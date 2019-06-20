@@ -8,7 +8,7 @@ license = "Apache-2.0"
 homepage = "https://wascap.io"
 documentation = "https://docs.rs/wascap"
 readme = "README.md"
-keywords = ["jwt", "crypto", "ed25519", "security", "wasm", "webassembly", "signature"]
+keywords = ["jwt", "crypto", "ed25519", "security", "webassembly"]
 categories = ["cryptography", "authentication", "wasm"]
 
 #travis-ci = { repository = "waxosuit/wascap", branch = "master" }
