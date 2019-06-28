@@ -1,10 +1,14 @@
+![crates.io](https://img.shields.io/crates/v/wascap.svg)&nbsp;
+![travis](https://travis-ci.org/waxosuit/wascap.svg?branch=master)&nbsp;
+![license](https://img.shields.io/crates/l/wascap.svg)
+
 # WASCAP
 
 A [WebAssembly Standard Capabilities Library](https://wascap.io) for Rust
 
-If you just want the CLI that signs and examines capabilities claims, then you can just install it with cargo:
+If you just want the CLI that signs and examines capabilities claims, then you can install it with cargo:
 ```
-$ cargo install wascap
+$ cargo install wascap --features "cli"
 ```
 
 This library can be used for embedding, extracting, and validating capabilities claims

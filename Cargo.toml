@@ -11,7 +11,8 @@ readme = "README.md"
 keywords = ["jwt", "crypto", "ed25519", "security", "webassembly"]
 categories = ["cryptography", "authentication", "wasm"]
 
-#travis-ci = { repository = "waxosuit/wascap", branch = "master" }
+[badges]
+travis-ci = { repository = "waxosuit/wascap", branch = "master" }
 
 [features]
 cli = ["quicli", "structopt", "term-table", "exitfailure"]
