@@ -18,7 +18,6 @@ use crate::errors::{self, ErrorKind};
 use crate::jwt::Claims;
 use crate::jwt::Token;
 use crate::Result;
-use chrono::Duration;
 use data_encoding::HEXUPPER;
 use nkeys::KeyPair;
 use parity_wasm::elements::CustomSection;
@@ -49,7 +48,7 @@ pub fn extract_claims(contents: impl AsRef<[u8]>) -> Result<Option<Token>> {
         .filter(|sect| sect.name() == "jwt")
         .collect();
 
-    if sections.len() == 0 {
+    if sections.is_empty() {
         Ok(None)
     } else {
         let jwt = String::from_utf8(sections[0].payload().to_vec())?;
@@ -188,7 +187,7 @@ mod test {
             assert_eq!(claims.caps, token.claims.caps);
             assert_ne!(claims.module_hash, token.claims.module_hash);
         } else {
-            assert!(false);
+            unreachable!()
         }
     }
 }

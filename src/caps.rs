@@ -1,4 +1,4 @@
-// Copyright 2015-2018 Capital One Services, LLC
+// Copyright 2015-2019 Capital One Services, LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,12 +13,11 @@
 // limitations under the License.
 
 //! A set of standard names for capabilities that can be provided by a host
-pub const MESSAGING: &'static str = "wascap:messaging";
-pub const KEY_VALUE: &'static str = "wascap:keyvalue";
-pub const HTTP_SERVER: &'static str = "wascap:http_server";
-pub const HTTP_CLIENT: &'static str = "wascap:http_client";
-pub const LOGGING: &'static str = "wascap:logging";
-pub const BLOB: &'static str = "wascap:blobstore";
+pub const MESSAGING: &str = "wascc:messaging";
+pub const KEY_VALUE: &str = "wascc:keyvalue";
+pub const HTTP_SERVER: &str = "wascc:http_server";
+pub const HTTP_CLIENT: &str = "wascc:http_client";
+pub const BLOB: &str = "wascc:blobstore";
 
 use std::collections::HashMap;
 
@@ -27,7 +26,6 @@ lazy_static! {
         let mut m = HashMap::new();
         m.insert(MESSAGING, "Messaging");
         m.insert(KEY_VALUE, "K/V Store");
-        m.insert(LOGGING, "Logging");
         m.insert(HTTP_SERVER, "HTTP Server");
         m.insert(HTTP_CLIENT, "HTTP Client");
         m

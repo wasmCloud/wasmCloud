@@ -23,8 +23,8 @@ use serde::Serialize;
 use serde_json::{from_str, to_string};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-const HEADER_TYPE: &'static str = "jwt";
-const HEADER_ALGORITHM: &'static str = "Ed25519";
+const HEADER_TYPE: &str = "jwt";
+const HEADER_ALGORITHM: &str = "Ed25519";
 
 /// A structure containing a JWT and its associated decoded claims
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
@@ -154,12 +154,12 @@ impl ClaimsBuilder {
             not_before: self
                 .not_before
                 .map(|nb| nb.as_secs() + since_the_epoch().as_secs()),
-            tags: if self.tags.len() > 0 {
+            tags: if !self.tags.is_empty() {
                 Some(self.tags.clone())
             } else {
                 None
             },
-            caps: if self.caps.len() > 0 {
+            caps: if !self.caps.is_empty() {
                 Some(self.caps.clone())
             } else {
                 None
@@ -207,14 +207,14 @@ impl Claims {
     ) -> Claims {
         Claims {
             module_hash: "".to_string(),
-            expires: expires,
+            expires,
             id: nuid::next(),
             issued_at: since_the_epoch().as_secs(),
-            issuer: issuer,
-            subject: subject,
-            not_before: not_before,
-            tags: tags,
-            caps: caps,
+            issuer,
+            subject,
+            not_before,
+            tags,
+            caps,
         }
     }
 
@@ -233,7 +233,7 @@ impl Claims {
     }
 
     pub fn decode(input: &str) -> Result<Claims> {
-        let segments: Vec<&str> = input.split(".").collect();
+        let segments: Vec<&str> = input.split('.').collect();
         let claims: Claims = from_jwt_segment(segments[1])?;
 
         Ok(claims)
@@ -241,7 +241,7 @@ impl Claims {
 }
 
 pub fn validate_token(input: &str) -> Result<TokenValidation> {
-    let segments: Vec<&str> = input.split(".").collect();
+    let segments: Vec<&str> = input.split('.').collect();
     let header_and_claims = format!("{}.{}", segments[0], segments[1]);
     let sig = base64::decode_config(segments[2], base64::URL_SAFE_NO_PAD)?;
 
@@ -253,21 +253,12 @@ pub fn validate_token(input: &str) -> Result<TokenValidation> {
     let sigverify = kp.verify(header_and_claims.as_bytes(), &sig);
 
     let validation = TokenValidation {
-        signature_valid: match sigverify {
-            Ok(_) => true,
-            Err(_) => false,
-        },
-        expired: match validate_expiration(claims.expires) {
-            Ok(_) => false,
-            Err(_) => true,
-        },
+        signature_valid: sigverify.is_ok(),
+        expired: validate_expiration(claims.expires).is_err(),
         expires_human: stamp_to_human(claims.expires).unwrap_or_else(|| "never".to_string()),
         not_before_human: stamp_to_human(claims.not_before)
             .unwrap_or_else(|| "immediately".to_string()),
-        cannot_use_yet: match validate_notbefore(claims.not_before) {
-            Ok(_) => false,
-            Err(_) => true,
-        },
+        cannot_use_yet: validate_notbefore(claims.not_before).is_err(),
     };
 
     Ok(validation)
@@ -459,5 +450,4 @@ mod test {
         assert_eq!(claims.issuer, "issuer".to_string());
         assert_eq!(claims.subject, "subject".to_string());
     }
-
 }

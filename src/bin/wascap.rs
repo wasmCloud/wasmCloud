@@ -9,28 +9,26 @@
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and 
+// See the License for the specific language governing permissions and
 // limitations under the License.
 
 use nkeys::KeyPair;
-use quicli::prelude::*;
 use std::fs::{read_to_string, File};
 use std::io::Read;
 use std::io::Write;
+use structopt::clap::AppSettings;
 use structopt::StructOpt;
-use wascap::caps::*;
-use wascap::cli::{emit_claims};
+use wascap::cli::emit_claims;
 use wascap::wasm::sign_buffer_with_claims;
 
 #[derive(Debug, StructOpt, Clone)]
-#[structopt(raw(setting = "structopt::clap::AppSettings::ColoredHelp"),
-    name = "wascap", about = "A command line utility for viewing, manipulating, and verifying WASCAP claims in WebAssembly modules")]
+#[structopt(
+    global_settings(&[AppSettings::ColoredHelp, AppSettings::VersionlessSubcommands]),
+    name = "wascap", 
+    about = "A command line utility for viewing, manipulating, and verifying capability claims in WebAssembly modules")]
 struct Cli {
     #[structopt(flatten)]
     command: CliCommand,
-
-    #[structopt(flatten)]
-    verbosity: Verbosity,
 }
 
 #[derive(Debug, Clone, StructOpt)]
@@ -62,11 +60,8 @@ struct SignCommand {
     /// Enable the Message broker standard capability
     #[structopt(short = "g", long = "msg")]
     msg_broker: bool,
-    /// Enable the Logging broker standard capability
-    #[structopt(short = "l", long = "logging")]
-    logging: bool,
     /// Enable the HTTP server standard capability
-    #[structopt(short = "s", long ="http_server")]
+    #[structopt(short = "s", long = "http_server")]
     http_server: bool,
     /// Enable the HTTP client standard capability
     #[structopt(short = "h", long = "http_client")]
@@ -95,8 +90,7 @@ struct SignCommand {
 fn main() -> Result<(), Box<dyn ::std::error::Error>> {
     let args = Cli::from_args();
     let cmd = args.command;
-    let verbosity = args.verbosity;
-    verbosity.setup_env_logger("head")?;
+    env_logger::init();
 
     handle_command(cmd)
 }
@@ -113,14 +107,12 @@ fn sign_file(cmd: &SignCommand) -> Result<(), Box<dyn ::std::error::Error>> {
     let mut buf = Vec::new();
     sfile.read_to_end(&mut buf).unwrap();
 
-    let mod_kp = if let Some(p) = &cmd.mod_key_path {        
+    let mod_kp = if let Some(p) = &cmd.mod_key_path {
         let kp = KeyPair::from_seed(&read_to_string(p)?.trim_end());
         match kp {
             Ok(pair) => pair,
-            Err(e) => {
-                panic!("Failed to read module seed key: {}", e)                
-            }
-        }        
+            Err(e) => panic!("Failed to read module seed key: {}", e),
+        }
     } else {
         let m = KeyPair::new_module();
         println!("New module key created. SAVE this seed key: {}", m.seed()?);
@@ -131,10 +123,8 @@ fn sign_file(cmd: &SignCommand) -> Result<(), Box<dyn ::std::error::Error>> {
         let kp = KeyPair::from_seed(&read_to_string(p)?.trim_end());
         match kp {
             Ok(pair) => pair,
-            Err(e) => {
-                panic!("Failed to read account seed key: {}", e)               
-            }
-        }        
+            Err(e) => panic!("Failed to read account seed key: {}", e),
+        }
     } else {
         let a = KeyPair::new_account();
         println!("New account key created. SAVE this seed key: {}", a.seed()?);
@@ -145,17 +135,14 @@ fn sign_file(cmd: &SignCommand) -> Result<(), Box<dyn ::std::error::Error>> {
     if cmd.keyvalue {
         caps_list.push(wascap::caps::KEY_VALUE.to_string());
     }
-    if cmd.logging {
-        caps_list.push(wascap::caps::LOGGING.to_string());
-    }
     if cmd.msg_broker {
         caps_list.push(wascap::caps::MESSAGING.to_string());
     }
     if cmd.http_client {
-        caps_list.push( wascap::caps::HTTP_CLIENT.to_string());
+        caps_list.push(wascap::caps::HTTP_CLIENT.to_string());
     }
     if cmd.http_server {
-        caps_list.push( wascap::caps::HTTP_SERVER.to_string());
+        caps_list.push(wascap::caps::HTTP_SERVER.to_string());
     }
     caps_list.extend(cmd.custom_caps.iter().cloned());
 

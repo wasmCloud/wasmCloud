@@ -67,7 +67,7 @@ impl StdError for Error {
         }
     }
 
-    fn cause(&self) -> Option<&StdError> {
+    fn cause(&self) -> Option<&dyn StdError> {
         match *self.0 {
             ErrorKind::Serialize(ref err) => Some(err),
             ErrorKind::Encryption(ref err) => Some(err),
