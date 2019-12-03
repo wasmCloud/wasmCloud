@@ -1,4 +1,4 @@
-// Copyright 2015-2018 Capital One Services, LLC
+// Copyright 2015-2019 Capital One Services, LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,12 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
-//! A [WebAssembly Standard Capabilities Library](https://wascap.io) for Rust
+//! A library for managing signed JWT (JSON Web Tokens) in WebAssembly modules. These
+//! are designed to be used with the [wascc](https://github.com/wascc) host, but can be
+//! used for any WebAssembly module, as the embedding technique used is compliant with
+//! the WebAssembly standard. 
 //!
 //! This library can be used for embedding, extracting, and validating capabilities claims
-//! in WebAssembly modules. While there are some standard, well-known claims already defined,
-//! you can add custom claims in your own namespaces if you like.
+//! in WebAssembly modules. While there are some standard, well-known claims already defined
+//! for use with *wascc*, you can add custom claims in your own namespaces if you like.
 //!
 //! The following example illustrates embedding a new set of claims
 //! into a WebAssembly module, then extracting, validating, and examining those claims.
