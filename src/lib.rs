@@ -71,12 +71,14 @@ impl CapabilityProvider for HttpServerProvider {
     }
 
     fn name(&self) -> &'static str {
-        "Wascc Default HTTP Server"
+        "waSCC Default HTTP Server (Actix Web)"
     }
 
-    fn handle_call(&self, op: &str, msg: &[u8]) -> Result<Vec<u8>, Box<dyn StdError>> {
-        info!("Handling operation: {}", op);
-        if op == OP_CONFIGURE {
+    fn handle_call(&self, actor: &str, op: &str, msg: &[u8]) -> Result<Vec<u8>, Box<dyn StdError>> {
+        info!("Handling operation `{}` from `{}`", op, actor);
+        // TIP: do not allow individual modules to attempt to send configuration,
+        // only accept it from the host runtime
+        if op == OP_CONFIGURE && actor == "system" {
             let cfgvals = CapabilityConfiguration::decode(msg)?;
             let bind_addr = match cfgvals.values.get("PORT") {
                 Some(v) => format!("0.0.0.0:{}", v),
