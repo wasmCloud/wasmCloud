@@ -1,3 +1,6 @@
+![travis](https://travis-ci.org/wascc/nats-provider.svg?branch=master)&nbsp;
+
+
 # waSCC Messaging Provider (NATS)
 
 The waSCC NATS capability provider exposes publish and subscribe functionality to actors. The following configuration values can be passed to the waSCC host runtime to configure the NATS connection on a per-actor basis:
