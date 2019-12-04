@@ -1,3 +1,5 @@
+![travis](https://travis-ci.org/wascc/http-server-provider.svg?branch=master)&nbsp;
+
 # waSCC HTTP Server Provider
 This library is a _native capability provider_ for the `wascc:http_server` capability. Only actors signed with tokens containing this capability privilege will be allowed to use it. 
 
