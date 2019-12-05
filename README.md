@@ -4,16 +4,14 @@
 
 # WASCAP
 
-A [WebAssembly Standard Capabilities Library](https://wascap.io) for Rust
+In the [waSCC](https://wasc.dev) runtime, each actor securely declares the set of capabilities it requires. This library and its associated binary are used to embed, extract, and validate JSON Web Tokens (JWT) containing these capability attestations, as well as the hash of the `wasm` file and a provable issuer for verifying module provenance.
 
 If you just want the CLI that signs and examines capabilities claims, then you can install it with cargo:
 ```
 $ cargo install wascap --features "cli"
 ```
 
-This library can be used for embedding, extracting, and validating capabilities claims
-in WebAssembly modules. While there are some standard, well-known claims already defined,
-you can add custom claims in your own namespaces if you like.
+While there are some standard, well-known claims already defined in the library (such as `wascc:messaging` and `wascc:keyvalue`), you can add custom claims in your own namespaces.
  
 The following example illustrates embedding a new set of claims into a WebAssembly module, then extracting, validating, and examining those claims:
 
