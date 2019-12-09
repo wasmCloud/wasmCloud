@@ -152,14 +152,14 @@ fn sign_file(cmd: &SignCommand) -> Result<(), Box<dyn ::std::error::Error>> {
         acct_kp,
         cmd.expires_in_days,
         cmd.not_before_days,
-        caps_list,
+        caps_list.clone(),
         cmd.tags.clone(),
     )?;
 
     let mut outfile = File::create(&cmd.output).unwrap();
     match outfile.write(&signed) {
         Ok(_) => {
-            println!("Successfully signed {}.", cmd.output);
+            println!("Successfully signed {} with capabilities: {}", cmd.output, caps_list.join(","));
             Ok(())
         }
         Err(e) => Err(Box::new(e)),
