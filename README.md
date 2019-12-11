@@ -54,7 +54,7 @@ The `wascap` CLI allows you to examine and sign WebAssembly files from a termina
 ```terminal
  $ wascap caps examples/signed_loop.wasm 
 ╔════════════════════════════════════════════════════════════════════════════╗
-║                                WASCAP Module                               ║
+║                          Secure Actor Module                               ║
 ╠═══════════════╦════════════════════════════════════════════════════════════╣
 ║ Account       ║   ACP6T7SH5R6JL3WV3LMNRS5V2SLB4LAMZR7CQPS6IAPYDW3OSBCTYM2J ║
 ╠═══════════════╬════════════════════════════════════════════════════════════╣
