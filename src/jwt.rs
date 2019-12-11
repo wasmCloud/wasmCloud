@@ -42,6 +42,10 @@ struct ClaimsHeader {
     algorithm: String,
 }
 
+fn default_as_false() -> bool {
+    false
+}
+
 /// Represents a set of [RFC 7519](https://tools.ietf.org/html/rfc7519) compliant JSON Web Token
 /// claims.
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Default)]
@@ -85,6 +89,10 @@ pub struct Claims {
     /// List of capability attestations. Can be standard wascap capabilities or custom namespace capabilities
     #[serde(rename = "caps", skip_serializing_if = "Option::is_none")]
     pub caps: Option<Vec<String>>,
+
+    /// Indicates whether this module is a capability provider
+    #[serde(rename = "prov", default = "default_as_false")]
+    pub provider: bool,
 }
 
 /// Utility struct for creating a fluent builder for a new set of claims
@@ -93,6 +101,7 @@ pub struct ClaimsBuilder {
     issuer: String,
     subject: String,
     caps: Vec<String>,
+    provider: bool,
     tags: Vec<String>,
     expires: Option<Duration>,
     not_before: Option<Duration>,
@@ -140,6 +149,12 @@ impl ClaimsBuilder {
         self
     }
 
+    // Indicates that these claims are for a capability provider
+    pub fn provider(&mut self) -> &mut Self {
+        self.provider = true;
+        self
+    }
+
     /// Produce a claims set from the builder
     pub fn build(&self) -> Claims {
         Claims {
@@ -151,6 +166,7 @@ impl ClaimsBuilder {
             issued_at: since_the_epoch().as_secs(),
             issuer: self.issuer.clone(),
             subject: self.subject.clone(),
+            provider: self.provider,
             not_before: self
                 .not_before
                 .map(|nb| nb.as_secs() + since_the_epoch().as_secs()),
@@ -185,6 +201,9 @@ pub struct TokenValidation {
     /// Indicates whether the signature is valid according to a cryptographic comparison. If `false` you should
     /// reject this token.
     pub signature_valid: bool,
+    /// Indicates that the claims are for a capability provider, yet there are multiple claims embedded. Providers
+    /// can only support a single capability
+    pub provider_too_many_capabilities: bool,
 }
 
 impl Claims {
@@ -193,8 +212,9 @@ impl Claims {
         subject: String,
         caps: Option<Vec<String>>,
         tags: Option<Vec<String>>,
+        provider: bool,
     ) -> Claims {
-        Self::with_dates(issuer, subject, caps, tags, None, None)
+        Self::with_dates(issuer, subject, caps, tags, None, None, provider)
     }
 
     pub fn with_dates(
@@ -204,6 +224,7 @@ impl Claims {
         tags: Option<Vec<String>>,
         not_before: Option<u64>,
         expires: Option<u64>,
+        provider: bool,
     ) -> Claims {
         Claims {
             module_hash: "".to_string(),
@@ -215,6 +236,7 @@ impl Claims {
             not_before,
             tags,
             caps,
+            provider,
         }
     }
 
@@ -259,6 +281,7 @@ pub fn validate_token(input: &str) -> Result<TokenValidation> {
         not_before_human: stamp_to_human(claims.not_before)
             .unwrap_or_else(|| "immediately".to_string()),
         cannot_use_yet: validate_notbefore(claims.not_before).is_err(),
+        provider_too_many_capabilities: claims.provider && claims.caps.map_or(0, |c| c.len()) > 1,
     };
 
     Ok(validation)
@@ -353,6 +376,7 @@ mod test {
             subject: "test.wasm".to_string(),
             not_before: Some(since_the_epoch().as_secs() + 1000),
             tags: Some(vec![]),
+            provider: false,
             caps: Some(vec![MESSAGING.to_string(), KEY_VALUE.to_string()]),
         };
 
@@ -377,6 +401,7 @@ mod test {
             issuer: kp.public_key(),
             subject: "test.wasm".to_string(),
             not_before: None,
+            provider: false,
             tags: Some(vec![]),
             caps: Some(vec![MESSAGING.to_string(), KEY_VALUE.to_string()]),
         };
@@ -402,6 +427,7 @@ mod test {
             issuer: kp.public_key(),
             subject: "test.wasm".to_string(),
             not_before: None,
+            provider: false,
             tags: Some(vec![]),
             caps: Some(vec![MESSAGING.to_string(), KEY_VALUE.to_string()]),
         };
@@ -422,6 +448,7 @@ mod test {
             issuer: kp.public_key(),
             subject: "test.wasm".to_string(),
             not_before: None,
+            provider: false,
             tags: Some(vec![]),
             caps: Some(vec![MESSAGING.to_string(), KEY_VALUE.to_string()]),
         };

@@ -15,7 +15,7 @@
 //! A library for managing signed JWT (JSON Web Tokens) in WebAssembly modules. These
 //! are designed to be used with the [wascc](https://github.com/wascc) host, but can be
 //! used for any WebAssembly module, as the embedding technique used is compliant with
-//! the WebAssembly standard. 
+//! the WebAssembly standard.
 //!
 //! This library can be used for embedding, extracting, and validating capabilities claims
 //! in WebAssembly modules. While there are some standard, well-known claims already defined

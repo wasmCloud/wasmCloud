@@ -33,9 +33,17 @@ pub fn emit_claims(claims: &Claims, token: &str) {
     let mut table = Table::new();
     table.max_column_width = 68;
     table.style = TableStyle::extended();
+    let headline = format!(
+        "Secure {} Module",
+        if claims.provider {
+            "Capability Provider"
+        } else {
+            "Actor"
+        }
+    );
 
     table.add_row(Row::new(vec![TableCell::new_with_alignment(
-        "Secure WebAssembly Module",
+        headline,
         2,
         Alignment::Center,
     )]));

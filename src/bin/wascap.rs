@@ -85,6 +85,9 @@ struct SignCommand {
     /// A list of arbitrary tags to be embedded in the token
     #[structopt(short = "t", long = "tag")]
     tags: Vec<String>,
+    /// Indicates whether the signed module is a capability provider instead of an actor (the default is actor)
+    #[structopt(short = "p", long = "prov")]
+    provider: bool,
 }
 
 fn main() -> Result<(), Box<dyn ::std::error::Error>> {
@@ -106,7 +109,7 @@ fn sign_file(cmd: &SignCommand) -> Result<(), Box<dyn ::std::error::Error>> {
     let mut sfile = File::open(&cmd.source).unwrap();
     let mut buf = Vec::new();
     sfile.read_to_end(&mut buf).unwrap();
-
+    
     let mod_kp = if let Some(p) = &cmd.mod_key_path {
         let kp = KeyPair::from_seed(&read_to_string(p)?.trim_end());
         match kp {
@@ -146,6 +149,10 @@ fn sign_file(cmd: &SignCommand) -> Result<(), Box<dyn ::std::error::Error>> {
     }
     caps_list.extend(cmd.custom_caps.iter().cloned());
 
+    if cmd.provider && caps_list.len() > 1 {
+        panic!("Capability providers cannot provide multiple capabilities at once.")
+    }
+
     let signed = sign_buffer_with_claims(
         &buf,
         mod_kp,
@@ -154,12 +161,17 @@ fn sign_file(cmd: &SignCommand) -> Result<(), Box<dyn ::std::error::Error>> {
         cmd.not_before_days,
         caps_list.clone(),
         cmd.tags.clone(),
+        cmd.provider,
     )?;
 
     let mut outfile = File::create(&cmd.output).unwrap();
     match outfile.write(&signed) {
         Ok(_) => {
-            println!("Successfully signed {} with capabilities: {}", cmd.output, caps_list.join(","));
+            println!(
+                "Successfully signed {} with capabilities: {}",
+                cmd.output,
+                caps_list.join(",")
+            );
             Ok(())
         }
         Err(e) => Err(Box::new(e)),

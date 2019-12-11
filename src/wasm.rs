@@ -71,7 +71,8 @@ pub fn extract_claims(contents: impl AsRef<[u8]>) -> Result<Option<Token>> {
 /// parsers or interpreters. Returns a vector of bytes representing the new WebAssembly module which can
 /// be saved to a `.wasm` file
 pub fn embed_claims(orig_bytecode: &[u8], claims: &Claims, kp: &KeyPair) -> Result<Vec<u8>> {
-    let module: Module = deserialize_buffer(orig_bytecode)?;
+    let mut module: Module = deserialize_buffer(orig_bytecode)?;
+    module.clear_custom_section("jwt");
     let cleanbytes = serialize(module)?;
 
     let digest = sha256_digest(cleanbytes.as_slice())?;
@@ -96,6 +97,7 @@ pub fn sign_buffer_with_claims(
     not_before_days: Option<u64>,
     caps: Vec<String>,
     tags: Vec<String>,
+    provider: bool,
 ) -> Result<Vec<u8>> {
     let claims = Claims::with_dates(
         acct_kp.public_key(),
@@ -104,6 +106,7 @@ pub fn sign_buffer_with_claims(
         Some(tags),
         days_from_now_to_jwt_time(not_before_days),
         days_from_now_to_jwt_time(expires_in_days),
+        provider,
     );
     embed_claims(buf.as_ref(), &claims, &acct_kp)
 }
@@ -174,6 +177,7 @@ mod test {
             issuer: kp.public_key(),
             subject: "test.wasm".to_string(),
             not_before: None,
+            provider: false,
             tags: None,
             caps: Some(vec![MESSAGING.to_string(), KEY_VALUE.to_string()]),
         };
