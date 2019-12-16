@@ -20,8 +20,8 @@ extern crate log;
 
 use actix_web::dev::Body;
 use actix_web::http::StatusCode;
+use actix_web::web::Bytes;
 use actix_web::{middleware, web, App, HttpRequest, HttpResponse, HttpServer};
-use bytes::Bytes;
 use codec::capabilities::{CapabilityProvider, Dispatcher, NullDispatcher};
 use codec::core::CapabilityConfiguration;
 use prost::Message;
@@ -30,6 +30,7 @@ use std::error::Error as StdError;
 use std::sync::Arc;
 use std::sync::RwLock;
 use wascc_codec::core::OP_CONFIGURE;
+use wascc_codec::core::OP_REMOVE_ACTOR;
 
 /// Unique identifier for the capability being provided. Note other providers can
 /// provide this same capability (just not at the same time)
@@ -103,6 +104,12 @@ impl CapabilityProvider for HttpServerProvider {
                 .run()
                 .unwrap();
             });
+        } else if op == OP_REMOVE_ACTOR {
+            let cfgvals = CapabilityConfiguration::decode(msg)?;
+            info!(
+                "NO-OP (TBF): removing actor configuration for {}",
+                cfgvals.module
+            );
         }
         Ok(vec![])
     }
