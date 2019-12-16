@@ -21,7 +21,7 @@ extern crate wascc_codec as codec;
 extern crate log;
 
 use codec::capabilities::{CapabilityProvider, Dispatcher, NullDispatcher};
-use codec::core::OP_CONFIGURE;
+use codec::core::{OP_CONFIGURE, OP_REMOVE_ACTOR};
 use codec::messaging::{PublishMessage, RequestMessage, OP_PERFORM_REQUEST, OP_PUBLISH_MESSAGE};
 use natsclient;
 use std::collections::HashMap;
@@ -92,6 +92,16 @@ impl NatsProvider {
         self.clients.write().unwrap().insert(msg.module, c);
         Ok(vec![])
     }
+
+    fn remove_actor(
+        &self,
+        msg: impl Into<CapabilityConfiguration>,
+    ) -> Result<Vec<u8>, Box<dyn Error>> {
+        let msg = msg.into();
+        info!("Removing NATS client for actor {}", msg.module);
+        self.clients.write().unwrap().remove(&msg.module);
+        Ok(vec![])
+    }
 }
 
 impl CapabilityProvider for NatsProvider {
@@ -118,6 +128,7 @@ impl CapabilityProvider for NatsProvider {
             OP_PUBLISH_MESSAGE => self.publish_message(actor, msg.to_vec().as_ref()),
             OP_PERFORM_REQUEST => self.request(actor, msg.to_vec().as_ref()),
             OP_CONFIGURE if actor == "system" => self.configure(msg.to_vec().as_ref()),
+            OP_REMOVE_ACTOR if actor == "system" => self.remove_actor(msg.to_vec().as_ref()),
             _ => Err("bad dispatch".into()),
         }
     }

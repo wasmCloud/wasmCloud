@@ -114,15 +114,15 @@ fn create_subscription(
     sub: String,
 ) -> Result<(), Box<dyn Error>> {
     let actor = actor.to_string();
-    let res = match values.get(ENV_NATS_QUEUEGROUP_NAME) {        
+    let res = match values.get(ENV_NATS_QUEUEGROUP_NAME) {
         Some(ref qgroup) => {
-            trace!("Queue subscribing '{}' to '{}'", qgroup, sub);            
+            trace!("Queue subscribing '{}' to '{}'", qgroup, sub);
             client.queue_subscribe(&sub, qgroup, move |msg| {
                 let dm = delivermessage_for_natsmessage(msg);
                 let mut buf = Vec::new();
                 dm.encode(&mut buf).unwrap();
                 let d = dispatcher.read().unwrap();
-                if let Err(e) = d.dispatch(&format!("{}!{}", actor,OP_DELIVER_MESSAGE), &buf) {
+                if let Err(e) = d.dispatch(&format!("{}!{}", actor, OP_DELIVER_MESSAGE), &buf) {
                     error!("Dispatch failed: {}", e);
                 }
                 Ok(())

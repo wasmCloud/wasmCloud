@@ -1,6 +1,6 @@
 [package]
 name = "nats-provider"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Kevin Hoffman <alothien@gmail.com>"]
 edition = "2018"
 
@@ -8,8 +8,8 @@ edition = "2018"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-wascc-codec = "0.3.3"
-log = "0.4.8"
+wascc-codec = "0.3.4"
+log = "0.4.10"
 env_logger = "0.7.1"
 crossbeam-channel = "0.4.0"
 crossbeam = "0.7.3"
