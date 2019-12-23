@@ -1,6 +1,6 @@
 [package]
 name = "wascc-httpsrv"
-version = "0.3.4"
+version = "0.3.5"
 authors = ["Kevin Hoffman <alothien@gmail.com>"]
 edition = "2018"
 
@@ -11,7 +11,8 @@ crate-type = ["cdylib", "rlib"]
 wascc-codec = "0.3.4"
 #wascc-codec = { path = "../wascc-codec" }
 actix-web = "1.0.9"
-actix-multipart = "0.1.5"
+actix-rt = "0.2.4"
+actix-multipart = "0.2.0"
 futures = "0.1.29"
 log = "0.4.8"
 env_logger = "0.7.1"

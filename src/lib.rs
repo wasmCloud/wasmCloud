@@ -18,12 +18,16 @@ extern crate wascc_codec as codec;
 #[macro_use]
 extern crate log;
 
+extern crate actix_rt;
+
 use actix_web::dev::Body;
+use actix_web::dev::Server;
 use actix_web::http::StatusCode;
 use actix_web::web::Bytes;
 use actix_web::{middleware, web, App, HttpRequest, HttpResponse, HttpServer};
 use codec::capabilities::{CapabilityProvider, Dispatcher, NullDispatcher};
 use codec::core::CapabilityConfiguration;
+use futures::future::Future;
 use prost::Message;
 use std::collections::HashMap;
 use std::error::Error as StdError;
@@ -40,11 +44,62 @@ capability_provider!(HttpServerProvider, HttpServerProvider::new);
 
 pub struct HttpServerProvider {
     dispatcher: Arc<RwLock<Box<dyn Dispatcher>>>,
+    servers: Arc<RwLock<HashMap<String, Server>>>,
 }
 
 impl HttpServerProvider {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Stops a running web server, freeing up its associated port
+    fn terminate_server(&self, module: &str) {
+        {
+            let lock = self.servers.read().unwrap();
+            let server = lock.get(module).unwrap();
+            let _ = server
+                .stop(true)
+                .wait()
+                .map(|_| info!("Stopped Actix Web Server"));
+        }
+        {
+            let mut lock = self.servers.write().unwrap();
+            lock.remove(module).unwrap();
+        }
+    }
+
+    /// Starts a new web server and binds to the appropriate port
+    fn spawn_server(&self, cfgvals: &CapabilityConfiguration) {
+        let bind_addr = match cfgvals.values.get("PORT") {
+            Some(v) => format!("0.0.0.0:{}", v),
+            None => "0.0.0.0:8080".to_string(),
+        };
+
+        let disp = self.dispatcher.clone();
+        let module_id = cfgvals.module.clone();
+
+        info!("Received HTTP Server configuration for {}", module_id);
+        let servers = self.servers.clone();
+
+        std::thread::spawn(move || {
+            let module = module_id.clone();
+            let sys = actix_rt::System::new(&module);
+            let server = HttpServer::new(move || {
+                App::new()
+                    .wrap(middleware::Logger::default())
+                    .data(disp.clone())
+                    .data(module.clone())
+                    .default_service(web::route().to(request_handler))
+            })
+            .bind(bind_addr)
+            .unwrap()
+            .disable_signals()
+            .start();
+
+            servers.write().unwrap().insert(module_id.clone(), server);
+
+            let _ = sys.run();
+        });
     }
 }
 
@@ -53,6 +108,7 @@ impl Default for HttpServerProvider {
         env_logger::init();
         HttpServerProvider {
             dispatcher: Arc::new(RwLock::new(Box::new(NullDispatcher::new()))),
+            servers: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 }
@@ -75,43 +131,27 @@ impl CapabilityProvider for HttpServerProvider {
         "waSCC Default HTTP Server (Actix Web)"
     }
 
-    fn handle_call(&self, actor: &str, op: &str, msg: &[u8]) -> Result<Vec<u8>, Box<dyn StdError>> {
-        info!("Handling operation `{}` from `{}`", op, actor);
+    fn handle_call(
+        &self,
+        origin: &str,
+        op: &str,
+        msg: &[u8],
+    ) -> Result<Vec<u8>, Box<dyn StdError>> {
+        info!("Handling operation `{}` from `{}`", op, origin);
         // TIP: do not allow individual modules to attempt to send configuration,
         // only accept it from the host runtime
-        if op == OP_CONFIGURE && actor == "system" {
+        if op == OP_CONFIGURE && origin == "system" {
             let cfgvals = CapabilityConfiguration::decode(msg)?;
-            let bind_addr = match cfgvals.values.get("PORT") {
-                Some(v) => format!("0.0.0.0:{}", v),
-                None => "0.0.0.0:8080".to_string(),
-            };
-
-            let disp = self.dispatcher.clone();
-
-            info!("Received HTTP Server configuration for {}", cfgvals.module);
-
-            std::thread::spawn(move || {
-                HttpServer::new(move || {
-                    App::new()
-                        .wrap(middleware::Logger::default())
-                        .data(disp.clone())
-                        .data(cfgvals.module.clone())
-                        .default_service(web::route().to(request_handler))
-                })
-                .bind(bind_addr)
-                .unwrap()
-                .disable_signals()
-                .run()
-                .unwrap();
-            });
-        } else if op == OP_REMOVE_ACTOR {
+            self.spawn_server(&cfgvals);
+            Ok(vec![])
+        } else if op == OP_REMOVE_ACTOR && origin == "system" {
             let cfgvals = CapabilityConfiguration::decode(msg)?;
-            info!(
-                "NO-OP (TBF): removing actor configuration for {}",
-                cfgvals.module
-            );
+            info!("Removing actor configuration for {}", cfgvals.module);
+            self.terminate_server(&cfgvals.module);
+            Ok(vec![])
+        } else {
+            Err(format!("Unknown operation: {}", op).into())
         }
-        Ok(vec![])
     }
 }
 
