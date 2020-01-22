@@ -105,7 +105,10 @@ impl HttpServerProvider {
 
 impl Default for HttpServerProvider {
     fn default() -> Self {
-        env_logger::init();
+        match env_logger::try_init() {
+            Ok(_) => {},
+            Err(_) => println!("** HTTP provider: Logger already initialized, skipping.")
+        };
         HttpServerProvider {
             dispatcher: Arc::new(RwLock::new(Box::new(NullDispatcher::new()))),
             servers: Arc::new(RwLock::new(HashMap::new())),
