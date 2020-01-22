@@ -22,7 +22,7 @@ extern crate log;
 
 use codec::capabilities::{CapabilityProvider, Dispatcher, NullDispatcher};
 use codec::core::CapabilityConfiguration;
-use codec::core::OP_CONFIGURE;
+use codec::core::{OP_CONFIGURE, OP_REMOVE_ACTOR};
 use codec::keyvalue;
 use keyvalue::*;
 use prost::Message;
@@ -45,7 +45,10 @@ pub struct RedisKVProvider {
 
 impl Default for RedisKVProvider {
     fn default() -> Self {
-        env_logger::init();
+        match env_logger::try_init() {
+            Ok(_) => {},
+            Err(_) => println!("** Redis provider skipping logger init, already initialized.")
+        };
 
         RedisKVProvider {
             dispatcher: Arc::new(RwLock::new(Box::new(NullDispatcher::new()))),
@@ -68,6 +71,11 @@ impl RedisKVProvider {
         let c = kvredis::initialize_client(config.clone())?;
 
         self.clients.write().unwrap().insert(config.module, c);
+        Ok(vec![])
+    }
+
+    fn remove_actor(&self, config: CapabilityConfiguration) -> Result<Vec<u8>, Box<dyn Error>> {
+        self.clients.write().unwrap().remove(&config.module);
         Ok(vec![])
     }
 
@@ -220,6 +228,9 @@ impl CapabilityProvider for RedisKVProvider {
         match op {
             OP_CONFIGURE if actor == "system" => {
                 self.configure(CapabilityConfiguration::decode(msg).unwrap())
+            }
+            OP_REMOVE_ACTOR if actor == "system" => {
+                self.remove_actor(CapabilityConfiguration::decode(msg).unwrap())
             }
             keyvalue::OP_ADD => self.add(actor, AddRequest::decode(msg).unwrap()),
             keyvalue::OP_DEL => self.del(actor, DelRequest::decode(msg).unwrap()),

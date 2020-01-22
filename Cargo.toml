@@ -1,6 +1,6 @@
 [package]
 name = "redis-provider"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Kevin Hoffman <alothien@gmail.com>"]
 edition = "2018"
 
@@ -14,7 +14,7 @@ crossbeam-channel = "0.4.0"
 crossbeam = "0.7.3"
 crossbeam-utils = "0.7.0"
 log = "0.4.8"
-wascc-codec = "0.3.3"
+wascc-codec = "0.3.4"
 prost-types = "0.5.0"
 prost = "0.5.0"
 bytes = "0.4.12"
