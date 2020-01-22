@@ -42,7 +42,10 @@ pub struct NatsProvider {
 
 impl Default for NatsProvider {
     fn default() -> Self {
-        env_logger::init();
+        match env_logger::try_init() {
+            Ok(_) => {},
+            Err(_) => println!("** NATS provider - skipping logger init, already initialized.")
+        };
 
         NatsProvider {
             dispatcher: Arc::new(RwLock::new(Box::new(NullDispatcher::new()))),
