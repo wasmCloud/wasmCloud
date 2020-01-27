@@ -91,6 +91,10 @@ struct SignCommand {
     /// Revision number of the Actor
     #[structopt(short = "r", long = "rev")]
     rev: Option<i32>,
+
+    /// Version
+    #[structopt(short = "v", long = "ver")]
+    rev: Option<String>,
 }
 
 fn main() -> Result<(), Box<dyn ::std::error::Error>> {
