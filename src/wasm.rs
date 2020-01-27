@@ -65,11 +65,23 @@ pub fn extract_claims(contents: impl AsRef<[u8]>) -> Result<Option<Token>> {
         } else {
             Err(errors::new(ErrorKind::InvalidModuleHash))
         }
-        */
         if claims.wascap_metadata.as_ref().unwrap().module_hash != hash {
             Err(errors::new(ErrorKind::InvalidModuleHash))
         } else {
             Ok(Some(Token { jwt, claims }))
+        }
+
+        */
+        println!("hash: {}", hash);
+        if let Some(ref meta) = claims.wascap_metadata {
+            println!("meta : {:#?}", meta);
+            if meta.module_hash != hash {
+                Err(errors::new(ErrorKind::InvalidModuleHash))
+            } else {
+                Ok(Some(Token { jwt, claims }))
+            }
+        } else {
+            Err(errors::new(ErrorKind::InvalidAlgorithm))
         }
     }
 }
@@ -87,9 +99,7 @@ pub fn embed_claims(orig_bytecode: &[u8], claims: &Claims, kp: &KeyPair) -> Resu
 
     let digest = sha256_digest(cleanbytes.as_slice())?;
     let claims = (*claims).clone();
-    let metadata = claims.wascap_metadata.clone();
-    metadata.unwrap().module_hash = HEXUPPER.encode(digest.as_ref());
-
+    claims.wascap_metadata.unwrap().module_hash = HEXUPPER.encode(digest.as_ref());
     let encoded = claims.encode(&kp)?;
     let encvec = encoded.as_bytes().to_vec();
     let mut m: Module = deserialize_buffer(orig_bytecode)?;
