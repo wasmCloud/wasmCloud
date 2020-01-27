@@ -90,6 +90,10 @@ pub struct Claims {
     #[serde(rename = "caps", skip_serializing_if = "Option::is_none")]
     pub caps: Option<Vec<String>>,
 
+    /// Indicates a monotonically increasing revision number.  Optional.
+    #[serde(rename = "rev", skip_serializing_if = "Option::is_none")]
+    pub rev: Option<i32>,
+
     /// Indicates whether this module is a capability provider
     #[serde(rename = "prov", default = "default_as_false")]
     pub provider: bool,
@@ -103,6 +107,7 @@ pub struct ClaimsBuilder {
     caps: Vec<String>,
     provider: bool,
     tags: Vec<String>,
+    rev: Option<i32>,
     expires: Option<Duration>,
     not_before: Option<Duration>,
 }
@@ -180,6 +185,11 @@ impl ClaimsBuilder {
             } else {
                 None
             },
+            rev: if !self.rev.is_none() {
+                self.rev.clone()
+            } else {
+                None
+            },
         }
     }
 }
@@ -213,8 +223,9 @@ impl Claims {
         caps: Option<Vec<String>>,
         tags: Option<Vec<String>>,
         provider: bool,
+        rev: Option<i32>,
     ) -> Claims {
-        Self::with_dates(issuer, subject, caps, tags, None, None, provider)
+        Self::with_dates(issuer, subject, caps, tags, None, None, provider, rev)
     }
 
     pub fn with_dates(
@@ -225,6 +236,7 @@ impl Claims {
         not_before: Option<u64>,
         expires: Option<u64>,
         provider: bool,
+        rev: Option<i32>,
     ) -> Claims {
         Claims {
             module_hash: "".to_string(),
@@ -237,6 +249,7 @@ impl Claims {
             tags,
             caps,
             provider,
+            rev,
         }
     }
 
@@ -378,6 +391,7 @@ mod test {
             tags: Some(vec![]),
             provider: false,
             caps: Some(vec![MESSAGING.to_string(), KEY_VALUE.to_string()]),
+            rev: Some(1),
         };
 
         let encoded = claims.encode(&kp).unwrap();
@@ -404,6 +418,7 @@ mod test {
             provider: false,
             tags: Some(vec![]),
             caps: Some(vec![MESSAGING.to_string(), KEY_VALUE.to_string()]),
+            rev: Some(1),
         };
 
         let encoded = claims.encode(&kp).unwrap();
@@ -430,6 +445,7 @@ mod test {
             provider: false,
             tags: Some(vec![]),
             caps: Some(vec![MESSAGING.to_string(), KEY_VALUE.to_string()]),
+            rev: Some(1),
         };
 
         let encoded = claims.encode(&kp).unwrap();
@@ -451,6 +467,7 @@ mod test {
             provider: false,
             tags: Some(vec![]),
             caps: Some(vec![MESSAGING.to_string(), KEY_VALUE.to_string()]),
+            rev: Some(1),
         };
 
         let encoded = claims.encode(&kp).unwrap();

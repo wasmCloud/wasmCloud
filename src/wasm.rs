@@ -98,6 +98,7 @@ pub fn sign_buffer_with_claims(
     caps: Vec<String>,
     tags: Vec<String>,
     provider: bool,
+    rev: Option<i32>,
 ) -> Result<Vec<u8>> {
     let claims = Claims::with_dates(
         acct_kp.public_key(),
@@ -107,6 +108,7 @@ pub fn sign_buffer_with_claims(
         days_from_now_to_jwt_time(not_before_days),
         days_from_now_to_jwt_time(expires_in_days),
         provider,
+        rev,
     );
     embed_claims(buf.as_ref(), &claims, &acct_kp)
 }
@@ -180,6 +182,7 @@ mod test {
             provider: false,
             tags: None,
             caps: Some(vec![MESSAGING.to_string(), KEY_VALUE.to_string()]),
+            rev: Some(1),
         };
         let modified_bytecode = embed_claims(&raw_module, &claims, &kp).unwrap();
         println!(

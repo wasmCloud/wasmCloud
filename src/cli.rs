@@ -67,6 +67,16 @@ pub fn emit_claims(claims: &Claims, token: &str) {
         TableCell::new_with_alignment(validation.not_before_human, 1, Alignment::Right),
     ]));
 
+    let friendly_rev: i32 = if let Some(rev) = claims.rev { rev } else { 0 };
+    table.add_row(Row::new(vec![
+        TableCell::new("Revision"),
+        if friendly_rev > 0 {
+            TableCell::new_with_alignment(friendly_rev, 1, Alignment::Right)
+        } else {
+            TableCell::new_with_alignment("None".to_string(), 1, Alignment::Right)
+        },
+    ]));
+
     table.add_row(Row::new(vec![TableCell::new_with_alignment(
         "Capabilities",
         2,

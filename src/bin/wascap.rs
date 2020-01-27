@@ -88,6 +88,9 @@ struct SignCommand {
     /// Indicates whether the signed module is a capability provider instead of an actor (the default is actor)
     #[structopt(short = "p", long = "prov")]
     provider: bool,
+    /// Revision number of the Actor
+    #[structopt(short = "r", long = "rev")]
+    rev: Option<i32>,
 }
 
 fn main() -> Result<(), Box<dyn ::std::error::Error>> {
@@ -109,7 +112,6 @@ fn sign_file(cmd: &SignCommand) -> Result<(), Box<dyn ::std::error::Error>> {
     let mut sfile = File::open(&cmd.source).unwrap();
     let mut buf = Vec::new();
     sfile.read_to_end(&mut buf).unwrap();
-    
     let mod_kp = if let Some(p) = &cmd.mod_key_path {
         let kp = KeyPair::from_seed(&read_to_string(p)?.trim_end());
         match kp {
@@ -162,6 +164,7 @@ fn sign_file(cmd: &SignCommand) -> Result<(), Box<dyn ::std::error::Error>> {
         caps_list.clone(),
         cmd.tags.clone(),
         cmd.provider,
+        cmd.rev,
     )?;
 
     let mut outfile = File::create(&cmd.output).unwrap();
