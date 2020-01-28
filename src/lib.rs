@@ -87,7 +87,7 @@ pub mod prelude {
     //! Public re-exports of the most commonly used wascap types
     pub use super::{Error, Result};
     pub use crate::caps;
-    pub use crate::jwt::{validate_token, Claims, ClaimsBuilder};
+    pub use crate::jwt::{validate_token, Claims, ClaimsBuilder, Metadata};
     pub use crate::wasm;
     pub use nkeys::KeyPair;
 }
