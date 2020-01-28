@@ -94,7 +94,7 @@ struct SignCommand {
 
     /// Version
     #[structopt(short = "v", long = "ver")]
-    rev: Option<String>,
+    ver: Option<String>,
 }
 
 fn main() -> Result<(), Box<dyn ::std::error::Error>> {
@@ -169,6 +169,7 @@ fn sign_file(cmd: &SignCommand) -> Result<(), Box<dyn ::std::error::Error>> {
         cmd.tags.clone(),
         cmd.provider,
         cmd.rev,
+        cmd.ver.clone(),
     )?;
 
     let mut outfile = File::create(&cmd.output).unwrap();

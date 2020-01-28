@@ -49,7 +49,7 @@ fn default_as_false() -> bool {
 /// Represents a set of [RFC 7519](https://tools.ietf.org/html/rfc7519) compliant JSON Web Token
 /// claims.
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
-pub struct WascapMetadata {
+pub struct Metadata {
     /// A hash of the module's bytes as they exist without the embedded signature. This is stored so wascap
     /// can determine if a WebAssembly module's bytecode has been altered after it was signed
     #[serde(rename = "hash")]
@@ -107,7 +107,7 @@ pub struct Claims {
 
     /// Custom jwt claims in the `wascap` namespace
     #[serde(rename = "wascap", skip_serializing_if = "Option::is_none")]
-    pub wascap_metadata: Option<WascapMetadata>,
+    pub metadata: Option<Metadata>,
 }
 
 /// Utility struct for creating a fluent builder for a new set of claims
@@ -175,7 +175,7 @@ impl ClaimsBuilder {
     /// Produce a claims set from the builder
     pub fn build(&self) -> Claims {
         Claims {
-            wascap_metadata: Some(WascapMetadata::new(
+            metadata: Some(Metadata::new(
                 Some(self.caps.clone()),
                 Some(self.tags.clone()),
                 self.provider,
@@ -243,7 +243,7 @@ impl Claims {
         ver: Option<String>,
     ) -> Claims {
         Claims {
-            wascap_metadata: Some(WascapMetadata::new(caps, tags, provider, rev, ver)),
+            metadata: Some(Metadata::new(caps, tags, provider, rev, ver)),
             expires,
             id: nuid::next(),
             issued_at: since_the_epoch().as_secs(),
@@ -294,13 +294,13 @@ pub fn validate_token(input: &str) -> Result<TokenValidation> {
         not_before_human: stamp_to_human(claims.not_before)
             .unwrap_or_else(|| "immediately".to_string()),
         cannot_use_yet: validate_notbefore(claims.not_before).is_err(),
-        provider_too_many_capabilities: validate_too_many_capabilities(claims.wascap_metadata),
+        provider_too_many_capabilities: validate_too_many_capabilities(claims.metadata),
     };
 
     Ok(validation)
 }
 
-fn validate_too_many_capabilities(metadata: Option<WascapMetadata>) -> bool {
+fn validate_too_many_capabilities(metadata: Option<Metadata>) -> bool {
     if let Some(meta) = metadata {
         if meta.provider && meta.caps.map_or(0, |c| c.len()) > 1 {
             true
@@ -382,15 +382,15 @@ fn stamp_to_human(stamp: Option<u64>) -> Option<String> {
     })
 }
 
-impl WascapMetadata {
+impl Metadata {
     pub fn new(
         caps: Option<Vec<String>>,
         tags: Option<Vec<String>>,
         provider: bool,
         rev: Option<i32>,
         ver: Option<String>,
-    ) -> WascapMetadata {
-        WascapMetadata {
+    ) -> Metadata {
+        Metadata {
             module_hash: "".to_string(),
             tags,
             caps,
@@ -403,7 +403,7 @@ impl WascapMetadata {
 
 #[cfg(test)]
 mod test {
-    use super::{Claims, ClaimsBuilder, KeyPair, WascapMetadata};
+    use super::{Claims, ClaimsBuilder, KeyPair, Metadata};
     use crate::caps::{KEY_VALUE, MESSAGING};
     use crate::jwt::since_the_epoch;
     use crate::jwt::validate_token;
@@ -412,7 +412,7 @@ mod test {
     fn full_validation_nbf() {
         let kp = KeyPair::new_account();
         let claims = Claims {
-            wascap_metadata: Some(WascapMetadata::new(
+            metadata: Some(Metadata::new(
                 Some(vec![MESSAGING.to_string(), KEY_VALUE.to_string()]),
                 Some(vec![]),
                 false,
@@ -441,7 +441,7 @@ mod test {
     fn full_validation_expires() {
         let kp = KeyPair::new_account();
         let claims = Claims {
-            wascap_metadata: Some(WascapMetadata::new(
+            metadata: Some(Metadata::new(
                 Some(vec![MESSAGING.to_string(), KEY_VALUE.to_string()]),
                 Some(vec![]),
                 false,
@@ -470,7 +470,7 @@ mod test {
     fn full_validation() {
         let kp = KeyPair::new_account();
         let claims = Claims {
-            wascap_metadata: Some(WascapMetadata::new(
+            metadata: Some(Metadata::new(
                 Some(vec![MESSAGING.to_string(), KEY_VALUE.to_string()]),
                 Some(vec![]),
                 false,
@@ -494,7 +494,7 @@ mod test {
     fn encode_decode_roundtrip() {
         let kp = KeyPair::new_account();
         let claims = Claims {
-            wascap_metadata: Some(WascapMetadata::new(
+            metadata: Some(Metadata::new(
                 Some(vec![MESSAGING.to_string(), KEY_VALUE.to_string()]),
                 Some(vec![]),
                 false,
@@ -527,7 +527,7 @@ mod test {
             .build();
 
         assert_eq!(
-            claims.wascap_metadata.unwrap().caps,
+            claims.metadata.unwrap().caps,
             Some(vec![MESSAGING.to_string(), KEY_VALUE.to_string()])
         );
         assert_eq!(claims.issuer, "issuer".to_string());

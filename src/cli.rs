@@ -21,6 +21,11 @@ use term_table::{
 };
 
 pub fn emit_claims(claims: &Claims, token: &str) {
+    if claims.metadata.is_none(){
+
+        println!("No metadata found in JWT claim.");
+        return;
+    }
     let vres = validate_token(token);
 
     if let Err(e) = vres {
@@ -35,7 +40,7 @@ pub fn emit_claims(claims: &Claims, token: &str) {
     table.style = TableStyle::extended();
     let headline = format!(
         "Secure {} Module",
-        if claims.provider {
+        if claims.metadata.as_ref().unwrap().provider {
             "Capability Provider"
         } else {
             "Actor"
@@ -67,14 +72,14 @@ pub fn emit_claims(claims: &Claims, token: &str) {
         TableCell::new_with_alignment(validation.not_before_human, 1, Alignment::Right),
     ]));
 
-    let friendly_rev: i32 = if let Some(rev) = claims.rev { rev } else { 0 };
+    let md = claims.metadata.clone().unwrap();
+    let friendly_rev = md.rev.unwrap_or(0);
+    let friendly_ver = md.ver.unwrap_or("None".to_string());
+    let friendly = format!("{} ({})", friendly_ver, friendly_rev);
+    
     table.add_row(Row::new(vec![
-        TableCell::new("Revision"),
-        if friendly_rev > 0 {
-            TableCell::new_with_alignment(friendly_rev, 1, Alignment::Right)
-        } else {
-            TableCell::new_with_alignment("None".to_string(), 1, Alignment::Right)
-        },
+        TableCell::new("Version"),
+        TableCell::new_with_alignment(friendly, 1, Alignment::Right),
     ]));
 
     table.add_row(Row::new(vec![TableCell::new_with_alignment(
@@ -83,7 +88,7 @@ pub fn emit_claims(claims: &Claims, token: &str) {
         Alignment::Center,
     )]));
 
-    let friendly_caps: Vec<String> = if let Some(caps) = &claims.caps {
+    let friendly_caps: Vec<String> = if let Some(caps) = &claims.metadata.as_ref().unwrap().caps {
         caps.iter().map(|c| capability_name(&c)).collect()
     } else {
         vec![]
@@ -101,7 +106,7 @@ pub fn emit_claims(claims: &Claims, token: &str) {
         Alignment::Center,
     )]));
 
-    let tags = if let Some(tags) = &claims.tags {
+    let tags = if let Some(tags) = &claims.metadata.as_ref().unwrap().tags {
         if tags.is_empty() {
             "None".to_string()
         } else {

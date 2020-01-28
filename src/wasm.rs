@@ -15,7 +15,7 @@
 //! Functions for extracting and embedding claims within a WebAssembly module
 
 use crate::errors::{self, ErrorKind};
-use crate::jwt::Claims;
+use crate::jwt::{Claims, Metadata};
 use crate::jwt::Token;
 use crate::Result;
 use data_encoding::HEXUPPER;
@@ -55,26 +55,7 @@ pub fn extract_claims(contents: impl AsRef<[u8]>) -> Result<Option<Token>> {
         let claims = Claims::decode(&jwt)?;
         let hash = compute_hash_without_jwt(module)?;
 
-        /* TODO: FIX MODULE HASHING */
-        /* if let Some(meta) = claims.wascap_metadata {
-            if hash != meta.module_hash {
-                Err(errors::new(ErrorKind::InvalidModuleHash))
-            } else {
-                Ok(Some(Token { jwt, claims }))
-            }
-        } else {
-            Err(errors::new(ErrorKind::InvalidModuleHash))
-        }
-        if claims.wascap_metadata.as_ref().unwrap().module_hash != hash {
-            Err(errors::new(ErrorKind::InvalidModuleHash))
-        } else {
-            Ok(Some(Token { jwt, claims }))
-        }
-
-        */
-        println!("hash: {}", hash);
-        if let Some(ref meta) = claims.wascap_metadata {
-            println!("meta : {:#?}", meta);
+        if let Some(ref meta) = claims.metadata {
             if meta.module_hash != hash {
                 Err(errors::new(ErrorKind::InvalidModuleHash))
             } else {
@@ -98,8 +79,18 @@ pub fn embed_claims(orig_bytecode: &[u8], claims: &Claims, kp: &KeyPair) -> Resu
     let cleanbytes = serialize(module)?;
 
     let digest = sha256_digest(cleanbytes.as_slice())?;
-    let claims = (*claims).clone();
-    claims.wascap_metadata.unwrap().module_hash = HEXUPPER.encode(digest.as_ref());
+    let mut claims = (*claims).clone();
+    let meta = claims.metadata.map(|md| {
+        Metadata {
+            module_hash: HEXUPPER.encode(digest.as_ref()),
+            ..md
+        }
+    });
+    claims.metadata = meta;
+
+
+    //claims.metadata.unwrap().module_hash = HEXUPPER.encode(digest.as_ref());
+
     let encoded = claims.encode(&kp)?;
     let encvec = encoded.as_bytes().to_vec();
     let mut m: Module = deserialize_buffer(orig_bytecode)?;
@@ -175,7 +166,7 @@ fn compute_hash_without_jwt(module: Module) -> Result<String> {
 mod test {
     use super::*;
     use crate::caps::{KEY_VALUE, MESSAGING};
-    use crate::jwt::{Claims, WascapMetadata};
+    use crate::jwt::{Claims, Metadata};
     use base64::decode;
     use parity_wasm::serialize;
 
@@ -196,7 +187,7 @@ mod test {
 
         let kp = KeyPair::new_account();
         let claims = Claims {
-            wascap_metadata: Some(WascapMetadata::new(
+            metadata: Some(Metadata::new(
                 Some(vec![MESSAGING.to_string(), KEY_VALUE.to_string()]),
                 Some(vec![]),
                 false,
@@ -218,13 +209,13 @@ mod test {
         if let Some(token) = extract_claims(&modified_bytecode).unwrap() {
             assert_eq!(claims.issuer, token.claims.issuer);
         /*     assert_eq!(
-            claims.wascap_metadata.as_ref().unwrap().caps,
-            token.claims.wascap_metadata.as_ref().unwrap().caps
+            claims.metadata.as_ref().unwrap().caps,
+            token.claims.metadata.as_ref().unwrap().caps
         );
         */
         /* assert_ne!(
-            claims.wascap_metadata.as_ref().unwrap().module_hash,
-            token.claims.wascap_metadata.as_ref().unwrap().module_hash
+            claims.metadata.as_ref().unwrap().module_hash,
+            token.claims.metadata.as_ref().unwrap().module_hash
         );
         */
         } else {
