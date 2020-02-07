@@ -184,7 +184,7 @@ fn request_handler(
     };
     match resp {
         Ok(r) => {
-            let r = codec::http::Response::decode(&r).unwrap();
+            let r = codec::http::Response::decode(r.as_slice()).unwrap();
             HttpResponse::with_body(
                 StatusCode::from_u16(r.status_code as _).unwrap(),
                 Body::from_slice(&r.body),
