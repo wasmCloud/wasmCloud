@@ -56,6 +56,10 @@ impl HttpServerProvider {
     fn terminate_server(&self, module: &str) {
         {
             let lock = self.servers.read().unwrap();
+            if !lock.contains_key(module) {
+                error!("Received request to stop server for non-configured actor {}. Igoring.", module);
+                return;
+            }
             let server = lock.get(module).unwrap();
             let _ = server
                 .stop(true)
