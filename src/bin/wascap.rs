@@ -12,14 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[macro_use]
+extern crate serde_derive;
+
 use nkeys::KeyPair;
 use std::fs::{read_to_string, File};
 use std::io::Read;
 use std::io::Write;
 use structopt::clap::AppSettings;
 use structopt::StructOpt;
-use wascap::cli::emit_claims;
-use wascap::wasm::sign_buffer_with_claims;
+use wascap::jwt::{Account, Actor, Claims, Operator};
+use wascap::wasm::{days_from_now_to_jwt_time, sign_buffer_with_claims};
 
 #[derive(Debug, StructOpt, Clone)]
 #[structopt(
@@ -46,14 +49,64 @@ enum CliCommand {
     /// including expiration, tags, and additional metadata
     #[structopt(name = "sign")]
     Sign(SignCommand),
+    /// Generate a signed JWT by supplying basic token information, a signing seed key, and metadata
+    #[structopt(name = "gen")]
+    Generate(GenerateCommand),
 }
 
-#[derive(StructOpt, Debug, Clone)]
-struct SignCommand {
-    /// File to read
-    source: String,
-    /// Target output file
-    output: String,
+#[derive(Debug, Clone, StructOpt)]
+enum GenerateCommand {
+    /// Generate a signed JWT for an actor module
+    #[structopt(name = "actor")]
+    Actor(ActorMetadata),
+    /// Generate a signed JWT for an operator
+    #[structopt(name = "operator")]
+    Operator(OperatorMetadata),
+    /// Generate a signed JWT for an account
+    #[structopt(name = "account")]
+    Account(AccountMetadata),
+}
+
+#[derive(Debug, Clone, StructOpt, Serialize, Deserialize)]
+struct GenerateCommon {
+    /// Issuer seed key path (usually a .nk file)
+    #[structopt(short = "i", long = "issuer")]
+    issuer_key_path: String,
+
+    /// Subject seed key path (usually a .nk file)
+    #[structopt(short = "u", long = "subject")]
+    subject_key_path: String,
+
+    /// Indicates the token expires in the given amount of days. If this option is left off, the token will never expire
+    #[structopt(short = "x", long = "expires")]
+    expires_in_days: Option<u64>,
+    /// Period in days that must elapse before this token is valid. If this option is left off, the token will be valid immediately
+    #[structopt(short = "b", long = "nbf")]
+    not_before_days: Option<u64>,
+}
+
+#[derive(Debug, Clone, StructOpt)]
+struct OperatorMetadata {
+    /// A descriptive name for the operator
+    #[structopt(short = "n", long = "name")]
+    name: String,
+
+    #[structopt(flatten)]
+    common: GenerateCommon,
+}
+
+#[derive(Debug, Clone, StructOpt)]
+struct AccountMetadata {
+    /// A descriptive name for the account
+    #[structopt(short = "n", long = "name")]
+    name: String,
+
+    #[structopt(flatten)]
+    common: GenerateCommon,
+}
+
+#[derive(StructOpt, Debug, Clone, Serialize, Deserialize)]
+struct ActorMetadata {
     /// Enable the Key/Value Store standard capability
     #[structopt(short = "k", long = "keyvalue")]
     keyvalue: bool,
@@ -66,35 +119,38 @@ struct SignCommand {
     /// Enable the HTTP client standard capability
     #[structopt(short = "h", long = "http_client")]
     http_client: bool,
-
+    /// A human-readable, descriptive name for the token
+    #[structopt(short = "n", long = "name")]
+    name: String,
     /// Add custom capabilities
     #[structopt(short = "c", long = "cap", name = "capabilities")]
     custom_caps: Vec<String>,
-    /// Indicates the token expires in the given amount of days. If this option is left off, the token will never expire
-    #[structopt(short = "x", long = "expires")]
-    expires_in_days: Option<u64>,
-    /// Period in days that must elapse before this token is valid. If this option is left off, the token will be valid immediately
-    #[structopt(short = "b", long = "nbf")]
-    not_before_days: Option<u64>,
-    /// Path to the account (signer)'s nkey file. If one is not present, one will be created
-    #[structopt(short = "a", long = "acct")]
-    acct_signer_path: Option<String>,
-    /// Path to the module's nkey file. If one is not present, one will be created
-    #[structopt(short = "m", long = "mod")]
-    mod_key_path: Option<String>,
     /// A list of arbitrary tags to be embedded in the token
     #[structopt(short = "t", long = "tag")]
     tags: Vec<String>,
     /// Indicates whether the signed module is a capability provider instead of an actor (the default is actor)
     #[structopt(short = "p", long = "prov")]
     provider: bool,
-    /// Revision number of the Actor
+    /// Revision number
     #[structopt(short = "r", long = "rev")]
     rev: Option<i32>,
-
-    /// Version
+    /// Human-readable version string
     #[structopt(short = "v", long = "ver")]
     ver: Option<String>,
+
+    #[structopt(flatten)]
+    common: GenerateCommon,
+}
+
+#[derive(StructOpt, Debug, Clone)]
+struct SignCommand {
+    /// File to read
+    source: String,
+    /// Target output file
+    output: String,
+
+    #[structopt(flatten)]
+    metadata: ActorMetadata,
 }
 
 fn main() -> Result<(), Box<dyn ::std::error::Error>> {
@@ -102,38 +158,125 @@ fn main() -> Result<(), Box<dyn ::std::error::Error>> {
     let cmd = args.command;
     env_logger::init();
 
-    handle_command(cmd)
+    match handle_command(cmd) {
+        Ok(_) => {},
+        Err(e) => {
+            println!("Command line failure: {}", e);
+        }
+    }
+    Ok(())
 }
 
 fn handle_command(cmd: CliCommand) -> Result<(), Box<dyn ::std::error::Error>> {
     match cmd {
         CliCommand::Caps { file, raw } => render_caps(&file, raw),
         CliCommand::Sign(signcmd) => sign_file(&signcmd),
+        CliCommand::Generate(gencmd) => generate_token(&gencmd),
     }
+}
+
+fn generate_token(cmd: &GenerateCommand) -> Result<(), Box<dyn ::std::error::Error>> {
+    match cmd {
+        GenerateCommand::Actor(actor) => generate_actor(actor),
+        GenerateCommand::Operator(operator) => generate_operator(operator),
+        GenerateCommand::Account(account) => generate_account(account),
+    }
+}
+
+fn get_keypairs(
+    common: &GenerateCommon,
+) -> Result<(KeyPair, KeyPair), Box<dyn ::std::error::Error>> {
+    if common.issuer_key_path.is_empty() {
+        return Err("Must specify an issuer key path".into());
+    }
+    if common.subject_key_path.is_empty() {
+        return Err("Must specify a subject key path".into());
+    }
+    let iss_key = read_to_string(&common.issuer_key_path)?;
+    let sub_key = read_to_string(&common.subject_key_path)?;
+    let issuer = KeyPair::from_seed(iss_key.trim_end())?;
+    let subject = KeyPair::from_seed(sub_key.trim_end())?;
+
+    Ok((issuer, subject))
+}
+
+fn generate_actor(actor: &ActorMetadata) -> Result<(), Box<dyn ::std::error::Error>> {
+    let (issuer, subject) = get_keypairs(&actor.common)?;
+    let mut caps_list = vec![];
+    if actor.keyvalue {
+        caps_list.push(wascap::caps::KEY_VALUE.to_string());
+    }
+    if actor.msg_broker {
+        caps_list.push(wascap::caps::MESSAGING.to_string());
+    }
+    if actor.http_client {
+        caps_list.push(wascap::caps::HTTP_CLIENT.to_string());
+    }
+    if actor.http_server {
+        caps_list.push(wascap::caps::HTTP_SERVER.to_string());
+    }
+    caps_list.extend(actor.custom_caps.iter().cloned());
+
+    if actor.provider && caps_list.len() > 1 {
+        return Err("Capability providers cannot provide multiple capabilities at once.".into());
+    }
+    let claims: Claims<Actor> = Claims::<Actor>::with_dates(
+        actor.name.clone(),
+        issuer.public_key(),
+        subject.public_key(),
+        Some(caps_list),
+        Some(actor.tags.clone()),
+        days_from_now_to_jwt_time(actor.common.expires_in_days),
+        days_from_now_to_jwt_time(actor.common.not_before_days),
+        actor.provider,
+        actor.rev,
+        actor.ver.clone(),
+    );
+    println!("{}", claims.encode(&issuer)?);
+    Ok(())
+}
+
+fn generate_operator(operator: &OperatorMetadata) -> Result<(), Box<dyn ::std::error::Error>> {
+    let (issuer, subject) = get_keypairs(&operator.common)?;
+    let claims: Claims<Operator> = Claims::<Operator>::with_dates(
+        operator.name.clone(),
+        issuer.public_key(),
+        subject.public_key(),
+        days_from_now_to_jwt_time(operator.common.not_before_days),
+        days_from_now_to_jwt_time(operator.common.expires_in_days),
+    );
+    println!("{}", claims.encode(&issuer)?);
+    Ok(())
+}
+
+fn generate_account(account: &AccountMetadata) -> Result<(), Box<dyn ::std::error::Error>> {
+    let (issuer, subject) = get_keypairs(&account.common)?;
+    let claims: Claims<Account> = Claims::<Account>::with_dates(
+        account.name.clone(),
+        issuer.public_key(),
+        subject.public_key(),
+        days_from_now_to_jwt_time(account.common.not_before_days),
+        days_from_now_to_jwt_time(account.common.expires_in_days),
+    );
+    println!("{}", claims.encode(&issuer)?);
+    Ok(())
 }
 
 fn sign_file(cmd: &SignCommand) -> Result<(), Box<dyn ::std::error::Error>> {
     let mut sfile = File::open(&cmd.source).unwrap();
     let mut buf = Vec::new();
     sfile.read_to_end(&mut buf).unwrap();
-    let mod_kp = if let Some(p) = &cmd.mod_key_path {
-        let kp = KeyPair::from_seed(&read_to_string(p)?.trim_end());
-        match kp {
-            Ok(pair) => pair,
-            Err(e) => panic!("Failed to read module seed key: {}", e),
-        }
+
+    let mod_kp = if !cmd.metadata.common.subject_key_path.is_empty() {
+        KeyPair::from_seed(&read_to_string(&cmd.metadata.common.subject_key_path)?.trim_end())?
     } else {
         let m = KeyPair::new_module();
         println!("New module key created. SAVE this seed key: {}", m.seed()?);
         m
     };
 
-    let acct_kp = if let Some(p) = &cmd.acct_signer_path {
-        let kp = KeyPair::from_seed(&read_to_string(p)?.trim_end());
-        match kp {
-            Ok(pair) => pair,
-            Err(e) => panic!("Failed to read account seed key: {}", e),
-        }
+    let acct_kp = if !cmd.metadata.common.issuer_key_path.is_empty() {
+        KeyPair::from_seed(&read_to_string(&cmd.metadata.common.issuer_key_path)?.trim_end())? 
     } else {
         let a = KeyPair::new_account();
         println!("New account key created. SAVE this seed key: {}", a.seed()?);
@@ -141,35 +284,36 @@ fn sign_file(cmd: &SignCommand) -> Result<(), Box<dyn ::std::error::Error>> {
     };
 
     let mut caps_list = vec![];
-    if cmd.keyvalue {
+    if cmd.metadata.keyvalue {
         caps_list.push(wascap::caps::KEY_VALUE.to_string());
     }
-    if cmd.msg_broker {
+    if cmd.metadata.msg_broker {
         caps_list.push(wascap::caps::MESSAGING.to_string());
     }
-    if cmd.http_client {
+    if cmd.metadata.http_client {
         caps_list.push(wascap::caps::HTTP_CLIENT.to_string());
     }
-    if cmd.http_server {
+    if cmd.metadata.http_server {
         caps_list.push(wascap::caps::HTTP_SERVER.to_string());
     }
-    caps_list.extend(cmd.custom_caps.iter().cloned());
+    caps_list.extend(cmd.metadata.custom_caps.iter().cloned());
 
-    if cmd.provider && caps_list.len() > 1 {
-        panic!("Capability providers cannot provide multiple capabilities at once.")
+    if cmd.metadata.provider && caps_list.len() > 1 {
+        return Err("Capability providers cannot provide multiple capabilities at once.".into());
     }
 
     let signed = sign_buffer_with_claims(
+        cmd.metadata.name.clone(),
         &buf,
         mod_kp,
         acct_kp,
-        cmd.expires_in_days,
-        cmd.not_before_days,
+        cmd.metadata.common.expires_in_days,
+        cmd.metadata.common.not_before_days,
         caps_list.clone(),
-        cmd.tags.clone(),
-        cmd.provider,
-        cmd.rev,
-        cmd.ver.clone(),
+        cmd.metadata.tags.clone(),
+        cmd.metadata.provider,
+        cmd.metadata.rev,
+        cmd.metadata.ver.clone(),
     )?;
 
     let mut outfile = File::create(&cmd.output).unwrap();
@@ -198,7 +342,8 @@ fn render_caps(file: &str, raw: bool) -> Result<(), Box<dyn ::std::error::Error>
             if raw {
                 println!("{}", &token.jwt);
             } else {
-                emit_claims(&token.claims, &token.jwt);
+                let validation = wascap::jwt::validate_token::<Actor>(&token.jwt)?;
+                println!("{}", token.claims.render(validation));
             }
             Ok(())
         }

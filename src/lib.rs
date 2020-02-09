@@ -35,11 +35,14 @@
 //! let module = KeyPair::new_module(); // Create a key pair for the module itself
 //!
 //! // Grant the module some basic capabilities, with no date limits
-//! let claims = ClaimsBuilder::new()
-//!     .with_capability(caps::MESSAGING)
-//!     .with_capability(caps::KEY_VALUE)
+//! let claims = ClaimsBuilder::<Actor>::new()
 //!     .issuer(&issuer.public_key())
 //!     .subject(&module.public_key())
+//!     .with_metadata(Actor{
+//!         name: Some("test".to_string()),
+//!         caps: Some(vec![caps::MESSAGING.to_string(), caps::KEY_VALUE.to_string()]),
+//!         .. Default::default()
+//!      })
 //!     .build();
 //!
 //! // Sign the JWT and embed it into the WebAssembly module, returning the signed bytes
@@ -50,7 +53,7 @@
 //! let extracted = wasm::extract_claims(&embedded)?.unwrap();
 //!
 //! // Validate dates, signature, JWT structure, etc.
-//! let v = validate_token(&extracted.jwt)?;
+//! let v = validate_token::<Actor>(&extracted.jwt)?;
 //!
 //! assert_eq!(v.expired, false);
 //! assert_eq!(v.cannot_use_yet, false);
@@ -87,7 +90,7 @@ pub mod prelude {
     //! Public re-exports of the most commonly used wascap types
     pub use super::{Error, Result};
     pub use crate::caps;
-    pub use crate::jwt::{validate_token, Claims, ClaimsBuilder, Metadata};
+    pub use crate::jwt::{validate_token, Account, Actor, Claims, ClaimsBuilder, Operator};
     pub use crate::wasm;
     pub use nkeys::KeyPair;
 }

@@ -28,9 +28,9 @@ const HEADER_ALGORITHM: &str = "Ed25519";
 
 /// A structure containing a JWT and its associated decoded claims
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
-pub struct Token {
+pub struct Token<T> {
     pub jwt: String,
-    pub claims: Claims,
+    pub claims: Claims<T>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -46,10 +46,17 @@ fn default_as_false() -> bool {
     false
 }
 
-/// Represents a set of [RFC 7519](https://tools.ietf.org/html/rfc7519) compliant JSON Web Token
-/// claims.
-#[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
-pub struct Metadata {
+pub trait WascapEntity: Clone {
+    fn name(&self) -> String;
+}
+
+/// The metadata that corresponds to an actor module
+#[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Default)]
+pub struct Actor {
+    /// A descriptive name for this actor, should not include version information or public key
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+
     /// A hash of the module's bytes as they exist without the embedded signature. This is stored so wascap
     /// can determine if a WebAssembly module's bytecode has been altered after it was signed
     #[serde(rename = "hash")]
@@ -74,10 +81,23 @@ pub struct Metadata {
     #[serde(rename = "prov", default = "default_as_false")]
     pub provider: bool,
 }
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Default)]
+pub struct Account {
+    /// A descriptive name for this account
+    pub name: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Default)]
+pub struct Operator {
+    /// A descriptive name for the operator
+    pub name: String,
+}
+
 /// Represents a set of [RFC 7519](https://tools.ietf.org/html/rfc7519) compliant JSON Web Token
 /// claims.
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Default)]
-pub struct Claims {
+pub struct Claims<T> {
     /// All timestamps in JWTs are stored in _seconds since the epoch_ format
     /// as described as `NumericDate` in the RFC. Corresponds to the `exp` field in a JWT.
     #[serde(rename = "exp", skip_serializing_if = "Option::is_none")]
@@ -107,93 +127,7 @@ pub struct Claims {
 
     /// Custom jwt claims in the `wascap` namespace
     #[serde(rename = "wascap", skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<Metadata>,
-}
-
-/// Utility struct for creating a fluent builder for a new set of claims
-#[derive(Default)]
-pub struct ClaimsBuilder {
-    issuer: String,
-    subject: String,
-    caps: Vec<String>,
-    provider: bool,
-    tags: Vec<String>,
-    rev: Option<i32>,
-    ver: Option<String>,
-    expires: Option<Duration>,
-    not_before: Option<Duration>,
-}
-
-impl ClaimsBuilder {
-    /// Creates a new builder
-    pub fn new() -> Self {
-        ClaimsBuilder::default()
-    }
-
-    /// Sets the issuer for the claims
-    pub fn issuer(&mut self, issuer: &str) -> &mut Self {
-        self.issuer = issuer.to_string();
-        self
-    }
-
-    /// Sets the subject for the claims
-    pub fn subject(&mut self, module: &str) -> &mut Self {
-        self.subject = module.to_string();
-        self
-    }
-
-    /// Adds a capability to the claims
-    pub fn with_capability(&mut self, cap: &str) -> &mut Self {
-        self.caps.push(cap.to_string());
-        self
-    }
-
-    /// Adds a tag to the claims
-    pub fn with_tag(&mut self, tag: &str) -> &mut Self {
-        self.tags.push(tag.to_string());
-        self
-    }
-
-    /// Indicates how long this claim set will remain valid
-    pub fn expires_in(&mut self, d: Duration) -> &mut Self {
-        self.expires = Some(d);
-        self
-    }
-
-    /// Indicates how long until this claim set becomes valid
-    pub fn valid_in(&mut self, d: Duration) -> &mut Self {
-        self.not_before = Some(d);
-        self
-    }
-
-    // Indicates that these claims are for a capability provider
-    pub fn provider(&mut self) -> &mut Self {
-        self.provider = true;
-        self
-    }
-
-    /// Produce a claims set from the builder
-    pub fn build(&self) -> Claims {
-        Claims {
-            metadata: Some(Metadata::new(
-                Some(self.caps.clone()),
-                Some(self.tags.clone()),
-                self.provider,
-                self.rev,
-                self.ver.clone(),
-            )),
-            expires: self
-                .expires
-                .map(|e| e.as_secs() + since_the_epoch().as_secs()),
-            id: nuid::next(),
-            issued_at: since_the_epoch().as_secs(),
-            issuer: self.issuer.clone(),
-            subject: self.subject.clone(),
-            not_before: self
-                .not_before
-                .map(|nb| nb.as_secs() + since_the_epoch().as_secs()),
-        }
-    }
+    pub metadata: Option<T>,
 }
 
 /// The result of the validation process perform on a JWT
@@ -213,46 +147,12 @@ pub struct TokenValidation {
     /// Indicates whether the signature is valid according to a cryptographic comparison. If `false` you should
     /// reject this token.
     pub signature_valid: bool,
-    /// Indicates that the claims are for a capability provider, yet there are multiple claims embedded. Providers
-    /// can only support a single capability
-    pub provider_too_many_capabilities: bool,
 }
 
-impl Claims {
-    pub fn new(
-        issuer: String,
-        subject: String,
-        caps: Option<Vec<String>>,
-        tags: Option<Vec<String>>,
-        provider: bool,
-        rev: Option<i32>,
-        ver: Option<String>,
-    ) -> Claims {
-        Self::with_dates(issuer, subject, caps, tags, None, None, provider, rev, ver)
-    }
-
-    pub fn with_dates(
-        issuer: String,
-        subject: String,
-        caps: Option<Vec<String>>,
-        tags: Option<Vec<String>>,
-        not_before: Option<u64>,
-        expires: Option<u64>,
-        provider: bool,
-        rev: Option<i32>,
-        ver: Option<String>,
-    ) -> Claims {
-        Claims {
-            metadata: Some(Metadata::new(caps, tags, provider, rev, ver)),
-            expires,
-            id: nuid::next(),
-            issued_at: since_the_epoch().as_secs(),
-            issuer,
-            subject,
-            not_before,
-        }
-    }
-
+impl<T> Claims<T>
+where
+    T: Serialize + DeserializeOwned + WascapEntity,
+{
     pub fn encode(&self, kp: &KeyPair) -> Result<String> {
         let header = ClaimsHeader {
             header_type: HEADER_TYPE.to_string(),
@@ -267,15 +167,187 @@ impl Claims {
         Ok(format!("{}.{}", head_and_claims, sig64))
     }
 
-    pub fn decode(input: &str) -> Result<Claims> {
+    pub fn decode(input: &str) -> Result<Claims<T>> {
         let segments: Vec<&str> = input.split('.').collect();
-        let claims: Claims = from_jwt_segment(segments[1])?;
+        let claims: Claims<T> = from_jwt_segment(segments[1])?;
 
         Ok(claims)
     }
+
+    pub fn name(&self) -> String {
+        self.metadata
+            .as_ref()
+            .map_or("Anonymous".to_string(), |md| md.name())
+    }
 }
 
-pub fn validate_token(input: &str) -> Result<TokenValidation> {
+impl WascapEntity for Actor {
+    fn name(&self) -> String {
+        self.name
+            .as_ref()
+            .unwrap_or(&"Anonymous".to_string())
+            .to_string()
+    }
+}
+
+impl WascapEntity for Account {
+    fn name(&self) -> String {
+        self.name.clone()
+    }
+}
+
+impl WascapEntity for Operator {
+    fn name(&self) -> String {
+        self.name.clone()
+    }
+}
+
+impl Claims<Account> {
+    pub fn new(name: String, issuer: String, subject: String) -> Claims<Account> {
+        Self::with_dates(name, issuer, subject, None, None)
+    }
+
+    pub fn with_dates(
+        name: String,
+        issuer: String,
+        subject: String,
+        not_before: Option<u64>,
+        expires: Option<u64>,
+    ) -> Claims<Account> {
+        Claims {
+            metadata: Some(Account { name }),
+            expires,
+            id: nuid::next(),
+            issued_at: since_the_epoch().as_secs(),
+            issuer,
+            subject,
+            not_before,
+        }
+    }
+}
+
+impl Claims<Operator> {
+    pub fn new(name: String, issuer: String, subject: String) -> Claims<Operator> {
+        Self::with_dates(name, issuer, subject, None, None)
+    }
+
+    pub fn with_dates(
+        name: String,
+        issuer: String,
+        subject: String,
+        not_before: Option<u64>,
+        expires: Option<u64>,
+    ) -> Claims<Operator> {
+        Claims {
+            metadata: Some(Operator { name }),
+            expires,
+            id: nuid::next(),
+            issued_at: since_the_epoch().as_secs(),
+            issuer,
+            subject,
+            not_before,
+        }
+    }
+}
+
+impl Claims<Actor> {
+    pub fn new(
+        name: String,
+        issuer: String,
+        subject: String,
+        caps: Option<Vec<String>>,
+        tags: Option<Vec<String>>,
+        provider: bool,
+        rev: Option<i32>,
+        ver: Option<String>,
+    ) -> Claims<Actor> {
+        Self::with_dates(
+            name, issuer, subject, caps, tags, None, None, provider, rev, ver,
+        )
+    }
+
+    pub fn with_dates(
+        name: String,
+        issuer: String,
+        subject: String,
+        caps: Option<Vec<String>>,
+        tags: Option<Vec<String>>,
+        not_before: Option<u64>,
+        expires: Option<u64>,
+        provider: bool,
+        rev: Option<i32>,
+        ver: Option<String>,
+    ) -> Claims<Actor> {
+        Claims {
+            metadata: Some(Actor::new(name, caps, tags, provider, rev, ver)),
+            expires,
+            id: nuid::next(),
+            issued_at: since_the_epoch().as_secs(),
+            issuer,
+            subject,
+            not_before,
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct ClaimsBuilder<T> {
+    claims: Claims<T>,
+}
+
+impl<T> ClaimsBuilder<T>
+where
+    T: Default + WascapEntity,
+{
+    /// Creates a new builder
+    pub fn new() -> Self {
+        ClaimsBuilder::default()
+    }
+
+    /// Sets the issuer for the claims
+    pub fn issuer(&mut self, issuer: &str) -> &mut Self {
+        self.claims.issuer = issuer.to_string();
+        self
+    }
+
+    /// Sets the subject for the claims
+    pub fn subject(&mut self, module: &str) -> &mut Self {
+        self.claims.subject = module.to_string();
+        self
+    }
+
+    /// Indicates how long this claim set will remain valid
+    pub fn expires_in(&mut self, d: Duration) -> &mut Self {
+        self.claims.expires = Some(d.as_secs() + since_the_epoch().as_secs());
+        self
+    }
+
+    /// Indicates how long until this claim set becomes valid
+    pub fn valid_in(&mut self, d: Duration) -> &mut Self {
+        self.claims.not_before = Some(d.as_secs() + since_the_epoch().as_secs());
+        self
+    }
+
+    /// Sets the appropriate metadata for this claims type (e.g. `Actor`, `Operator`, or `Account`)
+    pub fn with_metadata(&mut self, metadata: T) -> &mut Self {
+        self.claims.metadata = Some(metadata);
+        self
+    }
+
+    // Produce a claims set from the builder
+    pub fn build(&self) -> Claims<T> {
+        Claims {
+            id: nuid::next(),
+            issued_at: since_the_epoch().as_secs(),
+            ..self.claims.clone()
+        }
+    }
+}
+
+pub fn validate_token<T>(input: &str) -> Result<TokenValidation>
+where
+    T: Serialize + DeserializeOwned + WascapEntity,
+{
     let segments: Vec<&str> = input.split('.').collect();
     let header_and_claims = format!("{}.{}", segments[0], segments[1]);
     let sig = base64::decode_config(segments[2], base64::URL_SAFE_NO_PAD)?;
@@ -283,7 +355,7 @@ pub fn validate_token(input: &str) -> Result<TokenValidation> {
     let header: ClaimsHeader = from_jwt_segment(segments[0])?;
     validate_header(&header)?;
 
-    let claims = Claims::decode(input)?;
+    let claims = Claims::<T>::decode(input)?;
     let kp = KeyPair::from_public_key(&claims.issuer)?;
     let sigverify = kp.verify(header_and_claims.as_bytes(), &sig);
 
@@ -294,22 +366,9 @@ pub fn validate_token(input: &str) -> Result<TokenValidation> {
         not_before_human: stamp_to_human(claims.not_before)
             .unwrap_or_else(|| "immediately".to_string()),
         cannot_use_yet: validate_notbefore(claims.not_before).is_err(),
-        provider_too_many_capabilities: validate_too_many_capabilities(claims.metadata),
     };
 
     Ok(validation)
-}
-
-fn validate_too_many_capabilities(metadata: Option<Metadata>) -> bool {
-    if let Some(meta) = metadata {
-        if meta.provider && meta.caps.map_or(0, |c| c.len()) > 1 {
-            true
-        } else {
-            false
-        }
-    } else {
-        false
-    }
 }
 
 fn validate_notbefore(nb: Option<u64>) -> Result<()> {
@@ -382,15 +441,17 @@ fn stamp_to_human(stamp: Option<u64>) -> Option<String> {
     })
 }
 
-impl Metadata {
+impl Actor {
     pub fn new(
+        name: String,
         caps: Option<Vec<String>>,
         tags: Option<Vec<String>>,
         provider: bool,
         rev: Option<i32>,
         ver: Option<String>,
-    ) -> Metadata {
-        Metadata {
+    ) -> Actor {
+        Actor {
+            name: Some(name),
             module_hash: "".to_string(),
             tags,
             caps,
@@ -401,9 +462,29 @@ impl Metadata {
     }
 }
 
+impl Account {
+    pub fn new(
+        name: String,
+    ) -> Account {
+        Account {
+            name
+        }
+    }
+}
+
+impl Operator {
+    pub fn new(
+        name: String,
+    ) -> Operator {
+        Operator {
+            name
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
-    use super::{Claims, ClaimsBuilder, KeyPair, Metadata};
+    use super::{Actor, Claims, KeyPair, Account, Operator};
     use crate::caps::{KEY_VALUE, MESSAGING};
     use crate::jwt::since_the_epoch;
     use crate::jwt::validate_token;
@@ -412,7 +493,8 @@ mod test {
     fn full_validation_nbf() {
         let kp = KeyPair::new_account();
         let claims = Claims {
-            metadata: Some(Metadata::new(
+            metadata: Some(Actor::new(
+                "test".to_string(),
                 Some(vec![MESSAGING.to_string(), KEY_VALUE.to_string()]),
                 Some(vec![]),
                 false,
@@ -428,7 +510,7 @@ mod test {
         };
 
         let encoded = claims.encode(&kp).unwrap();
-        let vres = validate_token(&encoded);
+        let vres = validate_token::<Actor>(&encoded);
         assert!(vres.is_ok());
         if let Ok(v) = vres {
             assert_eq!(v.expired, false);
@@ -441,7 +523,8 @@ mod test {
     fn full_validation_expires() {
         let kp = KeyPair::new_account();
         let claims = Claims {
-            metadata: Some(Metadata::new(
+            metadata: Some(Actor::new(
+                "test".to_string(),
                 Some(vec![MESSAGING.to_string(), KEY_VALUE.to_string()]),
                 Some(vec![]),
                 false,
@@ -457,7 +540,31 @@ mod test {
         };
 
         let encoded = claims.encode(&kp).unwrap();
-        let vres = validate_token(&encoded);
+        let vres = validate_token::<Actor>(&encoded);
+        assert!(vres.is_ok());
+        if let Ok(v) = vres {
+            assert!(v.expired);
+            assert_eq!(v.cannot_use_yet, false);
+            assert_eq!(v.expires_human, "8 hours ago");
+        }
+    }
+
+    #[test]
+    fn validate_account() {
+        let issuer = KeyPair::new_operator();
+        let claims = Claims {
+            metadata: Some(Account::new(
+                "test account".to_string()
+            )),
+            expires: Some(since_the_epoch().as_secs() - 30000),
+            id: nuid::next(),
+            issued_at: 0,
+            issuer: issuer.public_key(),
+            subject: "foo".to_string(),
+            not_before: None,
+        };
+        let encoded = claims.encode(&issuer).unwrap();
+        let vres = validate_token::<Account>(&encoded);
         assert!(vres.is_ok());
         if let Ok(v) = vres {
             assert!(v.expired);
@@ -470,7 +577,8 @@ mod test {
     fn full_validation() {
         let kp = KeyPair::new_account();
         let claims = Claims {
-            metadata: Some(Metadata::new(
+            metadata: Some(Actor::new(
+                "test".to_string(),
                 Some(vec![MESSAGING.to_string(), KEY_VALUE.to_string()]),
                 Some(vec![]),
                 false,
@@ -486,15 +594,59 @@ mod test {
         };
 
         let encoded = claims.encode(&kp).unwrap();
-        let vres = validate_token(&encoded);
+        let vres = validate_token::<Actor>(&encoded);
         assert!(vres.is_ok());
+    }
+
+    #[test]
+    fn encode_decode_mismatch() {
+        let issuer = KeyPair::new_operator();
+        let claims = Claims {
+            metadata: Some(Account::new("test account".to_string())),
+            expires: None,
+            id: nuid::next(),
+            issued_at: 0,
+            issuer: "foo".to_string(),
+            subject: "test".to_string(),
+            not_before: None,
+        };
+        let encoded = claims.encode(&issuer).unwrap();
+        let decoded = Claims::<Actor>::decode(&encoded);
+        assert!(decoded.is_err());
+
+    }
+
+    #[test]
+    fn decode_actor_as_operator() {
+        let kp = KeyPair::new_account();
+        let claims = Claims {
+            metadata: Some(Actor::new(
+                "test".to_string(),
+                Some(vec![MESSAGING.to_string(), KEY_VALUE.to_string()]),
+                Some(vec![]),
+                false,
+                Some(1),
+                Some("".to_string()),
+            )),
+            expires: None,
+            id: nuid::next(),
+            issued_at: 0,
+            issuer: kp.public_key(),
+            subject: "test.wasm".to_string(),
+            not_before: None,
+        };
+        let encoded = claims.encode(&kp).unwrap();
+        let decoded = Claims::<Operator>::decode(&encoded);
+        assert!(decoded.is_ok());
+        assert_eq!(decoded.unwrap().metadata.unwrap().name, "test");
     }
 
     #[test]
     fn encode_decode_roundtrip() {
         let kp = KeyPair::new_account();
         let claims = Claims {
-            metadata: Some(Metadata::new(
+            metadata: Some(Actor::new(
+                "test".to_string(),
                 Some(vec![MESSAGING.to_string(), KEY_VALUE.to_string()]),
                 Some(vec![]),
                 false,
@@ -512,25 +664,8 @@ mod test {
         let encoded = claims.encode(&kp).unwrap();
 
         let decoded = Claims::decode(&encoded).unwrap();
-        assert!(validate_token(&encoded).is_ok());
+        assert!(validate_token::<Actor>(&encoded).is_ok());
 
         assert_eq!(claims, decoded);
-    }
-
-    #[test]
-    fn builder() {
-        let claims = ClaimsBuilder::new()
-            .with_capability(MESSAGING)
-            .with_capability(KEY_VALUE)
-            .issuer("issuer")
-            .subject("subject")
-            .build();
-
-        assert_eq!(
-            claims.metadata.unwrap().caps,
-            Some(vec![MESSAGING.to_string(), KEY_VALUE.to_string()])
-        );
-        assert_eq!(claims.issuer, "issuer".to_string());
-        assert_eq!(claims.subject, "subject".to_string());
     }
 }

@@ -15,8 +15,8 @@
 //! Functions for extracting and embedding claims within a WebAssembly module
 
 use crate::errors::{self, ErrorKind};
-use crate::jwt::{Claims, Metadata};
 use crate::jwt::Token;
+use crate::jwt::{Actor, Claims};
 use crate::Result;
 use data_encoding::HEXUPPER;
 use nkeys::KeyPair;
@@ -40,7 +40,7 @@ const SECS_PER_DAY: u64 = 86400;
 /// Will return errors if the file cannot be read, cannot be parsed, contains an improperly
 /// forms JWT, or the `module_hash` claim inside the decoded JWT does not match the hash
 /// of the file.
-pub fn extract_claims(contents: impl AsRef<[u8]>) -> Result<Option<Token>> {
+pub fn extract_claims(contents: impl AsRef<[u8]>) -> Result<Option<Token<Actor>>> {
     let module: Module = deserialize_buffer(contents.as_ref())?;
 
     let sections: Vec<&CustomSection> = module
@@ -52,7 +52,7 @@ pub fn extract_claims(contents: impl AsRef<[u8]>) -> Result<Option<Token>> {
         Ok(None)
     } else {
         let jwt = String::from_utf8(sections[0].payload().to_vec())?;
-        let claims = Claims::decode(&jwt)?;
+        let claims: Claims<Actor> = Claims::decode(&jwt)?;
         let hash = compute_hash_without_jwt(module)?;
 
         if let Some(ref meta) = claims.metadata {
@@ -73,23 +73,18 @@ pub fn extract_claims(contents: impl AsRef<[u8]>) -> Result<Option<Token>> {
 /// specification, arbitary sets of bytes can be stored in a WebAssembly module without impacting
 /// parsers or interpreters. Returns a vector of bytes representing the new WebAssembly module which can
 /// be saved to a `.wasm` file
-pub fn embed_claims(orig_bytecode: &[u8], claims: &Claims, kp: &KeyPair) -> Result<Vec<u8>> {
+pub fn embed_claims(orig_bytecode: &[u8], claims: &Claims<Actor>, kp: &KeyPair) -> Result<Vec<u8>> {
     let mut module: Module = deserialize_buffer(orig_bytecode)?;
     module.clear_custom_section("jwt");
     let cleanbytes = serialize(module)?;
 
     let digest = sha256_digest(cleanbytes.as_slice())?;
     let mut claims = (*claims).clone();
-    let meta = claims.metadata.map(|md| {
-        Metadata {
-            module_hash: HEXUPPER.encode(digest.as_ref()),
-            ..md
-        }
+    let meta = claims.metadata.map(|md| Actor {
+        module_hash: HEXUPPER.encode(digest.as_ref()),
+        ..md
     });
-    claims.metadata = meta;
-
-
-    //claims.metadata.unwrap().module_hash = HEXUPPER.encode(digest.as_ref());
+    claims.metadata = meta;    
 
     let encoded = claims.encode(&kp)?;
     let encvec = encoded.as_bytes().to_vec();
@@ -102,6 +97,7 @@ pub fn embed_claims(orig_bytecode: &[u8], claims: &Claims, kp: &KeyPair) -> Resu
 }
 
 pub fn sign_buffer_with_claims(
+    name: String,
     buf: impl AsRef<[u8]>,
     mod_kp: KeyPair,
     acct_kp: KeyPair,
@@ -113,7 +109,8 @@ pub fn sign_buffer_with_claims(
     rev: Option<i32>,
     ver: Option<String>,
 ) -> Result<Vec<u8>> {
-    let claims = Claims::with_dates(
+    let claims = Claims::<Actor>::with_dates(
+        name,
         acct_kp.public_key(),
         mod_kp.public_key(),
         Some(caps),
@@ -134,7 +131,7 @@ fn since_the_epoch() -> std::time::Duration {
         .expect("A timey wimey problem has occurred!")
 }
 
-fn days_from_now_to_jwt_time(stamp: Option<u64>) -> Option<u64> {
+pub fn days_from_now_to_jwt_time(stamp: Option<u64>) -> Option<u64> {
     stamp.map(|e| since_the_epoch().as_secs() + e * SECS_PER_DAY)
 }
 
@@ -154,7 +151,7 @@ fn sha256_digest<R: Read>(mut reader: R) -> Result<Digest> {
 }
 
 fn compute_hash_without_jwt(module: Module) -> Result<String> {
-    let mut refmod = module.clone();
+    let mut refmod = module;
     refmod.clear_custom_section("jwt");
     let modbytes = serialize(refmod)?;
 
@@ -166,7 +163,7 @@ fn compute_hash_without_jwt(module: Module) -> Result<String> {
 mod test {
     use super::*;
     use crate::caps::{KEY_VALUE, MESSAGING};
-    use crate::jwt::{Claims, Metadata};
+    use crate::jwt::{Actor, Claims};
     use base64::decode;
     use parity_wasm::serialize;
 
@@ -187,7 +184,8 @@ mod test {
 
         let kp = KeyPair::new_account();
         let claims = Claims {
-            metadata: Some(Metadata::new(
+            metadata: Some(Actor::new(
+                "testing".to_string(),
                 Some(vec![MESSAGING.to_string(), KEY_VALUE.to_string()]),
                 Some(vec![]),
                 false,
