@@ -63,8 +63,8 @@ impl NatsProvider {
         &self,
         actor: &str,
         msg: impl Into<PublishMessage>,
-    ) -> Result<Vec<u8>, Box<dyn Error>> {
-        let msg = msg.into();
+    ) -> Result<Vec<u8>, Box<dyn Error>> {        
+        let msg = msg.into();        
 
         let lock = self.clients.read().unwrap();
         let client = lock.get(actor).unwrap();
@@ -125,7 +125,7 @@ impl CapabilityProvider for NatsProvider {
     }
 
     fn handle_call(&self, actor: &str, op: &str, msg: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
-        trace!("Received host call from {}, operation - {}", op, actor);
+        trace!("Received host call from {}, operation - {}",actor, op);
 
         match op {
             OP_PUBLISH_MESSAGE => self.publish_message(actor, msg.to_vec().as_ref()),

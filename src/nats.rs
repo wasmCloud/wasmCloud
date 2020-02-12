@@ -21,6 +21,7 @@ const ENV_NATS_QUEUEGROUP_NAME: &str = "QUEUEGROUP_NAME";
 pub(crate) fn publish(client: &Client, msg: PublishMessage) -> Result<Vec<u8>, Box<dyn Error>> {
     match msg.message {
         Some(m) => {
+            trace!("Publishing message on {}", &m.subject);
             match client.publish(
                 &m.subject,
                 &m.body,
@@ -138,7 +139,7 @@ fn create_subscription(
                 let d = dispatcher.read().unwrap();
                 if let Err(e) = d.dispatch(&format!("{}!{}", actor, OP_DELIVER_MESSAGE), &buf) {
                     error!("Dispatch failed: {}", e);
-                }
+                }                
                 Ok(())
             })
         }
