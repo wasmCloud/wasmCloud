@@ -223,7 +223,7 @@ impl CapabilityProvider for RedisKVProvider {
     }
 
     fn handle_call(&self, actor: &str, op: &str, msg: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
-        info!("Received host call, operation - {}", op);
+        info!("Received host call, operation - {} ({} bytes)", op, msg.len());
 
         match op {
             OP_CONFIGURE if actor == "system" => {
