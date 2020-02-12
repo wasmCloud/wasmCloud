@@ -46,8 +46,8 @@ pub struct RedisKVProvider {
 impl Default for RedisKVProvider {
     fn default() -> Self {
         match env_logger::try_init() {
-            Ok(_) => {},
-            Err(_) => println!("** Redis provider skipping logger init, already initialized.")
+            Ok(_) => {}
+            Err(_) => println!("** Redis provider skipping logger init, already initialized."),
         };
 
         RedisKVProvider {
@@ -64,7 +64,14 @@ impl RedisKVProvider {
 
     fn actor_con(&self, actor: &str) -> RedisResult<Connection> {
         let lock = self.clients.read().unwrap();
-        lock.get(actor).unwrap().get_connection()
+        if let Some(client) = lock.get(actor) {
+            client.get_connection()
+        } else {
+            Err(redis::RedisError::from((
+                redis::ErrorKind::InvalidClientConfig,
+                "No client for this actor. Did the host configure it?",
+            )))
+        }
     }
 
     fn configure(&self, config: CapabilityConfiguration) -> Result<Vec<u8>, Box<dyn Error>> {
@@ -223,7 +230,11 @@ impl CapabilityProvider for RedisKVProvider {
     }
 
     fn handle_call(&self, actor: &str, op: &str, msg: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
-        info!("Received host call, operation - {} ({} bytes)", op, msg.len());
+        info!(
+            "Received host call, operation - {} ({} bytes)",
+            op,
+            msg.len()
+        );
 
         match op {
             OP_CONFIGURE if actor == "system" => {
