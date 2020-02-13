@@ -86,12 +86,18 @@ pub struct Actor {
 pub struct Account {
     /// A descriptive name for this account
     pub name: Option<String>,
+    /// A list of valid public keys that may appear as an `issuer` on
+    /// actors signed by one of this account's multiple seed keys
+    pub valid_signers: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Default)]
 pub struct Operator {
     /// A descriptive name for the operator
     pub name: Option<String>,
+    /// A list of valid public keys that may appear as an `issuer` on accounts
+    /// signed by one of this operator's multiple seed keys
+    pub valid_signers: Option<Vec<String>>,
 }
 
 /// Represents a set of [RFC 7519](https://tools.ietf.org/html/rfc7519) compliant JSON Web Token
@@ -192,19 +198,30 @@ impl WascapEntity for Actor {
 
 impl WascapEntity for Account {
     fn name(&self) -> String {
-        self.name.as_ref().unwrap_or(&"Anonymous".to_string()).clone()
+        self.name
+            .as_ref()
+            .unwrap_or(&"Anonymous".to_string())
+            .clone()
     }
 }
 
 impl WascapEntity for Operator {
     fn name(&self) -> String {
-        self.name.as_ref().unwrap_or(&"Anonymous".to_string()).clone()
+        self.name
+            .as_ref()
+            .unwrap_or(&"Anonymous".to_string())
+            .clone()
     }
 }
 
 impl Claims<Account> {
-    pub fn new(name: String, issuer: String, subject: String) -> Claims<Account> {
-        Self::with_dates(name, issuer, subject, None, None)
+    pub fn new(
+        name: String,
+        issuer: String,
+        subject: String,
+        additional_keys: Vec<String>,
+    ) -> Claims<Account> {
+        Self::with_dates(name, issuer, subject, None, None, additional_keys)
     }
 
     pub fn with_dates(
@@ -213,9 +230,13 @@ impl Claims<Account> {
         subject: String,
         not_before: Option<u64>,
         expires: Option<u64>,
+        additional_keys: Vec<String>,
     ) -> Claims<Account> {
         Claims {
-            metadata: Some(Account { name:Some(name) }),
+            metadata: Some(Account {
+                name: Some(name),
+                valid_signers: Some(additional_keys),
+            }),
             expires,
             id: nuid::next(),
             issued_at: since_the_epoch().as_secs(),
@@ -227,8 +248,13 @@ impl Claims<Account> {
 }
 
 impl Claims<Operator> {
-    pub fn new(name: String, issuer: String, subject: String) -> Claims<Operator> {
-        Self::with_dates(name, issuer, subject, None, None)
+    pub fn new(
+        name: String,
+        issuer: String,
+        subject: String,
+        additional_keys: Vec<String>,
+    ) -> Claims<Operator> {
+        Self::with_dates(name, issuer, subject, None, None, additional_keys)
     }
 
     pub fn with_dates(
@@ -237,9 +263,13 @@ impl Claims<Operator> {
         subject: String,
         not_before: Option<u64>,
         expires: Option<u64>,
+        additional_keys: Vec<String>,
     ) -> Claims<Operator> {
         Claims {
-            metadata: Some(Operator { name:Some(name) }),
+            metadata: Some(Operator {
+                name: Some(name),
+                valid_signers: Some(additional_keys),
+            }),
             expires,
             id: nuid::next(),
             issued_at: since_the_epoch().as_secs(),
@@ -463,28 +493,26 @@ impl Actor {
 }
 
 impl Account {
-    pub fn new(
-        name: String,
-    ) -> Account {
+    pub fn new(name: String, additional_keys: Vec<String>) -> Account {
         Account {
-            name: Some(name)
+            name: Some(name),
+            valid_signers: Some(additional_keys),
         }
     }
 }
 
 impl Operator {
-    pub fn new(
-        name: String,
-    ) -> Operator {
+    pub fn new(name: String, additional_keys: Vec<String>) -> Operator {
         Operator {
-            name: Some(name)
+            name: Some(name),
+            valid_signers: Some(additional_keys),
         }
     }
 }
 
 #[cfg(test)]
 mod test {
-    use super::{Actor, Claims, KeyPair, Account, Operator};
+    use super::{Account, Actor, Claims, KeyPair, Operator};
     use crate::caps::{KEY_VALUE, MESSAGING};
     use crate::jwt::since_the_epoch;
     use crate::jwt::validate_token;
@@ -553,9 +581,7 @@ mod test {
     fn validate_account() {
         let issuer = KeyPair::new_operator();
         let claims = Claims {
-            metadata: Some(Account::new(
-                "test account".to_string()
-            )),
+            metadata: Some(Account::new("test account".to_string(), vec![])),
             expires: Some(since_the_epoch().as_secs() - 30000),
             id: nuid::next(),
             issued_at: 0,
@@ -602,7 +628,7 @@ mod test {
     fn encode_decode_mismatch() {
         let issuer = KeyPair::new_operator();
         let claims = Claims {
-            metadata: Some(Account::new("test account".to_string())),
+            metadata: Some(Account::new("test account".to_string(), vec![])),
             expires: None,
             id: nuid::next(),
             issued_at: 0,
@@ -613,7 +639,6 @@ mod test {
         let encoded = claims.encode(&issuer).unwrap();
         let decoded = Claims::<Actor>::decode(&encoded);
         assert!(decoded.is_err());
-
     }
 
     #[test]
@@ -667,5 +692,23 @@ mod test {
         assert!(validate_token::<Actor>(&encoded).is_ok());
 
         assert_eq!(claims, decoded);
+    }
+
+    #[test]
+    fn account_extra_signers() {
+        let op = KeyPair::new_operator();
+        let kp1 = KeyPair::new_account();
+        let kp2 = KeyPair::new_account();
+        let claims = Claims::<Account>::new(
+            "test account".to_string(),
+            op.public_key(),
+            kp1.public_key(),
+            vec![kp2.public_key()],
+        );
+        let encoded = claims.encode(&kp1).unwrap();
+        let decoded = Claims::<Account>::decode(&encoded).unwrap();
+        assert!(validate_token::<Account>(&encoded).is_ok());
+        assert_eq!(claims, decoded);
+        assert_eq!(claims.metadata.unwrap().valid_signers.unwrap().len(), 1);
     }
 }

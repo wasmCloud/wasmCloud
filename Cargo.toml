@@ -1,6 +1,6 @@
 [package]
 name = "wascap"
-version = "0.3.1"
+version = "0.4.0"
 authors = ["Kevin Hoffman <alothien@gmail.com>"]
 edition = "2018"
 description = "Extracting, embedding, and validating WebAssembly Standard Capabilities tokens"

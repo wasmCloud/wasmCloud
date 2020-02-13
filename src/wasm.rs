@@ -84,7 +84,7 @@ pub fn embed_claims(orig_bytecode: &[u8], claims: &Claims<Actor>, kp: &KeyPair) 
         module_hash: HEXUPPER.encode(digest.as_ref()),
         ..md
     });
-    claims.metadata = meta;    
+    claims.metadata = meta;
 
     let encoded = claims.encode(&kp)?;
     let encvec = encoded.as_bytes().to_vec();

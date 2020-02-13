@@ -91,8 +91,17 @@ struct OperatorMetadata {
     #[structopt(short = "n", long = "name")]
     name: String,
 
-    #[structopt(flatten)]
-    common: GenerateCommon,
+    /// Seed key paths (first seed establishes self-signed identity, others are used for optional valid signers list)
+    #[structopt(short = "s", long = "seed", name = "seed-path")]
+    key_paths: Vec<String>,
+
+    /// Indicates the token expires in the given amount of days. If this option is left off, the token will never expire
+    #[structopt(short = "x", long = "expires")]
+    expires_in_days: Option<u64>,
+
+    /// Period in days that must elapse before this token is valid. If this option is left off, the token will be valid immediately
+    #[structopt(short = "b", long = "nbf")]
+    not_before_days: Option<u64>,
 }
 
 #[derive(Debug, Clone, StructOpt)]
@@ -101,8 +110,17 @@ struct AccountMetadata {
     #[structopt(short = "n", long = "name")]
     name: String,
 
-    #[structopt(flatten)]
-    common: GenerateCommon,
+    /// Seed key paths (first seed is the issuer[operator], second is the subject[account], any additional seeds are used for the valid signers list)
+    #[structopt(short = "s", long = "seed", name = "seed-path")]
+    key_paths: Vec<String>,
+
+    /// Indicates the token expires in the given amount of days. If this option is left off, the token will never expire
+    #[structopt(short = "x", long = "expires")]
+    expires_in_days: Option<u64>,
+
+    /// Period in days that must elapse before this token is valid. If this option is left off, the token will be valid immediately
+    #[structopt(short = "b", long = "nbf")]
+    not_before_days: Option<u64>,
 }
 
 #[derive(StructOpt, Debug, Clone, Serialize, Deserialize)]
@@ -159,7 +177,7 @@ fn main() -> Result<(), Box<dyn ::std::error::Error>> {
     env_logger::init();
 
     match handle_command(cmd) {
-        Ok(_) => {},
+        Ok(_) => {}
         Err(e) => {
             println!("Command line failure: {}", e);
         }
@@ -181,6 +199,17 @@ fn generate_token(cmd: &GenerateCommand) -> Result<(), Box<dyn ::std::error::Err
         GenerateCommand::Operator(operator) => generate_operator(operator),
         GenerateCommand::Account(account) => generate_account(account),
     }
+}
+
+fn get_keypair_vec(paths: &[String]) -> Result<Vec<KeyPair>, Box<dyn ::std::error::Error>> {
+    Ok(paths
+        .iter()
+        .map(|p| {
+            let key = read_to_string(p).unwrap();
+            let pair = KeyPair::from_seed(key.trim_end()).unwrap();
+            pair
+        })
+        .collect())
 }
 
 fn get_keypairs(
@@ -237,28 +266,45 @@ fn generate_actor(actor: &ActorMetadata) -> Result<(), Box<dyn ::std::error::Err
 }
 
 fn generate_operator(operator: &OperatorMetadata) -> Result<(), Box<dyn ::std::error::Error>> {
-    let (issuer, subject) = get_keypairs(&operator.common)?;
+    let keys = get_keypair_vec(&operator.key_paths)?;
+    if keys.len() < 1 {
+        return Err("Must supply at least one seed key for operator self-signing".into());
+    }
     let claims: Claims<Operator> = Claims::<Operator>::with_dates(
         operator.name.clone(),
-        issuer.public_key(),
-        subject.public_key(),
-        days_from_now_to_jwt_time(operator.common.not_before_days),
-        days_from_now_to_jwt_time(operator.common.expires_in_days),
+        keys[0].public_key(),
+        keys[0].public_key(),
+        days_from_now_to_jwt_time(operator.not_before_days),
+        days_from_now_to_jwt_time(operator.expires_in_days),
+        if keys.len() > 1 {
+            keys[1..].iter().map(|k| k.public_key()).collect()
+        } else {
+            vec![]
+        },
     );
-    println!("{}", claims.encode(&issuer)?);
+    println!("{}", claims.encode(&keys[0])?);
     Ok(())
 }
 
 fn generate_account(account: &AccountMetadata) -> Result<(), Box<dyn ::std::error::Error>> {
-    let (issuer, subject) = get_keypairs(&account.common)?;
+    let keys = get_keypair_vec(&account.key_paths)?;
+    if keys.len() < 2 {
+        return Err("Must supply at least two keys - one for the issuer, one for subject, and an optional list of additional signers".into());
+    }
+
     let claims: Claims<Account> = Claims::<Account>::with_dates(
         account.name.clone(),
-        issuer.public_key(),
-        subject.public_key(),
-        days_from_now_to_jwt_time(account.common.not_before_days),
-        days_from_now_to_jwt_time(account.common.expires_in_days),
+        keys[0].public_key(), // issuer
+        keys[1].public_key(), // subject
+        days_from_now_to_jwt_time(account.not_before_days),
+        days_from_now_to_jwt_time(account.expires_in_days),
+        if keys.len() > 2 {
+            keys[2..].iter().map(|k| k.public_key()).collect()
+        } else {
+            vec![]
+        },
     );
-    println!("{}", claims.encode(&issuer)?);
+    println!("{}", claims.encode(&keys[0])?);
     Ok(())
 }
 
@@ -276,7 +322,7 @@ fn sign_file(cmd: &SignCommand) -> Result<(), Box<dyn ::std::error::Error>> {
     };
 
     let acct_kp = if !cmd.metadata.common.issuer_key_path.is_empty() {
-        KeyPair::from_seed(&read_to_string(&cmd.metadata.common.issuer_key_path)?.trim_end())? 
+        KeyPair::from_seed(&read_to_string(&cmd.metadata.common.issuer_key_path)?.trim_end())?
     } else {
         let a = KeyPair::new_account();
         println!("New account key created. SAVE this seed key: {}", a.seed()?);
