@@ -85,13 +85,13 @@ pub struct Actor {
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Default)]
 pub struct Account {
     /// A descriptive name for this account
-    pub name: String,
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Default)]
 pub struct Operator {
     /// A descriptive name for the operator
-    pub name: String,
+    pub name: Option<String>,
 }
 
 /// Represents a set of [RFC 7519](https://tools.ietf.org/html/rfc7519) compliant JSON Web Token
@@ -192,13 +192,13 @@ impl WascapEntity for Actor {
 
 impl WascapEntity for Account {
     fn name(&self) -> String {
-        self.name.clone()
+        self.name.as_ref().unwrap_or(&"Anonymous".to_string()).clone()
     }
 }
 
 impl WascapEntity for Operator {
     fn name(&self) -> String {
-        self.name.clone()
+        self.name.as_ref().unwrap_or(&"Anonymous".to_string()).clone()
     }
 }
 
@@ -215,7 +215,7 @@ impl Claims<Account> {
         expires: Option<u64>,
     ) -> Claims<Account> {
         Claims {
-            metadata: Some(Account { name }),
+            metadata: Some(Account { name:Some(name) }),
             expires,
             id: nuid::next(),
             issued_at: since_the_epoch().as_secs(),
@@ -239,7 +239,7 @@ impl Claims<Operator> {
         expires: Option<u64>,
     ) -> Claims<Operator> {
         Claims {
-            metadata: Some(Operator { name }),
+            metadata: Some(Operator { name:Some(name) }),
             expires,
             id: nuid::next(),
             issued_at: since_the_epoch().as_secs(),
@@ -467,7 +467,7 @@ impl Account {
         name: String,
     ) -> Account {
         Account {
-            name
+            name: Some(name)
         }
     }
 }
@@ -477,7 +477,7 @@ impl Operator {
         name: String,
     ) -> Operator {
         Operator {
-            name
+            name: Some(name)
         }
     }
 }
@@ -638,7 +638,7 @@ mod test {
         let encoded = claims.encode(&kp).unwrap();
         let decoded = Claims::<Operator>::decode(&encoded);
         assert!(decoded.is_ok());
-        assert_eq!(decoded.unwrap().metadata.unwrap().name, "test");
+        assert_eq!(decoded.unwrap().metadata.unwrap().name.unwrap(), "test");
     }
 
     #[test]
