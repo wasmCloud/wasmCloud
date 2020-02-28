@@ -137,6 +137,16 @@ struct ActorMetadata {
     /// Enable the HTTP client standard capability
     #[structopt(short = "h", long = "http_client")]
     http_client: bool,
+    /// Enable access to the blob store capability
+    #[structopt(short = "f", long = "blob_store")]
+    blob_store: bool,
+    /// Enable access to the extras functionality (random nos, guids, etc)
+    #[structopt(short = "z", long = "extras")]
+    extras: bool,
+    /// Enable access to an append-only event stream provider
+    #[structopt(short = "e", long = "events")]
+    events: bool,
+
     /// A human-readable, descriptive name for the token
     #[structopt(short = "n", long = "name")]
     name: String,
@@ -243,6 +253,15 @@ fn generate_actor(actor: &ActorMetadata) -> Result<(), Box<dyn ::std::error::Err
     }
     if actor.http_server {
         caps_list.push(wascap::caps::HTTP_SERVER.to_string());
+    }
+    if actor.blob_store {
+        caps_list.push(wascap::caps::BLOB.to_string());
+    }
+    if actor.events {
+        caps_list.push(wascap::caps::EVENTSTREAMS.to_string());
+    }
+    if actor.extras {
+        caps_list.push(wascap::caps::EXTRAS.to_string());
     }
     caps_list.extend(actor.custom_caps.iter().cloned());
 

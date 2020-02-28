@@ -18,6 +18,8 @@ pub const KEY_VALUE: &str = "wascc:keyvalue";
 pub const HTTP_SERVER: &str = "wascc:http_server";
 pub const HTTP_CLIENT: &str = "wascc:http_client";
 pub const BLOB: &str = "wascc:blobstore";
+pub const EVENTSTREAMS: &str = "wascc:eventstreams";
+pub const EXTRAS: &str = "wascc:extras";
 
 use std::collections::HashMap;
 
@@ -28,6 +30,9 @@ lazy_static! {
         m.insert(KEY_VALUE, "K/V Store");
         m.insert(HTTP_SERVER, "HTTP Server");
         m.insert(HTTP_CLIENT, "HTTP Client");
+        m.insert(BLOB, "Blob Store");
+        m.insert(EVENTSTREAMS, "Event Streams");
+        m.insert(EXTRAS, "Extras");
         m
     };
 }
