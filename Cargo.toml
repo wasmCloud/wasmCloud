@@ -1,0 +1,16 @@
+[package]
+name = "redis-streams-provider"
+version = "0.0.1"
+authors = ["Kevin Hoffman <alothien@gmail.com>"]
+edition = "2018"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+#wascc-codec = "0.4.1"
+wascc-codec = { path = "../wascc-codec"  }
+log = "0.4.8"
+env_logger = "0.7.1"
+redis-streams = "0.1.0"
+prost = "0.6.1"
