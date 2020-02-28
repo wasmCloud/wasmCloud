@@ -145,8 +145,7 @@ struct ActorMetadata {
     extras: bool,
     /// Enable access to an append-only event stream provider
     #[structopt(short = "e", long = "events")]
-    events: bool,
-
+    eventstream: bool,
     /// A human-readable, descriptive name for the token
     #[structopt(short = "n", long = "name")]
     name: String,
@@ -239,7 +238,7 @@ fn get_keypairs(
     Ok((issuer, subject))
 }
 
-fn generate_actor(actor: &ActorMetadata) -> Result<(), Box<dyn ::std::error::Error>> {
+fn generate_actor(actor: &ActorMetadata) -> Result<(), Box<dyn ::std::error::Error>> {    
     let (issuer, subject) = get_keypairs(&actor.common)?;
     let mut caps_list = vec![];
     if actor.keyvalue {
@@ -257,7 +256,7 @@ fn generate_actor(actor: &ActorMetadata) -> Result<(), Box<dyn ::std::error::Err
     if actor.blob_store {
         caps_list.push(wascap::caps::BLOB.to_string());
     }
-    if actor.events {
+    if actor.eventstream {        
         caps_list.push(wascap::caps::EVENTSTREAMS.to_string());
     }
     if actor.extras {
@@ -327,7 +326,7 @@ fn generate_account(account: &AccountMetadata) -> Result<(), Box<dyn ::std::erro
     Ok(())
 }
 
-fn sign_file(cmd: &SignCommand) -> Result<(), Box<dyn ::std::error::Error>> {
+fn sign_file(cmd: &SignCommand) -> Result<(), Box<dyn ::std::error::Error>> {    
     let mut sfile = File::open(&cmd.source).unwrap();
     let mut buf = Vec::new();
     sfile.read_to_end(&mut buf).unwrap();
@@ -360,6 +359,15 @@ fn sign_file(cmd: &SignCommand) -> Result<(), Box<dyn ::std::error::Error>> {
     }
     if cmd.metadata.http_server {
         caps_list.push(wascap::caps::HTTP_SERVER.to_string());
+    }
+    if cmd.metadata.blob_store {
+        caps_list.push(wascap::caps::BLOB.to_string());
+    }
+    if cmd.metadata.extras {
+        caps_list.push(wascap::caps::EXTRAS.to_string());
+    }
+    if cmd.metadata.eventstream {
+        caps_list.push(wascap::caps::EVENTSTREAMS.to_string());
     }
     caps_list.extend(cmd.metadata.custom_caps.iter().cloned());
 
