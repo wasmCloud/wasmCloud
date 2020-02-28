@@ -2,7 +2,7 @@ language: rust
 services: docker
 before_install:
 - docker pull redis
-- docker run -d redis
+- docker run -p 6379:6379 -d redis
 rust:
   - stable
   - nightly
