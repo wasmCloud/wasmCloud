@@ -1,5 +1,4 @@
 ![travis](https://travis-ci.org/wascc/redis-streams.svg?branch=master)&nbsp;
-![license](https://img.shields.io/crates/l/redis-streams.svg)
 
 # Redis Streams
 
