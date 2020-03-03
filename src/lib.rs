@@ -24,8 +24,8 @@ use codec::capabilities::{CapabilityProvider, Dispatcher, NullDispatcher};
 use codec::core::CapabilityConfiguration;
 use codec::core::{OP_CONFIGURE, OP_REMOVE_ACTOR};
 use codec::keyvalue;
+use codec::{deserialize, serialize};
 use keyvalue::*;
-use prost::Message;
 use redis::Connection;
 use redis::RedisResult;
 use redis::{self, Commands};
@@ -91,7 +91,7 @@ impl RedisKVProvider {
         let res: i32 = con.incr(req.key, req.value)?;
         let resp = AddResponse { value: res };
 
-        Ok(bytes(resp))
+        Ok(serialize(resp)?)
     }
 
     fn del(&self, actor: &str, req: DelRequest) -> Result<Vec<u8>, Box<dyn Error>> {
@@ -99,19 +99,19 @@ impl RedisKVProvider {
         con.del(&req.key)?;
         let resp = DelResponse { key: req.key };
 
-        Ok(bytes(resp))
+        Ok(serialize(resp)?)
     }
 
     fn get(&self, actor: &str, req: GetRequest) -> Result<Vec<u8>, Box<dyn Error>> {
         let mut con = self.actor_con(actor)?;
         if !con.exists(&req.key)? {
-            Ok(bytes(GetResponse {
+            Ok(serialize(GetResponse {
                 value: String::from(""),
                 exists: false,
-            }))
+            })?)
         } else {
             let v: redis::RedisResult<String> = con.get(&req.key);
-            Ok(bytes(match v {
+            Ok(serialize(match v {
                 Ok(s) => GetResponse {
                     value: s,
                     exists: true,
@@ -123,7 +123,7 @@ impl RedisKVProvider {
                         exists: false,
                     }
                 }
-            }))
+            })?)
         }
     }
 
@@ -134,21 +134,21 @@ impl RedisKVProvider {
     fn list_range(&self, actor: &str, req: ListRangeRequest) -> Result<Vec<u8>, Box<dyn Error>> {
         let mut con = self.actor_con(actor)?;
         let result: Vec<String> = con.lrange(req.key, req.start as _, req.stop as _)?;
-        Ok(bytes(ListRangeResponse { values: result }))
+        Ok(serialize(ListRangeResponse { values: result })?)
     }
 
     fn list_push(&self, actor: &str, req: ListPushRequest) -> Result<Vec<u8>, Box<dyn Error>> {
         let mut con = self.actor_con(actor)?;
         let result: i32 = con.lpush(req.key, req.value)?;
-        Ok(bytes(ListResponse { new_count: result }))
+        Ok(serialize(ListResponse { new_count: result })?)
     }
 
     fn set(&self, actor: &str, req: SetRequest) -> Result<Vec<u8>, Box<dyn Error>> {
         let mut con = self.actor_con(actor)?;
         con.set(req.key, &req.value)?;
-        Ok(bytes(SetResponse {
+        Ok(serialize(SetResponse {
             value: req.value.clone(),
-        }))
+        })?)
     }
 
     fn list_del_item(
@@ -158,25 +158,25 @@ impl RedisKVProvider {
     ) -> Result<Vec<u8>, Box<dyn Error>> {
         let mut con = self.actor_con(actor)?;
         let result: i32 = con.lrem(req.key, 0, &req.value)?;
-        Ok(bytes(ListResponse { new_count: result }))
+        Ok(serialize(ListResponse { new_count: result })?)
     }
 
     fn set_add(&self, actor: &str, req: SetAddRequest) -> Result<Vec<u8>, Box<dyn Error>> {
         let mut con = self.actor_con(actor)?;
         let result: i32 = con.sadd(req.key, &req.value)?;
-        Ok(bytes(SetOperationResponse { new_count: result }))
+        Ok(serialize(SetOperationResponse { new_count: result })?)
     }
 
     fn set_remove(&self, actor: &str, req: SetRemoveRequest) -> Result<Vec<u8>, Box<dyn Error>> {
         let mut con = self.actor_con(actor)?;
         let result: i32 = con.srem(req.key, &req.value)?;
-        Ok(bytes(SetOperationResponse { new_count: result }))
+        Ok(serialize(SetOperationResponse { new_count: result })?)
     }
 
     fn set_union(&self, actor: &str, req: SetUnionRequest) -> Result<Vec<u8>, Box<dyn Error>> {
         let mut con = self.actor_con(actor)?;
         let result: Vec<String> = con.sunion(req.keys)?;
-        Ok(bytes(SetQueryResponse { values: result }))
+        Ok(serialize(SetQueryResponse { values: result })?)
     }
 
     fn set_intersect(
@@ -186,29 +186,23 @@ impl RedisKVProvider {
     ) -> Result<Vec<u8>, Box<dyn Error>> {
         let mut con = self.actor_con(actor)?;
         let result: Vec<String> = con.sinter(req.keys)?;
-        Ok(bytes(SetQueryResponse { values: result }))
+        Ok(serialize(SetQueryResponse { values: result })?)
     }
 
     fn set_query(&self, actor: &str, req: SetQueryRequest) -> Result<Vec<u8>, Box<dyn Error>> {
         let mut con = self.actor_con(actor)?;
         let result: Vec<String> = con.smembers(req.key)?;
-        Ok(bytes(SetQueryResponse { values: result }))
+        Ok(serialize(SetQueryResponse { values: result })?)
     }
 
     fn exists(&self, actor: &str, req: KeyExistsQuery) -> Result<Vec<u8>, Box<dyn Error>> {
         let mut con = self.actor_con(actor)?;
         let result: bool = con.exists(req.key)?;
-        Ok(bytes(GetResponse {
+        Ok(serialize(GetResponse {
             value: "".to_string(),
             exists: result,
-        }))
+        })?)
     }
-}
-
-fn bytes(msg: impl prost::Message) -> Vec<u8> {
-    let mut buf = Vec::new();
-    msg.encode(&mut buf).unwrap();
-    buf
 }
 
 impl CapabilityProvider for RedisKVProvider {
@@ -238,31 +232,25 @@ impl CapabilityProvider for RedisKVProvider {
 
         match op {
             OP_CONFIGURE if actor == "system" => {
-                self.configure(CapabilityConfiguration::decode(msg).unwrap())
+                self.configure(deserialize::<CapabilityConfiguration>(msg).unwrap())
             }
             OP_REMOVE_ACTOR if actor == "system" => {
-                self.remove_actor(CapabilityConfiguration::decode(msg).unwrap())
+                self.remove_actor(deserialize::<CapabilityConfiguration>(msg).unwrap())
             }
-            keyvalue::OP_ADD => self.add(actor, AddRequest::decode(msg).unwrap()),
-            keyvalue::OP_DEL => self.del(actor, DelRequest::decode(msg).unwrap()),
-            keyvalue::OP_GET => self.get(actor, GetRequest::decode(msg).unwrap()),
-            keyvalue::OP_CLEAR => self.list_clear(actor, ListClearRequest::decode(msg).unwrap()),
-            keyvalue::OP_RANGE => self.list_range(actor, ListRangeRequest::decode(msg).unwrap()),
-            keyvalue::OP_PUSH => self.list_push(actor, ListPushRequest::decode(msg).unwrap()),
-            keyvalue::OP_SET => self.set(actor, SetRequest::decode(msg).unwrap()),
-            keyvalue::OP_LIST_DEL => {
-                self.list_del_item(actor, ListDelItemRequest::decode(msg).unwrap())
-            }
-            keyvalue::OP_SET_ADD => self.set_add(actor, SetAddRequest::decode(msg).unwrap()),
-            keyvalue::OP_SET_REMOVE => {
-                self.set_remove(actor, SetRemoveRequest::decode(msg).unwrap())
-            }
-            keyvalue::OP_SET_UNION => self.set_union(actor, SetUnionRequest::decode(msg).unwrap()),
-            keyvalue::OP_SET_INTERSECT => {
-                self.set_intersect(actor, SetIntersectionRequest::decode(msg).unwrap())
-            }
-            keyvalue::OP_SET_QUERY => self.set_query(actor, SetQueryRequest::decode(msg).unwrap()),
-            keyvalue::OP_KEY_EXISTS => self.exists(actor, KeyExistsQuery::decode(msg).unwrap()),
+            keyvalue::OP_ADD => self.add(actor, deserialize(msg).unwrap()),
+            keyvalue::OP_DEL => self.del(actor, deserialize(msg).unwrap()),
+            keyvalue::OP_GET => self.get(actor, deserialize(msg).unwrap()),
+            keyvalue::OP_CLEAR => self.list_clear(actor, deserialize(msg).unwrap()),
+            keyvalue::OP_RANGE => self.list_range(actor, deserialize(msg).unwrap()),
+            keyvalue::OP_PUSH => self.list_push(actor, deserialize(msg).unwrap()),
+            keyvalue::OP_SET => self.set(actor, deserialize(msg).unwrap()),
+            keyvalue::OP_LIST_DEL => self.list_del_item(actor, deserialize(msg).unwrap()),
+            keyvalue::OP_SET_ADD => self.set_add(actor, deserialize(msg).unwrap()),
+            keyvalue::OP_SET_REMOVE => self.set_remove(actor, deserialize(msg).unwrap()),
+            keyvalue::OP_SET_UNION => self.set_union(actor, deserialize(msg).unwrap()),
+            keyvalue::OP_SET_INTERSECT => self.set_intersect(actor, deserialize(msg).unwrap()),
+            keyvalue::OP_SET_QUERY => self.set_query(actor, deserialize(msg).unwrap()),
+            keyvalue::OP_KEY_EXISTS => self.exists(actor, deserialize(msg).unwrap()),
             _ => Err("bad dispatch".into()),
         }
     }
