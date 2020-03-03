@@ -28,13 +28,13 @@ use actix_web::{middleware, web, App, HttpRequest, HttpResponse, HttpServer};
 use codec::capabilities::{CapabilityProvider, Dispatcher, NullDispatcher};
 use codec::core::CapabilityConfiguration;
 use futures::future::Future;
-use prost::Message;
 use std::collections::HashMap;
 use std::error::Error as StdError;
 use std::sync::Arc;
 use std::sync::RwLock;
 use wascc_codec::core::OP_CONFIGURE;
 use wascc_codec::core::OP_REMOVE_ACTOR;
+use wascc_codec::{deserialize, serialize};
 
 /// Unique identifier for the capability being provided. Note other providers can
 /// provide this same capability (just not at the same time)
@@ -57,7 +57,10 @@ impl HttpServerProvider {
         {
             let lock = self.servers.read().unwrap();
             if !lock.contains_key(module) {
-                error!("Received request to stop server for non-configured actor {}. Igoring.", module);
+                error!(
+                    "Received request to stop server for non-configured actor {}. Igoring.",
+                    module
+                );
                 return;
             }
             let server = lock.get(module).unwrap();
@@ -110,8 +113,8 @@ impl HttpServerProvider {
 impl Default for HttpServerProvider {
     fn default() -> Self {
         match env_logger::try_init() {
-            Ok(_) => {},
-            Err(_) => println!("** HTTP provider: Logger already initialized, skipping.")
+            Ok(_) => {}
+            Err(_) => println!("** HTTP provider: Logger already initialized, skipping."),
         };
         HttpServerProvider {
             dispatcher: Arc::new(RwLock::new(Box::new(NullDispatcher::new()))),
@@ -148,11 +151,11 @@ impl CapabilityProvider for HttpServerProvider {
         // TIP: do not allow individual modules to attempt to send configuration,
         // only accept it from the host runtime
         if op == OP_CONFIGURE && origin == "system" {
-            let cfgvals = CapabilityConfiguration::decode(msg)?;
+            let cfgvals = deserialize(msg)?;
             self.spawn_server(&cfgvals);
             Ok(vec![])
         } else if op == OP_REMOVE_ACTOR && origin == "system" {
-            let cfgvals = CapabilityConfiguration::decode(msg)?;
+            let cfgvals = deserialize::<CapabilityConfiguration>(msg)?;
             info!("Removing actor configuration for {}", cfgvals.module);
             self.terminate_server(&cfgvals.module);
             Ok(vec![])
@@ -175,8 +178,7 @@ fn request_handler(
         header: extract_headers(&req),
         body: payload.to_vec(),
     };
-    let mut buf = Vec::new();
-    request.encode(&mut buf).unwrap();
+    let buf = serialize(request).unwrap();
 
     let resp = {
         let lock = (*state).read().unwrap();
@@ -184,7 +186,7 @@ fn request_handler(
     };
     match resp {
         Ok(r) => {
-            let r = codec::http::Response::decode(r.as_slice()).unwrap();
+            let r = deserialize::<codec::http::Response>(r.as_slice()).unwrap();
             HttpResponse::with_body(
                 StatusCode::from_u16(r.status_code as _).unwrap(),
                 Body::from_slice(&r.body),
