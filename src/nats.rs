@@ -1,6 +1,5 @@
 use natsclient::AuthenticationStyle;
 use natsclient::Client;
-use prost::Message;
 use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Arc;
@@ -11,6 +10,7 @@ use wascc_codec::messaging::DeliverMessage;
 use wascc_codec::messaging::PublishMessage;
 use wascc_codec::messaging::RequestMessage;
 use wascc_codec::messaging::OP_DELIVER_MESSAGE;
+use wascc_codec::serialize;
 
 const ENV_NATS_SUBSCRIPTION: &str = "SUBSCRIPTION";
 const ENV_NATS_URL: &str = "URL";
@@ -19,23 +19,23 @@ const ENV_NATS_CLIENT_SEED: &str = "CLIENT_SEED";
 const ENV_NATS_QUEUEGROUP_NAME: &str = "QUEUEGROUP_NAME";
 
 pub(crate) fn publish(client: &Client, msg: PublishMessage) -> Result<Vec<u8>, Box<dyn Error>> {
-    match msg.message {
-        Some(m) => {
-            trace!("Publishing message on {}", &m.subject);
-            match client.publish(
-                &m.subject,
-                &m.body,
-                if !m.reply_to.is_empty() {
-                    Some(&m.reply_to)
-                } else {
-                    None
-                },
-            ) {
-                Ok(_) => Ok(vec![]),
-                Err(e) => Err(format!("Failed to publish message: {}", e).into()),
-            }
-        }
-        None => Err("no message to publish".into()),
+    let m = msg.message;
+    trace!(
+        "Publishing message on {} ({} bytes)",
+        &m.subject,
+        &m.body.len()
+    );
+    match client.publish(
+        &m.subject,
+        &m.body,
+        if !m.reply_to.is_empty() {
+            Some(&m.reply_to)
+        } else {
+            None
+        },
+    ) {
+        Ok(_) => Ok(vec![]),
+        Err(e) => Err(format!("Failed to publish message: {}", e).into()),
     }
 }
 
@@ -120,8 +120,8 @@ fn create_subscription(
             trace!("Queue subscribing '{}' to '{}'", qgroup, sub);
             client.queue_subscribe(&sub, qgroup, move |msg| {
                 let dm = delivermessage_for_natsmessage(msg);
-                let mut buf = Vec::new();
-                dm.encode(&mut buf).unwrap();
+                let buf = serialize(&dm).unwrap();
+
                 let d = dispatcher.read().unwrap();
                 if let Err(e) = d.dispatch(&format!("{}!{}", actor, OP_DELIVER_MESSAGE), &buf) {
                     error!("Dispatch failed: {}", e);
@@ -134,12 +134,11 @@ fn create_subscription(
 
             client.subscribe(&sub, move |msg| {
                 let dm = delivermessage_for_natsmessage(msg);
-                let mut buf = Vec::new();
-                dm.encode(&mut buf).unwrap();
+                let buf = serialize(&dm).unwrap();
                 let d = dispatcher.read().unwrap();
                 if let Err(e) = d.dispatch(&format!("{}!{}", actor, OP_DELIVER_MESSAGE), &buf) {
                     error!("Dispatch failed: {}", e);
-                }                
+                }
                 Ok(())
             })
         }
@@ -153,10 +152,10 @@ fn create_subscription(
 
 fn delivermessage_for_natsmessage(msg: &natsclient::Message) -> DeliverMessage {
     DeliverMessage {
-        message: Some(BrokerMessage {
+        message: BrokerMessage {
             subject: msg.subject.clone(),
             reply_to: msg.reply_to.clone().unwrap_or_else(|| "".to_string()),
             body: msg.payload.clone(),
-        }),
+        },
     }
 }

@@ -26,6 +26,7 @@ use codec::messaging::{PublishMessage, RequestMessage, OP_PERFORM_REQUEST, OP_PU
 use natsclient;
 use std::collections::HashMap;
 use wascc_codec::core::CapabilityConfiguration;
+use wascc_codec::deserialize;
 
 use std::error::Error;
 use std::sync::Arc;
@@ -43,8 +44,8 @@ pub struct NatsProvider {
 impl Default for NatsProvider {
     fn default() -> Self {
         match env_logger::try_init() {
-            Ok(_) => {},
-            Err(_) => println!("** NATS provider - skipping logger init, already initialized.")
+            Ok(_) => {}
+            Err(_) => println!("** NATS provider - skipping logger init, already initialized."),
         };
 
         NatsProvider {
@@ -59,36 +60,21 @@ impl NatsProvider {
         Self::default()
     }
 
-    fn publish_message(
-        &self,
-        actor: &str,
-        msg: impl Into<PublishMessage>,
-    ) -> Result<Vec<u8>, Box<dyn Error>> {        
-        let msg = msg.into();        
-
+    fn publish_message(&self, actor: &str, msg: PublishMessage) -> Result<Vec<u8>, Box<dyn Error>> {
         let lock = self.clients.read().unwrap();
         let client = lock.get(actor).unwrap();
 
         nats::publish(&client, msg)
     }
 
-    fn request(
-        &self,
-        actor: &str,
-        msg: impl Into<RequestMessage>,
-    ) -> Result<Vec<u8>, Box<dyn Error>> {
-        let msg = msg.into();
+    fn request(&self, actor: &str, msg: RequestMessage) -> Result<Vec<u8>, Box<dyn Error>> {
         let lock = self.clients.read().unwrap();
         let client = lock.get(actor).unwrap();
 
         nats::request(&client, msg)
     }
 
-    fn configure(
-        &self,
-        msg: impl Into<CapabilityConfiguration>,
-    ) -> Result<Vec<u8>, Box<dyn Error>> {
-        let msg = msg.into();
+    fn configure(&self, msg: CapabilityConfiguration) -> Result<Vec<u8>, Box<dyn Error>> {
         let d = self.dispatcher.clone();
         let c = nats::initialize_client(d, &msg.module, &msg.values)?;
 
@@ -96,11 +82,7 @@ impl NatsProvider {
         Ok(vec![])
     }
 
-    fn remove_actor(
-        &self,
-        msg: impl Into<CapabilityConfiguration>,
-    ) -> Result<Vec<u8>, Box<dyn Error>> {
-        let msg = msg.into();
+    fn remove_actor(&self, msg: CapabilityConfiguration) -> Result<Vec<u8>, Box<dyn Error>> {
         info!("Removing NATS client for actor {}", msg.module);
         self.clients.write().unwrap().remove(&msg.module);
         Ok(vec![])
@@ -125,13 +107,13 @@ impl CapabilityProvider for NatsProvider {
     }
 
     fn handle_call(&self, actor: &str, op: &str, msg: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
-        trace!("Received host call from {}, operation - {}",actor, op);
+        trace!("Received host call from {}, operation - {}", actor, op);
 
         match op {
-            OP_PUBLISH_MESSAGE => self.publish_message(actor, msg.to_vec().as_ref()),
-            OP_PERFORM_REQUEST => self.request(actor, msg.to_vec().as_ref()),
-            OP_CONFIGURE if actor == "system" => self.configure(msg.to_vec().as_ref()),
-            OP_REMOVE_ACTOR if actor == "system" => self.remove_actor(msg.to_vec().as_ref()),
+            OP_PUBLISH_MESSAGE => self.publish_message(actor, deserialize(msg)?),
+            OP_PERFORM_REQUEST => self.request(actor, deserialize(msg)?),
+            OP_CONFIGURE if actor == "system" => self.configure(deserialize(msg)?),
+            OP_REMOVE_ACTOR if actor == "system" => self.remove_actor(deserialize(msg)?),
             _ => Err("bad dispatch".into()),
         }
     }
