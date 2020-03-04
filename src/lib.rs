@@ -4,7 +4,6 @@ extern crate wascc_codec as codec;
 #[macro_use]
 extern crate log;
 
-use prost::Message;
 use ::redis_streams::{
     Client, Connection, ErrorKind, RedisError, RedisResult, StreamCommands, Value,
 };
@@ -13,6 +12,7 @@ use codec::capabilities::{CapabilityProvider, Dispatcher, NullDispatcher};
 use codec::core::OP_CONFIGURE;
 use codec::eventstreams::{self, Event, StreamQuery, StreamResults, WriteResponse};
 use wascc_codec::core::CapabilityConfiguration;
+use wascc_codec::{deserialize, serialize};
 
 use std::error::Error;
 use std::{
@@ -48,11 +48,7 @@ impl RedisStreamsProvider {
         Self::default()
     }
 
-    fn configure(
-        &self,
-        config: impl Into<CapabilityConfiguration>,
-    ) -> Result<Vec<u8>, Box<dyn Error>> {
-        let config = config.into();
+    fn configure(&self, config: CapabilityConfiguration) -> Result<Vec<u8>, Box<dyn Error>> {
         let c = initialize_client(config.clone())?;
 
         self.clients.write().unwrap().insert(config.module, c);
@@ -74,7 +70,7 @@ impl RedisStreamsProvider {
     fn write_event(&self, actor: &str, event: Event) -> Result<Vec<u8>, Box<dyn Error>> {
         let data = map_to_tuples(event.values);
         let res: String = self.actor_con(actor)?.xadd(event.stream, "*", &data)?;
-        Ok(bytes(WriteResponse { event_id: res }))
+        Ok(serialize(WriteResponse { event_id: res })?)
     }
 
     fn query_stream(&self, actor: &str, query: StreamQuery) -> Result<Vec<u8>, Box<dyn Error>> {
@@ -117,7 +113,7 @@ impl RedisStreamsProvider {
             });
         }
 
-        Ok(bytes(StreamResults { events }))
+        Ok(serialize(StreamResults { events })?)
     }
 }
 
@@ -146,11 +142,9 @@ impl CapabilityProvider for RedisStreamsProvider {
         trace!("Received host call from {}, operation - {}", actor, op);
 
         match op {
-            OP_CONFIGURE if actor == "system" => self.configure(msg.to_vec().as_ref()),
-            eventstreams::OP_WRITE_EVENT => self.write_event(actor, Event::decode(msg).unwrap()),
-            eventstreams::OP_QUERY_STREAM => {
-                self.query_stream(actor, StreamQuery::decode(msg).unwrap())
-            }
+            OP_CONFIGURE if actor == "system" => self.configure(deserialize(msg)?),
+            eventstreams::OP_WRITE_EVENT => self.write_event(actor, deserialize(msg)?),
+            eventstreams::OP_QUERY_STREAM => self.query_stream(actor, deserialize(msg)?),
             _ => Err("bad dispatch".into()),
         }
     }
@@ -179,12 +173,6 @@ fn map_to_tuples(map: HashMap<String, String>) -> Vec<(String, String)> {
     map.into_iter().collect()
 }
 
-fn bytes(msg: impl prost::Message) -> Vec<u8> {
-    let mut buf = Vec::new();
-    msg.encode(&mut buf).unwrap();
-    buf
-}
-
 // Extracts Redis arbitrary binary data as a string
 fn val_to_string(val: &Value) -> String {
     if let Value::Data(vec) = val {
@@ -194,46 +182,47 @@ fn val_to_string(val: &Value) -> String {
     }
 }
 
-
 #[cfg(test)]
-mod test {    
+mod test {
     use super::*;
-    use std::collections::HashMap;
     use redis_streams::Commands;
+    use std::collections::HashMap;
     // **==- REQUIRES A RUNNING REDIS INSTANCE ON LOCALHOST -==**
 
     #[test]
-    fn round_trip() {                
+    fn round_trip() {
         let prov = RedisStreamsProvider::new();
         let config = CapabilityConfiguration {
             module: "testing-actor".to_string(),
             values: gen_config(),
         };
 
-        let c = initialize_client(config.clone()).unwrap(); 
+        let c = initialize_client(config.clone()).unwrap();
         let _res: bool = c.get_connection().unwrap().del("my-stream").unwrap(); // make sure we start with an empty stream
         prov.configure(config).unwrap();
 
         for _ in 0..6 {
-            let ev = Event{
+            let ev = Event {
                 event_id: "".to_string(),
                 stream: "my-stream".to_string(),
                 values: gen_values(),
             };
-            let mut buf = Vec::new();
-            ev.encode(&mut buf).unwrap();
-            let _res = prov.handle_call("testing-actor", eventstreams::OP_WRITE_EVENT, &buf).unwrap();            
+            let buf = serialize(&ev).unwrap();
+            let _res = prov
+                .handle_call("testing-actor", eventstreams::OP_WRITE_EVENT, &buf)
+                .unwrap();
         }
 
-        let mut buf = Vec::new();
-        let query = StreamQuery{
+        let query = StreamQuery {
             count: 0,
             range: None,
             stream_id: "my-stream".to_string(),
         };
-        query.encode(&mut buf).unwrap();
-        let res = prov.handle_call("testing-actor", eventstreams::OP_QUERY_STREAM, &buf).unwrap();
-        let query_res = StreamResults::decode(res.as_ref()).unwrap();
+        let buf = serialize(&query).unwrap();
+        let res = prov
+            .handle_call("testing-actor", eventstreams::OP_QUERY_STREAM, &buf)
+            .unwrap();
+        let query_res = deserialize::<StreamResults>(res.as_ref()).unwrap();
         assert_eq!(6, query_res.events.len());
         assert_eq!(query_res.events[0].values["scruffy-looking"], "nerf-herder");
         let _res: bool = c.get_connection().unwrap().del("my-stream").unwrap(); // make sure we start with an empty stream
