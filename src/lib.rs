@@ -4,20 +4,19 @@ extern crate wascc_codec as codec;
 #[macro_use]
 extern crate log;
 
+use chunks::Chunks;
 use codec::blobstore::*;
 use codec::capabilities::{CapabilityProvider, Dispatcher, NullDispatcher};
 use codec::core::OP_CONFIGURE;
-use prost::Message;
-use wascc_codec::core::CapabilityConfiguration;
-
-use chunks::Chunks;
+use codec::{deserialize, serialize};
 use std::error::Error;
 use std::io::Write;
-use std::{    
+use std::{
     fs::OpenOptions,
     path::{Path, PathBuf},
     sync::{Arc, RwLock},
 };
+use wascc_codec::core::CapabilityConfiguration;
 
 mod chunks;
 
@@ -46,12 +45,7 @@ impl FileSystemProvider {
         Self::default()
     }
 
-    fn configure(
-        &self,
-        config: impl Into<CapabilityConfiguration>,
-    ) -> Result<Vec<u8>, Box<dyn Error>> {
-        let config = config.into();
-
+    fn configure(&self, config: CapabilityConfiguration) -> Result<Vec<u8>, Box<dyn Error>> {
         let mut lock = self.rootdir.write().unwrap();
         let root_dir = config.values["ROOT"].clone();
         info!("File System Blob Store Container Root: '{}'", root_dir);
@@ -107,11 +101,13 @@ impl FileSystemProvider {
                 byte_size: bfile.metadata().unwrap().len(),
             }
         } else {
-            Blob::default()
+            Blob {
+                id: "none".to_string(),
+                container: "none".to_string(),
+                byte_size: 0,
+            }
         };
-        let mut buf = Vec::new();
-        blob.encode(&mut buf)?;
-        Ok(buf)
+        Ok(serialize(&blob)?)
     }
 
     fn list_objects(&self, _actor: &str, container: Container) -> Result<Vec<u8>, Box<dyn Error>> {
@@ -127,9 +123,7 @@ impl FileSystemProvider {
             .partition(Result::is_ok);
         let blobs = blobs.into_iter().map(Result::unwrap).collect();
         let bloblist = BlobList { blobs };
-        let mut buf = Vec::new();
-        bloblist.encode(&mut buf)?;
-        Ok(buf)
+        Ok(serialize(&bloblist)?)
     }
 
     fn upload_chunk(&self, _actor: &str, chunk: FileChunk) -> Result<Vec<u8>, Box<dyn Error>> {
@@ -211,8 +205,7 @@ fn dispatch_chunk(
                 chunk_size: xfer.chunk_size,
                 total_bytes: xfer.total_size,
             };
-            let mut buf = Vec::new();
-            fc.encode(&mut buf).unwrap();
+            let buf = serialize(&fc).unwrap();
             match d
                 .read()
                 .unwrap()
@@ -242,7 +235,7 @@ impl CapabilityProvider for FileSystemProvider {
     }
 
     fn name(&self) -> &'static str {
-        "waSCC Blob Store Provider (File System)" 
+        "waSCC Blob Store Provider (File System)"
     }
 
     // Invoked by host runtime to allow an actor to make use of the capability
@@ -251,15 +244,15 @@ impl CapabilityProvider for FileSystemProvider {
         trace!("Received host call from {}, operation - {}", actor, op);
 
         match op {
-            OP_CONFIGURE if actor == "system" => self.configure(msg.to_vec().as_ref()),
-            OP_CREATE_CONTAINER => self.create_container(actor, msg.into()),
-            OP_REMOVE_CONTAINER => self.remove_container(actor, msg.into()),
-            OP_REMOVE_OBJECT => self.remove_object(actor, msg.into()),
-            OP_LIST_OBJECTS => self.list_objects(actor, msg.into()),
-            OP_UPLOAD_CHUNK => self.upload_chunk(actor, msg.into()),
-            OP_START_DOWNLOAD => self.start_download(actor, msg.into()),
-            OP_START_UPLOAD => self.start_upload(actor, msg.into()),
-            OP_GET_OBJECT_INFO => self.get_object_info(actor, msg.into()),
+            OP_CONFIGURE if actor == "system" => self.configure(deserialize(msg)?),
+            OP_CREATE_CONTAINER => self.create_container(actor, deserialize(msg)?),
+            OP_REMOVE_CONTAINER => self.remove_container(actor, deserialize(msg)?),
+            OP_REMOVE_OBJECT => self.remove_object(actor, deserialize(msg)?),
+            OP_LIST_OBJECTS => self.list_objects(actor, deserialize(msg)?),
+            OP_UPLOAD_CHUNK => self.upload_chunk(actor, deserialize(msg)?),
+            OP_START_DOWNLOAD => self.start_download(actor, deserialize(msg)?),
+            OP_START_UPLOAD => self.start_upload(actor, deserialize(msg)?),
+            OP_GET_OBJECT_INFO => self.get_object_info(actor, deserialize(msg)?),
             _ => Err("bad dispatch".into()),
         }
     }
