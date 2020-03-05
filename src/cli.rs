@@ -27,7 +27,7 @@ impl Claims<Actor> {
     pub fn render(&self, validation: TokenValidation) -> String {
         let mut table = render_core(self, validation);
 
-        let md = self.metadata.clone().unwrap();
+        let md = self.metadata.clone().unwrap();        
         let friendly_rev = md.rev.unwrap_or(0);
         let friendly_ver = md.ver.unwrap_or_else(|| "None".to_string());
         let friendly = format!("{} ({})", friendly_ver, friendly_rev);
@@ -38,7 +38,7 @@ impl Claims<Actor> {
         ]));
 
         table.add_row(Row::new(vec![TableCell::new_with_alignment(
-            "Capabilities",
+            if md.provider { "Capability Provider" } else { "Capabilities" },
             2,
             Alignment::Center,
         )]));
