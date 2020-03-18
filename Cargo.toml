@@ -1,6 +1,6 @@
 [package]
 name = "wascap"
-version = "0.4.3"
+version = "0.4.4"
 authors = ["Kevin Hoffman <alothien@gmail.com>"]
 edition = "2018"
 description = "Extracting, embedding, and validating WebAssembly Standard Capabilities tokens"
@@ -26,7 +26,7 @@ log = "0.4.8"
 env_logger = "0.7.1"
 serde_derive = "1"
 serde = "1"
-nkeys = "0.0.8"
+nkeys = "0.0.9"
 base64 = "0.11.0"
 serde_json = "1.0.48"
 nuid = "0.2.1"
