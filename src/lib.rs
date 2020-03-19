@@ -554,8 +554,7 @@ mod test {
     }
 
     impl Dispatcher for TestDispatcher {
-        fn dispatch(&self, _op: &str, msg: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
-            println!("Received dispatch");
+        fn dispatch(&self, _op: &str, msg: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {            
             let fc: FileChunk = deserialize(msg)?;
             self.chunks.write().unwrap().push(fc);
             if self.chunks.read().unwrap().len() == self.expected_chunks as usize {
