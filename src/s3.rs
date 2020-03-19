@@ -6,6 +6,7 @@ use rusoto_credential::ProvideAwsCredentials;
 use rusoto_s3::util::{PreSignedRequest, PreSignedRequestOption};
 use rusoto_s3::HeadObjectOutput;
 use rusoto_s3::ListObjectsV2Output;
+use futures::TryStreamExt;
 use rusoto_s3::Object;
 use rusoto_s3::{
     CORSConfiguration, CORSRule, CompleteMultipartUploadRequest, CompletedMultipartUpload,
@@ -112,10 +113,9 @@ pub(crate) async fn get_blob_range(
     };
 
     let result = client.get_object(get_req).await?;
-    let stream = result.body.unwrap();
-    let mut buf = Vec::new();
-    stream.into_blocking_read().read_to_end(&mut buf)?;
-    Ok(buf)
+    let stream = result.body.unwrap();    
+    let body = stream.map_ok(|b| bytes::BytesMut::from(&b[..])).try_concat().await.unwrap();    
+    Ok(body.to_vec())
 }
 
 pub(crate) async fn complete_upload(

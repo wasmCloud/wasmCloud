@@ -221,29 +221,31 @@ impl S3Provider {
             println!("HERE2");
 
             let chunk_count = expected_chunks(byte_size, chunk_size);
-            for idx in 0..chunk_count {
-                println!("HERE3");
-
-                dispatch_chunk(
-                    idx,
-                    d.clone(),
-                    c.clone(),
-                    container.to_string(),
-                    id.to_string(),
-                    chunk_size,
-                    chunk_count,
-                    actor.clone(),
-                );
-
-                println!("HERE6");
-            }
+            let mut rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async {
+                for idx in 0..chunk_count {
+                    println!("HERE3");
+    
+                    dispatch_chunk(
+                        idx,
+                        d.clone(),
+                        c.clone(),
+                        container.to_string(),
+                        id.to_string(),
+                        chunk_size,
+                        chunk_count,
+                        actor.clone(),
+                    ).await;                
+                }
+            });
+                        
         });
 
         Ok(vec![])
     }
 }
 
-fn dispatch_chunk(
+async fn dispatch_chunk(
     idx: u64,
     dispatcher: Arc<RwLock<Box<dyn Dispatcher>>>,
     client: Arc<S3Client>,
@@ -257,14 +259,8 @@ fn dispatch_chunk(
     let start = idx * chunk_size;
     let end = start + chunk_size;
 
-    let bytes = {
-        let mut rt = tokio::runtime::Runtime::new().unwrap();
-        let bytes =
-            rt.block_on(s3::get_blob_range(&client, &container, &id, start, end))
-                .unwrap();
-        drop(rt);
-        bytes
-    };
+    let bytes = s3::get_blob_range(&client, &container, &id, start, end).await.unwrap();
+                
     println!("HERE5");
     let fc = FileChunk {
         sequence_no: idx + 1,

@@ -15,7 +15,7 @@ rusoto_core = { version="0.43.0", default_features=false, features=["rustls"] }
 rusoto_s3 = { version="0.43.0", default_features=false, features=["rustls"] }
 rusoto_credential = "0.43.0"
 tokio = { version = "0.2.13", features = ["macros", "rt-threaded"]}
-#futures = "0.3"
+futures = "0.3"
 bytes = "0.5"
 #async-std = { version ="1.5.0", features = ["attributes"] }
 
