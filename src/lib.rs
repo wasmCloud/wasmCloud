@@ -42,6 +42,7 @@ pub struct S3Provider {
     dispatcher: Arc<RwLock<Box<dyn Dispatcher>>>,
     clients: RwLock<HashMap<String, Arc<S3Client>>>,
     uploads: RwLock<HashMap<String, FileUpload>>,
+    runtime: RwLock<tokio::runtime::Runtime>,
 }
 
 impl Default for S3Provider {
@@ -51,10 +52,20 @@ impl Default for S3Provider {
             Err(_) => {}
         }
 
+        let runtime = tokio::runtime::Builder::new()
+            .threaded_scheduler()
+            .core_threads(4)
+            .thread_name("chunker")
+            .thread_stack_size(3 * 1024 * 1024)
+            .enable_all()
+            .build()
+            .unwrap();
+
         S3Provider {
             dispatcher: Arc::new(RwLock::new(Box::new(NullDispatcher::new()))),
             clients: RwLock::new(HashMap::new()),
             uploads: RwLock::new(HashMap::new()),
+            runtime: RwLock::new(runtime),
         }
     }
 }
@@ -225,9 +236,10 @@ impl S3Provider {
                     container.to_string(),
                     id.to_string(),
                     chunk_size,
-                    chunk_count,
+                    byte_size,
                     actor.clone(),
-                ).await;                
+                )
+                .await;
             }
         });
 
@@ -289,25 +301,47 @@ impl CapabilityProvider for S3Provider {
 
     // Invoked by host runtime to allow an actor to make use of the capability
     // All providers MUST handle the "configure" message, even if no work will be done
-    #[tokio::main(core_threads = 4, max_threads=8)]
-    async fn handle_call(
-        &self,
-        actor: &str,
-        op: &str,
-        msg: &[u8],
-    ) -> Result<Vec<u8>, Box<dyn Error>> {
+    fn handle_call(&self, actor: &str, op: &str, msg: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
         trace!("Received host call from {}, operation - {}", actor, op);
 
         match op {
             OP_CONFIGURE if actor == "system" => self.configure(deserialize(msg)?),
-            OP_CREATE_CONTAINER => self.create_container(actor, deserialize(msg)?).await,
-            OP_REMOVE_CONTAINER => self.remove_container(actor, deserialize(msg)?).await,
-            OP_REMOVE_OBJECT => self.remove_object(actor, deserialize(msg)?).await,
-            OP_LIST_OBJECTS => self.list_objects(actor, deserialize(msg)?).await,
-            OP_UPLOAD_CHUNK => self.upload_chunk(actor, deserialize(msg)?).await,
-            OP_START_DOWNLOAD => self.start_download(actor, deserialize(msg)?).await,
+            OP_CREATE_CONTAINER => self
+                .runtime
+                .write()
+                .unwrap()
+                .block_on(self.create_container(actor, deserialize(msg)?)),
+            OP_REMOVE_CONTAINER => self
+                .runtime
+                .write()
+                .unwrap()
+                .block_on(self.remove_container(actor, deserialize(msg)?)),
+            OP_REMOVE_OBJECT => self
+                .runtime
+                .write()
+                .unwrap()
+                .block_on(self.remove_object(actor, deserialize(msg)?)),
+            OP_LIST_OBJECTS => self
+                .runtime
+                .write()
+                .unwrap()
+                .block_on(self.list_objects(actor, deserialize(msg)?)),
+            OP_UPLOAD_CHUNK => self
+                .runtime
+                .write()
+                .unwrap()
+                .block_on(self.upload_chunk(actor, deserialize(msg)?)),
+            OP_START_DOWNLOAD => self
+                .runtime
+                .write()
+                .unwrap()
+                .block_on(self.start_download(actor, deserialize(msg)?)),
             OP_START_UPLOAD => self.start_upload(actor, deserialize(msg)?),
-            OP_GET_OBJECT_INFO => self.get_object_info(actor, deserialize(msg)?).await,
+            OP_GET_OBJECT_INFO => self
+                .runtime
+                .write()
+                .unwrap()
+                .block_on(self.get_object_info(actor, deserialize(msg)?)),
 
             _ => Err("bad dispatch".into()),
         }
