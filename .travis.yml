@@ -1,7 +1,6 @@
 language: rust
 services: docker
 before_install:
-- docker pull minio
 - docker run -p 9000:9000 minio/minio -d server /data
 rust:
   - stable
