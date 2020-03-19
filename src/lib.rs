@@ -208,23 +208,19 @@ impl S3Provider {
         let id = request.id.to_string();
 
         let byte_size = {
-            let mut rt = tokio::runtime::Runtime::new().unwrap();
-            println!("HERE1");
+            let mut rt = tokio::runtime::Runtime::new().unwrap();            
             let info = rt.block_on(s3::head_object(&c, &container, &id)).unwrap();
             drop(rt);
             info.content_length.unwrap() as u64
         };
 
         std::thread::spawn(move || {
-            let actor = actor.to_string();
-
-            println!("HERE2");
+            let actor = actor.to_string();          
 
             let chunk_count = expected_chunks(byte_size, chunk_size);
             let mut rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async {
-                for idx in 0..chunk_count {
-                    println!("HERE3");
+                for idx in 0..chunk_count {                    
     
                     dispatch_chunk(
                         idx,
@@ -254,14 +250,12 @@ async fn dispatch_chunk(
     chunk_size: u64,
     byte_size: u64,
     actor: String,
-) {
-    println!("HERE4");
+) {    
     let start = idx * chunk_size;
     let end = start + chunk_size;
 
     let bytes = s3::get_blob_range(&client, &container, &id, start, end).await.unwrap();
-                
-    println!("HERE5");
+                    
     let fc = FileChunk {
         sequence_no: idx + 1,
         container,
