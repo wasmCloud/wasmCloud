@@ -1,0 +1,24 @@
+[package]
+name = "s3-provider"
+version = "0.0.1"
+authors = ["Kevin Hoffman <alothien@gmail.com>"]
+edition = "2018"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wascc-codec = "0.5.0"
+log = "0.4.8"
+env_logger = "0.7.1"
+rusoto_core = { version="0.43.0", default_features=false, features=["rustls"] }
+rusoto_s3 = { version="0.43.0", default_features=false, features=["rustls"] }
+rusoto_credential = "0.43.0"
+tokio = { version = "0.2.13", features = ["macros"]}
+#futures = "0.3"
+bytes = "0.5"
+#async-std = { version ="1.5.0", features = ["attributes"] }
+
+[dev-dependencies]
+crossbeam = "0.7.3"
+crossbeam-utils = "0.7.2"
