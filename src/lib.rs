@@ -215,7 +215,7 @@ impl S3Provider {
         let byte_size = blob.byte_size;
         let chunk_count = expected_chunks(byte_size, chunk_size);
 
-        ::std::thread::spawn(move || {
+        tokio::spawn(async move {
             for idx in 0..chunk_count {
                 println!("HERE");
                 dispatch_chunk(
@@ -227,7 +227,7 @@ impl S3Provider {
                     chunk_size,
                     chunk_count,
                     actor.clone(),
-                );
+                ).await;                
             }
         });
 
@@ -235,7 +235,7 @@ impl S3Provider {
     }
 }
 
-fn dispatch_chunk(
+async fn dispatch_chunk(
     idx: u64,
     dispatcher: Arc<RwLock<Box<dyn Dispatcher>>>,
     client: Arc<S3Client>,
@@ -247,10 +247,9 @@ fn dispatch_chunk(
 ) {
     let start = idx * chunk_size;
     let end = start + chunk_size;
-    use tokio::runtime::Runtime;
-    let mut runtime = Runtime::new().unwrap();
-    let bytes = runtime
-        .block_on(s3::get_blob_range(&client, &container, &id, start, end))
+
+    let bytes = s3::get_blob_range(&client, &container, &id, start, end)
+        .await
         .unwrap();
     let fc = FileChunk {
         sequence_no: idx + 1,
@@ -290,7 +289,7 @@ impl CapabilityProvider for S3Provider {
 
     // Invoked by host runtime to allow an actor to make use of the capability
     // All providers MUST handle the "configure" message, even if no work will be done
-    #[tokio::main]
+    #[tokio::main(core_threads = 4, max_threads=8)]
     async fn handle_call(
         &self,
         actor: &str,
