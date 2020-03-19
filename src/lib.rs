@@ -229,7 +229,7 @@ impl S3Provider {
                         container.to_string(),
                         id.to_string(),
                         chunk_size,
-                        chunk_count,
+                        byte_size,
                         actor.clone(),
                     ).await;                
                 }
@@ -251,8 +251,14 @@ async fn dispatch_chunk(
     byte_size: u64,
     actor: String,
 ) {    
+    // range header spec: https://www.w3.org/Protocols/rfc2616/rfc2616-sec14.html#sec14.35
+    // tl;dr - ranges are _inclusive_, but start at 0.
+    // idx 0, start 0, end chunk_size-1
     let start = idx * chunk_size;
-    let end = start + chunk_size;
+    let mut end = start + chunk_size - 1;
+    if end > byte_size {
+        end = byte_size-1;
+    }
 
     let bytes = s3::get_blob_range(&client, &container, &id, start, end).await.unwrap();
                     
