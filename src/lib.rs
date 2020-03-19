@@ -14,7 +14,6 @@ use std::{
     collections::HashMap,
     sync::{Arc, RwLock},
 };
-use tokio::task;
 use wascc_codec::core::CapabilityConfiguration;
 
 mod s3;
@@ -42,7 +41,6 @@ pub struct S3Provider {
     dispatcher: Arc<RwLock<Box<dyn Dispatcher>>>,
     clients: RwLock<HashMap<String, Arc<S3Client>>>,
     uploads: RwLock<HashMap<String, FileUpload>>,
-    runtime: RwLock<tokio::runtime::Runtime>,
 }
 
 impl Default for S3Provider {
@@ -50,22 +48,12 @@ impl Default for S3Provider {
         match env_logger::try_init() {
             Ok(_) => {}
             Err(_) => {}
-        }
-
-        let runtime = tokio::runtime::Builder::new()
-            .threaded_scheduler()
-            .core_threads(4)
-            .thread_name("chunker")
-            .thread_stack_size(3 * 1024 * 1024)
-            .enable_all()
-            .build()
-            .unwrap();
+        }        
 
         S3Provider {
             dispatcher: Arc::new(RwLock::new(Box::new(NullDispatcher::new()))),
             clients: RwLock::new(HashMap::new()),
             uploads: RwLock::new(HashMap::new()),
-            runtime: RwLock::new(runtime),
         }
     }
 }
@@ -84,27 +72,35 @@ impl S3Provider {
         Ok(vec![])
     }
 
-    async fn create_container(
+    fn create_container(
         &self,
         actor: &str,
         container: Container,
     ) -> Result<Vec<u8>, Box<dyn Error>> {
-        s3::create_bucket(&self.clients.read().unwrap()[actor], &container.id).await?;
+        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(s3::create_bucket(
+            &self.clients.read().unwrap()[actor],
+            &container.id,
+        ))?;
 
         Ok(vec![])
     }
 
-    async fn remove_container(
+    fn remove_container(
         &self,
         actor: &str,
         container: Container,
     ) -> Result<Vec<u8>, Box<dyn Error>> {
-        s3::remove_bucket(&self.clients.read().unwrap()[actor], &container.id).await?;
+        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(s3::remove_bucket(
+            &self.clients.read().unwrap()[actor],
+            &container.id,
+        ))?;
 
         Ok(vec![])
     }
 
-    async fn upload_chunk(&self, actor: &str, chunk: FileChunk) -> Result<Vec<u8>, Box<dyn Error>> {
+    fn upload_chunk(&self, actor: &str, chunk: FileChunk) -> Result<Vec<u8>, Box<dyn Error>> {
         let key = upload_key(&chunk.container, &chunk.id, &actor);
         self.uploads
             .write()
@@ -115,11 +111,11 @@ impl S3Provider {
             });
         let complete = self.uploads.read().unwrap()[&key].is_complete();
         if complete {
-            s3::complete_upload(
+            let mut rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(s3::complete_upload(
                 &self.clients.read().unwrap()[actor],
                 &self.uploads.read().unwrap()[&key],
-            )
-            .await?;
+            ))?;
             self.uploads.write().unwrap().remove(&key);
         }
         Ok(vec![])
@@ -141,24 +137,24 @@ impl S3Provider {
         Ok(vec![])
     }
 
-    async fn remove_object(&self, actor: &str, blob: Blob) -> Result<Vec<u8>, Box<dyn Error>> {
-        s3::remove_object(
+    fn remove_object(&self, actor: &str, blob: Blob) -> Result<Vec<u8>, Box<dyn Error>> {
+        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(s3::remove_object(
             &self.clients.read().unwrap()[actor],
             &blob.container,
             &blob.id,
-        )
-        .await?;
+        ))?;
 
         Ok(vec![])
     }
 
-    async fn get_object_info(&self, actor: &str, blob: Blob) -> Result<Vec<u8>, Box<dyn Error>> {
-        let info = s3::head_object(
+    fn get_object_info(&self, actor: &str, blob: Blob) -> Result<Vec<u8>, Box<dyn Error>> {
+        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        let info = rt.block_on(s3::head_object(
             &self.clients.read().unwrap()[actor],
             &blob.container,
             &blob.id,
-        )
-        .await;
+        ));
 
         let blob = if let Ok(ob) = info {
             Blob {
@@ -177,12 +173,12 @@ impl S3Provider {
         Ok(serialize(&blob)?)
     }
 
-    async fn list_objects(
-        &self,
-        actor: &str,
-        container: Container,
-    ) -> Result<Vec<u8>, Box<dyn Error>> {
-        let objects = s3::list_objects(&self.clients.read().unwrap()[actor], &container.id).await?;
+    fn list_objects(&self, actor: &str, container: Container) -> Result<Vec<u8>, Box<dyn Error>> {
+        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        let objects = rt.block_on(s3::list_objects(
+            &self.clients.read().unwrap()[actor],
+            &container.id,
+        ))?;
         let blobs = if let Some(v) = objects {
             v.iter()
                 .map(|ob| Blob {
@@ -198,48 +194,48 @@ impl S3Provider {
         Ok(serialize(&bloblist)?)
     }
 
-    async fn start_download(
+    fn start_download(
         &self,
         actor: &str,
         request: StreamRequest,
     ) -> Result<Vec<u8>, Box<dyn Error>> {
-        let obj = self
-            .get_object_info(
-                actor,
-                Blob {
-                    byte_size: 0,
-                    container: request.container.to_string(),
-                    id: request.id.to_string(),
-                },
-            )
-            .await?;
-        let blob: Blob = deserialize(&obj)?;
-
-        //TODO: figure out how to get rid of the ceremony of duplicating all this
-        //stuff to make the borrow checker happy for the task spawn
         let actor = actor.to_string();
-        let client = self.clients.read().unwrap()[&actor].clone();
-        let d = self.dispatcher.clone();
-        let container = blob.container.to_string();
-        let id = blob.id.to_string();
-        let chunk_size = request.chunk_size;
-        let byte_size = blob.byte_size;
-        let chunk_count = expected_chunks(byte_size, chunk_size);
 
-        tokio::spawn(async move {
+        let d = self.dispatcher.clone();
+        let c = self.clients.read().unwrap()[&actor].clone();
+        let container = request.container.to_string();
+        let chunk_size = request.chunk_size;
+        let id = request.id.to_string();
+
+        let byte_size = {
+            let mut rt = tokio::runtime::Runtime::new().unwrap();
+            println!("HERE1");
+            let info = rt.block_on(s3::head_object(&c, &container, &id)).unwrap();
+            drop(rt);
+            info.content_length.unwrap() as u64
+        };
+
+        std::thread::spawn(move || {
+            let actor = actor.to_string();
+
+            println!("HERE2");
+
+            let chunk_count = expected_chunks(byte_size, chunk_size);
             for idx in 0..chunk_count {
-                println!("HERE");
+                println!("HERE3");
+
                 dispatch_chunk(
                     idx,
                     d.clone(),
-                    client.clone(),
+                    c.clone(),
                     container.to_string(),
                     id.to_string(),
                     chunk_size,
-                    byte_size,
+                    chunk_count,
                     actor.clone(),
-                )
-                .await;
+                );
+
+                println!("HERE6");
             }
         });
 
@@ -247,7 +243,7 @@ impl S3Provider {
     }
 }
 
-async fn dispatch_chunk(
+fn dispatch_chunk(
     idx: u64,
     dispatcher: Arc<RwLock<Box<dyn Dispatcher>>>,
     client: Arc<S3Client>,
@@ -257,12 +253,19 @@ async fn dispatch_chunk(
     byte_size: u64,
     actor: String,
 ) {
+    println!("HERE4");
     let start = idx * chunk_size;
     let end = start + chunk_size;
 
-    let bytes = s3::get_blob_range(&client, &container, &id, start, end)
-        .await
-        .unwrap();
+    let bytes = {
+        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        let bytes =
+            rt.block_on(s3::get_blob_range(&client, &container, &id, start, end))
+                .unwrap();
+        drop(rt);
+        bytes
+    };
+    println!("HERE5");
     let fc = FileChunk {
         sequence_no: idx + 1,
         container,
@@ -306,42 +309,14 @@ impl CapabilityProvider for S3Provider {
 
         match op {
             OP_CONFIGURE if actor == "system" => self.configure(deserialize(msg)?),
-            OP_CREATE_CONTAINER => self
-                .runtime
-                .write()
-                .unwrap()
-                .block_on(self.create_container(actor, deserialize(msg)?)),
-            OP_REMOVE_CONTAINER => self
-                .runtime
-                .write()
-                .unwrap()
-                .block_on(self.remove_container(actor, deserialize(msg)?)),
-            OP_REMOVE_OBJECT => self
-                .runtime
-                .write()
-                .unwrap()
-                .block_on(self.remove_object(actor, deserialize(msg)?)),
-            OP_LIST_OBJECTS => self
-                .runtime
-                .write()
-                .unwrap()
-                .block_on(self.list_objects(actor, deserialize(msg)?)),
-            OP_UPLOAD_CHUNK => self
-                .runtime
-                .write()
-                .unwrap()
-                .block_on(self.upload_chunk(actor, deserialize(msg)?)),
-            OP_START_DOWNLOAD => self
-                .runtime
-                .write()
-                .unwrap()
-                .block_on(self.start_download(actor, deserialize(msg)?)),
+            OP_CREATE_CONTAINER => self.create_container(actor, deserialize(msg)?),
+            OP_REMOVE_CONTAINER => self.remove_container(actor, deserialize(msg)?),
+            OP_REMOVE_OBJECT => self.remove_object(actor, deserialize(msg)?),
+            OP_LIST_OBJECTS => self.list_objects(actor, deserialize(msg)?),
+            OP_UPLOAD_CHUNK => self.upload_chunk(actor, deserialize(msg)?),
+            OP_START_DOWNLOAD => self.start_download(actor, deserialize(msg)?),
             OP_START_UPLOAD => self.start_upload(actor, deserialize(msg)?),
-            OP_GET_OBJECT_INFO => self
-                .runtime
-                .write()
-                .unwrap()
-                .block_on(self.get_object_info(actor, deserialize(msg)?)),
+            OP_GET_OBJECT_INFO => self.get_object_info(actor, deserialize(msg)?),
 
             _ => Err("bad dispatch".into()),
         }
@@ -584,7 +559,7 @@ mod test {
 
     impl Dispatcher for TestDispatcher {
         fn dispatch(&self, _op: &str, msg: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
-            info!("Received dispatch");
+            println!("Received dispatch");
             let fc: FileChunk = deserialize(msg)?;
             self.chunks.write().unwrap().push(fc);
             if self.chunks.read().unwrap().len() == self.expected_chunks as usize {
