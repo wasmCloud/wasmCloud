@@ -1,6 +1,6 @@
 [package]
 name = "nats-provider"
-version = "0.2.0"
+version = "0.2.1"
 authors = ["Kevin Hoffman <alothien@gmail.com>"]
 edition = "2018"
 
@@ -14,5 +14,5 @@ env_logger = "0.7.1"
 crossbeam-channel = "0.4.2"
 crossbeam = "0.7.3"
 crossbeam-utils = "^0.7.0"
-natsclient = "0.0.6"
+natsclient = "0.0.7"
 
