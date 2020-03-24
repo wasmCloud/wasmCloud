@@ -162,7 +162,7 @@ fn compute_hash_without_jwt(module: Module) -> Result<String> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::caps::{KEY_VALUE, MESSAGING};
+    use crate::caps::{KEY_VALUE, MESSAGING,LOGGING};
     use crate::jwt::{Actor, Claims};
     use base64::decode;
     use parity_wasm::serialize;
@@ -187,6 +187,53 @@ mod test {
             metadata: Some(Actor::new(
                 "testing".to_string(),
                 Some(vec![MESSAGING.to_string(), KEY_VALUE.to_string()]),
+                Some(vec![]),
+                false,
+                Some(1),
+                Some("".to_string()),
+            )),
+            expires: None,
+            id: nuid::next(),
+            issued_at: 0,
+            issuer: kp.public_key(),
+            subject: "test.wasm".to_string(),
+            not_before: None,
+        };
+        let modified_bytecode = embed_claims(&raw_module, &claims, &kp).unwrap();
+        println!(
+            "Added {} bytes in custom section.",
+            modified_bytecode.len() - raw_module.len()
+        );
+        if let Some(token) = extract_claims(&modified_bytecode).unwrap() {
+            assert_eq!(claims.issuer, token.claims.issuer);
+        /*     assert_eq!(
+            claims.metadata.as_ref().unwrap().caps,
+            token.claims.metadata.as_ref().unwrap().caps
+        );
+        */
+        /* assert_ne!(
+            claims.metadata.as_ref().unwrap().module_hash,
+            token.claims.metadata.as_ref().unwrap().module_hash
+        );
+        */
+        } else {
+            unreachable!()
+        }
+    }
+
+    #[test]
+    fn claims_logging_roundtrip() {
+        // Serialize and de-serialize this because the module loader adds bytes to
+        // the above base64 encoded module.
+        let dec_module = decode(WASM_BASE64).unwrap();
+        let m: Module = deserialize_buffer(&dec_module).unwrap();
+        let raw_module = serialize(m).unwrap();
+
+        let kp = KeyPair::new_account();
+        let claims = Claims {
+            metadata: Some(Actor::new(
+                "testing".to_string(),
+                Some(vec![MESSAGING.to_string(), LOGGING.to_string()]),
                 Some(vec![]),
                 false,
                 Some(1),

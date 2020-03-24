@@ -20,6 +20,7 @@ pub const HTTP_CLIENT: &str = "wascc:http_client";
 pub const BLOB: &str = "wascc:blobstore";
 pub const EVENTSTREAMS: &str = "wascc:eventstreams";
 pub const EXTRAS: &str = "wascc:extras";
+pub const LOGGING: &str = "wascc:logging";
 
 use std::collections::HashMap;
 
@@ -33,6 +34,7 @@ lazy_static! {
         m.insert(BLOB, "Blob Store");
         m.insert(EVENTSTREAMS, "Event Streams");
         m.insert(EXTRAS, "Extras");
+        m.insert(LOGGING, "Logging");
         m
     };
 }

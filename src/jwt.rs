@@ -513,7 +513,7 @@ impl Operator {
 #[cfg(test)]
 mod test {
     use super::{Account, Actor, Claims, KeyPair, Operator};
-    use crate::caps::{KEY_VALUE, MESSAGING};
+    use crate::caps::{KEY_VALUE, MESSAGING, LOGGING};
     use crate::jwt::since_the_epoch;
     use crate::jwt::validate_token;
 
@@ -694,6 +694,33 @@ mod test {
         assert_eq!(claims, decoded);
     }
 
+    #[test]
+    fn encode_decode_logging_roundtrip() {
+        let kp = KeyPair::new_account();
+        let claims = Claims {
+            metadata: Some(Actor::new(
+                "test".to_string(),
+                Some(vec![MESSAGING.to_string(), LOGGING.to_string()]),
+                Some(vec![]),
+                false,
+                Some(1),
+                Some("".to_string()),
+            )),
+            expires: None,
+            id: nuid::next(),
+            issued_at: 0,
+            issuer: kp.public_key(),
+            subject: "test.wasm".to_string(),
+            not_before: None,
+        };
+
+        let encoded = claims.encode(&kp).unwrap();
+
+        let decoded = Claims::decode(&encoded).unwrap();
+        assert!(validate_token::<Actor>(&encoded).is_ok());
+
+        assert_eq!(claims, decoded);
+    }
     #[test]
     fn account_extra_signers() {
         let op = KeyPair::new_operator();

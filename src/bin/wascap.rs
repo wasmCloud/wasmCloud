@@ -143,6 +143,9 @@ struct ActorMetadata {
     /// Enable access to the extras functionality (random nos, guids, etc)
     #[structopt(short = "z", long = "extras")]
     extras: bool,
+    /// Enable access to logging capability
+    #[structopt(short = "l", long = "logging")]
+    logging: bool,
     /// Enable access to an append-only event stream provider
     #[structopt(short = "e", long = "events")]
     eventstream: bool,
@@ -256,6 +259,9 @@ fn generate_actor(actor: &ActorMetadata) -> Result<(), Box<dyn ::std::error::Err
     if actor.blob_store {
         caps_list.push(wascap::caps::BLOB.to_string());
     }
+    if actor.logging {
+        caps_list.push(wascap::caps::LOGGING.to_string());
+    }
     if actor.eventstream {        
         caps_list.push(wascap::caps::EVENTSTREAMS.to_string());
     }
@@ -362,6 +368,9 @@ fn sign_file(cmd: &SignCommand) -> Result<(), Box<dyn ::std::error::Error>> {
     }
     if cmd.metadata.blob_store {
         caps_list.push(wascap::caps::BLOB.to_string());
+    }
+    if cmd.metadata.logging {
+        caps_list.push(wascap::caps::LOGGING.to_string());
     }
     if cmd.metadata.extras {
         caps_list.push(wascap::caps::EXTRAS.to_string());
