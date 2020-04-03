@@ -32,6 +32,7 @@ use std::sync::RwLock;
 capability_provider!(LoggingProvider, LoggingProvider::new);
 
 const CAPABILITY_ID: &str = "wascc:logging";
+const SYSTEM_ACTOR: &str = "system";
 
 const ERROR: u32 = 1;
 const WARN: u32 = 2;
@@ -87,19 +88,18 @@ impl CapabilityProvider for LoggingProvider {
     fn handle_call(&self, actor: &str, op: &str, msg: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
         // TIP: do not allow individual modules to attempt to send configuration,
         // only accept it from the host runtime
-        if op == OP_BIND_ACTOR && actor == "system" {
+        if op == OP_BIND_ACTOR && actor == SYSTEM_ACTOR {
             // if there were configuration values, we'd call
             // self.configure() here:
             //     self.configure(cfgvals).map(|_| vec![])
 
             Ok(vec![])
-        } else if op == OP_REMOVE_ACTOR && actor == "system" {
+        } else if op == OP_REMOVE_ACTOR && actor == SYSTEM_ACTOR {
             let cfg_vals = deserialize::<CapabilityConfiguration>(msg)?;
             info!("Removing actor configuration for {}", cfg_vals.module);
             // tear down stuff here
             Ok(vec![])
-        } else if op == OP_LOG {
-            println!("LOGG");
+        } else if op == OP_LOG {            
             let log_msg = deserialize::<WriteLogRequest>(msg)?;
             match log_msg.level {
                 ERROR => error!("[{}] {}", actor, log_msg.body),
