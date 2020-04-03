@@ -27,7 +27,6 @@ use actix_web::web::Bytes;
 use actix_web::{middleware, web, App, HttpRequest, HttpResponse, HttpServer};
 use codec::capabilities::{CapabilityProvider, Dispatcher, NullDispatcher};
 use codec::core::CapabilityConfiguration;
-use futures::future::Future;
 use std::collections::HashMap;
 use std::error::Error as StdError;
 use std::sync::Arc;
@@ -65,9 +64,7 @@ impl HttpServerProvider {
             }
             let server = lock.get(module).unwrap();
             let _ = server
-                .stop(true)
-                .wait()
-                .map(|_| info!("Stopped Actix Web Server"));
+                .stop(true);
         }
         {
             let mut lock = self.servers.write().unwrap();
@@ -101,7 +98,7 @@ impl HttpServerProvider {
             .bind(bind_addr)
             .unwrap()
             .disable_signals()
-            .start();
+            .run();
 
             servers.write().unwrap().insert(module_id.clone(), server);
 
@@ -165,7 +162,7 @@ impl CapabilityProvider for HttpServerProvider {
     }
 }
 
-fn request_handler(
+async fn request_handler(
     req: HttpRequest,
     payload: Bytes,
     state: web::Data<Arc<RwLock<Box<dyn Dispatcher>>>>,

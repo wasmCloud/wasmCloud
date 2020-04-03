@@ -9,10 +9,10 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 wascc-codec = "0.5.0"
-actix-web = "1.0.9"
-actix-rt = "0.2.4"
+actix-web = "2.0.0"
+actix-rt = "1.0.0"
 actix-multipart = "0.2.0"
-futures = "0.1.29"
+futures = "0.3.4"
 log = "0.4.8"
 env_logger = "0.7.1"
 crossbeam-channel = "0.4.2"
