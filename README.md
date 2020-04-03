@@ -1,5 +1,7 @@
-![travis](https://travis-ci.org/wascc/redis-provider.svg?branch=master)&nbsp;
-
+[![crates.io](https://img.shields.io/crates/v/wascc-redis-provider.svg)](https://crates.io/crates/wascc-redis-provider)&nbsp;
+![Rust](https://github.com/wascc/redis-provider/workflows/Rust/badge.svg)&nbsp;
+![license](https://img.shields.io/crates/l/wascc-redis-provider.svg)&nbsp;
+[![documentation](https://docs.rs/wascc-host/badge.svg)](https://docs.rs/wascc-redis-provider)
 
 # waSCC Key-Value Provider (Redis)
 
@@ -7,4 +9,8 @@ The waSCC Redis capability provider exposes an implementation of the key-value s
 
 * `URL` - The connection string URL. This will default to `redis://0.0.0.0:6379` if a configuration is supplied without this value.
 
-**NOTE** As with all native capability providers, they will not activate or provision resources on behalf of an actor module until the `host::configure_actor()` function is called for an actor on this capability ID (`wascc:keyvalue`).
+If you want to statically link (embed) this plugin in a custom waSCC host rather than use it as a dynamic plugin, then enable the `static_plugin` feature in your dependencies section as shown:
+
+```
+redis-provider = { version = "??", features = ["static_plugin"] }
+```
