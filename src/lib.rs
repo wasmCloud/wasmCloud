@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Capital One Services, LLC
+// Copyright 2015-2020 Capital One Services, LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,7 +16,7 @@
 extern crate wascc_codec as codec;
 
 use codec::capabilities::{CapabilityProvider, Dispatcher, NullDispatcher};
-use codec::core::{CapabilityConfiguration, OP_CONFIGURE, OP_REMOVE_ACTOR};
+use codec::core::{CapabilityConfiguration, OP_BIND_ACTOR, OP_REMOVE_ACTOR};
 use codec::{
     deserialize,
     logging::{WriteLogRequest, OP_LOG},
@@ -28,23 +28,29 @@ extern crate log;
 use std::error::Error;
 use std::sync::RwLock;
 
+#[cfg(not(feature = "static_plugin"))]
 capability_provider!(LoggingProvider, LoggingProvider::new);
 
 const CAPABILITY_ID: &str = "wascc:logging";
+const SYSTEM_ACTOR: &str = "system";
 
-const ERROR: usize = 1;
-const WARN: usize = 2;
-const INFO: usize = 3;
-const DEBUG: usize = 4;
-const TRACE: usize = 5;
+const ERROR: u32 = 1;
+const WARN: u32 = 2;
+const INFO: u32 = 3;
+const DEBUG: u32 = 4;
+const TRACE: u32 = 5;
 
+/// Standard output logging implementation of the `wascc:logging` specification
 pub struct LoggingProvider {
     dispatcher: RwLock<Box<dyn Dispatcher>>,
 }
 
 impl Default for LoggingProvider {
     fn default() -> Self {
-        env_logger::init();
+        match env_logger::try_init() {
+            Ok(_) => {}
+            Err(_) => {}
+        }
 
         LoggingProvider {
             dispatcher: RwLock::new(Box::new(NullDispatcher::new())),
@@ -53,16 +59,9 @@ impl Default for LoggingProvider {
 }
 
 impl LoggingProvider {
+    /// Creates a new logging provider
     pub fn new() -> Self {
         Self::default()
-    }
-
-    fn configure(
-        &self,
-        _config: impl Into<CapabilityConfiguration>,
-    ) -> Result<Vec<u8>, Box<dyn Error>> {
-        trace!("configuring {}", CAPABILITY_ID);
-        Ok(vec![])
     }
 }
 
@@ -89,18 +88,18 @@ impl CapabilityProvider for LoggingProvider {
     fn handle_call(&self, actor: &str, op: &str, msg: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
         // TIP: do not allow individual modules to attempt to send configuration,
         // only accept it from the host runtime
-        if op == OP_CONFIGURE && actor == "system" {
+        if op == OP_BIND_ACTOR && actor == SYSTEM_ACTOR {
             // if there were configuration values, we'd call
             // self.configure() here:
             //     self.configure(cfgvals).map(|_| vec![])
 
             Ok(vec![])
-        } else if op == OP_REMOVE_ACTOR && actor == "system" {
+        } else if op == OP_REMOVE_ACTOR && actor == SYSTEM_ACTOR {
             let cfg_vals = deserialize::<CapabilityConfiguration>(msg)?;
             info!("Removing actor configuration for {}", cfg_vals.module);
             // tear down stuff here
             Ok(vec![])
-        } else if op == OP_LOG {
+        } else if op == OP_LOG {            
             let log_msg = deserialize::<WriteLogRequest>(msg)?;
             match log_msg.level {
                 ERROR => error!("[{}] {}", actor, log_msg.body),
