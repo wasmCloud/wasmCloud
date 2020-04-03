@@ -1,18 +1,33 @@
 [package]
-name = "nats-provider"
-version = "0.2.0"
+name = "wascc-nats"
+version = "0.6.0"
 authors = ["Kevin Hoffman <alothien@gmail.com>"]
 edition = "2018"
+homepage = "https://wascc.dev"
+repository = "https://github.com/wascc/nats-provider"
+description = "NATS capability provider for the waSCC host runtime"
+license = "Apache-2.0"
+documentation = "https://docs.rs/wascc-nats"
+readme = "README.md"
+keywords = ["webassembly", "wasm", "wasi", "wascc", "nats"]
+categories = ["wasm", "api-bindings"]
+
+[badges]
+maintenance = { status = "actively-developed" }
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[features]
+# Enable if the provider will be statically compiled into a host
+static_plugin = []
+
 [dependencies]
-wascc-codec = "0.5.0"
+wascc-codec = "0.6.0"
 log = "0.4.8"
 env_logger = "0.7.1"
 crossbeam-channel = "0.4.2"
 crossbeam = "0.7.3"
 crossbeam-utils = "^0.7.0"
-natsclient = "0.0.6"
+natsclient = "0.0.7"
 
