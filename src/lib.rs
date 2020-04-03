@@ -5,7 +5,7 @@ extern crate wascc_codec as codec;
 extern crate log;
 
 use codec::capabilities::{CapabilityProvider, Dispatcher, NullDispatcher};
-use codec::core::OP_CONFIGURE;
+use codec::core::OP_BIND_ACTOR;
 use codec::deserialize;
 use codec::{blobstore::*, serialize};
 use rusoto_s3::S3Client;
@@ -271,7 +271,7 @@ async fn dispatch_chunk(
         chunk_bytes: bytes,
     };
     match dispatcher.read().unwrap().dispatch(
-        &format!("{}!{}", actor, OP_RECEIVE_CHUNK),
+        &actor, OP_RECEIVE_CHUNK,
         &serialize(&fc).unwrap(),
     ) {
         Ok(_) => {}
@@ -304,7 +304,7 @@ impl CapabilityProvider for S3Provider {
         trace!("Received host call from {}, operation - {}", actor, op);
 
         match op {
-            OP_CONFIGURE if actor == "system" => self.configure(deserialize(msg)?),
+            OP_BIND_ACTOR if actor == "system" => self.configure(deserialize(msg)?),
             OP_CREATE_CONTAINER => self.create_container(actor, deserialize(msg)?),
             OP_REMOVE_CONTAINER => self.remove_container(actor, deserialize(msg)?),
             OP_REMOVE_OBJECT => self.remove_object(actor, deserialize(msg)?),
@@ -554,7 +554,7 @@ mod test {
     }
 
     impl Dispatcher for TestDispatcher {
-        fn dispatch(&self, _op: &str, msg: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {            
+        fn dispatch(&self, _actor: &str, _op: &str, msg: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {            
             let fc: FileChunk = deserialize(msg)?;
             self.chunks.write().unwrap().push(fc);
             if self.chunks.read().unwrap().len() == self.expected_chunks as usize {
