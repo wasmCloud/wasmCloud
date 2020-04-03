@@ -13,7 +13,7 @@ jobs:
         image: minio/minio
         ports:
           - 9000/9000
-        options: --entrypoint server /data 
+        options: server /data 
 
     runs-on: ubuntu-latest
 
