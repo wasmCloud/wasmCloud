@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Capital One Services, LLC
+// Copyright 2015-2020 Capital One Services, LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,7 +22,7 @@ extern crate log;
 
 use codec::capabilities::{CapabilityProvider, Dispatcher, NullDispatcher};
 use codec::core::CapabilityConfiguration;
-use codec::core::{OP_CONFIGURE, OP_REMOVE_ACTOR};
+use codec::core::{OP_BIND_ACTOR, OP_REMOVE_ACTOR};
 use codec::keyvalue;
 use codec::{deserialize, serialize};
 use keyvalue::*;
@@ -36,8 +36,11 @@ use std::sync::RwLock;
 
 const CAPABILITY_ID: &str = "wascc:keyvalue";
 
+#[cfg(not(feature = "static_plugin"))]
 capability_provider!(RedisKVProvider, RedisKVProvider::new);
 
+
+/// Redis implementation of the `wascc:keyvalue` specification
 pub struct RedisKVProvider {
     dispatcher: Arc<RwLock<Box<dyn Dispatcher>>>,
     clients: Arc<RwLock<HashMap<String, redis::Client>>>,
@@ -47,7 +50,7 @@ impl Default for RedisKVProvider {
     fn default() -> Self {
         match env_logger::try_init() {
             Ok(_) => {}
-            Err(_) => println!("** Redis provider skipping logger init, already initialized."),
+            Err(_) => {},
         };
 
         RedisKVProvider {
@@ -58,6 +61,7 @@ impl Default for RedisKVProvider {
 }
 
 impl RedisKVProvider {
+    /// Creates a new Redis provider
     pub fn new() -> Self {
         RedisKVProvider::default()
     }
@@ -66,7 +70,7 @@ impl RedisKVProvider {
         let lock = self.clients.read().unwrap();
         if let Some(client) = lock.get(actor) {
             client.get_connection()
-        } else {
+        } else {            
             Err(redis::RedisError::from((
                 redis::ErrorKind::InvalidClientConfig,
                 "No client for this actor. Did the host configure it?",
@@ -225,13 +229,14 @@ impl CapabilityProvider for RedisKVProvider {
 
     fn handle_call(&self, actor: &str, op: &str, msg: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
         info!(
-            "Received host call, operation - {} ({} bytes)",
+            "Received host call from {}, operation - {} ({} bytes)",
+            actor,
             op,
             msg.len()
         );
 
         match op {
-            OP_CONFIGURE if actor == "system" => {
+            OP_BIND_ACTOR if actor == "system" => {
                 self.configure(deserialize::<CapabilityConfiguration>(msg).unwrap())
             }
             OP_REMOVE_ACTOR if actor == "system" => {
