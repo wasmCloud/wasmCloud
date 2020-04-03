@@ -40,6 +40,10 @@ const CAPABILITY_ID: &str = "wascc:keyvalue";
 capability_provider!(RedisKVProvider, RedisKVProvider::new);
 
 
+<<<<<<< HEAD
+=======
+/// Redis implementation of the `wascc:keyvalue` specification
+>>>>>>> c3cf76022150221eb4f1627c3155a4b6a6a53ea0
 pub struct RedisKVProvider {
     dispatcher: Arc<RwLock<Box<dyn Dispatcher>>>,
     clients: Arc<RwLock<HashMap<String, redis::Client>>>,
@@ -49,7 +53,7 @@ impl Default for RedisKVProvider {
     fn default() -> Self {
         match env_logger::try_init() {
             Ok(_) => {}
-            Err(_) => println!("** Redis provider skipping logger init, already initialized."),
+            Err(_) => {},
         };
 
         RedisKVProvider {
@@ -60,6 +64,7 @@ impl Default for RedisKVProvider {
 }
 
 impl RedisKVProvider {
+    /// Creates a new Redis provider
     pub fn new() -> Self {
         RedisKVProvider::default()
     }
