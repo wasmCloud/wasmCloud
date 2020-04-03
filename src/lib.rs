@@ -5,7 +5,7 @@ extern crate wascc_codec as codec;
 extern crate log;
 
 use codec::capabilities::{CapabilityProvider, Dispatcher, NullDispatcher};
-use codec::core::OP_CONFIGURE;
+use codec::core::OP_BIND_ACTOR;
 use codec::deserialize;
 use codec::{blobstore::*, serialize};
 use rusoto_s3::S3Client;
@@ -18,9 +18,11 @@ use wascc_codec::core::CapabilityConfiguration;
 
 mod s3;
 
+#[cfg(not(feature = "static_plugin"))]
 capability_provider!(S3Provider, S3Provider::new);
 
 const CAPABILITY_ID: &str = "wascc:blobstore";
+const SYSTEM_ACTOR: &str = "system";
 
 #[derive(Debug, PartialEq)]
 struct FileUpload {
@@ -37,6 +39,7 @@ impl FileUpload {
     }
 }
 
+/// AWS S3 implementation of the `wascc:blobstore` specification
 pub struct S3Provider {
     dispatcher: Arc<RwLock<Box<dyn Dispatcher>>>,
     clients: RwLock<HashMap<String, Arc<S3Client>>>,
@@ -59,6 +62,7 @@ impl Default for S3Provider {
 }
 
 impl S3Provider {
+    /// Creates a new S3 provider
     pub fn new() -> Self {
         Self::default()
     }
@@ -271,7 +275,7 @@ async fn dispatch_chunk(
         chunk_bytes: bytes,
     };
     match dispatcher.read().unwrap().dispatch(
-        &format!("{}!{}", actor, OP_RECEIVE_CHUNK),
+        &actor, OP_RECEIVE_CHUNK,
         &serialize(&fc).unwrap(),
     ) {
         Ok(_) => {}
@@ -304,7 +308,7 @@ impl CapabilityProvider for S3Provider {
         trace!("Received host call from {}, operation - {}", actor, op);
 
         match op {
-            OP_CONFIGURE if actor == "system" => self.configure(deserialize(msg)?),
+            OP_BIND_ACTOR if actor == SYSTEM_ACTOR => self.configure(deserialize(msg)?),
             OP_CREATE_CONTAINER => self.create_container(actor, deserialize(msg)?),
             OP_REMOVE_CONTAINER => self.remove_container(actor, deserialize(msg)?),
             OP_REMOVE_OBJECT => self.remove_object(actor, deserialize(msg)?),
@@ -336,6 +340,10 @@ mod test {
     use super::*;
     use crossbeam_utils::sync::WaitGroup;
     use std::collections::HashMap;
+
+    // ***! These tests MUST be run in the presence of a minio server
+    // The easiest option is just to run the default minio docker image as a 
+    // service
 
     #[test]
     fn test_create_and_remove_bucket() {
@@ -554,7 +562,7 @@ mod test {
     }
 
     impl Dispatcher for TestDispatcher {
-        fn dispatch(&self, _op: &str, msg: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {            
+        fn dispatch(&self, _actor: &str, _op: &str, msg: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {            
             let fc: FileChunk = deserialize(msg)?;
             self.chunks.write().unwrap().push(fc);
             if self.chunks.read().unwrap().len() == self.expected_chunks as usize {

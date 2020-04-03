@@ -1,21 +1,16 @@
 use crate::FileUpload;
 use codec::core::CapabilityConfiguration;
-use rusoto_core::credential::{AwsCredentials, DefaultCredentialsProvider, StaticProvider};
-use rusoto_core::{Region, RusotoError};
-use rusoto_credential::ProvideAwsCredentials;
-use rusoto_s3::util::{PreSignedRequest, PreSignedRequestOption};
+use rusoto_core::credential::{DefaultCredentialsProvider, StaticProvider};
+use rusoto_core::{Region};
 use rusoto_s3::HeadObjectOutput;
 use rusoto_s3::ListObjectsV2Output;
 use futures::TryStreamExt;
 use rusoto_s3::Object;
 use rusoto_s3::{
-    CORSConfiguration, CORSRule, CompleteMultipartUploadRequest, CompletedMultipartUpload,
-    CompletedPart, CopyObjectRequest, CreateBucketRequest, CreateMultipartUploadRequest,
-    DeleteBucketRequest, DeleteObjectRequest, GetObjectError, GetObjectRequest, HeadObjectRequest,
-    ListObjectsRequest, ListObjectsV2Request, PutBucketCorsRequest, PutObjectRequest, S3Client,
-    StreamingBody, UploadPartCopyRequest, UploadPartRequest, S3,
+   CreateBucketRequest,
+    DeleteBucketRequest, DeleteObjectRequest, PutObjectRequest, GetObjectRequest, HeadObjectRequest,
+     ListObjectsV2Request,  S3Client, S3,
 };
-use std::io::Read;
 
 use std::error::Error;
 
