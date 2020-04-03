@@ -39,11 +39,7 @@ const CAPABILITY_ID: &str = "wascc:keyvalue";
 #[cfg(not(feature = "static_plugin"))]
 capability_provider!(RedisKVProvider, RedisKVProvider::new);
 
-
-<<<<<<< HEAD
-=======
 /// Redis implementation of the `wascc:keyvalue` specification
->>>>>>> c3cf76022150221eb4f1627c3155a4b6a6a53ea0
 pub struct RedisKVProvider {
     dispatcher: Arc<RwLock<Box<dyn Dispatcher>>>,
     clients: Arc<RwLock<HashMap<String, redis::Client>>>,
@@ -53,7 +49,7 @@ impl Default for RedisKVProvider {
     fn default() -> Self {
         match env_logger::try_init() {
             Ok(_) => {}
-            Err(_) => {},
+            Err(_) => {}
         };
 
         RedisKVProvider {
@@ -73,7 +69,7 @@ impl RedisKVProvider {
         let lock = self.clients.read().unwrap();
         if let Some(client) = lock.get(actor) {
             client.get_connection()
-        } else {            
+        } else {
             Err(redis::RedisError::from((
                 redis::ErrorKind::InvalidClientConfig,
                 "No client for this actor. Did the host configure it?",
