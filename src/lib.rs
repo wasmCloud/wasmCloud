@@ -39,6 +39,7 @@ const INFO: u32 = 3;
 const DEBUG: u32 = 4;
 const TRACE: u32 = 5;
 
+/// Standard output logging implementation of the `wascc:logging` specification
 pub struct LoggingProvider {
     dispatcher: RwLock<Box<dyn Dispatcher>>,
 }
@@ -46,7 +47,7 @@ pub struct LoggingProvider {
 impl Default for LoggingProvider {
     fn default() -> Self {
         match env_logger::try_init() {
-            Ok(_) => {},
+            Ok(_) => {}
             Err(_) => {}
         }
 
@@ -57,9 +58,10 @@ impl Default for LoggingProvider {
 }
 
 impl LoggingProvider {
+    /// Creates a new logging provider
     pub fn new() -> Self {
         Self::default()
-    }    
+    }
 }
 
 impl CapabilityProvider for LoggingProvider {
