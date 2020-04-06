@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Capital One Services, LLC
+// Copyright 2015-2020 Capital One Services, LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,8 +21,8 @@ extern crate wascc_codec as codec;
 extern crate log;
 
 use codec::capabilities::{CapabilityProvider, Dispatcher, NullDispatcher};
-use codec::core::{OP_CONFIGURE, OP_REMOVE_ACTOR};
-use codec::messaging::{PublishMessage, RequestMessage, OP_PERFORM_REQUEST, OP_PUBLISH_MESSAGE};
+use codec::core::{OP_BIND_ACTOR, OP_REMOVE_ACTOR};
+use codec::messaging::{BrokerMessage, RequestMessage, OP_PERFORM_REQUEST, OP_PUBLISH_MESSAGE};
 use natsclient;
 use std::collections::HashMap;
 use wascc_codec::core::CapabilityConfiguration;
@@ -32,10 +32,12 @@ use std::error::Error;
 use std::sync::Arc;
 use std::sync::RwLock;
 
+#[cfg(not(feature = "static_plugin"))]
 capability_provider!(NatsProvider, NatsProvider::new);
 
 const CAPABILITY_ID: &str = "wascc:messaging";
 
+/// NATS implementation of the `wascc:messaging` specification
 pub struct NatsProvider {
     dispatcher: Arc<RwLock<Box<dyn Dispatcher>>>,
     clients: Arc<RwLock<HashMap<String, natsclient::Client>>>,
@@ -45,7 +47,7 @@ impl Default for NatsProvider {
     fn default() -> Self {
         match env_logger::try_init() {
             Ok(_) => {}
-            Err(_) => println!("** NATS provider - skipping logger init, already initialized."),
+            Err(_) => {}
         };
 
         NatsProvider {
@@ -56,11 +58,13 @@ impl Default for NatsProvider {
 }
 
 impl NatsProvider {
+    /// Creates a new NATS provider. This is either invoked manually in static plugin
+    /// mode, or invoked by the host during dynamic loading
     pub fn new() -> NatsProvider {
         Self::default()
     }
 
-    fn publish_message(&self, actor: &str, msg: PublishMessage) -> Result<Vec<u8>, Box<dyn Error>> {
+    fn publish_message(&self, actor: &str, msg: BrokerMessage) -> Result<Vec<u8>, Box<dyn Error>> {
         let lock = self.clients.read().unwrap();
         let client = lock.get(actor).unwrap();
 
@@ -90,10 +94,12 @@ impl NatsProvider {
 }
 
 impl CapabilityProvider for NatsProvider {
+    /// Returns the capability ID of this provider
     fn capability_id(&self) -> &'static str {
         CAPABILITY_ID
     }
 
+    /// Receives a dispatcher from the host runtime
     fn configure_dispatch(&self, dispatcher: Box<dyn Dispatcher>) -> Result<(), Box<dyn Error>> {
         trace!("Dispatcher received.");
         let mut lock = self.dispatcher.write().unwrap();
@@ -102,17 +108,19 @@ impl CapabilityProvider for NatsProvider {
         Ok(())
     }
 
+    /// The friendly name of the capability provider
     fn name(&self) -> &'static str {
         "waSCC Default Messaging Provider (NATS)"
     }
 
+    /// Handles an invocation received from the host runtime
     fn handle_call(&self, actor: &str, op: &str, msg: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
         trace!("Received host call from {}, operation - {}", actor, op);
 
         match op {
             OP_PUBLISH_MESSAGE => self.publish_message(actor, deserialize(msg)?),
             OP_PERFORM_REQUEST => self.request(actor, deserialize(msg)?),
-            OP_CONFIGURE if actor == "system" => self.configure(deserialize(msg)?),
+            OP_BIND_ACTOR if actor == "system" => self.configure(deserialize(msg)?),
             OP_REMOVE_ACTOR if actor == "system" => self.remove_actor(deserialize(msg)?),
             _ => Err("bad dispatch".into()),
         }

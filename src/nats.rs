@@ -6,8 +6,6 @@ use std::sync::Arc;
 use std::sync::RwLock;
 use wascc_codec::capabilities::Dispatcher;
 use wascc_codec::messaging::BrokerMessage;
-use wascc_codec::messaging::DeliverMessage;
-use wascc_codec::messaging::PublishMessage;
 use wascc_codec::messaging::RequestMessage;
 use wascc_codec::messaging::OP_DELIVER_MESSAGE;
 use wascc_codec::serialize;
@@ -18,18 +16,17 @@ const ENV_NATS_CLIENT_JWT: &str = "CLIENT_JWT";
 const ENV_NATS_CLIENT_SEED: &str = "CLIENT_SEED";
 const ENV_NATS_QUEUEGROUP_NAME: &str = "QUEUEGROUP_NAME";
 
-pub(crate) fn publish(client: &Client, msg: PublishMessage) -> Result<Vec<u8>, Box<dyn Error>> {
-    let m = msg.message;
+pub(crate) fn publish(client: &Client, msg: BrokerMessage) -> Result<Vec<u8>, Box<dyn Error>> {
     trace!(
         "Publishing message on {} ({} bytes)",
-        &m.subject,
-        &m.body.len()
+        &msg.subject,
+        &msg.body.len()
     );
     match client.publish(
-        &m.subject,
-        &m.body,
-        if !m.reply_to.is_empty() {
-            Some(&m.reply_to)
+        &msg.subject,
+        &msg.body,
+        if !msg.reply_to.is_empty() {
+            Some(&msg.reply_to)
         } else {
             None
         },
@@ -123,7 +120,7 @@ fn create_subscription(
                 let buf = serialize(&dm).unwrap();
 
                 let d = dispatcher.read().unwrap();
-                if let Err(e) = d.dispatch(&format!("{}!{}", actor, OP_DELIVER_MESSAGE), &buf) {
+                if let Err(e) = d.dispatch(&actor, OP_DELIVER_MESSAGE, &buf) {
                     error!("Dispatch failed: {}", e);
                 }
                 Ok(())
@@ -136,7 +133,7 @@ fn create_subscription(
                 let dm = delivermessage_for_natsmessage(msg);
                 let buf = serialize(&dm).unwrap();
                 let d = dispatcher.read().unwrap();
-                if let Err(e) = d.dispatch(&format!("{}!{}", actor, OP_DELIVER_MESSAGE), &buf) {
+                if let Err(e) = d.dispatch(&actor, OP_DELIVER_MESSAGE, &buf) {
                     error!("Dispatch failed: {}", e);
                 }
                 Ok(())
@@ -150,12 +147,10 @@ fn create_subscription(
     }
 }
 
-fn delivermessage_for_natsmessage(msg: &natsclient::Message) -> DeliverMessage {
-    DeliverMessage {
-        message: BrokerMessage {
-            subject: msg.subject.clone(),
-            reply_to: msg.reply_to.clone().unwrap_or_else(|| "".to_string()),
-            body: msg.payload.clone(),
-        },
+fn delivermessage_for_natsmessage(msg: &natsclient::Message) -> BrokerMessage {
+    BrokerMessage {
+        subject: msg.subject.clone(),
+        reply_to: msg.reply_to.clone().unwrap_or_else(|| "".to_string()),
+        body: msg.payload.clone(),
     }
 }
