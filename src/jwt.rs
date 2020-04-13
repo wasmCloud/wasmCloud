@@ -175,6 +175,11 @@ where
 
     pub fn decode(input: &str) -> Result<Claims<T>> {
         let segments: Vec<&str> = input.split('.').collect();
+        if segments.len() != 3 {
+            return Err(errors::new(errors::ErrorKind::Token(
+                "invalid token format".into(),
+            )));
+        }
         let claims: Claims<T> = from_jwt_segment(segments[1])?;
 
         Ok(claims)
@@ -512,8 +517,8 @@ impl Operator {
 
 #[cfg(test)]
 mod test {
-    use super::{Account, Actor, Claims, KeyPair, Operator};
-    use crate::caps::{KEY_VALUE, MESSAGING, LOGGING};
+    use super::{Account, Actor, Claims, ErrorKind, KeyPair, Operator};
+    use crate::caps::{KEY_VALUE, LOGGING, MESSAGING};
     use crate::jwt::since_the_epoch;
     use crate::jwt::validate_token;
 
@@ -737,5 +742,39 @@ mod test {
         assert!(validate_token::<Account>(&encoded).is_ok());
         assert_eq!(claims, decoded);
         assert_eq!(claims.metadata.unwrap().valid_signers.unwrap().len(), 1);
+    }
+
+    #[test]
+    fn encode_decode_bad_token() {
+        let kp = KeyPair::new_account();
+        let claims = Claims {
+            metadata: Some(Actor::new(
+                "test".to_string(),
+                Some(vec![MESSAGING.to_string(), KEY_VALUE.to_string()]),
+                Some(vec![]),
+                false,
+                Some(1),
+                Some("".to_string()),
+            )),
+            expires: None,
+            id: nuid::next(),
+            issued_at: 0,
+            issuer: kp.public_key(),
+            subject: "test.wasm".to_string(),
+            not_before: None,
+        };
+
+        let encoded_nosep = claims.encode(&kp).unwrap().replace(".", "");
+
+        let decoded = Claims::<Account>::decode(&encoded_nosep);
+        assert!(decoded.is_err());
+        if let Err(e) = decoded {
+            match e.kind() {
+                ErrorKind::Token(s) => assert_eq!(s, "invalid token format"),
+                _ => {
+                    panic!("failed to assert errors::ErrorKind::Token");
+                }
+            }
+        }
     }
 }
