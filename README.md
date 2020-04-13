@@ -4,7 +4,7 @@
 
 # WASCAP
 
-In the [waSCC](https://wasc.dev) runtime, each actor securely declares the set of capabilities it requires. This library and its associated binary are used to embed, extract, and validate JSON Web Tokens (JWT) containing these capability attestations, as well as the hash of the `wasm` file and a provable issuer for verifying module provenance.
+In the [waSCC](https://wascc.dev) runtime, each actor securely declares the set of capabilities it requires. This library and its associated binary are used to embed, extract, and validate JSON Web Tokens (JWT) containing these capability attestations, as well as the hash of the `wasm` file and a provable issuer for verifying module provenance.
 
 If you just want the CLI that signs and examines capabilities claims, then you can install it with cargo:
 ```
