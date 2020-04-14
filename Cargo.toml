@@ -1,14 +1,26 @@
 [package]
-name = "redis-streams-provider"
-version = "0.1.0"
+name = "wascc-streams-redis"
+version = "0.2.0"
 authors = ["Kevin Hoffman <alothien@gmail.com>"]
 edition = "2018"
+homepage = "https://wascc.dev"
+repository = "https://github.com/wascc/redis-streams"
+description = "Redis Event Streams capability provider for the waSCC host runtime"
+license = "Apache-2.0"
+documentation = "https://docs.rs/wascc-host"
+readme = "README.md"
+keywords = ["webassembly", "events", "stream", "wascc", "redis"]
+categories = ["wasm", "api-bindings"]
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[features]
+# Enable if the provider will be statically compiled into a host
+static_plugin = []
+
 [dependencies]
-wascc-codec = "0.5.0"
+wascc-codec = "0.6.0"
 log = "0.4.8"
 env_logger = "0.7.1"
 redis-streams = "0.1.0"

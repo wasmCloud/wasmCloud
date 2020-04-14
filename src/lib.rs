@@ -9,7 +9,7 @@ use ::redis_streams::{
 };
 
 use codec::capabilities::{CapabilityProvider, Dispatcher, NullDispatcher};
-use codec::core::OP_CONFIGURE;
+use codec::core::OP_BIND_ACTOR;
 use codec::eventstreams::{self, Event, StreamQuery, StreamResults, WriteResponse};
 use wascc_codec::core::CapabilityConfiguration;
 use wascc_codec::{deserialize, serialize};
@@ -20,6 +20,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+#[cfg(not(feature = "static_plugin"))]
 capability_provider!(RedisStreamsProvider, RedisStreamsProvider::new);
 
 const CAPABILITY_ID: &str = "wascc:eventstreams";
@@ -142,7 +143,7 @@ impl CapabilityProvider for RedisStreamsProvider {
         trace!("Received host call from {}, operation - {}", actor, op);
 
         match op {
-            OP_CONFIGURE if actor == "system" => self.configure(deserialize(msg)?),
+            OP_BIND_ACTOR if actor == "system" => self.configure(deserialize(msg)?),
             eventstreams::OP_WRITE_EVENT => self.write_event(actor, deserialize(msg)?),
             eventstreams::OP_QUERY_STREAM => self.query_stream(actor, deserialize(msg)?),
             _ => Err("bad dispatch".into()),
