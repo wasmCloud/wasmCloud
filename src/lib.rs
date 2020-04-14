@@ -24,6 +24,7 @@ mod chunks;
 capability_provider!(FileSystemProvider, FileSystemProvider::new);
 
 const CAPABILITY_ID: &str = "wascc:blobstore";
+const SYSTEM_ACTOR: &str = "system";
 
 pub struct FileSystemProvider {
     dispatcher: Arc<RwLock<Box<dyn Dispatcher>>>,
@@ -207,11 +208,7 @@ fn dispatch_chunk(
                 total_bytes: xfer.total_size,
             };
             let buf = serialize(&fc).unwrap();
-            match d
-                .read()
-                .unwrap()
-                .dispatch(actor, OP_RECEIVE_CHUNK, &buf)
-            {
+            match d.read().unwrap().dispatch(actor, OP_RECEIVE_CHUNK, &buf) {
                 Ok(_) => {}
                 Err(_) => {}
             }
@@ -245,7 +242,7 @@ impl CapabilityProvider for FileSystemProvider {
         trace!("Received host call from {}, operation - {}", actor, op);
 
         match op {
-            OP_CONFIGURE if actor == "system" => self.configure(deserialize(msg)?),
+            OP_BIND_ACTOR if actor == SYSTEM_ACTOR => self.configure(deserialize(msg)?),
             OP_CREATE_CONTAINER => self.create_container(actor, deserialize(msg)?),
             OP_REMOVE_CONTAINER => self.remove_container(actor, deserialize(msg)?),
             OP_REMOVE_OBJECT => self.remove_object(actor, deserialize(msg)?),
