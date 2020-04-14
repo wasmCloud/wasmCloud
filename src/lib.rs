@@ -7,7 +7,7 @@ extern crate log;
 use chunks::Chunks;
 use codec::blobstore::*;
 use codec::capabilities::{CapabilityProvider, Dispatcher, NullDispatcher};
-use codec::core::OP_CONFIGURE;
+use codec::core::OP_BIND_ACTOR;
 use codec::{deserialize, serialize};
 use std::error::Error;
 use std::io::Write;
@@ -20,6 +20,7 @@ use wascc_codec::core::CapabilityConfiguration;
 
 mod chunks;
 
+#[cfg(not(feature = "static_plugin"))]
 capability_provider!(FileSystemProvider, FileSystemProvider::new);
 
 const CAPABILITY_ID: &str = "wascc:blobstore";
@@ -209,7 +210,7 @@ fn dispatch_chunk(
             match d
                 .read()
                 .unwrap()
-                .dispatch(&format!("{}!{}", actor, OP_RECEIVE_CHUNK), &buf)
+                .dispatch(actor, OP_RECEIVE_CHUNK, &buf)
             {
                 Ok(_) => {}
                 Err(_) => {}
