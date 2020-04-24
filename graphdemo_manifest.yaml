@@ -1,0 +1,27 @@
+# Use this file in conjunction with the generic wascc-host binary to launch a
+# demonstration of the graph database capability provider. 
+# You'll need to launch redisgraph, easiest way to do that is with
+# this docker command:
+#
+# docker run --name redisgraph-test -d --rm -p 6379:6379 redislabs/redisgraph
+#
+# NOTE: your actor subject will change from this because you will use different
+# signing keys.
+#
+# $ curl -X POST localhost:8081 (creates nodes/edges)
+# $ curl localhost:8081 (retrieves some data in a sample query)
+---
+actors:
+    - ./graph-actor/target/wasm32-unknown-unknown/release/graph_actor_signed.wasm
+capabilities:
+    - path: ./wascc-redisgraph/target/release/libwascc_redisgraph.so
+    - path: ../wascc-host/examples/.assets/libwascc_httpsrv.so
+bindings:
+    - actor: "MDSY2N2ALHIPBOL6W44KMOIHHKPD4CAMJMWAGXEIAHTPS7LLYQKSFZ2L"
+      capability: "wascc:graphdb"
+      values:
+        URL: redis://127.0.0.1:6379
+    - actor: "MDSY2N2ALHIPBOL6W44KMOIHHKPD4CAMJMWAGXEIAHTPS7LLYQKSFZ2L"
+      capability: "wascc:http_server"
+      values:
+        PORT: "8081"
