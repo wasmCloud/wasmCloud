@@ -1,6 +1,8 @@
-# Graph Database Capability Provider (RedisGraph)
+# Redis Graph - Graph Database Capability Provider
 
 This repository contains a shared library of [types and protocol definitions](./common), a [graph-guest](./graphguest) library that can be used by any actor that wants to consume _any_ graph database capability (not just RedisGraph), a [sample actor](./graph-actor), and the main capability provider [library](./wascc-redisgraph).
+
+While the actor and common libraries should be usable across different types of graph databases, this provider is build on top of [Redis Graph](https://oss.redislabs.com/redisgraph/).
 
 The following sample shows just how few lines of code are required to build an actor that responds to HTTP requests, reads and writes graph data, and exposes results over HTTP as JSON:
 
