@@ -7,7 +7,7 @@ extern crate log;
 use chunks::Chunks;
 use codec::blobstore::*;
 use codec::capabilities::{CapabilityProvider, Dispatcher, NullDispatcher};
-use codec::core::OP_BIND_ACTOR;
+use codec::core::{OP_BIND_ACTOR, OP_REMOVE_ACTOR};
 use codec::{deserialize, serialize};
 use std::error::Error;
 use std::io::Write;
@@ -33,7 +33,7 @@ pub struct FileSystemProvider {
 
 impl Default for FileSystemProvider {
     fn default() -> Self {
-        env_logger::init();
+        let _ = env_logger::builder().format_module_path(false).try_init();
 
         FileSystemProvider {
             dispatcher: Arc::new(RwLock::new(Box::new(NullDispatcher::new()))),
@@ -243,6 +243,7 @@ impl CapabilityProvider for FileSystemProvider {
 
         match op {
             OP_BIND_ACTOR if actor == SYSTEM_ACTOR => self.configure(deserialize(msg)?),
+            OP_REMOVE_ACTOR if actor == SYSTEM_ACTOR => Ok(vec![]),
             OP_CREATE_CONTAINER => self.create_container(actor, deserialize(msg)?),
             OP_REMOVE_CONTAINER => self.remove_container(actor, deserialize(msg)?),
             OP_REMOVE_OBJECT => self.remove_object(actor, deserialize(msg)?),
