@@ -62,8 +62,8 @@ impl FileSystemProvider {
         container: Container,
     ) -> Result<Vec<u8>, Box<dyn Error>> {
         let cdir = self.container_to_path(&container);
-        std::fs::create_dir_all(cdir)?;
-        Ok(vec![])
+        std::fs::create_dir_all(cdir)?;        
+        Ok(serialize(&container)?)
     }
 
     fn remove_container(
