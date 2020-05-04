@@ -1,6 +1,6 @@
 [package]
 name = "wascc-fs"
-version = "0.0.4"
+version = "0.0.5"
 authors = ["Kevin Hoffman <alothien@gmail.com>"]
 edition = "2018"
 homepage = "https://wascc.dev"

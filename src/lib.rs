@@ -61,8 +61,9 @@ impl FileSystemProvider {
         _actor: &str,
         container: Container,
     ) -> Result<Vec<u8>, Box<dyn Error>> {
+        let container = sanitize_container(&container);
         let cdir = self.container_to_path(&container);
-        std::fs::create_dir_all(cdir)?;        
+        std::fs::create_dir_all(cdir)?;
         Ok(serialize(&container)?)
     }
 
@@ -71,6 +72,7 @@ impl FileSystemProvider {
         _actor: &str,
         container: Container,
     ) -> Result<Vec<u8>, Box<dyn Error>> {
+        let container = sanitize_container(&container);
         let cdir = self.container_to_path(&container);
         std::fs::remove_dir(cdir)?;
         Ok(vec![])
@@ -82,6 +84,7 @@ impl FileSystemProvider {
             id: blob.id,
             container: blob.container,
         };
+        let blob = sanitize_blob(&blob);
         info!("Starting upload: {}/{}", blob.container, blob.id);
         let bfile = self.blob_to_path(&blob);
         std::fs::write(bfile, &[])?;
@@ -89,12 +92,14 @@ impl FileSystemProvider {
     }
 
     fn remove_object(&self, _actor: &str, blob: Blob) -> Result<Vec<u8>, Box<dyn Error>> {
+        let blob = sanitize_blob(&blob);
         let bfile = self.blob_to_path(&blob);
         std::fs::remove_file(&bfile)?;
         Ok(vec![])
     }
 
     fn get_object_info(&self, _actor: &str, blob: Blob) -> Result<Vec<u8>, Box<dyn Error>> {
+        let blob = sanitize_blob(&blob);
         let bfile = self.blob_to_path(&blob);
         let blob: Blob = if bfile.exists() {
             Blob {
@@ -113,6 +118,7 @@ impl FileSystemProvider {
     }
 
     fn list_objects(&self, _actor: &str, container: Container) -> Result<Vec<u8>, Box<dyn Error>> {
+        let container = sanitize_container(&container);
         let cpath = self.container_to_path(&container);
         let (blobs, _errors): (Vec<_>, Vec<_>) = std::fs::read_dir(&cpath)?
             .map(|e| {
@@ -130,8 +136,8 @@ impl FileSystemProvider {
 
     fn upload_chunk(&self, _actor: &str, chunk: FileChunk) -> Result<Vec<u8>, Box<dyn Error>> {
         let bpath = Path::join(
-            &Path::join(&self.rootdir.read().unwrap(), chunk.container.to_string()),
-            chunk.id.to_string(),
+            &Path::join(&self.rootdir.read().unwrap(), sanitize_id(&chunk.container)),
+            sanitize_id(&chunk.id),
         );
         let mut file = OpenOptions::new().create(false).append(true).open(bpath)?;
         info!(
@@ -139,9 +145,18 @@ impl FileSystemProvider {
             chunk.sequence_no, chunk.container, chunk.id
         );
 
-        file.write(chunk.chunk_bytes.as_ref())?;
-
-        Ok(vec![])
+        let count = file.write(chunk.chunk_bytes.as_ref())?;
+        if count != chunk.chunk_bytes.len() {
+            let msg = format!(
+                "Failed to fully write chunk: {} of {} bytes",
+                count,
+                chunk.chunk_bytes.len()
+            );
+            error!("{}", &msg);
+            Err(msg.into())
+        } else {
+            Ok(vec![])
+        }
     }
 
     fn start_download(
@@ -152,8 +167,11 @@ impl FileSystemProvider {
         info!("Received request to start download : {:?}", request);
         let actor = actor.to_string();
         let bpath = Path::join(
-            &Path::join(&self.rootdir.read().unwrap(), request.container.to_string()),
-            request.id.to_string(),
+            &Path::join(
+                &self.rootdir.read().unwrap(),
+                sanitize_id(&request.container),
+            ),
+            sanitize_id(&request.id),
         );
         let byte_size = &bpath.metadata()?.len();
         let bfile = std::fs::File::open(bpath)?;
@@ -163,8 +181,8 @@ impl FileSystemProvider {
             request.chunk_size as usize
         };
         let xfer = Transfer {
-            blob_id: request.id.clone(),
-            container: request.container.clone(),
+            blob_id: sanitize_id(&request.id),
+            container: sanitize_id(&request.container),
             total_size: *byte_size,
             chunk_size: chunk_size as _,
             total_chunks: *byte_size / chunk_size as u64,
@@ -189,6 +207,25 @@ impl FileSystemProvider {
         Path::join(&self.rootdir.read().unwrap(), container.id.to_string())
     }
 }
+fn sanitize_container(container: &Container) -> Container {
+    Container {
+        id: sanitize_id(&container.id),
+    }
+}
+fn sanitize_blob(blob: &Blob) -> Blob {
+    Blob {
+        id: sanitize_id(&blob.id),
+        byte_size: blob.byte_size,
+        container: sanitize_id(&blob.container),
+    }
+}
+
+fn sanitize_id(id: &str) -> String {
+    let bad_prefixes: &[_] = &['/', '.'];
+    let s = id.trim_start_matches(bad_prefixes);
+    let s = s.replace("..", "");
+    s.replace("/", "_")
+}
 
 fn dispatch_chunk(
     xfer: &Transfer,
@@ -197,23 +234,17 @@ fn dispatch_chunk(
     d: Arc<RwLock<Box<dyn Dispatcher>>>,
     chunk: Result<Vec<u8>, std::io::Error>,
 ) {
-    match chunk {
-        Ok(chunk) => {
-            let fc = FileChunk {
-                sequence_no: i as u64,
-                container: xfer.container.to_string(),
-                id: xfer.blob_id.to_string(),
-                chunk_bytes: chunk,
-                chunk_size: xfer.chunk_size,
-                total_bytes: xfer.total_size,
-            };
-            let buf = serialize(&fc).unwrap();
-            match d.read().unwrap().dispatch(actor, OP_RECEIVE_CHUNK, &buf) {
-                Ok(_) => {}
-                Err(_) => {}
-            }
-        }
-        Err(_) => {}
+    if let Ok(chunk) = chunk {
+        let fc = FileChunk {
+            sequence_no: i as u64,
+            container: xfer.container.to_string(),
+            id: xfer.blob_id.to_string(),
+            chunk_bytes: chunk,
+            chunk_size: xfer.chunk_size,
+            total_bytes: xfer.total_size,
+        };
+        let buf = serialize(&fc).unwrap();
+        let _ = d.read().unwrap().dispatch(actor, OP_RECEIVE_CHUNK, &buf);
     }
 }
 
@@ -254,5 +285,31 @@ impl CapabilityProvider for FileSystemProvider {
             OP_GET_OBJECT_INFO => self.get_object_info(actor, deserialize(msg)?),
             _ => Err("bad dispatch".into()),
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::{sanitize_blob, sanitize_container};
+    use codec::blobstore::{Blob, Container};
+
+    #[test]
+    fn no_hacky_hacky() {
+        let container = Container {
+            id: "/etc/h4x0rd".to_string(),
+        };
+        let blob = Blob {
+            byte_size: 0,
+            id: "../passwd".to_string(),
+            container: "/etc/h4x0rd".to_string(),
+        };
+        let c = sanitize_container(&container);
+        let b = sanitize_blob(&blob);
+
+        // the resulting tricksy blob should end up in ${ROOT}/etc_h4x0rd/passwd and
+        // thereby not expose anything sensitive
+        assert_eq!(c.id, "etc_h4x0rd");
+        assert_eq!(b.id, "passwd");
+        assert_eq!(b.container, "etc_h4x0rd");
     }
 }
