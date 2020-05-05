@@ -9,6 +9,7 @@ use codec::blobstore::*;
 use codec::capabilities::{CapabilityProvider, Dispatcher, NullDispatcher};
 use codec::core::{OP_BIND_ACTOR, OP_REMOVE_ACTOR};
 use codec::{deserialize, serialize};
+use std::collections::HashMap;
 use std::error::Error;
 use std::io::Write;
 use std::{
@@ -25,10 +26,12 @@ capability_provider!(FileSystemProvider, FileSystemProvider::new);
 
 const CAPABILITY_ID: &str = "wascc:blobstore";
 const SYSTEM_ACTOR: &str = "system";
+const FIRST_SEQ_NBR: u64 = 1;
 
 pub struct FileSystemProvider {
     dispatcher: Arc<RwLock<Box<dyn Dispatcher>>>,
     rootdir: RwLock<PathBuf>,
+    upload_chunks: RwLock<HashMap<String, (u64, Vec<FileChunk>)>>,
 }
 
 impl Default for FileSystemProvider {
@@ -38,6 +41,7 @@ impl Default for FileSystemProvider {
         FileSystemProvider {
             dispatcher: Arc::new(RwLock::new(Box::new(NullDispatcher::new()))),
             rootdir: RwLock::new(PathBuf::new()),
+            upload_chunks: RwLock::new(HashMap::new()),
         }
     }
 }
@@ -134,29 +138,51 @@ impl FileSystemProvider {
         Ok(serialize(&bloblist)?)
     }
 
-    fn upload_chunk(&self, _actor: &str, chunk: FileChunk) -> Result<Vec<u8>, Box<dyn Error>> {
-        let bpath = Path::join(
-            &Path::join(&self.rootdir.read().unwrap(), sanitize_id(&chunk.container)),
-            sanitize_id(&chunk.id),
-        );
-        let mut file = OpenOptions::new().create(false).append(true).open(bpath)?;
-        info!(
-            "Receiving file chunk: {} for {}/{}",
-            chunk.sequence_no, chunk.container, chunk.id
-        );
+    fn upload_chunk(&self, actor: &str, chunk: FileChunk) -> Result<Vec<u8>, Box<dyn Error>> {
+        let mut upload_chunks = self.upload_chunks.write().unwrap();
+        let key = actor.to_string() + &sanitize_id(&chunk.container) + &sanitize_id(&chunk.id);
+        let total_chunk_count = chunk.total_bytes / chunk.chunk_size;
 
-        let count = file.write(chunk.chunk_bytes.as_ref())?;
-        if count != chunk.chunk_bytes.len() {
-            let msg = format!(
-                "Failed to fully write chunk: {} of {} bytes",
-                count,
-                chunk.chunk_bytes.len()
+        let (expected_sequence_no, chunks) = upload_chunks
+            .entry(key.clone())
+            .or_insert((FIRST_SEQ_NBR, vec![]));
+        chunks.push(chunk);
+
+        while let Some(i) = chunks
+            .iter()
+            .position(|fc| fc.sequence_no == *expected_sequence_no)
+        {
+            let chunk = chunks.get(i).unwrap();
+            let bpath = Path::join(
+                &Path::join(&self.rootdir.read().unwrap(), sanitize_id(&chunk.container)),
+                sanitize_id(&chunk.id),
             );
-            error!("{}", &msg);
-            Err(msg.into())
-        } else {
-            Ok(vec![])
+            let mut file = OpenOptions::new().create(false).append(true).open(bpath)?;
+            info!(
+                "Receiving file chunk: {} for {}/{}",
+                chunk.sequence_no, chunk.container, chunk.id
+            );
+
+            let count = file.write(chunk.chunk_bytes.as_ref())?;
+            if count != chunk.chunk_bytes.len() {
+                let msg = format!(
+                    "Failed to fully write chunk: {} of {} bytes",
+                    count,
+                    chunk.chunk_bytes.len()
+                );
+                error!("{}", &msg);
+                return Err(msg.into());
+            }
+
+            chunks.remove(i);
+            *expected_sequence_no += 1;
         }
+
+        if *expected_sequence_no - 1 == total_chunk_count {
+            upload_chunks.remove(&key);
+        }
+
+        Ok(vec![])
     }
 
     fn start_download(
@@ -289,9 +315,18 @@ impl CapabilityProvider for FileSystemProvider {
 }
 
 #[cfg(test)]
-mod test {
+#[allow(unused_imports)]
+mod tests {
     use super::{sanitize_blob, sanitize_container};
+    use crate::FileSystemProvider;
     use codec::blobstore::{Blob, Container};
+    use std::collections::HashMap;
+    use std::env::temp_dir;
+    use std::fs::File;
+    use std::io::{BufReader, Read};
+    use std::path::{Path, PathBuf};
+    use wascc_codec::blobstore::FileChunk;
+    use wascc_codec::core::CapabilityConfiguration;
 
     #[test]
     fn no_hacky_hacky() {
@@ -311,5 +346,99 @@ mod test {
         assert_eq!(c.id, "etc_h4x0rd");
         assert_eq!(b.id, "passwd");
         assert_eq!(b.container, "etc_h4x0rd");
+    }
+
+    #[test]
+    fn test_start_upload() {
+        let actor = "actor1";
+        let container = "container".to_string();
+        let id = "blob".to_string();
+
+        let fs = FileSystemProvider::new();
+        let root_dir = setup_test_start_upload(&fs);
+        let upload_dir = Path::join(&root_dir, &container);
+        let bpath = create_dir(&upload_dir, &id);
+
+        let total_bytes = 5;
+        let chunk_size = 2;
+
+        let chunk1 = FileChunk {
+            sequence_no: 1,
+            container: container.clone(),
+            id: id.clone(),
+            total_bytes,
+            chunk_size,
+            chunk_bytes: vec![1, 1],
+        };
+        let chunk2 = FileChunk {
+            sequence_no: 2,
+            container: container.clone(),
+            id: id.clone(),
+            total_bytes,
+            chunk_size,
+            chunk_bytes: vec![2, 2],
+        };
+        let chunk3 = FileChunk {
+            sequence_no: 3,
+            container: container.clone(),
+            id: id.clone(),
+            total_bytes,
+            chunk_size,
+            chunk_bytes: vec![3],
+        };
+        let chunk3_dup = FileChunk {
+            sequence_no: 3,
+            container: container.clone(),
+            id: id.clone(),
+            total_bytes,
+            chunk_size,
+            chunk_bytes: vec![3],
+        };
+
+        assert!(fs.upload_chunk(actor, chunk3).is_ok());
+        assert!(fs.upload_chunk(actor, chunk2).is_ok());
+        assert!(fs.upload_chunk(actor, chunk1).is_ok());
+        assert!(fs.upload_chunk(actor, chunk3_dup).is_ok());
+
+        // check file contents
+        let mut reader = BufReader::new(File::open(&bpath).unwrap());
+        let mut buffer = [0; 5];
+
+        teardown_test_start_upload(&bpath, &upload_dir);
+
+        assert!(reader.read(&mut buffer).is_ok());
+        assert_eq!(vec![1, 1, 2, 2, 3], buffer);
+        // the last duplicate is not cleaned up because it can't tell the
+        // difference between a late duplicate chunk and an early out of order chunk
+        assert_eq!(1, fs.upload_chunks.read().unwrap().len());
+    }
+
+    #[allow(dead_code)]
+    fn setup_test_start_upload(fs: &FileSystemProvider) -> PathBuf {
+        let mut config = HashMap::new();
+        let root_dir = temp_dir();
+
+        config.insert("ROOT".to_string(), String::from(root_dir.to_str().unwrap()));
+        fs.configure(CapabilityConfiguration {
+            module: "test_start_upload-module".to_string(),
+            values: config,
+        })
+        .unwrap();
+
+        root_dir
+    }
+
+    #[allow(dead_code)]
+    fn teardown_test_start_upload(file: &PathBuf, upload_dir: &PathBuf) {
+        std::fs::remove_file(file).unwrap();
+        std::fs::remove_dir_all(upload_dir).unwrap();
+    }
+
+    #[allow(dead_code)]
+    fn create_dir(dir: &PathBuf, id: &String) -> PathBuf {
+        let bpath = Path::join(&dir, &id);
+        let _res = std::fs::create_dir(&dir);
+        drop(File::create(&bpath).unwrap());
+        bpath
     }
 }
