@@ -1,3 +1,5 @@
+![Rust](https://github.com/wascc/fs-provider/workflows/Rust/badge.svg)
+
 # File System Provider
 
 The **waSCC** File System provider is a capability provider for the `wascap:blobstore` protocol. This generic protocol allows for capability providers like Amazon S3, Azure blob storage, Google blob storage, and more. This is an implementation of this protocol that operates on top of a designated root directory.
