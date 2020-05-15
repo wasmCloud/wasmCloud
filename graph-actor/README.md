@@ -1,17 +1,31 @@
-# New Actor Template
+# waSCC Graph Actor API
 
-Use cargo generate to create a new actor module from this template.
+This crate provides [waSCC actors](https://github.com/wascc) with an API they can use to interact with a graph database. The exact implementation of the graph database (Neo4j, RedisGraph, etc) is immaterial to the actor developer using this API.
 
-[Learn how to write](https://wascc.dev/tutorials/first-actor/) waSCC actors, or [explore the actor concept](https://wascc.dev/docs/concepts/actors/).
+The following illustrates an example of consuming the graph guest API:
 
-To generate new keys, use `make keys`. This will use `nk` to generate both sets of keys for you, and then write them to the `.keys` directory.
+```
+// Execute a Cypher query to add data
+fn create_data() -> HandlerResult<codec::http::Response> {
+    info!("Creating graph data");
+    graph::default().graph("MotoGP").mutate("CREATE (:Rider {name: 'Valentino Rossi', birth_year: 1979})-[:rides]->(:Team {name: 'Yamaha'}), \
+    (:Rider {name:'Dani Pedrosa', birth_year: 1985, height: 1.58})-[:rides]->(:Team {name: 'Honda'}), \
+    (:Rider {name:'Andrea Dovizioso', birth_year: 1986, height: 1.67})-[:rides]->(:Team {name: 'Ducati'})")?;
 
-To build your new module, use `make build`. This will compile your code with `cargo`, and then sign it with `wascap` using the keys in `.keys`.
+    Ok(codec::http::Response::ok())
+}
 
-## Tool Requirements
+// Execute a Cypher query to return data values
+fn query_data() -> HandlerResult<codec::http::Response> {
+    info!("Querying graph data");
+    let (name, birth_year): (String, u32) = graph::default().graph("MotoGP").query(
+        "MATCH (r:Rider)-[:rides]->(t:Team) WHERE t.name = 'Yamaha' RETURN r.name, r.birth_year",
+    )?;
 
-- Cargo and Rust are required
-- Make is recommended, but not strictly necessary
-- [wascap](https://github.com/wascc/wascap) is required for signing actor modules
-- [nk](https://github.com/encabulators/nkeys) is required if you need to generate keys (which you almost certainly do)
-
+    let result = json!({
+        "name": name,
+        "birth_year": birth_year
+    });
+    Ok(codec::http::Response::json(result, 200, "OK"))
+}
+```

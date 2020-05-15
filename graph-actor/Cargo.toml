@@ -1,18 +1,18 @@
 [package]
-name = "graph-actor"
+name = "wasccgraph-actor"
 version = "0.0.1"
 authors = ["Kevin Hoffman <alothien@gmail.com>"]
 edition = "2018"
+homepage = "https://wascc.dev"
+repository = "https://github.com/wascc/redisgraph"
+description = "waSCC Actor Support for graph database capability providers"
+license = "Apache-2.0"
+documentation = "https://docs.rs/wasccgraph-actor"
+readme = "README.md"
+keywords = ["webassembly", "wasm", "graphdb", "graph", "wascc"]
+categories = ["wasm", "api-bindings", "database"]
 
-[lib]
-crate-type = ["cdylib"]
 
 [dependencies]
+wasccgraph-common = "0.0.1"
 wascc-actor = "0.7.1"
-graphguest = { path = "../graphguest" }
-serde_json = "1.0.51"
-log = "0.4.8"
-
-[profile.release]
-# Optimize for small code size
-opt-level = "s"
