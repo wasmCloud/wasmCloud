@@ -1,9 +1,9 @@
 //! # Common types (GraphDB)
-//! 
+//!
 //! A set of common types that largely support the `ResultSet` type, a wrapper
 //! around results that come back from a graph database that supports dynamic,
 //! strongly-typed tuple extraction.
-//! 
+//!
 //! These types are mostly copied wholesale from the RedisGraph client library
 //! that can be found at https://github.com/malte-v/redisgraph-rs
 
@@ -12,12 +12,12 @@ use std::collections::HashMap;
 #[macro_use]
 extern crate serde_derive;
 
-mod errors;
 mod conversions;
+mod errors;
 pub mod protocol;
 
-pub use errors::GraphError;
 pub use crate::errors::GraphResult;
+pub use errors::GraphError;
 
 pub const CAPID_GRAPHDB: &str = "wascc:graphdb";
 
@@ -37,7 +37,6 @@ pub struct ResultSet {
 /// Human-readable statistics that are optionally returned with each query
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Statistics(pub Vec<String>);
-
 
 impl ResultSet {
     /// Returns the number of rows in the result set.
@@ -143,11 +142,7 @@ pub trait FromRow: Sized {
 
 /// Implemented by types that can be constructed from a cell in a [`ResultSet`](../result_set/struct.ResultSet.html).
 pub trait FromCell: Sized {
-    fn from_cell(
-        result_set: &ResultSet,
-        row_idx: usize,
-        column_idx: usize,
-    ) -> GraphResult<Self>;
+    fn from_cell(result_set: &ResultSet, row_idx: usize, column_idx: usize) -> GraphResult<Self>;
 }
 
 /// A single column of the result set.
@@ -174,7 +169,6 @@ impl Column {
     }
 }
 
-
 #[derive(Serialize, Debug, Deserialize)]
 enum ColumnType {
     Unknown = 0,
@@ -185,7 +179,7 @@ enum ColumnType {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Relation {
-    /// The type name of this relation. 
+    /// The type name of this relation.
     pub type_name: String,
     /// The properties of this relation.
     pub properties: HashMap<String, Scalar>,
@@ -200,7 +194,6 @@ pub enum Scalar {
     Double(f64),
     String(GraphString), // A string returned by the graph DB
 }
-
 
 /// The valid types of scalars
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -248,7 +241,7 @@ pub struct Node {
 
 // Macro generates generic "From" implementations to allow
 // tuples/vecs-of-tuples to be extracted from various types
-// 
+//
 // Altered version of https://github.com/mitsuhiko/redis-rs/blob/master/src/types.rs#L1080
 macro_rules! impl_row_for_tuple {
     () => ();
@@ -288,7 +281,6 @@ macro_rules! impl_row_for_tuple_peel {
 // The library supports tuples of up to 12 items
 impl_row_for_tuple! { T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, }
 
-
 // Row and column indices default to zero for lower-level values
 impl<T: FromCell> FromRow for T {
     fn from_row(result_set: &ResultSet, row_idx: usize) -> GraphResult<Self> {
@@ -303,14 +295,14 @@ impl<T: FromRow> FromTable for T {
 }
 
 #[cfg(test)]
-mod test{
-    use super::*;    
+mod test {
+    use super::*;
 
     // Verifies that we can extract the tuples we expect from the raw ResultSet
     // structure and that the various return types are automatically converted
     #[test]
     fn tuple_extraction_test() {
-        let (name, birth_year) : (String, u32) = fake_query("fake query").unwrap();
+        let (name, birth_year): (String, u32) = fake_query("fake query").unwrap();
         assert_eq!("tester", name);
         assert_eq!(1985, birth_year);
     }
@@ -319,24 +311,21 @@ mod test{
         query_with_statistics().map(|(value, _)| value)
     }
 
-    fn query_with_statistics<T:FromTable>() -> GraphResult<(T, Statistics)> {
+    fn query_with_statistics<T: FromTable>() -> GraphResult<(T, Statistics)> {
         let result_set = get_result_set()?;
         let value = T::from_table(&result_set)?;
         Ok((value, result_set.statistics))
     }
 
     fn get_result_set() -> GraphResult<ResultSet> {
-        Ok(ResultSet{
+        Ok(ResultSet {
             statistics: Statistics(vec![]),
             columns: vec![
-                Column::Scalars(vec![
-                    Scalar::String(GraphString::from("tester".to_string())),                    
-                ]),
-                Column::Scalars(vec![
-                    Scalar::Integer(1985)
-                ])
-            ]
+                Column::Scalars(vec![Scalar::String(GraphString::from(
+                    "tester".to_string(),
+                ))]),
+                Column::Scalars(vec![Scalar::Integer(1985)]),
+            ],
         })
-
     }
 }

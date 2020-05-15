@@ -3,9 +3,18 @@ name = "wasccgraph-common"
 version = "0.0.1"
 authors = ["Kevin Hoffman <alothien@gmail.com>"]
 edition = "2018"
+homepage = "https://wascc.dev"
+repository = "https://github.com/wascc/redisgraph"
+description = "Common graph database support for waSCC actors and capability providers"
+license = "Apache-2.0"
+documentation = "https://docs.rs/wascc-host"
+readme = "README.md"
+keywords = ["webassembly", "wasm", "redis", "graphdb", "database"]
+categories = ["wasm", "api-bindings"]
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[badges]
+maintenance = { status = "actively-developed" }
 
 [dependencies]
-serde = "1.0.106"
-serde_derive = "1.0.106"
+serde = "1.0.110"
+serde_derive = "1.0.110"

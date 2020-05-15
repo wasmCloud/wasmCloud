@@ -1,5 +1,5 @@
 //! # Common protocol types
-//! 
+//!
 //! Used to describe the communication between graphdb actor and graphdb capability
 //! provider.
 
@@ -12,7 +12,7 @@ pub struct QueryRequest {
 
 /// A request to delete a graph
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DeleteRequest {    
+pub struct DeleteRequest {
     pub graph_name: String,
 }
 

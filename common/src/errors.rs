@@ -11,7 +11,7 @@ pub type GraphResult<T> = Result<T, GraphError>;
 
 /// Common error type for this crate.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum GraphError {    
+pub enum GraphError {
     /// Returned if the data you requested is of a different type
     /// than the data returned by the database.
     ClientTypeError(String),
@@ -37,10 +37,9 @@ pub enum GraphError {
 
 impl std::fmt::Display for GraphError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-         match self {
-             GraphError::ClientTypeError(e) => write!(f, "Graph client error: {}", e),
-             _ => write!(f, "Graph error"),
-         }
+        match self {
+            GraphError::ClientTypeError(e) => write!(f, "Graph client error: {}", e),
+            _ => write!(f, "Graph error"),
+        }
     }
-
 }

@@ -1,26 +1,17 @@
 use crate::{
-    FromCell,
-    client_type_error,Node, Relation, Scalar,
-    GraphResult, ResultSet, GraphString, GraphError,
+    client_type_error, FromCell, GraphError, GraphResult, GraphString, Node, Relation, ResultSet,
+    Scalar,
 };
 
 impl FromCell for Scalar {
-    fn from_cell(
-        result_set: &ResultSet,
-        row_idx: usize,
-        column_idx: usize,
-    ) -> GraphResult<Self> {
+    fn from_cell(result_set: &ResultSet, row_idx: usize, column_idx: usize) -> GraphResult<Self> {
         let scalar = result_set.get_scalar(row_idx, column_idx)?;
         Ok(scalar.clone())
     }
 }
 
 impl FromCell for () {
-    fn from_cell(
-        result_set: &ResultSet,
-        row_idx: usize,
-        column_idx: usize,
-    ) -> GraphResult<Self> {
+    fn from_cell(result_set: &ResultSet, row_idx: usize, column_idx: usize) -> GraphResult<Self> {
         let scalar = result_set.get_scalar(row_idx, column_idx)?;
         match scalar {
             Scalar::Nil => Ok(()),
@@ -30,11 +21,7 @@ impl FromCell for () {
 }
 
 impl<T: FromCell> FromCell for Option<T> {
-    fn from_cell(
-        result_set: &ResultSet,
-        row_idx: usize,
-        column_idx: usize,
-    ) -> GraphResult<Self> {
+    fn from_cell(result_set: &ResultSet, row_idx: usize, column_idx: usize) -> GraphResult<Self> {
         let scalar = result_set.get_scalar(row_idx, column_idx)?;
         match scalar {
             Scalar::Nil => Ok(None),
@@ -44,11 +31,7 @@ impl<T: FromCell> FromCell for Option<T> {
 }
 
 impl FromCell for bool {
-    fn from_cell(
-        result_set: &ResultSet,
-        row_idx: usize,
-        column_idx: usize,
-    ) -> GraphResult<Self> {
+    fn from_cell(result_set: &ResultSet, row_idx: usize, column_idx: usize) -> GraphResult<Self> {
         let scalar = result_set.get_scalar(row_idx, column_idx)?;
         match scalar {
             Scalar::Boolean(boolean) => Ok(*boolean),
@@ -59,6 +42,10 @@ impl FromCell for bool {
         }
     }
 }
+
+// The following code and macros produce the requisite type "magic" to allow
+// code in an actor to extract strongly-typed data from a result set in
+// tuples (or vecs of tuples)
 
 macro_rules! impl_from_scalar_for_integer {
     ($t:ty) => {
@@ -117,13 +104,8 @@ macro_rules! impl_from_scalar_for_float {
 impl_from_scalar_for_float!(f32);
 impl_from_scalar_for_float!(f64);
 
-
 impl FromCell for GraphString {
-    fn from_cell(
-        result_set: &ResultSet,
-        row_idx: usize,
-        column_idx: usize,
-    ) -> GraphResult<Self> {
+    fn from_cell(result_set: &ResultSet, row_idx: usize, column_idx: usize) -> GraphResult<Self> {
         let scalar = result_set.get_scalar(row_idx, column_idx)?;
         match scalar {
             Scalar::String(data) => Ok(data.clone()),
@@ -136,33 +118,21 @@ impl FromCell for GraphString {
 }
 
 impl FromCell for String {
-    fn from_cell(
-        result_set: &ResultSet,
-        row_idx: usize,
-        column_idx: usize,
-    ) -> GraphResult<Self> {
+    fn from_cell(result_set: &ResultSet, row_idx: usize, column_idx: usize) -> GraphResult<Self> {
         let redis_string = GraphString::from_cell(result_set, row_idx, column_idx)?;
         String::from_utf8(redis_string.into()).map_err(|_| GraphError::InvalidUtf8)
     }
 }
 
 impl FromCell for Node {
-    fn from_cell(
-        result_set: &ResultSet,
-        row_idx: usize,
-        column_idx: usize,
-    ) -> GraphResult<Self> {
+    fn from_cell(result_set: &ResultSet, row_idx: usize, column_idx: usize) -> GraphResult<Self> {
         let node = result_set.get_node(row_idx, column_idx)?;
         Ok(node.clone())
     }
 }
 
 impl FromCell for Relation {
-    fn from_cell(
-        result_set: &ResultSet,
-        row_idx: usize,
-        column_idx: usize,
-    ) -> GraphResult<Self> {
+    fn from_cell(result_set: &ResultSet, row_idx: usize, column_idx: usize) -> GraphResult<Self> {
         let relation = result_set.get_relation(row_idx, column_idx)?;
         Ok(relation.clone())
     }
