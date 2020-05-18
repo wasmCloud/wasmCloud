@@ -147,7 +147,7 @@ pub struct TokenValidation {
     /// A human-friendly (lowercase) description of the _relative_ expiration date (e.g. "in 3 hours").
     /// If the token never expires, the value will be "never"
     pub expires_human: String,
-    /// A human-friendly description of the relative time when this token will become valiad (e.g. "in 2 weeks").
+    /// A human-friendly description of the relative time when this token will become valid (e.g. "in 2 weeks").
     /// If the token has not had a "not before" date set, the value will be "immediately"
     pub not_before_human: String,
     /// Indicates whether the signature is valid according to a cryptographic comparison. If `false` you should
@@ -391,6 +391,9 @@ where
     validate_header(&header)?;
 
     let claims = Claims::<T>::decode(input)?;
+    validate_issuer(&claims.issuer)?;
+    validate_subject(&claims.subject)?;
+
     let kp = KeyPair::from_public_key(&claims.issuer)?;
     let sigverify = kp.verify(header_and_claims.as_bytes(), &sig);
 
@@ -427,6 +430,22 @@ fn validate_expiration(exp: Option<u64>) -> Result<()> {
         } else {
             Ok(())
         }
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_issuer(iss: &String) -> Result<()> {
+    if iss.is_empty() {
+        Err(errors::new(ErrorKind::MissingIssuer))
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_subject(sub: &String) -> Result<()> {
+    if sub.is_empty() {
+        Err(errors::new(ErrorKind::MissingSubject))
     } else {
         Ok(())
     }
@@ -774,6 +793,75 @@ mod test {
                 _ => {
                     panic!("failed to assert errors::ErrorKind::Token");
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn ensure_issuer_on_token() {
+        let kp = KeyPair::new_account();
+        let mut claims = Claims {
+            metadata: Some(Actor::new(
+                "test".to_string(),
+                Some(vec![MESSAGING.to_string(), KEY_VALUE.to_string()]),
+                Some(vec![]),
+                false,
+                Some(1),
+                Some("".to_string()),
+            )),
+            expires: None,
+            id: nuid::next(),
+            issued_at: 0,
+            issuer: kp.public_key(),
+            subject: "test.wasm".to_string(),
+            not_before: None,
+        };
+
+        let encoded = claims.encode(&kp).unwrap();
+        assert!(validate_token::<Account>(&encoded).is_ok());
+
+        // Set the issuer to empty
+        claims.issuer = String::new();
+        let bad_encode = claims.encode(&kp).unwrap();
+        let issuer_err = validate_token::<Account>(&bad_encode);
+        assert!(issuer_err.is_err());
+        if let Err(e) = issuer_err {
+            match e.kind() {
+                ErrorKind::MissingIssuer => (),
+                _ => panic!("failed to assert errors::ErrorKind::MissingIssuer"),
+            }
+        }
+    }
+
+    #[test]
+    fn ensure_subject_on_token() {
+        let kp = KeyPair::new_account();
+        let mut claims = Claims {
+            metadata: Some(Actor::new(
+                "test".to_string(),
+                Some(vec![MESSAGING.to_string(), KEY_VALUE.to_string()]),
+                Some(vec![]),
+                false,
+                Some(1),
+                Some("".to_string()),
+            )),
+            expires: None,
+            id: nuid::next(),
+            issued_at: 0,
+            issuer: kp.public_key(),
+            subject: "test.wasm".to_string(),
+            not_before: None,
+        };
+
+        claims.subject = String::new();
+        let bad_subject = claims.encode(&kp).unwrap();
+        let subject_err = validate_token::<Account>(&bad_subject);
+        assert!(subject_err.is_err());
+        assert!(subject_err.is_err());
+        if let Err(e) = subject_err {
+            match e.kind() {
+                ErrorKind::MissingSubject => (),
+                _ => panic!("failed to assert errors::ErrorKind::MissingSubject"),
             }
         }
     }

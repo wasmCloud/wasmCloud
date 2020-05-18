@@ -37,6 +37,8 @@ pub enum ErrorKind {
     ExpiredToken,
     TokenTooEarly,
     InvalidAlgorithm,
+    MissingIssuer,
+    MissingSubject,
 }
 
 impl Error {
@@ -64,6 +66,8 @@ impl StdError for Error {
             ErrorKind::ExpiredToken => "Token has expired",
             ErrorKind::TokenTooEarly => "Token cannot be used yet",
             ErrorKind::InvalidAlgorithm => "Invalid JWT algorithm",
+            ErrorKind::MissingIssuer => "Missing issuer claim",
+            ErrorKind::MissingSubject=> "Missing sub claim",
         }
     }
 
@@ -81,6 +85,8 @@ impl StdError for Error {
             ErrorKind::ExpiredToken => None,
             ErrorKind::TokenTooEarly => None,
             ErrorKind::InvalidAlgorithm => None,
+            ErrorKind::MissingIssuer => None,
+            ErrorKind::MissingSubject => None,
         }
     }
 }
@@ -101,6 +107,12 @@ impl fmt::Display for Error {
             ErrorKind::TokenTooEarly => write!(f, "Module cannot be used yet"),
             ErrorKind::InvalidAlgorithm => {
                 write!(f, "Invalid JWT algorithm. WASCAP only supports Ed25519")
+            }
+            ErrorKind::MissingIssuer => {
+                write!(f, "Invalid JWT. WASCAP requires an issuer claim to be present")
+            },
+            ErrorKind::MissingSubject => {
+                write!(f, "Invalid JWT. WASCAP requires a sub claim to be present")
             }
         }
     }
