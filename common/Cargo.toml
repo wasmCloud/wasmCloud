@@ -1,6 +1,6 @@
 [package]
 name = "wasccgraph-common"
-version = "0.0.1"
+version = "0.0.2"
 authors = ["Kevin Hoffman <alothien@gmail.com>"]
 edition = "2018"
 homepage = "https://wascc.dev"

@@ -131,6 +131,19 @@ impl FromTable for ResultSet {
     }
 }
 
+impl<T: FromRow> FromTable for Vec<T> {
+    fn from_table(result_set: &ResultSet) -> GraphResult<Self> {
+        let num_rows = result_set.num_rows();
+        let mut ret = Self::with_capacity(num_rows);
+
+        for i in 0..num_rows {
+            ret.push(T::from_row(result_set, i)?);
+        }
+
+        Ok(ret)
+    }
+}
+
 pub trait FromTable: Sized {
     fn from_table(result_set: &ResultSet) -> GraphResult<Self>;
 }
@@ -307,12 +320,29 @@ mod test {
         assert_eq!(1985, birth_year);
     }
 
+    #[test]
+    fn vec_tuple_extraction_test() {
+        let res: Vec<(String, u32)> = fake_vec_query("foo").unwrap();
+        assert_eq!(("tester".to_string(), 1985), res[0]);
+        assert_eq!(("test2".to_string(), 1986), res[1]);
+    }
+
+    fn fake_vec_query<T: FromTable>(_query: &str) -> GraphResult<T> {
+        query_with_statistics2().map(|(value, _)| value)
+    }
+
     fn fake_query<T: FromTable>(_query: &str) -> GraphResult<T> {
         query_with_statistics().map(|(value, _)| value)
     }
 
     fn query_with_statistics<T: FromTable>() -> GraphResult<(T, Statistics)> {
         let result_set = get_result_set()?;
+        let value = T::from_table(&result_set)?;
+        Ok((value, result_set.statistics))
+    }
+
+    fn query_with_statistics2<T: FromTable>() -> GraphResult<(T, Statistics)> {
+        let result_set = get_result_set2()?;
         let value = T::from_table(&result_set)?;
         Ok((value, result_set.statistics))
     }
@@ -325,6 +355,19 @@ mod test {
                     "tester".to_string(),
                 ))]),
                 Column::Scalars(vec![Scalar::Integer(1985)]),
+            ],
+        })
+    }
+
+    fn get_result_set2() -> GraphResult<ResultSet> {
+        Ok(ResultSet {
+            statistics: Statistics(vec![]),
+            columns: vec![
+                Column::Scalars(vec![
+                    Scalar::String(GraphString::from("tester".to_string())),
+                    Scalar::String(GraphString::from("test2".to_string())),
+                ]),
+                Column::Scalars(vec![Scalar::Integer(1985), Scalar::Integer(1986)]),
             ],
         })
     }
