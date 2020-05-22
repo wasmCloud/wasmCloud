@@ -1,2 +1,2 @@
-# http-client-provider
-HTTP Client capability provider for waSCC actors
+# HTTP Client Provider
+The HTTP Client provider allows waSCC actors to make outbound HTTP requests
