@@ -1,0 +1,34 @@
+[package]
+name = "http-client-provider"
+version = "0.1.0"
+authors = ["Dan Norris <protochron@users.noreply.github.com>"]
+edition = "2018"
+repository = "https://githublcom/wascc/http-client-provider"
+description = "HTTP client capaiblity provider for the waSCC wasm host runtime"
+license = "Apache-2.0"
+documentation = "https://docs.rc/wascc-host"
+readme = "README.md"
+keywords = ["webassembly", "wasm", "wasi", "wascc"]
+categories = ["wasm", "api-bindings"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[features]
+static_plugin = []
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wascc-codec = "0.6.0"
+log = "0.4.8"
+futures = "0.3.5"
+env_logger = "0.7.1"
+reqwest = { version = "0.10", features = ["json", "gzip", "brotli"] }
+tokio = { version = "0.2", features = ["rt-threaded", "tcp", "time", "macros", "signal", "dns"] }
+base64 = "0.12.1"
+serde_json = "1.0.53"
+
+[dev-dependencies]
+mockito = "0.25"
+tokio = { version = "0.2", features = ["rt-threaded", "tcp", "time", "macros", "signal", "dns", "full"]}
