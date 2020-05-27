@@ -1,7 +1,7 @@
-/*!
-http-client-provider is a [waSCC](https://wascc.dev/) provider for actors that need to make HTTP
-requests.
-*/
+///!
+///! # http-client-provider
+///! This library exposes the HTTP client capability to waSCC-compliant actors
+
 mod http_client;
 
 #[macro_use]

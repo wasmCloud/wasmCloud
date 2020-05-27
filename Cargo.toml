@@ -1,12 +1,12 @@
 [package]
-name = "http-client-provider"
+name = "wascc-httpclient"
 version = "0.1.0"
 authors = ["Dan Norris <protochron@users.noreply.github.com>"]
 edition = "2018"
-repository = "https://githublcom/wascc/http-client-provider"
-description = "HTTP client capaiblity provider for the waSCC wasm host runtime"
+repository = "https://github.com/wascc/http-client-provider"
+description = "HTTP client capability provider for the waSCC wasm host runtime"
 license = "Apache-2.0"
-documentation = "https://docs.rc/wascc-host"
+documentation = "https://docs.rs/wascc-host"
 readme = "README.md"
 keywords = ["webassembly", "wasm", "wasi", "wascc"]
 categories = ["wasm", "api-bindings"]
