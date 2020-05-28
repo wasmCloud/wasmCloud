@@ -27,7 +27,7 @@ use wascap::wasm::{days_from_now_to_jwt_time, sign_buffer_with_claims};
 #[derive(Debug, StructOpt, Clone)]
 #[structopt(
     global_settings(&[AppSettings::ColoredHelp, AppSettings::VersionlessSubcommands]),
-    name = "wascap", 
+    name = "wascap",
     about = "A command line utility for viewing, manipulating, and verifying capability claims in WebAssembly modules")]
 struct Cli {
     #[structopt(flatten)]
@@ -183,18 +183,18 @@ struct SignCommand {
     metadata: ActorMetadata,
 }
 
-fn main() -> Result<(), Box<dyn ::std::error::Error>> {
+fn main() {
     let args = Cli::from_args();
     let cmd = args.command;
     env_logger::init();
 
-    match handle_command(cmd) {
-        Ok(_) => {}
+    std::process::exit(match handle_command(cmd) {
+        Ok(_) => 0,
         Err(e) => {
-            println!("Command line failure: {}", e);
+            eprintln!("error: {}", e);
+            1
         }
-    }
-    Ok(())
+    })
 }
 
 fn handle_command(cmd: CliCommand) -> Result<(), Box<dyn ::std::error::Error>> {
@@ -241,7 +241,7 @@ fn get_keypairs(
     Ok((issuer, subject))
 }
 
-fn generate_actor(actor: &ActorMetadata) -> Result<(), Box<dyn ::std::error::Error>> {    
+fn generate_actor(actor: &ActorMetadata) -> Result<(), Box<dyn ::std::error::Error>> {
     let (issuer, subject) = get_keypairs(&actor.common)?;
     let mut caps_list = vec![];
     if actor.keyvalue {
@@ -262,7 +262,7 @@ fn generate_actor(actor: &ActorMetadata) -> Result<(), Box<dyn ::std::error::Err
     if actor.logging {
         caps_list.push(wascap::caps::LOGGING.to_string());
     }
-    if actor.eventstream {        
+    if actor.eventstream {
         caps_list.push(wascap::caps::EVENTSTREAMS.to_string());
     }
     if actor.extras {
@@ -332,7 +332,7 @@ fn generate_account(account: &AccountMetadata) -> Result<(), Box<dyn ::std::erro
     Ok(())
 }
 
-fn sign_file(cmd: &SignCommand) -> Result<(), Box<dyn ::std::error::Error>> {    
+fn sign_file(cmd: &SignCommand) -> Result<(), Box<dyn ::std::error::Error>> {
     let mut sfile = File::open(&cmd.source).unwrap();
     let mut buf = Vec::new();
     sfile.read_to_end(&mut buf).unwrap();
@@ -430,11 +430,10 @@ fn render_caps(file: &str, raw: bool) -> Result<(), Box<dyn ::std::error::Error>
             Ok(())
         }
         Err(e) => {
-            println!("Error reading capabilities: {}", e);
-            Ok(())
+            Err(Box::new(e))
         }
         Ok(None) => {
-            println!("No capabilities discovered in : {}", &file);
+            eprintln!("No capabilities discovered in : {}", &file);
             Ok(())
         }
     }
