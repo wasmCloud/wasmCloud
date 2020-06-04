@@ -1,8 +1,11 @@
+use crate::FromTable;
 use common::CAPID_GRAPHDB;
-use crate::{FromTable};
-use wasccgraph_common::{Statistics, ResultSet};
+use wascc_actor::{
+    prelude::{deserialize, serialize},
+    untyped::{self, UntypedHostBinding},
+};
 use wasccgraph_common::protocol::*;
-use wascc_actor::{prelude::{deserialize, serialize}, untyped::{self, UntypedHostBinding}};
+use wasccgraph_common::{ResultSet, Statistics};
 
 #[doc(hidden)]
 pub struct GraphHostBindingBuilder {
@@ -17,6 +20,8 @@ impl GraphHostBindingBuilder {
         }
     }
 }
+
+/// Represents an abstraction around a graph database host binding
 pub struct GraphHostBinding {
     hostbinding: UntypedHostBinding,
     graph_name: String,
@@ -30,7 +35,7 @@ pub fn host(binding: &str) -> GraphHostBindingBuilder {
     }
 }
 
-/// Requests the default named host binding. Unless you know you're going to 
+/// Requests the default named host binding. Unless you know you're going to
 /// have multiple graph providers for the same actor, you should use the
 /// default binding
 pub fn default() -> GraphHostBindingBuilder {
@@ -43,12 +48,18 @@ impl GraphHostBinding {
     /// Executes a query against the host graph. For this provider, we assume the query is a Cypher query
     /// but it could be Gremlin or GraphQL, etc, depending on the capability provider satisfying `wascc:graphdb`. This
     /// can be used to perform mutations if you also return data from the mutation query
-    pub fn query<T: FromTable>(&self, query: &str) -> std::result::Result<T, Box<dyn std::error::Error>> {        
+    pub fn query<T: FromTable>(
+        &self,
+        query: &str,
+    ) -> std::result::Result<T, Box<dyn std::error::Error>> {
         self.query_with_statistics(query).map(|(value, _)| value)
     }
 
     /// The same as [`query`](#method.query), but returns statistics from the query like execution time and nodes/relations affected, etc.
-    pub fn query_with_statistics<T:FromTable>(&self, query: &str) -> std::result::Result<(T, Statistics), Box<dyn std::error::Error>> {
+    pub fn query_with_statistics<T: FromTable>(
+        &self,
+        query: &str,
+    ) -> std::result::Result<(T, Statistics), Box<dyn std::error::Error>> {
         let result_set = self.get_result_set(query).map_err(|e| format!("{}", e))?;
         let value = T::from_table(&result_set).map_err(|e| format!("{}", e))?;
         Ok((value, result_set.statistics))
@@ -62,20 +73,24 @@ impl GraphHostBinding {
     }
 
     /// Same as [`mutate`](#method.mutate), but returns statistics about the query.
-    pub fn mutate_with_statistics(&mut self, query: &str) -> std::result::Result<Statistics, Box<dyn std::error::Error>> {        
+    pub fn mutate_with_statistics(
+        &mut self,
+        query: &str,
+    ) -> std::result::Result<Statistics, Box<dyn std::error::Error>> {
         let result_set = self.get_result_set(query).map_err(|e| format!("{}", e))?;
         Ok(result_set.statistics)
     }
 
     /// Deletes the entire graph from the database.
-    /// 
+    ///
     /// This is a potentially very destructive function. Use with care.    
     pub fn delete(self) -> std::result::Result<(), Box<dyn std::error::Error>> {
         let delreq = DeleteRequest {
-            graph_name: self.graph_name.to_string()
+            graph_name: self.graph_name.to_string(),
         };
-        self.hostbinding.call(CAPID_GRAPHDB, OP_DELETE, serialize(&delreq)?)?;
-        Ok(())        
+        self.hostbinding
+            .call(CAPID_GRAPHDB, OP_DELETE, serialize(&delreq)?)?;
+        Ok(())
     }
 
     /// Returns the name of the graph
@@ -83,12 +98,17 @@ impl GraphHostBinding {
         &self.graph_name
     }
 
-    fn get_result_set(&self, query: &str) -> std::result::Result<ResultSet, Box<dyn std::error::Error>> {
+    fn get_result_set(
+        &self,
+        query: &str,
+    ) -> std::result::Result<ResultSet, Box<dyn std::error::Error>> {
         let query = QueryRequest {
             graph_name: self.graph_name.to_string(),
-            query: query.to_string()
+            query: query.to_string(),
         };
-        let res = self.hostbinding.call(CAPID_GRAPHDB, OP_QUERY, serialize(&query)?)?;
-        Ok(deserialize(&res)?)        
+        let res = self
+            .hostbinding
+            .call(CAPID_GRAPHDB, OP_QUERY, serialize(&query)?)?;
+        Ok(deserialize(&res)?)
     }
 }

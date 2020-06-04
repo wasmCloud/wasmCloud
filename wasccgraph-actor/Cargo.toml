@@ -1,6 +1,6 @@
 [package]
 name = "wasccgraph-actor"
-version = "0.0.2"
+version = "0.0.3"
 authors = ["Kevin Hoffman <alothien@gmail.com>"]
 edition = "2018"
 homepage = "https://wascc.dev"
@@ -15,4 +15,4 @@ categories = ["wasm", "api-bindings", "database"]
 
 [dependencies]
 wasccgraph-common = "0.0.2"
-wascc-actor = "0.7.1"
+wascc-actor = "0.7.2"

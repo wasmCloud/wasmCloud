@@ -1,6 +1,6 @@
 [package]
 name = "wasccgraph-redis"
-version = "0.0.1"
+version = "0.1.0"
 authors = ["Kevin Hoffman <alothien@gmail.com>"]
 edition = "2018"
 homepage = "https://wascc.dev"
@@ -22,9 +22,9 @@ static_plugin = []
 
 
 [dependencies]
-wascc-codec = "0.6.0"
+wascc-codec = "0.7.0"
 log = "0.4.8"
 env_logger = "0.7.1"
-redis = "0.15.1"
-redisgraph = "0.4.0"
-wasccgraph-common = "0.0.1"
+redis = "0.16.0"
+redisgraph = "0.5.0"
+wasccgraph-common = "0.0.2"

@@ -11,7 +11,10 @@ extern crate wasccgraph_common as common;
 #[macro_use]
 extern crate log;
 
-use codec::capabilities::{CapabilityProvider, Dispatcher, NullDispatcher};
+use codec::capabilities::{
+    CapabilityDescriptor, CapabilityProvider, Dispatcher, NullDispatcher, OperationDirection,
+    OP_GET_CAPABILITY_DESCRIPTOR,
+};
 use codec::core::{CapabilityConfiguration, OP_BIND_ACTOR, OP_REMOVE_ACTOR};
 use codec::{deserialize, serialize};
 
@@ -29,14 +32,14 @@ use redisgraph::{Graph, RedisGraphResult, ResultSet};
 mod rgraph;
 
 const SYSTEM_ACTOR: &str = "system";
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+const REVISION: u32 = 2; // Increment for each crates publish
 
 // Enable the static_plugin feature in your Cargo.toml if you want to statically
 // embed this capability instead of loading the dynamic library at runtime.
 
 #[cfg(not(feature = "static_plugin"))]
 capability_provider!(WasccRedisgraphProvider, WasccRedisgraphProvider::new);
-
-const CAPABILITY_ID: &str = "wascc:graphdb";
 
 pub struct WasccRedisgraphProvider {
     dispatcher: RwLock<Box<dyn Dispatcher>>,
@@ -116,6 +119,28 @@ impl WasccRedisgraphProvider {
         let g = rgraph::open_graph(conn, &graph)?;
         Ok(g)
     }
+
+    fn get_descriptor(&self) -> Result<Vec<u8>, Box<dyn Error>> {
+        Ok(serialize(
+            CapabilityDescriptor::builder()
+                .id(common::CAPID_GRAPHDB)
+                .name("waSCC Graph Database Provider (RedisGraph)")
+                .long_description("A capability provider exposing Cypher-based RedisGraph database access to waSCC actors")
+                .version(VERSION)
+                .revision(REVISION)
+                .with_operation(
+                    OP_QUERY,
+                    OperationDirection::ToProvider,
+                    "Executes a Cypher query against the database and returns the results"
+                )
+                .with_operation(
+                    OP_DELETE,
+                    OperationDirection::ToProvider,
+                    "Deletes a graph database"
+                )
+                .build()
+        )?)
+    }
 }
 
 // Force a serialization trip between the internal redisgraph::ResultSet type and
@@ -130,10 +155,6 @@ fn to_common_resultset(rs: redisgraph::ResultSet) -> Result<common::ResultSet, B
 }
 
 impl CapabilityProvider for WasccRedisgraphProvider {
-    fn capability_id(&self) -> &'static str {
-        CAPABILITY_ID
-    }
-
     // Invoked by the runtime host to give this provider plugin the ability to communicate
     // with actors
     fn configure_dispatch(&self, dispatcher: Box<dyn Dispatcher>) -> Result<(), Box<dyn Error>> {
@@ -142,12 +163,6 @@ impl CapabilityProvider for WasccRedisgraphProvider {
         *lock = dispatcher;
 
         Ok(())
-    }
-
-    // Best practice is to not include the phrase "capability provider" in the name,
-    // as that is usually included in relevant logging contexts already.
-    fn name(&self) -> &'static str {
-        "waSCC Graph DB (RedisGraph)"
     }
 
     // Invoked by host runtime to allow an actor to make use of the capability
@@ -161,6 +176,7 @@ impl CapabilityProvider for WasccRedisgraphProvider {
             OP_QUERY => self.query_graph(actor, deserialize(msg)?),
             OP_DELETE => self.delete_graph(actor, deserialize(msg)?),
             OP_REMOVE_ACTOR if actor == SYSTEM_ACTOR => self.deconfigure(actor),
+            OP_GET_CAPABILITY_DESCRIPTOR if actor == SYSTEM_ACTOR => self.get_descriptor(),
             _ => Err("bad dispatch".into()),
         }
     }

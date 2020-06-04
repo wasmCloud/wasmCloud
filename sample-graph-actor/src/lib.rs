@@ -30,10 +30,12 @@ extern crate serde_json;
 extern crate log;
 
 use actor::prelude::*;
-use graphguest::graph;
+use wasccgraph_actor::graph;
 
-actor_handlers! { codec::http::OP_HANDLE_REQUEST => handle_http_request,
-                  codec::core::OP_HEALTH_REQUEST => health }
+actor_handlers! {
+    codec::http::OP_HANDLE_REQUEST => handle_http_request,
+    codec::core::OP_HEALTH_REQUEST => health
+}
 
 fn handle_http_request(req: codec::http::Request) -> HandlerResult<codec::http::Response> {
     info!("Handling HTTP request"); // requires wascc:logging
@@ -41,7 +43,7 @@ fn handle_http_request(req: codec::http::Request) -> HandlerResult<codec::http::
         create_data()
     } else {
         query_data()
-    }    
+    }
 }
 
 // Execute a Cypher query to add data
@@ -65,7 +67,7 @@ fn query_data() -> HandlerResult<codec::http::Response> {
         "name": name,
         "birth_year": birth_year
     });
-    Ok(codec::http::Response::json(result, 200, "OK"))    
+    Ok(codec::http::Response::json(result, 200, "OK"))
 }
 
 fn health(_req: codec::core::HealthRequest) -> HandlerResult<()> {
