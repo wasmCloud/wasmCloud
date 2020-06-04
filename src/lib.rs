@@ -8,8 +8,11 @@ use ::redis_streams::{
     Client, Connection, ErrorKind, RedisError, RedisResult, StreamCommands, Value,
 };
 
-use codec::capabilities::{CapabilityProvider, Dispatcher, NullDispatcher};
-use codec::core::OP_BIND_ACTOR;
+use codec::capabilities::{
+    CapabilityDescriptor, CapabilityProvider, Dispatcher, NullDispatcher, OperationDirection,
+    OP_GET_CAPABILITY_DESCRIPTOR,
+};
+use codec::core::{OP_BIND_ACTOR, OP_REMOVE_ACTOR};
 use codec::eventstreams::{self, Event, StreamQuery, StreamResults, WriteResponse};
 use wascc_codec::core::CapabilityConfiguration;
 use wascc_codec::{deserialize, serialize};
@@ -24,6 +27,9 @@ use std::{
 capability_provider!(RedisStreamsProvider, RedisStreamsProvider::new);
 
 const CAPABILITY_ID: &str = "wascc:eventstreams";
+const SYSTEM_ACTOR: &str = "system";
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+const REVISION: u32 = 2; // Increment for each crates publish
 
 pub struct RedisStreamsProvider {
     dispatcher: RwLock<Box<dyn Dispatcher>>,
@@ -53,6 +59,11 @@ impl RedisStreamsProvider {
         let c = initialize_client(config.clone())?;
 
         self.clients.write().unwrap().insert(config.module, c);
+        Ok(vec![])
+    }
+
+    fn deconfigure(&self, actor: &str) -> Result<Vec<u8>, Box<dyn Error>> {
+        self.clients.write().unwrap().remove(actor);
         Ok(vec![])
     }
 
@@ -116,13 +127,23 @@ impl RedisStreamsProvider {
 
         Ok(serialize(StreamResults { events })?)
     }
+
+    fn get_descriptor(&self) -> Result<Vec<u8>, Box<dyn Error>> {
+        Ok(serialize(
+            CapabilityDescriptor::builder()
+            .id(CAPABILITY_ID)
+            .name("waSCC Default Event Streams Provider (Redis)")
+            .long_description("A capability provider exposing a streaming-read and append-only event streams interface")
+            .version(VERSION)
+            .revision(REVISION)
+            .with_operation(eventstreams::OP_WRITE_EVENT, OperationDirection::ToProvider, "Writes an event to the end of a stream")
+            .with_operation(eventstreams::OP_QUERY_STREAM, OperationDirection::ToProvider, "Queries a set of events from a stream")
+            .build()
+        )?)
+    }
 }
 
 impl CapabilityProvider for RedisStreamsProvider {
-    fn capability_id(&self) -> &'static str {
-        CAPABILITY_ID
-    }
-
     // Invoked by the runtime host to give this provider plugin the ability to communicate
     // with actors
     fn configure_dispatch(&self, dispatcher: Box<dyn Dispatcher>) -> Result<(), Box<dyn Error>> {
@@ -133,17 +154,15 @@ impl CapabilityProvider for RedisStreamsProvider {
         Ok(())
     }
 
-    fn name(&self) -> &'static str {
-        "waSCC Event Streams Provider (Redis)"
-    }
-
     // Invoked by host runtime to allow an actor to make use of the capability
     // All providers MUST handle the "configure" message, even if no work will be done
     fn handle_call(&self, actor: &str, op: &str, msg: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
         trace!("Received host call from {}, operation - {}", actor, op);
 
         match op {
-            OP_BIND_ACTOR if actor == "system" => self.configure(deserialize(msg)?),
+            OP_BIND_ACTOR if actor == SYSTEM_ACTOR => self.configure(deserialize(msg)?),
+            OP_REMOVE_ACTOR if actor == SYSTEM_ACTOR => self.deconfigure(actor),
+            OP_GET_CAPABILITY_DESCRIPTOR if actor == SYSTEM_ACTOR => self.get_descriptor(),
             eventstreams::OP_WRITE_EVENT => self.write_event(actor, deserialize(msg)?),
             eventstreams::OP_QUERY_STREAM => self.query_stream(actor, deserialize(msg)?),
             _ => Err("bad dispatch".into()),
