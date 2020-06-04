@@ -1,13 +1,13 @@
 [package]
 name = "wascc-redis"
-version = "0.6.0"
+version = "0.7.0"
 authors = ["Kevin Hoffman <alothien@gmail.com>"]
 edition = "2018"
 homepage = "https://wascc.dev"
 repository = "https://github.com/wascc/redis-provider"
 description = "Redis capability provider for the waSCC wasm host runtime"
 license = "Apache-2.0"
-documentation = "https://docs.rs/wascc-host"
+documentation = "https://docs.rs/wascc-redis"
 readme = "README.md"
 keywords = ["webassembly", "wasm", "wasi", "wascc", "redis"]
 categories = ["wasm", "api-bindings"]
@@ -29,5 +29,5 @@ crossbeam-channel = "0.4.2"
 crossbeam = "0.7.3"
 crossbeam-utils = "0.7.2"
 log = "0.4.8"
-wascc-codec = "0.6.0"
-redis = "0.15.1"
+wascc-codec = "0.7.0"
+redis = "0.16.0"
