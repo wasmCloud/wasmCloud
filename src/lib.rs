@@ -15,11 +15,15 @@
 #[macro_use]
 extern crate wascc_codec as codec;
 
-use codec::capabilities::{CapabilityProvider, Dispatcher, NullDispatcher};
-use codec::core::{CapabilityConfiguration, OP_BIND_ACTOR, OP_REMOVE_ACTOR};
+use codec::capabilities::{
+    CapabilityDescriptor, CapabilityProvider, Dispatcher, NullDispatcher, OperationDirection,
+    OP_GET_CAPABILITY_DESCRIPTOR,
+};
+use codec::core::{OP_BIND_ACTOR, OP_REMOVE_ACTOR};
 use codec::{
     deserialize,
     logging::{WriteLogRequest, OP_LOG},
+    serialize,
 };
 
 #[macro_use]
@@ -33,6 +37,8 @@ capability_provider!(LoggingProvider, LoggingProvider::new);
 
 const CAPABILITY_ID: &str = "wascc:logging";
 const SYSTEM_ACTOR: &str = "system";
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+const REVISION: u32 = 2; // Increment for each crates publish
 
 const ERROR: u32 = 1;
 const WARN: u32 = 2;
@@ -63,13 +69,40 @@ impl LoggingProvider {
     pub fn new() -> Self {
         Self::default()
     }
+
+    fn get_descriptor(&self) -> Result<Vec<u8>, Box<dyn Error>> {
+        Ok(serialize(
+            CapabilityDescriptor::builder()
+                .id(CAPABILITY_ID)
+                .name("waSCC Default Logging Provider (STDOUT)")
+                .long_description(
+                    "A simple logging capability provider that supports levels from error to trace",
+                )
+                .version(VERSION)
+                .revision(REVISION)
+                .with_operation(
+                    OP_LOG,
+                    OperationDirection::ToProvider,
+                    "Sends a log message to stdout",
+                )
+                .build(),
+        )?)
+    }
+
+    fn write_log(&self, actor: &str, log_msg: WriteLogRequest) -> Result<Vec<u8>, Box<dyn Error>> {
+        match log_msg.level {
+            ERROR => error!("[{}] {}", actor, log_msg.body),
+            WARN => warn!("[{}] {}", actor, log_msg.body),
+            INFO => info!("[{}] {}", actor, log_msg.body),
+            DEBUG => debug!("[{}] {}", actor, log_msg.body),
+            TRACE => trace!("[{}] {}", actor, log_msg.body),
+            _ => error!("Unknown log level: {}", log_msg.level),
+        }
+        Ok(vec![])
+    }
 }
 
 impl CapabilityProvider for LoggingProvider {
-    fn capability_id(&self) -> &'static str {
-        CAPABILITY_ID
-    }
-
     // Invoked by the runtime host to give this provider plugin the ability to communicate
     // with actors
     fn configure_dispatch(&self, dispatcher: Box<dyn Dispatcher>) -> Result<(), Box<dyn Error>> {
@@ -79,39 +112,15 @@ impl CapabilityProvider for LoggingProvider {
         Ok(())
     }
 
-    fn name(&self) -> &'static str {
-        "waSCC Logging Provider"
-    }
-
     // Invoked by host runtime to allow an actor to make use of the capability
     // All providers MUST handle the "configure" message, even if no work will be done
     fn handle_call(&self, actor: &str, op: &str, msg: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
-        // TIP: do not allow individual modules to attempt to send configuration,
-        // only accept it from the host runtime
-        if op == OP_BIND_ACTOR && actor == SYSTEM_ACTOR {
-            // if there were configuration values, we'd call
-            // self.configure() here:
-            //     self.configure(cfgvals).map(|_| vec![])
-
-            Ok(vec![])
-        } else if op == OP_REMOVE_ACTOR && actor == SYSTEM_ACTOR {
-            let cfg_vals = deserialize::<CapabilityConfiguration>(msg)?;
-            info!("Removing actor configuration for {}", cfg_vals.module);
-            // tear down stuff here
-            Ok(vec![])
-        } else if op == OP_LOG {            
-            let log_msg = deserialize::<WriteLogRequest>(msg)?;
-            match log_msg.level {
-                ERROR => error!("[{}] {}", actor, log_msg.body),
-                WARN => warn!("[{}] {}", actor, log_msg.body),
-                INFO => info!("[{}] {}", actor, log_msg.body),
-                DEBUG => debug!("[{}] {}", actor, log_msg.body),
-                TRACE => trace!("[{}] {}", actor, log_msg.body),
-                _ => error!("Unknown log level: {}", log_msg.level),
-            }
-            Ok(vec![])
-        } else {
-            Err(format!("Unknown operation: {}", op).into())
+        match op {
+            OP_BIND_ACTOR if actor == SYSTEM_ACTOR => Ok(vec![]),
+            OP_REMOVE_ACTOR if actor == SYSTEM_ACTOR => Ok(vec![]),
+            OP_GET_CAPABILITY_DESCRIPTOR if actor == SYSTEM_ACTOR => self.get_descriptor(),
+            OP_LOG => self.write_log(actor, deserialize(msg)?),
+            _ => Err(format!("Unknown operation: {}", op).into()),
         }
     }
 }
