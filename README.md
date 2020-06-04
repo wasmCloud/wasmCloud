@@ -1,4 +1,7 @@
+[![crates.io](https://img.shields.io/crates/v/wascc-fs.svg)](https://crates.io/crates/wascc-fs)&nbsp;
 ![Rust](https://github.com/wascc/fs-provider/workflows/Rust/badge.svg)
+![license](https://img.shields.io/crates/l/wascc-fs.svg)&nbsp;
+[![documentation](https://docs.rs/wascc-fs/badge.svg)](https://docs.rs/wascc-fs)
 
 # File System Provider
 
