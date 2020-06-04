@@ -6,7 +6,10 @@ extern crate log;
 
 use chunks::Chunks;
 use codec::blobstore::*;
-use codec::capabilities::{CapabilityProvider, Dispatcher, NullDispatcher};
+use codec::capabilities::{
+    CapabilityDescriptor, CapabilityProvider, Dispatcher, NullDispatcher, OperationDirection,
+    OP_GET_CAPABILITY_DESCRIPTOR,
+};
 use codec::core::{OP_BIND_ACTOR, OP_REMOVE_ACTOR};
 use codec::{deserialize, serialize};
 use std::collections::HashMap;
@@ -27,6 +30,8 @@ capability_provider!(FileSystemProvider, FileSystemProvider::new);
 const CAPABILITY_ID: &str = "wascc:blobstore";
 const SYSTEM_ACTOR: &str = "system";
 const FIRST_SEQ_NBR: u64 = 1;
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+const REVISION: u32 = 2; // Increment for each crates publish
 
 pub struct FileSystemProvider {
     dispatcher: Arc<RwLock<Box<dyn Dispatcher>>>,
@@ -232,6 +237,61 @@ impl FileSystemProvider {
     fn container_to_path(&self, container: &Container) -> PathBuf {
         Path::join(&self.rootdir.read().unwrap(), container.id.to_string())
     }
+
+    fn get_descriptor(&self) -> Result<Vec<u8>, Box<dyn Error>> {
+        use OperationDirection::{ToActor, ToProvider};
+        Ok(serialize(
+            CapabilityDescriptor::builder()
+                .id(CAPABILITY_ID)
+                .name("waSCC Blob Store Provider (Disk/File System)")
+                .long_description(
+                    "A waSCC blob store capability provider exposing a file system to actors",
+                )
+                .version(VERSION)
+                .revision(REVISION)
+                .with_operation(
+                    OP_CREATE_CONTAINER,
+                    ToProvider,
+                    "Creates a new container/bucket",
+                )
+                .with_operation(
+                    OP_REMOVE_CONTAINER,
+                    ToProvider,
+                    "Removes a container/bucket",
+                )
+                .with_operation(
+                    OP_LIST_OBJECTS,
+                    ToProvider,
+                    "Lists objects within a container",
+                )
+                .with_operation(
+                    OP_UPLOAD_CHUNK,
+                    ToProvider,
+                    "Uploads a chunk of a blob to an item in a container. Must start upload first",
+                )
+                .with_operation(
+                    OP_START_UPLOAD,
+                    ToProvider,
+                    "Starts the chunked upload of a blob",
+                )
+                .with_operation(
+                    OP_START_DOWNLOAD,
+                    ToProvider,
+                    "Starts the chunked download of a blob",
+                )
+                .with_operation(
+                    OP_GET_OBJECT_INFO,
+                    ToProvider,
+                    "Retrieves metadata about a blob",
+                )
+                .with_operation(
+                    OP_RECEIVE_CHUNK,
+                    ToActor,
+                    "Receives a chunk of a blob for download",
+                )
+                .build(),
+        )?)
+    }
 }
 fn sanitize_container(container: &Container) -> Container {
     Container {
@@ -275,10 +335,6 @@ fn dispatch_chunk(
 }
 
 impl CapabilityProvider for FileSystemProvider {
-    fn capability_id(&self) -> &'static str {
-        CAPABILITY_ID
-    }
-
     // Invoked by the runtime host to give this provider plugin the ability to communicate
     // with actors
     fn configure_dispatch(&self, dispatcher: Box<dyn Dispatcher>) -> Result<(), Box<dyn Error>> {
@@ -289,10 +345,6 @@ impl CapabilityProvider for FileSystemProvider {
         Ok(())
     }
 
-    fn name(&self) -> &'static str {
-        "waSCC Blob Store Provider (File System)"
-    }
-
     // Invoked by host runtime to allow an actor to make use of the capability
     // All providers MUST handle the "configure" message, even if no work will be done
     fn handle_call(&self, actor: &str, op: &str, msg: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
@@ -301,6 +353,7 @@ impl CapabilityProvider for FileSystemProvider {
         match op {
             OP_BIND_ACTOR if actor == SYSTEM_ACTOR => self.configure(deserialize(msg)?),
             OP_REMOVE_ACTOR if actor == SYSTEM_ACTOR => Ok(vec![]),
+            OP_GET_CAPABILITY_DESCRIPTOR if actor == SYSTEM_ACTOR => self.get_descriptor(),
             OP_CREATE_CONTAINER => self.create_container(actor, deserialize(msg)?),
             OP_REMOVE_CONTAINER => self.remove_container(actor, deserialize(msg)?),
             OP_REMOVE_OBJECT => self.remove_object(actor, deserialize(msg)?),
