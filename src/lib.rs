@@ -17,12 +17,23 @@ mod nats;
 #[macro_use]
 extern crate wascc_codec as codec;
 
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+const REVISION: u32 = 2; // Increment for each crates publish
+
 #[macro_use]
 extern crate log;
 
-use codec::capabilities::{CapabilityProvider, Dispatcher, NullDispatcher};
+use codec::capabilities::{
+    CapabilityDescriptor, CapabilityProvider, Dispatcher, NullDispatcher, OperationDirection,
+    OP_GET_CAPABILITY_DESCRIPTOR,
+};
 use codec::core::{OP_BIND_ACTOR, OP_REMOVE_ACTOR};
-use codec::messaging::{BrokerMessage, RequestMessage, OP_PERFORM_REQUEST, OP_PUBLISH_MESSAGE};
+use codec::{
+    messaging::{
+        BrokerMessage, RequestMessage, OP_DELIVER_MESSAGE, OP_PERFORM_REQUEST, OP_PUBLISH_MESSAGE,
+    },
+    serialize,
+};
 use natsclient;
 use std::collections::HashMap;
 use wascc_codec::core::CapabilityConfiguration;
@@ -91,14 +102,36 @@ impl NatsProvider {
         self.clients.write().unwrap().remove(&msg.module);
         Ok(vec![])
     }
+
+    fn get_descriptor(&self) -> Result<Vec<u8>, Box<dyn Error>> {
+        Ok(serialize(
+            CapabilityDescriptor::builder()
+                .id(CAPABILITY_ID)
+                .name("Default waSCC Messaging Provider (NATS)")
+                .long_description("A NATS-based implementation of the wascc:messaging contract")
+                .version(VERSION)
+                .revision(REVISION)
+                .with_operation(
+                    OP_PUBLISH_MESSAGE,
+                    OperationDirection::ToProvider,
+                    "Sends a message on a subject with an optional reply-to",
+                )
+                .with_operation(
+                    OP_PERFORM_REQUEST,
+                    OperationDirection::ToProvider,
+                    "Sends a message on a subject expecting a reply on an auto-generated inbox",
+                )
+                .with_operation(
+                    OP_DELIVER_MESSAGE,
+                    OperationDirection::ToActor,
+                    "Delivers a message from a NATS subscription to an actor",
+                )
+                .build(),
+        )?)
+    }
 }
 
 impl CapabilityProvider for NatsProvider {
-    /// Returns the capability ID of this provider
-    fn capability_id(&self) -> &'static str {
-        CAPABILITY_ID
-    }
-
     /// Receives a dispatcher from the host runtime
     fn configure_dispatch(&self, dispatcher: Box<dyn Dispatcher>) -> Result<(), Box<dyn Error>> {
         trace!("Dispatcher received.");
@@ -108,11 +141,6 @@ impl CapabilityProvider for NatsProvider {
         Ok(())
     }
 
-    /// The friendly name of the capability provider
-    fn name(&self) -> &'static str {
-        "waSCC Default Messaging Provider (NATS)"
-    }
-
     /// Handles an invocation received from the host runtime
     fn handle_call(&self, actor: &str, op: &str, msg: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
         trace!("Received host call from {}, operation - {}", actor, op);
@@ -120,6 +148,7 @@ impl CapabilityProvider for NatsProvider {
         match op {
             OP_PUBLISH_MESSAGE => self.publish_message(actor, deserialize(msg)?),
             OP_PERFORM_REQUEST => self.request(actor, deserialize(msg)?),
+            OP_GET_CAPABILITY_DESCRIPTOR if actor == "system" => self.get_descriptor(),
             OP_BIND_ACTOR if actor == "system" => self.configure(deserialize(msg)?),
             OP_REMOVE_ACTOR if actor == "system" => self.remove_actor(deserialize(msg)?),
             _ => Err("bad dispatch".into()),
