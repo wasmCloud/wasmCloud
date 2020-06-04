@@ -1,8 +1,16 @@
 [package]
 name = "wascc-telnet"
-version = "0.0.1"
+version = "0.1.0"
 authors = ["Kevin Hoffman <alothien@gmail.com>"]
 edition = "2018"
+homepage = "https://wascc.dev"
+repository = "https://github.com/wascc/telnet-provider"
+description = "A telnet server capability provider for waSCC actors"
+license = "Apache-2.0"
+documentation = "https://docs.rs/wascc-telnet"
+readme = "README.md"
+keywords = ["webassembly", "wasm", "telnet", "wascc"]
+categories = ["wasm", "api-bindings", "network-programming"]
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -13,7 +21,7 @@ static_plugin = []
 
 
 [dependencies]
-wascc-codec = "0.6.0"
+wascc-codec = "0.7.0"
 log = "0.4.8"
 env_logger = "0.7.1"
 telnet = "0.1.4"
@@ -21,5 +29,5 @@ ansi-escapes = "0.1.0"
 uuid = { version = "0.8", features = ["serde", "v4"]}
 crossbeam = "0.7.3"
 crossbeam-channel = "0.4.2"
-serde = "1.0.110"
-serde_derive = "1.0.110"
+serde = "1.0.111"
+serde_derive = "1.0.111"
