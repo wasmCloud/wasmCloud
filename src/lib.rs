@@ -1,11 +1,19 @@
+//! # S3 implementation of the waSCC blob store capability provider API
+//!
+//! Provides an implementation of the wascc:blobstore contract for S3 and
+//! S3-compatible (e.g. Minio) products.
+
 #[macro_use]
 extern crate wascc_codec as codec;
 
 #[macro_use]
 extern crate log;
 
-use codec::capabilities::{CapabilityProvider, Dispatcher, NullDispatcher};
-use codec::core::OP_BIND_ACTOR;
+use codec::capabilities::{
+    CapabilityDescriptor, CapabilityProvider, Dispatcher, NullDispatcher, OperationDirection,
+    OP_GET_CAPABILITY_DESCRIPTOR,
+};
+use codec::core::{OP_BIND_ACTOR, OP_REMOVE_ACTOR};
 use codec::deserialize;
 use codec::{blobstore::*, serialize};
 use rusoto_s3::S3Client;
@@ -23,6 +31,8 @@ capability_provider!(S3Provider, S3Provider::new);
 
 const CAPABILITY_ID: &str = "wascc:blobstore";
 const SYSTEM_ACTOR: &str = "system";
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+const REVISION: u32 = 2; // Increment for each crates publish
 
 #[derive(Debug, PartialEq)]
 struct FileUpload {
@@ -51,7 +61,7 @@ impl Default for S3Provider {
         match env_logger::try_init() {
             Ok(_) => {}
             Err(_) => {}
-        }        
+        }
 
         S3Provider {
             dispatcher: Arc::new(RwLock::new(Box::new(NullDispatcher::new()))),
@@ -72,6 +82,11 @@ impl S3Provider {
             config.module.clone(),
             Arc::new(s3::client_for_config(&config)?),
         );
+
+        Ok(vec![])
+    }
+    fn deconfigure(&self, actor: &str) -> Result<Vec<u8>, Box<dyn Error>> {
+        self.clients.write().unwrap().remove(actor);
 
         Ok(vec![])
     }
@@ -212,20 +227,19 @@ impl S3Provider {
         let id = request.id.to_string();
 
         let byte_size = {
-            let mut rt = tokio::runtime::Runtime::new().unwrap();            
+            let mut rt = tokio::runtime::Runtime::new().unwrap();
             let info = rt.block_on(s3::head_object(&c, &container, &id)).unwrap();
             drop(rt);
             info.content_length.unwrap() as u64
         };
 
         std::thread::spawn(move || {
-            let actor = actor.to_string();          
+            let actor = actor.to_string();
 
             let chunk_count = expected_chunks(byte_size, chunk_size);
             let mut rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async {
-                for idx in 0..chunk_count {                    
-    
+                for idx in 0..chunk_count {
                     dispatch_chunk(
                         idx,
                         d.clone(),
@@ -235,13 +249,68 @@ impl S3Provider {
                         chunk_size,
                         byte_size,
                         actor.clone(),
-                    ).await;                
+                    )
+                    .await;
                 }
             });
-                        
         });
 
         Ok(vec![])
+    }
+
+    fn get_descriptor(&self) -> Result<Vec<u8>, Box<dyn Error>> {
+        use OperationDirection::{ToActor, ToProvider};
+        Ok(serialize(
+            CapabilityDescriptor::builder()
+                .id(CAPABILITY_ID)
+                .name("waSCC Blob Store Provider (S3)")
+                .long_description(
+                    "A waSCC blob store capability provider exposing an S3 client to actors",
+                )
+                .version(VERSION)
+                .revision(REVISION)
+                .with_operation(
+                    OP_CREATE_CONTAINER,
+                    ToProvider,
+                    "Creates a new container/bucket",
+                )
+                .with_operation(
+                    OP_REMOVE_CONTAINER,
+                    ToProvider,
+                    "Removes a container/bucket",
+                )
+                .with_operation(
+                    OP_LIST_OBJECTS,
+                    ToProvider,
+                    "Lists objects within a container",
+                )
+                .with_operation(
+                    OP_UPLOAD_CHUNK,
+                    ToProvider,
+                    "Uploads a chunk of a blob to an item in a container. Must start upload first",
+                )
+                .with_operation(
+                    OP_START_UPLOAD,
+                    ToProvider,
+                    "Starts the chunked upload of a blob",
+                )
+                .with_operation(
+                    OP_START_DOWNLOAD,
+                    ToProvider,
+                    "Starts the chunked download of a blob",
+                )
+                .with_operation(
+                    OP_GET_OBJECT_INFO,
+                    ToProvider,
+                    "Retrieves metadata about a blob",
+                )
+                .with_operation(
+                    OP_RECEIVE_CHUNK,
+                    ToActor,
+                    "Receives a chunk of a blob for download",
+                )
+                .build(),
+        )?)
     }
 }
 
@@ -254,18 +323,20 @@ async fn dispatch_chunk(
     chunk_size: u64,
     byte_size: u64,
     actor: String,
-) {    
+) {
     // range header spec: https://www.w3.org/Protocols/rfc2616/rfc2616-sec14.html#sec14.35
     // tl;dr - ranges are _inclusive_, but start at 0.
     // idx 0, start 0, end chunk_size-1
     let start = idx * chunk_size;
     let mut end = start + chunk_size - 1;
     if end > byte_size {
-        end = byte_size-1;
+        end = byte_size - 1;
     }
 
-    let bytes = s3::get_blob_range(&client, &container, &id, start, end).await.unwrap();
-                    
+    let bytes = s3::get_blob_range(&client, &container, &id, start, end)
+        .await
+        .unwrap();
+
     let fc = FileChunk {
         sequence_no: idx + 1,
         container,
@@ -274,20 +345,17 @@ async fn dispatch_chunk(
         total_bytes: byte_size,
         chunk_bytes: bytes,
     };
-    match dispatcher.read().unwrap().dispatch(
-        &actor, OP_RECEIVE_CHUNK,
-        &serialize(&fc).unwrap(),
-    ) {
+    match dispatcher
+        .read()
+        .unwrap()
+        .dispatch(&actor, OP_RECEIVE_CHUNK, &serialize(&fc).unwrap())
+    {
         Ok(_) => {}
         Err(_) => error!("Failed to dispatch block to actor {}", actor),
     }
 }
 
 impl CapabilityProvider for S3Provider {
-    fn capability_id(&self) -> &'static str {
-        CAPABILITY_ID
-    }
-
     // Invoked by the runtime host to give this provider plugin the ability to communicate
     // with actors
     fn configure_dispatch(&self, dispatcher: Box<dyn Dispatcher>) -> Result<(), Box<dyn Error>> {
@@ -298,10 +366,6 @@ impl CapabilityProvider for S3Provider {
         Ok(())
     }
 
-    fn name(&self) -> &'static str {
-        "S3 Blob Store"
-    }
-
     // Invoked by host runtime to allow an actor to make use of the capability
     // All providers MUST handle the "configure" message, even if no work will be done
     fn handle_call(&self, actor: &str, op: &str, msg: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
@@ -309,6 +373,8 @@ impl CapabilityProvider for S3Provider {
 
         match op {
             OP_BIND_ACTOR if actor == SYSTEM_ACTOR => self.configure(deserialize(msg)?),
+            OP_REMOVE_ACTOR if actor == SYSTEM_ACTOR => self.deconfigure(actor),
+            OP_GET_CAPABILITY_DESCRIPTOR if actor == SYSTEM_ACTOR => self.get_descriptor(),
             OP_CREATE_CONTAINER => self.create_container(actor, deserialize(msg)?),
             OP_REMOVE_CONTAINER => self.remove_container(actor, deserialize(msg)?),
             OP_REMOVE_OBJECT => self.remove_object(actor, deserialize(msg)?),
@@ -342,7 +408,7 @@ mod test {
     use std::collections::HashMap;
 
     // ***! These tests MUST be run in the presence of a minio server
-    // The easiest option is just to run the default minio docker image as a 
+    // The easiest option is just to run the default minio docker image as a
     // service
 
     #[test]
@@ -562,7 +628,7 @@ mod test {
     }
 
     impl Dispatcher for TestDispatcher {
-        fn dispatch(&self, _actor: &str, _op: &str, msg: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {            
+        fn dispatch(&self, _actor: &str, _op: &str, msg: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
             let fc: FileChunk = deserialize(msg)?;
             self.chunks.write().unwrap().push(fc);
             if self.chunks.read().unwrap().len() == self.expected_chunks as usize {

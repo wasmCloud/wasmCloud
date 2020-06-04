@@ -1,13 +1,13 @@
 [package]
 name = "wascc-s3"
-version = "0.6.0"
+version = "0.7.0"
 authors = ["Kevin Hoffman <alothien@gmail.com>"]
 edition = "2018"
 homepage = "https://wascc.dev"
 repository = "https://github.com/wascc/s3-provider"
 description = "AWS S3 capability provider for the waSCC wasm host runtime"
 license = "Apache-2.0"
-documentation = "https://docs.rs/wascc-host"
+documentation = "https://docs.rs/wascc-s3"
 readme = "README.md"
 keywords = ["webassembly", "wasm", "aws", "wascc", "s3"]
 categories = ["wasm", "api-bindings"]
@@ -23,13 +23,13 @@ static_plugin = []
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-wascc-codec = "0.6.0"
+wascc-codec = "0.7.0"
 log = "0.4.8"
 env_logger = "0.7.1"
-rusoto_core = { version="0.43.0", default_features=false, features=["rustls"] }
-rusoto_s3 = { version="0.43.0", default_features=false, features=["rustls"] }
-rusoto_credential = "0.43.0"
-tokio = { version = "0.2.15", features = ["macros", "rt-threaded"]}
+rusoto_core = { version="0.44.0", default_features=false, features=["rustls"] }
+rusoto_s3 = { version="0.44.0", default_features=false, features=["rustls"] }
+rusoto_credential = "0.44.0"
+tokio = { version = "0.2.21", features = ["macros", "rt-threaded"]}
 futures = "0.3"
 bytes = "0.5"
 

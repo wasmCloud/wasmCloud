@@ -1,15 +1,14 @@
 use crate::FileUpload;
 use codec::core::CapabilityConfiguration;
+use futures::TryStreamExt;
 use rusoto_core::credential::{DefaultCredentialsProvider, StaticProvider};
-use rusoto_core::{Region};
+use rusoto_core::Region;
 use rusoto_s3::HeadObjectOutput;
 use rusoto_s3::ListObjectsV2Output;
-use futures::TryStreamExt;
 use rusoto_s3::Object;
 use rusoto_s3::{
-   CreateBucketRequest,
-    DeleteBucketRequest, DeleteObjectRequest, PutObjectRequest, GetObjectRequest, HeadObjectRequest,
-     ListObjectsV2Request,  S3Client, S3,
+    CreateBucketRequest, DeleteBucketRequest, DeleteObjectRequest, GetObjectRequest,
+    HeadObjectRequest, ListObjectsV2Request, PutObjectRequest, S3Client, S3,
 };
 
 use std::error::Error;
@@ -108,8 +107,12 @@ pub(crate) async fn get_blob_range(
     };
 
     let result = client.get_object(get_req).await?;
-    let stream = result.body.unwrap();    
-    let body = stream.map_ok(|b| bytes::BytesMut::from(&b[..])).try_concat().await.unwrap();    
+    let stream = result.body.unwrap();
+    let body = stream
+        .map_ok(|b| bytes::BytesMut::from(&b[..]))
+        .try_concat()
+        .await
+        .unwrap();
     Ok(body.to_vec())
 }
 
