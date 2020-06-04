@@ -1,6 +1,6 @@
 [package]
 name = "wascc-httpsrv"
-version = "0.6.0"
+version = "0.7.0"
 authors = ["Kevin Hoffman <alothien@gmail.com>"]
 edition = "2018"
 homepage = "https://wascc.dev"
@@ -22,11 +22,11 @@ static_plugin = [] # Enable to statically compile this into a host
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-wascc-codec = "0.6.0"
+wascc-codec = "0.7.0"
 actix-web = "2.0.0"
-actix-rt = "1.0.0"
+actix-rt = "1.1.1"
 actix-multipart = "0.2.0"
-futures = "0.3.4"
+futures = "0.3.5"
 log = "0.4.8"
 env_logger = "0.7.1"
 crossbeam-channel = "0.4.2"

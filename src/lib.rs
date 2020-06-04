@@ -25,16 +25,21 @@ use actix_web::dev::Server;
 use actix_web::http::StatusCode;
 use actix_web::web::Bytes;
 use actix_web::{middleware, web, App, HttpRequest, HttpResponse, HttpServer};
-use codec::capabilities::{CapabilityProvider, Dispatcher, NullDispatcher};
-use codec::core::CapabilityConfiguration;
+use codec::capabilities::{
+    CapabilityDescriptor, CapabilityProvider, Dispatcher, NullDispatcher, OperationDirection,
+    OP_GET_CAPABILITY_DESCRIPTOR,
+};
+use codec::{core::CapabilityConfiguration, http::OP_HANDLE_REQUEST};
 use std::collections::HashMap;
-use std::error::Error as StdError;
+use std::error::Error;
 use std::sync::Arc;
 use std::sync::RwLock;
 use wascc_codec::core::{OP_BIND_ACTOR, OP_REMOVE_ACTOR};
 use wascc_codec::{deserialize, serialize};
 
 const CAPABILITY_ID: &str = "wascc:http_server";
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+const REVISION: u32 = 2; // Increment for each crates publish
 
 #[cfg(not(feature = "static_plugin"))]
 capability_provider!(HttpServerProvider, HttpServerProvider::new);
@@ -106,6 +111,24 @@ impl HttpServerProvider {
             let _ = sys.run();
         });
     }
+
+    /// Obtains the capability provider descriptor
+    fn get_descriptor(&self) -> Result<Vec<u8>, Box<dyn Error>> {
+        Ok(serialize(
+            CapabilityDescriptor::builder()
+                .id(CAPABILITY_ID)
+                .name("Default waSCC HTTP Server Provider (Actix)")
+                .long_description("A fast, multi-threaded HTTP server for waSCC actors")
+                .version(VERSION)
+                .revision(REVISION)
+                .with_operation(
+                    OP_HANDLE_REQUEST,
+                    OperationDirection::ToActor,
+                    "Delivers an HTTP request to an actor and expects an HTTP response in return",
+                )
+                .build(),
+        )?)
+    }
 }
 
 impl Default for HttpServerProvider {
@@ -122,13 +145,8 @@ impl Default for HttpServerProvider {
 }
 
 impl CapabilityProvider for HttpServerProvider {
-    /// Returns the capability ID of the provider
-    fn capability_id(&self) -> &'static str {
-        CAPABILITY_ID
-    }
-
     /// Accepts the dispatcher provided by the waSCC host runtime
-    fn configure_dispatch(&self, dispatcher: Box<dyn Dispatcher>) -> Result<(), Box<dyn StdError>> {
+    fn configure_dispatch(&self, dispatcher: Box<dyn Dispatcher>) -> Result<(), Box<dyn Error>> {
         info!("Dispatcher configured.");
 
         let mut lock = self.dispatcher.write().unwrap();
@@ -137,32 +155,23 @@ impl CapabilityProvider for HttpServerProvider {
         Ok(())
     }
 
-    /// Returns the human-friendly name of the provider
-    fn name(&self) -> &'static str {
-        "waSCC Default HTTP Server (Actix Web)"
-    }
-
     /// Handles an invocation from the host runtime
-    fn handle_call(
-        &self,
-        origin: &str,
-        op: &str,
-        msg: &[u8],
-    ) -> Result<Vec<u8>, Box<dyn StdError>> {
-        trace!("Handling operation `{}` from `{}`", op, origin);
-        // TIP: do not allow individual modules to attempt to send configuration,
-        // only accept it from the host runtime
-        if op == OP_BIND_ACTOR && origin == "system" {
-            let cfgvals = deserialize(msg)?;
-            self.spawn_server(&cfgvals);
-            Ok(vec![])
-        } else if op == OP_REMOVE_ACTOR && origin == "system" {
-            let cfgvals = deserialize::<CapabilityConfiguration>(msg)?;
-            info!("Removing actor configuration for {}", cfgvals.module);
-            self.terminate_server(&cfgvals.module);
-            Ok(vec![])
-        } else {
-            Err(format!("Unknown operation: {}", op).into())
+    fn handle_call(&self, actor: &str, op: &str, msg: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+        trace!("Handling operation `{}` from `{}`", op, actor);
+
+        match op {
+            OP_BIND_ACTOR if actor == "system" => {
+                self.spawn_server(&deserialize(msg)?);
+                Ok(vec![])
+            }
+            OP_REMOVE_ACTOR if actor == "system" => {
+                let cfgvals = deserialize::<CapabilityConfiguration>(msg)?;
+                info!("Removing actor configuration for {}", cfgvals.module);
+                self.terminate_server(&cfgvals.module);
+                Ok(vec![])
+            }
+            OP_GET_CAPABILITY_DESCRIPTOR if actor == "system" => self.get_descriptor(),
+            _ => Err("bad dispatch".into()),
         }
     }
 }
@@ -184,7 +193,7 @@ async fn request_handler(
 
     let resp = {
         let lock = (*state).read().unwrap();
-        lock.dispatch(module.get_ref(), "HandleRequest", &buf)
+        lock.dispatch(module.get_ref(), OP_HANDLE_REQUEST, &buf)
     };
     match resp {
         Ok(r) => {
