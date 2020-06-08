@@ -1,7 +1,6 @@
 ///!
 ///! # http-client-provider
 ///! This library exposes the HTTP client capability to waSCC-compliant actors
-
 mod http_client;
 
 #[macro_use]
@@ -10,17 +9,21 @@ extern crate wascc_codec as codec;
 #[macro_use]
 extern crate log;
 
-use codec::capabilities::{CapabilityProvider, Dispatcher, NullDispatcher};
+use codec::capabilities::{
+    CapabilityDescriptor, CapabilityProvider, Dispatcher, NullDispatcher, OperationDirection,
+    OP_GET_CAPABILITY_DESCRIPTOR,
+};
 use codec::core::{CapabilityConfiguration, OP_BIND_ACTOR, OP_REMOVE_ACTOR};
-use codec::deserialize;
 use codec::http::{Request, OP_PERFORM_REQUEST};
+use codec::{deserialize, serialize, SYSTEM_ACTOR};
 use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Arc;
 use std::sync::RwLock;
 
 const CAPABILITY_ID: &str = "wascc:http_client";
-const SYSTEM_ACTOR: &str = "system";
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+const REVISION: u32 = 0;
 
 #[cfg(not(feature = "static_plugin"))]
 capability_provider!(HttpClientProvider, HttpClientProvider::new);
@@ -77,6 +80,20 @@ impl HttpClientProvider {
             .handle()
             .block_on(async { http_client::request(&client, msg).await })
     }
+
+    fn get_descriptor(&self) -> Result<Vec<u8>, Box<dyn Error>> {
+        use OperationDirection::ToProvider;
+        Ok(serialize(
+            CapabilityDescriptor::builder()
+                .id(CAPABILITY_ID)
+                .name("wasCC HTTP Client Provider")
+                .long_description("A http client provider")
+                .version(VERSION)
+                .revision(REVISION)
+                .with_operation(OP_PERFORM_REQUEST, ToProvider, "Perform a http request")
+                .build(),
+        )?)
+    }
 }
 
 impl Default for HttpClientProvider {
@@ -107,22 +124,13 @@ impl CapabilityProvider for HttpClientProvider {
         Ok(())
     }
 
-    /// The name of the provider.
-    fn name(&self) -> &'static str {
-        "waSCC Default HTTP Client"
-    }
-
-    /// The capability ID provided by the implementation.
-    fn capability_id(&self) -> &'static str {
-        CAPABILITY_ID
-    }
-
     /// Handle all calls from actors.
     fn handle_call(&self, actor: &str, op: &str, msg: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
         match op {
             OP_BIND_ACTOR if actor == SYSTEM_ACTOR => self.configure(deserialize(msg)?),
             OP_REMOVE_ACTOR if actor == SYSTEM_ACTOR => self.deconfigure(deserialize(msg)?),
             OP_PERFORM_REQUEST => self.request(actor, deserialize(msg)?),
+            OP_GET_CAPABILITY_DESCRIPTOR => self.get_descriptor(),
             _ => Err(format!("Unknown operation: {}", op).into()),
         }
     }

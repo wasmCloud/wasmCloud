@@ -20,7 +20,7 @@ static_plugin = []
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-wascc-codec = "0.6.0"
+wascc-codec = "0.7.0"
 log = "0.4.8"
 futures = "0.3.5"
 env_logger = "0.7.1"
