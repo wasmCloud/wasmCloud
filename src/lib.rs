@@ -18,8 +18,8 @@ use codec::http::{Request, OP_PERFORM_REQUEST};
 use codec::{deserialize, serialize, SYSTEM_ACTOR};
 use std::collections::HashMap;
 use std::error::Error;
-use std::sync::Arc;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
+use std::time::Duration;
 
 const CAPABILITY_ID: &str = "wascc:http_client";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -45,11 +45,29 @@ impl HttpClientProvider {
     /// Each actor gets a dedicated client so that we can take advantage of connection pooling.
     /// TODO: This needs to set things like timeouts, redirects, etc.
     fn configure(&self, config: CapabilityConfiguration) -> Result<Vec<u8>, Box<dyn Error>> {
-        // TODO read in config and set defaults
-        self.clients
-            .write()
-            .unwrap()
-            .insert(config.module.clone(), reqwest::Client::new());
+        let timeout = match config.values.get("timeout") {
+            Some(v) => {
+                let parsed: u64 = v.parse()?;
+                Duration::new(parsed, 0)
+            }
+            None => Duration::new(30, 0),
+        };
+
+        let redirect_policy = match config.values.get("max_redirects") {
+            Some(v) => {
+                let parsed: usize = v.parse()?;
+                reqwest::redirect::Policy::limited(parsed)
+            }
+            None => reqwest::redirect::Policy::default(),
+        };
+
+        self.clients.write().unwrap().insert(
+            config.module.clone(),
+            reqwest::Client::builder()
+                .timeout(timeout)
+                .redirect(redirect_policy)
+                .build()?,
+        );
         Ok(vec![])
     }
 
