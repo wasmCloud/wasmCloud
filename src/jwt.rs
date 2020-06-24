@@ -100,6 +100,17 @@ pub struct Operator {
     pub valid_signers: Option<Vec<String>>,
 }
 
+#[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Default)]
+pub struct Invocation {
+    /// Fully qualified bus URL indicating the target of the invocation
+    pub target_url: String,
+    /// Fully qualified bus URL indicating the origin of the invocation
+    pub origin_url: String,
+    /// Hash of the invocation to which these claims belong
+    #[serde(rename = "hash")]
+    pub invocation_hash: String,
+}
+
 /// Represents a set of [RFC 7519](https://tools.ietf.org/html/rfc7519) compliant JSON Web Token
 /// claims.
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Default)]
@@ -219,6 +230,12 @@ impl WascapEntity for Operator {
     }
 }
 
+impl WascapEntity for Invocation {
+    fn name(&self) -> String {
+        self.target_url.to_string()
+    }
+}
+
 impl Claims<Account> {
     pub fn new(
         name: String,
@@ -315,6 +332,42 @@ impl Claims<Actor> {
     ) -> Claims<Actor> {
         Claims {
             metadata: Some(Actor::new(name, caps, tags, provider, rev, ver)),
+            expires,
+            id: nuid::next(),
+            issued_at: since_the_epoch().as_secs(),
+            issuer,
+            subject,
+            not_before,
+        }
+    }
+}
+
+impl Claims<Invocation> {
+    pub fn new(
+        issuer: String,
+        subject: String,
+        target_url: &str,
+        origin_url: &str,
+        hash: &str,
+    ) -> Claims<Invocation> {
+        Self::with_dates(issuer, subject, None, None, target_url, origin_url, hash)
+    }
+
+    pub fn with_dates(
+        issuer: String,
+        subject: String,
+        not_before: Option<u64>,
+        expires: Option<u64>,
+        target_url: &str,
+        origin_url: &str,
+        hash: &str,
+    ) -> Claims<Invocation> {
+        Claims {
+            metadata: Some(Invocation {
+                target_url: target_url.to_string(),
+                origin_url: origin_url.to_string(),
+                invocation_hash: hash.to_string(),
+            }),
             expires,
             id: nuid::next(),
             issued_at: since_the_epoch().as_secs(),
@@ -534,9 +587,19 @@ impl Operator {
     }
 }
 
+impl Invocation {
+    pub fn new(target_url: &str, origin_url: &str, hash: &str) -> Invocation {
+        Invocation {
+            target_url: target_url.to_string(),
+            origin_url: origin_url.to_string(),
+            invocation_hash: hash.to_string(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
-    use super::{Account, Actor, Claims, ErrorKind, KeyPair, Operator};
+    use super::{Account, Actor, Claims, ErrorKind, Invocation, KeyPair, Operator};
     use crate::caps::{KEY_VALUE, LOGGING, MESSAGING};
     use crate::jwt::since_the_epoch;
     use crate::jwt::validate_token;
@@ -621,6 +684,32 @@ mod test {
             assert_eq!(v.cannot_use_yet, false);
             assert_eq!(v.expires_human, "8 hours ago");
         }
+    }
+
+    #[test]
+    fn validate_invocation() {
+        let issuer = KeyPair::new_server();
+        let claims = Claims {
+            id: nuid::next(),
+            metadata: Some(Invocation::new(
+                "wasmbus://M1234/DeliverMessage",
+                "wasmbus://wascc/messaging/default",
+                "abc",
+            )),
+            expires: None,
+            not_before: None,
+            issued_at: 0,
+            issuer: issuer.public_key(),
+            subject: "invocation1".to_string(),
+        };
+        let encoded = claims.encode(&issuer).unwrap();
+        let vres = validate_token::<Invocation>(&encoded);
+        let decoded = Claims::<Invocation>::decode(&encoded).unwrap();
+        assert_eq!(
+            decoded.metadata.unwrap().target_url,
+            claims.metadata.unwrap().target_url
+        );
+        assert!(vres.is_ok());
     }
 
     #[test]
