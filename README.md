@@ -1,5 +1,5 @@
 ![crates.io](https://img.shields.io/crates/v/wascap.svg)&nbsp;
-![travis](https://travis-ci.org/wascc/wascap.svg?branch=master)&nbsp;
+![Rust](https://github.com/wascc/wascap/workflows/Rust/badge.svg)&nbsp;
 ![license](https://img.shields.io/crates/l/wascap.svg)
 
 # WASCAP
