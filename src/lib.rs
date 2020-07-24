@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Capital One Services, LLC
+// Copyright 2015-2020 Capital One Services, LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -29,7 +29,7 @@
 //!# fn read_unsigned_wasm() -> Vec<u8> {
 //!#   include_bytes!("../examples/loop.wasm").to_vec()
 //!# }
-//!# fn main() -> Result<()> {
+//!# fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 //! let unsigned = read_unsigned_wasm(); // Read a Wasm file into a byte vector
 //! let issuer = KeyPair::new_account(); // Create an Ed25519 key pair to sign the module
 //! let module = KeyPair::new_module(); // Create a key pair for the module itself
@@ -88,7 +88,7 @@ pub mod cli;
 
 pub mod prelude {
     //! Public re-exports of the most commonly used wascap types
-    pub use super::{Error, Result};
+    pub use super::{Error as WascapError, Result as WascapResult};
     pub use crate::caps;
     pub use crate::jwt::{
         validate_token, Account, Actor, Claims, ClaimsBuilder, Invocation, Operator,
