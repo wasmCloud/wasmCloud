@@ -70,7 +70,7 @@ impl LoggingProvider {
         Self::default()
     }
 
-    fn get_descriptor(&self) -> Result<Vec<u8>, Box<dyn Error>> {
+    fn get_descriptor(&self) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
         Ok(serialize(
             CapabilityDescriptor::builder()
                 .id(CAPABILITY_ID)
@@ -89,7 +89,11 @@ impl LoggingProvider {
         )?)
     }
 
-    fn write_log(&self, actor: &str, log_msg: WriteLogRequest) -> Result<Vec<u8>, Box<dyn Error>> {
+    fn write_log(
+        &self,
+        actor: &str,
+        log_msg: WriteLogRequest,
+    ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
         match log_msg.level {
             ERROR => error!("[{}] {}", actor, log_msg.body),
             WARN => warn!("[{}] {}", actor, log_msg.body),
@@ -105,7 +109,10 @@ impl LoggingProvider {
 impl CapabilityProvider for LoggingProvider {
     // Invoked by the runtime host to give this provider plugin the ability to communicate
     // with actors
-    fn configure_dispatch(&self, dispatcher: Box<dyn Dispatcher>) -> Result<(), Box<dyn Error>> {
+    fn configure_dispatch(
+        &self,
+        dispatcher: Box<dyn Dispatcher>,
+    ) -> Result<(), Box<dyn Error + Sync + Send>> {
         let mut lock = self.dispatcher.write().unwrap();
         *lock = dispatcher;
 
@@ -114,7 +121,12 @@ impl CapabilityProvider for LoggingProvider {
 
     // Invoked by host runtime to allow an actor to make use of the capability
     // All providers MUST handle the "configure" message, even if no work will be done
-    fn handle_call(&self, actor: &str, op: &str, msg: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+    fn handle_call(
+        &self,
+        actor: &str,
+        op: &str,
+        msg: &[u8],
+    ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
         match op {
             OP_BIND_ACTOR if actor == SYSTEM_ACTOR => Ok(vec![]),
             OP_REMOVE_ACTOR if actor == SYSTEM_ACTOR => Ok(vec![]),

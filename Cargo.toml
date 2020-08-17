@@ -1,6 +1,6 @@
 [package]
 name = "wascc-logging"
-version = "0.7.0"
+version = "0.8.0"
 authors = ["Kevin Hoffman <alothien@gmail.com>"]
 edition = "2018"
 homepage = "https://wascc.dev"
@@ -22,6 +22,6 @@ crate-type = ["cdylib", "rlib"]
 static_plugin = [] # Enable to statically compile this into a host
 
 [dependencies]
-wascc-codec = "0.7.0"
+wascc-codec = "0.8.0"
 log = "0.4.8"
 env_logger = "0.7.1"
