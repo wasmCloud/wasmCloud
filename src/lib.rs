@@ -75,21 +75,32 @@ impl NatsProvider {
         Self::default()
     }
 
-    fn publish_message(&self, actor: &str, msg: BrokerMessage) -> Result<Vec<u8>, Box<dyn Error>> {
+    fn publish_message(
+        &self,
+        actor: &str,
+        msg: BrokerMessage,
+    ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
         let lock = self.clients.read().unwrap();
         let client = lock.get(actor).unwrap();
 
         nats::publish(&client, msg)
     }
 
-    fn request(&self, actor: &str, msg: RequestMessage) -> Result<Vec<u8>, Box<dyn Error>> {
+    fn request(
+        &self,
+        actor: &str,
+        msg: RequestMessage,
+    ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
         let lock = self.clients.read().unwrap();
         let client = lock.get(actor).unwrap();
 
         nats::request(&client, msg)
     }
 
-    fn configure(&self, msg: CapabilityConfiguration) -> Result<Vec<u8>, Box<dyn Error>> {
+    fn configure(
+        &self,
+        msg: CapabilityConfiguration,
+    ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
         let d = self.dispatcher.clone();
         let c = nats::initialize_client(d, &msg.module, &msg.values)?;
 
@@ -97,13 +108,16 @@ impl NatsProvider {
         Ok(vec![])
     }
 
-    fn remove_actor(&self, msg: CapabilityConfiguration) -> Result<Vec<u8>, Box<dyn Error>> {
+    fn remove_actor(
+        &self,
+        msg: CapabilityConfiguration,
+    ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
         info!("Removing NATS client for actor {}", msg.module);
         self.clients.write().unwrap().remove(&msg.module);
         Ok(vec![])
     }
 
-    fn get_descriptor(&self) -> Result<Vec<u8>, Box<dyn Error>> {
+    fn get_descriptor(&self) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
         Ok(serialize(
             CapabilityDescriptor::builder()
                 .id(CAPABILITY_ID)
@@ -133,7 +147,10 @@ impl NatsProvider {
 
 impl CapabilityProvider for NatsProvider {
     /// Receives a dispatcher from the host runtime
-    fn configure_dispatch(&self, dispatcher: Box<dyn Dispatcher>) -> Result<(), Box<dyn Error>> {
+    fn configure_dispatch(
+        &self,
+        dispatcher: Box<dyn Dispatcher>,
+    ) -> Result<(), Box<dyn Error + Sync + Send>> {
         trace!("Dispatcher received.");
         let mut lock = self.dispatcher.write().unwrap();
         *lock = dispatcher;
@@ -142,7 +159,12 @@ impl CapabilityProvider for NatsProvider {
     }
 
     /// Handles an invocation received from the host runtime
-    fn handle_call(&self, actor: &str, op: &str, msg: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+    fn handle_call(
+        &self,
+        actor: &str,
+        op: &str,
+        msg: &[u8],
+    ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
         trace!("Received host call from {}, operation - {}", actor, op);
 
         match op {

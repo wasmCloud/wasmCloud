@@ -16,7 +16,10 @@ const ENV_NATS_CLIENT_JWT: &str = "CLIENT_JWT";
 const ENV_NATS_CLIENT_SEED: &str = "CLIENT_SEED";
 const ENV_NATS_QUEUEGROUP_NAME: &str = "QUEUEGROUP_NAME";
 
-pub(crate) fn publish(client: &Client, msg: BrokerMessage) -> Result<Vec<u8>, Box<dyn Error>> {
+pub(crate) fn publish(
+    client: &Client,
+    msg: BrokerMessage,
+) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
     trace!(
         "Publishing message on {} ({} bytes)",
         &msg.subject,
@@ -36,7 +39,10 @@ pub(crate) fn publish(client: &Client, msg: BrokerMessage) -> Result<Vec<u8>, Bo
     }
 }
 
-pub(crate) fn request(client: &Client, msg: RequestMessage) -> Result<Vec<u8>, Box<dyn Error>> {
+pub(crate) fn request(
+    client: &Client,
+    msg: RequestMessage,
+) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
     let reply = client.request(
         &msg.subject,
         &msg.body,
@@ -49,7 +55,7 @@ pub(crate) fn initialize_client(
     dispatcher: Arc<RwLock<Box<dyn Dispatcher>>>,
     actor: &str,
     values: &HashMap<String, String>,
-) -> Result<Client, Box<dyn Error>> {
+) -> Result<Client, Box<dyn Error + Sync + Send>> {
     let nats_url = match values.get(ENV_NATS_URL) {
         Some(v) => v,
         None => "nats://0.0.0.0:4222",
@@ -89,7 +95,7 @@ pub(crate) fn initialize_client(
 
 fn determine_authentication(
     values: &HashMap<String, String>,
-) -> Result<AuthenticationStyle, Box<dyn Error>> {
+) -> Result<AuthenticationStyle, Box<dyn Error + Sync + Send>> {
     match values.get(ENV_NATS_CLIENT_JWT) {
         Some(client_jwt) => match values.get(ENV_NATS_CLIENT_SEED) {
             Some(client_seed) => Ok(AuthenticationStyle::UserCredentials(
@@ -110,7 +116,7 @@ fn create_subscription(
     dispatcher: Arc<RwLock<Box<dyn Dispatcher>>>,
     client: &Client,
     sub: String,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<(), Box<dyn Error + Sync + Send>> {
     let actor = actor.to_string();
     let res = match values.get(ENV_NATS_QUEUEGROUP_NAME) {
         Some(ref qgroup) => {
