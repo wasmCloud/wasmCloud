@@ -113,7 +113,7 @@ impl HttpServerProvider {
     }
 
     /// Obtains the capability provider descriptor
-    fn get_descriptor(&self) -> Result<Vec<u8>, Box<dyn Error>> {
+    fn get_descriptor(&self) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
         Ok(serialize(
             CapabilityDescriptor::builder()
                 .id(CAPABILITY_ID)
@@ -146,7 +146,9 @@ impl Default for HttpServerProvider {
 
 impl CapabilityProvider for HttpServerProvider {
     /// Accepts the dispatcher provided by the waSCC host runtime
-    fn configure_dispatch(&self, dispatcher: Box<dyn Dispatcher>) -> Result<(), Box<dyn Error>> {
+    fn configure_dispatch(&self,
+                          dispatcher: Box<dyn Dispatcher>,
+    ) -> Result<(), Box<dyn Error + Sync + Send>> {
         info!("Dispatcher configured.");
 
         let mut lock = self.dispatcher.write().unwrap();
@@ -156,7 +158,12 @@ impl CapabilityProvider for HttpServerProvider {
     }
 
     /// Handles an invocation from the host runtime
-    fn handle_call(&self, actor: &str, op: &str, msg: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+    fn handle_call(
+        &self,
+        actor: &str,
+        op: &str,
+        msg: &[u8],
+    ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
         trace!("Handling operation `{}` from `{}`", op, actor);
 
         match op {

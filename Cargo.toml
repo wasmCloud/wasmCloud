@@ -1,13 +1,13 @@
 [package]
 name = "wascc-httpsrv"
-version = "0.7.0"
+version = "0.8.0"
 authors = ["Kevin Hoffman <alothien@gmail.com>"]
 edition = "2018"
 homepage = "https://wascc.dev"
-repository = "https://github.com/wascc/redis-provider"
+repository = "https://github.com/wascc/http-server-provider"
 description = "HTTP Server capability provider for the waSCC wasm host runtime"
 license = "Apache-2.0"
-documentation = "https://docs.rs/wascc-host"
+documentation = "https://docs.rs/wascc-httpsrv"
 readme = "README.md"
 keywords = ["webassembly", "wasm", "wasi", "wascc", "actix"]
 categories = ["wasm", "api-bindings"]
@@ -22,7 +22,7 @@ static_plugin = [] # Enable to statically compile this into a host
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-wascc-codec = "0.7.0"
+wascc-codec = "0.8.0"
 actix-web = "2.0.0"
 actix-rt = "1.1.1"
 actix-multipart = "0.2.0"
