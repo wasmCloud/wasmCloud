@@ -5,7 +5,7 @@ const ENV_REDIS_URL: &str = "URL";
 
 pub(crate) fn initialize_client(
     config: CapabilityConfiguration,
-) -> Result<redis::Client, Box<dyn Error>> {
+) -> Result<redis::Client, Box<dyn Error + Sync + Send>> {
     let redis_url = match config.values.get(ENV_REDIS_URL) {
         Some(v) => v,
         None => "redis://0.0.0.0:6379/",

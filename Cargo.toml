@@ -1,6 +1,6 @@
 [package]
 name = "wascc-redis"
-version = "0.7.0"
+version = "0.8.0"
 authors = ["Kevin Hoffman <alothien@gmail.com>"]
 edition = "2018"
 homepage = "https://wascc.dev"
@@ -29,5 +29,5 @@ crossbeam-channel = "0.4.2"
 crossbeam = "0.7.3"
 crossbeam-utils = "0.7.2"
 log = "0.4.8"
-wascc-codec = "0.7.0"
+wascc-codec = "0.8.0"
 redis = "0.16.0"
