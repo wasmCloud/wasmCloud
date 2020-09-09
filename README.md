@@ -5,7 +5,7 @@
 
 # File System Provider
 
-The **waSCC** File System provider is a capability provider for the `wascap:blobstore` protocol. This generic protocol allows for capability providers like Amazon S3, Azure blob storage, Google blob storage, and more. This is an implementation of this protocol that operates on top of a designated root directory.
+The **waSCC** File System provider is a capability provider for the `wascap:blobstore` protocol. This generic protocol can be used to support capability providers like Amazon S3, Azure blob storage, Google blob storage, and more. This crate is an implementation of the protocol that operates on top of a designated root directory and can be used interchangeably with the larger cloud blob providers.
 
 For this provider, the concept of a `container` is a directory beneath the root (specified via the `ROOT` configuration variable), while a `blob` corresponds to a file stored within one of the containers.
 

@@ -29,9 +29,9 @@ capability_provider!(FileSystemProvider, FileSystemProvider::new);
 
 const CAPABILITY_ID: &str = "wascc:blobstore";
 const SYSTEM_ACTOR: &str = "system";
-const FIRST_SEQ_NBR: u64 = 1;
+const FIRST_SEQ_NBR: u64 = 0;
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-const REVISION: u32 = 2; // Increment for each crates publish
+const REVISION: u32 = 3; // Increment for each crates publish
 
 pub struct FileSystemProvider {
     dispatcher: Arc<RwLock<Box<dyn Dispatcher>>>,
@@ -56,7 +56,10 @@ impl FileSystemProvider {
         Self::default()
     }
 
-    fn configure(&self, config: CapabilityConfiguration) -> Result<Vec<u8>, Box<dyn Error>> {
+    fn configure(
+        &self,
+        config: CapabilityConfiguration,
+    ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
         let mut lock = self.rootdir.write().unwrap();
         let root_dir = config.values["ROOT"].clone();
         info!("File System Blob Store Container Root: '{}'", root_dir);
@@ -69,7 +72,7 @@ impl FileSystemProvider {
         &self,
         _actor: &str,
         container: Container,
-    ) -> Result<Vec<u8>, Box<dyn Error>> {
+    ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
         let container = sanitize_container(&container);
         let cdir = self.container_to_path(&container);
         std::fs::create_dir_all(cdir)?;
@@ -80,14 +83,18 @@ impl FileSystemProvider {
         &self,
         _actor: &str,
         container: Container,
-    ) -> Result<Vec<u8>, Box<dyn Error>> {
+    ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
         let container = sanitize_container(&container);
         let cdir = self.container_to_path(&container);
         std::fs::remove_dir(cdir)?;
         Ok(vec![])
     }
 
-    fn start_upload(&self, _actor: &str, blob: FileChunk) -> Result<Vec<u8>, Box<dyn Error>> {
+    fn start_upload(
+        &self,
+        _actor: &str,
+        blob: FileChunk,
+    ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
         let blob = Blob {
             byte_size: 0,
             id: blob.id,
@@ -100,14 +107,22 @@ impl FileSystemProvider {
         Ok(vec![])
     }
 
-    fn remove_object(&self, _actor: &str, blob: Blob) -> Result<Vec<u8>, Box<dyn Error>> {
+    fn remove_object(
+        &self,
+        _actor: &str,
+        blob: Blob,
+    ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
         let blob = sanitize_blob(&blob);
         let bfile = self.blob_to_path(&blob);
         std::fs::remove_file(&bfile)?;
         Ok(vec![])
     }
 
-    fn get_object_info(&self, _actor: &str, blob: Blob) -> Result<Vec<u8>, Box<dyn Error>> {
+    fn get_object_info(
+        &self,
+        _actor: &str,
+        blob: Blob,
+    ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
         let blob = sanitize_blob(&blob);
         let bfile = self.blob_to_path(&blob);
         let blob: Blob = if bfile.exists() {
@@ -126,7 +141,11 @@ impl FileSystemProvider {
         Ok(serialize(&blob)?)
     }
 
-    fn list_objects(&self, _actor: &str, container: Container) -> Result<Vec<u8>, Box<dyn Error>> {
+    fn list_objects(
+        &self,
+        _actor: &str,
+        container: Container,
+    ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
         let container = sanitize_container(&container);
         let cpath = self.container_to_path(&container);
         let (blobs, _errors): (Vec<_>, Vec<_>) = std::fs::read_dir(&cpath)?
@@ -143,7 +162,11 @@ impl FileSystemProvider {
         Ok(serialize(&bloblist)?)
     }
 
-    fn upload_chunk(&self, actor: &str, chunk: FileChunk) -> Result<Vec<u8>, Box<dyn Error>> {
+    fn upload_chunk(
+        &self,
+        actor: &str,
+        chunk: FileChunk,
+    ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
         let mut upload_chunks = self.upload_chunks.write().unwrap();
         let key = actor.to_string() + &sanitize_id(&chunk.container) + &sanitize_id(&chunk.id);
         let total_chunk_count = chunk.total_bytes / chunk.chunk_size;
@@ -183,7 +206,7 @@ impl FileSystemProvider {
             *expected_sequence_no += 1;
         }
 
-        if *expected_sequence_no - 1 == total_chunk_count {
+        if *expected_sequence_no == total_chunk_count {
             upload_chunks.remove(&key);
         }
 
@@ -194,7 +217,7 @@ impl FileSystemProvider {
         &self,
         actor: &str,
         request: StreamRequest,
-    ) -> Result<Vec<u8>, Box<dyn Error>> {
+    ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
         info!("Received request to start download : {:?}", request);
         let actor = actor.to_string();
         let bpath = Path::join(
@@ -217,6 +240,7 @@ impl FileSystemProvider {
             total_size: *byte_size,
             chunk_size: chunk_size as _,
             total_chunks: *byte_size / chunk_size as u64,
+            context: request.context,
         };
         let iter = Chunks::new(bfile, chunk_size);
         let d = self.dispatcher.clone();
@@ -238,7 +262,7 @@ impl FileSystemProvider {
         Path::join(&self.rootdir.read().unwrap(), container.id.to_string())
     }
 
-    fn get_descriptor(&self) -> Result<Vec<u8>, Box<dyn Error>> {
+    fn get_descriptor(&self) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
         use OperationDirection::{ToActor, ToProvider};
         Ok(serialize(
             CapabilityDescriptor::builder()
@@ -328,6 +352,7 @@ fn dispatch_chunk(
             chunk_bytes: chunk,
             chunk_size: xfer.chunk_size,
             total_bytes: xfer.total_size,
+            context: xfer.context.clone(),
         };
         let buf = serialize(&fc).unwrap();
         let _ = d.read().unwrap().dispatch(actor, OP_RECEIVE_CHUNK, &buf);
@@ -337,7 +362,10 @@ fn dispatch_chunk(
 impl CapabilityProvider for FileSystemProvider {
     // Invoked by the runtime host to give this provider plugin the ability to communicate
     // with actors
-    fn configure_dispatch(&self, dispatcher: Box<dyn Dispatcher>) -> Result<(), Box<dyn Error>> {
+    fn configure_dispatch(
+        &self,
+        dispatcher: Box<dyn Dispatcher>,
+    ) -> Result<(), Box<dyn Error + Sync + Send>> {
         trace!("Dispatcher received.");
         let mut lock = self.dispatcher.write().unwrap();
         *lock = dispatcher;
@@ -347,7 +375,12 @@ impl CapabilityProvider for FileSystemProvider {
 
     // Invoked by host runtime to allow an actor to make use of the capability
     // All providers MUST handle the "configure" message, even if no work will be done
-    fn handle_call(&self, actor: &str, op: &str, msg: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+    fn handle_call(
+        &self,
+        actor: &str,
+        op: &str,
+        msg: &[u8],
+    ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
         trace!("Received host call from {}, operation - {}", actor, op);
 
         match op {
@@ -412,46 +445,50 @@ mod tests {
         let upload_dir = Path::join(&root_dir, &container);
         let bpath = create_dir(&upload_dir, &id);
 
-        let total_bytes = 5;
+        let total_bytes = 6;
         let chunk_size = 2;
 
         let chunk1 = FileChunk {
-            sequence_no: 1,
+            sequence_no: 0,
             container: container.clone(),
             id: id.clone(),
             total_bytes,
             chunk_size,
             chunk_bytes: vec![1, 1],
+            context: None,
         };
         let chunk2 = FileChunk {
-            sequence_no: 2,
+            sequence_no: 1,
             container: container.clone(),
             id: id.clone(),
             total_bytes,
             chunk_size,
             chunk_bytes: vec![2, 2],
+            context: None,
         };
         let chunk3 = FileChunk {
-            sequence_no: 3,
+            sequence_no: 2,
             container: container.clone(),
             id: id.clone(),
             total_bytes,
             chunk_size,
             chunk_bytes: vec![3],
+            context: None,
         };
-        let chunk3_dup = FileChunk {
+        let chunk4 = FileChunk {
             sequence_no: 3,
             container: container.clone(),
             id: id.clone(),
             total_bytes,
             chunk_size,
             chunk_bytes: vec![3],
+            context: None,
         };
 
-        assert!(fs.upload_chunk(actor, chunk3).is_ok());
-        assert!(fs.upload_chunk(actor, chunk2).is_ok());
         assert!(fs.upload_chunk(actor, chunk1).is_ok());
-        assert!(fs.upload_chunk(actor, chunk3_dup).is_ok());
+        assert!(fs.upload_chunk(actor, chunk2).is_ok());
+        assert!(fs.upload_chunk(actor, chunk3).is_ok());
+        assert!(fs.upload_chunk(actor, chunk4).is_ok());
 
         // check file contents
         let mut reader = BufReader::new(File::open(&bpath).unwrap());
