@@ -23,13 +23,13 @@ static_plugin = []
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-wascc-codec = "0.7.0"
-log = "0.4.8"
+wascc-codec = "0.8.1"
+log = "0.4.11"
 env_logger = "0.7.1"
-rusoto_core = { version="0.44.0", default_features=false, features=["rustls"] }
-rusoto_s3 = { version="0.44.0", default_features=false, features=["rustls"] }
-rusoto_credential = "0.44.0"
-tokio = { version = "0.2.21", features = ["macros", "rt-threaded"]}
+rusoto_core = { version="0.45.0", default_features=false, features=["rustls"] }
+rusoto_s3 = { version="0.45.0", default_features=false, features=["rustls"] }
+rusoto_credential = "0.45.0"
+tokio = { version = "0.2.22", features = ["macros", "rt-threaded"]}
 futures = "0.3"
 bytes = "0.5"
 

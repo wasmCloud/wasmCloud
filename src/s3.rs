@@ -15,7 +15,7 @@ use std::error::Error;
 
 pub(crate) fn client_for_config(
     config: &CapabilityConfiguration,
-) -> std::result::Result<S3Client, Box<dyn std::error::Error>> {
+) -> std::result::Result<S3Client, Box<dyn std::error::Error + Sync + Send>> {
     let region = if config.values.contains_key("REGION") {
         Region::Custom {
             name: config.values["REGION"].clone(),
@@ -56,7 +56,10 @@ pub(crate) fn client_for_config(
     Ok(client)
 }
 
-pub(crate) async fn create_bucket(client: &S3Client, name: &str) -> Result<(), Box<dyn Error>> {
+pub(crate) async fn create_bucket(
+    client: &S3Client,
+    name: &str,
+) -> Result<(), Box<dyn Error + Sync + Send>> {
     let create_bucket_req = CreateBucketRequest {
         bucket: name.to_string(),
         ..Default::default()
@@ -65,7 +68,10 @@ pub(crate) async fn create_bucket(client: &S3Client, name: &str) -> Result<(), B
     Ok(())
 }
 
-pub(crate) async fn remove_bucket(client: &S3Client, bucket: &str) -> Result<(), Box<dyn Error>> {
+pub(crate) async fn remove_bucket(
+    client: &S3Client,
+    bucket: &str,
+) -> Result<(), Box<dyn Error + Sync + Send>> {
     let delete_bucket_req = DeleteBucketRequest {
         bucket: bucket.to_owned(),
         ..Default::default()
@@ -80,7 +86,7 @@ pub(crate) async fn remove_object(
     client: &S3Client,
     bucket: &str,
     id: &str,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<(), Box<dyn Error + Sync + Send>> {
     let delete_object_req = DeleteObjectRequest {
         bucket: bucket.to_string(),
         key: id.to_string(),
@@ -98,7 +104,7 @@ pub(crate) async fn get_blob_range(
     id: &str,
     start: u64,
     end: u64,
-) -> Result<Vec<u8>, Box<dyn Error>> {
+) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
     let get_req = GetObjectRequest {
         bucket: bucket.to_owned(),
         key: id.to_owned(),
@@ -119,7 +125,7 @@ pub(crate) async fn get_blob_range(
 pub(crate) async fn complete_upload(
     client: &S3Client,
     upload: &FileUpload,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<(), Box<dyn Error + Sync + Send>> {
     let bytes = upload
         .chunks
         .iter()
@@ -138,7 +144,7 @@ pub(crate) async fn complete_upload(
 pub(crate) async fn list_objects(
     client: &S3Client,
     bucket: &str,
-) -> Result<Option<Vec<Object>>, Box<dyn Error>> {
+) -> Result<Option<Vec<Object>>, Box<dyn Error + Sync + Send>> {
     let list_obj_req = ListObjectsV2Request {
         bucket: bucket.to_owned(),
         ..Default::default()
@@ -152,7 +158,7 @@ pub(crate) async fn head_object(
     client: &S3Client,
     bucket: &str,
     key: &str,
-) -> Result<HeadObjectOutput, Box<dyn Error>> {
+) -> Result<HeadObjectOutput, Box<dyn Error + Sync + Send>> {
     let head_req = HeadObjectRequest {
         bucket: bucket.to_owned(),
         key: key.to_owned(),

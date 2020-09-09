@@ -77,7 +77,10 @@ impl S3Provider {
         Self::default()
     }
 
-    fn configure(&self, config: CapabilityConfiguration) -> Result<Vec<u8>, Box<dyn Error>> {
+    fn configure(
+        &self,
+        config: CapabilityConfiguration,
+    ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
         self.clients.write().unwrap().insert(
             config.module.clone(),
             Arc::new(s3::client_for_config(&config)?),
@@ -85,7 +88,7 @@ impl S3Provider {
 
         Ok(vec![])
     }
-    fn deconfigure(&self, actor: &str) -> Result<Vec<u8>, Box<dyn Error>> {
+    fn deconfigure(&self, actor: &str) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
         self.clients.write().unwrap().remove(actor);
 
         Ok(vec![])
@@ -95,7 +98,7 @@ impl S3Provider {
         &self,
         actor: &str,
         container: Container,
-    ) -> Result<Vec<u8>, Box<dyn Error>> {
+    ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
         let mut rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(s3::create_bucket(
             &self.clients.read().unwrap()[actor],
@@ -109,7 +112,7 @@ impl S3Provider {
         &self,
         actor: &str,
         container: Container,
-    ) -> Result<Vec<u8>, Box<dyn Error>> {
+    ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
         let mut rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(s3::remove_bucket(
             &self.clients.read().unwrap()[actor],
@@ -119,7 +122,11 @@ impl S3Provider {
         Ok(vec![])
     }
 
-    fn upload_chunk(&self, actor: &str, chunk: FileChunk) -> Result<Vec<u8>, Box<dyn Error>> {
+    fn upload_chunk(
+        &self,
+        actor: &str,
+        chunk: FileChunk,
+    ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
         let key = upload_key(&chunk.container, &chunk.id, &actor);
         self.uploads
             .write()
@@ -140,7 +147,11 @@ impl S3Provider {
         Ok(vec![])
     }
 
-    fn start_upload(&self, actor: &str, chunk: FileChunk) -> Result<Vec<u8>, Box<dyn Error>> {
+    fn start_upload(
+        &self,
+        actor: &str,
+        chunk: FileChunk,
+    ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
         let key = upload_key(&chunk.container, &chunk.id, &actor);
 
         let upload = FileUpload {
@@ -156,7 +167,11 @@ impl S3Provider {
         Ok(vec![])
     }
 
-    fn remove_object(&self, actor: &str, blob: Blob) -> Result<Vec<u8>, Box<dyn Error>> {
+    fn remove_object(
+        &self,
+        actor: &str,
+        blob: Blob,
+    ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
         let mut rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(s3::remove_object(
             &self.clients.read().unwrap()[actor],
@@ -167,7 +182,11 @@ impl S3Provider {
         Ok(vec![])
     }
 
-    fn get_object_info(&self, actor: &str, blob: Blob) -> Result<Vec<u8>, Box<dyn Error>> {
+    fn get_object_info(
+        &self,
+        actor: &str,
+        blob: Blob,
+    ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
         let mut rt = tokio::runtime::Runtime::new().unwrap();
         let info = rt.block_on(s3::head_object(
             &self.clients.read().unwrap()[actor],
@@ -192,7 +211,11 @@ impl S3Provider {
         Ok(serialize(&blob)?)
     }
 
-    fn list_objects(&self, actor: &str, container: Container) -> Result<Vec<u8>, Box<dyn Error>> {
+    fn list_objects(
+        &self,
+        actor: &str,
+        container: Container,
+    ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
         let mut rt = tokio::runtime::Runtime::new().unwrap();
         let objects = rt.block_on(s3::list_objects(
             &self.clients.read().unwrap()[actor],
@@ -217,7 +240,7 @@ impl S3Provider {
         &self,
         actor: &str,
         request: StreamRequest,
-    ) -> Result<Vec<u8>, Box<dyn Error>> {
+    ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
         let actor = actor.to_string();
 
         let d = self.dispatcher.clone();
@@ -225,6 +248,7 @@ impl S3Provider {
         let container = request.container.to_string();
         let chunk_size = request.chunk_size;
         let id = request.id.to_string();
+        let ctx = request.context.clone();
 
         let byte_size = {
             let mut rt = tokio::runtime::Runtime::new().unwrap();
@@ -249,6 +273,7 @@ impl S3Provider {
                         chunk_size,
                         byte_size,
                         actor.clone(),
+                        ctx.clone(),
                     )
                     .await;
                 }
@@ -258,7 +283,7 @@ impl S3Provider {
         Ok(vec![])
     }
 
-    fn get_descriptor(&self) -> Result<Vec<u8>, Box<dyn Error>> {
+    fn get_descriptor(&self) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
         use OperationDirection::{ToActor, ToProvider};
         Ok(serialize(
             CapabilityDescriptor::builder()
@@ -323,6 +348,7 @@ async fn dispatch_chunk(
     chunk_size: u64,
     byte_size: u64,
     actor: String,
+    context: Option<String>,
 ) {
     // range header spec: https://www.w3.org/Protocols/rfc2616/rfc2616-sec14.html#sec14.35
     // tl;dr - ranges are _inclusive_, but start at 0.
@@ -344,6 +370,7 @@ async fn dispatch_chunk(
         chunk_size,
         total_bytes: byte_size,
         chunk_bytes: bytes,
+        context,
     };
     match dispatcher
         .read()
@@ -358,7 +385,10 @@ async fn dispatch_chunk(
 impl CapabilityProvider for S3Provider {
     // Invoked by the runtime host to give this provider plugin the ability to communicate
     // with actors
-    fn configure_dispatch(&self, dispatcher: Box<dyn Dispatcher>) -> Result<(), Box<dyn Error>> {
+    fn configure_dispatch(
+        &self,
+        dispatcher: Box<dyn Dispatcher>,
+    ) -> Result<(), Box<dyn Error + Sync + Send>> {
         trace!("Dispatcher received.");
         let mut lock = self.dispatcher.write().unwrap();
         *lock = dispatcher;
@@ -368,7 +398,12 @@ impl CapabilityProvider for S3Provider {
 
     // Invoked by host runtime to allow an actor to make use of the capability
     // All providers MUST handle the "configure" message, even if no work will be done
-    fn handle_call(&self, actor: &str, op: &str, msg: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+    fn handle_call(
+        &self,
+        actor: &str,
+        op: &str,
+        msg: &[u8],
+    ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
         trace!("Received host call from {}, operation - {}", actor, op);
 
         match op {
@@ -464,6 +499,7 @@ mod test {
                 id: "updowntestfile".to_string(),
                 total_bytes: data.len() as u64,
                 sequence_no: idx as u64 + 1,
+                context: None,
             })
             .collect();
 
@@ -474,6 +510,7 @@ mod test {
             id: "updowntestfile".to_string(),
             total_bytes: data.len() as u64,
             sequence_no: 0,
+            context: None,
         };
 
         let _ = provider
@@ -493,6 +530,7 @@ mod test {
             chunk_size: 100,
             container: "updownbucket".to_string(),
             id: "updowntestfile".to_string(),
+            context: Some("test1".to_string()),
         };
         let _ = provider
             .handle_call(
@@ -535,6 +573,7 @@ mod test {
                 id: "testfile".to_string(),
                 total_bytes: data.len() as u64,
                 sequence_no: idx as u64 + 1,
+                context: None,
             })
             .collect();
 
@@ -545,6 +584,7 @@ mod test {
             id: "testfile".to_string(),
             total_bytes: data.len() as u64,
             sequence_no: 0,
+            context: None,
         };
 
         let _ = provider.handle_call(
@@ -628,7 +668,12 @@ mod test {
     }
 
     impl Dispatcher for TestDispatcher {
-        fn dispatch(&self, _actor: &str, _op: &str, msg: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+        fn dispatch(
+            &self,
+            _actor: &str,
+            _op: &str,
+            msg: &[u8],
+        ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
             let fc: FileChunk = deserialize(msg)?;
             self.chunks.write().unwrap().push(fc);
             if self.chunks.read().unwrap().len() == self.expected_chunks as usize {
