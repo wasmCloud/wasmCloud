@@ -1,6 +1,6 @@
 [package]
 name = "wascc-httpsrv"
-version = "0.8.0"
+version = "0.8.1"
 authors = ["Kevin Hoffman <alothien@gmail.com>"]
 edition = "2018"
 homepage = "https://wascc.dev"
