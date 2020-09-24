@@ -22,7 +22,7 @@ extern crate actix_rt;
 
 use actix_web::dev::Body;
 use actix_web::dev::Server;
-use actix_web::http::StatusCode;
+use actix_web::http::{StatusCode, HeaderName, HeaderValue};
 use actix_web::web::Bytes;
 use actix_web::{middleware, web, App, HttpRequest, HttpResponse, HttpServer};
 use codec::capabilities::{
@@ -205,10 +205,20 @@ async fn request_handler(
     match resp {
         Ok(r) => {
             let r = deserialize::<codec::http::Response>(r.as_slice()).unwrap();
-            HttpResponse::with_body(
+            let mut response = HttpResponse::with_body(
                 StatusCode::from_u16(r.status_code as _).unwrap(),
                 Body::from_slice(&r.body),
-            )
+            );
+            if !r.header.is_empty() {
+                let headers = response.head_mut();
+                r.header.iter().for_each(|(key, val)|
+                    headers.headers.insert(
+                        HeaderName::from_bytes(key.as_bytes()).unwrap(),
+                        HeaderValue::from_str(val).unwrap())
+                );
+            }
+
+            response
         }
         Err(e) => {
             error!("Guest failed to handle HTTP request: {}", e);
