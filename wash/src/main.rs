@@ -10,7 +10,7 @@ const ASCII: &str = "
    \\ \\____________\\ \\_______\\ \\_______\\
     \\|____________|\\|_______|\\|_______|
 
-waSCC CLI utilities
+A single CLI to handle all of your waSCC tooling needs
 ";
 
 #[derive(Debug, Clone, StructOpt)]
@@ -18,21 +18,57 @@ waSCC CLI utilities
 struct Cli {
     #[structopt(flatten)]
     command: CliCommand,
-    
 }
 
 #[derive(Debug, Clone, StructOpt)]
 enum CliCommand {
-    /// nkeys
-    #[structopt(name = "nk")]
-    Nk(NkCommand),
-
-    //TODO: Add wascap, gantry, and latticectl options
-
+    /// caps
+    #[structopt(name = "caps")]
+    Caps(CapsCommand),
+    /// gantry
+    #[structopt(name = "gantry")]
+    Gantry(GantryCommand),
+    /// keys
+    #[structopt(name = "keys")]
+    Keys(KeysCommand),
+    /// lattice
+    #[structopt(name = "lattice")]
+    Lattice(LatticeCommand),
+    /// sign
+    #[structopt(name = "sign")]
+    Sign(SignCommand),
 }
 
 #[derive(Debug, Clone, StructOpt)]
-struct NkCommand {
+struct CapsCommand {
+    /// Sample path
+    #[structopt(short = "p", long = "path")]
+    path: PathBuf,
+}
+
+#[derive(Debug, Clone, StructOpt)]
+struct GantryCommand {
+    /// Sample path
+    #[structopt(short = "p", long = "path")]
+    path: PathBuf,
+}
+
+#[derive(Debug, Clone, StructOpt)]
+struct KeysCommand {
+    /// Sample path
+    #[structopt(short = "p", long = "path")]
+    path: PathBuf,
+}
+
+#[derive(Debug, Clone, StructOpt)]
+struct LatticeCommand {
+    /// Sample path
+    #[structopt(short = "p", long = "path")]
+    path: PathBuf,
+}
+
+#[derive(Debug, Clone, StructOpt)]
+struct SignCommand {
     /// Sample path
     #[structopt(short = "p", long = "path")]
     path: PathBuf,
@@ -42,7 +78,3 @@ fn main() {
     let cli = Cli::from_args();
     println!("{:#?}", cli);
 }
-                                       
-                                       
-                                       
-
