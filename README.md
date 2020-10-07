@@ -61,7 +61,7 @@ FLAGS:
     -h, --help    Prints help information
 
 ARGS:
-    <keytype>    The type of key pair to generate. May be Account, User, Module, Server, Operator, Cluster
+    <keytype>    The type of key pair to generate. May be Account, User, Module (Actor), Server, Operator, Cluster, Service (Capability Provider)
 ```
 
 ### lattice
