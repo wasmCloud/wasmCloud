@@ -1,18 +1,15 @@
 [package]
 name = "wascap"
-version = "0.5.0"
+version = "0.5.1"
 authors = ["Kevin Hoffman <alothien@gmail.com>"]
 edition = "2018"
-description = "Extracting, embedding, and validating WebAssembly Standard Capabilities tokens"
+description = "Wascap - WebAssembly Standard Capabilities. Library for extracting, embedding, and validating claims"
 license = "Apache-2.0"
 homepage = "https://github.com/wascc"
 documentation = "https://docs.rs/wascap"
 readme = "README.md"
 keywords = ["jwt", "crypto", "ed25519", "security", "webassembly"]
 categories = ["cryptography", "authentication", "wasm"]
-
-[badges]
-travis-ci = { repository = "wascc/wascap", branch = "master" }
 
 [features]
 cli = ["quicli", "structopt", "term-table", "exitfailure"]
@@ -24,18 +21,18 @@ required-features = ["cli"]
 [dependencies]
 log = "0.4.11"
 env_logger = "0.7.1"
-serde_derive = "1"
-serde = "1"
-nkeys = "0.0.9"
-base64 = "0.12.3"
-serde_json = "1.0.56"
+serde_derive = "1.0.116"
+serde = "1.0.116"
+nkeys = "0.0.11"
+base64 = "0.13.0"
+serde_json = "1.0.58"
 nuid = "0.2.1"
-parity-wasm = "0.41.0"
+parity-wasm = "0.42.1"
 lazy_static = "1.4.0"
 ring = "0.16.15"
-data-encoding = "2.2.1"
-chrono-humanize = "0.0.11"
-chrono = "0.4.13"
+data-encoding = "2.3.0"
+chrono-humanize = "0.1.1"
+chrono = "0.4.19"
 
 quicli = { version = "0.4", optional = true }
 structopt = { version = "0.3.15", optional = true }

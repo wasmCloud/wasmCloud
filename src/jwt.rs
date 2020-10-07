@@ -1,18 +1,5 @@
-// Copyright 2015-2018 Capital One Services, LLC
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 //! Claims encoding, decoding, and validation for JSON Web Tokens (JWT)
+
 use crate::errors;
 use crate::errors::ErrorKind;
 use crate::Result;
@@ -22,6 +9,7 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::{from_str, to_string};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::collections::HashMap;
 
 const HEADER_TYPE: &str = "jwt";
 const HEADER_ALGORITHM: &str = "Ed25519";
@@ -82,6 +70,26 @@ pub struct Actor {
     pub provider: bool,
 }
 
+/// The claims metadata corresponding to a capability provider
+#[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Default)]
+pub struct CapabilityProvider {
+    /// A descriptive name for the capability provider
+    pub name: Option<String>,
+    /// The capability contract ID this provider supports
+    pub capid: String,
+    /// A human-readable string identifying the vendor of this provider (e.g. Redis or Cassandra or NATS etc)
+    pub vendor: String,
+    /// Indicates a monotonically increasing revision number.  Optional.
+    #[serde(rename = "rev", skip_serializing_if = "Option::is_none")]
+    pub rev: Option<i32>,
+    /// Indicates a human-friendly version string. Optional.
+    #[serde(rename = "ver", skip_serializing_if = "Option::is_none")]
+    pub ver: Option<String>,
+    /// The file hashes that correspond to the achitecture-OS target triples for this provider.
+    pub target_hashes: HashMap<String, String>
+}
+
+/// The claims metadata corresponding to an account
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Default)]
 pub struct Account {
     /// A descriptive name for this account
@@ -91,6 +99,7 @@ pub struct Account {
     pub valid_signers: Option<Vec<String>>,
 }
 
+/// The claims metadata corresponding to an operator
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Default)]
 pub struct Operator {
     /// A descriptive name for the operator
@@ -212,12 +221,19 @@ impl WascapEntity for Actor {
     }
 }
 
+impl WascapEntity for CapabilityProvider {
+    fn name(&self) -> String {
+        self.name.as_ref().unwrap_or(&"Unnamed Provider".to_string())
+            .to_string()
+    }
+}
+
 impl WascapEntity for Account {
     fn name(&self) -> String {
         self.name
             .as_ref()
             .unwrap_or(&"Anonymous".to_string())
-            .clone()
+            .to_string()
     }
 }
 
@@ -226,7 +242,7 @@ impl WascapEntity for Operator {
         self.name
             .as_ref()
             .unwrap_or(&"Anonymous".to_string())
-            .clone()
+            .to_string()
     }
 }
 
@@ -265,6 +281,51 @@ impl Claims<Account> {
             issuer,
             subject,
             not_before,
+        }
+    }
+}
+
+impl Claims<CapabilityProvider> {
+    pub fn new(
+        name: String,
+        issuer: String,
+        subject: String,
+        capid: String,
+        vendor: String,
+        rev: Option<i32>,
+        ver: Option<String>,
+        hashes: HashMap<String, String>
+    ) -> Claims<CapabilityProvider> {
+        Self::with_dates(name, issuer, subject, capid, vendor, rev, ver, hashes, None, None)
+    }
+
+    pub fn with_dates(
+        name: String,
+        issuer: String,
+        subject: String,
+        capid: String,
+        vendor: String,
+        rev: Option<i32>,
+        ver: Option<String>,
+        hashes: HashMap<String, String>,
+        not_before: Option<u64>,
+        expires: Option<u64>,
+    ) -> Claims<CapabilityProvider> {
+        Claims {
+            metadata: Some(CapabilityProvider {
+                name: Some(name),
+                capid,
+                rev,
+                ver,
+                target_hashes: hashes,
+                vendor
+            }),
+            expires,
+            id: nuid::next(),
+            issued_at: since_the_epoch().as_secs(),
+            issuer,
+            subject,
+            not_before
         }
     }
 }
@@ -416,7 +477,7 @@ where
         self
     }
 
-    /// Sets the appropriate metadata for this claims type (e.g. `Actor`, `Operator`, or `Account`)
+    /// Sets the appropriate metadata for this claims type (e.g. `Actor`, `Operator`, `CapabilityProvider` or `Account`)
     pub fn with_metadata(&mut self, metadata: T) -> &mut Self {
         self.claims.metadata = Some(metadata);
         self
@@ -432,6 +493,7 @@ where
     }
 }
 
+/// Validates a signed JWT. This will check the signature, expiration time, and not-valid-before time
 pub fn validate_token<T>(input: &str) -> Result<TokenValidation>
 where
     T: Serialize + DeserializeOwned + WascapEntity,
@@ -569,6 +631,26 @@ impl Actor {
     }
 }
 
+impl CapabilityProvider {
+    pub fn new(
+        name: String,
+        capid: String,
+        vendor: String,
+        rev: Option<i32>,
+        ver: Option<String>,
+        hashes: HashMap<String, String>
+    ) -> CapabilityProvider {
+        CapabilityProvider {
+            target_hashes: hashes,
+            name: Some(name),
+            capid,
+            vendor,
+            rev,
+            ver
+        }
+    }
+}
+
 impl Account {
     pub fn new(name: String, additional_keys: Vec<String>) -> Account {
         Account {
@@ -601,8 +683,9 @@ impl Invocation {
 mod test {
     use super::{Account, Actor, Claims, ErrorKind, Invocation, KeyPair, Operator};
     use crate::caps::{KEY_VALUE, LOGGING, MESSAGING};
-    use crate::jwt::since_the_epoch;
+    use crate::jwt::{since_the_epoch, ClaimsBuilder, CapabilityProvider};
     use crate::jwt::validate_token;
+    use std::collections::HashMap;
 
     #[test]
     fn full_validation_nbf() {
@@ -805,6 +888,34 @@ mod test {
         assert!(validate_token::<Actor>(&encoded).is_ok());
 
         assert_eq!(claims, decoded);
+    }
+
+    #[test]
+    fn provider_round_trip() {
+        let account = KeyPair::new_account();
+        let provider = KeyPair::new_service();
+
+        let mut hashes = HashMap::new();
+        hashes.insert("aarch64-linux".to_string(), "abc12345".to_string());
+        let claims = ClaimsBuilder::new()
+            .subject(&provider.public_key())
+            .issuer(&account.public_key())
+            .with_metadata(CapabilityProvider::new(
+                "Test Provider".to_string(),
+                "wascc:testing".to_string(),
+                "waSCC Internal".to_string(),
+                Some(1),
+                Some("v0.0.1".to_string()),
+                hashes,
+            )).build();
+
+        let encoded = claims.encode(&account).unwrap();
+        let decoded: Claims<CapabilityProvider> = Claims::decode(&encoded).unwrap();
+        assert!(validate_token::<CapabilityProvider>(&encoded).is_ok());
+        assert_eq!(decoded.issuer, account.public_key());
+        assert_eq!(decoded.subject, provider.public_key());
+        assert_eq!(decoded.metadata.as_ref().unwrap().vendor, "waSCC Internal");
+        assert_eq!(decoded.metadata.as_ref().unwrap().capid, "wascc:testing");
     }
 
     #[test]
