@@ -1,20 +1,19 @@
 use std::path::PathBuf;
 use structopt::StructOpt;
 
+/// This renders appropriately with escape characters
 const ASCII: &str = "
- ___       __   ________  ________     
-|\\  \\     |\\  \\|\\   ____\\|\\   ____\\    
-\\ \\  \\    \\ \\  \\ \\  \\___|\\ \\  \\___|    
- \\ \\  \\  __\\ \\  \\ \\  \\    \\ \\  \\       
-  \\ \\  \\|\\__\\_\\  \\ \\  \\____\\ \\  \\____  
-   \\ \\____________\\ \\_______\\ \\_______\\
-    \\|____________|\\|_______|\\|_______|
+               __    ___   ___   __ _          _ _ 
+__      ____ _/ _\\  / __\\ / __\\ / _\\ |__   ___| | |
+\\ \\ /\\ / / _` \\ \\  / /   / /    \\ \\| '_ \\ / _ \\ | |
+ \\ V  V / (_| |\\ \\/ /___/ /___  _\\ \\ | | |  __/ | |
+  \\_/\\_/ \\__,_\\__/\\____/\\____/  \\__/_| |_|\\___|_|_|
 
 A single CLI to handle all of your waSCC tooling needs
 ";
 
 #[derive(Debug, Clone, StructOpt)]
-#[structopt(name = "wcc", about = ASCII)]
+#[structopt(name = "wash", about = ASCII)]
 struct Cli {
     #[structopt(flatten)]
     command: CliCommand,
@@ -22,32 +21,22 @@ struct Cli {
 
 #[derive(Debug, Clone, StructOpt)]
 enum CliCommand {
-    /// caps
-    #[structopt(name = "caps")]
-    Caps(CapsCommand),
-    /// gantry
-    #[structopt(name = "gantry")]
-    Gantry(GantryCommand),
+    /// claims
+    #[structopt(name = "claims")]
+    Claims(ClaimsCommand),
     /// keys
     #[structopt(name = "keys")]
     Keys(KeysCommand),
+    /// reg
+    #[structopt(name = "reg")]
+    Reg(RegCommand),
     /// lattice
     #[structopt(name = "lattice")]
     Lattice(LatticeCommand),
-    /// sign
-    #[structopt(name = "sign")]
-    Sign(SignCommand),
 }
 
 #[derive(Debug, Clone, StructOpt)]
-struct CapsCommand {
-    /// Sample path
-    #[structopt(short = "p", long = "path")]
-    path: PathBuf,
-}
-
-#[derive(Debug, Clone, StructOpt)]
-struct GantryCommand {
+struct ClaimsCommand {
     /// Sample path
     #[structopt(short = "p", long = "path")]
     path: PathBuf,
@@ -68,7 +57,7 @@ struct LatticeCommand {
 }
 
 #[derive(Debug, Clone, StructOpt)]
-struct SignCommand {
+struct RegCommand {
     /// Sample path
     #[structopt(short = "p", long = "path")]
     path: PathBuf,

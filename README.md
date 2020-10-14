@@ -1,9 +1,9 @@
-# wcc
-waSCC Controller - A single CLI to handle all of your waSCC tooling needs
+# wash
+waSCC Shell - A single CLI to handle all of your waSCC tooling needs
 
-## Using wcc
+## Using wash
 ```
-wcc <subcommand> [args]
+wash <subcommand> [args]
 ```
 
 ## Subcommands
@@ -12,18 +12,7 @@ wcc <subcommand> [args]
 
 ```
 USAGE:
-    wcc claims token <keytype>
-
-FLAGS:
-    -h, --help    Prints help information
-
-ARGS:
-    <tokentype>    The type of jwt to generate. May be Account, Actor, or Operator.
-```
-
-```
-USAGE:
-    wcc claims inspect [FLAGS] <file>
+    wash claims inspect [FLAGS] <file>
 
 FLAGS:
     -h, --help    Prints help information
@@ -33,29 +22,56 @@ ARGS:
     <file>    The WASM file to inspect
 ```
 
-### gantry
+```
+USAGE:
+    wash claims sign [FLAGS] [OPTIONS] <module> <output> --name <name>
+
+FLAGS:
+    -f, --blob_store     Enable access to the blob store capability
+    -e, --events         Enable access to an append-only event stream provider
+    -z, --extras         Enable access to the extras functionality (random nos, guids, etc)
+        --help           Prints help information
+    -h, --http_client    Enable the HTTP client standard capability
+    -s, --http_server    Enable the HTTP server standard capability
+    -k, --keyvalue       Enable the Key/Value Store standard capability
+    -l, --logging        Enable access to logging capability
+    -g, --msg            Enable the Message broker standard capability
+    -p, --prov           Indicates whether the signed module is a capability provider instead of an actor (the default is actor)
+
+OPTIONS:
+    -c, --cap <capabilities>...         Add custom capabilities
+    -x, --expires <expires-in-days>     Indicates the token expires in the given amount of days. If this option is left
+                                        off, the token will never expire
+    -i, --issuer <issuer-key-path>      Issuer seed key path (usually a .nk file). If this option is left off, `wash` will attempt to locate an account key at `$HOME/.wash/keys/<module>_account.nk`, and if it is not found then an issuer key will be generated and placed in `$HOME/.wash/keys/<module>_account.nk`. You can also override this directory by setting the `WCC_HOME` environment variable.
+    -n, --name <name>                   A human-readable, descriptive name for the token
+    -b, --nbf <not-before-days>         Period in days that must elapse before this token is valid. If this option is
+                                        left off, the token will be valid immediately
+    -r, --rev <rev>                     Revision number
+    -u, --subject <subject-key-path>    Subject seed key path (usually a .nk file). If this option is left off, `wash` will attempt to locate a module key at `$HOME/.wash/keys/<module>_module.nk`, and if it is not found then a module key will be generated and placed in `$HOME/.wash/keys/<module>_module.nk`. You can also override this directory by setting the `WCC_HOME` environment variable.
+    -t, --tag <tags>...                 A list of arbitrary tags to be embedded in the token
+    -v, --ver <ver>                     Human-readable version string
+
+ARGS:
+    <module>    WASM to read
+    <output>    Target output file. Defaults to `<module_location>/<module>_signed.wasm`
+```
 
 ```
 USAGE:
-    wcc gantry <SUBCOMMAND>
+    wash claims token <tokentype>
 
 FLAGS:
-    -h, --help       Prints help information
-    -V, --version    Prints version information
+    -h, --help    Prints help information
 
-SUBCOMMANDS:
-    download    Downloads an actor module from the registry
-    get         Query the Gantry registry
-    help        Prints this message or the help of the given subcommand(s)
-    put         Puts a token in the registry
-    upload      Uploads an actor module to the registry
+ARGS:
+    <tokentype>    The type of jwt to generate. May be Account, Actor, or Operator.
 ```
 
 ### keys
 
 ```
 USAGE:
-    wcc keys gen <keytype>
+    wash keys gen <keytype>
 
 FLAGS:
     -h, --help    Prints help information
@@ -64,11 +80,36 @@ ARGS:
     <keytype>    The type of key pair to generate. May be Account, User, Module (Actor), Server, Operator, Cluster, Service (Capability Provider)
 ```
 
+```
+USAGE:
+    wash keys get [OPTIONS] <keyname>
+
+FLAGS:
+    -h, --help      Prints help information
+
+OPTIONS:
+    -d, --directory <keysdirectory>     The directory where keys are stored for listing. Defaults to `$HOME/.wash/keys`, and can also be overwritten by setting the WCC_HOME environment variable.
+
+ARGS:
+    <keyname>   The name of the key to output
+```
+
+```
+USAGE:
+    wash keys list [OPTIONS]
+
+FLAGS:
+    -h, --help          Prints help information
+
+OPTIONS:
+    -d, --directory <keysdirectory>     The directory where keys are stored for listing. Defaults to `$HOME/.wash/keys`, and can also be overwritten by setting the WCC_HOME environment variable.
+```
+
 ### lattice
 
 ```
 USAGE:
-    wcc lattice [FLAGS] [OPTIONS] <SUBCOMMAND>
+    wash lattice [FLAGS] [OPTIONS] <SUBCOMMAND>
 
 FLAGS:
     -h, --help       Prints help information
@@ -91,39 +132,35 @@ SUBCOMMANDS:
     watch    Watch events on the lattice
 ```
 
-### sign
+### reg
 
 ```
 USAGE:
-    wcc sign [FLAGS] [OPTIONS] <source> <output> --issuer <issuer-key-path> --name <name> --subject <subject-key-path>
+    wash reg <SUBCOMMAND> <artifact> [FLAGS]
 
 FLAGS:
-    -f, --blob_store     Enable access to the blob store capability
-    -e, --events         Enable access to an append-only event stream provider
-    -z, --extras         Enable access to the extras functionality (random nos, guids, etc)
-        --help           Prints help information
-    -h, --http_client    Enable the HTTP client standard capability
-    -s, --http_server    Enable the HTTP server standard capability
-    -k, --keyvalue       Enable the Key/Value Store standard capability
-    -l, --logging        Enable access to logging capability
-    -g, --msg            Enable the Message broker standard capability
-    -p, --prov           Indicates whether the signed module is a capability provider instead of an actor (the default
-                         is actor)
+    -h, --help       Prints help information
+    -V, --version    Prints version information
 
-OPTIONS:
-    -c, --cap <capabilities>...         Add custom capabilities
-    -x, --expires <expires-in-days>     Indicates the token expires in the given amount of days. If this option is left
-                                        off, the token will never expire
-    -i, --issuer <issuer-key-path>      Issuer seed key path (usually a .nk file)
-    -n, --name <name>                   A human-readable, descriptive name for the token
-    -b, --nbf <not-before-days>         Period in days that must elapse before this token is valid. If this option is
-                                        left off, the token will be valid immediately
-    -r, --rev <rev>                     Revision number
-    -u, --subject <subject-key-path>    Subject seed key path (usually a .nk file)
-    -t, --tag <tags>...                 A list of arbitrary tags to be embedded in the token
-    -v, --ver <ver>                     Human-readable version string
+SUBCOMMANDS:
+    help        Prints this message or the help of the given subcommand(s)
+    pull        Downloads a blob from an OCI compliant registry
+    push        Uploads a blob to an OCI compliant registry
 
 ARGS:
-    <source>    File to read
-    <output>    Target output file
+    <artifact>       URI of the artifact
+```
+
+### up
+Starts an interactive REPL session for waSCC development
+```
+USAGE:
+    wash up [FLAGS]
+
+FLAGS:
+    -h, --help       Prints help information
+    -V, --version    Prints version information
+
+SUBCOMMANDS:
+    help        Prints this message or the help of the given subcommand(s)
 ```
