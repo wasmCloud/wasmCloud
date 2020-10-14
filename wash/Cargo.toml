@@ -1,5 +1,5 @@
 [package]
-name = "wcc"
+name = "wash"
 version = "0.1.0"
 authors = ["Brooks Townsend <brooks.townsend@capitalone.com>"]
 edition = "2018"
