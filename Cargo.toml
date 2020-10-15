@@ -1,0 +1,53 @@
+[package]
+name = "wasccd"
+version = "0.15.0"
+authors = [
+    "Kevin Hoffman <alothien@gmail.com>",    
+]
+edition = "2018"
+default-run = "wasccd"
+license-file = "LICENSE"
+description = "A secure, distributed, WebAssembly actor model runtime for the cloud, edge, and everything in between"
+repository = "https://github.com/wascc/wasccd"
+documentation = "https://wascc.dev"
+readme = "README.md"
+keywords = [
+    "wasm",
+    "wasi",
+    "wascc",
+    "webassembly",
+    "actor",
+]
+categories = [
+    "wasm", "api-bindings", "command-line-utilities"
+]
+exclude = [    
+    "demos/*",
+    ".github/*",
+    ".gitignore"
+]
+
+[badges]
+maintenance = { status = "actively-developed" }
+
+[dependencies]
+wapc = { version = "0.10.1" }
+log = "0.4.11"
+env_logger = "0.7.1"
+anyhow = "1.0.33"
+
+[workspace]
+members = [
+    "crates/wascc-host",
+    "crates/bus-inproc",
+    "crates/bus-nats",    
+]
+
+
+[[bin]]
+name = "wasccd"
+path = "src/wasccd.rs"
+
+[[bin]]
+name = "wasccd-local"
+path = "src/wasccd-local.rs"
