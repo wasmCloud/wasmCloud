@@ -1,9 +1,31 @@
 [package]
 name = "wascc-host"
-version = "0.1.0"
+version = "0.15.0"
 authors = ["Kevin Hoffman <alothien@gmail.com>"]
 edition = "2018"
+homepage = "https://wascc.dev"
+repository = "https://github.com/wascc/wasscd"
+description = "A secure, distributed, WebAssembly actor model runtime for the cloud, edge, and everything in between"
+license = "Apache-2.0"
+documentation = "https://docs.rs/wascc-host"
+readme = "README.md"
+keywords = ["webassembly", "wasm", "wascc", "wapc", "actors"]
+categories = ["wasm", "api-bindings"]
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+actix = "0.10.0"
+actix-rt = "1.1.1"
+wascap = "0.5.1"
+wapc = "0.10.1"
+libloading = "0.6.4"
+log = "0.4.11"
+serde = { version = "1.0.117", features = ["derive"] }
+serde_json = "1.0.59"
+uuid = {version = "0.8", features  = ["serde", "v4"]}
+ring = "0.16.15"
+data-encoding = "2.3.0"
+tokio = "0.3.0"
+futures = "0.3.6"
+rmp-serde = "0.14.4"
+serde_bytes = "0.11.5"
