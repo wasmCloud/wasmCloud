@@ -25,7 +25,12 @@ serde_json = "1.0.59"
 uuid = {version = "0.8", features  = ["serde", "v4"]}
 ring = "0.16.15"
 data-encoding = "2.3.0"
-tokio = "0.3.0"
+tokio = { version = "0.3.0", features = ["rt"] }
 futures = "0.3.6"
 rmp-serde = "0.14.4"
 serde_bytes = "0.11.5"
+provider-archive ="0.1.0"
+lazy_static = "1.4.0"
+wascc-codec = "0.8.1"
+oci-distribution = "0.4.0"
+rand = "0.7.3"

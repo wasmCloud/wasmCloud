@@ -1,0 +1,11 @@
+schema: ../../../schemas/core.widl
+generates:
+  src/generated/core.rs:
+    package: widl-codegen/language/rust
+    visitorClass: ModuleVisitor
+---
+schema: ../../../schemas/extras.widl
+generates:
+  src/generated/extras.rs:
+    package: widl-codegen/language/rust
+    visitorClass: ModuleVisitor
