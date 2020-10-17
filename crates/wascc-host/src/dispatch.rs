@@ -1,8 +1,10 @@
+use crate::control_plane::{ControlPlane, GetProviderForBinding};
 use crate::errors::{self, ErrorKind};
 use crate::Result;
 use actix::dev::{MessageResponse, ResponseChannel};
 use actix::prelude::*;
 use data_encoding::HEXUPPER;
+use futures::executor::block_on;
 use ring::digest::{Context, Digest, SHA256};
 use serde::{Deserialize, Serialize};
 use std::io::Read;
@@ -210,7 +212,33 @@ pub fn invocation_hash(target_url: &str, origin_url: &str, msg: &[u8]) -> String
     HEXUPPER.encode(digest.as_ref())
 }
 
-/*
+pub(crate) fn wapc_host_callback(
+    kp: KeyPair,
+    claims: Claims<wascap::jwt::Actor>,
+    binding_name: &str,
+    namespace: &str,
+    operation: &str,
+    payload: &[u8],
+) -> std::result::Result<Vec<u8>, Box<dyn ::std::error::Error + Sync + Send>> {
+    trace!(
+        "Guest {} invoking {}:{}",
+        claims.subject,
+        namespace,
+        operation
+    );
+
+    let capability_id = namespace;
+    let inv = invocation_from_callback(
+        &kp,
+        &claims.subject,
+        binding_name,
+        namespace,
+        operation,
+        payload,
+    );
+    Ok(vec![])
+}
+
 fn invocation_from_callback(
     hostkey: &KeyPair,
     origin: &str,
@@ -228,9 +256,21 @@ fn invocation_from_callback(
     let target = if ns.len() == 56 && ns.starts_with("M") {
         WasccEntity::Actor(ns.to_string())
     } else {
+        // Look up the public key of the provider bound to the origin actor
+        // for the given capability contract ID.
+        let cp = ControlPlane::from_registry();
+        let prov = block_on(async {
+            cp.send(GetProviderForBinding {
+                contract_id: ns.to_string(),
+                actor: origin.to_string(),
+            })
+            .await
+            .unwrap()
+        });
         WasccEntity::Capability {
             binding,
-            capid: ns.to_string(),
+            contract_id: ns.to_string(),
+            id: prov.unwrap(),
         }
     };
     Invocation::new(
@@ -240,12 +280,12 @@ fn invocation_from_callback(
         op,
         payload.to_vec(),
     )
-}*/
+}
 
 #[cfg(test)]
 mod test {
-    use wascap::prelude::KeyPair;
     use crate::dispatch::{Invocation, WasccEntity};
+    use wascap::prelude::KeyPair;
 
     #[test]
     fn invocation_antiforgery() {
@@ -263,7 +303,7 @@ mod test {
             vec![1, 2, 3, 4],
         );
         let res = inv.validate_antiforgery();
-        println!("{:?}", res);
+        //println!("{:?}", res);
         // Obviously an invocation we just created should pass anti-forgery check
         assert!(inv.validate_antiforgery().is_ok());
 

@@ -13,6 +13,11 @@ keywords = ["webassembly", "wasm", "wascc", "wapc", "actors"]
 categories = ["wasm", "api-bindings"]
 
 
+[features]
+default = ["wasmtime"]
+wasmtime = ["wasmtime-provider"]
+wasm3 = ["wasm3-provider"]
+
 [dependencies]
 actix = "0.10.0"
 actix-rt = "1.1.1"
@@ -34,3 +39,6 @@ lazy_static = "1.4.0"
 wascc-codec = "0.8.1"
 oci-distribution = "0.4.0"
 rand = "0.7.3"
+
+wasm3-provider = { version = "0.0.1", optional = true}
+wasmtime-provider = { version = "0.0.1" , optional = true}

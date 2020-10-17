@@ -1,6 +1,6 @@
+use crate::dispatch::{Invocation, WasccEntity};
 use crate::Result;
 use actix::prelude::*;
-use crate::dispatch::{WasccEntity, Invocation};
 use std::collections::HashMap;
 
 #[derive(Message)]
@@ -11,9 +11,9 @@ pub struct SetProvider {
 
 #[derive(Message)]
 #[rtype(result = "()")]
-pub struct Subscribe{
+pub struct Subscribe {
     pub interest: WasccEntity,
-    pub subscriber: Recipient<Invocation>
+    pub subscriber: Recipient<Invocation>,
 }
 
 pub trait MessageBusProvider: Sync + Send {
@@ -24,12 +24,11 @@ pub trait MessageBusProvider: Sync + Send {
 #[derive(Default)]
 pub(crate) struct MessageBus {
     pub provider: Option<Box<dyn MessageBusProvider>>,
-    subscribers: HashMap<WasccEntity, Recipient<Invocation>>
+    subscribers: HashMap<WasccEntity, Recipient<Invocation>>,
 }
 
 impl Supervised for MessageBus {}
 impl SystemService for MessageBus {
-
     fn service_started(&mut self, ctx: &mut Context<Self>) {
         info!("Message Bus started");
     }

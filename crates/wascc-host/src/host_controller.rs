@@ -1,8 +1,8 @@
+use crate::actors::ActorHost;
 use crate::Result;
 use actix::prelude::*;
 use std::collections::HashMap;
 use wascap::prelude::KeyPair;
-use crate::actor_host::ActorHost;
 
 #[derive(Default)]
 pub(crate) struct HostController {
@@ -40,9 +40,9 @@ impl Handler<SetLabels> for HostController {
         // TODO: this is experimental - remove this
         // Just testing to see if I can start a sync arbiter from inside a
         // non-sync actor
-        let _a = SyncArbiter::start(1, || {
+        /*let _a = SyncArbiter::start(1, || {
             ActorHost{}
-        });
+        }); */
     }
 }
 

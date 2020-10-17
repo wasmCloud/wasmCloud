@@ -8,6 +8,7 @@ use crate::auth::Authorizer;
 use crate::capability::extras::ExtrasCapabilityProvider;
 use crate::capability::native::NativeCapability;
 use crate::capability::native_host::NativeCapabilityHost;
+use crate::control_plane::ControlPlane;
 use crate::host_controller::{HostController, SetLabels};
 use crate::Result;
 use std::collections::HashMap;
@@ -69,13 +70,16 @@ impl Host {
         })
         .await?;
 
+        // Start control plane
+        let _cp = ControlPlane::from_registry();
+
         // Start wascc:extras
         let _extras = SyncArbiter::start(1, || {
             let extras = ExtrasCapabilityProvider::default();
             let claims = crate::capability::extras::get_claims();
             let cap = NativeCapability::from_instance(extras, Some("default".to_string()), claims)
                 .unwrap();
-            NativeCapabilityHost::new(cap)
+            NativeCapabilityHost::new(cap, vec![])
         });
         Ok(())
     }

@@ -1,18 +1,20 @@
 use crate::capability::native::NativeCapability;
 use crate::dispatch::{Invocation, InvocationResponse, WasccEntity};
 use crate::errors;
+use crate::messagebus::{MessageBus, Subscribe};
+use crate::middleware::{run_capability_post_invoke, run_capability_pre_invoke, Middleware};
 use crate::Result;
 use actix::prelude::*;
-use crate::messagebus::{MessageBus, Subscribe};
 use futures::executor::block_on;
 
 pub(crate) struct NativeCapabilityHost {
     cap: NativeCapability,
+    mw_chain: Vec<Box<dyn Middleware>>,
 }
 
 impl NativeCapabilityHost {
-    pub fn new(cap: NativeCapability) -> Self {
-        NativeCapabilityHost { cap }
+    pub fn new(cap: NativeCapability, mw_chain: Vec<Box<dyn Middleware>>) -> Self {
+        NativeCapabilityHost { cap, mw_chain }
     }
 }
 
@@ -24,13 +26,14 @@ impl Actor for NativeCapabilityHost {
         let entity = WasccEntity::Capability {
             id: self.cap.claims.subject.to_string(),
             contract_id: self.cap.contract_id(),
-            binding: self.cap.binding_name.to_string()
+            binding: self.cap.binding_name.to_string(),
         };
         let _ = block_on(async move {
             b.send(Subscribe {
                 interest: entity,
-                subscriber: ctx.address().recipient()
-            }).await
+                subscriber: ctx.address().recipient(),
+            })
+            .await
         });
         info!(
             "Native Capability Provider '{}' ready ({}/{})",
@@ -44,9 +47,16 @@ impl Actor for NativeCapabilityHost {
 impl Handler<Invocation> for NativeCapabilityHost {
     type Result = InvocationResponse;
 
+    /// Receives an invocation from any source, validating the anti-forgery token
+    /// and that the destination matches this process. If those checks pass, runs
+    /// the capability provider pre-invoke middleware, invokes the operation on the native
+    /// plugin, then runs the provider post-invoke middleware.
     fn handle(&mut self, inv: Invocation, ctx: &mut Self::Context) -> Self::Result {
         if inv.validate_antiforgery().is_err() {
-            return InvocationResponse::error(&inv,"Anti-forgery validation failed for invocation.");
+            return InvocationResponse::error(
+                &inv,
+                "Anti-forgery validation failed for invocation.",
+            );
         }
 
         if let WasccEntity::Actor(ref s) = inv.origin {
@@ -57,11 +67,29 @@ impl Handler<Invocation> for NativeCapabilityHost {
             } = &inv.target
             {
                 if id != &self.cap.id() {
-                    return InvocationResponse::error(&inv, "Invocation target ID did not match provider ID");
+                    return InvocationResponse::error(
+                        &inv,
+                        "Invocation target ID did not match provider ID",
+                    );
+                }
+                if let Err(e) = run_capability_pre_invoke(&inv, &self.mw_chain) {
+                    return InvocationResponse::error(
+                        &inv,
+                        &format!("Capability middleware pre-invoke failure: {}", e),
+                    );
                 }
 
                 match self.cap.plugin.handle_call(&s, &inv.operation, &inv.msg) {
-                    Ok(msg) => InvocationResponse::success(&inv, msg),
+                    Ok(msg) => {
+                        let ir = InvocationResponse::success(&inv, msg);
+                        match run_capability_post_invoke(ir, &self.mw_chain) {
+                            Ok(r) => r,
+                            Err(e) => InvocationResponse::error(
+                                &inv,
+                                &format!("Capability middleware post-invoke failure: {}", e),
+                            ),
+                        }
+                    }
                     Err(e) => InvocationResponse::error(&inv, &format!("{}", e)),
                 }
             } else {
@@ -92,7 +120,7 @@ mod test {
             let claims = crate::capability::extras::get_claims();
             let cap = NativeCapability::from_instance(extras, Some("default".to_string()), claims)
                 .unwrap();
-            NativeCapabilityHost::new(cap)
+            NativeCapabilityHost::new(cap, vec![])
         });
         let kp = KeyPair::new_server();
         let req = GeneratorRequest {
