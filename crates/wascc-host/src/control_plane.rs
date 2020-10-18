@@ -15,18 +15,3 @@ impl SystemService for ControlPlane {
 impl Actor for ControlPlane {
     type Context = Context<Self>;
 }
-
-impl Handler<GetProviderForBinding> for ControlPlane {
-    type Result = Option<String>;
-
-    fn handle(&mut self, _msg: GetProviderForBinding, ctx: &mut Self::Context) -> Self::Result {
-        Some("TBD".to_string())
-    }
-}
-
-#[derive(Message)]
-#[rtype(result = "Option<String>")]
-pub struct GetProviderForBinding {
-    pub contract_id: String,
-    pub actor: String,
-}

@@ -1,8 +1,10 @@
 use crate::actors::WasccActor;
 use crate::dispatch::{Invocation, InvocationResponse, WasccEntity};
+use crate::messagebus::{MessageBus, Subscribe};
 use crate::middleware::{run_actor_post_invoke, run_actor_pre_invoke, Middleware};
 use crate::Result;
 use actix::prelude::*;
+use futures::executor::block_on;
 use wapc::{WapcHost, WasiParams};
 use wascap::prelude::{Claims, KeyPair};
 
@@ -49,8 +51,17 @@ impl ActorHost {
 impl Actor for ActorHost {
     type Context = SyncContext<Self>;
 
-    fn started(&mut self, _ctx: &mut Self::Context) {
-        info!("Actor {} started", self.claims.subject);
+    fn started(&mut self, ctx: &mut Self::Context) {
+        info!("Actor {} started", &self.claims.subject);
+        let entity = WasccEntity::Actor(self.claims.subject.to_string());
+        let b = MessageBus::from_registry();
+        let _ = block_on(async move {
+            b.send(Subscribe {
+                interest: entity,
+                subscriber: ctx.address().recipient(),
+            })
+            .await
+        });
     }
 }
 

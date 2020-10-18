@@ -1,4 +1,4 @@
-use crate::messagebus::{LatticeProvider, MessageBus, SetProvider};
+use crate::messagebus::{AdvertiseBinding, LatticeProvider, MessageBus, SetProvider};
 use std::thread;
 use wapc::WebAssemblyEngineProvider;
 
@@ -84,6 +84,25 @@ impl Host {
             NativeCapabilityHost::new(cap, vec![])
         });
         Ok(())
+    }
+
+    pub async fn set_binding(
+        &self,
+        actor: &str,
+        contract_id: &str,
+        binding_name: Option<String>,
+        provider_id: String,
+        values: HashMap<String, String>,
+    ) -> Result<()> {
+        let bus = MessageBus::from_registry();
+        bus.send(AdvertiseBinding {
+            contract_id: contract_id.to_string(),
+            actor: actor.to_string(),
+            binding_name: binding_name.unwrap_or("default".to_string()),
+            provider_id,
+            values,
+        })
+        .await?
     }
 
     pub(crate) fn native_target() -> String {

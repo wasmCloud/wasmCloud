@@ -5,7 +5,7 @@ use std::fmt;
 #[derive(Debug)]
 pub struct Error(Box<ErrorKind>);
 
-pub fn new(kind: ErrorKind) -> Box<dyn ::std::error::Error> {
+pub fn new(kind: ErrorKind) -> Box<dyn ::std::error::Error + Sync + Send> {
     Box::new(Error(Box::new(kind)))
 }
 

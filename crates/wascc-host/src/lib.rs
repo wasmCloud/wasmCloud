@@ -18,7 +18,7 @@ pub use dispatch::{Invocation, InvocationResponse};
 pub use host::{Host, HostBuilder};
 pub use messagebus::LatticeProvider;
 
-pub type Result<T> = ::std::result::Result<T, Box<dyn ::std::error::Error>>;
+pub type Result<T> = ::std::result::Result<T, Box<dyn ::std::error::Error + Send + Sync>>;
 pub type Actor = actors::WasccActor;
 
 pub const SYSTEM_ACTOR: &str = "system";

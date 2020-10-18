@@ -1,6 +1,5 @@
-use crate::control_plane::{ControlPlane, GetProviderForBinding};
 use crate::errors::{self, ErrorKind};
-use crate::messagebus::MessageBus;
+use crate::messagebus::{LookupBinding, MessageBus};
 use crate::Result;
 use actix::dev::{MessageResponse, ResponseChannel};
 use actix::prelude::*;
@@ -13,6 +12,19 @@ use uuid::Uuid;
 use wascap::prelude::{Claims, KeyPair};
 
 pub(crate) const URL_SCHEME: &str = "wasmbus";
+
+pub struct Dispatcher {
+    pub(crate) addr: Recipient<Invocation>,
+}
+
+impl Dispatcher {
+    pub async fn invoke(&self, inv: Invocation) -> InvocationResponse {
+        match self.addr.send(inv.clone()).await {
+            Ok(ir) => ir,
+            Err(e) => InvocationResponse::error(&inv, "Mailbox error calling invocation"),
+        }
+    }
+}
 
 /// An immutable representation of an invocation within waSCC
 #[derive(Debug, Clone, Serialize, Deserialize, Message)]
@@ -229,19 +241,39 @@ pub(crate) fn wapc_host_callback(
     );
 
     let capability_id = namespace;
-    let inv = invocation_from_callback(
-        &kp,
-        &claims.subject,
-        binding_name,
-        namespace,
-        operation,
-        payload,
-    );
 
+    // Look up the public key of the provider bound to the origin actor
+    // for the given capability contract ID.
     let bus = MessageBus::from_registry();
-    match block_on(async { bus.send(inv).await.map(|ir| ir.msg) }) {
-        Ok(v) => Ok(v),
-        Err(e) => Err("Mailbox error during host callback".into()),
+    let prov = block_on(async {
+        bus.send(LookupBinding {
+            contract_id: namespace.to_string(),
+            actor: claims.subject.to_string(),
+            binding_name: binding_name.to_string(),
+        })
+        .await
+        .unwrap()
+    });
+    if let Some(p) = prov {
+        let inv = invocation_from_callback(
+            &kp,
+            &claims.subject,
+            binding_name,
+            namespace,
+            operation,
+            &p,
+            payload,
+        );
+        match block_on(async { bus.send(inv).await.map(|ir| ir.msg) }) {
+            Ok(v) => Ok(v),
+            Err(e) => Err("Mailbox error during host callback".into()),
+        }
+    } else {
+        Err(format!(
+            "Unable to locate a known binding for {}->{}:{}",
+            claims.subject, namespace, binding_name
+        )
+        .into())
     }
 }
 
@@ -251,6 +283,7 @@ fn invocation_from_callback(
     bd: &str,
     ns: &str,
     op: &str,
+    provider_id: &str,
     payload: &[u8],
 ) -> Invocation {
     let binding = if bd.trim().is_empty() {
@@ -262,21 +295,10 @@ fn invocation_from_callback(
     let target = if ns.len() == 56 && ns.starts_with("M") {
         WasccEntity::Actor(ns.to_string())
     } else {
-        // Look up the public key of the provider bound to the origin actor
-        // for the given capability contract ID.
-        let cp = ControlPlane::from_registry();
-        let prov = block_on(async {
-            cp.send(GetProviderForBinding {
-                contract_id: ns.to_string(),
-                actor: origin.to_string(),
-            })
-            .await
-            .unwrap()
-        });
         WasccEntity::Capability {
             binding,
             contract_id: ns.to_string(),
-            id: prov.unwrap(),
+            id: provider_id.to_string(),
         }
     };
     Invocation::new(

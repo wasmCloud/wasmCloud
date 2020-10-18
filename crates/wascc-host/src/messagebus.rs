@@ -1,4 +1,5 @@
-use crate::dispatch::{Invocation, InvocationResponse, WasccEntity};
+use crate::capability::binding_cache::BindingCache;
+use crate::dispatch::{Dispatcher, Invocation, InvocationResponse, WasccEntity};
 use crate::Result;
 use actix::prelude::*;
 use futures::executor::block_on;
@@ -17,16 +18,36 @@ pub struct Subscribe {
     pub subscriber: Recipient<Invocation>,
 }
 
+#[derive(Message)]
+#[rtype(result = "Option<String>")]
+pub struct LookupBinding {
+    pub contract_id: String,
+    // Capability ID
+    pub actor: String,
+    pub binding_name: String,
+}
+
+#[derive(Message)]
+#[rtype(result = "Result<()>")]
+pub struct AdvertiseBinding {
+    pub contract_id: String,
+    pub actor: String,
+    pub binding_name: String,
+    pub provider_id: String,
+    pub values: HashMap<String, String>,
+}
+
 pub trait LatticeProvider: Sync + Send {
     fn name(&self) -> String;
     fn rpc(&self, inv: &Invocation) -> Result<InvocationResponse>;
-    fn register_interest(&self, subscriber: &WasccEntity) -> Result<()>;
+    fn register_interest(&self, subscriber: &WasccEntity, dispatcher: Dispatcher) -> Result<()>;
 }
 
 #[derive(Default)]
 pub(crate) struct MessageBus {
     pub provider: Option<Box<dyn LatticeProvider>>,
     subscribers: HashMap<WasccEntity, Recipient<Invocation>>,
+    binding_cache: BindingCache,
 }
 
 impl Supervised for MessageBus {}
@@ -39,6 +60,28 @@ impl SystemService for MessageBus {
 
 impl Actor for MessageBus {
     type Context = Context<Self>;
+}
+
+impl Handler<AdvertiseBinding> for MessageBus {
+    type Result = Result<()>;
+
+    fn handle(&mut self, msg: AdvertiseBinding, _ctx: &mut Context<Self>) -> Result<()> {
+        self.binding_cache.add_binding(
+            &msg.actor,
+            &msg.contract_id,
+            &msg.binding_name,
+            &msg.provider_id,
+            msg.values,
+        );
+
+        // TODO: where / when do we do the configure actor invocation on the provider?
+        // -- I think this should be done in the subscription handler for the "advertise binding"
+        // -- which should be idempotent
+        // if there is a provider registered locally, we should invoke that directly
+
+        // TODO: if there's a lattice provider, tell that provider to advertise said binding
+        Ok(())
+    }
 }
 
 impl Handler<SetProvider> for MessageBus {
@@ -97,18 +140,30 @@ impl Handler<Invocation> for MessageBus {
 impl Handler<Subscribe> for MessageBus {
     type Result = ();
 
-    fn handle(&mut self, msg: Subscribe, _ctx: &mut Context<Self>) {
+    fn handle(&mut self, msg: Subscribe, ctx: &mut Context<Self>) {
         info!("Bus registered interest for {}", &msg.interest.url());
         self.subscribers
             .insert(msg.interest.clone(), msg.subscriber.clone());
         if let Some(ref l) = self.provider {
-            if let Err(e) = l.register_interest(&msg.interest) {
+            let dispatcher = Dispatcher {
+                addr: ctx.address().recipient().clone(),
+            };
+            if let Err(e) = l.register_interest(&msg.interest, dispatcher) {
                 error!(
                     "Failed to register subscriber interest with lattice provider: {}",
                     e
                 );
             }
         }
+    }
+}
+
+impl Handler<LookupBinding> for MessageBus {
+    type Result = Option<String>;
+
+    fn handle(&mut self, msg: LookupBinding, ctx: &mut Self::Context) -> Self::Result {
+        self.binding_cache
+            .find_provider_id(&msg.actor, &msg.contract_id, &msg.binding_name)
     }
 }
 
@@ -121,7 +176,7 @@ fn do_rpc(l: &Box<dyn LatticeProvider>, inv: &Invocation) -> InvocationResponse 
 
 #[cfg(test)]
 mod test {
-    use crate::dispatch::{Invocation, InvocationResponse, WasccEntity};
+    use crate::dispatch::{Dispatcher, Invocation, InvocationResponse, WasccEntity};
     use crate::messagebus::{MessageBus, SetProvider, Subscribe};
     use crate::LatticeProvider;
     use crate::Result;
@@ -238,7 +293,11 @@ mod test {
             Ok(InvocationResponse::success(&inv, self.result.clone()))
         }
 
-        fn register_interest(&self, subscriber: &WasccEntity) -> Result<()> {
+        fn register_interest(
+            &self,
+            subscriber: &WasccEntity,
+            dispatcher: Dispatcher,
+        ) -> Result<()> {
             Ok(())
         }
     }
