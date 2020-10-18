@@ -7,18 +7,23 @@ use data_encoding::HEXUPPER;
 use futures::executor::block_on;
 use ring::digest::{Context, Digest, SHA256};
 use serde::{Deserialize, Serialize};
+use std::error::Error;
 use std::io::Read;
 use uuid::Uuid;
 use wascap::prelude::{Claims, KeyPair};
+use wascc_codec::capabilities::Dispatcher;
 
 pub(crate) const URL_SCHEME: &str = "wasmbus";
 
-pub struct Dispatcher {
+pub struct BusDispatcher {
     pub(crate) addr: Recipient<Invocation>,
 }
 
-impl Dispatcher {
-    pub async fn invoke(&self, inv: Invocation) -> InvocationResponse {
+impl BusDispatcher {
+    // NOTE: the lattice provider using the bus dispatcher doesn't need to fabricate
+    // new invocations (so it doesn't need a host key), it's de-serializing them off
+    // the wire.
+    pub async fn invoke(&self, inv: &Invocation) -> InvocationResponse {
         match self.addr.send(inv.clone()).await {
             Ok(ir) => ir,
             Err(e) => InvocationResponse::error(&inv, "Mailbox error calling invocation"),

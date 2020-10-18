@@ -1,4 +1,5 @@
 use crate::actors::ActorHost;
+use crate::messagebus::MessageBus;
 use crate::Result;
 use actix::prelude::*;
 use std::collections::HashMap;
@@ -6,8 +7,8 @@ use wascap::prelude::KeyPair;
 
 #[derive(Default)]
 pub(crate) struct HostController {
-    kp: Option<KeyPair>,
     host_labels: HashMap<String, String>,
+    kp: Option<KeyPair>,
 }
 
 #[derive(Message)]

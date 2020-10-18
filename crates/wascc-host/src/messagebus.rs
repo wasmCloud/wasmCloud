@@ -1,9 +1,10 @@
 use crate::capability::binding_cache::BindingCache;
-use crate::dispatch::{Dispatcher, Invocation, InvocationResponse, WasccEntity};
+use crate::dispatch::{BusDispatcher, Invocation, InvocationResponse, WasccEntity};
 use crate::Result;
 use actix::prelude::*;
 use futures::executor::block_on;
 use std::collections::HashMap;
+use wascap::prelude::KeyPair;
 
 #[derive(Message)]
 #[rtype(result = "()")]
@@ -21,8 +22,8 @@ pub struct Subscribe {
 #[derive(Message)]
 #[rtype(result = "Option<String>")]
 pub struct LookupBinding {
-    pub contract_id: String,
     // Capability ID
+    pub contract_id: String,
     pub actor: String,
     pub binding_name: String,
 }
@@ -38,9 +39,10 @@ pub struct AdvertiseBinding {
 }
 
 pub trait LatticeProvider: Sync + Send {
+    fn init(&mut self, dispatcher: BusDispatcher);
     fn name(&self) -> String;
     fn rpc(&self, inv: &Invocation) -> Result<InvocationResponse>;
-    fn register_interest(&self, subscriber: &WasccEntity, dispatcher: Dispatcher) -> Result<()>;
+    fn register_rpc_listener(&self, subscriber: &WasccEntity) -> Result<()>;
 }
 
 #[derive(Default)]
@@ -87,8 +89,11 @@ impl Handler<AdvertiseBinding> for MessageBus {
 impl Handler<SetProvider> for MessageBus {
     type Result = ();
 
-    fn handle(&mut self, msg: SetProvider, _ctx: &mut Context<Self>) {
+    fn handle(&mut self, msg: SetProvider, ctx: &mut Context<Self>) {
         self.provider = Some(msg.provider);
+        self.provider.as_mut().unwrap().init(BusDispatcher {
+            addr: ctx.address().recipient().clone(),
+        });
         info!(
             "Message bus using provider - {}",
             self.provider.as_ref().unwrap().name()
@@ -137,33 +142,21 @@ impl Handler<Invocation> for MessageBus {
     }
 }
 
-impl Handler<Subscribe> for MessageBus {
-    type Result = ();
-
-    fn handle(&mut self, msg: Subscribe, ctx: &mut Context<Self>) {
-        info!("Bus registered interest for {}", &msg.interest.url());
-        self.subscribers
-            .insert(msg.interest.clone(), msg.subscriber.clone());
-        if let Some(ref l) = self.provider {
-            let dispatcher = Dispatcher {
-                addr: ctx.address().recipient().clone(),
-            };
-            if let Err(e) = l.register_interest(&msg.interest, dispatcher) {
-                error!(
-                    "Failed to register subscriber interest with lattice provider: {}",
-                    e
-                );
-            }
-        }
-    }
-}
-
 impl Handler<LookupBinding> for MessageBus {
     type Result = Option<String>;
 
     fn handle(&mut self, msg: LookupBinding, ctx: &mut Self::Context) -> Self::Result {
         self.binding_cache
             .find_provider_id(&msg.actor, &msg.contract_id, &msg.binding_name)
+    }
+}
+
+impl Handler<Subscribe> for MessageBus {
+    type Result = ();
+
+    fn handle(&mut self, msg: Subscribe, _ctx: &mut Context<Self>) {
+        info!("Bus registered interest for {}", &msg.interest.url());
+        self.subscribers.insert(msg.interest, msg.subscriber);
     }
 }
 

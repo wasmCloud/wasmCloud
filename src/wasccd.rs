@@ -1,6 +1,6 @@
 use actix_rt::System;
-use wascc_host::HostBuilder;
 use lattice_nats::NatsLatticeProvider;
+use wascc_host::HostBuilder;
 
 #[macro_use]
 extern crate log;
