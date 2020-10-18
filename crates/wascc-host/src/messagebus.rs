@@ -20,6 +20,7 @@ pub struct Subscribe {
 pub trait LatticeProvider: Sync + Send {
     fn name(&self) -> String;
     fn rpc(&self, inv: &Invocation) -> Result<InvocationResponse>;
+    fn register_interest(&self, subscriber: &WasccEntity) -> Result<()>;
 }
 
 #[derive(Default)]
@@ -98,7 +99,16 @@ impl Handler<Subscribe> for MessageBus {
 
     fn handle(&mut self, msg: Subscribe, _ctx: &mut Context<Self>) {
         info!("Bus registered interest for {}", &msg.interest.url());
-        self.subscribers.insert(msg.interest, msg.subscriber);
+        self.subscribers
+            .insert(msg.interest.clone(), msg.subscriber.clone());
+        if let Some(ref l) = self.provider {
+            if let Err(e) = l.register_interest(&msg.interest) {
+                error!(
+                    "Failed to register subscriber interest with lattice provider: {}",
+                    e
+                );
+            }
+        }
     }
 }
 
@@ -226,6 +236,10 @@ mod test {
 
         fn rpc(&self, inv: &Invocation) -> Result<InvocationResponse> {
             Ok(InvocationResponse::success(&inv, self.result.clone()))
+        }
+
+        fn register_interest(&self, subscriber: &WasccEntity) -> Result<()> {
+            Ok(())
         }
     }
 }
