@@ -1,5 +1,6 @@
 use crate::control_plane::{ControlPlane, GetProviderForBinding};
 use crate::errors::{self, ErrorKind};
+use crate::messagebus::MessageBus;
 use crate::Result;
 use actix::dev::{MessageResponse, ResponseChannel};
 use actix::prelude::*;
@@ -236,7 +237,12 @@ pub(crate) fn wapc_host_callback(
         operation,
         payload,
     );
-    Ok(vec![])
+
+    let bus = MessageBus::from_registry();
+    match block_on(async { bus.send(inv).await.map(|ir| ir.msg) }) {
+        Ok(v) => Ok(v),
+        Err(e) => Err("Mailbox error during host callback".into()),
+    }
 }
 
 fn invocation_from_callback(

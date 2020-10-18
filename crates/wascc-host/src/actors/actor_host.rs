@@ -1,10 +1,10 @@
+use crate::actors::WasccActor;
 use crate::dispatch::{Invocation, InvocationResponse, WasccEntity};
 use crate::middleware::{run_actor_post_invoke, run_actor_pre_invoke, Middleware};
 use crate::Result;
 use actix::prelude::*;
 use wapc::{WapcHost, WasiParams};
 use wascap::prelude::{Claims, KeyPair};
-use crate::actors::WasccActor;
 
 pub(crate) struct ActorHost {
     guest_module: WapcHost,

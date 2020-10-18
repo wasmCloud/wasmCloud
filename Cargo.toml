@@ -41,15 +41,13 @@ log = "0.4.11"
 env_logger = "0.7.1"
 anyhow = "1.0.33"
 wascc-host = { path = "./crates/wascc-host" }
-bus-nats = { path = "./crates/bus-nats" }
-bus-inproc = { path = "./crates/bus-inproc" }
+lattice-nats = { path = "crates/lattice-nats" }
 actix-rt = "1.1.1"
 
 [workspace]
 members = [
     "crates/wascc-host",
-    "crates/bus-inproc",
-    "crates/bus-nats",    
+    "crates/lattice-nats",
 ]
 
 
@@ -58,5 +56,5 @@ name = "wasccd"
 path = "src/wasccd.rs"
 
 [[bin]]
-name = "wasccd-local"
-path = "src/wasccd-local.rs"
+name = "wasccd-lite"
+path = "src/wasccd-lite.rs"

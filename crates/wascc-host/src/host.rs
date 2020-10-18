@@ -1,4 +1,4 @@
-use crate::messagebus::{MessageBus, MessageBusProvider, SetProvider};
+use crate::messagebus::{LatticeProvider, MessageBus, SetProvider};
 use std::thread;
 use wapc::WebAssemblyEngineProvider;
 
@@ -57,12 +57,14 @@ pub struct Host {
 impl Host {
     /// Starts the host's actor system. This call is non-blocking, so it is up to the consumer
     /// to provide some form of parking or waiting (e.g. wait for a Ctrl-C signal).
-    pub async fn start(&self, bus_provider: impl MessageBusProvider + 'static) -> Result<()> {
+    pub async fn start(&self, lattice: Option<impl LatticeProvider + 'static>) -> Result<()> {
         let mb = MessageBus::from_registry();
-        mb.send(SetProvider {
-            provider: Box::new(bus_provider),
-        })
-        .await?;
+        if let Some(l) = lattice {
+            mb.send(SetProvider {
+                provider: Box::new(l),
+            })
+            .await?;
+        }
 
         let hc = HostController::from_registry();
         hc.send(SetLabels {

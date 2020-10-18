@@ -1,3 +1,4 @@
+mod actors;
 mod auth;
 mod capability;
 mod control_plane;
@@ -9,13 +10,13 @@ mod host_controller;
 mod messagebus;
 mod middleware;
 mod oci;
-mod actors;
 
 #[macro_use]
 extern crate log;
 
+pub use dispatch::{Invocation, InvocationResponse};
 pub use host::{Host, HostBuilder};
-pub use messagebus::MessageBusProvider;
+pub use messagebus::LatticeProvider;
 
 pub type Result<T> = ::std::result::Result<T, Box<dyn ::std::error::Error>>;
 pub type Actor = actors::WasccActor;
