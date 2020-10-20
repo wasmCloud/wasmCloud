@@ -3,7 +3,8 @@ use data_encoding::HEXUPPER;
 use ring::digest::{Context, Digest, SHA256};
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::{copy, Cursor, Read};
+use std::path::Path;
 use std::path::PathBuf;
 use wascap::jwt::{CapabilityProvider, Claims};
 use wascap::prelude::KeyPair;
@@ -72,36 +73,37 @@ impl ProviderArchive {
     /// verified against hashes computed at load time. This prevents the contents of the archive from being modified
     /// without the embedded claims being re-signed
     pub fn try_load(input: &[u8]) -> Result<ProviderArchive> {
-        let reader = std::io::Cursor::new(input);
-
         let mut libraries = HashMap::new();
-        let mut zip = zip::ZipArchive::new(reader)?;
+        let mut par = tar::Archive::new(Cursor::new(input));
         let mut c: Option<Claims<CapabilityProvider>> = None;
-        if zip.len() < 2 {
-            // we need at least claims.jwt and one plugin binary
-            return Err(
-                "Not enough files found in provider archive. Is this a complete archive?".into(),
-            );
-        }
-        for i in 0..zip.len() {
-            let file = zip.by_index(i).unwrap();
-            let target = PathBuf::from(file.name())
+
+        let entries = par.entries()?;
+
+        for f in entries {
+            let mut file = f.unwrap();
+            let mut bytes = Vec::new();
+            copy(&mut file, &mut bytes)?;
+            let target = PathBuf::from(file.path()?)
                 .file_stem()
                 .unwrap()
                 .to_str()
                 .unwrap()
                 .to_string();
-            let mut filebuf = Vec::new();
-            for byte in file.bytes() {
-                filebuf.push(byte?);
-            }
             if target == "claims" {
                 c = Some(Claims::<CapabilityProvider>::decode(&std::str::from_utf8(
-                    &filebuf,
+                    &bytes,
                 )?)?);
             } else {
-                libraries.insert(target.to_string(), filebuf.to_vec());
+                libraries.insert(target.to_string(), bytes.to_vec());
             }
+        }
+
+        if c == None || libraries.len() < 1 {
+            // we need at least claims.jwt and one plugin binary
+            libraries.clear();
+            return Err(
+                "Not enough files found in provider archive. Is this a complete archive?".into(),
+            );
         }
 
         if let Some(ref cl) = c {
@@ -133,9 +135,7 @@ impl ProviderArchive {
         subject: &KeyPair,
     ) -> Result<()> {
         let hashes = generate_hashes(&self.libraries);
-        let mut zip = zip::ZipWriter::new(destination);
-        let options =
-            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        let mut par = tar::Builder::new(destination);
 
         let claims = Claims::<CapabilityProvider>::new(
             self.name.to_string(),
@@ -148,15 +148,23 @@ impl ProviderArchive {
             hashes,
         );
         self.claims = Some(claims.clone());
-        zip.start_file(CLAIMS_JWT_FILE, options)?;
-        zip.write(claims.encode(&issuer)?.as_bytes())?;
+
+        let claims_file = claims.encode(&issuer)?;
+
+        let mut header = tar::Header::new_gnu();
+        header.set_path(CLAIMS_JWT_FILE)?;
+        header.set_size(claims_file.as_bytes().len() as u64);
+        header.set_cksum();
+        par.append_data(&mut header, CLAIMS_JWT_FILE, Cursor::new(claims_file))?;
 
         for (tgt, lib) in self.libraries.iter() {
-            zip.start_file(format!("{}.bin", tgt), options)?;
-            zip.write(lib)?;
+            let mut header = tar::Header::new_gnu();
+            let path = format!("{}.bin", tgt);
+            header.set_path(path.to_string())?;
+            header.set_size(lib.len() as u64);
+            header.set_cksum();
+            par.append_data(&mut header, path.to_string(), Cursor::new(lib))?;
         }
-
-        zip.finish()?;
 
         Ok(())
     }
@@ -217,14 +225,66 @@ mod test {
     use wascap::prelude::KeyPair;
 
     #[test]
-    fn round_trip() -> Result<()> {
-        // Build an archive in memory the way a CLI wrapper might...
+    fn write_par() -> Result<()> {
         let mut arch = ProviderArchive::new(
             "wascc:testing",
             "Testing",
             "waSCC",
             Some(1),
             Some("0.0.1".to_string()),
+        );
+        arch.add_library("aarch64-linux", b"blahblah")?;
+
+        let issuer = KeyPair::new_account();
+        let subject = KeyPair::new_service();
+
+        let mut f = File::create("./writetest.par")?;
+        arch.write(&mut f, &issuer, &subject)?;
+
+        let _ = std::fs::remove_file("./writetest.par");
+        Ok(())
+    }
+
+    #[test]
+    fn error_on_no_providers() -> Result<()> {
+        let mut arch = ProviderArchive::new(
+            "wascc:testing",
+            "Testing",
+            "waSCC",
+            Some(2),
+            Some("0.0.2".to_string()),
+        );
+
+        let issuer = KeyPair::new_account();
+        let subject = KeyPair::new_service();
+
+        let mut f = File::create("./shoulderr.par")?;
+        arch.write(&mut f, &issuer, &subject)?;
+
+        let mut buf2 = Vec::new();
+        let mut f2 = File::open("./shoulderr.par")?;
+        f2.read_to_end(&mut buf2)?;
+
+        let arch2 = ProviderArchive::try_load(&buf2);
+
+        match arch2 {
+            Ok(_notok) => panic!("Loading an archive without any libraries should fail"),
+            Err(_e) => (),
+        }
+
+        let _ = std::fs::remove_file("./shoulderr.par");
+        Ok(())
+    }
+
+    #[test]
+    fn round_trip() -> Result<()> {
+        // Build an archive in memory the way a CLI wrapper might...
+        let mut arch = ProviderArchive::new(
+            "wascc:testing",
+            "Testing",
+            "waSCC",
+            Some(3),
+            Some("0.0.3".to_string()),
         );
         arch.add_library("aarch64-linux", b"blahblah")?;
         arch.add_library("x86_64-linux", b"bloobloo")?;
@@ -234,11 +294,11 @@ mod test {
         let subject = KeyPair::new_service();
 
         // Generate the .par file with embedded claims.jwt file (needs a service and an account key)
-        let mut f = File::create("./test.par")?;
+        let mut f = File::create("./firstarchive.par")?;
         arch.write(&mut f, &issuer, &subject)?;
 
         let mut buf2 = Vec::new();
-        let mut f2 = File::open("./test.par")?;
+        let mut f2 = File::open("./firstarchive.par")?;
         f2.read_to_end(&mut buf2)?;
 
         // Make sure the file we wrote can be read back in with no data loss
@@ -252,12 +312,12 @@ mod test {
 
         // Another common task - read an existing archive and add another library file to it
         arch2.add_library("mips-linux", b"bluhbluh")?;
-        let mut f3 = File::create("./test2.par")?;
+        let mut f3 = File::create("./secondarchive.par")?;
         arch2.write(&mut f3, &issuer, &subject)?;
 
         let mut buf3 = Vec::new();
-        let mut f4 = File::open("./test2.par")?;
-        f4.read_to_end(&mut buf3)?;
+        let mut f3 = File::open("./secondarchive.par")?;
+        f3.read_to_end(&mut buf3)?;
 
         // Make sure the re-written/modified archive looks the way we expect
         let arch3 = ProviderArchive::try_load(&buf3)?;
@@ -269,8 +329,8 @@ mod test {
         assert_eq!(arch3.claims().unwrap().subject, subject.public_key());
         assert_eq!(arch3.targets().len(), 4);
 
-        let _ = std::fs::remove_file("./test.par");
-        let _ = std::fs::remove_file("./test2.par");
+        let _ = std::fs::remove_file("./firstarchive.par");
+        let _ = std::fs::remove_file("./secondarchive.par");
 
         Ok(())
     }
