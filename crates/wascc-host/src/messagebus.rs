@@ -1,10 +1,44 @@
 use crate::capability::binding_cache::BindingCache;
 use crate::dispatch::{BusDispatcher, Invocation, InvocationResponse, WasccEntity};
-use crate::Result;
+use crate::host_controller::{HostController, MintInvocationRequest};
+use crate::{Result, SYSTEM_ACTOR};
+use actix::dev::{MessageResponse, ResponseChannel};
 use actix::prelude::*;
 use futures::executor::block_on;
 use std::collections::HashMap;
+use wascap::jwt::Claims;
 use wascap::prelude::KeyPair;
+
+pub const OP_PERFORM_LIVE_UPDATE: &str = "PerformLiveUpdate";
+pub const OP_IDENTIFY_CAPABILITY: &str = "IdentifyCapability";
+pub const OP_HEALTH_REQUEST: &str = "HealthRequest";
+pub const OP_INITIALIZE: &str = "Initialize";
+pub const OP_BIND_ACTOR: &str = "BindActor";
+pub const OP_REMOVE_ACTOR: &str = "RemoveActor";
+
+#[derive(Message)]
+#[rtype(result = "QueryResponse")]
+pub struct QueryActors;
+
+#[derive(Message)]
+#[rtype(result = "QueryResponse")]
+pub struct QueryProviders;
+
+pub struct QueryResponse {
+    pub results: Vec<String>,
+}
+
+impl<A, M> MessageResponse<A, M> for QueryResponse
+where
+    A: Actor,
+    M: Message<Result = QueryResponse>,
+{
+    fn handle<R: ResponseChannel<M>>(self, _: &mut A::Context, tx: Option<R>) {
+        if let Some(tx) = tx {
+            tx.send(self);
+        }
+    }
+}
 
 #[derive(Message)]
 #[rtype(result = "()")]
@@ -38,11 +72,32 @@ pub struct AdvertiseBinding {
     pub values: HashMap<String, String>,
 }
 
+#[derive(Message)]
+#[rtype(result = "Result<()>")]
+pub struct AdvertiseClaims {
+    pub claims: Claims<wascap::jwt::Actor>,
+}
+
+#[derive(Message)]
+#[rtype(result = "()")]
+pub struct SetKey {
+    pub key: KeyPair,
+}
+
 pub trait LatticeProvider: Sync + Send {
     fn init(&mut self, dispatcher: BusDispatcher);
     fn name(&self) -> String;
     fn rpc(&self, inv: &Invocation) -> Result<InvocationResponse>;
     fn register_rpc_listener(&self, subscriber: &WasccEntity) -> Result<()>;
+    fn advertise_binding(
+        &self,
+        actor: &str,
+        contract_id: &str,
+        binding_name: &str,
+        provider_id: &str,
+        values: HashMap<String, String>,
+    ) -> Result<()>;
+    fn advertise_claims(&self, claims: Claims<wascap::jwt::Actor>) -> Result<()>;
 }
 
 #[derive(Default)]
@@ -50,6 +105,8 @@ pub(crate) struct MessageBus {
     pub provider: Option<Box<dyn LatticeProvider>>,
     subscribers: HashMap<WasccEntity, Recipient<Invocation>>,
     binding_cache: BindingCache,
+    claims_cache: HashMap<String, Claims<wascap::jwt::Actor>>,
+    key: Option<KeyPair>,
 }
 
 impl Supervised for MessageBus {}
@@ -57,6 +114,8 @@ impl Supervised for MessageBus {}
 impl SystemService for MessageBus {
     fn service_started(&mut self, ctx: &mut Context<Self>) {
         info!("Message Bus started");
+        // TODO: make this value configurable
+        ctx.set_mailbox_capacity(1000);
     }
 }
 
@@ -64,24 +123,118 @@ impl Actor for MessageBus {
     type Context = Context<Self>;
 }
 
-impl Handler<AdvertiseBinding> for MessageBus {
-    type Result = Result<()>;
+impl Handler<QueryActors> for MessageBus {
+    type Result = QueryResponse;
 
-    fn handle(&mut self, msg: AdvertiseBinding, _ctx: &mut Context<Self>) -> Result<()> {
+    fn handle(&mut self, _msg: QueryActors, _ctx: &mut Context<Self>) -> QueryResponse {
+        QueryResponse {
+            results: self
+                .subscribers
+                .keys()
+                .filter_map(|k| match k {
+                    WasccEntity::Actor(s) => Some(s.to_string()),
+                    WasccEntity::Capability { .. } => None,
+                })
+                .collect(),
+        }
+    }
+}
+
+impl Handler<QueryProviders> for MessageBus {
+    type Result = QueryResponse;
+
+    fn handle(&mut self, _msg: QueryProviders, _ctx: &mut Context<Self>) -> QueryResponse {
+        QueryResponse {
+            results: self
+                .subscribers
+                .keys()
+                .filter_map(|k| match k {
+                    WasccEntity::Capability { id, .. } => Some(id.to_string()),
+                    _ => None,
+                })
+                .collect(),
+        }
+    }
+}
+
+impl Handler<SetKey> for MessageBus {
+    type Result = ();
+
+    fn handle(&mut self, msg: SetKey, _ctx: &mut Context<Self>) {
+        self.key = Some(msg.key)
+    }
+}
+
+impl Handler<AdvertiseBinding> for MessageBus {
+    type Result = ResponseActFuture<Self, Result<()>>;
+
+    fn handle(&mut self, msg: AdvertiseBinding, ctx: &mut Context<Self>) -> Self::Result {
+        let target = WasccEntity::Capability {
+            id: msg.provider_id.to_string(),
+            contract_id: msg.contract_id.to_string(),
+            binding: msg.binding_name.to_string(),
+        };
+        // If there's a lattice provider, tell that provider to advertise said binding
+        // if we fail to advertise the binding on the lattice, return and error and skip
+        // the local binding code below.
+        if let Some(ref lp) = self.provider {
+            if let Err(e) = lp.advertise_binding(
+                &msg.actor,
+                &msg.contract_id,
+                &msg.binding_name,
+                &msg.provider_id,
+                msg.values.clone(),
+            ) {
+                error!("Failed to advertise binding on the lattice: {}", e);
+                return Box::pin(async move { Err(e) }.into_actor(self));
+            }
+        }
+
         self.binding_cache.add_binding(
             &msg.actor,
             &msg.contract_id,
             &msg.binding_name,
             &msg.provider_id,
-            msg.values,
+            msg.values.clone(),
         );
 
-        // TODO: where / when do we do the configure actor invocation on the provider?
-        // -- I think this should be done in the subscription handler for the "advertise binding"
-        // -- which should be idempotent
-        // if there is a provider registered locally, we should invoke that directly
+        if let Some(t) = self.subscribers.get(&target) {
+            let req = generate_binding_invocation(t, &msg, self.key.as_ref().unwrap(), target);
+            Box::pin(req.into_actor(self).map(move |res, act, _ctx| match res {
+                Ok(ir) => {
+                    if let Some(er) = ir.error {
+                        Err(format!("Failed to set binding: {}", er).into())
+                    } else {
+                        Ok(())
+                    }
+                }
+                Err(_) => Err("Mailbox error setting binding".into()),
+            }))
+        } else {
+            // No _local_ subscriber found for this target.
+            let is_none = self.provider.as_ref().is_none();
+            Box::pin( async move {
+                if is_none {
+                    error!("Attempt to advertise a binding with no local subscribers and no lattice provider - binding ignored");
+                    Err("Cannot advertise a binding with no local subscribers and no lattice provider. Binding ignored".into())
+                } else {
+                    Ok(())
+                }
+            }.into_actor(self))
+        }
+    }
+}
 
-        // TODO: if there's a lattice provider, tell that provider to advertise said binding
+impl Handler<AdvertiseClaims> for MessageBus {
+    type Result = Result<()>;
+
+    fn handle(&mut self, msg: AdvertiseClaims, _ctx: &mut Context<Self>) -> Result<()> {
+        self.claims_cache
+            .insert(msg.claims.subject.to_string(), msg.claims.clone());
+
+        if let Some(ref lp) = self.provider {
+            lp.advertise_claims(msg.claims)?
+        }
         Ok(())
     }
 }
@@ -109,12 +262,16 @@ impl Handler<Invocation> for MessageBus {
     /// is not local, _and_ there is a lattice provider configured, then the bus will attempt
     /// to satisfy that call via RPC over lattice.
     fn handle(&mut self, msg: Invocation, _ctx: &mut Context<Self>) -> Self::Result {
+        println!("handling invocation");
         match self.subscribers.get(&msg.target) {
             Some(target) => Box::pin(target.send(msg.clone()).into_actor(self).map(
                 move |res, act, _ctx| {
+                    println!("{:?}", res);
                     if let Ok(r) = res {
+                        println!("success");
                         r
                     } else {
+                        println!("failure");
                         InvocationResponse::error(
                             &msg,
                             "Mailbox error attempting to perform invocation",
@@ -123,6 +280,7 @@ impl Handler<Invocation> for MessageBus {
                 },
             )),
             None => {
+                println!("deferring to lattice");
                 if let Some(ref l) = self.provider {
                     let res = do_rpc(l, &msg);
                     Box::pin(async move { res }.into_actor(self))
@@ -167,13 +325,37 @@ fn do_rpc(l: &Box<dyn LatticeProvider>, inv: &Invocation) -> InvocationResponse 
     }
 }
 
+fn generate_binding_invocation(
+    t: &Recipient<Invocation>,
+    msg: &AdvertiseBinding,
+    key: &KeyPair,
+    target: WasccEntity,
+) -> RecipientRequest<Invocation> {
+    let config = crate::generated::core::CapabilityConfiguration {
+        module: msg.actor.to_string(),
+        values: msg.values.clone(),
+    };
+    let inv = Invocation::new(
+        key,
+        WasccEntity::Actor(SYSTEM_ACTOR.to_string()),
+        target,
+        OP_BIND_ACTOR,
+        crate::generated::core::serialize(&config).unwrap(),
+    );
+
+    t.send(inv)
+}
+
 #[cfg(test)]
 mod test {
     use crate::dispatch::{Dispatcher, Invocation, InvocationResponse, WasccEntity};
     use crate::messagebus::{MessageBus, SetProvider, Subscribe};
-    use crate::LatticeProvider;
     use crate::Result;
+    use crate::{BusDispatcher, LatticeProvider};
     use actix::prelude::*;
+    use std::collections::hash_map::RandomState;
+    use std::collections::HashMap;
+    use wascap::jwt::Claims;
     use wascap::prelude::KeyPair;
 
     // This test demonstrates the basic role of the message bus -- to act as an intermediary
@@ -286,12 +468,27 @@ mod test {
             Ok(InvocationResponse::success(&inv, self.result.clone()))
         }
 
-        fn register_interest(
+        fn init(&mut self, dispatcher: BusDispatcher) {
+            unimplemented!()
+        }
+
+        fn register_rpc_listener(&self, subscriber: &WasccEntity) -> Result<()> {
+            unimplemented!()
+        }
+
+        fn advertise_binding(
             &self,
-            subscriber: &WasccEntity,
-            dispatcher: Dispatcher,
+            actor: &str,
+            contract_id: &str,
+            binding_name: &str,
+            provider_id: &str,
+            values: HashMap<String, String, RandomState>,
         ) -> Result<()> {
-            Ok(())
+            unimplemented!()
+        }
+
+        fn advertise_claims(&self, claims: Claims<Actor>) -> Result<()> {
+            unimplemented!()
         }
     }
 }

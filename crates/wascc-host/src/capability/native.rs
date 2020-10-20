@@ -25,9 +25,8 @@ pub struct NativeCapability {
 }
 
 impl NativeCapability {
-    /// Reads a capability provider from a file. The capability provider must implement the
-    /// correct FFI interface to support waSCC plugins. See [wascc.dev](https://wascc.dev) for
-    /// documentation and tutorials on how to create a native capability provider
+    /// Reads a capability provider from an archive file. The right architecture/OS plugin
+    /// library will be chosen from the file, or an error will result if it isn't found.
     pub fn from_archive(
         archive: &ProviderArchive,
         binding_target_name: Option<String>,
@@ -87,7 +86,8 @@ impl NativeCapability {
     /// waSCC host and have a fixed set of capabilities that you want to always be available
     /// to actors, then you can declare a dependency on the capability provider, enable
     /// the `static_plugin` feature, and provide an instance of that provider. Be sure to check
-    /// that the provider supports capability embedding.
+    /// that the provider supports capability embedding. You must also provide a set of valid
+    /// claims that can be generated from a signed JWT
     pub fn from_instance(
         instance: impl CapabilityProvider,
         binding_target_name: Option<String>,
@@ -98,8 +98,8 @@ impl NativeCapability {
         let binding = binding_target_name.unwrap_or("default".to_string());
 
         info!(
-            "Loaded native capability provider library '{}'",
-            descriptor.name
+            "Loaded native capability provider library '{}' - {}",
+            descriptor.name, &claims.subject
         );
         Ok(NativeCapability {
             descriptor,

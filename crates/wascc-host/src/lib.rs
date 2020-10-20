@@ -14,6 +14,7 @@ mod oci;
 #[macro_use]
 extern crate log;
 
+pub use capability::native::NativeCapability;
 pub use dispatch::{BusDispatcher, Invocation, InvocationResponse, WasccEntity};
 pub use host::{Host, HostBuilder};
 pub use messagebus::LatticeProvider;

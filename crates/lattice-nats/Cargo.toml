@@ -8,4 +8,5 @@ edition = "2018"
 
 [dependencies]
 wascc-host = { path = "../wascc-host"}
+wascap = "0.5.1"
 nats = { git = "https://github.com/autodidaddict/nats.rs"}

@@ -8,6 +8,7 @@ extern crate log;
 //use guest::prelude::*;
 
 use lazy_static::lazy_static;
+use std::collections::HashMap;
 use std::sync::RwLock;
 
 pub struct Host {
@@ -66,6 +67,24 @@ pub struct OperationDescriptor {
     pub direction: u8,
     #[serde(rename = "docText")]
     pub doc_text: String,
+}
+
+#[derive(Debug, PartialEq, Deserialize, Serialize, Clone)]
+pub struct CapabilityConfiguration {
+    pub module: String,
+    #[serde(default)]
+    pub values: HashMap<String, String>,
+}
+
+#[derive(Debug, PartialEq, Deserialize, Serialize)]
+pub struct HealthRequest {
+    pub placeholder: bool,
+}
+
+#[derive(Debug, PartialEq, Deserialize, Serialize)]
+pub struct HealthResponse {
+    pub healthy: bool,
+    pub message: String,
 }
 
 /// The standard function for serializing codec structs into a format that can be

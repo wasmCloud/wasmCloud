@@ -9,8 +9,13 @@ use crate::capability::extras::ExtrasCapabilityProvider;
 use crate::capability::native::NativeCapability;
 use crate::capability::native_host::NativeCapabilityHost;
 use crate::control_plane::ControlPlane;
-use crate::host_controller::{HostController, SetLabels};
-use crate::Result;
+use crate::dispatch::{Invocation, InvocationResponse};
+use crate::host_controller::{
+    HostController, MintInvocationRequest, SetLabels, StartActor, StartProvider,
+};
+use crate::messagebus::{QueryActors, QueryProviders};
+use crate::WasccEntity;
+use crate::{Result, SYSTEM_ACTOR};
 use std::collections::HashMap;
 
 pub struct HostBuilder {
@@ -57,13 +62,10 @@ pub struct Host {
 impl Host {
     /// Starts the host's actor system. This call is non-blocking, so it is up to the consumer
     /// to provide some form of parking or waiting (e.g. wait for a Ctrl-C signal).
-    pub async fn start(&self, lattice: Option<impl LatticeProvider + 'static>) -> Result<()> {
+    pub async fn start(&self, lattice: Option<Box<dyn LatticeProvider + 'static>>) -> Result<()> {
         let mb = MessageBus::from_registry();
         if let Some(l) = lattice {
-            mb.send(SetProvider {
-                provider: Box::new(l),
-            })
-            .await?;
+            mb.send(SetProvider { provider: l }).await?;
         }
 
         let hc = HostController::from_registry();
@@ -75,15 +77,49 @@ impl Host {
         // Start control plane
         let _cp = ControlPlane::from_registry();
 
-        // Start wascc:extras
-        let _extras = SyncArbiter::start(1, || {
-            let extras = ExtrasCapabilityProvider::default();
-            let claims = crate::capability::extras::get_claims();
-            let cap = NativeCapability::from_instance(extras, Some("default".to_string()), claims)
-                .unwrap();
-            NativeCapabilityHost::new(cap, vec![])
-        });
         Ok(())
+    }
+
+    pub async fn start_native_capability(&self, capability: crate::NativeCapability) -> Result<()> {
+        let hc = HostController::from_registry();
+        hc.send(StartProvider {
+            provider: capability,
+        })
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn start_actor(&self, actor: crate::Actor) -> Result<()> {
+        let hc = HostController::from_registry();
+
+        hc.send(StartActor { actor }).await?;
+        Ok(())
+    }
+
+    pub async fn get_actors(&self) -> Result<Vec<String>> {
+        let b = MessageBus::from_registry();
+        Ok(b.send(QueryActors {}).await?.results)
+    }
+
+    pub async fn get_providers(&self) -> Result<Vec<String>> {
+        let b = MessageBus::from_registry();
+        Ok(b.send(QueryProviders {}).await?.results)
+    }
+
+    pub async fn call_actor(&self, actor: &str, operation: &str, msg: &[u8]) -> Result<Vec<u8>> {
+        let hc = HostController::from_registry();
+        let inv = hc
+            .send(MintInvocationRequest {
+                op: operation.to_string(),
+                target: WasccEntity::Actor(actor.to_string()),
+                msg: msg.to_vec(),
+                origin: WasccEntity::Actor(SYSTEM_ACTOR.to_string()),
+            })
+            .await?;
+        let b = MessageBus::from_registry();
+        let ir = b.send(inv).await?;
+        Ok(ir.msg)
     }
 
     pub async fn set_binding(

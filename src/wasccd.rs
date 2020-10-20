@@ -15,7 +15,10 @@ async fn main() {
     .try_init();
 
     let host = HostBuilder::new().build();
-    match host.start(Some(NatsLatticeProvider::new(None))).await {
+    match host
+        .start(Some(Box::new(NatsLatticeProvider::new(None))))
+        .await
+    {
         Ok(_) => {
             actix_rt::signal::ctrl_c().await.unwrap();
             info!("Ctrl-C received, shutting down");

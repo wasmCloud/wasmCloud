@@ -16,19 +16,22 @@ pub(crate) struct ActorHost {
 
 impl ActorHost {
     pub fn new(
-        actor: WasccActor,
+        actor_bytes: Vec<u8>,
         wasi: Option<WasiParams>,
         mw_chain: Vec<Box<dyn Middleware>>,
         signing_seed: String,
     ) -> ActorHost {
-        let buf = actor.bytes.clone();
+        let buf = actor_bytes.clone();
+        let actor = WasccActor::from_slice(&buf).unwrap();
+
         #[cfg(feature = "wasmtime")]
         let engine = wasmtime_provider::WasmtimeEngineProvider::new(&buf, wasi);
         #[cfg(feature = "wasm3")]
         let engine = wasm3_provider::Wasm3EngineProvider::new(&buf);
 
         let c = actor.token.claims.clone();
-        let mut guest = WapcHost::new(Box::new(engine), move |_id, bd, ns, op, payload| {
+
+        let guest = WapcHost::new(Box::new(engine), move |_id, bd, ns, op, payload| {
             crate::dispatch::wapc_host_callback(
                 KeyPair::from_seed(&signing_seed).unwrap(),
                 actor.token.claims.clone(),
@@ -37,13 +40,18 @@ impl ActorHost {
                 op,
                 payload,
             )
-        })
-        .unwrap();
+        });
 
-        ActorHost {
-            guest_module: guest,
-            claims: c,
-            mw_chain,
+        match guest {
+            Ok(g) => ActorHost {
+                guest_module: g,
+                claims: c,
+                mw_chain,
+            },
+            Err(e) => {
+                error!("Failed to instantiate waPC host: {}", e);
+                panic!();
+            }
         }
     }
 }
@@ -53,6 +61,8 @@ impl Actor for ActorHost {
 
     fn started(&mut self, ctx: &mut Self::Context) {
         info!("Actor {} started", &self.claims.subject);
+        println!("Actor {} started", &self.claims.subject);
+        //TODO: make this value configurable
         let entity = WasccEntity::Actor(self.claims.subject.to_string());
         let b = MessageBus::from_registry();
         let _ = block_on(async move {
@@ -63,6 +73,10 @@ impl Actor for ActorHost {
             .await
         });
     }
+
+    fn stopped(&mut self, _ctx: &mut Self::Context) {
+        println!("Actor {} stopped", &self.claims.subject);
+    }
 }
 
 impl Handler<Invocation> for ActorHost {
@@ -72,6 +86,7 @@ impl Handler<Invocation> for ActorHost {
     /// middleware chain, perform the requested operation, and then perform the full
     /// post-exec middleware chain, assuming no errors indicate a pre-emptive halt
     fn handle(&mut self, msg: Invocation, ctx: &mut Self::Context) -> Self::Result {
+        println!("Actor being invoked");
         if msg.validate_antiforgery().is_err() {
             return InvocationResponse::error(
                 &msg,

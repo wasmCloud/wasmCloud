@@ -2,7 +2,7 @@ use crate::Result;
 use std::fs::File;
 use std::io::prelude::*;
 use std::path::Path;
-use wascap::jwt::Token;
+use wascap::jwt::{Claims, Token};
 
 /// An actor is a WebAssembly module that conforms to the waSCC protocols and can securely
 /// consume capabilities exposed by native or portable capability providers
@@ -68,5 +68,10 @@ impl WasccActor {
             Some(ref tags) => tags.clone(),
             None => vec![],
         }
+    }
+
+    // Obtain the raw set of claims for this actor
+    pub fn claims(&self) -> Claims<wascap::jwt::Actor> {
+        self.token.claims.clone()
     }
 }

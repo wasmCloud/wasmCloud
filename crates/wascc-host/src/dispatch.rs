@@ -1,12 +1,13 @@
 use crate::errors::{self, ErrorKind};
-use crate::messagebus::{LookupBinding, MessageBus};
-use crate::Result;
+use crate::messagebus::{LookupBinding, MessageBus, OP_BIND_ACTOR};
+use crate::{Result, SYSTEM_ACTOR};
 use actix::dev::{MessageResponse, ResponseChannel};
 use actix::prelude::*;
 use data_encoding::HEXUPPER;
 use futures::executor::block_on;
 use ring::digest::{Context, Digest, SHA256};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::error::Error;
 use std::io::Read;
 use uuid::Uuid;
@@ -14,6 +15,12 @@ use wascap::prelude::{Claims, KeyPair};
 use wascc_codec::capabilities::Dispatcher;
 
 pub(crate) const URL_SCHEME: &str = "wasmbus";
+
+pub const CONFIG_WASCC_CLAIMS_ISSUER: &str = "__wascc_issuer";
+pub const CONFIG_WASCC_CLAIMS_CAPABILITIES: &str = "__wascc_capabilities";
+pub const CONFIG_WASCC_CLAIMS_NAME: &str = "__wascc_name";
+pub const CONFIG_WASCC_CLAIMS_EXPIRES: &str = "__wascc_expires";
+pub const CONFIG_WASCC_CLAIMS_TAGS: &str = "__wascc_tags";
 
 pub struct BusDispatcher {
     pub(crate) addr: Recipient<Invocation>,
@@ -23,10 +30,62 @@ impl BusDispatcher {
     // NOTE: the lattice provider using the bus dispatcher doesn't need to fabricate
     // new invocations (so it doesn't need a host key), it's de-serializing them off
     // the wire.
+
+    /// Use this function to send an invocation through the host's message bus, which
+    /// could potentially become a remote procedure call. Typically this function is called
+    /// in response to receiving a serialized invocation on a given target's RPC subscription
+    /// topic
     pub async fn invoke(&self, inv: &Invocation) -> InvocationResponse {
         match self.addr.send(inv.clone()).await {
             Ok(ir) => ir,
             Err(e) => InvocationResponse::error(&inv, "Mailbox error calling invocation"),
+        }
+    }
+
+    /// Notifies the host that a binding was received from the lattice
+    pub async fn notify_binding_update(
+        &self,
+        actor: &str,
+        contract_id: &str,
+        provider_id: &str,
+        binding_name: &str,
+        values: HashMap<String, String>,
+    ) {
+    }
+
+    /// Notifies the host that a set of actor claims were received from the lattice
+    pub async fn notify_claims_received(&self, claims: Claims<wascap::jwt::Actor>) {}
+}
+
+pub struct ProviderDispatcher {
+    pub(crate) addr: Recipient<Invocation>, // the bus
+    kp: KeyPair,
+    me: WasccEntity,
+}
+
+impl ProviderDispatcher {
+    pub fn new(bus: Recipient<Invocation>, kp: KeyPair, me: WasccEntity) -> ProviderDispatcher {
+        ProviderDispatcher { addr: bus, kp, me }
+    }
+}
+
+impl Dispatcher for ProviderDispatcher {
+    fn dispatch(
+        &self,
+        actor: &str,
+        op: &str,
+        msg: &[u8],
+    ) -> ::std::result::Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
+        let inv = Invocation::new(
+            &self.kp,
+            self.me.clone(),
+            WasccEntity::Actor(actor.to_string()),
+            op,
+            msg.to_vec(),
+        );
+        match block_on(async { self.addr.send(inv).await.map(|ir| ir.msg) }) {
+            Ok(v) => Ok(v),
+            Err(e) => Err("Mailbox error during host callback".into()),
         }
     }
 }
@@ -131,6 +190,18 @@ impl Invocation {
         }
 
         Ok(())
+    }
+}
+
+impl<A, M> MessageResponse<A, M> for Invocation
+where
+    A: Actor,
+    M: Message<Result = Invocation>,
+{
+    fn handle<R: ResponseChannel<M>>(self, _: &mut A::Context, tx: Option<R>) {
+        if let Some(tx) = tx {
+            tx.send(self);
+        }
     }
 }
 
@@ -312,6 +383,65 @@ fn invocation_from_callback(
         target,
         op,
         payload.to_vec(),
+    )
+}
+
+pub(crate) fn gen_config_invocation(
+    hostkey: &KeyPair,
+    actor: &str,
+    contract_id: &str,
+    provider_id: &str,
+    claims: Claims<wascap::jwt::Actor>,
+    binding_name: String,
+    values: HashMap<String, String>,
+) -> Invocation {
+    let mut values = values.clone();
+    values.insert(
+        CONFIG_WASCC_CLAIMS_ISSUER.to_string(),
+        claims.issuer.to_string(),
+    );
+    values.insert(
+        CONFIG_WASCC_CLAIMS_CAPABILITIES.to_string(),
+        claims
+            .metadata
+            .as_ref()
+            .unwrap()
+            .caps
+            .as_ref()
+            .unwrap_or(&Vec::new())
+            .join(","),
+    );
+    values.insert(CONFIG_WASCC_CLAIMS_NAME.to_string(), claims.name());
+    values.insert(
+        CONFIG_WASCC_CLAIMS_EXPIRES.to_string(),
+        claims.expires.unwrap_or(0).to_string(),
+    );
+    values.insert(
+        CONFIG_WASCC_CLAIMS_TAGS.to_string(),
+        claims
+            .metadata
+            .as_ref()
+            .unwrap()
+            .tags
+            .as_ref()
+            .unwrap_or(&Vec::new())
+            .join(","),
+    );
+    let cfgvals = crate::generated::core::CapabilityConfiguration {
+        module: actor.to_string(),
+        values,
+    };
+    let payload = crate::generated::core::serialize(&cfgvals).unwrap();
+    Invocation::new(
+        hostkey,
+        WasccEntity::Actor(SYSTEM_ACTOR.to_string()),
+        WasccEntity::Capability {
+            contract_id: contract_id.to_string(),
+            id: provider_id.to_string(),
+            binding: binding_name,
+        },
+        OP_BIND_ACTOR,
+        payload,
     )
 }
 

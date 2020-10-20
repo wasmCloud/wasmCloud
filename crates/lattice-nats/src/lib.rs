@@ -1,3 +1,6 @@
+use std::collections::hash_map::RandomState;
+use std::collections::HashMap;
+use wascap::jwt::Claims;
 use wascc_host::{
     BusDispatcher, Invocation, InvocationResponse, LatticeProvider, Result, WasccEntity,
 };
@@ -35,5 +38,20 @@ impl LatticeProvider for NatsLatticeProvider {
         // use the dispatcher to invoke functions on the bus
 
         Ok(())
+    }
+
+    fn advertise_binding(
+        &self,
+        actor: &str,
+        contract_id: &str,
+        binding_name: &str,
+        provider_id: &str,
+        values: HashMap<String, String, RandomState>,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    fn advertise_claims(&self, claims: Claims<wascap::jwt::Actor>) -> Result<()> {
+        unimplemented!()
     }
 }

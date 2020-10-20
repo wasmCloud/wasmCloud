@@ -1,20 +1,27 @@
 use crate::capability::native::NativeCapability;
-use crate::dispatch::{Invocation, InvocationResponse, WasccEntity};
+use crate::dispatch::{Invocation, InvocationResponse, ProviderDispatcher, WasccEntity};
 use crate::errors;
 use crate::messagebus::{MessageBus, Subscribe};
 use crate::middleware::{run_capability_post_invoke, run_capability_pre_invoke, Middleware};
 use crate::Result;
 use actix::prelude::*;
 use futures::executor::block_on;
+use std::sync::Arc;
+use wascap::prelude::KeyPair;
 
 pub(crate) struct NativeCapabilityHost {
-    cap: NativeCapability,
+    cap: Arc<NativeCapability>,
     mw_chain: Vec<Box<dyn Middleware>>,
+    kp: KeyPair,
 }
 
 impl NativeCapabilityHost {
-    pub fn new(cap: NativeCapability, mw_chain: Vec<Box<dyn Middleware>>) -> Self {
-        NativeCapabilityHost { cap, mw_chain }
+    pub fn new(
+        cap: Arc<NativeCapability>,
+        mw_chain: Vec<Box<dyn Middleware>>,
+        kp: KeyPair,
+    ) -> Self {
+        NativeCapabilityHost { cap, mw_chain, kp }
     }
 }
 
@@ -28,6 +35,20 @@ impl Actor for NativeCapabilityHost {
             contract_id: self.cap.contract_id(),
             binding: self.cap.binding_name.to_string(),
         };
+        println!("Native provider {} started", &entity.url());
+        let nativedispatch = ProviderDispatcher::new(
+            b.clone().recipient(),
+            KeyPair::from_seed(&self.kp.seed().unwrap()).unwrap(),
+            entity.clone(),
+        );
+        if let Err(e) = self.cap.plugin.configure_dispatch(Box::new(nativedispatch)) {
+            error!(
+                "Failed to configure provider dispatcher: {}, provider stopping.",
+                e
+            );
+            ctx.stop();
+        }
+
         let _ = block_on(async move {
             b.send(Subscribe {
                 interest: entity,

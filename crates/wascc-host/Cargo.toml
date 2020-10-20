@@ -14,7 +14,7 @@ categories = ["wasm", "api-bindings"]
 
 
 [features]
-default = ["wasmtime"]
+default = ["wasm3"]
 wasmtime = ["wasmtime-provider"]
 wasm3 = ["wasm3-provider"]
 
