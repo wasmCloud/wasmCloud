@@ -1,4 +1,4 @@
-use crate::common::{await_actor_count, await_provider_count};
+use crate::common::{await_actor_count, await_provider_count, par_from_file};
 use crate::generated::http::{deserialize, serialize, Request, Response};
 use provider_archive::ProviderArchive;
 use std::collections::HashMap;
@@ -46,15 +46,8 @@ pub async fn kvcounter_basic() -> Result<(), Box<dyn Error + Sync + Send>> {
     h.start_actor(kvcounter).await?;
     await_actor_count(&h, 1, Duration::from_millis(50), 3).await?;
 
-    let mut f = File::open("./tests/modules/libwascc_redis.par")?;
-    let mut buf = Vec::new();
-    f.read_to_end(&mut buf)?;
-    let arc = ProviderArchive::try_load(&buf)?;
-
-    let mut f2 = File::open("./tests/modules/libwascc_httpsrv.par")?;
-    let mut buf2 = Vec::new();
-    f2.read_to_end(&mut buf2)?;
-    let arc2 = ProviderArchive::try_load(&buf2)?;
+    let arc = par_from_file("./tests/modules/libwascc_redis.par")?;
+    let arc2 = par_from_file("./tests/modules/libwascc_httpsrv.par")?;
 
     let redis = NativeCapability::from_archive(&arc, None)?;
     let websrv = NativeCapability::from_archive(&arc2, None)?;

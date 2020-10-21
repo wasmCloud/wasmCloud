@@ -1,5 +1,8 @@
 use std::time::Duration;
 use wascc_host::{Host, Result};
+use provider_archive::ProviderArchive;
+use std::fs::File;
+use std::io::Read;
 
 pub async fn await_actor_count(
     h: &Host,
@@ -39,4 +42,11 @@ pub async fn await_provider_count(
         }
     }
     Ok(())
+}
+
+pub fn par_from_file(file: &str) -> Result<ProviderArchive> {
+    let mut f = File::open(file)?;
+    let mut buf = Vec::new();
+    f.read_to_end(&mut buf)?;
+    ProviderArchive::try_load(&buf)
 }
