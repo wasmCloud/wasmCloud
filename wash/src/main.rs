@@ -1,5 +1,14 @@
-use std::path::PathBuf;
 use structopt::StructOpt;
+use structopt::clap::AppSettings;
+
+mod claims;
+use claims::ClaimsCli;
+
+mod lattice;
+use lattice::LatticeCli;
+
+mod keys;
+use keys::KeysCli;
 
 /// This renders appropriately with escape characters
 const ASCII: &str = "
@@ -13,7 +22,9 @@ A single CLI to handle all of your waSCC tooling needs
 ";
 
 #[derive(Debug, Clone, StructOpt)]
-#[structopt(name = "wash", about = ASCII)]
+#[structopt(global_settings(&[AppSettings::ColoredHelp, AppSettings::VersionlessSubcommands]),
+            name = "wash",
+            about = ASCII)]
 struct Cli {
     #[structopt(flatten)]
     command: CliCommand,
@@ -21,49 +32,35 @@ struct Cli {
 
 #[derive(Debug, Clone, StructOpt)]
 enum CliCommand {
-    /// claims
+    /// Utilities for generating and managing JWTs for waSCC Actors
     #[structopt(name = "claims")]
-    Claims(ClaimsCommand),
-    /// keys
+    Claims(ClaimsCli),
+    /// Utilities for generating and managing keys
     #[structopt(name = "keys")]
-    Keys(KeysCommand),
-    /// reg
-    #[structopt(name = "reg")]
-    Reg(RegCommand),
-    /// lattice
+    Keys(KeysCli),
+    /// Utilities for interacting with a waSCC Lattice
     #[structopt(name = "lattice")]
-    Lattice(LatticeCommand),
-}
-
-#[derive(Debug, Clone, StructOpt)]
-struct ClaimsCommand {
-    /// Sample path
-    #[structopt(short = "p", long = "path")]
-    path: PathBuf,
-}
-
-#[derive(Debug, Clone, StructOpt)]
-struct KeysCommand {
-    /// Sample path
-    #[structopt(short = "p", long = "path")]
-    path: PathBuf,
-}
-
-#[derive(Debug, Clone, StructOpt)]
-struct LatticeCommand {
-    /// Sample path
-    #[structopt(short = "p", long = "path")]
-    path: PathBuf,
-}
-
-#[derive(Debug, Clone, StructOpt)]
-struct RegCommand {
-    /// Sample path
-    #[structopt(short = "p", long = "path")]
-    path: PathBuf,
+    Lattice(LatticeCli),
 }
 
 fn main() {
     let cli = Cli::from_args();
-    println!("{:#?}", cli);
+    env_logger::init();
+
+    let res = match cli.command {
+        CliCommand::Keys(keyscli) => {
+            keys::handle_command(keyscli)
+        }
+        CliCommand::Lattice(latticecli) => {
+            lattice::handle_command(latticecli)
+        }
+        CliCommand::Claims(claimscli) => {
+            claims::handle_command(claimscli)
+        }
+    };
+
+    match res {
+        Ok(_v) => (),
+        Err(e) => println!("Error: {}", e),
+    }
 }
