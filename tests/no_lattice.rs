@@ -44,22 +44,31 @@ pub async fn kvcounter_basic() -> Result<(), Box<dyn Error + Sync + Send>> {
     h.start_actor(kvcounter).await?;
     await_actor_count(&h, 1, Duration::from_millis(50), 3).await?;
 
-    let mut f = File::open("./tests/modules/redis.par")?;
+    let mut f = File::open("./tests/modules/libwascc_redis.par")?;
     let mut buf = Vec::new();
     f.read_to_end(&mut buf)?;
-    let arc = ProviderArchive::try_load(&buf).unwrap();
+    let arc = ProviderArchive::try_load(&buf)?;
+
+    let mut f2 = File::open("./tests/modules/libwascc_httpsrv.par")?;
+    let mut buf2 = Vec::new();
+    f2.read_to_end(&mut buf2)?;
+    let arc2 = ProviderArchive::try_load(&buf2)?;
 
     let redis = NativeCapability::from_archive(&arc, None)?;
+    let websrv = NativeCapability::from_archive(&arc2, None)?;
+
     let redis_id = arc.claims().unwrap().subject;
+    let websrv_id = arc2.claims().unwrap().subject;
 
     let mut values: HashMap<String, String> = HashMap::new();
     values.insert(
-        "REDIS_URL".to_string(),
+        "URL".to_string(),
         "redis://127.0.0.1:6379".to_string(),
     );
     h.start_native_capability(redis).await?;
-    // need to wait for 2 providers because extras is always there
-    await_provider_count(&h, 2, Duration::from_millis(50), 3).await?;
+    h.start_native_capability(websrv).await?;
+    // need to wait for 3 providers because extras is always there
+    await_provider_count(&h, 3, Duration::from_millis(50), 3).await?;
 
     h.set_binding(&kvcounter_key, "wascc:keyvalue", None, redis_id, values)
         .await?;

@@ -49,7 +49,7 @@ rmp-serde = "0.14.4"
 serde = {version = "1.0.117", features = ["derive"] }
 serde_bytes = "0.11.5"
 serde_json = "1.0.59"
-provider-archive = "0.1.0"
+provider-archive = "0.1.2"
 
 [workspace]
 members = [

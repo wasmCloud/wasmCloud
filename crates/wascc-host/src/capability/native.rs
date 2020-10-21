@@ -40,6 +40,8 @@ impl NativeCapability {
         match archive.target_bytes(&target) {
             Some(bytes) => {
                 let path = std::env::temp_dir();
+                let path = path.join(archive.claims().unwrap().subject);
+                ::std::fs::create_dir_all(&path)?;
                 let path = path.join(&target);
                 {
                     let mut tf = File::create(&path)?;
