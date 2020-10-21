@@ -82,10 +82,11 @@ impl Host {
 
     pub async fn start_native_capability(&self, capability: crate::NativeCapability) -> Result<()> {
         let hc = HostController::from_registry();
-        let _ = hc.send(StartProvider {
-            provider: capability,
-        })
-        .await??;
+        let _ = hc
+            .send(StartProvider {
+                provider: capability,
+            })
+            .await??;
 
         Ok(())
     }

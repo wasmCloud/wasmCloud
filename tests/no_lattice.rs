@@ -56,16 +56,10 @@ pub async fn kvcounter_basic() -> Result<(), Box<dyn Error + Sync + Send>> {
     let websrv_id = arc2.claims().unwrap().subject;
 
     let mut values: HashMap<String, String> = HashMap::new();
-    values.insert(
-        "URL".to_string(),
-        "redis://127.0.0.1:6379".to_string(),
-    );
+    values.insert("URL".to_string(), "redis://127.0.0.1:6379".to_string());
 
     let mut webvalues: HashMap<String, String> = HashMap::new();
-    webvalues.insert(
-        "PORT".to_string(),
-        "9999".to_string()
-    );
+    webvalues.insert("PORT".to_string(), "9999".to_string());
     h.start_native_capability(redis).await?;
     h.start_native_capability(websrv).await?;
     // need to wait for 3 providers because extras is always there
@@ -74,7 +68,14 @@ pub async fn kvcounter_basic() -> Result<(), Box<dyn Error + Sync + Send>> {
     h.set_binding(&kvcounter_key, "wascc:keyvalue", None, redis_id, values)
         .await?;
 
-    h.set_binding(&kvcounter_key, "wascc:http_server", None, websrv_id, webvalues).await?;
+    h.set_binding(
+        &kvcounter_key,
+        "wascc:http_server",
+        None,
+        websrv_id,
+        webvalues,
+    )
+    .await?;
 
     let key = uuid::Uuid::new_v4().to_string();
     let rkey = format!(":{}", key); // the kv wasm logic does a replace on '/' with ':'

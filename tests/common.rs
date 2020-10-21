@@ -1,8 +1,8 @@
-use std::time::Duration;
-use wascc_host::{Host, Result};
 use provider_archive::ProviderArchive;
 use std::fs::File;
 use std::io::Read;
+use std::time::Duration;
+use wascc_host::{Host, Result};
 
 pub async fn await_actor_count(
     h: &Host,
