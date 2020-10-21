@@ -42,12 +42,12 @@ OPTIONS:
     -c, --cap <capabilities>...         Add custom capabilities
     -x, --expires <expires-in-days>     Indicates the token expires in the given amount of days. If this option is left
                                         off, the token will never expire
-    -i, --issuer <issuer-key-path>      Issuer seed key path (usually a .nk file). If this option is left off, `wash` will attempt to locate an account key at `$HOME/.wash/keys/<module>_account.nk`, and if it is not found then an issuer key will be generated and placed in `$HOME/.wash/keys/<module>_account.nk`. You can also override this directory by setting the `WCC_HOME` environment variable.
+    -i, --issuer <issuer-key-path>      Issuer seed key path (usually a .nk file). If this option is left off, `wash` will attempt to locate an account key at `$HOME/.wash/keys/<module>_account.nk`, and if it is not found then an issuer key will be generated and placed in `$HOME/.wash/keys/<module>_account.nk`. You can also override this directory by setting the `WASH_HOME` environment variable.
     -n, --name <name>                   A human-readable, descriptive name for the token
     -b, --nbf <not-before-days>         Period in days that must elapse before this token is valid. If this option is
                                         left off, the token will be valid immediately
     -r, --rev <rev>                     Revision number
-    -u, --subject <subject-key-path>    Subject seed key path (usually a .nk file). If this option is left off, `wash` will attempt to locate a module key at `$HOME/.wash/keys/<module>_module.nk`, and if it is not found then a module key will be generated and placed in `$HOME/.wash/keys/<module>_module.nk`. You can also override this directory by setting the `WCC_HOME` environment variable.
+    -u, --subject <subject-key-path>    Subject seed key path (usually a .nk file). If this option is left off, `wash` will attempt to locate a module key at `$HOME/.wash/keys/<module>_module.nk`, and if it is not found then a module key will be generated and placed in `$HOME/.wash/keys/<module>_module.nk`. You can also override this directory by setting the `WASH_HOME` environment variable.
     -t, --tag <tags>...                 A list of arbitrary tags to be embedded in the token
     -v, --ver <ver>                     Human-readable version string
 
@@ -63,8 +63,11 @@ USAGE:
 FLAGS:
     -h, --help    Prints help information
 
-ARGS:
-    <tokentype>    The type of jwt to generate. May be Account, Actor, or Operator.
+SUBCOMMANDS:
+    account     Generate a signed JWT for an account
+    actor       Generate a signed JWT for an actor module
+    help        Prints this message or the help of the given subcommand(s)
+    operator    Generate a signed JWT for an operator
 ```
 
 ### keys
@@ -77,7 +80,7 @@ FLAGS:
     -h, --help    Prints help information
 
 ARGS:
-    <keytype>    The type of key pair to generate. May be Account, User, Module (Actor), Server, Operator, Cluster, Service (Capability Provider)
+    <keytype>    The type of keypair to generate. May be Account, User, Module (Actor), Server, Operator, Cluster, Service (Capability Provider)
 ```
 
 ```
@@ -88,7 +91,7 @@ FLAGS:
     -h, --help      Prints help information
 
 OPTIONS:
-    -d, --directory <keysdirectory>     The directory where keys are stored for listing. Defaults to `$HOME/.wash/keys`, and can also be overwritten by setting the WCC_HOME environment variable.
+    -d, --directory <keysdirectory>     The directory where keys are stored for listing. Defaults to `$HOME/.wash/keys`, and can also be overwritten by setting the WASH_HOME environment variable.
 
 ARGS:
     <keyname>   The name of the key to output
@@ -102,7 +105,7 @@ FLAGS:
     -h, --help          Prints help information
 
 OPTIONS:
-    -d, --directory <keysdirectory>     The directory where keys are stored for listing. Defaults to `$HOME/.wash/keys`, and can also be overwritten by setting the WCC_HOME environment variable.
+    -d, --directory <keysdirectory>     The directory where keys are stored for listing. Defaults to `$HOME/.wash/keys`, and can also be overwritten by setting the WASH_HOME environment variable.
 ```
 
 ### lattice
