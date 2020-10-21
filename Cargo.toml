@@ -1,6 +1,6 @@
 [package]
 name = "provider-archive"
-version = "0.1.1"
+version = "0.1.2"
 authors = ["Kevin Hoffman <alothien@gmail.com>"]
 edition = "2018"
 description = "Library for reading and writing waSCC capability provider archive files"
