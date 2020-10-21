@@ -36,6 +36,8 @@ pub async fn start_and_execute_echo() -> Result<(), Box<dyn Error + Sync + Send>
 }
 
 pub async fn kvcounter_basic() -> Result<(), Box<dyn Error + Sync + Send>> {
+    use redis::Commands;
+
     let h = HostBuilder::new().build();
     h.start(None).await?;
 
@@ -65,6 +67,12 @@ pub async fn kvcounter_basic() -> Result<(), Box<dyn Error + Sync + Send>> {
         "URL".to_string(),
         "redis://127.0.0.1:6379".to_string(),
     );
+
+    let mut webvalues: HashMap<String, String> = HashMap::new();
+    webvalues.insert(
+        "PORT".to_string(),
+        "9999".to_string()
+    );
     h.start_native_capability(redis).await?;
     h.start_native_capability(websrv).await?;
     // need to wait for 3 providers because extras is always there
@@ -72,6 +80,24 @@ pub async fn kvcounter_basic() -> Result<(), Box<dyn Error + Sync + Send>> {
 
     h.set_binding(&kvcounter_key, "wascc:keyvalue", None, redis_id, values)
         .await?;
+
+    h.set_binding(&kvcounter_key, "wascc:http_server", None, websrv_id, webvalues).await?;
+
+    let key = uuid::Uuid::new_v4().to_string();
+    let rkey = format!(":{}", key); // the kv wasm logic does a replace on '/' with ':'
+    let url = format!("http://localhost:9999/{}", key);
+
+    let mut resp = reqwest::get(&url).await?;
+    //let mut resp = reqwest::blocking::get(&url)?;
+    assert!(resp.status().is_success());
+    let _ = reqwest::get(&url).await?;
+    resp = reqwest::get(&url).await?; // counter should be at 3 now
+    assert!(resp.status().is_success());
+    assert_eq!(resp.text().await?, "{\"counter\":3}");
+
+    let client = redis::Client::open("redis://127.0.0.1/")?;
+    let mut con = client.get_connection()?;
+    let _: () = con.del(&rkey)?;
 
     Ok(())
 }
