@@ -1,8 +1,9 @@
 use crate::actors::{ActorHost, WasccActor};
+use crate::auth::Authorizer;
 use crate::capability::extras::ExtrasCapabilityProvider;
 use crate::capability::native_host::NativeCapabilityHost;
 use crate::dispatch::Invocation;
-use crate::messagebus::{MessageBus, SetKey};
+use crate::messagebus::{MessageBus, SetAuthorizer, SetKey};
 use crate::middleware::Middleware;
 use crate::{NativeCapability, Result, WasccEntity};
 use actix::prelude::*;
@@ -17,6 +18,7 @@ pub(crate) struct HostController {
     kp: Option<KeyPair>,
     actors: Vec<Addr<ActorHost>>,
     providers: Vec<Addr<NativeCapabilityHost>>,
+    authorizer: Option<Box<dyn Authorizer>>,
 }
 
 #[derive(Message)]
@@ -118,6 +120,14 @@ impl Handler<StartActor> for HostController {
         let seed = self.kp.as_ref().unwrap().seed()?;
         let mw = self.mw_chain.clone();
         let bytes = msg.actor.bytes;
+        let claims = wascap::wasm::extract_claims(&bytes)?;
+        if let Some(c) = claims {
+            if !self.authorizer.as_ref().unwrap().can_load(&c.claims) {
+                return Err("Permission denied starting actor.".into());
+            }
+        } else {
+            return Err("No claims found in actor. Aborting startup.".into());
+        }
 
         let new_actor = SyncArbiter::start(1, move || {
             println!("instantiating (seed {})", &seed);
@@ -127,6 +137,14 @@ impl Handler<StartActor> for HostController {
         });
         self.actors.push(new_actor);
         Ok(())
+    }
+}
+
+impl Handler<SetAuthorizer> for HostController {
+    type Result = ();
+
+    fn handle(&mut self, msg: SetAuthorizer, _ctx: &mut Context<Self>) {
+        self.authorizer = Some(msg.auth);
     }
 }
 

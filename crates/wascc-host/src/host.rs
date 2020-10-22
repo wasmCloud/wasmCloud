@@ -1,4 +1,6 @@
-use crate::messagebus::{AdvertiseBinding, LatticeProvider, MessageBus, SetProvider};
+use crate::messagebus::{
+    AdvertiseBinding, LatticeProvider, MessageBus, SetAuthorizer, SetProvider,
+};
 use std::thread;
 use wapc::WebAssemblyEngineProvider;
 
@@ -67,8 +69,18 @@ impl Host {
         if let Some(l) = lattice {
             mb.send(SetProvider { provider: l }).await?;
         }
+        // message bus authorizes invocations, host controller authorizes loads
+        mb.send(SetAuthorizer {
+            auth: self.authorizer.clone(),
+        })
+        .await?;
 
         let hc = HostController::from_registry();
+        let hc2 = hc.clone();
+        hc2.send(SetAuthorizer {
+            auth: self.authorizer.clone(),
+        })
+        .await?;
         hc.send(SetLabels {
             labels: self.labels.clone(),
         })

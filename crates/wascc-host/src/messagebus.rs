@@ -1,7 +1,8 @@
+use crate::auth::Authorizer;
 use crate::capability::binding_cache::BindingCache;
 use crate::dispatch::{BusDispatcher, Invocation, InvocationResponse, WasccEntity};
 use crate::host_controller::{HostController, MintInvocationRequest};
-use crate::{Result, SYSTEM_ACTOR};
+use crate::{auth, Result, SYSTEM_ACTOR};
 use actix::dev::{MessageResponse, ResponseChannel};
 use actix::prelude::*;
 use futures::executor::block_on;
@@ -54,6 +55,18 @@ pub struct Subscribe {
 }
 
 #[derive(Message)]
+#[rtype(result = "()")]
+pub struct Unsubscribe {
+    pub interest: WasccEntity,
+}
+
+#[derive(Message)]
+#[rtype(result = "()")]
+pub struct PutClaims {
+    pub claims: Claims<wascap::jwt::Actor>,
+}
+
+#[derive(Message)]
 #[rtype(result = "Option<String>")]
 pub struct LookupBinding {
     // Capability ID
@@ -84,11 +97,18 @@ pub struct SetKey {
     pub key: KeyPair,
 }
 
+#[derive(Message)]
+#[rtype(result = "()")]
+pub struct SetAuthorizer {
+    pub auth: Box<dyn Authorizer>,
+}
+
 pub trait LatticeProvider: Sync + Send {
     fn init(&mut self, dispatcher: BusDispatcher);
     fn name(&self) -> String;
     fn rpc(&self, inv: &Invocation) -> Result<InvocationResponse>;
     fn register_rpc_listener(&self, subscriber: &WasccEntity) -> Result<()>;
+    fn remove_rpc_listener(&self, subscriber: &WasccEntity) -> Result<()>;
     fn advertise_binding(
         &self,
         actor: &str,
@@ -107,6 +127,7 @@ pub(crate) struct MessageBus {
     binding_cache: BindingCache,
     claims_cache: HashMap<String, Claims<wascap::jwt::Actor>>,
     key: Option<KeyPair>,
+    authorizer: Option<Box<dyn Authorizer>>,
 }
 
 impl Supervised for MessageBus {}
@@ -140,6 +161,15 @@ impl Handler<QueryActors> for MessageBus {
     }
 }
 
+impl Handler<PutClaims> for MessageBus {
+    type Result = ();
+
+    fn handle(&mut self, msg: PutClaims, _ctx: &mut Context<Self>) {
+        self.claims_cache
+            .insert(msg.claims.subject.to_string(), msg.claims);
+    }
+}
+
 impl Handler<QueryProviders> for MessageBus {
     type Result = QueryResponse;
 
@@ -162,6 +192,14 @@ impl Handler<SetKey> for MessageBus {
 
     fn handle(&mut self, msg: SetKey, _ctx: &mut Context<Self>) {
         self.key = Some(msg.key)
+    }
+}
+
+impl Handler<SetAuthorizer> for MessageBus {
+    type Result = ();
+
+    fn handle(&mut self, msg: SetAuthorizer, _ctx: &mut Context<Self>) {
+        self.authorizer = Some(msg.auth);
     }
 }
 
@@ -262,7 +300,19 @@ impl Handler<Invocation> for MessageBus {
     /// is not local, _and_ there is a lattice provider configured, then the bus will attempt
     /// to satisfy that call via RPC over lattice.
     fn handle(&mut self, msg: Invocation, _ctx: &mut Context<Self>) -> Self::Result {
-        println!("handling invocation");
+        if let Err(e) = auth::authorize_invocation(
+            &msg,
+            self.authorizer.as_ref().unwrap().clone(),
+            &self.claims_cache,
+        ) {
+            error!("Authorization failure: {}", e);
+            println!("Authorization failure: {}", e);
+            return Box::pin(
+                async move {
+                    InvocationResponse::error(&msg, &format!("Authorization denied: {}", e))
+                }.into_actor(self)
+            );
+        }
         match self.subscribers.get(&msg.target) {
             Some(target) => Box::pin(target.send(msg.clone()).into_actor(self).map(
                 move |res, act, _ctx| {
@@ -313,8 +363,31 @@ impl Handler<Subscribe> for MessageBus {
     type Result = ();
 
     fn handle(&mut self, msg: Subscribe, _ctx: &mut Context<Self>) {
-        info!("Bus registered interest for {}", &msg.interest.url());
-        self.subscribers.insert(msg.interest, msg.subscriber);
+        trace!("Bus registered interest for {}", &msg.interest.url());
+        self.subscribers
+            .insert(msg.interest.clone(), msg.subscriber.clone());
+        if let Some(ref lp) = self.provider {
+            if let Err(e) = lp.register_rpc_listener(&msg.interest) {
+                error!("Failed to register lattice interest for {} - actor should be considered unstable.", msg.interest.url());
+            }
+        }
+    }
+}
+
+impl Handler<Unsubscribe> for MessageBus {
+    type Result = ();
+
+    fn handle(&mut self, msg: Unsubscribe, _ctx: &mut Context<Self>) {
+        trace!("Bus removing interest for {}", msg.interest.url());
+        let _ = self.subscribers.remove(&msg.interest);
+        if let Some(ref lp) = self.provider {
+            if let Err(e) = lp.remove_rpc_listener(&msg.interest) {
+                error!(
+                    "Failed to remove lattice interest for {} - lattice may be unstable.",
+                    msg.interest.url()
+                );
+            }
+        }
     }
 }
 
@@ -348,8 +421,9 @@ fn generate_binding_invocation(
 
 #[cfg(test)]
 mod test {
-    use crate::dispatch::{Dispatcher, Invocation, InvocationResponse, WasccEntity};
-    use crate::messagebus::{MessageBus, SetProvider, Subscribe};
+    use crate::auth::DefaultAuthorizer;
+    use crate::dispatch::{Invocation, InvocationResponse, WasccEntity};
+    use crate::messagebus::{MessageBus, SetAuthorizer, SetProvider, Subscribe};
     use crate::Result;
     use crate::{BusDispatcher, LatticeProvider};
     use actix::prelude::*;
@@ -357,74 +431,7 @@ mod test {
     use std::collections::HashMap;
     use wascap::jwt::Claims;
     use wascap::prelude::KeyPair;
-
-    // This test demonstrates the basic role of the message bus -- to act as an intermediary
-    // between targets and senders. Any actor in the application can simply send
-    // the bus an invocation with a proper target, and the bus will deliver the invocation to that
-    // target
-    #[actix_rt::test]
-    async fn bus_supports_actor_to_actor() {
-        let hk = KeyPair::new_server();
-        let b = MessageBus::from_registry();
-        let h1 = SyncArbiter::start(1, || HappyActor { inv_count: 0 });
-        let h2 = SyncArbiter::start(1, || HappyActor { inv_count: 0 });
-        let a1 = WasccEntity::Actor("Mxxx1".to_string());
-        let a2 = WasccEntity::Actor("Mxxx2".to_string());
-
-        let recip1 = h1.clone().recipient();
-        let recip2 = h2.clone().recipient();
-        b.send(Subscribe {
-            interest: a1.clone(),
-            subscriber: recip1,
-        })
-        .await
-        .unwrap();
-        b.send(Subscribe {
-            interest: a2.clone(),
-            subscriber: recip2,
-        })
-        .await
-        .unwrap();
-        println!("Subscribed...");
-        let inv1 = Invocation::new(&hk, a1.clone(), a2.clone(), "OP_FOO", vec![]);
-        let ir1 = b.send(inv1).await.unwrap(); // Actor a1 calls a2
-        println!("A called A2");
-        assert!(ir1.error.is_none());
-        let inv2 = Invocation::new(&hk, a2.clone(), a1.clone(), "OP_FOO", vec![]);
-        let ir2 = b.send(inv2).await.unwrap(); // Actor a2 calls a1
-        println!("A2 called A");
-        assert!(ir2.error.is_none());
-
-        let val1 = h1.send(Query).await.unwrap();
-        let val2 = h2.send(Query).await.unwrap();
-        assert_eq!(val1, 1);
-        assert_eq!(val2, 1);
-    }
-
-    #[actix_rt::test]
-    async fn bus_defers_to_lattice_for_missing_subscriber() {
-        let hk = KeyPair::new_server();
-        let b = MessageBus::from_registry();
-        let a1 = WasccEntity::Actor("Mxxx1".to_string());
-        let a2 = WasccEntity::Actor("Mxxx2".to_string());
-
-        b.send(SetProvider {
-            provider: Box::new(FauxLattice {
-                result: vec![1, 2, 3, 4, 5],
-            }),
-        })
-        .await
-        .unwrap();
-
-        // The answer to this invocation should come from the lattice
-        let inv1 = Invocation::new(&hk, a1.clone(), a2.clone(), "OP_FOO", vec![]);
-        let inv1_id = inv1.id.to_string();
-        let ir1 = b.send(inv1).await.unwrap(); // Actor a1 calls a2.. but a2 isn't local!
-
-        assert!(ir1.error.is_none());
-        assert_eq!(ir1.msg, vec![1, 2, 3, 4, 5]);
-        assert_eq!(ir1.invocation_id, inv1_id);
-    }
+    use wascc_codec::capabilities::Dispatcher;
 
     #[derive(Debug, Clone, Message)]
     #[rtype(result = "u32")]
@@ -468,12 +475,10 @@ mod test {
             Ok(InvocationResponse::success(&inv, self.result.clone()))
         }
 
-        fn init(&mut self, dispatcher: BusDispatcher) {
-            unimplemented!()
-        }
+        fn init(&mut self, dispatcher: BusDispatcher) {}
 
         fn register_rpc_listener(&self, subscriber: &WasccEntity) -> Result<()> {
-            unimplemented!()
+            Ok(())
         }
 
         fn advertise_binding(
@@ -484,11 +489,15 @@ mod test {
             provider_id: &str,
             values: HashMap<String, String, RandomState>,
         ) -> Result<()> {
-            unimplemented!()
+            Ok(())
         }
 
-        fn advertise_claims(&self, claims: Claims<Actor>) -> Result<()> {
-            unimplemented!()
+        fn advertise_claims(&self, claims: Claims<wascap::jwt::Actor>) -> Result<()> {
+            Ok(())
+        }
+
+        fn remove_rpc_listener(&self, subscriber: &WasccEntity) -> Result<()> {
+            Ok(())
         }
     }
 }

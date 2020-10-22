@@ -1,6 +1,6 @@
 use crate::actors::WasccActor;
 use crate::dispatch::{Invocation, InvocationResponse, WasccEntity};
-use crate::messagebus::{MessageBus, Subscribe};
+use crate::messagebus::{MessageBus, PutClaims, Subscribe};
 use crate::middleware::{run_actor_post_invoke, run_actor_pre_invoke, Middleware};
 use crate::Result;
 use actix::prelude::*;
@@ -65,10 +65,17 @@ impl Actor for ActorHost {
         //TODO: make this value configurable
         let entity = WasccEntity::Actor(self.claims.subject.to_string());
         let b = MessageBus::from_registry();
+        let b2 = b.clone();
         let _ = block_on(async move {
             b.send(Subscribe {
                 interest: entity,
                 subscriber: ctx.address().recipient(),
+            })
+            .await
+        });
+        let _ = block_on(async move {
+            b2.send(PutClaims {
+                claims: self.claims.clone(),
             })
             .await
         });
@@ -87,12 +94,6 @@ impl Handler<Invocation> for ActorHost {
     /// post-exec middleware chain, assuming no errors indicate a pre-emptive halt
     fn handle(&mut self, msg: Invocation, ctx: &mut Self::Context) -> Self::Result {
         println!("Actor being invoked");
-        if msg.validate_antiforgery().is_err() {
-            return InvocationResponse::error(
-                &msg,
-                "Anti-forgery validation failed for invocation.",
-            );
-        }
 
         if let WasccEntity::Actor(ref target) = msg.target {
             if run_actor_pre_invoke(&msg, &self.mw_chain).is_err() {

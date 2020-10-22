@@ -73,13 +73,6 @@ impl Handler<Invocation> for NativeCapabilityHost {
     /// the capability provider pre-invoke middleware, invokes the operation on the native
     /// plugin, then runs the provider post-invoke middleware.
     fn handle(&mut self, inv: Invocation, ctx: &mut Self::Context) -> Self::Result {
-        if inv.validate_antiforgery().is_err() {
-            return InvocationResponse::error(
-                &inv,
-                "Anti-forgery validation failed for invocation.",
-            );
-        }
-
         if let WasccEntity::Actor(ref s) = inv.origin {
             if let WasccEntity::Capability {
                 id,
@@ -132,18 +125,22 @@ mod test {
     use crate::Result;
     use crate::SYSTEM_ACTOR;
     use actix::prelude::*;
+    use std::sync::Arc;
     use wascap::prelude::KeyPair;
 
     #[actix_rt::test]
     async fn test_extras_actor() {
-        let extras = SyncArbiter::start(1, || {
+        let kp = KeyPair::new_server();
+        let seed = kp.seed().unwrap();
+        let extras = SyncArbiter::start(1, move || {
+            let key = KeyPair::from_seed(&seed).unwrap();
             let extras = ExtrasCapabilityProvider::default();
             let claims = crate::capability::extras::get_claims();
             let cap = NativeCapability::from_instance(extras, Some("default".to_string()), claims)
                 .unwrap();
-            NativeCapabilityHost::new(cap, vec![])
+            NativeCapabilityHost::new(Arc::new(cap), vec![], key)
         });
-        let kp = KeyPair::new_server();
+
         let req = GeneratorRequest {
             guid: true,
             sequence: false,

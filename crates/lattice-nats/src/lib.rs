@@ -29,7 +29,7 @@ impl LatticeProvider for NatsLatticeProvider {
     }
 
     fn rpc(&self, inv: &Invocation) -> Result<InvocationResponse> {
-        Ok(InvocationResponse::success(inv, vec![]))
+        unimplemented!()
     }
 
     fn register_rpc_listener(&self, subscriber: &WasccEntity) -> Result<()> {
@@ -37,7 +37,11 @@ impl LatticeProvider for NatsLatticeProvider {
         // NATS subscriber should deserialize the RPC message into an invocation, and then
         // use the dispatcher to invoke functions on the bus
 
-        Ok(())
+        unimplemented!()
+    }
+
+    fn remove_rpc_listener(&self, subscriber: &WasccEntity) -> Result<()> {
+        unimplemented!()
     }
 
     fn advertise_binding(
@@ -48,7 +52,7 @@ impl LatticeProvider for NatsLatticeProvider {
         provider_id: &str,
         values: HashMap<String, String, RandomState>,
     ) -> Result<()> {
-        Ok(())
+        unimplemented!()
     }
 
     fn advertise_claims(&self, claims: Claims<wascap::jwt::Actor>) -> Result<()> {
