@@ -1,8 +1,17 @@
 [package]
 name = "wash"
 version = "0.1.0"
-authors = ["Brooks Townsend <brooks.townsend@capitalone.com>"]
+authors = ["Brooks Townsend <brooksmtownsend@gmail.com>"]
 edition = "2018"
+repository = "https://github.com/wascc/wash"
+description = "waSCC Shell (wash) CLI tool"
+license = "Apache-2.0"
+readme = "README.md"
+keywords = ["webassembly", "wascc", "wash"]
+categories = ["wasm", "command-line-utilities"]
+
+[badges]
+maintenance = { status = "actively-developed" }
 
 [dependencies]
 structopt = "0.3.18"
