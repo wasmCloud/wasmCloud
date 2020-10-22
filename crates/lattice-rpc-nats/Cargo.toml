@@ -1,0 +1,10 @@
+[package]
+name = "lattice-rpc-nats"
+version = "0.1.0"
+authors = ["Kevin Hoffman <alothien@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+wascc-host = { path = "../wascc-host"}
+wascap = "0.5.1"
+nats = "0.8.1"

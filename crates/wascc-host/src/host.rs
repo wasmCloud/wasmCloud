@@ -10,7 +10,8 @@ use crate::auth::Authorizer;
 use crate::capability::extras::ExtrasCapabilityProvider;
 use crate::capability::native::NativeCapability;
 use crate::capability::native_host::NativeCapabilityHost;
-use crate::control_plane::ControlPlane;
+use crate::control_plane::actorhost::ControlPlane;
+use crate::control_plane::ControlPlaneProvider;
 use crate::dispatch::{Invocation, InvocationResponse};
 use crate::host_controller::{
     HostController, MintInvocationRequest, SetLabels, StartActor, StartProvider,
@@ -64,9 +65,13 @@ pub struct Host {
 impl Host {
     /// Starts the host's actor system. This call is non-blocking, so it is up to the consumer
     /// to provide some form of parking or waiting (e.g. wait for a Ctrl-C signal).
-    pub async fn start(&self, lattice: Option<Box<dyn LatticeProvider + 'static>>) -> Result<()> {
+    pub async fn start(
+        &self,
+        lattice_rpc: Option<Box<dyn LatticeProvider + 'static>>,
+        lattice_control: Option<Box<dyn ControlPlaneProvider + 'static>>,
+    ) -> Result<()> {
         let mb = MessageBus::from_registry();
-        if let Some(l) = lattice {
+        if let Some(l) = lattice_rpc {
             mb.send(SetProvider { provider: l }).await?;
         }
         // message bus authorizes invocations, host controller authorizes loads
@@ -87,7 +92,14 @@ impl Host {
         .await?;
 
         // Start control plane
-        let _cp = ControlPlane::from_registry();
+        let cp = ControlPlane::from_registry();
+        if let Some(lattice_control) = lattice_control {
+            cp.send(crate::control_plane::actorhost::SetProvider {
+                provider: lattice_control,
+                labels: self.labels.clone(),
+            })
+            .await?;
+        }
 
         Ok(())
     }

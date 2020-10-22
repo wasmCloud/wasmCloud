@@ -1,5 +1,6 @@
 use actix_rt::System;
-use lattice_nats::NatsLatticeProvider;
+use lattice_cplane_nats::NatsControlPlaneProvider;
+use lattice_rpc_nats::NatsLatticeProvider;
 use wascc_host::HostBuilder;
 
 #[macro_use]
@@ -16,7 +17,10 @@ async fn main() {
 
     let host = HostBuilder::new().build();
     match host
-        .start(Some(Box::new(NatsLatticeProvider::new(None))))
+        .start(
+            Some(Box::new(NatsLatticeProvider::new(None))),
+            Some(Box::new(NatsControlPlaneProvider::new())),
+        )
         .await
     {
         Ok(_) => {

@@ -10,7 +10,7 @@ use wascc_host::{Actor, HostBuilder, NativeCapability};
 
 pub async fn start_and_execute_echo() -> Result<(), Box<dyn Error + Sync + Send>> {
     let h = HostBuilder::new().build();
-    h.start(None).await?;
+    h.start(None, None).await?;
     let echo = Actor::from_file("./tests/modules/echo.wasm")?;
     let actor_id = echo.public_key();
     h.start_actor(echo).await?;
@@ -39,7 +39,7 @@ pub async fn kvcounter_basic() -> Result<(), Box<dyn Error + Sync + Send>> {
     use redis::Commands;
 
     let h = HostBuilder::new().build();
-    h.start(None).await?;
+    h.start(None, None).await?;
 
     let kvcounter = Actor::from_file("./tests/modules/kvcounter.wasm")?;
     let kvcounter_key = kvcounter.public_key();
