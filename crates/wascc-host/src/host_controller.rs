@@ -61,8 +61,13 @@ impl SystemService for HostController {
         // TODO: make this value configurable
         ctx.set_mailbox_capacity(100);
 
+        let b = MessageBus::from_registry();
+        b.do_send(SetKey {
+            key: KeyPair::from_seed(&k2).unwrap(),
+        });
+
         // Start wascc:extras
-        let _extras = SyncArbiter::start(1, move || {
+        let extras = SyncArbiter::start(1, move || {
             let k = KeyPair::from_seed(&ks).unwrap();
             let extras = ExtrasCapabilityProvider::default();
             let claims = crate::capability::extras::get_claims();
@@ -70,11 +75,7 @@ impl SystemService for HostController {
                 .unwrap();
             NativeCapabilityHost::new(Arc::new(cap), vec![], k)
         });
-
-        let b = MessageBus::from_registry();
-        b.do_send(SetKey {
-            key: KeyPair::from_seed(&k2).unwrap(),
-        });
+        self.providers.push(extras); // can't let this provider go out of scope, or the actor will stop
     }
 }
 

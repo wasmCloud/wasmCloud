@@ -32,8 +32,11 @@ pub async fn await_provider_count(
 ) -> Result<()> {
     let mut attempt = 0;
     loop {
-        if h.get_providers().await?.len() == count {
+        let p = h.get_providers().await?;
+        if p.len() == count {
             break;
+        } else {
+            println!("provider wait: {:?}", p);
         }
         ::std::thread::sleep(backoff);
         attempt = attempt + 1;

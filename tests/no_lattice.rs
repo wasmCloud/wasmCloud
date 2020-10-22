@@ -63,7 +63,7 @@ pub async fn kvcounter_basic() -> Result<(), Box<dyn Error + Sync + Send>> {
     h.start_native_capability(redis).await?;
     h.start_native_capability(websrv).await?;
     // need to wait for 3 providers because extras is always there
-    await_provider_count(&h, 3, Duration::from_millis(50), 3).await?;
+    await_provider_count(&h, 3, Duration::from_millis(500), 5).await?;
 
     h.set_binding(&kvcounter_key, "wascc:keyvalue", None, redis_id, values)
         .await?;

@@ -1,6 +1,6 @@
 use crate::actors::WasccActor;
 use crate::dispatch::{Invocation, InvocationResponse, WasccEntity};
-use crate::messagebus::{MessageBus, PutClaims, Subscribe};
+use crate::messagebus::{MessageBus, PutClaims, Subscribe, Unsubscribe};
 use crate::middleware::{run_actor_post_invoke, run_actor_pre_invoke, Middleware};
 use crate::Result;
 use actix::prelude::*;
@@ -66,23 +66,37 @@ impl Actor for ActorHost {
         let entity = WasccEntity::Actor(self.claims.subject.to_string());
         let b = MessageBus::from_registry();
         let b2 = b.clone();
+        let recipient = ctx.address().clone().recipient();
         let _ = block_on(async move {
             b.send(Subscribe {
                 interest: entity,
-                subscriber: ctx.address().recipient(),
+                subscriber: recipient,
             })
             .await
         });
         let _ = block_on(async move {
-            b2.send(PutClaims {
-                claims: self.claims.clone(),
-            })
-            .await
+            if let Err(e) = b2
+                .send(PutClaims {
+                    claims: self.claims.clone(),
+                })
+                .await
+            {
+                error!("Actor failed to subscribe to bus: {}", e);
+                ctx.stop();
+            }
         });
     }
 
-    fn stopped(&mut self, _ctx: &mut Self::Context) {
+    fn stopped(&mut self, ctx: &mut Self::Context) {
         println!("Actor {} stopped", &self.claims.subject);
+        let entity = WasccEntity::Actor(self.claims.subject.to_string());
+        let b = MessageBus::from_registry();
+        let _ = block_on(async move {
+            if let Err(e) = b.send(Unsubscribe { interest: entity }).await {
+                error!("Actor failed to unsubscribe from bus: {}", e);
+                ctx.stop();
+            }
+        });
     }
 }
 

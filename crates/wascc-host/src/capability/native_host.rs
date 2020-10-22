@@ -1,7 +1,7 @@
 use crate::capability::native::NativeCapability;
 use crate::dispatch::{Invocation, InvocationResponse, ProviderDispatcher, WasccEntity};
 use crate::errors;
-use crate::messagebus::{MessageBus, Subscribe};
+use crate::messagebus::{MessageBus, Subscribe, Unsubscribe};
 use crate::middleware::{run_capability_post_invoke, run_capability_pre_invoke, Middleware};
 use crate::Result;
 use actix::prelude::*;
@@ -42,26 +42,42 @@ impl Actor for NativeCapabilityHost {
             entity.clone(),
         );
         if let Err(e) = self.cap.plugin.configure_dispatch(Box::new(nativedispatch)) {
+            println!("{:?}", e);
             error!(
                 "Failed to configure provider dispatcher: {}, provider stopping.",
                 e
             );
             ctx.stop();
         }
-
+        let url = entity.url().to_string();
         let _ = block_on(async move {
-            b.send(Subscribe {
-                interest: entity,
-                subscriber: ctx.address().recipient(),
-            })
-            .await
+            if let Err(e) = b
+                .send(Subscribe {
+                    interest: entity.clone(),
+                    subscriber: ctx.address().recipient(),
+                })
+                .await
+            {
+                println!("{:?}", e);
+                error!(
+                    "Native capability provider failed to subscribe to bus: {}",
+                    e
+                );
+                ctx.stop();
+            }
         });
-        info!(
-            "Native Capability Provider '{}' ready ({}/{})",
-            &self.cap.claims.subject,
-            &self.cap.contract_id(),
-            &self.cap.binding_name
-        );
+        info!("Native Capability Provider '{}' ready", url);
+    }
+
+    fn stopped(&mut self, _ctx: &mut Self::Context) {
+        let b = MessageBus::from_registry();
+        let entity = WasccEntity::Capability {
+            id: self.cap.claims.subject.to_string(),
+            contract_id: self.cap.contract_id(),
+            binding: self.cap.binding_name.to_string(),
+        };
+        info!("Native capability provider '{}' stopped.", entity.url());
+        let _ = block_on(async move { b.send(Unsubscribe { interest: entity }).await });
     }
 }
 
