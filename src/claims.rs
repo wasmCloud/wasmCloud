@@ -14,28 +14,30 @@
 
 // extern crate serde_derive;
 
-use serde::{Serialize, Deserialize};
 use nkeys::KeyPair;
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs::{read_to_string, File};
 use std::io::Read;
 use std::io::Write;
 use structopt::clap::AppSettings;
 use structopt::StructOpt;
-use wascap::jwt::{Account, Actor, Claims, Operator, TokenValidation, WascapEntity, };
-use wascap::wasm::{days_from_now_to_jwt_time, sign_buffer_with_claims};
-use wascap::caps::*;
-use serde::de::DeserializeOwned;
 use term_table::{
     row::Row,
     table_cell::{Alignment, TableCell},
     Table, TableStyle,
 };
+use wascap::caps::*;
+use wascap::jwt::{
+    Account, Actor, CapabilityProvider, Claims, Operator, TokenValidation, WascapEntity,
+};
+use wascap::wasm::{days_from_now_to_jwt_time, sign_buffer_with_claims};
 
 #[derive(Debug, StructOpt, Clone)]
 #[structopt(
     global_settings(&[AppSettings::ColoredHelp, AppSettings::VersionlessSubcommands]),
-    name = "wascap",
-    about = "A command line utility for viewing, manipulating, and verifying capability claims in WebAssembly modules")]
+    name = "claims")]
 pub struct ClaimsCli {
     #[structopt(flatten)]
     command: ClaimsCliCommand,
@@ -72,6 +74,9 @@ enum TokenCommand {
     /// Generate a signed JWT for an account
     #[structopt(name = "account")]
     Account(AccountMetadata),
+    /// Generate a signed JWT for a service (capability provider)
+    #[structopt(name = "provider")]
+    Provider(ProviderMetadata),
 }
 
 #[derive(Debug, Clone, StructOpt, Serialize, Deserialize)]
@@ -120,6 +125,45 @@ struct AccountMetadata {
     /// Seed key paths (first seed is the issuer[operator], second is the subject[account], any additional seeds are used for the valid signers list)
     #[structopt(short = "s", long = "seed", name = "seed-path")]
     key_paths: Vec<String>,
+
+    /// Indicates the token expires in the given amount of days. If this option is left off, the token will never expire
+    #[structopt(short = "x", long = "expires")]
+    expires_in_days: Option<u64>,
+
+    /// Period in days that must elapse before this token is valid. If this option is left off, the token will be valid immediately
+    #[structopt(short = "b", long = "nbf")]
+    not_before_days: Option<u64>,
+}
+
+#[derive(Debug, Clone, StructOpt)]
+struct ProviderMetadata {
+    /// A descriptive name for the provider
+    #[structopt(short = "n", long = "name")]
+    name: String,
+
+    /// Capability contract ID that this provider supports
+    #[structopt(short = "c", long = "capid")]
+    capid: String,
+
+    /// A human-readable string identifying the vendor of this provider (e.g. Redis or Cassandra or NATS etc)
+    #[structopt(short = "v", long = "vendor")]
+    vendor: String,
+
+    /// Monotonically increasing revision number
+    #[structopt(short = "r", long = "revision")]
+    revision: Option<i32>,
+
+    /// Human-friendly version string
+    #[structopt(short = "e", long = "version")]
+    version: Option<String>,
+
+    /// Seed path for the issuer
+    #[structopt(short = "i", long = "issuer")]
+    issuer: String,
+
+    /// Seed path for the subject
+    #[structopt(short = "s", long = "subject")]
+    subject: String,
 
     /// Indicates the token expires in the given amount of days. If this option is left off, the token will never expire
     #[structopt(short = "x", long = "expires")]
@@ -194,7 +238,7 @@ pub fn handle_command(cli: ClaimsCli) -> Result<(), Box<dyn ::std::error::Error>
     match cli.command {
         ClaimsCliCommand::Inspect { file, raw } => render_caps(&file, raw),
         ClaimsCliCommand::Sign(signcmd) => sign_file(&signcmd),
-        ClaimsCliCommand::Token (gencmd) => generate_token(&gencmd),
+        ClaimsCliCommand::Token(gencmd) => generate_token(&gencmd),
     }
 }
 
@@ -203,6 +247,7 @@ fn generate_token(cmd: &TokenCommand) -> Result<(), Box<dyn ::std::error::Error>
         TokenCommand::Actor(actor) => generate_actor(actor),
         TokenCommand::Operator(operator) => generate_operator(operator),
         TokenCommand::Account(account) => generate_account(account),
+        TokenCommand::Provider(provider) => generate_provider(provider),
     }
 }
 
@@ -325,6 +370,28 @@ fn generate_account(account: &AccountMetadata) -> Result<(), Box<dyn ::std::erro
     Ok(())
 }
 
+fn generate_provider(provider: &ProviderMetadata) -> Result<(), Box<dyn ::std::error::Error>> {
+    let keys = get_keypair_vec(&vec![provider.issuer.clone(), provider.subject.clone()])?;
+    if keys.len() < 2 {
+        return Err("must supply two keys - one for the issuer, one for subject".into());
+    }
+
+    let claims: Claims<CapabilityProvider> = Claims::<CapabilityProvider>::with_dates(
+        provider.name.clone(),
+        keys[0].public_key(),
+        keys[1].public_key(),
+        provider.capid.clone(),
+        provider.vendor.clone(),
+        provider.revision.clone(),
+        provider.version.clone(),
+        HashMap::new(),
+        days_from_now_to_jwt_time(provider.not_before_days),
+        days_from_now_to_jwt_time(provider.expires_in_days),
+    );
+    println!("{}", claims.encode(&keys[0])?);
+    Ok(())
+}
+
 fn sign_file(cmd: &SignCommand) -> Result<(), Box<dyn ::std::error::Error>> {
     let mut sfile = File::open(&cmd.source).unwrap();
     let mut buf = Vec::new();
@@ -422,9 +489,7 @@ fn render_caps(file: &str, raw: bool) -> Result<(), Box<dyn ::std::error::Error>
             }
             Ok(())
         }
-        Err(e) => {
-            Err(Box::new(e))
-        }
+        Err(e) => Err(Box::new(e)),
         Ok(None) => {
             eprintln!("No capabilities discovered in : {}", &file);
             Ok(())
@@ -436,7 +501,7 @@ fn render_caps(file: &str, raw: bool) -> Result<(), Box<dyn ::std::error::Error>
 fn render_actor_claims(claims: Claims<Actor>, validation: TokenValidation) -> String {
     let mut table = render_core(&claims, validation);
 
-    let md = claims.metadata.clone().unwrap();        
+    let md = claims.metadata.clone().unwrap();
     let friendly_rev = md.rev.unwrap_or(0);
     let friendly_ver = md.ver.unwrap_or_else(|| "None".to_string());
     let friendly = format!("{} ({})", friendly_ver, friendly_rev);
@@ -447,7 +512,11 @@ fn render_actor_claims(claims: Claims<Actor>, validation: TokenValidation) -> St
     ]));
 
     table.add_row(Row::new(vec![TableCell::new_with_alignment(
-        if md.provider { "Capability Provider" } else { "Capabilities" },
+        if md.provider {
+            "Capability Provider"
+        } else {
+            "Capabilities"
+        },
         2,
         Alignment::Center,
     )]));
