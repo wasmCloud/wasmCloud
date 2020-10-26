@@ -1,6 +1,6 @@
 [package]
 name = "wash"
-version = "0.1.1"
+version = "0.1.2"
 authors = ["Brooks Townsend <brooksmtownsend@gmail.com>"]
 edition = "2018"
 repository = "https://github.com/wascc/wash"
