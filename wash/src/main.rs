@@ -1,14 +1,14 @@
-use structopt::StructOpt;
 use structopt::clap::AppSettings;
+use structopt::StructOpt;
 
 mod claims;
 use claims::ClaimsCli;
-
 mod lattice;
 use lattice::LatticeCli;
-
 mod keys;
 use keys::KeysCli;
+mod par;
+use par::ParCli;
 
 /// This renders appropriately with escape characters
 const ASCII: &str = "
@@ -22,7 +22,7 @@ A single CLI to handle all of your waSCC tooling needs
 ";
 
 #[derive(Debug, Clone, StructOpt)]
-#[structopt(global_settings(&[AppSettings::ColoredHelp, AppSettings::VersionlessSubcommands]),
+#[structopt(global_settings(&[AppSettings::ColoredHelp, AppSettings::VersionlessSubcommands, AppSettings::DisableHelpSubcommand]),
             name = "wash",
             about = ASCII)]
 struct Cli {
@@ -41,6 +41,9 @@ enum CliCommand {
     /// Utilities for interacting with a waSCC Lattice
     #[structopt(name = "lattice")]
     Lattice(LatticeCli),
+    /// Utilities for creating, inspecting, and modifying capability provider archive files
+    #[structopt(name = "par")]
+    Par(ParCli),
 }
 
 fn main() {
@@ -48,15 +51,10 @@ fn main() {
     env_logger::init();
 
     let res = match cli.command {
-        CliCommand::Keys(keyscli) => {
-            keys::handle_command(keyscli)
-        }
-        CliCommand::Lattice(latticecli) => {
-            lattice::handle_command(latticecli)
-        }
-        CliCommand::Claims(claimscli) => {
-            claims::handle_command(claimscli)
-        }
+        CliCommand::Keys(keyscli) => keys::handle_command(keyscli),
+        CliCommand::Lattice(latticecli) => lattice::handle_command(latticecli),
+        CliCommand::Claims(claimscli) => claims::handle_command(claimscli),
+        CliCommand::Par(parcli) => par::handle_command(parcli),
     };
 
     match res {

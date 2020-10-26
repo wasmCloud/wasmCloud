@@ -1,13 +1,14 @@
 use nkeys::{KeyPair, KeyPairType};
 use serde_json::json;
+use std::env;
 use std::error::Error;
 use std::fmt;
-use std::str::FromStr;
-use structopt::StructOpt;
 use std::fs;
 use std::fs::File;
-use std::env;
 use std::io::prelude::*;
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
+use structopt::StructOpt;
 
 #[derive(StructOpt, Debug, Clone)]
 pub enum Output {
@@ -44,7 +45,7 @@ impl fmt::Display for OutputParseErr {
 #[derive(Debug, Clone, StructOpt)]
 pub struct KeysCli {
     #[structopt(flatten)]
-    command: KeysCliCommand
+    command: KeysCliCommand,
 }
 
 #[derive(Debug, Clone, StructOpt)]
@@ -69,7 +70,7 @@ pub enum KeysCliCommand {
         #[structopt(
             short = "d",
             long = "directory",
-            env = "WASH_HOME",
+            env = "WASH_KEYS",
             hide_env_values = true,
             help = "Absolute path to where keypairs are stored. Defaults to `$HOME/.wash/keys`"
         )]
@@ -80,7 +81,7 @@ pub enum KeysCliCommand {
         #[structopt(
             short = "d",
             long = "directory",
-            env = "WASH_HOME",
+            env = "WASH_KEYS",
             hide_env_values = true,
             help = "Absolute path to where keypairs are stored. Defaults to `$HOME/.wash/keys`"
         )]
@@ -88,7 +89,7 @@ pub enum KeysCliCommand {
     },
 }
 
-pub fn handle_command(cli: KeysCli) -> Result<(), Box<dyn ::std::error::Error>>{
+pub fn handle_command(cli: KeysCli) -> Result<(), Box<dyn ::std::error::Error>> {
     match cli.command {
         KeysCliCommand::GenCommand { keytype, output } => {
             println!("{}", generate(&keytype, &output));
@@ -120,10 +121,10 @@ pub fn generate(kt: &KeyPairType, output_type: &Output) -> String {
     }
 }
 
-/// Retrieves a keypair by name in a specified directory, or WASH_HOME ($HOME/.wash/keys) if directory is not specified
+/// Retrieves a keypair by name in a specified directory, or $WASH_KEYS ($HOME/.wash/keys) if directory is not specified
 pub fn get(keyname: &String, directory: Option<String>) {
     let dir = determine_directory(directory);
-    let mut f = match File::open(format!("{}/{}", dir, keyname)){
+    let mut f = match File::open(format!("{}/{}", dir, keyname)) {
         Ok(f) => f,
         Err(f) => {
             println!("Error: {}.\nPlease ensure {}/{} exists.", f, dir, keyname);
@@ -141,7 +142,7 @@ pub fn get(keyname: &String, directory: Option<String>) {
     }
 }
 
-/// Lists all keypairs (file extension .nk) in a specified directory or WASH_HOME($HOME/.wash/keys) if directory is not specified
+/// Lists all keypairs (file extension .nk) in a specified directory or $WASH_KEYS($HOME/.wash/keys) if directory is not specified
 pub fn list(directory: Option<String>) {
     let dir = determine_directory(directory);
 
@@ -154,21 +155,94 @@ pub fn list(directory: Option<String>) {
                 if f.ends_with(".nk") {
                     println!("{}", f);
                 }
-            };
-    }
+            }
+        }
     }
 }
 
 fn determine_directory(directory: Option<String>) -> String {
     match directory {
         Some(d) => d,
-        None => format!("{}/.wash/keys", env::var("HOME").unwrap())
+        None => format!("{}/.wash/keys", env::var("HOME").unwrap()),
+    }
+}
+
+/// Helper function to locate and extract keypair from user input
+pub fn extract_keypair(
+    input: Option<String>,
+    module_path: String,
+    directory: Option<String>,
+    keypair_type: KeyPairType,
+) -> Result<KeyPair, Box<dyn std::error::Error>> {
+    let seed = if let Some(input_str) = input {
+        match File::open(input_str.clone()) {
+            // User provided file path to seed as argument
+            Ok(mut f) => {
+                let mut s = String::new();
+                f.read_to_string(&mut s)?;
+                s
+            }
+            // User provided seed as an argument
+            Err(_e) => input_str,
+        }
+    } else {
+        // No seed value provided, attempting to source from provided or default directory
+        let dir = determine_directory(directory);
+        let module_name = PathBuf::from(module_path)
+            .file_stem()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        let path = format!(
+            "{}/{}_{}.nk",
+            dir,
+            module_name,
+            keypair_type_to_string(keypair_type.clone())
+        );
+        match File::open(path.clone()) {
+            // Default key found
+            Ok(mut f) => {
+                let mut s = String::new();
+                f.read_to_string(&mut s)?;
+                s
+            }
+            // No default key, generating for user
+            Err(_e) => {
+                let kp = KeyPair::new(keypair_type);
+                println!("No keypair found in {}, we will generate one for you and place it there. If you'd like to use alternative keys, you can supply them as a flag.", path);
+                let seed = kp.seed()?;
+                fs::create_dir_all(Path::new(&path).parent().unwrap())?;
+                let mut f = File::create(path)?;
+                f.write_all(seed.as_bytes())?;
+                seed
+            }
+        }
+    };
+
+    // from_seed returns nkeys::error::Error
+    match KeyPair::from_seed(&seed) {
+        Ok(kp) => Ok(kp),
+        Err(e) => Err(e.into()),
+    }
+}
+
+fn keypair_type_to_string(keypair_type: KeyPairType) -> String {
+    use KeyPairType::*;
+    match keypair_type {
+        Account => "account".to_string(),
+        Cluster => "cluster".to_string(),
+        Service => "service".to_string(),
+        Module => "module".to_string(),
+        Server => "server".to_string(),
+        Operator => "operator".to_string(),
+        User => "user".to_string(),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{generate, get, list, Output};
+    use super::{generate, Output};
     use nkeys::KeyPairType;
     use serde::Deserialize;
 
