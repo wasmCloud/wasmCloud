@@ -195,7 +195,8 @@ fn handle_inspect(cmd: InspectCommand) -> Result<()> {
     f.read_to_end(&mut buf)?;
 
     let archive = ProviderArchive::try_load(&buf).map_err(|e| format!("{}", e))?;
-    let claims = archive.claims().unwrap().metadata.unwrap();
+    let claims = archive.claims().unwrap();
+    let metadata = claims.metadata.unwrap();
 
     use term_table::row::Row;
     use term_table::table_cell::*;
@@ -206,18 +207,22 @@ fn handle_inspect(cmd: InspectCommand) -> Result<()> {
     table.style = TableStyle::extended();
 
     table.add_row(Row::new(vec![TableCell::new_with_alignment(
-        format!("{} - Provider Archive", claims.name.unwrap()),
+        format!("{} - Provider Archive", metadata.name.unwrap()),
         2,
         Alignment::Center,
     )]));
 
     table.add_row(Row::new(vec![
+        TableCell::new("Public Key"),
+        TableCell::new_with_alignment(claims.subject, 1, Alignment::Right),
+    ]));
+    table.add_row(Row::new(vec![
         TableCell::new("Capability Contract ID"),
-        TableCell::new_with_alignment(claims.capid, 1, Alignment::Right),
+        TableCell::new_with_alignment(metadata.capid, 1, Alignment::Right),
     ]));
     table.add_row(Row::new(vec![
         TableCell::new("Vendor"),
-        TableCell::new_with_alignment(claims.vendor, 1, Alignment::Right),
+        TableCell::new_with_alignment(metadata.vendor, 1, Alignment::Right),
     ]));
 
     table.add_row(Row::new(vec![TableCell::new_with_alignment(
