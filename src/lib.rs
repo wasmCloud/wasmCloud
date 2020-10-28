@@ -1,16 +1,4 @@
-// Copyright 2015-2020 Capital One Services, LLC
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+mod generated;
 
 #[macro_use]
 extern crate wascc_codec as codec;
@@ -20,16 +8,17 @@ extern crate log;
 
 extern crate actix_rt;
 
+use crate::generated::core::CapabilityConfiguration;
 use actix_web::dev::Body;
 use actix_web::dev::Server;
-use actix_web::http::{StatusCode, HeaderName, HeaderValue};
+use actix_web::http::{HeaderName, HeaderValue, StatusCode};
 use actix_web::web::Bytes;
 use actix_web::{middleware, web, App, HttpRequest, HttpResponse, HttpServer};
 use codec::capabilities::{
     CapabilityDescriptor, CapabilityProvider, Dispatcher, NullDispatcher, OperationDirection,
     OP_GET_CAPABILITY_DESCRIPTOR,
 };
-use codec::{core::CapabilityConfiguration, http::OP_HANDLE_REQUEST};
+
 use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Arc;
@@ -41,10 +30,13 @@ const CAPABILITY_ID: &str = "wascc:http_server";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const REVISION: u32 = 2; // Increment for each crates publish
 
+const OP_HANDLE_REQUEST: &str = "HandleRequest";
+
 #[cfg(not(feature = "static_plugin"))]
 capability_provider!(HttpServerProvider, HttpServerProvider::new);
 
 /// An Actix-web implementation of the `wascc:http_server` capability specification
+#[derive(Clone)]
 pub struct HttpServerProvider {
     dispatcher: Arc<RwLock<Box<dyn Dispatcher>>>,
     servers: Arc<RwLock<HashMap<String, Server>>>,
@@ -146,8 +138,9 @@ impl Default for HttpServerProvider {
 
 impl CapabilityProvider for HttpServerProvider {
     /// Accepts the dispatcher provided by the waSCC host runtime
-    fn configure_dispatch(&self,
-                          dispatcher: Box<dyn Dispatcher>,
+    fn configure_dispatch(
+        &self,
+        dispatcher: Box<dyn Dispatcher>,
     ) -> Result<(), Box<dyn Error + Sync + Send>> {
         info!("Dispatcher configured.");
 
@@ -181,6 +174,16 @@ impl CapabilityProvider for HttpServerProvider {
             _ => Err("bad dispatch".into()),
         }
     }
+
+    fn stop(&self) {
+        let server_list: Vec<_> = {
+            let lock = self.servers.read().unwrap();
+            lock.keys().cloned().collect()
+        };
+        for svr in server_list {
+            self.terminate_server(&svr);
+        }
+    }
 }
 
 async fn request_handler(
@@ -189,7 +192,7 @@ async fn request_handler(
     state: web::Data<Arc<RwLock<Box<dyn Dispatcher>>>>,
     module: web::Data<String>,
 ) -> HttpResponse {
-    let request = codec::http::Request {
+    let request = crate::generated::http::Request {
         method: req.method().as_str().to_string(),
         path: req.uri().path().to_string(),
         query_string: req.query_string().to_string(),
@@ -204,18 +207,19 @@ async fn request_handler(
     };
     match resp {
         Ok(r) => {
-            let r = deserialize::<codec::http::Response>(r.as_slice()).unwrap();
+            let r = deserialize::<crate::generated::http::Response>(r.as_slice()).unwrap();
             let mut response = HttpResponse::with_body(
                 StatusCode::from_u16(r.status_code as _).unwrap(),
                 Body::from_slice(&r.body),
             );
             if !r.header.is_empty() {
                 let headers = response.head_mut();
-                r.header.iter().for_each(|(key, val)|
+                r.header.iter().for_each(|(key, val)| {
                     headers.headers.insert(
                         HeaderName::from_bytes(key.as_bytes()).unwrap(),
-                        HeaderValue::from_str(val).unwrap())
-                );
+                        HeaderValue::from_str(val).unwrap(),
+                    )
+                });
             }
 
             response
