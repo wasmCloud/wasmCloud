@@ -1,15 +1,20 @@
 use crate::Result;
 use data_encoding::HEXUPPER;
+use flate2::read::GzDecoder;
+use flate2::write::GzEncoder;
+use flate2::Compression;
 use ring::digest::{Context, Digest, SHA256};
 use std::collections::HashMap;
 use std::fs::File;
+use std::io::prelude::*;
 use std::io::{copy, Cursor, Read};
-use std::path::Path;
 use std::path::PathBuf;
 use wascap::jwt::{CapabilityProvider, Claims};
 use wascap::prelude::KeyPair;
 
 const CLAIMS_JWT_FILE: &str = "claims.jwt";
+
+const GZIP_MAGIC : [u8; 2] = [0x1f, 0x8b];
 
 /// A provider archive is a specialized ZIP file that contains a set of embedded and signed claims
 /// (a .JWT file) as well as a list of binary files, one plugin library for each supported
@@ -74,7 +79,19 @@ impl ProviderArchive {
     /// without the embedded claims being re-signed
     pub fn try_load(input: &[u8]) -> Result<ProviderArchive> {
         let mut libraries = HashMap::new();
-        let mut par = tar::Archive::new(Cursor::new(input));
+
+        if input.len() < 2 {
+            return Err(
+                "Not enough bytes to be a valid PAR file".into(),
+            );
+        }
+
+        let archive = if input[0..2] == GZIP_MAGIC {
+            decompress(input)?
+        } else {
+            input.to_vec()
+        };
+        let mut par = tar::Archive::new(Cursor::new(archive));
         let mut c: Option<Claims<CapabilityProvider>> = None;
 
         let entries = par.entries()?;
@@ -130,12 +147,13 @@ impl ProviderArchive {
     /// Generates a Provider Archive (PAR) file with all of the library files and a signed set of claims in an embedded JWT
     pub fn write(
         &mut self,
-        destination: &mut File,
+        destination: &str,
         issuer: &KeyPair,
         subject: &KeyPair,
+        compress_par: bool,
     ) -> Result<()> {
         let hashes = generate_hashes(&self.libraries);
-        let mut par = tar::Builder::new(destination);
+        let mut par = tar::Builder::new(File::create(destination.clone())?);
 
         let claims = Claims::<CapabilityProvider>::new(
             self.name.to_string(),
@@ -164,6 +182,18 @@ impl ProviderArchive {
             header.set_size(lib.len() as u64);
             header.set_cksum();
             par.append_data(&mut header, path.to_string(), Cursor::new(lib))?;
+        }
+
+        // Completes the process of packing a .par archive
+        par.into_inner()?;
+
+        if compress_par {
+            let mut buf = Vec::new();
+            let mut file = File::open(destination.clone())?;
+            file.read_to_end(&mut buf)?;
+
+            let mut compressed_file = File::create(format!("{}.gz", destination))?;
+            compressed_file.write_all(&compress(&buf)?)?;
         }
 
         Ok(())
@@ -216,11 +246,27 @@ fn sha256_digest<R: Read>(mut reader: R) -> Result<Digest> {
     Ok(context.finish())
 }
 
+pub fn compress(par: &[u8]) -> Result<Vec<u8>> {
+    let mut e = GzEncoder::new(Vec::new(), Compression::best());
+    e.write_all(par).unwrap();
+    e.finish().map_err(|e| e.into())
+}
+
+pub fn decompress(par: &[u8]) -> Result<Vec<u8>> {
+    let mut d = GzDecoder::new(par);
+    let mut buf = Vec::new();
+    d.read_to_end(&mut buf)?;
+
+    Ok(buf)
+}
+
 #[cfg(test)]
 mod test {
+    use super::{compress, decompress};
     use crate::ProviderArchive;
     use crate::Result;
     use std::fs::File;
+    use std::io::prelude::*;
     use std::io::Read;
     use wascap::prelude::KeyPair;
 
@@ -238,8 +284,7 @@ mod test {
         let issuer = KeyPair::new_account();
         let subject = KeyPair::new_service();
 
-        let mut f = File::create("./writetest.par")?;
-        arch.write(&mut f, &issuer, &subject)?;
+        arch.write("./writetest.par", &issuer, &subject, false)?;
 
         let _ = std::fs::remove_file("./writetest.par");
         Ok(())
@@ -258,8 +303,7 @@ mod test {
         let issuer = KeyPair::new_account();
         let subject = KeyPair::new_service();
 
-        let mut f = File::create("./shoulderr.par")?;
-        arch.write(&mut f, &issuer, &subject)?;
+        arch.write("./shoulderr.par", &issuer, &subject, false)?;
 
         let mut buf2 = Vec::new();
         let mut f2 = File::open("./shoulderr.par")?;
@@ -294,8 +338,7 @@ mod test {
         let subject = KeyPair::new_service();
 
         // Generate the .par file with embedded claims.jwt file (needs a service and an account key)
-        let mut f = File::create("./firstarchive.par")?;
-        arch.write(&mut f, &issuer, &subject)?;
+        arch.write("./firstarchive.par", &issuer, &subject, false)?;
 
         let mut buf2 = Vec::new();
         let mut f2 = File::open("./firstarchive.par")?;
@@ -305,15 +348,14 @@ mod test {
         let mut arch2 = ProviderArchive::try_load(&buf2)?;
         assert_eq!(arch.capid, arch2.capid);
         assert_eq!(
-            arch.libraries[&"aarch64-linux".to_string()].len(),
-            arch2.libraries[&"aarch64-linux".to_string()].len()
+            arch.libraries[&"aarch64-linux".to_string()],
+            arch2.libraries[&"aarch64-linux".to_string()]
         );
         assert_eq!(arch.claims().unwrap().subject, subject.public_key());
 
         // Another common task - read an existing archive and add another library file to it
         arch2.add_library("mips-linux", b"bluhbluh")?;
-        let mut f3 = File::create("./secondarchive.par")?;
-        arch2.write(&mut f3, &issuer, &subject)?;
+        arch2.write("./secondarchive.par", &issuer, &subject, false)?;
 
         let mut buf3 = Vec::new();
         let mut f3 = File::open("./secondarchive.par")?;
@@ -323,14 +365,147 @@ mod test {
         let arch3 = ProviderArchive::try_load(&buf3)?;
         assert_eq!(arch3.capid, arch2.capid);
         assert_eq!(
-            arch3.libraries[&"aarch64-linux".to_string()].len(),
-            arch2.libraries[&"aarch64-linux".to_string()].len()
+            arch3.libraries[&"aarch64-linux".to_string()],
+            arch2.libraries[&"aarch64-linux".to_string()]
         );
         assert_eq!(arch3.claims().unwrap().subject, subject.public_key());
         assert_eq!(arch3.targets().len(), 4);
 
         let _ = std::fs::remove_file("./firstarchive.par");
         let _ = std::fs::remove_file("./secondarchive.par");
+
+        Ok(())
+    }
+
+    #[test]
+    fn compression_roundtrip() -> Result<()> {
+        let mut arch = ProviderArchive::new(
+            "wascc:testing",
+            "Testing",
+            "waSCC",
+            Some(4),
+            Some("0.0.4".to_string()),
+        );
+        arch.add_library("aarch64-linux", b"heylookimaraspberrypi")?;
+        arch.add_library("x86_64-linux", b"system76")?;
+        arch.add_library("x86_64-macos", b"16inchmacbookpro")?;
+
+        let issuer = KeyPair::new_account();
+        let subject = KeyPair::new_service();
+
+        let filename = "computers";
+
+        arch.write(&format!("{}.par", filename), &issuer, &subject, false)?;
+
+        let mut buf2 = Vec::new();
+        let mut f2 = File::open(&format!("{}.par", filename))?;
+        f2.read_to_end(&mut buf2)?;
+
+        let compressed = compress(&buf2)?;
+        let mut file = File::create(&format!("{}.par.gz", filename))?;
+        file.write_all(&compressed)?;
+
+        let mut buf3 = Vec::new();
+        let mut f3 = File::open(&format!("{}.par.gz", filename))?;
+        f3.read_to_end(&mut buf3)?;
+
+        // Make sure the file we wrote compressed can be read back in with no data loss
+        let arch2 = ProviderArchive::try_load(&buf3)?;
+        assert_eq!(arch.capid, arch2.capid);
+        assert_eq!(
+            arch.libraries[&"aarch64-linux".to_string()],
+            arch2.libraries[&"aarch64-linux".to_string()]
+        );
+        assert_eq!(arch.claims().unwrap().subject, subject.public_key());
+
+        let _ = std::fs::remove_file(&format!("{}.par", filename));
+        let _ = std::fs::remove_file(&format!("{}.par.gz", filename));
+        Ok(())
+    }
+
+    #[test]
+    fn valid_decompression() -> Result<()> {
+        let mut arch = ProviderArchive::new(
+            "wascc:testing",
+            "Testing",
+            "waSCC",
+            Some(5),
+            Some("0.0.5".to_string()),
+        );
+        arch.add_library("aarch64-linux", b"cool-linux")?;
+        arch.add_library("x86_64-linux", b"linux")?;
+        arch.add_library("x86_64-macos", b"macos")?;
+
+        let issuer = KeyPair::new_account();
+        let subject = KeyPair::new_service();
+
+        let filename = "operatingsystem";
+
+        arch.write(&format!("{}.par", filename), &issuer, &subject, false)?;
+
+        let mut buf2 = Vec::new();
+        let mut f2 = File::open(&format!("{}.par", filename))?;
+        f2.read_to_end(&mut buf2)?;
+
+        let compressed = compress(&buf2)?;
+        let mut file = File::create(&format!("{}.par.gz", filename))?;
+        file.write_all(&compressed)?;
+
+        let mut buf3 = Vec::new();
+        let mut f3 = File::open(&format!("{}.par.gz", filename))?;
+        f3.read_to_end(&mut buf3)?;
+
+        let decompressed = decompress(&buf3)?;
+
+        assert_eq!(buf2, decompressed);
+
+        let _ = std::fs::remove_file(&format!("{}.par", filename));
+        let _ = std::fs::remove_file(&format!("{}.par.gz", filename));
+        Ok(())
+    }
+
+    #[test]
+    fn valid_write_compressed() -> Result<()> {
+        let mut arch = ProviderArchive::new(
+            "wascc:testing",
+            "Testing",
+            "waSCC",
+            Some(6),
+            Some("0.0.6".to_string()),
+        );
+        arch.add_library("x86_64-linux", b"linux")?;
+        arch.add_library("arm-macos", b"macos")?;
+        arch.add_library("mips64-freebsd", b"freebsd")?;
+
+        let filename = "multi-os";
+
+        let issuer = KeyPair::new_account();
+        let subject = KeyPair::new_service();
+
+        arch.write(&format!("{}.par", filename), &issuer, &subject, true)?;
+
+        let mut buf = Vec::new();
+        let mut f = File::open(format!("{}.par.gz", filename))?;
+        f.read_to_end(&mut buf)?;
+
+        let arch2 = ProviderArchive::try_load(&buf)?;
+
+        assert_eq!(
+            arch.libraries[&"x86_64-linux".to_string()],
+            arch2.libraries[&"x86_64-linux".to_string()]
+        );
+        assert_eq!(
+            arch.libraries[&"arm-macos".to_string()],
+            arch2.libraries[&"arm-macos".to_string()]
+        );
+        assert_eq!(
+            arch.libraries[&"mips64-freebsd".to_string()],
+            arch2.libraries[&"mips64-freebsd".to_string()]
+        );
+        assert_eq!(arch.claims(), arch2.claims());
+
+        let _ = std::fs::remove_file(format!("{}.par", filename));
+        let _ = std::fs::remove_file(format!("{}.par.gz", filename));
 
         Ok(())
     }
