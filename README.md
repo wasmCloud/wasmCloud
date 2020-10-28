@@ -3,7 +3,7 @@ Until the [WASI](https://wasi.dev) specification includes robust networking supp
 
 In the absence of useful portable capability providers, we need the ability to store, retrieve, and schedule _native_ capability providers. A native capability provider is an FFI plugin stored in a binary file that is specific to a particular CPU architecture and Operating System. The issue with these binary files (_shared object_ files on linux) is that we cannot embed secure claims JWTs in these like we can in WebAssembly files. With actors, we use these signed tokens to get a verifiable, globally unique public key (identity) as well as a hash of the associated file to verify that the file has not been tampered with since being signed.
 
-To give us the ability to store, retrieve, schedule, and _sign_ capability providers, we need a **Provider Archive** (PAR). This is a simple ZIP file that contains a signed JWT, as well as a binary file for each of the supported OS/CPU combinations.
+To give us the ability to store, retrieve, schedule, and _sign_ capability providers, we need a **Provider Archive** (PAR). This is a simple TAR file that contains a signed JWT, as well as a binary file for each of the supported OS/CPU combinations.
 
 ## Provider Archive File Format
 Each provider archive file contains a root `claims.jwt` file that holds a signed set of claims (see appendix). Also in the root directory of the archive are binary files containing the bytes of the native capability provider plugin with a filename of the format `[arch]-[os].bin`.
@@ -11,7 +11,7 @@ Each provider archive file contains a root `claims.jwt` file that holds a signed
 The following is an example of the contents of a provider archive file:
 
 ```
-+ provider_archive.zip
++ provider_archive.tar
 |
 +---- claims.jwt
 |
