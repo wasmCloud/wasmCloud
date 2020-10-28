@@ -1,5 +1,5 @@
+use crate::generated::core::CapabilityConfiguration;
 use std::error::Error;
-use wascc_codec::core::CapabilityConfiguration;
 
 const ENV_REDIS_URL: &str = "URL";
 

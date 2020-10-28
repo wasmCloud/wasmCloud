@@ -1,6 +1,6 @@
-[![crates.io](https://img.shields.io/crates/v/wascc-redis.svg)](https://crates.io/crates/wascc-redis)&nbsp;
-![Rust](https://github.com/wascc/redis-provider/workflows/Rust/badge.svg)&nbsp;
-![license](https://img.shields.io/crates/l/wascc-redis.svg)&nbsp;
+[![crates.io](https://img.shields.io/crates/v/wascc-redis.svg)](https://crates.io/crates/wascc-redis)
+![Rust](https://github.com/wascc/redis-provider/workflows/Rust/badge.svg)
+![license](https://img.shields.io/crates/l/wascc-redis.svg)
 [![documentation](https://docs.rs/wascc-redis/badge.svg)](https://docs.rs/wascc-redis)
 
 # waSCC Key-Value Provider (Redis)
@@ -12,5 +12,5 @@ The waSCC Redis capability provider exposes an implementation of the key-value s
 If you want to statically link (embed) this plugin in a custom waSCC host rather than use it as a dynamic plugin, then enable the `static_plugin` feature in your dependencies section as shown:
 
 ```
-wascc-redis = { version = "??", features = ["static_plugin"] }
+wascc-redis = { version = "0.9.0", features = ["static_plugin"] }
 ```
