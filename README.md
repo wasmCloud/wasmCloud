@@ -1,3 +1,5 @@
+![Rust](https://github.com/wascc/provider-archive/workflows/Rust/badge.svg)
+
 # Provider Archive
 Until the [WASI](https://wasi.dev) specification includes robust networking support _and_ the available WebAssembly tooling (**wasm3** , **wasmtime**, etc) supports this WASI specification, _and_ the Rust compiler is able to generate the right set of WASI imports when compiling "regular" socket code ... our support for portable capability providers will be limited.
 
