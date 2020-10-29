@@ -1,6 +1,5 @@
-![Rust](https://github.com/wascc/provider-archive/workflows/Rust/badge.svg)
-[![crates.io](https://img.shields.io/crates/v/provider-archive.svg)](https://crates.io/crates/provider-archive)
 ![Rust build](https://github.com/wascc/provider-archive/workflows/Rust/badge.svg)
+[![crates.io](https://img.shields.io/crates/v/provider-archive.svg)](https://crates.io/crates/provider-archive)
 ![license](https://img.shields.io/crates/l/provider-archive.svg)&nbsp;
 [![documentation](https://docs.rs/provider-archive/badge.svg)](https://docs.rs/provider-archive)
 
