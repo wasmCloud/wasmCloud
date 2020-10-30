@@ -14,7 +14,7 @@ use wascap::prelude::KeyPair;
 
 const CLAIMS_JWT_FILE: &str = "claims.jwt";
 
-const GZIP_MAGIC : [u8; 2] = [0x1f, 0x8b];
+const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
 
 /// A provider archive is a specialized ZIP file that contains a set of embedded and signed claims
 /// (a .JWT file) as well as a list of binary files, one plugin library for each supported
@@ -81,9 +81,7 @@ impl ProviderArchive {
         let mut libraries = HashMap::new();
 
         if input.len() < 2 {
-            return Err(
-                "Not enough bytes to be a valid PAR file".into(),
-            );
+            return Err("Not enough bytes to be a valid PAR file".into());
         }
 
         let archive = if input[0..2] == GZIP_MAGIC {
@@ -194,6 +192,9 @@ impl ProviderArchive {
 
             let mut compressed_file = File::create(format!("{}.gz", destination))?;
             compressed_file.write_all(&compress(&buf)?)?;
+
+            // Removing the uncompressed .par to leave only the compressed version on disk
+            std::fs::remove_file(destination.clone())?;
         }
 
         Ok(())

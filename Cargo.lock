@@ -398,7 +398,7 @@ dependencies = [
 
 [[package]]
 name = "provider-archive"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "data-encoding",
  "flate2",
