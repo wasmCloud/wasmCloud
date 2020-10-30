@@ -19,6 +19,8 @@ use wascc_codec::capabilities::{
 };
 use wascc_codec::core::OP_BIND_ACTOR;
 use wascc_codec::{deserialize, serialize, SYSTEM_ACTOR};
+use crate::messagebus::handlers::OP_HEALTH_REQUEST;
+use crate::generated::core::HealthResponse;
 
 const REVISION: u32 = 3;
 
@@ -26,6 +28,7 @@ pub(crate) const OP_REQUEST_GUID: &str = "RequestGuid";
 pub(crate) const OP_REQUEST_RANDOM: &str = "RequestRandom";
 pub(crate) const OP_REQUEST_SEQUENCE: &str = "RequestSequence";
 
+#[derive(Clone)]
 pub(crate) struct ExtrasCapabilityProvider {
     dispatcher: Arc<RwLock<Box<dyn Dispatcher>>>,
     sequences: Arc<RwLock<HashMap<String, AtomicU64>>>,
@@ -158,10 +161,23 @@ impl CapabilityProvider for ExtrasCapabilityProvider {
             OP_REQUEST_GUID => self.generate_guid(actor, deserialize(msg)?),
             OP_REQUEST_RANDOM => self.generate_random(actor, deserialize(msg)?),
             OP_REQUEST_SEQUENCE => self.generate_sequence(actor, deserialize(msg)?),
+            OP_HEALTH_REQUEST => healthy(),
             OP_BIND_ACTOR => Ok(vec![]),
             _ => Err("bad dispatch".into()),
         }
     }
+
+    fn stop(&self) {
+        // Nothing needed here
+    }
+}
+
+fn healthy() -> Result<Vec<u8>, Box<dyn std::error::Error + Sync + Send>> {
+    let hr = HealthResponse {
+        message: "".to_string(),
+        healthy: true
+    };
+    Ok(serialize(hr)?)
 }
 
 pub(crate) fn get_claims() -> Claims<wascap::jwt::CapabilityProvider> {

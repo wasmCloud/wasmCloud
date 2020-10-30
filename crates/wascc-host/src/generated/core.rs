@@ -43,32 +43,6 @@ impl Handlers {}
 
 lazy_static! {}
 
-#[derive(Debug, PartialEq, Deserialize, Serialize, Default)]
-pub struct CapabilityDescriptor {
-    #[serde(rename = "id")]
-    pub id: String,
-    #[serde(rename = "name")]
-    pub name: String,
-    #[serde(rename = "version")]
-    pub version: String,
-    #[serde(rename = "revision")]
-    pub revision: u32,
-    #[serde(rename = "longDescription")]
-    pub long_description: String,
-    #[serde(rename = "supportedOperations")]
-    pub supported_operations: Vec<OperationDescriptor>,
-}
-
-#[derive(Debug, PartialEq, Deserialize, Serialize, Default)]
-pub struct OperationDescriptor {
-    #[serde(rename = "name")]
-    pub name: String,
-    #[serde(rename = "direction")]
-    pub direction: u8,
-    #[serde(rename = "docText")]
-    pub doc_text: String,
-}
-
 #[derive(Debug, PartialEq, Deserialize, Serialize, Clone)]
 pub struct CapabilityConfiguration {
     pub module: String,

@@ -36,9 +36,10 @@ rmp-serde = "0.14.4"
 serde_bytes = "0.11.5"
 provider-archive ="0.1.0"
 lazy_static = "1.4.0"
-wascc-codec = "0.8.1"
+wascc-codec = "0.9.0"
 oci-distribution = "0.4.0"
 rand = "0.7.3"
+chrono = "0.4.19"
 
-wasm3-provider = { version = "0.0.1", optional = true}
-wasmtime-provider = { version = "0.0.1" , optional = true}
+wasm3-provider = { version = "0.0.2", optional = true}
+wasmtime-provider = { version = "0.0.2" , optional = true}

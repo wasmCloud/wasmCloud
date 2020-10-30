@@ -18,15 +18,15 @@ async fn main() {
     let host = HostBuilder::new().build();
     match host
         .start(
-            Some(Box::new(NatsLatticeProvider::new(None))),
-            Some(Box::new(NatsControlPlaneProvider::new())),
+            None, //Some(Box::new(NatsLatticeProvider::new(None))),
+            None, // Some(Box::new(NatsControlPlaneProvider::new())),
         )
         .await
     {
         Ok(_) => {
             actix_rt::signal::ctrl_c().await.unwrap();
             info!("Ctrl-C received, shutting down");
-            System::current().stop();
+            host.stop().await;
         }
         Err(e) => {
             error!("Failed to start host: {}", e);

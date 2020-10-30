@@ -9,6 +9,8 @@ use futures::executor::block_on;
 use std::collections::HashMap;
 use wascap::jwt::Claims;
 use wascap::prelude::KeyPair;
+use super::MessageBus;
+use crate::messagebus::{FindBindings, FindBindingsResponse, QueryActors, QueryResponse, PutClaims, QueryProviders, SetKey, SetAuthorizer, AdvertiseBinding, AdvertiseClaims, SetProvider, LookupBinding, Subscribe, Unsubscribe};
 
 pub const OP_PERFORM_LIVE_UPDATE: &str = "PerformLiveUpdate";
 pub const OP_IDENTIFY_CAPABILITY: &str = "IdentifyCapability";
@@ -17,118 +19,6 @@ pub const OP_INITIALIZE: &str = "Initialize";
 pub const OP_BIND_ACTOR: &str = "BindActor";
 pub const OP_REMOVE_ACTOR: &str = "RemoveActor";
 
-#[derive(Message)]
-#[rtype(result = "QueryResponse")]
-pub struct QueryActors;
-
-#[derive(Message)]
-#[rtype(result = "QueryResponse")]
-pub struct QueryProviders;
-
-pub struct QueryResponse {
-    pub results: Vec<String>,
-}
-
-impl<A, M> MessageResponse<A, M> for QueryResponse
-where
-    A: Actor,
-    M: Message<Result = QueryResponse>,
-{
-    fn handle<R: ResponseChannel<M>>(self, _: &mut A::Context, tx: Option<R>) {
-        if let Some(tx) = tx {
-            tx.send(self);
-        }
-    }
-}
-
-#[derive(Message)]
-#[rtype(result = "()")]
-pub struct SetProvider {
-    pub provider: Box<dyn LatticeProvider>,
-}
-
-#[derive(Message)]
-#[rtype(result = "()")]
-pub struct Subscribe {
-    pub interest: WasccEntity,
-    pub subscriber: Recipient<Invocation>,
-}
-
-#[derive(Message)]
-#[rtype(result = "()")]
-pub struct Unsubscribe {
-    pub interest: WasccEntity,
-}
-
-#[derive(Message)]
-#[rtype(result = "()")]
-pub struct PutClaims {
-    pub claims: Claims<wascap::jwt::Actor>,
-}
-
-#[derive(Message)]
-#[rtype(result = "Option<String>")]
-pub struct LookupBinding {
-    // Capability ID
-    pub contract_id: String,
-    pub actor: String,
-    pub binding_name: String,
-}
-
-#[derive(Message)]
-#[rtype(result = "Result<()>")]
-pub struct AdvertiseBinding {
-    pub contract_id: String,
-    pub actor: String,
-    pub binding_name: String,
-    pub provider_id: String,
-    pub values: HashMap<String, String>,
-}
-
-#[derive(Message)]
-#[rtype(result = "Result<()>")]
-pub struct AdvertiseClaims {
-    pub claims: Claims<wascap::jwt::Actor>,
-}
-
-#[derive(Message)]
-#[rtype(result = "()")]
-pub struct SetKey {
-    pub key: KeyPair,
-}
-
-#[derive(Message)]
-#[rtype(result = "()")]
-pub struct SetAuthorizer {
-    pub auth: Box<dyn Authorizer>,
-}
-
-pub trait LatticeProvider: Sync + Send {
-    fn init(&mut self, dispatcher: BusDispatcher);
-    fn name(&self) -> String;
-    fn rpc(&self, inv: &Invocation) -> Result<InvocationResponse>;
-    fn register_rpc_listener(&self, subscriber: &WasccEntity) -> Result<()>;
-    fn remove_rpc_listener(&self, subscriber: &WasccEntity) -> Result<()>;
-    fn advertise_binding(
-        &self,
-        actor: &str,
-        contract_id: &str,
-        binding_name: &str,
-        provider_id: &str,
-        values: HashMap<String, String>,
-    ) -> Result<()>;
-    fn advertise_claims(&self, claims: Claims<wascap::jwt::Actor>) -> Result<()>;
-}
-
-#[derive(Default)]
-pub(crate) struct MessageBus {
-    pub provider: Option<Box<dyn LatticeProvider>>,
-    subscribers: HashMap<WasccEntity, Recipient<Invocation>>,
-    binding_cache: BindingCache,
-    claims_cache: HashMap<String, Claims<wascap::jwt::Actor>>,
-    key: Option<KeyPair>,
-    authorizer: Option<Box<dyn Authorizer>>,
-}
 
 impl Supervised for MessageBus {}
 
@@ -137,11 +27,28 @@ impl SystemService for MessageBus {
         info!("Message Bus started");
         // TODO: make this value configurable
         ctx.set_mailbox_capacity(1000);
+        self.hb(ctx);
     }
 }
 
 impl Actor for MessageBus {
     type Context = Context<Self>;
+}
+
+impl Handler<FindBindings> for MessageBus {
+    type Result = FindBindingsResponse;
+
+    fn handle(&mut self, msg: FindBindings, _ctx: &mut Context<Self>) -> Self::Result {
+        println!(
+            "Looking for bindings {:?} - cache size {}",
+            &self.binding_cache,
+            self.binding_cache.len()
+        );
+        let res = self
+            .binding_cache
+            .find_bindings(&msg.binding_name, &msg.provider_id);
+        FindBindingsResponse { bindings: res }
+    }
 }
 
 impl Handler<QueryActors> for MessageBus {
@@ -237,7 +144,7 @@ impl Handler<AdvertiseBinding> for MessageBus {
         );
 
         if let Some(t) = self.subscribers.get(&target) {
-            let req = generate_binding_invocation(t, &msg, self.key.as_ref().unwrap(), target);
+            let req = super::utils::generate_binding_invocation(t, &msg, self.key.as_ref().unwrap(), target);
             Box::pin(req.into_actor(self).map(move |res, act, _ctx| match res {
                 Ok(ir) => {
                     if let Some(er) = ir.error {
@@ -253,11 +160,9 @@ impl Handler<AdvertiseBinding> for MessageBus {
             let is_none = self.provider.as_ref().is_none();
             Box::pin( async move {
                 if is_none {
-                    error!("Attempt to advertise a binding with no local subscribers and no lattice provider - binding ignored");
-                    Err("Cannot advertise a binding with no local subscribers and no lattice provider. Binding ignored".into())
-                } else {
-                    Ok(())
+                    info!("No potential targets for advertised binding. Assuming this provider will be added later.");
                 }
+                Ok(())
             }.into_actor(self))
         }
     }
@@ -316,7 +221,7 @@ impl Handler<Invocation> for MessageBus {
         match self.subscribers.get(&msg.target) {
             Some(target) => Box::pin(target.send(msg.clone()).into_actor(self).map(
                 move |res, act, _ctx| {
-                    println!("{:?}", res);
+                    println!("Bus invocation - {:?}", res);
                     if let Ok(r) = res {
                         println!("success");
                         r
@@ -332,7 +237,7 @@ impl Handler<Invocation> for MessageBus {
             None => {
                 println!("deferring to lattice");
                 if let Some(ref l) = self.provider {
-                    let res = do_rpc(l, &msg);
+                    let res = super::utils::do_rpc(l, &msg);
                     Box::pin(async move { res }.into_actor(self))
                 } else {
                     Box::pin(
@@ -362,7 +267,7 @@ impl Handler<LookupBinding> for MessageBus {
 impl Handler<Subscribe> for MessageBus {
     type Result = ();
 
-    fn handle(&mut self, msg: Subscribe, _ctx: &mut Context<Self>) {
+    fn handle(&mut self, msg: Subscribe, _ctx: &mut Context<Self>) -> Self::Result {
         trace!("Bus registered interest for {}", &msg.interest.url());
         self.subscribers
             .insert(msg.interest.clone(), msg.subscriber.clone());
@@ -378,8 +283,12 @@ impl Handler<Unsubscribe> for MessageBus {
     type Result = ();
 
     fn handle(&mut self, msg: Unsubscribe, _ctx: &mut Context<Self>) {
+        println!("Unsubscribing {}", msg.interest.url());
         trace!("Bus removing interest for {}", msg.interest.url());
-        let _ = self.subscribers.remove(&msg.interest);
+        if let None = self.subscribers.remove(&msg.interest) {
+            println!("{:?}", self.subscribers.keys());
+            println!("did not remove subscriber {:?}", msg.interest);
+        }
         if let Some(ref lp) = self.provider {
             if let Err(e) = lp.remove_rpc_listener(&msg.interest) {
                 error!(
@@ -391,33 +300,6 @@ impl Handler<Unsubscribe> for MessageBus {
     }
 }
 
-fn do_rpc(l: &Box<dyn LatticeProvider>, inv: &Invocation) -> InvocationResponse {
-    match l.rpc(&inv) {
-        Ok(ir) => ir,
-        Err(e) => InvocationResponse::error(&inv, &format!("RPC failure: {}", e)),
-    }
-}
-
-fn generate_binding_invocation(
-    t: &Recipient<Invocation>,
-    msg: &AdvertiseBinding,
-    key: &KeyPair,
-    target: WasccEntity,
-) -> RecipientRequest<Invocation> {
-    let config = crate::generated::core::CapabilityConfiguration {
-        module: msg.actor.to_string(),
-        values: msg.values.clone(),
-    };
-    let inv = Invocation::new(
-        key,
-        WasccEntity::Actor(SYSTEM_ACTOR.to_string()),
-        target,
-        OP_BIND_ACTOR,
-        crate::generated::core::serialize(&config).unwrap(),
-    );
-
-    t.send(inv)
-}
 
 #[cfg(test)]
 mod test {

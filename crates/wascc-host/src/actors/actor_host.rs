@@ -1,17 +1,20 @@
 use crate::actors::WasccActor;
+use crate::control_plane::actorhost::{ControlPlane, PublishEvent};
 use crate::dispatch::{Invocation, InvocationResponse, WasccEntity};
 use crate::messagebus::{MessageBus, PutClaims, Subscribe, Unsubscribe};
 use crate::middleware::{run_actor_post_invoke, run_actor_pre_invoke, Middleware};
-use crate::Result;
+use crate::{ControlEvent, Result};
 use actix::prelude::*;
 use futures::executor::block_on;
 use wapc::{WapcHost, WasiParams};
 use wascap::prelude::{Claims, KeyPair};
+use crate::control_plane::events::TerminationReason;
 
 pub(crate) struct ActorHost {
     guest_module: WapcHost,
     claims: Claims<wascap::jwt::Actor>,
     mw_chain: Vec<Box<dyn Middleware>>,
+    image_ref: Option<String>,
 }
 
 impl ActorHost {
@@ -20,6 +23,7 @@ impl ActorHost {
         wasi: Option<WasiParams>,
         mw_chain: Vec<Box<dyn Middleware>>,
         signing_seed: String,
+        image_ref: Option<String>,
     ) -> ActorHost {
         let buf = actor_bytes.clone();
         let actor = WasccActor::from_slice(&buf).unwrap();
@@ -47,6 +51,7 @@ impl ActorHost {
                 guest_module: g,
                 claims: c,
                 mw_chain,
+                image_ref,
             },
             Err(e) => {
                 error!("Failed to instantiate waPC host: {}", e);
@@ -74,28 +79,38 @@ impl Actor for ActorHost {
             })
             .await
         });
+        let c = self.claims.clone();
         let _ = block_on(async move {
-            if let Err(e) = b2
-                .send(PutClaims {
-                    claims: self.claims.clone(),
-                })
-                .await
-            {
+            if let Err(e) = b2.send(PutClaims { claims: c }).await {
                 error!("Actor failed to subscribe to bus: {}", e);
                 ctx.stop();
             }
+        });
+        let _ = block_on(async move {
+            let cp = ControlPlane::from_registry();
+            cp.send(PublishEvent {
+                event: ControlEvent::ActorStarted {
+                    header: Default::default(),
+                    actor: self.claims.subject.to_string(),
+                    image_ref: self.image_ref.clone(),
+                },
+            })
+            .await
         });
     }
 
     fn stopped(&mut self, ctx: &mut Self::Context) {
         println!("Actor {} stopped", &self.claims.subject);
-        let entity = WasccEntity::Actor(self.claims.subject.to_string());
-        let b = MessageBus::from_registry();
         let _ = block_on(async move {
-            if let Err(e) = b.send(Unsubscribe { interest: entity }).await {
-                error!("Actor failed to unsubscribe from bus: {}", e);
-                ctx.stop();
-            }
+            let cp = ControlPlane::from_registry();
+            cp.send(PublishEvent {
+                event: ControlEvent::ActorStopped {
+                    header: Default::default(),
+                    actor: self.claims.subject.to_string(),
+                    reason: TerminationReason::Requested,
+                },
+            })
+            .await
         });
     }
 }

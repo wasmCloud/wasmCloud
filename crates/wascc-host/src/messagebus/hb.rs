@@ -1,0 +1,98 @@
+use super::MessageBus;
+use actix::prelude::*;
+use std::time::Duration;
+use crate::{ControlEvent, WasccEntity, Invocation, SYSTEM_ACTOR};
+use std::collections::HashMap;
+use wascap::prelude::KeyPair;
+use crate::control_plane::events::RunState;
+use crate::messagebus::handlers::OP_HEALTH_REQUEST;
+use crate::generated::core::{serialize, HealthRequest, HealthResponse, deserialize};
+use crate::Result;
+use futures::executor::block_on;
+use crate::control_plane::actorhost::{ControlPlane, PublishEvent};
+
+const HEARTBEAT_INTERVAL_ENV_VAR: &str = "HEARTBEAT_INTERVAL_S";
+const DEFAULT_HEARTBEAT_INTERVAL: u16 = 30;
+const PING_TIMEOUT_MS: u64 = 200;
+
+impl MessageBus {
+    pub(crate) fn hb(&self, ctx: &mut Context<Self>) {
+        println!("HB");
+        let interval = hb_duration();
+        ctx.run_interval(interval, | act, ctx | {
+            let claims = act.claims_cache.values().cloned().collect();
+            let subs = act.subscribers.clone();
+            let entities: Vec<(_, _)> = subs.into_iter().collect();
+            let seed = act.key.as_ref().unwrap().seed().unwrap();
+
+            ctx.wait(async move {
+                let evt = generate_heartbeat_event(entities, claims, seed).await;
+                let cp = ControlPlane::from_registry();
+                cp.do_send(PublishEvent{
+                    event: evt
+                });
+            }.into_actor(act));
+        });
+    }
+}
+
+async fn generate_heartbeat_event(entities: Vec<(WasccEntity, Recipient<Invocation>)>, claims: Vec<wascap::jwt::Claims<wascap::jwt::Actor>>, seed: String) -> ControlEvent {
+    ControlEvent::Heartbeat {
+        header: Default::default(),
+        claims: claims,
+        entities: healthping_subscribers(&entities, seed).await
+    }
+}
+
+async fn healthping_subscribers(subs: &[(WasccEntity, Recipient<Invocation>)], seed: String) -> HashMap<String, RunState> {
+    let key = KeyPair::from_seed(&seed).unwrap();
+    let mut hm = HashMap::new();
+    for (subscriber, recipient) in subs {
+        let ping = generate_ping(subscriber, &key);
+        let pong = recipient.send(ping).timeout(Duration::from_millis(PING_TIMEOUT_MS)).await;
+        match pong {
+            Ok(ir) => {
+                let hr: Result<HealthResponse> = deserialize(&ir.msg);
+                match hr {
+                    Ok(hr) => {
+                        if hr.healthy {
+                            hm.insert(subscriber.key(), RunState::Running);
+                        } else {
+                            hm.insert(subscriber.key(), RunState::Unhealthy(hr.message));
+                        }
+                    },
+                    Err(e) => {
+                        hm.insert(subscriber.key(), RunState::Unhealthy("Failed to de-serialize health check response from target".to_string()));
+                    }
+                }
+            },
+            Err(e) => {
+                hm.insert(subscriber.key(), RunState::Unhealthy("No successful health check response from target".to_string()));
+            }
+        }
+    }
+    hm
+}
+
+fn generate_ping(target: &WasccEntity, key: &KeyPair) -> Invocation {
+    Invocation::new(
+        key,
+        WasccEntity::Actor(SYSTEM_ACTOR.to_string()),
+        target.clone(),
+        OP_HEALTH_REQUEST,
+        serialize(&HealthRequest{
+            placeholder: true
+        }).unwrap()
+    )
+}
+
+fn hb_duration() -> Duration {
+    match std::env::var(HEARTBEAT_INTERVAL_ENV_VAR) {
+        Ok(s) => {
+            Duration::from_secs(s.parse().unwrap_or(DEFAULT_HEARTBEAT_INTERVAL as u64))
+        },
+        Err(_) => {
+            Duration::from_secs(DEFAULT_HEARTBEAT_INTERVAL as u64)
+        }
+    }
+}

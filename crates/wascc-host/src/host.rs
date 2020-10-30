@@ -10,16 +10,21 @@ use crate::auth::Authorizer;
 use crate::capability::extras::ExtrasCapabilityProvider;
 use crate::capability::native::NativeCapability;
 use crate::capability::native_host::NativeCapabilityHost;
-use crate::control_plane::actorhost::ControlPlane;
+use crate::control_plane::actorhost::{ControlPlane, PublishEvent};
 use crate::control_plane::ControlPlaneProvider;
 use crate::dispatch::{Invocation, InvocationResponse};
 use crate::host_controller::{
-    HostController, MintInvocationRequest, SetLabels, StartActor, StartProvider,
+    GetHostID, HostController, MintInvocationRequest, SetLabels, StartActor, StartProvider,
+    StopActor, StopProvider,
 };
 use crate::messagebus::{QueryActors, QueryProviders};
-use crate::WasccEntity;
+use crate::oci::fetch_oci_bytes;
+use crate::{ControlEvent, WasccEntity};
 use crate::{Result, SYSTEM_ACTOR};
+use provider_archive::ProviderArchive;
+use std::cell::RefCell;
 use std::collections::HashMap;
+use crate::control_plane::events::TerminationReason;
 
 pub struct HostBuilder {
     labels: HashMap<String, String>,
@@ -53,6 +58,7 @@ impl HostBuilder {
         Host {
             labels: self.labels,
             authorizer: self.authorizer,
+            id: RefCell::new("".to_string()),
         }
     }
 }
@@ -60,6 +66,7 @@ impl HostBuilder {
 pub struct Host {
     labels: HashMap<String, String>,
     authorizer: Box<dyn Authorizer + 'static>,
+    id: RefCell<String>,
 }
 
 impl Host {
@@ -90,10 +97,11 @@ impl Host {
             labels: self.labels.clone(),
         })
         .await?;
+        *self.id.borrow_mut() = hc.send(GetHostID {}).await?;
 
         // Start control plane
-        let cp = ControlPlane::from_registry();
         if let Some(lattice_control) = lattice_control {
+            let cp = ControlPlane::from_registry();
             cp.send(crate::control_plane::actorhost::SetProvider {
                 provider: lattice_control,
                 labels: self.labels.clone(),
@@ -104,21 +112,97 @@ impl Host {
         Ok(())
     }
 
+    pub async fn stop(&self) {
+        let cp = ControlPlane::from_registry();
+        let _ = cp.send(PublishEvent {
+            event: ControlEvent::HostStopped {
+                reason: TerminationReason::Requested,
+                header: Default::default(),
+            },
+        }).await;
+        System::current().stop();
+    }
+
+    pub fn id(&self) -> String {
+        self.id.borrow().to_string()
+    }
+
     pub async fn start_native_capability(&self, capability: crate::NativeCapability) -> Result<()> {
         let hc = HostController::from_registry();
         let _ = hc
             .send(StartProvider {
                 provider: capability,
+                image_ref: None,
             })
             .await??;
 
         Ok(())
     }
 
+    pub async fn start_capability_from_registry(
+        &self,
+        cap_ref: &str,
+        binding_name: Option<String>,
+    ) -> Result<()> {
+        let hc = HostController::from_registry();
+        let bytes = fetch_oci_bytes(cap_ref).await?;
+        let par = ProviderArchive::try_load(&bytes)?;
+        let nc = NativeCapability::from_archive(&par, binding_name)?;
+        hc.send(StartProvider {
+            provider: nc,
+            image_ref: Some(cap_ref.to_string()),
+        })
+        .await??;
+        Ok(())
+    }
+
     pub async fn start_actor(&self, actor: crate::Actor) -> Result<()> {
         let hc = HostController::from_registry();
 
-        hc.send(StartActor { actor }).await?;
+        hc.send(StartActor {
+            actor,
+            image_ref: None,
+        })
+        .await??;
+        Ok(())
+    }
+
+    pub async fn start_actor_from_registry(&self, actor_ref: &str) -> Result<()> {
+        let hc = HostController::from_registry();
+        let bytes = fetch_oci_bytes(actor_ref).await?;
+        let actor = crate::Actor::from_slice(&bytes)?;
+        hc.send(StartActor {
+            actor,
+            image_ref: Some(actor_ref.to_string()),
+        })
+        .await??;
+        Ok(())
+    }
+
+    pub async fn stop_actor(&self, actor_ref: &str) -> Result<()> {
+        let hc = HostController::from_registry();
+        hc.send(StopActor {
+            actor_ref: actor_ref.to_string(),
+        })
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn stop_provider(
+        &self,
+        provider_ref: &str,
+        contract_id: &str,
+        binding: Option<String>,
+    ) -> Result<()> {
+        let hc = HostController::from_registry();
+        let binding = binding.unwrap_or("default".to_string());
+        hc.send(StopProvider {
+            provider_ref: provider_ref.to_string(),
+            contract_id: contract_id.to_string(),
+            binding,
+        })
+        .await?;
         Ok(())
     }
 

@@ -1,4 +1,4 @@
-use crate::common::{await_actor_count, await_provider_count, par_from_file};
+use crate::common::{await_actor_count, await_provider_count, gen_kvcounter_host, par_from_file};
 use crate::generated::http::{deserialize, serialize, Request, Response};
 use provider_archive::ProviderArchive;
 use std::collections::HashMap;
@@ -6,9 +6,10 @@ use std::error::Error;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::time::Duration;
+use wascc_host::Result;
 use wascc_host::{Actor, HostBuilder, NativeCapability};
 
-pub async fn start_and_execute_echo() -> Result<(), Box<dyn Error + Sync + Send>> {
+pub async fn start_and_execute_echo() -> Result<()> {
     let h = HostBuilder::new().build();
     h.start(None, None).await?;
     let echo = Actor::from_file("./tests/modules/echo.wasm")?;
@@ -35,47 +36,11 @@ pub async fn start_and_execute_echo() -> Result<(), Box<dyn Error + Sync + Send>
     Ok(())
 }
 
-pub async fn kvcounter_basic() -> Result<(), Box<dyn Error + Sync + Send>> {
+pub async fn kvcounter_basic() -> Result<()> {
     use redis::Commands;
 
-    let h = HostBuilder::new().build();
-    h.start(None, None).await?;
-
-    let kvcounter = Actor::from_file("./tests/modules/kvcounter.wasm")?;
-    let kvcounter_key = kvcounter.public_key();
-    h.start_actor(kvcounter).await?;
-    await_actor_count(&h, 1, Duration::from_millis(50), 3).await?;
-
-    let arc = par_from_file("./tests/modules/libwascc_redis.par")?;
-    let arc2 = par_from_file("./tests/modules/libwascc_httpsrv.par")?;
-
-    let redis = NativeCapability::from_archive(&arc, None)?;
-    let websrv = NativeCapability::from_archive(&arc2, None)?;
-
-    let redis_id = arc.claims().unwrap().subject;
-    let websrv_id = arc2.claims().unwrap().subject;
-
-    let mut values: HashMap<String, String> = HashMap::new();
-    values.insert("URL".to_string(), "redis://127.0.0.1:6379".to_string());
-
-    let mut webvalues: HashMap<String, String> = HashMap::new();
-    webvalues.insert("PORT".to_string(), "9999".to_string());
-    h.start_native_capability(redis).await?;
-    h.start_native_capability(websrv).await?;
-    // need to wait for 3 providers because extras is always there
-    await_provider_count(&h, 3, Duration::from_millis(500), 5).await?;
-
-    h.set_binding(&kvcounter_key, "wascc:keyvalue", None, redis_id, values)
-        .await?;
-
-    h.set_binding(
-        &kvcounter_key,
-        "wascc:http_server",
-        None,
-        websrv_id,
-        webvalues,
-    )
-    .await?;
+    let h = gen_kvcounter_host(9999, None, None).await?;
+    println!("Got host");
 
     let key = uuid::Uuid::new_v4().to_string();
     let rkey = format!(":{}", key); // the kv wasm logic does a replace on '/' with ':'
@@ -88,6 +53,115 @@ pub async fn kvcounter_basic() -> Result<(), Box<dyn Error + Sync + Send>> {
     resp = reqwest::get(&url).await?; // counter should be at 3 now
     assert!(resp.status().is_success());
     assert_eq!(resp.text().await?, "{\"counter\":3}");
+
+    let client = redis::Client::open("redis://127.0.0.1/")?;
+    let mut con = client.get_connection()?;
+    let _: () = con.del(&rkey)?;
+
+    Ok(())
+}
+
+pub async fn kvcounter_start_stop() -> Result<()> {
+    use redis::Commands;
+    let h = gen_kvcounter_host(9997, None, None).await?;
+
+    let key = uuid::Uuid::new_v4().to_string();
+    let rkey = format!(":{}", key); // the kv wasm logic does a replace on '/' with ':'
+    let url = format!("http://localhost:9997/{}", key);
+
+    let resp = reqwest::get(&url).await?;
+    assert!(resp.status().is_success());
+
+    h.stop_actor("MASCXFM4R6X63UD5MSCDZYCJNPBVSIU6RKMXUPXRKAOSBQ6UY3VT3NPZ")
+        .await?;
+    println!("Waiting for 0");
+    await_actor_count(&h, 0, Duration::from_millis(50), 3).await?;
+    println!("Got 0");
+
+    let kvcounter = Actor::from_file("./tests/modules/kvcounter.wasm")?;
+    h.start_actor(kvcounter).await?;
+    await_actor_count(&h, 1, Duration::from_millis(50), 3).await?;
+
+    let arc2 = par_from_file("./tests/modules/libwascc_httpsrv.par")?;
+
+    h.stop_provider(&arc2.claims().unwrap().subject, "wascc:http_server", None)
+        .await?;
+    await_provider_count(&h, 2, Duration::from_millis(50), 3).await?;
+
+    ::std::thread::sleep(Duration::from_millis(2500)); // give the web server enough time to let go of the port
+
+    let websrv = NativeCapability::from_archive(&arc2, None)?;
+    h.start_native_capability(websrv).await?;
+    await_provider_count(&h, 3, Duration::from_millis(50), 3).await?; // 2 providers plus wascc:extras
+
+    let resp2 = reqwest::get(&url).await?;
+    assert!(resp2.status().is_success());
+    assert_eq!(resp2.text().await?, "{\"counter\":2}");
+
+    let client = redis::Client::open("redis://127.0.0.1/")?;
+    let mut con = client.get_connection()?;
+    let _: () = con.del(&rkey)?;
+
+    Ok(())
+}
+
+// Set the binding before either the actor or the provider are running in
+// the host, and verify that we can then hit the HTTP endpoint.
+pub async fn kvcounter_binding_first() -> Result<()> {
+    use redis::Commands;
+    let h = HostBuilder::new().build();
+    h.start(None, None).await?;
+
+    let web_port = 9998_u32;
+
+    // Set the bindings before there's any provider to invoke OP_BIND_ACTOR
+
+    let mut webvalues: HashMap<String, String> = HashMap::new();
+    webvalues.insert("PORT".to_string(), format!("{}", web_port));
+
+    let mut values: HashMap<String, String> = HashMap::new();
+    values.insert("URL".to_string(), "redis://127.0.0.1:6379".to_string());
+
+    let arc = par_from_file("./tests/modules/libwascc_redis.par")?;
+    let arc2 = par_from_file("./tests/modules/libwascc_httpsrv.par")?;
+
+    let redis_id = arc.claims().unwrap().subject;
+    let websrv_id = arc2.claims().unwrap().subject;
+
+    let kvcounter = Actor::from_file("./tests/modules/kvcounter.wasm")?;
+    let kvcounter_key = kvcounter.public_key();
+
+    h.set_binding(
+        &kvcounter_key,
+        "wascc:http_server",
+        None,
+        websrv_id,
+        webvalues,
+    )
+    .await?;
+
+    h.set_binding(&kvcounter_key, "wascc:keyvalue", None, redis_id, values)
+        .await?;
+
+    h.start_actor(kvcounter).await?;
+    await_actor_count(&h, 1, Duration::from_millis(50), 3).await?;
+
+    let redis = NativeCapability::from_archive(&arc, None)?;
+    let websrv = NativeCapability::from_archive(&arc2, None)?;
+
+    // When we start these, with pre-existing bindings, they should trigger OP_BIND_ACTOR invocations
+    // for each.
+    h.start_native_capability(redis).await?;
+    h.start_native_capability(websrv).await?;
+    await_provider_count(&h, 3, Duration::from_millis(50), 3).await?; // 2 providers plus wascc:extras
+
+    let key = uuid::Uuid::new_v4().to_string();
+    let rkey = format!(":{}", key); // the kv wasm logic does a replace on '/' with ':'
+    let url = format!("http://localhost:{}/{}", web_port, key);
+
+    let mut resp = reqwest::get(&url).await?;
+    assert!(resp.status().is_success());
+    assert_eq!(resp.text().await?, "{\"counter\":1}");
 
     let client = redis::Client::open("redis://127.0.0.1/")?;
     let mut con = client.get_connection()?;
