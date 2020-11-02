@@ -104,9 +104,7 @@ pub enum LatticeCliCommand {
 //     )
 // }
 
-pub fn handle_command(
-    cli: LatticeCli,
-) -> Result<(), Box<dyn ::std::error::Error>> {
+pub fn handle_command(cli: LatticeCli) -> Result<(), Box<dyn ::std::error::Error>> {
     let cmd = cli.command;
     let url = cli.url;
     let json = cli.json;
