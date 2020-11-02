@@ -10,6 +10,8 @@ use structopt::StructOpt;
 
 type Result<T> = ::std::result::Result<T, Box<dyn ::std::error::Error>>;
 
+const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
+
 #[derive(Debug, StructOpt, Clone)]
 #[structopt(
     global_settings(&[AppSettings::ColoredHelp, AppSettings::VersionlessSubcommands]),
@@ -82,6 +84,10 @@ struct CreateCommand {
     /// Output file path
     #[structopt(short = "o", long = "output")]
     output: Option<String>,
+
+    /// Include a compressed provider archive
+    #[structopt(long = "compress")]
+    compress: bool,
 }
 
 #[derive(StructOpt, Debug, Clone)]
@@ -174,15 +180,11 @@ fn handle_create(cmd: CreateCommand) -> Result<()> {
         ),
     };
 
-    match File::create(output.clone()) {
-        Ok(mut out) => par
-            .write(&mut out, &issuer, &subject)
-            .map_err(|e| format!("{}", e))?,
-        Err(e) => println!(
-            "Error: {}, please ensure directory {:?} exists",
-            e,
-            PathBuf::from(output).parent().unwrap()
-        ),
+    if par.write(&output, &issuer, &subject, cmd.compress).is_err() {
+        println!(
+            "Error writing PAR. Please ensure directory {:?} exists",
+            PathBuf::from(output).parent().unwrap(),
+        );
     }
 
     Ok(())
@@ -270,9 +272,21 @@ fn handle_insert(cmd: InsertCommand) -> Result<()> {
     par.add_library(&cmd.arch, &lib)
         .map_err(|e| format!("{}", e))?;
 
-    let mut out = File::create(cmd.archive)?;
-    par.write(&mut out, &issuer, &subject)
-        .map_err(|e| format!("{}", e))?;
+    par.write(
+        &cmd.archive,
+        &issuer,
+        &subject,
+        is_compressed(&buf).map_err(|e| format!("{}", e))?,
+    )
+    .map_err(|e| format!("{}", e))?;
 
     Ok(())
+}
+
+/// Inspects the byte slice for a GZIP header, and returns true if the file is compressed
+fn is_compressed(input: &[u8]) -> Result<bool> {
+    if input.len() < 2 {
+        return Err("Not enough bytes to be a valid PAR file".into());
+    }
+    Ok(input[0..2] == GZIP_MAGIC)
 }
