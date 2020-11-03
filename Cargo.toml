@@ -1,0 +1,25 @@
+[package]
+name = "wascc-fs"
+version = "0.1.2"
+authors = ["Kevin Hoffman <alothien@gmail.com>"]
+edition = "2018"
+homepage = "https://wascc.dev"
+repository = "https://github.com/wascc/fs-provider"
+description = "Blob store capability provider (local file system) for the waSCC runtime"
+license = "Apache-2.0"
+documentation = "https://docs.rs/wascc-fs"
+readme = "README.md"
+keywords = ["webassembly", "wasm", "files", "wascc", "blobstore"]
+categories = ["wasm", "api-bindings"]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+# Enable if the provider will be statically compiled into a host
+static_plugin = []
+
+[dependencies]
+wascc-codec = "0.8.1"
+log = "0.4.11"
+env_logger = "0.7.1"
