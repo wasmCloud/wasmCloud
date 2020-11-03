@@ -170,9 +170,10 @@ fn determine_directory(directory: Option<String>) -> String {
 /// Helper function to locate and extract keypair from user input
 pub fn extract_keypair(
     input: Option<String>,
-    module_path: String,
+    module_path: Option<String>,
     directory: Option<String>,
     keypair_type: KeyPairType,
+    disable_keygen: bool,
 ) -> Result<KeyPair, Box<dyn std::error::Error>> {
     let seed = if let Some(input_str) = input {
         match File::open(input_str.clone()) {
@@ -185,10 +186,10 @@ pub fn extract_keypair(
             // User provided seed as an argument
             Err(_e) => input_str,
         }
-    } else {
+    } else if let Some(module) = module_path {
         // No seed value provided, attempting to source from provided or default directory
         let dir = determine_directory(directory);
-        let module_name = PathBuf::from(module_path)
+        let module_name = PathBuf::from(module)
             .file_stem()
             .unwrap()
             .to_str()
@@ -208,23 +209,28 @@ pub fn extract_keypair(
                 s
             }
             // No default key, generating for user
-            Err(_e) => {
+            Err(_e) if !disable_keygen => {
                 let kp = KeyPair::new(keypair_type);
-                println!("No keypair found in {}, we will generate one for you and place it there. If you'd like to use alternative keys, you can supply them as a flag.", path);
+                println!("No keypair found in \"{}\".\nWe will generate one for you and place it there.\nIf you'd like to use alternative keys, you can supply them as a flag.\n", path);
                 let seed = kp.seed()?;
                 fs::create_dir_all(Path::new(&path).parent().unwrap())?;
                 let mut f = File::create(path)?;
                 f.write_all(seed.as_bytes())?;
                 seed
             }
+            _ => {
+                return Err(format!(
+                    "No keypair found in {}, please ensure key exists or supply one as a flag",
+                    path
+                )
+                .into());
+            }
         }
+    } else {
+        return Err("Keypair path or string not supplied. Ensure provided keypair is valid".into());
     };
 
-    // from_seed returns nkeys::error::Error
-    match KeyPair::from_seed(&seed) {
-        Ok(kp) => Ok(kp),
-        Err(e) => Err(e.into()),
-    }
+    KeyPair::from_seed(&seed).map_err(|e| format!("{}", e).into())
 }
 
 fn keypair_type_to_string(keypair_type: KeyPairType) -> String {

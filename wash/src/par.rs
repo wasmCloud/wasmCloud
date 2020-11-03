@@ -88,6 +88,10 @@ struct CreateCommand {
     /// Include a compressed provider archive
     #[structopt(long = "compress")]
     compress: bool,
+
+    /// Disables autogeneration of signing keys
+    #[structopt(long = "disable-keygen")]
+    disable_keygen: bool,
 }
 
 #[derive(StructOpt, Debug, Clone)]
@@ -127,6 +131,10 @@ struct InsertCommand {
     /// Path to subject seed key (service). If this flag is not provided, the will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
     #[structopt(short = "s", long = "subject")]
     subject: Option<String>,
+
+    /// Disables autogeneration of signing keys
+    #[structopt(long = "disable-keygen")]
+    disable_keygen: bool,
 }
 
 pub fn handle_command(cli: ParCli) -> Result<()> {
@@ -153,15 +161,17 @@ fn handle_create(cmd: CreateCommand) -> Result<()> {
 
     let issuer = extract_keypair(
         cmd.issuer,
-        cmd.binary.clone(),
+        Some(cmd.binary.clone()),
         cmd.directory.clone(),
         KeyPairType::Account,
+        cmd.disable_keygen,
     )?;
     let subject = extract_keypair(
         cmd.subject,
-        cmd.binary.clone(),
+        Some(cmd.binary.clone()),
         cmd.directory,
         KeyPairType::Service,
+        cmd.disable_keygen,
     )?;
 
     par.add_library(&cmd.arch, &lib)
@@ -254,15 +264,17 @@ fn handle_insert(cmd: InsertCommand) -> Result<()> {
 
     let issuer = extract_keypair(
         cmd.issuer,
-        cmd.binary.clone(),
+        Some(cmd.binary.clone()),
         cmd.directory.clone(),
         KeyPairType::Account,
+        cmd.disable_keygen,
     )?;
     let subject = extract_keypair(
         cmd.subject,
-        cmd.binary.clone(),
+        Some(cmd.binary.clone()),
         cmd.directory,
         KeyPairType::Service,
+        cmd.disable_keygen,
     )?;
 
     let mut f = File::open(cmd.binary.clone())?;
