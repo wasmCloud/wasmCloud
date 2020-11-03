@@ -1,0 +1,35 @@
+[package]
+name = "wascc-redis"
+version = "0.9.0"
+authors = ["Kevin Hoffman <alothien@gmail.com>"]
+edition = "2018"
+homepage = "https://wascc.dev"
+repository = "https://github.com/wascc/redis-provider"
+description = "Redis capability provider for the waSCC WebAssembly actor runtime"
+license = "Apache-2.0"
+documentation = "https://docs.rs/wascc-redis"
+readme = "README.md"
+keywords = ["webassembly", "wasm", "keyvalue", "wascc", "redis"]
+categories = ["wasm", "api-bindings"]
+
+[badges]
+maintenance = { status = "actively-developed" }
+
+[features]
+# Enable if the provider will be statically compiled into a host
+static_plugin = []
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+env_logger = "0.8.1"
+lazy_static = "1.4.0"
+crossbeam-channel = "0.5.0"
+crossbeam = "0.8.0"
+rmp-serde = "0.14.4"
+serde = {version = "1.0.117", features = ["derive"] }
+crossbeam-utils = "0.8.0"
+log = "0.4.11"
+wascc-codec = "0.9.0"
+redis = "0.17.0"
