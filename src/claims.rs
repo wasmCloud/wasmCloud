@@ -14,13 +14,15 @@
 
 // extern crate serde_derive;
 
-use nkeys::KeyPair;
+use crate::keys::extract_keypair;
+use nkeys::{KeyPair, KeyPairType};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{read_to_string, File};
 use std::io::Read;
 use std::io::Write;
+use std::path::PathBuf;
 use structopt::clap::AppSettings;
 use structopt::StructOpt;
 use term_table::{
@@ -63,6 +65,30 @@ enum ClaimsCliCommand {
     Token(TokenCommand),
 }
 
+#[derive(StructOpt, Debug, Clone)]
+struct SignCommand {
+    /// File to read
+    source: String,
+    /// Target output file. If this flag is not provided, the signed module will be placed in the same directory as the source with a "_s" suffix
+    #[structopt(short = "o", long = "output")]
+    output: Option<String>,
+
+    // /// Location of key files for signing. Defaults to $WASH_KEYS ($HOME/.wash/keys)
+    // #[structopt(
+    //     short = "d",
+    //     long = "directory",
+    //     env = "WASH_KEYS",
+    //     hide_env_values = true
+    // )]
+    // directory: Option<String>,
+    /// Disables autogeneration of signing keys
+    #[structopt(long = "disable-keygen")]
+    disable_keygen: bool,
+
+    #[structopt(flatten)]
+    metadata: ActorMetadata,
+}
+
 #[derive(Debug, Clone, StructOpt)]
 enum TokenCommand {
     /// Generate a signed JWT for an actor module
@@ -81,13 +107,22 @@ enum TokenCommand {
 
 #[derive(Debug, Clone, StructOpt, Serialize, Deserialize)]
 struct GenerateCommon {
-    /// Issuer seed key path (usually a .nk file)
+    /// Path to issuer seed key. If this flag is not provided, the will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
     #[structopt(short = "i", long = "issuer")]
-    issuer_key_path: String,
+    issuer: Option<String>,
 
-    /// Subject seed key path (usually a .nk file)
+    /// Path to subject seed key. If this flag is not provided, the will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
     #[structopt(short = "u", long = "subject")]
-    subject_key_path: String,
+    subject: Option<String>,
+
+    /// Location of key files for signing. Defaults to $WASH_KEYS ($HOME/.wash/keys)
+    #[structopt(
+        short = "d",
+        long = "directory",
+        env = "WASH_KEYS",
+        hide_env_values = true
+    )]
+    directory: Option<String>,
 
     /// Indicates the token expires in the given amount of days. If this option is left off, the token will never expire
     #[structopt(short = "x", long = "expires")]
@@ -223,17 +258,6 @@ struct ActorMetadata {
     common: GenerateCommon,
 }
 
-#[derive(StructOpt, Debug, Clone)]
-struct SignCommand {
-    /// File to read
-    source: String,
-    /// Target output file
-    output: String,
-
-    #[structopt(flatten)]
-    metadata: ActorMetadata,
-}
-
 pub fn handle_command(cli: ClaimsCli) -> Result<(), Box<dyn ::std::error::Error>> {
     match cli.command {
         ClaimsCliCommand::Inspect { file, raw } => render_caps(&file, raw),
@@ -262,25 +286,22 @@ fn get_keypair_vec(paths: &[String]) -> Result<Vec<KeyPair>, Box<dyn ::std::erro
         .collect())
 }
 
-fn get_keypairs(
-    common: &GenerateCommon,
-) -> Result<(KeyPair, KeyPair), Box<dyn ::std::error::Error>> {
-    if common.issuer_key_path.is_empty() {
-        return Err("Must specify an issuer key path".into());
-    }
-    if common.subject_key_path.is_empty() {
-        return Err("Must specify a subject key path".into());
-    }
-    let iss_key = read_to_string(&common.issuer_key_path)?;
-    let sub_key = read_to_string(&common.subject_key_path)?;
-    let issuer = KeyPair::from_seed(iss_key.trim_end())?;
-    let subject = KeyPair::from_seed(sub_key.trim_end())?;
-
-    Ok((issuer, subject))
-}
-
 fn generate_actor(actor: &ActorMetadata) -> Result<(), Box<dyn ::std::error::Error>> {
-    let (issuer, subject) = get_keypairs(&actor.common)?;
+    let issuer = extract_keypair(
+        actor.common.issuer.clone(),
+        None,
+        actor.common.directory.clone(),
+        KeyPairType::Account,
+        true,
+    )?;
+    let subject = extract_keypair(
+        actor.common.subject.clone(),
+        None,
+        actor.common.directory.clone(),
+        KeyPairType::Module,
+        true,
+    )?;
+
     let mut caps_list = vec![];
     if actor.keyvalue {
         caps_list.push(wascap::caps::KEY_VALUE.to_string());
@@ -397,21 +418,20 @@ fn sign_file(cmd: &SignCommand) -> Result<(), Box<dyn ::std::error::Error>> {
     let mut buf = Vec::new();
     sfile.read_to_end(&mut buf).unwrap();
 
-    let mod_kp = if !cmd.metadata.common.subject_key_path.is_empty() {
-        KeyPair::from_seed(&read_to_string(&cmd.metadata.common.subject_key_path)?.trim_end())?
-    } else {
-        let m = KeyPair::new_module();
-        println!("New module key created. SAVE this seed key: {}", m.seed()?);
-        m
-    };
-
-    let acct_kp = if !cmd.metadata.common.issuer_key_path.is_empty() {
-        KeyPair::from_seed(&read_to_string(&cmd.metadata.common.issuer_key_path)?.trim_end())?
-    } else {
-        let a = KeyPair::new_account();
-        println!("New account key created. SAVE this seed key: {}", a.seed()?);
-        a
-    };
+    let issuer = extract_keypair(
+        cmd.metadata.common.issuer.clone(),
+        Some(cmd.source.clone()),
+        cmd.metadata.common.directory.clone(),
+        KeyPairType::Account,
+        cmd.disable_keygen,
+    )?;
+    let subject = extract_keypair(
+        cmd.metadata.common.subject.clone(),
+        Some(cmd.source.clone()),
+        cmd.metadata.common.directory.clone(),
+        KeyPairType::Module,
+        cmd.disable_keygen,
+    )?;
 
     let mut caps_list = vec![];
     if cmd.metadata.keyvalue {
@@ -447,8 +467,8 @@ fn sign_file(cmd: &SignCommand) -> Result<(), Box<dyn ::std::error::Error>> {
     let signed = sign_buffer_with_claims(
         cmd.metadata.name.clone(),
         &buf,
-        mod_kp,
-        acct_kp,
+        issuer,
+        subject,
         cmd.metadata.common.expires_in_days,
         cmd.metadata.common.not_before_days,
         caps_list.clone(),
@@ -458,12 +478,31 @@ fn sign_file(cmd: &SignCommand) -> Result<(), Box<dyn ::std::error::Error>> {
         cmd.metadata.ver.clone(),
     )?;
 
-    let mut outfile = File::create(&cmd.output).unwrap();
+    let output = match cmd.output.clone() {
+        Some(out) => out,
+        None => {
+            let path = PathBuf::from(cmd.source.clone())
+                .parent()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_string();
+            let module_name = PathBuf::from(cmd.source.clone())
+                .file_stem()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_string();
+            format!("{}/{}_s.wasm", path, module_name)
+        }
+    };
+
+    let mut outfile = File::create(&output).unwrap();
     match outfile.write(&signed) {
         Ok(_) => {
             println!(
                 "Successfully signed {} with capabilities: {}",
-                cmd.output,
+                output,
                 caps_list.join(",")
             );
             Ok(())
