@@ -1,0 +1,18 @@
+[package]
+name = "graph-actor"
+version = "0.0.1"
+authors = ["Kevin Hoffman <alothien@gmail.com>"]
+edition = "2018"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wascc-actor = "0.7.2"
+wasccgraph-actor = { path = "../wasccgraph-actor"}
+serde_json = "1.0.53"
+log = "0.4.8"
+
+[profile.release]
+# Optimize for small code size
+opt-level = "s"

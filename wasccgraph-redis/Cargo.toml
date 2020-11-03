@@ -1,0 +1,30 @@
+[package]
+name = "wasccgraph-redis"
+version = "0.1.0"
+authors = ["Kevin Hoffman <alothien@gmail.com>"]
+edition = "2018"
+homepage = "https://wascc.dev"
+repository = "https://github.com/wascc/redisgraph"
+description = "RedisGraph implementation of the waSCC Graph Database capability provider contract"
+license = "Apache-2.0"
+documentation = "https://docs.rs/wasccgraph-redis"
+readme = "README.md"
+keywords = ["webassembly", "wasm", "graphdb", "graph", "wascc"]
+categories = ["wasm", "api-bindings", "database"]
+
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+# Enable if the provider will be statically compiled into a host
+static_plugin = []
+
+
+[dependencies]
+wascc-codec = "0.7.0"
+log = "0.4.8"
+env_logger = "0.7.1"
+redis = "0.16.0"
+redisgraph = "0.5.0"
+wasccgraph-common = "0.0.2"
