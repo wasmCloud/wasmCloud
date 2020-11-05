@@ -1,0 +1,2 @@
+# Don't directly commit provider archives
+*.par

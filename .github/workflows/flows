@@ -1,0 +1,10 @@
+fs
+http-client
+http-server
+logging
+nats
+redis
+redis-streams
+redisgraph
+s3
+telnet
