@@ -4,11 +4,11 @@ on:
   push:
     branches: [ main ]
     paths:
-    - "redis/*"
+    - "redis/**"
   pull_request:
     branches: [ main ]
     paths:
-    - "redis/*"
+    - "redis/**"
 
 env:
   CARGO_TERM_COLOR: always
