@@ -4,10 +4,10 @@ on:
   push:
     branches: [ main ]
     paths:
-    - "PROVIDER/*"
+    - "PROVIDER/**"
   pull_request:
     branches: [ main ]
-    - "PROVIDER/*"
+    - "PROVIDER/**"
 
 env:
   CARGO_TERM_COLOR: always
