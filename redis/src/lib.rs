@@ -41,8 +41,8 @@ pub const OP_KEY_EXISTS: &str = "KeyExists";
 
 const CAPABILITY_ID: &str = "wascc:keyvalue";
 const SYSTEM_ACTOR: &str = "system";
-const VERSION: &str = env!("CARGO_PKG_VERSION");
 const REVISION: u32 = 2; // Increment for each crates publish
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[cfg(not(feature = "static_plugin"))]
 capability_provider!(RedisKVProvider, RedisKVProvider::new);
