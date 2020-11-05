@@ -1,5 +1,7 @@
 name: Rust
 
+# TODO: For each provider, copy this file and adapt it for the provider. Delete this template afterwards
+
 on:
   push:
     branches: [ main ]
@@ -7,6 +9,7 @@ on:
     - "PROVIDER/**"
   pull_request:
     branches: [ main ]
+    paths:
     - "PROVIDER/**"
 
 env:
@@ -43,8 +46,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
-      - run: rustup add target x86_64-unknown-linux-gnu
-#      - run: rustup add target x86_64-apple-darwin
+      - run: rustup target add x86_64-unknown-linux-gnu
+#      - run: rustup target add x86_64-apple-darwin
       - run: cargo install --git https://github.com/wascc/wash --branch main --force #TODO: install from specific tag
       - run: cargo install cross # TODO: From chris's repo / PR
       - name: build-linux
