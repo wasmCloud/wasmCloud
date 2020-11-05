@@ -1,6 +1,6 @@
 # waSCC Capability Providers
 
-This repository includes the waSCC first party capability providers.
+This repository includes the waSCC first party and sample capability providers.
 
 1. fs
 1. http-client
@@ -12,4 +12,3 @@ This repository includes the waSCC first party capability providers.
 1. redisgraph
 1. s3
 1. telnet
-
