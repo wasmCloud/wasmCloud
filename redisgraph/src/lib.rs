@@ -31,6 +31,7 @@ use redisgraph::{Graph, RedisGraphResult, ResultSet};
 
 mod rgraph;
 
+const CAPABILITY_ID: &str = "wascc:graphdb";
 const SYSTEM_ACTOR: &str = "system";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const REVISION: u32 = 2; // Increment for each crates publish
@@ -123,7 +124,7 @@ impl WasccRedisgraphProvider {
     fn get_descriptor(&self) -> Result<Vec<u8>, Box<dyn Error>> {
         Ok(serialize(
             CapabilityDescriptor::builder()
-                .id(common::CAPID_GRAPHDB)
+                .id(CAPABILITY_ID)
                 .name("waSCC Graph Database Provider (RedisGraph)")
                 .long_description("A capability provider exposing Cypher-based RedisGraph database access to waSCC actors")
                 .version(VERSION)
