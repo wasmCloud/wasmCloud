@@ -7,6 +7,7 @@ mod errors;
 mod generated;
 mod host;
 mod host_controller;
+mod manifest;
 mod messagebus;
 mod middleware;
 mod oci;
@@ -19,6 +20,7 @@ pub use control_plane::events::{ControlEvent, EventHeader};
 pub use control_plane::{ControlInterface, ControlPlaneProvider};
 pub use dispatch::{BusDispatcher, Invocation, InvocationResponse, WasccEntity};
 pub use host::{Host, HostBuilder};
+pub use manifest::HostManifest;
 pub use messagebus::LatticeProvider;
 
 pub type Result<T> = ::std::result::Result<T, Box<dyn ::std::error::Error + Send + Sync>>;

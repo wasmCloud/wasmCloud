@@ -1,16 +1,16 @@
-use std::collections::HashMap;
-use crate::capability::binding_cache::BindingCache;
-use crate::{WasccEntity, Invocation, BusDispatcher, InvocationResponse};
-use actix::prelude::*;
-use wascap::prelude::{Claims, KeyPair};
 use crate::auth::Authorizer;
-use actix::dev::{MessageResponse, ResponseChannel};
+use crate::capability::binding_cache::BindingCache;
 use crate::Result;
+use crate::{BusDispatcher, Invocation, InvocationResponse, WasccEntity};
+use actix::dev::{MessageResponse, ResponseChannel};
+use actix::prelude::*;
+use std::collections::HashMap;
+use wascap::prelude::{Claims, KeyPair};
 
 pub use handlers::OP_BIND_ACTOR;
 pub(crate) mod handlers;
-mod utils;
 mod hb;
+mod utils;
 
 pub trait LatticeProvider: Sync + Send {
     fn init(&mut self, dispatcher: BusDispatcher);
@@ -28,8 +28,6 @@ pub trait LatticeProvider: Sync + Send {
     ) -> Result<()>;
     fn advertise_claims(&self, claims: Claims<wascap::jwt::Actor>) -> Result<()>;
 }
-
-
 
 #[derive(Default)]
 pub(crate) struct MessageBus {
@@ -54,9 +52,9 @@ pub struct QueryResponse {
 }
 
 impl<A, M> MessageResponse<A, M> for QueryResponse
-    where
-        A: Actor,
-        M: Message<Result = QueryResponse>,
+where
+    A: Actor,
+    M: Message<Result = QueryResponse>,
 {
     fn handle<R: ResponseChannel<M>>(self, _: &mut A::Context, tx: Option<R>) {
         if let Some(tx) = tx {
@@ -128,9 +126,9 @@ pub struct FindBindingsResponse {
 }
 
 impl<A, M> MessageResponse<A, M> for FindBindingsResponse
-    where
-        A: Actor,
-        M: Message<Result = FindBindingsResponse>,
+where
+    A: Actor,
+    M: Message<Result = FindBindingsResponse>,
 {
     fn handle<R: ResponseChannel<M>>(self, _: &mut A::Context, tx: Option<R>) {
         if let Some(tx) = tx {

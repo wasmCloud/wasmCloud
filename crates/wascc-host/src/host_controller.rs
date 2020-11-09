@@ -5,14 +5,21 @@ use crate::capability::native_host::NativeCapabilityHost;
 use crate::control_plane::actorhost::ControlPlane;
 use crate::dispatch::Invocation;
 use crate::messagebus::{
-    FindBindings, MessageBus, SetAuthorizer, SetKey, Unsubscribe, OP_BIND_ACTOR,
+    AdvertiseBinding, FindBindings, MessageBus, SetAuthorizer, SetKey, Unsubscribe, OP_BIND_ACTOR,
 };
 use crate::middleware::Middleware;
-use crate::{NativeCapability, Result, WasccEntity, SYSTEM_ACTOR};
+use crate::oci::fetch_oci_bytes;
+use crate::{HostManifest, NativeCapability, Result, WasccEntity, SYSTEM_ACTOR};
 use actix::prelude::*;
+use provider_archive::ProviderArchive;
 use std::collections::HashMap;
 use std::sync::Arc;
 use wascap::prelude::KeyPair;
+
+pub(crate) const CORELABEL_ARCH: &str = "hostcore.arch";
+pub(crate) const CORELABEL_OS: &str = "hostcore.os";
+pub(crate) const CORELABEL_OSFAMILY: &str = "hostcore.osfamily";
+pub(crate) const RESTRICTED_LABELS: [&str; 3] = [CORELABEL_OSFAMILY, CORELABEL_ARCH, CORELABEL_OS];
 
 #[derive(Default)]
 pub(crate) struct HostController {
@@ -217,7 +224,13 @@ impl Handler<StartActor> for HostController {
         }
 
         let new_actor = SyncArbiter::start(1, move || {
-            ActorHost::new(bytes.clone(), None, mw.clone(), seed.clone(), imgref.clone())
+            ActorHost::new(
+                bytes.clone(),
+                None,
+                mw.clone(),
+                seed.clone(),
+                imgref.clone(),
+            )
         });
 
         if let Some(imageref) = msg.image_ref {
@@ -240,7 +253,7 @@ impl Handler<SetAuthorizer> for HostController {
 impl Handler<StartProvider> for HostController {
     type Result = ResponseActFuture<Self, Result<()>>;
 
-    fn handle(&mut self, msg: StartProvider, _ctx: &mut Context<Self>) -> Self::Result {
+    fn handle(&mut self, msg: StartProvider, ctx: &mut Context<Self>) -> Self::Result {
         let seed = self.kp.as_ref().unwrap().seed().unwrap();
         let s = seed.clone();
         let mw = self.mw_chain.clone();
@@ -343,7 +356,3 @@ async fn reinvoke_bindings(
         }
     }
 }
-
-pub(crate) const CORELABEL_ARCH: &str = "hostcore.arch";
-pub(crate) const CORELABEL_OS: &str = "hostcore.os";
-pub(crate) const CORELABEL_OSFAMILY: &str = "hostcore.osfamily";

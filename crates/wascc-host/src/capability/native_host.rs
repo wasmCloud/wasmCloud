@@ -1,5 +1,6 @@
 use crate::capability::native::NativeCapability;
 use crate::control_plane::actorhost::{ControlPlane, PublishEvent};
+use crate::control_plane::events::TerminationReason;
 use crate::dispatch::{Invocation, InvocationResponse, ProviderDispatcher, WasccEntity};
 use crate::messagebus::{MessageBus, Subscribe, Unsubscribe};
 use crate::middleware::{run_capability_post_invoke, run_capability_pre_invoke, Middleware};
@@ -15,7 +16,6 @@ use wascap::prelude::KeyPair;
 use wascc_codec::capabilities::{
     CapabilityDescriptor, CapabilityProvider, OP_GET_CAPABILITY_DESCRIPTOR,
 };
-use crate::control_plane::events::TerminationReason;
 
 pub(crate) struct NativeCapabilityHost {
     cap: NativeCapability,
@@ -245,7 +245,7 @@ mod test {
             let claims = crate::capability::extras::get_claims();
             let cap = NativeCapability::from_instance(extras, Some("default".to_string()), claims)
                 .unwrap();
-            NativeCapabilityHost::new(Arc::new(cap), vec![], key)
+            NativeCapabilityHost::try_new(cap, vec![], key, None).unwrap()
         });
 
         let req = GeneratorRequest {

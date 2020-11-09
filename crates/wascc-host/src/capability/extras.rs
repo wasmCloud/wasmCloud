@@ -3,7 +3,9 @@
 // generating a guid, and generating a sequence number... things that a standalone
 // WASM module cannot do.
 
+use crate::generated::core::HealthResponse;
 use crate::generated::extras::{GeneratorRequest, GeneratorResult};
+use crate::messagebus::handlers::OP_HEALTH_REQUEST;
 use crate::VERSION;
 use std::error::Error;
 use std::sync::{Arc, RwLock};
@@ -19,8 +21,6 @@ use wascc_codec::capabilities::{
 };
 use wascc_codec::core::OP_BIND_ACTOR;
 use wascc_codec::{deserialize, serialize, SYSTEM_ACTOR};
-use crate::messagebus::handlers::OP_HEALTH_REQUEST;
-use crate::generated::core::HealthResponse;
 
 const REVISION: u32 = 3;
 
@@ -175,7 +175,7 @@ impl CapabilityProvider for ExtrasCapabilityProvider {
 fn healthy() -> Result<Vec<u8>, Box<dyn std::error::Error + Sync + Send>> {
     let hr = HealthResponse {
         message: "".to_string(),
-        healthy: true
+        healthy: true,
     };
     Ok(serialize(hr)?)
 }

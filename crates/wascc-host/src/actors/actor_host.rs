@@ -1,5 +1,6 @@
 use crate::actors::WasccActor;
 use crate::control_plane::actorhost::{ControlPlane, PublishEvent};
+use crate::control_plane::events::TerminationReason;
 use crate::dispatch::{Invocation, InvocationResponse, WasccEntity};
 use crate::messagebus::{MessageBus, PutClaims, Subscribe, Unsubscribe};
 use crate::middleware::{run_actor_post_invoke, run_actor_pre_invoke, Middleware};
@@ -8,7 +9,6 @@ use actix::prelude::*;
 use futures::executor::block_on;
 use wapc::{WapcHost, WasiParams};
 use wascap::prelude::{Claims, KeyPair};
-use crate::control_plane::events::TerminationReason;
 
 pub(crate) struct ActorHost {
     guest_module: WapcHost,

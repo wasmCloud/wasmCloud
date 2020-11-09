@@ -1,6 +1,6 @@
 use crate::Result;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use serde::{Serialize, Deserialize};
 
 /// When an an actor binds to a capability provider, it does so with a contract ID
 /// (e.g. 'wascc:messaging') and a binding name (e.g. `default`). The triplet of
