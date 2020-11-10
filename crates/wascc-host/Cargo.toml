@@ -35,7 +35,7 @@ tokio = { version = "0.3.0", features = ["rt"] }
 futures = "0.3.6"
 rmp-serde = "0.14.4"
 serde_bytes = "0.11.5"
-provider-archive ="0.1.0"
+provider-archive ="0.3.0"
 lazy_static = "1.4.0"
 wascc-codec = "0.9.0"
 oci-distribution = "0.4.0"
