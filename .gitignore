@@ -13,5 +13,5 @@ Cargo.lock
 /target
 
 # Just in case the tests fail to delete the files..
-.par
-
+*.par
+*.par.gz

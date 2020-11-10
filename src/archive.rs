@@ -84,12 +84,12 @@ impl ProviderArchive {
             return Err("Not enough bytes to be a valid PAR file".into());
         }
 
-        let archive = if input[0..2] == GZIP_MAGIC {
-            decompress(input)?
+        let mut par = tar::Archive::new(if input[0..2] == GZIP_MAGIC {
+            Box::new(GzDecoder::new(input)) as Box<dyn Read>
         } else {
-            input.to_vec()
-        };
-        let mut par = tar::Archive::new(Cursor::new(archive));
+            Box::new(Cursor::new(input)) as Box<dyn Read>
+        });
+
         let mut c: Option<Claims<CapabilityProvider>> = None;
 
         let entries = par.entries()?;
@@ -150,8 +150,17 @@ impl ProviderArchive {
         subject: &KeyPair,
         compress_par: bool,
     ) -> Result<()> {
-        let hashes = generate_hashes(&self.libraries);
-        let mut par = tar::Builder::new(File::create(destination.clone())?);
+        let file = File::create(if compress_par && !destination.ends_with(".gz") {
+            format!("{}.gz", destination)
+        } else {
+            destination.to_string()
+        })?;
+
+        let mut par = tar::Builder::new(if compress_par {
+            Box::new(GzEncoder::new(file, Compression::best())) as Box<dyn Write>
+        } else {
+            Box::new(file) as Box<dyn Write>
+        });
 
         let claims = Claims::<CapabilityProvider>::new(
             self.name.to_string(),
@@ -161,7 +170,7 @@ impl ProviderArchive {
             self.vendor.to_string(),
             self.rev.clone(),
             self.ver.clone(),
-            hashes,
+            generate_hashes(&self.libraries),
         );
         self.claims = Some(claims.clone());
 
@@ -184,18 +193,6 @@ impl ProviderArchive {
 
         // Completes the process of packing a .par archive
         par.into_inner()?;
-
-        if compress_par {
-            let mut buf = Vec::new();
-            let mut file = File::open(destination.clone())?;
-            file.read_to_end(&mut buf)?;
-
-            let mut compressed_file = File::create(format!("{}.gz", destination))?;
-            compressed_file.write_all(&compress(&buf)?)?;
-
-            // Removing the uncompressed .par to leave only the compressed version on disk
-            std::fs::remove_file(destination.clone())?;
-        }
 
         Ok(())
     }
@@ -247,29 +244,31 @@ fn sha256_digest<R: Read>(mut reader: R) -> Result<Digest> {
     Ok(context.finish())
 }
 
-pub fn compress(par: &[u8]) -> Result<Vec<u8>> {
-    let mut e = GzEncoder::new(Vec::new(), Compression::best());
-    e.write_all(par).unwrap();
-    e.finish().map_err(|e| e.into())
-}
-
-pub fn decompress(par: &[u8]) -> Result<Vec<u8>> {
-    let mut d = GzDecoder::new(par);
-    let mut buf = Vec::new();
-    d.read_to_end(&mut buf)?;
-
-    Ok(buf)
-}
-
 #[cfg(test)]
 mod test {
-    use super::{compress, decompress};
     use crate::ProviderArchive;
     use crate::Result;
+    use flate2::read::GzDecoder;
+    use flate2::write::GzEncoder;
+    use flate2::Compression;
     use std::fs::File;
     use std::io::prelude::*;
     use std::io::Read;
     use wascap::prelude::KeyPair;
+
+    fn compress(par: &[u8]) -> Result<Vec<u8>> {
+        let mut e = GzEncoder::new(Vec::new(), Compression::best());
+        e.write_all(par).unwrap();
+        e.finish().map_err(|e| e.into())
+    }
+
+    fn decompress(par: &[u8]) -> Result<Vec<u8>> {
+        let mut d = GzDecoder::new(par);
+        let mut buf = Vec::new();
+        d.read_to_end(&mut buf)?;
+
+        Ok(buf)
+    }
 
     #[test]
     fn write_par() -> Result<()> {
@@ -484,6 +483,53 @@ mod test {
         let subject = KeyPair::new_service();
 
         arch.write(&format!("{}.par", filename), &issuer, &subject, true)?;
+
+        let mut buf = Vec::new();
+        let mut f = File::open(format!("{}.par.gz", filename))?;
+        f.read_to_end(&mut buf)?;
+
+        let arch2 = ProviderArchive::try_load(&buf)?;
+
+        assert_eq!(
+            arch.libraries[&"x86_64-linux".to_string()],
+            arch2.libraries[&"x86_64-linux".to_string()]
+        );
+        assert_eq!(
+            arch.libraries[&"arm-macos".to_string()],
+            arch2.libraries[&"arm-macos".to_string()]
+        );
+        assert_eq!(
+            arch.libraries[&"mips64-freebsd".to_string()],
+            arch2.libraries[&"mips64-freebsd".to_string()]
+        );
+        assert_eq!(arch.claims(), arch2.claims());
+
+        let _ = std::fs::remove_file(format!("{}.par", filename));
+        let _ = std::fs::remove_file(format!("{}.par.gz", filename));
+
+        Ok(())
+    }
+
+    #[test]
+    fn valid_write_compressed_with_suffix() -> Result<()> {
+        let mut arch = ProviderArchive::new(
+            "wascc:testing",
+            "Testing",
+            "waSCC",
+            Some(6),
+            Some("0.0.6".to_string()),
+        );
+        arch.add_library("x86_64-linux", b"linux")?;
+        arch.add_library("arm-macos", b"macos")?;
+        arch.add_library("mips64-freebsd", b"freebsd")?;
+
+        let filename = "suffix-test";
+
+        let issuer = KeyPair::new_account();
+        let subject = KeyPair::new_service();
+
+        // the gz suffix is explicitly provided to write
+        arch.write(&format!("{}.par.gz", filename), &issuer, &subject, true)?;
 
         let mut buf = Vec::new();
         let mut f = File::open(format!("{}.par.gz", filename))?;
