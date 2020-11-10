@@ -7,7 +7,8 @@ pub(crate) const OCI_VAR_PASSWORD: &str = "OCI_REGISTRY_PASSWORD";
 
 pub(crate) async fn fetch_oci_bytes(img: &str, allow_latest: bool) -> Result<Vec<u8>> {
     if !allow_latest && img.ends_with(":latest") {
-        return Err("Fetching mutable images tagged 'latest' is prohibited".into());
+        return Err(
+            "Fetching images tagged 'latest' is currently prohibited in this host. This option can be overridden".into());
     }
     let cfg = oci_distribution::client::ClientConfig::default();
     let mut c = oci_distribution::Client::new(cfg);
