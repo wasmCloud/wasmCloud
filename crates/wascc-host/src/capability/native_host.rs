@@ -152,8 +152,8 @@ impl Actor for NativeCapabilityHost {
     }
 
     fn stopped(&mut self, _ctx: &mut Self::Context) {
-        println!(
-            "Provider stopped {} ({})",
+        info!(
+            "Provider stopped {} - {}",
             &self.cap.claims.subject, self.descriptor.name
         );
 
@@ -179,7 +179,11 @@ impl Handler<Invocation> for NativeCapabilityHost {
     /// the capability provider pre-invoke middleware, invokes the operation on the native
     /// plugin, then runs the provider post-invoke middleware.
     fn handle(&mut self, inv: Invocation, ctx: &mut Self::Context) -> Self::Result {
-        println!("Provider handling {}", inv.operation);
+        trace!(
+            "Provider {} handling {}",
+            self.cap.claims.subject,
+            inv.operation
+        );
         if let WasccEntity::Actor(ref s) = inv.origin {
             if let WasccEntity::Capability {
                 id,

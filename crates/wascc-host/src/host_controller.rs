@@ -113,7 +113,7 @@ impl SystemService for HostController {
                 .unwrap();
             NativeCapabilityHost::try_new(cap, vec![], k, None).unwrap()
         });
-        self.providers.insert(pk.clone(), extras); // can't let this provider go out of scope, or the actor will stop
+        self.providers.insert(pk.clone(), extras); // can't let this provider go out of scope, or the actix actor will stop
     }
 }
 
@@ -132,9 +132,9 @@ impl Handler<GetHostID> for HostController {
 impl Handler<StopActor> for HostController {
     type Result = ResponseActFuture<Self, ()>;
 
-    // We should be able to make the actor stop itself by removing the last reference to it
     fn handle(&mut self, msg: StopActor, _ctx: &mut Context<Self>) -> Self::Result {
-        println!("Handling remove");
+        trace!("Stopping actor {} per request.", msg.actor_ref);
+        // We should be able to make the actor stop itself by removing the last reference to it
         let pk = if let Some(pk) = self.image_refs.remove(&msg.actor_ref) {
             let _ = self.actors.remove(&pk);
             pk
@@ -142,6 +142,8 @@ impl Handler<StopActor> for HostController {
             let _ = self.actors.remove(&msg.actor_ref);
             msg.actor_ref.to_string()
         };
+
+        // Ensure that this actor's interest is removed from the bus
         let b = MessageBus::from_registry();
         Box::pin(
             async move {
@@ -159,8 +161,9 @@ impl Handler<StopActor> for HostController {
 impl Handler<StopProvider> for HostController {
     type Result = ResponseActFuture<Self, ()>;
 
-    // The provider should stop itself once all references to it are gone
     fn handle(&mut self, msg: StopProvider, _ctx: &mut Context<Self>) -> Self::Result {
+        trace!("Stopping provider {} per request", msg.provider_ref);
+        // The provider should stop itself once all references to it are gone
         let pk = if let Some(pk) = self.image_refs.remove(&msg.provider_ref) {
             let _provider = self.providers.remove(&pk);
             pk
@@ -168,6 +171,7 @@ impl Handler<StopProvider> for HostController {
             let _provider = self.providers.remove(&msg.provider_ref);
             msg.provider_ref.to_string()
         };
+
         let b = MessageBus::from_registry();
         Box::pin(
             async move {
@@ -199,7 +203,6 @@ impl Handler<MintInvocationRequest> for HostController {
     type Result = Invocation;
 
     fn handle(&mut self, msg: MintInvocationRequest, _ctx: &mut Context<Self>) -> Invocation {
-        println!("minting invocation request");
         Invocation::new(
             self.kp.as_ref().unwrap(),
             msg.origin.clone(),
@@ -214,6 +217,19 @@ impl Handler<StartActor> for HostController {
     type Result = Result<()>;
 
     fn handle(&mut self, msg: StartActor, ctx: &mut Context<Self>) -> Result<()> {
+        let sub = msg.actor.claims().subject.to_string();
+
+        if self.actors.contains_key(&sub) {
+            error!("Aborting attempt to start already running actor {}", sub);
+            return Err(format!("Cannot start already running actor {}", sub).into());
+        }
+
+        trace!(
+            "Starting actor {} per request",
+            msg.actor.token.claims.subject
+        );
+        // get "free standing" references to all these things so we don't
+        // move self into the arbiter start closure. YAY borrow checker.
         let seed = self.kp.as_ref().unwrap().seed()?;
         let mw = self.mw_chain.clone();
         let bytes = msg.actor.bytes.clone();
@@ -254,20 +270,53 @@ impl Handler<StartProvider> for HostController {
     type Result = ResponseActFuture<Self, Result<()>>;
 
     fn handle(&mut self, msg: StartProvider, ctx: &mut Context<Self>) -> Self::Result {
+        let sub = msg.provider.claims.subject.to_string();
+        if self.providers.contains_key(&sub) {
+            error!("Aborting attempt to start already running provider {}", sub);
+            return Box::pin(
+                async move { Err(format!("Cannot start already running provider {}", sub).into()) }
+                    .into_actor(self),
+            );
+        }
+
+        trace!(
+            "Starting provider {} per request",
+            msg.provider.claims.subject
+        );
+
         let seed = self.kp.as_ref().unwrap().seed().unwrap();
         let s = seed.clone();
         let mw = self.mw_chain.clone();
 
         let provider = msg.provider;
-        let sub = provider.claims.subject.to_string();
+
         let capid = provider.claims.metadata.as_ref().unwrap().capid.to_string();
         let binding_name = provider.binding_name.to_string();
         let provider_id = provider.claims.subject.to_string();
         let image_ref = msg.image_ref.clone();
         let ir2 = msg.image_ref.clone();
 
+        if let Err(e) = NativeCapabilityHost::try_new(
+            provider.clone(),
+            mw.clone(),
+            KeyPair::from_seed(&seed).unwrap(),
+            image_ref.clone(),
+        ) {
+            error!("Failed to create a native capability provider host: {}", e);
+            return Box::pin(
+                async move {
+                    Err(format!("Failed to create native capability provider host: {}", e).into())
+                }
+                .into_actor(self),
+            );
+        } // dynamically loaded library is dropped here
+
         let new_provider = SyncArbiter::start(1, move || {
-            //TODO: get rid of this unwrap - it can take out the entire host controller
+            // I know we're calling try_new here twice. Problem is I need to detect the failure
+            // and reject the start attempt (see above)... and I can't instantiate the actor outside this
+            // closure because it's not cloneable. We could in theory fix this by making
+            // the NCH cloneable which means we could instantiate once then return the clone
+            // in this closure... doesn't feel worth the effort (yet).
             NativeCapabilityHost::try_new(
                 provider.clone(),
                 mw.clone(),
@@ -283,7 +332,6 @@ impl Handler<StartProvider> for HostController {
         self.providers.insert(provider_id.to_string(), new_provider);
 
         let k = KeyPair::from_seed(&s).unwrap();
-        println!("Attempting to re-invoke bindings");
         Box::pin(
             async move {
                 let b = MessageBus::from_registry();
@@ -293,8 +341,8 @@ impl Handler<StartProvider> for HostController {
                         binding_name: binding_name.to_string(),
                     })
                     .await;
-                println!("BINDINGS: {:?}", bindings);
                 if let Ok(bindings) = bindings {
+                    trace!("Re-applying bindings to provider {}", &sub);
                     reinvoke_bindings(&k, target, &sub, &capid, &binding_name, bindings.bindings)
                         .await;
                     Ok(())
@@ -332,7 +380,7 @@ async fn reinvoke_bindings(
     existing_bindings: Vec<(String, HashMap<String, String>)>,
 ) {
     for (actor, vals) in existing_bindings.iter() {
-        println!("Re-invoking binding {}->{}", actor, provider_id);
+        trace!("Re-invoking bind_actor {}->{}", actor, provider_id);
         let config = crate::generated::core::CapabilityConfiguration {
             module: actor.to_string(),
             values: vals.clone(),
