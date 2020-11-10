@@ -9,13 +9,22 @@ use wascap::prelude::KeyPair;
 pub struct ControlPlane {
     provider: Option<Box<dyn ControlPlaneProvider>>,
     key: Option<KeyPair>,
+    options: ControlOptions,
 }
 
 #[derive(Message)]
 #[rtype(result = "()")]
-pub struct SetProvider {
+pub struct Initialize {
     pub provider: Box<dyn ControlPlaneProvider>,
-    pub labels: HashMap<String, String>,
+    pub control_options: ControlOptions,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ControlOptions {
+    pub oci_allow_latest: bool,
+    pub host_labels: HashMap<String, String>,
+    pub max_actors: u16,    // Currently unused
+    pub max_providers: u16, // Currently unused
 }
 
 #[derive(Message)]
@@ -60,17 +69,18 @@ impl Handler<PublishEvent> for ControlPlane {
     }
 }
 
-impl Handler<SetProvider> for ControlPlane {
+impl Handler<Initialize> for ControlPlane {
     type Result = ();
 
-    fn handle(&mut self, msg: SetProvider, ctx: &mut Context<Self>) {
+    fn handle(&mut self, msg: Initialize, ctx: &mut Context<Self>) {
         let controller = ControlInterface {
-            labels: msg.labels.clone(),
+            labels: msg.control_options.host_labels.clone(),
             bus: MessageBus::from_registry(),
             control_plane: ctx.address(),
         };
         self.provider = Some(msg.provider);
         self.provider.as_mut().unwrap().init(controller);
+        self.options = msg.control_options;
         let evt = ControlEvent::HostStarted {
             header: Default::default(),
         };

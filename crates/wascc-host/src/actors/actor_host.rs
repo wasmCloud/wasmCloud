@@ -1,5 +1,5 @@
 use crate::actors::WasccActor;
-use crate::control_plane::actorhost::{ControlPlane, PublishEvent};
+use crate::control_plane::cpactor::{ControlPlane, PublishEvent};
 use crate::control_plane::events::TerminationReason;
 use crate::dispatch::{Invocation, InvocationResponse, WasccEntity};
 use crate::messagebus::{MessageBus, PutClaims, Subscribe, Unsubscribe};

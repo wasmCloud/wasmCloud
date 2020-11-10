@@ -1,11 +1,11 @@
-use crate::control_plane::actorhost::ControlPlane;
+use crate::control_plane::cpactor::ControlPlane;
 use crate::control_plane::events::ControlEvent;
 use crate::messagebus::MessageBus;
 use crate::Result;
 use actix::Addr;
 use std::collections::HashMap;
 
-pub(crate) mod actorhost;
+pub(crate) mod cpactor;
 pub mod events;
 
 /// A control plane provider is responsible for managing whatever endpoint (or endpoints) is

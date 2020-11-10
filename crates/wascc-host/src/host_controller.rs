@@ -2,7 +2,7 @@ use crate::actors::{ActorHost, WasccActor};
 use crate::auth::Authorizer;
 use crate::capability::extras::ExtrasCapabilityProvider;
 use crate::capability::native_host::{NativeCapabilityHost, NativeCapabilityHostBuilder};
-use crate::control_plane::actorhost::ControlPlane;
+use crate::control_plane::cpactor::ControlPlane;
 use crate::dispatch::Invocation;
 use crate::messagebus::{
     AdvertiseBinding, FindBindings, MessageBus, SetAuthorizer, SetKey, Unsubscribe, OP_BIND_ACTOR,

@@ -10,7 +10,7 @@ use crate::auth::Authorizer;
 use crate::capability::extras::ExtrasCapabilityProvider;
 use crate::capability::native::NativeCapability;
 use crate::capability::native_host::NativeCapabilityHost;
-use crate::control_plane::actorhost::{ControlPlane, PublishEvent};
+use crate::control_plane::cpactor::{ControlOptions, ControlPlane, PublishEvent};
 use crate::control_plane::events::TerminationReason;
 use crate::control_plane::ControlPlaneProvider;
 use crate::dispatch::{Invocation, InvocationResponse};
@@ -31,6 +31,7 @@ use std::path::Path;
 pub struct HostBuilder {
     labels: HashMap<String, String>,
     authorizer: Box<dyn Authorizer + 'static>,
+    allow_latest: bool,
 }
 
 impl HostBuilder {
@@ -38,12 +39,26 @@ impl HostBuilder {
         HostBuilder {
             labels: crate::host_controller::detect_core_host_labels(),
             authorizer: Box::new(crate::auth::DefaultAuthorizer::new()),
+            allow_latest: false,
         }
     }
 
     pub fn with_authorizer(self, authorizer: impl Authorizer + 'static) -> HostBuilder {
         HostBuilder {
             authorizer: Box::new(authorizer),
+            ..self
+        }
+    }
+
+    /// Consulted when a host runtime needs to download an image from an OCI registry,
+    /// this option enables the use of images tagged 'latest'. The default is `false` to prevent
+    /// accidental mutation of images, close potential attack vectors, and prevent against
+    /// inconsistencies when running as part of a distributed system. Also keep in mind that if you
+    /// do enable images to run as 'latest', it may interfere with live update/hot swap
+    /// functionality
+    pub fn oci_allow_latest(self) -> HostBuilder {
+        HostBuilder {
+            allow_latest: true,
             ..self
         }
     }
@@ -61,6 +76,7 @@ impl HostBuilder {
             labels: self.labels,
             authorizer: self.authorizer,
             id: RefCell::new("".to_string()),
+            allow_latest: self.allow_latest,
         }
     }
 }
@@ -69,6 +85,7 @@ pub struct Host {
     labels: HashMap<String, String>,
     authorizer: Box<dyn Authorizer + 'static>,
     id: RefCell<String>,
+    allow_latest: bool,
 }
 
 impl Host {
@@ -104,9 +121,13 @@ impl Host {
         // Start control plane
         if let Some(lattice_control) = lattice_control {
             let cp = ControlPlane::from_registry();
-            cp.send(crate::control_plane::actorhost::SetProvider {
+            cp.send(crate::control_plane::cpactor::Initialize {
                 provider: lattice_control,
-                labels: self.labels.clone(),
+                control_options: ControlOptions {
+                    host_labels: self.labels.clone(),
+                    oci_allow_latest: self.allow_latest,
+                    ..Default::default()
+                },
             })
             .await?;
         }
@@ -149,7 +170,7 @@ impl Host {
         binding_name: Option<String>,
     ) -> Result<()> {
         let hc = HostController::from_registry();
-        let bytes = fetch_oci_bytes(cap_ref).await?;
+        let bytes = fetch_oci_bytes(cap_ref, self.allow_latest).await?;
         let par = ProviderArchive::try_load(&bytes)?;
         let nc = NativeCapability::from_archive(&par, binding_name)?;
         hc.send(StartProvider {
@@ -173,7 +194,7 @@ impl Host {
 
     pub async fn start_actor_from_registry(&self, actor_ref: &str) -> Result<()> {
         let hc = HostController::from_registry();
-        let bytes = fetch_oci_bytes(actor_ref).await?;
+        let bytes = fetch_oci_bytes(actor_ref, self.allow_latest).await?;
         let actor = crate::Actor::from_slice(&bytes)?;
         hc.send(StartActor {
             actor,
@@ -266,10 +287,14 @@ impl Host {
             hc.send(SetLabels { labels }).await?;
         }
 
-        for msg in crate::manifest::generate_actor_start_messages(&manifest).await {
+        for msg in
+            crate::manifest::generate_actor_start_messages(&manifest, self.allow_latest).await
+        {
             let _ = hc.send(msg).await?;
         }
-        for msg in crate::manifest::generate_provider_start_messages(&manifest).await {
+        for msg in
+            crate::manifest::generate_provider_start_messages(&manifest, self.allow_latest).await
+        {
             let _ = hc.send(msg).await?;
         }
         for msg in crate::manifest::generate_adv_binding_messages(&manifest).await {

@@ -1,5 +1,5 @@
 use super::MessageBus;
-use crate::control_plane::actorhost::{ControlPlane, PublishEvent};
+use crate::control_plane::cpactor::{ControlPlane, PublishEvent};
 use crate::control_plane::events::RunState;
 use crate::generated::core::{deserialize, serialize, HealthRequest, HealthResponse};
 use crate::messagebus::handlers::OP_HEALTH_REQUEST;

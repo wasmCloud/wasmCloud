@@ -1,5 +1,5 @@
 use crate::capability::native::NativeCapability;
-use crate::control_plane::actorhost::{ControlPlane, PublishEvent};
+use crate::control_plane::cpactor::{ControlPlane, PublishEvent};
 use crate::control_plane::events::TerminationReason;
 use crate::dispatch::{Invocation, InvocationResponse, ProviderDispatcher, WasccEntity};
 use crate::messagebus::{MessageBus, Subscribe, Unsubscribe};
