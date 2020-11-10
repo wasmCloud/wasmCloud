@@ -107,12 +107,22 @@ enum TokenCommand {
 
 #[derive(Debug, Clone, StructOpt, Serialize, Deserialize)]
 struct GenerateCommon {
-    /// Path to issuer seed key. If this flag is not provided, the will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
-    #[structopt(short = "i", long = "issuer")]
+    /// Path to issuer seed key (account). If this flag is not provided, the will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
+    #[structopt(
+        short = "i",
+        long = "issuer",
+        env = "WASH_ISSUER_KEY",
+        hide_env_values = true
+    )]
     issuer: Option<String>,
 
-    /// Path to subject seed key. If this flag is not provided, the will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
-    #[structopt(short = "u", long = "subject")]
+    /// Path to subject seed key (service). If this flag is not provided, the will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
+    #[structopt(
+        short = "s",
+        long = "subject",
+        env = "WASH_SUBJECT_KEY",
+        hide_env_values = true
+    )]
     subject: Option<String>,
 
     /// Location of key files for signing. Defaults to $WASH_KEYS ($HOME/.wash/keys)
@@ -192,12 +202,22 @@ struct ProviderMetadata {
     #[structopt(short = "e", long = "version")]
     version: Option<String>,
 
-    /// Seed path for the issuer
-    #[structopt(short = "i", long = "issuer")]
+    /// Path to issuer seed key (account). If this flag is not provided, the will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
+    #[structopt(
+        short = "i",
+        long = "issuer",
+        env = "WASH_ISSUER_KEY",
+        hide_env_values = true
+    )]
     issuer: String,
 
-    /// Seed path for the subject
-    #[structopt(short = "s", long = "subject")]
+    /// Path to subject seed key (service). If this flag is not provided, the will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
+    #[structopt(
+        short = "s",
+        long = "subject",
+        env = "WASH_SUBJECT_KEY",
+        hide_env_values = true
+    )]
     subject: String,
 
     /// Indicates the token expires in the given amount of days. If this option is left off, the token will never expire
