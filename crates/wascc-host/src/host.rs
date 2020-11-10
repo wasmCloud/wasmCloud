@@ -11,20 +11,22 @@ use crate::capability::extras::ExtrasCapabilityProvider;
 use crate::capability::native::NativeCapability;
 use crate::capability::native_host::NativeCapabilityHost;
 use crate::control_plane::actorhost::{ControlPlane, PublishEvent};
+use crate::control_plane::events::TerminationReason;
 use crate::control_plane::ControlPlaneProvider;
 use crate::dispatch::{Invocation, InvocationResponse};
 use crate::host_controller::{
     GetHostID, HostController, MintInvocationRequest, SetLabels, StartActor, StartProvider,
-    StopActor, StopProvider,
+    StopActor, StopProvider, RESTRICTED_LABELS,
 };
 use crate::messagebus::{QueryActors, QueryProviders};
 use crate::oci::fetch_oci_bytes;
-use crate::{ControlEvent, WasccEntity};
+use crate::{ControlEvent, HostManifest, WasccEntity};
 use crate::{Result, SYSTEM_ACTOR};
 use provider_archive::ProviderArchive;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use crate::control_plane::events::TerminationReason;
+use std::fs::File;
+use std::path::Path;
 
 pub struct HostBuilder {
     labels: HashMap<String, String>,
@@ -114,12 +116,14 @@ impl Host {
 
     pub async fn stop(&self) {
         let cp = ControlPlane::from_registry();
-        let _ = cp.send(PublishEvent {
-            event: ControlEvent::HostStopped {
-                reason: TerminationReason::Requested,
-                header: Default::default(),
-            },
-        }).await;
+        let _ = cp
+            .send(PublishEvent {
+                event: ControlEvent::HostStopped {
+                    reason: TerminationReason::Requested,
+                    header: Default::default(),
+                },
+            })
+            .await;
         System::current().stop();
     }
 
@@ -248,6 +252,31 @@ impl Host {
             values,
         })
         .await?
+    }
+
+    pub async fn apply_manifest(&self, manifest: HostManifest) -> Result<()> {
+        let hc = HostController::from_registry();
+        let bus = MessageBus::from_registry();
+
+        if manifest.labels.len() > 0 {
+            let mut labels = manifest.labels.clone();
+            for x in 0..RESTRICTED_LABELS.len() {
+                labels.remove(RESTRICTED_LABELS[x]); // getting an iterator of this const produces `&&str` which is a super annoying type
+            }
+            hc.send(SetLabels { labels }).await?;
+        }
+
+        for msg in crate::manifest::generate_actor_start_messages(&manifest).await {
+            let _ = hc.send(msg).await?;
+        }
+        for msg in crate::manifest::generate_provider_start_messages(&manifest).await {
+            let _ = hc.send(msg).await?;
+        }
+        for msg in crate::manifest::generate_adv_binding_messages(&manifest).await {
+            let _ = bus.send(msg).await?;
+        }
+
+        Ok(())
     }
 
     pub(crate) fn native_target() -> String {

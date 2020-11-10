@@ -1,8 +1,8 @@
-use actix::prelude::*;
-use crate::messagebus::{LatticeProvider, AdvertiseBinding};
-use crate::{Invocation, InvocationResponse, WasccEntity, SYSTEM_ACTOR};
-use wascap::prelude::KeyPair;
 use crate::messagebus::OP_BIND_ACTOR;
+use crate::messagebus::{AdvertiseBinding, LatticeProvider};
+use crate::{Invocation, InvocationResponse, WasccEntity, SYSTEM_ACTOR};
+use actix::prelude::*;
+use wascap::prelude::KeyPair;
 
 pub(crate) fn do_rpc(l: &Box<dyn LatticeProvider>, inv: &Invocation) -> InvocationResponse {
     match l.rpc(&inv) {

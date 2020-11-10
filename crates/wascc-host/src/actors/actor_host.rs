@@ -1,5 +1,6 @@
 use crate::actors::WasccActor;
 use crate::control_plane::actorhost::{ControlPlane, PublishEvent};
+use crate::control_plane::events::TerminationReason;
 use crate::dispatch::{Invocation, InvocationResponse, WasccEntity};
 use crate::messagebus::{MessageBus, PutClaims, Subscribe, Unsubscribe};
 use crate::middleware::{run_actor_post_invoke, run_actor_pre_invoke, Middleware};
@@ -8,7 +9,6 @@ use actix::prelude::*;
 use futures::executor::block_on;
 use wapc::{WapcHost, WasiParams};
 use wascap::prelude::{Claims, KeyPair};
-use crate::control_plane::events::TerminationReason;
 
 pub(crate) struct ActorHost {
     guest_module: WapcHost,
@@ -66,8 +66,7 @@ impl Actor for ActorHost {
 
     fn started(&mut self, ctx: &mut Self::Context) {
         info!("Actor {} started", &self.claims.subject);
-        println!("Actor {} started", &self.claims.subject);
-        //TODO: make this value configurable
+
         let entity = WasccEntity::Actor(self.claims.subject.to_string());
         let b = MessageBus::from_registry();
         let b2 = b.clone();
@@ -82,7 +81,7 @@ impl Actor for ActorHost {
         let c = self.claims.clone();
         let _ = block_on(async move {
             if let Err(e) = b2.send(PutClaims { claims: c }).await {
-                error!("Actor failed to subscribe to bus: {}", e);
+                error!("Actor failed to advertise claims to bus: {}", e);
                 ctx.stop();
             }
         });
@@ -100,7 +99,7 @@ impl Actor for ActorHost {
     }
 
     fn stopped(&mut self, ctx: &mut Self::Context) {
-        println!("Actor {} stopped", &self.claims.subject);
+        info!("Actor {} stopped", &self.claims.subject);
         let _ = block_on(async move {
             let cp = ControlPlane::from_registry();
             cp.send(PublishEvent {
@@ -122,7 +121,12 @@ impl Handler<Invocation> for ActorHost {
     /// middleware chain, perform the requested operation, and then perform the full
     /// post-exec middleware chain, assuming no errors indicate a pre-emptive halt
     fn handle(&mut self, msg: Invocation, ctx: &mut Self::Context) -> Self::Result {
-        println!("Actor being invoked");
+        trace!(
+            "Actor Invocation - From {} to {}: {}",
+            msg.origin.url(),
+            msg.target.url(),
+            msg.operation
+        );
 
         if let WasccEntity::Actor(ref target) = msg.target {
             if run_actor_pre_invoke(&msg, &self.mw_chain).is_err() {

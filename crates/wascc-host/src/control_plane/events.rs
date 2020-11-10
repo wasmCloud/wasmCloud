@@ -1,6 +1,6 @@
+use crate::generated::core::HealthResponse;
 use chrono::prelude::*;
 use serde::{Deserialize, Serialize};
-use crate::generated::core::HealthResponse;
 use std::collections::HashMap;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
@@ -58,8 +58,8 @@ pub enum ControlEvent {
     Heartbeat {
         header: EventHeader,
         claims: Vec<wascap::jwt::Claims<wascap::jwt::Actor>>,
-        entities: HashMap<String, RunState>
-    }
+        entities: HashMap<String, RunState>,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -92,7 +92,9 @@ impl ControlEvent {
                 actor,
                 reason,
             },
-            ActorStarted { actor, image_ref, .. } => ActorStarted {
+            ActorStarted {
+                actor, image_ref, ..
+            } => ActorStarted {
                 header: new_header,
                 actor,
                 image_ref,
@@ -145,12 +147,13 @@ impl ControlEvent {
                 provider_id,
                 reason,
             },
-            Heartbeat { claims, entities, .. } =>
-                Heartbeat {
-                    header: new_header,
-                    claims,
-                    entities
-                }
+            Heartbeat {
+                claims, entities, ..
+            } => Heartbeat {
+                header: new_header,
+                claims,
+                entities,
+            },
         }
     }
 }

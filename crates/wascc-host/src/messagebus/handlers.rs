@@ -1,7 +1,13 @@
+use super::MessageBus;
 use crate::auth::Authorizer;
 use crate::capability::binding_cache::BindingCache;
 use crate::dispatch::{BusDispatcher, Invocation, InvocationResponse, WasccEntity};
 use crate::host_controller::{HostController, MintInvocationRequest};
+use crate::messagebus::{
+    AdvertiseBinding, AdvertiseClaims, FindBindings, FindBindingsResponse, LookupBinding,
+    PutClaims, QueryActors, QueryProviders, QueryResponse, SetAuthorizer, SetKey, SetProvider,
+    Subscribe, Unsubscribe,
+};
 use crate::{auth, Result, SYSTEM_ACTOR};
 use actix::dev::{MessageResponse, ResponseChannel};
 use actix::prelude::*;
@@ -9,8 +15,6 @@ use futures::executor::block_on;
 use std::collections::HashMap;
 use wascap::jwt::Claims;
 use wascap::prelude::KeyPair;
-use super::MessageBus;
-use crate::messagebus::{FindBindings, FindBindingsResponse, QueryActors, QueryResponse, PutClaims, QueryProviders, SetKey, SetAuthorizer, AdvertiseBinding, AdvertiseClaims, SetProvider, LookupBinding, Subscribe, Unsubscribe};
 
 pub const OP_PERFORM_LIVE_UPDATE: &str = "PerformLiveUpdate";
 pub const OP_IDENTIFY_CAPABILITY: &str = "IdentifyCapability";
@@ -18,7 +22,6 @@ pub const OP_HEALTH_REQUEST: &str = "HealthRequest";
 pub const OP_INITIALIZE: &str = "Initialize";
 pub const OP_BIND_ACTOR: &str = "BindActor";
 pub const OP_REMOVE_ACTOR: &str = "RemoveActor";
-
 
 impl Supervised for MessageBus {}
 
@@ -144,7 +147,12 @@ impl Handler<AdvertiseBinding> for MessageBus {
         );
 
         if let Some(t) = self.subscribers.get(&target) {
-            let req = super::utils::generate_binding_invocation(t, &msg, self.key.as_ref().unwrap(), target);
+            let req = super::utils::generate_binding_invocation(
+                t,
+                &msg,
+                self.key.as_ref().unwrap(),
+                target,
+            );
             Box::pin(req.into_actor(self).map(move |res, act, _ctx| match res {
                 Ok(ir) => {
                     if let Some(er) = ir.error {
@@ -299,7 +307,6 @@ impl Handler<Unsubscribe> for MessageBus {
         }
     }
 }
-
 
 #[cfg(test)]
 mod test {

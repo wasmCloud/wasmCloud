@@ -1,5 +1,6 @@
 use crate::capability::native::NativeCapability;
 use crate::control_plane::actorhost::{ControlPlane, PublishEvent};
+use crate::control_plane::events::TerminationReason;
 use crate::dispatch::{Invocation, InvocationResponse, ProviderDispatcher, WasccEntity};
 use crate::messagebus::{MessageBus, Subscribe, Unsubscribe};
 use crate::middleware::{run_capability_post_invoke, run_capability_pre_invoke, Middleware};
@@ -15,37 +16,56 @@ use wascap::prelude::KeyPair;
 use wascc_codec::capabilities::{
     CapabilityDescriptor, CapabilityProvider, OP_GET_CAPABILITY_DESCRIPTOR,
 };
-use crate::control_plane::events::TerminationReason;
+
+#[derive(Clone)]
+pub(crate) struct NativeCapabilityHostBuilder {
+    cap: NativeCapability,
+    mw_chain: Vec<Box<dyn Middleware>>,
+    image_ref: Option<String>,
+    plugin: Box<dyn CapabilityProvider + 'static>,
+    library: Arc<Option<Library>>,
+    descriptor: CapabilityDescriptor,
+}
+
+impl NativeCapabilityHostBuilder {
+    pub fn try_new(
+        cap: NativeCapability,
+        mw_chain: Vec<Box<dyn Middleware>>,
+        image_ref: Option<String>,
+    ) -> Result<Self> {
+        let (library, plugin) = extrude(&cap)?;
+        let descriptor = get_descriptor(&plugin)?;
+        Ok(NativeCapabilityHostBuilder {
+            cap,
+            mw_chain,
+            plugin,
+            image_ref,
+            library: Arc::new(library),
+            descriptor,
+        })
+    }
+
+    pub fn build(self, kp: KeyPair) -> NativeCapabilityHost {
+        NativeCapabilityHost {
+            library: self.library,
+            plugin: self.plugin,
+            cap: self.cap,
+            mw_chain: self.mw_chain,
+            kp,
+            descriptor: self.descriptor,
+            image_ref: self.image_ref,
+        }
+    }
+}
 
 pub(crate) struct NativeCapabilityHost {
     cap: NativeCapability,
     mw_chain: Vec<Box<dyn Middleware>>,
     kp: KeyPair,
-    library: Option<Library>,
+    library: Arc<Option<Library>>,
     plugin: Box<dyn CapabilityProvider + 'static>,
     descriptor: CapabilityDescriptor,
     image_ref: Option<String>,
-}
-
-impl NativeCapabilityHost {
-    pub fn try_new(
-        cap: NativeCapability,
-        mw_chain: Vec<Box<dyn Middleware>>,
-        kp: KeyPair,
-        image_ref: Option<String>,
-    ) -> Result<Self> {
-        let (library, plugin) = extrude(&cap)?;
-        let descriptor = get_descriptor(&plugin)?;
-        Ok(NativeCapabilityHost {
-            library,
-            plugin,
-            cap,
-            mw_chain,
-            kp,
-            descriptor,
-            image_ref,
-        })
-    }
 }
 
 fn extrude(
@@ -104,14 +124,13 @@ impl Actor for NativeCapabilityHost {
             contract_id: self.descriptor.id.to_string(),
             binding: self.cap.binding_name.to_string(),
         };
-        println!("Native provider {} started", &entity.url());
+        info!("Native provider started: {}", entity.url());
         let nativedispatch = ProviderDispatcher::new(
             b.clone().recipient(),
             KeyPair::from_seed(&self.kp.seed().unwrap()).unwrap(),
             entity.clone(),
         );
         if let Err(e) = self.plugin.configure_dispatch(Box::new(nativedispatch)) {
-            println!("Failed to configure provider dispatcher - {:?}", e);
             error!(
                 "Failed to configure provider dispatcher: {}, provider stopping.",
                 e
@@ -127,10 +146,6 @@ impl Actor for NativeCapabilityHost {
                 })
                 .await
             {
-                println!(
-                    "Native capability provider failed to subscribe to bus - {:?}",
-                    e
-                );
                 error!(
                     "Native capability provider failed to subscribe to bus: {}",
                     e
@@ -152,8 +167,8 @@ impl Actor for NativeCapabilityHost {
     }
 
     fn stopped(&mut self, _ctx: &mut Self::Context) {
-        println!(
-            "Provider stopped {} ({})",
+        info!(
+            "Provider stopped {} - {}",
             &self.cap.claims.subject, self.descriptor.name
         );
 
@@ -179,7 +194,11 @@ impl Handler<Invocation> for NativeCapabilityHost {
     /// the capability provider pre-invoke middleware, invokes the operation on the native
     /// plugin, then runs the provider post-invoke middleware.
     fn handle(&mut self, inv: Invocation, ctx: &mut Self::Context) -> Self::Result {
-        println!("Provider handling {}", inv.operation);
+        trace!(
+            "Provider {} handling {}",
+            self.cap.claims.subject,
+            inv.operation
+        );
         if let WasccEntity::Actor(ref s) = inv.origin {
             if let WasccEntity::Capability {
                 id,
@@ -226,7 +245,7 @@ impl Handler<Invocation> for NativeCapabilityHost {
 mod test {
     use crate::capability::extras::{ExtrasCapabilityProvider, OP_REQUEST_GUID};
     use crate::capability::native::NativeCapability;
-    use crate::capability::native_host::NativeCapabilityHost;
+    use crate::capability::native_host::{NativeCapabilityHost, NativeCapabilityHostBuilder};
     use crate::dispatch::{Invocation, InvocationResponse, WasccEntity};
     use crate::generated::extras::{GeneratorRequest, GeneratorResult};
     use crate::Result;
@@ -245,7 +264,9 @@ mod test {
             let claims = crate::capability::extras::get_claims();
             let cap = NativeCapability::from_instance(extras, Some("default".to_string()), claims)
                 .unwrap();
-            NativeCapabilityHost::new(Arc::new(cap), vec![], key)
+            NativeCapabilityHostBuilder::try_new(cap, vec![], None)
+                .unwrap()
+                .build(key)
         });
 
         let req = GeneratorRequest {

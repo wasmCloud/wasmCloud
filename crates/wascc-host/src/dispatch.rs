@@ -278,7 +278,7 @@ impl WasccEntity {
     pub fn key(&self) -> String {
         match self {
             WasccEntity::Actor(pk) => pk.to_string(),
-            WasccEntity::Capability { id, .. } => id.to_string()
+            WasccEntity::Capability { id, .. } => id.to_string(),
         }
     }
 }
