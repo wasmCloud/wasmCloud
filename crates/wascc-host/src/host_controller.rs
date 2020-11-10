@@ -1,7 +1,7 @@
 use crate::actors::{ActorHost, WasccActor};
 use crate::auth::Authorizer;
 use crate::capability::extras::ExtrasCapabilityProvider;
-use crate::capability::native_host::NativeCapabilityHost;
+use crate::capability::native_host::{NativeCapabilityHost, NativeCapabilityHostBuilder};
 use crate::control_plane::actorhost::ControlPlane;
 use crate::dispatch::Invocation;
 use crate::messagebus::{
@@ -111,7 +111,9 @@ impl SystemService for HostController {
             let claims = crate::capability::extras::get_claims();
             let cap = NativeCapability::from_instance(extras, Some("default".to_string()), claims)
                 .unwrap();
-            NativeCapabilityHost::try_new(cap, vec![], k, None).unwrap()
+            NativeCapabilityHostBuilder::try_new(cap, vec![], None)
+                .unwrap()
+                .build(KeyPair::from_seed(&k2).unwrap())
         });
         self.providers.insert(pk.clone(), extras); // can't let this provider go out of scope, or the actix actor will stop
     }
@@ -296,35 +298,22 @@ impl Handler<StartProvider> for HostController {
         let image_ref = msg.image_ref.clone();
         let ir2 = msg.image_ref.clone();
 
-        if let Err(e) = NativeCapabilityHost::try_new(
-            provider.clone(),
-            mw.clone(),
-            KeyPair::from_seed(&seed).unwrap(),
-            image_ref.clone(),
-        ) {
-            error!("Failed to create a native capability provider host: {}", e);
+        let ncb =
+            NativeCapabilityHostBuilder::try_new(provider.clone(), mw.clone(), image_ref.clone());
+
+        if ncb.is_err() {
+            error!("Failed to create a native capability provider host");
             return Box::pin(
-                async move {
-                    Err(format!("Failed to create native capability provider host: {}", e).into())
-                }
-                .into_actor(self),
+                async move { Err("Failed to create native capability provider host".into()) }
+                    .into_actor(self),
             );
-        } // dynamically loaded library is dropped here
+        }
+        let ncb = ncb.unwrap();
 
         let new_provider = SyncArbiter::start(1, move || {
-            // I know we're calling try_new here twice. Problem is I need to detect the failure
-            // and reject the start attempt (see above)... and I can't instantiate the actor outside this
-            // closure because it's not cloneable. We could in theory fix this by making
-            // the NCH cloneable which means we could instantiate once then return the clone
-            // in this closure... doesn't feel worth the effort (yet).
-            NativeCapabilityHost::try_new(
-                provider.clone(),
-                mw.clone(),
-                KeyPair::from_seed(&seed).unwrap(),
-                image_ref.clone(),
-            )
-            .unwrap()
+            ncb.clone().build(KeyPair::from_seed(&seed).unwrap())
         });
+
         let target = new_provider.clone().recipient();
         if let Some(imageref) = ir2 {
             self.image_refs.insert(imageref, provider_id.to_string());
