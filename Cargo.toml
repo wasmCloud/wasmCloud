@@ -1,6 +1,6 @@
 [package]
 name = "wash-cli"
-version = "0.1.6"
+version = "0.1.7"
 authors = ["Brooks Townsend <brooksmtownsend@gmail.com>"]
 edition = "2018"
 repository = "https://github.com/wascc/wash"

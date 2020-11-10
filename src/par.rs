@@ -61,12 +61,22 @@ struct CreateCommand {
     )]
     directory: Option<String>,
 
-    /// Path to issuer seed key (account) If this flag is not provided, the will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
-    #[structopt(short = "i", long = "issuer")]
+    /// Path to issuer seed key (account). If this flag is not provided, the will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
+    #[structopt(
+        short = "i",
+        long = "issuer",
+        env = "WASH_ISSUER_KEY",
+        hide_env_values = true
+    )]
     issuer: Option<String>,
 
-    /// Path to subject seed key (service) If this flag is not provided, the will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
-    #[structopt(short = "s", long = "subject")]
+    /// Path to subject seed key (service). If this flag is not provided, the will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
+    #[structopt(
+        short = "s",
+        long = "subject",
+        env = "WASH_SUBJECT_KEY",
+        hide_env_values = true
+    )]
     subject: Option<String>,
 
     /// Name of the capability provider
@@ -124,12 +134,22 @@ struct InsertCommand {
     )]
     directory: Option<String>,
 
-    /// Path to issuer seed key (account.) If this flag is not provided, the will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
-    #[structopt(short = "i", long = "issuer")]
+    /// Path to issuer seed key (account). If this flag is not provided, the will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
+    #[structopt(
+        short = "i",
+        long = "issuer",
+        env = "WASH_ISSUER_KEY",
+        hide_env_values = true
+    )]
     issuer: Option<String>,
 
     /// Path to subject seed key (service). If this flag is not provided, the will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
-    #[structopt(short = "s", long = "subject")]
+    #[structopt(
+        short = "s",
+        long = "subject",
+        env = "WASH_SUBJECT_KEY",
+        hide_env_values = true
+    )]
     subject: Option<String>,
 
     /// Disables autogeneration of signing keys
