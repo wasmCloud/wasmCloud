@@ -1,6 +1,6 @@
 [package]
 name = "wash"
-version = "0.1.4"
+version = "0.1.5"
 authors = ["Brooks Townsend <brooksmtownsend@gmail.com>"]
 edition = "2018"
 repository = "https://github.com/wascc/wash"
@@ -24,4 +24,4 @@ nkeys = "0.0.11"
 latticeclient = "0.4.0"
 wascap = "0.5.1"
 term-table = "1.3.0"
-provider-archive = "0.2.1"
+provider-archive = "0.3.0"
