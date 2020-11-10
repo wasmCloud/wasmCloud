@@ -1,6 +1,11 @@
 # wash
 waSCC Shell - A single CLI to handle all of your waSCC tooling needs
 
+## Installing wash
+```
+cargo install wash-cli
+```
+
 ## Using wash
 ```
 wash <subcommand> [args]

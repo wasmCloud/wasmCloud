@@ -1,6 +1,6 @@
 [package]
-name = "wash"
-version = "0.1.5"
+name = "wash-cli"
+version = "0.1.6"
 authors = ["Brooks Townsend <brooksmtownsend@gmail.com>"]
 edition = "2018"
 repository = "https://github.com/wascc/wash"
@@ -25,3 +25,9 @@ latticeclient = "0.4.0"
 wascap = "0.5.1"
 term-table = "1.3.0"
 provider-archive = "0.3.0"
+
+[[bin]]
+name = "wash"
+path = "src/main.rs"
+test = true
+bench = true
