@@ -5,7 +5,10 @@ use std::str::FromStr;
 pub(crate) const OCI_VAR_USER: &str = "OCI_REGISTRY_USER";
 pub(crate) const OCI_VAR_PASSWORD: &str = "OCI_REGISTRY_PASSWORD";
 
-pub(crate) async fn fetch_oci_bytes(img: &str) -> Result<Vec<u8>> {
+pub(crate) async fn fetch_oci_bytes(img: &str, allow_latest: bool) -> Result<Vec<u8>> {
+    if !allow_latest && img.ends_with(":latest") {
+        return Err("Fetching mutable images tagged 'latest' is prohibited".into());
+    }
     let cfg = oci_distribution::client::ClientConfig::default();
     let mut c = oci_distribution::Client::new(cfg);
 
@@ -33,8 +36,11 @@ pub(crate) async fn fetch_oci_bytes(img: &str) -> Result<Vec<u8>> {
     }
 }
 
-pub(crate) async fn fetch_provider_archive(img: &str) -> Result<ProviderArchive> {
-    let bytes = fetch_oci_bytes(img).await?;
+pub(crate) async fn fetch_provider_archive(
+    img: &str,
+    allow_latest: bool,
+) -> Result<ProviderArchive> {
+    let bytes = fetch_oci_bytes(img, allow_latest).await?;
     ProviderArchive::try_load(&bytes)
         .map_err(|e| format!("Failed to load provider archive: {}", e).into())
 }
