@@ -1,7 +1,7 @@
 use crate::actors::{ActorHost, WasccActor};
 use crate::auth::Authorizer;
 use crate::capability::extras::ExtrasCapabilityProvider;
-use crate::capability::native_host::{NativeCapabilityHost, NativeCapabilityHostBuilder};
+use crate::capability::native_host::NativeCapabilityHost;
 use crate::control_plane::cpactor::ControlPlane;
 use crate::dispatch::Invocation;
 use crate::messagebus::{
@@ -11,6 +11,7 @@ use crate::middleware::Middleware;
 use crate::oci::fetch_oci_bytes;
 use crate::{HostManifest, NativeCapability, Result, WasccEntity, SYSTEM_ACTOR};
 use actix::prelude::*;
+use futures::executor::block_on;
 use provider_archive::ProviderArchive;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -106,15 +107,19 @@ impl SystemService for HostController {
         let pk = claims.subject.to_string();
         // Start wascc:extras
         let extras = SyncArbiter::start(1, move || {
-            let k = KeyPair::from_seed(&ks).unwrap();
-            let extras = ExtrasCapabilityProvider::default();
-            let claims = crate::capability::extras::get_claims();
-            let cap = NativeCapability::from_instance(extras, Some("default".to_string()), claims)
-                .unwrap();
-            NativeCapabilityHostBuilder::try_new(cap, vec![], None)
-                .unwrap()
-                .build(KeyPair::from_seed(&k2).unwrap())
+            // let k = KeyPair::from_seed(&ks).unwrap();
+            NativeCapabilityHost::new()
         });
+        let claims = crate::capability::extras::get_claims();
+        let ex = ExtrasCapabilityProvider::default();
+        let cap = NativeCapability::from_instance(ex, Some("default".to_string()), claims).unwrap();
+        let init = crate::capability::native_host::Initialize {
+            cap: cap,
+            mw_chain: vec![],
+            seed: k2.to_string(),
+            image_ref: None,
+        };
+        extras.do_send(init);
         self.providers.insert(pk.clone(), extras); // can't let this provider go out of scope, or the actix actor will stop
     }
 }
@@ -287,60 +292,84 @@ impl Handler<StartProvider> for HostController {
         );
 
         let seed = self.kp.as_ref().unwrap().seed().unwrap();
-        let s = seed.clone();
         let mw = self.mw_chain.clone();
-
         let provider = msg.provider;
-
-        let capid = provider.claims.metadata.as_ref().unwrap().capid.to_string();
-        let binding_name = provider.binding_name.to_string();
         let provider_id = provider.claims.subject.to_string();
-        let image_ref = msg.image_ref.clone();
-        let ir2 = msg.image_ref.clone();
+        let binding_name = provider.binding_name.to_string();
+        let imageref = msg.image_ref.clone();
+        let ir2 = imageref.clone();
+        let pid = provider_id.to_string();
 
-        let ncb =
-            NativeCapabilityHostBuilder::try_new(provider.clone(), mw.clone(), image_ref.clone());
-
-        if ncb.is_err() {
-            error!("Failed to create a native capability provider host");
-            return Box::pin(
-                async move { Err("Failed to create native capability provider host".into()) }
-                    .into_actor(self),
-            );
-        }
-        let ncb = ncb.unwrap();
-
-        let new_provider = SyncArbiter::start(1, move || {
-            ncb.clone().build(KeyPair::from_seed(&seed).unwrap())
-        });
-
-        let target = new_provider.clone().recipient();
-        if let Some(imageref) = ir2 {
-            self.image_refs.insert(imageref, provider_id.to_string());
-        }
-        self.providers.insert(provider_id.to_string(), new_provider);
-
-        let k = KeyPair::from_seed(&s).unwrap();
+        let k = KeyPair::from_seed(&seed).unwrap();
         Box::pin(
             async move {
-                let b = MessageBus::from_registry();
-                let bindings = b
-                    .send(FindBindings {
-                        provider_id: provider_id.to_string(),
-                        binding_name: binding_name.to_string(),
-                    })
-                    .await;
-                if let Ok(bindings) = bindings {
-                    trace!("Re-applying bindings to provider {}", &sub);
-                    reinvoke_bindings(&k, target, &sub, &capid, &binding_name, bindings.bindings)
-                        .await;
-                    Ok(())
-                } else {
-                    Err("Failed to obtain list of bindings for re-invoke from message bus".into())
-                }
+                initialize_provider(
+                    provider.clone(),
+                    mw.clone(),
+                    seed.to_string(),
+                    imageref.clone(),
+                    provider_id.to_string(),
+                    binding_name.to_string(),
+                )
+                .await
             }
-            .into_actor(self),
+            .into_actor(self)
+            .map(move |res, act, _| {
+                if let Ok(new_provider) = res {
+                    if let Some(imageref) = ir2 {
+                        act.image_refs.insert(imageref, pid.to_string());
+                    }
+                    act.providers.insert(pid.to_string(), new_provider);
+                }
+                Ok(())
+            }),
         )
+    }
+}
+
+async fn initialize_provider(
+    provider: NativeCapability,
+    mw: Vec<Box<dyn Middleware>>,
+    seed: String,
+    image_ref: Option<String>,
+    provider_id: String,
+    binding_name: String,
+) -> Result<Addr<NativeCapabilityHost>> {
+    let new_provider = SyncArbiter::start(1, || NativeCapabilityHost::new());
+    let im = crate::capability::native_host::Initialize {
+        cap: provider.clone(),
+        mw_chain: mw.clone(),
+        seed: seed.to_string(),
+        image_ref: image_ref.clone(),
+    };
+    let entity = new_provider.send(im).await??;
+    let capid = match entity {
+        WasccEntity::Capability { contract_id, .. } => contract_id,
+        _ => return Err("Creating provider returned the wrong entity type!".into()),
+    };
+
+    let b = MessageBus::from_registry();
+    let bindings = b
+        .send(FindBindings {
+            provider_id: provider_id.to_string(),
+            binding_name: binding_name.to_string(),
+        })
+        .await;
+    if let Ok(bindings) = bindings {
+        trace!("Re-applying bindings to provider {}", &provider_id);
+        let k = KeyPair::from_seed(&seed)?;
+        reinvoke_bindings(
+            &k,
+            new_provider.clone().recipient(),
+            &provider_id,
+            &capid,
+            &binding_name,
+            bindings.bindings,
+        )
+        .await;
+        Ok(new_provider)
+    } else {
+        Err("Failed to obtain list of bindings for re-invoke from message bus".into())
     }
 }
 
