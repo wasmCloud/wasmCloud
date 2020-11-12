@@ -113,7 +113,7 @@ impl Handler<Initialize> for ActorHost {
                     actor.token.claims.subject
                 );
                 ctx.stop();
-                Err("Failed to create a raw WebASsembly host".into())
+                Err("Failed to create a raw WebAssembly host".into())
             }
         }
     }
