@@ -232,16 +232,14 @@ mod test {
         let key = KeyPair::from_seed(&seed).unwrap();
         let extras = ExtrasCapabilityProvider::default();
         let claims = crate::capability::extras::get_claims();
-        let cap = NativeCapability::from_instance(extras, Some("default".to_string()), claims)
-            .unwrap();
-        let extras = SyncArbiter::start(1, move || {
-            NativeCapabilityHost::new()
-        });
-        let init = crate::capability::native_host::Initialize{
+        let cap =
+            NativeCapability::from_instance(extras, Some("default".to_string()), claims).unwrap();
+        let extras = SyncArbiter::start(1, move || NativeCapabilityHost::new());
+        let init = crate::capability::native_host::Initialize {
             cap,
             mw_chain: vec![],
             seed,
-            image_ref: None
+            image_ref: None,
         };
         let _ = extras.send(init).await.unwrap();
 

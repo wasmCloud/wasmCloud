@@ -10,23 +10,34 @@ use futures::executor::block_on;
 use wapc::{WapcHost, WasiParams};
 use wascap::prelude::{Claims, KeyPair};
 
+#[derive(Default)]
 pub(crate) struct ActorHost {
+    state: Option<State>,
+}
+
+struct State {
     guest_module: WapcHost,
     claims: Claims<wascap::jwt::Actor>,
     mw_chain: Vec<Box<dyn Middleware>>,
     image_ref: Option<String>,
 }
 
-impl ActorHost {
-    pub fn new(
-        actor_bytes: Vec<u8>,
-        wasi: Option<WasiParams>,
-        mw_chain: Vec<Box<dyn Middleware>>,
-        signing_seed: String,
-        image_ref: Option<String>,
-    ) -> ActorHost {
-        let buf = actor_bytes.clone();
-        let actor = WasccActor::from_slice(&buf).unwrap();
+#[derive(Message)]
+#[rtype(result = "Result<()>")]
+pub(crate) struct Initialize {
+    pub actor_bytes: Vec<u8>,
+    pub wasi: Option<WasiParams>,
+    pub mw_chain: Vec<Box<dyn Middleware>>,
+    pub signing_seed: String,
+    pub image_ref: Option<String>,
+}
+
+impl Handler<Initialize> for ActorHost {
+    type Result = Result<()>;
+
+    fn handle(&mut self, msg: Initialize, ctx: &mut Self::Context) -> Self::Result {
+        let buf = msg.actor_bytes.clone();
+        let actor = WasccActor::from_slice(&buf)?;
 
         #[cfg(feature = "wasmtime")]
         let engine = wasmtime_provider::WasmtimeEngineProvider::new(&buf, wasi);
@@ -34,11 +45,14 @@ impl ActorHost {
         let engine = wasm3_provider::Wasm3EngineProvider::new(&buf);
 
         let c = actor.token.claims.clone();
+        let c2 = c.clone();
+        let c3 = c.clone(); // TODO: I can't believe I have to do this to make the [censored] borrow checker happy
+        let seed = msg.signing_seed.to_string();
 
         let guest = WapcHost::new(Box::new(engine), move |_id, bd, ns, op, payload| {
             crate::dispatch::wapc_host_callback(
-                KeyPair::from_seed(&signing_seed).unwrap(),
-                actor.token.claims.clone(),
+                KeyPair::from_seed(&seed).unwrap(),
+                c2.clone(),
                 bd,
                 ns,
                 op,
@@ -47,15 +61,59 @@ impl ActorHost {
         });
 
         match guest {
-            Ok(g) => ActorHost {
-                guest_module: g,
-                claims: c,
-                mw_chain,
-                image_ref,
-            },
+            Ok(g) => {
+                let c = c3.clone();
+                let entity = WasccEntity::Actor(c.subject.to_string());
+                let b = MessageBus::from_registry();
+                let b2 = b.clone();
+                let recipient = ctx.address().clone().recipient();
+                let _ = block_on(async move {
+                    b.send(Subscribe {
+                        interest: entity,
+                        subscriber: recipient,
+                    })
+                    .await
+                });
+                let pc = PutClaims{ claims: c.clone() };
+                let r = block_on(async move {
+                    if let Err(e) = b2.send(pc).await {
+                        error!("Actor failed to advertise claims to bus: {}", e);
+                        ctx.stop();
+                        Err("Failed to advertise bus claims".into())
+                    } else {
+                        Ok(())
+                    }
+                });
+                if r.is_err() {
+                    return r;
+                }
+                let pe = PublishEvent {
+                    event: ControlEvent::ActorStarted {
+                        header: Default::default(),
+                        actor: c.subject.to_string(),
+                        image_ref: msg.image_ref.clone(),
+                    },
+                };
+                let _ = block_on(async move {
+                    let cp = ControlPlane::from_registry();
+                    cp.send(pe)
+                    .await
+                });
+                self.state = Some(State {
+                    guest_module: g,
+                    claims: c.clone(),
+                    mw_chain: msg.mw_chain,
+                    image_ref: msg.image_ref,
+                });
+                Ok(())
+            }
             Err(e) => {
-                error!("Failed to instantiate waPC host: {}", e);
-                panic!();
+                error!(
+                    "Failed to create a WebAssembly host for actor {}",
+                    actor.token.claims.subject
+                );
+                ctx.stop();
+                Err("Failed to create a raw WebASsembly host".into())
             }
         }
     }
@@ -65,47 +123,21 @@ impl Actor for ActorHost {
     type Context = SyncContext<Self>;
 
     fn started(&mut self, ctx: &mut Self::Context) {
-        info!("Actor {} started", &self.claims.subject);
-
-        let entity = WasccEntity::Actor(self.claims.subject.to_string());
-        let b = MessageBus::from_registry();
-        let b2 = b.clone();
-        let recipient = ctx.address().clone().recipient();
-        let _ = block_on(async move {
-            b.send(Subscribe {
-                interest: entity,
-                subscriber: recipient,
-            })
-            .await
-        });
-        let c = self.claims.clone();
-        let _ = block_on(async move {
-            if let Err(e) = b2.send(PutClaims { claims: c }).await {
-                error!("Actor failed to advertise claims to bus: {}", e);
-                ctx.stop();
-            }
-        });
-        let _ = block_on(async move {
-            let cp = ControlPlane::from_registry();
-            cp.send(PublishEvent {
-                event: ControlEvent::ActorStarted {
-                    header: Default::default(),
-                    actor: self.claims.subject.to_string(),
-                    image_ref: self.image_ref.clone(),
-                },
-            })
-            .await
-        });
+        info!(
+            "Actor {} started",
+            &self.state.as_ref().unwrap().claims.subject
+        );
     }
 
     fn stopped(&mut self, ctx: &mut Self::Context) {
-        info!("Actor {} stopped", &self.claims.subject);
+        let state = self.state.as_ref().unwrap();
+        info!("Actor {} stopped", &state.claims.subject);
         let _ = block_on(async move {
             let cp = ControlPlane::from_registry();
             cp.send(PublishEvent {
                 event: ControlEvent::ActorStopped {
                     header: Default::default(),
-                    actor: self.claims.subject.to_string(),
+                    actor: state.claims.subject.to_string(),
                     reason: TerminationReason::Requested,
                 },
             })
@@ -121,6 +153,8 @@ impl Handler<Invocation> for ActorHost {
     /// middleware chain, perform the requested operation, and then perform the full
     /// post-exec middleware chain, assuming no errors indicate a pre-emptive halt
     fn handle(&mut self, msg: Invocation, ctx: &mut Self::Context) -> Self::Result {
+        let state = self.state.as_ref().unwrap();
+
         trace!(
             "Actor Invocation - From {} to {}: {}",
             msg.origin.url(),
@@ -129,16 +163,16 @@ impl Handler<Invocation> for ActorHost {
         );
 
         if let WasccEntity::Actor(ref target) = msg.target {
-            if run_actor_pre_invoke(&msg, &self.mw_chain).is_err() {
+            if run_actor_pre_invoke(&msg, &state.mw_chain).is_err() {
                 return InvocationResponse::error(
                     &msg,
                     "Pre-invoke middleware execution failure on actor",
                 );
             }
-            match self.guest_module.call(&msg.operation, &msg.msg) {
+            match state.guest_module.call(&msg.operation, &msg.msg) {
                 Ok(v) => {
                     let resp = InvocationResponse::success(&msg, v);
-                    match run_actor_post_invoke(resp, &self.mw_chain) {
+                    match run_actor_post_invoke(resp, &state.mw_chain) {
                         Ok(r) => r,
                         Err(e) => InvocationResponse::error(
                             &msg,

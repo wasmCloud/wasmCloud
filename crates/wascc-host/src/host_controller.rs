@@ -221,14 +221,17 @@ impl Handler<MintInvocationRequest> for HostController {
 }
 
 impl Handler<StartActor> for HostController {
-    type Result = Result<()>;
+    type Result = ResponseActFuture<Self, Result<()>>;
 
-    fn handle(&mut self, msg: StartActor, ctx: &mut Context<Self>) -> Result<()> {
+    fn handle(&mut self, msg: StartActor, ctx: &mut Context<Self>) -> Self::Result {
         let sub = msg.actor.claims().subject.to_string();
 
         if self.actors.contains_key(&sub) {
             error!("Aborting attempt to start already running actor {}", sub);
-            return Err(format!("Cannot start already running actor {}", sub).into());
+            return Box::pin(
+                async move { Err(format!("Cannot start already running actor {}", sub).into()) }
+                    .into_actor(self),
+            );
         }
 
         trace!(
@@ -237,31 +240,44 @@ impl Handler<StartActor> for HostController {
         );
         // get "free standing" references to all these things so we don't
         // move self into the arbiter start closure. YAY borrow checker.
-        let seed = self.kp.as_ref().unwrap().seed()?;
+        let seed = self.kp.as_ref().unwrap().seed().unwrap();
         let mw = self.mw_chain.clone();
         let bytes = msg.actor.bytes.clone();
         let claims = &msg.actor.token.claims;
         let imgref = msg.image_ref.clone();
         if !self.authorizer.as_ref().unwrap().can_load(claims) {
-            return Err("Permission denied starting actor.".into());
+            return Box::pin(
+                async move { Err("Permission denied starting actor.".into()) }.into_actor(self),
+            );
         }
+        let init = crate::actors::Initialize {
+            actor_bytes: bytes.clone(),
+            wasi: None,
+            mw_chain: mw.clone(),
+            signing_seed: seed.clone(),
+            image_ref: imgref.clone(),
+        };
 
-        let new_actor = SyncArbiter::start(1, move || {
-            ActorHost::new(
-                bytes.clone(),
-                None,
-                mw.clone(),
-                seed.clone(),
-                imgref.clone(),
-            )
-        });
+        let new_actor = SyncArbiter::start(1, move || ActorHost::default());
+        let na = new_actor.clone();
 
-        if let Some(imageref) = msg.image_ref {
-            self.image_refs.insert(imageref, msg.actor.public_key());
-        }
-        self.actors.insert(msg.actor.public_key(), new_actor);
-
-        Ok(())
+        Box::pin(
+            async move { new_actor.send(init).await }
+                .into_actor(self)
+                .map(move |res, act, ctx| match res {
+                    Ok(_) => {
+                        if let Some(imageref) = msg.image_ref {
+                            act.image_refs.insert(imageref, msg.actor.public_key());
+                        }
+                        act.actors.insert(msg.actor.public_key(), na);
+                        Ok(())
+                    }
+                    Err(e) => {
+                        error!("Failed to start actor");
+                        Err("Failed to start actor".into())
+                    }
+                }),
+        )
     }
 }
 
