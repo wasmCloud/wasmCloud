@@ -74,7 +74,7 @@ impl Handler<Initialize> for ActorHost {
                     })
                     .await
                 });
-                let pc = PutClaims{ claims: c.clone() };
+                let pc = PutClaims { claims: c.clone() };
                 let r = block_on(async move {
                     if let Err(e) = b2.send(pc).await {
                         error!("Actor failed to advertise claims to bus: {}", e);
@@ -89,15 +89,13 @@ impl Handler<Initialize> for ActorHost {
                 }
                 let pe = PublishEvent {
                     event: ControlEvent::ActorStarted {
-                        header: Default::default(),
                         actor: c.subject.to_string(),
                         image_ref: msg.image_ref.clone(),
                     },
                 };
                 let _ = block_on(async move {
                     let cp = ControlPlane::from_registry();
-                    cp.send(pe)
-                    .await
+                    cp.send(pe).await
                 });
                 self.state = Some(State {
                     guest_module: g,
@@ -136,7 +134,6 @@ impl Actor for ActorHost {
             let cp = ControlPlane::from_registry();
             cp.send(PublishEvent {
                 event: ControlEvent::ActorStopped {
-                    header: Default::default(),
                     actor: state.claims.subject.to_string(),
                     reason: TerminationReason::Requested,
                 },

@@ -63,7 +63,6 @@ impl Actor for NativeCapabilityHost {
         let cp = ControlPlane::from_registry();
         cp.do_send(PublishEvent {
             event: ControlEvent::ProviderStopped {
-                header: Default::default(),
                 binding_name: state.cap.binding_name.to_string(),
                 provider_id: state.cap.claims.subject.to_string(),
                 contract_id: state.descriptor.id.to_string(),
@@ -143,7 +142,6 @@ impl Handler<Initialize> for NativeCapabilityHost {
         let cp = ControlPlane::from_registry();
         cp.do_send(PublishEvent {
             event: ControlEvent::ProviderStarted {
-                header: Default::default(),
                 binding_name: state.cap.binding_name.to_string(),
                 provider_id: state.cap.claims.subject.to_string(),
                 contract_id: state.descriptor.id.to_string(),

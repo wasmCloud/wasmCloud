@@ -43,7 +43,6 @@ async fn generate_heartbeat_event(
     seed: String,
 ) -> ControlEvent {
     ControlEvent::Heartbeat {
-        header: Default::default(),
         claims: claims,
         entities: healthping_subscribers(&entities, seed).await,
     }
