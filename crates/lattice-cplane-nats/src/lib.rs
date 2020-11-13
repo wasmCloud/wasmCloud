@@ -1,4 +1,4 @@
-use wascc_host::{ControlEvent, ControlInterface, ControlPlaneProvider, Result};
+use wascc_host::{PublishedEvent, ControlInterface, ControlPlaneProvider, Result};
 
 pub struct NatsControlPlaneProvider {
     control: Option<ControlInterface>,
@@ -20,7 +20,7 @@ impl ControlPlaneProvider for NatsControlPlaneProvider {
         unimplemented!()
     }
 
-    fn emit_control_event(&self, event: ControlEvent) -> Result<()> {
+    fn emit_control_event(&self, event: PublishedEvent) -> Result<()> {
         unimplemented!()
     }
 }
