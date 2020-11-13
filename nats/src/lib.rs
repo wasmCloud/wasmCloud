@@ -1,21 +1,8 @@
-// Copyright 2015-2020 Capital One Services, LLC
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-mod nats;
-
 #[macro_use]
 extern crate wascc_codec as codec;
+
+mod generated;
+mod natsprov;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const REVISION: u32 = 2; // Increment for each crates publish
@@ -27,17 +14,17 @@ use codec::capabilities::{
     CapabilityDescriptor, CapabilityProvider, Dispatcher, NullDispatcher, OperationDirection,
     OP_GET_CAPABILITY_DESCRIPTOR,
 };
+
+pub const OP_DELIVER_MESSAGE: &str = "DeliverMessage";
+pub const OP_PUBLISH_MESSAGE: &str = "Publish";
+pub const OP_PERFORM_REQUEST: &str = "Request";
+
 use codec::core::{OP_BIND_ACTOR, OP_REMOVE_ACTOR};
-use codec::{
-    messaging::{
-        BrokerMessage, RequestMessage, OP_DELIVER_MESSAGE, OP_PERFORM_REQUEST, OP_PUBLISH_MESSAGE,
-    },
-    serialize,
-};
-use natsclient;
+use generated::messaging::{BrokerMessage, RequestArgs};
+
+use generated::core::CapabilityConfiguration;
 use std::collections::HashMap;
-use wascc_codec::core::CapabilityConfiguration;
-use wascc_codec::deserialize;
+use wascc_codec::{deserialize, serialize};
 
 use std::error::Error;
 use std::sync::Arc;
@@ -49,9 +36,10 @@ capability_provider!(NatsProvider, NatsProvider::new);
 const CAPABILITY_ID: &str = "wascc:messaging";
 
 /// NATS implementation of the `wascc:messaging` specification
+#[derive(Clone)]
 pub struct NatsProvider {
     dispatcher: Arc<RwLock<Box<dyn Dispatcher>>>,
-    clients: Arc<RwLock<HashMap<String, natsclient::Client>>>,
+    clients: Arc<RwLock<HashMap<String, nats::Connection>>>,
 }
 
 impl Default for NatsProvider {
@@ -83,18 +71,18 @@ impl NatsProvider {
         let lock = self.clients.read().unwrap();
         let client = lock.get(actor).unwrap();
 
-        nats::publish(&client, msg)
+        natsprov::publish(&client, msg)
     }
 
     fn request(
         &self,
         actor: &str,
-        msg: RequestMessage,
+        msg: RequestArgs,
     ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
         let lock = self.clients.read().unwrap();
         let client = lock.get(actor).unwrap();
 
-        nats::request(&client, msg)
+        natsprov::request(&client, msg)
     }
 
     fn configure(
@@ -102,7 +90,7 @@ impl NatsProvider {
         msg: CapabilityConfiguration,
     ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
         let d = self.dispatcher.clone();
-        let c = nats::initialize_client(d, &msg.module, &msg.values)?;
+        let c = natsprov::initialize_client(d, &msg.module, &msg.values)?;
 
         self.clients.write().unwrap().insert(msg.module, c);
         Ok(vec![])
@@ -175,5 +163,12 @@ impl CapabilityProvider for NatsProvider {
             OP_REMOVE_ACTOR if actor == "system" => self.remove_actor(deserialize(msg)?),
             _ => Err("bad dispatch".into()),
         }
+    }
+
+    fn stop(&self) {
+        let mut lock = self.clients.write().unwrap();
+        lock.clear();
+        let mut lock = self.dispatcher.write().unwrap();
+        *lock = Box::new(NullDispatcher::default());
     }
 }
