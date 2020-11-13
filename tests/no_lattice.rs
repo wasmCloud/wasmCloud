@@ -33,6 +33,7 @@ pub async fn start_and_execute_echo() -> Result<()> {
     assert_eq!(resp.status, "OK");
     let v: serde_json::Value = serde_json::from_slice(&resp.body)?;
     assert_eq!("test=kthxbye", v["query_string"].as_str().unwrap());
+    h.stop().await;
     Ok(())
 }
 
@@ -57,6 +58,7 @@ pub async fn kvcounter_basic() -> Result<()> {
     let client = redis::Client::open("redis://127.0.0.1/")?;
     let mut con = client.get_connection()?;
     let _: () = con.del(&rkey)?;
+    h.stop().await;
 
     Ok(())
 }
@@ -82,13 +84,13 @@ pub async fn kvcounter_start_stop() -> Result<()> {
     h.start_actor(kvcounter).await?;
     await_actor_count(&h, 1, Duration::from_millis(50), 3).await?;
 
-    let arc2 = par_from_file("./tests/modules/libwascc_httpsrv.par")?;
+    let arc2 = par_from_file("./tests/modules/libwascc_httpsrv.par.gz")?;
 
     h.stop_provider(&arc2.claims().unwrap().subject, "wascc:http_server", None)
         .await?;
     await_provider_count(&h, 2, Duration::from_millis(50), 3).await?;
 
-    ::std::thread::sleep(Duration::from_millis(2500)); // give the web server enough time to let go of the port
+    ::std::thread::sleep(Duration::from_millis(50)); // give the web server enough time to let go of the port
 
     let websrv = NativeCapability::from_archive(&arc2, None)?;
     h.start_native_capability(websrv).await?;
@@ -101,6 +103,7 @@ pub async fn kvcounter_start_stop() -> Result<()> {
     let client = redis::Client::open("redis://127.0.0.1/")?;
     let mut con = client.get_connection()?;
     let _: () = con.del(&rkey)?;
+    h.stop().await;
 
     Ok(())
 }
@@ -122,8 +125,8 @@ pub async fn kvcounter_binding_first() -> Result<()> {
     let mut values: HashMap<String, String> = HashMap::new();
     values.insert("URL".to_string(), "redis://127.0.0.1:6379".to_string());
 
-    let arc = par_from_file("./tests/modules/libwascc_redis.par")?;
-    let arc2 = par_from_file("./tests/modules/libwascc_httpsrv.par")?;
+    let arc = par_from_file("./tests/modules/libwascc_redis.par.gz")?;
+    let arc2 = par_from_file("./tests/modules/libwascc_httpsrv.par.gz")?;
 
     let redis_id = arc.claims().unwrap().subject;
     let websrv_id = arc2.claims().unwrap().subject;
@@ -166,6 +169,7 @@ pub async fn kvcounter_binding_first() -> Result<()> {
     let client = redis::Client::open("redis://127.0.0.1/")?;
     let mut con = client.get_connection()?;
     let _: () = con.del(&rkey)?;
+    h.stop().await;
 
     Ok(())
 }

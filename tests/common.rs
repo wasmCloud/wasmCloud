@@ -63,8 +63,8 @@ pub async fn gen_kvcounter_host(
     h.start_actor(kvcounter).await?;
     await_actor_count(&h, 1, Duration::from_millis(50), 3).await?;
 
-    let arc = par_from_file("./tests/modules/libwascc_redis.par")?;
-    let arc2 = par_from_file("./tests/modules/libwascc_httpsrv.par")?;
+    let arc = par_from_file("./tests/modules/libwascc_redis.par.gz")?;
+    let arc2 = par_from_file("./tests/modules/libwascc_httpsrv.par.gz")?;
 
     let redis = NativeCapability::from_archive(&arc, None)?;
     let websrv = NativeCapability::from_archive(&arc2, None)?;
