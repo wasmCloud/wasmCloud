@@ -141,7 +141,6 @@ impl Host {
             .send(PublishEvent {
                 event: ControlEvent::HostStopped {
                     reason: TerminationReason::Requested,
-                    header: Default::default(),
                 },
             })
             .await;

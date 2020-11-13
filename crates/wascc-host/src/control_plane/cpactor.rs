@@ -59,8 +59,11 @@ impl Handler<PublishEvent> for ControlPlane {
     fn handle(&mut self, msg: PublishEvent, _ctx: &mut Context<Self>) {
         let evt = msg
             .event
-            .replace_header(&self.key.as_ref().unwrap().public_key());
-        println!("Publishing {:?}", evt);
+            .into_published(&self.key.as_ref().unwrap().public_key());
+        trace!(
+            "Control plane instructing provider to publish event {:?}",
+            evt
+        );
         if let Some(ref p) = self.provider {
             if let Err(e) = p.emit_control_event(evt) {
                 error!("Control plane failed to emit event: {}", e);
@@ -81,10 +84,8 @@ impl Handler<Initialize> for ControlPlane {
         self.provider = Some(msg.provider);
         self.provider.as_mut().unwrap().init(controller);
         self.options = msg.control_options;
-        let evt = ControlEvent::HostStarted {
-            header: Default::default(),
-        };
-        let evt = evt.replace_header(&self.key.as_ref().unwrap().public_key());
+        let evt = ControlEvent::HostStarted;
+        let evt = evt.into_published(&self.key.as_ref().unwrap().public_key());
         if let Err(e) = self.provider.as_ref().unwrap().emit_control_event(evt) {
             error!("Control plane failed to emit host started event: {}", e);
         }

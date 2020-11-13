@@ -8,55 +8,51 @@ pub struct EventHeader {
     pub host_origin: String,
     pub timestamp: u64,
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct PublishedEvent {
+    pub event: ControlEvent,
+    pub header: EventHeader,
+}
 /// Represents an event that may occur on the lattice control plane. All timestamps
 /// are to be considered as Unix timestamps in UTC in seconds since the epoch.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub enum ControlEvent {
-    HostStarted {
-        header: EventHeader,
-    },
+    HostStarted,
     HostStopped {
-        header: EventHeader,
         reason: TerminationReason,
     },
     ActorStarted {
-        header: EventHeader,
         actor: String,
         image_ref: Option<String>,
     },
     ActorStopped {
-        header: EventHeader,
         actor: String,
         reason: TerminationReason,
     },
     ActorUpdateBegan {
-        header: EventHeader,
         actor: String,
         old_revision: u32,
         new_revision: u32,
     },
     ActorUpdateCompleted {
-        header: EventHeader,
         actor: String,
         old_revision: u32,
         new_revision: u32,
     },
     ProviderStarted {
-        header: EventHeader,
         contract_id: String,
         binding_name: String,
         provider_id: String,
         image_ref: Option<String>,
     },
     ProviderStopped {
-        header: EventHeader,
         contract_id: String,
         binding_name: String,
         provider_id: String,
         reason: TerminationReason,
     },
     Heartbeat {
-        header: EventHeader,
         claims: Vec<wascap::jwt::Claims<wascap::jwt::Actor>>,
         entities: HashMap<String, RunState>,
     },
@@ -75,85 +71,14 @@ pub enum TerminationReason {
 }
 
 impl ControlEvent {
-    pub fn replace_header(self, origin: &str) -> ControlEvent {
-        let new_header = EventHeader {
+    pub fn into_published(self, origin: &str) -> PublishedEvent {
+        let header = EventHeader {
             host_origin: origin.to_string(),
             timestamp: Utc::now().timestamp() as u64,
         };
-        use ControlEvent::*;
-        match self {
-            HostStarted { .. } => HostStarted { header: new_header },
-            HostStopped { reason, .. } => HostStopped {
-                header: new_header,
-                reason,
-            },
-            ActorStopped { actor, reason, .. } => ActorStopped {
-                header: new_header,
-                actor,
-                reason,
-            },
-            ActorStarted {
-                actor, image_ref, ..
-            } => ActorStarted {
-                header: new_header,
-                actor,
-                image_ref,
-            },
-            ActorUpdateBegan {
-                actor,
-                old_revision,
-                new_revision,
-                ..
-            } => ActorUpdateBegan {
-                header: new_header,
-                actor,
-                old_revision,
-                new_revision,
-            },
-            ActorUpdateCompleted {
-                actor,
-                old_revision,
-                new_revision,
-                ..
-            } => ActorUpdateCompleted {
-                header: new_header,
-                actor,
-                old_revision,
-                new_revision,
-            },
-            ProviderStarted {
-                contract_id,
-                binding_name,
-                provider_id,
-                image_ref,
-                ..
-            } => ProviderStarted {
-                header: new_header,
-                contract_id,
-                binding_name,
-                provider_id,
-                image_ref,
-            },
-            ProviderStopped {
-                contract_id,
-                binding_name,
-                provider_id,
-                reason,
-                ..
-            } => ProviderStopped {
-                header: new_header,
-                contract_id,
-                binding_name,
-                provider_id,
-                reason,
-            },
-            Heartbeat {
-                claims, entities, ..
-            } => Heartbeat {
-                header: new_header,
-                claims,
-                entities,
-            },
+        PublishedEvent {
+            header,
+            event: self,
         }
     }
 }
