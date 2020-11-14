@@ -1,6 +1,5 @@
 use crate::actors::WasccActor;
 use crate::control_plane::cpactor::{ControlPlane, PublishEvent};
-use crate::control_plane::events::TerminationReason;
 use crate::dispatch::{Invocation, InvocationResponse, WasccEntity};
 use crate::messagebus::{MessageBus, PutClaims, Subscribe, Unsubscribe};
 use crate::middleware::{run_actor_post_invoke, run_actor_pre_invoke, Middleware};
@@ -135,7 +134,6 @@ impl Actor for ActorHost {
             cp.send(PublishEvent {
                 event: ControlEvent::ActorStopped {
                     actor: state.claims.subject.to_string(),
-                    reason: TerminationReason::Requested,
                 },
             })
             .await

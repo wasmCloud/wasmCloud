@@ -11,7 +11,6 @@ use crate::capability::extras::ExtrasCapabilityProvider;
 use crate::capability::native::NativeCapability;
 use crate::capability::native_host::NativeCapabilityHost;
 use crate::control_plane::cpactor::{ControlOptions, ControlPlane, PublishEvent};
-use crate::control_plane::events::TerminationReason;
 use crate::control_plane::ControlPlaneProvider;
 use crate::dispatch::{Invocation, InvocationResponse};
 use crate::host_controller::{
@@ -139,9 +138,7 @@ impl Host {
         let cp = ControlPlane::from_registry();
         let _ = cp
             .send(PublishEvent {
-                event: ControlEvent::HostStopped {
-                    reason: TerminationReason::Requested,
-                },
+                event: ControlEvent::HostStopped,
             })
             .await;
         System::current().stop();

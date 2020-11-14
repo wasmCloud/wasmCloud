@@ -1,6 +1,5 @@
 use crate::capability::native::NativeCapability;
 use crate::control_plane::cpactor::{ControlPlane, PublishEvent};
-use crate::control_plane::events::TerminationReason;
 use crate::dispatch::{Invocation, InvocationResponse, ProviderDispatcher, WasccEntity};
 use crate::messagebus::{MessageBus, Subscribe, Unsubscribe};
 use crate::middleware::{run_capability_post_invoke, run_capability_pre_invoke, Middleware};
@@ -66,7 +65,6 @@ impl Actor for NativeCapabilityHost {
                 binding_name: state.cap.binding_name.to_string(),
                 provider_id: state.cap.claims.subject.to_string(),
                 contract_id: state.descriptor.id.to_string(),
-                reason: TerminationReason::Requested,
             },
         });
         state.plugin.stop(); // Tell the provider to clean up, dispose of resources, stop threads, etc
