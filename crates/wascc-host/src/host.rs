@@ -1,6 +1,4 @@
-use crate::messagebus::{
-    AdvertiseBinding, LatticeProvider, MessageBus, SetAuthorizer, SetProvider,
-};
+use crate::messagebus::{AdvertiseLink, LatticeProvider, MessageBus, SetAuthorizer, SetProvider};
 use std::thread;
 use wapc::WebAssemblyEngineProvider;
 
@@ -166,12 +164,12 @@ impl Host {
     pub async fn start_capability_from_registry(
         &self,
         cap_ref: &str,
-        binding_name: Option<String>,
+        link_name: Option<String>,
     ) -> Result<()> {
         let hc = HostController::from_registry();
         let bytes = fetch_oci_bytes(cap_ref, self.allow_latest).await?;
         let par = ProviderArchive::try_load(&bytes)?;
-        let nc = NativeCapability::from_archive(&par, binding_name)?;
+        let nc = NativeCapability::from_archive(&par, link_name)?;
         hc.send(StartProvider {
             provider: nc,
             image_ref: Some(cap_ref.to_string()),
@@ -217,14 +215,14 @@ impl Host {
         &self,
         provider_ref: &str,
         contract_id: &str,
-        binding: Option<String>,
+        link: Option<String>,
     ) -> Result<()> {
         let hc = HostController::from_registry();
-        let binding = binding.unwrap_or("default".to_string());
+        let link = link.unwrap_or("default".to_string());
         hc.send(StopProvider {
             provider_ref: provider_ref.to_string(),
             contract_id: contract_id.to_string(),
-            binding,
+            link,
         })
         .await?;
         Ok(())
@@ -255,19 +253,19 @@ impl Host {
         Ok(ir.msg)
     }
 
-    pub async fn set_binding(
+    pub async fn set_link(
         &self,
         actor: &str,
         contract_id: &str,
-        binding_name: Option<String>,
+        link_name: Option<String>,
         provider_id: String,
         values: HashMap<String, String>,
     ) -> Result<()> {
         let bus = MessageBus::from_registry();
-        bus.send(AdvertiseBinding {
+        bus.send(AdvertiseLink {
             contract_id: contract_id.to_string(),
             actor: actor.to_string(),
-            binding_name: binding_name.unwrap_or("default".to_string()),
+            link_name: link_name.unwrap_or("default".to_string()),
             provider_id,
             values,
         })
@@ -296,7 +294,7 @@ impl Host {
         {
             let _ = hc.send(msg).await?;
         }
-        for msg in crate::manifest::generate_adv_binding_messages(&manifest).await {
+        for msg in crate::manifest::generate_adv_link_messages(&manifest).await {
             let _ = bus.send(msg).await?;
         }
 

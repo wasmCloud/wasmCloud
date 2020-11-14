@@ -12,25 +12,25 @@ use std::collections::HashMap;
 use std::sync::RwLock;
 
 pub struct Host {
-    binding: String,
+    link: String,
 }
 
 impl Default for Host {
     fn default() -> Self {
         Host {
-            binding: "default".to_string(),
+            link: "default".to_string(),
         }
     }
 }
 
-/// Creates a named host binding for the key-value store capability
-pub fn host(binding: &str) -> Host {
+/// Creates a named host link for the key-value store capability
+pub fn host(link: &str) -> Host {
     Host {
-        binding: binding.to_string(),
+        link: link.to_string(),
     }
 }
 
-/// Creates the default host binding for the key-value store capability
+/// Creates the default host link for the key-value store capability
 pub fn default() -> Host {
     Host::default()
 }

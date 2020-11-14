@@ -16,7 +16,7 @@ use wascc_codec::capabilities::{
 #[derive(Clone)]
 pub struct NativeCapability {
     pub(crate) plugin: Option<Box<dyn CapabilityProvider>>,
-    pub(crate) binding_name: String,
+    pub(crate) link_name: String,
     pub(crate) claims: Claims<wascap::jwt::CapabilityProvider>,
     pub(crate) native_bytes: Option<Vec<u8>>,
 }
@@ -26,19 +26,19 @@ impl NativeCapability {
     /// library will be chosen from the file, or an error will result if it isn't found.
     pub fn from_archive(
         archive: &ProviderArchive,
-        binding_target_name: Option<String>,
+        link_target_name: Option<String>,
     ) -> Result<Self> {
         if archive.claims().is_none() {
             return Err("No claims found in provider archive file".into());
         }
-        let binding = binding_target_name.unwrap_or("default".to_string());
+        let link = link_target_name.unwrap_or("default".to_string());
 
         let target = Host::native_target();
 
         match archive.target_bytes(&target) {
             Some(bytes) => Ok(NativeCapability {
                 claims: archive.claims().unwrap(),
-                binding_name: binding,
+                link_name: link,
                 native_bytes: Some(bytes),
                 plugin: None,
             }),
@@ -58,17 +58,17 @@ impl NativeCapability {
     /// claims that can be generated from a signed JWT
     pub fn from_instance(
         instance: impl CapabilityProvider + 'static,
-        binding_target_name: Option<String>,
+        link_target_name: Option<String>,
         claims: Claims<wascap::jwt::CapabilityProvider>,
     ) -> Result<Self> {
         let b: Box<dyn CapabilityProvider> = Box::new(instance);
-        let binding = binding_target_name.unwrap_or("default".to_string());
+        let link = link_target_name.unwrap_or("default".to_string());
 
         Ok(NativeCapability {
             plugin: Some(b),
             native_bytes: None,
             claims: claims.clone(),
-            binding_name: binding,
+            link_name: link,
         })
     }
 

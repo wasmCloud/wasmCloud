@@ -1,5 +1,5 @@
 use crate::errors::{self, ErrorKind};
-use crate::messagebus::{LookupBinding, MessageBus, OP_BIND_ACTOR};
+use crate::messagebus::{LookupLink, MessageBus, OP_BIND_ACTOR};
 use crate::{Result, SYSTEM_ACTOR};
 use actix::dev::{MessageResponse, ResponseChannel};
 use actix::prelude::*;
@@ -42,13 +42,13 @@ impl BusDispatcher {
         }
     }
 
-    /// Notifies the host that a binding was received from the lattice
-    pub async fn notify_binding_update(
+    /// Notifies the host that a link was received from the lattice
+    pub async fn notify_link_update(
         &self,
         actor: &str,
         contract_id: &str,
         provider_id: &str,
-        binding_name: &str,
+        link_name: &str,
         values: HashMap<String, String>,
     ) {
     }
@@ -250,7 +250,7 @@ pub enum WasccEntity {
     Capability {
         id: String,
         contract_id: String,
-        binding: String,
+        link: String,
     },
 }
 
@@ -261,7 +261,7 @@ impl WasccEntity {
             WasccEntity::Capability {
                 id,
                 contract_id,
-                binding,
+                link,
             } => format!(
                 "{}://{}/{}/{}",
                 URL_SCHEME,
@@ -269,7 +269,7 @@ impl WasccEntity {
                     .replace(":", "/")
                     .replace(" ", "_")
                     .to_lowercase(),
-                binding.replace(" ", "_").to_lowercase(),
+                link.replace(" ", "_").to_lowercase(),
                 id
             ),
         }
@@ -311,7 +311,7 @@ pub fn invocation_hash(target_url: &str, origin_url: &str, msg: &[u8]) -> String
 pub(crate) fn wapc_host_callback(
     kp: KeyPair,
     claims: Claims<wascap::jwt::Actor>,
-    binding_name: &str,
+    link_name: &str,
     namespace: &str,
     operation: &str,
     payload: &[u8],
@@ -329,10 +329,10 @@ pub(crate) fn wapc_host_callback(
     // for the given capability contract ID.
     let bus = MessageBus::from_registry();
     let prov = block_on(async {
-        bus.send(LookupBinding {
+        bus.send(LookupLink {
             contract_id: namespace.to_string(),
             actor: claims.subject.to_string(),
-            binding_name: binding_name.to_string(),
+            link_name: link_name.to_string(),
         })
         .await
         .unwrap()
@@ -341,7 +341,7 @@ pub(crate) fn wapc_host_callback(
         let inv = invocation_from_callback(
             &kp,
             &claims.subject,
-            binding_name,
+            link_name,
             namespace,
             operation,
             &p,
@@ -353,8 +353,8 @@ pub(crate) fn wapc_host_callback(
         }
     } else {
         Err(format!(
-            "Unable to locate a known binding for {}->{}:{}",
-            claims.subject, namespace, binding_name
+            "Unable to locate a known link for {}->{}:{}",
+            claims.subject, namespace, link_name
         )
         .into())
     }
@@ -369,8 +369,8 @@ fn invocation_from_callback(
     provider_id: &str,
     payload: &[u8],
 ) -> Invocation {
-    let binding = if bd.trim().is_empty() {
-        // Some actor SDKs may not specify a binding field by default
+    let link = if bd.trim().is_empty() {
+        // Some actor SDKs may not specify a link field by default
         "default".to_string()
     } else {
         bd.to_string()
@@ -379,7 +379,7 @@ fn invocation_from_callback(
         WasccEntity::Actor(ns.to_string())
     } else {
         WasccEntity::Capability {
-            binding,
+            link,
             contract_id: ns.to_string(),
             id: provider_id.to_string(),
         }
@@ -399,7 +399,7 @@ pub(crate) fn gen_config_invocation(
     contract_id: &str,
     provider_id: &str,
     claims: Claims<wascap::jwt::Actor>,
-    binding_name: String,
+    link_name: String,
     values: HashMap<String, String>,
 ) -> Invocation {
     let mut values = values.clone();
@@ -445,7 +445,7 @@ pub(crate) fn gen_config_invocation(
         WasccEntity::Capability {
             contract_id: contract_id.to_string(),
             id: provider_id.to_string(),
-            binding: binding_name,
+            link: link_name,
         },
         OP_BIND_ACTOR,
         payload,
@@ -467,7 +467,7 @@ mod test {
             WasccEntity::Capability {
                 id: "Vxxx".to_string(),
                 contract_id: "wascc:messaging".into(),
-                binding: "default".into(),
+                link: "default".into(),
             },
             "OP_TESTING",
             vec![1, 2, 3, 4],

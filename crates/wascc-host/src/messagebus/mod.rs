@@ -1,5 +1,5 @@
 use crate::auth::Authorizer;
-use crate::capability::binding_cache::BindingCache;
+use crate::capability::link_cache::LinkCache;
 use crate::Result;
 use crate::{BusDispatcher, Invocation, InvocationResponse, WasccEntity};
 use actix::dev::{MessageResponse, ResponseChannel};
@@ -18,11 +18,11 @@ pub trait LatticeProvider: Sync + Send {
     fn rpc(&self, inv: &Invocation) -> Result<InvocationResponse>;
     fn register_rpc_listener(&self, subscriber: &WasccEntity) -> Result<()>;
     fn remove_rpc_listener(&self, subscriber: &WasccEntity) -> Result<()>;
-    fn advertise_binding(
+    fn advertise_link(
         &self,
         actor: &str,
         contract_id: &str,
-        binding_name: &str,
+        link_name: &str,
         provider_id: &str,
         values: HashMap<String, String>,
     ) -> Result<()>;
@@ -33,7 +33,7 @@ pub trait LatticeProvider: Sync + Send {
 pub(crate) struct MessageBus {
     pub provider: Option<Box<dyn LatticeProvider>>,
     subscribers: HashMap<WasccEntity, Recipient<Invocation>>,
-    binding_cache: BindingCache,
+    link_cache: LinkCache,
     claims_cache: HashMap<String, Claims<wascap::jwt::Actor>>,
     key: Option<KeyPair>,
     authorizer: Option<Box<dyn Authorizer>>,
@@ -90,19 +90,19 @@ pub struct PutClaims {
 
 #[derive(Message)]
 #[rtype(result = "Option<String>")]
-pub struct LookupBinding {
+pub struct LookupLink {
     // Capability ID
     pub contract_id: String,
     pub actor: String,
-    pub binding_name: String,
+    pub link_name: String,
 }
 
 #[derive(Message)]
 #[rtype(result = "Result<()>")]
-pub struct AdvertiseBinding {
+pub struct AdvertiseLink {
     pub contract_id: String,
     pub actor: String,
-    pub binding_name: String,
+    pub link_name: String,
     pub provider_id: String,
     pub values: HashMap<String, String>,
 }
@@ -114,21 +114,21 @@ pub struct AdvertiseClaims {
 }
 
 #[derive(Message)]
-#[rtype(result = "FindBindingsResponse")]
-pub struct FindBindings {
+#[rtype(result = "FindLinksResponse")]
+pub struct FindLinks {
     pub provider_id: String,
-    pub binding_name: String,
+    pub link_name: String,
 }
 
 #[derive(Debug)]
-pub struct FindBindingsResponse {
-    pub bindings: Vec<(String, HashMap<String, String>)>,
+pub struct FindLinksResponse {
+    pub links: Vec<(String, HashMap<String, String>)>,
 }
 
-impl<A, M> MessageResponse<A, M> for FindBindingsResponse
+impl<A, M> MessageResponse<A, M> for FindLinksResponse
 where
     A: Actor,
-    M: Message<Result = FindBindingsResponse>,
+    M: Message<Result = FindLinksResponse>,
 {
     fn handle<R: ResponseChannel<M>>(self, _: &mut A::Context, tx: Option<R>) {
         if let Some(tx) = tx {

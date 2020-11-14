@@ -108,16 +108,16 @@ pub async fn kvcounter_start_stop() -> Result<()> {
     Ok(())
 }
 
-// Set the binding before either the actor or the provider are running in
+// Set the link before either the actor or the provider are running in
 // the host, and verify that we can then hit the HTTP endpoint.
-pub async fn kvcounter_binding_first() -> Result<()> {
+pub async fn kvcounter_link_first() -> Result<()> {
     use redis::Commands;
     let h = HostBuilder::new().build();
     h.start(None, None).await?;
 
     let web_port = 9998_u32;
 
-    // Set the bindings before there's any provider to invoke OP_BIND_ACTOR
+    // Set the links before there's any provider to invoke OP_BIND_ACTOR
 
     let mut webvalues: HashMap<String, String> = HashMap::new();
     webvalues.insert("PORT".to_string(), format!("{}", web_port));
@@ -134,7 +134,7 @@ pub async fn kvcounter_binding_first() -> Result<()> {
     let kvcounter = Actor::from_file("./tests/modules/kvcounter.wasm")?;
     let kvcounter_key = kvcounter.public_key();
 
-    h.set_binding(
+    h.set_link(
         &kvcounter_key,
         "wascc:http_server",
         None,
@@ -143,7 +143,7 @@ pub async fn kvcounter_binding_first() -> Result<()> {
     )
     .await?;
 
-    h.set_binding(&kvcounter_key, "wascc:keyvalue", None, redis_id, values)
+    h.set_link(&kvcounter_key, "wascc:keyvalue", None, redis_id, values)
         .await?;
 
     h.start_actor(kvcounter).await?;
@@ -152,7 +152,7 @@ pub async fn kvcounter_binding_first() -> Result<()> {
     let redis = NativeCapability::from_archive(&arc, None)?;
     let websrv = NativeCapability::from_archive(&arc2, None)?;
 
-    // When we start these, with pre-existing bindings, they should trigger OP_BIND_ACTOR invocations
+    // When we start these, with pre-existing links, they should trigger OP_BIND_ACTOR invocations
     // for each.
     h.start_native_capability(redis).await?;
     h.start_native_capability(websrv).await?;

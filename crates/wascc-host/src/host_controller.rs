@@ -5,7 +5,7 @@ use crate::capability::native_host::NativeCapabilityHost;
 use crate::control_plane::cpactor::ControlPlane;
 use crate::dispatch::Invocation;
 use crate::messagebus::{
-    AdvertiseBinding, FindBindings, MessageBus, SetAuthorizer, SetKey, Unsubscribe, OP_BIND_ACTOR,
+    AdvertiseLink, FindLinks, MessageBus, SetAuthorizer, SetKey, Unsubscribe, OP_BIND_ACTOR,
 };
 use crate::middleware::Middleware;
 use crate::oci::fetch_oci_bytes;
@@ -63,7 +63,7 @@ pub(crate) struct StopActor {
 #[rtype(result = "()")]
 pub(crate) struct StopProvider {
     pub provider_ref: String,
-    pub binding: String,
+    pub link: String,
     pub contract_id: String,
 }
 
@@ -187,7 +187,7 @@ impl Handler<StopProvider> for HostController {
                         interest: WasccEntity::Capability {
                             id: pk.to_string(),
                             contract_id: msg.contract_id.to_string(),
-                            binding: msg.binding.to_string(),
+                            link: msg.link.to_string(),
                         },
                     })
                     .await;
@@ -311,7 +311,7 @@ impl Handler<StartProvider> for HostController {
         let mw = self.mw_chain.clone();
         let provider = msg.provider;
         let provider_id = provider.claims.subject.to_string();
-        let binding_name = provider.binding_name.to_string();
+        let link_name = provider.link_name.to_string();
         let imageref = msg.image_ref.clone();
         let ir2 = imageref.clone();
         let pid = provider_id.to_string();
@@ -325,7 +325,7 @@ impl Handler<StartProvider> for HostController {
                     seed.to_string(),
                     imageref.clone(),
                     provider_id.to_string(),
-                    binding_name.to_string(),
+                    link_name.to_string(),
                 )
                 .await
             }
@@ -349,7 +349,7 @@ async fn initialize_provider(
     seed: String,
     image_ref: Option<String>,
     provider_id: String,
-    binding_name: String,
+    link_name: String,
 ) -> Result<Addr<NativeCapabilityHost>> {
     let new_provider = SyncArbiter::start(1, || NativeCapabilityHost::new());
     let im = crate::capability::native_host::Initialize {
@@ -365,27 +365,27 @@ async fn initialize_provider(
     };
 
     let b = MessageBus::from_registry();
-    let bindings = b
-        .send(FindBindings {
+    let links = b
+        .send(FindLinks {
             provider_id: provider_id.to_string(),
-            binding_name: binding_name.to_string(),
+            link_name: link_name.to_string(),
         })
         .await;
-    if let Ok(bindings) = bindings {
-        trace!("Re-applying bindings to provider {}", &provider_id);
+    if let Ok(links) = links {
+        trace!("Re-applying links to provider {}", &provider_id);
         let k = KeyPair::from_seed(&seed)?;
-        reinvoke_bindings(
+        reinvoke_links(
             &k,
             new_provider.clone().recipient(),
             &provider_id,
             &capid,
-            &binding_name,
-            bindings.bindings,
+            &link_name,
+            links.links,
         )
         .await;
         Ok(new_provider)
     } else {
-        Err("Failed to obtain list of bindings for re-invoke from message bus".into())
+        Err("Failed to obtain list of links for re-invoke from message bus".into())
     }
 }
 
@@ -403,17 +403,17 @@ pub(crate) fn detect_core_host_labels() -> HashMap<String, String> {
     hm
 }
 
-// Examine the bindings cache for anything that applies to this specific provider and, if so, generate a binding
+// Examine the links cache for anything that applies to this specific provider and, if so, generate a link
 // invocation for it and send it to the provider
-async fn reinvoke_bindings(
+async fn reinvoke_links(
     key: &KeyPair,
     target: Recipient<Invocation>,
     provider_id: &str,
     contract_id: &str,
-    binding: &str,
-    existing_bindings: Vec<(String, HashMap<String, String>)>,
+    link: &str,
+    existing_links: Vec<(String, HashMap<String, String>)>,
 ) {
-    for (actor, vals) in existing_bindings.iter() {
+    for (actor, vals) in existing_links.iter() {
         trace!("Re-invoking bind_actor {}->{}", actor, provider_id);
         let config = crate::generated::core::CapabilityConfiguration {
             module: actor.to_string(),
@@ -425,14 +425,14 @@ async fn reinvoke_bindings(
             WasccEntity::Capability {
                 id: provider_id.to_string(),
                 contract_id: contract_id.to_string(),
-                binding: binding.to_string(),
+                link: link.to_string(),
             },
             OP_BIND_ACTOR,
             crate::generated::core::serialize(&config).unwrap(),
         );
         if let Err(_e) = target.clone().send(inv).await {
             error!(
-                "Mailbox failure sending binding re-invoke for {} -> {}",
+                "Mailbox failure sending link re-invoke for {} -> {}",
                 actor, provider_id
             );
         }

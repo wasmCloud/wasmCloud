@@ -1,5 +1,5 @@
 use crate::host_controller::{StartActor, StartProvider};
-use crate::messagebus::AdvertiseBinding;
+use crate::messagebus::AdvertiseLink;
 use crate::oci::fetch_oci_bytes;
 use crate::NativeCapability;
 use provider_archive::ProviderArchive;
@@ -14,23 +14,23 @@ pub struct HostManifest {
     pub labels: HashMap<String, String>,
     pub actors: Vec<String>,
     pub capabilities: Vec<Capability>,
-    pub bindings: Vec<BindingEntry>,
+    pub links: Vec<LinkEntry>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Capability {
     pub image_ref: String,
-    pub binding_name: Option<String>,
+    pub link_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BindingEntry {
+pub struct LinkEntry {
     pub actor: String,
     pub contract_id: String,
     pub provider_id: String,
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub binding_name: Option<String>,
+    pub link_name: Option<String>,
     pub values: Option<HashMap<String, String>>,
 }
 
@@ -115,7 +115,7 @@ pub(crate) async fn generate_provider_start_messages(
             // read PAR from disk
             if let Ok(prov) = file_bytes(&p)
                 .and_then(|bytes| ProviderArchive::try_load(&bytes))
-                .and_then(|par| NativeCapability::from_archive(&par, cap.binding_name.clone()))
+                .and_then(|par| NativeCapability::from_archive(&par, cap.link_name.clone()))
             {
                 v.push(StartProvider {
                     provider: prov,
@@ -127,7 +127,7 @@ pub(crate) async fn generate_provider_start_messages(
             if let Ok(prov) = fetch_oci_bytes(&cap.image_ref, allow_latest)
                 .await
                 .and_then(|bytes| ProviderArchive::try_load(&bytes))
-                .and_then(|par| NativeCapability::from_archive(&par, cap.binding_name.clone()))
+                .and_then(|par| NativeCapability::from_archive(&par, cap.link_name.clone()))
             {
                 v.push(StartProvider {
                     provider: prov,
@@ -140,17 +140,15 @@ pub(crate) async fn generate_provider_start_messages(
     v
 }
 
-pub(crate) async fn generate_adv_binding_messages(
-    manifest: &HostManifest,
-) -> Vec<AdvertiseBinding> {
+pub(crate) async fn generate_adv_link_messages(manifest: &HostManifest) -> Vec<AdvertiseLink> {
     manifest
-        .bindings
+        .links
         .iter()
-        .map(|config| AdvertiseBinding {
+        .map(|config| AdvertiseLink {
             contract_id: config.contract_id.to_string(),
             actor: config.actor.to_string(),
-            binding_name: config
-                .binding_name
+            link_name: config
+                .link_name
                 .as_ref()
                 .unwrap_or(&"default".to_string())
                 .to_string(),
@@ -169,7 +167,7 @@ fn file_bytes(path: &Path) -> crate::Result<Vec<u8>> {
 
 #[cfg(test)]
 mod test {
-    use super::{BindingEntry, Capability};
+    use super::{Capability, LinkEntry};
     use std::collections::HashMap;
 
     #[test]
@@ -180,23 +178,23 @@ mod test {
             capabilities: vec![
                 Capability {
                     image_ref: "one".to_string(),
-                    binding_name: Some("default".to_string()),
+                    link_name: Some("default".to_string()),
                 },
                 Capability {
                     image_ref: "two".to_string(),
-                    binding_name: Some("default".to_string()),
+                    link_name: Some("default".to_string()),
                 },
             ],
-            bindings: vec![BindingEntry {
+            links: vec![LinkEntry {
                 actor: "a".to_string(),
                 contract_id: "wascc:one".to_string(),
                 provider_id: "Vxxxone".to_string(),
                 values: Some(gen_values()),
-                binding_name: None,
+                link_name: None,
             }],
         };
         let yaml = serde_yaml::to_string(&manifest).unwrap();
-        assert_eq!(yaml, "---\nactors:\n  - a\n  - b\n  - c\ncapabilities:\n  - image_ref: one\n    binding_name: default\n  - image_ref: two\n    binding_name: default\nbindings:\n  - actor: a\n    contract_id: \"wascc:one\"\n    provider_id: Vxxxone\n    values:\n      ROOT: /tmp");
+        assert_eq!(yaml, "---\nactors:\n  - a\n  - b\n  - c\ncapabilities:\n  - image_ref: one\n    link_name: default\n  - image_ref: two\n    link_name: default\nlinks:\n  - actor: a\n    contract_id: \"wascc:one\"\n    provider_id: Vxxxone\n    values:\n      ROOT: /tmp");
     }
 
     #[test]
@@ -211,23 +209,23 @@ mod test {
             capabilities: vec![
                 Capability {
                     image_ref: "one".to_string(),
-                    binding_name: Some("default".to_string()),
+                    link_name: Some("default".to_string()),
                 },
                 Capability {
                     image_ref: "two".to_string(),
-                    binding_name: Some("default".to_string()),
+                    link_name: Some("default".to_string()),
                 },
             ],
-            bindings: vec![BindingEntry {
+            links: vec![LinkEntry {
                 actor: "a".to_string(),
                 contract_id: "wascc:one".to_string(),
                 provider_id: "VxxxxONE".to_string(),
                 values: Some(gen_values()),
-                binding_name: Some("default".to_string()),
+                link_name: Some("default".to_string()),
             }],
         };
         let yaml = serde_yaml::to_string(&manifest).unwrap();
-        assert_eq!(yaml, "---\nlabels:\n  test: value\nactors:\n  - a\n  - b\n  - c\ncapabilities:\n  - image_ref: one\n    binding_name: default\n  - image_ref: two\n    binding_name: default\nbindings:\n  - actor: a\n    contract_id: \"wascc:one\"\n    provider_id: VxxxxONE\n    binding_name: default\n    values:\n      ROOT: /tmp");
+        assert_eq!(yaml, "---\nlabels:\n  test: value\nactors:\n  - a\n  - b\n  - c\ncapabilities:\n  - image_ref: one\n    link_name: default\n  - image_ref: two\n    link_name: default\nlinks:\n  - actor: a\n    contract_id: \"wascc:one\"\n    provider_id: VxxxxONE\n    link_name: default\n    values:\n      ROOT: /tmp");
     }
 
     #[test]

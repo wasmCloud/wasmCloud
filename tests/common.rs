@@ -80,10 +80,10 @@ pub async fn gen_kvcounter_host(
     h.start_native_capability(redis).await?;
     h.start_native_capability(websrv).await?;
     await_provider_count(&h, 3, Duration::from_millis(50), 3).await?; // 2 providers plus wascc:extras
-    h.set_binding(&kvcounter_key, "wascc:keyvalue", None, redis_id, values)
+    h.set_link(&kvcounter_key, "wascc:keyvalue", None, redis_id, values)
         .await?;
 
-    h.set_binding(
+    h.set_link(
         &kvcounter_key,
         "wascc:http_server",
         None,

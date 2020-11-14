@@ -63,7 +63,7 @@ impl Actor for NativeCapabilityHost {
         let cp = ControlPlane::from_registry();
         cp.do_send(PublishEvent {
             event: ControlEvent::ProviderStopped {
-                binding_name: state.cap.binding_name.to_string(),
+                link_name: state.cap.link_name.to_string(),
                 provider_id: state.cap.claims.subject.to_string(),
                 contract_id: state.descriptor.id.to_string(),
                 reason: TerminationReason::Requested,
@@ -109,7 +109,7 @@ impl Handler<Initialize> for NativeCapabilityHost {
         let entity = WasccEntity::Capability {
             id: state.cap.claims.subject.to_string(),
             contract_id: state.descriptor.id.to_string(),
-            binding: state.cap.binding_name.to_string(),
+            link: state.cap.link_name.to_string(),
         };
 
         let nativedispatch = ProviderDispatcher::new(
@@ -142,7 +142,7 @@ impl Handler<Initialize> for NativeCapabilityHost {
         let cp = ControlPlane::from_registry();
         cp.do_send(PublishEvent {
             event: ControlEvent::ProviderStarted {
-                binding_name: state.cap.binding_name.to_string(),
+                link_name: state.cap.link_name.to_string(),
                 provider_id: state.cap.claims.subject.to_string(),
                 contract_id: state.descriptor.id.to_string(),
                 image_ref: state.image_ref.clone(),
@@ -172,7 +172,7 @@ impl Handler<Invocation> for NativeCapabilityHost {
             if let WasccEntity::Capability {
                 id,
                 contract_id,
-                binding,
+                link,
             } = &inv.target
             {
                 if id != &state.cap.id() {
@@ -254,7 +254,7 @@ mod test {
             WasccEntity::Capability {
                 id: "VDHPKGFKDI34Y4RN4PWWZHRYZ6373HYRSNNEM4UTDLLOGO5B37TSVREP".to_string(),
                 contract_id: "wascc:extras".to_string(),
-                binding: "default".to_string(),
+                link: "default".to_string(),
             },
             OP_REQUEST_GUID,
             crate::generated::extras::serialize(&req).unwrap(),

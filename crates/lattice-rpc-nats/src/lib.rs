@@ -44,11 +44,11 @@ impl LatticeProvider for NatsLatticeProvider {
         unimplemented!()
     }
 
-    fn advertise_binding(
+    fn advertise_link(
         &self,
         actor: &str,
         contract_id: &str,
-        binding_name: &str,
+        link_name: &str,
         provider_id: &str,
         values: HashMap<String, String, RandomState>,
     ) -> Result<()> {

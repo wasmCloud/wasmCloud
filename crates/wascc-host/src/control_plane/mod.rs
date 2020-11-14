@@ -62,7 +62,7 @@ impl ControlInterface {
         Ok(())
     }
 
-    pub fn get_known_bindings(&self) -> Result<()> {
+    pub fn get_known_links(&self) -> Result<()> {
         Ok(())
     }
 }

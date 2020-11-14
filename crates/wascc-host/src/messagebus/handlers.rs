@@ -1,12 +1,12 @@
 use super::MessageBus;
 use crate::auth::Authorizer;
-use crate::capability::binding_cache::BindingCache;
+use crate::capability::link_cache::LinkCache;
 use crate::dispatch::{BusDispatcher, Invocation, InvocationResponse, WasccEntity};
 use crate::host_controller::{HostController, MintInvocationRequest};
 use crate::messagebus::{
-    AdvertiseBinding, AdvertiseClaims, FindBindings, FindBindingsResponse, LookupBinding,
-    PutClaims, QueryActors, QueryProviders, QueryResponse, SetAuthorizer, SetKey, SetProvider,
-    Subscribe, Unsubscribe,
+    AdvertiseClaims, AdvertiseLink, FindLinks, FindLinksResponse, LookupLink, PutClaims,
+    QueryActors, QueryProviders, QueryResponse, SetAuthorizer, SetKey, SetProvider, Subscribe,
+    Unsubscribe,
 };
 use crate::{auth, Result, SYSTEM_ACTOR};
 use actix::dev::{MessageResponse, ResponseChannel};
@@ -38,19 +38,17 @@ impl Actor for MessageBus {
     type Context = Context<Self>;
 }
 
-impl Handler<FindBindings> for MessageBus {
-    type Result = FindBindingsResponse;
+impl Handler<FindLinks> for MessageBus {
+    type Result = FindLinksResponse;
 
-    fn handle(&mut self, msg: FindBindings, _ctx: &mut Context<Self>) -> Self::Result {
+    fn handle(&mut self, msg: FindLinks, _ctx: &mut Context<Self>) -> Self::Result {
         println!(
-            "Looking for bindings {:?} - cache size {}",
-            &self.binding_cache,
-            self.binding_cache.len()
+            "Looking for links {:?} - cache size {}",
+            &self.link_cache,
+            self.link_cache.len()
         );
-        let res = self
-            .binding_cache
-            .find_bindings(&msg.binding_name, &msg.provider_id);
-        FindBindingsResponse { bindings: res }
+        let res = self.link_cache.find_links(&msg.link_name, &msg.provider_id);
+        FindLinksResponse { links: res }
     }
 }
 
@@ -113,62 +111,58 @@ impl Handler<SetAuthorizer> for MessageBus {
     }
 }
 
-impl Handler<AdvertiseBinding> for MessageBus {
+impl Handler<AdvertiseLink> for MessageBus {
     type Result = ResponseActFuture<Self, Result<()>>;
 
-    fn handle(&mut self, msg: AdvertiseBinding, ctx: &mut Context<Self>) -> Self::Result {
+    fn handle(&mut self, msg: AdvertiseLink, ctx: &mut Context<Self>) -> Self::Result {
         let target = WasccEntity::Capability {
             id: msg.provider_id.to_string(),
             contract_id: msg.contract_id.to_string(),
-            binding: msg.binding_name.to_string(),
+            link: msg.link_name.to_string(),
         };
-        // If there's a lattice provider, tell that provider to advertise said binding
-        // if we fail to advertise the binding on the lattice, return and error and skip
-        // the local binding code below.
+        // If there's a lattice provider, tell that provider to advertise said link
+        // if we fail to advertise the link on the lattice, return and error and skip
+        // the local link code below.
         if let Some(ref lp) = self.provider {
-            if let Err(e) = lp.advertise_binding(
+            if let Err(e) = lp.advertise_link(
                 &msg.actor,
                 &msg.contract_id,
-                &msg.binding_name,
+                &msg.link_name,
                 &msg.provider_id,
                 msg.values.clone(),
             ) {
-                error!("Failed to advertise binding on the lattice: {}", e);
+                error!("Failed to advertise link on the lattice: {}", e);
                 return Box::pin(async move { Err(e) }.into_actor(self));
             }
         }
 
-        self.binding_cache.add_binding(
+        self.link_cache.add_link(
             &msg.actor,
             &msg.contract_id,
-            &msg.binding_name,
+            &msg.link_name,
             &msg.provider_id,
             msg.values.clone(),
         );
 
         if let Some(t) = self.subscribers.get(&target) {
-            let req = super::utils::generate_binding_invocation(
-                t,
-                &msg,
-                self.key.as_ref().unwrap(),
-                target,
-            );
+            let req =
+                super::utils::generate_link_invocation(t, &msg, self.key.as_ref().unwrap(), target);
             Box::pin(req.into_actor(self).map(move |res, act, _ctx| match res {
                 Ok(ir) => {
                     if let Some(er) = ir.error {
-                        Err(format!("Failed to set binding: {}", er).into())
+                        Err(format!("Failed to set link: {}", er).into())
                     } else {
                         Ok(())
                     }
                 }
-                Err(_) => Err("Mailbox error setting binding".into()),
+                Err(_) => Err("Mailbox error setting link".into()),
             }))
         } else {
             // No _local_ subscriber found for this target.
             let is_none = self.provider.as_ref().is_none();
             Box::pin( async move {
                 if is_none {
-                    info!("No potential targets for advertised binding. Assuming this provider will be added later.");
+                    info!("No potential targets for advertised link. Assuming this provider will be added later.");
                 }
                 Ok(())
             }.into_actor(self))
@@ -263,12 +257,12 @@ impl Handler<Invocation> for MessageBus {
     }
 }
 
-impl Handler<LookupBinding> for MessageBus {
+impl Handler<LookupLink> for MessageBus {
     type Result = Option<String>;
 
-    fn handle(&mut self, msg: LookupBinding, ctx: &mut Self::Context) -> Self::Result {
-        self.binding_cache
-            .find_provider_id(&msg.actor, &msg.contract_id, &msg.binding_name)
+    fn handle(&mut self, msg: LookupLink, ctx: &mut Self::Context) -> Self::Result {
+        self.link_cache
+            .find_provider_id(&msg.actor, &msg.contract_id, &msg.link_name)
     }
 }
 
@@ -370,11 +364,11 @@ mod test {
             Ok(())
         }
 
-        fn advertise_binding(
+        fn advertise_link(
             &self,
             actor: &str,
             contract_id: &str,
-            binding_name: &str,
+            link_name: &str,
             provider_id: &str,
             values: HashMap<String, String, RandomState>,
         ) -> Result<()> {

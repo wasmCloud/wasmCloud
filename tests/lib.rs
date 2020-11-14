@@ -16,8 +16,8 @@ async fn kvcounter_basic() -> Result<()> {
 }
 
 #[actix_rt::test]
-async fn kvcounter_binding_first() -> Result<()> {
-    no_lattice::kvcounter_binding_first().await
+async fn kvcounter_link_first() -> Result<()> {
+    no_lattice::kvcounter_link_first().await
 }
 
 #[actix_rt::test]
