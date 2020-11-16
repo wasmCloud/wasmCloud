@@ -118,7 +118,7 @@ impl Handler<AdvertiseLink> for MessageBus {
         let target = WasccEntity::Capability {
             id: msg.provider_id.to_string(),
             contract_id: msg.contract_id.to_string(),
-            link: msg.link_name.to_string(),
+            link_name: msg.link_name.to_string(),
         };
         // If there's a lattice provider, tell that provider to advertise said link
         // if we fail to advertise the link on the lattice, return and error and skip

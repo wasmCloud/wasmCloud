@@ -109,7 +109,7 @@ impl Handler<Initialize> for NativeCapabilityHost {
         let entity = WasccEntity::Capability {
             id: state.cap.claims.subject.to_string(),
             contract_id: state.descriptor.id.to_string(),
-            link: state.cap.link_name.to_string(),
+            link_name: state.cap.link_name.to_string(),
         };
 
         let nativedispatch = ProviderDispatcher::new(
@@ -172,7 +172,7 @@ impl Handler<Invocation> for NativeCapabilityHost {
             if let WasccEntity::Capability {
                 id,
                 contract_id,
-                link,
+                link_name,
             } = &inv.target
             {
                 if id != &state.cap.id() {

@@ -187,7 +187,7 @@ impl Handler<StopProvider> for HostController {
                         interest: WasccEntity::Capability {
                             id: pk.to_string(),
                             contract_id: msg.contract_id.to_string(),
-                            link: msg.link.to_string(),
+                            link_name: msg.link.to_string(),
                         },
                     })
                     .await;
@@ -410,7 +410,7 @@ async fn reinvoke_links(
     target: Recipient<Invocation>,
     provider_id: &str,
     contract_id: &str,
-    link: &str,
+    link_name: &str,
     existing_links: Vec<(String, HashMap<String, String>)>,
 ) {
     for (actor, vals) in existing_links.iter() {
@@ -425,7 +425,7 @@ async fn reinvoke_links(
             WasccEntity::Capability {
                 id: provider_id.to_string(),
                 contract_id: contract_id.to_string(),
-                link: link.to_string(),
+                link_name: link_name.to_string(),
             },
             OP_BIND_ACTOR,
             crate::generated::core::serialize(&config).unwrap(),
