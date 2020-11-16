@@ -54,6 +54,7 @@ provider-archive = "0.3.0"
 redis = "0.17.0"
 reqwest = { version = "0.10"}
 uuid = { version = "0.8", features = ["serde", "v4"] }
+nats = "0.8.3"
 
 [workspace]
 members = [

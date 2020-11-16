@@ -1,6 +1,7 @@
 mod common;
 mod generated;
 mod no_lattice;
+mod with_lattice;
 
 use std::error::Error;
 use wascc_host::{HostBuilder, Result};
@@ -23,4 +24,9 @@ async fn kvcounter_binding_first() -> Result<()> {
 #[actix_rt::test]
 async fn kvcounter_start_stop() -> Result<()> {
     no_lattice::kvcounter_start_stop().await
+}
+
+#[actix_rt::test]
+async fn distributed_echo() -> Result<()> {
+    with_lattice::distributed_echo().await
 }

@@ -16,13 +16,13 @@ pub trait LatticeProvider: Sync + Send {
     fn init(&mut self, dispatcher: BusDispatcher);
     fn name(&self) -> String;
     fn rpc(&self, inv: &Invocation) -> Result<InvocationResponse>;
-    fn register_rpc_listener(&self, subscriber: &WasccEntity) -> Result<()>;
-    fn remove_rpc_listener(&self, subscriber: &WasccEntity) -> Result<()>;
-    fn advertise_binding(
+    fn register_rpc_listener(&mut self, subscriber: &WasccEntity) -> Result<()>;
+    fn remove_rpc_listener(&mut self, subscriber: &WasccEntity) -> Result<()>;
+    fn advertise_link(
         &self,
         actor: &str,
         contract_id: &str,
-        binding_name: &str,
+        link_name: &str,
         provider_id: &str,
         values: HashMap<String, String>,
     ) -> Result<()>;
@@ -100,6 +100,16 @@ pub struct LookupBinding {
 #[derive(Message)]
 #[rtype(result = "Result<()>")]
 pub struct AdvertiseBinding {
+    pub contract_id: String,
+    pub actor: String,
+    pub binding_name: String,
+    pub provider_id: String,
+    pub values: HashMap<String, String>,
+}
+
+#[derive(Message)]
+#[rtype(result = "()")]
+pub struct PutLink {
     pub contract_id: String,
     pub actor: String,
     pub binding_name: String,

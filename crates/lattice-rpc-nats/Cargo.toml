@@ -7,4 +7,7 @@ edition = "2018"
 [dependencies]
 wascc-host = { path = "../wascc-host"}
 wascap = "0.5.1"
-nats = "0.8.1"
+nats = "0.8.3"
+serde = { version = "1.0.117", features = ["derive"] }
+rmp-serde = "0.14.4"
+log = "0.4.11"

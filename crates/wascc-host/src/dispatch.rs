@@ -1,5 +1,5 @@
 use crate::errors::{self, ErrorKind};
-use crate::messagebus::{LookupBinding, MessageBus, OP_BIND_ACTOR};
+use crate::messagebus::{LookupBinding, MessageBus, PutClaims, PutLink, OP_BIND_ACTOR};
 use crate::{Result, SYSTEM_ACTOR};
 use actix::dev::{MessageResponse, ResponseChannel};
 use actix::prelude::*;
@@ -22,8 +22,9 @@ pub const CONFIG_WASCC_CLAIMS_NAME: &str = "__wascc_name";
 pub const CONFIG_WASCC_CLAIMS_EXPIRES: &str = "__wascc_expires";
 pub const CONFIG_WASCC_CLAIMS_TAGS: &str = "__wascc_tags";
 
+#[derive(Clone)]
 pub struct BusDispatcher {
-    pub(crate) addr: Recipient<Invocation>,
+    pub(crate) addr: Addr<MessageBus>,
 }
 
 impl BusDispatcher {
@@ -35,15 +36,17 @@ impl BusDispatcher {
     /// could potentially become a remote procedure call. Typically this function is called
     /// in response to receiving a serialized invocation on a given target's RPC subscription
     /// topic
-    pub async fn invoke(&self, inv: &Invocation) -> InvocationResponse {
-        match self.addr.send(inv.clone()).await {
-            Ok(ir) => ir,
-            Err(e) => InvocationResponse::error(&inv, "Mailbox error calling invocation"),
-        }
+    pub fn invoke(&self, inv: &Invocation) -> InvocationResponse {
+        block_on(async move {
+            match self.addr.send(inv.clone()).await {
+                Ok(ir) => ir,
+                Err(e) => InvocationResponse::error(&inv, "Mailbox error calling invocation"),
+            }
+        })
     }
 
     /// Notifies the host that a binding was received from the lattice
-    pub async fn notify_binding_update(
+    pub fn notify_binding_update(
         &self,
         actor: &str,
         contract_id: &str,
@@ -51,10 +54,26 @@ impl BusDispatcher {
         binding_name: &str,
         values: HashMap<String, String>,
     ) {
+        block_on(async move {
+            let _ = self
+                .addr
+                .send(PutLink {
+                    contract_id: contract_id.to_string(),
+                    actor: actor.to_string(),
+                    binding_name: binding_name.to_string(),
+                    provider_id: provider_id.to_string(),
+                    values,
+                })
+                .await;
+        });
     }
 
     /// Notifies the host that a set of actor claims were received from the lattice
-    pub async fn notify_claims_received(&self, claims: Claims<wascap::jwt::Actor>) {}
+    pub fn notify_claims_received(&self, claims: Claims<wascap::jwt::Actor>) {
+        block_on(async move {
+            let _ = self.addr.send(PutClaims { claims }).await;
+        })
+    }
 }
 
 pub struct ProviderDispatcher {

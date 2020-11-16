@@ -5,8 +5,8 @@ use crate::dispatch::{BusDispatcher, Invocation, InvocationResponse, WasccEntity
 use crate::host_controller::{HostController, MintInvocationRequest};
 use crate::messagebus::{
     AdvertiseBinding, AdvertiseClaims, FindBindings, FindBindingsResponse, LookupBinding,
-    PutClaims, QueryActors, QueryProviders, QueryResponse, SetAuthorizer, SetKey, SetProvider,
-    Subscribe, Unsubscribe,
+    PutClaims, PutLink, QueryActors, QueryProviders, QueryResponse, SetAuthorizer, SetKey,
+    SetProvider, Subscribe, Unsubscribe,
 };
 use crate::{auth, Result, SYSTEM_ACTOR};
 use actix::dev::{MessageResponse, ResponseChannel};
@@ -71,12 +71,28 @@ impl Handler<QueryActors> for MessageBus {
     }
 }
 
+// Receive a notification of claims
 impl Handler<PutClaims> for MessageBus {
     type Result = ();
 
     fn handle(&mut self, msg: PutClaims, _ctx: &mut Context<Self>) {
         self.claims_cache
             .insert(msg.claims.subject.to_string(), msg.claims);
+    }
+}
+
+// Receive a link definition through an advertisement
+impl Handler<PutLink> for MessageBus {
+    type Result = ();
+
+    fn handle(&mut self, msg: PutLink, _ctx: &mut Context<Self>) {
+        self.binding_cache.add_binding(
+            &msg.actor,
+            &msg.contract_id,
+            &msg.binding_name,
+            &msg.provider_id,
+            msg.values.clone(),
+        );
     }
 }
 
@@ -126,7 +142,7 @@ impl Handler<AdvertiseBinding> for MessageBus {
         // if we fail to advertise the binding on the lattice, return and error and skip
         // the local binding code below.
         if let Some(ref lp) = self.provider {
-            if let Err(e) = lp.advertise_binding(
+            if let Err(e) = lp.advertise_link(
                 &msg.actor,
                 &msg.contract_id,
                 &msg.binding_name,
@@ -196,7 +212,7 @@ impl Handler<SetProvider> for MessageBus {
     fn handle(&mut self, msg: SetProvider, ctx: &mut Context<Self>) {
         self.provider = Some(msg.provider);
         self.provider.as_mut().unwrap().init(BusDispatcher {
-            addr: ctx.address().recipient().clone(),
+            addr: ctx.address().clone(),
         });
         info!(
             "Message bus using provider - {}",
@@ -279,7 +295,7 @@ impl Handler<Subscribe> for MessageBus {
         trace!("Bus registered interest for {}", &msg.interest.url());
         self.subscribers
             .insert(msg.interest.clone(), msg.subscriber.clone());
-        if let Some(ref lp) = self.provider {
+        if let Some(ref mut lp) = self.provider.as_mut() {
             if let Err(e) = lp.register_rpc_listener(&msg.interest) {
                 error!("Failed to register lattice interest for {} - actor should be considered unstable.", msg.interest.url());
             }
@@ -297,7 +313,7 @@ impl Handler<Unsubscribe> for MessageBus {
             println!("{:?}", self.subscribers.keys());
             println!("did not remove subscriber {:?}", msg.interest);
         }
-        if let Some(ref lp) = self.provider {
+        if let Some(ref mut lp) = self.provider.as_mut() {
             if let Err(e) = lp.remove_rpc_listener(&msg.interest) {
                 error!(
                     "Failed to remove lattice interest for {} - lattice may be unstable.",

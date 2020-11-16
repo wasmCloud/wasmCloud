@@ -1,4 +1,4 @@
-use wascc_host::{PublishedEvent, ControlInterface, ControlPlaneProvider, Result};
+use wascc_host::{ControlInterface, ControlPlaneProvider, PublishedEvent, Result};
 
 pub struct NatsControlPlaneProvider {
     control: Option<ControlInterface>,
