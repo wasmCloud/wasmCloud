@@ -30,3 +30,8 @@ async fn kvcounter_start_stop() -> Result<()> {
 async fn distributed_echo() -> Result<()> {
     with_lattice::distributed_echo().await
 }
+
+#[actix_rt::test]
+async fn link_on_third_host() -> Result<()> {
+    with_lattice::link_on_third_host().await
+}
