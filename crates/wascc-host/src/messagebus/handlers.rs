@@ -2,11 +2,12 @@ use super::MessageBus;
 use crate::auth::Authorizer;
 use crate::capability::binding_cache::BindingCache;
 use crate::dispatch::{BusDispatcher, Invocation, InvocationResponse, WasccEntity};
+use crate::hlreg::HostLocalSystemService;
 use crate::host_controller::{HostController, MintInvocationRequest};
 use crate::messagebus::{
-    AdvertiseBinding, AdvertiseClaims, FindBindings, FindBindingsResponse, LookupBinding,
-    PutClaims, PutLink, QueryActors, QueryProviders, QueryResponse, SetAuthorizer, SetKey,
-    SetProvider, Subscribe, Unsubscribe,
+    AdvertiseBinding, AdvertiseClaims, FindBindings, FindBindingsResponse, Initialize,
+    LookupBinding, PutClaims, PutLink, QueryActors, QueryProviders, QueryResponse, Subscribe,
+    Unsubscribe,
 };
 use crate::{auth, Result, SYSTEM_ACTOR};
 use actix::dev::{MessageResponse, ResponseChannel};
@@ -33,6 +34,8 @@ impl SystemService for MessageBus {
         self.hb(ctx);
     }
 }
+
+impl HostLocalSystemService for MessageBus {}
 
 impl Actor for MessageBus {
     type Context = Context<Self>;
@@ -113,19 +116,23 @@ impl Handler<QueryProviders> for MessageBus {
     }
 }
 
-impl Handler<SetKey> for MessageBus {
+impl Handler<Initialize> for MessageBus {
     type Result = ();
 
-    fn handle(&mut self, msg: SetKey, _ctx: &mut Context<Self>) {
-        self.key = Some(msg.key)
-    }
-}
-
-impl Handler<SetAuthorizer> for MessageBus {
-    type Result = ();
-
-    fn handle(&mut self, msg: SetAuthorizer, _ctx: &mut Context<Self>) {
+    fn handle(&mut self, msg: Initialize, ctx: &mut Context<Self>) {
+        self.key = Some(msg.key);
         self.authorizer = Some(msg.auth);
+        self.provider = msg.provider;
+
+        if let Some(p) = self.provider.as_mut() {
+            p.init(BusDispatcher {
+                addr: ctx.address().clone(),
+            });
+            info!(
+                "Message bus using provider - {}",
+                self.provider.as_ref().unwrap().name()
+            );
+        }
     }
 }
 
@@ -206,21 +213,6 @@ impl Handler<AdvertiseClaims> for MessageBus {
     }
 }
 
-impl Handler<SetProvider> for MessageBus {
-    type Result = ();
-
-    fn handle(&mut self, msg: SetProvider, ctx: &mut Context<Self>) {
-        self.provider = Some(msg.provider);
-        self.provider.as_mut().unwrap().init(BusDispatcher {
-            addr: ctx.address().clone(),
-        });
-        info!(
-            "Message bus using provider - {}",
-            self.provider.as_ref().unwrap().name()
-        );
-    }
-}
-
 impl Handler<Invocation> for MessageBus {
     type Result = ResponseActFuture<Self, InvocationResponse>;
 
@@ -229,6 +221,7 @@ impl Handler<Invocation> for MessageBus {
     /// is not local, _and_ there is a lattice provider configured, then the bus will attempt
     /// to satisfy that call via RPC over lattice.
     fn handle(&mut self, msg: Invocation, _ctx: &mut Context<Self>) -> Self::Result {
+        println!("{}: Handling invocation from {} to {}", self.key.as_ref().unwrap().public_key(), msg.origin_url(), msg.target_url());
         if let Err(e) = auth::authorize_invocation(
             &msg,
             self.authorizer.as_ref().unwrap().clone(),
@@ -242,22 +235,25 @@ impl Handler<Invocation> for MessageBus {
                 }.into_actor(self)
             );
         }
-        match self.subscribers.get(&msg.target) {
-            Some(target) => Box::pin(target.send(msg.clone()).into_actor(self).map(
-                move |res, act, _ctx| {
-                    println!("Bus invocation - {:?}", res);
-                    if let Ok(r) = res {
-                        println!("success");
-                        r
-                    } else {
-                        println!("failure");
-                        InvocationResponse::error(
-                            &msg,
-                            "Mailbox error attempting to perform invocation",
-                        )
-                    }
-                },
-            )),
+        let subscribers = self.subscribers.clone();
+        match subscribers.get(&msg.target) {
+            Some(target) => {
+                println!("Bus local invocation");
+                Box::pin(target.send(msg.clone()).into_actor(self).map(
+                    move |res, act, _ctx| {
+                        if let Ok(r) = res {
+                            println!("success");
+                            r
+                        } else {
+                            println!("failure");
+                            InvocationResponse::error(
+                                &msg,
+                                "Mailbox error attempting to perform invocation",
+                            )
+                        }
+                    },
+                ))
+            },
             None => {
                 println!("deferring to lattice");
                 if let Some(ref l) = self.provider {

@@ -10,8 +10,13 @@ use wascap::jwt::Claims;
 use wascc_host::{
     BusDispatcher, Invocation, InvocationResponse, LatticeProvider, Result, WasccEntity,
 };
+use crossbeam_channel::{Sender, Receiver};
+
 #[macro_use]
 extern crate log;
+
+#[macro_use]
+extern crate crossbeam_channel;
 
 pub struct NatsLatticeProvider {
     ns_prefix: Option<String>,
@@ -21,12 +26,22 @@ pub struct NatsLatticeProvider {
     handlers: HashMap<String, Handler>,
 }
 
+
+struct RpcCall {
+    subject: String,
+    inv: Invocation,
+    timeout: Duration
+}
+
+struct Term;
+
 impl NatsLatticeProvider {
     pub fn new(
         ns_prefix: Option<String>,
         rpc_timeout: Duration,
         nc: nats::Connection,
     ) -> NatsLatticeProvider {
+
         NatsLatticeProvider {
             ns_prefix,
             dispatcher: None,
@@ -65,8 +80,8 @@ impl NatsLatticeProvider {
         format!("wasmbus.{}.claims", prefix)
     }
 
-    // All hosts should receive claims advertisements, so this is not a queue subscribe
-    fn handle_claims_advertisements(&self) -> Result<()> {
+    // All hosts should receive link advertisements, so this is not a queue subscribe
+    fn handle_links_advertisements(&self) -> Result<()> {
         let d = self.dispatcher.clone().unwrap();
         self.nc
             .subscribe(&self.links_subject())?
@@ -92,8 +107,8 @@ impl NatsLatticeProvider {
         Ok(())
     }
 
-    // All hosts should receive link advertisements, so this is not a queue subscribe
-    fn handle_links_advertisements(&self) -> Result<()> {
+    // All hosts should receive claims advertisements, so this is not a queue subscribe
+    fn handle_claims_advertisements(&self) -> Result<()> {
         let d = self.dispatcher.clone().unwrap();
         self.nc
             .subscribe(&self.claims_subject())?
@@ -131,23 +146,34 @@ impl LatticeProvider for NatsLatticeProvider {
 
     fn rpc(&self, inv: &Invocation) -> Result<InvocationResponse> {
         let bytes = serialize(&inv)?;
+        let subject = self.invoke_subject(&inv.target);
+        let timeout = self.rpc_timeout.clone();
+        let inv = inv.clone();
+        let res = self.nc.request_timeout(&subject, &bytes, timeout);
 
-        let res =
-            self.nc
-                .request_timeout(&self.invoke_subject(&inv.target), &bytes, self.rpc_timeout)?;
-
-        let ir: InvocationResponse = deserialize(&res.data)?;
-        Ok(ir)
+        match res {
+            Ok(r) => {
+                let ir: Result<InvocationResponse> = deserialize(&r.data);
+                ir
+            },
+            Err(e) => {
+                println!("Nats timeout");
+                Err("NaTS timeout".into())
+            }
+        }
     }
 
     fn register_rpc_listener(&mut self, subscriber: &WasccEntity) -> Result<()> {
         let subject = self.invoke_subject(&subscriber);
         let s = subject.clone();
         let d = self.dispatcher.clone().unwrap();
+        let nc = self.nc.clone();
+
         let handler = self
             .nc
             .queue_subscribe(&subject, &subject)?
             .with_handler(move |msg| {
+                println!("Received inbound RPC");
                 let inv: Invocation = match deserialize(&msg.data) {
                     Ok(i) => i,
                     Err(_) => {
@@ -157,12 +183,24 @@ impl LatticeProvider for NatsLatticeProvider {
                         ))
                     }
                 };
+                println!("Deserialized invocation {:?}", inv);
                 let res = d.invoke(&inv);
-                if msg.reply.is_some() {
-                    msg.respond(&serialize(res).unwrap())?;
+                println!("Got a response: {:?}", res);
+                if let Some(ref s) = msg.reply {
+                    println!("REPLY: {}", s);
                 }
+                if let Ok(r) = serialize(res) {
+                    println!("RESPONDING");
+                    msg.respond(&r)?;
+                    nc.drain();
+                } else {
+                    println!("Failed to serialize invocation response");
+                }
+
+                nc.flush()?;
                 Ok(())
             });
+
         self.handlers.insert(s, handler);
 
         Ok(())
@@ -192,6 +230,7 @@ impl LatticeProvider for NatsLatticeProvider {
             provider_id: provider_id.to_string(),
             values,
         };
+        println!("Advertised link!! {:?}", ld);
         self.nc
             .publish(&self.links_subject(), &serialize(&ld).unwrap())?;
         Ok(())

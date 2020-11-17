@@ -5,6 +5,7 @@ mod control_plane;
 mod dispatch;
 mod errors;
 mod generated;
+mod hlreg;
 mod host;
 mod host_controller;
 mod manifest;

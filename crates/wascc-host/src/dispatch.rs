@@ -1,4 +1,5 @@
 use crate::errors::{self, ErrorKind};
+use crate::hlreg::HostLocalSystemService;
 use crate::messagebus::{LookupBinding, MessageBus, PutClaims, PutLink, OP_BIND_ACTOR};
 use crate::{Result, SYSTEM_ACTOR};
 use actix::dev::{MessageResponse, ResponseChannel};
@@ -28,18 +29,19 @@ pub struct BusDispatcher {
 }
 
 impl BusDispatcher {
-    // NOTE: the lattice provider using the bus dispatcher doesn't need to fabricate
-    // new invocations (so it doesn't need a host key), it's de-serializing them off
-    // the wire.
-
     /// Use this function to send an invocation through the host's message bus, which
     /// could potentially become a remote procedure call. Typically this function is called
     /// in response to receiving a serialized invocation on a given target's RPC subscription
     /// topic
     pub fn invoke(&self, inv: &Invocation) -> InvocationResponse {
+        println!("Passing invocation from lattice to internal bus");
+
         block_on(async move {
             match self.addr.send(inv.clone()).await {
-                Ok(ir) => ir,
+                Ok(ir) => {
+                    println!("Got a response from the bus: {:?}", ir);
+                    ir
+                },
                 Err(e) => InvocationResponse::error(&inv, "Mailbox error calling invocation"),
             }
         })
@@ -103,8 +105,14 @@ impl Dispatcher for ProviderDispatcher {
             msg.to_vec(),
         );
         match block_on(async { self.addr.send(inv).await.map(|ir| ir.msg) }) {
-            Ok(v) => Ok(v),
-            Err(e) => Err("Mailbox error during host callback".into()),
+            Ok(v) => {
+                println!("Back from dispatch {}", v.len());
+                Ok(v)
+            },
+            Err(e) => {
+                println!("Mailbox error");
+                Err("Mailbox error during host callback".into())
+            },
         }
     }
 }
@@ -346,7 +354,7 @@ pub(crate) fn wapc_host_callback(
 
     // Look up the public key of the provider bound to the origin actor
     // for the given capability contract ID.
-    let bus = MessageBus::from_registry();
+    let bus = MessageBus::from_hostlocal_registry(&kp.public_key());
     let prov = block_on(async {
         bus.send(LookupBinding {
             contract_id: namespace.to_string(),

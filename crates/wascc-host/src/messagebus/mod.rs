@@ -65,8 +65,10 @@ where
 
 #[derive(Message)]
 #[rtype(result = "()")]
-pub struct SetProvider {
-    pub provider: Box<dyn LatticeProvider>,
+pub struct Initialize {
+    pub provider: Option<Box<dyn LatticeProvider>>,
+    pub key: KeyPair,
+    pub auth: Box<dyn Authorizer>,
 }
 
 #[derive(Message)]
@@ -145,16 +147,4 @@ where
             tx.send(self);
         }
     }
-}
-
-#[derive(Message)]
-#[rtype(result = "()")]
-pub struct SetKey {
-    pub key: KeyPair,
-}
-
-#[derive(Message)]
-#[rtype(result = "()")]
-pub struct SetAuthorizer {
-    pub auth: Box<dyn Authorizer>,
 }

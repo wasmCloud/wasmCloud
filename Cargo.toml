@@ -55,6 +55,8 @@ redis = "0.17.0"
 reqwest = { version = "0.10"}
 uuid = { version = "0.8", features = ["serde", "v4"] }
 nats = "0.8.3"
+wascc-httpsrv = { git = "https://github.com/wascc/capability-providers", branch = "main", features = ["static_plugin"]}
+
 
 [workspace]
 members = [

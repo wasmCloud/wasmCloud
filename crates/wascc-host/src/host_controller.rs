@@ -4,9 +4,8 @@ use crate::capability::extras::ExtrasCapabilityProvider;
 use crate::capability::native_host::NativeCapabilityHost;
 use crate::control_plane::cpactor::ControlPlane;
 use crate::dispatch::Invocation;
-use crate::messagebus::{
-    AdvertiseBinding, FindBindings, MessageBus, SetAuthorizer, SetKey, Unsubscribe, OP_BIND_ACTOR,
-};
+use crate::hlreg::HostLocalSystemService;
+use crate::messagebus::{AdvertiseBinding, FindBindings, MessageBus, Unsubscribe, OP_BIND_ACTOR};
 use crate::middleware::Middleware;
 use crate::oci::fetch_oci_bytes;
 use crate::{HostManifest, NativeCapability, Result, WasccEntity, SYSTEM_ACTOR};
@@ -31,6 +30,14 @@ pub(crate) struct HostController {
     providers: HashMap<String, Addr<NativeCapabilityHost>>,
     authorizer: Option<Box<dyn Authorizer>>,
     image_refs: HashMap<String, String>,
+}
+
+#[derive(Message)]
+#[rtype(result = "()")]
+pub(crate) struct Initialize {
+    pub labels: HashMap<String, String>,
+    pub auth: Box<dyn Authorizer>,
+    pub kp: KeyPair,
 }
 
 #[derive(Message)]
@@ -84,48 +91,25 @@ impl Supervised for HostController {}
 
 impl SystemService for HostController {
     fn service_started(&mut self, ctx: &mut Context<Self>) {
-        let kp = KeyPair::new_server();
-        info!("Host Controller started - {}", kp.public_key());
-        let ks = kp.seed().unwrap();
-        let k2 = ks.clone();
-        self.kp = Some(kp);
+        info!("Host Controller started");
 
         // TODO: make this value configurable
         ctx.set_mailbox_capacity(100);
-
-        let b = MessageBus::from_registry();
-        b.do_send(SetKey {
-            key: KeyPair::from_seed(&k2).unwrap(),
-        });
-
-        let cp = ControlPlane::from_registry();
-        cp.do_send(SetKey {
-            key: KeyPair::from_seed(&k2).unwrap(),
-        });
-
-        let claims = crate::capability::extras::get_claims();
-        let pk = claims.subject.to_string();
-        // Start wascc:extras
-        let extras = SyncArbiter::start(1, move || {
-            // let k = KeyPair::from_seed(&ks).unwrap();
-            NativeCapabilityHost::new()
-        });
-        let claims = crate::capability::extras::get_claims();
-        let ex = ExtrasCapabilityProvider::default();
-        let cap = NativeCapability::from_instance(ex, Some("default".to_string()), claims).unwrap();
-        let init = crate::capability::native_host::Initialize {
-            cap: cap,
-            mw_chain: vec![],
-            seed: k2.to_string(),
-            image_ref: None,
-        };
-        extras.do_send(init);
-        self.providers.insert(pk.clone(), extras); // can't let this provider go out of scope, or the actix actor will stop
     }
 }
 
+impl HostLocalSystemService for HostController {}
+
 impl Actor for HostController {
     type Context = Context<Self>;
+}
+
+impl Handler<SetLabels> for HostController {
+    type Result = ();
+
+    fn handle(&mut self, msg: SetLabels, _ctx: &mut Context<Self>) -> Self::Result {
+        self.host_labels = msg.labels;
+    }
 }
 
 impl Handler<GetHostID> for HostController {
@@ -151,7 +135,7 @@ impl Handler<StopActor> for HostController {
         };
 
         // Ensure that this actor's interest is removed from the bus
-        let b = MessageBus::from_registry();
+        let b = MessageBus::from_hostlocal_registry(&self.kp.as_ref().unwrap().public_key());
         Box::pin(
             async move {
                 let _ = b
@@ -179,7 +163,7 @@ impl Handler<StopProvider> for HostController {
             msg.provider_ref.to_string()
         };
 
-        let b = MessageBus::from_registry();
+        let b = MessageBus::from_hostlocal_registry(&self.kp.as_ref().unwrap().public_key());
         Box::pin(
             async move {
                 let _ = b
@@ -197,12 +181,33 @@ impl Handler<StopProvider> for HostController {
     }
 }
 
-impl Handler<SetLabels> for HostController {
+impl Handler<Initialize> for HostController {
     type Result = ();
 
-    fn handle(&mut self, msg: SetLabels, _ctx: &mut Context<Self>) {
+    fn handle(&mut self, msg: Initialize, _ctx: &mut Context<Self>) {
+        info!("Host controller initialized - {}", msg.kp.public_key());
+
         self.host_labels = msg.labels;
-        info!("Host labels: {:?}", &self.host_labels);
+        self.authorizer = Some(msg.auth);
+
+        let claims = crate::capability::extras::get_claims();
+        let pk = claims.subject.to_string();
+        // Start wascc:extras
+        let extras = SyncArbiter::start(1, move || NativeCapabilityHost::new());
+        let claims = crate::capability::extras::get_claims();
+        let ex = ExtrasCapabilityProvider::default();
+        let cap = NativeCapability::from_instance(ex, Some("default".to_string()), claims).unwrap();
+        let init = crate::capability::native_host::Initialize {
+            cap: cap,
+            mw_chain: vec![],
+            seed: msg.kp.seed().unwrap(),
+            image_ref: None,
+        };
+        extras.do_send(init);
+        self.providers.insert(pk.clone(), extras); // can't let this provider go out of scope, or the actix actor will stop
+        self.kp = Some(msg.kp);
+
+        trace!("Host labels: {:?}", &self.host_labels);
     }
 }
 
@@ -256,6 +261,7 @@ impl Handler<StartActor> for HostController {
             mw_chain: mw.clone(),
             signing_seed: seed.clone(),
             image_ref: imgref.clone(),
+            host_id: self.kp.as_ref().unwrap().public_key()
         };
 
         let new_actor = SyncArbiter::start(1, move || ActorHost::default());
@@ -281,14 +287,6 @@ impl Handler<StartActor> for HostController {
     }
 }
 
-impl Handler<SetAuthorizer> for HostController {
-    type Result = ();
-
-    fn handle(&mut self, msg: SetAuthorizer, _ctx: &mut Context<Self>) {
-        self.authorizer = Some(msg.auth);
-    }
-}
-
 impl Handler<StartProvider> for HostController {
     type Result = ResponseActFuture<Self, Result<()>>;
 
@@ -301,6 +299,8 @@ impl Handler<StartProvider> for HostController {
                     .into_actor(self),
             );
         }
+
+        println!("{} Starting provider {}", self.kp.as_ref().unwrap().public_key(), msg.provider.claims.subject);
 
         trace!(
             "Starting provider {} per request",
@@ -322,6 +322,7 @@ impl Handler<StartProvider> for HostController {
                 initialize_provider(
                     provider.clone(),
                     mw.clone(),
+                    k.public_key(),
                     seed.to_string(),
                     imageref.clone(),
                     provider_id.to_string(),
@@ -346,6 +347,7 @@ impl Handler<StartProvider> for HostController {
 async fn initialize_provider(
     provider: NativeCapability,
     mw: Vec<Box<dyn Middleware>>,
+    host_id: String,
     seed: String,
     image_ref: Option<String>,
     provider_id: String,
@@ -364,7 +366,7 @@ async fn initialize_provider(
         _ => return Err("Creating provider returned the wrong entity type!".into()),
     };
 
-    let b = MessageBus::from_registry();
+    let b = MessageBus::from_hostlocal_registry(&host_id);
     let bindings = b
         .send(FindBindings {
             provider_id: provider_id.to_string(),
