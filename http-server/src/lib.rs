@@ -207,22 +207,25 @@ async fn request_handler(
     };
     match resp {
         Ok(r) => {
-            let r = deserialize::<crate::generated::http::Response>(r.as_slice()).unwrap();
-            let mut response = HttpResponse::with_body(
-                StatusCode::from_u16(r.status_code as _).unwrap(),
-                Body::from_slice(&r.body),
-            );
-            if !r.header.is_empty() {
-                let headers = response.head_mut();
-                r.header.iter().for_each(|(key, val)| {
-                    headers.headers.insert(
-                        HeaderName::from_bytes(key.as_bytes()).unwrap(),
-                        HeaderValue::from_str(val).unwrap(),
-                    )
-                });
+            let r = deserialize::<crate::generated::http::Response>(r.as_slice());
+            if let Ok(r) = r {
+                let mut response = HttpResponse::with_body(
+                    StatusCode::from_u16(r.status_code as _).unwrap(),
+                    Body::from_slice(&r.body),
+                );
+                if !r.header.is_empty() {
+                    let headers = response.head_mut();
+                    r.header.iter().for_each(|(key, val)| {
+                        headers.headers.insert(
+                            HeaderName::from_bytes(key.as_bytes()).unwrap(),
+                            HeaderValue::from_str(val).unwrap(),
+                        )
+                    });
+                }
+                response
+            } else {
+                HttpResponse::InternalServerError().body("Malformed response from actor")
             }
-
-            response
         }
         Err(e) => {
             error!("Guest failed to handle HTTP request: {}", e);
