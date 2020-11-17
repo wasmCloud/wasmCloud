@@ -30,9 +30,7 @@ impl MessageBus {
             ctx.wait(
                 async move {
                     let evt = generate_heartbeat_event(entities, claims, seed).await;
-                    let cp = ControlPlane::from_hostlocal_registry(
-                        &host_id,
-                    );
+                    let cp = ControlPlane::from_hostlocal_registry(&host_id);
                     cp.do_send(PublishEvent { event: evt });
                 }
                 .into_actor(act),

@@ -1,3 +1,6 @@
+use actix_rt::{spawn, Arbiter};
+use crossbeam_channel::{Receiver, Sender};
+use futures::StreamExt;
 use nats::subscription::Handler;
 use rmp_serde::{Deserializer, Serializer};
 use serde::{Deserialize, Serialize};
@@ -5,12 +8,13 @@ use std::collections::hash_map::RandomState;
 use std::collections::HashMap;
 use std::error::Error;
 use std::io::Cursor;
+use std::sync::Arc;
+use std::thread;
 use std::time::Duration;
 use wascap::jwt::Claims;
 use wascc_host::{
     BusDispatcher, Invocation, InvocationResponse, LatticeProvider, Result, WasccEntity,
 };
-use crossbeam_channel::{Sender, Receiver};
 
 #[macro_use]
 extern crate log;
@@ -18,19 +22,21 @@ extern crate log;
 #[macro_use]
 extern crate crossbeam_channel;
 
+#[macro_use]
+extern crate async_trait;
+
 pub struct NatsLatticeProvider {
     ns_prefix: Option<String>,
     dispatcher: Option<BusDispatcher>,
-    nc: nats::Connection,
+    nc: nats::asynk::Connection,
     rpc_timeout: Duration,
-    handlers: HashMap<String, Handler>,
+    handlers: HashMap<String, Arc<nats::asynk::Subscription>>,
 }
-
 
 struct RpcCall {
     subject: String,
     inv: Invocation,
-    timeout: Duration
+    timeout: Duration,
 }
 
 struct Term;
@@ -39,9 +45,8 @@ impl NatsLatticeProvider {
     pub fn new(
         ns_prefix: Option<String>,
         rpc_timeout: Duration,
-        nc: nats::Connection,
+        nc: nats::asynk::Connection,
     ) -> NatsLatticeProvider {
-
         NatsLatticeProvider {
             ns_prefix,
             dispatcher: None,
@@ -82,7 +87,7 @@ impl NatsLatticeProvider {
 
     // All hosts should receive link advertisements, so this is not a queue subscribe
     fn handle_links_advertisements(&self) -> Result<()> {
-        let d = self.dispatcher.clone().unwrap();
+        /*let d = self.dispatcher.clone().unwrap();
         self.nc
             .subscribe(&self.links_subject())?
             .with_handler(move |msg| {
@@ -103,32 +108,33 @@ impl NatsLatticeProvider {
                     ld.values,
                 );
                 Ok(())
-            });
+            }); */
         Ok(())
     }
 
     // All hosts should receive claims advertisements, so this is not a queue subscribe
     fn handle_claims_advertisements(&self) -> Result<()> {
         let d = self.dispatcher.clone().unwrap();
-        self.nc
-            .subscribe(&self.claims_subject())?
-            .with_handler(move |msg| {
-                let c: Claims<wascap::jwt::Actor> = match deserialize(&msg.data) {
-                    Ok(c) => c,
-                    Err(_) => {
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::Other,
-                            "Deserialization failure",
-                        ))
-                    }
-                };
-                d.notify_claims_received(c);
-                Ok(())
-            });
+        /* self.nc
+        .subscribe(&self.claims_subject())?
+        .with_handler(move |msg| {
+            let c: Claims<wascap::jwt::Actor> = match deserialize(&msg.data) {
+                Ok(c) => c,
+                Err(_) => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        "Deserialization failure",
+                    ))
+                }
+            };
+            d.notify_claims_received(c);
+            Ok(())
+        }); */
         Ok(())
     }
 }
 
+#[async_trait]
 impl LatticeProvider for NatsLatticeProvider {
     fn init(&mut self, dispatcher: BusDispatcher) {
         self.dispatcher = Some(dispatcher);
@@ -144,32 +150,57 @@ impl LatticeProvider for NatsLatticeProvider {
         "NATS".to_string()
     }
 
-    fn rpc(&self, inv: &Invocation) -> Result<InvocationResponse> {
+    async fn rpc(&self, inv: &Invocation) -> Result<InvocationResponse> {
         let bytes = serialize(&inv)?;
         let subject = self.invoke_subject(&inv.target);
         let timeout = self.rpc_timeout.clone();
-        let inv = inv.clone();
-        let res = self.nc.request_timeout(&subject, &bytes, timeout);
+        //let inv = inv.clone();
+        //let res = self.nc.request_timeout(&subject, &bytes, timeout);
+        match actix_rt::time::timeout(timeout, self.nc.request(&subject, &bytes)).await? {
+            Err(_) => {
+                println!("Nats timeout");
+                Err("NaTS timeout".into())
+            }
+            Ok(res) => {
+                println!("nc.request(subject, msg) resulted in {:?}", res);
+                let ir: Result<InvocationResponse> = deserialize(&res.data);
+                ir
+            }
+        }
 
-        match res {
+        /*        match res {
             Ok(r) => {
                 let ir: Result<InvocationResponse> = deserialize(&r.data);
                 ir
-            },
+            }
             Err(e) => {
                 println!("Nats timeout");
                 Err("NaTS timeout".into())
             }
-        }
+        } */
     }
 
-    fn register_rpc_listener(&mut self, subscriber: &WasccEntity) -> Result<()> {
+    async fn register_rpc_listener(&mut self, subscriber: &WasccEntity) -> Result<()> {
         let subject = self.invoke_subject(&subscriber);
         let s = subject.clone();
         let d = self.dispatcher.clone().unwrap();
         let nc = self.nc.clone();
 
-        let handler = self
+        /*let mut sub = Arc::new(nc.queue_subscribe(&subject, &subject).await?);
+        self.handlers.insert(s.to_string(), sub);
+        Arbiter::spawn(async move {
+            while let Some(msg) = sub.next().await {
+                let inv: Invocation = match deserialize(&msg.data) {
+                    Ok(i) => i,
+                    Err(_) => return Err("Deserialization failure".into()),
+                };
+                let res = d.invoke(&inv);
+                let _ = msg.respond(&serialize(res).unwrap()).await;
+            };
+        }); */
+        Ok(())
+
+        /* let handler = self
             .nc
             .queue_subscribe(&subject, &subject)?
             .with_handler(move |msg| {
@@ -191,8 +222,9 @@ impl LatticeProvider for NatsLatticeProvider {
                 }
                 if let Ok(r) = serialize(res) {
                     println!("RESPONDING");
-                    msg.respond(&r)?;
-                    nc.drain();
+                    nc.publish(&msg.reply.unwrap(), &r).unwrap();
+                    //msg.respond(&r)?;
+                    //nc.drain();
                 } else {
                     println!("Failed to serialize invocation response");
                 }
@@ -201,9 +233,7 @@ impl LatticeProvider for NatsLatticeProvider {
                 Ok(())
             });
 
-        self.handlers.insert(s, handler);
-
-        Ok(())
+        self.handlers.insert(s, handler);*/
     }
 
     fn remove_rpc_listener(&mut self, subscriber: &WasccEntity) -> Result<()> {
@@ -231,15 +261,15 @@ impl LatticeProvider for NatsLatticeProvider {
             values,
         };
         println!("Advertised link!! {:?}", ld);
-        self.nc
-            .publish(&self.links_subject(), &serialize(&ld).unwrap())?;
+        /* self.nc
+        .publish(&self.links_subject(), &serialize(&ld).unwrap())?; */
         Ok(())
     }
 
     // Claims advertisements take place on wasmbus.{prefix}.claims
     fn advertise_claims(&self, claims: Claims<wascap::jwt::Actor>) -> Result<()> {
-        self.nc
-            .publish(&self.claims_subject(), &serialize(&claims).unwrap())?;
+        //self.nc
+        //            .publish(&self.claims_subject(), &serialize(&claims).unwrap())?;
         Ok(())
     }
 }

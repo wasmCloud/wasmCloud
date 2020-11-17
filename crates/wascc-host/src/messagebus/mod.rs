@@ -4,19 +4,26 @@ use crate::Result;
 use crate::{BusDispatcher, Invocation, InvocationResponse, WasccEntity};
 use actix::dev::{MessageResponse, ResponseChannel};
 use actix::prelude::*;
+use async_trait::async_trait;
 use std::collections::HashMap;
 use wascap::prelude::{Claims, KeyPair};
 
+use crate::messagebus::rpc_client::RpcClient;
 pub use handlers::OP_BIND_ACTOR;
+use std::sync::Arc;
+
 pub(crate) mod handlers;
 mod hb;
+mod rpc_client;
+mod rpc_subscription;
 mod utils;
 
+#[async_trait]
 pub trait LatticeProvider: Sync + Send {
     fn init(&mut self, dispatcher: BusDispatcher);
     fn name(&self) -> String;
-    fn rpc(&self, inv: &Invocation) -> Result<InvocationResponse>;
-    fn register_rpc_listener(&mut self, subscriber: &WasccEntity) -> Result<()>;
+    async fn rpc(&self, inv: &Invocation) -> Result<InvocationResponse>;
+    async fn register_rpc_listener(&mut self, subscriber: &WasccEntity) -> Result<()>;
     fn remove_rpc_listener(&mut self, subscriber: &WasccEntity) -> Result<()>;
     fn advertise_link(
         &self,
@@ -31,8 +38,10 @@ pub trait LatticeProvider: Sync + Send {
 
 #[derive(Default)]
 pub(crate) struct MessageBus {
-    pub provider: Option<Box<dyn LatticeProvider>>,
+    nc: Option<nats::asynk::Connection>,
+    namespace: Option<String>,
     subscribers: HashMap<WasccEntity, Recipient<Invocation>>,
+    rpc_outbound: Option<Addr<RpcClient>>,
     binding_cache: BindingCache,
     claims_cache: HashMap<String, Claims<wascap::jwt::Actor>>,
     key: Option<KeyPair>,
@@ -66,7 +75,8 @@ where
 #[derive(Message)]
 #[rtype(result = "()")]
 pub struct Initialize {
-    pub provider: Option<Box<dyn LatticeProvider>>,
+    pub nc: Option<nats::asynk::Connection>,
+    pub namespace: Option<String>,
     pub key: KeyPair,
     pub auth: Box<dyn Authorizer>,
 }
@@ -99,7 +109,7 @@ pub struct LookupBinding {
     pub binding_name: String,
 }
 
-#[derive(Message)]
+#[derive(Message, Clone)]
 #[rtype(result = "Result<()>")]
 pub struct AdvertiseBinding {
     pub contract_id: String,

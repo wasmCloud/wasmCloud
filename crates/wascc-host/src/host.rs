@@ -95,14 +95,16 @@ impl Host {
     /// to provide some form of parking or waiting (e.g. wait for a Ctrl-C signal).
     pub async fn start(
         &self,
-        lattice_rpc: Option<Box<dyn LatticeProvider + 'static>>,
+        lattice_rpc_connection: Option<nats::asynk::Connection>,
         lattice_control: Option<Box<dyn ControlPlaneProvider + 'static>>,
+        namespace: Option<String>,
     ) -> Result<()> {
         let kp = KeyPair::new_server();
 
         let mb = MessageBus::from_hostlocal_registry(&kp.public_key());
         let init = crate::messagebus::Initialize {
-            provider: lattice_rpc,
+            nc: lattice_rpc_connection,
+            namespace,
             key: KeyPair::from_seed(&kp.seed()?)?,
             auth: self.authorizer.clone(),
         };

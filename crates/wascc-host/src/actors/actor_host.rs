@@ -185,7 +185,7 @@ impl Handler<Invocation> for ActorHost {
                         Ok(r) => {
                             println!("All good {:?}", r);
                             r
-                        },
+                        }
                         Err(e) => InvocationResponse::error(
                             &msg,
                             &format!("Post-invoke middleware execution failure on actor: {}", e),

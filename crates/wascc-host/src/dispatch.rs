@@ -41,8 +41,11 @@ impl BusDispatcher {
                 Ok(ir) => {
                     println!("Got a response from the bus: {:?}", ir);
                     ir
-                },
-                Err(e) => InvocationResponse::error(&inv, "Mailbox error calling invocation"),
+                }
+                Err(e) => {
+                    println!("Bus call failed: {:?}", e);
+                    InvocationResponse::error(&inv, "Mailbox error calling invocation")
+                }
             }
         })
     }
@@ -108,11 +111,11 @@ impl Dispatcher for ProviderDispatcher {
             Ok(v) => {
                 println!("Back from dispatch {}", v.len());
                 Ok(v)
-            },
+            }
             Err(e) => {
                 println!("Mailbox error");
                 Err("Mailbox error during host callback".into())
-            },
+            }
         }
     }
 }

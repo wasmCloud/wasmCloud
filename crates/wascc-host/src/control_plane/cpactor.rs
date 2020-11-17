@@ -89,7 +89,10 @@ impl Handler<Initialize> for ControlPlane {
             let evt = ControlEvent::HostStarted;
             let evt = evt.into_published(&self.key.as_ref().unwrap().public_key());
             if let Err(e) = p.emit_control_event(evt) {
-                error!("Control plane provider failed to emit host started event: {}", e);
+                error!(
+                    "Control plane provider failed to emit host started event: {}",
+                    e
+                );
                 passed = false;
             }
             true;
@@ -99,7 +102,5 @@ impl Handler<Initialize> for ControlPlane {
         }
 
         self.options = msg.control_options;
-
-
     }
 }

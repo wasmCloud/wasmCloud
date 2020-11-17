@@ -261,7 +261,7 @@ impl Handler<StartActor> for HostController {
             mw_chain: mw.clone(),
             signing_seed: seed.clone(),
             image_ref: imgref.clone(),
-            host_id: self.kp.as_ref().unwrap().public_key()
+            host_id: self.kp.as_ref().unwrap().public_key(),
         };
 
         let new_actor = SyncArbiter::start(1, move || ActorHost::default());
@@ -300,7 +300,11 @@ impl Handler<StartProvider> for HostController {
             );
         }
 
-        println!("{} Starting provider {}", self.kp.as_ref().unwrap().public_key(), msg.provider.claims.subject);
+        println!(
+            "{} Starting provider {}",
+            self.kp.as_ref().unwrap().public_key(),
+            msg.provider.claims.subject
+        );
 
         trace!(
             "Starting provider {} per request",

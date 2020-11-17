@@ -2,6 +2,7 @@ use crate::common::{await_actor_count, await_provider_count, gen_kvcounter_host,
 use crate::generated::http::{deserialize, serialize, Request, Response};
 use lattice_rpc_nats::NatsLatticeProvider;
 use provider_archive::ProviderArchive;
+use smol::block_on;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fs::File;
@@ -15,48 +16,58 @@ use wascc_host::{Host, Result};
 // API and then invoke the provider's running HTTP endpoint
 // to ensure the RPC link between actor and provider works
 pub(crate) async fn distributed_echo() -> Result<()> {
+    let web_port = 7001_u32;
+    let echo = Actor::from_file("./tests/modules/echo.wasm").unwrap();
+    let actor_id = echo.public_key();
+    let aid = actor_id.clone();
+
     let host_a = HostBuilder::new().build();
-    let nc = nats::connect("0.0.0.0:4222")?;
+    let nc = nats::connect("0.0.0.0:4222").unwrap();
     let nats_rpc = Box::new(NatsLatticeProvider::new(
         Some("distributedecho".to_string()),
         Duration::from_secs(2),
         nc.clone(),
     ));
 
-    host_a.start(Some(nats_rpc), None).await?;
-    let echo = Actor::from_file("./tests/modules/echo.wasm")?;
-    let actor_id = echo.public_key();
-    host_a.start_actor(echo).await?;
-    await_actor_count(&host_a, 1, Duration::from_millis(50), 3).await?;
+    host_a.start(Some(nats_rpc), None).await.unwrap();
+
+    host_a.start_actor(echo).await.unwrap();
+    await_actor_count(&host_a, 1, Duration::from_millis(50), 3)
+        .await
+        .unwrap();
 
     let host_b = HostBuilder::new().build();
     let nats_rpc_b = Box::new(NatsLatticeProvider::new(
         Some("distributedecho".to_string()),
         Duration::from_secs(2),
-        nats::connect("0.0.0.0:4222")?,
+        nats::connect("0.0.0.0:4222").unwrap(),
     ));
-    host_b.start(Some(nats_rpc_b), None).await?;
-    let web_port = 7001_u32;
-    let arc = par_from_file("./tests/modules/libwascc_httpsrv.par.gz")?;
-    let httpserv = wascc_httpsrv::HttpServerProvider::new();
-    let websrv = NativeCapability::from_instance(httpserv, None, arc.claims().unwrap())?;
+    host_b.start(Some(nats_rpc_b), None).await.unwrap();
 
-    host_b.start_native_capability(websrv).await?;
+    let arc = par_from_file("./tests/modules/libwascc_httpsrv.par.gz").unwrap();
+    let httpserv = wascc_httpsrv::HttpServerProvider::new();
+    let websrv = NativeCapability::from_instance(httpserv, None, arc.claims().unwrap()).unwrap();
+
+    host_b.start_native_capability(websrv).await.unwrap();
     // always have to remember that "extras" is in the provider list.
-    await_provider_count(&host_b, 2, Duration::from_millis(50), 3).await?;
+    await_provider_count(&host_b, 2, Duration::from_millis(50), 3)
+        .await
+        .unwrap();
 
     let mut webvalues: HashMap<String, String> = HashMap::new();
     webvalues.insert("PORT".to_string(), format!("{}", web_port));
     host_b
         .set_binding(
-            &actor_id,
+            &aid,
             "wascc:http_server",
             None,
             arc.claims().unwrap().subject.to_string(),
             webvalues,
         )
-        .await?;
-    std::thread::sleep(Duration::from_millis(300));
+        .await
+        .unwrap();
+
+    std::thread::sleep(Duration::from_millis(3000));
 
     let url = format!("http://localhost:{}/foo/bar", web_port);
     let resp = reqwest::get(&url).await?;
@@ -64,9 +75,8 @@ pub(crate) async fn distributed_echo() -> Result<()> {
     assert_eq!(resp.text().await?,
      "{\"method\":\"GET\",\"path\":\"/foo/bar\",\"query_string\":\"\",\"headers\":{\"accept\":\"*/*\",\"host\":\"localhost:7001\"},\"body\":[]}");
 
-    std::thread::sleep(Duration::from_millis(300));
-    host_a.stop().await;
-    host_b.stop().await;
+    //    host_a.stop().await;
+    //    host_b.stop().await;
     Ok(())
 }
 
@@ -147,10 +157,31 @@ pub(crate) async fn scaled_kvcounter() -> Result<()> {
     let redis_id = redis.claims().as_ref().unwrap().subject.to_string();
 
     let host_a = scaledkv_host(Some(a), None).await?;
-    let host_b = scaledkv_host(Some(Actor::from_file("./tests/modules/kvcounter.wasm")?), None).await?;
-    let host_c = scaledkv_host(Some(Actor::from_file("./tests/modules/kvcounter.wasm")?), Some(vec![redis])).await?;
-    let host_d = scaledkv_host(None, Some(vec![websrv, par_from_file("./tests/modules/libwascc_redis.par.gz")?])).await?;
-    let host_e = scaledkv_host(None, Some(vec![par_from_file("./tests/modules/libwascc_redis.par.gz")?])).await?;
+    let host_b = scaledkv_host(
+        Some(Actor::from_file("./tests/modules/kvcounter.wasm")?),
+        None,
+    )
+    .await?;
+    let host_c = scaledkv_host(
+        Some(Actor::from_file("./tests/modules/kvcounter.wasm")?),
+        Some(vec![redis]),
+    )
+    .await?;
+    let host_d = scaledkv_host(
+        None,
+        Some(vec![
+            websrv,
+            par_from_file("./tests/modules/libwascc_redis.par.gz")?,
+        ]),
+    )
+    .await?;
+    let host_e = scaledkv_host(
+        None,
+        Some(vec![par_from_file(
+            "./tests/modules/libwascc_redis.par.gz",
+        )?]),
+    )
+    .await?;
 
     let web_port = 6001_u32;
 

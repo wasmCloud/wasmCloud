@@ -20,6 +20,7 @@ async fn main() {
         .start(
             None, //Some(Box::new(NatsLatticeProvider::new(None))),
             None, // Some(Box::new(NatsControlPlaneProvider::new())),
+            None,
         )
         .await
     {
