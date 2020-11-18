@@ -18,11 +18,9 @@ extern crate log;
 
 pub use capability::native::NativeCapability;
 pub use control_plane::events::{ControlEvent, EventHeader, PublishedEvent};
-pub use control_plane::{ControlInterface, ControlPlaneProvider};
-pub use dispatch::{BusDispatcher, Invocation, InvocationResponse, WasccEntity};
+pub use dispatch::{Invocation, InvocationResponse, WasccEntity};
 pub use host::{Host, HostBuilder};
 pub use manifest::HostManifest;
-pub use messagebus::LatticeProvider;
 
 pub type Result<T> = ::std::result::Result<T, Box<dyn ::std::error::Error + Send + Sync>>;
 pub type Actor = actors::WasccActor;

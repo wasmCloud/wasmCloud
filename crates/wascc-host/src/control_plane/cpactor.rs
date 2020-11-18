@@ -1,4 +1,3 @@
-use crate::control_plane::{ControlInterface, ControlPlaneProvider};
 use crate::hlreg::HostLocalSystemService;
 use crate::messagebus::MessageBus;
 use crate::{ControlEvent, Result};
@@ -8,7 +7,7 @@ use wascap::prelude::KeyPair;
 
 #[derive(Default)]
 pub struct ControlPlane {
-    provider: Option<Box<dyn ControlPlaneProvider>>,
+    client: Option<nats::asynk::Connection>,
     key: Option<KeyPair>,
     options: ControlOptions,
 }
@@ -16,7 +15,7 @@ pub struct ControlPlane {
 #[derive(Message)]
 #[rtype(result = "()")]
 pub struct Initialize {
-    pub provider: Option<Box<dyn ControlPlaneProvider>>,
+    pub client: Option<nats::asynk::Connection>,
     pub control_options: ControlOptions,
     pub key: KeyPair,
 }
@@ -53,7 +52,8 @@ impl Handler<PublishEvent> for ControlPlane {
     type Result = ();
 
     fn handle(&mut self, msg: PublishEvent, _ctx: &mut Context<Self>) {
-        let evt = msg
+        // TODO: implement in the next PR
+        /*let evt = msg
             .event
             .into_published(&self.key.as_ref().unwrap().public_key());
         trace!(
@@ -64,23 +64,23 @@ impl Handler<PublishEvent> for ControlPlane {
             if let Err(e) = p.emit_control_event(evt) {
                 error!("Control plane failed to emit event: {}", e);
             }
-        }
+        } */
     }
 }
 
 impl Handler<Initialize> for ControlPlane {
     type Result = ();
 
-    fn handle(&mut self, msg: Initialize, ctx: &mut Context<Self>) {
+    fn handle(&mut self, msg: Initialize, _ctx: &mut Context<Self>) {
         self.key = Some(msg.key);
-        let controller = ControlInterface {
-            labels: msg.control_options.host_labels.clone(),
-            bus: MessageBus::from_hostlocal_registry(&self.key.as_ref().unwrap().public_key()),
-            control_plane: ctx.address(),
-        };
+        self.client = msg.client;
+        self.options = msg.control_options;
 
+        // TODO: implement in next PR
+        /*
         let mut passed = false;
-        self.provider = msg.provider;
+        self.client = msg.client;
+
         if let Some(ref mut p) = self.provider.as_mut() {
             if let Err(e) = p.init(controller) {
                 error!("Failed to initialize control plane: {}, falling back to null control plane default.", e);
@@ -99,8 +99,6 @@ impl Handler<Initialize> for ControlPlane {
         }
         if !passed {
             self.provider = None;
-        }
-
-        self.options = msg.control_options;
+        }*/
     }
 }

@@ -1,6 +1,4 @@
 use actix_rt::System;
-use lattice_cplane_nats::NatsControlPlaneProvider;
-use lattice_rpc_nats::NatsLatticeProvider;
 use wascc_host::HostBuilder;
 
 #[macro_use]
@@ -15,15 +13,9 @@ async fn main() {
     .format_module_path(false)
     .try_init();
 
+    // TODO: add nats clients for control plane and rpc
     let host = HostBuilder::new().build();
-    match host
-        .start(
-            None, //Some(Box::new(NatsLatticeProvider::new(None))),
-            None, // Some(Box::new(NatsControlPlaneProvider::new())),
-            None,
-        )
-        .await
-    {
+    match host.start().await {
         Ok(_) => {
             actix_rt::signal::ctrl_c().await.unwrap();
             info!("Ctrl-C received, shutting down");

@@ -18,7 +18,7 @@ const PING_TIMEOUT_MS: u64 = 200;
 
 impl MessageBus {
     pub(crate) fn hb(&self, ctx: &mut Context<Self>) {
-        trace!("Heartbeat");
+        trace!("Emitting heartbeat");
         let interval = hb_duration();
         ctx.run_interval(interval, |act, ctx| {
             let claims = act.claims_cache.values().cloned().collect();

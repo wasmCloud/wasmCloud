@@ -36,6 +36,7 @@ impl Handler<CreateSubscription> for RpcSubscription {
     type Result = ResponseActFuture<Self, ()>;
 
     fn handle(&mut self, msg: CreateSubscription, _ctx: &mut Self::Context) -> Self::Result {
+        info!("Creating lattice subscription for {}", msg.entity.url());
         self.target = Some(msg.target);
         self.nc = Some(msg.nc.clone());
         self.ns_prefix = msg.namespace;
@@ -75,6 +76,7 @@ impl Handler<RpcInvocation> for RpcSubscription {
         Box::pin(
             async move {
                 if let Some(inv) = msg.invocation {
+                    trace!("Handling inbound RPC call from {}", inv.origin.url());
                     let res = target.send(inv).await; // TODO: convert this into a timeout
                     match res {
                         Ok(ir) => {
@@ -93,10 +95,13 @@ impl Handler<RpcInvocation> for RpcSubscription {
     }
 }
 
+// An RPC subscription will also act as a proxy for the underlying target when in local
+// dispatch mode, so it needs to be able to handle invocations as well as rpc invocations
 impl Handler<Invocation> for RpcSubscription {
     type Result = ResponseActFuture<Self, InvocationResponse>;
 
     fn handle(&mut self, msg: Invocation, _ctx: &mut Self::Context) -> Self::Result {
+        trace!("RPC subscriber proxying invocation to {}", msg.target.url());
         let target = self.target.clone().unwrap();
         Box::pin(
             async move {

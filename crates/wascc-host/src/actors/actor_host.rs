@@ -109,6 +109,10 @@ impl Handler<Initialize> for ActorHost {
                     image_ref: msg.image_ref,
                     host_id: hid,
                 });
+                info!(
+                    "Actor {} initialized",
+                    &self.state.as_ref().unwrap().claims.subject
+                );
                 Ok(())
             }
             Err(e) => {
@@ -127,10 +131,7 @@ impl Actor for ActorHost {
     type Context = SyncContext<Self>;
 
     fn started(&mut self, ctx: &mut Self::Context) {
-        info!(
-            "Actor {} started",
-            &self.state.as_ref().unwrap().claims.subject
-        );
+        info!("Actor started");
     }
 
     fn stopped(&mut self, ctx: &mut Self::Context) {
@@ -164,12 +165,6 @@ impl Handler<Invocation> for ActorHost {
             msg.target.url(),
             msg.operation
         );
-        println!(
-            "Actor Invocation - From {} to {}: {}",
-            msg.origin.url(),
-            msg.target.url(),
-            msg.operation
-        );
 
         if let WasccEntity::Actor(ref target) = msg.target {
             if run_actor_pre_invoke(&msg, &state.mw_chain).is_err() {
@@ -182,10 +177,7 @@ impl Handler<Invocation> for ActorHost {
                 Ok(v) => {
                     let resp = InvocationResponse::success(&msg, v);
                     match run_actor_post_invoke(resp, &state.mw_chain) {
-                        Ok(r) => {
-                            println!("All good {:?}", r);
-                            r
-                        }
+                        Ok(r) => r,
                         Err(e) => InvocationResponse::error(
                             &msg,
                             &format!("Post-invoke middleware execution failure on actor: {}", e),

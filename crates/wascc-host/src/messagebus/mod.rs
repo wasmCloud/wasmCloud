@@ -1,40 +1,22 @@
 use crate::auth::Authorizer;
 use crate::capability::binding_cache::BindingCache;
 use crate::Result;
-use crate::{BusDispatcher, Invocation, InvocationResponse, WasccEntity};
+use crate::{Invocation, InvocationResponse, WasccEntity};
 use actix::dev::{MessageResponse, ResponseChannel};
 use actix::prelude::*;
-use async_trait::async_trait;
 use std::collections::HashMap;
 use wascap::prelude::{Claims, KeyPair};
 
 use crate::messagebus::rpc_client::RpcClient;
 pub use handlers::OP_BIND_ACTOR;
 use std::sync::Arc;
+use std::time::Duration;
 
 pub(crate) mod handlers;
 mod hb;
-mod rpc_client;
-mod rpc_subscription;
+pub(crate) mod rpc_client;
+pub(crate) mod rpc_subscription;
 mod utils;
-
-#[async_trait]
-pub trait LatticeProvider: Sync + Send {
-    fn init(&mut self, dispatcher: BusDispatcher);
-    fn name(&self) -> String;
-    async fn rpc(&self, inv: &Invocation) -> Result<InvocationResponse>;
-    async fn register_rpc_listener(&mut self, subscriber: &WasccEntity) -> Result<()>;
-    fn remove_rpc_listener(&mut self, subscriber: &WasccEntity) -> Result<()>;
-    fn advertise_link(
-        &self,
-        actor: &str,
-        contract_id: &str,
-        link_name: &str,
-        provider_id: &str,
-        values: HashMap<String, String>,
-    ) -> Result<()>;
-    fn advertise_claims(&self, claims: Claims<wascap::jwt::Actor>) -> Result<()>;
-}
 
 #[derive(Default)]
 pub(crate) struct MessageBus {
@@ -79,6 +61,7 @@ pub struct Initialize {
     pub namespace: Option<String>,
     pub key: KeyPair,
     pub auth: Box<dyn Authorizer>,
+    pub rpc_timeout: Duration,
 }
 
 #[derive(Message)]

@@ -1,4 +1,4 @@
-use crate::messagebus::{AdvertiseBinding, LatticeProvider, MessageBus};
+use crate::messagebus::{AdvertiseBinding, MessageBus};
 use std::thread;
 use wapc::WebAssemblyEngineProvider;
 
@@ -10,12 +10,11 @@ use crate::capability::native::NativeCapability;
 use crate::capability::native_host::NativeCapabilityHost;
 use crate::control_plane::cpactor::{ControlOptions, ControlPlane, PublishEvent};
 use crate::control_plane::events::TerminationReason;
-use crate::control_plane::ControlPlaneProvider;
 use crate::dispatch::{Invocation, InvocationResponse};
 use crate::hlreg::HostLocalSystemService;
 use crate::host_controller::{
-    GetHostID, HostController, MintInvocationRequest, SetLabels, StartActor, StartProvider,
-    StopActor, StopProvider, RESTRICTED_LABELS,
+    GetHostID, HostController, SetLabels, StartActor, StartProvider, StopActor, StopProvider,
+    RESTRICTED_LABELS,
 };
 use crate::messagebus::{QueryActors, QueryProviders};
 use crate::oci::fetch_oci_bytes;
@@ -26,12 +25,17 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs::File;
 use std::path::Path;
+use std::time::Duration;
 use wascap::prelude::KeyPair;
 
 pub struct HostBuilder {
     labels: HashMap<String, String>,
     authorizer: Box<dyn Authorizer + 'static>,
+    namespace: String,
+    rpc_timeout: Duration,
     allow_latest: bool,
+    rpc_client: Option<nats::asynk::Connection>,
+    cplane_client: Option<nats::asynk::Connection>,
 }
 
 impl HostBuilder {
@@ -40,12 +44,43 @@ impl HostBuilder {
             labels: crate::host_controller::detect_core_host_labels(),
             authorizer: Box::new(crate::auth::DefaultAuthorizer::new()),
             allow_latest: false,
+            namespace: "default".to_string(),
+            rpc_timeout: Duration::from_secs(2),
+            rpc_client: None,
+            cplane_client: None,
         }
     }
 
+    pub fn with_rpc_client(self, client: nats::asynk::Connection) -> HostBuilder {
+        HostBuilder {
+            rpc_client: Some(client),
+            ..self
+        }
+    }
+
+    pub fn with_controlplane_client(self, client: nats::asynk::Connection) -> HostBuilder {
+        HostBuilder {
+            cplane_client: Some(client),
+            ..self
+        }
+    }
     pub fn with_authorizer(self, authorizer: impl Authorizer + 'static) -> HostBuilder {
         HostBuilder {
             authorizer: Box::new(authorizer),
+            ..self
+        }
+    }
+
+    pub fn with_namespace(self, namespace: &str) -> HostBuilder {
+        HostBuilder {
+            namespace: namespace.to_string(),
+            ..self
+        }
+    }
+
+    pub fn with_rpc_timeout(self, rpc_timeout: Duration) -> HostBuilder {
+        HostBuilder {
+            rpc_timeout: rpc_timeout,
             ..self
         }
     }
@@ -78,6 +113,10 @@ impl HostBuilder {
             id: RefCell::new("".to_string()),
             allow_latest: self.allow_latest,
             kp: RefCell::new(None),
+            rpc_timeout: self.rpc_timeout,
+            namespace: self.namespace,
+            rpc_client: self.rpc_client,
+            cplane_client: self.cplane_client,
         }
     }
 }
@@ -88,25 +127,25 @@ pub struct Host {
     id: RefCell<String>,
     allow_latest: bool,
     kp: RefCell<Option<KeyPair>>,
+    namespace: String,
+    rpc_timeout: Duration,
+    cplane_client: Option<nats::asynk::Connection>,
+    rpc_client: Option<nats::asynk::Connection>,
 }
 
 impl Host {
     /// Starts the host's actor system. This call is non-blocking, so it is up to the consumer
     /// to provide some form of parking or waiting (e.g. wait for a Ctrl-C signal).
-    pub async fn start(
-        &self,
-        lattice_rpc_connection: Option<nats::asynk::Connection>,
-        lattice_control: Option<Box<dyn ControlPlaneProvider + 'static>>,
-        namespace: Option<String>,
-    ) -> Result<()> {
+    pub async fn start(&self) -> Result<()> {
         let kp = KeyPair::new_server();
 
         let mb = MessageBus::from_hostlocal_registry(&kp.public_key());
         let init = crate::messagebus::Initialize {
-            nc: lattice_rpc_connection,
-            namespace,
+            nc: self.rpc_client.clone(),
+            namespace: Some(self.namespace.to_string()),
             key: KeyPair::from_seed(&kp.seed()?)?,
             auth: self.authorizer.clone(),
+            rpc_timeout: self.rpc_timeout.clone(),
         };
         mb.send(init).await?;
 
@@ -122,7 +161,7 @@ impl Host {
         // Start control plane
         let cp = ControlPlane::from_hostlocal_registry(&kp.public_key());
         cp.send(crate::control_plane::cpactor::Initialize {
-            provider: lattice_control,
+            client: self.cplane_client.clone(),
             control_options: ControlOptions {
                 host_labels: self.labels.clone(),
                 oci_allow_latest: self.allow_latest,
@@ -243,15 +282,13 @@ impl Host {
     }
 
     pub async fn call_actor(&self, actor: &str, operation: &str, msg: &[u8]) -> Result<Vec<u8>> {
-        let hc = HostController::from_hostlocal_registry(&self.id.borrow());
-        let inv = hc
-            .send(MintInvocationRequest {
-                op: operation.to_string(),
-                target: WasccEntity::Actor(actor.to_string()),
-                msg: msg.to_vec(),
-                origin: WasccEntity::Actor(SYSTEM_ACTOR.to_string()),
-            })
-            .await?;
+        let inv = Invocation::new(
+            self.kp.borrow().as_ref().unwrap(),
+            WasccEntity::Actor(SYSTEM_ACTOR.to_string()),
+            WasccEntity::Actor(actor.to_string()),
+            operation,
+            msg.to_vec(),
+        );
         let b = MessageBus::from_hostlocal_registry(&self.id.borrow());
         let ir = b.send(inv).await?;
         Ok(ir.msg)

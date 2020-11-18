@@ -45,8 +45,7 @@ oci-distribution = "0.4.0"
 rand = "0.7.3"
 chrono = "0.4.19"
 envmnt = "0.8.4"
-nats = "0.8.3"
-async-trait = "0.1.41"
+nats = "0.8.5"
 
 wasm3-provider = { version = "0.0.2", optional = true}
 wasmtime-provider = { version = "0.0.2" , optional = true}

@@ -56,7 +56,7 @@ impl Actor for NativeCapabilityHost {
 
     fn stopped(&mut self, _ctx: &mut Self::Context) {
         if self.state.is_none() {
-            warn!("Stopping a provider that had no state. Something might be amiss.");
+            warn!("Stopped a provider host that had no state. Something might be amiss, askew, or perchance awry");
             return;
         }
 
@@ -170,7 +170,7 @@ impl Handler<Invocation> for NativeCapabilityHost {
     fn handle(&mut self, inv: Invocation, ctx: &mut Self::Context) -> Self::Result {
         let state = self.state.as_ref().unwrap();
         trace!(
-            "Provider {} handling {}",
+            "Provider {} handling invocation operation '{}'",
             state.cap.claims.subject,
             inv.operation
         );

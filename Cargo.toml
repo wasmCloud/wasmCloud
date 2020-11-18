@@ -41,9 +41,8 @@ log = "0.4.11"
 env_logger = "0.7.1"
 anyhow = "1.0.33"
 wascc-host = { path = "./crates/wascc-host" }
-lattice-rpc-nats = { path = "crates/lattice-rpc-nats" }
-lattice-cplane-nats = { path = "crates/lattice-cplane-nats"}
 actix-rt = "1.1.1"
+nats = "0.8.5"
 
 [dev-dependencies]
 rmp-serde = "0.14.4"
@@ -54,15 +53,12 @@ provider-archive = "0.3.0"
 redis = "0.17.0"
 reqwest = { version = "0.10"}
 uuid = { version = "0.8", features = ["serde", "v4"] }
-nats = "0.8.3"
+nats = "0.8.5"
 wascc-httpsrv = { git = "https://github.com/wascc/capability-providers", branch = "main", features = ["static_plugin"]}
-smol = "1.2.4"
 
 [workspace]
 members = [
     "crates/wascc-host",
-    "crates/lattice-rpc-nats",
-    "crates/lattice-cplane-nats"
 ]
 
 

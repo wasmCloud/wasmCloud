@@ -1,8 +1,6 @@
 use crate::common::{await_actor_count, await_provider_count, gen_kvcounter_host, par_from_file};
 use crate::generated::http::{deserialize, serialize, Request, Response};
-use lattice_rpc_nats::NatsLatticeProvider;
 use provider_archive::ProviderArchive;
-use smol::block_on;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fs::File;
@@ -21,28 +19,26 @@ pub(crate) async fn distributed_echo() -> Result<()> {
     let actor_id = echo.public_key();
     let aid = actor_id.clone();
 
-    let host_a = HostBuilder::new().build();
-    let nc = nats::connect("0.0.0.0:4222").unwrap();
-    let nats_rpc = Box::new(NatsLatticeProvider::new(
-        Some("distributedecho".to_string()),
-        Duration::from_secs(2),
-        nc.clone(),
-    ));
+    let nc = nats::asynk::connect("0.0.0.0:4222").await?;
+    let host_a = HostBuilder::new()
+        .with_rpc_client(nc)
+        .with_namespace("distributedecho")
+        .build();
 
-    host_a.start(Some(nats_rpc), None).await.unwrap();
+    host_a.start().await.unwrap();
 
     host_a.start_actor(echo).await.unwrap();
     await_actor_count(&host_a, 1, Duration::from_millis(50), 3)
         .await
         .unwrap();
 
-    let host_b = HostBuilder::new().build();
-    let nats_rpc_b = Box::new(NatsLatticeProvider::new(
-        Some("distributedecho".to_string()),
-        Duration::from_secs(2),
-        nats::connect("0.0.0.0:4222").unwrap(),
-    ));
-    host_b.start(Some(nats_rpc_b), None).await.unwrap();
+    let nc2 = nats::asynk::connect("0.0.0.0:4222").await?;
+    let host_b = HostBuilder::new()
+        .with_rpc_client(nc2)
+        .with_namespace("distributedecho")
+        .build();
+
+    host_b.start().await.unwrap();
 
     let arc = par_from_file("./tests/modules/libwascc_httpsrv.par.gz").unwrap();
     let httpserv = wascc_httpsrv::HttpServerProvider::new();
@@ -67,7 +63,7 @@ pub(crate) async fn distributed_echo() -> Result<()> {
         .await
         .unwrap();
 
-    std::thread::sleep(Duration::from_millis(3000));
+    std::thread::sleep(Duration::from_millis(300));
 
     let url = format!("http://localhost:{}/foo/bar", web_port);
     let resp = reqwest::get(&url).await?;
@@ -75,8 +71,8 @@ pub(crate) async fn distributed_echo() -> Result<()> {
     assert_eq!(resp.text().await?,
      "{\"method\":\"GET\",\"path\":\"/foo/bar\",\"query_string\":\"\",\"headers\":{\"accept\":\"*/*\",\"host\":\"localhost:7001\"},\"body\":[]}");
 
-    //    host_a.stop().await;
-    //    host_b.stop().await;
+    host_a.stop().await;
+    host_b.stop().await;
     Ok(())
 }
 
@@ -85,43 +81,43 @@ pub(crate) async fn distributed_echo() -> Result<()> {
 // anywhere in the lattice.
 pub(crate) async fn link_on_third_host() -> Result<()> {
     const NS: &str = "linkonthirdhost";
-    let host_a = HostBuilder::new().build();
-    let nc = nats::connect("0.0.0.0:4222")?;
-    let nats_rpc = Box::new(NatsLatticeProvider::new(
-        Some(NS.to_string()),
-        Duration::from_millis(300),
-        nc.clone(),
-    ));
 
-    host_a.start(Some(nats_rpc), None).await?;
+    let nc = nats::asynk::connect("0.0.0.0:4222").await?;
+    let host_a = HostBuilder::new()
+        .with_rpc_client(nc)
+        .with_namespace(NS)
+        .build();
+
+    host_a.start().await?;
     let echo = Actor::from_file("./tests/modules/echo.wasm")?;
     let actor_id = echo.public_key();
     host_a.start_actor(echo).await?;
     await_actor_count(&host_a, 1, Duration::from_millis(50), 3).await?;
 
-    let host_b = HostBuilder::new().build();
-    let nats_rpc_b = Box::new(NatsLatticeProvider::new(
-        Some(NS.to_string()),
-        Duration::from_millis(300),
-        nc.clone(),
-    ));
-    host_b.start(Some(nats_rpc_b), None).await?;
+    let nc2 = nats::asynk::connect("0.0.0.0:4222").await?;
+    let host_b = HostBuilder::new()
+        .with_rpc_client(nc2)
+        .with_namespace(NS)
+        .build();
+
+    host_b.start().await?;
     let web_port = 7002_u32;
     let arc = par_from_file("./tests/modules/libwascc_httpsrv.par.gz")?;
     let websrv = NativeCapability::from_archive(&arc, None)?;
-    let mut webvalues: HashMap<String, String> = HashMap::new();
-    webvalues.insert("PORT".to_string(), format!("{}", web_port));
+
     host_b.start_native_capability(websrv).await?;
     // always have to remember that "extras" is in the provider list.
     await_provider_count(&host_b, 2, Duration::from_millis(50), 3).await?;
 
-    let host_c = HostBuilder::new().build();
-    let nats_rpc_c = Box::new(NatsLatticeProvider::new(
-        Some(NS.to_string()),
-        Duration::from_millis(300),
-        nc.clone(),
-    ));
-    host_c.start(Some(nats_rpc_c), None).await?;
+    let nc3 = nats::asynk::connect("0.0.0.0:4222").await?;
+    let host_c = HostBuilder::new()
+        .with_rpc_client(nc3)
+        .with_namespace(NS)
+        .build();
+
+    host_c.start().await?;
+    let mut webvalues: HashMap<String, String> = HashMap::new();
+    webvalues.insert("PORT".to_string(), format!("{}", web_port));
     host_c
         .set_binding(
             &actor_id,
@@ -131,6 +127,8 @@ pub(crate) async fn link_on_third_host() -> Result<()> {
             webvalues,
         )
         .await?;
+
+    ::std::thread::sleep(Duration::from_millis(100)); // let the HTTP server spin up
 
     let url = format!("http://localhost:{}/foo/bar", web_port);
     let resp = reqwest::get(&url).await?;
@@ -234,14 +232,14 @@ pub(crate) async fn scaled_kvcounter() -> Result<()> {
 
 async fn scaledkv_host(actor: Option<Actor>, par: Option<Vec<ProviderArchive>>) -> Result<Host> {
     const NS: &str = "scaledkvhost";
-    let h = HostBuilder::new().build();
-    let nc = nats::connect("0.0.0.0:4222")?;
-    let nats_rpc = Box::new(NatsLatticeProvider::new(
-        Some(NS.to_string()),
-        Duration::from_millis(300),
-        nc.clone(),
-    ));
-    h.start(Some(nats_rpc), None).await?;
+    let nc = nats::asynk::connect("0.0.0.0:4222").await?;
+
+    let h = HostBuilder::new()
+        .with_rpc_client(nc)
+        .with_namespace(NS)
+        .build();
+
+    h.start().await?;
     if let Some(a) = actor {
         h.start_actor(a).await?;
         await_actor_count(&h, 1, Duration::from_millis(30), 3).await?;

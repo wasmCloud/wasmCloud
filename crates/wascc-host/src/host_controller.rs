@@ -5,6 +5,7 @@ use crate::capability::native_host::NativeCapabilityHost;
 use crate::control_plane::cpactor::ControlPlane;
 use crate::dispatch::Invocation;
 use crate::hlreg::HostLocalSystemService;
+use crate::messagebus::rpc_client::LinkDefinition;
 use crate::messagebus::{AdvertiseBinding, FindBindings, MessageBus, Unsubscribe, OP_BIND_ACTOR};
 use crate::middleware::Middleware;
 use crate::oci::fetch_oci_bytes;
@@ -30,6 +31,12 @@ pub(crate) struct HostController {
     providers: HashMap<String, Addr<NativeCapabilityHost>>,
     authorizer: Option<Box<dyn Authorizer>>,
     image_refs: HashMap<String, String>,
+}
+
+#[derive(Message)]
+#[rtype(result = "()")]
+pub(crate) struct CheckLink {
+    pub linkdef: LinkDefinition,
 }
 
 #[derive(Message)]
@@ -78,15 +85,6 @@ pub(crate) struct StopProvider {
 #[rtype(result = "String")]
 pub(crate) struct GetHostID;
 
-#[derive(Message)]
-#[rtype(result = "Invocation")]
-pub struct MintInvocationRequest {
-    pub op: String,
-    pub target: WasccEntity,
-    pub msg: Vec<u8>,
-    pub origin: WasccEntity,
-}
-
 impl Supervised for HostController {}
 
 impl SystemService for HostController {
@@ -102,6 +100,52 @@ impl HostLocalSystemService for HostController {}
 
 impl Actor for HostController {
     type Context = Context<Self>;
+}
+
+// If an incoming link definition relates to a provider currently
+// running in this host, then re-invoke the link call
+// to ensure this provider is aware of it. NOTE that all of the link
+// actor RPC calls MUST be considered idempotent because they WILL get
+// called multiple times.
+impl Handler<CheckLink> for HostController {
+    type Result = ResponseActFuture<Self, ()>;
+
+    fn handle(&mut self, msg: CheckLink, _ctx: &mut Context<Self>) -> Self::Result {
+        if self.providers.contains_key(&msg.linkdef.provider_id) {
+            let config = crate::generated::core::CapabilityConfiguration {
+                module: msg.linkdef.actor,
+                values: msg.linkdef.values,
+            };
+            let inv = Invocation::new(
+                self.kp.as_ref().unwrap(),
+                WasccEntity::Actor(SYSTEM_ACTOR.to_string()),
+                WasccEntity::Capability {
+                    id: msg.linkdef.provider_id.to_string(),
+                    contract_id: msg.linkdef.contract_id,
+                    binding: msg.linkdef.link_name,
+                },
+                OP_BIND_ACTOR,
+                crate::generated::core::serialize(&config).unwrap(),
+            );
+            let target = self
+                .providers
+                .get(&msg.linkdef.provider_id)
+                .cloned()
+                .unwrap();
+            Box::pin(
+                async move {
+                    // * Send directly to the provider rather than via the bus
+                    // * so we can guarantee we'll never infinite loop this invocation
+                    if let Err(_) = target.send(inv).await {
+                        error!("Capability provider failed to handle link enable call");
+                    }
+                }
+                .into_actor(self),
+            )
+        } else {
+            Box::pin(async {}.into_actor(self))
+        }
+    }
 }
 
 impl Handler<SetLabels> for HostController {
@@ -185,10 +229,9 @@ impl Handler<Initialize> for HostController {
     type Result = ();
 
     fn handle(&mut self, msg: Initialize, _ctx: &mut Context<Self>) {
-        info!("Host controller initialized - {}", msg.kp.public_key());
-
         self.host_labels = msg.labels;
         self.authorizer = Some(msg.auth);
+        let host_id = msg.kp.public_key();
 
         let claims = crate::capability::extras::get_claims();
         let pk = claims.subject.to_string();
@@ -206,22 +249,9 @@ impl Handler<Initialize> for HostController {
         extras.do_send(init);
         self.providers.insert(pk.clone(), extras); // can't let this provider go out of scope, or the actix actor will stop
         self.kp = Some(msg.kp);
+        info!("Host controller initialized - {}", host_id);
 
         trace!("Host labels: {:?}", &self.host_labels);
-    }
-}
-
-impl Handler<MintInvocationRequest> for HostController {
-    type Result = Invocation;
-
-    fn handle(&mut self, msg: MintInvocationRequest, _ctx: &mut Context<Self>) -> Invocation {
-        Invocation::new(
-            self.kp.as_ref().unwrap(),
-            msg.origin.clone(),
-            msg.target.clone(),
-            &msg.op,
-            msg.msg.clone(),
-        )
     }
 }
 
@@ -230,6 +260,8 @@ impl Handler<StartActor> for HostController {
 
     fn handle(&mut self, msg: StartActor, ctx: &mut Context<Self>) -> Self::Result {
         let sub = msg.actor.claims().subject.to_string();
+        let claims = msg.actor.claims();
+        info!("Starting actor {}", sub);
 
         if self.actors.contains_key(&sub) {
             error!("Aborting attempt to start already running actor {}", sub);
@@ -239,28 +271,17 @@ impl Handler<StartActor> for HostController {
             );
         }
 
-        trace!(
-            "Starting actor {} per request",
-            msg.actor.token.claims.subject
-        );
-        // get "free standing" references to all these things so we don't
-        // move self into the arbiter start closure. YAY borrow checker.
-        let seed = self.kp.as_ref().unwrap().seed().unwrap();
-        let mw = self.mw_chain.clone();
-        let bytes = msg.actor.bytes.clone();
-        let claims = &msg.actor.token.claims;
-        let imgref = msg.image_ref.clone();
-        if !self.authorizer.as_ref().unwrap().can_load(claims) {
+        if !self.authorizer.as_ref().unwrap().can_load(&claims) {
             return Box::pin(
                 async move { Err("Permission denied starting actor.".into()) }.into_actor(self),
             );
         }
         let init = crate::actors::Initialize {
-            actor_bytes: bytes.clone(),
+            actor_bytes: msg.actor.bytes.clone(),
             wasi: None,
-            mw_chain: mw.clone(),
-            signing_seed: seed.clone(),
-            image_ref: imgref.clone(),
+            mw_chain: self.mw_chain.clone(),
+            signing_seed: self.kp.as_ref().unwrap().seed().unwrap(),
+            image_ref: msg.image_ref.clone(),
             host_id: self.kp.as_ref().unwrap().public_key(),
         };
 
@@ -279,8 +300,8 @@ impl Handler<StartActor> for HostController {
                         Ok(())
                     }
                     Err(e) => {
-                        error!("Failed to start actor");
-                        Err("Failed to start actor".into())
+                        error!("Failed to initialize actor");
+                        Err("Failed to initialize actor".into())
                     }
                 }),
         )
@@ -300,16 +321,7 @@ impl Handler<StartProvider> for HostController {
             );
         }
 
-        println!(
-            "{} Starting provider {}",
-            self.kp.as_ref().unwrap().public_key(),
-            msg.provider.claims.subject
-        );
-
-        trace!(
-            "Starting provider {} per request",
-            msg.provider.claims.subject
-        );
+        info!("Starting provider {}", msg.provider.claims.subject);
 
         let seed = self.kp.as_ref().unwrap().seed().unwrap();
         let mw = self.mw_chain.clone();
@@ -378,7 +390,7 @@ async fn initialize_provider(
         })
         .await;
     if let Ok(bindings) = bindings {
-        trace!("Re-applying bindings to provider {}", &provider_id);
+        trace!("Re-applying link definitions to provider {}", &provider_id);
         let k = KeyPair::from_seed(&seed)?;
         reinvoke_bindings(
             &k,
