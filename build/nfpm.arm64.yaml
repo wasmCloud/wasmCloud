@@ -1,0 +1,18 @@
+# NFPM: check https://nfpm.goreleaser.com/configuration for detailed usage
+# wash cli [amd64]
+
+name: wash
+arch: arm64
+platform: linux
+version: ${VERSION}
+section: default
+priority: extra
+maintainer: Bill Young <bill@byoung.io>
+description: |
+  waSCC Shell
+   A single CLI to handle all of your waSCC tooling needs
+vendor: waSCC
+homepage: https://wascc.dev
+license: Apache-2.0
+files:
+  target/armv7-unknown-linux-gnueabihf/release/wash: "/usr/local/bin/wash"
