@@ -205,7 +205,7 @@ impl Handler<AdvertiseBinding> for RpcClient {
         };
         let nc = self.nc.clone().unwrap();
         let subject = links_subject(&self.ns_prefix);
-        let bytes = serialize(&ld).unwrap(); // we should never fail or own serialize
+        let bytes = serialize(&ld).unwrap(); // we should never fail our own serialize
         Box::pin(
             async move {
                 let r = nc.publish(&subject, &bytes).await;
