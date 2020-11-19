@@ -1,5 +1,9 @@
 name: Release
 
+on:
+  push:
+    branches:
+      - feature/*
 jobs:
   package:
     runs-on: ubuntu-latest
