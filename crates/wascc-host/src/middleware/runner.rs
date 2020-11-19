@@ -38,7 +38,6 @@ pub(crate) async fn invoke_actor(
     } else {
         match target.send(inv.clone()).await {
             Ok(ir) => {
-                println!("done");
                 // POST
                 run_actor_post_invoke(ir, middlewares)
             }
