@@ -1,38 +1,29 @@
 use crate::auth::Authorizer;
 use crate::capability::binding_cache::BindingCache;
 use crate::Result;
-use crate::{BusDispatcher, Invocation, InvocationResponse, WasccEntity};
+use crate::{Invocation, InvocationResponse, WasccEntity};
 use actix::dev::{MessageResponse, ResponseChannel};
 use actix::prelude::*;
 use std::collections::HashMap;
 use wascap::prelude::{Claims, KeyPair};
 
+use crate::messagebus::rpc_client::RpcClient;
 pub use handlers::OP_BIND_ACTOR;
+use std::sync::Arc;
+use std::time::Duration;
+
 pub(crate) mod handlers;
 mod hb;
+pub(crate) mod rpc_client;
+pub(crate) mod rpc_subscription;
 mod utils;
-
-pub trait LatticeProvider: Sync + Send {
-    fn init(&mut self, dispatcher: BusDispatcher);
-    fn name(&self) -> String;
-    fn rpc(&self, inv: &Invocation) -> Result<InvocationResponse>;
-    fn register_rpc_listener(&self, subscriber: &WasccEntity) -> Result<()>;
-    fn remove_rpc_listener(&self, subscriber: &WasccEntity) -> Result<()>;
-    fn advertise_binding(
-        &self,
-        actor: &str,
-        contract_id: &str,
-        binding_name: &str,
-        provider_id: &str,
-        values: HashMap<String, String>,
-    ) -> Result<()>;
-    fn advertise_claims(&self, claims: Claims<wascap::jwt::Actor>) -> Result<()>;
-}
 
 #[derive(Default)]
 pub(crate) struct MessageBus {
-    pub provider: Option<Box<dyn LatticeProvider>>,
+    nc: Option<nats::asynk::Connection>,
+    namespace: Option<String>,
     subscribers: HashMap<WasccEntity, Recipient<Invocation>>,
+    rpc_outbound: Option<Addr<RpcClient>>,
     binding_cache: BindingCache,
     claims_cache: HashMap<String, Claims<wascap::jwt::Actor>>,
     key: Option<KeyPair>,
@@ -65,8 +56,12 @@ where
 
 #[derive(Message)]
 #[rtype(result = "()")]
-pub struct SetProvider {
-    pub provider: Box<dyn LatticeProvider>,
+pub struct Initialize {
+    pub nc: Option<nats::asynk::Connection>,
+    pub namespace: Option<String>,
+    pub key: KeyPair,
+    pub auth: Box<dyn Authorizer>,
+    pub rpc_timeout: Duration,
 }
 
 #[derive(Message)]
@@ -97,9 +92,19 @@ pub struct LookupBinding {
     pub binding_name: String,
 }
 
-#[derive(Message)]
+#[derive(Message, Clone)]
 #[rtype(result = "Result<()>")]
 pub struct AdvertiseBinding {
+    pub contract_id: String,
+    pub actor: String,
+    pub binding_name: String,
+    pub provider_id: String,
+    pub values: HashMap<String, String>,
+}
+
+#[derive(Message)]
+#[rtype(result = "()")]
+pub struct PutLink {
     pub contract_id: String,
     pub actor: String,
     pub binding_name: String,
@@ -135,16 +140,4 @@ where
             tx.send(self);
         }
     }
-}
-
-#[derive(Message)]
-#[rtype(result = "()")]
-pub struct SetKey {
-    pub key: KeyPair,
-}
-
-#[derive(Message)]
-#[rtype(result = "()")]
-pub struct SetAuthorizer {
-    pub auth: Box<dyn Authorizer>,
 }

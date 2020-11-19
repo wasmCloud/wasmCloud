@@ -2,6 +2,7 @@ use crate::capability::native::NativeCapability;
 use crate::control_plane::cpactor::{ControlPlane, PublishEvent};
 use crate::control_plane::events::TerminationReason;
 use crate::dispatch::{Invocation, InvocationResponse, ProviderDispatcher, WasccEntity};
+use crate::hlreg::HostLocalSystemService;
 use crate::messagebus::{MessageBus, Subscribe, Unsubscribe};
 use crate::middleware::{run_capability_post_invoke, run_capability_pre_invoke, Middleware};
 use crate::{errors, Host, SYSTEM_ACTOR};
@@ -54,13 +55,18 @@ impl Actor for NativeCapabilityHost {
     }
 
     fn stopped(&mut self, _ctx: &mut Self::Context) {
+        if self.state.is_none() {
+            warn!("Stopped a provider host that had no state. Something might be amiss, askew, or perchance awry");
+            return;
+        }
+
         let state = self.state.as_ref().unwrap();
         info!(
             "Provider stopped {} - {}",
             &state.cap.claims.subject, &state.descriptor.name
         );
 
-        let cp = ControlPlane::from_registry();
+        let cp = ControlPlane::from_hostlocal_registry(&state.kp.public_key());
         cp.do_send(PublishEvent {
             event: ControlEvent::ProviderStopped {
                 binding_name: state.cap.binding_name.to_string(),
@@ -105,7 +111,7 @@ impl Handler<Initialize> for NativeCapabilityHost {
         });
         let state = self.state.as_ref().unwrap();
 
-        let b = MessageBus::from_registry();
+        let b = MessageBus::from_hostlocal_registry(&state.kp.public_key());
         let entity = WasccEntity::Capability {
             id: state.cap.claims.subject.to_string(),
             contract_id: state.descriptor.id.to_string(),
@@ -139,7 +145,7 @@ impl Handler<Initialize> for NativeCapabilityHost {
                 ctx.stop();
             }
         });
-        let cp = ControlPlane::from_registry();
+        let cp = ControlPlane::from_hostlocal_registry(&state.kp.public_key());
         cp.do_send(PublishEvent {
             event: ControlEvent::ProviderStarted {
                 binding_name: state.cap.binding_name.to_string(),
@@ -164,7 +170,7 @@ impl Handler<Invocation> for NativeCapabilityHost {
     fn handle(&mut self, inv: Invocation, ctx: &mut Self::Context) -> Self::Result {
         let state = self.state.as_ref().unwrap();
         trace!(
-            "Provider {} handling {}",
+            "Provider {} handling invocation operation '{}'",
             state.cap.claims.subject,
             inv.operation
         );

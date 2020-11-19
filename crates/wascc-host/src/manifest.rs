@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::{fs::File, io::Read, path::Path};
 
+/// A host manifest contains a descriptive profile of the host's desired state, including
+/// a list of actors and capability providers to load as well as any desired link definitions
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostManifest {
     #[serde(default)]
@@ -17,12 +19,18 @@ pub struct HostManifest {
     pub bindings: Vec<BindingEntry>,
 }
 
+/// The description of a capability within a host manifest
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Capability {
+    /// An image reference for this capability. If this is a file on disk, it will be used, otherwise
+    /// the system will assume it is an OCI registry image reference
     pub image_ref: String,
+    /// The (optional) name of the link that identifies this instance of the capability
     pub binding_name: Option<String>,
 }
 
+/// A link definition describing the actor and capability provider involved, as well
+/// as the configuration values for that link
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BindingEntry {
     pub actor: String,

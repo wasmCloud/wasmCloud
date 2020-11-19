@@ -36,10 +36,8 @@ pub(crate) async fn invoke_actor(
         error!("Middleware pre-invoke failure: {}", e);
         return Err(e);
     } else {
-        println!("invoking");
         match target.send(inv.clone()).await {
             Ok(ir) => {
-                println!("done");
                 // POST
                 run_actor_post_invoke(ir, middlewares)
             }

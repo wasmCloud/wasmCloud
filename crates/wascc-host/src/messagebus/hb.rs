@@ -2,6 +2,7 @@ use super::MessageBus;
 use crate::control_plane::cpactor::{ControlPlane, PublishEvent};
 use crate::control_plane::events::RunState;
 use crate::generated::core::{deserialize, serialize, HealthRequest, HealthResponse};
+use crate::hlreg::HostLocalSystemService;
 use crate::messagebus::handlers::OP_HEALTH_REQUEST;
 use crate::Result;
 use crate::{ControlEvent, Invocation, WasccEntity, SYSTEM_ACTOR};
@@ -17,18 +18,19 @@ const PING_TIMEOUT_MS: u64 = 200;
 
 impl MessageBus {
     pub(crate) fn hb(&self, ctx: &mut Context<Self>) {
-        println!("HB");
+        trace!("Emitting heartbeat");
         let interval = hb_duration();
         ctx.run_interval(interval, |act, ctx| {
             let claims = act.claims_cache.values().cloned().collect();
             let subs = act.subscribers.clone();
             let entities: Vec<(_, _)> = subs.into_iter().collect();
             let seed = act.key.as_ref().unwrap().seed().unwrap();
+            let host_id = act.key.as_ref().unwrap().public_key();
 
             ctx.wait(
                 async move {
                     let evt = generate_heartbeat_event(entities, claims, seed).await;
-                    let cp = ControlPlane::from_registry();
+                    let cp = ControlPlane::from_hostlocal_registry(&host_id);
                     cp.do_send(PublishEvent { event: evt });
                 }
                 .into_actor(act),

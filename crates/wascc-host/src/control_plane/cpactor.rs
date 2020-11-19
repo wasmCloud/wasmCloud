@@ -1,5 +1,5 @@
-use crate::control_plane::{ControlInterface, ControlPlaneProvider};
-use crate::messagebus::{MessageBus, SetKey};
+use crate::hlreg::HostLocalSystemService;
+use crate::messagebus::MessageBus;
 use crate::{ControlEvent, Result};
 use actix::prelude::*;
 use std::collections::HashMap;
@@ -7,7 +7,7 @@ use wascap::prelude::KeyPair;
 
 #[derive(Default)]
 pub struct ControlPlane {
-    provider: Option<Box<dyn ControlPlaneProvider>>,
+    client: Option<nats::asynk::Connection>,
     key: Option<KeyPair>,
     options: ControlOptions,
 }
@@ -15,8 +15,9 @@ pub struct ControlPlane {
 #[derive(Message)]
 #[rtype(result = "()")]
 pub struct Initialize {
-    pub provider: Box<dyn ControlPlaneProvider>,
+    pub client: Option<nats::asynk::Connection>,
     pub control_options: ControlOptions,
+    pub key: KeyPair,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -41,23 +42,18 @@ impl SystemService for ControlPlane {
     }
 }
 
+impl HostLocalSystemService for ControlPlane {}
+
 impl Actor for ControlPlane {
     type Context = Context<Self>;
-}
-
-impl Handler<SetKey> for ControlPlane {
-    type Result = ();
-
-    fn handle(&mut self, msg: SetKey, _ctx: &mut Context<Self>) {
-        self.key = Some(msg.key)
-    }
 }
 
 impl Handler<PublishEvent> for ControlPlane {
     type Result = ();
 
     fn handle(&mut self, msg: PublishEvent, _ctx: &mut Context<Self>) {
-        let evt = msg
+        // TODO: implement in the next PR
+        /*let evt = msg
             .event
             .into_published(&self.key.as_ref().unwrap().public_key());
         trace!(
@@ -68,26 +64,41 @@ impl Handler<PublishEvent> for ControlPlane {
             if let Err(e) = p.emit_control_event(evt) {
                 error!("Control plane failed to emit event: {}", e);
             }
-        }
+        } */
     }
 }
 
 impl Handler<Initialize> for ControlPlane {
     type Result = ();
 
-    fn handle(&mut self, msg: Initialize, ctx: &mut Context<Self>) {
-        let controller = ControlInterface {
-            labels: msg.control_options.host_labels.clone(),
-            bus: MessageBus::from_registry(),
-            control_plane: ctx.address(),
-        };
-        self.provider = Some(msg.provider);
-        self.provider.as_mut().unwrap().init(controller);
+    fn handle(&mut self, msg: Initialize, _ctx: &mut Context<Self>) {
+        self.key = Some(msg.key);
+        self.client = msg.client;
         self.options = msg.control_options;
-        let evt = ControlEvent::HostStarted;
-        let evt = evt.into_published(&self.key.as_ref().unwrap().public_key());
-        if let Err(e) = self.provider.as_ref().unwrap().emit_control_event(evt) {
-            error!("Control plane failed to emit host started event: {}", e);
+
+        // TODO: implement in next PR
+        /*
+        let mut passed = false;
+        self.client = msg.client;
+
+        if let Some(ref mut p) = self.provider.as_mut() {
+            if let Err(e) = p.init(controller) {
+                error!("Failed to initialize control plane: {}, falling back to null control plane default.", e);
+                passed = false;
+            }
+            let evt = ControlEvent::HostStarted;
+            let evt = evt.into_published(&self.key.as_ref().unwrap().public_key());
+            if let Err(e) = p.emit_control_event(evt) {
+                error!(
+                    "Control plane provider failed to emit host started event: {}",
+                    e
+                );
+                passed = false;
+            }
+            true;
         }
+        if !passed {
+            self.provider = None;
+        }*/
     }
 }

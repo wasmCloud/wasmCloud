@@ -1,6 +1,4 @@
-use crate::messagebus::{
-    AdvertiseBinding, LatticeProvider, MessageBus, SetAuthorizer, SetProvider,
-};
+use crate::messagebus::{AdvertiseBinding, MessageBus};
 use std::thread;
 use wapc::WebAssemblyEngineProvider;
 
@@ -12,11 +10,11 @@ use crate::capability::native::NativeCapability;
 use crate::capability::native_host::NativeCapabilityHost;
 use crate::control_plane::cpactor::{ControlOptions, ControlPlane, PublishEvent};
 use crate::control_plane::events::TerminationReason;
-use crate::control_plane::ControlPlaneProvider;
 use crate::dispatch::{Invocation, InvocationResponse};
+use crate::hlreg::HostLocalSystemService;
 use crate::host_controller::{
-    GetHostID, HostController, MintInvocationRequest, SetLabels, StartActor, StartProvider,
-    StopActor, StopProvider, RESTRICTED_LABELS,
+    GetHostID, HostController, SetLabels, StartActor, StartProvider, StopActor, StopProvider,
+    RESTRICTED_LABELS,
 };
 use crate::messagebus::{QueryActors, QueryProviders};
 use crate::oci::fetch_oci_bytes;
@@ -27,11 +25,17 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs::File;
 use std::path::Path;
+use std::time::Duration;
+use wascap::prelude::KeyPair;
 
 pub struct HostBuilder {
     labels: HashMap<String, String>,
     authorizer: Box<dyn Authorizer + 'static>,
+    namespace: String,
+    rpc_timeout: Duration,
     allow_latest: bool,
+    rpc_client: Option<nats::asynk::Connection>,
+    cplane_client: Option<nats::asynk::Connection>,
 }
 
 impl HostBuilder {
@@ -40,12 +44,43 @@ impl HostBuilder {
             labels: crate::host_controller::detect_core_host_labels(),
             authorizer: Box::new(crate::auth::DefaultAuthorizer::new()),
             allow_latest: false,
+            namespace: "default".to_string(),
+            rpc_timeout: Duration::from_secs(2),
+            rpc_client: None,
+            cplane_client: None,
         }
     }
 
+    pub fn with_rpc_client(self, client: nats::asynk::Connection) -> HostBuilder {
+        HostBuilder {
+            rpc_client: Some(client),
+            ..self
+        }
+    }
+
+    pub fn with_controlplane_client(self, client: nats::asynk::Connection) -> HostBuilder {
+        HostBuilder {
+            cplane_client: Some(client),
+            ..self
+        }
+    }
     pub fn with_authorizer(self, authorizer: impl Authorizer + 'static) -> HostBuilder {
         HostBuilder {
             authorizer: Box::new(authorizer),
+            ..self
+        }
+    }
+
+    pub fn with_namespace(self, namespace: &str) -> HostBuilder {
+        HostBuilder {
+            namespace: namespace.to_string(),
+            ..self
+        }
+    }
+
+    pub fn with_rpc_timeout(self, rpc_timeout: Duration) -> HostBuilder {
+        HostBuilder {
+            rpc_timeout: rpc_timeout,
             ..self
         }
     }
@@ -77,6 +112,11 @@ impl HostBuilder {
             authorizer: self.authorizer,
             id: RefCell::new("".to_string()),
             allow_latest: self.allow_latest,
+            kp: RefCell::new(None),
+            rpc_timeout: self.rpc_timeout,
+            namespace: self.namespace,
+            rpc_client: self.rpc_client,
+            cplane_client: self.cplane_client,
         }
     }
 }
@@ -86,57 +126,58 @@ pub struct Host {
     authorizer: Box<dyn Authorizer + 'static>,
     id: RefCell<String>,
     allow_latest: bool,
+    kp: RefCell<Option<KeyPair>>,
+    namespace: String,
+    rpc_timeout: Duration,
+    cplane_client: Option<nats::asynk::Connection>,
+    rpc_client: Option<nats::asynk::Connection>,
 }
 
 impl Host {
     /// Starts the host's actor system. This call is non-blocking, so it is up to the consumer
     /// to provide some form of parking or waiting (e.g. wait for a Ctrl-C signal).
-    pub async fn start(
-        &self,
-        lattice_rpc: Option<Box<dyn LatticeProvider + 'static>>,
-        lattice_control: Option<Box<dyn ControlPlaneProvider + 'static>>,
-    ) -> Result<()> {
-        let mb = MessageBus::from_registry();
-        if let Some(l) = lattice_rpc {
-            mb.send(SetProvider { provider: l }).await?;
-        }
-        // message bus authorizes invocations, host controller authorizes loads
-        mb.send(SetAuthorizer {
-            auth: self.authorizer.clone(),
-        })
-        .await?;
+    pub async fn start(&self) -> Result<()> {
+        let kp = KeyPair::new_server();
 
-        let hc = HostController::from_registry();
-        let hc2 = hc.clone();
-        hc2.send(SetAuthorizer {
+        let mb = MessageBus::from_hostlocal_registry(&kp.public_key());
+        let init = crate::messagebus::Initialize {
+            nc: self.rpc_client.clone(),
+            namespace: Some(self.namespace.to_string()),
+            key: KeyPair::from_seed(&kp.seed()?)?,
             auth: self.authorizer.clone(),
-        })
-        .await?;
-        hc.send(SetLabels {
+            rpc_timeout: self.rpc_timeout.clone(),
+        };
+        mb.send(init).await?;
+
+        let hc = HostController::from_hostlocal_registry(&kp.public_key());
+        hc.send(crate::host_controller::Initialize {
             labels: self.labels.clone(),
+            auth: self.authorizer.clone(),
+            kp: KeyPair::from_seed(&kp.seed()?)?,
         })
         .await?;
-        *self.id.borrow_mut() = hc.send(GetHostID {}).await?;
+        *self.id.borrow_mut() = kp.public_key();
 
         // Start control plane
-        if let Some(lattice_control) = lattice_control {
-            let cp = ControlPlane::from_registry();
-            cp.send(crate::control_plane::cpactor::Initialize {
-                provider: lattice_control,
-                control_options: ControlOptions {
-                    host_labels: self.labels.clone(),
-                    oci_allow_latest: self.allow_latest,
-                    ..Default::default()
-                },
-            })
-            .await?;
-        }
+        let cp = ControlPlane::from_hostlocal_registry(&kp.public_key());
+        cp.send(crate::control_plane::cpactor::Initialize {
+            client: self.cplane_client.clone(),
+            control_options: ControlOptions {
+                host_labels: self.labels.clone(),
+                oci_allow_latest: self.allow_latest,
+                ..Default::default()
+            },
+            key: KeyPair::from_seed(&kp.seed()?)?,
+        })
+        .await?;
+
+        *self.kp.borrow_mut() = Some(kp);
 
         Ok(())
     }
 
     pub async fn stop(&self) {
-        let cp = ControlPlane::from_registry();
+        let cp = ControlPlane::from_hostlocal_registry(&self.id.borrow());
         let _ = cp
             .send(PublishEvent {
                 event: ControlEvent::HostStopped {
@@ -152,7 +193,7 @@ impl Host {
     }
 
     pub async fn start_native_capability(&self, capability: crate::NativeCapability) -> Result<()> {
-        let hc = HostController::from_registry();
+        let hc = HostController::from_hostlocal_registry(&self.id.borrow());
         let _ = hc
             .send(StartProvider {
                 provider: capability,
@@ -168,7 +209,7 @@ impl Host {
         cap_ref: &str,
         binding_name: Option<String>,
     ) -> Result<()> {
-        let hc = HostController::from_registry();
+        let hc = HostController::from_hostlocal_registry(&self.id.borrow());
         let bytes = fetch_oci_bytes(cap_ref, self.allow_latest).await?;
         let par = ProviderArchive::try_load(&bytes)?;
         let nc = NativeCapability::from_archive(&par, binding_name)?;
@@ -181,7 +222,7 @@ impl Host {
     }
 
     pub async fn start_actor(&self, actor: crate::Actor) -> Result<()> {
-        let hc = HostController::from_registry();
+        let hc = HostController::from_hostlocal_registry(&self.id.borrow());
 
         hc.send(StartActor {
             actor,
@@ -192,7 +233,7 @@ impl Host {
     }
 
     pub async fn start_actor_from_registry(&self, actor_ref: &str) -> Result<()> {
-        let hc = HostController::from_registry();
+        let hc = HostController::from_hostlocal_registry(&self.id.borrow());
         let bytes = fetch_oci_bytes(actor_ref, self.allow_latest).await?;
         let actor = crate::Actor::from_slice(&bytes)?;
         hc.send(StartActor {
@@ -204,7 +245,7 @@ impl Host {
     }
 
     pub async fn stop_actor(&self, actor_ref: &str) -> Result<()> {
-        let hc = HostController::from_registry();
+        let hc = HostController::from_hostlocal_registry(&self.id.borrow());
         hc.send(StopActor {
             actor_ref: actor_ref.to_string(),
         })
@@ -219,7 +260,7 @@ impl Host {
         contract_id: &str,
         binding: Option<String>,
     ) -> Result<()> {
-        let hc = HostController::from_registry();
+        let hc = HostController::from_hostlocal_registry(&self.id.borrow());
         let binding = binding.unwrap_or("default".to_string());
         hc.send(StopProvider {
             provider_ref: provider_ref.to_string(),
@@ -231,26 +272,24 @@ impl Host {
     }
 
     pub async fn get_actors(&self) -> Result<Vec<String>> {
-        let b = MessageBus::from_registry();
+        let b = MessageBus::from_hostlocal_registry(&self.id.borrow());
         Ok(b.send(QueryActors {}).await?.results)
     }
 
     pub async fn get_providers(&self) -> Result<Vec<String>> {
-        let b = MessageBus::from_registry();
+        let b = MessageBus::from_hostlocal_registry(&self.id.borrow());
         Ok(b.send(QueryProviders {}).await?.results)
     }
 
     pub async fn call_actor(&self, actor: &str, operation: &str, msg: &[u8]) -> Result<Vec<u8>> {
-        let hc = HostController::from_registry();
-        let inv = hc
-            .send(MintInvocationRequest {
-                op: operation.to_string(),
-                target: WasccEntity::Actor(actor.to_string()),
-                msg: msg.to_vec(),
-                origin: WasccEntity::Actor(SYSTEM_ACTOR.to_string()),
-            })
-            .await?;
-        let b = MessageBus::from_registry();
+        let inv = Invocation::new(
+            self.kp.borrow().as_ref().unwrap(),
+            WasccEntity::Actor(SYSTEM_ACTOR.to_string()),
+            WasccEntity::Actor(actor.to_string()),
+            operation,
+            msg.to_vec(),
+        );
+        let b = MessageBus::from_hostlocal_registry(&self.id.borrow());
         let ir = b.send(inv).await?;
         Ok(ir.msg)
     }
@@ -263,7 +302,7 @@ impl Host {
         provider_id: String,
         values: HashMap<String, String>,
     ) -> Result<()> {
-        let bus = MessageBus::from_registry();
+        let bus = MessageBus::from_hostlocal_registry(&self.id.borrow());
         bus.send(AdvertiseBinding {
             contract_id: contract_id.to_string(),
             actor: actor.to_string(),
@@ -275,8 +314,9 @@ impl Host {
     }
 
     pub async fn apply_manifest(&self, manifest: HostManifest) -> Result<()> {
-        let hc = HostController::from_registry();
-        let bus = MessageBus::from_registry();
+        let host_id = self.kp.borrow().as_ref().unwrap().public_key();
+        let hc = HostController::from_hostlocal_registry(&host_id);
+        let bus = MessageBus::from_hostlocal_registry(&host_id);
 
         if manifest.labels.len() > 0 {
             let mut labels = manifest.labels.clone();

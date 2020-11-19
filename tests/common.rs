@@ -3,9 +3,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
 use std::time::Duration;
-use wascc_host::{
-    Actor, ControlPlaneProvider, Host, HostBuilder, LatticeProvider, NativeCapability, Result,
-};
+use wascc_host::{Actor, Host, HostBuilder, NativeCapability, Result};
 
 pub async fn await_actor_count(
     h: &Host,
@@ -52,11 +50,18 @@ pub async fn await_provider_count(
 
 pub async fn gen_kvcounter_host(
     web_port: u32,
-    lattice_rpc: Option<Box<dyn LatticeProvider + 'static>>,
-    lattice_control: Option<Box<dyn ControlPlaneProvider + 'static>>,
+    lattice_rpc: Option<nats::asynk::Connection>,
+    lattice_control: Option<nats::asynk::Connection>,
 ) -> Result<Host> {
-    let h = HostBuilder::new().build();
-    h.start(lattice_rpc, lattice_control).await?;
+    let mut h = HostBuilder::new();
+    if let Some(rpc) = lattice_rpc {
+        h = h.with_rpc_client(rpc);
+    }
+    if let Some(cplane) = lattice_control {
+        h = h.with_controlplane_client(cplane);
+    }
+    let h = h.build();
+    h.start().await?;
 
     let kvcounter = Actor::from_file("./tests/modules/kvcounter.wasm")?;
     let kvcounter_key = kvcounter.public_key();

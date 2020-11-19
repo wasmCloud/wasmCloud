@@ -10,7 +10,7 @@ use wascap::jwt::{Actor, Claims};
 /// impossible to override the base behavior of checking that an actor's embedded JWT contains the right
 /// capability attestations.
 pub trait Authorizer: CloneAuthorizer + Sync + Send {
-    /// This check is performed during the `add_actor` call, allowing the custom authorizer to do things
+    /// This check is performed during the `[start_actor](crate::Host::start_actor)` call, allowing the custom authorizer to do things
     /// like verify a provenance chain, make external calls, etc.
     fn can_load(&self, claims: &Claims<Actor>) -> bool;
     /// This check will be performed for _every_ invocation that has passed the base capability check,
@@ -19,6 +19,7 @@ pub trait Authorizer: CloneAuthorizer + Sync + Send {
     fn can_invoke(&self, claims: &Claims<Actor>, target: &WasccEntity, operation: &str) -> bool;
 }
 
+#[doc(hidden)]
 pub trait CloneAuthorizer {
     fn clone_authorizer(&self) -> Box<dyn Authorizer>;
 }
@@ -65,7 +66,7 @@ impl Authorizer for DefaultAuthorizer {
 
 pub(crate) fn authorize_invocation(
     inv: &Invocation,
-    authorizer: Box<dyn Authorizer>, // SIGH: I can't believe I have to clone this because I can't pass the &Box...WHY!?
+    authorizer: Box<dyn Authorizer>,
     claims_cache: &HashMap<String, Claims<wascap::jwt::Actor>>,
 ) -> Result<()> {
     let _ = inv.validate_antiforgery()?; // Fail authorization if the invocation isn't properly signed

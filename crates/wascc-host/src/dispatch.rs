@@ -1,5 +1,6 @@
 use crate::errors::{self, ErrorKind};
-use crate::messagebus::{LookupBinding, MessageBus, OP_BIND_ACTOR};
+use crate::hlreg::HostLocalSystemService;
+use crate::messagebus::{LookupBinding, MessageBus, PutClaims, PutLink, OP_BIND_ACTOR};
 use crate::{Result, SYSTEM_ACTOR};
 use actix::dev::{MessageResponse, ResponseChannel};
 use actix::prelude::*;
@@ -22,41 +23,9 @@ pub const CONFIG_WASCC_CLAIMS_NAME: &str = "__wascc_name";
 pub const CONFIG_WASCC_CLAIMS_EXPIRES: &str = "__wascc_expires";
 pub const CONFIG_WASCC_CLAIMS_TAGS: &str = "__wascc_tags";
 
-pub struct BusDispatcher {
-    pub(crate) addr: Recipient<Invocation>,
-}
-
-impl BusDispatcher {
-    // NOTE: the lattice provider using the bus dispatcher doesn't need to fabricate
-    // new invocations (so it doesn't need a host key), it's de-serializing them off
-    // the wire.
-
-    /// Use this function to send an invocation through the host's message bus, which
-    /// could potentially become a remote procedure call. Typically this function is called
-    /// in response to receiving a serialized invocation on a given target's RPC subscription
-    /// topic
-    pub async fn invoke(&self, inv: &Invocation) -> InvocationResponse {
-        match self.addr.send(inv.clone()).await {
-            Ok(ir) => ir,
-            Err(e) => InvocationResponse::error(&inv, "Mailbox error calling invocation"),
-        }
-    }
-
-    /// Notifies the host that a binding was received from the lattice
-    pub async fn notify_binding_update(
-        &self,
-        actor: &str,
-        contract_id: &str,
-        provider_id: &str,
-        binding_name: &str,
-        values: HashMap<String, String>,
-    ) {
-    }
-
-    /// Notifies the host that a set of actor claims were received from the lattice
-    pub async fn notify_claims_received(&self, claims: Claims<wascap::jwt::Actor>) {}
-}
-
+#[doc(hidden)]
+// Given to a capability provider plugin to give it the means
+// to communicate with the host machinery
 pub struct ProviderDispatcher {
     pub(crate) addr: Recipient<Invocation>, // the bus
     kp: KeyPair,
@@ -76,6 +45,12 @@ impl Dispatcher for ProviderDispatcher {
         op: &str,
         msg: &[u8],
     ) -> ::std::result::Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
+        trace!(
+            "Provider {} dispatching to bus. Destination {} {}",
+            self.me.key(),
+            actor,
+            op
+        );
         let inv = Invocation::new(
             &self.kp,
             self.me.clone(),
@@ -85,7 +60,10 @@ impl Dispatcher for ProviderDispatcher {
         );
         match block_on(async { self.addr.send(inv).await.map(|ir| ir.msg) }) {
             Ok(v) => Ok(v),
-            Err(e) => Err("Mailbox error during host callback".into()),
+            Err(e) => {
+                error!("Provider dispatch to bus failed (mailbox error)");
+                Err("Mailbox error during provider dispatch".into())
+            }
         }
     }
 }
@@ -104,6 +82,9 @@ pub struct Invocation {
 }
 
 impl Invocation {
+    /// Creates a new invocation. All invocations are signed with the host key as a way
+    /// of preventing them from being forged over the network when connected to a lattice,
+    /// so an invocation requires a reference to the host (signing) key
     pub fn new(
         hostkey: &KeyPair,
         origin: WasccEntity,
@@ -132,18 +113,23 @@ impl Invocation {
         }
     }
 
+    /// A fully-qualified URL indicating the origin of the invocation
     pub fn origin_url(&self) -> String {
         self.origin.url()
     }
 
+    /// A fully-qualified URL indicating the target of the invocation
     pub fn target_url(&self) -> String {
         format!("{}/{}", self.target.url(), self.operation)
     }
 
+    /// The hash of the invocation's target, origin, and raw bytes
     pub fn hash(&self) -> String {
         invocation_hash(&self.target_url(), &self.origin_url(), &self.msg)
     }
 
+    /// Validates the current invocation to ensure that the invocation claims have
+    /// not been forged, are not expired, etc
     pub fn validate_antiforgery(&self) -> Result<()> {
         let vr = wascap::jwt::validate_token::<wascap::prelude::Invocation>(&self.encoded_claims)?;
         let claims = Claims::<wascap::prelude::Invocation>::decode(&self.encoded_claims)?;
@@ -214,6 +200,8 @@ pub struct InvocationResponse {
 }
 
 impl InvocationResponse {
+    /// Creates a successful invocation response. All invocation responses contain the
+    /// invocation ID to which they correlate
     pub fn success(inv: &Invocation, msg: Vec<u8>) -> InvocationResponse {
         InvocationResponse {
             msg,
@@ -222,6 +210,7 @@ impl InvocationResponse {
         }
     }
 
+    /// Creates an error response
     pub fn error(inv: &Invocation, err: &str) -> InvocationResponse {
         InvocationResponse {
             msg: Vec::new(),
@@ -243,7 +232,8 @@ where
     }
 }
 
-/// Represents an invocation target - either an actor or a bound capability provider
+/// Represents an entity within the host runtime that can be the source
+/// or target of an invocation
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Eq, Hash)]
 pub enum WasccEntity {
     Actor(String),
@@ -255,6 +245,7 @@ pub enum WasccEntity {
 }
 
 impl WasccEntity {
+    /// The URL of the entity
     pub fn url(&self) -> String {
         match self {
             WasccEntity::Actor(pk) => format!("{}://{}", URL_SCHEME, pk),
@@ -275,6 +266,7 @@ impl WasccEntity {
         }
     }
 
+    /// The unique (public) key of the entity
     pub fn key(&self) -> String {
         match self {
             WasccEntity::Actor(pk) => pk.to_string(),
@@ -298,7 +290,7 @@ fn sha256_digest<R: Read>(mut reader: R) -> Result<Digest> {
     Ok(context.finish())
 }
 
-pub fn invocation_hash(target_url: &str, origin_url: &str, msg: &[u8]) -> String {
+pub(crate) fn invocation_hash(target_url: &str, origin_url: &str, msg: &[u8]) -> String {
     use std::io::Write;
     let mut cleanbytes: Vec<u8> = Vec::new();
     cleanbytes.write(origin_url.as_bytes()).unwrap();
@@ -327,7 +319,7 @@ pub(crate) fn wapc_host_callback(
 
     // Look up the public key of the provider bound to the origin actor
     // for the given capability contract ID.
-    let bus = MessageBus::from_registry();
+    let bus = MessageBus::from_hostlocal_registry(&kp.public_key());
     let prov = block_on(async {
         bus.send(LookupBinding {
             contract_id: namespace.to_string(),

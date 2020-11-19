@@ -1,15 +1,10 @@
+use crate::generated::core::{deserialize, serialize};
+use crate::messagebus::AdvertiseBinding;
 use crate::messagebus::OP_BIND_ACTOR;
-use crate::messagebus::{AdvertiseBinding, LatticeProvider};
 use crate::{Invocation, InvocationResponse, WasccEntity, SYSTEM_ACTOR};
 use actix::prelude::*;
+use std::sync::Arc;
 use wascap::prelude::KeyPair;
-
-pub(crate) fn do_rpc(l: &Box<dyn LatticeProvider>, inv: &Invocation) -> InvocationResponse {
-    match l.rpc(&inv) {
-        Ok(ir) => ir,
-        Err(e) => InvocationResponse::error(&inv, &format!("RPC failure: {}", e)),
-    }
-}
 
 pub(crate) fn generate_binding_invocation(
     t: &Recipient<Invocation>,

@@ -2,6 +2,7 @@ use crate::actors::WasccActor;
 use crate::control_plane::cpactor::{ControlPlane, PublishEvent};
 use crate::control_plane::events::TerminationReason;
 use crate::dispatch::{Invocation, InvocationResponse, WasccEntity};
+use crate::hlreg::HostLocalSystemService;
 use crate::messagebus::{MessageBus, PutClaims, Subscribe, Unsubscribe};
 use crate::middleware::{run_actor_post_invoke, run_actor_pre_invoke, Middleware};
 use crate::{ControlEvent, Result};
@@ -20,6 +21,7 @@ struct State {
     claims: Claims<wascap::jwt::Actor>,
     mw_chain: Vec<Box<dyn Middleware>>,
     image_ref: Option<String>,
+    host_id: String,
 }
 
 #[derive(Message)]
@@ -30,6 +32,7 @@ pub(crate) struct Initialize {
     pub mw_chain: Vec<Box<dyn Middleware>>,
     pub signing_seed: String,
     pub image_ref: Option<String>,
+    pub host_id: String,
 }
 
 impl Handler<Initialize> for ActorHost {
@@ -64,7 +67,7 @@ impl Handler<Initialize> for ActorHost {
             Ok(g) => {
                 let c = c3.clone();
                 let entity = WasccEntity::Actor(c.subject.to_string());
-                let b = MessageBus::from_registry();
+                let b = MessageBus::from_hostlocal_registry(&msg.host_id);
                 let b2 = b.clone();
                 let recipient = ctx.address().clone().recipient();
                 let _ = block_on(async move {
@@ -93,8 +96,10 @@ impl Handler<Initialize> for ActorHost {
                         image_ref: msg.image_ref.clone(),
                     },
                 };
+                let host_id = msg.host_id.to_string();
+                let hid = msg.host_id.to_string();
                 let _ = block_on(async move {
-                    let cp = ControlPlane::from_registry();
+                    let cp = ControlPlane::from_hostlocal_registry(&host_id);
                     cp.send(pe).await
                 });
                 self.state = Some(State {
@@ -102,7 +107,12 @@ impl Handler<Initialize> for ActorHost {
                     claims: c.clone(),
                     mw_chain: msg.mw_chain,
                     image_ref: msg.image_ref,
+                    host_id: hid,
                 });
+                info!(
+                    "Actor {} initialized",
+                    &self.state.as_ref().unwrap().claims.subject
+                );
                 Ok(())
             }
             Err(e) => {
@@ -121,17 +131,14 @@ impl Actor for ActorHost {
     type Context = SyncContext<Self>;
 
     fn started(&mut self, ctx: &mut Self::Context) {
-        info!(
-            "Actor {} started",
-            &self.state.as_ref().unwrap().claims.subject
-        );
+        info!("Actor started");
     }
 
     fn stopped(&mut self, ctx: &mut Self::Context) {
         let state = self.state.as_ref().unwrap();
         info!("Actor {} stopped", &state.claims.subject);
         let _ = block_on(async move {
-            let cp = ControlPlane::from_registry();
+            let cp = ControlPlane::from_hostlocal_registry(&state.host_id);
             cp.send(PublishEvent {
                 event: ControlEvent::ActorStopped {
                     actor: state.claims.subject.to_string(),

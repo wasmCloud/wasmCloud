@@ -1,18 +1,22 @@
 use super::MessageBus;
 use crate::auth::Authorizer;
 use crate::capability::binding_cache::BindingCache;
-use crate::dispatch::{BusDispatcher, Invocation, InvocationResponse, WasccEntity};
-use crate::host_controller::{HostController, MintInvocationRequest};
+use crate::dispatch::{Invocation, InvocationResponse, WasccEntity};
+use crate::hlreg::HostLocalSystemService;
+use crate::host_controller::HostController;
+use crate::messagebus::rpc_client::RpcClient;
+use crate::messagebus::rpc_subscription::{CreateSubscription, RpcSubscription};
 use crate::messagebus::{
-    AdvertiseBinding, AdvertiseClaims, FindBindings, FindBindingsResponse, LookupBinding,
-    PutClaims, QueryActors, QueryProviders, QueryResponse, SetAuthorizer, SetKey, SetProvider,
-    Subscribe, Unsubscribe,
+    AdvertiseBinding, AdvertiseClaims, FindBindings, FindBindingsResponse, Initialize,
+    LookupBinding, PutClaims, PutLink, QueryActors, QueryProviders, QueryResponse, Subscribe,
+    Unsubscribe,
 };
 use crate::{auth, Result, SYSTEM_ACTOR};
 use actix::dev::{MessageResponse, ResponseChannel};
 use actix::prelude::*;
 use futures::executor::block_on;
 use std::collections::HashMap;
+use std::sync::Arc;
 use wascap::jwt::Claims;
 use wascap::prelude::KeyPair;
 
@@ -28,11 +32,14 @@ impl Supervised for MessageBus {}
 impl SystemService for MessageBus {
     fn service_started(&mut self, ctx: &mut Context<Self>) {
         info!("Message Bus started");
+
         // TODO: make this value configurable
         ctx.set_mailbox_capacity(1000);
         self.hb(ctx);
     }
 }
+
+impl HostLocalSystemService for MessageBus {}
 
 impl Actor for MessageBus {
     type Context = Context<Self>;
@@ -42,11 +49,6 @@ impl Handler<FindBindings> for MessageBus {
     type Result = FindBindingsResponse;
 
     fn handle(&mut self, msg: FindBindings, _ctx: &mut Context<Self>) -> Self::Result {
-        println!(
-            "Looking for bindings {:?} - cache size {}",
-            &self.binding_cache,
-            self.binding_cache.len()
-        );
         let res = self
             .binding_cache
             .find_bindings(&msg.binding_name, &msg.provider_id);
@@ -71,12 +73,29 @@ impl Handler<QueryActors> for MessageBus {
     }
 }
 
+// Receive a notification of claims
 impl Handler<PutClaims> for MessageBus {
     type Result = ();
 
     fn handle(&mut self, msg: PutClaims, _ctx: &mut Context<Self>) {
         self.claims_cache
             .insert(msg.claims.subject.to_string(), msg.claims);
+    }
+}
+
+// Receive a link definition through an advertisement
+impl Handler<PutLink> for MessageBus {
+    type Result = ();
+
+    fn handle(&mut self, msg: PutLink, _ctx: &mut Context<Self>) {
+        trace!("Messagebus received link definition notification");
+        self.binding_cache.add_binding(
+            &msg.actor,
+            &msg.contract_id,
+            &msg.binding_name,
+            &msg.provider_id,
+            msg.values.clone(),
+        );
     }
 }
 
@@ -97,19 +116,41 @@ impl Handler<QueryProviders> for MessageBus {
     }
 }
 
-impl Handler<SetKey> for MessageBus {
-    type Result = ();
+impl Handler<Initialize> for MessageBus {
+    type Result = ResponseActFuture<Self, ()>;
 
-    fn handle(&mut self, msg: SetKey, _ctx: &mut Context<Self>) {
-        self.key = Some(msg.key)
-    }
-}
-
-impl Handler<SetAuthorizer> for MessageBus {
-    type Result = ();
-
-    fn handle(&mut self, msg: SetAuthorizer, _ctx: &mut Context<Self>) {
+    fn handle(&mut self, msg: Initialize, ctx: &mut Context<Self>) -> Self::Result {
+        self.key = Some(msg.key);
         self.authorizer = Some(msg.auth);
+        self.nc = msg.nc;
+        self.namespace = msg.namespace;
+        let ns = self.namespace.clone();
+        let timeout = msg.rpc_timeout.clone();
+        info!("Messagebus initialized");
+        if let Some(nc) = self.nc.clone() {
+            let rpc_outbound = RpcClient::default().start();
+            self.rpc_outbound = Some(rpc_outbound);
+            let target = self.rpc_outbound.clone().unwrap();
+            let bus = ctx.address().clone();
+            let host_id = self.key.as_ref().unwrap().public_key();
+            info!("Messagebus initializing with lattice RPC support");
+            Box::pin(
+                async move {
+                    let _ = target
+                        .send(super::rpc_client::Initialize {
+                            host_id,
+                            nc: Arc::new(nc),
+                            ns_prefix: ns,
+                            bus: bus,
+                            rpc_timeout: timeout,
+                        })
+                        .await;
+                }
+                .into_actor(self),
+            )
+        } else {
+            Box::pin(async move {}.into_actor(self))
+        }
     }
 }
 
@@ -117,26 +158,12 @@ impl Handler<AdvertiseBinding> for MessageBus {
     type Result = ResponseActFuture<Self, Result<()>>;
 
     fn handle(&mut self, msg: AdvertiseBinding, ctx: &mut Context<Self>) -> Self::Result {
+        trace!("Advertisting link definition");
         let target = WasccEntity::Capability {
             id: msg.provider_id.to_string(),
             contract_id: msg.contract_id.to_string(),
             binding: msg.binding_name.to_string(),
         };
-        // If there's a lattice provider, tell that provider to advertise said binding
-        // if we fail to advertise the binding on the lattice, return and error and skip
-        // the local binding code below.
-        if let Some(ref lp) = self.provider {
-            if let Err(e) = lp.advertise_binding(
-                &msg.actor,
-                &msg.contract_id,
-                &msg.binding_name,
-                &msg.provider_id,
-                msg.values.clone(),
-            ) {
-                error!("Failed to advertise binding on the lattice: {}", e);
-                return Box::pin(async move { Err(e) }.into_actor(self));
-            }
-        }
 
         self.binding_cache.add_binding(
             &msg.actor,
@@ -145,6 +172,8 @@ impl Handler<AdvertiseBinding> for MessageBus {
             &msg.provider_id,
             msg.values.clone(),
         );
+
+        let advbinding = msg.clone();
 
         if let Some(t) = self.subscribers.get(&target) {
             let req = super::utils::generate_binding_invocation(
@@ -165,10 +194,12 @@ impl Handler<AdvertiseBinding> for MessageBus {
             }))
         } else {
             // No _local_ subscriber found for this target.
-            let is_none = self.provider.as_ref().is_none();
+            let rpc = self.rpc_outbound.clone();
             Box::pin( async move {
-                if is_none {
-                    info!("No potential targets for advertised binding. Assuming this provider will be added later.");
+                if let Some(ref rpc) = rpc {
+                    let _ = rpc.send(advbinding).await;
+                } else {
+                    info!("No potential targets for advertised link definition, no lattice RPC enabled. Assuming this provider will be added later.");
                 }
                 Ok(())
             }.into_actor(self))
@@ -177,31 +208,25 @@ impl Handler<AdvertiseBinding> for MessageBus {
 }
 
 impl Handler<AdvertiseClaims> for MessageBus {
-    type Result = Result<()>;
+    type Result = ResponseActFuture<Self, Result<()>>;
 
-    fn handle(&mut self, msg: AdvertiseClaims, _ctx: &mut Context<Self>) -> Result<()> {
+    fn handle(&mut self, msg: AdvertiseClaims, _ctx: &mut Context<Self>) -> Self::Result {
+        trace!("Advertising claims");
         self.claims_cache
             .insert(msg.claims.subject.to_string(), msg.claims.clone());
 
-        if let Some(ref lp) = self.provider {
-            lp.advertise_claims(msg.claims)?
+        let rpc = self.rpc_outbound.clone();
+        if let Some(rpc) = rpc {
+            Box::pin(
+                async move {
+                    let _ = rpc.send(msg).await;
+                    Ok(())
+                }
+                .into_actor(self),
+            )
+        } else {
+            Box::pin(async move { Ok(()) }.into_actor(self))
         }
-        Ok(())
-    }
-}
-
-impl Handler<SetProvider> for MessageBus {
-    type Result = ();
-
-    fn handle(&mut self, msg: SetProvider, ctx: &mut Context<Self>) {
-        self.provider = Some(msg.provider);
-        self.provider.as_mut().unwrap().init(BusDispatcher {
-            addr: ctx.address().recipient().clone(),
-        });
-        info!(
-            "Message bus using provider - {}",
-            self.provider.as_ref().unwrap().name()
-        );
     }
 }
 
@@ -212,48 +237,70 @@ impl Handler<Invocation> for MessageBus {
     /// then the invocation will be delivered directly to that subscriber. If the subscriber
     /// is not local, _and_ there is a lattice provider configured, then the bus will attempt
     /// to satisfy that call via RPC over lattice.
-    fn handle(&mut self, msg: Invocation, _ctx: &mut Context<Self>) -> Self::Result {
+    fn handle(&mut self, msg: Invocation, ctx: &mut Context<Self>) -> Self::Result {
+        trace!(
+            "{}: Handling invocation from {} to {}",
+            self.key.as_ref().unwrap().public_key(),
+            msg.origin_url(),
+            msg.target_url()
+        );
         if let Err(e) = auth::authorize_invocation(
             &msg,
             self.authorizer.as_ref().unwrap().clone(),
             &self.claims_cache,
         ) {
             error!("Authorization failure: {}", e);
-            println!("Authorization failure: {}", e);
             return Box::pin(
                 async move {
                     InvocationResponse::error(&msg, &format!("Authorization denied: {}", e))
                 }.into_actor(self)
             );
         }
-        match self.subscribers.get(&msg.target) {
-            Some(target) => Box::pin(target.send(msg.clone()).into_actor(self).map(
-                move |res, act, _ctx| {
-                    println!("Bus invocation - {:?}", res);
-                    if let Ok(r) = res {
-                        println!("success");
-                        r
-                    } else {
-                        println!("failure");
-                        InvocationResponse::error(
-                            &msg,
-                            "Mailbox error attempting to perform invocation",
-                        )
-                    }
-                },
-            )),
+        let subscribers = self.subscribers.clone();
+        match subscribers.get(&msg.target) {
+            Some(target) => {
+                trace!("Invocation taking place within bus");
+                Box::pin(
+                    target
+                        .send(msg.clone())
+                        .into_actor(self)
+                        .map(move |res, act, _ctx| {
+                            if let Ok(r) = res {
+                                r
+                            } else {
+                                InvocationResponse::error(
+                                    &msg,
+                                    "Mailbox error attempting to perform invocation",
+                                )
+                            }
+                        }),
+                )
+            }
             None => {
-                println!("deferring to lattice");
-                if let Some(ref l) = self.provider {
-                    let res = super::utils::do_rpc(l, &msg);
-                    Box::pin(async move { res }.into_actor(self))
-                } else {
+                if self.rpc_outbound.is_none() {
+                    warn!("No local subscribers and no RPC client enabled - invocation lost");
                     Box::pin(
                         async move {
                             InvocationResponse::error(
-                                &msg,
-                                &format!("No matching target found on bus {:?}", &msg.target),
-                            )
+                            &msg,
+                            &"No local bus subscribers found, and no lattice RPC client enabled",
+                        )
+                        }
+                        .into_actor(self),
+                    )
+                } else {
+                    trace!("Deferring invocation to lattice (no local subscribers)");
+                    let rpc = self.rpc_outbound.clone().unwrap();
+                    Box::pin(
+                        async move {
+                            let ir = rpc.send(msg.clone()).await;
+                            match ir {
+                                Ok(ir) => ir,
+                                Err(e) => InvocationResponse::error(
+                                    &msg,
+                                    &format!("Error performing lattice RPC {:?}", e),
+                                ),
+                            }
                         }
                         .into_actor(self),
                     )
@@ -272,18 +319,41 @@ impl Handler<LookupBinding> for MessageBus {
     }
 }
 
+// register interest for an entity that's "on" the bus. if the bus has a
+// nats connection, it will register the interest of an RPC subscription proxy. If there is no
+// nats connection, it will register the interest of the actual subscriber.
 impl Handler<Subscribe> for MessageBus {
-    type Result = ();
+    type Result = ResponseActFuture<Self, ()>;
 
-    fn handle(&mut self, msg: Subscribe, _ctx: &mut Context<Self>) -> Self::Result {
+    fn handle(&mut self, msg: Subscribe, ctx: &mut Context<Self>) -> Self::Result {
         trace!("Bus registered interest for {}", &msg.interest.url());
-        self.subscribers
-            .insert(msg.interest.clone(), msg.subscriber.clone());
-        if let Some(ref lp) = self.provider {
-            if let Err(e) = lp.register_rpc_listener(&msg.interest) {
-                error!("Failed to register lattice interest for {} - actor should be considered unstable.", msg.interest.url());
+
+        let nc = self.nc.clone();
+        let ns = self.namespace.clone();
+        Box::pin(
+            async move {
+                let interest = msg.interest.clone();
+                let address = if let Some(ref nc) = nc {
+                    let addr = RpcSubscription::default().start();
+                    let _ = addr
+                        .send(CreateSubscription {
+                            entity: msg.interest.clone(),
+                            target: msg.subscriber,
+                            nc: Arc::new(nc.clone()),
+                            namespace: ns,
+                        })
+                        .await;
+                    addr.recipient() // RPC subscriber proxy
+                } else {
+                    msg.subscriber // Actual subscriber
+                };
+                (interest, address)
             }
-        }
+            .into_actor(self)
+            .map(|(entity, res), act, _ctx| {
+                act.subscribers.insert(entity, res);
+            }),
+        )
     }
 }
 
@@ -291,102 +361,9 @@ impl Handler<Unsubscribe> for MessageBus {
     type Result = ();
 
     fn handle(&mut self, msg: Unsubscribe, _ctx: &mut Context<Self>) {
-        println!("Unsubscribing {}", msg.interest.url());
         trace!("Bus removing interest for {}", msg.interest.url());
         if let None = self.subscribers.remove(&msg.interest) {
-            println!("{:?}", self.subscribers.keys());
-            println!("did not remove subscriber {:?}", msg.interest);
-        }
-        if let Some(ref lp) = self.provider {
-            if let Err(e) = lp.remove_rpc_listener(&msg.interest) {
-                error!(
-                    "Failed to remove lattice interest for {} - lattice may be unstable.",
-                    msg.interest.url()
-                );
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use crate::auth::DefaultAuthorizer;
-    use crate::dispatch::{Invocation, InvocationResponse, WasccEntity};
-    use crate::messagebus::{MessageBus, SetAuthorizer, SetProvider, Subscribe};
-    use crate::Result;
-    use crate::{BusDispatcher, LatticeProvider};
-    use actix::prelude::*;
-    use std::collections::hash_map::RandomState;
-    use std::collections::HashMap;
-    use wascap::jwt::Claims;
-    use wascap::prelude::KeyPair;
-    use wascc_codec::capabilities::Dispatcher;
-
-    #[derive(Debug, Clone, Message)]
-    #[rtype(result = "u32")]
-    struct Query;
-
-    struct HappyActor {
-        inv_count: u32,
-    }
-
-    impl Actor for HappyActor {
-        type Context = SyncContext<Self>;
-    }
-
-    impl Handler<Invocation> for HappyActor {
-        type Result = InvocationResponse;
-
-        fn handle(&mut self, msg: Invocation, ctx: &mut Self::Context) -> Self::Result {
-            self.inv_count = self.inv_count + 1;
-            InvocationResponse::success(&msg, vec![])
-        }
-    }
-
-    impl Handler<Query> for HappyActor {
-        type Result = u32;
-
-        fn handle(&mut self, _msg: Query, _ctx: &mut Self::Context) -> Self::Result {
-            self.inv_count
-        }
-    }
-
-    struct FauxLattice {
-        result: Vec<u8>,
-    }
-
-    impl LatticeProvider for FauxLattice {
-        fn name(&self) -> String {
-            "FAUX".to_string()
-        }
-
-        fn rpc(&self, inv: &Invocation) -> Result<InvocationResponse> {
-            Ok(InvocationResponse::success(&inv, self.result.clone()))
-        }
-
-        fn init(&mut self, dispatcher: BusDispatcher) {}
-
-        fn register_rpc_listener(&self, subscriber: &WasccEntity) -> Result<()> {
-            Ok(())
-        }
-
-        fn advertise_binding(
-            &self,
-            actor: &str,
-            contract_id: &str,
-            binding_name: &str,
-            provider_id: &str,
-            values: HashMap<String, String, RandomState>,
-        ) -> Result<()> {
-            Ok(())
-        }
-
-        fn advertise_claims(&self, claims: Claims<wascap::jwt::Actor>) -> Result<()> {
-            Ok(())
-        }
-
-        fn remove_rpc_listener(&self, subscriber: &WasccEntity) -> Result<()> {
-            Ok(())
+            warn!("Attempted to remove a non-existent subscriber");
         }
     }
 }
