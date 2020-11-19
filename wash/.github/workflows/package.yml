@@ -21,10 +21,10 @@ jobs:
       - name: Install NFPM
         run: curl -sfL https://install.goreleaser.com/github.com/goreleaser/nfpm.sh | sh
       - name: Package amd64 (Debian)
-        run: nfpm pkg --packager deb --target /tmp/ -f build/nfpm.amd64.yaml
+        run: ./bin/nfpm pkg --packager deb --target /tmp/ -f build/nfpm.amd64.yaml
       - name: Package amd64 (RPM)
-        run: nfpm pkg --packager rpm --target /tmp/ -f build/nfpm.amd64.yaml
+        run: ./bin/nfpm pkg --packager rpm --target /tmp/ -f build/nfpm.amd64.yaml
       - name: Package arm64 (Debian)
-        run: nfpm pkg --packager deb --target /tmp/ -f build/nfpm.arm64.yaml
+        run: ./bin/nfpm pkg --packager deb --target /tmp/ -f build/nfpm.arm64.yaml
       - name: Package arm64 (RPM)
-        run: nfpm pkg --packager rpm --target /tmp/ -f build/nfpm.arm64.yaml
+        run: ./bin/nfpm pkg --packager rpm --target /tmp/ -f build/nfpm.arm64.yaml
