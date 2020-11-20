@@ -1,14 +1,16 @@
-name: Release
+name: Package
 
 on:
   push:
-    branches:
-      - feature/*
+    tags:
+      - 'v*' # Push events to matching v*, i.e. v1.0, v20.15.10
+
 jobs:
   package:
     runs-on: ubuntu-latest
     env:
-      VERSION: v0.0.1
+      VERSION: ${{ github.ref }}
+      PACKAGECLOUD_TOKEN: ${{ secrets.PACKAGECLOUD_API_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v1
