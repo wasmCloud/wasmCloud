@@ -1,5 +1,5 @@
 # NFPM: check https://nfpm.goreleaser.com/configuration for detailed usage
-# wash cli [amd64]
+# wash cli [arm64]
 
 name: wash
 arch: arm64
