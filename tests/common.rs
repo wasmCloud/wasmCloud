@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
 use std::time::Duration;
-use wascc_host::{Actor, Host, HostBuilder, NativeCapability, Result};
+use wasmcloud_host::{Actor, Host, HostBuilder, NativeCapability, Result};
 
 pub async fn await_actor_count(
     h: &Host,
@@ -34,7 +34,7 @@ pub async fn await_provider_count(
     let mut attempt = 0;
     loop {
         let p = h.get_providers().await?;
-        if p.len() == count {
+        if p.len() >= count {
             break;
         } else {
             println!("provider wait: {:?}", p);

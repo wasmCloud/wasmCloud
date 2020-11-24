@@ -1,7 +1,7 @@
 mod actors;
 mod auth;
 mod capability;
-mod control_plane;
+mod control_interface;
 mod dispatch;
 mod errors;
 mod generated;
@@ -16,8 +16,8 @@ mod oci;
 #[macro_use]
 extern crate log;
 
+pub use crate::control_interface::events::{ControlEvent, EventHeader, PublishedEvent};
 pub use capability::native::NativeCapability;
-pub use control_plane::events::{ControlEvent, EventHeader, PublishedEvent};
 pub use dispatch::{Invocation, InvocationResponse, WasccEntity};
 pub use host::{Host, HostBuilder};
 pub use manifest::HostManifest;

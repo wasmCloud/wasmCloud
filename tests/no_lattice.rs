@@ -6,8 +6,8 @@ use std::error::Error;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::time::Duration;
-use wascc_host::Result;
-use wascc_host::{Actor, HostBuilder, NativeCapability};
+use wasmcloud_host::Result;
+use wasmcloud_host::{Actor, HostBuilder, NativeCapability};
 
 pub async fn start_and_execute_echo() -> Result<()> {
     let h = HostBuilder::new().build();

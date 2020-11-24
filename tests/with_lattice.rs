@@ -6,8 +6,8 @@ use std::error::Error;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::time::Duration;
-use wascc_host::{Actor, HostBuilder, NativeCapability};
-use wascc_host::{Host, Result};
+use wasmcloud_host::{Actor, HostBuilder, NativeCapability};
+use wasmcloud_host::{Host, Result};
 
 // Start two hosts, A and B. Host A contains an actor
 // and host B contains a provider. Set a link via host B's

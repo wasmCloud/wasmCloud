@@ -1,5 +1,5 @@
 use actix_rt::System;
-use wascc_host::HostBuilder;
+use wasmcloud_host::HostBuilder;
 
 #[macro_use]
 extern crate log;

@@ -1,8 +1,9 @@
+use super::*;
 use crate::actors::{ActorHost, WasccActor};
 use crate::auth::Authorizer;
 use crate::capability::extras::ExtrasCapabilityProvider;
 use crate::capability::native_host::NativeCapabilityHost;
-use crate::control_plane::cpactor::ControlPlane;
+use crate::control_interface::ctlactor::ControlInterface;
 use crate::dispatch::Invocation;
 use crate::hlreg::HostLocalSystemService;
 use crate::messagebus::rpc_client::LinkDefinition;
@@ -15,15 +16,10 @@ use futures::executor::block_on;
 use provider_archive::ProviderArchive;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
 use wascap::prelude::KeyPair;
 
-pub(crate) const CORELABEL_ARCH: &str = "hostcore.arch";
-pub(crate) const CORELABEL_OS: &str = "hostcore.os";
-pub(crate) const CORELABEL_OSFAMILY: &str = "hostcore.osfamily";
-pub(crate) const RESTRICTED_LABELS: [&str; 3] = [CORELABEL_OSFAMILY, CORELABEL_ARCH, CORELABEL_OS];
-
-#[derive(Default)]
-pub(crate) struct HostController {
+pub struct HostController {
     host_labels: HashMap<String, String>,
     mw_chain: Vec<Box<dyn Middleware>>,
     kp: Option<KeyPair>,
@@ -31,59 +27,23 @@ pub(crate) struct HostController {
     providers: HashMap<String, Addr<NativeCapabilityHost>>,
     authorizer: Option<Box<dyn Authorizer>>,
     image_refs: HashMap<String, String>,
+    started: Instant,
 }
 
-#[derive(Message)]
-#[rtype(result = "()")]
-pub(crate) struct CheckLink {
-    pub linkdef: LinkDefinition,
+impl Default for HostController {
+    fn default() -> Self {
+        HostController {
+            host_labels: HashMap::new(),
+            mw_chain: vec![],
+            kp: None,
+            actors: HashMap::new(),
+            providers: HashMap::new(),
+            authorizer: None,
+            image_refs: HashMap::new(),
+            started: Instant::now(),
+        }
+    }
 }
-
-#[derive(Message)]
-#[rtype(result = "()")]
-pub(crate) struct Initialize {
-    pub labels: HashMap<String, String>,
-    pub auth: Box<dyn Authorizer>,
-    pub kp: KeyPair,
-}
-
-#[derive(Message)]
-#[rtype(result = "()")]
-pub(crate) struct SetLabels {
-    pub labels: HashMap<String, String>,
-}
-
-#[derive(Message)]
-#[rtype(result = "Result<()>")]
-pub(crate) struct StartActor {
-    pub actor: WasccActor,
-    pub image_ref: Option<String>,
-}
-
-#[derive(Message)]
-#[rtype(result = "Result<()>")]
-pub(crate) struct StartProvider {
-    pub provider: NativeCapability,
-    pub image_ref: Option<String>,
-}
-
-#[derive(Message)]
-#[rtype(result = "()")]
-pub(crate) struct StopActor {
-    pub actor_ref: String,
-}
-
-#[derive(Message)]
-#[rtype(result = "()")]
-pub(crate) struct StopProvider {
-    pub provider_ref: String,
-    pub binding: String,
-    pub contract_id: String,
-}
-
-#[derive(Message)]
-#[rtype(result = "String")]
-pub(crate) struct GetHostID;
 
 impl Supervised for HostController {}
 
@@ -100,6 +60,31 @@ impl HostLocalSystemService for HostController {}
 
 impl Actor for HostController {
     type Context = Context<Self>;
+}
+
+impl Handler<QueryActorRunning> for HostController {
+    type Result = bool;
+
+    fn handle(&mut self, msg: QueryActorRunning, _ctx: &mut Context<Self>) -> Self::Result {
+        self.image_refs.contains_key(&msg.actor_ref) || self.actors.contains_key(&msg.actor_ref)
+    }
+}
+
+impl Handler<QueryUptime> for HostController {
+    type Result = u64;
+
+    fn handle(&mut self, _msg: QueryUptime, _ctx: &mut Context<Self>) -> Self::Result {
+        self.started.elapsed().as_secs()
+    }
+}
+
+impl Handler<QueryProviderRunning> for HostController {
+    type Result = bool;
+
+    fn handle(&mut self, msg: QueryProviderRunning, _ctx: &mut Context<Self>) -> Self::Result {
+        self.image_refs.contains_key(&msg.provider_ref)
+            || self.providers.contains_key(&msg.provider_ref)
+    }
 }
 
 // If an incoming link definition relates to a provider currently

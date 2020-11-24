@@ -7,9 +7,9 @@ use crate::host_controller::HostController;
 use crate::messagebus::rpc_client::RpcClient;
 use crate::messagebus::rpc_subscription::{CreateSubscription, RpcSubscription};
 use crate::messagebus::{
-    AdvertiseBinding, AdvertiseClaims, FindBindings, FindBindingsResponse, Initialize,
-    LookupBinding, PutClaims, PutLink, QueryActors, QueryProviders, QueryResponse, Subscribe,
-    Unsubscribe,
+    AdvertiseBinding, AdvertiseClaims, ClaimsResponse, FindBindings, FindBindingsResponse,
+    GetClaims, Initialize, LookupBinding, PutClaims, PutLink, QueryActors, QueryProviders,
+    QueryResponse, Subscribe, Unsubscribe,
 };
 use crate::{auth, Result, SYSTEM_ACTOR};
 use actix::dev::{MessageResponse, ResponseChannel};
@@ -364,6 +364,16 @@ impl Handler<Unsubscribe> for MessageBus {
         trace!("Bus removing interest for {}", msg.interest.url());
         if let None = self.subscribers.remove(&msg.interest) {
             warn!("Attempted to remove a non-existent subscriber");
+        }
+    }
+}
+
+impl Handler<GetClaims> for MessageBus {
+    type Result = ClaimsResponse;
+
+    fn handle(&mut self, _msg: GetClaims, _ctx: &mut Context<Self>) -> Self::Result {
+        ClaimsResponse {
+            claims: self.claims_cache.clone(),
         }
     }
 }

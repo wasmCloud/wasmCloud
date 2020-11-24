@@ -1,6 +1,6 @@
 use crate::capability::native::NativeCapability;
-use crate::control_plane::cpactor::{ControlPlane, PublishEvent};
-use crate::control_plane::events::TerminationReason;
+use crate::control_interface::ctlactor::{ControlInterface, PublishEvent};
+use crate::control_interface::events::TerminationReason;
 use crate::dispatch::{Invocation, InvocationResponse, ProviderDispatcher, WasccEntity};
 use crate::hlreg::HostLocalSystemService;
 use crate::messagebus::{MessageBus, Subscribe, Unsubscribe};
@@ -66,7 +66,7 @@ impl Actor for NativeCapabilityHost {
             &state.cap.claims.subject, &state.descriptor.name
         );
 
-        let cp = ControlPlane::from_hostlocal_registry(&state.kp.public_key());
+        let cp = ControlInterface::from_hostlocal_registry(&state.kp.public_key());
         cp.do_send(PublishEvent {
             event: ControlEvent::ProviderStopped {
                 binding_name: state.cap.binding_name.to_string(),
@@ -75,7 +75,9 @@ impl Actor for NativeCapabilityHost {
                 reason: TerminationReason::Requested,
             },
         });
+        println!("A");
         state.plugin.stop(); // Tell the provider to clean up, dispose of resources, stop threads, etc
+        println!("B");
     }
 }
 
@@ -124,6 +126,7 @@ impl Handler<Initialize> for NativeCapabilityHost {
             entity.clone(),
         );
         if let Err(e) = state.plugin.configure_dispatch(Box::new(nativedispatch)) {
+            println!("Dispatch assignment failed");
             error!(
                 "Failed to configure provider dispatcher: {}, provider stopping.",
                 e
@@ -145,7 +148,7 @@ impl Handler<Initialize> for NativeCapabilityHost {
                 ctx.stop();
             }
         });
-        let cp = ControlPlane::from_hostlocal_registry(&state.kp.public_key());
+        let cp = ControlInterface::from_hostlocal_registry(&state.kp.public_key());
         cp.do_send(PublishEvent {
             event: ControlEvent::ProviderStarted {
                 binding_name: state.cap.binding_name.to_string(),
@@ -216,6 +219,52 @@ impl Handler<Invocation> for NativeCapabilityHost {
     }
 }
 
+fn extrude(
+    cap: &NativeCapability,
+) -> Result<(Option<Library>, Box<dyn CapabilityProvider + 'static>)> {
+    use std::io::Write;
+    if let Some(ref bytes) = cap.native_bytes {
+        let path = temp_dir();
+        let path = path.join(&cap.claims.subject);
+        let path = path.join(format!(
+            "{}",
+            cap.claims.metadata.as_ref().unwrap().rev.unwrap_or(0)
+        ));
+        ::std::fs::create_dir_all(&path)?;
+        let target = Host::native_target();
+        let path = path.join(&target);
+        // If this file is already on disk, some other host has probably
+        // created it so don't over-write
+        if !path.exists() {
+            let mut tf = File::create(&path)?;
+            tf.write_all(&bytes)?;
+        }
+        type PluginCreate = unsafe fn() -> *mut dyn CapabilityProvider;
+        let library = Library::new(&path)?;
+
+        let plugin = unsafe {
+            let constructor: Symbol<PluginCreate> = library.get(b"__capability_provider_create")?;
+            let boxed_raw = constructor();
+
+            Box::from_raw(boxed_raw)
+        };
+        Ok((Some(library), plugin))
+    } else {
+        Ok((None, cap.plugin.clone().unwrap()))
+    }
+}
+
+fn get_descriptor(plugin: &Box<dyn CapabilityProvider>) -> Result<CapabilityDescriptor> {
+    if let Ok(v) = plugin.handle_call(SYSTEM_ACTOR, OP_GET_CAPABILITY_DESCRIPTOR, &[]) {
+        match crate::generated::core::deserialize::<CapabilityDescriptor>(&v) {
+            Ok(c) => Ok(c),
+            Err(e) => Err(format!("Failed to deserialize descriptor: {}", e).into()),
+        }
+    } else {
+        Err("Failed to invoke GetCapabilityDescriptor".into())
+    }
+}
+
 #[cfg(test)]
 mod test {
     use crate::capability::extras::{ExtrasCapabilityProvider, OP_REQUEST_GUID};
@@ -269,51 +318,5 @@ mod test {
         assert!(ir.error.is_none());
         let gen_r: GeneratorResult = crate::generated::extras::deserialize(&ir.msg).unwrap();
         assert!(gen_r.guid.is_some());
-    }
-}
-
-fn extrude(
-    cap: &NativeCapability,
-) -> Result<(Option<Library>, Box<dyn CapabilityProvider + 'static>)> {
-    use std::io::Write;
-    if let Some(ref bytes) = cap.native_bytes {
-        let path = temp_dir();
-        let path = path.join(&cap.claims.subject);
-        let path = path.join(format!(
-            "{}",
-            cap.claims.metadata.as_ref().unwrap().rev.unwrap_or(0)
-        ));
-        ::std::fs::create_dir_all(&path)?;
-        let target = Host::native_target();
-        let path = path.join(&target);
-        // If this file is already on disk, some other host has probably
-        // created it so don't over-write
-        if !path.exists() {
-            let mut tf = File::create(&path)?;
-            tf.write_all(&bytes)?;
-        }
-        type PluginCreate = unsafe fn() -> *mut dyn CapabilityProvider;
-        let library = Library::new(&path)?;
-
-        let plugin = unsafe {
-            let constructor: Symbol<PluginCreate> = library.get(b"__capability_provider_create")?;
-            let boxed_raw = constructor();
-
-            Box::from_raw(boxed_raw)
-        };
-        Ok((Some(library), plugin))
-    } else {
-        Ok((None, cap.plugin.clone().unwrap()))
-    }
-}
-
-fn get_descriptor(plugin: &Box<dyn CapabilityProvider>) -> Result<CapabilityDescriptor> {
-    if let Ok(v) = plugin.handle_call(SYSTEM_ACTOR, OP_GET_CAPABILITY_DESCRIPTOR, &[]) {
-        match crate::generated::core::deserialize::<CapabilityDescriptor>(&v) {
-            Ok(c) => Ok(c),
-            Err(e) => Err(format!("Failed to deserialize descriptor: {}", e).into()),
-        }
-    } else {
-        Err("Failed to invoke GetCapabilityDescriptor".into())
     }
 }

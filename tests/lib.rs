@@ -1,11 +1,12 @@
 mod common;
+mod control;
 mod generated;
 mod no_lattice;
 mod with_lattice;
 
 use std::error::Error;
-use wascc_host::{HostBuilder, Result};
-
+use wasmcloud_host::{HostBuilder, Result};
+/*
 #[actix_rt::test]
 async fn start_and_execute_echo() -> Result<()> {
     no_lattice::start_and_execute_echo().await
@@ -39,4 +40,10 @@ async fn link_on_third_host() -> Result<()> {
 #[actix_rt::test]
 async fn scaled_kvcounter() -> Result<()> {
     with_lattice::scaled_kvcounter().await
+}
+*/
+
+#[actix_rt::test]
+async fn control_basics() -> Result<()> {
+    control::basics().await
 }

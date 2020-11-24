@@ -14,9 +14,12 @@ use std::time::Duration;
 
 pub(crate) mod handlers;
 mod hb;
+pub(crate) mod nats_subscriber;
 pub(crate) mod rpc_client;
 pub(crate) mod rpc_subscription;
 mod utils;
+
+pub(crate) use nats_subscriber::{NatsMessage, NatsSubscriber};
 
 #[derive(Default)]
 pub(crate) struct MessageBus {
@@ -130,10 +133,31 @@ pub struct FindBindingsResponse {
     pub bindings: Vec<(String, HashMap<String, String>)>,
 }
 
+#[derive(Message)]
+#[rtype(result = "ClaimsResponse")]
+pub struct GetClaims;
+
+#[derive(Debug)]
+pub struct ClaimsResponse {
+    pub claims: HashMap<String, Claims<wascap::jwt::Actor>>,
+}
+
 impl<A, M> MessageResponse<A, M> for FindBindingsResponse
 where
     A: Actor,
     M: Message<Result = FindBindingsResponse>,
+{
+    fn handle<R: ResponseChannel<M>>(self, _: &mut A::Context, tx: Option<R>) {
+        if let Some(tx) = tx {
+            tx.send(self);
+        }
+    }
+}
+
+impl<A, M> MessageResponse<A, M> for ClaimsResponse
+where
+    A: Actor,
+    M: Message<Result = ClaimsResponse>,
 {
     fn handle<R: ResponseChannel<M>>(self, _: &mut A::Context, tx: Option<R>) {
         if let Some(tx) = tx {

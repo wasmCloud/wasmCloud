@@ -1,6 +1,6 @@
 use crate::actors::WasccActor;
-use crate::control_plane::cpactor::{ControlPlane, PublishEvent};
-use crate::control_plane::events::TerminationReason;
+use crate::control_interface::ctlactor::{ControlInterface, PublishEvent};
+use crate::control_interface::events::TerminationReason;
 use crate::dispatch::{Invocation, InvocationResponse, WasccEntity};
 use crate::hlreg::HostLocalSystemService;
 use crate::messagebus::{MessageBus, PutClaims, Subscribe, Unsubscribe};
@@ -99,7 +99,7 @@ impl Handler<Initialize> for ActorHost {
                 let host_id = msg.host_id.to_string();
                 let hid = msg.host_id.to_string();
                 let _ = block_on(async move {
-                    let cp = ControlPlane::from_hostlocal_registry(&host_id);
+                    let cp = ControlInterface::from_hostlocal_registry(&host_id);
                     cp.send(pe).await
                 });
                 self.state = Some(State {
@@ -138,7 +138,7 @@ impl Actor for ActorHost {
         let state = self.state.as_ref().unwrap();
         info!("Actor {} stopped", &state.claims.subject);
         let _ = block_on(async move {
-            let cp = ControlPlane::from_hostlocal_registry(&state.host_id);
+            let cp = ControlInterface::from_hostlocal_registry(&state.host_id);
             cp.send(PublishEvent {
                 event: ControlEvent::ActorStopped {
                     actor: state.claims.subject.to_string(),

@@ -1,5 +1,5 @@
 [package]
-name = "wascc-host"
+name = "wasmcloud-host"
 version = "0.15.0"
 authors = ["Kevin Hoffman <alothien@gmail.com>"]
 edition = "2018"
@@ -46,6 +46,7 @@ rand = "0.7.3"
 chrono = "0.4.19"
 envmnt = "0.8.4"
 nats = "0.8.5"
+control-interface = { path = "../control-interface" }
 
 wasm3-provider = { version = "0.0.2", optional = true}
 wasmtime-provider = { version = "0.0.2" , optional = true}

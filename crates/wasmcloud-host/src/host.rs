@@ -8,8 +8,8 @@ use crate::auth::Authorizer;
 use crate::capability::extras::ExtrasCapabilityProvider;
 use crate::capability::native::NativeCapability;
 use crate::capability::native_host::NativeCapabilityHost;
-use crate::control_plane::cpactor::{ControlOptions, ControlPlane, PublishEvent};
-use crate::control_plane::events::TerminationReason;
+use crate::control_interface::ctlactor::{ControlInterface, ControlOptions, PublishEvent};
+use crate::control_interface::events::TerminationReason;
 use crate::dispatch::{Invocation, InvocationResponse};
 use crate::hlreg::HostLocalSystemService;
 use crate::host_controller::{
@@ -159,8 +159,8 @@ impl Host {
         *self.id.borrow_mut() = kp.public_key();
 
         // Start control plane
-        let cp = ControlPlane::from_hostlocal_registry(&kp.public_key());
-        cp.send(crate::control_plane::cpactor::Initialize {
+        let cp = ControlInterface::from_hostlocal_registry(&kp.public_key());
+        cp.send(crate::control_interface::ctlactor::Initialize {
             client: self.cplane_client.clone(),
             control_options: ControlOptions {
                 host_labels: self.labels.clone(),
@@ -168,8 +168,15 @@ impl Host {
                 ..Default::default()
             },
             key: KeyPair::from_seed(&kp.seed()?)?,
+            ns_prefix: self.namespace.to_string(),
         })
         .await?;
+
+        let _ = cp
+            .send(PublishEvent {
+                event: ControlEvent::HostStarted,
+            })
+            .await;
 
         *self.kp.borrow_mut() = Some(kp);
 
@@ -177,7 +184,7 @@ impl Host {
     }
 
     pub async fn stop(&self) {
-        let cp = ControlPlane::from_hostlocal_registry(&self.id.borrow());
+        let cp = ControlInterface::from_hostlocal_registry(&self.id.borrow());
         let _ = cp
             .send(PublishEvent {
                 event: ControlEvent::HostStopped {

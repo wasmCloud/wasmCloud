@@ -1,6 +1,6 @@
 use super::MessageBus;
-use crate::control_plane::cpactor::{ControlPlane, PublishEvent};
-use crate::control_plane::events::RunState;
+use crate::control_interface::ctlactor::{ControlInterface, PublishEvent};
+use crate::control_interface::events::RunState;
 use crate::generated::core::{deserialize, serialize, HealthRequest, HealthResponse};
 use crate::hlreg::HostLocalSystemService;
 use crate::messagebus::handlers::OP_HEALTH_REQUEST;
@@ -30,7 +30,7 @@ impl MessageBus {
             ctx.wait(
                 async move {
                     let evt = generate_heartbeat_event(entities, claims, seed).await;
-                    let cp = ControlPlane::from_hostlocal_registry(&host_id);
+                    let cp = ControlInterface::from_hostlocal_registry(&host_id);
                     cp.do_send(PublishEvent { event: evt });
                 }
                 .into_actor(act),
