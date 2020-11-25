@@ -4,43 +4,6 @@ use serde::{Deserialize, Serialize};
 use std::io::Cursor;
 
 extern crate log;
-//extern crate wapc_guest as guest;
-//use guest::prelude::*;
-
-//use lazy_static::lazy_static;
-//use std::sync::RwLock;
-
-pub struct Host {
-    binding: String,
-}
-
-impl Default for Host {
-    fn default() -> Self {
-        Host {
-            binding: "default".to_string(),
-        }
-    }
-}
-
-/// Creates a named host binding for the key-value store capability
-pub fn host(binding: &str) -> Host {
-    Host {
-        binding: binding.to_string(),
-    }
-}
-
-/// Creates the default host binding for the key-value store capability
-pub fn default() -> Host {
-    Host::default()
-}
-
-impl Host {}
-
-pub struct Handlers {}
-
-impl Handlers {}
-
-//lazy_static! {}
 
 #[derive(Debug, PartialEq, Deserialize, Serialize, Default)]
 pub struct Request {
@@ -76,8 +39,8 @@ pub struct Response {
 pub fn serialize<T>(
     item: T,
 ) -> ::std::result::Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>>
-where
-    T: Serialize,
+    where
+        T: Serialize,
 {
     let mut buf = Vec::new();
     item.serialize(&mut Serializer::new(&mut buf).with_struct_map())?;

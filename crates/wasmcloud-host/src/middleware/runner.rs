@@ -2,7 +2,6 @@ use crate::dispatch::{Invocation, InvocationResponse};
 use crate::middleware::Middleware;
 use crate::Result;
 use actix::Recipient;
-use futures::executor::block_on;
 
 /// Execute a full chain of middleware, terminating at a capability provider
 pub(crate) async fn invoke_capability(
@@ -131,7 +130,7 @@ mod tests {
     impl Handler<Invocation> for HappyActor {
         type Result = InvocationResponse;
 
-        fn handle(&mut self, msg: Invocation, ctx: &mut Self::Context) -> Self::Result {
+        fn handle(&mut self, msg: Invocation, _ctx: &mut Self::Context) -> Self::Result {
             self.inv_count = self.inv_count + 1;
             InvocationResponse::success(&msg, vec![])
         }
@@ -146,7 +145,7 @@ mod tests {
     }
 
     impl Middleware for IncMiddleware {
-        fn actor_pre_invoke(&self, inv: &Invocation) -> Result<()> {
+        fn actor_pre_invoke(&self, _inv: &Invocation) -> Result<()> {
             self.pre.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
@@ -155,7 +154,7 @@ mod tests {
             self.post.fetch_add(1, Ordering::SeqCst);
             Ok(response)
         }
-        fn capability_pre_invoke(&self, inv: &Invocation) -> Result<()> {
+        fn capability_pre_invoke(&self, _inv: &Invocation) -> Result<()> {
             self.cap_pre.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
@@ -231,7 +230,7 @@ mod tests {
         let happy = SyncArbiter::start(1, || HappyActor { inv_count: 0 });
         let res = super::invoke_actor(&mids, inv.clone(), happy.clone().recipient()).await;
         // It's just invocation recipients, so it doesn't care if the actor is a cap or not
-        let res2 = super::invoke_capability(&mids, inv, happy.recipient()).await;
+        let _res2 = super::invoke_capability(&mids, inv, happy.recipient()).await;
         assert!(res.is_ok());
         if let Ok(ir) = res {
             assert!(ir.error.as_ref().is_none());

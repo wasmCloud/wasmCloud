@@ -7,7 +7,6 @@ use crate::messagebus::handlers::OP_HEALTH_REQUEST;
 use crate::Result;
 use crate::{ControlEvent, Invocation, WasccEntity, SYSTEM_ACTOR};
 use actix::prelude::*;
-use futures::executor::block_on;
 use std::collections::HashMap;
 use std::time::Duration;
 use wascap::prelude::KeyPair;
@@ -45,7 +44,7 @@ async fn generate_heartbeat_event(
     seed: String,
 ) -> ControlEvent {
     ControlEvent::Heartbeat {
-        claims: claims,
+        claims,
         entities: healthping_subscribers(&entities, seed).await,
     }
 }
@@ -73,7 +72,7 @@ async fn healthping_subscribers(
                             hm.insert(subscriber.key(), RunState::Unhealthy(hr.message));
                         }
                     }
-                    Err(e) => {
+                    Err(_e) => {
                         hm.insert(
                             subscriber.key(),
                             RunState::Unhealthy(
@@ -84,7 +83,7 @@ async fn healthping_subscribers(
                     }
                 }
             }
-            Err(e) => {
+            Err(_e) => {
                 hm.insert(
                     subscriber.key(),
                     RunState::Unhealthy(

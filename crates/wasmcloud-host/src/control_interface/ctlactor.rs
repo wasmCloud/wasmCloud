@@ -1,7 +1,6 @@
-use crate::generated::core::{deserialize, serialize};
 use crate::hlreg::HostLocalSystemService;
-use crate::messagebus::{MessageBus, NatsMessage, NatsSubscriber};
-use crate::{ControlEvent, Result};
+use crate::messagebus::{NatsMessage, NatsSubscriber};
+use crate::ControlEvent;
 use actix::prelude::*;
 use std::collections::HashMap;
 use wascap::prelude::KeyPair;
@@ -41,7 +40,7 @@ pub struct PublishEvent {
 impl Supervised for ControlInterface {}
 
 impl SystemService for ControlInterface {
-    fn service_started(&mut self, ctx: &mut Context<Self>) {
+    fn service_started(&mut self, _ctx: &mut Context<Self>) {
         info!("Control Interface started");
     }
 }

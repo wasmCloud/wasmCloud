@@ -3,16 +3,15 @@ use crate::control_interface::ctlactor::{ControlInterface, PublishEvent};
 use crate::control_interface::events::TerminationReason;
 use crate::dispatch::{Invocation, InvocationResponse, ProviderDispatcher, WasccEntity};
 use crate::hlreg::HostLocalSystemService;
-use crate::messagebus::{MessageBus, Subscribe, Unsubscribe};
+use crate::messagebus::{MessageBus, Subscribe};
 use crate::middleware::{run_capability_post_invoke, run_capability_pre_invoke, Middleware};
-use crate::{errors, Host, SYSTEM_ACTOR};
 use crate::{ControlEvent, Result};
+use crate::{Host, SYSTEM_ACTOR};
 use actix::prelude::*;
 use futures::executor::block_on;
 use libloading::{Library, Symbol};
 use std::env::temp_dir;
 use std::fs::File;
-use std::sync::Arc;
 use wascap::prelude::KeyPair;
 use wascc_codec::capabilities::{
     CapabilityDescriptor, CapabilityProvider, OP_GET_CAPABILITY_DESCRIPTOR,
@@ -31,7 +30,7 @@ struct State {
     cap: NativeCapability,
     mw_chain: Vec<Box<dyn Middleware>>,
     kp: KeyPair,
-    library: Option<Library>,
+    _library: Option<Library>,
     plugin: Box<dyn CapabilityProvider + 'static>,
     descriptor: CapabilityDescriptor,
     image_ref: Option<String>,
@@ -50,7 +49,7 @@ impl NativeCapabilityHost {
 impl Actor for NativeCapabilityHost {
     type Context = SyncContext<Self>;
 
-    fn started(&mut self, ctx: &mut Self::Context) {
+    fn started(&mut self, _ctx: &mut Self::Context) {
         info!("Native provider host started");
     }
 
@@ -106,7 +105,7 @@ impl Handler<Initialize> for NativeCapabilityHost {
             cap: msg.cap,
             mw_chain: msg.mw_chain,
             kp: KeyPair::from_seed(&msg.seed)?,
-            library,
+            _library: library,
             plugin,
             descriptor,
             image_ref: msg.image_ref,
@@ -170,7 +169,7 @@ impl Handler<Invocation> for NativeCapabilityHost {
     /// and that the destination matches this process. If those checks pass, runs
     /// the capability provider pre-invoke middleware, invokes the operation on the native
     /// plugin, then runs the provider post-invoke middleware.
-    fn handle(&mut self, inv: Invocation, ctx: &mut Self::Context) -> Self::Result {
+    fn handle(&mut self, inv: Invocation, _ctx: &mut Self::Context) -> Self::Result {
         let state = self.state.as_ref().unwrap();
         trace!(
             "Provider {} handling invocation operation '{}'",
@@ -178,12 +177,7 @@ impl Handler<Invocation> for NativeCapabilityHost {
             inv.operation
         );
         if let WasccEntity::Actor(ref s) = inv.origin {
-            if let WasccEntity::Capability {
-                id,
-                contract_id,
-                binding,
-            } = &inv.target
-            {
+            if let WasccEntity::Capability { id, .. } = &inv.target {
                 if id != &state.cap.id() {
                     return InvocationResponse::error(
                         &inv,
@@ -270,19 +264,16 @@ mod test {
     use crate::capability::extras::{ExtrasCapabilityProvider, OP_REQUEST_GUID};
     use crate::capability::native::NativeCapability;
     use crate::capability::native_host::NativeCapabilityHost;
-    use crate::dispatch::{Invocation, InvocationResponse, WasccEntity};
+    use crate::dispatch::{Invocation, WasccEntity};
     use crate::generated::extras::{GeneratorRequest, GeneratorResult};
-    use crate::Result;
     use crate::SYSTEM_ACTOR;
     use actix::prelude::*;
-    use std::sync::Arc;
     use wascap::prelude::KeyPair;
 
     #[actix_rt::test]
     async fn test_extras_actor() {
         let kp = KeyPair::new_server();
         let seed = kp.seed().unwrap();
-        let key = KeyPair::from_seed(&seed).unwrap();
         let extras = ExtrasCapabilityProvider::default();
         let claims = crate::capability::extras::get_claims();
         let cap =

@@ -1,5 +1,4 @@
 use crate::generated::core::{deserialize, serialize};
-use crate::messagebus::MessageBus;
 use crate::{Invocation, InvocationResponse, WasccEntity};
 use actix::prelude::*;
 use futures::StreamExt;
@@ -46,7 +45,7 @@ impl Handler<CreateSubscription> for RpcSubscription {
         Box::pin(
             async move { nc.queue_subscribe(&s, &s).await }
                 .into_actor(self)
-                .map(|sub, act, ctx| {
+                .map(|sub, _act, ctx| {
                     if let Ok(sub) = sub {
                         ctx.add_message_stream(sub.map(|m| {
                             let i = deserialize::<Invocation>(&m.data);
@@ -55,7 +54,7 @@ impl Handler<CreateSubscription> for RpcSubscription {
                                     invocation: Some(i),
                                     reply: m.reply.clone(),
                                 },
-                                Err(e) => RpcInvocation {
+                                Err(_e) => RpcInvocation {
                                     invocation: None,
                                     reply: None,
                                 },
@@ -70,7 +69,7 @@ impl Handler<CreateSubscription> for RpcSubscription {
 impl Handler<RpcInvocation> for RpcSubscription {
     type Result = ResponseActFuture<Self, ()>;
 
-    fn handle(&mut self, msg: RpcInvocation, ctx: &mut Self::Context) -> Self::Result {
+    fn handle(&mut self, msg: RpcInvocation, _ctx: &mut Self::Context) -> Self::Result {
         let target = self.target.clone().unwrap();
         let nc = self.nc.as_ref().unwrap().clone();
         Box::pin(
@@ -107,7 +106,7 @@ impl Handler<Invocation> for RpcSubscription {
             async move {
                 match target.send(msg.clone()).await {
                     Ok(ir) => ir,
-                    Err(e) => InvocationResponse::error(&msg, "Unresponsive target actor"),
+                    Err(_e) => InvocationResponse::error(&msg, "Unresponsive target actor"),
                 }
             }
             .into_actor(self),

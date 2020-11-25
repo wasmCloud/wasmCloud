@@ -1,30 +1,24 @@
 use crate::messagebus::{AdvertiseBinding, MessageBus};
-use std::thread;
-use wapc::WebAssemblyEngineProvider;
 
 use actix::prelude::*;
 
 use crate::auth::Authorizer;
-use crate::capability::extras::ExtrasCapabilityProvider;
-use crate::capability::native::NativeCapability;
-use crate::capability::native_host::NativeCapabilityHost;
+
 use crate::control_interface::ctlactor::{ControlInterface, ControlOptions, PublishEvent};
 use crate::control_interface::events::TerminationReason;
-use crate::dispatch::{Invocation, InvocationResponse};
+use crate::dispatch::Invocation;
 use crate::hlreg::HostLocalSystemService;
 use crate::host_controller::{
-    GetHostID, HostController, SetLabels, StartActor, StartProvider, StopActor, StopProvider,
+    HostController, SetLabels, StartActor, StartProvider, StopActor, StopProvider,
     RESTRICTED_LABELS,
 };
 use crate::messagebus::{QueryActors, QueryProviders};
 use crate::oci::fetch_oci_bytes;
-use crate::{ControlEvent, HostManifest, WasccEntity};
+use crate::{ControlEvent, HostManifest, NativeCapability, WasccEntity};
 use crate::{Result, SYSTEM_ACTOR};
 use provider_archive::ProviderArchive;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::fs::File;
-use std::path::Path;
 use std::time::Duration;
 use wascap::prelude::KeyPair;
 
@@ -80,7 +74,7 @@ impl HostBuilder {
 
     pub fn with_rpc_timeout(self, rpc_timeout: Duration) -> HostBuilder {
         HostBuilder {
-            rpc_timeout: rpc_timeout,
+            rpc_timeout,
             ..self
         }
     }

@@ -4,14 +4,14 @@ use crate::host_controller::{
     HostController, QueryActorRunning, QueryProviderRunning, QueryUptime, StartActor, StartProvider,
 };
 use crate::messagebus::{GetClaims, MessageBus};
-use crate::{Actor, NativeCapability, Result};
+use crate::{Actor, NativeCapability};
 use control_interface::{StartActorAck, StartActorCommand, StartProviderAck, StartProviderCommand};
 use std::collections::HashMap;
 use wascap::jwt::Claims;
 
-pub(crate) async fn handle_host_inventory_query(host: &str, msg: &nats::asynk::Message) {}
+pub(crate) async fn handle_host_inventory_query(_host: &str, _msg: &nats::asynk::Message) {}
 
-pub(crate) async fn handle_linkdefs_query(host: &str, msg: &nats::asynk::Message) {}
+pub(crate) async fn handle_linkdefs_query(_host: &str, _msg: &nats::asynk::Message) {}
 
 pub(crate) async fn handle_claims_query(host: &str, msg: &nats::asynk::Message) {
     let mb = MessageBus::from_hostlocal_registry(host);
@@ -45,9 +45,9 @@ pub(crate) async fn handle_host_probe(host: &str, msg: &nats::asynk::Message) {
     let _ = msg.respond(&serialize(probe_ack).unwrap()).await;
 }
 
-pub(crate) async fn handle_provider_auction(host: &str, msg: &nats::asynk::Message) {}
+pub(crate) async fn handle_provider_auction(_host: &str, _msg: &nats::asynk::Message) {}
 
-pub(crate) async fn handle_actor_auction(host: &str, msg: &nats::asynk::Message) {}
+pub(crate) async fn handle_actor_auction(_host: &str, _msg: &nats::asynk::Message) {}
 
 // TODO: I don't know if this function reads better as a chain of `and_then` futures or
 // if this "go" style guard check sequence is easier to read.
@@ -124,7 +124,7 @@ pub(crate) async fn handle_start_actor(host: &str, msg: &nats::asynk::Message, a
             image_ref: Some(cmd.actor_ref.to_string()),
         })
         .await;
-    if let Err(e) = r {
+    if let Err(_e) = r {
         let f = "Host controller did not acknowledge start actor message".to_string();
         error!("{}", f);
         ack.failure = Some(f);
@@ -215,15 +215,13 @@ pub(crate) async fn handle_start_provider(
     }
     let cap = cap.unwrap();
 
-    let capid = cap.claims.subject.to_string();
-
     let r = hc
         .send(StartProvider {
             provider: cap,
             image_ref: Some(cmd.provider_ref.to_string()),
         })
         .await;
-    if let Err(e) = r {
+    if let Err(_e) = r {
         let f = "Host controller failed to acknowledge start provider command".to_string();
         error!("{}", f);
         let _ = msg.respond(&serialize(ack).unwrap()).await;

@@ -1,14 +1,7 @@
-use crate::{Host, Result, SYSTEM_ACTOR};
-use libloading::Library;
-use libloading::Symbol;
+use crate::{Host, Result};
 use provider_archive::ProviderArchive;
-use std::ffi::OsStr;
-use std::fs::File;
-use std::io::Write;
 use wascap::jwt::Claims;
-use wascc_codec::capabilities::{
-    CapabilityDescriptor, CapabilityProvider, OP_GET_CAPABILITY_DESCRIPTOR,
-};
+use wascc_codec::capabilities::CapabilityProvider;
 
 /// Represents a native capability provider compiled as a shared object library.
 /// These plugins are OS- and architecture-specific, so they will be `.so` files on Linux, `.dylib`

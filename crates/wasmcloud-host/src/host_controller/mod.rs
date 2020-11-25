@@ -1,21 +1,10 @@
-use crate::actors::{ActorHost, WasccActor};
+use crate::actors::WasccActor;
 use crate::auth::Authorizer;
-use crate::capability::extras::ExtrasCapabilityProvider;
-use crate::capability::native_host::NativeCapabilityHost;
-use crate::control_interface::ctlactor::ControlInterface;
-use crate::dispatch::Invocation;
-use crate::hlreg::HostLocalSystemService;
 use crate::messagebus::rpc_client::LinkDefinition;
-use crate::messagebus::{AdvertiseBinding, FindBindings, MessageBus, Unsubscribe, OP_BIND_ACTOR};
-use crate::middleware::Middleware;
-use crate::oci::fetch_oci_bytes;
-use crate::{HostManifest, NativeCapability, Result, WasccEntity, SYSTEM_ACTOR};
+use crate::{NativeCapability, Result};
 use actix::prelude::*;
-use futures::executor::block_on;
-use provider_archive::ProviderArchive;
 use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Instant;
+
 use wascap::prelude::KeyPair;
 
 mod hc_actor;

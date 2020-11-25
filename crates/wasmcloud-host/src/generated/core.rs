@@ -4,44 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::io::Cursor;
 
 extern crate log;
-//extern crate wapc_guest as guest;
-//use guest::prelude::*;
 
-use lazy_static::lazy_static;
 use std::collections::HashMap;
-use std::sync::RwLock;
-
-pub struct Host {
-    binding: String,
-}
-
-impl Default for Host {
-    fn default() -> Self {
-        Host {
-            binding: "default".to_string(),
-        }
-    }
-}
-
-/// Creates a named host binding for the key-value store capability
-pub fn host(binding: &str) -> Host {
-    Host {
-        binding: binding.to_string(),
-    }
-}
-
-/// Creates the default host binding for the key-value store capability
-pub fn default() -> Host {
-    Host::default()
-}
-
-impl Host {}
-
-pub struct Handlers {}
-
-impl Handlers {}
-
-lazy_static! {}
 
 #[derive(Debug, PartialEq, Deserialize, Serialize, Clone)]
 pub struct CapabilityConfiguration {

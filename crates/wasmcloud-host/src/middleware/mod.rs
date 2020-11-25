@@ -2,7 +2,6 @@ mod runner;
 
 use crate::dispatch::{Invocation, InvocationResponse};
 use crate::Result;
-use std::collections::HashMap;
 
 pub(crate) use runner::*;
 

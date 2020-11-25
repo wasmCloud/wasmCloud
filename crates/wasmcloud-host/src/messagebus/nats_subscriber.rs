@@ -1,9 +1,6 @@
-use crate::generated::core::{deserialize, serialize};
-use crate::messagebus::MessageBus;
-use crate::{Invocation, InvocationResponse, WasccEntity};
+use crate::{InvocationResponse, WasccEntity};
 use actix::prelude::*;
 use futures::StreamExt;
-use std::sync::Arc;
 
 #[derive(Message)]
 #[rtype(result = "()")]
@@ -26,20 +23,17 @@ pub(crate) struct NatsSubscriber {
 }
 
 struct SubscriberState {
-    /*    nc: nats::asynk::Connection,
-    subject: String,
-    queue: Option<String>, */
     receiver: Recipient<NatsMessage>,
 }
 
 impl Actor for NatsSubscriber {
     type Context = Context<Self>;
 
-    fn started(&mut self, ctx: &mut Self::Context) {
+    fn started(&mut self, _ctx: &mut Self::Context) {
         trace!("NATS Subscriber started");
     }
 
-    fn stopped(&mut self, ctx: &mut Self::Context) {
+    fn stopped(&mut self, _ctx: &mut Self::Context) {
         trace!("NATS Subscriber stopped");
         println!("SUB STOPPED");
     }
@@ -66,7 +60,7 @@ impl Handler<Initialize> for NatsSubscriber {
                 res
             }
             .into_actor(self)
-            .map(|sub, act, ctx| {
+            .map(|sub, _act, ctx| {
                 if let Ok(sub) = sub {
                     ctx.add_message_stream(sub.map(|m| NatsMessage { msg: m }))
                 }

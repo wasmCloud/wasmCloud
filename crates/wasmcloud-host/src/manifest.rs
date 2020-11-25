@@ -114,8 +114,6 @@ pub(crate) async fn generate_provider_start_messages(
     manifest: &HostManifest,
     allow_latest: bool,
 ) -> Vec<StartProvider> {
-    use std::io::Read;
-
     let mut v = Vec::new();
     for cap in &manifest.capabilities {
         let p = Path::new(&cap.image_ref);

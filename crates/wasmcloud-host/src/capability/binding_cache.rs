@@ -1,4 +1,3 @@
-use crate::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -52,10 +51,6 @@ impl BindingCache {
         );
     }
 
-    pub fn len(&self) -> usize {
-        self.binding_config.len()
-    }
-
     pub fn find_provider_id(
         &self,
         actor: &str,
@@ -67,11 +62,6 @@ impl BindingCache {
             .get(&key)
             .cloned()
             .map(|bv| bv.provider_id.to_string())
-    }
-
-    pub fn remove_binding(&mut self, actor: &str, contract_id: &str, binding_name: &str) {
-        self.binding_config
-            .remove(&BindingKey::new(actor, contract_id, binding_name));
     }
 
     /// Retrieves the list of all actor bindings that pertain to a specific capability provider. Does not return an error,

@@ -3,7 +3,7 @@ use crate::control_interface::ctlactor::{ControlInterface, PublishEvent};
 use crate::control_interface::events::TerminationReason;
 use crate::dispatch::{Invocation, InvocationResponse, WasccEntity};
 use crate::hlreg::HostLocalSystemService;
-use crate::messagebus::{MessageBus, PutClaims, Subscribe, Unsubscribe};
+use crate::messagebus::{MessageBus, PutClaims, Subscribe};
 use crate::middleware::{run_actor_post_invoke, run_actor_pre_invoke, Middleware};
 use crate::{ControlEvent, Result};
 use actix::prelude::*;
@@ -115,7 +115,7 @@ impl Handler<Initialize> for ActorHost {
                 );
                 Ok(())
             }
-            Err(e) => {
+            Err(_e) => {
                 error!(
                     "Failed to create a WebAssembly host for actor {}",
                     actor.token.claims.subject
@@ -130,11 +130,11 @@ impl Handler<Initialize> for ActorHost {
 impl Actor for ActorHost {
     type Context = SyncContext<Self>;
 
-    fn started(&mut self, ctx: &mut Self::Context) {
+    fn started(&mut self, _ctx: &mut Self::Context) {
         info!("Actor started");
     }
 
-    fn stopped(&mut self, ctx: &mut Self::Context) {
+    fn stopped(&mut self, _ctx: &mut Self::Context) {
         let state = self.state.as_ref().unwrap();
         info!("Actor {} stopped", &state.claims.subject);
         let _ = block_on(async move {
@@ -156,7 +156,7 @@ impl Handler<Invocation> for ActorHost {
     /// Receives an invocation from any source. This will execute the full pre-exec
     /// middleware chain, perform the requested operation, and then perform the full
     /// post-exec middleware chain, assuming no errors indicate a pre-emptive halt
-    fn handle(&mut self, msg: Invocation, ctx: &mut Self::Context) -> Self::Result {
+    fn handle(&mut self, msg: Invocation, _ctx: &mut Self::Context) -> Self::Result {
         let state = self.state.as_ref().unwrap();
 
         trace!(
@@ -166,7 +166,7 @@ impl Handler<Invocation> for ActorHost {
             msg.operation
         );
 
-        if let WasccEntity::Actor(ref target) = msg.target {
+        if let WasccEntity::Actor(_) = msg.target {
             if run_actor_pre_invoke(&msg, &state.mw_chain).is_err() {
                 return InvocationResponse::error(
                     &msg,

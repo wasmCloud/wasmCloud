@@ -1,10 +1,6 @@
 use crate::common::{await_actor_count, await_provider_count, gen_kvcounter_host, par_from_file};
-use crate::generated::http::{deserialize, serialize, Request, Response};
-use provider_archive::ProviderArchive;
+use crate::generated::http::{Request, Response, serialize, deserialize};
 use std::collections::HashMap;
-use std::error::Error;
-use std::fs::File;
-use std::io::{Read, Write};
 use std::time::Duration;
 use wasmcloud_host::Result;
 use wasmcloud_host::{Actor, HostBuilder, NativeCapability};
@@ -162,7 +158,7 @@ pub async fn kvcounter_binding_first() -> Result<()> {
     let rkey = format!(":{}", key); // the kv wasm logic does a replace on '/' with ':'
     let url = format!("http://localhost:{}/{}", web_port, key);
 
-    let mut resp = reqwest::get(&url).await?;
+    let resp = reqwest::get(&url).await?;
     assert!(resp.status().is_success());
     assert_eq!(resp.text().await?, "{\"counter\":1}");
 

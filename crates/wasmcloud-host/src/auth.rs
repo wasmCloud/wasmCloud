@@ -112,9 +112,7 @@ pub(crate) fn authorize_invocation(
 mod test {
     use crate::auth::{authorize_invocation, Authorizer, DefaultAuthorizer};
     use crate::{Invocation, WasccEntity};
-    use futures::SinkExt;
     use std::collections::HashMap;
-    use std::error::Error;
     use wascap::jwt::{Actor, Claims, ClaimsBuilder};
     use wascap::prelude::KeyPair;
 
@@ -150,7 +148,7 @@ mod test {
             WasccEntity::Actor("B".to_string()),
             "test",
         );
-        let mut cache = HashMap::new();
+        let cache = HashMap::new();
         let auth = Box::new(DefaultAuthorizer::new());
         let res = authorize_invocation(&inv, auth, &cache);
         assert!(res.is_err());
@@ -233,15 +231,15 @@ mod test {
         }
     }
     impl Authorizer for CrankyAuthorizer {
-        fn can_load(&self, claims: &Claims<Actor>) -> bool {
+        fn can_load(&self, _claims: &Claims<Actor>) -> bool {
             false
         }
 
         fn can_invoke(
             &self,
-            claims: &Claims<Actor>,
-            target: &WasccEntity,
-            operation: &str,
+            _claims: &Claims<Actor>,
+            _target: &WasccEntity,
+            _operation: &str,
         ) -> bool {
             false
         }

@@ -1,21 +1,15 @@
 use super::*;
-use crate::actors::{ActorHost, WasccActor};
+use crate::actors::ActorHost;
 use crate::auth::Authorizer;
 use crate::capability::extras::ExtrasCapabilityProvider;
 use crate::capability::native_host::NativeCapabilityHost;
-use crate::control_interface::ctlactor::ControlInterface;
 use crate::dispatch::Invocation;
 use crate::hlreg::HostLocalSystemService;
-use crate::messagebus::rpc_client::LinkDefinition;
-use crate::messagebus::{AdvertiseBinding, FindBindings, MessageBus, Unsubscribe, OP_BIND_ACTOR};
+use crate::messagebus::{FindBindings, GetClaims, MessageBus, Unsubscribe, OP_BIND_ACTOR};
 use crate::middleware::Middleware;
-use crate::oci::fetch_oci_bytes;
-use crate::{HostManifest, NativeCapability, Result, WasccEntity, SYSTEM_ACTOR};
-use actix::prelude::*;
-use futures::executor::block_on;
-use provider_archive::ProviderArchive;
+use crate::{NativeCapability, Result, WasccEntity, SYSTEM_ACTOR};
 use std::collections::HashMap;
-use std::sync::Arc;
+
 use std::time::Instant;
 use wascap::prelude::KeyPair;
 
@@ -97,31 +91,49 @@ impl Handler<CheckLink> for HostController {
 
     fn handle(&mut self, msg: CheckLink, _ctx: &mut Context<Self>) -> Self::Result {
         if self.providers.contains_key(&msg.linkdef.provider_id) {
-            let config = crate::generated::core::CapabilityConfiguration {
-                module: msg.linkdef.actor,
-                values: msg.linkdef.values,
-            };
-            let inv = Invocation::new(
-                self.kp.as_ref().unwrap(),
-                WasccEntity::Actor(SYSTEM_ACTOR.to_string()),
-                WasccEntity::Capability {
-                    id: msg.linkdef.provider_id.to_string(),
-                    contract_id: msg.linkdef.contract_id,
-                    binding: msg.linkdef.link_name,
-                },
-                OP_BIND_ACTOR,
-                crate::generated::core::serialize(&config).unwrap(),
-            );
+            let mb = MessageBus::from_hostlocal_registry(&self.kp.as_ref().unwrap().public_key());
             let target = self
                 .providers
                 .get(&msg.linkdef.provider_id)
                 .cloned()
                 .unwrap();
+            let recip = target.recipient::<Invocation>();
+            let actor = msg.linkdef.actor.to_string();
+            let prov_entity = WasccEntity::Capability {
+                id: msg.linkdef.provider_id.to_string(),
+                contract_id: msg.linkdef.contract_id,
+                binding: msg.linkdef.link_name,
+            };
+            let key = KeyPair::from_seed(&self.kp.as_ref().unwrap().seed().unwrap()).unwrap();
+            let values = msg.linkdef.values.clone();
             Box::pin(
                 async move {
-                    // * Send directly to the provider rather than via the bus
-                    // * so we can guarantee we'll never infinite loop this invocation
-                    if let Err(_) = target.send(inv).await {
+                    let claims = mb.send(GetClaims).await;
+                    if let Err(_) = claims {
+                        error!("Could not get claims from message bus");
+                        return;
+                    }
+                    let cr = claims.unwrap();
+                    let claims = cr.claims.get(&actor).clone();
+                    if claims.is_none() {
+                        error!(
+                            "No matching actor claims found in actor cache for establishing link"
+                        );
+                        return;
+                    }
+                    let claims = claims.unwrap();
+                    // We use this utils function so that it's guaranteed to be the same
+                    // link invocation as if they'd called `set_link` in the host
+                    if let Err(_) = crate::messagebus::utils::generate_binding_invocation(
+                        &recip,
+                        &actor,
+                        values,
+                        &key,
+                        prov_entity,
+                        claims.clone(),
+                    )
+                    .await
+                    {
                         error!("Capability provider failed to handle link enable call");
                     }
                 }
@@ -137,7 +149,7 @@ impl Handler<SetLabels> for HostController {
     type Result = ();
 
     fn handle(&mut self, msg: SetLabels, _ctx: &mut Context<Self>) -> Self::Result {
-        self.host_labels = msg.labels;
+        self.host_labels = msg.labels
     }
 }
 
@@ -226,7 +238,7 @@ impl Handler<Initialize> for HostController {
         let ex = ExtrasCapabilityProvider::default();
         let cap = NativeCapability::from_instance(ex, Some("default".to_string()), claims).unwrap();
         let init = crate::capability::native_host::Initialize {
-            cap: cap,
+            cap,
             mw_chain: vec![],
             seed: msg.kp.seed().unwrap(),
             image_ref: None,
@@ -243,7 +255,7 @@ impl Handler<Initialize> for HostController {
 impl Handler<StartActor> for HostController {
     type Result = ResponseActFuture<Self, Result<()>>;
 
-    fn handle(&mut self, msg: StartActor, ctx: &mut Context<Self>) -> Self::Result {
+    fn handle(&mut self, msg: StartActor, _ctx: &mut Context<Self>) -> Self::Result {
         let sub = msg.actor.claims().subject.to_string();
         let claims = msg.actor.claims();
         info!("Starting actor {}", sub);
@@ -276,7 +288,7 @@ impl Handler<StartActor> for HostController {
         Box::pin(
             async move { new_actor.send(init).await }
                 .into_actor(self)
-                .map(move |res, act, ctx| match res {
+                .map(move |res, act, _ctx| match res {
                     Ok(_) => {
                         if let Some(imageref) = msg.image_ref {
                             act.image_refs.insert(imageref, msg.actor.public_key());
@@ -284,7 +296,7 @@ impl Handler<StartActor> for HostController {
                         act.actors.insert(msg.actor.public_key(), na);
                         Ok(())
                     }
-                    Err(e) => {
+                    Err(_e) => {
                         error!("Failed to initialize actor");
                         Err("Failed to initialize actor".into())
                     }
@@ -296,7 +308,7 @@ impl Handler<StartActor> for HostController {
 impl Handler<StartProvider> for HostController {
     type Result = ResponseActFuture<Self, Result<()>>;
 
-    fn handle(&mut self, msg: StartProvider, ctx: &mut Context<Self>) -> Self::Result {
+    fn handle(&mut self, msg: StartProvider, _ctx: &mut Context<Self>) -> Self::Result {
         let sub = msg.provider.claims.subject.to_string();
         if self.providers.contains_key(&sub) {
             error!("Aborting attempt to start already running provider {}", sub);

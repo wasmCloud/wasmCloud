@@ -14,7 +14,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 use uuid::Uuid;
-use wascap::jwt::{Claims, ClaimsBuilder};
+use wascap::jwt::Claims;
 use wascc_codec::capabilities::{
     CapabilityDescriptor, CapabilityProvider, Dispatcher, NullDispatcher, OperationDirection,
     OP_GET_CAPABILITY_DESCRIPTOR,

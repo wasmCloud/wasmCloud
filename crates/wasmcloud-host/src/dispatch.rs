@@ -1,6 +1,6 @@
 use crate::errors::{self, ErrorKind};
 use crate::hlreg::HostLocalSystemService;
-use crate::messagebus::{LookupBinding, MessageBus, PutClaims, PutLink, OP_BIND_ACTOR};
+use crate::messagebus::{LookupBinding, MessageBus, OP_BIND_ACTOR};
 use crate::{Result, SYSTEM_ACTOR};
 use actix::dev::{MessageResponse, ResponseChannel};
 use actix::prelude::*;
@@ -60,7 +60,7 @@ impl Dispatcher for ProviderDispatcher {
         );
         match block_on(async { self.addr.send(inv).await.map(|ir| ir.msg) }) {
             Ok(v) => Ok(v),
-            Err(e) => {
+            Err(_e) => {
                 error!("Provider dispatch to bus failed (mailbox error)");
                 Err("Mailbox error during provider dispatch".into())
             }
@@ -315,8 +315,6 @@ pub(crate) fn wapc_host_callback(
         operation
     );
 
-    let capability_id = namespace;
-
     // Look up the public key of the provider bound to the origin actor
     // for the given capability contract ID.
     let bus = MessageBus::from_hostlocal_registry(&kp.public_key());
@@ -341,7 +339,7 @@ pub(crate) fn wapc_host_callback(
         );
         match block_on(async { bus.send(inv).await.map(|ir| ir.msg) }) {
             Ok(v) => Ok(v),
-            Err(e) => Err("Mailbox error during host callback".into()),
+            Err(_e) => Err("Mailbox error during host callback".into()),
         }
     } else {
         Err(format!(
@@ -464,8 +462,7 @@ mod test {
             "OP_TESTING",
             vec![1, 2, 3, 4],
         );
-        let res = inv.validate_antiforgery();
-        //println!("{:?}", res);
+
         // Obviously an invocation we just created should pass anti-forgery check
         assert!(inv.validate_antiforgery().is_ok());
 

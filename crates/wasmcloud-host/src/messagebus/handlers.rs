@@ -1,9 +1,6 @@
 use super::MessageBus;
-use crate::auth::Authorizer;
-use crate::capability::binding_cache::BindingCache;
 use crate::dispatch::{Invocation, InvocationResponse, WasccEntity};
 use crate::hlreg::HostLocalSystemService;
-use crate::host_controller::HostController;
 use crate::messagebus::rpc_client::RpcClient;
 use crate::messagebus::rpc_subscription::{CreateSubscription, RpcSubscription};
 use crate::messagebus::{
@@ -11,14 +8,9 @@ use crate::messagebus::{
     GetClaims, Initialize, LookupBinding, PutClaims, PutLink, QueryActors, QueryProviders,
     QueryResponse, Subscribe, Unsubscribe,
 };
-use crate::{auth, Result, SYSTEM_ACTOR};
-use actix::dev::{MessageResponse, ResponseChannel};
+use crate::{auth, Result};
 use actix::prelude::*;
-use futures::executor::block_on;
-use std::collections::HashMap;
 use std::sync::Arc;
-use wascap::jwt::Claims;
-use wascap::prelude::KeyPair;
 
 pub const OP_PERFORM_LIVE_UPDATE: &str = "PerformLiveUpdate";
 pub const OP_IDENTIFY_CAPABILITY: &str = "IdentifyCapability";
@@ -141,7 +133,7 @@ impl Handler<Initialize> for MessageBus {
                             host_id,
                             nc: Arc::new(nc),
                             ns_prefix: ns,
-                            bus: bus,
+                            bus,
                             rpc_timeout: timeout,
                         })
                         .await;
@@ -157,7 +149,8 @@ impl Handler<Initialize> for MessageBus {
 impl Handler<AdvertiseBinding> for MessageBus {
     type Result = ResponseActFuture<Self, Result<()>>;
 
-    fn handle(&mut self, msg: AdvertiseBinding, ctx: &mut Context<Self>) -> Self::Result {
+    fn handle(&mut self, msg: AdvertiseBinding, _ctx: &mut Context<Self>) -> Self::Result {
+        if !self.claims_cache.contains_key(&msg.actor.to_string()) {}
         trace!("Advertisting link definition");
         let target = WasccEntity::Capability {
             id: msg.provider_id.to_string(),
@@ -176,13 +169,16 @@ impl Handler<AdvertiseBinding> for MessageBus {
         let advbinding = msg.clone();
 
         if let Some(t) = self.subscribers.get(&target) {
+            let claims = self.claims_cache.get(&msg.actor.to_string()).unwrap();
             let req = super::utils::generate_binding_invocation(
                 t,
-                &msg,
+                &msg.actor,
+                msg.values.clone(),
                 self.key.as_ref().unwrap(),
                 target,
+                claims.clone(),
             );
-            Box::pin(req.into_actor(self).map(move |res, act, _ctx| match res {
+            Box::pin(req.into_actor(self).map(move |res, _act, _ctx| match res {
                 Ok(ir) => {
                     if let Some(er) = ir.error {
                         Err(format!("Failed to set binding: {}", er).into())
@@ -237,7 +233,7 @@ impl Handler<Invocation> for MessageBus {
     /// then the invocation will be delivered directly to that subscriber. If the subscriber
     /// is not local, _and_ there is a lattice provider configured, then the bus will attempt
     /// to satisfy that call via RPC over lattice.
-    fn handle(&mut self, msg: Invocation, ctx: &mut Context<Self>) -> Self::Result {
+    fn handle(&mut self, msg: Invocation, _ctx: &mut Context<Self>) -> Self::Result {
         trace!(
             "{}: Handling invocation from {} to {}",
             self.key.as_ref().unwrap().public_key(),
@@ -264,7 +260,7 @@ impl Handler<Invocation> for MessageBus {
                     target
                         .send(msg.clone())
                         .into_actor(self)
-                        .map(move |res, act, _ctx| {
+                        .map(move |res, _act, _ctx| {
                             if let Ok(r) = res {
                                 r
                             } else {
@@ -313,7 +309,7 @@ impl Handler<Invocation> for MessageBus {
 impl Handler<LookupBinding> for MessageBus {
     type Result = Option<String>;
 
-    fn handle(&mut self, msg: LookupBinding, ctx: &mut Self::Context) -> Self::Result {
+    fn handle(&mut self, msg: LookupBinding, _ctx: &mut Self::Context) -> Self::Result {
         self.binding_cache
             .find_provider_id(&msg.actor, &msg.contract_id, &msg.binding_name)
     }
@@ -325,7 +321,7 @@ impl Handler<LookupBinding> for MessageBus {
 impl Handler<Subscribe> for MessageBus {
     type Result = ResponseActFuture<Self, ()>;
 
-    fn handle(&mut self, msg: Subscribe, ctx: &mut Context<Self>) -> Self::Result {
+    fn handle(&mut self, msg: Subscribe, _ctx: &mut Context<Self>) -> Self::Result {
         trace!("Bus registered interest for {}", &msg.interest.url());
 
         let nc = self.nc.clone();

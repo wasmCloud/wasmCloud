@@ -1,4 +1,3 @@
-use crate::generated::core::HealthResponse;
 use chrono::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

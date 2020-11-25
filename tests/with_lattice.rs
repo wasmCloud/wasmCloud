@@ -1,10 +1,6 @@
 use crate::common::{await_actor_count, await_provider_count, gen_kvcounter_host, par_from_file};
-use crate::generated::http::{deserialize, serialize, Request, Response};
 use provider_archive::ProviderArchive;
 use std::collections::HashMap;
-use std::error::Error;
-use std::fs::File;
-use std::io::{Read, Write};
 use std::time::Duration;
 use wasmcloud_host::{Actor, HostBuilder, NativeCapability};
 use wasmcloud_host::{Host, Result};

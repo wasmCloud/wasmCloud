@@ -1,4 +1,3 @@
-use actix_rt::System;
 use wasmcloud_host::HostBuilder;
 
 #[macro_use]

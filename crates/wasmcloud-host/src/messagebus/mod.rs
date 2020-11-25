@@ -1,7 +1,7 @@
 use crate::auth::Authorizer;
 use crate::capability::binding_cache::BindingCache;
 use crate::Result;
-use crate::{Invocation, InvocationResponse, WasccEntity};
+use crate::{Invocation, WasccEntity};
 use actix::dev::{MessageResponse, ResponseChannel};
 use actix::prelude::*;
 use std::collections::HashMap;
@@ -9,7 +9,6 @@ use wascap::prelude::{Claims, KeyPair};
 
 use crate::messagebus::rpc_client::RpcClient;
 pub use handlers::OP_BIND_ACTOR;
-use std::sync::Arc;
 use std::time::Duration;
 
 pub(crate) mod handlers;
@@ -17,7 +16,7 @@ mod hb;
 pub(crate) mod nats_subscriber;
 pub(crate) mod rpc_client;
 pub(crate) mod rpc_subscription;
-mod utils;
+pub(crate) mod utils;
 
 pub(crate) use nats_subscriber::{NatsMessage, NatsSubscriber};
 

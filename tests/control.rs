@@ -1,20 +1,13 @@
-use crate::common::{await_actor_count, await_provider_count, gen_kvcounter_host, par_from_file};
-use crate::generated::http::{deserialize, serialize, Request, Response};
+use crate::common::{await_actor_count, await_provider_count, par_from_file};
 use ::control_interface::Client;
-use provider_archive::ProviderArchive;
-use std::collections::HashMap;
-use std::error::Error;
-use std::fs::File;
-use std::io::{Read, Write};
 use std::thread;
 use std::time::Duration;
 use wascc_redis::RedisKVProvider;
-use wasmcloud_host::{Actor, HostBuilder, NativeCapability};
-use wasmcloud_host::{Host, Result};
+use wasmcloud_host::Result;
+use wasmcloud_host::{HostBuilder, NativeCapability};
 
 pub(crate) async fn basics() -> Result<()> {
     let nc = nats::asynk::connect("0.0.0.0:4222").await?;
-    let nc3 = nats::asynk::connect("0.0.0.0:4222").await?;
     let h = HostBuilder::new()
         .with_namespace("controlbasics")
         .with_controlplane_client(nc)

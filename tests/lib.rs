@@ -4,8 +4,7 @@ mod generated;
 mod no_lattice;
 mod with_lattice;
 
-use std::error::Error;
-use wasmcloud_host::{HostBuilder, Result};
+use wasmcloud_host::Result;
 /*
 #[actix_rt::test]
 async fn start_and_execute_echo() -> Result<()> {

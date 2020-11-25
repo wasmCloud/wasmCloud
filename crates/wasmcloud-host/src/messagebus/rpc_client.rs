@@ -4,7 +4,7 @@ use crate::host_controller::{CheckLink, HostController};
 use crate::messagebus::rpc_subscription::{claims_subject, invoke_subject, links_subject};
 use crate::messagebus::{AdvertiseBinding, AdvertiseClaims, MessageBus, PutClaims, PutLink};
 use crate::Result;
-use crate::{Invocation, InvocationResponse, WasccEntity};
+use crate::{Invocation, InvocationResponse};
 use actix::prelude::*;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -76,7 +76,7 @@ impl Handler<Initialize> for RpcClient {
                 (claims_sub, links_sub)
             }
             .into_actor(self)
-            .map(|(claims, links), act, ctx| {
+            .map(|(claims, links), _act, ctx| {
                 // Set up subscriber for claims advertisements
                 if let Ok(c) = claims {
                     ctx.add_message_stream(c.map(|m| {
