@@ -312,9 +312,7 @@ impl CapabilityProvider for RedisKVProvider {
     }
 
     fn stop(&self) {
-        let mut lock = self.clients.write().unwrap();
-        lock.clear();
-        *self.dispatcher.write().unwrap() = Box::new(NullDispatcher::new());
+        // Nothing to do here
     }
 
     fn handle_call(
