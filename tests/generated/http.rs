@@ -39,8 +39,8 @@ pub struct Response {
 pub fn serialize<T>(
     item: T,
 ) -> ::std::result::Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>>
-    where
-        T: Serialize,
+where
+    T: Serialize,
 {
     let mut buf = Vec::new();
     item.serialize(&mut Serializer::new(&mut buf).with_struct_map())?;

@@ -14,6 +14,7 @@ pub(crate) const CORELABEL_OS: &str = "hostcore.os";
 pub(crate) const CORELABEL_OSFAMILY: &str = "hostcore.osfamily";
 pub(crate) const RESTRICTED_LABELS: [&str; 3] = [CORELABEL_OSFAMILY, CORELABEL_ARCH, CORELABEL_OS];
 
+use actix::dev::{MessageResponse, ResponseChannel};
 pub(crate) use hc_actor::detect_core_host_labels;
 pub(crate) use hc_actor::HostController;
 
@@ -75,6 +76,7 @@ pub(crate) struct QueryActorRunning {
 #[rtype(result = "bool")]
 pub(crate) struct QueryProviderRunning {
     pub provider_ref: String,
+    pub link_name: String,
 }
 
 #[derive(Message)]
@@ -84,3 +86,40 @@ pub(crate) struct GetHostID;
 #[derive(Message)]
 #[rtype(result = "u64")]
 pub(crate) struct QueryUptime;
+
+#[derive(Message)]
+#[rtype(result = "HostInventory")]
+pub(crate) struct QueryHostInventory;
+
+#[derive(Default, Debug, Clone, PartialEq)]
+pub(crate) struct HostInventory {
+    pub host_id: String,
+    pub labels: HashMap<String, String>,
+    pub actors: Vec<ActorSummary>,
+    pub providers: Vec<ProviderSummary>,
+}
+
+#[derive(Default, Debug, Clone, PartialEq)]
+pub(crate) struct ActorSummary {
+    pub id: String,
+    pub image_ref: Option<String>,
+}
+
+#[derive(Default, Debug, Clone, PartialEq)]
+pub(crate) struct ProviderSummary {
+    pub id: String,
+    pub image_ref: Option<String>,
+    pub link_name: String,
+}
+
+impl<A, M> MessageResponse<A, M> for HostInventory
+where
+    A: Actor,
+    M: Message<Result = HostInventory>,
+{
+    fn handle<R: ResponseChannel<M>>(self, _: &mut A::Context, tx: Option<R>) {
+        if let Some(tx) = tx {
+            tx.send(self);
+        }
+    }
+}

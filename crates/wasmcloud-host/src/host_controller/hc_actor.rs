@@ -5,20 +5,38 @@ use crate::capability::extras::ExtrasCapabilityProvider;
 use crate::capability::native_host::NativeCapabilityHost;
 use crate::dispatch::Invocation;
 use crate::hlreg::HostLocalSystemService;
-use crate::messagebus::{FindBindings, GetClaims, MessageBus, Unsubscribe, OP_BIND_ACTOR};
+use crate::messagebus::{
+    CanInvoke, FindBindings, GetClaims, MessageBus, Unsubscribe, OP_BIND_ACTOR,
+};
 use crate::middleware::Middleware;
 use crate::{NativeCapability, Result, WasccEntity, SYSTEM_ACTOR};
 use std::collections::HashMap;
 
 use std::time::Instant;
+use wascap::jwt::Claims;
 use wascap::prelude::KeyPair;
+
+#[derive(Debug, PartialEq, Clone, Eq, Hash)]
+struct ProviderKey {
+    pub id: String,
+    pub link_name: String,
+}
+
+impl ProviderKey {
+    pub fn new(id: &str, link_name: &str) -> Self {
+        ProviderKey {
+            id: id.to_string(),
+            link_name: link_name.to_string(),
+        }
+    }
+}
 
 pub struct HostController {
     host_labels: HashMap<String, String>,
     mw_chain: Vec<Box<dyn Middleware>>,
     kp: Option<KeyPair>,
     actors: HashMap<String, Addr<ActorHost>>,
-    providers: HashMap<String, Addr<NativeCapabilityHost>>,
+    providers: HashMap<ProviderKey, Addr<NativeCapabilityHost>>,
     authorizer: Option<Box<dyn Authorizer>>,
     image_refs: HashMap<String, String>,
     started: Instant,
@@ -77,7 +95,9 @@ impl Handler<QueryProviderRunning> for HostController {
 
     fn handle(&mut self, msg: QueryProviderRunning, _ctx: &mut Context<Self>) -> Self::Result {
         self.image_refs.contains_key(&msg.provider_ref)
-            || self.providers.contains_key(&msg.provider_ref)
+            || self
+                .providers
+                .contains_key(&ProviderKey::new(&msg.provider_ref, &msg.link_name))
     }
 }
 
@@ -90,13 +110,10 @@ impl Handler<CheckLink> for HostController {
     type Result = ResponseActFuture<Self, ()>;
 
     fn handle(&mut self, msg: CheckLink, _ctx: &mut Context<Self>) -> Self::Result {
-        if self.providers.contains_key(&msg.linkdef.provider_id) {
+        let key = ProviderKey::new(&msg.linkdef.provider_id, &msg.linkdef.link_name);
+        if self.providers.contains_key(&key) {
             let mb = MessageBus::from_hostlocal_registry(&self.kp.as_ref().unwrap().public_key());
-            let target = self
-                .providers
-                .get(&msg.linkdef.provider_id)
-                .cloned()
-                .unwrap();
+            let target = self.providers.get(&key).cloned().unwrap();
             let recip = target.recipient::<Invocation>();
             let actor = msg.linkdef.actor.to_string();
             let prov_entity = WasccEntity::Capability {
@@ -197,10 +214,12 @@ impl Handler<StopProvider> for HostController {
         trace!("Stopping provider {} per request", msg.provider_ref);
         // The provider should stop itself once all references to it are gone
         let pk = if let Some(pk) = self.image_refs.remove(&msg.provider_ref) {
-            let _provider = self.providers.remove(&pk);
+            let _provider = self.providers.remove(&ProviderKey::new(&pk, &msg.binding));
             pk
         } else {
-            let _provider = self.providers.remove(&msg.provider_ref);
+            let _provider = self
+                .providers
+                .remove(&ProviderKey::new(&msg.provider_ref, &msg.binding));
             msg.provider_ref.to_string()
         };
 
@@ -244,7 +263,8 @@ impl Handler<Initialize> for HostController {
             image_ref: None,
         };
         extras.do_send(init);
-        self.providers.insert(pk.clone(), extras); // can't let this provider go out of scope, or the actix actor will stop
+        let key = ProviderKey::new(&pk, "default");
+        self.providers.insert(key, extras); // can't let this provider go out of scope, or the actix actor will stop
         self.kp = Some(msg.kp);
         info!("Host controller initialized - {}", host_id);
 
@@ -305,12 +325,46 @@ impl Handler<StartActor> for HostController {
     }
 }
 
+impl Handler<QueryHostInventory> for HostController {
+    type Result = HostInventory;
+
+    fn handle(&mut self, _msg: QueryHostInventory, _ctx: &mut Context<Self>) -> Self::Result {
+        HostInventory {
+            actors: self
+                .actors
+                .iter()
+                .map(|(k, v)| ActorSummary {
+                    id: k.to_string(),
+                    image_ref: self.image_refs.get(k).clone().map(|s| s.to_string()),
+                })
+                .collect(),
+            host_id: self.kp.as_ref().unwrap().public_key(),
+            providers: self
+                .providers
+                .iter()
+                .map(|(k, v)| ProviderSummary {
+                    image_ref: self
+                        .image_refs
+                        .values()
+                        .find(|pk| **pk == k.id)
+                        .map(|s| s.to_string()),
+                    id: k.id.to_string(),
+                    link_name: k.link_name.to_string(),
+                })
+                .collect(),
+            labels: self.host_labels.clone(),
+        }
+    }
+}
+
 impl Handler<StartProvider> for HostController {
     type Result = ResponseActFuture<Self, Result<()>>;
 
     fn handle(&mut self, msg: StartProvider, _ctx: &mut Context<Self>) -> Self::Result {
+        println!("Starting provider...");
         let sub = msg.provider.claims.subject.to_string();
-        if self.providers.contains_key(&sub) {
+        let key = ProviderKey::new(&sub, &msg.provider.binding_name);
+        if self.providers.contains_key(&key) {
             error!("Aborting attempt to start already running provider {}", sub);
             return Box::pin(
                 async move { Err(format!("Cannot start already running provider {}", sub).into()) }
@@ -328,6 +382,7 @@ impl Handler<StartProvider> for HostController {
         let imageref = msg.image_ref.clone();
         let ir2 = imageref.clone();
         let pid = provider_id.to_string();
+        let auther = self.authorizer.as_ref().unwrap().clone();
 
         let k = KeyPair::from_seed(&seed).unwrap();
         Box::pin(
@@ -340,6 +395,7 @@ impl Handler<StartProvider> for HostController {
                     imageref.clone(),
                     provider_id.to_string(),
                     binding_name.to_string(),
+                    auther,
                 )
                 .await
             }
@@ -349,7 +405,7 @@ impl Handler<StartProvider> for HostController {
                     if let Some(imageref) = ir2 {
                         act.image_refs.insert(imageref, pid.to_string());
                     }
-                    act.providers.insert(pid.to_string(), new_provider);
+                    act.providers.insert(key, new_provider);
                 }
                 Ok(())
             }),
@@ -365,7 +421,9 @@ async fn initialize_provider(
     image_ref: Option<String>,
     provider_id: String,
     binding_name: String,
+    authorizer: Box<dyn Authorizer>,
 ) -> Result<Addr<NativeCapabilityHost>> {
+    println!("Provider initializing");
     let new_provider = SyncArbiter::start(1, || NativeCapabilityHost::new());
     let im = crate::capability::native_host::Initialize {
         cap: provider.clone(),
@@ -389,16 +447,21 @@ async fn initialize_provider(
     if let Ok(bindings) = bindings {
         trace!("Re-applying link definitions to provider {}", &provider_id);
         let k = KeyPair::from_seed(&seed)?;
-        reinvoke_bindings(
-            &k,
-            new_provider.clone().recipient(),
-            &provider_id,
-            &capid,
-            &binding_name,
-            bindings.bindings,
-        )
-        .await;
-        Ok(new_provider)
+        let claims = b.send(GetClaims {}).await;
+        if let Ok(c) = claims {
+            reinvoke_bindings(
+                &k,
+                new_provider.clone().recipient(),
+                &provider_id,
+                &capid,
+                &binding_name,
+                bindings.bindings,
+            )
+            .await;
+            Ok(new_provider)
+        } else {
+            Err("Failed to get claims cache from message bus".into())
+        }
     } else {
         Err("Failed to obtain list of bindings for re-invoke from message bus".into())
     }
@@ -425,9 +488,10 @@ async fn reinvoke_bindings(
     target: Recipient<Invocation>,
     provider_id: &str,
     contract_id: &str,
-    binding: &str,
+    link_name: &str,
     existing_bindings: Vec<(String, HashMap<String, String>)>,
 ) {
+    let mb = MessageBus::from_hostlocal_registry(&key.public_key());
     for (actor, vals) in existing_bindings.iter() {
         trace!("Re-invoking bind_actor {}->{}", actor, provider_id);
         let config = crate::generated::core::CapabilityConfiguration {
@@ -440,11 +504,29 @@ async fn reinvoke_bindings(
             WasccEntity::Capability {
                 id: provider_id.to_string(),
                 contract_id: contract_id.to_string(),
-                binding: binding.to_string(),
+                binding: link_name.to_string(),
             },
             OP_BIND_ACTOR,
             crate::generated::core::serialize(&config).unwrap(),
         );
+        let auth = mb
+            .send(CanInvoke {
+                actor: actor.to_string(),
+                contract_id: contract_id.to_string(),
+                operation: OP_BIND_ACTOR.to_string(),
+                provider_id: provider_id.to_string(),
+                link_name: link_name.to_string(),
+            })
+            .await;
+        if let Ok(a) = auth {
+            if !a {
+                error!("Attempt to re-establish link for unauthorized actor {} to {}. Not invoking link", actor, contract_id);
+                continue;
+            }
+        } else {
+            error!("Failed to get authorization decision from message bus, not invoking pre-existing binding");
+            continue;
+        }
         if let Err(_e) = target.clone().send(inv).await {
             error!(
                 "Mailbox failure sending binding re-invoke for {} -> {}",

@@ -5,6 +5,10 @@ use std::io::Read;
 use std::time::Duration;
 use wasmcloud_host::{Actor, Host, HostBuilder, NativeCapability, Result};
 
+pub const REDIS_OCI: &str = "wascc.azurecr.io/redis:v0.9.1";
+pub const HTTPSRV_OCI: &str = "wascc.azurecr.io/httpsrv:v1";
+pub const NATS_OCI: &str = "wascc.azurecr.io/nats:v0.9.1";
+
 pub async fn await_actor_count(
     h: &Host,
     count: usize,
@@ -13,14 +17,19 @@ pub async fn await_actor_count(
 ) -> Result<()> {
     let mut attempt = 0;
     loop {
-        if h.get_actors().await?.len() == count {
-            break;
+        match actix_rt::time::timeout(backoff, h.get_actors()).await {
+            Ok(c) => {
+                if c.unwrap().len() >= count {
+                    break;
+                }
+            },
+            Err(e) => {
+                if attempt > max_attempts {
+                    return Err("Exceeded max attempts".into())
+                }
+            }
         }
-        ::std::thread::sleep(backoff);
         attempt = attempt + 1;
-        if attempt > max_attempts {
-            return Err("Exceeded max attempts".into());
-        }
     }
     Ok(())
 }
@@ -33,17 +42,19 @@ pub async fn await_provider_count(
 ) -> Result<()> {
     let mut attempt = 0;
     loop {
-        let p = h.get_providers().await?;
-        if p.len() >= count {
-            break;
-        } else {
-            println!("provider wait: {:?}", p);
+        match actix_rt::time::timeout(backoff, h.get_providers()).await {
+            Ok(c) => {
+                if c.unwrap().len() >= count {
+                    break;
+                }
+            },
+            Err(e) => {
+                if attempt > max_attempts {
+                    return Err("Exceeded max attempts".into())
+                }
+            }
         }
-        ::std::thread::sleep(backoff);
         attempt = attempt + 1;
-        if attempt > max_attempts {
-            return Err("Exceeded max attempts".into());
-        }
     }
     Ok(())
 }
@@ -58,7 +69,7 @@ pub async fn gen_kvcounter_host(
         h = h.with_rpc_client(rpc);
     }
     if let Some(cplane) = lattice_control {
-        h = h.with_controlplane_client(cplane);
+        h = h.with_control_client(cplane);
     }
     let h = h.build();
     h.start().await?;

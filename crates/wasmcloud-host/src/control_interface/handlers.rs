@@ -1,17 +1,78 @@
-use crate::generated::core::{deserialize, serialize};
 use crate::hlreg::HostLocalSystemService;
 use crate::host_controller::{
-    HostController, QueryActorRunning, QueryProviderRunning, QueryUptime, StartActor, StartProvider,
+    HostController, QueryActorRunning, QueryHostInventory, QueryProviderRunning, QueryUptime,
+    StartActor, StartProvider,
 };
-use crate::messagebus::{GetClaims, MessageBus};
+use crate::messagebus::{GetClaims, MessageBus, QueryAllLinks};
 use crate::{Actor, NativeCapability};
+use control_interface::{
+    deserialize, serialize, ActorDescription, HostInventory, LinkDefinition, ProviderDescription,
+};
 use control_interface::{StartActorAck, StartActorCommand, StartProviderAck, StartProviderCommand};
 use std::collections::HashMap;
 use wascap::jwt::Claims;
 
-pub(crate) async fn handle_host_inventory_query(_host: &str, _msg: &nats::asynk::Message) {}
+pub(crate) async fn handle_host_inventory_query(host: &str, msg: &nats::asynk::Message) {
+    let hc = HostController::from_hostlocal_registry(host);
+    let res = hc.send(QueryHostInventory {}).await;
+    let mut inv = HostInventory {
+        providers: vec![],
+        actors: vec![],
+        labels: HashMap::new(),
+        host_id: host.to_string(),
+    };
+    match res {
+        Ok(hi) => {
+            inv.providers = hi
+                .providers
+                .iter()
+                .map(|ps| ProviderDescription {
+                    id: ps.id.to_string(),
+                    link_name: ps.link_name.to_string(),
+                    image_ref: ps.image_ref.clone(),
+                })
+                .collect();
+            inv.actors = hi
+                .actors
+                .iter()
+                .map(|a| ActorDescription {
+                    id: a.id.to_string(),
+                    image_ref: a.image_ref.clone(),
+                })
+                .collect();
+            inv.labels = hi.labels.clone();
+        }
+        Err(_) => {
+            error!("Mailbox failure querying host controller for inventory");
+        }
+    }
+    let _ = msg.respond(&serialize(inv).unwrap()).await;
+}
 
-pub(crate) async fn handle_linkdefs_query(_host: &str, _msg: &nats::asynk::Message) {}
+pub(crate) async fn handle_linkdefs_query(host: &str, msg: &nats::asynk::Message) {
+    let mb = MessageBus::from_hostlocal_registry(host);
+    match mb.send(QueryAllLinks {}).await {
+        Ok(links) => {
+            let linkres = ::control_interface::LinkDefinitionList {
+                links: links
+                    .links
+                    .into_iter()
+                    .map(|l| ::control_interface::LinkDefinition {
+                        actor_id: l.actor_id,
+                        provider_id: l.provider_id,
+                        link_name: l.link_name,
+                        contract_id: l.contract_id,
+                        values: l.values,
+                    })
+                    .collect(),
+            };
+            let _ = msg.respond(&serialize(&linkres).unwrap()).await;
+        }
+        Err(_) => {
+            error!("Messagebus mailbox failure querying link definitions");
+        }
+    }
+}
 
 pub(crate) async fn handle_claims_query(host: &str, msg: &nats::asynk::Message) {
     let mb = MessageBus::from_hostlocal_registry(host);
@@ -148,6 +209,7 @@ pub(crate) async fn handle_start_provider(
     msg: &nats::asynk::Message,
     allow_latest: bool,
 ) {
+    println!("Provider remote starting");
     let mut ack = StartProviderAck::default();
     ack.host_id = host.to_string();
 
@@ -165,6 +227,7 @@ pub(crate) async fn handle_start_provider(
     let res = hc
         .send(QueryProviderRunning {
             provider_ref: cmd.provider_ref.to_string(),
+            link_name: cmd.link_name.to_string(),
         })
         .await;
     match res {
@@ -201,6 +264,7 @@ pub(crate) async fn handle_start_provider(
         return;
     }
     let par = par.unwrap();
+    println!("PAR downloaded");
 
     let cap = NativeCapability::from_archive(&par, Some(cmd.link_name.to_string()));
     if let Err(e) = cap {
@@ -214,6 +278,8 @@ pub(crate) async fn handle_start_provider(
         return;
     }
     let cap = cap.unwrap();
+    let provider_id = cap.id();
+    println!("Native capability extracted");
 
     let r = hc
         .send(StartProvider {
@@ -227,6 +293,10 @@ pub(crate) async fn handle_start_provider(
         let _ = msg.respond(&serialize(ack).unwrap()).await;
         return;
     }
+
+    ack.provider_ref = cmd.provider_ref;
+    ack.provider_id = provider_id;
+
 
     // Acknowledge the command
     let _ = msg.respond(&serialize(ack).unwrap()).await;

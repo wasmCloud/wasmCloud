@@ -6,10 +6,10 @@ use std::collections::HashMap;
 /// the actor, contract_id, and the binding name is the unique or primary key for
 /// the binding. That triplet can only ever be bound to a single provider ID.
 #[derive(Default, Eq, Clone, PartialEq, Hash, Debug, Serialize, Deserialize)]
-struct BindingKey {
-    actor: String,
-    contract_id: String,
-    binding_name: String,
+pub(crate) struct BindingKey {
+    pub actor: String,
+    pub contract_id: String,
+    pub binding_name: String,
 }
 
 impl BindingKey {
@@ -23,9 +23,9 @@ impl BindingKey {
 }
 
 #[derive(Default, Clone, Debug, Serialize, Deserialize)]
-struct BindingValues {
-    provider_id: String,
-    values: HashMap<String, String>,
+pub(crate) struct BindingValues {
+    pub provider_id: String,
+    pub values: HashMap<String, String>,
 }
 
 #[derive(Default, Clone, Debug, Serialize, Deserialize)]
@@ -49,6 +49,10 @@ impl BindingCache {
                 values,
             },
         );
+    }
+
+    pub fn all(&self) -> HashMap<BindingKey, BindingValues> {
+        self.binding_config.clone()
     }
 
     pub fn find_provider_id(

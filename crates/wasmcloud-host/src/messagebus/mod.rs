@@ -40,6 +40,22 @@ pub struct QueryActors;
 #[rtype(result = "QueryResponse")]
 pub struct QueryProviders;
 
+#[derive(Message)]
+#[rtype(result = "LinksResponse")]
+pub struct QueryAllLinks;
+
+pub struct LinksResponse {
+    pub links: Vec<LinkDefinition>,
+}
+
+pub struct LinkDefinition {
+    pub actor_id: String,
+    pub provider_id: String,
+    pub contract_id: String,
+    pub link_name: String,
+    pub values: std::collections::HashMap<String, String>,
+}
+
 pub struct QueryResponse {
     pub results: Vec<String>,
 }
@@ -48,6 +64,18 @@ impl<A, M> MessageResponse<A, M> for QueryResponse
 where
     A: Actor,
     M: Message<Result = QueryResponse>,
+{
+    fn handle<R: ResponseChannel<M>>(self, _: &mut A::Context, tx: Option<R>) {
+        if let Some(tx) = tx {
+            tx.send(self);
+        }
+    }
+}
+
+impl<A, M> MessageResponse<A, M> for LinksResponse
+where
+    A: Actor,
+    M: Message<Result = LinksResponse>,
 {
     fn handle<R: ResponseChannel<M>>(self, _: &mut A::Context, tx: Option<R>) {
         if let Some(tx) = tx {
@@ -139,6 +167,16 @@ pub struct GetClaims;
 #[derive(Debug)]
 pub struct ClaimsResponse {
     pub claims: HashMap<String, Claims<wascap::jwt::Actor>>,
+}
+
+#[derive(Message)]
+#[rtype(result = "bool")]
+pub struct CanInvoke {
+    pub actor: String,
+    pub contract_id: String,
+    pub operation: String,
+    pub provider_id: String,
+    pub link_name: String,
 }
 
 impl<A, M> MessageResponse<A, M> for FindBindingsResponse

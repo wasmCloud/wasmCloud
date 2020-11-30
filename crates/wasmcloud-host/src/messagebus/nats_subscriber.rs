@@ -24,6 +24,7 @@ pub(crate) struct NatsSubscriber {
 
 struct SubscriberState {
     receiver: Recipient<NatsMessage>,
+    subject: String,
 }
 
 impl Actor for NatsSubscriber {
@@ -35,7 +36,10 @@ impl Actor for NatsSubscriber {
 
     fn stopped(&mut self, _ctx: &mut Self::Context) {
         trace!("NATS Subscriber stopped");
-        println!("SUB STOPPED");
+        if let Some(ref s) = self.state {
+            println!("SUB STOPPED {}", s.subject);
+        }
+
     }
 }
 
@@ -45,6 +49,7 @@ impl Handler<Initialize> for NatsSubscriber {
     fn handle(&mut self, msg: Initialize, _ctx: &mut Self::Context) -> Self::Result {
         let state = SubscriberState {
             receiver: msg.receiver,
+            subject: msg.subject.to_string()
         };
         self.state = Some(state);
         let nc = msg.nc;

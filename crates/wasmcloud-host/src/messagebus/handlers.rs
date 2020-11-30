@@ -4,9 +4,10 @@ use crate::hlreg::HostLocalSystemService;
 use crate::messagebus::rpc_client::RpcClient;
 use crate::messagebus::rpc_subscription::{CreateSubscription, RpcSubscription};
 use crate::messagebus::{
-    AdvertiseBinding, AdvertiseClaims, ClaimsResponse, FindBindings, FindBindingsResponse,
-    GetClaims, Initialize, LookupBinding, PutClaims, PutLink, QueryActors, QueryProviders,
-    QueryResponse, Subscribe, Unsubscribe,
+    AdvertiseBinding, AdvertiseClaims, CanInvoke, ClaimsResponse, FindBindings,
+    FindBindingsResponse, GetClaims, Initialize, LinkDefinition, LinksResponse, LookupBinding,
+    PutClaims, PutLink, QueryActors, QueryAllLinks, QueryProviders, QueryResponse, Subscribe,
+    Unsubscribe,
 };
 use crate::{auth, Result};
 use actix::prelude::*;
@@ -88,6 +89,60 @@ impl Handler<PutLink> for MessageBus {
             &msg.provider_id,
             msg.values.clone(),
         );
+    }
+}
+
+impl Handler<CanInvoke> for MessageBus {
+    type Result = bool;
+
+    fn handle(&mut self, msg: CanInvoke, _ctx: &mut Context<Self>) -> Self::Result {
+        let c = self.claims_cache.get(&msg.actor);
+        if c.is_none() {
+            return false;
+        }
+        let c = c.unwrap();
+        let target = WasccEntity::Capability {
+            id: msg.provider_id,
+            contract_id: msg.contract_id.to_string(),
+            binding: msg.link_name,
+        };
+        let pre_auth = if let Some(ref a) = c.metadata {
+            if let Some(ref c) = a.caps {
+                c.contains(&msg.contract_id)
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        if !pre_auth {
+            return false;
+        }
+        self.authorizer
+            .as_ref()
+            .unwrap()
+            .can_invoke(c, &target, OP_BIND_ACTOR)
+    }
+}
+
+impl Handler<QueryAllLinks> for MessageBus {
+    type Result = LinksResponse;
+
+    fn handle(&mut self, _msg: QueryAllLinks, _ctx: &mut Context<Self>) -> Self::Result {
+        let lds = self
+            .binding_cache
+            .all()
+            .iter()
+            .map(|(k, v)| LinkDefinition {
+                actor_id: k.actor.to_string(),
+                provider_id: v.provider_id.to_string(),
+                contract_id: k.contract_id.to_string(),
+                link_name: k.binding_name.to_string(),
+                values: v.values.clone(),
+            })
+            .collect();
+
+        LinksResponse { links: lds }
     }
 }
 

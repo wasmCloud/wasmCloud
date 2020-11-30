@@ -1,5 +1,5 @@
 use crate::common::{await_actor_count, await_provider_count, gen_kvcounter_host, par_from_file};
-use crate::generated::http::{Request, Response, serialize, deserialize};
+use crate::generated::http::{deserialize, serialize, Request, Response};
 use std::collections::HashMap;
 use std::time::Duration;
 use wasmcloud_host::Result;

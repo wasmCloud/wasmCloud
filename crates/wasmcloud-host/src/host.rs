@@ -52,7 +52,7 @@ impl HostBuilder {
         }
     }
 
-    pub fn with_controlplane_client(self, client: nats::asynk::Connection) -> HostBuilder {
+    pub fn with_control_client(self, client: nats::asynk::Connection) -> HostBuilder {
         HostBuilder {
             cplane_client: Some(client),
             ..self

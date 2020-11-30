@@ -157,6 +157,10 @@ impl Handler<Initialize> for ControlInterface {
             queries::linkdefinitions(&prefix),
             NatsSubscriber::default().start(),
         );
+        self.subscribers.insert(
+            queries::host_inventory(&prefix, &host_id),
+            NatsSubscriber::default().start(),
+        );
         self.subscribers
             .insert(queries::claims(&prefix), NatsSubscriber::default().start());
         self.subscribers.insert(

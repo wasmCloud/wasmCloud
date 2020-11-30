@@ -30,7 +30,7 @@ struct State {
     cap: NativeCapability,
     mw_chain: Vec<Box<dyn Middleware>>,
     kp: KeyPair,
-    _library: Option<Library>,
+    library: Option<Library>,
     plugin: Box<dyn CapabilityProvider + 'static>,
     descriptor: CapabilityDescriptor,
     image_ref: Option<String>,
@@ -54,12 +54,13 @@ impl Actor for NativeCapabilityHost {
     }
 
     fn stopped(&mut self, _ctx: &mut Self::Context) {
+        println!("Stopping provider");
         if self.state.is_none() {
             warn!("Stopped a provider host that had no state. Something might be amiss, askew, or perchance awry");
             return;
         }
 
-        let state = self.state.as_ref().unwrap();
+        let mut state = self.state.as_mut().unwrap();
         info!(
             "Provider stopped {} - {}",
             &state.cap.claims.subject, &state.descriptor.name
@@ -74,9 +75,15 @@ impl Actor for NativeCapabilityHost {
                 reason: TerminationReason::Requested,
             },
         });
-        println!("A");
         state.plugin.stop(); // Tell the provider to clean up, dispose of resources, stop threads, etc
-        println!("B");
+        if let Some(l) = state.library.take() {
+            let r = l.close();
+            if let Err(e) = r {
+                warn!("Failure closing plugin library: {}", e);
+                println!("Failure closign plugin library: {}", e);
+            }
+        }
+        println!("Stopped");
     }
 }
 
@@ -105,7 +112,7 @@ impl Handler<Initialize> for NativeCapabilityHost {
             cap: msg.cap,
             mw_chain: msg.mw_chain,
             kp: KeyPair::from_seed(&msg.seed)?,
-            _library: library,
+            library,
             plugin,
             descriptor,
             image_ref: msg.image_ref,
@@ -219,6 +226,7 @@ fn extrude(
     use std::io::Write;
     if let Some(ref bytes) = cap.native_bytes {
         let path = temp_dir();
+        let path = path.join("wasmcloudcache");
         let path = path.join(&cap.claims.subject);
         let path = path.join(format!(
             "{}",

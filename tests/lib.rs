@@ -4,7 +4,18 @@ mod generated;
 mod no_lattice;
 mod with_lattice;
 
+use std::env::temp_dir;
 use wasmcloud_host::Result;
+
+#[cfg(test)]
+#[ctor::ctor]
+fn init() {
+    println!("Purging provider cache");
+    let path = temp_dir();
+    let path = path.join("wasmcloudcache");
+    let _ = ::std::fs::remove_dir_all(path);
+}
+
 /*
 #[actix_rt::test]
 async fn start_and_execute_echo() -> Result<()> {
