@@ -32,7 +32,7 @@ struct State {
     kp: KeyPair,
     library: Option<Library>,
     plugin: Box<dyn CapabilityProvider + 'static>,
-    descriptor: CapabilityDescriptor,
+    //descriptor: CapabilityDescriptor,
     image_ref: Option<String>,
 }
 
@@ -63,7 +63,8 @@ impl Actor for NativeCapabilityHost {
         let mut state = self.state.as_mut().unwrap();
         info!(
             "Provider stopped {} - {}",
-            &state.cap.claims.subject, &state.descriptor.name
+            &state.cap.claims.subject,
+            &state.cap.claims.metadata.as_ref().unwrap().capid
         );
 
         let cp = ControlInterface::from_hostlocal_registry(&state.kp.public_key());
@@ -71,7 +72,14 @@ impl Actor for NativeCapabilityHost {
             event: ControlEvent::ProviderStopped {
                 binding_name: state.cap.binding_name.to_string(),
                 provider_id: state.cap.claims.subject.to_string(),
-                contract_id: state.descriptor.id.to_string(),
+                contract_id: state
+                    .cap
+                    .claims
+                    .metadata
+                    .as_ref()
+                    .unwrap()
+                    .capid
+                    .to_string(),
                 reason: TerminationReason::Requested,
             },
         });
@@ -99,14 +107,15 @@ impl Handler<Initialize> for NativeCapabilityHost {
                 return Err("Failed to extract plugin from provider".into());
             }
         };
-        let descriptor = match get_descriptor(&plugin) {
+        /*let descriptor = match get_descriptor(&plugin) {
             Ok(d) => d,
             Err(e) => {
                 error!("Failed to get descriptor from provider: {}", e);
                 ctx.stop();
                 return Err("Failed to get descriptor from provider".into());
             }
-        };
+        }; */
+ // Descriptor usage should be deprecated..
 
         self.state = Some(State {
             cap: msg.cap,
@@ -114,7 +123,6 @@ impl Handler<Initialize> for NativeCapabilityHost {
             kp: KeyPair::from_seed(&msg.seed)?,
             library,
             plugin,
-            descriptor,
             image_ref: msg.image_ref,
         });
         let state = self.state.as_ref().unwrap();
@@ -122,7 +130,14 @@ impl Handler<Initialize> for NativeCapabilityHost {
         let b = MessageBus::from_hostlocal_registry(&state.kp.public_key());
         let entity = WasccEntity::Capability {
             id: state.cap.claims.subject.to_string(),
-            contract_id: state.descriptor.id.to_string(),
+            contract_id: state
+                .cap
+                .claims
+                .metadata
+                .as_ref()
+                .unwrap()
+                .capid
+                .to_string(),
             binding: state.cap.binding_name.to_string(),
         };
 
@@ -159,7 +174,14 @@ impl Handler<Initialize> for NativeCapabilityHost {
             event: ControlEvent::ProviderStarted {
                 binding_name: state.cap.binding_name.to_string(),
                 provider_id: state.cap.claims.subject.to_string(),
-                contract_id: state.descriptor.id.to_string(),
+                contract_id: state
+                    .cap
+                    .claims
+                    .metadata
+                    .as_ref()
+                    .unwrap()
+                    .capid
+                    .to_string(),
                 image_ref: state.image_ref.clone(),
             },
         });

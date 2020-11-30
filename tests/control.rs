@@ -1,11 +1,13 @@
-use crate::common::{await_actor_count, await_provider_count, par_from_file, REDIS_OCI, HTTPSRV_OCI, NATS_OCI};
+use crate::common::{
+    await_actor_count, await_provider_count, par_from_file, HTTPSRV_OCI, NATS_OCI, REDIS_OCI,
+};
 use ::control_interface::Client;
+use actix_rt::time::delay_for;
 use std::thread;
 use std::time::Duration;
 use wascc_redis::RedisKVProvider;
 use wasmcloud_host::Result;
 use wasmcloud_host::{HostBuilder, NativeCapability};
-use actix_rt::time::delay_for;
 
 pub(crate) async fn basics() -> Result<()> {
     let nc = nats::asynk::connect("0.0.0.0:4222").await?;
@@ -46,17 +48,15 @@ pub(crate) async fn basics() -> Result<()> {
         "Actor with image ref 'wascc.azurecr.io/kvcounter:v1' is already running on this host"
     );
 
-    let redis_ack = ctl_client
+    /*let redis_ack = ctl_client
         .start_provider(&hid, REDIS_OCI, None)
         .await?;
     await_provider_count(&h, 2, Duration::from_millis(50), 20).await?;
-    println!("Redis {:?} started", redis_ack);
+    println!("Redis {:?} started", redis_ack); */
 
-    /*let nats_ack = ctl_client
-        .start_provider(&hid, NATS_OCI, None)
-        .await?;
+    let nats_ack = ctl_client.start_provider(&hid, NATS_OCI, None).await?;
     await_provider_count(&h, 2, Duration::from_millis(10), 200).await?;
-    println!("NATS {:?} started", nats_ack); */
+    println!("NATS {:?} started", nats_ack);
 
     /* let redis_claims = {
         let arc = par_from_file("./tests/modules/libwascc_redis.par.gz")?;
@@ -68,9 +68,7 @@ pub(crate) async fn basics() -> Result<()> {
     await_provider_count(&h, 2, Duration::from_millis(50), 10)
         .await?; */
 
-    let http_ack = ctl_client
-        .start_provider(&hid, HTTPSRV_OCI, None)
-        .await?;
+    let http_ack = ctl_client.start_provider(&hid, HTTPSRV_OCI, None).await?;
     await_provider_count(&h, 3, Duration::from_millis(50), 10).await?;
     println!("HTTP Server {:?} started", http_ack);
 

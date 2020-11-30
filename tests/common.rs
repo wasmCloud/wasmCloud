@@ -22,10 +22,10 @@ pub async fn await_actor_count(
                 if c.unwrap().len() >= count {
                     break;
                 }
-            },
+            }
             Err(e) => {
                 if attempt > max_attempts {
-                    return Err("Exceeded max attempts".into())
+                    return Err("Exceeded max attempts".into());
                 }
             }
         }
@@ -47,10 +47,10 @@ pub async fn await_provider_count(
                 if c.unwrap().len() >= count {
                     break;
                 }
-            },
+            }
             Err(e) => {
                 if attempt > max_attempts {
-                    return Err("Exceeded max attempts".into())
+                    return Err("Exceeded max attempts".into());
                 }
             }
         }

@@ -297,7 +297,6 @@ pub(crate) async fn handle_start_provider(
     ack.provider_ref = cmd.provider_ref;
     ack.provider_id = provider_id;
 
-
     // Acknowledge the command
     let _ = msg.respond(&serialize(ack).unwrap()).await;
 }

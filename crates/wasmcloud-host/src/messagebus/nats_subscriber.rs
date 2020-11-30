@@ -39,7 +39,6 @@ impl Actor for NatsSubscriber {
         if let Some(ref s) = self.state {
             println!("SUB STOPPED {}", s.subject);
         }
-
     }
 }
 
@@ -49,7 +48,7 @@ impl Handler<Initialize> for NatsSubscriber {
     fn handle(&mut self, msg: Initialize, _ctx: &mut Self::Context) -> Self::Result {
         let state = SubscriberState {
             receiver: msg.receiver,
-            subject: msg.subject.to_string()
+            subject: msg.subject.to_string(),
         };
         self.state = Some(state);
         let nc = msg.nc;
