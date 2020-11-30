@@ -34,12 +34,7 @@ impl Actor for NatsSubscriber {
         trace!("NATS Subscriber started");
     }
 
-    fn stopped(&mut self, _ctx: &mut Self::Context) {
-        trace!("NATS Subscriber stopped");
-        if let Some(ref s) = self.state {
-            println!("SUB STOPPED {}", s.subject);
-        }
-    }
+    fn stopped(&mut self, _ctx: &mut Self::Context) {}
 }
 
 impl Handler<Initialize> for NatsSubscriber {

@@ -64,7 +64,7 @@ impl SystemService for HostController {
         info!("Host Controller started");
 
         // TODO: make this value configurable
-        ctx.set_mailbox_capacity(100);
+        ctx.set_mailbox_capacity(1000);
     }
 }
 
@@ -329,13 +329,14 @@ impl Handler<QueryHostInventory> for HostController {
     type Result = HostInventory;
 
     fn handle(&mut self, _msg: QueryHostInventory, _ctx: &mut Context<Self>) -> Self::Result {
+        println!("{:?}", self.image_refs);
         HostInventory {
             actors: self
                 .actors
                 .iter()
                 .map(|(k, v)| ActorSummary {
                     id: k.to_string(),
-                    image_ref: self.image_refs.get(k).clone().map(|s| s.to_string()),
+                    image_ref: find_imageref(k, &self.image_refs),
                 })
                 .collect(),
             host_id: self.kp.as_ref().unwrap().public_key(),
@@ -343,11 +344,7 @@ impl Handler<QueryHostInventory> for HostController {
                 .providers
                 .iter()
                 .map(|(k, v)| ProviderSummary {
-                    image_ref: self
-                        .image_refs
-                        .values()
-                        .find(|pk| **pk == k.id)
-                        .map(|s| s.to_string()),
+                    image_ref: find_imageref(&k.id, &self.image_refs),
                     id: k.id.to_string(),
                     link_name: k.link_name.to_string(),
                 })
@@ -355,6 +352,13 @@ impl Handler<QueryHostInventory> for HostController {
             labels: self.host_labels.clone(),
         }
     }
+}
+
+fn find_imageref(target: &str, image_refs: &HashMap<String, String>) -> Option<String> {
+    image_refs
+        .iter()
+        .find(|(ir, pk)| &pk.to_string() == target)
+        .map(|(ir, _pk)| ir.to_string())
 }
 
 impl Handler<StartProvider> for HostController {

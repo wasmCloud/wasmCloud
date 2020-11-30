@@ -40,8 +40,9 @@ pub struct PublishEvent {
 impl Supervised for ControlInterface {}
 
 impl SystemService for ControlInterface {
-    fn service_started(&mut self, _ctx: &mut Context<Self>) {
+    fn service_started(&mut self, ctx: &mut Context<Self>) {
         info!("Control Interface started");
+        ctx.set_mailbox_capacity(1000);
     }
 }
 
@@ -55,15 +56,15 @@ impl Handler<PublishEvent> for ControlInterface {
     type Result = ResponseActFuture<Self, ()>;
 
     fn handle(&mut self, msg: PublishEvent, _ctx: &mut Context<Self>) -> Self::Result {
-        if self.client.is_none() {
-            trace!("Skipping control interface event (interface disabled)");
+        /*if self.client.is_none() {
+        //    trace!("Skipping control interface event (interface disabled)");
             return Box::pin(async move {}.into_actor(self));
         }
         let evt = msg
             .event
             .into_published(&self.key.as_ref().unwrap().public_key());
         let prefix = Some(self.ns_prefix.to_string());
-        trace!("Emitting control interface event {:?}", evt);
+        //trace!("Emitting control interface event {:?}", evt);
         if let Some(ref nc) = self.client {
             let nc = nc.clone();
             Box::pin(
@@ -79,7 +80,8 @@ impl Handler<PublishEvent> for ControlInterface {
             )
         } else {
             Box::pin(async move {}.into_actor(self))
-        }
+        } */
+        Box::pin(async move {}.into_actor(self))
     }
 }
 

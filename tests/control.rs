@@ -1,5 +1,6 @@
 use crate::common::{
-    await_actor_count, await_provider_count, par_from_file, HTTPSRV_OCI, NATS_OCI, REDIS_OCI,
+    await_actor_count, await_provider_count, par_from_file, HTTPSRV_OCI, KVCOUNTER_OCI, NATS_OCI,
+    REDIS_OCI,
 };
 use ::control_interface::Client;
 use actix_rt::time::delay_for;
@@ -25,12 +26,10 @@ pub(crate) async fn basics() -> Result<()> {
     let ctl_client = Client::new(
         nc2,
         Some("controlbasics".to_string()),
-        Duration::from_secs(10),
+        Duration::from_secs(20),
     );
 
-    let a_ack = ctl_client
-        .start_actor(&hid, "wascc.azurecr.io/kvcounter:v1")
-        .await?;
+    let a_ack = ctl_client.start_actor(&hid, KVCOUNTER_OCI).await?;
     await_actor_count(&h, 1, Duration::from_millis(50), 20).await?;
     println!("Actor {} started on host {}", a_ack.actor_id, a_ack.host_id);
 
@@ -39,23 +38,22 @@ pub(crate) async fn basics() -> Result<()> {
     assert_eq!(a_ack.actor_id, claims.claims[0].values["sub"]);
     assert!(a_ack.failure.is_none());
 
-    let a_ack2 = ctl_client
-        .start_actor(&hid, "wascc.azurecr.io/kvcounter:v1")
-        .await?;
+    let a_ack2 = ctl_client.start_actor(&hid, KVCOUNTER_OCI).await?;
     assert!(a_ack2.failure.is_some()); // cannot start the same actor twice
     assert_eq!(
         a_ack2.failure.unwrap(),
-        "Actor with image ref 'wascc.azurecr.io/kvcounter:v1' is already running on this host"
+        format!(
+            "Actor with image ref '{}' is already running on this host",
+            KVCOUNTER_OCI
+        )
     );
 
-    /*let redis_ack = ctl_client
-        .start_provider(&hid, REDIS_OCI, None)
-        .await?;
+    let redis_ack = ctl_client.start_provider(&hid, REDIS_OCI, None).await?;
     await_provider_count(&h, 2, Duration::from_millis(50), 20).await?;
-    println!("Redis {:?} started", redis_ack); */
+    println!("Redis {:?} started", redis_ack);
 
     let nats_ack = ctl_client.start_provider(&hid, NATS_OCI, None).await?;
-    await_provider_count(&h, 2, Duration::from_millis(10), 200).await?;
+    await_provider_count(&h, 3, Duration::from_millis(10), 200).await?;
     println!("NATS {:?} started", nats_ack);
 
     /* let redis_claims = {
@@ -69,17 +67,15 @@ pub(crate) async fn basics() -> Result<()> {
         .await?; */
 
     let http_ack = ctl_client.start_provider(&hid, HTTPSRV_OCI, None).await?;
-    await_provider_count(&h, 3, Duration::from_millis(50), 10).await?;
+    await_provider_count(&h, 4, Duration::from_millis(50), 10).await?;
     println!("HTTP Server {:?} started", http_ack);
 
-    /*let http_ack2 = ctl_client
-        .start_provider(&hid, HTTPSRV_OCI, None)
-        .await?;
+    let http_ack2 = ctl_client.start_provider(&hid, HTTPSRV_OCI, None).await?;
     assert!(http_ack2.failure.is_some());
     assert_eq!(
         http_ack2.failure.unwrap(),
         "Provider with image ref 'wascc.azurecr.io/httpsrv:v1' is already running on this host."
-    ); */
+    );
 
     let hosts = ctl_client.get_hosts(Duration::from_millis(500)).await?;
     assert_eq!(hosts.len(), 1);
@@ -88,11 +84,17 @@ pub(crate) async fn basics() -> Result<()> {
     let inv = ctl_client.get_host_inventory(&hosts[0].id).await?;
     //assert_eq!(3, inv.providers.len());
     assert_eq!(1, inv.actors.len());
+    assert_eq!(inv.actors[0].image_ref, Some(KVCOUNTER_OCI.to_string()));
     assert_eq!(4, inv.labels.len()); // each host gets 3 built-in labels
     assert_eq!(inv.host_id, hosts[0].id);
+    assert!(inv
+        .providers
+        .iter()
+        .find(|p| p.image_ref == Some(HTTPSRV_OCI.to_string()) && p.id == http_ack.provider_id)
+        .is_some());
 
     println!("{:?}", hosts);
-
+    delay_for(Duration::from_secs(1)).await;
     h.stop().await;
     delay_for(Duration::from_secs(1)).await;
 

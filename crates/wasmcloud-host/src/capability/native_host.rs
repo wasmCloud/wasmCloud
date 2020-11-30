@@ -54,20 +54,14 @@ impl Actor for NativeCapabilityHost {
     }
 
     fn stopped(&mut self, _ctx: &mut Self::Context) {
-        println!("Stopping provider");
         if self.state.is_none() {
-            warn!("Stopped a provider host that had no state. Something might be amiss, askew, or perchance awry");
+            //warn!("Stopped a provider host that had no state. Something might be amiss, askew, or perchance awry");
             return;
         }
 
         let mut state = self.state.as_mut().unwrap();
-        info!(
-            "Provider stopped {} - {}",
-            &state.cap.claims.subject,
-            &state.cap.claims.metadata.as_ref().unwrap().capid
-        );
 
-        let cp = ControlInterface::from_hostlocal_registry(&state.kp.public_key());
+        /* let cp = ControlInterface::from_hostlocal_registry(&state.kp.public_key());
         cp.do_send(PublishEvent {
             event: ControlEvent::ProviderStopped {
                 binding_name: state.cap.binding_name.to_string(),
@@ -82,16 +76,14 @@ impl Actor for NativeCapabilityHost {
                     .to_string(),
                 reason: TerminationReason::Requested,
             },
-        });
+        }); */
         state.plugin.stop(); // Tell the provider to clean up, dispose of resources, stop threads, etc
         if let Some(l) = state.library.take() {
             let r = l.close();
             if let Err(e) = r {
-                warn!("Failure closing plugin library: {}", e);
-                println!("Failure closign plugin library: {}", e);
+                //
             }
         }
-        println!("Stopped");
     }
 }
 
@@ -115,7 +107,7 @@ impl Handler<Initialize> for NativeCapabilityHost {
                 return Err("Failed to get descriptor from provider".into());
             }
         }; */
- // Descriptor usage should be deprecated..
+        // Descriptor usage should be deprecated..
 
         self.state = Some(State {
             cap: msg.cap,

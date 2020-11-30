@@ -135,8 +135,7 @@ impl Actor for ActorHost {
     }
 
     fn stopped(&mut self, _ctx: &mut Self::Context) {
-        let state = self.state.as_ref().unwrap();
-        info!("Actor {} stopped", &state.claims.subject);
+        /* let state = self.state.as_ref().unwrap();
         let _ = block_on(async move {
             let cp = ControlInterface::from_hostlocal_registry(&state.host_id);
             cp.send(PublishEvent {
@@ -146,7 +145,7 @@ impl Actor for ActorHost {
                 },
             })
             .await
-        });
+        }); */
     }
 }
 
