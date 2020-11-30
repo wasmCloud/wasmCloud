@@ -165,10 +165,5 @@ impl CapabilityProvider for NatsProvider {
         }
     }
 
-    fn stop(&self) {
-        let mut lock = self.clients.write().unwrap();
-        lock.clear();
-        let mut lock = self.dispatcher.write().unwrap();
-        *lock = Box::new(NullDispatcher::default());
-    }
+    fn stop(&self) {}
 }
