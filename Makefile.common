@@ -21,7 +21,6 @@ MIPS_TARGETS := mips-unknown-linux-gnu \
 	mips64el-unknown-linux-gnuabi64
 
 $(TARGETS):
-$(MIPS_TARGETS):
 	cross build --target $@ --release
 
 par: $(TARGETS)
@@ -48,6 +47,9 @@ par: $(TARGETS)
 		--arch x86_64-linux \
 		--binary target/x86_64-unknown-linux-gnu/release/lib$(LIBNAME).so \
 		lib$(LIBNAME).par.gz
+
+$(MIPS_TARGETS):
+	cross build --target $@ --release
 
 par-mips: $(MIPS_TARGETS) par 
 	wash par insert \
