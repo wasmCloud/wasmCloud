@@ -116,6 +116,12 @@ pub struct UpdateActorAck {
 }
 
 #[derive(Debug, PartialEq, Deserialize, Serialize, Default, Clone)]
+pub struct StopActorAck {
+    #[serde(rename = "failure")]
+    pub failure: Option<String>,
+}
+
+#[derive(Debug, PartialEq, Deserialize, Serialize, Default, Clone)]
 pub struct LinkDefinitionList {
     #[serde(rename = "links")]
     pub links: Vec<LinkDefinition>,

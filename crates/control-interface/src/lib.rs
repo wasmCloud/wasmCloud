@@ -84,6 +84,21 @@ impl Client {
         }
     }
 
+    pub async fn stop_actor(&self, host_id: &str, actor_ref: &str) -> Result<StopActorAck> {
+        let subject = broker::commands::stop_actor(&self.nsprefix, host_id);
+        let bytes = serialize(StopActorCommand {
+            host_id: host_id.to_string(),
+            actor_ref: actor_ref.to_string()
+        })?;
+        match actix_rt::time::timeout(self.timeout, self.nc.request(&subject, &bytes)).await? {
+            Ok(msg) => {
+                let ack: StopActorAck = deserialize(&msg.data)?;
+                Ok(ack)
+            },
+            Err(e) => Err(format!("Did not receive stop actor acknowledgement: {}", e).into()),
+        }
+    }
+
     pub async fn get_claims(&self) -> Result<ClaimsList> {
         let subject = broker::queries::claims(&self.nsprefix);
         match actix_rt::time::timeout(self.timeout, self.nc.request(&subject, vec![])).await? {

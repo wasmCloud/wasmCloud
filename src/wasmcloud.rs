@@ -7,7 +7,7 @@ extern crate log;
 async fn main() -> Result<()> {
     let _ = env_logger::Builder::from_env(env_logger::Env::default().filter_or(
         env_logger::DEFAULT_FILTER_ENV,
-        "wasccd=info,wascc_host=info",
+        "wasccd=info,wasmcloud_host=info",
     ))
     .format_module_path(false)
     .try_init();

@@ -1,13 +1,8 @@
 use crate::hlreg::HostLocalSystemService;
-use crate::host_controller::{
-    HostController, QueryActorRunning, QueryHostInventory, QueryProviderRunning, QueryUptime,
-    StartActor, StartProvider,
-};
+use crate::host_controller::{HostController, QueryActorRunning, QueryHostInventory, QueryProviderRunning, QueryUptime, StartActor, StartProvider, StopActor};
 use crate::messagebus::{GetClaims, MessageBus, QueryAllLinks};
 use crate::{Actor, NativeCapability};
-use control_interface::{
-    deserialize, serialize, ActorDescription, HostInventory, LinkDefinition, ProviderDescription,
-};
+use control_interface::{deserialize, serialize, ActorDescription, HostInventory, LinkDefinition, ProviderDescription, StopActorCommand, StopActorAck};
 use control_interface::{StartActorAck, StartActorCommand, StartProviderAck, StartProviderCommand};
 use std::collections::HashMap;
 use wascap::jwt::Claims;
@@ -301,7 +296,45 @@ pub(crate) async fn handle_start_provider(
     let _ = msg.respond(&serialize(ack).unwrap()).await;
 }
 
-pub(crate) async fn handle_stop_actor(host: &str, msg: &nats::asynk::Message) {}
+pub(crate) async fn handle_stop_actor(host: &str, msg: &nats::asynk::Message) {
+    let mut ack = StopActorAck::default();
+    let hc = HostController::from_hostlocal_registry(host);
+
+    let cmd = match deserialize::<StopActorCommand>(&msg.data) {
+        Ok(c) => c,
+        Err(_) => {
+            error!("Failed to deserialize stop actor command");
+            ack.failure = Some("Failed to deserialize stop actor command".to_string());
+            let _ = msg.respond(&serialize(ack).unwrap()).await;
+            return;
+        }
+    };
+
+    match hc.send(QueryActorRunning{
+        actor_ref: cmd.actor_ref.to_string()
+    }).await {
+        Ok(r) if r => {},
+        _ => {
+            let f = "Actor is either not running on this host or host controller unresponsive";
+            error!("{}", f);
+            ack.failure = Some(f.to_string());
+            let _ = msg.respond(&serialize(ack).unwrap()).await;
+            return;
+        }
+    };
+
+    if let Err(_) = hc.send(StopActor{
+        actor_ref: cmd.actor_ref
+    }).await {
+        let f = "Host controller did not acknowledge stop command";
+        error!("{}", f);
+        ack.failure = Some(f.to_string());
+        let _ = msg.respond(&serialize(ack).unwrap()).await;
+        return;
+    }
+
+    let _ = msg.respond(&serialize(ack).unwrap()).await;
+}
 
 fn claims_to_if(c: &Claims<wascap::jwt::Actor>) -> ::control_interface::Claims {
     let mut hm = HashMap::new();
