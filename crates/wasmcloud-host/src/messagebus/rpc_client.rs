@@ -2,11 +2,14 @@ use crate::generated::core::{deserialize, serialize};
 use crate::hlreg::HostLocalSystemService;
 use crate::host_controller::{CheckLink, HostController};
 use crate::messagebus::rpc_subscription::{claims_subject, invoke_subject, links_subject};
-use crate::messagebus::{AdvertiseBinding, AdvertiseClaims, MessageBus, PutClaims, PutLink};
+use crate::messagebus::{
+    AdvertiseBinding, AdvertiseClaims, EnforceLocalActorLinks, EnforceLocalProviderLinks,
+    MessageBus, PutClaims, PutLink,
+};
 use crate::Result;
 use crate::{Invocation, InvocationResponse};
 use actix::prelude::*;
-use futures::StreamExt;
+use futures::{StreamExt, TryFutureExt};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -15,7 +18,7 @@ use std::time::Duration;
 #[derive(Message)]
 #[rtype(result = "()")]
 pub(crate) struct Initialize {
-    pub nc: Arc<nats::asynk::Connection>,
+    pub nc: nats::asynk::Connection,
     pub ns_prefix: Option<String>,
     pub bus: Addr<MessageBus>,
     pub rpc_timeout: Duration,
@@ -24,7 +27,7 @@ pub(crate) struct Initialize {
 
 #[derive(Default)]
 pub(crate) struct RpcClient {
-    nc: Option<Arc<nats::asynk::Connection>>,
+    nc: Option<nats::asynk::Connection>,
     ns_prefix: Option<String>,
     bus: Option<Addr<MessageBus>>,
     rpc_timeout: Duration,
@@ -149,7 +152,7 @@ impl Handler<ClaimsInbound> for RpcClient {
                 async move {
                     let _ = target
                         .send(PutClaims {
-                            claims: msg.claims.unwrap(),
+                            claims: msg.claims.as_ref().unwrap().clone(),
                         })
                         .await;
                 }
@@ -181,7 +184,9 @@ impl Handler<LinkInbound> for RpcClient {
                             values: link.values,
                         })
                         .await;
-                    let _ = hc.send(CheckLink { linkdef: ld }).await;
+                    //let _ = hc.send(CheckLink { linkdef: ld }).await;
+                    // If this link relates to any of the providers currently running in this host,
+                    // perform the bind call
                 }
                 .into_actor(self),
             )

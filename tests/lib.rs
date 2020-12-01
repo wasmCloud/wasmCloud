@@ -16,7 +16,6 @@ fn init() {
     let _ = ::std::fs::remove_dir_all(path);
 }
 
-/*
 #[actix_rt::test]
 async fn start_and_execute_echo() -> Result<()> {
     no_lattice::start_and_execute_echo().await
@@ -46,7 +45,7 @@ async fn distributed_echo() -> Result<()> {
 async fn link_on_third_host() -> Result<()> {
     with_lattice::link_on_third_host().await
 }
-
+/*
 #[actix_rt::test]
 async fn scaled_kvcounter() -> Result<()> {
     with_lattice::scaled_kvcounter().await

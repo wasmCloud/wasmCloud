@@ -329,7 +329,6 @@ impl Handler<QueryHostInventory> for HostController {
     type Result = HostInventory;
 
     fn handle(&mut self, _msg: QueryHostInventory, _ctx: &mut Context<Self>) -> Self::Result {
-        println!("{:?}", self.image_refs);
         HostInventory {
             actors: self
                 .actors
@@ -365,7 +364,6 @@ impl Handler<StartProvider> for HostController {
     type Result = ResponseActFuture<Self, Result<()>>;
 
     fn handle(&mut self, msg: StartProvider, _ctx: &mut Context<Self>) -> Self::Result {
-        println!("Starting provider...");
         let sub = msg.provider.claims.subject.to_string();
         let key = ProviderKey::new(&sub, &msg.provider.binding_name);
         if self.providers.contains_key(&key) {
@@ -427,7 +425,6 @@ async fn initialize_provider(
     binding_name: String,
     authorizer: Box<dyn Authorizer>,
 ) -> Result<Addr<NativeCapabilityHost>> {
-    println!("Provider initializing");
     let new_provider = SyncArbiter::start(1, || NativeCapabilityHost::new());
     let im = crate::capability::native_host::Initialize {
         cap: provider.clone(),
@@ -442,7 +439,9 @@ async fn initialize_provider(
     };
 
     let b = MessageBus::from_hostlocal_registry(&host_id);
-    let bindings = b
+
+    Ok(new_provider)
+    /*let bindings = b
         .send(FindBindings {
             provider_id: provider_id.to_string(),
             binding_name: binding_name.to_string(),
@@ -468,7 +467,7 @@ async fn initialize_provider(
         }
     } else {
         Err("Failed to obtain list of bindings for re-invoke from message bus".into())
-    }
+    } */
 }
 
 pub(crate) fn detect_core_host_labels() -> HashMap<String, String> {

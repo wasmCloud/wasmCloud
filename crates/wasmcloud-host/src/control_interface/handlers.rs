@@ -1,11 +1,24 @@
 use crate::hlreg::HostLocalSystemService;
-use crate::host_controller::{HostController, QueryActorRunning, QueryHostInventory, QueryProviderRunning, QueryUptime, StartActor, StartProvider, StopActor};
+use crate::host_controller::{
+    HostController, QueryActorRunning, QueryHostInventory, QueryProviderRunning, QueryUptime,
+    StartActor, StartProvider, StopActor, StopProvider,
+};
 use crate::messagebus::{GetClaims, MessageBus, QueryAllLinks};
 use crate::{Actor, NativeCapability};
-use control_interface::{deserialize, serialize, ActorDescription, HostInventory, LinkDefinition, ProviderDescription, StopActorCommand, StopActorAck};
+use control_interface::{
+    deserialize, serialize, ActorDescription, HostInventory, LinkDefinition, ProviderDescription,
+    StopActorAck, StopActorCommand, StopProviderAck, StopProviderCommand,
+};
 use control_interface::{StartActorAck, StartActorCommand, StartProviderAck, StartProviderCommand};
 use std::collections::HashMap;
 use wascap::jwt::Claims;
+
+// TODO: implement actor update
+pub(crate) async fn handle_update_actor(host: &str, msg: &nats::asynk::Message) {}
+// TODO: implement provider auction
+pub(crate) async fn handle_provider_auction(_host: &str, _msg: &nats::asynk::Message) {}
+// TODO: implement actor auction
+pub(crate) async fn handle_actor_auction(_host: &str, _msg: &nats::asynk::Message) {}
 
 pub(crate) async fn handle_host_inventory_query(host: &str, msg: &nats::asynk::Message) {
     let hc = HostController::from_hostlocal_registry(host);
@@ -101,10 +114,6 @@ pub(crate) async fn handle_host_probe(host: &str, msg: &nats::asynk::Message) {
     let _ = msg.respond(&serialize(probe_ack).unwrap()).await;
 }
 
-pub(crate) async fn handle_provider_auction(_host: &str, _msg: &nats::asynk::Message) {}
-
-pub(crate) async fn handle_actor_auction(_host: &str, _msg: &nats::asynk::Message) {}
-
 // TODO: I don't know if this function reads better as a chain of `and_then` futures or
 // if this "go" style guard check sequence is easier to read.
 pub(crate) async fn handle_start_actor(host: &str, msg: &nats::asynk::Message, allow_latest: bool) {
@@ -120,6 +129,7 @@ pub(crate) async fn handle_start_actor(host: &str, msg: &nats::asynk::Message, a
         return;
     }
     let cmd = cmd.unwrap();
+    ack.actor_ref = cmd.actor_ref.to_string();
 
     let hc = HostController::from_hostlocal_registry(host);
     let res = hc
@@ -195,16 +205,70 @@ pub(crate) async fn handle_start_actor(host: &str, msg: &nats::asynk::Message, a
     let _ = msg.respond(&serialize(ack).unwrap()).await;
 }
 
-pub(crate) async fn handle_update_actor(host: &str, msg: &nats::asynk::Message) {}
+pub(crate) async fn handle_stop_provider(host: &str, msg: &nats::asynk::Message) {
+    let mut ack = StopProviderAck::default();
+    let hc = HostController::from_hostlocal_registry(host);
 
-pub(crate) async fn handle_stop_provider(host: &str, msg: &nats::asynk::Message) {}
+    let cmd = match deserialize::<StopProviderCommand>(&msg.data) {
+        Ok(c) => c,
+        Err(_) => {
+            let f = "Failed to deserialize stop provider command";
+            error!("{}", f);
+            ack.failure = Some(f.to_string());
+            let _ = msg.respond(&serialize(ack).unwrap()).await;
+            return;
+        }
+    };
+    match hc
+        .send(QueryProviderRunning {
+            provider_ref: cmd.provider_ref.to_string(),
+            link_name: cmd.link_name.to_string(),
+        })
+        .await
+    {
+        Ok(r) if !r => {
+            let f = format!(
+                "Provider {}/{} is not running on this host",
+                cmd.provider_ref, cmd.link_name
+            );
+            error!("{}", f);
+            ack.failure = Some(f);
+            let _ = msg.respond(&serialize(ack).unwrap()).await;
+            return;
+        }
+        Ok(_) => {} // Running
+        _ => {
+            let f = "Host controller unavailable";
+            error!("{}", f);
+            ack.failure = Some(f.to_string());
+            let _ = msg.respond(&serialize(ack).unwrap()).await;
+            return;
+        }
+    }
+
+    if let Err(_) = hc
+        .send(StopProvider {
+            provider_ref: cmd.provider_ref,
+            binding: cmd.link_name,
+            contract_id: cmd.contract_id,
+        })
+        .await
+    {
+        let f = "Host controller unavailable to stop provider";
+        error!("{}", f);
+        ack.failure = Some(f.to_string());
+        let _ = msg.respond(&serialize(ack).unwrap()).await;
+        return;
+    }
+
+    let _ = msg.respond(&serialize(ack).unwrap()).await;
+}
 
 pub(crate) async fn handle_start_provider(
     host: &str,
     msg: &nats::asynk::Message,
     allow_latest: bool,
 ) {
-    println!("Provider remote starting");
     let mut ack = StartProviderAck::default();
     ack.host_id = host.to_string();
 
@@ -259,7 +323,6 @@ pub(crate) async fn handle_start_provider(
         return;
     }
     let par = par.unwrap();
-    println!("PAR downloaded");
 
     let cap = NativeCapability::from_archive(&par, Some(cmd.link_name.to_string()));
     if let Err(e) = cap {
@@ -274,7 +337,6 @@ pub(crate) async fn handle_start_provider(
     }
     let cap = cap.unwrap();
     let provider_id = cap.id();
-    println!("Native capability extracted");
 
     let r = hc
         .send(StartProvider {
@@ -310,10 +372,13 @@ pub(crate) async fn handle_stop_actor(host: &str, msg: &nats::asynk::Message) {
         }
     };
 
-    match hc.send(QueryActorRunning{
-        actor_ref: cmd.actor_ref.to_string()
-    }).await {
-        Ok(r) if r => {},
+    match hc
+        .send(QueryActorRunning {
+            actor_ref: cmd.actor_ref.to_string(),
+        })
+        .await
+    {
+        Ok(r) if r => {}
         _ => {
             let f = "Actor is either not running on this host or host controller unresponsive";
             error!("{}", f);
@@ -323,9 +388,12 @@ pub(crate) async fn handle_stop_actor(host: &str, msg: &nats::asynk::Message) {
         }
     };
 
-    if let Err(_) = hc.send(StopActor{
-        actor_ref: cmd.actor_ref
-    }).await {
+    if let Err(_) = hc
+        .send(StopActor {
+            actor_ref: cmd.actor_ref,
+        })
+        .await
+    {
         let f = "Host controller did not acknowledge stop command";
         error!("{}", f);
         ack.failure = Some(f.to_string());

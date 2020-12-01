@@ -3,7 +3,7 @@ use crate::control_interface::ctlactor::{ControlInterface, PublishEvent};
 use crate::control_interface::events::TerminationReason;
 use crate::dispatch::{Invocation, InvocationResponse, ProviderDispatcher, WasccEntity};
 use crate::hlreg::HostLocalSystemService;
-use crate::messagebus::{MessageBus, Subscribe};
+use crate::messagebus::{EnforceLocalProviderLinks, MessageBus, Subscribe};
 use crate::middleware::{run_capability_post_invoke, run_capability_pre_invoke, Middleware};
 use crate::{ControlEvent, Result};
 use crate::{Host, SYSTEM_ACTOR};
@@ -120,6 +120,7 @@ impl Handler<Initialize> for NativeCapabilityHost {
         let state = self.state.as_ref().unwrap();
 
         let b = MessageBus::from_hostlocal_registry(&state.kp.public_key());
+        let b2 = b.clone();
         let entity = WasccEntity::Capability {
             id: state.cap.claims.subject.to_string(),
             contract_id: state
@@ -139,7 +140,6 @@ impl Handler<Initialize> for NativeCapabilityHost {
             entity.clone(),
         );
         if let Err(e) = state.plugin.configure_dispatch(Box::new(nativedispatch)) {
-            println!("Dispatch assignment failed");
             error!(
                 "Failed to configure provider dispatcher: {}, provider stopping.",
                 e
@@ -159,7 +159,17 @@ impl Handler<Initialize> for NativeCapabilityHost {
                     e
                 );
                 ctx.stop();
+            } else {
             }
+        });
+        let epl = EnforceLocalProviderLinks {
+            provider_id: state.cap.claims.subject.to_string(),
+            link_name: state.cap.binding_name.to_string(),
+        };
+        let _ = block_on(async move {
+            // If the target provider for any known links involving this provider
+            // are present, perform the bind actor func call
+            let _ = b2.send(epl).await;
         });
         let cp = ControlInterface::from_hostlocal_registry(&state.kp.public_key());
         cp.do_send(PublishEvent {

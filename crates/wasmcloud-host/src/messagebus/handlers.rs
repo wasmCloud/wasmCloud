@@ -1,15 +1,17 @@
 use super::MessageBus;
-use crate::dispatch::{Invocation, InvocationResponse, WasccEntity};
+use crate::capability::binding_cache::BindingKey;
+use crate::dispatch::{gen_config_invocation, Invocation, InvocationResponse, WasccEntity};
 use crate::hlreg::HostLocalSystemService;
 use crate::messagebus::rpc_client::RpcClient;
 use crate::messagebus::rpc_subscription::{CreateSubscription, RpcSubscription};
 use crate::messagebus::{
-    AdvertiseBinding, AdvertiseClaims, CanInvoke, ClaimsResponse, FindBindings,
+    AdvertiseBinding, AdvertiseClaims, CanInvoke, ClaimsResponse, EnforceLocalActorLinks,
+    EnforceLocalLink, EnforceLocalProviderLinks, EstablishAllLinks, FindBindings,
     FindBindingsResponse, GetClaims, Initialize, LinkDefinition, LinksResponse, LookupBinding,
     PutClaims, PutLink, QueryActors, QueryAllLinks, QueryProviders, QueryResponse, Subscribe,
     Unsubscribe,
 };
-use crate::{auth, Result};
+use crate::{auth, Result, SYSTEM_ACTOR};
 use actix::prelude::*;
 use std::sync::Arc;
 
@@ -49,6 +51,104 @@ impl Handler<FindBindings> for MessageBus {
     }
 }
 
+impl Handler<EnforceLocalActorLinks> for MessageBus {
+    type Result = ();
+
+    fn handle(&mut self, msg: EnforceLocalActorLinks, ctx: &mut Context<Self>) -> Self::Result {
+        for (key, values) in self.binding_cache.all() {
+            if key.actor == msg.actor && self.claims_cache.contains_key(&msg.actor) {
+                ctx.notify(EnforceLocalLink {
+                    actor: key.actor,
+                    contract_id: key.contract_id,
+                    link_name: key.binding_name,
+                })
+            }
+        }
+    }
+}
+
+impl Handler<EnforceLocalProviderLinks> for MessageBus {
+    type Result = ();
+
+    fn handle(&mut self, msg: EnforceLocalProviderLinks, ctx: &mut Context<Self>) -> Self::Result {
+        for (key, values) in self.binding_cache.all() {
+            if key.binding_name == msg.link_name && values.provider_id == msg.provider_id {
+                ctx.notify(EnforceLocalLink {
+                    actor: key.actor,
+                    contract_id: key.contract_id,
+                    link_name: key.binding_name,
+                })
+            }
+        }
+    }
+}
+
+impl Handler<EnforceLocalLink> for MessageBus {
+    type Result = ResponseActFuture<Self, ()>;
+
+    // If the provider responsible for this link is local, and the actor
+    // for this link is known to us, then invoke the link binding
+    fn handle(&mut self, msg: EnforceLocalLink, ctx: &mut Context<Self>) -> Self::Result {
+        let claims = self.claims_cache.get(&msg.actor);
+        if claims.is_none() {
+            return Box::pin(async move {}.into_actor(self)); // do not send link invocation for actors we don't know about
+        }
+        let key = BindingKey {
+            actor: msg.actor.to_string(),
+            contract_id: msg.contract_id.to_string(),
+            binding_name: msg.link_name.to_string(),
+        };
+        let link = self.binding_cache.get(&key);
+        if link.is_none() {
+            return Box::pin(async move {}.into_actor(self)); // do not invoke if we don't have the link in the binding cache
+        }
+        let link = link.unwrap();
+        let target = WasccEntity::Capability {
+            id: link.provider_id.to_string(),
+            contract_id: msg.contract_id.to_string(),
+            binding: msg.link_name.to_string(),
+        };
+        if let Some(t) = self.subscribers.get(&target) {
+            let t = t.clone();
+            let inv = gen_config_invocation(
+                self.key.as_ref().unwrap(),
+                &msg.actor,
+                &msg.contract_id,
+                &link.provider_id,
+                claims.unwrap().clone(),
+                msg.link_name.to_string(),
+                link.values,
+            );
+            Box::pin(
+                async move {
+                    let _ = t.send(inv).await;
+                }
+                .into_actor(self),
+            )
+        } else {
+            Box::pin(async move {}.into_actor(self))
+        }
+    }
+}
+
+impl Handler<EstablishAllLinks> for MessageBus {
+    type Result = ();
+
+    fn handle(&mut self, _msg: EstablishAllLinks, ctx: &mut Context<Self>) -> Self::Result {
+        for (key, value) in self.binding_cache.all() {
+            if !self.claims_cache.contains_key(&key.actor) {
+                continue; // do not send link invocation for actors we don't know about
+            }
+
+            ctx.notify(EnforceLocalLink {
+                actor: key.actor.to_string(),
+                contract_id: key.contract_id.to_string(),
+                link_name: key.binding_name.to_string(),
+            });
+        }
+    }
+}
+
 impl Handler<QueryActors> for MessageBus {
     type Result = QueryResponse;
 
@@ -70,9 +170,12 @@ impl Handler<QueryActors> for MessageBus {
 impl Handler<PutClaims> for MessageBus {
     type Result = ();
 
-    fn handle(&mut self, msg: PutClaims, _ctx: &mut Context<Self>) {
+    fn handle(&mut self, msg: PutClaims, ctx: &mut Context<Self>) {
+        let subject = msg.claims.subject.to_string();
         self.claims_cache
             .insert(msg.claims.subject.to_string(), msg.claims);
+
+        ctx.notify(EnforceLocalActorLinks { actor: subject });
     }
 }
 
@@ -80,7 +183,7 @@ impl Handler<PutClaims> for MessageBus {
 impl Handler<PutLink> for MessageBus {
     type Result = ();
 
-    fn handle(&mut self, msg: PutLink, _ctx: &mut Context<Self>) {
+    fn handle(&mut self, msg: PutLink, ctx: &mut Context<Self>) {
         trace!("Messagebus received link definition notification");
         self.binding_cache.add_binding(
             &msg.actor,
@@ -89,6 +192,12 @@ impl Handler<PutLink> for MessageBus {
             &msg.provider_id,
             msg.values.clone(),
         );
+
+        ctx.notify(EnforceLocalLink {
+            actor: msg.actor.to_string(),
+            contract_id: msg.contract_id.to_string(),
+            link_name: msg.binding_name.to_string(),
+        });
     }
 }
 
@@ -186,7 +295,7 @@ impl Handler<Initialize> for MessageBus {
                     let _ = target
                         .send(super::rpc_client::Initialize {
                             host_id,
-                            nc: Arc::new(nc),
+                            nc: nc,
                             ns_prefix: ns,
                             bus,
                             rpc_timeout: timeout,
@@ -204,8 +313,7 @@ impl Handler<Initialize> for MessageBus {
 impl Handler<AdvertiseBinding> for MessageBus {
     type Result = ResponseActFuture<Self, Result<()>>;
 
-    fn handle(&mut self, msg: AdvertiseBinding, _ctx: &mut Context<Self>) -> Self::Result {
-        if !self.claims_cache.contains_key(&msg.actor.to_string()) {}
+    fn handle(&mut self, msg: AdvertiseBinding, ctx: &mut Context<Self>) -> Self::Result {
         trace!("Advertisting link definition");
         let target = WasccEntity::Capability {
             id: msg.provider_id.to_string(),
@@ -221,63 +329,49 @@ impl Handler<AdvertiseBinding> for MessageBus {
             msg.values.clone(),
         );
 
+        ctx.notify(EnforceLocalLink {
+            actor: msg.actor.to_string(),
+            contract_id: msg.contract_id.to_string(),
+            link_name: msg.binding_name.to_string(),
+        });
+
         let advbinding = msg.clone();
 
-        if let Some(t) = self.subscribers.get(&target) {
-            let claims = self.claims_cache.get(&msg.actor.to_string()).unwrap();
-            let req = super::utils::generate_binding_invocation(
-                t,
-                &msg.actor,
-                msg.values.clone(),
-                self.key.as_ref().unwrap(),
-                target,
-                claims.clone(),
-            );
-            Box::pin(req.into_actor(self).map(move |res, _act, _ctx| match res {
-                Ok(ir) => {
-                    if let Some(er) = ir.error {
-                        Err(format!("Failed to set binding: {}", er).into())
-                    } else {
-                        Ok(())
-                    }
-                }
-                Err(_) => Err("Mailbox error setting binding".into()),
-            }))
-        } else {
-            // No _local_ subscriber found for this target.
-            let rpc = self.rpc_outbound.clone();
-            Box::pin( async move {
+        let rpc = self.rpc_outbound.clone();
+        Box::pin(
+            async move {
                 if let Some(ref rpc) = rpc {
                     let _ = rpc.send(advbinding).await;
-                } else {
-                    info!("No potential targets for advertised link definition, no lattice RPC enabled. Assuming this provider will be added later.");
                 }
                 Ok(())
-            }.into_actor(self))
-        }
+            }
+            .into_actor(self),
+        )
     }
 }
 
 impl Handler<AdvertiseClaims> for MessageBus {
     type Result = ResponseActFuture<Self, Result<()>>;
 
-    fn handle(&mut self, msg: AdvertiseClaims, _ctx: &mut Context<Self>) -> Self::Result {
+    fn handle(&mut self, msg: AdvertiseClaims, ctx: &mut Context<Self>) -> Self::Result {
         trace!("Advertising claims");
         self.claims_cache
             .insert(msg.claims.subject.to_string(), msg.claims.clone());
 
+        ctx.notify(EnforceLocalActorLinks {
+            actor: msg.claims.subject.to_string(),
+        });
+
         let rpc = self.rpc_outbound.clone();
-        if let Some(rpc) = rpc {
-            Box::pin(
-                async move {
+        Box::pin(
+            async move {
+                if let Some(rpc) = rpc {
                     let _ = rpc.send(msg).await;
-                    Ok(())
                 }
-                .into_actor(self),
-            )
-        } else {
-            Box::pin(async move { Ok(()) }.into_actor(self))
-        }
+                Ok(())
+            }
+            .into_actor(self),
+        )
     }
 }
 

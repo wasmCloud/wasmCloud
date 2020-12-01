@@ -98,7 +98,6 @@ impl Handler<NatsMessage> for ControlInterface {
         let msg = msg.msg;
         let subject = msg.subject.to_string();
         let allow_latest = self.options.oci_allow_latest;
-        println!("Handling {}", subject);
         let nc = self.client.clone();
         Box::pin(
             async move {
@@ -125,7 +124,6 @@ impl Handler<NatsMessage> for ControlInterface {
                 } else if subject == queries::hosts(&prefix) {
                     handle_host_probe(&host, &msg).await
                 }
-                println!("HANDLED");
                 let _ = nc.as_ref().unwrap().flush().await;
             }
             .into_actor(self),
@@ -151,7 +149,6 @@ impl Handler<Initialize> for ControlInterface {
         use ::control_interface::broker::*;
 
         let host_id = self.key.as_ref().unwrap().public_key();
-        println!("HOST ID {}", host_id);
 
         let prefix = Some(self.ns_prefix.to_string());
 
@@ -206,7 +203,6 @@ impl Handler<Initialize> for ControlInterface {
         Box::pin(
             async move {
                 for (subject, subscriber) in subscribers.iter() {
-                    println!("SUBBING {}", subject);
                     let _ = subscriber
                         .send(crate::messagebus::nats_subscriber::Initialize {
                             nc: nc.clone(),

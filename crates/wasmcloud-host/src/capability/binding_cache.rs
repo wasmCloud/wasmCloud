@@ -51,6 +51,10 @@ impl BindingCache {
         );
     }
 
+    pub fn get(&self, key: &BindingKey) -> Option<BindingValues> {
+        self.binding_config.get(key).cloned()
+    }
+
     pub fn all(&self) -> HashMap<BindingKey, BindingValues> {
         self.binding_config.clone()
     }

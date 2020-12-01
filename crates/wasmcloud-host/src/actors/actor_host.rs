@@ -3,7 +3,9 @@ use crate::control_interface::ctlactor::{ControlInterface, PublishEvent};
 use crate::control_interface::events::TerminationReason;
 use crate::dispatch::{Invocation, InvocationResponse, WasccEntity};
 use crate::hlreg::HostLocalSystemService;
-use crate::messagebus::{MessageBus, PutClaims, Subscribe};
+use crate::messagebus::{
+    AdvertiseClaims, EnforceLocalActorLinks, MessageBus, PutClaims, Subscribe,
+};
 use crate::middleware::{run_actor_post_invoke, run_actor_pre_invoke, Middleware};
 use crate::{ControlEvent, Result};
 use actix::prelude::*;
@@ -43,7 +45,7 @@ impl Handler<Initialize> for ActorHost {
         let actor = WasccActor::from_slice(&buf)?;
 
         #[cfg(feature = "wasmtime")]
-        let engine = wasmtime_provider::WasmtimeEngineProvider::new(&buf, wasi);
+        let engine = wasmtime_provider::WasmtimeEngineProvider::new(&buf, msg.wasi);
         #[cfg(feature = "wasm3")]
         let engine = wasm3_provider::Wasm3EngineProvider::new(&buf);
 
@@ -69,6 +71,7 @@ impl Handler<Initialize> for ActorHost {
                 let entity = WasccEntity::Actor(c.subject.to_string());
                 let b = MessageBus::from_hostlocal_registry(&msg.host_id);
                 let b2 = b.clone();
+                let b3 = b.clone(); // DAMN YOU BORROW CHECKER
                 let recipient = ctx.address().clone().recipient();
                 let _ = block_on(async move {
                     b.send(Subscribe {
@@ -77,7 +80,7 @@ impl Handler<Initialize> for ActorHost {
                     })
                     .await
                 });
-                let pc = PutClaims { claims: c.clone() };
+                let pc = AdvertiseClaims { claims: c.clone() };
                 let r = block_on(async move {
                     if let Err(e) = b2.send(pc).await {
                         error!("Actor failed to advertise claims to bus: {}", e);
@@ -90,18 +93,21 @@ impl Handler<Initialize> for ActorHost {
                 if r.is_err() {
                     return r;
                 }
-                let pe = PublishEvent {
-                    event: ControlEvent::ActorStarted {
-                        actor: c.subject.to_string(),
-                        image_ref: msg.image_ref.clone(),
-                    },
-                };
                 let host_id = msg.host_id.to_string();
                 let hid = msg.host_id.to_string();
+                let imgref = msg.image_ref.clone();
+                let subject = c.subject.to_string();
                 let _ = block_on(async move {
+                    let pe = PublishEvent {
+                        event: ControlEvent::ActorStarted {
+                            actor: subject.to_string(),
+                            image_ref: imgref.clone(),
+                        },
+                    };
                     let cp = ControlInterface::from_hostlocal_registry(&host_id);
-                    cp.send(pe).await
+                    let _ = cp.send(pe).await;
                 });
+
                 self.state = Some(State {
                     guest_module: g,
                     claims: c.clone(),

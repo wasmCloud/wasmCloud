@@ -30,8 +30,17 @@ pub(crate) async fn basics() -> Result<()> {
     );
 
     // Cannot stop a non-existent actor
-    let a1 = ctl_client.stop_actor(&hid, KVCOUNTER_OCI).await?;
-    assert!(a1.failure.is_some());
+    assert!(ctl_client
+        .stop_actor(&hid, KVCOUNTER_OCI)
+        .await?
+        .failure
+        .is_some());
+    // Cannot stop a non-existent provider
+    assert!(ctl_client
+        .stop_provider(&hid, "fooref", "default", "wascc:testing")
+        .await?
+        .failure
+        .is_some());
 
     let a_ack = ctl_client.start_actor(&hid, KVCOUNTER_OCI).await?;
     await_actor_count(&h, 1, Duration::from_millis(50), 20).await?;
@@ -60,6 +69,20 @@ pub(crate) async fn basics() -> Result<()> {
     let redis_ack = ctl_client.start_provider(&hid, REDIS_OCI, None).await?;
     await_provider_count(&h, 2, Duration::from_millis(50), 20).await?;
     println!("Redis {:?} started", redis_ack);
+
+    // Stop and re-start a provider
+    assert!(ctl_client
+        .stop_provider(&hid, REDIS_OCI, "default", "wascc:key_value")
+        .await?
+        .failure
+        .is_none());
+    await_provider_count(&h, 1, Duration::from_millis(50), 20).await?;
+    assert!(ctl_client
+        .start_provider(&hid, REDIS_OCI, None)
+        .await?
+        .failure
+        .is_none());
+    await_provider_count(&h, 2, Duration::from_millis(50), 20).await?;
 
     let nats_ack = ctl_client.start_provider(&hid, NATS_OCI, None).await?;
     await_provider_count(&h, 3, Duration::from_millis(10), 200).await?;

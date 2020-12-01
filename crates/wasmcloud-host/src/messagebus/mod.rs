@@ -179,6 +179,31 @@ pub struct CanInvoke {
     pub link_name: String,
 }
 
+#[derive(Message)]
+#[rtype(result = "()")]
+pub struct EnforceLocalLink {
+    pub actor: String,
+    pub contract_id: String,
+    pub link_name: String,
+}
+
+#[derive(Message)]
+#[rtype(result = "()")]
+pub struct EnforceLocalActorLinks {
+    pub actor: String,
+}
+
+#[derive(Message)]
+#[rtype(result = "()")]
+pub struct EnforceLocalProviderLinks {
+    pub provider_id: String,
+    pub link_name: String,
+}
+
+#[derive(Message)]
+#[rtype(result = "()")]
+pub struct EstablishAllLinks {}
+
 impl<A, M> MessageResponse<A, M> for FindBindingsResponse
 where
     A: Actor,

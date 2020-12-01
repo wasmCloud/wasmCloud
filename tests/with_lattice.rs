@@ -1,4 +1,5 @@
 use crate::common::{await_actor_count, await_provider_count, gen_kvcounter_host, par_from_file};
+use actix_rt::time::delay_for;
 use provider_archive::ProviderArchive;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -22,12 +23,6 @@ pub(crate) async fn distributed_echo() -> Result<()> {
         .build();
 
     host_a.start().await.unwrap();
-
-    host_a.start_actor(echo).await.unwrap();
-    await_actor_count(&host_a, 1, Duration::from_millis(50), 3)
-        .await
-        .unwrap();
-
     let nc2 = nats::asynk::connect("0.0.0.0:4222").await?;
     let host_b = HostBuilder::new()
         .with_rpc_client(nc2)
@@ -35,6 +30,14 @@ pub(crate) async fn distributed_echo() -> Result<()> {
         .build();
 
     host_b.start().await.unwrap();
+
+    // ** NOTE ** - we need both hosts to be running before we start
+    // so that host b will receive the claims from host a
+
+    host_a.start_actor(echo).await.unwrap();
+    await_actor_count(&host_a, 1, Duration::from_millis(50), 3)
+        .await
+        .unwrap();
 
     let arc = par_from_file("./tests/modules/libwascc_httpsrv.par.gz").unwrap();
     let httpserv = wascc_httpsrv::HttpServerProvider::new();
@@ -59,7 +62,7 @@ pub(crate) async fn distributed_echo() -> Result<()> {
         .await
         .unwrap();
 
-    std::thread::sleep(Duration::from_millis(300));
+    delay_for(Duration::from_secs(1)).await;
 
     let url = format!("http://localhost:{}/foo/bar", web_port);
     let resp = reqwest::get(&url).await?;
@@ -85,10 +88,6 @@ pub(crate) async fn link_on_third_host() -> Result<()> {
         .build();
 
     host_a.start().await?;
-    let echo = Actor::from_file("./tests/modules/echo.wasm")?;
-    let actor_id = echo.public_key();
-    host_a.start_actor(echo).await?;
-    await_actor_count(&host_a, 1, Duration::from_millis(50), 3).await?;
 
     let nc2 = nats::asynk::connect("0.0.0.0:4222").await?;
     let host_b = HostBuilder::new()
@@ -97,6 +96,12 @@ pub(crate) async fn link_on_third_host() -> Result<()> {
         .build();
 
     host_b.start().await?;
+
+    let echo = Actor::from_file("./tests/modules/echo.wasm")?;
+    let actor_id = echo.public_key();
+    host_a.start_actor(echo).await?;
+    await_actor_count(&host_a, 1, Duration::from_millis(50), 3).await?;
+
     let web_port = 7002_u32;
     let arc = par_from_file("./tests/modules/libwascc_httpsrv.par.gz")?;
     let websrv = NativeCapability::from_archive(&arc, None)?;
@@ -124,7 +129,7 @@ pub(crate) async fn link_on_third_host() -> Result<()> {
         )
         .await?;
 
-    ::std::thread::sleep(Duration::from_millis(100)); // let the HTTP server spin up
+    delay_for(Duration::from_millis(100)).await; // let the HTTP server spin up
 
     let url = format!("http://localhost:{}/foo/bar", web_port);
     let resp = reqwest::get(&url).await?;

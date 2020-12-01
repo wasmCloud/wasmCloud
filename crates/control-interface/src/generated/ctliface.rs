@@ -97,6 +97,10 @@ pub struct StopProviderCommand {
     pub host_id: String,
     #[serde(rename = "provider_ref")]
     pub provider_ref: String,
+    #[serde(rename = "link_name")]
+    pub link_name: String,
+    #[serde(rename = "contract_id")]
+    pub contract_id: String,
 }
 
 #[derive(Debug, PartialEq, Deserialize, Serialize, Default, Clone)]
@@ -117,6 +121,12 @@ pub struct UpdateActorAck {
 
 #[derive(Debug, PartialEq, Deserialize, Serialize, Default, Clone)]
 pub struct StopActorAck {
+    #[serde(rename = "failure")]
+    pub failure: Option<String>,
+}
+
+#[derive(Debug, PartialEq, Deserialize, Serialize, Default, Clone)]
+pub struct StopProviderAck {
     #[serde(rename = "failure")]
     pub failure: Option<String>,
 }

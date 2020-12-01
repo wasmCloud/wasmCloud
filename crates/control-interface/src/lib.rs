@@ -84,17 +84,40 @@ impl Client {
         }
     }
 
+    pub async fn stop_provider(
+        &self,
+        host_id: &str,
+        provider_ref: &str,
+        link_name: &str,
+        contract_id: &str,
+    ) -> Result<StopProviderAck> {
+        let subject = broker::commands::stop_provider(&self.nsprefix, host_id);
+        let bytes = serialize(StopProviderCommand {
+            host_id: host_id.to_string(),
+            provider_ref: provider_ref.to_string(),
+            link_name: link_name.to_string(),
+            contract_id: contract_id.to_string(),
+        })?;
+        match actix_rt::time::timeout(self.timeout, self.nc.request(&subject, &bytes)).await? {
+            Ok(msg) => {
+                let ack: StopProviderAck = deserialize(&msg.data)?;
+                Ok(ack)
+            }
+            Err(e) => Err(format!("Did not receive stop provider acknowledgement: {}", e).into()),
+        }
+    }
+
     pub async fn stop_actor(&self, host_id: &str, actor_ref: &str) -> Result<StopActorAck> {
         let subject = broker::commands::stop_actor(&self.nsprefix, host_id);
         let bytes = serialize(StopActorCommand {
             host_id: host_id.to_string(),
-            actor_ref: actor_ref.to_string()
+            actor_ref: actor_ref.to_string(),
         })?;
         match actix_rt::time::timeout(self.timeout, self.nc.request(&subject, &bytes)).await? {
             Ok(msg) => {
                 let ack: StopActorAck = deserialize(&msg.data)?;
                 Ok(ack)
-            },
+            }
             Err(e) => Err(format!("Did not receive stop actor acknowledgement: {}", e).into()),
         }
     }
