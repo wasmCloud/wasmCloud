@@ -8,7 +8,7 @@ extern crate log;
 
 extern crate actix_rt;
 
-use crate::generated::core::CapabilityConfiguration;
+use crate::generated::core::{CapabilityConfiguration, HealthResponse};
 use actix_web::dev::Body;
 use actix_web::dev::Server;
 use actix_web::http::{HeaderName, HeaderValue, StatusCode};
@@ -23,12 +23,12 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Arc;
 use std::sync::RwLock;
-use wascc_codec::core::{OP_BIND_ACTOR, OP_REMOVE_ACTOR};
+use wascc_codec::core::{OP_BIND_ACTOR, OP_REMOVE_ACTOR, OP_HEALTH_REQUEST};
 use wascc_codec::{deserialize, serialize};
 
 const CAPABILITY_ID: &str = "wascc:http_server";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-const REVISION: u32 = 2; // Increment for each crates publish
+const REVISION: u32 = 3; // Increment for each crates publish
 
 const OP_HANDLE_REQUEST: &str = "HandleRequest";
 
@@ -72,6 +72,10 @@ impl HttpServerProvider {
 
     /// Starts a new web server and binds to the appropriate port
     fn spawn_server(&self, cfgvals: &CapabilityConfiguration) {
+        if self.servers.read().unwrap().contains_key(&cfgvals.module) {
+            return;
+        }        
+        
         let bind_addr = match cfgvals.values.get("PORT") {
             Some(v) => format!("0.0.0.0:{}", v),
             None => "0.0.0.0:8080".to_string(),
@@ -169,6 +173,9 @@ impl CapabilityProvider for HttpServerProvider {
                 info!("Removing actor configuration for {}", cfgvals.module);
                 self.terminate_server(&cfgvals.module);
                 Ok(vec![])
+            }
+            OP_HEALTH_REQUEST if actor == "system" => {
+                Ok(serialize(HealthResponse{healthy: true, message: "".to_string()})?)
             }
             OP_GET_CAPABILITY_DESCRIPTOR if actor == "system" => self.get_descriptor(),
             _ => Err("bad dispatch".into()),
