@@ -12,13 +12,13 @@ pub struct CapabilityConfiguration {
 }
 
 #[derive(Debug, PartialEq, Deserialize, Serialize, Default, Clone)]
-pub struct HealthCheckRequest {
+pub struct HealthRequest {
     #[serde(rename = "placeholder")]
     pub placeholder: bool,
 }
 
 #[derive(Debug, PartialEq, Deserialize, Serialize, Default, Clone)]
-pub struct HealthCheckResponse {
+pub struct HealthResponse {
     #[serde(rename = "healthy")]
     pub healthy: bool,
     #[serde(rename = "message")]
