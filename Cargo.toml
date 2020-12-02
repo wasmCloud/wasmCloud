@@ -1,11 +1,11 @@
 [package]
-name = "wasccd"
+name = "wasmcloud"
 version = "0.15.0"
 authors = [
     "Kevin Hoffman <alothien@gmail.com>",    
 ]
 edition = "2018"
-default-run = "wasccd"
+default-run = "wasmcloud"
 license-file = "LICENSE"
 description = "A secure, distributed, WebAssembly actor model runtime for the cloud, edge, and everything in between"
 repository = "https://github.com/wascc/wasccd"
@@ -40,7 +40,7 @@ wapc = { version = "0.10.1" }
 log = "0.4.11"
 env_logger = "0.7.1"
 anyhow = "1.0.33"
-wascc-host = { path = "./crates/wascc-host" }
+wasmcloud-host = { path = "crates/wasmcloud-host" }
 actix-rt = "1.1.1"
 nats = "0.8.5"
 
@@ -55,17 +55,21 @@ reqwest = { version = "0.10"}
 uuid = { version = "0.8", features = ["serde", "v4"] }
 nats = "0.8.5"
 wascc-httpsrv = { git = "https://github.com/wascc/capability-providers", branch = "main", features = ["static_plugin"]}
+wascc-redis = { git = "https://github.com/wascc/capability-providers", branch = "main", features = ["static_plugin"] }
+control-interface = { path = "./crates/control-interface"}
+ctor = "0.1.16"
 
 [workspace]
 members = [
-    "crates/wascc-host",
+    "crates/wasmcloud-host",
+    "crates/control-interface"
 ]
 
 
 [[bin]]
-name = "wasccd"
-path = "src/wasccd.rs"
+name = "wasmcloud"
+path = "src/wasmcloud.rs"
 
 [[bin]]
-name = "wasccd-lite"
-path = "src/wasccd-lite.rs"
+name = "wasmcloud-lite"
+path = "src/wasmcloud-lite.rs"

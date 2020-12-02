@@ -5,38 +5,30 @@ use std::io::Cursor;
 
 extern crate log;
 
-#[derive(Debug, PartialEq, Deserialize, Serialize, Default)]
-pub struct Request {
-    #[serde(rename = "method")]
-    pub method: String,
-    #[serde(rename = "path")]
-    pub path: String,
-    #[serde(rename = "queryString")]
-    pub query_string: String,
-    #[serde(rename = "header")]
-    pub header: std::collections::HashMap<String, String>,
-    #[serde(with = "serde_bytes")]
-    #[serde(rename = "body")]
-    pub body: Vec<u8>,
+use std::collections::HashMap;
+
+#[derive(Debug, PartialEq, Deserialize, Serialize, Clone)]
+pub struct CapabilityConfiguration {
+    pub module: String,
+    #[serde(default)]
+    pub values: HashMap<String, String>,
 }
 
-#[derive(Debug, PartialEq, Deserialize, Serialize, Default)]
-pub struct Response {
-    #[serde(rename = "statusCode")]
-    pub status_code: u32,
-    #[serde(rename = "status")]
-    pub status: String,
-    #[serde(rename = "header")]
-    pub header: std::collections::HashMap<String, String>,
-    #[serde(with = "serde_bytes")]
-    #[serde(rename = "body")]
-    pub body: Vec<u8>,
+#[derive(Debug, PartialEq, Deserialize, Serialize)]
+pub struct HealthRequest {
+    pub placeholder: bool,
+}
+
+#[derive(Debug, PartialEq, Deserialize, Serialize)]
+pub struct HealthResponse {
+    pub healthy: bool,
+    pub message: String,
 }
 
 /// The standard function for serializing codec structs into a format that can be
 /// used for message exchange between actor and host. Use of any other function to
 /// serialize could result in breaking incompatibilities.
-pub fn serialize<T>(
+pub(crate) fn serialize<T>(
     item: T,
 ) -> ::std::result::Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>>
 where
@@ -50,7 +42,7 @@ where
 /// The standard function for de-serializing codec structs from a format suitable
 /// for message exchange between actor and host. Use of any other function to
 /// deserialize could result in breaking incompatibilities.
-pub fn deserialize<'de, T: Deserialize<'de>>(
+pub(crate) fn deserialize<'de, T: Deserialize<'de>>(
     buf: &[u8],
 ) -> ::std::result::Result<T, Box<dyn std::error::Error + Send + Sync>> {
     let mut de = Deserializer::new(Cursor::new(buf));

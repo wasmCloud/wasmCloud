@@ -1,0 +1,208 @@
+extern crate rmp_serde as rmps;
+use rmps::{Deserializer, Serializer};
+use serde::{Deserialize, Serialize};
+use std::io::Cursor;
+
+#[derive(Debug, PartialEq, Deserialize, Serialize, Default, Clone)]
+pub struct ProviderAuctionRequest {
+    #[serde(rename = "provider_ref")]
+    pub provider_ref: String,
+    #[serde(rename = "link_name")]
+    pub link_name: String,
+    #[serde(rename = "constraints")]
+    pub constraints: std::collections::HashMap<String, String>,
+}
+
+#[derive(Debug, PartialEq, Deserialize, Serialize, Default, Clone)]
+pub struct ProviderAuctionAck {
+    #[serde(rename = "provider_ref")]
+    pub provider_ref: String,
+    #[serde(rename = "link_name")]
+    pub link_name: String,
+    #[serde(rename = "host_id")]
+    pub host_id: String,
+}
+
+#[derive(Debug, PartialEq, Deserialize, Serialize, Default, Clone)]
+pub struct ActorAuctionRequest {
+    #[serde(rename = "actor_ref")]
+    pub actor_ref: String,
+    #[serde(rename = "constraints")]
+    pub constraints: std::collections::HashMap<String, String>,
+}
+
+#[derive(Debug, PartialEq, Deserialize, Serialize, Default, Clone)]
+pub struct ActorAuctionAck {
+    #[serde(rename = "actor_ref")]
+    pub actor_ref: String,
+    #[serde(rename = "constraints")]
+    pub constraints: std::collections::HashMap<String, String>,
+    #[serde(rename = "host_id")]
+    pub host_id: String,
+}
+
+#[derive(Debug, PartialEq, Deserialize, Serialize, Default, Clone)]
+pub struct StartActorCommand {
+    #[serde(rename = "actor_ref")]
+    pub actor_ref: String,
+    #[serde(rename = "host_id")]
+    pub host_id: String,
+}
+
+#[derive(Debug, PartialEq, Deserialize, Serialize, Default, Clone)]
+pub struct StartActorAck {
+    #[serde(rename = "host_id")]
+    pub host_id: String,
+    #[serde(rename = "actor_ref")]
+    pub actor_ref: String,
+    #[serde(rename = "actor_id")]
+    pub actor_id: String,
+    #[serde(rename = "failure")]
+    pub failure: Option<String>,
+}
+
+#[derive(Debug, PartialEq, Deserialize, Serialize, Default, Clone)]
+pub struct StartProviderCommand {
+    #[serde(rename = "host_id")]
+    pub host_id: String,
+    #[serde(rename = "provider_ref")]
+    pub provider_ref: String,
+    #[serde(rename = "link_name")]
+    pub link_name: String,
+}
+
+#[derive(Debug, PartialEq, Deserialize, Serialize, Default, Clone)]
+pub struct StartProviderAck {
+    #[serde(rename = "host_id")]
+    pub host_id: String,
+    #[serde(rename = "provider_ref")]
+    pub provider_ref: String,
+    #[serde(rename = "provider_id")]
+    pub provider_id: String,
+    #[serde(rename = "failure")]
+    pub failure: Option<String>,
+}
+
+#[derive(Debug, PartialEq, Deserialize, Serialize, Default, Clone)]
+pub struct StopActorCommand {
+    #[serde(rename = "host_id")]
+    pub host_id: String,
+    #[serde(rename = "actor_ref")]
+    pub actor_ref: String,
+}
+
+#[derive(Debug, PartialEq, Deserialize, Serialize, Default, Clone)]
+pub struct StopProviderCommand {
+    #[serde(rename = "host_id")]
+    pub host_id: String,
+    #[serde(rename = "provider_ref")]
+    pub provider_ref: String,
+    #[serde(rename = "link_name")]
+    pub link_name: String,
+    #[serde(rename = "contract_id")]
+    pub contract_id: String,
+}
+
+#[derive(Debug, PartialEq, Deserialize, Serialize, Default, Clone)]
+pub struct UpdateActorCommand {
+    #[serde(rename = "host_id")]
+    pub host_id: String,
+    #[serde(rename = "actor_id")]
+    pub actor_id: String,
+    #[serde(rename = "new_actor_ref")]
+    pub new_actor_ref: String,
+}
+
+#[derive(Debug, PartialEq, Deserialize, Serialize, Default, Clone)]
+pub struct UpdateActorAck {
+    #[serde(rename = "accepted")]
+    pub accepted: bool,
+}
+
+#[derive(Debug, PartialEq, Deserialize, Serialize, Default, Clone)]
+pub struct StopActorAck {
+    #[serde(rename = "failure")]
+    pub failure: Option<String>,
+}
+
+#[derive(Debug, PartialEq, Deserialize, Serialize, Default, Clone)]
+pub struct StopProviderAck {
+    #[serde(rename = "failure")]
+    pub failure: Option<String>,
+}
+
+#[derive(Debug, PartialEq, Deserialize, Serialize, Default, Clone)]
+pub struct LinkDefinitionList {
+    #[serde(rename = "links")]
+    pub links: Vec<LinkDefinition>,
+}
+
+#[derive(Debug, PartialEq, Deserialize, Serialize, Default, Clone)]
+pub struct LinkDefinition {
+    #[serde(rename = "actor_id")]
+    pub actor_id: String,
+    #[serde(rename = "provider_id")]
+    pub provider_id: String,
+    #[serde(rename = "link_name")]
+    pub link_name: String,
+    #[serde(rename = "contract_id")]
+    pub contract_id: String,
+    #[serde(rename = "values")]
+    pub values: std::collections::HashMap<String, String>,
+}
+
+#[derive(Debug, PartialEq, Deserialize, Serialize, Default, Clone)]
+pub struct HostList {
+    #[serde(rename = "hosts")]
+    pub hosts: Vec<Host>,
+}
+
+#[derive(Debug, PartialEq, Deserialize, Serialize, Default, Clone)]
+pub struct Host {
+    #[serde(rename = "id")]
+    pub id: String,
+    #[serde(rename = "uptime")]
+    pub uptime_seconds: u64,
+}
+
+#[derive(Debug, PartialEq, Deserialize, Serialize, Default, Clone)]
+pub struct ClaimsList {
+    #[serde(rename = "claims")]
+    pub claims: Vec<Claims>,
+}
+
+#[derive(Debug, PartialEq, Deserialize, Serialize, Default, Clone)]
+pub struct Claims {
+    #[serde(rename = "values")]
+    pub values: std::collections::HashMap<String, String>,
+}
+
+#[derive(Debug, PartialEq, Deserialize, Serialize, Default, Clone)]
+pub struct HostInventory {
+    #[serde(rename = "host_id")]
+    pub host_id: String,
+    #[serde(rename = "labels")]
+    pub labels: std::collections::HashMap<String, String>,
+    #[serde(rename = "actors")]
+    pub actors: Vec<ActorDescription>,
+    #[serde(rename = "providers")]
+    pub providers: Vec<ProviderDescription>,
+}
+
+#[derive(Debug, PartialEq, Deserialize, Serialize, Default, Clone)]
+pub struct ActorDescription {
+    #[serde(rename = "id")]
+    pub id: String,
+    #[serde(rename = "image_ref")]
+    pub image_ref: Option<String>,
+}
+
+#[derive(Debug, PartialEq, Deserialize, Serialize, Default, Clone)]
+pub struct ProviderDescription {
+    #[serde(rename = "id")]
+    pub id: String,
+    #[serde(rename = "link_name")]
+    pub link_name: String,
+    #[serde(rename = "image_ref")]
+    pub image_ref: Option<String>,
+}

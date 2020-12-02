@@ -1,0 +1,52 @@
+[package]
+name = "wasmcloud-host"
+version = "0.15.0"
+authors = ["Kevin Hoffman <alothien@gmail.com>"]
+edition = "2018"
+homepage = "https://wascc.dev"
+repository = "https://github.com/wascc/wasccd"
+description = "A secure, distributed, WebAssembly actor model runtime for the cloud, edge, and everything in between"
+license = "Apache-2.0"
+documentation = "https://docs.rs/wascc-host"
+readme = "README.md"
+keywords = ["webassembly", "wasm", "wascc", "wapc", "actors"]
+categories = ["wasm", "api-bindings"]
+
+
+[features]
+default = ["wasm3"]
+wasmtime = ["wasmtime-provider"]
+wasm3 = ["wasm3-provider"]
+
+[dependencies]
+actix = "0.10.0"
+actix-rt = "1.1.1"
+wascap = "0.5.1"
+wapc = "0.10.1"
+libloading = "0.6.4"
+log = "0.4.11"
+once_cell = "1.5.2"
+parking_lot = "0.11.0"
+serde = { version = "1.0.117", features = ["derive"] }
+serde_json = "1.0.59"
+serde_yaml = "0.8.14"
+uuid = {version = "0.8", features  = ["serde", "v4"]}
+ring = "0.16.15"
+data-encoding = "2.3.0"
+tokio = { version = "0.3.0", features = ["rt"] }
+futures = "0.3.6"
+crossbeam-channel = "0.5.0"
+rmp-serde = "0.14.4"
+serde_bytes = "0.11.5"
+provider-archive ="0.3.0"
+lazy_static = "1.4.0"
+wascc-codec = "0.9.0"
+oci-distribution = "0.4.0"
+rand = "0.7.3"
+chrono = "0.4.19"
+envmnt = "0.8.4"
+nats = "0.8.5"
+control-interface = { path = "../control-interface" }
+
+wasm3-provider = { version = "0.0.2", optional = true}
+wasmtime-provider = { version = "0.0.2" , optional = true}
