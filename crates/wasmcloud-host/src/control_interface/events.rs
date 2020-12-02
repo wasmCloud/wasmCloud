@@ -18,16 +18,13 @@ pub struct PublishedEvent {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub enum ControlEvent {
     HostStarted,
-    HostStopped {
-        reason: TerminationReason,
-    },
+    HostStopped,
     ActorStarted {
         actor: String,
         image_ref: Option<String>,
     },
     ActorStopped {
-        actor: String,
-        reason: TerminationReason,
+        actor: String
     },
     ActorUpdateBegan {
         actor: String,
@@ -49,7 +46,6 @@ pub enum ControlEvent {
         contract_id: String,
         binding_name: String,
         provider_id: String,
-        reason: TerminationReason,
     },
     Heartbeat {
         claims: Vec<wascap::jwt::Claims<wascap::jwt::Actor>>,
