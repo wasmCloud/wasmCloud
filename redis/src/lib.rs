@@ -7,13 +7,13 @@ extern crate wascc_codec as codec;
 #[macro_use]
 extern crate log;
 
-use crate::generated::core::CapabilityConfiguration;
+use crate::generated::core::{CapabilityConfiguration, HealthResponse};
 use crate::generated::keyvalue::*;
 use codec::capabilities::{
     CapabilityDescriptor, CapabilityProvider, Dispatcher, NullDispatcher, OperationDirection,
     OP_GET_CAPABILITY_DESCRIPTOR,
 };
-use codec::core::{OP_BIND_ACTOR, OP_REMOVE_ACTOR};
+use codec::core::{OP_BIND_ACTOR, OP_HEALTH_REQUEST, OP_REMOVE_ACTOR};
 use codec::{deserialize, serialize};
 use redis::Connection;
 use redis::RedisResult;
@@ -90,6 +90,9 @@ impl RedisKVProvider {
         &self,
         config: CapabilityConfiguration,
     ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
+        if self.clients.read().unwrap().contains_key(&config.module) {
+            return Ok(vec![]);
+        }
         let c = kvredis::initialize_client(config.clone())?;
 
         self.clients.write().unwrap().insert(config.module, c);
@@ -350,6 +353,11 @@ impl CapabilityProvider for RedisKVProvider {
             OP_SET_INTERSECT => self.set_intersect(actor, deserialize(msg).unwrap()),
             OP_SET_QUERY => self.set_query(actor, deserialize(msg).unwrap()),
             OP_KEY_EXISTS => self.exists(actor, deserialize(msg).unwrap()),
+            OP_HEALTH_REQUEST if actor == SYSTEM_ACTOR => Ok(serialize(HealthResponse {
+                healthy: true,
+                message: "".to_string(),
+            })
+            .unwrap()),
             _ => Err("bad dispatch".into()),
         }
     }

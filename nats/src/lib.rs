@@ -19,10 +19,10 @@ pub const OP_DELIVER_MESSAGE: &str = "DeliverMessage";
 pub const OP_PUBLISH_MESSAGE: &str = "Publish";
 pub const OP_PERFORM_REQUEST: &str = "Request";
 
-use codec::core::{OP_BIND_ACTOR, OP_REMOVE_ACTOR};
+use codec::core::{OP_BIND_ACTOR, OP_HEALTH_REQUEST, OP_REMOVE_ACTOR};
 use generated::messaging::{BrokerMessage, RequestArgs};
 
-use generated::core::CapabilityConfiguration;
+use generated::core::{CapabilityConfiguration, HealthResponse};
 use std::collections::HashMap;
 use wascc_codec::{deserialize, serialize};
 
@@ -89,6 +89,9 @@ impl NatsProvider {
         &self,
         msg: CapabilityConfiguration,
     ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
+        if self.clients.read().unwrap().contains_key(&msg.module) {
+            return Ok(vec![]);
+        }
         let d = self.dispatcher.clone();
         let c = natsprov::initialize_client(d, &msg.module, &msg.values)?;
 
@@ -161,6 +164,11 @@ impl CapabilityProvider for NatsProvider {
             OP_GET_CAPABILITY_DESCRIPTOR if actor == "system" => self.get_descriptor(),
             OP_BIND_ACTOR if actor == "system" => self.configure(deserialize(msg)?),
             OP_REMOVE_ACTOR if actor == "system" => self.remove_actor(deserialize(msg)?),
+            OP_HEALTH_REQUEST if actor == "system" => Ok(serialize(HealthResponse {
+                healthy: true,
+                message: "".to_string(),
+            })
+            .unwrap()),
             _ => Err("bad dispatch".into()),
         }
     }
