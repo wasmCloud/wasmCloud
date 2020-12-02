@@ -12,6 +12,7 @@ use control_interface::{
 use control_interface::{StartActorAck, StartActorCommand, StartProviderAck, StartProviderCommand};
 use std::collections::HashMap;
 use wascap::jwt::Claims;
+use futures::TryFutureExt;
 
 // TODO: implement actor update
 pub(crate) async fn handle_update_actor(host: &str, msg: &nats::asynk::Message) {}
@@ -138,18 +139,17 @@ pub(crate) async fn handle_start_actor(host: &str, msg: &nats::asynk::Message, a
         })
         .await;
     match res {
-        Ok(running) => {
-            if running {
-                let f = format!(
-                    "Actor with image ref '{}' is already running on this host",
-                    cmd.actor_ref
-                );
-                error!("{}", f);
-                ack.failure = Some(f);
-                let _ = msg.respond(&serialize(ack).unwrap()).await;
-                return;
-            }
+        Ok(running) if running => {
+            let f = format!(
+                "Actor with image ref '{}' is already running on this host",
+                cmd.actor_ref
+            );
+            error!("{}", f);
+            ack.failure = Some(f);
+            let _ = msg.respond(&serialize(ack).unwrap()).await;
+            return;
         }
+        Ok(_) => {} // all good to start
         Err(_) => {
             let f = "Failed to query host controller for running actor".to_string();
             error!("{}", f);
@@ -290,18 +290,17 @@ pub(crate) async fn handle_start_provider(
         })
         .await;
     match res {
-        Ok(running) => {
-            if running {
-                let f = format!(
-                    "Provider with image ref '{}' is already running on this host.",
-                    cmd.provider_ref
-                );
-                error!("{}", f);
-                ack.failure = Some(f);
-                let _ = msg.respond(&serialize(ack).unwrap()).await;
-                return;
-            }
+        Ok(running) if running => {
+            let f = format!(
+                "Provider with image ref '{}' is already running on this host.",
+                cmd.provider_ref
+            );
+            error!("{}", f);
+            ack.failure = Some(f);
+            let _ = msg.respond(&serialize(ack).unwrap()).await;
+            return;
         }
+        Ok(_) => {}
         Err(_) => {
             let f = "Failed to query host controller for running providers".to_string();
             error!("{}", f);

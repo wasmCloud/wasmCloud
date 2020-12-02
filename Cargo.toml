@@ -54,8 +54,7 @@ redis = "0.17.0"
 reqwest = { version = "0.10"}
 uuid = { version = "0.8", features = ["serde", "v4"] }
 nats = "0.8.5"
-# wascc-httpsrv = { git = "https://github.com/wascc/capability-providers", branch = "main", features = ["static_plugin"]}
-wascc-httpsrv = { path = "../capability-providers/http-server", features = ["static_plugin"]}
+wascc-httpsrv = { git = "https://github.com/wascc/capability-providers", branch = "main", features = ["static_plugin"]}
 wascc-redis = { git = "https://github.com/wascc/capability-providers", branch = "main", features = ["static_plugin"] }
 control-interface = { path = "./crates/control-interface"}
 ctor = "0.1.16"

@@ -295,7 +295,7 @@ impl Handler<Initialize> for MessageBus {
                     let _ = target
                         .send(super::rpc_client::Initialize {
                             host_id,
-                            nc: nc,
+                            nc,
                             ns_prefix: ns,
                             bus,
                             rpc_timeout: timeout,

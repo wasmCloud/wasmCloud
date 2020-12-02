@@ -51,12 +51,11 @@ impl Handler<Initialize> for NatsSubscriber {
         let queue = msg.queue;
         Box::pin(
             async move {
-                let res = if let Some(q) = queue {
+                if let Some(q) = queue {
                     nc.queue_subscribe(&subject, &q).await
                 } else {
                     nc.subscribe(&subject).await
-                };
-                res
+                }
             }
             .into_actor(self)
             .map(|sub, _act, ctx| {
