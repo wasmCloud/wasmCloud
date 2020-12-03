@@ -1,15 +1,14 @@
 use super::MessageBus;
-use crate::capability::binding_cache::BindingKey;
+use crate::capability::link_cache::LinkKey;
 use crate::dispatch::{gen_config_invocation, Invocation, InvocationResponse, WasccEntity};
 use crate::hlreg::HostLocalSystemService;
 use crate::messagebus::rpc_client::RpcClient;
 use crate::messagebus::rpc_subscription::{CreateSubscription, RpcSubscription};
 use crate::messagebus::{
-    AdvertiseBinding, AdvertiseClaims, CanInvoke, ClaimsResponse, EnforceLocalActorLinks,
-    EnforceLocalLink, EnforceLocalProviderLinks, EstablishAllLinks, FindBindings,
-    FindBindingsResponse, GetClaims, Initialize, LinkDefinition, LinksResponse, LookupBinding,
-    PutClaims, PutLink, QueryActors, QueryAllLinks, QueryProviders, QueryResponse, Subscribe,
-    Unsubscribe,
+    AdvertiseClaims, AdvertiseLink, CanInvoke, ClaimsResponse, EnforceLocalActorLinks,
+    EnforceLocalLink, EnforceLocalProviderLinks, EstablishAllLinks, FindLinks, FindLinksResponse,
+    GetClaims, Initialize, LinkDefinition, LinksResponse, LookupLink, PutClaims, PutLink,
+    QueryActors, QueryAllLinks, QueryProviders, QueryResponse, Subscribe, Unsubscribe,
 };
 use crate::{auth, Result, SYSTEM_ACTOR};
 use actix::prelude::*;
@@ -40,14 +39,12 @@ impl Actor for MessageBus {
     type Context = Context<Self>;
 }
 
-impl Handler<FindBindings> for MessageBus {
-    type Result = FindBindingsResponse;
+impl Handler<FindLinks> for MessageBus {
+    type Result = FindLinksResponse;
 
-    fn handle(&mut self, msg: FindBindings, _ctx: &mut Context<Self>) -> Self::Result {
-        let res = self
-            .binding_cache
-            .find_bindings(&msg.binding_name, &msg.provider_id);
-        FindBindingsResponse { bindings: res }
+    fn handle(&mut self, msg: FindLinks, _ctx: &mut Context<Self>) -> Self::Result {
+        let res = self.link_cache.find_links(&msg.link_name, &msg.provider_id);
+        FindLinksResponse { links: res }
     }
 }
 
@@ -55,12 +52,12 @@ impl Handler<EnforceLocalActorLinks> for MessageBus {
     type Result = ();
 
     fn handle(&mut self, msg: EnforceLocalActorLinks, ctx: &mut Context<Self>) -> Self::Result {
-        for (key, values) in self.binding_cache.all() {
+        for (key, values) in self.link_cache.all() {
             if key.actor == msg.actor && self.claims_cache.contains_key(&msg.actor) {
                 ctx.notify(EnforceLocalLink {
                     actor: key.actor,
                     contract_id: key.contract_id,
-                    link_name: key.binding_name,
+                    link_name: key.link_name,
                 })
             }
         }
@@ -71,12 +68,12 @@ impl Handler<EnforceLocalProviderLinks> for MessageBus {
     type Result = ();
 
     fn handle(&mut self, msg: EnforceLocalProviderLinks, ctx: &mut Context<Self>) -> Self::Result {
-        for (key, values) in self.binding_cache.all() {
-            if key.binding_name == msg.link_name && values.provider_id == msg.provider_id {
+        for (key, values) in self.link_cache.all() {
+            if key.link_name == msg.link_name && values.provider_id == msg.provider_id {
                 ctx.notify(EnforceLocalLink {
                     actor: key.actor,
                     contract_id: key.contract_id,
-                    link_name: key.binding_name,
+                    link_name: key.link_name,
                 })
             }
         }
@@ -87,26 +84,26 @@ impl Handler<EnforceLocalLink> for MessageBus {
     type Result = ResponseActFuture<Self, ()>;
 
     // If the provider responsible for this link is local, and the actor
-    // for this link is known to us, then invoke the link binding
+    // for this link is known to us, then invoke the link link
     fn handle(&mut self, msg: EnforceLocalLink, ctx: &mut Context<Self>) -> Self::Result {
         let claims = self.claims_cache.get(&msg.actor);
         if claims.is_none() {
             return Box::pin(async move {}.into_actor(self)); // do not send link invocation for actors we don't know about
         }
-        let key = BindingKey {
+        let key = LinkKey {
             actor: msg.actor.to_string(),
             contract_id: msg.contract_id.to_string(),
-            binding_name: msg.link_name.to_string(),
+            link_name: msg.link_name.to_string(),
         };
-        let link = self.binding_cache.get(&key);
+        let link = self.link_cache.get(&key);
         if link.is_none() {
-            return Box::pin(async move {}.into_actor(self)); // do not invoke if we don't have the link in the binding cache
+            return Box::pin(async move {}.into_actor(self)); // do not invoke if we don't have the link in the link cache
         }
         let link = link.unwrap();
         let target = WasccEntity::Capability {
             id: link.provider_id.to_string(),
             contract_id: msg.contract_id.to_string(),
-            binding: msg.link_name.to_string(),
+            link: msg.link_name.to_string(),
         };
         if let Some(t) = self.subscribers.get(&target) {
             let t = t.clone();
@@ -135,7 +132,7 @@ impl Handler<EstablishAllLinks> for MessageBus {
     type Result = ();
 
     fn handle(&mut self, _msg: EstablishAllLinks, ctx: &mut Context<Self>) -> Self::Result {
-        for (key, value) in self.binding_cache.all() {
+        for (key, value) in self.link_cache.all() {
             if !self.claims_cache.contains_key(&key.actor) {
                 continue; // do not send link invocation for actors we don't know about
             }
@@ -143,7 +140,7 @@ impl Handler<EstablishAllLinks> for MessageBus {
             ctx.notify(EnforceLocalLink {
                 actor: key.actor.to_string(),
                 contract_id: key.contract_id.to_string(),
-                link_name: key.binding_name.to_string(),
+                link_name: key.link_name.to_string(),
             });
         }
     }
@@ -185,10 +182,10 @@ impl Handler<PutLink> for MessageBus {
 
     fn handle(&mut self, msg: PutLink, ctx: &mut Context<Self>) {
         trace!("Messagebus received link definition notification");
-        self.binding_cache.add_binding(
+        self.link_cache.add_link(
             &msg.actor,
             &msg.contract_id,
-            &msg.binding_name,
+            &msg.link_name,
             &msg.provider_id,
             msg.values.clone(),
         );
@@ -196,7 +193,7 @@ impl Handler<PutLink> for MessageBus {
         ctx.notify(EnforceLocalLink {
             actor: msg.actor.to_string(),
             contract_id: msg.contract_id.to_string(),
-            link_name: msg.binding_name.to_string(),
+            link_name: msg.link_name.to_string(),
         });
     }
 }
@@ -213,7 +210,7 @@ impl Handler<CanInvoke> for MessageBus {
         let target = WasccEntity::Capability {
             id: msg.provider_id,
             contract_id: msg.contract_id.to_string(),
-            binding: msg.link_name,
+            link: msg.link_name,
         };
         let pre_auth = if let Some(ref a) = c.metadata {
             if let Some(ref c) = a.caps {
@@ -239,14 +236,14 @@ impl Handler<QueryAllLinks> for MessageBus {
 
     fn handle(&mut self, _msg: QueryAllLinks, _ctx: &mut Context<Self>) -> Self::Result {
         let lds = self
-            .binding_cache
+            .link_cache
             .all()
             .iter()
             .map(|(k, v)| LinkDefinition {
                 actor_id: k.actor.to_string(),
                 provider_id: v.provider_id.to_string(),
                 contract_id: k.contract_id.to_string(),
-                link_name: k.binding_name.to_string(),
+                link_name: k.link_name.to_string(),
                 values: v.values.clone(),
             })
             .collect();
@@ -310,21 +307,21 @@ impl Handler<Initialize> for MessageBus {
     }
 }
 
-impl Handler<AdvertiseBinding> for MessageBus {
+impl Handler<AdvertiseLink> for MessageBus {
     type Result = ResponseActFuture<Self, Result<()>>;
 
-    fn handle(&mut self, msg: AdvertiseBinding, ctx: &mut Context<Self>) -> Self::Result {
+    fn handle(&mut self, msg: AdvertiseLink, ctx: &mut Context<Self>) -> Self::Result {
         trace!("Advertisting link definition");
         let target = WasccEntity::Capability {
             id: msg.provider_id.to_string(),
             contract_id: msg.contract_id.to_string(),
-            binding: msg.binding_name.to_string(),
+            link: msg.link_name.to_string(),
         };
 
-        self.binding_cache.add_binding(
+        self.link_cache.add_link(
             &msg.actor,
             &msg.contract_id,
-            &msg.binding_name,
+            &msg.link_name,
             &msg.provider_id,
             msg.values.clone(),
         );
@@ -332,16 +329,16 @@ impl Handler<AdvertiseBinding> for MessageBus {
         ctx.notify(EnforceLocalLink {
             actor: msg.actor.to_string(),
             contract_id: msg.contract_id.to_string(),
-            link_name: msg.binding_name.to_string(),
+            link_name: msg.link_name.to_string(),
         });
 
-        let advbinding = msg.clone();
+        let advlink = msg.clone();
 
         let rpc = self.rpc_outbound.clone();
         Box::pin(
             async move {
                 if let Some(ref rpc) = rpc {
-                    let _ = rpc.send(advbinding).await;
+                    let _ = rpc.send(advlink).await;
                 }
                 Ok(())
             }
@@ -455,12 +452,12 @@ impl Handler<Invocation> for MessageBus {
     }
 }
 
-impl Handler<LookupBinding> for MessageBus {
+impl Handler<LookupLink> for MessageBus {
     type Result = Option<String>;
 
-    fn handle(&mut self, msg: LookupBinding, _ctx: &mut Self::Context) -> Self::Result {
-        self.binding_cache
-            .find_provider_id(&msg.actor, &msg.contract_id, &msg.binding_name)
+    fn handle(&mut self, msg: LookupLink, _ctx: &mut Self::Context) -> Self::Result {
+        self.link_cache
+            .find_provider_id(&msg.actor, &msg.contract_id, &msg.link_name)
     }
 }
 

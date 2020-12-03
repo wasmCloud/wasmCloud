@@ -41,13 +41,13 @@ pub enum ControlEvent {
     },
     ProviderStarted {
         contract_id: String,
-        binding_name: String,
+        link_name: String,
         provider_id: String,
         image_ref: Option<String>,
     },
     ProviderStopped {
         contract_id: String,
-        binding_name: String,
+        link_name: String,
         provider_id: String,
         reason: TerminationReason,
     },

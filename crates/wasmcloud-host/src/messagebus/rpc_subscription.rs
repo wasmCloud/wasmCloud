@@ -125,7 +125,7 @@ pub(crate) fn invoke_subject(ns_prefix: &Option<String>, entity: &WasccEntity) -
     let prefix = subject_prefix(ns_prefix);
     match entity {
         WasccEntity::Actor(s) => format!("{}.{}", prefix, s),
-        WasccEntity::Capability { id, binding, .. } => format!("{}.{}.{}", prefix, id, binding),
+        WasccEntity::Capability { id, link, .. } => format!("{}.{}.{}", prefix, id, link),
     }
 }
 

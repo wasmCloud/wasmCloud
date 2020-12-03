@@ -192,7 +192,7 @@ mod tests {
             WasccEntity::Capability {
                 id: "Vxxx".to_string(),
                 contract_id: "testing:sample".to_string(),
-                binding: "default".to_string(),
+                link: "default".to_string(),
             },
             "testing",
             b"abc1234".to_vec(),
@@ -221,7 +221,7 @@ mod tests {
             WasccEntity::Capability {
                 id: "Vxxx".to_string(),
                 contract_id: "testing:sample".to_string(),
-                binding: "default".to_string(),
+                link: "default".to_string(),
             },
             "testing",
             b"abc1234".to_vec(),

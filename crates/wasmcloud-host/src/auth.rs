@@ -15,7 +15,7 @@ pub trait Authorizer: CloneAuthorizer + Sync + Send {
     fn can_load(&self, claims: &Claims<Actor>) -> bool;
     /// This check will be performed for _every_ invocation that has passed the base capability check,
     /// including the operation that occurs during `bind_actor`. Developers should be aware of this because
-    /// if `set_authorizer` is done _after_ actor binding, it could potentially allow an unauthorized binding.
+    /// if `set_authorizer` is done _after_ actor link, it could potentially allow an unauthorized link.
     fn can_invoke(&self, claims: &Claims<Actor>, target: &WasccEntity, operation: &str) -> bool;
 }
 
@@ -163,7 +163,7 @@ mod test {
         let target = WasccEntity::Capability {
             contract_id: "wascc:keyvalue".to_string(),
             id: "Vxxx".to_string(),
-            binding: "default".to_string(),
+            link: "default".to_string(),
         };
         let inv = gen_invocation(WasccEntity::Actor("A".to_string()), target, "test");
         let mut cache = HashMap::new();
@@ -193,7 +193,7 @@ mod test {
         let target = WasccEntity::Capability {
             contract_id: "wascc:keyvalue".to_string(),
             id: "Vxxx".to_string(),
-            binding: "default".to_string(),
+            link: "default".to_string(),
         };
         let inv = gen_invocation(WasccEntity::Actor("A".to_string()), target, "test");
         let mut cache = HashMap::new();

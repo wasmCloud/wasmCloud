@@ -249,7 +249,7 @@ pub(crate) async fn handle_stop_provider(host: &str, msg: &nats::asynk::Message)
     if let Err(_) = hc
         .send(StopProvider {
             provider_ref: cmd.provider_ref,
-            binding: cmd.link_name,
+            link: cmd.link_name,
             contract_id: cmd.contract_id,
         })
         .await

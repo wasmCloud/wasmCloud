@@ -2,7 +2,7 @@ use crate::dispatch::{
     CONFIG_WASCC_CLAIMS_CAPABILITIES, CONFIG_WASCC_CLAIMS_EXPIRES, CONFIG_WASCC_CLAIMS_ISSUER,
     CONFIG_WASCC_CLAIMS_NAME, CONFIG_WASCC_CLAIMS_TAGS,
 };
-use crate::messagebus::AdvertiseBinding;
+use crate::messagebus::AdvertiseLink;
 use crate::messagebus::OP_BIND_ACTOR;
 use crate::{Invocation, WasccEntity, SYSTEM_ACTOR};
 use actix::prelude::*;
@@ -11,9 +11,9 @@ use wascap::jwt::Claims;
 use wascap::prelude::KeyPair;
 
 // TODO: add wascc internal claims to the config values
-pub(crate) fn generate_binding_invocation(
+pub(crate) fn generate_link_invocation(
     t: &Recipient<Invocation>,
-    //msg: &AdvertiseBinding,
+    //msg: &Advertiselink,
     actor: &str,
     values: HashMap<String, String>,
     key: &KeyPair,
