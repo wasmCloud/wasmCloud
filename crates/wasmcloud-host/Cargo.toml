@@ -10,7 +10,7 @@ license = "Apache-2.0"
 documentation = "https://docs.rs/wascc-host"
 readme = "README.md"
 keywords = ["webassembly", "wasm", "wascc", "wapc", "actors"]
-categories = ["wasm", "api-links"]
+categories = ["wasm", "api-bindings"]
 
 
 [features]

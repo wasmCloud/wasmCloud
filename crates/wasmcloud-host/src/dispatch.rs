@@ -240,7 +240,7 @@ pub enum WasccEntity {
     Capability {
         id: String,
         contract_id: String,
-        link: String,
+        link_name: String,
     },
 }
 
@@ -252,7 +252,7 @@ impl WasccEntity {
             WasccEntity::Capability {
                 id,
                 contract_id,
-                link,
+                link_name,
             } => format!(
                 "{}://{}/{}/{}",
                 URL_SCHEME,
@@ -260,7 +260,7 @@ impl WasccEntity {
                     .replace(":", "/")
                     .replace(" ", "_")
                     .to_lowercase(),
-                link.replace(" ", "_").to_lowercase(),
+                link_name.replace(" ", "_").to_lowercase(),
                 id
             ),
         }
@@ -359,7 +359,7 @@ fn invocation_from_callback(
     provider_id: &str,
     payload: &[u8],
 ) -> Invocation {
-    let link = if bd.trim().is_empty() {
+    let link_name = if bd.trim().is_empty() {
         // Some actor SDKs may not specify a link field by default
         "default".to_string()
     } else {
@@ -369,7 +369,7 @@ fn invocation_from_callback(
         WasccEntity::Actor(ns.to_string())
     } else {
         WasccEntity::Capability {
-            link,
+            link_name,
             contract_id: ns.to_string(),
             id: provider_id.to_string(),
         }
@@ -435,7 +435,7 @@ pub(crate) fn gen_config_invocation(
         WasccEntity::Capability {
             contract_id: contract_id.to_string(),
             id: provider_id.to_string(),
-            link: link_name,
+            link_name: link_name,
         },
         OP_BIND_ACTOR,
         payload,
@@ -457,7 +457,7 @@ mod test {
             WasccEntity::Capability {
                 id: "Vxxx".to_string(),
                 contract_id: "wascc:messaging".into(),
-                link: "default".into(),
+                link_name: "default".into(),
             },
             "OP_TESTING",
             vec![1, 2, 3, 4],

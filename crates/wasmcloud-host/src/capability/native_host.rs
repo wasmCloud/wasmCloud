@@ -131,7 +131,7 @@ impl Handler<Initialize> for NativeCapabilityHost {
                 .unwrap()
                 .capid
                 .to_string(),
-            link: state.cap.link_name.to_string(),
+            link_name: state.cap.link_name.to_string(),
         };
 
         let nativedispatch = ProviderDispatcher::new(
@@ -332,7 +332,7 @@ mod test {
             WasccEntity::Capability {
                 id: "VDHPKGFKDI34Y4RN4PWWZHRYZ6373HYRSNNEM4UTDLLOGO5B37TSVREP".to_string(),
                 contract_id: "wascc:extras".to_string(),
-                link: "default".to_string(),
+                link_name: "default".to_string(),
             },
             OP_REQUEST_GUID,
             crate::generated::extras::serialize(&req).unwrap(),

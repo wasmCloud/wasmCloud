@@ -117,7 +117,7 @@ impl Handler<CheckLink> for HostController {
             let prov_entity = WasccEntity::Capability {
                 id: msg.linkdef.provider_id.to_string(),
                 contract_id: msg.linkdef.contract_id,
-                link: msg.linkdef.link_name,
+                link_name: msg.linkdef.link_name,
             };
             let key = KeyPair::from_seed(&self.kp.as_ref().unwrap().seed().unwrap()).unwrap();
             let values = msg.linkdef.values.clone();
@@ -212,12 +212,14 @@ impl Handler<StopProvider> for HostController {
         trace!("Stopping provider {} per request", msg.provider_ref);
         // The provider should stop itself once all references to it are gone
         let pk = if let Some(pk) = self.image_refs.remove(&msg.provider_ref) {
-            let _provider = self.providers.remove(&ProviderKey::new(&pk, &msg.link));
+            let _provider = self
+                .providers
+                .remove(&ProviderKey::new(&pk, &msg.link_name));
             pk
         } else {
             let _provider = self
                 .providers
-                .remove(&ProviderKey::new(&msg.provider_ref, &msg.link));
+                .remove(&ProviderKey::new(&msg.provider_ref, &msg.link_name));
             msg.provider_ref.to_string()
         };
 
@@ -229,7 +231,7 @@ impl Handler<StopProvider> for HostController {
                         interest: WasccEntity::Capability {
                             id: pk.to_string(),
                             contract_id: msg.contract_id.to_string(),
-                            link: msg.link.to_string(),
+                            link_name: msg.link_name.to_string(),
                         },
                     })
                     .await;
@@ -439,33 +441,6 @@ async fn initialize_provider(
     let b = MessageBus::from_hostlocal_registry(&host_id);
 
     Ok(new_provider)
-    /*let links = b
-        .send(Findlinks {
-            provider_id: provider_id.to_string(),
-            link_name: link_name.to_string(),
-        })
-        .await;
-    if let Ok(links) = links {
-        trace!("Re-applying link definitions to provider {}", &provider_id);
-        let k = KeyPair::from_seed(&seed)?;
-        let claims = b.send(GetClaims {}).await;
-        if let Ok(c) = claims {
-            reinvoke_links(
-                &k,
-                new_provider.clone().recipient(),
-                &provider_id,
-                &capid,
-                &link_name,
-                links.links,
-            )
-            .await;
-            Ok(new_provider)
-        } else {
-            Err("Failed to get claims cache from message bus".into())
-        }
-    } else {
-        Err("Failed to obtain list of links for re-invoke from message bus".into())
-    } */
 }
 
 pub(crate) fn detect_core_host_labels() -> HashMap<String, String> {
@@ -505,7 +480,7 @@ async fn reinvoke_links(
             WasccEntity::Capability {
                 id: provider_id.to_string(),
                 contract_id: contract_id.to_string(),
-                link: link_name.to_string(),
+                link_name: link_name.to_string(),
             },
             OP_BIND_ACTOR,
             crate::generated::core::serialize(&config).unwrap(),

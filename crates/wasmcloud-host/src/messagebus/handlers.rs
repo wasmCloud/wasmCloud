@@ -103,7 +103,7 @@ impl Handler<EnforceLocalLink> for MessageBus {
         let target = WasccEntity::Capability {
             id: link.provider_id.to_string(),
             contract_id: msg.contract_id.to_string(),
-            link: msg.link_name.to_string(),
+            link_name: msg.link_name.to_string(),
         };
         if let Some(t) = self.subscribers.get(&target) {
             let t = t.clone();
@@ -210,7 +210,7 @@ impl Handler<CanInvoke> for MessageBus {
         let target = WasccEntity::Capability {
             id: msg.provider_id,
             contract_id: msg.contract_id.to_string(),
-            link: msg.link_name,
+            link_name: msg.link_name,
         };
         let pre_auth = if let Some(ref a) = c.metadata {
             if let Some(ref c) = a.caps {
@@ -315,7 +315,7 @@ impl Handler<AdvertiseLink> for MessageBus {
         let target = WasccEntity::Capability {
             id: msg.provider_id.to_string(),
             contract_id: msg.contract_id.to_string(),
-            link: msg.link_name.to_string(),
+            link_name: msg.link_name.to_string(),
         };
 
         self.link_cache.add_link(

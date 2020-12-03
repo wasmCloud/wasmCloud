@@ -262,11 +262,11 @@ impl Host {
         link: Option<String>,
     ) -> Result<()> {
         let hc = HostController::from_hostlocal_registry(&self.id.borrow());
-        let link = link.unwrap_or("default".to_string());
+        let link_name = link.unwrap_or("default".to_string());
         hc.send(StopProvider {
             provider_ref: provider_ref.to_string(),
             contract_id: contract_id.to_string(),
-            link,
+            link_name,
         })
         .await?;
         Ok(())

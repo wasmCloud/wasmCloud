@@ -163,7 +163,7 @@ mod test {
         let target = WasccEntity::Capability {
             contract_id: "wascc:keyvalue".to_string(),
             id: "Vxxx".to_string(),
-            link: "default".to_string(),
+            link_name: "default".to_string(),
         };
         let inv = gen_invocation(WasccEntity::Actor("A".to_string()), target, "test");
         let mut cache = HashMap::new();

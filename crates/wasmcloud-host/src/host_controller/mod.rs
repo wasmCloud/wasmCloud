@@ -62,7 +62,7 @@ pub(crate) struct StopActor {
 #[rtype(result = "()")]
 pub(crate) struct StopProvider {
     pub provider_ref: String,
-    pub link: String,
+    pub link_name: String,
     pub contract_id: String,
 }
 
