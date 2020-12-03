@@ -181,9 +181,7 @@ impl Host {
         let cp = ControlInterface::from_hostlocal_registry(&self.id.borrow());
         let _ = cp
             .send(PublishEvent {
-                event: ControlEvent::HostStopped {
-                    reason: TerminationReason::Requested,
-                },
+                event: ControlEvent::HostStopped,
             })
             .await;
         System::current().stop();
