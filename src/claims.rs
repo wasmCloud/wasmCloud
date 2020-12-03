@@ -238,7 +238,7 @@ struct ActorMetadata {
     #[structopt(short = "g", long = "msg")]
     msg_broker: bool,
     /// Enable the HTTP server standard capability
-    #[structopt(short = "s", long = "http_server")]
+    #[structopt(short = "q", long = "http_server")]
     http_server: bool,
     /// Enable the HTTP client standard capability
     #[structopt(short = "h", long = "http_client")]

@@ -9,6 +9,8 @@ mod keys;
 use keys::KeysCli;
 mod par;
 use par::ParCli;
+mod reg;
+use reg::RegCli;
 
 /// This renders appropriately with escape characters
 const ASCII: &str = "
@@ -44,6 +46,9 @@ enum CliCommand {
     /// Utilities for creating, inspecting, and modifying capability provider archive files
     #[structopt(name = "par")]
     Par(ParCli),
+    /// Utilities for interacting with OCI compliant registries
+    #[structopt(name = "reg")]
+    Reg(RegCli),
 }
 
 fn main() {
@@ -55,6 +60,7 @@ fn main() {
         CliCommand::Lattice(latticecli) => lattice::handle_command(latticecli),
         CliCommand::Claims(claimscli) => claims::handle_command(claimscli),
         CliCommand::Par(parcli) => par::handle_command(parcli),
+        CliCommand::Reg(regcli) => reg::handle_command(regcli),
     };
 
     match res {
