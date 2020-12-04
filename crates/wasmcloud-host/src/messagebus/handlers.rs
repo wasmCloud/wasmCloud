@@ -55,7 +55,7 @@ impl Handler<EnforceLocalActorLinks> for MessageBus {
     type Result = ();
 
     fn handle(&mut self, msg: EnforceLocalActorLinks, ctx: &mut Context<Self>) -> Self::Result {
-        for (key, values) in self.binding_cache.all() {
+        for (key, _values) in self.binding_cache.all() {
             if key.actor == msg.actor && self.claims_cache.contains_key(&msg.actor) {
                 ctx.notify(EnforceLocalLink {
                     actor: key.actor,
@@ -88,7 +88,7 @@ impl Handler<EnforceLocalLink> for MessageBus {
 
     // If the provider responsible for this link is local, and the actor
     // for this link is known to us, then invoke the link binding
-    fn handle(&mut self, msg: EnforceLocalLink, ctx: &mut Context<Self>) -> Self::Result {
+    fn handle(&mut self, msg: EnforceLocalLink, _ctx: &mut Context<Self>) -> Self::Result {
         let claims = self.claims_cache.get(&msg.actor);
         if claims.is_none() {
             return Box::pin(async move {}.into_actor(self)); // do not send link invocation for actors we don't know about
@@ -135,7 +135,7 @@ impl Handler<EstablishAllLinks> for MessageBus {
     type Result = ();
 
     fn handle(&mut self, _msg: EstablishAllLinks, ctx: &mut Context<Self>) -> Self::Result {
-        for (key, value) in self.binding_cache.all() {
+        for (key, _value) in self.binding_cache.all() {
             if !self.claims_cache.contains_key(&key.actor) {
                 continue; // do not send link invocation for actors we don't know about
             }

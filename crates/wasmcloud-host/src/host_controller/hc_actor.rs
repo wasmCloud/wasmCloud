@@ -74,6 +74,57 @@ impl Actor for HostController {
     type Context = Context<Self>;
 }
 
+impl Handler<AuctionActor> for HostController {
+    type Result = bool;
+
+    fn handle(&mut self, msg: AuctionActor, _ctx: &mut Context<Self>) -> Self::Result {
+        if self.image_refs.contains_key(&msg.actor_ref) || self.actors.contains_key(&msg.actor_ref)
+        {
+            return false; // don't respond to auctions where the actor in question is running already
+        }
+
+        satisfies_constraints(&self.host_labels, &msg.constraints)
+    }
+}
+
+impl Handler<AuctionProvider> for HostController {
+    type Result = bool;
+
+    fn handle(&mut self, msg: AuctionProvider, _ctx: &mut Context<Self>) -> Self::Result {
+        let pid = if let Some(pid) = self.image_refs.get(&msg.provider_ref) {
+            pid
+        } else {
+            &msg.provider_ref
+        };
+        if self.providers.contains_key(&ProviderKey {
+            id: pid.to_string(),
+            link_name: msg.link_name.to_string(),
+        }) {
+            return false;
+        }
+
+        satisfies_constraints(&self.host_labels, &msg.constraints)
+    }
+}
+
+fn satisfies_constraints(
+    host_labels: &HashMap<String, String>,
+    constraints: &HashMap<String, String>,
+) -> bool {
+    // All constraints must exist and match exactly to respond positively to auction
+    for (constraint, reqval) in constraints {
+        if let Some(v) = host_labels.get(constraint) {
+            if v != reqval {
+                return false;
+            }
+        } else {
+            return false;
+        }
+    }
+
+    true
+}
+
 impl Handler<QueryActorRunning> for HostController {
     type Result = bool;
 

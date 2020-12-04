@@ -24,7 +24,7 @@ pub enum ControlEvent {
         image_ref: Option<String>,
     },
     ActorStopped {
-        actor: String
+        actor: String,
     },
     ActorUpdateBegan {
         actor: String,

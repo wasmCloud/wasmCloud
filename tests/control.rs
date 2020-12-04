@@ -4,6 +4,7 @@ use crate::common::{
 };
 use ::control_interface::Client;
 use actix_rt::time::delay_for;
+use std::collections::HashMap;
 use std::thread;
 use std::time::Duration;
 use wascc_redis::RedisKVProvider;
@@ -125,7 +126,6 @@ pub(crate) async fn basics() -> Result<()> {
         .find(|p| p.image_ref == Some(HTTPSRV_OCI.to_string()) && p.id == http_ack.provider_id)
         .is_some());
 
-    println!("{:?}", hosts);
     delay_for(Duration::from_secs(1)).await;
     h.stop().await;
     delay_for(Duration::from_secs(1)).await;
@@ -133,4 +133,99 @@ pub(crate) async fn basics() -> Result<()> {
     //h.stop().await;
 
     Ok(())
+}
+
+pub(crate) async fn auctions() -> Result<()> {
+    let nc = nats::asynk::connect("0.0.0.0:4222").await?;
+    let h = HostBuilder::new()
+        .with_namespace("auctions")
+        .with_control_client(nc)
+        .oci_allow_latest()
+        .with_label("kv-friendly", "yes")
+        .with_label("web-friendly", "no")
+        .build();
+
+    h.start().await?;
+    let hid = h.id();
+    let nc2 = nats::asynk::connect("0.0.0.0:4222").await?;
+    let nc3 = nats::asynk::connect("0.0.0.0:4222").await?;
+
+    let ctl_client = Client::new(nc2, Some("auctions".to_string()), Duration::from_secs(20));
+
+    let h2 = HostBuilder::new()
+        .with_namespace("auctions")
+        .with_control_client(nc3)
+        .oci_allow_latest()
+        .with_label("web-friendly", "yes")
+        .build();
+    h2.start().await?;
+    let hid2 = h2.id();
+
+    // auction with no requirements
+    let kvack = ctl_client
+        .perform_actor_auction(KVCOUNTER_OCI, HashMap::new(), Duration::from_millis(200))
+        .await?;
+    assert_eq!(2, kvack.len());
+
+    // auction the KV counter with a constraint
+    let kvack = ctl_client
+        .perform_actor_auction(KVCOUNTER_OCI, kvrequirements(), Duration::from_millis(200))
+        .await?;
+    assert_eq!(1, kvack.len());
+    assert_eq!(kvack[0].host_id, hid);
+
+    // start it and re-attempt an auction
+    let _ = ctl_client.start_actor(&hid, KVCOUNTER_OCI).await?;
+    await_actor_count(&h, 1, Duration::from_millis(50), 20).await?;
+
+    let kvack = ctl_client
+        .perform_actor_auction(KVCOUNTER_OCI, kvrequirements(), Duration::from_millis(500))
+        .await?;
+    // Should be no viable candidates now
+    assert_eq!(0, kvack.len());
+
+    // find a place for the web server
+    let httpack = ctl_client
+        .perform_provider_auction(
+            HTTPSRV_OCI,
+            "default",
+            webrequirements(),
+            Duration::from_millis(200),
+        )
+        .await?;
+    assert_eq!(1, httpack.len());
+    assert_eq!(httpack[0].host_id, hid2);
+
+    // start web server on host 2
+    let _http_ack = ctl_client
+        .start_provider(&httpack[0].host_id, HTTPSRV_OCI, None)
+        .await?;
+    await_provider_count(&h2, 2, Duration::from_millis(50), 10).await?;
+
+    // should be no candidates now
+    let httpack = ctl_client
+        .perform_provider_auction(
+            HTTPSRV_OCI,
+            "default",
+            webrequirements(),
+            Duration::from_millis(200),
+        )
+        .await?;
+    assert_eq!(0, httpack.len());
+    h.stop().await;
+    h2.stop().await;
+    delay_for(Duration::from_millis(300)).await;
+    Ok(())
+}
+
+fn kvrequirements() -> HashMap<String, String> {
+    let mut hm = HashMap::new();
+    hm.insert("kv-friendly".to_string(), "yes".to_string());
+    hm
+}
+
+fn webrequirements() -> HashMap<String, String> {
+    let mut hm = HashMap::new();
+    hm.insert("web-friendly".to_string(), "yes".to_string());
+    hm
 }

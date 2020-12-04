@@ -6,6 +6,7 @@ use actix_rt::time::delay_for;
 use futures::stream::StreamExt;
 use futures::TryStreamExt;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::time::Duration;
 
 type Result<T> = ::std::result::Result<T, Box<dyn ::std::error::Error + Send + Sync>>;
@@ -32,6 +33,48 @@ impl Client {
             .request_multi(&subject, vec![])
             .await?
             .map(|m| deserialize::<Host>(&m.data))
+            .take_until(delay_for(timeout))
+            .try_collect()
+            .await
+    }
+
+    pub async fn perform_actor_auction(
+        &self,
+        actor_ref: &str,
+        constraints: HashMap<String, String>,
+        timeout: Duration,
+    ) -> Result<Vec<ActorAuctionAck>> {
+        let subject = broker::actor_auction_subject(&self.nsprefix);
+        let bytes = serialize(ActorAuctionRequest {
+            actor_ref: actor_ref.to_string(),
+            constraints,
+        })?;
+        self.nc
+            .request_multi(&subject, bytes)
+            .await?
+            .map(|m| deserialize::<ActorAuctionAck>(&m.data))
+            .take_until(delay_for(timeout))
+            .try_collect()
+            .await
+    }
+
+    pub async fn perform_provider_auction(
+        &self,
+        provider_ref: &str,
+        link_name: &str,
+        constraints: HashMap<String, String>,
+        timeout: Duration,
+    ) -> Result<Vec<ProviderAuctionAck>> {
+        let subject = broker::provider_auction_subject(&self.nsprefix);
+        let bytes = serialize(ProviderAuctionRequest {
+            provider_ref: provider_ref.to_string(),
+            link_name: link_name.to_string(),
+            constraints,
+        })?;
+        self.nc
+            .request_multi(&subject, bytes)
+            .await?
+            .map(|m| deserialize::<ProviderAuctionAck>(&m.data))
             .take_until(delay_for(timeout))
             .try_collect()
             .await

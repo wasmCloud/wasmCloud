@@ -45,14 +45,20 @@ async fn distributed_echo() -> Result<()> {
 async fn link_on_third_host() -> Result<()> {
     with_lattice::link_on_third_host().await
 }
-/*
-#[actix_rt::test]
-async fn scaled_kvcounter() -> Result<()> {
-    with_lattice::scaled_kvcounter().await
-}
-*/
+
+//#[actix_rt::test]
+//async fn scaled_kvcounter() -> Result<()> {
+//    with_lattice::scaled_kvcounter().await
+//}
+
 
 #[actix_rt::test]
 async fn control_basics() -> Result<()> {
     control::basics().await
+}
+
+
+#[actix_rt::test]
+async fn auctions() -> Result<()> {
+    control::auctions().await
 }
