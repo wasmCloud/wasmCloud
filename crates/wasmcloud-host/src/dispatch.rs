@@ -435,7 +435,7 @@ pub(crate) fn gen_config_invocation(
         WasccEntity::Capability {
             contract_id: contract_id.to_string(),
             id: provider_id.to_string(),
-            link_name: link_name,
+            link_name,
         },
         OP_BIND_ACTOR,
         payload,
