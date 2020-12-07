@@ -11,6 +11,8 @@ mod par;
 use par::ParCli;
 mod reg;
 use reg::RegCli;
+mod up;
+use up::UpCli;
 
 /// This renders appropriately with escape characters
 const ASCII: &str = "
@@ -49,11 +51,14 @@ enum CliCommand {
     /// Utilities for interacting with OCI compliant registries
     #[structopt(name = "reg")]
     Reg(RegCli),
+    /// Utility to launch waSCC REPL environment
+    #[structopt(name = "up")]
+    Up(UpCli),
 }
 
 fn main() {
     let cli = Cli::from_args();
-    env_logger::init();
+    // env_logger::init();
 
     let res = match cli.command {
         CliCommand::Keys(keyscli) => keys::handle_command(keyscli),
@@ -61,6 +66,7 @@ fn main() {
         CliCommand::Claims(claimscli) => claims::handle_command(claimscli),
         CliCommand::Par(parcli) => par::handle_command(parcli),
         CliCommand::Reg(regcli) => reg::handle_command(regcli),
+        CliCommand::Up(upcli) => up::handle_command(upcli),
     };
 
     match res {
