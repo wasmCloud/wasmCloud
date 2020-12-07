@@ -141,17 +141,8 @@ impl Actor for ActorHost {
     }
 
     fn stopped(&mut self, _ctx: &mut Self::Context) {
-        /* let state = self.state.as_ref().unwrap();
-        let _ = block_on(async move {
-            let cp = ControlInterface::from_hostlocal_registry(&state.host_id);
-            cp.send(PublishEvent {
-                event: ControlEvent::ActorStopped {
-                    actor: state.claims.subject.to_string(),
-                    reason: TerminationReason::Requested,
-                },
-            })
-            .await
-        }); */
+        // NOTE: do not attempt to log asynchronously in a stopped function,
+        // resources (including stdout) may not be available
     }
 }
 

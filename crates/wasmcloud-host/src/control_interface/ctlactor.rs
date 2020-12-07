@@ -55,16 +55,14 @@ impl Actor for ControlInterface {
 impl Handler<PublishEvent> for ControlInterface {
     type Result = ResponseActFuture<Self, ()>;
 
-    fn handle(&mut self, _msg: PublishEvent, _ctx: &mut Context<Self>) -> Self::Result {
+    fn handle(&mut self, msg: PublishEvent, _ctx: &mut Context<Self>) -> Self::Result {
         if self.client.is_none() {
-            //    trace!("Skipping control interface event (interface disabled)");
             return Box::pin(async move {}.into_actor(self));
         }
-        let evt = _msg
+        let evt = msg
             .event
             .into_published(&self.key.as_ref().unwrap().public_key());
         let prefix = Some(self.ns_prefix.to_string());
-        //trace!("Emitting control interface event {:?}", evt);
         if let Some(ref nc) = self.client {
             let nc = nc.clone();
             Box::pin(

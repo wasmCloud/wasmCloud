@@ -492,33 +492,6 @@ async fn initialize_provider(
     let b = MessageBus::from_hostlocal_registry(&host_id);
 
     Ok(new_provider)
-    /*let bindings = b
-        .send(FindBindings {
-            provider_id: provider_id.to_string(),
-            binding_name: binding_name.to_string(),
-        })
-        .await;
-    if let Ok(bindings) = bindings {
-        trace!("Re-applying link definitions to provider {}", &provider_id);
-        let k = KeyPair::from_seed(&seed)?;
-        let claims = b.send(GetClaims {}).await;
-        if let Ok(c) = claims {
-            reinvoke_bindings(
-                &k,
-                new_provider.clone().recipient(),
-                &provider_id,
-                &capid,
-                &binding_name,
-                bindings.bindings,
-            )
-            .await;
-            Ok(new_provider)
-        } else {
-            Err("Failed to get claims cache from message bus".into())
-        }
-    } else {
-        Err("Failed to obtain list of bindings for re-invoke from message bus".into())
-    } */
 }
 
 pub(crate) fn detect_core_host_labels() -> HashMap<String, String> {
