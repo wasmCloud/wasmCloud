@@ -1,0 +1,16 @@
+# NFPM: check https://nfpm.goreleaser.com/configuration for detailed usage
+# wasmCloud cli [arm64]
+
+name: wasmcloud
+arch: amd64
+platform: linux
+version: ${VERSION}
+section: default
+priority: extra
+maintainer: Bill Young <bill@byoung.io>
+description: wasmcloud
+vendor: wasmCloud
+homepage: https://wascc.dev
+license: Apache-2.0
+files:
+  target/release/wasmcloud: "/usr/local/bin/wasmcloud"
