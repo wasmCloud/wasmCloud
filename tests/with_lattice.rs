@@ -52,7 +52,7 @@ pub(crate) async fn distributed_echo() -> Result<()> {
     let mut webvalues: HashMap<String, String> = HashMap::new();
     webvalues.insert("PORT".to_string(), format!("{}", web_port));
     host_b
-        .set_binding(
+        .set_link(
             &aid,
             "wascc:http_server",
             None,
@@ -120,7 +120,7 @@ pub(crate) async fn link_on_third_host() -> Result<()> {
     let mut webvalues: HashMap<String, String> = HashMap::new();
     webvalues.insert("PORT".to_string(), format!("{}", web_port));
     host_c
-        .set_binding(
+        .set_link(
             &actor_id,
             "wascc:http_server",
             None,
@@ -191,7 +191,7 @@ pub(crate) async fn scaled_kvcounter() -> Result<()> {
     redisvalues.insert("URL".to_string(), "redis://127.0.0.1:6379".to_string());
 
     host_a
-        .set_binding(
+        .set_link(
             &a_id,
             "wascc:http_server",
             None,
@@ -200,7 +200,7 @@ pub(crate) async fn scaled_kvcounter() -> Result<()> {
         )
         .await?;
     host_a
-        .set_binding(
+        .set_link(
             &a_id,
             "wascc:keyvalue",
             None,
