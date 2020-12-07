@@ -3,8 +3,8 @@ use crate::hlreg::HostLocalSystemService;
 use crate::host_controller::{CheckLink, HostController};
 use crate::messagebus::rpc_subscription::{claims_subject, invoke_subject, links_subject};
 use crate::messagebus::{
-    AdvertiseBinding, AdvertiseClaims, EnforceLocalActorLinks, EnforceLocalProviderLinks,
-    MessageBus, PutClaims, PutLink,
+    AdvertiseClaims, AdvertiseLink, EnforceLocalActorLinks, EnforceLocalProviderLinks, MessageBus,
+    PutClaims, PutLink,
 };
 use crate::Result;
 use crate::{Invocation, InvocationResponse};
@@ -177,7 +177,7 @@ impl Handler<LinkInbound> for RpcClient {
                     let ld = link.clone();
                     let _ = target
                         .send(PutLink {
-                            binding_name: link.link_name,
+                            link_name: link.link_name,
                             contract_id: link.contract_id,
                             provider_id: link.provider_id,
                             actor: link.actor,
@@ -196,15 +196,15 @@ impl Handler<LinkInbound> for RpcClient {
     }
 }
 // Publish a link definition to the RPC bus
-impl Handler<AdvertiseBinding> for RpcClient {
+impl Handler<AdvertiseLink> for RpcClient {
     type Result = ResponseActFuture<Self, Result<()>>;
 
-    fn handle(&mut self, msg: AdvertiseBinding, _ctx: &mut Self::Context) -> Self::Result {
+    fn handle(&mut self, msg: AdvertiseLink, _ctx: &mut Self::Context) -> Self::Result {
         trace!("Publishing link definition on lattice");
         let ld = LinkDefinition {
             actor: msg.actor,
             contract_id: msg.contract_id,
-            link_name: msg.binding_name,
+            link_name: msg.link_name,
             provider_id: msg.provider_id,
             values: msg.values,
         };

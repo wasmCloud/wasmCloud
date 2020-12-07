@@ -1,5 +1,5 @@
 use crate::auth::Authorizer;
-use crate::capability::binding_cache::BindingCache;
+use crate::capability::link_cache::LinkCache;
 use crate::Result;
 use crate::{Invocation, WasccEntity};
 use actix::dev::{MessageResponse, ResponseChannel};
@@ -26,7 +26,7 @@ pub(crate) struct MessageBus {
     namespace: Option<String>,
     subscribers: HashMap<WasccEntity, Recipient<Invocation>>,
     rpc_outbound: Option<Addr<RpcClient>>,
-    binding_cache: BindingCache,
+    link_cache: LinkCache,
     claims_cache: HashMap<String, Claims<wascap::jwt::Actor>>,
     key: Option<KeyPair>,
     authorizer: Option<Box<dyn Authorizer>>,
@@ -115,19 +115,19 @@ pub struct PutClaims {
 
 #[derive(Message)]
 #[rtype(result = "Option<String>")]
-pub struct LookupBinding {
+pub struct LookupLink {
     // Capability ID
     pub contract_id: String,
     pub actor: String,
-    pub binding_name: String,
+    pub link_name: String,
 }
 
 #[derive(Message, Clone)]
 #[rtype(result = "Result<()>")]
-pub struct AdvertiseBinding {
+pub struct AdvertiseLink {
     pub contract_id: String,
     pub actor: String,
-    pub binding_name: String,
+    pub link_name: String,
     pub provider_id: String,
     pub values: HashMap<String, String>,
 }
@@ -137,7 +137,7 @@ pub struct AdvertiseBinding {
 pub struct PutLink {
     pub contract_id: String,
     pub actor: String,
-    pub binding_name: String,
+    pub link_name: String,
     pub provider_id: String,
     pub values: HashMap<String, String>,
 }
@@ -149,15 +149,15 @@ pub struct AdvertiseClaims {
 }
 
 #[derive(Message)]
-#[rtype(result = "FindBindingsResponse")]
-pub struct FindBindings {
+#[rtype(result = "FindLinksResponse")]
+pub struct FindLinks {
     pub provider_id: String,
-    pub binding_name: String,
+    pub link_name: String,
 }
 
 #[derive(Debug)]
-pub struct FindBindingsResponse {
-    pub bindings: Vec<(String, HashMap<String, String>)>,
+pub struct FindLinksResponse {
+    pub links: Vec<(String, HashMap<String, String>)>,
 }
 
 #[derive(Message)]
@@ -204,10 +204,10 @@ pub struct EnforceLocalProviderLinks {
 #[rtype(result = "()")]
 pub struct EstablishAllLinks {}
 
-impl<A, M> MessageResponse<A, M> for FindBindingsResponse
+impl<A, M> MessageResponse<A, M> for FindLinksResponse
 where
     A: Actor,
-    M: Message<Result = FindBindingsResponse>,
+    M: Message<Result = FindLinksResponse>,
 {
     fn handle<R: ResponseChannel<M>>(self, _: &mut A::Context, tx: Option<R>) {
         if let Some(tx) = tx {

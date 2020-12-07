@@ -10,9 +10,9 @@ use control_interface::{
     StopActorAck, StopActorCommand, StopProviderAck, StopProviderCommand,
 };
 use control_interface::{StartActorAck, StartActorCommand, StartProviderAck, StartProviderCommand};
+use futures::TryFutureExt;
 use std::collections::HashMap;
 use wascap::jwt::Claims;
-use futures::TryFutureExt;
 
 // TODO: implement actor update
 pub(crate) async fn handle_update_actor(host: &str, msg: &nats::asynk::Message) {}
@@ -249,7 +249,7 @@ pub(crate) async fn handle_stop_provider(host: &str, msg: &nats::asynk::Message)
     if let Err(_) = hc
         .send(StopProvider {
             provider_ref: cmd.provider_ref,
-            binding: cmd.link_name,
+            link_name: cmd.link_name,
             contract_id: cmd.contract_id,
         })
         .await

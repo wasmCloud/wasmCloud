@@ -64,7 +64,7 @@ impl Actor for NativeCapabilityHost {
         /* let cp = ControlInterface::from_hostlocal_registry(&state.kp.public_key());
         cp.do_send(PublishEvent {
             event: ControlEvent::ProviderStopped {
-                binding_name: state.cap.binding_name.to_string(),
+                link_name: state.cap.link_name.to_string(),
                 provider_id: state.cap.claims.subject.to_string(),
                 contract_id: state
                     .cap
@@ -131,7 +131,7 @@ impl Handler<Initialize> for NativeCapabilityHost {
                 .unwrap()
                 .capid
                 .to_string(),
-            binding: state.cap.binding_name.to_string(),
+            link_name: state.cap.link_name.to_string(),
         };
 
         let nativedispatch = ProviderDispatcher::new(
@@ -164,7 +164,7 @@ impl Handler<Initialize> for NativeCapabilityHost {
         });
         let epl = EnforceLocalProviderLinks {
             provider_id: state.cap.claims.subject.to_string(),
-            link_name: state.cap.binding_name.to_string(),
+            link_name: state.cap.link_name.to_string(),
         };
         let _ = block_on(async move {
             // If the target provider for any known links involving this provider
@@ -174,7 +174,7 @@ impl Handler<Initialize> for NativeCapabilityHost {
         let cp = ControlInterface::from_hostlocal_registry(&state.kp.public_key());
         cp.do_send(PublishEvent {
             event: ControlEvent::ProviderStarted {
-                binding_name: state.cap.binding_name.to_string(),
+                link_name: state.cap.link_name.to_string(),
                 provider_id: state.cap.claims.subject.to_string(),
                 contract_id: state
                     .cap
@@ -332,7 +332,7 @@ mod test {
             WasccEntity::Capability {
                 id: "VDHPKGFKDI34Y4RN4PWWZHRYZ6373HYRSNNEM4UTDLLOGO5B37TSVREP".to_string(),
                 contract_id: "wascc:extras".to_string(),
-                binding: "default".to_string(),
+                link_name: "default".to_string(),
             },
             OP_REQUEST_GUID,
             crate::generated::extras::serialize(&req).unwrap(),

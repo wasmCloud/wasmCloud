@@ -5,9 +5,7 @@ use crate::capability::extras::ExtrasCapabilityProvider;
 use crate::capability::native_host::NativeCapabilityHost;
 use crate::dispatch::Invocation;
 use crate::hlreg::HostLocalSystemService;
-use crate::messagebus::{
-    CanInvoke, FindBindings, GetClaims, MessageBus, Unsubscribe, OP_BIND_ACTOR,
-};
+use crate::messagebus::{CanInvoke, FindLinks, GetClaims, MessageBus, Unsubscribe, OP_BIND_ACTOR};
 use crate::middleware::Middleware;
 use crate::{NativeCapability, Result, WasccEntity, SYSTEM_ACTOR};
 use std::collections::HashMap;
@@ -119,7 +117,7 @@ impl Handler<CheckLink> for HostController {
             let prov_entity = WasccEntity::Capability {
                 id: msg.linkdef.provider_id.to_string(),
                 contract_id: msg.linkdef.contract_id,
-                binding: msg.linkdef.link_name,
+                link_name: msg.linkdef.link_name,
             };
             let key = KeyPair::from_seed(&self.kp.as_ref().unwrap().seed().unwrap()).unwrap();
             let values = msg.linkdef.values.clone();
@@ -141,7 +139,7 @@ impl Handler<CheckLink> for HostController {
                     let claims = claims.unwrap();
                     // We use this utils function so that it's guaranteed to be the same
                     // link invocation as if they'd called `set_link` in the host
-                    if let Err(_) = crate::messagebus::utils::generate_binding_invocation(
+                    if let Err(_) = crate::messagebus::utils::generate_link_invocation(
                         &recip,
                         &actor,
                         values,
@@ -214,12 +212,14 @@ impl Handler<StopProvider> for HostController {
         trace!("Stopping provider {} per request", msg.provider_ref);
         // The provider should stop itself once all references to it are gone
         let pk = if let Some(pk) = self.image_refs.remove(&msg.provider_ref) {
-            let _provider = self.providers.remove(&ProviderKey::new(&pk, &msg.binding));
+            let _provider = self
+                .providers
+                .remove(&ProviderKey::new(&pk, &msg.link_name));
             pk
         } else {
             let _provider = self
                 .providers
-                .remove(&ProviderKey::new(&msg.provider_ref, &msg.binding));
+                .remove(&ProviderKey::new(&msg.provider_ref, &msg.link_name));
             msg.provider_ref.to_string()
         };
 
@@ -231,7 +231,7 @@ impl Handler<StopProvider> for HostController {
                         interest: WasccEntity::Capability {
                             id: pk.to_string(),
                             contract_id: msg.contract_id.to_string(),
-                            binding: msg.binding.to_string(),
+                            link_name: msg.link_name.to_string(),
                         },
                     })
                     .await;
@@ -365,7 +365,7 @@ impl Handler<StartProvider> for HostController {
 
     fn handle(&mut self, msg: StartProvider, _ctx: &mut Context<Self>) -> Self::Result {
         let sub = msg.provider.claims.subject.to_string();
-        let key = ProviderKey::new(&sub, &msg.provider.binding_name);
+        let key = ProviderKey::new(&sub, &msg.provider.link_name);
         if self.providers.contains_key(&key) {
             error!("Aborting attempt to start already running provider {}", sub);
             return Box::pin(
@@ -380,7 +380,7 @@ impl Handler<StartProvider> for HostController {
         let mw = self.mw_chain.clone();
         let provider = msg.provider;
         let provider_id = provider.claims.subject.to_string();
-        let binding_name = provider.binding_name.to_string();
+        let link_name = provider.link_name.to_string();
         let imageref = msg.image_ref.clone();
         let ir2 = imageref.clone();
         let pid = provider_id.to_string();
@@ -396,7 +396,7 @@ impl Handler<StartProvider> for HostController {
                     seed.to_string(),
                     imageref.clone(),
                     provider_id.to_string(),
-                    binding_name.to_string(),
+                    link_name.to_string(),
                     auther,
                 )
                 .await
@@ -422,7 +422,7 @@ async fn initialize_provider(
     seed: String,
     image_ref: Option<String>,
     provider_id: String,
-    binding_name: String,
+    link_name: String,
     authorizer: Box<dyn Authorizer>,
 ) -> Result<Addr<NativeCapabilityHost>> {
     let new_provider = SyncArbiter::start(1, || NativeCapabilityHost::new());
@@ -441,33 +441,6 @@ async fn initialize_provider(
     let b = MessageBus::from_hostlocal_registry(&host_id);
 
     Ok(new_provider)
-    /*let bindings = b
-        .send(FindBindings {
-            provider_id: provider_id.to_string(),
-            binding_name: binding_name.to_string(),
-        })
-        .await;
-    if let Ok(bindings) = bindings {
-        trace!("Re-applying link definitions to provider {}", &provider_id);
-        let k = KeyPair::from_seed(&seed)?;
-        let claims = b.send(GetClaims {}).await;
-        if let Ok(c) = claims {
-            reinvoke_bindings(
-                &k,
-                new_provider.clone().recipient(),
-                &provider_id,
-                &capid,
-                &binding_name,
-                bindings.bindings,
-            )
-            .await;
-            Ok(new_provider)
-        } else {
-            Err("Failed to get claims cache from message bus".into())
-        }
-    } else {
-        Err("Failed to obtain list of bindings for re-invoke from message bus".into())
-    } */
 }
 
 pub(crate) fn detect_core_host_labels() -> HashMap<String, String> {
@@ -484,18 +457,18 @@ pub(crate) fn detect_core_host_labels() -> HashMap<String, String> {
     hm
 }
 
-// Examine the bindings cache for anything that applies to this specific provider and, if so, generate a binding
+// Examine the links cache for anything that applies to this specific provider and, if so, generate a link
 // invocation for it and send it to the provider
-async fn reinvoke_bindings(
+async fn reinvoke_links(
     key: &KeyPair,
     target: Recipient<Invocation>,
     provider_id: &str,
     contract_id: &str,
     link_name: &str,
-    existing_bindings: Vec<(String, HashMap<String, String>)>,
+    existing_links: Vec<(String, HashMap<String, String>)>,
 ) {
     let mb = MessageBus::from_hostlocal_registry(&key.public_key());
-    for (actor, vals) in existing_bindings.iter() {
+    for (actor, vals) in existing_links.iter() {
         trace!("Re-invoking bind_actor {}->{}", actor, provider_id);
         let config = crate::generated::core::CapabilityConfiguration {
             module: actor.to_string(),
@@ -507,7 +480,7 @@ async fn reinvoke_bindings(
             WasccEntity::Capability {
                 id: provider_id.to_string(),
                 contract_id: contract_id.to_string(),
-                binding: link_name.to_string(),
+                link_name: link_name.to_string(),
             },
             OP_BIND_ACTOR,
             crate::generated::core::serialize(&config).unwrap(),
@@ -527,12 +500,12 @@ async fn reinvoke_bindings(
                 continue;
             }
         } else {
-            error!("Failed to get authorization decision from message bus, not invoking pre-existing binding");
+            error!("Failed to get authorization decision from message bus, not invoking pre-existing link");
             continue;
         }
         if let Err(_e) = target.clone().send(inv).await {
             error!(
-                "Mailbox failure sending binding re-invoke for {} -> {}",
+                "Mailbox failure sending link re-invoke for {} -> {}",
                 actor, provider_id
             );
         }
