@@ -58,25 +58,8 @@ impl Actor for NativeCapabilityHost {
             //warn!("Stopped a provider host that had no state. Something might be amiss, askew, or perchance awry");
             return;
         }
-
         let mut state = self.state.as_mut().unwrap();
 
-        /* let cp = ControlInterface::from_hostlocal_registry(&state.kp.public_key());
-        cp.do_send(PublishEvent {
-            event: ControlEvent::ProviderStopped {
-                link_name: state.cap.link_name.to_string(),
-                provider_id: state.cap.claims.subject.to_string(),
-                contract_id: state
-                    .cap
-                    .claims
-                    .metadata
-                    .as_ref()
-                    .unwrap()
-                    .capid
-                    .to_string(),
-                reason: TerminationReason::Requested,
-            },
-        }); */
         state.plugin.stop(); // Tell the provider to clean up, dispose of resources, stop threads, etc
         if let Some(l) = state.library.take() {
             let r = l.close();
@@ -99,15 +82,8 @@ impl Handler<Initialize> for NativeCapabilityHost {
                 return Err("Failed to extract plugin from provider".into());
             }
         };
-        /*let descriptor = match get_descriptor(&plugin) {
-            Ok(d) => d,
-            Err(e) => {
-                error!("Failed to get descriptor from provider: {}", e);
-                ctx.stop();
-                return Err("Failed to get descriptor from provider".into());
-            }
-        }; */
-        // Descriptor usage should be deprecated..
+        // NOTE: used to invoke get descriptor here, but we no longer obtain that information
+        // from the provider at runtime, it's obtained from the now-mandatory (0.15.0+) claims
 
         self.state = Some(State {
             cap: msg.cap,
@@ -335,11 +311,11 @@ mod test {
                 link_name: "default".to_string(),
             },
             OP_REQUEST_GUID,
-            crate::generated::extras::serialize(&req).unwrap(),
+            crate::generated::core::serialize(&req).unwrap(),
         );
         let ir = extras.send(inv).await.unwrap();
         assert!(ir.error.is_none());
-        let gen_r: GeneratorResult = crate::generated::extras::deserialize(&ir.msg).unwrap();
+        let gen_r: GeneratorResult = crate::generated::core::deserialize(&ir.msg).unwrap();
         assert!(gen_r.guid.is_some());
     }
 }

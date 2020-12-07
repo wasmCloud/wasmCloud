@@ -1,13 +1,14 @@
 use crate::hlreg::HostLocalSystemService;
 use crate::host_controller::{
-    HostController, QueryActorRunning, QueryHostInventory, QueryProviderRunning, QueryUptime,
-    StartActor, StartProvider, StopActor, StopProvider,
+    AuctionActor, AuctionProvider, HostController, QueryActorRunning, QueryHostInventory,
+    QueryProviderRunning, QueryUptime, StartActor, StartProvider, StopActor, StopProvider,
 };
 use crate::messagebus::{GetClaims, MessageBus, QueryAllLinks};
 use crate::{Actor, NativeCapability};
 use control_interface::{
-    deserialize, serialize, ActorDescription, HostInventory, LinkDefinition, ProviderDescription,
-    StopActorAck, StopActorCommand, StopProviderAck, StopProviderCommand,
+    deserialize, serialize, ActorAuctionAck, ActorAuctionRequest, ActorDescription, HostInventory,
+    LinkDefinition, ProviderAuctionAck, ProviderAuctionRequest, ProviderDescription, StopActorAck,
+    StopActorCommand, StopProviderAck, StopProviderCommand,
 };
 use control_interface::{StartActorAck, StartActorCommand, StartProviderAck, StartProviderCommand};
 use futures::TryFutureExt;
@@ -16,10 +17,65 @@ use wascap::jwt::Claims;
 
 // TODO: implement actor update
 pub(crate) async fn handle_update_actor(host: &str, msg: &nats::asynk::Message) {}
-// TODO: implement provider auction
-pub(crate) async fn handle_provider_auction(_host: &str, _msg: &nats::asynk::Message) {}
-// TODO: implement actor auction
-pub(crate) async fn handle_actor_auction(_host: &str, _msg: &nats::asynk::Message) {}
+
+pub(crate) async fn handle_provider_auction(host: &str, msg: &nats::asynk::Message) {
+    let hc = HostController::from_hostlocal_registry(host);
+    let req = deserialize::<ProviderAuctionRequest>(&msg.data);
+    if req.is_err() {
+        error!("Failed to deserialize provider auction request");
+        return;
+    }
+    let req = req.unwrap();
+    match hc
+        .send(AuctionProvider {
+            constraints: req.constraints.clone(),
+            provider_ref: req.provider_ref.to_string(),
+            link_name: req.link_name.to_string(),
+        })
+        .await
+    {
+        Ok(r) if r => {
+            let ack = ProviderAuctionAck {
+                provider_ref: req.provider_ref.to_string(),
+                link_name: req.link_name.to_string(),
+                host_id: host.to_string(),
+            };
+            let _ = msg.respond(&serialize(ack).unwrap()).await;
+        }
+        _ => {
+            trace!("Auction provider request denied");
+        }
+    }
+}
+
+pub(crate) async fn handle_actor_auction(host: &str, msg: &nats::asynk::Message) {
+    let hc = HostController::from_hostlocal_registry(host);
+    let req = deserialize::<ActorAuctionRequest>(&msg.data);
+    if req.is_err() {
+        error!("Failed to deserialize actor auction request");
+        return;
+    }
+    let req = req.unwrap();
+    match hc
+        .send(AuctionActor {
+            constraints: req.constraints.clone(),
+            actor_ref: req.actor_ref.to_string(),
+        })
+        .await
+    {
+        Ok(r) if r => {
+            let ack = ActorAuctionAck {
+                actor_ref: req.actor_ref,
+                constraints: req.constraints,
+                host_id: host.to_string(),
+            };
+            let _ = msg.respond(&serialize(ack).unwrap()).await;
+        }
+        _ => {
+            trace!("Auction actor request denied");
+        }
+    }
+}
 
 pub(crate) async fn handle_host_inventory_query(host: &str, msg: &nats::asynk::Message) {
     let hc = HostController::from_hostlocal_registry(host);

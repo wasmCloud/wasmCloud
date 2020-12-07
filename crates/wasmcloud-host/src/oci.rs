@@ -48,7 +48,7 @@ pub(crate) async fn fetch_oci_bytes(img: &str, allow_latest: bool) -> Result<Vec
     } else {
         let mut buf = vec![];
         let mut f = std::fs::File::open(cached_file(img))?;
-        f.read_to_end(&mut buf);
+        f.read_to_end(&mut buf)?;
         Ok(buf)
     }
 }

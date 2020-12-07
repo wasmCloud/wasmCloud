@@ -91,6 +91,21 @@ pub(crate) struct QueryUptime;
 #[rtype(result = "HostInventory")]
 pub(crate) struct QueryHostInventory;
 
+#[derive(Message)]
+#[rtype(result = "bool")]
+pub(crate) struct AuctionProvider {
+    pub constraints: HashMap<String, String>,
+    pub provider_ref: String,
+    pub link_name: String,
+}
+
+#[derive(Message)]
+#[rtype(result = "bool")]
+pub(crate) struct AuctionActor {
+    pub constraints: HashMap<String, String>,
+    pub actor_ref: String,
+}
+
 #[derive(Default, Debug, Clone, PartialEq)]
 pub(crate) struct HostInventory {
     pub host_id: String,
