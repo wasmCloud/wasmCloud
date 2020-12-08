@@ -19,7 +19,7 @@ use nkeys::{KeyPair, KeyPairType};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs::{read_to_string, File};
+use std::fs::File;
 use std::io::Read;
 use std::io::Write;
 use std::path::PathBuf;
@@ -73,18 +73,6 @@ struct SignCommand {
     #[structopt(short = "o", long = "output")]
     output: Option<String>,
 
-    // /// Location of key files for signing. Defaults to $WASH_KEYS ($HOME/.wash/keys)
-    // #[structopt(
-    //     short = "d",
-    //     long = "directory",
-    //     env = "WASH_KEYS",
-    //     hide_env_values = true
-    // )]
-    // directory: Option<String>,
-    /// Disables autogeneration of signing keys
-    #[structopt(long = "disable-keygen")]
-    disable_keygen: bool,
-
     #[structopt(flatten)]
     metadata: ActorMetadata,
 }
@@ -107,24 +95,6 @@ enum TokenCommand {
 
 #[derive(Debug, Clone, StructOpt, Serialize, Deserialize)]
 struct GenerateCommon {
-    /// Path to issuer seed key (account). If this flag is not provided, the will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
-    #[structopt(
-        short = "i",
-        long = "issuer",
-        env = "WASH_ISSUER_KEY",
-        hide_env_values = true
-    )]
-    issuer: Option<String>,
-
-    /// Path to subject seed key (service). If this flag is not provided, the will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
-    #[structopt(
-        short = "s",
-        long = "subject",
-        env = "WASH_SUBJECT_KEY",
-        hide_env_values = true
-    )]
-    subject: Option<String>,
-
     /// Location of key files for signing. Defaults to $WASH_KEYS ($HOME/.wash/keys)
     #[structopt(
         short = "d",
@@ -137,9 +107,14 @@ struct GenerateCommon {
     /// Indicates the token expires in the given amount of days. If this option is left off, the token will never expire
     #[structopt(short = "x", long = "expires")]
     expires_in_days: Option<u64>,
+
     /// Period in days that must elapse before this token is valid. If this option is left off, the token will be valid immediately
     #[structopt(short = "b", long = "nbf")]
     not_before_days: Option<u64>,
+
+    /// Disables autogeneration of keys if seed(s) are not provided
+    #[structopt(long = "disable-keygen")]
+    disable_keygen: bool,
 }
 
 #[derive(Debug, Clone, StructOpt)]
@@ -148,17 +123,22 @@ struct OperatorMetadata {
     #[structopt(short = "n", long = "name")]
     name: String,
 
-    /// Seed key paths (first seed establishes self-signed identity, others are used for optional valid signers list)
-    #[structopt(short = "s", long = "seed", name = "seed-path")]
-    key_paths: Vec<String>,
+    /// Path to issuer seed key (self signing operator). If this flag is not provided, the will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
+    #[structopt(
+        short = "i",
+        long = "issuer",
+        env = "WASH_ISSUER_KEY",
+        hide_env_values = true
+    )]
+    issuer: Option<String>,
 
-    /// Indicates the token expires in the given amount of days. If this option is left off, the token will never expire
-    #[structopt(short = "x", long = "expires")]
-    expires_in_days: Option<u64>,
+    /// Additional keys to add to valid signers list
+    /// Can either be seed value or path to seed file
+    #[structopt(short = "a", long = "additional-key", name = "additional-keys")]
+    additional_signing_keys: Option<Vec<String>>,
 
-    /// Period in days that must elapse before this token is valid. If this option is left off, the token will be valid immediately
-    #[structopt(short = "b", long = "nbf")]
-    not_before_days: Option<u64>,
+    #[structopt(flatten)]
+    common: GenerateCommon,
 }
 
 #[derive(Debug, Clone, StructOpt)]
@@ -167,17 +147,31 @@ struct AccountMetadata {
     #[structopt(short = "n", long = "name")]
     name: String,
 
-    /// Seed key paths (first seed is the issuer[operator], second is the subject[account], any additional seeds are used for the valid signers list)
-    #[structopt(short = "s", long = "seed", name = "seed-path")]
-    key_paths: Vec<String>,
+    /// Path to issuer seed key (operator). If this flag is not provided, the will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
+    #[structopt(
+        short = "i",
+        long = "issuer",
+        env = "WASH_ISSUER_KEY",
+        hide_env_values = true
+    )]
+    issuer: Option<String>,
 
-    /// Indicates the token expires in the given amount of days. If this option is left off, the token will never expire
-    #[structopt(short = "x", long = "expires")]
-    expires_in_days: Option<u64>,
+    /// Path to subject seed key (account). If this flag is not provided, the will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
+    #[structopt(
+        short = "s",
+        long = "subject",
+        env = "WASH_SUBJECT_KEY",
+        hide_env_values = true
+    )]
+    subject: Option<String>,
 
-    /// Period in days that must elapse before this token is valid. If this option is left off, the token will be valid immediately
-    #[structopt(short = "b", long = "nbf")]
-    not_before_days: Option<u64>,
+    /// Additional keys to add to valid signers list.
+    /// Can either be seed value or path to seed file
+    #[structopt(short = "a", long = "additional-key", name = "additional-keys")]
+    additional_signing_keys: Option<Vec<String>>,
+
+    #[structopt(flatten)]
+    common: GenerateCommon,
 }
 
 #[derive(Debug, Clone, StructOpt)]
@@ -209,7 +203,7 @@ struct ProviderMetadata {
         env = "WASH_ISSUER_KEY",
         hide_env_values = true
     )]
-    issuer: String,
+    issuer: Option<String>,
 
     /// Path to subject seed key (service). If this flag is not provided, the will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
     #[structopt(
@@ -218,15 +212,10 @@ struct ProviderMetadata {
         env = "WASH_SUBJECT_KEY",
         hide_env_values = true
     )]
-    subject: String,
+    subject: Option<String>,
 
-    /// Indicates the token expires in the given amount of days. If this option is left off, the token will never expire
-    #[structopt(short = "x", long = "expires")]
-    expires_in_days: Option<u64>,
-
-    /// Period in days that must elapse before this token is valid. If this option is left off, the token will be valid immediately
-    #[structopt(short = "b", long = "nbf")]
-    not_before_days: Option<u64>,
+    #[structopt(flatten)]
+    common: GenerateCommon,
 }
 
 #[derive(StructOpt, Debug, Clone, Serialize, Deserialize)]
@@ -274,6 +263,24 @@ struct ActorMetadata {
     #[structopt(short = "v", long = "ver")]
     ver: Option<String>,
 
+    /// Path to issuer seed key (account). If this flag is not provided, the will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
+    #[structopt(
+        short = "i",
+        long = "issuer",
+        env = "WASH_ISSUER_KEY",
+        hide_env_values = true
+    )]
+    issuer: Option<String>,
+
+    /// Path to subject seed key (module). If this flag is not provided, the will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
+    #[structopt(
+        short = "s",
+        long = "subject",
+        env = "WASH_SUBJECT_KEY",
+        hide_env_values = true
+    )]
+    subject: Option<String>,
+
     #[structopt(flatten)]
     common: GenerateCommon,
 }
@@ -295,27 +302,37 @@ fn generate_token(cmd: &TokenCommand) -> Result<(), Box<dyn ::std::error::Error>
     }
 }
 
-fn get_keypair_vec(paths: &[String]) -> Result<Vec<KeyPair>, Box<dyn ::std::error::Error>> {
-    Ok(paths
+fn get_keypair_vec(
+    keys: &[String],
+    keys_dir: Option<String>,
+    keypair_type: KeyPairType,
+    disable_keygen: bool,
+) -> Result<Vec<KeyPair>, Box<dyn ::std::error::Error>> {
+    Ok(keys
         .iter()
-        .map(|p| {
-            let key = read_to_string(p).unwrap();
-            let pair = KeyPair::from_seed(key.trim_end()).unwrap();
-            pair
+        .map(|k| {
+            extract_keypair(
+                Some(k.to_string()),
+                None,
+                keys_dir.clone(),
+                keypair_type.clone(),
+                disable_keygen,
+            )
+            .unwrap()
         })
         .collect())
 }
 
 fn generate_actor(actor: &ActorMetadata) -> Result<(), Box<dyn ::std::error::Error>> {
     let issuer = extract_keypair(
-        actor.common.issuer.clone(),
+        actor.issuer.clone(),
         None,
         actor.common.directory.clone(),
         KeyPairType::Account,
         true,
     )?;
     let subject = extract_keypair(
-        actor.common.subject.clone(),
+        actor.subject.clone(),
         None,
         actor.common.directory.clone(),
         KeyPairType::Module,
@@ -369,67 +386,110 @@ fn generate_actor(actor: &ActorMetadata) -> Result<(), Box<dyn ::std::error::Err
 }
 
 fn generate_operator(operator: &OperatorMetadata) -> Result<(), Box<dyn ::std::error::Error>> {
-    let keys = get_keypair_vec(&operator.key_paths)?;
-    if keys.len() < 1 {
-        return Err("Must supply at least one seed key for operator self-signing".into());
-    }
+    let self_sign_key = extract_keypair(
+        operator.issuer.clone(),
+        Some(operator.name.clone()),
+        operator.common.directory.clone(),
+        KeyPairType::Operator,
+        operator.common.disable_keygen,
+    )?;
+
+    let additional_keys = match operator.additional_signing_keys.clone() {
+        Some(keys) => get_keypair_vec(
+            &keys,
+            operator.common.directory.clone(),
+            KeyPairType::Operator,
+            true,
+        )?,
+        None => vec![],
+    };
+
     let claims: Claims<Operator> = Claims::<Operator>::with_dates(
         operator.name.clone(),
-        keys[0].public_key(),
-        keys[0].public_key(),
-        days_from_now_to_jwt_time(operator.not_before_days),
-        days_from_now_to_jwt_time(operator.expires_in_days),
-        if keys.len() > 1 {
-            keys[1..].iter().map(|k| k.public_key()).collect()
+        self_sign_key.public_key(),
+        self_sign_key.public_key(),
+        days_from_now_to_jwt_time(operator.common.not_before_days),
+        days_from_now_to_jwt_time(operator.common.expires_in_days),
+        if additional_keys.len() > 0 {
+            additional_keys.iter().map(|k| k.public_key()).collect()
         } else {
             vec![]
         },
     );
-    println!("{}", claims.encode(&keys[0])?);
+    println!("{}", claims.encode(&self_sign_key)?);
     Ok(())
 }
 
 fn generate_account(account: &AccountMetadata) -> Result<(), Box<dyn ::std::error::Error>> {
-    let keys = get_keypair_vec(&account.key_paths)?;
-    if keys.len() < 2 {
-        return Err("Must supply at least two keys - one for the issuer, one for subject, and an optional list of additional signers".into());
-    }
+    let issuer = extract_keypair(
+        account.issuer.clone(),
+        Some(account.name.clone()),
+        account.common.directory.clone(),
+        KeyPairType::Operator,
+        account.common.disable_keygen,
+    )?;
+    let subject = extract_keypair(
+        account.subject.clone(),
+        Some(account.name.clone()),
+        account.common.directory.clone(),
+        KeyPairType::Account,
+        account.common.disable_keygen,
+    )?;
+    let additional_keys = match account.additional_signing_keys.clone() {
+        Some(keys) => get_keypair_vec(
+            &keys,
+            account.common.directory.clone(),
+            KeyPairType::Account,
+            true,
+        )?,
+        None => vec![],
+    };
 
     let claims: Claims<Account> = Claims::<Account>::with_dates(
         account.name.clone(),
-        keys[0].public_key(), // issuer
-        keys[1].public_key(), // subject
-        days_from_now_to_jwt_time(account.not_before_days),
-        days_from_now_to_jwt_time(account.expires_in_days),
-        if keys.len() > 2 {
-            keys[2..].iter().map(|k| k.public_key()).collect()
+        issuer.public_key(),
+        subject.public_key(),
+        days_from_now_to_jwt_time(account.common.not_before_days),
+        days_from_now_to_jwt_time(account.common.expires_in_days),
+        if additional_keys.len() > 0 {
+            additional_keys.iter().map(|k| k.public_key()).collect()
         } else {
             vec![]
         },
     );
-    println!("{}", claims.encode(&keys[0])?);
+    println!("{}", claims.encode(&issuer)?);
     Ok(())
 }
 
 fn generate_provider(provider: &ProviderMetadata) -> Result<(), Box<dyn ::std::error::Error>> {
-    let keys = get_keypair_vec(&vec![provider.issuer.clone(), provider.subject.clone()])?;
-    if keys.len() < 2 {
-        return Err("must supply two keys - one for the issuer, one for subject".into());
-    }
+    let issuer = extract_keypair(
+        provider.issuer.clone(),
+        None,
+        provider.common.directory.clone(),
+        KeyPairType::Account,
+        true,
+    )?;
+    let subject = extract_keypair(
+        provider.subject.clone(),
+        None,
+        provider.common.directory.clone(),
+        KeyPairType::Module,
+        true,
+    )?;
 
     let claims: Claims<CapabilityProvider> = Claims::<CapabilityProvider>::with_dates(
         provider.name.clone(),
-        keys[0].public_key(),
-        keys[1].public_key(),
+        issuer.public_key(),
+        subject.public_key(),
         provider.capid.clone(),
         provider.vendor.clone(),
         provider.revision.clone(),
         provider.version.clone(),
         HashMap::new(),
-        days_from_now_to_jwt_time(provider.not_before_days),
-        days_from_now_to_jwt_time(provider.expires_in_days),
+        days_from_now_to_jwt_time(provider.common.not_before_days),
+        days_from_now_to_jwt_time(provider.common.expires_in_days),
     );
-    println!("{}", claims.encode(&keys[0])?);
+    println!("{}", claims.encode(&issuer)?);
     Ok(())
 }
 
@@ -439,18 +499,18 @@ fn sign_file(cmd: &SignCommand) -> Result<(), Box<dyn ::std::error::Error>> {
     sfile.read_to_end(&mut buf).unwrap();
 
     let issuer = extract_keypair(
-        cmd.metadata.common.issuer.clone(),
+        cmd.metadata.issuer.clone(),
         Some(cmd.source.clone()),
         cmd.metadata.common.directory.clone(),
         KeyPairType::Account,
-        cmd.disable_keygen,
+        cmd.metadata.common.disable_keygen,
     )?;
     let subject = extract_keypair(
-        cmd.metadata.common.subject.clone(),
+        cmd.metadata.subject.clone(),
         Some(cmd.source.clone()),
         cmd.metadata.common.directory.clone(),
         KeyPairType::Module,
-        cmd.disable_keygen,
+        cmd.metadata.common.disable_keygen,
     )?;
 
     let mut caps_list = vec![];

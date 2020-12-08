@@ -172,7 +172,7 @@ pub fn extract_keypair(
     input: Option<String>,
     module_path: Option<String>,
     directory: Option<String>,
-    keypair_type: KeyPairType,
+    keygen_type: KeyPairType,
     disable_keygen: bool,
 ) -> Result<KeyPair, Box<dyn std::error::Error>> {
     let seed = if let Some(input_str) = input {
@@ -189,17 +189,21 @@ pub fn extract_keypair(
     } else if let Some(module) = module_path {
         // No seed value provided, attempting to source from provided or default directory
         let dir = determine_directory(directory);
-        let module_name = PathBuf::from(module)
-            .file_stem()
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .to_string();
+        // Account key should be re-used, and will attempt to generate based on the terminal USER
+        let module_name = match keygen_type {
+            KeyPairType::Account => std::env::var("USER").unwrap_or("user".to_string()),
+            _ => PathBuf::from(module)
+                .file_stem()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_string(),
+        };
         let path = format!(
             "{}/{}_{}.nk",
             dir,
             module_name,
-            keypair_type_to_string(keypair_type.clone())
+            keypair_type_to_string(keygen_type.clone())
         );
         match File::open(path.clone()) {
             // Default key found
@@ -210,7 +214,7 @@ pub fn extract_keypair(
             }
             // No default key, generating for user
             Err(_e) if !disable_keygen => {
-                let kp = KeyPair::new(keypair_type);
+                let kp = KeyPair::new(keygen_type);
                 println!("No keypair found in \"{}\".\nWe will generate one for you and place it there.\nIf you'd like to use alternative keys, you can supply them as a flag.\n", path);
                 let seed = kp.seed()?;
                 fs::create_dir_all(Path::new(&path).parent().unwrap())?;
