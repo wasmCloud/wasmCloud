@@ -106,9 +106,43 @@ struct CreateCommand {
 
 #[derive(StructOpt, Debug, Clone)]
 struct InspectCommand {
-    /// Path to provider archive
+    /// Path to provider archive or OCI URL of provider archive
     #[structopt(name = "archive")]
     archive: String,
+
+    /// File output for OCI artifact (if OCI URL is provided for <archive>)
+    #[structopt(short = "o", long = "output")]
+    output: Option<String>,
+
+    /// Digest to verify artifact against (if OCI URL is provided for <archive>)
+    #[structopt(short = "d", long = "digest")]
+    digest: Option<String>,
+
+    /// Allow latest artifact tags (if OCI URL is provided for <archive>)
+    #[structopt(long = "allow-latest")]
+    allow_latest: bool,
+
+    /// OCI username, if omitted anonymous authentication will be used
+    #[structopt(
+        short = "u",
+        long = "user",
+        env = "WASH_REG_USER",
+        hide_env_values = true
+    )]
+    user: Option<String>,
+
+    /// OCI password, if omitted anonymous authentication will be used
+    #[structopt(
+        short = "p",
+        long = "password",
+        env = "WASH_REG_PASSWORD",
+        hide_env_values = true
+    )]
+    password: Option<String>,
+
+    /// Allow insecure (HTTP) registry connections
+    #[structopt(long = "insecure")]
+    insecure: bool,
 }
 
 #[derive(StructOpt, Debug, Clone)]
@@ -222,11 +256,24 @@ fn handle_create(cmd: CreateCommand) -> Result<()> {
 
 /// Loads a provider archive and prints the contents of the claims
 fn handle_inspect(cmd: InspectCommand) -> Result<()> {
-    let mut buf = Vec::new();
-    let mut f = File::open(&cmd.archive)?;
-    f.read_to_end(&mut buf)?;
-
-    let archive = ProviderArchive::try_load(&buf).map_err(|e| format!("{}", e))?;
+    let archive = match File::open(&cmd.archive) {
+        Ok(mut f) => {
+            let mut buf = Vec::new();
+            f.read_to_end(&mut buf)?;
+            ProviderArchive::try_load(&buf).map_err(|e| format!("{}", e))?
+        }
+        Err(_) => {
+            let artifact = crate::reg::pull_artifact(
+                cmd.archive,
+                cmd.digest,
+                cmd.allow_latest,
+                cmd.user,
+                cmd.password,
+                cmd.insecure,
+            )?;
+            ProviderArchive::try_load(&artifact).map_err(|e| format!("{}", e))?
+        }
+    };
     let claims = archive.claims().unwrap();
     let metadata = claims.metadata.unwrap();
 

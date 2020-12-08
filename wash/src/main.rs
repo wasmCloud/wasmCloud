@@ -40,7 +40,7 @@ enum CliCommand {
     #[structopt(name = "claims")]
     Claims(ClaimsCli),
     /// Utilities for generating and managing keys
-    #[structopt(name = "keys")]
+    #[structopt(name = "keys", aliases = &["key"])]
     Keys(KeysCli),
     /// Utilities for interacting with a waSCC Lattice
     #[structopt(name = "lattice")]
