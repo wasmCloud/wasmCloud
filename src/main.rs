@@ -3,8 +3,8 @@ use structopt::StructOpt;
 
 mod claims;
 use claims::ClaimsCli;
-mod lattice;
-use lattice::LatticeCli;
+mod ctl;
+use ctl::CtlCli;
 mod keys;
 use keys::KeysCli;
 mod par;
@@ -13,16 +13,18 @@ mod reg;
 use reg::RegCli;
 mod up;
 use up::UpCli;
+mod util;
 
 /// This renders appropriately with escape characters
 const ASCII: &str = "
-               __    ___   ___   __ _          _ _ 
-__      ____ _/ _\\  / __\\ / __\\ / _\\ |__   ___| | |
-\\ \\ /\\ / / _` \\ \\  / /   / /    \\ \\| '_ \\ / _ \\ | |
- \\ V  V / (_| |\\ \\/ /___/ /___  _\\ \\ | | |  __/ | |
-  \\_/\\_/ \\__,_\\__/\\____/\\____/  \\__/_| |_|\\___|_|_|
+                               _____ _                 _    _____ _          _ _ 
+                              / ____| |               | |  / ____| |        | | |
+ __      ____ _ ___ _ __ ___ | |    | | ___  _   _  __| | | (___ | |__   ___| | |
+ \\ \\ /\\ / / _` / __| '_ ` _ \\| |    | |/ _ \\| | | |/ _` |  \\___ \\| '_ \\ / _ \\ | |
+  \\ V  V / (_| \\__ \\ | | | | | |____| | (_) | |_| | (_| |  ____) | | | |  __/ | |
+   \\_/\\_/ \\__,_|___/_| |_| |_|\\_____|_|\\___/ \\__,_|\\__,_| |_____/|_| |_|\\___|_|_|
 
-A single CLI to handle all of your waSCC tooling needs
+A single CLI to handle all of your wasmCloud tooling needs
 ";
 
 #[derive(Debug, Clone, StructOpt)]
@@ -36,22 +38,22 @@ struct Cli {
 
 #[derive(Debug, Clone, StructOpt)]
 enum CliCommand {
-    /// Utilities for generating and managing JWTs for waSCC Actors
+    /// Generate and manage JWTs for wasmCloud Actors
     #[structopt(name = "claims")]
     Claims(ClaimsCli),
     /// Utilities for generating and managing keys
     #[structopt(name = "keys", aliases = &["key"])]
     Keys(KeysCli),
-    /// Utilities for interacting with a waSCC Lattice
-    #[structopt(name = "lattice")]
-    Lattice(LatticeCli),
-    /// Utilities for creating, inspecting, and modifying capability provider archive files
+    /// Interact with a wasmCloud control interface
+    #[structopt(name = "ctl")]
+    Ctl(CtlCli),
+    /// Create, inspect, and modify capability provider archive files
     #[structopt(name = "par")]
     Par(ParCli),
-    /// Utilities for interacting with OCI compliant registries
+    /// Interact with OCI compliant registries
     #[structopt(name = "reg")]
     Reg(RegCli),
-    /// Utility to launch waSCC REPL environment
+    /// Launch waSCC REPL environment
     #[structopt(name = "up")]
     Up(UpCli),
 }
@@ -62,7 +64,7 @@ fn main() {
 
     let res = match cli.command {
         CliCommand::Keys(keyscli) => keys::handle_command(keyscli),
-        CliCommand::Lattice(latticecli) => lattice::handle_command(latticecli),
+        CliCommand::Ctl(ctlcli) => ctl::handle_command(ctlcli),
         CliCommand::Claims(claimscli) => claims::handle_command(claimscli),
         CliCommand::Par(parcli) => par::handle_command(parcli),
         CliCommand::Reg(regcli) => reg::handle_command(regcli),

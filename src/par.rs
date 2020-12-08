@@ -1,5 +1,6 @@
 extern crate provider_archive;
 use crate::keys::extract_keypair;
+use crate::util::convert_error;
 use nkeys::KeyPairType;
 use provider_archive::*;
 use std::fs::File;
@@ -228,8 +229,7 @@ fn handle_create(cmd: CreateCommand) -> Result<()> {
         cmd.disable_keygen,
     )?;
 
-    par.add_library(&cmd.arch, &lib)
-        .map_err(|e| format!("{}", e))?;
+    par.add_library(&cmd.arch, &lib).map_err(convert_error)?;
 
     let output = match cmd.output {
         Some(path) => path,
@@ -327,7 +327,7 @@ fn handle_insert(cmd: InsertCommand) -> Result<()> {
     let mut f = File::open(cmd.archive.clone())?;
     f.read_to_end(&mut buf)?;
 
-    let mut par = ProviderArchive::try_load(&buf).map_err(|e| format!("{}", e))?;
+    let mut par = ProviderArchive::try_load(&buf).map_err(convert_error)?;
 
     let issuer = extract_keypair(
         cmd.issuer,
@@ -348,16 +348,10 @@ fn handle_insert(cmd: InsertCommand) -> Result<()> {
     let mut lib = Vec::new();
     f.read_to_end(&mut lib)?;
 
-    par.add_library(&cmd.arch, &lib)
-        .map_err(|e| format!("{}", e))?;
+    par.add_library(&cmd.arch, &lib).map_err(convert_error)?;
 
-    par.write(
-        &cmd.archive,
-        &issuer,
-        &subject,
-        is_compressed(&buf).map_err(|e| format!("{}", e))?,
-    )
-    .map_err(|e| format!("{}", e))?;
+    par.write(&cmd.archive, &issuer, &subject, is_compressed(&buf)?)
+        .map_err(convert_error)?;
 
     Ok(())
 }
