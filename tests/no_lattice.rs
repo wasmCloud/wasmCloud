@@ -1,5 +1,6 @@
 use crate::common::{await_actor_count, await_provider_count, gen_kvcounter_host, par_from_file};
 use crate::generated::http::{deserialize, serialize, Request, Response};
+use actix_rt::time::delay_for;
 use std::collections::HashMap;
 use std::time::Duration;
 use wasmcloud_host::Result;
@@ -86,7 +87,7 @@ pub async fn kvcounter_start_stop() -> Result<()> {
         .await?;
     await_provider_count(&h, 2, Duration::from_millis(50), 3).await?;
 
-    ::std::thread::sleep(Duration::from_millis(50)); // give the web server enough time to let go of the port
+    delay_for(Duration::from_millis(50)); // give the web server enough time to let go of the port
 
     let websrv = NativeCapability::from_archive(&arc2, None)?;
     h.start_native_capability(websrv).await?;

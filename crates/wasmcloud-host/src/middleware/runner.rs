@@ -3,48 +3,6 @@ use crate::middleware::Middleware;
 use crate::Result;
 use actix::Recipient;
 
-/// Execute a full chain of middleware, terminating at a capability provider
-pub(crate) async fn invoke_capability(
-    middlewares: &[Box<dyn Middleware>],
-    inv: Invocation,
-    target: Recipient<Invocation>,
-) -> Result<InvocationResponse> {
-    // PRE
-    if let Err(e) = run_capability_pre_invoke(&inv, &middlewares) {
-        error!("Middleware pre-invoke failure: {}", e);
-        return Err(e);
-    } else {
-        match target.send(inv.clone()).await {
-            Ok(ir) => {
-                // POST
-                run_capability_post_invoke(ir, middlewares)
-            }
-            Err(_e) => Err("Actor mailbox failure during middleware execution".into()),
-        }
-    }
-}
-
-/// Execute a full chain of middleware, termianting at an actor
-pub(crate) async fn invoke_actor(
-    middlewares: &[Box<dyn Middleware>],
-    inv: Invocation,
-    target: Recipient<Invocation>,
-) -> Result<InvocationResponse> {
-    // PRE
-    if let Err(e) = run_actor_pre_invoke(&inv, middlewares) {
-        error!("Middleware pre-invoke failure: {}", e);
-        return Err(e);
-    } else {
-        match target.send(inv.clone()).await {
-            Ok(ir) => {
-                // POST
-                run_actor_post_invoke(ir, middlewares)
-            }
-            Err(_e) => Err("Actor mailbox failure during middleware execution".into()),
-        }
-    }
-}
-
 /// Executes a chain of pre-invoke handlers for a capability
 pub(crate) fn run_capability_pre_invoke(
     inv: &Invocation,

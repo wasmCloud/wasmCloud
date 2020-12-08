@@ -58,6 +58,8 @@ wascc-httpsrv = { git = "https://github.com/wascc/capability-providers", branch 
 wascc-redis = { git = "https://github.com/wascc/capability-providers", branch = "main", features = ["static_plugin"] }
 control-interface = { path = "./crates/control-interface"}
 ctor = "0.1.16"
+wascap = "0.5.1"
+futures = "0.3.6"
 
 [workspace]
 members = [

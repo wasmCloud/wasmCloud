@@ -1,7 +1,6 @@
 extern crate rmp_serde as rmps;
-use rmps::{Deserializer, Serializer};
+
 use serde::{Deserialize, Serialize};
-use std::io::Cursor;
 
 #[derive(Debug, PartialEq, Deserialize, Serialize, Default, Clone)]
 pub struct ProviderAuctionRequest {

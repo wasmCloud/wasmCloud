@@ -5,13 +5,13 @@ use crate::capability::extras::ExtrasCapabilityProvider;
 use crate::capability::native_host::NativeCapabilityHost;
 use crate::dispatch::Invocation;
 use crate::hlreg::HostLocalSystemService;
-use crate::messagebus::{CanInvoke, FindLinks, GetClaims, MessageBus, Unsubscribe, OP_BIND_ACTOR};
+use crate::messagebus::{CanInvoke, GetClaims, MessageBus, Unsubscribe, OP_BIND_ACTOR};
 use crate::middleware::Middleware;
 use crate::{NativeCapability, Result, WasccEntity, SYSTEM_ACTOR};
 use std::collections::HashMap;
 
 use std::time::Instant;
-use wascap::jwt::Claims;
+
 use wascap::prelude::KeyPair;
 
 #[derive(Debug, PartialEq, Clone, Eq, Hash)]
@@ -38,6 +38,7 @@ pub struct HostController {
     authorizer: Option<Box<dyn Authorizer>>,
     image_refs: HashMap<String, String>,
     started: Instant,
+    allow_live_updates: bool,
 }
 
 impl Default for HostController {
@@ -51,6 +52,7 @@ impl Default for HostController {
             authorizer: None,
             image_refs: HashMap::new(),
             started: Instant::now(),
+            allow_live_updates: false,
         }
     }
 }
@@ -128,6 +130,16 @@ impl Handler<QueryActorRunning> for HostController {
 
     fn handle(&mut self, msg: QueryActorRunning, _ctx: &mut Context<Self>) -> Self::Result {
         self.image_refs.contains_key(&msg.actor_ref) || self.actors.contains_key(&msg.actor_ref)
+    }
+}
+
+// This returns the messaging address of the actor host that corresponds to a -public key-
+// this handler does NOT examine image refs
+impl Handler<GetRunningActor> for HostController {
+    type Result = Option<Addr<ActorHost>>;
+
+    fn handle(&mut self, msg: GetRunningActor, _ctx: &mut Context<Self>) -> Self::Result {
+        self.actors.get(&msg.actor_id).cloned()
     }
 }
 
@@ -317,7 +329,11 @@ impl Handler<Initialize> for HostController {
         let key = ProviderKey::new(&pk, "default");
         self.providers.insert(key, extras); // can't let this provider go out of scope, or the actix actor will stop
         self.kp = Some(msg.kp);
-        info!("Host controller initialized - {}", host_id);
+        self.allow_live_updates = msg.allow_live_updates;
+        info!(
+            "Host controller initialized - {} (Hot Updating - {})",
+            host_id, self.allow_live_updates
+        );
 
         trace!("Host labels: {:?}", &self.host_labels);
     }
@@ -346,11 +362,11 @@ impl Handler<StartActor> for HostController {
         }
         let init = crate::actors::Initialize {
             actor_bytes: msg.actor.bytes.clone(),
-            wasi: None,
             mw_chain: self.mw_chain.clone(),
             signing_seed: self.kp.as_ref().unwrap().seed().unwrap(),
             image_ref: msg.image_ref.clone(),
             host_id: self.kp.as_ref().unwrap().public_key(),
+            can_update: self.allow_live_updates,
         };
 
         let new_actor = SyncArbiter::start(1, move || ActorHost::default());
@@ -360,16 +376,19 @@ impl Handler<StartActor> for HostController {
             async move { new_actor.send(init).await }
                 .into_actor(self)
                 .map(move |res, act, _ctx| match res {
-                    Ok(_) => {
-                        if let Some(imageref) = msg.image_ref {
-                            act.image_refs.insert(imageref, msg.actor.public_key());
+                    Ok(r) => match r {
+                        Ok(_) => {
+                            if let Some(imageref) = msg.image_ref {
+                                act.image_refs.insert(imageref, msg.actor.public_key());
+                            }
+                            act.actors.insert(msg.actor.public_key(), na);
+                            Ok(())
                         }
-                        act.actors.insert(msg.actor.public_key(), na);
-                        Ok(())
-                    }
+                        Err(e) => Err(format!("Failed to initialize actor: {}", e).into()),
+                    },
                     Err(_e) => {
-                        error!("Failed to initialize actor");
-                        Err("Failed to initialize actor".into())
+                        error!("Failed to initialize actor - mailbox error");
+                        Err("Failed to initialize actor - mailbox error".into())
                     }
                 }),
         )
@@ -384,7 +403,7 @@ impl Handler<QueryHostInventory> for HostController {
             actors: self
                 .actors
                 .iter()
-                .map(|(k, v)| ActorSummary {
+                .map(|(k, _v)| ActorSummary {
                     id: k.to_string(),
                     image_ref: find_imageref(k, &self.image_refs),
                 })
@@ -393,7 +412,7 @@ impl Handler<QueryHostInventory> for HostController {
             providers: self
                 .providers
                 .iter()
-                .map(|(k, v)| ProviderSummary {
+                .map(|(k, _v)| ProviderSummary {
                     image_ref: find_imageref(&k.id, &self.image_refs),
                     id: k.id.to_string(),
                     link_name: k.link_name.to_string(),
@@ -407,7 +426,7 @@ impl Handler<QueryHostInventory> for HostController {
 fn find_imageref(target: &str, image_refs: &HashMap<String, String>) -> Option<String> {
     image_refs
         .iter()
-        .find(|(ir, pk)| &pk.to_string() == target)
+        .find(|(_ir, pk)| &pk.to_string() == target)
         .map(|(ir, _pk)| ir.to_string())
 }
 
@@ -472,9 +491,9 @@ async fn initialize_provider(
     host_id: String,
     seed: String,
     image_ref: Option<String>,
-    provider_id: String,
-    link_name: String,
-    authorizer: Box<dyn Authorizer>,
+    _provider_id: String,
+    _link_name: String,
+    _authorizer: Box<dyn Authorizer>,
 ) -> Result<Addr<NativeCapabilityHost>> {
     let new_provider = SyncArbiter::start(1, || NativeCapabilityHost::new());
     let im = crate::capability::native_host::Initialize {
@@ -484,12 +503,12 @@ async fn initialize_provider(
         image_ref: image_ref.clone(),
     };
     let entity = new_provider.send(im).await??;
-    let capid = match entity {
+    let _capid = match entity {
         WasccEntity::Capability { contract_id, .. } => contract_id,
         _ => return Err("Creating provider returned the wrong entity type!".into()),
     };
 
-    let b = MessageBus::from_hostlocal_registry(&host_id);
+    let _b = MessageBus::from_hostlocal_registry(&host_id);
 
     Ok(new_provider)
 }
@@ -506,59 +525,4 @@ pub(crate) fn detect_core_host_labels() -> HashMap<String, String> {
         std::env::consts::FAMILY.to_string(),
     );
     hm
-}
-
-// Examine the links cache for anything that applies to this specific provider and, if so, generate a link
-// invocation for it and send it to the provider
-async fn reinvoke_links(
-    key: &KeyPair,
-    target: Recipient<Invocation>,
-    provider_id: &str,
-    contract_id: &str,
-    link_name: &str,
-    existing_links: Vec<(String, HashMap<String, String>)>,
-) {
-    let mb = MessageBus::from_hostlocal_registry(&key.public_key());
-    for (actor, vals) in existing_links.iter() {
-        trace!("Re-invoking bind_actor {}->{}", actor, provider_id);
-        let config = crate::generated::core::CapabilityConfiguration {
-            module: actor.to_string(),
-            values: vals.clone(),
-        };
-        let inv = Invocation::new(
-            key,
-            WasccEntity::Actor(SYSTEM_ACTOR.to_string()),
-            WasccEntity::Capability {
-                id: provider_id.to_string(),
-                contract_id: contract_id.to_string(),
-                link_name: link_name.to_string(),
-            },
-            OP_BIND_ACTOR,
-            crate::generated::core::serialize(&config).unwrap(),
-        );
-        let auth = mb
-            .send(CanInvoke {
-                actor: actor.to_string(),
-                contract_id: contract_id.to_string(),
-                operation: OP_BIND_ACTOR.to_string(),
-                provider_id: provider_id.to_string(),
-                link_name: link_name.to_string(),
-            })
-            .await;
-        if let Ok(a) = auth {
-            if !a {
-                error!("Attempt to re-establish link for unauthorized actor {} to {}. Not invoking link", actor, contract_id);
-                continue;
-            }
-        } else {
-            error!("Failed to get authorization decision from message bus, not invoking pre-existing link");
-            continue;
-        }
-        if let Err(_e) = target.clone().send(inv).await {
-            error!(
-                "Mailbox failure sending link re-invoke for {} -> {}",
-                actor, provider_id
-            );
-        }
-    }
 }

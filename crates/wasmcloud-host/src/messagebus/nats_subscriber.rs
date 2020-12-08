@@ -1,4 +1,3 @@
-use crate::{InvocationResponse, WasccEntity};
 use actix::prelude::*;
 use futures::StreamExt;
 
@@ -24,7 +23,6 @@ pub(crate) struct NatsSubscriber {
 
 struct SubscriberState {
     receiver: Recipient<NatsMessage>,
-    subject: String,
 }
 
 impl Actor for NatsSubscriber {
@@ -43,7 +41,6 @@ impl Handler<Initialize> for NatsSubscriber {
     fn handle(&mut self, msg: Initialize, _ctx: &mut Self::Context) -> Self::Result {
         let state = SubscriberState {
             receiver: msg.receiver,
-            subject: msg.subject.to_string(),
         };
         self.state = Some(state);
         let nc = msg.nc;

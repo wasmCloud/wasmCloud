@@ -1,6 +1,6 @@
 use crate::capability::native::NativeCapability;
 use crate::control_interface::ctlactor::{ControlInterface, PublishEvent};
-use crate::control_interface::events::TerminationReason;
+
 use crate::dispatch::{Invocation, InvocationResponse, ProviderDispatcher, WasccEntity};
 use crate::hlreg::HostLocalSystemService;
 use crate::messagebus::{EnforceLocalProviderLinks, MessageBus, Subscribe};
@@ -58,12 +58,12 @@ impl Actor for NativeCapabilityHost {
             //warn!("Stopped a provider host that had no state. Something might be amiss, askew, or perchance awry");
             return;
         }
-        let mut state = self.state.as_mut().unwrap();
+        let state = self.state.as_mut().unwrap();
 
         state.plugin.stop(); // Tell the provider to clean up, dispose of resources, stop threads, etc
         if let Some(l) = state.library.take() {
             let r = l.close();
-            if let Err(e) = r {
+            if let Err(_e) = r {
                 //
             }
         }
@@ -253,17 +253,6 @@ fn extrude(
         Ok((Some(library), plugin))
     } else {
         Ok((None, cap.plugin.clone().unwrap()))
-    }
-}
-
-fn get_descriptor(plugin: &Box<dyn CapabilityProvider>) -> Result<CapabilityDescriptor> {
-    if let Ok(v) = plugin.handle_call(SYSTEM_ACTOR, OP_GET_CAPABILITY_DESCRIPTOR, &[]) {
-        match crate::generated::core::deserialize::<CapabilityDescriptor>(&v) {
-            Ok(c) => Ok(c),
-            Err(e) => Err(format!("Failed to deserialize descriptor: {}", e).into()),
-        }
-    } else {
-        Err("Failed to invoke GetCapabilityDescriptor".into())
     }
 }
 

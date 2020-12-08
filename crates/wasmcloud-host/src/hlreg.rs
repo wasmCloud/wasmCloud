@@ -38,8 +38,3 @@ pub(crate) trait HostLocalSystemService: SystemService {
         })
     }
 }
-
-pub(crate) fn purge() {
-    let mut sreg = SREG.lock();
-    sreg.clear();
-}

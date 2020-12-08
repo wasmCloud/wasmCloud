@@ -19,6 +19,7 @@ async fn main() -> Result<()> {
     let host = HostBuilder::new()
         .with_rpc_client(nc_rpc)
         .with_control_client(nc_control)
+        .enable_live_updates()
         .build();
     match host.start().await {
         Ok(_) => {

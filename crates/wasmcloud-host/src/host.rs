@@ -5,7 +5,7 @@ use actix::prelude::*;
 use crate::auth::Authorizer;
 
 use crate::control_interface::ctlactor::{ControlInterface, ControlOptions, PublishEvent};
-use crate::control_interface::events::TerminationReason;
+
 use crate::dispatch::Invocation;
 use crate::hlreg::HostLocalSystemService;
 use crate::host_controller::{
@@ -30,6 +30,7 @@ pub struct HostBuilder {
     allow_latest: bool,
     rpc_client: Option<nats::asynk::Connection>,
     cplane_client: Option<nats::asynk::Connection>,
+    allow_live_update: bool,
 }
 
 impl HostBuilder {
@@ -42,6 +43,14 @@ impl HostBuilder {
             rpc_timeout: Duration::from_secs(2),
             rpc_client: None,
             cplane_client: None,
+            allow_live_update: false,
+        }
+    }
+
+    pub fn enable_live_updates(self) -> HostBuilder {
+        HostBuilder {
+            allow_live_update: true,
+            ..self
         }
     }
 
@@ -111,6 +120,7 @@ impl HostBuilder {
             namespace: self.namespace,
             rpc_client: self.rpc_client,
             cplane_client: self.cplane_client,
+            allow_live_updates: self.allow_live_update,
         }
     }
 }
@@ -125,6 +135,7 @@ pub struct Host {
     rpc_timeout: Duration,
     cplane_client: Option<nats::asynk::Connection>,
     rpc_client: Option<nats::asynk::Connection>,
+    allow_live_updates: bool,
 }
 
 impl Host {
@@ -148,6 +159,7 @@ impl Host {
             labels: self.labels.clone(),
             auth: self.authorizer.clone(),
             kp: KeyPair::from_seed(&kp.seed()?)?,
+            allow_live_updates: self.allow_live_updates,
         })
         .await?;
         *self.id.borrow_mut() = kp.public_key();
