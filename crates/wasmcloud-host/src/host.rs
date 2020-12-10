@@ -1,4 +1,7 @@
-use crate::messagebus::{AdvertiseLink, MessageBus};
+use crate::{
+    messagebus::{AdvertiseLink, MessageBus},
+    InvocationResponse,
+};
 
 use actix::prelude::*;
 
@@ -301,8 +304,13 @@ impl Host {
             msg.to_vec(),
         );
         let b = MessageBus::from_hostlocal_registry(&self.id.borrow());
-        let ir = b.send(inv).await?;
-        Ok(ir.msg)
+        let ir: InvocationResponse = b.send(inv).await?;
+
+        if let Some(e) = ir.error {
+            Err(format!("Invocation failure: {}", e).into())
+        } else {
+            Ok(ir.msg)
+        }
     }
 
     pub async fn set_link(

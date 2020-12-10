@@ -38,11 +38,11 @@ maintenance = { status = "actively-developed" }
 [dependencies]
 wapc = { version = "0.10.1" }
 log = "0.4.11"
-env_logger = "0.7.1"
-anyhow = "1.0.33"
+env_logger = "0.8.2"
+anyhow = "1.0.34"
 wasmcloud-host = { path = "crates/wasmcloud-host" }
 actix-rt = "1.1.1"
-nats = "0.8.5"
+nats = "0.8.6"
 
 [dev-dependencies]
 rmp-serde = "0.14.4"
