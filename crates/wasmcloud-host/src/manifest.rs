@@ -191,7 +191,7 @@ mod test {
                     link_name: Some("default".to_string()),
                 },
             ],
-            links: vec![linkEntry {
+            links: vec![LinkEntry {
                 actor: "a".to_string(),
                 contract_id: "wascc:one".to_string(),
                 provider_id: "Vxxxone".to_string(),

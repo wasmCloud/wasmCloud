@@ -1,15 +1,15 @@
 use crate::common::{
-    await_actor_count, await_provider_count, par_from_file, HTTPSRV_OCI, KVCOUNTER_OCI, NATS_OCI,
-    REDIS_OCI,
+    await_actor_count, await_provider_count, HTTPSRV_OCI, KVCOUNTER_OCI, NATS_OCI, REDIS_OCI,
 };
 use ::control_interface::Client;
 use actix_rt::time::delay_for;
 use std::collections::HashMap;
-use std::thread;
+
 use std::time::Duration;
-use wascc_redis::RedisKVProvider;
+
+use wascap::prelude::KeyPair;
+use wasmcloud_host::HostBuilder;
 use wasmcloud_host::Result;
-use wasmcloud_host::{HostBuilder, NativeCapability};
 
 pub(crate) async fn basics() -> Result<()> {
     let nc = nats::asynk::connect("0.0.0.0:4222").await?;
@@ -163,13 +163,13 @@ pub(crate) async fn auctions() -> Result<()> {
 
     // auction with no requirements
     let kvack = ctl_client
-        .perform_actor_auction(KVCOUNTER_OCI, HashMap::new(), Duration::from_millis(200))
+        .perform_actor_auction(KVCOUNTER_OCI, HashMap::new(), Duration::from_secs(1))
         .await?;
     assert_eq!(2, kvack.len());
 
     // auction the KV counter with a constraint
     let kvack = ctl_client
-        .perform_actor_auction(KVCOUNTER_OCI, kvrequirements(), Duration::from_millis(200))
+        .perform_actor_auction(KVCOUNTER_OCI, kvrequirements(), Duration::from_secs(1))
         .await?;
     assert_eq!(1, kvack.len());
     assert_eq!(kvack[0].host_id, hid);
@@ -228,4 +228,18 @@ fn webrequirements() -> HashMap<String, String> {
     let mut hm = HashMap::new();
     hm.insert("web-friendly".to_string(), "yes".to_string());
     hm
+}
+
+fn embed_revision(source: &[u8], kp: &KeyPair, rev: i32, subject: &str, issuer: &str) -> Vec<u8> {
+    let claims = wascap::jwt::Claims::<wascap::jwt::Actor>::new(
+        "Testy McTestFace".to_string(),
+        issuer.to_string(),
+        subject.to_string(),
+        Some(vec!["test:testo".to_string()]),
+        None,
+        false,
+        Some(rev),
+        None,
+    );
+    wascap::wasm::embed_claims(source, &claims, kp).unwrap()
 }

@@ -106,6 +106,35 @@ impl Client {
         }
     }
 
+    /// Issue a command to a host instructing that it replace an existing actor (indicated by its
+    /// public key) with a new actor indicated by an OCI image reference. The host will acknowledge
+    /// this request as soon as it verifies that the target actor is running. This acknowledgement
+    /// occurs **before** the new bytes are downloaded. Live-updating an actor can take a long
+    /// time and control clients cannot block waiting for a reply that could come several seconds
+    /// later. If you need to verify that the actor has been updated, you will want to set up a
+    /// listener for the appropriate **ControlEvent** which will be published on the control events
+    /// channel in JSON
+    pub async fn update_actor(
+        &self,
+        host_id: &str,
+        existing_actor_id: &str,
+        new_actor_ref: &str,
+    ) -> Result<UpdateActorAck> {
+        let subject = broker::commands::update_actor(&self.nsprefix, host_id);
+        let bytes = serialize(UpdateActorCommand {
+            host_id: host_id.to_string(),
+            actor_id: existing_actor_id.to_string(),
+            new_actor_ref: new_actor_ref.to_string(),
+        })?;
+        match actix_rt::time::timeout(self.timeout, self.nc.request(&subject, &bytes)).await? {
+            Ok(msg) => {
+                let ack: UpdateActorAck = deserialize(&msg.data)?;
+                Ok(ack)
+            }
+            Err(e) => Err(format!("Did not receive update actor acknowledgement: {}", e).into()),
+        }
+    }
+
     pub async fn start_provider(
         &self,
         host_id: &str,
@@ -186,7 +215,7 @@ pub fn serialize<T>(
 where
     T: Serialize,
 {
-    serde_json::to_vec(&item).map_err(|e| "JSON serialization failure".into())
+    serde_json::to_vec(&item).map_err(|_e| "JSON serialization failure".into())
 }
 
 /// The standard function for de-serializing codec structs from a format suitable
@@ -195,5 +224,5 @@ where
 pub fn deserialize<'de, T: Deserialize<'de>>(
     buf: &'de [u8],
 ) -> ::std::result::Result<T, Box<dyn std::error::Error + Send + Sync>> {
-    serde_json::from_slice(buf).map_err(|e| "JSON deserialization failure".into())
+    serde_json::from_slice(buf).map_err(|_e| "JSON deserialization failure".into())
 }
