@@ -23,20 +23,20 @@ actix = "0.10.0"
 actix-rt = "1.1.1"
 wascap = "0.5.1"
 wapc = "0.10.1"
-libloading = "0.6.4"
+libloading = "0.6.6"
 log = "0.4.11"
 once_cell = "1.5.2"
-parking_lot = "0.11.0"
-serde = { version = "1.0.117", features = ["derive"] }
+parking_lot = "0.11.1"
+serde = { version = "1.0.118", features = ["derive"] }
 serde_json = "1.0.59"
 serde_yaml = "0.8.14"
 uuid = {version = "0.8", features  = ["serde", "v4"]}
-ring = "0.16.15"
-data-encoding = "2.3.0"
-tokio = { version = "0.3.0", features = ["rt"] }
+ring = "0.16.19"
+data-encoding = "2.3.1"
+tokio = { version = "0.3.5", features = ["rt"] }
 futures = "0.3.6"
 crossbeam-channel = "0.5.0"
-rmp-serde = "0.14.4"
+rmp-serde = "0.15.0"
 serde_bytes = "0.11.5"
 provider-archive ="0.3.0"
 lazy_static = "1.4.0"
@@ -45,7 +45,7 @@ oci-distribution = "0.4.0"
 rand = "0.7.3"
 chrono = "0.4.19"
 envmnt = "0.8.4"
-nats = "0.8.5"
+nats = "0.8.6"
 control-interface = { path = "../control-interface" }
 
 wasm3-provider = { version = "0.0.2", optional = true}

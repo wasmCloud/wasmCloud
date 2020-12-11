@@ -1,13 +1,16 @@
 pub mod broker;
 mod generated;
+mod inv;
 
 pub use crate::generated::ctliface::*;
 use actix_rt::time::delay_for;
 use futures::stream::StreamExt;
 use futures::TryStreamExt;
+use inv::{Invocation, InvocationResponse, WasccEntity};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
+use wascap::prelude::KeyPair;
 
 type Result<T> = ::std::result::Result<T, Box<dyn ::std::error::Error + Send + Sync>>;
 
@@ -15,6 +18,7 @@ pub struct Client {
     nc: nats::asynk::Connection,
     nsprefix: Option<String>,
     timeout: Duration,
+    key: KeyPair,
 }
 
 impl Client {
@@ -23,6 +27,7 @@ impl Client {
             nc,
             nsprefix,
             timeout,
+            key: KeyPair::new_server(),
         }
     }
 
@@ -103,6 +108,29 @@ impl Client {
                 Ok(ack)
             }
             Err(e) => Err(format!("Did not receive start actor acknowledgement: {}", e).into()),
+        }
+    }
+
+    pub async fn call_actor(
+        &self,
+        target_id: &str,
+        operation: &str,
+        data: &[u8],
+    ) -> Result<InvocationResponse> {
+        let subject = broker::rpc::call_actor(&self.nsprefix, target_id);
+        let bytes = crate::generated::ctliface::serialize(Invocation::new(
+            &self.key,
+            WasccEntity::Actor("system".to_string()),
+            WasccEntity::Actor(target_id.to_string()),
+            operation,
+            data.to_vec(),
+        ))?;
+        match actix_rt::time::timeout(self.timeout, self.nc.request(&subject, &bytes)).await? {
+            Ok(msg) => {
+                let resp: InvocationResponse = crate::generated::ctliface::deserialize(&msg.data)?;
+                Ok(resp)
+            }
+            Err(e) => Err(format!("Actor RPC call did not succeed: {}", e).into()),
         }
     }
 

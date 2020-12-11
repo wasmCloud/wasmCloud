@@ -5,6 +5,13 @@ pub fn prefix(nsprefix: &Option<String>) -> String {
     )
 }
 
+pub fn rpc_prefix(nsprefix: &Option<String>) -> String {
+    format!(
+        "wasmbus.rpc.{}",
+        nsprefix.as_ref().unwrap_or(&"default".to_string())
+    )
+}
+
 pub fn control_event(nsprefix: &Option<String>) -> String {
     format!("{}.events", prefix(nsprefix))
 }
@@ -15,6 +22,14 @@ pub fn provider_auction_subject(nsprefix: &Option<String>) -> String {
 
 pub fn actor_auction_subject(nsprefix: &Option<String>) -> String {
     format!("{}.auction.actor", prefix(nsprefix))
+}
+
+pub mod rpc {
+    use super::rpc_prefix;
+
+    pub fn call_actor(nsprefix: &Option<String>, actor: &str) -> String {
+        format!("{}.{}", rpc_prefix(nsprefix), actor)
+    }
 }
 
 pub mod commands {

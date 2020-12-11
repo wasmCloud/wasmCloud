@@ -5,10 +5,10 @@ use std::io::Read;
 use std::time::Duration;
 use wasmcloud_host::{Actor, Host, HostBuilder, NativeCapability, Result};
 
-pub const REDIS_OCI: &str = "wascc.azurecr.io/redis:v0.9.1";
-pub const HTTPSRV_OCI: &str = "wascc.azurecr.io/httpsrv:v1";
+pub const REDIS_OCI: &str = "wascc.azurecr.io/redis:v0.9.2";
+pub const HTTPSRV_OCI: &str = "wascc.azurecr.io/httpsrv:v0.9.2";
 pub const NATS_OCI: &str = "wascc.azurecr.io/nats:v0.9.1";
-pub const KVCOUNTER_OCI: &str = "wascc.azurecr.io/kvcounter:v1";
+pub const KVCOUNTER_OCI: &str = "wascc.azurecr.io/kvcounter:v0.1.1";
 
 pub async fn await_actor_count(
     h: &Host,

@@ -57,6 +57,11 @@ async fn control_basics() -> Result<()> {
 }
 
 #[actix_rt::test]
-async fn auctions() -> Result<()> {
+async fn control_auctions() -> Result<()> {
     control::auctions().await
+}
+
+#[actix_rt::test]
+async fn control_calltest() -> Result<()> {
+    control::calltest().await
 }
