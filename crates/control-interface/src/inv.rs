@@ -6,7 +6,8 @@
 // new "reason to change" now for three crates and produces a "dependency as a liability"
 //
 // Therefore, it's easier to simply create copies of the data types since we only need them to be
-// able to push them on the wire.
+// able to push them on the wire. The "real" Invocation and InvocationResponse types are in the wasmcloud-host
+// crate in the dispatch module because we need to implement other traits on those types.
 
 use crate::Result;
 use data_encoding::HEXUPPER;
