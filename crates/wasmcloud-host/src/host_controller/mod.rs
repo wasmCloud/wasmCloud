@@ -1,8 +1,9 @@
 use crate::actors::{ActorHost, WasccActor};
 use crate::auth::Authorizer;
-use crate::messagebus::rpc_client::LinkDefinition;
+
 use crate::{NativeCapability, Result};
 use actix::prelude::*;
+use control_interface::LinkDefinition;
 use std::collections::HashMap;
 
 use wascap::prelude::KeyPair;

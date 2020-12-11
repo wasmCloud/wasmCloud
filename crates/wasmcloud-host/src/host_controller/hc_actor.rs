@@ -176,7 +176,7 @@ impl Handler<CheckLink> for HostController {
             let mb = MessageBus::from_hostlocal_registry(&self.kp.as_ref().unwrap().public_key());
             let target = self.providers.get(&key).cloned().unwrap();
             let recip = target.recipient::<Invocation>();
-            let actor = msg.linkdef.actor.to_string();
+            let actor = msg.linkdef.actor_id.to_string();
             let prov_entity = WasccEntity::Capability {
                 id: msg.linkdef.provider_id.to_string(),
                 contract_id: msg.linkdef.contract_id,

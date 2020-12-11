@@ -6,6 +6,7 @@ use crate::messagebus::{AdvertiseClaims, AdvertiseLink, MessageBus, PutClaims, P
 use crate::Result;
 use crate::{Invocation, InvocationResponse};
 use actix::prelude::*;
+use control_interface::LinkDefinition;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -41,15 +42,6 @@ struct ClaimsInbound {
 #[rtype(result = "()")]
 struct LinkInbound {
     link: Option<LinkDefinition>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub(crate) struct LinkDefinition {
-    pub actor: String,
-    pub contract_id: String,
-    pub link_name: String,
-    pub provider_id: String,
-    pub values: HashMap<String, String>,
 }
 
 impl Actor for RpcClient {
@@ -177,7 +169,7 @@ impl Handler<LinkInbound> for RpcClient {
                             link_name: link.link_name,
                             contract_id: link.contract_id,
                             provider_id: link.provider_id,
-                            actor: link.actor,
+                            actor: link.actor_id,
                             values: link.values,
                         })
                         .await;
@@ -199,7 +191,7 @@ impl Handler<AdvertiseLink> for RpcClient {
     fn handle(&mut self, msg: AdvertiseLink, _ctx: &mut Self::Context) -> Self::Result {
         trace!("Publishing link definition on lattice");
         let ld = LinkDefinition {
-            actor: msg.actor,
+            actor_id: msg.actor,
             contract_id: msg.contract_id,
             link_name: msg.link_name,
             provider_id: msg.provider_id,
