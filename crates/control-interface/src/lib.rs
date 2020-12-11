@@ -1,12 +1,13 @@
 pub mod broker;
 mod generated;
-pub mod inv;
+mod inv;
 
 pub use crate::generated::ctliface::*;
 use actix_rt::time::delay_for;
 use futures::stream::StreamExt;
 use futures::TryStreamExt;
-use inv::{Invocation, InvocationResponse, WasccEntity};
+pub use inv::{Invocation, InvocationResponse};
+use inv::WasccEntity;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
