@@ -1,6 +1,6 @@
 pub mod broker;
 mod generated;
-mod inv;
+pub mod inv;
 
 pub use crate::generated::ctliface::*;
 use actix_rt::time::delay_for;
