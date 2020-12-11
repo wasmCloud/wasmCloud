@@ -30,6 +30,13 @@ pub mod rpc {
     pub fn call_actor(nsprefix: &Option<String>, actor: &str) -> String {
         format!("{}.{}", rpc_prefix(nsprefix), actor)
     }
+
+    pub fn advertise_links(ns_prefix: &Option<String>) -> String {
+        format!(
+            "wasmbus.{}.links",
+            ns_prefix.as_ref().unwrap_or(&"default".to_string())
+        )
+    }
 }
 
 pub mod commands {
