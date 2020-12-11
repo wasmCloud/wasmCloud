@@ -1,18 +1,15 @@
 use crate::generated::core::{deserialize, serialize};
 use crate::hlreg::HostLocalSystemService;
-use crate::host_controller::{CheckLink, HostController};
+use crate::host_controller::HostController;
 use crate::messagebus::rpc_subscription::{claims_subject, invoke_subject, links_subject};
-use crate::messagebus::{
-    AdvertiseClaims, AdvertiseLink, EnforceLocalActorLinks, EnforceLocalProviderLinks, MessageBus,
-    PutClaims, PutLink,
-};
+use crate::messagebus::{AdvertiseClaims, AdvertiseLink, MessageBus, PutClaims, PutLink};
 use crate::Result;
 use crate::{Invocation, InvocationResponse};
 use actix::prelude::*;
-use futures::{StreamExt, TryFutureExt};
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::Arc;
+
 use std::time::Duration;
 
 #[derive(Message)]
@@ -170,11 +167,11 @@ impl Handler<LinkInbound> for RpcClient {
     fn handle(&mut self, msg: LinkInbound, _ctx: &mut Self::Context) -> Self::Result {
         trace!("Received notification of link definition lattice-wide publication");
         let target = self.bus.clone().unwrap();
-        let hc = HostController::from_hostlocal_registry(self.host_id.as_ref().unwrap());
+        let _hc = HostController::from_hostlocal_registry(self.host_id.as_ref().unwrap());
         if let Some(link) = msg.link {
             Box::pin(
                 async move {
-                    let ld = link.clone();
+                    let _ld = link.clone();
                     let _ = target
                         .send(PutLink {
                             link_name: link.link_name,

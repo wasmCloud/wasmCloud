@@ -1,4 +1,4 @@
-use crate::actors::WasccActor;
+use crate::actors::{ActorHost, WasccActor};
 use crate::auth::Authorizer;
 use crate::messagebus::rpc_client::LinkDefinition;
 use crate::{NativeCapability, Result};
@@ -30,6 +30,7 @@ pub(crate) struct Initialize {
     pub labels: HashMap<String, String>,
     pub auth: Box<dyn Authorizer>,
     pub kp: KeyPair,
+    pub allow_live_updates: bool,
 }
 
 #[derive(Message)]
@@ -77,6 +78,12 @@ pub(crate) struct QueryActorRunning {
 pub(crate) struct QueryProviderRunning {
     pub provider_ref: String,
     pub link_name: String,
+}
+
+#[derive(Message)]
+#[rtype(result = "Option<Addr<ActorHost>>")]
+pub(crate) struct GetRunningActor {
+    pub actor_id: String,
 }
 
 #[derive(Message)]

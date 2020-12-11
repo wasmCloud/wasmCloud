@@ -3,48 +3,6 @@ use crate::middleware::Middleware;
 use crate::Result;
 use actix::Recipient;
 
-/// Execute a full chain of middleware, terminating at a capability provider
-pub(crate) async fn invoke_capability(
-    middlewares: &[Box<dyn Middleware>],
-    inv: Invocation,
-    target: Recipient<Invocation>,
-) -> Result<InvocationResponse> {
-    // PRE
-    if let Err(e) = run_capability_pre_invoke(&inv, &middlewares) {
-        error!("Middleware pre-invoke failure: {}", e);
-        return Err(e);
-    } else {
-        match target.send(inv.clone()).await {
-            Ok(ir) => {
-                // POST
-                run_capability_post_invoke(ir, middlewares)
-            }
-            Err(_e) => Err("Actor mailbox failure during middleware execution".into()),
-        }
-    }
-}
-
-/// Execute a full chain of middleware, termianting at an actor
-pub(crate) async fn invoke_actor(
-    middlewares: &[Box<dyn Middleware>],
-    inv: Invocation,
-    target: Recipient<Invocation>,
-) -> Result<InvocationResponse> {
-    // PRE
-    if let Err(e) = run_actor_pre_invoke(&inv, middlewares) {
-        error!("Middleware pre-invoke failure: {}", e);
-        return Err(e);
-    } else {
-        match target.send(inv.clone()).await {
-            Ok(ir) => {
-                // POST
-                run_actor_post_invoke(ir, middlewares)
-            }
-            Err(_e) => Err("Actor mailbox failure during middleware execution".into()),
-        }
-    }
-}
-
 /// Executes a chain of pre-invoke handlers for a capability
 pub(crate) fn run_capability_pre_invoke(
     inv: &Invocation,
@@ -202,40 +160,5 @@ mod tests {
         let res2 = super::run_actor_pre_invoke(&inv, &mids);
         assert!(res2.is_ok());
         assert_eq!(PRE.fetch_add(0, Ordering::SeqCst), 2);
-    }
-
-    #[actix_rt::test]
-    async fn full_add_with_actor() {
-        let inc_mid = IncMiddleware {
-            pre: &FULL,
-            post: &FULL,
-            cap_pre: &FULL,
-            cap_post: &FULL,
-        };
-        let hk = KeyPair::new_server();
-
-        let mids: Vec<Box<dyn Middleware>> = vec![Box::new(inc_mid)];
-        let inv = Invocation::new(
-            &hk,
-            WasccEntity::Actor("test".to_string()),
-            WasccEntity::Capability {
-                id: "Vxxx".to_string(),
-                contract_id: "testing:sample".to_string(),
-                link_name: "default".to_string(),
-            },
-            "testing",
-            b"abc1234".to_vec(),
-        );
-        let invocation_id = inv.id.to_string();
-        let happy = SyncArbiter::start(1, || HappyActor { inv_count: 0 });
-        let res = super::invoke_actor(&mids, inv.clone(), happy.clone().recipient()).await;
-        // It's just invocation recipients, so it doesn't care if the actor is a cap or not
-        let _res2 = super::invoke_capability(&mids, inv, happy.recipient()).await;
-        assert!(res.is_ok());
-        if let Ok(ir) = res {
-            assert!(ir.error.as_ref().is_none());
-            assert_eq!(ir.invocation_id, invocation_id);
-            assert_eq!(FULL.fetch_add(0, Ordering::SeqCst), 4);
-        }
     }
 }

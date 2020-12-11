@@ -1,5 +1,5 @@
 use super::MessageBus;
-use crate::capability::link_cache::LinkKey;
+use crate::capability::{extras::EXTRAS_PUBLIC_KEY, link_cache::LinkKey};
 use crate::dispatch::{gen_config_invocation, Invocation, InvocationResponse, WasccEntity};
 use crate::hlreg::HostLocalSystemService;
 use crate::messagebus::rpc_client::RpcClient;
@@ -10,16 +10,12 @@ use crate::messagebus::{
     GetClaims, Initialize, LinkDefinition, LinksResponse, LookupLink, PutClaims, PutLink,
     QueryActors, QueryAllLinks, QueryProviders, QueryResponse, Subscribe, Unsubscribe,
 };
-use crate::{auth, Result, SYSTEM_ACTOR};
+use crate::{auth, Result};
 use actix::prelude::*;
 use std::sync::Arc;
 
-pub const OP_PERFORM_LIVE_UPDATE: &str = "PerformLiveUpdate";
-pub const OP_IDENTIFY_CAPABILITY: &str = "IdentifyCapability";
 pub const OP_HEALTH_REQUEST: &str = "HealthRequest";
-pub const OP_INITIALIZE: &str = "Initialize";
 pub const OP_BIND_ACTOR: &str = "BindActor";
-pub const OP_REMOVE_ACTOR: &str = "RemoveActor";
 
 impl Supervised for MessageBus {}
 
@@ -312,12 +308,6 @@ impl Handler<AdvertiseLink> for MessageBus {
 
     fn handle(&mut self, msg: AdvertiseLink, ctx: &mut Context<Self>) -> Self::Result {
         trace!("Advertisting link definition");
-        let target = WasccEntity::Capability {
-            id: msg.provider_id.to_string(),
-            contract_id: msg.contract_id.to_string(),
-            link_name: msg.link_name.to_string(),
-        };
-
         self.link_cache.add_link(
             &msg.actor,
             &msg.contract_id,
@@ -468,6 +458,11 @@ impl Handler<Subscribe> for MessageBus {
     type Result = ResponseActFuture<Self, ()>;
 
     fn handle(&mut self, msg: Subscribe, _ctx: &mut Context<Self>) -> Self::Result {
+        if self.subscribers.contains_key(&msg.interest) {
+            trace!("Skipping bus registration - interested party already registered");
+            return Box::pin(async move {}.into_actor(self));
+        }
+
         trace!("Bus registered interest for {}", &msg.interest.url());
 
         let nc = self.nc.clone();
@@ -475,6 +470,9 @@ impl Handler<Subscribe> for MessageBus {
         Box::pin(
             async move {
                 let interest = msg.interest.clone();
+                if interest.key() == EXTRAS_PUBLIC_KEY {
+                    return (interest, msg.subscriber); // extras are not available over lattice as all hosts have it
+                }
                 let address = if let Some(ref nc) = nc {
                     let addr = RpcSubscription::default().start();
                     let _ = addr

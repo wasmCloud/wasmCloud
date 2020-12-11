@@ -1,15 +1,18 @@
-use crate::common::{
-    await_actor_count, await_provider_count, par_from_file, HTTPSRV_OCI, KVCOUNTER_OCI, NATS_OCI,
-    REDIS_OCI,
+use crate::{
+    common::{
+        await_actor_count, await_provider_count, HTTPSRV_OCI, KVCOUNTER_OCI, NATS_OCI, REDIS_OCI,
+    },
+    generated::http::{deserialize, serialize},
 };
 use ::control_interface::Client;
 use actix_rt::time::delay_for;
 use std::collections::HashMap;
-use std::thread;
+
 use std::time::Duration;
-use wascc_redis::RedisKVProvider;
+
+use wascap::prelude::KeyPair;
 use wasmcloud_host::Result;
-use wasmcloud_host::{HostBuilder, NativeCapability};
+use wasmcloud_host::{Actor, HostBuilder};
 
 pub(crate) async fn basics() -> Result<()> {
     let nc = nats::asynk::connect("0.0.0.0:4222").await?;
@@ -107,7 +110,10 @@ pub(crate) async fn basics() -> Result<()> {
     assert!(http_ack2.failure.is_some());
     assert_eq!(
         http_ack2.failure.unwrap(),
-        "Provider with image ref 'wascc.azurecr.io/httpsrv:v1' is already running on this host."
+        format!(
+            "Provider with image ref '{}' is already running on this host.",
+            HTTPSRV_OCI
+        )
     );
 
     let hosts = ctl_client.get_hosts(Duration::from_millis(500)).await?;
@@ -131,6 +137,51 @@ pub(crate) async fn basics() -> Result<()> {
     delay_for(Duration::from_secs(1)).await;
 
     //h.stop().await;
+
+    Ok(())
+}
+
+pub(crate) async fn calltest() -> Result<()> {
+    let nc = nats::asynk::connect("0.0.0.0:4222").await?;
+    let nc3 = nats::asynk::connect("0.0.0.0:4222").await?;
+    let h = HostBuilder::new()
+        .with_namespace("calltest")
+        .with_control_client(nc)
+        .with_rpc_client(nc3)
+        .build();
+
+    h.start().await?;
+    let a = Actor::from_file("./tests/modules/echo.wasm")?;
+    let a_id = a.public_key();
+    h.start_actor(a).await?;
+    await_actor_count(&h, 1, Duration::from_millis(50), 20).await?;
+    delay_for(Duration::from_millis(300)).await;
+
+    let nc2 = nats::asynk::connect("0.0.0.0:4222").await?;
+
+    let ctl_client = Client::new(nc2, Some("calltest".to_string()), Duration::from_secs(20));
+
+    let req = crate::generated::http::Request {
+        header: HashMap::new(),
+        method: "GET".to_string(),
+        path: "".to_string(),
+        query_string: "".to_string(),
+        body: b"NARF".to_vec(),
+    };
+    let inv_r = ctl_client
+        .call_actor(&a_id, "HandleRequest", &serialize(&req)?)
+        .await?;
+    let http_r: crate::generated::http::Response = deserialize(&inv_r.msg)?;
+
+    assert_eq!(inv_r.error, None);
+    assert_eq!(
+        std::str::from_utf8(&http_r.body)?,
+        r#"{"method":"GET","path":"","query_string":"","headers":{},"body":[78,65,82,70]}"#
+    );
+    assert_eq!(http_r.status, "OK".to_string());
+    assert_eq!(http_r.status_code, 200);
+    h.stop().await;
+    delay_for(Duration::from_millis(300)).await;
 
     Ok(())
 }
@@ -163,13 +214,13 @@ pub(crate) async fn auctions() -> Result<()> {
 
     // auction with no requirements
     let kvack = ctl_client
-        .perform_actor_auction(KVCOUNTER_OCI, HashMap::new(), Duration::from_millis(200))
+        .perform_actor_auction(KVCOUNTER_OCI, HashMap::new(), Duration::from_secs(1))
         .await?;
     assert_eq!(2, kvack.len());
 
     // auction the KV counter with a constraint
     let kvack = ctl_client
-        .perform_actor_auction(KVCOUNTER_OCI, kvrequirements(), Duration::from_millis(200))
+        .perform_actor_auction(KVCOUNTER_OCI, kvrequirements(), Duration::from_secs(1))
         .await?;
     assert_eq!(1, kvack.len());
     assert_eq!(kvack[0].host_id, hid);
@@ -228,4 +279,18 @@ fn webrequirements() -> HashMap<String, String> {
     let mut hm = HashMap::new();
     hm.insert("web-friendly".to_string(), "yes".to_string());
     hm
+}
+
+fn embed_revision(source: &[u8], kp: &KeyPair, rev: i32, subject: &str, issuer: &str) -> Vec<u8> {
+    let claims = wascap::jwt::Claims::<wascap::jwt::Actor>::new(
+        "Testy McTestFace".to_string(),
+        issuer.to_string(),
+        subject.to_string(),
+        Some(vec!["test:testo".to_string()]),
+        None,
+        false,
+        Some(rev),
+        None,
+    );
+    wascap::wasm::embed_claims(source, &claims, kp).unwrap()
 }

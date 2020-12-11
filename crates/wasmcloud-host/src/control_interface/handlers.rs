@@ -1,22 +1,84 @@
+use crate::actors::LiveUpdate;
+
 use crate::hlreg::HostLocalSystemService;
 use crate::host_controller::{
-    AuctionActor, AuctionProvider, HostController, QueryActorRunning, QueryHostInventory,
-    QueryProviderRunning, QueryUptime, StartActor, StartProvider, StopActor, StopProvider,
+    AuctionActor, AuctionProvider, GetRunningActor, HostController, QueryActorRunning,
+    QueryHostInventory, QueryProviderRunning, QueryUptime, StartActor, StartProvider, StopActor,
+    StopProvider,
 };
 use crate::messagebus::{GetClaims, MessageBus, QueryAllLinks};
+use crate::oci::fetch_oci_bytes;
 use crate::{Actor, NativeCapability};
+
 use control_interface::{
     deserialize, serialize, ActorAuctionAck, ActorAuctionRequest, ActorDescription, HostInventory,
-    LinkDefinition, ProviderAuctionAck, ProviderAuctionRequest, ProviderDescription, StopActorAck,
-    StopActorCommand, StopProviderAck, StopProviderCommand,
+    ProviderAuctionAck, ProviderAuctionRequest, ProviderDescription, StopActorAck,
+    StopActorCommand, StopProviderAck, StopProviderCommand, UpdateActorAck, UpdateActorCommand,
 };
 use control_interface::{StartActorAck, StartActorCommand, StartProviderAck, StartProviderCommand};
-use futures::TryFutureExt;
+
 use std::collections::HashMap;
 use wascap::jwt::Claims;
 
-// TODO: implement actor update
-pub(crate) async fn handle_update_actor(host: &str, msg: &nats::asynk::Message) {}
+// *** NOTE ***
+// It is extremely important to note that this function will acknowledge the -acceptance-
+// of the actor update as soon as it has verified that the update process can begin.
+// In other words, acceptance of this command constitutes the following:
+// * the command de-serialized properly
+// * the actor mentioned in that command is running within the host that received the command
+// Because live updating an actor involves downloading the OCI bytes and then reconstituting a
+// low-level wasm runtime host (which could involve a JIT pass depending on the runtime), we
+// cannot allow control interface clients to wait that long for acknowledgement.
+pub(crate) async fn handle_update_actor(host: &str, msg: &nats::asynk::Message) {
+    let hc = HostController::from_hostlocal_registry(host);
+    let req = deserialize::<UpdateActorCommand>(&msg.data);
+    if req.is_err() {
+        error!("Failed to deserialize actor start command");
+        return;
+    }
+    let req = req.unwrap();
+    let actor = hc
+        .send(GetRunningActor {
+            actor_id: req.actor_id.to_string(),
+        })
+        .await;
+    let mut ack = UpdateActorAck { accepted: false };
+    match actor {
+        Ok(a) => {
+            if let Some(a) = a {
+                ack.accepted = true;
+                let _ = msg.respond(&serialize(ack).unwrap()).await;
+                let bytes = fetch_oci_bytes(&req.new_actor_ref, false).await;
+                match bytes {
+                    Ok(v) => {
+                        if let Err(e) = a
+                            .send(LiveUpdate {
+                                actor_bytes: v,
+                                image_ref: req.new_actor_ref,
+                            })
+                            .await
+                        {
+                            error!("Failed to perform actor update: {}", e);
+                        }
+                    }
+                    Err(_e) => {
+                        error!(
+                            "Failed to obtain actor image '{}' from OCI registry",
+                            req.new_actor_ref
+                        );
+                    }
+                }
+            } else {
+                error!("Target actor for a live update is not running on this host");
+                let _ = msg.respond(&serialize(ack).unwrap()).await;
+            }
+        }
+        Err(_) => {
+            error!("Failed to obtain running actor from host controller (mailbox error)");
+            let _ = msg.respond(&serialize(ack).unwrap()).await;
+        }
+    }
+}
 
 pub(crate) async fn handle_provider_auction(host: &str, msg: &nats::asynk::Message) {
     let hc = HostController::from_hostlocal_registry(host);
