@@ -131,10 +131,10 @@ pub(crate) fn invoke_subject(ns_prefix: &Option<String>, entity: &WasccEntity) -
 
 pub(crate) fn links_subject(ns_prefix: &Option<String>) -> String {
     let prefix = subject_prefix(ns_prefix);
-    format!("wasmbus.{}.links", prefix)
+    format!("{}.links", prefix)
 }
 
 pub(crate) fn claims_subject(ns_prefix: &Option<String>) -> String {
     let prefix = subject_prefix(ns_prefix);
-    format!("wasmbus.{}.claims", prefix)
+    format!("{}.claims", prefix)
 }
