@@ -161,39 +161,4 @@ mod tests {
         assert!(res2.is_ok());
         assert_eq!(PRE.fetch_add(0, Ordering::SeqCst), 2);
     }
-
-    #[actix_rt::test]
-    async fn full_add_with_actor() {
-        let inc_mid = IncMiddleware {
-            pre: &FULL,
-            post: &FULL,
-            cap_pre: &FULL,
-            cap_post: &FULL,
-        };
-        let hk = KeyPair::new_server();
-
-        let mids: Vec<Box<dyn Middleware>> = vec![Box::new(inc_mid)];
-        let inv = Invocation::new(
-            &hk,
-            WasccEntity::Actor("test".to_string()),
-            WasccEntity::Capability {
-                id: "Vxxx".to_string(),
-                contract_id: "testing:sample".to_string(),
-                link_name: "default".to_string(),
-            },
-            "testing",
-            b"abc1234".to_vec(),
-        );
-        let invocation_id = inv.id.to_string();
-        let happy = SyncArbiter::start(1, || HappyActor { inv_count: 0 });
-        let res = super::invoke_actor(&mids, inv.clone(), happy.clone().recipient()).await;
-        // It's just invocation recipients, so it doesn't care if the actor is a cap or not
-        let _res2 = super::invoke_capability(&mids, inv, happy.recipient()).await;
-        assert!(res.is_ok());
-        if let Ok(ir) = res {
-            assert!(ir.error.as_ref().is_none());
-            assert_eq!(ir.invocation_id, invocation_id);
-            assert_eq!(FULL.fetch_add(0, Ordering::SeqCst), 4);
-        }
-    }
 }

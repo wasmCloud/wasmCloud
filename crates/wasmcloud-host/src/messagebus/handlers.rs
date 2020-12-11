@@ -1,5 +1,5 @@
 use super::MessageBus;
-use crate::capability::link_cache::LinkKey;
+use crate::capability::{extras::EXTRAS_PUBLIC_KEY, link_cache::LinkKey};
 use crate::dispatch::{gen_config_invocation, Invocation, InvocationResponse, WasccEntity};
 use crate::hlreg::HostLocalSystemService;
 use crate::messagebus::rpc_client::RpcClient;
@@ -14,12 +14,8 @@ use crate::{auth, Result};
 use actix::prelude::*;
 use std::sync::Arc;
 
-pub const OP_PERFORM_LIVE_UPDATE: &str = "PerformLiveUpdate";
-pub const OP_IDENTIFY_CAPABILITY: &str = "IdentifyCapability";
 pub const OP_HEALTH_REQUEST: &str = "HealthRequest";
-pub const OP_INITIALIZE: &str = "Initialize";
 pub const OP_BIND_ACTOR: &str = "BindActor";
-pub const OP_REMOVE_ACTOR: &str = "RemoveActor";
 
 impl Supervised for MessageBus {}
 
@@ -474,6 +470,9 @@ impl Handler<Subscribe> for MessageBus {
         Box::pin(
             async move {
                 let interest = msg.interest.clone();
+                if interest.key() == EXTRAS_PUBLIC_KEY {
+                    return (interest, msg.subscriber); // extras are not available over lattice as all hosts have it
+                }
                 let address = if let Some(ref nc) = nc {
                     let addr = RpcSubscription::default().start();
                     let _ = addr
