@@ -32,10 +32,7 @@ pub mod rpc {
     }
 
     pub fn advertise_links(ns_prefix: &Option<String>) -> String {
-        format!(
-            "wasmbus.{}.links",
-            ns_prefix.as_ref().unwrap_or(&"default".to_string())
-        )
+        format!("{}.links", rpc_prefix(ns_prefix))
     }
 }
 
