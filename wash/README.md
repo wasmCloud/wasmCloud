@@ -1,5 +1,5 @@
 # wash
-waSCC Shell - A single CLI to handle all of your waSCC tooling needs
+wasmCloud Shell - A single CLI to handle all of your wasmCloud tooling needs
 
 ## Installing wash
 ```
@@ -173,7 +173,7 @@ ARGS:
 ```
 
 ### up
-Starts an interactive REPL session for waSCC development
+Starts an interactive REPL session for wasmCloud development
 ```
 USAGE:
     wash up [FLAGS]
