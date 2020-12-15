@@ -74,8 +74,9 @@ fn cached_file(img: &str) -> PathBuf {
 pub(crate) async fn fetch_provider_archive(
     img: &str,
     allow_latest: bool,
+    allow_insecure: bool
 ) -> Result<ProviderArchive> {
-    let bytes = fetch_oci_bytes(img, allow_latest, false).await?;
+    let bytes = fetch_oci_bytes(img, allow_latest, allow_insecure).await?;
     ProviderArchive::try_load(&bytes)
         .map_err(|e| format!("Failed to load provider archive: {}", e).into())
 }
