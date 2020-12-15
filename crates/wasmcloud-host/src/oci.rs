@@ -8,14 +8,18 @@ use std::str::FromStr;
 pub(crate) const OCI_VAR_USER: &str = "OCI_REGISTRY_USER";
 pub(crate) const OCI_VAR_PASSWORD: &str = "OCI_REGISTRY_PASSWORD";
 
-pub(crate) async fn fetch_oci_bytes(img: &str, allow_latest: bool) -> Result<Vec<u8>> {
+pub(crate) async fn fetch_oci_bytes(img: &str, allow_latest: bool, allow_insecure: bool) -> Result<Vec<u8>> {
     if !allow_latest && img.ends_with(":latest") {
         return Err(
             "Fetching images tagged 'latest' is currently prohibited in this host. This option can be overridden".into());
     }
     let cf = cached_file(img);
     if !cf.exists() {
-        let cfg = oci_distribution::client::ClientConfig::default();
+        let protocol = match allow_insecure {
+            false => oci_distribution::client::ClientProtocol::Https,
+            true => oci_distribution::client::ClientProtocol::Http
+        };
+        let cfg = oci_distribution::client::ClientConfig{protocol};
         let mut c = oci_distribution::Client::new(cfg);
 
         let img = oci_distribution::Reference::from_str(img)?;
@@ -70,8 +74,9 @@ fn cached_file(img: &str) -> PathBuf {
 pub(crate) async fn fetch_provider_archive(
     img: &str,
     allow_latest: bool,
+    allow_insecure: bool
 ) -> Result<ProviderArchive> {
-    let bytes = fetch_oci_bytes(img, allow_latest).await?;
+    let bytes = fetch_oci_bytes(img, allow_latest, allow_insecure).await?;
     ProviderArchive::try_load(&bytes)
         .map_err(|e| format!("Failed to load provider archive: {}", e).into())
 }

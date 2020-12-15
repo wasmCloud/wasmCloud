@@ -31,6 +31,7 @@ pub struct HostBuilder {
     namespace: String,
     rpc_timeout: Duration,
     allow_latest: bool,
+    allow_insecure: bool,
     rpc_client: Option<nats::asynk::Connection>,
     cplane_client: Option<nats::asynk::Connection>,
     allow_live_update: bool,
@@ -42,6 +43,7 @@ impl HostBuilder {
             labels: crate::host_controller::detect_core_host_labels(),
             authorizer: Box::new(crate::auth::DefaultAuthorizer::new()),
             allow_latest: false,
+            allow_insecure: false,
             namespace: "default".to_string(),
             rpc_timeout: Duration::from_secs(2),
             rpc_client: None,
@@ -104,6 +106,13 @@ impl HostBuilder {
         }
     }
 
+    pub fn oci_allow_insecure(self) -> HostBuilder {
+        HostBuilder {
+            allow_insecure: true,
+            ..self
+        }
+    }
+
     pub fn with_label(self, key: &str, value: &str) -> HostBuilder {
         let mut hm = self.labels.clone();
         if !hm.contains_key(key) {
@@ -118,6 +127,7 @@ impl HostBuilder {
             authorizer: self.authorizer,
             id: RefCell::new("".to_string()),
             allow_latest: self.allow_latest,
+            allow_insecure: self.allow_insecure,
             kp: RefCell::new(None),
             rpc_timeout: self.rpc_timeout,
             namespace: self.namespace,
@@ -133,6 +143,7 @@ pub struct Host {
     authorizer: Box<dyn Authorizer + 'static>,
     id: RefCell<String>,
     allow_latest: bool,
+    allow_insecure: bool,
     kp: RefCell<Option<KeyPair>>,
     namespace: String,
     rpc_timeout: Duration,
@@ -174,6 +185,7 @@ impl Host {
             control_options: ControlOptions {
                 host_labels: self.labels.clone(),
                 oci_allow_latest: self.allow_latest,
+                oci_allow_insecure: self.allow_insecure,
                 ..Default::default()
             },
             key: KeyPair::from_seed(&kp.seed()?)?,
@@ -224,7 +236,7 @@ impl Host {
         link_name: Option<String>,
     ) -> Result<()> {
         let hc = HostController::from_hostlocal_registry(&self.id.borrow());
-        let bytes = fetch_oci_bytes(cap_ref, self.allow_latest).await?;
+        let bytes = fetch_oci_bytes(cap_ref, self.allow_latest, self.allow_insecure).await?;
         let par = ProviderArchive::try_load(&bytes)?;
         let nc = NativeCapability::from_archive(&par, link_name)?;
         hc.send(StartProvider {
@@ -248,7 +260,7 @@ impl Host {
 
     pub async fn start_actor_from_registry(&self, actor_ref: &str) -> Result<()> {
         let hc = HostController::from_hostlocal_registry(&self.id.borrow());
-        let bytes = fetch_oci_bytes(actor_ref, self.allow_latest).await?;
+        let bytes = fetch_oci_bytes(actor_ref, self.allow_latest, self.allow_insecure).await?;
         let actor = crate::Actor::from_slice(&bytes)?;
         hc.send(StartActor {
             actor,
@@ -346,12 +358,12 @@ impl Host {
         }
 
         for msg in
-            crate::manifest::generate_actor_start_messages(&manifest, self.allow_latest).await
+            crate::manifest::generate_actor_start_messages(&manifest, self.allow_latest, self.allow_insecure).await
         {
             let _ = hc.send(msg).await?;
         }
         for msg in
-            crate::manifest::generate_provider_start_messages(&manifest, self.allow_latest).await
+            crate::manifest::generate_provider_start_messages(&manifest, self.allow_latest, self.allow_insecure).await
         {
             let _ = hc.send(msg).await?;
         }
