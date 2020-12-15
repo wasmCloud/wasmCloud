@@ -224,7 +224,7 @@ impl Host {
         link_name: Option<String>,
     ) -> Result<()> {
         let hc = HostController::from_hostlocal_registry(&self.id.borrow());
-        let bytes = fetch_oci_bytes(cap_ref, self.allow_latest).await?;
+        let bytes = fetch_oci_bytes(cap_ref, self.allow_latest, false).await?;
         let par = ProviderArchive::try_load(&bytes)?;
         let nc = NativeCapability::from_archive(&par, link_name)?;
         hc.send(StartProvider {
@@ -248,7 +248,7 @@ impl Host {
 
     pub async fn start_actor_from_registry(&self, actor_ref: &str) -> Result<()> {
         let hc = HostController::from_hostlocal_registry(&self.id.borrow());
-        let bytes = fetch_oci_bytes(actor_ref, self.allow_latest).await?;
+        let bytes = fetch_oci_bytes(actor_ref, self.allow_latest, false).await?;
         let actor = crate::Actor::from_slice(&bytes)?;
         hc.send(StartActor {
             actor,

@@ -96,7 +96,7 @@ pub(crate) async fn generate_actor_start_messages(
             }
         } else {
             // load actor from OCI
-            if let Ok(a) = fetch_oci_bytes(&actor_ref, allow_latest)
+            if let Ok(a) = fetch_oci_bytes(&actor_ref, allow_latest, false)
                 .await
                 .and_then(|bytes| crate::Actor::from_slice(&bytes))
             {
@@ -130,7 +130,7 @@ pub(crate) async fn generate_provider_start_messages(
             }
         } else {
             // read PAR from OCI
-            if let Ok(prov) = fetch_oci_bytes(&cap.image_ref, allow_latest)
+            if let Ok(prov) = fetch_oci_bytes(&cap.image_ref, allow_latest, false)
                 .await
                 .and_then(|bytes| ProviderArchive::try_load(&bytes))
                 .and_then(|par| NativeCapability::from_archive(&par, cap.link_name.clone()))

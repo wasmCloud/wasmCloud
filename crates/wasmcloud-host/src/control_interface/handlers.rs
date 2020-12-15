@@ -48,7 +48,7 @@ pub(crate) async fn handle_update_actor(host: &str, msg: &nats::asynk::Message) 
             if let Some(a) = a {
                 ack.accepted = true;
                 let _ = msg.respond(&serialize(ack).unwrap()).await;
-                let bytes = fetch_oci_bytes(&req.new_actor_ref, false).await;
+                let bytes = fetch_oci_bytes(&req.new_actor_ref, false, false).await;
                 match bytes {
                     Ok(v) => {
                         if let Err(e) = a
@@ -277,7 +277,7 @@ pub(crate) async fn handle_start_actor(host: &str, msg: &nats::asynk::Message, a
         }
     }
 
-    let bytes = crate::oci::fetch_oci_bytes(&cmd.actor_ref, allow_latest).await;
+    let bytes = crate::oci::fetch_oci_bytes(&cmd.actor_ref, allow_latest, false).await;
     if let Err(e) = bytes {
         let f = format!("Failed to retrieve actor image from OCI registry: {}", e);
         error!("{}", f);
