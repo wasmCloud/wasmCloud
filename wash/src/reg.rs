@@ -8,13 +8,13 @@ use std::fs::File;
 use std::io::prelude::*;
 use structopt::clap::AppSettings;
 use structopt::StructOpt;
-use tokio::runtime::*;
 
 const PROVIDER_ARCHIVE_MEDIA_TYPE: &str = "application/vnd.wascc.provider.archive.layer.v1+par";
 const PROVIDER_ARCHIVE_CONFIG_MEDIA_TYPE: &str = "application/vnd.wascc.provider.archive.config";
 const PROVIDER_ARCHIVE_FILE_EXTENSION: &str = ".par.gz";
 const WASM_MEDIA_TYPE: &str = "application/vnd.module.wasm.content.layer.v1+wasm";
 const WASM_CONFIG_MEDIA_TYPE: &str = "application/vnd.wascc.actor.archive.config";
+const OCI_MEDIA_TYPE: &str = "application/vnd.oci.image.layer.v1.tar";
 const WASM_FILE_EXTENSION: &str = ".wasm";
 
 const SHOWER_EMOJI: &str = "\u{1F6BF}";
@@ -112,14 +112,14 @@ struct AuthOpts {
     insecure: bool,
 }
 
-pub fn handle_command(cli: RegCli) -> Result<(), Box<dyn ::std::error::Error>> {
+pub async fn handle_command(cli: RegCli) -> Result<(), Box<dyn ::std::error::Error>> {
     match cli.command {
-        RegCliCommand::Pull(cmd) => handle_pull(cmd),
-        RegCliCommand::Push(cmd) => handle_push(cmd),
+        RegCliCommand::Pull(cmd) => handle_pull(cmd).await,
+        RegCliCommand::Push(cmd) => handle_push(cmd).await,
     }
 }
 
-fn handle_pull(cmd: PullCommand) -> Result<(), Box<dyn ::std::error::Error>> {
+async fn handle_pull(cmd: PullCommand) -> Result<(), Box<dyn ::std::error::Error>> {
     let image: Reference = cmd.url.parse().unwrap();
     let sp = Spinner::new(
         Spinners::Dots12,
@@ -132,7 +132,8 @@ fn handle_pull(cmd: PullCommand) -> Result<(), Box<dyn ::std::error::Error>> {
         cmd.opts.user,
         cmd.opts.password,
         cmd.opts.insecure,
-    )?;
+    )
+    .await?;
     sp.message(format!(" Writing {} ...", image.whole()));
     let outfile = write_artifact(&artifact, &image, cmd.output)?;
     sp.stop();
@@ -144,7 +145,7 @@ fn handle_pull(cmd: PullCommand) -> Result<(), Box<dyn ::std::error::Error>> {
     Ok(())
 }
 
-pub fn pull_artifact(
+pub async fn pull_artifact(
     url: String,
     digest: Option<String>,
     allow_latest: bool,
@@ -174,13 +175,13 @@ pub fn pull_artifact(
         _ => RegistryAuth::Anonymous,
     };
 
-    // Asynchronous code from the oci-distribution crate must run on the tokio runtime
-    let mut rt = Runtime::new()?;
-    let image_data = rt.block_on(client.pull(
-        &image,
-        &auth,
-        vec![PROVIDER_ARCHIVE_MEDIA_TYPE, WASM_MEDIA_TYPE],
-    ))?;
+    let image_data = client
+        .pull(
+            &image,
+            &auth,
+            vec![PROVIDER_ARCHIVE_MEDIA_TYPE, WASM_MEDIA_TYPE, OCI_MEDIA_TYPE],
+        )
+        .await?;
 
     // Reformatting digest in case the sha256: prefix is left off
     let digest = match digest {
@@ -271,7 +272,7 @@ fn validate_provider_archive(
     }
 }
 
-fn handle_push(cmd: PushCommand) -> Result<(), Box<dyn ::std::error::Error>> {
+async fn handle_push(cmd: PushCommand) -> Result<(), Box<dyn ::std::error::Error>> {
     let sp = Spinner::new(
         Spinners::Dots12,
         format!(" Pushing {} to {} ...", cmd.artifact, cmd.url),
@@ -284,7 +285,8 @@ fn handle_push(cmd: PushCommand) -> Result<(), Box<dyn ::std::error::Error>> {
         cmd.opts.user,
         cmd.opts.password,
         cmd.opts.insecure,
-    )?;
+    )
+    .await?;
 
     sp.stop();
     println!(
@@ -294,7 +296,7 @@ fn handle_push(cmd: PushCommand) -> Result<(), Box<dyn ::std::error::Error>> {
     Ok(())
 }
 
-pub fn push_artifact(
+pub async fn push_artifact(
     url: String,
     artifact: String,
     config: Option<String>,
@@ -358,15 +360,15 @@ pub fn push_artifact(
         _ => RegistryAuth::Anonymous,
     };
 
-    // Asynchronous code from the oci-distribution crate must run on the tokio runtime
-    let mut rt = Runtime::new()?;
-    rt.block_on(client.push(
-        &image,
-        &image_data,
-        &config_buf,
-        config_media_type,
-        &auth,
-        None,
-    ))?;
+    client
+        .push(
+            &image,
+            &image_data,
+            &config_buf,
+            config_media_type,
+            &auth,
+            None,
+        )
+        .await?;
     Ok(())
 }

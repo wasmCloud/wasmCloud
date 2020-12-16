@@ -547,8 +547,8 @@ fn sign_file(cmd: &SignCommand) -> Result<(), Box<dyn ::std::error::Error>> {
     let signed = sign_buffer_with_claims(
         cmd.metadata.name.clone(),
         &buf,
-        issuer,
         subject,
+        issuer,
         cmd.metadata.common.expires_in_days,
         cmd.metadata.common.not_before_days,
         caps_list.clone(),

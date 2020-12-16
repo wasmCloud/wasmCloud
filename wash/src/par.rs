@@ -1,6 +1,6 @@
 extern crate provider_archive;
 use crate::keys::extract_keypair;
-use crate::util::convert_error;
+use crate::util::{convert_error, Result};
 use nkeys::KeyPairType;
 use provider_archive::*;
 use std::fs::File;
@@ -8,8 +8,6 @@ use std::io::prelude::*;
 use std::path::PathBuf;
 use structopt::clap::AppSettings;
 use structopt::StructOpt;
-
-type Result<T> = ::std::result::Result<T, Box<dyn ::std::error::Error>>;
 
 const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
 
@@ -192,10 +190,10 @@ struct InsertCommand {
     disable_keygen: bool,
 }
 
-pub fn handle_command(cli: ParCli) -> Result<()> {
+pub async fn handle_command(cli: ParCli) -> Result<()> {
     match cli.command {
         ParCliCommand::Create(cmd) => handle_create(cmd),
-        ParCliCommand::Inspect(cmd) => handle_inspect(cmd),
+        ParCliCommand::Inspect(cmd) => handle_inspect(cmd).await,
         ParCliCommand::Insert(cmd) => handle_insert(cmd),
     }
 }
@@ -255,7 +253,7 @@ fn handle_create(cmd: CreateCommand) -> Result<()> {
 }
 
 /// Loads a provider archive and prints the contents of the claims
-fn handle_inspect(cmd: InspectCommand) -> Result<()> {
+async fn handle_inspect(cmd: InspectCommand) -> Result<()> {
     let archive = match File::open(&cmd.archive) {
         Ok(mut f) => {
             let mut buf = Vec::new();
@@ -270,7 +268,8 @@ fn handle_inspect(cmd: InspectCommand) -> Result<()> {
                 cmd.user,
                 cmd.password,
                 cmd.insecure,
-            )?;
+            )
+            .await?;
             ProviderArchive::try_load(&artifact).map_err(|e| format!("{}", e))?
         }
     };
