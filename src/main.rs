@@ -53,22 +53,22 @@ enum CliCommand {
     /// Interact with OCI compliant registries
     #[structopt(name = "reg")]
     Reg(RegCli),
-    /// Launch waSCC REPL environment
+    /// Launch wasmCloud REPL environment
     #[structopt(name = "up")]
     Up(UpCli),
 }
 
-fn main() {
+#[actix_rt::main]
+async fn main() {
     let cli = Cli::from_args();
-    // env_logger::init();
 
     let res = match cli.command {
         CliCommand::Keys(keyscli) => keys::handle_command(keyscli),
-        CliCommand::Ctl(ctlcli) => ctl::handle_command(ctlcli),
         CliCommand::Claims(claimscli) => claims::handle_command(claimscli),
-        CliCommand::Par(parcli) => par::handle_command(parcli),
-        CliCommand::Reg(regcli) => reg::handle_command(regcli),
-        CliCommand::Up(upcli) => up::handle_command(upcli),
+        CliCommand::Ctl(ctlcli) => ctl::handle_command(ctlcli).await,
+        CliCommand::Par(parcli) => par::handle_command(parcli).await,
+        CliCommand::Reg(regcli) => reg::handle_command(regcli).await,
+        CliCommand::Up(upcli) => up::handle_command(upcli).await,
     };
 
     match res {
