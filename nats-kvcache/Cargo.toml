@@ -1,8 +1,24 @@
 [package]
-name = "nats-keyvalue"
+name = "nats-kvcache"
 version = "0.1.0"
 authors = ["wasmCloud Team"]
 edition = "2018"
+license-file = "LICENSE.txt"
+description = "A key-value capability provider for wasmCloud that replicates data changes over NATS"
+repository = "https://github.com/wascc/wasccd"
+documentation = "https://wasmcloud.com"
+readme = "README.md"
+keywords = [
+    "cache",
+    "nats",
+    "keyvalue",
+    "webassembly",
+    "wasmcloud"    
+]
+categories = [
+    "wasm", "api-bindings",
+]
+
 
 [lib]
 crate-type = ["cdylib", "rlib"]

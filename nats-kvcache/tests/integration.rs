@@ -7,7 +7,7 @@ use actor_keyvalue::{
     AddArgs, GetArgs, GetResponse, SetAddArgs, SetQueryArgs, SetQueryResponse, OP_ADD, OP_GET,
     OP_SET_ADD, OP_SET_QUERY,
 };
-use nats_keyvalue::NatsReplicatedKVProvider;
+use nats_kvcache::NatsReplicatedKVProvider;
 use wascc_codec::{capabilities::CapabilityProvider, core::OP_BIND_ACTOR};
 
 #[test]
