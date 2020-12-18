@@ -26,7 +26,7 @@ const WASH_PROMPT: &str = "wash> ";
 #[structopt(
     global_settings(&[AppSettings::ColoredHelp, AppSettings::VersionlessSubcommands]),
     name = "up")]
-pub struct UpCli {
+pub(crate) struct UpCli {
     #[structopt(flatten)]
     command: UpCommand,
 }

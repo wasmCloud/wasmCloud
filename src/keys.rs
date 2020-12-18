@@ -1,66 +1,27 @@
+use crate::util::{format_output, Output, OutputKind};
 use nkeys::{KeyPair, KeyPairType};
 use serde_json::json;
 use std::env;
-use std::error::Error;
-use std::fmt;
 use std::fs;
 use std::fs::File;
 use std::io::prelude::*;
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 use structopt::StructOpt;
 
-#[derive(StructOpt, Debug, Clone)]
-pub enum Output {
-    Text,
-    JSON,
-}
-
-impl FromStr for Output {
-    type Err = OutputParseErr;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "json" => Ok(Output::JSON),
-            "text" => Ok(Output::Text),
-            _ => Err(OutputParseErr),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OutputParseErr;
-
-impl Error for OutputParseErr {}
-
-impl fmt::Display for OutputParseErr {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{}",
-            "error parsing output type, see help for the list of accepted outputs"
-        )
-    }
-}
 #[derive(Debug, Clone, StructOpt)]
-pub struct KeysCli {
+pub(crate) struct KeysCli {
     #[structopt(flatten)]
     command: KeysCliCommand,
 }
 
 #[derive(Debug, Clone, StructOpt)]
-pub enum KeysCliCommand {
+pub(crate) enum KeysCliCommand {
     #[structopt(name = "gen", about = "Generates a keypair")]
     GenCommand {
         /// The type of keypair to generate. May be Account, User, Module (Actor), Service (Capability Provider), Server, Operator, Cluster
         #[structopt(case_insensitive = true)]
         keytype: KeyPairType,
-        #[structopt(
-            short = "o",
-            long = "output",
-            default_value = "text",
-            help = "Specify output format (text or json)"
-        )]
+        #[structopt(flatten)]
         output: Output,
     },
     #[structopt(name = "get", about = "Retrieves a keypair and prints the contents")]
@@ -75,6 +36,8 @@ pub enum KeysCliCommand {
             help = "Absolute path to where keypairs are stored. Defaults to `$HOME/.wash/keys`"
         )]
         directory: Option<String>,
+        #[structopt(flatten)]
+        output: Output,
     },
     #[structopt(name = "list", about = "Lists all keypairs in a directory")]
     ListCommand {
@@ -86,34 +49,40 @@ pub enum KeysCliCommand {
             help = "Absolute path to where keypairs are stored. Defaults to `$HOME/.wash/keys`"
         )]
         directory: Option<String>,
+        #[structopt(flatten)]
+        output: Output,
     },
 }
 
-pub fn handle_command(cli: KeysCli) -> Result<(), Box<dyn ::std::error::Error>> {
+pub(crate) fn handle_command(cli: KeysCli) -> Result<(), Box<dyn ::std::error::Error>> {
     match cli.command {
         KeysCliCommand::GenCommand { keytype, output } => {
-            println!("{}", generate(&keytype, &output));
+            println!("{}", generate(&keytype, &output.kind));
         }
-        KeysCliCommand::GetCommand { keyname, directory } => {
-            get(&keyname, directory);
+        KeysCliCommand::GetCommand {
+            keyname,
+            directory,
+            output,
+        } => {
+            get(&keyname, directory, &output);
         }
-        KeysCliCommand::ListCommand { directory } => {
-            list(directory);
+        KeysCliCommand::ListCommand { directory, output } => {
+            list(directory, &output);
         }
     }
     Ok(())
 }
 
 /// Generates a keypair of the specified KeyPairType, as either Text or JSON
-pub fn generate(kt: &KeyPairType, output_type: &Output) -> String {
+pub(crate) fn generate(kt: &KeyPairType, output: &OutputKind) -> String {
     let kp = KeyPair::new(kt.clone());
-    match output_type {
-        Output::Text => format!(
+    match output {
+        OutputKind::Text => format!(
             "Public Key: {}\nSeed: {}\n\nRemember that the seed is private, treat it as a secret.",
             kp.public_key(),
             kp.seed().unwrap()
         ),
-        Output::JSON => json!({
+        OutputKind::JSON => json!({
             "public_key": kp.public_key(),
             "seed": kp.seed().unwrap(),
         })
@@ -122,7 +91,7 @@ pub fn generate(kt: &KeyPairType, output_type: &Output) -> String {
 }
 
 /// Retrieves a keypair by name in a specified directory, or $WASH_KEYS ($HOME/.wash/keys) if directory is not specified
-pub fn get(keyname: &String, directory: Option<String>) {
+pub(crate) fn get(keyname: &String, directory: Option<String>, output: &Output) {
     let dir = determine_directory(directory);
     let mut f = match File::open(format!("{}/{}", dir, keyname)) {
         Ok(f) => f,
@@ -138,24 +107,39 @@ pub fn get(keyname: &String, directory: Option<String>) {
     };
     match res {
         Err(e) => println!("Error: {:?}", e.kind()),
-        Ok(s) => println!("{}", s),
+        Ok(s) => println!(
+            "{}",
+            format_output(s.clone(), json!({ "seed": s }), &output.kind)
+        ),
     }
 }
 
 /// Lists all keypairs (file extension .nk) in a specified directory or $WASH_KEYS($HOME/.wash/keys) if directory is not specified
-pub fn list(directory: Option<String>) {
+pub(crate) fn list(directory: Option<String>, output: &Output) {
     let dir = determine_directory(directory);
 
+    let mut keys = vec![];
     match fs::read_dir(dir.clone()) {
         Err(e) => println!("Error: {}, please ensure directory {} exists", e, dir),
         Ok(paths) => {
-            println!("====== Keys found in {} ======\n", dir);
             for path in paths {
                 let f = String::from(path.unwrap().file_name().to_str().unwrap());
                 if f.ends_with(".nk") {
-                    println!("{}", f);
+                    keys.push(f);
                 }
             }
+        }
+    }
+
+    match output.kind {
+        OutputKind::Text => {
+            println!("====== Keys found in {} ======\n", dir);
+            for key in keys {
+                println!("{}", key);
+            }
+        }
+        OutputKind::JSON => {
+            println!("{}", json!({ "keys": keys }))
         }
     }
 }
@@ -168,7 +152,7 @@ fn determine_directory(directory: Option<String>) -> String {
 }
 
 /// Helper function to locate and extract keypair from user input
-pub fn extract_keypair(
+pub(crate) fn extract_keypair(
     input: Option<String>,
     module_path: Option<String>,
     directory: Option<String>,
@@ -252,7 +236,7 @@ fn keypair_type_to_string(keypair_type: KeyPairType) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{generate, Output};
+    use super::{generate, OutputKind};
     use nkeys::KeyPairType;
     use serde::Deserialize;
 
@@ -260,8 +244,8 @@ mod tests {
     fn keys_generate_basic_test() {
         let kt = KeyPairType::Account;
 
-        let keypair = generate(&kt, &Output::Text);
-        let keypair_json = generate(&kt, &Output::JSON);
+        let keypair = generate(&kt, &OutputKind::Text);
+        let keypair_json = generate(&kt, &OutputKind::JSON);
 
         assert_eq!(keypair.contains("Public Key: "), true);
         assert_eq!(keypair.contains("Seed: "), true);
@@ -286,7 +270,7 @@ mod tests {
 
         let kt = KeyPairType::Module;
 
-        let keypair_json = generate(&kt, &Output::JSON);
+        let keypair_json = generate(&kt, &OutputKind::JSON);
         let keypair: KeyPairJSON = serde_json::from_str(&keypair_json).unwrap();
 
         assert_eq!(keypair.public_key.len(), sample_public_key.len());
@@ -301,19 +285,19 @@ mod tests {
         let sample_seed = "SMAH45IUULL57OSXNOOAKOTLSVNQOORMDLE3Y3PQLJ4J5MY7MN2K7BIFI4";
 
         let account_keypair: KeyPairJSON =
-            serde_json::from_str(&generate(&KeyPairType::Account, &Output::JSON)).unwrap();
+            serde_json::from_str(&generate(&KeyPairType::Account, &OutputKind::JSON)).unwrap();
         let user_keypair: KeyPairJSON =
-            serde_json::from_str(&generate(&KeyPairType::User, &Output::JSON)).unwrap();
+            serde_json::from_str(&generate(&KeyPairType::User, &OutputKind::JSON)).unwrap();
         let module_keypair: KeyPairJSON =
-            serde_json::from_str(&generate(&KeyPairType::Module, &Output::JSON)).unwrap();
+            serde_json::from_str(&generate(&KeyPairType::Module, &OutputKind::JSON)).unwrap();
         let service_keypair: KeyPairJSON =
-            serde_json::from_str(&generate(&KeyPairType::Service, &Output::JSON)).unwrap();
+            serde_json::from_str(&generate(&KeyPairType::Service, &OutputKind::JSON)).unwrap();
         let server_keypair: KeyPairJSON =
-            serde_json::from_str(&generate(&KeyPairType::Server, &Output::JSON)).unwrap();
+            serde_json::from_str(&generate(&KeyPairType::Server, &OutputKind::JSON)).unwrap();
         let operator_keypair: KeyPairJSON =
-            serde_json::from_str(&generate(&KeyPairType::Operator, &Output::JSON)).unwrap();
+            serde_json::from_str(&generate(&KeyPairType::Operator, &OutputKind::JSON)).unwrap();
         let cluster_keypair: KeyPairJSON =
-            serde_json::from_str(&generate(&KeyPairType::Cluster, &Output::JSON)).unwrap();
+            serde_json::from_str(&generate(&KeyPairType::Cluster, &OutputKind::JSON)).unwrap();
 
         assert_eq!(account_keypair.public_key.starts_with("A"), true);
         assert_eq!(account_keypair.public_key.len(), sample_public_key.len());

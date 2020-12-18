@@ -1,8 +1,9 @@
 extern crate provider_archive;
 use crate::keys::extract_keypair;
-use crate::util::{convert_error, Result};
+use crate::util::{convert_error, format_output, Output, OutputKind, Result};
 use nkeys::KeyPairType;
 use provider_archive::*;
+use serde_json::json;
 use std::fs::File;
 use std::io::prelude::*;
 use std::path::PathBuf;
@@ -15,7 +16,7 @@ const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
 #[structopt(
     global_settings(&[AppSettings::ColoredHelp, AppSettings::VersionlessSubcommands]),
     name = "par")]
-pub struct ParCli {
+pub(crate) struct ParCli {
     #[structopt(flatten)]
     command: ParCliCommand,
 }
@@ -48,7 +49,7 @@ struct CreateCommand {
     revision: Option<i32>,
 
     /// Human friendly version string
-    #[structopt(name = "version")]
+    #[structopt(long = "version")]
     version: Option<String>,
 
     /// Location of key files for signing. Defaults to $WASH_KEYS ($HOME/.wash/keys)
@@ -90,9 +91,9 @@ struct CreateCommand {
     #[structopt(short = "b", long = "binary")]
     binary: String,
 
-    /// Output file path
-    #[structopt(short = "o", long = "output")]
-    output: Option<String>,
+    /// File output destination path
+    #[structopt(long = "destination")]
+    destination: Option<String>,
 
     /// Include a compressed provider archive
     #[structopt(long = "compress")]
@@ -101,6 +102,9 @@ struct CreateCommand {
     /// Disables autogeneration of signing keys
     #[structopt(long = "disable-keygen")]
     disable_keygen: bool,
+
+    #[structopt(flatten)]
+    pub(crate) output: Output,
 }
 
 #[derive(StructOpt, Debug, Clone)]
@@ -108,10 +112,6 @@ struct InspectCommand {
     /// Path to provider archive or OCI URL of provider archive
     #[structopt(name = "archive")]
     archive: String,
-
-    /// File output for OCI artifact (if OCI URL is provided for <archive>)
-    #[structopt(short = "o", long = "output")]
-    output: Option<String>,
 
     /// Digest to verify artifact against (if OCI URL is provided for <archive>)
     #[structopt(short = "d", long = "digest")]
@@ -142,6 +142,9 @@ struct InspectCommand {
     /// Allow insecure (HTTP) registry connections
     #[structopt(long = "insecure")]
     insecure: bool,
+
+    #[structopt(flatten)]
+    pub(crate) output: Output,
 }
 
 #[derive(StructOpt, Debug, Clone)]
@@ -188,9 +191,12 @@ struct InsertCommand {
     /// Disables autogeneration of signing keys
     #[structopt(long = "disable-keygen")]
     disable_keygen: bool,
+
+    #[structopt(flatten)]
+    pub(crate) output: Output,
 }
 
-pub async fn handle_command(cli: ParCli) -> Result<()> {
+pub(crate) async fn handle_command(cli: ParCli) -> Result<()> {
     match cli.command {
         ParCliCommand::Create(cmd) => handle_create(cmd),
         ParCliCommand::Inspect(cmd) => handle_inspect(cmd).await,
@@ -229,7 +235,7 @@ fn handle_create(cmd: CreateCommand) -> Result<()> {
 
     par.add_library(&cmd.arch, &lib).map_err(convert_error)?;
 
-    let output = match cmd.output {
+    let outfile = match cmd.destination {
         Some(path) => path,
         None => format!(
             "{}.par",
@@ -242,12 +248,24 @@ fn handle_create(cmd: CreateCommand) -> Result<()> {
         ),
     };
 
-    if par.write(&output, &issuer, &subject, cmd.compress).is_err() {
-        println!(
+    if par
+        .write(&outfile, &issuer, &subject, cmd.compress)
+        .is_err()
+    {
+        eprintln!(
             "Error writing PAR. Please ensure directory {:?} exists",
-            PathBuf::from(output).parent().unwrap(),
+            PathBuf::from(outfile.clone()).parent().unwrap(),
         );
     }
+
+    println!(
+        "{}",
+        format_output(
+            format!("Successfully created archive {}", outfile),
+            json!({"result": "success", "file": outfile}),
+            &cmd.output.kind
+        )
+    );
 
     Ok(())
 }
@@ -276,60 +294,82 @@ async fn handle_inspect(cmd: InspectCommand) -> Result<()> {
     let claims = archive.claims().unwrap();
     let metadata = claims.metadata.unwrap();
 
-    use term_table::row::Row;
-    use term_table::table_cell::*;
-    use term_table::{Table, TableStyle};
+    match cmd.output.kind {
+        OutputKind::JSON => {
+            let friendly_rev = if metadata.rev.is_some() {
+                format!("{}", metadata.rev.unwrap())
+            } else {
+                "None".to_string()
+            };
+            let friendly_ver = metadata.ver.unwrap_or("None".to_string());
+            println!(
+                "{}",
+                json!({"name": metadata.name.unwrap(),
+                    "public_key": claims.subject,
+                    "capability_contract_id": metadata.capid,
+                    "vendor": metadata.vendor,
+                    "ver": friendly_ver,
+                    "rev": friendly_rev,
+                    "targets": archive.targets()})
+            );
+        }
+        OutputKind::Text => {
+            use term_table::row::Row;
+            use term_table::table_cell::*;
+            use term_table::{Table, TableStyle};
 
-    let mut table = Table::new();
-    table.max_column_width = 68;
-    table.style = TableStyle::extended();
+            let mut table = Table::new();
+            table.max_column_width = 68;
+            table.style = TableStyle::extended();
 
-    table.add_row(Row::new(vec![TableCell::new_with_alignment(
-        format!("{} - Provider Archive", metadata.name.unwrap()),
-        2,
-        Alignment::Center,
-    )]));
+            table.add_row(Row::new(vec![TableCell::new_with_alignment(
+                format!("{} - Provider Archive", metadata.name.unwrap()),
+                2,
+                Alignment::Center,
+            )]));
 
-    table.add_row(Row::new(vec![
-        TableCell::new("Public Key"),
-        TableCell::new_with_alignment(claims.subject, 1, Alignment::Right),
-    ]));
-    table.add_row(Row::new(vec![
-        TableCell::new("Capability Contract ID"),
-        TableCell::new_with_alignment(metadata.capid, 1, Alignment::Right),
-    ]));
-    table.add_row(Row::new(vec![
-        TableCell::new("Vendor"),
-        TableCell::new_with_alignment(metadata.vendor, 1, Alignment::Right),
-    ]));
+            table.add_row(Row::new(vec![
+                TableCell::new("Public Key"),
+                TableCell::new_with_alignment(claims.subject, 1, Alignment::Right),
+            ]));
+            table.add_row(Row::new(vec![
+                TableCell::new("Capability Contract ID"),
+                TableCell::new_with_alignment(metadata.capid, 1, Alignment::Right),
+            ]));
+            table.add_row(Row::new(vec![
+                TableCell::new("Vendor"),
+                TableCell::new_with_alignment(metadata.vendor, 1, Alignment::Right),
+            ]));
 
-    if let Some(ver) = metadata.ver {
-        table.add_row(Row::new(vec![
-            TableCell::new("Version"),
-            TableCell::new_with_alignment(ver, 1, Alignment::Right),
-        ]));
-    }
+            if let Some(ver) = metadata.ver {
+                table.add_row(Row::new(vec![
+                    TableCell::new("Version"),
+                    TableCell::new_with_alignment(ver, 1, Alignment::Right),
+                ]));
+            }
 
-    if let Some(rev) = metadata.rev {
-        table.add_row(Row::new(vec![
-            TableCell::new("Revision"),
-            TableCell::new_with_alignment(rev, 1, Alignment::Right),
-        ]));
-    }
+            if let Some(rev) = metadata.rev {
+                table.add_row(Row::new(vec![
+                    TableCell::new("Revision"),
+                    TableCell::new_with_alignment(rev, 1, Alignment::Right),
+                ]));
+            }
 
-    table.add_row(Row::new(vec![TableCell::new_with_alignment(
-        "Supported Architecture Targets",
-        2,
-        Alignment::Center,
-    )]));
+            table.add_row(Row::new(vec![TableCell::new_with_alignment(
+                "Supported Architecture Targets",
+                2,
+                Alignment::Center,
+            )]));
 
-    table.add_row(Row::new(vec![TableCell::new_with_alignment(
-        archive.targets().join("\n"),
-        2,
-        Alignment::Left,
-    )]));
+            table.add_row(Row::new(vec![TableCell::new_with_alignment(
+                archive.targets().join("\n"),
+                2,
+                Alignment::Left,
+            )]));
 
-    println!("{}", table.render());
+            println!("{}", table.render());
+        }
+    };
 
     Ok(())
 }
@@ -366,6 +406,17 @@ fn handle_insert(cmd: InsertCommand) -> Result<()> {
     par.write(&cmd.archive, &issuer, &subject, is_compressed(&buf)?)
         .map_err(convert_error)?;
 
+    println!(
+        "{}",
+        format_output(
+            format!(
+                "Successfully inserted {} into archive {}",
+                cmd.binary, cmd.archive
+            ),
+            json!({"result": "success", "file": cmd.archive}),
+            &cmd.output.kind,
+        )
+    );
     Ok(())
 }
 
