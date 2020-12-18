@@ -64,7 +64,7 @@ async fn main() {
 
     let res = match cli.command {
         CliCommand::Keys(keyscli) => keys::handle_command(keyscli),
-        CliCommand::Claims(claimscli) => claims::handle_command(claimscli),
+        CliCommand::Claims(claimscli) => claims::handle_command(claimscli).await,
         CliCommand::Ctl(ctlcli) => ctl::handle_command(ctlcli).await,
         CliCommand::Par(parcli) => par::handle_command(parcli).await,
         CliCommand::Reg(regcli) => reg::handle_command(regcli).await,

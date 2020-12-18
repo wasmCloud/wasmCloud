@@ -49,13 +49,7 @@ pub struct ClaimsCli {
 enum ClaimsCliCommand {
     /// Examine the capabilities of a WebAssembly module
     #[structopt(name = "inspect")]
-    Inspect {
-        /// The file to read
-        file: String,
-        /// Extract the raw JWT from the file and print to stdout
-        #[structopt(name = "raw", short = "r", long = "raw")]
-        raw: bool,
-    },
+    Inspect(InspectCommand),
     /// Sign a WebAssembly module, specifying capabilities and other claims
     /// including expiration, tags, and additional metadata
     #[structopt(name = "sign")]
@@ -63,6 +57,45 @@ enum ClaimsCliCommand {
     /// Generate a signed JWT by supplying basic token information, a signing seed key, and metadata
     #[structopt(name = "token")]
     Token(TokenCommand),
+}
+
+#[derive(StructOpt, Debug, Clone)]
+struct InspectCommand {
+    /// Path to signed actor module or OCI URL of signed actor module
+    module: String,
+    /// Extract the raw JWT from the file and print to stdout
+    #[structopt(name = "raw", short = "r", long = "raw")]
+    raw: bool,
+
+    /// Digest to verify artifact against (if OCI URL is provided for <module>)
+    #[structopt(short = "d", long = "digest")]
+    digest: Option<String>,
+
+    /// Allow latest artifact tags (if OCI URL is provided for <module>)
+    #[structopt(long = "allow-latest")]
+    allow_latest: bool,
+
+    /// OCI username, if omitted anonymous authentication will be used
+    #[structopt(
+        short = "u",
+        long = "user",
+        env = "WASH_REG_USER",
+        hide_env_values = true
+    )]
+    user: Option<String>,
+
+    /// OCI password, if omitted anonymous authentication will be used
+    #[structopt(
+        short = "p",
+        long = "password",
+        env = "WASH_REG_PASSWORD",
+        hide_env_values = true
+    )]
+    password: Option<String>,
+
+    /// Allow insecure (HTTP) registry connections
+    #[structopt(long = "insecure")]
+    insecure: bool,
 }
 
 #[derive(StructOpt, Debug, Clone)]
@@ -285,15 +318,15 @@ struct ActorMetadata {
     common: GenerateCommon,
 }
 
-pub fn handle_command(cli: ClaimsCli) -> Result<(), Box<dyn ::std::error::Error>> {
+pub async fn handle_command(cli: ClaimsCli) -> Result<(), Box<dyn ::std::error::Error>> {
     match cli.command {
-        ClaimsCliCommand::Inspect { file, raw } => render_caps(&file, raw),
-        ClaimsCliCommand::Sign(signcmd) => sign_file(&signcmd),
-        ClaimsCliCommand::Token(gencmd) => generate_token(&gencmd),
+        ClaimsCliCommand::Inspect(inspectcmd) => render_caps(inspectcmd).await,
+        ClaimsCliCommand::Sign(signcmd) => sign_file(signcmd),
+        ClaimsCliCommand::Token(gencmd) => generate_token(gencmd),
     }
 }
 
-fn generate_token(cmd: &TokenCommand) -> Result<(), Box<dyn ::std::error::Error>> {
+fn generate_token(cmd: TokenCommand) -> Result<(), Box<dyn ::std::error::Error>> {
     match cmd {
         TokenCommand::Actor(actor) => generate_actor(actor),
         TokenCommand::Operator(operator) => generate_operator(operator),
@@ -323,7 +356,7 @@ fn get_keypair_vec(
         .collect())
 }
 
-fn generate_actor(actor: &ActorMetadata) -> Result<(), Box<dyn ::std::error::Error>> {
+fn generate_actor(actor: ActorMetadata) -> Result<(), Box<dyn ::std::error::Error>> {
     let issuer = extract_keypair(
         actor.issuer.clone(),
         None,
@@ -385,7 +418,7 @@ fn generate_actor(actor: &ActorMetadata) -> Result<(), Box<dyn ::std::error::Err
     Ok(())
 }
 
-fn generate_operator(operator: &OperatorMetadata) -> Result<(), Box<dyn ::std::error::Error>> {
+fn generate_operator(operator: OperatorMetadata) -> Result<(), Box<dyn ::std::error::Error>> {
     let self_sign_key = extract_keypair(
         operator.issuer.clone(),
         Some(operator.name.clone()),
@@ -420,7 +453,7 @@ fn generate_operator(operator: &OperatorMetadata) -> Result<(), Box<dyn ::std::e
     Ok(())
 }
 
-fn generate_account(account: &AccountMetadata) -> Result<(), Box<dyn ::std::error::Error>> {
+fn generate_account(account: AccountMetadata) -> Result<(), Box<dyn ::std::error::Error>> {
     let issuer = extract_keypair(
         account.issuer.clone(),
         Some(account.name.clone()),
@@ -461,7 +494,7 @@ fn generate_account(account: &AccountMetadata) -> Result<(), Box<dyn ::std::erro
     Ok(())
 }
 
-fn generate_provider(provider: &ProviderMetadata) -> Result<(), Box<dyn ::std::error::Error>> {
+fn generate_provider(provider: ProviderMetadata) -> Result<(), Box<dyn ::std::error::Error>> {
     let issuer = extract_keypair(
         provider.issuer.clone(),
         None,
@@ -493,7 +526,7 @@ fn generate_provider(provider: &ProviderMetadata) -> Result<(), Box<dyn ::std::e
     Ok(())
 }
 
-fn sign_file(cmd: &SignCommand) -> Result<(), Box<dyn ::std::error::Error>> {
+fn sign_file(cmd: SignCommand) -> Result<(), Box<dyn ::std::error::Error>> {
     let mut sfile = File::open(&cmd.source).unwrap();
     let mut buf = Vec::new();
     sfile.read_to_end(&mut buf).unwrap();
@@ -591,16 +624,31 @@ fn sign_file(cmd: &SignCommand) -> Result<(), Box<dyn ::std::error::Error>> {
     }
 }
 
-fn render_caps(file: &str, raw: bool) -> Result<(), Box<dyn ::std::error::Error>> {
-    let mut wfile = File::open(&file).unwrap();
-    let mut buf = Vec::new();
-    wfile.read_to_end(&mut buf).unwrap();
+async fn render_caps(cmd: InspectCommand) -> Result<(), Box<dyn ::std::error::Error>> {
+    let module_bytes = match File::open(&cmd.module) {
+        Ok(mut f) => {
+            let mut buf = Vec::new();
+            f.read_to_end(&mut buf).unwrap();
+            buf
+        }
+        Err(_) => {
+            crate::reg::pull_artifact(
+                cmd.module.to_string(),
+                cmd.digest,
+                cmd.allow_latest,
+                cmd.user,
+                cmd.password,
+                cmd.insecure,
+            )
+            .await?
+        }
+    };
 
     // Extract will return an error if it encounters an invalid hash in the claims
-    let claims = wascap::wasm::extract_claims(&buf);
+    let claims = wascap::wasm::extract_claims(&module_bytes);
     match claims {
         Ok(Some(token)) => {
-            if raw {
+            if cmd.raw {
                 println!("{}", &token.jwt);
             } else {
                 let validation = wascap::jwt::validate_token::<Actor>(&token.jwt)?;
@@ -610,7 +658,7 @@ fn render_caps(file: &str, raw: bool) -> Result<(), Box<dyn ::std::error::Error>
         }
         Err(e) => Err(Box::new(e)),
         Ok(None) => {
-            eprintln!("No capabilities discovered in : {}", &file);
+            eprintln!("No capabilities discovered in : {}", &cmd.module);
             Ok(())
         }
     }
