@@ -1,3 +1,3 @@
-# waSCCd
+# wasmCloud 
 
-waSCC Daemon - A host process for running actors and capability providers
+wasmCloud is a secure, distributed actor platform with an autonomous mesh network built for bridging disparate and far-flung infrastructure.
