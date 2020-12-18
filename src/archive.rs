@@ -122,9 +122,12 @@ impl ProviderArchive {
         }
 
         if let Some(ref cl) = c {
-            let capid = cl.metadata.as_ref().unwrap().capid.to_string();
+            let metadata = cl.metadata.as_ref().unwrap();
             let name = cl.name();
-            let vendor = cl.metadata.as_ref().unwrap().vendor.to_string();
+            let capid = metadata.capid.to_string();
+            let vendor = metadata.vendor.to_string();
+            let rev = metadata.rev;
+            let ver = metadata.ver.clone();
 
             validate_hashes(&libraries, c.as_ref().unwrap())?;
 
@@ -133,8 +136,8 @@ impl ProviderArchive {
                 capid,
                 name,
                 vendor,
-                rev: None,
-                ver: None,
+                rev,
+                ver,
                 claims: c,
             })
         } else {
@@ -516,8 +519,8 @@ mod test {
             "wascc:testing",
             "Testing",
             "waSCC",
-            Some(6),
-            Some("0.0.6".to_string()),
+            Some(7),
+            Some("0.0.7".to_string()),
         );
         arch.add_library("x86_64-linux", b"linux")?;
         arch.add_library("arm-macos", b"macos")?;
@@ -553,6 +556,74 @@ mod test {
 
         let _ = std::fs::remove_file(format!("{}.par", filename));
         let _ = std::fs::remove_file(format!("{}.par.gz", filename));
+
+        Ok(())
+    }
+
+    #[test]
+    fn preserved_claims() -> Result<()> {
+        // Build an archive in memory the way a CLI wrapper might...
+        let capid = "wascc:testing";
+        let name = "Testing";
+        let vendor = "waSCC";
+        let rev = 8;
+        let ver = "0.0.8".to_string();
+        let mut arch = ProviderArchive::new(capid, name, vendor, Some(rev), Some(ver.clone()));
+        arch.add_library("aarch64-linux", b"blahblah")?;
+        arch.add_library("x86_64-linux", b"bloobloo")?;
+        arch.add_library("x86_64-macos", b"blarblar")?;
+
+        let issuer = KeyPair::new_account();
+        let subject = KeyPair::new_service();
+
+        arch.write("./original.par.gz", &issuer, &subject, true)?;
+
+        let mut buf2 = Vec::new();
+        let mut f2 = File::open("./original.par.gz")?;
+        f2.read_to_end(&mut buf2)?;
+
+        // Make sure the file we wrote can be read back in with no claims loss
+        let mut arch2 = ProviderArchive::try_load(&buf2)?;
+
+        assert_eq!(arch.capid, arch2.capid);
+        assert_eq!(
+            arch.libraries[&"aarch64-linux".to_string()],
+            arch2.libraries[&"aarch64-linux".to_string()]
+        );
+        assert_eq!(arch2.claims().unwrap().subject, subject.public_key());
+        assert_eq!(arch2.claims().unwrap().issuer, issuer.public_key());
+        assert_eq!(arch2.claims().unwrap().name(), name);
+        assert_eq!(arch2.claims().unwrap().metadata.unwrap().ver.unwrap(), ver);
+        assert_eq!(arch2.claims().unwrap().metadata.unwrap().rev.unwrap(), rev);
+        assert_eq!(arch2.claims().unwrap().metadata.unwrap().vendor, vendor);
+        assert_eq!(arch2.claims().unwrap().metadata.unwrap().capid, capid);
+
+        // Another common task - read an existing archive and add another library file to it
+        arch2.add_library("mips-linux", b"bluhbluh")?;
+        arch2.write("./linuxadded.par.gz", &issuer, &subject, true)?;
+
+        let mut buf3 = Vec::new();
+        let mut f3 = File::open("./linuxadded.par.gz")?;
+        f3.read_to_end(&mut buf3)?;
+
+        // Make sure the re-written/modified archive looks the way we expect
+        let arch3 = ProviderArchive::try_load(&buf3)?;
+        assert_eq!(arch3.capid, arch2.capid);
+        assert_eq!(
+            arch3.libraries[&"aarch64-linux".to_string()],
+            arch2.libraries[&"aarch64-linux".to_string()]
+        );
+        assert_eq!(arch3.claims().unwrap().subject, subject.public_key());
+        assert_eq!(arch3.claims().unwrap().issuer, issuer.public_key());
+        assert_eq!(arch3.claims().unwrap().name(), name);
+        assert_eq!(arch3.claims().unwrap().metadata.unwrap().ver.unwrap(), ver);
+        assert_eq!(arch3.claims().unwrap().metadata.unwrap().rev.unwrap(), rev);
+        assert_eq!(arch3.claims().unwrap().metadata.unwrap().vendor, vendor);
+        assert_eq!(arch3.claims().unwrap().metadata.unwrap().capid, capid);
+        assert_eq!(arch3.targets().len(), 4);
+
+        let _ = std::fs::remove_file("./original.par.gz");
+        let _ = std::fs::remove_file("./linuxadded.par.gz");
 
         Ok(())
     }
