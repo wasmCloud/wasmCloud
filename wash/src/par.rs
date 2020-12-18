@@ -303,6 +303,20 @@ async fn handle_inspect(cmd: InspectCommand) -> Result<()> {
         TableCell::new_with_alignment(metadata.vendor, 1, Alignment::Right),
     ]));
 
+    if let Some(ver) = metadata.ver {
+        table.add_row(Row::new(vec![
+            TableCell::new("Version"),
+            TableCell::new_with_alignment(ver, 1, Alignment::Right),
+        ]));
+    }
+
+    if let Some(rev) = metadata.rev {
+        table.add_row(Row::new(vec![
+            TableCell::new("Revision"),
+            TableCell::new_with_alignment(rev, 1, Alignment::Right),
+        ]));
+    }
+
     table.add_row(Row::new(vec![TableCell::new_with_alignment(
         "Supported Architecture Targets",
         2,
