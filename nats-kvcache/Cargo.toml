@@ -1,0 +1,41 @@
+[package]
+name = "nats-kvcache"
+version = "0.1.0"
+authors = ["wasmCloud Team"]
+edition = "2018"
+license-file = "LICENSE.txt"
+description = "A key-value capability provider for wasmCloud that replicates data changes over NATS"
+repository = "https://github.com/wascc/wasccd"
+documentation = "https://wasmcloud.com"
+readme = "README.md"
+keywords = [
+    "cache",
+    "nats",
+    "keyvalue",
+    "webassembly",
+    "wasmcloud"    
+]
+categories = [
+    "wasm", "api-bindings",
+]
+
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+# Enable if the provider will be statically compiled into a host
+static_plugin = []
+
+[dependencies]
+actor-keyvalue = { git = "https://github.com/wasmCloud/actor-interfaces", branch = "main"}
+actor-core = { git = "https://github.com/wasmCloud/actor-interfaces", branch = "main"}
+nats = "0.8.6"
+wascc-codec = "0.9.0"
+env_logger = "0.8.2"
+uuid = { version = "0.8.1", features = ["v4"] }
+lazy_static = "1.4.0"
+log = "0.4.11"
+eventsourcing = "0.1.5"
+eventsourcing-derive = "0.1.3"
+serde = { version = "1.0.118", features = ["derive"]}
