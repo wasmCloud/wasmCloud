@@ -35,6 +35,7 @@ pub struct HostBuilder {
     rpc_client: Option<nats::asynk::Connection>,
     cplane_client: Option<nats::asynk::Connection>,
     allow_live_update: bool,
+    strict_update_check: bool,
 }
 
 impl HostBuilder {
@@ -49,12 +50,20 @@ impl HostBuilder {
             rpc_client: None,
             cplane_client: None,
             allow_live_update: false,
+            strict_update_check: true,
         }
     }
 
     pub fn enable_live_updates(self) -> HostBuilder {
         HostBuilder {
             allow_live_update: true,
+            ..self
+        }
+    }
+
+    pub fn disable_strict_update_check(self) -> HostBuilder {
+        HostBuilder {
+            strict_update_check: false,
             ..self
         }
     }
@@ -134,6 +143,7 @@ impl HostBuilder {
             rpc_client: self.rpc_client,
             cplane_client: self.cplane_client,
             allow_live_updates: self.allow_live_update,
+            strict_update_check: self.strict_update_check,
         }
     }
 }
@@ -150,6 +160,7 @@ pub struct Host {
     cplane_client: Option<nats::asynk::Connection>,
     rpc_client: Option<nats::asynk::Connection>,
     allow_live_updates: bool,
+    strict_update_check: bool,
 }
 
 impl Host {
@@ -174,6 +185,7 @@ impl Host {
             auth: self.authorizer.clone(),
             kp: KeyPair::from_seed(&kp.seed()?)?,
             allow_live_updates: self.allow_live_updates,
+            strict_update_check: self.strict_update_check,
         })
         .await?;
         *self.id.borrow_mut() = kp.public_key();
@@ -357,13 +369,21 @@ impl Host {
             hc.send(SetLabels { labels }).await?;
         }
 
-        for msg in
-            crate::manifest::generate_actor_start_messages(&manifest, self.allow_latest, self.allow_insecure).await
+        for msg in crate::manifest::generate_actor_start_messages(
+            &manifest,
+            self.allow_latest,
+            self.allow_insecure,
+        )
+        .await
         {
             let _ = hc.send(msg).await?;
         }
-        for msg in
-            crate::manifest::generate_provider_start_messages(&manifest, self.allow_latest, self.allow_insecure).await
+        for msg in crate::manifest::generate_provider_start_messages(
+            &manifest,
+            self.allow_latest,
+            self.allow_insecure,
+        )
+        .await
         {
             let _ = hc.send(msg).await?;
         }

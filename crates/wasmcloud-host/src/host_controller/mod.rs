@@ -32,6 +32,7 @@ pub(crate) struct Initialize {
     pub auth: Box<dyn Authorizer>,
     pub kp: KeyPair,
     pub allow_live_updates: bool,
+    pub strict_update_check: bool,
 }
 
 #[derive(Message)]
