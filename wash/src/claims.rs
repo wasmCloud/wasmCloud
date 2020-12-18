@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// extern crate serde_derive;
-
 use crate::keys::extract_keypair;
+use crate::util::{format_output, Output, OutputKind};
 use nkeys::{KeyPair, KeyPairType};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
@@ -40,7 +40,7 @@ use wascap::wasm::{days_from_now_to_jwt_time, sign_buffer_with_claims};
 #[structopt(
     global_settings(&[AppSettings::ColoredHelp, AppSettings::VersionlessSubcommands]),
     name = "claims")]
-pub struct ClaimsCli {
+pub(crate) struct ClaimsCli {
     #[structopt(flatten)]
     command: ClaimsCliCommand,
 }
@@ -63,9 +63,10 @@ enum ClaimsCliCommand {
 struct InspectCommand {
     /// Path to signed actor module or OCI URL of signed actor module
     module: String,
+
     /// Extract the raw JWT from the file and print to stdout
-    #[structopt(name = "raw", short = "r", long = "raw")]
-    raw: bool,
+    #[structopt(name = "jwt_only", long = "jwt-only")]
+    jwt_only: bool,
 
     /// Digest to verify artifact against (if OCI URL is provided for <module>)
     #[structopt(short = "d", long = "digest")]
@@ -96,15 +97,19 @@ struct InspectCommand {
     /// Allow insecure (HTTP) registry connections
     #[structopt(long = "insecure")]
     insecure: bool,
+
+    #[structopt(flatten)]
+    pub(crate) output: Output,
 }
 
 #[derive(StructOpt, Debug, Clone)]
 struct SignCommand {
     /// File to read
     source: String,
-    /// Target output file. If this flag is not provided, the signed module will be placed in the same directory as the source with a "_s" suffix
-    #[structopt(short = "o", long = "output")]
-    output: Option<String>,
+
+    /// Destionation for signed module. If this flag is not provided, the signed module will be placed in the same directory as the source with a "_s" suffix
+    #[structopt(short = "d", long = "destination")]
+    destination: Option<String>,
 
     #[structopt(flatten)]
     metadata: ActorMetadata,
@@ -129,12 +134,7 @@ enum TokenCommand {
 #[derive(Debug, Clone, StructOpt, Serialize, Deserialize)]
 struct GenerateCommon {
     /// Location of key files for signing. Defaults to $WASH_KEYS ($HOME/.wash/keys)
-    #[structopt(
-        short = "d",
-        long = "directory",
-        env = "WASH_KEYS",
-        hide_env_values = true
-    )]
+    #[structopt(long = "directory", env = "WASH_KEYS", hide_env_values = true)]
     directory: Option<String>,
 
     /// Indicates the token expires in the given amount of days. If this option is left off, the token will never expire
@@ -148,6 +148,9 @@ struct GenerateCommon {
     /// Disables autogeneration of keys if seed(s) are not provided
     #[structopt(long = "disable-keygen")]
     disable_keygen: bool,
+
+    #[structopt(flatten)]
+    pub(crate) output: Output,
 }
 
 #[derive(Debug, Clone, StructOpt)]
@@ -318,7 +321,7 @@ struct ActorMetadata {
     common: GenerateCommon,
 }
 
-pub async fn handle_command(cli: ClaimsCli) -> Result<(), Box<dyn ::std::error::Error>> {
+pub(crate) async fn handle_command(cli: ClaimsCli) -> Result<(), Box<dyn ::std::error::Error>> {
     match cli.command {
         ClaimsCliCommand::Inspect(inspectcmd) => render_caps(inspectcmd).await,
         ClaimsCliCommand::Sign(signcmd) => sign_file(signcmd),
@@ -414,7 +417,17 @@ fn generate_actor(actor: ActorMetadata) -> Result<(), Box<dyn ::std::error::Erro
         actor.rev,
         actor.ver.clone(),
     );
-    println!("{}", claims.encode(&issuer)?);
+
+    let jwt = claims.encode(&issuer)?;
+    println!(
+        "{}",
+        format_output(
+            jwt.clone(),
+            json!({ "token": jwt }),
+            &actor.common.output.kind
+        )
+    );
+
     Ok(())
 }
 
@@ -449,7 +462,16 @@ fn generate_operator(operator: OperatorMetadata) -> Result<(), Box<dyn ::std::er
             vec![]
         },
     );
-    println!("{}", claims.encode(&self_sign_key)?);
+
+    let jwt = claims.encode(&self_sign_key)?;
+    println!(
+        "{}",
+        format_output(
+            jwt.clone(),
+            json!({ "token": jwt }),
+            &operator.common.output.kind
+        )
+    );
     Ok(())
 }
 
@@ -490,7 +512,15 @@ fn generate_account(account: AccountMetadata) -> Result<(), Box<dyn ::std::error
             vec![]
         },
     );
-    println!("{}", claims.encode(&issuer)?);
+    let jwt = claims.encode(&issuer)?;
+    println!(
+        "{}",
+        format_output(
+            jwt.clone(),
+            json!({ "token": jwt }),
+            &account.common.output.kind
+        )
+    );
     Ok(())
 }
 
@@ -522,7 +552,15 @@ fn generate_provider(provider: ProviderMetadata) -> Result<(), Box<dyn ::std::er
         days_from_now_to_jwt_time(provider.common.not_before_days),
         days_from_now_to_jwt_time(provider.common.expires_in_days),
     );
-    println!("{}", claims.encode(&issuer)?);
+    let jwt = claims.encode(&issuer)?;
+    println!(
+        "{}",
+        format_output(
+            jwt.clone(),
+            json!({ "token": jwt }),
+            &provider.common.output.kind
+        )
+    );
     Ok(())
 }
 
@@ -591,8 +629,8 @@ fn sign_file(cmd: SignCommand) -> Result<(), Box<dyn ::std::error::Error>> {
         cmd.metadata.ver.clone(),
     )?;
 
-    let output = match cmd.output.clone() {
-        Some(out) => out,
+    let destination = match cmd.destination.clone() {
+        Some(d) => d,
         None => {
             let path = PathBuf::from(cmd.source.clone())
                 .parent()
@@ -615,18 +653,22 @@ fn sign_file(cmd: SignCommand) -> Result<(), Box<dyn ::std::error::Error>> {
         }
     };
 
-    let mut outfile = File::create(&output).unwrap();
-    match outfile.write(&signed) {
-        Ok(_) => {
-            println!(
+    let mut outfile = File::create(&destination).unwrap();
+    let output = match outfile.write(&signed) {
+        Ok(_) => Ok(format_output(
+            format!(
                 "Successfully signed {} with capabilities: {}",
-                output,
+                destination,
                 caps_list.join(",")
-            );
-            Ok(())
-        }
+            ),
+            json!({"result": "success", "destination": destination, "capabilities": caps_list}),
+            &cmd.metadata.common.output.kind,
+        )),
         Err(e) => Err(Box::new(e)),
-    }
+    }?;
+
+    println!("{}", output);
+    Ok(())
 }
 
 async fn render_caps(cmd: InspectCommand) -> Result<(), Box<dyn ::std::error::Error>> {
@@ -651,65 +693,38 @@ async fn render_caps(cmd: InspectCommand) -> Result<(), Box<dyn ::std::error::Er
 
     // Extract will return an error if it encounters an invalid hash in the claims
     let claims = wascap::wasm::extract_claims(&module_bytes);
-    match claims {
+    let out = match claims {
         Ok(Some(token)) => {
-            if cmd.raw {
-                println!("{}", &token.jwt);
+            if cmd.jwt_only {
+                Ok(token.jwt)
             } else {
                 let validation = wascap::jwt::validate_token::<Actor>(&token.jwt)?;
-                println!("{}", render_actor_claims(token.claims, validation));
+                Ok(render_actor_claims(token.claims, validation, &cmd.output))
             }
-            Ok(())
         }
         Err(e) => Err(Box::new(e)),
-        Ok(None) => {
-            eprintln!("No capabilities discovered in : {}", &cmd.module);
-            Ok(())
-        }
-    }
+        Ok(None) => Ok(format!("No capabilities discovered in : {}", &cmd.module)),
+    }?;
+
+    println!("{}", out);
+    Ok(())
 }
 
-/// Prints the claims of an actor to stdout
-fn render_actor_claims(claims: Claims<Actor>, validation: TokenValidation) -> String {
-    let mut table = render_core(&claims, validation);
-
+/// Renders actor claims into provided output format
+fn render_actor_claims(
+    claims: Claims<Actor>,
+    validation: TokenValidation,
+    output: &Output,
+) -> String {
     let md = claims.metadata.clone().unwrap();
     let friendly_rev = md.rev.unwrap_or(0);
     let friendly_ver = md.ver.unwrap_or_else(|| "None".to_string());
     let friendly = format!("{} ({})", friendly_ver, friendly_rev);
-
-    table.add_row(Row::new(vec![
-        TableCell::new("Version"),
-        TableCell::new_with_alignment(friendly, 1, Alignment::Right),
-    ]));
-
-    table.add_row(Row::new(vec![TableCell::new_with_alignment(
-        if md.provider {
-            "Capability Provider"
-        } else {
-            "Capabilities"
-        },
-        2,
-        Alignment::Center,
-    )]));
-
-    let friendly_caps: Vec<String> = if let Some(caps) = &claims.metadata.as_ref().unwrap().caps {
-        caps.iter().map(|c| capability_name(&c)).collect()
+    let provider = if md.provider {
+        "Capability Provider"
     } else {
-        vec![]
+        "Capabilities"
     };
-
-    table.add_row(Row::new(vec![TableCell::new_with_alignment(
-        friendly_caps.join("\n"),
-        2,
-        Alignment::Left,
-    )]));
-
-    table.add_row(Row::new(vec![TableCell::new_with_alignment(
-        "Tags",
-        2,
-        Alignment::Center,
-    )]));
 
     let tags = if let Some(tags) = &claims.metadata.as_ref().unwrap().tags {
         if tags.is_empty() {
@@ -720,13 +735,64 @@ fn render_actor_claims(claims: Claims<Actor>, validation: TokenValidation) -> St
     } else {
         "None".to_string()
     };
-    table.add_row(Row::new(vec![TableCell::new_with_alignment(
-        tags,
-        2,
-        Alignment::Left,
-    )]));
 
-    table.render()
+    let friendly_caps: Vec<String> = if let Some(caps) = &claims.metadata.as_ref().unwrap().caps {
+        caps.iter().map(|c| capability_name(&c)).collect()
+    } else {
+        vec![]
+    };
+
+    match output.kind {
+        OutputKind::JSON => {
+            let iss_label = token_label(&claims.issuer).to_ascii_lowercase();
+            let sub_label = token_label(&claims.subject).to_ascii_lowercase();
+            let provider_json = provider.replace(" ", "_").to_ascii_lowercase();
+            format!(
+                "{}",
+                json!({ iss_label: claims.issuer,
+                    sub_label: claims.subject,
+                    "expires": validation.expires_human,
+                    "can_be_used": validation.not_before_human,
+                    "version": friendly_ver,
+                    provider_json: friendly_caps,
+                    "tags": tags })
+            )
+        }
+        OutputKind::Text => {
+            let mut table = render_core(&claims, validation);
+
+            table.add_row(Row::new(vec![
+                TableCell::new("Version"),
+                TableCell::new_with_alignment(friendly, 1, Alignment::Right),
+            ]));
+
+            table.add_row(Row::new(vec![TableCell::new_with_alignment(
+                provider,
+                2,
+                Alignment::Center,
+            )]));
+
+            table.add_row(Row::new(vec![TableCell::new_with_alignment(
+                friendly_caps.join("\n"),
+                2,
+                Alignment::Left,
+            )]));
+
+            table.add_row(Row::new(vec![TableCell::new_with_alignment(
+                "Tags",
+                2,
+                Alignment::Center,
+            )]));
+
+            table.add_row(Row::new(vec![TableCell::new_with_alignment(
+                tags,
+                2,
+                Alignment::Left,
+            )]));
+
+            table.render()
+        }
+    }
 }
 
 // * - we don't need render impls for Operator or Account because those tokens are never embedded into a module,

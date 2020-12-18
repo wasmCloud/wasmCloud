@@ -73,6 +73,6 @@ async fn main() {
 
     match res {
         Ok(_v) => (),
-        Err(e) => println!("Error: {}", e),
+        Err(e) => eprintln!("Error: {}", e),
     }
 }

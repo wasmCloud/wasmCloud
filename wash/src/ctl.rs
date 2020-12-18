@@ -1,5 +1,10 @@
 extern crate control_interface;
+use crate::util::{
+    convert_error, format_output, json_str_to_msgpack_bytes, labels_vec_to_hashmap, Output,
+    OutputKind, Result,
+};
 use control_interface::*;
+use serde_json::json;
 use spinners::{Spinner, Spinners};
 use std::time::Duration;
 use structopt::StructOpt;
@@ -7,18 +12,16 @@ use term_table::row::Row;
 use term_table::table_cell::*;
 use term_table::{Table, TableStyle};
 
-use crate::util::{convert_error, json_str_to_msgpack_bytes, labels_vec_to_hashmap, Result};
-
 //TODO(brooksmtownsend): If theres a deadline that elapses, suggest specifying a namespace
 
 #[derive(Debug, Clone, StructOpt)]
-pub struct CtlCli {
+pub(crate) struct CtlCli {
     #[structopt(flatten)]
     command: CtlCliCommand,
 }
 
 #[derive(Debug, Clone, StructOpt)]
-pub struct ConnectionOpts {
+pub(crate) struct ConnectionOpts {
     /// RPC Host for connection, defaults to 0.0.0.0 for local nats
     #[structopt(short = "r", long = "rpc-host", default_value = "0.0.0.0")]
     rpc_host: String,
@@ -37,7 +40,7 @@ pub struct ConnectionOpts {
 }
 
 #[derive(Debug, Clone, StructOpt)]
-pub enum CtlCliCommand {
+pub(crate) enum CtlCliCommand {
     /// Invoke an operation on an actor
     #[structopt(name = "call")]
     Call(CallCommand),
@@ -60,9 +63,12 @@ pub enum CtlCliCommand {
 }
 
 #[derive(StructOpt, Debug, Clone)]
-pub struct CallCommand {
+pub(crate) struct CallCommand {
     #[structopt(flatten)]
     opts: ConnectionOpts,
+
+    #[structopt(flatten)]
+    pub(crate) output: Output,
 
     /// Public key or OCI reference of actor
     #[structopt(name = "actor-id")]
@@ -74,11 +80,11 @@ pub struct CallCommand {
 
     /// Payload to send with operation (in the form of '{"field": "value"}' )
     #[structopt(name = "data")]
-    pub data: Vec<String>,
+    pub(crate) data: Vec<String>,
 }
 
 #[derive(Debug, Clone, StructOpt)]
-pub enum GetCommand {
+pub(crate) enum GetCommand {
     /// Query lattice for running hosts
     #[structopt(name = "hosts")]
     Hosts(GetHostsCommand),
@@ -93,9 +99,12 @@ pub enum GetCommand {
 }
 
 #[derive(StructOpt, Debug, Clone)]
-pub struct LinkCommand {
+pub(crate) struct LinkCommand {
     #[structopt(flatten)]
     opts: ConnectionOpts,
+
+    #[structopt(flatten)]
+    pub(crate) output: Output,
 
     /// Public key ID of actor
     #[structopt(name = "actor-id")]
@@ -119,7 +128,7 @@ pub struct LinkCommand {
 }
 
 #[derive(Debug, Clone, StructOpt)]
-pub enum StartCommand {
+pub(crate) enum StartCommand {
     /// Launch an actor in a host
     #[structopt(name = "actor")]
     Actor(StartActorCommand),
@@ -130,7 +139,7 @@ pub enum StartCommand {
 }
 
 #[derive(Debug, Clone, StructOpt)]
-pub enum StopCommand {
+pub(crate) enum StopCommand {
     /// Stop an actor running in a host
     #[structopt(name = "actor")]
     Actor(StopActorCommand),
@@ -141,18 +150,24 @@ pub enum StopCommand {
 }
 
 #[derive(Debug, Clone, StructOpt)]
-pub struct GetHostsCommand {
+pub(crate) struct GetHostsCommand {
     #[structopt(flatten)]
     opts: ConnectionOpts,
 
-    #[structopt(short = "o", long = "timeout", default_value = "2")]
+    #[structopt(flatten)]
+    pub(crate) output: Output,
+
+    #[structopt(long = "timeout", default_value = "2")]
     timeout: u64,
 }
 
 #[derive(Debug, Clone, StructOpt)]
-pub struct GetHostInventoryCommand {
+pub(crate) struct GetHostInventoryCommand {
     #[structopt(flatten)]
     opts: ConnectionOpts,
+
+    #[structopt(flatten)]
+    pub(crate) output: Output,
 
     /// Id of host
     #[structopt(name = "host-id")]
@@ -160,15 +175,21 @@ pub struct GetHostInventoryCommand {
 }
 
 #[derive(Debug, Clone, StructOpt)]
-pub struct GetClaimsCommand {
+pub(crate) struct GetClaimsCommand {
     #[structopt(flatten)]
     opts: ConnectionOpts,
+
+    #[structopt(flatten)]
+    pub(crate) output: Output,
 }
 
 #[derive(Debug, Clone, StructOpt)]
-pub struct StartActorCommand {
+pub(crate) struct StartActorCommand {
     #[structopt(flatten)]
     opts: ConnectionOpts,
+
+    #[structopt(flatten)]
+    pub(crate) output: Output,
 
     /// Id of host, if omitted the actor will be auctioned in the lattice to find a suitable host
     #[structopt(short = "h", long = "host-id", name = "host-id")]
@@ -182,14 +203,17 @@ pub struct StartActorCommand {
     #[structopt(short = "c", long = "constraint", name = "constraints")]
     constraints: Option<Vec<String>>,
 
-    #[structopt(short = "o", long = "timeout", default_value = "2")]
+    #[structopt(long = "timeout", default_value = "2")]
     timeout: u64,
 }
 
 #[derive(Debug, Clone, StructOpt)]
-pub struct StartProviderCommand {
+pub(crate) struct StartProviderCommand {
     #[structopt(flatten)]
     opts: ConnectionOpts,
+
+    #[structopt(flatten)]
+    pub(crate) output: Output,
 
     /// Id of host, if omitted the provider will be auctioned in the lattice to find a suitable host
     #[structopt(short = "h", long = "host-id", name = "host-id")]
@@ -207,14 +231,17 @@ pub struct StartProviderCommand {
     #[structopt(short = "c", long = "constraint", name = "constraints")]
     constraints: Option<Vec<String>>,
 
-    #[structopt(short = "o", long = "timeout", default_value = "5")]
+    #[structopt(long = "timeout", default_value = "5")]
     timeout: u64,
 }
 
 #[derive(Debug, Clone, StructOpt)]
-pub struct StopActorCommand {
+pub(crate) struct StopActorCommand {
     #[structopt(flatten)]
     opts: ConnectionOpts,
+
+    #[structopt(flatten)]
+    pub(crate) output: Output,
 
     /// Id of host
     #[structopt(name = "host-id")]
@@ -226,9 +253,12 @@ pub struct StopActorCommand {
 }
 
 #[derive(Debug, Clone, StructOpt)]
-pub struct StopProviderCommand {
+pub(crate) struct StopProviderCommand {
     #[structopt(flatten)]
     opts: ConnectionOpts,
+
+    #[structopt(flatten)]
+    pub(crate) output: Output,
 
     /// Id of host
     #[structopt(name = "host-id")]
@@ -249,90 +279,185 @@ pub struct StopProviderCommand {
 
 pub(crate) async fn handle_command(cli: CtlCli) -> Result<()> {
     use CtlCliCommand::*;
-    let sp: Spinner = Spinner::new(Spinners::Dots12, "".to_string());
-    let output = match cli.command {
+    let mut sp: Option<Spinner> = None; // = Spinner::new(Spinners::Dots12, "".to_string());
+    let out = match cli.command {
         Call(cmd) => {
-            sp.message(format!(" Calling Actor {} ...", cmd.actor_id));
+            let output_kind = cmd.output.kind;
+            sp = update_spinner_message(
+                sp,
+                format!("Calling actor {} ... ", cmd.actor_id),
+                &output_kind,
+            );
             let ir = call_actor(cmd).await?;
             match ir.error {
-                Some(e) => format!("Error invoking actor: {}", e),
+                Some(e) => format_output(
+                    format!("Error invoking actor: {}", e),
+                    json!({ "error": e }),
+                    &output_kind,
+                ),
                 None => {
                     //TODO(brooksmtownsend): String::from_utf8_lossy should be decoder only if one is not available
-                    format!("Call response (raw): {}", String::from_utf8_lossy(&ir.msg))
+                    let call_response = String::from_utf8_lossy(&ir.msg);
+                    format_output(
+                        format!("Call response (raw): {}", call_response),
+                        json!({ "response": call_response }),
+                        &output_kind,
+                    )
                 }
             }
         }
         Get(GetCommand::Hosts(cmd)) => {
-            sp.message(format!(" Retrieving Hosts ..."));
+            let output_kind = cmd.output.kind;
+            sp = update_spinner_message(sp, format!(" Retrieving Hosts ..."), &output_kind);
             let hosts = get_hosts(cmd).await?;
-            format!("{}", hosts_table(hosts, None))
+            match output_kind {
+                OutputKind::Text => hosts_table(hosts, None),
+                OutputKind::JSON => format!("{}", json!({ "hosts": hosts })),
+            }
         }
         Get(GetCommand::HostInventory(cmd)) => {
-            sp.message(format!(
-                " Retrieving inventory for host {} ...",
-                cmd.host_id
-            ));
+            let output_kind = cmd.output.kind;
+            sp = update_spinner_message(
+                sp,
+                format!(" Retrieving inventory for host {} ...", cmd.host_id),
+                &output_kind,
+            );
             let inv = get_host_inventory(cmd).await?;
-            format!("{}", host_inventory_table(inv, None))
+            match output_kind {
+                OutputKind::Text => host_inventory_table(inv, None),
+                OutputKind::JSON => format!("{}", json!({ "inventory": inv })),
+            }
         }
         Get(GetCommand::Claims(cmd)) => {
-            sp.message(format!(" Retrieving claims ... "));
+            let output_kind = cmd.output.kind;
+            sp = update_spinner_message(sp, format!(" Retrieving claims ... "), &output_kind);
             let claims = get_claims(cmd).await?;
-            format!("{}", claims_table(claims, None))
+            match output_kind {
+                OutputKind::Text => claims_table(claims, None),
+                OutputKind::JSON => format!("{}", json!({ "claims": claims })),
+            }
         }
         Link(cmd) => {
-            sp.message(format!(
-                " Advertising link between {} and {} ... ",
-                cmd.actor_id, cmd.provider_id
-            ));
-            match advertise_link(cmd.clone()).await {
-                Ok(_) => format!(
-                    "Advertised link ({}) <-> ({}) successfully",
+            sp = update_spinner_message(
+                sp,
+                format!(
+                    " Advertising link between {} and {} ... ",
                     cmd.actor_id, cmd.provider_id
                 ),
-                Err(e) => format!("Error advertising link: {}", e),
+                &cmd.output.kind,
+            );
+            match advertise_link(cmd.clone()).await {
+                Ok(_) => format_output(
+                    format!(
+                        "Advertised link ({}) <-> ({}) successfully",
+                        cmd.actor_id, cmd.provider_id
+                    ),
+                    json!({"actor_id": cmd.actor_id, "provider_id": cmd.provider_id, "result": "published"}),
+                    &cmd.output.kind,
+                ),
+                Err(e) => format_output(
+                    format!("Error advertising link: {}", e),
+                    json!({ "error": format!("{}", e) }),
+                    &cmd.output.kind,
+                ),
             }
         }
         Start(StartCommand::Actor(cmd)) => {
-            sp.message(format!(" Starting actor {} ... ", cmd.actor_ref));
+            let output_kind = cmd.output.kind;
+            sp = update_spinner_message(
+                sp,
+                format!(" Starting actor {} ... ", cmd.actor_ref),
+                &output_kind,
+            );
             match start_actor(cmd).await {
-                Ok(r) => format!("Actor {} being scheduled on host {}", r.actor_id, r.host_id),
-                Err(e) => format!("Error starting actor: {}", e),
+                Ok(r) => format_output(
+                    format!("Actor {} being scheduled on host {}", r.actor_id, r.host_id),
+                    json!({ "ack": r }),
+                    &output_kind,
+                ),
+                Err(e) => format_output(
+                    format!("Error starting actor: {}", e),
+                    json!({ "error": format!("{}", e) }),
+                    &output_kind,
+                ),
             }
         }
         Start(StartCommand::Provider(cmd)) => {
-            sp.message(format!(" Starting provider {} ... ", cmd.provider_ref));
+            let output_kind = cmd.output.kind;
+            sp = update_spinner_message(
+                sp,
+                format!(" Starting provider {} ... ", cmd.provider_ref),
+                &output_kind,
+            );
             match start_provider(cmd).await {
-                Ok(r) => format!(
-                    "Provider {} being scheduled on host {}",
-                    r.provider_id, r.host_id
+                Ok(r) => format_output(
+                    format!(
+                        "Provider {} being scheduled on host {}",
+                        r.provider_id, r.host_id
+                    ),
+                    json!({ "ack": r }),
+                    &output_kind,
                 ),
-                Err(e) => format!("Error starting provider: {}", e),
+                Err(e) => format_output(
+                    format!("Error starting provider: {}", e),
+                    json!({ "error": format!("{}", e) }),
+                    &output_kind,
+                ),
             }
         }
         Stop(StopCommand::Actor(cmd)) => {
-            sp.message(format!(" Stopping actor {} ... ", cmd.actor_ref));
-            match stop_actor(cmd.clone()).await?.failure {
-                Some(f) => format!("Error stopping actor: {}", f),
-                None => format!("Stopping actor: {}", cmd.actor_ref),
+            let output_kind = cmd.output.kind;
+            sp = update_spinner_message(
+                sp,
+                format!(" Stopping actor {} ... ", cmd.actor_ref),
+                &output_kind,
+            );
+            let ack = stop_actor(cmd.clone()).await?;
+            match ack.failure {
+                Some(f) => format_output(
+                    format!("Error stopping actor: {}", f),
+                    json!({ "error": f }),
+                    &output_kind,
+                ),
+                None => format_output(
+                    format!("Stopping actor: {}", cmd.actor_ref),
+                    json!({ "ack": ack }),
+                    &output_kind,
+                ),
             }
         }
         Stop(StopCommand::Provider(cmd)) => {
-            sp.message(format!(" Stopping provider {} ... ", cmd.provider_ref));
-            match stop_provider(cmd.clone()).await?.failure {
-                Some(f) => format!("Error stopping provider: {}", f),
-                None => format!("Stopping provider: {}", cmd.provider_ref),
+            let output_kind = cmd.output.kind;
+            sp = update_spinner_message(
+                sp,
+                format!(" Stopping provider {} ... ", cmd.provider_ref),
+                &output_kind,
+            );
+            let ack = stop_provider(cmd.clone()).await?;
+            match ack.failure {
+                Some(f) => format_output(
+                    format!("Error stopping provider: {}", f),
+                    json!({ "error": f }),
+                    &output_kind,
+                ),
+                None => format_output(
+                    format!("Stopping provider: {}", cmd.provider_ref),
+                    json!({ "ack": ack }),
+                    &output_kind,
+                ),
             }
         }
     };
 
-    sp.stop();
-    println!("\n{}", output);
+    if sp.is_some() {
+        sp.unwrap().stop()
+    }
+    println!("\n{}", out);
 
     Ok(())
 }
 
-pub async fn new_ctl_client(
+pub(crate) async fn new_ctl_client(
     host: &str,
     port: &str,
     ns_prefix: String,
@@ -352,7 +477,7 @@ async fn client_from_opts(opts: ConnectionOpts) -> Result<Client> {
     .await
 }
 
-pub async fn call_actor(cmd: CallCommand) -> Result<InvocationResponse> {
+pub(crate) async fn call_actor(cmd: CallCommand) -> Result<InvocationResponse> {
     let client = client_from_opts(cmd.opts).await?;
     let bytes = json_str_to_msgpack_bytes(cmd.data)?;
     client
@@ -361,13 +486,13 @@ pub async fn call_actor(cmd: CallCommand) -> Result<InvocationResponse> {
         .map_err(convert_error)
 }
 
-pub async fn get_hosts(cmd: GetHostsCommand) -> Result<Vec<Host>> {
+pub(crate) async fn get_hosts(cmd: GetHostsCommand) -> Result<Vec<Host>> {
     let timeout = Duration::from_secs(cmd.timeout);
     let client = client_from_opts(cmd.opts).await?;
     client.get_hosts(timeout).await.map_err(convert_error)
 }
 
-pub async fn get_host_inventory(cmd: GetHostInventoryCommand) -> Result<HostInventory> {
+pub(crate) async fn get_host_inventory(cmd: GetHostInventoryCommand) -> Result<HostInventory> {
     let client = client_from_opts(cmd.opts).await?;
     client
         .get_host_inventory(&cmd.host_id)
@@ -375,12 +500,12 @@ pub async fn get_host_inventory(cmd: GetHostInventoryCommand) -> Result<HostInve
         .map_err(convert_error)
 }
 
-pub async fn get_claims(cmd: GetClaimsCommand) -> Result<ClaimsList> {
+pub(crate) async fn get_claims(cmd: GetClaimsCommand) -> Result<ClaimsList> {
     let client = client_from_opts(cmd.opts).await?;
     client.get_claims().await.map_err(convert_error)
 }
 
-pub async fn advertise_link(cmd: LinkCommand) -> Result<()> {
+pub(crate) async fn advertise_link(cmd: LinkCommand) -> Result<()> {
     let client = client_from_opts(cmd.opts).await?;
     client
         .advertise_link(
@@ -394,7 +519,7 @@ pub async fn advertise_link(cmd: LinkCommand) -> Result<()> {
         .map_err(convert_error)
 }
 
-pub async fn start_actor(cmd: StartActorCommand) -> Result<StartActorAck> {
+pub(crate) async fn start_actor(cmd: StartActorCommand) -> Result<StartActorAck> {
     let client = client_from_opts(cmd.opts.clone()).await?;
 
     let host = match cmd.host_id {
@@ -422,7 +547,7 @@ pub async fn start_actor(cmd: StartActorCommand) -> Result<StartActorAck> {
         .map_err(convert_error)
 }
 
-pub async fn start_provider(cmd: StartProviderCommand) -> Result<StartProviderAck> {
+pub(crate) async fn start_provider(cmd: StartProviderCommand) -> Result<StartProviderAck> {
     let client = client_from_opts(cmd.opts.clone()).await?;
 
     let host = match cmd.host_id {
@@ -453,7 +578,7 @@ pub async fn start_provider(cmd: StartProviderCommand) -> Result<StartProviderAc
         .map_err(convert_error)
 }
 
-pub async fn stop_provider(cmd: StopProviderCommand) -> Result<StopProviderAck> {
+pub(crate) async fn stop_provider(cmd: StopProviderCommand) -> Result<StopProviderAck> {
     let client = client_from_opts(cmd.opts).await?;
     client
         .stop_provider(
@@ -466,7 +591,7 @@ pub async fn stop_provider(cmd: StopProviderCommand) -> Result<StopProviderAck> 
         .map_err(convert_error)
 }
 
-pub async fn stop_actor(cmd: StopActorCommand) -> Result<StopActorAck> {
+pub(crate) async fn stop_actor(cmd: StopActorCommand) -> Result<StopActorAck> {
     let client = client_from_opts(cmd.opts).await?;
     client
         .stop_actor(&cmd.host_id, &cmd.actor_ref)
@@ -662,4 +787,21 @@ pub(crate) fn claims_table(list: ClaimsList, max_width: Option<usize>) -> String
     });
 
     table.render()
+}
+
+/// Handles updating the spinner for text output
+/// JSON output will be corrupted with a spinner
+fn update_spinner_message(
+    spinner: Option<Spinner>,
+    msg: String,
+    output_kind: &OutputKind,
+) -> Option<Spinner> {
+    if let Some(sp) = spinner {
+        sp.message(msg);
+        Some(sp)
+    } else if output_kind == &OutputKind::Text {
+        Some(Spinner::new(Spinners::Dots12, msg))
+    } else {
+        None
+    }
 }

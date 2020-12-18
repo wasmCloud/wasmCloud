@@ -1,8 +1,10 @@
 extern crate oci_distribution;
+use crate::util::{format_output, Output, OutputKind};
 use oci_distribution::client::*;
 use oci_distribution::secrets::RegistryAuth;
 use oci_distribution::Reference;
 use provider_archive::ProviderArchive;
+use serde_json::json;
 use spinners::{Spinner, Spinners};
 use std::fs::File;
 use std::io::prelude::*;
@@ -19,7 +21,7 @@ const WASM_FILE_EXTENSION: &str = ".wasm";
 
 const SHOWER_EMOJI: &str = "\u{1F6BF}";
 
-pub enum SupportedArtifacts {
+pub(crate) enum SupportedArtifacts {
     Par,
     Wasm,
 }
@@ -28,7 +30,7 @@ pub enum SupportedArtifacts {
 #[structopt(
     global_settings(&[AppSettings::ColoredHelp, AppSettings::VersionlessSubcommands]),
     name = "reg")]
-pub struct RegCli {
+pub(crate) struct RegCli {
     #[structopt(flatten)]
     command: RegCliCommand,
 }
@@ -49,9 +51,9 @@ struct PullCommand {
     #[structopt(name = "url")]
     url: String,
 
-    /// Path to output
-    #[structopt(short = "o", long = "output")]
-    output: Option<String>,
+    /// File destination of artifact
+    #[structopt(long = "destination")]
+    destination: Option<String>,
 
     /// Digest to verify artifact against
     #[structopt(short = "d", long = "digest")]
@@ -60,6 +62,9 @@ struct PullCommand {
     /// Allow latest artifact tags
     #[structopt(long = "allow-latest")]
     allow_latest: bool,
+
+    #[structopt(flatten)]
+    pub(crate) output: Output,
 
     #[structopt(flatten)]
     opts: AuthOpts,
@@ -82,6 +87,9 @@ struct PushCommand {
     /// Allow latest artifact tags
     #[structopt(long = "allow-latest")]
     allow_latest: bool,
+
+    #[structopt(flatten)]
+    pub(crate) output: Output,
 
     #[structopt(flatten)]
     opts: AuthOpts,
@@ -112,7 +120,7 @@ struct AuthOpts {
     insecure: bool,
 }
 
-pub async fn handle_command(cli: RegCli) -> Result<(), Box<dyn ::std::error::Error>> {
+pub(crate) async fn handle_command(cli: RegCli) -> Result<(), Box<dyn ::std::error::Error>> {
     match cli.command {
         RegCliCommand::Pull(cmd) => handle_pull(cmd).await,
         RegCliCommand::Push(cmd) => handle_push(cmd).await,
@@ -121,10 +129,13 @@ pub async fn handle_command(cli: RegCli) -> Result<(), Box<dyn ::std::error::Err
 
 async fn handle_pull(cmd: PullCommand) -> Result<(), Box<dyn ::std::error::Error>> {
     let image: Reference = cmd.url.parse().unwrap();
-    let sp = Spinner::new(
-        Spinners::Dots12,
-        format!(" Downloading {} ...", image.whole()),
-    );
+    let spinner = match cmd.output.kind {
+        OutputKind::Text => Some(Spinner::new(
+            Spinners::Dots12,
+            format!(" Downloading {} ...", image.whole()),
+        )),
+        OutputKind::JSON => None,
+    };
     let artifact = pull_artifact(
         cmd.url,
         cmd.digest,
@@ -134,18 +145,28 @@ async fn handle_pull(cmd: PullCommand) -> Result<(), Box<dyn ::std::error::Error
         cmd.opts.insecure,
     )
     .await?;
-    sp.message(format!(" Writing {} ...", image.whole()));
-    let outfile = write_artifact(&artifact, &image, cmd.output)?;
-    sp.stop();
+
+    let outfile = write_artifact(&artifact, &image, cmd.destination)?;
+
+    if spinner.is_some() {
+        spinner.unwrap().stop();
+    }
 
     println!(
-        "\n{} Successfully pulled and validated {}",
-        SHOWER_EMOJI, outfile
+        "{}",
+        format_output(
+            format!(
+                "\n{} Successfully pulled and validated {}",
+                SHOWER_EMOJI, outfile
+            ),
+            json!({"result": "success", "file": outfile}),
+            &cmd.output.kind
+        )
     );
     Ok(())
 }
 
-pub async fn pull_artifact(
+pub(crate) async fn pull_artifact(
     url: String,
     digest: Option<String>,
     allow_latest: bool,
@@ -234,7 +255,7 @@ fn write_artifact(
 
 /// Helper function to determine artifact type and validate that it is
 /// a valid artifact of that type
-pub fn validate_artifact(
+pub(crate) fn validate_artifact(
     artifact: &[u8],
     name: &str,
 ) -> Result<SupportedArtifacts, Box<dyn ::std::error::Error>> {
@@ -273,10 +294,14 @@ fn validate_provider_archive(
 }
 
 async fn handle_push(cmd: PushCommand) -> Result<(), Box<dyn ::std::error::Error>> {
-    let sp = Spinner::new(
-        Spinners::Dots12,
-        format!(" Pushing {} to {} ...", cmd.artifact, cmd.url),
-    );
+    let spinner = match cmd.output.kind {
+        OutputKind::Text => Some(Spinner::new(
+            Spinners::Dots12,
+            format!(" Pushing {} to {} ...", cmd.artifact, cmd.url),
+        )),
+        OutputKind::JSON => None,
+    };
+
     push_artifact(
         cmd.url.clone(),
         cmd.artifact,
@@ -288,15 +313,24 @@ async fn handle_push(cmd: PushCommand) -> Result<(), Box<dyn ::std::error::Error
     )
     .await?;
 
-    sp.stop();
+    if spinner.is_some() {
+        spinner.unwrap().stop();
+    }
     println!(
-        "\n{} Successfully validated and pushed to {}",
-        SHOWER_EMOJI, cmd.url
+        "{}",
+        format_output(
+            format!(
+                "\n{} Successfully validated and pushed to {}",
+                SHOWER_EMOJI, cmd.url
+            ),
+            json!({"result": "success", "url": cmd.url}),
+            &cmd.output.kind
+        )
     );
     Ok(())
 }
 
-pub async fn push_artifact(
+pub(crate) async fn push_artifact(
     url: String,
     artifact: String,
     config: Option<String>,
