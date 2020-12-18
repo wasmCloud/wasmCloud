@@ -606,7 +606,12 @@ fn sign_file(cmd: SignCommand) -> Result<(), Box<dyn ::std::error::Error>> {
                 .to_str()
                 .unwrap()
                 .to_string();
-            format!("{}/{}_s.wasm", path, module_name)
+            // If path is empty, user supplied module in current directory
+            if path.is_empty() {
+                format!("./{}_s.wasm", module_name)
+            } else {
+                format!("{}/{}_s.wasm", path, module_name)
+            }
         }
     };
 
