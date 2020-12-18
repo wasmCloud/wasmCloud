@@ -1,6 +1,7 @@
 use crate::actors::{ActorHost, WasccActor};
 use crate::auth::Authorizer;
 
+use crate::messagebus::LatticeCacheClient;
 use crate::{NativeCapability, Result};
 use actix::prelude::*;
 use control_interface::LinkDefinition;
@@ -32,6 +33,9 @@ pub(crate) struct Initialize {
     pub auth: Box<dyn Authorizer>,
     pub kp: KeyPair,
     pub allow_live_updates: bool,
+    pub allow_latest: bool,
+    pub allow_insecure: bool,
+    pub lattice_cache_provider: Option<String>,
 }
 
 #[derive(Message)]

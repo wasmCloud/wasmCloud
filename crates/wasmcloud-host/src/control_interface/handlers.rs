@@ -29,7 +29,11 @@ use wascap::jwt::Claims;
 // Because live updating an actor involves downloading the OCI bytes and then reconstituting a
 // low-level wasm runtime host (which could involve a JIT pass depending on the runtime), we
 // cannot allow control interface clients to wait that long for acknowledgement.
-pub(crate) async fn handle_update_actor(host: &str, msg: &nats::asynk::Message, allow_insecure: bool) {
+pub(crate) async fn handle_update_actor(
+    host: &str,
+    msg: &nats::asynk::Message,
+    allow_insecure: bool,
+) {
     let hc = HostController::from_hostlocal_registry(host);
     let req = deserialize::<UpdateActorCommand>(&msg.data);
     if req.is_err() {
@@ -235,7 +239,12 @@ pub(crate) async fn handle_host_probe(host: &str, msg: &nats::asynk::Message) {
 
 // TODO: I don't know if this function reads better as a chain of `and_then` futures or
 // if this "go" style guard check sequence is easier to read.
-pub(crate) async fn handle_start_actor(host: &str, msg: &nats::asynk::Message, allow_latest: bool, allow_insecure: bool) {
+pub(crate) async fn handle_start_actor(
+    host: &str,
+    msg: &nats::asynk::Message,
+    allow_latest: bool,
+    allow_insecure: bool,
+) {
     let cmd = deserialize::<StartActorCommand>(&msg.data);
     let mut ack = StartActorAck::default();
     ack.host_id = host.to_string();
@@ -386,7 +395,7 @@ pub(crate) async fn handle_start_provider(
     host: &str,
     msg: &nats::asynk::Message,
     allow_latest: bool,
-    allow_insecure: bool
+    allow_insecure: bool,
 ) {
     let mut ack = StartProviderAck::default();
     ack.host_id = host.to_string();
@@ -429,7 +438,8 @@ pub(crate) async fn handle_start_provider(
         }
     }
 
-    let par = crate::oci::fetch_provider_archive(&cmd.provider_ref, allow_latest, allow_insecure).await;
+    let par =
+        crate::oci::fetch_provider_archive(&cmd.provider_ref, allow_latest, allow_insecure).await;
     if let Err(e) = par {
         let f = format!(
             "Failed to retrieve provider archive from OCI registry: {}",

@@ -8,7 +8,8 @@ use crate::messagebus::{
     AdvertiseClaims, AdvertiseLink, CanInvoke, ClaimsResponse, EnforceLocalActorLinks,
     EnforceLocalLink, EnforceLocalProviderLinks, EstablishAllLinks, FindLinks, FindLinksResponse,
     GetClaims, Initialize, LinkDefinition, LinksResponse, LookupLink, PutClaims, PutLink,
-    QueryActors, QueryAllLinks, QueryProviders, QueryResponse, Subscribe, Unsubscribe,
+    QueryActors, QueryAllLinks, QueryProviders, QueryResponse, SetCacheClient, Subscribe,
+    Unsubscribe,
 };
 use crate::{auth, Result};
 use actix::prelude::*;
@@ -36,11 +37,29 @@ impl Actor for MessageBus {
 }
 
 impl Handler<FindLinks> for MessageBus {
-    type Result = FindLinksResponse;
+    type Result = ResponseActFuture<Self, FindLinksResponse>;
 
     fn handle(&mut self, msg: FindLinks, _ctx: &mut Context<Self>) -> Self::Result {
-        let res = self.link_cache.find_links(&msg.link_name, &msg.provider_id);
-        FindLinksResponse { links: res }
+        let lc = self.latticecache.unwrap().clone();
+        Box::pin(
+            async move {
+                FindLinksResponse {
+                    links: lc
+                        .collect_links()
+                        .await
+                        .iter()
+                        .filter_map(|ld| {
+                            if ld.link_name == msg.link_name && ld.provider_id == msg.provider_id {
+                                Some((ld.actor_id.to_string(), ld.values.clone()))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect(),
+                }
+            }
+            .into_actor(self),
+        )
     }
 }
 
@@ -194,6 +213,14 @@ impl Handler<PutLink> for MessageBus {
     }
 }
 
+impl Handler<SetCacheClient> for MessageBus {
+    type Result = ();
+
+    fn handle(&mut self, msg: SetCacheClient, _ctx: &mut Context<Self>) -> Self::Result {
+        self.latticecache = Some(msg.client);
+    }
+}
+
 impl Handler<CanInvoke> for MessageBus {
     type Result = bool;
 
@@ -273,6 +300,7 @@ impl Handler<Initialize> for MessageBus {
         self.authorizer = Some(msg.auth);
         self.nc = msg.nc;
         self.namespace = msg.namespace;
+
         let ns = self.namespace.clone();
         let timeout = msg.rpc_timeout.clone();
         info!("Messagebus initialized");

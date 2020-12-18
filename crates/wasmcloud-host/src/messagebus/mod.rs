@@ -9,15 +9,18 @@ use wascap::prelude::{Claims, KeyPair};
 
 use crate::messagebus::rpc_client::RpcClient;
 pub use handlers::OP_BIND_ACTOR;
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 pub(crate) mod handlers;
 mod hb;
+pub(crate) mod latticecache_client;
 pub(crate) mod nats_subscriber;
 pub(crate) mod rpc_client;
 pub(crate) mod rpc_subscription;
 pub(crate) mod utils;
 
+pub(crate) use latticecache_client::LatticeCacheClient;
 pub(crate) use nats_subscriber::{NatsMessage, NatsSubscriber};
 
 #[derive(Default)]
@@ -26,10 +29,9 @@ pub(crate) struct MessageBus {
     namespace: Option<String>,
     subscribers: HashMap<WasccEntity, Recipient<Invocation>>,
     rpc_outbound: Option<Addr<RpcClient>>,
-    link_cache: LinkCache,
-    claims_cache: HashMap<String, Claims<wascap::jwt::Actor>>,
     key: Option<KeyPair>,
     authorizer: Option<Box<dyn Authorizer>>,
+    latticecache: Option<LatticeCacheClient>,
 }
 
 #[derive(Message)]
@@ -48,6 +50,7 @@ pub struct LinksResponse {
     pub links: Vec<LinkDefinition>,
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct LinkDefinition {
     pub actor_id: String,
     pub provider_id: String,
@@ -163,6 +166,12 @@ pub struct FindLinksResponse {
 #[derive(Message)]
 #[rtype(result = "ClaimsResponse")]
 pub struct GetClaims;
+
+#[derive(Message)]
+#[rtype(result = "()")]
+pub struct SetCacheClient {
+    pub client: LatticeCacheClient,
+}
 
 #[derive(Debug)]
 pub struct ClaimsResponse {
