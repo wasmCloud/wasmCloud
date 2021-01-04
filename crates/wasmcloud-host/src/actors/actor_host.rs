@@ -25,6 +25,7 @@ struct State {
     host_id: String,
     seed: String,
     can_update: bool,
+    strict_update_check: bool,
 }
 
 #[derive(Message)]
@@ -37,6 +38,7 @@ pub(crate) struct Initialize {
     pub image_ref: Option<String>,
     pub host_id: String,
     pub can_update: bool,
+    pub strict_update_check: bool,
 }
 
 #[derive(Message)]
@@ -79,7 +81,11 @@ impl Handler<LiveUpdate> for ActorHost {
         let actor = WasccActor::from_slice(&msg.actor_bytes)?;
         let new_claims = actor.claims();
         // Validate that this update is one that we will allow to take place
-        validate_update(&new_claims, &self.state.as_ref().unwrap().claims)?;
+        validate_update(
+            &new_claims,
+            &self.state.as_ref().unwrap().claims,
+            self.state.as_ref().unwrap().strict_update_check,
+        )?;
         let old_revision = self
             .state
             .as_ref()
@@ -113,6 +119,7 @@ impl Handler<LiveUpdate> for ActorHost {
             image_ref: Some(msg.image_ref),
             host_id: self.state.as_ref().unwrap().host_id.to_string(),
             can_update: true,
+            strict_update_check: true,
         };
         let host_id = init.host_id.to_string();
         let actor = perform_initialization(self, ctx, init);
@@ -221,6 +228,7 @@ fn perform_initialization(
                 host_id: hid,
                 seed: msg.signing_seed,
                 can_update: msg.can_update,
+                strict_update_check: msg.strict_update_check,
             });
             info!(
                 "Actor {} initialized",
@@ -271,6 +279,7 @@ fn assert_validation_result(tv: &TokenValidation) -> Result<()> {
 fn validate_update(
     new_claims: &Claims<wascap::jwt::Actor>,
     old_claims: &Claims<wascap::jwt::Actor>,
+    strict_update_check: bool,
 ) -> Result<u32> {
     if let Some(ref new_md) = new_claims.metadata {
         if let Some(ref old_md) = old_claims.metadata {
@@ -288,10 +297,19 @@ fn validate_update(
                     "Cannot live update if the new module is not a higher revision number".into(),
                 );
             }
-            if new_md.caps.as_ref().unwrap_or(&vec![]).len()
-                > old_md.caps.as_ref().unwrap_or(&vec![]).len()
-            {
-                warn!("Live update warning: new actor has more claims than the previous revision.");
+            // False if old and new capabilities are the same list by comparing length and contents
+            let claims_changed = old_md.caps.as_ref().unwrap_or(&vec![]).len()
+                == new_md.caps.as_ref().unwrap_or(&vec![]).len()
+                && new_md
+                    .caps
+                    .as_ref()
+                    .unwrap_or(&vec![])
+                    .iter()
+                    .all(|c| old_md.caps.as_ref().unwrap_or(&vec![]).contains(c));
+            if claims_changed && strict_update_check {
+                return Err("Strict claims checking does not allow live updated actors to have different claims".into());
+            } else if claims_changed {
+                warn!("Live update warning: new actor has different claims than the previous revision.");
             }
         }
     }
