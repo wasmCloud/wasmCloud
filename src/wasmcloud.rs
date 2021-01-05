@@ -62,6 +62,10 @@ struct Cli {
     /// Allows the use of "latest" artifact tag
     #[structopt(long = "allow-oci-latest")]
     allow_oci_latest: bool,
+
+    /// Disables strict comparison of live updated actor claims
+    #[structopt(long = "disable-strict-update-check")]
+    disable_strict_update_check: bool,
 }
 
 #[actix_rt::main]
@@ -93,6 +97,9 @@ async fn main() -> Result<()> {
     }
     if cli.allow_oci_latest {
         host_builder = host_builder.oci_allow_latest();
+    }
+    if cli.disable_strict_update_check {
+        host_builder = host_builder.disable_strict_update_check();
     }
 
     let host = host_builder.build();
