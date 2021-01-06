@@ -36,6 +36,7 @@ extern crate actor_keyvalue as keyvalue;
 extern crate wascc_codec as codec;
 #[macro_use]
 extern crate log;
+use crossbeam_channel::{select, tick, Receiver, Sender};
 
 use codec::capabilities::{
     CapabilityProvider, Dispatcher, NullDispatcher, OP_GET_CAPABILITY_DESCRIPTOR,
@@ -85,6 +86,7 @@ pub struct NatsReplicatedKVProvider {
     nc: Arc<RwLock<Option<nats::Connection>>>,
     event_subject: Arc<RwLock<String>>,
     id: String,
+    terminator: Arc<RwLock<Option<Sender<bool>>>>,
 }
 
 impl Default for NatsReplicatedKVProvider {
@@ -99,6 +101,7 @@ impl Default for NatsReplicatedKVProvider {
             nc: Arc::new(RwLock::new(None)),
             event_subject: Arc::new(RwLock::new("".to_string())),
             id: Uuid::new_v4().to_string(),
+            terminator: Arc::new(RwLock::new(None)),
         }
     }
 }
@@ -184,9 +187,23 @@ impl NatsReplicatedKVProvider {
         );
         let c = cache2.clone();
         let conn = nc2.clone();
-        thread::spawn(move || loop {
-            thread::sleep(delay);
-            let _ = regenerate_cache_from_replay(&conn, c.clone(), &replay_req_subject);
+
+        let (term_s, term_r): (Sender<bool>, Receiver<bool>) = crossbeam_channel::bounded(1);
+        {
+            let mut lock = self.terminator.write().unwrap();
+            *lock = Some(term_s);
+        }
+
+        thread::spawn(move || {
+            let ticker = tick(delay);
+            loop {
+                select! {
+                    recv(ticker) -> _ =>  {
+                        let _ = regenerate_cache_from_replay(&conn, c.clone(), &replay_req_subject);
+                    }
+                    recv(term_r) -> _ => break,
+                }
+            }
         });
 
         Ok(())
@@ -498,7 +515,17 @@ impl CapabilityProvider for NatsReplicatedKVProvider {
     }
 
     fn stop(&self) {
-        todo!()
+        {
+            let mut lock = self.terminator.write().unwrap();
+            if let Some(t) = lock.as_mut() {
+                let _ = t.send(true);
+            }
+        }
+
+        let mut lock = self.nc.write().unwrap();
+        if let Some(nc) = lock.take() {
+            nc.close();
+        }
     }
 }
 
