@@ -36,6 +36,7 @@ pub(crate) struct Initialize {
     pub allow_latest: bool,
     pub allow_insecure: bool,
     pub lattice_cache_provider: Option<String>,
+    pub strict_update_check: bool,
 }
 
 #[derive(Message)]

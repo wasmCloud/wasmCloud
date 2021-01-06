@@ -49,6 +49,7 @@ pub struct HostController {
     started: Instant,
     allow_live_updates: bool,
     latticecache: Option<LatticeCacheClient>,
+    strict_update_check: bool,
 }
 
 impl Default for HostController {
@@ -63,6 +64,7 @@ impl Default for HostController {
             started: Instant::now(),
             latticecache: None,
             allow_live_updates: false,
+            strict_update_check: true,
         }
     }
 }
@@ -390,6 +392,11 @@ impl Handler<Initialize> for HostController {
         let seed = msg.kp.seed().unwrap().to_string();
         self.kp = Some(KeyPair::from_seed(&seed).unwrap());
         self.allow_live_updates = msg.allow_live_updates;
+        self.strict_update_check = msg.strict_update_check;
+        info!(
+            "Host controller initialized - {} (Hot Updating - {})",
+            host_id, self.allow_live_updates
+        );
 
         trace!("Host labels: {:?}", &self.host_labels);
         Box::pin(
@@ -493,6 +500,7 @@ impl Handler<StartActor> for HostController {
             image_ref: msg.image_ref.clone(),
             host_id: self.kp.as_ref().unwrap().public_key(),
             can_update: self.allow_live_updates,
+            strict_update_check: self.strict_update_check,
         };
 
         let new_actor = SyncArbiter::start(1, move || ActorHost::default());

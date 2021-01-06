@@ -36,6 +36,7 @@ pub struct HostBuilder {
     cplane_client: Option<nats::asynk::Connection>,
     allow_live_update: bool,
     lattice_cache_provider_ref: Option<String>,
+    strict_update_check: bool,
 }
 
 impl HostBuilder {
@@ -51,12 +52,20 @@ impl HostBuilder {
             cplane_client: None,
             allow_live_update: false,
             lattice_cache_provider_ref: None,
+            strict_update_check: true,
         }
     }
 
     pub fn enable_live_updates(self) -> HostBuilder {
         HostBuilder {
             allow_live_update: true,
+            ..self
+        }
+    }
+
+    pub fn disable_strict_update_check(self) -> HostBuilder {
+        HostBuilder {
+            strict_update_check: false,
             ..self
         }
     }
@@ -144,6 +153,7 @@ impl HostBuilder {
             cplane_client: self.cplane_client,
             allow_live_updates: self.allow_live_update,
             lattice_cache_provider_ref: self.lattice_cache_provider_ref,
+            strict_update_check: self.strict_update_check,
         }
     }
 }
@@ -161,6 +171,7 @@ pub struct Host {
     rpc_client: Option<nats::asynk::Connection>,
     allow_live_updates: bool,
     lattice_cache_provider_ref: Option<String>,
+    strict_update_check: bool,
 }
 
 impl Host {
@@ -188,6 +199,7 @@ impl Host {
             allow_latest: self.allow_latest,
             allow_insecure: self.allow_insecure,
             lattice_cache_provider: self.lattice_cache_provider_ref.clone(),
+            strict_update_check: self.strict_update_check,
         })
         .await?;
 
