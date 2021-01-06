@@ -199,7 +199,7 @@ impl KeyValueStore {
                 if let KeyValueItem::Set(ref s) = v {
                     Ok(s.iter().cloned().collect())
                 } else {
-                    Err("attempt to query non-set".into())
+                    Err(format!("attempt to query non-set '{}'", key).into())
                 }
             },
         )
