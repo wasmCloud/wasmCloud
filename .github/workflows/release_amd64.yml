@@ -15,8 +15,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v1
       - name: Install dependencies
-        run: apt-get update -q -y;
-             apt-get install -y \
+        run: sudo apt-get update -q -y;
+             sudo apt-get install -y \
               libssl-dev \
               pkg-config \
               libclang-dev
