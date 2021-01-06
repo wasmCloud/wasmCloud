@@ -5,8 +5,11 @@ endef
 
 CAPABILITY_ID := $(call readvar,CAPABILITY_ID)
 NAME          := $(shell cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name')
+VERSION				:= $(shell cargo metadata --no-deps --format-version 1 | jq -r '.packages[].version')
 LIBNAME       := $(shell echo $(NAME) | tr '-' '_')
-VENDOR        := waSCC
+VENDOR        := wasmCloud
+REVISION			?= 0
+DESTINATION		?= nats.par.gz
 
 TARGETS := armv7-unknown-linux-gnueabihf \
 	aarch64-unknown-linux-gnu \
@@ -30,23 +33,26 @@ par: $(TARGETS)
 		--capid $(CAPABILITY_ID) \
 		--name $(NAME) \
 		--vendor $(VENDOR) \
+		--version $(VERSION) \
+		--revision $(REVISION) \
+		--destination $(DESTINATION) \
 		--compress
 	wash par insert \
 		--arch aarch64-linux \
 		--binary target/aarch64-unknown-linux-gnu/release/lib$(LIBNAME).so \
-		lib$(LIBNAME).par.gz
+		$(DESTINATION)
 	wash par insert \
 		--arch x86_64-macos \
 		--binary target/x86_64-apple-darwin/release/lib$(LIBNAME).dylib \
-		lib$(LIBNAME).par.gz
+		$(DESTINATION)
 	wash par insert \
 		--arch x86_64-windows \
 		--binary target/x86_64-pc-windows-gnu/release/$(LIBNAME).dll \
-		lib$(LIBNAME).par.gz
+		$(DESTINATION)
 	wash par insert \
 		--arch x86_64-linux \
 		--binary target/x86_64-unknown-linux-gnu/release/lib$(LIBNAME).so \
-		lib$(LIBNAME).par.gz
+		$(DESTINATION)
 
 $(MIPS_TARGETS):
 	cross build --target $@ --release
@@ -55,16 +61,16 @@ par-mips: $(MIPS_TARGETS) par
 	wash par insert \
 		--arch mips-linux \
 		--binary target/mips-unknown-linux-gnu/release/lib$(LIBNAME).so \
-		lib$(LIBNAME).par.gz
+		$(DESTINATION)
 	wash par insert \
 		--arch mipsel-linux \
 		--binary target/mipsel-unknown-linux-gnu/release/lib$(LIBNAME).so \
-		lib$(LIBNAME).par.gz
+		$(DESTINATION)
 	wash par insert \
 		--arch mips64-linux \
 		--binary target/mips64-unknown-linux-gnuabi64/release/lib$(LIBNAME).so \
-		lib$(LIBNAME).par.gz
+		$(DESTINATION)
 	wash par insert \
 		--arch mips64el-linux \
 		--binary target/mips64el-unknown-linux-gnuabi64/release/lib$(LIBNAME).so \
-		lib$(LIBNAME).par.gz
+		$(DESTINATION)
