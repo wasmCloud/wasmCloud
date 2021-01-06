@@ -169,7 +169,7 @@ pub struct GetClaims;
 
 #[derive(Message)]
 #[rtype(result = "()")]
-pub struct SetCacheClient {
+pub(crate) struct SetCacheClient {
     pub client: LatticeCacheClient,
 }
 

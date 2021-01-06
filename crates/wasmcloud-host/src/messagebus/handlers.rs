@@ -13,7 +13,9 @@ use crate::messagebus::{
 };
 use crate::{auth, Result};
 use actix::prelude::*;
+use std::collections::HashMap;
 use std::sync::Arc;
+use wascap::prelude::KeyPair;
 
 pub const OP_HEALTH_REQUEST: &str = "HealthRequest";
 pub const OP_BIND_ACTOR: &str = "BindActor";
@@ -40,7 +42,7 @@ impl Handler<FindLinks> for MessageBus {
     type Result = ResponseActFuture<Self, FindLinksResponse>;
 
     fn handle(&mut self, msg: FindLinks, _ctx: &mut Context<Self>) -> Self::Result {
-        let lc = self.latticecache.unwrap().clone();
+        let lc = self.latticecache.clone().unwrap();
         Box::pin(
             async move {
                 FindLinksResponse {
@@ -64,34 +66,74 @@ impl Handler<FindLinks> for MessageBus {
 }
 
 impl Handler<EnforceLocalActorLinks> for MessageBus {
-    type Result = ();
+    type Result = ResponseActFuture<Self, ()>;
 
     fn handle(&mut self, msg: EnforceLocalActorLinks, ctx: &mut Context<Self>) -> Self::Result {
-        for (key, _values) in self.link_cache.all() {
-            if key.actor == msg.actor && self.claims_cache.contains_key(&msg.actor) {
-                ctx.notify(EnforceLocalLink {
-                    actor: key.actor,
-                    contract_id: key.contract_id,
-                    link_name: key.link_name,
-                })
+        let lc = self.latticecache.clone().unwrap();
+
+        Box::pin(
+            async move {
+                let mut lds = Vec::new();
+                let x = lc.collect_links().await;
+                for ld in x {
+                    if ld.actor_id == msg.actor && lc.has_actor(&msg.actor).await {
+                        lds.push(ld);
+                    }
+                }
+                lds
             }
-        }
+            .into_actor(self)
+            .map(move |links, _act, ctx| {
+                for link in links {
+                    ctx.notify(EnforceLocalLink {
+                        actor: link.actor_id,
+                        contract_id: link.contract_id,
+                        link_name: link.link_name,
+                    });
+                }
+            }),
+        )
     }
 }
 
 impl Handler<EnforceLocalProviderLinks> for MessageBus {
-    type Result = ();
+    type Result = ResponseActFuture<Self, ()>;
 
     fn handle(&mut self, msg: EnforceLocalProviderLinks, ctx: &mut Context<Self>) -> Self::Result {
-        for (key, values) in self.link_cache.all() {
-            if key.link_name == msg.link_name && values.provider_id == msg.provider_id {
-                ctx.notify(EnforceLocalLink {
-                    actor: key.actor,
-                    contract_id: key.contract_id,
-                    link_name: key.link_name,
-                })
-            }
+        if self.latticecache.is_none() {
+            return Box::pin(async {}.into_actor(self));
         }
+
+        let lc = self.latticecache.clone().unwrap();
+
+        Box::pin(
+            async move {
+                let mut lds = Vec::new();
+                let x = lc.collect_links().await;
+                info!(
+                    "Performing local provider link re-establish check for {}/{} ({} known links)",
+                    msg.provider_id,
+                    msg.link_name,
+                    x.len()
+                );
+                for ld in x {
+                    if ld.link_name == msg.link_name && ld.provider_id == msg.provider_id {
+                        lds.push(ld);
+                    }
+                }
+                lds
+            }
+            .into_actor(self)
+            .map(move |links, _act, ctx| {
+                for link in links {
+                    ctx.notify(EnforceLocalLink {
+                        actor: link.actor_id,
+                        contract_id: link.contract_id,
+                        link_name: link.link_name,
+                    });
+                }
+            }),
+        )
     }
 }
 
@@ -101,63 +143,78 @@ impl Handler<EnforceLocalLink> for MessageBus {
     // If the provider responsible for this link is local, and the actor
     // for this link is known to us, then invoke the link binding
     fn handle(&mut self, msg: EnforceLocalLink, _ctx: &mut Context<Self>) -> Self::Result {
-        let claims = self.claims_cache.get(&msg.actor);
-        if claims.is_none() {
-            return Box::pin(async move {}.into_actor(self)); // do not send link invocation for actors we don't know about
+        if self.latticecache.is_none() {
+            return Box::pin(async {}.into_actor(self));
         }
-        let key = LinkKey {
-            actor: msg.actor.to_string(),
-            contract_id: msg.contract_id.to_string(),
-            link_name: msg.link_name.to_string(),
-        };
-        let link = self.link_cache.get(&key);
-        if link.is_none() {
-            return Box::pin(async move {}.into_actor(self)); // do not invoke if we don't have the link in the link cache
-        }
-        let link = link.unwrap();
-        let target = WasccEntity::Capability {
-            id: link.provider_id.to_string(),
-            contract_id: msg.contract_id.to_string(),
-            link_name: msg.link_name.to_string(),
-        };
-        if let Some(t) = self.subscribers.get(&target) {
-            let t = t.clone();
-            let inv = gen_config_invocation(
-                self.key.as_ref().unwrap(),
-                &msg.actor,
-                &msg.contract_id,
-                &link.provider_id,
-                claims.unwrap().clone(),
-                msg.link_name.to_string(),
-                link.values,
-            );
-            Box::pin(
-                async move {
-                    let _ = t.send(inv).await;
+        let lc = self.latticecache.clone().unwrap();
+        let subscribers = self.subscribers.clone();
+        let seed = self.key.as_ref().clone().unwrap().seed().unwrap();
+        let key = KeyPair::from_seed(&seed).unwrap();
+        Box::pin(
+            async move {
+                let claims = match lc.get_claims(&msg.actor).await {
+                    Ok(Some(c)) => c,
+                    _ => return,
+                };
+                if !lc.has_actor(&msg.actor).await {
+                    return; // do not send link invocation for actors we don't know about
                 }
-                .into_actor(self),
-            )
-        } else {
-            Box::pin(async move {}.into_actor(self))
-        }
+                if let Ok(Some(ld)) = lc
+                    .lookup_link(&msg.actor, &msg.contract_id, &msg.link_name)
+                    .await
+                {
+                    let target = WasccEntity::Capability {
+                        id: ld.provider_id.to_string(),
+                        contract_id: ld.contract_id.to_string(),
+                        link_name: ld.link_name.to_string(),
+                    };
+                    if let Some(t) = subscribers.get(&target) {
+                        let inv = gen_config_invocation(
+                            &key,
+                            &msg.actor,
+                            &msg.contract_id,
+                            &ld.provider_id,
+                            claims,
+                            msg.link_name,
+                            ld.values,
+                        );
+                        let _ = t.send(inv).await;
+                    }
+                } else {
+                    return;
+                }
+            }
+            .into_actor(self),
+        )
     }
 }
 
 impl Handler<EstablishAllLinks> for MessageBus {
-    type Result = ();
+    type Result = ResponseActFuture<Self, ()>;
 
-    fn handle(&mut self, _msg: EstablishAllLinks, ctx: &mut Context<Self>) -> Self::Result {
-        for (key, _value) in self.link_cache.all() {
-            if !self.claims_cache.contains_key(&key.actor) {
-                continue; // do not send link invocation for actors we don't know about
+    fn handle(&mut self, _msg: EstablishAllLinks, _ctx: &mut Context<Self>) -> Self::Result {
+        let lc = self.latticecache.clone().unwrap();
+        Box::pin(
+            async move {
+                let mut x = Vec::new();
+                for ld in lc.collect_links().await {
+                    if lc.has_actor(&ld.actor_id).await {
+                        x.push(ld);
+                    }
+                }
+                x
             }
-
-            ctx.notify(EnforceLocalLink {
-                actor: key.actor.to_string(),
-                contract_id: key.contract_id.to_string(),
-                link_name: key.link_name.to_string(),
-            });
-        }
+            .into_actor(self)
+            .map(|lds, _act, ctx| {
+                for ld in lds {
+                    ctx.notify(EnforceLocalLink {
+                        actor: ld.actor_id,
+                        contract_id: ld.contract_id,
+                        link_name: ld.link_name,
+                    });
+                }
+            }),
+        )
     }
 }
 
@@ -180,36 +237,54 @@ impl Handler<QueryActors> for MessageBus {
 
 // Receive a notification of claims
 impl Handler<PutClaims> for MessageBus {
-    type Result = ();
+    type Result = ResponseActFuture<Self, ()>;
 
-    fn handle(&mut self, msg: PutClaims, ctx: &mut Context<Self>) {
+    fn handle(&mut self, msg: PutClaims, ctx: &mut Context<Self>) -> Self::Result {
         let subject = msg.claims.subject.to_string();
-        self.claims_cache
-            .insert(msg.claims.subject.to_string(), msg.claims);
+        let claims = msg.claims.clone();
 
-        ctx.notify(EnforceLocalActorLinks { actor: subject });
+        let lc = self.latticecache.clone().unwrap();
+        Box::pin(
+            async move {
+                let _ = lc.put_claims(&msg.claims.subject, claims).await;
+            }
+            .into_actor(self)
+            .map(move |_res, _act, ctx| {
+                ctx.notify(EnforceLocalActorLinks { actor: subject });
+            }),
+        )
     }
 }
 
 // Receive a link definition through an advertisement
 impl Handler<PutLink> for MessageBus {
-    type Result = ();
+    type Result = ResponseActFuture<Self, ()>;
 
-    fn handle(&mut self, msg: PutLink, ctx: &mut Context<Self>) {
+    fn handle(&mut self, msg: PutLink, ctx: &mut Context<Self>) -> Self::Result {
         trace!("Messagebus received link definition notification");
-        self.link_cache.add_link(
-            &msg.actor,
-            &msg.contract_id,
-            &msg.link_name,
-            &msg.provider_id,
-            msg.values.clone(),
-        );
-
-        ctx.notify(EnforceLocalLink {
-            actor: msg.actor.to_string(),
-            contract_id: msg.contract_id.to_string(),
-            link_name: msg.link_name.to_string(),
-        });
+        let lc = self.latticecache.clone().unwrap();
+        Box::pin(
+            async move {
+                let _ = lc
+                    .put_link(
+                        &msg.actor,
+                        &msg.provider_id,
+                        &msg.contract_id,
+                        &msg.link_name,
+                        msg.values.clone(),
+                    )
+                    .await;
+                msg
+            }
+            .into_actor(self)
+            .map(|msg, _act, ctx| {
+                ctx.notify(EnforceLocalLink {
+                    actor: msg.actor.to_string(),
+                    contract_id: msg.contract_id.to_string(),
+                    link_name: msg.link_name.to_string(),
+                });
+            }),
+        )
     }
 }
 
@@ -222,56 +297,55 @@ impl Handler<SetCacheClient> for MessageBus {
 }
 
 impl Handler<CanInvoke> for MessageBus {
-    type Result = bool;
+    type Result = ResponseActFuture<Self, bool>;
 
     fn handle(&mut self, msg: CanInvoke, _ctx: &mut Context<Self>) -> Self::Result {
-        let c = self.claims_cache.get(&msg.actor);
-        if c.is_none() {
-            return false;
-        }
-        let c = c.unwrap();
-        let target = WasccEntity::Capability {
-            id: msg.provider_id,
-            contract_id: msg.contract_id.to_string(),
-            link_name: msg.link_name,
-        };
-        let pre_auth = if let Some(ref a) = c.metadata {
-            if let Some(ref c) = a.caps {
-                c.contains(&msg.contract_id)
-            } else {
-                false
+        let lc = self.latticecache.clone().unwrap();
+        let auther = self.authorizer.clone();
+        let contract_id = msg.contract_id.to_string();
+
+        Box::pin(
+            async move {
+                if let Ok(Some(c)) = lc.get_claims(&msg.actor).await {
+                    let target = WasccEntity::Capability {
+                        id: msg.provider_id,
+                        contract_id: msg.contract_id.to_string(),
+                        link_name: msg.link_name,
+                    };
+                    if !c
+                        .metadata
+                        .as_ref()
+                        .and_then(|m| m.caps.clone())
+                        .map_or(false, |c| c.contains(&contract_id))
+                    {
+                        return false;
+                    }
+                    auther
+                        .as_ref()
+                        .unwrap()
+                        .can_invoke(&c, &target, OP_BIND_ACTOR)
+                } else {
+                    false
+                }
             }
-        } else {
-            false
-        };
-        if !pre_auth {
-            return false;
-        }
-        self.authorizer
-            .as_ref()
-            .unwrap()
-            .can_invoke(c, &target, OP_BIND_ACTOR)
+            .into_actor(self),
+        )
     }
 }
 
 impl Handler<QueryAllLinks> for MessageBus {
-    type Result = LinksResponse;
+    type Result = ResponseActFuture<Self, LinksResponse>;
 
     fn handle(&mut self, _msg: QueryAllLinks, _ctx: &mut Context<Self>) -> Self::Result {
-        let lds = self
-            .link_cache
-            .all()
-            .iter()
-            .map(|(k, v)| LinkDefinition {
-                actor_id: k.actor.to_string(),
-                provider_id: v.provider_id.to_string(),
-                contract_id: k.contract_id.to_string(),
-                link_name: k.link_name.to_string(),
-                values: v.values.clone(),
-            })
-            .collect();
-
-        LinksResponse { links: lds }
+        let lc = self.latticecache.clone().unwrap();
+        Box::pin(
+            async move {
+                LinksResponse {
+                    links: lc.collect_links().await,
+                }
+            }
+            .into_actor(self),
+        )
     }
 }
 
@@ -336,31 +410,36 @@ impl Handler<AdvertiseLink> for MessageBus {
 
     fn handle(&mut self, msg: AdvertiseLink, ctx: &mut Context<Self>) -> Self::Result {
         trace!("Advertisting link definition");
-        self.link_cache.add_link(
-            &msg.actor,
-            &msg.contract_id,
-            &msg.link_name,
-            &msg.provider_id,
-            msg.values.clone(),
-        );
-
-        ctx.notify(EnforceLocalLink {
-            actor: msg.actor.to_string(),
-            contract_id: msg.contract_id.to_string(),
-            link_name: msg.link_name.to_string(),
-        });
 
         let advlink = msg.clone();
-
         let rpc = self.rpc_outbound.clone();
+        let lc = self.latticecache.clone().unwrap();
         Box::pin(
             async move {
+                let _ = lc
+                    .put_link(
+                        &msg.actor,
+                        &msg.provider_id,
+                        &msg.contract_id,
+                        &msg.link_name,
+                        msg.values,
+                    )
+                    .await;
+
                 if let Some(ref rpc) = rpc {
                     let _ = rpc.send(advlink).await;
                 }
-                Ok(())
+                EnforceLocalLink {
+                    actor: msg.actor.to_string(),
+                    contract_id: msg.contract_id.to_string(),
+                    link_name: msg.link_name.to_string(),
+                }
             }
-            .into_actor(self),
+            .into_actor(self)
+            .map(|ell, _act, ctx| {
+                ctx.notify(ell);
+                Ok(())
+            }),
         )
     }
 }
@@ -370,22 +449,25 @@ impl Handler<AdvertiseClaims> for MessageBus {
 
     fn handle(&mut self, msg: AdvertiseClaims, ctx: &mut Context<Self>) -> Self::Result {
         trace!("Advertising claims");
-        self.claims_cache
-            .insert(msg.claims.subject.to_string(), msg.claims.clone());
-
-        ctx.notify(EnforceLocalActorLinks {
-            actor: msg.claims.subject.to_string(),
-        });
+        let lc = self.latticecache.clone().unwrap();
 
         let rpc = self.rpc_outbound.clone();
         Box::pin(
             async move {
+                let _ = lc.put_claims(&msg.claims.subject, msg.claims.clone()).await;
+                let el = EnforceLocalActorLinks {
+                    actor: msg.claims.subject.to_string(),
+                };
                 if let Some(rpc) = rpc {
                     let _ = rpc.send(msg).await;
                 }
-                Ok(())
+                el
             }
-            .into_actor(self),
+            .into_actor(self)
+            .map(|el, _act, ctx| {
+                ctx.notify(el);
+                Ok(())
+            }),
         )
     }
 }
@@ -404,78 +486,77 @@ impl Handler<Invocation> for MessageBus {
             msg.origin_url(),
             msg.target_url()
         );
-        if let Err(e) = auth::authorize_invocation(
-            &msg,
-            self.authorizer.as_ref().unwrap().clone(),
-            &self.claims_cache,
-        ) {
-            error!("Authorization failure: {}", e);
-            return Box::pin(
-                async move {
-                    InvocationResponse::error(&msg, &format!("Authorization denied: {}", e))
-                }.into_actor(self)
-            );
-        }
+        let lc = self.latticecache.clone().unwrap();
+        let auther = self.authorizer.clone();
         let subscribers = self.subscribers.clone();
-        match subscribers.get(&msg.target) {
-            Some(target) => {
-                trace!("Invocation taking place within bus");
-                Box::pin(
-                    target
-                        .send(msg.clone())
-                        .into_actor(self)
-                        .map(move |res, _act, _ctx| {
-                            if let Ok(r) = res {
-                                r
-                            } else {
-                                InvocationResponse::error(
-                                    &msg,
-                                    "Mailbox error attempting to perform invocation",
-                                )
-                            }
-                        }),
-                )
-            }
-            None => {
-                if self.rpc_outbound.is_none() {
-                    warn!("No local subscribers and no RPC client enabled - invocation lost");
-                    Box::pin(
-                        async move {
-                            InvocationResponse::error(
-                            &msg,
-                            &"No local bus subscribers found, and no lattice RPC client enabled",
-                        )
-                        }
-                        .into_actor(self),
-                    )
+        let rpc_outbound = self.rpc_outbound.clone();
+        Box::pin(
+            async move {
+                let can_call = if let Ok(claims_map) = lc.get_all_claims().await {
+                    if let Err(e) = auth::authorize_invocation(
+                        &msg,
+                        auther.as_ref().unwrap().clone(),
+                        &claims_map,
+                    ) {
+                        false
+                    } else {
+                        true
+                    }
                 } else {
-                    trace!("Deferring invocation to lattice (no local subscribers)");
-                    let rpc = self.rpc_outbound.clone().unwrap();
-                    Box::pin(
-                        async move {
-                            let ir = rpc.send(msg.clone()).await;
-                            match ir {
-                                Ok(ir) => ir,
-                                Err(e) => InvocationResponse::error(
-                                    &msg,
-                                    &format!("Error performing lattice RPC {:?}", e),
-                                ),
-                            }
+                    false
+                };
+                if !can_call {
+                    return InvocationResponse::error(&msg, "Invocation authorization denied");
+                }
+                let res = match subscribers.get(&msg.target) {
+                    Some(t) => {
+                        trace!("Invocation taking place within bus");
+                        t.send(msg.clone()).await
+                    }
+                    None => {
+                        if rpc_outbound.is_none() {
+                            warn!(
+                                "No local subscribers and no RPC client enabled - invocation lost"
+                            );
+                            Ok(InvocationResponse::error(
+                            &msg,
+                            &"No local bus subscribers found, and no lattice RPC client enabled"))
+                        } else {
+                            trace!("Deferring invocation to lattice (no local subscribers)");
+                            let rpc = rpc_outbound.unwrap().recipient();
+                            rpc.send(msg.clone()).await
                         }
-                        .into_actor(self),
-                    )
+                    }
+                };
+                match res {
+                    Ok(ir) => ir,
+                    Err(e) => {
+                        InvocationResponse::error(&msg, &"Mailbox error attempting to invoke")
+                    }
                 }
             }
-        }
+            .into_actor(self),
+        )
     }
 }
 
 impl Handler<LookupLink> for MessageBus {
-    type Result = Option<String>;
+    type Result = ResponseActFuture<Self, Option<String>>;
 
     fn handle(&mut self, msg: LookupLink, _ctx: &mut Self::Context) -> Self::Result {
-        self.link_cache
-            .find_provider_id(&msg.actor, &msg.contract_id, &msg.link_name)
+        let lc = self.latticecache.clone().unwrap();
+        Box::pin(
+            async move {
+                match lc
+                    .lookup_link(&msg.actor, &msg.contract_id, &msg.link_name)
+                    .await
+                {
+                    Ok(Some(ld)) => Some(ld.provider_id),
+                    _ => None,
+                }
+            }
+            .into_actor(self),
+        )
     }
 }
 
@@ -537,11 +618,17 @@ impl Handler<Unsubscribe> for MessageBus {
 }
 
 impl Handler<GetClaims> for MessageBus {
-    type Result = ClaimsResponse;
+    type Result = ResponseActFuture<Self, ClaimsResponse>;
 
     fn handle(&mut self, _msg: GetClaims, _ctx: &mut Context<Self>) -> Self::Result {
-        ClaimsResponse {
-            claims: self.claims_cache.clone(),
-        }
+        let lc = self.latticecache.clone().unwrap();
+        Box::pin(
+            async move {
+                ClaimsResponse {
+                    claims: lc.get_all_claims().await.unwrap_or(HashMap::new()),
+                }
+            }
+            .into_actor(self),
+        )
     }
 }

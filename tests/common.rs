@@ -1,3 +1,4 @@
+use actix_rt::time::delay_for;
 use provider_archive::ProviderArchive;
 use std::collections::HashMap;
 use std::fs::File;
@@ -51,6 +52,7 @@ pub async fn await_provider_count(
             }
             Err(_e) => {
                 if attempt > max_attempts {
+                    println!("PROVIDER COUNT FAIL AT {}/{}", attempt, max_attempts);
                     return Err("Exceeded max attempts".into());
                 }
             }
@@ -96,7 +98,7 @@ pub async fn gen_kvcounter_host(
     webvalues.insert("PORT".to_string(), format!("{}", web_port));
     h.start_native_capability(redis).await?;
     h.start_native_capability(websrv).await?;
-    await_provider_count(&h, 3, Duration::from_millis(50), 3).await?; // 2 providers plus wascc:extras
+    await_provider_count(&h, 4, Duration::from_millis(50), 3).await?; // 2 providers plus wascc:extras
     h.set_link(&kvcounter_key, "wascc:keyvalue", None, redis_id, values)
         .await?;
 
@@ -108,6 +110,7 @@ pub async fn gen_kvcounter_host(
         webvalues,
     )
     .await?;
+    delay_for(Duration::from_millis(75)).await; // give the web server enough time to fire up
 
     Ok(h)
 }

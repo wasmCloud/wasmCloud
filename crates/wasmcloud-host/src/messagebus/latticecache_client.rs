@@ -201,8 +201,8 @@ impl LatticeCacheClient {
         // value is claims JSON
         let key = prefix(&format!("claims_{}", actor_id));
         let mb = MessageBus::from_hostlocal_registry(&self.host.public_key());
-        let args = SetQueryArgs { key };
-        let inv = self.invocation_for_provider(OP_SET_QUERY, &serialize(&args)?);
+        let args = GetArgs { key };
+        let inv = self.invocation_for_provider(OP_GET, &serialize(&args)?);
         let get_r: GetResponse = invoke_as(&self.provider, inv).await?;
 
         if get_r.exists {
@@ -213,6 +213,13 @@ impl LatticeCacheClient {
         }
     }
 
+    pub async fn has_actor(&self, actor_id: &str) -> bool {
+        match self.get_actors().await {
+            Ok(t) => t.contains(&actor_id.to_string()),
+            Err(_) => false,
+        }
+    }
+
     /// Retrieves the list of all known actor public keys within the claims cache
     pub async fn get_actors(&self) -> Result<Vec<String>> {
         let key = prefix("claims");
@@ -220,6 +227,19 @@ impl LatticeCacheClient {
         let inv = self.invocation_for_provider(OP_SET_QUERY, &serialize(&args)?);
         let smembers: SetQueryResponse = invoke_as(&self.provider, inv).await?;
         Ok(smembers.values)
+    }
+
+    /// Retrieves the entire claims cache as a mapping between actor public keys and their associated claims
+    pub async fn get_all_claims(&self) -> Result<HashMap<String, Claims<wascap::jwt::Actor>>> {
+        let mut hm = HashMap::new();
+        let actors = self.get_actors().await?;
+        for actor in actors {
+            let claims = self.get_claims(&actor).await?;
+            if let Some(c) = claims {
+                hm.insert(actor.to_string(), c);
+            }
+        }
+        Ok(hm)
     }
 
     /// Stores the link configuration values and provider public key associated with the
@@ -260,7 +280,7 @@ impl LatticeCacheClient {
         let key = prefix("links");
         let args = SetAddArgs {
             key,
-            value: format!("{}", hash_link_key(actor_id, provider_id, link_name)),
+            value: format!("{}", hash_link_key(actor_id, contract_id, link_name)),
         };
         let inv = self.invocation_for_provider(OP_SET_ADD, &serialize(&args)?);
         let inv_r = self.provider.send(inv).await?;
@@ -289,7 +309,7 @@ impl LatticeCacheClient {
     pub async fn lookup_link_by_hash(&self, hash: u64) -> Result<Option<LinkDefinition>> {
         let key = prefix(&format!("link_{}", hash));
         let args = GetArgs { key };
-        let inv = self.invocation_for_provider(OP_SET_QUERY, &serialize(&args)?);
+        let inv = self.invocation_for_provider(OP_GET, &serialize(&args)?);
         let res: GetResponse = invoke_as(&self.provider, inv).await?;
         if res.exists {
             let ld: LinkDefinition = serde_json::from_str(&res.value)?;
@@ -423,9 +443,9 @@ pub(crate) fn get_claims() -> Claims<wascap::jwt::CapabilityProvider> {
     Claims::<wascap::jwt::CapabilityProvider>::decode(CACHE_JWT).unwrap()
 }
 
-// TODO: this is the extras JWT. replace with the default cache provider JWT.
-pub const CACHE_JWT: &str = "eyJ0eXAiOiJqd3QiLCJhbGciOiJFZDI1NTE5In0.eyJqdGkiOiJwblFiaWN2b2tmaU5kTllrTHZQYVAzIiwiaWF0IjoxNjAyODczNDg2LCJpc3MiOiJBQ09KSk42V1VQNE9ERDc1WEVCS0tUQ0NVSkpDWTVaS1E1NlhWS1lLNEJFSldHVkFPT1FIWk1DVyIsInN1YiI6IlZESFBLR0ZLREkzNFk0Uk40UFdXWkhSWVo2MzczSFlSU05ORU00VVRETExPR081QjM3VFNWUkVQIiwid2FzY2FwIjp7Im5hbWUiOiJ3YVNDQyBFeHRyYXMiLCJjYXBpZCI6Indhc2NjOmV4dHJhcyIsInZlbmRvciI6IkV4dHJhcyIsInRhcmdldF9oYXNoZXMiOnt9fX0.LLXkiH6-8xIH42yR9ACXDFaTlpVPLZdr6tzRjLJiNQafPY3bTTazwlFJpPlYpDk6hJxwuV9-OsPvZ1ZcxVyZDQ";
-pub const CACHE_PUBLIC_KEY: &str = "VDHPKGFKDI34Y4RN4PWWZHRYZ6373HYRSNNEM4UTDLLOGO5B37TSVREP";
+pub(crate) const CACHE_JWT: &str = "eyJ0eXAiOiJqd3QiLCJhbGciOiJFZDI1NTE5In0.eyJqdGkiOiJncVJBY0ZIb0lKdW55TFpiMXozenNnIiwiaWF0IjoxNjA5OTQzMTkzLCJpc3MiOiJBQ09KSk42V1VQNE9ERDc1WEVCS0tUQ0NVSkpDWTVaS1E1NlhWS1lLNEJFSldHVkFPT1FIWk1DVyIsInN1YiI6IlZBSE5NMzdHNEFSSFozQ1lIQjNMMzRNNlRZUVdRUjZJWjRRVllDNE5ZWldUSkNKMkxXUDdTNloyIiwid2FzY2FwIjp7Im5hbWUiOiJOQVRTIFJlcGxpY2F0ZWQgSW4tTWVtb3J5IEtleS1WYWx1ZSBTdG9yZSIsImNhcGlkIjoid2FzbWNsb3VkOmtleXZhbHVlIiwidmVuZG9yIjoid2FzbUNsb3VkIiwicmV2IjoxLCJ2ZXIiOiIwLjEuMCIsInRhcmdldF9oYXNoZXMiOnt9fX0.NwDUQMl08RRMjcNrvKiTNKYyLahYrYtcIUIQiHzElOq7SJqtYh_YGVKN-64YYGHdSfwK1OK89arS9DGmW7YuCQ";
+pub(crate) const CACHE_PUBLIC_KEY: &str =
+    "VAHNM37G4ARHZ3CYHB3L34M6TYQWQR6IZ4QVYC4NYZWTJCJ2LWP7S6Z2";
 
 #[cfg(test)]
 mod test {
@@ -433,8 +453,8 @@ mod test {
 
     #[test]
     fn hasher() {
-        let a = hash_link_key("Mxxxx", "wascc:keyvalue", "default");
-        let b = hash_link_key("Mxxxx", "wascc:keyvalue", "default");
+        let a = hash_link_key("Mxxxx", "wasmcloud:keyvalue", "default");
+        let b = hash_link_key("Mxxxx", "wasmcloud:keyvalue", "default");
         assert_eq!(a, b);
     }
 }

@@ -10,10 +10,8 @@ use std::collections::HashMap;
 use wascap::jwt::Claims;
 use wascap::prelude::KeyPair;
 
-// TODO: add wascc internal claims to the config values
-pub(crate) fn generate_link_invocation(
+pub(crate) fn generate_link_invocation_and_call(
     t: &Recipient<Invocation>,
-    //msg: &Advertiselink,
     actor: &str,
     values: HashMap<String, String>,
     key: &KeyPair,
@@ -69,4 +67,17 @@ pub(crate) fn generate_link_invocation(
     );
 
     t.send(inv)
+}
+
+pub(crate) fn system_actor_claims() -> Claims<wascap::jwt::Actor> {
+    Claims::<wascap::jwt::Actor>::new(
+        SYSTEM_ACTOR.to_string(),
+        "ACOJJN6WUP4ODD75XEBKKTCCUJJCY5ZKQ56XVKYK4BEJWGVAOOQHZMCW".to_string(),
+        SYSTEM_ACTOR.to_string(),
+        None,
+        None,
+        false,
+        None,
+        None,
+    )
 }

@@ -20,14 +20,16 @@ impl MessageBus {
         trace!("Emitting heartbeat");
         let interval = hb_duration();
         ctx.run_interval(interval, |act, ctx| {
-            let claims = act.claims_cache.values().cloned().collect();
             let subs = act.subscribers.clone();
             let entities: Vec<(_, _)> = subs.into_iter().collect();
             let seed = act.key.as_ref().unwrap().seed().unwrap();
             let host_id = act.key.as_ref().unwrap().public_key();
+            let lc = act.latticecache.clone().unwrap();
 
             ctx.wait(
                 async move {
+                    let c = lc.get_all_claims().await;
+                    let claims = c.unwrap_or(HashMap::new()).values().cloned().collect();
                     let evt = generate_heartbeat_event(entities, claims, seed).await;
                     let cp = ControlInterface::from_hostlocal_registry(&host_id);
                     cp.do_send(PublishEvent { event: evt });

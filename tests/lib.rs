@@ -17,40 +17,70 @@ fn init() {
 }
 
 #[actix_rt::test]
-async fn start_and_execute_echo() -> Result<()> {
-    no_lattice::start_and_execute_echo().await
+async fn empty_host_has_two_providers() {
+    let res = no_lattice::empty_host_has_two_providers().await;
+    if let Err(ref e) = res {
+        println!("{}", e);
+    }
+    assert!(res.is_ok());
 }
 
 #[actix_rt::test]
-async fn kvcounter_basic() -> Result<()> {
-    no_lattice::kvcounter_basic().await
+async fn start_and_execute_echo() {
+    let res = no_lattice::start_and_execute_echo().await;
+    if let Err(ref e) = res {
+        println!("{}", e);
+    }
+    assert!(res.is_ok());
 }
 
 #[actix_rt::test]
-async fn kvcounter_link_first() -> Result<()> {
-    no_lattice::kvcounter_link_first().await
+async fn kvcounter_basic() {
+    let res = no_lattice::kvcounter_basic().await;
+    if let Err(ref e) = res {
+        println!("{}", e);
+    }
+    assert!(res.is_ok());
 }
 
 #[actix_rt::test]
-async fn kvcounter_start_stop() -> Result<()> {
-    no_lattice::kvcounter_start_stop().await
+async fn kvcounter_start_stop() {
+    let res = no_lattice::kvcounter_start_stop().await;
+    if let Err(ref e) = res {
+        println!("{}", e);
+    }
+    assert!(res.is_ok());
 }
 
+#[actix_rt::test]
+async fn kvcounter_link_first() {
+    let res = no_lattice::kvcounter_link_first().await;
+    if let Err(ref e) = res {
+        println!("{}", e);
+    }
+    assert!(res.is_ok());
+}
+
+/*
+ */
+
+/*
 #[actix_rt::test]
 async fn distributed_echo() -> Result<()> {
     with_lattice::distributed_echo().await
 }
 
+
 #[actix_rt::test]
 async fn link_on_third_host() -> Result<()> {
     with_lattice::link_on_third_host().await
-}
+} */
 
 //#[actix_rt::test]
 //async fn scaled_kvcounter() -> Result<()> {
 //    with_lattice::scaled_kvcounter().await
 //}
-
+/*
 #[actix_rt::test]
 async fn control_basics() -> Result<()> {
     control::basics().await
@@ -65,3 +95,4 @@ async fn control_auctions() -> Result<()> {
 async fn control_calltest() -> Result<()> {
     control::calltest().await
 }
+*/
