@@ -521,11 +521,11 @@ impl CapabilityProvider for NatsReplicatedKVProvider {
                 let _ = t.send(true);
             }
         }
-
+        /*
         let mut lock = self.nc.write().unwrap();
         if let Some(nc) = lock.take() {
             nc.close();
-        }
+        } */
     }
 }
 
