@@ -16,9 +16,7 @@ env:
 
 jobs:
   cargo_check:
-
     runs-on: ubuntu-latest
-
     steps:
     - uses: actions/checkout@v2
     - name: Build
@@ -40,28 +38,3 @@ jobs:
         run: cargo clippy --all-features
         working-directory: ${{env.working-directory}}
 
-  build_par:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-      - run: rustup target add x86_64-unknown-linux-gnu
-#      - run: rustup target add x86_64-apple-darwin
-      - run: cargo install --git https://github.com/wascc/wash --branch main --force #TODO: install from specific tag
-      - run: cargo install cross # TODO: From chris's repo / PR
-      - name: build-linux
-        run: cross build --target x86_64-unknown-linux-gnu --release
-        working-directory: ${{env.working-directory}}
-#TODO: Include these builds once we upload keys into GH secrets, and once we can cross-build to macos
-#      - name: build-macos
-#        run: cross build --target x86_64-apple-darwin --release
-#        working-directory: ${{env.working-directory}}
-#      - name: par-create-linux
-#        run: wash par create -a x86_64-linux -b ./target/x86_64-unknown-linux-gnu/release/libwascc_nats.so -n nats -v waSCC -c wascc:messaging -i ${{ secrets.WASCC_ACCOUNT }} -s ${{ secrets.WASCC_nats}} -o ./nats.par.gz --compress
-#        working-directory: ${{env.working-directory}}
-#     - name: par-add-macos
-#        run: wash par insert -a x86_64-macos -b ./target/x86_64-apple-darwin/release/libwascc_nats.dylib ./nats.par.gz -i ${{ secrets.WASCC_ACCOUNT }} -s ${{ secrets.WASCC_nats}}
-#        working-directory: ${{env.working-directory}}
-#      - name: publish-par
-#        run: bill-young-cool-program-for-oci --push ./nats.par.gz
-#        working-directory: ${{env.working-directory}}
-      
