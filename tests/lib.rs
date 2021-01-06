@@ -61,15 +61,15 @@ async fn kvcounter_link_first() {
     assert!(res.is_ok());
 }
 
-/*
- */
-
-/*
 #[actix_rt::test]
-async fn distributed_echo() -> Result<()> {
-    with_lattice::distributed_echo().await
+async fn distributed_echo() {
+    let res = with_lattice::distributed_echo().await;
+    if let Err(ref e) = res {
+        println!("{}", e);
+    }
+    assert!(res.is_ok());
 }
-
+/*
 
 #[actix_rt::test]
 async fn link_on_third_host() -> Result<()> {
