@@ -1,0 +1,35 @@
+name: Release - amd64
+
+on:
+  push:
+    tags:
+      - 'v*' # Push events to matching v*, i.e. v1.0, v20.15.10
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ github.ref }}
+      PACKAGECLOUD_TOKEN: ${{ secrets.PACKAGECLOUD_API_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v1
+      - name: Install dependencies
+        run: apt-get update -q -y;
+             apt-get install -y \
+              libssl-dev \
+              pkg-config \
+              libclang-dev
+      - name: Compile wash
+        run: cargo build --release
+      - name: Install NFPM
+        run: curl -sfL https://install.goreleaser.com/github.com/goreleaser/nfpm.sh | sh
+      - name: Package amd64 (Debian)
+        run: ./bin/nfpm pkg --packager deb -f build/nfpm.amd64.yaml
+      - name: Package amd64 (RPM)
+        run: ./bin/nfpm pkg --packager rpm -f build/nfpm.amd64.yaml
+      - name: Push amd64 (Debian)
+        run: curl -F "package[distro_version_id]=203" -F "package[package_file]=@$(ls wash_*_amd64.deb)" https://$PACKAGECLOUD_TOKEN:@packagecloud.io/api/v1/repos/wasmCloud/core/packages.json
+        run: curl -F "package[distro_version_id]=210" -F "package[package_file]=@$(ls wash_*_amd64.deb)" https://$PACKAGECLOUD_TOKEN:@packagecloud.io/api/v1/repos/wasmCloud/core/packages.json
+      - name: Push x86_64 (RPM)
+        run: curl -F "package[distro_version_id]=216" -F "package[package_file]=@$(ls wash-*.x86_64.rpm)" https://$PACKAGECLOUD_TOKEN:@packagecloud.io/api/v1/repos/wasmCloud/core/packages.json
