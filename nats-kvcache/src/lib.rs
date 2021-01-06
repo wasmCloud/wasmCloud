@@ -515,12 +515,12 @@ impl CapabilityProvider for NatsReplicatedKVProvider {
     }
 
     fn stop(&self) {
-        {
+        /*{
             let mut lock = self.terminator.write().unwrap();
             if let Some(t) = lock.as_mut() {
                 let _ = t.send(true);
             }
-        }
+        } */
         /*
         let mut lock = self.nc.write().unwrap();
         if let Some(nc) = lock.take() {
