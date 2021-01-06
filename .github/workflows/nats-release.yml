@@ -44,11 +44,10 @@ jobs:
     steps:
       - uses: actions/checkout@v2
       - run: cargo install --git https://github.com/wasmcloud/wash --branch main --tag v0.1.13 --force
-      - run: cargo install cross --version 0.2.1 --force
+      - run: cargo install --git https://github.com/ChrisRx/cross --branch add-darwin-target --force # Installing from feature branch until PR merged
       - name: build-par
         run: make par
         working-directory: ${{ env.working-directory }}
       - name: push-par
         run: wash reg push ${{ secrets.AZURECR_PUSH_URL }} ${{ env.DESTINATION }}
         working-directory: ${{ env.working-directory }}
-      
