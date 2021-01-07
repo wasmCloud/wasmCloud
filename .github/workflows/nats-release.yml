@@ -48,6 +48,7 @@ jobs:
       - name: build-par
         run: make par
         working-directory: ${{ env.working-directory }}
+      # Push artifact to https://AZURECR/nats:VERSION
       - name: push-par
-        run: wash reg push ${{ secrets.AZURECR_PUSH_URL }} ${{ env.DESTINATION }}
+        run: wash reg push https://${{ secrets.AZURECR_PUSH_URL }}/nats:$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].version') ${{ env.DESTINATION }}
         working-directory: ${{ env.working-directory }}
