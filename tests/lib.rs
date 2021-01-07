@@ -94,6 +94,8 @@ async fn link_on_third_host() {
 //    let res = control::basics().await;
 //    if let Err(ref e) = res {
 //        println!("{}", e);
+//    } else {
+//        println!("** MADE IT HERE **");
 //    }
 //    assert!(res.is_ok());
 //}

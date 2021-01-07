@@ -271,7 +271,7 @@ pub(crate) async fn handle_start_actor(
                 "Actor with image ref '{}' is already running on this host",
                 cmd.actor_ref
             );
-            error!("{}", f);
+            warn!("{}", f);
             ack.failure = Some(f);
             let _ = msg.respond(&serialize(ack).unwrap()).await;
             return;
@@ -358,7 +358,7 @@ pub(crate) async fn handle_stop_provider(host: &str, msg: &nats::asynk::Message)
                 "Provider {}/{} is not running on this host",
                 cmd.provider_ref, cmd.link_name
             );
-            error!("{}", f);
+            warn!("{}", f);
             ack.failure = Some(f);
             let _ = msg.respond(&serialize(ack).unwrap()).await;
             return;
@@ -423,7 +423,7 @@ pub(crate) async fn handle_start_provider(
                 "Provider with image ref '{}' is already running on this host.",
                 cmd.provider_ref
             );
-            error!("{}", f);
+            warn!("{}", f);
             ack.failure = Some(f);
             let _ = msg.respond(&serialize(ack).unwrap()).await;
             return;
@@ -509,7 +509,7 @@ pub(crate) async fn handle_stop_actor(host: &str, msg: &nats::asynk::Message) {
         Ok(r) if r => {}
         _ => {
             let f = "Actor is either not running on this host or host controller unresponsive";
-            error!("{}", f);
+            warn!("{}", f);
             ack.failure = Some(f.to_string());
             let _ = msg.respond(&serialize(ack).unwrap()).await;
             return;

@@ -17,6 +17,9 @@ use wasmcloud_host::{Actor, HostBuilder};
 // NOTE: this test does verify a number of error and edge cases, so when it is
 // running -properly- you will see warnings and errors in the output log
 pub(crate) async fn basics() -> Result<()> {
+    // Ensure that we're not accidentally using the replication feature on KV cache
+    ::std::env::remove_var("KVCACHE_NATS_URL");
+
     let nc = nats::asynk::connect("0.0.0.0:4222").await?;
     let h = HostBuilder::new()
         .with_namespace("controlbasics")
@@ -83,15 +86,17 @@ pub(crate) async fn basics() -> Result<()> {
         .failure
         .is_none());
     await_provider_count(&h, 2, Duration::from_millis(50), 20).await?;
+    delay_for(Duration::from_secs(1)).await;
     assert!(ctl_client
         .start_provider(&hid, REDIS_OCI, None)
         .await?
         .failure
         .is_none());
     await_provider_count(&h, 3, Duration::from_millis(50), 20).await?;
+    delay_for(Duration::from_secs(1)).await;
 
     let nats_ack = ctl_client.start_provider(&hid, NATS_OCI, None).await?;
-    await_provider_count(&h, 4, Duration::from_millis(10), 200).await?;
+    await_provider_count(&h, 4, Duration::from_millis(50), 200).await?;
     println!("NATS {:?} started", nats_ack);
 
     /* let redis_claims = {
@@ -139,8 +144,8 @@ pub(crate) async fn basics() -> Result<()> {
     //        .is_some());
 
     //delay_for(Duration::from_secs(1)).await;
-    //h.stop().await;
-    delay_for(Duration::from_secs(1)).await;
+    h.stop().await;
+    //delay_for(Duration::from_secs(1)).await;
 
     //h.stop().await;
 
@@ -148,6 +153,9 @@ pub(crate) async fn basics() -> Result<()> {
 }
 
 pub(crate) async fn calltest() -> Result<()> {
+    // Ensure that we're not accidentally using the replication feature on KV cache
+    ::std::env::remove_var("KVCACHE_NATS_URL");
+
     let nc = nats::asynk::connect("0.0.0.0:4222").await?;
     let nc3 = nats::asynk::connect("0.0.0.0:4222").await?;
     let h = HostBuilder::new()
