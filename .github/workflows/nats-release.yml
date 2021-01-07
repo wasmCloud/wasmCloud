@@ -8,7 +8,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   working-directory: ./nats
-  DESTINATION: nats.par.gz
+  DESTINATION: nats.par.gz #aka the filename of the parJEEzy
   WASH_ISSUER_KEY: ${{ secrets.WASMCLOUD_ACCOUNT_OFFICIAL }}
   WASH_SUBJECT_KEY: ${{ secrets.WASMCLOUD_NATS }}
   WASH_REG_USER:  ${{ secrets.AZURECR_PUSH_USER }}
@@ -52,7 +52,6 @@ jobs:
       - name: push-par
         run: |
           VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].version')
-          URL=https://${{secrets.AZURECR_PUSH_URL}}/nats:$VERSION
-          echo $URL
+          URL=${{secrets.AZURECR_PUSH_URL}}/nats:$VERSION
           wash reg push $URL ${{ env.DESTINATION }}
         working-directory: ${{ env.working-directory }}
