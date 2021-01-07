@@ -7,19 +7,13 @@ on:
 
 jobs:
   package:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04
     env:
       VERSION: ${{ github.ref }}
       PACKAGECLOUD_TOKEN: ${{ secrets.PACKAGECLOUD_API_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v1
-      - name: Install dependencies
-        run: sudo apt-get update -q -y;
-             sudo apt-get install -y \
-              libssl-dev \
-              pkg-config \
-              libclang-dev
       - name: Compile wash
         run: cargo build --release
       - name: Install NFPM

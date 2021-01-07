@@ -14,5 +14,6 @@ description: |
 vendor: wasmCloud
 homepage: https://wascc.dev
 license: Apache-2.0
-files:
-  target/release/wash: "/usr/local/bin/wash"
+contents:
+  - src: target/release/wash
+    dst: /usr/local/bin/wash
