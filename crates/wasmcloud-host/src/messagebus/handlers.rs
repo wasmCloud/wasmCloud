@@ -110,7 +110,7 @@ impl Handler<EnforceLocalProviderLinks> for MessageBus {
             async move {
                 let mut lds = Vec::new();
                 let x = lc.collect_links().await;
-                info!(
+                trace!(
                     "Performing local provider link re-establish check for {}/{} ({} known links)",
                     msg.provider_id,
                     msg.link_name,

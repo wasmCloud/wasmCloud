@@ -69,30 +69,49 @@ async fn distributed_echo() {
     }
     assert!(res.is_ok());
 }
-/*
 
 #[actix_rt::test]
-async fn link_on_third_host() -> Result<()> {
-    with_lattice::link_on_third_host().await
-} */
+async fn link_on_third_host() {
+    let res = with_lattice::link_on_third_host().await;
+    if let Err(ref e) = res {
+        println!("{}", e);
+    }
+    assert!(res.is_ok());
+}
+
+//TODO: get this test working in a way that doesn't require specific time delays
+//#[actix_rt::test]
+//async fn scaled_kvcounter() {
+//    let res = with_lattice::scaled_kvcounter().await;
+//    if let Err(ref e) = res {
+//        println!("{}", e);
+//    }
+//    assert!(res.is_ok());
+//}
 
 //#[actix_rt::test]
-//async fn scaled_kvcounter() -> Result<()> {
-//    with_lattice::scaled_kvcounter().await
+//async fn control_basics() {
+//    let res = control::basics().await;
+//    if let Err(ref e) = res {
+//        println!("{}", e);
+//    }
+//    assert!(res.is_ok());
 //}
-/*
+
 #[actix_rt::test]
-async fn control_basics() -> Result<()> {
-    control::basics().await
+async fn control_auctions() {
+    let res = control::auctions().await;
+    if let Err(ref e) = res {
+        println!("{}", e);
+    }
+    assert!(res.is_ok());
 }
 
 #[actix_rt::test]
-async fn control_auctions() -> Result<()> {
-    control::auctions().await
+async fn control_calltest() {
+    let res = control::calltest().await;
+    if let Err(ref e) = res {
+        println!("{}", e);
+    }
+    assert!(res.is_ok());
 }
-
-#[actix_rt::test]
-async fn control_calltest() -> Result<()> {
-    control::calltest().await
-}
-*/

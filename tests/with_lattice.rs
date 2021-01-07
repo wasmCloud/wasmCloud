@@ -11,7 +11,6 @@ use wasmcloud_host::{Host, Result};
 // API and then invoke the provider's running HTTP endpoint
 // to ensure the RPC link between actor and provider works
 pub(crate) async fn distributed_echo() -> Result<()> {
-
     // Set the default kvcache provider to enable NATS-based replication
     // by supplying a NATS URL.
     ::std::env::set_var("KVCACHE_NATS_URL", "0.0.0.0:4222");
@@ -34,10 +33,8 @@ pub(crate) async fn distributed_echo() -> Result<()> {
         .with_namespace("distributedecho")
         .build();
 
-
     host_a.start_actor(echo).await?;
-    await_actor_count(&host_a, 1, Duration::from_millis(50), 3)
-        .await?;
+    await_actor_count(&host_a, 1, Duration::from_millis(50), 3).await?;
 
     let arc = par_from_file("./tests/modules/libwascc_httpsrv.par.gz").unwrap();
     let httpserv = wascc_httpsrv::HttpServerProvider::new();
@@ -50,8 +47,7 @@ pub(crate) async fn distributed_echo() -> Result<()> {
 
     host_b.start_native_capability(websrv).await?;
     // always have to remember that "extras" and kvcache is in the provider list.
-    await_provider_count(&host_b, 3, Duration::from_millis(50), 3)
-        .await?;
+    await_provider_count(&host_b, 3, Duration::from_millis(50), 3).await?;
 
     let mut webvalues: HashMap<String, String> = HashMap::new();
     webvalues.insert("PORT".to_string(), format!("{}", web_port));
@@ -83,6 +79,9 @@ pub(crate) async fn distributed_echo() -> Result<()> {
 // is used to receive the set_link call, ensuring that any link can be set from
 // anywhere in the lattice.
 pub(crate) async fn link_on_third_host() -> Result<()> {
+    // Set the default kvcache provider to enable NATS-based replication
+    // by supplying a NATS URL.
+    ::std::env::set_var("KVCACHE_NATS_URL", "0.0.0.0:4222");
     const NS: &str = "linkonthirdhost";
 
     let nc = nats::asynk::connect("0.0.0.0:4222").await?;
@@ -133,7 +132,7 @@ pub(crate) async fn link_on_third_host() -> Result<()> {
         )
         .await?;
 
-    delay_for(Duration::from_millis(100)).await; // let the HTTP server spin up
+    delay_for(Duration::from_millis(150)).await; // let the HTTP server spin up
 
     let url = format!("http://localhost:{}/foo/bar", web_port);
     let resp = reqwest::get(&url).await?;
@@ -151,6 +150,10 @@ pub(crate) async fn link_on_third_host() -> Result<()> {
 // of redis provider,  and 3 instances of the actor in a 5-host lattice.
 // We can't do 2 instances of the HTTP provider because it would try and bind the same HTTP port twice
 pub(crate) async fn scaled_kvcounter() -> Result<()> {
+    // Set the default kvcache provider to enable NATS-based replication
+    // by supplying a NATS URL.
+    ::std::env::set_var("KVCACHE_NATS_URL", "0.0.0.0:4222");
+
     use redis::Commands;
     let a = Actor::from_file("./tests/modules/kvcounter.wasm")?;
     let a_id = a.public_key();
@@ -185,6 +188,7 @@ pub(crate) async fn scaled_kvcounter() -> Result<()> {
         )?]),
     )
     .await?;
+    println!("5 hosts started.");
 
     let web_port = 6001_u32;
 
@@ -203,7 +207,9 @@ pub(crate) async fn scaled_kvcounter() -> Result<()> {
             webvalues,
         )
         .await?;
-    host_a
+
+    delay_for(Duration::from_secs(1)).await;
+    host_e
         .set_link(
             &a_id,
             "wascc:keyvalue",
@@ -213,14 +219,18 @@ pub(crate) async fn scaled_kvcounter() -> Result<()> {
         )
         .await?;
 
+    delay_for(Duration::from_secs(3)).await; // let all these hosts stabilize
+
     let key = uuid::Uuid::new_v4().to_string();
     let rkey = format!(":{}", key); // the kv wasm logic does a replace on '/' with ':'
     let url = format!("http://localhost:{}/{}", web_port, key);
 
     let resp = reqwest::get(&url).await?;
     assert!(resp.status().is_success());
+    println!("First counter");
     let resp2 = reqwest::get(&url).await?;
     assert_eq!(resp2.text().await?, "{\"counter\":2}");
+    println!("Second counter");
 
     let client = redis::Client::open("redis://127.0.0.1/")?;
     let mut con = client.get_connection()?;
@@ -231,6 +241,8 @@ pub(crate) async fn scaled_kvcounter() -> Result<()> {
     host_c.stop().await;
     host_d.stop().await;
     host_e.stop().await;
+
+    delay_for(Duration::from_millis(500)).await;
 
     Ok(())
 }
@@ -253,9 +265,12 @@ async fn scaledkv_host(actor: Option<Actor>, par: Option<Vec<ProviderArchive>>) 
         for p in vp {
             let nc = NativeCapability::from_archive(p, None)?;
             h.start_native_capability(nc).await?;
+            delay_for(Duration::from_millis(50)).await;
         }
-        await_provider_count(&h, 1 + vp.len(), Duration::from_millis(30), 3).await?;
+        await_provider_count(&h, 2 + vp.len(), Duration::from_millis(30), 3).await?;
     }
+
+    delay_for(Duration::from_millis(350)).await;
 
     Ok(h)
 }

@@ -7,6 +7,8 @@ use wasmcloud_host::Result;
 use wasmcloud_host::{Actor, HostBuilder, NativeCapability};
 
 pub async fn empty_host_has_two_providers() -> Result<()> {
+    // Ensure that we're not accidentally using the replication feature on KV cache
+    ::std::env::remove_var("KVCACHE_NATS_URL");
     let h = HostBuilder::new().build();
     h.start().await?;
     delay_for(Duration::from_millis(300)).await;
@@ -18,6 +20,8 @@ pub async fn empty_host_has_two_providers() -> Result<()> {
 }
 
 pub async fn start_and_execute_echo() -> Result<()> {
+    // Ensure that we're not accidentally using the replication feature on KV cache
+    ::std::env::remove_var("KVCACHE_NATS_URL");
     let h = HostBuilder::new().build();
     h.start().await?;
     let echo = Actor::from_file("./tests/modules/echo.wasm")?;
@@ -46,6 +50,8 @@ pub async fn start_and_execute_echo() -> Result<()> {
 }
 
 pub async fn kvcounter_basic() -> Result<()> {
+    // Ensure that we're not accidentally using the replication feature on KV cache
+    ::std::env::remove_var("KVCACHE_NATS_URL");
     use redis::Commands;
 
     let h = gen_kvcounter_host(9999, None, None).await?;
@@ -74,6 +80,8 @@ pub async fn kvcounter_basic() -> Result<()> {
 }
 
 pub async fn kvcounter_start_stop() -> Result<()> {
+    // Ensure that we're not accidentally using the replication feature on KV cache
+    ::std::env::remove_var("KVCACHE_NATS_URL");
     use redis::Commands;
     let h = gen_kvcounter_host(9997, None, None).await?;
     delay_for(Duration::from_millis(50)).await;
@@ -121,6 +129,8 @@ pub async fn kvcounter_start_stop() -> Result<()> {
 // Set the link before either the actor or the provider are running in
 // the host, and verify that we can then hit the HTTP endpoint.
 pub async fn kvcounter_link_first() -> Result<()> {
+    // Ensure that we're not accidentally using the replication feature on KV cache
+    ::std::env::remove_var("KVCACHE_NATS_URL");
     use redis::Commands;
     let h = HostBuilder::new().build();
     h.start().await?;
