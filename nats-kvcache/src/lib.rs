@@ -61,6 +61,7 @@ use std::{
     time::Duration,
 };
 use uuid::Uuid;
+use wascap::prelude::KeyPair;
 
 type MessageHandlerResult = Result<Vec<u8>, Box<dyn Error + Send + Sync + 'static>>;
 
@@ -69,6 +70,8 @@ type MessageHandlerResult = Result<Vec<u8>, Box<dyn Error + Send + Sync + 'stati
 capability_provider!(NatsReplicatedKVProvider, NatsReplicatedKVProvider::new);
 
 const NATS_URL_CONFIG_KEY: &str = "NATS_URL";
+const CLIENT_SEED_CONFIG_KEY: &str = "CLIENT_SEED";
+const CLIENT_JWT_CONFIG_KEY: &str = "CLIENT_JWT";
 const STATE_REPL_SUBJECT_KEY: &str = "STATE_REPL_SUBJECT";
 const STATE_REPLAY_SUBJECT_KEY: &str = "REPLAY_REQ_SUBJECT";
 const HEARTBEAT_KEY: &str = "REPLAY_HEARTBEAT_SECS";
@@ -113,9 +116,20 @@ impl NatsReplicatedKVProvider {
 
     fn configure(&self, config: CapabilityConfiguration) -> MessageHandlerResult {
         if config.values.contains_key(NATS_URL_CONFIG_KEY) {
-            self.initialize_connection(config.values)?;
+            match self.initialize_connection(config.values) {
+                Ok(_) => {
+                    info!("KV cache configured for {}", config.module);
+                    Ok(vec![])
+                }
+                Err(e) => {
+                    error!("Failed to configure KV cache for {}: {}", config.module, e);
+                    Err(e)
+                }
+            }
+        } else {
+            info!("No NATS URL present, falling back to standalone/isolated KV cache");
+            Ok(vec![])
         }
-        Ok(vec![])
     }
 
     fn remove_actor(&self, _config: CapabilityConfiguration) -> MessageHandlerResult {
@@ -147,14 +161,7 @@ impl NatsReplicatedKVProvider {
         let cache2 = self.cache.clone();
         let cache3 = self.cache.clone();
         // TODO: get authentication information from the values map
-        let nc = nats::Options::new()
-            .with_name("wasmCloud NATS KV Provider")
-            .connect(
-                values
-                    .get(NATS_URL_CONFIG_KEY)
-                    .unwrap_or(&"nats://0.0.0.0:4222".to_string()),
-            )?;
-        //let nc = nats::connect(&values[NATS_URL_CONFIG_KEY])?;
+        let nc = nats_connection_from_values(values.clone())?;
         let origin = self.id.to_string();
         nc.subscribe(&subject)?.with_handler(move |msg| {
             let evt: CacheEventWrapper = deserialize(&msg.data).map_err(|e| {
@@ -379,6 +386,32 @@ impl NatsReplicatedKVProvider {
             exists: resp,
         })?)
     }
+}
+
+fn nats_connection_from_values(
+    values: HashMap<String, String>,
+) -> Result<nats::Connection, Box<dyn std::error::Error + Sync + Send>> {
+    let nats_url = match values.get(NATS_URL_CONFIG_KEY) {
+        Some(v) => v,
+        None => "nats://0.0.0.0:4222",
+    }
+    .to_string();
+    let mut opts = if let Some(seed) = values.get(CLIENT_SEED_CONFIG_KEY) {
+        let jwt = values
+            .get(CLIENT_JWT_CONFIG_KEY)
+            .unwrap_or(&"".to_string())
+            .to_string();
+        let kp = KeyPair::from_seed(seed)?;
+        nats::Options::with_jwt(
+            move || Ok(jwt.to_string()),
+            move |nonce| kp.sign(nonce).unwrap(),
+        )
+    } else {
+        nats::Options::new()
+    };
+    opts = opts.with_name("wasmCloud KV Cache Provider");
+    opts.connect(&nats_url)
+        .map_err(|e| format!("NATS connection failure:{}", e).into())
 }
 
 fn process_replay_request(
