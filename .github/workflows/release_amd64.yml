@@ -9,7 +9,7 @@ jobs:
   package:
     runs-on: ubuntu-20.04
     env:
-      VERSION: ${{ github.ref }}
+      REF: ${{ github.ref }}
       PACKAGECLOUD_TOKEN: ${{ secrets.PACKAGECLOUD_API_TOKEN }}
     steps:
       - name: Checkout
@@ -19,9 +19,10 @@ jobs:
       - name: Install NFPM
         run: curl -sfL https://install.goreleaser.com/github.com/goreleaser/nfpm.sh | sh
       - name: Package amd64 (Debian)
-        run: ./bin/nfpm pkg --packager deb -f build/nfpm.amd64.yaml
-      - name: Package amd64 (RPM)
-        run: ./bin/nfpm pkg --packager rpm -f build/nfpm.amd64.yaml
+        run: |
+          export VERSION=$(echo $REF | cut -d/ -f3)
+          ./bin/nfpm pkg --packager deb -f build/nfpm.amd64.yaml
+          ./bin/nfpm pkg --packager rpm -f build/nfpm.amd64.yaml
       - name: Push amd64 (Ubuntu 19.04)
         run: curl -F "package[distro_version_id]=203" -F "package[package_file]=@$(ls wash_*_amd64.deb)" https://$PACKAGECLOUD_TOKEN:@packagecloud.io/api/v1/repos/wasmCloud/core/packages.json
       - name: Push amd64 (Ubuntu 20.04)
