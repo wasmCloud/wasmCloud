@@ -7,7 +7,7 @@ CAPABILITY_ID := $(call readvar,CAPABILITY_ID)
 NAME          := $(shell cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name')
 VERSION				:= $(shell cargo metadata --no-deps --format-version 1 | jq -r '.packages[].version')
 LIBNAME       := $(shell echo $(NAME) | tr '-' '_')
-VENDOR        := wasmCloud
+VENDOR        ?= wasmcloud
 REVISION			?= 0
 DESTINATION		?= nats.par.gz
 
