@@ -52,5 +52,7 @@ jobs:
       - name: push-par
         run: |
           VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].version')
-          wash reg push https://${{secrets.AZURECR_PUSH_URL}}/nats:$VERSION ${{ env.DESTINATION }}
+          URL=https://${{secrets.AZURECR_PUSH_URL}}/nats:$VERSION
+          echo $URL
+          wash reg push $URL ${{ env.DESTINATION }}
         working-directory: ${{ env.working-directory }}
