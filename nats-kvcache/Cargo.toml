@@ -32,6 +32,7 @@ actor-keyvalue = { git = "https://github.com/wasmCloud/actor-interfaces", branch
 actor-core = { git = "https://github.com/wasmCloud/actor-interfaces", branch = "main"}
 nats = "0.8.6"
 wascc-codec = "0.9.0"
+wascap = "0.5.1"
 env_logger = "0.8.2"
 uuid = { version = "0.8.1", features = ["v4"] }
 lazy_static = "1.4.0"
