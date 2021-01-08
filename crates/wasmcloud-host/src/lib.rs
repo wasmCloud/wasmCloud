@@ -106,7 +106,7 @@ pub use crate::control_interface::events::{ControlEvent, EventHeader, PublishedE
 pub use actors::WasmcloudActor;
 pub use auth::{Authorizer, CloneAuthorizer};
 pub use capability::native::NativeCapability;
-pub use dispatch::{Invocation, InvocationResponse, WasccEntity};
+pub use dispatch::{Invocation, InvocationResponse, WasmCloudEntity};
 pub use host::{Host, HostBuilder};
 pub use manifest::HostManifest;
 

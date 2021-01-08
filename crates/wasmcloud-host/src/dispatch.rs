@@ -29,11 +29,11 @@ pub const CONFIG_WASCC_CLAIMS_TAGS: &str = "__wascc_tags";
 pub struct ProviderDispatcher {
     pub(crate) addr: Recipient<Invocation>, // the bus
     kp: KeyPair,
-    me: WasccEntity,
+    me: WasmCloudEntity,
 }
 
 impl ProviderDispatcher {
-    pub fn new(bus: Recipient<Invocation>, kp: KeyPair, me: WasccEntity) -> ProviderDispatcher {
+    pub fn new(bus: Recipient<Invocation>, kp: KeyPair, me: WasmCloudEntity) -> ProviderDispatcher {
         ProviderDispatcher { addr: bus, kp, me }
     }
 }
@@ -54,7 +54,7 @@ impl Dispatcher for ProviderDispatcher {
         let inv = Invocation::new(
             &self.kp,
             self.me.clone(),
-            WasccEntity::Actor(actor.to_string()),
+            WasmCloudEntity::Actor(actor.to_string()),
             op,
             msg.to_vec(),
         );
@@ -73,8 +73,8 @@ impl Dispatcher for ProviderDispatcher {
 #[rtype(result = "InvocationResponse")]
 #[doc(hidden)]
 pub struct Invocation {
-    pub origin: WasccEntity,
-    pub target: WasccEntity,
+    pub origin: WasmCloudEntity,
+    pub target: WasmCloudEntity,
     pub operation: String,
     pub msg: Vec<u8>,
     pub id: String,
@@ -88,8 +88,8 @@ impl Invocation {
     /// so an invocation requires a reference to the host (signing) key
     pub fn new(
         hostkey: &KeyPair,
-        origin: WasccEntity,
-        target: WasccEntity,
+        origin: WasmCloudEntity,
+        target: WasmCloudEntity,
         op: &str,
         msg: Vec<u8>,
     ) -> Invocation {
@@ -238,7 +238,7 @@ where
 /// or target of an invocation
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Eq, Hash)]
 #[doc(hidden)]
-pub enum WasccEntity {
+pub enum WasmCloudEntity {
     Actor(String),
     Capability {
         id: String,
@@ -247,12 +247,12 @@ pub enum WasccEntity {
     },
 }
 
-impl WasccEntity {
+impl WasmCloudEntity {
     /// The URL of the entity
     pub fn url(&self) -> String {
         match self {
-            WasccEntity::Actor(pk) => format!("{}://{}", URL_SCHEME, pk),
-            WasccEntity::Capability {
+            WasmCloudEntity::Actor(pk) => format!("{}://{}", URL_SCHEME, pk),
+            WasmCloudEntity::Capability {
                 id,
                 contract_id,
                 link_name,
@@ -272,8 +272,8 @@ impl WasccEntity {
     /// The unique (public) key of the entity
     pub fn key(&self) -> String {
         match self {
-            WasccEntity::Actor(pk) => pk.to_string(),
-            WasccEntity::Capability { id, .. } => id.to_string(),
+            WasmCloudEntity::Actor(pk) => pk.to_string(),
+            WasmCloudEntity::Capability { id, .. } => id.to_string(),
         }
     }
 }
@@ -369,9 +369,9 @@ fn invocation_from_callback(
         bd.to_string()
     };
     let target = if ns.len() == 56 && ns.starts_with("M") {
-        WasccEntity::Actor(ns.to_string())
+        WasmCloudEntity::Actor(ns.to_string())
     } else {
-        WasccEntity::Capability {
+        WasmCloudEntity::Capability {
             link_name,
             contract_id: ns.to_string(),
             id: provider_id.to_string(),
@@ -379,7 +379,7 @@ fn invocation_from_callback(
     };
     Invocation::new(
         hostkey,
-        WasccEntity::Actor(origin.to_string()),
+        WasmCloudEntity::Actor(origin.to_string()),
         target,
         op,
         payload.to_vec(),
@@ -434,8 +434,8 @@ pub(crate) fn gen_config_invocation(
     let payload = crate::generated::core::serialize(&cfgvals).unwrap();
     Invocation::new(
         hostkey,
-        WasccEntity::Actor(SYSTEM_ACTOR.to_string()),
-        WasccEntity::Capability {
+        WasmCloudEntity::Actor(SYSTEM_ACTOR.to_string()),
+        WasmCloudEntity::Capability {
             contract_id: contract_id.to_string(),
             id: provider_id.to_string(),
             link_name,
@@ -447,7 +447,7 @@ pub(crate) fn gen_config_invocation(
 
 #[cfg(test)]
 mod test {
-    use crate::dispatch::{Invocation, WasccEntity};
+    use crate::dispatch::{Invocation, WasmCloudEntity};
     use wascap::prelude::KeyPair;
 
     #[test]
@@ -456,8 +456,8 @@ mod test {
         // As soon as we create the invocation, the claims are baked and signed with the hash embedded.
         let inv = Invocation::new(
             &hostkey,
-            WasccEntity::Actor("testing".into()),
-            WasccEntity::Capability {
+            WasmCloudEntity::Actor("testing".into()),
+            WasmCloudEntity::Capability {
                 id: "Vxxx".to_string(),
                 contract_id: "wascc:messaging".into(),
                 link_name: "default".into(),
@@ -471,7 +471,7 @@ mod test {
 
         // Let's tamper with the invocation and we should hit the hash check first
         let mut bad_inv = inv.clone();
-        bad_inv.target = WasccEntity::Actor("BADACTOR-EXFILTRATOR".into());
+        bad_inv.target = WasmCloudEntity::Actor("BADACTOR-EXFILTRATOR".into());
         assert!(bad_inv.validate_antiforgery().is_err());
 
         // Alter the payload and we should also hit the hash check

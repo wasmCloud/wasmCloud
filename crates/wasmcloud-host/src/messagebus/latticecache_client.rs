@@ -10,13 +10,13 @@
 use crate::generated::core::{deserialize, serialize};
 use crate::hlreg::HostLocalSystemService;
 use crate::messagebus::{LinkDefinition, MessageBus};
-use crate::{Invocation, Result, WasccEntity, SYSTEM_ACTOR};
-use actix::{Addr, Recipient};
+use crate::{Invocation, Result, WasmCloudEntity, SYSTEM_ACTOR};
+use actix::Recipient;
 use actor_keyvalue::{
     DelArgs, GetArgs, GetResponse, SetAddArgs, SetArgs, SetQueryArgs, SetQueryResponse,
-    SetRemoveArgs, OP_ADD, OP_DEL, OP_GET, OP_SET, OP_SET_ADD, OP_SET_QUERY, OP_SET_REMOVE,
+    SetRemoveArgs, OP_DEL, OP_GET, OP_SET, OP_SET_ADD, OP_SET_QUERY, OP_SET_REMOVE,
 };
-use futures::{FutureExt, TryFutureExt};
+
 use serde::Deserialize;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
@@ -129,12 +129,11 @@ impl LatticeCacheClient {
         }
     }
 
-    /// Retrieves the list of all currently known OCI image references. You can this list in a loop to
+    /// Retrieves the list of all currently known OCI image references. You can use this list in a loop to
     /// retrieve all of the image reference mappings.
     pub async fn get_oci_references(&self) -> Result<Vec<String>> {
         let key = prefix("ocis");
         let args = SetQueryArgs { key };
-        let mb = MessageBus::from_hostlocal_registry(&self.host.public_key());
         let inv = self.invocation_for_provider(OP_SET_QUERY, &serialize(&args)?);
         let smembers: SetQueryResponse = invoke_as(&self.provider, inv).await?;
         Ok(smembers.values)
@@ -200,7 +199,6 @@ impl LatticeCacheClient {
         // KV context: KEY is {prefix}:claims_{actor_id}
         // value is claims JSON
         let key = prefix(&format!("claims_{}", actor_id));
-        let mb = MessageBus::from_hostlocal_registry(&self.host.public_key());
         let args = GetArgs { key };
         let inv = self.invocation_for_provider(OP_GET, &serialize(&args)?);
         let get_r: GetResponse = invoke_as(&self.provider, inv).await?;
@@ -345,17 +343,6 @@ impl LatticeCacheClient {
         res
     }
 
-    /// Retrieves the list of all actor links that pertain to a specific capability provider. Does not return an error,
-    /// will return an empty vector if no links are found. Each item in the returned vector is a tuple consisting of the
-    /// actor's public key and the config values hash map.
-    pub async fn find_links(
-        &self,
-        link_name: &str,
-        provider_id: &str,
-    ) -> Vec<(String, HashMap<String, String>)> {
-        vec![]
-    }
-
     /// Removes an OCI mapping from the cache
     async fn remove_oci(&self, oci_ref: &str) -> Result<()> {
         let key = prefix("ocis");
@@ -386,14 +373,14 @@ impl LatticeCacheClient {
     }
 
     fn invocation_for_provider(&self, op: &str, payload: &[u8]) -> Invocation {
-        let target = WasccEntity::Capability {
+        let target = WasmCloudEntity::Capability {
             id: self.cache_provider_id.to_string(),
             contract_id: CACHE_CONTRACT_ID.to_string(),
             link_name: CACHE_PROVIDER_LINK_NAME.to_string(),
         };
         Invocation::new(
             &self.host,
-            WasccEntity::Actor(SYSTEM_ACTOR.to_string()),
+            WasmCloudEntity::Actor(SYSTEM_ACTOR.to_string()),
             target,
             op,
             payload.to_vec(),

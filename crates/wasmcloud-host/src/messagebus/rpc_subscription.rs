@@ -1,5 +1,5 @@
 use crate::generated::core::{deserialize, serialize};
-use crate::{Invocation, InvocationResponse, WasccEntity};
+use crate::{Invocation, InvocationResponse, WasmCloudEntity};
 use actix::prelude::*;
 use futures::StreamExt;
 use std::sync::Arc;
@@ -7,7 +7,7 @@ use std::sync::Arc;
 #[derive(Message)]
 #[rtype(result = "()")]
 pub(crate) struct CreateSubscription {
-    pub entity: WasccEntity,
+    pub entity: WasmCloudEntity,
     pub target: Recipient<Invocation>,
     pub nc: Arc<nats::asynk::Connection>,
     pub namespace: Option<String>,
@@ -121,11 +121,13 @@ pub(crate) fn subject_prefix(ns_prefix: &Option<String>) -> String {
     )
 }
 
-pub(crate) fn invoke_subject(ns_prefix: &Option<String>, entity: &WasccEntity) -> String {
+pub(crate) fn invoke_subject(ns_prefix: &Option<String>, entity: &WasmCloudEntity) -> String {
     let prefix = subject_prefix(ns_prefix);
     match entity {
-        WasccEntity::Actor(s) => format!("{}.{}", prefix, s),
-        WasccEntity::Capability { id, link_name, .. } => format!("{}.{}.{}", prefix, id, link_name),
+        WasmCloudEntity::Actor(s) => format!("{}.{}", prefix, s),
+        WasmCloudEntity::Capability { id, link_name, .. } => {
+            format!("{}.{}.{}", prefix, id, link_name)
+        }
     }
 }
 

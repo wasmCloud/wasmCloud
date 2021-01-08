@@ -177,20 +177,15 @@ pub async fn kvcounter_link_first() -> Result<()> {
     h.start_native_capability(redis).await?;
     h.start_native_capability(websrv).await?;
     await_provider_count(&h, 4, Duration::from_millis(50), 3).await?; // 2 providers plus wascc:extras
-    println!("Providers up");
     delay_for(Duration::from_millis(150)).await;
-    println!("HERE0");
 
     let key = uuid::Uuid::new_v4().to_string();
     let rkey = format!(":{}", key); // the kv wasm logic does a replace on '/' with ':'
     let url = format!("http://localhost:{}/{}", web_port, key);
 
     let resp = reqwest::get(&url).await?;
-    println!("HERE1");
     assert!(resp.status().is_success());
-    println!("HERE2");
     assert_eq!(resp.text().await?, "{\"counter\":1}");
-    println!("Asserts are good");
     delay_for(Duration::from_millis(50)).await;
 
     let client = redis::Client::open("redis://127.0.0.1/")?;
@@ -198,6 +193,5 @@ pub async fn kvcounter_link_first() -> Result<()> {
     let _: () = con.del(&rkey)?;
     h.stop().await;
     delay_for(Duration::from_millis(50)).await;
-
     Ok(())
 }

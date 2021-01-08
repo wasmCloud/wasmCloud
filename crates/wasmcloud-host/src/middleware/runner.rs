@@ -72,7 +72,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::Middleware;
-    use crate::dispatch::{Invocation, InvocationResponse, WasccEntity};
+    use crate::dispatch::{Invocation, InvocationResponse, WasmCloudEntity};
     use crate::Result;
     use actix::prelude::*;
     use wascap::prelude::KeyPair;
@@ -146,8 +146,8 @@ mod tests {
         let mids: Vec<Box<dyn Middleware>> = vec![Box::new(inc_mid)];
         let inv = Invocation::new(
             &hk,
-            WasccEntity::Actor("test".to_string()),
-            WasccEntity::Capability {
+            WasmCloudEntity::Actor("test".to_string()),
+            WasmCloudEntity::Capability {
                 id: "Vxxx".to_string(),
                 contract_id: "testing:sample".to_string(),
                 link_name: "default".to_string(),

@@ -1,7 +1,7 @@
 use crate::capability::native::NativeCapability;
 use crate::control_interface::ctlactor::{ControlInterface, PublishEvent};
 
-use crate::dispatch::{Invocation, InvocationResponse, ProviderDispatcher, WasccEntity};
+use crate::dispatch::{Invocation, InvocationResponse, ProviderDispatcher, WasmCloudEntity};
 use crate::hlreg::HostLocalSystemService;
 use crate::messagebus::{EnforceLocalProviderLinks, MessageBus, Subscribe};
 use crate::middleware::{run_capability_post_invoke, run_capability_pre_invoke, Middleware};
@@ -18,7 +18,7 @@ use wascc_codec::capabilities::{
 };
 
 #[derive(Message)]
-#[rtype(result = "Result<WasccEntity>")]
+#[rtype(result = "Result<WasmCloudEntity>")]
 pub(crate) struct Initialize {
     pub cap: NativeCapability,
     pub mw_chain: Vec<Box<dyn Middleware>>,
@@ -32,7 +32,6 @@ struct State {
     kp: KeyPair,
     library: Option<Library>,
     plugin: Box<dyn CapabilityProvider + 'static>,
-    //descriptor: CapabilityDescriptor,
     image_ref: Option<String>,
 }
 
@@ -71,7 +70,7 @@ impl Actor for NativeCapabilityHost {
 }
 
 impl Handler<Initialize> for NativeCapabilityHost {
-    type Result = Result<WasccEntity>;
+    type Result = Result<WasmCloudEntity>;
 
     fn handle(&mut self, msg: Initialize, ctx: &mut Self::Context) -> Self::Result {
         let (library, plugin) = match extrude(&msg.cap) {
@@ -97,7 +96,7 @@ impl Handler<Initialize> for NativeCapabilityHost {
 
         let b = MessageBus::from_hostlocal_registry(&state.kp.public_key());
         let b2 = b.clone();
-        let entity = WasccEntity::Capability {
+        let entity = WasmCloudEntity::Capability {
             id: state.cap.claims.subject.to_string(),
             contract_id: state
                 .cap
@@ -183,8 +182,8 @@ impl Handler<Invocation> for NativeCapabilityHost {
             state.cap.claims.subject,
             inv.operation
         );
-        if let WasccEntity::Actor(ref s) = inv.origin {
-            if let WasccEntity::Capability { id, .. } = &inv.target {
+        if let WasmCloudEntity::Actor(ref s) = inv.origin {
+            if let WasmCloudEntity::Capability { id, .. } = &inv.target {
                 if id != &state.cap.id() {
                     return InvocationResponse::error(
                         &inv,
@@ -261,7 +260,7 @@ mod test {
     use crate::capability::extras::{ExtrasCapabilityProvider, OP_REQUEST_GUID};
     use crate::capability::native::NativeCapability;
     use crate::capability::native_host::NativeCapabilityHost;
-    use crate::dispatch::{Invocation, WasccEntity};
+    use crate::dispatch::{Invocation, WasmCloudEntity};
     use crate::generated::extras::{GeneratorRequest, GeneratorResult};
     use crate::SYSTEM_ACTOR;
     use actix::prelude::*;
@@ -293,8 +292,8 @@ mod test {
         };
         let inv = Invocation::new(
             &kp,
-            WasccEntity::Actor(SYSTEM_ACTOR.to_string()),
-            WasccEntity::Capability {
+            WasmCloudEntity::Actor(SYSTEM_ACTOR.to_string()),
+            WasmCloudEntity::Capability {
                 id: "VDHPKGFKDI34Y4RN4PWWZHRYZ6373HYRSNNEM4UTDLLOGO5B37TSVREP".to_string(),
                 contract_id: "wascc:extras".to_string(),
                 link_name: "default".to_string(),

@@ -99,16 +99,6 @@ pub(crate) async fn basics() -> Result<()> {
     await_provider_count(&h, 4, Duration::from_millis(50), 200).await?;
     println!("NATS {:?} started", nats_ack);
 
-    /* let redis_claims = {
-        let arc = par_from_file("./tests/modules/libwascc_redis.par.gz")?;
-        arc.claims().unwrap()
-    };
-    let redis = RedisKVProvider::new();
-    let redcap = NativeCapability::from_instance(redis, None, redis_claims)?;
-    h.start_native_capability(redcap).await?;
-    await_provider_count(&h, 2, Duration::from_millis(50), 10)
-        .await?; */
-
     let http_ack = ctl_client.start_provider(&hid, HTTPSRV_OCI, None).await?;
     await_provider_count(&h, 5, Duration::from_millis(50), 10).await?;
     println!("HTTP Server {:?} started", http_ack);
@@ -122,13 +112,10 @@ pub(crate) async fn basics() -> Result<()> {
             HTTPSRV_OCI
         )
     );
-    println!("Verified dupe-check");
 
     let hosts = ctl_client.get_hosts(Duration::from_secs(1)).await?;
     assert_eq!(hosts.len(), 1);
     assert_eq!(hosts[0].id, hid);
-
-    println!("verified host count");
 
     let inv = ctl_client.get_host_inventory(&hosts[0].id).await?;
     println!("Got host inventory: {:?}", inv);
@@ -137,18 +124,7 @@ pub(crate) async fn basics() -> Result<()> {
     assert_eq!(inv.actors[0].image_ref, Some(KVCOUNTER_OCI.to_string()));
     assert_eq!(4, inv.labels.len()); // each host gets 3 built-in labels
     assert_eq!(inv.host_id, hosts[0].id);
-    //assert!(inv
-    //        .providers
-    //        .iter()
-    //        .find(|p| p.image_ref == Some(HTTPSRV_OCI.to_string()) && p.id == http_ack.provider_id)
-    //        .is_some());
-
-    //delay_for(Duration::from_secs(1)).await;
     h.stop().await;
-    //delay_for(Duration::from_secs(1)).await;
-
-    //h.stop().await;
-
     Ok(())
 }
 

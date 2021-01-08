@@ -1,7 +1,6 @@
 use crate::auth::Authorizer;
-use crate::capability::link_cache::LinkCache;
 use crate::Result;
-use crate::{Invocation, WasccEntity};
+use crate::{Invocation, WasmCloudEntity};
 use actix::dev::{MessageResponse, ResponseChannel};
 use actix::prelude::*;
 use std::collections::HashMap;
@@ -27,7 +26,7 @@ pub(crate) use nats_subscriber::{NatsMessage, NatsSubscriber};
 pub(crate) struct MessageBus {
     nc: Option<nats::asynk::Connection>,
     namespace: Option<String>,
-    subscribers: HashMap<WasccEntity, Recipient<Invocation>>,
+    subscribers: HashMap<WasmCloudEntity, Recipient<Invocation>>,
     rpc_outbound: Option<Addr<RpcClient>>,
     key: Option<KeyPair>,
     authorizer: Option<Box<dyn Authorizer>>,
@@ -100,14 +99,14 @@ pub struct Initialize {
 #[derive(Message)]
 #[rtype(result = "()")]
 pub struct Subscribe {
-    pub interest: WasccEntity,
+    pub interest: WasmCloudEntity,
     pub subscriber: Recipient<Invocation>,
 }
 
 #[derive(Message)]
 #[rtype(result = "()")]
 pub struct Unsubscribe {
-    pub interest: WasccEntity,
+    pub interest: WasmCloudEntity,
 }
 
 #[derive(Message)]

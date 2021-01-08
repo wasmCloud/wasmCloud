@@ -17,7 +17,7 @@ use crate::host_controller::{
 };
 use crate::messagebus::{QueryActors, QueryProviders};
 use crate::oci::fetch_oci_bytes;
-use crate::{ControlEvent, HostManifest, NativeCapability, WasccEntity};
+use crate::{ControlEvent, HostManifest, NativeCapability, WasmCloudEntity};
 use crate::{Result, SYSTEM_ACTOR};
 use provider_archive::ProviderArchive;
 use std::cell::RefCell;
@@ -150,7 +150,7 @@ impl HostBuilder {
 
     /// Allows the host to pull actor and capability provider images from registries without
     /// using a secure (SSL/TLS) connection. This option is off by default and we recommend
-    /// it not be used in production environments. This option is disabled by default
+    /// it not be used in production environments.
     pub fn oci_allow_insecure(self) -> HostBuilder {
         HostBuilder {
             allow_insecure: true,
@@ -405,8 +405,8 @@ impl Host {
     pub async fn call_actor(&self, actor: &str, operation: &str, msg: &[u8]) -> Result<Vec<u8>> {
         let inv = Invocation::new(
             self.kp.borrow().as_ref().unwrap(),
-            WasccEntity::Actor(SYSTEM_ACTOR.to_string()),
-            WasccEntity::Actor(actor.to_string()),
+            WasmCloudEntity::Actor(SYSTEM_ACTOR.to_string()),
+            WasmCloudEntity::Actor(actor.to_string()),
             operation,
             msg.to_vec(),
         );

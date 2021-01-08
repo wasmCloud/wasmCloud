@@ -6,19 +6,16 @@ use crate::capability::native_host::NativeCapabilityHost;
 use crate::dispatch::Invocation;
 use crate::hlreg::HostLocalSystemService;
 use crate::messagebus::{
-    CanInvoke, GetClaims, LatticeCacheClient, MessageBus, SetCacheClient, Unsubscribe,
-    OP_BIND_ACTOR,
+    GetClaims, LatticeCacheClient, MessageBus, SetCacheClient, Unsubscribe, OP_BIND_ACTOR,
 };
 use crate::middleware::Middleware;
-use crate::{NativeCapability, Result, WasccEntity, SYSTEM_ACTOR};
+use crate::{NativeCapability, Result, WasmCloudEntity, SYSTEM_ACTOR};
 use actix::prelude::*;
 use std::collections::HashMap;
 
 use std::time::Instant;
 
-use crate::messagebus::latticecache_client::{
-    CACHE_CONTRACT_ID, CACHE_PROVIDER_LINK_NAME, CACHE_PUBLIC_KEY,
-};
+use crate::messagebus::latticecache_client::{CACHE_CONTRACT_ID, CACHE_PROVIDER_LINK_NAME};
 use crate::messagebus::utils::{generate_link_invocation_and_call, system_actor_claims};
 use nats_kvcache::NatsReplicatedKVProvider;
 use wascap::jwt::Claims;
@@ -242,7 +239,7 @@ impl Handler<CheckLink> for HostController {
             let target = self.providers.get(&key).cloned().unwrap();
             let recip = target.recipient::<Invocation>();
             let actor = msg.linkdef.actor_id.to_string();
-            let prov_entity = WasccEntity::Capability {
+            let prov_entity = WasmCloudEntity::Capability {
                 id: msg.linkdef.provider_id.to_string(),
                 contract_id: msg.linkdef.contract_id,
                 link_name: msg.linkdef.link_name,
@@ -322,7 +319,7 @@ impl Handler<StopActor> for HostController {
             .into_actor(self)
             .map(move |pk, act, _ctx| {
                 let _ = b.do_send(Unsubscribe {
-                    interest: WasccEntity::Actor(pk.to_string()),
+                    interest: WasmCloudEntity::Actor(pk.to_string()),
                 });
                 act.actors.remove(&pk);
             }),
@@ -350,7 +347,7 @@ impl Handler<StopProvider> for HostController {
             .map(move |pk, act, _ctx| {
                 act.providers.remove(&ProviderKey::new(&pk, &msg.link_name));
                 b.do_send(Unsubscribe {
-                    interest: WasccEntity::Capability {
+                    interest: WasmCloudEntity::Capability {
                         id: pk,
                         contract_id: msg.contract_id,
                         link_name: msg.link_name,
@@ -418,9 +415,9 @@ impl Handler<Initialize> for HostController {
                 // that also return Result end up coming back from a send as Result<Result<T>>...
                 let entity = cache.send(init).await;
                 match entity {
-                    Ok(Ok(e)) => info!("Initialized lattice cache provider"),
+                    Ok(Ok(_e)) => info!("Initialized lattice cache provider"),
                     Ok(Err(e)) => error!("Failed to initialize lattice cache provider: {}", e),
-                    Err(e) => error!("Lattice cache provider failed to respond to initialization"),
+                    Err(_e) => error!("Lattice cache provider failed to respond to initialization"),
                 }
                 let kp = KeyPair::from_seed(&seed).unwrap();
                 let sysclaims = system_actor_claims();
@@ -429,7 +426,7 @@ impl Handler<Initialize> for HostController {
                     SYSTEM_ACTOR,
                     get_kvcache_values_from_environment(),
                     &kp,
-                    WasccEntity::Capability {
+                    WasmCloudEntity::Capability {
                         id: claims.subject.to_string(),
                         contract_id: CACHE_CONTRACT_ID.to_string(),
                         link_name: CACHE_PROVIDER_LINK_NAME.to_string(),
@@ -527,7 +524,7 @@ impl Handler<StartActor> for HostController {
                 Ok(())
             }
             .into_actor(self)
-            .map(move |res: Result<()>, act, _ctx| {
+            .map(move |_res: Result<()>, act, _ctx| {
                 act.actors.insert(msg.actor.public_key(), na);
                 Ok(())
             }),
@@ -606,7 +603,6 @@ impl Handler<StartProvider> for HostController {
         let auther = self.authorizer.as_ref().unwrap().clone();
 
         let k = KeyPair::from_seed(&seed).unwrap();
-        let lc = self.latticecache.clone().unwrap();
         Box::pin(
             async move {
                 initialize_provider(
@@ -626,7 +622,6 @@ impl Handler<StartProvider> for HostController {
                 if let Ok(new_provider) = res {
                     act.providers.insert(key, new_provider);
                 }
-                // async {}.into_actor(act)
             })
             .then(move |_, act, _ctx| {
                 let lc = act.latticecache.clone().unwrap();
@@ -645,7 +640,7 @@ impl Handler<StartProvider> for HostController {
 async fn initialize_provider(
     provider: NativeCapability,
     mw: Vec<Box<dyn Middleware>>,
-    host_id: String,
+    _host_id: String,
     seed: String,
     image_ref: Option<String>,
     _provider_id: String,
@@ -661,7 +656,7 @@ async fn initialize_provider(
     };
     let entity = new_provider.send(im).await??;
     let _capid = match entity {
-        WasccEntity::Capability { contract_id, .. } => contract_id,
+        WasmCloudEntity::Capability { contract_id, .. } => contract_id,
         _ => return Err("Creating provider returned the wrong entity type!".into()),
     };
 

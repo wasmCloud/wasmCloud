@@ -1,15 +1,14 @@
 use super::MessageBus;
-use crate::capability::{extras::EXTRAS_PUBLIC_KEY, link_cache::LinkKey};
-use crate::dispatch::{gen_config_invocation, Invocation, InvocationResponse, WasccEntity};
+use crate::capability::extras::EXTRAS_PUBLIC_KEY;
+use crate::dispatch::{gen_config_invocation, Invocation, InvocationResponse, WasmCloudEntity};
 use crate::hlreg::HostLocalSystemService;
 use crate::messagebus::rpc_client::RpcClient;
 use crate::messagebus::rpc_subscription::{CreateSubscription, RpcSubscription};
 use crate::messagebus::{
     AdvertiseClaims, AdvertiseLink, CanInvoke, ClaimsResponse, EnforceLocalActorLinks,
     EnforceLocalLink, EnforceLocalProviderLinks, EstablishAllLinks, FindLinks, FindLinksResponse,
-    GetClaims, Initialize, LinkDefinition, LinksResponse, LookupLink, PutClaims, PutLink,
-    QueryActors, QueryAllLinks, QueryProviders, QueryResponse, SetCacheClient, Subscribe,
-    Unsubscribe,
+    GetClaims, Initialize, LinksResponse, LookupLink, PutClaims, PutLink, QueryActors,
+    QueryAllLinks, QueryProviders, QueryResponse, SetCacheClient, Subscribe, Unsubscribe,
 };
 use crate::{auth, Result};
 use actix::prelude::*;
@@ -68,7 +67,7 @@ impl Handler<FindLinks> for MessageBus {
 impl Handler<EnforceLocalActorLinks> for MessageBus {
     type Result = ResponseActFuture<Self, ()>;
 
-    fn handle(&mut self, msg: EnforceLocalActorLinks, ctx: &mut Context<Self>) -> Self::Result {
+    fn handle(&mut self, msg: EnforceLocalActorLinks, _ctx: &mut Context<Self>) -> Self::Result {
         let lc = self.latticecache.clone().unwrap();
 
         Box::pin(
@@ -99,7 +98,7 @@ impl Handler<EnforceLocalActorLinks> for MessageBus {
 impl Handler<EnforceLocalProviderLinks> for MessageBus {
     type Result = ResponseActFuture<Self, ()>;
 
-    fn handle(&mut self, msg: EnforceLocalProviderLinks, ctx: &mut Context<Self>) -> Self::Result {
+    fn handle(&mut self, msg: EnforceLocalProviderLinks, _ctx: &mut Context<Self>) -> Self::Result {
         if self.latticecache.is_none() {
             return Box::pin(async {}.into_actor(self));
         }
@@ -163,7 +162,7 @@ impl Handler<EnforceLocalLink> for MessageBus {
                     .lookup_link(&msg.actor, &msg.contract_id, &msg.link_name)
                     .await
                 {
-                    let target = WasccEntity::Capability {
+                    let target = WasmCloudEntity::Capability {
                         id: ld.provider_id.to_string(),
                         contract_id: ld.contract_id.to_string(),
                         link_name: ld.link_name.to_string(),
@@ -227,8 +226,8 @@ impl Handler<QueryActors> for MessageBus {
                 .subscribers
                 .keys()
                 .filter_map(|k| match k {
-                    WasccEntity::Actor(s) => Some(s.to_string()),
-                    WasccEntity::Capability { .. } => None,
+                    WasmCloudEntity::Actor(s) => Some(s.to_string()),
+                    WasmCloudEntity::Capability { .. } => None,
                 })
                 .collect(),
         }
@@ -239,7 +238,7 @@ impl Handler<QueryActors> for MessageBus {
 impl Handler<PutClaims> for MessageBus {
     type Result = ResponseActFuture<Self, ()>;
 
-    fn handle(&mut self, msg: PutClaims, ctx: &mut Context<Self>) -> Self::Result {
+    fn handle(&mut self, msg: PutClaims, _ctx: &mut Context<Self>) -> Self::Result {
         let subject = msg.claims.subject.to_string();
         let claims = msg.claims.clone();
 
@@ -260,7 +259,7 @@ impl Handler<PutClaims> for MessageBus {
 impl Handler<PutLink> for MessageBus {
     type Result = ResponseActFuture<Self, ()>;
 
-    fn handle(&mut self, msg: PutLink, ctx: &mut Context<Self>) -> Self::Result {
+    fn handle(&mut self, msg: PutLink, _ctx: &mut Context<Self>) -> Self::Result {
         trace!("Messagebus received link definition notification");
         let lc = self.latticecache.clone().unwrap();
         Box::pin(
@@ -307,7 +306,7 @@ impl Handler<CanInvoke> for MessageBus {
         Box::pin(
             async move {
                 if let Ok(Some(c)) = lc.get_claims(&msg.actor).await {
-                    let target = WasccEntity::Capability {
+                    let target = WasmCloudEntity::Capability {
                         id: msg.provider_id,
                         contract_id: msg.contract_id.to_string(),
                         link_name: msg.link_name,
@@ -358,7 +357,7 @@ impl Handler<QueryProviders> for MessageBus {
                 .subscribers
                 .keys()
                 .filter_map(|k| match k {
-                    WasccEntity::Capability { id, .. } => Some(id.to_string()),
+                    WasmCloudEntity::Capability { id, .. } => Some(id.to_string()),
                     _ => None,
                 })
                 .collect(),
@@ -408,7 +407,7 @@ impl Handler<Initialize> for MessageBus {
 impl Handler<AdvertiseLink> for MessageBus {
     type Result = ResponseActFuture<Self, Result<()>>;
 
-    fn handle(&mut self, msg: AdvertiseLink, ctx: &mut Context<Self>) -> Self::Result {
+    fn handle(&mut self, msg: AdvertiseLink, _ctx: &mut Context<Self>) -> Self::Result {
         trace!("Advertisting link definition");
 
         let advlink = msg.clone();
@@ -447,7 +446,7 @@ impl Handler<AdvertiseLink> for MessageBus {
 impl Handler<AdvertiseClaims> for MessageBus {
     type Result = ResponseActFuture<Self, Result<()>>;
 
-    fn handle(&mut self, msg: AdvertiseClaims, ctx: &mut Context<Self>) -> Self::Result {
+    fn handle(&mut self, msg: AdvertiseClaims, _ctx: &mut Context<Self>) -> Self::Result {
         trace!("Advertising claims");
         let lc = self.latticecache.clone().unwrap();
 
@@ -493,7 +492,7 @@ impl Handler<Invocation> for MessageBus {
         Box::pin(
             async move {
                 let can_call = if let Ok(claims_map) = lc.get_all_claims().await {
-                    if let Err(e) = auth::authorize_invocation(
+                    if let Err(_e) = auth::authorize_invocation(
                         &msg,
                         auther.as_ref().unwrap().clone(),
                         &claims_map,
@@ -530,7 +529,7 @@ impl Handler<Invocation> for MessageBus {
                 };
                 match res {
                     Ok(ir) => ir,
-                    Err(e) => {
+                    Err(_e) => {
                         InvocationResponse::error(&msg, &"Mailbox error attempting to invoke")
                     }
                 }

@@ -4,7 +4,7 @@ use crate::dispatch::{
 };
 
 use crate::messagebus::OP_BIND_ACTOR;
-use crate::{Invocation, WasccEntity, SYSTEM_ACTOR};
+use crate::{Invocation, WasmCloudEntity, SYSTEM_ACTOR};
 use actix::prelude::*;
 use std::collections::HashMap;
 use wascap::jwt::Claims;
@@ -15,7 +15,7 @@ pub(crate) fn generate_link_invocation_and_call(
     actor: &str,
     values: HashMap<String, String>,
     key: &KeyPair,
-    target: WasccEntity,
+    target: WasmCloudEntity,
     claims: Claims<wascap::jwt::Actor>,
 ) -> RecipientRequest<Invocation> {
     // Add "hidden" configuration values to the config hashmap that
@@ -60,7 +60,7 @@ pub(crate) fn generate_link_invocation_and_call(
     };
     let inv = Invocation::new(
         key,
-        WasccEntity::Actor(SYSTEM_ACTOR.to_string()),
+        WasmCloudEntity::Actor(SYSTEM_ACTOR.to_string()),
         target,
         OP_BIND_ACTOR,
         crate::generated::core::serialize(&config).unwrap(),
