@@ -13,10 +13,11 @@ use wasmcloud_host::{Host, Result};
 pub(crate) async fn distributed_echo() -> Result<()> {
     // Set the default kvcache provider to enable NATS-based replication
     // by supplying a NATS URL.
+    delay_for(Duration::from_millis(500)).await;
     ::std::env::set_var("KVCACHE_NATS_URL", "0.0.0.0:4222");
 
-    let web_port = 7001_u32;
-    let echo = Actor::from_file("./tests/modules/echo.wasm").unwrap();
+    let web_port = 32400_u32;
+    let echo = Actor::from_file("./tests/modules/echo.wasm")?;
     let actor_id = echo.public_key();
     let aid = actor_id.clone();
 
@@ -26,7 +27,7 @@ pub(crate) async fn distributed_echo() -> Result<()> {
         .with_namespace("distributedecho")
         .build();
 
-    host_a.start().await.unwrap();
+    host_a.start().await?;
     let nc2 = nats::asynk::connect("0.0.0.0:4222").await?;
     let host_b = HostBuilder::new()
         .with_rpc_client(nc2)
@@ -37,17 +38,19 @@ pub(crate) async fn distributed_echo() -> Result<()> {
     await_actor_count(&host_a, 1, Duration::from_millis(50), 3).await?;
 
     let arc = par_from_file("./tests/modules/libwascc_httpsrv.par.gz").unwrap();
-    let httpserv = wascc_httpsrv::HttpServerProvider::new();
-    let websrv = NativeCapability::from_instance(httpserv, None, arc.claims().unwrap()).unwrap();
+    let websrv = NativeCapability::from_instance(wascc_httpsrv::HttpServerProvider::new(),
+      None, arc.claims().clone().unwrap())?;
 
     // ** NOTE - we should be able to start host B in any order because when the cache client starts
     // it should request a replay of cache events and therefore get the existing claims, links,
     // etc.
     host_b.start().await?;
+    delay_for(Duration::from_millis(500)).await;
 
     host_b.start_native_capability(websrv).await?;
     // always have to remember that "extras" and kvcache is in the provider list.
     await_provider_count(&host_b, 3, Duration::from_millis(50), 3).await?;
+    delay_for(Duration::from_millis(500)).await;
 
     let mut webvalues: HashMap<String, String> = HashMap::new();
     webvalues.insert("PORT".to_string(), format!("{}", web_port));
@@ -59,19 +62,19 @@ pub(crate) async fn distributed_echo() -> Result<()> {
             arc.claims().unwrap().subject.to_string(),
             webvalues,
         )
-        .await
-        .unwrap();
+        .await?;
 
-    delay_for(Duration::from_millis(500)).await;
+    delay_for(Duration::from_secs(4)).await;
 
     let url = format!("http://localhost:{}/foo/bar", web_port);
     let resp = reqwest::get(&url).await?;
     assert!(resp.status().is_success());
     assert_eq!(resp.text().await?,
-     "{\"method\":\"GET\",\"path\":\"/foo/bar\",\"query_string\":\"\",\"headers\":{\"accept\":\"*/*\",\"host\":\"localhost:7001\"},\"body\":[]}");
+     "{\"method\":\"GET\",\"path\":\"/foo/bar\",\"query_string\":\"\",\"headers\":{\"accept\":\"*/*\",\"host\":\"localhost:32400\"},\"body\":[]}");
 
     host_a.stop().await;
     host_b.stop().await;
+    delay_for(Duration::from_millis(500)).await;
     Ok(())
 }
 

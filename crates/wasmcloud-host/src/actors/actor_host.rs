@@ -1,4 +1,4 @@
-use crate::actors::WasmcloudActor;
+use crate::actors::WasmCloudActor;
 use crate::control_interface::ctlactor::{ControlInterface, PublishEvent};
 
 use crate::dispatch::{Invocation, InvocationResponse, WasmCloudEntity};
@@ -78,7 +78,7 @@ impl Handler<LiveUpdate> for ActorHost {
             );
         }
 
-        let actor = WasmcloudActor::from_slice(&msg.actor_bytes)?;
+        let actor = WasmCloudActor::from_slice(&msg.actor_bytes)?;
         let new_claims = actor.claims();
         // Validate that this update is one that we will allow to take place
         validate_update(
@@ -171,7 +171,7 @@ fn perform_initialization(
     msg: Initialize,
 ) -> Result<String> {
     let buf = msg.actor_bytes.clone();
-    let actor = WasmcloudActor::from_slice(&buf)?;
+    let actor = WasmCloudActor::from_slice(&buf)?;
     let c = actor.token.claims.clone();
     let jwt = actor.token.jwt.to_string();
 

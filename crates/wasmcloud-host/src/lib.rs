@@ -103,7 +103,7 @@ mod oci;
 extern crate log;
 
 pub use crate::control_interface::events::{ControlEvent, EventHeader, PublishedEvent};
-pub use actors::WasmcloudActor;
+pub use actors::WasmCloudActor;
 pub use auth::{Authorizer, CloneAuthorizer};
 pub use capability::native::NativeCapability;
 pub use dispatch::{Invocation, InvocationResponse, WasmCloudEntity};
@@ -113,7 +113,7 @@ pub use manifest::HostManifest;
 /// Result type used for function calls within this library
 pub type Result<T> = ::std::result::Result<T, Box<dyn ::std::error::Error + Send + Sync>>;
 /// Type alias used to disambiguate between wasmCloud actors and Actix actors
-pub type Actor = WasmcloudActor;
+pub type Actor = WasmCloudActor;
 
 #[doc(hidden)]
 pub const SYSTEM_ACTOR: &str = "system";

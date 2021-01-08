@@ -7,18 +7,18 @@ use wascap::jwt::{Claims, Token};
 /// An actor is a WebAssembly module that conforms to the wasmCloud protocols and can securely
 /// consume capabilities exposed by native or portable capability providers
 #[derive(Debug)]
-pub struct WasmcloudActor {
+pub struct WasmCloudActor {
     pub(crate) token: Token<wascap::jwt::Actor>,
     pub(crate) bytes: Vec<u8>,
 }
 
-impl WasmcloudActor {
+impl WasmCloudActor {
     /// Create an actor from the bytes of a signed WebAssembly module. Attempting to load
     /// an unsigned module, or a module signed improperly, will result in an error
-    pub fn from_slice(buf: &[u8]) -> Result<WasmcloudActor> {
+    pub fn from_slice(buf: &[u8]) -> Result<WasmCloudActor> {
         let token = wascap::wasm::extract_claims(&buf)?;
         if let Some(t) = token {
-            Ok(WasmcloudActor {
+            Ok(WasmCloudActor {
                 token: t,
                 bytes: buf.to_vec(),
             })
@@ -28,12 +28,12 @@ impl WasmcloudActor {
     }
 
     /// Create an actor from a signed WebAssembly (`.wasm`) file
-    pub fn from_file(path: impl AsRef<Path>) -> Result<WasmcloudActor> {
+    pub fn from_file(path: impl AsRef<Path>) -> Result<WasmCloudActor> {
         let mut file = File::open(path)?;
         let mut buf = Vec::new();
         file.read_to_end(&mut buf)?;
 
-        WasmcloudActor::from_slice(&buf)
+        WasmCloudActor::from_slice(&buf)
     }
 
     /// Obtain the actor's public key (The `sub` field of a JWT). This can be treated as a globally unique identifier

@@ -171,7 +171,7 @@ pub(crate) async fn calltest() -> Result<()> {
     assert_eq!(http_r.status, "OK".to_string());
     assert_eq!(http_r.status_code, 200);
     h.stop().await;
-    delay_for(Duration::from_millis(300)).await;
+    delay_for(Duration::from_millis(900)).await;
 
     Ok(())
 }
@@ -216,7 +216,6 @@ pub(crate) async fn auctions() -> Result<()> {
         .perform_actor_auction(KVCOUNTER_OCI, HashMap::new(), Duration::from_secs(5))
         .await?;
     assert_eq!(2, kvack.len());
-    println!("No requirement auction OK");
 
     // auction the KV counter with a constraint
     let kvack = ctl_client
@@ -224,7 +223,6 @@ pub(crate) async fn auctions() -> Result<()> {
         .await?;
     assert_eq!(1, kvack.len());
     assert_eq!(kvack[0].host_id, hid);
-    println!("Constrained auction OK");
 
     // start it and re-attempt an auction
     let _ = ctl_client.start_actor(&hid, KVCOUNTER_OCI).await?;
@@ -235,7 +233,6 @@ pub(crate) async fn auctions() -> Result<()> {
         .await?;
     // Should be no viable candidates now
     assert_eq!(0, kvack.len());
-    println!("Actor auction turned up empty - OK");
 
     // find a place for the web server
     let httpack = ctl_client
