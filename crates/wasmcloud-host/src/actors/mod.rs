@@ -1,5 +1,5 @@
 mod actor_host;
-mod wascc_actor;
+mod wasmcloud_actor;
 
 pub(crate) use actor_host::{ActorHost, Initialize, LiveUpdate};
-pub(crate) use wascc_actor::WasccActor;
+pub use wasmcloud_actor::WasmcloudActor;

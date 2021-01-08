@@ -71,6 +71,7 @@ impl Dispatcher for ProviderDispatcher {
 /// An immutable representation of an invocation within waSCC
 #[derive(Debug, Clone, Serialize, Deserialize, Message)]
 #[rtype(result = "InvocationResponse")]
+#[doc(hidden)]
 pub struct Invocation {
     pub origin: WasccEntity,
     pub target: WasccEntity,
@@ -193,6 +194,7 @@ where
 
 /// The response to an invocation
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[doc(hidden)]
 pub struct InvocationResponse {
     pub msg: Vec<u8>,
     pub error: Option<String>,
@@ -235,6 +237,7 @@ where
 /// Represents an entity within the host runtime that can be the source
 /// or target of an invocation
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Eq, Hash)]
+#[doc(hidden)]
 pub enum WasccEntity {
     Actor(String),
     Capability {

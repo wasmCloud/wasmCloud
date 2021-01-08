@@ -3,12 +3,14 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[doc(hidden)]
 pub struct EventHeader {
     pub host_origin: String,
     pub timestamp: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[doc(hidden)]
 pub struct PublishedEvent {
     pub event: ControlEvent,
     pub header: EventHeader,
@@ -16,6 +18,7 @@ pub struct PublishedEvent {
 /// Represents an event that may occur on the lattice control plane. All timestamps
 /// are to be considered as Unix timestamps in UTC in seconds since the epoch.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[doc(hidden)]
 pub enum ControlEvent {
     HostStarted,
     HostStopped,
@@ -54,12 +57,14 @@ pub enum ControlEvent {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[doc(hidden)]
 pub enum RunState {
     Running,
     Unhealthy(String),
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[doc(hidden)]
 pub enum TerminationReason {
     Requested,
     Unexpected(String),

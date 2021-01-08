@@ -1,4 +1,4 @@
-use crate::actors::{ActorHost, WasccActor};
+use crate::actors::{ActorHost, WasmcloudActor};
 use crate::auth::Authorizer;
 
 use crate::messagebus::LatticeCacheClient;
@@ -48,7 +48,7 @@ pub(crate) struct SetLabels {
 #[derive(Message)]
 #[rtype(result = "Result<()>")]
 pub(crate) struct StartActor {
-    pub actor: WasccActor,
+    pub actor: WasmcloudActor,
     pub image_ref: Option<String>,
 }
 

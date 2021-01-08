@@ -10,12 +10,11 @@ use wascap::jwt::{Actor, Claims};
 /// impossible to override the base behavior of checking that an actor's embedded JWT contains the right
 /// capability attestations.
 pub trait Authorizer: CloneAuthorizer + Sync + Send {
-    /// This check is performed during the `[start_actor](crate::Host::start_actor)` call, allowing the custom authorizer to do things
+    /// This check is performed during the [`start_actor`](`crate::Host::start_actor()`) call, allowing the custom authorizer to do things
     /// like verify a provenance chain, make external calls, etc.
     fn can_load(&self, claims: &Claims<Actor>) -> bool;
     /// This check will be performed for _every_ invocation that has passed the base capability check,
-    /// including the operation that occurs during `bind_actor`. Developers should be aware of this because
-    /// if `set_authorizer` is done _after_ actor link, it could potentially allow an unauthorized link.
+    /// including the operation that occurs during [`set_link`](`crate::Host::set_link()`).
     fn can_invoke(&self, claims: &Claims<Actor>, target: &WasccEntity, operation: &str) -> bool;
 }
 
