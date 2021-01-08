@@ -1,4 +1,4 @@
-use crate::common::{await_actor_count, await_provider_count, par_from_file};
+use crate::common::{await_actor_count, await_provider_count, par_from_file, REDIS_OCI};
 use actix_rt::time::delay_for;
 use provider_archive::ProviderArchive;
 use std::collections::HashMap;
@@ -143,6 +143,92 @@ pub(crate) async fn link_on_third_host() -> Result<()> {
     host_a.stop().await;
     host_b.stop().await;
     host_c.stop().await;
+    Ok(())
+}
+
+// Identical to the "link on third host" test, but the means of storing/retrieving lattice cache
+// values is the Redis provider instead of the default NATS-based replication provider.
+// Another reason these tests need to be single-threaded - this test purges the redis database
+// before and after
+pub(crate) async fn redis_kvcache() -> Result<()> {
+    // Configure the -redis- cache provider
+    ::std::env::set_var("KVCACHE_URL", "redis://127.0.0.1:6379/1"); // use alternate "2nd" db
+
+    let client = redis::Client::open("redis://127.0.0.1/1")?;
+    let mut con = client.get_connection()?;
+    redis::cmd("FLUSHDB").execute(&mut con);
+
+    const NS: &str = "rediskvcache";
+
+    let nc = nats::asynk::connect("0.0.0.0:4222").await?;
+    let host_a = HostBuilder::new()
+        .with_lattice_cache_provider(REDIS_OCI)
+        .with_rpc_client(nc)
+        .with_namespace(NS)
+        .build();
+
+    host_a.start().await?;
+
+    let nc2 = nats::asynk::connect("0.0.0.0:4222").await?;
+    let host_b = HostBuilder::new()
+        .with_rpc_client(nc2)
+        .with_namespace(NS)
+        .with_lattice_cache_provider(REDIS_OCI)
+        .build();
+
+    host_b.start().await?;
+
+    delay_for(Duration::from_secs(2)).await;
+
+    let echo = Actor::from_file("./tests/modules/echo.wasm")?;
+    let actor_id = echo.public_key();
+    host_a.start_actor(echo).await?;
+    await_actor_count(&host_a, 1, Duration::from_millis(50), 3).await?;
+
+    let web_port = 7002_u32;
+    let arc = par_from_file("./tests/modules/libwascc_httpsrv.par.gz")?;
+    let websrv = NativeCapability::from_archive(&arc, None)?;
+
+    host_b.start_native_capability(websrv).await?;
+    // always have to remember that "extras" and kvcache is in the provider list.
+    await_provider_count(&host_b, 3, Duration::from_millis(50), 3).await?;
+
+    let nc3 = nats::asynk::connect("0.0.0.0:4222").await?;
+    let host_c = HostBuilder::new()
+        .with_rpc_client(nc3)
+        .with_lattice_cache_provider(REDIS_OCI)
+        .with_namespace(NS)
+        .build();
+
+    host_c.start().await?;
+    delay_for(Duration::from_secs(2)).await;
+    println!("3 hosts started");
+
+    let mut webvalues: HashMap<String, String> = HashMap::new();
+    webvalues.insert("PORT".to_string(), format!("{}", web_port));
+    host_c
+        .set_link(
+            &actor_id,
+            "wascc:http_server",
+            None,
+            arc.claims().unwrap().subject.to_string(),
+            webvalues,
+        )
+        .await?;
+    println!("set link (activating web server)");
+    delay_for(Duration::from_secs(1)).await; // let the HTTP server spin up
+
+    let url = format!("http://localhost:{}/foo/bar", web_port);
+    let resp = reqwest::get(&url).await?;
+    assert!(resp.status().is_success());
+    assert_eq!(resp.text().await?,
+               "{\"method\":\"GET\",\"path\":\"/foo/bar\",\"query_string\":\"\",\"headers\":{\"accept\":\"*/*\",\"host\":\"localhost:7002\"},\"body\":[]}");
+
+    host_a.stop().await;
+    host_b.stop().await;
+    host_c.stop().await;
+    delay_for(Duration::from_millis(500)).await;
+    redis::cmd("FLUSHDB").execute(&mut con);
     Ok(())
 }
 

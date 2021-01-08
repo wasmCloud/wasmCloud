@@ -79,6 +79,15 @@ async fn link_on_third_host() {
     assert!(res.is_ok());
 }
 
+#[actix_rt::test]
+async fn redis_kvcache() {
+    let res = with_lattice::redis_kvcache().await;
+    if let Err(ref e) = res {
+        println!("{}", e);
+    }
+    assert!(res.is_ok());
+}
+
 //TODO: get this test working in a way that doesn't require specific time delays
 //#[actix_rt::test]
 //async fn scaled_kvcounter() {

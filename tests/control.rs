@@ -201,6 +201,13 @@ pub(crate) async fn calltest() -> Result<()> {
 }
 
 pub(crate) async fn auctions() -> Result<()> {
+    // Auctions tests require that the hosts are at the very least
+    // sharing the same lattice data.
+
+    // Set the default kvcache provider to enable NATS-based replication
+    // by supplying a NATS URL.
+    ::std::env::set_var("KVCACHE_NATS_URL", "0.0.0.0:4222");
+
     let nc = nats::asynk::connect("0.0.0.0:4222").await?;
     let h = HostBuilder::new()
         .with_namespace("auctions")
@@ -226,28 +233,33 @@ pub(crate) async fn auctions() -> Result<()> {
     h2.start().await?;
     let hid2 = h2.id();
 
+    delay_for(Duration::from_secs(2)).await;
+
     // auction with no requirements
     let kvack = ctl_client
-        .perform_actor_auction(KVCOUNTER_OCI, HashMap::new(), Duration::from_secs(1))
+        .perform_actor_auction(KVCOUNTER_OCI, HashMap::new(), Duration::from_secs(5))
         .await?;
     assert_eq!(2, kvack.len());
+    println!("No requirement auction OK");
 
     // auction the KV counter with a constraint
     let kvack = ctl_client
-        .perform_actor_auction(KVCOUNTER_OCI, kvrequirements(), Duration::from_secs(1))
+        .perform_actor_auction(KVCOUNTER_OCI, kvrequirements(), Duration::from_secs(5))
         .await?;
     assert_eq!(1, kvack.len());
     assert_eq!(kvack[0].host_id, hid);
+    println!("Constrained auction OK");
 
     // start it and re-attempt an auction
     let _ = ctl_client.start_actor(&hid, KVCOUNTER_OCI).await?;
     await_actor_count(&h, 1, Duration::from_millis(50), 20).await?;
 
     let kvack = ctl_client
-        .perform_actor_auction(KVCOUNTER_OCI, kvrequirements(), Duration::from_millis(500))
+        .perform_actor_auction(KVCOUNTER_OCI, kvrequirements(), Duration::from_secs(5))
         .await?;
     // Should be no viable candidates now
     assert_eq!(0, kvack.len());
+    println!("Actor auction turned up empty - OK");
 
     // find a place for the web server
     let httpack = ctl_client
@@ -255,7 +267,7 @@ pub(crate) async fn auctions() -> Result<()> {
             HTTPSRV_OCI,
             "default",
             webrequirements(),
-            Duration::from_millis(200),
+            Duration::from_secs(2),
         )
         .await?;
     assert_eq!(1, httpack.len());
@@ -265,7 +277,8 @@ pub(crate) async fn auctions() -> Result<()> {
     let _http_ack = ctl_client
         .start_provider(&httpack[0].host_id, HTTPSRV_OCI, None)
         .await?;
-    await_provider_count(&h2, 2, Duration::from_millis(50), 10).await?;
+    await_provider_count(&h2, 3, Duration::from_millis(50), 10).await?;
+    delay_for(Duration::from_millis(500)).await;
 
     // should be no candidates now
     let httpack = ctl_client
@@ -273,7 +286,7 @@ pub(crate) async fn auctions() -> Result<()> {
             HTTPSRV_OCI,
             "default",
             webrequirements(),
-            Duration::from_millis(200),
+            Duration::from_secs(1),
         )
         .await?;
     assert_eq!(0, httpack.len());

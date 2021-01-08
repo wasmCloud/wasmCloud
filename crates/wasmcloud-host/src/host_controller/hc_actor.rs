@@ -414,7 +414,14 @@ impl Handler<Initialize> for HostController {
                     seed: seed.to_string(),
                     image_ref: msg.lattice_cache_provider.clone(),
                 };
-                cache.do_send(init);
+                // as always, send is a Result<T> which can be a mailbox failure, so results
+                // that also return Result end up coming back from a send as Result<Result<T>>...
+                let entity = cache.send(init).await;
+                match entity {
+                    Ok(Ok(e)) => info!("Initialized lattice cache provider"),
+                    Ok(Err(e)) => error!("Failed to initialize lattice cache provider: {}", e),
+                    Err(e) => error!("Lattice cache provider failed to respond to initialization"),
+                }
                 let kp = KeyPair::from_seed(&seed).unwrap();
                 let sysclaims = system_actor_claims();
                 let res = generate_link_invocation_and_call(
@@ -423,7 +430,7 @@ impl Handler<Initialize> for HostController {
                     get_kvcache_values_from_environment(),
                     &kp,
                     WasccEntity::Capability {
-                        id: CACHE_PUBLIC_KEY.to_string(),
+                        id: claims.subject.to_string(),
                         contract_id: CACHE_CONTRACT_ID.to_string(),
                         link_name: CACHE_PROVIDER_LINK_NAME.to_string(),
                     },
@@ -432,6 +439,8 @@ impl Handler<Initialize> for HostController {
                 .await;
                 if let Err(_) = res {
                     error!("Failed to properly initialize key-value cache provider");
+                } else {
+                    info!("Cache provider successfully configured");
                 }
 
                 info!(
