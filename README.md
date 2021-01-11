@@ -1,6 +1,6 @@
 # capability-providers
 
-This repo contains first-party native capability providers for waSCC, and the tools to build and develop them.
+This repo contains first-party native capability providers for wasmCloud, and the tools to build and develop them.
 
 ### Supported platforms
 
