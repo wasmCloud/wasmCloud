@@ -5,13 +5,20 @@ use crate::capability::extras::ExtrasCapabilityProvider;
 use crate::capability::native_host::NativeCapabilityHost;
 use crate::dispatch::Invocation;
 use crate::hlreg::HostLocalSystemService;
-use crate::messagebus::{CanInvoke, GetClaims, MessageBus, Unsubscribe, OP_BIND_ACTOR};
+use crate::messagebus::{
+    GetClaims, LatticeCacheClient, MessageBus, SetCacheClient, Unsubscribe, OP_BIND_ACTOR,
+};
 use crate::middleware::Middleware;
-use crate::{NativeCapability, Result, WasccEntity, SYSTEM_ACTOR};
+use crate::{NativeCapability, Result, WasmCloudEntity, SYSTEM_ACTOR};
+use actix::prelude::*;
 use std::collections::HashMap;
 
 use std::time::Instant;
 
+use crate::messagebus::latticecache_client::{CACHE_CONTRACT_ID, CACHE_PROVIDER_LINK_NAME};
+use crate::messagebus::utils::{generate_link_invocation_and_call, system_actor_claims};
+use nats_kvcache::NatsReplicatedKVProvider;
+use wascap::jwt::Claims;
 use wascap::prelude::KeyPair;
 
 #[derive(Debug, PartialEq, Clone, Eq, Hash)]
@@ -36,9 +43,9 @@ pub struct HostController {
     actors: HashMap<String, Addr<ActorHost>>,
     providers: HashMap<ProviderKey, Addr<NativeCapabilityHost>>,
     authorizer: Option<Box<dyn Authorizer>>,
-    image_refs: HashMap<String, String>,
     started: Instant,
     allow_live_updates: bool,
+    latticecache: Option<LatticeCacheClient>,
     strict_update_check: bool,
 }
 
@@ -51,8 +58,8 @@ impl Default for HostController {
             actors: HashMap::new(),
             providers: HashMap::new(),
             authorizer: None,
-            image_refs: HashMap::new(),
             started: Instant::now(),
+            latticecache: None,
             allow_live_updates: false,
             strict_update_check: true,
         }
@@ -76,36 +83,66 @@ impl Actor for HostController {
     type Context = Context<Self>;
 }
 
+impl HostController {
+    fn bus(&self) -> Addr<MessageBus> {
+        MessageBus::from_hostlocal_registry(&self.kp.as_ref().unwrap().public_key())
+    }
+}
+
 impl Handler<AuctionActor> for HostController {
-    type Result = bool;
+    type Result = ResponseActFuture<Self, bool>;
 
+    // Indicate if the specified actor can be launched on this host. Returns
+    // true only if the actor is not running and the host satisfies the indicated
+    // constraints.
     fn handle(&mut self, msg: AuctionActor, _ctx: &mut Context<Self>) -> Self::Result {
-        if self.image_refs.contains_key(&msg.actor_ref) || self.actors.contains_key(&msg.actor_ref)
-        {
-            return false; // don't respond to auctions where the actor in question is running already
-        }
+        let lc = self.latticecache.clone().unwrap();
+        let host_labels = self.host_labels.clone();
+        let actor_ref = msg.actor_ref.to_string();
 
-        satisfies_constraints(&self.host_labels, &msg.constraints)
+        Box::pin(
+            async move {
+                if let Some(pk) = lc.lookup_oci_mapping(&actor_ref).await.unwrap_or(None) {
+                    pk
+                } else {
+                    actor_ref
+                }
+            }
+            .into_actor(self)
+            .map(move |pk, act, _ctx| {
+                !act.actors.contains_key(&pk)
+                    && satisfies_constraints(&host_labels, &msg.constraints)
+            }),
+        )
     }
 }
 
 impl Handler<AuctionProvider> for HostController {
-    type Result = bool;
+    type Result = ResponseActFuture<Self, bool>;
 
+    // Indicate if the specified provider can be launched on this host. Returns true
+    // only if the provider is not running and the host satisfies the indicated
+    // constraints.
     fn handle(&mut self, msg: AuctionProvider, _ctx: &mut Context<Self>) -> Self::Result {
-        let pid = if let Some(pid) = self.image_refs.get(&msg.provider_ref) {
-            pid
-        } else {
-            &msg.provider_ref
-        };
-        if self.providers.contains_key(&ProviderKey {
-            id: pid.to_string(),
-            link_name: msg.link_name.to_string(),
-        }) {
-            return false;
-        }
-
-        satisfies_constraints(&self.host_labels, &msg.constraints)
+        let lc = self.latticecache.clone().unwrap();
+        let host_labels = self.host_labels.clone();
+        let provider_ref = msg.provider_ref.to_string();
+        Box::pin(
+            async move {
+                if let Some(pid) = lc.lookup_oci_mapping(&provider_ref).await.unwrap_or(None) {
+                    pid
+                } else {
+                    provider_ref
+                }
+            }
+            .into_actor(self)
+            .map(move |pk, act, _ctx| {
+                !act.providers.contains_key(&ProviderKey {
+                    id: pk,
+                    link_name: msg.link_name.to_string(),
+                }) && satisfies_constraints(&host_labels, &msg.constraints)
+            }),
+        )
     }
 }
 
@@ -128,10 +165,21 @@ fn satisfies_constraints(
 }
 
 impl Handler<QueryActorRunning> for HostController {
-    type Result = bool;
+    type Result = ResponseActFuture<Self, bool>;
 
     fn handle(&mut self, msg: QueryActorRunning, _ctx: &mut Context<Self>) -> Self::Result {
-        self.image_refs.contains_key(&msg.actor_ref) || self.actors.contains_key(&msg.actor_ref)
+        let lc = self.latticecache.clone().unwrap();
+        Box::pin(
+            async move {
+                if let Some(pid) = lc.lookup_oci_mapping(&msg.actor_ref).await.unwrap_or(None) {
+                    pid
+                } else {
+                    msg.actor_ref
+                }
+            }
+            .into_actor(self)
+            .map(|pk, act, _ctx| act.actors.contains_key(&pk)),
+        )
     }
 }
 
@@ -154,13 +202,25 @@ impl Handler<QueryUptime> for HostController {
 }
 
 impl Handler<QueryProviderRunning> for HostController {
-    type Result = bool;
+    type Result = ResponseActFuture<Self, bool>;
 
     fn handle(&mut self, msg: QueryProviderRunning, _ctx: &mut Context<Self>) -> Self::Result {
-        self.image_refs.contains_key(&msg.provider_ref)
-            || self
-                .providers
-                .contains_key(&ProviderKey::new(&msg.provider_ref, &msg.link_name))
+        let lc = self.latticecache.clone().unwrap();
+        let provider_ref = msg.provider_ref.to_string();
+        Box::pin(
+            async move {
+                if let Some(pid) = lc.lookup_oci_mapping(&provider_ref).await.unwrap_or(None) {
+                    pid
+                } else {
+                    provider_ref
+                }
+            }
+            .into_actor(self)
+            .map(move |pk, act, _ctx| {
+                act.providers
+                    .contains_key(&ProviderKey::new(&pk, &msg.link_name))
+            }),
+        )
     }
 }
 
@@ -179,7 +239,7 @@ impl Handler<CheckLink> for HostController {
             let target = self.providers.get(&key).cloned().unwrap();
             let recip = target.recipient::<Invocation>();
             let actor = msg.linkdef.actor_id.to_string();
-            let prov_entity = WasccEntity::Capability {
+            let prov_entity = WasmCloudEntity::Capability {
                 id: msg.linkdef.provider_id.to_string(),
                 contract_id: msg.linkdef.contract_id,
                 link_name: msg.linkdef.link_name,
@@ -204,7 +264,7 @@ impl Handler<CheckLink> for HostController {
                     let claims = claims.unwrap();
                     // We use this utils function so that it's guaranteed to be the same
                     // link invocation as if they'd called `set_link` in the host
-                    if let Err(_) = crate::messagebus::utils::generate_link_invocation(
+                    if let Err(_) = generate_link_invocation_and_call(
                         &recip,
                         &actor,
                         values,
@@ -246,26 +306,23 @@ impl Handler<StopActor> for HostController {
 
     fn handle(&mut self, msg: StopActor, _ctx: &mut Context<Self>) -> Self::Result {
         trace!("Stopping actor {} per request.", msg.actor_ref);
-        // We should be able to make the actor stop itself by removing the last reference to it
-        let pk = if let Some(pk) = self.image_refs.remove(&msg.actor_ref) {
-            let _ = self.actors.remove(&pk);
-            pk
-        } else {
-            let _ = self.actors.remove(&msg.actor_ref);
-            msg.actor_ref.to_string()
-        };
-
-        // Ensure that this actor's interest is removed from the bus
+        let lc = self.latticecache.clone().unwrap();
         let b = MessageBus::from_hostlocal_registry(&self.kp.as_ref().unwrap().public_key());
         Box::pin(
             async move {
-                let _ = b
-                    .send(Unsubscribe {
-                        interest: WasccEntity::Actor(pk),
-                    })
-                    .await;
+                if let Some(pk) = lc.lookup_oci_mapping(&msg.actor_ref).await.unwrap_or(None) {
+                    pk
+                } else {
+                    msg.actor_ref
+                }
             }
-            .into_actor(self),
+            .into_actor(self)
+            .map(move |pk, act, _ctx| {
+                let _ = b.do_send(Unsubscribe {
+                    interest: WasmCloudEntity::Actor(pk.to_string()),
+                });
+                act.actors.remove(&pk);
+            }),
         )
     }
 }
@@ -275,47 +332,46 @@ impl Handler<StopProvider> for HostController {
 
     fn handle(&mut self, msg: StopProvider, _ctx: &mut Context<Self>) -> Self::Result {
         trace!("Stopping provider {} per request", msg.provider_ref);
-        // The provider should stop itself once all references to it are gone
-        let pk = if let Some(pk) = self.image_refs.remove(&msg.provider_ref) {
-            let _provider = self
-                .providers
-                .remove(&ProviderKey::new(&pk, &msg.link_name));
-            pk
-        } else {
-            let _provider = self
-                .providers
-                .remove(&ProviderKey::new(&msg.provider_ref, &msg.link_name));
-            msg.provider_ref.to_string()
-        };
-
-        let b = MessageBus::from_hostlocal_registry(&self.kp.as_ref().unwrap().public_key());
+        let lc = self.latticecache.clone().unwrap();
+        let provider_ref = msg.provider_ref.to_string();
+        let b = self.bus();
         Box::pin(
             async move {
-                let _ = b
-                    .send(Unsubscribe {
-                        interest: WasccEntity::Capability {
-                            id: pk.to_string(),
-                            contract_id: msg.contract_id.to_string(),
-                            link_name: msg.link_name.to_string(),
-                        },
-                    })
-                    .await;
+                if let Some(pk) = lc.lookup_oci_mapping(&provider_ref).await.unwrap_or(None) {
+                    pk
+                } else {
+                    provider_ref
+                }
             }
-            .into_actor(self),
+            .into_actor(self)
+            .map(move |pk, act, _ctx| {
+                act.providers.remove(&ProviderKey::new(&pk, &msg.link_name));
+                b.do_send(Unsubscribe {
+                    interest: WasmCloudEntity::Capability {
+                        id: pk,
+                        contract_id: msg.contract_id,
+                        link_name: msg.link_name,
+                    },
+                });
+            }),
         )
     }
 }
 
+// IMPORTANT NOTE: the message bus needs to have been properly initialized before
+// the host controller can be initialized, since the HC sends several messages
+// to the message bus
 impl Handler<Initialize> for HostController {
-    type Result = ();
+    type Result = ResponseActFuture<Self, ()>;
 
-    fn handle(&mut self, msg: Initialize, _ctx: &mut Context<Self>) {
-        self.host_labels = msg.labels;
-        self.authorizer = Some(msg.auth);
+    fn handle(&mut self, msg: Initialize, _ctx: &mut Context<Self>) -> Self::Result {
+        self.host_labels = msg.labels.clone();
+        self.authorizer = Some(msg.auth.clone());
         let host_id = msg.kp.public_key();
 
         let claims = crate::capability::extras::get_claims();
         let pk = claims.subject.to_string();
+
         // Start wascc:extras
         let extras = SyncArbiter::start(1, move || NativeCapabilityHost::new());
         let claims = crate::capability::extras::get_claims();
@@ -330,7 +386,8 @@ impl Handler<Initialize> for HostController {
         extras.do_send(init);
         let key = ProviderKey::new(&pk, "default");
         self.providers.insert(key, extras); // can't let this provider go out of scope, or the actix actor will stop
-        self.kp = Some(msg.kp);
+        let seed = msg.kp.seed().unwrap().to_string();
+        self.kp = Some(KeyPair::from_seed(&seed).unwrap());
         self.allow_live_updates = msg.allow_live_updates;
         self.strict_update_check = msg.strict_update_check;
         info!(
@@ -339,6 +396,85 @@ impl Handler<Initialize> for HostController {
         );
 
         trace!("Host labels: {:?}", &self.host_labels);
+        Box::pin(
+            async move {
+                let cache = SyncArbiter::start(1, move || NativeCapabilityHost::new());
+                let (nativecache, claims) = create_cache_provider(
+                    msg.lattice_cache_provider.clone(),
+                    msg.allow_latest,
+                    msg.allow_insecure,
+                )
+                .await;
+                let init = crate::capability::native_host::Initialize {
+                    cap: nativecache,
+                    mw_chain: vec![],
+                    seed: seed.to_string(),
+                    image_ref: msg.lattice_cache_provider.clone(),
+                };
+                // as always, send is a Result<T> which can be a mailbox failure, so results
+                // that also return Result end up coming back from a send as Result<Result<T>>...
+                let entity = cache.send(init).await;
+                match entity {
+                    Ok(Ok(_e)) => info!("Initialized lattice cache provider"),
+                    Ok(Err(e)) => error!("Failed to initialize lattice cache provider: {}", e),
+                    Err(_e) => error!("Lattice cache provider failed to respond to initialization"),
+                }
+                let kp = KeyPair::from_seed(&seed).unwrap();
+                let sysclaims = system_actor_claims();
+                let res = generate_link_invocation_and_call(
+                    &cache.clone().recipient(),
+                    SYSTEM_ACTOR,
+                    get_kvcache_values_from_environment(),
+                    &kp,
+                    WasmCloudEntity::Capability {
+                        id: claims.subject.to_string(),
+                        contract_id: CACHE_CONTRACT_ID.to_string(),
+                        link_name: CACHE_PROVIDER_LINK_NAME.to_string(),
+                    },
+                    sysclaims,
+                )
+                .await;
+                if let Err(_) = res {
+                    error!("Failed to properly initialize key-value cache provider");
+                } else {
+                    info!("Cache provider successfully configured");
+                }
+
+                info!(
+                    "Host controller initialized - {} (Hot Updating - {})",
+                    host_id, msg.allow_live_updates
+                );
+                (
+                    claims.subject.to_string(),
+                    cache,
+                    KeyPair::from_seed(&seed).unwrap(),
+                )
+            }
+            .into_actor(self)
+            .map(move |(id, cache, kp), act, _ctx| {
+                let pk = kp.public_key();
+                let lc = LatticeCacheClient::new(kp, cache.clone().recipient(), &id);
+                act.latticecache = Some(lc.clone());
+
+                act.providers.insert(
+                    ProviderKey::new(
+                        &id,
+                        crate::messagebus::latticecache_client::CACHE_PROVIDER_LINK_NAME,
+                    ),
+                    cache,
+                );
+                (lc, pk)
+            })
+            .then(|(lc, pk), act, _ctx| {
+                async move {
+                    MessageBus::from_hostlocal_registry(&pk)
+                        .send(SetCacheClient { client: lc })
+                        .await
+                        .unwrap(); // if this doesn't succeed, panic is ok
+                }
+                .into_actor(act)
+            }),
+        )
     }
 }
 
@@ -375,55 +511,61 @@ impl Handler<StartActor> for HostController {
 
         let new_actor = SyncArbiter::start(1, move || ActorHost::default());
         let na = new_actor.clone();
+        let lc = self.latticecache.clone().unwrap();
+        let image_ref = msg.image_ref.clone();
+        let pk = msg.actor.public_key();
 
         Box::pin(
-            async move { new_actor.send(init).await }
-                .into_actor(self)
-                .map(move |res, act, _ctx| match res {
-                    Ok(r) => match r {
-                        Ok(_) => {
-                            if let Some(imageref) = msg.image_ref {
-                                act.image_refs.insert(imageref, msg.actor.public_key());
-                            }
-                            act.actors.insert(msg.actor.public_key(), na);
-                            Ok(())
-                        }
-                        Err(e) => Err(format!("Failed to initialize actor: {}", e).into()),
-                    },
-                    Err(_e) => {
-                        error!("Failed to initialize actor - mailbox error");
-                        Err("Failed to initialize actor - mailbox error".into())
-                    }
-                }),
+            async move {
+                new_actor.send(init).await??;
+                if let Some(imageref) = image_ref {
+                    lc.put_oci_mapping(&imageref, &pk).await?;
+                }
+                Ok(())
+            }
+            .into_actor(self)
+            .map(move |_res: Result<()>, act, _ctx| {
+                act.actors.insert(msg.actor.public_key(), na);
+                Ok(())
+            }),
         )
     }
 }
 
 impl Handler<QueryHostInventory> for HostController {
-    type Result = HostInventory;
+    type Result = ResponseActFuture<Self, HostInventory>;
 
     fn handle(&mut self, _msg: QueryHostInventory, _ctx: &mut Context<Self>) -> Self::Result {
-        HostInventory {
-            actors: self
-                .actors
-                .iter()
-                .map(|(k, _v)| ActorSummary {
-                    id: k.to_string(),
-                    image_ref: find_imageref(k, &self.image_refs),
-                })
-                .collect(),
-            host_id: self.kp.as_ref().unwrap().public_key(),
-            providers: self
-                .providers
-                .iter()
-                .map(|(k, _v)| ProviderSummary {
-                    image_ref: find_imageref(&k.id, &self.image_refs),
-                    id: k.id.to_string(),
-                    link_name: k.link_name.to_string(),
-                })
-                .collect(),
-            labels: self.host_labels.clone(),
-        }
+        let host_labels = self.host_labels.clone();
+        let lc = self.latticecache.clone().unwrap();
+        let actors = self.actors.clone();
+        let providers = self.providers.clone();
+        let host_id = self.kp.as_ref().unwrap().public_key();
+        Box::pin(
+            async move {
+                let image_refs = lc.collect_oci_references().await;
+                HostInventory {
+                    actors: actors
+                        .iter()
+                        .map(|(k, _v)| ActorSummary {
+                            id: k.to_string(),
+                            image_ref: find_imageref(k, &image_refs),
+                        })
+                        .collect(),
+                    host_id,
+                    providers: providers
+                        .iter()
+                        .map(|(k, _v)| ProviderSummary {
+                            image_ref: find_imageref(&k.id, &image_refs),
+                            id: k.id.to_string(),
+                            link_name: k.link_name.to_string(),
+                        })
+                        .collect(),
+                    labels: host_labels,
+                }
+            }
+            .into_actor(self),
+        )
     }
 }
 
@@ -478,12 +620,18 @@ impl Handler<StartProvider> for HostController {
             .into_actor(self)
             .map(move |res, act, _| {
                 if let Ok(new_provider) = res {
-                    if let Some(imageref) = ir2 {
-                        act.image_refs.insert(imageref, pid.to_string());
-                    }
                     act.providers.insert(key, new_provider);
                 }
-                Ok(())
+            })
+            .then(move |_, act, _ctx| {
+                let lc = act.latticecache.clone().unwrap();
+                async move {
+                    if let Some(imageref) = ir2 {
+                        lc.put_oci_mapping(&imageref, &pid).await?;
+                    }
+                    Ok(())
+                }
+                .into_actor(act)
             }),
         )
     }
@@ -492,7 +640,7 @@ impl Handler<StartProvider> for HostController {
 async fn initialize_provider(
     provider: NativeCapability,
     mw: Vec<Box<dyn Middleware>>,
-    host_id: String,
+    _host_id: String,
     seed: String,
     image_ref: Option<String>,
     _provider_id: String,
@@ -508,13 +656,43 @@ async fn initialize_provider(
     };
     let entity = new_provider.send(im).await??;
     let _capid = match entity {
-        WasccEntity::Capability { contract_id, .. } => contract_id,
+        WasmCloudEntity::Capability { contract_id, .. } => contract_id,
         _ => return Err("Creating provider returned the wrong entity type!".into()),
     };
 
-    let _b = MessageBus::from_hostlocal_registry(&host_id);
-
     Ok(new_provider)
+}
+
+async fn create_cache_provider(
+    provider_ref: Option<String>,
+    allow_latest: bool,
+    allow_insecure: bool,
+) -> (NativeCapability, Claims<wascap::jwt::CapabilityProvider>) {
+    if let Some(s) = provider_ref {
+        let par = crate::oci::fetch_provider_archive(&s, allow_latest, allow_insecure)
+            .await
+            .unwrap();
+        (
+            NativeCapability::from_archive(&par, Some(CACHE_PROVIDER_LINK_NAME.to_string()))
+                .unwrap(),
+            par.claims().unwrap(),
+        )
+    } else {
+        (
+            create_default_cache_provider().unwrap(),
+            crate::messagebus::latticecache_client::get_claims(),
+        ) // if we can't instantiate the default provider, nothing will work anyway. panic is fine here.
+    }
+}
+
+fn create_default_cache_provider() -> Result<NativeCapability> {
+    let claims = crate::messagebus::latticecache_client::get_claims();
+    let natscache = NatsReplicatedKVProvider::default();
+    NativeCapability::from_instance(
+        natscache,
+        Some(CACHE_PROVIDER_LINK_NAME.to_string()),
+        claims,
+    )
 }
 
 pub(crate) fn detect_core_host_labels() -> HashMap<String, String> {
@@ -528,5 +706,19 @@ pub(crate) fn detect_core_host_labels() -> HashMap<String, String> {
         CORELABEL_OSFAMILY.to_string(),
         std::env::consts::FAMILY.to_string(),
     );
+    hm
+}
+
+// Take all environment variables with the `KVCACHE_` prefix and send them
+// to the key-value store provider being used as the lattice cache for the
+// "link(bind) actor" invocation.
+fn get_kvcache_values_from_environment() -> HashMap<String, String> {
+    let mut hm = HashMap::new();
+    for (key, value) in std::env::vars() {
+        if key.to_uppercase().starts_with("KVCACHE_") {
+            let nkey = key.replace("KVCACHE_", "");
+            hm.insert(nkey, value);
+        }
+    }
     hm
 }

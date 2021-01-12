@@ -5,7 +5,7 @@ use crate::generated::core::{deserialize, serialize, HealthRequest, HealthRespon
 use crate::hlreg::HostLocalSystemService;
 use crate::messagebus::handlers::OP_HEALTH_REQUEST;
 use crate::Result;
-use crate::{ControlEvent, Invocation, WasccEntity, SYSTEM_ACTOR};
+use crate::{ControlEvent, Invocation, WasmCloudEntity, SYSTEM_ACTOR};
 use actix::prelude::*;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -20,14 +20,16 @@ impl MessageBus {
         trace!("Emitting heartbeat");
         let interval = hb_duration();
         ctx.run_interval(interval, |act, ctx| {
-            let claims = act.claims_cache.values().cloned().collect();
             let subs = act.subscribers.clone();
             let entities: Vec<(_, _)> = subs.into_iter().collect();
             let seed = act.key.as_ref().unwrap().seed().unwrap();
             let host_id = act.key.as_ref().unwrap().public_key();
+            let lc = act.latticecache.clone().unwrap();
 
             ctx.wait(
                 async move {
+                    let c = lc.get_all_claims().await;
+                    let claims = c.unwrap_or(HashMap::new()).values().cloned().collect();
                     let evt = generate_heartbeat_event(entities, claims, seed).await;
                     let cp = ControlInterface::from_hostlocal_registry(&host_id);
                     cp.do_send(PublishEvent { event: evt });
@@ -39,7 +41,7 @@ impl MessageBus {
 }
 
 async fn generate_heartbeat_event(
-    entities: Vec<(WasccEntity, Recipient<Invocation>)>,
+    entities: Vec<(WasmCloudEntity, Recipient<Invocation>)>,
     claims: Vec<wascap::jwt::Claims<wascap::jwt::Actor>>,
     seed: String,
 ) -> ControlEvent {
@@ -50,7 +52,7 @@ async fn generate_heartbeat_event(
 }
 
 async fn healthping_subscribers(
-    subs: &[(WasccEntity, Recipient<Invocation>)],
+    subs: &[(WasmCloudEntity, Recipient<Invocation>)],
     seed: String,
 ) -> HashMap<String, RunState> {
     let key = KeyPair::from_seed(&seed).unwrap();
@@ -96,10 +98,10 @@ async fn healthping_subscribers(
     hm
 }
 
-fn generate_ping(target: &WasccEntity, key: &KeyPair) -> Invocation {
+fn generate_ping(target: &WasmCloudEntity, key: &KeyPair) -> Invocation {
     Invocation::new(
         key,
-        WasccEntity::Actor(SYSTEM_ACTOR.to_string()),
+        WasmCloudEntity::Actor(SYSTEM_ACTOR.to_string()),
         target.clone(),
         OP_HEALTH_REQUEST,
         serialize(&HealthRequest { placeholder: true }).unwrap(),

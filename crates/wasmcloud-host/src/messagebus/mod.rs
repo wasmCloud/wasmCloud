@@ -1,7 +1,6 @@
 use crate::auth::Authorizer;
-use crate::capability::link_cache::LinkCache;
 use crate::Result;
-use crate::{Invocation, WasccEntity};
+use crate::{Invocation, WasmCloudEntity};
 use actix::dev::{MessageResponse, ResponseChannel};
 use actix::prelude::*;
 use std::collections::HashMap;
@@ -9,27 +8,29 @@ use wascap::prelude::{Claims, KeyPair};
 
 use crate::messagebus::rpc_client::RpcClient;
 pub use handlers::OP_BIND_ACTOR;
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 pub(crate) mod handlers;
 mod hb;
+pub(crate) mod latticecache_client;
 pub(crate) mod nats_subscriber;
 pub(crate) mod rpc_client;
 pub(crate) mod rpc_subscription;
 pub(crate) mod utils;
 
+pub(crate) use latticecache_client::LatticeCacheClient;
 pub(crate) use nats_subscriber::{NatsMessage, NatsSubscriber};
 
 #[derive(Default)]
 pub(crate) struct MessageBus {
     nc: Option<nats::asynk::Connection>,
     namespace: Option<String>,
-    subscribers: HashMap<WasccEntity, Recipient<Invocation>>,
+    subscribers: HashMap<WasmCloudEntity, Recipient<Invocation>>,
     rpc_outbound: Option<Addr<RpcClient>>,
-    link_cache: LinkCache,
-    claims_cache: HashMap<String, Claims<wascap::jwt::Actor>>,
     key: Option<KeyPair>,
     authorizer: Option<Box<dyn Authorizer>>,
+    latticecache: Option<LatticeCacheClient>,
 }
 
 #[derive(Message)]
@@ -48,6 +49,7 @@ pub struct LinksResponse {
     pub links: Vec<LinkDefinition>,
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct LinkDefinition {
     pub actor_id: String,
     pub provider_id: String,
@@ -97,14 +99,14 @@ pub struct Initialize {
 #[derive(Message)]
 #[rtype(result = "()")]
 pub struct Subscribe {
-    pub interest: WasccEntity,
+    pub interest: WasmCloudEntity,
     pub subscriber: Recipient<Invocation>,
 }
 
 #[derive(Message)]
 #[rtype(result = "()")]
 pub struct Unsubscribe {
-    pub interest: WasccEntity,
+    pub interest: WasmCloudEntity,
 }
 
 #[derive(Message)]
@@ -163,6 +165,12 @@ pub struct FindLinksResponse {
 #[derive(Message)]
 #[rtype(result = "ClaimsResponse")]
 pub struct GetClaims;
+
+#[derive(Message)]
+#[rtype(result = "()")]
+pub(crate) struct SetCacheClient {
+    pub client: LatticeCacheClient,
+}
 
 #[derive(Debug)]
 pub struct ClaimsResponse {

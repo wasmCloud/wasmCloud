@@ -1,9 +1,9 @@
-use crate::actors::WasccActor;
+use crate::actors::WasmCloudActor;
 use crate::control_interface::ctlactor::{ControlInterface, PublishEvent};
 
-use crate::dispatch::{Invocation, InvocationResponse, WasccEntity};
+use crate::dispatch::{Invocation, InvocationResponse, WasmCloudEntity};
 use crate::hlreg::HostLocalSystemService;
-use crate::messagebus::{AdvertiseClaims, MessageBus, PutClaims, Subscribe};
+use crate::messagebus::{AdvertiseClaims, MessageBus, Subscribe};
 use crate::middleware::{run_actor_post_invoke, run_actor_pre_invoke, Middleware};
 use crate::{ControlEvent, Result};
 use actix::prelude::*;
@@ -78,7 +78,7 @@ impl Handler<LiveUpdate> for ActorHost {
             );
         }
 
-        let actor = WasccActor::from_slice(&msg.actor_bytes)?;
+        let actor = WasmCloudActor::from_slice(&msg.actor_bytes)?;
         let new_claims = actor.claims();
         // Validate that this update is one that we will allow to take place
         validate_update(
@@ -171,7 +171,7 @@ fn perform_initialization(
     msg: Initialize,
 ) -> Result<String> {
     let buf = msg.actor_bytes.clone();
-    let actor = WasccActor::from_slice(&buf)?;
+    let actor = WasmCloudActor::from_slice(&buf)?;
     let c = actor.token.claims.clone();
     let jwt = actor.token.jwt.to_string();
 
@@ -203,7 +203,7 @@ fn perform_initialization(
     match guest {
         Ok(g) => {
             let c = c3.clone();
-            let entity = WasccEntity::Actor(c.subject.to_string());
+            let entity = WasmCloudEntity::Actor(c.subject.to_string());
             let b = MessageBus::from_hostlocal_registry(&msg.host_id);
             let b2 = b.clone();
             let recipient = ctx.address().clone().recipient();
@@ -350,7 +350,7 @@ impl Handler<Invocation> for ActorHost {
             msg.operation
         );
 
-        if let WasccEntity::Actor(_) = msg.target {
+        if let WasmCloudEntity::Actor(_) = msg.target {
             if run_actor_pre_invoke(&msg, &state.mw_chain).is_err() {
                 return InvocationResponse::error(
                     &msg,

@@ -14,7 +14,12 @@ use wascap::prelude::KeyPair;
 use wasmcloud_host::Result;
 use wasmcloud_host::{Actor, HostBuilder};
 
+// NOTE: this test does verify a number of error and edge cases, so when it is
+// running -properly- you will see warnings and errors in the output log
 pub(crate) async fn basics() -> Result<()> {
+    // Ensure that we're not accidentally using the replication feature on KV cache
+    ::std::env::remove_var("KVCACHE_NATS_URL");
+
     let nc = nats::asynk::connect("0.0.0.0:4222").await?;
     let h = HostBuilder::new()
         .with_namespace("controlbasics")
@@ -71,7 +76,7 @@ pub(crate) async fn basics() -> Result<()> {
     let _ = ctl_client.start_actor(&hid, KVCOUNTER_OCI).await?;
 
     let redis_ack = ctl_client.start_provider(&hid, REDIS_OCI, None).await?;
-    await_provider_count(&h, 2, Duration::from_millis(50), 20).await?;
+    await_provider_count(&h, 3, Duration::from_millis(50), 20).await?;
     println!("Redis {:?} started", redis_ack);
 
     // Stop and re-start a provider
@@ -80,30 +85,22 @@ pub(crate) async fn basics() -> Result<()> {
         .await?
         .failure
         .is_none());
-    await_provider_count(&h, 1, Duration::from_millis(50), 20).await?;
+    await_provider_count(&h, 2, Duration::from_millis(50), 20).await?;
+    delay_for(Duration::from_secs(1)).await;
     assert!(ctl_client
         .start_provider(&hid, REDIS_OCI, None)
         .await?
         .failure
         .is_none());
-    await_provider_count(&h, 2, Duration::from_millis(50), 20).await?;
+    await_provider_count(&h, 3, Duration::from_millis(50), 20).await?;
+    delay_for(Duration::from_secs(1)).await;
 
     let nats_ack = ctl_client.start_provider(&hid, NATS_OCI, None).await?;
-    await_provider_count(&h, 3, Duration::from_millis(10), 200).await?;
+    await_provider_count(&h, 4, Duration::from_millis(50), 200).await?;
     println!("NATS {:?} started", nats_ack);
 
-    /* let redis_claims = {
-        let arc = par_from_file("./tests/modules/libwascc_redis.par.gz")?;
-        arc.claims().unwrap()
-    };
-    let redis = RedisKVProvider::new();
-    let redcap = NativeCapability::from_instance(redis, None, redis_claims)?;
-    h.start_native_capability(redcap).await?;
-    await_provider_count(&h, 2, Duration::from_millis(50), 10)
-        .await?; */
-
     let http_ack = ctl_client.start_provider(&hid, HTTPSRV_OCI, None).await?;
-    await_provider_count(&h, 4, Duration::from_millis(50), 10).await?;
+    await_provider_count(&h, 5, Duration::from_millis(50), 10).await?;
     println!("HTTP Server {:?} started", http_ack);
 
     let http_ack2 = ctl_client.start_provider(&hid, HTTPSRV_OCI, None).await?;
@@ -116,32 +113,25 @@ pub(crate) async fn basics() -> Result<()> {
         )
     );
 
-    let hosts = ctl_client.get_hosts(Duration::from_millis(500)).await?;
+    let hosts = ctl_client.get_hosts(Duration::from_secs(1)).await?;
     assert_eq!(hosts.len(), 1);
     assert_eq!(hosts[0].id, hid);
 
     let inv = ctl_client.get_host_inventory(&hosts[0].id).await?;
+    println!("Got host inventory: {:?}", inv);
     //assert_eq!(3, inv.providers.len());
     assert_eq!(1, inv.actors.len());
     assert_eq!(inv.actors[0].image_ref, Some(KVCOUNTER_OCI.to_string()));
     assert_eq!(4, inv.labels.len()); // each host gets 3 built-in labels
     assert_eq!(inv.host_id, hosts[0].id);
-    assert!(inv
-        .providers
-        .iter()
-        .find(|p| p.image_ref == Some(HTTPSRV_OCI.to_string()) && p.id == http_ack.provider_id)
-        .is_some());
-
-    delay_for(Duration::from_secs(1)).await;
     h.stop().await;
-    delay_for(Duration::from_secs(1)).await;
-
-    //h.stop().await;
-
     Ok(())
 }
 
 pub(crate) async fn calltest() -> Result<()> {
+    // Ensure that we're not accidentally using the replication feature on KV cache
+    ::std::env::remove_var("KVCACHE_NATS_URL");
+
     let nc = nats::asynk::connect("0.0.0.0:4222").await?;
     let nc3 = nats::asynk::connect("0.0.0.0:4222").await?;
     let h = HostBuilder::new()
@@ -181,12 +171,19 @@ pub(crate) async fn calltest() -> Result<()> {
     assert_eq!(http_r.status, "OK".to_string());
     assert_eq!(http_r.status_code, 200);
     h.stop().await;
-    delay_for(Duration::from_millis(300)).await;
+    delay_for(Duration::from_millis(900)).await;
 
     Ok(())
 }
 
 pub(crate) async fn auctions() -> Result<()> {
+    // Auctions tests require that the hosts are at the very least
+    // sharing the same lattice data.
+
+    // Set the default kvcache provider to enable NATS-based replication
+    // by supplying a NATS URL.
+    ::std::env::set_var("KVCACHE_NATS_URL", "0.0.0.0:4222");
+
     let nc = nats::asynk::connect("0.0.0.0:4222").await?;
     let h = HostBuilder::new()
         .with_namespace("auctions")
@@ -212,15 +209,17 @@ pub(crate) async fn auctions() -> Result<()> {
     h2.start().await?;
     let hid2 = h2.id();
 
+    delay_for(Duration::from_secs(2)).await;
+
     // auction with no requirements
     let kvack = ctl_client
-        .perform_actor_auction(KVCOUNTER_OCI, HashMap::new(), Duration::from_secs(1))
+        .perform_actor_auction(KVCOUNTER_OCI, HashMap::new(), Duration::from_secs(5))
         .await?;
     assert_eq!(2, kvack.len());
 
     // auction the KV counter with a constraint
     let kvack = ctl_client
-        .perform_actor_auction(KVCOUNTER_OCI, kvrequirements(), Duration::from_secs(1))
+        .perform_actor_auction(KVCOUNTER_OCI, kvrequirements(), Duration::from_secs(5))
         .await?;
     assert_eq!(1, kvack.len());
     assert_eq!(kvack[0].host_id, hid);
@@ -230,7 +229,7 @@ pub(crate) async fn auctions() -> Result<()> {
     await_actor_count(&h, 1, Duration::from_millis(50), 20).await?;
 
     let kvack = ctl_client
-        .perform_actor_auction(KVCOUNTER_OCI, kvrequirements(), Duration::from_millis(500))
+        .perform_actor_auction(KVCOUNTER_OCI, kvrequirements(), Duration::from_secs(5))
         .await?;
     // Should be no viable candidates now
     assert_eq!(0, kvack.len());
@@ -241,7 +240,7 @@ pub(crate) async fn auctions() -> Result<()> {
             HTTPSRV_OCI,
             "default",
             webrequirements(),
-            Duration::from_millis(200),
+            Duration::from_secs(2),
         )
         .await?;
     assert_eq!(1, httpack.len());
@@ -251,7 +250,8 @@ pub(crate) async fn auctions() -> Result<()> {
     let _http_ack = ctl_client
         .start_provider(&httpack[0].host_id, HTTPSRV_OCI, None)
         .await?;
-    await_provider_count(&h2, 2, Duration::from_millis(50), 10).await?;
+    await_provider_count(&h2, 3, Duration::from_millis(50), 10).await?;
+    delay_for(Duration::from_millis(500)).await;
 
     // should be no candidates now
     let httpack = ctl_client
@@ -259,7 +259,7 @@ pub(crate) async fn auctions() -> Result<()> {
             HTTPSRV_OCI,
             "default",
             webrequirements(),
-            Duration::from_millis(200),
+            Duration::from_secs(1),
         )
         .await?;
     assert_eq!(0, httpack.len());

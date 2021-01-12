@@ -17,7 +17,7 @@ use crate::host_controller::{
 };
 use crate::messagebus::{QueryActors, QueryProviders};
 use crate::oci::fetch_oci_bytes;
-use crate::{ControlEvent, HostManifest, NativeCapability, WasccEntity};
+use crate::{ControlEvent, HostManifest, NativeCapability, WasmCloudEntity};
 use crate::{Result, SYSTEM_ACTOR};
 use provider_archive::ProviderArchive;
 use std::cell::RefCell;
@@ -25,6 +25,8 @@ use std::collections::HashMap;
 use std::time::Duration;
 use wascap::prelude::KeyPair;
 
+/// A host builder provides a convenient, fluid syntax for setting initial configuration
+/// and tuning parameters for a wasmCloud host
 pub struct HostBuilder {
     labels: HashMap<String, String>,
     authorizer: Box<dyn Authorizer + 'static>,
@@ -35,10 +37,12 @@ pub struct HostBuilder {
     rpc_client: Option<nats::asynk::Connection>,
     cplane_client: Option<nats::asynk::Connection>,
     allow_live_update: bool,
+    lattice_cache_provider_ref: Option<String>,
     strict_update_check: bool,
 }
 
 impl HostBuilder {
+    /// Creates a new host builder
     pub fn new() -> HostBuilder {
         HostBuilder {
             labels: crate::host_controller::detect_core_host_labels(),
@@ -50,10 +54,12 @@ impl HostBuilder {
             rpc_client: None,
             cplane_client: None,
             allow_live_update: false,
+            lattice_cache_provider_ref: None,
             strict_update_check: true,
         }
     }
 
+    /// Indicates that live-updating (hot swapping) of actors at runtime is allowed. The default is to deny
     pub fn enable_live_updates(self) -> HostBuilder {
         HostBuilder {
             allow_live_update: true,
@@ -61,6 +67,9 @@ impl HostBuilder {
         }
     }
 
+    /// Disables strict update checks at runtime. Strict update checks require that the replacement
+    /// actor's claims must match _exactly_ the claims of the actor being replaced during update. Strict
+    /// updates are enabled by default
     pub fn disable_strict_update_check(self) -> HostBuilder {
         HostBuilder {
             strict_update_check: false,
@@ -68,6 +77,8 @@ impl HostBuilder {
         }
     }
 
+    /// Build the host with an RPC client by providing an instance of a NATS connection. The presence
+    /// of an RPC client will automatically enable lattice clustering. RPC is off by default
     pub fn with_rpc_client(self, client: nats::asynk::Connection) -> HostBuilder {
         HostBuilder {
             rpc_client: Some(client),
@@ -75,12 +86,18 @@ impl HostBuilder {
         }
     }
 
+    /// Enables remote control of the host via the lattice control protocol by providing an instance
+    /// of a NATS connection through which control commands flow. Remote control of hosts is
+    /// disabled by default.
     pub fn with_control_client(self, client: nats::asynk::Connection) -> HostBuilder {
         HostBuilder {
             cplane_client: Some(client),
             ..self
         }
     }
+
+    /// Provides an additional layer of runtime security by providing the host with an
+    /// instance of an implementor of the [crate::Authorizer] trait.
     pub fn with_authorizer(self, authorizer: impl Authorizer + 'static) -> HostBuilder {
         HostBuilder {
             authorizer: Box::new(authorizer),
@@ -88,6 +105,9 @@ impl HostBuilder {
         }
     }
 
+    /// When running with lattice enabled, a namespace prefix can be provided to allow
+    /// multiple lattices to co-exist within the same account space on a NATS server. This
+    /// allows for multi-tenancy but can be a security risk if configured incorrectly
     pub fn with_namespace(self, namespace: &str) -> HostBuilder {
         HostBuilder {
             namespace: namespace.to_string(),
@@ -95,9 +115,22 @@ impl HostBuilder {
         }
     }
 
+    /// Sets the timeout of default RPC invocations across the lattice. This value only
+    /// carries meaning if an RPC client has been supplied
     pub fn with_rpc_timeout(self, rpc_timeout: Duration) -> HostBuilder {
         HostBuilder {
             rpc_timeout,
+            ..self
+        }
+    }
+
+    /// Overrides the default lattice cache provider with the key-value capability
+    /// provider indicated by the OCI image reference. Note that your host must
+    /// have connectivity to and authorization for the OCI URL provided or the host
+    /// will not start
+    pub fn with_lattice_cache_provider(self, provider_ref: &str) -> HostBuilder {
+        HostBuilder {
+            lattice_cache_provider_ref: Some(provider_ref.to_string()),
             ..self
         }
     }
@@ -115,6 +148,9 @@ impl HostBuilder {
         }
     }
 
+    /// Allows the host to pull actor and capability provider images from registries without
+    /// using a secure (SSL/TLS) connection. This option is off by default and we recommend
+    /// it not be used in production environments.
     pub fn oci_allow_insecure(self) -> HostBuilder {
         HostBuilder {
             allow_insecure: true,
@@ -122,6 +158,10 @@ impl HostBuilder {
         }
     }
 
+    /// Adds a custom label and value pair to the host. Label-value pairs are used during
+    /// scheduler auctions to determine if a host is compatible with a given scheduling request.
+    /// All hosts automatically come with the following built-in system labels: `hostcore.arch`,
+    /// `hostcore.os`, `hostcore.osfamily`
     pub fn with_label(self, key: &str, value: &str) -> HostBuilder {
         let mut hm = self.labels.clone();
         if !hm.contains_key(key) {
@@ -130,6 +170,8 @@ impl HostBuilder {
         HostBuilder { labels: hm, ..self }
     }
 
+    /// Constructs an instance of a wasmCloud host. Note that this will not _start_ the host. You
+    /// will need to invoke the `start` function after building a new host
     pub fn build(self) -> Host {
         Host {
             labels: self.labels,
@@ -143,11 +185,15 @@ impl HostBuilder {
             rpc_client: self.rpc_client,
             cplane_client: self.cplane_client,
             allow_live_updates: self.allow_live_update,
+            lattice_cache_provider_ref: self.lattice_cache_provider_ref,
             strict_update_check: self.strict_update_check,
         }
     }
 }
 
+/// A wasmCloud `Host` is a secure runtime container responsible for scheduling
+/// actors and capability providers, configuring the links between them, and facilitating
+/// secure function call dispatch between actors and capabilities.
 pub struct Host {
     labels: HashMap<String, String>,
     authorizer: Box<dyn Authorizer + 'static>,
@@ -160,6 +206,7 @@ pub struct Host {
     cplane_client: Option<nats::asynk::Connection>,
     rpc_client: Option<nats::asynk::Connection>,
     allow_live_updates: bool,
+    lattice_cache_provider_ref: Option<String>,
     strict_update_check: bool,
 }
 
@@ -185,9 +232,13 @@ impl Host {
             auth: self.authorizer.clone(),
             kp: KeyPair::from_seed(&kp.seed()?)?,
             allow_live_updates: self.allow_live_updates,
+            allow_latest: self.allow_latest,
+            allow_insecure: self.allow_insecure,
+            lattice_cache_provider: self.lattice_cache_provider_ref.clone(),
             strict_update_check: self.strict_update_check,
         })
         .await?;
+
         *self.id.borrow_mut() = kp.public_key();
 
         // Start control plane
@@ -216,6 +267,8 @@ impl Host {
         Ok(())
     }
 
+    /// Stops a running host. Be aware that this function may terminate before the host has
+    /// finished disposing of all of its resources
     pub async fn stop(&self) {
         let cp = ControlInterface::from_hostlocal_registry(&self.id.borrow());
         let _ = cp
@@ -226,10 +279,15 @@ impl Host {
         System::current().stop();
     }
 
+    /// Returns the unique public key (a 56-character upppercase string beginning with the letter `N`) of this host.
+    /// The host's private key is used to securely sign invocations so that remote hosts can perform
+    /// anti-forgery checks
     pub fn id(&self) -> String {
         self.id.borrow().to_string()
     }
 
+    /// Starts a native (non-portable dynamically linked library plugin) capability provider and preps
+    /// it for execution in the host
     pub async fn start_native_capability(&self, capability: crate::NativeCapability) -> Result<()> {
         let hc = HostController::from_hostlocal_registry(&self.id.borrow());
         let _ = hc
@@ -242,6 +300,11 @@ impl Host {
         Ok(())
     }
 
+    /// Instructs the host to download a capability provider from an OCI registry and start
+    /// it. The wasmCloud host caches binary images retrieved from OCI registries (because
+    /// images are assumed to be immutable this kind of caching is acceptable). If you need to
+    /// purge the OCI image cache, remove the `wasmcloud_cache` directory from your environment's
+    /// `TEMP` directory.
     pub async fn start_capability_from_registry(
         &self,
         cap_ref: &str,
@@ -259,6 +322,7 @@ impl Host {
         Ok(())
     }
 
+    /// Instructs the runtime host to start an actor.
     pub async fn start_actor(&self, actor: crate::Actor) -> Result<()> {
         let hc = HostController::from_hostlocal_registry(&self.id.borrow());
 
@@ -270,6 +334,9 @@ impl Host {
         Ok(())
     }
 
+    /// Instructs the runtime host to download the actor from the indicated OCI registry and
+    /// start the actor. This call will fail if the host cannot communicate with or finish
+    /// downloading the indicated OCI image
     pub async fn start_actor_from_registry(&self, actor_ref: &str) -> Result<()> {
         let hc = HostController::from_hostlocal_registry(&self.id.borrow());
         let bytes = fetch_oci_bytes(actor_ref, self.allow_latest, self.allow_insecure).await?;
@@ -282,6 +349,9 @@ impl Host {
         Ok(())
     }
 
+    /// Stops a running actor in the host. This call is assumed to be idempotent and as such will
+    /// not fail if you attempt to stop an actor that is not running (though this may result
+    /// in errors or warnings in log output)
     pub async fn stop_actor(&self, actor_ref: &str) -> Result<()> {
         let hc = HostController::from_hostlocal_registry(&self.id.borrow());
         hc.send(StopActor {
@@ -292,6 +362,9 @@ impl Host {
         Ok(())
     }
 
+    /// Stops a running capability provider. This call will not fail if the indicated provider
+    /// is not currently running, and this call may terminate before the provider has finished
+    /// shutting down cleanly
     pub async fn stop_provider(
         &self,
         provider_ref: &str,
@@ -309,21 +382,31 @@ impl Host {
         Ok(())
     }
 
+    /// Retrieves the list of all actors within this host. This function call does _not_
+    /// include any actors remotely running in a connected lattice
     pub async fn get_actors(&self) -> Result<Vec<String>> {
         let b = MessageBus::from_hostlocal_registry(&self.id.borrow());
         Ok(b.send(QueryActors {}).await?.results)
     }
 
+    /// Retrieves the list of capability providers running in the host. This function does
+    /// _not_ include any capability providers that may be remotely running in a connected
+    /// lattice
     pub async fn get_providers(&self) -> Result<Vec<String>> {
         let b = MessageBus::from_hostlocal_registry(&self.id.borrow());
         Ok(b.send(QueryProviders {}).await?.results)
     }
 
+    /// Perform a raw waPC-style invocation on the given actor by supplying an operation
+    /// string and a payload of raw bytes, resulting in a payload of raw response bytes. It
+    /// is entirely up to the actor as to how it responds to unrecognized operations. This
+    /// operation will also be checked against the authorization system if a custom
+    /// authorization plugin has been supplied to this host
     pub async fn call_actor(&self, actor: &str, operation: &str, msg: &[u8]) -> Result<Vec<u8>> {
         let inv = Invocation::new(
             self.kp.borrow().as_ref().unwrap(),
-            WasccEntity::Actor(SYSTEM_ACTOR.to_string()),
-            WasccEntity::Actor(actor.to_string()),
+            WasmCloudEntity::Actor(SYSTEM_ACTOR.to_string()),
+            WasmCloudEntity::Actor(actor.to_string()),
             operation,
             msg.to_vec(),
         );
@@ -337,6 +420,13 @@ impl Host {
         }
     }
 
+    /// Links are a self-standing, durable entity within a lattice and host runtime. A link
+    /// defines a set of configuration values that apply to an actor and a capability provider indicated
+    /// by the provider's contract ID, public key, and link name. You can set a link before or
+    /// after either the actor or provider are started. Links are automatically established
+    /// when both parties are present in a lattice, and re-established if a party temporarily
+    /// leaves the lattice and rejoins (which can happen during a crash or a partition event). Link
+    /// data is exactly as durable as your choice of lattice cache provider
     pub async fn set_link(
         &self,
         actor: &str,
@@ -356,6 +446,11 @@ impl Host {
         .await?
     }
 
+    /// Apply a number of instructions from a manifest file to the runtime host. A manifest
+    /// file can contain a list of actors, capability providers, and link definitions that will
+    /// be added to a host upon ingestion. Manifest application is _not_ idempotent, so
+    /// repeated application of multiple manifests may not always produce the same runtime
+    /// host state
     pub async fn apply_manifest(&self, manifest: HostManifest) -> Result<()> {
         let host_id = self.kp.borrow().as_ref().unwrap().public_key();
         let hc = HostController::from_hostlocal_registry(&host_id);

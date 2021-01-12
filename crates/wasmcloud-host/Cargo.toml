@@ -46,7 +46,14 @@ rand = "0.7.3"
 chrono = "0.4.19"
 envmnt = "0.8.4"
 nats = "0.8.6"
+actor-keyvalue = { git = "https://github.com/wasmCloud/actor-interfaces", branch = "main" }
+nats-kvcache = { git = "https://github.com/wasmCloud/capability-providers", branch = "main" }
+#nats-kvcache = { path = "../../../capability-providers/nats-kvcache/"}
 control-interface = { path = "../control-interface" }
 
 wasm3-provider = { version = "0.0.2", optional = true}
 wasmtime-provider = { version = "0.0.2" , optional = true}
+
+[dev-dependencies]
+provider-archive = "0.3.0"
+reqwest = "0.10"

@@ -1,4 +1,4 @@
-use crate::dispatch::WasccEntity;
+use crate::dispatch::WasmCloudEntity;
 use crate::Result;
 use crate::{Invocation, SYSTEM_ACTOR};
 use std::collections::HashMap;
@@ -10,13 +10,13 @@ use wascap::jwt::{Actor, Claims};
 /// impossible to override the base behavior of checking that an actor's embedded JWT contains the right
 /// capability attestations.
 pub trait Authorizer: CloneAuthorizer + Sync + Send {
-    /// This check is performed during the `[start_actor](crate::Host::start_actor)` call, allowing the custom authorizer to do things
+    /// This check is performed during the [`start_actor`](`crate::Host::start_actor()`) call, allowing the custom authorizer to do things
     /// like verify a provenance chain, make external calls, etc.
     fn can_load(&self, claims: &Claims<Actor>) -> bool;
     /// This check will be performed for _every_ invocation that has passed the base capability check,
-    /// including the operation that occurs during `bind_actor`. Developers should be aware of this because
-    /// if `set_authorizer` is done _after_ actor link, it could potentially allow an unauthorized link.
-    fn can_invoke(&self, claims: &Claims<Actor>, target: &WasccEntity, operation: &str) -> bool;
+    /// including the operation that occurs during [`set_link`](`crate::Host::set_link()`).
+    fn can_invoke(&self, claims: &Claims<Actor>, target: &WasmCloudEntity, operation: &str)
+        -> bool;
 }
 
 #[doc(hidden)]
@@ -56,10 +56,15 @@ impl Authorizer for DefaultAuthorizer {
     // This doesn't actually mean everyone can invoke everything. Remember that the host itself
     // will _always_ enforce the claims check on an actor having the required capability
     // attestation
-    fn can_invoke(&self, _claims: &Claims<Actor>, target: &WasccEntity, _operation: &str) -> bool {
+    fn can_invoke(
+        &self,
+        _claims: &Claims<Actor>,
+        target: &WasmCloudEntity,
+        _operation: &str,
+    ) -> bool {
         match target {
-            WasccEntity::Actor(_a) => true,
-            WasccEntity::Capability { .. } => true,
+            WasmCloudEntity::Actor(_a) => true,
+            WasmCloudEntity::Capability { .. } => true,
         }
     }
 }
@@ -71,10 +76,10 @@ pub(crate) fn authorize_invocation(
 ) -> Result<()> {
     let _ = inv.validate_antiforgery()?; // Fail authorization if the invocation isn't properly signed
 
-    if let WasccEntity::Actor(ref actor_key) = &inv.origin {
+    if let WasmCloudEntity::Actor(ref actor_key) = &inv.origin {
         if let Some(c) = claims_cache.get(actor_key) {
             if let Some(ref caps) = c.metadata.as_ref().unwrap().caps {
-                let allowed = if let WasccEntity::Capability { contract_id, .. } = &inv.target {
+                let allowed = if let WasmCloudEntity::Capability { contract_id, .. } = &inv.target {
                     caps.contains(contract_id)
                 } else {
                     true
@@ -111,7 +116,7 @@ pub(crate) fn authorize_invocation(
 #[cfg(test)]
 mod test {
     use crate::auth::{authorize_invocation, Authorizer, DefaultAuthorizer};
-    use crate::{Invocation, WasccEntity};
+    use crate::{Invocation, WasmCloudEntity};
     use std::collections::HashMap;
     use wascap::jwt::{Actor, Claims, ClaimsBuilder};
     use wascap::prelude::KeyPair;
@@ -119,8 +124,8 @@ mod test {
     #[test]
     fn actor_to_actor_allowed() {
         let inv = gen_invocation(
-            WasccEntity::Actor("A".to_string()),
-            WasccEntity::Actor("B".to_string()),
+            WasmCloudEntity::Actor("A".to_string()),
+            WasmCloudEntity::Actor("B".to_string()),
             "test",
         );
         let mut cache = HashMap::new();
@@ -144,8 +149,8 @@ mod test {
     #[test]
     fn block_actor_with_no_claims() {
         let inv = gen_invocation(
-            WasccEntity::Actor("A".to_string()),
-            WasccEntity::Actor("B".to_string()),
+            WasmCloudEntity::Actor("A".to_string()),
+            WasmCloudEntity::Actor("B".to_string()),
             "test",
         );
         let cache = HashMap::new();
@@ -160,12 +165,12 @@ mod test {
 
     #[test]
     fn block_actor_with_insufficient_claims() {
-        let target = WasccEntity::Capability {
+        let target = WasmCloudEntity::Capability {
             contract_id: "wascc:keyvalue".to_string(),
             id: "Vxxx".to_string(),
             link_name: "default".to_string(),
         };
-        let inv = gen_invocation(WasccEntity::Actor("A".to_string()), target, "test");
+        let inv = gen_invocation(WasmCloudEntity::Actor("A".to_string()), target, "test");
         let mut cache = HashMap::new();
         cache.insert(
             "A".to_string(),
@@ -190,12 +195,12 @@ mod test {
 
     #[test]
     fn invoke_authorizer_when_initial_check_passes() {
-        let target = WasccEntity::Capability {
+        let target = WasmCloudEntity::Capability {
             contract_id: "wascc:keyvalue".to_string(),
             id: "Vxxx".to_string(),
             link_name: "default".to_string(),
         };
-        let inv = gen_invocation(WasccEntity::Actor("A".to_string()), target, "test");
+        let inv = gen_invocation(WasmCloudEntity::Actor("A".to_string()), target, "test");
         let mut cache = HashMap::new();
         cache.insert(
             "A".to_string(),
@@ -218,7 +223,7 @@ mod test {
         );
     }
 
-    fn gen_invocation(source: WasccEntity, target: WasccEntity, op: &str) -> Invocation {
+    fn gen_invocation(source: WasmCloudEntity, target: WasmCloudEntity, op: &str) -> Invocation {
         let hk = KeyPair::new_server();
         Invocation::new(&hk, source, target, op, vec![])
     }
@@ -238,7 +243,7 @@ mod test {
         fn can_invoke(
             &self,
             _claims: &Claims<Actor>,
-            _target: &WasccEntity,
+            _target: &WasmCloudEntity,
             _operation: &str,
         ) -> bool {
             false

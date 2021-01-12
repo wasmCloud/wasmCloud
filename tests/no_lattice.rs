@@ -6,7 +6,22 @@ use std::time::Duration;
 use wasmcloud_host::Result;
 use wasmcloud_host::{Actor, HostBuilder, NativeCapability};
 
+pub async fn empty_host_has_two_providers() -> Result<()> {
+    // Ensure that we're not accidentally using the replication feature on KV cache
+    ::std::env::remove_var("KVCACHE_NATS_URL");
+    let h = HostBuilder::new().build();
+    h.start().await?;
+    delay_for(Duration::from_millis(300)).await;
+
+    let prov = h.get_providers().await?;
+    assert_eq!(2, prov.len());
+
+    Ok(())
+}
+
 pub async fn start_and_execute_echo() -> Result<()> {
+    // Ensure that we're not accidentally using the replication feature on KV cache
+    ::std::env::remove_var("KVCACHE_NATS_URL");
     let h = HostBuilder::new().build();
     h.start().await?;
     let echo = Actor::from_file("./tests/modules/echo.wasm")?;
@@ -35,10 +50,13 @@ pub async fn start_and_execute_echo() -> Result<()> {
 }
 
 pub async fn kvcounter_basic() -> Result<()> {
+    // Ensure that we're not accidentally using the replication feature on KV cache
+    ::std::env::remove_var("KVCACHE_NATS_URL");
     use redis::Commands;
 
     let h = gen_kvcounter_host(9999, None, None).await?;
     println!("Got host");
+    delay_for(Duration::from_millis(50)).await;
 
     let key = uuid::Uuid::new_v4().to_string();
     let rkey = format!(":{}", key); // the kv wasm logic does a replace on '/' with ':'
@@ -51,6 +69,7 @@ pub async fn kvcounter_basic() -> Result<()> {
     resp = reqwest::get(&url).await?; // counter should be at 3 now
     assert!(resp.status().is_success());
     assert_eq!(resp.text().await?, "{\"counter\":3}");
+    println!("asserts good");
 
     let client = redis::Client::open("redis://127.0.0.1/")?;
     let mut con = client.get_connection()?;
@@ -61,8 +80,11 @@ pub async fn kvcounter_basic() -> Result<()> {
 }
 
 pub async fn kvcounter_start_stop() -> Result<()> {
+    // Ensure that we're not accidentally using the replication feature on KV cache
+    ::std::env::remove_var("KVCACHE_NATS_URL");
     use redis::Commands;
     let h = gen_kvcounter_host(9997, None, None).await?;
+    delay_for(Duration::from_millis(50)).await;
 
     let key = uuid::Uuid::new_v4().to_string();
     let rkey = format!(":{}", key); // the kv wasm logic does a replace on '/' with ':'
@@ -73,9 +95,7 @@ pub async fn kvcounter_start_stop() -> Result<()> {
 
     h.stop_actor("MASCXFM4R6X63UD5MSCDZYCJNPBVSIU6RKMXUPXRKAOSBQ6UY3VT3NPZ")
         .await?;
-    println!("Waiting for 0");
-    await_actor_count(&h, 0, Duration::from_millis(50), 3).await?;
-    println!("Got 0");
+    delay_for(Duration::from_millis(100)).await;
 
     let kvcounter = Actor::from_file("./tests/modules/kvcounter.wasm")?;
     h.start_actor(kvcounter).await?;
@@ -85,13 +105,14 @@ pub async fn kvcounter_start_stop() -> Result<()> {
 
     h.stop_provider(&arc2.claims().unwrap().subject, "wascc:http_server", None)
         .await?;
-    await_provider_count(&h, 2, Duration::from_millis(50), 3).await?;
+    delay_for(Duration::from_millis(200)).await;
 
-    delay_for(Duration::from_millis(50)).await; // give the web server enough time to let go of the port
+    await_provider_count(&h, 3, Duration::from_millis(50), 4).await?;
 
     let websrv = NativeCapability::from_archive(&arc2, None)?;
     h.start_native_capability(websrv).await?;
-    await_provider_count(&h, 3, Duration::from_millis(50), 3).await?; // 2 providers plus wascc:extras
+    await_provider_count(&h, 4, Duration::from_millis(50), 3).await?; // 2 providers plus wascc:extras + kvcache
+    delay_for(Duration::from_millis(300)).await; // give web server enough time to start
 
     let resp2 = reqwest::get(&url).await?;
     assert!(resp2.status().is_success());
@@ -108,6 +129,8 @@ pub async fn kvcounter_start_stop() -> Result<()> {
 // Set the link before either the actor or the provider are running in
 // the host, and verify that we can then hit the HTTP endpoint.
 pub async fn kvcounter_link_first() -> Result<()> {
+    // Ensure that we're not accidentally using the replication feature on KV cache
+    ::std::env::remove_var("KVCACHE_NATS_URL");
     use redis::Commands;
     let h = HostBuilder::new().build();
     h.start().await?;
@@ -153,7 +176,8 @@ pub async fn kvcounter_link_first() -> Result<()> {
     // for each.
     h.start_native_capability(redis).await?;
     h.start_native_capability(websrv).await?;
-    await_provider_count(&h, 3, Duration::from_millis(50), 3).await?; // 2 providers plus wascc:extras
+    await_provider_count(&h, 4, Duration::from_millis(50), 3).await?; // 2 providers plus wascc:extras
+    delay_for(Duration::from_millis(150)).await;
 
     let key = uuid::Uuid::new_v4().to_string();
     let rkey = format!(":{}", key); // the kv wasm logic does a replace on '/' with ':'
@@ -162,11 +186,12 @@ pub async fn kvcounter_link_first() -> Result<()> {
     let resp = reqwest::get(&url).await?;
     assert!(resp.status().is_success());
     assert_eq!(resp.text().await?, "{\"counter\":1}");
+    delay_for(Duration::from_millis(50)).await;
 
     let client = redis::Client::open("redis://127.0.0.1/")?;
     let mut con = client.get_connection()?;
     let _: () = con.del(&rkey)?;
     h.stop().await;
-
+    delay_for(Duration::from_millis(50)).await;
     Ok(())
 }

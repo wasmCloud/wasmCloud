@@ -4,20 +4,18 @@ use crate::dispatch::{
 };
 
 use crate::messagebus::OP_BIND_ACTOR;
-use crate::{Invocation, WasccEntity, SYSTEM_ACTOR};
+use crate::{Invocation, WasmCloudEntity, SYSTEM_ACTOR};
 use actix::prelude::*;
 use std::collections::HashMap;
 use wascap::jwt::Claims;
 use wascap::prelude::KeyPair;
 
-// TODO: add wascc internal claims to the config values
-pub(crate) fn generate_link_invocation(
+pub(crate) fn generate_link_invocation_and_call(
     t: &Recipient<Invocation>,
-    //msg: &Advertiselink,
     actor: &str,
     values: HashMap<String, String>,
     key: &KeyPair,
-    target: WasccEntity,
+    target: WasmCloudEntity,
     claims: Claims<wascap::jwt::Actor>,
 ) -> RecipientRequest<Invocation> {
     // Add "hidden" configuration values to the config hashmap that
@@ -62,11 +60,24 @@ pub(crate) fn generate_link_invocation(
     };
     let inv = Invocation::new(
         key,
-        WasccEntity::Actor(SYSTEM_ACTOR.to_string()),
+        WasmCloudEntity::Actor(SYSTEM_ACTOR.to_string()),
         target,
         OP_BIND_ACTOR,
         crate::generated::core::serialize(&config).unwrap(),
     );
 
     t.send(inv)
+}
+
+pub(crate) fn system_actor_claims() -> Claims<wascap::jwt::Actor> {
+    Claims::<wascap::jwt::Actor>::new(
+        SYSTEM_ACTOR.to_string(),
+        "ACOJJN6WUP4ODD75XEBKKTCCUJJCY5ZKQ56XVKYK4BEJWGVAOOQHZMCW".to_string(),
+        SYSTEM_ACTOR.to_string(),
+        None,
+        None,
+        false,
+        None,
+        None,
+    )
 }
