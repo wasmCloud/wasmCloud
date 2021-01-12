@@ -41,3 +41,18 @@ make par-mips
 ```
 
 This will build a provider archive that includes all supported platforms include ones that have MIPS-based architectures.
+
+### Releasing Capability Providers
+
+This repo contains `Actions` that allow for individual releases of capability providers. To release a capability provider as a maintainer (I'll use http-client in this example), follow these steps.
+
+1. Make any necessary changes to capability provider
+1. Update semver contained in that specific provider's `Cargo.toml`
+1. Submit PR for review
+1. Once PR is merged:
+```
+git checkout origin/main
+git pull origin main
+git tag -a http-client-v1.2.3 -m "http-client release v1.2.3" # Tag must be in the form of <provider>-vX.Y.Z
+git push origin --tags # Kicks off the release action
+```
