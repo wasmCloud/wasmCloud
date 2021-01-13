@@ -7,7 +7,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  working-directory: ./httpserver
+  working-directory: ./http-server
   DESTINATION: httpserver.par.gz #aka the filename of the parJEEzy
   WASH_ISSUER_KEY: ${{ secrets.WASMCLOUD_ACCOUNT_OFFICIAL }}
   WASH_SUBJECT_KEY: ${{ secrets.WASMCLOUD_HTTPSERVER }}
@@ -65,6 +65,7 @@ jobs:
         run: cargo login ${{ env.CRATES_TOKEN }}
       - name: Cargo publish
         run: cargo publish --no-verify
+        working-directory: ${{ env.working-directory }}
 
   artifact_release:
     needs: github_release

@@ -67,6 +67,7 @@ jobs:
         run: cargo login ${{ env.CRATES_TOKEN }}
       - name: Cargo publish
         run: cargo publish --no-verify
+        working-directory: ${{ env.working-directory }}
 
   artifact_release:
     needs: github_release
