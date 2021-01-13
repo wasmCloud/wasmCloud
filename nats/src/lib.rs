@@ -33,7 +33,7 @@ use std::sync::RwLock;
 #[cfg(not(feature = "static_plugin"))]
 capability_provider!(NatsProvider, NatsProvider::new);
 
-const CAPABILITY_ID: &str = "wasmcloud:messaging";
+const CAPABILITY_ID: &str = "wascc:messaging";
 
 /// NATS implementation of the `wascc:messaging` specification
 #[derive(Clone)]
