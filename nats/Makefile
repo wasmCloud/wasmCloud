@@ -5,11 +5,11 @@ endef
 
 CAPABILITY_ID := $(call readvar,CAPABILITY_ID)
 NAME          := $(shell cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name')
-VERSION				:= $(shell cargo metadata --no-deps --format-version 1 | jq -r '.packages[].version')
+VERSION       := $(shell cargo metadata --no-deps --format-version 1 | jq -r '.packages[].version')
 LIBNAME       := $(shell echo $(NAME) | tr '-' '_')
 VENDOR        ?= wasmcloud
-REVISION			?= 0
-DESTINATION		?= nats.par.gz
+REVISION	  ?= 0
+DESTINATION   ?= nats.par.gz
 
 TARGETS := armv7-unknown-linux-gnueabihf \
 	aarch64-unknown-linux-gnu \
