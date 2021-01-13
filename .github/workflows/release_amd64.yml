@@ -23,6 +23,8 @@ jobs:
           export VERSION=$(echo $REF | cut -d/ -f3)
           ./bin/nfpm pkg --packager deb -f build/nfpm.amd64.yaml
           ./bin/nfpm pkg --packager rpm -f build/nfpm.amd64.yaml
+      - name: Push amd64 (Ubuntu 18.04)
+        run: curl -F "package[distro_version_id]=190" -F "package[package_file]=@$(ls wash_*_amd64.deb)" https://$PACKAGECLOUD_TOKEN:@packagecloud.io/api/v1/repos/wasmCloud/core/packages.json
       - name: Push amd64 (Ubuntu 19.04)
         run: curl -F "package[distro_version_id]=203" -F "package[package_file]=@$(ls wash_*_amd64.deb)" https://$PACKAGECLOUD_TOKEN:@packagecloud.io/api/v1/repos/wasmCloud/core/packages.json
       - name: Push amd64 (Ubuntu 20.04)
