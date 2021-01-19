@@ -32,7 +32,7 @@ use term_table::{
 };
 use wascap::caps::*;
 use wascap::jwt::{
-    Account, Actor, CapabilityProvider, Claims, Operator, TokenValidation, WascapEntity,
+    Account, Actor, CapabilityProvider, Claims, Operator, Token, TokenValidation, WascapEntity,
 };
 use wascap::wasm::{days_from_now_to_jwt_time, sign_buffer_with_claims};
 
@@ -46,7 +46,7 @@ pub(crate) struct ClaimsCli {
 }
 
 #[derive(Debug, Clone, StructOpt)]
-enum ClaimsCliCommand {
+pub(crate) enum ClaimsCliCommand {
     /// Examine the capabilities of a WebAssembly module
     #[structopt(name = "inspect")]
     Inspect(InspectCommand),
@@ -60,9 +60,9 @@ enum ClaimsCliCommand {
 }
 
 #[derive(StructOpt, Debug, Clone)]
-struct InspectCommand {
+pub(crate) struct InspectCommand {
     /// Path to signed actor module or OCI URL of signed actor module
-    module: String,
+    pub(crate) module: String,
 
     /// Extract the raw JWT from the file and print to stdout
     #[structopt(name = "jwt_only", long = "jwt-only")]
@@ -103,9 +103,9 @@ struct InspectCommand {
 }
 
 #[derive(StructOpt, Debug, Clone)]
-struct SignCommand {
+pub(crate) struct SignCommand {
     /// File to read
-    source: String,
+    pub(crate) source: String,
 
     /// Destionation for signed module. If this flag is not provided, the signed module will be placed in the same directory as the source with a "_s" suffix
     #[structopt(short = "d", long = "destination")]
@@ -116,7 +116,7 @@ struct SignCommand {
 }
 
 #[derive(Debug, Clone, StructOpt)]
-enum TokenCommand {
+pub(crate) enum TokenCommand {
     /// Generate a signed JWT for an actor module
     #[structopt(name = "actor")]
     Actor(ActorMetadata),
@@ -154,7 +154,7 @@ struct GenerateCommon {
 }
 
 #[derive(Debug, Clone, StructOpt)]
-struct OperatorMetadata {
+pub(crate) struct OperatorMetadata {
     /// A descriptive name for the operator
     #[structopt(short = "n", long = "name")]
     name: String,
@@ -178,7 +178,7 @@ struct OperatorMetadata {
 }
 
 #[derive(Debug, Clone, StructOpt)]
-struct AccountMetadata {
+pub(crate) struct AccountMetadata {
     /// A descriptive name for the account
     #[structopt(short = "n", long = "name")]
     name: String,
@@ -211,7 +211,7 @@ struct AccountMetadata {
 }
 
 #[derive(Debug, Clone, StructOpt)]
-struct ProviderMetadata {
+pub(crate) struct ProviderMetadata {
     /// A descriptive name for the provider
     #[structopt(short = "n", long = "name")]
     name: String,
@@ -255,7 +255,7 @@ struct ProviderMetadata {
 }
 
 #[derive(StructOpt, Debug, Clone, Serialize, Deserialize)]
-struct ActorMetadata {
+pub(crate) struct ActorMetadata {
     /// Enable the Key/Value Store standard capability
     #[structopt(short = "k", long = "keyvalue")]
     keyvalue: bool,
@@ -322,14 +322,16 @@ struct ActorMetadata {
 }
 
 pub(crate) async fn handle_command(cli: ClaimsCli) -> Result<(), Box<dyn ::std::error::Error>> {
-    match cli.command {
-        ClaimsCliCommand::Inspect(inspectcmd) => render_caps(inspectcmd).await,
-        ClaimsCliCommand::Sign(signcmd) => sign_file(signcmd),
-        ClaimsCliCommand::Token(gencmd) => generate_token(gencmd),
-    }
+    let output = match cli.command {
+        ClaimsCliCommand::Inspect(inspectcmd) => render_caps(inspectcmd).await?,
+        ClaimsCliCommand::Sign(signcmd) => sign_file(signcmd)?,
+        ClaimsCliCommand::Token(gencmd) => generate_token(gencmd)?,
+    };
+    println!("{}", output);
+    Ok(())
 }
 
-fn generate_token(cmd: TokenCommand) -> Result<(), Box<dyn ::std::error::Error>> {
+pub(crate) fn generate_token(cmd: TokenCommand) -> Result<String, Box<dyn ::std::error::Error>> {
     match cmd {
         TokenCommand::Actor(actor) => generate_actor(actor),
         TokenCommand::Operator(operator) => generate_operator(operator),
@@ -359,7 +361,7 @@ fn get_keypair_vec(
         .collect())
 }
 
-fn generate_actor(actor: ActorMetadata) -> Result<(), Box<dyn ::std::error::Error>> {
+fn generate_actor(actor: ActorMetadata) -> Result<String, Box<dyn ::std::error::Error>> {
     let issuer = extract_keypair(
         actor.issuer.clone(),
         None,
@@ -419,19 +421,16 @@ fn generate_actor(actor: ActorMetadata) -> Result<(), Box<dyn ::std::error::Erro
     );
 
     let jwt = claims.encode(&issuer)?;
-    println!(
-        "{}",
-        format_output(
-            jwt.clone(),
-            json!({ "token": jwt }),
-            &actor.common.output.kind
-        )
+    let out = format_output(
+        jwt.clone(),
+        json!({ "token": jwt }),
+        &actor.common.output.kind,
     );
 
-    Ok(())
+    Ok(out)
 }
 
-fn generate_operator(operator: OperatorMetadata) -> Result<(), Box<dyn ::std::error::Error>> {
+fn generate_operator(operator: OperatorMetadata) -> Result<String, Box<dyn ::std::error::Error>> {
     let self_sign_key = extract_keypair(
         operator.issuer.clone(),
         Some(operator.name.clone()),
@@ -464,18 +463,15 @@ fn generate_operator(operator: OperatorMetadata) -> Result<(), Box<dyn ::std::er
     );
 
     let jwt = claims.encode(&self_sign_key)?;
-    println!(
-        "{}",
-        format_output(
-            jwt.clone(),
-            json!({ "token": jwt }),
-            &operator.common.output.kind
-        )
+    let out = format_output(
+        jwt.clone(),
+        json!({ "token": jwt }),
+        &operator.common.output.kind,
     );
-    Ok(())
+    Ok(out)
 }
 
-fn generate_account(account: AccountMetadata) -> Result<(), Box<dyn ::std::error::Error>> {
+fn generate_account(account: AccountMetadata) -> Result<String, Box<dyn ::std::error::Error>> {
     let issuer = extract_keypair(
         account.issuer.clone(),
         Some(account.name.clone()),
@@ -513,18 +509,15 @@ fn generate_account(account: AccountMetadata) -> Result<(), Box<dyn ::std::error
         },
     );
     let jwt = claims.encode(&issuer)?;
-    println!(
-        "{}",
-        format_output(
-            jwt.clone(),
-            json!({ "token": jwt }),
-            &account.common.output.kind
-        )
+    let out = format_output(
+        jwt.clone(),
+        json!({ "token": jwt }),
+        &account.common.output.kind,
     );
-    Ok(())
+    Ok(out)
 }
 
-fn generate_provider(provider: ProviderMetadata) -> Result<(), Box<dyn ::std::error::Error>> {
+fn generate_provider(provider: ProviderMetadata) -> Result<String, Box<dyn ::std::error::Error>> {
     let issuer = extract_keypair(
         provider.issuer.clone(),
         None,
@@ -553,18 +546,15 @@ fn generate_provider(provider: ProviderMetadata) -> Result<(), Box<dyn ::std::er
         days_from_now_to_jwt_time(provider.common.expires_in_days),
     );
     let jwt = claims.encode(&issuer)?;
-    println!(
-        "{}",
-        format_output(
-            jwt.clone(),
-            json!({ "token": jwt }),
-            &provider.common.output.kind
-        )
+    let out = format_output(
+        jwt.clone(),
+        json!({ "token": jwt }),
+        &provider.common.output.kind,
     );
-    Ok(())
+    Ok(out)
 }
 
-fn sign_file(cmd: SignCommand) -> Result<(), Box<dyn ::std::error::Error>> {
+pub(crate) fn sign_file(cmd: SignCommand) -> Result<String, Box<dyn ::std::error::Error>> {
     let mut sfile = File::open(&cmd.source).unwrap();
     let mut buf = Vec::new();
     sfile.read_to_end(&mut buf).unwrap();
@@ -667,11 +657,12 @@ fn sign_file(cmd: SignCommand) -> Result<(), Box<dyn ::std::error::Error>> {
         Err(e) => Err(Box::new(e)),
     }?;
 
-    println!("{}", output);
-    Ok(())
+    Ok(output)
 }
 
-async fn render_caps(cmd: InspectCommand) -> Result<(), Box<dyn ::std::error::Error>> {
+async fn get_caps(
+    cmd: &InspectCommand,
+) -> Result<Option<Token<Actor>>, Box<dyn ::std::error::Error>> {
     let module_bytes = match File::open(&cmd.module) {
         Ok(mut f) => {
             let mut buf = Vec::new();
@@ -681,10 +672,10 @@ async fn render_caps(cmd: InspectCommand) -> Result<(), Box<dyn ::std::error::Er
         Err(_) => {
             crate::reg::pull_artifact(
                 cmd.module.to_string(),
-                cmd.digest,
+                cmd.digest.clone(),
                 cmd.allow_latest,
-                cmd.user,
-                cmd.password,
+                cmd.user.clone(),
+                cmd.password.clone(),
                 cmd.insecure,
             )
             .await?
@@ -693,28 +684,37 @@ async fn render_caps(cmd: InspectCommand) -> Result<(), Box<dyn ::std::error::Er
 
     // Extract will return an error if it encounters an invalid hash in the claims
     let claims = wascap::wasm::extract_claims(&module_bytes);
-    let out = match claims {
-        Ok(Some(token)) => {
+    match claims {
+        Ok(token) => Ok(token),
+        Err(e) => Err(Box::new(e)),
+    }
+}
+
+pub(crate) async fn render_caps(
+    cmd: InspectCommand,
+) -> Result<String, Box<dyn ::std::error::Error>> {
+    let caps = get_caps(&cmd).await?;
+
+    let out = match caps {
+        Some(token) => {
             if cmd.jwt_only {
-                Ok(token.jwt)
+                token.jwt
             } else {
                 let validation = wascap::jwt::validate_token::<Actor>(&token.jwt)?;
-                Ok(render_actor_claims(token.claims, validation, &cmd.output))
+                render_actor_claims(token.claims, validation, &cmd.output, None)
             }
         }
-        Err(e) => Err(Box::new(e)),
-        Ok(None) => Ok(format!("No capabilities discovered in : {}", &cmd.module)),
-    }?;
-
-    println!("{}", out);
-    Ok(())
+        None => format!("No capabilities discovered in : {}", &cmd.module),
+    };
+    Ok(out)
 }
 
 /// Renders actor claims into provided output format
-fn render_actor_claims(
+pub(crate) fn render_actor_claims(
     claims: Claims<Actor>,
     validation: TokenValidation,
     output: &Output,
+    max_width: Option<usize>,
 ) -> String {
     let md = claims.metadata.clone().unwrap();
     let friendly_rev = md.rev.unwrap_or(0);
@@ -759,7 +759,7 @@ fn render_actor_claims(
             )
         }
         OutputKind::Text => {
-            let mut table = render_core(&claims, validation);
+            let mut table = render_core(&claims, validation, max_width);
 
             table.add_row(Row::new(vec![
                 TableCell::new("Version"),
@@ -809,13 +809,18 @@ fn token_label(pk: &str) -> String {
     }
 }
 
-fn render_core<T>(claims: &Claims<T>, validation: TokenValidation) -> Table
+fn render_core<T>(
+    claims: &Claims<T>,
+    validation: TokenValidation,
+    max_width: Option<usize>,
+) -> Table
 where
     T: serde::Serialize + DeserializeOwned + WascapEntity,
 {
     let mut table = Table::new();
-    table.max_column_width = 68;
-    table.style = TableStyle::extended();
+    table.max_column_width = max_width.unwrap_or(68);
+    table.style = TableStyle::blank();
+    table.separate_rows = false;
     let headline = format!("{} - {}", claims.name(), token_label(&claims.subject));
 
     table.add_row(Row::new(vec![TableCell::new_with_alignment(

@@ -19,7 +19,7 @@ const WASM_CONFIG_MEDIA_TYPE: &str = "application/vnd.wascc.actor.archive.config
 const OCI_MEDIA_TYPE: &str = "application/vnd.oci.image.layer.v1.tar";
 const WASM_FILE_EXTENSION: &str = ".wasm";
 
-const SHOWER_EMOJI: &str = "\u{1F6BF}";
+pub(crate) const SHOWER_EMOJI: &str = "\u{1F6BF}";
 
 pub(crate) enum SupportedArtifacts {
     Par,
@@ -36,7 +36,7 @@ pub(crate) struct RegCli {
 }
 
 #[derive(Debug, Clone, StructOpt)]
-enum RegCliCommand {
+pub(crate) enum RegCliCommand {
     /// Pull an artifact from an OCI compliant registry
     #[structopt(name = "pull")]
     Pull(PullCommand),
@@ -46,57 +46,57 @@ enum RegCliCommand {
 }
 
 #[derive(StructOpt, Debug, Clone)]
-struct PullCommand {
+pub(crate) struct PullCommand {
     /// URL of artifact
     #[structopt(name = "url")]
-    url: String,
+    pub(crate) url: String,
 
     /// File destination of artifact
     #[structopt(long = "destination")]
-    destination: Option<String>,
+    pub(crate) destination: Option<String>,
 
     /// Digest to verify artifact against
     #[structopt(short = "d", long = "digest")]
-    digest: Option<String>,
+    pub(crate) digest: Option<String>,
 
     /// Allow latest artifact tags
     #[structopt(long = "allow-latest")]
-    allow_latest: bool,
+    pub(crate) allow_latest: bool,
 
     #[structopt(flatten)]
     pub(crate) output: Output,
 
     #[structopt(flatten)]
-    opts: AuthOpts,
+    pub(crate) opts: AuthOpts,
 }
 
 #[derive(StructOpt, Debug, Clone)]
-struct PushCommand {
+pub(crate) struct PushCommand {
     /// URL to push artifact to
     #[structopt(name = "url")]
-    url: String,
+    pub(crate) url: String,
 
     /// Path to artifact to push
     #[structopt(name = "artifact")]
-    artifact: String,
+    pub(crate) artifact: String,
 
     /// Path to config file, if omitted will default to a blank configuration
     #[structopt(short = "c", long = "config")]
-    config: Option<String>,
+    pub(crate) config: Option<String>,
 
     /// Allow latest artifact tags
     #[structopt(long = "allow-latest")]
-    allow_latest: bool,
+    pub(crate) allow_latest: bool,
 
     #[structopt(flatten)]
     pub(crate) output: Output,
 
     #[structopt(flatten)]
-    opts: AuthOpts,
+    pub(crate) opts: AuthOpts,
 }
 
 #[derive(StructOpt, Debug, Clone)]
-struct AuthOpts {
+pub(crate) struct AuthOpts {
     /// OCI username, if omitted anonymous authentication will be used
     #[structopt(
         short = "u",
@@ -104,7 +104,7 @@ struct AuthOpts {
         env = "WASH_REG_USER",
         hide_env_values = true
     )]
-    user: Option<String>,
+    pub(crate) user: Option<String>,
 
     /// OCI password, if omitted anonymous authentication will be used
     #[structopt(
@@ -113,11 +113,11 @@ struct AuthOpts {
         env = "WASH_REG_PASSWORD",
         hide_env_values = true
     )]
-    password: Option<String>,
+    pub(crate) password: Option<String>,
 
     /// Allow insecure (HTTP) registry connections
     #[structopt(long = "insecure")]
-    insecure: bool,
+    pub(crate) insecure: bool,
 }
 
 pub(crate) async fn handle_command(cli: RegCli) -> Result<(), Box<dyn ::std::error::Error>> {
@@ -127,7 +127,7 @@ pub(crate) async fn handle_command(cli: RegCli) -> Result<(), Box<dyn ::std::err
     }
 }
 
-async fn handle_pull(cmd: PullCommand) -> Result<(), Box<dyn ::std::error::Error>> {
+pub(crate) async fn handle_pull(cmd: PullCommand) -> Result<(), Box<dyn ::std::error::Error>> {
     let image: Reference = cmd.url.parse().unwrap();
     let spinner = match cmd.output.kind {
         OutputKind::Text => Some(Spinner::new(
@@ -226,7 +226,7 @@ pub(crate) async fn pull_artifact(
         .collect::<Vec<_>>())
 }
 
-fn write_artifact(
+pub(crate) fn write_artifact(
     artifact: &[u8],
     image: &Reference,
     output: Option<String>,
@@ -293,7 +293,7 @@ fn validate_provider_archive(
     }
 }
 
-async fn handle_push(cmd: PushCommand) -> Result<(), Box<dyn ::std::error::Error>> {
+pub(crate) async fn handle_push(cmd: PushCommand) -> Result<(), Box<dyn ::std::error::Error>> {
     let spinner = match cmd.output.kind {
         OutputKind::Text => Some(Spinner::new(
             Spinners::Dots12,

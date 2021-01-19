@@ -22,7 +22,7 @@ pub(crate) struct ParCli {
 }
 
 #[derive(Debug, Clone, StructOpt)]
-enum ParCliCommand {
+pub(crate) enum ParCliCommand {
     /// Build a provider archive file
     #[structopt(name = "create")]
     Create(CreateCommand),
@@ -35,7 +35,7 @@ enum ParCliCommand {
 }
 
 #[derive(StructOpt, Debug, Clone)]
-struct CreateCommand {
+pub(crate) struct CreateCommand {
     /// Capability contract ID (e.g. wascc:messaging or wascc:keyvalue).
     #[structopt(short = "c", long = "capid")]
     capid: String,
@@ -108,7 +108,7 @@ struct CreateCommand {
 }
 
 #[derive(StructOpt, Debug, Clone)]
-struct InspectCommand {
+pub(crate) struct InspectCommand {
     /// Path to provider archive or OCI URL of provider archive
     #[structopt(name = "archive")]
     archive: String,
@@ -148,7 +148,7 @@ struct InspectCommand {
 }
 
 #[derive(StructOpt, Debug, Clone)]
-struct InsertCommand {
+pub(crate) struct InsertCommand {
     /// Path to provider archive
     #[structopt(name = "archive")]
     archive: String,
@@ -197,15 +197,17 @@ struct InsertCommand {
 }
 
 pub(crate) async fn handle_command(cli: ParCli) -> Result<()> {
-    match cli.command {
+    let output = match cli.command {
         ParCliCommand::Create(cmd) => handle_create(cmd),
         ParCliCommand::Inspect(cmd) => handle_inspect(cmd).await,
         ParCliCommand::Insert(cmd) => handle_insert(cmd),
-    }
+    }?;
+    println!("{}", output);
+    Ok(())
 }
 
 /// Creates a provider archive using an initial architecture target, provider, and signing keys
-fn handle_create(cmd: CreateCommand) -> Result<()> {
+pub(crate) fn handle_create(cmd: CreateCommand) -> Result<String> {
     let mut par = ProviderArchive::new(
         &cmd.capid,
         &cmd.name,
@@ -248,30 +250,27 @@ fn handle_create(cmd: CreateCommand) -> Result<()> {
         ),
     };
 
-    if par
-        .write(&outfile, &issuer, &subject, cmd.compress)
-        .is_err()
-    {
-        eprintln!(
-            "Error writing PAR. Please ensure directory {:?} exists",
-            PathBuf::from(outfile.clone()).parent().unwrap(),
-        );
-    }
-
-    println!(
-        "{}",
-        format_output(
-            format!("Successfully created archive {}", outfile),
-            json!({"result": "success", "file": outfile}),
-            &cmd.output.kind
-        )
-    );
-
-    Ok(())
+    Ok(
+        if par
+            .write(&outfile, &issuer, &subject, cmd.compress)
+            .is_err()
+        {
+            format!(
+                "Error writing PAR. Please ensure directory {:?} exists",
+                PathBuf::from(outfile.clone()).parent().unwrap(),
+            )
+        } else {
+            format_output(
+                format!("Successfully created archive {}", outfile),
+                json!({"result": "success", "file": outfile}),
+                &cmd.output.kind,
+            )
+        },
+    )
 }
 
 /// Loads a provider archive and prints the contents of the claims
-async fn handle_inspect(cmd: InspectCommand) -> Result<()> {
+pub(crate) async fn handle_inspect(cmd: InspectCommand) -> Result<String> {
     let archive = match File::open(&cmd.archive) {
         Ok(mut f) => {
             let mut buf = Vec::new();
@@ -294,7 +293,7 @@ async fn handle_inspect(cmd: InspectCommand) -> Result<()> {
     let claims = archive.claims().unwrap();
     let metadata = claims.metadata.unwrap();
 
-    match cmd.output.kind {
+    let output = match cmd.output.kind {
         OutputKind::JSON => {
             let friendly_rev = if metadata.rev.is_some() {
                 format!("{}", metadata.rev.unwrap())
@@ -302,7 +301,7 @@ async fn handle_inspect(cmd: InspectCommand) -> Result<()> {
                 "None".to_string()
             };
             let friendly_ver = metadata.ver.unwrap_or("None".to_string());
-            println!(
+            format!(
                 "{}",
                 json!({"name": metadata.name.unwrap(),
                     "public_key": claims.subject,
@@ -311,7 +310,7 @@ async fn handle_inspect(cmd: InspectCommand) -> Result<()> {
                     "ver": friendly_ver,
                     "rev": friendly_rev,
                     "targets": archive.targets()})
-            );
+            )
         }
         OutputKind::Text => {
             use term_table::row::Row;
@@ -367,15 +366,15 @@ async fn handle_inspect(cmd: InspectCommand) -> Result<()> {
                 Alignment::Left,
             )]));
 
-            println!("{}", table.render());
+            table.render()
         }
     };
 
-    Ok(())
+    Ok(output)
 }
 
 /// Loads a provider archive and attempts to insert an additional provider into it
-fn handle_insert(cmd: InsertCommand) -> Result<()> {
+pub(crate) fn handle_insert(cmd: InsertCommand) -> Result<String> {
     let mut buf = Vec::new();
     let mut f = File::open(cmd.archive.clone())?;
     f.read_to_end(&mut buf)?;
@@ -406,18 +405,14 @@ fn handle_insert(cmd: InsertCommand) -> Result<()> {
     par.write(&cmd.archive, &issuer, &subject, is_compressed(&buf)?)
         .map_err(convert_error)?;
 
-    println!(
-        "{}",
-        format_output(
-            format!(
-                "Successfully inserted {} into archive {}",
-                cmd.binary, cmd.archive
-            ),
-            json!({"result": "success", "file": cmd.archive}),
-            &cmd.output.kind,
-        )
-    );
-    Ok(())
+    Ok(format_output(
+        format!(
+            "Successfully inserted {} into archive {}",
+            cmd.binary, cmd.archive
+        ),
+        json!({"result": "success", "file": cmd.archive}),
+        &cmd.output.kind,
+    ))
 }
 
 /// Inspects the byte slice for a GZIP header, and returns true if the file is compressed
