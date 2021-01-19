@@ -602,10 +602,7 @@ pub(crate) async fn stop_actor(cmd: StopActorCommand) -> Result<StopActorAck> {
 /// Helper function to print a Host list to stdout as a table
 pub(crate) fn hosts_table(hosts: Vec<Host>, max_width: Option<usize>) -> String {
     let mut table = Table::new();
-    table.max_column_width = match max_width {
-        Some(n) => n,
-        None => 80,
-    };
+    table.max_column_width = max_width.unwrap_or(80);
     table.style = TableStyle::blank();
     table.separate_rows = false;
 

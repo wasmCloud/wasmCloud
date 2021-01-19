@@ -5,6 +5,7 @@ use std::env;
 use std::fs;
 use std::fs::File;
 use std::io::prelude::*;
+use std::io::Error;
 use std::path::{Path, PathBuf};
 use structopt::StructOpt;
 
@@ -55,20 +56,18 @@ pub(crate) enum KeysCliCommand {
 }
 
 pub(crate) fn handle_command(cli: KeysCli) -> Result<(), Box<dyn ::std::error::Error>> {
-    match cli.command {
-        KeysCliCommand::GenCommand { keytype, output } => {
-            println!("{}", generate(&keytype, &output.kind));
-        }
+    let output = match cli.command {
+        KeysCliCommand::GenCommand { keytype, output } => Ok(generate(&keytype, &output.kind)),
         KeysCliCommand::GetCommand {
             keyname,
             directory,
             output,
-        } => {
-            get(&keyname, directory, &output);
-        }
-        KeysCliCommand::ListCommand { directory, output } => {
-            list(directory, &output);
-        }
+        } => get(&keyname, directory, &output),
+        KeysCliCommand::ListCommand { directory, output } => list(directory, &output),
+    };
+    match output {
+        Ok(r) => println!("{}", r),
+        Err(e) => println!("Error: {}", e),
     }
     Ok(())
 }
@@ -91,13 +90,19 @@ pub(crate) fn generate(kt: &KeyPairType, output: &OutputKind) -> String {
 }
 
 /// Retrieves a keypair by name in a specified directory, or $WASH_KEYS ($HOME/.wash/keys) if directory is not specified
-pub(crate) fn get(keyname: &String, directory: Option<String>, output: &Output) {
+pub(crate) fn get(
+    keyname: &String,
+    directory: Option<String>,
+    output: &Output,
+) -> Result<String, Error> {
     let dir = determine_directory(directory);
     let mut f = match File::open(format!("{}/{}", dir, keyname)) {
         Ok(f) => f,
         Err(f) => {
-            println!("Error: {}.\nPlease ensure {}/{} exists.", f, dir, keyname);
-            return;
+            return Err(Error::new(
+                f.kind(),
+                format!("{}.\nPlease ensure {}/{} exists.", f, dir, keyname),
+            ));
         }
     };
     let mut s = String::new();
@@ -106,21 +111,26 @@ pub(crate) fn get(keyname: &String, directory: Option<String>, output: &Output) 
         Err(e) => Err(e),
     };
     match res {
-        Err(e) => println!("Error: {:?}", e.kind()),
-        Ok(s) => println!(
+        Err(e) => Err(e),
+        Ok(s) => Ok(format!(
             "{}",
             format_output(s.clone(), json!({ "seed": s }), &output.kind)
-        ),
+        )),
     }
 }
 
 /// Lists all keypairs (file extension .nk) in a specified directory or $WASH_KEYS($HOME/.wash/keys) if directory is not specified
-pub(crate) fn list(directory: Option<String>, output: &Output) {
+pub(crate) fn list(directory: Option<String>, output: &Output) -> Result<String, Error> {
     let dir = determine_directory(directory);
 
     let mut keys = vec![];
     match fs::read_dir(dir.clone()) {
-        Err(e) => println!("Error: {}, please ensure directory {} exists", e, dir),
+        Err(e) => {
+            return Err(Error::new(
+                e.kind(),
+                format!("Error: {}, please ensure directory {} exists", e, dir),
+            ))
+        }
         Ok(paths) => {
             for path in paths {
                 let f = String::from(path.unwrap().file_name().to_str().unwrap());
@@ -131,17 +141,10 @@ pub(crate) fn list(directory: Option<String>, output: &Output) {
         }
     }
 
-    match output.kind {
-        OutputKind::Text => {
-            println!("====== Keys found in {} ======\n", dir);
-            for key in keys {
-                println!("{}", key);
-            }
-        }
-        OutputKind::JSON => {
-            println!("{}", json!({ "keys": keys }))
-        }
-    }
+    Ok(match output.kind {
+        OutputKind::Text => format!("====== Keys found in {} ======\n{}", dir, keys.join("\n")),
+        OutputKind::JSON => format!("{}", json!({ "keys": keys })),
+    })
 }
 
 fn determine_directory(directory: Option<String>) -> String {

@@ -1,8 +1,14 @@
+use crate::claims::*;
 use crate::ctl::*;
-use crate::util::{convert_error, Result};
+use crate::keys::*;
+use crate::par::*;
+use crate::reg::*;
+use crate::util::{convert_error, format_output, Result};
 use crossterm::event::{poll, read, DisableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use log::{debug, error, info, LevelFilter};
+use oci_distribution::Reference;
+use serde_json::json;
 use std::io::{self, Stdout};
 use std::{cell::RefCell, io::Write, rc::Rc};
 use structopt::{clap::AppSettings, StructOpt};
@@ -68,25 +74,25 @@ struct ReplCli {
 #[derive(StructOpt, Debug, Clone)]
 #[structopt(global_settings(&[AppSettings::ColorNever, AppSettings::DisableVersion, AppSettings::VersionlessSubcommands]))]
 enum ReplCliCommand {
-    /// Query lattice for information
-    #[structopt(name = "get")]
-    Get(GetCommand),
+    /// Create, inspect, and modify capability provider archive files
+    #[structopt(name = "ctl")]
+    Ctl(CtlCliCommand),
 
-    /// Invokes an operation on an actor
-    #[structopt(name = "call")]
-    Call(CallCommand),
+    /// Generate and manage JWTs for wasmCloud Actors
+    #[structopt(name = "claims")]
+    Claims(ClaimsCliCommand),
 
-    /// Links an actor and a capability provider
-    #[structopt(name = "link")]
-    Link(LinkCommand),
+    /// Utilities for generating and managing keys
+    #[structopt(name = "keys")]
+    Keys(KeysCliCommand),
 
-    /// Starts an actor or capability provider
-    #[structopt(name = "start")]
-    Start(StartCommand),
+    /// Interact with OCI compliant registries
+    #[structopt(name = "par")]
+    Par(ParCliCommand),
 
-    /// Starts an actor or capability provider
-    #[structopt(name = "stop")]
-    Stop(StopCommand),
+    /// Launch wasmCloud REPL environment
+    #[structopt(name = "reg")]
+    Reg(RegCliCommand),
 
     /// Terminates the REPL environment (also accepts 'exit', 'logout', 'q' and ':q!')
     #[structopt(name = "quit", aliases = &["exit", "logout", "q", ":q!"])]
@@ -297,35 +303,35 @@ impl WashRepl {
                                 info!(target: WASH_CMD_INFO, "Goodbye");
                                 return Err("REPL Quit".into());
                             }
-                            Call(callcmd) => {
-                                match handle_call(callcmd, &mut self.output_state).await {
+                            ReplCliCommand::Ctl(ctlcmd) => {
+                                match handle_ctl(ctlcmd, &mut self.output_state).await {
                                     Ok(r) => r,
-                                    Err(e) => error!("Error handling call: {}", e),
-                                };
-                            }
-                            Get(getcmd) => {
-                                match handle_get(getcmd, &mut self.output_state).await {
-                                    Ok(r) => r,
-                                    Err(e) => error!("Error handling get: {}", e),
-                                };
-                            }
-                            Link(linkcmd) => {
-                                match handle_link(linkcmd, &mut self.output_state).await {
-                                    Ok(r) => r,
-                                    Err(e) => error!("Error handling link: {}", e),
+                                    Err(e) => error!("Error handling ctl: {}", e),
                                 }
                             }
-                            Start(startcmd) => {
-                                match handle_start(startcmd, &mut self.output_state).await {
+                            ReplCliCommand::Claims(claimscmd) => {
+                                match handle_claims(claimscmd, &mut self.output_state).await {
                                     Ok(r) => r,
-                                    Err(e) => error!("Error handling start: {}", e),
+                                    Err(e) => error!("Error handling claims: {}", e),
                                 };
                             }
-                            Stop(stopcmd) => {
-                                match handle_stop(stopcmd, &mut self.output_state).await {
+                            ReplCliCommand::Keys(keyscmd) => {
+                                match handle_keys(keyscmd, &mut self.output_state).await {
                                     Ok(r) => r,
-                                    Err(e) => error!("Error handling stop: {}", e),
-                                };
+                                    Err(e) => error!("Error handling key: {}", e),
+                                }
+                            }
+                            ReplCliCommand::Par(parcmd) => {
+                                match handle_par(parcmd, &mut self.output_state).await {
+                                    Ok(r) => r,
+                                    Err(e) => error!("Error handling par: {}", e),
+                                }
+                            }
+                            ReplCliCommand::Reg(regcmd) => {
+                                match handle_reg(regcmd, &mut self.output_state).await {
+                                    Ok(r) => r,
+                                    Err(e) => error!("Error handling reg: {}", e),
+                                }
                             }
                         }
                     }
@@ -473,33 +479,125 @@ async fn handle_up(cmd: UpCommand) -> Result<()> {
     Ok(())
 }
 
+async fn handle_claims(claims_cmd: ClaimsCliCommand, output_state: &mut OutputState) -> Result<()> {
+    let output = match claims_cmd {
+        ClaimsCliCommand::Inspect(inspectcmd) => render_caps(inspectcmd).await?,
+        ClaimsCliCommand::Sign(signcmd) => sign_file(signcmd)?,
+        ClaimsCliCommand::Token(gencmd) => generate_token(gencmd)?,
+    };
+    log_to_output(output_state, output);
+    Ok(())
+}
+
+async fn handle_keys(keys_cmd: KeysCliCommand, output_state: &mut OutputState) -> Result<()> {
+    let output = match keys_cmd {
+        KeysCliCommand::GenCommand { keytype, output } => generate(&keytype, &output.kind),
+        KeysCliCommand::GetCommand {
+            keyname,
+            directory,
+            output,
+        } => get(&keyname, directory, &output)?,
+        KeysCliCommand::ListCommand { directory, output } => list(directory, &output)?,
+    };
+    log_to_output(output_state, output);
+    Ok(())
+}
+
+async fn handle_par(par_cmd: ParCliCommand, output_state: &mut OutputState) -> Result<()> {
+    let output = match par_cmd {
+        ParCliCommand::Create(cmd) => handle_create(cmd),
+        ParCliCommand::Inspect(cmd) => handle_inspect(cmd).await,
+        ParCliCommand::Insert(cmd) => handle_insert(cmd),
+    }?;
+    log_to_output(output_state, output);
+    Ok(())
+}
+
+async fn handle_reg(reg_cmd: RegCliCommand, output_state: &mut OutputState) -> Result<()> {
+    let output = match reg_cmd {
+        RegCliCommand::Pull(cmd) => handle_pull(cmd).await,
+        RegCliCommand::Push(cmd) => handle_push(cmd).await,
+    }?;
+    log_to_output(output_state, output);
+    Ok(())
+}
+
+async fn handle_pull(pull_cmd: PullCommand) -> Result<String> {
+    let image: Reference = pull_cmd.url.parse().unwrap();
+    debug!(" Downloading {} ...", image.whole());
+    let artifact = pull_artifact(
+        pull_cmd.url,
+        pull_cmd.digest,
+        pull_cmd.allow_latest,
+        pull_cmd.opts.user,
+        pull_cmd.opts.password,
+        pull_cmd.opts.insecure,
+    )
+    .await?;
+
+    let outfile = write_artifact(&artifact, &image, pull_cmd.destination)?;
+
+    Ok(format_output(
+        format!(
+            "{} Successfully pulled and validated {}",
+            SHOWER_EMOJI, outfile
+        ),
+        json!({"result": "success", "file": outfile}),
+        &pull_cmd.output.kind,
+    ))
+}
+
+async fn handle_push(push_cmd: PushCommand) -> Result<String> {
+    debug!(" Pushing {} to {} ...", push_cmd.artifact, push_cmd.url);
+    push_artifact(
+        push_cmd.url.clone(),
+        push_cmd.artifact,
+        push_cmd.config,
+        push_cmd.allow_latest,
+        push_cmd.opts.user,
+        push_cmd.opts.password,
+        push_cmd.opts.insecure,
+    )
+    .await?;
+    Ok(format_output(
+        format!(
+            "{} Successfully validated and pushed to {}",
+            SHOWER_EMOJI, push_cmd.url
+        ),
+        json!({"result": "success", "url": push_cmd.url}),
+        &push_cmd.output.kind,
+    ))
+}
+
+async fn handle_ctl(claims_cmd: CtlCliCommand, output_state: &mut OutputState) -> Result<()> {
+    match claims_cmd {
+        CtlCliCommand::Call(callcmd) => handle_call(callcmd, output_state).await,
+        CtlCliCommand::Get(getcmd) => handle_get(getcmd, output_state).await,
+        CtlCliCommand::Link(linkcmd) => handle_link(linkcmd, output_state).await,
+        CtlCliCommand::Start(startcmd) => handle_start(startcmd, output_state).await,
+        CtlCliCommand::Stop(stopcmd) => handle_stop(stopcmd, output_state).await,
+    }
+}
+
 async fn handle_get(get_cmd: GetCommand, output_state: &mut OutputState) -> Result<()> {
-    match get_cmd {
+    let output = match get_cmd {
         GetCommand::Claims(cmd) => {
             let claims_list = get_claims(cmd).await?;
             debug!(target: WASH_CMD_INFO, "\n{:?}", claims_list);
-            log_to_output(
-                output_state,
-                claims_table(claims_list, Some(output_state.output_width)),
-            )
+            claims_table(claims_list, Some(output_state.output_width))
         }
         GetCommand::Hosts(cmd) => {
             let hosts = get_hosts(cmd).await?;
             debug!(target: WASH_CMD_INFO, "\n{:?}", hosts);
-            log_to_output(
-                output_state,
-                hosts_table(hosts, Some(output_state.output_width)),
-            )
+            hosts_table(hosts, Some(output_state.output_width))
         }
         GetCommand::HostInventory(cmd) => {
             let inventory = get_host_inventory(cmd).await?;
             debug!(target: WASH_CMD_INFO, "\n{:?}", inventory);
-            log_to_output(
-                output_state,
-                host_inventory_table(inventory, Some(output_state.output_width)),
-            )
+            host_inventory_table(inventory, Some(output_state.output_width))
         }
     };
+    log_to_output(output_state, output);
     Ok(())
 }
 
@@ -630,10 +728,25 @@ fn log_to_output(state: &mut OutputState, out: String) {
     // Reset output scroll to bottom
     state.output_cursor = state.output.len();
 
+    let output_width = state.output_width - 2;
+
     // Newlines are used here for accurate scrolling in the Output pane
     out.split('\n').for_each(|line| {
-        state.output.push(line.to_string());
-        state.output_cursor += 1;
+        let line_len = line.chars().count();
+        if line_len > output_width {
+            let mut offset = 0;
+            // Div and round up
+            let n_lines = (line_len + (output_width - 1)) / output_width;
+            for _ in 0..n_lines {
+                let sub_line = line.chars().skip(offset).take(output_width).collect();
+                state.output.push(sub_line);
+                offset += output_width
+            }
+            state.output_cursor += n_lines;
+        } else {
+            state.output.push(line.to_string());
+            state.output_cursor += 1;
+        }
     });
     state.output.push("".to_string());
     state.output_cursor += 1;
