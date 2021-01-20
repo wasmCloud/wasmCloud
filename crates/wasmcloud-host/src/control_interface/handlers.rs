@@ -32,7 +32,7 @@ use wascap::jwt::Claims;
 pub(crate) async fn handle_update_actor(
     host: &str,
     msg: &nats::asynk::Message,
-    allow_insecure: bool,
+    allowed_insecure: &Vec<String>,
 ) {
     let hc = HostController::from_hostlocal_registry(host);
     let req = deserialize::<UpdateActorCommand>(&msg.data);
@@ -52,7 +52,7 @@ pub(crate) async fn handle_update_actor(
             if let Some(a) = a {
                 ack.accepted = true;
                 let _ = msg.respond(&serialize(ack).unwrap()).await;
-                let bytes = fetch_oci_bytes(&req.new_actor_ref, false, allow_insecure).await;
+                let bytes = fetch_oci_bytes(&req.new_actor_ref, false, allowed_insecure).await;
                 match bytes {
                     Ok(v) => {
                         if let Err(e) = a
@@ -243,7 +243,7 @@ pub(crate) async fn handle_start_actor(
     host: &str,
     msg: &nats::asynk::Message,
     allow_latest: bool,
-    allow_insecure: bool,
+    allowed_insecure: &Vec<String>,
 ) {
     let cmd = deserialize::<StartActorCommand>(&msg.data);
     let mut ack = StartActorAck::default();
@@ -286,7 +286,7 @@ pub(crate) async fn handle_start_actor(
         }
     }
 
-    let bytes = crate::oci::fetch_oci_bytes(&cmd.actor_ref, allow_latest, allow_insecure).await;
+    let bytes = crate::oci::fetch_oci_bytes(&cmd.actor_ref, allow_latest, allowed_insecure).await;
     if let Err(e) = bytes {
         let f = format!("Failed to retrieve actor image from OCI registry: {}", e);
         error!("{}", f);
@@ -395,7 +395,7 @@ pub(crate) async fn handle_start_provider(
     host: &str,
     msg: &nats::asynk::Message,
     allow_latest: bool,
-    allow_insecure: bool,
+    allowed_insecure: &Vec<String>,
 ) {
     let mut ack = StartProviderAck::default();
     ack.host_id = host.to_string();
@@ -439,7 +439,7 @@ pub(crate) async fn handle_start_provider(
     }
 
     let par =
-        crate::oci::fetch_provider_archive(&cmd.provider_ref, allow_latest, allow_insecure).await;
+        crate::oci::fetch_provider_archive(&cmd.provider_ref, allow_latest, allowed_insecure).await;
     if let Err(e) = par {
         let f = format!(
             "Failed to retrieve provider archive from OCI registry: {}",

@@ -402,7 +402,7 @@ impl Handler<Initialize> for HostController {
                 let (nativecache, claims) = create_cache_provider(
                     msg.lattice_cache_provider.clone(),
                     msg.allow_latest,
-                    msg.allow_insecure,
+                    &msg.allowed_insecure,
                 )
                 .await;
                 let init = crate::capability::native_host::Initialize {
@@ -666,10 +666,10 @@ async fn initialize_provider(
 async fn create_cache_provider(
     provider_ref: Option<String>,
     allow_latest: bool,
-    allow_insecure: bool,
+    allowed_insecure: &Vec<String>,
 ) -> (NativeCapability, Claims<wascap::jwt::CapabilityProvider>) {
     if let Some(s) = provider_ref {
-        let par = crate::oci::fetch_provider_archive(&s, allow_latest, allow_insecure)
+        let par = crate::oci::fetch_provider_archive(&s, allow_latest, allowed_insecure)
             .await
             .unwrap();
         (

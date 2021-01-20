@@ -26,7 +26,7 @@ pub struct Initialize {
 #[derive(Clone, Debug, Default)]
 pub struct ControlOptions {
     pub oci_allow_latest: bool,
-    pub oci_allow_insecure: bool,
+    pub oci_allowed_insecure: Vec<String>,
     pub host_labels: HashMap<String, String>,
     pub max_actors: u16,    // Currently unused
     pub max_providers: u16, // Currently unused
@@ -96,7 +96,7 @@ impl Handler<NatsMessage> for ControlInterface {
         let msg = msg.msg;
         let subject = msg.subject.to_string();
         let allow_latest = self.options.oci_allow_latest;
-        let allow_insecure = self.options.oci_allow_insecure;
+        let allowed_insecure = self.options.oci_allowed_insecure.clone();
         let nc = self.client.clone();
         Box::pin(
             async move {
@@ -111,13 +111,13 @@ impl Handler<NatsMessage> for ControlInterface {
                 } else if subject == actor_auction_subject(&prefix) {
                     handle_actor_auction(&host, &msg).await
                 } else if subject == commands::start_actor(&prefix, &host) {
-                    handle_start_actor(&host, &msg, allow_latest, allow_insecure).await
+                    handle_start_actor(&host, &msg, allow_latest, &allowed_insecure).await
                 } else if subject == commands::update_actor(&prefix, &host) {
-                    handle_update_actor(&host, &msg, allow_insecure).await
+                    handle_update_actor(&host, &msg, &allowed_insecure).await
                 } else if subject == commands::stop_provider(&prefix, &host) {
                     handle_stop_provider(&host, &msg).await
                 } else if subject == commands::start_provider(&prefix, &host) {
-                    handle_start_provider(&host, &msg, allow_latest, allow_insecure).await
+                    handle_start_provider(&host, &msg, allow_latest, &allowed_insecure).await
                 } else if subject == commands::stop_actor(&prefix, &host) {
                     handle_stop_actor(&host, &msg).await
                 } else if subject == queries::hosts(&prefix) {

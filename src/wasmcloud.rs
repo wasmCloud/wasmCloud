@@ -66,6 +66,10 @@ struct Cli {
     /// Disables strict comparison of live updated actor claims
     #[structopt(long = "disable-strict-update-check")]
     disable_strict_update_check: bool,
+
+    /// Allows the use of HTTP registry connections to these registries
+    #[structopt(long = "allowed-insecure")]
+    allowed_insecure: Vec<String>,
 }
 
 #[actix_rt::main]
@@ -100,6 +104,9 @@ async fn main() -> Result<()> {
     }
     if cli.disable_strict_update_check {
         host_builder = host_builder.disable_strict_update_check();
+    }
+    if !cli.allowed_insecure.is_empty() {
+        host_builder = host_builder.oci_allow_insecure(cli.allowed_insecure);
     }
 
     let host = host_builder.build();

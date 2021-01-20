@@ -33,7 +33,7 @@ pub struct HostBuilder {
     namespace: String,
     rpc_timeout: Duration,
     allow_latest: bool,
-    allow_insecure: bool,
+    allowed_insecure: Vec<String>,
     rpc_client: Option<nats::asynk::Connection>,
     cplane_client: Option<nats::asynk::Connection>,
     allow_live_update: bool,
@@ -48,7 +48,7 @@ impl HostBuilder {
             labels: crate::host_controller::detect_core_host_labels(),
             authorizer: Box::new(crate::auth::DefaultAuthorizer::new()),
             allow_latest: false,
-            allow_insecure: false,
+            allowed_insecure: vec![],
             namespace: "default".to_string(),
             rpc_timeout: Duration::from_secs(2),
             rpc_client: None,
@@ -148,12 +148,13 @@ impl HostBuilder {
         }
     }
 
-    /// Allows the host to pull actor and capability provider images from registries without
-    /// using a secure (SSL/TLS) connection. This option is off by default and we recommend
-    /// it not be used in production environments.
-    pub fn oci_allow_insecure(self) -> HostBuilder {
+    /// Allows the host to pull actor and capability provider images from these registries without
+    /// using a secure (SSL/TLS) connection. This option is empty by default and we recommend
+    /// it not be used in production environments. For local testing, supplying ["localhost:5000"]
+    /// as an argument for the local docker reigstry will allow for http connections to that registry.
+    pub fn oci_allow_insecure(self, allowed_insecure: Vec<String>) -> HostBuilder {
         HostBuilder {
-            allow_insecure: true,
+            allowed_insecure,
             ..self
         }
     }
@@ -178,7 +179,7 @@ impl HostBuilder {
             authorizer: self.authorizer,
             id: RefCell::new("".to_string()),
             allow_latest: self.allow_latest,
-            allow_insecure: self.allow_insecure,
+            allowed_insecure: self.allowed_insecure,
             kp: RefCell::new(None),
             rpc_timeout: self.rpc_timeout,
             namespace: self.namespace,
@@ -199,7 +200,7 @@ pub struct Host {
     authorizer: Box<dyn Authorizer + 'static>,
     id: RefCell<String>,
     allow_latest: bool,
-    allow_insecure: bool,
+    allowed_insecure: Vec<String>,
     kp: RefCell<Option<KeyPair>>,
     namespace: String,
     rpc_timeout: Duration,
@@ -233,7 +234,7 @@ impl Host {
             kp: KeyPair::from_seed(&kp.seed()?)?,
             allow_live_updates: self.allow_live_updates,
             allow_latest: self.allow_latest,
-            allow_insecure: self.allow_insecure,
+            allowed_insecure: self.allowed_insecure.clone(),
             lattice_cache_provider: self.lattice_cache_provider_ref.clone(),
             strict_update_check: self.strict_update_check,
         })
@@ -248,7 +249,7 @@ impl Host {
             control_options: ControlOptions {
                 host_labels: self.labels.clone(),
                 oci_allow_latest: self.allow_latest,
-                oci_allow_insecure: self.allow_insecure,
+                oci_allowed_insecure: self.allowed_insecure.clone(),
                 ..Default::default()
             },
             key: KeyPair::from_seed(&kp.seed()?)?,
@@ -311,7 +312,7 @@ impl Host {
         link_name: Option<String>,
     ) -> Result<()> {
         let hc = HostController::from_hostlocal_registry(&self.id.borrow());
-        let bytes = fetch_oci_bytes(cap_ref, self.allow_latest, self.allow_insecure).await?;
+        let bytes = fetch_oci_bytes(cap_ref, self.allow_latest, &self.allowed_insecure).await?;
         let par = ProviderArchive::try_load(&bytes)?;
         let nc = NativeCapability::from_archive(&par, link_name)?;
         hc.send(StartProvider {
@@ -339,7 +340,7 @@ impl Host {
     /// downloading the indicated OCI image
     pub async fn start_actor_from_registry(&self, actor_ref: &str) -> Result<()> {
         let hc = HostController::from_hostlocal_registry(&self.id.borrow());
-        let bytes = fetch_oci_bytes(actor_ref, self.allow_latest, self.allow_insecure).await?;
+        let bytes = fetch_oci_bytes(actor_ref, self.allow_latest, &self.allowed_insecure).await?;
         let actor = crate::Actor::from_slice(&bytes)?;
         hc.send(StartActor {
             actor,
@@ -467,7 +468,7 @@ impl Host {
         for msg in crate::manifest::generate_actor_start_messages(
             &manifest,
             self.allow_latest,
-            self.allow_insecure,
+            &self.allowed_insecure,
         )
         .await
         {
@@ -476,7 +477,7 @@ impl Host {
         for msg in crate::manifest::generate_provider_start_messages(
             &manifest,
             self.allow_latest,
-            self.allow_insecure,
+            &self.allowed_insecure,
         )
         .await
         {
