@@ -82,7 +82,7 @@ impl HostManifest {
 pub(crate) async fn generate_actor_start_messages(
     manifest: &HostManifest,
     allow_latest: bool,
-    allow_insecure: bool,
+    allowed_insecure: &Vec<String>,
 ) -> Vec<StartActor> {
     let mut v = Vec::new();
     for actor_ref in &manifest.actors {
@@ -97,7 +97,7 @@ pub(crate) async fn generate_actor_start_messages(
             }
         } else {
             // load actor from OCI
-            if let Ok(a) = fetch_oci_bytes(&actor_ref, allow_latest, allow_insecure)
+            if let Ok(a) = fetch_oci_bytes(&actor_ref, allow_latest, allowed_insecure)
                 .await
                 .and_then(|bytes| crate::Actor::from_slice(&bytes))
             {
@@ -114,7 +114,7 @@ pub(crate) async fn generate_actor_start_messages(
 pub(crate) async fn generate_provider_start_messages(
     manifest: &HostManifest,
     allow_latest: bool,
-    allow_insecure: bool,
+    allowed_insecure: &Vec<String>,
 ) -> Vec<StartProvider> {
     let mut v = Vec::new();
     for cap in &manifest.capabilities {
@@ -132,7 +132,7 @@ pub(crate) async fn generate_provider_start_messages(
             }
         } else {
             // read PAR from OCI
-            if let Ok(prov) = fetch_oci_bytes(&cap.image_ref, allow_latest, allow_insecure)
+            if let Ok(prov) = fetch_oci_bytes(&cap.image_ref, allow_latest, allowed_insecure)
                 .await
                 .and_then(|bytes| ProviderArchive::try_load(&bytes))
                 .and_then(|par| NativeCapability::from_archive(&par, cap.link_name.clone()))

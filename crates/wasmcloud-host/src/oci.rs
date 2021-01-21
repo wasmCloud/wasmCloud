@@ -11,7 +11,7 @@ pub(crate) const OCI_VAR_PASSWORD: &str = "OCI_REGISTRY_PASSWORD";
 pub(crate) async fn fetch_oci_bytes(
     img: &str,
     allow_latest: bool,
-    allow_insecure: bool,
+    allowed_insecure: &Vec<String>,
 ) -> Result<Vec<u8>> {
     if !allow_latest && img.ends_with(":latest") {
         return Err(
@@ -19,13 +19,6 @@ pub(crate) async fn fetch_oci_bytes(
     }
     let cf = cached_file(img);
     if !cf.exists() {
-        let protocol = match allow_insecure {
-            false => oci_distribution::client::ClientProtocol::Https,
-            true => oci_distribution::client::ClientProtocol::Http,
-        };
-        let cfg = oci_distribution::client::ClientConfig { protocol };
-        let mut c = oci_distribution::Client::new(cfg);
-
         let img = oci_distribution::Reference::from_str(img)?;
         let auth = if let Ok(u) = std::env::var(OCI_VAR_USER) {
             if let Ok(p) = std::env::var(OCI_VAR_PASSWORD) {
@@ -36,10 +29,12 @@ pub(crate) async fn fetch_oci_bytes(
         } else {
             oci_distribution::secrets::RegistryAuth::Anonymous
         };
-        let imgdata: Result<oci_distribution::client::ImageData> = c
-            .pull_image(&img, &auth)
-            .await
-            .map_err(|e| format!("{}", e).into());
+
+        let protocol =
+            oci_distribution::client::ClientProtocol::HttpsExcept(allowed_insecure.to_vec());
+        let config = oci_distribution::client::ClientConfig { protocol };
+        let mut c = oci_distribution::Client::new(config);
+        let imgdata = pull(&mut c, &img, &auth).await;
 
         match imgdata {
             Ok(imgdata) => {
@@ -75,12 +70,23 @@ fn cached_file(img: &str) -> PathBuf {
     path
 }
 
+async fn pull(
+    client: &mut oci_distribution::Client,
+    img: &oci_distribution::Reference,
+    auth: &oci_distribution::secrets::RegistryAuth,
+) -> Result<oci_distribution::client::ImageData> {
+    client
+        .pull_image(&img, &auth)
+        .await
+        .map_err(|e| format!("{}", e).into())
+}
+
 pub(crate) async fn fetch_provider_archive(
     img: &str,
     allow_latest: bool,
-    allow_insecure: bool,
+    allowed_insecure: &Vec<String>,
 ) -> Result<ProviderArchive> {
-    let bytes = fetch_oci_bytes(img, allow_latest, allow_insecure).await?;
+    let bytes = fetch_oci_bytes(img, allow_latest, allowed_insecure).await?;
     ProviderArchive::try_load(&bytes)
         .map_err(|e| format!("Failed to load provider archive: {}", e).into())
 }
