@@ -23,6 +23,7 @@ pub struct Client {
 }
 
 impl Client {
+    /// Creates a new lattice control interface client
     pub fn new(nc: nats::asynk::Connection, nsprefix: Option<String>, timeout: Duration) -> Self {
         Client {
             nc,
@@ -32,6 +33,7 @@ impl Client {
         }
     }
 
+    /// Queries the lattice for all responsive hosts, waiting for the full period specified by _timeout_.
     pub async fn get_hosts(&self, timeout: Duration) -> Result<Vec<Host>> {
         let subject = broker::queries::hosts(&self.nsprefix);
 
@@ -44,6 +46,10 @@ impl Client {
             .await
     }
 
+    /// Performs an actor auction within the lattice, publishing a set of constraints and the metadata for the actor
+    /// in question. This will always wait for the full period specified by _duration_, and then return the set of
+    /// gathered results. It is then up to the client to choose from among the "auction winners" to issue the appropriate
+    /// command to start an actor. Clients cannot assume that auctions will always return at least one result.
     pub async fn perform_actor_auction(
         &self,
         actor_ref: &str,
@@ -64,6 +70,10 @@ impl Client {
             .await
     }
 
+    /// Performs a provider auction within the lattice, publishing a set of constraints and the metadata for the provider
+    /// in question. This will always wait for the full period specified by _duration_, and then return the set of gathered
+    /// results. It is then up to the client to choose from among the "auction winners" and issue the appropriate command
+    /// to start a provider. Clients cannot assume that auctions will always return at least one result.
     pub async fn perform_provider_auction(
         &self,
         provider_ref: &str,
@@ -86,6 +96,7 @@ impl Client {
             .await
     }
 
+    /// Retrieves the contents of a running host
     pub async fn get_host_inventory(&self, host_id: &str) -> Result<HostInventory> {
         let subject = broker::queries::host_inventory(&self.nsprefix, host_id);
         match actix_rt::time::timeout(self.timeout, self.nc.request(&subject, vec![])).await? {
@@ -97,6 +108,12 @@ impl Client {
         }
     }
 
+    /// Sends a request to the given host to start a given actor by its OCI reference. This returns an acknowledgement
+    /// of _receipt_ of the command, not a confirmation that the actor started. An acknowledgement will either indicate
+    /// some form of validation failure, or, if no failure occurs, the receipt of the command. To avoid blocking consumers,
+    /// wasmCloud hosts will acknowledge the start actor command prior to fetching the actor's OCI bytes. If a client needs
+    /// deterministic results as to whether the actor completed its startup process, the client will have to monitor
+    /// the appropriate event in the control event stream
     pub async fn start_actor(&self, host_id: &str, actor_ref: &str) -> Result<StartActorAck> {
         let subject = broker::commands::start_actor(&self.nsprefix, host_id);
         let bytes = serialize(StartActorCommand {
@@ -195,6 +212,12 @@ impl Client {
         }
     }
 
+    /// Issues a command to a host to start a provider with a given OCI reference using the specified link
+    /// name (or "default" if none is specified). The target wasmCloud host will acknowledge the receipt
+    /// of this command _before_ downloading the provider's bytes from the OCI registry, indicating either
+    /// a validation failure or success. If a client needs deterministic guarantees that the provider has
+    /// completed its startup process, such a client needs to monitor the control event stream for the
+    /// appropriate event
     pub async fn start_provider(
         &self,
         host_id: &str,
@@ -216,6 +239,10 @@ impl Client {
         }
     }
 
+    /// Issues a command to a host to stop a provider for the given OCI reference, link name, and contract ID. The
+    /// target wasmCloud host will acknowledge the receipt of this command, and _will not_ supply a discrete
+    /// confirmation that a provider has terminated. For that kind of information, the client must also monitor
+    /// the control event stream
     pub async fn stop_provider(
         &self,
         host_id: &str,
@@ -239,6 +266,10 @@ impl Client {
         }
     }
 
+    /// Issues a command to a host to stop an actor for the given OCI reference. The
+    /// target wasmCloud host will acknowledge the receipt of this command, and _will not_ supply a discrete
+    /// confirmation that the actor has terminated. For that kind of information, the client must also monitor
+    /// the control event stream
     pub async fn stop_actor(&self, host_id: &str, actor_ref: &str) -> Result<StopActorAck> {
         let subject = broker::commands::stop_actor(&self.nsprefix, host_id);
         let bytes = serialize(StopActorCommand {
@@ -254,6 +285,8 @@ impl Client {
         }
     }
 
+    /// Retrieves the full set of all cached claims in the lattice by getting a response from the first
+    /// host that answers this query
     pub async fn get_claims(&self) -> Result<ClaimsList> {
         let subject = broker::queries::claims(&self.nsprefix);
         match actix_rt::time::timeout(self.timeout, self.nc.request(&subject, vec![])).await? {
