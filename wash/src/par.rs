@@ -237,16 +237,18 @@ pub(crate) fn handle_create(cmd: CreateCommand) -> Result<String> {
 
     par.add_library(&cmd.arch, &lib).map_err(convert_error)?;
 
+    let extension = if cmd.compress { ".par.gz" } else { ".par" };
     let outfile = match cmd.destination {
         Some(path) => path,
         None => format!(
-            "{}.par",
+            "{}{}",
             PathBuf::from(cmd.binary.clone())
                 .file_stem()
                 .unwrap()
                 .to_str()
                 .unwrap()
-                .to_string()
+                .to_string(),
+            extension
         ),
     };
 

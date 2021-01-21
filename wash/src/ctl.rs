@@ -60,6 +60,10 @@ pub(crate) enum CtlCliCommand {
     /// Stop an actor or a provider
     #[structopt(name = "stop")]
     Stop(StopCommand),
+
+    /// Update an actor running in a host to a new actor
+    #[structopt(name = "update")]
+    Update(UpdateCommand),
 }
 
 #[derive(StructOpt, Debug, Clone)]
@@ -147,6 +151,13 @@ pub(crate) enum StopCommand {
     /// Stop a provider running in a host
     #[structopt(name = "provider")]
     Provider(StopProviderCommand),
+}
+
+#[derive(Debug, Clone, StructOpt)]
+pub(crate) enum UpdateCommand {
+    /// Update an actor running in a host
+    #[structopt(name = "actor")]
+    Actor(UpdateActorCommand),
 }
 
 #[derive(Debug, Clone, StructOpt)]
@@ -247,9 +258,9 @@ pub(crate) struct StopActorCommand {
     #[structopt(name = "host-id")]
     pub(crate) host_id: String,
 
-    /// Actor reference, e.g. the OCI URL for the actor
-    #[structopt(name = "actor-ref")]
-    pub(crate) actor_ref: String,
+    /// Actor Id, e.g. the public key for the actor
+    #[structopt(name = "actor-id")]
+    pub(crate) actor_id: String,
 }
 
 #[derive(Debug, Clone, StructOpt)]
@@ -264,9 +275,9 @@ pub(crate) struct StopProviderCommand {
     #[structopt(name = "host-id")]
     host_id: String,
 
-    /// Provider reference, e.g. the OCI URL for the provider
-    #[structopt(name = "provider-ref")]
-    pub(crate) provider_ref: String,
+    /// Provider Id, e.g. the public key for the provider
+    #[structopt(name = "provider-id")]
+    pub(crate) provider_id: String,
 
     /// Link name of provider
     #[structopt(name = "link-name")]
@@ -275,6 +286,27 @@ pub(crate) struct StopProviderCommand {
     /// Capability contract Id of provider
     #[structopt(name = "contract-id")]
     contract_id: String,
+}
+
+#[derive(Debug, Clone, StructOpt)]
+pub(crate) struct UpdateActorCommand {
+    #[structopt(flatten)]
+    opts: ConnectionOpts,
+
+    #[structopt(flatten)]
+    pub(crate) output: Output,
+
+    /// Id of host
+    #[structopt(name = "host-id")]
+    host_id: String,
+
+    /// Actor Id, e.g. the public key for the actor
+    #[structopt(name = "actor-id")]
+    pub(crate) actor_id: String,
+
+    /// Actor reference, e.g. the OCI URL for the actor
+    #[structopt(name = "new-actor-ref")]
+    pub(crate) new_actor_ref: String,
 }
 
 pub(crate) async fn handle_command(cli: CtlCli) -> Result<()> {
@@ -409,7 +441,7 @@ pub(crate) async fn handle_command(cli: CtlCli) -> Result<()> {
             let output_kind = cmd.output.kind;
             sp = update_spinner_message(
                 sp,
-                format!(" Stopping actor {} ... ", cmd.actor_ref),
+                format!(" Stopping actor {} ... ", cmd.actor_id),
                 &output_kind,
             );
             let ack = stop_actor(cmd.clone()).await?;
@@ -420,7 +452,7 @@ pub(crate) async fn handle_command(cli: CtlCli) -> Result<()> {
                     &output_kind,
                 ),
                 None => format_output(
-                    format!("Stopping actor: {}", cmd.actor_ref),
+                    format!("Stopping actor: {}", cmd.actor_id),
                     json!({ "ack": ack }),
                     &output_kind,
                 ),
@@ -430,7 +462,7 @@ pub(crate) async fn handle_command(cli: CtlCli) -> Result<()> {
             let output_kind = cmd.output.kind;
             sp = update_spinner_message(
                 sp,
-                format!(" Stopping provider {} ... ", cmd.provider_ref),
+                format!(" Stopping provider {} ... ", cmd.provider_id),
                 &output_kind,
             );
             let ack = stop_provider(cmd.clone()).await?;
@@ -441,8 +473,31 @@ pub(crate) async fn handle_command(cli: CtlCli) -> Result<()> {
                     &output_kind,
                 ),
                 None => format_output(
-                    format!("Stopping provider: {}", cmd.provider_ref),
+                    format!("Stopping provider: {}", cmd.provider_id),
                     json!({ "ack": ack }),
+                    &output_kind,
+                ),
+            }
+        }
+        Update(UpdateCommand::Actor(cmd)) => {
+            let output_kind = cmd.output.kind;
+            sp = update_spinner_message(
+                sp,
+                format!(
+                    " Updating Actor {} to {} ... ",
+                    cmd.actor_id, cmd.new_actor_ref
+                ),
+                &output_kind,
+            );
+            match update_actor(cmd.clone()).await {
+                Ok(r) => format_output(
+                    format!("Actor {} updated to {}", cmd.actor_id, cmd.new_actor_ref),
+                    json!({ "ack": r }),
+                    &output_kind,
+                ),
+                Err(e) => format_output(
+                    format!("Error updating actor: {}", e),
+                    json!({ "error": format!("{}", e) }),
                     &output_kind,
                 ),
             }
@@ -583,7 +638,7 @@ pub(crate) async fn stop_provider(cmd: StopProviderCommand) -> Result<StopProvid
     client
         .stop_provider(
             &cmd.host_id,
-            &cmd.provider_ref,
+            &cmd.provider_id,
             &cmd.link_name,
             &cmd.contract_id,
         )
@@ -594,7 +649,15 @@ pub(crate) async fn stop_provider(cmd: StopProviderCommand) -> Result<StopProvid
 pub(crate) async fn stop_actor(cmd: StopActorCommand) -> Result<StopActorAck> {
     let client = client_from_opts(cmd.opts).await?;
     client
-        .stop_actor(&cmd.host_id, &cmd.actor_ref)
+        .stop_actor(&cmd.host_id, &cmd.actor_id)
+        .await
+        .map_err(convert_error)
+}
+
+pub(crate) async fn update_actor(cmd: UpdateActorCommand) -> Result<UpdateActorAck> {
+    let client = client_from_opts(cmd.opts).await?;
+    client
+        .update_actor(&cmd.host_id, &cmd.actor_id, &cmd.new_actor_ref)
         .await
         .map_err(convert_error)
 }

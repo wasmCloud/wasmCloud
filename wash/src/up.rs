@@ -414,6 +414,7 @@ async fn handle_up(cmd: UpCommand) -> Result<()> {
                 .with_label("repl_mode", "true")
                 .oci_allow_latest()
                 .oci_allow_insecure()
+                .enable_live_updates()
                 .build();
             if let Err(_e) = host.start().await.map_err(convert_error) {
                 error!(target: WASH_LOG_INFO, "Error launching REPL host");
@@ -576,6 +577,7 @@ async fn handle_ctl(claims_cmd: CtlCliCommand, output_state: &mut OutputState) -
         CtlCliCommand::Link(linkcmd) => handle_link(linkcmd, output_state).await,
         CtlCliCommand::Start(startcmd) => handle_start(startcmd, output_state).await,
         CtlCliCommand::Stop(stopcmd) => handle_stop(stopcmd, output_state).await,
+        CtlCliCommand::Update(updatecmd) => handle_update(updatecmd, output_state).await,
     }
 }
 
@@ -642,7 +644,7 @@ async fn handle_start(start_cmd: StartCommand, output_state: &mut OutputState) -
 async fn handle_stop(stop_cmd: StopCommand, output_state: &mut OutputState) -> Result<()> {
     match stop_cmd {
         StopCommand::Actor(cmd) => {
-            let actor_ref = cmd.actor_ref.clone();
+            let actor_ref = cmd.actor_id.clone();
             match stop_actor(cmd).await {
                 Ok(ack) => {
                     debug!(target: WASH_CMD_INFO, "Stop actor ack: {:?}", ack);
@@ -659,7 +661,7 @@ async fn handle_stop(stop_cmd: StopCommand, output_state: &mut OutputState) -> R
             };
         }
         StopCommand::Provider(cmd) => {
-            let provider_ref = cmd.provider_ref.clone();
+            let provider_ref = cmd.provider_id.clone();
             match stop_provider(cmd).await {
                 Ok(ack) => {
                     debug!(target: WASH_CMD_INFO, "Stop provider ack: {:?}", ack);
@@ -711,6 +713,28 @@ async fn handle_call(cmd: CallCommand, output_state: &mut OutputState) -> Result
             }
         },
         Err(e) => error!(target: WASH_CMD_INFO, "unsuccessful call: {:?}", e),
+    };
+    Ok(())
+}
+
+async fn handle_update(update_cmd: UpdateCommand, output_state: &mut OutputState) -> Result<()> {
+    match update_cmd {
+        UpdateCommand::Actor(cmd) => {
+            info!(
+                target: WASH_CMD_INFO,
+                "Sending request to update actor {}", cmd.actor_id
+            );
+            match update_actor(cmd).await {
+                Ok(ack) => {
+                    debug!(target: WASH_CMD_INFO, "Update actor ack: {:?}", ack);
+                    log_to_output(
+                        output_state,
+                        format!("Actor update result: {}", ack.accepted),
+                    );
+                }
+                Err(e) => error!(target: WASH_CMD_INFO, "{}", e),
+            };
+        }
     };
     Ok(())
 }
@@ -832,7 +856,7 @@ fn draw_output_panel(
     state: &mut OutputState,
     chunk: Rect,
 ) {
-    let output_logs: String = state.output.iter().map(|h| format!("{}\n", h)).collect();
+    let output_logs: String = state.output.iter().map(|h| format!(" {}\n", h)).collect();
 
     // Autoscroll if output overflows chunk height, adjusting for manual scroll with output_cursor
     let output_length = state.output.len() as u16;
