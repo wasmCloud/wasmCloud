@@ -55,8 +55,6 @@ pub struct StartActorAck {
     pub host_id: String,
     #[serde(rename = "actor_ref")]
     pub actor_ref: String,
-    #[serde(rename = "actor_id")]
-    pub actor_id: String,
     #[serde(rename = "failure")]
     pub failure: Option<String>,
 }
@@ -77,8 +75,6 @@ pub struct StartProviderAck {
     pub host_id: String,
     #[serde(rename = "provider_ref")]
     pub provider_ref: String,
-    #[serde(rename = "provider_id")]
-    pub provider_id: String,
     #[serde(rename = "failure")]
     pub failure: Option<String>,
 }

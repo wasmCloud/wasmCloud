@@ -38,8 +38,11 @@ pub(crate) async fn distributed_echo() -> Result<()> {
     await_actor_count(&host_a, 1, Duration::from_millis(50), 3).await?;
 
     let arc = par_from_file("./tests/modules/libwascc_httpsrv.par.gz").unwrap();
-    let websrv = NativeCapability::from_instance(wascc_httpsrv::HttpServerProvider::new(),
-      None, arc.claims().clone().unwrap())?;
+    let websrv = NativeCapability::from_instance(
+        wascc_httpsrv::HttpServerProvider::new(),
+        None,
+        arc.claims().clone().unwrap(),
+    )?;
 
     // ** NOTE - we should be able to start host B in any order because when the cache client starts
     // it should request a replay of cache events and therefore get the existing claims, links,
