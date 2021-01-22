@@ -276,7 +276,9 @@ pub(crate) async fn handle_start_actor(
             let _ = msg.respond(&serialize(ack).unwrap()).await;
             return;
         }
-        Ok(_) => {} // all good to start
+        Ok(_) => {
+            let _ = msg.respond(&serialize(ack).unwrap()).await;
+        } // all good to start
         Err(_) => {
             let f = "Failed to query host controller for running actor".to_string();
             error!("{}", f);
@@ -290,8 +292,6 @@ pub(crate) async fn handle_start_actor(
     if let Err(e) = bytes {
         let f = format!("Failed to retrieve actor image from OCI registry: {}", e);
         error!("{}", f);
-        ack.failure = Some(f);
-        let _ = msg.respond(&serialize(ack).unwrap()).await;
         return;
     }
     let bytes = bytes.unwrap();
@@ -303,13 +303,9 @@ pub(crate) async fn handle_start_actor(
             e
         );
         error!("{}", f);
-        ack.failure = Some(f);
-        let _ = msg.respond(&serialize(ack).unwrap()).await;
         return;
     }
     let actor = actor.unwrap();
-
-    let actor_id = actor.public_key();
 
     let r = hc
         .send(StartActor {
@@ -320,16 +316,8 @@ pub(crate) async fn handle_start_actor(
     if let Err(_e) = r {
         let f = "Host controller did not acknowledge start actor message".to_string();
         error!("{}", f);
-        ack.failure = Some(f);
-        let _ = msg.respond(&serialize(ack).unwrap()).await;
         return;
     }
-    // Acknowledge the message
-    ack.actor_ref = cmd.actor_ref;
-    ack.actor_id = actor_id;
-    ack.failure = None;
-
-    let _ = msg.respond(&serialize(ack).unwrap()).await;
 }
 
 pub(crate) async fn handle_stop_provider(host: &str, msg: &nats::asynk::Message) {
@@ -428,7 +416,9 @@ pub(crate) async fn handle_start_provider(
             let _ = msg.respond(&serialize(ack).unwrap()).await;
             return;
         }
-        Ok(_) => {}
+        Ok(_) => {
+            let _ = msg.respond(&serialize(ack).unwrap()).await;
+        }
         Err(_) => {
             let f = "Failed to query host controller for running providers".to_string();
             error!("{}", f);
@@ -446,8 +436,6 @@ pub(crate) async fn handle_start_provider(
             e
         );
         error!("{}", f);
-        ack.failure = Some(f);
-        let _ = msg.respond(&serialize(ack).unwrap()).await;
         return;
     }
     let par = par.unwrap();
@@ -459,8 +447,6 @@ pub(crate) async fn handle_start_provider(
             e
         );
         error!("{}", f);
-        ack.failure = Some(f);
-        let _ = msg.respond(&serialize(ack).unwrap()).await;
         return;
     }
     let cap = cap.unwrap();
@@ -475,15 +461,8 @@ pub(crate) async fn handle_start_provider(
     if let Err(_e) = r {
         let f = "Host controller failed to acknowledge start provider command".to_string();
         error!("{}", f);
-        let _ = msg.respond(&serialize(ack).unwrap()).await;
         return;
     }
-
-    ack.provider_ref = cmd.provider_ref;
-    ack.provider_id = provider_id;
-
-    // Acknowledge the command
-    let _ = msg.respond(&serialize(ack).unwrap()).await;
 }
 
 pub(crate) async fn handle_stop_actor(host: &str, msg: &nats::asynk::Message) {

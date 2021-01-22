@@ -109,7 +109,6 @@ async fn redis_kvcache() {
 //    assert!(res.is_ok());
 //}
 
-
 #[actix_rt::test]
 async fn control_auctions() {
     let res = control::auctions().await;
