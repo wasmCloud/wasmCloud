@@ -3,7 +3,7 @@ wasmCloud Shell - A single CLI to handle all of your wasmCloud tooling needs
 
 ## Installing wash
 ```
-cargo install wash-cli
+cargo install --git https://github.com/wasmcloud/wash --tag v0.1.15
 ```
 
 ## Using wash
