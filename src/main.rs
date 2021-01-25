@@ -63,16 +63,18 @@ async fn main() {
     let cli = Cli::from_args();
 
     let res = match cli.command {
-        CliCommand::Keys(keyscli) => keys::handle_command(keyscli),
-        CliCommand::Claims(claimscli) => claims::handle_command(claimscli).await,
-        CliCommand::Ctl(ctlcli) => ctl::handle_command(ctlcli).await,
-        CliCommand::Par(parcli) => par::handle_command(parcli).await,
-        CliCommand::Reg(regcli) => reg::handle_command(regcli).await,
-        CliCommand::Up(upcli) => up::handle_command(upcli).await,
+        CliCommand::Keys(keyscli) => keys::handle_command(keyscli.command()),
+        CliCommand::Claims(claimscli) => claims::handle_command(claimscli.command()).await,
+        CliCommand::Ctl(ctlcli) => ctl::handle_command(ctlcli.command()).await,
+        CliCommand::Par(parcli) => par::handle_command(parcli.command()).await,
+        CliCommand::Reg(regcli) => reg::handle_command(regcli.command()).await,
+        CliCommand::Up(upcli) => up::handle_command(upcli.command())
+            .await
+            .map(|_s| "Exiting REPL".to_string()),
     };
 
     match res {
-        Ok(_v) => (),
+        Ok(out) => println!("{}", out),
         Err(e) => eprintln!("Error: {}", e),
     }
 }

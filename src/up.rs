@@ -3,12 +3,10 @@ use crate::ctl::*;
 use crate::keys::*;
 use crate::par::*;
 use crate::reg::*;
-use crate::util::{convert_error, format_output, Result};
+use crate::util::{convert_error, Result, WASH_CMD_INFO, WASH_LOG_INFO};
 use crossterm::event::{poll, read, DisableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
-use log::{debug, error, info, LevelFilter};
-use oci_distribution::Reference;
-use serde_json::json;
+use log::{error, info, LevelFilter};
 use std::io::{self, Stdout};
 use std::{cell::RefCell, io::Write, rc::Rc};
 use structopt::{clap::AppSettings, StructOpt};
@@ -23,8 +21,6 @@ use tui::{
 use tui_logger::*;
 use wasmcloud_host::HostBuilder;
 
-const WASH_LOG_INFO: &str = "WASH_LOG";
-const WASH_CMD_INFO: &str = "WASH_CMD";
 const CTL_NS: &str = "default";
 const WASH_PROMPT: &str = "wash> ";
 
@@ -34,11 +30,17 @@ const WASH_PROMPT: &str = "wash> ";
     name = "up")]
 pub(crate) struct UpCli {
     #[structopt(flatten)]
-    command: UpCommand,
+    command: UpCliCommand,
+}
+
+impl UpCli {
+    pub(crate) fn command(self) -> UpCliCommand {
+        self.command
+    }
 }
 
 #[derive(StructOpt, Debug, Clone)]
-struct UpCommand {
+pub(crate) struct UpCliCommand {
     /// Host for lattice connections, defaults to 0.0.0.0
     #[structopt(
         short = "h",
@@ -56,11 +58,39 @@ struct UpCommand {
         env = "WASH_RPC_PORT"
     )]
     rpc_port: String,
+
+    /// Log level verbosity, valid values are `error`, `warn`, `info`, `debug`, and `trace`
+    #[structopt(short = "l", long = "log-level", default_value = "debug")]
+    log_level: LogLevel,
 }
 
-pub(crate) async fn handle_command(cli: UpCli) -> Result<()> {
-    match cli.command {
-        UpCommand { .. } => handle_up(cli.command).await,
+#[derive(StructOpt, Debug, Clone)]
+enum LogLevel {
+    Error,
+    Warn,
+    Info,
+    Debug,
+    Trace,
+}
+
+impl std::str::FromStr for LogLevel {
+    type Err = std::io::Error;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "error" => Ok(LogLevel::Error),
+            "warn" => Ok(LogLevel::Warn),
+            "info" => Ok(LogLevel::Info),
+            "debug" => Ok(LogLevel::Debug),
+            "trace" => Ok(LogLevel::Trace),
+            _ => Ok(LogLevel::Trace),
+        }
+    }
+}
+
+pub(crate) async fn handle_command(command: UpCliCommand) -> Result<()> {
+    match command {
+        UpCliCommand { .. } => handle_up(command).await,
     }
 }
 
@@ -293,7 +323,6 @@ impl WashRepl {
                 match cli {
                     Ok(ReplCli { cmd }) => {
                         use ReplCliCommand::*;
-                        //TODO(brooksmtownsend): Add loading / fetching messages to longer / blocking calls
                         match cmd {
                             Clear => {
                                 info!(target: WASH_LOG_INFO, "Clearing REPL history");
@@ -303,17 +332,17 @@ impl WashRepl {
                                 info!(target: WASH_CMD_INFO, "Goodbye");
                                 return Err("REPL Quit".into());
                             }
-                            ReplCliCommand::Ctl(ctlcmd) => {
-                                match handle_ctl(ctlcmd, &mut self.output_state).await {
-                                    Ok(r) => r,
-                                    Err(e) => error!("Error handling ctl: {}", e),
-                                }
-                            }
                             ReplCliCommand::Claims(claimscmd) => {
                                 match handle_claims(claimscmd, &mut self.output_state).await {
                                     Ok(r) => r,
                                     Err(e) => error!("Error handling claims: {}", e),
                                 };
+                            }
+                            ReplCliCommand::Ctl(ctlcmd) => {
+                                match handle_ctl(ctlcmd, &mut self.output_state).await {
+                                    Ok(r) => r,
+                                    Err(e) => error!("Error handling ctl: {}", e),
+                                }
                             }
                             ReplCliCommand::Keys(keyscmd) => {
                                 match handle_keys(keyscmd, &mut self.output_state).await {
@@ -339,8 +368,8 @@ impl WashRepl {
                         use structopt::clap::ErrorKind::*;
                         // HelpDisplayed is the StructOpt help text error, which should be displayed as info
                         match e.kind {
-                            HelpDisplayed => info!(target: WASH_CMD_INFO, "\n{}", e.message),
-                            _ => error!(target: WASH_CMD_INFO, "\n{}", e.message),
+                            HelpDisplayed => info!(target: WASH_CMD_INFO, "{}", e.message),
+                            _ => error!(target: WASH_CMD_INFO, "{}", e.message),
                         }
                     }
                 };
@@ -352,10 +381,23 @@ impl WashRepl {
 }
 
 /// Launches REPL environment
-async fn handle_up(cmd: UpCommand) -> Result<()> {
-    // Initialize logger at default level Trace
-    init_logger(LevelFilter::Trace).unwrap();
-    set_default_level(LevelFilter::Trace);
+async fn handle_up(cmd: UpCliCommand) -> Result<()> {
+    // Initialize logger at default level based on user input. Defaults to Debug
+    // Trace is very noisy and should be used only for intense debugging
+    use LogLevel::*;
+    let filter = match cmd.log_level {
+        Error => LevelFilter::Error,
+        Warn => LevelFilter::Warn,
+        Info => LevelFilter::Info,
+        Debug => LevelFilter::Debug,
+        Trace => LevelFilter::Trace,
+    };
+    init_logger(filter).unwrap();
+    set_default_level(filter);
+
+    // Set global variable to show we're in REPL mode
+    // This ensures the rest of the modules can properly format output information
+    crate::util::REPL_MODE.set("true".to_string()).unwrap();
 
     // Initialize terminal
     let backend = {
@@ -481,261 +523,32 @@ async fn handle_up(cmd: UpCommand) -> Result<()> {
 }
 
 async fn handle_claims(claims_cmd: ClaimsCliCommand, output_state: &mut OutputState) -> Result<()> {
-    let output = match claims_cmd {
-        ClaimsCliCommand::Inspect(inspectcmd) => render_caps(inspectcmd).await?,
-        ClaimsCliCommand::Sign(signcmd) => sign_file(signcmd)?,
-        ClaimsCliCommand::Token(gencmd) => generate_token(gencmd)?,
-    };
+    let output = crate::claims::handle_command(claims_cmd).await?;
+    log_to_output(output_state, output);
+    Ok(())
+}
+
+async fn handle_ctl(ctl_cmd: CtlCliCommand, output_state: &mut OutputState) -> Result<()> {
+    let output = crate::ctl::handle_command(ctl_cmd).await?;
     log_to_output(output_state, output);
     Ok(())
 }
 
 async fn handle_keys(keys_cmd: KeysCliCommand, output_state: &mut OutputState) -> Result<()> {
-    let output = match keys_cmd {
-        KeysCliCommand::GenCommand { keytype, output } => generate(&keytype, &output.kind),
-        KeysCliCommand::GetCommand {
-            keyname,
-            directory,
-            output,
-        } => get(&keyname, directory, &output)?,
-        KeysCliCommand::ListCommand { directory, output } => list(directory, &output)?,
-    };
+    let output = crate::keys::handle_command(keys_cmd)?;
     log_to_output(output_state, output);
     Ok(())
 }
 
 async fn handle_par(par_cmd: ParCliCommand, output_state: &mut OutputState) -> Result<()> {
-    let output = match par_cmd {
-        ParCliCommand::Create(cmd) => handle_create(cmd),
-        ParCliCommand::Inspect(cmd) => handle_inspect(cmd).await,
-        ParCliCommand::Insert(cmd) => handle_insert(cmd),
-    }?;
+    let output = crate::par::handle_command(par_cmd).await?;
     log_to_output(output_state, output);
     Ok(())
 }
 
 async fn handle_reg(reg_cmd: RegCliCommand, output_state: &mut OutputState) -> Result<()> {
-    let output = match reg_cmd {
-        RegCliCommand::Pull(cmd) => handle_pull(cmd).await,
-        RegCliCommand::Push(cmd) => handle_push(cmd).await,
-    }?;
+    let output = crate::reg::handle_command(reg_cmd).await?;
     log_to_output(output_state, output);
-    Ok(())
-}
-
-async fn handle_pull(pull_cmd: PullCommand) -> Result<String> {
-    let image: Reference = pull_cmd.url.parse().unwrap();
-    debug!(" Downloading {} ...", image.whole());
-    let artifact = pull_artifact(
-        pull_cmd.url,
-        pull_cmd.digest,
-        pull_cmd.allow_latest,
-        pull_cmd.opts.user,
-        pull_cmd.opts.password,
-        pull_cmd.opts.insecure,
-    )
-    .await?;
-
-    let outfile = write_artifact(&artifact, &image, pull_cmd.destination)?;
-
-    Ok(format_output(
-        format!(
-            "{} Successfully pulled and validated {}",
-            SHOWER_EMOJI, outfile
-        ),
-        json!({"result": "success", "file": outfile}),
-        &pull_cmd.output.kind,
-    ))
-}
-
-async fn handle_push(push_cmd: PushCommand) -> Result<String> {
-    debug!(" Pushing {} to {} ...", push_cmd.artifact, push_cmd.url);
-    push_artifact(
-        push_cmd.url.clone(),
-        push_cmd.artifact,
-        push_cmd.config,
-        push_cmd.allow_latest,
-        push_cmd.opts.user,
-        push_cmd.opts.password,
-        push_cmd.opts.insecure,
-    )
-    .await?;
-    Ok(format_output(
-        format!(
-            "{} Successfully validated and pushed to {}",
-            SHOWER_EMOJI, push_cmd.url
-        ),
-        json!({"result": "success", "url": push_cmd.url}),
-        &push_cmd.output.kind,
-    ))
-}
-
-async fn handle_ctl(claims_cmd: CtlCliCommand, output_state: &mut OutputState) -> Result<()> {
-    match claims_cmd {
-        CtlCliCommand::Call(callcmd) => handle_call(callcmd, output_state).await,
-        CtlCliCommand::Get(getcmd) => handle_get(getcmd, output_state).await,
-        CtlCliCommand::Link(linkcmd) => handle_link(linkcmd, output_state).await,
-        CtlCliCommand::Start(startcmd) => handle_start(startcmd, output_state).await,
-        CtlCliCommand::Stop(stopcmd) => handle_stop(stopcmd, output_state).await,
-        CtlCliCommand::Update(updatecmd) => handle_update(updatecmd, output_state).await,
-    }
-}
-
-async fn handle_get(get_cmd: GetCommand, output_state: &mut OutputState) -> Result<()> {
-    let output = match get_cmd {
-        GetCommand::Claims(cmd) => {
-            let claims_list = get_claims(cmd).await?;
-            debug!(target: WASH_CMD_INFO, "\n{:?}", claims_list);
-            claims_table(claims_list, Some(output_state.output_width))
-        }
-        GetCommand::Hosts(cmd) => {
-            let hosts = get_hosts(cmd).await?;
-            debug!(target: WASH_CMD_INFO, "\n{:?}", hosts);
-            hosts_table(hosts, Some(output_state.output_width))
-        }
-        GetCommand::HostInventory(cmd) => {
-            let inventory = get_host_inventory(cmd).await?;
-            debug!(target: WASH_CMD_INFO, "\n{:?}", inventory);
-            host_inventory_table(inventory, Some(output_state.output_width))
-        }
-    };
-    log_to_output(output_state, output);
-    Ok(())
-}
-
-async fn handle_start(start_cmd: StartCommand, output_state: &mut OutputState) -> Result<()> {
-    match start_cmd {
-        StartCommand::Actor(cmd) => {
-            info!(
-                target: WASH_CMD_INFO,
-                "Sending request to start actor {}", cmd.actor_ref
-            );
-            match start_actor(cmd).await {
-                Ok(ack) => {
-                    debug!(target: WASH_CMD_INFO, "Start actor ack: {:?}", ack);
-                    log_to_output(
-                        output_state,
-                        format!("Starting {} ({})", ack.actor_ref, ack.actor_id),
-                    );
-                }
-                Err(e) => error!(target: WASH_CMD_INFO, "{}", e),
-            };
-        }
-        StartCommand::Provider(cmd) => {
-            info!(
-                target: WASH_CMD_INFO,
-                "Sending request to start provider {}", cmd.provider_ref
-            );
-            match start_provider(cmd).await {
-                Ok(ack) => {
-                    debug!(target: WASH_CMD_INFO, "Start provider ack: {:?}", ack);
-                    log_to_output(
-                        output_state,
-                        format!("Starting {} ({})", ack.provider_ref, ack.provider_id),
-                    );
-                }
-                Err(e) => error!(target: WASH_CMD_INFO, "{}", e),
-            };
-        }
-    };
-    Ok(())
-}
-
-async fn handle_stop(stop_cmd: StopCommand, output_state: &mut OutputState) -> Result<()> {
-    match stop_cmd {
-        StopCommand::Actor(cmd) => {
-            let actor_ref = cmd.actor_id.clone();
-            match stop_actor(cmd).await {
-                Ok(ack) => {
-                    debug!(target: WASH_CMD_INFO, "Stop actor ack: {:?}", ack);
-                    if let Some(err) = ack.failure {
-                        error!(target: WASH_CMD_INFO, "{}", err);
-                    } else {
-                        log_to_output(
-                            output_state,
-                            format!("Successfully stopped actor {}", actor_ref),
-                        );
-                    }
-                }
-                Err(e) => error!(target: WASH_CMD_INFO, "{}", e),
-            };
-        }
-        StopCommand::Provider(cmd) => {
-            let provider_ref = cmd.provider_id.clone();
-            match stop_provider(cmd).await {
-                Ok(ack) => {
-                    debug!(target: WASH_CMD_INFO, "Stop provider ack: {:?}", ack);
-                    if let Some(err) = ack.failure {
-                        error!(target: WASH_CMD_INFO, "{}", err);
-                    } else {
-                        log_to_output(
-                            output_state,
-                            format!("Successfully stopped provider {}", provider_ref),
-                        );
-                    }
-                }
-                Err(e) => error!(target: WASH_CMD_INFO, "{}", e),
-            };
-        }
-    };
-    Ok(())
-}
-
-async fn handle_link(cmd: LinkCommand, output_state: &mut OutputState) -> Result<()> {
-    match advertise_link(cmd.clone()).await {
-        Ok(_r) => {
-            info!(target: WASH_CMD_INFO, "Published link successfully");
-            log_to_output(
-                output_state,
-                format!("Published link {} <-> {}", cmd.actor_id, cmd.provider_id),
-            );
-        }
-        Err(e) => error!(target: WASH_CMD_INFO, "Error publishing link {}", e),
-    }
-    Ok(())
-}
-
-async fn handle_call(cmd: CallCommand, output_state: &mut OutputState) -> Result<()> {
-    match call_actor(cmd).await {
-        Ok(r) => match r.error {
-            Some(e) => error!(target: WASH_CMD_INFO, "Error invoking actor: {}", e),
-            None => {
-                debug!(
-                    target: WASH_CMD_INFO,
-                    "Invocation successful ({})", r.invocation_id
-                );
-                //TODO: String::from_utf8_lossy should be decoder only if one is not available
-                let out = String::from_utf8_lossy(&r.msg);
-                log_to_output(
-                    output_state,
-                    format!("Call response (raw): {}", out.to_string()),
-                );
-            }
-        },
-        Err(e) => error!(target: WASH_CMD_INFO, "unsuccessful call: {:?}", e),
-    };
-    Ok(())
-}
-
-async fn handle_update(update_cmd: UpdateCommand, output_state: &mut OutputState) -> Result<()> {
-    match update_cmd {
-        UpdateCommand::Actor(cmd) => {
-            info!(
-                target: WASH_CMD_INFO,
-                "Sending request to update actor {}", cmd.actor_id
-            );
-            match update_actor(cmd).await {
-                Ok(ack) => {
-                    debug!(target: WASH_CMD_INFO, "Update actor ack: {:?}", ack);
-                    log_to_output(
-                        output_state,
-                        format!("Actor update result: {}", ack.accepted),
-                    );
-                }
-                Err(e) => error!(target: WASH_CMD_INFO, "{}", e),
-            };
-        }
-    };
     Ok(())
 }
 
@@ -870,7 +683,7 @@ fn draw_output_panel(
     } else {
         0
     };
-    state.output_width = chunk.width as usize;
+    state.output_width = chunk.width as usize - 1;
 
     // Draw REPL panel
     let output_panel = Paragraph::new(output_logs)

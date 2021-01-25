@@ -1,5 +1,6 @@
 extern crate oci_distribution;
-use crate::util::{format_output, Output, OutputKind};
+use crate::util::{format_output, output_destination, Output, OutputDestination, OutputKind};
+use log::{debug, info};
 use oci_distribution::client::*;
 use oci_distribution::secrets::RegistryAuth;
 use oci_distribution::Reference;
@@ -33,6 +34,12 @@ pub(crate) enum SupportedArtifacts {
 pub(crate) struct RegCli {
     #[structopt(flatten)]
     command: RegCliCommand,
+}
+
+impl RegCli {
+    pub(crate) fn command(self) -> RegCliCommand {
+        self.command
+    }
 }
 
 #[derive(Debug, Clone, StructOpt)]
@@ -120,22 +127,25 @@ pub(crate) struct AuthOpts {
     pub(crate) insecure: bool,
 }
 
-pub(crate) async fn handle_command(cli: RegCli) -> Result<(), Box<dyn ::std::error::Error>> {
-    match cli.command {
+pub(crate) async fn handle_command(
+    command: RegCliCommand,
+) -> Result<String, Box<dyn ::std::error::Error>> {
+    match command {
         RegCliCommand::Pull(cmd) => handle_pull(cmd).await,
         RegCliCommand::Push(cmd) => handle_push(cmd).await,
     }
 }
 
-pub(crate) async fn handle_pull(cmd: PullCommand) -> Result<(), Box<dyn ::std::error::Error>> {
+pub(crate) async fn handle_pull(cmd: PullCommand) -> Result<String, Box<dyn ::std::error::Error>> {
     let image: Reference = cmd.url.parse().unwrap();
     let spinner = match cmd.output.kind {
-        OutputKind::Text => Some(Spinner::new(
+        OutputKind::Text if output_destination() == OutputDestination::CLI => Some(Spinner::new(
             Spinners::Dots12,
             format!(" Downloading {} ...", image.whole()),
         )),
-        OutputKind::JSON => None,
+        _ => None,
     };
+    info!("Downloading {}", image.whole());
     let artifact = pull_artifact(
         cmd.url,
         cmd.digest,
@@ -152,18 +162,14 @@ pub(crate) async fn handle_pull(cmd: PullCommand) -> Result<(), Box<dyn ::std::e
         spinner.unwrap().stop();
     }
 
-    println!(
-        "{}",
-        format_output(
-            format!(
-                "\n{} Successfully pulled and validated {}",
-                SHOWER_EMOJI, outfile
-            ),
-            json!({"result": "success", "file": outfile}),
-            &cmd.output.kind
-        )
-    );
-    Ok(())
+    Ok(format_output(
+        format!(
+            "\n{} Successfully pulled and validated {}",
+            SHOWER_EMOJI, outfile
+        ),
+        json!({"result": "success", "file": outfile}),
+        &cmd.output,
+    ))
 }
 
 pub(crate) async fn pull_artifact(
@@ -215,7 +221,10 @@ pub(crate) async fn pull_artifact(
         (Some(digest), Some(image_digest)) if digest != image_digest => {
             Err("Image digest did not match provided digest, aborting")
         }
-        _ => Ok(()),
+        _ => {
+            debug!("Image digest validated against provided digest");
+            Ok(())
+        }
     }?;
 
     Ok(image_data
@@ -293,14 +302,15 @@ fn validate_provider_archive(
     }
 }
 
-pub(crate) async fn handle_push(cmd: PushCommand) -> Result<(), Box<dyn ::std::error::Error>> {
+pub(crate) async fn handle_push(cmd: PushCommand) -> Result<String, Box<dyn ::std::error::Error>> {
     let spinner = match cmd.output.kind {
-        OutputKind::Text => Some(Spinner::new(
+        OutputKind::Text if output_destination() == OutputDestination::CLI => Some(Spinner::new(
             Spinners::Dots12,
             format!(" Pushing {} to {} ...", cmd.artifact, cmd.url),
         )),
-        OutputKind::JSON => None,
+        _ => None,
     };
+    info!(" Pushing {} to {} ...", cmd.artifact, cmd.url);
 
     push_artifact(
         cmd.url.clone(),
@@ -316,18 +326,14 @@ pub(crate) async fn handle_push(cmd: PushCommand) -> Result<(), Box<dyn ::std::e
     if spinner.is_some() {
         spinner.unwrap().stop();
     }
-    println!(
-        "{}",
-        format_output(
-            format!(
-                "\n{} Successfully validated and pushed to {}",
-                SHOWER_EMOJI, cmd.url
-            ),
-            json!({"result": "success", "url": cmd.url}),
-            &cmd.output.kind
-        )
-    );
-    Ok(())
+    Ok(format_output(
+        format!(
+            "\n{} Successfully validated and pushed to {}",
+            SHOWER_EMOJI, cmd.url
+        ),
+        json!({"result": "success", "url": cmd.url}),
+        &cmd.output,
+    ))
 }
 
 pub(crate) async fn push_artifact(
