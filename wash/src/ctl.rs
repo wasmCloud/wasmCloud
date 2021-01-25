@@ -1,9 +1,10 @@
 extern crate control_interface;
 use crate::util::{
-    convert_error, format_output, json_str_to_msgpack_bytes, labels_vec_to_hashmap, Output,
-    OutputKind, Result,
+    convert_error, format_output, json_str_to_msgpack_bytes, labels_vec_to_hashmap,
+    output_destination, Output, OutputDestination, OutputKind, Result, WASH_CMD_INFO,
 };
 use control_interface::*;
+use log::debug;
 use serde_json::json;
 use spinners::{Spinner, Spinners};
 use std::time::Duration;
@@ -18,6 +19,12 @@ use term_table::{Table, TableStyle};
 pub(crate) struct CtlCli {
     #[structopt(flatten)]
     command: CtlCliCommand,
+}
+
+impl CtlCli {
+    pub(crate) fn command(self) -> CtlCliCommand {
+        self.command
+    }
 }
 
 #[derive(Debug, Clone, StructOpt)]
@@ -309,23 +316,22 @@ pub(crate) struct UpdateActorCommand {
     pub(crate) new_actor_ref: String,
 }
 
-pub(crate) async fn handle_command(cli: CtlCli) -> Result<()> {
+pub(crate) async fn handle_command(command: CtlCliCommand) -> Result<String> {
     use CtlCliCommand::*;
-    let mut sp: Option<Spinner> = None; // = Spinner::new(Spinners::Dots12, "".to_string());
-    let out = match cli.command {
+    let mut sp: Option<Spinner> = None;
+    let out = match command {
         Call(cmd) => {
-            let output_kind = cmd.output.kind;
-            sp = update_spinner_message(
-                sp,
-                format!("Calling actor {} ... ", cmd.actor_id),
-                &output_kind,
-            );
+            let output = cmd.output;
+            sp =
+                update_spinner_message(sp, format!("Calling actor {} ... ", cmd.actor_id), &output);
+            debug!(target: WASH_CMD_INFO, "Calling actor {}", cmd.actor_id);
             let ir = call_actor(cmd).await?;
+            debug!(target: WASH_CMD_INFO, "Invocation response {:?}", ir);
             match ir.error {
                 Some(e) => format_output(
                     format!("Error invoking actor: {}", e),
                     json!({ "error": e }),
-                    &output_kind,
+                    &output,
                 ),
                 None => {
                     //TODO(brooksmtownsend): String::from_utf8_lossy should be decoder only if one is not available
@@ -333,38 +339,41 @@ pub(crate) async fn handle_command(cli: CtlCli) -> Result<()> {
                     format_output(
                         format!("Call response (raw): {}", call_response),
                         json!({ "response": call_response }),
-                        &output_kind,
+                        &output,
                     )
                 }
             }
         }
         Get(GetCommand::Hosts(cmd)) => {
-            let output_kind = cmd.output.kind;
-            sp = update_spinner_message(sp, format!(" Retrieving Hosts ..."), &output_kind);
+            let output = cmd.output;
+            sp = update_spinner_message(sp, " Retrieving Hosts ...".to_string(), &output);
             let hosts = get_hosts(cmd).await?;
-            match output_kind {
+            debug!(target: WASH_CMD_INFO, "Hosts:{:?}", hosts);
+            match output.kind {
                 OutputKind::Text => hosts_table(hosts, None),
                 OutputKind::JSON => format!("{}", json!({ "hosts": hosts })),
             }
         }
         Get(GetCommand::HostInventory(cmd)) => {
-            let output_kind = cmd.output.kind;
+            let output = cmd.output;
             sp = update_spinner_message(
                 sp,
                 format!(" Retrieving inventory for host {} ...", cmd.host_id),
-                &output_kind,
+                &output,
             );
             let inv = get_host_inventory(cmd).await?;
-            match output_kind {
+            debug!(target: WASH_CMD_INFO, "Inventory:{:?}", inv);
+            match output.kind {
                 OutputKind::Text => host_inventory_table(inv, None),
                 OutputKind::JSON => format!("{}", json!({ "inventory": inv })),
             }
         }
         Get(GetCommand::Claims(cmd)) => {
-            let output_kind = cmd.output.kind;
-            sp = update_spinner_message(sp, format!(" Retrieving claims ... "), &output_kind);
+            let output = cmd.output;
+            sp = update_spinner_message(sp, " Retrieving claims ... ".to_string(), &output);
             let claims = get_claims(cmd).await?;
-            match output_kind {
+            debug!(target: WASH_CMD_INFO, "Claims:{:?}", claims);
+            match output.kind {
                 OutputKind::Text => claims_table(claims, None),
                 OutputKind::JSON => format!("{}", json!({ "claims": claims })),
             }
@@ -376,7 +385,11 @@ pub(crate) async fn handle_command(cli: CtlCli) -> Result<()> {
                     " Advertising link between {} and {} ... ",
                     cmd.actor_id, cmd.provider_id
                 ),
-                &cmd.output.kind,
+                &cmd.output,
+            );
+            debug!(
+                target: WASH_CMD_INFO,
+                "Publishing link between {} and {}", cmd.actor_id, cmd.provider_id
             );
             match advertise_link(cmd.clone()).await {
                 Ok(_) => format_output(
@@ -385,120 +398,131 @@ pub(crate) async fn handle_command(cli: CtlCli) -> Result<()> {
                         cmd.actor_id, cmd.provider_id
                     ),
                     json!({"actor_id": cmd.actor_id, "provider_id": cmd.provider_id, "result": "published"}),
-                    &cmd.output.kind,
+                    &cmd.output,
                 ),
                 Err(e) => format_output(
                     format!("Error advertising link: {}", e),
                     json!({ "error": format!("{}", e) }),
-                    &cmd.output.kind,
+                    &cmd.output,
                 ),
             }
         }
         Start(StartCommand::Actor(cmd)) => {
-            let output_kind = cmd.output.kind;
+            let output = cmd.output;
             sp = update_spinner_message(
                 sp,
                 format!(" Starting actor {} ... ", cmd.actor_ref),
-                &output_kind,
+                &output,
+            );
+            debug!(
+                target: WASH_CMD_INFO,
+                "Sending request to start actor {}", cmd.actor_ref
             );
             match start_actor(cmd).await {
                 Ok(r) => format_output(
-                    format!("Actor {} being scheduled on host {}", r.actor_id, r.host_id),
+                    format!("Actor starting on host {}", r.host_id),
                     json!({ "ack": r }),
-                    &output_kind,
+                    &output,
                 ),
                 Err(e) => format_output(
                     format!("Error starting actor: {}", e),
                     json!({ "error": format!("{}", e) }),
-                    &output_kind,
+                    &output,
                 ),
             }
         }
         Start(StartCommand::Provider(cmd)) => {
-            let output_kind = cmd.output.kind;
+            let output = cmd.output;
             sp = update_spinner_message(
                 sp,
                 format!(" Starting provider {} ... ", cmd.provider_ref),
-                &output_kind,
+                &output,
+            );
+            debug!(
+                target: WASH_CMD_INFO,
+                "Sending request to start provider {}", cmd.provider_ref
             );
             match start_provider(cmd).await {
                 Ok(r) => format_output(
-                    format!(
-                        "Provider {} being scheduled on host {}",
-                        r.provider_id, r.host_id
-                    ),
+                    format!("Provider starting on host {}", r.host_id),
                     json!({ "ack": r }),
-                    &output_kind,
+                    &output,
                 ),
                 Err(e) => format_output(
                     format!("Error starting provider: {}", e),
                     json!({ "error": format!("{}", e) }),
-                    &output_kind,
+                    &output,
                 ),
             }
         }
         Stop(StopCommand::Actor(cmd)) => {
-            let output_kind = cmd.output.kind;
+            let output = cmd.output;
             sp = update_spinner_message(
                 sp,
                 format!(" Stopping actor {} ... ", cmd.actor_id),
-                &output_kind,
+                &output,
             );
             let ack = stop_actor(cmd.clone()).await?;
+            debug!(target: WASH_CMD_INFO, "Stop actor ack: {:?}", ack);
             match ack.failure {
                 Some(f) => format_output(
                     format!("Error stopping actor: {}", f),
                     json!({ "error": f }),
-                    &output_kind,
+                    &output,
                 ),
                 None => format_output(
                     format!("Stopping actor: {}", cmd.actor_id),
                     json!({ "ack": ack }),
-                    &output_kind,
+                    &output,
                 ),
             }
         }
         Stop(StopCommand::Provider(cmd)) => {
-            let output_kind = cmd.output.kind;
+            let output = cmd.output;
             sp = update_spinner_message(
                 sp,
                 format!(" Stopping provider {} ... ", cmd.provider_id),
-                &output_kind,
+                &output,
             );
             let ack = stop_provider(cmd.clone()).await?;
+            debug!(target: WASH_CMD_INFO, "Stop provider ack: {:?}", ack);
             match ack.failure {
                 Some(f) => format_output(
                     format!("Error stopping provider: {}", f),
                     json!({ "error": f }),
-                    &output_kind,
+                    &output,
                 ),
                 None => format_output(
                     format!("Stopping provider: {}", cmd.provider_id),
                     json!({ "ack": ack }),
-                    &output_kind,
+                    &output,
                 ),
             }
         }
         Update(UpdateCommand::Actor(cmd)) => {
-            let output_kind = cmd.output.kind;
+            let output = cmd.output;
             sp = update_spinner_message(
                 sp,
                 format!(
                     " Updating Actor {} to {} ... ",
                     cmd.actor_id, cmd.new_actor_ref
                 ),
-                &output_kind,
+                &output,
+            );
+            debug!(
+                "Sending request to update actor {} to {}",
+                cmd.actor_id, cmd.new_actor_ref
             );
             match update_actor(cmd.clone()).await {
                 Ok(r) => format_output(
                     format!("Actor {} updated to {}", cmd.actor_id, cmd.new_actor_ref),
                     json!({ "ack": r }),
-                    &output_kind,
+                    &output,
                 ),
                 Err(e) => format_output(
                     format!("Error updating actor: {}", e),
                     json!({ "error": format!("{}", e) }),
-                    &output_kind,
+                    &output,
                 ),
             }
         }
@@ -507,9 +531,8 @@ pub(crate) async fn handle_command(cli: CtlCli) -> Result<()> {
     if sp.is_some() {
         sp.unwrap().stop()
     }
-    println!("\n{}", out);
 
-    Ok(())
+    Ok(out)
 }
 
 pub(crate) async fn new_ctl_client(
@@ -567,7 +590,7 @@ pub(crate) async fn advertise_link(cmd: LinkCommand) -> Result<()> {
             &cmd.actor_id,
             &cmd.provider_id,
             &cmd.contract_id,
-            &cmd.link_name.unwrap_or("default".to_string()),
+            &cmd.link_name.unwrap_or_else(|| "default".to_string()),
             labels_vec_to_hashmap(cmd.values)?,
         )
         .await
@@ -583,7 +606,7 @@ pub(crate) async fn start_actor(cmd: StartActorCommand) -> Result<StartActorAck>
             let suitable_hosts = client
                 .perform_actor_auction(
                     &cmd.actor_ref,
-                    labels_vec_to_hashmap(cmd.constraints.unwrap_or(vec![]))?,
+                    labels_vec_to_hashmap(cmd.constraints.unwrap_or_default())?,
                     Duration::from_secs(cmd.timeout),
                 )
                 .await
@@ -612,7 +635,7 @@ pub(crate) async fn start_provider(cmd: StartProviderCommand) -> Result<StartPro
                 .perform_provider_auction(
                     &cmd.provider_ref,
                     &cmd.link_name,
-                    labels_vec_to_hashmap(cmd.constraints.unwrap_or(vec![]))?,
+                    labels_vec_to_hashmap(cmd.constraints.unwrap_or_default())?,
                     Duration::from_secs(cmd.timeout),
                 )
                 .await
@@ -699,7 +722,7 @@ pub(crate) fn host_inventory_table(inv: HostInventory, max_width: Option<usize>)
         Alignment::Center,
     )]));
 
-    if inv.labels.len() >= 1 {
+    if !inv.labels.is_empty() {
         table.add_row(Row::new(vec![TableCell::new_with_alignment(
             "",
             4,
@@ -719,7 +742,7 @@ pub(crate) fn host_inventory_table(inv: HostInventory, max_width: Option<usize>)
         )]));
     }
 
-    if inv.actors.len() >= 1 {
+    if !inv.actors.is_empty() {
         table.add_row(Row::new(vec![TableCell::new_with_alignment(
             "",
             4,
@@ -734,7 +757,7 @@ pub(crate) fn host_inventory_table(inv: HostInventory, max_width: Option<usize>)
             table.add_row(Row::new(vec![
                 TableCell::new_with_alignment(a.id, 2, Alignment::Left),
                 TableCell::new_with_alignment(
-                    a.image_ref.unwrap_or("N/A".to_string()),
+                    a.image_ref.unwrap_or_else(|| "N/A".to_string()),
                     2,
                     Alignment::Left,
                 ),
@@ -748,7 +771,7 @@ pub(crate) fn host_inventory_table(inv: HostInventory, max_width: Option<usize>)
         )]));
     }
 
-    if inv.providers.len() >= 1 {
+    if !inv.providers.is_empty() {
         table.add_row(Row::new(vec![TableCell::new_with_alignment(
             "",
             4,
@@ -765,7 +788,7 @@ pub(crate) fn host_inventory_table(inv: HostInventory, max_width: Option<usize>)
                 TableCell::new_with_alignment(p.id, 2, Alignment::Left),
                 TableCell::new_with_alignment(p.link_name, 1, Alignment::Left),
                 TableCell::new_with_alignment(
-                    p.image_ref.unwrap_or("N/A".to_string()),
+                    p.image_ref.unwrap_or_else(|| "N/A".to_string()),
                     1,
                     Alignment::Left,
                 ),
@@ -854,12 +877,12 @@ pub(crate) fn claims_table(list: ClaimsList, max_width: Option<usize>) -> String
 fn update_spinner_message(
     spinner: Option<Spinner>,
     msg: String,
-    output_kind: &OutputKind,
+    output: &Output,
 ) -> Option<Spinner> {
     if let Some(sp) = spinner {
         sp.message(msg);
         Some(sp)
-    } else if output_kind == &OutputKind::Text {
+    } else if output.kind == OutputKind::Text && output_destination() == OutputDestination::CLI {
         Some(Spinner::new(Spinners::Dots12, msg))
     } else {
         None
