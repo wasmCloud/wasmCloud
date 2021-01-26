@@ -53,11 +53,10 @@ pub(crate) async fn basics() -> Result<()> {
 
     let a_ack = ctl_client.start_actor(&hid, KVCOUNTER_OCI).await?;
     await_actor_count(&h, 1, Duration::from_millis(50), 20).await?;
-    println!("Actor {} started on host {}", a_ack.actor_id, a_ack.host_id);
+    println!("Received ACK from host {}", a_ack.host_id);
 
     let claims = ctl_client.get_claims().await?;
     assert_eq!(1, claims.claims.len());
-    assert_eq!(a_ack.actor_id, claims.claims[0].values["sub"]);
     assert!(a_ack.failure.is_none());
 
     let a_ack2 = ctl_client.start_actor(&hid, KVCOUNTER_OCI).await?;
@@ -145,7 +144,7 @@ pub(crate) async fn calltest() -> Result<()> {
     let a_id = a.public_key();
     h.start_actor(a).await?;
     await_actor_count(&h, 1, Duration::from_millis(50), 20).await?;
-    delay_for(Duration::from_millis(300)).await;
+    delay_for(Duration::from_millis(600)).await;
 
     let nc2 = nats::asynk::connect("0.0.0.0:4222").await?;
 
@@ -227,6 +226,7 @@ pub(crate) async fn auctions() -> Result<()> {
     // start it and re-attempt an auction
     let _ = ctl_client.start_actor(&hid, KVCOUNTER_OCI).await?;
     await_actor_count(&h, 1, Duration::from_millis(50), 20).await?;
+    delay_for(Duration::from_secs(1)).await;
 
     let kvack = ctl_client
         .perform_actor_auction(KVCOUNTER_OCI, kvrequirements(), Duration::from_secs(5))
