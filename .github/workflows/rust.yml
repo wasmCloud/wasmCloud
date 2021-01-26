@@ -14,6 +14,19 @@ jobs:
 
     runs-on: ubuntu-latest
 
+    services:
+      nats:
+        image: nats
+        ports:
+          - 6222:6222
+          - 4222:4222
+          - 8222:8222
+
+      redis:
+        image: redis
+        ports:
+          - 6379:6379
+
     steps:
     - uses: actions/checkout@v2
     - name: Build
