@@ -30,11 +30,21 @@ impl CtlCli {
 #[derive(Debug, Clone, StructOpt)]
 pub(crate) struct ConnectionOpts {
     /// RPC Host for connection, defaults to 0.0.0.0 for local nats
-    #[structopt(short = "r", long = "rpc-host", default_value = "0.0.0.0")]
+    #[structopt(
+        short = "r",
+        long = "rpc-host",
+        default_value = "0.0.0.0",
+        env = "WASH_RPC_HOST"
+    )]
     rpc_host: String,
 
     /// RPC Port for connections, defaults to 4222 for local nats
-    #[structopt(short = "p", long = "rpc-port", default_value = "4222")]
+    #[structopt(
+        short = "p",
+        long = "rpc-port",
+        default_value = "4222",
+        env = "WASH_RPC_PORT"
+    )]
     rpc_port: String,
 
     /// Namespace prefix for wasmCloud command interface
@@ -42,7 +52,12 @@ pub(crate) struct ConnectionOpts {
     ns_prefix: String,
 
     /// Timeout length for RPC, defaults to 5 seconds
-    #[structopt(short = "t", long = "rpc-timeout", default_value = "5")]
+    #[structopt(
+        short = "t",
+        long = "rpc-timeout",
+        default_value = "5",
+        env = "WASH_RPC_TIMEOUT"
+    )]
     rpc_timeout: u64,
 }
 
