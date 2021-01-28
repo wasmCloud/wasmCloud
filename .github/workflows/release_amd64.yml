@@ -18,7 +18,7 @@ jobs:
         run: cargo build --release
       - name: Install NFPM
         run: curl -sfL https://install.goreleaser.com/github.com/goreleaser/nfpm.sh | sh
-      - name: Package amd64 (Debian)
+      - name: Package amd64
         run: |
           export VERSION=$(echo $REF | cut -d/ -f3)
           ./bin/nfpm pkg --packager deb -f build/nfpm.amd64.yaml
