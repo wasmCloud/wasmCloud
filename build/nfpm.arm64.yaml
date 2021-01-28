@@ -12,5 +12,6 @@ description: wasmcloud
 vendor: wasmCloud
 homepage: https://wascc.dev
 license: Apache-2.0
-files:
-  artifacts/release/wasmcloud: "/usr/local/bin/wasmcloud"
+contents:
+  - src: artifacts/release/wasmcloud
+    dst: /usr/local/bin/wasmcloud
