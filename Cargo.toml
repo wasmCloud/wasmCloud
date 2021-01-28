@@ -1,6 +1,6 @@
 [package]
 name = "provider-archive"
-version = "0.3.1"
+version = "0.3.2"
 authors = ["Kevin Hoffman <alothien@gmail.com>"]
 edition = "2018"
 description = "Library for reading and writing waSCC capability provider archive files"
@@ -13,7 +13,7 @@ categories = ["cryptography", "authentication", "wasm"]
 
 
 [dependencies]
-wascap = "0.5.1"
+wascap = "0.5.2"
 data-encoding = "2.3.1"
 ring = "0.16"
 tar = "0.4.30"
