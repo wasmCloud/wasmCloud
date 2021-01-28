@@ -1,13 +1,13 @@
 [package]
-name = "wascc-httpsrv"
-version = "0.9.2"
-authors = ["Kevin Hoffman <alothien@gmail.com>"]
+name = "wasmcloud-httpserver"
+version = "0.10.0"
+authors = ["wasmCloud Team"]
 edition = "2018"
-homepage = "https://wascc.dev"
-repository = "https://github.com/wascc/http-server-provider"
-description = "HTTP Server capability provider for the waSCC wasm host runtime"
+homepage = "https://wasmcloud.dev"
+repository = "https://github.com/wasmcloud/capability-providers"
+description = "HTTP Server capability provider for the wasmCloud host runtime"
 license = "Apache-2.0"
-documentation = "https://docs.rs/wascc-httpsrv"
+documentation = "https://docs.rs/wasmcloud-httpserver"
 readme = "README.md"
 keywords = ["webassembly", "wasm", "wasi", "wascc", "actix"]
 categories = ["wasm", "api-bindings"]
@@ -35,4 +35,5 @@ env_logger = "0.7.1"
 crossbeam-channel = "0.4.2"
 crossbeam = "0.7.3"
 crossbeam-utils = "^0.7.0"
-
+actor-http-server = { git = "https://github.com/wasmcloud/actor-interfaces", branch = "main" }
+actor-core = { git = "https://github.com/wasmcloud/actor-interfaces", branch = "main" }

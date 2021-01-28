@@ -5,7 +5,7 @@
 
 # waSCC HTTP Server Provider
 
-This library is a _native capability provider_ for the `wascc:http_server` capability. Only actors signed with tokens containing this capability privilege will be allowed to use it. 
+This library is a _native capability provider_ for the `wasmcloud:httpserver` capability. Only actors signed with tokens containing this capability privilege will be allowed to use it. 
 
 It should be compiled as a native shared object binary (linux `.so`, mac `.dylib`, windows `.dll`) and made available to the **waSCC** host runtime as a plugin. If you want to statically compile (embed) it into a custom waSCC host, then simply enable the `static_plugin` feature in your dependencies:
 

@@ -1,20 +1,18 @@
-pub(crate) mod generated;
 mod kvredis;
 
 #[macro_use]
 extern crate wascc_codec as codec;
+use codec::capabilities::{CapabilityProvider, Dispatcher, NullDispatcher};
+use codec::core::{OP_BIND_ACTOR, OP_HEALTH_REQUEST, OP_REMOVE_ACTOR};
 
 #[macro_use]
 extern crate log;
 
-use crate::generated::core::{CapabilityConfiguration, HealthResponse};
-use crate::generated::keyvalue::*;
-use codec::capabilities::{
-    CapabilityDescriptor, CapabilityProvider, Dispatcher, NullDispatcher, OperationDirection,
-    OP_GET_CAPABILITY_DESCRIPTOR,
-};
-use codec::core::{OP_BIND_ACTOR, OP_HEALTH_REQUEST, OP_REMOVE_ACTOR};
-use codec::{deserialize, serialize};
+extern crate actor_core as actorcore;
+use actorcore::{deserialize, serialize, CapabilityConfiguration, HealthCheckResponse};
+extern crate actor_keyvalue as actorkeyvalue;
+use actorkeyvalue::*;
+
 use redis::Connection;
 use redis::RedisResult;
 use redis::{self, Commands};
@@ -23,31 +21,15 @@ use std::error::Error;
 use std::sync::Arc;
 use std::sync::RwLock;
 
-pub const OP_ADD: &str = "Add";
-pub const OP_DEL: &str = "Del";
-pub const OP_GET: &str = "Get";
-pub const OP_SET: &str = "Set";
-pub const OP_CLEAR: &str = "Clear";
-pub const OP_RANGE: &str = "Range";
-pub const OP_PUSH: &str = "Push";
-pub const OP_LIST_DEL: &str = "ListItemDelete";
-
-pub const OP_SET_ADD: &str = "SetAdd";
-pub const OP_SET_REMOVE: &str = "SetRemove";
-pub const OP_SET_INTERSECT: &str = "SetIntersection";
-pub const OP_SET_UNION: &str = "SetUnion";
-pub const OP_KEY_EXISTS: &str = "KeyExists";
-pub const OP_SET_QUERY: &str = "SetQuery";
-
-const CAPABILITY_ID: &str = "wascc:keyvalue";
+const CAPABILITY_ID: &str = "wasmcloud:keyvalue";
 const SYSTEM_ACTOR: &str = "system";
-const REVISION: u32 = 2; // Increment for each crates publish
+const REVISION: u32 = 3; // Increment for each crates publish
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[cfg(not(feature = "static_plugin"))]
 capability_provider!(RedisKVProvider, RedisKVProvider::new);
 
-/// Redis implementation of the `wascc:keyvalue` specification
+/// Redis implementation of the `wasmcloud:keyvalue` specification
 #[derive(Clone)]
 pub struct RedisKVProvider {
     dispatcher: Arc<RwLock<Box<dyn Dispatcher>>>,
@@ -256,49 +238,6 @@ impl RedisKVProvider {
             exists: result,
         })?)
     }
-
-    fn get_descriptor(&self) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
-        use OperationDirection::ToProvider;
-        Ok(serialize(
-            CapabilityDescriptor::builder()
-                .id(CAPABILITY_ID)
-                .name("waSCC Default Key-Value Provider (Redis)")
-                .long_description("A key-value store capability provider built on Redis")
-                .version(VERSION)
-                .revision(REVISION)
-                .with_operation(OP_ADD, ToProvider, "Performs an atomic addition operation")
-                .with_operation(OP_DEL, ToProvider, "Deletes a key from the store")
-                .with_operation(OP_GET, ToProvider, "Gets the raw value for a key")
-                .with_operation(OP_CLEAR, ToProvider, "Clears a list")
-                .with_operation(
-                    OP_RANGE,
-                    ToProvider,
-                    "Selects items from a list within a range",
-                )
-                .with_operation(OP_PUSH, ToProvider, "Pushes a new item onto a list")
-                .with_operation(OP_SET, ToProvider, "Sets the value of a key")
-                .with_operation(OP_LIST_DEL, ToProvider, "Deletes an item from a list")
-                .with_operation(OP_SET_ADD, ToProvider, "Adds an item to a set")
-                .with_operation(OP_SET_REMOVE, ToProvider, "Remove an item from a set")
-                .with_operation(
-                    OP_SET_UNION,
-                    ToProvider,
-                    "Returns the union of multiple sets",
-                )
-                .with_operation(
-                    OP_SET_INTERSECT,
-                    ToProvider,
-                    "Returns the intersection of multiple sets",
-                )
-                .with_operation(OP_SET_QUERY, ToProvider, "Queries a set")
-                .with_operation(
-                    OP_KEY_EXISTS,
-                    ToProvider,
-                    "Returns a boolean indicating if a key exists",
-                )
-                .build(),
-        )?)
-    }
 }
 
 impl CapabilityProvider for RedisKVProvider {
@@ -338,7 +277,6 @@ impl CapabilityProvider for RedisKVProvider {
             OP_REMOVE_ACTOR if actor == SYSTEM_ACTOR => {
                 self.remove_actor(deserialize::<CapabilityConfiguration>(msg).unwrap())
             }
-            OP_GET_CAPABILITY_DESCRIPTOR if actor == SYSTEM_ACTOR => self.get_descriptor(),
             OP_ADD => self.add(actor, deserialize(msg).unwrap()),
             OP_DEL => self.del(actor, deserialize(msg).unwrap()),
             OP_GET => self.get(actor, deserialize(msg).unwrap()),
@@ -353,7 +291,7 @@ impl CapabilityProvider for RedisKVProvider {
             OP_SET_INTERSECT => self.set_intersect(actor, deserialize(msg).unwrap()),
             OP_SET_QUERY => self.set_query(actor, deserialize(msg).unwrap()),
             OP_KEY_EXISTS => self.exists(actor, deserialize(msg).unwrap()),
-            OP_HEALTH_REQUEST if actor == SYSTEM_ACTOR => Ok(serialize(HealthResponse {
+            OP_HEALTH_REQUEST if actor == SYSTEM_ACTOR => Ok(serialize(HealthCheckResponse {
                 healthy: true,
                 message: "".to_string(),
             })

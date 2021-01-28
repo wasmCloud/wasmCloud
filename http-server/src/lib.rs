@@ -1,32 +1,24 @@
-mod generated;
-
 #[macro_use]
 extern crate wascc_codec as codec;
-
 #[macro_use]
 extern crate log;
 
 extern crate actix_rt;
-
-use crate::generated::core::{CapabilityConfiguration, HealthResponse};
 use actix_web::dev::Body;
 use actix_web::dev::Server;
 use actix_web::http::{HeaderName, HeaderValue, StatusCode};
 use actix_web::web::Bytes;
 use actix_web::{middleware, web, App, HttpRequest, HttpResponse, HttpServer};
-use codec::capabilities::{
-    CapabilityDescriptor, CapabilityProvider, Dispatcher, NullDispatcher, OperationDirection,
-    OP_GET_CAPABILITY_DESCRIPTOR,
-};
-
 use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Arc;
 use std::sync::RwLock;
-use wascc_codec::core::{OP_BIND_ACTOR, OP_REMOVE_ACTOR, OP_HEALTH_REQUEST};
-use wascc_codec::{deserialize, serialize};
 
-const CAPABILITY_ID: &str = "wascc:http_server";
+use actor_core::{deserialize, serialize, CapabilityConfiguration, HealthCheckResponse};
+use codec::capabilities::{CapabilityProvider, Dispatcher, NullDispatcher};
+use codec::core::{OP_BIND_ACTOR, OP_HEALTH_REQUEST, OP_REMOVE_ACTOR};
+
+const CAPABILITY_ID: &str = "wasmcloud:httpserver";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const REVISION: u32 = 3; // Increment for each crates publish
 
@@ -35,7 +27,7 @@ const OP_HANDLE_REQUEST: &str = "HandleRequest";
 #[cfg(not(feature = "static_plugin"))]
 capability_provider!(HttpServerProvider, HttpServerProvider::new);
 
-/// An Actix-web implementation of the `wascc:http_server` capability specification
+/// An Actix-web implementation of the `wasmcloud:httpserver` capability specification
 #[derive(Clone)]
 pub struct HttpServerProvider {
     dispatcher: Arc<RwLock<Box<dyn Dispatcher>>>,
@@ -74,8 +66,7 @@ impl HttpServerProvider {
     fn spawn_server(&self, cfgvals: &CapabilityConfiguration) {
         if self.servers.read().unwrap().contains_key(&cfgvals.module) {
             return;
-        }        
-        
+        }
         let bind_addr = match cfgvals.values.get("PORT") {
             Some(v) => format!("0.0.0.0:{}", v),
             None => "0.0.0.0:8080".to_string(),
@@ -106,24 +97,6 @@ impl HttpServerProvider {
 
             let _ = sys.run();
         });
-    }
-
-    /// Obtains the capability provider descriptor
-    fn get_descriptor(&self) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
-        Ok(serialize(
-            CapabilityDescriptor::builder()
-                .id(CAPABILITY_ID)
-                .name("Default waSCC HTTP Server Provider (Actix)")
-                .long_description("A fast, multi-threaded HTTP server for waSCC actors")
-                .version(VERSION)
-                .revision(REVISION)
-                .with_operation(
-                    OP_HANDLE_REQUEST,
-                    OperationDirection::ToActor,
-                    "Delivers an HTTP request to an actor and expects an HTTP response in return",
-                )
-                .build(),
-        )?)
     }
 }
 
@@ -174,10 +147,10 @@ impl CapabilityProvider for HttpServerProvider {
                 self.terminate_server(&cfgvals.module);
                 Ok(vec![])
             }
-            OP_HEALTH_REQUEST if actor == "system" => {
-                Ok(serialize(HealthResponse{healthy: true, message: "".to_string()})?)
-            }
-            OP_GET_CAPABILITY_DESCRIPTOR if actor == "system" => self.get_descriptor(),
+            OP_HEALTH_REQUEST if actor == "system" => Ok(serialize(HealthCheckResponse {
+                healthy: true,
+                message: "".to_string(),
+            })?),
             _ => Err("bad dispatch".into()),
         }
     }
@@ -199,7 +172,7 @@ async fn request_handler(
     state: web::Data<Arc<RwLock<Box<dyn Dispatcher>>>>,
     module: web::Data<String>,
 ) -> HttpResponse {
-    let request = crate::generated::http::Request {
+    let request = actor_http_server::Request {
         method: req.method().as_str().to_string(),
         path: req.uri().path().to_string(),
         query_string: req.query_string().to_string(),
@@ -214,7 +187,7 @@ async fn request_handler(
     };
     match resp {
         Ok(r) => {
-            let r = deserialize::<crate::generated::http::Response>(r.as_slice());
+            let r = deserialize::<actor_http_server::Response>(r.as_slice());
             if let Ok(r) = r {
                 let mut response = HttpResponse::with_body(
                     StatusCode::from_u16(r.status_code as _).unwrap(),

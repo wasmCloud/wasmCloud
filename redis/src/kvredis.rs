@@ -1,4 +1,4 @@
-use crate::generated::core::CapabilityConfiguration;
+use actor_core::CapabilityConfiguration;
 use std::error::Error;
 
 const ENV_REDIS_URL: &str = "URL";
