@@ -39,7 +39,7 @@ then
 	exit
 fi
 
-echo ""
+echo "Discovering hosts ..."
 HOSTS=$(wash ctl get hosts -o json)
 if [ $(echo $HOSTS | jq '.hosts | length') -gt 0 ] 
 then
@@ -48,23 +48,23 @@ then
 	HOST=$(echo $HOSTS | jq ".hosts[0].id" | tr -d "\"")
 	wash ctl start actor wasmcloud.azurecr.io/kvcounter:0.2.0 -h $HOST
 	wash ctl start provider wasmcloud.azurecr.io/redis:0.10.0 -h $HOST
-	wash ctl link MCFMFDWFHGKELOXPCNCDXKK5OFLHBVEWRAOXR5JSQUD2TOFRE3DFPM7E VC4PGPGUM3UHVBDFATPAMFHJJLTLE5LWZIJ36ZTVH4FTEP4QP24D3UR7 wasmcloud:keyvalue URL=redis://localhost:6379
+	wash ctl link MCFMFDWFHGKELOXPCNCDXKK5OFLHBVEWRAOXR5JSQUD2TOFRE3DFPM7E VAZVC4RX54J2NVCMCW7BPCAHGGG5XZXDBXFUMDUXGESTMQEJLC3YVZWB wasmcloud:keyvalue URL=redis://localhost:6379
 	wash ctl start provider wasmcloud.azurecr.io/httpserver:0.10.0 -h $HOST
-	wash ctl link MCFMFDWFHGKELOXPCNCDXKK5OFLHBVEWRAOXR5JSQUD2TOFRE3DFPM7E VCMSQB74OEU4B5CN3LA6VD5CWOQWMKXNVQQZY256WF65U2VFZEARUKW7 wasmcloud:httpserver PORT=8080
+	wash ctl link MCFMFDWFHGKELOXPCNCDXKK5OFLHBVEWRAOXR5JSQUD2TOFRE3DFPM7E VAG3QITQQ2ODAOWB5TTQSDJ53XK3SHBEIFNK4AYJ5RKAX2UNSCAPHA5M wasmcloud:httpserver PORT=8080
 
 	echo ""
 	echo "Actors and providers linked and starting, try running one of the following commands to test your KVCounter!"
 	echo "curl localhost:8080/mycounter
-wash ctl call MCFMFDWFHGKELOXPCNCDXKK5OFLHBVEWRAOXR5JSQUD2TOFRE3DFPM7E HandleRequest '{"method": "GET", "path": "/mycounter", "body": "", "queryString":"", "header":{}}'"
+wash ctl call MCFMFDWFHGKELOXPCNCDXKK5OFLHBVEWRAOXR5JSQUD2TOFRE3DFPM7E HandleRequest '{\"method\": \"GET\", \"path\": \"/mycounter\", \"body\": \"\", \"queryString\":\"\", \"header\":{}}'"
 else
 	echo "No hosts found, please run the wasmcloud binary, or proceed with the following commands in the REPL:"
 	echo ""
 	echo "ctl start actor wasmcloud.azurecr.io/kvcounter:0.2.0
 ctl start provider wasmcloud.azurecr.io/redis:0.10.0
-ctl link MCFMFDWFHGKELOXPCNCDXKK5OFLHBVEWRAOXR5JSQUD2TOFRE3DFPM7E VC4PGPGUM3UHVBDFATPAMFHJJLTLE5LWZIJ36ZTVH4FTEP4QP24D3UR7 wasmcloud:keyvalue URL=redis://localhost:6379
+ctl link MCFMFDWFHGKELOXPCNCDXKK5OFLHBVEWRAOXR5JSQUD2TOFRE3DFPM7E VAZVC4RX54J2NVCMCW7BPCAHGGG5XZXDBXFUMDUXGESTMQEJLC3YVZWB wasmcloud:keyvalue URL=redis://localhost:6379
 ctl start provider wasmcloud.azurecr.io/httpserver:0.10.0
-ctl link MCFMFDWFHGKELOXPCNCDXKK5OFLHBVEWRAOXR5JSQUD2TOFRE3DFPM7E VCMSQB74OEU4B5CN3LA6VD5CWOQWMKXNVQQZY256WF65U2VFZEARUKW7 wasmcloud:httpserver PORT=8080
-ctl call MCFMFDWFHGKELOXPCNCDXKK5OFLHBVEWRAOXR5JSQUD2TOFRE3DFPM7E HandleRequest {"method": "GET", "path": "/mycounter", "body": "", "queryString":"", "header":{}}"
+ctl link MCFMFDWFHGKELOXPCNCDXKK5OFLHBVEWRAOXR5JSQUD2TOFRE3DFPM7E VAG3QITQQ2ODAOWB5TTQSDJ53XK3SHBEIFNK4AYJ5RKAX2UNSCAPHA5M wasmcloud:httpserver PORT=8080
+ctl call MCFMFDWFHGKELOXPCNCDXKK5OFLHBVEWRAOXR5JSQUD2TOFRE3DFPM7E HandleRequest {\"method\": \"GET\", \"path\": \"/mycounter\", \"body\": \"\", \"queryString\":\"\", \"header\":{}}"
 	exit
 fi
 
