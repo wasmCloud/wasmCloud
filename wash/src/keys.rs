@@ -22,6 +22,7 @@ impl KeysCli {
 }
 
 #[derive(Debug, Clone, StructOpt)]
+#[allow(clippy::enum_variant_names)]
 pub(crate) enum KeysCliCommand {
     #[structopt(name = "gen", about = "Generates a keypair")]
     GenCommand {

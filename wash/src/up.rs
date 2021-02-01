@@ -89,9 +89,8 @@ impl std::str::FromStr for LogLevel {
 }
 
 pub(crate) async fn handle_command(command: UpCliCommand) -> Result<()> {
-    match command {
-        UpCliCommand { .. } => handle_up(command).await,
-    }
+    let UpCliCommand { .. } = command;
+    handle_up(command).await
 }
 
 #[derive(StructOpt, Debug, Clone)]

@@ -724,10 +724,7 @@ pub(crate) fn hosts_table(hosts: Vec<Host>, max_width: Option<usize>) -> String 
 /// Helper function to print a HostInventory to stdout as a table
 pub(crate) fn host_inventory_table(inv: HostInventory, max_width: Option<usize>) -> String {
     let mut table = Table::new();
-    table.max_column_width = match max_width {
-        Some(n) => n,
-        None => 80,
-    };
+    table.max_column_width = max_width.unwrap_or(80);
     table.style = TableStyle::blank();
     table.separate_rows = false;
 
@@ -825,10 +822,7 @@ pub(crate) fn claims_table(list: ClaimsList, max_width: Option<usize>) -> String
     let mut table = Table::new();
     table.style = TableStyle::blank();
     table.separate_rows = false;
-    table.max_column_width = match max_width {
-        Some(n) => n,
-        None => 80,
-    };
+    table.max_column_width = max_width.unwrap_or(80);
 
     table.add_row(Row::new(vec![TableCell::new_with_alignment(
         "Claims",
