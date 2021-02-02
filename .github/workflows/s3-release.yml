@@ -17,6 +17,11 @@ env:
 
 jobs:
   cargo_check:
+    services:
+      minio:
+        image: kotancode/minio
+        ports:
+          - 9000:9000
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v2
