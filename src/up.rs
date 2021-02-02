@@ -8,6 +8,7 @@ use crossterm::event::{poll, read, DisableMouseCapture, Event, KeyCode, KeyEvent
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use log::{error, info, LevelFilter};
 use std::io::{self, Stdout};
+use std::sync::{Arc, Mutex};
 use std::{cell::RefCell, io::Write, rc::Rc};
 use structopt::{clap::AppSettings, StructOpt};
 use tui::{
@@ -198,7 +199,7 @@ impl Default for OutputState {
 
 struct WashRepl {
     input_state: InputState,
-    output_state: OutputState,
+    output_state: Arc<Mutex<OutputState>>,
     tui_dispatcher: Rc<RefCell<Dispatcher<Event>>>,
     tui_state: TuiWidgetState,
 }
@@ -207,7 +208,7 @@ impl Default for WashRepl {
     fn default() -> Self {
         WashRepl {
             input_state: InputState::default(),
-            output_state: OutputState::default(),
+            output_state: Arc::new(Mutex::new(OutputState::default())),
             tui_dispatcher: Rc::new(RefCell::new(Dispatcher::<Event>::new())),
             tui_state: TuiWidgetState::new(),
         }
@@ -232,7 +233,7 @@ impl WashRepl {
                 .split(main_chunks[0]);
 
             draw_input_panel(frame, &mut self.input_state, io_chunks[0]);
-            draw_output_panel(frame, &mut self.output_state, io_chunks[1]);
+            draw_output_panel(frame, Arc::clone(&self.output_state), io_chunks[1]);
             draw_smart_logger(frame, main_chunks[1], &self.tui_state, &self.tui_dispatcher);
         })?;
         Ok(())
@@ -258,11 +259,11 @@ impl WashRepl {
                 }
             }
             KeyCode::Up => {
-                if modifier == KeyModifiers::SHIFT
-                    && self.output_state.output_cursor > 0
-                    && self.output_state.output_scroll > 0
-                {
-                    self.output_state.output_cursor -= 1;
+                if modifier == KeyModifiers::SHIFT {
+                    let mut state = self.output_state.lock().unwrap();
+                    if state.output_cursor > 0 && state.output_scroll > 0 {
+                        state.output_cursor -= 1;
+                    }
                 } else if self.input_state.history_cursor > 0 && modifier == KeyModifiers::NONE {
                     self.input_state.history_cursor -= 1;
                     self.input_state.input =
@@ -271,10 +272,11 @@ impl WashRepl {
                 }
             }
             KeyCode::Down => {
-                if modifier == KeyModifiers::SHIFT
-                    && self.output_state.output_cursor < self.output_state.output.len()
-                {
-                    self.output_state.output_cursor += 1;
+                if modifier == KeyModifiers::SHIFT {
+                    let mut state = self.output_state.lock().unwrap();
+                    if state.output_cursor < state.output.len() {
+                        state.output_cursor += 1;
+                    }
                 } else if modifier == KeyModifiers::NONE {
                     if self.input_state.history.is_empty() {
                         return Ok(());
@@ -332,34 +334,64 @@ impl WashRepl {
                                 return Err("REPL Quit".into());
                             }
                             ReplCliCommand::Claims(claimscmd) => {
-                                match handle_claims(claimscmd, &mut self.output_state).await {
-                                    Ok(r) => r,
-                                    Err(e) => error!("Error handling claims: {}", e),
-                                };
+                                let output_state = Arc::clone(&self.output_state);
+                                std::thread::spawn(|| {
+                                    let mut rt = actix_rt::System::new("cmd");
+                                    rt.block_on(async {
+                                        match handle_claims(claimscmd, output_state).await {
+                                            Ok(r) => r,
+                                            Err(e) => error!("Error handling claims: {}", e),
+                                        };
+                                    });
+                                });
                             }
                             ReplCliCommand::Ctl(ctlcmd) => {
-                                match handle_ctl(ctlcmd, &mut self.output_state).await {
-                                    Ok(r) => r,
-                                    Err(e) => error!("Error handling ctl: {}", e),
-                                }
+                                let output_state = Arc::clone(&self.output_state);
+                                std::thread::spawn(|| {
+                                    let mut rt = actix_rt::System::new("cmd");
+                                    rt.block_on(async {
+                                        match handle_ctl(ctlcmd, output_state).await {
+                                            Ok(r) => r,
+                                            Err(e) => error!("Error handling ctl: {}", e),
+                                        };
+                                    });
+                                });
                             }
                             ReplCliCommand::Keys(keyscmd) => {
-                                match handle_keys(keyscmd, &mut self.output_state).await {
-                                    Ok(r) => r,
-                                    Err(e) => error!("Error handling key: {}", e),
-                                }
+                                let output_state = Arc::clone(&self.output_state);
+                                std::thread::spawn(|| {
+                                    let mut rt = actix_rt::System::new("cmd");
+                                    rt.block_on(async {
+                                        match handle_keys(keyscmd, output_state).await {
+                                            Ok(r) => r,
+                                            Err(e) => error!("Error handling key: {}", e),
+                                        };
+                                    });
+                                });
                             }
                             ReplCliCommand::Par(parcmd) => {
-                                match handle_par(parcmd, &mut self.output_state).await {
-                                    Ok(r) => r,
-                                    Err(e) => error!("Error handling par: {}", e),
-                                }
+                                let output_state = Arc::clone(&self.output_state);
+                                std::thread::spawn(|| {
+                                    let mut rt = actix_rt::System::new("cmd");
+                                    rt.block_on(async {
+                                        match handle_par(parcmd, output_state).await {
+                                            Ok(r) => r,
+                                            Err(e) => error!("Error handling par: {}", e),
+                                        };
+                                    });
+                                });
                             }
                             ReplCliCommand::Reg(regcmd) => {
-                                match handle_reg(regcmd, &mut self.output_state).await {
-                                    Ok(r) => r,
-                                    Err(e) => error!("Error handling reg: {}", e),
-                                }
+                                let output_state = Arc::clone(&self.output_state);
+                                std::thread::spawn(|| {
+                                    let mut rt = actix_rt::System::new("cmd");
+                                    rt.block_on(async {
+                                        match handle_reg(regcmd, output_state).await {
+                                            Ok(r) => r,
+                                            Err(e) => error!("Error handling reg: {}", e),
+                                        };
+                                    });
+                                });
                             }
                         }
                     }
@@ -521,31 +553,37 @@ async fn handle_up(cmd: UpCliCommand) -> Result<()> {
     Ok(())
 }
 
-async fn handle_claims(claims_cmd: ClaimsCliCommand, output_state: &mut OutputState) -> Result<()> {
+async fn handle_claims(
+    claims_cmd: ClaimsCliCommand,
+    output_state: Arc<Mutex<OutputState>>,
+) -> Result<()> {
     let output = crate::claims::handle_command(claims_cmd).await?;
     log_to_output(output_state, output);
     Ok(())
 }
 
-async fn handle_ctl(ctl_cmd: CtlCliCommand, output_state: &mut OutputState) -> Result<()> {
+async fn handle_ctl(ctl_cmd: CtlCliCommand, output_state: Arc<Mutex<OutputState>>) -> Result<()> {
     let output = crate::ctl::handle_command(ctl_cmd).await?;
     log_to_output(output_state, output);
     Ok(())
 }
 
-async fn handle_keys(keys_cmd: KeysCliCommand, output_state: &mut OutputState) -> Result<()> {
+async fn handle_keys(
+    keys_cmd: KeysCliCommand,
+    output_state: Arc<Mutex<OutputState>>,
+) -> Result<()> {
     let output = crate::keys::handle_command(keys_cmd)?;
     log_to_output(output_state, output);
     Ok(())
 }
 
-async fn handle_par(par_cmd: ParCliCommand, output_state: &mut OutputState) -> Result<()> {
+async fn handle_par(par_cmd: ParCliCommand, output_state: Arc<Mutex<OutputState>>) -> Result<()> {
     let output = crate::par::handle_command(par_cmd).await?;
     log_to_output(output_state, output);
     Ok(())
 }
 
-async fn handle_reg(reg_cmd: RegCliCommand, output_state: &mut OutputState) -> Result<()> {
+async fn handle_reg(reg_cmd: RegCliCommand, output_state: Arc<Mutex<OutputState>>) -> Result<()> {
     let output = crate::reg::handle_command(reg_cmd).await?;
     log_to_output(output_state, output);
     Ok(())
@@ -560,8 +598,9 @@ fn cleanup_terminal(terminal: &mut Terminal<tui::backend::CrosstermBackend<std::
 }
 
 /// Append a message to the output log
-fn log_to_output(state: &mut OutputState, out: String) {
+fn log_to_output(state: Arc<Mutex<OutputState>>, out: String) {
     // Reset output scroll to bottom
+    let mut state = state.lock().unwrap();
     state.output_cursor = state.output.len();
 
     let output_width = state.output_width - 2;
@@ -665,9 +704,10 @@ fn draw_input_panel(
 /// Display command output in the provided panel
 fn draw_output_panel(
     frame: &mut Frame<CrosstermBackend<Stdout>>,
-    state: &mut OutputState,
+    state: Arc<Mutex<OutputState>>,
     chunk: Rect,
 ) {
+    let mut state = state.lock().unwrap();
     let output_logs: String = state.output.iter().map(|h| format!(" {}\n", h)).collect();
 
     // Autoscroll if output overflows chunk height, adjusting for manual scroll with output_cursor
