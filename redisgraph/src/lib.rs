@@ -5,88 +5,93 @@
 
 #[macro_use]
 extern crate wascc_codec as codec;
-
-extern crate wasccgraph_common as common;
-
 #[macro_use]
 extern crate log;
-
-use codec::capabilities::{
-    CapabilityDescriptor, CapabilityProvider, Dispatcher, NullDispatcher, OperationDirection,
-    OP_GET_CAPABILITY_DESCRIPTOR,
+use actor_core::CapabilityConfiguration;
+use actor_graphdb::{
+    deserialize, serialize, DeleteGraphArgs, DeleteResponse, QueryGraphArgs, QueryResponse,
+    OP_DELETE, OP_QUERY,
 };
-use codec::core::{CapabilityConfiguration, OP_BIND_ACTOR, OP_REMOVE_ACTOR};
-use codec::{deserialize, serialize};
-
+use codec::capabilities::{CapabilityProvider, Dispatcher, NullDispatcher};
+use codec::core::{OP_BIND_ACTOR, OP_REMOVE_ACTOR};
+use redis::Connection;
+use redis::RedisResult;
+use redisgraph::{Graph, RedisGraphResult, ResultSet};
 use std::error::Error;
 use std::{
     collections::HashMap,
     sync::{Arc, RwLock},
 };
-
-use common::protocol::*;
-use redis::Connection;
-use redis::RedisResult;
-use redisgraph::{Graph, RedisGraphResult, ResultSet};
-
+mod conversions;
 mod rgraph;
 
-const CAPABILITY_ID: &str = "wascc:graphdb";
+const CAPABILITY_ID: &str = "wasmcloud:graphdb";
 const SYSTEM_ACTOR: &str = "system";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const REVISION: u32 = 2; // Increment for each crates publish
+
+type GraphHandlerResult = Result<Vec<u8>, Box<dyn Error + Send + Sync + 'static>>;
 
 // Enable the static_plugin feature in your Cargo.toml if you want to statically
 // embed this capability instead of loading the dynamic library at runtime.
 
 #[cfg(not(feature = "static_plugin"))]
-capability_provider!(WasccRedisgraphProvider, WasccRedisgraphProvider::new);
+capability_provider!(RedisgraphProvider, RedisgraphProvider::new);
 
-pub struct WasccRedisgraphProvider {
-    dispatcher: RwLock<Box<dyn Dispatcher>>,
+#[derive(Clone)]
+pub struct RedisgraphProvider {
+    dispatcher: Arc<RwLock<Box<dyn Dispatcher>>>,
     clients: Arc<RwLock<HashMap<String, redis::Client>>>,
 }
 
-impl Default for WasccRedisgraphProvider {
+impl Default for RedisgraphProvider {
     fn default() -> Self {
         let _ = env_logger::builder().format_module_path(false).try_init();
 
-        WasccRedisgraphProvider {
-            dispatcher: RwLock::new(Box::new(NullDispatcher::new())),
+        RedisgraphProvider {
+            dispatcher: Arc::new(RwLock::new(Box::new(NullDispatcher::new()))),
             clients: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 }
 
-impl WasccRedisgraphProvider {
+impl RedisgraphProvider {
     pub fn new() -> Self {
         Self::default()
     }
 
     // Handles a request to query a graph, passing the query on to the RedisGraph client
-    fn query_graph(&self, actor: &str, query: QueryRequest) -> Result<Vec<u8>, Box<dyn Error>> {
-        trace!("Querying graph database: {:?}", query);
-        let mut g = self.open_graph(actor, &query.graph_name)?;
+    fn query_graph(&self, actor: &str, query: QueryGraphArgs) -> GraphHandlerResult {
+        let mut g = self
+            .open_graph(actor, &query.graph_name)
+            .map_err(|e| format!("{}", e))?;
         let rs: RedisGraphResult<ResultSet> = g.query(&query.query);
         match rs {
-            Ok(rs) => Ok(serialize(&to_common_resultset(rs)?)?),
+            Ok(rs) => {
+                let response = QueryResponse {
+                    result_set: to_common_resultset(rs)?,
+                };
+                Ok(serialize(response)?)
+            }
             Err(e) => Err(format!("Graph query failure: {:?}", e).into()),
         }
     }
 
     // Handles a request to delete a graph
-    fn delete_graph(&self, actor: &str, delete: DeleteRequest) -> Result<Vec<u8>, Box<dyn Error>> {
-        let g = self.open_graph(actor, &delete.graph_name)?; // Ensure Graph exists
+    fn delete_graph(&self, actor: &str, delete: DeleteGraphArgs) -> GraphHandlerResult {
+        let g = self
+            .open_graph(actor, &delete.graph_name)
+            .map_err(|e| format!("{}", e))?; // Ensure Graph exists
         let rs: RedisGraphResult<()> = g.delete();
         match rs {
-            Ok(_) => Ok(vec![]),
+            Ok(_) => Ok(serialize(DeleteResponse { success: true })?),
             Err(e) => Err(format!("Failed to delete graph: {:?}", e).into()),
         }
     }
 
     // Called when a previously bound actor is removed from the host. This allows
     // us to clean up resources (drop the client) used by the actor
-    fn deconfigure(&self, actor: &str) -> Result<Vec<u8>, Box<dyn Error>> {
+    fn deconfigure(&self, actor: &str) -> GraphHandlerResult {
         if self.clients.write().unwrap().remove(actor).is_none() {
             warn!("Attempted to de-configure non-existent actor: {}", actor);
         }
@@ -95,9 +100,9 @@ impl WasccRedisgraphProvider {
 
     // Called when an actor is bound to this capability provider by the host
     // We create a Redis client in response to this message
-    fn configure(&self, config: CapabilityConfiguration) -> Result<Vec<u8>, Box<dyn Error>> {
+    fn configure(&self, config: CapabilityConfiguration) -> GraphHandlerResult {
         trace!("Configuring provider for {}", &config.module);
-        let c = rgraph::initialize_client(config.clone())?;
+        let c = rgraph::initialize_client(config.clone()).map_err(|e| format!("{}", e))?;
 
         self.clients.write().unwrap().insert(config.module, c);
         Ok(vec![])
@@ -120,45 +125,35 @@ impl WasccRedisgraphProvider {
         let g = rgraph::open_graph(conn, &graph)?;
         Ok(g)
     }
-
-    fn get_descriptor(&self) -> Result<Vec<u8>, Box<dyn Error>> {
-        Ok(serialize(
-            CapabilityDescriptor::builder()
-                .id(CAPABILITY_ID)
-                .name("waSCC Graph Database Provider (RedisGraph)")
-                .long_description("A capability provider exposing Cypher-based RedisGraph database access to waSCC actors")
-                .version(VERSION)
-                .revision(REVISION)
-                .with_operation(
-                    OP_QUERY,
-                    OperationDirection::ToProvider,
-                    "Executes a Cypher query against the database and returns the results"
-                )
-                .with_operation(
-                    OP_DELETE,
-                    OperationDirection::ToProvider,
-                    "Deletes a graph database"
-                )
-                .build()
-        )?)
-    }
 }
 
-// Force a serialization trip between the internal redisgraph::ResultSet type and
-// the shared common protocol ResultSet type. If this works, then we should be
-// reasonably confident the guest graph library can unpack this within the actor
+// Convert the redisgraph::ResultSet type to the common actor_graphdb::ResultSet
+// type. This ensures guests using the actor_graphdb library (e.g. Actors) can
+// interact with the common ResultSet type.
 // WARNING: this could fail if redisgraph is upgraded and changes the shape of its
 // ResultSet type
-fn to_common_resultset(rs: redisgraph::ResultSet) -> Result<common::ResultSet, Box<dyn Error>> {
-    let input = serialize(&rs)?;
-    let output: common::ResultSet = deserialize(&input)?;
-    Ok(output)
+fn to_common_resultset(
+    rs: redisgraph::ResultSet,
+) -> Result<actor_graphdb::ResultSet, Box<dyn Error + Send + Sync>> {
+    let columns = rs
+        .columns
+        .into_iter()
+        .map(conversions::redisgraph_column_to_common)
+        .collect::<Vec<_>>();
+    let statistics = rs.statistics.0;
+    Ok(actor_graphdb::ResultSet {
+        columns,
+        statistics,
+    })
 }
 
-impl CapabilityProvider for WasccRedisgraphProvider {
+impl CapabilityProvider for RedisgraphProvider {
     // Invoked by the runtime host to give this provider plugin the ability to communicate
     // with actors
-    fn configure_dispatch(&self, dispatcher: Box<dyn Dispatcher>) -> Result<(), Box<dyn Error>> {
+    fn configure_dispatch(
+        &self,
+        dispatcher: Box<dyn Dispatcher>,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         trace!("Dispatcher received.");
         let mut lock = self.dispatcher.write().unwrap();
         *lock = dispatcher;
@@ -169,7 +164,12 @@ impl CapabilityProvider for WasccRedisgraphProvider {
     // Invoked by host runtime to allow an actor to make use of the capability
     // All providers MUST handle the OP_BIND_ACTOR and OP_REMOVE_ACTOR messages, even
     // if no resources are provisioned or cleaned up
-    fn handle_call(&self, actor: &str, op: &str, msg: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+    fn handle_call(
+        &self,
+        actor: &str,
+        op: &str,
+        msg: &[u8],
+    ) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
         trace!("Received host call from {}, operation - {}", actor, op);
 
         match op {
@@ -177,8 +177,9 @@ impl CapabilityProvider for WasccRedisgraphProvider {
             OP_QUERY => self.query_graph(actor, deserialize(msg)?),
             OP_DELETE => self.delete_graph(actor, deserialize(msg)?),
             OP_REMOVE_ACTOR if actor == SYSTEM_ACTOR => self.deconfigure(actor),
-            OP_GET_CAPABILITY_DESCRIPTOR if actor == SYSTEM_ACTOR => self.get_descriptor(),
             _ => Err("bad dispatch".into()),
         }
     }
+
+    fn stop(&self) {}
 }
