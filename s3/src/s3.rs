@@ -1,5 +1,5 @@
 use crate::FileUpload;
-use codec::core::CapabilityConfiguration;
+use actor_core::CapabilityConfiguration;
 use futures::TryStreamExt;
 use rusoto_core::credential::{DefaultCredentialsProvider, StaticProvider};
 use rusoto_core::Region;

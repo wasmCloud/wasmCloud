@@ -1,35 +1,30 @@
-//! # S3 implementation of the waSCC blob store capability provider API
+//! # S3 implementation of the wasmCloud blob store capability provider API
 //!
-//! Provides an implementation of the wascc:blobstore contract for S3 and
+//! Provides an implementation of the wasmcloud:blobstore contract for S3 and
 //! S3-compatible (e.g. Minio) products.
 
 #[macro_use]
 extern crate wascc_codec as codec;
-
 #[macro_use]
 extern crate log;
 
-use codec::capabilities::{
-    CapabilityDescriptor, CapabilityProvider, Dispatcher, NullDispatcher, OperationDirection,
-    OP_GET_CAPABILITY_DESCRIPTOR,
-};
+use actor_blobstore::*;
+use actor_core::CapabilityConfiguration;
+use codec::capabilities::{CapabilityProvider, Dispatcher, NullDispatcher};
 use codec::core::{OP_BIND_ACTOR, OP_REMOVE_ACTOR};
-use codec::deserialize;
-use codec::{blobstore::*, serialize};
+use codec::{deserialize, serialize};
 use rusoto_s3::S3Client;
 use std::error::Error;
 use std::{
     collections::HashMap,
     sync::{Arc, RwLock},
 };
-use wascc_codec::core::CapabilityConfiguration;
-
 mod s3;
 
 #[cfg(not(feature = "static_plugin"))]
 capability_provider!(S3Provider, S3Provider::new);
 
-const CAPABILITY_ID: &str = "wascc:blobstore";
+const CAPABILITY_ID: &str = "wasmcloud:blobstore";
 const SYSTEM_ACTOR: &str = "system";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const REVISION: u32 = 2; // Increment for each crates publish
@@ -50,10 +45,11 @@ impl FileUpload {
 }
 
 /// AWS S3 implementation of the `wascc:blobstore` specification
+#[derive(Clone)]
 pub struct S3Provider {
     dispatcher: Arc<RwLock<Box<dyn Dispatcher>>>,
-    clients: RwLock<HashMap<String, Arc<S3Client>>>,
-    uploads: RwLock<HashMap<String, FileUpload>>,
+    clients: Arc<RwLock<HashMap<String, Arc<S3Client>>>>,
+    uploads: Arc<RwLock<HashMap<String, FileUpload>>>,
 }
 
 impl Default for S3Provider {
@@ -65,8 +61,8 @@ impl Default for S3Provider {
 
         S3Provider {
             dispatcher: Arc::new(RwLock::new(Box::new(NullDispatcher::new()))),
-            clients: RwLock::new(HashMap::new()),
-            uploads: RwLock::new(HashMap::new()),
+            clients: Arc::new(RwLock::new(HashMap::new())),
+            uploads: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 }
@@ -127,7 +123,7 @@ impl S3Provider {
         actor: &str,
         chunk: FileChunk,
     ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
-        let key = upload_key(&chunk.container, &chunk.id, &actor);
+        let key = upload_key(&chunk.container.id, &chunk.id, &actor);
         self.uploads
             .write()
             .unwrap()
@@ -152,11 +148,11 @@ impl S3Provider {
         actor: &str,
         chunk: FileChunk,
     ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
-        let key = upload_key(&chunk.container, &chunk.id, &actor);
+        let key = upload_key(&chunk.container.id, &chunk.id, &actor);
 
         let upload = FileUpload {
             chunks: vec![],
-            container: chunk.container.to_string(),
+            container: chunk.container.id,
             id: chunk.id.to_string(),
             total_bytes: chunk.total_bytes,
             expected_chunks: expected_chunks(chunk.total_bytes, chunk.chunk_size),
@@ -175,7 +171,7 @@ impl S3Provider {
         let mut rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(s3::remove_object(
             &self.clients.read().unwrap()[actor],
-            &blob.container,
+            &blob.container.id,
             &blob.id,
         ))?;
 
@@ -190,20 +186,20 @@ impl S3Provider {
         let mut rt = tokio::runtime::Runtime::new().unwrap();
         let info = rt.block_on(s3::head_object(
             &self.clients.read().unwrap()[actor],
-            &blob.container,
+            &blob.container.id,
             &blob.id,
         ));
 
         let blob = if let Ok(ob) = info {
             Blob {
                 id: blob.id.to_string(),
-                container: blob.container.to_string(),
+                container: blob.container,
                 byte_size: ob.content_length.unwrap() as u64,
             }
         } else {
             Blob {
                 id: "none".to_string(),
-                container: "none".to_string(),
+                container: Container::new("none".to_string()),
                 byte_size: 0,
             }
         };
@@ -225,7 +221,7 @@ impl S3Provider {
             v.iter()
                 .map(|ob| Blob {
                     id: ob.key.clone().unwrap(),
-                    container: container.id.to_string(),
+                    container: container.clone(),
                     byte_size: ob.size.unwrap() as u64,
                 })
                 .collect()
@@ -245,7 +241,7 @@ impl S3Provider {
 
         let d = self.dispatcher.clone();
         let c = self.clients.read().unwrap()[&actor].clone();
-        let container = request.container.to_string();
+        let container = request.container.id.to_string();
         let chunk_size = request.chunk_size;
         let id = request.id.to_string();
         let ctx = request.context.clone();
@@ -282,61 +278,6 @@ impl S3Provider {
 
         Ok(vec![])
     }
-
-    fn get_descriptor(&self) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
-        use OperationDirection::{ToActor, ToProvider};
-        Ok(serialize(
-            CapabilityDescriptor::builder()
-                .id(CAPABILITY_ID)
-                .name("waSCC Blob Store Provider (S3)")
-                .long_description(
-                    "A waSCC blob store capability provider exposing an S3 client to actors",
-                )
-                .version(VERSION)
-                .revision(REVISION)
-                .with_operation(
-                    OP_CREATE_CONTAINER,
-                    ToProvider,
-                    "Creates a new container/bucket",
-                )
-                .with_operation(
-                    OP_REMOVE_CONTAINER,
-                    ToProvider,
-                    "Removes a container/bucket",
-                )
-                .with_operation(
-                    OP_LIST_OBJECTS,
-                    ToProvider,
-                    "Lists objects within a container",
-                )
-                .with_operation(
-                    OP_UPLOAD_CHUNK,
-                    ToProvider,
-                    "Uploads a chunk of a blob to an item in a container. Must start upload first",
-                )
-                .with_operation(
-                    OP_START_UPLOAD,
-                    ToProvider,
-                    "Starts the chunked upload of a blob",
-                )
-                .with_operation(
-                    OP_START_DOWNLOAD,
-                    ToProvider,
-                    "Starts the chunked download of a blob",
-                )
-                .with_operation(
-                    OP_GET_OBJECT_INFO,
-                    ToProvider,
-                    "Retrieves metadata about a blob",
-                )
-                .with_operation(
-                    OP_RECEIVE_CHUNK,
-                    ToActor,
-                    "Receives a chunk of a blob for download",
-                )
-                .build(),
-        )?)
-    }
 }
 
 async fn dispatch_chunk(
@@ -365,7 +306,7 @@ async fn dispatch_chunk(
 
     let fc = FileChunk {
         sequence_no: idx + 1,
-        container,
+        container: Container::new(container),
         id,
         chunk_size,
         total_bytes: byte_size,
@@ -409,7 +350,6 @@ impl CapabilityProvider for S3Provider {
         match op {
             OP_BIND_ACTOR if actor == SYSTEM_ACTOR => self.configure(deserialize(msg)?),
             OP_REMOVE_ACTOR if actor == SYSTEM_ACTOR => self.deconfigure(actor),
-            OP_GET_CAPABILITY_DESCRIPTOR if actor == SYSTEM_ACTOR => self.get_descriptor(),
             OP_CREATE_CONTAINER => self.create_container(actor, deserialize(msg)?),
             OP_REMOVE_CONTAINER => self.remove_container(actor, deserialize(msg)?),
             OP_REMOVE_OBJECT => self.remove_object(actor, deserialize(msg)?),
@@ -421,6 +361,11 @@ impl CapabilityProvider for S3Provider {
 
             _ => Err("bad dispatch".into()),
         }
+    }
+
+    /// No cleanup needed
+    fn stop(&self) {
+        ()
     }
 }
 
@@ -444,7 +389,12 @@ mod test {
 
     // ***! These tests MUST be run in the presence of a minio server
     // The easiest option is just to run the default minio docker image as a
-    // service
+    // service. The following command will get you up and running for these tests.
+    //
+    // (Don't use this setup for production)
+    // docker run -p 9000:9000 --name minio \
+    //   --env MINIO_ACCESS_KEY="minioadmin" \
+    //   --env MINIO_SECRET_KEY="minioadmin" bitnami/minio:latest
 
     #[test]
     fn test_create_and_remove_bucket() {
@@ -495,7 +445,7 @@ mod test {
             .map(|(idx, v)| FileChunk {
                 chunk_bytes: v.to_vec(),
                 chunk_size: 100,
-                container: "updownbucket".to_string(),
+                container: Container::new("updownbucket".to_string()),
                 id: "updowntestfile".to_string(),
                 total_bytes: data.len() as u64,
                 sequence_no: idx as u64 + 1,
@@ -506,7 +456,7 @@ mod test {
         let first_chunk = FileChunk {
             chunk_bytes: vec![],
             chunk_size: 100,
-            container: "updownbucket".to_string(),
+            container: Container::new("updownbucket".to_string()),
             id: "updowntestfile".to_string(),
             total_bytes: data.len() as u64,
             sequence_no: 0,
@@ -528,7 +478,7 @@ mod test {
         }
         let req = StreamRequest {
             chunk_size: 100,
-            container: "updownbucket".to_string(),
+            container: Container::new("updownbucket".to_string()),
             id: "updowntestfile".to_string(),
             context: Some("test1".to_string()),
         };
@@ -569,7 +519,7 @@ mod test {
             .map(|(idx, v)| FileChunk {
                 chunk_bytes: v.to_vec(),
                 chunk_size: 100,
-                container: "uploadbucket".to_string(),
+                container: Container::new("uploadbucket".to_string()),
                 id: "testfile".to_string(),
                 total_bytes: data.len() as u64,
                 sequence_no: idx as u64 + 1,
@@ -580,7 +530,7 @@ mod test {
         let first_chunk = FileChunk {
             chunk_bytes: vec![],
             chunk_size: 100,
-            container: "uploadbucket".to_string(),
+            container: Container::new("uploadbucket".to_string()),
             id: "testfile".to_string(),
             total_bytes: data.len() as u64,
             sequence_no: 0,
@@ -609,7 +559,7 @@ mod test {
         assert_eq!("testfile", object_list.blobs[0].id);
 
         let blob = Blob {
-            container: "uploadbucket".to_string(),
+            container: Container::new("uploadbucket".to_string()),
             id: "testfile".to_string(),
             byte_size: 0,
         };
