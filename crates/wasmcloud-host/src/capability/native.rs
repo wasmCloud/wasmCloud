@@ -24,7 +24,7 @@ impl NativeCapability {
         if archive.claims().is_none() {
             return Err("No claims found in provider archive file".into());
         }
-        let link = link_target_name.unwrap_or("default".to_string());
+        let link = normalize_link_name(link_target_name.unwrap_or("default".to_string()));
 
         let target = Host::native_target();
 
@@ -55,7 +55,7 @@ impl NativeCapability {
         claims: Claims<wascap::jwt::CapabilityProvider>,
     ) -> Result<Self> {
         let b: Box<dyn CapabilityProvider> = Box::new(instance);
-        let link = link_target_name.unwrap_or("default".to_string());
+        let link = normalize_link_name(link_target_name.unwrap_or("default".to_string()));
 
         Ok(NativeCapability {
             plugin: Some(b),
@@ -68,5 +68,14 @@ impl NativeCapability {
     /// Returns the unique ID (public key/subject) of the capability provider
     pub fn id(&self) -> String {
         self.claims.subject.to_string()
+    }
+}
+
+/// Helper function to unwrap link name. Returns link name if exists and non-empty, "default" otherwise
+pub(crate) fn normalize_link_name(link_name: String) -> String {
+    if link_name.trim().is_empty() {
+        "default".to_string()
+    } else {
+        link_name
     }
 }

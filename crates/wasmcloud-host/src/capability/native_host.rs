@@ -1,4 +1,4 @@
-use crate::capability::native::NativeCapability;
+use crate::capability::native::{normalize_link_name, NativeCapability};
 use crate::control_interface::ctlactor::{ControlInterface, PublishEvent};
 
 use crate::dispatch::{Invocation, InvocationResponse, ProviderDispatcher, WasmCloudEntity};
@@ -96,6 +96,7 @@ impl Handler<Initialize> for NativeCapabilityHost {
 
         let b = MessageBus::from_hostlocal_registry(&state.kp.public_key());
         let b2 = b.clone();
+        let link_name = normalize_link_name(state.cap.link_name.to_string());
         let entity = WasmCloudEntity::Capability {
             id: state.cap.claims.subject.to_string(),
             contract_id: state
@@ -106,7 +107,7 @@ impl Handler<Initialize> for NativeCapabilityHost {
                 .unwrap()
                 .capid
                 .to_string(),
-            link_name: state.cap.link_name.to_string(),
+            link_name: link_name.to_string(),
         };
 
         let nativedispatch = ProviderDispatcher::new(
@@ -139,7 +140,7 @@ impl Handler<Initialize> for NativeCapabilityHost {
         });
         let epl = EnforceLocalProviderLinks {
             provider_id: state.cap.claims.subject.to_string(),
-            link_name: state.cap.link_name.to_string(),
+            link_name: link_name.to_string(),
         };
         let _ = block_on(async move {
             // If the target provider for any known links involving this provider
@@ -149,7 +150,7 @@ impl Handler<Initialize> for NativeCapabilityHost {
         let cp = ControlInterface::from_hostlocal_registry(&state.kp.public_key());
         cp.do_send(PublishEvent {
             event: ControlEvent::ProviderStarted {
-                link_name: state.cap.link_name.to_string(),
+                link_name,
                 provider_id: state.cap.claims.subject.to_string(),
                 contract_id: state
                     .cap

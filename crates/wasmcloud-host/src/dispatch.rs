@@ -318,6 +318,12 @@ pub(crate) fn wapc_host_callback(
         operation
     );
 
+    let link_name = if link_name.trim().is_empty() {
+        // Some actor SDKs may not specify a link field by default
+        "default"
+    } else {
+        link_name
+    };
     // Look up the public key of the provider bound to the origin actor
     // for the given capability contract ID.
     let bus = MessageBus::from_hostlocal_registry(&kp.public_key());
@@ -362,17 +368,11 @@ fn invocation_from_callback(
     provider_id: &str,
     payload: &[u8],
 ) -> Invocation {
-    let link_name = if bd.trim().is_empty() {
-        // Some actor SDKs may not specify a link field by default
-        "default".to_string()
-    } else {
-        bd.to_string()
-    };
     let target = if ns.len() == 56 && ns.starts_with("M") {
         WasmCloudEntity::Actor(ns.to_string())
     } else {
         WasmCloudEntity::Capability {
-            link_name,
+            link_name: bd.to_string(),
             contract_id: ns.to_string(),
             id: provider_id.to_string(),
         }
