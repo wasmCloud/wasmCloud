@@ -9,10 +9,10 @@ section: default
 priority: extra
 maintainer: Bill Young <bill@byoung.io>
 description: |
-  waSCC Shell
-   A single CLI to handle all of your waSCC tooling needs
-vendor: waSCC
-homepage: https://wascc.dev
+  wasmCloud Shell
+   A single CLI to handle all of your wasmCloud tooling needs
+vendor: wasmCloud
+homepage: https://wasmCloud.dev
 license: Apache-2.0
 files:
   target/armv7-unknown-linux-gnueabihf/release/wash: "/usr/local/bin/wash"

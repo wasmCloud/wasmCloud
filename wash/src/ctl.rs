@@ -51,11 +51,11 @@ pub(crate) struct ConnectionOpts {
     #[structopt(short = "n", long = "ns-prefix", default_value = "default")]
     ns_prefix: String,
 
-    /// Timeout length for RPC, defaults to 5 seconds
+    /// Timeout length for RPC, defaults to 1 second
     #[structopt(
         short = "t",
         long = "rpc-timeout",
-        default_value = "5",
+        default_value = "1",
         env = "WASH_RPC_TIMEOUT"
     )]
     rpc_timeout: u64,
@@ -190,7 +190,7 @@ pub(crate) struct GetHostsCommand {
     #[structopt(flatten)]
     pub(crate) output: Output,
 
-    #[structopt(long = "timeout", default_value = "2")]
+    #[structopt(long = "timeout", default_value = "1")]
     timeout: u64,
 }
 
@@ -236,7 +236,8 @@ pub(crate) struct StartActorCommand {
     #[structopt(short = "c", long = "constraint", name = "constraints")]
     constraints: Option<Vec<String>>,
 
-    #[structopt(long = "timeout", default_value = "2")]
+    /// Timeout to wait for actor start acknowledgement, defaults to 1 second
+    #[structopt(long = "timeout", default_value = "1")]
     timeout: u64,
 }
 
@@ -264,7 +265,8 @@ pub(crate) struct StartProviderCommand {
     #[structopt(short = "c", long = "constraint", name = "constraints")]
     constraints: Option<Vec<String>>,
 
-    #[structopt(long = "timeout", default_value = "5")]
+    /// Timeout to wait for provider start acknowledgement, defaults to 1 second
+    #[structopt(long = "timeout", default_value = "1")]
     timeout: u64,
 }
 
@@ -344,7 +346,7 @@ pub(crate) async fn handle_command(command: CtlCliCommand) -> Result<String> {
             debug!(target: WASH_CMD_INFO, "Invocation response {:?}", ir);
             match ir.error {
                 Some(e) => format_output(
-                    format!("Error invoking actor: {}", e),
+                    format!("\nError invoking actor: {}", e),
                     json!({ "error": e }),
                     &output,
                 ),
@@ -352,7 +354,7 @@ pub(crate) async fn handle_command(command: CtlCliCommand) -> Result<String> {
                     //TODO(brooksmtownsend): String::from_utf8_lossy should be decoder only if one is not available
                     let call_response = String::from_utf8_lossy(&ir.msg);
                     format_output(
-                        format!("Call response (raw): {}", call_response),
+                        format!("\nCall response (raw): {}", call_response),
                         json!({ "response": call_response }),
                         &output,
                     )
@@ -409,14 +411,14 @@ pub(crate) async fn handle_command(command: CtlCliCommand) -> Result<String> {
             match advertise_link(cmd.clone()).await {
                 Ok(_) => format_output(
                     format!(
-                        "Advertised link ({}) <-> ({}) successfully",
+                        "\nAdvertised link ({}) <-> ({}) successfully",
                         cmd.actor_id, cmd.provider_id
                     ),
                     json!({"actor_id": cmd.actor_id, "provider_id": cmd.provider_id, "result": "published"}),
                     &cmd.output,
                 ),
                 Err(e) => format_output(
-                    format!("Error advertising link: {}", e),
+                    format!("\nError advertising link: {}", e),
                     json!({ "error": format!("{}", e) }),
                     &cmd.output,
                 ),
@@ -435,12 +437,12 @@ pub(crate) async fn handle_command(command: CtlCliCommand) -> Result<String> {
             );
             match start_actor(cmd).await {
                 Ok(r) => format_output(
-                    format!("Actor starting on host {}", r.host_id),
+                    format!("\nActor starting on host {}", r.host_id),
                     json!({ "ack": r }),
                     &output,
                 ),
                 Err(e) => format_output(
-                    format!("Error starting actor: {}", e),
+                    format!("\nError starting actor: {}", e),
                     json!({ "error": format!("{}", e) }),
                     &output,
                 ),
@@ -459,12 +461,12 @@ pub(crate) async fn handle_command(command: CtlCliCommand) -> Result<String> {
             );
             match start_provider(cmd).await {
                 Ok(r) => format_output(
-                    format!("Provider starting on host {}", r.host_id),
+                    format!("\nProvider starting on host {}", r.host_id),
                     json!({ "ack": r }),
                     &output,
                 ),
                 Err(e) => format_output(
-                    format!("Error starting provider: {}", e),
+                    format!("\nError starting provider: {}", e),
                     json!({ "error": format!("{}", e) }),
                     &output,
                 ),
@@ -481,12 +483,12 @@ pub(crate) async fn handle_command(command: CtlCliCommand) -> Result<String> {
             debug!(target: WASH_CMD_INFO, "Stop actor ack: {:?}", ack);
             match ack.failure {
                 Some(f) => format_output(
-                    format!("Error stopping actor: {}", f),
+                    format!("\nError stopping actor: {}", f),
                     json!({ "error": f }),
                     &output,
                 ),
                 None => format_output(
-                    format!("Stopping actor: {}", cmd.actor_id),
+                    format!("\nStopping actor: {}", cmd.actor_id),
                     json!({ "ack": ack }),
                     &output,
                 ),
@@ -503,12 +505,12 @@ pub(crate) async fn handle_command(command: CtlCliCommand) -> Result<String> {
             debug!(target: WASH_CMD_INFO, "Stop provider ack: {:?}", ack);
             match ack.failure {
                 Some(f) => format_output(
-                    format!("Error stopping provider: {}", f),
+                    format!("\nError stopping provider: {}", f),
                     json!({ "error": f }),
                     &output,
                 ),
                 None => format_output(
-                    format!("Stopping provider: {}", cmd.provider_id),
+                    format!("\nStopping provider: {}", cmd.provider_id),
                     json!({ "ack": ack }),
                     &output,
                 ),
@@ -530,12 +532,12 @@ pub(crate) async fn handle_command(command: CtlCliCommand) -> Result<String> {
             );
             match update_actor(cmd.clone()).await {
                 Ok(r) => format_output(
-                    format!("Actor {} updated to {}", cmd.actor_id, cmd.new_actor_ref),
+                    format!("\nActor {} updated to {}", cmd.actor_id, cmd.new_actor_ref),
                     json!({ "ack": r }),
                     &output,
                 ),
                 Err(e) => format_output(
-                    format!("Error updating actor: {}", e),
+                    format!("\nError updating actor: {}", e),
                     json!({ "error": format!("{}", e) }),
                     &output,
                 ),

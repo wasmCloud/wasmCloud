@@ -12,11 +12,12 @@ use std::io::prelude::*;
 use structopt::clap::AppSettings;
 use structopt::StructOpt;
 
-const PROVIDER_ARCHIVE_MEDIA_TYPE: &str = "application/vnd.wascc.provider.archive.layer.v1+par";
-const PROVIDER_ARCHIVE_CONFIG_MEDIA_TYPE: &str = "application/vnd.wascc.provider.archive.config";
+const PROVIDER_ARCHIVE_MEDIA_TYPE: &str = "application/vnd.wasmcloud.provider.archive.layer.v1+par";
+const PROVIDER_ARCHIVE_CONFIG_MEDIA_TYPE: &str =
+    "application/vnd.wasmcloud.provider.archive.config";
 const PROVIDER_ARCHIVE_FILE_EXTENSION: &str = ".par.gz";
 const WASM_MEDIA_TYPE: &str = "application/vnd.module.wasm.content.layer.v1+wasm";
-const WASM_CONFIG_MEDIA_TYPE: &str = "application/vnd.wascc.actor.archive.config";
+const WASM_CONFIG_MEDIA_TYPE: &str = "application/vnd.wasmcloud.actor.archive.config";
 const OCI_MEDIA_TYPE: &str = "application/vnd.oci.image.layer.v1.tar";
 const WASM_FILE_EXTENSION: &str = ".wasm";
 

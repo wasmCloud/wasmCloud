@@ -1,13 +1,13 @@
 [package]
 name = "wash-cli"
-version = "0.1.17"
+version = "0.1.18"
 authors = ["Brooks Townsend <brooksmtownsend@gmail.com>"]
 edition = "2018"
 repository = "https://github.com/wasmcloud/wash"
 description = "wasmCloud Shell (wash) CLI tool"
 license = "Apache-2.0"
 readme = "README.md"
-keywords = ["webassembly", "wasmcloud", "wash"]
+keywords = ["webassembly", "wasmcloud", "wash", "cli"]
 categories = ["wasm", "command-line-utilities"]
 
 [badges]

@@ -42,11 +42,11 @@ pub(crate) enum ParCliCommand {
 
 #[derive(StructOpt, Debug, Clone)]
 pub(crate) struct CreateCommand {
-    /// Capability contract ID (e.g. wascc:messaging or wascc:keyvalue).
+    /// Capability contract ID (e.g. wasmcloud:messaging or wasmcloud:keyvalue).
     #[structopt(short = "c", long = "capid")]
     capid: String,
 
-    /// Vendor string to help identify the publisher of the provider (e.g. Redis, Cassandra, waSCC, etc). Not unique.
+    /// Vendor string to help identify the publisher of the provider (e.g. Redis, Cassandra, wasmCloud, etc). Not unique.
     #[structopt(short = "v", long = "vendor")]
     vendor: String,
 
