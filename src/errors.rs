@@ -67,7 +67,7 @@ impl StdError for Error {
             ErrorKind::TokenTooEarly => "Token cannot be used yet",
             ErrorKind::InvalidAlgorithm => "Invalid JWT algorithm",
             ErrorKind::MissingIssuer => "Missing issuer claim",
-            ErrorKind::MissingSubject=> "Missing sub claim",
+            ErrorKind::MissingSubject => "Missing sub claim",
         }
     }
 
@@ -109,8 +109,11 @@ impl fmt::Display for Error {
                 write!(f, "Invalid JWT algorithm. WASCAP only supports Ed25519")
             }
             ErrorKind::MissingIssuer => {
-                write!(f, "Invalid JWT. WASCAP requires an issuer claim to be present")
-            },
+                write!(
+                    f,
+                    "Invalid JWT. WASCAP requires an issuer claim to be present"
+                )
+            }
             ErrorKind::MissingSubject => {
                 write!(f, "Invalid JWT. WASCAP requires a sub claim to be present")
             }

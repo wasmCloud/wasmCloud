@@ -1,17 +1,14 @@
 ![crates.io](https://img.shields.io/crates/v/wascap.svg)&nbsp;
-![Rust](https://github.com/wascc/wascap/workflows/Rust/badge.svg)&nbsp;
+![Rust](https://github.com/wasmcloud/wascap/workflows/Rust/badge.svg)&nbsp;
 ![license](https://img.shields.io/crates/l/wascap.svg)
 
 # WASCAP
 
-In the [wasmCloud](https://wasmcloud.dev) runtime, each actor securely declares the set of capabilities it requires. This library and its associated binary are used to embed, extract, and validate JSON Web Tokens (JWT) containing these capability attestations, as well as the hash of the `wasm` file and a provable issuer for verifying module provenance.
+In the [wasmCloud](https://wasmcloud.dev) host runtime, each actor securely declares the set of capabilities it requires. This library is used to embed, extract, and validate JSON Web Tokens (JWT) containing these capability attestations, as well as the hash of the `wasm` file and a provable issuer for verifying module provenance.
 
-If you just want the CLI that signs and examines capabilities claims, then you can install it with cargo:
-```
-$ cargo install wascap --features "cli"
-```
+If you want to use the CLI that lets you sign and examine module claims, then you can install the [wash](https://github.com/wasmCloud/wash) CLI and use the `wash claims` set of commands. _Note that earlier versions of `wascap` came with a CLI. This is no longer available and has been supercede by the `wash` CLI._
 
-While there are some standard, well-known claims already defined in the library (such as `wascc:messaging` and `wascc:keyvalue`), you can add custom claims in your own namespaces.
+While there are some standard, well-known claims already defined in the library (such as `wasmcloud:messaging` and `wasmcloud:keyvalue`), you can add custom claims in your own namespaces.
 
 The following example illustrates embedding a new set of claims into a WebAssembly module, then extracting, validating, and examining those claims:
 
@@ -49,10 +46,10 @@ assert_eq!(extracted.claims.issuer, issuer.public_key());
 
 The `Ed25519` key functionality is provided by the [nkeys](https://docs.rs/nkeys) crate.
 
-The `wascap` CLI allows you to examine and sign WebAssembly files from a terminal prompt:
+The `wash` CLI allows you to examine and sign WebAssembly files from a terminal prompt:
 
 ```terminal
- $ wascap caps examples/signed_loop.wasm
+ $ wash claims inspect examples/signed_loop.wasm
  ╔════════════════════════════════════════════════════════════════════════╗
  ║                          Secure Actor - Module                         ║
  ╠═════════════╦══════════════════════════════════════════════════════════╣

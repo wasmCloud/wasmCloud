@@ -1,26 +1,12 @@
-// Copyright 2015-2019 Capital One Services, LLC
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 //! A set of standard names for capabilities that can be provided by a host
-pub const MESSAGING: &str = "wascc:messaging";
-pub const KEY_VALUE: &str = "wascc:keyvalue";
-pub const HTTP_SERVER: &str = "wascc:http_server";
-pub const HTTP_CLIENT: &str = "wascc:http_client";
-pub const BLOB: &str = "wascc:blobstore";
-pub const EVENTSTREAMS: &str = "wascc:eventstreams";
-pub const EXTRAS: &str = "wascc:extras";
-pub const LOGGING: &str = "wascc:logging";
+pub const MESSAGING: &str = "wasmcloud:messaging";
+pub const KEY_VALUE: &str = "wasmcloud:keyvalue";
+pub const HTTP_SERVER: &str = "wasmcloud:httpserver";
+pub const HTTP_CLIENT: &str = "wasmcloud:httpclient";
+pub const BLOB: &str = "wasmcloud:blobstore";
+pub const EVENTSTREAMS: &str = "wasmcloud:eventstreams";
+pub const EXTRAS: &str = "wasmcloud:extras";
+pub const LOGGING: &str = "wasmcloud:logging";
 
 use std::collections::HashMap;
 

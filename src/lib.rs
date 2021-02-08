@@ -1,11 +1,11 @@
 //! A library for managing signed JWT (JSON Web Tokens) in WebAssembly modules. These
-//! are designed to be used with the [wascc](https://github.com/wascc) host, but can be
+//! are designed to be used with the [wasmCloud](https://github.com/wasmCloud) host, but can be
 //! used for any WebAssembly module, as the embedding technique used is compliant with
 //! the WebAssembly standard.
 //!
 //! This library can be used for embedding, extracting, and validating capabilities claims
 //! in WebAssembly modules. While there are some standard, well-known claims already defined
-//! for use with *wascc*, you can add custom claims in your own namespaces if you like.
+//! for use with *wasmCloud*, you can add custom claims in your own namespaces if you like.
 //!
 //! The following example illustrates embedding a new set of claims
 //! into a WebAssembly module, then extracting, validating, and examining those claims.
@@ -67,10 +67,6 @@ pub mod caps;
 mod errors;
 pub mod jwt;
 pub mod wasm;
-
-#[doc(hidden)]
-#[cfg(feature = "cli")]
-pub mod cli;
 
 pub mod prelude {
     //! Public re-exports of the most commonly used wascap types

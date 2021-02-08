@@ -8,8 +8,8 @@ use nkeys::KeyPair;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::{from_str, to_string};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::collections::HashMap;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const HEADER_TYPE: &str = "jwt";
 const HEADER_ALGORITHM: &str = "Ed25519";
@@ -61,9 +61,15 @@ pub struct Actor {
     /// Indicates a monotonically increasing revision number.  Optional.
     #[serde(rename = "rev", skip_serializing_if = "Option::is_none")]
     pub rev: Option<i32>,
+
     /// Indicates a human-friendly version string
     #[serde(rename = "ver", skip_serializing_if = "Option::is_none")]
     pub ver: Option<String>,
+
+    /// An optional, code-friendly alias that can be used instead of a public key or
+    /// OCI reference for invocations
+    #[serde(rename = "call_alias", skip_serializing_if = "Option::is_none")]
+    pub call_alias: Option<String>,
 
     /// Indicates whether this module is a capability provider
     #[serde(rename = "prov", default = "default_as_false")]
@@ -86,7 +92,7 @@ pub struct CapabilityProvider {
     #[serde(rename = "ver", skip_serializing_if = "Option::is_none")]
     pub ver: Option<String>,
     /// The file hashes that correspond to the achitecture-OS target triples for this provider.
-    pub target_hashes: HashMap<String, String>
+    pub target_hashes: HashMap<String, String>,
 }
 
 /// The claims metadata corresponding to an account
@@ -223,7 +229,9 @@ impl WascapEntity for Actor {
 
 impl WascapEntity for CapabilityProvider {
     fn name(&self) -> String {
-        self.name.as_ref().unwrap_or(&"Unnamed Provider".to_string())
+        self.name
+            .as_ref()
+            .unwrap_or(&"Unnamed Provider".to_string())
             .to_string()
     }
 }
@@ -294,9 +302,11 @@ impl Claims<CapabilityProvider> {
         vendor: String,
         rev: Option<i32>,
         ver: Option<String>,
-        hashes: HashMap<String, String>
+        hashes: HashMap<String, String>,
     ) -> Claims<CapabilityProvider> {
-        Self::with_dates(name, issuer, subject, capid, vendor, rev, ver, hashes, None, None)
+        Self::with_dates(
+            name, issuer, subject, capid, vendor, rev, ver, hashes, None, None,
+        )
     }
 
     pub fn with_dates(
@@ -318,14 +328,14 @@ impl Claims<CapabilityProvider> {
                 rev,
                 ver,
                 target_hashes: hashes,
-                vendor
+                vendor,
             }),
             expires,
             id: nuid::next(),
             issued_at: since_the_epoch().as_secs(),
             issuer,
             subject,
-            not_before
+            not_before,
         }
     }
 }
@@ -373,9 +383,10 @@ impl Claims<Actor> {
         provider: bool,
         rev: Option<i32>,
         ver: Option<String>,
+        call_alias: Option<String>,
     ) -> Claims<Actor> {
         Self::with_dates(
-            name, issuer, subject, caps, tags, None, None, provider, rev, ver,
+            name, issuer, subject, caps, tags, None, None, provider, rev, ver, call_alias,
         )
     }
 
@@ -390,9 +401,10 @@ impl Claims<Actor> {
         provider: bool,
         rev: Option<i32>,
         ver: Option<String>,
+        call_alias: Option<String>,
     ) -> Claims<Actor> {
         Claims {
-            metadata: Some(Actor::new(name, caps, tags, provider, rev, ver)),
+            metadata: Some(Actor::new(name, caps, tags, provider, rev, ver, call_alias)),
             expires,
             id: nuid::next(),
             issued_at: since_the_epoch().as_secs(),
@@ -610,6 +622,18 @@ fn stamp_to_human(stamp: Option<u64>) -> Option<String> {
     })
 }
 
+fn normalize_call_alias(alias: Option<String>) -> Option<String> {
+    alias.map(|a| {
+        let mut n = a.to_lowercase();
+        n = n.trim().to_string();
+        n = n.replace(|c: char| !c.is_ascii(), "");
+        n = n.replace(" ", "_");
+        n = n.replace("-", "_");
+        n = n.replace(".", "_");
+        n
+    })
+}
+
 impl Actor {
     pub fn new(
         name: String,
@@ -618,6 +642,7 @@ impl Actor {
         provider: bool,
         rev: Option<i32>,
         ver: Option<String>,
+        call_alias: Option<String>,
     ) -> Actor {
         Actor {
             name: Some(name),
@@ -627,6 +652,7 @@ impl Actor {
             provider,
             rev,
             ver,
+            call_alias: normalize_call_alias(call_alias),
         }
     }
 }
@@ -638,7 +664,7 @@ impl CapabilityProvider {
         vendor: String,
         rev: Option<i32>,
         ver: Option<String>,
-        hashes: HashMap<String, String>
+        hashes: HashMap<String, String>,
     ) -> CapabilityProvider {
         CapabilityProvider {
             target_hashes: hashes,
@@ -646,7 +672,7 @@ impl CapabilityProvider {
             capid,
             vendor,
             rev,
-            ver
+            ver,
         }
     }
 }
@@ -683,8 +709,8 @@ impl Invocation {
 mod test {
     use super::{Account, Actor, Claims, ErrorKind, Invocation, KeyPair, Operator};
     use crate::caps::{KEY_VALUE, LOGGING, MESSAGING};
-    use crate::jwt::{since_the_epoch, ClaimsBuilder, CapabilityProvider};
     use crate::jwt::validate_token;
+    use crate::jwt::{since_the_epoch, CapabilityProvider, ClaimsBuilder};
     use std::collections::HashMap;
 
     #[test]
@@ -698,6 +724,7 @@ mod test {
                 false,
                 Some(0),
                 Some("".to_string()),
+                None,
             )),
             expires: None,
             id: nuid::next(),
@@ -728,6 +755,7 @@ mod test {
                 false,
                 Some(1),
                 Some("".to_string()),
+                None,
             )),
             expires: Some(since_the_epoch().as_secs() - 30000),
             id: nuid::next(),
@@ -776,7 +804,7 @@ mod test {
             id: nuid::next(),
             metadata: Some(Invocation::new(
                 "wasmbus://M1234/DeliverMessage",
-                "wasmbus://wascc/messaging/default",
+                "wasmbus://wasmcloud/messaging/default",
                 "abc",
             )),
             expires: None,
@@ -806,6 +834,7 @@ mod test {
                 false,
                 Some(1),
                 Some("".to_string()),
+                None,
             )),
             expires: None,
             id: nuid::next(),
@@ -848,6 +877,7 @@ mod test {
                 false,
                 Some(1),
                 Some("".to_string()),
+                None,
             )),
             expires: None,
             id: nuid::next(),
@@ -873,6 +903,7 @@ mod test {
                 false,
                 Some(1),
                 Some("".to_string()),
+                None,
             )),
             expires: None,
             id: nuid::next(),
@@ -902,20 +933,27 @@ mod test {
             .issuer(&account.public_key())
             .with_metadata(CapabilityProvider::new(
                 "Test Provider".to_string(),
-                "wascc:testing".to_string(),
-                "waSCC Internal".to_string(),
+                "wasmcloud:testing".to_string(),
+                "wasmCloud Internal".to_string(),
                 Some(1),
                 Some("v0.0.1".to_string()),
                 hashes,
-            )).build();
+            ))
+            .build();
 
         let encoded = claims.encode(&account).unwrap();
         let decoded: Claims<CapabilityProvider> = Claims::decode(&encoded).unwrap();
         assert!(validate_token::<CapabilityProvider>(&encoded).is_ok());
         assert_eq!(decoded.issuer, account.public_key());
         assert_eq!(decoded.subject, provider.public_key());
-        assert_eq!(decoded.metadata.as_ref().unwrap().vendor, "waSCC Internal");
-        assert_eq!(decoded.metadata.as_ref().unwrap().capid, "wascc:testing");
+        assert_eq!(
+            decoded.metadata.as_ref().unwrap().vendor,
+            "wasmCloud Internal"
+        );
+        assert_eq!(
+            decoded.metadata.as_ref().unwrap().capid,
+            "wasmcloud:testing"
+        );
     }
 
     #[test]
@@ -929,6 +967,7 @@ mod test {
                 false,
                 Some(1),
                 Some("".to_string()),
+                None,
             )),
             expires: None,
             id: nuid::next(),
@@ -974,6 +1013,7 @@ mod test {
                 false,
                 Some(1),
                 Some("".to_string()),
+                None,
             )),
             expires: None,
             id: nuid::next(),
@@ -1008,6 +1048,7 @@ mod test {
                 false,
                 Some(1),
                 Some("".to_string()),
+                None,
             )),
             expires: None,
             id: nuid::next(),
@@ -1044,6 +1085,7 @@ mod test {
                 false,
                 Some(1),
                 Some("".to_string()),
+                None,
             )),
             expires: None,
             id: nuid::next(),

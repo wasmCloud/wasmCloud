@@ -94,6 +94,7 @@ pub fn sign_buffer_with_claims(
     provider: bool,
     rev: Option<i32>,
     ver: Option<String>,
+    call_alias: Option<String>,
 ) -> Result<Vec<u8>> {
     let claims = Claims::<Actor>::with_dates(
         name,
@@ -106,6 +107,7 @@ pub fn sign_buffer_with_claims(
         provider,
         rev,
         ver,
+        call_alias,
     );
     embed_claims(buf.as_ref(), &claims, &acct_kp)
 }
@@ -148,7 +150,7 @@ fn compute_hash_without_jwt(module: Module) -> Result<String> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::caps::{KEY_VALUE, MESSAGING,LOGGING};
+    use crate::caps::{KEY_VALUE, LOGGING, MESSAGING};
     use crate::jwt::{Actor, Claims};
     use base64::decode;
     use parity_wasm::serialize;
@@ -177,6 +179,7 @@ mod test {
                 false,
                 Some(1),
                 Some("".to_string()),
+                None,
             )),
             expires: None,
             id: nuid::next(),
@@ -224,6 +227,7 @@ mod test {
                 false,
                 Some(1),
                 Some("".to_string()),
+                None,
             )),
             expires: None,
             id: nuid::next(),
@@ -239,16 +243,6 @@ mod test {
         );
         if let Some(token) = extract_claims(&modified_bytecode).unwrap() {
             assert_eq!(claims.issuer, token.claims.issuer);
-        /*     assert_eq!(
-            claims.metadata.as_ref().unwrap().caps,
-            token.claims.metadata.as_ref().unwrap().caps
-        );
-        */
-        /* assert_ne!(
-            claims.metadata.as_ref().unwrap().module_hash,
-            token.claims.metadata.as_ref().unwrap().module_hash
-        );
-        */
         } else {
             unreachable!()
         }
