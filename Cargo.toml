@@ -1,19 +1,19 @@
 [package]
 name = "provider-archive"
-version = "0.3.2"
+version = "0.4.0"
 authors = ["Kevin Hoffman <alothien@gmail.com>"]
 edition = "2018"
-description = "Library for reading and writing waSCC capability provider archive files"
+description = "Library for reading and writing wasmCloud capability provider archive files"
 license = "Apache-2.0"
-homepage = "https://github.com/wascc"
+homepage = "https://github.com/wasmcloud/provider-archive"
 documentation = "https://docs.rs/provider-archive"
 readme = "README.md"
-keywords = ["jwt", "zip", "archive", "security", "wascc"]
+keywords = ["jwt", "zip", "archive", "security", "wasmcloud"]
 categories = ["cryptography", "authentication", "wasm"]
 
 
 [dependencies]
-wascap = "0.5.2"
+wascap = "0.6.0"
 data-encoding = "2.3.1"
 ring = "0.16"
 tar = "0.4.30"
