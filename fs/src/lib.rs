@@ -4,12 +4,10 @@ extern crate wascc_codec as codec;
 #[macro_use]
 extern crate log;
 
+use actor_blobstore::*;
+use actor_core::CapabilityConfiguration;
 use chunks::Chunks;
-use codec::blobstore::*;
-use codec::capabilities::{
-    CapabilityDescriptor, CapabilityProvider, Dispatcher, NullDispatcher, OperationDirection,
-    OP_GET_CAPABILITY_DESCRIPTOR,
-};
+use codec::capabilities::{CapabilityProvider, Dispatcher, NullDispatcher};
 use codec::core::{OP_BIND_ACTOR, OP_REMOVE_ACTOR};
 use codec::{deserialize, serialize};
 use std::collections::HashMap;
@@ -20,23 +18,25 @@ use std::{
     path::{Path, PathBuf},
     sync::{Arc, RwLock},
 };
-use wascc_codec::core::CapabilityConfiguration;
 
 mod chunks;
 
 #[cfg(not(feature = "static_plugin"))]
 capability_provider!(FileSystemProvider, FileSystemProvider::new);
 
-const CAPABILITY_ID: &str = "wascc:blobstore";
+#[allow(unused)]
+const CAPABILITY_ID: &str = "wasmcloud:blobstore";
 const SYSTEM_ACTOR: &str = "system";
 const FIRST_SEQ_NBR: u64 = 0;
-const VERSION: &str = env!("CARGO_PKG_VERSION");
-const REVISION: u32 = 3; // Increment for each crates publish
 
+/// Tuple of (expected sequence number, chunks)
+type SequencedChunk = (u64, Vec<FileChunk>);
+
+#[derive(Clone)]
 pub struct FileSystemProvider {
     dispatcher: Arc<RwLock<Box<dyn Dispatcher>>>,
-    rootdir: RwLock<PathBuf>,
-    upload_chunks: RwLock<HashMap<String, (u64, Vec<FileChunk>)>>,
+    rootdir: Arc<RwLock<PathBuf>>,
+    upload_chunks: Arc<RwLock<HashMap<String, SequencedChunk>>>,
 }
 
 impl Default for FileSystemProvider {
@@ -45,8 +45,8 @@ impl Default for FileSystemProvider {
 
         FileSystemProvider {
             dispatcher: Arc::new(RwLock::new(Box::new(NullDispatcher::new()))),
-            rootdir: RwLock::new(PathBuf::new()),
-            upload_chunks: RwLock::new(HashMap::new()),
+            rootdir: Arc::new(RwLock::new(PathBuf::new())),
+            upload_chunks: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 }
@@ -101,7 +101,7 @@ impl FileSystemProvider {
             container: blob.container,
         };
         let blob = sanitize_blob(&blob);
-        info!("Starting upload: {}/{}", blob.container, blob.id);
+        info!("Starting upload: {}/{}", blob.container.id, blob.id);
         let bfile = self.blob_to_path(&blob);
         std::fs::write(bfile, &[])?;
         Ok(vec![])
@@ -134,7 +134,7 @@ impl FileSystemProvider {
         } else {
             Blob {
                 id: "none".to_string(),
-                container: "none".to_string(),
+                container: Container::new("none"),
                 byte_size: 0,
             }
         };
@@ -152,7 +152,7 @@ impl FileSystemProvider {
             .map(|e| {
                 e.map(|e| Blob {
                     id: e.file_name().into_string().unwrap(),
-                    container: container.id.to_string(),
+                    container: container.clone(),
                     byte_size: e.metadata().unwrap().len(),
                 })
             })
@@ -168,7 +168,7 @@ impl FileSystemProvider {
         chunk: FileChunk,
     ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
         let mut upload_chunks = self.upload_chunks.write().unwrap();
-        let key = actor.to_string() + &sanitize_id(&chunk.container) + &sanitize_id(&chunk.id);
+        let key = actor.to_string() + &sanitize_id(&chunk.container.id) + &sanitize_id(&chunk.id);
         let total_chunk_count = chunk.total_bytes / chunk.chunk_size;
 
         let (expected_sequence_no, chunks) = upload_chunks
@@ -182,13 +182,16 @@ impl FileSystemProvider {
         {
             let chunk = chunks.get(i).unwrap();
             let bpath = Path::join(
-                &Path::join(&self.rootdir.read().unwrap(), sanitize_id(&chunk.container)),
+                &Path::join(
+                    &self.rootdir.read().unwrap(),
+                    sanitize_id(&chunk.container.id),
+                ),
                 sanitize_id(&chunk.id),
             );
             let mut file = OpenOptions::new().create(false).append(true).open(bpath)?;
             info!(
                 "Receiving file chunk: {} for {}/{}",
-                chunk.sequence_no, chunk.container, chunk.id
+                chunk.sequence_no, chunk.container.id, chunk.id
             );
 
             let count = file.write(chunk.chunk_bytes.as_ref())?;
@@ -223,7 +226,7 @@ impl FileSystemProvider {
         let bpath = Path::join(
             &Path::join(
                 &self.rootdir.read().unwrap(),
-                sanitize_id(&request.container),
+                sanitize_id(&request.container.id),
             ),
             sanitize_id(&request.id),
         );
@@ -236,7 +239,7 @@ impl FileSystemProvider {
         };
         let xfer = Transfer {
             blob_id: sanitize_id(&request.id),
-            container: sanitize_id(&request.container),
+            container: Container::new(sanitize_id(&request.container.id)),
             total_size: *byte_size,
             chunk_size: chunk_size as _,
             total_chunks: *byte_size / chunk_size as u64,
@@ -254,79 +257,26 @@ impl FileSystemProvider {
     }
 
     fn blob_to_path(&self, blob: &Blob) -> PathBuf {
-        let cdir = Path::join(&self.rootdir.read().unwrap(), blob.container.to_string());
+        let cdir = Path::join(&self.rootdir.read().unwrap(), blob.container.id.to_string());
         Path::join(&cdir, blob.id.to_string())
     }
 
     fn container_to_path(&self, container: &Container) -> PathBuf {
         Path::join(&self.rootdir.read().unwrap(), container.id.to_string())
     }
-
-    fn get_descriptor(&self) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
-        use OperationDirection::{ToActor, ToProvider};
-        Ok(serialize(
-            CapabilityDescriptor::builder()
-                .id(CAPABILITY_ID)
-                .name("waSCC Blob Store Provider (Disk/File System)")
-                .long_description(
-                    "A waSCC blob store capability provider exposing a file system to actors",
-                )
-                .version(VERSION)
-                .revision(REVISION)
-                .with_operation(
-                    OP_CREATE_CONTAINER,
-                    ToProvider,
-                    "Creates a new container/bucket",
-                )
-                .with_operation(
-                    OP_REMOVE_CONTAINER,
-                    ToProvider,
-                    "Removes a container/bucket",
-                )
-                .with_operation(
-                    OP_LIST_OBJECTS,
-                    ToProvider,
-                    "Lists objects within a container",
-                )
-                .with_operation(
-                    OP_UPLOAD_CHUNK,
-                    ToProvider,
-                    "Uploads a chunk of a blob to an item in a container. Must start upload first",
-                )
-                .with_operation(
-                    OP_START_UPLOAD,
-                    ToProvider,
-                    "Starts the chunked upload of a blob",
-                )
-                .with_operation(
-                    OP_START_DOWNLOAD,
-                    ToProvider,
-                    "Starts the chunked download of a blob",
-                )
-                .with_operation(
-                    OP_GET_OBJECT_INFO,
-                    ToProvider,
-                    "Retrieves metadata about a blob",
-                )
-                .with_operation(
-                    OP_RECEIVE_CHUNK,
-                    ToActor,
-                    "Receives a chunk of a blob for download",
-                )
-                .build(),
-        )?)
-    }
 }
+
 fn sanitize_container(container: &Container) -> Container {
     Container {
         id: sanitize_id(&container.id),
     }
 }
+
 fn sanitize_blob(blob: &Blob) -> Blob {
     Blob {
         id: sanitize_id(&blob.id),
         byte_size: blob.byte_size,
-        container: sanitize_id(&blob.container),
+        container: Container::new(sanitize_id(&blob.container.id)),
     }
 }
 
@@ -347,7 +297,7 @@ fn dispatch_chunk(
     if let Ok(chunk) = chunk {
         let fc = FileChunk {
             sequence_no: i as u64,
-            container: xfer.container.to_string(),
+            container: Container::new(xfer.container.id.clone()),
             id: xfer.blob_id.to_string(),
             chunk_bytes: chunk,
             chunk_size: xfer.chunk_size,
@@ -386,7 +336,6 @@ impl CapabilityProvider for FileSystemProvider {
         match op {
             OP_BIND_ACTOR if actor == SYSTEM_ACTOR => self.configure(deserialize(msg)?),
             OP_REMOVE_ACTOR if actor == SYSTEM_ACTOR => Ok(vec![]),
-            OP_GET_CAPABILITY_DESCRIPTOR if actor == SYSTEM_ACTOR => self.get_descriptor(),
             OP_CREATE_CONTAINER => self.create_container(actor, deserialize(msg)?),
             OP_REMOVE_CONTAINER => self.remove_container(actor, deserialize(msg)?),
             OP_REMOVE_OBJECT => self.remove_object(actor, deserialize(msg)?),
@@ -398,6 +347,10 @@ impl CapabilityProvider for FileSystemProvider {
             _ => Err("bad dispatch".into()),
         }
     }
+
+    fn stop(&self) {
+        // No cleanup needed on stop at the moment
+    }
 }
 
 #[cfg(test)]
@@ -405,14 +358,13 @@ impl CapabilityProvider for FileSystemProvider {
 mod tests {
     use super::{sanitize_blob, sanitize_container};
     use crate::FileSystemProvider;
-    use codec::blobstore::{Blob, Container};
+    use actor_blobstore::{Blob, Container, FileChunk};
+    use actor_core::CapabilityConfiguration;
     use std::collections::HashMap;
     use std::env::temp_dir;
     use std::fs::File;
     use std::io::{BufReader, Read};
     use std::path::{Path, PathBuf};
-    use wascc_codec::blobstore::FileChunk;
-    use wascc_codec::core::CapabilityConfiguration;
 
     #[test]
     fn no_hacky_hacky() {
@@ -422,7 +374,7 @@ mod tests {
         let blob = Blob {
             byte_size: 0,
             id: "../passwd".to_string(),
-            container: "/etc/h4x0rd".to_string(),
+            container: Container::new("/etc/h4x0rd"),
         };
         let c = sanitize_container(&container);
         let b = sanitize_blob(&blob);
@@ -431,18 +383,18 @@ mod tests {
         // thereby not expose anything sensitive
         assert_eq!(c.id, "etc_h4x0rd");
         assert_eq!(b.id, "passwd");
-        assert_eq!(b.container, "etc_h4x0rd");
+        assert_eq!(b.container.id, "etc_h4x0rd");
     }
 
     #[test]
     fn test_start_upload() {
         let actor = "actor1";
-        let container = "container".to_string();
+        let container = Container::new("container");
         let id = "blob".to_string();
 
         let fs = FileSystemProvider::new();
         let root_dir = setup_test_start_upload(&fs);
-        let upload_dir = Path::join(&root_dir, &container);
+        let upload_dir = Path::join(&root_dir, &container.id);
         let bpath = create_dir(&upload_dir, &id);
 
         let total_bytes = 6;

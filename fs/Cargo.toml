@@ -1,15 +1,15 @@
 [package]
-name = "wascc-fs"
-version = "0.1.2"
-authors = ["Kevin Hoffman <alothien@gmail.com>"]
+name = "wasmcloud-fs"
+version = "0.2.0"
+authors = ["wasmCloud Team"]
 edition = "2018"
-homepage = "https://wascc.dev"
-repository = "https://github.com/wascc/fs-provider"
-description = "Blob store capability provider (local file system) for the waSCC runtime"
+homepage = "https://wasmcloud.dev"
+repository = "https://github.com/wasmcloud/capability-providers"
+description = "Blob store capability provider (local file system) for the wasmCloud runtime"
 license = "Apache-2.0"
-documentation = "https://docs.rs/wascc-fs"
+documentation = "https://docs.rs/wasmcloud-fs"
 readme = "README.md"
-keywords = ["webassembly", "wasm", "files", "wascc", "blobstore"]
+keywords = ["webassembly", "wasm", "files", "wasmcloud", "blobstore"]
 categories = ["wasm", "api-bindings"]
 
 [lib]
@@ -20,6 +20,8 @@ crate-type = ["cdylib", "rlib"]
 static_plugin = []
 
 [dependencies]
-wascc-codec = "0.8.1"
+wascc-codec = "0.9.0"
 log = "0.4.11"
 env_logger = "0.7.1"
+actor-blobstore = { git = "https://github.com/wasmcloud/actor-interfaces", branch = "main" }
+actor-core = { git = "https://github.com/wasmcloud/actor-interfaces", branch = "main" }
