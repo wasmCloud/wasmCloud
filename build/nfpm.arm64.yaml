@@ -10,7 +10,7 @@ priority: extra
 maintainer: Bill Young <bill@byoung.io>
 description: wasmcloud
 vendor: wasmCloud
-homepage: https://wascc.dev
+homepage: https://wasmcloud.dev
 license: Apache-2.0
 files:
   artifacts/release/wasmcloud: "/usr/local/bin/wasmcloud"
