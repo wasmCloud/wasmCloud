@@ -1,4 +1,4 @@
-![Documentation](https://img.shields.io/badge/Docs-Documentation-blue)
+[![Documentation](https://img.shields.io/badge/Docs-Documentation-blue)](https://wasmcloud.dev)
 ![Rustdocs](https://docs.rs/wasmcloud-host/badge.svg)
 
 # wasmCloud Host
