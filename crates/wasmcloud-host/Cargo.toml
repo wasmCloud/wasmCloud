@@ -3,13 +3,13 @@ name = "wasmcloud-host"
 version = "0.15.0"
 authors = ["Kevin Hoffman <alothien@gmail.com>"]
 edition = "2018"
-homepage = "https://wascc.dev"
-repository = "https://github.com/wascc/wasccd"
+homepage = "https://wasmcloud.dev"
+repository = "https://github.com/wasmCloud/wasmCloud"
 description = "A secure, distributed, WebAssembly actor model runtime for the cloud, edge, and everything in between"
 license = "Apache-2.0"
-documentation = "https://docs.rs/wascc-host"
+documentation = "https://docs.rs/wasmcloud-host"
 readme = "README.md"
-keywords = ["webassembly", "wasm", "wascc", "wapc", "actors"]
+keywords = ["webassembly", "wasm", "wasmcloud", "wapc", "actors"]
 categories = ["wasm", "api-bindings"]
 
 
