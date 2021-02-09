@@ -424,6 +424,7 @@ fn generate_actor(actor: ActorMetadata) -> Result<String, Box<dyn ::std::error::
         actor.provider,
         actor.rev,
         actor.ver.clone(),
+        None,
     );
 
     let jwt = claims.encode(&issuer)?;
@@ -615,6 +616,7 @@ fn sign_file(cmd: SignCommand) -> Result<String, Box<dyn ::std::error::Error>> {
         cmd.metadata.provider,
         cmd.metadata.rev,
         cmd.metadata.ver.clone(),
+        None,
     )?;
 
     let destination = match cmd.destination.clone() {
