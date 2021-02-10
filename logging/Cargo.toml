@@ -1,15 +1,15 @@
 [package]
-name = "wascc-logging"
-version = "0.8.0"
-authors = ["Kevin Hoffman <alothien@gmail.com>"]
+name = "wasmcloud-logging"
+version = "0.9.0"
+authors = ["wasmCloud Team"]
 edition = "2018"
-homepage = "https://wascc.dev"
-repository = "https://github.com/wascc/logging-provider"
-description = "Structured logging capability provider for the waSCC host runtime"
+homepage = "https://wasmcloud.dev"
+repository = "https://github.com/wasmcloud/capability-providers"
+description = "Structured logging capability provider for the wasmCloud host runtime"
 license = "Apache-2.0"
-documentation = "https://docs.rs/wascc-logging"
+documentation = "https://docs.rs/wasmcloud-logging"
 readme = "README.md"
-keywords = ["webassembly", "wasm", "wasi", "wascc", "logging"]
+keywords = ["webassembly", "wasm", "wasi", "wasmcloud", "logging"]
 categories = ["wasm", "api-bindings"]
 
 [badges]
@@ -22,6 +22,8 @@ crate-type = ["cdylib", "rlib"]
 static_plugin = [] # Enable to statically compile this into a host
 
 [dependencies]
-wascc-codec = "0.8.0"
-log = "0.4.8"
-env_logger = "0.7.1"
+wascc-codec = "0.9.0"
+log = "0.4.14"
+env_logger = "0.8.2"
+wasmcloud-actor-core = "0.2.0"
+wasmcloud-actor-logging = "0.1.0"

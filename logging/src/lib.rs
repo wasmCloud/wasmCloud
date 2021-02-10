@@ -14,41 +14,33 @@
 
 #[macro_use]
 extern crate wascc_codec as codec;
-
-use codec::capabilities::{
-    CapabilityDescriptor, CapabilityProvider, Dispatcher, NullDispatcher, OperationDirection,
-    OP_GET_CAPABILITY_DESCRIPTOR,
-};
-use codec::core::{OP_BIND_ACTOR, OP_REMOVE_ACTOR};
-use codec::{
-    deserialize,
-    logging::{WriteLogRequest, OP_LOG},
-    serialize,
-};
-
 #[macro_use]
 extern crate log;
 
+use codec::capabilities::{CapabilityProvider, Dispatcher, NullDispatcher};
+use codec::core::{OP_BIND_ACTOR, OP_REMOVE_ACTOR};
 use std::error::Error;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
+use wasmcloud_actor_core::deserialize;
+use wasmcloud_actor_logging::{WriteLogArgs, OP_LOG};
 
 #[cfg(not(feature = "static_plugin"))]
 capability_provider!(LoggingProvider, LoggingProvider::new);
 
-const CAPABILITY_ID: &str = "wascc:logging";
+#[allow(unused)]
+const CAPABILITY_ID: &str = "wasmcloud:logging";
 const SYSTEM_ACTOR: &str = "system";
-const VERSION: &str = env!("CARGO_PKG_VERSION");
-const REVISION: u32 = 2; // Increment for each crates publish
 
-const ERROR: u32 = 1;
-const WARN: u32 = 2;
-const INFO: u32 = 3;
-const DEBUG: u32 = 4;
-const TRACE: u32 = 5;
+const ERROR: &str = "error";
+const WARN: &str = "warn";
+const INFO: &str = "info";
+const DEBUG: &str = "debug";
+const TRACE: &str = "trace";
 
-/// Standard output logging implementation of the `wascc:logging` specification
+/// Standard output logging implementation of the `wasmcloud:logging` specification
+#[derive(Clone)]
 pub struct LoggingProvider {
-    dispatcher: RwLock<Box<dyn Dispatcher>>,
+    dispatcher: Arc<RwLock<Box<dyn Dispatcher>>>,
 }
 
 impl Default for LoggingProvider {
@@ -59,7 +51,7 @@ impl Default for LoggingProvider {
         }
 
         LoggingProvider {
-            dispatcher: RwLock::new(Box::new(NullDispatcher::new())),
+            dispatcher: Arc::new(RwLock::new(Box::new(NullDispatcher::new()))),
         }
     }
 }
@@ -70,36 +62,17 @@ impl LoggingProvider {
         Self::default()
     }
 
-    fn get_descriptor(&self) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
-        Ok(serialize(
-            CapabilityDescriptor::builder()
-                .id(CAPABILITY_ID)
-                .name("waSCC Default Logging Provider (STDOUT)")
-                .long_description(
-                    "A simple logging capability provider that supports levels from error to trace",
-                )
-                .version(VERSION)
-                .revision(REVISION)
-                .with_operation(
-                    OP_LOG,
-                    OperationDirection::ToProvider,
-                    "Sends a log message to stdout",
-                )
-                .build(),
-        )?)
-    }
-
     fn write_log(
         &self,
         actor: &str,
-        log_msg: WriteLogRequest,
+        log_msg: WriteLogArgs,
     ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
-        match log_msg.level {
-            ERROR => error!("[{}] {}", actor, log_msg.body),
-            WARN => warn!("[{}] {}", actor, log_msg.body),
-            INFO => info!("[{}] {}", actor, log_msg.body),
-            DEBUG => debug!("[{}] {}", actor, log_msg.body),
-            TRACE => trace!("[{}] {}", actor, log_msg.body),
+        match &*log_msg.level {
+            ERROR => error!(target: &log_msg.target, "[{}] {}", actor, log_msg.text),
+            WARN => warn!(target: &log_msg.target, "[{}] {}", actor, log_msg.text),
+            INFO => info!(target: &log_msg.target, "[{}] {}", actor, log_msg.text),
+            DEBUG => debug!(target: &log_msg.target, "[{}] {}", actor, log_msg.text),
+            TRACE => trace!(target: &log_msg.target, "[{}] {}", actor, log_msg.text),
             _ => error!("Unknown log level: {}", log_msg.level),
         }
         Ok(vec![])
@@ -113,6 +86,7 @@ impl CapabilityProvider for LoggingProvider {
         &self,
         dispatcher: Box<dyn Dispatcher>,
     ) -> Result<(), Box<dyn Error + Sync + Send>> {
+        info!("Dispatcher configured.");
         let mut lock = self.dispatcher.write().unwrap();
         *lock = dispatcher;
 
@@ -127,12 +101,15 @@ impl CapabilityProvider for LoggingProvider {
         op: &str,
         msg: &[u8],
     ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
+        trace!("Handling operation `{}` from `{}`", op, actor);
         match op {
             OP_BIND_ACTOR if actor == SYSTEM_ACTOR => Ok(vec![]),
             OP_REMOVE_ACTOR if actor == SYSTEM_ACTOR => Ok(vec![]),
-            OP_GET_CAPABILITY_DESCRIPTOR if actor == SYSTEM_ACTOR => self.get_descriptor(),
             OP_LOG => self.write_log(actor, deserialize(msg)?),
             _ => Err(format!("Unknown operation: {}", op).into()),
         }
     }
+
+    // No cleanup needed on stop
+    fn stop(&self) {}
 }
