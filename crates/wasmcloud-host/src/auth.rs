@@ -134,9 +134,10 @@ mod test {
             ClaimsBuilder::new()
                 .with_metadata(wascap::jwt::Actor::new(
                     "A".to_string(),
-                    Some(vec!["wascc:messaging".to_string()]),
+                    Some(vec!["wasmcloud:messaging".to_string()]),
                     None,
                     false,
+                    None,
                     None,
                     None,
                 ))
@@ -166,7 +167,7 @@ mod test {
     #[test]
     fn block_actor_with_insufficient_claims() {
         let target = WasmCloudEntity::Capability {
-            contract_id: "wascc:keyvalue".to_string(),
+            contract_id: "wasmcloud:keyvalue".to_string(),
             id: "Vxxx".to_string(),
             link_name: "default".to_string(),
         };
@@ -177,9 +178,10 @@ mod test {
             ClaimsBuilder::new()
                 .with_metadata(wascap::jwt::Actor::new(
                     "A".to_string(),
-                    Some(vec!["wascc:messaging".to_string()]),
+                    Some(vec!["wasmcloud:messaging".to_string()]),
                     None,
                     false,
+                    None,
                     None,
                     None,
                 ))
@@ -196,7 +198,7 @@ mod test {
     #[test]
     fn invoke_authorizer_when_initial_check_passes() {
         let target = WasmCloudEntity::Capability {
-            contract_id: "wascc:keyvalue".to_string(),
+            contract_id: "wasmcloud:keyvalue".to_string(),
             id: "Vxxx".to_string(),
             link_name: "default".to_string(),
         };
@@ -207,9 +209,10 @@ mod test {
             ClaimsBuilder::new()
                 .with_metadata(wascap::jwt::Actor::new(
                     "A".to_string(),
-                    Some(vec!["wascc:keyvalue".to_string()]),
+                    Some(vec!["wasmcloud:keyvalue".to_string()]),
                     None,
                     false,
+                    None,
                     None,
                     None,
                 ))

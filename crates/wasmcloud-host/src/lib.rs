@@ -44,7 +44,7 @@
 //!     h.start_actor(echo).await?;
 //!
 //!     // Read a cross-platform provider archive file
-//!     let arc = par_from_file("../../tests/modules/libwasmcloud_httpsrv.par.gz")?;
+//!     let arc = par_from_file("../../tests/modules/httpserver.par.gz")?;
 //!     let websrv = NativeCapability::from_archive(&arc, None)?;
 //!     let websrv_id = websrv.id();
 //!
@@ -53,7 +53,7 @@
 //!     // Establish a link between the actor and a capability provider
 //!     h.set_link(
 //!         &actor_id,
-//!         "wascc:http_server",
+//!         "wasmcloud:httpserver",
 //!         None,
 //!         websrv_id,
 //!         webvalues,

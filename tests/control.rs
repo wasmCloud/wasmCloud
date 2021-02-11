@@ -46,7 +46,7 @@ pub(crate) async fn basics() -> Result<()> {
         .is_some());
     // Cannot stop a non-existent provider
     assert!(ctl_client
-        .stop_provider(&hid, "fooref", "default", "wascc:testing")
+        .stop_provider(&hid, "fooref", "default", "wasmcloud:testing")
         .await?
         .failure
         .is_some());
@@ -80,7 +80,7 @@ pub(crate) async fn basics() -> Result<()> {
 
     // Stop and re-start a provider
     assert!(ctl_client
-        .stop_provider(&hid, REDIS_OCI, "default", "wascc:key_value")
+        .stop_provider(&hid, REDIS_OCI, "default", "wasmcloud:keyvalue")
         .await?
         .failure
         .is_none());
@@ -290,6 +290,7 @@ fn embed_revision(source: &[u8], kp: &KeyPair, rev: i32, subject: &str, issuer: 
         None,
         false,
         Some(rev),
+        None,
         None,
     );
     wascap::wasm::embed_claims(source, &claims, kp).unwrap()

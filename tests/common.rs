@@ -6,10 +6,10 @@ use std::io::Read;
 use std::time::Duration;
 use wasmcloud_host::{Actor, Host, HostBuilder, NativeCapability, Result};
 
-pub const REDIS_OCI: &str = "wascc.azurecr.io/redis:v0.9.2";
-pub const HTTPSRV_OCI: &str = "wascc.azurecr.io/httpsrv:v0.9.2";
-pub const NATS_OCI: &str = "wascc.azurecr.io/nats:v0.9.1";
-pub const KVCOUNTER_OCI: &str = "wascc.azurecr.io/kvcounter:v0.1.1";
+pub const REDIS_OCI: &str = "wasmcloud.azurecr.io/redis:0.11.1";
+pub const HTTPSRV_OCI: &str = "wasmcloud.azurecr.io/httpserver:0.11.1";
+pub const NATS_OCI: &str = "wasmcloud.azurecr.io/nats:0.10.1";
+pub const KVCOUNTER_OCI: &str = "wasmcloud.azurecr.io/kvcounter:0.2.0";
 
 pub async fn await_actor_count(
     h: &Host,
@@ -82,8 +82,8 @@ pub async fn gen_kvcounter_host(
     h.start_actor(kvcounter).await?;
     await_actor_count(&h, 1, Duration::from_millis(50), 3).await?;
 
-    let arc = par_from_file("./tests/modules/libwascc_redis.par.gz")?;
-    let arc2 = par_from_file("./tests/modules/libwascc_httpsrv.par.gz")?;
+    let arc = par_from_file("./tests/modules/redis.par.gz")?;
+    let arc2 = par_from_file("./tests/modules/httpserver.par.gz")?;
 
     let redis = NativeCapability::from_archive(&arc, None)?;
     let websrv = NativeCapability::from_archive(&arc2, None)?;
@@ -99,12 +99,12 @@ pub async fn gen_kvcounter_host(
     h.start_native_capability(redis).await?;
     h.start_native_capability(websrv).await?;
     await_provider_count(&h, 4, Duration::from_millis(50), 3).await?; // 2 providers plus wascc:extras
-    h.set_link(&kvcounter_key, "wascc:keyvalue", None, redis_id, values)
+    h.set_link(&kvcounter_key, "wasmcloud:keyvalue", None, redis_id, values)
         .await?;
 
     h.set_link(
         &kvcounter_key,
-        "wascc:http_server",
+        "wasmcloud:httpserver",
         None,
         websrv_id,
         webvalues,

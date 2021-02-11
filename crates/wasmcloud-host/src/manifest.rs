@@ -195,14 +195,14 @@ mod test {
             ],
             links: vec![LinkEntry {
                 actor: "a".to_string(),
-                contract_id: "wascc:one".to_string(),
+                contract_id: "wasmcloud:one".to_string(),
                 provider_id: "Vxxxone".to_string(),
                 values: Some(gen_values()),
                 link_name: None,
             }],
         };
         let yaml = serde_yaml::to_string(&manifest).unwrap();
-        assert_eq!(yaml, "---\nactors:\n  - a\n  - b\n  - c\ncapabilities:\n  - image_ref: one\n    link_name: default\n  - image_ref: two\n    link_name: default\nlinks:\n  - actor: a\n    contract_id: \"wascc:one\"\n    provider_id: Vxxxone\n    values:\n      ROOT: /tmp");
+        assert_eq!(yaml, "---\nactors:\n  - a\n  - b\n  - c\ncapabilities:\n  - image_ref: one\n    link_name: default\n  - image_ref: two\n    link_name: default\nlinks:\n  - actor: a\n    contract_id: \"wasmcloud:one\"\n    provider_id: Vxxxone\n    values:\n      ROOT: /tmp\n");
     }
 
     #[test]
@@ -226,14 +226,14 @@ mod test {
             ],
             links: vec![LinkEntry {
                 actor: "a".to_string(),
-                contract_id: "wascc:one".to_string(),
+                contract_id: "wasmcloud:one".to_string(),
                 provider_id: "VxxxxONE".to_string(),
                 values: Some(gen_values()),
                 link_name: Some("default".to_string()),
             }],
         };
         let yaml = serde_yaml::to_string(&manifest).unwrap();
-        assert_eq!(yaml, "---\nlabels:\n  test: value\nactors:\n  - a\n  - b\n  - c\ncapabilities:\n  - image_ref: one\n    link_name: default\n  - image_ref: two\n    link_name: default\nlinks:\n  - actor: a\n    contract_id: \"wascc:one\"\n    provider_id: VxxxxONE\n    link_name: default\n    values:\n      ROOT: /tmp");
+        assert_eq!(yaml, "---\nlabels:\n  test: value\nactors:\n  - a\n  - b\n  - c\ncapabilities:\n  - image_ref: one\n    link_name: default\n  - image_ref: two\n    link_name: default\nlinks:\n  - actor: a\n    contract_id: \"wasmcloud:one\"\n    provider_id: VxxxxONE\n    link_name: default\n    values:\n      ROOT: /tmp\n");
     }
 
     #[test]

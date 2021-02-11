@@ -459,7 +459,7 @@ mod test {
             WasmCloudEntity::Actor("testing".into()),
             WasmCloudEntity::Capability {
                 id: "Vxxx".to_string(),
-                contract_id: "wascc:messaging".into(),
+                contract_id: "wasmcloud:messaging".into(),
                 link_name: "default".into(),
             },
             "OP_TESTING",
@@ -482,7 +482,7 @@ mod test {
         // And just to double-check the routing address
         assert_eq!(
             inv.target_url(),
-            "wasmbus://wascc/messaging/default/Vxxx/OP_TESTING"
+            "wasmbus://wasmcloud/messaging/default/Vxxx/OP_TESTING"
         );
     }
 }

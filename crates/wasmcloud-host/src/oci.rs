@@ -7,6 +7,9 @@ use std::str::FromStr;
 
 pub(crate) const OCI_VAR_USER: &str = "OCI_REGISTRY_USER";
 pub(crate) const OCI_VAR_PASSWORD: &str = "OCI_REGISTRY_PASSWORD";
+const PROVIDER_ARCHIVE_MEDIA_TYPE: &str = "application/vnd.wasmcloud.provider.archive.layer.v1+par";
+const WASM_MEDIA_TYPE: &str = "application/vnd.module.wasm.content.layer.v1+wasm";
+const OCI_MEDIA_TYPE: &str = "application/vnd.oci.image.layer.v1.tar";
 
 pub(crate) async fn fetch_oci_bytes(
     img: &str,
@@ -39,9 +42,15 @@ pub(crate) async fn fetch_oci_bytes(
         match imgdata {
             Ok(imgdata) => {
                 let mut f = std::fs::File::create(cf)?;
-                f.write_all(&imgdata.content)?;
+                let content = imgdata
+                    .layers
+                    .iter()
+                    .map(|l| l.data.clone())
+                    .flatten()
+                    .collect::<Vec<_>>();
+                f.write_all(&content)?;
                 f.flush()?;
-                Ok(imgdata.content)
+                Ok(content)
             }
             Err(e) => {
                 error!("Failed to fetch OCI bytes: {}", e);
@@ -76,7 +85,11 @@ async fn pull(
     auth: &oci_distribution::secrets::RegistryAuth,
 ) -> Result<oci_distribution::client::ImageData> {
     client
-        .pull_image(&img, &auth)
+        .pull(
+            &img,
+            &auth,
+            vec![PROVIDER_ARCHIVE_MEDIA_TYPE, WASM_MEDIA_TYPE, OCI_MEDIA_TYPE],
+        )
         .await
         .map_err(|e| format!("{}", e).into())
 }

@@ -79,5 +79,6 @@ pub(crate) fn system_actor_claims() -> Claims<wascap::jwt::Actor> {
         false,
         None,
         None,
+        None,
     )
 }

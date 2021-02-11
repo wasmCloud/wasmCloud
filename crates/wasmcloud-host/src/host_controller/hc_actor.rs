@@ -17,9 +17,9 @@ use std::time::Instant;
 
 use crate::messagebus::latticecache_client::{CACHE_CONTRACT_ID, CACHE_PROVIDER_LINK_NAME};
 use crate::messagebus::utils::{generate_link_invocation_and_call, system_actor_claims};
-use nats_kvcache::NatsReplicatedKVProvider;
 use wascap::jwt::Claims;
 use wascap::prelude::KeyPair;
+use wasmcloud_nats_kvcache::NatsReplicatedKVProvider;
 
 #[derive(Debug, PartialEq, Clone, Eq, Hash)]
 struct ProviderKey {

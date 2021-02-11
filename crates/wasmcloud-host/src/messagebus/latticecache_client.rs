@@ -12,7 +12,7 @@ use crate::hlreg::HostLocalSystemService;
 use crate::messagebus::{LinkDefinition, MessageBus};
 use crate::{Invocation, Result, WasmCloudEntity, SYSTEM_ACTOR};
 use actix::Recipient;
-use actor_keyvalue::{
+use wasmcloud_actor_keyvalue::{
     DelArgs, GetArgs, GetResponse, SetAddArgs, SetArgs, SetQueryArgs, SetQueryResponse,
     SetRemoveArgs, OP_DEL, OP_GET, OP_SET, OP_SET_ADD, OP_SET_QUERY, OP_SET_REMOVE,
 };
