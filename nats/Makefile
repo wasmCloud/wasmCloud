@@ -8,7 +8,7 @@ NAME          := $(shell cargo metadata --no-deps --format-version 1 | jq -r '.p
 VERSION       := $(shell cargo metadata --no-deps --format-version 1 | jq -r '.packages[].version')
 LIBNAME       := $(shell echo $(NAME) | tr '-' '_')
 VENDOR        ?= wasmcloud
-REVISION	  ?= 0
+REVISION	  ?= 2
 DESTINATION   ?= nats.par.gz
 
 TARGETS := armv7-unknown-linux-gnueabihf \

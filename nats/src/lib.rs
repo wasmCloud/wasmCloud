@@ -1,28 +1,27 @@
 #[macro_use]
 extern crate wascc_codec as codec;
 
-mod generated;
+extern crate wasmcloud_actor_core as actorcore;
+extern crate wasmcloud_actor_messaging as messaging;
+
 mod natsprov;
 
-const VERSION: &str = env!("CARGO_PKG_VERSION");
-const REVISION: u32 = 2; // Increment for each crates publish
+#[allow(unused)]
+const CAPABILITY_ID: &str = "wasmcloud:messaging"; // used by the Makefile
 
 #[macro_use]
 extern crate log;
 
-use codec::capabilities::{
-    CapabilityDescriptor, CapabilityProvider, Dispatcher, NullDispatcher, OperationDirection,
-    OP_GET_CAPABILITY_DESCRIPTOR,
-};
+use codec::capabilities::{CapabilityProvider, Dispatcher, NullDispatcher};
 
 pub const OP_DELIVER_MESSAGE: &str = "DeliverMessage";
 pub const OP_PUBLISH_MESSAGE: &str = "Publish";
 pub const OP_PERFORM_REQUEST: &str = "Request";
 
 use codec::core::{OP_BIND_ACTOR, OP_HEALTH_REQUEST, OP_REMOVE_ACTOR};
-use generated::messaging::{BrokerMessage, RequestArgs};
+use messaging::{BrokerMessage, RequestArgs};
 
-use generated::core::{CapabilityConfiguration, HealthResponse};
+use actorcore::{CapabilityConfiguration, HealthCheckResponse};
 use std::collections::HashMap;
 use wascc_codec::{deserialize, serialize};
 
@@ -33,9 +32,7 @@ use std::sync::RwLock;
 #[cfg(not(feature = "static_plugin"))]
 capability_provider!(NatsProvider, NatsProvider::new);
 
-const CAPABILITY_ID: &str = "wascc:messaging";
-
-/// NATS implementation of the `wascc:messaging` specification
+/// NATS implementation of the `wasmcloud:messaging` specification
 #[derive(Clone)]
 pub struct NatsProvider {
     dispatcher: Arc<RwLock<Box<dyn Dispatcher>>>,
@@ -107,33 +104,6 @@ impl NatsProvider {
         self.clients.write().unwrap().remove(&msg.module);
         Ok(vec![])
     }
-
-    fn get_descriptor(&self) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
-        Ok(serialize(
-            CapabilityDescriptor::builder()
-                .id(CAPABILITY_ID)
-                .name("Default waSCC Messaging Provider (NATS)")
-                .long_description("A NATS-based implementation of the wascc:messaging contract")
-                .version(VERSION)
-                .revision(REVISION)
-                .with_operation(
-                    OP_PUBLISH_MESSAGE,
-                    OperationDirection::ToProvider,
-                    "Sends a message on a subject with an optional reply-to",
-                )
-                .with_operation(
-                    OP_PERFORM_REQUEST,
-                    OperationDirection::ToProvider,
-                    "Sends a message on a subject expecting a reply on an auto-generated inbox",
-                )
-                .with_operation(
-                    OP_DELIVER_MESSAGE,
-                    OperationDirection::ToActor,
-                    "Delivers a message from a NATS subscription to an actor",
-                )
-                .build(),
-        )?)
-    }
 }
 
 impl CapabilityProvider for NatsProvider {
@@ -161,10 +131,9 @@ impl CapabilityProvider for NatsProvider {
         match op {
             OP_PUBLISH_MESSAGE => self.publish_message(actor, deserialize(msg)?),
             OP_PERFORM_REQUEST => self.request(actor, deserialize(msg)?),
-            OP_GET_CAPABILITY_DESCRIPTOR if actor == "system" => self.get_descriptor(),
             OP_BIND_ACTOR if actor == "system" => self.configure(deserialize(msg)?),
             OP_REMOVE_ACTOR if actor == "system" => self.remove_actor(deserialize(msg)?),
-            OP_HEALTH_REQUEST if actor == "system" => Ok(serialize(HealthResponse {
+            OP_HEALTH_REQUEST if actor == "system" => Ok(serialize(HealthCheckResponse {
                 healthy: true,
                 message: "".to_string(),
             })

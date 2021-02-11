@@ -1,4 +1,4 @@
-use crate::generated::messaging::{BrokerMessage, PublishResponse, RequestArgs};
+use crate::messaging::{BrokerMessage, PublishResponse, RequestArgs};
 use std::error::Error;
 use std::sync::Arc;
 use std::sync::RwLock;
@@ -8,6 +8,8 @@ use wascc_codec::capabilities::Dispatcher;
 use crate::OP_DELIVER_MESSAGE;
 use nats::Connection;
 use wascc_codec::serialize;
+
+use wascap::prelude::KeyPair;
 
 const ENV_NATS_SUBSCRIPTION: &str = "SUBSCRIPTION";
 const ENV_NATS_URL: &str = "URL";
@@ -144,9 +146,27 @@ fn get_connection(
     let mut opts = if let Some(creds) = get_credsfile(values) {
         nats::Options::with_credentials(creds)
     } else {
-        nats::Options::new()
+        let jwt = values
+            .get(ENV_NATS_CLIENT_JWT)
+            .clone()
+            .unwrap_or(&"".to_string())
+            .to_string();
+        if jwt.len() > 0 {
+            let seed = values
+                .get(ENV_NATS_CLIENT_SEED)
+                .clone()
+                .unwrap_or(&"".to_string())
+                .to_string();
+            let kp = KeyPair::from_seed(&seed)?;
+            nats::Options::with_jwt(
+                move || Ok(jwt.to_string()),
+                move |nonce| kp.sign(nonce).unwrap(),
+            )
+        } else {
+            nats::Options::new()
+        }
     };
-    opts = opts.with_name("waSCC NATS Provider");
+    opts = opts.with_name("wasmCloud NATS Provider");
     opts.connect(&nats_url)
         .map_err(|e| format!("NATS connection failure:{}", e).into())
 }
