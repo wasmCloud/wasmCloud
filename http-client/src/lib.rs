@@ -1,6 +1,5 @@
-///!
-///! # http-client-provider
-///! This library exposes the HTTP client capability to waSCC-compliant actors
+///! http-client-provider
+///! This library exposes the HTTP client capability to wasmCloud-compliant actors
 mod http_client;
 
 #[macro_use]
@@ -9,30 +8,29 @@ extern crate wascc_codec as codec;
 #[macro_use]
 extern crate log;
 
-use codec::capabilities::{
-    CapabilityDescriptor, CapabilityProvider, Dispatcher, NullDispatcher, OperationDirection,
-    OP_GET_CAPABILITY_DESCRIPTOR,
-};
-use codec::core::{CapabilityConfiguration, OP_BIND_ACTOR, OP_REMOVE_ACTOR};
-use codec::http::{Request, OP_PERFORM_REQUEST};
-use codec::{deserialize, serialize, SYSTEM_ACTOR};
+extern crate wasmcloud_actor_http_client as http;
+use codec::capabilities::{CapabilityProvider, Dispatcher, NullDispatcher};
+use codec::core::{OP_BIND_ACTOR, OP_REMOVE_ACTOR};
+use codec::{deserialize, SYSTEM_ACTOR};
+use http::{RequestArgs, OP_PERFORM_REQUEST};
 use std::collections::HashMap;
 use std::error::Error;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
+use wasmcloud_actor_core::CapabilityConfiguration;
 
-const CAPABILITY_ID: &str = "wascc:http_client";
-const VERSION: &str = env!("CARGO_PKG_VERSION");
-const REVISION: u32 = 0;
+#[allow(unused)]
+const CAPABILITY_ID: &str = "wasmcloud:httpclient";
 
 #[cfg(not(feature = "static_plugin"))]
 capability_provider!(HttpClientProvider, HttpClientProvider::new);
 
 /// An implementation HTTP client provider using reqwest.
+#[derive(Clone)]
 pub struct HttpClientProvider {
     dispatcher: Arc<RwLock<Box<dyn Dispatcher>>>,
     clients: Arc<RwLock<HashMap<String, reqwest::Client>>>,
-    runtime: tokio::runtime::Runtime,
+    runtime: Arc<tokio::runtime::Runtime>,
 }
 
 impl HttpClientProvider {
@@ -44,7 +42,10 @@ impl HttpClientProvider {
     /// Configure the HTTP client for a particular actor.
     /// Each actor gets a dedicated client so that we can take advantage of connection pooling.
     /// TODO: This needs to set things like timeouts, redirects, etc.
-    fn configure(&self, config: CapabilityConfiguration) -> Result<Vec<u8>, Box<dyn Error>> {
+    fn configure(
+        &self,
+        config: CapabilityConfiguration,
+    ) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
         let timeout = match config.values.get("timeout") {
             Some(v) => {
                 let parsed: u64 = v.parse()?;
@@ -62,7 +63,7 @@ impl HttpClientProvider {
         };
 
         self.clients.write().unwrap().insert(
-            config.module.clone(),
+            config.module,
             reqwest::Client::builder()
                 .timeout(timeout)
                 .redirect(redirect_policy)
@@ -73,7 +74,10 @@ impl HttpClientProvider {
 
     /// Clean up resources when a actor disconnects.
     /// This removes the HTTP client associated with an actor.
-    fn deconfigure(&self, config: CapabilityConfiguration) -> Result<Vec<u8>, Box<dyn Error>> {
+    fn deconfigure(
+        &self,
+        config: CapabilityConfiguration,
+    ) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
         if self
             .clients
             .write()
@@ -91,26 +95,15 @@ impl HttpClientProvider {
     }
 
     /// Make a HTTP request.
-    fn request(&self, actor: &str, msg: Request) -> Result<Vec<u8>, Box<dyn Error>> {
+    fn request(
+        &self,
+        actor: &str,
+        msg: RequestArgs,
+    ) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
         let lock = self.clients.read().unwrap();
         let client = lock.get(actor).unwrap();
         self.runtime
-            .handle()
             .block_on(async { http_client::request(&client, msg).await })
-    }
-
-    fn get_descriptor(&self) -> Result<Vec<u8>, Box<dyn Error>> {
-        use OperationDirection::ToProvider;
-        Ok(serialize(
-            CapabilityDescriptor::builder()
-                .id(CAPABILITY_ID)
-                .name("wasCC HTTP Client Provider")
-                .long_description("A http client provider")
-                .version(VERSION)
-                .revision(REVISION)
-                .with_operation(OP_PERFORM_REQUEST, ToProvider, "Perform a http request")
-                .build(),
-        )?)
     }
 }
 
@@ -118,8 +111,7 @@ impl Default for HttpClientProvider {
     fn default() -> Self {
         let _ = env_logger::builder().format_module_path(false).try_init();
 
-        let r = tokio::runtime::Builder::new()
-            .threaded_scheduler()
+        let r = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
             .unwrap();
@@ -127,14 +119,17 @@ impl Default for HttpClientProvider {
         HttpClientProvider {
             dispatcher: Arc::new(RwLock::new(Box::new(NullDispatcher::new()))),
             clients: Arc::new(RwLock::new(HashMap::new())),
-            runtime: r,
+            runtime: Arc::new(r),
         }
     }
 }
 
 /// Implements the CapabilityProvider interface.
 impl CapabilityProvider for HttpClientProvider {
-    fn configure_dispatch(&self, dispatcher: Box<dyn Dispatcher>) -> Result<(), Box<dyn Error>> {
+    fn configure_dispatch(
+        &self,
+        dispatcher: Box<dyn Dispatcher>,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         info!("Dispatcher configured");
 
         let mut lock = self.dispatcher.write().unwrap();
@@ -143,33 +138,38 @@ impl CapabilityProvider for HttpClientProvider {
     }
 
     /// Handle all calls from actors.
-    fn handle_call(&self, actor: &str, op: &str, msg: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+    fn handle_call(
+        &self,
+        actor: &str,
+        op: &str,
+        msg: &[u8],
+    ) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
         match op {
             OP_BIND_ACTOR if actor == SYSTEM_ACTOR => self.configure(deserialize(msg)?),
             OP_REMOVE_ACTOR if actor == SYSTEM_ACTOR => self.deconfigure(deserialize(msg)?),
             OP_PERFORM_REQUEST => self.request(actor, deserialize(msg)?),
-            OP_GET_CAPABILITY_DESCRIPTOR => self.get_descriptor(),
             _ => Err(format!("Unknown operation: {}", op).into()),
         }
     }
+
+    fn stop(&self) {}
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use codec::deserialize;
-    use codec::http::Response;
     use mockito::mock;
+    use wasmcloud_actor_http_client::{RequestArgs, Response};
 
     #[test]
     fn test_request() {
         let _ = env_logger::try_init();
-        let request = Request {
+        let request = RequestArgs {
             method: "GET".to_string(),
-            path: mockito::server_url(),
-            header: HashMap::new(),
+            url: mockito::server_url(),
+            headers: HashMap::new(),
             body: vec![],
-            query_string: String::new(),
         };
 
         let _m = mock("GET", "/")

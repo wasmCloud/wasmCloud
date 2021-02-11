@@ -1,14 +1,14 @@
 [package]
-name = "wascc-httpclient"
-version = "0.1.0"
-authors = ["Dan Norris <protochron@users.noreply.github.com>"]
+name = "wasmcloud-httpclient"
+version = "0.2.0"
+authors = ["wasmCloud Team"]
 edition = "2018"
-repository = "https://github.com/wascc/http-client-provider"
-description = "HTTP client capability provider for the waSCC wasm host runtime"
+repository = "https://github.com/wasmcloud/capability-providers"
+description = "HTTP client capability provider for the wasmCloud wasm host runtime"
 license = "Apache-2.0"
-documentation = "https://docs.rs/wascc-host"
+documentation = "https://docs.rs/wasmcloud-httpclient"
 readme = "README.md"
-keywords = ["webassembly", "wasm", "wasi", "wascc"]
+keywords = ["webassembly", "wasm", "wasi", "wasmcloud", "http"]
 categories = ["wasm", "api-bindings"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -20,15 +20,17 @@ static_plugin = []
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-wascc-codec = "0.7.0"
-log = "0.4.8"
-futures = "0.3.5"
-env_logger = "0.7.1"
-reqwest = { version = "0.10", features = ["json", "gzip", "brotli"] }
-tokio = { version = "0.2", features = ["rt-threaded", "tcp", "time", "macros", "signal", "dns"] }
-base64 = "0.12.1"
-serde_json = "1.0.53"
+wascc-codec = "0.9.0"
+log = "0.4.14"
+futures = "0.3.12"
+env_logger = "0.8.2"
+reqwest = { version = "0.11", features = ["json", "gzip", "brotli"] }
+tokio = { version = "1.1.1", features = ["rt-multi-thread", "net", "time", "macros", "signal"] }
+base64 = "0.13.0"
+serde_json = "1.0.61"
+wasmcloud-actor-http-client = "0.1.0"
+wasmcloud-actor-core = "0.2.0"
 
 [dev-dependencies]
-mockito = "0.25"
-tokio = { version = "0.2", features = ["rt-threaded", "tcp", "time", "macros", "signal", "dns", "full"]}
+mockito = "0.29"
+tokio = { version = "1.1.1", features = ["rt-multi-thread", "net", "time", "macros", "signal", "full"]}
