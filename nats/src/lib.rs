@@ -6,8 +6,8 @@ extern crate wasmcloud_actor_messaging as messaging;
 
 mod natsprov;
 
-#[allow(unused)]
-const CAPABILITY_ID: &str = "wasmcloud:messaging"; // used by the Makefile
+#[allow(unused)] // used by the Makefile
+const CAPABILITY_ID: &str = "wasmcloud:messaging";
 
 #[macro_use]
 extern crate log;

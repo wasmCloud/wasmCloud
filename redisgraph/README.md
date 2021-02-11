@@ -1,6 +1,11 @@
-# Redis Graph - Graph Database Capability Provider
+[![crates.io](https://img.shields.io/crates/v/wasmcloud-redisgraph.svg)](https://crates.io/crates/wasmcloud-redisgraph)
+![Rust](https://github.com/wasmcloud/capability-providers/workflows/REDISGRAPH/badge.svg)
+![license](https://img.shields.io/crates/l/wasmcloud-redisgraph.svg)
+[![documentation](https://docs.rs/wasmcloud-redisgraph/badge.svg)](https://docs.rs/wasmcloud-redisgraph)
 
-This repository contains a shared library of [types and protocol definitions](./common), a [graph-guest](./graphguest) library that can be used by any actor that wants to consume _any_ graph database capability (not just RedisGraph), a [sample actor](./graph-actor), and the main capability provider [library](./wascc-redisgraph).
+# wasmCloud Graph Database Provider (Redis Graph)
+
+This repository contains a [sample actor](./examples/sample-graph-actor), and the main capability provider [library](./src).
 
 While the actor and common libraries should be usable across different types of graph databases, this provider is build on top of [Redis Graph](https://oss.redislabs.com/redisgraph/).
 

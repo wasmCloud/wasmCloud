@@ -1,4 +1,9 @@
-# NATS Distributed Key-Value Store
+[![crates.io](https://img.shields.io/crates/v/wasmcloud-nats-kvcache.svg)](https://crates.io/crates/wasmcloud-nats-kvcache)
+![Rust](https://github.com/wasmcloud/capability-providers/workflows/NATS-KVCACHE/badge.svg)
+![license](https://img.shields.io/crates/l/wasmcloud-nats-kvcache.svg)
+[![documentation](https://docs.rs/wasmcloud-nats-kvcache/badge.svg)](https://docs.rs/wasmcloud-nats-kvcache)
+
+# wasmCloud Key-Value Provider (NATS Distributed Key-Value Cache)
 
 This is an _in-memory_ key-value cache that is distributed by replicating state changes across a specific set of
 NATS topics. It is understood that in the "bare NATS" version of this provider, message loss can potentially happen

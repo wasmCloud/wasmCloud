@@ -1,5 +1,5 @@
 [![crates.io](https://img.shields.io/crates/v/wasmcloud-logging.svg)](https://crates.io/crates/wasmcloud-logging)&nbsp;
-![Rust](https://github.com/wasmcloud/logging-provider/workflows/Rust/badge.svg)&nbsp;
+![Rust](https://github.com/wasmcloud/capability-providers/workflows/LOGGING/badge.svg)&nbsp;
 ![license](https://img.shields.io/crates/l/wasmcloud-logging.svg)&nbsp;
 [![documentation](https://docs.rs/wasmcloud-logging/badge.svg)](https://docs.rs/wasmcloud-logging)
 

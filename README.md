@@ -20,6 +20,22 @@ cargo install --git https://github.com/ChrisRx/cross --branch add-darwin-target 
 
 MIPS-based architectures are not cross-compiled by default because some capability providers have dependencies that do not currently support MIPS. In particular, anything using [rustls](https://github.com/ctz/rustls) will not compile for MIPS-based architectures until [ring](https://github.com/briansmith/ring), a cryptography library that rustls depends on, fully [supports MIPS](https://github.com/briansmith/ring/issues/562).
 
+### Latest Versions
+| Capability Provider | Crate | Provider Archive OCI Reference |
+|---|---|---|
+| FS (File system) | [![Crates.io](https://img.shields.io/crates/v/wasmcloud-fs)](https://crates.io/crates/wasmcloud-fs) | wasmcloud.azurecr.io/fs |
+| HTTP Client | [![Crates.io](https://img.shields.io/crates/v/wasmcloud-httpclient)](https://crates.io/crates/wasmcloud-httpclient) | wasmcloud.azurecr.io/httpclient |
+| HTTP Server | [![Crates.io](https://img.shields.io/crates/v/wasmcloud-httpserver)](https://crates.io/crates/wasmcloud-httpserver) | wasmcloud.azurecr.io/httpserver |
+| Logging | [![Crates.io](https://img.shields.io/crates/v/wasmcloud-logging)](https://crates.io/crates/wasmcloud-logging) | wasmcloud.azurecr.io/logging |
+| NATS | [![Crates.io](https://img.shields.io/crates/v/wasmcloud-nats)](https://crates.io/crates/wasmcloud-nats) | wasmcloud.azurecr.io/nats |
+| Redis | [![Crates.io](https://img.shields.io/crates/v/wasmcloud-redis)](https://crates.io/crates/wasmcloud-redis) | wasmcloud.azurecr.io/redis |
+| Redis Streams | [![Crates.io](https://img.shields.io/crates/v/wasmcloud-redisstreams)](https://crates.io/crates/wasmcloud-redisstreams) | wasmcloud.azurecr.io/redisstreams |
+| RedisGraph | [![Crates.io](https://img.shields.io/crates/v/wasmcloud-redisgraph)](https://crates.io/crates/wasmcloud-redisgraph) | wasmcloud.azurecr.io/redisgraph |
+| S3 | [![Crates.io](https://img.shields.io/crates/v/wasmcloud-s3)](https://crates.io/crates/wasmcloud-s3) | wasmcloud.azurecr.io/s3 |
+| Telnet | [![Crates.io](https://img.shields.io/crates/v/wasmcloud-telnet)](https://crates.io/crates/wasmcloud-telnet) | wasmcloud.azurecr.io/telnet |
+
+OCI reference tags match up exactly to the `crates.io` version, without the prefixed `v`. For example, if the `Logging` provider shows a `crates.io` version of `v0.9.0`, you can access the `Logging` provider archive at `wasmcloud.azurecr.io/logging:0.9.0`.
+
 ### Getting started
 
 You can cross-compile every provider running:

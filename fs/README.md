@@ -1,9 +1,9 @@
 [![crates.io](https://img.shields.io/crates/v/wasmcloud-fs.svg)](https://crates.io/crates/wasmcloud-fs)&nbsp;
-![Rust](https://github.com/wasmcloud/capability-providers/workflows/Rust/badge.svg)
+![Rust](https://github.com/wasmcloud/capability-providers/workflows/FS/badge.svg)
 ![license](https://img.shields.io/crates/l/wasmcloud-fs.svg)&nbsp;
 [![documentation](https://docs.rs/wasmcloud-fs/badge.svg)](https://docs.rs/wasmcloud-fs)
 
-# File System Provider
+# wasmCloud File System Provider
 
 The **wasmCloud** File System provider is a capability provider for the `wasmcloud:blobstore` protocol. This generic protocol can be used to support capability providers like Amazon S3, Azure blob storage, Google blob storage, and more. This crate is an implementation of the protocol that operates on top of a designated root directory and can be used interchangeably with the larger cloud blob providers.
 
