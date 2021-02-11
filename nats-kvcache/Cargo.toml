@@ -1,11 +1,11 @@
 [package]
 name = "nats-kvcache"
-version = "0.1.0"
+version = "0.3.0"
 authors = ["wasmCloud Team"]
 edition = "2018"
 license-file = "LICENSE.txt"
 description = "A key-value capability provider for wasmCloud that replicates data changes over NATS"
-repository = "https://github.com/wascc/wasccd"
+repository = "https://github.com/wasmcloud/capability-providers"
 documentation = "https://wasmcloud.com"
 readme = "README.md"
 keywords = [
@@ -28,8 +28,8 @@ crate-type = ["cdylib", "rlib"]
 static_plugin = []
 
 [dependencies]
-actor-keyvalue = { git = "https://github.com/wasmCloud/actor-interfaces", branch = "main"}
-actor-core = { git = "https://github.com/wasmCloud/actor-interfaces", branch = "main"}
+wasmcloud-actor-keyvalue = "0.2.0"
+wasmcloud-actor-core = "0.2.0"
 nats = "0.8.6"
 wascc-codec = "0.9.0"
 wascap = "0.5.1"

@@ -8,9 +8,9 @@ use codec::core::{OP_BIND_ACTOR, OP_HEALTH_REQUEST, OP_REMOVE_ACTOR};
 #[macro_use]
 extern crate log;
 
-extern crate actor_core as actorcore;
+extern crate wasmcloud_actor_core as actorcore;
 use actorcore::{deserialize, serialize, CapabilityConfiguration, HealthCheckResponse};
-extern crate actor_keyvalue as actorkeyvalue;
+extern crate wasmcloud_actor_keyvalue as actorkeyvalue;
 use actorkeyvalue::*;
 
 use redis::Connection;
@@ -21,10 +21,9 @@ use std::error::Error;
 use std::sync::Arc;
 use std::sync::RwLock;
 
+#[allow(unused)]
 const CAPABILITY_ID: &str = "wasmcloud:keyvalue";
 const SYSTEM_ACTOR: &str = "system";
-const REVISION: u32 = 3; // Increment for each crates publish
-const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[cfg(not(feature = "static_plugin"))]
 capability_provider!(RedisKVProvider, RedisKVProvider::new);

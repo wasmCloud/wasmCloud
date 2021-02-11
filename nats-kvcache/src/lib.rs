@@ -30,8 +30,8 @@ extern crate eventsourcing_derive;
 
 extern crate eventsourcing;
 
-extern crate actor_core as core;
-extern crate actor_keyvalue as keyvalue;
+extern crate wasmcloud_actor_core as core;
+extern crate wasmcloud_actor_keyvalue as keyvalue;
 #[macro_use]
 extern crate wascc_codec as codec;
 #[macro_use]

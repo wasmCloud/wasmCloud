@@ -4,8 +4,6 @@ extern crate wascc_codec as codec;
 #[macro_use]
 extern crate log;
 
-use actor_blobstore::*;
-use actor_core::CapabilityConfiguration;
 use chunks::Chunks;
 use codec::capabilities::{CapabilityProvider, Dispatcher, NullDispatcher};
 use codec::core::{OP_BIND_ACTOR, OP_REMOVE_ACTOR};
@@ -18,6 +16,8 @@ use std::{
     path::{Path, PathBuf},
     sync::{Arc, RwLock},
 };
+use wasmcloud_actor_blobstore::*;
+use wasmcloud_actor_core::CapabilityConfiguration;
 
 mod chunks;
 
@@ -358,13 +358,13 @@ impl CapabilityProvider for FileSystemProvider {
 mod tests {
     use super::{sanitize_blob, sanitize_container};
     use crate::FileSystemProvider;
-    use actor_blobstore::{Blob, Container, FileChunk};
-    use actor_core::CapabilityConfiguration;
     use std::collections::HashMap;
     use std::env::temp_dir;
     use std::fs::File;
     use std::io::{BufReader, Read};
     use std::path::{Path, PathBuf};
+    use wasmcloud_actor_blobstore::{Blob, Container, FileChunk};
+    use wasmcloud_actor_core::CapabilityConfiguration;
 
     #[test]
     fn no_hacky_hacky() {

@@ -1,13 +1,13 @@
-use actor_graphdb;
-use actor_graphdb::generated::Column;
 use redisgraph;
 use redisgraph::result_set::Column::*;
 use redisgraph::result_set::Scalar;
 use std::collections::HashMap;
+use wasmcloud_actor_graphdb;
+use wasmcloud_actor_graphdb::generated::Column;
 
 pub(crate) fn redisgraph_column_to_common(
     rc: redisgraph::result_set::Column,
-) -> actor_graphdb::generated::Column {
+) -> wasmcloud_actor_graphdb::generated::Column {
     match rc {
         Scalars(s) => {
             let scalars = Some(
@@ -48,8 +48,8 @@ pub(crate) fn redisgraph_column_to_common(
 
 pub(crate) fn redisgraph_scalar_to_common(
     rs: redisgraph::result_set::Scalar,
-) -> actor_graphdb::generated::Scalar {
-    let mut scalar = actor_graphdb::generated::Scalar::default();
+) -> wasmcloud_actor_graphdb::generated::Scalar {
+    let mut scalar = wasmcloud_actor_graphdb::generated::Scalar::default();
     match rs {
         Scalar::Boolean(b) => scalar.bool_value = Some(b),
         Scalar::Double(d) => scalar.double_value = Some(d),
@@ -62,7 +62,7 @@ pub(crate) fn redisgraph_scalar_to_common(
 
 pub(crate) fn redisgraph_node_to_common(
     rn: redisgraph::result_set::Node,
-) -> actor_graphdb::generated::Node {
+) -> wasmcloud_actor_graphdb::generated::Node {
     let labels = rn
         .labels
         .into_iter()
@@ -73,19 +73,19 @@ pub(crate) fn redisgraph_node_to_common(
         .into_iter()
         .map(|(k, v)| (redisstring_to_string(k), redisgraph_scalar_to_common(v)))
         .collect::<HashMap<_, _>>();
-    actor_graphdb::generated::Node { labels, properties }
+    wasmcloud_actor_graphdb::generated::Node { labels, properties }
 }
 
 pub(crate) fn redisgraph_relation_to_common(
     rr: redisgraph::result_set::Relation,
-) -> actor_graphdb::generated::Relation {
+) -> wasmcloud_actor_graphdb::generated::Relation {
     let type_name = redisstring_to_string(rr.type_name);
     let properties = rr
         .properties
         .into_iter()
         .map(|(k, v)| (redisstring_to_string(k), redisgraph_scalar_to_common(v)))
         .collect::<HashMap<_, _>>();
-    actor_graphdb::generated::Relation {
+    wasmcloud_actor_graphdb::generated::Relation {
         type_name,
         properties,
     }

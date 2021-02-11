@@ -1,5 +1,4 @@
 use crate::FileUpload;
-use actor_core::CapabilityConfiguration;
 use futures::TryStreamExt;
 use rusoto_core::credential::{DefaultCredentialsProvider, StaticProvider};
 use rusoto_core::Region;
@@ -10,6 +9,7 @@ use rusoto_s3::{
     CreateBucketRequest, DeleteBucketRequest, DeleteObjectRequest, GetObjectRequest,
     HeadObjectRequest, ListObjectsV2Request, PutObjectRequest, S3Client, S3,
 };
+use wasmcloud_actor_core::CapabilityConfiguration;
 
 use std::error::Error;
 

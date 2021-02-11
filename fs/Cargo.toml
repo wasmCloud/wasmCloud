@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-fs"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["wasmCloud Team"]
 edition = "2018"
 homepage = "https://wasmcloud.dev"
@@ -23,5 +23,5 @@ static_plugin = []
 wascc-codec = "0.9.0"
 log = "0.4.11"
 env_logger = "0.7.1"
-actor-blobstore = { git = "https://github.com/wasmcloud/actor-interfaces", branch = "main" }
-actor-core = { git = "https://github.com/wasmcloud/actor-interfaces", branch = "main" }
+wasmcloud-actor-blobstore = "0.1.0"
+wasmcloud-actor-core = "0.2.0"

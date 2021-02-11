@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-redisgraph"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["Kevin Hoffman <alothien@gmail.com>"]
 edition = "2018"
 homepage = "https://wasmcloud.dev"
@@ -20,8 +20,8 @@ crate-type = ["cdylib", "rlib"]
 static_plugin = []
 
 [dependencies]
-actor-graphdb = { git = "https://github.com/wasmCloud/actor-interfaces", branch = "main"}
-actor-core = { git = "https://github.com/wasmCloud/actor-interfaces", branch = "main"}
+wasmcloud-actor-graphdb = "0.1.0"
+wasmcloud-actor-core = "0.2.0"
 wascc-codec = "0.9.0"
 log = "0.4.13"
 env_logger = "0.8.2"

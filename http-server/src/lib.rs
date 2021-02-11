@@ -9,18 +9,17 @@ use actix_web::dev::Server;
 use actix_web::http::{HeaderName, HeaderValue, StatusCode};
 use actix_web::web::Bytes;
 use actix_web::{middleware, web, App, HttpRequest, HttpResponse, HttpServer};
+use codec::capabilities::{CapabilityProvider, Dispatcher, NullDispatcher};
+use codec::core::{OP_BIND_ACTOR, OP_HEALTH_REQUEST, OP_REMOVE_ACTOR};
 use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Arc;
 use std::sync::RwLock;
+use wasmcloud_actor_core::{deserialize, serialize, CapabilityConfiguration, HealthCheckResponse};
+use wasmcloud_actor_http_server::{Request, Response};
 
-use actor_core::{deserialize, serialize, CapabilityConfiguration, HealthCheckResponse};
-use codec::capabilities::{CapabilityProvider, Dispatcher, NullDispatcher};
-use codec::core::{OP_BIND_ACTOR, OP_HEALTH_REQUEST, OP_REMOVE_ACTOR};
-
+#[allow(unused)]
 const CAPABILITY_ID: &str = "wasmcloud:httpserver";
-const VERSION: &str = env!("CARGO_PKG_VERSION");
-const REVISION: u32 = 3; // Increment for each crates publish
 
 const OP_HANDLE_REQUEST: &str = "HandleRequest";
 
@@ -172,7 +171,7 @@ async fn request_handler(
     state: web::Data<Arc<RwLock<Box<dyn Dispatcher>>>>,
     module: web::Data<String>,
 ) -> HttpResponse {
-    let request = actor_http_server::Request {
+    let request = Request {
         method: req.method().as_str().to_string(),
         path: req.uri().path().to_string(),
         query_string: req.query_string().to_string(),
@@ -187,7 +186,7 @@ async fn request_handler(
     };
     match resp {
         Ok(r) => {
-            let r = deserialize::<actor_http_server::Response>(r.as_slice());
+            let r = deserialize::<Response>(r.as_slice());
             if let Ok(r) = r {
                 let mut response = HttpResponse::with_body(
                     StatusCode::from_u16(r.status_code as _).unwrap(),

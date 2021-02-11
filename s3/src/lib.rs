@@ -8,8 +8,6 @@ extern crate wascc_codec as codec;
 #[macro_use]
 extern crate log;
 
-use actor_blobstore::*;
-use actor_core::CapabilityConfiguration;
 use codec::capabilities::{CapabilityProvider, Dispatcher, NullDispatcher};
 use codec::core::{OP_BIND_ACTOR, OP_REMOVE_ACTOR};
 use codec::{deserialize, serialize};
@@ -19,15 +17,16 @@ use std::{
     collections::HashMap,
     sync::{Arc, RwLock},
 };
+use wasmcloud_actor_blobstore::*;
+use wasmcloud_actor_core::CapabilityConfiguration;
 mod s3;
 
 #[cfg(not(feature = "static_plugin"))]
 capability_provider!(S3Provider, S3Provider::new);
 
+#[allow(unused)]
 const CAPABILITY_ID: &str = "wasmcloud:blobstore";
 const SYSTEM_ACTOR: &str = "system";
-const VERSION: &str = env!("CARGO_PKG_VERSION");
-const REVISION: u32 = 2; // Increment for each crates publish
 
 #[derive(Debug, PartialEq)]
 struct FileUpload {

@@ -1,6 +1,6 @@
 [package]
 name = "graph-actor"
-version = "0.0.1"
+version = "0.1.0"
 authors = ["Kevin Hoffman <alothien@gmail.com>"]
 edition = "2018"
 
@@ -9,10 +9,9 @@ crate-type = ["cdylib"]
 
 [dependencies]
 wapc-guest = "0.4.0"
-actor-graphdb = { path = "../../../../actor-interfaces/rust/graphdb", features = ["guest"] }
-actor-http-server = { git = "https://github.com/wasmCloud/actor-interfaces", branch = "main" }
-#actor-graphdb = { git = "https://github.com/wasmCloud/actor-interfaces", branch = "graphdb", features = ["guest"]}
-actor-core = { git = "https://github.com/wasmCloud/actor-interfaces", branch = "main", features = ["guest"]}
+wasmcloud-actor-graphdb = { version = "0.1.1", features = ["guest"] }
+wasmcloud-actor-http-server = { version = "0.1.0", features = ["guest"]}
+wasmcloud-actor-core = { version = "0.2.0", features = ["guest"]}
 serde_json = "1.0.53"
 log = "0.4.8"
 

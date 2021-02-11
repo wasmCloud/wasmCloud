@@ -7,11 +7,6 @@
 extern crate wascc_codec as codec;
 #[macro_use]
 extern crate log;
-use actor_core::CapabilityConfiguration;
-use actor_graphdb::{
-    deserialize, serialize, DeleteGraphArgs, DeleteResponse, QueryGraphArgs, QueryResponse,
-    OP_DELETE, OP_QUERY,
-};
 use codec::capabilities::{CapabilityProvider, Dispatcher, NullDispatcher};
 use codec::core::{OP_BIND_ACTOR, OP_REMOVE_ACTOR};
 use redis::Connection;
@@ -22,13 +17,17 @@ use std::{
     collections::HashMap,
     sync::{Arc, RwLock},
 };
+use wasmcloud_actor_core::CapabilityConfiguration;
+use wasmcloud_actor_graphdb::{
+    deserialize, serialize, DeleteGraphArgs, DeleteResponse, QueryGraphArgs, QueryResponse,
+    OP_DELETE, OP_QUERY,
+};
 mod conversions;
 mod rgraph;
 
+#[allow(unused)]
 const CAPABILITY_ID: &str = "wasmcloud:graphdb";
 const SYSTEM_ACTOR: &str = "system";
-const VERSION: &str = env!("CARGO_PKG_VERSION");
-const REVISION: u32 = 2; // Increment for each crates publish
 
 type GraphHandlerResult = Result<Vec<u8>, Box<dyn Error + Send + Sync + 'static>>;
 
@@ -134,14 +133,14 @@ impl RedisgraphProvider {
 // ResultSet type
 fn to_common_resultset(
     rs: redisgraph::ResultSet,
-) -> Result<actor_graphdb::ResultSet, Box<dyn Error + Send + Sync>> {
+) -> Result<wasmcloud_actor_graphdb::ResultSet, Box<dyn Error + Send + Sync>> {
     let columns = rs
         .columns
         .into_iter()
         .map(conversions::redisgraph_column_to_common)
         .collect::<Vec<_>>();
     let statistics = rs.statistics.0;
-    Ok(actor_graphdb::ResultSet {
+    Ok(wasmcloud_actor_graphdb::ResultSet {
         columns,
         statistics,
     })

@@ -2,13 +2,13 @@
 
 use std::{collections::HashMap, time::Duration};
 
-use actor_core::{deserialize, serialize, CapabilityConfiguration};
-use actor_keyvalue::{
+use nats_kvcache::NatsReplicatedKVProvider;
+use wascc_codec::{capabilities::CapabilityProvider, core::OP_BIND_ACTOR};
+use wasmcloud_actor_core::{deserialize, serialize, CapabilityConfiguration};
+use wasmcloud_actor_keyvalue::{
     AddArgs, GetArgs, GetResponse, SetAddArgs, SetQueryArgs, SetQueryResponse, OP_ADD, OP_GET,
     OP_SET_ADD, OP_SET_QUERY,
 };
-use nats_kvcache::NatsReplicatedKVProvider;
-use wascc_codec::{capabilities::CapabilityProvider, core::OP_BIND_ACTOR};
 
 #[test]
 fn steadystate_and_replay() {
