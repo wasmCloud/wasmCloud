@@ -61,6 +61,7 @@ async fn kvcounter_link_first() {
 }
 
 #[actix_rt::test]
+#[ignore]
 async fn distributed_echo() {
     let res = with_lattice::distributed_echo().await;
     if let Err(ref e) = res {
