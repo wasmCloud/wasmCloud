@@ -1,8 +1,8 @@
 use crate::common::{await_actor_count, await_provider_count, gen_kvcounter_host, par_from_file};
-use crate::generated::http::{deserialize, serialize, Request, Response};
 use actix_rt::time::delay_for;
 use std::collections::HashMap;
 use std::time::Duration;
+use wasmcloud_actor_http_server::{deserialize, serialize, Request, Response};
 use wasmcloud_host::Result;
 use wasmcloud_host::{Actor, HostBuilder, NativeCapability};
 

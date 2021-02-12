@@ -1,5 +1,5 @@
 [package]
-name = "control-interface"
+name = "wasmcloud-control-interface"
 version = "0.1.0"
 authors = ["wasmCloud Team"]
 edition = "2018"

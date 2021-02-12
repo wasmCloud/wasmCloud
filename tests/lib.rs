@@ -1,6 +1,5 @@
 mod common;
 mod control;
-mod generated;
 mod no_lattice;
 mod with_lattice;
 

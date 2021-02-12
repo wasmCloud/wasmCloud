@@ -1,13 +1,13 @@
-name: CONTROL-INTERFACE_RELEASE
+name: WASMCLOUD-CONTROL-INTERFACE_RELEASE
 
 on:
   push:
     tags:
-    - 'control-interface-v*'
+    - 'wasmcloud-control-interface-v*'
 
 env:
   CARGO_TERM_COLOR: always
-  working-directory: ./crates/control-interface
+  working-directory: ./crates/wasmcloud-control-interface
 
 jobs:
   cargo_check:
