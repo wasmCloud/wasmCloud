@@ -1,6 +1,8 @@
 use structopt::clap::AppSettings;
 use structopt::StructOpt;
 
+mod drain;
+use drain::DrainCli;
 mod claims;
 use claims::ClaimsCli;
 mod ctl;
@@ -38,6 +40,9 @@ struct Cli {
 
 #[derive(Debug, Clone, StructOpt)]
 enum CliCommand {
+    /// Manage contents of local wasmCloud cache
+    #[structopt(name = "drain")]
+    Drain(DrainCli),
     /// Generate and manage JWTs for wasmCloud Actors
     #[structopt(name = "claims")]
     Claims(ClaimsCli),
@@ -63,6 +68,7 @@ async fn main() {
     let cli = Cli::from_args();
 
     let res = match cli.command {
+        CliCommand::Drain(draincmd) => drain::handle_command(draincmd.command()),
         CliCommand::Keys(keyscli) => keys::handle_command(keyscli.command()),
         CliCommand::Claims(claimscli) => claims::handle_command(claimscli.command()).await,
         CliCommand::Ctl(ctlcli) => ctl::handle_command(ctlcli.command()).await,

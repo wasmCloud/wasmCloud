@@ -1,5 +1,6 @@
 use crate::claims::*;
 use crate::ctl::*;
+use crate::drain::*;
 use crate::keys::*;
 use crate::par::*;
 use crate::reg::*;
@@ -104,6 +105,10 @@ struct ReplCli {
 #[derive(StructOpt, Debug, Clone)]
 #[structopt(global_settings(&[AppSettings::ColorNever, AppSettings::DisableVersion, AppSettings::VersionlessSubcommands]))]
 enum ReplCliCommand {
+    // Manage contents of local wasmCloud cache
+    #[structopt(name = "drain")]
+    Drain(DrainCliCommand),
+
     /// Create, inspect, and modify capability provider archive files
     #[structopt(name = "ctl")]
     Ctl(CtlCliCommand),
@@ -333,6 +338,15 @@ impl WashRepl {
                                 info!(target: WASH_CMD_INFO, "Goodbye");
                                 return Err("REPL Quit".into());
                             }
+                            ReplCliCommand::Drain(draincmd) => {
+                                let output_state = Arc::clone(&self.output_state);
+                                std::thread::spawn(|| {
+                                    match handle_drain(draincmd, output_state) {
+                                        Ok(r) => r,
+                                        Err(e) => error!("Error handling drain: {}", e),
+                                    };
+                                });
+                            }
                             ReplCliCommand::Claims(claimscmd) => {
                                 let output_state = Arc::clone(&self.output_state);
                                 std::thread::spawn(|| {
@@ -550,6 +564,12 @@ async fn handle_up(cmd: UpCliCommand) -> Result<()> {
         }
     }
     cleanup_terminal(&mut terminal);
+    Ok(())
+}
+
+fn handle_drain(drain_cmd: DrainCliCommand, output_state: Arc<Mutex<OutputState>>) -> Result<()> {
+    let output = crate::drain::handle_command(drain_cmd)?;
+    log_to_output(output_state, output);
     Ok(())
 }
 
