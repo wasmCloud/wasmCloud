@@ -41,6 +41,12 @@ pub struct HostBuilder {
     strict_update_check: bool,
 }
 
+impl Default for HostBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl HostBuilder {
     /// Creates a new host builder
     pub fn new() -> HostBuilder {
@@ -223,7 +229,7 @@ impl Host {
             namespace: Some(self.namespace.to_string()),
             key: KeyPair::from_seed(&kp.seed()?)?,
             auth: self.authorizer.clone(),
-            rpc_timeout: self.rpc_timeout.clone(),
+            rpc_timeout: self.rpc_timeout,
         };
         mb.send(init).await?;
 
@@ -373,7 +379,7 @@ impl Host {
         link: Option<String>,
     ) -> Result<()> {
         let hc = HostController::from_hostlocal_registry(&self.id.borrow());
-        let link_name = link.unwrap_or("default".to_string());
+        let link_name = link.unwrap_or_else(|| "default".to_string());
         hc.send(StopProvider {
             provider_ref: provider_ref.to_string(),
             contract_id: contract_id.to_string(),
@@ -440,7 +446,7 @@ impl Host {
         bus.send(AdvertiseLink {
             contract_id: contract_id.to_string(),
             actor: actor.to_string(),
-            link_name: link_name.unwrap_or("default".to_string()),
+            link_name: link_name.unwrap_or_else(|| "default".to_string()),
             provider_id,
             values,
         })
@@ -457,10 +463,12 @@ impl Host {
         let hc = HostController::from_hostlocal_registry(&host_id);
         let bus = MessageBus::from_hostlocal_registry(&host_id);
 
-        if manifest.labels.len() > 0 {
+        if !manifest.labels.is_empty() {
             let mut labels = manifest.labels.clone();
+            // getting an iterator of this const produces `&&str` which is a super annoying type
+            #[allow(clippy::needless_range_loop)]
             for x in 0..RESTRICTED_LABELS.len() {
-                labels.remove(RESTRICTED_LABELS[x]); // getting an iterator of this const produces `&&str` which is a super annoying type
+                labels.remove(RESTRICTED_LABELS[x]);
             }
             hc.send(SetLabels { labels }).await?;
         }

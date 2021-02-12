@@ -96,17 +96,15 @@ pub(crate) fn authorize_invocation(
             } else {
                 Err("This actor has no embedded claims. Authorization denied".into())
             }
+        } else if actor_key == SYSTEM_ACTOR {
+            // system actor can call other actors
+            Ok(())
         } else {
-            if actor_key == SYSTEM_ACTOR {
-                // system actor can call other actors
-                Ok(())
-            } else {
-                Err(format!(
-                    "No claims found for actor '{}'. Has it been started?",
-                    actor_key
-                )
-                .into())
-            }
+            Err(format!(
+                "No claims found for actor '{}'. Has it been started?",
+                actor_key
+            )
+            .into())
         }
     } else {
         Ok(()) // Allow cap->actor calls without checking

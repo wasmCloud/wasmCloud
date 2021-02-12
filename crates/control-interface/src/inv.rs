@@ -61,7 +61,7 @@ impl Invocation {
             msg,
             id: subject,
             encoded_claims: claims.encode(&hostkey).unwrap(),
-            host_id: issuer.to_string(),
+            host_id: issuer,
         }
     }
 }
@@ -127,9 +127,9 @@ fn sha256_digest<R: Read>(mut reader: R) -> Result<Digest> {
 pub(crate) fn invocation_hash(target_url: &str, origin_url: &str, msg: &[u8]) -> String {
     use std::io::Write;
     let mut cleanbytes: Vec<u8> = Vec::new();
-    cleanbytes.write(origin_url.as_bytes()).unwrap();
-    cleanbytes.write(target_url.as_bytes()).unwrap();
-    cleanbytes.write(msg).unwrap();
+    cleanbytes.write_all(origin_url.as_bytes()).unwrap();
+    cleanbytes.write_all(target_url.as_bytes()).unwrap();
+    cleanbytes.write_all(msg).unwrap();
     let digest = sha256_digest(cleanbytes.as_slice()).unwrap();
     HEXUPPER.encode(digest.as_ref())
 }

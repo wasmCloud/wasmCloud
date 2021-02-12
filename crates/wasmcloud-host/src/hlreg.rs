@@ -22,9 +22,7 @@ pub(crate) trait HostLocalSystemService: SystemService {
     fn from_hostlocal_registry(hostid: &str) -> Addr<Self> {
         System::with_current(|sys| {
             let mut sreg = SREG.lock();
-            let reg = sreg
-                .entry(hostid.to_string())
-                .or_insert_with(|| HashMap::new());
+            let reg = sreg.entry(hostid.to_string()).or_insert_with(HashMap::new);
 
             if let Some(addr) = reg.get(&TypeId::of::<Self>()) {
                 if let Some(addr) = addr.downcast_ref::<Addr<Self>>() {

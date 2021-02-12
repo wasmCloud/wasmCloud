@@ -82,7 +82,7 @@ impl HostManifest {
 pub(crate) async fn generate_actor_start_messages(
     manifest: &HostManifest,
     allow_latest: bool,
-    allowed_insecure: &Vec<String>,
+    allowed_insecure: &[String],
 ) -> Vec<StartActor> {
     let mut v = Vec::new();
     for actor_ref in &manifest.actors {
@@ -114,7 +114,7 @@ pub(crate) async fn generate_actor_start_messages(
 pub(crate) async fn generate_provider_start_messages(
     manifest: &HostManifest,
     allow_latest: bool,
-    allowed_insecure: &Vec<String>,
+    allowed_insecure: &[String],
 ) -> Vec<StartProvider> {
     let mut v = Vec::new();
     for cap in &manifest.capabilities {

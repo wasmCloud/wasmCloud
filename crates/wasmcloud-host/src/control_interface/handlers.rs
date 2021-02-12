@@ -32,7 +32,7 @@ use wascap::jwt::Claims;
 pub(crate) async fn handle_update_actor(
     host: &str,
     msg: &nats::asynk::Message,
-    allowed_insecure: &Vec<String>,
+    allowed_insecure: &[String],
 ) {
     let hc = HostController::from_hostlocal_registry(host);
     let req = deserialize::<UpdateActorCommand>(&msg.data);
@@ -171,7 +171,7 @@ pub(crate) async fn handle_host_inventory_query(host: &str, msg: &nats::asynk::M
                     image_ref: a.image_ref.clone(),
                 })
                 .collect();
-            inv.labels = hi.labels.clone();
+            inv.labels = hi.labels;
         }
         Err(_) => {
             error!("Mailbox failure querying host controller for inventory");
@@ -243,11 +243,13 @@ pub(crate) async fn handle_start_actor(
     host: &str,
     msg: &nats::asynk::Message,
     allow_latest: bool,
-    allowed_insecure: &Vec<String>,
+    allowed_insecure: &[String],
 ) {
     let cmd = deserialize::<StartActorCommand>(&msg.data);
-    let mut ack = StartActorAck::default();
-    ack.host_id = host.to_string();
+    let mut ack = StartActorAck {
+        host_id: host.to_string(),
+        ..Default::default()
+    };
 
     if let Err(e) = cmd {
         let f = format!("Bad StartActor command received: {}", e);
@@ -361,13 +363,14 @@ pub(crate) async fn handle_stop_provider(host: &str, msg: &nats::asynk::Message)
         }
     }
 
-    if let Err(_) = hc
+    if hc
         .send(StopProvider {
             provider_ref: cmd.provider_ref,
             link_name: cmd.link_name,
             contract_id: cmd.contract_id,
         })
         .await
+        .is_err()
     {
         let f = "Host controller unavailable to stop provider";
         error!("{}", f);
@@ -383,10 +386,12 @@ pub(crate) async fn handle_start_provider(
     host: &str,
     msg: &nats::asynk::Message,
     allow_latest: bool,
-    allowed_insecure: &Vec<String>,
+    allowed_insecure: &[String],
 ) {
-    let mut ack = StartProviderAck::default();
-    ack.host_id = host.to_string();
+    let mut ack = StartProviderAck {
+        host_id: host.to_string(),
+        ..Default::default()
+    };
 
     let cmd = deserialize::<StartProviderCommand>(&msg.data);
     if let Err(e) = cmd {
@@ -450,7 +455,7 @@ pub(crate) async fn handle_start_provider(
         return;
     }
     let cap = cap.unwrap();
-    let provider_id = cap.id();
+    let _provider_id = cap.id();
 
     let r = hc
         .send(StartProvider {
@@ -495,11 +500,12 @@ pub(crate) async fn handle_stop_actor(host: &str, msg: &nats::asynk::Message) {
         }
     };
 
-    if let Err(_) = hc
+    if hc
         .send(StopActor {
             actor_ref: cmd.actor_ref,
         })
         .await
+        .is_err()
     {
         let f = "Host controller did not acknowledge stop command";
         error!("{}", f);
@@ -521,7 +527,7 @@ fn claims_to_if(c: &Claims<wascap::jwt::Actor>) -> ::control_interface::Claims {
             md.caps
                 .as_ref()
                 .map(|v| v.join(","))
-                .unwrap_or("".to_string()),
+                .unwrap_or_else(|| "".to_string()),
         );
         hm.insert("rev".to_string(), md.rev.unwrap_or(0).to_string());
         hm.insert(

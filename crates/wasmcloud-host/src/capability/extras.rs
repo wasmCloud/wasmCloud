@@ -96,7 +96,7 @@ impl ExtrasCapabilityProvider {
         let mut lock = self.sequences.write().unwrap();
         let seq = lock
             .entry(actor.to_string())
-            .or_insert(AtomicU64::new(0))
+            .or_insert_with(|| AtomicU64::new(0))
             .fetch_add(1, Ordering::SeqCst);
         let result = GeneratorResult {
             sequence_number: seq,

@@ -5,17 +5,15 @@ use crate::dispatch::{Invocation, InvocationResponse, ProviderDispatcher, WasmCl
 use crate::hlreg::HostLocalSystemService;
 use crate::messagebus::{EnforceLocalProviderLinks, MessageBus, Subscribe};
 use crate::middleware::{run_capability_post_invoke, run_capability_pre_invoke, Middleware};
+use crate::Host;
 use crate::{ControlEvent, Result};
-use crate::{Host, SYSTEM_ACTOR};
 use actix::prelude::*;
 use futures::executor::block_on;
 use libloading::{Library, Symbol};
 use std::env::temp_dir;
 use std::fs::File;
 use wascap::prelude::KeyPair;
-use wascc_codec::capabilities::{
-    CapabilityDescriptor, CapabilityProvider, OP_GET_CAPABILITY_DESCRIPTOR,
-};
+use wascc_codec::capabilities::CapabilityProvider;
 
 #[derive(Message)]
 #[rtype(result = "Result<WasmCloudEntity>")]
@@ -123,7 +121,7 @@ impl Handler<Initialize> for NativeCapabilityHost {
             ctx.stop();
             return Err(e);
         }
-        let url = entity.url().to_string();
+        let url = entity.url();
         let submsg = Subscribe {
             interest: entity.clone(),
             subscriber: ctx.address().recipient(),

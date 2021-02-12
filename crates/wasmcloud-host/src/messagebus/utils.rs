@@ -21,7 +21,7 @@ pub(crate) fn generate_link_invocation_and_call(
     // Add "hidden" configuration values to the config hashmap that
     // contain the issuer, capabilities list, name, and tags from
     // the source actor
-    let mut values = values.clone();
+    let mut values = values;
     values.insert(
         CONFIG_WASCC_CLAIMS_ISSUER.to_string(),
         claims.issuer.to_string(),
@@ -56,7 +56,7 @@ pub(crate) fn generate_link_invocation_and_call(
 
     let config = crate::generated::core::CapabilityConfiguration {
         module: actor.to_string(),
-        values: values.clone(),
+        values,
     };
     let inv = Invocation::new(
         key,

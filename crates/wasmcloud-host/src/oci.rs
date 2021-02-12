@@ -14,7 +14,7 @@ const OCI_MEDIA_TYPE: &str = "application/vnd.oci.image.layer.v1.tar";
 pub(crate) async fn fetch_oci_bytes(
     img: &str,
     allow_latest: bool,
-    allowed_insecure: &Vec<String>,
+    allowed_insecure: &[String],
 ) -> Result<Vec<u8>> {
     if !allow_latest && img.ends_with(":latest") {
         return Err(
@@ -97,7 +97,7 @@ async fn pull(
 pub(crate) async fn fetch_provider_archive(
     img: &str,
     allow_latest: bool,
-    allowed_insecure: &Vec<String>,
+    allowed_insecure: &[String],
 ) -> Result<ProviderArchive> {
     let bytes = fetch_oci_bytes(img, allow_latest, allowed_insecure).await?;
     ProviderArchive::try_load(&bytes)

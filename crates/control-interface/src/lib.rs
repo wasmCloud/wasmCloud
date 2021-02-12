@@ -228,7 +228,7 @@ impl Client {
         let bytes = serialize(StartProviderCommand {
             host_id: host_id.to_string(),
             provider_ref: provider_ref.to_string(),
-            link_name: link_name.unwrap_or("default".to_string()),
+            link_name: link_name.unwrap_or_else(|| "default".to_string()),
         })?;
         match actix_rt::time::timeout(self.timeout, self.nc.request(&subject, &bytes)).await? {
             Ok(msg) => {

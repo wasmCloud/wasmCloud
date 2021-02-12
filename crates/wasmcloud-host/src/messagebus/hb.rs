@@ -29,7 +29,7 @@ impl MessageBus {
             ctx.wait(
                 async move {
                     let c = lc.get_all_claims().await;
-                    let claims = c.unwrap_or(HashMap::new()).values().cloned().collect();
+                    let claims = c.unwrap_or_default().values().cloned().collect();
                     let evt = generate_heartbeat_event(entities, claims, seed).await;
                     let cp = ControlInterface::from_hostlocal_registry(&host_id);
                     cp.do_send(PublishEvent { event: evt });
