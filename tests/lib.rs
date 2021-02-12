@@ -5,7 +5,6 @@ mod no_lattice;
 mod with_lattice;
 
 use std::env::temp_dir;
-use wasmcloud_host::Result;
 
 #[cfg(test)]
 #[ctor::ctor]
