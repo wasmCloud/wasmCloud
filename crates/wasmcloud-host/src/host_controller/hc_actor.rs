@@ -5,21 +5,18 @@ use crate::capability::extras::ExtrasCapabilityProvider;
 use crate::capability::native_host::NativeCapabilityHost;
 use crate::dispatch::Invocation;
 use crate::hlreg::HostLocalSystemService;
-use crate::messagebus::{
-    GetClaims, LatticeCacheClient, MessageBus, SetCacheClient, Unsubscribe, OP_BIND_ACTOR,
-};
+use crate::messagebus::{GetClaims, LatticeCacheClient, MessageBus, SetCacheClient, Unsubscribe};
 use crate::middleware::Middleware;
 use crate::{NativeCapability, Result, WasmCloudEntity, SYSTEM_ACTOR};
-use actix::prelude::*;
 use std::collections::HashMap;
 
 use std::time::Instant;
 
 use crate::messagebus::latticecache_client::{CACHE_CONTRACT_ID, CACHE_PROVIDER_LINK_NAME};
 use crate::messagebus::utils::{generate_link_invocation_and_call, system_actor_claims};
-use nats_kvcache::NatsReplicatedKVProvider;
 use wascap::jwt::Claims;
 use wascap::prelude::KeyPair;
+use wasmcloud_nats_kvcache::NatsReplicatedKVProvider;
 
 #[derive(Debug, PartialEq, Clone, Eq, Hash)]
 struct ProviderKey {
@@ -245,16 +242,16 @@ impl Handler<CheckLink> for HostController {
                 link_name: msg.linkdef.link_name,
             };
             let key = KeyPair::from_seed(&self.kp.as_ref().unwrap().seed().unwrap()).unwrap();
-            let values = msg.linkdef.values.clone();
+            let values = msg.linkdef.values;
             Box::pin(
                 async move {
                     let claims = mb.send(GetClaims).await;
-                    if let Err(_) = claims {
+                    if claims.is_err() {
                         error!("Could not get claims from message bus");
                         return;
                     }
                     let cr = claims.unwrap();
-                    let claims = cr.claims.get(&actor).clone();
+                    let claims = cr.claims.get(&actor);
                     if claims.is_none() {
                         error!(
                             "No matching actor claims found in actor cache for establishing link"
@@ -264,6 +261,7 @@ impl Handler<CheckLink> for HostController {
                     let claims = claims.unwrap();
                     // We use this utils function so that it's guaranteed to be the same
                     // link invocation as if they'd called `set_link` in the host
+                    #[allow(clippy::redundant_pattern_matching)] // .is_err() does not work here
                     if let Err(_) = generate_link_invocation_and_call(
                         &recip,
                         &actor,
@@ -370,10 +368,10 @@ impl Handler<Initialize> for HostController {
         let host_id = msg.kp.public_key();
 
         let claims = crate::capability::extras::get_claims();
-        let pk = claims.subject.to_string();
+        let pk = claims.subject;
 
         // Start wascc:extras
-        let extras = SyncArbiter::start(1, move || NativeCapabilityHost::new());
+        let extras = SyncArbiter::start(1, NativeCapabilityHost::new);
         let claims = crate::capability::extras::get_claims();
         let ex = ExtrasCapabilityProvider::default();
         let cap = NativeCapability::from_instance(ex, Some("default".to_string()), claims).unwrap();
@@ -386,7 +384,7 @@ impl Handler<Initialize> for HostController {
         extras.do_send(init);
         let key = ProviderKey::new(&pk, "default");
         self.providers.insert(key, extras); // can't let this provider go out of scope, or the actix actor will stop
-        let seed = msg.kp.seed().unwrap().to_string();
+        let seed = msg.kp.seed().unwrap();
         self.kp = Some(KeyPair::from_seed(&seed).unwrap());
         self.allow_live_updates = msg.allow_live_updates;
         self.strict_update_check = msg.strict_update_check;
@@ -398,7 +396,7 @@ impl Handler<Initialize> for HostController {
         trace!("Host labels: {:?}", &self.host_labels);
         Box::pin(
             async move {
-                let cache = SyncArbiter::start(1, move || NativeCapabilityHost::new());
+                let cache = SyncArbiter::start(1, NativeCapabilityHost::new);
                 let (nativecache, claims) = create_cache_provider(
                     msg.lattice_cache_provider.clone(),
                     msg.allow_latest,
@@ -434,7 +432,7 @@ impl Handler<Initialize> for HostController {
                     sysclaims,
                 )
                 .await;
-                if let Err(_) = res {
+                if res.is_err() {
                     error!("Failed to properly initialize key-value cache provider");
                 } else {
                     info!("Cache provider successfully configured");
@@ -482,7 +480,7 @@ impl Handler<StartActor> for HostController {
     type Result = ResponseActFuture<Self, Result<()>>;
 
     fn handle(&mut self, msg: StartActor, _ctx: &mut Context<Self>) -> Self::Result {
-        let sub = msg.actor.claims().subject.to_string();
+        let sub = msg.actor.claims().subject;
         let claims = msg.actor.claims();
         info!("Starting actor {}", sub);
 
@@ -509,7 +507,7 @@ impl Handler<StartActor> for HostController {
             strict_update_check: self.strict_update_check,
         };
 
-        let new_actor = SyncArbiter::start(1, move || ActorHost::default());
+        let new_actor = SyncArbiter::start(1, ActorHost::default);
         let na = new_actor.clone();
         let lc = self.latticecache.clone().unwrap();
         let image_ref = msg.image_ref.clone();
@@ -572,7 +570,7 @@ impl Handler<QueryHostInventory> for HostController {
 fn find_imageref(target: &str, image_refs: &HashMap<String, String>) -> Option<String> {
     image_refs
         .iter()
-        .find(|(_ir, pk)| &pk.to_string() == target)
+        .find(|(_ir, pk)| pk.to_string() == *target)
         .map(|(ir, _pk)| ir.to_string())
 }
 
@@ -597,7 +595,7 @@ impl Handler<StartProvider> for HostController {
         let provider = msg.provider;
         let provider_id = provider.claims.subject.to_string();
         let link_name = provider.link_name.to_string();
-        let imageref = msg.image_ref.clone();
+        let imageref = msg.image_ref;
         let ir2 = imageref.clone();
         let pid = provider_id.to_string();
         let auther = self.authorizer.as_ref().unwrap().clone();
@@ -637,6 +635,7 @@ impl Handler<StartProvider> for HostController {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn initialize_provider(
     provider: NativeCapability,
     mw: Vec<Box<dyn Middleware>>,
@@ -647,7 +646,7 @@ async fn initialize_provider(
     _link_name: String,
     _authorizer: Box<dyn Authorizer>,
 ) -> Result<Addr<NativeCapabilityHost>> {
-    let new_provider = SyncArbiter::start(1, || NativeCapabilityHost::new());
+    let new_provider = SyncArbiter::start(1, NativeCapabilityHost::new);
     let im = crate::capability::native_host::Initialize {
         cap: provider.clone(),
         mw_chain: mw.clone(),
@@ -666,7 +665,7 @@ async fn initialize_provider(
 async fn create_cache_provider(
     provider_ref: Option<String>,
     allow_latest: bool,
-    allowed_insecure: &Vec<String>,
+    allowed_insecure: &[String],
 ) -> (NativeCapability, Claims<wascap::jwt::CapabilityProvider>) {
     if let Some(s) = provider_ref {
         let par = crate::oci::fetch_provider_archive(&s, allow_latest, allowed_insecure)

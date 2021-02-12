@@ -1,7 +1,7 @@
 [package]
 name = "wasmcloud-host"
 version = "0.15.0"
-authors = ["Kevin Hoffman <alothien@gmail.com>"]
+authors = ["wasmCloud Team"]
 edition = "2018"
 homepage = "https://wasmcloud.dev"
 repository = "https://github.com/wasmCloud/wasmCloud"
@@ -21,7 +21,7 @@ wasm3 = ["wasm3-provider"]
 [dependencies]
 actix = "0.10.0"
 actix-rt = "1.1.1"
-wascap = "0.5.1"
+wascap = "0.6.0"
 wapc = "0.10.1"
 libloading = "0.6.6"
 log = "0.4.11"
@@ -38,22 +38,21 @@ futures = "0.3.6"
 crossbeam-channel = "0.5.0"
 rmp-serde = "0.15.0"
 serde_bytes = "0.11.5"
-provider-archive ="0.3.0"
+provider-archive ="0.4.0"
 lazy_static = "1.4.0"
 wascc-codec = "0.9.0"
-oci-distribution = "0.4.0"
+oci-distribution = "0.5.0"
 rand = "0.7.3"
 chrono = "0.4.19"
 envmnt = "0.8.4"
 nats = "0.8.6"
-actor-keyvalue = { git = "https://github.com/wasmCloud/actor-interfaces", branch = "main" }
-nats-kvcache = { git = "https://github.com/wasmCloud/capability-providers", branch = "main" }
-#nats-kvcache = { path = "../../../capability-providers/nats-kvcache/"}
+wasmcloud-actor-keyvalue = "0.2.0"
+wasmcloud-nats-kvcache = "0.4.0"
 control-interface = { path = "../control-interface" }
 
 wasm3-provider = { version = "0.0.2", optional = true}
 wasmtime-provider = { version = "0.0.2" , optional = true}
 
 [dev-dependencies]
-provider-archive = "0.3.0"
+provider-archive = "0.4.0"
 reqwest = "0.10"

@@ -1,7 +1,6 @@
 use crate::dispatch::{Invocation, InvocationResponse};
 use crate::middleware::Middleware;
 use crate::Result;
-use actix::Recipient;
 
 /// Executes a chain of pre-invoke handlers for a capability
 pub(crate) fn run_capability_pre_invoke(

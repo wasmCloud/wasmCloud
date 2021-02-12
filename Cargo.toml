@@ -1,20 +1,18 @@
 [package]
 name = "wasmcloud"
 version = "0.15.0"
-authors = [
-    "Kevin Hoffman <alothien@gmail.com>",    
-]
+authors = ["wasmCloud Team"]
 edition = "2018"
 default-run = "wasmcloud"
 license-file = "LICENSE"
 description = "A secure, distributed, WebAssembly actor model runtime for the cloud, edge, and everything in between"
-repository = "https://github.com/wascc/wasccd"
-documentation = "https://wascc.dev"
+repository = "https://github.com/wasmcloud/wasmcloud"
+documentation = "https://wasmcloud.dev"
 readme = "README.md"
 keywords = [
     "wasm",
     "wasi",
-    "wascc",
+    "wasmcloud",
     "webassembly",
     "actor",
 ]
@@ -51,16 +49,16 @@ rmp-serde = "0.14.4"
 serde = {version = "1.0.117", features = ["derive"] }
 serde_bytes = "0.11.5"
 serde_json = "1.0.59"
-provider-archive = "0.3.0"
+provider-archive = "0.4.0"
 redis = "0.17.0"
 reqwest = { version = "0.10"}
 uuid = { version = "0.8", features = ["serde", "v4"] }
 nats = "0.8.5"
-wascc-httpsrv = { git = "https://github.com/wascc/capability-providers", branch = "main", features = ["static_plugin"]}
-wascc-redis = { git = "https://github.com/wascc/capability-providers", branch = "main", features = ["static_plugin"] }
+wasmcloud-httpserver = { version = "0.11.0", features = ["static_plugin"] }
+wasmcloud-redis = { version = "0.11.0", features = ["static_plugin"] }
 control-interface = { path = "./crates/control-interface"}
 ctor = "0.1.16"
-wascap = "0.5.1"
+wascap = "0.6.0"
 futures = "0.3.6"
 
 [workspace]

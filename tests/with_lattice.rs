@@ -37,9 +37,9 @@ pub(crate) async fn distributed_echo() -> Result<()> {
     host_a.start_actor(echo).await?;
     await_actor_count(&host_a, 1, Duration::from_millis(50), 3).await?;
 
-    let arc = par_from_file("./tests/modules/libwascc_httpsrv.par.gz").unwrap();
+    let arc = par_from_file("./tests/modules/httpserver.par.gz").unwrap();
     let websrv = NativeCapability::from_instance(
-        wascc_httpsrv::HttpServerProvider::new(),
+        wasmcloud_httpserver::HttpServerProvider::new(),
         None,
         arc.claims().clone().unwrap(),
     )?;
@@ -60,7 +60,7 @@ pub(crate) async fn distributed_echo() -> Result<()> {
     host_b
         .set_link(
             &aid,
-            "wascc:http_server",
+            "wasmcloud:httpserver",
             None,
             arc.claims().unwrap().subject.to_string(),
             webvalues,
@@ -112,7 +112,7 @@ pub(crate) async fn link_on_third_host() -> Result<()> {
     await_actor_count(&host_a, 1, Duration::from_millis(50), 3).await?;
 
     let web_port = 7002_u32;
-    let arc = par_from_file("./tests/modules/libwascc_httpsrv.par.gz")?;
+    let arc = par_from_file("./tests/modules/httpserver.par.gz")?;
     let websrv = NativeCapability::from_archive(&arc, None)?;
 
     host_b.start_native_capability(websrv).await?;
@@ -131,7 +131,7 @@ pub(crate) async fn link_on_third_host() -> Result<()> {
     host_c
         .set_link(
             &actor_id,
-            "wascc:http_server",
+            "wasmcloud:httpserver",
             None,
             arc.claims().unwrap().subject.to_string(),
             webvalues,
@@ -144,7 +144,7 @@ pub(crate) async fn link_on_third_host() -> Result<()> {
     let resp = reqwest::get(&url).await?;
     assert!(resp.status().is_success());
     assert_eq!(resp.text().await?,
-               "{\"method\":\"GET\",\"path\":\"/foo/bar\",\"query_string\":\"\",\"headers\":{\"accept\":\"*/*\",\"host\":\"localhost:7002\"},\"body\":[]}");
+               "{\"method\":\"GET\",\"path\":\"/foo/bar\",\"query_string\":\"\",\"headers\":{\"host\":\"localhost:7002\",\"accept\":\"*/*\"},\"body\":[]}");
 
     host_a.stop().await;
     host_b.stop().await;
@@ -192,7 +192,7 @@ pub(crate) async fn redis_kvcache() -> Result<()> {
     await_actor_count(&host_a, 1, Duration::from_millis(50), 3).await?;
 
     let web_port = 7002_u32;
-    let arc = par_from_file("./tests/modules/libwascc_httpsrv.par.gz")?;
+    let arc = par_from_file("./tests/modules/httpserver.par.gz")?;
     let websrv = NativeCapability::from_archive(&arc, None)?;
 
     host_b.start_native_capability(websrv).await?;
@@ -215,7 +215,7 @@ pub(crate) async fn redis_kvcache() -> Result<()> {
     host_c
         .set_link(
             &actor_id,
-            "wascc:http_server",
+            "wasmcloud:httpserver",
             None,
             arc.claims().unwrap().subject.to_string(),
             webvalues,
@@ -228,7 +228,7 @@ pub(crate) async fn redis_kvcache() -> Result<()> {
     let resp = reqwest::get(&url).await?;
     assert!(resp.status().is_success());
     assert_eq!(resp.text().await?,
-               "{\"method\":\"GET\",\"path\":\"/foo/bar\",\"query_string\":\"\",\"headers\":{\"accept\":\"*/*\",\"host\":\"localhost:7002\"},\"body\":[]}");
+               "{\"method\":\"GET\",\"path\":\"/foo/bar\",\"query_string\":\"\",\"headers\":{\"host\":\"localhost:7002\",\"accept\":\"*/*\"},\"body\":[]}");
 
     host_a.stop().await;
     host_b.stop().await;
@@ -249,9 +249,9 @@ pub(crate) async fn scaled_kvcounter() -> Result<()> {
     use redis::Commands;
     let a = Actor::from_file("./tests/modules/kvcounter.wasm")?;
     let a_id = a.public_key();
-    let websrv = par_from_file("./tests/modules/libwascc_httpsrv.par.gz")?;
+    let websrv = par_from_file("./tests/modules/httpserver.par.gz")?;
     let web_id = websrv.claims().as_ref().unwrap().subject.to_string();
-    let redis = par_from_file("./tests/modules/libwascc_redis.par.gz")?;
+    let redis = par_from_file("./tests/modules/redis.par.gz")?;
     let redis_id = redis.claims().as_ref().unwrap().subject.to_string();
 
     let host_a = scaledkv_host(Some(a), None).await?;
@@ -267,17 +267,12 @@ pub(crate) async fn scaled_kvcounter() -> Result<()> {
     .await?;
     let host_d = scaledkv_host(
         None,
-        Some(vec![
-            websrv,
-            par_from_file("./tests/modules/libwascc_redis.par.gz")?,
-        ]),
+        Some(vec![websrv, par_from_file("./tests/modules/redis.par.gz")?]),
     )
     .await?;
     let host_e = scaledkv_host(
         None,
-        Some(vec![par_from_file(
-            "./tests/modules/libwascc_redis.par.gz",
-        )?]),
+        Some(vec![par_from_file("./tests/modules/redis.par.gz")?]),
     )
     .await?;
     println!("5 hosts started.");
@@ -293,7 +288,7 @@ pub(crate) async fn scaled_kvcounter() -> Result<()> {
     host_a
         .set_link(
             &a_id,
-            "wascc:http_server",
+            "wasmcloud:httpserver",
             None,
             web_id.to_string(),
             webvalues,
@@ -304,7 +299,7 @@ pub(crate) async fn scaled_kvcounter() -> Result<()> {
     host_e
         .set_link(
             &a_id,
-            "wascc:keyvalue",
+            "wasmcloud:keyvalue",
             None,
             redis_id.to_string(),
             redisvalues,

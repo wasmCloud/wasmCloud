@@ -62,14 +62,13 @@ impl Handler<LiveUpdate> for ActorHost {
             );
             return Err("Attempt to live update actor denied. Runtime updates for this actor are not enabled".into());
         }
-        if self
+        if *self
             .state
             .as_ref()
             .unwrap()
             .image_ref
             .as_ref()
             .unwrap_or(&"".to_string())
-            .to_string()
             != msg.image_ref
         {
             error!("Live updated targeted at this actor but the image ref does not match");
@@ -149,7 +148,7 @@ impl Handler<Initialize> for ActorHost {
             Ok(a) => {
                 let pe = PublishEvent {
                     event: ControlEvent::ActorStarted {
-                        actor: a.to_string(),
+                        actor: a,
                         image_ref,
                     },
                 };
@@ -186,7 +185,6 @@ fn perform_initialization(
     let engine = wasm3_provider::Wasm3EngineProvider::new(&buf);
 
     let c2 = c.clone();
-    let c3 = c.clone(); // TODO: I can't believe I have to do this to make the [censored] borrow checker happy
     let seed = msg.signing_seed.to_string();
 
     let guest = WapcHost::new(Box::new(engine), move |_id, bd, ns, op, payload| {
@@ -202,11 +200,10 @@ fn perform_initialization(
 
     match guest {
         Ok(g) => {
-            let c = c3.clone();
             let entity = WasmCloudEntity::Actor(c.subject.to_string());
             let b = MessageBus::from_hostlocal_registry(&msg.host_id);
             let b2 = b.clone();
-            let recipient = ctx.address().clone().recipient();
+            let recipient = ctx.address().recipient();
             let _ = block_on(async move {
                 b.send(Subscribe {
                     interest: entity,
@@ -234,7 +231,7 @@ fn perform_initialization(
                 "Actor {} initialized",
                 &me.state.as_ref().unwrap().claims.subject
             );
-            Ok(c.subject.to_string())
+            Ok(c.subject)
         }
         Err(_e) => {
             error!(

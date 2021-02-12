@@ -70,10 +70,9 @@ impl Handler<NatsMessage> for NatsSubscriber {
     fn handle(&mut self, msg: NatsMessage, _ctx: &mut Self::Context) -> Self::Result {
         trace!("NATS subscriber forwarding message");
         let target = self.state.as_ref().unwrap().receiver.clone();
-        let m = msg.clone();
         Box::pin(
             async move {
-                if let Err(_) = target.send(m).await {
+                if target.send(msg).await.is_err() {
                     error!("Target failed to process NATS subscription message.");
                 }
             }

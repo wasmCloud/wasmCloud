@@ -24,7 +24,7 @@ impl NativeCapability {
         if archive.claims().is_none() {
             return Err("No claims found in provider archive file".into());
         }
-        let link = normalize_link_name(link_target_name.unwrap_or("default".to_string()));
+        let link = normalize_link_name(link_target_name.unwrap_or_else(|| "default".to_string()));
 
         let target = Host::native_target();
 
@@ -55,12 +55,12 @@ impl NativeCapability {
         claims: Claims<wascap::jwt::CapabilityProvider>,
     ) -> Result<Self> {
         let b: Box<dyn CapabilityProvider> = Box::new(instance);
-        let link = normalize_link_name(link_target_name.unwrap_or("default".to_string()));
+        let link = normalize_link_name(link_target_name.unwrap_or_else(|| "default".to_string()));
 
         Ok(NativeCapability {
             plugin: Some(b),
             native_bytes: None,
-            claims: claims.clone(),
+            claims,
             link_name: link,
         })
     }

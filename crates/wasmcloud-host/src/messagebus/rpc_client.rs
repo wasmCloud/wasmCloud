@@ -8,8 +8,6 @@ use crate::{Invocation, InvocationResponse};
 use actix::prelude::*;
 use control_interface::LinkDefinition;
 use futures::StreamExt;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 use std::time::Duration;
 
