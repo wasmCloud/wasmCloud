@@ -13,7 +13,7 @@ use wasmcloud_host::{Host, Result};
 pub(crate) async fn distributed_echo() -> Result<()> {
     // Set the default kvcache provider to enable NATS-based replication
     // by supplying a NATS URL.
-    delay_for(Duration::from_millis(5000)).await;
+    delay_for(Duration::from_millis(500)).await;
     ::std::env::set_var("KVCACHE_NATS_URL", "0.0.0.0:4222");
 
     let web_port = 32400_u32;
@@ -35,7 +35,7 @@ pub(crate) async fn distributed_echo() -> Result<()> {
         .build();
 
     host_a.start_actor(echo).await?;
-    await_actor_count(&host_a, 1, Duration::from_millis(50), 3).await?;
+    await_actor_count(&host_a, 1, Duration::from_millis(500), 3).await?;
 
     let arc = par_from_file("./tests/modules/httpserver.par.gz").unwrap();
     let websrv = NativeCapability::from_instance(
@@ -48,12 +48,12 @@ pub(crate) async fn distributed_echo() -> Result<()> {
     // it should request a replay of cache events and therefore get the existing claims, links,
     // etc.
     host_b.start().await?;
-    delay_for(Duration::from_millis(5000)).await;
+    delay_for(Duration::from_millis(500)).await;
 
     host_b.start_native_capability(websrv).await?;
     // always have to remember that "extras" and kvcache is in the provider list.
-    await_provider_count(&host_b, 3, Duration::from_millis(50), 3).await?;
-    delay_for(Duration::from_millis(5000)).await;
+    await_provider_count(&host_b, 3, Duration::from_millis(500), 3).await?;
+    delay_for(Duration::from_millis(500)).await;
 
     let mut webvalues: HashMap<String, String> = HashMap::new();
     webvalues.insert("PORT".to_string(), format!("{}", web_port));
@@ -67,7 +67,7 @@ pub(crate) async fn distributed_echo() -> Result<()> {
         )
         .await?;
 
-    delay_for(Duration::from_secs(4)).await;
+    delay_for(Duration::from_millis(500)).await;
 
     let url = format!("http://localhost:{}/foo/bar", web_port);
     let resp = reqwest::get(&url).await?;
