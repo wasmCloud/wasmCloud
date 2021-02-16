@@ -1,6 +1,7 @@
-![Crates.io](https://img.shields.io/crates/v/control-interface)
+![Crates.io](https://img.shields.io/crates/v/wasmcloud-control-interface)
+![Rust Build](https://img.shields.io/github/workflow/status/wasmcloud/wasmcloud/WASMCLOUD-CONTROL-INTERFACE/main)
 [![Documentation](https://img.shields.io/badge/Docs-Documentation-blue)](https://wasmcloud.dev)
-![Rustdocs](https://docs.rs/wasmcloud-host/badge.svg
+![Rustdocs](https://docs.rs/wasmcloud-host/badge.svg)
 
 # wasmCloud Control Interface
 This library is a convenient API for interacting with the lattice control interface.

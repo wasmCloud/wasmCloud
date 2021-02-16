@@ -1,18 +1,18 @@
-name: CONTROL-INTERFACE
+name: WASMCLOUD-CONTROL-INTERFACE
 
 on:
   push:
     branches: [ main ]
     paths:
-    - "crates/control-interface/**"
+    - "crates/wasmcloud-control-interface/**"
   pull_request:
     branches: [ main ]
     paths:
-    - "crates/control-interface/**"
+    - "crates/wasmcloud-control-interface/**"
 
 env:
   CARGO_TERM_COLOR: always
-  working-directory: ./crates/control-interface
+  working-directory: ./crates/wasmcloud-control-interface
 
 jobs:
   cargo_check:
