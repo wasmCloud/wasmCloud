@@ -48,7 +48,7 @@ envmnt = "0.8.4"
 nats = "0.8.6"
 wasmcloud-actor-keyvalue = "0.2.0"
 wasmcloud-nats-kvcache = "0.4.0"
-wasmcloud-control-interface = { path = "../wasmcloud-control-interface" }
+wasmcloud-control-interface = { path = "../wasmcloud-control-interface", version = "0.1.0" }
 
 wasm3-provider = { version = "0.0.2", optional = true}
 wasmtime-provider = { version = "0.0.2" , optional = true}
