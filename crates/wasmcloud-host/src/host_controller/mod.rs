@@ -1,11 +1,10 @@
 use crate::actors::{ActorHost, WasmCloudActor};
 use crate::auth::Authorizer;
 
-use crate::messagebus::LatticeCacheClient;
 use crate::{NativeCapability, Result};
 use actix::prelude::*;
-use control_interface::LinkDefinition;
 use std::collections::HashMap;
+use wasmcloud_control_interface::LinkDefinition;
 
 use wascap::prelude::KeyPair;
 

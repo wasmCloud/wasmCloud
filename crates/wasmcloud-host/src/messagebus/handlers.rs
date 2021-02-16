@@ -12,7 +12,6 @@ use crate::messagebus::{
 };
 use crate::{auth, Result};
 use actix::prelude::*;
-use std::collections::HashMap;
 use std::sync::Arc;
 use wascap::prelude::KeyPair;
 
@@ -179,8 +178,6 @@ impl Handler<EnforceLocalLink> for MessageBus {
                         );
                         let _ = t.send(inv).await;
                     }
-                } else {
-                    return;
                 }
             }
             .into_actor(self),
@@ -280,7 +277,7 @@ impl Handler<PutLink> for MessageBus {
                 ctx.notify(EnforceLocalLink {
                     actor: msg.actor.to_string(),
                     contract_id: msg.contract_id.to_string(),
-                    link_name: msg.link_name.to_string(),
+                    link_name: msg.link_name,
                 });
             }),
         )
@@ -375,13 +372,13 @@ impl Handler<Initialize> for MessageBus {
         self.namespace = msg.namespace;
 
         let ns = self.namespace.clone();
-        let timeout = msg.rpc_timeout.clone();
+        let timeout = msg.rpc_timeout;
         info!("Messagebus initialized");
         if let Some(nc) = self.nc.clone() {
             let rpc_outbound = RpcClient::default().start();
             self.rpc_outbound = Some(rpc_outbound);
             let target = self.rpc_outbound.clone().unwrap();
-            let bus = ctx.address().clone();
+            let bus = ctx.address();
             let host_id = self.key.as_ref().unwrap().public_key();
             info!("Messagebus initializing with lattice RPC support");
             Box::pin(
@@ -492,15 +489,8 @@ impl Handler<Invocation> for MessageBus {
         Box::pin(
             async move {
                 let can_call = if let Ok(claims_map) = lc.get_all_claims().await {
-                    if let Err(_e) = auth::authorize_invocation(
-                        &msg,
-                        auther.as_ref().unwrap().clone(),
-                        &claims_map,
-                    ) {
-                        false
-                    } else {
-                        true
-                    }
+                    auth::authorize_invocation(&msg, auther.as_ref().unwrap().clone(), &claims_map)
+                        .is_ok()
                 } else {
                     false
                 };
@@ -513,17 +503,16 @@ impl Handler<Invocation> for MessageBus {
                         t.send(msg.clone()).await
                     }
                     None => {
-                        if rpc_outbound.is_none() {
+                        if let Some(rpc) = rpc_outbound {
+                            trace!("Deferring invocation to lattice (no local subscribers)");
+                            rpc.send(msg.clone()).await
+                        } else {
                             warn!(
                                 "No local subscribers and no RPC client enabled - invocation lost"
                             );
                             Ok(InvocationResponse::error(
                             &msg,
                             &"No local bus subscribers found, and no lattice RPC client enabled"))
-                        } else {
-                            trace!("Deferring invocation to lattice (no local subscribers)");
-                            let rpc = rpc_outbound.unwrap().recipient();
-                            rpc.send(msg.clone()).await
                         }
                     }
                 };
@@ -610,7 +599,7 @@ impl Handler<Unsubscribe> for MessageBus {
 
     fn handle(&mut self, msg: Unsubscribe, _ctx: &mut Context<Self>) {
         trace!("Bus removing interest for {}", msg.interest.url());
-        if let None = self.subscribers.remove(&msg.interest) {
+        if self.subscribers.remove(&msg.interest).is_none() {
             warn!("Attempted to remove a non-existent subscriber");
         }
     }
@@ -624,7 +613,7 @@ impl Handler<GetClaims> for MessageBus {
         Box::pin(
             async move {
                 ClaimsResponse {
-                    claims: lc.get_all_claims().await.unwrap_or(HashMap::new()),
+                    claims: lc.get_all_claims().await.unwrap_or_default(),
                 }
             }
             .into_actor(self),

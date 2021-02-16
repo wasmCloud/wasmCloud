@@ -110,7 +110,7 @@ impl Invocation {
             msg,
             id: subject,
             encoded_claims: claims.encode(&hostkey).unwrap(),
-            host_id: issuer.to_string(),
+            host_id: issuer,
         }
     }
 
@@ -296,9 +296,9 @@ fn sha256_digest<R: Read>(mut reader: R) -> Result<Digest> {
 pub(crate) fn invocation_hash(target_url: &str, origin_url: &str, msg: &[u8]) -> String {
     use std::io::Write;
     let mut cleanbytes: Vec<u8> = Vec::new();
-    cleanbytes.write(origin_url.as_bytes()).unwrap();
-    cleanbytes.write(target_url.as_bytes()).unwrap();
-    cleanbytes.write(msg).unwrap();
+    cleanbytes.write_all(origin_url.as_bytes()).unwrap();
+    cleanbytes.write_all(target_url.as_bytes()).unwrap();
+    cleanbytes.write_all(msg).unwrap();
     let digest = sha256_digest(cleanbytes.as_slice()).unwrap();
     HEXUPPER.encode(digest.as_ref())
 }
@@ -368,7 +368,7 @@ fn invocation_from_callback(
     provider_id: &str,
     payload: &[u8],
 ) -> Invocation {
-    let target = if ns.len() == 56 && ns.starts_with("M") {
+    let target = if ns.len() == 56 && ns.starts_with('M') {
         WasmCloudEntity::Actor(ns.to_string())
     } else {
         WasmCloudEntity::Capability {
@@ -395,7 +395,7 @@ pub(crate) fn gen_config_invocation(
     link_name: String,
     values: HashMap<String, String>,
 ) -> Invocation {
-    let mut values = values.clone();
+    let mut values = values;
     values.insert(
         CONFIG_WASCC_CLAIMS_ISSUER.to_string(),
         claims.issuer.to_string(),
@@ -459,7 +459,7 @@ mod test {
             WasmCloudEntity::Actor("testing".into()),
             WasmCloudEntity::Capability {
                 id: "Vxxx".to_string(),
-                contract_id: "wascc:messaging".into(),
+                contract_id: "wasmcloud:messaging".into(),
                 link_name: "default".into(),
             },
             "OP_TESTING",
@@ -482,7 +482,7 @@ mod test {
         // And just to double-check the routing address
         assert_eq!(
             inv.target_url(),
-            "wasmbus://wascc/messaging/default/Vxxx/OP_TESTING"
+            "wasmbus://wasmcloud/messaging/default/Vxxx/OP_TESTING"
         );
     }
 }

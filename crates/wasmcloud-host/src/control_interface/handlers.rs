@@ -10,12 +10,14 @@ use crate::messagebus::{GetClaims, MessageBus, QueryAllLinks};
 use crate::oci::fetch_oci_bytes;
 use crate::{Actor, NativeCapability};
 
-use control_interface::{
+use wasmcloud_control_interface::{
     deserialize, serialize, ActorAuctionAck, ActorAuctionRequest, ActorDescription, HostInventory,
     ProviderAuctionAck, ProviderAuctionRequest, ProviderDescription, StopActorAck,
     StopActorCommand, StopProviderAck, StopProviderCommand, UpdateActorAck, UpdateActorCommand,
 };
-use control_interface::{StartActorAck, StartActorCommand, StartProviderAck, StartProviderCommand};
+use wasmcloud_control_interface::{
+    StartActorAck, StartActorCommand, StartProviderAck, StartProviderCommand,
+};
 
 use std::collections::HashMap;
 use wascap::jwt::Claims;
@@ -32,7 +34,7 @@ use wascap::jwt::Claims;
 pub(crate) async fn handle_update_actor(
     host: &str,
     msg: &nats::asynk::Message,
-    allowed_insecure: &Vec<String>,
+    allowed_insecure: &[String],
 ) {
     let hc = HostController::from_hostlocal_registry(host);
     let req = deserialize::<UpdateActorCommand>(&msg.data);
@@ -171,7 +173,7 @@ pub(crate) async fn handle_host_inventory_query(host: &str, msg: &nats::asynk::M
                     image_ref: a.image_ref.clone(),
                 })
                 .collect();
-            inv.labels = hi.labels.clone();
+            inv.labels = hi.labels;
         }
         Err(_) => {
             error!("Mailbox failure querying host controller for inventory");
@@ -184,11 +186,11 @@ pub(crate) async fn handle_linkdefs_query(host: &str, msg: &nats::asynk::Message
     let mb = MessageBus::from_hostlocal_registry(host);
     match mb.send(QueryAllLinks {}).await {
         Ok(links) => {
-            let linkres = ::control_interface::LinkDefinitionList {
+            let linkres = ::wasmcloud_control_interface::LinkDefinitionList {
                 links: links
                     .links
                     .into_iter()
-                    .map(|l| ::control_interface::LinkDefinition {
+                    .map(|l| ::wasmcloud_control_interface::LinkDefinition {
                         actor_id: l.actor_id,
                         provider_id: l.provider_id,
                         link_name: l.link_name,
@@ -210,7 +212,7 @@ pub(crate) async fn handle_claims_query(host: &str, msg: &nats::asynk::Message) 
     match mb.send(GetClaims {}).await {
         Ok(claims) => {
             let cs = claims.claims.values().map(|c| claims_to_if(c)).collect();
-            let cl = ::control_interface::ClaimsList { claims: cs };
+            let cl = ::wasmcloud_control_interface::ClaimsList { claims: cs };
             let _ = msg.respond(&serialize(cl).unwrap()).await;
         }
         Err(_) => {
@@ -222,7 +224,7 @@ pub(crate) async fn handle_claims_query(host: &str, msg: &nats::asynk::Message) 
 pub(crate) async fn handle_host_probe(host: &str, msg: &nats::asynk::Message) {
     let hc = HostController::from_hostlocal_registry(host);
     let res = hc.send(QueryUptime {}).await;
-    let mut probe_ack = ::control_interface::Host {
+    let mut probe_ack = ::wasmcloud_control_interface::Host {
         id: host.to_string(),
         uptime_seconds: 0,
     };
@@ -243,11 +245,13 @@ pub(crate) async fn handle_start_actor(
     host: &str,
     msg: &nats::asynk::Message,
     allow_latest: bool,
-    allowed_insecure: &Vec<String>,
+    allowed_insecure: &[String],
 ) {
     let cmd = deserialize::<StartActorCommand>(&msg.data);
-    let mut ack = StartActorAck::default();
-    ack.host_id = host.to_string();
+    let mut ack = StartActorAck {
+        host_id: host.to_string(),
+        ..Default::default()
+    };
 
     if let Err(e) = cmd {
         let f = format!("Bad StartActor command received: {}", e);
@@ -361,13 +365,14 @@ pub(crate) async fn handle_stop_provider(host: &str, msg: &nats::asynk::Message)
         }
     }
 
-    if let Err(_) = hc
+    if hc
         .send(StopProvider {
             provider_ref: cmd.provider_ref,
             link_name: cmd.link_name,
             contract_id: cmd.contract_id,
         })
         .await
+        .is_err()
     {
         let f = "Host controller unavailable to stop provider";
         error!("{}", f);
@@ -383,10 +388,12 @@ pub(crate) async fn handle_start_provider(
     host: &str,
     msg: &nats::asynk::Message,
     allow_latest: bool,
-    allowed_insecure: &Vec<String>,
+    allowed_insecure: &[String],
 ) {
-    let mut ack = StartProviderAck::default();
-    ack.host_id = host.to_string();
+    let mut ack = StartProviderAck {
+        host_id: host.to_string(),
+        ..Default::default()
+    };
 
     let cmd = deserialize::<StartProviderCommand>(&msg.data);
     if let Err(e) = cmd {
@@ -450,7 +457,7 @@ pub(crate) async fn handle_start_provider(
         return;
     }
     let cap = cap.unwrap();
-    let provider_id = cap.id();
+    let _provider_id = cap.id();
 
     let r = hc
         .send(StartProvider {
@@ -495,11 +502,12 @@ pub(crate) async fn handle_stop_actor(host: &str, msg: &nats::asynk::Message) {
         }
     };
 
-    if let Err(_) = hc
+    if hc
         .send(StopActor {
             actor_ref: cmd.actor_ref,
         })
         .await
+        .is_err()
     {
         let f = "Host controller did not acknowledge stop command";
         error!("{}", f);
@@ -511,7 +519,7 @@ pub(crate) async fn handle_stop_actor(host: &str, msg: &nats::asynk::Message) {
     let _ = msg.respond(&serialize(ack).unwrap()).await;
 }
 
-fn claims_to_if(c: &Claims<wascap::jwt::Actor>) -> ::control_interface::Claims {
+fn claims_to_if(c: &Claims<wascap::jwt::Actor>) -> ::wasmcloud_control_interface::Claims {
     let mut hm = HashMap::new();
     hm.insert("sub".to_string(), c.subject.to_string());
     hm.insert("iss".to_string(), c.issuer.to_string());
@@ -521,7 +529,7 @@ fn claims_to_if(c: &Claims<wascap::jwt::Actor>) -> ::control_interface::Claims {
             md.caps
                 .as_ref()
                 .map(|v| v.join(","))
-                .unwrap_or("".to_string()),
+                .unwrap_or_else(|| "".to_string()),
         );
         hm.insert("rev".to_string(), md.rev.unwrap_or(0).to_string());
         hm.insert(
@@ -529,5 +537,5 @@ fn claims_to_if(c: &Claims<wascap::jwt::Actor>) -> ::control_interface::Claims {
             md.ver.as_ref().unwrap_or(&"".to_string()).to_string(),
         );
     }
-    ::control_interface::Claims { values: hm }
+    ::wasmcloud_control_interface::Claims { values: hm }
 }

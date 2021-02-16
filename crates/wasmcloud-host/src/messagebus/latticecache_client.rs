@@ -8,11 +8,10 @@
 //! * link cache, a lookup table keyed by actor public key+provider public key+provider link name, containing link configuration values
 
 use crate::generated::core::{deserialize, serialize};
-use crate::hlreg::HostLocalSystemService;
-use crate::messagebus::{LinkDefinition, MessageBus};
+use crate::messagebus::LinkDefinition;
 use crate::{Invocation, Result, WasmCloudEntity, SYSTEM_ACTOR};
 use actix::Recipient;
-use actor_keyvalue::{
+use wasmcloud_actor_keyvalue::{
     DelArgs, GetArgs, GetResponse, SetAddArgs, SetArgs, SetQueryArgs, SetQueryResponse,
     SetRemoveArgs, OP_DEL, OP_GET, OP_SET, OP_SET_ADD, OP_SET_QUERY, OP_SET_REMOVE,
 };
@@ -334,7 +333,7 @@ impl LatticeCacheClient {
     pub async fn collect_links(&self) -> Vec<LinkDefinition> {
         let mut res = Vec::new();
 
-        for hash in self.get_links().await.unwrap_or(vec![]) {
+        for hash in self.get_links().await.unwrap_or_default() {
             if let Some(item) = self.lookup_link_by_hash(hash).await.unwrap_or(None) {
                 res.push(item);
             }

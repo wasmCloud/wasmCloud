@@ -1,11 +1,9 @@
 mod common;
 mod control;
-mod generated;
 mod no_lattice;
 mod with_lattice;
 
 use std::env::temp_dir;
-use wasmcloud_host::Result;
 
 #[cfg(test)]
 #[ctor::ctor]
@@ -62,6 +60,7 @@ async fn kvcounter_link_first() {
 }
 
 #[actix_rt::test]
+#[ignore]
 async fn distributed_echo() {
     let res = with_lattice::distributed_echo().await;
     if let Err(ref e) = res {

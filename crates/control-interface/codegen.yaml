@@ -1,5 +1,0 @@
-schema: https://raw.githubusercontent.com/wascc/schemas/main/control_interface.widl
-generates:
-  src/generated/ctliface.rs:
-    package: widl-codegen/language/rust
-    visitorClass: ModuleVisitor
