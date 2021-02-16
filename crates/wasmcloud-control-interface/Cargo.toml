@@ -3,6 +3,14 @@ name = "wasmcloud-control-interface"
 version = "0.1.0"
 authors = ["wasmCloud Team"]
 edition = "2018"
+homepage = "https://wasmcloud.dev"
+repository = "https://github.com/wasmCloud/wasmCloud"
+description = "This library is a convenient API for interacting with the lattice control interface."
+license = "Apache-2.0"
+documentation = "https://docs.rs/wasmcloud-control-interface"
+readme = "README.md"
+keywords = ["webassembly", "wasm", "wasmcloud", "control", "ctl"]
+categories = ["wasm", "api-bindings"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
