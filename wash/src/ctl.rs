@@ -1,9 +1,8 @@
-extern crate control_interface;
+extern crate wasmcloud_control_interface;
 use crate::util::{
     convert_error, format_output, json_str_to_msgpack_bytes, labels_vec_to_hashmap,
     output_destination, Output, OutputDestination, OutputKind, Result, WASH_CMD_INFO,
 };
-use control_interface::*;
 use log::debug;
 use serde_json::json;
 use spinners::{Spinner, Spinners};
@@ -12,6 +11,7 @@ use structopt::StructOpt;
 use term_table::row::Row;
 use term_table::table_cell::*;
 use term_table::{Table, TableStyle};
+use wasmcloud_control_interface::*;
 
 //TODO(brooksmtownsend): If theres a deadline that elapses, suggest specifying a namespace
 
