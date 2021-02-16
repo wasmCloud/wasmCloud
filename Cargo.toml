@@ -65,7 +65,7 @@ futures = "0.3.6"
 [workspace]
 members = [
     "crates/wasmcloud-host",
-    "samples/bench-actor"
+    "samples/bench-actor",
     "crates/wasmcloud-control-interface"
 ]
 
