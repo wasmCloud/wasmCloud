@@ -10,7 +10,7 @@ use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use log::{error, info, LevelFilter};
 use std::io::{self, Stdout};
 use std::sync::{Arc, Mutex};
-use std::{cell::RefCell, io::Write, rc::Rc};
+use std::{cell::RefCell, rc::Rc};
 use structopt::{clap::AppSettings, StructOpt};
 use tui::{
     backend::CrosstermBackend,
@@ -474,10 +474,12 @@ async fn handle_up(cmd: UpCliCommand) -> Result<()> {
                     Err(_e) => {
                         error!(
                             target: WASH_CMD_INFO,
-                            "Error connecting to NATS at {}:{}, running in hostless mode",
+                            "Error connecting to NATS at {}:{}",
                             cmd.rpc_host,
                             cmd.rpc_port
                         );
+                        error!(target: WASH_CMD_INFO, "NATS is required to run control interface (ctl) commands. Please refer to
+https://www.wasmcloud.dev/overview/getting-started/#starting-nats for instructions on how to launch NATS");
                         return;
                     }
                 };
@@ -487,10 +489,12 @@ async fn handle_up(cmd: UpCliCommand) -> Result<()> {
                     Err(_e) => {
                         error!(
                             target: WASH_CMD_INFO,
-                            "Error connecting to NATS at {}:{}, running in hostless mode",
+                            "Error connecting to NATS at {}:{}",
                             cmd.rpc_host,
                             cmd.rpc_port
                         );
+                        error!(target: WASH_CMD_INFO, "NATS is required to run control interface (ctl) commands. Please refer to
+https://www.wasmcloud.dev/overview/getting-started/#starting-nats for instructions on how to launch NATS");
                         return;
                     }
                 };

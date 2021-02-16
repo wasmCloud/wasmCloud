@@ -351,9 +351,8 @@ fn get_keypair_vec(
     keys_dir: Option<String>,
     keypair_type: KeyPairType,
     disable_keygen: bool,
-) -> Result<Vec<KeyPair>, Box<dyn ::std::error::Error>> {
-    Ok(keys
-        .iter()
+) -> Vec<KeyPair> {
+    keys.iter()
         .map(|k| {
             extract_keypair(
                 Some(k.to_string()),
@@ -364,7 +363,7 @@ fn get_keypair_vec(
             )
             .unwrap()
         })
-        .collect())
+        .collect()
 }
 
 fn generate_actor(actor: ActorMetadata) -> Result<String, Box<dyn ::std::error::Error>> {
@@ -448,7 +447,7 @@ fn generate_operator(operator: OperatorMetadata) -> Result<String, Box<dyn ::std
             operator.common.directory.clone(),
             KeyPairType::Operator,
             true,
-        )?,
+        ),
         None => vec![],
     };
 
@@ -495,7 +494,7 @@ fn generate_account(account: AccountMetadata) -> Result<String, Box<dyn ::std::e
             account.common.directory.clone(),
             KeyPairType::Account,
             true,
-        )?,
+        ),
         None => vec![],
     };
 

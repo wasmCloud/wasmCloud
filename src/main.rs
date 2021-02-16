@@ -45,7 +45,7 @@ enum CliCommand {
     Drain(DrainCli),
     /// Generate and manage JWTs for wasmCloud Actors
     #[structopt(name = "claims")]
-    Claims(ClaimsCli),
+    Claims(Box<ClaimsCli>),
     /// Utilities for generating and managing keys
     #[structopt(name = "keys", aliases = &["key"])]
     Keys(KeysCli),

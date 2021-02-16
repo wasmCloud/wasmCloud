@@ -325,7 +325,7 @@ pub(crate) async fn handle_inspect(cmd: InspectCommand) -> Result<String> {
 
             let mut table = Table::new();
             table.max_column_width = 68;
-            table.style = TableStyle::extended();
+            table.style = TableStyle::blank();
 
             table.add_row(Row::new(vec![TableCell::new_with_alignment(
                 format!("{} - Provider Archive", metadata.name.unwrap()),
