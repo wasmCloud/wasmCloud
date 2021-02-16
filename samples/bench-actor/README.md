@@ -1,21 +1,6 @@
-# New Actor Template
+# Benchmark Actor
 
-Use cargo generate to create a new actor module from this template:
-
-```
-cargo generate --git https://github.com/wasmCloud/new-actor-template
-```
-
-Use the `wash` CLI to sign your WebAssembly module after you have created it. The `Makefile` created by this template will sign your module for you with `make build` and `make release`.
-
-You should modify this `Makefile` after creation to have the right actor name, revision, tags, and claims.
-
-## Tool Requirements
-
-- Cargo and Rust are required
-- Make is recommended, but not strictly necessary
-- [wash](https://github.com/wasmCloud/wash) - wasmCloud's multi-purpose CLI
-
-### Note
-
-The `Makefile` will use keys that are generated _locally_ for you. Once you move this actor into a pipeline toward a production deployment, you will want to explicitly specify the key locations and disable key generation in `wash` with the `--disable-keygen` option.
+This actor is designed to be used to do performance calculations. It performs de-serialization and serialization
+of an internal payload, does a couple of math operations, and does not make use of any other capability providers,
+allowing it to be invoked directly via `call_actor`, via the lattice, or via the HTTP provider, depending on which
+round-trip time you're looking to test.
