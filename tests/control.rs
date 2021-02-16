@@ -1,12 +1,10 @@
-use crate::{
-    common::{
-        await_actor_count, await_provider_count, HTTPSRV_OCI, KVCOUNTER_OCI, NATS_OCI, REDIS_OCI,
-    },
-    generated::http::{deserialize, serialize},
+use crate::common::{
+    await_actor_count, await_provider_count, HTTPSRV_OCI, KVCOUNTER_OCI, NATS_OCI, REDIS_OCI,
 };
-use ::control_interface::Client;
+use ::wasmcloud_control_interface::Client;
 use actix_rt::time::delay_for;
 use std::collections::HashMap;
+use wasmcloud_actor_http_server::{deserialize, serialize};
 
 use std::time::Duration;
 
@@ -150,7 +148,7 @@ pub(crate) async fn calltest() -> Result<()> {
 
     let ctl_client = Client::new(nc2, Some("calltest".to_string()), Duration::from_secs(20));
 
-    let req = crate::generated::http::Request {
+    let req = wasmcloud_actor_http_server::Request {
         header: HashMap::new(),
         method: "GET".to_string(),
         path: "".to_string(),
@@ -160,7 +158,7 @@ pub(crate) async fn calltest() -> Result<()> {
     let inv_r = ctl_client
         .call_actor(&a_id, "HandleRequest", &serialize(&req)?)
         .await?;
-    let http_r: crate::generated::http::Response = deserialize(&inv_r.msg)?;
+    let http_r: wasmcloud_actor_http_server::Response = deserialize(&inv_r.msg)?;
 
     assert_eq!(inv_r.error, None);
     assert_eq!(

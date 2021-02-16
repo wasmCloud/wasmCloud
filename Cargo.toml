@@ -54,9 +54,10 @@ redis = "0.17.0"
 reqwest = { version = "0.10"}
 uuid = { version = "0.8", features = ["serde", "v4"] }
 nats = "0.8.5"
-wasmcloud-httpserver = { version = "0.11.0", features = ["static_plugin"] }
-wasmcloud-redis = { version = "0.11.0", features = ["static_plugin"] }
-control-interface = { path = "./crates/control-interface"}
+wasmcloud-httpserver = { version = "0.11.1", features = ["static_plugin"] }
+wasmcloud-redis = { version = "0.11.1", features = ["static_plugin"] }
+wasmcloud-control-interface = { path = "./crates/wasmcloud-control-interface"}
+wasmcloud-actor-http-server = "0.1.0"
 ctor = "0.1.16"
 wascap = "0.6.0"
 futures = "0.3.6"
@@ -64,7 +65,7 @@ futures = "0.3.6"
 [workspace]
 members = [
     "crates/wasmcloud-host",
-    "crates/control-interface"
+    "crates/wasmcloud-control-interface"
 ]
 
 

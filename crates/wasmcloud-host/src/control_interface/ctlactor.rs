@@ -70,7 +70,7 @@ impl Handler<PublishEvent> for ControlInterface {
                 async move {
                     let _ = nc
                         .publish(
-                            &::control_interface::broker::control_event(&prefix),
+                            &::wasmcloud_control_interface::broker::control_event(&prefix),
                             serde_json::to_string(&evt).unwrap(),
                         )
                         .await;
@@ -88,7 +88,7 @@ impl Handler<NatsMessage> for ControlInterface {
 
     fn handle(&mut self, msg: NatsMessage, _ctx: &mut Context<Self>) -> Self::Result {
         use super::handlers::*;
-        use ::control_interface::broker::*;
+        use ::wasmcloud_control_interface::broker::*;
 
         let prefix = Some(self.ns_prefix.to_string());
         let host = self.key.as_ref().unwrap().public_key();
@@ -145,7 +145,7 @@ impl Handler<Initialize> for ControlInterface {
         self.options = msg.control_options;
         self.ns_prefix = msg.ns_prefix;
 
-        use ::control_interface::broker::*;
+        use ::wasmcloud_control_interface::broker::*;
 
         let host_id = self.key.as_ref().unwrap().public_key();
 

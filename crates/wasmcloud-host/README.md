@@ -1,4 +1,5 @@
 ![Crates.io](https://img.shields.io/crates/v/wasmcloud-host)
+![Rust Build](https://img.shields.io/github/workflow/status/wasmcloud/wasmcloud/WASMCLOUD-HOST/main)
 [![Documentation](https://img.shields.io/badge/Docs-Documentation-blue)](https://wasmcloud.dev)
 ![Rustdocs](https://docs.rs/wasmcloud-host/badge.svg)
 
