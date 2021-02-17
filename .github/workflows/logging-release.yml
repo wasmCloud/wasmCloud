@@ -40,6 +40,7 @@ jobs:
         working-directory: ${{ env.working-directory }}
 
   github_release:
+    needs: [cargo_check, clippy_check]
     runs-on: ubuntu-latest
     steps:
     - name: Create Release
