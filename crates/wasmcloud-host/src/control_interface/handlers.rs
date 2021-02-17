@@ -10,12 +10,14 @@ use crate::messagebus::{GetClaims, MessageBus, QueryAllLinks};
 use crate::oci::fetch_oci_bytes;
 use crate::{Actor, NativeCapability};
 
-use control_interface::{
+use wasmcloud_control_interface::{
     deserialize, serialize, ActorAuctionAck, ActorAuctionRequest, ActorDescription, HostInventory,
     ProviderAuctionAck, ProviderAuctionRequest, ProviderDescription, StopActorAck,
     StopActorCommand, StopProviderAck, StopProviderCommand, UpdateActorAck, UpdateActorCommand,
 };
-use control_interface::{StartActorAck, StartActorCommand, StartProviderAck, StartProviderCommand};
+use wasmcloud_control_interface::{
+    StartActorAck, StartActorCommand, StartProviderAck, StartProviderCommand,
+};
 
 use std::collections::HashMap;
 use wascap::jwt::Claims;
@@ -184,11 +186,11 @@ pub(crate) async fn handle_linkdefs_query(host: &str, msg: &nats::asynk::Message
     let mb = MessageBus::from_hostlocal_registry(host);
     match mb.send(QueryAllLinks {}).await {
         Ok(links) => {
-            let linkres = ::control_interface::LinkDefinitionList {
+            let linkres = ::wasmcloud_control_interface::LinkDefinitionList {
                 links: links
                     .links
                     .into_iter()
-                    .map(|l| ::control_interface::LinkDefinition {
+                    .map(|l| ::wasmcloud_control_interface::LinkDefinition {
                         actor_id: l.actor_id,
                         provider_id: l.provider_id,
                         link_name: l.link_name,
@@ -210,7 +212,7 @@ pub(crate) async fn handle_claims_query(host: &str, msg: &nats::asynk::Message) 
     match mb.send(GetClaims {}).await {
         Ok(claims) => {
             let cs = claims.claims.values().map(|c| claims_to_if(c)).collect();
-            let cl = ::control_interface::ClaimsList { claims: cs };
+            let cl = ::wasmcloud_control_interface::ClaimsList { claims: cs };
             let _ = msg.respond(&serialize(cl).unwrap()).await;
         }
         Err(_) => {
@@ -222,7 +224,7 @@ pub(crate) async fn handle_claims_query(host: &str, msg: &nats::asynk::Message) 
 pub(crate) async fn handle_host_probe(host: &str, msg: &nats::asynk::Message) {
     let hc = HostController::from_hostlocal_registry(host);
     let res = hc.send(QueryUptime {}).await;
-    let mut probe_ack = ::control_interface::Host {
+    let mut probe_ack = ::wasmcloud_control_interface::Host {
         id: host.to_string(),
         uptime_seconds: 0,
     };
@@ -517,7 +519,7 @@ pub(crate) async fn handle_stop_actor(host: &str, msg: &nats::asynk::Message) {
     let _ = msg.respond(&serialize(ack).unwrap()).await;
 }
 
-fn claims_to_if(c: &Claims<wascap::jwt::Actor>) -> ::control_interface::Claims {
+fn claims_to_if(c: &Claims<wascap::jwt::Actor>) -> ::wasmcloud_control_interface::Claims {
     let mut hm = HashMap::new();
     hm.insert("sub".to_string(), c.subject.to_string());
     hm.insert("iss".to_string(), c.issuer.to_string());
@@ -535,5 +537,5 @@ fn claims_to_if(c: &Claims<wascap::jwt::Actor>) -> ::control_interface::Claims {
             md.ver.as_ref().unwrap_or(&"".to_string()).to_string(),
         );
     }
-    ::control_interface::Claims { values: hm }
+    ::wasmcloud_control_interface::Claims { values: hm }
 }

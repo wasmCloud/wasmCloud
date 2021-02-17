@@ -6,8 +6,8 @@ use crate::messagebus::{AdvertiseClaims, AdvertiseLink, MessageBus, PutClaims, P
 use crate::Result;
 use crate::{Invocation, InvocationResponse};
 use actix::prelude::*;
-use control_interface::LinkDefinition;
 use futures::StreamExt;
+use wasmcloud_control_interface::LinkDefinition;
 
 use std::time::Duration;
 
