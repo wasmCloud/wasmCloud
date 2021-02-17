@@ -16,7 +16,7 @@ pub(crate) async fn distributed_echo() -> Result<()> {
     delay_for(Duration::from_millis(500)).await;
     ::std::env::set_var("KVCACHE_NATS_URL", "0.0.0.0:4222");
 
-    let web_port = 32400_u32;
+    let web_port = 32600_u32;
     let echo = Actor::from_file("./tests/modules/echo.wasm")?;
     let actor_id = echo.public_key();
     let aid = actor_id.clone();
@@ -73,7 +73,7 @@ pub(crate) async fn distributed_echo() -> Result<()> {
     let resp = reqwest::get(&url).await?;
     assert!(resp.status().is_success());
     assert_eq!(resp.text().await?,
-     "{\"method\":\"GET\",\"path\":\"/foo/bar\",\"query_string\":\"\",\"headers\":{\"host\":\"localhost:32400\",\"accept\":\"*/*\"},\"body\":[]}");
+     "{\"method\":\"GET\",\"path\":\"/foo/bar\",\"query_string\":\"\",\"headers\":{\"host\":\"localhost:32600\",\"accept\":\"*/*\"},\"body\":[]}");
 
     host_a.stop().await;
     host_b.stop().await;
@@ -191,7 +191,7 @@ pub(crate) async fn redis_kvcache() -> Result<()> {
     host_a.start_actor(echo).await?;
     await_actor_count(&host_a, 1, Duration::from_millis(50), 3).await?;
 
-    let web_port = 7002_u32;
+    let web_port = 7003_u32;
     let arc = par_from_file("./tests/modules/httpserver.par.gz")?;
     let websrv = NativeCapability::from_archive(&arc, None)?;
 
@@ -228,7 +228,7 @@ pub(crate) async fn redis_kvcache() -> Result<()> {
     let resp = reqwest::get(&url).await?;
     assert!(resp.status().is_success());
     assert_eq!(resp.text().await?,
-               "{\"method\":\"GET\",\"path\":\"/foo/bar\",\"query_string\":\"\",\"headers\":{\"host\":\"localhost:7002\",\"accept\":\"*/*\"},\"body\":[]}");
+               "{\"method\":\"GET\",\"path\":\"/foo/bar\",\"query_string\":\"\",\"headers\":{\"host\":\"localhost:7003\",\"accept\":\"*/*\"},\"body\":[]}");
 
     host_a.stop().await;
     host_b.stop().await;

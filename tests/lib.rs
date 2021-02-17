@@ -12,6 +12,8 @@ fn init() {
     let path = temp_dir();
     let path = path.join("wasmcloudcache");
     let _ = ::std::fs::remove_dir_all(path);
+    println!("Initializing env_logger for tests");
+    let _ = env_logger::builder().is_test(true).try_init();
 }
 
 #[actix_rt::test]
@@ -60,7 +62,6 @@ async fn kvcounter_link_first() {
 }
 
 #[actix_rt::test]
-#[ignore]
 async fn distributed_echo() {
     let res = with_lattice::distributed_echo().await;
     if let Err(ref e) = res {
