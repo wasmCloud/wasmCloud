@@ -42,16 +42,16 @@ wasmcloud-host = { path = "crates/wasmcloud-host", version = "0.15.0" }
 actix-rt = "1.1.1"
 nats = "0.8.6"
 structopt = "0.3.21"
-nkeys = "0.0.11"
+nkeys = "0.1.0"
 
 [dev-dependencies]
-rmp-serde = "0.14.4"
+rmp-serde = "0.15.4"
 serde = {version = "1.0.117", features = ["derive"] }
 serde_bytes = "0.11.5"
 serde_json = "1.0.59"
 provider-archive = "0.4.0"
-redis = "0.17.0"
-reqwest = { version = "0.10"}
+redis = "0.19.0"
+reqwest = { version = "0.10.0"}
 uuid = { version = "0.8", features = ["serde", "v4"] }
 nats = "0.8.5"
 wasmcloud-httpserver = { version = "0.11.1", features = ["static_plugin"] }
@@ -65,6 +65,7 @@ futures = "0.3.6"
 [workspace]
 members = [
     "crates/wasmcloud-host",
+    "samples/bench-actor",
     "crates/wasmcloud-control-interface"
 ]
 
