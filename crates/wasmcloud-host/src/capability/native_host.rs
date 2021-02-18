@@ -239,9 +239,20 @@ fn extrude(
             let mut tf = File::create(&path)?;
             tf.write_all(&bytes)?;
         }
-        type PluginCreate = unsafe fn() -> *mut dyn CapabilityProvider;
+
+        #[cfg(target_os = "linux")]
+        let library: Library = {
+            // On linux the library must be loaded with `RTLD_NOW | RTLD_NODELETE` to fix a SIGSEGV
+            // that happens when a thread terminates AFTER a library is unloaded. This has the
+            // effect of keeping the library loaded in-memory until the process ends.
+            //
+            // https://github.com/nagisa/rust_libloading/issues/41
+            ::libloading::os::unix::Library::open(Some(&path), 0x2 | 0x1000)?.into()
+        };
+        #[cfg(not(target_os = "linux"))]
         let library = Library::new(&path)?;
 
+        type PluginCreate = unsafe fn() -> *mut dyn CapabilityProvider;
         let plugin = unsafe {
             let constructor: Symbol<PluginCreate> = library.get(b"__capability_provider_create")?;
             let boxed_raw = constructor();
