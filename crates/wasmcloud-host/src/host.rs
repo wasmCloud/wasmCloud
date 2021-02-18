@@ -4,6 +4,7 @@ use crate::{
 };
 
 use actix::prelude::*;
+use crossbeam_channel::Sender;
 
 use crate::auth::Authorizer;
 
@@ -39,6 +40,7 @@ pub struct HostBuilder {
     allow_live_update: bool,
     lattice_cache_provider_ref: Option<String>,
     strict_update_check: bool,
+    event_sender: Option<Sender<ControlEvent>>,
 }
 
 impl Default for HostBuilder {
@@ -62,6 +64,19 @@ impl HostBuilder {
             allow_live_update: false,
             lattice_cache_provider_ref: None,
             strict_update_check: true,
+            event_sender: None,
+        }
+    }
+
+    /// Provides a channel receiver that will be used to sent control events from this host. Note that
+    /// as soon as this sender or its channel is dropped, or an error occurs during handling, the host will
+    /// stop sending events with this sender. Additionally, the host does not guarantee _exactly once_
+    /// delivery of events. Some events, like the establishment of links between providers and actors,
+    /// may occur multiple times (providers must handle these duplicates in an idempotent fashion)
+    pub fn with_event_sender(self, sender: Sender<ControlEvent>) -> HostBuilder {
+        HostBuilder {
+            event_sender: Some(sender),
+            ..self
         }
     }
 
@@ -194,6 +209,7 @@ impl HostBuilder {
             allow_live_updates: self.allow_live_update,
             lattice_cache_provider_ref: self.lattice_cache_provider_ref,
             strict_update_check: self.strict_update_check,
+            event_sender: self.event_sender,
         }
     }
 }
@@ -215,6 +231,7 @@ pub struct Host {
     allow_live_updates: bool,
     lattice_cache_provider_ref: Option<String>,
     strict_update_check: bool,
+    event_sender: Option<Sender<ControlEvent>>,
 }
 
 impl Host {
@@ -248,7 +265,8 @@ impl Host {
 
         *self.id.borrow_mut() = kp.public_key();
 
-        // Start control plane
+        // Start control interface
+        println!("EVT SENDER: {}", self.event_sender.is_some());
         let cp = ControlInterface::from_hostlocal_registry(&kp.public_key());
         cp.send(crate::control_interface::ctlactor::Initialize {
             client: self.cplane_client.clone(),
@@ -256,6 +274,7 @@ impl Host {
                 host_labels: self.labels.clone(),
                 oci_allow_latest: self.allow_latest,
                 oci_allowed_insecure: self.allowed_insecure.clone(),
+                event_sender: self.event_sender.clone(),
                 ..Default::default()
             },
             key: KeyPair::from_seed(&kp.seed()?)?,

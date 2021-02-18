@@ -1,33 +1,63 @@
-use crate::common::{await_actor_count, await_provider_count, gen_kvcounter_host, par_from_file};
+use crate::common::{
+    await_actor_count, await_provider_count, gen_kvcounter_host, par_from_file, EventCollector,
+};
 use actix_rt::time::delay_for;
 use std::collections::HashMap;
 use std::time::Duration;
 use wasmcloud_actor_http_server::{deserialize, serialize, Request, Response};
-use wasmcloud_host::Result;
 use wasmcloud_host::{Actor, HostBuilder, NativeCapability};
+use wasmcloud_host::{ControlEvent, Result};
 
 pub async fn empty_host_has_two_providers() -> Result<()> {
+    let timeout = Duration::from_millis(300);
     // Ensure that we're not accidentally using the replication feature on KV cache
     ::std::env::remove_var("KVCACHE_NATS_URL");
-    let h = HostBuilder::new().build();
+    let (s, r) = crossbeam_channel::unbounded();
+    let ec = EventCollector::new(r);
+
+    let h = HostBuilder::new()
+        .with_event_sender(s)
+        .with_namespace("empty_has_two_providers")
+        .build();
     h.start().await?;
-    delay_for(Duration::from_millis(300)).await;
+
+    assert!(ec.wait_for(|e| *e == ControlEvent::HostStarted, timeout)?);
 
     let prov = h.get_providers().await?;
     assert_eq!(2, prov.len());
+    h.stop().await;
+    assert!(ec.wait_for(|e| *e == ControlEvent::HostStopped, timeout)?);
 
     Ok(())
 }
 
 pub async fn start_and_execute_echo() -> Result<()> {
+    let timeout = Duration::from_millis(300);
     // Ensure that we're not accidentally using the replication feature on KV cache
     ::std::env::remove_var("KVCACHE_NATS_URL");
-    let h = HostBuilder::new().build();
+    let (s, r) = crossbeam_channel::unbounded();
+    let ec = EventCollector::new(r);
+
+    let h = HostBuilder::new()
+        .with_event_sender(s)
+        .with_namespace("start_and_execute_echo")
+        .build();
     h.start().await?;
+
+    assert!(ec.wait_for(|e| *e == ControlEvent::HostStarted, timeout)?);
+
     let echo = Actor::from_file("./tests/modules/echo.wasm")?;
     let actor_id = echo.public_key();
     h.start_actor(echo).await?;
-    await_actor_count(&h, 1, Duration::from_millis(50), 3).await?;
+
+    assert!(ec.wait_for(
+        |e| *e
+            == ControlEvent::ActorStarted {
+                actor: actor_id.to_string(),
+                image_ref: None,
+            },
+        timeout
+    )?);
 
     let request = Request {
         method: "GET".to_string(),
@@ -46,17 +76,24 @@ pub async fn start_and_execute_echo() -> Result<()> {
     let v: serde_json::Value = serde_json::from_slice(&resp.body)?;
     assert_eq!("test=kthxbye", v["query_string"].as_str().unwrap());
     h.stop().await;
+    assert!(ec.wait_for(|e| *e == ControlEvent::HostStopped, timeout)?);
     Ok(())
 }
 
 pub async fn kvcounter_basic() -> Result<()> {
+    let timeout = Duration::from_millis(300);
     // Ensure that we're not accidentally using the replication feature on KV cache
     ::std::env::remove_var("KVCACHE_NATS_URL");
-    use redis::Commands;
+    let (s, r) = crossbeam_channel::unbounded();
+    let ec = EventCollector::new(r);
 
-    let h = gen_kvcounter_host(9999, None, None).await?;
-    println!("Got host");
-    delay_for(Duration::from_millis(50)).await;
+    use redis::Commands;
+    let h = HostBuilder::new()
+        .with_namespace("kvcounterbasic")
+        .with_event_sender(s)
+        .build();
+
+    gen_kvcounter_host(&h, 9999, &ec).await?;
 
     let key = uuid::Uuid::new_v4().to_string();
     let rkey = format!(":{}", key); // the kv wasm logic does a replace on '/' with ':'
@@ -69,7 +106,6 @@ pub async fn kvcounter_basic() -> Result<()> {
     resp = reqwest::get(&url).await?; // counter should be at 3 now
     assert!(resp.status().is_success());
     assert_eq!(resp.text().await?, "{\"counter\":3}");
-    println!("asserts good");
 
     let client = redis::Client::open("redis://127.0.0.1/")?;
     let mut con = client.get_connection()?;
@@ -78,6 +114,7 @@ pub async fn kvcounter_basic() -> Result<()> {
 
     Ok(())
 }
+/*
 
 pub async fn kvcounter_start_stop() -> Result<()> {
     // Ensure that we're not accidentally using the replication feature on KV cache
@@ -115,7 +152,7 @@ pub async fn kvcounter_start_stop() -> Result<()> {
 
     let websrv = NativeCapability::from_archive(&arc2, None)?;
     h.start_native_capability(websrv).await?;
-    await_provider_count(&h, 4, Duration::from_millis(50), 3).await?; // 2 providers plus wascc:extras + kvcache
+    await_provider_count(&h, 4, Duration::from_millis(50), 3).await?; // 2 providers plus wasmcloud:extras + kvcache
     delay_for(Duration::from_millis(300)).await; // give web server enough time to start
 
     let resp2 = reqwest::get(&url).await?;
@@ -180,7 +217,7 @@ pub async fn kvcounter_link_first() -> Result<()> {
     // for each.
     h.start_native_capability(redis).await?;
     h.start_native_capability(websrv).await?;
-    await_provider_count(&h, 4, Duration::from_millis(50), 3).await?; // 2 providers plus wascc:extras
+    await_provider_count(&h, 4, Duration::from_millis(50), 3).await?; // 2 providers plus wasmcloud:extras
     delay_for(Duration::from_millis(150)).await;
 
     let key = uuid::Uuid::new_v4().to_string();
@@ -199,3 +236,4 @@ pub async fn kvcounter_link_first() -> Result<()> {
     delay_for(Duration::from_millis(50)).await;
     Ok(())
 }
+ */

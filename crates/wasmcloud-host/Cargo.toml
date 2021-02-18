@@ -1,10 +1,10 @@
 [package]
 name = "wasmcloud-host"
-version = "0.15.0"
+version = "0.16.0"
 authors = ["wasmCloud Team"]
 edition = "2018"
 homepage = "https://wasmcloud.dev"
-repository = "https://github.com/wasmCloud/wasmCloud"
+repository = "https://github.com/wasmcloud/wasmcloud"
 description = "A secure, distributed, WebAssembly actor model runtime for the cloud, edge, and everything in between"
 license = "Apache-2.0"
 documentation = "https://docs.rs/wasmcloud-host"
@@ -47,7 +47,7 @@ chrono = "0.4.19"
 envmnt = "0.8.4"
 nats = "0.8.6"
 wasmcloud-actor-keyvalue = "0.2.0"
-wasmcloud-nats-kvcache = "0.4.0"
+wasmcloud-nats-kvcache = { version = "0.4.1", path = "../nats-kvcache" }
 wasmcloud-control-interface = { path = "../wasmcloud-control-interface", version = "0.1.0" }
 
 wasm3-provider = { version = "0.0.2", optional = true}

@@ -294,7 +294,7 @@ mod test {
             WasmCloudEntity::Actor(SYSTEM_ACTOR.to_string()),
             WasmCloudEntity::Capability {
                 id: "VDHPKGFKDI34Y4RN4PWWZHRYZ6373HYRSNNEM4UTDLLOGO5B37TSVREP".to_string(),
-                contract_id: "wascc:extras".to_string(),
+                contract_id: "wasmcloud:extras".to_string(),
                 link_name: "default".to_string(),
             },
             OP_REQUEST_GUID,

@@ -1,4 +1,4 @@
-// A default implementation of the "wascc:extras" provider that is always included
+// A default implementation of the "wasmcloud:extras" provider that is always included
 // with the host runtime. This provides functionality for generating random numbers,
 // generating a guid, and generating a sequence number... things that a standalone
 // WASM module cannot do.
@@ -43,7 +43,7 @@ impl Default for ExtrasCapabilityProvider {
     }
 }
 
-pub(crate) const CAPABILITY_ID: &str = "wascc:extras";
+pub(crate) const CAPABILITY_ID: &str = "wasmcloud:extras";
 
 impl ExtrasCapabilityProvider {
     fn generate_guid(

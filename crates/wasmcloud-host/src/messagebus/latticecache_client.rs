@@ -161,6 +161,7 @@ impl LatticeCacheClient {
         actor_id: &str,
         claims: Claims<wascap::jwt::Actor>,
     ) -> Result<()> {
+        println!("LC CLAIMS PUT: {:?}", claims);
         // KV context: KEY is {prefix}:claims_{actor_id}
         // value is claims JSON
         let key = prefix(&format!("claims_{}", actor_id));
@@ -195,17 +196,21 @@ impl LatticeCacheClient {
 
     /// Retrieves the claims, if they exist, belonging to a given actor ID
     pub async fn get_claims(&self, actor_id: &str) -> Result<Option<Claims<wascap::jwt::Actor>>> {
+        println!("LC CLAIMS GET: {}", actor_id);
         // KV context: KEY is {prefix}:claims_{actor_id}
         // value is claims JSON
         let key = prefix(&format!("claims_{}", actor_id));
         let args = GetArgs { key };
         let inv = self.invocation_for_provider(OP_GET, &serialize(&args)?);
         let get_r: GetResponse = invoke_as(&self.provider, inv).await?;
+        println!("HEYO");
 
         if get_r.exists {
             let c: Claims<wascap::jwt::Actor> = serde_json::from_str(&get_r.value)?;
+            println!("WIN");
             Ok(Some(c))
         } else {
+            println!("LOSE");
             Ok(None)
         }
     }
@@ -411,6 +416,7 @@ async fn invoke_as<'de, T: Deserialize<'de>>(
     inv: Invocation,
 ) -> Result<T> {
     let inv_r = target.send(inv).await?;
+    println!("INV_R: {:?}", inv_r);
     if let Some(e) = inv_r.error {
         let s = format!("Lattice cache client invocation failure: {}", e);
         error!("{}", s);

@@ -14,6 +14,7 @@ fn init() {
     let _ = ::std::fs::remove_dir_all(path);
 }
 
+/*
 #[actix_rt::test]
 async fn empty_host_has_two_providers() {
     let res = no_lattice::empty_host_has_two_providers().await;
@@ -30,7 +31,7 @@ async fn start_and_execute_echo() {
         println!("{}", e);
     }
     assert!(res.is_ok());
-}
+} */
 
 #[actix_rt::test]
 async fn kvcounter_basic() {
@@ -40,6 +41,7 @@ async fn kvcounter_basic() {
     }
     assert!(res.is_ok());
 }
+/*
 
 #[actix_rt::test]
 async fn kvcounter_start_stop() {
@@ -125,3 +127,4 @@ async fn control_calltest() {
     }
     assert!(res.is_ok());
 }
+ */

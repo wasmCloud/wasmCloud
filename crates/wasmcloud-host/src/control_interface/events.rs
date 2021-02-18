@@ -50,6 +50,11 @@ pub enum ControlEvent {
         link_name: String,
         provider_id: String,
     },
+    LinkEstablished {
+        contract_id: String,
+        link_name: String,
+        provider_id: String,
+    },
     Heartbeat {
         claims: Vec<wascap::jwt::Claims<wascap::jwt::Actor>>,
         entities: HashMap<String, RunState>,

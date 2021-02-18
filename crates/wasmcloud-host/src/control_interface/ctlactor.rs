@@ -2,6 +2,7 @@ use crate::hlreg::HostLocalSystemService;
 use crate::messagebus::{NatsMessage, NatsSubscriber};
 use crate::ControlEvent;
 use actix::prelude::*;
+use crossbeam_channel::Sender;
 use std::collections::HashMap;
 use wascap::prelude::KeyPair;
 
@@ -30,6 +31,7 @@ pub struct ControlOptions {
     pub host_labels: HashMap<String, String>,
     pub max_actors: u16,    // Currently unused
     pub max_providers: u16, // Currently unused
+    pub event_sender: Option<Sender<ControlEvent>>,
 }
 
 #[derive(Message)]
@@ -57,6 +59,14 @@ impl Handler<PublishEvent> for ControlInterface {
     type Result = ResponseActFuture<Self, ()>;
 
     fn handle(&mut self, msg: PublishEvent, _ctx: &mut Context<Self>) -> Self::Result {
+        println!("PUB: {:?}", msg.event);
+        if let Some(ref sender) = self.options.event_sender {
+            // try_send is async
+            if let Err(e) = sender.try_send(msg.event.clone()) {
+                warn!("Event receiver on dropped channel or failed to receive. Stopping event publications on internal host channel: {}", e);
+                self.options.event_sender = None;
+            }
+        }
         if self.client.is_none() {
             return Box::pin(async move {}.into_actor(self));
         }
@@ -135,15 +145,17 @@ impl Handler<Initialize> for ControlInterface {
 
     fn handle(&mut self, msg: Initialize, ctx: &mut Context<Self>) -> Self::Result {
         self.key = Some(msg.key);
+
+        self.options = msg.control_options;
+        self.ns_prefix = msg.ns_prefix;
+
         if msg.client.is_some() {
-            info!("Initializing control interface - Active");
+            info!("Initializing control interface - NATS");
         } else {
-            info!("Initializing control interface - Disabled");
+            info!("Initializing control interface - Isolated");
             return Box::pin(async move {}.into_actor(self));
         }
         self.client = msg.client;
-        self.options = msg.control_options;
-        self.ns_prefix = msg.ns_prefix;
 
         use ::wasmcloud_control_interface::broker::*;
 

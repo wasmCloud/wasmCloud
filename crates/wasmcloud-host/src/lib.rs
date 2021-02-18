@@ -1,9 +1,10 @@
-//! # wasmCloud Host
+#![doc(html_logo_url = "https://avatars0.githubusercontent.com/u/52050279?s=200&v=4")]
+//! # wasmcloud Host
 //!
-//! [wasmCloud](https://wasmcloud.com) is a secure, distributed actor platform with an autonomous mesh network built
+//! [wasmcloud](https://wasmcloud.com) is a secure, distributed actor platform with an autonomous mesh network built
 //! for bridging disparate and far-flung infrastructure.
 //!
-//! By default a wasmCloud host will start in offline mode and only allow "local" scheduling of actors
+//! By default a wasmcloud host will start in offline mode and only allow "local" scheduling of actors
 //! and capabilities. If you choose to opt-in to the lattice, you can use NATS as a message broker to
 //! provide the infrastructure for wasmCloud's self-forming, self-healing network. If you then want
 //! even more power, you can choose to override the capability provider used for managing the shared
@@ -17,7 +18,8 @@
 //! take a look at the documentation and tutorials at [wasmcloud.dev](https://wasmcloud.dev).
 //!
 //! # Example
-//! The following example creates a new wasmCloud host in the default standalone (no lattice) mode. It
+//!
+//! The following example creates a new wasmcloud host in the default standalone (no lattice) mode. It
 //! then loads an actor that simply echoes back incoming HTTP requests as outbound HTTP responses.
 //! The HTTP server capability provider is loaded so that the actor can receive web requests.
 //! Note that the link definition (configuration of the link between the actor and the

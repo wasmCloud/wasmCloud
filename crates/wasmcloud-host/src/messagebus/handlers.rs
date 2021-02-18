@@ -1,6 +1,4 @@
 use super::MessageBus;
-use crate::capability::extras::EXTRAS_PUBLIC_KEY;
-use crate::dispatch::{gen_config_invocation, Invocation, InvocationResponse, WasmCloudEntity};
 use crate::hlreg::HostLocalSystemService;
 use crate::messagebus::rpc_client::RpcClient;
 use crate::messagebus::rpc_subscription::{CreateSubscription, RpcSubscription};
@@ -11,6 +9,12 @@ use crate::messagebus::{
     QueryAllLinks, QueryProviders, QueryResponse, SetCacheClient, Subscribe, Unsubscribe,
 };
 use crate::{auth, Result};
+use crate::{capability::extras::EXTRAS_PUBLIC_KEY, control_interface::ctlactor::ControlInterface};
+use crate::{
+    control_interface::ctlactor::PublishEvent,
+    dispatch::{gen_config_invocation, Invocation, InvocationResponse, WasmCloudEntity},
+    ControlEvent,
+};
 use actix::prelude::*;
 use std::sync::Arc;
 use wascap::prelude::KeyPair;
@@ -141,26 +145,32 @@ impl Handler<EnforceLocalLink> for MessageBus {
     // If the provider responsible for this link is local, and the actor
     // for this link is known to us, then invoke the link binding
     fn handle(&mut self, msg: EnforceLocalLink, _ctx: &mut Context<Self>) -> Self::Result {
+        println!("EF1");
         if self.latticecache.is_none() {
             return Box::pin(async {}.into_actor(self));
         }
+        println!("EF1.5");
         let lc = self.latticecache.clone().unwrap();
         let subscribers = self.subscribers.clone();
         let seed = self.key.as_ref().clone().unwrap().seed().unwrap();
         let key = KeyPair::from_seed(&seed).unwrap();
         Box::pin(
             async move {
+                println!("EF1.8 - {:?}", msg.actor);
                 let claims = match lc.get_claims(&msg.actor).await {
                     Ok(Some(c)) => c,
                     _ => return,
                 };
+                println!("EF2");
                 if !lc.has_actor(&msg.actor).await {
                     return; // do not send link invocation for actors we don't know about
                 }
+                println!("EF3");
                 if let Ok(Some(ld)) = lc
                     .lookup_link(&msg.actor, &msg.contract_id, &msg.link_name)
                     .await
                 {
+                    println!("EF4");
                     let target = WasmCloudEntity::Capability {
                         id: ld.provider_id.to_string(),
                         contract_id: ld.contract_id.to_string(),
@@ -173,10 +183,21 @@ impl Handler<EnforceLocalLink> for MessageBus {
                             &msg.contract_id,
                             &ld.provider_id,
                             claims,
-                            msg.link_name,
+                            msg.link_name.clone(),
                             ld.values,
                         );
                         let _ = t.send(inv).await;
+                        // publish a link established event
+                        let ci = ControlInterface::from_hostlocal_registry(&key.public_key());
+                        let _ = ci
+                            .send(PublishEvent {
+                                event: ControlEvent::LinkEstablished {
+                                    contract_id: msg.contract_id.to_string(),
+                                    link_name: msg.link_name.to_string(),
+                                    provider_id: ld.provider_id.to_string(),
+                                },
+                            })
+                            .await;
                     }
                 }
             }
