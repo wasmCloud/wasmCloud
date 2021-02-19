@@ -1,10 +1,10 @@
 COLOR ?= always # Valid COLOR options: {always, auto, never}
 CARGO = cargo --color $(COLOR)
-TARGET = target/wasm32-unknown-unknown
+TARGET = ../../target/wasm32-unknown-unknown
 DEBUG = $(TARGET)/debug
 RELEASE = $(TARGET)/release
 KEYDIR ?= .keys
-VERSION = $(shell cargo metadata --no-deps --format-version 1 | jq -r '.packages[].version')
+VERSION = "0.1.0"
 
 .PHONY: all build check clean doc test update
 

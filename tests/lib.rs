@@ -99,7 +99,7 @@ async fn redis_kvcache() {
 
 //#[actix_rt::test]
 //async fn control_basics() {
-//    let res = control::basics().await;
+//let res = control::basics().await;
 //    if let Err(ref e) = res {
 //        println!("{}", e);
 //    } else {
