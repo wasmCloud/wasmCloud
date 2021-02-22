@@ -10,7 +10,15 @@ use wasmcloud_host::{Actor, HostBuilder};
 async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     let h = HostBuilder::new().build();
     h.start().await?;
-    let echo = Actor::from_file("../../target/wasm32-unknown-unknown/release/bench_actor_s.wasm")?;
+    let echo = match Actor::from_file(
+        "../../target/wasm32-unknown-unknown/release/bench_actor_s.wasm",
+    ) {
+        Ok(e) => e,
+        Err(e) => {
+            println!("Unable to locate bench_actor_s.wasm. Please run 'make release' in samples/bench-actor/");
+            return Err(e);
+        }
+    };
     let actor_id = echo.public_key();
     h.start_actor(echo).await?;
 
