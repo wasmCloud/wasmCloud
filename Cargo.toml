@@ -66,6 +66,7 @@ futures = "0.3.6"
 members = [
     "crates/wasmcloud-host",
     "samples/bench-actor",
+    "samples/bencher",
     "crates/wasmcloud-control-interface"
 ]
 
