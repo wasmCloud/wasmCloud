@@ -105,7 +105,7 @@ struct ReplCli {
 #[derive(StructOpt, Debug, Clone)]
 #[structopt(global_settings(&[AppSettings::ColorNever, AppSettings::DisableVersion, AppSettings::VersionlessSubcommands]))]
 enum ReplCliCommand {
-    // Manage contents of local wasmCloud cache
+    // Manage contents of local wasmcloud cache
     #[structopt(name = "drain")]
     Drain(DrainCliCommand),
 
@@ -113,7 +113,7 @@ enum ReplCliCommand {
     #[structopt(name = "ctl")]
     Ctl(CtlCliCommand),
 
-    /// Generate and manage JWTs for wasmCloud Actors
+    /// Generate and manage JWTs for wasmcloud Actors
     #[structopt(name = "claims")]
     Claims(ClaimsCliCommand),
 
@@ -125,7 +125,7 @@ enum ReplCliCommand {
     #[structopt(name = "par")]
     Par(ParCliCommand),
 
-    /// Launch wasmCloud REPL environment
+    /// Launch wasmcloud REPL environment
     #[structopt(name = "reg")]
     Reg(RegCliCommand),
 

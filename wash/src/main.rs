@@ -26,7 +26,7 @@ const ASCII: &str = "
   \\ V  V / (_| \\__ \\ | | | | | |____| | (_) | |_| | (_| |  ____) | | | |  __/ | |
    \\_/\\_/ \\__,_|___/_| |_| |_|\\_____|_|\\___/ \\__,_|\\__,_| |_____/|_| |_|\\___|_|_|
 
-A single CLI to handle all of your wasmCloud tooling needs
+A single CLI to handle all of your wasmcloud tooling needs
 ";
 
 #[derive(Debug, Clone, StructOpt)]
@@ -40,16 +40,16 @@ struct Cli {
 
 #[derive(Debug, Clone, StructOpt)]
 enum CliCommand {
-    /// Manage contents of local wasmCloud cache
+    /// Manage contents of local wasmcloud cache
     #[structopt(name = "drain")]
     Drain(DrainCli),
-    /// Generate and manage JWTs for wasmCloud Actors
+    /// Generate and manage JWTs for wasmcloud Actors
     #[structopt(name = "claims")]
     Claims(Box<ClaimsCli>),
     /// Utilities for generating and managing keys
     #[structopt(name = "keys", aliases = &["key"])]
     Keys(KeysCli),
-    /// Interact with a wasmCloud control interface
+    /// Interact with a wasmcloud control interface
     #[structopt(name = "ctl")]
     Ctl(CtlCli),
     /// Create, inspect, and modify capability provider archive files
@@ -58,7 +58,7 @@ enum CliCommand {
     /// Interact with OCI compliant registries
     #[structopt(name = "reg")]
     Reg(RegCli),
-    /// Launch wasmCloud REPL environment
+    /// Launch wasmcloud REPL environment
     #[structopt(name = "up")]
     Up(UpCli),
 }

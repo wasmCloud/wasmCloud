@@ -1,10 +1,10 @@
 [package]
 name = "wash-cli"
 version = "0.2.0"
-authors = ["wasmCloud Team"]
+authors = ["wasmcloud Team"]
 edition = "2018"
-repository = "https://github.com/wasmCloud/wash"
-description = "wasmCloud Shell (wash) CLI tool"
+repository = "https://github.com/wasmcloud/wash"
+description = "wasmcloud Shell (wash) CLI tool"
 license = "Apache-2.0"
 readme = "README.md"
 keywords = ["webassembly", "wasmcloud", "wash", "cli"]

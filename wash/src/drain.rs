@@ -36,9 +36,9 @@ impl DrainCliCommand {
 
 #[derive(StructOpt, Debug, Clone)]
 pub(crate) enum DrainSelection {
-    /// Remove all cached files created by wasmCloud
+    /// Remove all cached files created by wasmcloud
     All(Output),
-    /// Remove cached files downloaded from OCI registries by wasmCloud
+    /// Remove cached files downloaded from OCI registries by wasmcloud
     Oci(Output),
     /// Remove cached binaries extracted from provider archives
     Lib(Output),
