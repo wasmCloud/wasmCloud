@@ -47,7 +47,7 @@ pub(crate) struct ConnectionOpts {
     )]
     rpc_port: String,
 
-    /// Namespace prefix for wasmCloud command interface
+    /// Namespace prefix for wasmcloud command interface
     #[structopt(short = "n", long = "ns-prefix", default_value = "default")]
     ns_prefix: String,
 

@@ -1,7 +1,7 @@
 #!/bin/bash
 
 ##
-# KVCounter wasmCloud example
+# KVCounter wasmcloud example
 #
 # This example starts our `KVCounter` actor, `httpserver` provider and `redis` provider.
 #
@@ -43,7 +43,7 @@ echo "Discovering hosts ..."
 HOSTS=$(wash ctl get hosts -o json)
 if [ $(echo $HOSTS | jq '.hosts | length') -gt 0 ] 
 then
-	# The following commands can be run as-is if you have a running wasmCloud host.
+	# The following commands can be run as-is if you have a running wasmcloud host.
 	# If you don't, you can omit the `wash` part of the command, and run the `ctl` commands in the REPL.
 	HOST=$(echo $HOSTS | jq ".hosts[0].id" | tr -d "\"")
 	wash ctl start actor wasmcloud.azurecr.io/kvcounter:0.2.0 -h $HOST

@@ -46,7 +46,7 @@ pub(crate) struct CreateCommand {
     #[structopt(short = "c", long = "capid")]
     capid: String,
 
-    /// Vendor string to help identify the publisher of the provider (e.g. Redis, Cassandra, wasmCloud, etc). Not unique.
+    /// Vendor string to help identify the publisher of the provider (e.g. Redis, Cassandra, wasmcloud, etc). Not unique.
     #[structopt(short = "v", long = "vendor")]
     vendor: String,
 
