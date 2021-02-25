@@ -77,9 +77,6 @@
 //!```
 //!
 
-/// The string used for the originator of messages dispatched by the host runtime
-pub const SYSTEM_ACTOR: &str = "system";
-
 pub use capabilities::*;
 
 extern crate rmp_serde as rmps;
