@@ -1,9 +1,9 @@
 #![doc(html_logo_url = "https://avatars2.githubusercontent.com/u/52050279?s=200&v=4")]
 
-//! # wasmCloud Provider Core
+//! # wasmcloud Provider Core
 //!
 //! This library provides the core set of types and associated functions used for
-//! the common set of functionality required for the wasmCloud host to manipulate
+//! the common set of functionality required for the wasmcloud host to manipulate
 //! capability providers and for developers to create their own providers.
 //!
 //! # Example

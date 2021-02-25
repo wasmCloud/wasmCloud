@@ -7,7 +7,7 @@ description = "Core types and traits used for building wasmcloud capability prov
 license = "Apache-2.0"
 documentation = "https://docs.rs/wasmcloud-provider-core"
 readme = "README.md"
-keywords = ["webassembly", "wasm", "codec", "wascc"]
+keywords = ["webassembly", "wasm", "codec", "provider", "wasmcloud"]
 categories = ["wasm", "data-structures","encoding"]
 homepage = "https://wasmcloud.dev"
 
