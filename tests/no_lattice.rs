@@ -19,6 +19,34 @@ pub async fn empty_host_has_two_providers() -> Result<()> {
     Ok(())
 }
 
+pub async fn start_and_stop_actor() -> Result<()> {
+    ::std::env::remove_var("KVCACHE_NATS_URL");
+    let h = HostBuilder::new().build();
+    h.start().await?;
+    let echo = Actor::from_file("./tests/modules/echo.wasm")?;
+    let actor_id = echo.public_key();
+    h.start_actor(echo).await?;
+    await_actor_count(&h, 1, Duration::from_millis(50), 3).await?;
+
+    h.stop_actor(&actor_id).await?;
+    delay_for(Duration::from_millis(500)).await;
+    assert_eq!(0, h.get_actors().await?.len());
+
+    let request = Request {
+        method: "GET".to_string(),
+        path: "/foo/bar".to_string(),
+        query_string: "test=kthxbye".to_string(),
+        header: Default::default(),
+        body: b"This is a test. Do not be alarmed".to_vec(),
+    };
+    let buf = serialize(&request)?;
+    println!("{}", buf.len());
+    let res = h.call_actor(&actor_id, "HandleRequest", &buf).await;
+    assert!(true, res.is_err()); // We should not still be able to call this actor
+
+    Ok(())
+}
+
 pub async fn start_and_execute_echo() -> Result<()> {
     // Ensure that we're not accidentally using the replication feature on KV cache
     ::std::env::remove_var("KVCACHE_NATS_URL");
