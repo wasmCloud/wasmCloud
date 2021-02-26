@@ -1,5 +1,6 @@
 use crate::common::{
-    await_actor_count, await_provider_count, HTTPSRV_OCI, KVCOUNTER_OCI, NATS_OCI, REDIS_OCI,
+    await_actor_count, await_provider_count, par_from_file, HTTPSRV_OCI, KVCOUNTER_OCI, NATS_OCI,
+    REDIS_OCI,
 };
 use ::wasmcloud_control_interface::Client;
 use actix_rt::time::delay_for;
@@ -9,8 +10,8 @@ use wasmcloud_actor_http_server::{deserialize, serialize};
 use std::time::Duration;
 
 use wascap::prelude::KeyPair;
-use wasmcloud_host::Result;
 use wasmcloud_host::{Actor, HostBuilder};
+use wasmcloud_host::{NativeCapability, Result};
 
 // NOTE: this test does verify a number of error and edge cases, so when it is
 // running -properly- you will see warnings and errors in the output log
@@ -19,8 +20,10 @@ pub(crate) async fn basics() -> Result<()> {
     ::std::env::remove_var("KVCACHE_NATS_URL");
 
     let nc = nats::asynk::connect("0.0.0.0:4222").await?;
+    let nc3 = nats::asynk::connect("0.0.0.0:4222").await?;
     let h = HostBuilder::new()
         .with_namespace("controlbasics")
+        .with_rpc_client(nc3)
         .with_control_client(nc)
         .oci_allow_latest()
         .with_label("testing", "test-one")
@@ -70,6 +73,7 @@ pub(crate) async fn basics() -> Result<()> {
     let stop_ack = ctl_client.stop_actor(&hid, KVCOUNTER_OCI).await?;
     assert!(stop_ack.failure.is_none());
     await_actor_count(&h, 0, Duration::from_millis(50), 20).await?;
+
     let _ = ctl_client.start_actor(&hid, KVCOUNTER_OCI).await?;
 
     let redis_ack = ctl_client.start_provider(&hid, REDIS_OCI, None).await?;
@@ -169,6 +173,16 @@ pub(crate) async fn calltest() -> Result<()> {
     assert_eq!(http_r.status_code, 200);
     h.stop().await;
     delay_for(Duration::from_millis(900)).await;
+
+    ctl_client.stop_actor(&h.id(), &a_id).await?;
+    delay_for(Duration::from_millis(300)).await;
+    let inv_r = ctl_client
+        .call_actor(&a_id, "HandleRequest", &serialize(&req)?)
+        .await;
+
+    println!("{:?}", inv_r);
+    // we should not be able to invoke an actor that we stopped
+    assert!(inv_r.is_err());
 
     Ok(())
 }

@@ -599,7 +599,9 @@ impl Handler<Unsubscribe> for MessageBus {
 
     fn handle(&mut self, msg: Unsubscribe, _ctx: &mut Context<Self>) {
         trace!("Bus removing interest for {}", msg.interest.url());
-        if self.subscribers.remove(&msg.interest).is_none() {
+        if let Some(subscriber) = self.subscribers.remove(&msg.interest) {
+            let _ = subscriber.do_send(Invocation::halt(self.key.as_ref().unwrap()));
+        } else {
             warn!("Attempted to remove a non-existent subscriber");
         }
     }

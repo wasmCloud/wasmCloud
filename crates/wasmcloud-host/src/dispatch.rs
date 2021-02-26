@@ -23,6 +23,8 @@ pub const CONFIG_WASCC_CLAIMS_NAME: &str = "__wascc_name";
 pub const CONFIG_WASCC_CLAIMS_EXPIRES: &str = "__wascc_expires";
 pub const CONFIG_WASCC_CLAIMS_TAGS: &str = "__wascc_tags";
 
+pub const OP_HALT: &str = "__halt";
+
 #[doc(hidden)]
 // Given to a capability provider plugin to give it the means
 // to communicate with the host machinery
@@ -68,8 +70,8 @@ impl Dispatcher for ProviderDispatcher {
     }
 }
 
-/// An immutable representation of an invocation within waSCC
-#[derive(Debug, Clone, Serialize, Deserialize, Message)]
+/// An immutable representation of an invocation within wasmcloud
+#[derive(Debug, Clone, Serialize, Deserialize, Message, PartialEq)]
 #[rtype(result = "InvocationResponse")]
 #[doc(hidden)]
 pub struct Invocation {
@@ -108,6 +110,34 @@ impl Invocation {
             target,
             operation: op.to_string(),
             msg,
+            id: subject,
+            encoded_claims: claims.encode(&hostkey).unwrap(),
+            host_id: issuer,
+        }
+    }
+
+    /// Produces a host-signed invocation that is used to halt anything that can receive invocations. This invocation
+    /// has both an origin and a target of SYSTEM_ACTOR. This has a net effect of making this invocation unroutable
+    /// across a lattice, and therefore can only be produced internally. In other words, a remote host can't fabricate
+    /// a halt invocation and send it to a provider or actor
+    pub fn halt(hostkey: &KeyPair) -> Invocation {
+        let subject = format!("{}", Uuid::new_v4());
+        let issuer = hostkey.public_key();
+        let op = OP_HALT.to_string();
+        let target = WasmCloudEntity::Actor(SYSTEM_ACTOR.to_string());
+        let target_url = format!("{}/{}", target.url(), &op);
+        let claims = Claims::<wascap::prelude::Invocation>::new(
+            issuer.to_string(),
+            subject.to_string(),
+            &target_url,
+            &target.url(),
+            &invocation_hash(&target_url, &target.url(), &[]),
+        );
+        Invocation {
+            origin: target.clone(),
+            target,
+            operation: op.to_string(),
+            msg: vec![],
             id: subject,
             encoded_claims: claims.encode(&hostkey).unwrap(),
             host_id: issuer,

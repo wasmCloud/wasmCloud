@@ -1,3 +1,4 @@
+use crate::dispatch::OP_HALT;
 use crate::generated::core::{deserialize, serialize};
 use crate::{Invocation, InvocationResponse, WasmCloudEntity};
 use actix::prelude::*;
@@ -70,6 +71,9 @@ impl Handler<RpcInvocation> for RpcSubscription {
     type Result = ResponseActFuture<Self, ()>;
 
     fn handle(&mut self, msg: RpcInvocation, _ctx: &mut Self::Context) -> Self::Result {
+        if self.target.is_none() {
+            return Box::pin(async move {}.into_actor(self));
+        }
         let target = self.target.clone().unwrap();
         let nc = self.nc.as_ref().unwrap().clone();
         Box::pin(
@@ -84,7 +88,7 @@ impl Handler<RpcInvocation> for RpcSubscription {
                                 .await;
                         }
                         Err(_) => {
-                            error!("Failed to forward RPC call to internal bus");
+                            error!("Failed to forward RPC call to internal target");
                         }
                     }
                 }
@@ -99,7 +103,18 @@ impl Handler<RpcInvocation> for RpcSubscription {
 impl Handler<Invocation> for RpcSubscription {
     type Result = ResponseActFuture<Self, InvocationResponse>;
 
-    fn handle(&mut self, msg: Invocation, _ctx: &mut Self::Context) -> Self::Result {
+    fn handle(&mut self, msg: Invocation, ctx: &mut Self::Context) -> Self::Result {
+        if msg.origin == msg.target && msg.operation == OP_HALT {
+            info!("RPC subscription proxy halting, forwarding halt instruction to internal target");
+            ctx.stop();
+            if let Some(ref target) = self.target {
+                let _ = target.do_send(msg.clone());
+            }
+            self.target = None;
+            return Box::pin(
+                async move { InvocationResponse::success(&msg, vec![]) }.into_actor(self),
+            );
+        }
         trace!("RPC subscriber proxying invocation to {}", msg.target.url());
         let target = self.target.clone().unwrap();
         Box::pin(
