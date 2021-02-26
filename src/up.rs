@@ -109,7 +109,7 @@ enum ReplCliCommand {
     #[structopt(name = "drain")]
     Drain(DrainCliCommand),
 
-    /// Create, inspect, and modify capability provider archive files
+    /// Interact with a wasmcloud control interface
     #[structopt(name = "ctl")]
     Ctl(CtlCliCommand),
 
@@ -121,7 +121,7 @@ enum ReplCliCommand {
     #[structopt(name = "keys")]
     Keys(KeysCliCommand),
 
-    /// Interact with OCI compliant registries
+    /// Create, inspect, and modify capability provider archive files
     #[structopt(name = "par")]
     Par(ParCliCommand),
 
