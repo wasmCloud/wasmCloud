@@ -24,6 +24,15 @@ async fn empty_host_has_two_providers() {
 }
 
 #[actix_rt::test]
+async fn start_and_stop_actor() {
+    let res = no_lattice::start_and_stop_actor().await;
+    if let Err(ref e) = res {
+        println!("{}", e);
+    }
+    assert!(res.is_ok());
+}
+
+#[actix_rt::test]
 async fn start_and_execute_echo() {
     let res = no_lattice::start_and_execute_echo().await;
     if let Err(ref e) = res {
