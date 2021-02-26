@@ -79,6 +79,7 @@ pub(crate) async fn basics() -> Result<()> {
     let redis_ack = ctl_client.start_provider(&hid, REDIS_OCI, None).await?;
     await_provider_count(&h, 3, Duration::from_millis(50), 20).await?;
     println!("Redis {:?} started", redis_ack);
+    delay_for(Duration::from_millis(500)).await;
 
     // Stop and re-start a provider
     assert!(ctl_client
