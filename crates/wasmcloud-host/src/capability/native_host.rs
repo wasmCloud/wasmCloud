@@ -1,6 +1,7 @@
 use crate::capability::native::{normalize_link_name, NativeCapability};
 use crate::control_interface::ctlactor::{ControlInterface, PublishEvent};
 
+use crate::dispatch::OP_HALT;
 use crate::dispatch::{Invocation, InvocationResponse, ProviderDispatcher, WasmCloudEntity};
 use crate::hlreg::HostLocalSystemService;
 use crate::messagebus::{EnforceLocalProviderLinks, MessageBus, Subscribe};
@@ -174,8 +175,16 @@ impl Handler<Invocation> for NativeCapabilityHost {
     /// and that the destination matches this process. If those checks pass, runs
     /// the capability provider pre-invoke middleware, invokes the operation on the native
     /// plugin, then runs the provider post-invoke middleware.
-    fn handle(&mut self, inv: Invocation, _ctx: &mut Self::Context) -> Self::Result {
+    fn handle(&mut self, inv: Invocation, ctx: &mut Self::Context) -> Self::Result {
         let state = self.state.as_ref().unwrap();
+        if inv.origin == inv.target && inv.operation == OP_HALT {
+            info!(
+                "Received explicit halt instruction. Provider {} shutting down",
+                state.cap.claims.subject
+            );
+            ctx.stop();
+            return InvocationResponse::success(&inv, vec![]);
+        }
         trace!(
             "Provider {} handling invocation operation '{}'",
             state.cap.claims.subject,

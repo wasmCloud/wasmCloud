@@ -1,6 +1,7 @@
 use crate::actors::WasmCloudActor;
 use crate::control_interface::ctlactor::{ControlInterface, PublishEvent};
 
+use crate::dispatch::OP_HALT;
 use crate::dispatch::{Invocation, InvocationResponse, WasmCloudEntity};
 use crate::hlreg::HostLocalSystemService;
 use crate::messagebus::{AdvertiseClaims, MessageBus, Subscribe};
@@ -337,8 +338,16 @@ impl Handler<Invocation> for ActorHost {
     /// Receives an invocation from any source. This will execute the full pre-exec
     /// middleware chain, perform the requested operation, and then perform the full
     /// post-exec middleware chain, assuming no errors indicate a pre-emptive halt
-    fn handle(&mut self, msg: Invocation, _ctx: &mut Self::Context) -> Self::Result {
+    fn handle(&mut self, msg: Invocation, ctx: &mut Self::Context) -> Self::Result {
         let state = self.state.as_ref().unwrap();
+        if msg.origin == msg.target && msg.operation == OP_HALT {
+            info!(
+                "Received explicit halt instruction. Actor {} shutting down",
+                state.claims.subject
+            );
+            ctx.stop();
+            return InvocationResponse::success(&msg, vec![]);
+        }
 
         trace!(
             "Actor Invocation - From {} to {}: {}",

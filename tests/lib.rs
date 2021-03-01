@@ -14,6 +14,15 @@ fn init() {
     let _ = ::std::fs::remove_dir_all(path);
 }
 
+// #[actix_rt::test]
+// async fn control_basics() {
+//     let res = control::basics().await;
+//     if let Err(ref e) = res {
+//         println!("{}", e);
+//     }
+//     assert!(res.is_ok())
+// }
+
 #[actix_rt::test]
 async fn empty_host_has_two_providers() {
     let res = no_lattice::empty_host_has_two_providers().await;
@@ -102,17 +111,6 @@ async fn redis_kvcache() {
 //    let res = with_lattice::scaled_kvcounter().await;
 //    if let Err(ref e) = res {
 //        println!("{}", e);
-//    }
-//    assert!(res.is_ok());
-//}
-
-//#[actix_rt::test]
-//async fn control_basics() {
-//let res = control::basics().await;
-//    if let Err(ref e) = res {
-//        println!("{}", e);
-//    } else {
-//        println!("** MADE IT HERE **");
 //    }
 //    assert!(res.is_ok());
 //}
