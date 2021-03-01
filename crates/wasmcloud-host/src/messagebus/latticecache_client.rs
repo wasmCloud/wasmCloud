@@ -105,6 +105,45 @@ impl LatticeCacheClient {
         }
     }
 
+    /// Adds a call alias mapping to the cache. Call aliases are lattice-unique strings that can
+    /// be used as developer-friendly handles for invoking actors, especially useful when the
+    /// public key can change from one environment to another.
+    pub async fn put_call_alias(&self, alias: &str, actor_key: &str) -> Result<()> {
+        if self.lookup_call_alias(alias).await?.is_some() {
+            let s = format!("Cannot put call alias, {} is already claimed", alias);
+            error!("{}", s);
+            return Err(s.into());
+        }
+        let key = call_alias_key(alias);
+        let args = SetArgs {
+            key,
+            value: actor_key.to_string(),
+            expires: 0,
+        };
+        let inv = self.invocation_for_provider(OP_SET, &serialize(&args)?);
+        let inv_r = self.provider.send(inv).await?;
+        if let Some(e) = inv_r.error {
+            let s = format!("Failed to put call alias mapping: {}", e);
+            error!("{}", s);
+            return Err(s.into());
+        }
+        Ok(())
+    }
+
+    /// Checks if a given call alias has been claimed and returns the corresponding actor's
+    /// public key if so
+    pub async fn lookup_call_alias(&self, alias: &str) -> Result<Option<String>> {
+        let key = call_alias_key(alias);
+        let args = GetArgs { key };
+        let inv = self.invocation_for_provider(OP_GET, &serialize(&args)?);
+        let gr: GetResponse = invoke_as(&self.provider, inv).await?;
+        if gr.exists {
+            Ok(Some(gr.value))
+        } else {
+            Ok(None)
+        }
+    }
+
     pub async fn remove_oci_mapping(&self, oci_ref: &str) -> Result<Option<String>> {
         if let Some(s) = self.lookup_oci_mapping(oci_ref).await? {
             self.remove_oci(oci_ref).await?;
@@ -385,6 +424,10 @@ impl LatticeCacheClient {
             payload.to_vec(),
         )
     }
+}
+
+fn call_alias_key(alias: &str) -> String {
+    prefix(&format!("call_{}", alias))
 }
 
 fn oci_key(oci_ref: &str) -> String {

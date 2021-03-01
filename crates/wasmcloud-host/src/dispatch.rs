@@ -1,6 +1,9 @@
-use crate::errors::{self, ErrorKind};
 use crate::hlreg::HostLocalSystemService;
 use crate::messagebus::{LookupLink, MessageBus, OP_BIND_ACTOR};
+use crate::{
+    errors::{self, ErrorKind},
+    messagebus::LookupAlias,
+};
 use crate::{Result, SYSTEM_ACTOR};
 use actix::dev::{MessageResponse, ResponseChannel};
 use actix::prelude::*;
@@ -357,56 +360,79 @@ pub(crate) fn wapc_host_callback(
     // Look up the public key of the provider bound to the origin actor
     // for the given capability contract ID.
     let bus = MessageBus::from_hostlocal_registry(&kp.public_key());
+    let target = resolve_target_from_reference(&bus, &claims.subject, link_name, namespace)?;
+    let inv = invocation_from_callback(&kp, &claims.subject, target, operation, payload);
+    match block_on(async { bus.send(inv).await.map(|ir| ir.msg) }) {
+        Ok(v) => Ok(v),
+        Err(_e) => Err("Mailbox error during host callback".into()),
+    }
+}
+
+/// Search for targets for outbound calls from an actor in the following order:
+/// 1. check if the target is an actor's public key
+/// 2. check if the target is a valid call alias for an actor
+/// 3. assume the target is a provider, check for an existing link definition from the actor to the provider.
+pub(crate) fn resolve_target_from_reference(
+    bus: &Addr<MessageBus>,
+    subject: &str,
+    link_name: &str,
+    namespace: &str,
+) -> Result<WasmCloudEntity> {
+    if namespace.starts_with("M") && namespace.len() == 56 {
+        Ok(WasmCloudEntity::Actor(namespace.to_string()))
+    } else if let Some(pk) = lookup_alias(bus, namespace) {
+        Ok(WasmCloudEntity::Actor(pk))
+    } else if let Some(p) = lookup_link(bus, subject, namespace, link_name)? {
+        Ok(WasmCloudEntity::Capability {
+            link_name: link_name.to_string(),
+            contract_id: namespace.to_string(),
+            id: p.to_string(),
+        })
+    } else {
+        let msg = format!("The target {} was not found as an actor public key, an actor call alias, or as the contract ID in an existing link from source actor {}",
+                                namespace, subject);
+        error!("{}", msg);
+        Err(msg.into())
+    }
+}
+
+fn lookup_alias(bus: &Addr<MessageBus>, namespace: &str) -> Option<String> {
+    block_on(async { lookup_call_alias(bus, namespace).await })
+}
+
+pub(crate) async fn lookup_call_alias(bus: &Addr<MessageBus>, alias: &str) -> Option<String> {
+    bus.send(LookupAlias {
+        alias: alias.to_string(),
+    })
+    .await
+    .unwrap()
+}
+
+fn lookup_link(
+    bus: &Addr<MessageBus>,
+    subject: &str,
+    namespace: &str,
+    link_name: &str,
+) -> Result<Option<String>> {
     let prov = block_on(async {
         bus.send(LookupLink {
             contract_id: namespace.to_string(),
-            actor: claims.subject.to_string(),
+            actor: subject.to_string(),
             link_name: link_name.to_string(),
         })
         .await
         .unwrap()
     });
-    if let Some(p) = prov {
-        let inv = invocation_from_callback(
-            &kp,
-            &claims.subject,
-            link_name,
-            namespace,
-            operation,
-            &p,
-            payload,
-        );
-        match block_on(async { bus.send(inv).await.map(|ir| ir.msg) }) {
-            Ok(v) => Ok(v),
-            Err(_e) => Err("Mailbox error during host callback".into()),
-        }
-    } else {
-        Err(format!(
-            "Unable to locate a known link for {}->{}:{}",
-            claims.subject, namespace, link_name
-        )
-        .into())
-    }
+    Ok(prov)
 }
 
 fn invocation_from_callback(
     hostkey: &KeyPair,
     origin: &str,
-    bd: &str,
-    ns: &str,
+    target: WasmCloudEntity,
     op: &str,
-    provider_id: &str,
     payload: &[u8],
 ) -> Invocation {
-    let target = if ns.len() == 56 && ns.starts_with('M') {
-        WasmCloudEntity::Actor(ns.to_string())
-    } else {
-        WasmCloudEntity::Capability {
-            link_name: bd.to_string(),
-            contract_id: ns.to_string(),
-            id: provider_id.to_string(),
-        }
-    };
     Invocation::new(
         hostkey,
         WasmCloudEntity::Actor(origin.to_string()),
