@@ -156,3 +156,87 @@ fn integration_claims_inspect() {
 
     remove_dir_all(inspect_dir).unwrap();
 }
+
+#[test]
+fn integration_claims_call_alias() {
+    const SUBFOLDER: &str = "call_alias";
+    let call_alias_dir = test_dir_with_subfolder(SUBFOLDER);
+    const ISSUER: &str = "SAADMA65NBETHOHQTXKV7XKQMXYDUS65JOWQORDR3IOMOB3UFZSDOU7TAA";
+    const ACC_PKEY: &str = "AALSO6EPE54BWUHXTVJLDIABLYOTXMCOTK52THAIKMKHD32YYWWGQQPW";
+    const SUBJECT: &str = "SMAABZ62LGU4SLS4SFK3MD463TRC7ZWMZLYPSVH2AOL3WRZXPBIGZG66JE";
+    const MOD_PKEY: &str = "MCLFG44AN6RKNORIDSN5JACURXNEIP5Q6CH2BOG5FCTDF7HE6ES3MCQB";
+
+    // Pull the logger module to test signing
+    // During the process of signing a module, the previous "jwt" section
+    // is cleared from a signed module, so this is just as effective
+    // as signing an unsigned wasm
+    let logger = test_dir_file(SUBFOLDER, "logger.wasm");
+    let get_wasm = wash()
+        .args(&[
+            "reg",
+            "pull",
+            "wasmcloud.azurecr.io/logger:0.1.0",
+            "--destination",
+            logger.to_str().unwrap(),
+        ])
+        .output()
+        .expect("failed to pull logger for call alias test");
+    assert!(get_wasm.status.success());
+
+    let signed_wasm_path = test_dir_file(SUBFOLDER, "logger_signed.wasm");
+    let sign_logger = wash()
+        .args(&[
+            "claims",
+            "sign",
+            logger.to_str().unwrap(),
+            "--name",
+            "Logger",
+            "-l",
+            "-q",
+            "--issuer",
+            ISSUER,
+            "--subject",
+            SUBJECT,
+            "--disable-keygen",
+            "--destination",
+            signed_wasm_path.to_str().unwrap(),
+            "--call-alias",
+            "wasmcloud/logger_onedotzero",
+        ])
+        .output()
+        .expect("failed to sign logger module");
+    assert!(sign_logger.status.success());
+    assert_eq!(
+        output_to_string(sign_logger),
+        format!(
+            "Successfully signed {} with capabilities: wasmcloud:httpserver,wasmcloud:logging\n",
+            signed_wasm_path.to_str().unwrap()
+        )
+    );
+
+    // inspect actor
+    let local_inspect = wash()
+        .args(&[
+            "claims",
+            "inspect",
+            signed_wasm_path.to_str().unwrap(),
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to inspect local wasm");
+    assert!(local_inspect.status.success());
+    let local_inspect_output = output_to_string(local_inspect);
+    assert!(local_inspect_output.contains(&format!("\"account\":\"{}\"", ACC_PKEY)));
+    assert!(local_inspect_output.contains(&format!("\"module\":\"{}\"", MOD_PKEY)));
+    assert!(local_inspect_output.contains("\"can_be_used\":\"immediately\""));
+    assert!(local_inspect_output.contains("\"capabilities\":["));
+    assert!(local_inspect_output.contains("\"HTTP Server\""));
+    assert!(local_inspect_output.contains("\"Logging\""));
+    assert!(local_inspect_output.contains("\"expires\":\"never\""));
+    assert!(local_inspect_output.contains("\"tags\":\"None\""));
+    assert!(local_inspect_output.contains("\"version\":\"None\""));
+    assert!(local_inspect_output.contains("\"call_alias\":\"wasmcloud/logger_onedotzero\""));
+
+    remove_dir_all(call_alias_dir).unwrap();
+}
