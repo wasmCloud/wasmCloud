@@ -453,7 +453,20 @@ impl Handler<AdvertiseClaims> for MessageBus {
                 let _ = lc.put_claims(&msg.claims.subject, msg.claims.clone()).await;
                 if let Some(ref md) = msg.claims.metadata {
                     if let Some(ref ca) = md.call_alias {
-                        let _ = lc.put_call_alias(ca, &msg.claims.subject).await;
+                        match lc.put_call_alias(ca, &msg.claims.subject).await {
+                            Ok(_) => {
+                                info!(
+                                    "Actor {} has claimed call alias '{}'",
+                                    &msg.claims.subject, ca
+                                );
+                            }
+                            Err(e) => {
+                                warn!(
+                                    "Actor {} failed to claim call alias '{}': {}",
+                                    &msg.claims.subject, ca, e
+                                );
+                            }
+                        }
                     }
                 }
                 let el = EnforceLocalActorLinks {
