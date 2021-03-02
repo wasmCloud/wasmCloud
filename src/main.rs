@@ -79,8 +79,14 @@ async fn main() {
             .map(|_s| "Exiting REPL".to_string()),
     };
 
-    match res {
-        Ok(out) => println!("{}", out),
-        Err(e) => eprintln!("Error: {}", e),
-    }
+    std::process::exit(match res {
+        Ok(out) => {
+            println!("{}", out);
+            0
+        }
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            1
+        }
+    })
 }

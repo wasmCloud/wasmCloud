@@ -899,3 +899,393 @@ fn update_spinner_message(
         None
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    const RPC_HOST: &str = "0.0.0.0";
+    const RPC_PORT: &str = "4222";
+    const NS_PREFIX: &str = "default";
+
+    const ACTOR_ID: &str = "MDPDJEYIAK6MACO67PRFGOSSLODBISK4SCEYDY3HEOY4P5CVJN6UCWUK";
+    const PROVIDER_ID: &str = "VBKTSBG2WKP6RJWLQ5O7RDVIIB4LMW6U5R67A7QMIDBZDGZWYTUE3TSI";
+    const HOST_ID: &str = "NCE7YHGI42RWEKBRDJZWXBEJJCFNE5YIWYMSTLGHQBEGFY55BKJ3EG3G";
+
+    #[test]
+    /// Enumerates multiple options of the `ctl` command to ensure API doesn't
+    /// change between versions. This test will fail if any subcommand of `wash ctl`
+    /// changes syntax, ordering of required elements, or flags.
+    fn test_ctl_comprehensive() -> Result<()> {
+        let call_all = CtlCli::from_iter_safe(&[
+            "ctl",
+            "call",
+            "-o",
+            "json",
+            "--ns-prefix",
+            NS_PREFIX,
+            "--rpc-host",
+            RPC_HOST,
+            "--rpc-port",
+            RPC_PORT,
+            "--rpc-timeout",
+            "1",
+            ACTOR_ID,
+            "HandleOperation",
+            "{ \"hello\": \"world\"}",
+        ])?;
+        match call_all.command {
+            CtlCliCommand::Call(CallCommand {
+                opts,
+                output,
+                actor_id,
+                operation,
+                data,
+            }) => {
+                assert_eq!(opts.rpc_host, RPC_HOST);
+                assert_eq!(opts.rpc_port, RPC_PORT);
+                assert_eq!(opts.ns_prefix, NS_PREFIX);
+                assert_eq!(opts.rpc_timeout, 1);
+                assert_eq!(output.kind, OutputKind::JSON);
+                assert_eq!(actor_id, ACTOR_ID);
+                assert_eq!(operation, "HandleOperation");
+                assert_eq!(data, vec!["{ \"hello\": \"world\"}".to_string()])
+            }
+            cmd => panic!("ctl call constructed incorrect command: {:?}", cmd),
+        }
+        let start_actor_all = CtlCli::from_iter_safe(&[
+            "ctl",
+            "start",
+            "actor",
+            "-o",
+            "json",
+            "--ns-prefix",
+            NS_PREFIX,
+            "--rpc-host",
+            RPC_HOST,
+            "--rpc-port",
+            RPC_PORT,
+            "--rpc-timeout",
+            "1",
+            "--constraint",
+            "arch=x86_64",
+            "--host-id",
+            HOST_ID,
+            "--timeout",
+            "5",
+            "wasmcloud.azurecr.io/actor:v1",
+        ])?;
+        match start_actor_all.command {
+            CtlCliCommand::Start(StartCommand::Actor(super::StartActorCommand {
+                opts,
+                output,
+                host_id,
+                actor_ref,
+                constraints,
+                timeout,
+            })) => {
+                assert_eq!(opts.rpc_host, RPC_HOST);
+                assert_eq!(opts.rpc_port, RPC_PORT);
+                assert_eq!(opts.ns_prefix, NS_PREFIX);
+                assert_eq!(opts.rpc_timeout, 1);
+                assert_eq!(output.kind, OutputKind::JSON);
+                assert_eq!(host_id.unwrap(), HOST_ID.to_string());
+                assert_eq!(actor_ref, "wasmcloud.azurecr.io/actor:v1".to_string());
+                assert_eq!(constraints.unwrap(), vec!["arch=x86_64".to_string()]);
+                assert_eq!(timeout, 5);
+            }
+            cmd => panic!("ctl start actor constructed incorrect command {:?}", cmd),
+        }
+        let start_provider_all = CtlCli::from_iter_safe(&[
+            "ctl",
+            "start",
+            "provider",
+            "-o",
+            "json",
+            "--ns-prefix",
+            NS_PREFIX,
+            "--rpc-host",
+            RPC_HOST,
+            "--rpc-port",
+            RPC_PORT,
+            "--rpc-timeout",
+            "1",
+            "--constraint",
+            "arch=x86_64",
+            "--host-id",
+            HOST_ID,
+            "--timeout",
+            "5",
+            "--link-name",
+            "default",
+            "wasmcloud.azurecr.io/provider:v1",
+        ])?;
+        match start_provider_all.command {
+            CtlCliCommand::Start(StartCommand::Provider(super::StartProviderCommand {
+                opts,
+                output,
+                host_id,
+                provider_ref,
+                link_name,
+                constraints,
+                timeout,
+            })) => {
+                assert_eq!(opts.rpc_host, RPC_HOST);
+                assert_eq!(opts.rpc_port, RPC_PORT);
+                assert_eq!(opts.ns_prefix, NS_PREFIX);
+                assert_eq!(opts.rpc_timeout, 1);
+                assert_eq!(output.kind, OutputKind::JSON);
+                assert_eq!(link_name, "default".to_string());
+                assert_eq!(constraints.unwrap(), vec!["arch=x86_64".to_string()]);
+                assert_eq!(host_id.unwrap(), HOST_ID.to_string());
+                assert_eq!(provider_ref, "wasmcloud.azurecr.io/provider:v1".to_string());
+                assert_eq!(timeout, 5);
+            }
+            cmd => panic!("ctl start provider constructed incorrect command {:?}", cmd),
+        }
+        let stop_actor_all = CtlCli::from_iter_safe(&[
+            "ctl",
+            "stop",
+            "actor",
+            "-o",
+            "json",
+            "--ns-prefix",
+            NS_PREFIX,
+            "--rpc-host",
+            RPC_HOST,
+            "--rpc-port",
+            RPC_PORT,
+            "--rpc-timeout",
+            "1",
+            HOST_ID,
+            ACTOR_ID,
+        ])?;
+        match stop_actor_all.command {
+            CtlCliCommand::Stop(StopCommand::Actor(super::StopActorCommand {
+                opts,
+                output,
+                host_id,
+                actor_id,
+            })) => {
+                assert_eq!(opts.rpc_host, RPC_HOST);
+                assert_eq!(opts.rpc_port, RPC_PORT);
+                assert_eq!(opts.ns_prefix, NS_PREFIX);
+                assert_eq!(opts.rpc_timeout, 1);
+                assert_eq!(output.kind, OutputKind::JSON);
+                assert_eq!(host_id, HOST_ID.to_string());
+                assert_eq!(actor_id, ACTOR_ID.to_string());
+            }
+            cmd => panic!("ctl stop actor constructed incorrect command {:?}", cmd),
+        }
+        let stop_provider_all = CtlCli::from_iter_safe(&[
+            "ctl",
+            "stop",
+            "provider",
+            "-o",
+            "json",
+            "--ns-prefix",
+            NS_PREFIX,
+            "--rpc-host",
+            RPC_HOST,
+            "--rpc-port",
+            RPC_PORT,
+            "--rpc-timeout",
+            "1",
+            HOST_ID,
+            PROVIDER_ID,
+            "default",
+            "wasmcloud:provider",
+        ])?;
+        match stop_provider_all.command {
+            CtlCliCommand::Stop(StopCommand::Provider(super::StopProviderCommand {
+                opts,
+                output,
+                host_id,
+                provider_id,
+                link_name,
+                contract_id,
+            })) => {
+                assert_eq!(opts.rpc_host, RPC_HOST);
+                assert_eq!(opts.rpc_port, RPC_PORT);
+                assert_eq!(opts.ns_prefix, NS_PREFIX);
+                assert_eq!(opts.rpc_timeout, 1);
+                assert_eq!(output.kind, OutputKind::JSON);
+                assert_eq!(host_id, HOST_ID.to_string());
+                assert_eq!(provider_id, PROVIDER_ID.to_string());
+                assert_eq!(link_name, "default".to_string());
+                assert_eq!(contract_id, "wasmcloud:provider".to_string());
+            }
+            cmd => panic!("ctl stop actor constructed incorrect command {:?}", cmd),
+        }
+        let get_hosts_all = CtlCli::from_iter_safe(&[
+            "ctl",
+            "get",
+            "hosts",
+            "-o",
+            "json",
+            "--ns-prefix",
+            NS_PREFIX,
+            "--rpc-host",
+            RPC_HOST,
+            "--rpc-port",
+            RPC_PORT,
+            "--rpc-timeout",
+            "1",
+            "--timeout",
+            "5",
+        ])?;
+        match get_hosts_all.command {
+            CtlCliCommand::Get(GetCommand::Hosts(GetHostsCommand {
+                opts,
+                output,
+                timeout,
+            })) => {
+                assert_eq!(opts.rpc_host, RPC_HOST);
+                assert_eq!(opts.rpc_port, RPC_PORT);
+                assert_eq!(opts.ns_prefix, NS_PREFIX);
+                assert_eq!(opts.rpc_timeout, 1);
+                assert_eq!(output.kind, OutputKind::JSON);
+                assert_eq!(timeout, 5);
+            }
+            cmd => panic!("ctl get hosts constructed incorrect command {:?}", cmd),
+        }
+        let get_host_inventory_all = CtlCli::from_iter_safe(&[
+            "ctl",
+            "get",
+            "inventory",
+            "-o",
+            "json",
+            "--ns-prefix",
+            NS_PREFIX,
+            "--rpc-host",
+            RPC_HOST,
+            "--rpc-port",
+            RPC_PORT,
+            "--rpc-timeout",
+            "1",
+            HOST_ID,
+        ])?;
+        match get_host_inventory_all.command {
+            CtlCliCommand::Get(GetCommand::HostInventory(GetHostInventoryCommand {
+                opts,
+                output,
+                host_id,
+            })) => {
+                assert_eq!(opts.rpc_host, RPC_HOST);
+                assert_eq!(opts.rpc_port, RPC_PORT);
+                assert_eq!(opts.ns_prefix, NS_PREFIX);
+                assert_eq!(opts.rpc_timeout, 1);
+                assert_eq!(output.kind, OutputKind::JSON);
+                assert_eq!(host_id, HOST_ID.to_string());
+            }
+            cmd => panic!("ctl get inventory constructed incorrect command {:?}", cmd),
+        }
+        let get_claims_all = CtlCli::from_iter_safe(&[
+            "ctl",
+            "get",
+            "claims",
+            "-o",
+            "json",
+            "--ns-prefix",
+            NS_PREFIX,
+            "--rpc-host",
+            RPC_HOST,
+            "--rpc-port",
+            RPC_PORT,
+            "--rpc-timeout",
+            "1",
+        ])?;
+        match get_claims_all.command {
+            CtlCliCommand::Get(GetCommand::Claims(GetClaimsCommand { opts, output })) => {
+                assert_eq!(opts.rpc_host, RPC_HOST);
+                assert_eq!(opts.rpc_port, RPC_PORT);
+                assert_eq!(opts.ns_prefix, NS_PREFIX);
+                assert_eq!(opts.rpc_timeout, 1);
+                assert_eq!(output.kind, OutputKind::JSON);
+            }
+            cmd => panic!("ctl get claims constructed incorrect command {:?}", cmd),
+        }
+        let link_all = CtlCli::from_iter_safe(&[
+            "ctl",
+            "link",
+            "-o",
+            "json",
+            "--ns-prefix",
+            NS_PREFIX,
+            "--rpc-host",
+            RPC_HOST,
+            "--rpc-port",
+            RPC_PORT,
+            "--rpc-timeout",
+            "1",
+            "--link-name",
+            "default",
+            ACTOR_ID,
+            PROVIDER_ID,
+            "wasmcloud:provider",
+            "THING=foo",
+        ])?;
+        match link_all.command {
+            CtlCliCommand::Link(LinkCommand {
+                opts,
+                output,
+                actor_id,
+                provider_id,
+                contract_id,
+                link_name,
+                values,
+            }) => {
+                assert_eq!(opts.rpc_host, RPC_HOST);
+                assert_eq!(opts.rpc_port, RPC_PORT);
+                assert_eq!(opts.ns_prefix, NS_PREFIX);
+                assert_eq!(opts.rpc_timeout, 1);
+                assert_eq!(output.kind, OutputKind::JSON);
+                assert_eq!(actor_id, ACTOR_ID.to_string());
+                assert_eq!(provider_id, PROVIDER_ID.to_string());
+                assert_eq!(contract_id, "wasmcloud:provider".to_string());
+                assert_eq!(link_name.unwrap(), "default".to_string());
+                assert_eq!(values, vec!["THING=foo".to_string()]);
+            }
+            cmd => panic!("ctl get claims constructed incorrect command {:?}", cmd),
+        }
+        let update_all = CtlCli::from_iter_safe(&[
+            "ctl",
+            "update",
+            "actor",
+            "-o",
+            "json",
+            "--ns-prefix",
+            NS_PREFIX,
+            "--rpc-host",
+            RPC_HOST,
+            "--rpc-port",
+            RPC_PORT,
+            "--rpc-timeout",
+            "1",
+            HOST_ID,
+            ACTOR_ID,
+            "wasmcloud.azurecr.io/actor:v2",
+        ])?;
+        match update_all.command {
+            CtlCliCommand::Update(UpdateCommand::Actor(super::UpdateActorCommand {
+                opts,
+                output,
+                host_id,
+                actor_id,
+                new_actor_ref,
+            })) => {
+                assert_eq!(opts.rpc_host, RPC_HOST);
+                assert_eq!(opts.rpc_port, RPC_PORT);
+                assert_eq!(opts.ns_prefix, NS_PREFIX);
+                assert_eq!(opts.rpc_timeout, 1);
+                assert_eq!(output.kind, OutputKind::JSON);
+                assert_eq!(host_id, HOST_ID.to_string());
+                assert_eq!(actor_id, ACTOR_ID.to_string());
+                assert_eq!(new_actor_ref, "wasmcloud.azurecr.io/actor:v2".to_string());
+            }
+            cmd => panic!("ctl get claims constructed incorrect command {:?}", cmd),
+        }
+
+        Ok(())
+    }
+}

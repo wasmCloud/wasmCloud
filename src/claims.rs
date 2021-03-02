@@ -113,7 +113,7 @@ pub(crate) struct SignCommand {
     /// File to read
     pub(crate) source: String,
 
-    /// Destionation for signed module. If this flag is not provided, the signed module will be placed in the same directory as the source with a "_s" suffix
+    /// Destination for signed module. If this flag is not provided, the signed module will be placed in the same directory as the source with a "_s" suffix
     #[structopt(short = "d", long = "destination")]
     destination: Option<String>,
 
@@ -846,4 +846,524 @@ where
     ]));
 
     table
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    const SUBSCRIBER_OCI: &str = "wasmcloud.azurecr.io/subscriber:0.2.0";
+
+    #[test]
+    /// Enumerates all options and flags of the `claims inspect` command
+    /// to ensure command line arguments do not change between versions
+    fn test_claims_inspect_comprehensive() {
+        let cmd = ClaimsCli::from_iter_safe(&[
+            "claims",
+            "inspect",
+            SUBSCRIBER_OCI,
+            "--digest",
+            "sha256:5790f650cff526fcbc1271107a05111a6647002098b74a9a5e2e26e3c0a116b8",
+            "--output",
+            "text",
+            "--user",
+            "name",
+            "--password",
+            "opensesame",
+            "--allow-latest",
+            "--insecure",
+            "--jwt-only",
+        ])
+        .unwrap();
+
+        match cmd.command {
+            ClaimsCliCommand::Inspect(InspectCommand {
+                module,
+                jwt_only,
+                digest,
+                allow_latest,
+                user,
+                password,
+                insecure,
+                output,
+            }) => {
+                assert_eq!(module, SUBSCRIBER_OCI);
+                assert_eq!(
+                    digest.unwrap(),
+                    "sha256:5790f650cff526fcbc1271107a05111a6647002098b74a9a5e2e26e3c0a116b8"
+                );
+                assert_eq!(output.kind, OutputKind::Text);
+                assert_eq!(user.unwrap(), "name");
+                assert_eq!(password.unwrap(), "opensesame");
+                assert!(allow_latest);
+                assert!(insecure);
+                assert!(jwt_only);
+            }
+            cmd => panic!("claims constructed incorrect command: {:?}", cmd),
+        }
+
+        let short_cmd = ClaimsCli::from_iter_safe(&[
+            "claims",
+            "inspect",
+            SUBSCRIBER_OCI,
+            "-d",
+            "sha256:5790f650cff526fcbc1271107a05111a6647002098b74a9a5e2e26e3c0a116b8",
+            "-o",
+            "text",
+            "-u",
+            "name",
+            "-p",
+            "opensesame",
+            "--allow-latest",
+            "--insecure",
+            "--jwt-only",
+        ])
+        .unwrap();
+
+        match short_cmd.command {
+            ClaimsCliCommand::Inspect(InspectCommand {
+                module,
+                jwt_only,
+                digest,
+                allow_latest,
+                user,
+                password,
+                insecure,
+                output,
+            }) => {
+                assert_eq!(module, SUBSCRIBER_OCI);
+                assert_eq!(
+                    digest.unwrap(),
+                    "sha256:5790f650cff526fcbc1271107a05111a6647002098b74a9a5e2e26e3c0a116b8"
+                );
+                assert_eq!(output.kind, OutputKind::Text);
+                assert_eq!(user.unwrap(), "name");
+                assert_eq!(password.unwrap(), "opensesame");
+                assert!(allow_latest);
+                assert!(insecure);
+                assert!(jwt_only);
+            }
+            cmd => panic!("claims constructed incorrect command: {:?}", cmd),
+        }
+    }
+
+    #[test]
+    /// Enumerates all options and flags of the `claims sign` command
+    /// to ensure command line arguments do not change between versions
+    fn test_claims_sign_comprehensive() {
+        const LOCAL_WASM: &str = "./myactor.wasm";
+        const ISSUER_KEY: &str = "SAAOBYD6BLELXSNN4S3TXUM7STGPB3A5HYU3D5T7XA4WHGVQBDBD4LJPOM";
+        const SUBJECT_KEY: &str = "SMAMA4ABHIJUYQR54BDFHEMXIIGQATUXK6RYU6XLTFHDNCRVWT4KSDDSVE";
+        let long_cmd = ClaimsCli::from_iter_safe(&[
+            "claims",
+            "sign",
+            LOCAL_WASM,
+            "--name",
+            "MyActor",
+            "--cap",
+            "test:custom",
+            "--destination",
+            "./myactor_s.wasm",
+            "--directory",
+            "./dir",
+            "--expires",
+            "3",
+            "--issuer",
+            ISSUER_KEY,
+            "--subject",
+            SUBJECT_KEY,
+            "--output",
+            "json",
+            "--nbf",
+            "1",
+            "--rev",
+            "2",
+            "--tag",
+            "testtag",
+            "--ver",
+            "0.0.1",
+            "--blob_store",
+            "--events",
+            "--extras",
+            "--http_client",
+            "--http_server",
+            "--keyvalue",
+            "--logging",
+            "--msg",
+            "--prov",
+            "--disable-keygen",
+        ])
+        .unwrap();
+
+        match long_cmd.command {
+            ClaimsCliCommand::Sign(SignCommand {
+                source,
+                destination,
+                metadata,
+            }) => {
+                assert_eq!(source, LOCAL_WASM);
+                assert_eq!(destination.unwrap(), "./myactor_s.wasm");
+                assert_eq!(metadata.common.directory.unwrap(), "./dir");
+                assert_eq!(metadata.common.expires_in_days.unwrap(), 3);
+                assert_eq!(metadata.common.not_before_days.unwrap(), 1);
+                assert!(metadata.common.disable_keygen);
+                assert_eq!(metadata.common.output.kind, OutputKind::JSON);
+                assert!(metadata.keyvalue);
+                assert!(metadata.msg_broker);
+                assert!(metadata.http_server);
+                assert!(metadata.http_client);
+                assert!(metadata.blob_store);
+                assert!(metadata.extras);
+                assert!(metadata.logging);
+                assert!(metadata.eventstream);
+                assert_eq!(metadata.name, "MyActor");
+                assert!(!metadata.custom_caps.is_empty());
+                assert_eq!(metadata.custom_caps[0], "test:custom");
+                assert!(!metadata.tags.is_empty());
+                assert_eq!(metadata.tags[0], "testtag");
+                assert!(metadata.provider);
+                assert_eq!(metadata.rev.unwrap(), 2);
+                assert_eq!(metadata.ver.unwrap(), "0.0.1");
+            }
+            cmd => panic!("claims constructed incorrect command: {:?}", cmd),
+        }
+        let short_cmd = ClaimsCli::from_iter_safe(&[
+            "claims",
+            "sign",
+            LOCAL_WASM,
+            "-n",
+            "MyActor",
+            "-c",
+            "test:custom",
+            "-d",
+            "./myactor_s.wasm",
+            "--directory",
+            "./dir",
+            "-x",
+            "3",
+            "-i",
+            ISSUER_KEY,
+            "-s",
+            SUBJECT_KEY,
+            "-o",
+            "json",
+            "-b",
+            "1",
+            "-r",
+            "2",
+            "-t",
+            "testtag",
+            "-v",
+            "0.0.1",
+            "-f",
+            "-e",
+            "-z",
+            "-h",
+            "-q",
+            "-k",
+            "-l",
+            "-g",
+            "-p",
+            "--disable-keygen",
+        ])
+        .unwrap();
+
+        match short_cmd.command {
+            ClaimsCliCommand::Sign(SignCommand {
+                source,
+                destination,
+                metadata,
+            }) => {
+                assert_eq!(source, LOCAL_WASM);
+                assert_eq!(destination.unwrap(), "./myactor_s.wasm");
+                assert_eq!(metadata.common.directory.unwrap(), "./dir");
+                assert_eq!(metadata.common.expires_in_days.unwrap(), 3);
+                assert_eq!(metadata.common.not_before_days.unwrap(), 1);
+                assert!(metadata.common.disable_keygen);
+                assert_eq!(metadata.common.output.kind, OutputKind::JSON);
+                assert!(metadata.keyvalue);
+                assert!(metadata.msg_broker);
+                assert!(metadata.http_server);
+                assert!(metadata.http_client);
+                assert!(metadata.blob_store);
+                assert!(metadata.extras);
+                assert!(metadata.logging);
+                assert!(metadata.eventstream);
+                assert_eq!(metadata.name, "MyActor");
+                assert!(!metadata.custom_caps.is_empty());
+                assert_eq!(metadata.custom_caps[0], "test:custom");
+                assert!(!metadata.tags.is_empty());
+                assert_eq!(metadata.tags[0], "testtag");
+                assert!(metadata.provider);
+                assert_eq!(metadata.rev.unwrap(), 2);
+                assert_eq!(metadata.ver.unwrap(), "0.0.1");
+            }
+            cmd => panic!("claims constructed incorrect command: {:?}", cmd),
+        }
+    }
+
+    #[test]
+    /// Enumerates all options and flags of the `claims sign` command
+    /// to ensure command line arguments do not change between versions
+    fn test_claims_token_comprehensive() {
+        const DIR: &str = "./tests/fixtures";
+        const EXPR: &str = "10";
+        const NBFR: &str = "12";
+        const OUT: &str = "json";
+        const OPERATOR_KEY: &str = "SOALSFXSHRVKCNOP2JSOVOU267XMF2ZMLF627OM6ZPS6WMKVS6HKQGU7QM";
+        const OPERATOR_TWO_KEY: &str = "SOAC7EGQIMNPUF3XBSWR2IQIX7ITDNRYZZ4PN3ZZTFEVHPMG7BFOJMGPW4";
+        const ACCOUNT_KEY: &str = "SAAH3WW3NDAT7GQOO5IHPHNIGS5JNFQN2F72P6QBSHCOKPBLEEDXQUWI4Q";
+        const ACTOR_KEY: &str = "SMAA2XB7UP7FZLPLO27NJB65PKYISNQAH7PZ6PJUHR6CUARVANXZ4OTZOU";
+        const PROVIDER_KEY: &str = "SVAKIVYER6D2LZS7QJFOU7LQYLRAMJ5DZE4B7BJHX6QFJIY24KN43JZGN4";
+
+        let account_cmd = ClaimsCli::from_iter_safe(&[
+            "claims",
+            "token",
+            "account",
+            "--name",
+            "TokenName",
+            "--directory",
+            DIR,
+            "--expires",
+            EXPR,
+            "--nbf",
+            NBFR,
+            "--disable-keygen",
+            "--output",
+            OUT,
+            "--issuer",
+            OPERATOR_KEY,
+            "--subject",
+            ACCOUNT_KEY,
+            "-a",
+            OPERATOR_TWO_KEY,
+        ])
+        .unwrap();
+        match account_cmd.command {
+            ClaimsCliCommand::Token(TokenCommand::Account(AccountMetadata {
+                name,
+                issuer,
+                subject,
+                common,
+                additional_signing_keys,
+                ..
+            })) => {
+                assert_eq!(name, "TokenName");
+                assert_eq!(common.directory.unwrap(), DIR);
+                assert_eq!(
+                    common.expires_in_days.unwrap(),
+                    EXPR.parse::<u64>().unwrap()
+                );
+                assert_eq!(
+                    common.not_before_days.unwrap(),
+                    NBFR.parse::<u64>().unwrap()
+                );
+                assert!(common.disable_keygen);
+                assert_eq!(common.output.kind, OutputKind::JSON);
+                assert_eq!(issuer.unwrap(), OPERATOR_KEY);
+                assert_eq!(subject.unwrap(), ACCOUNT_KEY);
+                let adds = additional_signing_keys.unwrap();
+                assert_eq!(adds.len(), 1);
+                assert_eq!(adds[0], OPERATOR_TWO_KEY);
+            }
+            cmd => panic!("claims constructed incorrect command: {:?}", cmd),
+        }
+        let actor_cmd = ClaimsCli::from_iter_safe(&[
+            "claims",
+            "token",
+            "actor",
+            "--name",
+            "TokenName",
+            "--directory",
+            DIR,
+            "--expires",
+            EXPR,
+            "--nbf",
+            NBFR,
+            "--disable-keygen",
+            "--output",
+            OUT,
+            "--issuer",
+            ACCOUNT_KEY,
+            "--subject",
+            ACTOR_KEY,
+            "-c",
+            "test:custom",
+            "--rev",
+            "2",
+            "--tag",
+            "testtag",
+            "--ver",
+            "0.0.1",
+            "--blob_store",
+            "--events",
+            "--extras",
+            "--http_client",
+            "--http_server",
+            "--keyvalue",
+            "--logging",
+            "--msg",
+        ])
+        .unwrap();
+        match actor_cmd.command {
+            ClaimsCliCommand::Token(TokenCommand::Actor(ActorMetadata {
+                name,
+                issuer,
+                subject,
+                common,
+                keyvalue,
+                msg_broker,
+                http_server,
+                http_client,
+                blob_store,
+                extras,
+                logging,
+                eventstream,
+                custom_caps,
+                tags,
+                rev,
+                ver,
+                ..
+            })) => {
+                assert_eq!(name, "TokenName");
+                assert_eq!(common.directory.unwrap(), DIR);
+                assert_eq!(
+                    common.expires_in_days.unwrap(),
+                    EXPR.parse::<u64>().unwrap()
+                );
+                assert_eq!(
+                    common.not_before_days.unwrap(),
+                    NBFR.parse::<u64>().unwrap()
+                );
+                assert!(common.disable_keygen);
+                assert_eq!(common.output.kind, OutputKind::JSON);
+                assert_eq!(issuer.unwrap(), ACCOUNT_KEY);
+                assert_eq!(subject.unwrap(), ACTOR_KEY);
+                assert!(keyvalue);
+                assert!(msg_broker);
+                assert!(http_server);
+                assert!(http_client);
+                assert!(blob_store);
+                assert!(extras);
+                assert!(logging);
+                assert!(eventstream);
+                assert_eq!(custom_caps.len(), 1);
+                assert_eq!(custom_caps[0], "test:custom");
+                assert!(!tags.is_empty());
+                assert_eq!(tags[0], "testtag");
+                assert_eq!(rev.unwrap(), 2);
+                assert_eq!(ver.unwrap(), "0.0.1");
+            }
+            cmd => panic!("claims constructed incorrect command: {:?}", cmd),
+        }
+        let operator_cmd = ClaimsCli::from_iter_safe(&[
+            "claims",
+            "token",
+            "operator",
+            "--name",
+            "TokenName",
+            "--directory",
+            DIR,
+            "--expires",
+            EXPR,
+            "--nbf",
+            NBFR,
+            "--disable-keygen",
+            "--output",
+            OUT,
+            "--issuer",
+            OPERATOR_KEY,
+            "--additional-key",
+            OPERATOR_TWO_KEY,
+        ])
+        .unwrap();
+        match operator_cmd.command {
+            ClaimsCliCommand::Token(TokenCommand::Operator(OperatorMetadata {
+                name,
+                issuer,
+                common,
+                additional_signing_keys,
+                ..
+            })) => {
+                assert_eq!(name, "TokenName");
+                assert_eq!(common.directory.unwrap(), DIR);
+                assert_eq!(
+                    common.expires_in_days.unwrap(),
+                    EXPR.parse::<u64>().unwrap()
+                );
+                assert_eq!(
+                    common.not_before_days.unwrap(),
+                    NBFR.parse::<u64>().unwrap()
+                );
+                assert!(common.disable_keygen);
+                assert_eq!(common.output.kind, OutputKind::JSON);
+                assert_eq!(issuer.unwrap(), OPERATOR_KEY);
+                let adds = additional_signing_keys.unwrap();
+                assert_eq!(adds.len(), 1);
+                assert_eq!(adds[0], OPERATOR_TWO_KEY);
+            }
+            cmd => panic!("claims constructed incorrect command: {:?}", cmd),
+        }
+        let provider_cmd = ClaimsCli::from_iter_safe(&[
+            "claims",
+            "token",
+            "provider",
+            "--name",
+            "TokenName",
+            "--directory",
+            DIR,
+            "--expires",
+            EXPR,
+            "--nbf",
+            NBFR,
+            "--disable-keygen",
+            "--output",
+            OUT,
+            "--issuer",
+            ACCOUNT_KEY,
+            "--subject",
+            PROVIDER_KEY,
+            "--capid",
+            "wasmcloud:test",
+            "--vendor",
+            "test",
+            "--revision",
+            "0",
+            "--version",
+            "1.2.3",
+        ])
+        .unwrap();
+        match provider_cmd.command {
+            ClaimsCliCommand::Token(TokenCommand::Provider(ProviderMetadata {
+                name,
+                issuer,
+                subject,
+                common,
+                capid,
+                vendor,
+                revision,
+                version,
+                ..
+            })) => {
+                assert_eq!(name, "TokenName");
+                assert_eq!(common.directory.unwrap(), DIR);
+                assert_eq!(
+                    common.expires_in_days.unwrap(),
+                    EXPR.parse::<u64>().unwrap()
+                );
+                assert_eq!(
+                    common.not_before_days.unwrap(),
+                    NBFR.parse::<u64>().unwrap()
+                );
+                assert!(common.disable_keygen);
+                assert_eq!(common.output.kind, OutputKind::JSON);
+                assert_eq!(issuer.unwrap(), ACCOUNT_KEY);
+                assert_eq!(subject.unwrap(), PROVIDER_KEY);
+                assert_eq!(capid, "wasmcloud:test");
+                assert_eq!(vendor, "test");
+                assert_eq!(revision.unwrap(), 0);
+                assert_eq!(version.unwrap(), "1.2.3");
+            }
+            cmd => panic!("claims constructed incorrect command: {:?}", cmd),
+        }
+    }
 }

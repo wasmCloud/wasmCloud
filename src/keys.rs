@@ -110,7 +110,11 @@ pub(crate) fn get(
     };
     match res {
         Err(e) => Err(e.into()),
-        Ok(s) => Ok(format_output(s.clone(), json!({ "seed": s }), output)),
+        Ok(s) => Ok(format_output(
+            s.trim().to_string(),
+            json!({ "seed": s.trim() }),
+            output,
+        )),
     }
 }
 
@@ -247,12 +251,13 @@ fn keypair_type_to_string(keypair_type: KeyPairType) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{generate, OutputKind};
+    use super::{generate, KeysCli, KeysCliCommand, OutputKind};
     use nkeys::KeyPairType;
     use serde::Deserialize;
+    use structopt::StructOpt;
 
     #[test]
-    fn keys_generate_basic_test() {
+    fn test_generate_basic_test() {
         let kt = KeyPairType::Account;
 
         let keypair = generate(&kt, &OutputKind::Text);
@@ -275,7 +280,7 @@ mod tests {
     }
 
     #[test]
-    fn keys_generate_valid_keypair() {
+    fn test_generate_valid_keypair() {
         let sample_public_key = "MBBLAHS7MCGNQ6IR4ZDSGRIAF7NVS7FCKFTKGO5JJJKN2QQRVAH7BSIO";
         let sample_seed = "SMAH45IUULL57OSX23NOOOTLSVNQOORMDLE3Y3PQLJ4J5MY7MN2K7BIFI4";
 
@@ -286,12 +291,12 @@ mod tests {
 
         assert_eq!(keypair.public_key.len(), sample_public_key.len());
         assert_eq!(keypair.seed.len(), sample_seed.len());
-        assert_eq!(keypair.public_key.starts_with("M"), true);
+        assert_eq!(keypair.public_key.starts_with('M'), true);
         assert_eq!(keypair.seed.starts_with("SM"), true);
     }
 
     #[test]
-    fn keys_generate_all_types() {
+    fn test_generate_all_types() {
         let sample_public_key = "MBBLAHS7MCGNQ6IR4ZDSGRIAF7NVS7FCKFTKGO5JJJKN2QQRVAH7BSIO";
         let sample_seed = "SMAH45IUULL57OSXNOOAKOTLSVNQOORMDLE3Y3PQLJ4J5MY7MN2K7BIFI4";
 
@@ -310,39 +315,148 @@ mod tests {
         let cluster_keypair: KeyPairJSON =
             serde_json::from_str(&generate(&KeyPairType::Cluster, &OutputKind::JSON)).unwrap();
 
-        assert_eq!(account_keypair.public_key.starts_with("A"), true);
+        assert_eq!(account_keypair.public_key.starts_with('A'), true);
         assert_eq!(account_keypair.public_key.len(), sample_public_key.len());
         assert_eq!(account_keypair.seed.starts_with("SA"), true);
         assert_eq!(account_keypair.seed.len(), sample_seed.len());
 
-        assert_eq!(user_keypair.public_key.starts_with("U"), true);
+        assert_eq!(user_keypair.public_key.starts_with('U'), true);
         assert_eq!(user_keypair.public_key.len(), sample_public_key.len());
         assert_eq!(user_keypair.seed.starts_with("SU"), true);
         assert_eq!(user_keypair.seed.len(), sample_seed.len());
 
-        assert_eq!(module_keypair.public_key.starts_with("M"), true);
+        assert_eq!(module_keypair.public_key.starts_with('M'), true);
         assert_eq!(module_keypair.public_key.len(), sample_public_key.len());
         assert_eq!(module_keypair.seed.starts_with("SM"), true);
         assert_eq!(module_keypair.seed.len(), sample_seed.len());
 
-        assert_eq!(service_keypair.public_key.starts_with("V"), true);
+        assert_eq!(service_keypair.public_key.starts_with('V'), true);
         assert_eq!(service_keypair.public_key.len(), sample_public_key.len());
         assert_eq!(service_keypair.seed.starts_with("SV"), true);
         assert_eq!(service_keypair.seed.len(), sample_seed.len());
 
-        assert_eq!(server_keypair.public_key.starts_with("N"), true);
+        assert_eq!(server_keypair.public_key.starts_with('N'), true);
         assert_eq!(server_keypair.public_key.len(), sample_public_key.len());
         assert_eq!(server_keypair.seed.starts_with("SN"), true);
         assert_eq!(server_keypair.seed.len(), sample_seed.len());
 
-        assert_eq!(operator_keypair.public_key.starts_with("O"), true);
+        assert_eq!(operator_keypair.public_key.starts_with('O'), true);
         assert_eq!(operator_keypair.public_key.len(), sample_public_key.len());
         assert_eq!(operator_keypair.seed.starts_with("SO"), true);
         assert_eq!(operator_keypair.seed.len(), sample_seed.len());
 
-        assert_eq!(cluster_keypair.public_key.starts_with("C"), true);
+        assert_eq!(cluster_keypair.public_key.starts_with('C'), true);
         assert_eq!(cluster_keypair.public_key.len(), sample_public_key.len());
         assert_eq!(cluster_keypair.seed.starts_with("SC"), true);
         assert_eq!(cluster_keypair.seed.len(), sample_seed.len());
+    }
+
+    #[test]
+    /// Enumerates multiple options of the `gen` command to ensure API doesn't
+    /// change between versions. This test will fail if `wash keys gen <type>`
+    /// changes syntax, ordering of required elements, or flags.
+    fn test_gen_comprehensive() {
+        let key_gen_types = vec![
+            "account", "user", "module", "service", "server", "operator", "cluster",
+        ];
+
+        key_gen_types.iter().for_each(|cmd| {
+            let gen_cmd = KeysCli::from_iter(&["keys", "gen", cmd]);
+            match gen_cmd.command {
+                KeysCliCommand::GenCommand { keytype, output } => {
+                    use KeyPairType::*;
+                    match keytype {
+                        Account => assert_eq!(*cmd, "account"),
+                        User => assert_eq!(*cmd, "user"),
+                        Module => assert_eq!(*cmd, "module"),
+                        Service => assert_eq!(*cmd, "service"),
+                        Server => assert_eq!(*cmd, "server"),
+                        Operator => assert_eq!(*cmd, "operator"),
+                        Cluster => assert_eq!(*cmd, "cluster"),
+                    }
+                    assert_eq!(output.kind, OutputKind::Text);
+                }
+                _ => panic!("`keys gen` constructed incorrect command"),
+            };
+        });
+
+        key_gen_types.iter().for_each(|cmd| {
+            let gen_cmd = KeysCli::from_iter(&["keys", "gen", cmd, "-o", "json"]);
+            match gen_cmd.command {
+                KeysCliCommand::GenCommand { keytype, output } => {
+                    use KeyPairType::*;
+                    match keytype {
+                        Account => assert_eq!(*cmd, "account"),
+                        User => assert_eq!(*cmd, "user"),
+                        Module => assert_eq!(*cmd, "module"),
+                        Service => assert_eq!(*cmd, "service"),
+                        Server => assert_eq!(*cmd, "server"),
+                        Operator => assert_eq!(*cmd, "operator"),
+                        Cluster => assert_eq!(*cmd, "cluster"),
+                    }
+                    assert_eq!(output.kind, OutputKind::JSON);
+                }
+                _ => panic!("`keys gen` constructed incorrect command"),
+            };
+        });
+    }
+
+    #[test]
+    fn test_get_basic() {
+        const KEYNAME: &str = "get_basic_test.nk";
+        const KEYPATH: &str = "./tests/fixtures";
+
+        let get_basic = KeysCli::from_iter(&["keys", "get", KEYNAME, "--directory", KEYPATH]);
+        match get_basic.command {
+            KeysCliCommand::GetCommand { keyname, .. } => assert_eq!(keyname, KEYNAME),
+            other_cmd => panic!("keys get generated other command {:?}", other_cmd),
+        }
+    }
+
+    #[test]
+    /// Enumerates multiple options of the `get` command to ensure API doesn't
+    /// change between versions. This test will fail if `wash keys get`
+    /// changes syntax, ordering of required elements, or flags.
+    fn test_get_comprehensive() {
+        const KEYPATH: &str = "./tests/fixtures";
+        const KEYNAME: &str = "get_comprehensive_test.nk";
+
+        let get_all_flags =
+            KeysCli::from_iter(&["keys", "get", KEYNAME, "-d", KEYPATH, "-o", "json"]);
+        match get_all_flags.command {
+            KeysCliCommand::GetCommand {
+                keyname,
+                directory,
+                output,
+            } => {
+                assert_eq!(keyname, KEYNAME);
+                assert_eq!(directory, Some(KEYPATH.to_string()));
+                assert_eq!(output.kind, OutputKind::JSON);
+            }
+            other_cmd => panic!("keys get generated other command {:?}", other_cmd),
+        }
+    }
+
+    #[test]
+    /// Enumerates multiple options of the `list` command to ensure API doesn't
+    /// change between versions. This test will fail if `wash keys list`
+    /// changes syntax, ordering of required elements, or flags.
+    fn test_list_comprehensive() {
+        const KEYPATH: &str = "./";
+
+        let list_basic = KeysCli::from_iter(&["keys", "list", "-d", KEYPATH]);
+        match list_basic.command {
+            KeysCliCommand::ListCommand { .. } => (),
+            other_cmd => panic!("keys get generated other command {:?}", other_cmd),
+        }
+
+        let list_all_flags = KeysCli::from_iter(&["keys", "list", "-d", KEYPATH, "-o", "json"]);
+        match list_all_flags.command {
+            KeysCliCommand::ListCommand { directory, output } => {
+                assert_eq!(directory, Some(KEYPATH.to_string()));
+                assert_eq!(output.kind, OutputKind::JSON);
+            }
+            other_cmd => panic!("keys get generated other command {:?}", other_cmd),
+        }
     }
 }

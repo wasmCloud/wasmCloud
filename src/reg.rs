@@ -413,3 +413,181 @@ pub(crate) async fn push_artifact(
         .await?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{PullCommand, PushCommand, RegCli, RegCliCommand};
+    use crate::util::OutputKind;
+    use structopt::StructOpt;
+
+    const ECHO_WASM: &str = "wasmcloud.azurecr.io/echo:0.2.0";
+    const LOCAL_REGISTRY: &str = "localhost:5000";
+
+    #[test]
+    /// Enumerates multiple options of the `pull` command to ensure API doesn't
+    /// change between versions. This test will fail if `wash reg pull`
+    /// changes syntax, ordering of required elements, or flags.
+    fn test_pull_comprehensive() {
+        // Not explicitly used, just a placeholder for a directory
+        const TESTDIR: &str = "./tests/fixtures";
+
+        let pull_basic = RegCli::from_iter(&["reg", "pull", ECHO_WASM]);
+        let pull_all_flags =
+            RegCli::from_iter(&["reg", "pull", ECHO_WASM, "--allow-latest", "--insecure"]);
+        let pull_all_options = RegCli::from_iter(&[
+            "reg",
+            "pull",
+            ECHO_WASM,
+            "--destination",
+            TESTDIR,
+            "--digest",
+            "sha256:a17a163afa8447622055deb049587641a9e23243a6cc4411eb33bd4267214cf3",
+            "--output",
+            "text",
+            "--password",
+            "password",
+            "--user",
+            "user",
+        ]);
+        match pull_basic.command {
+            RegCliCommand::Pull(PullCommand { url, .. }) => {
+                assert_eq!(url, ECHO_WASM);
+            }
+            _ => panic!("`reg pull` constructed incorrect command"),
+        };
+
+        match pull_all_flags.command {
+            RegCliCommand::Pull(PullCommand {
+                url,
+                allow_latest,
+                opts,
+                ..
+            }) => {
+                assert_eq!(url, ECHO_WASM);
+                assert!(allow_latest);
+                assert!(opts.insecure);
+            }
+            _ => panic!("`reg pull` constructed incorrect command"),
+        };
+
+        match pull_all_options.command {
+            RegCliCommand::Pull(PullCommand {
+                url,
+                destination,
+                digest,
+                output,
+                opts,
+                ..
+            }) => {
+                assert_eq!(url, ECHO_WASM);
+                assert_eq!(destination.unwrap(), TESTDIR);
+                assert_eq!(
+                    digest.unwrap(),
+                    "sha256:a17a163afa8447622055deb049587641a9e23243a6cc4411eb33bd4267214cf3"
+                );
+                assert_eq!(output.kind, OutputKind::Text);
+                assert_eq!(opts.user.unwrap(), "user");
+                assert_eq!(opts.password.unwrap(), "password");
+            }
+            _ => panic!("`reg pull` constructed incorrect command"),
+        };
+    }
+
+    #[test]
+    /// Enumerates multiple options of the `push` command to ensure API doesn't
+    /// change between versions. This test will fail if `wash reg push`
+    /// changes syntax, ordering of required elements, or flags.
+    fn test_push_comprehensive() {
+        // Not explicitly used, just a placeholder for a directory
+        const TESTDIR: &str = "./tests/fixtures";
+
+        // Push echo.wasm and pull from local registry
+        let echo_push_basic = &format!("{}/echo:pushbasic", LOCAL_REGISTRY);
+        let push_basic = RegCli::from_iter(&[
+            "reg",
+            "push",
+            echo_push_basic,
+            &format!("{}/echopush.wasm", TESTDIR),
+            "--insecure",
+        ]);
+        match push_basic.command {
+            RegCliCommand::Push(PushCommand {
+                url,
+                artifact,
+                opts,
+                ..
+            }) => {
+                assert_eq!(&url, echo_push_basic);
+                assert_eq!(artifact, format!("{}/echopush.wasm", TESTDIR));
+                assert!(opts.insecure);
+            }
+            _ => panic!("`reg push` constructed incorrect command"),
+        };
+
+        // Push logging.par.gz and pull from local registry
+        let logging_push_all_flags = &format!("{}/logging:allflags", LOCAL_REGISTRY);
+        let push_all_flags = RegCli::from_iter(&[
+            "reg",
+            "push",
+            logging_push_all_flags,
+            &format!("{}/logging.par.gz", TESTDIR),
+            "--insecure",
+            "--allow-latest",
+        ]);
+        match push_all_flags.command {
+            RegCliCommand::Push(PushCommand {
+                url,
+                artifact,
+                opts,
+                allow_latest,
+                ..
+            }) => {
+                assert_eq!(&url, logging_push_all_flags);
+                assert_eq!(artifact, format!("{}/logging.par.gz", TESTDIR));
+                assert!(opts.insecure);
+                assert!(allow_latest);
+            }
+            _ => panic!("`reg push` constructed incorrect command"),
+        };
+
+        // Push logging.par.gz to different tag and pull to confirm successful push
+        let logging_push_all_options = &format!("{}/logging:alloptions", LOCAL_REGISTRY);
+        let push_all_options = RegCli::from_iter(&[
+            "reg",
+            "push",
+            logging_push_all_options,
+            &format!("{}/logging.par.gz", TESTDIR),
+            "--allow-latest",
+            "--insecure",
+            "--config",
+            &format!("{}/config.json", TESTDIR),
+            "--output",
+            "json",
+            "--password",
+            "supers3cr3t",
+            "--user",
+            "localuser",
+        ]);
+        match push_all_options.command {
+            RegCliCommand::Push(PushCommand {
+                url,
+                artifact,
+                opts,
+                allow_latest,
+                config,
+                output,
+                ..
+            }) => {
+                assert_eq!(&url, logging_push_all_options);
+                assert_eq!(artifact, format!("{}/logging.par.gz", TESTDIR));
+                assert!(opts.insecure);
+                assert!(allow_latest);
+                assert_eq!(config.unwrap(), format!("{}/config.json", TESTDIR));
+                assert_eq!(opts.user.unwrap(), "localuser");
+                assert_eq!(opts.password.unwrap(), "supers3cr3t");
+                assert_eq!(output.kind, OutputKind::JSON);
+            }
+            _ => panic!("`reg push` constructed incorrect command"),
+        };
+    }
+}
