@@ -33,7 +33,11 @@ nkeys = "0.1.0"
 wascap = "0.6.0"
 provider-archive = "0.4.0"
 wasmcloud-control-interface = "0.1.0"
-wasmcloud-host = "0.15.0"
+wasmcloud-host = "0.15.1"
+
+[dev-dependencies]
+test_bin = "0.3.0"
+reqwest = { version = "0.11", features = ["blocking"] }
 
 [[bin]]
 name = "wash"

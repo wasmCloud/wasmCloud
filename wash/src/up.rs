@@ -66,7 +66,7 @@ pub(crate) struct UpCliCommand {
     log_level: LogLevel,
 }
 
-#[derive(StructOpt, Debug, Clone)]
+#[derive(StructOpt, Debug, Clone, PartialEq)]
 enum LogLevel {
     Error,
     Warn,
@@ -787,4 +787,118 @@ fn draw_smart_logger(
     set_level_for_target("async_io::reactor", LevelFilter::Off);
 
     frame.render_widget(selector_panel, chunk);
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    /// Enumerates multiple options of the `up` command to ensure API doesn't
+    /// change between versions. This test will fail if `wash up`
+    /// changes syntax, ordering of required elements, or flags.
+    fn test_up_comprehensive() -> Result<()> {
+        const LOG_LEVEL: &str = "info";
+        const RPC_HOST: &str = "0.0.0.0";
+        const RPC_PORT: &str = "4222";
+
+        let up_all_options = UpCli::from_iter_safe(&[
+            "up",
+            "--log-level",
+            LOG_LEVEL,
+            "--host",
+            RPC_HOST,
+            "--port",
+            RPC_PORT,
+        ])?;
+        let up_all_short_options =
+            UpCli::from_iter_safe(&["up", "-l", LOG_LEVEL, "-h", RPC_HOST, "-p", RPC_PORT])?;
+
+        #[allow(unreachable_patterns)]
+        match up_all_options.command {
+            UpCliCommand {
+                rpc_host,
+                rpc_port,
+                log_level,
+            } => {
+                assert_eq!(rpc_host, RPC_HOST);
+                assert_eq!(rpc_port, RPC_PORT);
+                assert_eq!(log_level, LogLevel::Info);
+            }
+            cmd => panic!("up generated other command {:?}", cmd),
+        }
+
+        #[allow(unreachable_patterns)]
+        match up_all_short_options.command {
+            UpCliCommand {
+                rpc_host,
+                rpc_port,
+                log_level,
+            } => {
+                assert_eq!(rpc_host, RPC_HOST);
+                assert_eq!(rpc_port, RPC_PORT);
+                assert_eq!(log_level, LogLevel::Info);
+            }
+            cmd => panic!("up generated other command {:?}", cmd),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_up_input_format() {
+        const CALL_INPUT: &str = "ctl call MBCFOPM6JW2APJLXJD3Z5O4CN7CPYJ2B4FTKLJUR5YR5MITIU7HD3WD5 HandleRequest {\"method\": \"GET\", \"path\": \"/\", \"body\": \"\", \"queryString\":\"\", \"header\":{}}";
+        const START_ACTOR_INPUT: &str = "ctl start actor wasmcloud.azurecr.io/echo:0.2.0";
+        const LINK_INPUT: &str = "ctl link MCFMFDWFHGKELOXPCNCDXKK5OFLHBVEWRAOXR5JSQUD2TOFRE3DFPM7E VAG3QITQQ2ODAOWB5TTQSDJ53XK3SHBEIFNK4AYJ5RKAX2UNSCAPHA5M wasmcloud:httpserver PORT=8080";
+        const TERMINAL_WIDTH: usize = 80;
+        let prompt_length = super::WASH_PROMPT.len(); // `wash> `
+
+        let (call_first_line, call_second_line) =
+            CALL_INPUT.split_at(TERMINAL_WIDTH - prompt_length);
+        let call_input_display =
+            format_input_for_display(CALL_INPUT.chars().collect(), TERMINAL_WIDTH);
+        let mut call_iter = call_input_display.split('\n');
+        assert_eq!(call_first_line, call_iter.next().unwrap());
+        assert_eq!(call_second_line, call_iter.next().unwrap());
+
+        assert!(START_ACTOR_INPUT.len() < TERMINAL_WIDTH - prompt_length);
+        let start_input_display =
+            format_input_for_display(START_ACTOR_INPUT.chars().collect(), TERMINAL_WIDTH);
+        let mut start_iter = start_input_display.split('\n');
+        assert_eq!(START_ACTOR_INPUT, start_iter.next().unwrap());
+
+        let (link_first_line, link_second_line) =
+            LINK_INPUT.split_at(TERMINAL_WIDTH - prompt_length);
+        let link_input_display =
+            format_input_for_display(LINK_INPUT.chars().collect(), TERMINAL_WIDTH);
+        let mut link_iter = link_input_display.split('\n');
+        assert_eq!(link_first_line, link_iter.next().unwrap());
+        assert_eq!(link_second_line, link_iter.next().unwrap());
+    }
+
+    #[test]
+    //TODO(brooksmtownsend): Write this test after merging in tui_logger changes. This changes the API
+    fn test_key_events() {
+        // let repl = WashRepl::default();
+        // repl.handle_key(code: KeyCode, modifier: KeyModifiers)
+    }
+
+    #[test]
+    fn test_log_level_from_str() -> Result<()> {
+        use std::str::FromStr;
+        const ERROR: &str = "error";
+        const WARN: &str = "warn";
+        const DEBUG: &str = "debug";
+        const INFO: &str = "info";
+        const TRACE: &str = "trace";
+        const FOO: &str = "foo";
+
+        assert_eq!(LogLevel::from_str(ERROR)?, LogLevel::Error);
+        assert_eq!(LogLevel::from_str(WARN)?, LogLevel::Warn);
+        assert_eq!(LogLevel::from_str(DEBUG)?, LogLevel::Debug);
+        assert_eq!(LogLevel::from_str(INFO)?, LogLevel::Info);
+        assert_eq!(LogLevel::from_str(TRACE)?, LogLevel::Trace);
+        assert_eq!(LogLevel::from_str(FOO)?, LogLevel::Trace);
+        Ok(())
+    }
 }

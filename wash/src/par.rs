@@ -428,3 +428,312 @@ fn is_compressed(input: &[u8]) -> Result<bool> {
     }
     Ok(input[0..2] == GZIP_MAGIC)
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    // Uses all flags and options of the `par create` command
+    // to ensure API does not change between versions
+    #[test]
+    fn test_par_create_comprehensive() {
+        const ISSUER: &str = "SAAJLQZDZO57THPTIIEELEY7FJYOJZQWQD7FF4J67TUYTSCOXTF7R4Y3VY";
+        const SUBJECT: &str = "SVAH7IN6QE6XODCGIIWZQDZ5LNSSS4FNEO6SNHZSSASW4BBBKSZ6KWTKWY";
+        let create_long = ParCli::from_iter_safe(&[
+            "par",
+            "create",
+            "--arch",
+            "x86_64-testrunner",
+            "--binary",
+            "./testrunner.so",
+            "--capid",
+            "wasmcloud:test",
+            "--name",
+            "CreateTest",
+            "--vendor",
+            "TestRunner",
+            "--destination",
+            "./test.par.gz",
+            "--revision",
+            "1",
+            "--version",
+            "1.11.111",
+            "--directory",
+            "./tests/fixtures",
+            "--issuer",
+            ISSUER,
+            "--subject",
+            SUBJECT,
+            "--output",
+            "text",
+            "--disable-keygen",
+            "--compress",
+        ])
+        .unwrap();
+        match create_long.command {
+            ParCliCommand::Create(CreateCommand {
+                capid,
+                vendor,
+                revision,
+                version,
+                directory,
+                issuer,
+                subject,
+                name,
+                arch,
+                binary,
+                destination,
+                compress,
+                disable_keygen,
+                output,
+            }) => {
+                assert_eq!(capid, "wasmcloud:test");
+                assert_eq!(arch, "x86_64-testrunner");
+                assert_eq!(binary, "./testrunner.so");
+                assert_eq!(directory.unwrap(), "./tests/fixtures");
+                assert_eq!(issuer.unwrap(), ISSUER);
+                assert_eq!(subject.unwrap(), SUBJECT);
+                assert_eq!(output.kind, OutputKind::Text);
+                assert_eq!(name, "CreateTest");
+                assert_eq!(vendor, "TestRunner");
+                assert_eq!(destination.unwrap(), "./test.par.gz");
+                assert_eq!(revision.unwrap(), 1);
+                assert_eq!(version.unwrap(), "1.11.111");
+                assert!(disable_keygen);
+                assert!(compress);
+            }
+            cmd => panic!("par insert constructed incorrect command {:?}", cmd),
+        }
+        let create_short = ParCli::from_iter_safe(&[
+            "par",
+            "create",
+            "-a",
+            "x86_64-testrunner",
+            "-b",
+            "./testrunner.so",
+            "-c",
+            "wasmcloud:test",
+            "-n",
+            "CreateTest",
+            "-v",
+            "TestRunner",
+            "--destination",
+            "./test.par.gz",
+            "-r",
+            "1",
+            "--version",
+            "1.11.111",
+            "-d",
+            "./tests/fixtures",
+            "-i",
+            ISSUER,
+            "-s",
+            SUBJECT,
+            "-o",
+            "json",
+        ])
+        .unwrap();
+        match create_short.command {
+            ParCliCommand::Create(CreateCommand {
+                capid,
+                vendor,
+                revision,
+                version,
+                directory,
+                issuer,
+                subject,
+                name,
+                arch,
+                binary,
+                destination,
+                compress,
+                disable_keygen,
+                output,
+            }) => {
+                assert_eq!(capid, "wasmcloud:test");
+                assert_eq!(arch, "x86_64-testrunner");
+                assert_eq!(binary, "./testrunner.so");
+                assert_eq!(directory.unwrap(), "./tests/fixtures");
+                assert_eq!(issuer.unwrap(), ISSUER);
+                assert_eq!(subject.unwrap(), SUBJECT);
+                assert_eq!(output.kind, OutputKind::JSON);
+                assert_eq!(name, "CreateTest");
+                assert_eq!(vendor, "TestRunner");
+                assert_eq!(destination.unwrap(), "./test.par.gz");
+                assert_eq!(revision.unwrap(), 1);
+                assert_eq!(version.unwrap(), "1.11.111");
+                assert!(!disable_keygen);
+                assert!(!compress);
+            }
+            cmd => panic!("par insert constructed incorrect command {:?}", cmd),
+        }
+    }
+
+    // Uses all flags and options of the `par insert` command
+    // to ensure API does not change between versions
+    #[test]
+    fn test_par_insert_comprehensive() {
+        const ISSUER: &str = "SAAJLQZDZO57THPTQLEELEY7FJYOJZQWQD7FF4J67TUYTSCOXTF7R4Y3VY";
+        const SUBJECT: &str = "SVAH7IN6QE6XODCGQAWZQDZ5LNSSS4FNEO6SNHZSSASW4BBBKSZ6KWTKWY";
+        let insert_short = ParCli::from_iter_safe(&[
+            "par",
+            "insert",
+            "libtest.par.gz",
+            "-a",
+            "x86_64-testrunner",
+            "-b",
+            "./testrunner.so",
+            "-d",
+            "./tests/fixtures",
+            "-i",
+            ISSUER,
+            "-s",
+            SUBJECT,
+            "-o",
+            "text",
+            "--disable-keygen",
+        ])
+        .unwrap();
+        match insert_short.command {
+            ParCliCommand::Insert(InsertCommand {
+                archive,
+                arch,
+                binary,
+                directory,
+                issuer,
+                subject,
+                output,
+                disable_keygen,
+            }) => {
+                assert_eq!(archive, "libtest.par.gz");
+                assert_eq!(arch, "x86_64-testrunner");
+                assert_eq!(binary, "./testrunner.so");
+                assert_eq!(directory.unwrap(), "./tests/fixtures");
+                assert_eq!(issuer.unwrap(), ISSUER);
+                assert_eq!(subject.unwrap(), SUBJECT);
+                assert_eq!(output.kind, OutputKind::Text);
+                assert!(disable_keygen);
+            }
+            cmd => panic!("par insert constructed incorrect command {:?}", cmd),
+        }
+        let insert_long = ParCli::from_iter_safe(&[
+            "par",
+            "insert",
+            "libtest.par.gz",
+            "--arch",
+            "x86_64-testrunner",
+            "--binary",
+            "./testrunner.so",
+            "--directory",
+            "./tests/fixtures",
+            "--issuer",
+            ISSUER,
+            "--subject",
+            SUBJECT,
+            "--output",
+            "text",
+        ])
+        .unwrap();
+        match insert_long.command {
+            ParCliCommand::Insert(InsertCommand {
+                archive,
+                arch,
+                binary,
+                directory,
+                issuer,
+                subject,
+                output,
+                disable_keygen,
+            }) => {
+                assert_eq!(archive, "libtest.par.gz");
+                assert_eq!(arch, "x86_64-testrunner");
+                assert_eq!(binary, "./testrunner.so");
+                assert_eq!(directory.unwrap(), "./tests/fixtures");
+                assert_eq!(issuer.unwrap(), ISSUER);
+                assert_eq!(subject.unwrap(), SUBJECT);
+                assert_eq!(output.kind, OutputKind::Text);
+                assert!(!disable_keygen);
+            }
+            cmd => panic!("par insert constructed incorrect command {:?}", cmd),
+        }
+    }
+
+    // Uses all flags and options of the `par inspect` command
+    // to ensure API does not change between versions
+    #[test]
+    fn test_par_inspect_comprehensive() {
+        const LOCAL: &str = "./coolthing.par.gz";
+        const REMOTE: &str = "wasmcloud.azurecr.io/coolthing.par.gz";
+
+        let inspect_long = ParCli::from_iter_safe(&[
+            "par",
+            "inspect",
+            LOCAL,
+            "--digest",
+            "sha256:blah",
+            "--output",
+            "json",
+            "--password",
+            "secret",
+            "--user",
+            "name",
+        ])
+        .unwrap();
+        match inspect_long.command {
+            ParCliCommand::Inspect(InspectCommand {
+                archive,
+                digest,
+                allow_latest,
+                user,
+                password,
+                insecure,
+                output,
+            }) => {
+                assert_eq!(archive, LOCAL);
+                assert_eq!(digest.unwrap(), "sha256:blah");
+                assert!(!allow_latest);
+                assert!(!insecure);
+                assert_eq!(user.unwrap(), "name");
+                assert_eq!(password.unwrap(), "secret");
+                assert_eq!(output.kind, OutputKind::JSON);
+            }
+            cmd => panic!("par inspect constructed incorrect command {:?}", cmd),
+        }
+        let inspect_short = ParCli::from_iter_safe(&[
+            "par",
+            "inspect",
+            REMOTE,
+            "-d",
+            "sha256:blah",
+            "-o",
+            "json",
+            "-p",
+            "secret",
+            "-u",
+            "name",
+            "--allow-latest",
+            "--insecure",
+        ])
+        .unwrap();
+        match inspect_short.command {
+            ParCliCommand::Inspect(InspectCommand {
+                archive,
+                digest,
+                allow_latest,
+                user,
+                password,
+                insecure,
+                output,
+            }) => {
+                assert_eq!(archive, REMOTE);
+                assert_eq!(digest.unwrap(), "sha256:blah");
+                assert!(allow_latest);
+                assert!(insecure);
+                assert_eq!(user.unwrap(), "name");
+                assert_eq!(password.unwrap(), "secret");
+                assert_eq!(output.kind, OutputKind::JSON);
+            }
+            cmd => panic!("par inspect constructed incorrect command {:?}", cmd),
+        }
+    }
+}
