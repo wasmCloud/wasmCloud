@@ -304,6 +304,9 @@ pub(crate) struct ActorMetadata {
     /// Human-readable version string
     #[structopt(short = "v", long = "ver")]
     ver: Option<String>,
+    /// Developer or human friendly unique alias used for invoking an actor, consisting of lowercase alphanumeric characters, underscores '_' and slashes '/'
+    #[structopt(short = "a", long = "call-alias")]
+    call_alias: Option<String>,
 
     /// Path to issuer seed key (account). If this flag is not provided, the will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
     #[structopt(
@@ -423,7 +426,7 @@ fn generate_actor(actor: ActorMetadata) -> Result<String, Box<dyn ::std::error::
         actor.provider,
         actor.rev,
         actor.ver.clone(),
-        None,
+        sanitize_alias(actor.call_alias)?,
     );
 
     let jwt = claims.encode(&issuer)?;
@@ -615,7 +618,7 @@ fn sign_file(cmd: SignCommand) -> Result<String, Box<dyn ::std::error::Error>> {
         cmd.metadata.provider,
         cmd.metadata.rev,
         cmd.metadata.ver.clone(),
-        None,
+        sanitize_alias(cmd.metadata.call_alias)?,
     )?;
 
     let destination = match cmd.destination.clone() {
@@ -739,6 +742,14 @@ pub(crate) fn render_actor_claims(
         vec![]
     };
 
+    let call_alias = claims
+        .metadata
+        .as_ref()
+        .unwrap()
+        .call_alias
+        .clone()
+        .unwrap_or("(Not set)".to_string());
+
     match output.kind {
         OutputKind::JSON => {
             let iss_label = token_label(&claims.issuer).to_ascii_lowercase();
@@ -747,12 +758,14 @@ pub(crate) fn render_actor_claims(
             format!(
                 "{}",
                 json!({ iss_label: claims.issuer,
-                    sub_label: claims.subject,
-                    "expires": validation.expires_human,
-                    "can_be_used": validation.not_before_human,
-                    "version": friendly_ver,
-                    provider_json: friendly_caps,
-                    "tags": tags })
+                sub_label: claims.subject,
+                "expires": validation.expires_human,
+                "can_be_used": validation.not_before_human,
+                "version": friendly_ver,
+                provider_json: friendly_caps,
+                "tags": tags,
+                "call_alias": call_alias,
+                })
             )
         }
         OutputKind::Text => {
@@ -761,6 +774,11 @@ pub(crate) fn render_actor_claims(
             table.add_row(Row::new(vec![
                 TableCell::new("Version"),
                 TableCell::new_with_alignment(friendly, 1, Alignment::Right),
+            ]));
+
+            table.add_row(Row::new(vec![
+                TableCell::new("Call Alias"),
+                TableCell::new_with_alignment(call_alias, 1, Alignment::Right),
             ]));
 
             table.add_row(Row::new(vec![TableCell::new_with_alignment(
@@ -848,10 +866,88 @@ where
     table
 }
 
+fn sanitize_alias(
+    call_alias: Option<String>,
+) -> Result<Option<String>, Box<dyn ::std::error::Error>> {
+    if let Some(alias) = call_alias {
+        // Alias cannot be a public key to ensure best practices
+        if alias.is_empty() {
+            Err("Call alias cannot be empty".into())
+        } else if alias.len() == 56
+            && alias
+                .chars()
+                .all(|c| c.is_ascii_digit() || c.is_ascii_uppercase())
+        {
+            Err("Public key cannot be used as a call alias".into())
+        // Valid aliases contain a combination of lowercase alphanumeric characters, dashes, and slashes
+        } else if alias
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '/')
+        {
+            Ok(Some(alias))
+        } else {
+            Err("Call alias contained invalid characters.\nValid aliases are lowercase alphanumeric and can contain underscores and slashes".into())
+        }
+    } else {
+        Ok(None)
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
     const SUBSCRIBER_OCI: &str = "wasmcloud.azurecr.io/subscriber:0.2.0";
+
+    #[test]
+    fn test_claims_sanitize_alias() {
+        const VALID_ALPHANUMERIC: &str = "abc123";
+        const VALID_WITHSYMBOLS: &str = "myorganization/subfolder_three";
+        const INVALID_SYMBOLS: &str = "hello*^&%@#";
+        const INVALID_CAPITAL: &str = "wasmCloud/camelCase_";
+        const INVALID_PKEY: &str = "MCUOUQQP3WK4EWO76DPWIEKXMN4JYZ63KEGIEEHZCNBR2GEIXPB4ZFUT";
+
+        assert_eq!(
+            sanitize_alias(Some(VALID_ALPHANUMERIC.to_string()))
+                .unwrap()
+                .unwrap(),
+            VALID_ALPHANUMERIC
+        );
+        assert_eq!(
+            sanitize_alias(Some(VALID_WITHSYMBOLS.to_string()))
+                .unwrap()
+                .unwrap(),
+            VALID_WITHSYMBOLS
+        );
+
+        let invalid_message = "Call alias contained invalid characters.\nValid aliases are lowercase alphanumeric and can contain underscores and slashes";
+        let invalid_symbols = sanitize_alias(Some(INVALID_SYMBOLS.to_string()));
+        match invalid_symbols {
+            Err(e) => assert_eq!(format!("{}", e), invalid_message),
+            _ => panic!("invalid symbols in call alias should not be accepted"),
+        };
+
+        let invalid_uppercase = sanitize_alias(Some(INVALID_CAPITAL.to_string()));
+        match invalid_uppercase {
+            Err(e) => assert_eq!(format!("{}", e), invalid_message),
+            _ => panic!("uppercase symbols in call alias should not be accepted"),
+        };
+
+        let pkey_message = "Public key cannot be used as a call alias";
+        let invalid_pkey = sanitize_alias(Some(INVALID_PKEY.to_string()));
+        match invalid_pkey {
+            Err(e) => assert_eq!(format!("{}", e), pkey_message),
+            _ => panic!("public keys cannot be a call alias"),
+        };
+
+        let empty_message = "Call alias cannot be empty";
+        let invalid_empty = sanitize_alias(Some("".to_string()));
+        match invalid_empty {
+            Err(e) => assert_eq!(format!("{}", e), empty_message),
+            _ => panic!("call alias cannot be left empty"),
+        }
+
+        assert!(sanitize_alias(None).unwrap().is_none());
+    }
 
     #[test]
     /// Enumerates all options and flags of the `claims inspect` command
