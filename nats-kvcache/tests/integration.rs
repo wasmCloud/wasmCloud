@@ -1,8 +1,8 @@
 // *** This test requires a running NATS server
 
 use std::{collections::HashMap, time::Duration};
-
-use wascc_codec::{capabilities::CapabilityProvider, core::OP_BIND_ACTOR};
+extern crate wasmcloud_provider_core as codec;
+use codec::{capabilities::CapabilityProvider, core::OP_BIND_ACTOR};
 use wasmcloud_actor_core::{deserialize, serialize, CapabilityConfiguration};
 use wasmcloud_actor_keyvalue::{
     AddArgs, GetArgs, GetResponse, SetAddArgs, SetQueryArgs, SetQueryResponse, OP_ADD, OP_GET,

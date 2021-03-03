@@ -33,16 +33,14 @@ extern crate eventsourcing;
 extern crate wasmcloud_actor_core as core;
 extern crate wasmcloud_actor_keyvalue as keyvalue;
 #[macro_use]
-extern crate wascc_codec as codec;
+extern crate wasmcloud_provider_core as codec;
 #[macro_use]
 extern crate log;
 use crossbeam_channel::{select, tick, Receiver, Sender};
 
-use codec::capabilities::{
-    CapabilityProvider, Dispatcher, NullDispatcher, OP_GET_CAPABILITY_DESCRIPTOR,
-};
+use codec::capabilities::{CapabilityProvider, Dispatcher, NullDispatcher};
+use codec::core::SYSTEM_ACTOR;
 use codec::core::{OP_BIND_ACTOR, OP_HEALTH_REQUEST, OP_REMOVE_ACTOR};
-use codec::SYSTEM_ACTOR;
 use core::{CapabilityConfiguration, HealthCheckResponse};
 use events::{Cache, CacheData, CacheEventWrapper};
 use eventsourcing::Aggregate;
@@ -528,7 +526,6 @@ impl CapabilityProvider for NatsReplicatedKVProvider {
             OP_BIND_ACTOR if actor == SYSTEM_ACTOR => self.configure(deserialize(msg)?),
             OP_REMOVE_ACTOR if actor == SYSTEM_ACTOR => self.remove_actor(deserialize(msg)?),
             OP_HEALTH_REQUEST if actor == SYSTEM_ACTOR => self.health(),
-            OP_GET_CAPABILITY_DESCRIPTOR if actor == SYSTEM_ACTOR => Ok(vec![]), // Descriptors are no longer used
             keyvalue::OP_ADD => self.add(actor, deserialize(msg)?),
             keyvalue::OP_DEL => self.del(actor, deserialize(msg)?),
             keyvalue::OP_GET => self.get(actor, deserialize(msg)?),
