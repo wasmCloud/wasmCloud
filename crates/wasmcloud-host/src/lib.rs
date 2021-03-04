@@ -117,5 +117,3 @@ pub type Actor = WasmCloudActor;
 
 #[doc(hidden)]
 pub const SYSTEM_ACTOR: &str = "system";
-
-pub(crate) const VERSION: &str = env!("CARGO_PKG_VERSION");

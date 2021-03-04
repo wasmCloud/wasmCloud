@@ -413,10 +413,10 @@ impl Host {
     /// invoke a non-existent actor or call alias.
     pub async fn call_actor(&self, actor: &str, operation: &str, msg: &[u8]) -> Result<Vec<u8>> {
         let b = MessageBus::from_hostlocal_registry(&self.id.borrow());
-        let target = if actor.len() == 56 && actor.starts_with("M") {
+        let target = if actor.len() == 56 && actor.starts_with('M') {
             WasmCloudEntity::Actor(actor.to_string())
         } else if let Some(pk) = crate::dispatch::lookup_call_alias(&b, actor).await {
-            WasmCloudEntity::Actor(pk.to_string())
+            WasmCloudEntity::Actor(pk)
         } else {
             return Err("Specified actor was not a public key or a known call alias.".into());
         };

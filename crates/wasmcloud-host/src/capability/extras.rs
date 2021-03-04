@@ -6,7 +6,11 @@
 use crate::generated::core::HealthResponse;
 use crate::generated::extras::{GeneratorRequest, GeneratorResult};
 use crate::messagebus::handlers::OP_HEALTH_REQUEST;
-use crate::VERSION;
+extern crate wasmcloud_provider_core as codec;
+
+use codec::capabilities::{CapabilityProvider, Dispatcher, NullDispatcher};
+use codec::core::OP_BIND_ACTOR;
+use codec::{deserialize, serialize};
 use std::error::Error;
 use std::sync::{Arc, RwLock};
 use std::{
@@ -15,14 +19,6 @@ use std::{
 };
 use uuid::Uuid;
 use wascap::jwt::Claims;
-use wascc_codec::capabilities::{
-    CapabilityDescriptor, CapabilityProvider, Dispatcher, NullDispatcher, OperationDirection,
-    OP_GET_CAPABILITY_DESCRIPTOR,
-};
-use wascc_codec::core::OP_BIND_ACTOR;
-use wascc_codec::{deserialize, serialize, SYSTEM_ACTOR};
-
-const REVISION: u32 = 3;
 
 pub(crate) const OP_REQUEST_GUID: &str = "RequestGuid";
 pub(crate) const OP_REQUEST_RANDOM: &str = "RequestRandom";
@@ -42,8 +38,6 @@ impl Default for ExtrasCapabilityProvider {
         }
     }
 }
-
-pub(crate) const CAPABILITY_ID: &str = "wascc:extras";
 
 impl ExtrasCapabilityProvider {
     fn generate_guid(
@@ -75,7 +69,7 @@ impl ExtrasCapabilityProvider {
             ..
         } = msg
         {
-            let n: u32 = rng.gen_range(min, max);
+            let n: u32 = rng.gen_range(min..max);
             GeneratorResult {
                 random_number: n,
                 sequence_number: 0,
@@ -105,41 +99,12 @@ impl ExtrasCapabilityProvider {
         };
         Ok(serialize(&result)?)
     }
-
-    fn get_descriptor(&self) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
-        Ok(serialize(
-            CapabilityDescriptor::builder()
-                .id(CAPABILITY_ID)
-                .name("waSCC Extras (Internal)")
-                .long_description(
-                    "A capability provider exposing miscellaneous utility functions to actors",
-                )
-                .version(VERSION)
-                .revision(REVISION)
-                .with_operation(
-                    OP_REQUEST_GUID,
-                    OperationDirection::ToProvider,
-                    "Requests the generation of a new GUID",
-                )
-                .with_operation(
-                    OP_REQUEST_RANDOM,
-                    OperationDirection::ToProvider,
-                    "Requests the generation of a randum number",
-                )
-                .with_operation(
-                    OP_REQUEST_SEQUENCE,
-                    OperationDirection::ToProvider,
-                    "Requests the next number in a process-wide global sequence number",
-                )
-                .build(),
-        )?)
-    }
 }
 
 impl CapabilityProvider for ExtrasCapabilityProvider {
     fn configure_dispatch(
         &self,
-        dispatcher: Box<dyn wascc_codec::capabilities::Dispatcher>,
+        dispatcher: Box<dyn codec::capabilities::Dispatcher>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         trace!("Dispatcher received.");
         let mut lock = self.dispatcher.write().unwrap();
@@ -157,7 +122,6 @@ impl CapabilityProvider for ExtrasCapabilityProvider {
         trace!("Received host call from {}, operation - {}", actor, op);
 
         match op {
-            OP_GET_CAPABILITY_DESCRIPTOR if actor == SYSTEM_ACTOR => self.get_descriptor(),
             OP_REQUEST_GUID => self.generate_guid(actor, deserialize(msg)?),
             OP_REQUEST_RANDOM => self.generate_random(actor, deserialize(msg)?),
             OP_REQUEST_SEQUENCE => self.generate_sequence(actor, deserialize(msg)?),

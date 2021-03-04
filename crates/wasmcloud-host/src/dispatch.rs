@@ -4,9 +4,11 @@ use crate::{
     errors::{self, ErrorKind},
     messagebus::LookupAlias,
 };
+extern crate wasmcloud_provider_core as codec;
 use crate::{Result, SYSTEM_ACTOR};
 use actix::dev::{MessageResponse, ResponseChannel};
 use actix::prelude::*;
+use codec::capabilities::Dispatcher;
 use data_encoding::HEXUPPER;
 use futures::executor::block_on;
 use ring::digest::{Context, Digest, SHA256};
@@ -16,7 +18,6 @@ use std::error::Error;
 use std::io::Read;
 use uuid::Uuid;
 use wascap::prelude::{Claims, KeyPair};
-use wascc_codec::capabilities::Dispatcher;
 
 pub(crate) const URL_SCHEME: &str = "wasmbus";
 
@@ -139,7 +140,7 @@ impl Invocation {
         Invocation {
             origin: target.clone(),
             target,
-            operation: op.to_string(),
+            operation: op,
             msg: vec![],
             id: subject,
             encoded_claims: claims.encode(&hostkey).unwrap(),
@@ -378,15 +379,15 @@ pub(crate) fn resolve_target_from_reference(
     link_name: &str,
     namespace: &str,
 ) -> Result<WasmCloudEntity> {
-    if namespace.starts_with("M") && namespace.len() == 56 {
+    if namespace.starts_with('M') && namespace.len() == 56 {
         Ok(WasmCloudEntity::Actor(namespace.to_string()))
     } else if let Some(pk) = lookup_alias(bus, namespace) {
         Ok(WasmCloudEntity::Actor(pk))
-    } else if let Some(p) = lookup_link(bus, subject, namespace, link_name)? {
+    } else if let Some(p) = lookup_link(bus, subject, namespace, link_name) {
         Ok(WasmCloudEntity::Capability {
             link_name: link_name.to_string(),
             contract_id: namespace.to_string(),
-            id: p.to_string(),
+            id: p,
         })
     } else {
         let msg = format!("The target {} was not found as an actor public key, an actor call alias, or as the contract ID in an existing link from source actor {}",
@@ -413,8 +414,8 @@ fn lookup_link(
     subject: &str,
     namespace: &str,
     link_name: &str,
-) -> Result<Option<String>> {
-    let prov = block_on(async {
+) -> Option<String> {
+    block_on(async {
         bus.send(LookupLink {
             contract_id: namespace.to_string(),
             actor: subject.to_string(),
@@ -422,8 +423,7 @@ fn lookup_link(
         })
         .await
         .unwrap()
-    });
-    Ok(prov)
+    })
 }
 
 fn invocation_from_callback(
