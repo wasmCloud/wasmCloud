@@ -105,6 +105,45 @@ impl LatticeCacheClient {
         }
     }
 
+    /// Adds a call alias mapping to the cache. Call aliases are lattice-unique strings that can
+    /// be used as developer-friendly handles for invoking actors, especially useful when the
+    /// public key can change from one environment to another.
+    pub async fn put_call_alias(&self, alias: &str, actor_key: &str) -> Result<()> {
+        if self.lookup_call_alias(alias).await?.is_some() {
+            let s = format!("Cannot put call alias, {} is already claimed", alias);
+            error!("{}", s);
+            return Err(s.into());
+        }
+        let key = call_alias_key(alias);
+        let args = SetArgs {
+            key,
+            value: actor_key.to_string(),
+            expires: 0,
+        };
+        let inv = self.invocation_for_provider(OP_SET, &serialize(&args)?);
+        let inv_r = self.provider.send(inv).await?;
+        if let Some(e) = inv_r.error {
+            let s = format!("Failed to put call alias mapping: {}", e);
+            error!("{}", s);
+            return Err(s.into());
+        }
+        Ok(())
+    }
+
+    /// Checks if a given call alias has been claimed and returns the corresponding actor's
+    /// public key if so
+    pub async fn lookup_call_alias(&self, alias: &str) -> Result<Option<String>> {
+        let key = call_alias_key(alias);
+        let args = GetArgs { key };
+        let inv = self.invocation_for_provider(OP_GET, &serialize(&args)?);
+        let gr: GetResponse = invoke_as(&self.provider, inv).await?;
+        if gr.exists {
+            Ok(Some(gr.value))
+        } else {
+            Ok(None)
+        }
+    }
+
     pub async fn remove_oci_mapping(&self, oci_ref: &str) -> Result<Option<String>> {
         if let Some(s) = self.lookup_oci_mapping(oci_ref).await? {
             self.remove_oci(oci_ref).await?;
@@ -387,6 +426,10 @@ impl LatticeCacheClient {
     }
 }
 
+fn call_alias_key(alias: &str) -> String {
+    prefix(&format!("call_{}", alias))
+}
+
 fn oci_key(oci_ref: &str) -> String {
     prefix(&format!("oci_{}", oci_ref))
 }
@@ -430,8 +473,6 @@ pub(crate) fn get_claims() -> Claims<wascap::jwt::CapabilityProvider> {
 }
 
 pub(crate) const CACHE_JWT: &str = "eyJ0eXAiOiJqd3QiLCJhbGciOiJFZDI1NTE5In0.eyJqdGkiOiJncVJBY0ZIb0lKdW55TFpiMXozenNnIiwiaWF0IjoxNjA5OTQzMTkzLCJpc3MiOiJBQ09KSk42V1VQNE9ERDc1WEVCS0tUQ0NVSkpDWTVaS1E1NlhWS1lLNEJFSldHVkFPT1FIWk1DVyIsInN1YiI6IlZBSE5NMzdHNEFSSFozQ1lIQjNMMzRNNlRZUVdRUjZJWjRRVllDNE5ZWldUSkNKMkxXUDdTNloyIiwid2FzY2FwIjp7Im5hbWUiOiJOQVRTIFJlcGxpY2F0ZWQgSW4tTWVtb3J5IEtleS1WYWx1ZSBTdG9yZSIsImNhcGlkIjoid2FzbWNsb3VkOmtleXZhbHVlIiwidmVuZG9yIjoid2FzbUNsb3VkIiwicmV2IjoxLCJ2ZXIiOiIwLjEuMCIsInRhcmdldF9oYXNoZXMiOnt9fX0.NwDUQMl08RRMjcNrvKiTNKYyLahYrYtcIUIQiHzElOq7SJqtYh_YGVKN-64YYGHdSfwK1OK89arS9DGmW7YuCQ";
-pub(crate) const CACHE_PUBLIC_KEY: &str =
-    "VAHNM37G4ARHZ3CYHB3L34M6TYQWQR6IZ4QVYC4NYZWTJCJ2LWP7S6Z2";
 
 #[cfg(test)]
 mod test {

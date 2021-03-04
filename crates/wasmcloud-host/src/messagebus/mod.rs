@@ -124,6 +124,12 @@ pub struct LookupLink {
     pub link_name: String,
 }
 
+#[derive(Message)]
+#[rtype(result = "Option<String>")]
+pub struct LookupAlias {
+    pub alias: String,
+}
+
 #[derive(Message, Clone)]
 #[rtype(result = "Result<()>")]
 pub struct AdvertiseLink {

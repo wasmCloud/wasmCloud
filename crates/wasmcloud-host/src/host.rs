@@ -408,12 +408,23 @@ impl Host {
     /// string and a payload of raw bytes, resulting in a payload of raw response bytes. It
     /// is entirely up to the actor as to how it responds to unrecognized operations. This
     /// operation will also be checked against the authorization system if a custom
-    /// authorization plugin has been supplied to this host
+    /// authorization plugin has been supplied to this host. You may supply either the actor's
+    /// public key or the actor's registered call alias. This call will fail if you attempt to
+    /// invoke a non-existent actor or call alias.
     pub async fn call_actor(&self, actor: &str, operation: &str, msg: &[u8]) -> Result<Vec<u8>> {
+        let b = MessageBus::from_hostlocal_registry(&self.id.borrow());
+        let target = if actor.len() == 56 && actor.starts_with('M') {
+            WasmCloudEntity::Actor(actor.to_string())
+        } else if let Some(pk) = crate::dispatch::lookup_call_alias(&b, actor).await {
+            WasmCloudEntity::Actor(pk)
+        } else {
+            return Err("Specified actor was not a public key or a known call alias.".into());
+        };
+
         let inv = Invocation::new(
             self.kp.borrow().as_ref().unwrap(),
             WasmCloudEntity::Actor(SYSTEM_ACTOR.to_string()),
-            WasmCloudEntity::Actor(actor.to_string()),
+            target,
             operation,
             msg.to_vec(),
         );

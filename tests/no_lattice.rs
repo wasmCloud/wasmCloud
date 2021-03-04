@@ -107,6 +107,47 @@ pub async fn kvcounter_basic() -> Result<()> {
     Ok(())
 }
 
+pub async fn actor_to_actor_call_alias() -> Result<()> {
+    ::std::env::remove_var("KVCACHE_NATS_URL");
+    let h = HostBuilder::new().with_namespace("actor2actor").build();
+    h.start().await?;
+    let pinger = Actor::from_file("./tests/modules/pinger.wasm")?;
+    let ponger = Actor::from_file("./tests/modules/ponger.wasm")?;
+    let pinger_id = pinger.public_key();
+
+    h.start_actor(pinger).await?;
+    h.start_actor(ponger).await?;
+    await_actor_count(&h, 2, Duration::from_millis(50), 3).await?;
+
+    let arc = par_from_file("./tests/modules/httpserver.par.gz")?;
+
+    let websrv = NativeCapability::from_archive(&arc, None)?;
+
+    let websrv_id = arc.claims().unwrap().subject;
+
+    let mut webvalues: HashMap<String, String> = HashMap::new();
+    webvalues.insert("PORT".to_string(), format!("{}", 5091));
+
+    h.start_native_capability(websrv).await?;
+    await_provider_count(&h, 3, Duration::from_millis(50), 3).await?;
+
+    h.set_link(
+        &pinger_id,
+        "wasmcloud:httpserver",
+        None,
+        websrv_id,
+        webvalues,
+    )
+    .await?;
+    delay_for(Duration::from_millis(150)).await; // give the web server enough time to fire up
+
+    let resp = reqwest::get("http://localhost:5091/foobar").await?;
+    assert!(resp.status().is_success());
+    assert_eq!("{\"value\":53}", resp.text().await?);
+
+    Ok(())
+}
+
 pub async fn kvcounter_start_stop() -> Result<()> {
     // Ensure that we're not accidentally using the replication feature on KV cache
     ::std::env::remove_var("KVCACHE_NATS_URL");

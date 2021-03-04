@@ -14,7 +14,8 @@ use libloading::{Library, Symbol};
 use std::env::temp_dir;
 use std::fs::File;
 use wascap::prelude::KeyPair;
-use wascc_codec::capabilities::CapabilityProvider;
+extern crate wasmcloud_provider_core as codec;
+use codec::capabilities::CapabilityProvider;
 
 #[derive(Message)]
 #[rtype(result = "Result<WasmCloudEntity>")]
@@ -256,7 +257,7 @@ fn extrude(
             // effect of keeping the library loaded in-memory until the process ends.
             //
             // https://github.com/nagisa/rust_libloading/issues/41
-            ::libloading::os::unix::Library::open(Some(&path), 0x2 | 0x1000)?.into()
+            unsafe { ::libloading::os::unix::Library::open(Some(&path), 0x2 | 0x1000)? }.into()
         };
         #[cfg(not(target_os = "linux"))]
         let library = Library::new(&path)?;

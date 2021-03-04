@@ -1,4 +1,4 @@
-use super::MessageBus;
+use super::{LookupAlias, MessageBus};
 use crate::capability::extras::EXTRAS_PUBLIC_KEY;
 use crate::dispatch::{gen_config_invocation, Invocation, InvocationResponse, WasmCloudEntity};
 use crate::hlreg::HostLocalSystemService;
@@ -451,6 +451,24 @@ impl Handler<AdvertiseClaims> for MessageBus {
         Box::pin(
             async move {
                 let _ = lc.put_claims(&msg.claims.subject, msg.claims.clone()).await;
+                if let Some(ref md) = msg.claims.metadata {
+                    if let Some(ref ca) = md.call_alias {
+                        match lc.put_call_alias(ca, &msg.claims.subject).await {
+                            Ok(_) => {
+                                info!(
+                                    "Actor {} has claimed call alias '{}'",
+                                    &msg.claims.subject, ca
+                                );
+                            }
+                            Err(e) => {
+                                warn!(
+                                    "Actor {} failed to claim call alias '{}': {}",
+                                    &msg.claims.subject, ca, e
+                                );
+                            }
+                        }
+                    }
+                }
                 let el = EnforceLocalActorLinks {
                     actor: msg.claims.subject.to_string(),
                 };
@@ -521,6 +539,23 @@ impl Handler<Invocation> for MessageBus {
                     Err(_e) => {
                         InvocationResponse::error(&msg, &"Mailbox error attempting to invoke")
                     }
+                }
+            }
+            .into_actor(self),
+        )
+    }
+}
+
+impl Handler<LookupAlias> for MessageBus {
+    type Result = ResponseActFuture<Self, Option<String>>;
+
+    fn handle(&mut self, msg: LookupAlias, _ctx: &mut Self::Context) -> Self::Result {
+        let lc = self.latticecache.clone().unwrap();
+        Box::pin(
+            async move {
+                match lc.lookup_call_alias(&msg.alias).await {
+                    Ok(Some(alias)) => Some(alias),
+                    _ => None,
                 }
             }
             .into_actor(self),

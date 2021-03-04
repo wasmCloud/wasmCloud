@@ -1,7 +1,8 @@
 use crate::{Host, Result};
 use provider_archive::ProviderArchive;
 use wascap::jwt::Claims;
-use wascc_codec::capabilities::CapabilityProvider;
+extern crate wasmcloud_provider_core as codec;
+use codec::capabilities::CapabilityProvider;
 
 /// Represents a native capability provider compiled as a shared object library.
 /// These plugins are OS- and architecture-specific, so they will be `.so` files on Linux, `.dylib`
