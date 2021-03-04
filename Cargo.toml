@@ -1,7 +1,7 @@
 [package]
 name = "wash-cli"
-version = "0.2.2"
-authors = ["wasmcloud Team"]
+version = "0.3.0"
+authors = ["wasmCloud Team"]
 edition = "2018"
 repository = "https://github.com/wasmcloud/wash"
 description = "wasmcloud Shell (wash) CLI tool"
@@ -18,10 +18,10 @@ structopt = "0.3.21"
 serde_json = { version = "1.0.62", features = ["raw_value"] }
 serde = { version = "1.0.123", features = ["derive"] }
 serdeconv = "0.4.0"
-tui-logger =  { version = "0.4.13", default-features = false, features = ["tui-crossterm"] }
-tui = { version = "0.14.0", default-features = false, features = ["crossterm"] }
+tui-logger = "0.6.0"
+tui = { version = "0.14.0", default-features = true }
 log = "0.4.14"
-crossterm = "0.19.0"
+termion = "1.5"
 actix-rt = "1.1.1"
 spinners = "1.2.0"
 nats = "0.8.6"

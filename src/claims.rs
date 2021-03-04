@@ -748,7 +748,7 @@ pub(crate) fn render_actor_claims(
         .unwrap()
         .call_alias
         .clone()
-        .unwrap_or("(Not set)".to_string());
+        .unwrap_or_else(|| "(Not set)".to_string());
 
     match output.kind {
         OutputKind::JSON => {

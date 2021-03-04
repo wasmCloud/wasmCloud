@@ -5,15 +5,18 @@ use crate::keys::*;
 use crate::par::*;
 use crate::reg::*;
 use crate::util::{convert_error, Result, WASH_CMD_INFO, WASH_LOG_INFO};
-use crossterm::event::{poll, read, DisableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers};
-use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use log::{error, info, LevelFilter};
-use std::io::{self, Stdout};
+use std::io;
 use std::sync::{Arc, Mutex};
-use std::{cell::RefCell, rc::Rc};
 use structopt::{clap::AppSettings, StructOpt};
+use termion::event::{Event, Key};
+use termion::{
+    input::TermRead,
+    raw::{IntoRawMode, RawTerminal},
+    screen::AlternateScreen,
+};
 use tui::{
-    backend::CrosstermBackend,
+    backend::TermionBackend,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::Span,
@@ -23,8 +26,15 @@ use tui::{
 use tui_logger::*;
 use wasmcloud_host::HostBuilder;
 
+type REPLTermionBackend =
+    tui::backend::TermionBackend<AlternateScreen<RawTerminal<std::io::Stdout>>>;
+
 const CTL_NS: &str = "default";
 const WASH_PROMPT: &str = "wash> ";
+/// Option is unsupported for MacOS, the following byte slices correspond
+/// to [1;3A for Option+UP and [1;3B for Option+Down
+const OPTIONUP: &[u8] = &[27_u8, 91_u8, 49_u8, 59_u8, 51_u8, 65_u8];
+const OPTIONDOWN: &[u8] = &[27_u8, 91_u8, 49_u8, 59_u8, 51_u8, 66_u8];
 
 #[derive(Debug, StructOpt, Clone)]
 #[structopt(
@@ -118,7 +128,7 @@ enum ReplCliCommand {
     Claims(ClaimsCliCommand),
 
     /// Utilities for generating and managing keys
-    #[structopt(name = "keys")]
+    #[structopt(name = "keys", aliases = &["key"])]
     Keys(KeysCliCommand),
 
     /// Create, inspect, and modify capability provider archive files
@@ -138,7 +148,7 @@ enum ReplCliCommand {
     Clear,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 struct InputState {
     history: Vec<Vec<char>>,
     history_cursor: usize,
@@ -146,6 +156,7 @@ struct InputState {
     input_cursor: usize,
     multiline_history: u16, // amount to offset cursor for multiline inputs
     input_width: usize,
+    focused: bool,
 }
 
 impl Default for InputState {
@@ -156,7 +167,8 @@ impl Default for InputState {
             input: vec![],
             input_cursor: 0,
             multiline_history: 0,
-            input_width: 0,
+            input_width: 40,
+            focused: true,
         }
     }
 }
@@ -177,6 +189,8 @@ impl InputState {
 
         // Offset Y by length of command history and multiline history
         position.1 += self.history.len();
+        //TODO(issue #90): Multiline history is calculated relative to the current terminal width
+        //                 when a terminal is resized, it needs to be re-evaluated
         position.1 += self.multiline_history as usize;
 
         (position.0 as u16, position.1 as u16)
@@ -205,7 +219,6 @@ impl Default for OutputState {
 struct WashRepl {
     input_state: InputState,
     output_state: Arc<Mutex<OutputState>>,
-    tui_dispatcher: Rc<RefCell<Dispatcher<Event>>>,
     tui_state: TuiWidgetState,
 }
 
@@ -214,7 +227,6 @@ impl Default for WashRepl {
         WashRepl {
             input_state: InputState::default(),
             output_state: Arc::new(Mutex::new(OutputState::default())),
-            tui_dispatcher: Rc::new(RefCell::new(Dispatcher::<Event>::new())),
             tui_state: TuiWidgetState::new(),
         }
     }
@@ -222,10 +234,7 @@ impl Default for WashRepl {
 
 impl WashRepl {
     /// Using the state of the REPL, display information in the terminal window
-    fn draw_ui(
-        &mut self,
-        terminal: &mut Terminal<tui::backend::CrosstermBackend<std::io::Stdout>>,
-    ) -> Result<()> {
+    fn draw_ui(&mut self, terminal: &mut Terminal<REPLTermionBackend>) -> Result<()> {
         terminal.draw(|frame| {
             let main_chunks = Layout::default()
                 .direction(Direction::Vertical)
@@ -238,70 +247,71 @@ impl WashRepl {
                 .split(main_chunks[0]);
 
             draw_input_panel(frame, &mut self.input_state, io_chunks[0]);
-            draw_output_panel(frame, Arc::clone(&self.output_state), io_chunks[1]);
-            draw_smart_logger(frame, main_chunks[1], &self.tui_state, &self.tui_dispatcher);
+            draw_output_panel(
+                frame,
+                Arc::clone(&self.output_state),
+                io_chunks[1],
+                self.input_state.focused,
+            );
+            draw_smart_logger(
+                frame,
+                main_chunks[1],
+                &self.tui_state,
+                !self.input_state.focused,
+            );
         })?;
         Ok(())
     }
 
     /// Handles key input by the user into the REPL
-    async fn handle_key(&mut self, code: KeyCode, modifier: KeyModifiers) -> Result<()> {
-        match code {
-            KeyCode::Char(c) => {
-                self.input_state
-                    .input
-                    .insert(self.input_state.input_cursor, c);
-                self.input_state.input_cursor += 1;
+    async fn handle_key_event(&mut self, key: Key) -> Result<()> {
+        match key {
+            Key::PageUp => {
+                let mut state = self.output_state.lock().unwrap();
+                if state.output_cursor > 0 && state.output_scroll > 0 {
+                    state.output_cursor -= 1;
+                }
             }
-            KeyCode::Left => {
+            Key::PageDown => {
+                let mut state = self.output_state.lock().unwrap();
+                if state.output_cursor < state.output.len() {
+                    state.output_cursor += 1;
+                }
+            }
+            Key::Left => {
                 if self.input_state.input_cursor > 0 {
                     self.input_state.input_cursor -= 1
                 }
             }
-            KeyCode::Right => {
+            Key::Right => {
                 if self.input_state.input_cursor < self.input_state.input.len() {
                     self.input_state.input_cursor += 1
                 }
             }
-            KeyCode::Up => {
-                if modifier == KeyModifiers::SHIFT {
-                    let mut state = self.output_state.lock().unwrap();
-                    if state.output_cursor > 0 && state.output_scroll > 0 {
-                        state.output_cursor -= 1;
-                    }
-                } else if self.input_state.history_cursor > 0 && modifier == KeyModifiers::NONE {
+            Key::Up => {
+                if self.input_state.history_cursor > 0 {
                     self.input_state.history_cursor -= 1;
                     self.input_state.input =
                         self.input_state.history[self.input_state.history_cursor].clone();
                     self.input_state.input_cursor = self.input_state.input.len();
                 }
             }
-            KeyCode::Down => {
-                if modifier == KeyModifiers::SHIFT {
-                    let mut state = self.output_state.lock().unwrap();
-                    if state.output_cursor < state.output.len() {
-                        state.output_cursor += 1;
-                    }
-                } else if modifier == KeyModifiers::NONE {
-                    if self.input_state.history.is_empty() {
-                        return Ok(());
-                    };
-                    if self.input_state.history_cursor < self.input_state.history.len() - 1
-                        && self.input_state.history_cursor > 0
-                    {
-                        self.input_state.history_cursor += 1;
-                        self.input_state.input =
-                            self.input_state.history[self.input_state.history_cursor].clone();
-                        self.input_state.input_cursor = self.input_state.input.len();
-                    } else if self.input_state.history_cursor >= self.input_state.history.len() - 1
-                    {
-                        self.input_state.history_cursor = self.input_state.history.len();
-                        self.input_state.input.clear();
-                        self.input_state.input_cursor = 0;
-                    }
+            Key::Down => {
+                if self.input_state.history.is_empty() {
+                    return Ok(());
+                };
+                if self.input_state.history_cursor < self.input_state.history.len() - 1 {
+                    self.input_state.history_cursor += 1;
+                    self.input_state.input =
+                        self.input_state.history[self.input_state.history_cursor].clone();
+                    self.input_state.input_cursor = self.input_state.input.len();
+                } else if self.input_state.history_cursor >= self.input_state.history.len() - 1 {
+                    self.input_state.history_cursor = self.input_state.history.len();
+                    self.input_state.input.clear();
+                    self.input_state.input_cursor = 0;
                 }
             }
-            KeyCode::Backspace => {
+            Key::Backspace => {
                 if self.input_state.input_cursor > 0
                     && self.input_state.input_cursor <= self.input_state.input.len()
                 {
@@ -309,7 +319,15 @@ impl WashRepl {
                     self.input_state.input.remove(self.input_state.input_cursor);
                 };
             }
-            KeyCode::Enter => {
+            //TODO(issue #67): navigate left one word
+            // Key::Alt(c) if c == 'b' => {
+            //     ()
+            // }
+            //TODO(issue #67): navigate right one word
+            // Key::Alt(c) if c == 'f' => {
+            //     ()
+            // }
+            Key::Char(c) if c == '\n' => {
                 let cmd: String = self.input_state.input.iter().collect();
                 let iter = cmd.split_ascii_whitespace();
                 let cli = ReplCli::from_iter_safe(iter);
@@ -412,15 +430,82 @@ impl WashRepl {
                     Err(e) => {
                         use structopt::clap::ErrorKind::*;
                         // HelpDisplayed is the StructOpt help text error, which should be displayed as info
+                        const WASH_HELP: &str = "WASH_HELP";
                         match e.kind {
-                            HelpDisplayed => info!(target: WASH_CMD_INFO, "{}", e.message),
-                            _ => error!(target: WASH_CMD_INFO, "{}", e.message),
+                            HelpDisplayed => {
+                                for line in e.message.split('\n') {
+                                    if !line.is_empty() {
+                                        info!(target: WASH_HELP, " {}", line);
+                                    } else {
+                                        info!(target: WASH_HELP, "\n");
+                                    }
+                                }
+                            }
+                            _ => {
+                                for line in e.message.split('\n') {
+                                    if !line.is_empty() {
+                                        error!(target: WASH_HELP, " {}", line)
+                                    } else {
+                                        error!(target: WASH_HELP, "\n");
+                                    }
+                                }
+                            }
                         }
                     }
                 };
             }
+            Key::Char(c) => {
+                self.input_state
+                    .input
+                    .insert(self.input_state.input_cursor, c);
+                self.input_state.input_cursor += 1;
+            }
             _ => (),
         };
+        Ok(())
+    }
+
+    /// Handles keys sent to the tui_logger
+    async fn handle_tui_logger_key_event(&mut self, key: Key) -> Result<()> {
+        match key {
+            Key::Char(' ') => {
+                self.tui_state.transition(&TuiWidgetEvent::SpaceKey);
+            }
+            Key::Esc => {
+                self.tui_state.transition(&TuiWidgetEvent::EscapeKey);
+            }
+            Key::PageUp => {
+                self.tui_state.transition(&TuiWidgetEvent::PrevPageKey);
+            }
+            Key::PageDown => {
+                self.tui_state.transition(&TuiWidgetEvent::NextPageKey);
+            }
+            Key::Up => {
+                self.tui_state.transition(&TuiWidgetEvent::UpKey);
+            }
+            Key::Down => {
+                self.tui_state.transition(&TuiWidgetEvent::DownKey);
+            }
+            Key::Left => {
+                self.tui_state.transition(&TuiWidgetEvent::LeftKey);
+            }
+            Key::Right => {
+                self.tui_state.transition(&TuiWidgetEvent::RightKey);
+            }
+            Key::Char('+') => {
+                self.tui_state.transition(&TuiWidgetEvent::PlusKey);
+            }
+            Key::Char('-') => {
+                self.tui_state.transition(&TuiWidgetEvent::MinusKey);
+            }
+            Key::Char('h') => {
+                self.tui_state.transition(&TuiWidgetEvent::HideKey);
+            }
+            Key::Char('f') => {
+                self.tui_state.transition(&TuiWidgetEvent::FocusKey);
+            }
+            _ => (),
+        }
         Ok(())
     }
 }
@@ -446,10 +531,9 @@ async fn handle_up(cmd: UpCliCommand) -> Result<()> {
 
     // Initialize terminal
     let backend = {
-        crossterm::terminal::enable_raw_mode().unwrap();
-        let mut stdout = io::stdout();
-        crossterm::execute!(stdout, EnterAlternateScreen).unwrap();
-        CrosstermBackend::new(stdout)
+        let stdout = io::stdout().into_raw_mode().unwrap();
+        let stdout = AlternateScreen::from(stdout);
+        TermionBackend::new(stdout)
     };
     let mut terminal = Terminal::new(backend).unwrap();
     terminal.clear().unwrap();
@@ -460,8 +544,7 @@ async fn handle_up(cmd: UpCliCommand) -> Result<()> {
     repl.draw_ui(&mut terminal)?;
     info!(target: WASH_LOG_INFO, "Initializing REPL...");
     // Sending SPACE event to tui logger to hide disabled logs
-    let evt = Event::Key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
-    repl.tui_dispatcher.borrow_mut().dispatch(&evt);
+    repl.tui_state.transition(&TuiWidgetEvent::SpaceKey);
     repl.draw_ui(&mut terminal)?;
 
     // Launch host in separate thread to avoid blocking host operations
@@ -524,20 +607,29 @@ https://www.wasmcloud.dev/overview/getting-started/#starting-nats for instructio
     });
 
     repl.draw_ui(&mut terminal)?;
-    let mut repl_focus = true;
+
+    // Use a channel to asynchronously receive stdin events
+    let (tx, rx) = std::sync::mpsc::channel();
+    let tx_event = tx.clone();
+    std::thread::spawn({
+        let stdin = io::stdin();
+        move || {
+            for c in stdin.events() {
+                tx_event.send(c).unwrap();
+            }
+        }
+    });
+
     loop {
-        // Polling here results in a nonblocking wait for events
-        if poll(std::time::Duration::from_millis(50))? {
-            let res = match read()? {
-                // Tab toggles input focus between REPL and Tui logger selector
-                Event::Key(KeyEvent {
-                    code: KeyCode::Tab, ..
-                }) => {
-                    repl_focus = !repl_focus;
+        if let Ok(evt) = rx.recv_timeout(std::time::Duration::from_millis(50)) {
+            let res = match evt? {
+                // Tab key toggles input focus between REPL and Tui logger selector
+                Event::Key(Key::Char('\t')) => {
+                    repl.input_state.focused = !repl.input_state.focused;
                     info!(
                         target: WASH_CMD_INFO,
                         "Switched command focus to {}",
-                        if repl_focus {
+                        if repl.input_state.focused {
                             "REPL"
                         } else {
                             "Logger selector"
@@ -546,14 +638,28 @@ https://www.wasmcloud.dev/overview/getting-started/#starting-nats for instructio
                     Ok(())
                 }
                 // Dispatch events for REPL interpretation
-                Event::Key(KeyEvent { code, modifiers }) if repl_focus => {
-                    repl.handle_key(code, modifiers).await
-                }
+                Event::Key(event) if repl.input_state.focused => repl.handle_key_event(event).await,
                 // Dispatch events for Tui Target interpretation
-                evt => {
-                    repl.tui_dispatcher.borrow_mut().dispatch(&evt);
-                    Ok(())
+                Event::Key(event) if !repl.input_state.focused => {
+                    repl.handle_tui_logger_key_event(event).await
                 }
+                // OPTION+Up/Down are unsupported on MacOS, send PageUp / PageDown in their place
+                Event::Unsupported(event_bytes) => match event_bytes.as_slice() {
+                    OPTIONUP if repl.input_state.focused => {
+                        repl.handle_key_event(Key::PageUp).await
+                    }
+                    OPTIONDOWN if repl.input_state.focused => {
+                        repl.handle_key_event(Key::PageDown).await
+                    }
+                    OPTIONUP if !repl.input_state.focused => {
+                        repl.handle_tui_logger_key_event(Key::PageUp).await
+                    }
+                    OPTIONDOWN if !repl.input_state.focused => {
+                        repl.handle_tui_logger_key_event(Key::PageDown).await
+                    }
+                    _ => Ok(()),
+                },
+                _ => Ok(()),
             };
             repl.draw_ui(&mut terminal)?;
 
@@ -563,7 +669,6 @@ https://www.wasmcloud.dev/overview/getting-started/#starting-nats for instructio
                 break;
             }
         } else {
-            // If no events occur, draw UI to show asynchronous logs
             repl.draw_ui(&mut terminal)?;
         }
     }
@@ -614,11 +719,9 @@ async fn handle_reg(reg_cmd: RegCliCommand, output_state: Arc<Mutex<OutputState>
 }
 
 /// Helper function to exit the alternate tui terminal without corrupting the user terminal
-fn cleanup_terminal(terminal: &mut Terminal<tui::backend::CrosstermBackend<std::io::Stdout>>) {
+fn cleanup_terminal(terminal: &mut Terminal<REPLTermionBackend>) {
     terminal.show_cursor().unwrap();
     terminal.clear().unwrap();
-    crossterm::execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture).unwrap();
-    terminal::disable_raw_mode().unwrap();
 }
 
 /// Append a message to the output log
@@ -670,11 +773,7 @@ fn format_input_for_display(input_vec: Vec<char>, input_width: usize) -> String 
 }
 
 /// Display the wash REPL in the provided panel, automatically scroll with overflow
-fn draw_input_panel(
-    frame: &mut Frame<CrosstermBackend<Stdout>>,
-    state: &mut InputState,
-    chunk: Rect,
-) {
+fn draw_input_panel(frame: &mut Frame<REPLTermionBackend>, state: &mut InputState, chunk: Rect) {
     let history: String = state
         .history
         .iter()
@@ -705,12 +804,19 @@ fn draw_input_panel(
     // 3 is chunk size minus borders minus buffer space
     state.input_width = chunk.width as usize - 3;
 
+    let style = if state.focused {
+        Style::default().add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+    };
+
     // Draw REPL panel
     let input_panel = Paragraph::new(display)
-        .block(Block::default().borders(Borders::ALL).title(Span::styled(
-            " REPL ",
-            Style::default().add_modifier(Modifier::BOLD),
-        )))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(Span::styled(" REPL ", style)),
+        )
         .style(Style::default().fg(Color::White))
         .alignment(Alignment::Left)
         .scroll((scroll_offset, 0));
@@ -727,9 +833,10 @@ fn draw_input_panel(
 
 /// Display command output in the provided panel
 fn draw_output_panel(
-    frame: &mut Frame<CrosstermBackend<Stdout>>,
+    frame: &mut Frame<REPLTermionBackend>,
     state: Arc<Mutex<OutputState>>,
     chunk: Rect,
+    focused: bool,
 ) {
     let mut state = state.lock().unwrap();
     let output_logs: String = state.output.iter().map(|h| format!(" {}\n", h)).collect();
@@ -748,11 +855,17 @@ fn draw_output_panel(
     };
     state.output_width = chunk.width as usize - 1;
 
+    let style = if focused {
+        Style::default().add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+    };
+
     // Draw REPL panel
     let output_panel = Paragraph::new(output_logs)
         .block(Block::default().borders(Borders::ALL).title(Span::styled(
-            " OUTPUT (SHIFT+UP/DOWN to scroll) ",
-            Style::default().add_modifier(Modifier::BOLD),
+            " OUTPUT (ALT+UP/DOWN or PageUp/PageDown to scroll) ",
+            style,
         )))
         .style(Style::default().fg(Color::White))
         .alignment(Alignment::Left)
@@ -763,20 +876,26 @@ fn draw_output_panel(
 
 /// Draws the Tui smart logger widget in the provided frame
 fn draw_smart_logger(
-    frame: &mut Frame<CrosstermBackend<Stdout>>,
+    frame: &mut Frame<REPLTermionBackend>,
     chunk: Rect,
     state: &TuiWidgetState,
-    dispatcher: &Rc<RefCell<Dispatcher<Event>>>,
+    focused: bool,
 ) {
-    dispatcher.borrow_mut().clear();
+    let style = if focused {
+        Style::default().add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+    };
     let selector_panel = TuiLoggerSmartWidget::default()
+        .title_log(" Tui Log ")
+        .title_target(" Tui Target Selector ")
         .style_error(Style::default().fg(Color::Red))
         .style_debug(Style::default().fg(Color::Green))
         .style_warn(Style::default().fg(Color::Yellow))
         .style_trace(Style::default().fg(Color::Magenta))
         .style_info(Style::default().fg(Color::Cyan))
-        .state(state)
-        .dispatcher(dispatcher.clone());
+        .border_style(style)
+        .state(state);
     // These loggers are far too noisy and don't provide any value to a wasmcloud user
     set_level_for_target("tui_logger::dispatcher", LevelFilter::Off);
     set_level_for_target("mio::poll", LevelFilter::Off);
@@ -876,11 +995,133 @@ mod test {
         assert_eq!(link_second_line, link_iter.next().unwrap());
     }
 
-    #[test]
-    //TODO(brooksmtownsend): Write this test after merging in tui_logger changes. This changes the API
-    fn test_key_events() {
-        // let repl = WashRepl::default();
-        // repl.handle_key(code: KeyCode, modifier: KeyModifiers)
+    #[actix_rt::test]
+    async fn test_key_events() {
+        let mut repl = WashRepl::default();
+        const OUTPUT_SCROLL: u16 = 42;
+        const OUTPUT_CURSOR: usize = 30;
+        const INPUT_HISTORY: &str = "ctl get hosts";
+        const INPUT: &str =
+            "ctl get inventory NBLX6IFXQGPPK74GG7Q4OVLDTXB3MPKLCXX7LPEXD4QP7DSD2HN7L56D";
+        let output: Vec<String> = vec!["command output".to_string(); OUTPUT_CURSOR];
+
+        // REPL input state setup
+        repl.input_state
+            .history
+            .push(INPUT_HISTORY.chars().collect::<Vec<char>>());
+        repl.input_state
+            .history
+            .push(INPUT_HISTORY.chars().collect::<Vec<char>>());
+        repl.input_state.history_cursor += 2;
+        assert_eq!(repl.input_state.history_cursor, 2);
+        assert_eq!(repl.input_state.history.len(), 2);
+        for c in INPUT.chars() {
+            repl.handle_key_event(Key::Char(c)).await.unwrap();
+        }
+        assert_eq!(repl.input_state.input_cursor, INPUT.len());
+
+        // REPL output state setup
+        repl.output_state.lock().unwrap().output_scroll += OUTPUT_SCROLL;
+        repl.output_state.lock().unwrap().output = output;
+        repl.output_state.lock().unwrap().output_cursor += OUTPUT_CURSOR;
+        assert_eq!(
+            repl.output_state.lock().unwrap().output_scroll,
+            OUTPUT_SCROLL
+        );
+        assert_eq!(
+            repl.output_state.lock().unwrap().output_cursor,
+            OUTPUT_CURSOR
+        );
+
+        // PageUp / PageDown with REPL focus
+        repl.handle_key_event(Key::PageUp).await.unwrap();
+        assert_eq!(
+            repl.output_state.lock().unwrap().output_cursor,
+            OUTPUT_CURSOR - 1
+        );
+        repl.handle_key_event(Key::PageUp).await.unwrap();
+        assert_eq!(
+            repl.output_state.lock().unwrap().output_cursor,
+            OUTPUT_CURSOR - 2
+        );
+        repl.handle_key_event(Key::PageDown).await.unwrap();
+        assert_eq!(
+            repl.output_state.lock().unwrap().output_cursor,
+            OUTPUT_CURSOR - 1
+        );
+
+        // Left/Right with REPL focus
+        repl.handle_key_event(Key::Left).await.unwrap();
+        repl.handle_key_event(Key::Left).await.unwrap();
+        repl.handle_key_event(Key::Left).await.unwrap();
+        assert_eq!(repl.input_state.input_cursor, INPUT.len() - 3);
+        repl.handle_key_event(Key::Right).await.unwrap();
+        repl.handle_key_event(Key::Right).await.unwrap();
+        assert_eq!(repl.input_state.input_cursor, INPUT.len() - 1);
+        repl.handle_key_event(Key::Right).await.unwrap();
+        assert_eq!(repl.input_state.input_cursor, INPUT.len());
+
+        // Backspace with REPL focus
+        repl.handle_key_event(Key::Backspace).await.unwrap();
+        repl.handle_key_event(Key::Backspace).await.unwrap();
+        repl.handle_key_event(Key::Backspace).await.unwrap();
+        repl.handle_key_event(Key::Backspace).await.unwrap();
+        assert_eq!(repl.input_state.input_cursor, INPUT.len() - 4);
+        assert_eq!(
+            &repl.input_state.input,
+            &INPUT[..INPUT.len() - 4].chars().collect::<Vec<char>>()
+        );
+
+        // ALT+Left('b') / Right('f')
+        //TODO(issue #67): Ensure cursor navigates by one "word"
+        assert!(repl.handle_key_event(Key::Alt('b')).await.is_ok());
+        assert!(repl.handle_key_event(Key::Alt('f')).await.is_ok());
+
+        // Up / Down with REPL focus
+        repl.handle_key_event(Key::Up).await.unwrap();
+        assert_eq!(repl.input_state.history_cursor, 1);
+        assert_eq!(
+            repl.input_state.input,
+            INPUT_HISTORY.chars().collect::<Vec<char>>()
+        );
+        assert_eq!(repl.input_state.input_cursor, INPUT_HISTORY.len());
+        repl.handle_key_event(Key::Down).await.unwrap();
+        assert_eq!(repl.input_state.history_cursor, 2);
+        assert!(repl.input_state.input.is_empty());
+        assert_eq!(repl.input_state.input_cursor, 0);
+        repl.handle_key_event(Key::Up).await.unwrap();
+        repl.handle_key_event(Key::Up).await.unwrap();
+        repl.handle_key_event(Key::Down).await.unwrap();
+        assert_eq!(repl.input_state.history_cursor, 1);
+        assert_eq!(
+            repl.input_state.input,
+            INPUT_HISTORY.chars().collect::<Vec<char>>()
+        );
+        assert_eq!(repl.input_state.input_cursor, INPUT_HISTORY.len());
+
+        // Clear REPL input again
+        repl.handle_key_event(Key::Down).await.unwrap();
+
+        repl.handle_key_event(Key::Char('c')).await.unwrap();
+        repl.handle_key_event(Key::Char('l')).await.unwrap();
+        repl.handle_key_event(Key::Char('e')).await.unwrap();
+        repl.handle_key_event(Key::Char('a')).await.unwrap();
+        repl.handle_key_event(Key::Char('r')).await.unwrap();
+        repl.handle_key_event(Key::Char('\n')).await.unwrap();
+
+        assert_eq!(repl.input_state, InputState::default());
+
+        let quit_options = vec!["exit", "logout", "q", ":q!"];
+        for opt in quit_options {
+            for c in opt.chars() {
+                repl.handle_key_event(Key::Char(c)).await.unwrap();
+            }
+            let res = repl.handle_key_event(Key::Char('\n')).await;
+            match res {
+                Err(e) => assert_eq!(format!("{}", e), "REPL Quit"),
+                _ => panic!("REPL exit option {} did not quit REPL", opt),
+            }
+        }
     }
 
     #[test]
