@@ -1,5 +1,5 @@
 #[macro_use]
-extern crate wascc_codec as codec;
+extern crate wasmcloud_provider_core as codec;
 #[macro_use]
 extern crate log;
 
