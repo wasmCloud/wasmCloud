@@ -260,7 +260,7 @@ fn extrude(
             unsafe { ::libloading::os::unix::Library::open(Some(&path), 0x2 | 0x1000)? }.into()
         };
         #[cfg(not(target_os = "linux"))]
-        let library = Library::new(&path)?;
+        let library: Library = unsafe { Library::new(&path)? };
 
         type PluginCreate = unsafe fn() -> *mut dyn CapabilityProvider;
         let plugin = unsafe {
@@ -277,7 +277,9 @@ fn extrude(
 
 #[cfg(test)]
 mod test {
-    use crate::capability::extras::{ExtrasCapabilityProvider, OP_REQUEST_GUID};
+    use crate::capability::extras::{
+        ExtrasCapabilityProvider, OP_REQUEST_GUID, OP_REQUEST_RANDOM, OP_REQUEST_SEQUENCE,
+    };
     use crate::capability::native::NativeCapability;
     use crate::capability::native_host::NativeCapabilityHost;
     use crate::dispatch::{Invocation, WasmCloudEntity};
@@ -303,6 +305,7 @@ mod test {
         };
         let _ = extras.send(init).await.unwrap();
 
+        // Test generating a guid
         let req = GeneratorRequest {
             guid: true,
             sequence: false,
@@ -315,7 +318,7 @@ mod test {
             WasmCloudEntity::Actor(SYSTEM_ACTOR.to_string()),
             WasmCloudEntity::Capability {
                 id: "VDHPKGFKDI34Y4RN4PWWZHRYZ6373HYRSNNEM4UTDLLOGO5B37TSVREP".to_string(),
-                contract_id: "wascc:extras".to_string(),
+                contract_id: "wasmcloud:extras".to_string(),
                 link_name: "default".to_string(),
             },
             OP_REQUEST_GUID,
@@ -325,5 +328,61 @@ mod test {
         assert!(ir.error.is_none());
         let gen_r: GeneratorResult = crate::generated::core::deserialize(&ir.msg).unwrap();
         assert!(gen_r.guid.is_some());
+
+        // Test generating a random number
+        let req = GeneratorRequest {
+            guid: false,
+            sequence: false,
+            random: true,
+            min: 1,
+            max: 256,
+        };
+        let inv = Invocation::new(
+            &kp,
+            WasmCloudEntity::Actor(SYSTEM_ACTOR.to_string()),
+            WasmCloudEntity::Capability {
+                id: "VDHPKGFKDI34Y4RN4PWWZHRYZ6373HYRSNNEM4UTDLLOGO5B37TSVREP".to_string(),
+                contract_id: "wasmcloud:extras".to_string(),
+                link_name: "default".to_string(),
+            },
+            OP_REQUEST_RANDOM,
+            crate::generated::core::serialize(&req).unwrap(),
+        );
+        let ir = extras.send(inv).await.unwrap();
+        assert!(ir.error.is_none());
+        let gen_r: GeneratorResult = crate::generated::core::deserialize(&ir.msg).unwrap();
+        assert_ne!(gen_r.random_number, 0);
+
+        // Test generating a sequence of 0-2
+        let req = GeneratorRequest {
+            guid: false,
+            sequence: true,
+            random: false,
+            min: 0,
+            max: 0,
+        };
+        let inv = Invocation::new(
+            &kp,
+            WasmCloudEntity::Actor(SYSTEM_ACTOR.to_string()),
+            WasmCloudEntity::Capability {
+                id: "VDHPKGFKDI34Y4RN4PWWZHRYZ6373HYRSNNEM4UTDLLOGO5B37TSVREP".to_string(),
+                contract_id: "wasmcloud:extras".to_string(),
+                link_name: "default".to_string(),
+            },
+            OP_REQUEST_SEQUENCE,
+            crate::generated::core::serialize(&req).unwrap(),
+        );
+        let ir = extras.send(inv.clone()).await.unwrap();
+        assert!(ir.error.is_none());
+        let gen_r: GeneratorResult = crate::generated::core::deserialize(&ir.msg).unwrap();
+        assert_eq!(gen_r.sequence_number, 0);
+        let ir = extras.send(inv.clone()).await.unwrap();
+        assert!(ir.error.is_none());
+        let gen_r: GeneratorResult = crate::generated::core::deserialize(&ir.msg).unwrap();
+        assert_eq!(gen_r.sequence_number, 1);
+        let ir = extras.send(inv).await.unwrap();
+        assert!(ir.error.is_none());
+        let gen_r: GeneratorResult = crate::generated::core::deserialize(&ir.msg).unwrap();
+        assert_eq!(gen_r.sequence_number, 2);
     }
 }

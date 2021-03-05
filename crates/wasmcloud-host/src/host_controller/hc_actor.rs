@@ -370,7 +370,7 @@ impl Handler<Initialize> for HostController {
         let claims = crate::capability::extras::get_claims();
         let pk = claims.subject;
 
-        // Start wascc:extras
+        // Start wasmcloud:extras
         let extras = SyncArbiter::start(1, NativeCapabilityHost::new);
         let claims = crate::capability::extras::get_claims();
         let ex = ExtrasCapabilityProvider::default();

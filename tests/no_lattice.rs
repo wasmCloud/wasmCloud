@@ -268,3 +268,61 @@ pub async fn kvcounter_link_first() -> Result<()> {
     delay_for(Duration::from_millis(50)).await;
     Ok(())
 }
+
+/// Ensures the embedded extras provider in a wasmcloud host
+/// handles operations properly
+pub async fn extras_provider() -> Result<()> {
+    const WEB_PORT: u32 = 9997_u32;
+    const EXTRAS_PUBLIC_KEY: &str = "VDHPKGFKDI34Y4RN4PWWZHRYZ6373HYRSNNEM4UTDLLOGO5B37TSVREP";
+
+    let h = HostBuilder::new().build();
+    h.start().await?;
+    // Start extras actor
+    //TODO(brooksmtownsend): replace this with the real extras
+    let extras = Actor::from_file("./tests/modules/extras.wasm")?;
+    let extras_id = extras.public_key();
+    h.start_actor(extras).await?;
+    await_actor_count(&h, 1, Duration::from_millis(50), 3).await?;
+
+    // Start httpserver provider
+    let mut config_values = HashMap::new();
+    config_values.insert("PORT".to_string(), format!("{}", WEB_PORT));
+    let httpserver = par_from_file("./tests/modules/httpserver.par.gz")?;
+    let websrv = NativeCapability::from_archive(&httpserver, None)?;
+    h.start_native_capability(websrv).await?;
+    await_provider_count(&h, 3, Duration::from_millis(50), 3).await?; // httpserver, kvcache, extras
+    h.set_link(
+        &extras_id,
+        "wasmcloud:httpserver",
+        None,
+        httpserver.claims().unwrap().subject,
+        config_values,
+    )
+    .await?;
+    h.set_link(
+        &extras_id,
+        "wasmcloud:extras",
+        None,
+        EXTRAS_PUBLIC_KEY.to_string(),
+        HashMap::new(),
+    )
+    .await?;
+    delay_for(Duration::from_millis(500)).await; // give web server enough time to start
+
+    // Query extras actor
+    #[derive(Debug, serde::Deserialize)]
+    struct ExtrasActorResponse {
+        guid: String,
+        random: u32,
+        sequence: u64,
+    }
+    let url = format!("http://localhost:{}/extras", WEB_PORT);
+    let resp = reqwest::get(&url).await?;
+    assert!(resp.status().is_success());
+    let generator_result: ExtrasActorResponse = resp.json().await?;
+    assert!(uuid::Uuid::parse_str(&generator_result.guid).is_ok());
+    assert!(generator_result.random < 100);
+    assert_eq!(generator_result.sequence, 0);
+
+    Ok(())
+}

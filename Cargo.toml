@@ -38,7 +38,7 @@ wapc = { version = "0.10.1" }
 log = "0.4.11"
 env_logger = "0.8.2"
 anyhow = "1.0.34"
-wasmcloud-host = { path = "crates/wasmcloud-host", version = "0.15.2" }
+wasmcloud-host = { path = "crates/wasmcloud-host", version = "0.15.3" }
 actix-rt = "1.1.1"
 nats = "0.8.6"
 structopt = "0.3.21"
@@ -51,13 +51,14 @@ serde_bytes = "0.11.5"
 serde_json = "1.0.59"
 provider-archive = "0.4.0"
 redis = "0.19.0"
-reqwest = { version = "0.10.0"}
+reqwest = { version = "0.10.0", features = ["json"]}
 uuid = { version = "0.8", features = ["serde", "v4"] }
 nats = "0.8.5"
 wasmcloud-httpserver = { version = "0.12.0", features = ["static_plugin"] }
 
 wasmcloud-control-interface = { path = "./crates/wasmcloud-control-interface"}
-wasmcloud-actor-http-server = "0.1.0"
+wasmcloud-actor-http-server = "0.1.1"
+wasmcloud-actor-extras = "0.1.1"
 ctor = "0.1.16"
 wascap = "0.6.0"
 futures = "0.3.6"

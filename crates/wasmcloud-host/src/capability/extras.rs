@@ -1,4 +1,4 @@
-// A default implementation of the "wascc:extras" provider that is always included
+// A default implementation of the "wasmcloud:extras" provider that is always included
 // with the host runtime. This provides functionality for generating random numbers,
 // generating a guid, and generating a sequence number... things that a standalone
 // WASM module cannot do.
@@ -148,5 +148,5 @@ pub(crate) fn get_claims() -> Claims<wascap::jwt::CapabilityProvider> {
     Claims::<wascap::jwt::CapabilityProvider>::decode(EXTRAS_JWT).unwrap()
 }
 
-pub const EXTRAS_JWT: &str = "eyJ0eXAiOiJqd3QiLCJhbGciOiJFZDI1NTE5In0.eyJqdGkiOiJwblFiaWN2b2tmaU5kTllrTHZQYVAzIiwiaWF0IjoxNjAyODczNDg2LCJpc3MiOiJBQ09KSk42V1VQNE9ERDc1WEVCS0tUQ0NVSkpDWTVaS1E1NlhWS1lLNEJFSldHVkFPT1FIWk1DVyIsInN1YiI6IlZESFBLR0ZLREkzNFk0Uk40UFdXWkhSWVo2MzczSFlSU05ORU00VVRETExPR081QjM3VFNWUkVQIiwid2FzY2FwIjp7Im5hbWUiOiJ3YVNDQyBFeHRyYXMiLCJjYXBpZCI6Indhc2NjOmV4dHJhcyIsInZlbmRvciI6IkV4dHJhcyIsInRhcmdldF9oYXNoZXMiOnt9fX0.LLXkiH6-8xIH42yR9ACXDFaTlpVPLZdr6tzRjLJiNQafPY3bTTazwlFJpPlYpDk6hJxwuV9-OsPvZ1ZcxVyZDQ";
+pub const EXTRAS_JWT: &str = "eyJ0eXAiOiJqd3QiLCJhbGciOiJFZDI1NTE5In0.eyJqdGkiOiJxaFBJdWJMZnRxNE1RdlkxbkQzODJsIiwiaWF0IjoxNjE0ODc3ODM5LCJpc3MiOiJBQ09KSk42V1VQNE9ERDc1WEVCS0tUQ0NVSkpDWTVaS1E1NlhWS1lLNEJFSldHVkFPT1FIWk1DVyIsInN1YiI6IlZESFBLR0ZLREkzNFk0Uk40UFdXWkhSWVo2MzczSFlSU05ORU00VVRETExPR081QjM3VFNWUkVQIiwid2FzY2FwIjp7Im5hbWUiOiJ3YXNtY2xvdWQgRXh0cmFzIiwiY2FwaWQiOiJ3YXNtY2xvdWQ6ZXh0cmFzIiwidmVuZG9yIjoid2FzbWNsb3VkIiwidGFyZ2V0X2hhc2hlcyI6e319fQ.tD3rA1M7fpzyt5-bX1nevdKG4e8GNNjRfNP5Mdz0MHnoZ2R-Qs6APwp2m6PvM9T5-Q4_wBzb_ZpVUoTSi_2RAQ";
 pub const EXTRAS_PUBLIC_KEY: &str = "VDHPKGFKDI34Y4RN4PWWZHRYZ6373HYRSNNEM4UTDLLOGO5B37TSVREP";
