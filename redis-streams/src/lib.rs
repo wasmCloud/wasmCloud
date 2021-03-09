@@ -1,5 +1,7 @@
 #[macro_use]
-extern crate wascc_codec as codec;
+extern crate wasmcloud_provider_core as codec;
+use wasmcloud_actor_core as actor;
+use wasmcloud_actor_eventstreams as eventstreams;
 
 #[macro_use]
 extern crate log;
@@ -7,15 +9,14 @@ extern crate log;
 use ::redis_streams::{
     Client, Connection, ErrorKind, RedisError, RedisResult, StreamCommands, Value,
 };
-
-use codec::capabilities::{
-    CapabilityDescriptor, CapabilityProvider, Dispatcher, NullDispatcher, OperationDirection,
-    OP_GET_CAPABILITY_DESCRIPTOR,
-};
+use actor::CapabilityConfiguration;
 use codec::core::{OP_BIND_ACTOR, OP_REMOVE_ACTOR};
-use codec::eventstreams::{self, Event, StreamQuery, StreamResults, WriteResponse};
-use wascc_codec::core::CapabilityConfiguration;
-use wascc_codec::{deserialize, serialize};
+use codec::{
+    capabilities::{CapabilityProvider, Dispatcher, NullDispatcher},
+    core::SYSTEM_ACTOR,
+};
+use codec::{deserialize, serialize};
+use eventstreams::*;
 
 use std::error::Error;
 use std::{
@@ -23,16 +24,21 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+// Required by the makefile
+#[allow(unused)]
+const CAPABILITY_ID: &str = "wasmcloud:eventstreams";
+
+const OP_WRITE_EVENT: &str = "WriteEvent";
+const _OP_DELIVER_EVENT: &str = "DeliverEvent"; // Currently unused by this provider
+const OP_QUERY_STREAM: &str = "QueryStream";
+
 #[cfg(not(feature = "static_plugin"))]
 capability_provider!(RedisStreamsProvider, RedisStreamsProvider::new);
 
-const CAPABILITY_ID: &str = "wascc:eventstreams";
-const SYSTEM_ACTOR: &str = "system";
-const VERSION: &str = env!("CARGO_PKG_VERSION");
-const REVISION: u32 = 2; // Increment for each crates publish
-
+/// Redis implementation of the `wasmcloud:eventstreams` provider contract
+#[derive(Clone)]
 pub struct RedisStreamsProvider {
-    dispatcher: RwLock<Box<dyn Dispatcher>>,
+    dispatcher: Arc<RwLock<Box<dyn Dispatcher>>>,
     clients: Arc<RwLock<HashMap<String, Client>>>,
 }
 
@@ -44,7 +50,7 @@ impl Default for RedisStreamsProvider {
         };
 
         RedisStreamsProvider {
-            dispatcher: RwLock::new(Box::new(NullDispatcher::new())),
+            dispatcher: Arc::new(RwLock::new(Box::new(NullDispatcher::new()))),
             clients: Arc::new(RwLock::new(HashMap::new())),
         }
     }
@@ -55,14 +61,17 @@ impl RedisStreamsProvider {
         Self::default()
     }
 
-    fn configure(&self, config: CapabilityConfiguration) -> Result<Vec<u8>, Box<dyn Error>> {
+    fn configure(
+        &self,
+        config: CapabilityConfiguration,
+    ) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
         let c = initialize_client(config.clone())?;
 
         self.clients.write().unwrap().insert(config.module, c);
         Ok(vec![])
     }
 
-    fn deconfigure(&self, actor: &str) -> Result<Vec<u8>, Box<dyn Error>> {
+    fn deconfigure(&self, actor: &str) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
         self.clients.write().unwrap().remove(actor);
         Ok(vec![])
     }
@@ -79,13 +88,21 @@ impl RedisStreamsProvider {
         }
     }
 
-    fn write_event(&self, actor: &str, event: Event) -> Result<Vec<u8>, Box<dyn Error>> {
+    fn write_event(
+        &self,
+        actor: &str,
+        event: Event,
+    ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
         let data = map_to_tuples(event.values);
-        let res: String = self.actor_con(actor)?.xadd(event.stream, "*", &data)?;
-        Ok(serialize(WriteResponse { event_id: res })?)
+        let res: String = self.actor_con(actor)?.xadd(event.stream_id, "*", &data)?;
+        Ok(serialize(res)?)
     }
 
-    fn query_stream(&self, actor: &str, query: StreamQuery) -> Result<Vec<u8>, Box<dyn Error>> {
+    fn query_stream(
+        &self,
+        actor: &str,
+        query: StreamQuery,
+    ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
         let sid = query.stream_id.to_string();
         let items = if let Some(time_range) = query.range {
             if query.count > 0 {
@@ -120,33 +137,22 @@ impl RedisStreamsProvider {
                 .collect::<HashMap<String, String>>();
             events.push(Event {
                 event_id: stream_id.id,
-                stream: sid.to_string(),
+                stream_id: sid.to_string(),
                 values: newmap,
             });
         }
 
-        Ok(serialize(StreamResults { events })?)
-    }
-
-    fn get_descriptor(&self) -> Result<Vec<u8>, Box<dyn Error>> {
-        Ok(serialize(
-            CapabilityDescriptor::builder()
-            .id(CAPABILITY_ID)
-            .name("waSCC Default Event Streams Provider (Redis)")
-            .long_description("A capability provider exposing a streaming-read and append-only event streams interface")
-            .version(VERSION)
-            .revision(REVISION)
-            .with_operation(eventstreams::OP_WRITE_EVENT, OperationDirection::ToProvider, "Writes an event to the end of a stream")
-            .with_operation(eventstreams::OP_QUERY_STREAM, OperationDirection::ToProvider, "Queries a set of events from a stream")
-            .build()
-        )?)
+        Ok(serialize(events)?)
     }
 }
 
 impl CapabilityProvider for RedisStreamsProvider {
     // Invoked by the runtime host to give this provider plugin the ability to communicate
     // with actors
-    fn configure_dispatch(&self, dispatcher: Box<dyn Dispatcher>) -> Result<(), Box<dyn Error>> {
+    fn configure_dispatch(
+        &self,
+        dispatcher: Box<dyn Dispatcher>,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         trace!("Dispatcher received.");
         let mut lock = self.dispatcher.write().unwrap();
         *lock = dispatcher;
@@ -156,23 +162,31 @@ impl CapabilityProvider for RedisStreamsProvider {
 
     // Invoked by host runtime to allow an actor to make use of the capability
     // All providers MUST handle the "configure" message, even if no work will be done
-    fn handle_call(&self, actor: &str, op: &str, msg: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+    fn handle_call(
+        &self,
+        actor: &str,
+        op: &str,
+        msg: &[u8],
+    ) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
         trace!("Received host call from {}, operation - {}", actor, op);
 
         match op {
             OP_BIND_ACTOR if actor == SYSTEM_ACTOR => self.configure(deserialize(msg)?),
             OP_REMOVE_ACTOR if actor == SYSTEM_ACTOR => self.deconfigure(actor),
-            OP_GET_CAPABILITY_DESCRIPTOR if actor == SYSTEM_ACTOR => self.get_descriptor(),
-            eventstreams::OP_WRITE_EVENT => self.write_event(actor, deserialize(msg)?),
-            eventstreams::OP_QUERY_STREAM => self.query_stream(actor, deserialize(msg)?),
+            OP_WRITE_EVENT => self.write_event(actor, deserialize(msg)?),
+            OP_QUERY_STREAM => self.query_stream(actor, deserialize(msg)?),
             _ => Err("bad dispatch".into()),
         }
     }
+
+    fn stop(&self) {}
 }
 
 const ENV_REDIS_URL: &str = "URL";
 
-fn initialize_client(config: CapabilityConfiguration) -> Result<Client, Box<dyn Error>> {
+fn initialize_client(
+    config: CapabilityConfiguration,
+) -> Result<Client, Box<dyn Error + Send + Sync>> {
     let redis_url = match config.values.get(ENV_REDIS_URL) {
         Some(v) => v,
         None => "redis://0.0.0.0:6379/",
@@ -224,12 +238,12 @@ mod test {
         for _ in 0..6 {
             let ev = Event {
                 event_id: "".to_string(),
-                stream: "my-stream".to_string(),
+                stream_id: "my-stream".to_string(),
                 values: gen_values(),
             };
             let buf = serialize(&ev).unwrap();
             let _res = prov
-                .handle_call("testing-actor", eventstreams::OP_WRITE_EVENT, &buf)
+                .handle_call("testing-actor", OP_WRITE_EVENT, &buf)
                 .unwrap();
         }
 
@@ -240,11 +254,11 @@ mod test {
         };
         let buf = serialize(&query).unwrap();
         let res = prov
-            .handle_call("testing-actor", eventstreams::OP_QUERY_STREAM, &buf)
+            .handle_call("testing-actor", OP_QUERY_STREAM, &buf)
             .unwrap();
-        let query_res = deserialize::<StreamResults>(res.as_ref()).unwrap();
-        assert_eq!(6, query_res.events.len());
-        assert_eq!(query_res.events[0].values["scruffy-looking"], "nerf-herder");
+        let query_res = deserialize::<Vec<Event>>(res.as_ref()).unwrap();
+        assert_eq!(6, query_res.len());
+        assert_eq!(query_res[0].values["scruffy-looking"], "nerf-herder");
         let _res: bool = c.get_connection().unwrap().del("my-stream").unwrap(); // make sure we start with an empty stream
     }
 

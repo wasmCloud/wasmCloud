@@ -1,15 +1,15 @@
 [package]
-name = "wascc-streams-redis"
-version = "0.3.0"
-authors = ["Kevin Hoffman <alothien@gmail.com>"]
+name = "wasmcloud-streams-redis"
+version = "0.4.0"
+authors = ["wasmCloud Team"]
 edition = "2018"
-homepage = "https://wascc.dev"
-repository = "https://github.com/wascc/redis-streams"
-description = "Redis Event Streams capability provider for the waSCC host runtime"
+homepage = "https://wasmcloud.dev"
+repository = "https://github.com/wasmcloud/capability-providers"
+description = "Redis Event Streams capability provider for the wasmCloud host runtime"
 license = "Apache-2.0"
 documentation = "https://docs.rs/wascc-host"
 readme = "README.md"
-keywords = ["webassembly", "events", "stream", "wascc", "redis"]
+keywords = ["webassembly", "events", "stream", "wasmcloud", "redis"]
 categories = ["wasm", "api-bindings", "database"]
 
 [lib]
@@ -20,7 +20,9 @@ crate-type = ["cdylib", "rlib"]
 static_plugin = []
 
 [dependencies]
-wascc-codec = "0.7.0"
+wasmcloud-provider-core = "0.1.0"
+wasmcloud-actor-eventstreams = "0.1.0"
+wasmcloud-actor-core = "0.2.2"
 log = "0.4.8"
-env_logger = "0.7.1"
+env_logger = "0.8.3"
 redis-streams = "0.1.1"
