@@ -1,7 +1,7 @@
-use std::fs::File;
 use std::io::prelude::*;
+use std::{fs::File, path::PathBuf};
 use structopt::{clap::AppSettings, StructOpt};
-use wasmcloud_host::{HostBuilder, Result};
+use wasmcloud_host::{HostBuilder, HostManifest, Result};
 
 #[macro_use]
 extern crate log;
@@ -70,6 +70,10 @@ struct Cli {
     /// Allows the use of HTTP registry connections to these registries
     #[structopt(long = "allowed-insecure")]
     allowed_insecure: Vec<String>,
+
+    /// Specifies a manifest file to apply to the host once started
+    #[structopt(long = "manifest", short = "m", parse(from_os_str))]
+    manifest: Option<PathBuf>,
 }
 
 #[actix_rt::main]
@@ -81,6 +85,13 @@ async fn main() -> Result<()> {
     ))
     .format_module_path(false)
     .try_init();
+
+    if let Some(ref pb) = cli.manifest {
+        if !pb.exists() {
+            error!("Specified manifest file {:?} could not be opened", pb);
+            return Err("Manifest file could not be opened.".into());
+        }
+    }
 
     let nats_url = &format!("{}:{}", cli.rpc_host, cli.rpc_port);
     let nc_rpc = nats_connection(nats_url, cli.rpc_jwt, cli.rpc_seed, cli.rpc_credsfile).await?;
@@ -112,6 +123,12 @@ async fn main() -> Result<()> {
     let host = host_builder.build();
     match host.start().await {
         Ok(_) => {
+            if let Some(pb) = cli.manifest {
+                if pb.exists() {
+                    let hm = HostManifest::from_path(pb, true)?;
+                    host.apply_manifest(hm).await?;
+                }
+            }
             actix_rt::signal::ctrl_c().await.unwrap();
             info!("Ctrl-C received, shutting down");
             host.stop().await;

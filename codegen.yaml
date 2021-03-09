@@ -1,5 +1,0 @@
-schema: ../schemas/http.widl
-generates:
-  tests/generated/http.rs:
-    package: widl-codegen/language/rust
-    visitorClass: ModuleVisitor

@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud"
-version = "0.15.2"
+version = "0.15.3"
 authors = ["wasmcloud Team"]
 edition = "2018"
 default-run = "wasmcloud"
@@ -76,7 +76,3 @@ members = [
 [[bin]]
 name = "wasmcloud"
 path = "src/wasmcloud.rs"
-
-[[bin]]
-name = "wasmcloud-lite"
-path = "src/wasmcloud-lite.rs"
