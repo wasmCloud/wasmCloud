@@ -1,33 +1,27 @@
-#[macro_use]
-extern crate wascc_codec as codec;
-
-extern crate wasmcloud_actor_core as actorcore;
-extern crate wasmcloud_actor_messaging as messaging;
+use actorcore::{CapabilityConfiguration, HealthCheckResponse};
+use log::{info, trace};
+use messaging::{BrokerMessage, RequestArgs};
+use std::collections::HashMap;
+use std::error::Error;
+use std::sync::Arc;
+use std::sync::RwLock;
+use wasmcloud_actor_core as actorcore;
+use wasmcloud_actor_messaging as messaging;
+use wasmcloud_provider_core::{
+    capabilities::{CapabilityProvider, Dispatcher, NullDispatcher},
+    capability_provider,
+    core::{OP_BIND_ACTOR, OP_HEALTH_REQUEST, OP_REMOVE_ACTOR},
+    deserialize, serialize,
+};
 
 mod natsprov;
 
 #[allow(unused)] // used by the Makefile
 const CAPABILITY_ID: &str = "wasmcloud:messaging";
 
-#[macro_use]
-extern crate log;
-
-use codec::capabilities::{CapabilityProvider, Dispatcher, NullDispatcher};
-
-pub const OP_DELIVER_MESSAGE: &str = "DeliverMessage";
+pub use messaging::OP_HANDLE_MESSAGE;
 pub const OP_PUBLISH_MESSAGE: &str = "Publish";
 pub const OP_PERFORM_REQUEST: &str = "Request";
-
-use codec::core::{OP_BIND_ACTOR, OP_HEALTH_REQUEST, OP_REMOVE_ACTOR};
-use messaging::{BrokerMessage, RequestArgs};
-
-use actorcore::{CapabilityConfiguration, HealthCheckResponse};
-use std::collections::HashMap;
-use wascc_codec::{deserialize, serialize};
-
-use std::error::Error;
-use std::sync::Arc;
-use std::sync::RwLock;
 
 #[cfg(not(feature = "static_plugin"))]
 capability_provider!(NatsProvider, NatsProvider::new);
@@ -41,10 +35,7 @@ pub struct NatsProvider {
 
 impl Default for NatsProvider {
     fn default() -> Self {
-        match env_logger::try_init() {
-            Ok(_) => {}
-            Err(_) => {}
-        };
+        if env_logger::try_init().is_err() {}
 
         NatsProvider {
             dispatcher: Arc::new(RwLock::new(Box::new(NullDispatcher::new()))),

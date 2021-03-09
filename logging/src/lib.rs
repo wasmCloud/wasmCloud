@@ -12,17 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#[macro_use]
-extern crate wascc_codec as codec;
-#[macro_use]
-extern crate log;
+use log::{debug, error, info, trace, warn};
 
-use codec::capabilities::{CapabilityProvider, Dispatcher, NullDispatcher};
-use codec::core::{OP_BIND_ACTOR, OP_REMOVE_ACTOR};
 use std::error::Error;
 use std::sync::{Arc, RwLock};
-use wasmcloud_actor_core::deserialize;
 use wasmcloud_actor_logging::{WriteLogArgs, OP_LOG};
+use wasmcloud_provider_core::{
+    capabilities::{CapabilityProvider, Dispatcher, NullDispatcher},
+    capability_provider,
+    core::{OP_BIND_ACTOR, OP_REMOVE_ACTOR},
+    deserialize,
+};
 
 #[cfg(not(feature = "static_plugin"))]
 capability_provider!(LoggingProvider, LoggingProvider::new);
@@ -45,10 +45,7 @@ pub struct LoggingProvider {
 
 impl Default for LoggingProvider {
     fn default() -> Self {
-        match env_logger::try_init() {
-            Ok(_) => {}
-            Err(_) => {}
-        }
+        if env_logger::try_init().is_err() {}
 
         LoggingProvider {
             dispatcher: Arc::new(RwLock::new(Box::new(NullDispatcher::new()))),

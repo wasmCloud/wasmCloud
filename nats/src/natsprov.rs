@@ -1,15 +1,14 @@
 use crate::messaging::{BrokerMessage, PublishResponse, RequestArgs};
+use crate::OP_HANDLE_MESSAGE;
+use log::{error, info, trace};
+use nats::Connection;
 use std::error::Error;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::{collections::HashMap, time::Duration};
-use wascc_codec::capabilities::Dispatcher;
-
-use crate::OP_DELIVER_MESSAGE;
-use nats::Connection;
-use wascc_codec::serialize;
-
 use wascap::prelude::KeyPair;
+use wasmcloud_provider_core::capabilities::Dispatcher;
+use wasmcloud_provider_core::serialize;
 
 const ENV_NATS_SUBSCRIPTION: &str = "SUBSCRIPTION";
 const ENV_NATS_URL: &str = "URL";
@@ -28,7 +27,7 @@ pub(crate) fn publish(
         &msg.body.len()
     );
 
-    let res = if msg.reply_to.len() > 0 {
+    let res = if !msg.reply_to.is_empty() {
         client.publish_with_reply_or_headers(&msg.subject, Some(&msg.reply_to), None, &msg.body)
     } else {
         client.publish(&msg.subject, &msg.body)
@@ -102,7 +101,7 @@ fn create_subscription(
                     let buf = serialize(&dm).unwrap();
 
                     let d = dispatcher.read().unwrap();
-                    if let Err(e) = d.dispatch(&actor, OP_DELIVER_MESSAGE, &buf) {
+                    if let Err(e) = d.dispatch(&actor, OP_HANDLE_MESSAGE, &buf) {
                         error!("Dispatch failed: {}", e);
                     }
                     Ok(())
@@ -115,7 +114,7 @@ fn create_subscription(
                 let dm = delivermessage_for_natsmessage(&msg);
                 let buf = serialize(&dm).unwrap();
                 let d = dispatcher.read().unwrap();
-                if let Err(e) = d.dispatch(&actor, OP_DELIVER_MESSAGE, &buf) {
+                if let Err(e) = d.dispatch(&actor, OP_HANDLE_MESSAGE, &buf) {
                     error!("Dispatch failed: {}", e);
                 }
                 Ok(())
@@ -151,7 +150,7 @@ fn get_connection(
             .clone()
             .unwrap_or(&"".to_string())
             .to_string();
-        if jwt.len() > 0 {
+        if !jwt.is_empty() {
             let seed = values
                 .get(ENV_NATS_CLIENT_SEED)
                 .clone()
