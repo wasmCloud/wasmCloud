@@ -70,5 +70,5 @@ This repo contains `Actions` that allow for individual releases of capability pr
 git checkout origin/main
 git pull origin main
 git tag -a http-client-v1.2.3 -m "http-client release v1.2.3" # Tag must be in the form of <provider>-vX.Y.Z
-git push origin --tags # Kicks off the release action
+git push origin http-client-v1.2.3 # Kicks off the release action
 ```
