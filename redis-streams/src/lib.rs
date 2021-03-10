@@ -9,8 +9,8 @@ extern crate log;
 use ::redis_streams::{
     Client, Connection, ErrorKind, RedisError, RedisResult, StreamCommands, Value,
 };
-use actor::CapabilityConfiguration;
-use codec::core::{OP_BIND_ACTOR, OP_REMOVE_ACTOR};
+use actor::{CapabilityConfiguration, HealthCheckResponse};
+use codec::core::{OP_BIND_ACTOR, OP_HEALTH_REQUEST, OP_REMOVE_ACTOR};
 use codec::{
     capabilities::{CapabilityProvider, Dispatcher, NullDispatcher},
     core::SYSTEM_ACTOR,
@@ -65,6 +65,10 @@ impl RedisStreamsProvider {
         &self,
         config: CapabilityConfiguration,
     ) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
+        if self.clients.read().unwrap().contains_key(&config.module) {
+            return Ok(vec![]);
+        }
+
         let c = initialize_client(config.clone())?;
 
         self.clients.write().unwrap().insert(config.module, c);
@@ -173,6 +177,10 @@ impl CapabilityProvider for RedisStreamsProvider {
         match op {
             OP_BIND_ACTOR if actor == SYSTEM_ACTOR => self.configure(deserialize(msg)?),
             OP_REMOVE_ACTOR if actor == SYSTEM_ACTOR => self.deconfigure(actor),
+            OP_HEALTH_REQUEST if actor == SYSTEM_ACTOR => Ok(serialize(HealthCheckResponse {
+                healthy: true,
+                message: "".to_string(),
+            })?),
             OP_WRITE_EVENT => self.write_event(actor, deserialize(msg)?),
             OP_QUERY_STREAM => self.query_stream(actor, deserialize(msg)?),
             _ => Err("bad dispatch".into()),
