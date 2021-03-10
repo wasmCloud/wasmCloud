@@ -91,10 +91,10 @@ impl RedisStreamsProvider {
     fn write_event(
         &self,
         actor: &str,
-        event: Event,
+        args: WriteEventArgs,
     ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
-        let data = map_to_tuples(event.values);
-        let ack = match self.actor_con(actor)?.xadd(event.stream_id, "*", &data) {
+        let data = map_to_tuples(args.values);
+        let ack = match self.actor_con(actor)?.xadd(args.stream_id, "*", &data) {
             Ok(res) => EventAck {
                 error: None,
                 event_id: Some(res),
@@ -250,8 +250,7 @@ mod test {
         prov.configure(config).unwrap();
 
         for _ in 0..6 {
-            let ev = Event {
-                event_id: "".to_string(),
+            let ev = WriteEventArgs {
                 stream_id: "my-stream".to_string(),
                 values: gen_values(),
             };
