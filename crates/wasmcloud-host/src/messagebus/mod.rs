@@ -69,7 +69,7 @@ where
 {
     fn handle(self, _: &mut A::Context, tx: Option<actix::dev::OneshotSender<Self>>) {
         if let Some(tx) = tx {
-            if let Err(_) = tx.send(self) {
+            if tx.send(self).is_err() {
                 error!("send error (QueryResponse)");
             }
         }
@@ -83,7 +83,7 @@ where
 {
     fn handle(self, _: &mut A::Context, tx: Option<actix::dev::OneshotSender<Self>>) {
         if let Some(tx) = tx {
-            if let Err(_) = tx.send(self) {
+            if tx.send(self).is_err() {
                 error!("send error (LinksResponse)");
             }
         }
@@ -229,7 +229,7 @@ where
 {
     fn handle(self, _: &mut A::Context, tx: Option<actix::dev::OneshotSender<Self>>) {
         if let Some(tx) = tx {
-            if let Err(_) = tx.send(self) {
+            if tx.send(self).is_err() {
                 error!("send error (FindLinksResponse)");
             }
         }
@@ -243,7 +243,7 @@ where
 {
     fn handle(self, _: &mut A::Context, tx: Option<actix::dev::OneshotSender<Self>>) {
         if let Some(tx) = tx {
-            if let Err(_) = tx.send(self) {
+            if tx.send(self).is_err() {
                 error!("send error (ClaimsResponse)");
             }
         }

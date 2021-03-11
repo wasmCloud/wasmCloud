@@ -52,7 +52,7 @@ impl ExtrasCapabilityProvider {
             sequence_number: 0,
         };
 
-        Ok(serialize(&result)?)
+        serialize(&result)
     }
 
     fn generate_random(
@@ -79,7 +79,7 @@ impl ExtrasCapabilityProvider {
             GeneratorResult::default()
         };
 
-        Ok(serialize(result)?)
+        serialize(result)
     }
 
     fn generate_sequence(
@@ -97,7 +97,7 @@ impl ExtrasCapabilityProvider {
             random_number: 0,
             guid: None,
         };
-        Ok(serialize(&result)?)
+        serialize(&result)
     }
 }
 
@@ -141,7 +141,7 @@ fn healthy() -> Result<Vec<u8>, Box<dyn std::error::Error + Sync + Send>> {
         message: "".to_string(),
         healthy: true,
     };
-    Ok(serialize(hr)?)
+    serialize(hr)
 }
 
 pub(crate) fn get_claims() -> Claims<wascap::jwt::CapabilityProvider> {

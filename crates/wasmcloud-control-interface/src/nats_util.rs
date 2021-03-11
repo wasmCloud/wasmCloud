@@ -49,7 +49,7 @@ impl SubscriptionStream {
 
     /// Wait for next subscription result and attempt to deserialize
     pub async fn next<T: serde::de::DeserializeOwned>(&mut self) -> SubscriptionNextResult<T> {
-        match tokio::time::timeout(self.timeout.clone(), &mut self.sub.next()).await {
+        match tokio::time::timeout(self.timeout, &mut self.sub.next()).await {
             Err(_) => SubscriptionNextResult::Timeout,
             Ok(Some(msg)) => match deserialize::<T>(&msg.data) {
                 Ok(item) => SubscriptionNextResult::Item(item),
