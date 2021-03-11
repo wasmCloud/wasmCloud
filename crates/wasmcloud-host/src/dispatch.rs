@@ -6,7 +6,7 @@ use crate::{
 };
 extern crate wasmcloud_provider_core as codec;
 use crate::{Result, SYSTEM_ACTOR};
-use actix::dev::{MessageResponse, ResponseChannel};
+use actix::dev::MessageResponse;
 use actix::prelude::*;
 use codec::capabilities::Dispatcher;
 use data_encoding::HEXUPPER;
@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::error::Error;
 use std::io::Read;
+use std::string::ToString;
 use uuid::Uuid;
 use wascap::prelude::{Claims, KeyPair};
 
@@ -219,9 +220,14 @@ where
     A: Actor,
     M: Message<Result = Invocation>,
 {
-    fn handle<R: ResponseChannel<M>>(self, _: &mut A::Context, tx: Option<R>) {
+    fn handle(self, _: &mut A::Context, tx: Option<actix::dev::OneshotSender<Self>>) {
         if let Some(tx) = tx {
-            tx.send(self);
+            if let Err(e) = tx.send(self) {
+                error!(
+                    "send error (call id:{} target:{:?} op:{})",
+                    &e.id, &e.target, &e.operation
+                );
+            }
         }
     }
 }
@@ -261,9 +267,14 @@ where
     A: Actor,
     M: Message<Result = InvocationResponse>,
 {
-    fn handle<R: ResponseChannel<M>>(self, _: &mut A::Context, tx: Option<R>) {
+    fn handle(self, _: &mut A::Context, tx: Option<actix::dev::OneshotSender<Self>>) {
         if let Some(tx) = tx {
-            tx.send(self);
+            if let Err(e) = tx.send(self) {
+                error!(
+                    "send error (response) error:{}",
+                    &e.error.unwrap_or_default(),
+                );
+            }
         }
     }
 }

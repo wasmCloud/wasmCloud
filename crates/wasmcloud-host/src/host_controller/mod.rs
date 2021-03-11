@@ -15,7 +15,7 @@ pub(crate) const CORELABEL_OS: &str = "hostcore.os";
 pub(crate) const CORELABEL_OSFAMILY: &str = "hostcore.osfamily";
 pub(crate) const RESTRICTED_LABELS: [&str; 3] = [CORELABEL_OSFAMILY, CORELABEL_ARCH, CORELABEL_OS];
 
-use actix::dev::{MessageResponse, ResponseChannel};
+use actix::dev::MessageResponse;
 pub(crate) use hc_actor::detect_core_host_labels;
 pub(crate) use hc_actor::HostController;
 
@@ -144,9 +144,11 @@ where
     A: Actor,
     M: Message<Result = HostInventory>,
 {
-    fn handle<R: ResponseChannel<M>>(self, _: &mut A::Context, tx: Option<R>) {
+    fn handle(self, _: &mut A::Context, tx: Option<actix::dev::OneshotSender<Self>>) {
         if let Some(tx) = tx {
-            tx.send(self);
+            if let Err(e) = tx.send(self) {
+                error!("send error (HostInventory host:{})", &e.host_id);
+            }
         }
     }
 }

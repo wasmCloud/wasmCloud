@@ -9,6 +9,7 @@ pub fn new(kind: ErrorKind) -> Box<dyn ::std::error::Error + Sync + Send> {
     Box::new(Error(Box::new(kind)))
 }
 
+#[allow(dead_code)] // do not warn for unused errors
 #[derive(Debug)]
 pub enum ErrorKind {
     Wapc(wapc::errors::Error),
@@ -23,6 +24,7 @@ pub enum ErrorKind {
     Serialization(String),
 }
 
+#[allow(dead_code)]
 impl Error {
     pub fn kind(&self) -> &ErrorKind {
         &self.0

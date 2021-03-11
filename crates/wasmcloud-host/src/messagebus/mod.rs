@@ -1,7 +1,7 @@
 use crate::auth::Authorizer;
 use crate::Result;
 use crate::{Invocation, WasmCloudEntity};
-use actix::dev::{MessageResponse, ResponseChannel};
+use actix::dev::MessageResponse;
 use actix::prelude::*;
 use std::collections::HashMap;
 use wascap::prelude::{Claims, KeyPair};
@@ -67,9 +67,11 @@ where
     A: Actor,
     M: Message<Result = QueryResponse>,
 {
-    fn handle<R: ResponseChannel<M>>(self, _: &mut A::Context, tx: Option<R>) {
+    fn handle(self, _: &mut A::Context, tx: Option<actix::dev::OneshotSender<Self>>) {
         if let Some(tx) = tx {
-            tx.send(self);
+            if let Err(_) = tx.send(self) {
+                error!("send error (QueryResponse)");
+            }
         }
     }
 }
@@ -79,9 +81,11 @@ where
     A: Actor,
     M: Message<Result = LinksResponse>,
 {
-    fn handle<R: ResponseChannel<M>>(self, _: &mut A::Context, tx: Option<R>) {
+    fn handle(self, _: &mut A::Context, tx: Option<actix::dev::OneshotSender<Self>>) {
         if let Some(tx) = tx {
-            tx.send(self);
+            if let Err(_) = tx.send(self) {
+                error!("send error (LinksResponse)");
+            }
         }
     }
 }
@@ -223,9 +227,11 @@ where
     A: Actor,
     M: Message<Result = FindLinksResponse>,
 {
-    fn handle<R: ResponseChannel<M>>(self, _: &mut A::Context, tx: Option<R>) {
+    fn handle(self, _: &mut A::Context, tx: Option<actix::dev::OneshotSender<Self>>) {
         if let Some(tx) = tx {
-            tx.send(self);
+            if let Err(_) = tx.send(self) {
+                error!("send error (FindLinksResponse)");
+            }
         }
     }
 }
@@ -235,9 +241,11 @@ where
     A: Actor,
     M: Message<Result = ClaimsResponse>,
 {
-    fn handle<R: ResponseChannel<M>>(self, _: &mut A::Context, tx: Option<R>) {
+    fn handle(self, _: &mut A::Context, tx: Option<actix::dev::OneshotSender<Self>>) {
         if let Some(tx) = tx {
-            tx.send(self);
+            if let Err(_) = tx.send(self) {
+                error!("send error (ClaimsResponse)");
+            }
         }
     }
 }

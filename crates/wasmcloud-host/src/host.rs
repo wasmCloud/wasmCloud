@@ -222,8 +222,10 @@ impl Host {
     /// to provide some form of parking or waiting (e.g. wait for a Ctrl-C signal).
     pub async fn start(&self) -> Result<()> {
         let kp = KeyPair::new_server();
+        eprintln!("Host starting ...");
 
         let mb = MessageBus::from_hostlocal_registry(&kp.public_key());
+        eprintln!("Host initialized message bus ...");
         let init = crate::messagebus::Initialize {
             nc: self.rpc_client.clone(),
             namespace: Some(self.namespace.to_string()),
@@ -232,6 +234,7 @@ impl Host {
             rpc_timeout: self.rpc_timeout,
         };
         mb.send(init).await?;
+        eprintln!("Host sent init...");
 
         let hc = HostController::from_hostlocal_registry(&kp.public_key());
         hc.send(crate::host_controller::Initialize {
@@ -247,6 +250,7 @@ impl Host {
         .await?;
 
         *self.id.borrow_mut() = kp.public_key();
+        eprintln!("Host controller up ...");
 
         // Start control plane
         let cp = ControlInterface::from_hostlocal_registry(&kp.public_key());
@@ -271,6 +275,7 @@ impl Host {
 
         *self.kp.borrow_mut() = Some(kp);
 
+        eprintln!("Host returning from start");
         Ok(())
     }
 

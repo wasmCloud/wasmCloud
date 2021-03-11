@@ -59,6 +59,7 @@ impl LatticeCacheClient {
     /// Check if a given OCI mapping is present without actually looking up the value. This
     /// function will return false if any errors happen while communicating with the message
     /// bus.
+    #[allow(dead_code)]
     pub async fn contains_oci_mapping(&self, oci_ref: &str) -> bool {
         let key = prefix("ocis");
         let args = SetQueryArgs { key };
@@ -144,6 +145,7 @@ impl LatticeCacheClient {
         }
     }
 
+    #[allow(dead_code)]
     pub async fn remove_oci_mapping(&self, oci_ref: &str) -> Result<Option<String>> {
         if let Some(s) = self.lookup_oci_mapping(oci_ref).await? {
             self.remove_oci(oci_ref).await?;
@@ -382,6 +384,7 @@ impl LatticeCacheClient {
     }
 
     /// Removes an OCI mapping from the cache
+    #[allow(dead_code)]
     async fn remove_oci(&self, oci_ref: &str) -> Result<()> {
         let key = prefix("ocis");
         let args = SetRemoveArgs {

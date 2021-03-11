@@ -1,13 +1,12 @@
 pub mod broker;
 mod generated;
 mod inv;
-
+mod nats_util;
 pub use crate::generated::ctliface::*;
-use actix_rt::time::delay_for;
-use futures::stream::StreamExt;
-use futures::TryStreamExt;
 use inv::WasccEntity;
 pub use inv::{Invocation, InvocationResponse};
+use log::error;
+use nats_util::{SubscriptionNextResult, SubscriptionStream};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
@@ -36,14 +35,19 @@ impl Client {
     /// Queries the lattice for all responsive hosts, waiting for the full period specified by _timeout_.
     pub async fn get_hosts(&self, timeout: Duration) -> Result<Vec<Host>> {
         let subject = broker::queries::hosts(&self.nsprefix);
-
-        self.nc
-            .request_multi(&subject, vec![])
-            .await?
-            .map(|m| deserialize::<Host>(&m.data))
-            .take_until(delay_for(timeout))
-            .try_collect()
-            .await
+        let sub = self.nc.request_multi(&subject, vec![]).await?;
+        let mut sub = SubscriptionStream::new(sub, timeout);
+        let mut hosts = Vec::new();
+        loop {
+            match sub.next().await {
+                SubscriptionNextResult::Item(host) => hosts.push(host),
+                SubscriptionNextResult::Cancelled | SubscriptionNextResult::Timeout => break,
+                SubscriptionNextResult::Err(s) => {
+                    error!("corrupt message received in host query: {}", s);
+                }
+            }
+        }
+        Ok(hosts)
     }
 
     /// Performs an actor auction within the lattice, publishing a set of constraints and the metadata for the actor
@@ -61,13 +65,19 @@ impl Client {
             actor_ref: actor_ref.to_string(),
             constraints,
         })?;
-        self.nc
-            .request_multi(&subject, bytes)
-            .await?
-            .map(|m| deserialize::<ActorAuctionAck>(&m.data))
-            .take_until(delay_for(timeout))
-            .try_collect()
-            .await
+        let mut actors = Vec::new();
+        let sub = self.nc.request_multi(&subject, bytes).await?;
+        let mut sub = SubscriptionStream::new(sub, timeout);
+        loop {
+            match sub.next().await {
+                SubscriptionNextResult::Item(actor) => actors.push(actor),
+                SubscriptionNextResult::Cancelled | SubscriptionNextResult::Timeout => break,
+                SubscriptionNextResult::Err(s) => {
+                    error!("corrupt message received in actor auction: {}", s);
+                }
+            }
+        }
+        Ok(actors)
     }
 
     /// Performs a provider auction within the lattice, publishing a set of constraints and the metadata for the provider
@@ -87,13 +97,19 @@ impl Client {
             link_name: link_name.to_string(),
             constraints,
         })?;
-        self.nc
-            .request_multi(&subject, bytes)
-            .await?
-            .map(|m| deserialize::<ProviderAuctionAck>(&m.data))
-            .take_until(delay_for(timeout))
-            .try_collect()
-            .await
+        let mut providers = Vec::new();
+        let sub = self.nc.request_multi(&subject, bytes).await?;
+        let mut sub = SubscriptionStream::new(sub, timeout);
+        loop {
+            match sub.next().await {
+                SubscriptionNextResult::Item(provider) => providers.push(provider),
+                SubscriptionNextResult::Cancelled | SubscriptionNextResult::Timeout => break,
+                SubscriptionNextResult::Err(s) => {
+                    error!("corrupt message received in provider auction: {}", s);
+                }
+            }
+        }
+        Ok(providers)
     }
 
     /// Retrieves the contents of a running host
