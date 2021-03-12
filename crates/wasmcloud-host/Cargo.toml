@@ -36,7 +36,6 @@ data-encoding = "2.3.1"
 futures = "0.3.6"
 crossbeam-channel = "0.5.0"
 rmp-serde = "0.15.0"
-serde_bytes = "0.11.5"
 provider-archive ="0.4.0"
 lazy_static = "1.4.0"
 wasmcloud-provider-core = { path = "../wasmcloud-provider-core", version="0.1.1" }

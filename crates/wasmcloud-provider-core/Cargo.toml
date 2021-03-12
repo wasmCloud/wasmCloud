@@ -16,14 +16,11 @@ maintenance = { status = "active"}
 
 [dependencies]
 serde = "1.0.115"
-serde_json = "1.0.57"
 serde_derive = "1.0.115"
-serde_bytes = "0.11.5"
 rmp-serde = "0.15.4"
 
 [dev-dependencies]
 structopt = "0.3.17"
-serde_json = "1.0.57"
 base64 = "0.13.0"
 
 # This is where the health check request/response types come from,
