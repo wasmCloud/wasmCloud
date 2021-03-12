@@ -10,7 +10,7 @@ pub async fn empty_host_has_two_providers() -> Result<()> {
     ::std::env::remove_var("KVCACHE_NATS_URL");
     let h = HostBuilder::new().build();
     h.start().await?;
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    actix_rt::time::sleep(Duration::from_millis(300)).await;
 
     let prov = h.get_providers().await?;
     assert_eq!(2, prov.len());
@@ -28,7 +28,7 @@ pub async fn start_and_stop_actor() -> Result<()> {
     await_actor_count(&h, 1, Duration::from_millis(50), 3).await?;
 
     h.stop_actor(&actor_id).await?;
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    actix_rt::time::sleep(Duration::from_millis(500)).await;
     assert_eq!(0, h.get_actors().await?.len());
 
     let request = Request {
@@ -83,7 +83,7 @@ pub async fn kvcounter_basic() -> Result<()> {
 
     let h = gen_kvcounter_host(9999, None, None).await?;
     println!("Got host");
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    actix_rt::time::sleep(Duration::from_millis(50)).await;
 
     let key = uuid::Uuid::new_v4().to_string();
     let rkey = format!(":{}", key); // the kv wasm logic does a replace on '/' with ':'
@@ -111,7 +111,7 @@ pub async fn actor_to_actor_call_alias() -> Result<()> {
     let h = HostBuilder::new().with_namespace("actor2actor").build();
     h.start().await?;
     // give host time to start
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    actix_rt::time::sleep(Duration::from_secs(3)).await;
 
     let pinger = Actor::from_file("./tests/modules/pinger.wasm")?;
     let ponger = Actor::from_file("./tests/modules/ponger.wasm")?;
@@ -142,7 +142,7 @@ pub async fn actor_to_actor_call_alias() -> Result<()> {
     )
     .await?;
     // give the web server enough time to fire up
-    tokio::time::sleep(Duration::from_millis(150)).await;
+    actix_rt::time::sleep(Duration::from_millis(150)).await;
 
     let resp = reqwest::get("http://localhost:5091/foobar").await?;
     assert!(resp.status().is_success());
@@ -156,7 +156,7 @@ pub async fn kvcounter_start_stop() -> Result<()> {
     ::std::env::remove_var("KVCACHE_NATS_URL");
     use redis::Commands;
     let h = gen_kvcounter_host(9997, None, None).await?;
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    actix_rt::time::sleep(Duration::from_millis(50)).await;
 
     let key = uuid::Uuid::new_v4().to_string();
     let rkey = format!(":{}", key); // the kv wasm logic does a replace on '/' with ':'
@@ -167,7 +167,7 @@ pub async fn kvcounter_start_stop() -> Result<()> {
 
     h.stop_actor("MCFMFDWFHGKELOXPCNCDXKK5OFLHBVEWRAOXR5JSQUD2TOFRE3DFPM7E")
         .await?;
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    actix_rt::time::sleep(Duration::from_millis(100)).await;
 
     let kvcounter = Actor::from_file("./tests/modules/kvcounter.wasm")?;
     h.start_actor(kvcounter).await?;
@@ -181,7 +181,7 @@ pub async fn kvcounter_start_stop() -> Result<()> {
         None,
     )
     .await?;
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    actix_rt::time::sleep(Duration::from_millis(200)).await;
 
     await_provider_count(&h, 3, Duration::from_millis(50), 4).await?;
 
@@ -189,7 +189,7 @@ pub async fn kvcounter_start_stop() -> Result<()> {
     h.start_native_capability(websrv).await?;
     await_provider_count(&h, 4, Duration::from_millis(50), 3).await?; // 2 providers plus wascc:extras + kvcache
                                                                       // give web server enough time to start
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    actix_rt::time::sleep(Duration::from_millis(300)).await;
 
     let resp2 = reqwest::get(&url).await?;
     assert!(resp2.status().is_success());
@@ -254,7 +254,7 @@ pub async fn kvcounter_link_first() -> Result<()> {
     h.start_native_capability(redis).await?;
     h.start_native_capability(websrv).await?;
     await_provider_count(&h, 4, Duration::from_millis(50), 3).await?; // 2 providers plus wascc:extras
-    tokio::time::sleep(Duration::from_millis(150)).await;
+    actix_rt::time::sleep(Duration::from_millis(150)).await;
 
     let key = uuid::Uuid::new_v4().to_string();
     let rkey = format!(":{}", key); // the kv wasm logic does a replace on '/' with ':'
@@ -263,13 +263,13 @@ pub async fn kvcounter_link_first() -> Result<()> {
     let resp = reqwest::get(&url).await?;
     assert!(resp.status().is_success());
     assert_eq!(resp.text().await?, "{\"counter\":1}");
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    actix_rt::time::sleep(Duration::from_millis(50)).await;
 
     let client = redis::Client::open("redis://127.0.0.1/")?;
     let mut con = client.get_connection()?;
     let _: () = con.del(&rkey)?;
     h.stop().await;
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    actix_rt::time::sleep(Duration::from_millis(50)).await;
     Ok(())
 }
 
@@ -312,7 +312,7 @@ pub async fn extras_provider() -> Result<()> {
     )
     .await?;
     // give web server enough time to start
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    actix_rt::time::sleep(Duration::from_millis(500)).await;
 
     // Query extras actor
     #[derive(Debug, serde::Deserialize)]

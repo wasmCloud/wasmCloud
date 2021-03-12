@@ -37,7 +37,7 @@ impl SubscriptionStream {
         &mut self,
         timeout: Duration,
     ) -> SubscriptionNextResult<T> {
-        match tokio::time::timeout(timeout, &mut self.sub.next()).await {
+        match actix_rt::time::timeout(timeout, &mut self.sub.next()).await {
             Err(_) => SubscriptionNextResult::Timeout,
             Ok(Some(msg)) => match deserialize::<T>(&msg.data) {
                 Ok(item) => SubscriptionNextResult::Item(item),

@@ -12,7 +12,7 @@ use wasmcloud_host::{Host, Result};
 pub(crate) async fn distributed_echo() -> Result<()> {
     // Set the default kvcache provider to enable NATS-based replication
     // by supplying a NATS URL.
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    actix_rt::time::sleep(Duration::from_millis(500)).await;
     ::std::env::set_var("KVCACHE_NATS_URL", "0.0.0.0:4222");
 
     let web_port = 32400_u32;
@@ -47,12 +47,12 @@ pub(crate) async fn distributed_echo() -> Result<()> {
     // it should request a replay of cache events and therefore get the existing claims, links,
     // etc.
     host_b.start().await?;
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    actix_rt::time::sleep(Duration::from_millis(500)).await;
 
     host_b.start_native_capability(websrv).await?;
     // always have to remember that "extras" and kvcache is in the provider list.
     await_provider_count(&host_b, 3, Duration::from_millis(500), 3).await?;
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    actix_rt::time::sleep(Duration::from_millis(500)).await;
 
     let mut webvalues: HashMap<String, String> = HashMap::new();
     webvalues.insert("PORT".to_string(), format!("{}", web_port));
@@ -66,7 +66,7 @@ pub(crate) async fn distributed_echo() -> Result<()> {
         )
         .await?;
 
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    actix_rt::time::sleep(Duration::from_millis(500)).await;
 
     let url = format!("http://localhost:{}/foo/bar", web_port);
     let resp = reqwest::get(&url).await?;
@@ -76,7 +76,7 @@ pub(crate) async fn distributed_echo() -> Result<()> {
 
     host_a.stop().await;
     host_b.stop().await;
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    actix_rt::time::sleep(Duration::from_millis(500)).await;
     Ok(())
 }
 
@@ -138,7 +138,7 @@ pub(crate) async fn link_on_third_host() -> Result<()> {
         .await?;
 
     // let the HTTP server spin up
-    tokio::time::sleep(Duration::from_millis(150)).await;
+    actix_rt::time::sleep(Duration::from_millis(150)).await;
 
     let url = format!("http://localhost:{}/foo/bar", web_port);
     let resp = reqwest::get(&url).await?;
@@ -184,7 +184,7 @@ pub(crate) async fn redis_kvcache() -> Result<()> {
 
     host_b.start().await?;
 
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    actix_rt::time::sleep(Duration::from_secs(2)).await;
 
     let echo = Actor::from_file("./tests/modules/echo.wasm")?;
     let actor_id = echo.public_key();
@@ -207,7 +207,7 @@ pub(crate) async fn redis_kvcache() -> Result<()> {
         .build();
 
     host_c.start().await?;
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    actix_rt::time::sleep(Duration::from_secs(2)).await;
     println!("3 hosts started");
 
     let mut webvalues: HashMap<String, String> = HashMap::new();
@@ -223,7 +223,7 @@ pub(crate) async fn redis_kvcache() -> Result<()> {
         .await?;
     println!("set link (activating web server)");
     // let the HTTP server spin up
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    actix_rt::time::sleep(Duration::from_secs(1)).await;
 
     let url = format!("http://localhost:{}/foo/bar", web_port);
     let resp = reqwest::get(&url).await?;
@@ -234,7 +234,7 @@ pub(crate) async fn redis_kvcache() -> Result<()> {
     host_a.stop().await;
     host_b.stop().await;
     host_c.stop().await;
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    actix_rt::time::sleep(Duration::from_millis(500)).await;
     redis::cmd("FLUSHDB").execute(&mut con);
     Ok(())
 }
@@ -297,7 +297,7 @@ pub(crate) async fn scaled_kvcounter() -> Result<()> {
         )
         .await?;
 
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    actix_rt::time::sleep(Duration::from_secs(1)).await;
     host_e
         .set_link(
             &a_id,
@@ -309,7 +309,7 @@ pub(crate) async fn scaled_kvcounter() -> Result<()> {
         .await?;
 
     // let all these hosts stabilize
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    actix_rt::time::sleep(Duration::from_secs(3)).await;
 
     let key = uuid::Uuid::new_v4().to_string();
     let rkey = format!(":{}", key); // the kv wasm logic does a replace on '/' with ':'
@@ -332,7 +332,7 @@ pub(crate) async fn scaled_kvcounter() -> Result<()> {
     host_d.stop().await;
     host_e.stop().await;
 
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    actix_rt::time::sleep(Duration::from_millis(500)).await;
 
     Ok(())
 }
@@ -356,12 +356,12 @@ async fn scaledkv_host(actor: Option<Actor>, par: Option<Vec<ProviderArchive>>) 
         for p in vp {
             let nc = NativeCapability::from_archive(p, None)?;
             h.start_native_capability(nc).await?;
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            actix_rt::time::sleep(Duration::from_millis(50)).await;
         }
         await_provider_count(&h, 2 + vp.len(), Duration::from_millis(30), 3).await?;
     }
 
-    tokio::time::sleep(Duration::from_millis(350)).await;
+    actix_rt::time::sleep(Duration::from_millis(350)).await;
 
     Ok(h)
 }

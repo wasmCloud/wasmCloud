@@ -114,7 +114,7 @@ pub async fn gen_kvcounter_host(
     .await?;
 
     // give the web server enough time to fire up
-    tokio::time::sleep(Duration::from_millis(75)).await;
+    actix_rt::time::sleep(Duration::from_millis(75)).await;
     Ok(h)
 }
 

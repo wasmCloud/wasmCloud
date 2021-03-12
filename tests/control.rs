@@ -77,7 +77,7 @@ pub(crate) async fn basics() -> Result<()> {
     let redis_ack = ctl_client.start_provider(&hid, REDIS_OCI, None).await?;
     await_provider_count(&h, 3, Duration::from_millis(50), 20).await?;
     println!("Redis {:?} started", redis_ack);
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    actix_rt::time::sleep(Duration::from_millis(500)).await;
 
     // Stop and re-start a provider
     assert!(ctl_client
@@ -86,14 +86,14 @@ pub(crate) async fn basics() -> Result<()> {
         .failure
         .is_none());
     await_provider_count(&h, 2, Duration::from_millis(50), 20).await?;
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    actix_rt::time::sleep(Duration::from_secs(1)).await;
     assert!(ctl_client
         .start_provider(&hid, REDIS_OCI, None)
         .await?
         .failure
         .is_none());
     await_provider_count(&h, 3, Duration::from_millis(50), 20).await?;
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    actix_rt::time::sleep(Duration::from_secs(1)).await;
 
     let nats_ack = ctl_client.start_provider(&hid, NATS_OCI, None).await?;
     await_provider_count(&h, 4, Duration::from_millis(50), 200).await?;
@@ -145,7 +145,7 @@ pub(crate) async fn calltest() -> Result<()> {
     let a_id = a.public_key();
     h.start_actor(a).await?;
     await_actor_count(&h, 1, Duration::from_millis(50), 20).await?;
-    tokio::time::sleep(Duration::from_millis(600)).await;
+    actix_rt::time::sleep(Duration::from_millis(600)).await;
 
     let nc2 = nats::asynk::connect("0.0.0.0:4222").await?;
 
@@ -171,10 +171,10 @@ pub(crate) async fn calltest() -> Result<()> {
     assert_eq!(http_r.status, "OK".to_string());
     assert_eq!(http_r.status_code, 200);
     h.stop().await;
-    tokio::time::sleep(Duration::from_millis(900)).await;
+    actix_rt::time::sleep(Duration::from_millis(900)).await;
 
     ctl_client.stop_actor(&h.id(), &a_id).await?;
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    actix_rt::time::sleep(Duration::from_millis(300)).await;
     let inv_r = ctl_client
         .call_actor(&a_id, "HandleRequest", &serialize(&req)?)
         .await;
@@ -219,7 +219,7 @@ pub(crate) async fn auctions() -> Result<()> {
     h2.start().await?;
     let hid2 = h2.id();
 
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    actix_rt::time::sleep(Duration::from_secs(2)).await;
 
     // auction with no requirements
     let kvack = ctl_client
@@ -237,7 +237,7 @@ pub(crate) async fn auctions() -> Result<()> {
     // start it and re-attempt an auction
     let _ = ctl_client.start_actor(&hid, KVCOUNTER_OCI).await?;
     await_actor_count(&h, 1, Duration::from_millis(50), 20).await?;
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    actix_rt::time::sleep(Duration::from_secs(1)).await;
 
     let kvack = ctl_client
         .perform_actor_auction(KVCOUNTER_OCI, kvrequirements(), Duration::from_secs(5))
@@ -262,7 +262,7 @@ pub(crate) async fn auctions() -> Result<()> {
         .start_provider(&httpack[0].host_id, HTTPSRV_OCI, None)
         .await?;
     await_provider_count(&h2, 3, Duration::from_millis(50), 10).await?;
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    actix_rt::time::sleep(Duration::from_millis(500)).await;
 
     // should be no candidates now
     let httpack = ctl_client
@@ -276,7 +276,7 @@ pub(crate) async fn auctions() -> Result<()> {
     assert_eq!(0, httpack.len());
     h.stop().await;
     h2.stop().await;
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    actix_rt::time::sleep(Duration::from_millis(300)).await;
     Ok(())
 }
 
