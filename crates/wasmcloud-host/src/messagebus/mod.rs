@@ -1,15 +1,16 @@
-use crate::auth::Authorizer;
-use crate::Result;
-use crate::{Invocation, WasmCloudEntity};
-use actix::dev::MessageResponse;
-use actix::prelude::*;
-use std::collections::HashMap;
+use actix::{dev::MessageResponse, prelude::*};
+use serde::{Deserialize, Serialize};
+use std::{collections::HashMap, time::Duration};
 use wascap::prelude::{Claims, KeyPair};
 
-use crate::messagebus::rpc_client::RpcClient;
 pub use handlers::OP_BIND_ACTOR;
-use serde::{Deserialize, Serialize};
-use std::time::Duration;
+pub(crate) use latticecache_client::LatticeCacheClient;
+pub(crate) use nats_subscriber::{NatsMessage, NatsSubscriber};
+
+use crate::auth::Authorizer;
+use crate::messagebus::rpc_client::RpcClient;
+use crate::Result;
+use crate::{Invocation, WasmCloudEntity};
 
 pub(crate) mod handlers;
 mod hb;
@@ -18,9 +19,6 @@ pub(crate) mod nats_subscriber;
 pub(crate) mod rpc_client;
 pub(crate) mod rpc_subscription;
 pub(crate) mod utils;
-
-pub(crate) use latticecache_client::LatticeCacheClient;
-pub(crate) use nats_subscriber::{NatsMessage, NatsSubscriber};
 
 #[derive(Default)]
 pub(crate) struct MessageBus {
