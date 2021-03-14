@@ -375,6 +375,7 @@ impl Handler<Invocation> for ActorHost {
                     }
                 }
                 Err(e) => {
+                    error!("Error invoking actor: {} (from {})", e, msg.target_url());
                     InvocationResponse::error(&msg, &format!("Failed to invoke actor: {}", e))
                 }
             }

@@ -1,3 +1,5 @@
+use std::{env::temp_dir, path::PathBuf};
+
 use crate::{Host, Result};
 use provider_archive::ProviderArchive;
 use wascap::jwt::Claims;
@@ -69,6 +71,18 @@ impl NativeCapability {
     /// Returns the unique ID (public key/subject) of the capability provider
     pub fn id(&self) -> String {
         self.claims.subject.to_string()
+    }
+
+    pub fn cache_path(&self) -> PathBuf {
+        let mut path = temp_dir();
+        path.push("wasmcloudcache");
+        path.push(&self.claims.subject);
+        path.push(format!(
+            "{}",
+            self.claims.metadata.as_ref().unwrap().rev.unwrap_or(0)
+        ));
+        path.push(Host::native_target());
+        path
     }
 }
 
