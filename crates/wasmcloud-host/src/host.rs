@@ -503,6 +503,10 @@ impl Host {
             let _ = hc.send(msg).await?;
         }
         for msg in crate::manifest::generate_adv_link_messages(&manifest).await {
+            debug!(
+                "Advertising {}:{}:{}",
+                msg.actor, msg.link_name, msg.provider_id
+            );
             let _ = bus.send(msg).await?;
         }
 
