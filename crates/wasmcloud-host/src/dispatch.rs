@@ -4,7 +4,6 @@ use crate::{
     errors::{self, ErrorKind},
     messagebus::LookupAlias,
 };
-extern crate wasmcloud_provider_core as codec;
 use crate::{Result, SYSTEM_ACTOR};
 use actix::dev::{MessageResponse, ResponseChannel};
 use actix::prelude::*;
@@ -18,14 +17,15 @@ use std::error::Error;
 use std::io::Read;
 use uuid::Uuid;
 use wascap::prelude::{Claims, KeyPair};
+use wasmcloud_provider_core as codec;
 
 pub(crate) const URL_SCHEME: &str = "wasmbus";
 
-pub const CONFIG_WASCC_CLAIMS_ISSUER: &str = "__wascc_issuer";
-pub const CONFIG_WASCC_CLAIMS_CAPABILITIES: &str = "__wascc_capabilities";
-pub const CONFIG_WASCC_CLAIMS_NAME: &str = "__wascc_name";
-pub const CONFIG_WASCC_CLAIMS_EXPIRES: &str = "__wascc_expires";
-pub const CONFIG_WASCC_CLAIMS_TAGS: &str = "__wascc_tags";
+pub const CONFIG_WASMCLOUD_CLAIMS_ISSUER: &str = "__wasmcloud_issuer";
+pub const CONFIG_WASMCLOUD_CLAIMS_CAPABILITIES: &str = "__wasmcloud_capabilities";
+pub const CONFIG_WASMCLOUD_CLAIMS_NAME: &str = "__wasmcloud_name";
+pub const CONFIG_WASMCLOUD_CLAIMS_EXPIRES: &str = "__wasmcloud_expires";
+pub const CONFIG_WASMCLOUD_CLAIMS_TAGS: &str = "__wasmcloud_tags";
 
 pub const OP_HALT: &str = "__halt";
 
@@ -453,11 +453,11 @@ pub(crate) fn gen_config_invocation(
 ) -> Invocation {
     let mut values = values;
     values.insert(
-        CONFIG_WASCC_CLAIMS_ISSUER.to_string(),
+        CONFIG_WASMCLOUD_CLAIMS_ISSUER.to_string(),
         claims.issuer.to_string(),
     );
     values.insert(
-        CONFIG_WASCC_CLAIMS_CAPABILITIES.to_string(),
+        CONFIG_WASMCLOUD_CLAIMS_CAPABILITIES.to_string(),
         claims
             .metadata
             .as_ref()
@@ -467,13 +467,13 @@ pub(crate) fn gen_config_invocation(
             .unwrap_or(&Vec::new())
             .join(","),
     );
-    values.insert(CONFIG_WASCC_CLAIMS_NAME.to_string(), claims.name());
+    values.insert(CONFIG_WASMCLOUD_CLAIMS_NAME.to_string(), claims.name());
     values.insert(
-        CONFIG_WASCC_CLAIMS_EXPIRES.to_string(),
+        CONFIG_WASMCLOUD_CLAIMS_EXPIRES.to_string(),
         claims.expires.unwrap_or(0).to_string(),
     );
     values.insert(
-        CONFIG_WASCC_CLAIMS_TAGS.to_string(),
+        CONFIG_WASMCLOUD_CLAIMS_TAGS.to_string(),
         claims
             .metadata
             .as_ref()

@@ -20,12 +20,12 @@ use wascap::prelude::KeyPair;
 
 const URL_SCHEME: &str = "wasmbus";
 
-/// An immutable representation of an invocation within waSCC
+/// An immutable representation of an invocation within wasmcloud
 #[derive(Debug, Clone, Serialize, Deserialize)]
 
 pub struct Invocation {
-    pub origin: WasccEntity,
-    pub target: WasccEntity,
+    pub origin: Entity,
+    pub target: Entity,
     pub operation: String,
     pub msg: Vec<u8>,
     pub id: String,
@@ -39,8 +39,8 @@ impl Invocation {
     /// so an invocation requires a reference to the host (signing) key
     pub fn new(
         hostkey: &KeyPair,
-        origin: WasccEntity,
-        target: WasccEntity,
+        origin: Entity,
+        target: Entity,
         op: &str,
         msg: Vec<u8>,
     ) -> Invocation {
@@ -77,7 +77,7 @@ pub struct InvocationResponse {
 /// Represents an entity within the host runtime that can be the source
 /// or target of an invocation
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Eq, Hash)]
-pub enum WasccEntity {
+pub enum Entity {
     Actor(String),
     Capability {
         id: String,
@@ -86,12 +86,12 @@ pub enum WasccEntity {
     },
 }
 
-impl WasccEntity {
+impl Entity {
     /// The URL of the entity
     pub fn url(&self) -> String {
         match self {
-            WasccEntity::Actor(pk) => format!("{}://{}", URL_SCHEME, pk),
-            WasccEntity::Capability {
+            Entity::Actor(pk) => format!("{}://{}", URL_SCHEME, pk),
+            Entity::Capability {
                 id,
                 contract_id,
                 link_name,

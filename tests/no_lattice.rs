@@ -184,7 +184,7 @@ pub async fn kvcounter_start_stop() -> Result<()> {
 
     let websrv = NativeCapability::from_archive(&arc2, None)?;
     h.start_native_capability(websrv).await?;
-    await_provider_count(&h, 4, Duration::from_millis(50), 3).await?; // 2 providers plus wascc:extras + kvcache
+    await_provider_count(&h, 4, Duration::from_millis(50), 3).await?; // 2 providers plus wasmcloud:extras + kvcache
     delay_for(Duration::from_millis(300)).await; // give web server enough time to start
 
     let resp2 = reqwest::get(&url).await?;
@@ -249,7 +249,7 @@ pub async fn kvcounter_link_first() -> Result<()> {
     // for each.
     h.start_native_capability(redis).await?;
     h.start_native_capability(websrv).await?;
-    await_provider_count(&h, 4, Duration::from_millis(50), 3).await?; // 2 providers plus wascc:extras
+    await_provider_count(&h, 4, Duration::from_millis(50), 3).await?; // 2 providers plus wasmcloud:extras
     delay_for(Duration::from_millis(150)).await;
 
     let key = uuid::Uuid::new_v4().to_string();

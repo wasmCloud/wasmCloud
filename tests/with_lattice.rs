@@ -1,3 +1,5 @@
+#![cfg_attr(debug_assertions, allow(dead_code, unused_imports))]
+
 use crate::common::{await_actor_count, await_provider_count, par_from_file, REDIS_OCI};
 use actix_rt::time::delay_for;
 use provider_archive::ProviderArchive;

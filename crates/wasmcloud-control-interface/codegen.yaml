@@ -1,4 +1,4 @@
-schema: https://raw.githubusercontent.com/wascc/schemas/main/control_interface.widl
+schema: https://raw.githubusercontent.com/wasmCloud/actor-interfaces/main/schemas/control_interface.widl
 generates:
   src/generated/ctliface.rs:
     package: widl-codegen/language/rust
