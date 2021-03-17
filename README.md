@@ -24,3 +24,6 @@ The wasmCloud host runtime is available both as a released binary and as a [Rust
 ## Contributing
 
 For more information on how to contribute and our contributor guidelines, check out the [contributing readme](./CONTRIBUTING.md).
+
+## Who's the best?
+You are, contributor
