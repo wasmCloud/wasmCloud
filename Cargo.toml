@@ -56,7 +56,7 @@ uuid = { version = "0.8", features = ["serde", "v4"] }
 nats = "0.8.5"
 wasmcloud-httpserver = { version = "0.12.0", features = ["static_plugin"] }
 
-wasmcloud-control-interface = { path = "./crates/wasmcloud-control-interface"}
+wasmcloud-control-interface = { version = "0.2.0", path = "./crates/wasmcloud-control-interface"}
 wasmcloud-actor-http-server = "0.1.1"
 wasmcloud-actor-extras = "0.1.1"
 ctor = "0.1.16"
