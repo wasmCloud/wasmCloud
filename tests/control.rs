@@ -291,19 +291,3 @@ fn webrequirements() -> HashMap<String, String> {
     hm.insert("web-friendly".to_string(), "yes".to_string());
     hm
 }
-
-#[allow(dead_code)]
-fn embed_revision(source: &[u8], kp: &KeyPair, rev: i32, subject: &str, issuer: &str) -> Vec<u8> {
-    let claims = wascap::jwt::Claims::<wascap::jwt::Actor>::new(
-        "Testy McTestFace".to_string(),
-        issuer.to_string(),
-        subject.to_string(),
-        Some(vec!["test:testo".to_string()]),
-        None,
-        false,
-        Some(rev),
-        None,
-        None,
-    );
-    wascap::wasm::embed_claims(source, &claims, kp).unwrap()
-}

@@ -10,8 +10,6 @@ use wasmcloud_host::{Actor, Host, HostBuilder, NativeCapability, Result};
 pub const REDIS_OCI: &str = "wasmcloud.azurecr.io/redis:0.11.1";
 pub const HTTPSRV_OCI: &str = "wasmcloud.azurecr.io/httpserver:0.11.1";
 pub const KVCOUNTER_OCI: &str = "wasmcloud.azurecr.io/kvcounter:0.2.0";
-#[allow(dead_code)]
-pub const NATS_OCI: &str = "wasmcloud.azurecr.io/nats:0.10.1";
 
 pub async fn await_actor_count(
     h: &Host,

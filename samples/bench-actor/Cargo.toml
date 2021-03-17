@@ -1,6 +1,6 @@
 [package]
 name = "bench-actor"
-version = "0.1.1"
+version = "0.1.0"
 authors = ["wasmCloud Team"]
 edition = "2018"
 

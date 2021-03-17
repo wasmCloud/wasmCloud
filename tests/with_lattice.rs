@@ -242,7 +242,6 @@ pub(crate) async fn redis_kvcache() -> Result<()> {
 // Run the kvcounter scenario, but with 1 instance of a HTTP provider, 2 instances
 // of redis provider,  and 3 instances of the actor in a 5-host lattice.
 // We can't do 2 instances of the HTTP provider because it would try and bind the same HTTP port twice
-#[allow(dead_code)]
 pub(crate) async fn scaled_kvcounter() -> Result<()> {
     // Set the default kvcache provider to enable NATS-based replication
     // by supplying a NATS URL.
@@ -335,33 +334,4 @@ pub(crate) async fn scaled_kvcounter() -> Result<()> {
     actix_rt::time::sleep(Duration::from_millis(500)).await;
 
     Ok(())
-}
-
-#[allow(dead_code)]
-async fn scaledkv_host(actor: Option<Actor>, par: Option<Vec<ProviderArchive>>) -> Result<Host> {
-    const NS: &str = "scaledkvhost";
-    let nc = nats::asynk::connect("0.0.0.0:4222").await?;
-
-    let h = HostBuilder::new()
-        .with_rpc_client(nc)
-        .with_namespace(NS)
-        .build();
-
-    h.start().await?;
-    if let Some(a) = actor {
-        h.start_actor(a).await?;
-        await_actor_count(&h, 1, Duration::from_millis(30), 3).await?;
-    }
-    if let Some(ref vp) = par {
-        for p in vp {
-            let nc = NativeCapability::from_archive(p, None)?;
-            h.start_native_capability(nc).await?;
-            actix_rt::time::sleep(Duration::from_millis(50)).await;
-        }
-        await_provider_count(&h, 2 + vp.len(), Duration::from_millis(30), 3).await?;
-    }
-
-    actix_rt::time::sleep(Duration::from_millis(350)).await;
-
-    Ok(h)
 }
