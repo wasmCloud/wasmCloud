@@ -64,7 +64,7 @@ pub mod commands {
 pub mod queries {
     use super::prefix;
 
-    pub fn linkdefinitions(nsprefix: &Option<String>) -> String {
+    pub fn link_definitions(nsprefix: &Option<String>) -> String {
         format!("{}.get.links", prefix(nsprefix))
     }
 

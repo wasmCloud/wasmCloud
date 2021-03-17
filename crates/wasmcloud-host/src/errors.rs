@@ -42,7 +42,7 @@ impl StdError for Error {
             ErrorKind::Wascap(_) => "Embedded JWT Failure",
             ErrorKind::Authorization(_) => "Module authorization failure",
             ErrorKind::CapabilityProvider(_) => "Capability provider failure",
-            ErrorKind::MiscHost(_) => "waSCC Host error",
+            ErrorKind::MiscHost(_) => "Wasmcloud Host error",
             ErrorKind::Plugin(_) => "Plugin error",
             ErrorKind::Middleware(_) => "Middleware error",
             ErrorKind::Serialization(_) => "Serialization failure",
@@ -80,7 +80,7 @@ impl fmt::Display for Error {
             ErrorKind::CapabilityProvider(ref err) => {
                 write!(f, "Capability provider error: {}", err)
             }
-            ErrorKind::MiscHost(ref err) => write!(f, "waSCC Host Error: {}", err),
+            ErrorKind::MiscHost(ref err) => write!(f, "Wasmcloud Host Error: {}", err),
             ErrorKind::Plugin(ref err) => write!(f, "Plugin error: {}", err),
             ErrorKind::Middleware(ref err) => write!(f, "Middleware error: {}", err),
             ErrorKind::Serialization(ref err) => write!(f, "Serialization failure: {}", err),

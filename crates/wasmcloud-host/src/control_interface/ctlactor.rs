@@ -102,7 +102,7 @@ impl Handler<NatsMessage> for ControlInterface {
             async move {
                 if subject == queries::host_inventory(&prefix, &host) {
                     handle_host_inventory_query(&host, &msg).await
-                } else if subject == queries::linkdefinitions(&prefix) {
+                } else if subject == queries::link_definitions(&prefix) {
                     handle_linkdefs_query(&host, &msg).await
                 } else if subject == queries::claims(&prefix) {
                     handle_claims_query(&host, &msg).await
@@ -152,7 +152,7 @@ impl Handler<Initialize> for ControlInterface {
         let prefix = Some(self.ns_prefix.to_string());
 
         self.subscribers.insert(
-            queries::linkdefinitions(&prefix),
+            queries::link_definitions(&prefix),
             NatsSubscriber::default().start(),
         );
         self.subscribers.insert(
@@ -162,7 +162,7 @@ impl Handler<Initialize> for ControlInterface {
         self.subscribers
             .insert(queries::claims(&prefix), NatsSubscriber::default().start());
         self.subscribers.insert(
-            queries::linkdefinitions(&prefix),
+            queries::link_definitions(&prefix),
             NatsSubscriber::default().start(),
         );
         self.subscribers.insert(

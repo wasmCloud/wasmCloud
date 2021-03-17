@@ -1,6 +1,6 @@
 use crate::dispatch::{
-    CONFIG_WASCC_CLAIMS_CAPABILITIES, CONFIG_WASCC_CLAIMS_EXPIRES, CONFIG_WASCC_CLAIMS_ISSUER,
-    CONFIG_WASCC_CLAIMS_NAME, CONFIG_WASCC_CLAIMS_TAGS,
+    CONFIG_WASMCLOUD_CLAIMS_CAPABILITIES, CONFIG_WASMCLOUD_CLAIMS_EXPIRES,
+    CONFIG_WASMCLOUD_CLAIMS_ISSUER, CONFIG_WASMCLOUD_CLAIMS_NAME, CONFIG_WASMCLOUD_CLAIMS_TAGS,
 };
 
 use crate::messagebus::OP_BIND_ACTOR;
@@ -23,11 +23,11 @@ pub(crate) fn generate_link_invocation_and_call(
     // the source actor
     let mut values = values;
     values.insert(
-        CONFIG_WASCC_CLAIMS_ISSUER.to_string(),
+        CONFIG_WASMCLOUD_CLAIMS_ISSUER.to_string(),
         claims.issuer.to_string(),
     );
     values.insert(
-        CONFIG_WASCC_CLAIMS_CAPABILITIES.to_string(),
+        CONFIG_WASMCLOUD_CLAIMS_CAPABILITIES.to_string(),
         claims
             .metadata
             .as_ref()
@@ -37,13 +37,13 @@ pub(crate) fn generate_link_invocation_and_call(
             .unwrap_or(&Vec::new())
             .join(","),
     );
-    values.insert(CONFIG_WASCC_CLAIMS_NAME.to_string(), claims.name());
+    values.insert(CONFIG_WASMCLOUD_CLAIMS_NAME.to_string(), claims.name());
     values.insert(
-        CONFIG_WASCC_CLAIMS_EXPIRES.to_string(),
+        CONFIG_WASMCLOUD_CLAIMS_EXPIRES.to_string(),
         claims.expires.unwrap_or(0).to_string(),
     );
     values.insert(
-        CONFIG_WASCC_CLAIMS_TAGS.to_string(),
+        CONFIG_WASMCLOUD_CLAIMS_TAGS.to_string(),
         claims
             .metadata
             .as_ref()

@@ -1,10 +1,9 @@
-extern crate wapc_guest as guest;
 use actor::deserialize;
 use serde::{Deserialize, Serialize};
 use wasmcloud_actor_core as actor;
 use wasmcloud_actor_http_server as http;
 
-use guest::prelude::*;
+use wapc_guest::prelude::*;
 
 #[no_mangle]
 pub fn wapc_init() {

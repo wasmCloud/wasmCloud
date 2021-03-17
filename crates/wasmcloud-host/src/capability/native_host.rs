@@ -11,8 +11,7 @@ use actix::prelude::*;
 use futures::executor::block_on;
 use libloading::{Library, Symbol};
 use wascap::prelude::KeyPair;
-extern crate wasmcloud_provider_core as codec;
-use codec::capabilities::CapabilityProvider;
+use wasmcloud_provider_core::capabilities::CapabilityProvider;
 
 #[derive(Message)]
 #[rtype(result = "Result<WasmCloudEntity>")]

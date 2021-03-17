@@ -6,7 +6,7 @@ pub use crate::generated::ctliface::*;
 use actix_rt::time::delay_for;
 use futures::stream::StreamExt;
 use futures::TryStreamExt;
-use inv::WasccEntity;
+use inv::Entity;
 pub use inv::{Invocation, InvocationResponse};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -144,8 +144,8 @@ impl Client {
         let subject = broker::rpc::call_actor(&self.nsprefix, target_id);
         let bytes = crate::generated::ctliface::serialize(Invocation::new(
             &self.key,
-            WasccEntity::Actor("system".to_string()),
-            WasccEntity::Actor(target_id.to_string()),
+            Entity::Actor("system".to_string()),
+            Entity::Actor(target_id.to_string()),
             operation,
             data.to_vec(),
         ))?;

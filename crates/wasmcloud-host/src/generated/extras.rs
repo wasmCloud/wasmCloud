@@ -1,5 +1,3 @@
-extern crate rmp_serde as rmps;
-
 use serde::{Deserialize, Serialize};
 
 extern crate log;

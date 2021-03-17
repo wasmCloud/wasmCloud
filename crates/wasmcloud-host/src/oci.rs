@@ -69,7 +69,7 @@ fn cached_file(img: &str) -> PathBuf {
     let path = temp_dir();
     let path = path.join("wasmcloud_ocicache");
     let _ = ::std::fs::create_dir_all(&path);
-    // should produce a file like wascc_azurecr_io_kvcounter_v1.bin
+    // should produce a file like wasmcloud_azurecr_io_kvcounter_v1.bin
     let img = img.replace(":", "_");
     let img = img.replace("/", "_");
     let img = img.replace(".", "_");
