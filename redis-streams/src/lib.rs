@@ -40,10 +40,7 @@ pub struct RedisStreamsProvider {
 
 impl Default for RedisStreamsProvider {
     fn default() -> Self {
-        match env_logger::try_init() {
-            Ok(_) => {}
-            Err(_) => {}
-        };
+        if env_logger::try_init().is_err() {}
 
         RedisStreamsProvider {
             dispatcher: Arc::new(RwLock::new(Box::new(NullDispatcher::new()))),
@@ -104,7 +101,7 @@ impl RedisStreamsProvider {
                 event_id: None,
             },
         };
-        Ok(serialize(ack)?)
+        serialize(ack)
     }
 
     fn query_stream(
@@ -128,13 +125,11 @@ impl RedisStreamsProvider {
                     time_range.max_time,
                 )?
             }
+        } else if query.count > 0 {
+            self.actor_con(actor)?
+                .xrange_count(query.stream_id, "-", "+", query.count)?
         } else {
-            if query.count > 0 {
-                self.actor_con(actor)?
-                    .xrange_count(query.stream_id, "-", "+", query.count)?
-            } else {
-                self.actor_con(actor)?.xrange(query.stream_id, "-", "+")?
-            }
+            self.actor_con(actor)?.xrange(query.stream_id, "-", "+")?
         };
         let mut events = Vec::new();
 
@@ -152,7 +147,7 @@ impl RedisStreamsProvider {
         }
         let list = EventList { events };
 
-        Ok(serialize(list)?)
+        serialize(list)
     }
 }
 

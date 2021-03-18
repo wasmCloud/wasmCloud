@@ -1,3 +1,4 @@
+use log::info;
 use std::error::Error;
 use wasmcloud_actor_core::CapabilityConfiguration;
 

@@ -3,18 +3,17 @@
 //! Provides an implementation of the wascc:graphdb contract for RedisGraph
 //! using the Cypher language
 
-#[macro_use]
-extern crate wascc_codec as codec;
-#[macro_use]
-extern crate log;
-use codec::capabilities::{CapabilityProvider, Dispatcher, NullDispatcher};
-use codec::core::{OP_BIND_ACTOR, OP_REMOVE_ACTOR};
-use redis::Connection;
-use redis::RedisResult;
+use codec::{
+    capabilities::{CapabilityProvider, Dispatcher, NullDispatcher},
+    capability_provider,
+    core::{OP_BIND_ACTOR, OP_REMOVE_ACTOR},
+};
+use log::{trace, warn};
+use redis::{Connection, RedisResult};
 use redisgraph::{Graph, RedisGraphResult, ResultSet};
-use std::error::Error;
 use std::{
     collections::HashMap,
+    error::Error,
     sync::{Arc, RwLock},
 };
 use wasmcloud_actor_core::CapabilityConfiguration;
@@ -22,6 +21,7 @@ use wasmcloud_actor_graphdb::{
     deserialize, serialize, DeleteGraphArgs, DeleteResponse, QueryGraphArgs, QueryResponse,
     OP_DELETE, OP_QUERY,
 };
+use wasmcloud_provider_core as codec;
 mod conversions;
 mod rgraph;
 

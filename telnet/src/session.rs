@@ -1,18 +1,17 @@
 use crate::server::TelnetServer;
-use ansi_escapes::*;
-use wascc_codec::serialize;
-
 use crate::{SessionStarted, TelnetMessage, OP_RECEIVE_TEXT, OP_SESSION_STARTED};
-use codec::capabilities::Dispatcher;
+use ansi_escapes::*;
 use crossbeam::channel::{Receiver, Sender};
-use crossbeam_channel::unbounded;
-use std::io::Write;
+use crossbeam_channel::{select, unbounded};
+use log::info;
 use std::{
     collections::HashMap,
+    io::Write,
     net::*,
     sync::{Arc, RwLock},
 };
 use uuid::Uuid;
+use wasmcloud_provider_core::{capabilities::Dispatcher, serialize};
 
 /// Code that performs initial text sending to a newly connected socket (e.g. motd)
 /// and then starts a read loop that takes characters from the client and adds
@@ -84,7 +83,7 @@ pub fn start_server(
     actor: &str,
     dispatcher: Arc<RwLock<Box<dyn Dispatcher>>>,
     outbounds: Arc<RwLock<HashMap<String, Sender<String>>>>,
-) -> Result<(), Box<dyn std::error::Error>> {
+) {
     info!(
         "Starting telnet session on port {} for actor {}",
         port, actor
@@ -133,5 +132,4 @@ pub fn start_server(
             });
         }
     });
-    Ok(())
 }

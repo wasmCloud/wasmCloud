@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-redisgraph"
-version = "0.3.1"
+version = "0.3.2"
 authors = ["wasmCloud Team"]
 edition = "2018"
 homepage = "https://wasmcloud.dev"
@@ -22,8 +22,11 @@ static_plugin = []
 [dependencies]
 wasmcloud-actor-graphdb = "0.1.0"
 wasmcloud-actor-core = "0.2.0"
-wascc-codec = "0.9.0"
-log = "0.4.13"
+log = "0.4.14"
 env_logger = "0.8.2"
-redis = "0.16.0"
+redis = "^0.16.0"
 redisgraph = "0.5.0"
+
+[dependencies.wasmcloud-provider-core]
+version = "0.1.0"
+#path = "../../wasmcloud/crates/wasmcloud-provider-core"

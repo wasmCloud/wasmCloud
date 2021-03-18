@@ -1,7 +1,8 @@
+use actor::HealthCheckResponse;
 use log::{debug, error, info, trace, warn};
-
 use std::error::Error;
 use std::sync::{Arc, RwLock};
+use wasmcloud_actor_core as actor;
 use wasmcloud_actor_logging::{WriteLogArgs, OP_LOG};
 use wasmcloud_provider_core::{
     capabilities::{CapabilityProvider, Dispatcher, NullDispatcher},
@@ -9,8 +10,6 @@ use wasmcloud_provider_core::{
     core::{OP_BIND_ACTOR, OP_HEALTH_REQUEST, OP_REMOVE_ACTOR},
     deserialize, serialize,
 };
-extern crate wasmcloud_actor_core as actor;
-use actor::HealthCheckResponse;
 
 #[cfg(not(feature = "static_plugin"))]
 capability_provider!(LoggingProvider, LoggingProvider::new);

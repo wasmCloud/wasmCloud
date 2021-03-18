@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-nats-kvcache"
-version = "0.5.0"
+version = "0.5.1"
 authors = ["wasmCloud Team"]
 edition = "2018"
 license-file = "LICENSE.txt"
@@ -13,15 +13,11 @@ keywords = [
     "nats",
     "keyvalue",
     "webassembly",
-    "wasmcloud"    
+    "wasmcloud"
 ]
 categories = [
     "wasm", "api-bindings",
 ]
-
-
-[lib]
-crate-type = ["cdylib", "rlib"]
 
 [features]
 # Enable if the provider will be statically compiled into a host
@@ -30,15 +26,17 @@ static_plugin = []
 [dependencies]
 wasmcloud-actor-keyvalue = "0.2.0"
 wasmcloud-actor-core = "0.2.0"
-nats = "0.8.6"
-wasmcloud-provider-core = "0.1.0"
+nats = "0.9.6"
 wascap = "0.6.0"
 env_logger = "0.8.2"
 uuid = { version = "0.8.1", features = ["v4"] }
 lazy_static = "1.4.0"
-log = "0.4.11"
+log = "0.4.14"
 eventsourcing = "0.1.5"
 eventsourcing-derive = "0.1.3"
 serde = { version = "1.0.118", features = ["derive"]}
-crossbeam = "0.8.0"
 crossbeam-channel = "0.5.0"
+
+[dependencies.wasmcloud-provider-core]
+version = "0.1.0"
+#path = "../../wasmcloud/crates/wasmcloud-provider-core"

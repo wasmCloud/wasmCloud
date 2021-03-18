@@ -1,8 +1,5 @@
-use redisgraph;
-use redisgraph::result_set::Column::*;
-use redisgraph::result_set::Scalar;
+use redisgraph::result_set::{Column::*, Scalar};
 use std::collections::HashMap;
-use wasmcloud_actor_graphdb;
 use wasmcloud_actor_graphdb::generated::Column;
 
 pub(crate) fn redisgraph_column_to_common(
@@ -42,7 +39,6 @@ pub(crate) fn redisgraph_column_to_common(
                 ..Default::default()
             }
         }
-        _ => Column::default(),
     }
 }
 
@@ -55,7 +51,7 @@ pub(crate) fn redisgraph_scalar_to_common(
         Scalar::Double(d) => scalar.double_value = Some(d),
         Scalar::Integer(i) => scalar.int_value = Some(i),
         Scalar::String(s) => scalar.string_value = Some(redisstring_to_string(s)),
-        Nil => (),
+        Scalar::Nil => (),
     };
     scalar
 }

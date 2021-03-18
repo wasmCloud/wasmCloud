@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-logging"
-version = "0.9.2"
+version = "0.9.3"
 authors = ["wasmCloud Team"]
 edition = "2018"
 homepage = "https://wasmcloud.dev"
@@ -24,6 +24,9 @@ static_plugin = [] # Enable to statically compile this into a host
 [dependencies]
 log = "0.4.14"
 env_logger = "0.8.2"
-wasmcloud-provider-core = "0.1.0"
 wasmcloud-actor-logging = "0.1.0"
 wasmcloud-actor-core = "0.2.2"
+
+[dependencies.wasmcloud-provider-core]
+version = "0.1.0"
+#path = "../../wasmcloud/crates/wasmcloud-provider-core"

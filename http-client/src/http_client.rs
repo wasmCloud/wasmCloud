@@ -73,7 +73,7 @@ fn build_request(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codec::deserialize;
+    use crate::codec::deserialize;
     use mockito::mock;
     use serde_json::json;
 
@@ -185,7 +185,7 @@ mod tests {
             headers: HashMap::new(),
             body: vec![],
         };
-        assert!(build_request(&c, req).is_err(), true);
+        assert!(build_request(&c, req).is_err());
     }
 
     #[tokio::test]

@@ -63,6 +63,8 @@ use wascap::prelude::KeyPair;
 
 type MessageHandlerResult = Result<Vec<u8>, Box<dyn Error + Send + Sync + 'static>>;
 
+const DEFAULT_NATS_URL: &str = "nats://0.0.0.0:4222";
+
 #[doc(hidden)]
 #[cfg(not(feature = "static_plugin"))]
 capability_provider!(NatsReplicatedKVProvider, NatsReplicatedKVProvider::new);
@@ -92,10 +94,7 @@ pub struct NatsReplicatedKVProvider {
 
 impl Default for NatsReplicatedKVProvider {
     fn default() -> Self {
-        match env_logger::try_init() {
-            Ok(_) => {}
-            Err(_) => {}
-        };
+        if env_logger::try_init().is_err() {}
         NatsReplicatedKVProvider {
             dispatcher: Arc::new(RwLock::new(Box::new(NullDispatcher::new()))),
             cache: Arc::new(RwLock::new(CacheData::new(KeyValueStore::new()))),
@@ -190,8 +189,8 @@ impl NatsReplicatedKVProvider {
                 .parse()
                 .unwrap(),
         );
-        let c = cache2.clone();
-        let conn = nc2.clone();
+        let c = cache2;
+        let conn = nc2;
 
         let (term_s, term_r): (Sender<bool>, Receiver<bool>) = crossbeam_channel::bounded(1);
         {
@@ -215,11 +214,10 @@ impl NatsReplicatedKVProvider {
     }
 
     fn health(&self) -> MessageHandlerResult {
-        let bytes = serialize(HealthCheckResponse {
+        serialize(HealthCheckResponse {
             healthy: true,
             message: "".to_string(),
-        })?;
-        Ok(bytes)
+        })
     }
 
     fn add(&self, _actor: &str, req: AddArgs) -> MessageHandlerResult {
@@ -231,9 +229,7 @@ impl NatsReplicatedKVProvider {
             &evt,
             self.nc.clone(),
         )?;
-        let bytes = serialize(AddResponse::default())?;
-
-        Ok(bytes)
+        serialize(AddResponse::default())
     }
 
     fn del(&self, _actor: &str, req: DelArgs) -> MessageHandlerResult {
@@ -245,8 +241,7 @@ impl NatsReplicatedKVProvider {
             &evt,
             self.nc.clone(),
         )?;
-        let bytes = serialize(DelResponse::default())?;
-        Ok(bytes)
+        serialize(DelResponse::default())
     }
 
     fn get(&self, _actor: &str, req: GetArgs) -> MessageHandlerResult {
@@ -261,7 +256,7 @@ impl NatsReplicatedKVProvider {
             },
             Err(e) => return Err(format!("Failed to retrieve value {}", e).into()),
         };
-        Ok(serialize(resp)?)
+        serialize(resp)
     }
 
     fn list_clear(&self, _actor: &str, req: ClearArgs) -> MessageHandlerResult {
@@ -273,8 +268,7 @@ impl NatsReplicatedKVProvider {
             &evt,
             self.nc.clone(),
         )?;
-        let bytes = serialize(DelResponse::default())?;
-        Ok(bytes)
+        serialize(DelResponse::default())
     }
 
     fn list_range(&self, _actor: &str, req: RangeArgs) -> MessageHandlerResult {
@@ -287,7 +281,7 @@ impl NatsReplicatedKVProvider {
             Ok(v) => v,
             Err(e) => return Err(format!("Failed to get list range: {}", e).into()),
         };
-        Ok(serialize(ListRangeResponse { values: resp })?)
+        serialize(ListRangeResponse { values: resp })
     }
 
     fn list_push(&self, _actor: &str, req: PushArgs) -> MessageHandlerResult {
@@ -299,7 +293,7 @@ impl NatsReplicatedKVProvider {
             &evt,
             self.nc.clone(),
         )?;
-        Ok(serialize(ListResponse::default())?)
+        serialize(ListResponse::default())
     }
 
     fn set(&self, _actor: &str, req: SetArgs) -> MessageHandlerResult {
@@ -311,7 +305,7 @@ impl NatsReplicatedKVProvider {
             &evt,
             self.nc.clone(),
         )?;
-        Ok(serialize(SetResponse::default())?)
+        serialize(SetResponse::default())
     }
 
     fn list_del_item(&self, _actor: &str, req: ListItemDeleteArgs) -> MessageHandlerResult {
@@ -323,7 +317,7 @@ impl NatsReplicatedKVProvider {
             &evt,
             self.nc.clone(),
         )?;
-        Ok(serialize(ListResponse::default())?)
+        serialize(ListResponse::default())
     }
 
     fn set_add(&self, _actor: &str, req: SetAddArgs) -> MessageHandlerResult {
@@ -335,7 +329,7 @@ impl NatsReplicatedKVProvider {
             &evt,
             self.nc.clone(),
         )?;
-        Ok(serialize(SetOperationResponse::default())?)
+        serialize(SetOperationResponse::default())
     }
 
     fn set_remove(&self, _actor: &str, req: SetRemoveArgs) -> MessageHandlerResult {
@@ -347,7 +341,7 @@ impl NatsReplicatedKVProvider {
             &evt,
             self.nc.clone(),
         )?;
-        Ok(serialize(SetOperationResponse::default())?)
+        serialize(SetOperationResponse::default())
     }
 
     fn set_union(&self, _actor: &str, req: SetUnionArgs) -> MessageHandlerResult {
@@ -355,7 +349,7 @@ impl NatsReplicatedKVProvider {
             Ok(v) => v,
             Err(e) => return Err(format!("Failed to perform set untion: {}", e).into()),
         };
-        Ok(serialize(SetQueryResponse { values: resp })?)
+        serialize(SetQueryResponse { values: resp })
     }
 
     fn set_intersect(&self, _actor: &str, req: SetIntersectionArgs) -> MessageHandlerResult {
@@ -363,7 +357,7 @@ impl NatsReplicatedKVProvider {
             Ok(v) => v,
             Err(e) => return Err(format!("Failed to perform set intersect: {}", e).into()),
         };
-        Ok(serialize(SetQueryResponse { values: resp })?)
+        serialize(SetQueryResponse { values: resp })
     }
 
     fn set_query(&self, _actor: &str, req: SetQueryArgs) -> MessageHandlerResult {
@@ -371,7 +365,7 @@ impl NatsReplicatedKVProvider {
             Ok(v) => v,
             Err(e) => return Err(format!("Failed to query set members: {}", e).into()),
         };
-        Ok(serialize(SetQueryResponse { values: resp })?)
+        serialize(SetQueryResponse { values: resp })
     }
 
     fn exists(&self, _actor: &str, req: KeyExistsArgs) -> MessageHandlerResult {
@@ -379,21 +373,20 @@ impl NatsReplicatedKVProvider {
             Ok(b) => b,
             Err(e) => return Err(format!("Unable to determine key existence: {}", e).into()),
         };
-        Ok(serialize(GetResponse {
+        serialize(GetResponse {
             value: "".to_string(),
             exists: resp,
-        })?)
+        })
     }
 }
 
 fn nats_connection_from_values(
     values: HashMap<String, String>,
 ) -> Result<nats::Connection, Box<dyn std::error::Error + Sync + Send>> {
-    let nats_url = match values.get(NATS_URL_CONFIG_KEY) {
-        Some(v) => v,
-        None => "nats://0.0.0.0:4222",
-    }
-    .to_string();
+    let nats_url = values
+        .get(NATS_URL_CONFIG_KEY)
+        .map(|v| v.as_str())
+        .unwrap_or(DEFAULT_NATS_URL);
     let mut opts = if let Some(seed) = values.get(CLIENT_SEED_CONFIG_KEY) {
         let jwt = values
             .get(CLIENT_JWT_CONFIG_KEY)
@@ -424,8 +417,7 @@ fn process_replay_request(
     msg.respond(&serialize(&ack).map_err(|e| gen_std_io_error(&format!("{}", e)))?)?;
     let start = history.len() - ack.events_to_expect as usize;
     let end = history.len();
-    for i in start..end {
-        let evt = history[i].clone();
+    for evt in history.iter().take(end).skip(start) {
         msg.respond(&serialize(evt).map_err(|e| gen_std_io_error(&format!("{}", e)))?)?;
     }
     Ok(())

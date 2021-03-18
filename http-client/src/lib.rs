@@ -2,22 +2,18 @@
 ///! This library exposes the HTTP client capability to wasmCloud-compliant actors
 mod http_client;
 
-#[macro_use]
-extern crate wascc_codec as codec;
-
-#[macro_use]
-extern crate log;
-
-extern crate wasmcloud_actor_http_client as http;
 use codec::capabilities::{CapabilityProvider, Dispatcher, NullDispatcher};
-use codec::core::{OP_BIND_ACTOR, OP_REMOVE_ACTOR};
-use codec::{deserialize, SYSTEM_ACTOR};
+use codec::core::{OP_BIND_ACTOR, OP_REMOVE_ACTOR, SYSTEM_ACTOR};
+use codec::{capability_provider, deserialize};
 use http::{RequestArgs, OP_PERFORM_REQUEST};
+use log::{info, warn};
 use std::collections::HashMap;
 use std::error::Error;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use wasmcloud_actor_core::CapabilityConfiguration;
+use wasmcloud_actor_http_client as http;
+use wasmcloud_provider_core as codec;
 
 #[allow(unused)]
 const CAPABILITY_ID: &str = "wasmcloud:httpclient";

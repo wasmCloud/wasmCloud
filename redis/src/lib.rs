@@ -1,18 +1,14 @@
 mod kvredis;
 
 #[macro_use]
-extern crate wascc_codec as codec;
-use codec::capabilities::{CapabilityProvider, Dispatcher, NullDispatcher};
-use codec::core::{OP_BIND_ACTOR, OP_HEALTH_REQUEST, OP_REMOVE_ACTOR};
-
-#[macro_use]
-extern crate log;
-
-extern crate wasmcloud_actor_core as actorcore;
+extern crate wasmcloud_provider_core as codec;
 use actorcore::{deserialize, serialize, CapabilityConfiguration, HealthCheckResponse};
-extern crate wasmcloud_actor_keyvalue as actorkeyvalue;
 use actorkeyvalue::*;
-
+use codec::{
+    capabilities::{CapabilityProvider, Dispatcher, NullDispatcher},
+    core::{OP_BIND_ACTOR, OP_HEALTH_REQUEST, OP_REMOVE_ACTOR},
+};
+use log::trace;
 use redis::Connection;
 use redis::RedisResult;
 use redis::{self, Commands};
@@ -20,6 +16,8 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Arc;
 use std::sync::RwLock;
+use wasmcloud_actor_core as actorcore;
+use wasmcloud_actor_keyvalue as actorkeyvalue;
 
 #[allow(unused)]
 const CAPABILITY_ID: &str = "wasmcloud:keyvalue";

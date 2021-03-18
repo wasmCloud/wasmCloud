@@ -1,23 +1,22 @@
-#[macro_use]
-extern crate wascc_codec as codec;
-
-#[macro_use]
-extern crate log;
-
 use chunks::Chunks;
-use codec::capabilities::{CapabilityProvider, Dispatcher, NullDispatcher};
-use codec::core::{OP_BIND_ACTOR, OP_REMOVE_ACTOR};
-use codec::{deserialize, serialize};
-use std::collections::HashMap;
-use std::error::Error;
-use std::io::Write;
+use codec::{
+    capabilities::{CapabilityProvider, Dispatcher, NullDispatcher},
+    capability_provider,
+    core::{OP_BIND_ACTOR, OP_REMOVE_ACTOR},
+    deserialize, serialize,
+};
+use log::{error, info, trace};
 use std::{
+    collections::HashMap,
+    error::Error,
     fs::OpenOptions,
+    io::Write,
     path::{Path, PathBuf},
     sync::{Arc, RwLock},
 };
 use wasmcloud_actor_blobstore::*;
 use wasmcloud_actor_core::CapabilityConfiguration;
+use wasmcloud_provider_core as codec;
 
 mod chunks;
 
@@ -76,7 +75,7 @@ impl FileSystemProvider {
         let container = sanitize_container(&container);
         let cdir = self.container_to_path(&container);
         std::fs::create_dir_all(cdir)?;
-        Ok(serialize(&container)?)
+        serialize(&container)
     }
 
     fn remove_container(
@@ -138,7 +137,7 @@ impl FileSystemProvider {
                 byte_size: 0,
             }
         };
-        Ok(serialize(&blob)?)
+        serialize(&blob)
     }
 
     fn list_objects(
@@ -159,7 +158,7 @@ impl FileSystemProvider {
             .partition(Result::is_ok);
         let blobs = blobs.into_iter().map(Result::unwrap).collect();
         let bloblist = BlobList { blobs };
-        Ok(serialize(&bloblist)?)
+        serialize(&bloblist)
     }
 
     fn upload_chunk(
