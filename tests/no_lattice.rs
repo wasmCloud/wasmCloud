@@ -256,7 +256,6 @@ pub async fn kvcounter_link_first() -> Result<()> {
     await_provider_count(&h, 4, Duration::from_millis(50), 3).await?; // 2 providers plus wasmcloud:extras
     actix_rt::time::sleep(Duration::from_millis(150)).await;
 
-
     let key = uuid::Uuid::new_v4().to_string();
     let rkey = format!(":{}", key); // the kv wasm logic does a replace on '/' with ':'
     let url = format!("http://localhost:{}/{}", web_port, key);
