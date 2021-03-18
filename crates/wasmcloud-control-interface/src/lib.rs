@@ -1,16 +1,15 @@
-use inv::WasccEntity;
-use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, time::Duration};
-use sub_stream::SubscriptionStream;
-use wascap::prelude::KeyPair;
-
-pub use crate::generated::ctliface::*;
-pub use inv::{Invocation, InvocationResponse};
-
 pub mod broker;
 mod generated;
 mod inv;
 mod sub_stream;
+
+pub use crate::generated::ctliface::*;
+use inv::Entity;
+pub use inv::{Invocation, InvocationResponse};
+use serde::{Deserialize, Serialize};
+use std::{collections::HashMap, time::Duration};
+use sub_stream::SubscriptionStream;
+use wascap::prelude::KeyPair;
 
 type Result<T> = ::std::result::Result<T, Box<dyn ::std::error::Error + Send + Sync>>;
 
@@ -136,8 +135,8 @@ impl Client {
         let subject = broker::rpc::call_actor(&self.nsprefix, target_id);
         let bytes = crate::generated::ctliface::serialize(Invocation::new(
             &self.key,
-            WasccEntity::Actor("system".to_string()),
-            WasccEntity::Actor(target_id.to_string()),
+            Entity::Actor("system".to_string()),
+            Entity::Actor(target_id.to_string()),
             operation,
             data.to_vec(),
         ))?;

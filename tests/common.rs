@@ -99,7 +99,7 @@ pub async fn gen_kvcounter_host(
     webvalues.insert("PORT".to_string(), format!("{}", web_port));
     h.start_native_capability(redis).await?;
     h.start_native_capability(websrv).await?;
-    await_provider_count(&h, 4, Duration::from_millis(50), 3).await?; // 2 providers plus wascc:extras
+    await_provider_count(&h, 4, Duration::from_millis(50), 3).await?; // 2 providers plus wasmcloud:extras
     h.set_link(&kvcounter_key, "wasmcloud:keyvalue", None, redis_id, values)
         .await?;
 

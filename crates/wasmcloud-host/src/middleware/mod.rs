@@ -5,7 +5,7 @@ use crate::Result;
 
 pub(crate) use runner::*;
 
-/// The trait that must be implemented by all waSCC middleware. Each time an actor or
+/// The trait that must be implemented by all middleware. Each time an actor or
 /// capability provider is invoked, each middleware in the chain will get a chance to
 /// react to the input Invocation. Middleware is cloned on a 1:1 basis with each
 /// potential target. Because each of the target types invokes in single-threaded fashion,

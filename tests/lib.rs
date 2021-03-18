@@ -1,3 +1,4 @@
+#[cfg(test)]
 mod common;
 mod control;
 mod no_lattice;

@@ -36,7 +36,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::time::Duration;
 use actix_rt::time::delay_for;
-extern crate reqwest;
+use reqwest;
 
 const WEB_PORT: u32 = 8080;
 

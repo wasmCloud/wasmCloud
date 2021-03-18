@@ -6,11 +6,7 @@
 use crate::generated::core::HealthResponse;
 use crate::generated::extras::{GeneratorRequest, GeneratorResult};
 use crate::messagebus::handlers::OP_HEALTH_REQUEST;
-extern crate wasmcloud_provider_core as codec;
 
-use codec::capabilities::{CapabilityProvider, Dispatcher, NullDispatcher};
-use codec::core::OP_BIND_ACTOR;
-use codec::{deserialize, serialize};
 use std::error::Error;
 use std::sync::{Arc, RwLock};
 use std::{
@@ -19,6 +15,9 @@ use std::{
 };
 use uuid::Uuid;
 use wascap::jwt::Claims;
+use wasmcloud_provider_core::capabilities::{CapabilityProvider, Dispatcher, NullDispatcher};
+use wasmcloud_provider_core::core::OP_BIND_ACTOR;
+use wasmcloud_provider_core::{deserialize, serialize};
 
 pub(crate) const OP_REQUEST_GUID: &str = "RequestGuid";
 pub(crate) const OP_REQUEST_RANDOM: &str = "RequestRandom";
@@ -104,7 +103,7 @@ impl ExtrasCapabilityProvider {
 impl CapabilityProvider for ExtrasCapabilityProvider {
     fn configure_dispatch(
         &self,
-        dispatcher: Box<dyn codec::capabilities::Dispatcher>,
+        dispatcher: Box<dyn Dispatcher>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         trace!("Dispatcher received.");
         let mut lock = self.dispatcher.write().unwrap();

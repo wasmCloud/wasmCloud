@@ -1,8 +1,9 @@
+use std::{env::temp_dir, path::PathBuf};
+
 use crate::{Host, Result};
 use provider_archive::ProviderArchive;
 use wascap::jwt::Claims;
-extern crate wasmcloud_provider_core as codec;
-use codec::capabilities::CapabilityProvider;
+use wasmcloud_provider_core::capabilities::CapabilityProvider;
 
 /// Represents a native capability provider compiled as a shared object library.
 /// These plugins are OS- and architecture-specific, so they will be `.so` files on Linux, `.dylib`
@@ -25,6 +26,7 @@ impl NativeCapability {
         if archive.claims().is_none() {
             return Err("No claims found in provider archive file".into());
         }
+
         let link = normalize_link_name(link_target_name.unwrap_or_else(|| "default".to_string()));
 
         let target = Host::native_target();
@@ -45,7 +47,7 @@ impl NativeCapability {
     }
 
     /// This function is to be used for _capability embedding_. If you are building a custom
-    /// waSCC host and have a fixed set of capabilities that you want to always be available
+    /// wasmcloud host and have a fixed set of capabilities that you want to always be available
     /// to actors, then you can declare a dependency on the capability provider, enable
     /// the `static_plugin` feature, and provide an instance of that provider. Be sure to check
     /// that the provider supports capability embedding. You must also provide a set of valid
@@ -69,6 +71,18 @@ impl NativeCapability {
     /// Returns the unique ID (public key/subject) of the capability provider
     pub fn id(&self) -> String {
         self.claims.subject.to_string()
+    }
+
+    pub fn cache_path(&self) -> PathBuf {
+        let mut path = temp_dir();
+        path.push("wasmcloudcache");
+        path.push(&self.claims.subject);
+        path.push(format!(
+            "{}",
+            self.claims.metadata.as_ref().unwrap().rev.unwrap_or(0)
+        ));
+        path.push(Host::native_target());
+        path
     }
 }
 

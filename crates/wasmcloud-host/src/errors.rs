@@ -28,7 +28,7 @@ impl StdError for Error {
             ErrorKind::HostCallFailure(_) => "Error occurred during host call",
             ErrorKind::Wascap(_) => "Embedded JWT Failure",
             ErrorKind::Authorization(_) => "Module authorization failure",
-            ErrorKind::MiscHost(_) => "waSCC Host error",
+            ErrorKind::MiscHost(_) => "Wasmcloud Host error",
             ErrorKind::Plugin(_) => "Plugin error",
         }
     }
@@ -58,7 +58,7 @@ impl fmt::Display for Error {
                 write!(f, "WebAssembly module authorization failure: {}", err)
             }
             ErrorKind::IO(ref err) => write!(f, "I/O error: {}", err),
-            ErrorKind::MiscHost(ref err) => write!(f, "waSCC Host Error: {}", err),
+            ErrorKind::MiscHost(ref err) => write!(f, "Wasmcloud Host Error: {}", err),
             ErrorKind::Plugin(ref err) => write!(f, "Plugin error: {}", err),
         }
     }

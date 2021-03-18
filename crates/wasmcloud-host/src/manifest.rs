@@ -105,6 +105,8 @@ pub(crate) async fn generate_actor_start_messages(
                     image_ref: Some(actor_ref.to_string()),
                     actor: a,
                 });
+            } else {
+                error!("Actor {} not found on disk or in registry", actor_ref);
             }
         }
     }
@@ -125,6 +127,9 @@ pub(crate) async fn generate_provider_start_messages(
                 .and_then(|bytes| ProviderArchive::try_load(&bytes))
                 .and_then(|par| NativeCapability::from_archive(&par, cap.link_name.clone()))
             {
+                if let Err(e) = crate::capability::native_host::write_provider_to_disk(&prov) {
+                    error!("Could not cache provider to disk: {}", e);
+                }
                 v.push(StartProvider {
                     provider: prov,
                     image_ref: None,
@@ -141,6 +146,11 @@ pub(crate) async fn generate_provider_start_messages(
                     provider: prov,
                     image_ref: Some(cap.image_ref.to_string()),
                 })
+            } else {
+                error!(
+                    "Provider {} not found on disk or in registry",
+                    cap.image_ref
+                );
             }
         }
     }
@@ -170,6 +180,7 @@ fn file_bytes(path: &Path) -> crate::Result<Vec<u8>> {
     let mut f = File::open(path)?;
     let mut bytes = Vec::new();
     f.read_to_end(&mut bytes)?;
+    trace!("read {} bytes from file {}", bytes.len(), path.display());
     Ok(bytes)
 }
 

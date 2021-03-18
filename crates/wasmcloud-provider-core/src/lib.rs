@@ -79,8 +79,7 @@
 
 pub use capabilities::*;
 
-extern crate rmp_serde as rmps;
-use rmps::{Deserializer, Serializer};
+use rmp_serde::{Deserializer, Serializer};
 use serde::{Deserialize, Serialize};
 use std::io::Cursor;
 

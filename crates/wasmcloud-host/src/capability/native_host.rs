@@ -6,16 +6,12 @@ use crate::dispatch::{Invocation, InvocationResponse, ProviderDispatcher, WasmCl
 use crate::hlreg::HostLocalSystemService;
 use crate::messagebus::{EnforceLocalProviderLinks, MessageBus, Subscribe};
 use crate::middleware::{run_capability_post_invoke, run_capability_pre_invoke, Middleware};
-use crate::Host;
 use crate::{ControlEvent, Result};
 use actix::prelude::*;
 use futures::executor::block_on;
 use libloading::{Library, Symbol};
-use std::env::temp_dir;
-use std::fs::File;
 use wascap::prelude::KeyPair;
-extern crate wasmcloud_provider_core as codec;
-use codec::capabilities::CapabilityProvider;
+use wasmcloud_provider_core::capabilities::CapabilityProvider;
 
 #[derive(Message)]
 #[rtype(result = "Result<WasmCloudEntity>")]
@@ -228,28 +224,32 @@ impl Handler<Invocation> for NativeCapabilityHost {
     }
 }
 
+pub(crate) fn write_provider_to_disk(cap: &NativeCapability) -> Result<()> {
+    if let Some(ref bytes) = cap.native_bytes {
+        use std::io::Write;
+        let path = cap.cache_path();
+        let mut parent_dir = path.clone();
+        parent_dir.pop();
+        std::fs::create_dir_all(parent_dir)?;
+        debug!("Caching provider to {}", path.display());
+        let mut file = std::fs::File::create(&path)?;
+        Ok(file.write_all(&bytes)?)
+    } else {
+        Err("No bytes to cache".into())
+    }
+}
+
 fn extrude(
     cap: &NativeCapability,
 ) -> Result<(Option<Library>, Box<dyn CapabilityProvider + 'static>)> {
-    use std::io::Write;
-    if let Some(ref bytes) = cap.native_bytes {
-        let path = temp_dir();
-        let path = path.join("wasmcloudcache");
-        let path = path.join(&cap.claims.subject);
-        let path = path.join(format!(
-            "{}",
-            cap.claims.metadata.as_ref().unwrap().rev.unwrap_or(0)
-        ));
-        ::std::fs::create_dir_all(&path)?;
-        let target = Host::native_target();
-        let path = path.join(&target);
-        // If this file is already on disk, some other host has probably
-        // created it so don't over-write
-        if !path.exists() {
-            let mut tf = File::create(&path)?;
-            tf.write_all(&bytes)?;
+    if cap.native_bytes.is_some() {
+        let path = cap.cache_path();
+        // If this file is already on disk, don't overwrite
+        if path.exists() {
+            debug!("Using cache at {}", path.display());
+        } else {
+            write_provider_to_disk(cap)?;
         }
-
         #[cfg(target_os = "linux")]
         let library: Library = {
             // On linux the library must be loaded with `RTLD_NOW | RTLD_NODELETE` to fix a SIGSEGV
