@@ -75,6 +75,7 @@ struct Cli {
     manifest: Option<PathBuf>,
 
     /// attach a label to the host - can be used multiple times
+    // `number_of_values = 1` means that each occurrence of the flag accepts only one key-value pair
     #[structopt(long = "label", short = "l", parse(try_from_str = parse_key_val), number_of_values = 1)]
     labels: Vec<(String, String)>,
 }
@@ -204,8 +205,8 @@ mod test {
     #[test]
     fn parse_key_val_ok() {
         let expected = ("x".to_string(), "1".to_string());
-        let actual = parse_key_val::<String, String>("x=1").unwrap();
-        assert!(actual == expected);
+        let actual: (String, String) = parse_key_val("x=1").unwrap();
+        assert_eq!(actual, expected);
     }
 
     #[test]
