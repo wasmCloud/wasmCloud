@@ -247,12 +247,12 @@ pub(crate) async fn handle_start_actor(
     allow_latest: bool,
     allowed_insecure: &[String],
 ) {
-    let cmd = deserialize::<StartActorCommand>(&msg.data);
     let mut ack = StartActorAck {
         host_id: host.to_string(),
         ..Default::default()
     };
 
+    let cmd = deserialize::<StartActorCommand>(&msg.data);
     if let Err(e) = cmd {
         let f = format!("Bad StartActor command received: {}", e);
         error!("{}", f);
@@ -404,6 +404,8 @@ pub(crate) async fn handle_start_provider(
         return;
     }
     let cmd = cmd.unwrap();
+    ack.provider_ref = cmd.provider_ref.to_string();
+
     let hc = HostController::from_hostlocal_registry(host);
 
     let res = hc
