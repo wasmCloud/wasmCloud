@@ -130,7 +130,6 @@ impl Handler<Initialize> for ActorHost {
 
     fn handle(&mut self, msg: Initialize, ctx: &mut Self::Context) -> Self::Result {
         let image_ref = msg.image_ref.clone();
-        self.state.as_mut().unwrap().image_ref = msg.image_ref.clone();
         let actor = perform_initialization(self, ctx, msg);
         match actor {
             Ok(a) => {
