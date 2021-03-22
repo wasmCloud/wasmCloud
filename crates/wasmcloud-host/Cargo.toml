@@ -12,7 +12,6 @@ readme = "README.md"
 keywords = ["webassembly", "wasm", "wasmcloud", "wapc", "actors"]
 categories = ["wasm", "api-bindings"]
 
-
 [features]
 default = ["wasm3"]
 wasmtime = ["wasmtime-provider"]
@@ -44,9 +43,12 @@ serde_yaml = "0.8.14"
 uuid = {version = "0.8", features  = ["serde", "v4"]}
 wapc = "0.10.1"
 wascap = "0.6.0"
-wasm3-provider = { version = "0.0.2", optional = true}
+tokio = { version = "0.3.5", features = ["rt"] }
+serde_bytes = "0.11.5"
 wasmcloud-actor-keyvalue = "0.2.0"
-wasmcloud-control-interface = { path = "../wasmcloud-control-interface", version = "0.1.1" }
+wasmcloud-control-interface = { path = "../wasmcloud-control-interface", version = "0.2.1" }
+
+wasm3-provider = { version = "0.0.2", optional = true}
 wasmtime-provider = { version = "0.0.2" , optional = true}
 
 [dependencies.wasmcloud-provider-core]

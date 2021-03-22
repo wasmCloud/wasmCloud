@@ -1,5 +1,4 @@
-use std::io::prelude::*;
-use std::{fs::File, path::PathBuf};
+use std::{error::Error, fs::File, io::prelude::*, path::PathBuf, str};
 use structopt::{clap::AppSettings, StructOpt};
 use wasmcloud_host::{HostBuilder, HostManifest, Result};
 
@@ -74,6 +73,11 @@ struct Cli {
     /// Specifies a manifest file to apply to the host once started
     #[structopt(long = "manifest", short = "m", parse(from_os_str))]
     manifest: Option<PathBuf>,
+
+    /// attach a label to the host - can be used multiple times
+    // `number_of_values = 1` means that each occurrence of the flag accepts only one key-value pair
+    #[structopt(long = "label", short = "l", parse(try_from_str = parse_key_val), number_of_values = 1)]
+    labels: Vec<(String, String)>,
 }
 
 #[actix_rt::main]
@@ -119,6 +123,10 @@ async fn main() -> Result<()> {
     if !cli.allowed_insecure.is_empty() {
         host_builder = host_builder.oci_allow_insecure(cli.allowed_insecure);
     }
+
+    host_builder = cli.labels.iter().fold(host_builder, |host_builder, label| {
+        host_builder.with_label(&label.0, &label.1)
+    });
 
     let host = host_builder.build();
     match host.start().await {
@@ -173,5 +181,37 @@ fn extract_arg_value(arg: &str) -> Result<String> {
             Ok(value)
         }
         Err(_) => Ok(arg.to_string()),
+    }
+}
+
+/// Parse a single key-value pair
+fn parse_key_val<T, U>(s: &str) -> std::result::Result<(T, U), Box<dyn Error>>
+where
+    T: str::FromStr,
+    T::Err: Error + 'static,
+    U: str::FromStr,
+    U::Err: Error + 'static,
+{
+    let pos = s
+        .find('=')
+        .ok_or_else(|| format!("invalid KEY=value: no `=` found in `{}`", s))?;
+    Ok((s[..pos].parse()?, s[pos + 1..].parse()?))
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn parse_key_val_ok() {
+        let expected = ("x".to_string(), "1".to_string());
+        let actual: (String, String) = parse_key_val("x=1").unwrap();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn parse_key_val_err() {
+        let actual = parse_key_val::<String, String>("bad string");
+        assert!(actual.is_err());
     }
 }

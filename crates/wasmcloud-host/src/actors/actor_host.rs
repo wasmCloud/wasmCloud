@@ -63,20 +63,6 @@ impl Handler<LiveUpdate> for ActorHost {
             );
             return Err("Attempt to live update actor denied. Runtime updates for this actor are not enabled".into());
         }
-        if *self
-            .state
-            .as_ref()
-            .unwrap()
-            .image_ref
-            .as_ref()
-            .unwrap_or(&"".to_string())
-            != msg.image_ref
-        {
-            error!("Live updated targeted at this actor but the image ref does not match");
-            return Err(
-                "Image reference for live update actor does not match running actor".into(),
-            );
-        }
 
         let actor = WasmCloudActor::from_slice(&msg.actor_bytes)?;
         let new_claims = actor.claims();
