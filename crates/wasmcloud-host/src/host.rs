@@ -20,7 +20,6 @@ use crate::oci::fetch_oci_bytes;
 use crate::{ControlEvent, HostManifest, NativeCapability, WasmCloudEntity};
 use crate::{Result, SYSTEM_ACTOR};
 use provider_archive::ProviderArchive;
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::time::Duration;
 use wascap::prelude::KeyPair;
@@ -180,13 +179,14 @@ impl HostBuilder {
     /// Constructs an instance of a wasmCloud host. Note that this will not _start_ the host. You
     /// will need to invoke the `start` function after building a new host
     pub fn build(self) -> Host {
+        let kp = KeyPair::new_server();
         Host {
             labels: self.labels,
             authorizer: self.authorizer,
-            id: RefCell::new("".to_string()),
+            id: kp.public_key(),
             allow_latest: self.allow_latest,
             allowed_insecure: self.allowed_insecure,
-            kp: RefCell::new(None),
+            kp,
             rpc_timeout: self.rpc_timeout,
             namespace: self.namespace,
             rpc_client: self.rpc_client,
@@ -204,10 +204,10 @@ impl HostBuilder {
 pub struct Host {
     labels: HashMap<String, String>,
     authorizer: Box<dyn Authorizer + 'static>,
-    id: RefCell<String>,
+    id: String,
     allow_latest: bool,
     allowed_insecure: Vec<String>,
-    kp: RefCell<Option<KeyPair>>,
+    kp: KeyPair,
     namespace: String,
     rpc_timeout: Duration,
     cplane_client: Option<nats::asynk::Connection>,
@@ -221,23 +221,21 @@ impl Host {
     /// Starts the host's actor system. This call is non-blocking, so it is up to the consumer
     /// to provide some form of parking or waiting (e.g. wait for a Ctrl-C signal).
     pub async fn start(&self) -> Result<()> {
-        let kp = KeyPair::new_server();
-
-        let mb = MessageBus::from_hostlocal_registry(&kp.public_key());
+        let mb = MessageBus::from_hostlocal_registry(&self.kp.public_key());
         let init = crate::messagebus::Initialize {
             nc: self.rpc_client.clone(),
             namespace: Some(self.namespace.to_string()),
-            key: KeyPair::from_seed(&kp.seed()?)?,
+            key: KeyPair::from_seed(&self.kp.seed()?)?,
             auth: self.authorizer.clone(),
             rpc_timeout: self.rpc_timeout,
         };
         mb.send(init).await?;
 
-        let hc = HostController::from_hostlocal_registry(&kp.public_key());
+        let hc = HostController::from_hostlocal_registry(&self.kp.public_key());
         hc.send(crate::host_controller::Initialize {
             labels: self.labels.clone(),
             auth: self.authorizer.clone(),
-            kp: KeyPair::from_seed(&kp.seed()?)?,
+            kp: KeyPair::from_seed(&self.kp.seed()?)?,
             allow_live_updates: self.allow_live_updates,
             allow_latest: self.allow_latest,
             allowed_insecure: self.allowed_insecure.clone(),
@@ -246,10 +244,8 @@ impl Host {
         })
         .await?;
 
-        *self.id.borrow_mut() = kp.public_key();
-
-        // Start control plane
-        let cp = ControlInterface::from_hostlocal_registry(&kp.public_key());
+        // Start control interface
+        let cp = ControlInterface::from_hostlocal_registry(&self.kp.public_key());
         cp.send(crate::control_interface::ctlactor::Initialize {
             client: self.cplane_client.clone(),
             control_options: ControlOptions {
@@ -258,7 +254,7 @@ impl Host {
                 oci_allowed_insecure: self.allowed_insecure.clone(),
                 ..Default::default()
             },
-            key: KeyPair::from_seed(&kp.seed()?)?,
+            key: KeyPair::from_seed(&self.kp.seed()?)?,
             ns_prefix: self.namespace.to_string(),
         })
         .await?;
@@ -269,15 +265,13 @@ impl Host {
             })
             .await;
 
-        *self.kp.borrow_mut() = Some(kp);
-
         Ok(())
     }
 
     /// Stops a running host. Be aware that this function may terminate before the host has
     /// finished disposing of all of its resources
     pub async fn stop(&self) {
-        let cp = ControlInterface::from_hostlocal_registry(&self.id.borrow());
+        let cp = ControlInterface::from_hostlocal_registry(&self.id);
         let _ = cp
             .send(PublishEvent {
                 event: ControlEvent::HostStopped,
@@ -290,13 +284,13 @@ impl Host {
     /// The host's private key is used to securely sign invocations so that remote hosts can perform
     /// anti-forgery checks
     pub fn id(&self) -> String {
-        self.id.borrow().to_string()
+        self.id.to_string()
     }
 
     /// Starts a native (non-portable dynamically linked library plugin) capability provider and preps
     /// it for execution in the host
     pub async fn start_native_capability(&self, capability: crate::NativeCapability) -> Result<()> {
-        let hc = HostController::from_hostlocal_registry(&self.id.borrow());
+        let hc = HostController::from_hostlocal_registry(&self.id);
         let _ = hc
             .send(StartProvider {
                 provider: capability,
@@ -317,7 +311,7 @@ impl Host {
         cap_ref: &str,
         link_name: Option<String>,
     ) -> Result<()> {
-        let hc = HostController::from_hostlocal_registry(&self.id.borrow());
+        let hc = HostController::from_hostlocal_registry(&self.id);
         let bytes = fetch_oci_bytes(cap_ref, self.allow_latest, &self.allowed_insecure).await?;
         let par = ProviderArchive::try_load(&bytes)?;
         let nc = NativeCapability::from_archive(&par, link_name)?;
@@ -331,7 +325,7 @@ impl Host {
 
     /// Instructs the runtime host to start an actor.
     pub async fn start_actor(&self, actor: crate::Actor) -> Result<()> {
-        let hc = HostController::from_hostlocal_registry(&self.id.borrow());
+        let hc = HostController::from_hostlocal_registry(&self.id);
 
         hc.send(StartActor {
             actor,
@@ -345,7 +339,7 @@ impl Host {
     /// start the actor. This call will fail if the host cannot communicate with or finish
     /// downloading the indicated OCI image
     pub async fn start_actor_from_registry(&self, actor_ref: &str) -> Result<()> {
-        let hc = HostController::from_hostlocal_registry(&self.id.borrow());
+        let hc = HostController::from_hostlocal_registry(&self.id);
         let bytes = fetch_oci_bytes(actor_ref, self.allow_latest, &self.allowed_insecure).await?;
         let actor = crate::Actor::from_slice(&bytes)?;
         hc.send(StartActor {
@@ -360,7 +354,7 @@ impl Host {
     /// not fail if you attempt to stop an actor that is not running (though this may result
     /// in errors or warnings in log output)
     pub async fn stop_actor(&self, actor_ref: &str) -> Result<()> {
-        let hc = HostController::from_hostlocal_registry(&self.id.borrow());
+        let hc = HostController::from_hostlocal_registry(&self.id);
         hc.send(StopActor {
             actor_ref: actor_ref.to_string(),
         })
@@ -378,7 +372,7 @@ impl Host {
         contract_id: &str,
         link: Option<String>,
     ) -> Result<()> {
-        let hc = HostController::from_hostlocal_registry(&self.id.borrow());
+        let hc = HostController::from_hostlocal_registry(&self.id);
         let link_name = link.unwrap_or_else(|| "default".to_string());
         hc.send(StopProvider {
             provider_ref: provider_ref.to_string(),
@@ -392,7 +386,7 @@ impl Host {
     /// Retrieves the list of all actors within this host. This function call does _not_
     /// include any actors remotely running in a connected lattice
     pub async fn get_actors(&self) -> Result<Vec<String>> {
-        let b = MessageBus::from_hostlocal_registry(&self.id.borrow());
+        let b = MessageBus::from_hostlocal_registry(&self.id);
         Ok(b.send(QueryActors {}).await?.results)
     }
 
@@ -400,7 +394,7 @@ impl Host {
     /// _not_ include any capability providers that may be remotely running in a connected
     /// lattice
     pub async fn get_providers(&self) -> Result<Vec<String>> {
-        let b = MessageBus::from_hostlocal_registry(&self.id.borrow());
+        let b = MessageBus::from_hostlocal_registry(&self.id);
         Ok(b.send(QueryProviders {}).await?.results)
     }
 
@@ -412,7 +406,7 @@ impl Host {
     /// public key or the actor's registered call alias. This call will fail if you attempt to
     /// invoke a non-existent actor or call alias.
     pub async fn call_actor(&self, actor: &str, operation: &str, msg: &[u8]) -> Result<Vec<u8>> {
-        let b = MessageBus::from_hostlocal_registry(&self.id.borrow());
+        let b = MessageBus::from_hostlocal_registry(&self.id);
         let target = if actor.len() == 56 && actor.starts_with('M') {
             WasmCloudEntity::Actor(actor.to_string())
         } else if let Some(pk) = crate::dispatch::lookup_call_alias(&b, actor).await {
@@ -422,13 +416,13 @@ impl Host {
         };
 
         let inv = Invocation::new(
-            self.kp.borrow().as_ref().unwrap(),
+            &self.kp,
             WasmCloudEntity::Actor(SYSTEM_ACTOR.to_string()),
             target,
             operation,
             msg.to_vec(),
         );
-        let b = MessageBus::from_hostlocal_registry(&self.id.borrow());
+        let b = MessageBus::from_hostlocal_registry(&self.id);
         let ir: InvocationResponse = b.send(inv).await?;
 
         if let Some(e) = ir.error {
@@ -453,7 +447,7 @@ impl Host {
         provider_id: String,
         values: HashMap<String, String>,
     ) -> Result<()> {
-        let bus = MessageBus::from_hostlocal_registry(&self.id.borrow());
+        let bus = MessageBus::from_hostlocal_registry(&self.id);
         bus.send(AdvertiseLink {
             contract_id: contract_id.to_string(),
             actor: actor.to_string(),
@@ -470,7 +464,7 @@ impl Host {
     /// repeated application of multiple manifests may not always produce the same runtime
     /// host state
     pub async fn apply_manifest(&self, manifest: HostManifest) -> Result<()> {
-        let host_id = self.kp.borrow().as_ref().unwrap().public_key();
+        let host_id = self.kp.public_key();
         let hc = HostController::from_hostlocal_registry(&host_id);
         let bus = MessageBus::from_hostlocal_registry(&host_id);
 
@@ -516,4 +510,17 @@ impl Host {
     pub(crate) fn native_target() -> String {
         format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS)
     }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::HostBuilder;
+
+    #[test]
+    fn is_send() {
+        let h = HostBuilder::new().build();
+        assert_is_send(h);
+    }
+
+    fn assert_is_send<T: Send>(_input: T) {}
 }

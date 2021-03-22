@@ -38,7 +38,7 @@ wapc = { version = "0.10.1" }
 log = "0.4.11"
 env_logger = "0.8.2"
 anyhow = "1.0.34"
-wasmcloud-host = { path = "crates/wasmcloud-host", version = "0.15.3" }
+wasmcloud-host = { path = "crates/wasmcloud-host", version = "0.15.4" }
 actix-rt = "1.1.1"
 nats = "0.8.6"
 structopt = "0.3.21"
