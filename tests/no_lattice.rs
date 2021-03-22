@@ -42,7 +42,7 @@ pub async fn start_and_stop_actor() -> Result<()> {
     let buf = serialize(&request)?;
     println!("{}", buf.len());
     let res = h.call_actor(&actor_id, "HandleRequest", &buf).await;
-    assert!(true, res.is_err()); // We should not still be able to call this actor
+    assert!(res.is_err()); // We should not still be able to call this actor
 
     Ok(())
 }
