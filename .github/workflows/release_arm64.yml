@@ -23,6 +23,8 @@ jobs:
           arch: aarch64
           distro: ubuntu20.04
           shell: /bin/bash
+          setup: |
+            mkdir -p "${PWD}/artifacts"
           dockerRunArgs: |
             --volume "${PWD}/artifacts:/artifacts"
           install: |
@@ -43,9 +45,9 @@ jobs:
       - name: Package arm64
         run: |
           curl -sfL https://install.goreleaser.com/github.com/goreleaser/nfpm.sh | sh
+          ls -l "/artifacts"
           ./bin/nfpm pkg --packager deb -f build/nfpm.arm64.yaml
           ./bin/nfpm pkg --packager rpm -f build/nfpm.arm64.yaml
-          ls -l "${PWD}/artifacts"
           debs=(35 150 155 156 190 203 206 207 210 215 219)
           for distro_version in "${debs[@]}"; do
             curl -F "package[distro_version_id]=${distro_version}" -F "package[package_file]=@$(ls wasmcloud_*_arm64.deb)" https://$PACKAGECLOUD_TOKEN:@packagecloud.io/api/v1/repos/wasmCloud/core/packages.json;
