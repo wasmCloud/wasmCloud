@@ -12,8 +12,8 @@ use crate::messagebus::LinkDefinition;
 use crate::{Invocation, Result, WasmCloudEntity, SYSTEM_ACTOR};
 use actix::Recipient;
 use wasmcloud_actor_keyvalue::{
-    DelArgs, GetArgs, GetResponse, SetAddArgs, SetArgs, SetQueryArgs, SetQueryResponse,
-    SetRemoveArgs, OP_DEL, OP_GET, OP_SET, OP_SET_ADD, OP_SET_QUERY, OP_SET_REMOVE,
+    GetArgs, GetResponse, SetAddArgs, SetArgs, SetQueryArgs, SetQueryResponse, OP_GET, OP_SET,
+    OP_SET_ADD, OP_SET_QUERY,
 };
 
 use serde::Deserialize;
@@ -54,19 +54,6 @@ impl LatticeCacheClient {
             provider,
             cache_provider_id: provider_id.to_string(),
         }
-    }
-
-    /// Check if a given OCI mapping is present without actually looking up the value. This
-    /// function will return false if any errors happen while communicating with the message
-    /// bus.
-    pub async fn contains_oci_mapping(&self, oci_ref: &str) -> bool {
-        let key = prefix("ocis");
-        let args = SetQueryArgs { key };
-        let inv = self.invocation_for_provider(OP_SET_QUERY, &serialize(&args).unwrap());
-        invoke_as::<SetQueryResponse>(&self.provider, inv)
-            .await
-            .map(|qr| qr.values.contains(&oci_ref.to_string()))
-            .unwrap_or(false)
     }
 
     /// Adds an OCI reference mapping to the cache. The OCI reference is an OCI compliant
@@ -139,15 +126,6 @@ impl LatticeCacheClient {
         let gr: GetResponse = invoke_as(&self.provider, inv).await?;
         if gr.exists {
             Ok(Some(gr.value))
-        } else {
-            Ok(None)
-        }
-    }
-
-    pub async fn remove_oci_mapping(&self, oci_ref: &str) -> Result<Option<String>> {
-        if let Some(s) = self.lookup_oci_mapping(oci_ref).await? {
-            self.remove_oci(oci_ref).await?;
-            Ok(Some(s))
         } else {
             Ok(None)
         }
@@ -379,35 +357,6 @@ impl LatticeCacheClient {
         }
 
         res
-    }
-
-    /// Removes an OCI mapping from the cache
-    async fn remove_oci(&self, oci_ref: &str) -> Result<()> {
-        let key = prefix("ocis");
-        let args = SetRemoveArgs {
-            key,
-            value: oci_ref.to_string(),
-        };
-        let inv = self.invocation_for_provider(OP_SET_REMOVE, &serialize(&args)?);
-        let inv_r = self.provider.send(inv).await?;
-        if let Some(e) = inv_r.error {
-            let s = format!("Failed to remove OCI reference from set: {}", e);
-            error!("{}", s);
-            return Err(s.into());
-        }
-
-        let args = DelArgs {
-            key: oci_key(oci_ref),
-        };
-        let inv = self.invocation_for_provider(OP_DEL, &serialize(&args)?);
-        let inv_r = self.provider.send(inv).await?;
-        if let Some(e) = inv_r.error {
-            let s = format!("Failed to delete OCI mapping: {}", e);
-            error!("{}", s);
-            Err(s.into())
-        } else {
-            Ok(())
-        }
     }
 
     fn invocation_for_provider(&self, op: &str, payload: &[u8]) -> Invocation {

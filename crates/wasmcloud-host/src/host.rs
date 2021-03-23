@@ -258,7 +258,6 @@ impl Host {
             ns_prefix: self.namespace.to_string(),
         })
         .await?;
-
         let _ = cp
             .send(PublishEvent {
                 event: ControlEvent::HostStarted,

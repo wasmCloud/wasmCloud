@@ -20,19 +20,18 @@ static SREG: Lazy<Mutex<ServiceMap>> = Lazy::new(|| Mutex::new(HashMap::new()));
 /// that implements it
 pub(crate) trait HostLocalSystemService: SystemService {
     fn from_hostlocal_registry(hostid: &str) -> Addr<Self> {
-        System::with_current(|sys| {
-            let mut sreg = SREG.lock();
-            let reg = sreg.entry(hostid.to_string()).or_insert_with(HashMap::new);
+        let sys = System::current();
+        let mut sreg = SREG.lock();
+        let reg = sreg.entry(hostid.to_string()).or_insert_with(HashMap::new);
 
-            if let Some(addr) = reg.get(&TypeId::of::<Self>()) {
-                if let Some(addr) = addr.downcast_ref::<Addr<Self>>() {
-                    return addr.clone();
-                }
+        if let Some(addr) = reg.get(&TypeId::of::<Self>()) {
+            if let Some(addr) = addr.downcast_ref::<Addr<Self>>() {
+                return addr.clone();
             }
+        }
 
-            let addr = Self::start_service(sys.arbiter());
-            reg.insert(TypeId::of::<Self>(), Box::new(addr.clone()));
-            addr
-        })
+        let addr = Self::start_service(sys.arbiter());
+        reg.insert(TypeId::of::<Self>(), Box::new(addr.clone()));
+        addr
     }
 }

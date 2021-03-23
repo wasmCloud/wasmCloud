@@ -16,21 +16,8 @@ pub enum ErrorKind {
     Wascap(wascap::Error),
     Authorization(String),
     IO(std::io::Error),
-    CapabilityProvider(String),
     MiscHost(String),
     Plugin(libloading::Error),
-    Middleware(String),
-    Serialization(String),
-}
-
-impl Error {
-    pub fn kind(&self) -> &ErrorKind {
-        &self.0
-    }
-
-    pub fn into_kind(self) -> ErrorKind {
-        *self.0
-    }
 }
 
 impl StdError for Error {
@@ -41,11 +28,8 @@ impl StdError for Error {
             ErrorKind::HostCallFailure(_) => "Error occurred during host call",
             ErrorKind::Wascap(_) => "Embedded JWT Failure",
             ErrorKind::Authorization(_) => "Module authorization failure",
-            ErrorKind::CapabilityProvider(_) => "Capability provider failure",
             ErrorKind::MiscHost(_) => "Wasmcloud Host error",
             ErrorKind::Plugin(_) => "Plugin error",
-            ErrorKind::Middleware(_) => "Middleware error",
-            ErrorKind::Serialization(_) => "Serialization failure",
         }
     }
 
@@ -56,11 +40,8 @@ impl StdError for Error {
             ErrorKind::Wascap(ref err) => Some(err),
             ErrorKind::Authorization(_) => None,
             ErrorKind::IO(ref err) => Some(err),
-            ErrorKind::CapabilityProvider(_) => None,
             ErrorKind::MiscHost(_) => None,
             ErrorKind::Plugin(ref err) => Some(err),
-            ErrorKind::Middleware(_) => None,
-            ErrorKind::Serialization(_) => None,
         }
     }
 }
@@ -77,13 +58,8 @@ impl fmt::Display for Error {
                 write!(f, "WebAssembly module authorization failure: {}", err)
             }
             ErrorKind::IO(ref err) => write!(f, "I/O error: {}", err),
-            ErrorKind::CapabilityProvider(ref err) => {
-                write!(f, "Capability provider error: {}", err)
-            }
             ErrorKind::MiscHost(ref err) => write!(f, "Wasmcloud Host Error: {}", err),
             ErrorKind::Plugin(ref err) => write!(f, "Plugin error: {}", err),
-            ErrorKind::Middleware(ref err) => write!(f, "Middleware error: {}", err),
-            ErrorKind::Serialization(ref err) => write!(f, "Serialization failure: {}", err),
         }
     }
 }
@@ -125,7 +101,6 @@ impl From<String> for Error {
 
 #[cfg(test)]
 mod tests {
-    #[allow(dead_code)]
     fn assert_sync_send<T: Send + Sync>() {}
     const _: fn() = || assert_sync_send::<super::Error>();
 }

@@ -35,7 +35,7 @@ use wasmcloud_host::{HostBuilder, Actor, NativeCapability};
 use std::collections::HashMap;
 use std::error::Error;
 use std::time::Duration;
-use actix_rt::time::delay_for;
+use actix_rt::time::sleep;
 use reqwest;
 
 const WEB_PORT: u32 = 8080;
@@ -67,7 +67,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync +Send>> {
     // Start the web server provider (which auto-establishes the link)
     h.start_native_capability(websrv).await?;
     // Let the web server start
-    delay_for(Duration::from_millis(500)).await;
+    sleep(Duration::from_millis(500)).await;
     let url = format!("http://localhost:{}/demo?test=kthxbye", WEB_PORT);
 
     let resp = reqwest::get(&url).await?;

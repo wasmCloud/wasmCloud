@@ -1,16 +1,14 @@
 pub mod broker;
 mod generated;
 mod inv;
+mod sub_stream;
 
 pub use crate::generated::ctliface::*;
-use actix_rt::time::delay_for;
-use futures::stream::StreamExt;
-use futures::TryStreamExt;
 use inv::Entity;
 pub use inv::{Invocation, InvocationResponse};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
+use sub_stream::SubscriptionStream;
 use wascap::prelude::KeyPair;
 
 type Result<T> = ::std::result::Result<T, Box<dyn ::std::error::Error + Send + Sync>>;
@@ -36,14 +34,11 @@ impl Client {
     /// Queries the lattice for all responsive hosts, waiting for the full period specified by _timeout_.
     pub async fn get_hosts(&self, timeout: Duration) -> Result<Vec<Host>> {
         let subject = broker::queries::hosts(&self.nsprefix);
-
-        self.nc
-            .request_multi(&subject, vec![])
-            .await?
-            .map(|m| deserialize::<Host>(&m.data))
-            .take_until(delay_for(timeout))
-            .try_collect()
-            .await
+        let sub = self.nc.request_multi(&subject, vec![]).await?;
+        let hosts = SubscriptionStream::new(sub)
+            .collect(timeout, "get hosts")
+            .await;
+        Ok(hosts)
     }
 
     /// Performs an actor auction within the lattice, publishing a set of constraints and the metadata for the actor
@@ -61,13 +56,11 @@ impl Client {
             actor_ref: actor_ref.to_string(),
             constraints,
         })?;
-        self.nc
-            .request_multi(&subject, bytes)
-            .await?
-            .map(|m| deserialize::<ActorAuctionAck>(&m.data))
-            .take_until(delay_for(timeout))
-            .try_collect()
-            .await
+        let sub = self.nc.request_multi(&subject, bytes).await?;
+        let actors = SubscriptionStream::new(sub)
+            .collect(timeout, "actor auction")
+            .await;
+        Ok(actors)
     }
 
     /// Performs a provider auction within the lattice, publishing a set of constraints and the metadata for the provider
@@ -87,13 +80,11 @@ impl Client {
             link_name: link_name.to_string(),
             constraints,
         })?;
-        self.nc
-            .request_multi(&subject, bytes)
-            .await?
-            .map(|m| deserialize::<ProviderAuctionAck>(&m.data))
-            .take_until(delay_for(timeout))
-            .try_collect()
-            .await
+        let sub = self.nc.request_multi(&subject, bytes).await?;
+        let providers = SubscriptionStream::new(sub)
+            .collect(timeout, "provider auction")
+            .await;
+        Ok(providers)
     }
 
     /// Retrieves the contents of a running host

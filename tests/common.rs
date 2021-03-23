@@ -1,4 +1,3 @@
-use actix_rt::time::delay_for;
 use provider_archive::ProviderArchive;
 use std::collections::HashMap;
 use std::fs::File;
@@ -6,10 +5,11 @@ use std::io::Read;
 use std::time::Duration;
 use wasmcloud_host::{Actor, Host, HostBuilder, NativeCapability, Result};
 
-pub const REDIS_OCI: &str = "wasmcloud.azurecr.io/redis:0.11.1";
-pub const HTTPSRV_OCI: &str = "wasmcloud.azurecr.io/httpserver:0.11.1";
-pub const NATS_OCI: &str = "wasmcloud.azurecr.io/nats:0.10.1";
+pub const REDIS_OCI: &str = "wasmcloud.azurecr.io/redis:0.11.2";
+pub const HTTPSRV_OCI: &str = "wasmcloud.azurecr.io/httpserver:0.12.1";
 pub const KVCOUNTER_OCI: &str = "wasmcloud.azurecr.io/kvcounter:0.2.0";
+#[cfg(test)]
+pub const NATS_OCI: &str = "wasmcloud.azurecr.io/nats:0.10.3";
 
 pub async fn await_actor_count(
     h: &Host,
@@ -110,8 +110,9 @@ pub async fn gen_kvcounter_host(
         webvalues,
     )
     .await?;
-    delay_for(Duration::from_millis(75)).await; // give the web server enough time to fire up
 
+    // give the web server enough time to fire up
+    actix_rt::time::sleep(Duration::from_millis(75)).await;
     Ok(h)
 }
 
