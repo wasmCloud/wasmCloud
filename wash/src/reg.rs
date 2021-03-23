@@ -181,7 +181,7 @@ pub(crate) async fn pull_artifact(
     password: Option<String>,
     insecure: bool,
 ) -> Result<Vec<u8>, Box<dyn ::std::error::Error>> {
-    let image: Reference = url.parse().unwrap();
+    let image: Reference = url.parse()?;
 
     if image.tag().unwrap_or("latest") == "latest" && !allow_latest {
         return Err(
