@@ -45,7 +45,7 @@ jobs:
       - name: Package arm64
         run: |
           curl -sfL https://install.goreleaser.com/github.com/goreleaser/nfpm.sh | sh
-          ls -l "/artifacts"
+          ls -l "${PWD}/artifacts"
           ./bin/nfpm pkg --packager deb -f build/nfpm.arm64.yaml
           ./bin/nfpm pkg --packager rpm -f build/nfpm.arm64.yaml
           debs=(35 150 155 156 190 203 206 207 210 215 219)
