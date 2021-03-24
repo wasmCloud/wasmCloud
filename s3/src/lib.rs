@@ -98,7 +98,7 @@ impl S3Provider {
             &container.id,
         ))?;
 
-        Ok(vec![])
+        serialize(container)
     }
 
     fn remove_container(
@@ -107,12 +107,22 @@ impl S3Provider {
         container: Container,
     ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(s3::remove_bucket(
-            &self.clients.read().unwrap()[actor],
-            &container.id,
-        ))?;
-
-        Ok(vec![])
+        serialize(
+            rt.block_on(s3::remove_bucket(
+                &self.clients.read().unwrap()[actor],
+                &container.id,
+            ))
+            .map_or_else(
+                |e| BlobstoreResult {
+                    success: false,
+                    error: Some(e.to_string()),
+                },
+                |_| BlobstoreResult {
+                    success: true,
+                    error: None,
+                },
+            ),
+        )
     }
 
     fn upload_chunk(
@@ -157,7 +167,10 @@ impl S3Provider {
 
         self.uploads.write().unwrap().insert(key, upload);
 
-        Ok(vec![])
+        serialize(BlobstoreResult {
+            success: true,
+            error: None,
+        })
     }
 
     fn remove_object(
@@ -166,13 +179,23 @@ impl S3Provider {
         blob: Blob,
     ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(s3::remove_object(
-            &self.clients.read().unwrap()[actor],
-            &blob.container.id,
-            &blob.id,
-        ))?;
-
-        Ok(vec![])
+        serialize(
+            rt.block_on(s3::remove_object(
+                &self.clients.read().unwrap()[actor],
+                &blob.container.id,
+                &blob.id,
+            ))
+            .map_or_else(
+                |e| BlobstoreResult {
+                    success: false,
+                    error: Some(e.to_string()),
+                },
+                |_| BlobstoreResult {
+                    success: true,
+                    error: None,
+                },
+            ),
+        )
     }
 
     fn get_object_info(
@@ -201,7 +224,7 @@ impl S3Provider {
             }
         };
 
-        Ok(serialize(&blob)?)
+        serialize(&blob)
     }
 
     fn list_objects(
@@ -226,7 +249,7 @@ impl S3Provider {
             vec![]
         };
         let bloblist = BlobList { blobs };
-        Ok(serialize(&bloblist)?)
+        serialize(&bloblist)
     }
 
     fn start_download(
@@ -273,7 +296,10 @@ impl S3Provider {
             });
         });
 
-        Ok(vec![])
+        serialize(BlobstoreResult {
+            success: true,
+            error: None,
+        })
     }
 }
 

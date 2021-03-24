@@ -1,5 +1,9 @@
 use crate::FileUpload;
 use futures::TryStreamExt;
+use hyper::{Client, Uri};
+use hyper_proxy::{Intercept, Proxy, ProxyConnector};
+use hyper_tls::HttpsConnector;
+use log::info;
 use rusoto_core::credential::{DefaultCredentialsProvider, StaticProvider};
 use rusoto_core::Region;
 use rusoto_s3::HeadObjectOutput;
@@ -12,6 +16,9 @@ use rusoto_s3::{
 use wasmcloud_actor_core::CapabilityConfiguration;
 
 use std::error::Error;
+
+type HttpConnector =
+    hyper_proxy::ProxyConnector<hyper_tls::HttpsConnector<hyper::client::HttpConnector>>;
 
 pub(crate) fn client_for_config(
     config: &CapabilityConfiguration,
@@ -30,6 +37,7 @@ pub(crate) fn client_for_config(
     };
 
     let client = if config.values.contains_key("AWS_ACCESS_KEY") {
+        info!("Creating provider from provided keys");
         let provider = StaticProvider::new(
             config.values["AWS_ACCESS_KEY"].to_string(),
             config.values["AWS_SECRET_ACCESS_KEY"].to_string(),
@@ -39,12 +47,20 @@ pub(crate) fn client_for_config(
                 .get("TOKEN_VALID_FOR")
                 .map(|t| t.parse::<i64>().unwrap()),
         );
-        S3Client::new_with(
-            rusoto_core::request::HttpClient::new().expect("Failed to create HTTP client"),
-            provider,
-            region,
-        )
+        let connector: HttpConnector = if let Some(proxy) = config.values.get("HTTP_PROXY") {
+            info!("Proxy enabled for S3 client");
+            let proxy = Proxy::new(Intercept::All, proxy.parse::<Uri>()?);
+            ProxyConnector::from_proxy(hyper_tls::HttpsConnector::new(), proxy)?
+        } else {
+            ProxyConnector::new(HttpsConnector::new())?
+        };
+        let mut hyper_builder: hyper::client::Builder = Client::builder();
+        // disabling due to connection closed issue
+        hyper_builder.pool_max_idle_per_host(0);
+        let client = rusoto_core::HttpClient::from_builder(hyper_builder, connector);
+        S3Client::new_with(client, provider, region)
     } else {
+        info!("Creating provider with default credentials");
         let provider = DefaultCredentialsProvider::new()?;
         S3Client::new_with(
             rusoto_core::request::HttpClient::new().expect("Failed to create HTTP client"),

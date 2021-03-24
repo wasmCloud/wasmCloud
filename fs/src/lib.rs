@@ -86,7 +86,10 @@ impl FileSystemProvider {
         let container = sanitize_container(&container);
         let cdir = self.container_to_path(&container);
         std::fs::remove_dir(cdir)?;
-        Ok(vec![])
+        serialize(BlobstoreResult {
+            success: true,
+            error: None,
+        })
     }
 
     fn start_upload(
@@ -100,10 +103,17 @@ impl FileSystemProvider {
             container: blob.container,
         };
         let blob = sanitize_blob(&blob);
-        info!("Starting upload: {}/{}", blob.container.id, blob.id);
         let bfile = self.blob_to_path(&blob);
-        std::fs::write(bfile, &[])?;
-        Ok(vec![])
+        serialize(std::fs::write(bfile, &[]).map_or_else(
+            |e| BlobstoreResult {
+                success: false,
+                error: Some(e.to_string()),
+            },
+            |_| BlobstoreResult {
+                success: true,
+                error: None,
+            },
+        ))
     }
 
     fn remove_object(
@@ -113,8 +123,16 @@ impl FileSystemProvider {
     ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
         let blob = sanitize_blob(&blob);
         let bfile = self.blob_to_path(&blob);
-        std::fs::remove_file(&bfile)?;
-        Ok(vec![])
+        serialize(std::fs::remove_file(&bfile).map_or_else(
+            |e| BlobstoreResult {
+                success: false,
+                error: Some(e.to_string()),
+            },
+            |_| BlobstoreResult {
+                success: true,
+                error: None,
+            },
+        ))
     }
 
     fn get_object_info(
@@ -212,7 +230,10 @@ impl FileSystemProvider {
             upload_chunks.remove(&key);
         }
 
-        Ok(vec![])
+        serialize(BlobstoreResult {
+            success: true,
+            error: None,
+        })
     }
 
     fn start_download(
@@ -252,7 +273,10 @@ impl FileSystemProvider {
             });
         });
 
-        Ok(vec![])
+        serialize(BlobstoreResult {
+            success: true,
+            error: None,
+        })
     }
 
     fn blob_to_path(&self, blob: &Blob) -> PathBuf {
