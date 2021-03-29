@@ -26,12 +26,11 @@ reqwest = { version = "0.11", features = ["json", "gzip", "brotli"] }
 tokio = { version = "1.3", features = ["rt-multi-thread", "net", "time", "macros", "signal"] }
 base64 = "0.13.0"
 serde_json = "1.0.61"
-wasmcloud-actor-http-client = "0.1.0"
+wasmcloud-actor-http-client = "0.2.0"
 wasmcloud-actor-core = "0.2.0"
 
 [dependencies.wasmcloud-provider-core]
-version = "0.1.0"
-#path = "../../wasmcloud/crates/wasmcloud-provider-core"
+version = "0.1.1"
 
 [dev-dependencies]
 mockito = "0.29"

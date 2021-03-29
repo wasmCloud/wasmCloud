@@ -5,7 +5,7 @@ mod http_client;
 use codec::capabilities::{CapabilityProvider, Dispatcher, NullDispatcher};
 use codec::core::{OP_BIND_ACTOR, OP_REMOVE_ACTOR, SYSTEM_ACTOR};
 use codec::{capability_provider, deserialize};
-use http::{RequestArgs, OP_PERFORM_REQUEST};
+use http::{RequestArgs, OP_REQUEST};
 use log::{info, warn};
 use std::collections::HashMap;
 use std::error::Error;
@@ -143,7 +143,7 @@ impl CapabilityProvider for HttpClientProvider {
         match op {
             OP_BIND_ACTOR if actor == SYSTEM_ACTOR => self.configure(deserialize(msg)?),
             OP_REMOVE_ACTOR if actor == SYSTEM_ACTOR => self.deconfigure(deserialize(msg)?),
-            OP_PERFORM_REQUEST => self.request(actor, deserialize(msg)?),
+            OP_REQUEST => self.request(actor, deserialize(msg)?),
             _ => Err(format!("Unknown operation: {}", op).into()),
         }
     }
