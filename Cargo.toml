@@ -20,6 +20,8 @@ categories = [
     "wasm", "api-bindings", "command-line-utilities"
 ]
 exclude = [
+    "tests/*",
+    "tools/*",
     "demos/*",
     ".github/*",
     ".gitignore"
