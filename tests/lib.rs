@@ -142,3 +142,12 @@ async fn control_calltest() {
     }
     assert!(res.is_ok());
 }
+
+#[actix_rt::test]
+async fn cant_use_unstarted_host() {
+    let res = no_lattice::cant_use_unstarted_host().await;
+    if let Err(ref e) = res {
+        println!("{}", e);
+    }
+    assert!(res.is_ok());
+}

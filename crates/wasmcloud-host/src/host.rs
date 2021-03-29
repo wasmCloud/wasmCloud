@@ -20,8 +20,11 @@ use crate::oci::fetch_oci_bytes;
 use crate::{ControlEvent, HostManifest, NativeCapability, WasmCloudEntity};
 use crate::{Result, SYSTEM_ACTOR};
 use provider_archive::ProviderArchive;
-use std::collections::HashMap;
 use std::time::Duration;
+use std::{
+    collections::HashMap,
+    sync::{Arc, RwLock},
+};
 use wascap::prelude::KeyPair;
 
 /// A host builder provides a convenient, fluid syntax for setting initial configuration
@@ -194,6 +197,7 @@ impl HostBuilder {
             allow_live_updates: self.allow_live_update,
             lattice_cache_provider_ref: self.lattice_cache_provider_ref,
             strict_update_check: self.strict_update_check,
+            started: Arc::new(RwLock::new(false)),
         }
     }
 }
@@ -215,6 +219,7 @@ pub struct Host {
     allow_live_updates: bool,
     lattice_cache_provider_ref: Option<String>,
     strict_update_check: bool,
+    started: Arc<RwLock<bool>>,
 }
 
 impl Host {
@@ -258,6 +263,9 @@ impl Host {
             ns_prefix: self.namespace.to_string(),
         })
         .await?;
+
+        *self.started.write().unwrap() = true;
+
         let _ = cp
             .send(PublishEvent {
                 event: ControlEvent::HostStarted,
@@ -268,7 +276,7 @@ impl Host {
     }
 
     /// Stops a running host. Be aware that this function may terminate before the host has
-    /// finished disposing of all of its resources
+    /// finished disposing of all of its resources.
     pub async fn stop(&self) {
         let cp = ControlInterface::from_hostlocal_registry(&self.id);
         let _ = cp
@@ -276,6 +284,7 @@ impl Host {
                 event: ControlEvent::HostStopped,
             })
             .await;
+        *self.started.write().unwrap() = false;
         System::current().stop();
     }
 
@@ -289,6 +298,7 @@ impl Host {
     /// Starts a native (non-portable dynamically linked library plugin) capability provider and preps
     /// it for execution in the host
     pub async fn start_native_capability(&self, capability: crate::NativeCapability) -> Result<()> {
+        self.ensure_started()?;
         let hc = HostController::from_hostlocal_registry(&self.id);
         let _ = hc
             .send(StartProvider {
@@ -310,6 +320,7 @@ impl Host {
         cap_ref: &str,
         link_name: Option<String>,
     ) -> Result<()> {
+        self.ensure_started()?;
         let hc = HostController::from_hostlocal_registry(&self.id);
         let bytes = fetch_oci_bytes(cap_ref, self.allow_latest, &self.allowed_insecure).await?;
         let par = ProviderArchive::try_load(&bytes)?;
@@ -324,6 +335,7 @@ impl Host {
 
     /// Instructs the runtime host to start an actor.
     pub async fn start_actor(&self, actor: crate::Actor) -> Result<()> {
+        self.ensure_started()?;
         let hc = HostController::from_hostlocal_registry(&self.id);
 
         hc.send(StartActor {
@@ -338,6 +350,7 @@ impl Host {
     /// start the actor. This call will fail if the host cannot communicate with or finish
     /// downloading the indicated OCI image
     pub async fn start_actor_from_registry(&self, actor_ref: &str) -> Result<()> {
+        self.ensure_started()?;
         let hc = HostController::from_hostlocal_registry(&self.id);
         let bytes = fetch_oci_bytes(actor_ref, self.allow_latest, &self.allowed_insecure).await?;
         let actor = crate::Actor::from_slice(&bytes)?;
@@ -353,6 +366,7 @@ impl Host {
     /// not fail if you attempt to stop an actor that is not running (though this may result
     /// in errors or warnings in log output)
     pub async fn stop_actor(&self, actor_ref: &str) -> Result<()> {
+        self.ensure_started()?;
         let hc = HostController::from_hostlocal_registry(&self.id);
         hc.send(StopActor {
             actor_ref: actor_ref.to_string(),
@@ -371,6 +385,7 @@ impl Host {
         contract_id: &str,
         link: Option<String>,
     ) -> Result<()> {
+        self.ensure_started()?;
         let hc = HostController::from_hostlocal_registry(&self.id);
         let link_name = link.unwrap_or_else(|| "default".to_string());
         hc.send(StopProvider {
@@ -385,6 +400,7 @@ impl Host {
     /// Retrieves the list of all actors within this host. This function call does _not_
     /// include any actors remotely running in a connected lattice
     pub async fn get_actors(&self) -> Result<Vec<String>> {
+        self.ensure_started()?;
         let b = MessageBus::from_hostlocal_registry(&self.id);
         Ok(b.send(QueryActors {}).await?.results)
     }
@@ -393,6 +409,7 @@ impl Host {
     /// _not_ include any capability providers that may be remotely running in a connected
     /// lattice
     pub async fn get_providers(&self) -> Result<Vec<String>> {
+        self.ensure_started()?;
         let b = MessageBus::from_hostlocal_registry(&self.id);
         Ok(b.send(QueryProviders {}).await?.results)
     }
@@ -405,6 +422,7 @@ impl Host {
     /// public key or the actor's registered call alias. This call will fail if you attempt to
     /// invoke a non-existent actor or call alias.
     pub async fn call_actor(&self, actor: &str, operation: &str, msg: &[u8]) -> Result<Vec<u8>> {
+        self.ensure_started()?;
         let b = MessageBus::from_hostlocal_registry(&self.id);
         let target = if actor.len() == 56 && actor.starts_with('M') {
             WasmCloudEntity::Actor(actor.to_string())
@@ -446,6 +464,7 @@ impl Host {
         provider_id: String,
         values: HashMap<String, String>,
     ) -> Result<()> {
+        self.ensure_started()?;
         let bus = MessageBus::from_hostlocal_registry(&self.id);
         bus.send(AdvertiseLink {
             contract_id: contract_id.to_string(),
@@ -463,6 +482,7 @@ impl Host {
     /// repeated application of multiple manifests may not always produce the same runtime
     /// host state
     pub async fn apply_manifest(&self, manifest: HostManifest) -> Result<()> {
+        self.ensure_started()?;
         let host_id = self.kp.public_key();
         let hc = HostController::from_hostlocal_registry(&host_id);
         let bus = MessageBus::from_hostlocal_registry(&host_id);
@@ -503,6 +523,16 @@ impl Host {
             let _ = bus.send(msg).await?;
         }
 
+        Ok(())
+    }
+
+    fn ensure_started(&self) -> Result<()> {
+        if *self.started.read().unwrap() == false {
+            return Err("Activity cannot be performed, host has not been started".into());
+        }
+        if System::try_current().is_none() {
+            return Err("No actix rt system is running. Cannot perform host activity.".into());
+        }
         Ok(())
     }
 

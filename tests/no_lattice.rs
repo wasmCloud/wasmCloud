@@ -18,6 +18,19 @@ pub async fn empty_host_has_two_providers() -> Result<()> {
     Ok(())
 }
 
+pub async fn cant_use_unstarted_host() -> Result<()> {
+    ::std::env::remove_var("KVCACHE_NATS_URL");
+    let h = HostBuilder::new()
+        .with_namespace("cantuseunstarted")
+        .build();
+    let res = h.start_actor_from_registry("foo.bar.baz").await;
+    assert_eq!(
+        format!("{}", res.err().unwrap()),
+        "Activity cannot be performed, host has not been started"
+    );
+    Ok(())
+}
+
 pub async fn start_and_stop_actor() -> Result<()> {
     ::std::env::remove_var("KVCACHE_NATS_URL");
     let h = HostBuilder::new().build();
