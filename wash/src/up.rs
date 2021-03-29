@@ -135,7 +135,7 @@ enum ReplCliCommand {
     #[structopt(name = "par")]
     Par(ParCliCommand),
 
-    /// Launch wasmcloud REPL environment
+    /// Interact with an OCI registry
     #[structopt(name = "reg")]
     Reg(RegCliCommand),
 
