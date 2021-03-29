@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-httpclient"
-version = "0.2.2"
+version = "0.2.3"
 authors = ["wasmCloud Team"]
 edition = "2018"
 repository = "https://github.com/wasmcloud/capability-providers"
