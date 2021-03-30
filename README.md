@@ -1,4 +1,4 @@
-![Latest Release](https://img.shields.io/github/v/release/wasmcloud/wasmcloud?color=success&include_prereleases)
+![Latest Release](https://img.shields.io/github/v/release/wasmcloud/wasmcloud?include_prereleases&sort=semver)
 ![Rust Build](https://img.shields.io/github/workflow/status/wasmcloud/wasmcloud/Rust/main)
 ![Contributors](https://img.shields.io/github/contributors/wasmcloud/wasmcloud)
 ![Good first issues](https://img.shields.io/github/issues/wasmcloud/wasmcloud/good%20first%20issue?label=good%20first%20issues)
