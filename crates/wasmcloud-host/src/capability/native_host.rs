@@ -262,7 +262,8 @@ fn extrude(
             #[cfg(not(target_os = "linux"))]
             unsafe { Library::new(&path)? }
         } else if cfg!(target_os = "windows") {
-            unsafe { ::libloading::os::windows::Library::load_with_flags(&path, 0x1000)? }.into()
+            // Must be opened with PAGE_EXECUTE_READWRITE | PAGE_NOCACHE on windows
+            unsafe { ::libloading::os::windows::Library::load_with_flags(&path, 0x40 | 0x200)? }.into()
         } else {
             unsafe { Library::new(&path)? }
         };
@@ -277,7 +278,7 @@ fn extrude(
                     return Err(Box::new(e));
                 }
             };
-            debug!("got constructor");
+            debug!("got constructor (status access violation incoming)");
             let boxed_raw = constructor();
             debug!("got boxed raw");
 
