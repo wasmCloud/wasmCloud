@@ -97,6 +97,9 @@ impl Handler<LiveUpdate> for ActorHost {
         };
         ControlInterface::from_hostlocal_registry(&self.state.as_ref().unwrap().host_id)
             .do_send(pe);
+        MessageBus::from_hostlocal_registry(&self.state.as_ref().unwrap().host_id)
+            .do_send(AdvertiseClaims { claims: new_claims });
+
         // Essentially re-starting the actor with a new set of bytes
         let init = Initialize {
             actor_bytes: msg.actor_bytes,
@@ -291,9 +294,9 @@ fn validate_update(
                     .iter()
                     .all(|c| old_md.caps.as_ref().unwrap_or(&vec![]).contains(c));
             if claims_changed && strict_update_check {
-                return Err("Strict claims checking does not allow live updated actors to have different claims".into());
+                return Err("Strict claims checking does not allow live updated actors to have different capability claims".into());
             } else if claims_changed {
-                warn!("Live update warning: new actor has different claims than the previous revision.");
+                warn!("Live update warning: new actor has different capability claims than the previous revision.");
             }
         }
     }
