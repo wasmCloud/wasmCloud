@@ -513,11 +513,17 @@ impl Handler<Invocation> for MessageBus {
                     false
                 };
                 if !can_call {
+                    error!(
+                        "Invocation from {} to {} - authorization denied.",
+                        msg.origin_url(),
+                        msg.target_url()
+                    );
                     return InvocationResponse::error(&msg, "Invocation authorization denied");
                 }
+                // Make call either locally within bus or deferred to RPC
                 let res = match subscribers.get(&msg.target) {
                     Some(t) => {
-                        trace!("Invocation taking place within bus");
+                        trace!("Invocation taking place locally within bus");
                         t.send(msg.clone()).await
                     }
                     None => {
