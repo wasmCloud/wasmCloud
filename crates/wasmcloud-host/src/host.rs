@@ -21,10 +21,7 @@ use crate::{ControlEvent, HostManifest, NativeCapability, WasmCloudEntity};
 use crate::{Result, SYSTEM_ACTOR};
 use provider_archive::ProviderArchive;
 use std::time::Duration;
-use std::{
-    collections::HashMap,
-    sync::{Arc, RwLock},
-};
+use std::{collections::HashMap, sync::RwLock};
 use wascap::prelude::KeyPair;
 
 /// A host builder provides a convenient, fluid syntax for setting initial configuration
@@ -197,7 +194,7 @@ impl HostBuilder {
             allow_live_updates: self.allow_live_update,
             lattice_cache_provider_ref: self.lattice_cache_provider_ref,
             strict_update_check: self.strict_update_check,
-            started: Arc::new(RwLock::new(false)),
+            started: RwLock::new(false),
         }
     }
 }
@@ -219,7 +216,7 @@ pub struct Host {
     allow_live_updates: bool,
     lattice_cache_provider_ref: Option<String>,
     strict_update_check: bool,
-    started: Arc<RwLock<bool>>,
+    started: RwLock<bool>,
 }
 
 impl Host {
@@ -527,7 +524,7 @@ impl Host {
     }
 
     fn ensure_started(&self) -> Result<()> {
-        if *self.started.read().unwrap() == false {
+        if !*self.started.read().unwrap() {
             return Err("Activity cannot be performed, host has not been started".into());
         }
         if System::try_current().is_none() {
