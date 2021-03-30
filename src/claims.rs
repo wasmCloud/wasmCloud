@@ -530,7 +530,7 @@ fn generate_provider(provider: ProviderMetadata) -> Result<String, Box<dyn ::std
         provider.subject.clone(),
         Some(provider.name.clone()),
         provider.common.directory.clone(),
-        KeyPairType::Module,
+        KeyPairType::Service,
         provider.common.disable_keygen,
     )?;
 
