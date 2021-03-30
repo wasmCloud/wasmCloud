@@ -250,22 +250,36 @@ fn extrude(
         } else {
             write_provider_to_disk(cap)?;
         }
-        #[cfg(target_os = "linux")]
-        let library: Library = {
+
+        let library: Library = if cfg!(target_os = "linux") {
             // On linux the library must be loaded with `RTLD_NOW | RTLD_NODELETE` to fix a SIGSEGV
             // that happens when a thread terminates AFTER a library is unloaded. This has the
             // effect of keeping the library loaded in-memory until the process ends.
             //
             // https://github.com/nagisa/rust_libloading/issues/41
-            unsafe { ::libloading::os::unix::Library::open(Some(&path), 0x2 | 0x1000)? }.into()
+            #[cfg(target_os = "linux")]
+            return unsafe { ::libloading::os::unix::Library::open(Some(&path), 0x2 | 0x1000)? }.into();
+            #[cfg(not(target_os = "linux"))]
+            unsafe { Library::new(&path)? }
+        } else if cfg!(target_os = "windows") {
+            unsafe { ::libloading::os::windows::Library::load_with_flags(&path, 0x1000)? }.into()
+        } else {
+            unsafe { Library::new(&path)? }
         };
-        #[cfg(not(target_os = "linux"))]
-        let library: Library = unsafe { Library::new(&path)? };
 
         type PluginCreate = unsafe fn() -> *mut dyn CapabilityProvider;
         let plugin = unsafe {
-            let constructor: Symbol<PluginCreate> = library.get(b"__capability_provider_create")?;
+            debug!("creating plugin");
+            let constructor: Symbol<PluginCreate> = match library.get(b"__capability_provider_create") {
+                Ok(lib) => lib,
+                Err(e) => {
+                    debug!("{:?}", e);
+                    return Err(Box::new(e));
+                }
+            };
+            debug!("got constructor");
             let boxed_raw = constructor();
+            debug!("got boxed raw");
 
             Box::from_raw(boxed_raw)
         };
