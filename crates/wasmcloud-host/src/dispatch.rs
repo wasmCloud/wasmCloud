@@ -374,8 +374,9 @@ pub(crate) fn wapc_host_callback(
     let bus = MessageBus::from_hostlocal_registry(&kp.public_key());
     let target = resolve_target_from_reference(&bus, &claims.subject, link_name, namespace)?;
     let inv = invocation_from_callback(&kp, &claims.subject, target, operation, payload);
-    match block_on(async { bus.send(inv).await.map(|ir| ir.msg) }) {
-        Ok(v) => Ok(v),
+    match block_on(async { bus.send(inv).await }) {
+        Ok(ir) if ir.error.is_none() => Ok(ir.msg),
+        Ok(ir) => Err(ir.error.unwrap().into()),
         Err(_e) => Err("Mailbox error during host callback".into()),
     }
 }
