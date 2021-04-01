@@ -1,6 +1,6 @@
-//! # RedisGraph implementation of the waSCC Graph Database Capability Provider API
+//! # RedisGraph implementation of the wasmCloud Graph Database Capability Provider API
 //!
-//! Provides an implementation of the wascc:graphdb contract for RedisGraph
+//! Provides an implementation of the wasmcloud:graphdb contract for RedisGraph
 //! using the Cypher language
 
 use codec::{

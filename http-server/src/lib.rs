@@ -199,7 +199,7 @@ impl TryFrom<&str> for ModuleId {
 }
 
 impl CapabilityProvider for HttpServerProvider {
-    /// Accepts the dispatcher provided by the waSCC host runtime
+    /// Accepts the dispatcher provided by the wasmCloud host runtime
     fn configure_dispatch(
         &self,
         dispatcher: Box<dyn Dispatcher>,

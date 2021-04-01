@@ -70,9 +70,9 @@ impl FileSystemProvider {
     fn create_container(
         &self,
         _actor: &str,
-        container: Container,
+        args: CreateContainerArgs,
     ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
-        let container = sanitize_container(&container);
+        let container = Container::new(sanitize_id(&args.id));
         let cdir = self.container_to_path(&container);
         std::fs::create_dir_all(cdir)?;
         serialize(&container)
@@ -81,9 +81,9 @@ impl FileSystemProvider {
     fn remove_container(
         &self,
         _actor: &str,
-        container: Container,
+        args: RemoveContainerArgs,
     ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
-        let container = sanitize_container(&container);
+        let container = Container::new(sanitize_id(&args.id));
         let cdir = self.container_to_path(&container);
         std::fs::remove_dir(cdir)?;
         serialize(BlobstoreResult {
@@ -97,12 +97,11 @@ impl FileSystemProvider {
         _actor: &str,
         blob: FileChunk,
     ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
-        let blob = Blob {
-            byte_size: 0,
+        let blob = sanitize_blob(&Blob {
             id: blob.id,
             container: blob.container,
-        };
-        let blob = sanitize_blob(&blob);
+            byte_size: 0,
+        });
         let bfile = self.blob_to_path(&blob);
         serialize(std::fs::write(bfile, &[]).map_or_else(
             |e| BlobstoreResult {
@@ -119,9 +118,13 @@ impl FileSystemProvider {
     fn remove_object(
         &self,
         _actor: &str,
-        blob: Blob,
+        args: RemoveObjectArgs,
     ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
-        let blob = sanitize_blob(&blob);
+        let blob = sanitize_blob(&Blob {
+            id: args.id,
+            container: Container::new(args.container_id),
+            byte_size: 0,
+        });
         let bfile = self.blob_to_path(&blob);
         serialize(std::fs::remove_file(&bfile).map_or_else(
             |e| BlobstoreResult {
@@ -138,11 +141,15 @@ impl FileSystemProvider {
     fn get_object_info(
         &self,
         _actor: &str,
-        blob: Blob,
+        args: GetObjectInfoArgs,
     ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
-        let blob = sanitize_blob(&blob);
+        let blob = sanitize_blob(&Blob {
+            id: args.blob_id,
+            container: Container::new(&args.container_id),
+            byte_size: 0,
+        });
         let bfile = self.blob_to_path(&blob);
-        let blob: Blob = if bfile.exists() {
+        serialize(if bfile.exists() {
             Blob {
                 id: blob.id,
                 container: blob.container,
@@ -154,16 +161,15 @@ impl FileSystemProvider {
                 container: Container::new("none"),
                 byte_size: 0,
             }
-        };
-        serialize(&blob)
+        })
     }
 
     fn list_objects(
         &self,
         _actor: &str,
-        container: Container,
+        args: ListObjectsArgs,
     ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
-        let container = sanitize_container(&container);
+        let container = sanitize_container(&Container::new(args.container_id));
         let cpath = self.container_to_path(&container);
         let (blobs, _errors): (Vec<_>, Vec<_>) = std::fs::read_dir(&cpath)?
             .map(|e| {
@@ -175,8 +181,7 @@ impl FileSystemProvider {
             })
             .partition(Result::is_ok);
         let blobs = blobs.into_iter().map(Result::unwrap).collect();
-        let bloblist = BlobList { blobs };
-        serialize(&bloblist)
+        serialize(&BlobList { blobs })
     }
 
     fn upload_chunk(
@@ -239,31 +244,31 @@ impl FileSystemProvider {
     fn start_download(
         &self,
         actor: &str,
-        request: StreamRequest,
+        args: StartDownloadArgs,
     ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
-        info!("Received request to start download : {:?}", request);
+        info!("Received request to start download : {:?}", args);
         let actor = actor.to_string();
         let bpath = Path::join(
             &Path::join(
                 &self.rootdir.read().unwrap(),
-                sanitize_id(&request.container.id),
+                sanitize_id(&args.container_id),
             ),
-            sanitize_id(&request.id),
+            sanitize_id(&args.blob_id),
         );
         let byte_size = &bpath.metadata()?.len();
         let bfile = std::fs::File::open(bpath)?;
-        let chunk_size = if request.chunk_size == 0 {
+        let chunk_size = if args.chunk_size == 0 {
             chunks::DEFAULT_CHUNK_SIZE
         } else {
-            request.chunk_size as usize
+            args.chunk_size as usize
         };
         let xfer = Transfer {
-            blob_id: sanitize_id(&request.id),
-            container: Container::new(sanitize_id(&request.container.id)),
+            blob_id: sanitize_id(&args.blob_id),
+            container: Container::new(sanitize_id(&args.container_id)),
             total_size: *byte_size,
             chunk_size: chunk_size as _,
             total_chunks: *byte_size / chunk_size as u64,
-            context: request.context,
+            context: args.context,
         };
         let iter = Chunks::new(bfile, chunk_size);
         let d = self.dispatcher.clone();

@@ -1,17 +1,21 @@
 # New Actor Template
 
-Use cargo generate to create a new actor module from this template.
+Use cargo generate to create a new actor module from this template:
 
-[Learn how to write](https://wascc.dev/tutorials/first-actor/) waSCC actors, or [explore the actor concept](https://wascc.dev/docs/concepts/actors/).
+```
+cargo generate --git https://github.com/wasmcloud/new-actor-template --branch main
+```
 
-To generate new keys, use `make keys`. This will use `nk` to generate both sets of keys for you, and then write them to the `.keys` directory.
+Use the `wash` CLI to sign your WebAssembly module after you have created it. The `Makefile` created by this template will sign your module for you with `make build` and `make release`.
 
-To build your new module, use `make build`. This will compile your code with `cargo`, and then sign it with `wascap` using the keys in `.keys`.
+You should modify this `Makefile` after creation to have the right actor name, revision, tags, and claims.
 
 ## Tool Requirements
 
 - Cargo and Rust are required
 - Make is recommended, but not strictly necessary
-- [wascap](https://github.com/wascc/wascap) is required for signing actor modules
-- [nk](https://github.com/encabulators/nkeys) is required if you need to generate keys (which you almost certainly do)
+- [wash](https://github.com/wasmcloud/wash) - wasmcloud's multi-purpose CLI
 
+### Note
+
+The `Makefile` will use keys that are generated _locally_ for you. Once you move this actor into a pipeline toward a production deployment, you will want to explicitly specify the key locations and disable key generation in `wash` with the `--disable-keygen` option.

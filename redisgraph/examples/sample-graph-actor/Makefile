@@ -28,7 +28,7 @@ bench:
 
 build:
 	@$(CARGO) build
-	wascap sign $(DEBUG)/graph_actor.wasm $(DEBUG)/graph_actor_signed.wasm -i $(KEYDIR)/account.nk -u $(KEYDIR)/module.nk -s -c wascc:graphdb -n "Graph DB Actor"
+	wascap sign $(DEBUG)/graph_actor.wasm $(DEBUG)/graph_actor_signed.wasm -i $(KEYDIR)/account.nk -u $(KEYDIR)/module.nk -s -c wasmcloud:graphdb -n "Graph DB Actor"
 
 check:
 	@$(CARGO) check
@@ -47,7 +47,7 @@ update:
 
 release:
 	@$(CARGO) build --release
-	wascap sign $(RELEASE)/graph_actor.wasm $(RELEASE)/graph_actor_signed.wasm -i $(KEYDIR)/account.nk -u $(KEYDIR)/module.nk -s -c wascc:graphdb -n "Graph DB Actor"
+	wascap sign $(RELEASE)/graph_actor.wasm $(RELEASE)/graph_actor_signed.wasm -i $(KEYDIR)/account.nk -u $(KEYDIR)/module.nk -s -c wasmcloud:graphdb -n "Graph DB Actor"
 	
 keys: keys-account
 keys: keys-module
