@@ -60,7 +60,7 @@ pub(crate) async fn handle_update_actor(
                         if let Err(e) = a
                             .send(LiveUpdate {
                                 actor_bytes: v,
-                                image_ref: req.new_actor_ref,
+                                image_ref: Some(req.new_actor_ref),
                             })
                             .await
                         {

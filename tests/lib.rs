@@ -16,6 +16,15 @@ fn init() {
 }
 
 #[actix_rt::test]
+async fn live_update() {
+    let res = control::live_update().await;
+    if let Err(ref e) = res {
+        println!("{}", e);
+    }
+    assert!(res.is_ok());
+}
+
+#[actix_rt::test]
 async fn actor_to_actor_call_alias() {
     let res = no_lattice::actor_to_actor_call_alias().await;
     if let Err(ref e) = res {

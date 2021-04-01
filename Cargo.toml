@@ -63,11 +63,6 @@ wasmcloud-actor-extras = "0.1.1"
 wasmcloud-actor-http-server = "0.1.1"
 wasmcloud-control-interface = { path = "./crates/wasmcloud-control-interface"}
 
-[dev-dependencies.wasmcloud-httpserver]
-#path = "../capability-providers/http-server"
-version = "0.12.1"
-#features=["static_plugin"]
-
 [workspace]
 members = [
     "crates/wasmcloud-provider-core",
