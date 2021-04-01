@@ -1,3 +1,5 @@
+use std::collections::{hash_map::Entry, HashMap};
+
 use crate::actors::WasmCloudActor;
 use crate::control_interface::ctlactor::{ControlInterface, PublishEvent};
 
@@ -46,7 +48,7 @@ pub(crate) struct Initialize {
 #[rtype(result = "Result<()>")]
 pub(crate) struct LiveUpdate {
     pub actor_bytes: Vec<u8>,
-    pub image_ref: String,
+    pub image_ref: Option<String>,
 }
 
 impl Handler<LiveUpdate> for ActorHost {
@@ -58,8 +60,8 @@ impl Handler<LiveUpdate> for ActorHost {
         }
         if !self.state.as_ref().unwrap().can_update {
             error!(
-                "Rejecting attempt to update actor {} - live updates disabled",
-                msg.image_ref
+                "Rejecting attempt to update actor ({}) - live updates disabled",
+                msg.image_ref.unwrap_or("No OCI Ref Supplied".into())
             );
             return Err("Attempt to live update actor denied. Runtime updates for this actor are not enabled".into());
         }
@@ -105,7 +107,7 @@ impl Handler<LiveUpdate> for ActorHost {
             actor_bytes: msg.actor_bytes,
             mw_chain: self.state.as_ref().unwrap().mw_chain.clone(),
             signing_seed: self.state.as_ref().unwrap().seed.clone(),
-            image_ref: Some(msg.image_ref),
+            image_ref: msg.image_ref,
             host_id: self.state.as_ref().unwrap().host_id.to_string(),
             can_update: true,
             strict_update_check: true,
@@ -285,14 +287,11 @@ fn validate_update(
                 );
             }
             // False if old and new capabilities are the same list by comparing length and contents
-            let claims_changed = old_md.caps.as_ref().unwrap_or(&vec![]).len()
-                == new_md.caps.as_ref().unwrap_or(&vec![]).len()
-                && new_md
-                    .caps
-                    .as_ref()
-                    .unwrap_or(&vec![])
-                    .iter()
-                    .all(|c| old_md.caps.as_ref().unwrap_or(&vec![]).contains(c));
+            let claims_changed = !vecs_equal_anyorder(
+                old_md.caps.as_ref().unwrap_or(&vec![]),
+                new_md.caps.as_ref().unwrap_or(&vec![]),
+            );
+
             if claims_changed && strict_update_check {
                 return Err("Strict claims checking does not allow live updated actors to have different capability claims".into());
             } else if claims_changed {
@@ -306,6 +305,24 @@ fn validate_update(
         .unwrap_or(&wascap::jwt::Actor::default())
         .rev
         .unwrap_or(0) as u32)
+}
+
+fn vecs_equal_anyorder(i1: &[String], i2: &[String]) -> bool {
+    fn get_lookup<T: Eq + std::hash::Hash>(iter: impl IntoIterator<Item = T>) -> HashMap<T, usize> {
+        let mut lookup = HashMap::<T, usize>::new();
+        for value in iter {
+            match lookup.entry(value) {
+                Entry::Occupied(entry) => {
+                    *entry.into_mut() += 1;
+                }
+                Entry::Vacant(entry) => {
+                    entry.insert(0);
+                }
+            }
+        }
+        lookup
+    }
+    get_lookup(i1) == get_lookup(i2)
 }
 
 impl Actor for ActorHost {

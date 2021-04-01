@@ -7,11 +7,12 @@ use ::wasmcloud_control_interface::Client;
 use std::collections::HashMap;
 use wasmcloud_actor_http_server::{deserialize, serialize};
 
+use std::io::Read;
 use std::time::Duration;
 
 use wascap::prelude::KeyPair;
-use wasmcloud_host::Result;
 use wasmcloud_host::{Actor, HostBuilder};
+use wasmcloud_host::{NativeCapability, Result};
 
 // NOTE: this test does verify a number of error and edge cases, so when it is
 // running -properly- you will see warnings and errors in the output log
@@ -128,6 +129,59 @@ pub(crate) async fn basics() -> Result<()> {
     assert_eq!(inv.host_id, hosts[0].id);
     h.stop().await;
     Ok(())
+}
+
+pub(crate) async fn live_update() -> Result<()> {
+    ::std::env::set_var("KVCACHE_NATS_URL", "0.0.0.0:4222");
+    const NS: &str = "liveupdate";
+    const PORT: u32 = 5251;
+
+    let host = HostBuilder::new()
+        .with_namespace(NS)
+        .enable_live_updates() // Need this or we can't update
+        .build();
+    host.start().await?;
+
+    let a = Actor::from_file("./tests/modules/echo_r0.wasm")?;
+    let a_id = a.public_key();
+    host.start_actor(a).await?;
+    await_actor_count(&host, 1, Duration::from_millis(50), 20).await?;
+    let arc = crate::common::par_from_file("./tests/modules/httpserver.par.gz")?;
+    let websrv = NativeCapability::from_archive(&arc, None)?;
+    let websrv_id = arc.claims().unwrap().subject;
+    let mut webvalues: HashMap<String, String> = HashMap::new();
+    webvalues.insert("PORT".to_string(), format!("{}", PORT));
+
+    host.start_native_capability(websrv).await?;
+    await_provider_count(&host, 2, Duration::from_millis(50), 3).await?;
+    host.set_link(&a_id, "wasmcloud:httpserver", None, websrv_id, webvalues)
+        .await?;
+    actix_rt::time::sleep(Duration::from_secs(1)).await; // Give web server time to start
+
+    let url = format!("http://localhost:{}/foo/bar", PORT);
+    let resp = reqwest::get(&url).await?;
+    assert!(resp.status().is_success());
+    assert_eq!(0, get_revision(&resp.text().await?));
+
+    let bytes = {
+        let mut f = std::fs::File::open("./tests/modules/echo_r1.wasm")?;
+        let mut buf = Vec::new();
+        f.read_to_end(&mut buf)?;
+        buf
+    };
+
+    host.update_actor(&a_id, None, &bytes).await?;
+    let resp = reqwest::get(&url).await?;
+    assert!(resp.status().is_success());
+    assert_eq!(1, get_revision(&resp.text().await?));
+
+    Ok(())
+}
+
+fn get_revision(body: &str) -> u64 {
+    println!("{}", body);
+    let v: serde_json::Value = serde_json::from_str(body).unwrap();
+    v["revision"].as_u64().unwrap()
 }
 
 pub(crate) async fn calltest() -> Result<()> {

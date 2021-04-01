@@ -1,4 +1,6 @@
 use crate::{
+    actors::LiveUpdate,
+    host_controller::GetRunningActor,
     messagebus::{AdvertiseLink, MessageBus},
     InvocationResponse,
 };
@@ -371,6 +373,45 @@ impl Host {
         .await?;
 
         Ok(())
+    }
+
+    /// Updates a running actor with the bytes from a new actor module. Invoking this method will
+    /// cause all messages inbound to the actor to block and it can take a second or two depending
+    /// on the size of the actor and the underlying engine you're using (e.g. JIT vs. interpreter).
+    /// ## ⚠️ Caveats
+    /// * Take care when supplying a value for the `new_oci_ref` parameter. You should be consistent
+    /// in how you supply this value. Updating actors that were started from OCI references should
+    /// continue to have OCI references, while those started from non-OCI sources should not be given
+    /// new, arbitrary OCI references. Failing to keep this consistent could cause unforeseen failed
+    /// attempts at subsequent updates.
+    /// * You should only ever use this method when running in standalone/isolated mode. If you have a control
+    /// interface configured, then you should perform live updates by using a control interface client
+    /// and a suitable OCI reference URL.
+    pub async fn update_actor(
+        &self,
+        actor_id: &str,
+        new_oci_ref: Option<String>,
+        bytes: &[u8],
+    ) -> Result<()> {
+        let hc = HostController::from_hostlocal_registry(&self.id);
+        let actor = hc
+            .send(GetRunningActor {
+                actor_id: actor_id.to_string(),
+            })
+            .await?;
+        if let Some(a) = actor {
+            a.send(LiveUpdate {
+                actor_bytes: bytes.to_vec(),
+                image_ref: new_oci_ref,
+            })
+            .await?
+        } else {
+            Err(format!(
+                "Actor {} not found on this host, live update aborted.",
+                actor_id
+            )
+            .into())
+        }
     }
 
     /// Stops a running capability provider. This call will not fail if the indicated provider
