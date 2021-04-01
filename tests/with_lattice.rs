@@ -39,11 +39,11 @@ pub(crate) async fn distributed_echo() -> Result<()> {
     await_actor_count(&host_a, 1, Duration::from_millis(500), 3).await?;
 
     let arc = par_from_file("./tests/modules/httpserver.par.gz").unwrap();
-    let websrv = NativeCapability::from_instance(
+    /*let websrv = NativeCapability::from_instance(
         wasmcloud_httpserver::HttpServerProvider::new(),
         None,
         arc.claims().clone().unwrap(),
-    )?;
+    )?;*/
 
     // ** NOTE - we should be able to start host B in any order because when the cache client starts
     // it should request a replay of cache events and therefore get the existing claims, links,
@@ -51,7 +51,10 @@ pub(crate) async fn distributed_echo() -> Result<()> {
     host_b.start().await?;
     actix_rt::time::sleep(Duration::from_millis(500)).await;
 
-    host_b.start_native_capability(websrv).await?;
+    //host_b.start_native_capability(websrv).await?;
+    host_b
+        .start_capability_from_registry(crate::common::HTTPSRV_OCI, None)
+        .await?;
     // always have to remember that "extras" and kvcache is in the provider list.
     await_provider_count(&host_b, 3, Duration::from_millis(500), 3).await?;
     actix_rt::time::sleep(Duration::from_millis(500)).await;
