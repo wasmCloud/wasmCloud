@@ -310,31 +310,6 @@ impl Handler<RemoveLink> for MessageBus {
                     warn!("Attempted to remove non-existent link.");
                     Ok(())
                 }
-                /*if let Ok(l) = ld {
-                if l.is_none() {
-                    error!("No link definition found to remove.");
-                    return;
-                }
-                let l = l.unwrap();
-                let _ = lc
-                    .remove_link(&msg.actor, &msg.contract_id, &msg.link_name)
-                    .await;
-                let inv = Invocation::new(
-                    self.key.as_ref().unwrap(),
-                    WasmCloudEntity::Actor(SYSTEM_ACTOR.to_string()),
-                    WasmCloudEntity::Capability {
-                        id: l.provider_id,
-                        contract_id: l.contract_id,
-                        link_name: l.link_name,
-                    },
-                    OP_REMOVE_ACTOR,
-                    serialize(CapabilityConfiguration {
-                        module: msg.actor,
-                        values: HashMap::new(),
-                    })
-                    .unwrap(),
-                );
-                Ok(()) */
             }
             .into_actor(self),
         )
