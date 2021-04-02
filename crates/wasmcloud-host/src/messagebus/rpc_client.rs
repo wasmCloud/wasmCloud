@@ -280,7 +280,7 @@ impl Handler<AdvertiseRemoveLink> for RpcClient {
             async move {
                 let r = nc.publish(&subject, &bytes).await;
                 let _ = nc.flush();
-                if let Err(_) = r {
+                if r.is_err() {
                     Err("Failed to publish link definition removal".into())
                 } else {
                     Ok(())

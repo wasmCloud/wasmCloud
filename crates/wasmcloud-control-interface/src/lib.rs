@@ -175,7 +175,7 @@ impl Client {
     }
 
     /// Publishes a request to remove a link definition to the lattice. All hosts in the lattice will
-    /// receive this message and, if the appropraite capability provider is in that host, it will have
+    /// receive this message and, if the appropriate capability provider is in that host, it will have
     /// the "remove actor" operation sent to it. The link definition will also be removed from the lattice
     /// cache. No confirmation or acknowledgement is available for this operation, you will need to monitor events
     /// and/or query the lattice to confirm that the link has been removed.

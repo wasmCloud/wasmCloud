@@ -329,7 +329,7 @@ impl LatticeCacheClient {
 
         let key = prefix("links");
         let args = SetRemoveArgs {
-            key: key,
+            key,
             value: format!("{}", hash_link_key(actor_id, contract_id, link_name)),
         };
         let inv = self.invocation_for_provider(OP_SET_REMOVE, &serialize(args)?);
