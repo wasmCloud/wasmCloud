@@ -4,8 +4,62 @@ use crate::common::{await_actor_count, await_provider_count, par_from_file, REDI
 use provider_archive::ProviderArchive;
 use std::collections::HashMap;
 use std::time::Duration;
+use wasmcloud_control_interface::Client;
 use wasmcloud_host::{Actor, HostBuilder, NativeCapability};
 use wasmcloud_host::{Host, Result};
+
+pub(crate) async fn distributed_unlink() -> Result<()> {
+    const PORT: u32 = 6121;
+    ::std::env::set_var("KVCACHE_NATS_URL", "0.0.0.0:4222");
+    let nc = nats::asynk::connect("0.0.0.0:4222").await?;
+    let h = HostBuilder::new()
+        .with_rpc_client(nc)
+        .with_namespace("distributedunlink")
+        .build();
+    h.start().await?;
+    let echo = Actor::from_file("./tests/modules/echo.wasm")?;
+    let actor_id = echo.public_key();
+    h.start_actor(echo).await?;
+    await_actor_count(&h, 1, Duration::from_millis(50), 3).await?;
+
+    h.start_capability_from_registry(crate::common::HTTPSRV_OCI, None)
+        .await?;
+    await_provider_count(&h, 3, Duration::from_millis(50), 3).await?;
+
+    let arc2 = par_from_file("./tests/modules/httpserver.par.gz")?;
+    let websrv_id = arc2.claims().unwrap().subject;
+    let mut webvalues: HashMap<String, String> = HashMap::new();
+    webvalues.insert("PORT".to_string(), format!("{}", PORT));
+    h.set_link(
+        &actor_id,
+        "wasmcloud:httpserver",
+        None,
+        websrv_id,
+        webvalues,
+    )
+    .await?;
+    actix_rt::time::sleep(Duration::from_secs(1)).await;
+
+    let url = format!("http://localhost:{}/foo", PORT);
+
+    let resp = reqwest::get(&url).await?;
+    assert!(resp.status().is_success());
+
+    let nc2 = nats::asynk::connect("0.0.0.0:4222").await?;
+    let ctl_client = Client::new(
+        nc2,
+        Some("distributedunlink".to_string()),
+        Duration::from_secs(20),
+    );
+    ctl_client
+        .remove_link(&actor_id, "wasmcloud:httpserver", "default")
+        .await?;
+    actix_rt::time::sleep(Duration::from_secs(1)).await;
+    let resp = reqwest::get(&url).await;
+    assert!(resp.is_err()); // should be a connection refused
+
+    Ok(())
+}
 
 // Start two hosts, A and B. Host A contains an actor
 // and host B contains a provider. Set a link via host B's

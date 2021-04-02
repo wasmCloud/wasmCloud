@@ -1,8 +1,12 @@
 use crate::generated::core::{deserialize, serialize};
 use crate::hlreg::HostLocalSystemService;
 use crate::host_controller::HostController;
-use crate::messagebus::rpc_subscription::{claims_subject, invoke_subject, links_subject};
-use crate::messagebus::{AdvertiseClaims, AdvertiseLink, MessageBus, PutClaims, PutLink};
+use crate::messagebus::rpc_subscription::{
+    claims_subject, invoke_subject, links_subject, remove_links_subject,
+};
+use crate::messagebus::{
+    AdvertiseClaims, AdvertiseLink, MessageBus, PutClaims, PutLink, RemoveLink,
+};
 use crate::Result;
 use crate::{Invocation, InvocationResponse};
 use actix::prelude::*;
@@ -10,6 +14,8 @@ use futures::StreamExt;
 use wasmcloud_control_interface::LinkDefinition;
 
 use std::time::Duration;
+
+use super::AdvertiseRemoveLink;
 
 #[derive(Message)]
 #[rtype(result = "()")]
@@ -42,6 +48,12 @@ struct LinkInbound {
     link: Option<LinkDefinition>,
 }
 
+#[derive(Message)]
+#[rtype(result = "()")]
+struct RemoveLinkInbound {
+    link: Option<LinkDefinition>,
+}
+
 impl Actor for RpcClient {
     type Context = Context<Self>;
 }
@@ -63,10 +75,11 @@ impl Handler<Initialize> for RpcClient {
             async move {
                 let claims_sub = nc.subscribe(&claims_subject(&prefix)).await;
                 let links_sub = nc.subscribe(&links_subject(&prefix)).await;
-                (claims_sub, links_sub)
+                let remlinks_sub = nc.subscribe(&remove_links_subject(&prefix)).await;
+                (claims_sub, links_sub, remlinks_sub)
             }
             .into_actor(self)
-            .map(|(claims, links), _act, ctx| {
+            .map(|(claims, links, remlinks), _act, ctx| {
                 // Set up subscriber for claims advertisements
                 if let Ok(c) = claims {
                     ctx.add_message_stream(c.map(|m| {
@@ -85,6 +98,17 @@ impl Handler<Initialize> for RpcClient {
                         match link {
                             Ok(l) => LinkInbound { link: Some(l) },
                             Err(_) => LinkInbound { link: None },
+                        }
+                    }))
+                }
+
+                // Set up subscriber for removal of links
+                if let Ok(rl) = remlinks {
+                    ctx.add_message_stream(rl.map(|m| {
+                        let link = deserialize::<LinkDefinition>(&m.data);
+                        match link {
+                            Ok(l) => RemoveLinkInbound { link: Some(l) },
+                            Err(_) => RemoveLinkInbound { link: None },
                         }
                     }))
                 }
@@ -182,6 +206,32 @@ impl Handler<LinkInbound> for RpcClient {
         }
     }
 }
+
+impl Handler<RemoveLinkInbound> for RpcClient {
+    type Result = ResponseActFuture<Self, ()>;
+
+    fn handle(&mut self, msg: RemoveLinkInbound, _ctx: &mut Self::Context) -> Self::Result {
+        trace!("Received notification to remove link definition");
+        let target = self.bus.clone().unwrap();
+        if let Some(link) = msg.link {
+            Box::pin(
+                async move {
+                    let _ = target
+                        .send(RemoveLink {
+                            contract_id: link.contract_id,
+                            actor: link.actor_id,
+                            link_name: link.link_name,
+                        })
+                        .await;
+                }
+                .into_actor(self),
+            )
+        } else {
+            Box::pin(async move {}.into_actor(self))
+        }
+    }
+}
+
 // Publish a link definition to the RPC bus
 impl Handler<AdvertiseLink> for RpcClient {
     type Result = ResponseActFuture<Self, Result<()>>;
@@ -205,6 +255,35 @@ impl Handler<AdvertiseLink> for RpcClient {
                 match r {
                     Ok(_) => Ok(()),
                     Err(_) => Err("Failed to publish link definition".into()),
+                }
+            }
+            .into_actor(self),
+        )
+    }
+}
+
+impl Handler<AdvertiseRemoveLink> for RpcClient {
+    type Result = ResponseActFuture<Self, Result<()>>;
+
+    fn handle(&mut self, msg: AdvertiseRemoveLink, _ctx: &mut Self::Context) -> Self::Result {
+        trace!("Publishing request to remove link on lattice");
+        let ld = LinkDefinition {
+            actor_id: msg.actor,
+            contract_id: msg.contract_id,
+            link_name: msg.link_name,
+            ..Default::default()
+        };
+        let nc = self.nc.clone().unwrap();
+        let subject = remove_links_subject(&self.ns_prefix);
+        let bytes = serialize(&ld).unwrap();
+        Box::pin(
+            async move {
+                let r = nc.publish(&subject, &bytes).await;
+                let _ = nc.flush();
+                if let Err(_) = r {
+                    Err("Failed to publish link definition removal".into())
+                } else {
+                    Ok(())
                 }
             }
             .into_actor(self),

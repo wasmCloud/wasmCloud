@@ -34,6 +34,11 @@ pub mod rpc {
     pub fn advertise_links(ns_prefix: &Option<String>) -> String {
         format!("{}.links", rpc_prefix(ns_prefix))
     }
+
+    pub fn remove_links(ns_prefix: &Option<String>) -> String {
+        let prefix = rpc_prefix(ns_prefix);
+        format!("{}.remlinks", prefix)
+    }
 }
 
 pub mod commands {

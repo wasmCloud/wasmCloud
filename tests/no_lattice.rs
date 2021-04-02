@@ -18,6 +18,51 @@ pub async fn empty_host_has_two_providers() -> Result<()> {
     Ok(())
 }
 
+pub async fn unlink_provider() -> Result<()> {
+    ::std::env::remove_var("KVCACHE_NATS_URL");
+    let h = HostBuilder::new().with_namespace("unlink").build();
+    const PORT: u32 = 5011;
+    h.start().await?;
+    actix_rt::time::sleep(Duration::from_millis(300)).await;
+
+    let echo = Actor::from_file("./tests/modules/echo.wasm")?;
+    let actor_id = echo.public_key();
+    h.start_actor(echo).await?;
+    await_actor_count(&h, 1, Duration::from_millis(50), 3).await?;
+
+    h.start_capability_from_registry(crate::common::HTTPSRV_OCI, None)
+        .await?;
+    await_provider_count(&h, 3, Duration::from_millis(50), 3).await?;
+
+    let arc2 = par_from_file("./tests/modules/httpserver.par.gz")?;
+    let websrv_id = arc2.claims().unwrap().subject;
+    let mut webvalues: HashMap<String, String> = HashMap::new();
+    webvalues.insert("PORT".to_string(), format!("{}", PORT));
+    h.set_link(
+        &actor_id,
+        "wasmcloud:httpserver",
+        None,
+        websrv_id,
+        webvalues,
+    )
+    .await?;
+    actix_rt::time::sleep(Duration::from_secs(1)).await;
+
+    let url = format!("http://localhost:{}/foo", PORT);
+
+    let resp = reqwest::get(&url).await?;
+    assert!(resp.status().is_success());
+
+    h.remove_link(&actor_id, "wasmcloud:httpserver", None)
+        .await?;
+    actix_rt::time::sleep(Duration::from_millis(500)).await;
+
+    let resp = reqwest::get(&url).await;
+    assert!(resp.is_err()); // should be a connection refused
+
+    Ok(())
+}
+
 pub async fn cant_use_unstarted_host() -> Result<()> {
     ::std::env::remove_var("KVCACHE_NATS_URL");
     let h = HostBuilder::new()

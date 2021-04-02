@@ -1,6 +1,7 @@
-use super::{LookupAlias, MessageBus};
+use super::{AdvertiseRemoveLink, LookupAlias, MessageBus, RemoveLink};
 use crate::capability::extras::EXTRAS_PUBLIC_KEY;
 use crate::dispatch::{gen_config_invocation, Invocation, InvocationResponse, WasmCloudEntity};
+use crate::generated::core::CapabilityConfiguration;
 use crate::hlreg::HostLocalSystemService;
 use crate::messagebus::rpc_client::RpcClient;
 use crate::messagebus::rpc_subscription::{CreateSubscription, RpcSubscription};
@@ -12,8 +13,12 @@ use crate::messagebus::{
 };
 use crate::{auth, Result};
 use actix::prelude::*;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 use wascap::prelude::KeyPair;
+use wasmcloud_provider_core::{
+    core::{OP_REMOVE_ACTOR, SYSTEM_ACTOR},
+    serialize,
+};
 
 pub const OP_HEALTH_REQUEST: &str = "HealthRequest";
 pub const OP_BIND_ACTOR: &str = "BindActor";
@@ -252,6 +257,90 @@ impl Handler<PutClaims> for MessageBus {
     }
 }
 
+// Receive a request to purge a link definition from the RPC bus
+impl Handler<RemoveLink> for MessageBus {
+    type Result = ResponseActFuture<Self, Result<()>>;
+
+    fn handle(&mut self, msg: RemoveLink, _ctx: &mut Context<Self>) -> Self::Result {
+        trace!("Messagebus received link definition purge notification");
+        let lc = self.latticecache.clone().unwrap();
+        let key = KeyPair::from_seed(&self.key.as_ref().unwrap().seed().unwrap()).unwrap();
+        let subscribers = self.subscribers.clone();
+        Box::pin(
+            async move {
+                let ld = lc
+                    .lookup_link(&msg.actor, &msg.contract_id, &msg.link_name)
+                    .await?;
+                if let Some(l) = ld {
+                    let target = WasmCloudEntity::Capability {
+                        id: l.provider_id,
+                        contract_id: l.contract_id,
+                        link_name: l.link_name,
+                    };
+                    match subscribers.get(&target) {
+                        Some(t) => {
+                            let inv = Invocation::new(
+                                &key,
+                                WasmCloudEntity::Actor(SYSTEM_ACTOR.to_string()),
+                                target.clone(),
+                                OP_REMOVE_ACTOR,
+                                serialize(CapabilityConfiguration {
+                                    module: msg.actor.to_string(),
+                                    values: HashMap::new(),
+                                })
+                                .unwrap(),
+                            );
+                            let inv_r = t.send(inv).await?;
+                            if let Some(e) = inv_r.error {
+                                error!("Provider failed to handle remove actor message: {}", e);
+                                return Err(e.into());
+                            }
+                        }
+                        None => {
+                            trace!(
+                                "Skipping remove actor invocation - target is not on this host."
+                            );
+                        }
+                    }
+                    let _ = lc
+                        .remove_link(&msg.actor, &msg.contract_id, &msg.link_name)
+                        .await;
+                    Ok(())
+                } else {
+                    warn!("Attempted to remove non-existent link.");
+                    Ok(())
+                }
+                /*if let Ok(l) = ld {
+                if l.is_none() {
+                    error!("No link definition found to remove.");
+                    return;
+                }
+                let l = l.unwrap();
+                let _ = lc
+                    .remove_link(&msg.actor, &msg.contract_id, &msg.link_name)
+                    .await;
+                let inv = Invocation::new(
+                    self.key.as_ref().unwrap(),
+                    WasmCloudEntity::Actor(SYSTEM_ACTOR.to_string()),
+                    WasmCloudEntity::Capability {
+                        id: l.provider_id,
+                        contract_id: l.contract_id,
+                        link_name: l.link_name,
+                    },
+                    OP_REMOVE_ACTOR,
+                    serialize(CapabilityConfiguration {
+                        module: msg.actor,
+                        values: HashMap::new(),
+                    })
+                    .unwrap(),
+                );
+                Ok(()) */
+            }
+            .into_actor(self),
+        )
+    }
+}
+
 // Receive a link definition through an advertisement
 impl Handler<PutLink> for MessageBus {
     type Result = ResponseActFuture<Self, ()>;
@@ -434,6 +523,42 @@ impl Handler<AdvertiseLink> for MessageBus {
             .into_actor(self)
             .map(|ell, _act, ctx| {
                 ctx.notify(ell);
+                Ok(())
+            }),
+        )
+    }
+}
+
+impl Handler<AdvertiseRemoveLink> for MessageBus {
+    type Result = ResponseActFuture<Self, Result<()>>;
+
+    fn handle(&mut self, msg: AdvertiseRemoveLink, _ctx: &mut Context<Self>) -> Self::Result {
+        trace!("Advertising link removal");
+
+        let rpc = self.rpc_outbound.clone();
+        Box::pin(
+            async move {
+                if let Some(ref rpc) = rpc {
+                    if let Err(e) = rpc.send(msg).await {
+                        error!(
+                            "Failed to advertise link definition removal to lattice: {}",
+                            e
+                        );
+                    }
+                    None
+                } else {
+                    Some(RemoveLink {
+                        actor: msg.actor,
+                        contract_id: msg.contract_id,
+                        link_name: msg.link_name,
+                    })
+                }
+            }
+            .into_actor(self)
+            .map(|rl, _act, ctx| {
+                if let Some(rl) = rl {
+                    ctx.notify(rl);
+                }
                 Ok(())
             }),
         )
