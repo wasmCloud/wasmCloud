@@ -146,6 +146,11 @@ pub(crate) fn invoke_subject(ns_prefix: &Option<String>, entity: &WasmCloudEntit
     }
 }
 
+pub(crate) fn remove_links_subject(ns_prefix: &Option<String>) -> String {
+    let prefix = subject_prefix(ns_prefix);
+    format!("{}.remlinks", prefix)
+}
+
 pub(crate) fn links_subject(ns_prefix: &Option<String>) -> String {
     let prefix = subject_prefix(ns_prefix);
     format!("{}.links", prefix)

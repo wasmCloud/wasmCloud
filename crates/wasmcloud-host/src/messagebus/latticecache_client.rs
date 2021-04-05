@@ -12,8 +12,8 @@ use crate::messagebus::LinkDefinition;
 use crate::{Invocation, Result, WasmCloudEntity, SYSTEM_ACTOR};
 use actix::Recipient;
 use wasmcloud_actor_keyvalue::{
-    GetArgs, GetResponse, SetAddArgs, SetArgs, SetQueryArgs, SetQueryResponse, OP_GET, OP_SET,
-    OP_SET_ADD, OP_SET_QUERY,
+    DelArgs, GetArgs, GetResponse, SetAddArgs, SetArgs, SetQueryArgs, SetQueryResponse,
+    SetRemoveArgs, OP_DEL, OP_GET, OP_SET, OP_SET_ADD, OP_SET_QUERY, OP_SET_REMOVE,
 };
 
 use serde::Deserialize;
@@ -300,6 +300,42 @@ impl LatticeCacheClient {
         let inv_r = self.provider.send(inv).await?;
         if let Some(e) = inv_r.error {
             let s = format!("Failed to add link to set: {}", e);
+            error!("{}", s);
+            return Err(s.into());
+        }
+
+        Ok(())
+    }
+
+    /// Removes a link definition keyed by actor, contract ID, and link name from the
+    /// lattice cache
+    pub async fn remove_link(
+        &self,
+        actor_id: &str,
+        contract_id: &str,
+        link_name: &str,
+    ) -> Result<()> {
+        let key = link_key(actor_id, contract_id, link_name);
+        let args = DelArgs {
+            key: key.to_string(),
+        };
+        let inv = self.invocation_for_provider(OP_DEL, &serialize(&args)?);
+        let inv_r = self.provider.send(inv).await?;
+        if let Some(e) = inv_r.error {
+            let s = format!("Failed to delete link: {}", e);
+            error!("{}", e);
+            return Err(s.into());
+        }
+
+        let key = prefix("links");
+        let args = SetRemoveArgs {
+            key,
+            value: format!("{}", hash_link_key(actor_id, contract_id, link_name)),
+        };
+        let inv = self.invocation_for_provider(OP_SET_REMOVE, &serialize(args)?);
+        let inv_r = self.provider.send(inv).await?;
+        if let Some(e) = inv_r.error {
+            let s = format!("Failed to remove link from set: {}", e);
             error!("{}", s);
             return Err(s.into());
         }

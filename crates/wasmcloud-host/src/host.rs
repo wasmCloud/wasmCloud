@@ -1,7 +1,7 @@
 use crate::{
     actors::LiveUpdate,
     host_controller::GetRunningActor,
-    messagebus::{AdvertiseLink, MessageBus},
+    messagebus::{AdvertiseLink, AdvertiseRemoveLink, MessageBus},
     InvocationResponse,
 };
 
@@ -510,6 +510,26 @@ impl Host {
             link_name: link_name.unwrap_or_else(|| "default".to_string()),
             provider_id,
             values,
+        })
+        .await?
+    }
+
+    /// Removes a link definition from the host (and accompanying lattice if connected). This
+    /// will remove the link definition from the lattice cache and it will also invoke the "remove actor"
+    /// operation on all affected capability providers, giving those providers an opportunity to clean
+    /// up resources and terminate any child processes associated with the actor
+    pub async fn remove_link(
+        &self,
+        actor: &str,
+        contract_id: &str,
+        link_name: Option<String>,
+    ) -> Result<()> {
+        self.ensure_started()?;
+        let bus = MessageBus::from_hostlocal_registry(&self.id);
+        bus.send(AdvertiseRemoveLink {
+            actor: actor.to_string(),
+            contract_id: contract_id.to_string(),
+            link_name: link_name.unwrap_or_else(|| "default".to_string()),
         })
         .await?
     }

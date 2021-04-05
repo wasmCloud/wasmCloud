@@ -134,12 +134,28 @@ pub struct LookupAlias {
 
 #[derive(Message, Clone)]
 #[rtype(result = "Result<()>")]
+pub struct RemoveLink {
+    pub contract_id: String,
+    pub actor: String,
+    pub link_name: String,
+}
+
+#[derive(Message, Clone)]
+#[rtype(result = "Result<()>")]
 pub struct AdvertiseLink {
     pub contract_id: String,
     pub actor: String,
     pub link_name: String,
     pub provider_id: String,
     pub values: HashMap<String, String>,
+}
+
+#[derive(Message, Clone)]
+#[rtype(result = "Result<()>")]
+pub struct AdvertiseRemoveLink {
+    pub contract_id: String,
+    pub actor: String,
+    pub link_name: String,
 }
 
 #[derive(Message)]

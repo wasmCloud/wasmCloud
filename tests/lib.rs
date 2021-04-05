@@ -16,6 +16,25 @@ fn init() {
 }
 
 #[actix_rt::test]
+async fn unlink_provider() {
+    let res = no_lattice::unlink_provider().await;
+    if let Err(ref e) = res {
+        println!("{}", e);
+    }
+    assert!(res.is_ok());
+}
+
+#[actix_rt::test]
+async fn distributed_unlink_provider() {
+    let res = with_lattice::distributed_unlink().await;
+    if let Err(ref e) = res {
+        println!("{}", e);
+    }
+    assert!(res.is_ok());
+}
+
+/*
+#[actix_rt::test]
 async fn live_update() {
     let res = control::live_update().await;
     if let Err(ref e) = res {
@@ -160,3 +179,4 @@ async fn cant_use_unstarted_host() {
     }
     assert!(res.is_ok());
 }
+*/
