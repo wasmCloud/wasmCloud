@@ -1,15 +1,15 @@
 [package]
 name = "wasmcloud-telnet"
-version = "0.1.1"
-authors = ["Kevin Hoffman <alothien@gmail.com>"]
+version = "0.1.2"
+authors = ["wasmCloud Team"]
 edition = "2018"
-homepage = "https://wascc.dev"
-repository = "https://github.com/wascc/telnet-provider"
-description = "A telnet server capability provider for waSCC actors"
+homepage = "https://wasmcloud.dev"
+repository = "https://github.com/wasmcloud/capability-providers"
+description = "A telnet server capability provider for wasmCloud actors"
 license = "Apache-2.0"
-documentation = "https://docs.rs/wascc-telnet"
+documentation = "https://docs.rs/wasmcloud-telnet"
 readme = "README.md"
-keywords = ["webassembly", "wasm", "telnet", "wascc"]
+keywords = ["webassembly", "wasm", "telnet", "wasmcloud"]
 categories = ["wasm", "api-bindings", "network-programming"]
 
 [lib]
@@ -18,7 +18,6 @@ crate-type = ["cdylib", "rlib"]
 [features]
 # Enable if the provider will be statically compiled into a host
 static_plugin = []
-
 
 [dependencies]
 log = "0.4.14"
@@ -34,3 +33,7 @@ wasmcloud-actor-core = "0.2.2"
 [dependencies.wasmcloud-provider-core]
 version = "0.1.0"
 #path = "../../wasmcloud/crates/wasmcloud-provider-core"
+
+[dependencies.wasmcloud-actor-telnet]
+version = "0.1.2"
+#path = "../../actor-interfaces/telnet/rust"

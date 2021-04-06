@@ -1,9 +1,8 @@
 use crate::server::TelnetServer;
-use crate::{SessionStarted, TelnetMessage, OP_RECEIVE_TEXT, OP_SESSION_STARTED};
 use ansi_escapes::*;
 use crossbeam::channel::{Receiver, Sender};
 use crossbeam_channel::{select, unbounded};
-use log::info;
+use log::{info, warn};
 use std::{
     collections::HashMap,
     io::Write,
@@ -11,6 +10,9 @@ use std::{
     sync::{Arc, RwLock},
 };
 use uuid::Uuid;
+use wasmcloud_actor_telnet::{
+    ReceiveTextArgs, SessionStartedArgs, OP_RECEIVE_TEXT, OP_SESSION_STARTED,
+};
 use wasmcloud_provider_core::{capabilities::Dispatcher, serialize};
 
 /// Code that performs initial text sending to a newly connected socket (e.g. motd)
@@ -83,6 +85,7 @@ pub fn start_server(
     actor: &str,
     dispatcher: Arc<RwLock<Box<dyn Dispatcher>>>,
     outbounds: Arc<RwLock<HashMap<String, Sender<String>>>>,
+    listeners: Arc<RwLock<HashMap<String, TcpListener>>>,
 ) {
     info!(
         "Starting telnet session on port {} for actor {}",
@@ -91,12 +94,23 @@ pub fn start_server(
     let a = actor.to_string();
 
     std::thread::spawn(move || {
-        let listener = TcpListener::bind(format!("0.0.0.0:{}", port)).unwrap();
+        let listener = match TcpListener::bind(format!("0.0.0.0:{}", port)) {
+            Ok(listener) => listener,
+            Err(e) => {
+                warn!("Could not bind to 0.0.0.0:{}, error: {}", port, e);
+                return;
+            }
+        };
+        listeners.write().unwrap().insert(a.clone(), listener);
         loop {
             let d = dispatcher.clone();
             let a = a.clone();
             let motd = motd.clone();
-            let (socket, _) = listener.accept().unwrap();
+            let (socket, _) = match listeners.read().unwrap().get(&a.clone()) {
+                Some(s) => s.accept().unwrap(),
+                // Actor was stopped, break loop and drop listener
+                _ => break,
+            };
             let session_id = Uuid::new_v4();
             let mut s = socket.try_clone().unwrap();
 
@@ -106,7 +120,8 @@ pub fn start_server(
                 .write()
                 .unwrap()
                 .insert(session_id.to_string(), writer_s);
-            let sess_start = SessionStarted {
+
+            let sess_start = SessionStartedArgs {
                 session: session_id.to_string(),
             };
 
@@ -120,7 +135,7 @@ pub fn start_server(
             std::thread::spawn(move || loop {
                 select! {
                     recv(reader_r) -> msg => {
-                        let tmsg = TelnetMessage{
+                        let tmsg = ReceiveTextArgs {
                             session: session_id.to_string(),
                             text: msg.unwrap(),
                         };

@@ -1,32 +1,26 @@
-#[macro_use]
-extern crate wasmcloud_provider_core as codec;
-
-use log::{info, trace};
-mod server;
-mod session;
-
-use codec::{
-    capabilities::{CapabilityProvider, Dispatcher, NullDispatcher},
-    core::{OP_BIND_ACTOR, OP_HEALTH_REQUEST, OP_REMOVE_ACTOR, SYSTEM_ACTOR},
-    deserialize, serialize,
-};
-use crossbeam::channel::Sender;
-use serde::{Deserialize, Serialize};
+use crossbeam_channel::Sender;
+use log::{debug, info, warn};
 use std::{
     collections::HashMap,
     error::Error,
+    net::TcpListener,
     sync::{Arc, RwLock},
 };
 use wasmcloud_actor_core::{CapabilityConfiguration, HealthCheckResponse};
-
-type MessageHandlerResult = Result<Vec<u8>, Box<dyn Error + Send + Sync + 'static>>;
+use wasmcloud_actor_telnet::{SendTextArgs, OP_SEND_TEXT};
+use wasmcloud_provider_core::{
+    capabilities::{CapabilityProvider, Dispatcher, NullDispatcher},
+    capability_provider,
+    core::{OP_BIND_ACTOR, OP_HEALTH_REQUEST, OP_REMOVE_ACTOR, SYSTEM_ACTOR},
+    deserialize, serialize,
+};
+mod server;
+mod session;
 
 #[allow(dead_code)]
 const CAPABILITY_ID: &str = "wasmcloud:telnet";
 
-pub(crate) const OP_SEND_TEXT: &str = "SendText";
-pub(crate) const OP_SESSION_STARTED: &str = "SessionStarted";
-pub(crate) const OP_RECEIVE_TEXT: &str = "ReceiveText";
+type MessageHandlerResult = Result<Vec<u8>, Box<dyn Error + Send + Sync + 'static>>;
 
 #[cfg(not(feature = "static_plugin"))]
 capability_provider!(TelnetProvider, TelnetProvider::new);
@@ -35,6 +29,7 @@ capability_provider!(TelnetProvider, TelnetProvider::new);
 pub struct TelnetProvider {
     dispatcher: Arc<RwLock<Box<dyn Dispatcher>>>,
     outbounds: Arc<RwLock<HashMap<String, Sender<String>>>>,
+    listeners: Arc<RwLock<HashMap<String, TcpListener>>>,
 }
 
 impl Default for TelnetProvider {
@@ -44,6 +39,7 @@ impl Default for TelnetProvider {
         TelnetProvider {
             dispatcher: Arc::new(RwLock::new(Box::new(NullDispatcher::new()))),
             outbounds: Arc::new(RwLock::new(HashMap::new())),
+            listeners: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 }
@@ -54,33 +50,60 @@ impl TelnetProvider {
     }
 
     fn configure(&self, config: CapabilityConfiguration) -> MessageHandlerResult {
+        if let Some(listener) = self.listeners.read().unwrap().get(&config.module) {
+            debug!(
+                "Telnet session for actor {} already listening on {}",
+                listener.local_addr().unwrap(),
+                &config.module
+            );
+            return Ok(vec![]);
+        }
+
         session::start_server(
-            std::fs::read_to_string(&config.values.get("MOTD").unwrap_or(&"".to_string()))?,
+            config
+                .values
+                .get("MOTD")
+                .map_or_else(|| "".to_string(), |motd| motd.to_string()),
             config
                 .values
                 .get("PORT")
-                .unwrap_or(&"3000".to_string())
-                .parse()
-                .unwrap(),
+                .map_or_else(|| Ok(3000), |p| p.parse())?,
             &config.module,
             self.dispatcher.clone(),
             self.outbounds.clone(),
+            self.listeners.clone(),
         );
-
         Ok(vec![])
     }
 
-    fn deconfigure(&self, _config: CapabilityConfiguration) -> MessageHandlerResult {
-        // Handle removal of resources claimed by an actor here
-        // TODO: terminate the telnet server for this actor
+    fn deconfigure(&self, config: CapabilityConfiguration) -> MessageHandlerResult {
+        debug!("Shutting down telnet session for actor {}", &config.module);
+        // Remove actor session, shutdown TCP listener
+        if self
+            .listeners
+            .write()
+            .unwrap()
+            .remove(&config.module)
+            .is_none()
+        {
+            warn!(
+                "Attempted to deconfigure actor {}, but it was not configured",
+                &config.module
+            );
+        }
         Ok(vec![])
     }
 
     /// Sends a text message to the appropriate socket
-    fn send_text(&self, _actor: &str, msg: TelnetMessage) -> MessageHandlerResult {
-        let outbound = self.outbounds.read().unwrap()[&msg.session].clone();
-        outbound.send(msg.text).unwrap();
-        Ok(vec![])
+    fn send_text(
+        &self,
+        _actor: &str,
+        msg: SendTextArgs,
+    ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
+        match self.outbounds.read().unwrap().get(&msg.session).clone() {
+            Some(outbound) => serialize(outbound.send(msg.text).is_ok()),
+            None => Err(format!("Socket is not present for session {}", &msg.session).into()),
+        }
     }
 
     fn health(&self) -> MessageHandlerResult {
@@ -113,7 +136,7 @@ impl CapabilityProvider for TelnetProvider {
         op: &str,
         msg: &[u8],
     ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
-        trace!("Received host call from {}, operation - {}", actor, op);
+        debug!("Received host call from {}, operation - {}", actor, op);
 
         match op {
             OP_BIND_ACTOR if actor == SYSTEM_ACTOR => self.configure(deserialize(msg)?),
@@ -127,15 +150,4 @@ impl CapabilityProvider for TelnetProvider {
     fn stop(&self) {
         /* nothing to do */
     }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct TelnetMessage {
-    pub session: String,
-    pub text: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct SessionStarted {
-    pub session: String,
 }
