@@ -323,7 +323,7 @@ pub fn serialize<T>(
 where
     T: Serialize,
 {
-    serde_json::to_vec(&item).map_err(|_e| "JSON serialization failure".into())
+    serde_json::to_vec(&item).map_err(|e| format!("JSON serialization failure: {}", e).into())
 }
 
 /// The standard function for de-serializing codec structs from a format suitable
@@ -332,5 +332,5 @@ where
 pub fn deserialize<'de, T: Deserialize<'de>>(
     buf: &'de [u8],
 ) -> ::std::result::Result<T, Box<dyn std::error::Error + Send + Sync>> {
-    serde_json::from_slice(buf).map_err(|_e| "JSON deserialization failure".into())
+    serde_json::from_slice(buf).map_err(|e| format!("JSON deserialization failure: {}", e).into())
 }
