@@ -42,6 +42,14 @@ pub struct HostManifest {
     #[doc(hidden)]
     pub capabilities: Vec<Capability>,
     #[doc(hidden)]
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub actors: Vec<String>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<Capability>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<LinkEntry>,
 }
 

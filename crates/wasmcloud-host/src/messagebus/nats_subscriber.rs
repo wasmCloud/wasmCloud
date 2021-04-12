@@ -39,6 +39,7 @@ impl Handler<Initialize> for NatsSubscriber {
     type Result = ResponseActFuture<Self, ()>;
 
     fn handle(&mut self, msg: Initialize, _ctx: &mut Self::Context) -> Self::Result {
+        trace!("Initializing NatsSubscriber for {}", msg.subject);
         let state = SubscriberState {
             receiver: msg.receiver,
         };
@@ -68,8 +69,8 @@ impl Handler<NatsMessage> for NatsSubscriber {
     type Result = ResponseActFuture<Self, ()>;
 
     fn handle(&mut self, msg: NatsMessage, _ctx: &mut Self::Context) -> Self::Result {
-        trace!("NATS subscriber forwarding message");
         let target = self.state.as_ref().unwrap().receiver.clone();
+        trace!("NATS subscriber forwarding message : {}", msg.msg.subject);
         Box::pin(
             async move {
                 if target.send(msg).await.is_err() {

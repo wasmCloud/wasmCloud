@@ -14,6 +14,7 @@ use ring::digest::{Context, Digest, SHA256};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::error::Error;
+use std::fmt::Display;
 use std::io::Read;
 use std::string::ToString;
 use uuid::Uuid;
@@ -290,6 +291,12 @@ pub enum WasmCloudEntity {
         contract_id: String,
         link_name: String,
     },
+}
+
+impl Display for WasmCloudEntity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.url())
+    }
 }
 
 impl WasmCloudEntity {

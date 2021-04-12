@@ -87,6 +87,7 @@ impl Handler<NatsMessage> for ControlInterface {
     type Result = ResponseActFuture<Self, ()>;
 
     fn handle(&mut self, msg: NatsMessage, _ctx: &mut Context<Self>) -> Self::Result {
+        trace!("Handling NATS message with subject:{}", msg.msg.subject);
         use super::handlers::*;
         use ::wasmcloud_control_interface::broker::*;
 

@@ -45,6 +45,7 @@ impl Handler<FindLinks> for MessageBus {
     type Result = ResponseActFuture<Self, FindLinksResponse>;
 
     fn handle(&mut self, msg: FindLinks, _ctx: &mut Context<Self>) -> Self::Result {
+        trace!("Finding links {}", msg.link_name);
         let lc = self.latticecache.clone().unwrap();
         Box::pin(
             async move {
@@ -72,6 +73,7 @@ impl Handler<EnforceLocalActorLinks> for MessageBus {
     type Result = ResponseActFuture<Self, ()>;
 
     fn handle(&mut self, msg: EnforceLocalActorLinks, _ctx: &mut Context<Self>) -> Self::Result {
+        trace!("Local actor link {}", msg.actor);
         let lc = self.latticecache.clone().unwrap();
 
         Box::pin(
@@ -103,6 +105,7 @@ impl Handler<EnforceLocalProviderLinks> for MessageBus {
     type Result = ResponseActFuture<Self, ()>;
 
     fn handle(&mut self, msg: EnforceLocalProviderLinks, _ctx: &mut Context<Self>) -> Self::Result {
+        trace!("Local provider link {}", msg.link_name);
         if self.latticecache.is_none() {
             return Box::pin(async {}.into_actor(self));
         }
@@ -146,6 +149,7 @@ impl Handler<EnforceLocalLink> for MessageBus {
     // If the provider responsible for this link is local, and the actor
     // for this link is known to us, then invoke the link binding
     fn handle(&mut self, msg: EnforceLocalLink, _ctx: &mut Context<Self>) -> Self::Result {
+        trace!("Local link {}", msg.link_name);
         if self.latticecache.is_none() {
             return Box::pin(async {}.into_actor(self));
         }
@@ -241,6 +245,7 @@ impl Handler<PutClaims> for MessageBus {
     type Result = ResponseActFuture<Self, ()>;
 
     fn handle(&mut self, msg: PutClaims, _ctx: &mut Context<Self>) -> Self::Result {
+        trace!("Storing claims");
         let subject = msg.claims.subject.to_string();
         let claims = msg.claims.clone();
 
@@ -321,7 +326,7 @@ impl Handler<PutLink> for MessageBus {
     type Result = ResponseActFuture<Self, ()>;
 
     fn handle(&mut self, msg: PutLink, _ctx: &mut Context<Self>) -> Self::Result {
-        trace!("Messagebus received link definition notification");
+        trace!("Caching link: {} on {}", msg.contract_id, msg.link_name);
         let lc = self.latticecache.clone().unwrap();
         Box::pin(
             async move {
@@ -352,6 +357,7 @@ impl Handler<SetCacheClient> for MessageBus {
     type Result = ();
 
     fn handle(&mut self, msg: SetCacheClient, _ctx: &mut Context<Self>) -> Self::Result {
+        trace!("Setting cache client");
         self.latticecache = Some(msg.client);
     }
 }
@@ -360,6 +366,12 @@ impl Handler<CanInvoke> for MessageBus {
     type Result = ResponseActFuture<Self, bool>;
 
     fn handle(&mut self, msg: CanInvoke, _ctx: &mut Context<Self>) -> Self::Result {
+        trace!(
+            "Asking if {}::{} can invoke {}",
+            msg.actor,
+            msg.operation,
+            msg.contract_id
+        );
         let lc = self.latticecache.clone().unwrap();
         let auther = self.authorizer.clone();
         let contract_id = msg.contract_id.to_string();
@@ -430,6 +442,7 @@ impl Handler<Initialize> for MessageBus {
     type Result = ResponseActFuture<Self, ()>;
 
     fn handle(&mut self, msg: Initialize, ctx: &mut Context<Self>) -> Self::Result {
+        trace!("Initializing MessageBus for namespace {:?}", msg.namespace);
         self.key = Some(msg.key);
         self.authorizer = Some(msg.auth);
         self.nc = msg.nc;
@@ -469,7 +482,12 @@ impl Handler<AdvertiseLink> for MessageBus {
     type Result = ResponseActFuture<Self, Result<()>>;
 
     fn handle(&mut self, msg: AdvertiseLink, _ctx: &mut Context<Self>) -> Self::Result {
-        trace!("Advertisting link definition");
+        trace!(
+            "Advertising link {}=>{}.{}",
+            msg.actor,
+            msg.link_name,
+            msg.contract_id,
+        );
 
         let advlink = msg.clone();
         let rpc = self.rpc_outbound.clone();
@@ -656,6 +674,7 @@ impl Handler<LookupAlias> for MessageBus {
     type Result = ResponseActFuture<Self, Option<String>>;
 
     fn handle(&mut self, msg: LookupAlias, _ctx: &mut Self::Context) -> Self::Result {
+        trace!("Looking up alias {}", msg.alias);
         let lc = self.latticecache.clone().unwrap();
         Box::pin(
             async move {
@@ -673,6 +692,7 @@ impl Handler<LookupLink> for MessageBus {
     type Result = ResponseActFuture<Self, Option<String>>;
 
     fn handle(&mut self, msg: LookupLink, _ctx: &mut Self::Context) -> Self::Result {
+        trace!("Looking up link {}", msg.link_name);
         let lc = self.latticecache.clone().unwrap();
         Box::pin(
             async move {
