@@ -38,16 +38,14 @@ pub struct HostManifest {
     #[doc(hidden)]
     pub labels: HashMap<String, String>,
     #[doc(hidden)]
-    pub actors: Vec<String>,
-    #[doc(hidden)]
-    pub capabilities: Vec<Capability>,
-    #[doc(hidden)]
     #[serde(default)]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub actors: Vec<String>,
+    #[doc(hidden)]
     #[serde(default)]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub capabilities: Vec<Capability>,
+    #[doc(hidden)]
     #[serde(default)]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<LinkEntry>,
