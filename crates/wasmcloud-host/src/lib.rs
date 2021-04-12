@@ -57,7 +57,7 @@
 //! The HTTP server capability provider is loaded so that the actor can receive web requests. A [link definition](https://wasmcloud.dev/reference/host-runtime/links/) is required
 //! between the HTTP server capability provider and the actor in order to verify actor privileges and supply configuration values
 //! (such as the port on which to listen). This link definition can be established _before or after_ the actor and capability
-//! provider have been started, as link definitions are first-class data cached throughout a lattice.
+//! provider have been started, as link definitions are first-class data cached throughout a [lattice](https://wasmcloud.dev/reference/lattice/).
 //!
 //! ```
 //! use wasmcloud_host::{HostBuilder, Actor, NativeCapability};

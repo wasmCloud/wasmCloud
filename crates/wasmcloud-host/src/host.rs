@@ -159,8 +159,8 @@ impl HostBuilder {
 
     /// Allows the host to pull actor and capability provider images from the supplied list
     /// of valid OCI registries without using a secure (SSL/TLS) connection. This option is empty by default and we recommend
-    /// it not be used in production environments. For local testing, supplying `["localhost:5000"]`
-    /// as an argument for the local OCI registry will allow for http connections to that registry.
+    /// it not be used in production environments. For local testing, make sure you supply the right
+    /// host name and port number for the locally running OCI registry.
     pub fn oci_allow_insecure(self, allowed_insecure: Vec<String>) -> HostBuilder {
         HostBuilder {
             allowed_insecure,
@@ -337,6 +337,10 @@ impl Host {
     /// images are assumed to be immutable this kind of caching is acceptable). If you need to
     /// purge the OCI image cache, remove the `wasmcloudcache` and `wasmcloud_ocicache` directories
     /// from the appropriate root folder (which defaults to the environment's `TEMP` directory).
+    ///
+    /// # Arguments
+    /// * `cap_ref` - The OCI reference URL of the capability provider.
+    /// * `link_name` - The link name to be used for this capability provider.
     pub async fn start_capability_from_registry(
         &self,
         cap_ref: &str,
@@ -389,6 +393,8 @@ impl Host {
     /// Stops a running actor in the host. This call is assumed to be idempotent and as such will
     /// not fail if you attempt to stop an actor that is not running (though this may result
     /// in errors or warnings in log output).
+    ///
+    /// * `actor_ref` - Either the public key or the OCI reference URL of the actor to stop.
     pub async fn stop_actor(&self, actor_ref: &str) -> Result<()> {
         self.ensure_started()?;
         let hc = HostController::from_hostlocal_registry(&self.id);
@@ -403,15 +409,21 @@ impl Host {
     /// Updates a running actor with the bytes from a new actor module. Invoking this method will
     /// cause all pending messages inbound to the actor to block while the update is performed. It can take a few
     /// seconds depending on the size of the actor and the underlying engine you're using (e.g. JIT vs. interpreter).
-    /// ## ⚠️ Caveats
+    ///
+    /// # Arguments
+    /// * `actor_id` - The public key of the actor to update.
+    /// * `new_oci_ref` - If applicable, a new OCI reference URL that corresponds to the new version.
+    /// * `bytes` - The raw bytes containing the new WebAssembly module.
+    ///
+    /// # ⚠️ Caveats
     /// * Take care when supplying a value for the `new_oci_ref` parameter. You should be consistent
     /// in how you supply this value. Updating actors that were started from OCI references should
     /// continue to have OCI references, while those started from non-OCI sources should not be given
     /// new, arbitrary OCI references. Failing to keep this consistent could cause unforeseen failed
-    /// attempts at subsequent updates.
-    /// * You should only ever use this method when running in standalone/isolated mode. If you have a control
-    /// interface configured, then you should perform live updates by using a control interface client
-    /// and a suitable OCI reference URL.
+    /// attempts at subsequent updates.  
+    /// * If the new version of the actor is actually in an OCI registry, then the preferred method of
+    /// performing a live update is to do so through the lattice control interface and specifying the OCI
+    /// URL. This method is less error-prone and can cause less confusion over time.        
     pub async fn update_actor(
         &self,
         actor_id: &str,
@@ -442,6 +454,11 @@ impl Host {
     /// Stops a running capability provider. This call will not fail if the indicated provider
     /// is not currently running. This call is non-blocking and does not wait for the provider
     /// to finish cleaning up its resources before returning.
+    ///
+    /// # Arguments
+    /// * `provider_ref` - The capability provider's public key or OCI reference URL
+    /// * `contract_id` - The contract ID of the provider to stop
+    /// * `link` - The link name used by the instance of the capability provider
     pub async fn stop_provider(
         &self,
         provider_ref: &str,
@@ -460,7 +477,7 @@ impl Host {
         Ok(())
     }
 
-    /// Retrieves the list of all actors within this host. This function call does _not_
+    /// Retrieves the list of the public keys of all actors within this host. This function call does _not_
     /// include any actors remotely running in a connected lattice.
     pub async fn get_actors(&self) -> Result<Vec<String>> {
         self.ensure_started()?;
@@ -468,7 +485,7 @@ impl Host {
         Ok(b.send(QueryActors {}).await?.results)
     }
 
-    /// Retrieves the list of capability providers running in the host. This function does
+    /// Retrieves the list of the public keys of all capability providers running in the host. This function does
     /// _not_ include any capability providers that may be remotely running in a connected
     /// lattice.
     pub async fn get_providers(&self) -> Result<Vec<String>> {
@@ -477,13 +494,17 @@ impl Host {
         Ok(b.send(QueryProviders {}).await?.results)
     }
 
-    /// Perform a raw [waPC](https://wapc.io)-style invocation on the given actor by supplying an operation
+    /// Perform a raw [waPC](https://crates.io/crates/wapc)-style invocation on the given actor by supplying an operation
     /// string and a payload of raw bytes, resulting in a payload of raw response bytes. It
     /// is entirely up to the actor as to how it responds to unrecognized operations. This
     /// operation will also be checked against the authorization system if a custom
-    /// authorization plugin has been supplied to this host. You may supply either the actor's
-    /// public key or the actor's registered call alias. This call will fail if you attempt to
-    /// invoke a non-existent actor or call alias.
+    /// authorization plugin has been supplied to this host. This call will fail if you attempt to
+    /// invoke a non-existent actor or call alias or the target actor cannot be reached.
+    ///
+    /// # Arguments
+    /// * `actor` - The public key of the actor or its call alias if applicable.
+    /// * `operation` - The name of the operation to perform
+    /// * `msg` - The raw bytes containing the payload pertaining to this operation.
     pub async fn call_actor(&self, actor: &str, operation: &str, msg: &[u8]) -> Result<Vec<u8>> {
         self.ensure_started()?;
         let b = MessageBus::from_hostlocal_registry(&self.id);
@@ -521,7 +542,12 @@ impl Host {
     /// leaves the lattice and rejoins (which can happen during a crash or a network partition event). The resiliency and
     /// reliability of link definitions within a lattice are inherited from your choice of lattice cache provider.
     ///
-    /// The value of `actor` for a link definition can either be the actor's public key _or_ an OCI reference URL.
+    /// # Arguments
+    /// * `actor` - Can either be the actor's public key _or_ an OCI reference URL.
+    /// * `contract_id` - The contract ID of the link, e.g. `wasmcloud:httpserver`.
+    /// * `link_name` - The link name of the capability provider when it was loaded.
+    /// * `provider_id` - The public key of the capability provider (e.g. `Vxxxx`)
+    /// * `values` - The set of configuration values to give to the capability provider for this link definition.
     pub async fn set_link(
         &self,
         actor: &str,
@@ -548,8 +574,10 @@ impl Host {
     /// up resources and terminate any child processes associated with the actor. This call does not
     /// wait for all providers to finish cleaning up associated resources.
     ///
-    /// To remove a link definition, the value of `actor` must be the actor's public key. You _cannot_ remove
-    /// a link definition with an actor's OCI reference URL.
+    /// # Arguments
+    /// * `actor` - The **public key** of the actor. You cannot supply an OCI reference when removing a link.
+    /// * `contract_id` - The contract ID of the capability in question.
+    /// * `link_name` - The name of the link used by the capability provider for which the link is to be removed.
     pub async fn remove_link(
         &self,
         actor: &str,
