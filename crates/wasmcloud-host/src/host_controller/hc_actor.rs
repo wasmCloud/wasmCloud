@@ -93,6 +93,7 @@ impl Handler<AuctionActor> for HostController {
     // true only if the actor is not running and the host satisfies the indicated
     // constraints.
     fn handle(&mut self, msg: AuctionActor, _ctx: &mut Context<Self>) -> Self::Result {
+        trace!("Received actor auction {}", msg.actor_ref);
         let lc = self.latticecache.clone().unwrap();
         let host_labels = self.host_labels.clone();
         let actor_ref = msg.actor_ref.to_string();
@@ -121,6 +122,7 @@ impl Handler<AuctionProvider> for HostController {
     // only if the provider is not running and the host satisfies the indicated
     // constraints.
     fn handle(&mut self, msg: AuctionProvider, _ctx: &mut Context<Self>) -> Self::Result {
+        trace!("Received provider auction {}", msg.provider_ref);
         let lc = self.latticecache.clone().unwrap();
         let host_labels = self.host_labels.clone();
         let provider_ref = msg.provider_ref.to_string();
@@ -165,6 +167,7 @@ impl Handler<QueryActorRunning> for HostController {
     type Result = ResponseActFuture<Self, bool>;
 
     fn handle(&mut self, msg: QueryActorRunning, _ctx: &mut Context<Self>) -> Self::Result {
+        trace!("Received ActorRunning query {}", msg.actor_ref);
         let lc = self.latticecache.clone().unwrap();
         Box::pin(
             async move {
@@ -186,6 +189,7 @@ impl Handler<GetRunningActor> for HostController {
     type Result = Option<Addr<ActorHost>>;
 
     fn handle(&mut self, msg: GetRunningActor, _ctx: &mut Context<Self>) -> Self::Result {
+        trace!("Getting running actor {}", msg.actor_id);
         self.actors.get(&msg.actor_id).cloned()
     }
 }
@@ -287,6 +291,7 @@ impl Handler<SetLabels> for HostController {
     type Result = ();
 
     fn handle(&mut self, msg: SetLabels, _ctx: &mut Context<Self>) -> Self::Result {
+        trace!("Setting host labels");
         self.host_labels = msg.labels
     }
 }
@@ -366,6 +371,7 @@ impl Handler<Initialize> for HostController {
         self.host_labels = msg.labels.clone();
         self.authorizer = Some(msg.auth.clone());
         let host_id = msg.kp.public_key();
+        trace!("Initializing host controller {}", host_id);
 
         let claims = crate::capability::extras::get_claims();
         let pk = claims.subject;

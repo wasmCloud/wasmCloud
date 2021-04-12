@@ -42,25 +42,33 @@ impl Handler<CreateSubscription> for RpcSubscription {
         self.ns_prefix = msg.namespace;
         let nc = msg.nc.clone();
         let s = invoke_subject(&self.ns_prefix, &msg.entity);
+        let subscription = msg.entity.url();
 
         Box::pin(
             async move { nc.queue_subscribe(&s, &s).await }
                 .into_actor(self)
-                .map(|sub, _act, ctx| {
-                    if let Ok(sub) = sub {
-                        ctx.add_message_stream(sub.map(|m| {
-                            let i = deserialize::<Invocation>(&m.data);
-                            match i {
-                                Ok(i) => RpcInvocation {
+                .map(move |sub, _act, ctx| match sub {
+                    Ok(sub) => ctx.add_message_stream(sub.map(|m| {
+                        let i = deserialize::<Invocation>(&m.data);
+                        match i {
+                            Ok(i) => {
+                                trace!("Forwarding RpcInvocation {}", i.target_url());
+                                RpcInvocation {
                                     invocation: Some(i),
                                     reply: m.reply.clone(),
-                                },
-                                Err(_e) => RpcInvocation {
+                                }
+                            }
+                            Err(e) => {
+                                error!("Error deserializing invocation: {}", e);
+                                RpcInvocation {
                                     invocation: None,
                                     reply: None,
-                                },
+                                }
                             }
-                        }))
+                        }
+                    })),
+                    Err(e) => {
+                        error!("Could not create subscription for {}, {}", subscription, e);
                     }
                 }),
         )
@@ -79,7 +87,11 @@ impl Handler<RpcInvocation> for RpcSubscription {
         Box::pin(
             async move {
                 if let Some(inv) = msg.invocation {
-                    trace!("Handling inbound RPC call from {}", inv.origin.url());
+                    trace!(
+                        "Handling inbound RPC call from {} to {}",
+                        inv.origin.url(),
+                        inv.target.url()
+                    );
                     let res = target.send(inv).await; // TODO: convert this into a timeout
                     match res {
                         Ok(ir) => {
