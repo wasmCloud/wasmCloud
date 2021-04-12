@@ -1,29 +1,63 @@
+#![doc(html_favicon_url = "https://wasmcloud.com/favicon.ico")]
+#![doc(html_logo_url = "https://wasmcloud.com/images/screenshots/Wasmcloud.Icon_Green_704x492.png")]
+
 //! # wasmCloud Host
 //!
-//! [wasmCloud](https://wasmcloud.com) is a secure, distributed actor platform with an autonomous mesh network built
-//! for bridging disparate and far-flung infrastructure.
+//! [wasmCloud](https://wasmcloud.dev) is a platform for writing portable business logic that can run anywhere
+//! from the edge to the cloud, that boasts a secure-by-default, boilerplate-free developer experience with
+//! rapid feedback loop.
 //!
-//! By default a wasmCloud host will start in offline mode and only allow "local" scheduling of actors
-//! and capabilities. If you choose to opt-in to the lattice, you can use NATS as a message broker to
-//! provide the infrastructure for wasmCloud's self-forming, self-healing network. If you then want
-//! even more power, you can choose to override the capability provider used for managing the shared
-//! state within a lattice.
+//! The wasmCloud team believes that we can not only change the way developers build software for the better,
+//! but make it easier to secure, deploy, maintain, observe, and upgrade that software as well--all while reducing
+//! the amount of boilerplate we have to copy and paste.
 //!
-//! Local development on your workstation is easy and simple by default, and you should only
-//! incur additional complexity as you move toward resilient, distributed production
-//! environments.
+//! wasmCloud is designed around the following core tenets:
+//! * Productivity - Developer and Operations
+//! * Enterprise-grade Security
+//! * Cost Savings
+//! * Portability
+//! * Performance
 //!
-//! To start a runtime, simply add actors and capabilities to the host. For more information,
-//! take a look at the documentation and tutorials at [wasmcloud.dev](https://wasmcloud.dev).
+//! You should not have to change your design, architecture, or your programming environment as you move from concept to production.
+//! wasmCloud aims to bring joy to distributed systems development without sacrificing enterprise-grade features.
 //!
-//! # Example
-//! The following example creates a new wasmCloud host in the default standalone (no lattice) mode. It
-//! then loads an actor that simply echoes back incoming HTTP requests as outbound HTTP responses.
-//! The HTTP server capability provider is loaded so that the actor can receive web requests.
-//! Note that the link definition (configuration of the link between the actor and the
-//! capability provider) can be defined _in any order_. The host runtime automatically
-//! establishes links as soon as all related parties are up and running inside a host or
-//! a lattice.
+//! # Actors
+//!
+//! wasmCloud's [actors](https://wasmcloud.dev/reference/host-runtime/actors/) are designed in the spirit of the [actor model](https://en.wikipedia.org/wiki/Actor_model), though some of
+//! the implementation details may differ from what people might expect from certain actor runtimes. A wasmCloud actor is a
+//! single-threaded, portable unit of compute and deployment.
+//!
+//! Our actors also contain cryptographically signed JSON Web Tokens (JWT) that assert via claims the list of capabilities
+//! to which any given actor has been granted access. For more information, check out our [security](https://wasmcloud.dev/reference/host-runtime/security/) documentation.
+//!
+//! # Capabilities
+//!
+//! Actors, by virtue of being freestanding (non-[WASI](https://wasi.dev/)) WebAssembly modules, cannot interact with the operating system nor can they
+//! perform I/O of any kind. As such, if an actor wants to do anything other than perform pure calculations, it must do so
+//! by virtue of a [capability provider](https://wasmcloud.dev/reference/host-runtime/capabilities/), a dynamic plugin loaded by the wasmCloud host runtime that is made available for
+//! secure dispatch to and from an actor.
+//!
+//! # Using the Host API
+//!
+//! This crate provides the [`primary API`](struct@Host) for interacting with the host runtime. If you are purely interested
+//! in using a "stock" binary to run your actor workloads and communicate with capability providers using standard
+//! features, then you should use the [wasmCloud](https://wasmcloud.dev/overview/installation/) binary available for installation.
+//!
+//! If, on the other hand, you are interested in providing a custom host runtime of your own that utilizes the wasmCloud
+//! host API as a platform, then this crate is what you'll need.
+//!
+//! To start a runtime, simply build a host and then add actors, capabilities, and link definitions to it.
+//! For more information, take a look at the documentation and tutorials at [wasmcloud.dev](https://wasmcloud.dev).
+//!
+//! # Host API Example
+//!
+//! The following example creates a new wasmCloud host in the default standalone (no lattice/single-player) mode. It
+//! then loads an actor that echoes back incoming HTTP requests as a JSON object in the body of the outbound HTTP response.
+//!
+//! The HTTP server capability provider is loaded so that the actor can receive web requests. A [link definition](https://wasmcloud.dev/reference/host-runtime/links/) is required
+//! between the HTTP server capability provider and the actor in order to verify actor privileges and supply configuration values
+//! (such as the port on which to listen). This link definition can be established _before or after_ the actor and capability
+//! provider have been started, as link definitions are first-class data cached throughout a lattice.
 //!
 //! ```
 //! use wasmcloud_host::{HostBuilder, Actor, NativeCapability};
@@ -50,6 +84,7 @@
 //!
 //!     let mut webvalues: HashMap<String, String> = HashMap::new();
 //!     webvalues.insert("PORT".to_string(), format!("{}", WEB_PORT));
+//!     
 //!     // Establish a link between the actor and a capability provider
 //!     h.set_link(
 //!         &actor_id,
