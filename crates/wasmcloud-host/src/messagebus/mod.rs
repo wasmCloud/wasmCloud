@@ -43,6 +43,10 @@ pub struct QueryProviders;
 #[rtype(result = "LinksResponse")]
 pub struct QueryAllLinks;
 
+#[derive(Message)]
+#[rtype(result = "HashMap<String, String>")]
+pub struct QueryOciReferences;
+
 pub struct LinksResponse {
     pub links: Vec<LinkDefinition>,
 }
