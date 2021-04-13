@@ -11,6 +11,7 @@ use crate::middleware::{run_actor_post_invoke, run_actor_pre_invoke, Middleware}
 use crate::{ControlEvent, Result};
 use actix::prelude::*;
 use futures::executor::block_on;
+use log::info;
 use wapc::WapcHost;
 use wascap::jwt::TokenValidation;
 use wascap::prelude::{Claims, KeyPair};
@@ -172,7 +173,10 @@ fn perform_initialization(
     assert_validation_result(&tv)?;
 
     #[cfg(feature = "wasmtime")]
-    let engine = wasmtime_provider::WasmtimeEngineProvider::new(&buf, None);
+    let engine = {
+        info!("Initializing wasmtime engine");
+        wasmtime_provider::WasmtimeEngineProvider::new(&buf, None)
+    };
     #[cfg(feature = "wasm3")]
     let engine = wasm3_provider::Wasm3EngineProvider::new(&buf);
 

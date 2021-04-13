@@ -85,7 +85,7 @@ async fn main() -> Result<()> {
     let cli = Cli::from_args();
     let _ = env_logger::Builder::from_env(env_logger::Env::default().filter_or(
         env_logger::DEFAULT_FILTER_ENV,
-        "wasmcloud=info,wasmcloud_host=info",
+        "wasmcloud=info,wasmcloud_host=info,wasmtime_provider=warn",
     ))
     .format_module_path(false)
     .try_init();
