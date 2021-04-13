@@ -178,4 +178,3 @@ async fn cant_use_unstarted_host() {
     }
     assert!(res.is_ok());
 }
-
