@@ -19,7 +19,7 @@ pub async fn await_actor_count(
 ) -> Result<()> {
     let mut attempt = 0;
     loop {
-        match actix_rt::time::timeout(backoff, h.get_actors()).await {
+        match actix_rt::time::timeout(backoff, h.actors()).await {
             Ok(c) => {
                 if c.unwrap().len() >= count {
                     break;
@@ -44,7 +44,7 @@ pub async fn await_provider_count(
 ) -> Result<()> {
     let mut attempt = 0;
     loop {
-        match actix_rt::time::timeout(backoff, h.get_providers()).await {
+        match actix_rt::time::timeout(backoff, h.providers()).await {
             Ok(c) => {
                 if c.unwrap().len() >= count {
                     break;

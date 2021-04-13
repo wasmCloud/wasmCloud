@@ -1,4 +1,4 @@
-use super::{AdvertiseRemoveLink, LookupAlias, MessageBus, RemoveLink};
+use super::{AdvertiseRemoveLink, LookupAlias, MessageBus, QueryOciReferences, RemoveLink};
 use crate::capability::extras::EXTRAS_PUBLIC_KEY;
 use crate::dispatch::{gen_config_invocation, Invocation, InvocationResponse, WasmCloudEntity};
 use crate::generated::core::CapabilityConfiguration;
@@ -418,6 +418,15 @@ impl Handler<QueryAllLinks> for MessageBus {
             }
             .into_actor(self),
         )
+    }
+}
+
+impl Handler<QueryOciReferences> for MessageBus {
+    type Result = ResponseActFuture<Self, HashMap<String, String>>;
+
+    fn handle(&mut self, _msg: QueryOciReferences, _ctx: &mut Context<Self>) -> Self::Result {
+        let lc = self.latticecache.clone().unwrap();
+        Box::pin(async move { lc.collect_oci_references().await }.into_actor(self))
     }
 }
 

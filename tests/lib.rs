@@ -33,7 +33,6 @@ async fn distributed_unlink_provider() {
     assert!(res.is_ok());
 }
 
-/*
 #[actix_rt::test]
 async fn live_update() {
     let res = control::live_update().await;
@@ -179,4 +178,3 @@ async fn cant_use_unstarted_host() {
     }
     assert!(res.is_ok());
 }
-*/

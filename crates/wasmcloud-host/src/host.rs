@@ -1,7 +1,10 @@
 use crate::{
     actors::LiveUpdate,
     host_controller::GetRunningActor,
-    messagebus::{AdvertiseLink, AdvertiseRemoveLink, MessageBus},
+    messagebus::{
+        AdvertiseLink, AdvertiseRemoveLink, GetClaims, LinkDefinition, MessageBus, QueryAllLinks,
+        QueryOciReferences,
+    },
     InvocationResponse,
 };
 
@@ -24,7 +27,7 @@ use crate::{Result, SYSTEM_ACTOR};
 use provider_archive::ProviderArchive;
 use std::time::Duration;
 use std::{collections::HashMap, sync::RwLock};
-use wascap::prelude::KeyPair;
+use wascap::prelude::{Claims, KeyPair};
 
 /// A host builder provides a convenient, fluid syntax for setting initial configuration
 /// and tuning parameters for a wasmCloud host
@@ -477,9 +480,9 @@ impl Host {
         Ok(())
     }
 
-    /// Retrieves the list of the public keys of all actors within this host. This function call does _not_
-    /// include any actors remotely running in a connected lattice.
-    pub async fn get_actors(&self) -> Result<Vec<String>> {
+    /// Retrieves the list of all actors within this host. This function call does _not_
+    /// include any actors remotely running in a connected lattice
+    pub async fn actors(&self) -> Result<Vec<String>> {
         self.ensure_started()?;
         let b = MessageBus::from_hostlocal_registry(&self.id);
         Ok(b.send(QueryActors {}).await?.results)
@@ -487,8 +490,8 @@ impl Host {
 
     /// Retrieves the list of the public keys of all capability providers running in the host. This function does
     /// _not_ include any capability providers that may be remotely running in a connected
-    /// lattice.
-    pub async fn get_providers(&self) -> Result<Vec<String>> {
+    /// lattice
+    pub async fn providers(&self) -> Result<Vec<String>> {
         self.ensure_started()?;
         let b = MessageBus::from_hostlocal_registry(&self.id);
         Ok(b.send(QueryProviders {}).await?.results)
@@ -641,6 +644,47 @@ impl Host {
         }
 
         Ok(())
+    }
+
+    /// Retrieves the list of all actor claims known to this host. Note that this list is
+    /// essentially a grow-only map maintained by the distributed lattice cache. As a result,
+    /// the return value of this function contains a list of all claims as seen _since the lattice began_.
+    /// It is quite likely that this list can contain references to actors that are no longer in
+    /// the lattice. When the host is operating in single-player mode, this list naturally only indicates
+    /// actors that have been started since the host was initialized.
+    pub async fn actor_claims(&self) -> Result<Vec<Claims<wascap::jwt::Actor>>> {
+        self.ensure_started()?;
+        let bus = MessageBus::from_hostlocal_registry(&self.kp.public_key());
+        let res = bus.send(GetClaims {}).await?;
+        Ok(res.claims.into_iter().map(|(_, v)| v).collect())
+    }
+
+    /// Retrieves the list of host labels. Some of these labels are automatically populated by the host
+    /// at start-time, such as OS family and CPU, and others are manually supplied to the host at build-time
+    /// or through a manifest to define custom scheduling rules.
+    pub async fn labels(&self) -> HashMap<String, String> {
+        self.labels.clone()
+    }
+
+    /// Retrieves the list of link definitions as known by the distributed lattice cache. If the host is
+    /// in single-player mode, this cache is limited to just that host. In lattice mode, this cache reflects
+    /// all of the current link definitions.
+    pub async fn link_definitions(&self) -> Result<Vec<LinkDefinition>> {
+        self.ensure_started()?;
+        let bus = MessageBus::from_hostlocal_registry(&self.kp.public_key());
+        let res = bus.send(QueryAllLinks {}).await?;
+        Ok(res.links)
+    }
+
+    /// Obtains the list of all known OCI references. As with other lattice cache data, this can be thought
+    /// of as a grow-only map that can contain references for actors or providers that may no longer be present
+    /// within a lattice or host. The returned map's `key` is the OCI reference URL of the entity, and the value
+    /// is the public key of that entity, where `Mxxx` are actors and `Vxxx` are capability providers.
+    pub async fn oci_references(&self) -> Result<HashMap<String, String>> {
+        self.ensure_started()?;
+        let bus = MessageBus::from_hostlocal_registry(&self.kp.public_key());
+        let res = bus.send(QueryOciReferences {}).await?;
+        Ok(res)
     }
 
     fn ensure_started(&self) -> Result<()> {

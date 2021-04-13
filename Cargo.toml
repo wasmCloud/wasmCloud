@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud"
-version = "0.16.1"
+version = "0.17.0"
 authors = ["wasmcloud Team"]
 edition = "2018"
 default-run = "wasmcloud"
@@ -41,7 +41,7 @@ log = "0.4.11"
 env_logger = "0.8.2"
 anyhow = "1.0.34"
 actix-rt = "2.1.0"
-wasmcloud-host = { path = "crates/wasmcloud-host", version = "0.16.1" }
+wasmcloud-host = { path = "crates/wasmcloud-host", version = "0.17.0" }
 nats = "0.8.6"
 structopt = "0.3.21"
 nkeys = "0.1.0"

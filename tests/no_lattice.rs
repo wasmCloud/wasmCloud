@@ -12,7 +12,7 @@ pub async fn empty_host_has_two_providers() -> Result<()> {
     h.start().await?;
     actix_rt::time::sleep(Duration::from_millis(300)).await;
 
-    let prov = h.get_providers().await?;
+    let prov = h.providers().await?;
     assert_eq!(2, prov.len());
 
     Ok(())
@@ -87,7 +87,7 @@ pub async fn start_and_stop_actor() -> Result<()> {
 
     h.stop_actor(&actor_id).await?;
     actix_rt::time::sleep(Duration::from_millis(500)).await;
-    assert_eq!(0, h.get_actors().await?.len());
+    assert_eq!(0, h.actors().await?.len());
 
     let request = Request {
         method: "GET".to_string(),
