@@ -125,6 +125,7 @@ pub(crate) async fn basics() -> Result<()> {
     //assert_eq!(3, inv.providers.len());
     assert_eq!(1, inv.actors.len());
     assert_eq!(inv.actors[0].image_ref, Some(KVCOUNTER_OCI.to_string()));
+    assert_eq!(inv.actors[0].name, Some("Key Value Counter".to_string()));
     assert_eq!(4, inv.labels.len()); // each host gets 3 built-in labels
     assert_eq!(inv.host_id, hosts[0].id);
     h.stop().await;

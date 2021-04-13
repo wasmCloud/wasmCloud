@@ -190,6 +190,9 @@ pub struct ActorDescription {
     pub id: String,
     #[serde(rename = "image_ref")]
     pub image_ref: Option<String>,
+    #[serde(rename = "name")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Deserialize, Serialize, Default, Clone)]
@@ -200,6 +203,9 @@ pub struct ProviderDescription {
     pub link_name: String,
     #[serde(rename = "image_ref")]
     pub image_ref: Option<String>,
+    #[serde(rename = "name")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 /// The standard function for serializing codec structs into a format that can be

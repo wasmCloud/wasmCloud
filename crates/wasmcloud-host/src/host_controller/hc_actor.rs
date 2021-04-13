@@ -1,5 +1,4 @@
 use super::*;
-use crate::actors::ActorHost;
 use crate::auth::Authorizer;
 use crate::capability::extras::ExtrasCapabilityProvider;
 use crate::capability::native_host::NativeCapabilityHost;
@@ -7,6 +6,7 @@ use crate::dispatch::Invocation;
 use crate::hlreg::HostLocalSystemService;
 use crate::messagebus::{GetClaims, LatticeCacheClient, MessageBus, SetCacheClient, Unsubscribe};
 use crate::middleware::Middleware;
+use crate::{actors::ActorHost, capability::native_host::GetName};
 use crate::{NativeCapability, Result, WasmCloudEntity, SYSTEM_ACTOR};
 use std::collections::HashMap;
 
@@ -548,12 +548,26 @@ impl Handler<QueryHostInventory> for HostController {
         Box::pin(
             async move {
                 let image_refs = lc.collect_oci_references().await;
+                let names: HashMap<String, String> = {
+                    // This is semi-wasteful (incurs 1 extra hashmap lookup per entity),
+                    // but I can't seem to find a good way to call the async send while inside the other loop
+                    // because async !@$%@#$)%@@#$ 😡😡😡😡
+                    let mut m = HashMap::new();
+                    for (k, v) in &actors {
+                        m.insert(k.to_string(), v.send(GetName {}).await.unwrap());
+                    }
+                    for (k, v) in &providers {
+                        m.insert(k.id.to_string(), v.send(GetName {}).await.unwrap());
+                    }
+                    m
+                };
                 HostInventory {
                     actors: actors
                         .iter()
                         .map(|(k, _v)| ActorSummary {
                             id: k.to_string(),
                             image_ref: find_imageref(k, &image_refs),
+                            name: names.get(k).map(|v| v.to_string()),
                         })
                         .collect(),
                     host_id,
@@ -563,6 +577,7 @@ impl Handler<QueryHostInventory> for HostController {
                             image_ref: find_imageref(&k.id, &image_refs),
                             id: k.id.to_string(),
                             link_name: k.link_name.to_string(),
+                            name: names.get(&k.id).map(|v| v.to_string()),
                         })
                         .collect(),
                     labels: host_labels,

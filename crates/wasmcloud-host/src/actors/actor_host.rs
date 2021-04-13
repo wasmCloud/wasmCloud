@@ -1,7 +1,7 @@
 use std::collections::{hash_map::Entry, HashMap};
 
-use crate::actors::WasmCloudActor;
 use crate::control_interface::ctlactor::{ControlInterface, PublishEvent};
+use crate::{actors::WasmCloudActor, capability::native_host::GetName};
 
 use crate::dispatch::OP_HALT;
 use crate::dispatch::{Invocation, InvocationResponse, WasmCloudEntity};
@@ -49,6 +49,14 @@ pub(crate) struct Initialize {
 pub(crate) struct LiveUpdate {
     pub actor_bytes: Vec<u8>,
     pub image_ref: Option<String>,
+}
+
+impl Handler<GetName> for ActorHost {
+    type Result = String;
+
+    fn handle(&mut self, _msg: GetName, _ctx: &mut Self::Context) -> Self::Result {
+        self.state.as_ref().unwrap().claims.name()
+    }
 }
 
 impl Handler<LiveUpdate> for ActorHost {

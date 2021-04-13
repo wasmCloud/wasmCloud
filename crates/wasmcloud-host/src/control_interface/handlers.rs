@@ -163,6 +163,7 @@ pub(crate) async fn handle_host_inventory_query(host: &str, msg: &nats::asynk::M
                     id: ps.id.to_string(),
                     link_name: ps.link_name.to_string(),
                     image_ref: ps.image_ref.clone(),
+                    name: ps.name.clone(),
                 })
                 .collect();
             inv.actors = hi
@@ -171,6 +172,7 @@ pub(crate) async fn handle_host_inventory_query(host: &str, msg: &nats::asynk::M
                 .map(|a| ActorDescription {
                     id: a.id.to_string(),
                     image_ref: a.image_ref.clone(),
+                    name: a.name.clone(),
                 })
                 .collect();
             inv.labels = hi.labels;
