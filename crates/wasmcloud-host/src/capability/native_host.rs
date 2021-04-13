@@ -22,6 +22,10 @@ pub(crate) struct Initialize {
     pub image_ref: Option<String>,
 }
 
+#[derive(Message)]
+#[rtype(result = "String")]
+pub(crate) struct GetName {}
+
 struct State {
     cap: NativeCapability,
     mw_chain: Vec<Box<dyn Middleware>>,
@@ -162,6 +166,14 @@ impl Handler<Initialize> for NativeCapabilityHost {
         info!("Native Capability Provider '{}' ready", url);
 
         Ok(entity)
+    }
+}
+
+impl Handler<GetName> for NativeCapabilityHost {
+    type Result = String;
+
+    fn handle(&mut self, _q: GetName, _ctx: &mut Self::Context) -> Self::Result {
+        self.state.as_ref().unwrap().cap.claims.name()
     }
 }
 
