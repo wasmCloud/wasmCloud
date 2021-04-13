@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud"
-version = "0.16.1"
+version = "0.17.0"
 authors = ["wasmcloud Team"]
 edition = "2018"
 default-run = "wasmcloud"
