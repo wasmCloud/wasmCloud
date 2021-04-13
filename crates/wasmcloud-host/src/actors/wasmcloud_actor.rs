@@ -5,7 +5,7 @@ use std::path::Path;
 use wascap::jwt::{Claims, Token};
 
 /// An actor is a WebAssembly module that conforms to the wasmCloud protocols and can securely
-/// consume capabilities exposed by native or portable capability providers
+/// consume capabilities exposed by capability providers.
 #[derive(Debug)]
 pub struct WasmCloudActor {
     pub(crate) token: Token<wascap::jwt::Actor>,
@@ -14,7 +14,7 @@ pub struct WasmCloudActor {
 
 impl WasmCloudActor {
     /// Create an actor from the bytes of a signed WebAssembly module. Attempting to load
-    /// an unsigned module, or a module signed improperly, will result in an error
+    /// an unsigned module, or a module signed improperly, will result in an error.
     pub fn from_slice(buf: &[u8]) -> Result<WasmCloudActor> {
         let token = wascap::wasm::extract_claims(&buf)?;
         if let Some(t) = token {
@@ -27,7 +27,7 @@ impl WasmCloudActor {
         }
     }
 
-    /// Create an actor from a signed WebAssembly (`.wasm`) file
+    /// Create an actor from a signed WebAssembly (`.wasm`) file.
     pub fn from_file(path: impl AsRef<Path>) -> Result<WasmCloudActor> {
         let mut file = File::open(path)?;
         let mut buf = Vec::new();
@@ -36,7 +36,7 @@ impl WasmCloudActor {
         WasmCloudActor::from_slice(&buf)
     }
 
-    /// Obtain the actor's public key (The `sub` field of a JWT). This can be treated as a globally unique identifier
+    /// Obtain the actor's public key (The `sub` field of the JWT). It is safe to treat this value as a globally unique identifier.
     pub fn public_key(&self) -> String {
         self.token.claims.subject.to_string()
     }
@@ -49,12 +49,12 @@ impl WasmCloudActor {
         }
     }
 
-    /// Obtain the public key of the issuer of the actor's signed token (the `iss` field of the JWT)
+    /// Obtain the issuer's public key as it resides in the actor's token (the `iss` field of the JWT).
     pub fn issuer(&self) -> String {
         self.token.claims.issuer.to_string()
     }
 
-    /// Obtain the list of capabilities declared in this actor's embedded token
+    /// Obtain the list of capabilities declared in this actor's embedded token.
     pub fn capabilities(&self) -> Vec<String> {
         match self.token.claims.metadata.as_ref().unwrap().caps {
             Some(ref caps) => caps.clone(),
@@ -62,7 +62,7 @@ impl WasmCloudActor {
         }
     }
 
-    /// Obtain the list of tags in the actor's token
+    /// Obtain the list of tags in the actor's token.
     pub fn tags(&self) -> Vec<String> {
         match self.token.claims.metadata.as_ref().unwrap().tags {
             Some(ref tags) => tags.clone(),
@@ -70,7 +70,7 @@ impl WasmCloudActor {
         }
     }
 
-    // Obtain the raw set of claims for this actor
+    // Obtain the raw set of claims for this actor.
     pub fn claims(&self) -> Claims<wascap::jwt::Actor> {
         self.token.claims.clone()
     }

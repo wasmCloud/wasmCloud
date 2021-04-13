@@ -95,7 +95,8 @@ impl HostBuilder {
 
     /// Enables remote control of the host via the lattice control protocol by providing an instance
     /// of a NATS connection through which control commands flow. Remote control of hosts is
-    /// disabled by default.
+    /// disabled by default. For security reasons, you should not use the same NATS connection or
+    /// security context for both RPC and lattice control.
     pub fn with_control_client(self, client: nats::asynk::Connection) -> HostBuilder {
         HostBuilder {
             cplane_client: Some(client),
@@ -104,7 +105,7 @@ impl HostBuilder {
     }
 
     /// Provides an additional layer of runtime security by providing the host with an
-    /// instance of an implementor of the [crate::Authorizer] trait.
+    /// instance of an implementor of the [`Authorizer`](trait@Authorizer) trait.
     pub fn with_authorizer(self, authorizer: impl Authorizer + 'static) -> HostBuilder {
         HostBuilder {
             authorizer: Box::new(authorizer),
@@ -114,7 +115,8 @@ impl HostBuilder {
 
     /// When running with lattice enabled, a namespace prefix can be provided to allow
     /// multiple lattices to co-exist within the same account space on a NATS server. This
-    /// allows for multi-tenancy but can be a security risk if configured incorrectly
+    /// allows for multi-tenancy but can be a security risk if configured incorrectly. If you do
+    /// not supply a namespace, the string `default` will be used.
     pub fn with_namespace(self, namespace: &str) -> HostBuilder {
         HostBuilder {
             namespace: namespace.to_string(),
@@ -147,7 +149,7 @@ impl HostBuilder {
     /// accidental mutation of images, close potential attack vectors, and prevent against
     /// inconsistencies when running as part of a distributed system. Also keep in mind that if you
     /// do enable images to run as 'latest', it may interfere with live update/hot swap
-    /// functionality
+    /// functionality.
     pub fn oci_allow_latest(self) -> HostBuilder {
         HostBuilder {
             allow_latest: true,
@@ -155,10 +157,10 @@ impl HostBuilder {
         }
     }
 
-    /// Allows the host to pull actor and capability provider images from these registries without
-    /// using a secure (SSL/TLS) connection. This option is empty by default and we recommend
-    /// it not be used in production environments. For local testing, supplying ["localhost:5000"]
-    /// as an argument for the local docker reigstry will allow for http connections to that registry.
+    /// Allows the host to pull actor and capability provider images from the supplied list
+    /// of valid OCI registries without using a secure (SSL/TLS) connection. This option is empty by default and we recommend
+    /// it not be used in production environments. For local testing, make sure you supply the right
+    /// host name and port number for the locally running OCI registry.
     pub fn oci_allow_insecure(self, allowed_insecure: Vec<String>) -> HostBuilder {
         HostBuilder {
             allowed_insecure,
@@ -169,7 +171,8 @@ impl HostBuilder {
     /// Adds a custom label and value pair to the host. Label-value pairs are used during
     /// scheduler auctions to determine if a host is compatible with a given scheduling request.
     /// All hosts automatically come with the following built-in system labels: `hostcore.arch`,
-    /// `hostcore.os`, `hostcore.osfamily`
+    /// `hostcore.os`, `hostcore.osfamily` and you cannot provide your own overridding values
+    /// for those.
     pub fn with_label(self, key: &str, value: &str) -> HostBuilder {
         let mut hm = self.labels.clone();
         if !hm.contains_key(key) {
@@ -179,7 +182,7 @@ impl HostBuilder {
     }
 
     /// Constructs an instance of a wasmCloud host. Note that this will not _start_ the host. You
-    /// will need to invoke the `start` function after building a new host
+    /// will need to invoke the [`start`](fn@Host::start) function after building a new host.
     pub fn build(self) -> Host {
         let kp = KeyPair::new_server();
         Host {
@@ -201,7 +204,7 @@ impl HostBuilder {
     }
 }
 
-/// A wasmCloud `Host` is a secure runtime container responsible for scheduling
+/// A wasmCloud host is a secure runtime responsible for scheduling
 /// actors and capability providers, configuring the links between them, and facilitating
 /// secure function call dispatch between actors and capabilities.
 pub struct Host {
@@ -224,6 +227,26 @@ pub struct Host {
 impl Host {
     /// Starts the host's actor system. This call is non-blocking, so it is up to the consumer
     /// to provide some form of parking or waiting (e.g. wait for a Ctrl-C signal).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use log::{info, error};    
+    /// # #[actix_rt::main]
+    /// # async fn main() {    
+    /// # let host = wasmcloud_host::HostBuilder::new().build();
+    /// match host.start().await {
+    ///    Ok(_) => {    
+    ///     // Await a ctrl-c, e.g. actix_rt::signal::ctrl_c().await.unwrap();
+    ///     info!("Ctrl-C received, shutting down");
+    ///     host.stop().await;
+    ///    }
+    ///    Err(e) => {
+    ///     error!("Failed to start host: {}", e);
+    ///    }
+    ///}
+    ///# }
+    /// ```    
     pub async fn start(&self) -> Result<()> {
         let mb = MessageBus::from_hostlocal_registry(&self.kp.public_key());
         let init = crate::messagebus::Initialize {
@@ -289,13 +312,13 @@ impl Host {
 
     /// Returns the unique public key (a 56-character upppercase string beginning with the letter `N`) of this host.
     /// The host's private key is used to securely sign invocations so that remote hosts can perform
-    /// anti-forgery checks
+    /// anti-forgery checks. For more information on the PKI used by wasmCloud, see the documentation for
+    /// the [nkeys](https://crates.io/crates/nkeys) crate.
     pub fn id(&self) -> String {
         self.id.to_string()
     }
 
-    /// Starts a native (non-portable dynamically linked library plugin) capability provider and preps
-    /// it for execution in the host
+    /// Starts a native capability provider and preps it for execution in the host.
     pub async fn start_native_capability(&self, capability: crate::NativeCapability) -> Result<()> {
         self.ensure_started()?;
         let hc = HostController::from_hostlocal_registry(&self.id);
@@ -312,8 +335,12 @@ impl Host {
     /// Instructs the host to download a capability provider from an OCI registry and start
     /// it. The wasmCloud host caches binary images retrieved from OCI registries (because
     /// images are assumed to be immutable this kind of caching is acceptable). If you need to
-    /// purge the OCI image cache, remove the `wasmcloud_cache` directory from your environment's
-    /// `TEMP` directory.
+    /// purge the OCI image cache, remove the `wasmcloudcache` and `wasmcloud_ocicache` directories
+    /// from the appropriate root folder (which defaults to the environment's `TEMP` directory).
+    ///
+    /// # Arguments
+    /// * `cap_ref` - The OCI reference URL of the capability provider.
+    /// * `link_name` - The link name to be used for this capability provider.
     pub async fn start_capability_from_registry(
         &self,
         cap_ref: &str,
@@ -332,7 +359,9 @@ impl Host {
         Ok(())
     }
 
-    /// Instructs the runtime host to start an actor.
+    /// Instructs the runtime host to start an actor. Note that starting an actor can trigger a
+    /// provider initialization if a link definition for this actor already exists in the lattice
+    /// cache.
     pub async fn start_actor(&self, actor: crate::Actor) -> Result<()> {
         self.ensure_started()?;
         let hc = HostController::from_hostlocal_registry(&self.id);
@@ -346,8 +375,8 @@ impl Host {
     }
 
     /// Instructs the runtime host to download the actor from the indicated OCI registry and
-    /// start the actor. This call will fail if the host cannot communicate with or finish
-    /// downloading the indicated OCI image
+    /// start the actor. This call will fail if the host cannot communicate with, fails to
+    /// authenticate against, or cannot finish downloading the indicated OCI image.
     pub async fn start_actor_from_registry(&self, actor_ref: &str) -> Result<()> {
         self.ensure_started()?;
         let hc = HostController::from_hostlocal_registry(&self.id);
@@ -363,7 +392,9 @@ impl Host {
 
     /// Stops a running actor in the host. This call is assumed to be idempotent and as such will
     /// not fail if you attempt to stop an actor that is not running (though this may result
-    /// in errors or warnings in log output)
+    /// in errors or warnings in log output).
+    ///
+    /// * `actor_ref` - Either the public key or the OCI reference URL of the actor to stop.
     pub async fn stop_actor(&self, actor_ref: &str) -> Result<()> {
         self.ensure_started()?;
         let hc = HostController::from_hostlocal_registry(&self.id);
@@ -376,17 +407,23 @@ impl Host {
     }
 
     /// Updates a running actor with the bytes from a new actor module. Invoking this method will
-    /// cause all messages inbound to the actor to block and it can take a second or two depending
-    /// on the size of the actor and the underlying engine you're using (e.g. JIT vs. interpreter).
-    /// ## ⚠️ Caveats
+    /// cause all pending messages inbound to the actor to block while the update is performed. It can take a few
+    /// seconds depending on the size of the actor and the underlying engine you're using (e.g. JIT vs. interpreter).
+    ///
+    /// # Arguments
+    /// * `actor_id` - The public key of the actor to update.
+    /// * `new_oci_ref` - If applicable, a new OCI reference URL that corresponds to the new version.
+    /// * `bytes` - The raw bytes containing the new WebAssembly module.
+    ///
+    /// # ⚠️ Caveats
     /// * Take care when supplying a value for the `new_oci_ref` parameter. You should be consistent
     /// in how you supply this value. Updating actors that were started from OCI references should
     /// continue to have OCI references, while those started from non-OCI sources should not be given
     /// new, arbitrary OCI references. Failing to keep this consistent could cause unforeseen failed
-    /// attempts at subsequent updates.
-    /// * You should only ever use this method when running in standalone/isolated mode. If you have a control
-    /// interface configured, then you should perform live updates by using a control interface client
-    /// and a suitable OCI reference URL.
+    /// attempts at subsequent updates.  
+    /// * If the new version of the actor is actually in an OCI registry, then the preferred method of
+    /// performing a live update is to do so through the lattice control interface and specifying the OCI
+    /// URL. This method is less error-prone and can cause less confusion over time.        
     pub async fn update_actor(
         &self,
         actor_id: &str,
@@ -415,8 +452,13 @@ impl Host {
     }
 
     /// Stops a running capability provider. This call will not fail if the indicated provider
-    /// is not currently running, and this call may terminate before the provider has finished
-    /// shutting down cleanly
+    /// is not currently running. This call is non-blocking and does not wait for the provider
+    /// to finish cleaning up its resources before returning.
+    ///
+    /// # Arguments
+    /// * `provider_ref` - The capability provider's public key or OCI reference URL
+    /// * `contract_id` - The contract ID of the provider to stop
+    /// * `link` - The link name used by the instance of the capability provider
     pub async fn stop_provider(
         &self,
         provider_ref: &str,
@@ -435,30 +477,34 @@ impl Host {
         Ok(())
     }
 
-    /// Retrieves the list of all actors within this host. This function call does _not_
-    /// include any actors remotely running in a connected lattice
+    /// Retrieves the list of the public keys of all actors within this host. This function call does _not_
+    /// include any actors remotely running in a connected lattice.
     pub async fn get_actors(&self) -> Result<Vec<String>> {
         self.ensure_started()?;
         let b = MessageBus::from_hostlocal_registry(&self.id);
         Ok(b.send(QueryActors {}).await?.results)
     }
 
-    /// Retrieves the list of capability providers running in the host. This function does
+    /// Retrieves the list of the public keys of all capability providers running in the host. This function does
     /// _not_ include any capability providers that may be remotely running in a connected
-    /// lattice
+    /// lattice.
     pub async fn get_providers(&self) -> Result<Vec<String>> {
         self.ensure_started()?;
         let b = MessageBus::from_hostlocal_registry(&self.id);
         Ok(b.send(QueryProviders {}).await?.results)
     }
 
-    /// Perform a raw waPC-style invocation on the given actor by supplying an operation
+    /// Perform a raw [waPC](https://crates.io/crates/wapc)-style invocation on the given actor by supplying an operation
     /// string and a payload of raw bytes, resulting in a payload of raw response bytes. It
     /// is entirely up to the actor as to how it responds to unrecognized operations. This
     /// operation will also be checked against the authorization system if a custom
-    /// authorization plugin has been supplied to this host. You may supply either the actor's
-    /// public key or the actor's registered call alias. This call will fail if you attempt to
-    /// invoke a non-existent actor or call alias.
+    /// authorization plugin has been supplied to this host. This call will fail if you attempt to
+    /// invoke a non-existent actor or call alias or the target actor cannot be reached.
+    ///
+    /// # Arguments
+    /// * `actor` - The public key of the actor or its call alias if applicable.
+    /// * `operation` - The name of the operation to perform
+    /// * `msg` - The raw bytes containing the payload pertaining to this operation.
     pub async fn call_actor(&self, actor: &str, operation: &str, msg: &[u8]) -> Result<Vec<u8>> {
         self.ensure_started()?;
         let b = MessageBus::from_hostlocal_registry(&self.id);
@@ -487,13 +533,21 @@ impl Host {
         }
     }
 
-    /// Links are a self-standing, durable entity within a lattice and host runtime. A link
-    /// defines a set of configuration values that apply to an actor and a capability provider indicated
-    /// by the provider's contract ID, public key, and link name. You can set a link before or
-    /// after either the actor or provider are started. Links are automatically established
+    /// Links are a first-class, durable entity within a lattice and host runtime. A link
+    /// defines a set of configuration values that apply to an actor and a capability provider that
+    /// is uniquely keyed by the provider's contract ID, public key, and link name.
+    ///
+    /// You can set a link before or after either the actor or provider are started. Links are automatically established
     /// when both parties are present in a lattice, and re-established if a party temporarily
-    /// leaves the lattice and rejoins (which can happen during a crash or a partition event). Link
-    /// data is exactly as durable as your choice of lattice cache provider
+    /// leaves the lattice and rejoins (which can happen during a crash or a network partition event). The resiliency and
+    /// reliability of link definitions within a lattice are inherited from your choice of lattice cache provider.
+    ///
+    /// # Arguments
+    /// * `actor` - Can either be the actor's public key _or_ an OCI reference URL.
+    /// * `contract_id` - The contract ID of the link, e.g. `wasmcloud:httpserver`.
+    /// * `link_name` - The link name of the capability provider when it was loaded.
+    /// * `provider_id` - The public key of the capability provider (e.g. `Vxxxx`)
+    /// * `values` - The set of configuration values to give to the capability provider for this link definition.
     pub async fn set_link(
         &self,
         actor: &str,
@@ -517,7 +571,13 @@ impl Host {
     /// Removes a link definition from the host (and accompanying lattice if connected). This
     /// will remove the link definition from the lattice cache and it will also invoke the "remove actor"
     /// operation on all affected capability providers, giving those providers an opportunity to clean
-    /// up resources and terminate any child processes associated with the actor
+    /// up resources and terminate any child processes associated with the actor. This call does not
+    /// wait for all providers to finish cleaning up associated resources.
+    ///
+    /// # Arguments
+    /// * `actor` - The **public key** of the actor. You cannot supply an OCI reference when removing a link.
+    /// * `contract_id` - The contract ID of the capability in question.
+    /// * `link_name` - The name of the link used by the capability provider for which the link is to be removed.
     pub async fn remove_link(
         &self,
         actor: &str,
@@ -534,11 +594,10 @@ impl Host {
         .await?
     }
 
-    /// Apply a number of instructions from a manifest file to the runtime host. A manifest
-    /// file can contain a list of actors, capability providers, and link definitions that will
-    /// be added to a host upon ingestion. Manifest application is _not_ idempotent, so
-    /// repeated application of multiple manifests may not always produce the same runtime
-    /// host state
+    /// Apply a number of declarations from a manifest file to the runtime host. A manifest
+    /// file can contain a list of actors, capability providers, custom labels, and link definitions that will
+    /// be added to a host upon application. Manifest application is _not_ idempotent, so
+    /// repeated application of multiple manifests will almost certainly not result in the same host state.
     pub async fn apply_manifest(&self, manifest: HostManifest) -> Result<()> {
         self.ensure_started()?;
         let host_id = self.kp.public_key();
