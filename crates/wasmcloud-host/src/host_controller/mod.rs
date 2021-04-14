@@ -129,16 +129,18 @@ pub(crate) struct HostInventory {
 #[derive(Default, Debug, Clone, PartialEq)]
 pub(crate) struct ActorSummary {
     pub id: String,
-    pub image_ref: Option<String>,
+    pub image_refs: Vec<String>,
     pub name: Option<String>,
+    pub revision: i32,
 }
 
 #[derive(Default, Debug, Clone, PartialEq)]
 pub(crate) struct ProviderSummary {
     pub id: String,
-    pub image_ref: Option<String>,
+    pub image_refs: Vec<String>,
     pub link_name: String,
     pub name: Option<String>,
+    pub revision: i32,
 }
 
 impl<A, M> MessageResponse<A, M> for HostInventory

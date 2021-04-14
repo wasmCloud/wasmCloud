@@ -232,7 +232,7 @@ impl Handler<QueryActors> for MessageBus {
                 .subscribers
                 .keys()
                 .filter_map(|k| match k {
-                    WasmCloudEntity::Actor(s) => Some(s.to_string()),
+                    WasmCloudEntity::Actor(s) => Some(WasmCloudEntity::Actor(s.clone())),
                     WasmCloudEntity::Capability { .. } => None,
                 })
                 .collect(),
@@ -439,7 +439,7 @@ impl Handler<QueryProviders> for MessageBus {
                 .subscribers
                 .keys()
                 .filter_map(|k| match k {
-                    WasmCloudEntity::Capability { id, .. } => Some(id.to_string()),
+                    c @ WasmCloudEntity::Capability { .. } => Some(c.clone()),
                     _ => None,
                 })
                 .collect(),

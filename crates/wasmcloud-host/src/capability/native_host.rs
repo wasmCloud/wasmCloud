@@ -1,5 +1,6 @@
 use crate::capability::native::{normalize_link_name, NativeCapability};
 use crate::control_interface::ctlactor::{ControlInterface, PublishEvent};
+use actix::dev::MessageResponse;
 
 use crate::dispatch::OP_HALT;
 use crate::dispatch::{Invocation, InvocationResponse, ProviderDispatcher, WasmCloudEntity};
@@ -23,8 +24,27 @@ pub(crate) struct Initialize {
 }
 
 #[derive(Message)]
-#[rtype(result = "String")]
-pub(crate) struct GetName {}
+#[rtype(result = "IdentityResponse")]
+pub(crate) struct GetIdentity {}
+
+pub(crate) struct IdentityResponse {
+    pub name: String,
+    pub revision: i32,
+}
+
+impl<A, M> MessageResponse<A, M> for IdentityResponse
+where
+    A: Actor,
+    M: Message<Result = IdentityResponse>,
+{
+    fn handle(self, _: &mut A::Context, tx: Option<actix::dev::OneshotSender<Self>>) {
+        if let Some(tx) = tx {
+            if tx.send(self).is_err() {
+                error!("send error (IdentityResponse)");
+            }
+        }
+    }
+}
 
 struct State {
     cap: NativeCapability,
@@ -169,11 +189,21 @@ impl Handler<Initialize> for NativeCapabilityHost {
     }
 }
 
-impl Handler<GetName> for NativeCapabilityHost {
-    type Result = String;
+impl Handler<GetIdentity> for NativeCapabilityHost {
+    type Result = IdentityResponse;
 
-    fn handle(&mut self, _q: GetName, _ctx: &mut Self::Context) -> Self::Result {
-        self.state.as_ref().unwrap().cap.claims.name()
+    fn handle(&mut self, _q: GetIdentity, _ctx: &mut Self::Context) -> Self::Result {
+        let state = self.state.as_ref().unwrap();
+        IdentityResponse {
+            name: state.cap.claims.name(),
+            revision: state
+                .cap
+                .claims
+                .metadata
+                .as_ref()
+                .map(|md| md.rev.unwrap_or(0))
+                .unwrap_or(0),
+        }
     }
 }
 

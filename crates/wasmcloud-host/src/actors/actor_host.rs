@@ -1,7 +1,10 @@
 use std::collections::{hash_map::Entry, HashMap};
 
-use crate::control_interface::ctlactor::{ControlInterface, PublishEvent};
-use crate::{actors::WasmCloudActor, capability::native_host::GetName};
+use crate::{actors::WasmCloudActor, capability::native_host::GetIdentity};
+use crate::{
+    capability::native_host::IdentityResponse,
+    control_interface::ctlactor::{ControlInterface, PublishEvent},
+};
 
 use crate::dispatch::OP_HALT;
 use crate::dispatch::{Invocation, InvocationResponse, WasmCloudEntity};
@@ -52,11 +55,21 @@ pub(crate) struct LiveUpdate {
     pub image_ref: Option<String>,
 }
 
-impl Handler<GetName> for ActorHost {
-    type Result = String;
+impl Handler<GetIdentity> for ActorHost {
+    type Result = IdentityResponse;
 
-    fn handle(&mut self, _msg: GetName, _ctx: &mut Self::Context) -> Self::Result {
-        self.state.as_ref().unwrap().claims.name()
+    fn handle(&mut self, _msg: GetIdentity, _ctx: &mut Self::Context) -> Self::Result {
+        let state = self.state.as_ref().unwrap();
+
+        IdentityResponse {
+            name: state.claims.name(),
+            revision: state
+                .claims
+                .metadata
+                .as_ref()
+                .map(|md| md.rev.unwrap_or(0))
+                .unwrap_or(0),
+        }
     }
 }
 

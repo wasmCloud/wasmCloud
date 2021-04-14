@@ -485,16 +485,40 @@ impl Host {
     pub async fn actors(&self) -> Result<Vec<String>> {
         self.ensure_started()?;
         let b = MessageBus::from_hostlocal_registry(&self.id);
-        Ok(b.send(QueryActors {}).await?.results)
+        Ok(b.send(QueryActors {})
+            .await?
+            .results
+            .iter()
+            .filter_map(|e| match e {
+                WasmCloudEntity::Actor(s) => Some(s.clone()),
+                _ => None,
+            })
+            .collect())
     }
 
-    /// Retrieves the list of the public keys of all capability providers running in the host. This function does
-    /// _not_ include any capability providers that may be remotely running in a connected
-    /// lattice
-    pub async fn providers(&self) -> Result<Vec<String>> {
+    /// Retrieves the list of the uniquely identifying information about all capability providers running in the host.
+    /// This function does _not_ include any capability providers that may be remotely running in a connected
+    /// lattice. The return value is a vector of 3-tuples `(provider_public_key, contract_id, link_name)`
+    pub async fn providers(&self) -> Result<Vec<(String, String, String)>> {
         self.ensure_started()?;
         let b = MessageBus::from_hostlocal_registry(&self.id);
-        Ok(b.send(QueryProviders {}).await?.results)
+        Ok(b.send(QueryProviders {})
+            .await?
+            .results
+            .iter()
+            .filter_map(|e| match e {
+                WasmCloudEntity::Capability {
+                    contract_id,
+                    id,
+                    link_name,
+                } => Some((
+                    id.to_string(),
+                    contract_id.to_string(),
+                    link_name.to_string(),
+                )),
+                _ => None,
+            })
+            .collect())
     }
 
     /// Perform a raw [waPC](https://crates.io/crates/wapc)-style invocation on the given actor by supplying an operation
