@@ -340,7 +340,6 @@ pub async fn extras_provider() -> Result<()> {
     let h = HostBuilder::new().build();
     h.start().await?;
     // Start extras actor
-    //TODO(brooksmtownsend): replace this with the real extras
     let extras = Actor::from_file("./tests/modules/extras.wasm")?;
     let extras_id = extras.public_key();
     h.start_actor(extras).await?;

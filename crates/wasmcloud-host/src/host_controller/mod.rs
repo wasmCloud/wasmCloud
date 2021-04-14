@@ -105,6 +105,13 @@ pub(crate) struct QueryHostInventory;
 
 #[derive(Message)]
 #[rtype(result = "bool")]
+pub(crate) struct PutOciReference {
+    pub oci_ref: String,
+    pub public_key: String,
+}
+
+#[derive(Message)]
+#[rtype(result = "bool")]
 pub(crate) struct AuctionProvider {
     pub constraints: HashMap<String, String>,
     pub provider_ref: String,

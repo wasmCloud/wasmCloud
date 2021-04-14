@@ -659,6 +659,22 @@ impl Handler<StartProvider> for HostController {
     }
 }
 
+impl Handler<PutOciReference> for HostController {
+    type Result = ResponseActFuture<Self, bool>;
+
+    fn handle(&mut self, msg: PutOciReference, _ctx: &mut Context<Self>) -> Self::Result {
+        let lc = self.latticecache.clone().unwrap();
+        Box::pin(
+            async move {
+                lc.put_oci_mapping(&msg.oci_ref, &msg.public_key)
+                    .await
+                    .is_ok()
+            }
+            .into_actor(self),
+        )
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn initialize_provider(
     provider: NativeCapability,
