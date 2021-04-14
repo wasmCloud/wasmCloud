@@ -61,7 +61,7 @@ pub struct LinkDefinition {
 }
 
 pub struct QueryResponse {
-    pub results: Vec<String>,
+    pub results: Vec<WasmCloudEntity>,
 }
 
 impl<A, M> MessageResponse<A, M> for QueryResponse

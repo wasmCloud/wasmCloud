@@ -1,12 +1,12 @@
 use super::*;
-use crate::auth::Authorizer;
 use crate::capability::extras::ExtrasCapabilityProvider;
 use crate::capability::native_host::NativeCapabilityHost;
 use crate::dispatch::Invocation;
 use crate::hlreg::HostLocalSystemService;
 use crate::messagebus::{GetClaims, LatticeCacheClient, MessageBus, SetCacheClient, Unsubscribe};
 use crate::middleware::Middleware;
-use crate::{actors::ActorHost, capability::native_host::GetName};
+use crate::{actors::ActorHost, capability::native_host::GetIdentity};
+use crate::{auth::Authorizer, capability::native_host::IdentityResponse};
 use crate::{NativeCapability, Result, WasmCloudEntity, SYSTEM_ACTOR};
 use std::collections::HashMap;
 
@@ -548,16 +548,16 @@ impl Handler<QueryHostInventory> for HostController {
         Box::pin(
             async move {
                 let image_refs = lc.collect_oci_references().await;
-                let names: HashMap<String, String> = {
+                let names: HashMap<String, IdentityResponse> = {
                     // This is semi-wasteful (incurs 1 extra hashmap lookup per entity),
                     // but I can't seem to find a good way to call the async send while inside the other loop
                     // because async !@$%@#$)%@@#$ 😡😡😡😡
                     let mut m = HashMap::new();
                     for (k, v) in &actors {
-                        m.insert(k.to_string(), v.send(GetName {}).await.unwrap());
+                        m.insert(k.to_string(), v.send(GetIdentity {}).await.unwrap());
                     }
                     for (k, v) in &providers {
-                        m.insert(k.id.to_string(), v.send(GetName {}).await.unwrap());
+                        m.insert(k.id.to_string(), v.send(GetIdentity {}).await.unwrap());
                     }
                     m
                 };
@@ -566,18 +566,20 @@ impl Handler<QueryHostInventory> for HostController {
                         .iter()
                         .map(|(k, _v)| ActorSummary {
                             id: k.to_string(),
-                            image_ref: find_imageref(k, &image_refs),
-                            name: names.get(k).map(|v| v.to_string()),
+                            image_refs: collect_imagerefs(k, &image_refs),
+                            name: names.get(k).map(|v| v.name.clone()),
+                            revision: names.get(k).map(|v| v.revision).unwrap_or(0),
                         })
                         .collect(),
                     host_id,
                     providers: providers
                         .iter()
                         .map(|(k, _v)| ProviderSummary {
-                            image_ref: find_imageref(&k.id, &image_refs),
+                            image_refs: collect_imagerefs(&k.id, &image_refs),
                             id: k.id.to_string(),
                             link_name: k.link_name.to_string(),
-                            name: names.get(&k.id).map(|v| v.to_string()),
+                            name: names.get(&k.id).map(|v| v.name.clone()),
+                            revision: names.get(&k.id).map(|v| v.revision).unwrap_or(0),
                         })
                         .collect(),
                     labels: host_labels,
@@ -588,11 +590,12 @@ impl Handler<QueryHostInventory> for HostController {
     }
 }
 
-fn find_imageref(target: &str, image_refs: &HashMap<String, String>) -> Option<String> {
+fn collect_imagerefs(target: &str, image_refs: &HashMap<String, String>) -> Vec<String> {
     image_refs
         .iter()
-        .find(|(_ir, pk)| pk.to_string() == *target)
+        .filter(|(_ir, pk)| pk.to_string() == *target)
         .map(|(ir, _pk)| ir.to_string())
+        .collect()
 }
 
 impl Handler<StartProvider> for HostController {

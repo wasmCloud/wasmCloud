@@ -126,14 +126,16 @@ type HostInventory {
 type ActorDescription {
     id: string
     "If there is a corresponding OCI image reference for this actor it will be in this field"
-    image_ref: string?
+    image_refs: [string]
     name: string?
+    revision: i32
 }
 
 type ProviderDescription {
     id: string
     link_name: string
     "If there is a corresponding OCI image reference for this provider it will be in this field"
-    image_ref: string?
+    image_refs: [string]
     name: string?
+    revision: i32
 }
