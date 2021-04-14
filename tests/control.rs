@@ -180,6 +180,73 @@ pub(crate) async fn live_update() -> Result<()> {
     Ok(())
 }
 
+/// Ensures a live update of an actor places the new OCI reference in the lattice cache
+pub(crate) async fn multiple_ocirefs() -> Result<()> {
+    // Ensure that we're not accidentally using the replication feature on KV cache
+    ::std::env::remove_var("KVCACHE_NATS_URL");
+    const NS: &str = "liveupdate_ctl";
+    const ECHO_0_2_0: &str = "wasmcloud.azurecr.io/echo:0.2.0";
+    const ECHO_0_2_1: &str = "wasmcloud.azurecr.io/echo:0.2.1";
+    const ECHO_PKEY: &str = "MBCFOPM6JW2APJLXJD3Z5O4CN7CPYJ2B4FTKLJUR5YR5MITIU7HD3WD5";
+    const MAX_RETRY: u8 = 10;
+
+    let nc = nats::asynk::connect("0.0.0.0:4222").await?;
+    let nc3 = nats::asynk::connect("0.0.0.0:4222").await?;
+    let h = HostBuilder::new()
+        .with_namespace(NS)
+        .with_rpc_client(nc3)
+        .with_control_client(nc)
+        .oci_allow_latest()
+        .enable_live_updates()
+        .with_label("testing", "multiple-ocirefs")
+        .build();
+
+    h.start().await?;
+    let hid = h.id();
+    let nc2 = nats::asynk::connect("0.0.0.0:4222").await?;
+    let ctl_client = Client::new(nc2, Some(NS.to_string()), Duration::from_secs(20));
+
+    let hosts = ctl_client.get_hosts(Duration::from_secs(1)).await?;
+    assert_eq!(hosts.len(), 1);
+    assert_eq!(hosts[0].id, hid);
+    ctl_client
+        .start_actor(&hid, "wasmcloud.azurecr.io/echo:0.2.0")
+        .await?;
+
+    for _ in 0..MAX_RETRY {
+        let inv = ctl_client.get_host_inventory(&hosts[0].id).await?;
+        if !inv.actors.is_empty() && inv.actors[0].image_refs.contains(&ECHO_0_2_0.to_string()) {
+            break;
+        }
+        actix_rt::time::sleep(Duration::from_millis(1000)).await;
+    }
+    ctl_client
+        .update_actor(&hid, ECHO_PKEY, "wasmcloud.azurecr.io/echo:0.2.1")
+        .await?;
+
+    for _ in 0..MAX_RETRY {
+        let inv = ctl_client.get_host_inventory(&hosts[0].id).await?;
+        if !inv.actors.is_empty() && inv.actors[0].image_refs.contains(&ECHO_0_2_1.to_string()) {
+            break;
+        }
+        actix_rt::time::sleep(Duration::from_millis(1000)).await;
+    }
+
+    let inv = ctl_client.get_host_inventory(&hosts[0].id).await?;
+
+    assert_eq!(1, inv.actors.len());
+    assert_eq!(2, inv.actors[0].image_refs.len());
+    assert!(inv.actors[0].image_refs.contains(&ECHO_0_2_0.to_string()));
+    assert!(inv.actors[0].image_refs.contains(&ECHO_0_2_1.to_string()));
+    assert_eq!(inv.actors[0].name, Some("Echo".to_string()));
+    assert_eq!(inv.actors[0].revision, 2);
+    assert_eq!(4, inv.labels.len()); // each host gets 3 built-in labels
+    assert_eq!(inv.host_id, hosts[0].id);
+    h.stop().await;
+
+    Ok(())
+}
+
 fn get_revision(body: &str) -> u64 {
     println!("{}", body);
     let v: serde_json::Value = serde_json::from_str(body).unwrap();

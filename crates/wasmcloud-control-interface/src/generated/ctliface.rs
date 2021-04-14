@@ -189,7 +189,6 @@ pub struct ActorDescription {
     #[serde(rename = "id")]
     pub id: String,
     #[serde(rename = "image_refs")]
-    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub image_refs: Vec<String>,
     #[serde(rename = "name")]
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -205,7 +204,6 @@ pub struct ProviderDescription {
     #[serde(rename = "link_name")]
     pub link_name: String,
     #[serde(rename = "image_refs")]
-    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub image_refs: Vec<String>,
     #[serde(rename = "name")]
     #[serde(skip_serializing_if = "Option::is_none")]
