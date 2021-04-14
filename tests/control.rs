@@ -232,8 +232,8 @@ pub(crate) async fn multiple_ocirefs() -> Result<()> {
         actix_rt::time::sleep(Duration::from_millis(1000)).await;
     }
 
+    // Ensure oci references exist over control interface
     let inv = ctl_client.get_host_inventory(&hosts[0].id).await?;
-
     assert_eq!(1, inv.actors.len());
     assert_eq!(2, inv.actors[0].image_refs.len());
     assert!(inv.actors[0].image_refs.contains(&ECHO_0_2_0.to_string()));
@@ -242,6 +242,13 @@ pub(crate) async fn multiple_ocirefs() -> Result<()> {
     assert_eq!(inv.actors[0].revision, 2);
     assert_eq!(4, inv.labels.len()); // each host gets 3 built-in labels
     assert_eq!(inv.host_id, hosts[0].id);
+
+    // Ensure oci references exist on host API
+    let oci_refs = h.oci_references().await?;
+    assert!(oci_refs.contains_key(ECHO_0_2_0));
+    assert_eq!(oci_refs.get(ECHO_0_2_0).unwrap(), ECHO_PKEY);
+    assert!(oci_refs.contains_key(ECHO_0_2_1));
+    assert_eq!(oci_refs.get(ECHO_0_2_1).unwrap(), ECHO_PKEY);
     h.stop().await;
 
     Ok(())
