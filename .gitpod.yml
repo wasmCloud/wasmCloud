@@ -1,0 +1,31 @@
+image:
+  file: .gitpod.Dockerfile
+tasks:
+  - name: Clippy
+    init: cargo clippy --all -- -D clippy::result_unwrap_used -D clippy::option_unwrap_used
+  - name: Testing
+    init: cargo test -- --test-threads=1
+  - name: Build
+    init: cargo build 
+  - name: wasmCloud
+    init: cargo install --path . 
+    command: wasmcloud --version
+  - name: wash
+    init: cargo install wash-cli --force
+    command: wash --version
+ports:
+  - port: 8080
+    onOpen: ignore
+github:
+  prebuilds:
+    branches: true
+    pullRequestsFromForks: true
+    addLabel: prebuilt-in-gitpod
+vscode:
+  extensions:
+    - hbenl.vscode-test-explorer@2.15.0:koqDUMWDPJzELp/hdS/lWw==
+    - Swellaby.vscode-rust-test-adapter@0.11.0:Xg+YeZZQiVpVUsIkH+uiiw==
+    - serayuzgur.crates@0.4.7:HMkoguLcXp9M3ud7ac3eIw==
+    - belfz.search-crates-io@1.2.1:kSLnyrOhXtYPjQpKnMr4eQ==
+    - bungcip.better-toml@0.3.2:3QfgGxxYtGHfJKQU7H0nEw==
+    - webfreak.debug@0.24.0:1zVcRsAhewYEX3/A9xjMNw==
