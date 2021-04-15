@@ -78,6 +78,10 @@ struct Cli {
     // `number_of_values = 1` means that each occurrence of the flag accepts only one key-value pair
     #[structopt(long = "label", short = "l", parse(try_from_str = parse_key_val), number_of_values = 1)]
     labels: Vec<(String, String)>,
+
+    /// Provide a namespace prefix for the lattice used by this host
+    #[structopt(long = "nsprefix")]
+    nsprefix: Option<String>,
 }
 
 #[actix_rt::main]
@@ -122,6 +126,9 @@ async fn main() -> Result<()> {
     }
     if !cli.allowed_insecure.is_empty() {
         host_builder = host_builder.oci_allow_insecure(cli.allowed_insecure);
+    }
+    if let Some(nsprefix) = cli.nsprefix {
+        host_builder = host_builder.with_namespace(&nsprefix);
     }
 
     host_builder = cli.labels.iter().fold(host_builder, |host_builder, label| {
