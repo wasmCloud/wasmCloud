@@ -523,12 +523,18 @@ impl Host {
 
     /// Retrieves human-friendly identity information for a provider
     /// Return value is `(image_reference, name, revision)`
-    pub async fn get_actor_identity(&self, id: &str) -> Result<(Option<String>, String, i32)> {
+    ///
+    /// # Arguments
+    /// * `actor_id` - The public key of the actor.
+    pub async fn get_actor_identity(
+        &self,
+        actor_id: &str,
+    ) -> Result<(Option<String>, String, i32)> {
         self.ensure_started()?;
         let hc = HostController::from_hostlocal_registry(&self.id);
         if let Some(actor) = hc
             .send(GetRunningActor {
-                actor_id: id.to_string(),
+                actor_id: actor_id.to_string(),
             })
             .await?
         {
@@ -541,16 +547,21 @@ impl Host {
 
     /// Retrieves human-friendly identity information for a provider
     /// Return value is `(image_reference, name, revision)`
+    ///
+    /// # Arguments
+    /// * `provider_id` - The public key of the provider.
+    /// * `link_name` - The link name used by the instance of the capability provider. If no `link_name`
+    /// is provided, the value "default" will be used
     pub async fn get_provider_identity(
         &self,
-        id: &str,
+        provider_id: &str,
         link_name: Option<String>,
     ) -> Result<(Option<String>, String, i32)> {
         self.ensure_started()?;
         let hc = HostController::from_hostlocal_registry(&self.id);
         if let Some(provider) = hc
             .send(GetRunningProvider {
-                provider_id: id.to_string(),
+                provider_id: provider_id.to_string(),
                 link_name: link_name.unwrap_or_else(|| "default".to_string()),
             })
             .await?
