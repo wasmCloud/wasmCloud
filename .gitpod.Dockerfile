@@ -18,7 +18,7 @@ RUN sudo apt-get update && \
 
 RUN curl -L https://github.com/nats-io/nats-server/releases/download/v2.2.1/nats-server-v2.2.1-linux-amd64.zip -o nats-server.zip
 RUN unzip nats-server.zip -d nats-server
-RUN sudo cp nats-server/nats-server-v2.0.0-linux-amd64/nats-server /usr/bin
+RUN sudo cp nats-server/nats-server-v2.2.1-linux-amd64/nats-server /usr/bin
 
 RUN /usr/bin/nats-server &
 
