@@ -16,7 +16,7 @@ RUN sudo apt-get update && \
     && sudo rm -rf /var/lib/apt/lists/*
 
 ENV GO111MODULE=on
-RUN SUDO go get github.com/nats-io/nats-server/v2
+RUN sudo go get github.com/nats-io/nats-server/v2
 
 RUN nats-server &
 
