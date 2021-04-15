@@ -9,6 +9,7 @@ use crate::{
 use crate::dispatch::OP_HALT;
 use crate::dispatch::{Invocation, InvocationResponse, WasmCloudEntity};
 use crate::hlreg::HostLocalSystemService;
+use crate::host_controller::{HostController, PutOciReference};
 use crate::messagebus::{AdvertiseClaims, MessageBus, Subscribe};
 use crate::middleware::{run_actor_post_invoke, run_actor_pre_invoke, Middleware};
 use crate::{ControlEvent, Result};
@@ -89,6 +90,7 @@ impl Handler<LiveUpdate> for ActorHost {
         }
 
         let actor = WasmCloudActor::from_slice(&msg.actor_bytes)?;
+        let public_key = actor.public_key();
         let new_claims = actor.claims();
         // Validate that this update is one that we will allow to take place
         validate_update(
@@ -129,7 +131,7 @@ impl Handler<LiveUpdate> for ActorHost {
             actor_bytes: msg.actor_bytes,
             mw_chain: self.state.as_ref().unwrap().mw_chain.clone(),
             signing_seed: self.state.as_ref().unwrap().seed.clone(),
-            image_ref: msg.image_ref,
+            image_ref: msg.image_ref.clone(),
             host_id: self.state.as_ref().unwrap().host_id.to_string(),
             can_update: true,
             strict_update_check: true,
@@ -138,6 +140,13 @@ impl Handler<LiveUpdate> for ActorHost {
         let actor = perform_initialization(self, ctx, init);
         match actor {
             Ok(a) => {
+                if let Some(oci_ref) = msg.image_ref {
+                    HostController::from_hostlocal_registry(&self.state.as_ref().unwrap().host_id)
+                        .do_send(PutOciReference {
+                            oci_ref,
+                            public_key,
+                        });
+                }
                 ControlInterface::from_hostlocal_registry(&host_id).do_send(PublishEvent {
                     event: ControlEvent::ActorUpdateCompleted {
                         actor: a,
