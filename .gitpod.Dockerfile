@@ -16,8 +16,8 @@ RUN sudo apt-get update && \
     && sudo rm -rf /var/lib/apt/lists/*
 
 ENV GO111MODULE=on
-RUN go get github.com/nats-io/nats-server/v2
+RUN SUDO go get github.com/nats-io/nats-server/v2
 
-RUN nats-server
+RUN nats-server &
 
 ENV RUST_LLDB=/usr/bin/lldb-11
