@@ -2,7 +2,7 @@ FROM gitpod/workspace-full
 
 # Gitpod will not rebuild dev image unless *some* change is made to this Dockerfile.
 # To force a rebuild, simply increase this counter:
-ENV TRIGGER_REBUILD 6
+ENV TRIGGER_REBUILD 7
 
 USER gitpod
 
@@ -20,7 +20,7 @@ RUN export PATH=$PATH:/usr/local/go/bin
 
 
 ENV GO111MODULE=on
-RUN sudo go get github.com/nats-io/nats-server/v2
+RUN sudo /usr/local/go/bin/go get github.com/nats-io/nats-server/v2
 
 RUN nats-server &
 
