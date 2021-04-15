@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud"
-version = "0.18.0"
+version = "0.18.1"
 authors = ["wasmcloud Team"]
 edition = "2018"
 default-run = "wasmcloud"
@@ -46,7 +46,7 @@ log = "0.4.11"
 env_logger = "0.8.2"
 anyhow = "1.0.34"
 actix-rt = "2.1.0"
-wasmcloud-host = { path = "crates/wasmcloud-host", version = "0.18.0", default-features = false }
+wasmcloud-host = { path = "crates/wasmcloud-host", version = "0.18.1", default-features = false }
 nats = "0.8.6"
 structopt = "0.3.21"
 nkeys = "0.1.0"
@@ -66,7 +66,7 @@ uuid = { version = "0.8", features = ["serde", "v4"] }
 wascap = "0.6.0"
 wasmcloud-actor-extras = "0.1.1"
 wasmcloud-actor-http-server = "0.1.1"
-wasmcloud-control-interface = { path = "./crates/wasmcloud-control-interface"}
+wasmcloud-control-interface = { path = "crates/wasmcloud-control-interface", version = "0.3.1" }
 
 [workspace]
 members = [

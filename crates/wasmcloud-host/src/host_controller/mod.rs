@@ -1,5 +1,6 @@
 use crate::actors::{ActorHost, WasmCloudActor};
 use crate::auth::Authorizer;
+use crate::capability::native_host::NativeCapabilityHost;
 
 use crate::{NativeCapability, Result};
 use actix::prelude::*;
@@ -92,6 +93,13 @@ pub(crate) struct GetRunningActor {
 }
 
 #[derive(Message)]
+#[rtype(result = "Option<Addr<NativeCapabilityHost>>")]
+pub(crate) struct GetRunningProvider {
+    pub provider_id: String,
+    pub link_name: String,
+}
+
+#[derive(Message)]
 #[rtype(result = "String")]
 pub(crate) struct GetHostID;
 
@@ -136,7 +144,7 @@ pub(crate) struct HostInventory {
 #[derive(Default, Debug, Clone, PartialEq)]
 pub(crate) struct ActorSummary {
     pub id: String,
-    pub image_refs: Vec<String>,
+    pub image_ref: Option<String>,
     pub name: Option<String>,
     pub revision: i32,
 }
@@ -144,7 +152,7 @@ pub(crate) struct ActorSummary {
 #[derive(Default, Debug, Clone, PartialEq)]
 pub(crate) struct ProviderSummary {
     pub id: String,
-    pub image_refs: Vec<String>,
+    pub image_ref: Option<String>,
     pub link_name: String,
     pub name: Option<String>,
     pub revision: i32,

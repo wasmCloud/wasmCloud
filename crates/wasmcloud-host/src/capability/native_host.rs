@@ -28,6 +28,7 @@ pub(crate) struct Initialize {
 pub(crate) struct GetIdentity {}
 
 pub(crate) struct IdentityResponse {
+    pub image_ref: Option<String>,
     pub name: String,
     pub revision: i32,
 }
@@ -195,6 +196,7 @@ impl Handler<GetIdentity> for NativeCapabilityHost {
     fn handle(&mut self, _q: GetIdentity, _ctx: &mut Self::Context) -> Self::Result {
         let state = self.state.as_ref().unwrap();
         IdentityResponse {
+            image_ref: state.image_ref.clone(),
             name: state.cap.claims.name(),
             revision: state
                 .cap

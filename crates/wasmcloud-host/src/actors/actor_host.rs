@@ -63,6 +63,7 @@ impl Handler<GetIdentity> for ActorHost {
         let state = self.state.as_ref().unwrap();
 
         IdentityResponse {
+            image_ref: state.image_ref.clone(),
             name: state.claims.name(),
             revision: state
                 .claims

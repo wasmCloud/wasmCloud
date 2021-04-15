@@ -188,8 +188,9 @@ pub struct HostInventory {
 pub struct ActorDescription {
     #[serde(rename = "id")]
     pub id: String,
-    #[serde(rename = "image_refs")]
-    pub image_refs: Vec<String>,
+    #[serde(rename = "image_ref")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_ref: Option<String>,
     #[serde(rename = "name")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -203,8 +204,9 @@ pub struct ProviderDescription {
     pub id: String,
     #[serde(rename = "link_name")]
     pub link_name: String,
-    #[serde(rename = "image_refs")]
-    pub image_refs: Vec<String>,
+    #[serde(rename = "image_ref")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_ref: Option<String>,
     #[serde(rename = "name")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,

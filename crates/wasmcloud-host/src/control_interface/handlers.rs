@@ -162,7 +162,7 @@ pub(crate) async fn handle_host_inventory_query(host: &str, msg: &nats::asynk::M
                 .map(|ps| ProviderDescription {
                     id: ps.id.to_string(),
                     link_name: ps.link_name.to_string(),
-                    image_refs: ps.image_refs.clone(),
+                    image_ref: ps.image_ref.clone(),
                     name: ps.name.clone(),
                     revision: ps.revision,
                 })
@@ -172,7 +172,7 @@ pub(crate) async fn handle_host_inventory_query(host: &str, msg: &nats::asynk::M
                 .iter()
                 .map(|a| ActorDescription {
                     id: a.id.to_string(),
-                    image_refs: a.image_refs.clone(),
+                    image_ref: a.image_ref.clone(),
                     name: a.name.clone(),
                     revision: a.revision,
                 })
