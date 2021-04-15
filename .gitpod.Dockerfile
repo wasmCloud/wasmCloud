@@ -2,7 +2,7 @@ FROM gitpod/workspace-full
 
 # Gitpod will not rebuild dev image unless *some* change is made to this Dockerfile.
 # To force a rebuild, simply increase this counter:
-ENV TRIGGER_REBUILD 7
+ENV TRIGGER_REBUILD 9
 
 USER gitpod
 
@@ -15,13 +15,11 @@ RUN sudo apt-get update && \
     redis-server \
     && sudo rm -rf /var/lib/apt/lists/*
 
-RUN wget -c https://dl.google.com/go/go1.14.2.linux-amd64.tar.gz -O - | sudo tar -xz -C /usr/local
-RUN export PATH=$PATH:/usr/local/go/bin
 
+RUN curl -L https://github.com/nats-io/nats-server/releases/download/v2.2.1/nats-server-v2.2.1-linux-amd64.zip -o nats-server.zip
+RUN unzip nats-server.zip -d nats-server
+RUN sudo cp nats-server/nats-server-v2.0.0-linux-amd64/nats-server /usr/bin
 
-ENV GO111MODULE=on
-RUN sudo /usr/local/go/bin/go get github.com/nats-io/nats-server/v2
-
-RUN nats-server &
+RUN /usr/bin/nats-server &
 
 ENV RUST_LLDB=/usr/bin/lldb-11
