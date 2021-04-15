@@ -187,7 +187,7 @@ pub(crate) async fn multiple_ocirefs() -> Result<()> {
     const ECHO_0_2_0: &str = "wasmcloud.azurecr.io/echo:0.2.0";
     const ECHO_0_2_1: &str = "wasmcloud.azurecr.io/echo:0.2.1";
     const ECHO_PKEY: &str = "MBCFOPM6JW2APJLXJD3Z5O4CN7CPYJ2B4FTKLJUR5YR5MITIU7HD3WD5";
-    const MAX_RETRY: u8 = 10;
+    const MAX_RETRY: u8 = 50;
 
     let nc = nats::asynk::connect("0.0.0.0:4222").await?;
     let nc3 = nats::asynk::connect("0.0.0.0:4222").await?;
