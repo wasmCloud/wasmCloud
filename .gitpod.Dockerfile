@@ -2,7 +2,7 @@ FROM gitpod/workspace-full
 
 # Gitpod will not rebuild dev image unless *some* change is made to this Dockerfile.
 # To force a rebuild, simply increase this counter:
-ENV TRIGGER_REBUILD 2
+ENV TRIGGER_REBUILD 3
 
 USER gitpod
 
