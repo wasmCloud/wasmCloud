@@ -101,7 +101,7 @@ pub(crate) struct GetRunningProvider {
 
 #[derive(Message)]
 #[rtype(result = "String")]
-pub(crate) struct GetHostID;
+pub(crate) struct GetHostId;
 
 #[derive(Message)]
 #[rtype(result = "u64")]

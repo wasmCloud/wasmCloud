@@ -312,10 +312,10 @@ impl Handler<SetLabels> for HostController {
     }
 }
 
-impl Handler<GetHostID> for HostController {
+impl Handler<GetHostId> for HostController {
     type Result = String;
 
-    fn handle(&mut self, _msg: GetHostID, _ctx: &mut Context<Self>) -> Self::Result {
+    fn handle(&mut self, _msg: GetHostId, _ctx: &mut Context<Self>) -> Self::Result {
         self.kp.as_ref().unwrap().public_key()
     }
 }

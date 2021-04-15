@@ -521,7 +521,7 @@ impl Host {
             .collect())
     }
 
-    /// Returns identity information for a provider
+    /// Retrieves human-friendly identity information for a provider
     /// Return value is `(image_reference, name, revision)`
     pub async fn get_actor_identity(&self, id: &str) -> Result<(Option<String>, String, i32)> {
         self.ensure_started()?;
@@ -539,7 +539,7 @@ impl Host {
         }
     }
 
-    /// Returns identity information for a provider
+    /// Retrieves human-friendly identity information for a provider
     /// Return value is `(image_reference, name, revision)`
     pub async fn get_provider_identity(
         &self,
