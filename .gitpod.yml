@@ -1,21 +1,19 @@
 image:
   file: .gitpod.Dockerfile
-tasks:
-  - name: Clippy
-    init: cargo clippy --all -- -D clippy::result_unwrap_used -D clippy::option_unwrap_used  
-  - name: Build
-    init: cargo build 
+tasks:  
   - name: wasmCloud
     init: cargo install --path . 
     command: wasmcloud --version
   - name: wash
     init: cargo install wash-cli --force
     command: wash --version
+  - name: nats
+    command: nats-server &
+  - name: redis
+    command: redis-server &
 ports:
   - port: 8080
-    onOpen: ignore
-  - port: 4222
-    onOpen: notify
+    onOpen: ignore  
 github:
   prebuilds:
     branches: true

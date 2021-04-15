@@ -1,9 +1,12 @@
+[![Gitpod ready-to-code](https://img.shields.io/badge/Gitpod-ready--to--code-blue?logo=gitpod)](https://gitpod.io/#https://github.com/wasmcloud/wasmcloud)
 ![Crates.io](https://img.shields.io/crates/v/wasmcloud-host)
 ![Rust Build](https://img.shields.io/github/workflow/status/wasmcloud/wasmcloud/WASMCLOUD-HOST/main)
 [![Documentation](https://img.shields.io/badge/Docs-Documentation-blue)](https://wasmcloud.dev)
 ![Rustdocs](https://docs.rs/wasmcloud-host/badge.svg)
 
 # wasmCloud Host
+
+[![Open in Gitpod](https://gitpod.io/button/open-in-gitpod.svg)](https://gitpod.io/#https://github.com/wasmcloud/wasmcloud)
 
 [wasmCloud](https://wasmcloud.com) is a secure, distributed actor platform with an autonomous mesh network built
 for bridging disparate and far-flung infrastructure.

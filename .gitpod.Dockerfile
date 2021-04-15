@@ -2,7 +2,7 @@ FROM gitpod/workspace-full
 
 # Gitpod will not rebuild dev image unless *some* change is made to this Dockerfile.
 # To force a rebuild, simply increase this counter:
-ENV TRIGGER_REBUILD 9
+ENV TRIGGER_REBUILD 10
 
 USER gitpod
 
@@ -23,3 +23,6 @@ RUN sudo cp nats-server/nats-server-v2.2.1-linux-amd64/nats-server /usr/bin
 RUN /usr/bin/nats-server &
 
 ENV RUST_LLDB=/usr/bin/lldb-11
+
+RUN rustup component add clippy
+RUN rustup target add wasm32-unknown-unknown
