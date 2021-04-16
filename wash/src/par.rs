@@ -269,7 +269,7 @@ pub(crate) fn handle_create(cmd: CreateCommand) -> Result<String> {
             format_output(
                 format!("Successfully created archive {}", outfile),
                 json!({"result": "success", "file": outfile}),
-                &cmd.output,
+                &cmd.output.kind,
             )
         },
     )
@@ -300,7 +300,7 @@ pub(crate) async fn handle_inspect(cmd: InspectCommand) -> Result<String> {
     let metadata = claims.metadata.unwrap();
 
     let output = match cmd.output.kind {
-        OutputKind::JSON => {
+        OutputKind::Json => {
             let friendly_rev = if metadata.rev.is_some() {
                 format!("{}", metadata.rev.unwrap())
             } else {
@@ -321,11 +321,11 @@ pub(crate) async fn handle_inspect(cmd: InspectCommand) -> Result<String> {
         OutputKind::Text => {
             use term_table::row::Row;
             use term_table::table_cell::*;
-            use term_table::{Table, TableStyle};
+            use term_table::Table;
 
             let mut table = Table::new();
             table.max_column_width = 68;
-            table.style = TableStyle::blank();
+            table.style = crate::util::empty_table_style();
 
             table.add_row(Row::new(vec![TableCell::new_with_alignment(
                 format!("{} - Provider Archive", metadata.name.unwrap()),
@@ -417,7 +417,7 @@ pub(crate) fn handle_insert(cmd: InsertCommand) -> Result<String> {
             cmd.binary, cmd.archive
         ),
         json!({"result": "success", "file": cmd.archive}),
-        &cmd.output,
+        &cmd.output.kind,
     ))
 }
 
@@ -556,7 +556,7 @@ mod test {
                 assert_eq!(directory.unwrap(), "./tests/fixtures");
                 assert_eq!(issuer.unwrap(), ISSUER);
                 assert_eq!(subject.unwrap(), SUBJECT);
-                assert_eq!(output.kind, OutputKind::JSON);
+                assert_eq!(output.kind, OutputKind::Json);
                 assert_eq!(name, "CreateTest");
                 assert_eq!(vendor, "TestRunner");
                 assert_eq!(destination.unwrap(), "./test.par.gz");
@@ -695,7 +695,7 @@ mod test {
                 assert!(!insecure);
                 assert_eq!(user.unwrap(), "name");
                 assert_eq!(password.unwrap(), "secret");
-                assert_eq!(output.kind, OutputKind::JSON);
+                assert_eq!(output.kind, OutputKind::Json);
             }
             cmd => panic!("par inspect constructed incorrect command {:?}", cmd),
         }
@@ -731,7 +731,7 @@ mod test {
                 assert!(insecure);
                 assert_eq!(user.unwrap(), "name");
                 assert_eq!(password.unwrap(), "secret");
-                assert_eq!(output.kind, OutputKind::JSON);
+                assert_eq!(output.kind, OutputKind::Json);
             }
             cmd => panic!("par inspect constructed incorrect command {:?}", cmd),
         }

@@ -85,7 +85,7 @@ pub(crate) fn generate(kt: &KeyPairType, output: &OutputKind) -> String {
             kp.public_key(),
             kp.seed().unwrap()
         ),
-        OutputKind::JSON => json!({
+        OutputKind::Json => json!({
             "public_key": kp.public_key(),
             "seed": kp.seed().unwrap(),
         })
@@ -113,7 +113,7 @@ pub(crate) fn get(
         Ok(s) => Ok(format_output(
             s.trim().to_string(),
             json!({ "seed": s.trim() }),
-            output,
+            &output.kind,
         )),
     }
 }
@@ -138,7 +138,7 @@ pub(crate) fn list(
 
     Ok(match output.kind {
         OutputKind::Text => format!("====== Keys found in {} ======\n{}", dir, keys.join("\n")),
-        OutputKind::JSON => format!("{}", json!({ "keys": keys })),
+        OutputKind::Json => format!("{}", json!({ "keys": keys })),
     })
 }
 
@@ -211,7 +211,7 @@ If you'd like to use alternative keys, you can supply them as a flag.\n",
                         path
                     ),
                     json!({"status": "No keypair found", "path": path, "keygen": "true"}),
-                    &Output::default(),
+                    &Output::default().kind,
                 ));
 
                 let kp = KeyPair::new(keygen_type);
@@ -261,7 +261,7 @@ mod tests {
         let kt = KeyPairType::Account;
 
         let keypair = generate(&kt, &OutputKind::Text);
-        let keypair_json = generate(&kt, &OutputKind::JSON);
+        let keypair_json = generate(&kt, &OutputKind::Json);
 
         assert_eq!(keypair.contains("Public Key: "), true);
         assert_eq!(keypair.contains("Seed: "), true);
@@ -274,7 +274,7 @@ mod tests {
     }
 
     #[derive(Debug, Clone, Deserialize)]
-    struct KeyPairJSON {
+    struct KeyPairJson {
         public_key: String,
         seed: String,
     }
@@ -286,8 +286,8 @@ mod tests {
 
         let kt = KeyPairType::Module;
 
-        let keypair_json = generate(&kt, &OutputKind::JSON);
-        let keypair: KeyPairJSON = serde_json::from_str(&keypair_json).unwrap();
+        let keypair_json = generate(&kt, &OutputKind::Json);
+        let keypair: KeyPairJson = serde_json::from_str(&keypair_json).unwrap();
 
         assert_eq!(keypair.public_key.len(), sample_public_key.len());
         assert_eq!(keypair.seed.len(), sample_seed.len());
@@ -300,20 +300,20 @@ mod tests {
         let sample_public_key = "MBBLAHS7MCGNQ6IR4ZDSGRIAF7NVS7FCKFTKGO5JJJKN2QQRVAH7BSIO";
         let sample_seed = "SMAH45IUULL57OSXNOOAKOTLSVNQOORMDLE3Y3PQLJ4J5MY7MN2K7BIFI4";
 
-        let account_keypair: KeyPairJSON =
-            serde_json::from_str(&generate(&KeyPairType::Account, &OutputKind::JSON)).unwrap();
-        let user_keypair: KeyPairJSON =
-            serde_json::from_str(&generate(&KeyPairType::User, &OutputKind::JSON)).unwrap();
-        let module_keypair: KeyPairJSON =
-            serde_json::from_str(&generate(&KeyPairType::Module, &OutputKind::JSON)).unwrap();
-        let service_keypair: KeyPairJSON =
-            serde_json::from_str(&generate(&KeyPairType::Service, &OutputKind::JSON)).unwrap();
-        let server_keypair: KeyPairJSON =
-            serde_json::from_str(&generate(&KeyPairType::Server, &OutputKind::JSON)).unwrap();
-        let operator_keypair: KeyPairJSON =
-            serde_json::from_str(&generate(&KeyPairType::Operator, &OutputKind::JSON)).unwrap();
-        let cluster_keypair: KeyPairJSON =
-            serde_json::from_str(&generate(&KeyPairType::Cluster, &OutputKind::JSON)).unwrap();
+        let account_keypair: KeyPairJson =
+            serde_json::from_str(&generate(&KeyPairType::Account, &OutputKind::Json)).unwrap();
+        let user_keypair: KeyPairJson =
+            serde_json::from_str(&generate(&KeyPairType::User, &OutputKind::Json)).unwrap();
+        let module_keypair: KeyPairJson =
+            serde_json::from_str(&generate(&KeyPairType::Module, &OutputKind::Json)).unwrap();
+        let service_keypair: KeyPairJson =
+            serde_json::from_str(&generate(&KeyPairType::Service, &OutputKind::Json)).unwrap();
+        let server_keypair: KeyPairJson =
+            serde_json::from_str(&generate(&KeyPairType::Server, &OutputKind::Json)).unwrap();
+        let operator_keypair: KeyPairJson =
+            serde_json::from_str(&generate(&KeyPairType::Operator, &OutputKind::Json)).unwrap();
+        let cluster_keypair: KeyPairJson =
+            serde_json::from_str(&generate(&KeyPairType::Cluster, &OutputKind::Json)).unwrap();
 
         assert_eq!(account_keypair.public_key.starts_with('A'), true);
         assert_eq!(account_keypair.public_key.len(), sample_public_key.len());
@@ -394,7 +394,7 @@ mod tests {
                         Operator => assert_eq!(*cmd, "operator"),
                         Cluster => assert_eq!(*cmd, "cluster"),
                     }
-                    assert_eq!(output.kind, OutputKind::JSON);
+                    assert_eq!(output.kind, OutputKind::Json);
                 }
                 _ => panic!("`keys gen` constructed incorrect command"),
             };
@@ -431,7 +431,7 @@ mod tests {
             } => {
                 assert_eq!(keyname, KEYNAME);
                 assert_eq!(directory, Some(KEYPATH.to_string()));
-                assert_eq!(output.kind, OutputKind::JSON);
+                assert_eq!(output.kind, OutputKind::Json);
             }
             other_cmd => panic!("keys get generated other command {:?}", other_cmd),
         }
@@ -454,7 +454,7 @@ mod tests {
         match list_all_flags.command {
             KeysCliCommand::ListCommand { directory, output } => {
                 assert_eq!(directory, Some(KEYPATH.to_string()));
-                assert_eq!(output.kind, OutputKind::JSON);
+                assert_eq!(output.kind, OutputKind::Json);
             }
             other_cmd => panic!("keys get generated other command {:?}", other_cmd),
         }

@@ -6,6 +6,7 @@ use std::error::Error;
 use std::fmt;
 use std::str::FromStr;
 use structopt::StructOpt;
+use term_table::TableStyle;
 
 pub(crate) type Result<T> = ::std::result::Result<T, Box<dyn ::std::error::Error>>;
 
@@ -30,14 +31,14 @@ pub(crate) struct Output {
 #[derive(StructOpt, Debug, Copy, Clone, Serialize, Deserialize, PartialEq)]
 pub(crate) enum OutputKind {
     Text,
-    JSON,
+    Json,
 }
 
 /// Used to supress `println!` macro calls in the REPL
 #[derive(StructOpt, Debug, Copy, Clone, Serialize, Deserialize, PartialEq)]
 pub(crate) enum OutputDestination {
-    CLI,
-    REPL,
+    Cli,
+    Repl,
 }
 
 impl Default for Output {
@@ -53,7 +54,7 @@ impl FromStr for OutputKind {
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s {
-            "json" => Ok(OutputKind::JSON),
+            "json" => Ok(OutputKind::Json),
             "text" => Ok(OutputKind::Text),
             _ => Err(OutputParseErr),
         }
@@ -75,10 +76,14 @@ impl fmt::Display for OutputParseErr {
 }
 
 /// Returns string output for provided output kind
-pub(crate) fn format_output(text: String, json: serde_json::Value, output: &Output) -> String {
-    match output.kind {
+pub(crate) fn format_output(
+    text: String,
+    json: serde_json::Value,
+    output_kind: &OutputKind,
+) -> String {
+    match output_kind {
         OutputKind::Text => text,
-        OutputKind::JSON => format!("{}", json),
+        OutputKind::Json => format!("{}", json),
     }
 }
 
@@ -105,7 +110,7 @@ pub(crate) fn labels_vec_to_hashmap(constraints: Vec<String>) -> Result<HashMap<
     Ok(hm)
 }
 
-/// Transform a json str (e.g. "{"hello": "world"}") and transform it into msgpack bytes
+/// Transform a json str (e.g. "{"hello": "world"}") into msgpack bytes
 pub(crate) fn json_str_to_msgpack_bytes(payload: Vec<String>) -> Result<Vec<u8>> {
     let json: serde_json::value::Value = serde_json::from_str(&payload.join(""))?;
     let payload = serdeconv::to_msgpack_vec(&json)?;
@@ -115,8 +120,8 @@ pub(crate) fn json_str_to_msgpack_bytes(payload: Vec<String>) -> Result<Vec<u8>>
 /// Helper function to either display input to stdout or log the output in the REPL
 pub(crate) fn print_or_log(output: String) {
     match output_destination() {
-        OutputDestination::REPL => info!(target: WASH_LOG_INFO, "{}", output),
-        OutputDestination::CLI => println!("{}", output),
+        OutputDestination::Repl => info!(target: WASH_LOG_INFO, "{}", output),
+        OutputDestination::Cli => println!("{}", output),
     }
 }
 
@@ -124,7 +129,23 @@ pub(crate) fn print_or_log(output: String) {
 pub(crate) fn output_destination() -> OutputDestination {
     // REPL_MODE is Some("true") when in REPL, otherwise CLI
     match REPL_MODE.get() {
-        Some(_) => OutputDestination::REPL,
-        None => OutputDestination::CLI,
+        Some(_) => OutputDestination::Repl,
+        None => OutputDestination::Cli,
+    }
+}
+
+pub(crate) fn empty_table_style() -> TableStyle {
+    TableStyle {
+        top_left_corner: ' ',
+        top_right_corner: ' ',
+        bottom_left_corner: ' ',
+        bottom_right_corner: ' ',
+        outer_left_vertical: ' ',
+        outer_right_vertical: ' ',
+        outer_bottom_horizontal: ' ',
+        outer_top_horizontal: ' ',
+        intersection: ' ',
+        vertical: ' ',
+        horizontal: ' ',
     }
 }

@@ -140,7 +140,7 @@ pub(crate) async fn handle_command(
 pub(crate) async fn handle_pull(cmd: PullCommand) -> Result<String, Box<dyn ::std::error::Error>> {
     let image: Reference = cmd.url.parse().unwrap();
     let spinner = match cmd.output.kind {
-        OutputKind::Text if output_destination() == OutputDestination::CLI => Some(Spinner::new(
+        OutputKind::Text if output_destination() == OutputDestination::Cli => Some(Spinner::new(
             Spinners::Dots12,
             format!(" Downloading {} ...", image.whole()),
         )),
@@ -169,7 +169,7 @@ pub(crate) async fn handle_pull(cmd: PullCommand) -> Result<String, Box<dyn ::st
             SHOWER_EMOJI, outfile
         ),
         json!({"result": "success", "file": outfile}),
-        &cmd.output,
+        &cmd.output.kind,
     ))
 }
 
@@ -305,7 +305,7 @@ fn validate_provider_archive(
 
 pub(crate) async fn handle_push(cmd: PushCommand) -> Result<String, Box<dyn ::std::error::Error>> {
     let spinner = match cmd.output.kind {
-        OutputKind::Text if output_destination() == OutputDestination::CLI => Some(Spinner::new(
+        OutputKind::Text if output_destination() == OutputDestination::Cli => Some(Spinner::new(
             Spinners::Dots12,
             format!(" Pushing {} to {} ...", cmd.artifact, cmd.url),
         )),
@@ -333,7 +333,7 @@ pub(crate) async fn handle_push(cmd: PushCommand) -> Result<String, Box<dyn ::st
             SHOWER_EMOJI, cmd.url
         ),
         json!({"result": "success", "url": cmd.url}),
-        &cmd.output,
+        &cmd.output.kind,
     ))
 }
 
@@ -585,7 +585,7 @@ mod tests {
                 assert_eq!(config.unwrap(), format!("{}/config.json", TESTDIR));
                 assert_eq!(opts.user.unwrap(), "localuser");
                 assert_eq!(opts.password.unwrap(), "supers3cr3t");
-                assert_eq!(output.kind, OutputKind::JSON);
+                assert_eq!(output.kind, OutputKind::Json);
             }
             _ => panic!("`reg push` constructed incorrect command"),
         };
