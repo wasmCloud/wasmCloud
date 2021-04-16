@@ -1,4 +1,4 @@
-image: ghcr.io/jordan-rash/wasmcloud:gitpod
+image: wasmcloud.azurecr.com/wasmcloud_gitpod:latest
 tasks:  
   - name: wasmCloud
     command: wasmcloud --version
