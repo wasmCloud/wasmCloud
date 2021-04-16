@@ -1,10 +1,8 @@
 image: ghcr.io/jordan-rash/wasmcloud:gitpod
 tasks:  
   - name: wasmCloud
-    init: cargo install --path . 
     command: wasmcloud --version
   - name: wash
-    init: cargo install wash-cli --force
     command: wash --version
   - name: nats
     command: nats-server &
