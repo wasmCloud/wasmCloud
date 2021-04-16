@@ -1,4 +1,5 @@
 ![Latest Release](https://img.shields.io/github/v/release/wasmcloud/wasmcloud?include_prereleases&sort=semver)
+[![Gitpod ready-to-code](https://img.shields.io/badge/Gitpod-ready--to--code-blue?logo=gitpod)](https://gitpod.io/#https://github.com/wasmcloud/wasmcloud)
 ![Rust Build](https://img.shields.io/github/workflow/status/wasmcloud/wasmcloud/Rust/main)
 ![Contributors](https://img.shields.io/github/contributors/wasmcloud/wasmcloud)
 ![Good first issues](https://img.shields.io/github/issues/wasmcloud/wasmcloud/good%20first%20issue?label=good%20first%20issues)
@@ -8,6 +9,8 @@
 # wasmCloud
 
 wasmCloud lets you focus on shipping _features_. Build secure, portable, re-usable components called **_actors_** and get rid of the headaches that come from being smothered by boilerplate, dependency hell, tight coupling, and making design decisions mandated by your infrastructure.
+
+[![Open in Gitpod](https://gitpod.io/button/open-in-gitpod.svg)](https://gitpod.io/#https://github.com/wasmcloud/wasmcloud)
 
 ## Distributed computing, _simplified_
 
