@@ -24,3 +24,4 @@ ENV RUST_LLDB=/usr/bin/lldb-11
 
 RUN rustup component add clippy
 RUN rustup target add wasm32-unknown-unknown
+RUN cargo install wasmcloud wash-cli
