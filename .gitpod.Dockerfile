@@ -1,4 +1,5 @@
 FROM gitpod/workspace-full
+LABEL maintainer="team@wasmcloud.com"
 
 USER gitpod
 
