@@ -1,19 +1,15 @@
 extern crate wasmcloud_control_interface;
 use crate::util::{
-    convert_error, format_output, json_str_to_msgpack_bytes, labels_vec_to_hashmap,
-    output_destination, Output, OutputDestination, OutputKind, Result, WASH_CMD_INFO,
+    convert_error, json_str_to_msgpack_bytes, labels_vec_to_hashmap, output_destination, Output,
+    OutputDestination, OutputKind, Result, WASH_CMD_INFO,
 };
 use log::debug;
-use serde_json::json;
 use spinners::{Spinner, Spinners};
 use std::time::Duration;
 use structopt::StructOpt;
-use term_table::row::Row;
-use term_table::table_cell::*;
-use term_table::{Table, TableStyle};
 use wasmcloud_control_interface::*;
-
-//TODO(brooksmtownsend): If theres a deadline that elapses, suggest specifying a namespace
+mod output;
+pub(crate) use output::*;
 
 #[derive(Debug, Clone, StructOpt)]
 pub(crate) struct CtlCli {
@@ -98,11 +94,11 @@ pub(crate) struct CallCommand {
 
     /// Public key or OCI reference of actor
     #[structopt(name = "actor-id")]
-    actor_id: String,
+    pub(crate) actor_id: String,
 
     /// Operation to invoke on actor
     #[structopt(name = "operation")]
-    operation: String,
+    pub(crate) operation: String,
 
     /// Payload to send with operation (in the form of '{"field": "value"}' )
     #[structopt(name = "data")]
@@ -142,15 +138,15 @@ pub(crate) struct LinkCommand {
 
     /// Capability contract ID between actor and provider
     #[structopt(name = "contract-id")]
-    contract_id: String,
+    pub(crate) contract_id: String,
 
     /// Link name, defaults to "default"
     #[structopt(short = "l", long = "link-name")]
-    link_name: Option<String>,
+    pub(crate) link_name: Option<String>,
 
     /// Environment values to provide alongside link
     #[structopt(name = "values")]
-    values: Vec<String>,
+    pub(crate) values: Vec<String>,
 }
 
 #[derive(Debug, Clone, StructOpt)]
@@ -204,7 +200,7 @@ pub(crate) struct GetHostInventoryCommand {
 
     /// Id of host
     #[structopt(name = "host-id")]
-    host_id: String,
+    pub(crate) host_id: String,
 }
 
 #[derive(Debug, Clone, StructOpt)]
@@ -259,7 +255,7 @@ pub(crate) struct StartProviderCommand {
 
     /// Link name of provider
     #[structopt(short = "l", long = "link-name", default_value = "default")]
-    link_name: String,
+    pub(crate) link_name: String,
 
     /// Constraints for provider auction in the form of "label=value". If host-id is supplied, this list is ignored
     #[structopt(short = "c", long = "constraint", name = "constraints")]
@@ -305,11 +301,11 @@ pub(crate) struct StopProviderCommand {
 
     /// Link name of provider
     #[structopt(name = "link-name")]
-    link_name: String,
+    pub(crate) link_name: String,
 
     /// Capability contract Id of provider
     #[structopt(name = "contract-id")]
-    contract_id: String,
+    pub(crate) contract_id: String,
 }
 
 #[derive(Debug, Clone, StructOpt)]
@@ -344,32 +340,13 @@ pub(crate) async fn handle_command(command: CtlCliCommand) -> Result<String> {
             debug!(target: WASH_CMD_INFO, "Calling actor {}", cmd.actor_id);
             let ir = call_actor(cmd).await?;
             debug!(target: WASH_CMD_INFO, "Invocation response {:?}", ir);
-            match ir.error {
-                Some(e) => format_output(
-                    format!("\nError invoking actor: {}", e),
-                    json!({ "error": e }),
-                    &output,
-                ),
-                None => {
-                    //TODO(brooksmtownsend): String::from_utf8_lossy should be decoder only if one is not available
-                    let call_response = String::from_utf8_lossy(&ir.msg);
-                    format_output(
-                        format!("\nCall response (raw): {}", call_response),
-                        json!({ "response": call_response }),
-                        &output,
-                    )
-                }
-            }
+            call_output(ir.error, ir.msg, &output.kind)
         }
         Get(GetCommand::Hosts(cmd)) => {
             let output = cmd.output;
             sp = update_spinner_message(sp, " Retrieving Hosts ...".to_string(), &output);
             let hosts = get_hosts(cmd).await?;
-            debug!(target: WASH_CMD_INFO, "Hosts:{:?}", hosts);
-            match output.kind {
-                OutputKind::Text => hosts_table(hosts, None),
-                OutputKind::JSON => format!("{}", json!({ "hosts": hosts })),
-            }
+            get_hosts_output(hosts, &output.kind)
         }
         Get(GetCommand::HostInventory(cmd)) => {
             let output = cmd.output;
@@ -379,21 +356,13 @@ pub(crate) async fn handle_command(command: CtlCliCommand) -> Result<String> {
                 &output,
             );
             let inv = get_host_inventory(cmd).await?;
-            debug!(target: WASH_CMD_INFO, "Inventory:{:?}", inv);
-            match output.kind {
-                OutputKind::Text => host_inventory_table(inv, None),
-                OutputKind::JSON => format!("{}", json!({ "inventory": inv })),
-            }
+            get_host_inventory_output(inv, &output.kind)
         }
         Get(GetCommand::Claims(cmd)) => {
             let output = cmd.output;
             sp = update_spinner_message(sp, " Retrieving claims ... ".to_string(), &output);
             let claims = get_claims(cmd).await?;
-            debug!(target: WASH_CMD_INFO, "Claims:{:?}", claims);
-            match output.kind {
-                OutputKind::Text => claims_table(claims, None),
-                OutputKind::JSON => format!("{}", json!({ "claims": claims })),
-            }
+            get_claims_output(claims, &output.kind)
         }
         Link(cmd) => {
             sp = update_spinner_message(
@@ -404,25 +373,10 @@ pub(crate) async fn handle_command(command: CtlCliCommand) -> Result<String> {
                 ),
                 &cmd.output,
             );
-            debug!(
-                target: WASH_CMD_INFO,
-                "Publishing link between {} and {}", cmd.actor_id, cmd.provider_id
-            );
-            match advertise_link(cmd.clone()).await {
-                Ok(_) => format_output(
-                    format!(
-                        "\nAdvertised link ({}) <-> ({}) successfully",
-                        cmd.actor_id, cmd.provider_id
-                    ),
-                    json!({"actor_id": cmd.actor_id, "provider_id": cmd.provider_id, "result": "published"}),
-                    &cmd.output,
-                ),
-                Err(e) => format_output(
-                    format!("\nError advertising link: {}", e),
-                    json!({ "error": format!("{}", e) }),
-                    &cmd.output,
-                ),
-            }
+            let failure = advertise_link(cmd.clone())
+                .await
+                .map_or_else(|e| Some(format!("{}", e)), |_| None);
+            link_output(&cmd.actor_id, &cmd.provider_id, failure, &cmd.output.kind)
         }
         Start(StartCommand::Actor(cmd)) => {
             let output = cmd.output;
@@ -431,22 +385,8 @@ pub(crate) async fn handle_command(command: CtlCliCommand) -> Result<String> {
                 format!(" Starting actor {} ... ", cmd.actor_ref),
                 &output,
             );
-            debug!(
-                target: WASH_CMD_INFO,
-                "Sending request to start actor {}", cmd.actor_ref
-            );
-            match start_actor(cmd).await {
-                Ok(r) => format_output(
-                    format!("\nActor starting on host {}", r.host_id),
-                    json!({ "ack": r }),
-                    &output,
-                ),
-                Err(e) => format_output(
-                    format!("\nError starting actor: {}", e),
-                    json!({ "error": format!("{}", e) }),
-                    &output,
-                ),
-            }
+            let ack = start_actor(cmd).await?;
+            start_actor_output(&ack.actor_ref, &ack.host_id, ack.failure, &output.kind)
         }
         Start(StartCommand::Provider(cmd)) => {
             let output = cmd.output;
@@ -455,22 +395,8 @@ pub(crate) async fn handle_command(command: CtlCliCommand) -> Result<String> {
                 format!(" Starting provider {} ... ", cmd.provider_ref),
                 &output,
             );
-            debug!(
-                target: WASH_CMD_INFO,
-                "Sending request to start provider {}", cmd.provider_ref
-            );
-            match start_provider(cmd).await {
-                Ok(r) => format_output(
-                    format!("\nProvider starting on host {}", r.host_id),
-                    json!({ "ack": r }),
-                    &output,
-                ),
-                Err(e) => format_output(
-                    format!("\nError starting provider: {}", e),
-                    json!({ "error": format!("{}", e) }),
-                    &output,
-                ),
-            }
+            let ack = start_provider(cmd).await?;
+            start_provider_output(&ack.provider_ref, &ack.host_id, ack.failure, &output.kind)
         }
         Stop(StopCommand::Actor(cmd)) => {
             let output = cmd.output;
@@ -481,18 +407,7 @@ pub(crate) async fn handle_command(command: CtlCliCommand) -> Result<String> {
             );
             let ack = stop_actor(cmd.clone()).await?;
             debug!(target: WASH_CMD_INFO, "Stop actor ack: {:?}", ack);
-            match ack.failure {
-                Some(f) => format_output(
-                    format!("\nError stopping actor: {}", f),
-                    json!({ "error": f }),
-                    &output,
-                ),
-                None => format_output(
-                    format!("\nStopping actor: {}", cmd.actor_id),
-                    json!({ "ack": ack }),
-                    &output,
-                ),
-            }
+            stop_actor_output(&cmd.actor_id, ack.failure, &cmd.output.kind)
         }
         Stop(StopCommand::Provider(cmd)) => {
             let output = cmd.output;
@@ -503,18 +418,7 @@ pub(crate) async fn handle_command(command: CtlCliCommand) -> Result<String> {
             );
             let ack = stop_provider(cmd.clone()).await?;
             debug!(target: WASH_CMD_INFO, "Stop provider ack: {:?}", ack);
-            match ack.failure {
-                Some(f) => format_output(
-                    format!("\nError stopping provider: {}", f),
-                    json!({ "error": f }),
-                    &output,
-                ),
-                None => format_output(
-                    format!("\nStopping provider: {}", cmd.provider_id),
-                    json!({ "ack": ack }),
-                    &output,
-                ),
-            }
+            stop_provider_output(&cmd.provider_id, ack.failure, &cmd.output.kind)
         }
         Update(UpdateCommand::Actor(cmd)) => {
             let output = cmd.output;
@@ -530,18 +434,13 @@ pub(crate) async fn handle_command(command: CtlCliCommand) -> Result<String> {
                 "Sending request to update actor {} to {}",
                 cmd.actor_id, cmd.new_actor_ref
             );
-            match update_actor(cmd.clone()).await {
-                Ok(r) => format_output(
-                    format!("\nActor {} updated to {}", cmd.actor_id, cmd.new_actor_ref),
-                    json!({ "ack": r }),
-                    &output,
-                ),
-                Err(e) => format_output(
-                    format!("\nError updating actor: {}", e),
-                    json!({ "error": format!("{}", e) }),
-                    &output,
-                ),
-            }
+            let ack = update_actor(cmd.clone()).await;
+            update_actor_output(
+                &cmd.actor_id,
+                &cmd.new_actor_ref,
+                ack.map_or_else(|e| Some(format!("{}", e)), |_| None),
+                &cmd.output.kind,
+            )
         }
     };
 
@@ -702,187 +601,6 @@ pub(crate) async fn update_actor(cmd: UpdateActorCommand) -> Result<UpdateActorA
         .map_err(convert_error)
 }
 
-/// Helper function to print a Host list to stdout as a table
-pub(crate) fn hosts_table(hosts: Vec<Host>, max_width: Option<usize>) -> String {
-    let mut table = Table::new();
-    table.max_column_width = max_width.unwrap_or(80);
-    table.style = TableStyle::blank();
-    table.separate_rows = false;
-
-    table.add_row(Row::new(vec![
-        TableCell::new_with_alignment("Host ID", 1, Alignment::Left),
-        TableCell::new_with_alignment("Uptime (seconds)", 1, Alignment::Left),
-    ]));
-    hosts.iter().for_each(|h| {
-        table.add_row(Row::new(vec![
-            TableCell::new_with_alignment(h.id.clone(), 1, Alignment::Left),
-            TableCell::new_with_alignment(format!("{}", h.uptime_seconds), 1, Alignment::Left),
-        ]))
-    });
-
-    table.render()
-}
-
-/// Helper function to print a HostInventory to stdout as a table
-pub(crate) fn host_inventory_table(inv: HostInventory, max_width: Option<usize>) -> String {
-    let mut table = Table::new();
-    table.max_column_width = max_width.unwrap_or(80);
-    table.style = TableStyle::blank();
-    table.separate_rows = false;
-
-    table.add_row(Row::new(vec![TableCell::new_with_alignment(
-        format!("Host Inventory ({})", inv.host_id),
-        4,
-        Alignment::Center,
-    )]));
-
-    if !inv.labels.is_empty() {
-        table.add_row(Row::new(vec![TableCell::new_with_alignment(
-            "",
-            4,
-            Alignment::Center,
-        )]));
-        inv.labels.iter().for_each(|(k, v)| {
-            table.add_row(Row::new(vec![
-                TableCell::new_with_alignment(k, 2, Alignment::Left),
-                TableCell::new_with_alignment(v, 2, Alignment::Left),
-            ]))
-        });
-    } else {
-        table.add_row(Row::new(vec![TableCell::new_with_alignment(
-            "No labels present",
-            4,
-            Alignment::Center,
-        )]));
-    }
-
-    if !inv.actors.is_empty() {
-        table.add_row(Row::new(vec![TableCell::new_with_alignment(
-            "",
-            4,
-            Alignment::Center,
-        )]));
-        table.add_row(Row::new(vec![
-            TableCell::new_with_alignment("Actor ID", 2, Alignment::Left),
-            TableCell::new_with_alignment("Image Reference", 2, Alignment::Left),
-        ]));
-        inv.actors.iter().for_each(|a| {
-            let a = a.clone();
-            table.add_row(Row::new(vec![
-                TableCell::new_with_alignment(a.id, 2, Alignment::Left),
-                TableCell::new_with_alignment(
-                    a.image_ref.unwrap_or_else(|| "N/A".to_string()),
-                    2,
-                    Alignment::Left,
-                ),
-            ]))
-        });
-    } else {
-        table.add_row(Row::new(vec![TableCell::new_with_alignment(
-            "No actors found",
-            4,
-            Alignment::Center,
-        )]));
-    }
-
-    if !inv.providers.is_empty() {
-        table.add_row(Row::new(vec![TableCell::new_with_alignment(
-            "",
-            4,
-            Alignment::Center,
-        )]));
-        table.add_row(Row::new(vec![
-            TableCell::new_with_alignment("Provider ID", 2, Alignment::Left),
-            TableCell::new_with_alignment("Link Name", 1, Alignment::Left),
-            TableCell::new_with_alignment("Image Reference", 1, Alignment::Left),
-        ]));
-        inv.providers.iter().for_each(|p| {
-            let p = p.clone();
-            table.add_row(Row::new(vec![
-                TableCell::new_with_alignment(p.id, 2, Alignment::Left),
-                TableCell::new_with_alignment(p.link_name, 1, Alignment::Left),
-                TableCell::new_with_alignment(
-                    p.image_ref.unwrap_or_else(|| "N/A".to_string()),
-                    1,
-                    Alignment::Left,
-                ),
-            ]))
-        });
-    } else {
-        table.add_row(Row::new(vec![TableCell::new_with_alignment(
-            "No providers found",
-            4,
-            Alignment::Left,
-        )]));
-    }
-
-    table.render()
-}
-
-/// Helper function to print a ClaimsList to stdout as a table
-pub(crate) fn claims_table(list: ClaimsList, max_width: Option<usize>) -> String {
-    let mut table = Table::new();
-    table.style = TableStyle::blank();
-    table.separate_rows = false;
-    table.max_column_width = max_width.unwrap_or(80);
-
-    table.add_row(Row::new(vec![TableCell::new_with_alignment(
-        "Claims",
-        2,
-        Alignment::Center,
-    )]));
-
-    list.claims.iter().for_each(|c| {
-        table.add_row(Row::new(vec![
-            TableCell::new_with_alignment("Issuer", 1, Alignment::Left),
-            TableCell::new_with_alignment(
-                c.values.get("iss").unwrap_or(&"".to_string()),
-                1,
-                Alignment::Left,
-            ),
-        ]));
-        table.add_row(Row::new(vec![
-            TableCell::new_with_alignment("Subject", 1, Alignment::Left),
-            TableCell::new_with_alignment(
-                c.values.get("sub").unwrap_or(&"".to_string()),
-                1,
-                Alignment::Left,
-            ),
-        ]));
-        table.add_row(Row::new(vec![
-            TableCell::new_with_alignment("Capabilities", 1, Alignment::Left),
-            TableCell::new_with_alignment(
-                c.values.get("caps").unwrap_or(&"".to_string()),
-                1,
-                Alignment::Left,
-            ),
-        ]));
-        table.add_row(Row::new(vec![
-            TableCell::new_with_alignment("Version", 1, Alignment::Left),
-            TableCell::new_with_alignment(
-                c.values.get("version").unwrap_or(&"".to_string()),
-                1,
-                Alignment::Left,
-            ),
-        ]));
-        table.add_row(Row::new(vec![
-            TableCell::new_with_alignment("Revision", 1, Alignment::Left),
-            TableCell::new_with_alignment(
-                c.values.get("rev").unwrap_or(&"".to_string()),
-                1,
-                Alignment::Left,
-            ),
-        ]));
-        table.add_row(Row::new(vec![TableCell::new_with_alignment(
-            format!(""),
-            2,
-            Alignment::Center,
-        )]));
-    });
-
-    table.render()
-}
-
 /// Handles updating the spinner for text output
 /// JSON output will be corrupted with a spinner
 fn update_spinner_message(
@@ -893,7 +611,7 @@ fn update_spinner_message(
     if let Some(sp) = spinner {
         sp.message(msg);
         Some(sp)
-    } else if output.kind == OutputKind::Text && output_destination() == OutputDestination::CLI {
+    } else if output.kind == OutputKind::Text && output_destination() == OutputDestination::Cli {
         Some(Spinner::new(Spinners::Dots12, msg))
     } else {
         None
@@ -946,7 +664,7 @@ mod test {
                 assert_eq!(opts.rpc_port, RPC_PORT);
                 assert_eq!(opts.ns_prefix, NS_PREFIX);
                 assert_eq!(opts.rpc_timeout, 1);
-                assert_eq!(output.kind, OutputKind::JSON);
+                assert_eq!(output.kind, OutputKind::Json);
                 assert_eq!(actor_id, ACTOR_ID);
                 assert_eq!(operation, "HandleOperation");
                 assert_eq!(data, vec!["{ \"hello\": \"world\"}".to_string()])
@@ -988,7 +706,7 @@ mod test {
                 assert_eq!(opts.rpc_port, RPC_PORT);
                 assert_eq!(opts.ns_prefix, NS_PREFIX);
                 assert_eq!(opts.rpc_timeout, 1);
-                assert_eq!(output.kind, OutputKind::JSON);
+                assert_eq!(output.kind, OutputKind::Json);
                 assert_eq!(host_id.unwrap(), HOST_ID.to_string());
                 assert_eq!(actor_ref, "wasmcloud.azurecr.io/actor:v1".to_string());
                 assert_eq!(constraints.unwrap(), vec!["arch=x86_64".to_string()]);
@@ -1034,7 +752,7 @@ mod test {
                 assert_eq!(opts.rpc_port, RPC_PORT);
                 assert_eq!(opts.ns_prefix, NS_PREFIX);
                 assert_eq!(opts.rpc_timeout, 1);
-                assert_eq!(output.kind, OutputKind::JSON);
+                assert_eq!(output.kind, OutputKind::Json);
                 assert_eq!(link_name, "default".to_string());
                 assert_eq!(constraints.unwrap(), vec!["arch=x86_64".to_string()]);
                 assert_eq!(host_id.unwrap(), HOST_ID.to_string());
@@ -1071,7 +789,7 @@ mod test {
                 assert_eq!(opts.rpc_port, RPC_PORT);
                 assert_eq!(opts.ns_prefix, NS_PREFIX);
                 assert_eq!(opts.rpc_timeout, 1);
-                assert_eq!(output.kind, OutputKind::JSON);
+                assert_eq!(output.kind, OutputKind::Json);
                 assert_eq!(host_id, HOST_ID.to_string());
                 assert_eq!(actor_id, ACTOR_ID.to_string());
             }
@@ -1109,7 +827,7 @@ mod test {
                 assert_eq!(opts.rpc_port, RPC_PORT);
                 assert_eq!(opts.ns_prefix, NS_PREFIX);
                 assert_eq!(opts.rpc_timeout, 1);
-                assert_eq!(output.kind, OutputKind::JSON);
+                assert_eq!(output.kind, OutputKind::Json);
                 assert_eq!(host_id, HOST_ID.to_string());
                 assert_eq!(provider_id, PROVIDER_ID.to_string());
                 assert_eq!(link_name, "default".to_string());
@@ -1144,7 +862,7 @@ mod test {
                 assert_eq!(opts.rpc_port, RPC_PORT);
                 assert_eq!(opts.ns_prefix, NS_PREFIX);
                 assert_eq!(opts.rpc_timeout, 1);
-                assert_eq!(output.kind, OutputKind::JSON);
+                assert_eq!(output.kind, OutputKind::Json);
                 assert_eq!(timeout, 5);
             }
             cmd => panic!("ctl get hosts constructed incorrect command {:?}", cmd),
@@ -1175,7 +893,7 @@ mod test {
                 assert_eq!(opts.rpc_port, RPC_PORT);
                 assert_eq!(opts.ns_prefix, NS_PREFIX);
                 assert_eq!(opts.rpc_timeout, 1);
-                assert_eq!(output.kind, OutputKind::JSON);
+                assert_eq!(output.kind, OutputKind::Json);
                 assert_eq!(host_id, HOST_ID.to_string());
             }
             cmd => panic!("ctl get inventory constructed incorrect command {:?}", cmd),
@@ -1201,7 +919,7 @@ mod test {
                 assert_eq!(opts.rpc_port, RPC_PORT);
                 assert_eq!(opts.ns_prefix, NS_PREFIX);
                 assert_eq!(opts.rpc_timeout, 1);
-                assert_eq!(output.kind, OutputKind::JSON);
+                assert_eq!(output.kind, OutputKind::Json);
             }
             cmd => panic!("ctl get claims constructed incorrect command {:?}", cmd),
         }
@@ -1239,7 +957,7 @@ mod test {
                 assert_eq!(opts.rpc_port, RPC_PORT);
                 assert_eq!(opts.ns_prefix, NS_PREFIX);
                 assert_eq!(opts.rpc_timeout, 1);
-                assert_eq!(output.kind, OutputKind::JSON);
+                assert_eq!(output.kind, OutputKind::Json);
                 assert_eq!(actor_id, ACTOR_ID.to_string());
                 assert_eq!(provider_id, PROVIDER_ID.to_string());
                 assert_eq!(contract_id, "wasmcloud:provider".to_string());
@@ -1278,7 +996,7 @@ mod test {
                 assert_eq!(opts.rpc_port, RPC_PORT);
                 assert_eq!(opts.ns_prefix, NS_PREFIX);
                 assert_eq!(opts.rpc_timeout, 1);
-                assert_eq!(output.kind, OutputKind::JSON);
+                assert_eq!(output.kind, OutputKind::Json);
                 assert_eq!(host_id, HOST_ID.to_string());
                 assert_eq!(actor_id, ACTOR_ID.to_string());
                 assert_eq!(new_actor_ref, "wasmcloud.azurecr.io/actor:v2".to_string());

@@ -70,7 +70,7 @@ impl DrainCliCommand {
         }
         Ok(match self.output_kind() {
             OutputKind::Text => format!("Successfully cleared caches at: {:?}", cleared),
-            OutputKind::JSON => json!({ "drained": cleared }).to_string(),
+            OutputKind::Json => json!({ "drained": cleared }).to_string(),
         })
     }
 }
@@ -110,7 +110,7 @@ mod test {
         }
         let oci = DrainCli::from_iter_safe(&["drain", "oci", "-o", "json"]).unwrap();
         match oci.command.selection {
-            DrainSelection::Oci(output) => assert_eq!(output.kind, OutputKind::JSON),
+            DrainSelection::Oci(output) => assert_eq!(output.kind, OutputKind::Json),
             _ => panic!("drain constructed incorrect command"),
         }
     }

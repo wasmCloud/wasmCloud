@@ -3,6 +3,7 @@ use common::wash;
 
 // Unfortunately, launching the REPL will corrupt a terminal session without being able to properly
 // clean up the interactive mode. Until this can be fixed, we'll run these in certain situations
+//TODO: Investigate possibility of "detatching" terminal _or_ starting a new session just for these tests.
 
 #[test]
 #[ignore]

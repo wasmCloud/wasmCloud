@@ -28,7 +28,7 @@ use structopt::StructOpt;
 use term_table::{
     row::Row,
     table_cell::{Alignment, TableCell},
-    Table, TableStyle,
+    Table,
 };
 use wascap::caps::*;
 use wascap::jwt::{
@@ -430,7 +430,11 @@ fn generate_actor(actor: ActorMetadata) -> Result<String, Box<dyn ::std::error::
     );
 
     let jwt = claims.encode(&issuer)?;
-    let out = format_output(jwt.clone(), json!({ "token": jwt }), &actor.common.output);
+    let out = format_output(
+        jwt.clone(),
+        json!({ "token": jwt }),
+        &actor.common.output.kind,
+    );
 
     Ok(out)
 }
@@ -471,7 +475,7 @@ fn generate_operator(operator: OperatorMetadata) -> Result<String, Box<dyn ::std
     let out = format_output(
         jwt.clone(),
         json!({ "token": jwt }),
-        &operator.common.output,
+        &operator.common.output.kind,
     );
     Ok(out)
 }
@@ -514,7 +518,11 @@ fn generate_account(account: AccountMetadata) -> Result<String, Box<dyn ::std::e
         },
     );
     let jwt = claims.encode(&issuer)?;
-    let out = format_output(jwt.clone(), json!({ "token": jwt }), &account.common.output);
+    let out = format_output(
+        jwt.clone(),
+        json!({ "token": jwt }),
+        &account.common.output.kind,
+    );
     Ok(out)
 }
 
@@ -550,7 +558,7 @@ fn generate_provider(provider: ProviderMetadata) -> Result<String, Box<dyn ::std
     let out = format_output(
         jwt.clone(),
         json!({ "token": jwt }),
-        &provider.common.output,
+        &provider.common.output.kind,
     );
     Ok(out)
 }
@@ -654,7 +662,7 @@ fn sign_file(cmd: SignCommand) -> Result<String, Box<dyn ::std::error::Error>> {
                 caps_list.join(",")
             ),
             json!({"result": "success", "destination": destination, "capabilities": caps_list}),
-            &cmd.metadata.common.output,
+            &cmd.metadata.common.output.kind,
         )),
         Err(e) => Err(Box::new(e)),
     }?;
@@ -751,7 +759,7 @@ pub(crate) fn render_actor_claims(
         .unwrap_or_else(|| "(Not set)".to_string());
 
     match output.kind {
-        OutputKind::JSON => {
+        OutputKind::Json => {
             let iss_label = token_label(&claims.issuer).to_ascii_lowercase();
             let sub_label = token_label(&claims.subject).to_ascii_lowercase();
             let provider_json = provider.replace(" ", "_").to_ascii_lowercase();
@@ -834,7 +842,7 @@ where
 {
     let mut table = Table::new();
     table.max_column_width = max_width.unwrap_or(68);
-    table.style = TableStyle::blank();
+    table.style = crate::util::empty_table_style();
     table.separate_rows = false;
     let headline = format!("{} - {}", claims.name(), token_label(&claims.subject));
 
@@ -1102,7 +1110,7 @@ mod test {
                 assert_eq!(metadata.common.expires_in_days.unwrap(), 3);
                 assert_eq!(metadata.common.not_before_days.unwrap(), 1);
                 assert!(metadata.common.disable_keygen);
-                assert_eq!(metadata.common.output.kind, OutputKind::JSON);
+                assert_eq!(metadata.common.output.kind, OutputKind::Json);
                 assert!(metadata.keyvalue);
                 assert!(metadata.msg_broker);
                 assert!(metadata.http_server);
@@ -1175,7 +1183,7 @@ mod test {
                 assert_eq!(metadata.common.expires_in_days.unwrap(), 3);
                 assert_eq!(metadata.common.not_before_days.unwrap(), 1);
                 assert!(metadata.common.disable_keygen);
-                assert_eq!(metadata.common.output.kind, OutputKind::JSON);
+                assert_eq!(metadata.common.output.kind, OutputKind::Json);
                 assert!(metadata.keyvalue);
                 assert!(metadata.msg_broker);
                 assert!(metadata.http_server);
@@ -1254,7 +1262,7 @@ mod test {
                     NBFR.parse::<u64>().unwrap()
                 );
                 assert!(common.disable_keygen);
-                assert_eq!(common.output.kind, OutputKind::JSON);
+                assert_eq!(common.output.kind, OutputKind::Json);
                 assert_eq!(issuer.unwrap(), OPERATOR_KEY);
                 assert_eq!(subject.unwrap(), ACCOUNT_KEY);
                 let adds = additional_signing_keys.unwrap();
@@ -1331,7 +1339,7 @@ mod test {
                     NBFR.parse::<u64>().unwrap()
                 );
                 assert!(common.disable_keygen);
-                assert_eq!(common.output.kind, OutputKind::JSON);
+                assert_eq!(common.output.kind, OutputKind::Json);
                 assert_eq!(issuer.unwrap(), ACCOUNT_KEY);
                 assert_eq!(subject.unwrap(), ACTOR_KEY);
                 assert!(keyvalue);
@@ -1391,7 +1399,7 @@ mod test {
                     NBFR.parse::<u64>().unwrap()
                 );
                 assert!(common.disable_keygen);
-                assert_eq!(common.output.kind, OutputKind::JSON);
+                assert_eq!(common.output.kind, OutputKind::Json);
                 assert_eq!(issuer.unwrap(), OPERATOR_KEY);
                 let adds = additional_signing_keys.unwrap();
                 assert_eq!(adds.len(), 1);
@@ -1451,7 +1459,7 @@ mod test {
                     NBFR.parse::<u64>().unwrap()
                 );
                 assert!(common.disable_keygen);
-                assert_eq!(common.output.kind, OutputKind::JSON);
+                assert_eq!(common.output.kind, OutputKind::Json);
                 assert_eq!(issuer.unwrap(), ACCOUNT_KEY);
                 assert_eq!(subject.unwrap(), PROVIDER_KEY);
                 assert_eq!(capid, "wasmcloud:test");
