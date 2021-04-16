@@ -1,4 +1,4 @@
-name: Package
+name: Build Gitpod Docker Artifact
 on:
   push:
     branches:
