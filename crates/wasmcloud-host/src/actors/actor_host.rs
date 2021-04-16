@@ -63,6 +63,7 @@ impl Handler<GetIdentity> for ActorHost {
         let state = self.state.as_ref().unwrap();
 
         IdentityResponse {
+            image_ref: state.image_ref.clone(),
             name: state.claims.name(),
             revision: state
                 .claims
@@ -84,7 +85,8 @@ impl Handler<LiveUpdate> for ActorHost {
         if !self.state.as_ref().unwrap().can_update {
             error!(
                 "Rejecting attempt to update actor ({}) - live updates disabled",
-                msg.image_ref.unwrap_or("No OCI Ref Supplied".into())
+                msg.image_ref
+                    .unwrap_or_else(|| "No OCI Ref Supplied".into())
             );
             return Err("Attempt to live update actor denied. Runtime updates for this actor are not enabled".into());
         }

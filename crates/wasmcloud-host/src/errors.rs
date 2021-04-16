@@ -15,7 +15,7 @@ pub enum ErrorKind {
     HostCallFailure(Box<dyn StdError + Send + Sync>),
     Wascap(wascap::Error),
     Authorization(String),
-    IO(std::io::Error),
+    Io(std::io::Error),
     MiscHost(String),
     Plugin(libloading::Error),
 }
@@ -24,7 +24,7 @@ impl StdError for Error {
     fn description(&self) -> &str {
         match *self.0 {
             ErrorKind::Wapc(_) => "waPC error",
-            ErrorKind::IO(_) => "I/O error",
+            ErrorKind::Io(_) => "I/O error",
             ErrorKind::HostCallFailure(_) => "Error occurred during host call",
             ErrorKind::Wascap(_) => "Embedded JWT Failure",
             ErrorKind::Authorization(_) => "Module authorization failure",
@@ -39,7 +39,7 @@ impl StdError for Error {
             ErrorKind::HostCallFailure(_) => None,
             ErrorKind::Wascap(ref err) => Some(err),
             ErrorKind::Authorization(_) => None,
-            ErrorKind::IO(ref err) => Some(err),
+            ErrorKind::Io(ref err) => Some(err),
             ErrorKind::MiscHost(_) => None,
             ErrorKind::Plugin(ref err) => Some(err),
         }
@@ -57,7 +57,7 @@ impl fmt::Display for Error {
             ErrorKind::Authorization(ref err) => {
                 write!(f, "WebAssembly module authorization failure: {}", err)
             }
-            ErrorKind::IO(ref err) => write!(f, "I/O error: {}", err),
+            ErrorKind::Io(ref err) => write!(f, "I/O error: {}", err),
             ErrorKind::MiscHost(ref err) => write!(f, "Wasmcloud Host Error: {}", err),
             ErrorKind::Plugin(ref err) => write!(f, "Plugin error: {}", err),
         }
@@ -83,7 +83,7 @@ impl From<wapc::errors::Error> for Error {
 
 impl From<std::io::Error> for Error {
     fn from(source: std::io::Error) -> Error {
-        Error(Box::new(ErrorKind::IO(source)))
+        Error(Box::new(ErrorKind::Io(source)))
     }
 }
 

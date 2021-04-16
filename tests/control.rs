@@ -122,9 +122,8 @@ pub(crate) async fn basics() -> Result<()> {
 
     let inv = ctl_client.get_host_inventory(&hosts[0].id).await?;
     println!("Got host inventory: {:?}", inv);
-    //assert_eq!(3, inv.providers.len());
     assert_eq!(1, inv.actors.len());
-    assert_eq!(inv.actors[0].image_refs, vec![KVCOUNTER_OCI.to_string()]);
+    assert_eq!(inv.actors[0].image_ref, Some(KVCOUNTER_OCI.to_string()));
     assert_eq!(inv.actors[0].name, Some("Key Value Counter".to_string()));
     assert_eq!(inv.actors[0].revision, 2);
     assert_eq!(4, inv.labels.len()); // each host gets 3 built-in labels
@@ -188,7 +187,7 @@ pub(crate) async fn multiple_ocirefs() -> Result<()> {
     const ECHO_0_2_0: &str = "wasmcloud.azurecr.io/echo:0.2.0";
     const ECHO_0_2_1: &str = "wasmcloud.azurecr.io/echo:0.2.1";
     const ECHO_PKEY: &str = "MBCFOPM6JW2APJLXJD3Z5O4CN7CPYJ2B4FTKLJUR5YR5MITIU7HD3WD5";
-    const MAX_RETRY: u8 = 10;
+    const MAX_RETRY: u8 = 50;
 
     let nc = nats::asynk::connect("0.0.0.0:4222").await?;
     let nc3 = nats::asynk::connect("0.0.0.0:4222").await?;
@@ -215,10 +214,13 @@ pub(crate) async fn multiple_ocirefs() -> Result<()> {
 
     for _ in 0..MAX_RETRY {
         let inv = ctl_client.get_host_inventory(&hosts[0].id).await?;
-        if !inv.actors.is_empty() && inv.actors[0].image_refs.contains(&ECHO_0_2_0.to_string()) {
+        if !inv.actors.is_empty() && inv.actors[0].image_ref == Some(ECHO_0_2_0.to_string()) {
+            assert_eq!(inv.actors[0].image_ref, Some(ECHO_0_2_0.to_string()));
+            assert_eq!(inv.actors[0].name, Some("Echo".to_string()));
+            assert_eq!(inv.actors[0].revision, 1);
             break;
         }
-        actix_rt::time::sleep(Duration::from_millis(1000)).await;
+        actix_rt::time::sleep(Duration::from_millis(100)).await;
     }
     ctl_client
         .update_actor(&hid, ECHO_PKEY, "wasmcloud.azurecr.io/echo:0.2.1")
@@ -226,18 +228,19 @@ pub(crate) async fn multiple_ocirefs() -> Result<()> {
 
     for _ in 0..MAX_RETRY {
         let inv = ctl_client.get_host_inventory(&hosts[0].id).await?;
-        if !inv.actors.is_empty() && inv.actors[0].image_refs.contains(&ECHO_0_2_1.to_string()) {
+        if !inv.actors.is_empty() && inv.actors[0].image_ref == Some(ECHO_0_2_1.to_string()) {
+            assert_eq!(inv.actors[0].image_ref, Some(ECHO_0_2_1.to_string()));
+            assert_eq!(inv.actors[0].name, Some("Echo".to_string()));
+            assert_eq!(inv.actors[0].revision, 2);
             break;
         }
-        actix_rt::time::sleep(Duration::from_millis(1000)).await;
+        actix_rt::time::sleep(Duration::from_millis(100)).await;
     }
 
     // Ensure oci references exist over control interface
     let inv = ctl_client.get_host_inventory(&hosts[0].id).await?;
     assert_eq!(1, inv.actors.len());
-    assert_eq!(2, inv.actors[0].image_refs.len());
-    assert!(inv.actors[0].image_refs.contains(&ECHO_0_2_0.to_string()));
-    assert!(inv.actors[0].image_refs.contains(&ECHO_0_2_1.to_string()));
+    assert_eq!(inv.actors[0].image_ref, Some(ECHO_0_2_1.to_string()));
     assert_eq!(inv.actors[0].name, Some("Echo".to_string()));
     assert_eq!(inv.actors[0].revision, 2);
     assert_eq!(4, inv.labels.len()); // each host gets 3 built-in labels

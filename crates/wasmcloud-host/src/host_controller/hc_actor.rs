@@ -194,6 +194,22 @@ impl Handler<GetRunningActor> for HostController {
     }
 }
 
+// This returns the messaging address of the native capability host that corresponds to a -public key-
+// this handler does NOT examine image refs
+impl Handler<GetRunningProvider> for HostController {
+    type Result = Option<Addr<NativeCapabilityHost>>;
+
+    fn handle(&mut self, msg: GetRunningProvider, _ctx: &mut Context<Self>) -> Self::Result {
+        trace!("Getting running provider {}", msg.provider_id);
+        self.providers
+            .get(&ProviderKey {
+                id: msg.provider_id,
+                link_name: msg.link_name,
+            })
+            .cloned()
+    }
+}
+
 impl Handler<QueryUptime> for HostController {
     type Result = u64;
 
@@ -296,10 +312,10 @@ impl Handler<SetLabels> for HostController {
     }
 }
 
-impl Handler<GetHostID> for HostController {
+impl Handler<GetHostId> for HostController {
     type Result = String;
 
-    fn handle(&mut self, _msg: GetHostID, _ctx: &mut Context<Self>) -> Self::Result {
+    fn handle(&mut self, _msg: GetHostId, _ctx: &mut Context<Self>) -> Self::Result {
         self.kp.as_ref().unwrap().public_key()
     }
 }
@@ -541,13 +557,11 @@ impl Handler<QueryHostInventory> for HostController {
 
     fn handle(&mut self, _msg: QueryHostInventory, _ctx: &mut Context<Self>) -> Self::Result {
         let host_labels = self.host_labels.clone();
-        let lc = self.latticecache.clone().unwrap();
         let actors = self.actors.clone();
         let providers = self.providers.clone();
         let host_id = self.kp.as_ref().unwrap().public_key();
         Box::pin(
             async move {
-                let image_refs = lc.collect_oci_references().await;
                 let names: HashMap<String, IdentityResponse> = {
                     // This is semi-wasteful (incurs 1 extra hashmap lookup per entity),
                     // but I can't seem to find a good way to call the async send while inside the other loop
@@ -566,7 +580,10 @@ impl Handler<QueryHostInventory> for HostController {
                         .iter()
                         .map(|(k, _v)| ActorSummary {
                             id: k.to_string(),
-                            image_refs: collect_imagerefs(k, &image_refs),
+                            image_ref: names
+                                .get(k)
+                                .map(|v| v.image_ref.clone())
+                                .unwrap_or_else(|| None),
                             name: names.get(k).map(|v| v.name.clone()),
                             revision: names.get(k).map(|v| v.revision).unwrap_or(0),
                         })
@@ -575,7 +592,10 @@ impl Handler<QueryHostInventory> for HostController {
                     providers: providers
                         .iter()
                         .map(|(k, _v)| ProviderSummary {
-                            image_refs: collect_imagerefs(&k.id, &image_refs),
+                            image_ref: names
+                                .get(&k.id)
+                                .map(|v| v.image_ref.clone())
+                                .unwrap_or_else(|| None),
                             id: k.id.to_string(),
                             link_name: k.link_name.to_string(),
                             name: names.get(&k.id).map(|v| v.name.clone()),
@@ -588,14 +608,6 @@ impl Handler<QueryHostInventory> for HostController {
             .into_actor(self),
         )
     }
-}
-
-fn collect_imagerefs(target: &str, image_refs: &HashMap<String, String>) -> Vec<String> {
-    image_refs
-        .iter()
-        .filter(|(_ir, pk)| pk.to_string() == *target)
-        .map(|(ir, _pk)| ir.to_string())
-        .collect()
 }
 
 impl Handler<StartProvider> for HostController {

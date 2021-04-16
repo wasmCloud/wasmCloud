@@ -1,6 +1,6 @@
 use crate::{
     actors::LiveUpdate,
-    host_controller::GetRunningActor,
+    host_controller::{GetRunningActor, GetRunningProvider},
     messagebus::{
         AdvertiseLink, AdvertiseRemoveLink, GetClaims, LinkDefinition, MessageBus, QueryAllLinks,
         QueryOciReferences,
@@ -12,8 +12,8 @@ use actix::prelude::*;
 
 use crate::auth::Authorizer;
 
+use crate::capability::native_host::GetIdentity;
 use crate::control_interface::ctlactor::{ControlInterface, ControlOptions, PublishEvent};
-
 use crate::dispatch::Invocation;
 use crate::hlreg::HostLocalSystemService;
 use crate::host_controller::{
@@ -481,7 +481,7 @@ impl Host {
     }
 
     /// Retrieves the list of all actors within this host. This function call does _not_
-    /// include any actors remotely running in a connected lattice
+    /// include any actors remotely running in a connected lattice.
     pub async fn actors(&self) -> Result<Vec<String>> {
         self.ensure_started()?;
         let b = MessageBus::from_hostlocal_registry(&self.id);
@@ -519,6 +519,58 @@ impl Host {
                 _ => None,
             })
             .collect())
+    }
+
+    /// Retrieves human-friendly identity information for a provider
+    /// Return value is `(image_reference, name, revision)`
+    ///
+    /// # Arguments
+    /// * `actor_id` - The public key of the actor.
+    pub async fn get_actor_identity(
+        &self,
+        actor_id: &str,
+    ) -> Result<(Option<String>, String, i32)> {
+        self.ensure_started()?;
+        let hc = HostController::from_hostlocal_registry(&self.id);
+        if let Some(actor) = hc
+            .send(GetRunningActor {
+                actor_id: actor_id.to_string(),
+            })
+            .await?
+        {
+            let identity = actor.send(GetIdentity {}).await?;
+            Ok((identity.image_ref, identity.name, identity.revision))
+        } else {
+            Err("Actor is not running on this host".into())
+        }
+    }
+
+    /// Retrieves human-friendly identity information for a provider
+    /// Return value is `(image_reference, name, revision)`
+    ///
+    /// # Arguments
+    /// * `provider_id` - The public key of the provider.
+    /// * `link_name` - The link name used by the instance of the capability provider. If no `link_name`
+    /// is provided, the value "default" will be used
+    pub async fn get_provider_identity(
+        &self,
+        provider_id: &str,
+        link_name: Option<String>,
+    ) -> Result<(Option<String>, String, i32)> {
+        self.ensure_started()?;
+        let hc = HostController::from_hostlocal_registry(&self.id);
+        if let Some(provider) = hc
+            .send(GetRunningProvider {
+                provider_id: provider_id.to_string(),
+                link_name: link_name.unwrap_or_else(|| "default".to_string()),
+            })
+            .await?
+        {
+            let identity = provider.send(GetIdentity {}).await?;
+            Ok((identity.image_ref, identity.name, identity.revision))
+        } else {
+            Err("Actor is not running on this host".into())
+        }
     }
 
     /// Perform a raw [waPC](https://crates.io/crates/wapc)-style invocation on the given actor by supplying an operation
