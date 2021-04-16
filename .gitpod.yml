@@ -1,5 +1,4 @@
-image:
-  file: .gitpod.Dockerfile
+image: ghcr.io/jordan-rash/wasmcloud:gitpod
 tasks:  
   - name: wasmCloud
     init: cargo install --path . 
