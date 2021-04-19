@@ -40,8 +40,8 @@ jobs:
           file: '.gitpod.Dockerfile'
           push: true
           tags: |
-            ${{ secrets.AZURECR_PUSH_URL }}/${{ env.REPO_LOWER }}_gitpod:latest
-            ${{ secrets.AZURECR_PUSH_URL }}/${{ env.REPO_LOWER }}_gitpod:${{ env.SHORT_SHA }}
+            wasmcloud.azurecr.io/${{ env.REPO_LOWER }}_gitpod:latest
+            wasmcloud.azurecr.io/${{ env.REPO_LOWER }}_gitpod:${{ env.SHORT_SHA }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
       - 
