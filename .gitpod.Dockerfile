@@ -1,6 +1,5 @@
 FROM gitpod/workspace-full
 LABEL maintainer="team@wasmcloud.com"
-LABEL repo="github.com/wasmcloud/wasmcloud"
 
 USER gitpod
 
