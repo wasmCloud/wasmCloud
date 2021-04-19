@@ -72,9 +72,10 @@ wasmcloud-control-interface = { path = "crates/wasmcloud-control-interface", ver
 members = [
     "crates/wasmcloud-provider-core",
     "crates/wasmcloud-host",
+    "crates/wasmcloud-control-interface",
+    "crates/auth-nats-account",
     "samples/bench-actor",
     "samples/bencher",
-    "crates/wasmcloud-control-interface"
 ]
 
 [[bin]]
