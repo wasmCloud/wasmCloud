@@ -1,7 +1,7 @@
 [package]
 name = "wasmcloud-auth-natsaccount"
 version = "0.1.0"
-authors = ["Kevin Hoffman <alothien@gmail.com>"]
+authors = ["wasmCloud Team"]
 edition = "2018"
 description = "Authorizer plugin for wasmCloud that consults a NATS account server"
 
