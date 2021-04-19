@@ -1,11 +1,8 @@
-image:
-  file: .gitpod.Dockerfile
+image: wasmcloud.azurecr.com/wasmcloud_gitpod:latest
 tasks:  
   - name: wasmCloud
-    init: cargo install --path . 
     command: wasmcloud --version
   - name: wash
-    init: cargo install wash-cli --force
     command: wash --version
   - name: nats
     command: nats-server &

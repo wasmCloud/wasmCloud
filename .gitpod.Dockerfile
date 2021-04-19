@@ -1,8 +1,6 @@
 FROM gitpod/workspace-full
-
-# Gitpod will not rebuild dev image unless *some* change is made to this Dockerfile.
-# To force a rebuild, simply increase this counter:
-ENV TRIGGER_REBUILD 10
+LABEL maintainer="team@wasmcloud.com"
+LABEL repo="github.com/wasmcloud/wasmcloud"
 
 USER gitpod
 
@@ -26,3 +24,4 @@ ENV RUST_LLDB=/usr/bin/lldb-11
 
 RUN rustup component add clippy
 RUN rustup target add wasm32-unknown-unknown
+RUN cargo install wasmcloud wash-cli
