@@ -4,9 +4,9 @@ use crate::common::{
     await_actor_count, await_provider_count, HTTPSRV_OCI, KVCOUNTER_OCI, NATS_OCI, REDIS_OCI,
 };
 use ::wasmcloud_control_interface::Client;
+use log::info;
 use std::collections::HashMap;
 use wasmcloud_actor_http_server::{deserialize, serialize};
-use log::info;
 
 use std::io::Read;
 use std::time::Duration;
