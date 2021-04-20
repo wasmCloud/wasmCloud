@@ -1,5 +1,6 @@
 name: Build Gitpod Docker Artifact
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
