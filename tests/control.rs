@@ -6,6 +6,7 @@ use crate::common::{
 use ::wasmcloud_control_interface::Client;
 use std::collections::HashMap;
 use wasmcloud_actor_http_server::{deserialize, serialize};
+use log::info;
 
 use std::io::Read;
 use std::time::Duration;
@@ -187,7 +188,7 @@ pub(crate) async fn multiple_ocirefs() -> Result<()> {
     const ECHO_0_2_0: &str = "wasmcloud.azurecr.io/echo:0.2.0";
     const ECHO_0_2_1: &str = "wasmcloud.azurecr.io/echo:0.2.1";
     const ECHO_PKEY: &str = "MBCFOPM6JW2APJLXJD3Z5O4CN7CPYJ2B4FTKLJUR5YR5MITIU7HD3WD5";
-    const MAX_RETRY: u8 = 50;
+    const MAX_RETRY: u8 = 60;
 
     let nc = nats::asynk::connect("0.0.0.0:4222").await?;
     let nc3 = nats::asynk::connect("0.0.0.0:4222").await?;
@@ -218,9 +219,10 @@ pub(crate) async fn multiple_ocirefs() -> Result<()> {
             assert_eq!(inv.actors[0].image_ref, Some(ECHO_0_2_0.to_string()));
             assert_eq!(inv.actors[0].name, Some("Echo".to_string()));
             assert_eq!(inv.actors[0].revision, 1);
+            info!("Successfully found echo 0.2.0 in inventory");
             break;
         }
-        actix_rt::time::sleep(Duration::from_millis(100)).await;
+        actix_rt::time::sleep(Duration::from_millis(500)).await;
     }
     ctl_client
         .update_actor(&hid, ECHO_PKEY, "wasmcloud.azurecr.io/echo:0.2.1")
@@ -232,9 +234,10 @@ pub(crate) async fn multiple_ocirefs() -> Result<()> {
             assert_eq!(inv.actors[0].image_ref, Some(ECHO_0_2_1.to_string()));
             assert_eq!(inv.actors[0].name, Some("Echo".to_string()));
             assert_eq!(inv.actors[0].revision, 2);
+            info!("Successfully found echo 0.2.1 in inventory");
             break;
         }
-        actix_rt::time::sleep(Duration::from_millis(100)).await;
+        actix_rt::time::sleep(Duration::from_millis(500)).await;
     }
 
     // Ensure oci references exist over control interface
