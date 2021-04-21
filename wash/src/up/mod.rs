@@ -1093,7 +1093,9 @@ fn draw_input_panel(frame: &mut Frame<ReplTermionBackend>, state: &mut InputStat
     state.input_width = chunk.width as usize - 3;
 
     let style = if state.focused {
-        Style::default().add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD | Modifier::SLOW_BLINK)
     } else {
         Style::default()
     };
@@ -1144,7 +1146,9 @@ fn draw_output_panel(
     state.output_width = chunk.width as usize - 1;
 
     let style = if focused {
-        Style::default().add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default()
     };
@@ -1170,7 +1174,9 @@ fn draw_smart_logger(
     focused: bool,
 ) {
     let style = if focused {
-        Style::default().add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default()
     };
