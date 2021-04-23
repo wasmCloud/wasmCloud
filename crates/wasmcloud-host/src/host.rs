@@ -22,12 +22,13 @@ use crate::host_controller::{
 };
 use crate::messagebus::{QueryActors, QueryProviders};
 use crate::oci::fetch_oci_bytes;
-use crate::{ControlEvent, HostManifest, NativeCapability, WasmCloudEntity};
+use crate::{HostManifest, NativeCapability, WasmCloudEntity};
 use crate::{Result, SYSTEM_ACTOR};
 use provider_archive::ProviderArchive;
 use std::time::Duration;
 use std::{collections::HashMap, sync::RwLock};
 use wascap::prelude::{Claims, KeyPair};
+use wasmcloud_control_interface::events::ControlEvent;
 
 /// A host builder provides a convenient, fluid syntax for setting initial configuration
 /// and tuning parameters for a wasmCloud host

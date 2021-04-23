@@ -3,22 +3,27 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
-#[doc(hidden)]
+/// Contains metadata about a control event
 pub struct EventHeader {
+    /// Origin host id
     pub host_origin: String,
+    /// Timestamp in UTC seconds since the epoch
     pub timestamp: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-#[doc(hidden)]
+/// A published control event including the event itself and
+/// additional metadata
 pub struct PublishedEvent {
+    /// Event object
     pub event: ControlEvent,
+    /// Event metadata
     pub header: EventHeader,
 }
+
 /// Represents an event that may occur on the lattice control plane. All timestamps
 /// are to be considered as Unix timestamps in UTC in seconds since the epoch.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-#[doc(hidden)]
 pub enum ControlEvent {
     HostStarted,
     HostStopped,
@@ -71,6 +76,7 @@ pub enum TerminationReason {
 }
 
 impl ControlEvent {
+    /// Converts a control event into a published event with additional metadata
     pub fn into_published(self, origin: &str) -> PublishedEvent {
         let header = EventHeader {
             host_origin: origin.to_string(),

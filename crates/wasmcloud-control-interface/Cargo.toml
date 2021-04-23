@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-control-interface"
-version = "0.3.0"
+version = "0.3.1"
 authors = ["wasmCloud Team"]
 edition = "2018"
 homepage = "https://wasmcloud.dev"
@@ -17,8 +17,10 @@ categories = ["wasm", "api-bindings"]
 [dependencies]
 actix-rt = "2.1.0"
 data-encoding = "2.3.1"
+chrono = "0.4.19"
 futures = "0.3.8"
 log = "0.4.14"
+crossbeam-channel = "0.5.1"
 nats = "0.8.6"
 ring = "0.16.19"
 rmp-serde = "0.15.0"

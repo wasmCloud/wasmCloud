@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-host"
-version = "0.18.0"
+version = "0.18.1"
 authors = ["wasmCloud Team"]
 edition = "2018"
 homepage = "https://wasmcloud.dev"
@@ -44,7 +44,7 @@ wapc = "0.10.1"
 wascap = "0.6.0"
 serde_bytes = "0.11.5"
 wasmcloud-actor-keyvalue = "0.2.0"
-wasmcloud-control-interface = { path = "../wasmcloud-control-interface", version = "0.3.0" }
+wasmcloud-control-interface = { path = "../wasmcloud-control-interface", version = "0.3.1" }
 
 wasm3-provider = { version = "0.0.2", optional = true}
 wasmtime-provider = { version = "0.0.3" , optional = true}
