@@ -380,6 +380,7 @@ impl Client {
                     Ok(evt) => {
                         // If the channel is disconnected, stop sending events
                         if sender.send(evt).is_err() {
+                            let _ = block_on(sub.unsubscribe());
                             return;
                         }
                     }
