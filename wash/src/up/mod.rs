@@ -8,10 +8,8 @@ use crate::util::{convert_error, Result, WASH_CMD_INFO, WASH_LOG_INFO};
 use log::{debug, error, info, warn, LevelFilter};
 use std::collections::HashMap;
 use std::io;
-use std::sync::{
-    mpsc::{channel, Sender},
-    Arc, Mutex,
-};
+use std::path::PathBuf;
+use std::sync::{mpsc::channel, Arc, Mutex};
 use structopt::{clap::AppSettings, StructOpt};
 use termion::event::{Event, Key};
 use termion::{
@@ -21,7 +19,7 @@ use termion::{
 };
 use tui::{
     backend::TermionBackend,
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Rect},
     style::{Color, Modifier, Style},
     text::Span,
     widgets::{Block, Borders, Paragraph},
@@ -31,17 +29,17 @@ use tui_logger::*;
 use wasmcloud_control_interface::{
     ActorDescription, Claims, ClaimsList, Host, HostInventory, ProviderDescription,
 };
-use wasmcloud_host::{Actor, HostBuilder};
-
+use wasmcloud_host::{Actor, HostBuilder, HostManifest};
 mod standalone;
 use standalone::HostCommand;
+mod repl;
+use repl::*;
 
 type ReplTermionBackend =
     tui::backend::TermionBackend<AlternateScreen<RawTerminal<std::io::Stdout>>>;
 
 const CTL_NS: &str = "default";
 const WASH_PROMPT: &str = "wash> ";
-const REPL_INIT: &str = " REPL (Initializing...) ";
 const REPL_STANDALONE: &str = " REPL (Standalone) ";
 const REPL_LATTICE: &str = " REPL (Lattice connected) ";
 /// Option is unsupported for MacOS, the following byte slices correspond
@@ -87,6 +85,10 @@ pub(crate) struct UpCliCommand {
     /// Log level verbosity, valid values are `error`, `warn`, `info`, `debug`, and `trace`
     #[structopt(short = "l", long = "log-level", default_value = "info")]
     log_level: LogLevel,
+
+    /// Specifies a manifest file to apply to the host once started
+    #[structopt(long = "manifest", short = "m", parse(from_os_str))]
+    manifest: Option<PathBuf>,
 }
 
 #[derive(StructOpt, Debug, Clone, PartialEq)]
@@ -159,421 +161,6 @@ enum ReplCliCommand {
     /// Clears the REPL input history
     #[structopt(name = "clear")]
     Clear,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-struct InputState {
-    history: Vec<Vec<char>>,
-    history_cursor: usize,
-    input: Vec<char>,
-    input_cursor: usize,
-    multiline_history: u16, // amount to offset cursor for multiline inputs
-    input_width: usize,
-    focused: bool,
-    title: String,
-}
-
-impl Default for InputState {
-    fn default() -> Self {
-        InputState {
-            history: vec![],
-            history_cursor: 0,
-            input: vec![],
-            input_cursor: 0,
-            multiline_history: 0,
-            input_width: 40,
-            focused: true,
-            title: REPL_INIT.to_string(),
-        }
-    }
-}
-
-impl InputState {
-    fn cursor_location(&self) -> (u16, u16) {
-        let mut position = (0, 0);
-
-        position.0 += WASH_PROMPT.len();
-
-        for _c in 0..self.input_cursor {
-            position.0 += 1;
-            if position.0 == self.input_width {
-                position.0 = 0;
-                position.1 += 1;
-            }
-        }
-
-        // Offset Y by length of command history and multiline history
-        position.1 += self.history.len();
-        //TODO(issue #90): Multiline history is calculated relative to the current terminal width
-        //                 when a terminal is resized, it needs to be re-evaluated
-        position.1 += self.multiline_history as usize;
-
-        (position.0 as u16, position.1 as u16)
-    }
-}
-
-#[derive(Debug, Clone)]
-struct OutputState {
-    output: Vec<String>,
-    output_cursor: usize,
-    output_width: usize,
-    output_scroll: u16,
-}
-
-impl Default for OutputState {
-    fn default() -> Self {
-        OutputState {
-            output: vec![],
-            output_cursor: 0,
-            output_width: 80,
-            output_scroll: 0,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum ReplMode {
-    Standalone,
-    Lattice,
-}
-
-#[derive(Debug, Clone)]
-struct EmbeddedHost {
-    id: String,
-    mode: ReplMode,
-    op_sender: Sender<CtlCliCommand>,
-}
-
-impl EmbeddedHost {
-    fn new(id: String, mode: ReplMode, op_sender: Sender<CtlCliCommand>) -> Self {
-        EmbeddedHost {
-            id,
-            mode,
-            op_sender,
-        }
-    }
-}
-
-struct WashRepl {
-    input_state: InputState,
-    output_state: Arc<Mutex<OutputState>>,
-    tui_state: TuiWidgetState,
-    embedded_host: Option<EmbeddedHost>,
-}
-
-impl Default for WashRepl {
-    fn default() -> Self {
-        WashRepl {
-            input_state: InputState::default(),
-            output_state: Arc::new(Mutex::new(OutputState::default())),
-            tui_state: TuiWidgetState::new(),
-            embedded_host: None,
-        }
-    }
-}
-
-impl WashRepl {
-    /// Using the state of the REPL, display information in the terminal window
-    fn draw_ui(&mut self, terminal: &mut Terminal<ReplTermionBackend>) -> Result<()> {
-        terminal.draw(|frame| {
-            let main_chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Percentage(67), Constraint::Min(5)].as_ref())
-                .split(frame.size());
-
-            let io_chunks = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(40), Constraint::Min(10)])
-                .split(main_chunks[0]);
-
-            draw_input_panel(frame, &mut self.input_state, io_chunks[0]);
-            draw_output_panel(
-                frame,
-                Arc::clone(&self.output_state),
-                io_chunks[1],
-                self.input_state.focused,
-            );
-            draw_smart_logger(
-                frame,
-                main_chunks[1],
-                &self.tui_state,
-                !self.input_state.focused,
-            );
-        })?;
-        Ok(())
-    }
-
-    /// Handles key input by the user into the REPL
-    async fn handle_key_event(&mut self, key: Key) -> Result<()> {
-        match key {
-            Key::PageUp => {
-                let mut state = self.output_state.lock().unwrap();
-                if state.output_cursor > 0 && state.output_scroll > 0 {
-                    state.output_cursor -= 1;
-                }
-            }
-            Key::PageDown => {
-                let mut state = self.output_state.lock().unwrap();
-                if state.output_cursor < state.output.len() {
-                    state.output_cursor += 1;
-                }
-            }
-            Key::Left => {
-                if self.input_state.input_cursor > 0 {
-                    self.input_state.input_cursor -= 1
-                }
-            }
-            Key::Right => {
-                if self.input_state.input_cursor < self.input_state.input.len() {
-                    self.input_state.input_cursor += 1
-                }
-            }
-            Key::Up => {
-                if self.input_state.history_cursor > 0 {
-                    self.input_state.history_cursor -= 1;
-                    self.input_state.input =
-                        self.input_state.history[self.input_state.history_cursor].clone();
-                    self.input_state.input_cursor = self.input_state.input.len();
-                }
-            }
-            Key::Down => {
-                if self.input_state.history.is_empty() {
-                    return Ok(());
-                };
-                if self.input_state.history_cursor < self.input_state.history.len() - 1 {
-                    self.input_state.history_cursor += 1;
-                    self.input_state.input =
-                        self.input_state.history[self.input_state.history_cursor].clone();
-                    self.input_state.input_cursor = self.input_state.input.len();
-                } else if self.input_state.history_cursor >= self.input_state.history.len() - 1 {
-                    self.input_state.history_cursor = self.input_state.history.len();
-                    self.input_state.input.clear();
-                    self.input_state.input_cursor = 0;
-                }
-            }
-            Key::Backspace => {
-                if self.input_state.input_cursor > 0
-                    && self.input_state.input_cursor <= self.input_state.input.len()
-                {
-                    self.input_state.input_cursor -= 1;
-                    self.input_state.input.remove(self.input_state.input_cursor);
-                };
-            }
-            //TODO(issue #67): navigate left one word
-            // Key::Alt(c) if c == 'b' => {
-            //     ()
-            // }
-            //TODO(issue #67): navigate right one word
-            // Key::Alt(c) if c == 'f' => {
-            //     ()
-            // }
-            Key::Char(c) if c == '\n' => {
-                let cmd: String = self.input_state.input.iter().collect();
-                let iter = cmd.split_ascii_whitespace();
-                let cli = ReplCli::from_iter_safe(iter);
-
-                let multilines = self.input_state.input.len() / self.input_state.input_width;
-                if multilines >= 1 {
-                    self.input_state.multiline_history += multilines as u16;
-                };
-
-                self.input_state
-                    .history
-                    .push(self.input_state.input.clone());
-                self.input_state.history_cursor = self.input_state.history.len();
-                self.input_state.input.clear();
-                self.input_state.input_cursor = 0;
-
-                match cli {
-                    Ok(ReplCli { cmd }) => {
-                        use ReplCliCommand::*;
-                        match cmd {
-                            Clear => {
-                                info!(target: WASH_LOG_INFO, "Clearing REPL history");
-                                self.input_state = InputState::default();
-                            }
-                            Quit => {
-                                info!(target: WASH_CMD_INFO, "Goodbye");
-                                return Err("REPL Quit".into());
-                            }
-                            ReplCliCommand::Drain(draincmd) => {
-                                let output_state = Arc::clone(&self.output_state);
-                                std::thread::spawn(|| {
-                                    match handle_drain(draincmd, output_state) {
-                                        Ok(r) => r,
-                                        Err(e) => error!("Error handling drain: {}", e),
-                                    };
-                                });
-                            }
-                            ReplCliCommand::Claims(claimscmd) => {
-                                let output_state = Arc::clone(&self.output_state);
-                                std::thread::spawn(|| {
-                                    let rt = actix_rt::System::new();
-                                    rt.block_on(async {
-                                        match handle_claims(claimscmd, output_state).await {
-                                            Ok(r) => r,
-                                            Err(e) => error!("Error handling claims: {}", e),
-                                        };
-                                    });
-                                });
-                            }
-                            ReplCliCommand::Ctl(ctlcmd) => {
-                                // This match statement handles loading an actor from disk instead of from an OCI registry
-                                //
-                                // When a StartActor `ctl` command is sent, we send the `ctl` command to the host API for the following cases:
-                                // 1. The Host is running in standalone mode (all ctl commands are delegated to host API)
-                                // 2. The actor_ref exists as a file on disk AND:
-                                //    a. The host ID specified is the embedded host
-                                //    b. The host ID is not specified (the embedded host is a suitable host for a local actor)
-                                match (self.embedded_host.as_ref(), ctlcmd.clone()) {
-                                    (
-                                        Some(host),
-                                        CtlCliCommand::Start(StartCommand::Actor(cmd)),
-                                    ) if host.mode == ReplMode::Lattice => {
-                                        if std::fs::metadata(&cmd.actor_ref).is_ok() // File exists
-                                                && (cmd.host_id.is_none()
-                                                    || cmd.host_id.unwrap() == host.id)
-                                        {
-                                            host.op_sender.send(ctlcmd)?;
-                                            return Ok(());
-                                        }
-                                    }
-                                    (Some(host), cmd) if host.mode == ReplMode::Standalone => {
-                                        host.op_sender.send(cmd)?;
-                                        return Ok(());
-                                    }
-                                    _ => debug!("Dispatching command to lattice control interface (actor not found locally)"),
-                                }
-                                let output_state = Arc::clone(&self.output_state);
-                                std::thread::spawn(|| {
-                                    let rt = actix_rt::System::new();
-                                    rt.block_on(async {
-                                        match handle_ctl(ctlcmd, output_state).await {
-                                            Ok(r) => r,
-                                            Err(e) => error!("Error handling ctl: {}", e),
-                                        };
-                                    });
-                                });
-                            }
-                            ReplCliCommand::Keys(keyscmd) => {
-                                let output_state = Arc::clone(&self.output_state);
-                                std::thread::spawn(|| {
-                                    let rt = actix_rt::System::new();
-                                    rt.block_on(async {
-                                        match handle_keys(keyscmd, output_state).await {
-                                            Ok(r) => r,
-                                            Err(e) => error!("Error handling key: {}", e),
-                                        };
-                                    });
-                                });
-                            }
-                            ReplCliCommand::Par(parcmd) => {
-                                let output_state = Arc::clone(&self.output_state);
-                                std::thread::spawn(|| {
-                                    let rt = actix_rt::System::new();
-                                    rt.block_on(async {
-                                        match handle_par(parcmd, output_state).await {
-                                            Ok(r) => r,
-                                            Err(e) => error!("Error handling par: {}", e),
-                                        };
-                                    });
-                                });
-                            }
-                            ReplCliCommand::Reg(regcmd) => {
-                                let output_state = Arc::clone(&self.output_state);
-                                std::thread::spawn(|| {
-                                    let rt = actix_rt::System::new();
-                                    rt.block_on(async {
-                                        match handle_reg(regcmd, output_state).await {
-                                            Ok(r) => r,
-                                            Err(e) => error!("Error handling reg: {}", e),
-                                        };
-                                    });
-                                });
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        use structopt::clap::ErrorKind::*;
-                        // HelpDisplayed is the StructOpt help text error, which should be displayed as info
-                        const WASH_HELP: &str = "WASH_HELP";
-                        match e.kind {
-                            HelpDisplayed => {
-                                for line in e.message.split('\n') {
-                                    if !line.is_empty() {
-                                        info!(target: WASH_HELP, " {}", line);
-                                    } else {
-                                        info!(target: WASH_HELP, "\n");
-                                    }
-                                }
-                            }
-                            _ => {
-                                for line in e.message.split('\n') {
-                                    if !line.is_empty() {
-                                        error!(target: WASH_HELP, " {}", line)
-                                    } else {
-                                        error!(target: WASH_HELP, "\n");
-                                    }
-                                }
-                            }
-                        }
-                    }
-                };
-            }
-            Key::Char(c) => {
-                self.input_state
-                    .input
-                    .insert(self.input_state.input_cursor, c);
-                self.input_state.input_cursor += 1;
-            }
-            _ => (),
-        };
-        Ok(())
-    }
-
-    /// Handles keys sent to the tui_logger
-    async fn handle_tui_logger_key_event(&mut self, key: Key) -> Result<()> {
-        match key {
-            Key::Char(' ') => {
-                self.tui_state.transition(&TuiWidgetEvent::SpaceKey);
-            }
-            Key::Esc => {
-                self.tui_state.transition(&TuiWidgetEvent::EscapeKey);
-            }
-            Key::PageUp => {
-                self.tui_state.transition(&TuiWidgetEvent::PrevPageKey);
-            }
-            Key::PageDown => {
-                self.tui_state.transition(&TuiWidgetEvent::NextPageKey);
-            }
-            Key::Up => {
-                self.tui_state.transition(&TuiWidgetEvent::UpKey);
-            }
-            Key::Down => {
-                self.tui_state.transition(&TuiWidgetEvent::DownKey);
-            }
-            Key::Left => {
-                self.tui_state.transition(&TuiWidgetEvent::LeftKey);
-            }
-            Key::Right => {
-                self.tui_state.transition(&TuiWidgetEvent::RightKey);
-            }
-            Key::Char('+') => {
-                self.tui_state.transition(&TuiWidgetEvent::PlusKey);
-            }
-            Key::Char('-') => {
-                self.tui_state.transition(&TuiWidgetEvent::MinusKey);
-            }
-            Key::Char('h') => {
-                self.tui_state.transition(&TuiWidgetEvent::HideKey);
-            }
-            Key::Char('f') => {
-                self.tui_state.transition(&TuiWidgetEvent::FocusKey);
-            }
-            _ => (),
-        }
-        Ok(())
-    }
 }
 
 /// Launches REPL environment
@@ -656,6 +243,23 @@ async fn handle_up(cmd: UpCliCommand) -> Result<()> {
                     "Host ({}) started in namespace ({})", host.id(), CTL_NS
                 );
             };
+            // If supplied, initialize the host with a manifest
+            if let Some(pb) = cmd.manifest {
+                let err = match HostManifest::from_path(pb.clone(), true) {
+                    Ok(hm) => {
+                        host_output_sender.send("Initializing host from manifest ...".to_string()).unwrap();
+                        host.apply_manifest(hm).await.err()
+                    },
+                    Err(e) => {
+                        Some(e)
+                    }
+                };
+                if let Some(e) = err {
+                    error!("Failed to load and apply manifest: {}", e);
+                } else {
+                    host_output_sender.send("Successfully initialized host from manifest".to_string()).unwrap();
+                }
+            }
             match mode {
                 ReplMode::Lattice => {
                     loop {
@@ -1052,13 +656,13 @@ async fn handle_reg(reg_cmd: RegCliCommand, output_state: Arc<Mutex<OutputState>
 }
 
 /// Helper function to exit the alternate tui terminal without corrupting the user terminal
-fn cleanup_terminal(terminal: &mut Terminal<ReplTermionBackend>) {
+pub(crate) fn cleanup_terminal(terminal: &mut Terminal<ReplTermionBackend>) {
     terminal.show_cursor().unwrap();
     terminal.clear().unwrap();
 }
 
 /// Append a message to the output log
-fn log_to_output(state: Arc<Mutex<OutputState>>, out: String) {
+pub(crate) fn log_to_output(state: Arc<Mutex<OutputState>>, out: String) {
     // Reset output scroll to bottom
     let mut state = state.lock().unwrap();
     state.output_cursor = state.output.len();
@@ -1088,7 +692,7 @@ fn log_to_output(state: Arc<Mutex<OutputState>>, out: String) {
 }
 
 /// Helper function to delimit an input vec by newlines for proper REPL display
-fn format_input_for_display(input_vec: Vec<char>, input_width: usize) -> String {
+pub(crate) fn format_input_for_display(input_vec: Vec<char>, input_width: usize) -> String {
     let mut input = String::new();
     let mut index = WASH_PROMPT.len() - 1;
     let disp_iter = input_vec.iter();
@@ -1106,7 +710,11 @@ fn format_input_for_display(input_vec: Vec<char>, input_width: usize) -> String 
 }
 
 /// Display the wash REPL in the provided panel, automatically scroll with overflow
-fn draw_input_panel(frame: &mut Frame<ReplTermionBackend>, state: &mut InputState, chunk: Rect) {
+pub(crate) fn draw_input_panel(
+    frame: &mut Frame<ReplTermionBackend>,
+    state: &mut InputState,
+    chunk: Rect,
+) {
     let history: String = state
         .history
         .iter()
@@ -1167,7 +775,7 @@ fn draw_input_panel(frame: &mut Frame<ReplTermionBackend>, state: &mut InputStat
 }
 
 /// Display command output in the provided panel
-fn draw_output_panel(
+pub(crate) fn draw_output_panel(
     frame: &mut Frame<ReplTermionBackend>,
     state: Arc<Mutex<OutputState>>,
     chunk: Rect,
@@ -1212,7 +820,7 @@ fn draw_output_panel(
 }
 
 /// Draws the Tui smart logger widget in the provided frame
-fn draw_smart_logger(
+pub(crate) fn draw_smart_logger(
     frame: &mut Frame<ReplTermionBackend>,
     chunk: Rect,
     state: &TuiWidgetState,
@@ -1268,9 +876,20 @@ mod test {
             RPC_HOST,
             "--port",
             RPC_PORT,
+            "--manifest",
+            "mani.yaml",
         ])?;
-        let up_all_short_options =
-            UpCli::from_iter_safe(&["up", "-l", LOG_LEVEL, "-h", RPC_HOST, "-p", RPC_PORT])?;
+        let up_all_short_options = UpCli::from_iter_safe(&[
+            "up",
+            "-l",
+            LOG_LEVEL,
+            "-h",
+            RPC_HOST,
+            "-p",
+            RPC_PORT,
+            "-m",
+            "mani.yaml",
+        ])?;
 
         #[allow(unreachable_patterns)]
         match up_all_options.command {
@@ -1278,10 +897,12 @@ mod test {
                 rpc_host,
                 rpc_port,
                 log_level,
+                manifest,
             } => {
                 assert_eq!(rpc_host, RPC_HOST);
                 assert_eq!(rpc_port, RPC_PORT);
                 assert_eq!(log_level, LogLevel::Info);
+                assert_eq!(manifest.unwrap().to_str().unwrap(), "mani.yaml");
             }
             cmd => panic!("up generated other command {:?}", cmd),
         }
@@ -1292,10 +913,12 @@ mod test {
                 rpc_host,
                 rpc_port,
                 log_level,
+                manifest,
             } => {
                 assert_eq!(rpc_host, RPC_HOST);
                 assert_eq!(rpc_port, RPC_PORT);
                 assert_eq!(log_level, LogLevel::Info);
+                assert_eq!(manifest.unwrap().to_str().unwrap(), "mani.yaml");
             }
             cmd => panic!("up generated other command {:?}", cmd),
         }
