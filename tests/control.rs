@@ -12,6 +12,7 @@ use std::io::Read;
 use std::time::Duration;
 
 use wascap::prelude::KeyPair;
+use wasmcloud_control_interface::events::*;
 use wasmcloud_host::{Actor, HostBuilder};
 use wasmcloud_host::{NativeCapability, Result};
 
@@ -415,6 +416,83 @@ pub(crate) async fn auctions() -> Result<()> {
     h.stop().await;
     h2.stop().await;
     actix_rt::time::sleep(Duration::from_millis(300)).await;
+    Ok(())
+}
+
+pub(crate) async fn monitor_event_stream() -> Result<()> {
+    use crate::common::{ECHO_OCI, ECHO_PKEY};
+    use crossbeam_channel::bounded;
+
+    // Ensure we aren't using replicated cache
+    ::std::env::set_var("KVCACHE_NATS_URL", "0.0.0.0:4222");
+
+    let nc = nats::asynk::connect("0.0.0.0:4222").await?;
+    let h = HostBuilder::new()
+        .with_namespace("events")
+        .with_control_client(nc)
+        .oci_allow_latest()
+        .with_label("big-brother-watching", "always")
+        .build();
+
+    h.start().await?;
+    let hid = h.id();
+
+    let nc2 = nats::asynk::connect("0.0.0.0:4222").await?;
+    let ctl_client = Client::new(nc2, Some("events".to_string()), Duration::from_secs(20));
+
+    let events_channel = ctl_client
+        .events_receiver()
+        .await
+        .expect("Failed to get events receiver channel");
+
+    ctl_client
+        .start_actor(&hid, ECHO_OCI)
+        .await
+        .expect("Failed to start echo actor on host");
+
+    // This timeout + async block + try_recv is carefully designed
+    // as we cannot block the current thread waiting for the event, and
+    // we don't want this test to run forever.
+    actix_rt::time::timeout(Duration::from_secs(30), async {
+        loop {
+            if let Ok(PublishedEvent {
+                event: ControlEvent::ActorStarted { actor, image_ref },
+                ..
+            }) = events_channel.try_recv()
+            {
+                assert_eq!(actor, ECHO_PKEY);
+                assert_eq!(image_ref.unwrap(), ECHO_OCI);
+                return;
+            } else {
+                actix_rt::time::sleep(Duration::from_secs(1)).await;
+            }
+        }
+    })
+    .await
+    .expect("failed to receive start actor event");
+
+    ctl_client
+        .stop_actor(&hid, ECHO_PKEY)
+        .await
+        .expect("Failed to start echo actor on host");
+
+    actix_rt::time::timeout(Duration::from_secs(30), async {
+        loop {
+            if let Ok(PublishedEvent {
+                event: ControlEvent::ActorStopped { actor },
+                ..
+            }) = events_channel.try_recv()
+            {
+                assert_eq!(actor, ECHO_PKEY);
+                return;
+            } else {
+                actix_rt::time::sleep(Duration::from_secs(1)).await;
+            }
+        }
+    })
+    .await
+    .expect("failed to receive stop actor event");
+
     Ok(())
 }
 

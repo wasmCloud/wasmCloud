@@ -55,6 +55,7 @@ nkeys = "0.1.0"
 ctor = "0.1.16"
 futures = "0.3.6"
 nats = "0.8.6"
+crossbeam-channel = "0.5.1"
 provider-archive = "0.4.0"
 redis = "0.19.0"
 reqwest = { version = "0.11", features = ["json"]}
