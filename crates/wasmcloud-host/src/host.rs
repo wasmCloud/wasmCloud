@@ -40,7 +40,7 @@ pub struct HostBuilder {
     allow_latest: bool,
     allowed_insecure: Vec<String>,
     rpc_client: Option<nats::asynk::Connection>,
-    cplane_client: Option<nats::asynk::Connection>,
+    ctl_client: Option<nats::asynk::Connection>,
     allow_live_update: bool,
     lattice_cache_provider_ref: Option<String>,
     strict_update_check: bool,
@@ -63,7 +63,7 @@ impl HostBuilder {
             namespace: "default".to_string(),
             rpc_timeout: Duration::from_secs(2),
             rpc_client: None,
-            cplane_client: None,
+            ctl_client: None,
             allow_live_update: false,
             lattice_cache_provider_ref: None,
             strict_update_check: true,
@@ -103,7 +103,7 @@ impl HostBuilder {
     /// security context for both RPC and lattice control.
     pub fn with_control_client(self, client: nats::asynk::Connection) -> HostBuilder {
         HostBuilder {
-            cplane_client: Some(client),
+            ctl_client: Some(client),
             ..self
         }
     }
@@ -199,7 +199,7 @@ impl HostBuilder {
             rpc_timeout: self.rpc_timeout,
             namespace: self.namespace,
             rpc_client: self.rpc_client,
-            cplane_client: self.cplane_client,
+            ctl_client: self.ctl_client,
             allow_live_updates: self.allow_live_update,
             lattice_cache_provider_ref: self.lattice_cache_provider_ref,
             strict_update_check: self.strict_update_check,
@@ -220,7 +220,7 @@ pub struct Host {
     kp: KeyPair,
     namespace: String,
     rpc_timeout: Duration,
-    cplane_client: Option<nats::asynk::Connection>,
+    ctl_client: Option<nats::asynk::Connection>,
     rpc_client: Option<nats::asynk::Connection>,
     allow_live_updates: bool,
     lattice_cache_provider_ref: Option<String>,
@@ -278,7 +278,7 @@ impl Host {
         // Start control interface
         let cp = ControlInterface::from_hostlocal_registry(&self.kp.public_key());
         cp.send(crate::control_interface::ctlactor::Initialize {
-            client: self.cplane_client.clone(),
+            client: self.ctl_client.clone(),
             control_options: ControlOptions {
                 host_labels: self.labels.clone(),
                 oci_allow_latest: self.allow_latest,

@@ -344,6 +344,30 @@ impl Client {
     ///   client.get_host_inventory("NAEXHW...").await.unwrap();
     /// };
     /// ```
+    ///
+    /// Once you're finished with the event receiver, be sure to call `drop` with the receiver
+    /// as an argument. This closes the channel and will prevent the sender from endlessly
+    /// sending messages into the channel buffer.
+    ///
+    /// # Example
+    /// ```rust
+    /// use wasmcloud_control_interface::Client;
+    /// async {
+    ///   let nc = nats::asynk::connect("0.0.0.0:4222").await.unwrap();
+    ///   let client = Client::new(nc, None, std::time::Duration::from_millis(1000));
+    ///   let receiver = client.events_receiver().await.unwrap();
+    ///   std::thread::spawn(move || {
+    ///     if let Ok(evt) = receiver.recv() {
+    ///       println!("Event received: {:?}", evt);
+    ///       // We received our one event, now close the channel
+    ///       drop(receiver);
+    ///     } else {
+    ///       // channel is closed
+    ///       return;
+    ///     }
+    ///   });
+    /// };
+    /// ```
     pub async fn events_receiver(&self) -> Result<Receiver<PublishedEvent>> {
         let (sender, receiver) = unbounded();
         let mut sub = self
@@ -353,7 +377,12 @@ impl Client {
         std::thread::spawn(move || loop {
             if let Some(msg) = block_on(&mut sub.next()) {
                 match deserialize::<PublishedEvent>(&msg.data) {
-                    Ok(evt) => sender.send(evt).unwrap(),
+                    Ok(evt) => {
+                        // If the channel is disconnected, stop sending events
+                        if sender.send(evt).is_err() {
+                            return;
+                        }
+                    }
                     _ => error!("Object received on event stream was not a PublishedEvent"),
                 }
             }

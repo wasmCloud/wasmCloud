@@ -21,7 +21,7 @@ pub struct PublishedEvent {
     pub header: EventHeader,
 }
 
-/// Represents an event that may occur on the lattice control plane. All timestamps
+/// Represents an event that may occur on the lattice control interface. All timestamps
 /// are to be considered as Unix timestamps in UTC in seconds since the epoch.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub enum ControlEvent {

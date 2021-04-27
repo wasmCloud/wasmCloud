@@ -343,9 +343,7 @@ impl Handler<StopActor> for HostController {
                 });
                 act.actors.remove(&pk);
                 let _ = cp.do_send(PublishEvent {
-                    event: ControlEvent::ActorStopped {
-                        actor: pk.to_string(),
-                    },
+                    event: ControlEvent::ActorStopped { actor: pk },
                 });
             }),
         )

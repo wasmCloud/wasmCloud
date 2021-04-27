@@ -73,8 +73,8 @@ pub async fn gen_kvcounter_host(
     if let Some(rpc) = lattice_rpc {
         h = h.with_rpc_client(rpc);
     }
-    if let Some(cplane) = lattice_control {
-        h = h.with_control_client(cplane);
+    if let Some(ctl) = lattice_control {
+        h = h.with_control_client(ctl);
     }
     let h = h.build();
     h.start().await?;
