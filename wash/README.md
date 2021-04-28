@@ -19,7 +19,7 @@
 ```
 cargo install wash-cli
 ```
-### Linux
+### Linux (deb/rpm + apt)
 ```
 # Debian / Ubuntu (deb)
 curl -s https://packagecloud.io/install/repositories/wasmcloud/core/script.deb.sh | sudo bash
@@ -28,10 +28,14 @@ curl -s https://packagecloud.io/install/repositories/wasmcloud/core/script.rpm.s
 
 sudo apt install wasmcloud wash
 ```
-### MacOS
+### MacOS (brew)
 ```
 brew tap wasmcloud/wasmcloud
 brew install wasmcloud wash
+```
+### NixOS
+```
+nix run github:wasmCloud/wash
 ```
 
 ## Using wash
