@@ -7,7 +7,7 @@ use std::io::prelude::*;
 /// Running create and insert tests together
 fn integration_create_and_insert() {
     const SUBFOLDER: &str = "par_create_insert";
-    const ISSUER: &str = "SAAFOASCMZ7K64AS36YHVOOZ5B5JOZBP6T6ZHKXXLBDLZLZYT5X4PMI7SQ";
+    const ISSUER: &str = "SAACTTUPKR55VUWUDK7GJ5SU5KGED455FR7BDO46RUVOTHUWKBLECLH2UU";
     const SUBJECT: &str = "SVAOZUSBWWFL65P255DOHIETPTXUQMM5ETLSYPITI5G4K4HI6M2CDAPWAU";
     let test_dir = test_dir_with_subfolder(SUBFOLDER);
     let pargz = test_dir_file(SUBFOLDER, "test.par.gz");
@@ -18,6 +18,7 @@ fn integration_create_and_insert() {
     remove_dir_all(test_dir).unwrap();
 }
 
+//TODO: test for issuer too
 /// Tests creation of a provider archive file with an initial binary
 fn integration_par_create(issuer: &str, subject: &str, archive: &str) {
     const ARCH: &str = "x86_64-linux";
@@ -70,8 +71,12 @@ fn integration_par_create(issuer: &str, subject: &str, archive: &str) {
     let output = output_to_string(inspect_created);
     assert!(output.contains("\"capability_contract_id\":\"wasmcloud:testing\""));
     assert!(output.contains("\"name\":\"Test parJEEzy\""));
-    assert!(output
-        .contains("\"public_key\":\"VBM5JMFOVUJDHGTOJSPUJ33ZGHCRCJ3LYHUJ3HND5ZMRVORYCMAVPZQF\""));
+    assert!(
+        output.contains("\"service\":\"VBM5JMFOVUJDHGTOJSPUJ33ZGHCRCJ3LYHUJ3HND5ZMRVORYCMAVPZQF\"")
+    );
+    assert!(
+        output.contains("\"issuer\":\"AA7R5L74E45BJ4XVUYTELQ56P5VCOSPOAA474L7QWH4ZAILLKTZFWYYW\"")
+    );
     assert!(output.contains("\"rev\":\"42\""));
     assert!(output.contains("\"targets\":[\"x86_64-linux\"]"));
     assert!(output.contains("\"vendor\":\"TestRunner\""));
@@ -130,8 +135,12 @@ fn integration_par_insert(issuer: &str, subject: &str, archive: &str) {
     let output = output_to_string(inspect_after_bin1);
     assert!(output.contains("\"capability_contract_id\":\"wasmcloud:testing\""));
     assert!(output.contains("\"name\":\"Test parJEEzy\""));
-    assert!(output
-        .contains("\"public_key\":\"VBM5JMFOVUJDHGTOJSPUJ33ZGHCRCJ3LYHUJ3HND5ZMRVORYCMAVPZQF\""));
+    assert!(
+        output.contains("\"service\":\"VBM5JMFOVUJDHGTOJSPUJ33ZGHCRCJ3LYHUJ3HND5ZMRVORYCMAVPZQF\"")
+    );
+    assert!(
+        output.contains("\"issuer\":\"AA7R5L74E45BJ4XVUYTELQ56P5VCOSPOAA474L7QWH4ZAILLKTZFWYYW\"")
+    );
     assert!(output.contains("\"rev\":\"42\""));
     assert!(output.contains("\"targets\":["));
     assert!(output.contains("\"x86_64-linux\""));
@@ -174,8 +183,12 @@ fn integration_par_insert(issuer: &str, subject: &str, archive: &str) {
     let output = output_to_string(inspect_after_bin2);
     assert!(output.contains("\"capability_contract_id\":\"wasmcloud:testing\""));
     assert!(output.contains("\"name\":\"Test parJEEzy\""));
-    assert!(output
-        .contains("\"public_key\":\"VBM5JMFOVUJDHGTOJSPUJ33ZGHCRCJ3LYHUJ3HND5ZMRVORYCMAVPZQF\""));
+    assert!(
+        output.contains("\"service\":\"VBM5JMFOVUJDHGTOJSPUJ33ZGHCRCJ3LYHUJ3HND5ZMRVORYCMAVPZQF\"")
+    );
+    assert!(
+        output.contains("\"issuer\":\"AA7R5L74E45BJ4XVUYTELQ56P5VCOSPOAA474L7QWH4ZAILLKTZFWYYW\"")
+    );
     assert!(output.contains("\"rev\":\"42\""));
     assert!(output.contains("\"targets\":["));
     assert!(output.contains("\"x86_64-linux\""));

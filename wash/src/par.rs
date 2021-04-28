@@ -310,7 +310,8 @@ pub(crate) async fn handle_inspect(cmd: InspectCommand) -> Result<String> {
             format!(
                 "{}",
                 json!({"name": metadata.name.unwrap(),
-                    "public_key": claims.subject,
+                    "issuer": claims.issuer,
+                    "service": claims.subject,
                     "capability_contract_id": metadata.capid,
                     "vendor": metadata.vendor,
                     "ver": friendly_ver,
@@ -326,6 +327,7 @@ pub(crate) async fn handle_inspect(cmd: InspectCommand) -> Result<String> {
             let mut table = Table::new();
             table.max_column_width = 68;
             table.style = crate::util::empty_table_style();
+            table.separate_rows = false;
 
             table.add_row(Row::new(vec![TableCell::new_with_alignment(
                 format!("{} - Provider Archive", metadata.name.unwrap()),
@@ -334,7 +336,11 @@ pub(crate) async fn handle_inspect(cmd: InspectCommand) -> Result<String> {
             )]));
 
             table.add_row(Row::new(vec![
-                TableCell::new("Public Key"),
+                TableCell::new("Account"),
+                TableCell::new_with_alignment(claims.issuer, 1, Alignment::Right),
+            ]));
+            table.add_row(Row::new(vec![
+                TableCell::new("Service"),
                 TableCell::new_with_alignment(claims.subject, 1, Alignment::Right),
             ]));
             table.add_row(Row::new(vec![
