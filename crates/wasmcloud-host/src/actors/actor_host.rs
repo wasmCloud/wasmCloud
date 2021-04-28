@@ -12,13 +12,14 @@ use crate::hlreg::HostLocalSystemService;
 use crate::host_controller::{HostController, PutOciReference};
 use crate::messagebus::{AdvertiseClaims, MessageBus, Subscribe};
 use crate::middleware::{run_actor_post_invoke, run_actor_pre_invoke, Middleware};
-use crate::{ControlEvent, Result};
+use crate::Result;
 use actix::prelude::*;
 use futures::executor::block_on;
 use log::info;
 use wapc::WapcHost;
 use wascap::jwt::TokenValidation;
 use wascap::prelude::{Claims, KeyPair};
+use wasmcloud_control_interface::events::ControlEvent;
 
 #[derive(Default)]
 pub(crate) struct ActorHost {

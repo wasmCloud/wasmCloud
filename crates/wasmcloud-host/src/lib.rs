@@ -137,7 +137,6 @@ mod oci;
 #[macro_use]
 extern crate log;
 
-pub use crate::control_interface::events::{ControlEvent, EventHeader, PublishedEvent};
 pub use actors::WasmCloudActor;
 pub use auth::{Authorizer, CloneAuthorizer};
 pub use capability::native::NativeCapability;

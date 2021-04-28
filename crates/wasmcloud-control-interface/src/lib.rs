@@ -1,11 +1,18 @@
 pub mod broker;
+pub mod events;
 mod generated;
 mod inv;
 mod sub_stream;
 
+use crate::events::PublishedEvent;
 pub use crate::generated::ctliface::*;
+use crossbeam_channel::{unbounded, Receiver};
+use futures::executor::block_on;
+use futures::stream::StreamExt;
 use inv::Entity;
 pub use inv::{Invocation, InvocationResponse};
+use log::error;
+use nats::asynk::Connection;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, time::Duration};
 use sub_stream::SubscriptionStream;
@@ -13,8 +20,9 @@ use wascap::prelude::KeyPair;
 
 type Result<T> = ::std::result::Result<T, Box<dyn ::std::error::Error + Send + Sync>>;
 
+/// Lattice control interface client
 pub struct Client {
-    nc: nats::asynk::Connection,
+    nc: Connection,
     nsprefix: Option<String>,
     timeout: Duration,
     key: KeyPair,
@@ -22,7 +30,7 @@ pub struct Client {
 
 impl Client {
     /// Creates a new lattice control interface client
-    pub fn new(nc: nats::asynk::Connection, nsprefix: Option<String>, timeout: Duration) -> Self {
+    pub fn new(nc: Connection, nsprefix: Option<String>, timeout: Duration) -> Self {
         Client {
             nc,
             nsprefix,
@@ -30,7 +38,6 @@ impl Client {
             key: KeyPair::new_server(),
         }
     }
-
     /// Queries the lattice for all responsive hosts, waiting for the full period specified by _timeout_.
     pub async fn get_hosts(&self, timeout: Duration) -> Result<Vec<Host>> {
         let subject = broker::queries::hosts(&self.nsprefix);
@@ -204,7 +211,7 @@ impl Client {
     /// occurs **before** the new bytes are downloaded. Live-updating an actor can take a long
     /// time and control clients cannot block waiting for a reply that could come several seconds
     /// later. If you need to verify that the actor has been updated, you will want to set up a
-    /// listener for the appropriate **ControlEvent** which will be published on the control events
+    /// listener for the appropriate **PublishedEvent** which will be published on the control events
     /// channel in JSON
     pub async fn update_actor(
         &self,
@@ -311,6 +318,77 @@ impl Client {
             }
             Err(e) => Err(format!("Did not receive claims from lattice: {}", e).into()),
         }
+    }
+
+    /// Returns the receiver end of a channel that subscribes to the lattice control event stream.
+    /// Any [`PublishedEvent`](struct@PublishedEvent)s that are published after this channel is created
+    /// will be added to the receiver channel's buffer, which can be observed or handled if needed.
+    /// See the example for how you could use this receiver to handle events.
+    ///
+    /// # Example
+    /// ```rust
+    /// use wasmcloud_control_interface::Client;
+    /// async {
+    ///   let nc = nats::asynk::connect("0.0.0.0:4222").await.unwrap();
+    ///   let client = Client::new(nc, None, std::time::Duration::from_millis(1000));
+    ///   let receiver = client.events_receiver().await.unwrap();
+    ///   std::thread::spawn(move || loop {
+    ///     if let Ok(evt) = receiver.recv() {
+    ///       println!("Event received: {:?}", evt);
+    ///     } else {
+    ///       // channel is closed
+    ///       break;
+    ///     }
+    ///   });
+    ///   // perform other operations on client
+    ///   client.get_host_inventory("NAEXHW...").await.unwrap();
+    /// };
+    /// ```
+    ///
+    /// Once you're finished with the event receiver, be sure to call `drop` with the receiver
+    /// as an argument. This closes the channel and will prevent the sender from endlessly
+    /// sending messages into the channel buffer.
+    ///
+    /// # Example
+    /// ```rust
+    /// use wasmcloud_control_interface::Client;
+    /// async {
+    ///   let nc = nats::asynk::connect("0.0.0.0:4222").await.unwrap();
+    ///   let client = Client::new(nc, None, std::time::Duration::from_millis(1000));
+    ///   let receiver = client.events_receiver().await.unwrap();
+    ///   std::thread::spawn(move || {
+    ///     if let Ok(evt) = receiver.recv() {
+    ///       println!("Event received: {:?}", evt);
+    ///       // We received our one event, now close the channel
+    ///       drop(receiver);
+    ///     } else {
+    ///       // channel is closed
+    ///       return;
+    ///     }
+    ///   });
+    /// };
+    /// ```
+    pub async fn events_receiver(&self) -> Result<Receiver<PublishedEvent>> {
+        let (sender, receiver) = unbounded();
+        let mut sub = self
+            .nc
+            .subscribe(&broker::control_event(&self.nsprefix))
+            .await?;
+        std::thread::spawn(move || loop {
+            if let Some(msg) = block_on(&mut sub.next()) {
+                match deserialize::<PublishedEvent>(&msg.data) {
+                    Ok(evt) => {
+                        // If the channel is disconnected, stop sending events
+                        if sender.send(evt).is_err() {
+                            let _ = block_on(sub.unsubscribe());
+                            return;
+                        }
+                    }
+                    _ => error!("Object received on event stream was not a PublishedEvent"),
+                }
+            }
+        });
+        Ok(receiver)
     }
 }
 

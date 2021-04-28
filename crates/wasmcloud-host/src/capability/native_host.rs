@@ -7,11 +7,12 @@ use crate::dispatch::{Invocation, InvocationResponse, ProviderDispatcher, WasmCl
 use crate::hlreg::HostLocalSystemService;
 use crate::messagebus::{EnforceLocalProviderLinks, MessageBus, Subscribe};
 use crate::middleware::{run_capability_post_invoke, run_capability_pre_invoke, Middleware};
-use crate::{ControlEvent, Result};
+use crate::Result;
 use actix::prelude::*;
 use futures::executor::block_on;
 use libloading::{Library, Symbol};
 use wascap::prelude::KeyPair;
+use wasmcloud_control_interface::events::ControlEvent;
 use wasmcloud_provider_core::capabilities::CapabilityProvider;
 
 #[derive(Message)]

@@ -2,8 +2,10 @@
 //!
 
 use crate::deserialize;
-use futures::StreamExt;
+pub use crate::events::ControlEvent;
+use futures::stream::StreamExt;
 use log::error;
+use nats::asynk::Subscription;
 use serde::de::DeserializeOwned;
 use std::time::{Duration, Instant};
 
@@ -23,12 +25,12 @@ pub enum SubscriptionNextResult<T: serde::de::DeserializeOwned> {
 /// Stream wrapper for nats subscription
 #[doc(hidden)]
 pub struct SubscriptionStream {
-    sub: nats::asynk::Subscription,
+    sub: Subscription,
 }
 
 impl SubscriptionStream {
     /// Construct stream wrapper for nats async subscription
-    pub fn new(sub: nats::asynk::Subscription) -> SubscriptionStream {
+    pub fn new(sub: Subscription) -> SubscriptionStream {
         SubscriptionStream { sub }
     }
 

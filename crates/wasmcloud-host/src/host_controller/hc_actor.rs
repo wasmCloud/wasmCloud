@@ -1,21 +1,21 @@
 use super::*;
 use crate::capability::extras::ExtrasCapabilityProvider;
 use crate::capability::native_host::NativeCapabilityHost;
+use crate::control_interface::ctlactor::{ControlInterface, PublishEvent};
 use crate::dispatch::Invocation;
 use crate::hlreg::HostLocalSystemService;
+use crate::messagebus::latticecache_client::{CACHE_CONTRACT_ID, CACHE_PROVIDER_LINK_NAME};
+use crate::messagebus::utils::{generate_link_invocation_and_call, system_actor_claims};
 use crate::messagebus::{GetClaims, LatticeCacheClient, MessageBus, SetCacheClient, Unsubscribe};
 use crate::middleware::Middleware;
 use crate::{actors::ActorHost, capability::native_host::GetIdentity};
 use crate::{auth::Authorizer, capability::native_host::IdentityResponse};
 use crate::{NativeCapability, Result, WasmCloudEntity, SYSTEM_ACTOR};
 use std::collections::HashMap;
-
 use std::time::Instant;
-
-use crate::messagebus::latticecache_client::{CACHE_CONTRACT_ID, CACHE_PROVIDER_LINK_NAME};
-use crate::messagebus::utils::{generate_link_invocation_and_call, system_actor_claims};
 use wascap::jwt::Claims;
 use wascap::prelude::KeyPair;
+use wasmcloud_control_interface::events::ControlEvent;
 use wasmcloud_nats_kvcache::NatsReplicatedKVProvider;
 
 #[derive(Debug, PartialEq, Clone, Eq, Hash)]
@@ -327,6 +327,7 @@ impl Handler<StopActor> for HostController {
         trace!("Stopping actor {} per request.", msg.actor_ref);
         let lc = self.latticecache.clone().unwrap();
         let b = MessageBus::from_hostlocal_registry(&self.kp.as_ref().unwrap().public_key());
+        let cp = ControlInterface::from_hostlocal_registry(&self.kp.as_ref().unwrap().public_key());
         Box::pin(
             async move {
                 if let Some(pk) = lc.lookup_oci_mapping(&msg.actor_ref).await.unwrap_or(None) {
@@ -341,6 +342,9 @@ impl Handler<StopActor> for HostController {
                     interest: WasmCloudEntity::Actor(pk.to_string()),
                 });
                 act.actors.remove(&pk);
+                let _ = cp.do_send(PublishEvent {
+                    event: ControlEvent::ActorStopped { actor: pk },
+                });
             }),
         )
     }

@@ -1,9 +1,9 @@
 use crate::hlreg::HostLocalSystemService;
 use crate::messagebus::{NatsMessage, NatsSubscriber};
-use crate::ControlEvent;
 use actix::prelude::*;
 use std::collections::HashMap;
 use wascap::prelude::KeyPair;
+use wasmcloud_control_interface::events::ControlEvent;
 
 #[derive(Default)]
 pub struct ControlInterface {

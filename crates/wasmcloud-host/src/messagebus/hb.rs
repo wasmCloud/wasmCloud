@@ -1,15 +1,15 @@
 use super::MessageBus;
 use crate::control_interface::ctlactor::{ControlInterface, PublishEvent};
-use crate::control_interface::events::RunState;
 use crate::generated::core::{deserialize, serialize, HealthRequest, HealthResponse};
 use crate::hlreg::HostLocalSystemService;
 use crate::messagebus::handlers::OP_HEALTH_REQUEST;
 use crate::Result;
-use crate::{ControlEvent, Invocation, WasmCloudEntity, SYSTEM_ACTOR};
+use crate::{Invocation, WasmCloudEntity, SYSTEM_ACTOR};
 use actix::prelude::*;
 use std::collections::HashMap;
 use std::time::Duration;
 use wascap::prelude::KeyPair;
+use wasmcloud_control_interface::events::{ControlEvent, RunState};
 
 const HEARTBEAT_INTERVAL_ENV_VAR: &str = "HEARTBEAT_INTERVAL_S";
 const DEFAULT_HEARTBEAT_INTERVAL: u16 = 30;
