@@ -3363,7 +3363,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud"
-version = "0.18.0"
+version = "0.18.1"
 dependencies = [
  "actix-rt",
  "anyhow",
@@ -3487,7 +3487,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-host"
-version = "0.18.0"
+version = "0.18.1"
 dependencies = [
  "actix",
  "actix-rt",
