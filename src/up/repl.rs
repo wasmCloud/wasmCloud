@@ -19,9 +19,10 @@ const REPL_INIT: &str = " REPL (Initializing...) ";
 pub(crate) struct InputState {
     pub(crate) history: Vec<Vec<char>>,
     pub(crate) history_cursor: usize,
+    pub(crate) history_offset: u16,
     pub(crate) input: Vec<char>,
     pub(crate) input_cursor: usize,
-    pub(crate) multiline_history: u16, // amount to offset cursor for multiline inputs
+    pub(crate) prev_width: usize,
     pub(crate) input_width: usize,
     pub(crate) focused: bool,
     pub(crate) title: String,
@@ -32,9 +33,10 @@ impl Default for InputState {
         InputState {
             history: vec![],
             history_cursor: 0,
+            history_offset: 0,
             input: vec![],
             input_cursor: 0,
-            multiline_history: 0,
+            prev_width: 40, // Used to indicate resizes
             input_width: 40,
             focused: true,
             title: REPL_INIT.to_string(),
@@ -43,7 +45,7 @@ impl Default for InputState {
 }
 
 impl InputState {
-    pub(crate) fn cursor_location(&self) -> (u16, u16) {
+    pub(crate) fn cursor_location(&mut self) -> (u16, u16) {
         let mut position = (0, 0);
 
         position.0 += WASH_PROMPT.len();
@@ -57,12 +59,33 @@ impl InputState {
         }
 
         // Offset Y by length of command history and multiline history
-        position.1 += self.history.len();
-        //TODO(issue #90): Multiline history is calculated relative to the current terminal width
-        //                 when a terminal is resized, it needs to be re-evaluated
-        position.1 += self.multiline_history as usize;
+        position.1 += self.vertical_history_offset();
 
         (position.0 as u16, position.1 as u16)
+    }
+
+    /// Computes vertical offset from command history, storing the
+    /// result in `history_offset` to avoid unnecessary future computation
+    pub(crate) fn vertical_history_offset(&mut self) -> u16 {
+        if self.prev_width == self.input_width {
+            return self.history_offset;
+        }
+        // Recompute history_offset
+        self.prev_width = self.input_width;
+        self.history_offset = self
+            .history
+            .iter()
+            .map(|h| {
+                let input_length = h.len() + WASH_PROMPT.len();
+                let multilines = input_length / self.input_width;
+                if multilines >= 1 && input_length != self.input_width {
+                    1_u16 + multilines as u16
+                } else {
+                    1_u16
+                }
+            })
+            .sum();
+        self.history_offset
     }
 }
 
@@ -225,11 +248,6 @@ impl WashRepl {
                 let cmd: String = self.input_state.input.iter().collect();
                 let iter = cmd.split_ascii_whitespace();
                 let cli = ReplCli::from_iter_safe(iter);
-
-                let multilines = self.input_state.input.len() / self.input_state.input_width;
-                if multilines >= 1 {
-                    self.input_state.multiline_history += multilines as u16;
-                };
 
                 self.input_state
                     .history

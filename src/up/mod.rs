@@ -736,9 +736,9 @@ pub(crate) fn draw_input_panel(
     );
 
     // 5 is the offset from the bottom of the chunk (3) plus 2 lines for buffer
-    let scroll_offset = if state.history.len() as u16 + state.multiline_history >= chunk.height - 3
-    {
-        state.multiline_history + state.history.len() as u16 + 5 - chunk.height
+    let hist_offset = state.vertical_history_offset();
+    let scroll_offset = if hist_offset >= chunk.height - 3 {
+        hist_offset + 5 - chunk.height
     } else {
         0
     };
@@ -768,10 +768,14 @@ pub(crate) fn draw_input_panel(
     let input_cursor = state.cursor_location();
 
     // Draw cursor on screen
-    frame.set_cursor(
-        chunk.x + 1 + input_cursor.0,
-        chunk.y + 1 + input_cursor.1 - scroll_offset,
-    )
+    let x_pos = chunk.x + 1 + input_cursor.0;
+    let mut y_pos = chunk.y + 1 + input_cursor.1;
+    if scroll_offset > y_pos {
+        // This can happen when resizing, the y position updates before the scroll.
+        // Since this would normally create a negative number, make y offset 0 instead.
+        y_pos = scroll_offset;
+    }
+    frame.set_cursor(x_pos, y_pos - scroll_offset)
 }
 
 /// Display command output in the provided panel
