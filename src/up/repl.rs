@@ -22,7 +22,6 @@ pub(crate) struct InputState {
     pub(crate) history_offset: u16,
     pub(crate) input: Vec<char>,
     pub(crate) input_cursor: usize,
-    pub(crate) prev_width: usize,
     pub(crate) input_width: usize,
     pub(crate) focused: bool,
     pub(crate) title: String,
@@ -36,7 +35,6 @@ impl Default for InputState {
             history_offset: 0,
             input: vec![],
             input_cursor: 0,
-            prev_width: 40, // Used to indicate resizes
             input_width: 40,
             focused: true,
             title: REPL_INIT.to_string(),
@@ -64,14 +62,8 @@ impl InputState {
         (position.0 as u16, position.1 as u16)
     }
 
-    /// Computes vertical offset from command history, storing the
-    /// result in `history_offset` to avoid unnecessary future computation
+    /// Computes vertical offset from command history
     pub(crate) fn vertical_history_offset(&mut self) -> u16 {
-        if self.prev_width == self.input_width {
-            return self.history_offset;
-        }
-        // Recompute history_offset
-        self.prev_width = self.input_width;
         self.history_offset = self
             .history
             .iter()
