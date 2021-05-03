@@ -3367,6 +3367,7 @@ version = "0.18.1"
 dependencies = [
  "actix-rt",
  "anyhow",
+ "crossbeam-channel",
  "ctor",
  "env_logger 0.8.3",
  "futures",
@@ -3470,9 +3471,11 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-control-interface"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "actix-rt",
+ "chrono",
+ "crossbeam-channel",
  "data-encoding",
  "futures",
  "log",
