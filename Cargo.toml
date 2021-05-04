@@ -75,6 +75,7 @@ members = [
     "crates/wasmcloud-host",
     "crates/wasmcloud-control-interface",
     "crates/auth-nats-account",
+    "crates/provider-archive",
     "samples/bench-actor",
     "samples/bencher",
 ]

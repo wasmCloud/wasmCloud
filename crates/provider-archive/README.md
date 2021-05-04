@@ -1,4 +1,4 @@
-![Rust build](https://github.com/wascc/provider-archive/workflows/Rust/badge.svg)
+![Rust build](https://github.com/wasmcloud/wasmcloud/workflows/PROVIDER-ARCHIVE/badge.svg)
 [![crates.io](https://img.shields.io/crates/v/provider-archive.svg)](https://crates.io/crates/provider-archive)
 ![license](https://img.shields.io/crates/l/provider-archive.svg)&nbsp;
 [![documentation](https://docs.rs/provider-archive/badge.svg)](https://docs.rs/provider-archive)
@@ -29,7 +29,7 @@ The following is an example of the contents of a provider archive file:
 Until we gain the ability to create network-capable WASI modules that can support robust capability provider functionality (like DB clients, web servers, raw TCP or UDP control, etc), Gantry will be storing and retrieving **par** files for each capability provider.
 
 ## Appendix A - Architecture values
-The following is a list of some of the possible architectures (_NOTE_ not all of these architectures may be supported by the waSCC host):
+The following is a list of some of the possible architectures (_NOTE_ not all of these architectures may be supported by the wasmCloud host):
 
 * x86
 * x86_64
@@ -39,7 +39,7 @@ The following is a list of some of the possible architectures (_NOTE_ not all of
 * mips64
 
 ## Appendix B - Operating System Values
-The following is a list of some of the possible operating systems (_NOTE_ not all of these operating systems may be supported by the waSCC host):
+The following is a list of some of the possible operating systems (_NOTE_ not all of these operating systems may be supported by the wasmCloud host):
 
 * linux
 * macos
@@ -54,7 +54,7 @@ The following is a list of the custom claims that will appear in the `wascap` se
 * `hashes` - This is a map where the key is an `[arch]-[os]` string and the value is the hash for that particular file. Having these hashes inside the signed token means we can verify that the plugin binaries have not been tampered with.
 * `name` - Friendly name of the capability provider.
 * `vendor` - A vendor string helping to identify the provider (e.g. `Redis` or `Cassandra` or `PostgreSQL` etc). This is an information-only field and is not used as any kind of key or unique identifier.
-* `capid` - The capability contract ID (e.g. `wascc:messaging` or `wascc:keyvalue`, etc). Note that the plugin itself is required to expose this information to the runtime when it receives the "query descriptor" message. This value is to allow processes other than the waSCC runtime (e.g. Gantry) to interrogate the core metadata.
+* `capid` - The capability contract ID (e.g. `wasmcloud:messaging` or `wasmcloud:keyvalue`, etc). Note that the plugin itself is required to expose this information to the runtime when it receives the "query descriptor" message. This value is to allow processes other than the wasmCloud runtime to interrogate the core metadata.
 * `version` - Friendly version string
 * `revision` - A monotonically increasing revision value. This value will be used to retrieve / store version-specific files.
 
