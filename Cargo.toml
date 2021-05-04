@@ -1,20 +1,84 @@
 [package]
-name = "provider-archive"
-version = "0.4.0"
-authors = ["Kevin Hoffman <alothien@gmail.com>"]
+name = "wasmcloud"
+version = "0.18.1"
+authors = ["wasmcloud Team"]
 edition = "2018"
-description = "Library for reading and writing wasmCloud capability provider archive files"
-license = "Apache-2.0"
-homepage = "https://github.com/wasmcloud/provider-archive"
-documentation = "https://docs.rs/provider-archive"
+default-run = "wasmcloud"
+license-file = "LICENSE"
+description = "A secure, distributed, WebAssembly actor model runtime for the cloud, edge, and everything in between"
+repository = "https://github.com/wasmcloud/wasmcloud"
+documentation = "https://wasmcloud.dev"
 readme = "README.md"
-keywords = ["jwt", "zip", "archive", "security", "wasmcloud"]
-categories = ["cryptography", "authentication", "wasm"]
+keywords = [
+    "wasm",
+    "wasi",
+    "wasmcloud",
+    "webassembly",
+    "actor",
+]
+categories = [
+    "wasm", "api-bindings", "command-line-utilities"
+]
+exclude = [
+    "tests/*",
+    "tools/*",
+    "demos/*",
+    ".github/*",
+    ".gitignore"
+]
+autotests = false
 
+[features]
+default = ["wasm3"]
+wasmtime = ["wasmcloud-host/wasmtime"]
+wasm3 = ["wasmcloud-host/wasm3"]
+
+[[test]]
+name = "integration"
+path = "tests/lib.rs"
+
+[badges]
+maintenance = { status = "actively-developed" }
 
 [dependencies]
+wapc = { version = "0.10.1" }
+log = "0.4.11"
+env_logger = "0.8.2"
+anyhow = "1.0.34"
+actix-rt = "2.1.0"
+wasmcloud-host = { path = "crates/wasmcloud-host", version = "0.18.1", default-features = false }
+nats = "0.8.6"
+structopt = "0.3.21"
+nkeys = "0.1.0"
+
+[dev-dependencies]
+ctor = "0.1.16"
+futures = "0.3.6"
+nats = "0.8.6"
+crossbeam-channel = "0.5.1"
+provider-archive = "0.4.0"
+redis = "0.19.0"
+reqwest = { version = "0.11", features = ["json"]}
+rmp-serde = "0.15.4"
+serde = {version = "1.0.117", features = ["derive"] }
+serde_bytes = "0.11.5"
+serde_json = "1.0.59"
+uuid = { version = "0.8", features = ["serde", "v4"] }
 wascap = "0.6.0"
-data-encoding = "2.3.1"
-ring = "0.16"
-tar = "0.4.30"
-flate2 = "1.0.19"
+wasmcloud-actor-extras = "0.1.1"
+wasmcloud-actor-http-server = "0.1.1"
+wasmcloud-control-interface = { path = "crates/wasmcloud-control-interface", version = "0.3.1" }
+
+[workspace]
+members = [
+    "crates/wasmcloud-provider-core",
+    "crates/wasmcloud-host",
+    "crates/wasmcloud-control-interface",
+    "crates/auth-nats-account",
+    "samples/bench-actor",
+    "samples/bencher",
+]
+
+[[bin]]
+name = "wasmcloud"
+path = "src/wasmcloud.rs"

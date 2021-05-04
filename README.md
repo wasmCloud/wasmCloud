@@ -1,60 +1,29 @@
-![Rust build](https://github.com/wascc/provider-archive/workflows/Rust/badge.svg)
-[![crates.io](https://img.shields.io/crates/v/provider-archive.svg)](https://crates.io/crates/provider-archive)
-![license](https://img.shields.io/crates/l/provider-archive.svg)&nbsp;
-[![documentation](https://docs.rs/provider-archive/badge.svg)](https://docs.rs/provider-archive)
+![Latest Release](https://img.shields.io/github/v/release/wasmcloud/wasmcloud?include_prereleases&sort=semver)
+[![Gitpod ready-to-code](https://img.shields.io/badge/Gitpod-ready--to--code-blue?logo=gitpod)](https://gitpod.io/#https://github.com/wasmcloud/wasmcloud)
+![Rust Build](https://img.shields.io/github/workflow/status/wasmcloud/wasmcloud/Rust/main)
+![Contributors](https://img.shields.io/github/contributors/wasmcloud/wasmcloud)
+![Good first issues](https://img.shields.io/github/issues/wasmcloud/wasmcloud/good%20first%20issue?label=good%20first%20issues)
+[![Documentation](https://img.shields.io/badge/Docs-Documentation-blue)](https://wasmcloud.dev)
+![Rustdocs](https://docs.rs/wasmcloud-host/badge.svg)
 
-# Provider Archive
-Until the [WASI](https://wasi.dev) specification includes robust networking support _and_ the available WebAssembly tooling (**wasm3** , **wasmtime**, etc) supports this WASI specification, _and_ the Rust compiler is able to generate the right set of WASI imports when compiling "regular" socket code ... our support for portable capability providers will be limited.
+# wasmCloud
 
-In the absence of useful portable capability providers, we need the ability to store, retrieve, and schedule _native_ capability providers. A native capability provider is an FFI plugin stored in a binary file that is specific to a particular CPU architecture and Operating System. The issue with these binary files (_shared object_ files on linux) is that we cannot embed secure claims JWTs in these like we can in WebAssembly files. With actors, we use these signed tokens to get a verifiable, globally unique public key (identity) as well as a hash of the associated file to verify that the file has not been tampered with since being signed.
+wasmCloud lets you focus on shipping _features_. Build secure, portable, re-usable components called **_actors_** and get rid of the headaches that come from being smothered by boilerplate, dependency hell, tight coupling, and making design decisions mandated by your infrastructure.
 
-To give us the ability to store, retrieve, schedule, and _sign_ capability providers, we need a **Provider Archive** (PAR). This is a simple TAR file that contains a signed JWT, as well as a binary file for each of the supported OS/CPU combinations.
+[![Open in Gitpod](https://gitpod.io/button/open-in-gitpod.svg)](https://gitpod.io/#https://github.com/wasmcloud/wasmcloud)
 
-## Provider Archive File Format
-Each provider archive file contains a root `claims.jwt` file that holds a signed set of claims (see appendix). Also in the root directory of the archive are binary files containing the bytes of the native capability provider plugin with a filename of the format `[arch]-[os].bin`.
+## Distributed computing, _simplified_
 
-The following is an example of the contents of a provider archive file:
+The wasmCloud runtime is a vessel for running actors and capability providers in the cloud, at the edge, in the browser, on small devices, and anywhere else you can imagine.
 
-```
-+ provider_archive.tar
-|
-+---- claims.jwt
-|
-|---- x86_64-linux.bin
-|---- aarch64-linux.bin
-|---- x86_64-macos.bin
-`---- aarch64-ios.bin
-```
+If you're new to the wasmCloud ecosystem, a great place to start is the [getting started](https://wasmcloud.dev/overview/getting-started/) section of our [documentation](https://wasmcloud.dev).
 
-Until we gain the ability to create network-capable WASI modules that can support robust capability provider functionality (like DB clients, web servers, raw TCP or UDP control, etc), Gantry will be storing and retrieving **par** files for each capability provider.
+You can also take a look at a wide range of [examples](https://github.com/wasmCloud/examples) in our Github repository, or look through the [reference applications](https://wasmcloud.dev/reference/refapps/) we've created as technology demonstrations to help illustrate a new way of designing, composing, and building applications.
 
-## Appendix A - Architecture values
-The following is a list of some of the possible architectures (_NOTE_ not all of these architectures may be supported by the waSCC host):
+## Rust Runtime
 
-* x86
-* x86_64
-* arm
-* aarch64
-* mips
-* mips64
+The wasmCloud host runtime is available both as a released binary and as a [Rust crate](https://crates.io/crates/wasmcloud-host) that you can incorporate in your own applications to create bespoke, fit-for-purpose hosts.
 
-## Appendix B - Operating System Values
-The following is a list of some of the possible operating systems (_NOTE_ not all of these operating systems may be supported by the waSCC host):
+## Contributing
 
-* linux
-* macos
-* ios
-* freebsd
-* android
-* windows
-
-## Appendix C - JSON Web Token Claims
-The following is a list of the custom claims that will appear in the `wascap` section beneath the standard JWT fields. This is the same nesting style used by actor claims when embedded into a WebAssembly file:
-
-* `hashes` - This is a map where the key is an `[arch]-[os]` string and the value is the hash for that particular file. Having these hashes inside the signed token means we can verify that the plugin binaries have not been tampered with.
-* `name` - Friendly name of the capability provider.
-* `vendor` - A vendor string helping to identify the provider (e.g. `Redis` or `Cassandra` or `PostgreSQL` etc). This is an information-only field and is not used as any kind of key or unique identifier.
-* `capid` - The capability contract ID (e.g. `wascc:messaging` or `wascc:keyvalue`, etc). Note that the plugin itself is required to expose this information to the runtime when it receives the "query descriptor" message. This value is to allow processes other than the waSCC runtime (e.g. Gantry) to interrogate the core metadata.
-* `version` - Friendly version string
-* `revision` - A monotonically increasing revision value. This value will be used to retrieve / store version-specific files.
-
+For more information on how to contribute and our contributor guidelines, check out the [contributing readme](./CONTRIBUTING.md).
