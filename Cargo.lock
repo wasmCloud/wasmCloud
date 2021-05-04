@@ -2048,6 +2048,17 @@ dependencies = [
 [[package]]
 name = "provider-archive"
 version = "0.4.0"
+dependencies = [
+ "data-encoding",
+ "flate2",
+ "ring",
+ "tar",
+ "wascap",
+]
+
+[[package]]
+name = "provider-archive"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1c05c0a204e6cc14b5a4a585ab20fa15ab757de28b833dd32750a65cd2749ebd"
 dependencies = [
@@ -3374,7 +3385,7 @@ dependencies = [
  "log",
  "nats 0.8.6",
  "nkeys 0.1.0",
- "provider-archive",
+ "provider-archive 0.4.0",
  "redis",
  "reqwest",
  "rmp-serde",
@@ -3506,7 +3517,7 @@ dependencies = [
  "oci-distribution",
  "once_cell",
  "parking_lot",
- "provider-archive",
+ "provider-archive 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.8.3",
  "reqwest",
  "ring",

@@ -15,3 +15,7 @@ target/
 *.creds
 *.jwt
 *.nk
+
+# Ignore par and parJEEzy files
+*.par
+*.par.gz
