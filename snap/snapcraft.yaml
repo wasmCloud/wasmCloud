@@ -1,0 +1,22 @@
+name: wasmcloud
+base: core20 # the base snap is the execution environment for this snap
+version: '0.18.1'
+summary: A secure, distributed, WebAssembly actor model runtime
+icon: snap/local/icon.png
+description: |
+  wasmCloud lets you focus on shipping features. Build secure, portable, re-usable components called actors and get rid of the headaches that come from being smothered by boilerplate, dependency hell, tight coupling, and making design decisions mandated by your infrastructure.
+grade: stable
+confinement: devmode
+apps:
+  wasmcloud:
+    command: bin/wasmcloud
+parts:
+  wasmcloud:
+    plugin: rust
+    source: https://github.com/wasmCloud/wasmcloud.git 
+    build-packages:
+    - libssl-dev
+    - pkg-config
+    - clang
+    stage-snaps:
+    - nats
