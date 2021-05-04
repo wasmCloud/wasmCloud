@@ -15,3 +15,7 @@ target/
 *.creds
 *.jwt
 *.nk
+
+# Don't commit provider archives
+*.par
+*.par.gz
