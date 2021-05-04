@@ -18,5 +18,3 @@ parts:
     - libssl-dev
     - pkg-config
     - clang
-    stage-snaps:
-    - nats
