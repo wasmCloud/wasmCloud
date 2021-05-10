@@ -63,11 +63,12 @@ impl IntoIterator for &DrainSelection {
 
 impl DrainCliCommand {
     fn drain(&self) -> Result<String, Box<dyn ::std::error::Error>> {
-        let to_clear = self.selection.into_iter();
-        let mut cleared = vec![];
-        for path in to_clear {
-            cleared.push(remove_dir_contents(path)?);
-        }
+        let cleared = self
+            .selection
+            .into_iter()
+            .filter(|path| path.exists())
+            .map(|path| remove_dir_contents(path))
+            .collect::<Result<Vec<String>, Box<dyn ::std::error::Error>>>()?;
         Ok(match self.output_kind() {
             OutputKind::Text => format!("Successfully cleared caches at: {:?}", cleared),
             OutputKind::Json => json!({ "drained": cleared }).to_string(),
