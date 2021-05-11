@@ -94,26 +94,47 @@ async fn main() -> Result<()> {
     .format_module_path(false)
     .try_init();
 
-    if let Some(ref pb) = cli.manifest {
+    let manifest = if let Some(ref pb) = cli.manifest {
         if !pb.exists() {
             error!("Specified manifest file {:?} could not be opened", pb);
             return Err("Manifest file could not be opened.".into());
+        } else {
+            Some(pb)
         }
-    }
+    } else {
+        None
+    };
 
     let nats_url = &format!("{}:{}", cli.rpc_host, cli.rpc_port);
-    let nc_rpc = nats_connection(nats_url, cli.rpc_jwt, cli.rpc_seed, cli.rpc_credsfile).await?;
-    let nc_control = nats_connection(
+
+    let mut host_builder = HostBuilder::new();
+
+    match nats_connection(nats_url, cli.rpc_jwt, cli.rpc_seed, cli.rpc_credsfile).await {
+        Ok(nc_rpc) => host_builder = host_builder.with_rpc_client(nc_rpc),
+        Err(e) => warn!(
+            "Starting host without a lattice connection (standalone mode), error: {}",
+            e
+        ),
+    };
+
+    match nats_connection(
         nats_url,
         cli.control_jwt,
         cli.control_seed,
         cli.control_credsfile,
     )
-    .await?;
-
-    let mut host_builder = HostBuilder::new()
-        .with_rpc_client(nc_rpc)
-        .with_control_client(nc_control);
+    .await
+    {
+        Ok(nc_control) => host_builder = host_builder.with_control_client(nc_control),
+        Err(e) if manifest.is_none() => {
+            error!(
+                "Unable to establish a control client and manifest is not present
+                         Host is unable to start workloads in this mode, exiting"
+            );
+            return Err(e.into());
+        }
+        Err(e) => warn!("Starting host without a control connection, error: {}", e),
+    };
 
     if cli.allow_live_updates {
         host_builder = host_builder.enable_live_updates();
@@ -138,11 +159,9 @@ async fn main() -> Result<()> {
     let host = host_builder.build();
     match host.start().await {
         Ok(_) => {
-            if let Some(pb) = cli.manifest {
-                if pb.exists() {
-                    let hm = HostManifest::from_path(pb, true)?;
-                    host.apply_manifest(hm).await?;
-                }
+            if let Some(pb) = manifest {
+                let hm = HostManifest::from_path(pb, true)?;
+                host.apply_manifest(hm).await?;
             }
             actix_rt::signal::ctrl_c().await.unwrap();
             info!("Ctrl-C received, shutting down");
