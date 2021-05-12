@@ -57,6 +57,17 @@ pub(crate) struct ConnectionOpts {
     rpc_timeout: u64,
 }
 
+impl Default for ConnectionOpts {
+    fn default() -> Self {
+        ConnectionOpts {
+            rpc_host: "0.0.0.0".to_string(),
+            rpc_port: "4222".to_string(),
+            ns_prefix: "default".to_string(),
+            rpc_timeout: 1,
+        }
+    }
+}
+
 #[derive(Debug, Clone, StructOpt)]
 pub(crate) enum CtlCliCommand {
     /// Invoke an operation on an actor
@@ -237,6 +248,26 @@ pub(crate) struct StartActorCommand {
     timeout: u64,
 }
 
+impl StartActorCommand {
+    pub(crate) fn new(
+        opts: ConnectionOpts,
+        output: Output,
+        host_id: Option<String>,
+        actor_ref: String,
+        constraints: Option<Vec<String>>,
+        timeout: u64,
+    ) -> Self {
+        StartActorCommand {
+            opts,
+            output,
+            host_id,
+            actor_ref,
+            constraints,
+            timeout,
+        }
+    }
+}
+
 #[derive(Debug, Clone, StructOpt)]
 pub(crate) struct StartProviderCommand {
     #[structopt(flatten)]
@@ -318,15 +349,33 @@ pub(crate) struct UpdateActorCommand {
 
     /// Id of host
     #[structopt(name = "host-id")]
-    host_id: String,
+    pub(crate) host_id: String,
 
     /// Actor Id, e.g. the public key for the actor
     #[structopt(name = "actor-id")]
     pub(crate) actor_id: String,
 
-    /// Actor reference, e.g. the OCI URL for the actor
+    /// Actor reference, e.g. the OCI URL for the actor. This can also be a signed local wasm file when using the REPL host
     #[structopt(name = "new-actor-ref")]
     pub(crate) new_actor_ref: String,
+}
+
+impl UpdateActorCommand {
+    pub(crate) fn new(
+        opts: ConnectionOpts,
+        output: Output,
+        host_id: String,
+        actor_id: String,
+        new_actor_ref: String,
+    ) -> Self {
+        UpdateActorCommand {
+            opts,
+            output,
+            host_id,
+            actor_id,
+            new_actor_ref,
+        }
+    }
 }
 
 pub(crate) async fn handle_command(command: CtlCliCommand) -> Result<String> {

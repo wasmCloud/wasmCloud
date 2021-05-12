@@ -18,7 +18,6 @@ fn integration_create_and_insert() {
     remove_dir_all(test_dir).unwrap();
 }
 
-//TODO: test for issuer too
 /// Tests creation of a provider archive file with an initial binary
 fn integration_par_create(issuer: &str, subject: &str, archive: &str) {
     const ARCH: &str = "x86_64-linux";

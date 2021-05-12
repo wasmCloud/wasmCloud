@@ -48,8 +48,7 @@ pub(crate) enum HostCommand {
     },
     UpdateActor {
         actor_id: String,
-        new_oci_ref: Option<String>,
-        bytes: Vec<u8>,
+        new_actor_ref: String,
         output_kind: OutputKind,
     },
 }
@@ -116,8 +115,7 @@ impl From<CtlCliCommand> for HostCommand {
             },
             Update(UpdateCommand::Actor(cmd)) => HostCommand::UpdateActor {
                 actor_id: cmd.actor_id,
-                new_oci_ref: Some(cmd.new_actor_ref),
-                bytes: vec![],
+                new_actor_ref: cmd.new_actor_ref,
                 output_kind: cmd.output.kind,
             },
         }
