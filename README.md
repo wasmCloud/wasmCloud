@@ -28,6 +28,10 @@ curl -s https://packagecloud.io/install/repositories/wasmcloud/core/script.rpm.s
 
 sudo apt install wasmcloud wash
 ```
+### Linux (snap)
+```
+sudo snap install wash --edge --devmode
+```
 ### MacOS (brew)
 ```
 brew tap wasmcloud/wasmcloud

@@ -1,0 +1,22 @@
+name: wash
+base: core20 # the base snap is the execution environment for this snap
+version: '0.4.4'
+summary: WAsmcloud SHell - A multi-tool for wasmCloud development.
+icon: snap/local/icon.png
+description: |
+  wash is a bundle of command line tools that, together, form a comprehensive CLI for wasmcloud development.
+  Everything from generating signing keys to a fully interactive REPL environment is contained within the subcommands of wash.
+  Our goal with wash is to encapsulate our tools into a single binary to make developing WebAssembly with wasmcloud painless and simple.
+grade: stable
+confinement: devmode
+apps:
+  wash:
+    command: bin/wash
+parts:
+  wash:
+    plugin: rust
+    source: https://github.com/wasmCloud/wash.git 
+    build-packages:
+    - libssl-dev
+    - pkg-config
+    - clang
