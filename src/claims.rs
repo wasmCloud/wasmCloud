@@ -770,6 +770,7 @@ pub(crate) fn render_actor_claims(
                 "expires": validation.expires_human,
                 "can_be_used": validation.not_before_human,
                 "version": friendly_ver,
+                "revision": friendly_rev,
                 provider_json: friendly_caps,
                 "tags": tags,
                 "call_alias": call_alias,

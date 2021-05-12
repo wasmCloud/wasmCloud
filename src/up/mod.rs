@@ -5,11 +5,14 @@ use crate::keys::*;
 use crate::par::*;
 use crate::reg::*;
 use crate::util::{convert_error, Result, WASH_CMD_INFO, WASH_LOG_INFO};
+use crossbeam_channel::unbounded;
 use log::{debug, error, info, warn, LevelFilter};
 use std::collections::HashMap;
+use std::fs::File;
 use std::io;
+use std::io::Read;
 use std::path::PathBuf;
-use std::sync::{mpsc::channel, Arc, Mutex};
+use std::sync::{Arc, Mutex};
 use structopt::{clap::AppSettings, StructOpt};
 use termion::event::{Event, Key};
 use termion::{
@@ -89,6 +92,10 @@ pub(crate) struct UpCliCommand {
     /// Specifies a manifest file to apply to the host once started
     #[structopt(long = "manifest", short = "m", parse(from_os_str))]
     manifest: Option<PathBuf>,
+
+    /// Specify signed actor modules to watch and update when the module changes
+    #[structopt(long = "watch", short = "w", parse(from_os_str))]
+    actors: Vec<PathBuf>,
 }
 
 #[derive(StructOpt, Debug, Clone, PartialEq)]
@@ -201,9 +208,9 @@ async fn handle_up(cmd: UpCliCommand) -> Result<()> {
     repl.draw_ui(&mut terminal)?;
 
     // Channel for host operations
-    let (host_op_sender, host_op_receiver) = channel();
+    let (host_op_sender, host_op_receiver) = unbounded();
     // Channel for host output
-    let (host_output_sender, host_output_receiver) = channel();
+    let (host_output_sender, host_output_receiver) = unbounded();
 
     let nats_connection = nats::asynk::connect(&format!("{}:{}", cmd.rpc_host, cmd.rpc_port)).await;
     let common_host = HostBuilder::new()
@@ -229,7 +236,15 @@ async fn handle_up(cmd: UpCliCommand) -> Result<()> {
         ),
     };
 
-    repl.embedded_host = Some(EmbeddedHost::new(host.id(), mode, host_op_sender));
+    let embedded_host = EmbeddedHost::new(host.id(), mode, host_op_sender);
+    // Ownership of the hotwatch vec is moved to this thread, where it won't be dropped.
+    // If the vec is dropped, the hotwatch objects will no longer watch for write events
+    let _hotwatch = if !cmd.actors.is_empty() {
+        embedded_host.watch_actors(cmd.actors.clone())
+    } else {
+        vec![]
+    };
+    repl.embedded_host = Some(embedded_host);
 
     // Move host to separate thread to avoid blocking host operations
     std::thread::spawn(move || {
@@ -244,9 +259,11 @@ async fn handle_up(cmd: UpCliCommand) -> Result<()> {
                 );
             };
             // If supplied, initialize the host with a manifest
-            if let Some(pb) = cmd.manifest {
+            if let Some(ref pb) = cmd.manifest {
                 let err = match HostManifest::from_path(pb.clone(), true) {
-                    Ok(hm) => {
+                    Ok(mut hm) => {
+                        // Don't attempt to start watched actors twice
+                        hm.actors.retain(|act| !cmd.actors.contains(&PathBuf::from(act)));
                         host_output_sender.send("Initializing host from manifest ...".to_string()).unwrap();
                         host.apply_manifest(hm).await.err()
                     },
@@ -265,24 +282,43 @@ async fn handle_up(cmd: UpCliCommand) -> Result<()> {
                     loop {
                         // The lattice mode REPL host will only invoke the host API when starting an actor from disk
                         // All other operations are done via the control interface
-                        if let Ok(CtlCliCommand::Start(StartCommand::Actor(cmd))) = host_op_receiver.try_recv() {
-                            debug!("Attempting to load actor from file");
-                            let failure = match Actor::from_file(cmd.actor_ref.clone()) {
-                                Ok(actor) => host.start_actor(actor).await,
-                                Err(file_err) => {
-                                    error!("Failed to load actor from file: {}", file_err);
-                                    Err(file_err)
-                                },
+                        match host_op_receiver.try_recv() {
+                            Ok(CtlCliCommand::Start(StartCommand::Actor(cmd))) => {
+                                debug!("Attempting to load actor from file");
+                                let failure = match Actor::from_file(cmd.actor_ref.clone()) {
+                                    Ok(actor) => host.start_actor(actor).await,
+                                    Err(file_err) => {
+                                        error!("Failed to load actor from file: {}", file_err);
+                                        Err(file_err)
+                                    },
+                                }
+                                .map_or_else(|e| Some(format!("{}", e)), |_| None);
+                                host_output_sender.send(start_actor_output(
+                                    &cmd.actor_ref,
+                                    &host.id(),
+                                    failure,
+                                    &cmd.output.kind,
+                                )).unwrap()
                             }
-                            .map_or_else(|e| Some(format!("{}", e)), |_| None);
-                            host_output_sender.send(start_actor_output(
-                                &cmd.actor_ref,
-                                &host.id(),
-                                failure,
-                                &cmd.output.kind,
-                            )).unwrap()
-                        } else {
-                            actix_rt::time::sleep(std::time::Duration::from_millis(100)).await;
+                            Ok(CtlCliCommand::Update(UpdateCommand::Actor(cmd))) => {
+                                debug!("Attempting to load actor from file");
+                                let failure = match File::open(cmd.new_actor_ref.clone()) {
+                                    Ok(mut actor) => {
+                                        let mut buf = Vec::new();
+                                        let _ = actor.read_to_end(&mut buf);
+                                        host.update_actor(&cmd.actor_id, None, &buf).await
+                                    },
+                                    Err(file_err) => {
+                                        error!("Failed to load actor from file: {}", file_err);
+                                        Err(file_err.into())
+                                    },
+                                }
+                                .map_or_else(|e| Some(format!("{}", e)), |_| None);
+                                host_output_sender.send(update_actor_output(&cmd.actor_id, &cmd.new_actor_ref, failure, &cmd.output.kind)).unwrap()
+                            }
+                            _ => {
+                                actix_rt::time::sleep(std::time::Duration::from_millis(100)).await;
+                            }
                         }
                     }
                 }
@@ -431,7 +467,7 @@ async fn handle_up(cmd: UpCliCommand) -> Result<()> {
                                     let failure = match Actor::from_file(actor_ref.clone()) {
                                         Ok(actor) => host.start_actor(actor).await,
                                         Err(file_err) => {
-                                            debug!("Actor failed to load from file, {}, trying from registry", file_err);
+                                            debug!("Actor failed to load from file: \"{}\". Trying from registry", file_err);
                                             if let Err(_reg_err) = host.start_actor_from_registry(&actor_ref).await {
                                                 Err("Actor reference was not a valid file or OCI reference".into())
                                             } else {
@@ -491,16 +527,22 @@ async fn handle_up(cmd: UpCliCommand) -> Result<()> {
                                 }
                                 UpdateActor {
                                     actor_id,
-                                    new_oci_ref,
-                                    bytes,
+                                    new_actor_ref,
                                     output_kind,
                                 } => {
                                     // If the actor is not local, we have to download it from the OCI registry
                                     // Providing OCI authentication parameters here will depend on https://github.com/wasmCloud/wasmCloud/issues/158
-                                    let actor_bytes = if new_oci_ref.is_some() && bytes.is_empty() {
+
+                                    // actor_bytes are required regardless to update an actor, but the actor reference is only an OCI reference
+                                    // if we use it to download the image from an OCI registry.
+                                    let (oci_ref, actor_bytes) = if let Ok(mut actor_bytes) = File::open(new_actor_ref.clone()) {
+                                        let mut buf = Vec::new();
+                                        let _ = actor_bytes.read_to_end(&mut buf);
+                                        (None, buf)
+                                    } else {
                                         info!("Downloading new actor module for update");
-                                        crate::reg::pull_artifact(
-                                            new_oci_ref.clone().unwrap(),
+                                        (Some(new_actor_ref.clone()), crate::reg::pull_artifact(
+                                            new_actor_ref.clone(),
                                             None,
                                             false,
                                             None,
@@ -508,17 +550,15 @@ async fn handle_up(cmd: UpCliCommand) -> Result<()> {
                                             false,
                                         )
                                         .await
-                                        .unwrap_or_else(|_| vec![])
-                                    } else {
-                                        bytes
+                                        .unwrap_or_else(|_| vec![]))
                                     };
+
                                     let ack = host
-                                        .update_actor(&actor_id, new_oci_ref.clone(), &actor_bytes)
+                                        .update_actor(&actor_id, oci_ref.clone(), &actor_bytes)
                                         .await;
                                     update_actor_output(
                                         &actor_id,
-                                        &new_oci_ref
-                                            .unwrap_or_else(|| "New local version".to_string()),
+                                        &new_actor_ref.to_string(),
                                         ack.map_or_else(|e| Some(format!("{}", e)), |_| None),
                                         &output_kind,
                                     )
@@ -536,7 +576,7 @@ async fn handle_up(cmd: UpCliCommand) -> Result<()> {
     repl.draw_ui(&mut terminal)?;
 
     // Use a channel to asynchronously receive stdin events
-    let (tui_sender, tui_receiver) = std::sync::mpsc::channel();
+    let (tui_sender, tui_receiver) = unbounded();
     std::thread::spawn({
         let stdin = io::stdin();
         move || {
@@ -551,7 +591,6 @@ async fn handle_up(cmd: UpCliCommand) -> Result<()> {
         ReplMode::Lattice => REPL_LATTICE.to_string(),
         ReplMode::Standalone => REPL_STANDALONE.to_string(),
     };
-
     // Main REPL event loop
     loop {
         // If any output is sent by a non-lattice connected host, log to output
@@ -882,6 +921,8 @@ mod test {
             RPC_PORT,
             "--manifest",
             "mani.yaml",
+            "--watch",
+            "myactor_s.wasm",
         ])?;
         let up_all_short_options = UpCli::from_iter_safe(&[
             "up",
@@ -893,6 +934,8 @@ mod test {
             RPC_PORT,
             "-m",
             "mani.yaml",
+            "--watch",
+            "myactor_s.wasm",
         ])?;
 
         #[allow(unreachable_patterns)]
@@ -902,11 +945,13 @@ mod test {
                 rpc_port,
                 log_level,
                 manifest,
+                actors,
             } => {
                 assert_eq!(rpc_host, RPC_HOST);
                 assert_eq!(rpc_port, RPC_PORT);
                 assert_eq!(log_level, LogLevel::Info);
                 assert_eq!(manifest.unwrap().to_str().unwrap(), "mani.yaml");
+                assert_eq!(actors, vec![PathBuf::from("myactor_s.wasm")])
             }
             cmd => panic!("up generated other command {:?}", cmd),
         }
@@ -918,11 +963,13 @@ mod test {
                 rpc_port,
                 log_level,
                 manifest,
+                actors,
             } => {
                 assert_eq!(rpc_host, RPC_HOST);
                 assert_eq!(rpc_port, RPC_PORT);
                 assert_eq!(log_level, LogLevel::Info);
                 assert_eq!(manifest.unwrap().to_str().unwrap(), "mani.yaml");
+                assert_eq!(actors, vec![PathBuf::from("myactor_s.wasm")])
             }
             cmd => panic!("up generated other command {:?}", cmd),
         }

@@ -1,5 +1,6 @@
 mod common;
 use common::{output_to_string, wash, Result};
+use crossbeam_channel::unbounded;
 use wasmcloud_host::HostBuilder;
 
 #[actix_rt::test]
@@ -353,7 +354,7 @@ async fn integration_ctl_update_actor() -> Result<()> {
 /// `namespace` is used to create hosts in isolation in the lattice,
 /// as we wouldn't want multiple hosts to interact between tests
 async fn create_host(namespace: String) -> Result<String> {
-    let (tx, rx) = std::sync::mpsc::channel();
+    let (tx, rx) = unbounded();
     std::thread::spawn(move || {
         let rt = actix_rt::System::new();
         rt.block_on(async move {
