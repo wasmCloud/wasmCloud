@@ -66,8 +66,16 @@ impl Dispatcher for ProviderDispatcher {
             op,
             msg.to_vec(),
         );
-        match block_on(async { self.addr.send(inv).await.map(|ir| ir.msg) }) {
-            Ok(v) => Ok(v),
+        match block_on(async { self.addr.send(inv).await }) {
+            Ok(ir) => {
+                if let Some(e) = ir.error {
+                    let f = format!("Invocation failure: {}", e);
+                    error!("{}", f);
+                    Err(f.into())
+                } else {
+                    Ok(ir.msg)
+                }
+            }
             Err(_e) => {
                 error!("Provider dispatch to bus failed (mailbox error)");
                 Err("Mailbox error during provider dispatch".into())
