@@ -8,6 +8,7 @@ Platforms are architecture/operating system combinations. All of the capability 
 
 * `arm-linux`
 * `aarch64-linux`
+* `aarch64-apple-darwin`
 * `x86_64-macos` (requires fork of [cross](https://github.com/ChrisRx/cross))
 * `x86_64-linux`
 * `x86_64-windows`

@@ -12,7 +12,6 @@ all: $(PROVIDERS) ## Build all capability providers
 $(PROVIDERS):
 	$(MAKE) -C $@ par
 
-
 ##@ Helpers
 
 .PHONY: help

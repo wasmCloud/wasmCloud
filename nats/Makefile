@@ -7,12 +7,13 @@ CAPABILITY_ID := $(call readvar,CAPABILITY_ID)
 NAME          := $(shell cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name')
 VERSION       := $(shell cargo metadata --no-deps --format-version 1 | jq -r '.packages[].version')
 LIBNAME       := $(shell echo $(NAME) | tr '-' '_')
-VENDOR        ?= wasmcloud
-REVISION	  ?= 2
-DESTINATION   ?= nats.par.gz
+VENDOR        := wasmCloud
+REVISION      ?= 0
+DESTINATION   ?= $(NAME).par.gz
 
 TARGETS := armv7-unknown-linux-gnueabihf \
 	aarch64-unknown-linux-gnu \
+	aarch64-apple-darwin \
 	x86_64-apple-darwin \
 	x86_64-pc-windows-gnu \
 	x86_64-unknown-linux-gnu
@@ -40,6 +41,10 @@ par: $(TARGETS)
 	wash par insert \
 		--arch aarch64-linux \
 		--binary target/aarch64-unknown-linux-gnu/release/lib$(LIBNAME).so \
+		$(DESTINATION)
+	wash par insert \
+		--arch aarch64-macos \
+		--binary target/aarch64-apple-darwin/release/lib$(LIBNAME).dylib \
 		$(DESTINATION)
 	wash par insert \
 		--arch x86_64-macos \
