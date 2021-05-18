@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-httpserver"
-version = "0.12.1"
+version = "0.12.2"
 authors = ["wasmCloud Team"]
 edition = "2018"
 homepage = "https://wasmcloud.dev"

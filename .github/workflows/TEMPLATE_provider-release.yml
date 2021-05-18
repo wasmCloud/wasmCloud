@@ -10,7 +10,6 @@ on:
 env:
   CARGO_TERM_COLOR: always
   working-directory: ./provider
-  DESTINATION: provider.par.gz #aka the filename of the parJEEzy
   WASH_ISSUER_KEY: ${{ secrets.WASMCLOUD_ACCOUNT_OFFICIAL }}
   WASH_SUBJECT_KEY: ${{ secrets.WASMCLOUD_PROVIDER }}
   WASH_REG_USER:  ${{ secrets.AZURECR_PUSH_USER }}
@@ -85,6 +84,7 @@ jobs:
       - name: push-par
         run: |
           VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].version')
-          URL=${{secrets.AZURECR_PUSH_URL}}/provider:$VERSION
-          wash reg push $URL ${{ env.DESTINATION }}
+          NAME=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name')
+          URL=${{secrets.AZURECR_PUSH_URL}}/$NAME:$VERSION
+          wash reg push $URL $NAME.par.gz
         working-directory: ${{ env.working-directory }}

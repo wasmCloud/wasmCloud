@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-streams-redis"
-version = "0.5.2"
+version = "0.5.3"
 authors = ["wasmCloud Team"]
 edition = "2018"
 homepage = "https://wasmcloud.dev"
