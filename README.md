@@ -30,7 +30,7 @@ MIPS-based architectures are not cross-compiled by default because some capabili
 | Logging | [![Crates.io](https://img.shields.io/crates/v/wasmcloud-logging)](https://crates.io/crates/wasmcloud-logging) | wasmcloud.azurecr.io/logging |
 | NATS | [![Crates.io](https://img.shields.io/crates/v/wasmcloud-nats)](https://crates.io/crates/wasmcloud-nats) | wasmcloud.azurecr.io/nats |
 | Redis | [![Crates.io](https://img.shields.io/crates/v/wasmcloud-redis)](https://crates.io/crates/wasmcloud-redis) | wasmcloud.azurecr.io/redis |
-| Redis Streams | [![Crates.io](https://img.shields.io/crates/v/wasmcloud-redisstreams)](https://crates.io/crates/wasmcloud-redisstreams) | wasmcloud.azurecr.io/redisstreams |
+| Redis Streams | [![Crates.io](https://img.shields.io/crates/v/wasmcloud-streams-redis)](https://crates.io/crates/wasmcloud-streams-redis) | wasmcloud.azurecr.io/streams-redis |
 | RedisGraph | [![Crates.io](https://img.shields.io/crates/v/wasmcloud-redisgraph)](https://crates.io/crates/wasmcloud-redisgraph) | wasmcloud.azurecr.io/redisgraph |
 | S3 | [![Crates.io](https://img.shields.io/crates/v/wasmcloud-s3)](https://crates.io/crates/wasmcloud-s3) | wasmcloud.azurecr.io/s3 |
 | Telnet | [![Crates.io](https://img.shields.io/crates/v/wasmcloud-telnet)](https://crates.io/crates/wasmcloud-telnet) | wasmcloud.azurecr.io/telnet |

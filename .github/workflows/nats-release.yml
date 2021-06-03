@@ -91,6 +91,7 @@ jobs:
         run: |
           VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].version')
           NAME=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name')
-          URL=${{secrets.AZURECR_PUSH_URL}}/$NAME:$VERSION
+          TAGNAME=$(echo $NAME | sed 's/wasmcloud-//')
+          URL=${{secrets.AZURECR_PUSH_URL}}/$TAGNAME:$VERSION
           wash reg push $URL $NAME.par.gz
         working-directory: ${{ env.working-directory }}
