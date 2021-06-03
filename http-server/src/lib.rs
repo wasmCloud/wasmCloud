@@ -1,3 +1,4 @@
+use actix_cors::Cors;
 use actix_rt;
 use actix_web::dev::Body;
 use actix_web::http::{HeaderName, HeaderValue, StatusCode};
@@ -121,11 +122,56 @@ impl HttpServerProvider {
         let (stop_tx, stop_rx) = oneshot::channel();
         let disp = self.dispatcher.clone();
         let module = module_id.clone();
+        let cfg_clone = cfgvals.clone();
         std::thread::spawn(move || {
             let sys = actix_rt::System::new();
             let mut server = HttpServer::new(move || {
+                let mut cors = Cors::default();
+                // The optional CORS_ALLOWED_ORIGINS parameter specifies origins for which CORS is allowed.
+                // It should be either be the string "*" to allow any origin, or a comma separated list.
+                cors = match cfg_clone
+                    .values
+                    .get("CORS_ALLOWED_ORIGINS")
+                    .map(|s| s.as_str())
+                {
+                    Some("*") => cors.allow_any_origin(),
+                    Some(origins) => origins
+                        .split(',')
+                        .collect::<Vec<&str>>()
+                        .iter()
+                        .fold(cors, |cors_inner, origin| cors_inner.allowed_origin(origin)),
+                    _ => cors,
+                };
+                // The optional CORS_ALLOWED_METHODS parameter specifies methods for which CORS is allowed.
+                // It should be either be the string "*" to allow any method, or a comma separated list.
+                cors = match cfg_clone
+                    .values
+                    .get("CORS_ALLOWED_METHODS")
+                    .map(|s| s.as_str())
+                {
+                    Some("*") => cors.allow_any_method(),
+                    Some(methods) => {
+                        cors.allowed_methods(methods.split(',').collect::<Vec<&str>>())
+                    }
+                    _ => cors,
+                };
+                // The optional CORS_ALLOWED_HEADERS parameter specifies headers for which CORS is allowed.
+                // It should be either be the string "*" to allow any header, or a comma separated list.
+                cors = match cfg_clone
+                    .values
+                    .get("CORS_ALLOWED_HEADERS")
+                    .map(|s| s.as_str())
+                {
+                    Some("*") => cors.allow_any_header(),
+                    Some(headers) => {
+                        cors.allowed_headers(headers.split(',').collect::<Vec<&str>>())
+                    }
+                    _ => cors,
+                };
+
                 App::new()
                     .wrap(middleware::Logger::default())
+                    .wrap(cors)
                     .data(disp.clone())
                     .data(module.clone())
                     .default_service(web::route().to(request_handler))
