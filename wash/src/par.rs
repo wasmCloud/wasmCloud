@@ -319,15 +319,13 @@ pub(crate) async fn handle_inspect(cmd: InspectCommand) -> Result<String> {
                     "targets": archive.targets()})
             )
         }
-        OutputKind::Text => {
+        OutputKind::Text { max_width } => {
             use term_table::row::Row;
             use term_table::table_cell::*;
             use term_table::Table;
 
             let mut table = Table::new();
-            table.max_column_width = 68;
-            table.style = crate::util::empty_table_style();
-            table.separate_rows = false;
+            crate::util::configure_table_style(&mut table, 2, max_width);
 
             table.add_row(Row::new(vec![TableCell::new_with_alignment(
                 format!("{} - Provider Archive", metadata.name.unwrap()),
@@ -499,7 +497,7 @@ mod test {
                 assert_eq!(directory.unwrap(), "./tests/fixtures");
                 assert_eq!(issuer.unwrap(), ISSUER);
                 assert_eq!(subject.unwrap(), SUBJECT);
-                assert_eq!(output.kind, OutputKind::Text);
+                assert_eq!(output.kind, OutputKind::Text { max_width: 0 });
                 assert_eq!(name, "CreateTest");
                 assert_eq!(vendor, "TestRunner");
                 assert_eq!(destination.unwrap(), "./test.par.gz");
@@ -617,7 +615,7 @@ mod test {
                 assert_eq!(directory.unwrap(), "./tests/fixtures");
                 assert_eq!(issuer.unwrap(), ISSUER);
                 assert_eq!(subject.unwrap(), SUBJECT);
-                assert_eq!(output.kind, OutputKind::Text);
+                assert_eq!(output.kind, OutputKind::Text { max_width: 0 });
                 assert!(disable_keygen);
             }
             cmd => panic!("par insert constructed incorrect command {:?}", cmd),
@@ -657,7 +655,7 @@ mod test {
                 assert_eq!(directory.unwrap(), "./tests/fixtures");
                 assert_eq!(issuer.unwrap(), ISSUER);
                 assert_eq!(subject.unwrap(), SUBJECT);
-                assert_eq!(output.kind, OutputKind::Text);
+                assert_eq!(output.kind, OutputKind::Text { max_width: 0 });
                 assert!(!disable_keygen);
             }
             cmd => panic!("par insert constructed incorrect command {:?}", cmd),

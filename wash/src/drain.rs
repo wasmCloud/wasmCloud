@@ -1,3 +1,4 @@
+use crate::util::format_output;
 use crate::util::{Output, OutputKind};
 use serde_json::json;
 use std::env;
@@ -67,12 +68,13 @@ impl DrainCliCommand {
             .selection
             .into_iter()
             .filter(|path| path.exists())
-            .map(|path| remove_dir_contents(path))
+            .map(remove_dir_contents)
             .collect::<Result<Vec<String>, Box<dyn ::std::error::Error>>>()?;
-        Ok(match self.output_kind() {
-            OutputKind::Text => format!("Successfully cleared caches at: {:?}", cleared),
-            OutputKind::Json => json!({ "drained": cleared }).to_string(),
-        })
+        Ok(format_output(
+            format!("Successfully cleared caches at: {:?}", cleared),
+            json!({ "drained": cleared }),
+            &self.output_kind(),
+        ))
     }
 }
 
@@ -101,12 +103,16 @@ mod test {
     fn test_drain_comprehensive() {
         let all = DrainCli::from_iter_safe(&["drain", "all", "-o", "text"]).unwrap();
         match all.command.selection {
-            DrainSelection::All(output) => assert_eq!(output.kind, OutputKind::Text),
+            DrainSelection::All(output) => {
+                assert_eq!(output.kind, OutputKind::Text { max_width: 0 })
+            }
             _ => panic!("drain constructed incorrect command"),
         }
         let lib = DrainCli::from_iter_safe(&["drain", "lib", "-o", "text"]).unwrap();
         match lib.command.selection {
-            DrainSelection::Lib(output) => assert_eq!(output.kind, OutputKind::Text),
+            DrainSelection::Lib(output) => {
+                assert_eq!(output.kind, OutputKind::Text { max_width: 0 })
+            }
             _ => panic!("drain constructed incorrect command"),
         }
         let oci = DrainCli::from_iter_safe(&["drain", "oci", "-o", "json"]).unwrap();

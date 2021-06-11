@@ -660,7 +660,9 @@ fn update_spinner_message(
     if let Some(sp) = spinner {
         sp.message(msg);
         Some(sp)
-    } else if output.kind == OutputKind::Text && output_destination() == OutputDestination::Cli {
+    } else if matches!(output.kind, OutputKind::Text { .. })
+        && output_destination() == OutputDestination::Cli
+    {
         Some(Spinner::new(Spinners::Dots12, msg))
     } else {
         None
