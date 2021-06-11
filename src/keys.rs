@@ -79,18 +79,18 @@ pub(crate) fn handle_command(
 /// Generates a keypair of the specified KeyPairType, as either Text or JSON
 pub(crate) fn generate(kt: &KeyPairType, output: &OutputKind) -> String {
     let kp = KeyPair::new(kt.clone());
-    match output {
-        OutputKind::Text => format!(
+    format_output(
+        format!(
             "Public Key: {}\nSeed: {}\n\nRemember that the seed is private, treat it as a secret.",
             kp.public_key(),
             kp.seed().unwrap()
         ),
-        OutputKind::Json => json!({
+        json!({
             "public_key": kp.public_key(),
             "seed": kp.seed().unwrap(),
-        })
-        .to_string(),
-    }
+        }),
+        output,
+    )
 }
 
 /// Retrieves a keypair by name in a specified directory, or $WASH_KEYS ($HOME/.wash/keys) if directory is not specified
@@ -136,10 +136,11 @@ pub(crate) fn list(
         }
     }
 
-    Ok(match output.kind {
-        OutputKind::Text => format!("====== Keys found in {} ======\n{}", dir, keys.join("\n")),
-        OutputKind::Json => format!("{}", json!({ "keys": keys })),
-    })
+    Ok(format_output(
+        format!("====== Keys found in {} ======\n{}", dir, keys.join("\n")),
+        json!({ "keys": keys }),
+        &output.kind,
+    ))
 }
 
 fn determine_directory(directory: Option<String>) -> Result<String, Error> {
@@ -260,7 +261,7 @@ mod tests {
     fn test_generate_basic_test() {
         let kt = KeyPairType::Account;
 
-        let keypair = generate(&kt, &OutputKind::Text);
+        let keypair = generate(&kt, &OutputKind::Text { max_width: 0 });
         let keypair_json = generate(&kt, &OutputKind::Json);
 
         assert_eq!(keypair.contains("Public Key: "), true);
@@ -374,7 +375,7 @@ mod tests {
                         Operator => assert_eq!(*cmd, "operator"),
                         Cluster => assert_eq!(*cmd, "cluster"),
                     }
-                    assert_eq!(output.kind, OutputKind::Text);
+                    assert_eq!(output.kind, OutputKind::Text { max_width: 0 });
                 }
                 _ => panic!("`keys gen` constructed incorrect command"),
             };

@@ -709,7 +709,7 @@ async fn render_caps(cmd: InspectCommand) -> Result<String, Box<dyn ::std::error
                 token.jwt
             } else {
                 let validation = wascap::jwt::validate_token::<Actor>(&token.jwt)?;
-                render_actor_claims(token.claims, validation, &cmd.output, None)
+                render_actor_claims(token.claims, validation, &cmd.output)
             }
         }
         None => format!("No capabilities discovered in : {}", &cmd.module),
@@ -722,7 +722,6 @@ pub(crate) fn render_actor_claims(
     claims: Claims<Actor>,
     validation: TokenValidation,
     output: &Output,
-    max_width: Option<usize>,
 ) -> String {
     let md = claims.metadata.clone().unwrap();
     let friendly_rev = md.rev.unwrap_or(0);
@@ -777,7 +776,7 @@ pub(crate) fn render_actor_claims(
                 })
             )
         }
-        OutputKind::Text => {
+        OutputKind::Text { max_width } => {
             let mut table = render_core(&claims, validation, max_width);
 
             table.add_row(Row::new(vec![
@@ -833,20 +832,14 @@ fn token_label(pk: &str) -> String {
     }
 }
 
-fn render_core<T>(
-    claims: &Claims<T>,
-    validation: TokenValidation,
-    max_width: Option<usize>,
-) -> Table
+fn render_core<T>(claims: &Claims<T>, validation: TokenValidation, max_width: usize) -> Table
 where
     T: serde::Serialize + DeserializeOwned + WascapEntity,
 {
     let mut table = Table::new();
-    table.max_column_width = max_width.unwrap_or(68);
-    table.style = crate::util::empty_table_style();
-    table.separate_rows = false;
-    let headline = format!("{} - {}", claims.name(), token_label(&claims.subject));
+    crate::util::configure_table_style(&mut table, 2, max_width);
 
+    let headline = format!("{} - {}", claims.name(), token_label(&claims.subject));
     table.add_row(Row::new(vec![TableCell::new_with_alignment(
         headline,
         2,
@@ -996,7 +989,7 @@ mod test {
                     digest.unwrap(),
                     "sha256:5790f650cff526fcbc1271107a05111a6647002098b74a9a5e2e26e3c0a116b8"
                 );
-                assert_eq!(output.kind, OutputKind::Text);
+                assert_eq!(output.kind, OutputKind::Text { max_width: 0 });
                 assert_eq!(user.unwrap(), "name");
                 assert_eq!(password.unwrap(), "opensesame");
                 assert!(allow_latest);
@@ -1040,7 +1033,7 @@ mod test {
                     digest.unwrap(),
                     "sha256:5790f650cff526fcbc1271107a05111a6647002098b74a9a5e2e26e3c0a116b8"
                 );
-                assert_eq!(output.kind, OutputKind::Text);
+                assert_eq!(output.kind, OutputKind::Text { max_width: 0 });
                 assert_eq!(user.unwrap(), "name");
                 assert_eq!(password.unwrap(), "opensesame");
                 assert!(allow_latest);
