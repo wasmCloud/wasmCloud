@@ -28,13 +28,13 @@ pub(crate) struct Output {
         short = "o",
         long = "output",
         default_value = "text",
-        help = "Specify output format (text or json)"
+        help = "Specify output format (text, json or wide)"
     )]
     pub(crate) kind: OutputKind,
 }
 
 /// Used for displaying human-readable output vs JSON format
-#[derive(StructOpt, Debug, Copy, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Copy, Clone, Serialize, Deserialize, PartialEq)]
 pub(crate) enum OutputKind {
     Text { max_width: usize },
     Json,
@@ -65,6 +65,9 @@ impl FromStr for OutputKind {
             "json" => Ok(OutputKind::Json),
             "text" => Ok(OutputKind::Text {
                 max_width: get_max_text_output_width(),
+            }),
+            "wide" => Ok(OutputKind::Text {
+                max_width: usize::MAX,
             }),
             _ => Err(OutputParseErr),
         }
@@ -105,6 +108,22 @@ pub(crate) fn format_output(
         OutputKind::Text { .. } => text,
         OutputKind::Json => format!("{}", json),
     }
+}
+
+pub(crate) fn format_ellipsis(id: String, max_width: usize) -> String {
+    if id.len() > max_width {
+        let ellipsis = "...";
+        id.chars()
+            .take(max_width - ellipsis.len())
+            .collect::<String>()
+            + ellipsis
+    } else {
+        id
+    }
+}
+
+pub(crate) fn format_optional(value: Option<String>) -> String {
+    value.unwrap_or_else(|| "N/A".into())
 }
 
 /// Converts error from Send + Sync error to standard error
@@ -165,6 +184,13 @@ pub(crate) fn configure_table_style(table: &mut Table<'_>, columns: usize, max_t
     table.separate_rows = false;
 }
 
+pub(crate) fn get_max_column_width(table: &Table<'_>, column_index: usize) -> usize {
+    *table
+        .max_column_widths
+        .get(&column_index)
+        .unwrap_or(&table.max_column_width)
+}
+
 fn empty_table_style() -> TableStyle {
     TableStyle {
         top_left_corner: ' ',
@@ -183,8 +209,18 @@ fn empty_table_style() -> TableStyle {
 
 #[cfg(test)]
 mod test {
-    use super::configure_table_style;
+    use super::{configure_table_style, format_ellipsis};
     use term_table::{row::Row, table_cell::TableCell, Table};
+
+    #[test]
+    fn format_ellipsis_truncates_to_max_width() {
+        assert_eq!("hello w...", &format_ellipsis("hello world".into(), 10));
+    }
+
+    #[test]
+    fn format_ellipsis_no_ellipsis_necessary() {
+        assert_eq!("hello world", &format_ellipsis("hello world".into(), 11));
+    }
 
     #[test]
     fn max_table_width_one_column() {
