@@ -1,5 +1,5 @@
 extern crate wasmcloud_control_interface;
-use crate::util::{format_output, OutputKind, WASH_CMD_INFO};
+use crate::util::{format_ellipsis, format_optional, format_output, OutputKind, WASH_CMD_INFO};
 use log::debug;
 use serde_json::json;
 use term_table::{row::Row, table_cell::*, Table};
@@ -199,6 +199,10 @@ pub(crate) fn host_inventory_table(inv: HostInventory, max_width: usize) -> Stri
     let mut table = Table::new();
     crate::util::configure_table_style(&mut table, 4, max_width);
 
+    // TableCells have 1 char padding left and right. See [TableCell::pad_content].
+    let content_padding_width = 2;
+    let max_id_width = crate::util::get_max_column_width(&table, 0) - content_padding_width;
+
     table.add_row(Row::new(vec![TableCell::new_with_alignment(
         format!("Host Inventory ({})", inv.host_id),
         4,
@@ -232,18 +236,20 @@ pub(crate) fn host_inventory_table(inv: HostInventory, max_width: usize) -> Stri
             Alignment::Center,
         )]));
         table.add_row(Row::new(vec![
-            TableCell::new_with_alignment("Actor ID", 2, Alignment::Left),
+            TableCell::new_with_alignment("Actor ID", 1, Alignment::Left),
+            TableCell::new_with_alignment("Name", 1, Alignment::Left),
             TableCell::new_with_alignment("Image Reference", 2, Alignment::Left),
         ]));
         inv.actors.iter().for_each(|a| {
             let a = a.clone();
             table.add_row(Row::new(vec![
-                TableCell::new_with_alignment(a.id, 2, Alignment::Left),
                 TableCell::new_with_alignment(
-                    a.image_ref.unwrap_or_else(|| "N/A".to_string()),
-                    2,
+                    format_ellipsis(a.id, max_id_width),
+                    1,
                     Alignment::Left,
                 ),
+                TableCell::new_with_alignment(format_optional(a.name), 1, Alignment::Left),
+                TableCell::new_with_alignment(format_optional(a.image_ref), 2, Alignment::Left),
             ]))
         });
     } else {
@@ -261,20 +267,22 @@ pub(crate) fn host_inventory_table(inv: HostInventory, max_width: usize) -> Stri
             Alignment::Center,
         )]));
         table.add_row(Row::new(vec![
-            TableCell::new_with_alignment("Provider ID", 2, Alignment::Left),
+            TableCell::new_with_alignment("Provider ID", 1, Alignment::Left),
+            TableCell::new_with_alignment("Name", 1, Alignment::Left),
             TableCell::new_with_alignment("Link Name", 1, Alignment::Left),
             TableCell::new_with_alignment("Image Reference", 1, Alignment::Left),
         ]));
         inv.providers.iter().for_each(|p| {
             let p = p.clone();
             table.add_row(Row::new(vec![
-                TableCell::new_with_alignment(p.id, 2, Alignment::Left),
-                TableCell::new_with_alignment(p.link_name, 1, Alignment::Left),
                 TableCell::new_with_alignment(
-                    p.image_ref.unwrap_or_else(|| "N/A".to_string()),
+                    format_ellipsis(p.id, max_id_width),
                     1,
                     Alignment::Left,
                 ),
+                TableCell::new_with_alignment(format_optional(p.name), 1, Alignment::Left),
+                TableCell::new_with_alignment(p.link_name, 1, Alignment::Left),
+                TableCell::new_with_alignment(format_optional(p.image_ref), 1, Alignment::Left),
             ]))
         });
     } else {
