@@ -1,4 +1,3 @@
-#![feature(associated_type_defaults)]
 use crate::{
     model::{expect_member, CommentKind, ModelIndex},
     writer::ToBytes,
