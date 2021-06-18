@@ -12,9 +12,11 @@ WITH_MODELS = $(foreach m,$(ALL_MODELS), -i $(m))
 
 .PHONY: lint validate serve doc
 
+# Run lint check on all smithy models in the models/smithy folder
 lint:
 	$(WELD) lint $(WITH_MODELS)
 
+# Run validation checks on all smithy models in the models/smithy folder
 validate:
 	$(WELD) lint $(WITH_MODELS)
 
@@ -22,8 +24,11 @@ serve:
 	python -m http.server -d $(HTML_TARGET) 8000
 
 doc:
+	# To generate docs, you don't need `--template-dir docgen/templates` because
+	# templates are compiled into the weld binary. If you are doing development on the
+	# templates, use `--template-dir` (and optionally `--template`) to override
+	# the defaults, so you don't need to recompile `weld` to test new templates.
 	$(WELD) doc --template-dir docgen/templates --output-dir $(HTML_TARGET) $(WITH_MODELS)
-
 
 
 $(CSS_DEST): $(CSS_BUILD_OUT)
