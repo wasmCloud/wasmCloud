@@ -1,0 +1,32 @@
+[package]
+name = "wasmcloud-weld-bin"
+version = "0.1.0"
+edition = "2018"
+authors = [ "stevelr <dev@somecool.net>" ]
+license = "Apache-2.0"
+description = "CLI for wasmcloud-weld"
+homepage = "https://github.com/wasmcloud-weld"
+repository = "https://github.com/wasmcloud-weld"
+readme = "README.md"
+
+[[bin]]
+name = "weld"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0"
+bytes = "1.0"
+clap = { version = "3.0.0-beta.2", features = ["derive"] }
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+atelier_core = { git="https://github.com/stevelr/rust-atelier", branch="json-member-shape" }
+atelier_json = { git="https://github.com/stevelr/rust-atelier", branch="json-member-shape" }
+cargo_atelier = { git="https://github.com/stevelr/rust-atelier", branch="json-member-shape" }
+
+[dependencies.wasmcloud-weld-codegen]
+version = "0.1"
+path = "../codegen"
+
+[dependencies.wasmcloud-weld-docgen]
+version = "0.1"
+path = "../docgen"

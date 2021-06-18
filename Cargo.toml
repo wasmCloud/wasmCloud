@@ -1,0 +1,9 @@
+[workspace]
+members = [
+    "bin",
+    "codegen",
+    "docgen",
+    "macros",
+    "rpc",
+]
+

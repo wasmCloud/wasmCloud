@@ -1,0 +1,27 @@
+{
+  "name": "css-dev",
+  "version": "0.1.0",
+  "description": "build tailwind css",
+  "main": "postcss.config.js",
+  "dependencies": {
+    "@tailwindcss/typography": "^0.4.0",
+    "alpinejs": "^2.8.0"
+  },
+  "devDependencies": {
+    "autoprefixer": "^10.2.6",
+    "postcss": "^8.3.2",
+    "tailwindcss": "^2.1.4"
+  },
+  "scripts": {
+    "build": "npx tailwindcss-cli@latest build src/css/styles.css -c conf/tailwind.config.js -o dist/tailwind.css",
+    "build-prod": "NODE_ENV=production npx tailwindcss-cli@latest build src/css/styles.css -c conf/tailwind.config.js -o dist/tailwind.min.css",
+    "dist": "cp dist/tailwind*.css ../public/css/",
+    "build-all": "npm run build && npm run build-prod && npm run dist",
+    "clean": "rm -rf dist/*.css node_modules/.bin node_modules/*",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "repository": "https://github.com/wasmcloud/weld/docgen"
+}

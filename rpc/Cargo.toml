@@ -1,0 +1,29 @@
+[package]
+name = "wasmcloud-weld-rpc"
+version = "0.1.0"
+edition = "2018"
+authors = [ "stevelr <dev@somecool.net>" ]
+license = "Apache-2.0"
+description = "Runtime library for actors and capability providers"
+homepage = "https://github.com/wasmcloud/weld"
+repository = "https://github.com/wasmcloud/weld"
+documentation = "https://docs.rs/wasmcloud-weld-rpc"
+readme = "README.md"
+
+[features]
+default = []
+guest = []
+
+[dependencies]
+async-trait = "0.1"
+rmp-serde = "0.15.4"
+serde = { version = "1.0", features = ["derive"] }
+thiserror = "1.0"
+toml = "0.5"
+
+[dependencies.wasmcloud-weld-macros]
+version = "0.1"
+path = "../macros"
+
+#[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+#anyhow = "1.0"
