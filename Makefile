@@ -21,7 +21,7 @@ validate:
 	$(WELD) lint $(WITH_MODELS)
 
 serve:
-	python -m http.server -d $(HTML_TARGET) 8000
+	python3 -m http.server -d $(HTML_TARGET) 8000
 
 doc:
 	# To generate docs, you don't need `--template-dir docgen/templates` because
