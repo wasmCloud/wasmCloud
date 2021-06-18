@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 use atelier_core::io::ModelWriter;
 use bytes::BytesMut;
-use clap::{self, Clap};
+use clap::{self, Clap, ValueHint};
 use serde_json::Value;
 use std::{collections::BTreeSet, path::PathBuf, string::ToString};
 use wasmcloud_weld_codegen::{self as codegen, CodeGen};
@@ -46,21 +46,21 @@ pub struct GenerateOpt {
     output: PathBuf,
 
     /// Input files to process
-    #[clap(short, long)]
+    #[clap(name = "input", required=true, min_values=1, parse(from_os_str), value_hint = ValueHint::AnyPath)]
     input: Vec<PathBuf>,
 }
 
 #[derive(Clap, Debug)]
 pub struct LintOpt {
     /// Input files to process
-    #[clap(short, long)]
+    #[clap(name = "input", required=true, min_values=1, parse(from_os_str), value_hint = ValueHint::AnyPath)]
     input: Vec<PathBuf>,
 }
 
 #[derive(Clap, Debug)]
 pub struct ValidateOpt {
     /// Input files to process
-    #[clap(short, long)]
+    #[clap(name = "input", required=true, min_values=1, parse(from_os_str), value_hint = ValueHint::AnyPath)]
     input: Vec<PathBuf>,
 }
 
@@ -74,8 +74,8 @@ pub struct DocumentationOpt {
     #[clap(short, long)]
     single: Option<PathBuf>,
 
-    /// Input smithy files to process
-    #[clap(short, long)]
+    /// Input files to process
+    #[clap(name = "input", required=true, min_values=1, parse(from_os_str), value_hint = ValueHint::AnyPath)]
     input: Vec<PathBuf>,
 
     // optional path for saving intermediate json
@@ -129,7 +129,7 @@ fn generate(opt: &GenerateOpt) -> Result<()> {
 
 fn lint(opt: &LintOpt) -> Result<()> {
     use atelier_core::action::lint::{run_linter_actions, NamingConventions, UnwelcomeTerms};
-    //use atelier_core::action::Linter;
+
     // load all input files specified, generate model in json
     let model = codegen::load_model(&opt.input)?;
     let report = run_linter_actions(
@@ -151,7 +151,6 @@ fn validate(opt: &ValidateOpt) -> Result<()> {
     use atelier_core::action::validate::{
         run_validation_actions, CorrectTypeReferences, NoUnresolvedReferences,
     };
-    //use atelier_core::action::Validator;
     // load all input files specified, generate model in json
     let model = codegen::load_model(&opt.input)?;
     let report = run_validation_actions(
