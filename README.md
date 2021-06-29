@@ -12,24 +12,24 @@ The `weld` cli includes a code generator, documentation generator, a model linte
 
 
 - Getting started
-  - Install [weld](./prerequisites.md#weld) the `weld` cli tool and [prerequisites](./prerequisites.md)
-  - Look at the [examples](../examples) folder for common interfaces, actors, and capability providers.
-  - Create a rust [actor](./getting_started.md#creating-an-actor) project
-  - Create a rust [interface](./getting_started.md#creating-an-interface-project) project
+  - Install the [weld](doc/prerequisites.md#weld) cli tool and [prerequisites](doc/prerequisites.md)
+  - Look at the [examples](./examples/) folder for common interfaces, actors, and capability providers.
+  - Create a rust [actor](doc/getting_started.md#creating-an-actor) project
+  - Create a rust [interface](doc/getting_started.md#creating-an-interface-project) project
 
-- Install the Visual Studio plugin for smithy syntax highlighting (in extensions marketplace or from [github](https://github.com/awslabs/smithy-vscode)
+- Install the Visual Studio plugin for Smithy syntax highlighting (in extensions marketplace or from [github](https://github.com/awslabs/smithy-vscode)
 
 
 - Guides
-  - Read the [Weld-Smithy guide](./weld-smithy.md) for examples of how weld uses smithy models, with examples.
-  - Read [codegen.toml guide](./codegen-toml.md) for instructions and examples for editing a project `codegen.toml`.
+  - Read the [Weld-Smithy guide](doc/weld-smithy.md) for examples of how weld uses smithy models, with examples.
+  - Read [codegen.toml guide](doc/codegen-toml.md) for instructions and examples for editing a project `codegen.toml`.
 
 
   - Tips and suggestions
-    - [simplify single-member structures](./tips/single-member-structures.md)
+    - [simplify single-member structures](doc/tips/single-member-structures.md)
   
 
-## Reference 
+## Smithy References and tools
 
 - [Smithy home page](https://awslabs.github.io/smithy/index.html)
 - [IDL spec v1.0](https://awslabs.github.io/smithy/1.0/spec/core/idl.html)
@@ -41,7 +41,6 @@ The `weld` cli includes a code generator, documentation generator, a model linte
 - Tools
   - [Visual Studio plugin](https://github.com/awslabs/smithy-vscode) (just search the extension marketplace for easy installation)
   - [Rust Atelier](https://github.com/johnstonskj/rust-atelier). Contains cli (`cargo-atelier`) that performs lint, validation, and model converion (various formats). Not necessary if you are using `weld`.
-  - [Other tools]()
     
 - SDKs (code generators and tools below are implemented in Java)
   - [Java SDK - main repo](https://github.com/awslabs) ( [javadoc](https://awslabs.github.io/smithy/javadoc/1.8.0/)  )
@@ -56,12 +55,11 @@ This is a work in progress - offers of help are much appreciated! Current status
 
 |Done? | |
 | :--- | :--- |
-| [ ] | Getting started documentation |
+| [ ] | Getting started documentation (50%) |
 | [x] | lint |
 | [x] | validate |
 | [x] | HTML documentation generation |
-| [ ] | code generation Rust [x] Actors [(50%)] Providers (pre-OTP) [(25%)] Providers (OTP)|
-| [ ] | code generation AssemblyScript [ ] Actors |
-| [ ] | code generation TinyGo [ ] Actors |
-| [ ] | code generation Go [ ] Providers (requires OTP) |
+| [ ] | code generation Rust: [x] Actor, [x] Interface library, [25%] Provider (OTP)|
+| [ ] | code generation AssemblyScript: [ ] Actor |
+| [ ] | code generation Go: [ ] Provider (OTP) |
 
