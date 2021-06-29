@@ -182,9 +182,11 @@ async fn nats_connection(
 ) -> Result<nats::asynk::Connection> {
     if let (Some(jwt_file), Some(seed_val)) = (jwt, seed) {
         let kp = nkeys::KeyPair::from_seed(&extract_arg_value(&seed_val)?)?;
+        let jwt_contents = extract_arg_value(&jwt_file)?;
+
         // You must provide the JWT via a closure
         Ok(nats::Options::with_jwt(
-            move || Ok(jwt_file.clone()),
+            move || Ok(jwt_contents.clone()),
             move |nonce| kp.sign(nonce).unwrap(),
         )
         .connect_async(url)
