@@ -1,0 +1,21 @@
+namespace org.wasmcloud.example.ping
+
+use org.wasmcloud.core.v0#actorReceiver
+use org.wasmcloud.core.v0#providerReceiver
+use org.wasmcloud.core.v0#wapc
+
+/// A Ponger service can receive a ping message and returns a pong response.
+@actorReceiver
+@providerReceiver
+@wapc
+service Ponger {
+    version: "0.1",
+    operations: [ Ping ]
+}
+
+/// A Ping takes a string and returns a string
+operation Ping {
+    input: String,
+    output: String,
+}
+

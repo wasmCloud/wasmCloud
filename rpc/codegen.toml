@@ -1,0 +1,24 @@
+
+# model sources and dependencies
+[[models]]
+url = "https://wasmcloud.github.io/models/org.wasmcloud"
+files = [ "wasmcloud-core-v0.smithy", "wasmcloud-model-v0.smithy" ]
+#[[models]]
+#path = "../models/smithy"
+#files = [ "wasmcloud-core.smithy", "wasmcloud-model.smithy" ]
+
+##
+## Rust Codegen
+##
+[rust]
+# output dir relative to OUT_DIR (compiler environment variable)
+output_dir = "src"
+
+## parameters for codegen
+[rust.parameters]
+
+
+[[rust.files]]
+namespace = "org.wasmcloud.core.v0"
+path = "core.rs"
+crate = "wasmcloud_weld_rpc"

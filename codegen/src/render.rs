@@ -1,30 +1,17 @@
 //! Code generation
 //!
-use crate::files::find_files;
-use atelier_core::model::{NamespaceID, ShapeID};
+use crate::{strings, JsonMap, JsonValue};
+use atelier_core::model::{Identifier, NamespaceID, ShapeID};
 use handlebars::{
-    Context, Handlebars, Helper, HelperDef, HelperResult, JsonValue, Output, RenderContext,
-    ScopedJson,
+    Context, Handlebars, Helper, HelperDef, HelperResult, Output, RenderContext, ScopedJson,
 };
+use serde::Serialize;
 use serde_json::Value;
-use std::{collections::BTreeMap, str::FromStr};
-use wasmcloud_weld_codegen::{error::Error as CodegenError, strings};
+use std::str::FromStr;
 
 pub use handlebars::RenderError;
 
-type JsonMap = serde_json::Map<String, JsonValue>;
-type VarMap = BTreeMap<String, JsonValue>;
-
 // these defaults can be overridden by the config file
-/// Pairing of template name and contents
-///
-pub type Template<'template> = (&'template str, &'template str);
-
-/// Default templates
-const DEFAULT_TEMPLATES: &[(&str, &str)] = &[
-    ("base0", include_str!("../templates/base0.hbs")),
-    ("namespace", include_str!("../templates/namespace.hbs")),
-];
 
 const DOCUMENTATION_TRAIT: &str = "smithy.api#documentation";
 const TRAIT_TRAIT: &str = "smithy.api#trait";
@@ -66,6 +53,10 @@ const BASIC_TYPES: &[&str] = &[
     "document",
 ];
 
+/// Pairing of template name and contents
+///
+pub type Template<'template> = (&'template str, &'template str);
+
 #[derive(Debug)]
 pub struct RenderConfig<'render> {
     /// Templates to be loaded for renderer. List of template name, data
@@ -79,8 +70,8 @@ pub struct RenderConfig<'render> {
 impl<'render> Default for RenderConfig<'render> {
     fn default() -> Self {
         Self {
-            templates: Vec::from(DEFAULT_TEMPLATES),
-            strict_mode: true,
+            templates: Vec::default(),
+            strict_mode: false,
         }
     }
 }
@@ -89,8 +80,6 @@ impl<'render> Default for RenderConfig<'render> {
 pub struct Renderer<'gen> {
     /// Handlebars processor
     hb: Handlebars<'gen>,
-    /// Additional dictionary that supplements data passed to render() method
-    vars: VarMap,
 }
 
 impl<'gen> Default for Renderer<'gen> {
@@ -102,7 +91,7 @@ impl<'gen> Default for Renderer<'gen> {
 
 impl<'gen> Renderer<'gen> {
     /// Initialize handlebars template processor.
-    pub fn init(config: &RenderConfig) -> Result<Self, CodegenError> {
+    pub fn init(config: &RenderConfig) -> Result<Self, crate::Error> {
         let mut hb = Handlebars::new();
         // don't use strict mode because
         // it's easier in templates to use if we allow undefined ~= false-y
@@ -115,36 +104,27 @@ impl<'gen> Renderer<'gen> {
             hb.register_template_string(t.0, t.1)?;
         }
 
-        let renderer = Self {
-            hb,
-            vars: VarMap::default(),
-        };
-        Ok(renderer)
-    }
-
-    /// Set a value in the renderer dict. If the key was previously set, it is replaced.
-    /// Values in the renderer dict override any values passed to render()
-    pub fn set<K: Into<String>, V: Into<JsonValue>>(&mut self, key: K, val: V) {
-        self.vars.insert(key.into(), val.into());
-    }
-
-    /// Remove key if it was present
-    pub fn remove(&mut self, key: &str) {
-        self.vars.remove(key);
+        Ok(Self { hb })
     }
 
     /// Adds template to internal dictionary
-    pub fn add_template(&mut self, template: Template) -> Result<(), CodegenError> {
+    pub fn add_template(&mut self, template: Template) -> Result<(), crate::Error> {
         self.hb.register_template_string(template.0, template.1)?;
         Ok(())
     }
 
     /// Render a template
-    pub fn render<W>(&self, template_name: &str, writer: &mut W) -> Result<(), CodegenError>
+    pub fn render<T, W>(
+        &self,
+        template_name: &str,
+        data: &T,
+        writer: &mut W,
+    ) -> Result<(), crate::Error>
     where
+        T: Serialize,
         W: std::io::Write,
     {
-        self.hb.render_to_write(template_name, &self.vars, writer)?;
+        self.hb.render_to_write(template_name, data, writer)?;
         Ok(())
     }
 }
@@ -234,7 +214,7 @@ impl HelperDef for ShapeHelper {
         _reg: &'reg Handlebars<'reg>,
         _ctx: &'rc Context,
         _rc: &mut RenderContext<'reg, 'rc>,
-    ) -> Result<Option<ScopedJson<'reg, 'rc>>, RenderError> {
+    ) -> Result<ScopedJson<'reg, 'rc>, RenderError> {
         let shape_kind = arg_as_string(h, 0, "filter_shapes")?.to_string();
         let arr = arg_as_array(h, 1, "filter_shapes")?;
 
@@ -251,7 +231,7 @@ impl HelperDef for ShapeHelper {
             })
             .cloned()
             .collect::<Vec<Value>>();
-        Ok(Some(ScopedJson::Derived(Value::Array(shapes))))
+        Ok(ScopedJson::Derived(Value::Array(shapes)))
     }
 }
 
@@ -265,7 +245,7 @@ impl HelperDef for NamespaceHelper {
         _reg: &'reg Handlebars<'reg>,
         _ctx: &'rc Context,
         _rc: &mut RenderContext<'reg, 'rc>,
-    ) -> Result<Option<ScopedJson<'reg, 'rc>>, RenderError> {
+    ) -> Result<ScopedJson<'reg, 'rc>, RenderError> {
         let namespace = arg_as_string(h, 0, "filter_namespace")?;
         let namespace = NamespaceID::from_str(namespace)
             .map_err(|e| RenderError::new(&format!("invalid namespace {}", e)))?;
@@ -274,7 +254,7 @@ impl HelperDef for NamespaceHelper {
             .iter()
             .filter(|(k, _)| ShapeID::from_str(k).unwrap().namespace() == &namespace)
             .collect::<Vec<(&String, &Value)>>();
-        Ok(Some(ScopedJson::Derived(to_sorted_array(shapes))))
+        Ok(ScopedJson::Derived(to_sorted_array(shapes)))
     }
 }
 
@@ -288,11 +268,11 @@ impl HelperDef for SimpleTypeHelper {
         _reg: &'reg Handlebars<'reg>,
         _ctx: &'rc Context,
         _rc: &mut RenderContext<'reg, 'rc>,
-    ) -> Result<Option<ScopedJson<'reg, 'rc>>, RenderError> {
+    ) -> Result<ScopedJson<'reg, 'rc>, RenderError> {
         let type_name = arg_as_string(h, 0, "is_simple")?;
-        Ok(Some(ScopedJson::Derived(serde_json::Value::Bool(
+        Ok(ScopedJson::Derived(serde_json::Value::Bool(
             SIMPLE_SHAPES.contains(&type_name),
-        ))))
+        )))
     }
 }
 
@@ -306,7 +286,7 @@ impl HelperDef for DocHelper {
         _reg: &'reg Handlebars<'reg>,
         _ctx: &'rc Context,
         _rc: &mut RenderContext<'reg, 'rc>,
-    ) -> Result<Option<ScopedJson<'reg, 'rc>>, RenderError> {
+    ) -> Result<ScopedJson<'reg, 'rc>, RenderError> {
         let mut doc = String::new();
         let shape_props = arg_as_obj(h, 0, "doc")?;
         if let Some(JsonValue::Object(traits)) = shape_props.get("traits") {
@@ -315,7 +295,7 @@ impl HelperDef for DocHelper {
                 // TODO: should convert markdown to html!
             }
         }
-        Ok(Some(ScopedJson::Derived(serde_json::Value::String(doc))))
+        Ok(ScopedJson::Derived(serde_json::Value::String(doc)))
     }
 }
 
@@ -389,7 +369,7 @@ impl HelperDef for TraitsHelper {
         _reg: &'reg Handlebars<'reg>,
         _ctx: &'rc Context,
         _rc: &mut RenderContext<'reg, 'rc>,
-    ) -> Result<Option<ScopedJson<'reg, 'rc>>, RenderError> {
+    ) -> Result<ScopedJson<'reg, 'rc>, RenderError> {
         let mut traits_no_doc = JsonMap::new();
 
         let shape_props = arg_as_obj(h, 0, "traits")?;
@@ -401,9 +381,9 @@ impl HelperDef for TraitsHelper {
             }
         }
         // TODO (later) - turn into an array with sorted keys
-        Ok(Some(ScopedJson::Derived(serde_json::Value::Object(
+        Ok(ScopedJson::Derived(serde_json::Value::Object(
             traits_no_doc,
-        ))))
+        )))
     }
 }
 
@@ -433,10 +413,10 @@ impl HelperDef for IsTraitHelper {
         _reg: &'reg Handlebars<'reg>,
         _ctx: &'rc Context,
         _rc: &mut RenderContext<'reg, 'rc>,
-    ) -> Result<Option<ScopedJson<'reg, 'rc>>, RenderError> {
+    ) -> Result<ScopedJson<'reg, 'rc>, RenderError> {
         let shape = arg_as_obj(h, 0, "is_trait")?;
-        Ok(Some(ScopedJson::Derived(serde_json::Value::Bool(
-            map_is_trait(shape),
+        Ok(ScopedJson::Derived(serde_json::Value::Bool(map_is_trait(
+            shape,
         ))))
     }
 }
@@ -479,8 +459,9 @@ fn add_base_helpers(hb: &mut Handlebars) {
              -> HelperResult {
                 // get first arg as string
                 let id = arg_as_string(h, 0, "namespace")?;
-                let id = ShapeID::from_str(id)
-                    .map_err(|e| RenderError::new(&format!("invalid shape id {}", e)))?;
+                let id = ShapeID::from_str(id).map_err(|e| {
+                    RenderError::new(&format!("invalid shape id {} for namespace_name", e))
+                })?;
                 out.write(&id.namespace().to_string())?;
                 Ok(())
             },
@@ -542,8 +523,9 @@ fn add_base_helpers(hb: &mut Handlebars) {
              out: &mut dyn Output|
              -> HelperResult {
                 let id = arg_as_string(h, 0, "shape_name")?;
-                let id = ShapeID::from_str(id)
-                    .map_err(|e| RenderError::new(&format!("invalid shape id {}", e)))?;
+                let id = ShapeID::from_str(id).map_err(|e| {
+                    RenderError::new(&format!("invalid shape id {} for shape_name", e))
+                })?;
                 out.write(&id.shape_name().to_string())?;
                 Ok(())
             },
@@ -563,21 +545,20 @@ fn add_base_helpers(hb: &mut Handlebars) {
              out: &mut dyn Output|
              -> HelperResult {
                 let id = arg_as_string(h, 0, "member_name")?;
-                let id = ShapeID::from_str(id)
-                    .map_err(|e| RenderError::new(&format!("invalid shape id {}", e)))?;
-                if let Some(member) = id.member_name() {
-                    out.write(&member.to_string())?;
-                }
+                let id = Identifier::from_str(id).map_err(|e| {
+                    RenderError::new(&format!("invalid member id {} for member_name", e))
+                })?;
+                out.write(&id.to_string())?;
                 Ok(())
             },
         ),
     );
 
     //
-    // convert an arbitrary string to an anchor id
+    // to_pascal_case
     //
     hb.register_helper(
-        "anchor",
+        "to_pascal_case",
         Box::new(
             |h: &Helper,
              _r: &Handlebars,
@@ -585,30 +566,29 @@ fn add_base_helpers(hb: &mut Handlebars) {
              _rc: &mut RenderContext,
              out: &mut dyn Output|
              -> HelperResult {
-                let id = arg_as_string(h, 0, "anchor")?;
+                let id = arg_as_string(h, 0, "to_pascal_case")?;
+                out.write(&strings::to_pascal_case(id))?;
+                Ok(())
+            },
+        ),
+    );
+
+    //
+    // to_snake_case
+    //
+    hb.register_helper(
+        "to_snake_case",
+        Box::new(
+            |h: &Helper,
+             _r: &Handlebars,
+             _: &Context,
+             _rc: &mut RenderContext,
+             out: &mut dyn Output|
+             -> HelperResult {
+                let id = arg_as_string(h, 0, "to_snake_case")?;
                 out.write(&strings::to_snake_case(id))?;
                 Ok(())
             },
         ),
     );
-}
-
-/// Add all templates from the specified folder, using the base file name
-/// as the template name. For example, "header.hbs" will be registered as "header"
-#[cfg(not(target_arch = "wasm32"))]
-pub fn add_templates_from_dir(
-    start: &std::path::Path,
-    renderer: &mut Renderer,
-) -> Result<(), CodegenError> {
-    for path in find_files(start, "hbs")?.iter() {
-        let stem = path
-            .file_stem()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_default();
-        if !stem.is_empty() {
-            let template = std::fs::read_to_string(path)?;
-            renderer.add_template((stem.as_str(), &template))?;
-        }
-    }
-    Ok(())
 }

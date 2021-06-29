@@ -27,22 +27,41 @@ pub enum Error {
     #[error("invalid model: {0}")]
     InvalidModel(String),
 
-    #[error("BigInteger is currently an unsupported type")]
-    UnsupportedBigInteger,
-    #[error("BigDecimal is currently an unsupported type")]
-    UnsupportedBigDecimal,
-    #[error("Timestamp is currently an unsupported type")]
-    UnsupportedTimestamp,
-    #[error("Document is currently an unsupported type")]
-    UnsupportedDocument,
+    //#[error("Document is currently an unsupported type")]
+    //UnsupportedDocument,
     #[error("{0} is an unsupported type")]
     UnsupportedType(String),
 
     #[error("handlebars error: {0}")]
     Handlebars(String),
 
-    #[error("visitor: {0}")]
-    Inner(String),
+    #[error("ser-deser : {0}")]
+    Serde(String),
+
+    #[error("rustfmt {0}")]
+    Rustfmt(String),
+
+    // build error
+    #[error("{0}")]
+    Build(String),
+
+    // catch-all - use descriptive error text
+    #[error("{0}")]
+    Other(String),
+
+    //#[error("visitor: {0}")]
+    //Inner(String),
+    #[cfg(not(feature = "BigInteger"))]
+    #[error("BigInteger is currently an unsupported type")]
+    UnsupportedBigInteger,
+
+    #[cfg(not(feature = "BigDecimal"))]
+    #[error("BigDecimal is currently an unsupported type")]
+    UnsupportedBigDecimal,
+
+    #[cfg(not(feature = "Timestamp"))]
+    #[error("Timestamp is currently an unsupported type")]
+    UnsupportedTimestamp,
 }
 
 impl From<std::io::Error> for Error {
@@ -66,5 +85,11 @@ impl From<handlebars::RenderError> for Error {
 impl From<atelier_core::error::Error> for Error {
     fn from(e: atelier_core::error::Error) -> Error {
         Error::Model(e.to_string())
+    }
+}
+
+impl From<serde_json::Error> for Error {
+    fn from(e: serde_json::Error) -> Error {
+        Error::Serde(e.to_string())
     }
 }

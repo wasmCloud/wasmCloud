@@ -1,16 +1,38 @@
 
 HTML_TARGET = models/html
 
-WELD = target/debug/weld
+WELD_DBG = target/debug/weld
+WELD_REL = target/release/weld
+WELD     = $(WELD_DBG)
 CSS_BUILD_OUT = $(wildcard docgen/dev/gen/css/*.css)
 CSS_BUILD_SRC  = docgen/dev/src/css/styles.css
 CSS_DEST = $(addprefix $(HTML_TARGET)/css/,$(notdir $(CSS_BUILD_OUT)))
 
-MODEL_DIR = models/smithy
-ALL_MODELS = $(wildcard models/smithy/*.smithy)
-ALL_TEMPLATES = $(wildcard docgen/templates/*.hbs)
+ALL_MODELS    = $(wildcard models/smithy/*.smithy)
+ALL_TEMPLATES = $(wildcard docgen/templates/*.hbs) $(wildcard codegen/templates/**/*.hbs)
 
-.PHONY: lint validate serve doc
+.PHONY: all build doc rust lint validate serve
+
+all: $(WELD) build doc
+
+$(WELD_DBG): $(ALL_TEMPLATES) bin/src/main.rs
+	cargo build --package wasmcloud-weld-bin
+
+$(WELD_REL): $(ALL_TEMPLATES) bin/src/main.rs
+	cargo build --release --package wasmcloud-weld-bin
+
+build: rust
+	cargo build
+
+doc: $(CSS_DEST)
+	$(WELD) gen -l html --config codegen.toml \
+		--template-dir=docgen/templates \
+		--output-dir=. $(ALL_MODELS)
+
+rust:
+	$(WELD) gen -l rust --config codegen.toml \
+		--template-dir=codegen/templates/rust \
+		--output-dir=. $(ALL_MODELS)
 
 # Run lint check on all smithy models in the models/smithy folder
 lint:
@@ -18,18 +40,10 @@ lint:
 
 # Run validation checks on all smithy models in the models/smithy folder
 validate:
-	$(WELD) lint $(ALL_MODELS)
+	$(WELD) validate $(ALL_MODELS)
 
-serve:
+serve: doc
 	python3 -m http.server -d $(HTML_TARGET) 8000
-
-doc:
-	# To generate docs, you don't need `--template-dir docgen/templates` because
-	# templates are compiled into the weld binary. If you are doing development on the
-	# templates, use `--template-dir` (and optionally `--template`) to override
-	# the defaults, so you don't need to recompile `weld` to test new templates.
-	$(WELD) doc --template-dir docgen/templates --output-dir $(HTML_TARGET) $(ALL_MODELS)
-
 
 $(CSS_DEST): $(CSS_BUILD_OUT)
 	mkdir -p $(dir $@)
@@ -39,3 +53,8 @@ $(CSS_DEST): $(CSS_BUILD_OUT)
 # (pruning to generate .min.css is dependent on styles used in templates)
 $(CSS_BUILD_OUT): $(CSS_BUILD_SRC) $(ALL_TEMPLATES)
 	cd docgen/dev && ./update-css.sh
+
+clean:
+	cargo clean
+	rm -f models/html/*.html
+	#rm -f rpc/src/{core,health,model}.rs

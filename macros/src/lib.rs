@@ -27,7 +27,7 @@ fn attr_traits(attr: &Attribute, key: &str) -> Vec<syn::Path> {
 }
 
 #[allow(dead_code)]
-struct ServerDef {
+struct ReceiverDef {
     attrs: Vec<Attribute>,
     attrs_span: Span,
     ident: Ident,
@@ -35,7 +35,7 @@ struct ServerDef {
     fields: Fields,
 }
 
-impl syn::parse::Parse for ServerDef {
+impl syn::parse::Parse for ReceiverDef {
     fn parse(input: syn::parse::ParseStream) -> ParseResult<Self> {
         let derive_input: syn::DeriveInput = input.parse()?;
         let attrs_span = derive_input.span();
@@ -52,7 +52,7 @@ impl syn::parse::Parse for ServerDef {
                 ))
             }
         };
-        Ok(ServerDef {
+        Ok(ReceiverDef {
             attrs,
             attrs_span,
             ident,
@@ -65,19 +65,19 @@ impl syn::parse::Parse for ServerDef {
 #[proc_macro_error]
 #[proc_macro_derive(Actor, attributes(services))]
 pub fn derive_actor(input: TokenStream) -> TokenStream {
-    let actor_server = parse_macro_input!(input as ServerDef);
+    let actor_receiver = parse_macro_input!(input as ReceiverDef);
 
     let mut traits = Vec::new();
-    for attr in actor_server.attrs.iter() {
+    for attr in actor_receiver.attrs.iter() {
         traits.extend(attr_traits(attr, "services"));
     }
     if traits.is_empty() {
         abort!(
-            actor_server.attrs_span,
+            actor_receiver.attrs_span,
             "Missing list of traits. try `#[services(Trait1,Trait2)]`"
         );
     }
-    let actor_ident = actor_server.ident;
+    let actor_ident = actor_receiver.ident;
     let dispatch_impl = gen_dispatch(&traits, &actor_ident);
     let output = quote!(
 
@@ -131,8 +131,6 @@ pub fn derive_actor(input: TokenStream) -> TokenStream {
                 1
             }
             Err(e) => {
-                //let errmsg = format!("Guest call failed for method {} on {}: {}",
-                //        &method, #actor_ident, e);
                 let errmsg = format!("Guest call failed for method {}: {}",
                         &method, e);
                 unsafe {
@@ -158,12 +156,12 @@ pub fn derive_actor(input: TokenStream) -> TokenStream {
 fn gen_dispatch(traits: &[syn::Path], ident: &Ident) -> TokenStream2 {
     let mut methods = Vec::new();
     let mut methods_legacy = Vec::new();
-    let mut trait_server_impl = Vec::new();
+    let mut trait_receiver_impl = Vec::new();
     //let ident_name = ident.to_string();
 
     for path in traits.iter() {
         let path_str = path.segments.to_token_stream().to_string();
-        let id = format_ident!("{}Server", &path_str);
+        let id = format_ident!("{}Receiver", &path_str);
         //let quoted_path = format!("\"{}\"", &path_str);
         methods.push(quote!(
             #path_str => #id::dispatch(self, ctx, &message).await
@@ -174,7 +172,7 @@ fn gen_dispatch(traits: &[syn::Path], ident: &Ident) -> TokenStream2 {
                 res => return res, // either Ok(_) or Err(_)
             };
         ));
-        trait_server_impl.push(quote!(
+        trait_receiver_impl.push(quote!(
             impl #id for #ident { }
         ));
     }
@@ -210,30 +208,27 @@ fn gen_dispatch(traits: &[syn::Path], ident: &Ident) -> TokenStream2 {
             }
         }
 
-      #( #trait_server_impl )*
+      #( #trait_receiver_impl )*
     )
 }
-/*
-
-*/
 
 #[proc_macro_error]
 #[proc_macro_derive(Provider, attributes(services))]
 pub fn derive_provider(input: TokenStream) -> TokenStream {
-    let provider_server = parse_macro_input!(input as ServerDef);
+    let provider_receiver = parse_macro_input!(input as ReceiverDef);
 
     let mut traits = Vec::new();
-    for attr in provider_server.attrs.iter() {
+    for attr in provider_receiver.attrs.iter() {
         traits.extend(attr_traits(attr, "services"));
     }
     if traits.is_empty() {
         abort!(
-            provider_server.attrs_span,
+            provider_receiver.attrs_span,
             "Missing list of traits. try `#[services(Trait1,Trait2)]`"
         );
     }
-    let ident = provider_server.ident;
-    //let fields = actor_server.fields;
+    let ident = provider_receiver.ident;
+    //let fields = actor_receiver.fields;
     let dispatch_impl = gen_dispatch(&traits, &ident);
     let output = quote!(
 

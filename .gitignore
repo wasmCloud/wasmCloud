@@ -1,3 +1,7 @@
 target
-.idea
 Cargo.lock
+out
+scratch
+.idea
+.vscode
+TODO.md

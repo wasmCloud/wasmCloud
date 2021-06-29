@@ -1,0 +1,15 @@
+labels:
+    sample: "wasmcloud {{ project_name }}"
+actors:
+    - target/wasm32-unknown-unknown/release/{{ to_snake_case project_name }}_s.wasm
+capabilities:
+    - image_ref: wasmcloud.azurecr.io/httpserver:0.12.1
+      link_name: default
+
+links:
+    - actor: ${ACTOR_ID:Mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx}
+      provider_id: "VAG3QITQQ2ODAOWB5TTQSDJ53XK3SHBEIFNK4AYJ5RKAX2UNSCAPHA5M"
+      contract_id: "wasmcloud:httpserver"
+      link_name: default
+      values:
+        PORT: 8080

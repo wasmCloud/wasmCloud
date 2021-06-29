@@ -1,4 +1,4 @@
-use bytes::BytesMut;
+use crate::BytesMut;
 
 #[derive(Default)]
 pub struct Writer {

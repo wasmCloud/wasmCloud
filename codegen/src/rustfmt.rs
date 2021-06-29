@@ -1,6 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use anyhow::{anyhow, Result};
+use crate::{Error, Result};
 
 pub struct RustFmtCommand<'cmd> {
     /// either 'rustfmt', (the default, assumes ~/.cargo/bin is in your path,
@@ -23,9 +23,9 @@ impl<'cmd> Default for RustFmtCommand<'cmd> {
 }
 
 impl<'cmd> RustFmtCommand<'cmd> {
-    pub fn execute(&self, source_files: Vec<&std::path::Path>) -> Result<()> {
+    pub fn execute(&self, source_files: Vec<std::path::PathBuf>) -> Result<()> {
         if !matches!(self.edition, "2015" | "2018" | "2021") {
-            return Err(anyhow!("Invalid edition: {}", self.edition));
+            return Err(Error::Rustfmt(format!("invalid edition: {}", self.edition)));
         }
         let missing = source_files
             .iter()
@@ -33,7 +33,10 @@ impl<'cmd> RustFmtCommand<'cmd> {
             .map(|p| p.to_string_lossy().into_owned())
             .collect::<Vec<String>>();
         if !missing.is_empty() {
-            return Err(anyhow!("Missing source file(s) '{}'", missing.join(",")));
+            return Err(Error::Rustfmt(format!(
+                "missing source file(s) '{}'",
+                missing.join(",")
+            )));
         }
         let source_paths: Vec<std::borrow::Cow<'_, str>> =
             source_files.iter().map(|p| p.to_string_lossy()).collect();
@@ -44,13 +47,13 @@ impl<'cmd> RustFmtCommand<'cmd> {
         let mut child = std::process::Command::new(self.program)
             .args(&args)
             .spawn()
-            .map_err(|e| anyhow!("Failed to start rustfmt: {}", e.to_string()))?;
+            .map_err(|e| Error::Rustfmt(format!("failed to start: {}", e.to_string())))?;
 
-        let code = child
-            .wait()
-            .map_err(|e| anyhow!("failed waiting for rustfmt: {}", e.to_string()))?;
+        let code = child.wait().map_err(|e| {
+            Error::Rustfmt(format!("failed waiting for rustfmt: {}", e.to_string()))
+        })?;
         if !code.success() {
-            return Err(anyhow!("rustfmt exited with error {}", code.to_string()));
+            return Err(Error::Rustfmt(code.to_string()));
         }
         Ok(())
     }

@@ -30,34 +30,34 @@ pub mod context {
 pub mod client {
     /// Client config defines the intended recipient of a message
     #[derive(Debug)]
-    pub struct ClientConfig {
+    pub struct SendConfig {
         /// Host/link name, usually "default" for the current host
         pub host: String,
         /// Recipient of message, such as actor's public key or provider id
         pub target: String,
     }
 
-    impl ClientConfig {
+    impl SendConfig {
         /// Constructs a new client with host and target
         /// when sending to a capability provider,
-        pub fn new<H: Into<String>, T: Into<String>>(host: H, target: T) -> ClientConfig {
-            ClientConfig {
+        pub fn new<H: Into<String>, T: Into<String>>(host: H, target: T) -> SendConfig {
+            SendConfig {
                 host: host.into(),
                 target: target.into(),
             }
         }
 
-        /// Create a ClientConfig for sending to an actor
-        pub fn actor<T: Into<String>>(target: T) -> ClientConfig {
-            ClientConfig {
+        /// Create a SendConfig for sending to an actor
+        pub fn actor<T: Into<String>>(target: T) -> SendConfig {
+            SendConfig {
                 host: "default".into(),
                 target: target.into(),
             }
         }
 
-        /// Create a ClientConfig using the default host and specified target
-        pub fn target<T: Into<String>>(target: T) -> ClientConfig {
-            ClientConfig {
+        /// Create a SendConfig using the default host and specified target
+        pub fn target<T: Into<String>>(target: T) -> SendConfig {
+            SendConfig {
                 host: "default".into(),
                 target: target.into(),
             }
@@ -72,46 +72,30 @@ pub trait Transport: Send {
     async fn send(
         &self,
         ctx: &context::Context<'_>,
-        config: &client::ClientConfig,
+        config: &client::SendConfig,
         req: Message<'_>,
     ) -> std::result::Result<Message<'static>, RpcError>;
 }
 
-#[derive(Clone, Debug, Default)]
-pub struct WasmHost {}
+// select serialization/deserialization mode
+cfg_if::cfg_if! {
+    if #[cfg(feature = "ser_msgpack")] {
+        pub fn deserialize<'de, T: Deserialize<'de>>(buf: &'de [u8]) -> Result<T, RpcError> {
+            rmp_serde::from_read_ref(buf).map_err(|e| RpcError::Deser(e.to_string()))
+        }
 
-//#[cfg(target_arch = "wasm32")]
-#[async_trait]
-impl Transport for WasmHost {
-    async fn send(
-        &self,
-        _ctx: &context::Context<'_>,
-        config: &client::ClientConfig,
-        req: Message<'_>,
-    ) -> std::result::Result<Message<'static>, RpcError> {
-        // TODO: currently makes no distinction between sending to actor and provider
-        // this is an actor call
-        let res = crate::host_call(
-            &config.host,   // "default", or capability provider ID
-            &config.target, // actor_ref, or capability name (e.g. wasmcloud::messaging)
-            req.method,
-            req.arg.as_ref(),
-        )?;
-        Ok(Message {
-            method: "_reply",
-            arg: Cow::Owned(res),
-        })
+        pub fn serialize<T: Serialize>(data: &T) -> Result<Vec<u8>, RpcError> {
+            rmp_serde::to_vec_named(data).map_err(|e| RpcError::Ser(e.to_string()))
+        }
+    } else if #[cfg(feature = "ser_json")] {
+        pub fn deserialize<'de, T: Deserialize<'de>>(buf: &'de [u8]) -> Result<T, RpcError> {
+            serde_json::from_slice(buf).map_err(|e| RpcError::Deser(e.to_string()))
+        }
+
+        pub fn serialize<T: Serialize>(data: &T) -> Result<Vec<u8>, RpcError> {
+            serde_json::to_vec(data).map_err(|e| RpcError::Ser(e.to_string()))
+        }
     }
-}
-
-pub fn deserialize<'de, T: Deserialize<'de>>(buf: &'de [u8]) -> Result<T, RpcError> {
-    //serde_json::from_slice(buf).map_err(|e| RpcError::Deser(e.to_string()))
-    rmp_serde::from_slice(buf).map_err(|e| RpcError::Deser(e.to_string()))
-}
-
-pub fn serialize<T: Serialize>(data: &T) -> Result<Vec<u8>, RpcError> {
-    //serde_json::to_vec(data).map_err(|e| RpcError::Ser(e.to_string()))
-    rmp_serde::to_vec(data).map_err(|e| RpcError::Ser(e.to_string()))
 }
 
 /// An error that can occur in the processing of an RPC. This is not request-specific errors but

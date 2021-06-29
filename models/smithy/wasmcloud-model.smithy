@@ -1,4 +1,6 @@
-namespace org.wasmcloud.model
+namespace org.wasmcloud.model.v0
+
+// Note: this file has moved into the wasmcloud/models crate
 
 /// definitions for api modeling
 /// These are modifications to the basic data model
@@ -9,8 +11,13 @@ namespace org.wasmcloud.model
 structure unsignedInt { }
 
 
+/// A non-empty string
+@trait(selector: "string")
+@length(min:1)
+string nonEmptyString
+
+
 /// Overrides for serializer & deserializer
-// TODO: what is selector for service.member ?
 @trait(selector: "member")
 structure serialize {
     /// (optional setting) Override name for field when serializing and deserializing
@@ -57,3 +64,4 @@ byte I8
 // unsigned byte
 @unsignedInt
 byte U8
+
