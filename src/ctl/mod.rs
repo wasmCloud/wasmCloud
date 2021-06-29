@@ -1,7 +1,7 @@
 extern crate wasmcloud_control_interface;
 use crate::util::{
-    convert_error, json_str_to_msgpack_bytes, labels_vec_to_hashmap, output_destination, Output,
-    OutputDestination, OutputKind, Result, WASH_CMD_INFO,
+    convert_error, extract_arg_value, json_str_to_msgpack_bytes, labels_vec_to_hashmap,
+    output_destination, Output, OutputDestination, OutputKind, Result, WASH_CMD_INFO,
 };
 use log::debug;
 use spinners::{Spinner, Spinners};
@@ -43,6 +43,19 @@ pub(crate) struct ConnectionOpts {
     )]
     rpc_port: String,
 
+    /// JWT file for RPC authentication. Must be supplied with rpc_seed.
+    #[structopt(long = "rpc-jwt", env = "WASH_RPC_JWT", hide_env_values = true)]
+    rpc_jwt: Option<String>,
+
+    /// Seed file or literal for RPC authentication. Must be supplied with rpc_jwt.
+    #[structopt(long = "rpc-seed", env = "WASH_RPC_SEED", hide_env_values = true)]
+    rpc_seed: Option<String>,
+
+    /// Credsfile for RPC authentication. Combines rpc_seed and rpc_jwt.
+    /// See https://docs.nats.io/developing-with-nats/security/creds for details.
+    #[structopt(long = "rpc-credsfile", env = "WASH_RPC_CREDS", hide_env_values = true)]
+    rpc_credsfile: Option<String>,
+
     /// Namespace prefix for wasmcloud command interface
     #[structopt(short = "n", long = "ns-prefix", default_value = "default")]
     ns_prefix: String,
@@ -62,6 +75,9 @@ impl Default for ConnectionOpts {
         ConnectionOpts {
             rpc_host: "0.0.0.0".to_string(),
             rpc_port: "4222".to_string(),
+            rpc_jwt: None,
+            rpc_seed: None,
+            rpc_credsfile: None,
             ns_prefix: "default".to_string(),
             rpc_timeout: 1,
         }
@@ -503,10 +519,30 @@ pub(crate) async fn handle_command(command: CtlCliCommand) -> Result<String> {
 pub(crate) async fn new_ctl_client(
     host: &str,
     port: &str,
+    jwt: Option<String>,
+    seed: Option<String>,
+    credsfile: Option<String>,
     ns_prefix: String,
     timeout: Duration,
 ) -> Result<Client> {
-    let nc = nats::asynk::connect(&format!("{}:{}", host, port)).await?;
+    let nats_url = format!("{}:{}", host, port);
+    let nc = if let (Some(jwt_file), Some(seed_val)) = (jwt, seed) {
+        let kp = nkeys::KeyPair::from_seed(&extract_arg_value(&seed_val)?)?;
+        let jwt_contents = extract_arg_value(&jwt_file)?;
+        // You must provide the JWT via a closure
+        nats::Options::with_jwt(
+            move || Ok(jwt_contents.clone()),
+            move |nonce| kp.sign(nonce).unwrap(),
+        )
+        .connect_async(&nats_url)
+        .await?
+    } else if let Some(credsfile_path) = credsfile {
+        nats::Options::with_credentials(credsfile_path)
+            .connect_async(&nats_url)
+            .await?
+    } else {
+        nats::asynk::connect(&nats_url).await?
+    };
     Ok(Client::new(nc, Some(ns_prefix), timeout))
 }
 
@@ -514,6 +550,9 @@ async fn client_from_opts(opts: ConnectionOpts) -> Result<Client> {
     new_ctl_client(
         &opts.rpc_host,
         &opts.rpc_port,
+        opts.rpc_jwt,
+        opts.rpc_seed,
+        opts.rpc_credsfile,
         opts.ns_prefix,
         Duration::from_secs(opts.rpc_timeout),
     )

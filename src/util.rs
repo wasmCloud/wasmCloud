@@ -5,6 +5,8 @@ use std::cell::Cell;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
+use std::fs::File;
+use std::io::Read;
 use std::str::FromStr;
 use structopt::StructOpt;
 use term_table::{Table, TableStyle};
@@ -124,6 +126,18 @@ pub(crate) fn format_ellipsis(id: String, max_width: usize) -> String {
 
 pub(crate) fn format_optional(value: Option<String>) -> String {
     value.unwrap_or_else(|| "N/A".into())
+}
+
+/// Returns value from an argument that may be a file path or the value itself
+pub(crate) fn extract_arg_value(arg: &str) -> Result<String> {
+    match File::open(arg) {
+        Ok(mut f) => {
+            let mut value = String::new();
+            f.read_to_string(&mut value)?;
+            Ok(value)
+        }
+        Err(_) => Ok(arg.to_string()),
+    }
 }
 
 /// Converts error from Send + Sync error to standard error
