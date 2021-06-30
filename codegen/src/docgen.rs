@@ -68,13 +68,6 @@ impl CodeGen for DocGen {
             .iter()
             .map(|id| id.to_string())
             .collect::<BTreeSet<String>>();
-        if namespaces.is_empty() {
-            println!("DBG: no namespaces!");
-        } else {
-            for ns in namespaces.iter() {
-                println!("DBG: namespace {}", ns);
-            }
-        }
 
         std::fs::create_dir_all(&output_dir).map_err(|e| {
             Error::Io(format!(
@@ -87,11 +80,6 @@ impl CodeGen for DocGen {
         for ns in namespaces.iter() {
             let output_file =
                 output_dir.join(format!("{}.html", crate::strings::to_snake_case(ns)));
-            println!(
-                "DBG: generating namespace {} to {}",
-                ns,
-                &output_file.display()
-            );
 
             let mut out = std::fs::File::create(&output_file).map_err(|e| {
                 Error::Io(format!(
