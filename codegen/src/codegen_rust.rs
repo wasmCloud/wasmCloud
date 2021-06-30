@@ -508,7 +508,7 @@ impl RustCodeGen {
         strukt: &StructureOrUnion,
     ) -> Result<()> {
         self.apply_documentation_traits(&mut w, id, traits);
-        w.write(b"#[derive(Debug, Clone, Serialize, Deserialize)]\n");
+        w.write(b"#[derive(Clone, Debug, Default, Serialize, Deserialize)]\n");
         w.write(b"pub struct ");
         self.write_ident(&mut w, id);
         w.write(b" {\n");
