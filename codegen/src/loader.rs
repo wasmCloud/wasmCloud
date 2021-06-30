@@ -13,7 +13,7 @@ const MAX_PARALLEL_DOWNLOADS: u16 = 8;
 /// See the codegen.toml documentation on `[[models]]` for
 /// a description of valid ModelSources.
 /// Returns single merged model.
-pub fn sources_to_model(sources: &Vec<ModelSource>, verbose: u8) -> Result<Model> {
+pub fn sources_to_model(sources: &[ModelSource], verbose: u8) -> Result<Model> {
     use std::convert::TryInto;
 
     let paths = sources_to_paths(sources, verbose)?;
@@ -52,7 +52,7 @@ pub fn files_to_model(files: Vec<PathBuf>, verbose: u8) -> Result<Model> {
 /// to the result and the caller is expected to traverse them
 /// or pass them to an Assembler for traversal.
 #[doc(hidden)]
-pub(crate) fn sources_to_paths(sources: &Vec<ModelSource>, verbose: u8) -> Result<Vec<PathBuf>> {
+pub(crate) fn sources_to_paths(sources: &[ModelSource], verbose: u8) -> Result<Vec<PathBuf>> {
     let mut results = Vec::new();
     let mut urls = Vec::new();
 
@@ -105,8 +105,8 @@ pub(crate) fn sources_to_paths(sources: &Vec<ModelSource>, verbose: u8) -> Resul
         }
     }
     if !urls.is_empty() {
-        let mut cached = urls_to_cached_files(urls)?;
-        results.extend_from_slice(&mut cached);
+        let cached = urls_to_cached_files(urls)?;
+        results.extend_from_slice(&cached);
     }
     Ok(results)
 }

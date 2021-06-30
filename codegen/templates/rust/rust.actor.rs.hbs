@@ -1,7 +1,7 @@
 use http_server::{HttpRequest, HttpResponse, HttpServer, HttpServerReceiver};
 use serde_json::json;
-use wasmcloud_weld_rpc::actor::prelude::*;
-use wasmcloud_weld_rpc::core::{Actor, ActorReceiver, HealthCheckRequest, HealthCheckResponse};
+use wasmbus_rpc::actor::prelude::*;
+use wasmbus_rpc::core::{Actor, ActorReceiver, HealthCheckRequest, HealthCheckResponse};
 
 #[derive(Debug, Default, Actor)]
 #[services(Actor, HttpServer)]

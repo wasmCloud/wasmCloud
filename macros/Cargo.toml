@@ -1,5 +1,5 @@
 [package]
-name = "wasmcloud-weld-macros"
+name = "wasmbus-macros"
 version = "0.1.0"
 edition = "2018"
 authors = [ "stevelr <dev@somecool.net>" ]

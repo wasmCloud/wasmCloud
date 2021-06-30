@@ -21,4 +21,4 @@ output_dir = "src"
 [[rust.files]]
 namespace = "org.wasmcloud.core.v0"
 path = "core.rs"
-crate = "wasmcloud_weld_rpc"
+crate = "wasmbus_rpc"

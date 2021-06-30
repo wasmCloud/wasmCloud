@@ -16,7 +16,11 @@ mod actor_wasm;
 
 /// Version number of this api
 #[doc(hidden)]
-pub const WELD_RPC_VERSION: u32 = 0; // api version 0 is binary compatible with wapc
+pub const WASMBUS_RPC_VERSION: u32 = 0;
+
+/// import module for webassembly linking
+#[doc(hidden)]
+pub const WASMBUS_RPC_IMPORT_NAME: &str = "wapc";
 
 /// This crate's published version
 pub const WELD_CRATE_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -36,8 +40,14 @@ pub mod actor {
         //pub use crate::core::{Actor, ActorReceiver, ActorSender};
         // re-export async_trait
         pub use async_trait::async_trait;
-        pub use wasmcloud_weld_macros::Actor;
+        pub use wasmbus_macros::Actor;
         //pub use crate::Timestamp;
+
+        #[cfg(feature = "BigInteger")]
+        pub use num_bigint::BigInt as BigInteger;
+
+        #[cfg(feature = "BigDecimal")]
+        pub use bigdecimal::BigDecimal;
     }
 }
 
@@ -47,7 +57,7 @@ pub mod provider {
         pub use crate::{client, context, Message, MessageDispatch, RpcError};
         //pub use crate::Timestamp;
         pub use async_trait::async_trait;
-        pub use wasmcloud_weld_macros::Provider;
+        pub use wasmbus_macros::Provider;
 
         #[cfg(feature = "BigInteger")]
         pub use num_bigint::BigInt as BigInteger;

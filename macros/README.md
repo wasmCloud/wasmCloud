@@ -1,4 +1,4 @@
 Derive macros for wasmcloud-weld.
 
 These are usually imported via wasmlcoud_weld_rpc::actor::prelude or
-wasmcloud_weld_rpc::provider::prelude
+wasmbus_rpc::provider::prelude

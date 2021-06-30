@@ -164,13 +164,11 @@ impl Generator {
                     let mut out = std::fs::File::create(&out_path)?;
                     renderer.render(hbs, &params, &mut out)?;
                     out.flush()?;
-                } else {
-                    if let Some(model) = model {
-                        let bytes = cgen.generate_file(model, file_config, &params)?;
-                        std::fs::write(&out_path, &bytes).map_err(|e| {
-                            Error::Io(format!("writing output file {}: {}", out_path.display(), e))
-                        })?;
-                    }
+                } else if let Some(model) = model {
+                    let bytes = cgen.generate_file(model, file_config, &params)?;
+                    std::fs::write(&out_path, &bytes).map_err(|e| {
+                        Error::Io(format!("writing output file {}: {}", out_path.display(), e))
+                    })?;
                 };
                 updated_files.push(out_path);
                 // retrieve json_model for the next iteration
@@ -397,21 +395,19 @@ pub fn find_files(dir: &Path, extension: &str) -> Result<Vec<PathBuf>> {
             }
         }
         Ok(results)
+    } else if dir.is_file()
+        && &dir
+            .extension()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default()
+            == "smithy"
+    {
+        Ok(vec![dir.to_owned()])
     } else {
-        if dir.is_file()
-            && &dir
-                .extension()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_default()
-                == "smithy"
-        {
-            Ok(vec![dir.to_owned()])
-        } else {
-            Err(Error::Other(format!(
-                "'{}' is not a valid folder or .smithy file",
-                dir.display()
-            )))
-        }
+        Err(Error::Other(format!(
+            "'{}' is not a valid folder or .smithy file",
+            dir.display()
+        )))
     }
 }
 

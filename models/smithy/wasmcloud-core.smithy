@@ -8,7 +8,7 @@ use org.wasmcloud.model.v0#nonEmptyString
 /// of how a client and server communicate.
 @protocolDefinition
 @trait(selector: "service")
-structure wapc {}
+structure wasmbus {}
 
 
 /// Capability contract id, e.g. 'wasmcloud:httpserver'
@@ -38,7 +38,7 @@ structure actorReceiver { }
 
 /// Actor service
 @actorReceiver
-@wapc
+@wasmbus
 service Actor {
   version: "0.1",
   operations: [ HealthRequest ]
@@ -46,7 +46,7 @@ service Actor {
 
 /// Capability Provider messages received from host
 @providerReceiver
-@wapc
+@wasmbus
 service CapabilityProvider {
   version: "0.1",
   operations: [ BindActor, RemoveActor, HealthRequest ]

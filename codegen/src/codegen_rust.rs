@@ -82,6 +82,19 @@ const DEFAULT_DOCUMENT_TYPE: &str = "Vec<u8>";
 #[derive(Eq, Ord, PartialOrd, PartialEq)]
 struct Declaration(u8, BytesMut);
 
+// Modifiers on data type
+// This enum may be extended in the future if other variations are required.
+// It's recursively composable, so you could represent &Option<&Value>
+// with `Ty::Ref(Ty::Opt(Ty::Ref(id)))`
+enum Ty<'typ> {
+    /// write a plain shape declaration
+    Shape(&'typ ShapeID),
+    /// write a type wrapped in Option<>
+    Opt(&'typ ShapeID),
+    /// write a reference type: preceeded by &
+    Ref(&'typ ShapeID),
+}
+
 #[derive(Default)]
 pub struct RustCodeGen {
     /// if set, limits declaration output to this namespace only
@@ -103,6 +116,23 @@ impl CodeGen for RustCodeGen {
             renderer.add_template(*t)?;
         }
         self.namespace = None;
+        Ok(())
+    }
+
+    /// After code generation has completed for all files, this method is called once per output language
+    /// to allow code formatters to run. The `files` parameter contains a list of all files written or updated.
+    fn format(&mut self, files: Vec<PathBuf>) -> Result<()> {
+        // make a list of all output files with ".rs" extension so we can fix formatting with rustfmt
+        // minor nit: we don't check the _config-only flag so there could be some false positives here, but rustfmt is safe to use anyway
+        let rust_sources = files
+            .into_iter()
+            .filter(is_rust_source)
+            .collect::<Vec<PathBuf>>();
+
+        if !rust_sources.is_empty() {
+            let formatter = crate::rustfmt::RustFmtCommand::default();
+            formatter.execute(rust_sources)?;
+        }
         Ok(())
     }
 
@@ -131,10 +161,10 @@ impl CodeGen for RustCodeGen {
         ix: &ModelIndex,
         params: &ParamMap,
     ) -> Result<()> {
-        // special case: if the crate we are generating is "wasmcloud_weld_rpc" then we have to import it with "crate::".
+        // special case: if the crate we are generating is "wasmbus_rpc" then we have to import it with "crate::".
         let import_crate = match params.get("crate") {
-            Some(JsonValue::String(c)) if c == "wasmcloud_weld_rpc" => "crate",
-            _ => "wasmcloud_weld_rpc",
+            Some(JsonValue::String(c)) if c == "wasmbus_rpc" => "crate",
+            _ => "wasmbus_rpc",
         };
         w.write(&format!(
             r#"// This file is generated automatically using wasmcloud-weld and smithy model definitions
@@ -144,14 +174,9 @@ use {}::{{
     client, context, deserialize, serialize, MessageDispatch, RpcError,
     Transport, Message,
 }};
-#[allow(unused_imports)]
-use async_trait::async_trait;
-#[allow(unused_imports)]
-use serde::{{Deserialize, Serialize}};
-#[allow(unused_imports)]
-use std::borrow::Cow;
-#[allow(unused_imports)]
-use serde_bytes;
+#[allow(unused_imports)] use async_trait::async_trait;
+#[allow(unused_imports)] use serde::{{Deserialize, Serialize}};
+#[allow(unused_imports)] use std::borrow::Cow;
 "#, import_crate))
         ;
 
@@ -235,23 +260,6 @@ use serde_bytes;
     fn get_file_extension(&self) -> &'static str {
         "rs"
     }
-
-    /// After code generation has completed for all files, this method is called once per output language
-    /// to allow code formatters to run. The `files` parameter contains a list of all files written or updated.
-    fn format(&mut self, files: Vec<PathBuf>) -> Result<()> {
-        // make a list of all output files with ".rs" extension so we can fix formatting with rustfmt
-        // minor nit: we don't check the _config-only flag so there could be some false positives here, but rustfmt is safe to use anyway
-        let rust_sources = files
-            .into_iter()
-            .filter(is_rust_source)
-            .collect::<Vec<PathBuf>>();
-
-        if !rust_sources.is_empty() {
-            let formatter = crate::rustfmt::RustFmtCommand::default();
-            formatter.execute(rust_sources)?;
-        }
-        Ok(())
-    }
 }
 
 /// returns true if the file path ends in ".rs"
@@ -324,65 +332,78 @@ impl RustCodeGen {
         }
     }
 
-    /// Write a type name, either a primitive or defined type.
-    fn write_type(&mut self, w: &mut Writer, id: &ShapeID) -> Result<()> {
-        let name = id.shape_name().to_string();
-        if id.namespace() == prelude_namespace_id() {
-            let ty = match name.as_ref() {
-                // Document are  Blob
-                SHAPE_BLOB => "Vec<u8>",
-                SHAPE_BOOLEAN | SHAPE_PRIMITIVEBOOLEAN => "bool",
-                SHAPE_STRING => "String",
-                SHAPE_BYTE | SHAPE_PRIMITIVEBYTE => "i8",
-                SHAPE_SHORT | SHAPE_PRIMITIVESHORT => "i16",
-                SHAPE_INTEGER | SHAPE_PRIMITIVEINTEGER => "i32",
-                SHAPE_LONG | SHAPE_PRIMITIVELONG => "i64",
-                SHAPE_FLOAT | SHAPE_PRIMITIVEFLOAT => "float32",
-                SHAPE_DOUBLE | SHAPE_PRIMITIVEDOUBLE => "float64",
-                // if declared as members (of a struct, list, or map), we don't have trait data here to write
-                // as anything other than a blob. Instead, a type should be created for the Document that can have traits,
-                // and that type used for the member. This should probably be a lint rule.
-                SHAPE_DOCUMENT => DEFAULT_DOCUMENT_TYPE,
-                SHAPE_TIMESTAMP => {
-                    cfg_if::cfg_if! {
-                        if #[cfg(feature = "Timestamp")] { "Timestamp" } else { return Err(Error::UnsupportedTimestamp) }
-                    }
+    /// Write a type name, a primitive or defined type, with or without deref('&') and with or without Option<>
+    fn write_type(&mut self, w: &mut Writer, ty: Ty<'_>) -> Result<()> {
+        match ty {
+            Ty::Opt(id) => {
+                w.write(b"Option<");
+                self.write_type(w, Ty::Shape(id))?;
+                w.write(b">");
+            }
+            Ty::Ref(id) => {
+                w.write(b"&");
+                self.write_type(w, Ty::Shape(id))?;
+            }
+            Ty::Shape(id) => {
+                let name = id.shape_name().to_string();
+                if id.namespace() == prelude_namespace_id() {
+                    let ty = match name.as_ref() {
+                        // Document are  Blob
+                        SHAPE_BLOB => "Vec<u8>",
+                        SHAPE_BOOLEAN | SHAPE_PRIMITIVEBOOLEAN => "bool",
+                        SHAPE_STRING => "String",
+                        SHAPE_BYTE | SHAPE_PRIMITIVEBYTE => "i8",
+                        SHAPE_SHORT | SHAPE_PRIMITIVESHORT => "i16",
+                        SHAPE_INTEGER | SHAPE_PRIMITIVEINTEGER => "i32",
+                        SHAPE_LONG | SHAPE_PRIMITIVELONG => "i64",
+                        SHAPE_FLOAT | SHAPE_PRIMITIVEFLOAT => "float32",
+                        SHAPE_DOUBLE | SHAPE_PRIMITIVEDOUBLE => "float64",
+                        // if declared as members (of a struct, list, or map), we don't have trait data here to write
+                        // as anything other than a blob. Instead, a type should be created for the Document that can have traits,
+                        // and that type used for the member. This should probably be a lint rule.
+                        SHAPE_DOCUMENT => DEFAULT_DOCUMENT_TYPE,
+                        SHAPE_TIMESTAMP => {
+                            cfg_if::cfg_if! {
+                                if #[cfg(feature = "Timestamp")] { "Timestamp" } else { return Err(Error::UnsupportedTimestamp) }
+                            }
+                        }
+                        SHAPE_BIGINTEGER => {
+                            cfg_if::cfg_if! {
+                                if #[cfg(feature = "BigInteger")] { "BigInteger" } else { return Err(Error::UnsupportedBigInteger) }
+                            }
+                        }
+                        SHAPE_BIGDECIMAL => {
+                            cfg_if::cfg_if! {
+                                if #[cfg(feature = "BigDecimal")] { "BigDecimal" } else { return Err(Error::UnsupportedBigDecimal) }
+                            }
+                        }
+                        _ => return Err(Error::UnsupportedType(name)),
+                    };
+                    w.write(ty);
+                } else if id.namespace() == wasmcloud_model_namespace() {
+                    let ty = match name.as_ref() {
+                        "U64" => "u64",
+                        "U32" => "u32",
+                        "U8" => "u8",
+                        "I64" => "i64",
+                        "I32" => "i32",
+                        "I8" => "i8",
+                        "U16" => "u16",
+                        "I16" => "i16",
+                        other => other, // just write the shape name
+                    };
+                    w.write(ty);
+                } else {
+                    // TODO: need to be able to lookup from namespace to canonical module path
+                    w.write(&self.to_type_name(&id.shape_name().to_string()));
                 }
-                SHAPE_BIGINTEGER => {
-                    cfg_if::cfg_if! {
-                        if #[cfg(feature = "BigInteger")] { "BigInteger" } else { return Err(Error::UnsupportedBigInteger) }
-                    }
-                }
-                SHAPE_BIGDECIMAL => {
-                    cfg_if::cfg_if! {
-                        if #[cfg(feature = "BigDecimal")] { "BigDecimal" } else { return Err(Error::UnsupportedBigDecimal) }
-                    }
-                }
-                _ => return Err(Error::UnsupportedType(name)),
-            };
-            w.write(ty);
-        } else if id.namespace() == wasmcloud_model_namespace() {
-            let ty = match name.as_ref() {
-                "U64" => "u64",
-                "U32" => "u32",
-                "U8" => "u8",
-                "I64" => "i64",
-                "I32" => "i32",
-                "I8" => "i8",
-                "U16" => "u16",
-                "I16" => "i16",
-                other => other, // just write the shape name
-            };
-            w.write(ty);
-        } else {
-            // TODO: need to be able to lookup from namespace to canonical module path
-            w.write(&self.to_type_name(&id.shape_name().to_string()));
+            }
         }
         Ok(())
     }
 
     /// append suffix to type name, for example "Game", "Context" -> "GameContext"
-    fn write_type_with_suffix(
+    fn write_ident_with_suffix(
         &mut self,
         mut w: &mut Writer,
         id: &Identifier,
@@ -453,9 +474,9 @@ impl RustCodeGen {
         w.write(b" = ");
         w.write(DEFAULT_MAP_TYPE);
         w.write(b"<");
-        self.write_type(&mut w, shape.key().target())?;
+        self.write_type(&mut w, Ty::Shape(shape.key().target()))?;
         w.write(b",");
-        self.write_type(&mut w, shape.value().target())?;
+        self.write_type(&mut w, Ty::Shape(shape.value().target()))?;
         w.write(b">;\n\n");
         Ok(())
     }
@@ -474,7 +495,7 @@ impl RustCodeGen {
         w.write(b" = ");
         w.write(typ);
         w.write(b"<");
-        self.write_type(&mut w, shape.member().target())?;
+        self.write_type(&mut w, Ty::Shape(shape.member().target()))?;
         w.write(b">;\n\n");
         Ok(())
     }
@@ -498,7 +519,7 @@ impl RustCodeGen {
             if declared_name != rust_field_name {
                 w.write(&format!("  #[serde(rename=\"{}\")] ", declared_name));
             }
-            // for wapc & rmp-msgpack - need to use serde_bytes serializer for Blob (and Option<Blob>)
+            // for rmp-msgpack - need to use serde_bytes serializer for Blob (and Option<Blob>)
             if member.target() == &ShapeID::new_unchecked("smithy.api", "Blob", None) {
                 w.write(r#"  #[serde(with="serde_bytes")] "#);
             }
@@ -515,18 +536,16 @@ impl RustCodeGen {
         Ok(())
     }
 
-    /// write field type
-    /// - if not required, surround type with Option<>, but only if it's not a bool type
+    /// write field type, wrapping with Option if field is not required
     fn write_field_type(&mut self, mut w: &mut Writer, field: &MemberShape) -> Result<()> {
-        // wrap with Optional<> unless the field is boolean, which is already optional with default=false
-        if is_optional_type(field) {
-            w.write(b"Option<");
-        }
-        self.write_type(&mut w, field.target())?;
-        if is_optional_type(field) {
-            w.write(b">");
-        }
-        Ok(())
+        self.write_type(
+            &mut w,
+            if is_optional_type(field) {
+                Ty::Opt(field.target())
+            } else {
+                Ty::Shape(field.target())
+            },
+        )
     }
 
     /// Declares the service as a rust Trait whose methods are the smithy service operations
@@ -574,12 +593,12 @@ impl RustCodeGen {
         w.write(&method_name);
         w.write(b"(&self, ctx: &context::Context<'_>");
         if let Some(input_type) = op.input() {
-            w.write(b", arg: &"); // pass arg by reference
-            self.write_type(&mut w, input_type)?;
+            w.write(b", arg: "); // pass arg by reference
+            self.write_type(&mut w, Ty::Ref(input_type))?;
         }
         w.write(b") -> Result<");
         if let Some(output_type) = op.output() {
-            self.write_type(&mut w, output_type)?;
+            self.write_type(&mut w, Ty::Shape(output_type))?;
         } else {
             w.write(b"()");
         }
@@ -603,7 +622,7 @@ impl RustCodeGen {
         self.write_comment(&mut w, CommentKind::Documentation, &doc);
         self.apply_documentation_traits(&mut w, id, traits);
         w.write(b"#[async_trait]\npub trait ");
-        self.write_type_with_suffix(&mut w, id, "Receiver")?;
+        self.write_ident_with_suffix(&mut w, id, "Receiver")?;
         w.write(b" : MessageDispatch + ");
         self.write_ident(&mut w, id);
         w.write(
@@ -628,12 +647,13 @@ impl RustCodeGen {
 
             let IxShape(_, _, op) = ix.get_operation(id, method_id)?;
             w.write(b"\"");
-            w.write(&self.op_dispatch_name(&method_ident));
+            w.write(&self.op_dispatch_name(method_ident));
             w.write(b"\" => {\n");
             if op.has_input() {
                 // let value : InputType = deserialize(...)?;
                 w.write(b"let value: ");
-                self.write_type(&mut w, op.input().as_ref().unwrap())?;
+                // TODO: should this be input.target?
+                self.write_type(&mut w, Ty::Shape(op.input().as_ref().unwrap()))?;
                 w.write(b" = deserialize(message.arg.as_ref())?;\n");
             }
             // let resp = Trait::method(self, ctx, &value).await?;
@@ -676,22 +696,22 @@ impl RustCodeGen {
         self.write_comment(&mut w, CommentKind::Documentation, &doc);
         self.apply_documentation_traits(&mut w, id, traits);
         w.write(b"#[derive(Debug)]\npub struct ");
-        self.write_type_with_suffix(&mut w, id, "Sender")?;
+        self.write_ident_with_suffix(&mut w, id, "Sender")?;
         w.write(b"<T> { transport: T, config: client::SendConfig }\n\n");
 
         // implement constructor for TraitClient
         w.write(b"impl<T:Transport>  ");
-        self.write_type_with_suffix(&mut w, id, "Sender")?;
+        self.write_ident_with_suffix(&mut w, id, "Sender")?;
         w.write(b"<T> { \n");
         w.write(b" pub fn new(config: client::SendConfig, transport: T) -> Self { ");
-        self.write_type_with_suffix(&mut w, id, "Sender")?;
+        self.write_ident_with_suffix(&mut w, id, "Sender")?;
         w.write(b"{ transport, config }\n}\n}\n\n");
 
         // implement Trait for TraitSender
         w.write(b"#[async_trait]\nimpl<T:Transport + std::marker::Sync + std::marker::Send> ");
         self.write_ident(&mut w, id);
         w.write(b" for ");
-        self.write_type_with_suffix(&mut w, id, "Sender")?;
+        self.write_ident_with_suffix(&mut w, id, "Sender")?;
         w.write(b"<T> {\n");
 
         for method_id in service.operations() {
@@ -706,7 +726,7 @@ impl RustCodeGen {
 
             let IxShape(_, traits, op) = ix.get_operation(id, method_id)?;
             w.write(b"#[allow(unused)]\n");
-            self.write_method_signature(&mut w, &method_ident, traits, op)?;
+            self.write_method_signature(&mut w, method_ident, traits, op)?;
             w.write(b" {\n");
 
             if op.has_input() {
@@ -719,7 +739,7 @@ impl RustCodeGen {
             //w.write(self.full_dispatch_name(trait_base.id(), method_id));
             // note: legacy is just the latter part
             w.write(b"\"");
-            w.write(&self.op_dispatch_name(&method_ident));
+            w.write(&self.op_dispatch_name(method_ident));
             w.write(b"\", arg: Cow::Borrowed(&arg)}).await?;\n");
             if op.has_output() {
                 w.write(b"let value = deserialize(resp.arg.as_ref())?; Ok(value)");
@@ -803,16 +823,28 @@ pub fn rust_build<P: Into<PathBuf>>(
 
     let mut config = config_file
         .parse::<CodegenConfig>()
-        .map_err(|e| Error::Build(format!("parsing config: {}", e)))?;
+        .map_err(|e| Error::Build(format!("parsing config: {}", e.to_string())))?;
     config.output_languages = vec![OutputLanguage::Rust];
 
     let model = crate::sources_to_model(&config.models, 0)?;
 
     // the second time we do this it should be faster since no downloading is required,
     // and we also don't invoke assembler to traverse directories
-    for path in crate::sources_to_paths(&config.models, 0)?.iter() {
-        if path.is_file() {
-            println!("cargo:rerun-if-changed={}", &path.display());
+    for path in crate::sources_to_paths(&config.models, 0)?.into_iter() {
+        // rerun-if-changed works on directories and files, so it's ok that sources_to_paths
+        // may include folders that haven't been traversed by the assembler.
+        // Using a folder depends on the OS updating folder mtime if the folder contents change.
+        // In many cases, the model file for the primary interface/namespace will
+        // be a file path (it is in projects created with `weld create`).
+        if path.exists() {
+            // relative paths in the config are relative the dir containing codegen.toml,
+            // but need to be adjusted to be relative to the dir containing build.rs
+            let adjusted = if path.is_absolute() {
+                path
+            } else {
+                config_relative_dir.join(&path)
+            };
+            println!("cargo:rerun-if-changed={}", &adjusted.display());
         }
     }
 

@@ -168,7 +168,7 @@ fn as_toml(s: &str) -> TomlValue {
     if let Ok(num) = s.parse::<i32>() {
         return num.into();
     };
-    return TomlValue::String(s.to_string());
+    TomlValue::String(s.to_string())
 }
 
 fn main() {
@@ -190,7 +190,7 @@ fn run(opt: Opt) -> Result<()> {
     Ok(())
 }
 
-fn inputs_to_model(inputs: &Vec<String>, verbose: u8) -> Result<Model> {
+fn inputs_to_model(inputs: &[String], verbose: u8) -> Result<Model> {
     let inputs = inputs
         .iter()
         // unwrap below ok because this from_str is Infallible

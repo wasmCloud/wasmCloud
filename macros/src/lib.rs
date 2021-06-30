@@ -79,6 +79,7 @@ pub fn derive_actor(input: TokenStream) -> TokenStream {
     }
     let actor_ident = actor_receiver.ident;
     let dispatch_impl = gen_dispatch(&traits, &actor_ident);
+
     let output = quote!(
 
     #[link(wasm_import_module = "wapc")]
@@ -90,7 +91,7 @@ pub fn derive_actor(input: TokenStream) -> TokenStream {
 
     #[no_mangle]
     pub extern "C" fn __actor_api_version() -> u32 {
-        wasmcloud_weld_rpc::WELD_RPC_VERSION
+        wasmbus_rpc::WASMBUS_RPC_VERSION
     }
 
     #[no_mangle]

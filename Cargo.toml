@@ -3,7 +3,7 @@ members = [
     "bin",
     "codegen",
     "macros",
-    "rpc",
+    "rpc-rs",
     "examples/http-server/gen/rust",
 ]
 
