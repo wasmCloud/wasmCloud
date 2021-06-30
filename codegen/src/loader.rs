@@ -19,32 +19,19 @@ pub fn sources_to_model(sources: &[ModelSource], verbose: u8) -> Result<Model> {
     let paths = sources_to_paths(sources, verbose)?;
     let mut assembler = atelier_assembler::ModelAssembler::default();
     for path in paths.iter() {
+        if !path.exists() {
+            return Err(Error::MissingFile(format!(
+                "'{}' is not a valid path to a file or directory",
+                path.display(),
+            )));
+        }
         let _ = assembler.push(path);
     }
     let model: Model = assembler
         .try_into()
-        .map_err(|e| Error::Model(format!("assembling model: {}", e)))?;
+        .map_err(|e| Error::Model(format!("assembling model: {:#?}", e)))?;
     Ok(model)
 }
-
-/*
-/// Load all models from the provided model files (.smithy or .json) and directories.
-/// Directories are searched recursively.
-/// Returns single merged model.
-pub fn files_to_model(files: Vec<PathBuf>, verbose: u8) -> Result<Model> {
-    use std::convert::TryInto;
-
-    let mut assembler = atelier_assembler::ModelAssembler::default();
-    for path in files.iter() {
-        if verbose > 0 {
-            println!("DEBUG: adding path {}", &path.display());
-        }
-        let _ = assembler.push(path);
-    }
-    let model: Model = assembler.try_into()?;
-    Ok(model)
-}
- */
 
 /// Flatten source lists and collect list of paths to local files.
 /// Download any urls to cache dir if they aren't already cached.
@@ -190,7 +177,7 @@ fn urls_to_cached_files(urls: Vec<String>) -> Result<Vec<PathBuf>> {
         for r in result.iter() {
             match r {
                 Err(e) => {
-                    println!("failure downloading: {}", e);
+                    println!("Failure downloading: {}", e);
                 }
                 Ok(summary) => {
                     for status in summary.status.iter() {
@@ -212,7 +199,7 @@ fn urls_to_cached_files(urls: Vec<String>) -> Result<Vec<PathBuf>> {
                             results.push(cache_file);
                             break;
                         } else {
-                            println!("warning: url '{}' got status {}", status.0, status.1);
+                            println!("Warning: url '{}' got status {}", status.0, status.1);
                         }
                     }
                 }
@@ -221,7 +208,7 @@ fn urls_to_cached_files(urls: Vec<String>) -> Result<Vec<PathBuf>> {
     }
     if results.len() != urls.len() {
         Err(Error::Other(format!(
-            "quitting - {} model files could not be downloaded and were not found in the cache",
+            "Quitting - {} model files could not be downloaded and were not found in the cache",
             urls.len() - results.len()
         )))
     } else {
