@@ -1,6 +1,4 @@
-namespace org.wasmcloud.model.v0
-
-// Note: this file has moved into the wasmcloud/models crate
+namespace org.wasmcloud.model
 
 /// definitions for api modeling
 /// These are modifications to the basic data model
@@ -65,3 +63,9 @@ byte I8
 @unsignedInt
 byte U8
 
+/// Rust codegen traits
+@trait(selector: "structure")
+structure codegenRust {
+    /// Instructs rust codegen to add `#[derive(Default)]`
+    deriveDefault: Boolean,
+}

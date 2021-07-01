@@ -1,14 +1,18 @@
-namespace org.wasmcloud.core.v0
+namespace org.wasmcloud.core
 
-// Note: this file has moved into the wasmcloud/models crate
-
-use org.wasmcloud.model.v0#nonEmptyString
+use org.wasmcloud.model#nonEmptyString
+use org.wasmcloud.model#codegenRust
 
 /// a protocol defines the semantics
 /// of how a client and server communicate.
 @protocolDefinition
 @trait(selector: "service")
 structure wasmbus {}
+
+/// data sent via wasmbus
+@trait(selector: "structure")
+@codegenRust( deriveDefault: true )
+structure wasmbusData {}
 
 
 /// Capability contract id, e.g. 'wasmcloud:httpserver'
