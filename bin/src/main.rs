@@ -196,7 +196,8 @@ fn inputs_to_model(inputs: &[String], verbose: u8) -> Result<Model> {
         // unwrap below ok because this from_str is Infallible
         .map(|s| ModelSource::from_str(s).unwrap())
         .collect::<Vec<ModelSource>>();
-    Ok(sources_to_model(&inputs, verbose)?)
+    let current_dir = PathBuf::from(".");
+    Ok(sources_to_model(&inputs, &current_dir, verbose)?)
 }
 
 fn lint(opt: LintOpt, verbose: u8) -> Result<()> {
@@ -204,7 +205,7 @@ fn lint(opt: LintOpt, verbose: u8) -> Result<()> {
 
     let config = select_config(&opt.config)?;
     let model = if opt.input.is_empty() {
-        sources_to_model(&config.models, verbose)?
+        sources_to_model(&config.models, &config.base_dir, verbose)?
     } else {
         inputs_to_model(&opt.input, verbose)?
     };
@@ -240,7 +241,7 @@ fn json(opt: JsonOpt, verbose: u8) -> Result<()> {
 
     let config = select_config(&opt.config)?;
     let model = if opt.input.is_empty() {
-        sources_to_model(&config.models, verbose)?
+        sources_to_model(&config.models, &config.base_dir, verbose)?
     } else {
         inputs_to_model(&opt.input, verbose)?
     };
@@ -261,7 +262,7 @@ fn validate(opt: ValidateOpt, verbose: u8) -> Result<()> {
     };
     let config = select_config(&opt.config)?;
     let model = if opt.input.is_empty() {
-        sources_to_model(&config.models, verbose)?
+        sources_to_model(&config.models, &config.base_dir, verbose)?
     } else {
         inputs_to_model(&opt.input, verbose)?
     };
@@ -355,7 +356,7 @@ fn generate(mut opt: GenerateOpt, verbose: u8) -> Result<()> {
     // a parsed model is only needed if we aren't creating a new project
     let model = if opt.create.is_none() {
         if opt.input.is_empty() {
-            Some(sources_to_model(&config.models, verbose)?)
+            Some(sources_to_model(&config.models, &config.base_dir, verbose)?)
         } else {
             Some(inputs_to_model(&opt.input, verbose)?)
         }
@@ -381,14 +382,22 @@ fn generate(mut opt: GenerateOpt, verbose: u8) -> Result<()> {
 fn select_config(opt_config: &Option<PathBuf>) -> Result<CodegenConfig> {
     // if --config is not specified in the command-line, try the current directory.
     // if it's not found use the default
-    let cfile = if let Some(path) = &opt_config {
-        std::fs::read_to_string(path)?
+    let (cfile, folder) = if let Some(path) = &opt_config {
+        (
+            std::fs::read_to_string(path)?,
+            path.parent().unwrap().to_path_buf(),
+        )
     } else if PathBuf::from("./codegen.toml").is_file() {
-        std::fs::read_to_string("./codegen.toml")?
+        (
+            std::fs::read_to_string("./codegen.toml")?,
+            PathBuf::from("."),
+        )
     } else {
-        DEFAULT_CONFIG.to_string()
+        (DEFAULT_CONFIG.to_string(), PathBuf::from("."))
     };
-    let config = cfile.parse::<CodegenConfig>()?;
+    let folder = std::fs::canonicalize(folder)?;
+    let mut config = cfile.parse::<CodegenConfig>()?;
+    config.base_dir = folder;
 
     Ok(config)
 }
