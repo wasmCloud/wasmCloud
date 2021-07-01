@@ -3,7 +3,7 @@ use atelier_core::model::Model;
 use downloader::Downloader;
 use reqwest::Url;
 use rustc_hash::FxHasher;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const MAX_PARALLEL_DOWNLOADS: u16 = 8;
 
@@ -12,11 +12,14 @@ const MAX_PARALLEL_DOWNLOADS: u16 = 8;
 /// - Model files may be .smithy or .json
 /// See the codegen.toml documentation on `[[models]]` for
 /// a description of valid ModelSources.
+/// If `relative_dir` is provided, all relative paths read will be made relative to that folder,
+/// (Relative paths in codegen.toml are relative to the file codegen.toml, not
+/// necessarily the current directory of the OS process)
 /// Returns single merged model.
-pub fn sources_to_model(sources: &[ModelSource], verbose: u8) -> Result<Model> {
+pub fn sources_to_model(sources: &[ModelSource], base_dir: &Path, verbose: u8) -> Result<Model> {
     use std::convert::TryInto;
 
-    let paths = sources_to_paths(sources, verbose)?;
+    let paths = sources_to_paths(sources, base_dir, verbose)?;
     let mut assembler = atelier_assembler::ModelAssembler::default();
     for path in paths.iter() {
         if !path.exists() {
@@ -34,19 +37,28 @@ pub fn sources_to_model(sources: &[ModelSource], verbose: u8) -> Result<Model> {
 }
 
 /// Flatten source lists and collect list of paths to local files.
+/// All returned paths that were relative have been joined to base_dir.
 /// Download any urls to cache dir if they aren't already cached.
 /// If any of the source paths are local directories, they are passed
 /// to the result and the caller is expected to traverse them
 /// or pass them to an Assembler for traversal.
 #[doc(hidden)]
-pub(crate) fn sources_to_paths(sources: &[ModelSource], verbose: u8) -> Result<Vec<PathBuf>> {
+pub(crate) fn sources_to_paths(
+    sources: &[ModelSource],
+    base_dir: &Path,
+    verbose: u8,
+) -> Result<Vec<PathBuf>> {
     let mut results = Vec::new();
     let mut urls = Vec::new();
 
     for source in sources.iter() {
         match source {
             ModelSource::Path { path, files } => {
-                let prefix = PathBuf::from(&path);
+                let prefix = if path.is_absolute() {
+                    path.to_path_buf()
+                } else {
+                    base_dir.join(path)
+                };
                 if files.is_empty() {
                     // If path is a file, it will be added; if a directory, and source.files is empty,
                     // the directory will be traversed to find model files
@@ -168,7 +180,12 @@ fn urls_to_cached_files(urls: Vec<String>) -> Result<Vec<PathBuf>> {
             .download_folder(tmpdir.path())
             .parallel_requests(MAX_PARALLEL_DOWNLOADS)
             .build()
-            .map_err(|e| Error::Other(format!("internal error: download failure: {}", e)))?;
+            .map_err(|e| {
+                Error::Other(format!(
+                    "internal error: download failure: {}",
+                    e.to_string()
+                ))
+            })?;
         // invoke parallel downloader, returns when all have been read
         let result = downloader
             .download(&to_download)
@@ -177,7 +194,7 @@ fn urls_to_cached_files(urls: Vec<String>) -> Result<Vec<PathBuf>> {
         for r in result.iter() {
             match r {
                 Err(e) => {
-                    println!("Failure downloading: {}", e);
+                    println!("Failure downloading: {}", e.to_string());
                 }
                 Ok(summary) => {
                     for status in summary.status.iter() {
