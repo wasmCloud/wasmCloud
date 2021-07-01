@@ -1,33 +1,43 @@
 # Weld - using Smithy models with wasmcloud
 
+Weld is a tool framework for using [Smithy IDL](https://awslabs.github.io/smithy/index.html) for [wasmcloud](https://github.com/wasmcloud/wasmcloud).
 
-Weld is based on the [Smithy IDL](https://awslabs.github.io/smithy/index.html) specification by Amazon.
+This repository contains
 
-The main types in a Smithy model are [shapes](https://awslabs.github.io/smithy/1.0/spec/core/model.html#shapes) (types), [services](https://awslabs.github.io/smithy/1.0/spec/core/model.html#service) (similar to interfaces), and [operations](https://awslabs.github.io/smithy/1.0/spec/core/model.html#operation) (methods). Objects can be annotated with [traits](https://awslabs.github.io/smithy/1.0/spec/core/model.html#traits), a flexible mechanism for declaring requirements, constraints, behaviors, or documentation.
-
-The `weld` cli includes a code generator, documentation generator, a model linter, and a model validator, and can be installed with `cargo install wasmcloud-weld-bin` (requires [`cargo`](https://doc.rust-lang.org/cargo/getting-started/installation.html))
+- The `weld` cli ([installation](doc/prerequisites.md/#weld)) ([source](./bin)) containing a code generator, html documentation generator, a model linter, and a model validator. 
+- [wasmbus-rpc](./rpc-rs) library used by actors and capability providers to send and receive messages. This library also contains the generated interface library for the wasmcloud core models.
+- [wasmcloud core models](./models/smithy) shared Smithy models with definitions needed by actors and capability providers  
+- [examples](./examples) of models and generated interface libraries, actors, and capability providers.
 
 
 ## Documentation
 
-
 - Getting started
   - Install the [weld](doc/prerequisites.md#weld) cli tool and [prerequisites](doc/prerequisites.md)
-  - Look at the [examples](./examples/) folder for common interfaces, actors, and capability providers.
+  - Look at the [examples](./examples/) folder for models, interface libraries, actors, and capability providers.
   - Create a rust [actor](doc/getting_started.md#creating-an-actor) project
   - Create a rust [interface](doc/getting_started.md#creating-an-interface-project) project
-
-- Install the Visual Studio plugin for Smithy syntax highlighting (in extensions marketplace or from [github](https://github.com/awslabs/smithy-vscode)
+    
+- Install the Visual Studio plugin for Smithy syntax highlighting (in extensions marketplace or from [github](https://github.com/awslabs/smithy-vscode))
+  
 
 
 - Guides
-  - Read the [Weld-Smithy guide](doc/weld-smithy.md) for examples of how weld uses smithy models, with examples.
-  - Read [codegen.toml guide](doc/codegen-toml.md) for instructions and examples for editing a project `codegen.toml`.
-
+  - [Weld-Smithy guide](doc/weld-smithy.md) - examples of how weld uses smithy models, with examples.
+  - [codegen.toml guide](doc/codegen-toml.md): instructions and examples for editing a project `codegen.toml`.
+  - [Code generation](doc/code-generation.md) - more info about how code and documentation generation works, and how to customize it or write a new code generator.
+  - [Tips for building and debugging models](doc/getting-started.md#model-builds-and-debugging)
+  - [Publishing](doc/crates-io.md) rust interface libraries to crates.io
+  
 
   - Tips and suggestions
     - [simplify single-member structures](doc/tips/single-member-structures.md)
   
+  
+## Rust-atelier
+
+Weld makes heavy use of [rust-atelier](https://github.com/johnstonskj/rust-atelier), a rust implementation of [AWS Smithy](https://awslabs.github.io/smithy/index.html).
+
 
 ## Smithy References and tools
 
@@ -38,15 +48,15 @@ The `weld` cli includes a code generator, documentation generator, a model linte
   
 - [Specifications](https://awslabs.github.io/smithy/1.0/spec/index.html)
 
-- Tools
-  - [Visual Studio plugin](https://github.com/awslabs/smithy-vscode) (just search the extension marketplace for easy installation)
-  - [Rust Atelier](https://github.com/johnstonskj/rust-atelier). Contains cli (`cargo-atelier`) that performs lint, validation, and model converion (various formats). Not necessary if you are using `weld`.
-    
+- [Visual Studio plugin](https://github.com/awslabs/smithy-vscode) (in the extension marketplace)
+
+- [Rust-atelier](https://github.com/johnstonskj/rust-atelier)
+  
 - SDKs (code generators and tools below are implemented in Java)
-  - [Java SDK - main repo](https://github.com/awslabs) ( [javadoc](https://awslabs.github.io/smithy/javadoc/1.8.0/)  )
-  - [Go](https://github.com/aws/smithy-go)
-  - [Typescript](https://github.com/awslabs/smithy-typescript)
-  - [Rust](https://github.com/awslabs/smithy-rs) (Alpha)
+  - go [github](https://github.com/aws/smithy-go)
+  - java sdk [github](https://github.com/awslabs) ( [javadoc](https://awslabs.github.io/smithy/javadoc/1.8.0/)  )
+  - rust [github](https://github.com/awslabs/smithy-rs) (Alpha status)
+  - typescript [github](https://github.com/awslabs/smithy-typescript)
 
 
 # Status
@@ -55,11 +65,29 @@ This is a work in progress - offers of help are much appreciated! Current status
 
 |Done? | |
 | :--- | :--- |
-| [ ] | Getting started documentation (50%) |
-| [x] | lint |
-| [x] | validate |
+| [x] | Getting started documentation|
+| [x] | Intermediate documentation|
+| [x] | model lint |
+| [x] | model validate |
 | [x] | HTML documentation generation |
-| [ ] | code generation Rust: [x] Actor, [x] Interface library, [25%] Provider (OTP)|
-| [ ] | code generation AssemblyScript: [ ] Actor |
-| [ ] | code generation Go: [ ] Provider (OTP) |
+| | __Examples__ |
+| [x] | Interface
+| [x] | Actor
+| [ ] | Provider (OTP)
+| | __Rust code-gen/project-gen__ |
+| [x] | Rust Actor
+| [x] | Rust Interface
+| [ ] | Rust Provider (OTP) |
 
+
+## Future
+
+- Assemblyscript codegen
+  - Interface
+  - Actor
+- Go code-gen 
+  - Interface
+  - Provider (OTP)
+- Grain code-gen
+  - Interface
+  - Actor
