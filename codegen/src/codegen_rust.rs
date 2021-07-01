@@ -4,8 +4,8 @@ use crate::{
     error::{Error, Result},
     gen::CodeGen,
     model::{
-        actor_receiver_trait, capability_trait, provider_receiver_trait, wasmcloud_model_namespace,
-        CommentKind, IxShape, ModelIndex,
+        actor_receiver_trait, capability_trait, codegen_rust_trait, provider_receiver_trait,
+        wasmcloud_model_namespace, CommentKind, IxShape, ModelIndex,
     },
     render::Renderer,
     writer::Writer,
@@ -225,7 +225,7 @@ use {}::{{
             })
             .filter(|s| s.is_opt_namespace(&ns))
         {
-            self.declare_struct_shape(&mut w, id.shape_name(), traits, strukt)?;
+            self.declare_structure_shape(&mut w, id.shape_name(), traits, strukt)?;
         }
         Ok(())
     }
@@ -395,6 +395,7 @@ impl RustCodeGen {
                     w.write(ty);
                 } else {
                     // TODO: need to be able to lookup from namespace to canonical module path
+                    // TODO: need to use explicit lib path
                     w.write(&self.to_type_name(&id.shape_name().to_string()));
                 }
             }
@@ -500,7 +501,7 @@ impl RustCodeGen {
         Ok(())
     }
 
-    fn declare_struct_shape(
+    fn declare_structure_shape(
         &mut self,
         mut w: &mut Writer,
         id: &Identifier,
@@ -508,7 +509,17 @@ impl RustCodeGen {
         strukt: &StructureOrUnion,
     ) -> Result<()> {
         self.apply_documentation_traits(&mut w, id, traits);
-        w.write(b"#[derive(Clone, Debug, Default, Serialize, Deserialize)]\n");
+        let mut derive_default = true;
+        if let Some(Some(Value::Object(cg_map))) = traits.get(codegen_rust_trait()) {
+            if let Some(Value::Boolean(enable)) = cg_map.get("deriveDefault") {
+                derive_default = *enable;
+            }
+        };
+        w.write(b"#[derive(");
+        if derive_default {
+            w.write(b"Default, ")
+        }
+        w.write(b"Clone, Debug, Serialize, Deserialize)]\n");
         w.write(b"pub struct ");
         self.write_ident(&mut w, id);
         w.write(b" {\n");
@@ -790,9 +801,6 @@ pub fn rust_build<P: Into<PathBuf>>(
         return Err(Error::Build(format!("missing config file {}", &config_path.display())).into());
     }
     let config_path = std::fs::canonicalize(config_path)?;
-    let config_relative_dir = config_path
-        .parent()
-        .ok_or_else(|| Error::Build(format!("invalid path {} ", &config_path.display())))?;
     let config_file = std::fs::read_to_string(&config_path).map_err(|e| {
         Error::Build(format!(
             "error reading config file '{}': {}",
@@ -800,62 +808,35 @@ pub fn rust_build<P: Into<PathBuf>>(
             e
         ))
     })?;
-    println!("cargo:rerun-if-changed={}", &config_path.display());
-
-    let out_dir = std::path::PathBuf::from(&std::env::var("OUT_DIR").unwrap());
-    let out_dir = std::fs::canonicalize(&out_dir)?;
-
-    // if config file is not in the same directory as build.rs,
-    // we need to adjust current dir to config file's dir because it may contain relative paths.
-    // save the current dir, then return to it at the end
-    let run_dir = std::env::current_dir().ok();
-
-    //
-    // cd config_relative_dir
-    //
-    std::env::set_current_dir(&config_relative_dir).map_err(|e| {
-        Error::Build(format!(
-            "cd {} failed:{}",
-            &config_relative_dir.display(),
-            e
-        ))
-    })?;
-
     let mut config = config_file
         .parse::<CodegenConfig>()
         .map_err(|e| Error::Build(format!("parsing config: {}", e.to_string())))?;
+    config.base_dir = config_path.parent().unwrap().to_path_buf();
     config.output_languages = vec![OutputLanguage::Rust];
 
-    let model = crate::sources_to_model(&config.models, 0)?;
+    // tell cargo to rebuild if codegen.toml changes
+    println!("cargo:rerun-if-changed={}", &config_path.display());
+
+    let out_dir = std::path::PathBuf::from(&std::env::var("OUT_DIR").unwrap());
+
+    let model = crate::sources_to_model(&config.models, &config.base_dir, 0)?;
 
     // the second time we do this it should be faster since no downloading is required,
     // and we also don't invoke assembler to traverse directories
-    for path in crate::sources_to_paths(&config.models, 0)?.into_iter() {
+    for path in crate::sources_to_paths(&config.models, &config.base_dir, 0)?.into_iter() {
         // rerun-if-changed works on directories and files, so it's ok that sources_to_paths
         // may include folders that haven't been traversed by the assembler.
         // Using a folder depends on the OS updating folder mtime if the folder contents change.
         // In many cases, the model file for the primary interface/namespace will
         // be a file path (it is in projects created with `weld create`).
+        // All paths returned from sources_to_paths are absolute (by joining to config.base_dir)
+        // so we don't need to adjust them here
         if path.exists() {
-            // relative paths in the config are relative the dir containing codegen.toml,
-            // but need to be adjusted to be relative to the dir containing build.rs
-            let adjusted = if path.is_absolute() {
-                path
-            } else {
-                config_relative_dir.join(&path)
-            };
-            println!("cargo:rerun-if-changed={}", &adjusted.display());
+            println!("cargo:rerun-if-changed={}", &path.display());
         }
     }
 
-    let g = Generator::default();
-    g.gen(Some(&model), config, Vec::new(), &out_dir, Vec::new())?;
+    Generator::default().gen(Some(&model), config, Vec::new(), &out_dir, Vec::new())?;
 
-    //
-    // return to build.rs dir
-    //
-    if let Some(original_dir) = run_dir {
-        let _ = std::env::set_current_dir(original_dir);
-    }
     Ok(())
 }
