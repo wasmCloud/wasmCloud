@@ -71,6 +71,13 @@ pub struct CodegenConfig {
     /// Language-specific output configuration
     #[serde(flatten)]
     pub languages: BTreeMap<OutputLanguage, LanguageConfig>,
+
+    /// The directory containing the codegen.toml file, and the base_dir
+    /// used for evaluating all relative paths in the file.
+    /// This is not set inside the toml file but is set by the file reader,
+    /// It is always set to an absolute path
+    #[serde(default)]
+    pub base_dir: PathBuf,
 }
 
 /// Source directory or url prefix for finding model files
