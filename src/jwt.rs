@@ -15,7 +15,7 @@ const HEADER_TYPE: &str = "jwt";
 const HEADER_ALGORITHM: &str = "Ed25519";
 
 /// A structure containing a JWT and its associated decoded claims
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
 pub struct Token<T> {
     pub jwt: String,
     pub claims: Claims<T>,
@@ -112,6 +112,16 @@ pub struct Operator {
     pub name: Option<String>,
     /// A list of valid public keys that may appear as an `issuer` on accounts
     /// signed by one of this operator's multiple seed keys
+    pub valid_signers: Option<Vec<String>>,
+}
+
+/// The claims metadata corresponding to a cluster
+#[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Default)]
+pub struct Cluster {
+    /// Optional friendly descriptive name for the cluster
+    pub name: Option<String>,
+    /// A list of valid public keys that may appear as an `issuer` on hosts
+    /// or anything else signed by one of the cluster's seed keys
     pub valid_signers: Option<Vec<String>>,
 }
 
@@ -254,6 +264,14 @@ impl WascapEntity for Operator {
     }
 }
 
+impl WascapEntity for Cluster {
+    fn name(&self) -> String {
+        self.name
+            .as_ref()
+            .unwrap_or(&"Anonymous Cluster".to_string())
+            .to_string()
+    }
+}
 impl WascapEntity for Invocation {
     fn name(&self) -> String {
         self.target_url.to_string()
@@ -360,6 +378,39 @@ impl Claims<Operator> {
     ) -> Claims<Operator> {
         Claims {
             metadata: Some(Operator {
+                name: Some(name),
+                valid_signers: Some(additional_keys),
+            }),
+            expires,
+            id: nuid::next(),
+            issued_at: since_the_epoch().as_secs(),
+            issuer,
+            subject,
+            not_before,
+        }
+    }
+}
+
+impl Claims<Cluster> {
+    pub fn new(
+        name: String,
+        issuer: String,
+        subject: String,
+        additional_keys: Vec<String>,
+    ) -> Claims<Cluster> {
+        Self::with_dates(name, issuer, subject, None, None, additional_keys)
+    }
+
+    pub fn with_dates(
+        name: String,
+        issuer: String,
+        subject: String,
+        not_before: Option<u64>,
+        expires: Option<u64>,
+        additional_keys: Vec<String>,
+    ) -> Claims<Cluster> {
+        Claims {
+            metadata: Some(Cluster {
                 name: Some(name),
                 valid_signers: Some(additional_keys),
             }),
@@ -695,6 +746,15 @@ impl Operator {
     }
 }
 
+impl Cluster {
+    pub fn new(name: String, additional_keys: Vec<String>) -> Cluster {
+        Cluster {
+            name: Some(name),
+            valid_signers: Some(additional_keys),
+        }
+    }
+}
+
 impl Invocation {
     pub fn new(target_url: &str, origin_url: &str, hash: &str) -> Invocation {
         Invocation {
@@ -709,8 +769,8 @@ impl Invocation {
 mod test {
     use super::{Account, Actor, Claims, ErrorKind, Invocation, KeyPair, Operator};
     use crate::caps::{KEY_VALUE, LOGGING, MESSAGING};
-    use crate::jwt::validate_token;
     use crate::jwt::{since_the_epoch, CapabilityProvider, ClaimsBuilder};
+    use crate::jwt::{validate_token, Cluster};
     use std::collections::HashMap;
 
     #[test]
@@ -998,6 +1058,24 @@ mod test {
         let encoded = claims.encode(&kp1).unwrap();
         let decoded = Claims::<Account>::decode(&encoded).unwrap();
         assert!(validate_token::<Account>(&encoded).is_ok());
+        assert_eq!(claims, decoded);
+        assert_eq!(claims.metadata.unwrap().valid_signers.unwrap().len(), 1);
+    }
+
+    #[test]
+    fn cluster_extra_signers() {
+        let op = KeyPair::new_operator();
+        let kp1 = KeyPair::new_cluster();
+        let kp2 = KeyPair::new_cluster();
+        let claims = Claims::<Cluster>::new(
+            "test cluster".to_string(),
+            op.public_key(),
+            kp1.public_key(),
+            vec![kp2.public_key()],
+        );
+        let encoded = claims.encode(&kp1).unwrap();
+        let decoded = Claims::<Cluster>::decode(&encoded).unwrap();
+        assert!(validate_token::<Cluster>(&encoded).is_ok());
         assert_eq!(claims, decoded);
         assert_eq!(claims.metadata.unwrap().valid_signers.unwrap().len(), 1);
     }
