@@ -1,5 +1,3 @@
-
-
 # [[models]]
 
 The `models` array contains a list of locations - on disk and via http servers - where smithy model files can be found. A codegen.toml file may contain several `[[models]]` sections, which should be located together, usually at the top of the file, since they represent input sources.
