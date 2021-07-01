@@ -17,19 +17,27 @@ use lazy_static::lazy_static;
 use std::collections::BTreeMap;
 use std::str::FromStr;
 
-pub const WASMCLOUD_MODEL_NAMESPACE: &str = "org.wasmcloud.model";
-pub const WASMCLOUD_CORE_NAMESPACE: &str = "org.wasmcloud.core";
-//pub const SMITHY_API_NAMESPACE: &str = "smithy.api";
-pub const TRAIT_ACTOR_RECEIVER: &str = "actorReceiver";
-pub const TRAIT_CAPABILITY: &str = "capability";
-pub const TRAIT_PROVIDER_RECEIVER: &str = "providerReceiver";
+const WASMCLOUD_MODEL_NAMESPACE: &str = "org.wasmcloud.model";
+const WASMCLOUD_CORE_NAMESPACE: &str = "org.wasmcloud.core";
+
+const TRAIT_ACTOR_RECEIVER: &str = "actorReceiver";
+const TRAIT_CAPABILITY: &str = "capability";
+const TRAIT_PROVIDER_RECEIVER: &str = "providerReceiver";
+const TRAIT_CODEGEN_RUST: &str = "codegenRust";
 
 lazy_static! {
     static ref WASMCLOUD_MODEL_NAMESPACE_ID: NamespaceID =
         NamespaceID::new_unchecked(WASMCLOUD_MODEL_NAMESPACE);
+    static ref WASMCLOUD_CORE_NAMESPACE_ID: NamespaceID =
+        NamespaceID::new_unchecked(WASMCLOUD_CORE_NAMESPACE);
     static ref ACTOR_RECEIVER_TRAIT_ID: ShapeID = ShapeID::new(
         NamespaceID::new_unchecked(WASMCLOUD_CORE_NAMESPACE),
         Identifier::from_str(TRAIT_ACTOR_RECEIVER).unwrap(),
+        None
+    );
+    static ref CODEGEN_RUST_TRAIT_ID: ShapeID = ShapeID::new(
+        NamespaceID::new_unchecked(WASMCLOUD_MODEL_NAMESPACE),
+        Identifier::from_str(TRAIT_CODEGEN_RUST).unwrap(),
         None
     );
     static ref PROVIDER_RECEIVER_TRAIT_ID: ShapeID = ShapeID::new(
@@ -47,6 +55,11 @@ lazy_static! {
 pub fn wasmcloud_model_namespace() -> &'static NamespaceID {
     &WASMCLOUD_MODEL_NAMESPACE_ID
 }
+
+//pub fn wasmcloud_core_namespace() -> &'static NamespaceID {
+//    &WASMCLOUD_CORE_NAMESPACE_ID
+//}
+
 pub fn actor_receiver_trait() -> &'static ShapeID {
     &ACTOR_RECEIVER_TRAIT_ID
 }
@@ -55,6 +68,9 @@ pub fn provider_receiver_trait() -> &'static ShapeID {
 }
 pub fn capability_trait() -> &'static ShapeID {
     &CAPABILITY_TRAIT_ID
+}
+pub fn codegen_rust_trait() -> &'static ShapeID {
+    &CODEGEN_RUST_TRAIT_ID
 }
 
 #[allow(dead_code)]
