@@ -1,10 +1,10 @@
 
 # model sources and dependencies
 [[models]]
-url = "https://wasmcloud.github.io/models/org.wasmcloud"
-files = [ "wasmcloud-core-v0.smithy", "wasmcloud-model-v0.smithy" ]
+#url = "https://wasmcloud.github.io/models/org.wasmcloud"
+path = "../models/smithy"
+files = [ "wasmcloud-core.smithy", "wasmcloud-model.smithy" ]
 #[[models]]
-#path = "../models/smithy"
 #files = [ "wasmcloud-core.smithy", "wasmcloud-model.smithy" ]
 
 ##
@@ -19,6 +19,6 @@ output_dir = "src"
 
 
 [[rust.files]]
-namespace = "org.wasmcloud.core.v0"
+namespace = "org.wasmcloud.core"
 path = "core.rs"
 crate = "wasmbus_rpc"
