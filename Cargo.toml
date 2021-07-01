@@ -4,11 +4,9 @@ members = [
     "codegen",
     "macros",
     "rpc-rs",
-    "examples/http-server/gen/rust",
 ]
 
 exclude = [
-    "examples/echo",
-    "examples/rangekv",
+    "examples",
     "scratch",
 ]
