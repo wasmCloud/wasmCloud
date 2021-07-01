@@ -45,6 +45,8 @@ impl Generator {
     /// Function parameters:
     /// - model - the smithy model
     /// - config - CodeConfig (usually loaded from a codegen.toml file)
+    ///     - N.B. all relative paths (template dirs and the output_dir parameter) are
+    ///            adjusted to be relative to config.base_dir.
     /// - templates - list of additional templates to register with the handlebars engine
     ///          (The templates parameter of config is ignored. to use a list of file
     ///          paths, call templates_from_dir() to load them and generate this parameter)
@@ -67,6 +69,11 @@ impl Generator {
             None => JsonValue::default(),
         };
 
+        let output_dir = if output_dir.is_absolute() {
+            output_dir.to_path_buf()
+        } else {
+            config.base_dir.join(output_dir)
+        };
         // create one renderer so we only need to parse templates once
         let mut renderer = Renderer::default();
 
@@ -75,10 +82,10 @@ impl Generator {
         for (name, template) in COMMON_TEMPLATES.iter() {
             renderer.add_template((name, template))?;
         }
-        std::fs::create_dir_all(output_dir).map_err(|e| {
+        std::fs::create_dir_all(&output_dir).map_err(|e| {
             Error::Io(format!(
                 "creating directory {}: {}",
-                output_dir.display(),
+                &output_dir.display(),
                 e
             ))
         })?;
@@ -90,7 +97,12 @@ impl Generator {
             }
             // add templates from <lang>.templates
             if let Some(template_dir) = &lc.templates {
-                for (name, tmpl) in templates_from_dir(template_dir)? {
+                let template_dir = if template_dir.is_absolute() {
+                    template_dir.clone()
+                } else {
+                    config.base_dir.join(template_dir)
+                };
+                for (name, tmpl) in templates_from_dir(&template_dir)? {
                     renderer.add_template((&name, &tmpl))?;
                 }
             }
@@ -405,8 +417,9 @@ pub fn find_files(dir: &Path, extension: &str) -> Result<Vec<PathBuf>> {
         Ok(vec![dir.to_owned()])
     } else {
         Err(Error::Other(format!(
-            "'{}' is not a valid folder or .smithy file",
-            dir.display()
+            "'{}' is not a valid folder or '.{}' file",
+            dir.display(),
+            extension
         )))
     }
 }
