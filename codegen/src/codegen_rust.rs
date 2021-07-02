@@ -4,13 +4,14 @@ use crate::{
     error::{Error, Result},
     gen::CodeGen,
     model::{
-        actor_receiver_trait, capability_trait, codegen_rust_trait, provider_receiver_trait,
-        wasmcloud_model_namespace, CommentKind, IxShape, ModelIndex,
+        actor_receiver_trait, capability_trait, codegen_rust_trait, get_operation,
+        is_opt_namespace, provider_receiver_trait, wasmcloud_model_namespace, CommentKind,
     },
     render::Renderer,
     writer::Writer,
     JsonValue, ParamMap,
 };
+use atelier_core::model::shapes::ShapeKind;
 use atelier_core::{
     model::{
         shapes::{
@@ -18,7 +19,7 @@ use atelier_core::{
             Simple, StructureOrUnion,
         },
         values::Value,
-        Identifier, Model, NamespaceID, ShapeID,
+        HasIdentity, Identifier, Model, NamespaceID, ShapeID,
     },
     prelude::{
         prelude_namespace_id, prelude_shape_named, SHAPE_BIGDECIMAL, SHAPE_BIGINTEGER, SHAPE_BLOB,
@@ -82,6 +83,8 @@ const DEFAULT_DOCUMENT_TYPE: &str = "Vec<u8>";
 #[derive(Eq, Ord, PartialOrd, PartialEq)]
 struct Declaration(u8, BytesMut);
 
+type ShapeList<'model> = Vec<(&'model ShapeID, &'model AppliedTraits, &'model ShapeKind)>;
+
 // Modifiers on data type
 // This enum may be extended in the future if other variations are required.
 // It's recursively composable, so you could represent &Option<&Value>
@@ -144,7 +147,7 @@ impl CodeGen for RustCodeGen {
     fn init_file(
         &mut self,
         w: &mut Writer,
-        ix: &ModelIndex,
+        model: &Model,
         file_config: &crate::config::OutputFile,
         params: &ParamMap,
     ) -> Result<()> {
@@ -158,7 +161,7 @@ impl CodeGen for RustCodeGen {
     fn write_source_file_header(
         &mut self,
         w: &mut Writer,
-        ix: &ModelIndex,
+        model: &Model,
         params: &ParamMap,
     ) -> Result<()> {
         // special case: if the crate we are generating is "wasmbus_rpc" then we have to import it with "crate::".
@@ -182,50 +185,64 @@ use {}::{{
 
         w.write(&format!(
             "\npub const SMITHY_VERSION : &str = \"{}\";\n\n",
-            ix.version.unwrap().to_string()
+            model.smithy_version().to_string()
         ));
         Ok(())
     }
 
-    // Declare simple types, then maps, then structures
     fn declare_types(
         &mut self,
         mut w: &mut Writer,
-        ix: &ModelIndex,
+        model: &Model,
         _params: &ParamMap,
     ) -> Result<()> {
         let ns = self.namespace.clone();
 
-        for IxShape(id, traits, simple) in ix.simples.values().filter(|s| s.is_opt_namespace(&ns)) {
-            self.declare_simple_shape(&mut w, id.shape_name(), traits, simple)?;
-        }
-        for IxShape(id, traits, map) in ix.maps.values().filter(|s| s.is_opt_namespace(&ns)) {
-            self.declare_map_shape(&mut w, id.shape_name(), traits, map)?;
-        }
-        for IxShape(id, traits, list) in ix.lists.values().filter(|s| s.is_opt_namespace(&ns)) {
-            self.declare_list_or_set_shape(
-                &mut w,
-                id.shape_name(),
-                traits,
-                list,
-                DEFAULT_LIST_TYPE,
-            )?;
-        }
-        for IxShape(id, traits, set) in ix.sets.values().filter(|s| s.is_opt_namespace(&ns)) {
-            self.declare_list_or_set_shape(&mut w, id.shape_name(), traits, set, DEFAULT_SET_TYPE)?;
-        }
-        for IxShape(id, traits, strukt) in ix
-            .structs
-            .values()
-            .filter(|shape| {
-                shape
-                    .1
-                    .get(&prelude_shape_named(TRAIT_TRAIT).unwrap())
-                    .is_none()
-            })
-            .filter(|s| s.is_opt_namespace(&ns))
-        {
-            self.declare_structure_shape(&mut w, id.shape_name(), traits, strukt)?;
+        let mut shapes = model
+            .shapes()
+            .filter(|s| is_opt_namespace(s.id(), &ns))
+            .map(|s| (s.id(), s.traits(), s.body()))
+            .collect::<ShapeList>();
+        // sort shapes (they are all in the same namespace if ns.is_some(), which is usually true)
+        shapes.sort_by_key(|v| v.0);
+
+        for (id, traits, shape) in shapes.into_iter() {
+            match shape {
+                ShapeKind::Simple(simple) => {
+                    self.declare_simple_shape(&mut w, id.shape_name(), traits, simple)?;
+                }
+                ShapeKind::Map(map) => {
+                    self.declare_map_shape(&mut w, id.shape_name(), traits, map)?;
+                }
+                ShapeKind::List(list) => {
+                    self.declare_list_or_set_shape(
+                        &mut w,
+                        id.shape_name(),
+                        traits,
+                        list,
+                        DEFAULT_LIST_TYPE,
+                    )?;
+                }
+                ShapeKind::Set(set) => {
+                    self.declare_list_or_set_shape(
+                        &mut w,
+                        id.shape_name(),
+                        traits,
+                        set,
+                        DEFAULT_SET_TYPE,
+                    )?;
+                }
+                ShapeKind::Structure(strukt) => {
+                    if !traits.contains_key(&prelude_shape_named(TRAIT_TRAIT).unwrap()) {
+                        self.declare_structure_shape(&mut w, id.shape_name(), traits, strukt)?;
+                    }
+                }
+                ShapeKind::Operation(_)
+                | ShapeKind::Resource(_)
+                | ShapeKind::Service(_)
+                | ShapeKind::Union(_)
+                | ShapeKind::Unresolved => {}
+            }
         }
         Ok(())
     }
@@ -233,15 +250,20 @@ use {}::{{
     fn write_services(
         &mut self,
         mut w: &mut Writer,
-        ix: &ModelIndex,
+        model: &Model,
         _params: &ParamMap,
     ) -> Result<()> {
         let ns = self.namespace.clone();
-        for IxShape(id, traits, service) in ix.services.values().filter(|s| s.is_opt_namespace(&ns))
+        for (id, traits, shape) in model
+            .shapes()
+            .filter(|s| is_opt_namespace(s.id(), &ns))
+            .map(|s| (s.id(), s.traits(), s.body()))
         {
-            self.write_service_interface(&mut w, ix, id.shape_name(), traits, service)?;
-            self.write_service_receiver(&mut w, ix, id.shape_name(), traits, service)?;
-            self.write_service_sender(&mut w, ix, id.shape_name(), traits, service)?;
+            if let ShapeKind::Service(service) = shape {
+                self.write_service_interface(&mut w, model, id.shape_name(), traits, service)?;
+                self.write_service_receiver(&mut w, model, id.shape_name(), traits, service)?;
+                self.write_service_sender(&mut w, model, id.shape_name(), traits, service)?;
+            }
         }
         Ok(())
     }
@@ -563,12 +585,12 @@ impl RustCodeGen {
     fn write_service_interface(
         &mut self,
         mut w: &mut Writer,
-        ix: &ModelIndex,
+        model: &Model,
         service_id: &Identifier,
-        traits: &AppliedTraits,
+        service_traits: &AppliedTraits,
         service: &Service,
     ) -> Result<()> {
-        self.apply_documentation_traits(&mut w, service_id, traits);
+        self.apply_documentation_traits(&mut w, service_id, service_traits);
         w.write(b"#[async_trait]\npub trait ");
         self.write_ident(&mut w, service_id);
         w.write(b"{\n");
@@ -579,10 +601,11 @@ impl RustCodeGen {
                     continue;
                 }
             }
-            let IxShape(_, traits, op) = ix.get_operation(service_id, operation)?;
-            // TODO: re-think what to do if this is in another namspace and self.namespace is None
+            let (op, op_traits) = get_operation(model, operation, service_id)?;
+
+            // TODO: re-think what to do if operation is in another namspace and self.namespace is None
             let method_id = operation.shape_name();
-            self.write_method_signature(&mut w, method_id, traits, op)?;
+            self.write_method_signature(&mut w, method_id, op_traits, op)?;
             w.write(b";\n");
         }
         w.write(b"}\n\n");
@@ -595,11 +618,11 @@ impl RustCodeGen {
         &mut self,
         mut w: &mut Writer,
         method_id: &Identifier,
-        traits: &AppliedTraits,
+        method_traits: &AppliedTraits,
         op: &Operation,
     ) -> Result<()> {
         let method_name = self.to_method_name(method_id);
-        self.apply_documentation_traits(&mut w, method_id, traits);
+        self.apply_documentation_traits(&mut w, method_id, method_traits);
         w.write(b"async fn ");
         w.write(&method_name);
         w.write(b"(&self, ctx: &context::Context<'_>");
@@ -621,21 +644,21 @@ impl RustCodeGen {
     fn write_service_receiver(
         &mut self,
         mut w: &mut Writer,
-        ix: &ModelIndex,
-        id: &Identifier,
-        traits: &AppliedTraits,
+        model: &Model,
+        service_id: &Identifier,
+        service_traits: &AppliedTraits,
         service: &Service,
     ) -> Result<()> {
         let doc = format!(
             "{}Receiver receives messages defined in the {} service trait",
-            id, id
+            service_id, service_id
         );
         self.write_comment(&mut w, CommentKind::Documentation, &doc);
-        self.apply_documentation_traits(&mut w, id, traits);
+        self.apply_documentation_traits(&mut w, service_id, service_traits);
         w.write(b"#[async_trait]\npub trait ");
-        self.write_ident_with_suffix(&mut w, id, "Receiver")?;
+        self.write_ident_with_suffix(&mut w, service_id, "Receiver")?;
         w.write(b" : MessageDispatch + ");
-        self.write_ident(&mut w, id);
+        self.write_ident(&mut w, service_id);
         w.write(
             br#"{
             async fn dispatch(
@@ -655,8 +678,7 @@ impl RustCodeGen {
                 }
             }
             let method_ident = method_id.shape_name();
-
-            let IxShape(_, _, op) = ix.get_operation(id, method_id)?;
+            let (op, _) = get_operation(model, method_id, service_id)?;
             w.write(b"\"");
             w.write(&self.op_dispatch_name(method_ident));
             w.write(b"\" => {\n");
@@ -669,7 +691,7 @@ impl RustCodeGen {
             }
             // let resp = Trait::method(self, ctx, &value).await?;
             w.write(b"let resp = ");
-            self.write_ident(&mut w, id); // Service::method
+            self.write_ident(&mut w, service_id); // Service::method
             w.write(b"::");
             w.write(&self.to_method_name(method_ident));
             w.write(b"(self, ctx");
@@ -682,11 +704,11 @@ impl RustCodeGen {
             w.write(b"let buf = Cow::Owned(serialize(&resp)?);\n");
             //w.write(br#"console_log(format!("actor result {}b",buf.len())); "#);
             w.write(b"Ok(Message { method: ");
-            w.write(&self.full_dispatch_name(id, method_ident));
+            w.write(&self.full_dispatch_name(service_id, method_ident));
             w.write(b", arg: buf })},\n");
         }
         w.write(b"_ => Err(RpcError::MethodNotHandled(format!(\"");
-        self.write_ident(&mut w, id);
+        self.write_ident(&mut w, service_id);
         w.write(b"::{}\", message.method))),\n");
         w.write(b"}\n}\n}\n\n"); // end match, end fn dispatch, end trait
 
@@ -698,31 +720,34 @@ impl RustCodeGen {
     fn write_service_sender(
         &mut self,
         mut w: &mut Writer,
-        ix: &ModelIndex,
-        id: &Identifier,
-        traits: &AppliedTraits,
+        model: &Model,
+        service_id: &Identifier,
+        service_traits: &AppliedTraits,
         service: &Service,
     ) -> Result<()> {
-        let doc = format!("{}Sender sends messages to a {} service", id, id);
+        let doc = format!(
+            "{}Sender sends messages to a {} service",
+            service_id, service_id
+        );
         self.write_comment(&mut w, CommentKind::Documentation, &doc);
-        self.apply_documentation_traits(&mut w, id, traits);
+        self.apply_documentation_traits(&mut w, service_id, service_traits);
         w.write(b"#[derive(Debug)]\npub struct ");
-        self.write_ident_with_suffix(&mut w, id, "Sender")?;
+        self.write_ident_with_suffix(&mut w, service_id, "Sender")?;
         w.write(b"<T> { transport: T, config: client::SendConfig }\n\n");
 
         // implement constructor for TraitClient
         w.write(b"impl<T:Transport>  ");
-        self.write_ident_with_suffix(&mut w, id, "Sender")?;
+        self.write_ident_with_suffix(&mut w, service_id, "Sender")?;
         w.write(b"<T> { \n");
         w.write(b" pub fn new(config: client::SendConfig, transport: T) -> Self { ");
-        self.write_ident_with_suffix(&mut w, id, "Sender")?;
+        self.write_ident_with_suffix(&mut w, service_id, "Sender")?;
         w.write(b"{ transport, config }\n}\n}\n\n");
 
         // implement Trait for TraitSender
         w.write(b"#[async_trait]\nimpl<T:Transport + std::marker::Sync + std::marker::Send> ");
-        self.write_ident(&mut w, id);
+        self.write_ident(&mut w, service_id);
         w.write(b" for ");
-        self.write_ident_with_suffix(&mut w, id, "Sender")?;
+        self.write_ident_with_suffix(&mut w, service_id, "Sender")?;
         w.write(b"<T> {\n");
 
         for method_id in service.operations() {
@@ -735,9 +760,9 @@ impl RustCodeGen {
             }
             let method_ident = method_id.shape_name();
 
-            let IxShape(_, traits, op) = ix.get_operation(id, method_id)?;
+            let (op, method_traits) = get_operation(model, method_id, service_id)?;
             w.write(b"#[allow(unused)]\n");
-            self.write_method_signature(&mut w, method_ident, traits, op)?;
+            self.write_method_signature(&mut w, method_ident, method_traits, op)?;
             w.write(b" {\n");
 
             if op.has_input() {
@@ -787,56 +812,3 @@ Opt   @required   @box    bool/int/...
 x     1           1       0
 x     1           1       1
 */
-
-/// wraps the logic inside build.rs
-pub fn rust_build<P: Into<PathBuf>>(
-    config_path: P,
-) -> std::result::Result<(), Box<dyn std::error::Error>> {
-    use crate::{
-        config::{CodegenConfig, OutputLanguage},
-        Generator,
-    };
-    let config_path = config_path.into();
-    if !config_path.is_file() {
-        return Err(Error::Build(format!("missing config file {}", &config_path.display())).into());
-    }
-    let config_path = std::fs::canonicalize(config_path)?;
-    let config_file = std::fs::read_to_string(&config_path).map_err(|e| {
-        Error::Build(format!(
-            "error reading config file '{}': {}",
-            &config_path.display(),
-            e
-        ))
-    })?;
-    let mut config = config_file
-        .parse::<CodegenConfig>()
-        .map_err(|e| Error::Build(format!("parsing config: {}", e.to_string())))?;
-    config.base_dir = config_path.parent().unwrap().to_path_buf();
-    config.output_languages = vec![OutputLanguage::Rust];
-
-    // tell cargo to rebuild if codegen.toml changes
-    println!("cargo:rerun-if-changed={}", &config_path.display());
-
-    let out_dir = std::path::PathBuf::from(&std::env::var("OUT_DIR").unwrap());
-
-    let model = crate::sources_to_model(&config.models, &config.base_dir, 0)?;
-
-    // the second time we do this it should be faster since no downloading is required,
-    // and we also don't invoke assembler to traverse directories
-    for path in crate::sources_to_paths(&config.models, &config.base_dir, 0)?.into_iter() {
-        // rerun-if-changed works on directories and files, so it's ok that sources_to_paths
-        // may include folders that haven't been traversed by the assembler.
-        // Using a folder depends on the OS updating folder mtime if the folder contents change.
-        // In many cases, the model file for the primary interface/namespace will
-        // be a file path (it is in projects created with `weld create`).
-        // All paths returned from sources_to_paths are absolute (by joining to config.base_dir)
-        // so we don't need to adjust them here
-        if path.exists() {
-            println!("cargo:rerun-if-changed={}", &path.display());
-        }
-    }
-
-    Generator::default().gen(Some(&model), config, Vec::new(), &out_dir, Vec::new())?;
-
-    Ok(())
-}

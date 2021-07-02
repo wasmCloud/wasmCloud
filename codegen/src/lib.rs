@@ -1,27 +1,21 @@
 #![forbid(unsafe_code)]
 
+mod error;
 pub use error::{Error, Result};
-mod loader;
-
-//pub mod codegen_as;
-//pub mod codegen_go;
 pub(crate) mod codegen_rust;
 pub mod config;
-//mod docgen;
 pub mod docgen;
-mod error;
 pub(crate) mod gen;
+mod loader;
 pub(crate) mod model;
 pub(crate) mod render;
-/// utility for running 'rustfmt'
-#[cfg(not(target_arch = "wasm32"))]
-pub mod rustfmt;
 pub mod writer;
-pub use codegen_rust::rust_build;
-pub use config::ModelSource;
 pub use gen::{templates_from_dir, Generator};
 pub(crate) use loader::sources_to_paths;
 pub use loader::{sources_to_model, weld_cache_dir};
+pub use rust_build::rust_build;
+mod rust_build;
+pub mod rustfmt;
 
 // re-export
 pub use bytes::Bytes;

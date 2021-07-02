@@ -8,7 +8,7 @@ use crate::{
     config::{CodegenConfig, LanguageConfig, OutputFile, OutputLanguage},
     docgen::DocGen,
     error::{Error, Result},
-    model::{CommentKind, ModelIndex},
+    model::CommentKind,
     render::Renderer,
     writer::Writer,
     JsonValue, ParamMap, TomlValue,
@@ -212,8 +212,6 @@ fn gen_for_language(language: &OutputLanguage) -> Box<dyn CodeGen> {
 /// - write_services()
 /// - finalize()
 ///
-/// Each of these methods receives a reference to a ModelIndex, which provides
-/// sorted collections of each of the model types.
 pub(crate) trait CodeGen {
     /// Initialize code generator and renderer for language output.j
     /// This hook is called before any code is generated and can be used to initialize code generator
@@ -238,13 +236,12 @@ pub(crate) trait CodeGen {
         file_config: &OutputFile,
         params: &ParamMap,
     ) -> Result<Bytes> {
-        let ix = ModelIndex::build(model);
         let mut w: Writer = Writer::default();
 
-        self.init_file(&mut w, &ix, file_config, params)?;
-        self.write_source_file_header(&mut w, &ix, params)?;
-        self.declare_types(&mut w, &ix, params)?;
-        self.write_services(&mut w, &ix, params)?;
+        self.init_file(&mut w, model, file_config, params)?;
+        self.write_source_file_header(&mut w, model, params)?;
+        self.declare_types(&mut w, model, params)?;
+        self.write_services(&mut w, model, params)?;
         self.finalize(&mut w)
     }
 
@@ -263,7 +260,7 @@ pub(crate) trait CodeGen {
     fn init_file(
         &mut self,
         w: &mut Writer,
-        ix: &ModelIndex,
+        model: &Model,
         file_config: &OutputFile,
         params: &ParamMap,
     ) -> Result<()> {
@@ -275,7 +272,7 @@ pub(crate) trait CodeGen {
     fn write_source_file_header(
         &mut self,
         w: &mut Writer,
-        ix: &ModelIndex,
+        model: &Model,
         params: &ParamMap,
     ) -> Result<()> {
         Ok(())
@@ -283,13 +280,13 @@ pub(crate) trait CodeGen {
 
     /// Write declarations for simple types, maps, and structures
     #[allow(unused_variables)]
-    fn declare_types(&mut self, w: &mut Writer, ix: &ModelIndex, params: &ParamMap) -> Result<()> {
+    fn declare_types(&mut self, w: &mut Writer, model: &Model, params: &ParamMap) -> Result<()> {
         Ok(())
     }
 
     /// Write service declarations and implementation stubs
     #[allow(unused_variables)]
-    fn write_services(&mut self, w: &mut Writer, ix: &ModelIndex, params: &ParamMap) -> Result<()> {
+    fn write_services(&mut self, w: &mut Writer, model: &Model, params: &ParamMap) -> Result<()> {
         Ok(())
     }
 
