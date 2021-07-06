@@ -4,9 +4,9 @@ TOPTARGETS := all clean
 
 SUBDIRS := $(wildcard */.)
 
-$(TOPTARGETS): $(SUBDIRS)
-
-$(SUBDIRS):
-	$(MAKE) -C $@ $(MAKECMDGOALS)
+$(TOPTARGETS):
+	for dir in $(SUBDIRS); do \
+        $(MAKE) -C $$dir $@; \
+    done
 
 .PHONY: $(TOPTARGETS) $(SUBDIRS)
