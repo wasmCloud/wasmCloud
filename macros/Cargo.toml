@@ -2,9 +2,9 @@
 name = "wasmbus-macros"
 version = "0.1.0"
 edition = "2018"
-authors = [ "stevelr <dev@somecool.net>" ]
+authors = [ "wasmcloud Team" ]
 license = "Apache-2.0"
-description = "derive macros for wasmcloud-weld"
+description = "derive macros for wasmbus-rpc"
 homepage = "https://github.com/wasmcloud/weld"
 repository = "https://github.com/wasmcloud/weld"
 documentation = "https://docs.rs/wasmcloud-weld-macros"
