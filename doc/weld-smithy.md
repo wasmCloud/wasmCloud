@@ -4,6 +4,7 @@ Weld's use of Smithy closely follows the [Smithy IDL specification](https://awsl
 
 __Contents__
 
+- [Models](#models)
 - [Data types](#data-types)
 - [Structures](#structures)  
 - [Operations](#operations)
@@ -12,11 +13,9 @@ __Contents__
 
 ## Models
 
-We author models in Smithy IDL files, with a `.smithy` extension. An IDL file contains zero or one namespaces, 
+We author models in Smithy IDL files, with a `.smithy` extension. An IDL that defines any shapes must have a namespace declaration, 
 
-A "Semantic Model", which can be serialized as a json file, can be built from multiple IDL and/or json (semantic model) files, and can contain multiple namespaces. To fully `weld lint` or `weld validate` a model, you will probably need to specify paths of all dependencies in all namespaces used by the model. `weld` commands accept multiple files, directories, or urls on the command line. Directories are scanned recursively to find `.smithy` or `.json` files to load.
-
-The weld tool uses a configuration file, [codegen.toml](./codegen-toml.md), usually located at the project root folder.
+A [Semantic Model](https://awslabs.github.io/smithy/1.0/spec/core/model.html#the-semantic-model) is built from multiple IDL files and/or json (AST model) files, and can contain multiple namespaces. To fully lint or validate a model, or to generate code from a semantic model, you need to specify paths to all dependencies in all namespaces used by the model. These dependencies are specified either on the `weld` command line, or in a [`codegen.toml`](./codegen-toml.md) configuration file, usually located in the project root folder.
 
 
 ## Data Types
@@ -38,10 +37,12 @@ In Smithy, data types are called [shapes](https://awslabs.github.io/smithy/1.0/s
   - `set` [Set](https://awslabs.github.io/smithy/1.0/spec/core/model.html#set) (set of unique values)
   - `map` [Map](https://awslabs.github.io/smithy/1.0/spec/core/model.html#map) map of key-type to value-type)
   - `structure` [Structure](https://awslabs.github.io/smithy/1.0/spec/core/model.html#structure)
-
+  - `service` [Service](https://awslabs.github.io/smithy/1.0/spec/core/model.html#service) a collection of operations
+  - `operation` [Operation](https://awslabs.github.io/smithy/1.0/spec/core/model.html#operation) a function
+    
 The following Smithy shapes are __partially supported__: `set`, `Timestamp`
 
-The following Smithy shapes are __not supported__ (yet): `BigInteger`, `BigDecimal`, `union`, `document`.
+The following Smithy shapes are __not supported__ (yet): `BigInteger`, `BigDecimal`, `union`, `document`. `resource`
 
 ### Integer types
 
@@ -134,49 +135,36 @@ with an optional field.
 
 ## Multiple parameters
 
-We would like to model functions that take multiple parameters,
-such as `fn set(key: string, value: string)`, but Smithy only supports
-a single `input` for any operation. Today, these parameters can be
-wrapped up into either a map or a structure, and the map or structure
-used as the input type. In WIDL, wrapping of multiple values
-into a single input parameter was done
-by the code generator, but there was no explicit indicator
-in the interface IDL that this was occurring.
+We would like to model functions that take multiple parameters.
+We can do that with Smithy by creating a wrapper structure for the multiple args.
 
-In Smithy, we want to make this explicit.
+For example, this method from  `wasmcloud:keyvalue`, defined in WIDL:
+   ```text
+   Set(key: string, value: string, expires: i32): SetResponse 
+   ```
+would not be written the same way in Smithy, since operations can only
+have one input. Instead, the smithy declaration would be
+   ```text
+   operation Set {
+     input: SetRequest,
+     output: SetResponse,
+   }
+   structure SetRequest {
+     @required
+     key: String,
+     @required
+     value: String,
+     @required
+     expires: I32,
+   }
+   structure SetResponse {
+     // ...
+   }
+   ```
+WIDL's code generator constructs a request structure like SetRequest automatically,
+so in fact the code generated from the above smithy model should be on-the-wire compatible with the widl-generated one. In both cases, the name of the wrapper struct is not transmitted, and the parameters are sent as a serialized map of key-value pairs.
 
-In the current weld version, the Smithy model author
-must explicitly declare the wrapper structure, and the code generator
-will generate function signatures with a single input parameter.
-
-In a future release, a trait will be available to declare that an operation's
-input structure should be "flattened" into multiple input parameters.
-The input parameters will be in the same order as they appear
-in the structure declaration.
-If structure field members are declared as optional (e.g., do not have
-a `@required` trait), they would appear as optional values in
-the target language, such as `Option<Type>` or `Type | null`
-
-
-```text
-/// Add a key/value pair to the dictionary
-@flattenInput
-operation Set { 
-    input: KeyValue, 
-}
-
-/// Key-value pair for Set
-structure KeyValue {
-    key: String,
-    value: String,
-}
-```
-
-Note that adding the `@flattenInput` trait to any operation would be a breaking
-change to users of your api, since it will change the generated function signature.
-If you plan to use this trait in the future, it may be useful to plan
-to use a different namespace to use with param flattening to avoid incompatibilities.
-
+In the future we would like the weld code generator to provide the same "syntactic sugar" that the widl generator does - function signatures with multiple args. A trait would be added to the structure (for examplel `@flattenInput`), and this would signal the code generator to generate the expanded function signature. This flattening ability is on the roadmap.
 
 ## Documentation
 
