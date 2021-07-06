@@ -2,14 +2,16 @@
 name = "wasmbus-rpc"
 version = "0.1.0"
 edition = "2018"
-authors = [ "stevelr <dev@somecool.net>" ]
+authors = [ "wasmcloud Team" ]
 license = "Apache-2.0"
 description = "Runtime library for actors and capability providers"
 homepage = "https://github.com/wasmcloud/weld"
 repository = "https://github.com/wasmcloud/weld"
 documentation = "https://docs.rs/wasmcloud-weld-rpc"
 readme = "README.md"
-build = "build.rs"
+
+# don't push build.rs
+exclude = [ "build.rs" ]
 
 [features]
 # Warning: Don't change serialization - things will break
@@ -17,37 +19,40 @@ default = [ "ser_msgpack" ]
 BigInteger = [ "num-bigint" ]
 BigDecimal = [ "bigdecimal" ]
 ser_msgpack = [ "rmp-serde" ]
-ser_json = [ "serde_json" ]
+ser_json = [ ]
 
 [dependencies]
 async-trait = "0.1"
+base64 = "0.13"
 chrono = "0.4"
 serde = { version = "1.0", features = ["derive"] }
 serde_bytes = "0.11"
+serde_json = "1.0"
 thiserror = "1.0"
 toml = "0.5"
 log = "0.4"
 cfg-if = "1.0"
-console_log = "0.2"
+#console_log = "0.2"
 
 #[feature-dependencies]
 rmp-serde = { version = "0.15.4", optional = true }
-serde_json = { version = "1.0", optional = true }
 
 #BigInteger support
 num-bigint = { version = "0.4", optional = true }
 #BigDecimal support
 bigdecimal = { version = "0.2", optional = true }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+anyhow = "1.0"
+tokio = { version = "1", features = ["full"]}
+nats = "0.9.18"
+#crossbeam = "0.8"
 
 [dependencies.wasmbus-macros]
 version = "0.1"
 path = "../macros"
 
-[build-dependencies]
-anyhow = "1.0"
-wasmcloud-weld-codegen = { path = "../codegen" }
 
-
-#[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-#anyhow = "1.0"
+[build-dependencies.weld-codegen]
+version = "0.1"
+path = "../codegen"

@@ -28,13 +28,32 @@ pub mod context {
 
 /// client is the caller side of any interface
 pub mod client {
-    /// Client config defines the intended recipient of a message
+
+    /// Client config defines the intended recipient of a message and parameters that transport may use to adapt sending it
     #[derive(Debug)]
     pub struct SendConfig {
         /// Host/link name, usually "default" for the current host
         pub host: String,
+
         /// Recipient of message, such as actor's public key or provider id
         pub target: String,
+
+        /// Optional flag for idempotent messages - transport may perform retries within configured timeouts
+        pub idempotent: bool,
+
+        /// Optional flag for read-only messages - those that do not change the responder's state. read-only messages may be retried within configured timeouts.
+        pub read_only: bool,
+    }
+
+    impl Default for SendConfig {
+        fn default() -> SendConfig {
+            SendConfig {
+                host: "default".to_string(),
+                target: String::default(),
+                idempotent: false,
+                read_only: false,
+            }
+        }
     }
 
     impl SendConfig {
@@ -44,23 +63,34 @@ pub mod client {
             SendConfig {
                 host: host.into(),
                 target: target.into(),
+                ..Default::default()
             }
         }
 
         /// Create a SendConfig for sending to an actor
         pub fn actor<T: Into<String>>(target: T) -> SendConfig {
             SendConfig {
-                host: "default".into(),
                 target: target.into(),
+                ..Default::default()
             }
         }
 
         /// Create a SendConfig using the default host and specified target
         pub fn target<T: Into<String>>(target: T) -> SendConfig {
             SendConfig {
-                host: "default".into(),
                 target: target.into(),
+                ..Default::default()
             }
+        }
+
+        pub fn idempotent(mut self, val: bool) -> SendConfig {
+            self.idempotent = val;
+            self
+        }
+
+        pub fn read_only(mut self, val: bool) -> SendConfig {
+            self.read_only = val;
+            self
         }
     }
 }
@@ -161,3 +191,44 @@ pub trait MessageDispatch {
 //
 //    };
 //}
+
+#[cfg(test)]
+mod test {
+
+    use super::*;
+    use client::SendConfig;
+
+    #[test]
+    fn send_config_constructor() {
+        let c = SendConfig::default();
+        assert_eq!(&c.target, "");
+        assert_eq!(&c.host, "default");
+        assert_eq!(c.idempotent, false);
+        assert_eq!(c.read_only, false);
+
+        let c = SendConfig::actor("a");
+        assert_eq!(&c.target, "a");
+        assert_eq!(&c.host, "default");
+        assert_eq!(c.idempotent, false);
+        assert_eq!(c.read_only, false);
+
+        let c = SendConfig::target("t");
+        assert_eq!(&c.target, "t");
+        assert_eq!(&c.host, "default");
+        assert_eq!(c.idempotent, false);
+        assert_eq!(c.read_only, false);
+    }
+
+    #[test]
+    fn send_config_builder() {
+        let c = SendConfig::actor("x").idempotent(true).read_only(true);
+        assert_eq!(&c.target, "x");
+        assert_eq!(&c.host, "default");
+        assert_eq!(c.idempotent, true);
+        assert_eq!(c.read_only, true);
+
+        let c = SendConfig::actor("x").idempotent(false).read_only(false);
+        assert_eq!(c.idempotent, false);
+        assert_eq!(c.read_only, false);
+    }
+}

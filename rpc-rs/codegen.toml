@@ -1,24 +1,13 @@
+# codegen.toml
 
-# model sources and dependencies
 [[models]]
-#url = "https://wasmcloud.github.io/models/org.wasmcloud"
-path = "../models/smithy"
-files = [ "wasmcloud-core.smithy", "wasmcloud-model.smithy" ]
-#[[models]]
-#files = [ "wasmcloud-core.smithy", "wasmcloud-model.smithy" ]
+path = "../examples/interface/wasmbus-core"
+files = [ "wasmcloud-model.smithy", "wasmcloud-core.smithy" ]
 
-##
-## Rust Codegen
-##
 [rust]
-# output dir relative to OUT_DIR (compiler environment variable)
-output_dir = "src"
-
-## parameters for codegen
-[rust.parameters]
-
+output_dir = "."
 
 [[rust.files]]
+path = "src/wasmbus_core.rs"
 namespace = "org.wasmcloud.core"
-path = "core.rs"
 crate = "wasmbus_rpc"

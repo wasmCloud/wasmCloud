@@ -4,15 +4,19 @@
 //! used by [wasmcloud](https://wasmcloud.dev) actors and capability providers.
 //!
 
+mod actor_wasm;
 mod common;
 pub use common::{
     client, context, deserialize, serialize, Message, MessageDispatch, RpcError, Transport,
 };
-pub mod core; // export auto-generated items from smithy model
 mod timestamp;
 pub use timestamp::Timestamp;
-
-mod actor_wasm;
+pub mod provider;
+mod wasmbus_core;
+pub mod core {
+    // re-export core lib as "core"
+    pub use crate::wasmbus_core::*;
+}
 
 /// Version number of this api
 #[doc(hidden)]
@@ -34,35 +38,34 @@ pub mod actor {
     pub mod prelude {
         pub use crate::common::{client, context, Message, MessageDispatch, RpcError};
 
-        #[cfg(target_arch = "wasm32")]
-        pub use crate::actor_wasm::{console_log, WasmHost};
-
-        //pub use crate::core::{Actor, ActorReceiver, ActorSender};
         // re-export async_trait
         pub use async_trait::async_trait;
         pub use wasmbus_macros::Actor;
-        //pub use crate::Timestamp;
 
         #[cfg(feature = "BigInteger")]
         pub use num_bigint::BigInt as BigInteger;
 
         #[cfg(feature = "BigDecimal")]
         pub use bigdecimal::BigDecimal;
-    }
-}
 
-pub mod provider {
+        cfg_if::cfg_if! {
 
-    pub mod prelude {
-        pub use crate::{client, context, Message, MessageDispatch, RpcError};
-        //pub use crate::Timestamp;
-        pub use async_trait::async_trait;
-        pub use wasmbus_macros::Provider;
+            if #[cfg(target_arch = "wasm32")] {
+                pub use crate::actor_wasm::{console_log, WasmHost};
+            } else {
+                // this is non-functional, since actors only run in wasm32,
+                // but it reduces compiler errors if you are building a cargo multi-project workspace for non-wasm32
+                #[derive(Clone, Debug, Default)]
+                pub struct WasmHost {}
 
-        #[cfg(feature = "BigInteger")]
-        pub use num_bigint::BigInt as BigInteger;
-
-        #[cfg(feature = "BigDecimal")]
-        pub use bigdecimal::BigDecimal;
+                #[async_trait]
+                impl crate::Transport for WasmHost {
+                    async fn send(&self, _: &context::Context<'_>, _: &client::SendConfig,
+                                _: Message<'_>, ) -> std::result::Result<Message<'static>, RpcError> {
+                       unimplemented!();
+                    }
+                }
+            }
+        }
     }
 }
