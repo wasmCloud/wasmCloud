@@ -1,6 +1,6 @@
 # http-server/rust/Makefile
 
-.PHONY: all build clean test
+.PHONY: all build release clean test
 
 all: build
 
@@ -13,5 +13,5 @@ release:
 clean:
 	cargo clean
 
-test: build
+test:
 	cargo test

@@ -1,36 +1,33 @@
-# http-server/Makefile
+# interface/http-server/Makefile
 
 HTML_TARGET = html
 
 WELD = ../../../target/debug/weld
 CSS_BUILD_OUT = $(wildcard ../../../docgen/dev/gen/css/*.css)
 CSS_DEST = $(addprefix $(HTML_TARGET)/css/,$(notdir $(CSS_BUILD_OUT)))
+CONFIG = ./codegen.toml
 
 .PHONY: all build release lint validate serve clean
 
 all: doc build
 
-build:
-	@cd rust && cargo build
+build release clean::
+	$(MAKE) -C rust $@
 
-release:
-	@cd rust && cargo build --release
-
-clean:
+clean::
 	rm -rf $(HTML_TARGET)/*.html
-	@cd rust && cargo clean
 
 # for docs
 doc: $(CSS_DEST)
-	$(WELD) gen --lang html --config rust/codegen.toml --output-dir ..
+	$(WELD) gen --lang html --config $(CONFIG) --output-dir .
 
 # Run lint check on all smithy models in the models/smithy folder
 lint:
-	$(WELD) lint --config rust/codegen.toml
+	$(WELD) lint --config $(CONFIG)
 
 # Run validation checks on all smithy models in the models/smithy folder
 validate:
-	$(WELD) validate --config rust/codegen.toml
+	$(WELD) validate --config $(CONFIG)
 
 # view docs - after running this, open browser to localhost:8000
 serve: doc
