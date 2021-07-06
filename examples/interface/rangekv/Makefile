@@ -3,21 +3,21 @@ HTML_TARGET = html
 WELD = ../../../target/debug/weld
 CSS_BUILD_OUT = $(wildcard ../../../docgen/dev/gen/css/*.css)
 CSS_DEST = $(addprefix $(HTML_TARGET)/css/,$(notdir $(CSS_BUILD_OUT)))
+CONFIG = ./codegen.toml
 
 # instead of using models explicitly, use them from codegen.toml
 #ALL_MODELS = $(wildcard *.smithy)
 #BASE_MODELS = ../../../models/smithy/*.smithy
 
-.PHONY: all lint validate serve clean
+.PHONY: all build release lint validate serve clean
 
 all: doc build
 
-build:
-	$(MAKE) -C rust build
+build release clean::
+	$(MAKE) -C rust $@
 
-clean:
+clean::
 	rm -rf $(HTML_TARGET)/*.html
-	$(MAKE) -C rust clean
 
 # for docs, include BASE_MODELS so links work
 doc: $(CSS_DEST)

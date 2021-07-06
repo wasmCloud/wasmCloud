@@ -37,7 +37,7 @@
                 </div>
                 <div class="table-cell align-top">
                     <ul>
-                        <li class="font-light"><a href="#org_wasmcloud_example_rangekv_key_range_response"><a href="#key_range_response">KeyRangeResponse</a></a></li><li class="font-light"><a href="#org_wasmcloud_example_rangekv_key_value"><a href="#key_value">KeyValue</a></a></li><li class="font-light"><a href="#org_wasmcloud_example_rangekv_maybe_value"><a href="#maybe_value">MaybeValue</a></a></li><li class="font-light"><a href="#org_wasmcloud_example_rangekv_range_request"><a href="#range_request">RangeRequest</a></a></li><li class="font-light"><a href="#org_wasmcloud_example_rangekv_value_range_response"><a href="#value_range_response">ValueRangeResponse</a></a></li>                    </ul>
+                        <li class="font-light"><a href="#org_wasmcloud_example_rangekv_key_range_response"><a href="#key_range_response">KeyRangeResponse</a></a></li><li class="font-light"><a href="#org_wasmcloud_example_rangekv_key_value"><a href="#key_value">KeyValue</a></a></li><li class="font-light"><a href="#org_wasmcloud_example_rangekv_key_value_range_response"><a href="#key_value_range_response">KeyValueRangeResponse</a></a></li><li class="font-light"><a href="#org_wasmcloud_example_rangekv_maybe_value"><a href="#maybe_value">MaybeValue</a></a></li><li class="font-light"><a href="#org_wasmcloud_example_rangekv_range_request"><a href="#range_request">RangeRequest</a></a></li>                    </ul>
                 </div>
             </div>
             <div class="table-row">
@@ -293,7 +293,7 @@ If this value is empty, there are no more keys</span></td>
                                         <td><span class="font-light"></span></td>
                                     </tr>                                    <tr>
                                         <td>output:</td>
-                                        <td><a href="#key_list">KeyList</a></td>
+                                        <td><a href="#key_range_response">KeyRangeResponse</a></td>
                                         <td><span class="font-light"></span></td>
                                     </tr>                                </tbody>
                             </table>
@@ -359,6 +359,40 @@ If this value is empty, there are no more keys</span></td>
                         </div>
                                                 
                                         
+                                        
+                                        
+    <h2 id="key_value_range_response" class="mt-8 border-t-2 border-gray-300">
+        <a href="#key_value_range_response">KeyValueRangeResponse</a><span class="text-lg pl-4">(structure)</span>
+    </h2><p class="font-light ml-6">result of Values range query</p>
+                        <div class="ml-12">
+                            <table>
+                                <thead>
+                                <tr>
+                                    <th class="w-48"></th>
+                                    <th class="w-48"></th>
+                                    <th class=""></th>
+                                </tr>
+                                </thead>
+                                <tbody>                                    <tr>
+                                        <td>count:</td>
+                                        <td><a href="../org_wasmcloud_model.html#u32">org.wasmcloud.model#U32</a></td>
+                                        <td><span class="font-light">number of items returned</span></td>
+                                    </tr>                                    <tr>
+                                        <td>items:</td>
+                                        <td><a href="#key_value_list">KeyValueList</a></td>
+                                        <td><span class="font-light">returned list of key-value pairs</span></td>
+                                    </tr>                                    <tr>
+                                        <td>nextKey:</td>
+                                        <td>String</td>
+                                        <td><span class="font-light">startKey that should be used on the next request
+If this value is empty, there are no more keys</span></td>
+                                    </tr>                                    <tr>
+                                        <td>startKey:</td>
+                                        <td>String</td>
+                                        <td><span class="font-light">first key in range returned</span></td>
+                                    </tr>                                </tbody>
+                            </table>
+                        </div>    
                                         
                                         
     <h2 id="maybe_value" class="mt-8 border-t-2 border-gray-300">
@@ -529,40 +563,6 @@ the server may return fewer than this value.</span></td>
     
                                         
                                         
-    <h2 id="value_range_response" class="mt-8 border-t-2 border-gray-300">
-        <a href="#value_range_response">ValueRangeResponse</a><span class="text-lg pl-4">(structure)</span>
-    </h2><p class="font-light ml-6">result of Values range query</p>
-                        <div class="ml-12">
-                            <table>
-                                <thead>
-                                <tr>
-                                    <th class="w-48"></th>
-                                    <th class="w-48"></th>
-                                    <th class=""></th>
-                                </tr>
-                                </thead>
-                                <tbody>                                    <tr>
-                                        <td>count:</td>
-                                        <td><a href="../org_wasmcloud_model.html#u32">org.wasmcloud.model#U32</a></td>
-                                        <td><span class="font-light">number of items returned</span></td>
-                                    </tr>                                    <tr>
-                                        <td>items:</td>
-                                        <td><a href="#key_value_list">KeyValueList</a></td>
-                                        <td><span class="font-light">returned list of key-value pairs</span></td>
-                                    </tr>                                    <tr>
-                                        <td>nextKey:</td>
-                                        <td>String</td>
-                                        <td><span class="font-light">startKey that should be used on the next request
-If this value is empty, there are no more keys</span></td>
-                                    </tr>                                    <tr>
-                                        <td>startKey:</td>
-                                        <td>String</td>
-                                        <td><span class="font-light">first key in range returned</span></td>
-                                    </tr>                                </tbody>
-                            </table>
-                        </div>    
-                                        
-                                        
     <h2 id="values" class="mt-8 border-t-2 border-gray-300">
         <a href="#values">Values</a><span class="text-lg pl-4">(operation)</span>
     </h2><p class="font-light ml-6">Returns a range of key-value pairs</p>
@@ -581,7 +581,7 @@ If this value is empty, there are no more keys</span></td>
                                         <td><span class="font-light"></span></td>
                                     </tr>                                    <tr>
                                         <td>output:</td>
-                                        <td><a href="#key_list">KeyList</a></td>
+                                        <td><a href="#key_value_range_response">KeyValueRangeResponse</a></td>
                                         <td><span class="font-light"></span></td>
                                     </tr>                                </tbody>
                             </table>

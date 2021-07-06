@@ -2,10 +2,12 @@
 name = "wasmcloud-example-rangekv"
 version = "0.1.0"
 #description = ""
-authors = [""]
+authors = [ "wasmcloud Team" ]
 edition = "2018"
 license = "Apache-2.0"
-build = "build.rs"
+
+# when publishing to crates.io, freeze src by omitting build.rs
+exclude = [ "build.rs" ]
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -30,5 +32,5 @@ base64 = "0.13"
 
 # build-dependencies needed for build.rs
 [build-dependencies]
-wasmcloud-weld-codegen = { version = "0.1", path = "../../../../codegen" }
+weld-codegen = { version = "0.1", path = "../../../../codegen" }
 

@@ -1,3 +1,11 @@
+metadata links = [
+    {
+        // doc links for information generator
+        namespace: "org.wasmcloud.example.rangekv",
+        doc_url: "https://wasmcloud.github.io/models/org_wasmcloud_example_rangekv.html",
+    }
+]
+
 namespace org.wasmcloud.example.rangekv
 // a key-value store with sorted keys and pagination
 
@@ -10,7 +18,7 @@ use org.wasmcloud.core#capability
 use org.wasmcloud.model#U32
 use org.wasmcloud.model#U64
 
-@capability(contractId: "wasmcloud:range-kv")
+@capability(contractId: "wasmcloud:rangekv")
 service RangeKeyValue{
   version: "0.1",
   operations: [ Get, Put, Delete, Clear, Contains, Keys, Values, Size  ]
@@ -71,7 +79,7 @@ operation Contains {
 @readonly
 operation Keys {
     input: RangeRequest,
-    output: KeyList,
+    output: KeyRangeResponse,
 }
 
 /// Returns a range of key-value pairs
@@ -84,7 +92,7 @@ operation Keys {
 @readonly
 operation Values {
     input: RangeRequest,
-    output: KeyList,
+    output: KeyValueRangeResponse,
 }
 
 
@@ -122,7 +130,7 @@ structure KeyRangeResponse {
 }
 
 /// result of Values range query
-structure ValueRangeResponse {
+structure KeyValueRangeResponse {
     /// first key in range returned
     @required
     startKey: String,

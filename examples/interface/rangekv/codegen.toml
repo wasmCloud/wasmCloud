@@ -13,7 +13,7 @@ path = "range-kv.smithy"
 
 [[models]]
 # use reloative paths for core models
-path = "../../../models/smithy"
+path = "../../interface/wasmbus-core"
 #alternately, use published models - this should be the setting when published on crates.io
 #url = "https://wasmcloud.github.io/models/org.wasmcloud"
 files = [ "wasmcloud-core.smithy", "wasmcloud-model.smithy" ]
@@ -44,9 +44,8 @@ minified = true
 ##
 [rust]
 
-# top-level output directory for rust files. If using build.rs,
-# this folder is relative to the compiler's environment variable "OUT_DIR"
-output_dir = "src"
+# top-level output directory for rust files.
+output_dir = "rust"
 
 [rust.parameters]
 
@@ -64,5 +63,5 @@ output_dir = "src"
 # and importing each of them into src/lib.rs
 
 [[rust.files]]
-path = "rangekv.rs"
+path = "src/rangekv.rs"
 namespace = "org.wasmcloud.example.rangekv"
