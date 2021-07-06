@@ -190,15 +190,15 @@ fn arg_as_array<'reg, 'rc>(
 struct ShapeHelper {}
 
 /// Convert map iterator into Vec of sorted shapes, adding the map's key as field _key to each item
-fn to_sorted_array(mut shapes: Vec<(&String, &Value)>) -> JsonValue {
+fn to_sorted_array<S: AsRef<str>>(mut shapes: Vec<(S, &Value)>) -> JsonValue {
     // case-insensitive, numeric-aware sort
     shapes.sort_unstable_by(|a, b| {
-        lexical_sort::natural_lexical_only_alnum_cmp(a.0.as_str(), b.0.as_str())
+        lexical_sort::natural_lexical_only_alnum_cmp(a.0.as_ref(), b.0.as_ref())
     });
 
     let shapes = shapes
         .into_iter()
-        .map(|(k, v)| (k.clone(), v.as_object().unwrap().clone()))
+        .map(|(k, v)| (k.as_ref().to_string(), v.as_object().unwrap().clone()))
         .map(|(k, mut v)| {
             v.insert("_key".to_string(), serde_json::Value::String(k));
             serde_json::Value::Object(v)
@@ -250,10 +250,16 @@ impl HelperDef for NamespaceHelper {
         let namespace = NamespaceID::from_str(namespace)
             .map_err(|e| RenderError::new(&format!("invalid namespace {}", e)))?;
         let obj = arg_as_obj(h, 1, "filter_namespace")?;
+
         let shapes = obj
             .iter()
-            .filter(|(k, _)| ShapeID::from_str(k).unwrap().namespace() == &namespace)
-            .collect::<Vec<(&String, &Value)>>();
+            .filter_map(|(k, v)| match ShapeID::from_str(k) {
+                Ok(id) => Some((id, v)),
+                _ => None,
+            })
+            .filter(|(id, _)| id.namespace() == &namespace)
+            .map(|(id, v)| (id.to_string(), v))
+            .collect::<Vec<(String, &Value)>>();
         Ok(ScopedJson::Derived(to_sorted_array(shapes)))
     }
 }

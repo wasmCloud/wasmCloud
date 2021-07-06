@@ -1,13 +1,13 @@
 [package]
-name = "wasmcloud-weld-codegen"
+name = "weld-codegen"
 version = "0.1.2"
 edition = "2018"
-authors = [ "stevelr <dev@somecool.net>" ]
+authors = [ "wasmcloud Team" ]
 license = "Apache-2.0"
 description = "Code generation for smithy models"
 homepage = "https://github.com/wasmcloud/weld"
 repository = "https://github.com/wasmcloud/weld"
-documentation = "https://docs.rs/wasmcloud-weld-codegen"
+documentation = "https://docs.rs/weld-codegen"
 readme = "README.md"
 
 [features]
@@ -17,9 +17,9 @@ BigDecimal = []
 Timestamp = []
 
 [dependencies]
-atelier_core = { version = "0.2", git="https://github.com/stevelr/rust-atelier", branch="operation-output" }
-atelier_json = { version = "0.2", git="https://github.com/stevelr/rust-atelier", branch="operation-output" }
-atelier_assembler = { version = "0.1", git="https://github.com/stevelr/rust-atelier", branch="operation-output" }
+atelier_assembler = "0.1.3"
+atelier_core = "0.2.22"
+atelier_json = "0.2.6"
 atelier_smithy = "0.2"
 bytes = "1.0"
 cfg-if = "1.0"

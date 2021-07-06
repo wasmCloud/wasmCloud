@@ -1,5 +1,5 @@
 use crate::error::Error;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::path::PathBuf;
@@ -7,7 +7,7 @@ use std::str::FromStr;
 use toml::Value as TomlValue;
 
 /// Output languages for code generation
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, PartialOrd, Eq, Ord)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum OutputLanguage {
     /// HTML documentation
@@ -57,7 +57,7 @@ impl fmt::Display for OutputLanguage {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct CodegenConfig {
     /// model inputs
     #[serde(default)]
@@ -84,7 +84,7 @@ pub struct CodegenConfig {
 /// For Paths, the `path` and `files` can be model files, or directories, which will
 /// be searched recursively for model files with `.json` or `.smithy` extensions.
 /// `files` array is optional if url or path directly references a model file,
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum ModelSource {
     Url {
@@ -145,7 +145,7 @@ impl fmt::Display for ModelSource {
     }
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Serialize)]
 pub struct LanguageConfig {
     /// list of template files or template folders for importing templates.
     /// Overwrites any compiled-in templates with the same name(s)
@@ -166,7 +166,7 @@ pub struct LanguageConfig {
 }
 
 /// Output-file specific settings
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, Serialize)]
 pub struct OutputFile {
     /// path to output file, relative to language output_dir. Required.
     pub path: PathBuf,

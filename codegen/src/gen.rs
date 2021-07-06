@@ -173,7 +173,9 @@ impl Generator {
 
                 // generate output using either hbs or CodeGen
                 if let Some(hbs) = &file_config.hbs {
-                    let mut out = std::fs::File::create(&out_path)?;
+                    let mut out = std::fs::File::create(&out_path).map_err(|e| {
+                        Error::Io(format!("creating file {}: {}", &out_path.display(), e))
+                    })?;
                     renderer.render(hbs, &params, &mut out)?;
                     out.flush()?;
                 } else if let Some(model) = model {
@@ -388,7 +390,9 @@ pub fn to_json<S: serde::Serialize, T: serde::de::DeserializeOwned>(val: S) -> R
 pub fn find_files(dir: &Path, extension: &str) -> Result<Vec<PathBuf>> {
     if dir.is_dir() {
         let mut results = Vec::new();
-        for entry in std::fs::read_dir(dir)? {
+        for entry in std::fs::read_dir(dir)
+            .map_err(|e| Error::Io(format!("reading directory {}: {}", dir.display(), e)))?
+        {
             let entry = entry?;
             let path = entry.path();
             if path.is_dir() {
@@ -433,7 +437,8 @@ pub fn templates_from_dir(start: &std::path::Path) -> Result<Vec<(String, String
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_default();
         if !stem.is_empty() {
-            let template = std::fs::read_to_string(path)?;
+            let template = std::fs::read_to_string(path)
+                .map_err(|e| Error::Io(format!("reading template {}: {}", path.display(), e)))?;
             templates.push((stem, template));
         }
     }
