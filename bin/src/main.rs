@@ -3,7 +3,7 @@ use atelier_core::model::Model;
 use clap::{self, Clap};
 use std::{path::PathBuf, str::FromStr, string::ToString};
 use toml::Value as TomlValue;
-use wasmcloud_weld_codegen::{
+use weld_codegen::{
     config::{CodegenConfig, ModelSource, OutputLanguage},
     sources_to_model,
     //load_model,
@@ -61,6 +61,10 @@ pub enum Command {
     /// Display the cache path or clear the cache
     #[clap(name = "cache")]
     Cache(CacheOpt),
+
+    /// Convert a toml file to json, so it can be used with jq in shell scripts
+    #[clap(name = "toml-json")]
+    TomlJson(TomlJsonOpt),
 }
 
 /// Cache commands. With no args, display the cache path
@@ -147,6 +151,13 @@ pub struct GenerateOpt {
     input: Vec<String>,
 }
 
+#[derive(Clap, Debug)]
+pub struct TomlJsonOpt {
+    /// Toml input file
+    #[clap(name = "input")]
+    input: PathBuf,
+}
+
 /// Parse a single key-value pair into (String,TomlValue)
 fn parse_key_val(
     s: &str,
@@ -186,6 +197,7 @@ fn run(opt: Opt) -> Result<()> {
         Command::Validate(validate_opt) => validate(validate_opt, opt.verbose)?,
         Command::Json(json_opt) => json(json_opt, opt.verbose)?,
         Command::Cache(cache_opt) => cache(cache_opt)?,
+        Command::TomlJson(toml_opt) => toml_json(toml_opt)?,
     }
     Ok(())
 }
@@ -225,7 +237,7 @@ fn lint(opt: LintOpt, verbose: u8) -> Result<()> {
 }
 
 fn cache(opt: CacheOpt) -> Result<()> {
-    let cache_dir = wasmcloud_weld_codegen::weld_cache_dir()?;
+    let cache_dir = weld_codegen::weld_cache_dir()?;
 
     if !opt.clear_all {
         println!("{}", cache_dir.display());
@@ -384,12 +396,14 @@ fn select_config(opt_config: &Option<PathBuf>) -> Result<CodegenConfig> {
     // if it's not found use the default
     let (cfile, folder) = if let Some(path) = &opt_config {
         (
-            std::fs::read_to_string(path)?,
+            std::fs::read_to_string(path)
+                .map_err(|e| anyhow!("reading config file {}: {}", path.display(), e))?,
             path.parent().unwrap().to_path_buf(),
         )
     } else if PathBuf::from("./codegen.toml").is_file() {
         (
-            std::fs::read_to_string("./codegen.toml")?,
+            std::fs::read_to_string("./codegen.toml")
+                .map_err(|e| anyhow!("reading config file codegen.toml: {}", e))?,
             PathBuf::from("."),
         )
     } else {
@@ -400,4 +414,27 @@ fn select_config(opt_config: &Option<PathBuf>) -> Result<CodegenConfig> {
     config.base_dir = folder;
 
     Ok(config)
+}
+
+/// Convert file from toml to json
+fn toml_json(toml_opt: TomlJsonOpt) -> Result<()> {
+    use std::io::Write;
+    if !toml_opt.input.is_file() {
+        return Err(anyhow!("missing file: {}", &toml_opt.input.display()));
+    }
+    let base_name = toml_opt.input.file_name().unwrap().to_string_lossy();
+
+    let data = std::fs::read_to_string(&toml_opt.input)?;
+    let out = if base_name == "Cargo.toml" {
+        let manifest = cargo_toml::Manifest::from_str(&data)?;
+        serde_json::to_vec(&manifest)?
+    } else if base_name == "codegen.toml" {
+        let config = CodegenConfig::from_str(&data)?;
+        serde_json::to_vec(&config)?
+    } else {
+        let generic = toml::from_str(&data)?;
+        serde_json::to_vec(&generic)?
+    };
+    std::io::stdout().write(&out)?;
+    Ok(())
 }
