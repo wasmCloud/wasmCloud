@@ -43,12 +43,11 @@ $(DIST_EXS): $(DIST_BIN) $(DIST_PAR)
 	@mkdir -p $(dir $@)
 	@cat <<- EOF > $@
 	%{
-		:name => $(NAME),
-		:path => "$(abspath $(DIST_BIN))",
-		:key => "$(shell wash par inspect $(DIST_PAR) -o json | jq -r ".service")",
-		:link => "default",
-		:contract => "$(CAPID)",
-		:params => %{ },
+		name: $(NAME),
+		path: "$(abspath $(DIST_BIN))",
+		key: "$(shell wash par inspect $(DIST_PAR) -o json | jq -r ".service")",
+		link: "default",
+		contract: "$(CAPID)",
 	},
 	EOF
 
@@ -70,7 +69,7 @@ $(RELEASE_TARGET_MAC): $(WELD) $(RUST_DEPS)
 
 clean:
 	$(CARGO) clean
-	rm -f $(DIST_BIN) $(DIST_PAR) $(DIST_EXS)
+	rm -f build #  $(DIST_BIN) $(DIST_PAR) $(DIST_EXS)
 
 $(DIST_PAR): $(RELEASE_TARGET_LINUX)
 	@mkdir -p $(dir $@)

@@ -19,25 +19,25 @@ pub type Headers = std::collections::HashMap<String, String>;
 /// HttpRequest contains data sent to actor about the http request
 #[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub struct HttpRequest {
-    pub path: String,
-    pub header: Headers,
-    #[serde(rename = "queryString")]
-    pub query_string: String,
     #[serde(with = "serde_bytes")]
     pub body: Vec<u8>,
+    pub path: String,
     pub method: String,
+    #[serde(rename = "queryString")]
+    pub query_string: String,
+    pub header: Headers,
 }
 
 /// HttpResponse contains the actor's response to return to the http client
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HttpResponse {
+    pub header: Headers,
     #[serde(with = "serde_bytes")]
     pub body: Vec<u8>,
     /// statusCode should be 200 if the request was correctly handled
     #[serde(rename = "statusCode")]
     pub status_code: u32,
     pub status: String,
-    pub header: Headers,
 }
 
 /// HttpServer is the contract to be implemented by actor

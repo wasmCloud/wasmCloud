@@ -1,6 +1,5 @@
 # provider/httpserver/Makefile
 
-.PHONY: httpserver keyvalue build help
 CARGO ?= cargo --color always
 CAPID = wasmcloud:httpserver
 NAME = "HttpServer Provider (Go)"
@@ -16,12 +15,11 @@ $(DIST_EXS): $(DIST_BIN) $(DIST_PAR)
 	@mkdir -p $(dir $@)
 	@cat <<- EOF > $@
 	%{
-		:name => $(NAME),
-		:path => "$(abspath $(DIST_BIN))",
-		:key => "$(shell wash par inspect $(DIST_PAR) -o json | jq -r ".service")",
-		:link => "default",
-		:contract => "$(CAPID)",
-		:params => %{ PORT: 8080 },
+		name: $(NAME),
+		path: "$(abspath $(DIST_BIN))",
+		key: "$(shell wash par inspect $(DIST_PAR) -o json | jq -r ".service")",
+		link: "default",
+		contract: "$(CAPID)",
 	},
 	EOF
 
@@ -53,3 +51,5 @@ inspect claims: $(DIST_PAR)
 
 clean:
 	rm -f $(DIST_BIN) $(DIST_PAR) $(DIST_EXS)
+
+.PHONY: httpserver keyvalue build help

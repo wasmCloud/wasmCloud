@@ -1,7 +1,7 @@
-use http_server::{HttpRequest, HttpResponse, HttpServer, HttpServerReceiver};
 use serde_json::json;
 use wasmbus_rpc::actor::prelude::*;
 use wasmbus_rpc::core::{Actor, ActorReceiver, HealthCheckRequest, HealthCheckResponse};
+use wasmcloud_example_httpserver::{HttpRequest, HttpResponse, HttpServer, HttpServerReceiver};
 
 #[derive(Debug, Default, Actor)]
 #[services(Actor, HttpServer)]
@@ -40,7 +40,7 @@ impl Actor for EchoActor {
     ) -> std::result::Result<HealthCheckResponse, RpcError> {
         Ok(HealthCheckResponse {
             healthy: false,
-            message: Some(String::from("where am I?")),
+            message: Some(String::from("OK")),
         })
     }
 }

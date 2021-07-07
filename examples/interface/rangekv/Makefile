@@ -1,15 +1,9 @@
-HTML_TARGET = html
+HTML_TARGET := html
 
-WELD = ../../../target/debug/weld
+WELD := ../../../target/debug/weld
 CSS_BUILD_OUT = $(wildcard ../../../docgen/dev/gen/css/*.css)
 CSS_DEST = $(addprefix $(HTML_TARGET)/css/,$(notdir $(CSS_BUILD_OUT)))
-CONFIG = ./codegen.toml
-
-# instead of using models explicitly, use them from codegen.toml
-#ALL_MODELS = $(wildcard *.smithy)
-#BASE_MODELS = ../../../models/smithy/*.smithy
-
-.PHONY: all build release lint validate serve clean
+CONFIG := ./codegen.toml
 
 all: doc build
 
@@ -39,3 +33,5 @@ serve: doc
 $(CSS_DEST): $(CSS_BUILD_OUT)
 	mkdir -p $(dir $@)
 	cp -p ${CSS_BUILD_OUT} $(HTML_TARGET)/css/
+
+.PHONY: all build release lint validate serve clean

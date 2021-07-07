@@ -1,8 +1,7 @@
 # examples/actor/Makefile
 
-TOPTARGETS := all clean
-
 SUBDIRS := $(wildcard */.)
+TOPTARGETS := all clean
 
 $(TOPTARGETS):
 	for dir in $(SUBDIRS); do \
@@ -10,3 +9,4 @@ $(TOPTARGETS):
     done
 
 .PHONY: $(TOPTARGETS) $(SUBDIRS)
+.NOTPARALLEL:

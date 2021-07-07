@@ -133,7 +133,10 @@ func main() {
 		var linkdef LinkDefinition
 		err := msgpack.Unmarshal(m.Data, &linkdef)
 		if err != nil {
-			fmt.Printf("Failed to unpack msgpack: %s\n", err)
+			fmt.Printf("Failed to unpack msgpack: %s for link-del\n", err)
+		    for i := 0; i < len(*m); i++ {
+		      fmt.Printf("%0x ", m[i] )
+		    }
 			return
 		}
 
@@ -149,9 +152,10 @@ func main() {
 
 	nc.Subscribe(ldput_topic, func(m *nats.Msg) {
 		var linkdef LinkDefinition
+		fmt.Printf("put subject %s data-len: %d\n", m.Subject)
 		err := msgpack.Unmarshal(m.Data, &linkdef)
 		if err != nil {
-			fmt.Printf("Failed to unpack msgpack: %s\n", err)
+			fmt.Printf("Failed to unpack msgpack: %s for link-put\n", err)
 			return
 		}
 

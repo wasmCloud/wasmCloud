@@ -1,13 +1,11 @@
 # interface/http-server/Makefile
 
-HTML_TARGET = html
-
-WELD = ../../../target/debug/weld
+HTML_TARGET := html
+WELD := ../../../target/debug/weld
 CSS_BUILD_OUT = $(wildcard ../../../docgen/dev/gen/css/*.css)
 CSS_DEST = $(addprefix $(HTML_TARGET)/css/,$(notdir $(CSS_BUILD_OUT)))
-CONFIG = ./codegen.toml
+CONFIG := ./codegen.toml
 
-.PHONY: all build release lint validate serve clean
 
 all: doc build
 
@@ -36,3 +34,5 @@ serve: doc
 # update css files in html/css
 $(HTML_TARGET)/css/%: ../../../docgen/dev/gen/css/%
 	cp -p $< $@
+
+.PHONY: all build release lint validate serve clean

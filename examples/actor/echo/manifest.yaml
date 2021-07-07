@@ -7,7 +7,7 @@ capabilities:
       link_name: default
 
 links:
-    - actor: ${ECHO_ACTOR:MBVK4ENB3UGUZRAYIZVPWHXXFXTB5H4EN4AGRT2YM2NRSH6SGDYANFTD}
+    - actor: ${ACTOR_ID:MBVK4ENB3UGUZRAYIZVPWHXXFXTB5H4EN4AGRT2YM2NRSH6SGDYANFTD}
       provider_id: "VCICJRM74GAWPMC2YW4PISQMJSWN3JDLMKNAFF3ARVGXE2G6N6YBARRU"
       contract_id: "wasmcloud:httpserver"
       link_name: default

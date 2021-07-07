@@ -1,8 +1,7 @@
+# weld top-level Makefile
 
-
-.PHONY: all build release clean
-
-all: build
+all clean:: build
+	$(MAKE) -C examples $@
 
 build::
 	cargo build
@@ -10,9 +9,9 @@ build::
 release::
 	cargo build --release
 
-clean::
-	cargo clean
+clean test::
+	cargo $@
 
 
-build release clean::
-	$(MAKE) -C examples $@
+.PHONY: all build release clean test
+.NOTPARALLEL:

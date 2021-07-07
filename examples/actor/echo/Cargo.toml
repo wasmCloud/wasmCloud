@@ -1,11 +1,8 @@
 [package]
 name = "echo"
 version = "0.1.0"
-authors = ["wasmcloud Team"]
+authors = [ "wasmcloud Team" ]
 edition = "2018"
-
-[build]
-target = "wasm32-unknown-unknown"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -14,7 +11,7 @@ crate-type = ["cdylib", "rlib"]
 async-trait = "0.1"
 console_log = "0.2"
 futures = "0.3"
-http-server = { path = "../../interface/http-server/rust" }
+wasmcloud-example-httpserver = { path = "../../interface/http-server/rust" }
 log = "0.4"
 serde_bytes = "0.11"
 serde_json ="1.0"

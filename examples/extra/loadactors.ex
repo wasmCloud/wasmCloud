@@ -16,16 +16,18 @@ defmodule LoadProject do
       provider.contract)
   end
 
-  def link(actor, provider) do
+  def make_link(actor, provider, params) do
+    IO.puts("linking actor #{actor.name} with provider #{provider.contract} params #{inspect(params)}")
     HostCore.Linkdefs.Manager.put_link_definition(
       actor.key,
       provider.contract,
       provider.link,
       provider.key,
-      provider.params)
+     params)
   end
 
-  def start(project) do
+  # main entrypoint - initialize actor(s), provider(s), and link them
+  def init(project) do
 
     for actor <- project.actors do
       load_actor(actor)
@@ -39,10 +41,21 @@ defmodule LoadProject do
     IO.puts("providers loaded")
     HostCore.Providers.ProviderSupervisor.all_providers()
 
-    # link (first) actor with all providers
-    for provider <- project.providers do
-        link(hd(project.actors),provider)
-    end
+    Process.sleep(3000)
 
+    # make maps to lookup actor by name and provider by contract
+    for link <- project.links do
+      actor = Enum.find(project.actors, fn(item) ->
+              item.name == link.actor end)
+      if is_nil(actor) do
+        raise "Invalid actor spec: no actor with name #{link.actor}"
+      end
+      provider = Enum.find(project.providers, fn(item) ->
+               item.contract == link.contract end)
+      if is_nil(provider) do
+        raise "Invalid provider spec: no provider with contract #{link.contract}"
+      end
+      make_link(actor, provider, link.params)
+    end
   end
 end
