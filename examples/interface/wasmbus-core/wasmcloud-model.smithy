@@ -9,7 +9,7 @@ namespace org.wasmcloud.model
 structure unsignedInt { }
 
 
-/// A non-empty string
+/// A non-empty string (minimum length 1)
 @trait(selector: "string")
 @length(min:1)
 string nonEmptyString
@@ -17,12 +17,12 @@ string nonEmptyString
 
 /// Overrides for serializer & deserializer
 @trait(selector: "member")
-structure serialize {
-    /// (optional setting) Override name for field when serializing and deserializing
-    /// By default, (when `rename` not specified) is the exact declared name without
+structure serialization {
+    /// (optional setting) Override field name when serializing and deserializing
+    /// By default, (when `name` not specified) is the exact declared name without
     /// casing transformations. This setting does not affect the field name
-    /// produced in code generation, which can vary by language.
-    rename: String,
+    /// produced in code generation, which is always lanaguage-idiomatic
+    name: String,
 }
 
 /// This trait doesn't have any functional impact on codegen. It is simply
@@ -31,41 +31,41 @@ structure serialize {
 @trait
 structure synonym{}
 
-// signed 64-bit int
+/// signed 64-bit int
 @synonym
 long I64
 
-// unsigned 64-bit int
+/// unsigned 64-bit int
 @unsignedInt
 long U64
 
-// signed 32-bit int
+/// signed 32-bit int
 @synonym
 integer I32
 
-// unsigned 32-bit int
+/// unsigned 32-bit int
 @unsignedInt
 integer U32
 
-// signed 16-bit int
+/// signed 16-bit int
 @synonym
 short I16
 
-// unsigned 16-bit int
+/// unsigned 16-bit int
 @unsignedInt
 short U16
 
-// signed byte
+/// signed byte
 @synonym
 byte I8
 
-// unsigned byte
+/// unsigned byte
 @unsignedInt
 byte U8
 
 /// Rust codegen traits
 @trait(selector: "structure")
 structure codegenRust {
-    /// Instructs rust codegen to add `#[derive(Default)]`
+    /// Instructs rust codegen to add `#[derive(Default)]` (default false)
     deriveDefault: Boolean,
 }
