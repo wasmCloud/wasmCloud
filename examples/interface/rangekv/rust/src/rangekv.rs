@@ -22,13 +22,8 @@ pub type Key = String;
 /// A list of keys
 pub type KeyList = Vec<Key>;
 
-#[derive(Default, Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct KeyRangeResponse {
-    /// startKey that should be used on the next request
-    /// If this value is empty, there are no more keys
-    #[serde(rename = "nextKey")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub next_key: Option<String>,
     /// first key in range returned
     #[serde(rename = "startKey")]
     pub start_key: String,
@@ -36,10 +31,15 @@ pub struct KeyRangeResponse {
     pub count: u32,
     /// values returned
     pub items: KeyList,
+    /// startKey that should be used on the next request
+    /// If this value is empty, there are no more keys
+    #[serde(rename = "nextKey")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_key: Option<String>,
 }
 
 /// A structure containing a key and value
-#[derive(Default, Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct KeyValue {
     pub key: Key,
     pub value: BlobValue,
@@ -49,10 +49,8 @@ pub struct KeyValue {
 pub type KeyValueList = Vec<KeyValue>;
 
 /// result of Values range query
-#[derive(Default, Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct KeyValueRangeResponse {
-    /// returned list of key-value pairs
-    pub items: KeyValueList,
     /// startKey that should be used on the next request
     /// If this value is empty, there are no more keys
     #[serde(rename = "nextKey")]
@@ -60,13 +58,15 @@ pub struct KeyValueRangeResponse {
     pub next_key: Option<String>,
     /// number of items returned
     pub count: u32,
+    /// returned list of key-value pairs
+    pub items: KeyValueList,
     /// first key in range returned
     #[serde(rename = "startKey")]
     pub start_key: String,
 }
 
 /// Structure that contains an optional value
-#[derive(Default, Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MaybeValue {
     /// a value or none
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -74,20 +74,22 @@ pub struct MaybeValue {
 }
 
 /// Input a range request (Keys or Values)
-#[derive(Default, Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RangeRequest {
     /// optional last key of the requested range (inclusive)
     #[serde(rename = "lastKey")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_key: Option<String>,
-    /// the initial key at start of range
-    #[serde(rename = "startKey")]
-    pub start_key: String,
     /// maximum number of values to return
     /// the server may return fewer than this value.
     pub limit: u32,
+    /// the initial key at start of range
+    #[serde(rename = "startKey")]
+    pub start_key: String,
 }
 
+/// wasmbus.contractId: wasmcloud::example:rangekv
+/// wasmbus.providerReceive
 #[async_trait]
 pub trait RangeKeyValue {
     /// Gets a value for a specified key.

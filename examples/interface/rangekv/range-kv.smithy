@@ -14,11 +14,14 @@ namespace org.wasmcloud.example.rangekv
 // - functions returning void
 // - functions with no parameters
 
-use org.wasmcloud.core#capability
+use org.wasmcloud.core#wasmbus
 use org.wasmcloud.model#U32
 use org.wasmcloud.model#U64
 
-@capability(contractId: "wasmcloud:rangekv")
+@wasmbus(
+    contractId: "wasmcloud::example:rangekv",
+    providerReceive: true,
+)
 service RangeKeyValue{
   version: "0.1",
   operations: [ Get, Put, Delete, Clear, Contains, Keys, Values, Size  ]
