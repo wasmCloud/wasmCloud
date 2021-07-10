@@ -11,3 +11,8 @@ output_dir = "."
 path = "src/wasmbus_core.rs"
 namespace = "org.wasmcloud.core"
 crate = "wasmbus_rpc"
+
+[[rust.files]]
+path = "src/wasmbus_model.rs"
+namespace = "org.wasmcloud.model"
+crate = "wasmbus_rpc"
