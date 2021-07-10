@@ -26,6 +26,7 @@ $(DIST_EXS): $(DIST_BIN) $(DIST_PAR)
 
 $(DIST_BIN): go/*.mod go/*.go Makefile
 	@mkdir -p $(dir $@)
+	rm -f $@
 	cd go && \
 	  GOOS=linux go build -o ../$@
 

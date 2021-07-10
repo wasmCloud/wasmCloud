@@ -2,9 +2,9 @@
 
 WELD = ../../../target/debug/weld
 # if this package is included in the top-level Cargo.toml, then target is in the top-level folder
-#TARGET_BASE=../../../target
+TARGET_BASE=../../../target
 # otherwise, it's local
-TARGET_BASE=./target
+#TARGET_BASE=./target
 CARGO=cargo
 RUST_DEPS = Cargo.toml $(wildcard src/*) Makefile
 
@@ -53,7 +53,7 @@ $(DIST_EXS): $(DIST_BIN) $(DIST_PAR)
 
 $(DIST_BIN): $(RELEASE_TARGET_LINUX)
 	@mkdir -p $(dir $@)
-	cp -p $< $@
+	cp -p --force $< $@
 
 $(DEBUG_TARGET_LINUX): $(WELD) $(RUST_DEPS)
 	$(CARGO) build --target $(TARGET_LINUX)
