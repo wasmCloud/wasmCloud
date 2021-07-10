@@ -17,31 +17,32 @@ pub const SMITHY_VERSION: &str = "1.0";
 pub type Headers = std::collections::HashMap<String, String>;
 
 /// HttpRequest contains data sent to actor about the http request
-#[derive(Default, Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HttpRequest {
+    pub method: String,
     #[serde(with = "serde_bytes")]
     pub body: Vec<u8>,
-    pub path: String,
-    pub method: String,
+    pub header: Headers,
     #[serde(rename = "queryString")]
     pub query_string: String,
-    pub header: Headers,
+    pub path: String,
 }
 
 /// HttpResponse contains the actor's response to return to the http client
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HttpResponse {
-    pub header: Headers,
-    #[serde(with = "serde_bytes")]
-    pub body: Vec<u8>,
     /// statusCode should be 200 if the request was correctly handled
     #[serde(rename = "statusCode")]
     pub status_code: u32,
     pub status: String,
+    #[serde(with = "serde_bytes")]
+    pub body: Vec<u8>,
+    pub header: Headers,
 }
 
 /// HttpServer is the contract to be implemented by actor
-/// @direction(actorReceiver)
+/// wasmbus.contractId: wasmcloud::httpserver
+/// wasmbus.actorReceive
 #[async_trait]
 pub trait HttpServer {
     async fn handle_request(
@@ -53,7 +54,6 @@ pub trait HttpServer {
 
 /// HttpServerReceiver receives messages defined in the HttpServer service trait
 /// HttpServer is the contract to be implemented by actor
-/// @direction(actorReceiver)
 #[async_trait]
 pub trait HttpServerReceiver: MessageDispatch + HttpServer {
     async fn dispatch(
@@ -81,7 +81,6 @@ pub trait HttpServerReceiver: MessageDispatch + HttpServer {
 
 /// HttpServerSender sends messages to a HttpServer service
 /// HttpServer is the contract to be implemented by actor
-/// @direction(actorReceiver)
 #[derive(Debug)]
 pub struct HttpServerSender<T> {
     transport: T,

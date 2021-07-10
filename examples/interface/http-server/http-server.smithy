@@ -11,9 +11,10 @@ use org.wasmcloud.model#U32
 use org.wasmcloud.model#codegenRust
 
 /// HttpServer is the contract to be implemented by actor
-@actorReceiver
-@wasmbus
-@capability(contractId: "wasmcloud:httpserver")
+@wasmbus(
+    contractId: "wasmcloud::httpserver",
+    actorReceive: true,
+)
 service HttpServer {
   version: "0.1",
   operations: [ HandleRequest ]
