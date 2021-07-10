@@ -4,7 +4,8 @@ use wasmbus_rpc::core::{Actor, ActorReceiver, HealthCheckRequest, HealthCheckRes
 use wasmcloud_example_hello::{Hello, HelloSender};
 use wasmcloud_example_httpserver::{HttpRequest, HttpResponse, HttpServer, HttpServerReceiver};
 
-const HELLO_PROVIDER_ID: &str = "wasmcloud:hello";
+const HELLO_PROVIDER: &str = "wasmcloud:example:hello";
+//const LINK_DEFAULT: &str = "default";
 
 #[derive(Debug, Default, Actor)]
 #[services(Actor, HttpServer)]
@@ -18,22 +19,25 @@ impl HttpServer for HelloSendActor {
         _ctx: &context::Context<'_>,
         req: &HttpRequest,
     ) -> std::result::Result<HttpResponse, RpcError> {
+        console_log("HelloSend: received request");
         // upon receiving http request, send hello
         let client = HelloSender::new(
-            client::SendConfig::target(HELLO_PROVIDER_ID),
+            client::SendConfig::contract(HELLO_PROVIDER),
             WasmHost::default(),
         );
         // If a query string exists and contains "name=NAME", send the value NAME, otherwise send "World"
         let name = form_urlencoded::parse(req.query_string.as_bytes())
             .find(|(n, _)| n == "name")
             .map(|(_, v)| v.to_string())
-            .unwrap_or("World".to_string());
+            .unwrap_or("World11".to_string());
 
+        console_log(&format!("HelloSend: sending '{}'", name));
         // send hello and wait for response
-        let hello_response = client
+        let hello_response: String = client
             .say_hello(&context::Context::default(), &name)
             .await?;
 
+        console_log(&format!("HelloSend: received '{}'", hello_response));
         let body = json!({
             "response": &hello_response,
         });
