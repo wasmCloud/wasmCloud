@@ -7,7 +7,7 @@ providers = [ "httpserver", "hello" ]
 [[links]]
 actor="hello_send"
 contract="wasmcloud:httpserver"
-params= { port= 8080 }
+params= { PORT = "8080" }
 
 # link hello actor with hello provider
 [[links]]
