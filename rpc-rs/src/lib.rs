@@ -17,6 +17,11 @@ pub mod core {
     // re-export core lib as "core"
     pub use crate::wasmbus_core::*;
 }
+mod wasmbus_model;
+pub mod model {
+    // re-export core lib as "core"
+    pub use crate::wasmbus_model::*;
+}
 
 /// Version number of this api
 #[doc(hidden)]
@@ -53,7 +58,7 @@ pub mod actor {
             if #[cfg(target_arch = "wasm32")] {
                 pub use crate::actor_wasm::{console_log, WasmHost};
             } else {
-                // this is non-functional, since actors only run in wasm32,
+                // this code is non-functional, since actors only run in wasm32,
                 // but it reduces compiler errors if you are building a cargo multi-project workspace for non-wasm32
                 #[derive(Clone, Debug, Default)]
                 pub struct WasmHost {}
@@ -65,6 +70,8 @@ pub mod actor {
                        unimplemented!();
                     }
                 }
+
+                pub fn console_log(_s: &str) {}
             }
         }
     }
