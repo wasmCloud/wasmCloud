@@ -4,9 +4,10 @@ use crate::{
     error::{Error, Result},
     gen::CodeGen,
     model::{
-        actor_receiver_trait, capability_trait, codegen_rust_trait, get_operation,
-        is_opt_namespace, provider_receiver_trait, wasmcloud_model_namespace, CommentKind,
+        codegen_rust_trait, get_operation, get_trait, is_opt_namespace, serialization_trait,
+        wasmcloud_model_namespace, CommentKind,
     },
+    model_gen::{CodegenRust, Serialization, Wasmbus},
     render::Renderer,
     writer::Writer,
     JsonValue, ParamMap,
@@ -233,9 +234,9 @@ use {}::{{
                     )?;
                 }
                 ShapeKind::Structure(strukt) => {
-                    if !traits.contains_key(&prelude_shape_named(TRAIT_TRAIT).unwrap()) {
-                        self.declare_structure_shape(&mut w, id.shape_name(), traits, strukt)?;
-                    }
+                    //if !traits.contains_key(&prelude_shape_named(TRAIT_TRAIT).unwrap()) {
+                    self.declare_structure_shape(&mut w, id.shape_name(), traits, strukt)?;
+                    //}
                 }
                 ShapeKind::Operation(_)
                 | ShapeKind::Resource(_)
@@ -307,31 +308,6 @@ impl RustCodeGen {
             self.write_documentation(&mut w, id, text);
         }
 
-        // directionality
-        if traits.get(actor_receiver_trait()).is_some() {
-            self.write_comment(
-                &mut w,
-                CommentKind::Documentation,
-                "@direction(actorReceiver)",
-            );
-        }
-        if traits.get(provider_receiver_trait()).is_some() {
-            self.write_comment(
-                &mut w,
-                CommentKind::Documentation,
-                "@direction(providerReceiver)",
-            );
-        }
-        // capability contract id
-        if let Some(Some(Value::Object(map))) = traits.get(capability_trait()) {
-            if let Some(Value::String(contract_id)) = map.get("capabilityId") {
-                self.write_comment(
-                    &mut w,
-                    CommentKind::Documentation,
-                    &format!("capabilityContractId({})", contract_id),
-                );
-            }
-        }
         // deprecated
         if let Some(Some(Value::Object(map))) =
             traits.get(&prelude_shape_named(TRAIT_DEPRECATED).unwrap())
@@ -345,6 +321,7 @@ impl RustCodeGen {
             }
             w.write(b")\n");
         }
+
         // unstable
         if traits
             .get(&prelude_shape_named(TRAIT_UNSTABLE).unwrap())
@@ -530,13 +507,19 @@ impl RustCodeGen {
         traits: &AppliedTraits,
         strukt: &StructureOrUnion,
     ) -> Result<()> {
+        let is_trait_struct = traits.contains_key(&prelude_shape_named(TRAIT_TRAIT).unwrap());
         self.apply_documentation_traits(&mut w, id, traits);
-        let mut derive_default = true;
-        if let Some(Some(Value::Object(cg_map))) = traits.get(codegen_rust_trait()) {
-            if let Some(Value::Boolean(enable)) = cg_map.get("deriveDefault") {
-                derive_default = *enable;
-            }
-        };
+        let derive_default =
+            if let Some(cg) = get_trait::<CodegenRust>(traits, codegen_rust_trait())? {
+                cg.derive_default
+            } else {
+                false
+            };
+        //if let Some(Some(Value::Object(cg_map))) = traits.get(codegen_rust_trait()) {
+        //    if let Some(Value::Boolean(enable)) = cg_map.get("deriveDefault") {
+        //        derive_default = *enable;
+        //    }
+        //};
         w.write(b"#[derive(");
         if derive_default {
             w.write(b"Default, ")
@@ -547,10 +530,21 @@ impl RustCodeGen {
         w.write(b" {\n");
         for member in strukt.members() {
             self.apply_documentation_traits(&mut w, member.id(), member.traits());
-            let declared_name = member.id().to_string();
+
+            // use the declared name for serialization, unless an override is declared
+            // with `@sesrialization(name: SNAME)`
+            let ser_name = if let Some(Serialization {
+                name: Some(ser_name),
+            }) = get_trait(member.traits(), serialization_trait())?
+            {
+                ser_name
+            } else {
+                member.id().to_string()
+            };
+            //let declared_name = member.id().to_string();
             let rust_field_name = self.to_field_name(member.id())?;
-            if declared_name != rust_field_name {
-                w.write(&format!("  #[serde(rename=\"{}\")] ", declared_name));
+            if ser_name != rust_field_name {
+                w.write(&format!("  #[serde(rename=\"{}\")] ", ser_name));
             }
             // for rmp-msgpack - need to use serde_bytes serializer for Blob (and Option<Blob>)
             if member.target() == &ShapeID::new_unchecked("smithy.api", "Blob", None) {
@@ -558,6 +552,9 @@ impl RustCodeGen {
             }
             if is_optional_type(member) {
                 w.write(r#"  #[serde(default, skip_serializing_if = "Option::is_none")]"#);
+            } else if is_trait_struct && !member.is_required() {
+                // trait structs are deserialized only and need default values if not required
+                w.write(r#"  #[serde(default)]"#);
             }
             w.write(b"  pub ");
             w.write(&rust_field_name);
@@ -591,9 +588,26 @@ impl RustCodeGen {
         service: &Service,
     ) -> Result<()> {
         self.apply_documentation_traits(&mut w, service_id, service_traits);
+        let wasmbus: Option<Wasmbus> = get_trait(service_traits, crate::model::wasmbus_trait())?;
+        if let Some(wasmbus) = wasmbus {
+            if let Some(contract) = wasmbus.contract_id {
+                let text = format!("wasmbus.contractId: {}", &contract);
+                self.write_documentation(&mut w, service_id, &text);
+            }
+            if wasmbus.provider_receive {
+                let text = "wasmbus.providerReceive";
+                self.write_documentation(&mut w, service_id, text);
+            }
+            if wasmbus.actor_receive {
+                let text = "wasmbus.actorReceive";
+                self.write_documentation(&mut w, service_id, text);
+            }
+        }
+
         w.write(b"#[async_trait]\npub trait ");
         self.write_ident(&mut w, service_id);
         w.write(b"{\n");
+        //HERE
         for operation in service.operations() {
             // if operation is not declared in this namespace, don't define it here
             if let Some(ref ns) = self.namespace {

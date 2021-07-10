@@ -4,30 +4,38 @@
 //! - various macros used in the codegen crate
 //!
 //use crate::strings::{to_pascal_case, to_snake_case};
-use crate::error::{Error, Result};
+use crate::{
+    error::{Error, Result},
+    JsonValue,
+};
 use atelier_core::model::{
     shapes::{AppliedTraits, HasTraits, Operation, ShapeKind},
+    values::{Number, Value as NodeValue},
     HasIdentity, Identifier, Model, NamespaceID, ShapeID,
 };
 use lazy_static::lazy_static;
+use serde::de::DeserializeOwned;
 use std::str::FromStr;
 
 const WASMCLOUD_MODEL_NAMESPACE: &str = "org.wasmcloud.model";
 const WASMCLOUD_CORE_NAMESPACE: &str = "org.wasmcloud.core";
 
-const TRAIT_ACTOR_RECEIVER: &str = "actorReceiver";
-const TRAIT_CAPABILITY: &str = "capability";
-const TRAIT_PROVIDER_RECEIVER: &str = "providerReceiver";
+//const TRAIT_ACTOR_RECEIVER: &str = "actorReceiver";
+//const TRAIT_CAPABILITY: &str = "capability";
+//const TRAIT_PROVIDER_RECEIVER: &str = "providerReceiver";
 const TRAIT_CODEGEN_RUST: &str = "codegenRust";
+const TRAIT_SERIALIZATION: &str = "serialization";
+const TRAIT_WASMBUS: &str = "wasmbus";
+//const TRAIT_SERIALIZE_RENAME: &str = "rename";
 
 lazy_static! {
     static ref WASMCLOUD_MODEL_NAMESPACE_ID: NamespaceID =
         NamespaceID::new_unchecked(WASMCLOUD_MODEL_NAMESPACE);
     static ref WASMCLOUD_CORE_NAMESPACE_ID: NamespaceID =
         NamespaceID::new_unchecked(WASMCLOUD_CORE_NAMESPACE);
-    static ref ACTOR_RECEIVER_TRAIT_ID: ShapeID = ShapeID::new(
-        NamespaceID::new_unchecked(WASMCLOUD_CORE_NAMESPACE),
-        Identifier::from_str(TRAIT_ACTOR_RECEIVER).unwrap(),
+    static ref SERIALIZATION_TRAIT_ID: ShapeID = ShapeID::new(
+        NamespaceID::new_unchecked(WASMCLOUD_MODEL_NAMESPACE),
+        Identifier::from_str(TRAIT_SERIALIZATION).unwrap(),
         None
     );
     static ref CODEGEN_RUST_TRAIT_ID: ShapeID = ShapeID::new(
@@ -35,31 +43,29 @@ lazy_static! {
         Identifier::from_str(TRAIT_CODEGEN_RUST).unwrap(),
         None
     );
-    static ref PROVIDER_RECEIVER_TRAIT_ID: ShapeID = ShapeID::new(
+    static ref WASMBUS_TRAIT_ID: ShapeID = ShapeID::new(
         NamespaceID::new_unchecked(WASMCLOUD_CORE_NAMESPACE),
-        Identifier::from_str(TRAIT_PROVIDER_RECEIVER).unwrap(),
-        None
-    );
-    static ref CAPABILITY_TRAIT_ID: ShapeID = ShapeID::new(
-        NamespaceID::new_unchecked(WASMCLOUD_CORE_NAMESPACE),
-        Identifier::from_str(TRAIT_CAPABILITY).unwrap(),
+        Identifier::from_str(TRAIT_WASMBUS).unwrap(),
         None
     );
 }
 
+/// namespace for org.wasmcloud.model
 pub fn wasmcloud_model_namespace() -> &'static NamespaceID {
     &WASMCLOUD_MODEL_NAMESPACE_ID
 }
 
-pub fn actor_receiver_trait() -> &'static ShapeID {
-    &ACTOR_RECEIVER_TRAIT_ID
+/// shape id of trait @wasmbus
+pub fn wasmbus_trait() -> &'static ShapeID {
+    &WASMBUS_TRAIT_ID
 }
-pub fn provider_receiver_trait() -> &'static ShapeID {
-    &PROVIDER_RECEIVER_TRAIT_ID
+
+/// shape id of trait @serialization
+pub fn serialization_trait() -> &'static ShapeID {
+    &SERIALIZATION_TRAIT_ID
 }
-pub fn capability_trait() -> &'static ShapeID {
-    &CAPABILITY_TRAIT_ID
-}
+
+/// shape id of trait @codegenRust
 pub fn codegen_rust_trait() -> &'static ShapeID {
     &CODEGEN_RUST_TRAIT_ID
 }
@@ -138,4 +144,45 @@ pub fn get_operation<'model>(
             ))
         })?;
     Ok(op)
+}
+
+/// Returns trait as deserialized object, or None if the trait is not defined.
+/// Returns error if the deserialization failed.
+pub fn get_trait<T: DeserializeOwned>(traits: &AppliedTraits, id: &ShapeID) -> Result<Option<T>> {
+    match traits.get(id) {
+        Some(Some(val)) => match trait_value(val) {
+            Ok(obj) => Ok(Some(obj)),
+            Err(e) => Err(e),
+        },
+        Some(None) => Ok(None),
+        None => Ok(None),
+    }
+}
+
+/// Convert trait object to its native type
+pub fn trait_value<T: DeserializeOwned>(value: &NodeValue) -> Result<T> {
+    let json = value_to_json(value);
+    let obj = serde_json::from_value(json)?;
+    Ok(obj)
+}
+
+/// Convert smithy model 'Value' to a json object
+pub fn value_to_json(value: &NodeValue) -> JsonValue {
+    match value {
+        NodeValue::None => JsonValue::Null,
+        NodeValue::Array(v) => JsonValue::Array(v.iter().map(|v| value_to_json(v)).collect()),
+        NodeValue::Object(v) => {
+            let mut object = crate::JsonMap::default();
+            for (k, v) in v {
+                let _ = object.insert(k.clone(), value_to_json(v));
+            }
+            JsonValue::Object(object)
+        }
+        NodeValue::Number(v) => match v {
+            Number::Integer(v) => JsonValue::Number((*v).into()),
+            Number::Float(v) => JsonValue::Number(serde_json::Number::from_f64(*v).unwrap()),
+        },
+        NodeValue::Boolean(v) => JsonValue::Bool(*v),
+        NodeValue::String(v) => JsonValue::String(v.clone()),
+    }
 }

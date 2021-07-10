@@ -14,6 +14,7 @@ pub use gen::{templates_from_dir, Generator};
 pub(crate) use loader::sources_to_paths;
 pub use loader::{sources_to_model, weld_cache_dir};
 pub use rust_build::rust_build;
+pub(crate) mod model_gen;
 mod rust_build;
 pub mod rustfmt;
 
