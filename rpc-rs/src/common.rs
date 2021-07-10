@@ -16,7 +16,7 @@ pub struct Message<'m> {
 pub mod context {
 
     /// Context - message passing metadata used by wasmhost Actors and Capability Providers
-    #[derive(Default, Debug)]
+    #[derive(Default, Debug, Clone)]
     pub struct Context<'msg> {
         /// Messages received by Context Provider will have actor set to the actor's public key
         pub actor: Option<&'msg str>,
@@ -57,8 +57,10 @@ pub mod client {
     }
 
     impl SendConfig {
-        /// Constructs a new client with host and target
-        /// when sending to a capability provider,
+        /// Constructs a new client with host (link binding) and target.
+        /// When sending to a capability provider, the host parameter
+        /// is the link name (usually "default" for the default host),
+        /// and target is the capability contract id, e.g., "wasmcloud:keyvalue"
         pub fn new<H: Into<String>, T: Into<String>>(host: H, target: T) -> SendConfig {
             SendConfig {
                 host: host.into(),
@@ -71,6 +73,15 @@ pub mod client {
         pub fn actor<T: Into<String>>(target: T) -> SendConfig {
             SendConfig {
                 target: target.into(),
+                ..Default::default()
+            }
+        }
+
+        /// Create a SendConfig using the capability contract id
+        /// (e.g., "wasmcloud:keyvalue"). Uses the default link binding.
+        pub fn contract<T: Into<String>>(contract: T) -> SendConfig {
+            SendConfig {
+                target: contract.into(),
                 ..Default::default()
             }
         }

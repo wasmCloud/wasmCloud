@@ -94,7 +94,7 @@ impl Transport for WasmHost {
     }
 }
 
-#[cold]
+//#[cold]
 #[inline(never)]
 pub fn console_log(s: &str) {
     unsafe {
