@@ -7,12 +7,14 @@ members = [
     "examples/interface/hello/rust",
     "examples/interface/rangekv/rust",
     "examples/interface/http-server/rust",
+    "examples/provider/hello",
+    #"examples/provider/rangekv-mem",
+
 ]
 
 exclude = [
     # actors need to be excluded because they have different target configurations
     # we build them with 'make' instead
     "examples/actor",
-    "examples/provider",
     "scratch",
 ]
