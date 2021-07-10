@@ -8,7 +8,7 @@ defmodule LoadProject do
   end
 
   def load_provider(provider) do
-    IO.puts("loading provider #{provider.name} '${provider.contract}'")
+    IO.puts("loading provider #{provider.name} '#{provider.contract}'")
     HostCore.Providers.ProviderSupervisor.start_executable_provider(
       provider.path,
       provider.key,
