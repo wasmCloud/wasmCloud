@@ -162,7 +162,7 @@ pub struct HostBridgeInner {
 }
 
 impl HostBridge {
-    // Clear out all subscriptions
+    /// Clear out all subscriptions
     pub fn unsubscribe_all(&self) {
         // make sure we call drain on all subscriptions
         for sub in self.subs.read().unwrap().iter() {
@@ -170,6 +170,7 @@ impl HostBridge {
         }
     }
 
+    /// Send log to main thread
     fn log(&self, level: log::Level, s: String) {
         let _ = self.log_tx.send((level, s));
     }
@@ -304,12 +305,12 @@ impl HostBridge {
         tokio::task::spawn(async move {
             if let Some(msg) = sub.next() {
                 info!("Received termination signal. Shutting down capability provider.");
+                // tell provider to shutdown - before we shut down nats subscriptions
+                let _ = provider.shutdown();
                 // drain all subscriptions (other than this one)
                 for sub in this.subs.read().unwrap().iter() {
                     let _ = sub.drain();
                 }
-                // tell provider to shutdown
-                let _ = provider.shutdown();
                 // send ack to host
                 let _ = msg.respond("Shutting down");
                 // signal main thread that we are ready
@@ -318,7 +319,7 @@ impl HostBridge {
                 }
             }
             // if subh.next() returns None, subscription has been cancelled or the connection was dropped.
-            // in either case, quit
+            // in either case, fall through to exit thread
         });
 
         // Health check
