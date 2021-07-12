@@ -1,0 +1,589 @@
+<!doctype html>
+<html>
+<head>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<link href="../css/tailwind.min.css" rel="stylesheet">
+	<title>org.wasmcloud.core</title>
+    <script src="https://cdn.jsdelivr.net/gh/alpinejs/alpine@v2.x.x/dist/alpine.min.js" type="text/javascript" defer></script>
+    <script src='https://cdn.jsdelivr.net/npm/fuse.js@6.4.6/dist/fuse.min.js' type="text/javascript"></script>
+</head>
+<body class="p-4">
+    <div id="content">
+        <div class="p-4 overflow-y-auto">
+            <h1 id="org_wasmcloud_core" class="text-2xl font-serif">Namespace org.wasmcloud.core</h1>
+            <div class="table m-4 ml-12">
+            <div class="table-row">
+                <div class="table-cell align-top pr-6 w-28">
+                    Services
+                </div>
+                <div class="table-cell align-top">
+                    <ul>
+                        <li class="font-light"><a href="#org_wasmcloud_core_actor"><a href="#actor">Actor</a></a></li>                    </ul>
+                </div>
+            </div>
+            <div class="table-row">
+                <div class="table-cell align-top pr-6 w-28">
+                    Operations
+                </div>
+                <div class="table-cell align-top">
+                    <ul>
+                        <li class="font-light"><a href="#org_wasmcloud_core_delete_link"><a href="#delete_link">DeleteLink</a></a></li><li class="font-light"><a href="#org_wasmcloud_core_get_links"><a href="#get_links">GetLinks</a></a></li><li class="font-light"><a href="#org_wasmcloud_core_has_link"><a href="#has_link">HasLink</a></a></li><li class="font-light"><a href="#org_wasmcloud_core_health_request"><a href="#health_request">HealthRequest</a></a></li><li class="font-light"><a href="#org_wasmcloud_core_put_link"><a href="#put_link">PutLink</a></a></li>                    </ul>
+                </div>
+            </div>
+            <div class="table-row">
+                <div class="table-cell align-top pr-6 w-28">
+                    Structures
+                </div>
+                <div class="table-cell align-top">
+                    <ul>
+                        <li class="font-light"><a href="#org_wasmcloud_core_health_check_request"><a href="#health_check_request">HealthCheckRequest</a></a></li><li class="font-light"><a href="#org_wasmcloud_core_health_check_response"><a href="#health_check_response">HealthCheckResponse</a></a></li><li class="font-light"><a href="#org_wasmcloud_core_host_data"><a href="#host_data">HostData</a></a></li><li class="font-light"><a href="#org_wasmcloud_core_invocation"><a href="#invocation">Invocation</a></a></li><li class="font-light"><a href="#org_wasmcloud_core_link_definition"><a href="#link_definition">LinkDefinition</a></a></li><li class="font-light"><a href="#org_wasmcloud_core_wasm_cloud_entity"><a href="#wasm_cloud_entity">WasmCloudEntity</a></a></li>                    </ul>
+                </div>
+            </div>
+            <div class="table-row">
+                <div class="table-cell align-top pr-6 w-28">
+                    Traits
+                </div>
+                <div class="table-cell align-top">
+                    <ul>
+                        <li class="font-light"><a href="#org_wasmcloud_core_wasmbus_data"><a href="#wasmbus_data">wasmbusData</a></a></li>                    </ul>
+                </div>
+            </div>
+            <div class="table-row">
+                <div class="table-cell align-top pr-6 w-28">
+                    Lists
+                </div>
+                <div class="table-cell align-top">
+                    <ul>
+                        <li class="font-light"><a href="#org_wasmcloud_core_actor_links"><a href="#actor_links">ActorLinks</a></a></li>                    </ul>
+                </div>
+            </div>
+            <div class="table-row">
+                <div class="table-cell align-top pr-6 w-28">
+                    Maps
+                </div>
+                <div class="table-cell align-top">
+                    <ul>
+                        <li class="font-light"><a href="#org_wasmcloud_core_host_env_values"><a href="#host_env_values">HostEnvValues</a></a></li><li class="font-light"><a href="#org_wasmcloud_core_link_settings"><a href="#link_settings">LinkSettings</a></a></li>                    </ul>
+                </div>
+            </div>
+            </div>
+                                
+                                        
+                    
+    <h2 id="actor" class="mt-8 border-t-2 border-gray-300">
+        <a href="#actor">Actor</a><span class="text-lg pl-4">(service)</span>
+    </h2><p class="font-light ml-6">Actor service</p>
+                        <div class="ml-12">                                <div class="table my-4">
+                                    <div class="table-row">
+                                        <div class="table-cell align-top pr-6 w-48">
+                                            <span class="font-medium my-4">
+                                                Operations
+                                            </span>
+                                        </div>
+                                        <div class="table-cell align-top">
+                                            <ul>                                                    <li class="font-light">
+                                                        <a href="#org_wasmcloud_core_health_request">
+                                                            <a href="#health_request">HealthRequest</a>
+                                                        </a>
+                                                    </li>                                            </ul>
+                                        </div>
+                                    </div>
+                                </div>                        </div>            <div class="ml-12">
+            <p class="font-medium mt-4">Traits
+            <p>
+            <table>                    <tr>
+                                                    <td><a href="#wasmbus">wasmbus</a></td>
+                            <td>[object]</td>
+                                            </tr>            </table>
+        </div>
+    
+    <h2 id="actor_links" class="mt-8 border-t-2 border-gray-300">
+        <a href="#actor_links">ActorLinks</a><span class="text-lg pl-4">(list)</span>
+    </h2><p class="font-light ml-6">List of linked actors for a provider</p>
+                        <div class="ml-12">
+                            <table>
+                                <thead>
+                                <tr>
+                                    <th class="w-48"></th>
+                                    <th class="w-48"></th>
+                                    <th class=""></th>
+                                </tr>
+                                </thead>
+                                <tbody>
+                                <tr>
+                                    <td>member:</td>
+                                    <td><a href="#link_definition">LinkDefinition</a></td>
+                                    <td><span class="font-light">&nbsp;</span></td>
+                                </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                                                
+                                        
+                                        
+                                        
+    <h2 id="delete_link" class="mt-8 border-t-2 border-gray-300">
+        <a href="#delete_link">DeleteLink</a><span class="text-lg pl-4">(operation)</span>
+    </h2><p class="font-light ml-6">instruction to capability provider to remove actor</p>
+                        <div class="ml-12">
+                            <table>
+                                <thead>
+                                <tr>
+                                    <th class="w-48"></th>
+                                    <th class="w-48"></th>
+                                    <th class=""></th>
+                                </tr>
+                                </thead>
+                                <tbody>                                    <tr>
+                                        <td>input:</td>
+                                        <td>String</td>
+                                        <td><span class="font-light"></span></td>
+                                    </tr>                                </tbody>
+                            </table>
+                        </div>
+                                    <div class="ml-12">
+            <p class="font-medium mt-4">Traits
+            <p>
+            <table>                    <tr>
+                                                    <td>idempotent</td>
+                            <td>[object]</td>
+                                            </tr>            </table>
+        </div>
+    
+                                        
+                                        
+    <h2 id="get_links" class="mt-8 border-t-2 border-gray-300">
+        <a href="#get_links">GetLinks</a><span class="text-lg pl-4">(operation)</span>
+    </h2><p class="font-light ml-6">Returns list of all actor links for this provider</p>
+                        <div class="ml-12">
+                            <table>
+                                <thead>
+                                <tr>
+                                    <th class="w-48"></th>
+                                    <th class="w-48"></th>
+                                    <th class=""></th>
+                                </tr>
+                                </thead>
+                                <tbody>                                    <tr>
+                                        <td>output:</td>
+                                        <td><a href="#actor_links">ActorLinks</a></td>
+                                        <td><span class="font-light"></span></td>
+                                    </tr>                                </tbody>
+                            </table>
+                        </div>
+                                    <div class="ml-12">
+            <p class="font-medium mt-4">Traits
+            <p>
+            <table>                    <tr>
+                                                    <td>readonly</td>
+                            <td>[object]</td>
+                                            </tr>            </table>
+        </div>
+    
+                                        
+                                        
+    <h2 id="has_link" class="mt-8 border-t-2 border-gray-300">
+        <a href="#has_link">HasLink</a><span class="text-lg pl-4">(operation)</span>
+    </h2><p class="font-light ml-6">Returns true if the link is defined</p>
+                        <div class="ml-12">
+                            <table>
+                                <thead>
+                                <tr>
+                                    <th class="w-48"></th>
+                                    <th class="w-48"></th>
+                                    <th class=""></th>
+                                </tr>
+                                </thead>
+                                <tbody>                                    <tr>
+                                        <td>input:</td>
+                                        <td>String</td>
+                                        <td><span class="font-light"></span></td>
+                                    </tr>                                    <tr>
+                                        <td>output:</td>
+                                        <td>Boolean</td>
+                                        <td><span class="font-light"></span></td>
+                                    </tr>                                </tbody>
+                            </table>
+                        </div>
+                                    <div class="ml-12">
+            <p class="font-medium mt-4">Traits
+            <p>
+            <table>                    <tr>
+                                                    <td>readonly</td>
+                            <td>[object]</td>
+                                            </tr>            </table>
+        </div>
+    
+                                        
+                                        
+    <h2 id="health_check_request" class="mt-8 border-t-2 border-gray-300">
+        <a href="#health_check_request">HealthCheckRequest</a><span class="text-lg pl-4">(structure)</span>
+    </h2><p class="font-light ml-6">health check request parameter</p>
+                        <div class="ml-12">
+                            <table>
+                                <thead>
+                                <tr>
+                                    <th class="w-48"></th>
+                                    <th class="w-48"></th>
+                                    <th class=""></th>
+                                </tr>
+                                </thead>
+                                <tbody>                                </tbody>
+                            </table>
+                        </div>            <div class="ml-12">
+            <p class="font-medium mt-4">Traits
+            <p>
+            <table>                    <tr>
+                                                    <td><a href="#wasmbus_data">wasmbusData</a></td>
+                            <td>[object]</td>
+                                            </tr>            </table>
+        </div>
+    
+                                        
+                                        
+    <h2 id="health_check_response" class="mt-8 border-t-2 border-gray-300">
+        <a href="#health_check_response">HealthCheckResponse</a><span class="text-lg pl-4">(structure)</span>
+    </h2><p class="font-light ml-6">Return value from actors and providers for health check status</p>
+                        <div class="ml-12">
+                            <table>
+                                <thead>
+                                <tr>
+                                    <th class="w-48"></th>
+                                    <th class="w-48"></th>
+                                    <th class=""></th>
+                                </tr>
+                                </thead>
+                                <tbody>                                    <tr>
+                                        <td>healthy:</td>
+                                        <td>Boolean</td>
+                                        <td><span class="font-light">A flag that indicates the the actor is healthy</span></td>
+                                    </tr>                                    <tr>
+                                        <td>message:</td>
+                                        <td>String</td>
+                                        <td><span class="font-light">A message containing additional information about the actors health</span></td>
+                                    </tr>                                </tbody>
+                            </table>
+                        </div>            <div class="ml-12">
+            <p class="font-medium mt-4">Traits
+            <p>
+            <table>                    <tr>
+                                                    <td><a href="#wasmbus_data">wasmbusData</a></td>
+                            <td>[object]</td>
+                                            </tr>            </table>
+        </div>
+    
+                                        
+                                        
+    <h2 id="health_request" class="mt-8 border-t-2 border-gray-300">
+        <a href="#health_request">HealthRequest</a><span class="text-lg pl-4">(operation)</span>
+    </h2><p class="font-light ml-6">Perform health check. Called at regular intervals by host</p>
+                        <div class="ml-12">
+                            <table>
+                                <thead>
+                                <tr>
+                                    <th class="w-48"></th>
+                                    <th class="w-48"></th>
+                                    <th class=""></th>
+                                </tr>
+                                </thead>
+                                <tbody>                                    <tr>
+                                        <td>input:</td>
+                                        <td><a href="#health_check_request">HealthCheckRequest</a></td>
+                                        <td><span class="font-light"></span></td>
+                                    </tr>                                    <tr>
+                                        <td>output:</td>
+                                        <td><a href="#health_check_response">HealthCheckResponse</a></td>
+                                        <td><span class="font-light"></span></td>
+                                    </tr>                                </tbody>
+                            </table>
+                        </div>
+                            
+                                        
+                                        
+    <h2 id="host_data" class="mt-8 border-t-2 border-gray-300">
+        <a href="#host_data">HostData</a><span class="text-lg pl-4">(structure)</span>
+    </h2><p class="font-light ml-6">The response to an invocation</p>
+                        <div class="ml-12">
+                            <table>
+                                <thead>
+                                <tr>
+                                    <th class="w-48"></th>
+                                    <th class="w-48"></th>
+                                    <th class=""></th>
+                                </tr>
+                                </thead>
+                                <tbody>                                    <tr>
+                                        <td>envValues:</td>
+                                        <td><a href="#host_env_values">HostEnvValues</a></td>
+                                        <td><span class="font-light"></span></td>
+                                    </tr>                                    <tr>
+                                        <td>hostId:</td>
+                                        <td>String</td>
+                                        <td><span class="font-light"></span></td>
+                                    </tr>                                    <tr>
+                                        <td>latticeRpcPrefix:</td>
+                                        <td>String</td>
+                                        <td><span class="font-light"></span></td>
+                                    </tr>                                    <tr>
+                                        <td>latticeRpcUrl:</td>
+                                        <td>String</td>
+                                        <td><span class="font-light"></span></td>
+                                    </tr>                                    <tr>
+                                        <td>latticeRpcUserJwt:</td>
+                                        <td>String</td>
+                                        <td><span class="font-light"></span></td>
+                                    </tr>                                    <tr>
+                                        <td>latticeRpcUserSeed:</td>
+                                        <td>String</td>
+                                        <td><span class="font-light"></span></td>
+                                    </tr>                                    <tr>
+                                        <td>linkName:</td>
+                                        <td>String</td>
+                                        <td><span class="font-light"></span></td>
+                                    </tr>                                    <tr>
+                                        <td>providerKey:</td>
+                                        <td>String</td>
+                                        <td><span class="font-light"></span></td>
+                                    </tr>                                </tbody>
+                            </table>
+                        </div>    
+                                        
+                    
+    <h2 id="host_env_values" class="mt-8 border-t-2 border-gray-300">
+        <a href="#host_env_values">HostEnvValues</a><span class="text-lg pl-4">(map)</span>
+    </h2>
+                        <div class="ml-12">
+                            <table>
+                                <thead>
+                                <tr>
+                                    <th class="w-48"></th>
+                                    <th class="w-48"></th>
+                                    <th class=""></th>
+                                </tr>
+                                </thead>
+                                <tbody>
+                                <tr>
+                                    <td>key:</td>
+                                    <td>String</td>
+                                    <td><span class="font-light"></span></td>
+                                </tr>
+                                <tr>
+                                    <td>value:</td>
+                                    <td>String</td>
+                                    <td><span class="font-light"></span></td>
+                                </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                                                
+                                        
+                                        
+    <h2 id="invocation" class="mt-8 border-t-2 border-gray-300">
+        <a href="#invocation">Invocation</a><span class="text-lg pl-4">(structure)</span>
+    </h2><p class="font-light ml-6">RPC message to capability provider</p>
+                        <div class="ml-12">
+                            <table>
+                                <thead>
+                                <tr>
+                                    <th class="w-48"></th>
+                                    <th class="w-48"></th>
+                                    <th class=""></th>
+                                </tr>
+                                </thead>
+                                <tbody>                                    <tr>
+                                        <td>encodedClass:</td>
+                                        <td>String</td>
+                                        <td><span class="font-light"></span></td>
+                                    </tr>                                    <tr>
+                                        <td>hostId:</td>
+                                        <td>String</td>
+                                        <td><span class="font-light"></span></td>
+                                    </tr>                                    <tr>
+                                        <td>id:</td>
+                                        <td>String</td>
+                                        <td><span class="font-light"></span></td>
+                                    </tr>                                    <tr>
+                                        <td>msg:</td>
+                                        <td>Blob</td>
+                                        <td><span class="font-light"></span></td>
+                                    </tr>                                    <tr>
+                                        <td>operation:</td>
+                                        <td>String</td>
+                                        <td><span class="font-light"></span></td>
+                                    </tr>                                    <tr>
+                                        <td>origin:</td>
+                                        <td><a href="#wasm_cloud_entity">WasmCloudEntity</a></td>
+                                        <td><span class="font-light"></span></td>
+                                    </tr>                                    <tr>
+                                        <td>target:</td>
+                                        <td><a href="#wasm_cloud_entity">WasmCloudEntity</a></td>
+                                        <td><span class="font-light"></span></td>
+                                    </tr>                                </tbody>
+                            </table>
+                        </div>    
+                                        
+                                        
+    <h2 id="link_definition" class="mt-8 border-t-2 border-gray-300">
+        <a href="#link_definition">LinkDefinition</a><span class="text-lg pl-4">(structure)</span>
+    </h2><p class="font-light ml-6">Link definition for an actor</p>
+                        <div class="ml-12">
+                            <table>
+                                <thead>
+                                <tr>
+                                    <th class="w-48"></th>
+                                    <th class="w-48"></th>
+                                    <th class=""></th>
+                                </tr>
+                                </thead>
+                                <tbody>                                    <tr>
+                                        <td>actorId:</td>
+                                        <td>String</td>
+                                        <td><span class="font-light">actor public key</span></td>
+                                    </tr>                                    <tr>
+                                        <td>contractId:</td>
+                                        <td>String</td>
+                                        <td><span class="font-light">contract id</span></td>
+                                    </tr>                                    <tr>
+                                        <td>linkName:</td>
+                                        <td>String</td>
+                                        <td><span class="font-light">link name</span></td>
+                                    </tr>                                    <tr>
+                                        <td>providerId:</td>
+                                        <td>String</td>
+                                        <td><span class="font-light">provider public key</span></td>
+                                    </tr>                                    <tr>
+                                        <td>values:</td>
+                                        <td><a href="#link_settings">LinkSettings</a></td>
+                                        <td><span class="font-light"></span></td>
+                                    </tr>                                </tbody>
+                            </table>
+                        </div>            <div class="ml-12">
+            <p class="font-medium mt-4">Traits
+            <p>
+            <table>                    <tr>
+                                                    <td><a href="#wasmbus_data">wasmbusData</a></td>
+                            <td>[object]</td>
+                                            </tr>            </table>
+        </div>
+    
+                                        
+                    
+    <h2 id="link_settings" class="mt-8 border-t-2 border-gray-300">
+        <a href="#link_settings">LinkSettings</a><span class="text-lg pl-4">(map)</span>
+    </h2><p class="font-light ml-6">Settings associated with an actor-provider link</p>
+                        <div class="ml-12">
+                            <table>
+                                <thead>
+                                <tr>
+                                    <th class="w-48"></th>
+                                    <th class="w-48"></th>
+                                    <th class=""></th>
+                                </tr>
+                                </thead>
+                                <tbody>
+                                <tr>
+                                    <td>key:</td>
+                                    <td>String</td>
+                                    <td><span class="font-light"></span></td>
+                                </tr>
+                                <tr>
+                                    <td>value:</td>
+                                    <td>String</td>
+                                    <td><span class="font-light"></span></td>
+                                </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                                                
+                                        
+                                        
+    <h2 id="put_link" class="mt-8 border-t-2 border-gray-300">
+        <a href="#put_link">PutLink</a><span class="text-lg pl-4">(operation)</span>
+    </h2><p class="font-light ml-6">instruction to capability provider to bind actor</p>
+                        <div class="ml-12">
+                            <table>
+                                <thead>
+                                <tr>
+                                    <th class="w-48"></th>
+                                    <th class="w-48"></th>
+                                    <th class=""></th>
+                                </tr>
+                                </thead>
+                                <tbody>                                    <tr>
+                                        <td>input:</td>
+                                        <td><a href="#link_definition">LinkDefinition</a></td>
+                                        <td><span class="font-light"></span></td>
+                                    </tr>                                </tbody>
+                            </table>
+                        </div>
+                                    <div class="ml-12">
+            <p class="font-medium mt-4">Traits
+            <p>
+            <table>                    <tr>
+                                                    <td>idempotent</td>
+                            <td>[object]</td>
+                                            </tr>            </table>
+        </div>
+    
+                                        
+                                        
+                    
+    <h2 id="wasmbus_data" class="mt-8 border-t-2 border-gray-300">
+        <a href="#wasmbus_data">wasmbusData</a><span class="text-lg pl-4">(structure)</span>
+    </h2><p class="font-light ml-6">data sent via wasmbus</p>
+        <div class="ml-12">
+        <table>
+            <thead>
+            <tr>
+                <th class="w-48"></th>
+                <th class="w-48"></th>
+                <th class=""></th>
+            </tr>
+            </thead>
+            <tbody>            </tbody>
+        </table>
+    </div>
+                <div class="ml-12">
+            <p class="font-medium mt-4">Traits
+            <p>
+            <table>                    <tr>
+                                                    <td><a href="../org_wasmcloud_model.html#codegen_rust">org.wasmcloud.model#codegenRust</a></td>
+                            <td>[object]</td>
+                                            </tr>            </table>
+        </div>
+    
+
+                                    
+                                        
+    <h2 id="wasm_cloud_entity" class="mt-8 border-t-2 border-gray-300">
+        <a href="#wasm_cloud_entity">WasmCloudEntity</a><span class="text-lg pl-4">(structure)</span>
+    </h2>
+                        <div class="ml-12">
+                            <table>
+                                <thead>
+                                <tr>
+                                    <th class="w-48"></th>
+                                    <th class="w-48"></th>
+                                    <th class=""></th>
+                                </tr>
+                                </thead>
+                                <tbody>                                    <tr>
+                                        <td>contractId:</td>
+                                        <td><a href="../org_wasmcloud_model.html#capability_contract_id">org.wasmcloud.model#CapabilityContractId</a></td>
+                                        <td><span class="font-light"></span></td>
+                                    </tr>                                    <tr>
+                                        <td>linkName:</td>
+                                        <td>String</td>
+                                        <td><span class="font-light"></span></td>
+                                    </tr>                                    <tr>
+                                        <td>publicKey:</td>
+                                        <td>String</td>
+                                        <td><span class="font-light"></span></td>
+                                    </tr>                                </tbody>
+                            </table>
+                        </div>    
+                            </div>
+    </div>
+</body>
+</html>
