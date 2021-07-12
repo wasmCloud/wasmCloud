@@ -435,6 +435,6 @@ fn toml_json(toml_opt: TomlJsonOpt) -> Result<()> {
         let generic: std::collections::BTreeMap<String, toml::Value> = toml::from_str(&data)?;
         serde_json::to_vec(&generic)?
     };
-    std::io::stdout().write(&out)?;
+    std::io::stdout().write_all(&out)?;
     Ok(())
 }
