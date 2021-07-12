@@ -1,14 +1,9 @@
 use async_trait::async_trait;
-use wasmbus_rpc::{
-    context::Context,
-    core::{HealthCheckRequest, HealthCheckResponse},
-    provider::prelude::*,
-    MessageDispatch, RpcError,
-};
+use wasmbus_rpc::{context::Context, provider::prelude::*, MessageDispatch, RpcError};
 use wasmcloud_example_hello::{Hello, HelloReceiver};
 
 /// Hello provider implementation
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct HelloProvider {}
 
 /// Implementation of hello provider
@@ -25,23 +20,6 @@ impl Hello for HelloProvider {
 impl HelloReceiver for HelloProvider {}
 impl ProviderDispatch for HelloProvider {}
 
-/// Capability Provider messages received from host
-#[async_trait]
-impl CapabilityProvider for HelloProvider {
-    /// Perform health check. Called at regular intervals by host
-    async fn health_request(
-        &self,
-        _ctx: &context::Context<'_>,
-        _arg: &HealthCheckRequest,
-    ) -> Result<HealthCheckResponse, RpcError> {
-        println!("------ hello provider responding to health check");
-        Ok(HealthCheckResponse {
-            healthy: true,
-            message: None,
-        })
-    }
-}
-
 #[async_trait]
 impl MessageDispatch for HelloProvider {
     async fn dispatch(
@@ -50,7 +28,7 @@ impl MessageDispatch for HelloProvider {
         message: Message<'_>,
     ) -> Result<Message<'static>, RpcError> {
         // this would iterate through Traits, but there's only one here
-        let resp = HelloReceiver::dispatch(self, ctx, &&message).await?;
+        let resp = HelloReceiver::dispatch(self, ctx, &message).await?;
         Ok(resp)
     }
 }

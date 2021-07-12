@@ -8,30 +8,33 @@ TARGET_BASE=../../../target
 CARGO=cargo
 RUST_DEPS = Cargo.toml $(wildcard src/*) Makefile
 
-
-PROJECT = $(shell $(WELD) toml-json Cargo.toml | jq -r '.package.name')
-VERSION = $(shell $(WELD) toml-json Cargo.toml | jq -r '.package.version')
 CAPID = wasmcloud:example:hello
 NAME = "Hello Provider (Rust)"
 VENDOR = "wasmCloud"
 REVISION = 1
 
 TARGET_LINUX = x86_64-unknown-linux-gnu
-
 TARGET_MAC = x86_64-apple-darwin
+
+PROJECT = $(shell $(WELD) toml-json Cargo.toml | jq -r '.package.name') 
+VERSION = $(shell $(WELD) toml-json Cargo.toml | jq -r '.package.version')
 
 RELEASE_TARGET_LINUX = $(TARGET_BASE)/$(TARGET_LINUX)/release/$(PROJECT)
 DEBUG_TARGET_LINUX = $(TARGET_BASE)/$(TARGET_LINUX)/debug/$(PROJECT)
 RELEASE_TARGET_MAC = $(TARGET_BASE)/$(TARGET_MAC)/release/$(PROJECT)
 DEBUG_TARGET_MAC = $(TARGET_BASE)/$(TARGET_MAC)/debug/$(PROJECT)
 
+
 DIST_BIN = build/hello-linux
 DIST_PAR = build/hello.par.gz
 DIST_EXS = build/exs.out
 
-.PHONY: all build release clean
 
-all: $(DIST_BIN) $(DIST_PAR) $(DIST_EXS)
+all:: $(DIST_BIN) $(DIST_PAR) $(DIST_EXS)
+
+clean:
+	$(CARGO) clean
+	rm -rf build $(DIST_BIN) $(DIST_PAR) $(DIST_EXS)
 
 #build-linux: $(DEBUG_TARGET_LINUX)
 #build-mac: $(DEBUG_TARGET_MAC)
@@ -67,9 +70,6 @@ $(RELEASE_TARGET_LINUX): $(WELD) $(RUST_DEPS)
 $(RELEASE_TARGET_MAC): $(WELD) $(RUST_DEPS)
 	$(CARGO) build --release --target $(TARGET_MAC)
 
-clean:
-	$(CARGO) clean
-	rm -f build #  $(DIST_BIN) $(DIST_PAR) $(DIST_EXS)
 
 $(DIST_PAR): $(RELEASE_TARGET_LINUX)
 	@mkdir -p $(dir $@)
@@ -90,3 +90,5 @@ $(DIST_PAR): $(RELEASE_TARGET_LINUX)
 
 inspect claims: $(DIST_PAR)
 	wash par inspect $(DIST_PAR)
+
+.PHONY: all build release clean

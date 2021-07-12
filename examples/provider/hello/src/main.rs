@@ -1,37 +1,65 @@
 //! # wasmCloud Hello Provider
 //!
-//! Topics relevant to a capability provider:
-//!
-//! RPC:
-//!   * wasmbus.rpc.{prefix}.{provider_key}.{link_name} - Get Invocation, answer InvocationResponse
-//!   * wasmbus.rpc.{prefix}.{public_key}.{link_name}.linkdefs.get - Query all link defs for this provider. (queue subscribed)
-//!   * wasmbus.rpc.{prefix}.{public_key}.{link_name}.linkdefs.del - Remove a link def. Provider de-provisions resources for the given actor.
-//!   * wasmbus.rpc.{prefix}.{public_key}.{link_name}.linkdefs.put - Puts a link def. Provider provisions resources for the given actor.
-//!   * wasmbus.rpc.{prefix}.{public_key}.{link_name}.shutdown - Request for graceful shutdown
 
 use anyhow::anyhow;
-use log::{info, warn};
-use std::result::Result;
-use std::sync::Arc;
-use wasmbus_rpc::provider::{HostBridge, ProviderHandler};
-
-//use std::sync::mpsc::channel;
-mod hello_rpc;
-use crate::hello_rpc::HelloProvider;
+use log::info;
 use once_cell::sync::OnceCell;
 use std::time::Duration;
 use tokio::sync::oneshot::error::TryRecvError;
+use wasmbus_rpc::provider::{HostBridge, ProviderHandler};
+use wasmbus_rpc::{
+    core::{HealthCheckRequest, HealthCheckResponse},
+    RpcError,
+};
 
-static BRIDGE: OnceCell<Arc<HostBridge>> = OnceCell::new();
+mod hello_rpc;
+use crate::hello_rpc::HelloProvider;
 
-/// handle link add/delete and shutdown in this trait,
-impl ProviderHandler for HelloProvider {}
+static BRIDGE: OnceCell<HostBridge> = OnceCell::new();
+
+/// Your provider can handle any of these methods
+/// to receive notification of new actor links, deleted links,
+/// and for handling health check.
+/// The default handlers are implemented in the trait ProviderHandler.
+impl ProviderHandler for HelloProvider {
+    /// Perform health check. Called at regular intervals by host
+    fn health_request(&self, _arg: &HealthCheckRequest) -> Result<HealthCheckResponse, RpcError> {
+        Ok(HealthCheckResponse {
+            healthy: true,
+            message: None,
+        })
+    }
+
+    /*
+    /// Provider should perform any operations needed for a new link,
+    /// including setting up per-actor resources, and checking authorization.
+    /// If the link is allowed, return true, otherwise return false to deny the link.
+    /// This message is idempotent - provider must be able to handle
+    /// duplicates
+    fn put_link(&self, ld: &LinkDefinition) -> Result<bool, RpcError> {
+        Ok(true)
+    }
+     */
+
+    /*
+    /// Notify the provider that the link is dropped
+    fn delete_link(&self, actor_id: &str) {}
+     */
+
+    /*
+    /// Handle system shutdown message
+    fn shutdown(&self) -> Result<(), Infallible> {
+        Ok(())
+    }
+     */
+}
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
-    //let (log_tx, log_rx) = std::sync::mpsc::channel(); //tokio::sync::mpsc::channel(1);
-    let (log_tx, log_rx) = crossbeam::channel::bounded(0);
     pretty_env_logger::init();
+    // create logging channel so all logs can be sent from main thread.
+    // The channel bound is 0 so that a thread will block until it's been logged.
+    let (log_tx, log_rx) = crossbeam::channel::bounded(0);
 
     info!("Initializing hello provider");
 
@@ -44,12 +72,9 @@ async fn main() -> Result<(), anyhow::Error> {
     // TODO: get real nats address and credentials from the host/env
     let nc = nats::connect("0.0.0.0:4222").map_err(|e| anyhow!("nats connection failed: {}", e))?;
 
-    let provider = Arc::new(HelloProvider::default());
+    let provider = HelloProvider::default();
 
-    let _ = BRIDGE.set(Arc::new(HostBridge {
-        nats: Some(nc.clone()),
-        ..Default::default()
-    }));
+    let _ = BRIDGE.set(HostBridge::new(nc.clone(), log_tx));
 
     BRIDGE
         .get()
@@ -59,18 +84,19 @@ async fn main() -> Result<(), anyhow::Error> {
             &host_data.link_name,
             provider,
             shutdown_tx,
-            log_tx,
         )
         .map_err(|e| anyhow!("fatal error setting up subscriptions: {}", e))?;
 
-    warn!("Hello provider is ready for requests (5)");
-    let timeout = Duration::from_millis(50);
+    info!("Hello provider is ready for requests (8)");
 
+    // every 50ms, check for new log messages.
+    let timeout = Duration::from_millis(50);
     loop {
         match log_rx.recv_timeout(timeout) {
+            // if we have received a log message, continue
+            // so that we check immediately - a group of messages that
+            // arrive together will be printed with no delay between them.
             Ok((level, s)) => {
-                //info!("log: {}, {}\r\n", level, s);
-                //eprintln!("log: {}, {}", level, s);
                 log::logger().log(
                     &log::Record::builder()
                         .args(format_args!("{}", s))
@@ -86,6 +112,8 @@ async fn main() -> Result<(), anyhow::Error> {
             }
         }
 
+        // on each iteration of the loop, after all pending logs
+        // have been written out, check for shutdown signal
         match shutdown_rx.try_recv() {
             Ok(_) => {
                 // got the shutdown signal
@@ -103,7 +131,8 @@ async fn main() -> Result<(), anyhow::Error> {
     //let _wait_for_shutdown = shutdown_rx.await;
     eprintln!("********** Hello server exiting");
 
-    // process pending messages and unsubscribe all subscriptions
+    // Flush outgoing buffers and unsubscribe all subscriptions.
+    // Most of the subscriptions have alrady been drained.
     let _ = nc.drain();
 
     Ok(())
