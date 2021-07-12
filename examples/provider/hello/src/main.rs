@@ -74,7 +74,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
     let provider = HelloProvider::default();
 
-    let _ = BRIDGE.set(HostBridge::new(nc.clone(), log_tx));
+    let _ = BRIDGE.set(HostBridge::new(nc.clone(), &host_data, log_tx));
 
     BRIDGE
         .get()

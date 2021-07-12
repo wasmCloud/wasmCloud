@@ -56,22 +56,6 @@ pub fn load_host_data() -> Result<HostData, anyhow::Error> {
     Ok(host_data)
 }
 
-/*
-/// The response to an invocation
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub struct HostData {
-    pub host_id: String,
-    pub lattice_rpc_prefix: String,
-    pub link_name: String,
-    pub lattice_rpc_user_jwt: String,
-    pub lattice_rpc_user_seed: String,
-    pub lattice_rpc_url: String,
-    pub provider_key: String,
-    #[serde(default)]
-    pub env_values: HashMap<String, String>,
-}
- */
-
 #[derive(Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WasmCloudEntity {
     pub public_key: String,
@@ -141,13 +125,18 @@ pub struct HostBridge {
 }
 
 impl HostBridge {
-    pub fn new(nats: NatsClient, log_tx: crossbeam::channel::Sender<LogEntry>) -> HostBridge {
+    pub fn new(
+        nats: NatsClient,
+        host_data: &HostData,
+        log_tx: crossbeam::channel::Sender<LogEntry>,
+    ) -> HostBridge {
         HostBridge {
             inner: Arc::new(HostBridgeInner {
                 nats,
                 log_tx,
                 subs: RwLock::new(Vec::new()),
                 links: RwLock::new(HashMap::new()),
+                lattice_prefix: host_data.lattice_rpc_prefix.clone(),
             }),
         }
     }
@@ -161,6 +150,7 @@ impl Deref for HostBridge {
     }
 }
 
+#[doc(hidden)]
 pub struct HostBridgeInner {
     subs: RwLock<Vec<Subscription>>,
     /// Table of actors that are bound to this provider
@@ -168,6 +158,7 @@ pub struct HostBridgeInner {
     links: RwLock<HashMap<String, LinkDefinition>>,
     nats: NatsClient,
     log_tx: crossbeam::channel::Sender<LogEntry>,
+    lattice_prefix: String,
 }
 
 impl HostBridge {
@@ -181,13 +172,6 @@ impl HostBridge {
 
     fn log(&self, level: log::Level, s: String) {
         let _ = self.log_tx.send((level, s));
-    }
-
-    /// returns copy of all links
-    fn get_links(&self) -> Result<Vec<LinkDefinition>, RpcError> {
-        let guard = self.links.read().unwrap();
-        let links = guard.values().cloned().collect();
-        Ok(links)
     }
 
     /// Stores actor with link definition
@@ -243,49 +227,10 @@ impl HostBridge {
         }
         let nats = self.nats.clone();
 
-        // Link Get
-        let link_get_topic = format!(
-            "wasmbus.rpc.default.{}.{}.linkdefs.get",
-            &provider_key, link_name
-        );
-        let sub = nats.queue_subscribe(&link_get_topic, &link_get_topic)?;
-        //let pk = provider_key.to_string();
-        self.subs.write().unwrap().push(sub.clone());
-        let this = self.clone();
-        tokio::task::spawn(async move {
-            for msg in sub.iter() {
-                debug!("Received request for linkdefs.\n");
-                let map = match this.get_links() {
-                    Ok(links) => links
-                        .into_iter()
-                        .map(|ld| (ld.actor_id.to_string(), ld))
-                        .collect::<HashMap<String, LinkDefinition>>(),
-                    Err(e) => {
-                        error!("get_links failed: {}\n", &e.to_string(),);
-                        // return a dummy empty map
-                        HashMap::new()
-                    }
-                };
-                // It should be sufficient to return Vec<LinkDefinition>,
-                // but the current api is defined to return a serialized map,
-                // so generate that here
-                let defs: Vec<u8> = match serialize(&map) {
-                    Ok(defs) => defs,
-                    Err(e) => {
-                        error!("Error serializing link defs: {}", e.to_string());
-                        Vec::new()
-                    }
-                };
-                if let Err(e) = msg.respond(defs) {
-                    error!("error respond to linkdefs: {}", e);
-                }
-            }
-        });
-
         // Link Delete
         let link_del_topic = format!(
-            "wasmbus.rpc.default.{}.{}.linkdefs.del",
-            &provider_key, &link_name
+            "wasmbus.rpc.{}.{}.{}.linkdefs.del",
+            &self.lattice_prefix, &provider_key, &link_name
         );
         let sub = nats.subscribe(&link_del_topic)?;
         self.subs.write().unwrap().push(sub.clone());
@@ -310,8 +255,8 @@ impl HostBridge {
 
         // Link Put
         let ldput_topic = format!(
-            "wasmbus.rpc.default.{}.{}.linkdefs.put",
-            &provider_key, &link_name
+            "wasmbus.rpc.{}.{}.{}.linkdefs.put",
+            &self.lattice_prefix, &provider_key, &link_name
         );
         let sub = nats.subscribe(&ldput_topic)?;
         self.subs.write().unwrap().push(sub.clone());
@@ -350,8 +295,8 @@ impl HostBridge {
 
         // Shutdown
         let shutdown_topic = format!(
-            "wasmbus.rpc.default.{}.{}.shutdown",
-            &provider_key, link_name
+            "wasmbus.rpc.{}.{}.{}.shutdown",
+            &self.lattice_prefix, &provider_key, link_name
         );
         let sub = nats.subscribe(&shutdown_topic)?;
         // don't add this sub to subs list
@@ -410,8 +355,10 @@ impl HostBridge {
             }
         });
 
-        // TODO: Add RPC handling for all app operations
-        let rpc_topic = format!("wasmbus.rpc.default.{}.{}", &provider_key, link_name);
+        let rpc_topic = format!(
+            "wasmbus.rpc.{}.{}.{}",
+            &self.lattice_prefix, &provider_key, link_name
+        );
         let sub = nats.subscribe(&rpc_topic)?;
         self.subs.write().unwrap().push(sub.clone());
         tokio::task::spawn(async move {
