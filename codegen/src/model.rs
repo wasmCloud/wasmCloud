@@ -14,7 +14,7 @@ use atelier_core::model::{
     HasIdentity, Identifier, Model, NamespaceID, ShapeID,
 };
 use lazy_static::lazy_static;
-use serde::de::DeserializeOwned;
+use serde::{de::DeserializeOwned, Deserialize};
 use std::str::FromStr;
 
 const WASMCLOUD_MODEL_NAMESPACE: &str = "org.wasmcloud.model";
@@ -55,6 +55,7 @@ pub fn wasmcloud_model_namespace() -> &'static NamespaceID {
     &WASMCLOUD_MODEL_NAMESPACE_ID
 }
 
+#[cfg(feature = "wasmbus")]
 /// shape id of trait @wasmbus
 pub fn wasmbus_trait() -> &'static ShapeID {
     &WASMBUS_TRAIT_ID
@@ -185,4 +186,35 @@ pub fn value_to_json(value: &NodeValue) -> JsonValue {
         NodeValue::Boolean(v) => JsonValue::Bool(*v),
         NodeValue::String(v) => JsonValue::String(v.clone()),
     }
+}
+
+/*
+/// if member is not present during deserialization we can fill in the natural default value
+/// This doesn't actually work .. the member type is a user-defined type, which in turn is a map or a list.
+/// To make it work, we need to follow the chain of types to get to the leaf/underlying-type.
+pub fn has_default(member: &MemberShape) -> bool {
+    let id = member.target();
+    id == &ShapeID::new_unchecked("smithy.api", "List", None)
+        || id == &ShapeID::new_unchecked("smithy.api", "Map", None)
+}
+ */
+
+/*
+pub fn get_metadata(model: &Model) -> JsonMap {
+    let mut metadata_map = JsonMap::default();
+    for (key, value) in model.metadata() {
+        let _ = metadata_map.insert(key.to_string(), value_to_json(value));
+    }
+    metadata_map
+}
+ */
+
+/// Map namespace to package
+///   rust: crate_name
+///   other-languages: TBD
+#[derive(Clone, Deserialize)]
+pub struct PackageName {
+    pub namespace: String,
+    #[serde(rename = "crate")]
+    pub crate_name: String,
 }

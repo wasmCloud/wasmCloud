@@ -1,3 +1,6 @@
+use crate::model::value_to_json;
+#[cfg(feature = "wasmbus")]
+use crate::wasmbus_model::Wasmbus;
 use crate::BytesMut;
 use crate::{
     config::LanguageConfig,
@@ -5,10 +8,10 @@ use crate::{
     gen::CodeGen,
     model::{
         codegen_rust_trait, get_operation, get_trait, is_opt_namespace, serialization_trait,
-        wasmcloud_model_namespace, CommentKind,
+        wasmcloud_model_namespace, CommentKind, PackageName,
     },
-    model_gen::{CodegenRust, Serialization, Wasmbus},
     render::Renderer,
+    wasmbus_model::{CodegenRust, Serialization},
     writer::Writer,
     JsonValue, ParamMap,
 };
@@ -32,10 +35,13 @@ use atelier_core::{
     },
 };
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
     str::FromStr,
     string::ToString,
 };
+
+const WASMBUS_RPC_CRATE: &str = "wasmbus_rpc";
 
 /// Default templates
 pub const RUST_TEMPLATES: &[(&str, &str)] = &[
@@ -103,6 +109,8 @@ enum Ty<'typ> {
 pub struct RustCodeGen {
     /// if set, limits declaration output to this namespace only
     namespace: Option<NamespaceID>,
+    packages: HashMap<String, PackageName>,
+    import_core: String,
 }
 
 impl CodeGen for RustCodeGen {
@@ -111,7 +119,7 @@ impl CodeGen for RustCodeGen {
     /// and/or perform additional processing before output files are created.
     fn init(
         &mut self,
-        _model: Option<&Model>,
+        model: Option<&Model>,
         _lc: &LanguageConfig,
         _output_dir: &Path,
         renderer: &mut Renderer,
@@ -120,6 +128,22 @@ impl CodeGen for RustCodeGen {
             renderer.add_template(*t)?;
         }
         self.namespace = None;
+        self.import_core = WASMBUS_RPC_CRATE.to_string();
+
+        if let Some(model) = model {
+            if let Some(packages) = model.metadata_value("package") {
+                let packages:Vec<PackageName> = serde_json::from_value(value_to_json(packages))
+                    .map_err(|e| Error::Model(format!("invalid metadata format for package, expecting format '[{{namespace:\"org.example\",crate:\"path::module\"}}]':  {}", e.to_string())))?;
+                for p in packages.iter() {
+                    eprintln!(" package map {}---{}", &p.namespace, &p.crate_name);
+                    self.packages.insert(p.namespace.to_string(), p.clone());
+                }
+            } else {
+                println!("METADATA BUT NO PACKAGE");
+            }
+        } else {
+            println!("NO METADATA");
+        }
         Ok(())
     }
 
@@ -156,6 +180,10 @@ impl CodeGen for RustCodeGen {
             Some(ns) => Some(NamespaceID::from_str(ns)?),
             None => None,
         };
+        self.import_core = match params.get("crate") {
+            Some(JsonValue::String(c)) if c == WASMBUS_RPC_CRATE => "crate".to_string(),
+            _ => WASMBUS_RPC_CRATE.to_string(),
+        };
         Ok(())
     }
 
@@ -163,27 +191,43 @@ impl CodeGen for RustCodeGen {
         &mut self,
         w: &mut Writer,
         model: &Model,
-        params: &ParamMap,
+        _params: &ParamMap,
     ) -> Result<()> {
-        // special case: if the crate we are generating is "wasmbus_rpc" then we have to import it with "crate::".
-        let import_crate = match params.get("crate") {
-            Some(JsonValue::String(c)) if c == "wasmbus_rpc" => "crate",
-            _ => "wasmbus_rpc",
-        };
-        w.write(&format!(
+        w.write(
             r#"// This file is generated automatically using wasmcloud-weld and smithy model definitions
-//
-#[allow(unused_imports)]
-use {}::{{
-    client, context, deserialize, serialize, MessageDispatch, RpcError,
-    Transport, Message,
-}};
-#[allow(unused_imports)] use async_trait::async_trait;
-#[allow(unused_imports)] use serde::{{Deserialize, Serialize}};
-#[allow(unused_imports)] use std::borrow::Cow;
-"#, import_crate))
-        ;
+               //
+            "#);
+        match &self.namespace {
+            Some(n) if n == wasmcloud_model_namespace() => {
+                // the base model has minimal dependencies
+                w.write(
+                    r#"
+                #![allow(dead_code)]
+                use serde::{{Deserialize, Serialize}};
+             "#,
+                );
+            }
+            _ => {
+                // all others use standard frontmatter
 
+                // special case for imports:
+                // if the crate we are generating is "wasmbus_rpc" then we have to import it with "crate::".
+                w.write(&format!(
+                    r#"
+                #![allow(clippy::ptr_arg)]
+                #[allow(unused_imports)]
+                use {}::{{
+                    client, context, deserialize, serialize, MessageDispatch, RpcError,
+                    Transport, Message,
+                }};
+                #[allow(unused_imports)] use serde::{{Deserialize, Serialize}};
+                #[allow(unused_imports)] use async_trait::async_trait;
+                #[allow(unused_imports)] use std::borrow::Cow;
+                "#,
+                    &self.import_core
+                ));
+            }
+        }
         w.write(&format!(
             "\npub const SMITHY_VERSION : &str = \"{}\";\n\n",
             model.smithy_version().to_string()
@@ -380,22 +424,45 @@ impl RustCodeGen {
                     };
                     w.write(ty);
                 } else if id.namespace() == wasmcloud_model_namespace() {
-                    let ty = match name.as_ref() {
-                        "U64" => "u64",
-                        "U32" => "u32",
-                        "U8" => "u8",
-                        "I64" => "i64",
-                        "I32" => "i32",
-                        "I8" => "i8",
-                        "U16" => "u16",
-                        "I16" => "i16",
-                        other => other, // just write the shape name
+                    match name.as_bytes() {
+                        b"U64" | b"U32" | b"U16" | b"U8" => {
+                            w.write(b"u");
+                            w.write(&name.as_bytes()[1..])
+                        }
+                        b"I64" | b"I32" | b"I16" | b"I8" => {
+                            w.write(b"i");
+                            w.write(&name.as_bytes()[1..])
+                        }
+                        _ => {
+                            if self.namespace.is_some()
+                                && self.namespace.as_ref().unwrap() == wasmcloud_model_namespace()
+                            {
+                                w.write(&self.to_type_name(&name));
+                            } else {
+                                w.write(&self.import_core);
+                                w.write(b"::model::");
+                                w.write(&self.to_type_name(&name));
+                            }
+                        }
                     };
-                    w.write(ty);
-                } else {
-                    // TODO: need to be able to lookup from namespace to canonical module path
-                    // TODO: need to use explicit lib path
+                } else if self.namespace.is_some()
+                    && id.namespace() == self.namespace.as_ref().unwrap()
+                {
+                    // we are in the same namespace so we don't need to specify namespace
                     w.write(&self.to_type_name(&id.shape_name().to_string()));
+                } else {
+                    match self.packages.get(&id.namespace().to_string()) {
+                        Some(package) => {
+                            // the crate name should be valid rust syntax. If not, they'll get an error with rustc
+                            w.write(&package.crate_name);
+                            w.write(b"::");
+                            w.write(&self.to_type_name(&id.shape_name().to_string()));
+                        }
+                        None => {
+                            return Err(Error::Model(format!("underined create for namespace {} for symbol {}. Make sure codegen.toml includes all dependent namespaces",
+                                    &id.namespace(), &id)));
+                        }
+                    }
                 }
             }
         }
@@ -528,7 +595,13 @@ impl RustCodeGen {
         w.write(b"pub struct ");
         self.write_ident(&mut w, id);
         w.write(b" {\n");
-        for member in strukt.members() {
+        // sort fields for deterministic output
+        let mut fields = strukt
+            .members()
+            .map(|m| m.to_owned())
+            .collect::<Vec<MemberShape>>();
+        fields.sort_by_key(|f| f.id().to_owned());
+        for member in fields.iter() {
             self.apply_documentation_traits(&mut w, member.id(), member.traits());
 
             // use the declared name for serialization, unless an override is declared
@@ -556,6 +629,12 @@ impl RustCodeGen {
                 // trait structs are deserialized only and need default values if not required
                 w.write(r#"  #[serde(default)]"#);
             }
+            // commented this out because it doesn't work (see comment in model.rs)
+            //} else if has_default(member) {
+            //    // for list and map types, even if they aren't optional,
+            //    // use default empty collection on deserialization if null or missing
+            //    w.write(r#"  #[serde(default)]"#);
+            //}
             w.write(b"  pub ");
             w.write(&rust_field_name);
             w.write(b": ");
@@ -588,21 +667,9 @@ impl RustCodeGen {
         service: &Service,
     ) -> Result<()> {
         self.apply_documentation_traits(&mut w, service_id, service_traits);
-        let wasmbus: Option<Wasmbus> = get_trait(service_traits, crate::model::wasmbus_trait())?;
-        if let Some(wasmbus) = wasmbus {
-            if let Some(contract) = wasmbus.contract_id {
-                let text = format!("wasmbus.contractId: {}", &contract);
-                self.write_documentation(&mut w, service_id, &text);
-            }
-            if wasmbus.provider_receive {
-                let text = "wasmbus.providerReceive";
-                self.write_documentation(&mut w, service_id, text);
-            }
-            if wasmbus.actor_receive {
-                let text = "wasmbus.actorReceive";
-                self.write_documentation(&mut w, service_id, text);
-            }
-        }
+
+        #[cfg(feature = "wasmbus")]
+        self.add_wasmbus_comments(&mut w, service_id, service_traits)?;
 
         w.write(b"#[async_trait]\npub trait ");
         self.write_ident(&mut w, service_id);
@@ -623,6 +690,32 @@ impl RustCodeGen {
             w.write(b";\n");
         }
         w.write(b"}\n\n");
+        Ok(())
+    }
+
+    #[cfg(feature = "wasmbus")]
+    fn add_wasmbus_comments(
+        &mut self,
+        mut w: &mut Writer,
+        service_id: &Identifier,
+        service_traits: &AppliedTraits,
+    ) -> Result<()> {
+        // currently the only thing we do with Wasmbus in codegen is add comments
+        let wasmbus: Option<Wasmbus> = get_trait(service_traits, crate::model::wasmbus_trait())?;
+        if let Some(wasmbus) = wasmbus {
+            if let Some(contract) = wasmbus.contract_id {
+                let text = format!("wasmbus.contractId: {}", &contract);
+                self.write_documentation(&mut w, service_id, &text);
+            }
+            if wasmbus.provider_receive {
+                let text = "wasmbus.providerReceive";
+                self.write_documentation(&mut w, service_id, text);
+            }
+            if wasmbus.actor_receive {
+                let text = "wasmbus.actorReceive";
+                self.write_documentation(&mut w, service_id, text);
+            }
+        }
         Ok(())
     }
 

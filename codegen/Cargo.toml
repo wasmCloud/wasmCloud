@@ -11,7 +11,9 @@ documentation = "https://docs.rs/weld-codegen"
 readme = "README.md"
 
 [features]
-default = [ "Timestamp" ]
+default = [ "wasmbus" ]
+wasmbus = []
+experimental_types = [ "BigInteger", "BigDecimal", "Timestamp"]
 BigInteger = []
 BigDecimal = []
 Timestamp = []
