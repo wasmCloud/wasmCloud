@@ -1,3 +1,4 @@
+metadata package = [ { namespace: "org.wasmcloud.example.hello", crate: "wasmcloud_example_hello" } ]
 namespace org.wasmcloud.example.hello
 
 use org.wasmcloud.core#wasmbus

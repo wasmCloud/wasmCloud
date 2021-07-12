@@ -1,3 +1,4 @@
+metadata package = [ { namespace: "org.wasmcloud.example.rangekv", crate: "wasmcloud_example_rangekv" } ]
 metadata links = [
     {
         // doc links for information generator

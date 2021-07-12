@@ -5,14 +5,8 @@ CSS_BUILD_OUT = $(wildcard ../../../docgen/dev/gen/css/*.css)
 CSS_DEST = $(addprefix $(HTML_TARGET)/css/,$(notdir $(CSS_BUILD_OUT)))
 CONFIG := ./codegen.toml
 
-
-all: doc build
-
-build::
-	@echo
-
-release::
-	@echo
+all: doc
+	$(WELD) gen --lang rust $(ALL_MODELS) $(BASE_MODELS)
 
 clean::
 	rm -rf $(HTML_TARGET)/*.html

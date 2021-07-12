@@ -1,7 +1,20 @@
+metadata package = [ { namespace: "org.wasmcloud.model", crate: "wasmbus_rpc::model" } ]
+
 namespace org.wasmcloud.model
 
-/// definitions for api modeling
-/// These are modifications to the basic data model
+// Definitions for api modeling and code generation
+// Traits declared here _may_ be used for code generation.
+// No services should be defined here.
+
+/// Overrides for serializer & deserializer
+@trait(selector: "member")
+structure serialization {
+    /// (optional setting) Override field name when serializing and deserializing
+    /// By default, (when `name` not specified) is the exact declared name without
+    /// casing transformations. This setting does not affect the field name
+    /// produced in code generation, which is always lanaguage-idiomatic
+    name: String,
+}
 
 /// The unsignedInt trait indicates that one of the number types is unsigned
 @trait(selector: "long,integer,short,byte")
@@ -13,17 +26,6 @@ structure unsignedInt { }
 @trait(selector: "string")
 @length(min:1)
 string nonEmptyString
-
-
-/// Overrides for serializer & deserializer
-@trait(selector: "member")
-structure serialization {
-    /// (optional setting) Override field name when serializing and deserializing
-    /// By default, (when `name` not specified) is the exact declared name without
-    /// casing transformations. This setting does not affect the field name
-    /// produced in code generation, which is always lanaguage-idiomatic
-    name: String,
-}
 
 /// This trait doesn't have any functional impact on codegen. It is simply
 /// to document that the defined type is a synonym, and to silence
@@ -69,3 +71,21 @@ structure codegenRust {
     /// Instructs rust codegen to add `#[derive(Default)]` (default false)
     deriveDefault: Boolean,
 }
+
+/// a protocol defines the semantics
+/// of how a client and server communicate.
+@protocolDefinition
+@trait(selector: "service")
+structure wasmbus {
+    /// capability id such as "wasmbus:httpserver"
+    /// always required for providerReceive, but optional for actorReceive
+    contractId: CapabilityContractId,
+    /// indicates this service's operations are handled by an actor (default false)
+    actorReceive: Boolean,
+    /// indicates this service's operations are handled by an provider (default false)
+    providerReceive: Boolean,
+}
+
+/// Capability contract id, e.g. 'wasmcloud:httpserver'
+@nonEmptyString
+string CapabilityContractId

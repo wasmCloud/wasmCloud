@@ -1,33 +1,15 @@
+metadata package = [ { namespace: "org.wasmcloud.core", crate: "wasmbus_rpc::core" } ]
 namespace org.wasmcloud.core
 
 use org.wasmcloud.model#nonEmptyString
 use org.wasmcloud.model#codegenRust
 use org.wasmcloud.model#serialization
-
-/// a protocol defines the semantics
-/// of how a client and server communicate.
-@protocolDefinition
-@trait(selector: "service")
-structure wasmbus {
-    /// capability id such as "wasmbus:httpserver"
-    /// always required for providerReceive, but optional for actorReceive
-    contractId: CapabilityContractId,
-    /// indicates this service's operations are handled by an actor (default false)
-    actorReceive: Boolean,
-    /// indicates this service's operations are handled by an provider (default false)
-    providerReceive: Boolean,
-}
+use org.wasmcloud.model#CapabilityContractId
 
 /// data sent via wasmbus
 @trait(selector: "structure")
 @codegenRust( deriveDefault: true )
 structure wasmbusData {}
-
-
-/// Capability contract id, e.g. 'wasmcloud:httpserver'
-@nonEmptyString
-string CapabilityContractId
-
 
 /// Actor service
 @wasmbus(
@@ -38,17 +20,6 @@ service Actor {
   operations: [ HealthRequest ]
 }
 
-/// CapabilityProvider service handles link + health-check messages from host
-/// (need to finalize Link apis)
-@wasmbus(
-    providerReceive: true,
-)
-service CapabilityProvider {
-  version: "0.1",
-  operations: [ HealthRequest ]
-
-  //operations: [ PutLink, DeleteLink, GetLinks, HasLink, HealthRequest ]
-}
 
 /// instruction to capability provider to bind actor
 @idempotent
@@ -103,7 +74,6 @@ structure LinkDefinition {
 }
 
 
-
 /// Return value from actors and providers for health check status
 @wasmbusData
 structure HealthCheckResponse {
@@ -135,3 +105,86 @@ map LinkSettings {
 list ActorLinks {
     member: LinkDefinition
 }
+
+/// The response to an invocation
+structure HostData {
+    @required
+    @serialization(name: "host_id")
+    hostId: String,
+
+    @required
+    @serialization(name: "lattice_rpc_prefix")
+    latticeRpcPrefix: String,
+
+    @required
+    @serialization(name: "link_name")
+    linkName: String,
+
+    @required
+    @serialization(name: "lattice_rpc_user_jwt")
+    latticeRpcUserJwt: String,
+
+    @required
+    @serialization(name: "lattice_rpc_user_seed")
+    latticeRpcUserSeed: String,
+
+    @required
+    @serialization(name: "lattice_rpc_url")
+    latticeRpcUrl: String,
+
+    @required
+    @serialization(name: "provider_key")
+    providerKey: String,
+
+    @required
+    @serialization(name: "env_values")
+    envValues: HostEnvValues,
+}
+
+map HostEnvValues {
+    key: String,
+    value: String,
+}
+
+/// RPC message to capability provider
+structure Invocation {
+    @required
+    origin: WasmCloudEntity,
+
+    @required
+    target: WasmCloudEntity,
+
+    @required
+    operation: String,
+
+    @required
+    msg: Blob,
+
+    @required
+    id: String,
+
+    @required
+    @serialization(name: "encoded_class")
+    encodedClass: String,
+
+    @required
+    @serialization(name: "host_id")
+    hostId: String,
+}
+
+structure WasmCloudEntity {
+
+    @required
+    @serialization(name: "public_key")
+    publicKey: String,
+
+    @required
+    @serialization(name: "link_name")
+    linkName: String,
+
+    @required
+    @serialization(name: "contract_id")
+    contractId: CapabilityContractId,
+}
+
+

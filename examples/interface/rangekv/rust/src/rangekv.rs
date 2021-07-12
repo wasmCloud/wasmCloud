@@ -1,5 +1,7 @@
 // This file is generated automatically using wasmcloud-weld and smithy model definitions
 //
+
+#![allow(clippy::ptr_arg)]
 #[allow(unused_imports)]
 use async_trait::async_trait;
 #[allow(unused_imports)]
@@ -24,9 +26,6 @@ pub type KeyList = Vec<Key>;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct KeyRangeResponse {
-    /// first key in range returned
-    #[serde(rename = "startKey")]
-    pub start_key: String,
     /// number of items returned
     pub count: u32,
     /// values returned
@@ -36,6 +35,9 @@ pub struct KeyRangeResponse {
     #[serde(rename = "nextKey")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_key: Option<String>,
+    /// first key in range returned
+    #[serde(rename = "startKey")]
+    pub start_key: String,
 }
 
 /// A structure containing a key and value
@@ -51,15 +53,15 @@ pub type KeyValueList = Vec<KeyValue>;
 /// result of Values range query
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct KeyValueRangeResponse {
+    /// number of items returned
+    pub count: u32,
+    /// returned list of key-value pairs
+    pub items: KeyValueList,
     /// startKey that should be used on the next request
     /// If this value is empty, there are no more keys
     #[serde(rename = "nextKey")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_key: Option<String>,
-    /// number of items returned
-    pub count: u32,
-    /// returned list of key-value pairs
-    pub items: KeyValueList,
     /// first key in range returned
     #[serde(rename = "startKey")]
     pub start_key: String,

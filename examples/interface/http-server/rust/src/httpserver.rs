@@ -1,5 +1,7 @@
 // This file is generated automatically using wasmcloud-weld and smithy model definitions
 //
+
+#![allow(clippy::ptr_arg)]
 #[allow(unused_imports)]
 use async_trait::async_trait;
 #[allow(unused_imports)]
@@ -19,25 +21,25 @@ pub type Headers = std::collections::HashMap<String, String>;
 /// HttpRequest contains data sent to actor about the http request
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HttpRequest {
-    pub method: String,
     #[serde(with = "serde_bytes")]
     pub body: Vec<u8>,
     pub header: Headers,
+    pub method: String,
+    pub path: String,
     #[serde(rename = "queryString")]
     pub query_string: String,
-    pub path: String,
 }
 
 /// HttpResponse contains the actor's response to return to the http client
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HttpResponse {
-    /// statusCode should be 200 if the request was correctly handled
-    #[serde(rename = "statusCode")]
-    pub status_code: u32,
-    pub status: String,
     #[serde(with = "serde_bytes")]
     pub body: Vec<u8>,
     pub header: Headers,
+    pub status: String,
+    /// statusCode should be 200 if the request was correctly handled
+    #[serde(rename = "statusCode")]
+    pub status_code: u32,
 }
 
 /// HttpServer is the contract to be implemented by actor

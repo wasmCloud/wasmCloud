@@ -1,5 +1,7 @@
 // This file is generated automatically using wasmcloud-weld and smithy model definitions
 //
+
+#![allow(clippy::ptr_arg)]
 #[allow(unused_imports)]
 use async_trait::async_trait;
 #[allow(unused_imports)]

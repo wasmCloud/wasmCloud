@@ -1,3 +1,4 @@
+metadata package = [ { namespace: "org.wasmcloud.example.httpServer", crate: "wasmcloud_example_httpserver" } ]
 namespace org.wasmcloud.example.httpServer
 // interface for a simple http server
 
