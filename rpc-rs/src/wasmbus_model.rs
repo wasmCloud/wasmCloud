@@ -1,17 +1,13 @@
 // This file is generated automatically using wasmcloud-weld and smithy model definitions
 //
-#[allow(unused_imports)]
-use crate::{
-    client, context, deserialize, serialize, Message, MessageDispatch, RpcError, Transport,
-};
-#[allow(unused_imports)]
-use async_trait::async_trait;
-#[allow(unused_imports)]
+
+#![allow(dead_code)]
 use serde::{Deserialize, Serialize};
-#[allow(unused_imports)]
-use std::borrow::Cow;
 
 pub const SMITHY_VERSION: &str = "1.0";
+
+/// Capability contract id, e.g. 'wasmcloud:httpserver'
+pub type CapabilityContractId = String;
 
 /// signed 16-bit int
 pub type I16 = i16;
@@ -66,8 +62,25 @@ pub struct Serialization {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Synonym {}
 
-/// definitions for api modeling
-/// These are modifications to the basic data model
 /// The unsignedInt trait indicates that one of the number types is unsigned
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct UnsignedInt {}
+
+/// a protocol defines the semantics
+/// of how a client and server communicate.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Wasmbus {
+    /// indicates this service's operations are handled by an actor (default false)
+    #[serde(rename = "actorReceive")]
+    #[serde(default)]
+    pub actor_receive: bool,
+    /// capability id such as "wasmbus:httpserver"
+    /// always required for providerReceive, but optional for actorReceive
+    #[serde(rename = "contractId")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contract_id: Option<CapabilityContractId>,
+    /// indicates this service's operations are handled by an provider (default false)
+    #[serde(rename = "providerReceive")]
+    #[serde(default)]
+    pub provider_receive: bool,
+}

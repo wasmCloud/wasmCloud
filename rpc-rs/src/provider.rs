@@ -2,39 +2,35 @@
 
 //! common provider wasmbus support
 //!
-//!
-//!
 //
 //   * wasmbus.rpc.{prefix}.{provider_key}.{link_name} - Get Invocation, answer InvocationResponse
 //   * wasmbus.rpc.{prefix}.{public_key}.{link_name}.linkdefs.get - Query all link defs for this provider. (queue subscribed)
 //   * wasmbus.rpc.{prefix}.{public_key}.{link_name}.linkdefs.del - Remove a link def. Provider de-provisions resources for the given actor.
 //   * wasmbus.rpc.{prefix}.{public_key}.{link_name}.linkdefs.put - Puts a link def. Provider provisions resources for the given actor.
-//   * wasmbus.rpc.{prefix}.{public_key}.{link_name}.shutdown - Request for graceful shutdown
+//   * wasmbus.rpc.{prefix}.{public_key}.{link_name}.linkdefs - Request for graceful shutdown
 
 use crate::{
-    core::{CapabilityProvider, HealthCheckRequest, HealthCheckResponse, LinkDefinition},
+    core::{HealthCheckRequest, HealthCheckResponse, HostData, LinkDefinition},
     deserialize, serialize, Message, MessageDispatch, RpcError,
 };
 use anyhow::anyhow;
 use nats::{Connection as NatsClient, Subscription};
 use serde::{Deserialize, Serialize};
-//use std::alloc::Global;
-#[allow(unused_variables)]
-use log::{debug, error, info, warn};
-use std::borrow::Cow;
-use std::collections::HashMap;
-use std::convert::Infallible;
-use std::sync::Arc;
-use std::sync::RwLock;
+use std::{
+    borrow::Cow,
+    collections::HashMap,
+    convert::Infallible,
+    ops::Deref,
+    sync::{Arc, RwLock},
+};
 use tokio::sync::oneshot;
 
 pub type HostShutdownEvent = String;
 
-pub trait ProviderDispatch: MessageDispatch + CapabilityProvider + ProviderHandler {}
+pub trait ProviderDispatch: MessageDispatch + ProviderHandler {}
 
 pub mod prelude {
     pub use super::ProviderDispatch;
-    pub use crate::core::CapabilityProvider;
     pub use crate::{client, context, Message, MessageDispatch, RpcError};
 
     //pub use crate::Timestamp;
@@ -60,6 +56,7 @@ pub fn load_host_data() -> Result<HostData, anyhow::Error> {
     Ok(host_data)
 }
 
+/*
 /// The response to an invocation
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct HostData {
@@ -73,6 +70,7 @@ pub struct HostData {
     #[serde(default)]
     pub env_values: HashMap<String, String>,
 }
+ */
 
 #[derive(Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WasmCloudEntity {
@@ -112,6 +110,8 @@ pub trait ProviderHandler: Sync {
     /// Provider should perform any operations needed for a new link,
     /// including setting up per-actor resources, and checking authorization.
     /// If the link is allowed, return true, otherwise return false to deny the link.
+    /// This message is idempotent - provider must be able to handle
+    /// duplicates
     #[allow(unused_variables)]
     fn put_link(&self, ld: &LinkDefinition) -> Result<bool, RpcError> {
         Ok(true)
@@ -121,28 +121,53 @@ pub trait ProviderHandler: Sync {
     #[allow(unused_variables)]
     fn delete_link(&self, actor_id: &str) {}
 
+    /// Perform health check. Called at regular intervals by host
+    fn health_request(&self, arg: &HealthCheckRequest) -> Result<HealthCheckResponse, RpcError>;
+
     /// Handle system shutdown message
     fn shutdown(&self) -> Result<(), Infallible> {
         Ok(())
     }
 }
 
+pub type LogEntry = (log::Level, String);
+
+/// HostBridge manages the NATS connection to the host,
+/// and processes subscriptions for links, health-checks, and rpc messages.
+/// The Provider callbacks
+#[derive(Clone)]
 pub struct HostBridge {
-    pub subs: RwLock<Vec<Subscription>>,
-    /// Table of actors that are bound to this provider
-    /// Key is actor_id / actor public key
-    pub links: RwLock<HashMap<String, LinkDefinition>>,
-    pub nats: Option<NatsClient>,
+    inner: Arc<HostBridgeInner>,
 }
 
-impl Default for HostBridge {
-    fn default() -> HostBridge {
+impl HostBridge {
+    pub fn new(nats: NatsClient, log_tx: crossbeam::channel::Sender<LogEntry>) -> HostBridge {
         HostBridge {
-            subs: RwLock::new(Vec::new()),
-            links: RwLock::new(HashMap::new()),
-            nats: None,
+            inner: Arc::new(HostBridgeInner {
+                nats,
+                log_tx,
+                subs: RwLock::new(Vec::new()),
+                links: RwLock::new(HashMap::new()),
+            }),
         }
     }
+}
+
+impl Deref for HostBridge {
+    type Target = HostBridgeInner;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+pub struct HostBridgeInner {
+    subs: RwLock<Vec<Subscription>>,
+    /// Table of actors that are bound to this provider
+    /// Key is actor_id / actor public key
+    links: RwLock<HashMap<String, LinkDefinition>>,
+    nats: NatsClient,
+    log_tx: crossbeam::channel::Sender<LogEntry>,
 }
 
 impl HostBridge {
@@ -154,10 +179,14 @@ impl HostBridge {
         }
     }
 
+    fn log(&self, level: log::Level, s: String) {
+        let _ = self.log_tx.send((level, s));
+    }
+
     /// returns copy of all links
     fn get_links(&self) -> Result<Vec<LinkDefinition>, RpcError> {
         let guard = self.links.read().unwrap();
-        let links = guard.values().map(|ld| ld.clone()).collect();
+        let links = guard.values().cloned().collect();
         Ok(links)
     }
 
@@ -166,7 +195,7 @@ impl HostBridge {
         self.links
             .write()
             .unwrap()
-            .insert(ld.actor_id.to_string(), ld.clone());
+            .insert(ld.actor_id.to_string(), ld);
     }
 
     /// Deletes link
@@ -184,29 +213,47 @@ impl HostBridge {
         self.links.read().unwrap().get(actor_id).cloned()
     }
 
-    pub fn connect(
+    pub fn connect<P>(
         &'static self,
         provider_key: String,
         link_name: &str,
-        provider_impl: Arc<dyn ProviderDispatch + Send + Sync>, // + Send + Sync + 'static),
+        provider_impl: P,
         shutdown_tx: oneshot::Sender<HostShutdownEvent>,
-        _log_tx0: crossbeam::channel::Sender<LogEvent>,
-    ) -> Result<(), anyhow::Error> {
-        let nats = self.nats.as_ref().unwrap().clone();
+    ) -> Result<(), anyhow::Error>
+    where
+        P: ProviderDispatch + Send + Sync,
+        P: 'static,
+        P: Clone,
+    {
+        use std::fmt;
 
-        error!("++++++++++ connect main thread\n");
+        // send all logging to main thread. This is intentionally blocking
+        // (channel size=0) so that logs are "immediate"
+        macro_rules! debug {
+            ($($arg:tt)*) => ({ self.log(log::Level::Debug, fmt::format(format_args!($($arg)*))); })
+        }
+        macro_rules! warn {
+            ($($arg:tt)*) => ({ self.log(log::Level::Warn, fmt::format(format_args!($($arg)*))); })
+        }
+        macro_rules! info {
+            ($($arg:tt)*) => ({ self.log(log::Level::Info, fmt::format(format_args!($($arg)*))); })
+        }
+        macro_rules! error {
+            ($($arg:tt)*) => ({ self.log(log::Level::Error, fmt::format(format_args!($($arg)*))); })
+        }
+        let nats = self.nats.clone();
+
         // Link Get
-        let ldget_topic = format!(
+        let link_get_topic = format!(
             "wasmbus.rpc.default.{}.{}.linkdefs.get",
             &provider_key, link_name
         );
-        let sub = nats.queue_subscribe(&ldget_topic, &ldget_topic)?;
+        let sub = nats.queue_subscribe(&link_get_topic, &link_get_topic)?;
         //let pk = provider_key.to_string();
         self.subs.write().unwrap().push(sub.clone());
-        let (this, subh) = (self.clone(), sub.clone());
-        //let log_tx = log_tx0.clone();
+        let this = self.clone();
         tokio::task::spawn(async move {
-            for msg in subh.iter() {
+            for msg in sub.iter() {
                 debug!("Received request for linkdefs.\n");
                 let map = match this.get_links() {
                     Ok(links) => links
@@ -225,7 +272,7 @@ impl HostBridge {
                 let defs: Vec<u8> = match serialize(&map) {
                     Ok(defs) => defs,
                     Err(e) => {
-                        error!("Error serializing link defs: {}", e);
+                        error!("Error serializing link defs: {}", e.to_string());
                         Vec::new()
                     }
                 };
@@ -236,16 +283,15 @@ impl HostBridge {
         });
 
         // Link Delete
-        let lddel_topic = format!(
+        let link_del_topic = format!(
             "wasmbus.rpc.default.{}.{}.linkdefs.del",
             &provider_key, &link_name
         );
-        let sub = nats.subscribe(&lddel_topic)?;
+        let sub = nats.subscribe(&link_del_topic)?;
         self.subs.write().unwrap().push(sub.clone());
-        let (this, subh, provider) = (self.clone(), sub.clone(), provider_impl.clone());
-        //let log_tx = log_tx0.clone();
+        let (this, provider) = (self.clone(), provider_impl.clone());
         tokio::task::spawn(async move {
-            for msg in subh.iter() {
+            for msg in sub.iter() {
                 match deserialize::<LinkDefinition>(&msg.data) {
                     Ok(ld) => {
                         this.delete_link(&ld.actor_id);
@@ -253,7 +299,10 @@ impl HostBridge {
                         provider.delete_link(&ld.actor_id);
                     }
                     Err(e) => {
-                        error!("error deserializing link-delete parameter: {}", e);
+                        error!(
+                            "error deserializing link-delete parameter: {}",
+                            e.to_string()
+                        );
                     }
                 }
             }
@@ -266,14 +315,13 @@ impl HostBridge {
         );
         let sub = nats.subscribe(&ldput_topic)?;
         self.subs.write().unwrap().push(sub.clone());
-        let (this, subh, provider) = (self.clone(), sub.clone(), provider_impl.clone());
-        //let log_tx = log_tx0.clone();
+        let (this, provider) = (self.clone(), provider_impl.clone());
         tokio::task::spawn(async move {
-            for msg in subh.iter() {
+            for msg in sub.iter() {
                 match deserialize::<LinkDefinition>(&msg.data) {
                     Ok(ld) => {
                         if this.is_linked(&ld.actor_id) {
-                            // if alrady linked, print warning
+                            // if already linked, print warning
                             warn!(
                                 "Received LD put for existing link definition from {} to {}\n",
                                 &ld.actor_id, &ld.provider_id
@@ -289,12 +337,12 @@ impl HostBridge {
                                 warn!("put_link denied: {}\n", &ld.actor_id);
                             }
                             Err(e) => {
-                                error!("put_link {} failed: {}\n", &ld.actor_id, e);
+                                error!("put_link {} failed: {}\n", &ld.actor_id, e.to_string());
                             }
                         }
                     }
                     Err(e) => {
-                        error!("error serializing put-link parameter: {}", e);
+                        error!("error serializing put-link parameter: {}", e.to_string());
                     }
                 }
             }
@@ -307,10 +355,9 @@ impl HostBridge {
         );
         let sub = nats.subscribe(&shutdown_topic)?;
         // don't add this sub to subs list
-        let (this, subh, provider) = (self.clone(), sub.clone(), provider_impl.clone());
-        //let log_tx = log_tx0.clone();
+        let (this, provider) = (self.clone(), provider_impl.clone());
         tokio::task::spawn(async move {
-            for msg in subh.iter() {
+            if let Some(msg) = sub.next() {
                 info!("Received termination signal. Shutting down capability provider.");
                 // drain all subscriptions (other than this one)
                 for sub in this.subs.read().unwrap().iter() {
@@ -324,27 +371,25 @@ impl HostBridge {
                 if let Err(e) = shutdown_tx.send("bye".to_string()) {
                     error!("Problem shutting down:  failure to send signal: {}\n", e);
                 }
-                // exit this thread
-                break;
             }
+            // if subh.next() returns None, subscription has been cancelled or the connection was dropped.
+            // in either case, quit
         });
 
         // Health check
         let health_topic = format!("wasmbus.rpc.{}.{}.health", &provider_key, &link_name);
         let sub = nats.subscribe(&health_topic)?;
         self.subs.write().unwrap().push(sub.clone());
-        let (subh, provider) = (sub.clone(), provider_impl.clone());
-        //let log_tx = log_tx0.clone();
+        let provider = provider_impl.clone();
         tokio::task::spawn(async move {
-            let ctx = crate::context::Context::default();
-            for msg in subh.iter() {
-                debug!("received health check request");
+            for msg in sub.iter() {
+                debug!("received health check request\n");
                 // placeholder arg
                 let arg = HealthCheckRequest {};
-                let resp = match provider.health_request(&ctx, &arg).await {
+                let resp = match provider.health_request(&arg) {
                     Ok(resp) => resp,
                     Err(e) => {
-                        error!("error generating health check response: {}", &e);
+                        error!("error generating health check response: {}", &e.to_string());
                         HealthCheckResponse {
                             healthy: false,
                             message: Some(e.to_string()),
@@ -369,14 +414,11 @@ impl HostBridge {
         let rpc_topic = format!("wasmbus.rpc.default.{}.{}", &provider_key, link_name);
         let sub = nats.subscribe(&rpc_topic)?;
         self.subs.write().unwrap().push(sub.clone());
-        let subh = sub.clone();
-        //let log_tx = log_tx0.clone();
         tokio::task::spawn(async move {
             let provider = provider_impl.clone();
             let ctx = crate::context::Context::default();
-            for msg in subh.iter() {
+            for msg in sub.iter() {
                 debug!("received an RPC message");
-                error!("++++++++++ RPC thread");
                 let inv = match deserialize::<Invocation>(&msg.data) {
                     Ok(inv) => {
                         debug!(
@@ -386,7 +428,7 @@ impl HostBridge {
                         inv
                     }
                     Err(e) => {
-                        error!("received corrupt invocation: {}\n", e);
+                        error!("received corrupt invocation: {}\n", e.to_string());
                         continue;
                     }
                 };
