@@ -1,42 +1,58 @@
+# examples/actor/echo
+
 COLOR ?= always # Valid COLOR options: {always, auto, never}
 CARGO := cargo --color $(COLOR)
 KEYDIR ?= .keys
-NAME := "echo"
 REVISION := 8
+RUST_DEPS := Cargo.toml Makefile $(wildcard src/*.rs) .cargo/config.toml
 TARGET := target/wasm32-unknown-unknown
 VERSION := $(shell cargo metadata --no-deps --format-version 1 | jq -r '.packages[] .version' | head -1)
 
+FNAME := echo
+DIST_WASM := build/$(FNAME)_s.wasm
+DIST_EXS := build/exs.out
 
-all: release
+all: $(DIST_WASM) $(DIST_EXS)
 
-build:
-	@$(CARGO) build
-	wash claims sign $(TARGET)/debug/$(NAME).wasm -c wasmcloud:httpserver --name "$(NAME)" --ver $(VERSION) --rev $(REVISION)
+$(DIST_WASM): $(TARGET)/release/$(FNAME)_s.wasm
+	@mkdir -p $(dir $@)
+	cp -p $< $@
 
-check:
-	@$(CARGO) check
+.ONESHELL:
+$(DIST_EXS): $(DIST_WASM)
+	@mkdir -p $(dir $@)
+	@cat <<- EOF > $@
+	%{
+		name: "$(FNAME)",
+		path: "$(abspath $(DIST_WASM))",
+	    key: "$(shell wash claims inspect $(DIST_WASM) -o json | jq -r .module )",
+	},
+	EOF
+
+$(TARGET)/debug/$(FNAME).wasm: $(RUST_DEPS)
+	$(CARGO) build
+
+$(TARGET)/release/$(FNAME).wasm: $(RUST_DEPS)
+	$(CARGO) build --release
+
+# sign it (debug or release)
+%/$(FNAME)_s.wasm: %/$(FNAME).wasm
+	wash claims sign $< \
+		-c wasmcloud:httpserver \
+		-c wasmcloud:example:echo \
+		--name "$(FNAME)" --ver $(VERSION) --rev $(REVISION)
+
+check clippy doc test update:
+	$(CARGO) $@
 
 clean:
-	@$(CARGO) clean
+	$(CARGO) clean
+	rm -rf build
 
-doc:
-	@$(CARGO) doc
+claims: $(DIST_WASM)
+	wash claims inspect $(DIST_WASM)
 
-test:
-	@$(CARGO) test
+actor_id: $(DIST_WASM)
+	wash claims inspect $(DIST_WASM) -o json | jq -r .module
 
-update:
-	@$(CARGO) update
-
-release:
-	@$(CARGO) build --release
-	wash claims sign $(TARGET)/release/$(NAME).wasm -c wasmcloud:httpserver --name "$(NAME)" --ver $(VERSION) --rev $(REVISION)
-
-actor_id: release
-	wash claims inspect $(TARGET)/release/$(NAME)_s.wasm -o json | jq .module | tr -d "\""
-
-run:
-	export ACTOR_ID=$(shell make actor_id 2>&1 | tail -1)
-	RUST_BACKTRACE=1 RUST_LOG=debug wasmcloud -m manifest.yaml --allowed-insecure localhost:5000
-
-.PHONY: all build release check clean doc test update
+.PHONY: check clean doc test update
