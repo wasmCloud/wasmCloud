@@ -503,7 +503,7 @@ fn add_base_helpers(hb: &mut Handlebars) {
                             )
                         }
                         _ => format!(
-                            "<a href=\"../{}.html#{}\">{}</a>",
+                            "<a href=\"./{}.html#{}\">{}</a>",
                             &strings::to_snake_case(&sid_ns.to_string()),
                             &strings::to_snake_case(&sid.shape_name().to_string()),
                             sid
