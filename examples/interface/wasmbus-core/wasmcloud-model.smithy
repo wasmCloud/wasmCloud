@@ -1,3 +1,8 @@
+// wasmcloud-model.smithy
+// Base types and traits used for wasmcloud models
+//
+
+// Tell the code generator how to reference symbols defined in this namespace
 metadata package = [ { namespace: "org.wasmcloud.model", crate: "wasmbus_rpc::model" } ]
 
 namespace org.wasmcloud.model
@@ -85,6 +90,12 @@ structure wasmbus {
     /// indicates this service's operations are handled by an provider (default false)
     providerReceive: Boolean,
 }
+
+/// data sent via wasmbus
+/// This trait is required for all messages sent via wasmbus
+@trait(selector: "simpleType,list,set,map,structure")
+@codegenRust( deriveDefault: true )
+structure wasmbusData {}
 
 /// Capability contract id, e.g. 'wasmcloud:httpserver'
 @nonEmptyString

@@ -34,7 +34,7 @@ pub type U64 = i64;
 pub type U8 = i8;
 
 /// Rust codegen traits
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct CodegenRust {
     /// Instructs rust codegen to add `#[derive(Default)]` (default false)
     #[serde(rename = "deriveDefault")]
@@ -46,7 +46,7 @@ pub struct CodegenRust {
 pub type NonEmptyString = String;
 
 /// Overrides for serializer & deserializer
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Serialization {
     /// (optional setting) Override field name when serializing and deserializing
     /// By default, (when `name` not specified) is the exact declared name without
@@ -59,16 +59,16 @@ pub struct Serialization {
 /// This trait doesn't have any functional impact on codegen. It is simply
 /// to document that the defined type is a synonym, and to silence
 /// the default validator that prints a notice for synonyms with no traits.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Synonym {}
 
 /// The unsignedInt trait indicates that one of the number types is unsigned
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct UnsignedInt {}
 
 /// a protocol defines the semantics
 /// of how a client and server communicate.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Wasmbus {
     /// indicates this service's operations are handled by an actor (default false)
     #[serde(rename = "actorReceive")]
@@ -84,3 +84,8 @@ pub struct Wasmbus {
     #[serde(default)]
     pub provider_receive: bool,
 }
+
+/// data sent via wasmbus
+/// This trait is required for all messages sent via wasmbus
+#[derive(Default, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct WasmbusData {}

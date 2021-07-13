@@ -1,15 +1,17 @@
+// wasmcloud-core.smithy
+// Core definitions for wasmcloud platform
+//
+
+// Tell the code generator how to reference symbols defined in this namespace
 metadata package = [ { namespace: "org.wasmcloud.core", crate: "wasmbus_rpc::core" } ]
+
 namespace org.wasmcloud.core
 
 use org.wasmcloud.model#nonEmptyString
 use org.wasmcloud.model#codegenRust
 use org.wasmcloud.model#serialization
 use org.wasmcloud.model#CapabilityContractId
-
-/// data sent via wasmbus
-@trait(selector: "structure")
-@codegenRust( deriveDefault: true )
-structure wasmbusData {}
+use org.wasmcloud.model#wasmbusData
 
 /// Actor service
 @wasmbus(
@@ -18,32 +20,6 @@ structure wasmbusData {}
 service Actor {
   version: "0.1",
   operations: [ HealthRequest ]
-}
-
-
-/// instruction to capability provider to bind actor
-@idempotent
-operation PutLink {
-    input: LinkDefinition
-}
-
-/// instruction to capability provider to remove actor
-@idempotent
-operation DeleteLink {
-    input: String
-}
-
-/// Returns list of all actor links for this provider
-@readonly
-operation GetLinks {
-    output: ActorLinks
-}
-
-/// Returns true if the link is defined
-@readonly
-operation HasLink {
-    input: String,
-    output: Boolean,
 }
 
 /// Link definition for an actor
@@ -106,7 +82,8 @@ list ActorLinks {
     member: LinkDefinition
 }
 
-/// The response to an invocation
+/// initialization data for a capability provider
+@wasmbusData
 structure HostData {
     @required
     @serialization(name: "host_id")
@@ -141,12 +118,14 @@ structure HostData {
     envValues: HostEnvValues,
 }
 
+/// Environment settings for initializing a capability provider
 map HostEnvValues {
     key: String,
     value: String,
 }
 
 /// RPC message to capability provider
+@wasmbusData
 structure Invocation {
     @required
     origin: WasmCloudEntity,
@@ -172,6 +151,7 @@ structure Invocation {
     hostId: String,
 }
 
+@wasmbusData
 structure WasmCloudEntity {
 
     @required
@@ -187,4 +167,20 @@ structure WasmCloudEntity {
     contractId: CapabilityContractId,
 }
 
+/// Response to an invocation
+@wasmbusData
+structure InvocationResponse {
+
+    /// serialize response message
+    @required
+    msg: Blob,
+
+    /// optional error message
+    error: String,
+
+    /// id connecting this response to the invocation
+    @required
+    @serialization(name: "invocation_id")
+    invocationId: String,
+}
 
