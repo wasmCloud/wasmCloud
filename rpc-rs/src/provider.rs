@@ -2,20 +2,16 @@
 
 //! common provider wasmbus support
 //!
-//
-//   * wasmbus.rpc.{prefix}.{provider_key}.{link_name} - Get Invocation, answer InvocationResponse
-//   * wasmbus.rpc.{prefix}.{public_key}.{link_name}.linkdefs.get - Query all link defs for this provider. (queue subscribed)
-//   * wasmbus.rpc.{prefix}.{public_key}.{link_name}.linkdefs.del - Remove a link def. Provider de-provisions resources for the given actor.
-//   * wasmbus.rpc.{prefix}.{public_key}.{link_name}.linkdefs.put - Puts a link def. Provider provisions resources for the given actor.
-//   * wasmbus.rpc.{prefix}.{public_key}.{link_name}.linkdefs - Request for graceful shutdown
 
 use crate::{
-    core::{HealthCheckRequest, HealthCheckResponse, HostData, LinkDefinition},
+    core::{
+        HealthCheckRequest, HealthCheckResponse, HostData, Invocation, InvocationResponse,
+        LinkDefinition,
+    },
     deserialize, serialize, Message, MessageDispatch, RpcError,
 };
 use anyhow::anyhow;
 use nats::{Connection as NatsClient, Subscription};
-use serde::{Deserialize, Serialize};
 use std::{
     borrow::Cow,
     collections::HashMap,
@@ -56,38 +52,6 @@ pub fn load_host_data() -> Result<HostData, anyhow::Error> {
     Ok(host_data)
 }
 
-#[derive(Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WasmCloudEntity {
-    pub public_key: String,
-    pub link_name: String,
-    pub contract_id: String,
-}
-
-#[derive(Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Invocation {
-    pub origin: WasmCloudEntity,
-    pub target: WasmCloudEntity,
-    pub operation: String,
-    // I believe we determined this is necessary to properly round trip the "bytes"
-    // type with Elixir so it doesn't treat it as a "list of u8s"
-    #[serde(with = "serde_bytes")]
-    pub msg: Vec<u8>,
-    pub id: String,
-    pub encoded_claims: String,
-    pub host_id: String,
-}
-
-/// The response to an invocation
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub struct InvocationResponse {
-    // I believe we determined this is necessary to properly round trip the "bytes"
-    // type with Elixir so it doesn't treat it as a "list of u8s"
-    #[serde(with = "serde_bytes")]
-    pub msg: Vec<u8>,
-    pub error: Option<String>,
-    pub invocation_id: String,
-}
-
 /// CapabilityProvider handling of messages from host
 /// The HostBridge handles most messages and forwards the remainder to this handler
 pub trait ProviderHandler: Sync {
@@ -114,11 +78,20 @@ pub trait ProviderHandler: Sync {
     }
 }
 
+/// format of log message sent to main thread for output to logger
 pub type LogEntry = (log::Level, String);
 
 /// HostBridge manages the NATS connection to the host,
 /// and processes subscriptions for links, health-checks, and rpc messages.
-/// The Provider callbacks
+/// Callbacks from HostBridge are implemented by the provider in the [[ProviderHandler]] implementation.
+///
+/// HostBridge subscribes to these nats subscriptions on behalf of the provider
+/// - wasmbus.rpc.{prefix}.{provider_key}.{link_name}.rpc - Get Invocation, answer InvocationResponse
+/// - wasmbus.rpc.{prefix}.{provider_key}.{link_name}.health - Health check
+/// - wasmbus.rpc.{prefix}.{provider_key}.{link_name}.shutdown - Request for graceful shutdown
+/// - wasmbus.rpc.{prefix}.{provider_key}.{link_name}.linkdefs.del - Remove a link def. Provider de-provisions resources for the given actor.
+/// - wasmbus.rpc.{prefix}.{provider_key}.{link_name}.linkdefs.put - Puts a link def. Provider provisions resources for the given actor.
+///
 #[derive(Clone)]
 pub struct HostBridge {
     inner: Arc<HostBridgeInner>,
@@ -198,6 +171,7 @@ impl HostBridge {
         self.links.read().unwrap().get(actor_id).cloned()
     }
 
+    /// Implement subscriber listener threads and provider callbacks
     pub fn connect<P>(
         &'static self,
         provider_key: String,
@@ -356,6 +330,8 @@ impl HostBridge {
             }
         });
 
+        // RPC messages
+        //
         let rpc_topic = format!(
             "wasmbus.rpc.{}.{}.{}",
             &self.lattice_prefix, &provider_key, link_name
