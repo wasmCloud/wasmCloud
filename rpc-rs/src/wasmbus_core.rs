@@ -33,7 +33,7 @@ pub struct HealthCheckResponse {
     pub message: Option<String>,
 }
 
-/// The response to an invocation
+/// initialization data for a capability provider
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct HostData {
     pub env_values: HostEnvValues,
@@ -53,6 +53,7 @@ pub struct HostData {
     pub provider_key: String,
 }
 
+/// Environment settings for initializing a capability provider
 pub type HostEnvValues = std::collections::HashMap<String, String>;
 
 /// RPC message to capability provider
