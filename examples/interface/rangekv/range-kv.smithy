@@ -1,4 +1,10 @@
+// http-server.smithy
+// Definition of the wasmbus:httpserver capability contract
+//
+
+// Tell the code generator how to reference symbols defined in this namespace
 metadata package = [ { namespace: "org.wasmcloud.example.rangekv", crate: "wasmcloud_example_rangekv" } ]
+
 metadata links = [
     {
         // doc links for information generator

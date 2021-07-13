@@ -19,23 +19,27 @@ pub const SMITHY_VERSION: &str = "1.0";
 pub type Headers = std::collections::HashMap<String, String>;
 
 /// HttpRequest contains data sent to actor about the http request
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct HttpRequest {
-    #[serde(with = "serde_bytes")]
+    #[serde(default)]
     pub body: Vec<u8>,
     pub header: Headers,
+    #[serde(default)]
     pub method: String,
+    #[serde(default)]
     pub path: String,
     #[serde(rename = "queryString")]
+    #[serde(default)]
     pub query_string: String,
 }
 
 /// HttpResponse contains the actor's response to return to the http client
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct HttpResponse {
-    #[serde(with = "serde_bytes")]
+    #[serde(default)]
     pub body: Vec<u8>,
     pub header: Headers,
+    #[serde(default)]
     pub status: String,
     /// statusCode should be 200 if the request was correctly handled
     #[serde(rename = "statusCode")]
@@ -43,8 +47,6 @@ pub struct HttpResponse {
 }
 
 /// HttpServer is the contract to be implemented by actor
-/// wasmbus.contractId: wasmcloud::httpserver
-/// wasmbus.actorReceive
 #[async_trait]
 pub trait HttpServer {
     async fn handle_request(

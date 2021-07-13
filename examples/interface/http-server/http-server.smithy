@@ -1,6 +1,11 @@
+// http-server.smithy
+// Definition of the wasmbus:httpserver capability contract
+//
+
+// Tell the code generator how to reference symbols defined in this namespace
 metadata package = [ { namespace: "org.wasmcloud.example.httpServer", crate: "wasmcloud_example_httpserver" } ]
+
 namespace org.wasmcloud.example.httpServer
-// interface for a simple http server
 
 use org.wasmcloud.core#actorReceiver
 use org.wasmcloud.core#CapabilityContractId

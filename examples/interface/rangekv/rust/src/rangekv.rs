@@ -24,7 +24,7 @@ pub type Key = String;
 /// A list of keys
 pub type KeyList = Vec<Key>;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KeyRangeResponse {
     /// number of items returned
     pub count: u32,
@@ -37,11 +37,12 @@ pub struct KeyRangeResponse {
     pub next_key: Option<String>,
     /// first key in range returned
     #[serde(rename = "startKey")]
+    #[serde(default)]
     pub start_key: String,
 }
 
 /// A structure containing a key and value
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KeyValue {
     pub key: Key,
     pub value: BlobValue,
@@ -51,7 +52,7 @@ pub struct KeyValue {
 pub type KeyValueList = Vec<KeyValue>;
 
 /// result of Values range query
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KeyValueRangeResponse {
     /// number of items returned
     pub count: u32,
@@ -64,11 +65,12 @@ pub struct KeyValueRangeResponse {
     pub next_key: Option<String>,
     /// first key in range returned
     #[serde(rename = "startKey")]
+    #[serde(default)]
     pub start_key: String,
 }
 
 /// Structure that contains an optional value
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct MaybeValue {
     /// a value or none
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -76,7 +78,7 @@ pub struct MaybeValue {
 }
 
 /// Input a range request (Keys or Values)
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct RangeRequest {
     /// optional last key of the requested range (inclusive)
     #[serde(rename = "lastKey")]
@@ -87,11 +89,10 @@ pub struct RangeRequest {
     pub limit: u32,
     /// the initial key at start of range
     #[serde(rename = "startKey")]
+    #[serde(default)]
     pub start_key: String,
 }
 
-/// wasmbus.contractId: wasmcloud::example:rangekv
-/// wasmbus.providerReceive
 #[async_trait]
 pub trait RangeKeyValue {
     /// Gets a value for a specified key.

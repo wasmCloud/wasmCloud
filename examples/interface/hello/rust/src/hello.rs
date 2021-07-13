@@ -15,19 +15,17 @@ use wasmbus_rpc::{
 
 pub const SMITHY_VERSION: &str = "1.0";
 
-/// Simple service that responds to a hello message
-/// wasmbus.contractId: wasmcloud:example:hello
-/// wasmbus.providerReceive
-/// wasmbus.actorReceive
+/// Simple service that responds to a message
 #[async_trait]
 pub trait Hello {
-    /// Send a hello message
+    /// Send a string message
+    /// .Response is "Hello " + input message
     async fn say_hello(&self, ctx: &context::Context<'_>, arg: &String)
         -> Result<String, RpcError>;
 }
 
 /// HelloReceiver receives messages defined in the Hello service trait
-/// Simple service that responds to a hello message
+/// Simple service that responds to a message
 #[async_trait]
 pub trait HelloReceiver: MessageDispatch + Hello {
     async fn dispatch(
@@ -54,7 +52,7 @@ pub trait HelloReceiver: MessageDispatch + Hello {
 }
 
 /// HelloSender sends messages to a Hello service
-/// Simple service that responds to a hello message
+/// Simple service that responds to a message
 #[derive(Debug)]
 pub struct HelloSender<T> {
     transport: T,
@@ -70,7 +68,8 @@ impl<T: Transport> HelloSender<T> {
 #[async_trait]
 impl<T: Transport + std::marker::Sync + std::marker::Send> Hello for HelloSender<T> {
     #[allow(unused)]
-    /// Send a hello message
+    /// Send a string message
+    /// .Response is "Hello " + input message
     async fn say_hello(
         &self,
         ctx: &context::Context<'_>,
