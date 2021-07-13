@@ -1,4 +1,5 @@
-use crate::model::value_to_json;
+use crate::error::print_warning;
+use crate::model::{value_to_json, wasmbus_data_trait};
 #[cfg(feature = "wasmbus")]
 use crate::wasmbus_model::Wasmbus;
 use crate::BytesMut;
@@ -7,8 +8,8 @@ use crate::{
     error::{Error, Result},
     gen::CodeGen,
     model::{
-        codegen_rust_trait, get_operation, get_trait, is_opt_namespace, serialization_trait,
-        wasmcloud_model_namespace, CommentKind, PackageName,
+        codegen_rust_trait, get_operation, get_trait, has_default, is_opt_namespace,
+        serialization_trait, wasmcloud_model_namespace, CommentKind, PackageName,
     },
     render::Renderer,
     wasmbus_model::{CodegenRust, Serialization},
@@ -106,14 +107,26 @@ enum Ty<'typ> {
 }
 
 #[derive(Default)]
-pub struct RustCodeGen {
+pub struct RustCodeGen<'model> {
     /// if set, limits declaration output to this namespace only
     namespace: Option<NamespaceID>,
     packages: HashMap<String, PackageName>,
     import_core: String,
+    model: Option<&'model Model>,
 }
 
-impl CodeGen for RustCodeGen {
+impl<'model> RustCodeGen<'model> {
+    pub fn new(model: Option<&'model Model>) -> Self {
+        Self {
+            model,
+            namespace: None,
+            packages: HashMap::default(),
+            import_core: String::default(),
+        }
+    }
+}
+
+impl<'model> CodeGen for RustCodeGen<'model> {
     /// Initialize code generator and renderer for language output.j
     /// This hook is called before any code is generated and can be used to initialize code generator
     /// and/or perform additional processing before output files are created.
@@ -132,17 +145,12 @@ impl CodeGen for RustCodeGen {
 
         if let Some(model) = model {
             if let Some(packages) = model.metadata_value("package") {
-                let packages:Vec<PackageName> = serde_json::from_value(value_to_json(packages))
+                let packages: Vec<PackageName> = serde_json::from_value(value_to_json(packages))
                     .map_err(|e| Error::Model(format!("invalid metadata format for package, expecting format '[{{namespace:\"org.example\",crate:\"path::module\"}}]':  {}", e.to_string())))?;
                 for p in packages.iter() {
-                    eprintln!(" package map {}---{}", &p.namespace, &p.crate_name);
                     self.packages.insert(p.namespace.to_string(), p.clone());
                 }
-            } else {
-                println!("METADATA BUT NO PACKAGE");
             }
-        } else {
-            println!("NO METADATA");
         }
         Ok(())
     }
@@ -180,6 +188,18 @@ impl CodeGen for RustCodeGen {
             Some(ns) => Some(NamespaceID::from_str(ns)?),
             None => None,
         };
+        if let Some(ref ns) = self.namespace {
+            if self.packages.get(&ns.to_string()).is_none() {
+                print_warning(&format!(
+                    concat!(
+                        "no package metadata defined for namespace {}.",
+                        " Add a declaration like this at the top of fhe .smithy file: ",
+                        " metadata package = [ {{ namespace: \"{}\", crate: \"crate_name\" }} ]"
+                    ),
+                    ns, ns
+                ));
+            }
+        }
         self.import_core = match params.get("crate") {
             Some(JsonValue::String(c)) if c == WASMBUS_RPC_CRATE => "crate".to_string(),
             _ => WASMBUS_RPC_CRATE.to_string(),
@@ -338,7 +358,7 @@ fn is_rust_source(path: &PathBuf) -> bool {
     }
 }
 
-impl RustCodeGen {
+impl<'model> RustCodeGen<'model> {
     /// Apply documentation traits: (documentation, deprecated, unstable)
     fn apply_documentation_traits(
         &mut self,
@@ -434,15 +454,13 @@ impl RustCodeGen {
                             w.write(&name.as_bytes()[1..])
                         }
                         _ => {
-                            if self.namespace.is_some()
-                                && self.namespace.as_ref().unwrap() == wasmcloud_model_namespace()
+                            if self.namespace.is_none()
+                                || self.namespace.as_ref().unwrap() != wasmcloud_model_namespace()
                             {
-                                w.write(&self.to_type_name(&name));
-                            } else {
                                 w.write(&self.import_core);
                                 w.write(b"::model::");
-                                w.write(&self.to_type_name(&name));
                             }
+                            w.write(&self.to_type_name(&name));
                         }
                     };
                 } else if self.namespace.is_some()
@@ -504,7 +522,7 @@ impl RustCodeGen {
             Simple::Float => "f32",
             Simple::Double => "f64",
 
-            // note: traits may modify this
+            // note: in the future, codegen traits may modify this
             Simple::Document => DEFAULT_DOCUMENT_TYPE,
 
             Simple::Timestamp => {
@@ -582,16 +600,11 @@ impl RustCodeGen {
             } else {
                 false
             };
-        //if let Some(Some(Value::Object(cg_map))) = traits.get(codegen_rust_trait()) {
-        //    if let Some(Value::Boolean(enable)) = cg_map.get("deriveDefault") {
-        //        derive_default = *enable;
-        //    }
-        //};
         w.write(b"#[derive(");
         if derive_default {
             w.write(b"Default, ")
         }
-        w.write(b"Clone, Debug, Serialize, Deserialize)]\n");
+        w.write(b"Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]\n");
         w.write(b"pub struct ");
         self.write_ident(&mut w, id);
         w.write(b" {\n");
@@ -619,22 +632,54 @@ impl RustCodeGen {
             if ser_name != rust_field_name {
                 w.write(&format!("  #[serde(rename=\"{}\")] ", ser_name));
             }
+
             // for rmp-msgpack - need to use serde_bytes serializer for Blob (and Option<Blob>)
+            // otherwise Vec<u8> is written as an array of individual bytes, not a memory slice.
+            //
+            // We should only add this serde declaration if the struct is tagged with @wasmbusData.
+            // Because of the possibility of smithy models being used for messages
+            // that don't use wasmbus protocols, we don't want to "automatically"
+            // assume wasmbusData trait, even if we are compiled with (feature="wasmbus").
+            //
+            // However, we don't really need to require users to declare
+            // structs with wasmbusData - we can infer it if it's used in an operation
+            // for a service tagged with wasmbus. This would require traversing the model
+            // from all services tagged with wasmbus, looking at the inputs and outputs
+            // of all operations for those services, and, transitively, any
+            // data types referred from them, including struct fields, list members,
+            // and map keys and values.
+            // Until that traversal is implemented, assume that wasmbusData is enabled
+            // for everything. This saves developers from needing to add a wasmbusData
+            // declaration on every struct, which is error-prone.
+            // I can't think of a use case when adding serde_bytes is the wrong thing to do,
+            // even if msgpack is not used for serialization, so it seems like
+            // an acceptable simplification.
+            #[cfg(feature = "wasmbus")]
             if member.target() == &ShapeID::new_unchecked("smithy.api", "Blob", None) {
-                w.write(r#"  #[serde(with="serde_bytes")] "#);
+                if traits.get(wasmbus_data_trait()).is_some() {
+                    w.write(r#"  #[serde(with="serde_bytes")] "#);
+                }
             }
+
             if is_optional_type(member) {
-                w.write(r#"  #[serde(default, skip_serializing_if = "Option::is_none")]"#);
-            } else if is_trait_struct && !member.is_required() {
-                // trait structs are deserialized only and need default values if not required
-                w.write(r#"  #[serde(default)]"#);
+                w.write(r#"  #[serde(default, skip_serializing_if = "Option::is_none")] "#);
+            } else if (is_trait_struct && !member.is_required())
+                || has_default(self.model.unwrap(), member)
+            {
+                // trait structs are deserialized only and need default values
+                // on deserialization, so always add [serde(default)] for trait structs.
+
+                // Additionally, add [serde(default)] for types that have a natural
+                // default value. Although not required if both ends of the protocol
+                // are implemented correctly, it may improve message resiliency
+                // if we can accept structs with missing fields, if the fields
+                // can be filled in/constructed with appropriate default values.
+                // This only applies if the default is a zero, empty list/map, etc,
+                // and we don't make any attempt to determine if a user-declared
+                // struct has a zero default.
+                // See the comment for has_default for more info.
+                w.write(r#"  #[serde(default)] "#);
             }
-            // commented this out because it doesn't work (see comment in model.rs)
-            //} else if has_default(member) {
-            //    // for list and map types, even if they aren't optional,
-            //    // use default empty collection on deserialization if null or missing
-            //    w.write(r#"  #[serde(default)]"#);
-            //}
             w.write(b"  pub ");
             w.write(&rust_field_name);
             w.write(b": ");

@@ -37,7 +37,7 @@ pub const COMMON_TEMPLATES: &[(&str, &str)] = &[(
 #[derive(Debug, Default)]
 pub struct Generator {}
 
-impl Generator {
+impl<'model> Generator {
     /// Perform code generation on model, iterating through each configured OutputFile.
     /// Each file to be generated is either based on a handlebars
     /// template, which is generated with the Renderer class,
@@ -58,7 +58,7 @@ impl Generator {
     ///   The default (create is false/the flag is unspecified)) changes the fewest files
     pub fn gen(
         &self,
-        model: Option<&Model>,
+        model: Option<&'model Model>,
         config: CodegenConfig,
         templates: Vec<(String, String)>,
         output_dir: &Path,
@@ -119,7 +119,7 @@ impl Generator {
             }
             let base_params: BTreeMap<String, JsonValue> = to_json(&lc.parameters)?;
 
-            let mut cgen = gen_for_language(&language);
+            let mut cgen = gen_for_language(&language, model);
 
             // initialize generator
             cgen.init(model, &lc, &output_dir, &mut renderer)?;
@@ -195,9 +195,12 @@ impl Generator {
     }
 }
 
-fn gen_for_language(language: &OutputLanguage) -> Box<dyn CodeGen> {
+fn gen_for_language<'model>(
+    language: &OutputLanguage,
+    model: Option<&'model Model>,
+) -> Box<dyn CodeGen + 'model> {
     match language {
-        OutputLanguage::Rust => Box::new(RustCodeGen::default()),
+        OutputLanguage::Rust => Box::new(RustCodeGen::new(model)),
         OutputLanguage::Html => Box::new(DocGen::default()),
         OutputLanguage::Poly => Box::new(PolyGen::default()),
         _ => {

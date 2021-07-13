@@ -8,11 +8,15 @@ use crate::{
     error::{Error, Result},
     JsonValue,
 };
-use atelier_core::model::{
-    shapes::{AppliedTraits, HasTraits, Operation, ShapeKind},
-    values::{Number, Value as NodeValue},
-    HasIdentity, Identifier, Model, NamespaceID, ShapeID,
+use atelier_core::{
+    model::{
+        shapes::{AppliedTraits, HasTraits, MemberShape, Operation, ShapeKind},
+        values::{Number, Value as NodeValue},
+        HasIdentity, Identifier, Model, NamespaceID, ShapeID,
+    },
+    prelude::prelude_namespace_id,
 };
+use cfg_if::cfg_if;
 use lazy_static::lazy_static;
 use serde::{de::DeserializeOwned, Deserialize};
 use std::str::FromStr;
@@ -26,6 +30,7 @@ const WASMCLOUD_CORE_NAMESPACE: &str = "org.wasmcloud.core";
 const TRAIT_CODEGEN_RUST: &str = "codegenRust";
 const TRAIT_SERIALIZATION: &str = "serialization";
 const TRAIT_WASMBUS: &str = "wasmbus";
+const TRAIT_WASMBUS_DATA: &str = "wasmbusData";
 //const TRAIT_SERIALIZE_RENAME: &str = "rename";
 
 lazy_static! {
@@ -44,8 +49,13 @@ lazy_static! {
         None
     );
     static ref WASMBUS_TRAIT_ID: ShapeID = ShapeID::new(
-        NamespaceID::new_unchecked(WASMCLOUD_CORE_NAMESPACE),
+        NamespaceID::new_unchecked(WASMCLOUD_MODEL_NAMESPACE),
         Identifier::from_str(TRAIT_WASMBUS).unwrap(),
+        None
+    );
+    static ref WASMBUS_DATA_TRAIT_ID: ShapeID = ShapeID::new(
+        NamespaceID::new_unchecked(WASMCLOUD_MODEL_NAMESPACE),
+        Identifier::from_str(TRAIT_WASMBUS_DATA).unwrap(),
         None
     );
 }
@@ -59,6 +69,12 @@ pub fn wasmcloud_model_namespace() -> &'static NamespaceID {
 /// shape id of trait @wasmbus
 pub fn wasmbus_trait() -> &'static ShapeID {
     &WASMBUS_TRAIT_ID
+}
+
+#[cfg(feature = "wasmbus")]
+/// shape id of trait @wasmbusData
+pub fn wasmbus_data_trait() -> &'static ShapeID {
+    &WASMBUS_DATA_TRAIT_ID
 }
 
 /// shape id of trait @serialization
@@ -188,16 +204,53 @@ pub fn value_to_json(value: &NodeValue) -> JsonValue {
     }
 }
 
-/*
-/// if member is not present during deserialization we can fill in the natural default value
-/// This doesn't actually work .. the member type is a user-defined type, which in turn is a map or a list.
-/// To make it work, we need to follow the chain of types to get to the leaf/underlying-type.
-pub fn has_default(member: &MemberShape) -> bool {
-    let id = member.target();
-    id == &ShapeID::new_unchecked("smithy.api", "List", None)
-        || id == &ShapeID::new_unchecked("smithy.api", "Map", None)
+/// resolve shape to its underlying shape
+/// e.g., if you have a declaration "string Foo",
+/// it will resolve Foo into smithy.api#String
+pub fn resolve<'model>(model: &'model Model, shape: &'model ShapeID) -> &'model ShapeID {
+    if let Some(resolved) = model.shape(shape) {
+        resolved.id()
+    } else {
+        shape
+    }
 }
- */
+
+/// Returns true if the type has a natural default (zero, empty set/list/map, etc.).
+/// Doesn't work for user-defined structs, only (most) simple types,
+/// and set, list, and map.
+///
+/// This can be used for deserialization,
+/// to allow missing fields to be filled in with the default.
+///
+/// The smithy developers considered and rejected the idea of being able to declare
+/// a default value that is not zero (such as http status with a default 200),
+/// which would be in the realm of business logic and outside the scope of smithy.
+/// This default only applies to simple types that have a zero value,
+/// and empty sets, list, and maps.
+pub fn has_default(model: &'_ Model, member: &MemberShape) -> bool {
+    let id = resolve(model, member.target());
+
+    if id.namespace().eq(prelude_namespace_id()) {
+        let name = id.shape_name().to_string();
+        cfg_if! { if #[cfg(feature = "BigInteger")] { &name == "bigInteger" || } }
+        cfg_if! { if #[cfg(feature = "BigDecimal")] { &name == "bigDecimal" || } }
+        cfg_if! { if #[cfg(feature = "Timestamp")]  { &name == "timestamp"  || } }
+        matches!(
+            name.as_str(),
+            // some aggregate types
+            "List" | "Set" | "Map"
+            // most simple types
+            | "Blob" | "Boolean" | "String" | "Byte" | "Short"
+            | "Integer" | "Long" | "Float" | "Double"
+        )
+        // excluded: Resource, Operation, Service, Document, Union
+    } else {
+        false
+        // for any other type, return false.
+        // if there was a need to override this,
+        // a trait could be added
+    }
+}
 
 /*
 pub fn get_metadata(model: &Model) -> JsonMap {
