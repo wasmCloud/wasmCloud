@@ -16,6 +16,9 @@ use wasmbus_rpc::{
 pub const SMITHY_VERSION: &str = "1.0";
 
 /// Simple service that responds to a message
+/// wasmbus.contractId: wasmcloud:example:hello
+/// wasmbus.providerReceive
+/// wasmbus.actorReceive
 #[async_trait]
 pub trait Hello {
     /// Send a string message
