@@ -24,8 +24,8 @@ const SAMPLE_PROJECT_VERSION: &str = "0.1.0";
 // for creating new interface project:
 // model file name - (must match [[rust-files]].path for the .smithy file in codegen.toml)
 // namespace - must match namespace declaration inside the sample .smithy file
-const CREATE_MODEL_SAMPLE: &str = "ping.smithy";
-const CREATE_MODEL_NAMESPACE: &str = "org.wasmcloud.example.ping";
+const CREATE_MODEL_SAMPLE: &str = "hello.smithy";
+const CREATE_MODEL_NAMESPACE: &str = "org.wasmcloud.example.hello";
 
 #[derive(Clap, Debug)]
 #[clap(name = "midl", about, version)]
@@ -315,7 +315,6 @@ fn generate(mut opt: GenerateOpt, verbose: u8) -> Result<()> {
         Some(pb) => pb.to_owned(),
         _ => PathBuf::from("."),
     };
-
     let mut config = select_config(&opt.config)?;
     if !opt.lang.is_empty() {
         config.output_languages = opt.lang.clone()
@@ -343,13 +342,10 @@ fn generate(mut opt: GenerateOpt, verbose: u8) -> Result<()> {
             "interface" => {
                 // use last part of namespace for file name
                 let ns_last = CREATE_MODEL_NAMESPACE.split('.').last().unwrap();
-
+                let model_names = vec![TomlValue::String(CREATE_MODEL_SAMPLE.to_string())];
                 opt.defines.extend_from_slice(&[
                     ("create_interface".to_string(), true.into()),
-                    (
-                        "project_models".to_string(),
-                        TomlValue::Array(vec![TomlValue::String(CREATE_MODEL_SAMPLE.to_string())]),
-                    ),
+                    ("project_models".to_string(), TomlValue::Array(model_names)),
                     (
                         "project_namespace".to_string(),
                         CREATE_MODEL_NAMESPACE.into(),
