@@ -79,10 +79,10 @@ structure codegenRust {
 
 /// a protocol defines the semantics
 /// of how a client and server communicate.
-@protocolDefinition
 @trait(selector: "service")
+@protocolDefinition
 structure wasmbus {
-    /// capability id such as "wasmbus:httpserver"
+    /// capability id such as "wasmcloud:httpserver"
     /// always required for providerReceive, but optional for actorReceive
     contractId: CapabilityContractId,
     /// indicates this service's operations are handled by an actor (default false)
