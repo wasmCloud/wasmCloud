@@ -3,17 +3,19 @@ HTML_TARGET := html
 CSS_FILES := tailwind.css tailwind.min.css
 CSS_DEST  := $(addprefix $(HTML_TARGET)/css/,$(notdir $(CSS_FILES)))
 CSS_URL   := https://wasmcloud.github.io/models/css
-CONFIG    := ./codegen.toml
 
-# find weld binary
+# find weld binary: (search order: environment (WELD), top folder debug build, PATH)
 ifeq ($(WELD),)
- ifeq ($(shell which weld 2>/dev/null),)
-  $(error No weld in your PATH. try installing with 'cargo install weld-bin')
+ ifeq ($(wildcard ../../../target/debug/weld),)
+  ifeq ($(shell which weld 2>/dev/null),)
+    $(error No weld in your PATH. try installing with 'cargo install weld-bin')
+  else
+    WELD=weld
+  endif
  else
-  WELD=weld
+    WELD=$(realpath ../../../target/debug/weld)
  endif
 endif
-
 
 all: doc build
 
@@ -32,7 +34,7 @@ $(HTML_TARGET)/css/%:
 	mkdir -p $(dir $@)
 	curl -L -o $@ "$(CSS_URL)/$(basename $@).css"
 
-# Run lint or validate check on all smithy models
+# Run lint or validation checks
 lint validate:
 	$(WELD) $@
 

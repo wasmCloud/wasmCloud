@@ -5,12 +5,16 @@ CSS_BUILD_OUT = $(wildcard ../../../docgen/dev/gen/css/*.css)
 CSS_DEST = $(addprefix $(HTML_TARGET)/css/,$(notdir $(CSS_BUILD_OUT)))
 CONFIG := ./codegen.toml
 
-# find weld binary
+# find weld binary: (search order: environment (WELD), top folder debug build, PATH)
 ifeq ($(WELD),)
- ifeq ($(shell which weld 2>/dev/null),)
-  $(error No weld in your PATH. try installing with 'cargo install weld-bin')
+ ifeq ($(wildcard ../../../target/debug/weld),)
+  ifeq ($(shell which weld 2>/dev/null),)
+    $(error No weld in your PATH. try installing with 'cargo install weld-bin')
+  else
+    WELD=weld
+  endif
  else
-  WELD=weld
+    WELD=$(realpath ../../../target/debug/weld)
  endif
 endif
 
@@ -26,13 +30,9 @@ clean::
 doc: $(CSS_DEST)
 	$(WELD) gen --lang html --config $(CONFIG) --output-dir .
 
-# Run lint check on all smithy models in the models/smithy folder
-lint:
-	$(WELD) lint --config $(CONFIG)
-
-# Run validation checks on all smithy models in the models/smithy folder
-validate:
-	$(WELD) validate --config $(CONFIG)
+# Run lint or validation checks
+lint validate:
+	$(WELD) $@ --config $(CONFIG)
 
 # view docs - after running this, open browser to localhost:8000
 serve: doc
