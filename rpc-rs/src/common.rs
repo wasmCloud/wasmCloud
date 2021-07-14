@@ -190,7 +190,7 @@ pub trait MessageDispatch {
         &self,
         ctx: &context::Context<'_>,
         message: Message<'_>,
-    ) -> Result<Message<'static>, RpcError>;
+    ) -> Result<Message<'_>, RpcError>;
 }
 
 //macro_rules! implement_service {
