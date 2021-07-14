@@ -93,6 +93,8 @@ pub struct RangeRequest {
     pub start_key: String,
 }
 
+/// wasmbus.contractId: wasmcloud:example:rangekv
+/// wasmbus.providerReceive
 #[async_trait]
 pub trait RangeKeyValue {
     /// Gets a value for a specified key.

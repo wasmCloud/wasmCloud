@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-example-rangekv"
-version = "0.1.0"
+version = "0.1.1"
 #description = ""
 authors = [ "wasmcloud Team" ]
 edition = "2018"
