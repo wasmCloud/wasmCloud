@@ -60,7 +60,7 @@ pub type HostEnvValues = std::collections::HashMap<String, String>;
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Invocation {
     #[serde(default)]
-    pub encoded_class: String,
+    pub encoded_claims: String,
     #[serde(default)]
     pub host_id: String,
     #[serde(default)]
