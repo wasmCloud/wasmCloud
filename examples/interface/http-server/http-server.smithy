@@ -7,23 +7,24 @@ metadata package = [ { namespace: "org.wasmcloud.example.httpServer", crate: "wa
 
 namespace org.wasmcloud.example.httpServer
 
-use org.wasmcloud.core#actorReceiver
-use org.wasmcloud.core#CapabilityContractId
-use org.wasmcloud.core#capability
-use org.wasmcloud.core#wasmbus
-use org.wasmcloud.core#wasmbusData
-
-use org.wasmcloud.model#U32
 use org.wasmcloud.model#codegenRust
+use org.wasmcloud.model#U32
+use org.wasmcloud.model#wasmbus
+use org.wasmcloud.model#wasmbusData
 
 /// HttpServer is the contract to be implemented by actor
 @wasmbus(
-    contractId: "wasmcloud::httpserver",
+    contractId: "wasmcloud:httpserver",
     actorReceive: true,
 )
 service HttpServer {
   version: "0.1",
   operations: [ HandleRequest ]
+}
+
+operation HandleRequest {
+  input: HttpRequest,
+  output: HttpResponse,
 }
 
 /// HttpRequest contains data sent to actor about the http request
@@ -57,10 +58,6 @@ structure HttpResponse {
   body: Blob,
 }
 
-operation HandleRequest {
-  input: HttpRequest,
-  output: HttpResponse,
-}
 
 /// Headers is a list of http headers
 map Headers {
