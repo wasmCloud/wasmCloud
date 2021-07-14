@@ -5,6 +5,7 @@ use std::{path::PathBuf, str::FromStr, string::ToString};
 use toml::Value as TomlValue;
 use weld_codegen::{
     config::{CodegenConfig, ModelSource, OutputLanguage},
+    default_config,
     sources_to_model,
     //load_model,
     //model_sources,
@@ -12,8 +13,6 @@ use weld_codegen::{
     //render::{RenderConfig, RenderError, Renderer},
     Generator,
 };
-
-const DEFAULT_CONFIG: &str = include_str!("../../codegen/templates/codegen.toml");
 
 // default project name, can be overridden in gen create with `-D project_name="foo"`
 const SAMPLE_PROJECT_NAME: &str = "my_project";
@@ -242,7 +241,9 @@ fn cache(opt: CacheOpt) -> Result<()> {
     if !opt.clear_all {
         println!("{}", cache_dir.display());
     } else {
-        std::fs::remove_dir_all(&cache_dir)?;
+        if cache_dir.is_dir() {
+            std::fs::remove_dir_all(&cache_dir)?;
+        }
         println!("Cache cleared.");
     }
     Ok(())
@@ -403,7 +404,7 @@ fn select_config(opt_config: &Option<PathBuf>) -> Result<CodegenConfig> {
             PathBuf::from("."),
         )
     } else {
-        (DEFAULT_CONFIG.to_string(), PathBuf::from("."))
+        (default_config().to_string(), PathBuf::from("."))
     };
     let folder = std::fs::canonicalize(folder)?;
     let mut config = cfile.parse::<CodegenConfig>()?;
