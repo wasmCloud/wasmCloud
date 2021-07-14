@@ -11,6 +11,7 @@ use crate::{
     deserialize, serialize, Message, MessageDispatch, RpcError,
 };
 use anyhow::anyhow;
+use log::{info, warn};
 use nats::{Connection as NatsClient, Subscription};
 use std::{
     borrow::Cow,
@@ -19,14 +20,16 @@ use std::{
     ops::Deref,
     sync::{Arc, RwLock},
 };
-use tokio::sync::oneshot;
+use tokio::{sync::oneshot, time::Duration};
+
+const MAIN_LOOP_WAIT_INTERVAL: Duration = Duration::from_millis(50);
 
 pub type HostShutdownEvent = String;
 
 pub trait ProviderDispatch: MessageDispatch + ProviderHandler {}
 
 pub mod prelude {
-    pub use super::ProviderDispatch;
+    pub use super::{ProviderDispatch, ProviderHandler};
     pub use crate::{client, context, Message, MessageDispatch, RpcError};
 
     //pub use crate::Timestamp;
@@ -50,6 +53,54 @@ pub fn load_host_data() -> Result<HostData, anyhow::Error> {
     let host_data: HostData = serde_json::from_slice(&bytes)
         .map_err(|e| anyhow!("parsing '{}': {}", HOST_DATA_ENV, e))?;
     Ok(host_data)
+}
+
+/// While waiting for messages, handle log messages sent to main thread.
+/// Exits when shutdown_rx is received _or_ either channel is closed.
+pub fn wait_for_shutdown(
+    log_rx: crossbeam::channel::Receiver<LogEntry>,
+    mut shutdown_rx: tokio::sync::oneshot::Receiver<HostShutdownEvent>,
+) {
+    use tokio::sync::oneshot::error::TryRecvError;
+
+    loop {
+        match log_rx.recv_timeout(MAIN_LOOP_WAIT_INTERVAL) {
+            // if we have received a log message, continue
+            // so that we check immediately - a group of messages that
+            // arrive together will be printed with no delay between them.
+            Ok((level, s)) => {
+                log::logger().log(
+                    &log::Record::builder()
+                        .args(format_args!("{}", s))
+                        .level(level)
+                        .build(),
+                );
+                continue;
+            }
+            Err(crossbeam::channel::RecvTimeoutError::Timeout) => {}
+            Err(crossbeam::channel::RecvTimeoutError::Disconnected) => {
+                warn!("Logger exited - quitting");
+                break;
+            }
+        }
+
+        // on each iteration of the loop, after all pending logs
+        // have been written out, check for shutdown signal
+        match shutdown_rx.try_recv() {
+            Ok(_) => {
+                info!("main thread received shutdown signal");
+                // got the shutdown signal
+                break;
+            }
+            Err(TryRecvError::Empty) => {
+                // no signal yet, keep waiting
+            }
+            Err(TryRecvError::Closed) => {
+                // sender exited
+                break;
+            }
+        }
+    }
 }
 
 /// CapabilityProvider handling of messages from host
