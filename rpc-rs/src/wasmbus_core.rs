@@ -120,6 +120,7 @@ pub struct WasmCloudEntity {
 }
 
 /// Actor service
+/// wasmbus.actorReceive
 #[async_trait]
 pub trait Actor {
     /// Perform health check. Called at regular intervals by host
