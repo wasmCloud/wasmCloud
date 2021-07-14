@@ -12,6 +12,7 @@ use org.wasmcloud.model#codegenRust
 use org.wasmcloud.model#serialization
 use org.wasmcloud.model#CapabilityContractId
 use org.wasmcloud.model#wasmbusData
+use org.wasmcloud.model#wasmbus
 
 /// Actor service
 @wasmbus(
