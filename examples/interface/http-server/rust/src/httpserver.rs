@@ -21,6 +21,7 @@ pub type Headers = std::collections::HashMap<String, String>;
 /// HttpRequest contains data sent to actor about the http request
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct HttpRequest {
+    #[serde(with = "serde_bytes")]
     #[serde(default)]
     pub body: Vec<u8>,
     pub header: Headers,
@@ -36,6 +37,7 @@ pub struct HttpRequest {
 /// HttpResponse contains the actor's response to return to the http client
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct HttpResponse {
+    #[serde(with = "serde_bytes")]
     #[serde(default)]
     pub body: Vec<u8>,
     pub header: Headers,
