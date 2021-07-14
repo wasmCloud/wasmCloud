@@ -144,8 +144,8 @@ structure Invocation {
     id: String,
 
     @required
-    @serialization(name: "encoded_class")
-    encodedClass: String,
+    @serialization(name: "encoded_claims")
+    encodedClaims: String,
 
     @required
     @serialization(name: "host_id")
