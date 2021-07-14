@@ -3,55 +3,52 @@
 <head>
 	<meta charset="UTF-8" />
 	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-	<link href="../css/tailwind.min.css" rel="stylesheet">
+<link href="../css/tailwind.min.css" rel="stylesheet">
 	<title>org.wasmcloud.example.httpServer</title>
     <script src="https://cdn.jsdelivr.net/gh/alpinejs/alpine@v2.x.x/dist/alpine.min.js" type="text/javascript" defer></script>
     <script src='https://cdn.jsdelivr.net/npm/fuse.js@6.4.6/dist/fuse.min.js' type="text/javascript"></script>
 </head>
 <body class="p-4">
+
     <div id="content">
         <div class="p-4 overflow-y-auto">
             <h1 id="org_wasmcloud_example_http_server" class="text-2xl font-serif">Namespace org.wasmcloud.example.httpServer</h1>
-            <div class="table m-4 ml-12">
-            <div class="table-row">
+            <div class="table m-4 ml-12">            <div class="table-row">
                 <div class="table-cell align-top pr-6 w-28">
                     Services
                 </div>
                 <div class="table-cell align-top">
                     <ul>
-                        <li class="font-light"><a href="#org_wasmcloud_example_http_server_http_server"><a href="#http_server">HttpServer</a></a></li>                    </ul>
+<li class="font-light"><a href="#org_wasmcloud_example_http_server_http_server"><a href="#http_server">HttpServer</a></a></li>                    </ul>
                 </div>
-            </div>
-            <div class="table-row">
+            </div>            <div class="table-row">
                 <div class="table-cell align-top pr-6 w-28">
                     Operations
                 </div>
                 <div class="table-cell align-top">
                     <ul>
-                        <li class="font-light"><a href="#org_wasmcloud_example_http_server_handle_request"><a href="#handle_request">HandleRequest</a></a></li>                    </ul>
+<li class="font-light"><a href="#org_wasmcloud_example_http_server_handle_request"><a href="#handle_request">HandleRequest</a></a></li>                    </ul>
                 </div>
-            </div>
-            <div class="table-row">
+            </div>            <div class="table-row">
                 <div class="table-cell align-top pr-6 w-28">
                     Structures
                 </div>
                 <div class="table-cell align-top">
                     <ul>
-                        <li class="font-light"><a href="#org_wasmcloud_example_http_server_http_request"><a href="#http_request">HttpRequest</a></a></li><li class="font-light"><a href="#org_wasmcloud_example_http_server_http_response"><a href="#http_response">HttpResponse</a></a></li>                    </ul>
+<li class="font-light"><a href="#org_wasmcloud_example_http_server_http_request"><a href="#http_request">HttpRequest</a></a></li><li class="font-light"><a href="#org_wasmcloud_example_http_server_http_response"><a href="#http_response">HttpResponse</a></a></li>                    </ul>
                 </div>
-            </div>
-            <div class="table-row">
+            </div>            <div class="table-row">
                 <div class="table-cell align-top pr-6 w-28">
                     Maps
                 </div>
                 <div class="table-cell align-top">
                     <ul>
-                        <li class="font-light"><a href="#org_wasmcloud_example_http_server_headers"><a href="#headers">Headers</a></a></li>                    </ul>
+<li class="font-light"><a href="#org_wasmcloud_example_http_server_headers"><a href="#headers">Headers</a></a></li>                    </ul>
                 </div>
             </div>
             </div>
-                                
-                                        
+
+
     <h2 id="handle_request" class="mt-8 border-t-2 border-gray-300">
         <a href="#handle_request">HandleRequest</a><span class="text-lg pl-4">(operation)</span>
     </h2>
@@ -75,9 +72,9 @@
                                     </tr>                                </tbody>
                             </table>
                         </div>
-                            
-                                        
-                    
+                        
+
+
     <h2 id="headers" class="mt-8 border-t-2 border-gray-300">
         <a href="#headers">Headers</a><span class="text-lg pl-4">(map)</span>
     </h2><p class="font-light ml-6">Headers is a list of http headers</p>
@@ -104,9 +101,9 @@
                                 </tbody>
                             </table>
                         </div>
-                                                
-                                        
-                                        
+                        
+
+
     <h2 id="http_request" class="mt-8 border-t-2 border-gray-300">
         <a href="#http_request">HttpRequest</a><span class="text-lg pl-4">(structure)</span>
     </h2><p class="font-light ml-6">HttpRequest contains data sent to actor about the http request</p>
@@ -141,17 +138,17 @@
                                         <td><span class="font-light"></span></td>
                                     </tr>                                </tbody>
                             </table>
-                        </div>            <div class="ml-12">
+                        </div>
+        <div class="ml-12">
             <p class="font-medium mt-4">Traits
             <p>
             <table>                    <tr>
-                                                    <td><a href="../org_wasmcloud_core.html#wasmbus_data">org.wasmcloud.core#wasmbusData</a></td>
+                            <td><a href="./org_wasmcloud_core.html#wasmbus_data">org.wasmcloud.core#wasmbusData</a></td>
                             <td>[object]</td>
-                                            </tr>            </table>
+                    </tr>            </table>
         </div>
-    
-                                        
-                                        
+
+
     <h2 id="http_response" class="mt-8 border-t-2 border-gray-300">
         <a href="#http_response">HttpResponse</a><span class="text-lg pl-4">(structure)</span>
     </h2><p class="font-light ml-6">HttpResponse contains the actor's response to return to the http client</p>
@@ -178,25 +175,24 @@
                                         <td><span class="font-light"></span></td>
                                     </tr>                                    <tr>
                                         <td>statusCode:</td>
-                                        <td><a href="../org_wasmcloud_model.html#u32">org.wasmcloud.model#U32</a></td>
+                                        <td><a href="./org_wasmcloud_model.html#u32">org.wasmcloud.model#U32</a></td>
                                         <td><span class="font-light">statusCode should be 200 if the request was correctly handled</span></td>
                                     </tr>                                </tbody>
                             </table>
-                        </div>            <div class="ml-12">
+                        </div>
+        <div class="ml-12">
             <p class="font-medium mt-4">Traits
             <p>
             <table>                    <tr>
-                                                    <td><a href="../org_wasmcloud_core.html#wasmbus_data">org.wasmcloud.core#wasmbusData</a></td>
+                            <td><a href="./org_wasmcloud_core.html#wasmbus_data">org.wasmcloud.core#wasmbusData</a></td>
                             <td>[object]</td>
-                                            </tr>                    <tr>
-                                                    <td><a href="../org_wasmcloud_model.html#codegen_rust">org.wasmcloud.model#codegenRust</a></td>
+                    </tr>                    <tr>
+                            <td><a href="./org_wasmcloud_model.html#codegen_rust">org.wasmcloud.model#codegenRust</a></td>
                             <td>[object]</td>
-                                            </tr>            </table>
+                    </tr>            </table>
         </div>
-    
-                                        
-                                        
-                    
+
+
     <h2 id="http_server" class="mt-8 border-t-2 border-gray-300">
         <a href="#http_server">HttpServer</a><span class="text-lg pl-4">(service)</span>
     </h2><p class="font-light ml-6">HttpServer is the contract to be implemented by actor</p>
@@ -215,15 +211,16 @@
                                                     </li>                                            </ul>
                                         </div>
                                     </div>
-                                </div>                        </div>            <div class="ml-12">
+                                </div>                        </div>
+        <div class="ml-12">
             <p class="font-medium mt-4">Traits
             <p>
             <table>                    <tr>
-                                                    <td><a href="../org_wasmcloud_core.html#wasmbus">org.wasmcloud.core#wasmbus</a></td>
+                            <td><a href="./org_wasmcloud_core.html#wasmbus">org.wasmcloud.core#wasmbus</a></td>
                             <td>[object]</td>
-                                            </tr>            </table>
+                    </tr>            </table>
         </div>
-            </div>
+        </div>
     </div>
 </body>
 </html>
