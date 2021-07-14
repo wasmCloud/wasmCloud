@@ -21,12 +21,12 @@ namespace org.wasmcloud.example.rangekv
 // - functions returning void
 // - functions with no parameters
 
-use org.wasmcloud.core#wasmbus
+use org.wasmcloud.model#wasmbus
 use org.wasmcloud.model#U32
 use org.wasmcloud.model#U64
 
 @wasmbus(
-    contractId: "wasmcloud::example:rangekv",
+    contractId: "wasmcloud:example:rangekv",
     providerReceive: true,
 )
 service RangeKeyValue{
