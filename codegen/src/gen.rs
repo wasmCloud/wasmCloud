@@ -19,10 +19,20 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 /// Common templates - not language specific
-pub const COMMON_TEMPLATES: &[(&str, &str)] = &[(
-    "codegen.toml",
-    include_str!("../templates/codegen.toml.hbs"),
-)];
+pub const COMMON_TEMPLATES: &[(&str, &str)] = &[
+    (
+        "codegen.toml",
+        include_str!("../templates/codegen.toml.hbs"),
+    ),
+    (
+        "hello.smithy",
+        include_str!("../templates/hello.smithy.hbs"),
+    ),
+    (
+        "Makefile.interface",
+        include_str!("../templates/Makefile.interface.hbs"),
+    ),
+];
 
 /// A Generator is a data-driven wrapper around code generator implementations,
 /// There are two main modes of generation:
@@ -68,7 +78,6 @@ impl<'model> Generator {
             Some(model) => atelier_json::model_to_json(model),
             None => JsonValue::default(),
         };
-
         let output_dir = if output_dir.is_absolute() {
             output_dir.to_path_buf()
         } else {
@@ -188,7 +197,7 @@ impl<'model> Generator {
                 // retrieve json_model for the next iteration
                 json_model = params.remove("model").unwrap();
             }
-            cgen.format(updated_files)?;
+            cgen.format(updated_files, &lc.parameters)?;
         }
 
         Ok(())
@@ -253,7 +262,11 @@ pub(crate) trait CodeGen {
     /// After code generation has completed for all files, this method is called once per output language
     /// to allow code formatters to run. The `files` parameter contains a list of all files written or updated.
     #[allow(unused_variables)]
-    fn format(&mut self, files: Vec<PathBuf>) -> Result<()> {
+    fn format(
+        &mut self,
+        files: Vec<PathBuf>,
+        lc_params: &BTreeMap<String, TomlValue>,
+    ) -> Result<()> {
         Ok(())
     }
 

@@ -71,6 +71,7 @@ pub fn wasmbus_trait() -> &'static ShapeID {
     &WASMBUS_TRAIT_ID
 }
 
+#[allow(dead_code)]
 #[cfg(feature = "wasmbus")]
 /// shape id of trait @wasmbusData
 pub fn wasmbus_data_trait() -> &'static ShapeID {

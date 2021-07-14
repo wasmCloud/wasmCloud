@@ -10,6 +10,8 @@ use toml::Value as TomlValue;
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum OutputLanguage {
+    /// used for code generation of language-independent project files
+    Poly,
     /// HTML documentation
     Html,
     /// Rust
@@ -20,8 +22,6 @@ pub enum OutputLanguage {
     TinyGo,
     /// Go
     Go,
-    /// poly - used for code generation of language-independent project files
-    Poly,
 }
 
 impl std::str::FromStr for OutputLanguage {
@@ -29,12 +29,12 @@ impl std::str::FromStr for OutputLanguage {
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s.to_ascii_lowercase().as_str() {
+            "poly" => Ok(OutputLanguage::Poly),
             "html" => Ok(OutputLanguage::Html),
             "rust" => Ok(OutputLanguage::Rust),
             "assemblyscript" | "assembly" => Ok(OutputLanguage::AssemblyScript),
             "tinygo" => Ok(OutputLanguage::TinyGo),
             "go" => Ok(OutputLanguage::Go),
-            "poly" => Ok(OutputLanguage::Poly),
             _ => Err(Error::UnsupportedLanguage(s.to_string())),
         }
     }
@@ -46,12 +46,12 @@ impl fmt::Display for OutputLanguage {
             f,
             "{}",
             match self {
+                OutputLanguage::Poly => "Poly",
                 OutputLanguage::Html => "Html",
                 OutputLanguage::Rust => "Rust",
                 OutputLanguage::AssemblyScript => "AssemblyScript",
                 OutputLanguage::TinyGo => "TinyGo",
                 OutputLanguage::Go => "Go",
-                OutputLanguage::Poly => "Poly",
             }
         )
     }

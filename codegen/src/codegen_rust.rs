@@ -1,20 +1,19 @@
-use crate::error::print_warning;
-use crate::model::{value_to_json, wasmbus_data_trait};
+//! Rust language code-generator
+//!
 #[cfg(feature = "wasmbus")]
 use crate::wasmbus_model::Wasmbus;
-use crate::BytesMut;
 use crate::{
     config::LanguageConfig,
-    error::{Error, Result},
+    error::{print_warning, Error, Result},
     gen::CodeGen,
     model::{
         codegen_rust_trait, get_operation, get_trait, has_default, is_opt_namespace,
-        serialization_trait, wasmcloud_model_namespace, CommentKind, PackageName,
+        serialization_trait, value_to_json, wasmcloud_model_namespace, CommentKind, PackageName,
     },
     render::Renderer,
     wasmbus_model::{CodegenRust, Serialization},
     writer::Writer,
-    JsonValue, ParamMap,
+    BytesMut, JsonValue, ParamMap, TomlValue,
 };
 use atelier_core::model::shapes::ShapeKind;
 use atelier_core::{
@@ -36,7 +35,7 @@ use atelier_core::{
     },
 };
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     path::{Path, PathBuf},
     str::FromStr,
     string::ToString,
@@ -70,7 +69,10 @@ pub const RUST_TEMPLATES: &[(&str, &str)] = &[
         "rust.build.rs",
         include_str!("../templates/rust/rust.build.rs.hbs"),
     ),
-    ("ping.smithy", include_str!("../templates/ping.smithy.hbs")),
+    (
+        "hello.smithy",
+        include_str!("../templates/hello.smithy.hbs"),
+    ),
     (
         "rust.lib.rs",
         include_str!("../templates/rust/rust.lib.rs.hbs"),
@@ -157,17 +159,25 @@ impl<'model> CodeGen for RustCodeGen<'model> {
 
     /// After code generation has completed for all files, this method is called once per output language
     /// to allow code formatters to run. The `files` parameter contains a list of all files written or updated.
-    fn format(&mut self, files: Vec<PathBuf>) -> Result<()> {
-        // make a list of all output files with ".rs" extension so we can fix formatting with rustfmt
-        // minor nit: we don't check the _config-only flag so there could be some false positives here, but rustfmt is safe to use anyway
-        let rust_sources = files
-            .into_iter()
-            .filter(is_rust_source)
-            .collect::<Vec<PathBuf>>();
+    fn format(
+        &mut self,
+        files: Vec<PathBuf>,
+        lc_params: &BTreeMap<String, TomlValue>,
+    ) -> Result<()> {
+        // if we just created an interface project, don't run rustfmt yet
+        // because we haven't generated the other rust file yet, so rustfmt will fail.
+        if !lc_params.contains_key("create_interface") {
+            // make a list of all output files with ".rs" extension so we can fix formatting with rustfmt
+            // minor nit: we don't check the _config-only flag so there could be some false positives here, but rustfmt is safe to use anyway
+            let rust_sources = files
+                .into_iter()
+                .filter(is_rust_source)
+                .collect::<Vec<PathBuf>>();
 
-        if !rust_sources.is_empty() {
-            let formatter = crate::rustfmt::RustFmtCommand::default();
-            formatter.execute(rust_sources)?;
+            if !rust_sources.is_empty() {
+                let formatter = crate::rustfmt::RustFmtCommand::default();
+                formatter.execute(rust_sources)?;
+            }
         }
         Ok(())
     }
@@ -655,10 +665,10 @@ impl<'model> RustCodeGen<'model> {
             // even if msgpack is not used for serialization, so it seems like
             // an acceptable simplification.
             #[cfg(feature = "wasmbus")]
-            if member.target() == &ShapeID::new_unchecked("smithy.api", "Blob", None) {
-                if traits.get(wasmbus_data_trait()).is_some() {
-                    w.write(r#"  #[serde(with="serde_bytes")] "#);
-                }
+            if member.target() == &ShapeID::new_unchecked("smithy.api", "Blob", None)
+            //&& traits.get(wasmbus_data_trait()).is_some()
+            {
+                w.write(r#"  #[serde(with="serde_bytes")] "#);
             }
 
             if is_optional_type(member) {
