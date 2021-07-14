@@ -3,80 +3,76 @@
 <head>
 	<meta charset="UTF-8" />
 	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-	<link href="../css/tailwind.min.css" rel="stylesheet">
+<link href="../css/tailwind.min.css" rel="stylesheet">
 	<title>org.wasmcloud.example.rangekv</title>
     <script src="https://cdn.jsdelivr.net/gh/alpinejs/alpine@v2.x.x/dist/alpine.min.js" type="text/javascript" defer></script>
     <script src='https://cdn.jsdelivr.net/npm/fuse.js@6.4.6/dist/fuse.min.js' type="text/javascript"></script>
 </head>
 <body class="p-4">
+
     <div id="content">
         <div class="p-4 overflow-y-auto">
             <h1 id="org_wasmcloud_example_rangekv" class="text-2xl font-serif">Namespace org.wasmcloud.example.rangekv</h1>
-            <div class="table m-4 ml-12">
-            <div class="table-row">
+            <div class="table m-4 ml-12">            <div class="table-row">
                 <div class="table-cell align-top pr-6 w-28">
                     Services
                 </div>
                 <div class="table-cell align-top">
                     <ul>
-                        <li class="font-light"><a href="#org_wasmcloud_example_rangekv_range_key_value"><a href="#range_key_value">RangeKeyValue</a></a></li>                    </ul>
+<li class="font-light"><a href="#org_wasmcloud_example_rangekv_range_key_value"><a href="#range_key_value">RangeKeyValue</a></a></li>                    </ul>
                 </div>
-            </div>
-            <div class="table-row">
+            </div>            <div class="table-row">
                 <div class="table-cell align-top pr-6 w-28">
                     Operations
                 </div>
                 <div class="table-cell align-top">
                     <ul>
-                        <li class="font-light"><a href="#org_wasmcloud_example_rangekv_clear"><a href="#clear">Clear</a></a></li><li class="font-light"><a href="#org_wasmcloud_example_rangekv_contains"><a href="#contains">Contains</a></a></li><li class="font-light"><a href="#org_wasmcloud_example_rangekv_delete"><a href="#delete">Delete</a></a></li><li class="font-light"><a href="#org_wasmcloud_example_rangekv_get"><a href="#get">Get</a></a></li><li class="font-light"><a href="#org_wasmcloud_example_rangekv_keys"><a href="#keys">Keys</a></a></li><li class="font-light"><a href="#org_wasmcloud_example_rangekv_put"><a href="#put">Put</a></a></li><li class="font-light"><a href="#org_wasmcloud_example_rangekv_size"><a href="#size">Size</a></a></li><li class="font-light"><a href="#org_wasmcloud_example_rangekv_values"><a href="#values">Values</a></a></li>                    </ul>
+<li class="font-light"><a href="#org_wasmcloud_example_rangekv_clear"><a href="#clear">Clear</a></a></li><li class="font-light"><a href="#org_wasmcloud_example_rangekv_contains"><a href="#contains">Contains</a></a></li><li class="font-light"><a href="#org_wasmcloud_example_rangekv_delete"><a href="#delete">Delete</a></a></li><li class="font-light"><a href="#org_wasmcloud_example_rangekv_get"><a href="#get">Get</a></a></li><li class="font-light"><a href="#org_wasmcloud_example_rangekv_keys"><a href="#keys">Keys</a></a></li><li class="font-light"><a href="#org_wasmcloud_example_rangekv_put"><a href="#put">Put</a></a></li><li class="font-light"><a href="#org_wasmcloud_example_rangekv_size"><a href="#size">Size</a></a></li><li class="font-light"><a href="#org_wasmcloud_example_rangekv_values"><a href="#values">Values</a></a></li>                    </ul>
                 </div>
-            </div>
-            <div class="table-row">
+            </div>            <div class="table-row">
                 <div class="table-cell align-top pr-6 w-28">
                     Structures
                 </div>
                 <div class="table-cell align-top">
                     <ul>
-                        <li class="font-light"><a href="#org_wasmcloud_example_rangekv_key_range_response"><a href="#key_range_response">KeyRangeResponse</a></a></li><li class="font-light"><a href="#org_wasmcloud_example_rangekv_key_value"><a href="#key_value">KeyValue</a></a></li><li class="font-light"><a href="#org_wasmcloud_example_rangekv_key_value_range_response"><a href="#key_value_range_response">KeyValueRangeResponse</a></a></li><li class="font-light"><a href="#org_wasmcloud_example_rangekv_maybe_value"><a href="#maybe_value">MaybeValue</a></a></li><li class="font-light"><a href="#org_wasmcloud_example_rangekv_range_request"><a href="#range_request">RangeRequest</a></a></li>                    </ul>
+<li class="font-light"><a href="#org_wasmcloud_example_rangekv_key_range_response"><a href="#key_range_response">KeyRangeResponse</a></a></li><li class="font-light"><a href="#org_wasmcloud_example_rangekv_key_value"><a href="#key_value">KeyValue</a></a></li><li class="font-light"><a href="#org_wasmcloud_example_rangekv_key_value_range_response"><a href="#key_value_range_response">KeyValueRangeResponse</a></a></li><li class="font-light"><a href="#org_wasmcloud_example_rangekv_maybe_value"><a href="#maybe_value">MaybeValue</a></a></li><li class="font-light"><a href="#org_wasmcloud_example_rangekv_range_request"><a href="#range_request">RangeRequest</a></a></li>                    </ul>
                 </div>
-            </div>
-            <div class="table-row">
+            </div>            <div class="table-row">
                 <div class="table-cell align-top pr-6 w-28">
                     Simple
                 </div>
                 <div class="table-cell align-top">
                     <ul>
-                        <li class="font-light"><a href="#org_wasmcloud_example_rangekv_blob_value"><a href="#blob_value">BlobValue</a></a></li><li class="font-light"><a href="#org_wasmcloud_example_rangekv_key"><a href="#key">Key</a></a></li>                    </ul>
+<li class="font-light"><a href="#org_wasmcloud_example_rangekv_blob_value"><a href="#blob_value">BlobValue</a></a></li><li class="font-light"><a href="#org_wasmcloud_example_rangekv_key"><a href="#key">Key</a></a></li>                    </ul>
                 </div>
-            </div>
-            <div class="table-row">
+            </div>            <div class="table-row">
                 <div class="table-cell align-top pr-6 w-28">
                     Lists
                 </div>
                 <div class="table-cell align-top">
                     <ul>
-                        <li class="font-light"><a href="#org_wasmcloud_example_rangekv_key_list"><a href="#key_list">KeyList</a></a></li><li class="font-light"><a href="#org_wasmcloud_example_rangekv_key_value_list"><a href="#key_value_list">KeyValueList</a></a></li>                    </ul>
+<li class="font-light"><a href="#org_wasmcloud_example_rangekv_key_list"><a href="#key_list">KeyList</a></a></li><li class="font-light"><a href="#org_wasmcloud_example_rangekv_key_value_list"><a href="#key_value_list">KeyValueList</a></a></li>                    </ul>
                 </div>
             </div>
             </div>
-            
+
+
     <h2 id="blob_value" class="mt-8 border-t-2 border-gray-300">
         <a href="#blob_value">BlobValue</a><span class="text-lg pl-4">(blob)</span>
     </h2><p class="font-light ml-6">BlobValue is a non-empty byte array</p>
-                <div class="ml-12">
+
+    
+        <div class="ml-12">
             <p class="font-medium mt-4">Traits
             <p>
             <table>                    <tr>
-                                                    <td>length</td>
+                            <td>length</td>
                             <td>[object]</td>
-                                            </tr>            </table>
+                    </tr>            </table>
         </div>
-    
 
-                                        
-                                        
-                                        
-                                        
+
+
     <h2 id="clear" class="mt-8 border-t-2 border-gray-300">
         <a href="#clear">Clear</a><span class="text-lg pl-4">(operation)</span>
     </h2><p class="font-light ml-6">Clears all keys</p>
@@ -92,17 +88,17 @@
                                 <tbody>                                </tbody>
                             </table>
                         </div>
-                                    <div class="ml-12">
+                        
+        <div class="ml-12">
             <p class="font-medium mt-4">Traits
             <p>
             <table>                    <tr>
-                                                    <td>idempotent</td>
+                            <td>idempotent</td>
                             <td>[object]</td>
-                                            </tr>            </table>
+                    </tr>            </table>
         </div>
-    
-                                        
-                                        
+
+
     <h2 id="contains" class="mt-8 border-t-2 border-gray-300">
         <a href="#contains">Contains</a><span class="text-lg pl-4">(operation)</span>
     </h2><p class="font-light ml-6">Returns true if the value is contained in the store</p>
@@ -126,17 +122,17 @@
                                     </tr>                                </tbody>
                             </table>
                         </div>
-                                    <div class="ml-12">
+                        
+        <div class="ml-12">
             <p class="font-medium mt-4">Traits
             <p>
             <table>                    <tr>
-                                                    <td>readonly</td>
+                            <td>readonly</td>
                             <td>[object]</td>
-                                            </tr>            </table>
+                    </tr>            </table>
         </div>
-    
-                                        
-                                        
+
+
     <h2 id="delete" class="mt-8 border-t-2 border-gray-300">
         <a href="#delete">Delete</a><span class="text-lg pl-4">(operation)</span>
     </h2><p class="font-light ml-6">Deletes a value if it exists.</p>
@@ -156,17 +152,17 @@
                                     </tr>                                </tbody>
                             </table>
                         </div>
-                                    <div class="ml-12">
+                        
+        <div class="ml-12">
             <p class="font-medium mt-4">Traits
             <p>
             <table>                    <tr>
-                                                    <td>idempotent</td>
+                            <td>idempotent</td>
                             <td>[object]</td>
-                                            </tr>            </table>
+                    </tr>            </table>
         </div>
-    
-                                        
-                                        
+
+
     <h2 id="get" class="mt-8 border-t-2 border-gray-300">
         <a href="#get">Get</a><span class="text-lg pl-4">(operation)</span>
     </h2><p class="font-light ml-6">Gets a value for a specified key.</p>
@@ -190,32 +186,33 @@
                                     </tr>                                </tbody>
                             </table>
                         </div>
-                                    <div class="ml-12">
+                        
+        <div class="ml-12">
             <p class="font-medium mt-4">Traits
             <p>
             <table>                    <tr>
-                                                    <td>readonly</td>
+                            <td>readonly</td>
                             <td>[object]</td>
-                                            </tr>            </table>
+                    </tr>            </table>
         </div>
-    
-                    
+
+
     <h2 id="key" class="mt-8 border-t-2 border-gray-300">
         <a href="#key">Key</a><span class="text-lg pl-4">(string)</span>
     </h2><p class="font-light ml-6">Key is any non-empty UTF-8 string</p>
-                <div class="ml-12">
+
+    
+        <div class="ml-12">
             <p class="font-medium mt-4">Traits
             <p>
             <table>                    <tr>
-                                                    <td>length</td>
+                            <td>length</td>
                             <td>[object]</td>
-                                            </tr>            </table>
+                    </tr>            </table>
         </div>
-    
 
-                                        
-                                        
-                    
+
+
     <h2 id="key_list" class="mt-8 border-t-2 border-gray-300">
         <a href="#key_list">KeyList</a><span class="text-lg pl-4">(list)</span>
     </h2><p class="font-light ml-6">A list of keys</p>
@@ -237,10 +234,9 @@
                                 </tbody>
                             </table>
                         </div>
-                                                
-                                        
-                                        
-                                        
+                        
+
+
     <h2 id="key_range_response" class="mt-8 border-t-2 border-gray-300">
         <a href="#key_range_response">KeyRangeResponse</a><span class="text-lg pl-4">(structure)</span>
     </h2>
@@ -255,7 +251,7 @@
                                 </thead>
                                 <tbody>                                    <tr>
                                         <td>count:</td>
-                                        <td><a href="../org_wasmcloud_model.html#u32">org.wasmcloud.model#U32</a></td>
+                                        <td><a href="./org_wasmcloud_model.html#u32">org.wasmcloud.model#U32</a></td>
                                         <td><span class="font-light">number of items returned</span></td>
                                     </tr>                                    <tr>
                                         <td>items:</td>
@@ -272,9 +268,9 @@ If this value is empty, there are no more keys</span></td>
                                         <td><span class="font-light">first key in range returned</span></td>
                                     </tr>                                </tbody>
                             </table>
-                        </div>    
-                                        
-                                        
+                        </div>
+
+
     <h2 id="keys" class="mt-8 border-t-2 border-gray-300">
         <a href="#keys">Keys</a><span class="text-lg pl-4">(operation)</span>
     </h2><p class="font-light ml-6">Returns a range of keys</p>
@@ -298,20 +294,20 @@ If this value is empty, there are no more keys</span></td>
                                     </tr>                                </tbody>
                             </table>
                         </div>
-                                    <div class="ml-12">
+                        
+        <div class="ml-12">
             <p class="font-medium mt-4">Traits
             <p>
             <table>                    <tr>
-                                                    <td>paginated</td>
+                            <td>paginated</td>
                             <td>[object]</td>
-                                            </tr>                    <tr>
-                                                    <td>readonly</td>
+                    </tr>                    <tr>
+                            <td>readonly</td>
                             <td>[object]</td>
-                                            </tr>            </table>
+                    </tr>            </table>
         </div>
-    
-                                        
-                                        
+
+
     <h2 id="key_value" class="mt-8 border-t-2 border-gray-300">
         <a href="#key_value">KeyValue</a><span class="text-lg pl-4">(structure)</span>
     </h2><p class="font-light ml-6">A structure containing a key and value</p>
@@ -334,8 +330,9 @@ If this value is empty, there are no more keys</span></td>
                                         <td><span class="font-light"></span></td>
                                     </tr>                                </tbody>
                             </table>
-                        </div>    
-                    
+                        </div>
+
+
     <h2 id="key_value_list" class="mt-8 border-t-2 border-gray-300">
         <a href="#key_value_list">KeyValueList</a><span class="text-lg pl-4">(list)</span>
     </h2><p class="font-light ml-6">A list of key-value pairs</p>
@@ -357,10 +354,9 @@ If this value is empty, there are no more keys</span></td>
                                 </tbody>
                             </table>
                         </div>
-                                                
-                                        
-                                        
-                                        
+                        
+
+
     <h2 id="key_value_range_response" class="mt-8 border-t-2 border-gray-300">
         <a href="#key_value_range_response">KeyValueRangeResponse</a><span class="text-lg pl-4">(structure)</span>
     </h2><p class="font-light ml-6">result of Values range query</p>
@@ -375,7 +371,7 @@ If this value is empty, there are no more keys</span></td>
                                 </thead>
                                 <tbody>                                    <tr>
                                         <td>count:</td>
-                                        <td><a href="../org_wasmcloud_model.html#u32">org.wasmcloud.model#U32</a></td>
+                                        <td><a href="./org_wasmcloud_model.html#u32">org.wasmcloud.model#U32</a></td>
                                         <td><span class="font-light">number of items returned</span></td>
                                     </tr>                                    <tr>
                                         <td>items:</td>
@@ -392,9 +388,9 @@ If this value is empty, there are no more keys</span></td>
                                         <td><span class="font-light">first key in range returned</span></td>
                                     </tr>                                </tbody>
                             </table>
-                        </div>    
-                                        
-                                        
+                        </div>
+
+
     <h2 id="maybe_value" class="mt-8 border-t-2 border-gray-300">
         <a href="#maybe_value">MaybeValue</a><span class="text-lg pl-4">(structure)</span>
     </h2><p class="font-light ml-6">Structure that contains an optional value</p>
@@ -413,9 +409,9 @@ If this value is empty, there are no more keys</span></td>
                                         <td><span class="font-light">a value or none</span></td>
                                     </tr>                                </tbody>
                             </table>
-                        </div>    
-                                        
-                                        
+                        </div>
+
+
     <h2 id="put" class="mt-8 border-t-2 border-gray-300">
         <a href="#put">Put</a><span class="text-lg pl-4">(operation)</span>
     </h2><p class="font-light ml-6">Stores a value. Replaces an existing value of the same key.</p>
@@ -435,18 +431,17 @@ If this value is empty, there are no more keys</span></td>
                                     </tr>                                </tbody>
                             </table>
                         </div>
-                                    <div class="ml-12">
+                        
+        <div class="ml-12">
             <p class="font-medium mt-4">Traits
             <p>
             <table>                    <tr>
-                                                    <td>idempotent</td>
+                            <td>idempotent</td>
                             <td>[object]</td>
-                                            </tr>            </table>
+                    </tr>            </table>
         </div>
-    
-                                        
-                                        
-                    
+
+
     <h2 id="range_key_value" class="mt-8 border-t-2 border-gray-300">
         <a href="#range_key_value">RangeKeyValue</a><span class="text-lg pl-4">(service)</span>
     </h2>
@@ -493,16 +488,17 @@ If this value is empty, there are no more keys</span></td>
                                                     </li>                                            </ul>
                                         </div>
                                     </div>
-                                </div>                        </div>            <div class="ml-12">
+                                </div>                        </div>
+        <div class="ml-12">
             <p class="font-medium mt-4">Traits
             <p>
             <table>                    <tr>
-                                                    <td><a href="../org_wasmcloud_core.html#wasmbus">org.wasmcloud.core#wasmbus</a></td>
+                            <td><a href="./org_wasmcloud_core.html#wasmbus">org.wasmcloud.core#wasmbus</a></td>
                             <td>[object]</td>
-                                            </tr>            </table>
+                    </tr>            </table>
         </div>
-                        
-                                        
+
+
     <h2 id="range_request" class="mt-8 border-t-2 border-gray-300">
         <a href="#range_request">RangeRequest</a><span class="text-lg pl-4">(structure)</span>
     </h2><p class="font-light ml-6">Input a range request (Keys or Values)</p>
@@ -521,7 +517,7 @@ If this value is empty, there are no more keys</span></td>
                                         <td><span class="font-light">optional last key of the requested range (inclusive)</span></td>
                                     </tr>                                    <tr>
                                         <td>limit:</td>
-                                        <td><a href="../org_wasmcloud_model.html#u32">org.wasmcloud.model#U32</a></td>
+                                        <td><a href="./org_wasmcloud_model.html#u32">org.wasmcloud.model#U32</a></td>
                                         <td><span class="font-light">maximum number of values to return
 the server may return fewer than this value.</span></td>
                                     </tr>                                    <tr>
@@ -530,9 +526,9 @@ the server may return fewer than this value.</span></td>
                                         <td><span class="font-light">the initial key at start of range</span></td>
                                     </tr>                                </tbody>
                             </table>
-                        </div>    
-                                        
-                                        
+                        </div>
+
+
     <h2 id="size" class="mt-8 border-t-2 border-gray-300">
         <a href="#size">Size</a><span class="text-lg pl-4">(operation)</span>
     </h2><p class="font-light ml-6">Returns the number of items in the store</p>
@@ -547,22 +543,22 @@ the server may return fewer than this value.</span></td>
                                 </thead>
                                 <tbody>                                    <tr>
                                         <td>output:</td>
-                                        <td><a href="../org_wasmcloud_model.html#u64">org.wasmcloud.model#U64</a></td>
+                                        <td><a href="./org_wasmcloud_model.html#u64">org.wasmcloud.model#U64</a></td>
                                         <td><span class="font-light"></span></td>
                                     </tr>                                </tbody>
                             </table>
                         </div>
-                                    <div class="ml-12">
+                        
+        <div class="ml-12">
             <p class="font-medium mt-4">Traits
             <p>
             <table>                    <tr>
-                                                    <td>readonly</td>
+                            <td>readonly</td>
                             <td>[object]</td>
-                                            </tr>            </table>
+                    </tr>            </table>
         </div>
-    
-                                        
-                                        
+
+
     <h2 id="values" class="mt-8 border-t-2 border-gray-300">
         <a href="#values">Values</a><span class="text-lg pl-4">(operation)</span>
     </h2><p class="font-light ml-6">Returns a range of key-value pairs</p>
@@ -586,19 +582,19 @@ the server may return fewer than this value.</span></td>
                                     </tr>                                </tbody>
                             </table>
                         </div>
-                                    <div class="ml-12">
+                        
+        <div class="ml-12">
             <p class="font-medium mt-4">Traits
             <p>
             <table>                    <tr>
-                                                    <td>paginated</td>
+                            <td>paginated</td>
                             <td>[object]</td>
-                                            </tr>                    <tr>
-                                                    <td>readonly</td>
+                    </tr>                    <tr>
+                            <td>readonly</td>
                             <td>[object]</td>
-                                            </tr>            </table>
+                    </tr>            </table>
         </div>
-    
-                            </div>
+        </div>
     </div>
 </body>
 </html>
