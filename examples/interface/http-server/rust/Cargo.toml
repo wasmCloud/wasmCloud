@@ -1,7 +1,7 @@
 [package]
 name = "wasmcloud-example-httpserver"
 version = "0.1.1"
-#description = ""
+description = "wasmcloud HttpServer interface"
 authors = [ "wasmcloud Team" ]
 edition = "2018"
 license = "Apache-2.0"
