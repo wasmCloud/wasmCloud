@@ -15,12 +15,16 @@ NAME = "Hello Provider (Rust)"
 VENDOR = "wasmCloud"
 REVISION = 1
 
-# find weld binary
+# find weld binary: (search order: environment (WELD), parent folder debug build, PATH)
 ifeq ($(WELD),)
- ifeq ($(shell which weld 2>/dev/null),)
-  $(error No weld in your PATH. try installing with 'cargo install weld-bin')
+ ifeq ($(wildcard ../../../target/debug/weld),)
+  ifeq ($(shell which weld 2>/dev/null),)
+    $(error No weld in your PATH. try installing with 'cargo install weld-bin')
+  else
+    WELD=weld
+  endif
  else
-  WELD=weld
+    WELD=$(realpath ../../../target/debug/weld)
  endif
 endif
 
