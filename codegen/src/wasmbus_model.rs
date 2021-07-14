@@ -74,7 +74,7 @@ pub struct Wasmbus {
     #[serde(rename = "actorReceive")]
     #[serde(default)]
     pub actor_receive: bool,
-    /// capability id such as "wasmbus:httpserver"
+    /// capability id such as "wasmcloud:httpserver"
     /// always required for providerReceive, but optional for actorReceive
     #[serde(rename = "contractId")]
     #[serde(default, skip_serializing_if = "Option::is_none")]

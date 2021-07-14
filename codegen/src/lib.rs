@@ -35,3 +35,7 @@ pub(crate) mod strings {
         camelcase::to_camel_case, pascalcase::to_pascal_case, snakecase::to_snake_case,
     };
 }
+
+pub fn default_config() -> &'static str {
+    include_str!("../templates/codegen.toml")
+}

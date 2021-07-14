@@ -8,9 +8,9 @@
 # the file name, plus a .smithy extension.
 # url paths are cached locally to improve build performance and
 # to enable offline builds
-[[models]]
-path = "."
-files = [ "hello-world.smithy" ]
+#[[models]]
+#path = "."
+#files = [ "*.smithy" ]
 
 [[models]]
 url = "https://wasmcloud.github.io/models/org.wasmcloud/"
