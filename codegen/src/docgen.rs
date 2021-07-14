@@ -15,13 +15,10 @@ const DOC_TEMPLATE: &str = "namespace_doc";
 
 /// Default templates
 pub const HTML_TEMPLATES: &[(&str, &str)] = &[
-    (
-        "page_base",
-        include_str!("../../docgen/templates/page_base.hbs"),
-    ),
+    ("page_base", include_str!("../templates/html/page_base.hbs")),
     (
         "namespace_doc",
-        include_str!("../../docgen/templates/namespace_doc.hbs"),
+        include_str!("../templates/html/namespace_doc.hbs"),
     ),
 ];
 
