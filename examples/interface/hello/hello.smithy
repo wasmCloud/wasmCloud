@@ -7,9 +7,7 @@ metadata package = [ { namespace: "org.wasmcloud.example.hello", crate: "wasmclo
 
 namespace org.wasmcloud.example.hello
 
-use org.wasmcloud.core#wasmbus
-use org.wasmcloud.model#U32
-use org.wasmcloud.model#U64
+use org.wasmcloud.model#wasmbus
 
 /// Simple service that responds to a message
 @wasmbus(
@@ -18,7 +16,7 @@ use org.wasmcloud.model#U64
     providerReceive: true )
 service Hello {
   version: "0.1",
-  operations: [ sayHello  ]
+  operations: [ SayHello  ]
 }
 
 /// Send a string message
