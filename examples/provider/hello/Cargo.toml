@@ -35,7 +35,7 @@ tokio = { version = "1", features = ["full"] }
 
 [dependencies.wasmcloud-example-hello]
 version = "0.1"
-#path = "../../interface/hello/rust"
+path = "../../interface/hello/rust"
 
 [dependencies.wasmbus-rpc]
 version = "0.1"
