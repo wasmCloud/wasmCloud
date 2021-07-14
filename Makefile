@@ -7,36 +7,34 @@
 MODEL_OUTPUT := codegen/src/wasmbus_model.rs rpc-rs/src/wasmbus_model.rs
 MODEL_SRC    := examples/interface/wasmbus-core/wasmcloud-model.smithy \
 				examples/interface/wasmbus-core/codegen.toml
+WELD         := target/debug/weld
+
 
 all build: $(MODEL_OUTPUT)
 	cargo build
-	$(MAKE) -C examples
+	$(MAKE) -C examples WELD=$(realpath $(WELD))
 
 clean:
 	cargo clean
 	$(MAKE) -C examples clean
 
-release:: $(MODEL_OUTPUT)
+release: $(MODEL_OUTPUT)
 	cargo build --release
 	$(MAKE) -C examples
 
-test::
+test:
 	cargo $@
 
-$(MODEL_OUTPUT) : $(MODEL_SRC) $(WELD_D)
-	$(WELD_D) gen --config examples/interface/wasmbus-core/codegen.toml
+$(MODEL_OUTPUT): $(WELD) $(MODEL_SRC)
+	$(WELD) gen --config examples/interface/wasmbus-core/codegen.toml
 
 check-model: $(MODEL_OUTPUT)
 	@diff $(MODEL_OUTPUT) || (echo ERROR: Model files differ && exit 1)
 
-WELD_SRC := bin/Cargo.toml bin/src/*.rs codegen/Cargo.toml codegen/src/*.rs codegen/templates/*.toml \
+WELD_SRC := bin/Cargo.toml bin/src/*.rs codegen/Cargo.toml codegen/templates/*.toml \
 			codegen/templates/*.hbs codegen/templates/rust/*.hbs
-WELD_D   := target/debug/weld
-$(WELD_D): $(WELD_SRC)
+target/debug/weld: $(WELD_SRC)
 	cargo build --package weld-bin
-
-#$(WELD_R): bin/Cargo.toml bin/src/*.rs codgen/**
-#	cargo build --release --package weld-bin
 
 .PHONY: all build release clean test
 .NOTPARALLEL:

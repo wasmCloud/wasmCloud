@@ -11,7 +11,7 @@ EX_LOADER_DEPS := extra/loadactors.ex extra/make-project.sh Makefile $(MANIFEST)
 
 $(TOPTARGETS)::
 	for dir in $(SUBDIRS); do \
-        $(MAKE) -C $$dir $@; \
+        $(MAKE) -C $$dir $@ WELD=$(WELD); \
     done
 
 all:: $(EX_LOADER)

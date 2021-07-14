@@ -5,7 +5,7 @@ TOPTARGETS := all clean
 
 $(TOPTARGETS):
 	for dir in $(SUBDIRS); do \
-        $(MAKE) -C $$dir $@; \
+        $(MAKE) -C $$dir $@ WELD=$(WELD); \
     done
 
 .PHONY: $(TOPTARGETS) $(SUBDIRS)

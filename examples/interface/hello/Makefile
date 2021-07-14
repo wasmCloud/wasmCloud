@@ -1,9 +1,19 @@
 HTML_TARGET := html
 
-WELD := ../../../target/debug/weld
-CSS_BUILD_OUT = $(wildcard ../../../docgen/dev/gen/css/*.css)
-CSS_DEST = $(addprefix $(HTML_TARGET)/css/,$(notdir $(CSS_BUILD_OUT)))
-CONFIG := ./codegen.toml
+CSS_FILES := tailwind.css tailwind.min.css
+CSS_DEST  := $(addprefix $(HTML_TARGET)/css/,$(notdir $(CSS_FILES)))
+CSS_URL   := https://wasmcloud.github.io/models/css
+CONFIG    := ./codegen.toml
+
+# find weld binary
+ifeq ($(WELD),)
+ ifeq ($(shell which weld 2>/dev/null),)
+  $(error No weld in your PATH. try installing with 'cargo install weld-bin')
+ else
+  WELD=weld
+ endif
+endif
+
 
 all: doc build
 
@@ -15,23 +25,19 @@ clean::
 
 # for docs, include BASE_MODELS so links work
 doc: $(CSS_DEST)
-	$(WELD) gen --lang html $(ALL_MODELS) $(BASE_MODELS)
+	$(WELD) gen --lang html
 
-# Run lint check on all smithy models in the models/smithy folder
-lint:
-	$(WELD) lint $(ALL_MODELS) $(BASE_MODELS)
+# download any missing css files
+$(HTML_TARGET)/css/%:
+	mkdir -p $(dir $@)
+	curl -L -o $@ "$(CSS_URL)/$(basename $@).css"
 
-# Run validation checks on all smithy models in the models/smithy folder
-validate:
-	$(WELD) validate $(ALL_MODELS) $(BASE_MODELS)
+# Run lint or validate check on all smithy models
+lint validate:
+	$(WELD) $@
 
 # view docs - after running this, open browser to localhost:8000
 serve: doc
 	python3 -m http.server -d $(HTML_TARGET) 8000
-
-# update css files in html/css
-$(CSS_DEST): $(CSS_BUILD_OUT)
-	mkdir -p $(dir $@)
-	cp -p ${CSS_BUILD_OUT} $(HTML_TARGET)/css/
 
 .PHONY: all build release lint validate serve clean

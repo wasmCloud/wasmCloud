@@ -1,10 +1,12 @@
 # examples/provider/hello/Makefile
 
-WELD = ../../../target/debug/weld
-# if this package is included in the top-level Cargo.toml, then target is in the top-level folder
-TARGET_BASE=../../../target
-# otherwise, it's local
-#TARGET_BASE=./target
+ifeq ($(wildcard ./target),)
+  # if this package is included in the top-level Cargo.toml, then target is in the top-level folder
+  TARGET_BASE=../../../target
+else
+  # otherwise, it's local
+  TARGET_BASE=./target
+endif
 CARGO=cargo
 RUST_DEPS = Cargo.toml $(wildcard src/*) Makefile
 
@@ -13,10 +15,19 @@ NAME = "Hello Provider (Rust)"
 VENDOR = "wasmCloud"
 REVISION = 1
 
+# find weld binary
+ifeq ($(WELD),)
+ ifeq ($(shell which weld 2>/dev/null),)
+  $(error No weld in your PATH. try installing with 'cargo install weld-bin')
+ else
+  WELD=weld
+ endif
+endif
+
 TARGET_LINUX = x86_64-unknown-linux-gnu
 TARGET_MAC = x86_64-apple-darwin
 
-PROJECT = $(shell $(WELD) toml-json Cargo.toml | jq -r '.package.name') 
+PROJECT = $(shell $(WELD) toml-json Cargo.toml | jq -r '.package.name')
 VERSION = $(shell $(WELD) toml-json Cargo.toml | jq -r '.package.version')
 
 RELEASE_TARGET_LINUX = $(TARGET_BASE)/$(TARGET_LINUX)/release/$(PROJECT)

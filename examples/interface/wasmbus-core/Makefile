@@ -1,9 +1,18 @@
 HTML_TARGET := html
 
-WELD := ../../../target/debug/weld
 CSS_BUILD_OUT = $(wildcard ../../../docgen/dev/gen/css/*.css)
 CSS_DEST = $(addprefix $(HTML_TARGET)/css/,$(notdir $(CSS_BUILD_OUT)))
 CONFIG := ./codegen.toml
+
+# find weld binary
+ifeq ($(WELD),)
+ ifeq ($(shell which weld 2>/dev/null),)
+  $(error No weld in your PATH. try installing with 'cargo install weld-bin')
+ else
+  WELD=weld
+ endif
+endif
+
 
 all: doc
 	$(WELD) gen --lang rust $(ALL_MODELS) $(BASE_MODELS)
