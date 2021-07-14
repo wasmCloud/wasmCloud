@@ -51,7 +51,7 @@ The executables are installed into `$HOME/.cargo/bin` - make sure that's in your
 The weld tool validates smithy models, is used to create projects and process Smithy models
 
 ```sh
-cargo install wasmcloud-weld-bin
+cargo install weld-bin
 ```
 
 The `weld` binary will be installed in `$HOME/.cargo/bin`
