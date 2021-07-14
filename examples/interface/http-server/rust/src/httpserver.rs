@@ -49,6 +49,8 @@ pub struct HttpResponse {
 }
 
 /// HttpServer is the contract to be implemented by actor
+/// wasmbus.contractId: wasmcloud:httpserver
+/// wasmbus.actorReceive
 #[async_trait]
 pub trait HttpServer {
     async fn handle_request(
