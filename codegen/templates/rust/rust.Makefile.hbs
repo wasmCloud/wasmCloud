@@ -41,16 +41,3 @@ all:
 	@echo NOT IMPLEMENTED
 
 {{/if ~}}
-{{#if create_interface ~}}
-# Makefile for {{ namespace }} - rust library
-
-build:
-	cargo build
-
-release:
-	cargo build --release
-
-clean:
-	cargo clean
-
-{{/if }}

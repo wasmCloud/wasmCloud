@@ -6,16 +6,14 @@ authors = [""]
 edition = "2018"
 license = "Apache-2.0"
 {{#if create_interface}}
-build = "build.rs"
+# don't publish build.rs - codegen runs on local builds before publish
+exclude = ["build.rs"]
 {{/if}}
 
 {{#if (or create_actor create_interface) }}
 [lib]
 crate-type = ["cdylib", "rlib"]
 {{/if}}
-
-[features]
-default = []
 
 [dependencies]
 async-trait = "0.1"
@@ -25,12 +23,9 @@ serde_json = "1.0"
 serde_bytes = "0.11"
 lazy_static = "1.4"
 {{#if create_actor}}
-http-server = { path = "../../../examples/http-server/gen/rust" }
+wasmcloud-example-httpserver = "0.1"
 {{/if}}
-
-[dependencies.wasmbus-rpc]
-version = "0.1"
-path = "../../../rpc-rs"
+wasmbus-rpc = "0.1"
 
 [dev-dependencies]
 base64 = "0.13"
@@ -38,8 +33,7 @@ base64 = "0.13"
 {{#if create_interface}}
 # build-dependencies needed for build.rs
 [build-dependencies]
-wasmcloud-weld-codegen = { version = "0.1", path = "../../../codegen" }
-# TODO: omit path, make this use published crate
+weld-codegen = "0.1"
 {{/if}}
 
 {{#if create_actor}}

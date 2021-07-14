@@ -1,11 +1,4 @@
 //! {{ project_namespace }}
 
-
-mod {{ project_namespace_file }} {
-  // the include file below is generated at build-time from the smithy model
-
-  include!(concat!(env!("OUT_DIR"), "/src/{{ project_namespace_file }}.rs"));
-
-}
-
+mod {{ project_namespace_file }};
 pub use {{ project_namespace_file }}::*;

@@ -13,7 +13,7 @@ path = "."
 files = [ "hello-world.smithy" ]
 
 [[models]]
-url = "https://wasmcloud.github.io/models/"
+url = "https://wasmcloud.github.io/models/org.wasmcloud/"
 files = [ "wasmcloud-core.smithy", "wasmcloud-model.smithy" ]
 
 
@@ -61,6 +61,8 @@ output_dir = "rust"
 [rust.parameters]
 project_name = "my-project"
 project_version = "0.1.0"
+#project_namespace_file = "hello"
+#project_namespace = "org.wasmcloud.example.hello"
 
 # any other parameters needed by code generator
 map_type = "std::collections::HashMap"
@@ -74,11 +76,11 @@ map_type = "std::collections::HashMap"
 # namespace   - limit generated shapes to shapes in this namespace
 # *           - any other fields are per-file parameters passed to codegen and renderer
 
-## interface-only files
+## rust interface-only files
 
 [[rust.files]]
-path = "src/lib.rs"
-hbs = "rust.lib.rs"
+path = "src/hello.rs"
+namespace = "org.wasmcloud.example.hello"
 if_defined = "create_interface"
 
 [[rust.files]]
@@ -86,7 +88,13 @@ path = "build.rs"
 hbs = "rust.build.rs"
 if_defined = "create_interface"
 
-## actor-only files
+[[rust.files]]
+path = "src/lib.rs"
+hbs = "rust.lib.rs"
+if_defined = "create_interface"
+
+
+## rust actor-only files
 
 [[rust.files]]
 path = "src/lib.rs"
@@ -103,17 +111,26 @@ path = ".cargo/config.toml"
 hbs  = "rust.cargo_config.toml"
 if_defined = "create_actor"
 
-## rust files - common for create modes
+[[rust.files]]
+path = "Makefile"
+hbs = "rust.Makefile"
+if_defined = "create_actor"
+
+## rust provider-only files
+
+[[rust.files]]
+path = "Makefile"
+hbs = "rust.Makefile"
+if_defined = "create_provider"
+
+
+## rust common files
 
 [[rust.files]]
 path = "Cargo.toml"
 hbs  = "rust.Cargo.toml"
 if_defined = "project_create"
 
-[[rust.files]]
-path = "Makefile"
-hbs = "rust.Makefile"
-if_defined = "project_create"
 
 [[rust.files]]
 path = ".gitignore"
@@ -122,7 +139,7 @@ if_defined = "project_create"
 
 
 ##
-## "poly" files - independent of target language
+## "poly" files - all languages
 ##
 [poly]
 output_dir = "."
@@ -133,7 +150,12 @@ hbs = "codegen.toml"
 if_defined = "create_interface"
 
 [[poly.files]]
-path = "ping.smithy"
-hbs = "ping.smithy"
+path = "hello.smithy"
+hbs = "hello.smithy"
+if_defined = "create_interface"
+
+[[poly.files]]
+path = "Makefile"
+hbs = "Makefile.interface"
 if_defined = "create_interface"
 

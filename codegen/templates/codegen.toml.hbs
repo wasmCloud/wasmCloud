@@ -7,7 +7,7 @@ path = "."
 files = [ {{#each project_models }}"{{ this }}",{{/each}} ]
 # include wasmcloud core & base model
 [[models]]
-url = "https://wasmcloud.github.io/models/org.wasmcloud"
+url = "https://wasmcloud.github.io/models/org.wasmcloud/"
 files = [ "wasmcloud-core.smithy", "wasmcloud-model.smithy" ]
 {{~/if }}
 
@@ -38,7 +38,7 @@ minified = true
 
 # top-level output directory for rust files. If using build.rs,
 # this folder is relative to the compiler's environment variable "OUT_DIR"
-output_dir = "src"
+output_dir = "rust"
 
 [rust.parameters]
 
@@ -64,6 +64,6 @@ version = "{{ project_version }}"
 
 {{#if create_interface }}
 [[rust.files]]
-path = "{{ project_namespace_file }}.rs"
+path = "src/{{ project_namespace_file }}.rs"
 namespace = "{{ project_namespace }}"
 {{/if}}
