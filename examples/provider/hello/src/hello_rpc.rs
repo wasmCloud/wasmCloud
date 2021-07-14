@@ -26,7 +26,7 @@ impl MessageDispatch for HelloProvider {
         &self,
         ctx: &context::Context<'_>,
         message: Message<'_>,
-    ) -> Result<Message<'static>, RpcError> {
+    ) -> Result<Message<'_>, RpcError> {
         // this would iterate through Traits, but there's only one here
         let resp = HelloReceiver::dispatch(self, ctx, &message).await?;
         Ok(resp)
