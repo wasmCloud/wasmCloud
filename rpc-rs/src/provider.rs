@@ -43,15 +43,25 @@ pub mod prelude {
     pub use bigdecimal::BigDecimal;
 }
 
-const HOST_DATA_ENV: &str = "WASMCLOUD_HOST_DATA";
-
 pub fn load_host_data() -> Result<HostData, anyhow::Error> {
-    let hd = std::env::var(HOST_DATA_ENV)
-        .map_err(|_| anyhow!("env variable '{}' not found", HOST_DATA_ENV))?;
-    let bytes = base64::decode(&hd)
-        .map_err(|e| anyhow!("env variable '{}' is invalid base64: {}", HOST_DATA_ENV, e))?;
-    let host_data: HostData = serde_json::from_slice(&bytes)
-        .map_err(|e| anyhow!("parsing '{}': {}", HOST_DATA_ENV, e))?;
+    let mut buf = String::default();
+    let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)
+        .map_err(|e| anyhow!("failed to read host data configuration from stdin: {}", e))?;
+    // remove spaces, tabs, and newlines before and after base64-encoded data
+    let buf = buf.trim();
+    if buf.is_empty() {
+        return Err(anyhow!(
+            "stdin is empty - expecting host data configuration"
+        ));
+    }
+    let bytes = base64::decode(buf.as_bytes()).map_err(|e| {
+        anyhow!(
+            "host data configuration passed through stdin has invalid encoding (expected base64): {}",
+            e
+        )
+    })?;
+    let host_data: HostData =
+        serde_json::from_slice(&bytes).map_err(|e| anyhow!("parsing host data: {}", e))?;
     Ok(host_data)
 }
 
