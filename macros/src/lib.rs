@@ -185,7 +185,7 @@ fn gen_dispatch(traits: &[syn::Path], ident: &Ident) -> TokenStream2 {
                 &self,
                 ctx: &context::Context<'_>,
                 message: Message<'_>,
-            ) -> Result<Message<'static>, RpcError> {
+            ) -> Result<Message<'_>, RpcError> {
                 let (trait_name, trait_method) = message
                     .method
                     .rsplit_once('.')
