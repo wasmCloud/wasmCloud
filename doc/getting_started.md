@@ -20,7 +20,7 @@ weld gen --create actor  [OPTIONS]
     - `--output-dir DIR`      - create the file in DIR (default ".")
     - `-D project_name=PROJ`  - initial project name (default "my_project")
 
-The actor project creates an echo actor that implements the httpserver interface. When it receives an http message, it echoes back data from the request.
+The actor project creates an echo actor that implements the httpserver interface. When it receives an http message, it echoes back data from the request. This actor should be compatible with both the current wasmcloud host (0.18) and the upcoming wasmcloud-otp host.
 
 To build, 
 ```text
