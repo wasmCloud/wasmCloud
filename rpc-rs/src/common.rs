@@ -115,7 +115,7 @@ pub trait Transport: Send {
         ctx: &context::Context<'_>,
         config: &client::SendConfig,
         req: Message<'_>,
-    ) -> std::result::Result<Message<'static>, RpcError>;
+    ) -> std::result::Result<Message<'_>, RpcError>;
 }
 
 // select serialization/deserialization mode

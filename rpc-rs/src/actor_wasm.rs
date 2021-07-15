@@ -80,7 +80,7 @@ impl Transport for WasmHost {
         _ctx: &context::Context<'_>,
         config: &client::SendConfig,
         req: Message<'_>,
-    ) -> std::result::Result<Message<'static>, RpcError> {
+    ) -> std::result::Result<Message<'_>, RpcError> {
         let res = host_call(
             &config.host,   // "default", or capability provider ID
             &config.target, // actor_ref, or capability name (e.g. wasmcloud::messaging)

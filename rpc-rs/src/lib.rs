@@ -66,7 +66,7 @@ pub mod actor {
                 #[async_trait]
                 impl crate::Transport for WasmHost {
                     async fn send(&self, _: &context::Context<'_>, _: &client::SendConfig,
-                                _: Message<'_>, ) -> std::result::Result<Message<'static>, RpcError> {
+                                _: Message<'_>, ) -> std::result::Result<Message<'_>, RpcError> {
                        unimplemented!();
                     }
                 }

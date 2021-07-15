@@ -139,7 +139,7 @@ pub trait ActorReceiver: MessageDispatch + Actor {
         &self,
         ctx: &context::Context<'_>,
         message: &Message<'_>,
-    ) -> Result<Message<'static>, RpcError> {
+    ) -> Result<Message<'_>, RpcError> {
         match message.method {
             "HealthRequest" => {
                 let value: HealthCheckRequest = deserialize(message.arg.as_ref())?;
