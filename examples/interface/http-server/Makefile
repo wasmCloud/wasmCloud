@@ -1,8 +1,9 @@
 # interface/http-server/Makefile
 
 HTML_TARGET := html
-CSS_BUILD_OUT = $(wildcard ../../../docgen/dev/gen/css/*.css)
-CSS_DEST = $(addprefix $(HTML_TARGET)/css/,$(notdir $(CSS_BUILD_OUT)))
+CSS_FILES := tailwind.css tailwind.min.css
+CSS_DEST  := $(addprefix $(HTML_TARGET)/css/,$(notdir $(CSS_FILES)))
+CSS_URL   := https://wasmcloud.github.io/models/css
 CONFIG := ./codegen.toml
 
 # find weld binary: (search order: environment (WELD), top folder debug build, PATH)
@@ -38,8 +39,9 @@ lint validate:
 serve: doc
 	python3 -m http.server -d $(HTML_TARGET) 8000
 
-# update css files in html/css
-$(HTML_TARGET)/css/%: ../../../docgen/dev/gen/css/%
-	cp -p $< $@
+# download any missing css files
+$(HTML_TARGET)/css/%:
+	mkdir -p $(dir $@)
+	curl -L -o $@ "$(CSS_URL)/$(basename $@).css"
 
 .PHONY: all build release lint validate serve clean

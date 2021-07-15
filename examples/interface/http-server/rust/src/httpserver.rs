@@ -68,7 +68,7 @@ pub trait HttpServerReceiver: MessageDispatch + HttpServer {
         &self,
         ctx: &context::Context<'_>,
         message: &Message<'_>,
-    ) -> Result<Message<'static>, RpcError> {
+    ) -> Result<Message<'_>, RpcError> {
         match message.method {
             "HandleRequest" => {
                 let value: HttpRequest = deserialize(message.arg.as_ref())?;
