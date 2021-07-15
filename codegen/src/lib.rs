@@ -2,6 +2,7 @@
 
 mod error;
 pub use error::{Error, Result};
+pub(crate) mod codegen_go;
 pub(crate) mod codegen_rust;
 pub mod config;
 pub mod docgen;
@@ -14,8 +15,8 @@ pub use gen::{templates_from_dir, Generator};
 pub(crate) use loader::sources_to_paths;
 pub use loader::{sources_to_model, weld_cache_dir};
 pub use rust_build::rust_build;
+pub mod format;
 mod rust_build;
-pub mod rustfmt;
 
 pub(crate) mod wasmbus_model;
 

@@ -38,8 +38,8 @@ pub enum Error {
     #[error("ser-deser : {0}")]
     Serde(String),
 
-    #[error("rustfmt {0}")]
-    Rustfmt(String),
+    #[error("source formatter {0}")]
+    Formatter(String),
 
     // build error
     #[error("{0}")]

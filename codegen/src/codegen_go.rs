@@ -1,4 +1,4 @@
-//! Rust language code-generator
+//! Go language code-generator
 //!
 #[cfg(feature = "wasmbus")]
 use crate::wasmbus_model::Wasmbus;
@@ -7,13 +7,13 @@ use crate::{
     error::{print_warning, Error, Result},
     gen::{CodeGen, SourceFormatter},
     model::{
-        codegen_rust_trait, get_operation, get_trait, has_default, is_opt_namespace,
-        serialization_trait, value_to_json, wasmcloud_model_namespace, CommentKind, PackageName,
+        get_operation, get_trait, is_opt_namespace, serialization_trait, value_to_json,
+        wasmcloud_model_namespace, CommentKind, PackageName,
     },
     render::Renderer,
-    wasmbus_model::{CodegenRust, Serialization},
+    wasmbus_model::Serialization,
     writer::Writer,
-    BytesMut, JsonValue, ParamMap,
+    BytesMut, ParamMap,
 };
 use atelier_core::model::shapes::ShapeKind;
 use atelier_core::{
@@ -39,52 +39,9 @@ use std::{collections::HashMap, path::Path, str::FromStr, string::ToString};
 const WASMBUS_RPC_CRATE: &str = "wasmbus_rpc";
 
 /// Default templates
-pub const RUST_TEMPLATES: &[(&str, &str)] = &[
-    (
-        "rust.actor.manifest.yaml",
-        include_str!("../templates/rust/rust.actor.manifest.yaml.hbs"),
-    ),
-    (
-        "rust.actor.rs",
-        include_str!("../templates/rust/rust.actor.rs.hbs"),
-    ),
-    (
-        "rust.Cargo.toml",
-        include_str!("../templates/rust/rust.Cargo.toml.hbs"),
-    ),
-    (
-        "rust.cargo_config.toml",
-        include_str!("../templates/rust/rust.cargo_config.toml.hbs"),
-    ),
-    (
-        "rust.gitignore",
-        include_str!("../templates/rust/rust.gitignore.hbs"),
-    ),
-    (
-        "rust.build.rs",
-        include_str!("../templates/rust/rust.build.rs.hbs"),
-    ),
-    (
-        "hello.smithy",
-        include_str!("../templates/hello.smithy.hbs"),
-    ),
-    (
-        "rust.lib.rs",
-        include_str!("../templates/rust/rust.lib.rs.hbs"),
-    ),
-    (
-        "rust.Makefile",
-        include_str!("../templates/rust/rust.Makefile.hbs"),
-    ),
-];
-
-const DEFAULT_MAP_TYPE: &str = "std::collections::HashMap";
-const DEFAULT_LIST_TYPE: &str = "Vec";
-const DEFAULT_SET_TYPE: &str = "std::collections::BTreeSet";
-const DEFAULT_DOCUMENT_TYPE: &str = "Vec<u8>";
+pub const GO_TEMPLATES: &[(&str, &str)] = &[];
 
 /// declarations for sorting. First sort key is the type (simple, then map, then struct).
-/// In rust, sorting by BytesMut as the second key will result in sort by item name.
 #[derive(Eq, Ord, PartialOrd, PartialEq)]
 struct Declaration(u8, BytesMut);
 
@@ -104,15 +61,16 @@ enum Ty<'typ> {
 }
 
 #[derive(Default)]
-pub struct RustCodeGen<'model> {
+pub struct GoCodeGen<'model> {
     /// if set, limits declaration output to this namespace only
     namespace: Option<NamespaceID>,
     packages: HashMap<String, PackageName>,
     import_core: String,
+    #[allow(dead_code)]
     model: Option<&'model Model>,
 }
 
-impl<'model> RustCodeGen<'model> {
+impl<'model> GoCodeGen<'model> {
     pub fn new(model: Option<&'model Model>) -> Self {
         Self {
             model,
@@ -123,7 +81,7 @@ impl<'model> RustCodeGen<'model> {
     }
 }
 
-impl<'model> CodeGen for RustCodeGen<'model> {
+impl<'model> CodeGen for GoCodeGen<'model> {
     /// Initialize code generator and renderer for language output.j
     /// This hook is called before any code is generated and can be used to initialize code generator
     /// and/or perform additional processing before output files are created.
@@ -134,7 +92,7 @@ impl<'model> CodeGen for RustCodeGen<'model> {
         _output_dir: &Path,
         renderer: &mut Renderer,
     ) -> std::result::Result<(), Error> {
-        for t in RUST_TEMPLATES.iter() {
+        for t in GO_TEMPLATES.iter() {
             renderer.add_template(*t)?;
         }
         self.namespace = None;
@@ -153,7 +111,7 @@ impl<'model> CodeGen for RustCodeGen<'model> {
     }
 
     fn source_formatter(&self) -> Result<Box<dyn SourceFormatter>> {
-        Ok(Box::new(crate::format::RustSourceFormatter::default()))
+        Ok(Box::new(crate::format::GoSourceFormatter::default()))
     }
 
     /// Perform any initialization required prior to code generation for a file
@@ -184,10 +142,10 @@ impl<'model> CodeGen for RustCodeGen<'model> {
                 ));
             }
         }
-        self.import_core = match params.get("crate") {
-            Some(JsonValue::String(c)) if c == WASMBUS_RPC_CRATE => "crate".to_string(),
-            _ => WASMBUS_RPC_CRATE.to_string(),
-        };
+        //self.import_core = match params.get("crate") {
+        //    Some(JsonValue::String(c)) if c == WASMBUS_RPC_CRATE => "gopkg".to_string(),
+        //    _ => WASMBUS_RPC_CRATE.to_string(),
+        //};
         Ok(())
     }
 
@@ -200,14 +158,18 @@ impl<'model> CodeGen for RustCodeGen<'model> {
         w.write(
             r#"// This file is generated automatically using wasmcloud-weld and smithy model definitions
                //
+               // WARNING WARNING
+               // GO language code generation is still in development and probably broken
+               //
             "#);
         match &self.namespace {
             Some(n) if n == wasmcloud_model_namespace() => {
                 // the base model has minimal dependencies
                 w.write(
                     r#"
-                #![allow(dead_code)]
-                use serde::{{Deserialize, Serialize}};
+                package lib
+                import "github.com/vmihailenco/msgpack/v5"
+                import "wasmbus_rpc"
              "#,
                 );
             }
@@ -216,24 +178,17 @@ impl<'model> CodeGen for RustCodeGen<'model> {
 
                 // special case for imports:
                 // if the crate we are generating is "wasmbus_rpc" then we have to import it with "crate::".
-                w.write(&format!(
+                w.write(
                     r#"
-                #![allow(clippy::ptr_arg)]
-                #[allow(unused_imports)]
-                use {}::{{
-                    client, context, deserialize, serialize, MessageDispatch, RpcError,
-                    Transport, Message,
-                }};
-                #[allow(unused_imports)] use serde::{{Deserialize, Serialize}};
-                #[allow(unused_imports)] use async_trait::async_trait;
-                #[allow(unused_imports)] use std::borrow::Cow;
+                package lib
+                import "github.com/vmihailenco/msgpack/v5"
+                import "wasmbus_rpc"
                 "#,
-                    &self.import_core
-                ));
+                );
             }
         }
         w.write(&format!(
-            "\npub const SMITHY_VERSION : &str = \"{}\";\n\n",
+            "\nconst SMITHY_VERSION = \"{}\";\n\n",
             model.smithy_version().to_string()
         ));
         Ok(())
@@ -255,6 +210,7 @@ impl<'model> CodeGen for RustCodeGen<'model> {
         // sort shapes (they are all in the same namespace if ns.is_some(), which is usually true)
         shapes.sort_by_key(|v| v.0);
 
+        w.write(b"var (\n");
         for (id, traits, shape) in shapes.into_iter() {
             match shape {
                 ShapeKind::Simple(simple) => {
@@ -264,43 +220,52 @@ impl<'model> CodeGen for RustCodeGen<'model> {
                     self.declare_map_shape(&mut w, id.shape_name(), traits, map)?;
                 }
                 ShapeKind::List(list) => {
-                    self.declare_list_or_set_shape(
-                        &mut w,
-                        id.shape_name(),
-                        traits,
-                        list,
-                        DEFAULT_LIST_TYPE,
-                    )?;
+                    self.declare_list_shape(&mut w, id.shape_name(), traits, list)?;
                 }
-                ShapeKind::Set(set) => {
+                ShapeKind::Set(_set) => {
+                    print_warning(&format!(
+                        "'Set' shape type is not implemented ({})",
+                        id.shape_name()
+                    ));
+                    /*
                     self.declare_list_or_set_shape(
                         &mut w,
                         id.shape_name(),
                         traits,
                         set,
-                        DEFAULT_SET_TYPE,
                     )?;
+                     */
                 }
-                ShapeKind::Structure(strukt) => {
-                    //if !traits.contains_key(&prelude_shape_named(TRAIT_TRAIT).unwrap()) {
-                    self.declare_structure_shape(&mut w, id.shape_name(), traits, strukt)?;
-                    //}
-                }
-                ShapeKind::Operation(_)
-                | ShapeKind::Resource(_)
-                | ShapeKind::Service(_)
-                | ShapeKind::Union(_)
-                | ShapeKind::Unresolved => {}
+                _ => {}
             }
         }
+        w.write(b")\n\n");
+
+        let mut shapes = model
+            .shapes()
+            .filter(|s| is_opt_namespace(s.id(), &ns))
+            .map(|s| (s.id(), s.traits(), s.body()))
+            .filter(|(_, _, b)| matches!(b, ShapeKind::Structure(_)))
+            .collect::<ShapeList>();
+        // sort shapes (they are all in the same namespace if ns.is_some(), which is usually true)
+        shapes.sort_by_key(|v| v.0);
+        for (id, traits, shape) in shapes.into_iter() {
+            if let ShapeKind::Structure(strukt) = shape {
+                //if !traits.contains_key(&prelude_shape_named(TRAIT_TRAIT).unwrap()) {
+                self.declare_structure_shape(&mut w, id.shape_name(), traits, strukt)?;
+                //}
+            }
+        }
+
         Ok(())
     }
 
+    #[allow(unused_variables)]
     fn write_services(
         &mut self,
         mut w: &mut Writer,
         model: &Model,
-        _params: &ParamMap,
+        params: &ParamMap,
     ) -> Result<()> {
         let ns = self.namespace.clone();
         for (id, traits, shape) in model
@@ -327,22 +292,22 @@ impl<'model> CodeGen for RustCodeGen<'model> {
         w.write(b"\n");
     }
 
-    /// returns rust source file extension "rs"
+    /// returns go source file extension "go"
     fn get_file_extension(&self) -> &'static str {
-        "rs"
+        "go"
     }
 }
 
-/// returns true if the file path ends in ".rs"
+/// returns true if the file path ends in ".go"
 #[allow(clippy::ptr_arg)]
-pub(crate) fn is_rust_source(path: &Path) -> bool {
+pub(crate) fn is_go_source(path: &Path) -> bool {
     match path.extension() {
-        Some(s) => s.to_string_lossy().as_ref() == "rs",
+        Some(s) => s.to_string_lossy().as_ref() == "go",
         _ => false,
     }
 }
 
-impl<'model> RustCodeGen<'model> {
+impl<'model> GoCodeGen<'model> {
     /// Apply documentation traits: (documentation, deprecated, unstable)
     fn apply_documentation_traits(
         &mut self,
@@ -357,17 +322,10 @@ impl<'model> RustCodeGen<'model> {
         }
 
         // deprecated
-        if let Some(Some(Value::Object(map))) =
+        if let Some(Some(Value::Object(_map))) =
             traits.get(&prelude_shape_named(TRAIT_DEPRECATED).unwrap())
         {
-            w.write(b"#[deprecated(");
-            if let Some(Value::String(since)) = map.get("since") {
-                w.write(&format!("since=\"{}\"\n", since));
-            }
-            if let Some(Value::String(message)) = map.get("message") {
-                w.write(&format!("note=\"{}\"\n", message));
-            }
-            w.write(b")\n");
+            self.write_documentation(&mut w, id, "Deprecated");
         }
 
         // unstable
@@ -375,7 +333,7 @@ impl<'model> RustCodeGen<'model> {
             .get(&prelude_shape_named(TRAIT_UNSTABLE).unwrap())
             .is_some()
         {
-            self.write_comment(&mut w, CommentKind::Documentation, "@unstable");
+            self.write_documentation(&mut w, id, "Unstable");
         }
     }
 
@@ -383,9 +341,7 @@ impl<'model> RustCodeGen<'model> {
     fn write_type(&mut self, w: &mut Writer, ty: Ty<'_>) -> Result<()> {
         match ty {
             Ty::Opt(id) => {
-                w.write(b"Option<");
                 self.write_type(w, Ty::Shape(id))?;
-                w.write(b">");
             }
             Ty::Ref(id) => {
                 w.write(b"&");
@@ -396,32 +352,39 @@ impl<'model> RustCodeGen<'model> {
                 if id.namespace() == prelude_namespace_id() {
                     let ty = match name.as_ref() {
                         // Document are  Blob
-                        SHAPE_BLOB => "Vec<u8>",
+                        SHAPE_BLOB => "[]byte",
                         SHAPE_BOOLEAN | SHAPE_PRIMITIVEBOOLEAN => "bool",
-                        SHAPE_STRING => "String",
-                        SHAPE_BYTE | SHAPE_PRIMITIVEBYTE => "i8",
-                        SHAPE_SHORT | SHAPE_PRIMITIVESHORT => "i16",
-                        SHAPE_INTEGER | SHAPE_PRIMITIVEINTEGER => "i32",
-                        SHAPE_LONG | SHAPE_PRIMITIVELONG => "i64",
+                        SHAPE_STRING => "string",
+                        SHAPE_BYTE | SHAPE_PRIMITIVEBYTE => "int8",
+                        SHAPE_SHORT | SHAPE_PRIMITIVESHORT => "int16",
+                        SHAPE_INTEGER | SHAPE_PRIMITIVEINTEGER => "int32",
+                        SHAPE_LONG | SHAPE_PRIMITIVELONG => "int64",
                         SHAPE_FLOAT | SHAPE_PRIMITIVEFLOAT => "float32",
                         SHAPE_DOUBLE | SHAPE_PRIMITIVEDOUBLE => "float64",
                         // if declared as members (of a struct, list, or map), we don't have trait data here to write
                         // as anything other than a blob. Instead, a type should be created for the Document that can have traits,
                         // and that type used for the member. This should probably be a lint rule.
-                        SHAPE_DOCUMENT => DEFAULT_DOCUMENT_TYPE,
+                        SHAPE_DOCUMENT => "[]byte", // FIXME
                         SHAPE_TIMESTAMP => {
+                            // FIXME: NOT IMPLEMENTED
                             cfg_if::cfg_if! {
-                                if #[cfg(feature = "Timestamp")] { "Timestamp" } else { return Err(Error::UnsupportedTimestamp) }
+                                if #[cfg(feature = "Timestamp")] {
+                                    print_warning("'Timestamp' type is not implemented");
+                                } else { return Err(Error::UnsupportedTimestamp) }
                             }
                         }
                         SHAPE_BIGINTEGER => {
                             cfg_if::cfg_if! {
-                                if #[cfg(feature = "BigInteger")] { "BigInteger" } else { return Err(Error::UnsupportedBigInteger) }
+                                if #[cfg(feature = "BigInteger")] {
+                                    print_warning("'BigInteger' type is not implemented");
+                                } else { return Err(Error::UnsupportedBigInteger) }
                             }
                         }
                         SHAPE_BIGDECIMAL => {
                             cfg_if::cfg_if! {
-                                if #[cfg(feature = "BigDecimal")] { "BigDecimal" } else { return Err(Error::UnsupportedBigDecimal) }
+                                if #[cfg(feature = "BigDecimal")] {
+                                    print_warning("'BigDecimal' type is not implemented");
+                                } else { return Err(Error::UnsupportedBigDecimal) }
                             }
                         }
                         _ => return Err(Error::UnsupportedType(name)),
@@ -430,11 +393,11 @@ impl<'model> RustCodeGen<'model> {
                 } else if id.namespace() == wasmcloud_model_namespace() {
                     match name.as_bytes() {
                         b"U64" | b"U32" | b"U16" | b"U8" => {
-                            w.write(b"u");
+                            w.write(b"uint");
                             w.write(&name.as_bytes()[1..])
                         }
                         b"I64" | b"I32" | b"I16" | b"I8" => {
-                            w.write(b"i");
+                            w.write(b"int");
                             w.write(&name.as_bytes()[1..])
                         }
                         _ => {
@@ -442,7 +405,7 @@ impl<'model> RustCodeGen<'model> {
                                 || self.namespace.as_ref().unwrap() != wasmcloud_model_namespace()
                             {
                                 w.write(&self.import_core);
-                                w.write(b"::model::");
+                                w.write(b".model.");
                             }
                             w.write(&self.to_type_name(&name));
                         }
@@ -457,11 +420,11 @@ impl<'model> RustCodeGen<'model> {
                         Some(package) => {
                             // the crate name should be valid rust syntax. If not, they'll get an error with rustc
                             w.write(&package.crate_name);
-                            w.write(b"::");
+                            w.write(b".");
                             w.write(&self.to_type_name(&id.shape_name().to_string()));
                         }
                         None => {
-                            return Err(Error::Model(format!("undefined create for namespace {} for symbol {}. Make sure codegen.toml includes all dependent namespaces",
+                            return Err(Error::Model(format!("undefined gopkg for namespace {} for symbol {}. Make sure codegen.toml includes all dependent namespaces",
                                     &id.namespace(), &id)));
                         }
                     }
@@ -472,6 +435,7 @@ impl<'model> RustCodeGen<'model> {
     }
 
     /// append suffix to type name, for example "Game", "Context" -> "GameContext"
+    #[allow(dead_code)]
     fn write_ident_with_suffix(
         &mut self,
         mut w: &mut Writer,
@@ -492,41 +456,51 @@ impl<'model> RustCodeGen<'model> {
         simple: &Simple,
     ) -> Result<()> {
         self.apply_documentation_traits(&mut w, id, traits);
-        w.write(b"pub type ");
+        w.write(b" ");
         self.write_ident(&mut w, id);
-        w.write(b" = ");
+        w.write(b" ");
         let ty = match simple {
-            Simple::Blob => "Vec<u8>",
+            Simple::Blob => "[]byte",
             Simple::Boolean => "bool",
-            Simple::String => "String",
-            Simple::Byte => "i8",
-            Simple::Short => "i16",
-            Simple::Integer => "i32",
-            Simple::Long => "i64",
-            Simple::Float => "f32",
-            Simple::Double => "f64",
+            Simple::String => "string",
+            Simple::Byte => "int8",
+            Simple::Short => "int16",
+            Simple::Integer => "int32",
+            Simple::Long => "int64",
+            Simple::Float => "float32",
+            Simple::Double => "float64",
 
             // note: in the future, codegen traits may modify this
-            Simple::Document => DEFAULT_DOCUMENT_TYPE,
+            Simple::Document => {
+                print_warning(&format!("'Document' type is not implemented ({})", id));
+                "[]byte"
+            }
 
             Simple::Timestamp => {
                 cfg_if::cfg_if! {
-                    if #[cfg(feature = "Timestamp")] { "Timestamp" } else { return Err(Error::UnsupportedTimestamp) }
+                    if #[cfg(feature = "Timestamp")] {
+                        print_warning(&format!("'Timestamp' type is not implemented ({})", id));
+                    } else { return Err(Error::UnsupportedTimestamp) }
                 }
             }
             Simple::BigInteger => {
                 cfg_if::cfg_if! {
-                    if #[cfg(feature = "BigInteger")] { "BigInteger" } else { return Err(Error::UnsupportedBigInteger) }
+                    if #[cfg(feature = "BigInteger")] {
+                        print_warning(&format!("'BigInteger' type is not implemented ({})", id));
+
+                    } else { return Err(Error::UnsupportedBigInteger) }
                 }
             }
             Simple::BigDecimal => {
                 cfg_if::cfg_if! {
-                    if #[cfg(feature = "BigDecimal")] { "BigDecimal" } else { return Err(Error::UnsupportedBigDecimal) }
+                    if #[cfg(feature = "BigDecimal")] {
+                        print_warning(&format!("'BigDecimal' type is not implemented ({})", id));
+                        } else { return Err(Error::UnsupportedBigDecimal) }
                 }
             }
         };
         w.write(ty);
-        w.write(b";\n\n");
+        w.write(b";\n");
         Ok(())
     }
 
@@ -538,34 +512,30 @@ impl<'model> RustCodeGen<'model> {
         shape: &MapShape,
     ) -> Result<()> {
         self.apply_documentation_traits(&mut w, id, traits);
-        w.write(b"pub type ");
+        w.write(b" ");
         self.write_ident(&mut w, id);
-        w.write(b" = ");
-        w.write(DEFAULT_MAP_TYPE);
-        w.write(b"<");
+        w.write(b" map");
+        w.write(b"[");
         self.write_type(&mut w, Ty::Shape(shape.key().target()))?;
-        w.write(b",");
+        w.write(b"]");
         self.write_type(&mut w, Ty::Shape(shape.value().target()))?;
-        w.write(b">;\n\n");
+        w.write(b";\n");
         Ok(())
     }
 
-    fn declare_list_or_set_shape(
+    fn declare_list_shape(
         &mut self,
         mut w: &mut Writer,
         id: &Identifier,
         traits: &AppliedTraits,
         shape: &ListOrSet,
-        typ: &str,
     ) -> Result<()> {
         self.apply_documentation_traits(&mut w, id, traits);
-        w.write(b"pub type ");
+        w.write(b" ");
         self.write_ident(&mut w, id);
-        w.write(b" = ");
-        w.write(typ);
-        w.write(b"<");
+        w.write(b" []");
         self.write_type(&mut w, Ty::Shape(shape.member().target()))?;
-        w.write(b">;\n\n");
+        w.write(b";\n");
         Ok(())
     }
 
@@ -578,20 +548,9 @@ impl<'model> RustCodeGen<'model> {
     ) -> Result<()> {
         let is_trait_struct = traits.contains_key(&prelude_shape_named(TRAIT_TRAIT).unwrap());
         self.apply_documentation_traits(&mut w, id, traits);
-        let derive_default =
-            if let Some(cg) = get_trait::<CodegenRust>(traits, codegen_rust_trait())? {
-                cg.derive_default
-            } else {
-                false
-            };
-        w.write(b"#[derive(");
-        if derive_default {
-            w.write(b"Default, ")
-        }
-        w.write(b"Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]\n");
-        w.write(b"pub struct ");
+        w.write(b"type ");
         self.write_ident(&mut w, id);
-        w.write(b" {\n");
+        w.write(b" struct {\n");
         // sort fields for deterministic output
         let mut fields = strukt
             .members()
@@ -611,64 +570,22 @@ impl<'model> RustCodeGen<'model> {
             } else {
                 member.id().to_string()
             };
-            //let declared_name = member.id().to_string();
-            let rust_field_name = self.to_field_name(member.id())?;
-            if ser_name != rust_field_name {
-                w.write(&format!("  #[serde(rename=\"{}\")] ", ser_name));
-            }
+            let go_field_name = self.to_field_name(member.id())?;
 
-            // for rmp-msgpack - need to use serde_bytes serializer for Blob (and Option<Blob>)
-            // otherwise Vec<u8> is written as an array of individual bytes, not a memory slice.
-            //
-            // We should only add this serde declaration if the struct is tagged with @wasmbusData.
-            // Because of the possibility of smithy models being used for messages
-            // that don't use wasmbus protocols, we don't want to "automatically"
-            // assume wasmbusData trait, even if we are compiled with (feature="wasmbus").
-            //
-            // However, we don't really need to require users to declare
-            // structs with wasmbusData - we can infer it if it's used in an operation
-            // for a service tagged with wasmbus. This would require traversing the model
-            // from all services tagged with wasmbus, looking at the inputs and outputs
-            // of all operations for those services, and, transitively, any
-            // data types referred from them, including struct fields, list members,
-            // and map keys and values.
-            // Until that traversal is implemented, assume that wasmbusData is enabled
-            // for everything. This saves developers from needing to add a wasmbusData
-            // declaration on every struct, which is error-prone.
-            // I can't think of a use case when adding serde_bytes is the wrong thing to do,
-            // even if msgpack is not used for serialization, so it seems like
-            // an acceptable simplification.
-            #[cfg(feature = "wasmbus")]
-            if member.target() == &ShapeID::new_unchecked("smithy.api", "Blob", None)
-            //&& traits.get(wasmbus_data_trait()).is_some()
-            {
-                w.write(r#"  #[serde(with="serde_bytes")] "#);
-            }
-
-            if is_optional_type(member) {
-                w.write(r#"  #[serde(default, skip_serializing_if = "Option::is_none")] "#);
-            } else if (is_trait_struct && !member.is_required())
-                || has_default(self.model.unwrap(), member)
-            {
-                // trait structs are deserialized only and need default values
-                // on deserialization, so always add [serde(default)] for trait structs.
-
-                // Additionally, add [serde(default)] for types that have a natural
-                // default value. Although not required if both ends of the protocol
-                // are implemented correctly, it may improve message resiliency
-                // if we can accept structs with missing fields, if the fields
-                // can be filled in/constructed with appropriate default values.
-                // This only applies if the default is a zero, empty list/map, etc,
-                // and we don't make any attempt to determine if a user-declared
-                // struct has a zero default.
-                // See the comment for has_default for more info.
-                w.write(r#"  #[serde(default)] "#);
-            }
-            w.write(b"  pub ");
-            w.write(&rust_field_name);
-            w.write(b": ");
+            let is_optional =
+                is_optional_type(member) || (is_trait_struct && !member.is_required());
+            let is_opt_label = if is_optional { ",omitempty" } else { "" };
+            w.write(&go_field_name);
+            w.write(b" ");
             self.write_field_type(&mut w, member)?;
-            w.write(b",\n");
+
+            if ser_name != go_field_name {
+                w.write(&format!(
+                    " `msgpack:\"{}{}\",json:\"{}{}\"`",
+                    ser_name, is_opt_label, ser_name, is_opt_label,
+                ));
+            }
+            w.write(b";\n"); // use semicolon at end of line
         }
         w.write(b"}\n\n");
         Ok(())
@@ -700,9 +617,9 @@ impl<'model> RustCodeGen<'model> {
         #[cfg(feature = "wasmbus")]
         self.add_wasmbus_comments(&mut w, service_id, service_traits)?;
 
-        w.write(b"#[async_trait]\npub trait ");
+        w.write(b"type ");
         self.write_ident(&mut w, service_id);
-        w.write(b"{\n");
+        w.write(b" interface {\n");
         for operation in service.operations() {
             // if operation is not declared in this namespace, don't define it here
             if let Some(ref ns) = self.namespace {
@@ -756,22 +673,19 @@ impl<'model> RustCodeGen<'model> {
         method_traits: &AppliedTraits,
         op: &Operation,
     ) -> Result<()> {
-        let method_name = self.to_method_name(method_id);
+        let method_name = self.to_method_name(method_id)?;
         self.apply_documentation_traits(&mut w, method_id, method_traits);
-        w.write(b"async fn ");
+        w.write(b" ");
         w.write(&method_name);
-        w.write(b"(&self, ctx: &context::Context<'_>");
+        w.write(b"(ctx  &context.Context");
         if let Some(input_type) = op.input() {
-            w.write(b", arg: "); // pass arg by reference
+            w.write(b", arg  "); // pass arg by reference
             self.write_type(&mut w, Ty::Ref(input_type))?;
         }
-        w.write(b") -> Result<");
+        w.write(b") ");
         if let Some(output_type) = op.output() {
             self.write_type(&mut w, Ty::Shape(output_type))?;
-        } else {
-            w.write(b"()");
         }
-        w.write(b", RpcError>");
         Ok(())
     }
 
@@ -779,10 +693,10 @@ impl<'model> RustCodeGen<'model> {
     fn write_service_receiver(
         &mut self,
         mut w: &mut Writer,
-        model: &Model,
+        _model: &Model,
         service_id: &Identifier,
         service_traits: &AppliedTraits,
-        service: &Service,
+        _service: &Service,
     ) -> Result<()> {
         let doc = format!(
             "{}Receiver receives messages defined in the {} service trait",
@@ -790,6 +704,9 @@ impl<'model> RustCodeGen<'model> {
         );
         self.write_comment(&mut w, CommentKind::Documentation, &doc);
         self.apply_documentation_traits(&mut w, service_id, service_traits);
+        w.write(&format!("// {}Receiver not implemented\n", service_id));
+
+        /*
         w.write(b"#[async_trait]\npub trait ");
         self.write_ident_with_suffix(&mut w, service_id, "Receiver")?;
         w.write(b" : MessageDispatch + ");
@@ -846,6 +763,7 @@ impl<'model> RustCodeGen<'model> {
         self.write_ident(&mut w, service_id);
         w.write(b"::{}\", message.method))),\n");
         w.write(b"}\n}\n}\n\n"); // end match, end fn dispatch, end trait
+         */
 
         Ok(())
     }
@@ -855,10 +773,10 @@ impl<'model> RustCodeGen<'model> {
     fn write_service_sender(
         &mut self,
         mut w: &mut Writer,
-        model: &Model,
+        _model: &Model,
         service_id: &Identifier,
         service_traits: &AppliedTraits,
-        service: &Service,
+        _service: &Service,
     ) -> Result<()> {
         let doc = format!(
             "{}Sender sends messages to a {} service",
@@ -866,6 +784,9 @@ impl<'model> RustCodeGen<'model> {
         );
         self.write_comment(&mut w, CommentKind::Documentation, &doc);
         self.apply_documentation_traits(&mut w, service_id, service_traits);
+
+        w.write(&format!("// {}Sender not implemented\n", service_id));
+        /*
         w.write(b"#[derive(Debug)]\npub struct ");
         self.write_ident_with_suffix(&mut w, service_id, "Sender")?;
         w.write(b"<T> { transport: T, config: client::SendConfig }\n\n");
@@ -920,9 +841,18 @@ impl<'model> RustCodeGen<'model> {
             w.write(b" }\n");
         }
         w.write(b"}\n\n");
+         */
         Ok(())
     }
-} // impl CodeGenRust
+    /// Convert field name to its target-language-idiomatic case style
+    fn to_field_name(&self, member_id: &Identifier) -> std::result::Result<String, Error> {
+        Ok(crate::strings::to_pascal_case(&member_id.to_string()))
+    }
+    /// Convert method name to its target-language-idiomatic case style
+    fn to_method_name(&self, method: &Identifier) -> std::result::Result<String, Error> {
+        Ok(crate::strings::to_pascal_case(&method.to_string()))
+    }
+} // impl CodeGenGo
 
 /// is_optional_type determines whether the field should be wrapped in Option<>
 /// the value is true if it has an explicit `box` trait, or if it's

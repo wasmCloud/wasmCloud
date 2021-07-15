@@ -4,6 +4,7 @@
 //!
 use crate::Bytes;
 use crate::{
+    codegen_go::GoCodeGen,
     codegen_rust::RustCodeGen,
     config::{CodegenConfig, LanguageConfig, OutputFile, OutputLanguage},
     docgen::DocGen,
@@ -14,6 +15,7 @@ use crate::{
     JsonValue, ParamMap, TomlValue,
 };
 use atelier_core::model::{Identifier, Model};
+use std::borrow::Borrow;
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -212,8 +214,10 @@ fn gen_for_language<'model>(
         OutputLanguage::Rust => Box::new(RustCodeGen::new(model)),
         OutputLanguage::Html => Box::new(DocGen::default()),
         OutputLanguage::Poly => Box::new(PolyGen::default()),
+        OutputLanguage::Go => Box::new(GoCodeGen::new(model)),
         _ => {
-            unimplemented!();
+            crate::error::print_warning(&format!("Target language {} not implemented", language));
+            Box::new(NoCodeGen::default())
         }
     }
 }
@@ -257,17 +261,6 @@ pub(crate) trait CodeGen {
         self.declare_types(&mut w, model, params)?;
         self.write_services(&mut w, model, params)?;
         self.finalize(&mut w)
-    }
-
-    /// After code generation has completed for all files, this method is called once per output language
-    /// to allow code formatters to run. The `files` parameter contains a list of all files written or updated.
-    #[allow(unused_variables)]
-    fn format(
-        &mut self,
-        files: Vec<PathBuf>,
-        lc_params: &BTreeMap<String, TomlValue>,
-    ) -> Result<()> {
-        Ok(())
     }
 
     /// Perform any initialization required prior to code generation for a file
@@ -343,7 +336,9 @@ pub(crate) trait CodeGen {
     //fn take(&mut self) -> BytesMut;
 
     /// returns file extension of source files for this language
-    fn get_file_extension(&self) -> &'static str;
+    fn get_file_extension(&self) -> &'static str {
+        ""
+    }
 
     /// Convert type name to its target-language-idiomatic case style
     /// The default implementation uses UpperPascalCase
@@ -378,15 +373,78 @@ pub(crate) trait CodeGen {
             &self.op_dispatch_name(method_id)
         )
     }
+
+    fn source_formatter(&self) -> Result<Box<dyn SourceFormatter>> {
+        Ok(Box::new(crate::format::NullFormatter::default()))
+    }
+
+    /// After code generation has completed for all files, this method is called once per output language
+    /// to allow code formatters to run. The `files` parameter contains a list of all files written or updated.
+    fn format(
+        &mut self,
+        files: Vec<PathBuf>,
+        lc_params: &BTreeMap<String, TomlValue>,
+    ) -> Result<()> {
+        // if we just created an interface project, don't run rustfmt yet
+        // because we haven't generated the other rust file yet, so rustfmt will fail.
+        if !lc_params.contains_key("create_interface") {
+            // make a list of all output files with ".rs" extension so we can fix formatting with rustfmt
+            // minor nit: we don't check the _config-only flag so there could be some false positives here, but rustfmt is safe to use anyway
+            let formatter = self.source_formatter()?;
+
+            let sources = files
+                .into_iter()
+                .filter(|f| formatter.include(f))
+                .collect::<Vec<PathBuf>>();
+
+            if !sources.is_empty() {
+                ensure_files_exist(&sources)?;
+
+                let file_names: Vec<std::borrow::Cow<'_, str>> =
+                    sources.iter().map(|p| p.to_string_lossy()).collect();
+                let borrowed = file_names.iter().map(|s| s.borrow()).collect::<Vec<&str>>();
+                formatter.run(&borrowed)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Formats source code
+#[allow(unused_variables)]
+pub trait SourceFormatter {
+    /// run formatter on all files
+    /// Default implementation does nothing
+    fn run(&self, source_files: &[&str]) -> Result<()> {
+        Ok(())
+    }
+
+    /// returns true if the file should be included in the set to be formatted
+    /// default implementation returns false for all files
+    fn include(&self, path: &std::path::Path) -> bool {
+        true
+    }
+}
+
+/// confirm all files are present, otherwise return error
+fn ensure_files_exist(source_files: &Vec<std::path::PathBuf>) -> Result<()> {
+    let missing = source_files
+        .iter()
+        .filter(|p| !p.is_file())
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect::<Vec<String>>();
+    if !missing.is_empty() {
+        return Err(Error::Formatter(format!(
+            "missing source file(s) '{}'",
+            missing.join(",")
+        )));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Default)]
 struct PolyGen {}
-impl CodeGen for PolyGen {
-    fn get_file_extension(&self) -> &'static str {
-        ""
-    }
-}
+impl CodeGen for PolyGen {}
 
 // convert from TOML map to JSON map so it's usable by handlebars
 //pub fn toml_to_json(map: &BTreeMap<String, TomlValue>) -> Result<ParamMap> {
@@ -459,4 +517,12 @@ pub fn templates_from_dir(start: &std::path::Path) -> Result<Vec<(String, String
         }
     }
     Ok(templates)
+}
+
+#[derive(Default)]
+struct NoCodeGen {}
+impl CodeGen for NoCodeGen {
+    fn get_file_extension(&self) -> &'static str {
+        ""
+    }
 }
