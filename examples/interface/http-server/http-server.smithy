@@ -8,7 +8,7 @@ metadata package = [ { namespace: "org.wasmcloud.example.httpServer", crate: "wa
 namespace org.wasmcloud.example.httpServer
 
 use org.wasmcloud.model#codegenRust
-use org.wasmcloud.model#U32
+use org.wasmcloud.model#U16
 use org.wasmcloud.model#wasmbus
 use org.wasmcloud.model#wasmbusData
 
@@ -49,7 +49,7 @@ structure HttpRequest {
 structure HttpResponse {
   /// statusCode should be 200 if the request was correctly handled
   @required
-  statusCode: U32,
+  statusCode: U16,
   @required
   status: String,
   @required
@@ -57,7 +57,6 @@ structure HttpResponse {
   @required
   body: Blob,
 }
-
 
 /// Headers is a list of http headers
 map Headers {

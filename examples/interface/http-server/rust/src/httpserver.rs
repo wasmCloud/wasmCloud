@@ -45,7 +45,7 @@ pub struct HttpResponse {
     pub status: String,
     /// statusCode should be 200 if the request was correctly handled
     #[serde(rename = "statusCode")]
-    pub status_code: u32,
+    pub status_code: u16,
 }
 
 /// HttpServer is the contract to be implemented by actor
