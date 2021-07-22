@@ -8,7 +8,7 @@ metadata package = [ { namespace: "org.wasmcloud.example.httpServer", crate: "wa
 namespace org.wasmcloud.example.httpServer
 
 use org.wasmcloud.model#codegenRust
-use org.wasmcloud.model#U16
+use org.wasmcloud.model#U32
 use org.wasmcloud.model#wasmbus
 use org.wasmcloud.model#wasmbusData
 
@@ -30,14 +30,19 @@ operation HandleRequest {
 /// HttpRequest contains data sent to actor about the http request
 @wasmbusData
 structure HttpRequest {
+  /// HTTP method. One of: GET,POST,PUT,DELETE,HEAD,OPTIONS,CONNECT,PATCH,TRACE
   @required
   method: String,
+  /// full request path
   @required
   path: String,
+  /// query string. May be an empty string if there were no query parameters.
   @required
   queryString: String,
+  /// map of request headers (string key, string value)
   @required
   header: Headers,
+  /// Request body as a byte array. May be empty.
   @required
   body: Blob,
 }
@@ -47,13 +52,17 @@ structure HttpRequest {
 // don't generate Default since we want to customize it
 @codegenRust( deriveDefault: false )
 structure HttpResponse {
-  /// statusCode should be 200 if the request was correctly handled
+  /// statusCode is a three-digit number, usually in the range 100-599,
+  /// A value of 200 indicates success.
   @required
-  statusCode: U16,
+  statusCode: U32,
+  /// status response, usually "OK"
   @required
   status: String,
+  /// Map of headers (string keys, string values)
   @required
   header: Headers,
+  /// Body of response as a byte array. May be an empty array.
   @required
   body: Blob,
 }

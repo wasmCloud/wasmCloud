@@ -21,14 +21,19 @@ pub type Headers = std::collections::HashMap<String, String>;
 /// HttpRequest contains data sent to actor about the http request
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct HttpRequest {
+    /// Request body as a byte array. May be empty.
     #[serde(with = "serde_bytes")]
     #[serde(default)]
     pub body: Vec<u8>,
+    /// map of request headers (string key, string value)
     pub header: Headers,
+    /// HTTP method. One of: GET,POST,PUT,DELETE,HEAD,OPTIONS,CONNECT,PATCH,TRACE
     #[serde(default)]
     pub method: String,
+    /// full request path
     #[serde(default)]
     pub path: String,
+    /// query string. May be an empty string if there were no query parameters.
     #[serde(rename = "queryString")]
     #[serde(default)]
     pub query_string: String,
@@ -37,15 +42,19 @@ pub struct HttpRequest {
 /// HttpResponse contains the actor's response to return to the http client
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct HttpResponse {
+    /// Body of response as a byte array. May be an empty array.
     #[serde(with = "serde_bytes")]
     #[serde(default)]
     pub body: Vec<u8>,
+    /// Map of headers (string keys, string values)
     pub header: Headers,
+    /// status response, usually "OK"
     #[serde(default)]
     pub status: String,
-    /// statusCode should be 200 if the request was correctly handled
+    /// statusCode is a three-digit number, usually in the range 100-599,
+    /// A value of 200 indicates success.
     #[serde(rename = "statusCode")]
-    pub status_code: u16,
+    pub status_code: u32,
 }
 
 /// HttpServer is the contract to be implemented by actor
