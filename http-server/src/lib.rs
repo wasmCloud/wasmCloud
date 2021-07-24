@@ -170,10 +170,10 @@ impl HttpServerProvider {
                 };
 
                 App::new()
-                    .wrap(middleware::Logger::default())
                     .wrap(cors)
-                    .data(disp.clone())
-                    .data(module.clone())
+                    .wrap(middleware::Logger::default())
+                    .app_data(disp.clone())
+                    .app_data(module.clone())
                     .default_service(web::route().to(request_handler))
             })
             .disable_signals();
