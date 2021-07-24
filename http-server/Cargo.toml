@@ -25,7 +25,7 @@ crate-type = ["cdylib", "rlib"]
 rmp-serde = "0.15.4"
 serde_bytes = "0.11.5"
 serde = { version = "1.0.124", features = ["derive"] }
-actix-cors = "0.5.4"
+actix-cors = "0.6.0-beta.2"
 actix-web = "4.0.0-beta.8"
 actix-rt = "2.1.0"
 env_logger = "0.8.3"
