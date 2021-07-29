@@ -39,6 +39,10 @@ pub struct HostData {
     pub env_values: HostEnvValues,
     #[serde(default)]
     pub host_id: String,
+    /// private key the provider should use to sign invocations
+    /// this field is sensitive and should never be logged
+    #[serde(default)]
+    pub invocation_seed: String,
     #[serde(default)]
     pub lattice_rpc_prefix: String,
     #[serde(default)]
