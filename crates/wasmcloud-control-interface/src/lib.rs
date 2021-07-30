@@ -292,11 +292,17 @@ impl Client {
     /// target wasmCloud host will acknowledge the receipt of this command, and _will not_ supply a discrete
     /// confirmation that the actor has terminated. For that kind of information, the client must also monitor
     /// the control event stream
-    pub async fn stop_actor(&self, host_id: &str, actor_ref: &str) -> Result<StopActorAck> {
+    pub async fn stop_actor(
+        &self,
+        host_id: &str,
+        actor_ref: &str,
+        count: u16,
+    ) -> Result<StopActorAck> {
         let subject = broker::commands::stop_actor(&self.nsprefix, host_id);
         let bytes = serialize(StopActorCommand {
             host_id: host_id.to_string(),
             actor_ref: actor_ref.to_string(),
+            count: Some(count),
         })?;
         match actix_rt::time::timeout(self.timeout, self.nc.request(&subject, &bytes)).await? {
             Ok(msg) => {
