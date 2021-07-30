@@ -44,7 +44,7 @@ pub(crate) async fn basics() -> Result<()> {
 
     // Cannot stop a non-existent actor
     assert!(ctl_client
-        .stop_actor(&hid, KVCOUNTER_OCI)
+        .stop_actor(&hid, KVCOUNTER_OCI, 1)
         .await?
         .failure
         .is_some());
@@ -73,7 +73,7 @@ pub(crate) async fn basics() -> Result<()> {
         )
     );
 
-    let stop_ack = ctl_client.stop_actor(&hid, KVCOUNTER_OCI).await?;
+    let stop_ack = ctl_client.stop_actor(&hid, KVCOUNTER_OCI, 1).await?;
     assert!(stop_ack.failure.is_none());
     await_actor_count(&h, 0, Duration::from_millis(50), 20).await?;
 
@@ -312,7 +312,7 @@ pub(crate) async fn calltest() -> Result<()> {
     h.stop().await;
     actix_rt::time::sleep(Duration::from_millis(900)).await;
 
-    ctl_client.stop_actor(&h.id(), &a_id).await?;
+    ctl_client.stop_actor(&h.id(), &a_id, 1).await?;
     actix_rt::time::sleep(Duration::from_millis(300)).await;
     let inv_r = ctl_client
         .call_actor(&a_id, "HandleRequest", &serialize(&req)?)
@@ -472,7 +472,7 @@ pub(crate) async fn monitor_event_stream() -> Result<()> {
     .expect("failed to receive start actor event");
 
     ctl_client
-        .stop_actor(&hid, ECHO_PKEY)
+        .stop_actor(&hid, ECHO_PKEY, 1)
         .await
         .expect("Failed to start echo actor on host");
 

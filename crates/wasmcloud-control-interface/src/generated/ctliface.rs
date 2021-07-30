@@ -84,6 +84,9 @@ pub struct StopActorCommand {
     pub host_id: String,
     #[serde(rename = "actor_ref")]
     pub actor_ref: String,
+    #[serde(rename = "count")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub count: Option<u16>,
 }
 
 #[derive(Debug, PartialEq, Deserialize, Serialize, Default, Clone)]
