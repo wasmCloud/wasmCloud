@@ -2,7 +2,7 @@ use actix_cors::Cors;
 use actix_rt;
 use actix_web::dev::Body;
 use actix_web::http::{HeaderName, HeaderValue, StatusCode};
-use actix_web::web::Bytes;
+use actix_web::web::{Bytes, Data};
 use actix_web::{middleware, web, App, HttpRequest, HttpResponse, HttpServer};
 use codec::capabilities::{CapabilityProvider, Dispatcher, NullDispatcher};
 use codec::core::{OP_BIND_ACTOR, OP_HEALTH_REQUEST, OP_REMOVE_ACTOR};
@@ -172,8 +172,8 @@ impl HttpServerProvider {
                 App::new()
                     .wrap(cors)
                     .wrap(middleware::Logger::default())
-                    .app_data(disp.clone())
-                    .app_data(module.clone())
+                    .app_data(Data::new(disp.clone()))
+                    .app_data(Data::new(module.clone()))
                     .default_service(web::route().to(request_handler))
             })
             .disable_signals();
