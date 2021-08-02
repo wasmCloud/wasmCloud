@@ -13,7 +13,7 @@ pub fn rpc_prefix(nsprefix: &Option<String>) -> String {
 }
 
 pub fn control_event(nsprefix: &Option<String>) -> String {
-    format!("{}.events", prefix(nsprefix))
+    format!("wasmbus.evt.{}", prefix(nsprefix))
 }
 
 pub fn provider_auction_subject(nsprefix: &Option<String>) -> String {
