@@ -1,6 +1,6 @@
 [package]
 name = "wash-cli"
-version = "0.4.5"
+version = "0.5.0"
 authors = ["wasmCloud Team"]
 edition = "2018"
 repository = "https://github.com/wasmcloud/wash"
@@ -12,8 +12,8 @@ categories = ["wasm", "command-line-utilities"]
 
 [features]
 default = ["wasm3"]
-wasmtime = ["wasmcloud-host/wasmtime"]
-wasm3 = ["wasmcloud-host/wasm3"]
+wasmtime = ["wasmcloud-host/wasmtime", "tui/termion", "termion"]
+wasm3 = ["wasmcloud-host/wasm3", "tui/termion", "termion"]
 
 [badges]
 maintenance = { status = "actively-developed" }
@@ -24,9 +24,9 @@ serde_json = { version = "1.0.62", features = ["raw_value"] }
 serde = { version = "1.0.123", features = ["derive"] }
 serdeconv = "0.4.0"
 tui-logger = "0.6.3"
-tui = { version = "0.14.0", default-features = true }
+tui = { version = "0.14.0", default-features = false }
 log = "0.4.14"
-termion = "1.5"
+termion = { version = "1.5", optional = true } 
 actix-rt = "2.2.0"
 spinners = "1.2.0"
 nats = "0.8.6"
@@ -40,11 +40,13 @@ nkeys = "0.1.0"
 wascap = "0.6.0"
 provider-archive = "0.4.0"
 wasmcloud-control-interface = "0.3.1"
-wasmcloud-host = { version = "0.18.1", default-features = false }
+wasmcloud-host = { version = "0.18.2", default-features = false, optional = true }
 
 [dev-dependencies]
 test_bin = "0.3.0"
-awc = "3.0.0-beta.4"
+reqwest = { version = "0.11", features = ["json"] }
+wasmcloud-host = { version = "0.18.2" }
+termion = "1.5"
 
 [[bin]]
 name = "wash"

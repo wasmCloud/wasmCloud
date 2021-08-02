@@ -216,7 +216,7 @@ async fn integration_ctl_actor_provider_roundtrip() -> Result<()> {
             ECHO_PKEY,
             HTTPSERVER_PKEY,
             CONTRACT,
-            "PORT=8080",
+            "PORT=8090",
             "-n",
             NS,
             "-o",
@@ -239,7 +239,7 @@ async fn integration_ctl_actor_provider_roundtrip() -> Result<()> {
                 ECHO_PKEY,
                 HTTPSERVER_PKEY,
                 CONTRACT,
-                "PORT=8080",
+                "PORT=8090",
                 "-n",
                 NS,
                 "-o",
@@ -250,27 +250,15 @@ async fn integration_ctl_actor_provider_roundtrip() -> Result<()> {
         assert!(link_echo_httpserver.status.success());
     }
 
-    let client = awc::Client::default();
+    let resp = reqwest::get("http://0.0.0.0:8090/echotest")
+        .await?
+        .text()
+        .await?;
 
-    // Create request builder and send request
-    let resp = String::from_utf8(
-        client
-            .get("http://localhost:8080/echotest")
-            .send() // <- Send request
-            .await
-            .expect("failed to make request to echo")
-            .body()
-            .await
-            .expect("failed to make request to echo")
-            .to_vec(),
-    )
-    .expect("failed to get echo response"); // <- Wait for response
-
-    // let resp = reqwest::blocking::get("http://localhost:8080/echotest")?.text()?;
     assert!(resp.contains("\"method\":\"GET\""));
     assert!(resp.contains("\"path\":\"/echotest\""));
     assert!(resp.contains("\"query_string\":\"\""));
-    assert!(resp.contains("\"host\":\"localhost:8080\""));
+    assert!(resp.contains("\"host\":\"0.0.0.0:8090\""));
     assert!(resp.contains("\"body\":[]"));
 
     let stop_actor = wash()
@@ -303,14 +291,8 @@ async fn integration_ctl_actor_provider_roundtrip() -> Result<()> {
     assert!(wait_for_stop(&host_id, NS, HTTPSERVER_PKEY, 30).await);
 
     // Now that actor and provider aren't running, this request should fail
-    // assert!(client
-    //     .get("http://localhost:8080/echotest")
-    //     .send()
-    //     .await
-    //     .is_err());
-
-    let resp = client.get("http://localhost:8080/echotest").send().await;
-    assert!(resp.unwrap().status().is_server_error());
+    let resp = reqwest::get("http://0.0.0.0:8090/echotest").await;
+    assert!(resp.is_err());
 
     Ok(())
 }
@@ -365,7 +347,7 @@ async fn create_host(namespace: String) -> Result<String> {
                 .with_control_client(nats_conn)
                 .with_label("test_mode", "true")
                 .oci_allow_latest()
-                .oci_allow_insecure(vec!["localhost:5000".to_string()])
+                .oci_allow_insecure(vec!["0.0.0.0:5000".to_string()])
                 .enable_live_updates()
                 .build();
             host.start().await.unwrap();
