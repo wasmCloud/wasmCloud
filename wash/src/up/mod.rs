@@ -123,8 +123,12 @@ impl std::str::FromStr for LogLevel {
 }
 
 pub(crate) async fn handle_command(command: UpCliCommand) -> Result<()> {
-    let UpCliCommand { .. } = command;
-    handle_up(command).await
+    {
+        let UpCliCommand { .. } = command;
+        handle_up(command).await
+    }
+    #[cfg(not(feature = "termion"))]
+    Err("`termion` feature was not installed, REPL cannot be initialized without `termion`".into())
 }
 
 #[derive(StructOpt, Debug, Clone)]
@@ -171,6 +175,7 @@ enum ReplCliCommand {
 }
 
 /// Launches REPL environment
+
 async fn handle_up(cmd: UpCliCommand) -> Result<()> {
     // Initialize logger at default level based on user input. Defaults to Debug
     // Trace is very noisy and should be used only for intense debugging
@@ -250,6 +255,7 @@ async fn handle_up(cmd: UpCliCommand) -> Result<()> {
     std::thread::spawn(move || {
         let rt = actix_rt::System::new();
         rt.block_on(async move {
+            host_output_sender.send("WARNING: The wash REPL is deprecated and will be removed in 0.6.0".to_string()).unwrap();
             if let Err(e) = host.start().await.map_err(convert_error) {
                 error!(target: WASH_LOG_INFO, "Error launching REPL host: {}", e);
             } else {
@@ -695,6 +701,7 @@ async fn handle_reg(reg_cmd: RegCliCommand, output_state: Arc<Mutex<OutputState>
 }
 
 /// Helper function to exit the alternate tui terminal without corrupting the user terminal
+
 pub(crate) fn cleanup_terminal(terminal: &mut Terminal<ReplTermionBackend>) {
     terminal.show_cursor().unwrap();
     terminal.clear().unwrap();
@@ -749,6 +756,7 @@ pub(crate) fn format_input_for_display(input_vec: Vec<char>, input_width: usize)
 }
 
 /// Display the wash REPL in the provided panel, automatically scroll with overflow
+
 pub(crate) fn draw_input_panel(
     frame: &mut Frame<ReplTermionBackend>,
     state: &mut InputState,
@@ -818,6 +826,7 @@ pub(crate) fn draw_input_panel(
 }
 
 /// Display command output in the provided panel
+
 pub(crate) fn draw_output_panel(
     frame: &mut Frame<ReplTermionBackend>,
     state: Arc<Mutex<OutputState>>,
@@ -863,6 +872,7 @@ pub(crate) fn draw_output_panel(
 }
 
 /// Draws the Tui smart logger widget in the provided frame
+
 pub(crate) fn draw_smart_logger(
     frame: &mut Frame<ReplTermionBackend>,
     chunk: Rect,
