@@ -1,12 +1,12 @@
 //! A set of standard names for capabilities that can be provided by a host
-pub const MESSAGING: &str = "wasmcloud:messaging";
-pub const KEY_VALUE: &str = "wasmcloud:keyvalue";
-pub const HTTP_SERVER: &str = "wasmcloud:httpserver";
-pub const HTTP_CLIENT: &str = "wasmcloud:httpclient";
 pub const BLOB: &str = "wasmcloud:blobstore";
+pub const HTTP_CLIENT: &str = "wasmcloud:httpclient";
+pub const HTTP_SERVER: &str = "wasmcloud:httpserver";
+pub const KEY_VALUE: &str = "wasmcloud:keyvalue";
+pub const MESSAGING: &str = "wasmcloud:messaging";
 pub const EVENTSTREAMS: &str = "wasmcloud:eventstreams";
-pub const EXTRAS: &str = "wasmcloud:extras";
-pub const LOGGING: &str = "wasmcloud:logging";
+pub const NUMBERGEN: &str = "wasmcloud:builtin:numbergen";
+pub const LOGGING: &str = "wasmcloud:builtin:logging";
 
 use std::collections::HashMap;
 
@@ -19,7 +19,7 @@ lazy_static! {
         m.insert(HTTP_CLIENT, "HTTP Client");
         m.insert(BLOB, "Blob Store");
         m.insert(EVENTSTREAMS, "Event Streams");
-        m.insert(EXTRAS, "Extras");
+        m.insert(NUMBERGEN, "Number Generation");
         m.insert(LOGGING, "Logging");
         m
     };

@@ -1,6 +1,6 @@
 [package]
 name = "wascap"
-version = "0.6.1"
+version = "0.7.0"
 authors = ["wasmCloud Team"]
 edition = "2018"
 description = "Wascap - WebAssembly Standard Capabilities. Library for extracting, embedding, and validating claims"
