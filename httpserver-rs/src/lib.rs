@@ -34,8 +34,9 @@
 //!
 use bytes::Bytes;
 use http::header::HeaderMap;
-use log::{error, info, trace};
-use std::{convert::Infallible, iter::FromIterator, sync::Arc};
+#[allow(unused_imports)]
+use log::{debug, error, info, trace};
+use std::{convert::Infallible, sync::Arc};
 use thiserror::Error as ThisError;
 use tokio::{
     sync::{oneshot, RwLock},
@@ -281,18 +282,17 @@ impl HttpServer {
 fn convert_request_headers(headers: &http::HeaderMap) -> wasmcloud_interface_httpserver::HeaderMap {
     let mut hmap = wasmcloud_interface_httpserver::HeaderMap::new();
     for k in headers.keys() {
-        let vals: Vec<String> = Vec::from_iter(
-            headers
-                .get_all(k)
-                .iter()
-                // from http crate:
-                //    In practice, HTTP header field values are usually valid ASCII.
-                //     However, the HTTP spec allows for a header value to contain
-                //     opaque bytes as well.
-                // This implementation only forwards headers with ascii values to the actor.
-                .filter_map(|val| val.to_str().ok())
-                .map(|s| s.to_string()),
-        );
+        let vals = headers
+            .get_all(k)
+            .iter()
+            // from http crate:
+            //    In practice, HTTP header field values are usually valid ASCII.
+            //     However, the HTTP spec allows for a header value to contain
+            //     opaque bytes as well.
+            // This implementation only forwards headers with ascii values to the actor.
+            .filter_map(|val| val.to_str().ok())
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>();
         if !vals.is_empty() {
             hmap.insert(k.to_string(), vals);
         }

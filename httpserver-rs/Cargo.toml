@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-provider-httpserver"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2018"
 resolver = "2"
 
@@ -30,9 +30,8 @@ warp = {version="0.3", features=["tls"]}
 version = "0.1"
 path = "../../interfaces/httpserver/rust"
 
-
 [dependencies.wasmbus-rpc]
-version = "0.1"
+version = "0.2"
 path = "../../weld/rpc-rs"
 
 [dev-dependencies]

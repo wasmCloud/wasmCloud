@@ -17,8 +17,6 @@
 ///
 use crate::Error;
 use serde::{de::Deserializer, de::Visitor, Deserialize, Serialize};
-//use std::convert::TryInto;
-use std::iter::FromIterator;
 use std::path::PathBuf;
 use std::{collections::HashMap, fmt, io::ErrorKind, net::SocketAddr, ops::Deref, str::FromStr};
 
@@ -359,11 +357,12 @@ impl Deref for AllowedOrigins {
 
 impl Default for AllowedOrigins {
     fn default() -> Self {
-        AllowedOrigins(Vec::from_iter(
+        AllowedOrigins(
             CORS_ALLOWED_ORIGINS
                 .iter()
-                .map(|s| CorsOrigin(s.to_string())),
-        ))
+                .map(|s| CorsOrigin(s.to_string()))
+                .collect::<Vec<_>>(),
+        )
     }
 }
 
@@ -405,9 +404,12 @@ impl Deref for ExposedHeaders {
 
 impl Default for ExposedHeaders {
     fn default() -> Self {
-        ExposedHeaders(Vec::from_iter(
-            CORS_EXPOSED_HEADERS.iter().map(|s| s.to_string()),
-        ))
+        ExposedHeaders(
+            CORS_EXPOSED_HEADERS
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>(),
+        )
     }
 }
 
@@ -515,7 +517,7 @@ where
     T: std::convert::From<&'d str>,
 {
     // unwrap ok here bacause this is only used for default values
-    Vec::from_iter(d.iter().map(|s| T::from(*s)))
+    d.iter().map(|s| T::from(*s)).collect::<Vec<_>>()
 }
 
 #[cfg(test)]
