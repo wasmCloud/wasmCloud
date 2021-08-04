@@ -582,7 +582,7 @@ impl<'model> RustCodeGen<'model> {
             if let Some(cg) = get_trait::<CodegenRust>(traits, codegen_rust_trait())? {
                 cg.derive_default
             } else {
-                false
+                true
             };
         w.write(b"#[derive(");
         if derive_default {
