@@ -36,7 +36,9 @@ pub type U8 = i8;
 /// Rust codegen traits
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct CodegenRust {
-    /// Instructs rust codegen to add `#[derive(Default)]` (default false)
+    /// Instructs rust codegen to add `#[derive(Default)]`
+    /// If the codegenRust trait is not applied to a structure,
+    /// 'Default' is generated for that structure.
     #[serde(rename = "deriveDefault")]
     #[serde(default)]
     pub derive_default: bool,
@@ -87,5 +89,5 @@ pub struct Wasmbus {
 
 /// data sent via wasmbus
 /// This trait is required for all messages sent via wasmbus
-#[derive(Default, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct WasmbusData {}

@@ -1,0 +1,13 @@
+# codegen.toml
+
+[[models]]
+#path = "../../interfaces/core"
+url = "https://wasmcloud.github.io/interfaces/idl/org.wasmcloud"
+files = [ "wasmcloud-model.smithy", "wasmcloud-core.smithy" ]
+
+[rust]
+output_dir = "."
+
+[[rust.files]]
+path = "src/wasmbus_model.rs"
+namespace = "org.wasmcloud.model"
