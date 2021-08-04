@@ -5,7 +5,7 @@
 //!
 //#![feature(toowned_clone_into)]
 
-use serde_json::Value as JsonValue;
+pub(crate) use serde_json::Value as JsonValue;
 
 mod timestamp;
 pub use timestamp::Timestamp;
@@ -24,7 +24,9 @@ pub mod model {
     pub use crate::wasmbus_model::*;
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod rpc_client;
+#[cfg(not(target_arch = "wasm32"))]
 pub use rpc_client::{RpcClient, RpcClientSync};
 
 /// Version number of this api

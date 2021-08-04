@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 use crate::{
     core::{Invocation, InvocationResponse, WasmCloudEntity},
     JsonValue, Message, RpcError,
