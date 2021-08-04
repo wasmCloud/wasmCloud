@@ -39,8 +39,6 @@ pub struct HostData {
     pub env_values: HostEnvValues,
     #[serde(default)]
     pub host_id: String,
-    /// private key the provider should use to sign invocations
-    /// this field is sensitive and should never be logged
     #[serde(default)]
     pub invocation_seed: String,
     #[serde(default)]
@@ -93,7 +91,7 @@ pub struct InvocationResponse {
     pub msg: Vec<u8>,
 }
 
-/// Link definition for an actor
+/// Link definition for binding actor to provider
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct LinkDefinition {
     /// actor public key
