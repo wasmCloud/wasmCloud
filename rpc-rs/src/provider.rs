@@ -16,24 +16,11 @@ use log::{debug, error, info, trace, warn};
 //use nats::{Connection as NatsClient, Subscription};
 use pin_utils::pin_mut;
 pub use ratsio::{NatsClient, NatsMessage};
-use ring::digest::{Context, Digest, SHA256};
-use serde::{de::DeserializeOwned, Serialize};
-use serde_json::Value as JsonValue;
-use std::{
-    borrow::Cow, collections::HashMap, convert::Infallible, io::Read, ops::Deref, sync::Arc,
-};
+use serde::de::DeserializeOwned;
+use std::{borrow::Cow, collections::HashMap, convert::Infallible, ops::Deref, sync::Arc};
 use tokio::sync::{oneshot, RwLock};
 
-//const ACTOR_RPC_TIMEOUT: Duration = Duration::from_millis(2000);
-
 type SubscriptionId = ratsio::NatsSid;
-
-// NatsMessage {
-// pub subject: String,
-// pub sid: String,
-// pub reply_to: Option<String>,
-// pub payload: Vec<u8>
-// }
 
 pub type HostShutdownEvent = String;
 
@@ -43,12 +30,17 @@ pub trait ProviderDispatch: MessageDispatch + ProviderHandler {}
 trait ProviderImpl: ProviderDispatch + Send + Sync + Clone + 'static {}
 
 pub mod prelude {
-    pub use super::{ProviderDispatch, ProviderHandler};
-    pub use crate::{client, context, Message, MessageDispatch, RpcError};
+    pub use super::{HostBridge, ProviderDispatch, ProviderHandler};
+    pub use crate::{
+        client, context,
+        core::LinkDefinition,
+        provider_main::{get_host_bridge, load_host_data, provider_main, provider_run},
+        Message, MessageDispatch, RpcError,
+    };
 
     //pub use crate::Timestamp;
+    pub use super::NatsClient;
     pub use async_trait::async_trait;
-    pub use ratsio::NatsClient;
     pub use wasmbus_macros::Provider;
 
     #[cfg(feature = "BigInteger")]
@@ -56,58 +48,6 @@ pub mod prelude {
 
     #[cfg(feature = "BigDecimal")]
     pub use bigdecimal::BigDecimal;
-}
-
-pub fn load_host_data() -> Result<HostData, RpcError> {
-    use std::io::BufRead;
-
-    let mut buffer = String::new();
-    let stdin = std::io::stdin();
-    {
-        let mut handle = stdin.lock();
-        handle.read_line(&mut buffer).map_err(|e| {
-            RpcError::Rpc(format!(
-                "failed to read host data configuration from stdin: {}",
-                e
-            ))
-        })?;
-    }
-    // remove spaces, tabs, and newlines before and after base64-encoded data
-    let buffer = buffer.trim();
-    if buffer.is_empty() {
-        return Err(RpcError::Rpc(
-            "stdin is empty - expecting host data configuration".to_string(),
-        ));
-    }
-    let bytes = base64::decode(buffer.as_bytes()).map_err(|e| {
-        RpcError::Rpc(format!(
-            "host data configuration passed through stdin has invalid encoding (expected base64): {}",
-            e
-        ))
-    })?;
-    let host_data: HostData = serde_json::from_slice(&bytes).map_err(|e| {
-        RpcError::Rpc(format!(
-            "parsing host data: {}:\n{}",
-            e,
-            String::from_utf8_lossy(&bytes)
-        ))
-    })?;
-    Ok(host_data)
-}
-
-// use noop_waker::noop_waker;
-//https://docs.rs/noop-waker/0.1.0/src/noop_waker/lib.rs.html#56-61
-
-/// Create a new random uuid for invocations
-pub fn make_uuid() -> String {
-    use uuid::Uuid;
-    // TODO: revisit whether this is using the right random
-    // all providers should use make_uuid() so we can change generation later if necessary
-
-    Uuid::new_v4()
-        .to_simple()
-        .encode_lower(&mut Uuid::encode_buffer())
-        .to_string()
 }
 
 /// CapabilityProvider handling of messages from host
@@ -129,10 +69,17 @@ pub trait ProviderHandler: Sync {
     async fn delete_link(&self, actor_id: &str) {}
 
     /// Perform health check. Called at regular intervals by host
+    /// Default implementation always returns healthy
+    #[allow(unused_variables)]
     async fn health_request(
         &self,
         arg: &HealthCheckRequest,
-    ) -> Result<HealthCheckResponse, RpcError>;
+    ) -> Result<HealthCheckResponse, RpcError> {
+        Ok(HealthCheckResponse {
+            healthy: true,
+            message: None,
+        })
+    }
 
     /// Handle system shutdown message
     async fn shutdown(&self) -> Result<(), Infallible> {
@@ -151,7 +98,6 @@ pub type LogEntry = (log::Level, String);
 pub struct HostBridge {
     inner: Arc<HostBridgeInner>,
     host_data: HostData,
-    key: Arc<wascap::prelude::KeyPair>,
 }
 
 impl HostBridge {
@@ -162,15 +108,17 @@ impl HostBridge {
             wascap::prelude::KeyPair::from_seed(&host_data.invocation_seed)
                 .map_err(|e| RpcError::NotInitialized(format!("key failure: {}", e)))?
         };
+        let rpc_client =
+            crate::rpc_client::RpcClient::new(nats, &host_data.lattice_rpc_prefix, key);
+
         Ok(HostBridge {
             inner: Arc::new(HostBridgeInner {
-                nats,
                 subs: RwLock::new(Vec::new()),
                 links: RwLock::new(HashMap::new()),
+                rpc_client,
                 lattice_prefix: host_data.lattice_rpc_prefix.clone(),
             }),
             host_data: host_data.clone(),
-            key: Arc::new(key),
         })
     }
 }
@@ -189,11 +137,23 @@ pub struct HostBridgeInner {
     /// Table of actors that are bound to this provider
     /// Key is actor_id / actor public key
     links: RwLock<HashMap<String, LinkDefinition>>,
-    nats: Arc<NatsClient>,
+    rpc_client: crate::rpc_client::RpcClient,
     lattice_prefix: String,
 }
 
 impl HostBridge {
+    /// Send an rpc message to the actor.
+    pub async fn send_actor(
+        &self,
+        origin: WasmCloudEntity,
+        actor_id: &str,
+        message: Message<'_>,
+    ) -> Result<InvocationResponse, RpcError> {
+        debug!("host_bridge sending actor {}", message.method);
+        let target = WasmCloudEntity::new_actor(actor_id);
+        self.rpc_client.send(origin, target, message).await
+    }
+
     /// Clear out all subscriptions
     async fn unsubscribe_all(&self) {
         let mut copy = Vec::new();
@@ -201,10 +161,12 @@ impl HostBridge {
             let mut sub_lock = self.subs.write().await;
             copy.append(&mut sub_lock);
         };
+        // async nats client
+        let nc = self.rpc_client.get_async().unwrap();
         // unsubscribe each with server and de-register streams
         for sid in copy.iter() {
             // ignore return code; we're shutting down
-            if let Err(e) = self.nats.un_subscribe(sid).await {
+            if let Err(e) = nc.un_subscribe(sid).await {
                 debug!("during shutdown, failure to unsubscribe: {}", e.to_string());
             }
         }
@@ -232,23 +194,6 @@ impl HostBridge {
             }
         }
     }
-
-    /*
-    /// Send log to main thread
-    fn log(&self, level: log::Level, s: String) {
-        let _ignore = self.log_tx.send((level, s));
-    }
-    fn debug(&self, s: String) {
-        let _ignore = self.log_tx.send((log::Level::Debug, s));
-    }
-    fn error(&self, s: String) {
-        let _ignore = self.log_tx.send((log::Level::Error, s));
-    }
-    #[allow(dead_code)]
-    fn info(&self, s: String) {
-        let _ignore = self.log_tx.send((log::Level::Info, s));
-    }
-     */
 
     /// Stores actor with link definition
     pub async fn put_link(&self, ld: LinkDefinition) {
@@ -304,7 +249,9 @@ impl HostBridge {
 
         debug!("subscribing for rpc : {}", &rpc_topic);
         let (sid, sub) = self
-            .nats
+            .rpc_client
+            .get_async()
+            .unwrap() // we are only async
             .subscribe(&rpc_topic)
             .await
             .map_err(|e| RpcError::Nats(e.to_string()))?;
@@ -356,7 +303,7 @@ impl HostBridge {
             if let Some(reply_to) = msg.reply_to {
                 match crate::serialize(&ir) {
                     Ok(t) => {
-                        if let Err(e) = self.publish_nats(reply_to, &t).await {
+                        if let Err(e) = self.rpc_client.publish(&reply_to, &t).await {
                             error!(
                                 "failed sending response to op {}: {}",
                                 &inv.operation,
@@ -392,7 +339,9 @@ impl HostBridge {
         );
         debug!("subscribing for shutdown : {}", &shutdown_topic);
         let (subscription_sid, mut sub) = self
-            .nats
+            .rpc_client
+            .get_async()
+            .unwrap() // we are only async
             .subscribe(&shutdown_topic)
             .await
             .map_err(|e| RpcError::Nats(e.to_string()))?;
@@ -421,15 +370,23 @@ impl HostBridge {
             // send ack to host
             if let Some(reply_to) = msg.reply_to.as_ref() {
                 let data = b"shutting down".to_vec();
-                if let Err(e) = self.publish_nats(reply_to, &data).await {
-                    error!("failed to send shutdown response to host: {}", e);
+                if let Err(e) = self.rpc_client.publish(reply_to, &data).await {
+                    error!(
+                        "failed to send shutdown response to host: {}",
+                        e.to_string()
+                    );
                 }
             }
             break;
         }
 
         // unsubscribe for shutdowns
-        let _ignore = this.nats.un_subscribe(&subscription_sid).await;
+        let _ignore = this
+            .rpc_client
+            .get_async()
+            .unwrap() // we are only async
+            .un_subscribe(&subscription_sid)
+            .await;
 
         // signal main thread to quit
         if let Err(e) = shutdown_tx.send("bye".to_string()) {
@@ -449,7 +406,9 @@ impl HostBridge {
 
         debug!("subscribing for link put : {}", &ldput_topic);
         let (sid, mut sub) = self
-            .nats
+            .rpc_client
+            .get_async()
+            .unwrap() // we are only async
             .subscribe(&ldput_topic)
             .await
             .map_err(|e| RpcError::Nats(e.to_string()))?;
@@ -463,7 +422,7 @@ impl HostBridge {
                         &ld.actor_id, &ld.provider_id
                     );
                 } else {
-                    info!("Linking {} with {}", &ld.actor_id, &ld.provider_id);
+                    info!("Linking '{}' with '{}'", &ld.actor_id, &ld.provider_id);
                     match provider.put_link(&ld).await {
                         Ok(true) => {
                             this.put_link(ld).await;
@@ -493,7 +452,9 @@ impl HostBridge {
         );
         debug!("subscribing for link del : {}", &link_del_topic);
         let (sid, mut sub) = self
-            .nats
+            .rpc_client
+            .get_async()
+            .unwrap() // we are only async
             .subscribe(&link_del_topic)
             .await
             .map_err(|e| RpcError::Nats(e.to_string()))?;
@@ -520,7 +481,9 @@ impl HostBridge {
         );
 
         let (sid, mut sub) = self
-            .nats
+            .rpc_client
+            .get_async()
+            .unwrap() // we are only async
             .subscribe(&topic)
             .await
             .map_err(|e| RpcError::Nats(e.to_string()))?;
@@ -546,7 +509,7 @@ impl HostBridge {
             match buf {
                 Ok(t) => {
                     if let Some(reply_to) = msg.reply_to.as_ref() {
-                        if let Err(e) = self.publish_nats(reply_to, &t).await {
+                        if let Err(e) = self.rpc_client.publish(reply_to, &t).await {
                             error!("failed sending health check response: {}", e.to_string());
                         }
                     }
@@ -558,110 +521,6 @@ impl HostBridge {
             }
         }
         Ok(())
-    }
-
-    /// Send actor a message using json-encoded data
-    pub async fn send_actor_json<Arg, Resp>(
-        &self,
-        link: &LinkDefinition,
-        method: &str,
-        args: JsonValue,
-    ) -> Result<JsonValue, RpcError>
-    where
-        Arg: DeserializeOwned + Serialize,
-        Resp: DeserializeOwned + Serialize,
-    {
-        let arg = crate::json_to_args::<Arg>(args)?.into();
-        let ir = self.send_actor(link, Message { method, arg }).await?;
-        if let Some(err) = ir.error {
-            // TODO: if ir.error is Some(_) does that mean Vec<u8> should be ignored?
-            // can ir.msg ever be non-empty and error Some ?
-            error!(
-                "actor {} call '{}' returned error: {}",
-                &link.actor_id, method, &err
-            );
-            Err(RpcError::Rpc(err))
-        } else {
-            let resp = crate::response_to_json::<Resp>(&ir.msg)?;
-            Ok(resp)
-        }
-    }
-
-    /// send a message to an actor.
-    pub async fn send_actor(
-        &self,
-        link: &LinkDefinition,
-        message: Message<'_>,
-        //method: &str,
-        //args: Vec<u8>,
-    ) -> Result<InvocationResponse, RpcError> {
-        let origin = WasmCloudEntity::new_provider(
-            &self.host_data.provider_key,
-            &link.link_name,
-            &link.contract_id,
-        );
-        let target = WasmCloudEntity::new_actor(&link.actor_id);
-
-        let subject = make_uuid();
-        let issuer = &self.key.public_key();
-        let target_url = format!("{}/{}", target.url(), &message.method);
-        let claims = wascap::prelude::Claims::<wascap::prelude::Invocation>::new(
-            issuer.clone(),
-            subject,
-            &target_url,
-            &origin.url(),
-            &invocation_hash(&target_url, &origin.url(), &message.arg),
-        );
-
-        let method = message.method.to_string();
-        let invocation = Invocation {
-            origin,
-            target,
-            operation: method.clone(),
-            msg: message.arg.into_owned(),
-            id: make_uuid(),
-            encoded_claims: claims.encode(&self.key).unwrap(),
-            host_id: issuer.to_string(),
-        };
-        let subj = format!(
-            "wasmbus.rpc.{}.{}",
-            self.host_data.lattice_rpc_prefix, &link.actor_id
-        );
-        trace!("sending '{}' to actor {}", &message.method, &link.actor_id);
-
-        let nats_body = crate::serialize(&invocation)?;
-
-        // TODO: request with timeout
-        let resp = self
-            .request_nats(subj, &nats_body)
-            .await
-            .map_err(|e| RpcError::Nats(format!("nats send: {}", e)))?;
-        let inv_response = crate::deserialize::<InvocationResponse>(&resp.payload)
-            .map_err(|e| RpcError::Deser(e.to_string()))?;
-        trace!("provider received response from {}", &link.actor_id);
-        Ok(inv_response)
-    }
-
-    /// Send nats message with no reply-to
-    pub async fn publish_nats<T>(&self, subject: T, data: &[u8]) -> Result<(), RpcError>
-    where
-        T: ToString,
-    {
-        self.nats
-            .publish(subject, data)
-            .await
-            .map_err(|e| RpcError::Nats(e.to_string()))
-    }
-
-    /// Send nats request message subject and data, wait for response
-    pub async fn request_nats<T>(&self, subject: T, data: &[u8]) -> Result<NatsMessage, RpcError>
-    where
-        T: ToString,
-    {
-        self.nats
-            .request(subject, data)
-            .await
-            .map_err(|e| RpcError::Nats(e.to_string()))
     }
 }
 
@@ -678,37 +537,13 @@ impl<'bridge> crate::Transport for ProviderTransport<'bridge> {
         _config: &crate::client::SendConfig,
         req: Message<'_>,
     ) -> std::result::Result<Message<'_>, RpcError> {
-        let iresp = self.bridge.send_actor(self.ld, req).await?;
+        let origin = WasmCloudEntity::from_link(self.ld);
+        let target: WasmCloudEntity = WasmCloudEntity::new_actor(&self.ld.actor_id);
+        let inv_resp = self.bridge.rpc_client.send(origin, target, req).await?;
 
-        // TODO: when is error field filled in? Is resp always empty when error is non-empty?
         Ok(Message {
             method: "_reply",
-            arg: std::borrow::Cow::Owned(iresp.msg),
+            arg: std::borrow::Cow::Owned(inv_resp.msg),
         })
     }
-}
-
-pub(crate) fn invocation_hash(target_url: &str, origin_url: &str, msg: &[u8]) -> String {
-    use std::io::Write;
-    let mut cleanbytes: Vec<u8> = Vec::new();
-    cleanbytes.write_all(origin_url.as_bytes()).unwrap();
-    cleanbytes.write_all(target_url.as_bytes()).unwrap();
-    cleanbytes.write_all(msg).unwrap();
-    let digest = sha256_digest(cleanbytes.as_slice()).unwrap();
-    data_encoding::HEXUPPER.encode(digest.as_ref())
-}
-
-fn sha256_digest<R: Read>(mut reader: R) -> Result<Digest, Box<dyn std::error::Error>> {
-    let mut context = Context::new(&SHA256);
-    let mut buffer = [0; 1024];
-
-    loop {
-        let count = reader.read(&mut buffer).map_err(|e| format!("{}", e))?;
-        if count == 0 {
-            break;
-        }
-        context.update(&buffer[..count]);
-    }
-
-    Ok(context.finish())
 }

@@ -71,9 +71,9 @@ impl log::Log for ChannelLogger {
     /// returns true if logging is enabled.
     /// This can be queried before calling log (or any of the macros), if
     /// generation of the log message may be "expensive"
-    fn enabled(&self, metadata: &Metadata) -> bool {
-        //true
-        LOGGER.get().is_some() && log::log_enabled!(target: metadata.target(), metadata.level())
+    fn enabled(&self, _metadata: &Metadata) -> bool {
+        true
+        //LOGGER.get().is_some() && log::log_enabled!(target: metadata.target(), metadata.level())
     }
 
     /// sends a log record into the channel

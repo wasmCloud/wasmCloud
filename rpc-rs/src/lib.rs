@@ -5,7 +5,6 @@
 //!
 //#![feature(toowned_clone_into)]
 
-use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value as JsonValue;
 
 mod timestamp;
@@ -18,11 +17,15 @@ pub use common::{
 };
 pub mod channel_log;
 pub mod provider;
+pub(crate) mod provider_main;
 mod wasmbus_model;
 pub mod model {
     // re-export core lib as "core"
     pub use crate::wasmbus_model::*;
 }
+
+pub(crate) mod rpc_client;
+pub use rpc_client::{RpcClient, RpcClientSync};
 
 /// Version number of this api
 #[doc(hidden)]
@@ -100,20 +103,33 @@ pub mod core {
 
     impl WasmCloudEntity {
         /// constructor for actor entity
-        pub fn new_actor(id: &str) -> WasmCloudEntity {
+        pub fn new_actor<T: ToString>(id: T) -> WasmCloudEntity {
             WasmCloudEntity {
                 public_key: id.to_string(),
-                contract_id: "".into(),
-                link_name: "".into(),
+                contract_id: String::new(),
+                link_name: String::new(),
+            }
+        }
+
+        /// create provider entity from link definition
+        pub fn from_link(link: &LinkDefinition) -> Self {
+            WasmCloudEntity {
+                public_key: link.provider_id.clone(),
+                contract_id: link.contract_id.clone(),
+                link_name: link.link_name.clone(),
             }
         }
 
         /// constructor for capability provider entity
-        pub fn new_provider(id: &str, contract_id: &str, link_name: &str) -> WasmCloudEntity {
+        pub fn new_provider<T1: ToString, T2: ToString, T3: ToString>(
+            id: T1,
+            contract_id: T2,
+            link_name: T3,
+        ) -> WasmCloudEntity {
             WasmCloudEntity {
-                public_key: id.into(),
-                contract_id: contract_id.into(),
-                link_name: link_name.into(),
+                public_key: id.to_string(),
+                contract_id: contract_id.to_string(),
+                link_name: link_name.to_string(),
             }
         }
 
@@ -136,8 +152,22 @@ pub mod core {
         }
 
         /// Returns the unique (public) key of the entity
-        pub fn key(&self) -> String {
+        pub fn public_key(&self) -> String {
             self.public_key.to_string()
+        }
+    }
+
+    impl From<&str> for WasmCloudEntity {
+        /// converts string into actor entity
+        fn from(target: &str) -> WasmCloudEntity {
+            WasmCloudEntity::new_actor(target.to_string())
+        }
+    }
+
+    impl From<String> for WasmCloudEntity {
+        /// converts string into actor entity
+        fn from(target: String) -> WasmCloudEntity {
+            WasmCloudEntity::new_actor(target)
         }
     }
 }
@@ -179,39 +209,4 @@ pub mod actor {
             }
         }
     }
-}
-
-/// convert json args to msgpack
-pub fn json_to_args<T>(v: JsonValue) -> Result<Vec<u8>, RpcError>
-where
-    T: Serialize,
-    T: DeserializeOwned,
-{
-    serialize(
-        &serde_json::from_value::<T>(v)
-            .map_err(|e| RpcError::Deser(format!("invalid params: {}.", e)))?,
-    )
-    /*
-    let val: T = serde_json::from_value(v)
-        .map_err(|e| RpcError::Deser(format!("invalid params: {}.", e)))?;
-    let blob = serialize(&val)?;
-    Ok(blob)
-         */
-}
-
-/// convert message response to json
-pub fn response_to_json<T>(msg: &[u8]) -> Result<JsonValue, RpcError>
-where
-    T: Serialize,
-    T: DeserializeOwned,
-{
-    serde_json::to_value(deserialize::<T>(msg)?)
-        .map_err(|e| RpcError::Ser(format!("response serialization : {}.", e)))
-
-    /*
-    let val: T = deserialize(msg)?;
-    let j = serde_json::to_value(val)
-        .map_err(|e| RpcError::Ser(format!("response serialization : {}.", e)))?;
-    Ok(j)
-     */
 }
