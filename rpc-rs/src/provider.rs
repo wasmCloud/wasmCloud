@@ -6,33 +6,40 @@
 use crate::{
     core::{
         HealthCheckRequest, HealthCheckResponse, HostData, Invocation, InvocationResponse,
-        LinkDefinition,
+        LinkDefinition, WasmCloudEntity,
     },
-    deserialize, serialize, Message, MessageDispatch, RpcError,
+    Message, MessageDispatch, RpcError,
 };
-use anyhow::anyhow;
-use log::{info, warn};
-use nats::{Connection as NatsClient, Subscription};
-use std::{
-    borrow::Cow,
-    collections::HashMap,
-    convert::Infallible,
-    ops::Deref,
-    sync::{Arc, RwLock},
-};
-use tokio::{sync::oneshot, time::Duration};
+use async_trait::async_trait;
+use futures::{future::JoinAll, StreamExt};
+use log::{debug, error, info, trace, warn};
+//use nats::{Connection as NatsClient, Subscription};
+use pin_utils::pin_mut;
+pub use ratsio::{NatsClient, NatsMessage};
+use serde::de::DeserializeOwned;
+use std::{borrow::Cow, collections::HashMap, convert::Infallible, ops::Deref, sync::Arc};
+use tokio::sync::{oneshot, RwLock};
 
-const MAIN_LOOP_WAIT_INTERVAL: Duration = Duration::from_millis(50);
+type SubscriptionId = ratsio::NatsSid;
 
 pub type HostShutdownEvent = String;
 
+trait Subscription: futures::stream::Stream<Item = NatsMessage> + Send + Sync {}
+
 pub trait ProviderDispatch: MessageDispatch + ProviderHandler {}
+trait ProviderImpl: ProviderDispatch + Send + Sync + Clone + 'static {}
 
 pub mod prelude {
-    pub use super::{ProviderDispatch, ProviderHandler};
-    pub use crate::{client, context, Message, MessageDispatch, RpcError};
+    pub use super::{HostBridge, ProviderDispatch, ProviderHandler};
+    pub use crate::{
+        client, context,
+        core::LinkDefinition,
+        provider_main::{get_host_bridge, load_host_data, provider_main, provider_run},
+        Message, MessageDispatch, RpcError,
+    };
 
     //pub use crate::Timestamp;
+    pub use super::NatsClient;
     pub use async_trait::async_trait;
     pub use wasmbus_macros::Provider;
 
@@ -43,78 +50,9 @@ pub mod prelude {
     pub use bigdecimal::BigDecimal;
 }
 
-pub fn load_host_data() -> Result<HostData, anyhow::Error> {
-    let mut buf = String::default();
-    let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)
-        .map_err(|e| anyhow!("failed to read host data configuration from stdin: {}", e))?;
-    // remove spaces, tabs, and newlines before and after base64-encoded data
-    let buf = buf.trim();
-    if buf.is_empty() {
-        return Err(anyhow!(
-            "stdin is empty - expecting host data configuration"
-        ));
-    }
-    let bytes = base64::decode(buf.as_bytes()).map_err(|e| {
-        anyhow!(
-            "host data configuration passed through stdin has invalid encoding (expected base64): {}",
-            e
-        )
-    })?;
-    let host_data: HostData =
-        serde_json::from_slice(&bytes).map_err(|e| anyhow!("parsing host data: {}", e))?;
-    Ok(host_data)
-}
-
-/// While waiting for messages, handle log messages sent to main thread.
-/// Exits when shutdown_rx is received _or_ either channel is closed.
-pub fn wait_for_shutdown(
-    log_rx: crossbeam::channel::Receiver<LogEntry>,
-    mut shutdown_rx: tokio::sync::oneshot::Receiver<HostShutdownEvent>,
-) {
-    use tokio::sync::oneshot::error::TryRecvError;
-
-    loop {
-        match log_rx.recv_timeout(MAIN_LOOP_WAIT_INTERVAL) {
-            // if we have received a log message, continue
-            // so that we check immediately - a group of messages that
-            // arrive together will be printed with no delay between them.
-            Ok((level, s)) => {
-                log::logger().log(
-                    &log::Record::builder()
-                        .args(format_args!("{}", s))
-                        .level(level)
-                        .build(),
-                );
-                continue;
-            }
-            Err(crossbeam::channel::RecvTimeoutError::Timeout) => {}
-            Err(crossbeam::channel::RecvTimeoutError::Disconnected) => {
-                warn!("Logger exited - quitting");
-                break;
-            }
-        }
-
-        // on each iteration of the loop, after all pending logs
-        // have been written out, check for shutdown signal
-        match shutdown_rx.try_recv() {
-            Ok(_) => {
-                info!("main thread received shutdown signal");
-                // got the shutdown signal
-                break;
-            }
-            Err(TryRecvError::Empty) => {
-                // no signal yet, keep waiting
-            }
-            Err(TryRecvError::Closed) => {
-                // sender exited
-                break;
-            }
-        }
-    }
-}
-
 /// CapabilityProvider handling of messages from host
 /// The HostBridge handles most messages and forwards the remainder to this handler
+#[async_trait]
 pub trait ProviderHandler: Sync {
     /// Provider should perform any operations needed for a new link,
     /// including setting up per-actor resources, and checking authorization.
@@ -122,19 +60,29 @@ pub trait ProviderHandler: Sync {
     /// This message is idempotent - provider must be able to handle
     /// duplicates
     #[allow(unused_variables)]
-    fn put_link(&self, ld: &LinkDefinition) -> Result<bool, RpcError> {
+    async fn put_link(&self, ld: &LinkDefinition) -> Result<bool, RpcError> {
         Ok(true)
     }
 
     /// Notify the provider that the link is dropped
     #[allow(unused_variables)]
-    fn delete_link(&self, actor_id: &str) {}
+    async fn delete_link(&self, actor_id: &str) {}
 
     /// Perform health check. Called at regular intervals by host
-    fn health_request(&self, arg: &HealthCheckRequest) -> Result<HealthCheckResponse, RpcError>;
+    /// Default implementation always returns healthy
+    #[allow(unused_variables)]
+    async fn health_request(
+        &self,
+        arg: &HealthCheckRequest,
+    ) -> Result<HealthCheckResponse, RpcError> {
+        Ok(HealthCheckResponse {
+            healthy: true,
+            message: None,
+        })
+    }
 
     /// Handle system shutdown message
-    fn shutdown(&self) -> Result<(), Infallible> {
+    async fn shutdown(&self) -> Result<(), Infallible> {
         Ok(())
     }
 }
@@ -146,33 +94,32 @@ pub type LogEntry = (log::Level, String);
 /// and processes subscriptions for links, health-checks, and rpc messages.
 /// Callbacks from HostBridge are implemented by the provider in the [[ProviderHandler]] implementation.
 ///
-/// HostBridge subscribes to these nats subscriptions on behalf of the provider
-/// - wasmbus.rpc.{prefix}.{provider_key}.{link_name}.rpc - Get Invocation, answer InvocationResponse
-/// - wasmbus.rpc.{prefix}.{provider_key}.{link_name}.health - Health check
-/// - wasmbus.rpc.{prefix}.{provider_key}.{link_name}.shutdown - Request for graceful shutdown
-/// - wasmbus.rpc.{prefix}.{provider_key}.{link_name}.linkdefs.del - Remove a link def. Provider de-provisions resources for the given actor.
-/// - wasmbus.rpc.{prefix}.{provider_key}.{link_name}.linkdefs.put - Puts a link def. Provider provisions resources for the given actor.
-///
 #[derive(Clone)]
 pub struct HostBridge {
     inner: Arc<HostBridgeInner>,
+    host_data: HostData,
 }
 
 impl HostBridge {
-    pub fn new(
-        nats: NatsClient,
-        host_data: &HostData,
-        log_tx: crossbeam::channel::Sender<LogEntry>,
-    ) -> HostBridge {
-        HostBridge {
+    pub fn new(nats: Arc<NatsClient>, host_data: &HostData) -> Result<HostBridge, RpcError> {
+        let key = if host_data.is_test() {
+            wascap::prelude::KeyPair::new_user()
+        } else {
+            wascap::prelude::KeyPair::from_seed(&host_data.invocation_seed)
+                .map_err(|e| RpcError::NotInitialized(format!("key failure: {}", e)))?
+        };
+        let rpc_client =
+            crate::rpc_client::RpcClient::new(nats, &host_data.lattice_rpc_prefix, key);
+
+        Ok(HostBridge {
             inner: Arc::new(HostBridgeInner {
-                nats,
-                log_tx,
                 subs: RwLock::new(Vec::new()),
                 links: RwLock::new(HashMap::new()),
+                rpc_client,
                 lattice_prefix: host_data.lattice_rpc_prefix.clone(),
             }),
-        }
+            host_data: host_data.clone(),
+        })
     }
 }
 
@@ -186,266 +133,177 @@ impl Deref for HostBridge {
 
 #[doc(hidden)]
 pub struct HostBridgeInner {
-    subs: RwLock<Vec<Subscription>>,
+    subs: RwLock<Vec<SubscriptionId>>,
     /// Table of actors that are bound to this provider
     /// Key is actor_id / actor public key
     links: RwLock<HashMap<String, LinkDefinition>>,
-    nats: NatsClient,
-    log_tx: crossbeam::channel::Sender<LogEntry>,
+    rpc_client: crate::rpc_client::RpcClient,
     lattice_prefix: String,
 }
 
 impl HostBridge {
+    /// Send an rpc message to the actor.
+    pub async fn send_actor(
+        &self,
+        origin: WasmCloudEntity,
+        actor_id: &str,
+        message: Message<'_>,
+    ) -> Result<InvocationResponse, RpcError> {
+        debug!("host_bridge sending actor {}", message.method);
+        let target = WasmCloudEntity::new_actor(actor_id);
+        self.rpc_client.send(origin, target, message).await
+    }
+
     /// Clear out all subscriptions
-    pub fn unsubscribe_all(&self) {
-        // make sure we call drain on all subscriptions
-        for sub in self.subs.read().unwrap().iter() {
-            let _ = sub.drain();
+    async fn unsubscribe_all(&self) {
+        let mut copy = Vec::new();
+        {
+            let mut sub_lock = self.subs.write().await;
+            copy.append(&mut sub_lock);
+        };
+        // async nats client
+        let nc = self.rpc_client.get_async().unwrap();
+        // unsubscribe each with server and de-register streams
+        for sid in copy.iter() {
+            // ignore return code; we're shutting down
+            if let Err(e) = nc.un_subscribe(sid).await {
+                debug!("during shutdown, failure to unsubscribe: {}", e.to_string());
+            }
         }
     }
 
-    /// Send log to main thread
-    fn log(&self, level: log::Level, s: String) {
-        let _ = self.log_tx.send((level, s));
+    // add subscription so we can unsubscribe_all later
+    async fn add_subscription(&self, sid: SubscriptionId) {
+        let mut sub_lock = self.subs.write().await;
+        sub_lock.push(sid);
+    }
+
+    // parse incoming subscription message
+    // if it fails deserialization, we can't really respond;
+    // so log the error
+    fn parse_msg<T: DeserializeOwned>(&self, msg: &NatsMessage, topic: &str) -> Option<T> {
+        match if self.host_data.is_test() {
+            serde_json::from_slice(&msg.payload).map_err(|e| RpcError::Deser(e.to_string()))
+        } else {
+            crate::deserialize(&msg.payload)
+        } {
+            Ok(item) => Some(item),
+            Err(e) => {
+                error!("garbled data received for {}: {}", topic, e.to_string());
+                None
+            }
+        }
     }
 
     /// Stores actor with link definition
-    pub fn put_link(&self, ld: LinkDefinition) {
-        self.links
-            .write()
-            .unwrap()
-            .insert(ld.actor_id.to_string(), ld);
+    pub async fn put_link(&self, ld: LinkDefinition) {
+        let mut update = self.links.write().await;
+        update.insert(ld.actor_id.to_string(), ld);
     }
 
     /// Deletes link
-    pub fn delete_link(&self, actor_id: &str) {
-        self.links.write().unwrap().remove(actor_id);
+    pub async fn delete_link(&self, actor_id: &str) {
+        let mut update = self.links.write().await;
+        update.remove(actor_id);
     }
 
     /// Returns true if the actor is linked
-    pub fn is_linked(&self, actor_id: &str) -> bool {
-        self.links.read().unwrap().contains_key(actor_id)
+    pub async fn is_linked(&self, actor_id: &str) -> bool {
+        let read = self.links.read().await;
+        read.contains_key(actor_id)
     }
 
     /// Returns copy of LinkDefinition, or None,if the actor is not linked
-    pub fn get_link(&self, actor_id: &str) -> Option<LinkDefinition> {
-        self.links.read().unwrap().get(actor_id).cloned()
+    pub async fn get_link(&self, actor_id: &str) -> Option<LinkDefinition> {
+        let read = self.links.read().await;
+        read.get(actor_id).cloned()
     }
 
     /// Implement subscriber listener threads and provider callbacks
-    pub fn connect<P>(
+    pub async fn connect<P>(
         &'static self,
-        provider_key: String,
-        link_name: &str,
-        provider_impl: P,
+        provider: P,
         shutdown_tx: oneshot::Sender<HostShutdownEvent>,
-    ) -> Result<(), anyhow::Error>
+    ) -> Result<JoinAll<tokio::task::JoinHandle<Result<(), RpcError>>>, RpcError>
     where
-        P: ProviderDispatch + Send + Sync,
-        P: 'static,
-        P: Clone,
+        P: ProviderDispatch + Send + Sync + Clone + 'static,
     {
-        use std::fmt;
+        let join = futures::future::join_all(vec![
+            tokio::task::spawn(self.subscribe_rpc(provider.clone())),
+            tokio::task::spawn(self.subscribe_link_put(provider.clone())),
+            tokio::task::spawn(self.subscribe_link_del(provider.clone())),
+            tokio::task::spawn(self.subscribe_shutdown(provider.clone(), shutdown_tx)),
+            tokio::task::spawn(self.subscribe_health(provider)),
+        ]);
+        Ok(join)
+    }
 
-        // send all logging to main thread. This is intentionally blocking
-        // (channel size=0) so that logs are "immediate"
-        macro_rules! debug {
-            ($($arg:tt)*) => ({ self.log(log::Level::Debug, fmt::format(format_args!($($arg)*))); })
-        }
-        macro_rules! warn {
-            ($($arg:tt)*) => ({ self.log(log::Level::Warn, fmt::format(format_args!($($arg)*))); })
-        }
-        macro_rules! info {
-            ($($arg:tt)*) => ({ self.log(log::Level::Info, fmt::format(format_args!($($arg)*))); })
-        }
-        macro_rules! error {
-            ($($arg:tt)*) => ({ self.log(log::Level::Error, fmt::format(format_args!($($arg)*))); })
-        }
-        let nats = self.nats.clone();
-
-        // Link Delete
-        let link_del_topic = format!(
-            "wasmbus.rpc.{}.{}.{}.linkdefs.del",
-            &self.lattice_prefix, &provider_key, &link_name
-        );
-        let sub = nats.subscribe(&link_del_topic)?;
-        self.subs.write().unwrap().push(sub.clone());
-        let (this, provider) = (self.clone(), provider_impl.clone());
-        tokio::task::spawn(async move {
-            for msg in sub.iter() {
-                match deserialize::<LinkDefinition>(&msg.data) {
-                    Ok(ld) => {
-                        this.delete_link(&ld.actor_id);
-                        // notify provider that link is deleted
-                        provider.delete_link(&ld.actor_id);
-                    }
-                    Err(e) => {
-                        error!(
-                            "error deserializing link-delete parameter: {}",
-                            e.to_string()
-                        );
-                    }
-                }
-            }
-        });
-
-        // Link Put
-        let ldput_topic = format!(
-            "wasmbus.rpc.{}.{}.{}.linkdefs.put",
-            &self.lattice_prefix, &provider_key, &link_name
-        );
-        let sub = nats.subscribe(&ldput_topic)?;
-        self.subs.write().unwrap().push(sub.clone());
-        let (this, provider) = (self.clone(), provider_impl.clone());
-        tokio::task::spawn(async move {
-            for msg in sub.iter() {
-                match deserialize::<LinkDefinition>(&msg.data) {
-                    Ok(ld) => {
-                        if this.is_linked(&ld.actor_id) {
-                            // if already linked, print warning
-                            warn!(
-                                "Received LD put for existing link definition from {} to {}\n",
-                                &ld.actor_id, &ld.provider_id
-                            );
-                        }
-                        match provider.put_link(&ld) {
-                            Ok(true) => {
-                                info!("Linking {}\n", &ld.actor_id);
-                                this.put_link(ld);
-                            }
-                            Ok(false) => {
-                                // authorization failed or parameters were invalid
-                                warn!("put_link denied: {}\n", &ld.actor_id);
-                            }
-                            Err(e) => {
-                                error!("put_link {} failed: {}\n", &ld.actor_id, e.to_string());
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        error!("error serializing put-link parameter: {}", e.to_string());
-                    }
-                }
-            }
-        });
-
-        // Shutdown
-        let shutdown_topic = format!(
-            "wasmbus.rpc.{}.{}.{}.shutdown",
-            &self.lattice_prefix, &provider_key, link_name
-        );
-        let sub = nats.subscribe(&shutdown_topic)?;
-        // don't add this sub to subs list
-        let (this, provider) = (self.clone(), provider_impl.clone());
-        tokio::task::spawn(async move {
-            if let Some(msg) = sub.next() {
-                info!("Received termination signal. Shutting down capability provider.");
-                // tell provider to shutdown - before we shut down nats subscriptions
-                let _ = provider.shutdown();
-                // drain all subscriptions (other than this one)
-                for sub in this.subs.read().unwrap().iter() {
-                    let _ = sub.drain();
-                }
-                // send ack to host
-                let _ = msg.respond("Shutting down");
-                // signal main thread that we are ready
-                if let Err(e) = shutdown_tx.send("bye".to_string()) {
-                    error!("Problem shutting down:  failure to send signal: {}\n", e);
-                }
-            }
-            // if subh.next() returns None, subscription has been cancelled or the connection was dropped.
-            // in either case, fall through to exit thread
-        });
-
-        // Health check
-        let health_topic = format!("wasmbus.rpc.{}.{}.health", &provider_key, &link_name);
-        let sub = nats.subscribe(&health_topic)?;
-        self.subs.write().unwrap().push(sub.clone());
-        let provider = provider_impl.clone();
-        tokio::task::spawn(async move {
-            for msg in sub.iter() {
-                debug!("received health check request\n");
-                // placeholder arg
-                let arg = HealthCheckRequest {};
-                let resp = match provider.health_request(&arg) {
-                    Ok(resp) => resp,
-                    Err(e) => {
-                        error!("error generating health check response: {}", &e.to_string());
-                        HealthCheckResponse {
-                            healthy: false,
-                            message: Some(e.to_string()),
-                        }
-                    }
-                };
-                match serialize(&resp) {
-                    Ok(t) => {
-                        if let Err(e) = msg.respond(t) {
-                            error!("failed sending health check response: {}", e.to_string());
-                        }
-                    }
-                    Err(e) => {
-                        // extremely unlikely that InvocationResponse would fail to serialize
-                        error!("failed serializing HealthCheckResponse: {}", e.to_string());
-                    }
-                }
-            }
-        });
-
-        // RPC messages
-        //
+    async fn subscribe_rpc<P>(&self, provider: P) -> Result<(), RpcError>
+    where
+        P: ProviderDispatch + Send + Sync + Clone + 'static,
+    {
         let rpc_topic = format!(
             "wasmbus.rpc.{}.{}.{}",
-            &self.lattice_prefix, &provider_key, link_name
+            &self.lattice_prefix, &self.host_data.provider_key, self.host_data.link_name
         );
-        let sub = nats.subscribe(&rpc_topic)?;
-        self.subs.write().unwrap().push(sub.clone());
-        tokio::task::spawn(async move {
-            let provider = provider_impl.clone();
-            let ctx = crate::context::Context::default();
-            for msg in sub.iter() {
-                debug!("received an RPC message");
-                let inv = match deserialize::<Invocation>(&msg.data) {
-                    Ok(inv) => {
-                        debug!(
-                            "Received RPC Invocation: op:{} from:{}\n",
-                            &inv.operation, &inv.origin.public_key,
-                        );
-                        inv
+
+        debug!("subscribing for rpc : {}", &rpc_topic);
+        let (sid, sub) = self
+            .rpc_client
+            .get_async()
+            .unwrap() // we are only async
+            .subscribe(&rpc_topic)
+            .await
+            .map_err(|e| RpcError::Nats(e.to_string()))?;
+        self.add_subscription(sid).await;
+        pin_mut!(sub);
+        let provider = provider.clone();
+        let ctx = crate::context::Context::default();
+        while let Some(msg) = sub.next().await {
+            let inv = match crate::deserialize::<Invocation>(&msg.payload) {
+                Ok(inv) => {
+                    trace!(
+                        "Received RPC Invocation: op:{} from:{}",
+                        &inv.operation,
+                        &inv.origin.public_key,
+                    );
+                    inv
+                }
+                Err(e) => {
+                    error!("received corrupt invocation: {}", e.to_string());
+                    continue;
+                }
+            };
+            let provider_msg = Message {
+                method: &inv.operation,
+                arg: Cow::from(inv.msg),
+            };
+            let ir = match provider.dispatch(&ctx, provider_msg).await {
+                Ok(resp) => {
+                    trace!("operation {} succeeded. returning response", &inv.operation);
+                    InvocationResponse {
+                        msg: resp.arg.to_vec(),
+                        error: None,
+                        invocation_id: inv.id,
                     }
-                    Err(e) => {
-                        error!("received corrupt invocation: {}\n", e.to_string());
-                        continue;
+                }
+                Err(e) => {
+                    error!(
+                        "operation {} failed with error {}",
+                        &inv.operation,
+                        e.to_string()
+                    );
+                    InvocationResponse {
+                        msg: Vec::new(),
+                        error: Some(e.to_string()),
+                        invocation_id: inv.id,
                     }
-                };
-                let provider_msg = Message {
-                    method: &inv.operation,
-                    arg: Cow::from(inv.msg),
-                };
-                let ir = match provider.dispatch(&ctx, provider_msg).await {
-                    Ok(resp) => {
-                        debug!("operation {} succeeded. returning response", &inv.operation);
-                        InvocationResponse {
-                            msg: resp.arg.to_vec(),
-                            error: None,
-                            invocation_id: inv.id,
-                        }
-                    }
-                    Err(e) => {
-                        error!(
-                            "operation {} failed with error {}\n",
-                            &inv.operation,
-                            e.to_string()
-                        );
-                        InvocationResponse {
-                            msg: Vec::new(),
-                            error: Some(e.to_string()),
-                            invocation_id: inv.id,
-                        }
-                    }
-                };
-                match serialize(&ir) {
+                }
+            };
+            if let Some(reply_to) = msg.reply_to {
+                match crate::serialize(&ir) {
                     Ok(t) => {
-                        if let Err(e) = msg.respond(t) {
+                        if let Err(e) = self.rpc_client.publish(&reply_to, &t).await {
                             error!(
                                 "failed sending response to op {}: {}",
                                 &inv.operation,
@@ -456,14 +314,236 @@ impl HostBridge {
                     Err(e) => {
                         // extremely unlikely that InvocationResponse would fail to serialize
                         error!(
-                            "failed serializing InvocationResponse to op:{} : {}\n",
+                            "failed serializing InvocationResponse to op:{} : {}",
                             &inv.operation,
                             e.to_string()
                         );
                     }
                 }
             }
-        });
+        }
         Ok(())
+    }
+
+    async fn subscribe_shutdown<P>(
+        &self,
+        provider: P,
+        shutdown_tx: oneshot::Sender<HostShutdownEvent>,
+    ) -> Result<(), RpcError>
+    where
+        P: ProviderDispatch + Send + Sync + Clone + 'static,
+    {
+        let shutdown_topic = format!(
+            "wasmbus.rpc.{}.{}.{}.shutdown",
+            &self.lattice_prefix, &self.host_data.provider_key, self.host_data.link_name
+        );
+        debug!("subscribing for shutdown : {}", &shutdown_topic);
+        let (subscription_sid, mut sub) = self
+            .rpc_client
+            .get_async()
+            .unwrap() // we are only async
+            .subscribe(&shutdown_topic)
+            .await
+            .map_err(|e| RpcError::Nats(e.to_string()))?;
+        let (this, provider) = (self.clone(), provider.clone());
+
+        // this while loop doesn't actually loop - it accepts the first signal received.
+        // leaving it as a loop for now because it needs to check
+        // validate the host signature, and loop if validation fails.
+        #[allow(clippy::never_loop)]
+        while let Some(msg) = sub.next().await {
+            // TODO: verify host's signature before quitting
+            // (not sure if host is signing these syet)
+            // if not a valid signed message, keep waiting for message
+            // if !msg.is_valid() { continue; }
+
+            debug!("Received termination signal. Shutting down capability provider.");
+            // tell provider to shutdown - before we shut down nats subscriptions,
+            // in case it needs to do any message passing during shutdown
+            if let Err(e) = provider.shutdown().await {
+                error!("during provider shutdown processing, got error: {}", e);
+            }
+
+            // drain all subscriptions except this one
+            self.unsubscribe_all().await;
+
+            // send ack to host
+            if let Some(reply_to) = msg.reply_to.as_ref() {
+                let data = b"shutting down".to_vec();
+                if let Err(e) = self.rpc_client.publish(reply_to, &data).await {
+                    error!(
+                        "failed to send shutdown response to host: {}",
+                        e.to_string()
+                    );
+                }
+            }
+            break;
+        }
+
+        // unsubscribe for shutdowns
+        let _ignore = this
+            .rpc_client
+            .get_async()
+            .unwrap() // we are only async
+            .un_subscribe(&subscription_sid)
+            .await;
+
+        // signal main thread to quit
+        if let Err(e) = shutdown_tx.send("bye".to_string()) {
+            error!("Problem shutting down:  failure to send signal: {}", e);
+        }
+        Ok(())
+    }
+
+    async fn subscribe_link_put<P>(&self, provider: P) -> Result<(), RpcError>
+    where
+        P: ProviderDispatch + Send + Sync + Clone + 'static,
+    {
+        let ldput_topic = format!(
+            "wasmbus.rpc.{}.{}.{}.linkdefs.put",
+            &self.lattice_prefix, &self.host_data.provider_key, &self.host_data.link_name
+        );
+
+        debug!("subscribing for link put : {}", &ldput_topic);
+        let (sid, mut sub) = self
+            .rpc_client
+            .get_async()
+            .unwrap() // we are only async
+            .subscribe(&ldput_topic)
+            .await
+            .map_err(|e| RpcError::Nats(e.to_string()))?;
+        self.add_subscription(sid).await;
+        let (this, provider) = (self.clone(), provider.clone());
+        while let Some(msg) = sub.next().await {
+            if let Some(ld) = this.parse_msg::<LinkDefinition>(&msg, "link.put") {
+                if this.is_linked(&ld.actor_id).await {
+                    warn!(
+                        "Ignoring duplicate link put for '{}' to '{}'.",
+                        &ld.actor_id, &ld.provider_id
+                    );
+                } else {
+                    info!("Linking '{}' with '{}'", &ld.actor_id, &ld.provider_id);
+                    match provider.put_link(&ld).await {
+                        Ok(true) => {
+                            this.put_link(ld).await;
+                        }
+                        Ok(false) => {
+                            // authorization failed or parameters were invalid
+                            warn!("put_link denied: {}", &ld.actor_id);
+                        }
+                        Err(e) => {
+                            error!("put_link {} failed: {}", &ld.actor_id, e.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn subscribe_link_del<P>(&self, provider: P) -> Result<(), RpcError>
+    where
+        P: ProviderDispatch + Send + Sync + Clone + 'static,
+    {
+        // Link Delete
+        let link_del_topic = format!(
+            "wasmbus.rpc.{}.{}.{}.linkdefs.del",
+            &self.lattice_prefix, &self.host_data.provider_key, &self.host_data.link_name
+        );
+        debug!("subscribing for link del : {}", &link_del_topic);
+        let (sid, mut sub) = self
+            .rpc_client
+            .get_async()
+            .unwrap() // we are only async
+            .subscribe(&link_del_topic)
+            .await
+            .map_err(|e| RpcError::Nats(e.to_string()))?;
+        self.add_subscription(sid).await;
+        //let (this, provider) = (self.clone(), provider_impl.clone());
+        while let Some(msg) = sub.next().await {
+            let (this, provider) = (self.clone(), provider.clone());
+            if let Some(ld) = &this.parse_msg::<LinkDefinition>(&msg, "link.del") {
+                this.delete_link(&ld.actor_id).await;
+                // notify provider that link is deleted
+                provider.delete_link(&ld.actor_id).await;
+            }
+        }
+        Ok(())
+    }
+
+    async fn subscribe_health<P>(&self, provider: P) -> Result<(), RpcError>
+    where
+        P: ProviderDispatch + Send + Sync + Clone + 'static,
+    {
+        let topic = format!(
+            "wasmbus.rpc.{}.{}.{}.health",
+            &self.lattice_prefix, &self.host_data.provider_key, &self.host_data.link_name
+        );
+
+        let (sid, mut sub) = self
+            .rpc_client
+            .get_async()
+            .unwrap() // we are only async
+            .subscribe(&topic)
+            .await
+            .map_err(|e| RpcError::Nats(e.to_string()))?;
+        self.add_subscription(sid).await;
+        while let Some(msg) = sub.next().await {
+            // placeholder arg
+            let arg = HealthCheckRequest {};
+            let resp = match provider.health_request(&arg).await {
+                Ok(resp) => resp,
+                Err(e) => {
+                    error!("error generating health check response: {}", &e.to_string());
+                    HealthCheckResponse {
+                        healthy: false,
+                        message: Some(e.to_string()),
+                    }
+                }
+            };
+            let buf = if self.host_data.is_test() {
+                Ok(serde_json::to_vec(&resp).unwrap())
+            } else {
+                crate::serialize(&resp)
+            };
+            match buf {
+                Ok(t) => {
+                    if let Some(reply_to) = msg.reply_to.as_ref() {
+                        if let Err(e) = self.rpc_client.publish(reply_to, &t).await {
+                            error!("failed sending health check response: {}", e.to_string());
+                        }
+                    }
+                }
+                Err(e) => {
+                    // extremely unlikely that InvocationResponse would fail to serialize
+                    error!("failed serializing HealthCheckResponse: {}", e.to_string());
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+pub struct ProviderTransport<'transport> {
+    pub bridge: &'transport HostBridge,
+    pub ld: &'transport LinkDefinition,
+}
+
+#[async_trait]
+impl<'bridge> crate::Transport for ProviderTransport<'bridge> {
+    async fn send(
+        &self,
+        _ctx: &crate::context::Context<'_>,
+        _config: &crate::client::SendConfig,
+        req: Message<'_>,
+    ) -> std::result::Result<Message<'_>, RpcError> {
+        let origin = WasmCloudEntity::from_link(self.ld);
+        let target: WasmCloudEntity = WasmCloudEntity::new_actor(&self.ld.actor_id);
+        let inv_resp = self.bridge.rpc_client.send(origin, target, req).await?;
+
+        Ok(Message {
+            method: "_reply",
+            arg: std::borrow::Cow::Owned(inv_resp.msg),
+        })
     }
 }

@@ -144,12 +144,12 @@ cfg_if::cfg_if! {
 #[derive(thiserror::Error, Debug, Serialize, Deserialize)]
 pub enum RpcError {
     /// The request exceeded its deadline.
-    #[error("the request exceeded its deadline")]
-    DeadlineExceeded,
+    #[error("the request exceeded its deadline: {0}")]
+    DeadlineExceeded(String),
 
     /// A capability provider was called before its configure_dispatch was called.
-    #[error("the capability provider has not been initialized")]
-    NotInitialized,
+    #[error("the capability provider has not been initialized: {0}")]
+    NotInitialized(String),
 
     /// The message was invalid
     #[error("the message was invalid")]
@@ -172,12 +172,22 @@ pub enum RpcError {
     #[error("serialization: {0}")]
     Ser(String),
 
+    #[error("rpc: {0}")]
+    Rpc(String),
+
+    #[error("nats: {0}")]
+    Nats(String),
+
     #[error("invalid parameter: {0}")]
     InvalidParameter(String),
 
     /// Error occurred in actor's rpc handler
     #[error("actor: {0}")]
     ActorHandler(String),
+
+    /// Error occurred during provider initialization or put-link
+    #[error("provider initialization or put-link: {0}")]
+    ProviderInit(String),
 
     /// Anything else
     #[error("{0}")]
