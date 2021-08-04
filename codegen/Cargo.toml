@@ -9,7 +9,6 @@ homepage = "https://github.com/wasmcloud/weld"
 repository = "https://github.com/wasmcloud/weld"
 documentation = "https://docs.rs/weld-codegen"
 readme = "README.md"
-exclude = ["codegen.toml"]
 
 [features]
 default = [ "wasmbus" ]
