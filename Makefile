@@ -5,28 +5,17 @@
 #    and ensure `/usr/local/opt/make/libexec/gnubin` is in your PATH before /usr/bin
 
 MODEL_OUTPUT := codegen/src/wasmbus_model.rs rpc-rs/src/wasmbus_model.rs
-MODEL_SRC    := examples/interface/wasmbus-core/wasmcloud-model.smithy \
-				examples/interface/wasmbus-core/codegen.toml
-WELD         := target/debug/weld
+#MODEL_SRC    := examples/interface/wasmbus-core/wasmcloud-model.smithy \
+#				examples/interface/wasmbus-core/codegen.toml
+#WELD         := target/debug/weld
 
+all: build
 
-all build: $(MODEL_OUTPUT)
-	cargo build
-	$(MAKE) -C examples WELD=$(realpath $(WELD))
-
-clean:
-	cargo clean
-	$(MAKE) -C examples clean
-
-release: $(MODEL_OUTPUT)
-	cargo build --release
-	$(MAKE) -C examples
-
-test:
+build clean test:
 	cargo $@
 
-$(MODEL_OUTPUT): $(WELD) $(MODEL_SRC)
-	$(WELD) gen --config examples/interface/wasmbus-core/codegen.toml
+release:
+	cargo build --release
 
 check-model: $(MODEL_OUTPUT)
 	@diff $(MODEL_OUTPUT) || (echo ERROR: Model files differ && exit 1)
@@ -36,5 +25,5 @@ WELD_SRC := bin/Cargo.toml bin/src/*.rs codegen/Cargo.toml codegen/templates/*.t
 target/debug/weld: $(WELD_SRC)
 	cargo build --package weld-bin
 
-.PHONY: all build release clean test
+.PHONY: all build release clean test check-model
 .NOTPARALLEL:
