@@ -19,11 +19,11 @@ pub const SMITHY_VERSION: &str = "1.0";
 pub type ActorLinks = Vec<LinkDefinition>;
 
 /// health check request parameter
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct HealthCheckRequest {}
 
 /// Return value from actors and providers for health check status
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct HealthCheckResponse {
     /// A flag that indicates the the actor is healthy
     #[serde(default)]
@@ -34,7 +34,7 @@ pub struct HealthCheckResponse {
 }
 
 /// initialization data for a capability provider
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct HostData {
     pub env_values: HostEnvValues,
     #[serde(default)]
@@ -59,7 +59,7 @@ pub struct HostData {
 pub type HostEnvValues = std::collections::HashMap<String, String>;
 
 /// RPC message to capability provider
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Invocation {
     #[serde(default)]
     pub encoded_claims: String,
@@ -77,7 +77,7 @@ pub struct Invocation {
 }
 
 /// Response to an invocation
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct InvocationResponse {
     /// optional error message
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -92,7 +92,7 @@ pub struct InvocationResponse {
 }
 
 /// Link definition for binding actor to provider
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct LinkDefinition {
     /// actor public key
     #[serde(default)]
@@ -112,7 +112,7 @@ pub struct LinkDefinition {
 /// Settings associated with an actor-provider link
 pub type LinkSettings = std::collections::HashMap<String, String>;
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct WasmCloudEntity {
     pub contract_id: crate::model::CapabilityContractId,
     #[serde(default)]
