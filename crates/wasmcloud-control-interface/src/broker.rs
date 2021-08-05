@@ -5,12 +5,14 @@ pub fn prefix(nsprefix: &Option<String>) -> String {
     )
 }
 
+/*
 pub fn rpc_prefix(nsprefix: &Option<String>) -> String {
     format!(
         "wasmbus.rpc.{}",
         nsprefix.as_ref().unwrap_or(&"default".to_string())
     )
 }
+ */
 
 pub fn control_event(nsprefix: &Option<String>) -> String {
     format!("{}.events", prefix(nsprefix))
@@ -25,19 +27,16 @@ pub fn actor_auction_subject(nsprefix: &Option<String>) -> String {
 }
 
 pub mod rpc {
-    use super::rpc_prefix;
 
-    pub fn call_actor(nsprefix: &Option<String>, actor: &str) -> String {
-        format!("{}.{}", rpc_prefix(nsprefix), actor)
+    pub fn advertise_links(_ns_prefix: &Option<String>) -> String {
+        String::from("FIXME_USE_CORRECT_TOPIC_ADVERTISE_LINKS")
+        //format!("{}.links", rpc_prefix(ns_prefix))
     }
 
-    pub fn advertise_links(ns_prefix: &Option<String>) -> String {
-        format!("{}.links", rpc_prefix(ns_prefix))
-    }
-
-    pub fn remove_links(ns_prefix: &Option<String>) -> String {
-        let prefix = rpc_prefix(ns_prefix);
-        format!("{}.remlinks", prefix)
+    pub fn remove_links(_ns_prefix: &Option<String>) -> String {
+        String::from("FIXME_USe_CORRECT_TOPIC_REMOVE_LINKS")
+        //let prefix = rpc_prefix(ns_prefix);
+        //format!("{}.remlinks", prefix)
     }
 }
 

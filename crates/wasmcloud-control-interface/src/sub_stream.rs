@@ -1,9 +1,8 @@
 //! Stream interface for async nats subscription
 //!
 
-use crate::deserialize;
 pub use crate::events::ControlEvent;
-use futures::stream::StreamExt;
+use crate::json_deserialize;
 use log::error;
 use nats::asynk::Subscription;
 use serde::de::DeserializeOwned;
@@ -39,12 +38,15 @@ impl SubscriptionStream {
         &mut self,
         timeout: Duration,
     ) -> SubscriptionNextResult<T> {
-        match actix_rt::time::timeout(timeout, &mut self.sub.next()).await {
+        match tokio::time::timeout(timeout, self.sub.next()).await {
+            // Error return means timeout occurred before a new value was received
             Err(_) => SubscriptionNextResult::Timeout,
-            Ok(Some(msg)) => match deserialize::<T>(&msg.data) {
+            // Ok(Some(_)) means subscription got a value
+            Ok(Some(msg)) => match json_deserialize::<T>(&msg.data) {
                 Ok(item) => SubscriptionNextResult::Item(item),
                 Err(e) => SubscriptionNextResult::Err(e.to_string()),
             },
+            // Ok(None) means subscription was cancelled
             Ok(None) => SubscriptionNextResult::Cancelled,
         }
     }

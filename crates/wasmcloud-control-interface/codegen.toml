@@ -1,0 +1,23 @@
+# codegen.toml
+
+[[models]]
+path = "control-interface.smithy"
+
+[[models]]
+url = "https://wasmcloud.github.io/models/org.wasmcloud"
+files = [ "wasmcloud-core.smithy", "wasmcloud-model.smithy" ]
+
+##
+## Rust language output
+##
+[rust]
+
+# top-level output directory for rust files.
+output_dir = "."
+
+[rust.parameters]
+
+[[rust.files]]
+path = "src/control.rs"
+namespace = "org.wasmcloud.interface.control"
+
