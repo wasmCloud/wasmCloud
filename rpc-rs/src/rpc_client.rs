@@ -41,6 +41,7 @@ pub struct RpcClient {
 #[derive(Clone)]
 pub(crate) enum NatsClientType {
     Sync(nats::Connection),
+    Asynk(nats::asynk::Connection),
     Async(Arc<crate::provider::NatsClient>),
 }
 
@@ -74,6 +75,21 @@ impl RpcClient {
         }
     }
 
+    /// Constructs a new RpcClient for a nats::asynk connection.
+    /// parameters: async nats client, lattice rpc prefix (usually "default"),
+    /// and secret key for signing messages
+    pub fn new_asynk(
+        nats: nats::asynk::Connection,
+        lattice_prefix: &str,
+        key: wascap::prelude::KeyPair,
+    ) -> Self {
+        RpcClient {
+            client: NatsClientType::Asynk(nats),
+            lattice_prefix: lattice_prefix.to_string(),
+            key: Arc::new(key),
+        }
+    }
+
     /// Constructs a new RpcClient using an async nats connection
     /// parameters: synch nats client connection, lattice rpc prefix (usually "default"),
     /// and secret key for signing messages
@@ -90,10 +106,21 @@ impl RpcClient {
     }
 
     // convenience method for returning async client
-    pub(crate) fn get_async(&self) -> Option<&ratsio::NatsClient> {
+    // If the client is not the correct type, returns None
+    pub fn get_async(&self) -> Option<&ratsio::NatsClient> {
         use std::borrow::Borrow;
         match self.client.borrow() {
             NatsClientType::Async(nats) => Some(nats),
+            _ => None,
+        }
+    }
+
+    // convenience method for returning nats::asynk Connection
+    // If the client is not the correct type, returns None
+    pub fn get_asynk(&self) -> Option<&nats::asynk::Connection> {
+        use std::borrow::Borrow;
+        match self.client.borrow() {
+            NatsClientType::Asynk(nc) => Some(nc),
             _ => None,
         }
     }
@@ -197,6 +224,13 @@ impl RpcClient {
                     .map_err(|e| RpcError::Nats(e.to_string()))?;
                 message.data
             }
+            NatsClientType::Asynk(ref connection) => {
+                let message = connection
+                    .request(subject, data)
+                    .await
+                    .map_err(|e| RpcError::Nats(e.to_string()))?;
+                message.data
+            }
         };
         Ok(bytes)
     }
@@ -212,6 +246,10 @@ impl RpcClient {
                 .map_err(|e| RpcError::Nats(e.to_string()))?,
             NatsClientType::Sync(connection) => connection
                 .publish(subject, data)
+                .map_err(|e| RpcError::Nats(e.to_string()))?,
+            NatsClientType::Asynk(connection) => connection
+                .publish(subject, data)
+                .await
                 .map_err(|e| RpcError::Nats(e.to_string()))?,
         }
         Ok(())
