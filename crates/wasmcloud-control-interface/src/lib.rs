@@ -420,16 +420,13 @@ impl Client {
 }
 
 //
-// [ss]: renamed these json_serialize and json_deserialize to avoid confusion
-//   with msgpack serialization, which is used for rpc messages.
-// [ss]: temporarily made these pub(crate) instead of pub to identify who uses them.
-//   (intentional breakage)  These should be internal to this crate
-//   to avoid accidental misuse of the wrong serialization.
+// [ss]: renamed to json_serialize and json_deserialize to avoid confusion
+//   with msgpack serialize and deserialize, used for rpc messages.
 //
 /// The standard function for serializing codec structs into a format that can be
 /// used for message exchange between actor and host. Use of any other function to
 /// serialize could result in breaking incompatibilities.
-pub(crate) fn json_serialize<T>(
+pub fn json_serialize<T>(
     item: T,
 ) -> ::std::result::Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>>
 where
@@ -441,7 +438,7 @@ where
 /// The standard function for de-serializing codec structs from a format suitable
 /// for message exchange between actor and host. Use of any other function to
 /// deserialize could result in breaking incompatibilities.
-pub(crate) fn json_deserialize<'de, T: Deserialize<'de>>(
+pub fn json_deserialize<'de, T: Deserialize<'de>>(
     buf: &'de [u8],
 ) -> ::std::result::Result<T, Box<dyn std::error::Error + Send + Sync>> {
     serde_json::from_slice(buf).map_err(|e| format!("JSON deserialization failure: {}", e).into())
