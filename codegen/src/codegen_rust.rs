@@ -582,7 +582,7 @@ impl<'model> RustCodeGen<'model> {
             if let Some(cg) = get_trait::<CodegenRust>(traits, codegen_rust_trait())? {
                 cg.derive_default
             } else {
-                true
+                !is_trait_struct // default to true for all non-trait structures
             };
         w.write(b"#[derive(");
         if derive_default {
