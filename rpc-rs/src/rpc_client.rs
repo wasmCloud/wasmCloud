@@ -1,12 +1,13 @@
 #![cfg(not(target_arch = "wasm32"))]
 use crate::{
     core::{Invocation, InvocationResponse, WasmCloudEntity},
-    JsonValue, Message, RpcError,
+    Message, RpcError,
 };
 #[allow(unused_imports)]
 use log::{debug, error, trace};
 use ring::digest::{Context, Digest, SHA256};
 use serde::{de::DeserializeOwned, Serialize};
+use serde_json::Value as JsonValue;
 use std::{
     convert::{TryFrom, TryInto},
     io::Read,
@@ -357,7 +358,7 @@ impl RpcClientSync {
 }
 
 /// A Json message (method, args)
-struct JsonMessage<'m>(&'m str, crate::JsonValue);
+struct JsonMessage<'m>(&'m str, JsonValue);
 
 impl<'m> TryFrom<JsonMessage<'m>> for Message<'m> {
     /// convert json message to rpc message (msgpack)
