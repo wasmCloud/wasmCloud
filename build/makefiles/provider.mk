@@ -10,14 +10,14 @@
 
 top_targets     ?= all build par clean
 
-platform_id = $$( uname -s )
+platform_id = $(shell uname -s)
 platform = $$( \
 	case $(platform_id) in \
 		( Linux | Darwin ) echo $(platform_id) ;; \
 		( * ) echo Unrecognized Platform;; \
 	esac )
 
-machine_id = $$( uname -m )
+machine_id = $(shell uname -m )
 
 # name of compiled binary
 bin_name ?= $(PROJECT)
@@ -41,15 +41,15 @@ par_targets ?= \
 bin_targets = $(foreach target,$(par_targets),target/$(target)/release/$(bin_name))
 
 # pick target0 for starting par
-ifeq ($(platform_id)_$(machine_id),Linux_x86_64)
-	par_target0=x86_64-unknown-linux-gnu
+ifeq ($(machine_id)-$(platform_id),x86_64-Linux)
+	par_target0 = x86_64-unknown-linux-gnu
 else
-	ifeq ($(platform_id)_$(machine_id),Darwin_x86_64)
-	    par_target0=x86_64-apple-darwin
+	ifeq ($(machine_id)-$(platform_id),x86_64-Darwin)
+		par_target0 = x86_64-apple-darwin
 	else
-		# default to linux-x86
-	    par_target0=x86_64-unknown-linux-gnu
-    endif
+		# default to x86_64-linux
+		par_target0=x86_64-unknown-linux-gnu
+	endif
 endif
 
 # the target of the current platform, as defined by cross
@@ -77,7 +77,7 @@ par: release $(dest_par) build/stub.exs
 $(dest_par): $(bin_target0) Makefile
 	@mkdir -p $(dir $(dest_par))
 	rm -f $@
-	par_arch=`echo -n $(par_target0) | sed -E 's/([^-]+)-([^-]+)-([^-]+)(-gnu)?/\1-\3/'`
+	par_arch=`echo $(par_target0) | sed -E 's/([^-]+)-([^-]+)-([^-]+)(-gnu)?/\1-\3/'`
 	wash par create \
 		--arch $$par_arch \
 		--binary $(bin_target0) \
@@ -88,6 +88,7 @@ $(dest_par): $(bin_target0) Makefile
 		--revision $(REVISION) \
 		--destination $@ \
 		--compress
+	@echo Created $@
 
 
 # par-full adds all the other targets to the base par
@@ -188,6 +189,7 @@ make-vars:
 	@echo "platform_id    : $(platform_id)"
 	@echo "platform       : $(platform)"
 	@echo "machine_id     : $(machine_id)"
+	@echo "default-par    : $(par_target0)"
 	@echo "project_dir    : $(project_dir)"
 	@echo "subdirs        : $(subdirs)"
 	@echo "top_targets    : $(top_targets)"
