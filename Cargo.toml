@@ -67,7 +67,7 @@ uuid = { version = "0.8", features = ["serde", "v4"] }
 wascap = "0.6.0"
 wasmcloud-actor-extras = "0.1.1"
 wasmcloud-actor-http-server = "0.1.1"
-wasmcloud-control-interface = { path = "crates/wasmcloud-control-interface", version = "0.4.0" }
+wasmcloud-control-interface = { path = "crates/wasmcloud-control-interface", version = "0.5.0" }
 
 [workspace]
 members = [
