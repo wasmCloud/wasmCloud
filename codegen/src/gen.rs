@@ -427,7 +427,7 @@ pub trait SourceFormatter {
 }
 
 /// confirm all files are present, otherwise return error
-fn ensure_files_exist(source_files: &Vec<std::path::PathBuf>) -> Result<()> {
+fn ensure_files_exist(source_files: &[std::path::PathBuf]) -> Result<()> {
     let missing = source_files
         .iter()
         .filter(|p| !p.is_file())
