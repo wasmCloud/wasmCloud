@@ -66,7 +66,7 @@ pub struct Host {
     #[serde(default)]
     pub id: String,
     /// uptime in seconds
-    pub uptime: u64,
+    pub uptime_seconds: u64,
 }
 
 #[derive(Default, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -134,7 +134,6 @@ pub struct StartActorAck {
 
 #[derive(Default, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct StartActorCommand {
-    #[serde(rename = "actorRef")]
     #[serde(default)]
     pub actor_ref: String,
     #[serde(default)]
