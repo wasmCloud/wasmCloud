@@ -31,7 +31,7 @@ ifeq ($(WASH_REG_USER),)
 endif
 
 par_targets ?= \
-	x86_64_unknown-linux \
+	x86_64-unknown-linux-gnu \
    	x86_64-apple-darwin \
 	armv7-unknown-linux-gnueabihf \
    	aarch64-unknown-linux-gnu \
@@ -42,13 +42,13 @@ bin_targets = $(foreach target,$(par_targets),target/$(target)/release/$(bin_nam
 
 # pick target0 for starting par
 ifeq ($(platform_id)_$(machine_id),Linux_x86_64)
-	par_target0=x86_64_unknown-linux
+	par_target0=x86_64-unknown-linux-gnu
 else
 	ifeq ($(platform_id)_$(machine_id),Darwin_x86_64)
 	    par_target0=x86_64-apple-darwin
 	else
 		# default to linux-x86
-	    par_target0=x86_64_unknown-linux
+	    par_target0=x86_64-unknown-linux-gnu
     endif
 endif
 
@@ -77,8 +77,9 @@ par: release $(dest_par) build/stub.exs
 $(dest_par): $(bin_target0) Makefile
 	@mkdir -p $(dir $(dest_par))
 	rm -f $@
+	par_arch=`echo -n $(par_target0) | sed -E 's/([^-]+)-([^-]+)-([^-]+)(-gnu)?/\1-\3/'`
 	wash par create \
-		--arch $(par_target0) \
+		--arch $$par_arch \
 		--binary $(bin_target0) \
 		--capid $(CAPABILITY_ID) \
 		--name $(NAME) \
@@ -94,9 +95,10 @@ par-full: $(dest_par) $(bin_targets)
 	# add other defined targets
 	for target in $(par_targets); do \
 	    target_dest=target/$$target/release/$(bin_name);  \
-		echo building $$target; \
+	    par_arch=`echo -n $$target | sed -E 's/([^-]+)-([^-]+)-([^-]+)(-gnu)?/\1-\3/'`; \
+		echo building $$par_arch; \
 		if [ $${target_dest} != $(cross_target0) ] && [ -f $$target_dest ]; then \
-		    wash par insert --arch $$target --binary $$target_dest $@; \
+		    wash par insert --arch $$par_arch --binary $$target_dest $@; \
 		fi; \
 	done
 
