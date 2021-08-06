@@ -139,6 +139,7 @@ structure ProviderDescription {
 
 structure StartActorCommand {
     @required
+    @serialization(name: "actor_ref")
     actorRef: String,
 
     @required
@@ -257,7 +258,8 @@ structure Host {
 
     /// uptime in seconds
     @required
-    uptime: U64
+    @serialization(name: "uptime_seconds")
+    uptimeSeconds: U64
 }
 
 list HostList {
