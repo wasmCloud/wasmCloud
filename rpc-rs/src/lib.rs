@@ -5,8 +5,6 @@
 //!
 //#![feature(toowned_clone_into)]
 
-pub(crate) use serde_json::Value as JsonValue;
-
 mod timestamp;
 pub use timestamp::Timestamp;
 
