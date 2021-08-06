@@ -9,14 +9,14 @@ use crate::events::PublishedEvent;
 pub use control::*;
 use crossbeam_channel::{unbounded, Receiver};
 use futures::executor::block_on;
-use log::error;
+use log::{error, trace};
 use nats::asynk::Connection;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, time::Duration};
 use sub_stream::SubscriptionStream;
-use wascap::prelude::KeyPair;
+//use wascap::prelude::KeyPair;
 // use and re-export LinkDefinition
-pub use wasmbus_rpc::core::LinkDefinition;
+pub use wasmbus_rpc::{core::LinkDefinition, RpcClient};
 
 type Result<T> = ::std::result::Result<T, Box<dyn ::std::error::Error + Send + Sync>>;
 
@@ -24,11 +24,10 @@ type Result<T> = ::std::result::Result<T, Box<dyn ::std::error::Error + Send + S
 
 /// Lattice control interface client
 pub struct Client {
-    nc: Connection,
+    nc: nats::asynk::Connection,
     nsprefix: Option<String>,
     timeout: Duration,
-    #[allow(dead_code)]
-    key: KeyPair,
+    //key: KeyPair,
 }
 
 impl Client {
@@ -38,7 +37,7 @@ impl Client {
             nc,
             nsprefix,
             timeout,
-            key: KeyPair::new_server(),
+            //key: KeyPair::new_user(),
         }
     }
 
@@ -46,6 +45,7 @@ impl Client {
     pub async fn get_hosts(&self, timeout: Duration) -> Result<Vec<Host>> {
         let subject = broker::queries::hosts(&self.nsprefix);
         let sub = self.nc.request_multi(&subject, vec![]).await?;
+        trace!("get_hosts: subscribing to {}", &subject);
         let hosts = SubscriptionStream::new(sub)
             .collect(timeout, "get hosts")
             .await;
@@ -67,6 +67,7 @@ impl Client {
             actor_ref: actor_ref.to_string(),
             constraints,
         })?;
+        trace!("actor_auction: subscribing to {}", &subject);
         let sub = self.nc.request_multi(&subject, bytes).await?;
         let actors = SubscriptionStream::new(sub)
             .collect(timeout, "actor auction")
@@ -91,6 +92,7 @@ impl Client {
             link_name: link_name.to_string(),
             constraints,
         })?;
+        trace!("provider_auction: subscribing to {}", &subject);
         let sub = self.nc.request_multi(&subject, bytes).await?;
         let providers = SubscriptionStream::new(sub)
             .collect(timeout, "provider auction")
@@ -101,6 +103,7 @@ impl Client {
     /// Retrieves the contents of a running host
     pub async fn get_host_inventory(&self, host_id: &str) -> Result<HostInventory> {
         let subject = broker::queries::host_inventory(&self.nsprefix, host_id);
+        trace!("get_host_inventory:request {}", &subject);
         match self
             .nc
             .request_timeout(&subject, vec![], self.timeout)
@@ -122,6 +125,7 @@ impl Client {
     /// the appropriate event in the control event stream
     pub async fn start_actor(&self, host_id: &str, actor_ref: &str) -> Result<StartActorAck> {
         let subject = broker::commands::start_actor(&self.nsprefix, host_id);
+        trace!("start_actor:request {}", &subject);
         let bytes = json_serialize(StartActorCommand {
             actor_ref: actor_ref.to_string(),
             host_id: host_id.to_string(),
@@ -150,7 +154,8 @@ impl Client {
         link_name: &str,
         values: HashMap<String, String>,
     ) -> Result<()> {
-        let subject = broker::rpc::advertise_links(&self.nsprefix);
+        let subject = broker::advertise_link(&self.nsprefix);
+        trace!("advertise_link:publish {}", &subject);
         let ld = LinkDefinition {
             actor_id: actor_id.to_string(),
             provider_id: provider_id.to_string(),
@@ -158,37 +163,39 @@ impl Client {
             link_name: link_name.to_string(),
             values,
         };
-        // TODO: should this be json_serialize or wasmbus_rpc::serialize ?
         let bytes = crate::json_serialize(&ld)?;
         self.nc.publish(&subject, &bytes).await?;
 
         Ok(())
     }
 
-    /// Publishes a request to remove a link definition to the lattice. All hosts in the lattice will
-    /// receive this message and, if the appropriate capability provider is in that host, it will have
-    /// the "remove actor" operation sent to it. The link definition will also be removed from the lattice
-    /// cache. No confirmation or acknowledgement is available for this operation, you will need to monitor events
-    /// and/or query the lattice to confirm that the link has been removed.
-    pub async fn remove_link(
-        &self,
-        actor_id: &str,
-        contract_id: &str,
-        link_name: &str,
-    ) -> Result<()> {
-        let subject = broker::rpc::remove_links(&self.nsprefix);
-        let ld = LinkDefinition {
-            actor_id: actor_id.to_string(),
-            contract_id: contract_id.to_string(),
-            link_name: link_name.to_string(),
-            ..Default::default()
-        };
-        // TODO: should this be json_serialize or wasmbus_rpc::serialize ?
-        let bytes = crate::json_serialize(&ld)?;
-        self.nc.publish(&subject, &bytes).await?;
+    /**
+     Not currently supported
 
-        Ok(())
-    }
+        /// Publishes a request to remove a link definition to the lattice. All hosts in the lattice will
+        /// receive this message and, if the appropriate capability provider is in that host, it will have
+        /// the "remove actor" operation sent to it. The link definition will also be removed from the lattice
+        /// cache. No confirmation or acknowledgement is available for this operation, you will need to monitor events
+        /// and/or query the lattice to confirm that the link has been removed.
+        pub async fn remove_link(
+            &self,
+            actor_id: &str,
+            contract_id: &str,
+            link_name: &str,
+        ) -> Result<()> {
+            let subject = broker::remove_link(&self.nsprefix);
+            let ld = LinkDefinition {
+                actor_id: actor_id.to_string(),
+                contract_id: contract_id.to_string(),
+                link_name: link_name.to_string(),
+                ..Default::default()
+            };
+            let bytes = crate::json_serialize(&ld)?;
+            self.nc.publish(&subject, &bytes).await?;
+
+            Ok(())
+        }
+    **/
 
     /// Issue a command to a host instructing that it replace an existing actor (indicated by its
     /// public key) with a new actor indicated by an OCI image reference. The host will acknowledge
@@ -205,6 +212,7 @@ impl Client {
         new_actor_ref: &str,
     ) -> Result<UpdateActorAck> {
         let subject = broker::commands::update_actor(&self.nsprefix, host_id);
+        trace!("update_actor:request {}", &subject);
         let bytes = json_serialize(UpdateActorCommand {
             host_id: host_id.to_string(),
             actor_id: existing_actor_id.to_string(),
@@ -236,6 +244,7 @@ impl Client {
         link_name: Option<String>,
     ) -> Result<StartProviderAck> {
         let subject = broker::commands::start_provider(&self.nsprefix, host_id);
+        trace!("start_provider:request {}", &subject);
         let bytes = json_serialize(StartProviderCommand {
             host_id: host_id.to_string(),
             provider_ref: provider_ref.to_string(),
@@ -266,6 +275,7 @@ impl Client {
         contract_id: &str,
     ) -> Result<StopProviderAck> {
         let subject = broker::commands::stop_provider(&self.nsprefix, host_id);
+        trace!("stop_provider:request {}", &subject);
         let bytes = json_serialize(StopProviderCommand {
             host_id: host_id.to_string(),
             provider_ref: provider_ref.to_string(),
@@ -296,6 +306,7 @@ impl Client {
         count: u16,
     ) -> Result<StopActorAck> {
         let subject = broker::commands::stop_actor(&self.nsprefix, host_id);
+        trace!("stop_actor:request {}", &subject);
         let bytes = json_serialize(StopActorCommand {
             host_id: host_id.to_string(),
             actor_ref: actor_ref.to_string(),
@@ -316,15 +327,16 @@ impl Client {
 
     /// Retrieves the full set of all cached claims in the lattice by getting a response from the first
     /// host that answers this query
-    pub async fn get_claims(&self) -> Result<ClaimsList> {
+    pub async fn get_claims(&self) -> Result<GetClaimsResponse> {
         let subject = broker::queries::claims(&self.nsprefix);
+        trace!("get_claims:request {}", &subject);
         match self
             .nc
             .request_timeout(&subject, vec![], self.timeout)
             .await
         {
             Ok(msg) => {
-                let list: ClaimsList = json_deserialize(&msg.data)?;
+                let list: GetClaimsResponse = json_deserialize(&msg.data)?;
                 Ok(list)
             }
             Err(e) => Err(format!("Did not receive claims from lattice: {}", e).into()),
@@ -391,6 +403,7 @@ impl Client {
                     //if let Some(msg) = block_on(&mut sub.next()) {
                     match json_deserialize::<PublishedEvent>(&msg.data) {
                         Ok(evt) => {
+                            trace!("received event: {:?}", evt);
                             // If the channel is disconnected, stop sending events
                             if sender.send(evt).is_err() {
                                 let _ = block_on(sub.unsubscribe());
