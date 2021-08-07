@@ -4,7 +4,7 @@
 // WASM module cannot do.
 
 use crate::generated::core::HealthResponse;
-use crate::generated::extras::{GeneratorRequest, GeneratorResult};
+use wasmcloud_actor_extras::{GeneratorRequest, GeneratorResult};
 use crate::messagebus::handlers::OP_HEALTH_REQUEST;
 
 use std::error::Error;
