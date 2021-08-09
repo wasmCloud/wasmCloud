@@ -1,5 +1,0 @@
-schema: ../../../schemas/control_interface.widl
-generates:
-  src/generated/ctliface.rs:
-    package: widl-codegen/language/rust
-    visitorClass: ModuleVisitor

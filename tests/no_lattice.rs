@@ -1,22 +1,8 @@
 use crate::common::{await_actor_count, await_provider_count, gen_kvcounter_host, par_from_file};
 use std::collections::HashMap;
 use std::time::Duration;
-use wasmcloud_actor_http_server::{deserialize, serialize, Request, Response};
 use wasmcloud_host::Result;
 use wasmcloud_host::{Actor, HostBuilder, NativeCapability};
-
-pub async fn empty_host_has_two_providers() -> Result<()> {
-    // Ensure that we're not accidentally using the replication feature on KV cache
-    ::std::env::remove_var("KVCACHE_NATS_URL");
-    let h = HostBuilder::new().build();
-    h.start().await?;
-    actix_rt::time::sleep(Duration::from_millis(300)).await;
-
-    let prov = h.providers().await?;
-    assert_eq!(2, prov.len());
-
-    Ok(())
-}
 
 pub async fn unlink_provider() -> Result<()> {
     ::std::env::remove_var("KVCACHE_NATS_URL");
@@ -60,77 +46,6 @@ pub async fn unlink_provider() -> Result<()> {
     let resp = reqwest::get(&url).await;
     assert!(resp.is_err()); // should be a connection refused
 
-    Ok(())
-}
-
-pub async fn cant_use_unstarted_host() -> Result<()> {
-    ::std::env::remove_var("KVCACHE_NATS_URL");
-    let h = HostBuilder::new()
-        .with_namespace("cantuseunstarted")
-        .build();
-    let res = h.start_actor_from_registry("foo.bar.baz").await;
-    assert_eq!(
-        format!("{}", res.err().unwrap()),
-        "Activity cannot be performed, host has not been started"
-    );
-    Ok(())
-}
-
-pub async fn start_and_stop_actor() -> Result<()> {
-    ::std::env::remove_var("KVCACHE_NATS_URL");
-    let h = HostBuilder::new().build();
-    h.start().await?;
-    let echo = Actor::from_file("./tests/modules/echo.wasm")?;
-    let actor_id = echo.public_key();
-    h.start_actor(echo).await?;
-    await_actor_count(&h, 1, Duration::from_millis(50), 3).await?;
-
-    h.stop_actor(&actor_id).await?;
-    actix_rt::time::sleep(Duration::from_millis(500)).await;
-    assert_eq!(0, h.actors().await?.len());
-
-    let request = Request {
-        method: "GET".to_string(),
-        path: "/foo/bar".to_string(),
-        query_string: "test=kthxbye".to_string(),
-        header: Default::default(),
-        body: b"This is a test. Do not be alarmed".to_vec(),
-    };
-    let buf = serialize(&request)?;
-    println!("{}", buf.len());
-    let res = h.call_actor(&actor_id, "HandleRequest", &buf).await;
-    assert!(res.is_err()); // We should not still be able to call this actor
-
-    Ok(())
-}
-
-pub async fn start_and_execute_echo() -> Result<()> {
-    // Ensure that we're not accidentally using the replication feature on KV cache
-    ::std::env::remove_var("KVCACHE_NATS_URL");
-    let h = HostBuilder::new().build();
-    h.start().await?;
-    let echo = Actor::from_file("./tests/modules/echo.wasm")?;
-    let actor_id = echo.public_key();
-    h.start_actor(echo).await?;
-    await_actor_count(&h, 1, Duration::from_millis(50), 3).await?;
-
-    let request = Request {
-        method: "GET".to_string(),
-        path: "/foo/bar".to_string(),
-        query_string: "test=kthxbye".to_string(),
-        header: Default::default(),
-        body: b"This is a test. Do not be alarmed".to_vec(),
-    };
-    let buf = serialize(&request)?;
-    println!("{}", buf.len());
-    let res = h.call_actor(&actor_id, "HandleRequest", &buf).await?;
-    println!("{}", res.len());
-    let resp: Response = deserialize(&res)?;
-    assert_eq!(resp.status_code, 200);
-    assert_eq!(resp.status, "OK");
-    let v: serde_json::Value = serde_json::from_slice(&resp.body)?;
-    assert_eq!("test=kthxbye", v["query_string"].as_str().unwrap());
-    h.stop().await;
     Ok(())
 }
 
