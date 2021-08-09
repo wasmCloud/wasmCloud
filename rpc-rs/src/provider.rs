@@ -32,10 +32,10 @@ trait ProviderImpl: ProviderDispatch + Send + Sync + Clone + 'static {}
 pub mod prelude {
     pub use super::{HostBridge, ProviderDispatch, ProviderHandler};
     pub use crate::{
-        client, context,
+        context::Context,
         core::LinkDefinition,
         provider_main::{get_host_bridge, load_host_data, provider_main, provider_run},
-        Message, MessageDispatch, RpcError,
+        Message, MessageDispatch, RpcError, RpcResult, SendOpts,
     };
 
     //pub use crate::Timestamp;
@@ -148,9 +148,9 @@ impl HostBridge {
         origin: WasmCloudEntity,
         actor_id: &str,
         message: Message<'_>,
-    ) -> Result<InvocationResponse, RpcError> {
+    ) -> Result<Vec<u8>, RpcError> {
         debug!("host_bridge sending actor {}", message.method);
-        let target = WasmCloudEntity::new_actor(actor_id);
+        let target = WasmCloudEntity::new_actor(actor_id)?;
         self.rpc_client.send(origin, target, message).await
     }
 
@@ -258,8 +258,8 @@ impl HostBridge {
         self.add_subscription(sid).await;
         pin_mut!(sub);
         let provider = provider.clone();
-        let ctx = crate::context::Context::default();
         while let Some(msg) = sub.next().await {
+            let mut ctx = crate::context::Context::default();
             let inv = match crate::deserialize::<Invocation>(&msg.payload) {
                 Ok(inv) => {
                     trace!(
@@ -278,6 +278,7 @@ impl HostBridge {
                 method: &inv.operation,
                 arg: Cow::from(inv.msg),
             };
+            ctx.actor = Some(inv.origin.public_key);
             let ir = match provider.dispatch(&ctx, provider_msg).await {
                 Ok(resp) => {
                     trace!("operation {} succeeded. returning response", &inv.operation);
@@ -529,21 +530,18 @@ pub struct ProviderTransport<'transport> {
     pub ld: &'transport LinkDefinition,
 }
 
+impl<'transport> ProviderTransport<'transport> {}
+
 #[async_trait]
 impl<'bridge> crate::Transport for ProviderTransport<'bridge> {
     async fn send(
         &self,
-        _ctx: &crate::context::Context<'_>,
-        _config: &crate::client::SendConfig,
+        _ctx: &crate::context::Context,
         req: Message<'_>,
-    ) -> std::result::Result<Message<'_>, RpcError> {
-        let origin = WasmCloudEntity::from_link(self.ld);
-        let target: WasmCloudEntity = WasmCloudEntity::new_actor(&self.ld.actor_id);
-        let inv_resp = self.bridge.rpc_client.send(origin, target, req).await?;
-
-        Ok(Message {
-            method: "_reply",
-            arg: std::borrow::Cow::Owned(inv_resp.msg),
-        })
+        _opts: Option<crate::SendOpts>,
+    ) -> std::result::Result<Vec<u8>, RpcError> {
+        let origin = self.ld.provider_entity();
+        let target = self.ld.actor_entity();
+        self.bridge.rpc_client.send(origin, target, req).await
     }
 }

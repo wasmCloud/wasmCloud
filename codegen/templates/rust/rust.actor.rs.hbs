@@ -12,7 +12,7 @@ struct {{ to_pascal_case project_name }}Actor {}
 impl HttpServer for {{ to_pascal_case project_name }}Actor {
     async fn handle_request(
         &self,
-        _ctx: &context::Context<'_>,
+        _ctx: &Context,
         value: &HttpRequest,
     ) -> std::result::Result<HttpResponse, RpcError> {
         console_log("hello world");
@@ -36,7 +36,7 @@ impl HttpServer for {{ to_pascal_case project_name }}Actor {
 impl Actor for {{ to_pascal_case project_name }}Actor {
     async fn health_request(
         &self,
-        _ctx: &context::Context<'_>,
+        _ctx: &Context,
         _value: &HealthCheckRequest,
     ) -> std::result::Result<HealthCheckResponse, RpcError> {
         Ok(HealthCheckResponse {

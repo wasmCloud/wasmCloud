@@ -21,6 +21,9 @@ pub type I64 = i64;
 /// signed byte
 pub type I8 = i8;
 
+/// list of identifiers
+pub type IdentifierList = Vec<String>;
+
 /// unsigned 16-bit int
 pub type U16 = i16;
 
@@ -42,6 +45,13 @@ pub struct CodegenRust {
     #[serde(rename = "deriveDefault")]
     #[serde(default)]
     pub derive_default: bool,
+}
+
+/// indicates that a trait or class extends one or more bases
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct Extends {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<IdentifierList>,
 }
 
 /// A non-empty string (minimum length 1)

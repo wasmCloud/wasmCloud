@@ -11,7 +11,7 @@ pub use timestamp::Timestamp;
 mod actor_wasm;
 mod common;
 pub use common::{
-    client, context, deserialize, serialize, Message, MessageDispatch, RpcError, Transport,
+    context, deserialize, serialize, Message, MessageDispatch, RpcError, SendOpts, Transport,
 };
 pub mod channel_log;
 pub mod provider;
@@ -26,6 +26,8 @@ pub mod model {
 pub(crate) mod rpc_client;
 #[cfg(not(target_arch = "wasm32"))]
 pub use rpc_client::{RpcClient, RpcClientSync};
+
+pub type RpcResult<T> = std::result::Result<T, RpcError>;
 
 /// Version number of this api
 #[doc(hidden)]
@@ -46,6 +48,8 @@ mod wasmbus_core;
 pub mod core {
     // re-export core lib as "core"
     pub use crate::wasmbus_core::*;
+    use crate::RpcError;
+    use std::convert::TryFrom;
 
     cfg_if::cfg_if! {
         if #[cfg(not(target_arch = "wasm32"))] {
@@ -101,16 +105,40 @@ pub mod core {
         }
     }
 
-    impl WasmCloudEntity {
-        /// constructor for actor entity
-        pub fn new_actor<T: ToString>(id: T) -> WasmCloudEntity {
+    impl LinkDefinition {
+        pub fn actor_entity(&self) -> WasmCloudEntity {
             WasmCloudEntity {
-                public_key: id.to_string(),
-                contract_id: String::new(),
-                link_name: String::new(),
+                public_key: self.actor_id.clone(),
+                contract_id: String::default(),
+                link_name: String::default(),
             }
         }
+        pub fn provider_entity(&self) -> WasmCloudEntity {
+            WasmCloudEntity {
+                public_key: self.provider_id.clone(),
+                contract_id: self.contract_id.clone(),
+                link_name: self.link_name.clone(),
+            }
+        }
+    }
 
+    impl WasmCloudEntity {
+        /// constructor for actor entity
+        pub fn new_actor<T: ToString>(public_key: T) -> Result<WasmCloudEntity, RpcError> {
+            let public_key = public_key.to_string();
+            if public_key.is_empty() {
+                return Err(RpcError::InvalidParameter(
+                    "public_key may not be empty".to_string(),
+                ));
+            }
+            Ok(WasmCloudEntity {
+                public_key,
+                contract_id: String::new(),
+                link_name: String::new(),
+            })
+        }
+
+        /*
         /// create provider entity from link definition
         pub fn from_link(link: &LinkDefinition) -> Self {
             WasmCloudEntity {
@@ -119,18 +147,38 @@ pub mod core {
                 link_name: link.link_name.clone(),
             }
         }
+         */
 
         /// constructor for capability provider entity
+        /// all parameters are required
         pub fn new_provider<T1: ToString, T2: ToString, T3: ToString>(
-            id: T1,
+            public_key: T1,
             contract_id: T2,
             link_name: T3,
-        ) -> WasmCloudEntity {
-            WasmCloudEntity {
-                public_key: id.to_string(),
-                contract_id: contract_id.to_string(),
-                link_name: link_name.to_string(),
+        ) -> Result<WasmCloudEntity, RpcError> {
+            let public_key = public_key.to_string();
+            if public_key.is_empty() {
+                return Err(RpcError::InvalidParameter(
+                    "public_key may not be empty".to_string(),
+                ));
             }
+            let contract_id = contract_id.to_string();
+            if contract_id.is_empty() {
+                return Err(RpcError::InvalidParameter(
+                    "contract_id may not be empty".to_string(),
+                ));
+            }
+            let link_name = link_name.to_string();
+            if link_name.is_empty() {
+                return Err(RpcError::InvalidParameter(
+                    "link_name may not be empty".to_string(),
+                ));
+            }
+            Ok(WasmCloudEntity {
+                public_key,
+                contract_id,
+                link_name,
+            })
         }
 
         /// Returns URL of the entity
@@ -155,18 +203,30 @@ pub mod core {
         pub fn public_key(&self) -> String {
             self.public_key.to_string()
         }
+
+        /// returns true if this entity refers to an actor
+        pub fn is_actor(&self) -> bool {
+            self.link_name.is_empty() || self.contract_id.is_empty()
+        }
+
+        /// returns true if this entity refers to a provider
+        pub fn is_provider(&self) -> bool {
+            !self.is_actor()
+        }
     }
 
-    impl From<&str> for WasmCloudEntity {
+    impl TryFrom<&str> for WasmCloudEntity {
+        type Error = RpcError;
         /// converts string into actor entity
-        fn from(target: &str) -> WasmCloudEntity {
+        fn try_from(target: &str) -> Result<WasmCloudEntity, Self::Error> {
             WasmCloudEntity::new_actor(target.to_string())
         }
     }
 
-    impl From<String> for WasmCloudEntity {
+    impl TryFrom<String> for WasmCloudEntity {
+        type Error = RpcError;
         /// converts string into actor entity
-        fn from(target: String) -> WasmCloudEntity {
+        fn try_from(target: String) -> Result<WasmCloudEntity, Self::Error> {
             WasmCloudEntity::new_actor(target)
         }
     }
@@ -175,11 +235,13 @@ pub mod core {
 pub mod actor {
 
     pub mod prelude {
-        pub use crate::common::{client, context, Message, MessageDispatch, RpcError};
+        pub use crate::core::{Actor, ActorReceiver};
+        pub use crate::{context::Context, Message, MessageDispatch, RpcError, RpcResult};
 
         // re-export async_trait
         pub use async_trait::async_trait;
-        pub use wasmbus_macros::Actor;
+        // derive macros
+        pub use wasmbus_macros::{Actor, ActorHealthResponder as HealthResponder};
 
         #[cfg(feature = "BigInteger")]
         pub use num_bigint::BigInt as BigInteger;
@@ -199,8 +261,8 @@ pub mod actor {
 
                 #[async_trait]
                 impl crate::Transport for WasmHost {
-                    async fn send(&self, _: &context::Context<'_>, _: &client::SendConfig,
-                                _: Message<'_>, ) -> std::result::Result<Message<'_>, RpcError> {
+                    async fn send(&self, _ctx: &Context,
+                                _msg: Message<'_>, _opts: Option<crate::SendOpts> ) -> std::result::Result<Vec<u8>, RpcError> {
                        unimplemented!();
                     }
                 }

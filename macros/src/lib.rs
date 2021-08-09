@@ -112,7 +112,7 @@ pub fn derive_actor(input: TokenStream) -> TokenStream {
             )
         };
         let method = String::from_utf8_lossy(op);
-        let context = context::Context::default();
+        let context = wasmbus_rpc::context::Context::default();
         let actor = #actor_ident ::default();
         let resp = futures::executor::block_on({
             MessageDispatch::dispatch(
@@ -148,11 +148,29 @@ pub fn derive_actor(input: TokenStream) -> TokenStream {
     // struct #actor_ident { #fields }
     output.into()
 }
-/*
 
+#[proc_macro_derive(ActorHealthResponder)]
+pub fn derive_health_responder(input: TokenStream) -> TokenStream {
+    let actor_receiver = parse_macro_input!(input as ReceiverDef);
+    let actor_ident = actor_receiver.ident;
+    let output = quote!(
 
-
-*/
+        #[async_trait]
+        impl Actor for #actor_ident {
+            async fn health_request(
+                &self,
+                ctx: &Context,
+                arg: &wasmbus_rpc::core::HealthCheckRequest,
+            ) -> RpcResult<wasmbus_rpc::core::HealthCheckResponse> {
+                Ok(wasmbus_rpc::core::HealthCheckResponse {
+                    healthy: true,
+                    message: None,
+                })
+            }
+        }
+    ); // end quote
+    output.into()
+}
 
 fn gen_dispatch(traits: &[syn::Path], ident: &Ident) -> TokenStream2 {
     let mut methods = Vec::new();
@@ -183,7 +201,7 @@ fn gen_dispatch(traits: &[syn::Path], ident: &Ident) -> TokenStream2 {
         impl MessageDispatch for #ident {
             async fn dispatch(
                 &self,
-                ctx: &context::Context<'_>,
+                ctx: &wasmbus_rpc::context::Context,
                 message: Message<'_>,
             ) -> Result<Message<'_>, RpcError> {
                 let (trait_name, trait_method) = message
@@ -251,8 +269,8 @@ pub fn derive_provider(input: TokenStream) -> TokenStream {
             actor: &str,
             op: &str,
             arg: &[u8],
-        ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
-            let ctx = &context::Context {
+        ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+            let ctx = &wasmbus_rpc::context::Context {
                 actor: Some(actor),
                 ..Default::default()
             };

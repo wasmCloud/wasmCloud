@@ -715,8 +715,8 @@ impl<'model> GoCodeGen<'model> {
             br#"{
             async fn dispatch(
                 &self,
-                ctx: &context::Context<'_>,
-                message: &Message<'_> ) -> Result< Message<'_>, RpcError> {
+                ctx: &Context,
+                message: &Message<'_> ) -> RpcResult< Message<'_>> {
                 match message.method {
         "#,
         );

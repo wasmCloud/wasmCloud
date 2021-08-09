@@ -140,8 +140,8 @@ impl RpcClient {
         Target: Into<WasmCloudEntity>,
     {
         let msg = JsonMessage(method, data).try_into()?;
-        let ir = self.send(origin, target, msg).await?;
-        let resp = response_to_json::<Resp>(&ir.msg)?;
+        let bytes = self.send(origin, target, msg).await?;
+        let resp = response_to_json::<Resp>(&bytes)?;
         Ok(resp)
     }
 
@@ -153,7 +153,7 @@ impl RpcClient {
         origin: WasmCloudEntity,
         target: Target,
         message: Message<'_>,
-    ) -> Result<InvocationResponse, RpcError>
+    ) -> Result<Vec<u8>, RpcError>
     where
         Target: Into<WasmCloudEntity>,
     {
@@ -196,7 +196,7 @@ impl RpcClient {
         match inv_response.error {
             None => {
                 trace!("rpc ok response from {}", &target_url);
-                Ok(inv_response)
+                Ok(inv_response.msg)
             }
             Some(err) => {
                 // if error is Some(_), we must ignore the msg field
@@ -335,8 +335,8 @@ impl RpcClientSync {
         Target: Into<WasmCloudEntity>,
     {
         let msg = JsonMessage(method, data).try_into()?;
-        let ir = self.send(origin, target, msg)?;
-        let resp = response_to_json::<Resp>(&ir.msg)?;
+        let bytes = self.send(origin, target, msg)?;
+        let resp = response_to_json::<Resp>(&bytes)?;
         Ok(resp)
     }
 
@@ -347,7 +347,7 @@ impl RpcClientSync {
         origin: WasmCloudEntity,
         target: Target,
         message: Message<'_>,
-    ) -> Result<InvocationResponse, RpcError>
+    ) -> Result<Vec<u8>, RpcError>
     where
         Target: Into<WasmCloudEntity>,
     {
