@@ -262,12 +262,8 @@ impl HttpServer {
         );
         let tx = ProviderTransport { bridge, ld: &ld };
         let ctx = wasmbus_rpc::context::Context::default();
-        let conf = wasmbus_rpc::client::SendConfig {
-            target: ld.actor_id.clone(),
-            ..Default::default()
-        };
+        let actor = wasmcloud_interface_httpserver::HttpServerSender::new(&tx);
 
-        let actor = wasmcloud_interface_httpserver::HttpServerSender::new(conf, tx);
         let resp = actor.handle_request(&ctx, &req).await?;
         trace!(
             "received from actor {}: code={}",

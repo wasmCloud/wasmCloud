@@ -28,17 +28,6 @@ struct HttpServerProvider {
 /// Default handlers are implemented in the trait ProviderHandler.
 #[async_trait]
 impl ProviderHandler for HttpServerProvider {
-    // Perform health check. Called at regular intervals by host
-    //async fn health_request(
-    //    &self,
-    //    _arg: &HealthCheckRequest,
-    //) -> Result<HealthCheckResponse, RpcError> {
-    //    Ok(HealthCheckResponse {
-    //        healthy: true,
-    //        message: None,
-    //    })
-    //}
-
     /// Provider should perform any operations needed for a new link,
     /// including setting up per-actor resources, and checking authorization.
     /// If the link is allowed, return true, otherwise return false to deny the link.
@@ -88,7 +77,7 @@ impl ProviderDispatch for HttpServerProvider {}
 impl MessageDispatch for HttpServerProvider {
     async fn dispatch(
         &self,
-        _ctx: &context::Context<'_>,
+        _ctx: &Context,
         message: Message<'_>,
     ) -> Result<Message<'_>, RpcError> {
         // We don't implement an rpc receiver

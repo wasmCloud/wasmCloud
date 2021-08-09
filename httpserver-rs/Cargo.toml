@@ -31,12 +31,11 @@ version = "0.1"
 #path = "../../interfaces/httpserver/rust"
 
 [dependencies.wasmbus-rpc]
-version = "0.2"
+version = "0.3"
 #path = "../../weld/rpc-rs"
 
 [dev-dependencies]
 assert_matches = "1.5"
-
 
 [lib]
 name = "wasmcloud_provider_httpserver"
