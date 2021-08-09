@@ -17,92 +17,34 @@ pub mod context {
 
     /// Context - message passing metadata used by wasmhost Actors and Capability Providers
     #[derive(Default, Debug, Clone)]
-    pub struct Context<'msg> {
+    pub struct Context {
         /// Messages received by Context Provider will have actor set to the actor's public key
-        pub actor: Option<&'msg str>,
+        pub actor: Option<String>,
 
         /// Span name/context for tracing. This is a placeholder for now
         pub span: Option<String>,
     }
 }
 
-/// client is the caller side of any interface
-pub mod client {
+/// Client config defines the intended recipient of a message and parameters that transport may use to adapt sending it
+#[derive(Default, Debug)]
+pub struct SendOpts {
+    /// Optional flag for idempotent messages - transport may perform retries within configured timeouts
+    pub idempotent: bool,
 
-    /// Client config defines the intended recipient of a message and parameters that transport may use to adapt sending it
-    #[derive(Debug)]
-    pub struct SendConfig {
-        /// Host/link name, usually "default" for the current host
-        pub host: String,
+    /// Optional flag for read-only messages - those that do not change the responder's state. read-only messages may be retried within configured timeouts.
+    pub read_only: bool,
+}
 
-        /// Recipient of message, such as actor's public key or provider id
-        pub target: String,
-
-        /// Optional flag for idempotent messages - transport may perform retries within configured timeouts
-        pub idempotent: bool,
-
-        /// Optional flag for read-only messages - those that do not change the responder's state. read-only messages may be retried within configured timeouts.
-        pub read_only: bool,
+impl SendOpts {
+    pub fn idempotent(mut self, val: bool) -> SendOpts {
+        self.idempotent = val;
+        self
     }
 
-    impl Default for SendConfig {
-        fn default() -> SendConfig {
-            SendConfig {
-                host: "default".to_string(),
-                target: String::default(),
-                idempotent: false,
-                read_only: false,
-            }
-        }
-    }
-
-    impl SendConfig {
-        /// Constructs a new client with host (link binding) and target.
-        /// When sending to a capability provider, the host parameter
-        /// is the link name (usually "default" for the default host),
-        /// and target is the capability contract id, e.g., "wasmcloud:keyvalue"
-        pub fn new<H: Into<String>, T: Into<String>>(host: H, target: T) -> SendConfig {
-            SendConfig {
-                host: host.into(),
-                target: target.into(),
-                ..Default::default()
-            }
-        }
-
-        /// Create a SendConfig for sending to an actor
-        pub fn actor<T: Into<String>>(target: T) -> SendConfig {
-            SendConfig {
-                target: target.into(),
-                ..Default::default()
-            }
-        }
-
-        /// Create a SendConfig using the capability contract id
-        /// (e.g., "wasmcloud:keyvalue"). Uses the default link binding.
-        pub fn contract<T: Into<String>>(contract: T) -> SendConfig {
-            SendConfig {
-                target: contract.into(),
-                ..Default::default()
-            }
-        }
-
-        /// Create a SendConfig using the default host and specified target
-        pub fn target<T: Into<String>>(target: T) -> SendConfig {
-            SendConfig {
-                target: target.into(),
-                ..Default::default()
-            }
-        }
-
-        pub fn idempotent(mut self, val: bool) -> SendConfig {
-            self.idempotent = val;
-            self
-        }
-
-        pub fn read_only(mut self, val: bool) -> SendConfig {
-            self.read_only = val;
-            self
-        }
+    pub fn read_only(mut self, val: bool) -> SendOpts {
+        self.read_only = val;
+        self
     }
 }
 
@@ -112,10 +54,10 @@ pub mod client {
 pub trait Transport: Send {
     async fn send(
         &self,
-        ctx: &context::Context<'_>,
-        config: &client::SendConfig,
+        ctx: &context::Context,
         req: Message<'_>,
-    ) -> std::result::Result<Message<'_>, RpcError>;
+        opts: Option<SendOpts>,
+    ) -> std::result::Result<Vec<u8>, RpcError>;
 }
 
 // select serialization/deserialization mode
@@ -151,10 +93,10 @@ pub enum RpcError {
     #[error("the capability provider has not been initialized: {0}")]
     NotInitialized(String),
 
-    /// The message was invalid
-    #[error("the message was invalid")]
-    Invalid(String),
-
+    // The message was invalid
+    //#[error("the message was invalid")]
+    //Invalid(String),
+    //
     #[error("method not handled {0}")]
     MethodNotHandled(String),
 
@@ -198,7 +140,7 @@ pub enum RpcError {
 pub trait MessageDispatch {
     async fn dispatch(
         &self,
-        ctx: &context::Context<'_>,
+        ctx: &context::Context,
         message: Message<'_>,
     ) -> Result<Message<'_>, RpcError>;
 }
@@ -217,23 +159,23 @@ pub trait MessageDispatch {
 mod test {
 
     use super::*;
-    use client::SendConfig;
+    use client::SendOpts;
 
     #[test]
     fn send_config_constructor() {
-        let c = SendConfig::default();
+        let c = SendOpts::default();
         assert_eq!(&c.target, "");
         assert_eq!(&c.host, "default");
         assert_eq!(c.idempotent, false);
         assert_eq!(c.read_only, false);
 
-        let c = SendConfig::actor("a");
+        let c = SendOpts::actor("a");
         assert_eq!(&c.target, "a");
         assert_eq!(&c.host, "default");
         assert_eq!(c.idempotent, false);
         assert_eq!(c.read_only, false);
 
-        let c = SendConfig::target("t");
+        let c = SendOpts::target("t");
         assert_eq!(&c.target, "t");
         assert_eq!(&c.host, "default");
         assert_eq!(c.idempotent, false);
@@ -242,13 +184,13 @@ mod test {
 
     #[test]
     fn send_config_builder() {
-        let c = SendConfig::actor("x").idempotent(true).read_only(true);
+        let c = SendOpts::actor("x").idempotent(true).read_only(true);
         assert_eq!(&c.target, "x");
         assert_eq!(&c.host, "default");
         assert_eq!(c.idempotent, true);
         assert_eq!(c.read_only, true);
 
-        let c = SendConfig::actor("x").idempotent(false).read_only(false);
+        let c = SendOpts::actor("x").idempotent(false).read_only(false);
         assert_eq!(c.idempotent, false);
         assert_eq!(c.read_only, false);
     }

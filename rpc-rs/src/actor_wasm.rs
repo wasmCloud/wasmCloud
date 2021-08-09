@@ -1,7 +1,7 @@
 //! imports/exports for WebAssembly actors
 #![cfg(target_arch = "wasm32")]
 
-use crate::{client, context, Message, RpcError, Transport};
+use crate::{Message, RpcError, RpcResult, Transport};
 use async_trait::async_trait;
 
 #[link(wasm_import_module = "wapc")]
@@ -27,12 +27,7 @@ extern "C" {
 }
 
 /// The function through which all host calls (from actors) take place.
-pub fn host_call(
-    binding: &str,
-    ns: &str,
-    op: &str,
-    msg: &[u8],
-) -> std::result::Result<Vec<u8>, RpcError> {
+pub fn host_call(binding: &str, ns: &str, op: &str, msg: &[u8]) -> crate::RpcResult<Vec<u8>> {
     let callresult = unsafe {
         __host_call(
             binding.as_ptr() as _,
@@ -71,26 +66,45 @@ pub fn host_call(
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct WasmHost {}
+pub struct WasmHost {
+    pub target: crate::core::WasmCloudEntity,
+}
+
+impl WasmHost {
+    /// constructs a Transport for sending messages to a capability provider
+    pub fn to_provider<T1: ToString, T2: ToString, T3: ToString>(
+        id: T1,
+        contract_id: T2,
+        link_name: T3,
+    ) -> RpcResult<Self> {
+        Ok(WasmHost {
+            target: crate::core::WasmCloudEntity::new_provider(id, contract_id, link_name)?,
+        })
+    }
+
+    /// constructs a WasmHost Transport for sending messages to another actor
+    pub fn to_actor<T1: ToString, T2: ToString, T3: ToString>(id: T1) -> RpcResult<Self> {
+        Ok(WasmHost {
+            target: crate::core::WasmCloudEntity::new_actor(id)?,
+        })
+    }
+}
 
 #[async_trait]
 impl Transport for WasmHost {
     async fn send(
         &self,
-        _ctx: &context::Context<'_>,
-        config: &client::SendConfig,
+        _ctx: &crate::context::Context,
         req: Message<'_>,
-    ) -> std::result::Result<Message<'_>, RpcError> {
+        _opts: Option<crate::SendOpts>,
+    ) -> std::result::Result<Vec<u8>, RpcError> {
         let res = host_call(
-            &config.host,   // "default", or capability provider ID
-            &config.target, // actor_ref, or capability name (e.g. wasmcloud::messaging)
+            &self.target.link_name,
+            &self.target.contract_id,
             req.method,
             req.arg.as_ref(),
         )?;
-        Ok(Message {
-            method: "_reply",
-            arg: std::borrow::Cow::Owned(res),
-        })
+        Ok(res)
     }
 }
 

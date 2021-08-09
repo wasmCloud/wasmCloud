@@ -4,14 +4,15 @@
 #![allow(clippy::ptr_arg)]
 #[allow(unused_imports)]
 use crate::{
-    client, context, deserialize, serialize, Message, MessageDispatch, RpcError, Transport,
+    context::Context, deserialize, serialize, Message, MessageDispatch, RpcError, RpcResult,
+    SendOpts, Transport,
 };
 #[allow(unused_imports)]
 use async_trait::async_trait;
 #[allow(unused_imports)]
 use serde::{Deserialize, Serialize};
 #[allow(unused_imports)]
-use std::borrow::Cow;
+use std::{borrow::Cow, string::ToString};
 
 pub const SMITHY_VERSION: &str = "1.0";
 
@@ -128,20 +129,16 @@ pub trait Actor {
     /// Perform health check. Called at regular intervals by host
     async fn health_request(
         &self,
-        ctx: &context::Context<'_>,
+        ctx: &Context,
         arg: &HealthCheckRequest,
-    ) -> Result<HealthCheckResponse, RpcError>;
+    ) -> RpcResult<HealthCheckResponse>;
 }
 
 /// ActorReceiver receives messages defined in the Actor service trait
 /// Actor service
 #[async_trait]
 pub trait ActorReceiver: MessageDispatch + Actor {
-    async fn dispatch(
-        &self,
-        ctx: &context::Context<'_>,
-        message: &Message<'_>,
-    ) -> Result<Message<'_>, RpcError> {
+    async fn dispatch(&self, ctx: &Context, message: &Message<'_>) -> RpcResult<Message<'_>> {
         match message.method {
             "HealthRequest" => {
                 let value: HealthCheckRequest = deserialize(message.arg.as_ref())?;
@@ -163,39 +160,38 @@ pub trait ActorReceiver: MessageDispatch + Actor {
 /// ActorSender sends messages to a Actor service
 /// Actor service
 #[derive(Debug)]
-pub struct ActorSender<T> {
-    transport: T,
-    config: client::SendConfig,
+pub struct ActorSender<'send, T> {
+    transport: &'send T,
 }
 
-impl<T: Transport> ActorSender<T> {
-    pub fn new(config: client::SendConfig, transport: T) -> Self {
-        ActorSender { transport, config }
+impl<'send, T: Transport> ActorSender<'send, T> {
+    pub fn new(transport: &'send T) -> Self {
+        ActorSender { transport }
     }
 }
 
 #[async_trait]
-impl<T: Transport + std::marker::Sync + std::marker::Send> Actor for ActorSender<T> {
+impl<'send, T: Transport + std::marker::Sync + std::marker::Send> Actor for ActorSender<'send, T> {
     #[allow(unused)]
     /// Perform health check. Called at regular intervals by host
     async fn health_request(
         &self,
-        ctx: &context::Context<'_>,
+        ctx: &Context,
         arg: &HealthCheckRequest,
-    ) -> Result<HealthCheckResponse, RpcError> {
+    ) -> RpcResult<HealthCheckResponse> {
         let arg = serialize(arg)?;
         let resp = self
             .transport
             .send(
                 ctx,
-                &self.config,
                 Message {
                     method: "HealthRequest",
                     arg: Cow::Borrowed(&arg),
                 },
+                None,
             )
             .await?;
-        let value = deserialize(resp.arg.as_ref())?;
+        let value = deserialize(&resp)?;
         Ok(value)
     }
 }

@@ -26,12 +26,12 @@ use atelier_core::{
         HasIdentity, Identifier, Model, NamespaceID, ShapeID,
     },
     prelude::{
-        prelude_namespace_id, prelude_shape_named, SHAPE_BIGDECIMAL, SHAPE_BIGINTEGER, SHAPE_BLOB,
-        SHAPE_BOOLEAN, SHAPE_BYTE, SHAPE_DOCUMENT, SHAPE_DOUBLE, SHAPE_FLOAT, SHAPE_INTEGER,
-        SHAPE_LONG, SHAPE_PRIMITIVEBOOLEAN, SHAPE_PRIMITIVEBYTE, SHAPE_PRIMITIVEDOUBLE,
-        SHAPE_PRIMITIVEFLOAT, SHAPE_PRIMITIVEINTEGER, SHAPE_PRIMITIVELONG, SHAPE_PRIMITIVESHORT,
-        SHAPE_SHORT, SHAPE_STRING, SHAPE_TIMESTAMP, TRAIT_DEPRECATED, TRAIT_DOCUMENTATION,
-        TRAIT_TRAIT, TRAIT_UNSTABLE,
+        prelude_namespace_id, prelude_shape_named, PRELUDE_NAMESPACE, SHAPE_BIGDECIMAL,
+        SHAPE_BIGINTEGER, SHAPE_BLOB, SHAPE_BOOLEAN, SHAPE_BYTE, SHAPE_DOCUMENT, SHAPE_DOUBLE,
+        SHAPE_FLOAT, SHAPE_INTEGER, SHAPE_LONG, SHAPE_PRIMITIVEBOOLEAN, SHAPE_PRIMITIVEBYTE,
+        SHAPE_PRIMITIVEDOUBLE, SHAPE_PRIMITIVEFLOAT, SHAPE_PRIMITIVEINTEGER, SHAPE_PRIMITIVELONG,
+        SHAPE_PRIMITIVESHORT, SHAPE_SHORT, SHAPE_STRING, SHAPE_TIMESTAMP, TRAIT_DEPRECATED,
+        TRAIT_DOCUMENTATION, TRAIT_TRAIT, TRAIT_UNSTABLE,
     },
 };
 use std::{collections::HashMap, path::Path, str::FromStr, string::ToString};
@@ -121,6 +121,12 @@ impl<'model> RustCodeGen<'model> {
             import_core: String::default(),
         }
     }
+}
+
+enum MethodArgFlags {
+    Normal,
+    // arg is type ToString
+    ToString,
 }
 
 impl<'model> CodeGen for RustCodeGen<'model> {
@@ -221,12 +227,12 @@ impl<'model> CodeGen for RustCodeGen<'model> {
                 #![allow(clippy::ptr_arg)]
                 #[allow(unused_imports)]
                 use {}::{{
-                    client, context, deserialize, serialize, MessageDispatch, RpcError,
-                    Transport, Message,
+                    context::Context, deserialize, serialize, MessageDispatch, RpcError, RpcResult,
+                    Transport, Message, SendOpts,
                 }};
                 #[allow(unused_imports)] use serde::{{Deserialize, Serialize}};
                 #[allow(unused_imports)] use async_trait::async_trait;
-                #[allow(unused_imports)] use std::borrow::Cow;
+                #[allow(unused_imports)] use std::{{borrow::Cow, string::ToString}};
                 "#,
                     &self.import_core
                 ));
@@ -714,7 +720,7 @@ impl<'model> RustCodeGen<'model> {
 
             // TODO: re-think what to do if operation is in another namespace and self.namespace is None
             let method_id = operation.shape_name();
-            self.write_method_signature(&mut w, method_id, op_traits, op)?;
+            let _flags = self.write_method_signature(&mut w, method_id, op_traits, op)?;
             w.write(b";\n");
         }
         w.write(b"}\n\n");
@@ -755,24 +761,35 @@ impl<'model> RustCodeGen<'model> {
         method_id: &Identifier,
         method_traits: &AppliedTraits,
         op: &Operation,
-    ) -> Result<()> {
+    ) -> Result<MethodArgFlags> {
         let method_name = self.to_method_name(method_id);
+        let mut arg_flags = MethodArgFlags::Normal;
         self.apply_documentation_traits(&mut w, method_id, method_traits);
         w.write(b"async fn ");
         w.write(&method_name);
-        w.write(b"(&self, ctx: &context::Context<'_>");
+        if let Some(input_type) = op.input() {
+            if input_type == &ShapeID::new_unchecked(PRELUDE_NAMESPACE, SHAPE_STRING, None) {
+                arg_flags = MethodArgFlags::ToString;
+                w.write("<TS:ToString + ?Sized + std::marker::Sync>");
+            }
+        }
+        w.write(b"(&self, ctx: &Context");
         if let Some(input_type) = op.input() {
             w.write(b", arg: "); // pass arg by reference
-            self.write_type(&mut w, Ty::Ref(input_type))?;
+            if matches!(arg_flags, MethodArgFlags::ToString) {
+                w.write(b"&TS");
+            } else {
+                self.write_type(&mut w, Ty::Ref(input_type))?;
+            }
         }
-        w.write(b") -> Result<");
+        w.write(b") -> RpcResult<");
         if let Some(output_type) = op.output() {
             self.write_type(&mut w, Ty::Shape(output_type))?;
         } else {
             w.write(b"()");
         }
-        w.write(b", RpcError>");
-        Ok(())
+        w.write(b">");
+        Ok(arg_flags)
     }
 
     // pub trait FooReceiver : MessageDispatch + Foo { ... }
@@ -798,8 +815,8 @@ impl<'model> RustCodeGen<'model> {
             br#"{
             async fn dispatch(
                 &self,
-                ctx: &context::Context<'_>,
-                message: &Message<'_> ) -> Result< Message<'_>, RpcError> {
+                ctx: &Context,
+                message: &Message<'_> ) -> RpcResult< Message<'_>> {
                 match message.method {
         "#,
         );
@@ -868,22 +885,24 @@ impl<'model> RustCodeGen<'model> {
         self.apply_documentation_traits(&mut w, service_id, service_traits);
         w.write(b"#[derive(Debug)]\npub struct ");
         self.write_ident_with_suffix(&mut w, service_id, "Sender")?;
-        w.write(b"<T> { transport: T, config: client::SendConfig }\n\n");
+        w.write(b"<'send,T> { transport: &'send T }\n\n");
 
         // implement constructor for TraitClient
-        w.write(b"impl<T:Transport>  ");
+        w.write(b"impl<'send, T:Transport>  ");
         self.write_ident_with_suffix(&mut w, service_id, "Sender")?;
-        w.write(b"<T> { \n");
-        w.write(b" pub fn new(config: client::SendConfig, transport: T) -> Self { ");
+        w.write(b"<'send,T> { \n");
+        w.write(b" pub fn new(transport: &'send T) -> Self { ");
         self.write_ident_with_suffix(&mut w, service_id, "Sender")?;
-        w.write(b"{ transport, config }\n}\n}\n\n");
+        w.write(b"{ transport }\n}\n}\n\n");
 
         // implement Trait for TraitSender
-        w.write(b"#[async_trait]\nimpl<T:Transport + std::marker::Sync + std::marker::Send> ");
+        w.write(
+            b"#[async_trait]\nimpl<'send, T:Transport + std::marker::Sync + std::marker::Send> ",
+        );
         self.write_ident(&mut w, service_id);
         w.write(b" for ");
         self.write_ident_with_suffix(&mut w, service_id, "Sender")?;
-        w.write(b"<T> {\n");
+        w.write(b"<'send, T> {\n");
 
         for method_id in service.operations() {
             // TODO: if it's valid for a service to include operations from another namespace, then this isn't doing the right thing
@@ -897,23 +916,26 @@ impl<'model> RustCodeGen<'model> {
 
             let (op, method_traits) = get_operation(model, method_id, service_id)?;
             w.write(b"#[allow(unused)]\n");
-            self.write_method_signature(&mut w, method_ident, method_traits, op)?;
+            let arg_flags = self.write_method_signature(&mut w, method_ident, method_traits, op)?;
             w.write(b" {\n");
-
             if op.has_input() {
-                w.write(b"let arg = serialize(arg)?;\n");
+                if matches!(arg_flags, MethodArgFlags::ToString) {
+                    w.write(b"let arg = serialize(&arg.to_string())?;\n");
+                } else {
+                    w.write(b"let arg = serialize(arg)?;\n");
+                }
             } else {
                 w.write(b"let arg = *b\"\";\n");
             }
-            w.write(b"let resp = self.transport.send(ctx, &self.config, Message{ method: ");
+            w.write(b"let resp = self.transport.send(ctx, Message{ method: ");
             // TODO: switch to quoted full method (increment api version # if not legacy)
             //w.write(self.full_dispatch_name(trait_base.id(), method_id));
             // note: legacy is just the latter part
             w.write(b"\"");
             w.write(&self.op_dispatch_name(method_ident));
-            w.write(b"\", arg: Cow::Borrowed(&arg)}).await?;\n");
+            w.write(b"\", arg: Cow::Borrowed(&arg)}, None).await?;\n");
             if op.has_output() {
-                w.write(b"let value = deserialize(resp.arg.as_ref())?; Ok(value)");
+                w.write(b"let value = deserialize(&resp)?; Ok(value)");
             } else {
                 w.write(b"Ok(())");
             }

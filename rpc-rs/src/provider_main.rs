@@ -53,6 +53,8 @@ where
 
     // get lattice configuration from host
     let host_data = load_host_data()?;
+    eprintln!("dumping host data: {:?}", &host_data);
+
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
     eprintln!(
         "Starting HttpServer Capability Provider {} with nats url {}",
