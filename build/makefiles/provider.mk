@@ -107,17 +107,20 @@ par-full: $(dest_par) $(bin_targets)
 ifeq ($(wildcard ./Cargo.toml),./Cargo.toml)
 
 # rust dependencies
-RUST_DEPS += $(wildcard src/*.rs) Cargo.toml Makefile
+RUST_DEPS += $(wildcard src/*.rs) $(wildcard target/release/deps/*) Cargo.toml Makefile
 
 target/release/$(bin_name): $(RUST_DEPS)
 	cargo build --release
+	@rm -f $(dest_par)
 
 target/debug/$(bin_name): $(RUST_DEPS)
 	cargo build
+	@rm -f $(dest_par)
 
 target/%/release/$(bin_name): $(RUST_DEPS)
 	tname=`echo -n $@ | sed -E 's_target/([^/]+)/release.*$$_\1_'` &&\
 	cross build --release --target $$tname
+	@rm -f $(dest_par)
 
 endif
 
@@ -164,9 +167,11 @@ clean::
 ifeq ($(wildcard ./Cargo.toml),./Cargo.toml)
 build::
 	cargo build
+	@rm -f $(dest_par)
 
 release::
 	cargo build --release
+	@rm -f $(dest_par)
 
 clean::
 	cargo clean
