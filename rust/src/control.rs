@@ -45,6 +45,12 @@ pub struct ActorDescription {
 
 pub type ActorDescriptions = Vec<ActorDescription>;
 
+#[derive(Default, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CacheAck {
+    #[serde(default)]
+    pub accepted: bool,
+}
+
 pub type ClaimsList = Vec<ClaimsMap>;
 
 pub type ClaimsMap = std::collections::HashMap<String, String>;

@@ -18,7 +18,7 @@ pub fn actor_auction_subject(nsprefix: &Option<String>) -> String {
 }
 
 pub fn advertise_link(ns_prefix: &Option<String>) -> String {
-    format!("{}.linkdef.put", prefix(ns_prefix))
+    format!("{}.linkdefs.put", prefix(ns_prefix))
 }
 
 pub mod commands {

@@ -162,7 +162,7 @@ impl Client {
         contract_id: &str,
         link_name: &str,
         values: HashMap<String, String>,
-    ) -> Result<()> {
+    ) -> Result<CacheAck> {
         let subject = broker::advertise_link(&self.nsprefix);
         trace!("advertise_link:publish {}", &subject);
         let ld = LinkDefinition {
@@ -173,9 +173,17 @@ impl Client {
             values,
         };
         let bytes = crate::json_serialize(&ld)?;
-        self.nc.publish(&subject, &bytes).await?;
-
-        Ok(())
+        match self
+            .nc
+            .request_timeout(&subject, &bytes, self.timeout)
+            .await
+        {
+            Ok(msg) => {
+                let ack: CacheAck = json_deserialize(&msg.data)?;
+                Ok(ack)
+            }
+            Err(e) => Err(format!("Did not receive advertise link acknowledgement: {}", e).into()),
+        }
     }
 
     /**

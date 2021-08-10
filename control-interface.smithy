@@ -246,6 +246,11 @@ structure UpdateActorAck {
     accepted: Boolean,
 }
 
+structure CacheAck {
+    @required
+    accepted: Boolean,
+}
+
 
 structure LinkDefinitionList {
     @required
