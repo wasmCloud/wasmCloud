@@ -266,20 +266,14 @@ list HostList {
     member: Host,
 }
 
-
 /// response to get_claims
 structure GetClaimsResponse {
     @required
     claims: ClaimsList
 }
 
-structure Claims {
-    @required
-    values: ClaimsMap,
-}
-
 list ClaimsList {
-    member: Claims,
+    member: ClaimsMap,
 }
 
 map ClaimsMap {

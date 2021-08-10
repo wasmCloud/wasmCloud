@@ -12,20 +12,15 @@ use nats::asynk::Connection;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, time::Duration};
 use sub_stream::SubscriptionStream;
-//use wascap::prelude::KeyPair;
-// use and re-export LinkDefinition
 pub use wasmbus_rpc::{core::LinkDefinition, RpcClient};
 
 type Result<T> = ::std::result::Result<T, Box<dyn ::std::error::Error + Send + Sync>>;
-
-// const URL_SCHEME: &str = "wasmbus";
 
 /// Lattice control interface client
 pub struct Client {
     nc: nats::asynk::Connection,
     nsprefix: Option<String>,
     timeout: Duration,
-    //key: KeyPair,
 }
 
 impl Client {
@@ -35,7 +30,6 @@ impl Client {
             nc,
             nsprefix,
             timeout,
-            //key: KeyPair::new_user(),
         }
     }
 
@@ -48,6 +42,41 @@ impl Client {
             .collect(timeout, "get hosts")
             .await;
         Ok(hosts)
+    }
+
+    /// Retrieves the contents of a running host
+    pub async fn get_host_inventory(&self, host_id: &str) -> Result<HostInventory> {
+        let subject = broker::queries::host_inventory(&self.nsprefix, host_id);
+        trace!("get_host_inventory:request {}", &subject);
+        match self
+            .nc
+            .request_timeout(&subject, vec![], self.timeout)
+            .await
+        {
+            Ok(msg) => {
+                let hi: HostInventory = json_deserialize(&msg.data)?;
+                Ok(hi)
+            }
+            Err(e) => Err(format!("Did not receive host inventory from target host: {}", e).into()),
+        }
+    }
+
+    /// Retrieves the full set of all cached claims in the lattice by getting a response from the first
+    /// host that answers this query
+    pub async fn get_claims(&self) -> Result<GetClaimsResponse> {
+        let subject = broker::queries::claims(&self.nsprefix);
+        trace!("get_claims:request {}", &subject);
+        match self
+            .nc
+            .request_timeout(&subject, vec![], self.timeout)
+            .await
+        {
+            Ok(msg) => {
+                let list: GetClaimsResponse = json_deserialize(&msg.data)?;
+                Ok(list)
+            }
+            Err(e) => Err(format!("Did not receive claims from lattice: {}", e).into()),
+        }
     }
 
     /// Performs an actor auction within the lattice, publishing a set of constraints and the metadata for the actor
@@ -97,24 +126,6 @@ impl Client {
             .await;
         Ok(providers)
     }
-
-    /// Retrieves the contents of a running host
-    pub async fn get_host_inventory(&self, host_id: &str) -> Result<HostInventory> {
-        let subject = broker::queries::host_inventory(&self.nsprefix, host_id);
-        trace!("get_host_inventory:request {}", &subject);
-        match self
-            .nc
-            .request_timeout(&subject, vec![], self.timeout)
-            .await
-        {
-            Ok(msg) => {
-                let hi: HostInventory = json_deserialize(&msg.data)?;
-                Ok(hi)
-            }
-            Err(e) => Err(format!("Did not receive host inventory from target host: {}", e).into()),
-        }
-    }
-
     /// Sends a request to the given host to start a given actor by its OCI reference. This returns an acknowledgement
     /// of _receipt_ of the command, not a confirmation that the actor started. An acknowledgement will either indicate
     /// some form of validation failure, or, if no failure occurs, the receipt of the command. To avoid blocking consumers,
@@ -320,24 +331,6 @@ impl Client {
                 Ok(ack)
             }
             Err(e) => Err(format!("Did not receive stop actor acknowledgement: {}", e).into()),
-        }
-    }
-
-    /// Retrieves the full set of all cached claims in the lattice by getting a response from the first
-    /// host that answers this query
-    pub async fn get_claims(&self) -> Result<GetClaimsResponse> {
-        let subject = broker::queries::claims(&self.nsprefix);
-        trace!("get_claims:request {}", &subject);
-        match self
-            .nc
-            .request_timeout(&subject, vec![], self.timeout)
-            .await
-        {
-            Ok(msg) => {
-                let list: GetClaimsResponse = json_deserialize(&msg.data)?;
-                Ok(list)
-            }
-            Err(e) => Err(format!("Did not receive claims from lattice: {}", e).into()),
         }
     }
 
