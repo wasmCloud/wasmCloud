@@ -62,6 +62,6 @@ pub mod queries {
     }
 
     pub fn hosts(nsprefix: &Option<String>) -> String {
-        format!("{}.get.hosts", prefix(nsprefix))
+        format!("{}.ping.hosts", prefix(nsprefix))
     }
 }
