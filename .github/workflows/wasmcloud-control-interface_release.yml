@@ -7,7 +7,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  working-directory: ./rust/wasmcloud-control-interface
+  working-directory: ./rust
 
 jobs:
   cargo_check:
