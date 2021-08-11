@@ -6,7 +6,10 @@ fn prefix(nsprefix: &Option<String>) -> String {
 }
 
 pub fn control_event(nsprefix: &Option<String>) -> String {
-    format!("{}.events", prefix(nsprefix))
+    format!(
+        "wasmbus.evt.{}",
+        nsprefix.as_ref().unwrap_or(&"default".to_string())
+    )
 }
 
 pub fn provider_auction_subject(nsprefix: &Option<String>) -> String {
@@ -18,7 +21,7 @@ pub fn actor_auction_subject(nsprefix: &Option<String>) -> String {
 }
 
 pub fn advertise_link(ns_prefix: &Option<String>) -> String {
-    format!("{}.linkdef.put", prefix(ns_prefix))
+    format!("{}.linkdefs.put", prefix(ns_prefix))
 }
 
 pub mod commands {
@@ -62,6 +65,6 @@ pub mod queries {
     }
 
     pub fn hosts(nsprefix: &Option<String>) -> String {
-        format!("{}.get.hosts", prefix(nsprefix))
+        format!("{}.ping.hosts", prefix(nsprefix))
     }
 }

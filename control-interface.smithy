@@ -147,19 +147,6 @@ structure StartActorCommand {
     hostId: String,
 }
 
-structure StartActorAck {
-    @required
-    @serialization(name: "actor_ref")
-    actorRef: String,
-
-    @required
-    @serialization(name: "host_id")
-    hostId: String,
-
-    /// optional failure message
-    failure: String,
-}
-
 structure StartProviderCommand {
     @required
     @serialization(name: "host_id")
@@ -174,19 +161,6 @@ structure StartProviderCommand {
     linkName: String,
 }
 
-structure StartProviderAck {
-    @required
-    @serialization(name: "host_id")
-    hostId: String,
-
-    @required
-    @serialization(name: "provider_ref")
-    providerRef: String,
-
-    /// optional failure message
-    failure: String,
-}
-
 structure StopActorCommand {
     @required
     @serialization(name: "host_id")
@@ -198,10 +172,6 @@ structure StopActorCommand {
 
     /// optional count
     count: U16,
-}
-
-structure StopActorAck {
-    failure: String,
 }
 
 structure StopProviderCommand {
@@ -222,11 +192,6 @@ structure StopProviderCommand {
     contractId: String,
 }
 
-structure StopProviderAck {
-    failure: String,
-}
-
-
 structure UpdateActorCommand {
     @required
     @serialization(name: "host_id")
@@ -241,11 +206,13 @@ structure UpdateActorCommand {
     newActorRef: String,
 }
 
-structure UpdateActorAck {
+/// Standard response for control interface operations
+structure CtlOperationAck {
     @required
     accepted: Boolean,
+    @required
+    error: String
 }
-
 
 structure LinkDefinitionList {
     @required
@@ -266,20 +233,14 @@ list HostList {
     member: Host,
 }
 
-
 /// response to get_claims
 structure GetClaimsResponse {
     @required
     claims: ClaimsList
 }
 
-structure Claims {
-    @required
-    values: ClaimsMap,
-}
-
 list ClaimsList {
-    member: Claims,
+    member: ClaimsMap,
 }
 
 map ClaimsMap {

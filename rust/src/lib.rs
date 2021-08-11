@@ -12,20 +12,15 @@ use nats::asynk::Connection;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, time::Duration};
 use sub_stream::SubscriptionStream;
-//use wascap::prelude::KeyPair;
-// use and re-export LinkDefinition
 pub use wasmbus_rpc::{core::LinkDefinition, RpcClient};
 
 type Result<T> = ::std::result::Result<T, Box<dyn ::std::error::Error + Send + Sync>>;
-
-// const URL_SCHEME: &str = "wasmbus";
 
 /// Lattice control interface client
 pub struct Client {
     nc: nats::asynk::Connection,
     nsprefix: Option<String>,
     timeout: Duration,
-    //key: KeyPair,
 }
 
 impl Client {
@@ -35,7 +30,6 @@ impl Client {
             nc,
             nsprefix,
             timeout,
-            //key: KeyPair::new_user(),
         }
     }
 
@@ -48,6 +42,41 @@ impl Client {
             .collect(timeout, "get hosts")
             .await;
         Ok(hosts)
+    }
+
+    /// Retrieves the contents of a running host
+    pub async fn get_host_inventory(&self, host_id: &str) -> Result<HostInventory> {
+        let subject = broker::queries::host_inventory(&self.nsprefix, host_id);
+        trace!("get_host_inventory:request {}", &subject);
+        match self
+            .nc
+            .request_timeout(&subject, vec![], self.timeout)
+            .await
+        {
+            Ok(msg) => {
+                let hi: HostInventory = json_deserialize(&msg.data)?;
+                Ok(hi)
+            }
+            Err(e) => Err(format!("Did not receive host inventory from target host: {}", e).into()),
+        }
+    }
+
+    /// Retrieves the full set of all cached claims in the lattice by getting a response from the first
+    /// host that answers this query
+    pub async fn get_claims(&self) -> Result<GetClaimsResponse> {
+        let subject = broker::queries::claims(&self.nsprefix);
+        trace!("get_claims:request {}", &subject);
+        match self
+            .nc
+            .request_timeout(&subject, vec![], self.timeout)
+            .await
+        {
+            Ok(msg) => {
+                let list: GetClaimsResponse = json_deserialize(&msg.data)?;
+                Ok(list)
+            }
+            Err(e) => Err(format!("Did not receive claims from lattice: {}", e).into()),
+        }
     }
 
     /// Performs an actor auction within the lattice, publishing a set of constraints and the metadata for the actor
@@ -97,31 +126,13 @@ impl Client {
             .await;
         Ok(providers)
     }
-
-    /// Retrieves the contents of a running host
-    pub async fn get_host_inventory(&self, host_id: &str) -> Result<HostInventory> {
-        let subject = broker::queries::host_inventory(&self.nsprefix, host_id);
-        trace!("get_host_inventory:request {}", &subject);
-        match self
-            .nc
-            .request_timeout(&subject, vec![], self.timeout)
-            .await
-        {
-            Ok(msg) => {
-                let hi: HostInventory = json_deserialize(&msg.data)?;
-                Ok(hi)
-            }
-            Err(e) => Err(format!("Did not receive host inventory from target host: {}", e).into()),
-        }
-    }
-
     /// Sends a request to the given host to start a given actor by its OCI reference. This returns an acknowledgement
     /// of _receipt_ of the command, not a confirmation that the actor started. An acknowledgement will either indicate
     /// some form of validation failure, or, if no failure occurs, the receipt of the command. To avoid blocking consumers,
     /// wasmCloud hosts will acknowledge the start actor command prior to fetching the actor's OCI bytes. If a client needs
     /// deterministic results as to whether the actor completed its startup process, the client will have to monitor
     /// the appropriate event in the control event stream
-    pub async fn start_actor(&self, host_id: &str, actor_ref: &str) -> Result<StartActorAck> {
+    pub async fn start_actor(&self, host_id: &str, actor_ref: &str) -> Result<CtlOperationAck> {
         let subject = broker::commands::start_actor(&self.nsprefix, host_id);
         trace!("start_actor:request {}", &subject);
         let bytes = json_serialize(StartActorCommand {
@@ -134,7 +145,7 @@ impl Client {
             .await
         {
             Ok(msg) => {
-                let ack: StartActorAck = json_deserialize(&msg.data)?;
+                let ack: CtlOperationAck = json_deserialize(&msg.data)?;
                 Ok(ack)
             }
             Err(e) => Err(format!("Did not receive start actor acknowledgement: {}", e).into()),
@@ -151,7 +162,7 @@ impl Client {
         contract_id: &str,
         link_name: &str,
         values: HashMap<String, String>,
-    ) -> Result<()> {
+    ) -> Result<CtlOperationAck> {
         let subject = broker::advertise_link(&self.nsprefix);
         trace!("advertise_link:publish {}", &subject);
         let ld = LinkDefinition {
@@ -162,9 +173,17 @@ impl Client {
             values,
         };
         let bytes = crate::json_serialize(&ld)?;
-        self.nc.publish(&subject, &bytes).await?;
-
-        Ok(())
+        match self
+            .nc
+            .request_timeout(&subject, &bytes, self.timeout)
+            .await
+        {
+            Ok(msg) => {
+                let ack: CtlOperationAck = json_deserialize(&msg.data)?;
+                Ok(ack)
+            }
+            Err(e) => Err(format!("Did not receive advertise link acknowledgement: {}", e).into()),
+        }
     }
 
     /**
@@ -208,7 +227,7 @@ impl Client {
         host_id: &str,
         existing_actor_id: &str,
         new_actor_ref: &str,
-    ) -> Result<UpdateActorAck> {
+    ) -> Result<CtlOperationAck> {
         let subject = broker::commands::update_actor(&self.nsprefix, host_id);
         trace!("update_actor:request {}", &subject);
         let bytes = json_serialize(UpdateActorCommand {
@@ -222,7 +241,7 @@ impl Client {
             .await
         {
             Ok(msg) => {
-                let ack: UpdateActorAck = json_deserialize(&msg.data)?;
+                let ack: CtlOperationAck = json_deserialize(&msg.data)?;
                 Ok(ack)
             }
             Err(e) => Err(format!("Did not receive update actor acknowledgement: {}", e).into()),
@@ -240,7 +259,7 @@ impl Client {
         host_id: &str,
         provider_ref: &str,
         link_name: Option<String>,
-    ) -> Result<StartProviderAck> {
+    ) -> Result<CtlOperationAck> {
         let subject = broker::commands::start_provider(&self.nsprefix, host_id);
         trace!("start_provider:request {}", &subject);
         let bytes = json_serialize(StartProviderCommand {
@@ -254,7 +273,7 @@ impl Client {
             .await
         {
             Ok(msg) => {
-                let ack: StartProviderAck = json_deserialize(&msg.data)?;
+                let ack: CtlOperationAck = json_deserialize(&msg.data)?;
                 Ok(ack)
             }
             Err(e) => Err(format!("Did not receive start provider acknowledgement: {}", e).into()),
@@ -271,7 +290,7 @@ impl Client {
         provider_ref: &str,
         link_name: &str,
         contract_id: &str,
-    ) -> Result<StopProviderAck> {
+    ) -> Result<CtlOperationAck> {
         let subject = broker::commands::stop_provider(&self.nsprefix, host_id);
         trace!("stop_provider:request {}", &subject);
         let bytes = json_serialize(StopProviderCommand {
@@ -286,7 +305,7 @@ impl Client {
             .await
         {
             Ok(msg) => {
-                let ack: StopProviderAck = json_deserialize(&msg.data)?;
+                let ack: CtlOperationAck = json_deserialize(&msg.data)?;
                 Ok(ack)
             }
             Err(e) => Err(format!("Did not receive stop provider acknowledgement: {}", e).into()),
@@ -302,7 +321,7 @@ impl Client {
         host_id: &str,
         actor_ref: &str,
         count: u16,
-    ) -> Result<StopActorAck> {
+    ) -> Result<CtlOperationAck> {
         let subject = broker::commands::stop_actor(&self.nsprefix, host_id);
         trace!("stop_actor:request {}", &subject);
         let bytes = json_serialize(StopActorCommand {
@@ -316,28 +335,10 @@ impl Client {
             .await
         {
             Ok(msg) => {
-                let ack: StopActorAck = json_deserialize(&msg.data)?;
+                let ack: CtlOperationAck = json_deserialize(&msg.data)?;
                 Ok(ack)
             }
             Err(e) => Err(format!("Did not receive stop actor acknowledgement: {}", e).into()),
-        }
-    }
-
-    /// Retrieves the full set of all cached claims in the lattice by getting a response from the first
-    /// host that answers this query
-    pub async fn get_claims(&self) -> Result<GetClaimsResponse> {
-        let subject = broker::queries::claims(&self.nsprefix);
-        trace!("get_claims:request {}", &subject);
-        match self
-            .nc
-            .request_timeout(&subject, vec![], self.timeout)
-            .await
-        {
-            Ok(msg) => {
-                let list: GetClaimsResponse = json_deserialize(&msg.data)?;
-                Ok(list)
-            }
-            Err(e) => Err(format!("Did not receive claims from lattice: {}", e).into()),
         }
     }
 
