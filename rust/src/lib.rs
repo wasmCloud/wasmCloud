@@ -418,7 +418,6 @@ impl Client {
     }
 }
 
-//
 // [ss]: renamed to json_serialize and json_deserialize to avoid confusion
 //   with msgpack serialize and deserialize, used for rpc messages.
 //
