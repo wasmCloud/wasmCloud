@@ -132,7 +132,7 @@ impl Client {
     /// wasmCloud hosts will acknowledge the start actor command prior to fetching the actor's OCI bytes. If a client needs
     /// deterministic results as to whether the actor completed its startup process, the client will have to monitor
     /// the appropriate event in the control event stream
-    pub async fn start_actor(&self, host_id: &str, actor_ref: &str) -> Result<StartActorAck> {
+    pub async fn start_actor(&self, host_id: &str, actor_ref: &str) -> Result<CtlOperationAck> {
         let subject = broker::commands::start_actor(&self.nsprefix, host_id);
         trace!("start_actor:request {}", &subject);
         let bytes = json_serialize(StartActorCommand {
@@ -145,7 +145,7 @@ impl Client {
             .await
         {
             Ok(msg) => {
-                let ack: StartActorAck = json_deserialize(&msg.data)?;
+                let ack: CtlOperationAck = json_deserialize(&msg.data)?;
                 Ok(ack)
             }
             Err(e) => Err(format!("Did not receive start actor acknowledgement: {}", e).into()),
@@ -162,7 +162,7 @@ impl Client {
         contract_id: &str,
         link_name: &str,
         values: HashMap<String, String>,
-    ) -> Result<CacheAck> {
+    ) -> Result<CtlOperationAck> {
         let subject = broker::advertise_link(&self.nsprefix);
         trace!("advertise_link:publish {}", &subject);
         let ld = LinkDefinition {
@@ -179,7 +179,7 @@ impl Client {
             .await
         {
             Ok(msg) => {
-                let ack: CacheAck = json_deserialize(&msg.data)?;
+                let ack: CtlOperationAck = json_deserialize(&msg.data)?;
                 Ok(ack)
             }
             Err(e) => Err(format!("Did not receive advertise link acknowledgement: {}", e).into()),
@@ -227,7 +227,7 @@ impl Client {
         host_id: &str,
         existing_actor_id: &str,
         new_actor_ref: &str,
-    ) -> Result<UpdateActorAck> {
+    ) -> Result<CtlOperationAck> {
         let subject = broker::commands::update_actor(&self.nsprefix, host_id);
         trace!("update_actor:request {}", &subject);
         let bytes = json_serialize(UpdateActorCommand {
@@ -241,7 +241,7 @@ impl Client {
             .await
         {
             Ok(msg) => {
-                let ack: UpdateActorAck = json_deserialize(&msg.data)?;
+                let ack: CtlOperationAck = json_deserialize(&msg.data)?;
                 Ok(ack)
             }
             Err(e) => Err(format!("Did not receive update actor acknowledgement: {}", e).into()),
@@ -259,7 +259,7 @@ impl Client {
         host_id: &str,
         provider_ref: &str,
         link_name: Option<String>,
-    ) -> Result<StartProviderAck> {
+    ) -> Result<CtlOperationAck> {
         let subject = broker::commands::start_provider(&self.nsprefix, host_id);
         trace!("start_provider:request {}", &subject);
         let bytes = json_serialize(StartProviderCommand {
@@ -273,7 +273,7 @@ impl Client {
             .await
         {
             Ok(msg) => {
-                let ack: StartProviderAck = json_deserialize(&msg.data)?;
+                let ack: CtlOperationAck = json_deserialize(&msg.data)?;
                 Ok(ack)
             }
             Err(e) => Err(format!("Did not receive start provider acknowledgement: {}", e).into()),
@@ -290,7 +290,7 @@ impl Client {
         provider_ref: &str,
         link_name: &str,
         contract_id: &str,
-    ) -> Result<StopProviderAck> {
+    ) -> Result<CtlOperationAck> {
         let subject = broker::commands::stop_provider(&self.nsprefix, host_id);
         trace!("stop_provider:request {}", &subject);
         let bytes = json_serialize(StopProviderCommand {
@@ -305,7 +305,7 @@ impl Client {
             .await
         {
             Ok(msg) => {
-                let ack: StopProviderAck = json_deserialize(&msg.data)?;
+                let ack: CtlOperationAck = json_deserialize(&msg.data)?;
                 Ok(ack)
             }
             Err(e) => Err(format!("Did not receive stop provider acknowledgement: {}", e).into()),
@@ -321,7 +321,7 @@ impl Client {
         host_id: &str,
         actor_ref: &str,
         count: u16,
-    ) -> Result<StopActorAck> {
+    ) -> Result<CtlOperationAck> {
         let subject = broker::commands::stop_actor(&self.nsprefix, host_id);
         trace!("stop_actor:request {}", &subject);
         let bytes = json_serialize(StopActorCommand {
@@ -335,7 +335,7 @@ impl Client {
             .await
         {
             Ok(msg) => {
-                let ack: StopActorAck = json_deserialize(&msg.data)?;
+                let ack: CtlOperationAck = json_deserialize(&msg.data)?;
                 Ok(ack)
             }
             Err(e) => Err(format!("Did not receive stop actor acknowledgement: {}", e).into()),

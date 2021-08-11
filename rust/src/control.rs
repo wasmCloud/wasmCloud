@@ -45,17 +45,20 @@ pub struct ActorDescription {
 
 pub type ActorDescriptions = Vec<ActorDescription>;
 
-#[derive(Default, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct CacheAck {
-    #[serde(default)]
-    pub accepted: bool,
-}
-
 pub type ClaimsList = Vec<ClaimsMap>;
 
 pub type ClaimsMap = std::collections::HashMap<String, String>;
 
 pub type ConstraintMap = std::collections::HashMap<String, String>;
+
+/// Standard response for control interface operations
+#[derive(Default, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CtlOperationAck {
+    #[serde(default)]
+    pub accepted: bool,
+    #[serde(default)]
+    pub error: String,
+}
 
 /// response to get_claims
 #[derive(Default, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -124,33 +127,11 @@ pub struct ProviderDescription {
 pub type ProviderDescriptions = Vec<ProviderDescription>;
 
 #[derive(Default, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct StartActorAck {
-    #[serde(default)]
-    pub actor_ref: String,
-    /// optional failure message
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub failure: Option<String>,
-    #[serde(default)]
-    pub host_id: String,
-}
-
-#[derive(Default, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct StartActorCommand {
     #[serde(default)]
     pub actor_ref: String,
     #[serde(default)]
     pub host_id: String,
-}
-
-#[derive(Default, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct StartProviderAck {
-    /// optional failure message
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub failure: Option<String>,
-    #[serde(default)]
-    pub host_id: String,
-    #[serde(default)]
-    pub provider_ref: String,
 }
 
 #[derive(Default, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -161,12 +142,6 @@ pub struct StartProviderCommand {
     pub link_name: String,
     #[serde(default)]
     pub provider_ref: String,
-}
-
-#[derive(Default, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct StopActorAck {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub failure: Option<String>,
 }
 
 #[derive(Default, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -181,12 +156,6 @@ pub struct StopActorCommand {
 }
 
 #[derive(Default, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct StopProviderAck {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub failure: Option<String>,
-}
-
-#[derive(Default, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct StopProviderCommand {
     #[serde(default)]
     pub contract_id: String,
@@ -196,12 +165,6 @@ pub struct StopProviderCommand {
     pub link_name: String,
     #[serde(default)]
     pub provider_ref: String,
-}
-
-#[derive(Default, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct UpdateActorAck {
-    #[serde(default)]
-    pub accepted: bool,
 }
 
 #[derive(Default, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
