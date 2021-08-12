@@ -227,7 +227,7 @@ impl<'model> CodeGen for RustCodeGen<'model> {
                 #![allow(clippy::ptr_arg)]
                 #[allow(unused_imports)]
                 use {}::{{
-                    context::Context, deserialize, serialize, MessageDispatch, RpcError, RpcResult,
+                    Context, deserialize, serialize, MessageDispatch, RpcError, RpcResult,
                     Transport, Message, SendOpts,
                 }};
                 #[allow(unused_imports)] use serde::{{Deserialize, Serialize}};
