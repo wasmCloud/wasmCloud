@@ -112,7 +112,7 @@ pub fn derive_actor(input: TokenStream) -> TokenStream {
             )
         };
         let method = String::from_utf8_lossy(op);
-        let context = wasmbus_rpc::context::Context::default();
+        let context = wasmbus_rpc::Context::default();
         let actor = #actor_ident ::default();
         let resp = futures::executor::block_on({
             MessageDispatch::dispatch(
@@ -201,7 +201,7 @@ fn gen_dispatch(traits: &[syn::Path], ident: &Ident) -> TokenStream2 {
         impl MessageDispatch for #ident {
             async fn dispatch(
                 &self,
-                ctx: &wasmbus_rpc::context::Context,
+                ctx: &wasmbus_rpc::Context,
                 message: Message<'_>,
             ) -> Result<Message<'_>, RpcError> {
                 let (trait_name, trait_method) = message
@@ -270,7 +270,7 @@ pub fn derive_provider(input: TokenStream) -> TokenStream {
             op: &str,
             arg: &[u8],
         ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-            let ctx = &wasmbus_rpc::context::Context {
+            let ctx = &wasmbus_rpc::Context {
                 actor: Some(actor),
                 ..Default::default()
             };
