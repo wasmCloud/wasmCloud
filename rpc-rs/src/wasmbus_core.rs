@@ -4,8 +4,8 @@
 #![allow(clippy::ptr_arg)]
 #[allow(unused_imports)]
 use crate::{
-    context::Context, deserialize, serialize, Message, MessageDispatch, RpcError, RpcResult,
-    SendOpts, Transport,
+    deserialize, serialize, Context, Message, MessageDispatch, RpcError, RpcResult, SendOpts,
+    Transport,
 };
 #[allow(unused_imports)]
 use async_trait::async_trait;

@@ -31,7 +31,8 @@ where
     P: ProviderDispatch + Send + Sync + Clone + 'static,
 {
     let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_io()
+        .enable_all()
+        //.enable_io()
         .build()?;
 
     runtime.block_on(async { provider_run(provider_dispatch).await })?;
@@ -57,7 +58,7 @@ where
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
     eprintln!(
-        "Starting HttpServer Capability Provider {} with nats url {}",
+        "Starting capability crovider {} with nats url {}",
         &host_data.provider_key, &host_data.lattice_rpc_url,
     );
 

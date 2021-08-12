@@ -11,7 +11,8 @@ pub use timestamp::Timestamp;
 mod actor_wasm;
 mod common;
 pub use common::{
-    context, deserialize, serialize, Message, MessageDispatch, RpcError, SendOpts, Transport,
+    context::Context, deserialize, serialize, Message, MessageDispatch, RpcError, SendOpts,
+    Transport,
 };
 pub mod channel_log;
 pub mod provider;
@@ -235,8 +236,10 @@ pub mod core {
 pub mod actor {
 
     pub mod prelude {
-        pub use crate::core::{Actor, ActorReceiver};
-        pub use crate::{context::Context, Message, MessageDispatch, RpcError, RpcResult};
+        pub use crate::{
+            core::{Actor, ActorReceiver},
+            RpcResult, {Context, Message, MessageDispatch, RpcError},
+        };
 
         // re-export async_trait
         pub use async_trait::async_trait;

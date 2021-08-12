@@ -30,16 +30,14 @@ pub trait ProviderDispatch: MessageDispatch + ProviderHandler {}
 trait ProviderImpl: ProviderDispatch + Send + Sync + Clone + 'static {}
 
 pub mod prelude {
-    pub use super::{HostBridge, ProviderDispatch, ProviderHandler};
+    pub use crate::provider::{HostBridge, NatsClient, ProviderDispatch, ProviderHandler};
     pub use crate::{
-        context::Context,
         core::LinkDefinition,
         provider_main::{get_host_bridge, load_host_data, provider_main, provider_run},
-        Message, MessageDispatch, RpcError, RpcResult, SendOpts,
+        Context, Message, MessageDispatch, RpcError, RpcResult, SendOpts,
     };
 
     //pub use crate::Timestamp;
-    pub use super::NatsClient;
     pub use async_trait::async_trait;
     pub use wasmbus_macros::Provider;
 
@@ -259,7 +257,7 @@ impl HostBridge {
         pin_mut!(sub);
         let provider = provider.clone();
         while let Some(msg) = sub.next().await {
-            let mut ctx = crate::context::Context::default();
+            let mut ctx = crate::Context::default();
             let inv = match crate::deserialize::<Invocation>(&msg.payload) {
                 Ok(inv) => {
                     trace!(
@@ -536,7 +534,7 @@ impl<'transport> ProviderTransport<'transport> {}
 impl<'bridge> crate::Transport for ProviderTransport<'bridge> {
     async fn send(
         &self,
-        _ctx: &crate::context::Context,
+        _ctx: &crate::Context,
         req: Message<'_>,
         _opts: Option<crate::SendOpts>,
     ) -> std::result::Result<Vec<u8>, RpcError> {
