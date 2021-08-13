@@ -7,7 +7,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  working-directory: ./http-server
+  working-directory: ./httpserver-rs
   WASH_ISSUER_KEY: ${{ secrets.WASMCLOUD_ACCOUNT_OFFICIAL }}
   WASH_SUBJECT_KEY: ${{ secrets.WASMCLOUD_HTTPSERVER }}
   WASH_REG_USER:  ${{ secrets.AZURECR_PUSH_USER }}
@@ -23,7 +23,7 @@ jobs:
       run: cargo build --verbose
       working-directory: ${{ env.working-directory }}
     - name: Run tests
-      run: cargo test --verbose
+      run: cargo test --verbose -- --nocapture
       working-directory: ${{ env.working-directory }}
     - name: Check fmt
       run: cargo fmt -- --check
