@@ -44,7 +44,7 @@ use tokio::{
 };
 use warp::{path::FullPath, Filter};
 use wasmbus_rpc::{core::LinkDefinition, provider::HostBridge, RpcError};
-use wasmcloud_interface_httpserver::{HttpRequest, HttpResponse};
+use wasmcloud_interface_httpserver::{HttpRequest, HttpResponse, HttpServerSender};
 
 mod settings;
 pub use settings::{load_settings, ServiceSettings};
@@ -90,7 +90,6 @@ pub struct HttpServer {
 impl HttpServer {
     /// Initializes server with settings
     pub fn new(settings: ServiceSettings, bridge: &'static HostBridge) -> Self {
-        //let (shutdown_tx, shutdown_rx) = crossbeam::channel::bounded(0);
         Self {
             inner: Arc::new(RwLock::new(Inner {
                 settings,
@@ -135,7 +134,6 @@ impl HttpServer {
             .and(warp::body::bytes())
             .and(warp::path::full())
             .and(opt_raw_query())
-            //.and(warp::query::query::<String>())
             .and_then(
                 move |headers: HeaderMap,
                       method: http::method::Method,
@@ -262,7 +260,7 @@ impl HttpServer {
         );
         let tx = ProviderTransport { bridge, ld: &ld };
         let ctx = wasmbus_rpc::Context::default();
-        let actor = wasmcloud_interface_httpserver::HttpServerSender::new(&tx);
+        let actor = HttpServerSender::new(&tx);
 
         let resp = actor.handle_request(&ctx, &req).await?;
         trace!(

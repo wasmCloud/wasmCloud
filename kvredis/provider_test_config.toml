@@ -1,7 +1,6 @@
-
 # configuration for kv test
 
-# name of combiled binary (usually project name unless overridded in [[bin]]
+# name of compiled binary (usually project name unless overridden in [[bin]]
 # Required
 bin_path = "target/debug/kvredis"
 
@@ -11,7 +10,7 @@ rust_log = "debug"
 # set RUST_BACKTRACE (default: 0)
 rust_backtrace = "1"
 
-# nats sholud be running. Uncommand to override the default url
+# nats should be running. Uncomment to override the default url
 #nats_url = "0.0.0.0:4222"
 
 # redis should be running. Uncomment to override the default url
@@ -20,7 +19,7 @@ rust_backtrace = "1"
 # lattice prefix (default "default")
 #lattice_rpc_prefix = "default"
 
-# link name (default: "deefault")
+# link name (default: "default")
 #link_name = "default"
 
 # name of contract under test

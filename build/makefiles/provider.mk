@@ -179,15 +179,6 @@ clean::
 endif
 
 
-
-# auto rust dependencies
-# TODO
-#   target: $(rust_deps)
-#     $(cargo) build --target $(...)
-
-
-
-
 # for debugging - show variables make is using
 make-vars:
 	@echo "weld:          : $(weld)"
