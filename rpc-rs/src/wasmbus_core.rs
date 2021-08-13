@@ -41,6 +41,8 @@ pub struct HostData {
     #[serde(default)]
     pub host_id: String,
     #[serde(default)]
+    pub instance_id: String,
+    #[serde(default)]
     pub invocation_seed: String,
     #[serde(default)]
     pub lattice_rpc_prefix: String,
@@ -50,6 +52,8 @@ pub struct HostData {
     pub lattice_rpc_user_jwt: String,
     #[serde(default)]
     pub lattice_rpc_user_seed: String,
+    /// initial list of links for provider
+    pub link_definitions: ActorLinks,
     #[serde(default)]
     pub link_name: String,
     #[serde(default)]

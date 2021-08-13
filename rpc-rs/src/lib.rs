@@ -152,17 +152,10 @@ pub mod core {
 
         /// constructor for capability provider entity
         /// all parameters are required
-        pub fn new_provider<T1: ToString, T2: ToString, T3: ToString>(
-            public_key: T1,
-            contract_id: T2,
-            link_name: T3,
+        pub fn new_provider<T1: ToString, T2: ToString>(
+            contract_id: T1,
+            link_name: T2,
         ) -> Result<WasmCloudEntity, RpcError> {
-            let public_key = public_key.to_string();
-            if public_key.is_empty() {
-                return Err(RpcError::InvalidParameter(
-                    "public_key may not be empty".to_string(),
-                ));
-            }
             let contract_id = contract_id.to_string();
             if contract_id.is_empty() {
                 return Err(RpcError::InvalidParameter(
@@ -176,7 +169,7 @@ pub mod core {
                 ));
             }
             Ok(WasmCloudEntity {
-                public_key,
+                public_key: "".to_string(),
                 contract_id,
                 link_name,
             })

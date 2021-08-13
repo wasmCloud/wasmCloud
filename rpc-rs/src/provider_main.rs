@@ -53,13 +53,12 @@ where
     crate::channel_log::init_receiver(log_rx);
 
     // get lattice configuration from host
-    let host_data = load_host_data()?;
-    eprintln!("dumping host data: {:?}", &host_data);
+    let mut host_data = load_host_data()?;
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
     eprintln!(
-        "Starting capability crovider {} with nats url {}",
-        &host_data.provider_key, &host_data.lattice_rpc_url,
+        "Starting capability provider {} instance {} with nats url {}",
+        &host_data.provider_key, &host_data.instance_id, &host_data.lattice_rpc_url,
     );
 
     let nats_addr = if !host_data.lattice_rpc_url.is_empty() {
@@ -79,10 +78,28 @@ where
             ))
         })?;
 
-    // initialize HostBridge and subscribe to nats topics.
+    // initialize HostBridge
     let bridge = HostBridge::new(nc, &host_data)?;
     let _ = BRIDGE.set(bridge);
-    let _join = get_host_bridge()
+    let bridge = get_host_bridge();
+
+    // pre-populate provider and bridge with initial set of link definitions
+    // initialization of any link is fatal for provider startup
+    let mut initial_links = Vec::new();
+    std::mem::swap(&mut initial_links, &mut host_data.link_definitions);
+    for ld in initial_links.into_iter() {
+        if let Err(e) = provider_dispatch.put_link(&ld).await {
+            eprintln!(
+                "Error starting provider: failed to initialize link {:?}",
+                &ld
+            );
+            return Err(Box::new(e));
+        }
+        bridge.put_link(ld).await;
+    }
+
+    // subscribe to nats topics
+    let _join = bridge
         .connect(provider_dispatch, shutdown_tx)
         .await
         .map_err(|e| {

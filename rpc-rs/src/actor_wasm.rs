@@ -72,13 +72,12 @@ pub struct WasmHost {
 
 impl WasmHost {
     /// constructs a Transport for sending messages to a capability provider
-    pub fn to_provider<T1: ToString, T2: ToString, T3: ToString>(
-        id: T1,
-        contract_id: T2,
-        link_name: T3,
+    pub fn to_provider<T1: ToString, T2: ToString>(
+        contract_id: T1,
+        link_name: T2,
     ) -> RpcResult<Self> {
         Ok(WasmHost {
-            target: crate::core::WasmCloudEntity::new_provider(id, contract_id, link_name)?,
+            target: crate::core::WasmCloudEntity::new_provider(contract_id, link_name)?,
         })
     }
 
@@ -94,7 +93,7 @@ impl WasmHost {
 impl Transport for WasmHost {
     async fn send(
         &self,
-        _ctx: &crate::context::Context,
+        _ctx: &crate::Context,
         req: Message<'_>,
         _opts: Option<crate::SendOpts>,
     ) -> std::result::Result<Vec<u8>, RpcError> {
