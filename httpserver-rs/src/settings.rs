@@ -557,7 +557,7 @@ mod test {
         assert!(s.cors.allowed_methods.is_some());
         assert!(s.cors.allowed_origins.is_some());
 
-        assert_eq!(&s.cors.allowed_origins.unwrap().0.get(0).unwrap().0, "*")
+        assert!(s.cors.allowed_origins.unwrap().0.is_empty())
     }
 
     #[test]
