@@ -261,7 +261,7 @@ impl HttpServer {
             &req.path
         );
         let tx = ProviderTransport { bridge, ld: &ld };
-        let ctx = wasmbus_rpc::context::Context::default();
+        let ctx = wasmbus_rpc::Context::default();
         let actor = wasmcloud_interface_httpserver::HttpServerSender::new(&tx);
 
         let resp = actor.handle_request(&ctx, &req).await?;
