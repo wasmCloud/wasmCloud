@@ -1,5 +1,5 @@
 extern crate oci_distribution;
-use crate::util::{format_output, output_destination, Output, OutputDestination, OutputKind};
+use crate::util::{format_output, Output, OutputKind};
 use log::{debug, info};
 use oci_distribution::client::*;
 use oci_distribution::secrets::RegistryAuth;
@@ -140,12 +140,10 @@ pub(crate) async fn handle_command(
 pub(crate) async fn handle_pull(cmd: PullCommand) -> Result<String, Box<dyn ::std::error::Error>> {
     let image: Reference = cmd.url.parse().unwrap();
     let spinner = match cmd.output.kind {
-        OutputKind::Text { .. } if output_destination() == OutputDestination::Cli => {
-            Some(Spinner::new(
-                Spinners::Dots12,
-                format!(" Downloading {} ...", image.whole()),
-            ))
-        }
+        OutputKind::Text => Some(Spinner::new(
+            Spinners::Dots12,
+            format!(" Downloading {} ...", image.whole()),
+        )),
         _ => None,
     };
     info!("Downloading {}", image.whole());
@@ -243,7 +241,7 @@ pub(crate) fn write_artifact(
     image: &Reference,
     output: Option<String>,
 ) -> Result<String, Box<dyn ::std::error::Error>> {
-    let file_extension = match validate_artifact(&artifact, image.repository())? {
+    let file_extension = match validate_artifact(artifact, image.repository())? {
         SupportedArtifacts::Par => PROVIDER_ARCHIVE_FILE_EXTENSION,
         SupportedArtifacts::Wasm => WASM_FILE_EXTENSION,
     };
@@ -261,7 +259,7 @@ pub(crate) fn write_artifact(
         file_extension
     ));
     let mut f = File::create(outfile.clone())?;
-    f.write_all(&artifact)?;
+    f.write_all(artifact)?;
     Ok(outfile)
 }
 
@@ -307,12 +305,10 @@ fn validate_provider_archive(
 
 pub(crate) async fn handle_push(cmd: PushCommand) -> Result<String, Box<dyn ::std::error::Error>> {
     let spinner = match cmd.output.kind {
-        OutputKind::Text { .. } if output_destination() == OutputDestination::Cli => {
-            Some(Spinner::new(
-                Spinners::Dots12,
-                format!(" Pushing {} to {} ...", cmd.artifact, cmd.url),
-            ))
-        }
+        OutputKind::Text => Some(Spinner::new(
+            Spinners::Dots12,
+            format!(" Pushing {} to {} ...", cmd.artifact, cmd.url),
+        )),
         _ => None,
     };
     info!(" Pushing {} to {} ...", cmd.artifact, cmd.url);
@@ -489,7 +485,7 @@ mod tests {
                     digest.unwrap(),
                     "sha256:a17a163afa8447622055deb049587641a9e23243a6cc4411eb33bd4267214cf3"
                 );
-                assert_eq!(output.kind, OutputKind::Text { max_width: 0 });
+                assert_eq!(output.kind, OutputKind::Text);
                 assert_eq!(opts.user.unwrap(), "user");
                 assert_eq!(opts.password.unwrap(), "password");
             }

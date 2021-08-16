@@ -8,6 +8,10 @@
 # Files created during tests
 /tests/fixtures
 
+# ide
+.idea
+
+# other
 *.par
 *.par.gz
 *.gz

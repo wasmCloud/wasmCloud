@@ -5,17 +5,12 @@
 test: ## Run unit test suite
 	cargo test --no-fail-fast --verbose --bin wash -- --nocapture
 
-test-integration-wasm3: ##Run integration test suite with wasm3 engine
+test-integration: ##Run integration test suite
 	docker-compose -f ./tools/docker-compose.yml up --detach
-	cargo test --no-fail-fast --verbose --test "integration*" --no-default-features --features wasm3 -- --nocapture
+	cargo test --no-fail-fast --verbose --test "integration*" -- --nocapture
 	docker-compose -f ./tools/docker-compose.yml down
 
-test-integration-wasmtime: ##Run integration test suite with wasmtime engine
-	docker-compose -f ./tools/docker-compose.yml up --detach
-	cargo test --no-fail-fast --verbose --test "integration*" --no-default-features --features wasmtime -- --nocapture
-	docker-compose -f ./tools/docker-compose.yml down
-
-test-all: test test-integration-wasm3 test-integration-wasmtime ## Run all tests
+test-all: test test-integration ## Run all tests
 
 ##@ Helpers
 

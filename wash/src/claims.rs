@@ -744,7 +744,7 @@ pub(crate) fn render_actor_claims(
     };
 
     let friendly_caps: Vec<String> = if let Some(caps) = &claims.metadata.as_ref().unwrap().caps {
-        caps.iter().map(|c| capability_name(&c)).collect()
+        caps.iter().map(|c| capability_name(c)).collect()
     } else {
         vec![]
     };
@@ -776,8 +776,8 @@ pub(crate) fn render_actor_claims(
                 })
             )
         }
-        OutputKind::Text { max_width } => {
-            let mut table = render_core(&claims, validation, max_width);
+        OutputKind::Text => {
+            let mut table = render_core(&claims, validation);
 
             table.add_row(Row::new(vec![
                 TableCell::new("Version"),
@@ -832,12 +832,12 @@ fn token_label(pk: &str) -> String {
     }
 }
 
-fn render_core<T>(claims: &Claims<T>, validation: TokenValidation, max_width: usize) -> Table
+fn render_core<T>(claims: &Claims<T>, validation: TokenValidation) -> Table
 where
     T: serde::Serialize + DeserializeOwned + WascapEntity,
 {
     let mut table = Table::new();
-    crate::util::configure_table_style(&mut table, 2, max_width);
+    crate::util::configure_table_style(&mut table);
 
     let headline = format!("{} - {}", claims.name(), token_label(&claims.subject));
     table.add_row(Row::new(vec![TableCell::new_with_alignment(
@@ -989,7 +989,7 @@ mod test {
                     digest.unwrap(),
                     "sha256:5790f650cff526fcbc1271107a05111a6647002098b74a9a5e2e26e3c0a116b8"
                 );
-                assert_eq!(output.kind, OutputKind::Text { max_width: 0 });
+                assert_eq!(output.kind, OutputKind::Text);
                 assert_eq!(user.unwrap(), "name");
                 assert_eq!(password.unwrap(), "opensesame");
                 assert!(allow_latest);
@@ -1033,7 +1033,7 @@ mod test {
                     digest.unwrap(),
                     "sha256:5790f650cff526fcbc1271107a05111a6647002098b74a9a5e2e26e3c0a116b8"
                 );
-                assert_eq!(output.kind, OutputKind::Text { max_width: 0 });
+                assert_eq!(output.kind, OutputKind::Text);
                 assert_eq!(user.unwrap(), "name");
                 assert_eq!(password.unwrap(), "opensesame");
                 assert!(allow_latest);

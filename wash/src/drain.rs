@@ -104,14 +104,14 @@ mod test {
         let all = DrainCli::from_iter_safe(&["drain", "all", "-o", "text"]).unwrap();
         match all.command.selection {
             DrainSelection::All(output) => {
-                assert_eq!(output.kind, OutputKind::Text { max_width: 0 })
+                assert_eq!(output.kind, OutputKind::Text)
             }
             _ => panic!("drain constructed incorrect command"),
         }
         let lib = DrainCli::from_iter_safe(&["drain", "lib", "-o", "text"]).unwrap();
         match lib.command.selection {
             DrainSelection::Lib(output) => {
-                assert_eq!(output.kind, OutputKind::Text { max_width: 0 })
+                assert_eq!(output.kind, OutputKind::Text)
             }
             _ => panic!("drain constructed incorrect command"),
         }
