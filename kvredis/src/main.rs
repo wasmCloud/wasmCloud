@@ -258,7 +258,7 @@ impl KvRedisProvider {
     ///
     /// There is a single connection per actor public key, and the write lock on the connection
     /// effectively serializes redis operations for all instances of the same actor.
-    /// The lock is held only for the duration of a redis command from this provvider
+    /// The lock is held only for the duration of a redis command from this provider
     /// and waiting for its response. The lock duration does not overlap with
     /// message passing between actors and this provider, including serialization
     /// of requests and deserialization of responses, which are fully parallelizable.

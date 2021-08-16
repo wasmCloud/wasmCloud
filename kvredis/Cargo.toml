@@ -21,25 +21,12 @@ serde = {version = "1.0", features = ["derive"] }
 thiserror = "1.0"
 tokio = { version = "1", features = ["full"] }
 toml = "0.5"
-
-[dependencies.wasmcloud-interface-keyvalue]
-version = "0.2"
-#path = "../../interfaces/keyvalue/rust"
-
-[dependencies.wasmbus-rpc]
-version = "0.3"
-#path = "../../weld/rpc-rs"
+wasmcloud-interface-keyvalue = "0.2"
+wasmbus-rpc = "0.3"
 
 # test dependencies
 [dev-dependencies]
-anyhow = "1.0"
-linkme = "0.2"
-shuttle = "0.0.6"
-termion = "1.5.6"
-
-[dev-dependencies.wasmcloud-test-util]
-version = "0.1"
-#path = "../../wasmcloud-test/wasmcloud-test-util"
+wasmcloud-test-util = "0.1"
 
 [[bin]]
 name = "kvredis"
