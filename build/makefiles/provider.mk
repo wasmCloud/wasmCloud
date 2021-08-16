@@ -137,18 +137,6 @@ build/stub.exs: $(dest_par)
 	},
 	EOF
 
-
-# is this needed for cap providers?
-## find weld binary: (search order: environment (weld), PATH)
-#ifeq ($(weld),)
-#	ifeq ($(shell which weld 2>/dev/null),)
-#		$(error No weld in your PATH. try installing with 'cargo install weld-bin')
-#	else
-#		weld:=weld
-#	endif
-#endif
-
-
 # push par file to registry
 push: $(dest_par)
 	wash reg push $(oci_insecure) $(oci_url) $(dest_par)
