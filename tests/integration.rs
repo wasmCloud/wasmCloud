@@ -16,5 +16,4 @@ fn integration_help_subcommand_check() {
     assert!(output.contains("drain"));
     assert!(output.contains("keys"));
     assert!(output.contains("par"));
-    assert!(output.contains("up"));
 }

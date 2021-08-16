@@ -1,4 +1,4 @@
-use crate::util::{format_output, print_or_log, Output, OutputKind};
+use crate::util::{format_output, Output, OutputKind};
 use nkeys::{KeyPair, KeyPairType};
 use serde_json::json;
 use std::env;
@@ -204,16 +204,19 @@ pub(crate) fn extract_keypair(
             }
             // No default key, generating for user
             Err(_e) if !disable_keygen => {
-                print_or_log(crate::util::format_output(
-                    format!(
-                        "No keypair found in \"{}\".
+                println!(
+                    "{}",
+                    crate::util::format_output(
+                        format!(
+                            "No keypair found in \"{}\".
 We will generate one for you and place it there.
 If you'd like to use alternative keys, you can supply them as a flag.\n",
-                        path
-                    ),
-                    json!({"status": "No keypair found", "path": path, "keygen": "true"}),
-                    &Output::default().kind,
-                ));
+                            path
+                        ),
+                        json!({"status": "No keypair found", "path": path, "keygen": "true"}),
+                        &Output::default().kind,
+                    )
+                );
 
                 let kp = KeyPair::new(keygen_type);
                 let seed = kp.seed()?;
@@ -261,7 +264,7 @@ mod tests {
     fn test_generate_basic_test() {
         let kt = KeyPairType::Account;
 
-        let keypair = generate(&kt, &OutputKind::Text { max_width: 0 });
+        let keypair = generate(&kt, &OutputKind::Text);
         let keypair_json = generate(&kt, &OutputKind::Json);
 
         assert_eq!(keypair.contains("Public Key: "), true);
@@ -375,7 +378,7 @@ mod tests {
                         Operator => assert_eq!(*cmd, "operator"),
                         Cluster => assert_eq!(*cmd, "cluster"),
                     }
-                    assert_eq!(output.kind, OutputKind::Text { max_width: 0 });
+                    assert_eq!(output.kind, OutputKind::Text);
                 }
                 _ => panic!("`keys gen` constructed incorrect command"),
             };

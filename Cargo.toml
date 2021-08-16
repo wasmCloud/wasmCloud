@@ -1,6 +1,6 @@
 [package]
 name = "wash-cli"
-version = "0.5.0"
+version = "0.6.0"
 authors = ["wasmCloud Team"]
 edition = "2018"
 repository = "https://github.com/wasmcloud/wash"
@@ -11,9 +11,7 @@ keywords = ["webassembly", "wasmcloud", "wash", "cli"]
 categories = ["wasm", "command-line-utilities"]
 
 [features]
-default = ["wasm3"]
-wasmtime = ["wasmcloud-host/wasmtime", "tui/termion", "termion"]
-wasm3 = ["wasmcloud-host/wasm3", "tui/termion", "termion"]
+default = []
 
 [badges]
 maintenance = { status = "actively-developed" }
@@ -21,32 +19,24 @@ maintenance = { status = "actively-developed" }
 [dependencies]
 structopt = "0.3.21"
 serde_json = { version = "1.0.62", features = ["raw_value"] }
-serde = { version = "1.0.123", features = ["derive"] }
-serdeconv = "0.4.0"
-tui-logger = "0.6.3"
-tui = { version = "0.14.0", default-features = false }
+serde = { version = "1.0", features = ["derive"] }
 log = "0.4.14"
-termion = { version = "1.5", optional = true } 
+env_logger = "0.9"
 actix-rt = "2.2.0"
 spinners = "1.2.0"
-nats = "0.8.6"
-once_cell = "1.5.2"
+nats = "0.11"
 term-table = "1.3.1"
 oci-distribution = "0.6.0"
-crossbeam-channel = "0.5.1"
-hotwatch = "0.4.5"
 
 nkeys = "0.1.0"
 wascap = "0.6.0"
 provider-archive = "0.4.0"
-wasmcloud-control-interface = "0.3.1"
-wasmcloud-host = { version = "0.18.2", default-features = false, optional = true }
+wasmbus-rpc = "0.3"
+wasmcloud-control-interface = { git = "https://github.com/wasmCloud/control-interface", version = "0.4.0" }
 
 [dev-dependencies]
 test_bin = "0.3.0"
 reqwest = { version = "0.11", features = ["json"] }
-wasmcloud-host = { version = "0.18.2" }
-termion = "1.5"
 
 [[bin]]
 name = "wash"
