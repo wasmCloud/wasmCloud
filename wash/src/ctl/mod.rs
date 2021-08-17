@@ -1,11 +1,16 @@
 extern crate wasmcloud_control_interface;
-use crate::util::{convert_error, labels_vec_to_hashmap, Output, OutputKind, Result};
+use crate::{
+    ctl::manifest::HostManifest,
+    util::{convert_error, labels_vec_to_hashmap, Output, OutputKind, Result},
+};
 use spinners::{Spinner, Spinners};
-use std::time::Duration;
+use std::collections::HashMap;
+use std::{path::Path, time::Duration};
 use structopt::StructOpt;
 use wasmcloud_control_interface::{
     Client as CtlClient, CtlOperationAck, GetClaimsResponse, Host, HostInventory,
 };
+mod manifest;
 mod output;
 pub(crate) use output::*;
 #[derive(Debug, Clone, StructOpt)]
@@ -102,6 +107,31 @@ pub(crate) enum CtlCliCommand {
     /// Update an actor running in a host to a new actor
     #[structopt(name = "update")]
     Update(UpdateCommand),
+
+    /// Apply a manifest file to a target hsot
+    #[structopt(name = "apply")]
+    Apply(ApplyCommand),
+}
+
+#[derive(StructOpt, Debug, Clone)]
+pub(crate) struct ApplyCommand {
+    /// Public key of the target host for the manifest application
+    #[structopt(name = "host-key")]
+    pub(crate) host_key: String,
+
+    /// Path to the manifest file. Note that all the entries in this file are imperative instructions, and all actor and provider references MUST be valid OCI references.
+    #[structopt(name = "path")]
+    pub(crate) path: String,
+
+    /// Expand environment variables using substitution syntax within the manifest file
+    #[structopt(name = "expand-env", short = "e", long = "expand-env")]
+    pub(crate) expand_env: bool,
+
+    #[structopt(flatten)]
+    opts: ConnectionOpts,
+
+    #[structopt(flatten)]
+    pub(crate) output: Output,
 }
 
 #[derive(Debug, Clone, StructOpt)]
@@ -325,6 +355,12 @@ pub(crate) async fn handle_command(command: CtlCliCommand) -> Result<String> {
     use CtlCliCommand::*;
     let mut sp: Option<Spinner> = None;
     let out = match command {
+        Apply(cmd) => {
+            let output = cmd.output;
+            sp = update_spinner_message(sp, " Applying manifest ...".to_string(), &output);
+            let results = apply_manifest(cmd).await?;
+            apply_manifest_output(results, &output.kind)
+        }
         Get(GetCommand::Hosts(cmd)) => {
             let output = cmd.output;
             sp = update_spinner_message(sp, " Retrieving Hosts ...".to_string(), &output);
@@ -567,6 +603,114 @@ pub(crate) async fn update_actor(cmd: UpdateActorCommand) -> Result<CtlOperation
         .update_actor(&cmd.host_id, &cmd.actor_id, &cmd.new_actor_ref)
         .await
         .map_err(convert_error)
+}
+
+pub(crate) async fn apply_manifest(cmd: ApplyCommand) -> Result<Vec<String>> {
+    let client = ctl_client_from_opts(cmd.opts).await?;
+    let hm = match HostManifest::from_path(Path::new(&cmd.path), cmd.expand_env) {
+        Ok(hm) => hm,
+        Err(e) => return Err(format!("Failed to load manifest: {}", e).into()),
+    };
+    let mut results = vec![];
+    results.extend_from_slice(&apply_manifest_actors(&cmd.host_key, &client, &hm).await?);
+    results.extend_from_slice(&apply_manifest_providers(&cmd.host_key, &client, &hm).await?);
+    results.extend_from_slice(&apply_manifest_linkdefs(&client, &hm).await?);
+    Ok(results)
+}
+
+async fn apply_manifest_actors(
+    host_id: &str,
+    client: &CtlClient,
+    hm: &HostManifest,
+) -> Result<Vec<String>> {
+    let mut results = vec![];
+
+    for actor in hm.actors.iter() {
+        match client.start_actor(host_id, actor).await {
+            Ok(ack) => {
+                if ack.accepted {
+                    results.push(format!(
+                        "Instruction to start actor {} acknowledged.",
+                        actor
+                    ));
+                } else {
+                    results.push(format!(
+                        "Instruction to start actor {} not acked: {}",
+                        actor, ack.error
+                    ));
+                }
+            }
+            Err(e) => results.push(format!("Failed to send start actor: {}", e)),
+        }
+    }
+
+    Ok(results)
+}
+
+async fn apply_manifest_linkdefs(client: &CtlClient, hm: &HostManifest) -> Result<Vec<String>> {
+    let mut results = vec![];
+
+    for ld in hm.links.iter() {
+        match client
+            .advertise_link(
+                &ld.actor,
+                &ld.provider_id,
+                &ld.contract_id,
+                ld.link_name.as_ref().unwrap_or(&"default".to_string()),
+                ld.values.clone().unwrap_or(HashMap::new()),
+            )
+            .await
+        {
+            Ok(ack) => {
+                if ack.accepted {
+                    results.push(format!(
+                        "Link def submission from {} to {} acknowledged.",
+                        ld.actor, ld.provider_id
+                    ));
+                } else {
+                    results.push(format!(
+                        "Link def submission from {} to {} not acked: {}",
+                        ld.actor, ld.provider_id, ack.error
+                    ));
+                }
+            }
+            Err(e) => results.push(format!("Failed to send link def: {}", e)),
+        }
+    }
+
+    Ok(results)
+}
+
+async fn apply_manifest_providers(
+    host_id: &str,
+    client: &CtlClient,
+    hm: &HostManifest,
+) -> Result<Vec<String>> {
+    let mut results = vec![];
+
+    for cap in hm.capabilities.iter() {
+        match client
+            .start_provider(host_id, &cap.image_ref, cap.link_name.clone())
+            .await
+        {
+            Ok(ack) => {
+                if ack.accepted {
+                    results.push(format!(
+                        "Instruction to start provider {} acknowledged.",
+                        cap.image_ref
+                    ));
+                } else {
+                    results.push(format!(
+                        "Instruction to start provider {} not acked: {}",
+                        cap.image_ref, ack.error
+                    ));
+                }
+            }
+            Err(e) => results.push(format!("Failed to send start capability message: {}", e)),
+        }
+    }
+
+    Ok(results)
 }
 
 async fn ctl_client_from_opts(opts: ConnectionOpts) -> Result<CtlClient> {
