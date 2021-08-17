@@ -120,9 +120,9 @@ pub(crate) fn labels_vec_to_hashmap(constraints: Vec<String>) -> Result<HashMap<
     Ok(hm)
 }
 
-/// Transform a json str (e.g. "{"hello": "world"}") into msgpack bytes
-pub(crate) fn json_str_to_msgpack_bytes(payload: Vec<String>) -> Result<Vec<u8>> {
-    let json = serde_json::from_str::<serde_json::Value>(&payload.join(""))?;
+/// Transform a json string (e.g. "{"hello": "world"}") into msgpack bytes
+pub(crate) fn json_str_to_msgpack_bytes(payload: &str) -> Result<Vec<u8>> {
+    let json = serde_json::from_str::<serde_json::Value>(payload)?;
     let payload = wasmbus_rpc::serialize(&json)?;
     Ok(payload)
 }

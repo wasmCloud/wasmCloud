@@ -64,7 +64,7 @@ enum CliCommand {
     Reg(RegCli),
 }
 
-#[actix_rt::main]
+#[tokio::main]
 async fn main() {
     if env_logger::try_init().is_err() {}
     let cli = Cli::from_args();
