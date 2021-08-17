@@ -22,17 +22,18 @@ serde_json = { version = "1.0.62", features = ["raw_value"] }
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4.14"
 env_logger = "0.9"
-actix-rt = "2.2.0"
 spinners = "1.2.0"
 nats = "0.11"
 term-table = "1.3.1"
 oci-distribution = "0.6.0"
+tokio = { version="1", features=["full"]}
 
 nkeys = "0.1.0"
 wascap = "0.6.0"
 provider-archive = "0.4.0"
 wasmbus-rpc = "0.3"
 wasmcloud-control-interface = { git = "https://github.com/wasmCloud/control-interface", version = "0.4.0" }
+wasmcloud-test-util = "0.1"
 
 [dev-dependencies]
 test_bin = "0.3.0"
