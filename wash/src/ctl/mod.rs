@@ -4,7 +4,6 @@ use crate::{
     util::{convert_error, labels_vec_to_hashmap, Output, OutputKind, Result},
 };
 use spinners::{Spinner, Spinners};
-use std::collections::HashMap;
 use std::{path::Path, time::Duration};
 use structopt::StructOpt;
 use wasmcloud_control_interface::{
@@ -657,7 +656,7 @@ async fn apply_manifest_linkdefs(client: &CtlClient, hm: &HostManifest) -> Resul
                 &ld.provider_id,
                 &ld.contract_id,
                 ld.link_name.as_ref().unwrap_or(&"default".to_string()),
-                ld.values.clone().unwrap_or(HashMap::new()),
+                ld.values.clone().unwrap_or_default(),
             )
             .await
         {
