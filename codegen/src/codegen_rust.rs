@@ -839,7 +839,8 @@ impl<'model> RustCodeGen<'model> {
                 w.write(b"let value: ");
                 // TODO: should this be input.target?
                 self.write_type(&mut w, Ty::Shape(op.input().as_ref().unwrap()))?;
-                w.write(b" = deserialize(message.arg.as_ref())?;\n");
+                w.write(b" = deserialize(message.arg.as_ref())\
+                  .map_err(|e| RpcError::Deser(format!(\"deserialization for message '{}': {}\", message.method, e)))?;\n");
             }
             // let resp = Trait::method(self, ctx, &value).await?;
             w.write(b"let resp = ");
@@ -935,7 +936,12 @@ impl<'model> RustCodeGen<'model> {
             w.write(&self.op_dispatch_name(method_ident));
             w.write(b"\", arg: Cow::Borrowed(&arg)}, None).await?;\n");
             if op.has_output() {
-                w.write(b"let value = deserialize(&resp)?; Ok(value)");
+                w.write(
+                    b"let value = deserialize(&resp)\
+                   .map_err(|e| RpcError::Deser(format!(\"response to {}: {}\", \"",
+                );
+                w.write(&method_ident.to_string());
+                w.write(b"\", e)))?; Ok(value)");
             } else {
                 w.write(b"Ok(())");
             }

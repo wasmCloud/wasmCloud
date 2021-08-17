@@ -49,7 +49,7 @@ mod wasmbus_core;
 pub mod core {
     // re-export core lib as "core"
     pub use crate::wasmbus_core::*;
-    use crate::RpcError;
+    use crate::{RpcError, RpcResult};
     use std::convert::TryFrom;
 
     cfg_if::cfg_if! {
@@ -125,7 +125,7 @@ pub mod core {
 
     impl WasmCloudEntity {
         /// constructor for actor entity
-        pub fn new_actor<T: ToString>(public_key: T) -> Result<WasmCloudEntity, RpcError> {
+        pub fn new_actor<T: ToString>(public_key: T) -> RpcResult<WasmCloudEntity> {
             let public_key = public_key.to_string();
             if public_key.is_empty() {
                 return Err(RpcError::InvalidParameter(
@@ -155,7 +155,7 @@ pub mod core {
         pub fn new_provider<T1: ToString, T2: ToString>(
             contract_id: T1,
             link_name: T2,
-        ) -> Result<WasmCloudEntity, RpcError> {
+        ) -> RpcResult<WasmCloudEntity> {
             let contract_id = contract_id.to_string();
             if contract_id.is_empty() {
                 return Err(RpcError::InvalidParameter(
@@ -231,7 +231,7 @@ pub mod actor {
     pub mod prelude {
         pub use crate::{
             core::{Actor, ActorReceiver},
-            RpcResult, {Context, Message, MessageDispatch, RpcError},
+            Context, Message, MessageDispatch, RpcError, RpcResult,
         };
 
         // re-export async_trait
@@ -258,7 +258,7 @@ pub mod actor {
                 #[async_trait]
                 impl crate::Transport for WasmHost {
                     async fn send(&self, _ctx: &Context,
-                                _msg: Message<'_>, _opts: Option<crate::SendOpts> ) -> std::result::Result<Vec<u8>, RpcError> {
+                                _msg: Message<'_>, _opts: Option<crate::SendOpts> ) -> crate::RpcResult<Vec<u8>> {
                        unimplemented!();
                     }
                 }
