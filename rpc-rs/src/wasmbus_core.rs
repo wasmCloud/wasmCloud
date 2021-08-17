@@ -145,7 +145,12 @@ pub trait ActorReceiver: MessageDispatch + Actor {
     async fn dispatch(&self, ctx: &Context, message: &Message<'_>) -> RpcResult<Message<'_>> {
         match message.method {
             "HealthRequest" => {
-                let value: HealthCheckRequest = deserialize(message.arg.as_ref())?;
+                let value: HealthCheckRequest = deserialize(message.arg.as_ref()).map_err(|e| {
+                    RpcError::Deser(format!(
+                        "deserialization for message '{}': {}",
+                        message.method, e
+                    ))
+                })?;
                 let resp = Actor::health_request(self, ctx, &value).await?;
                 let buf = Cow::Owned(serialize(&resp)?);
                 Ok(Message {
@@ -195,7 +200,8 @@ impl<'send, T: Transport + std::marker::Sync + std::marker::Send> Actor for Acto
                 None,
             )
             .await?;
-        let value = deserialize(&resp)?;
+        let value = deserialize(&resp)
+            .map_err(|e| RpcError::Deser(format!("response to {}: {}", "HealthRequest", e)))?;
         Ok(value)
     }
 }
