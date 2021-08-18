@@ -2,38 +2,45 @@ use wasmbus_rpc::{provider::prelude::Context, RpcResult};
 use wasmcloud_interface_keyvalue::*;
 use wasmcloud_test_util::{
     check, check_eq,
-    provider_test::{run_tests, test_provider, ProviderProcess, TestFunc},
+    cli::print_test_results,
+    provider_test::{test_provider, Provider},
+    testing::{TestOptions, TestResult},
 };
+#[allow(unused_imports)]
+use wasmcloud_test_util::{run_selected, run_selected_spawn};
 
-// this shows up as one test case when run with 'cargo test'.
-// run with 'cargo test -- --nocapture' to see per-function test case output
 #[tokio::test]
-async fn test_main() -> Result<(), Box<dyn std::error::Error>> {
-    // list of test cases: name and function
-    let tests: Vec<(&'static str, TestFunc)> = vec![
-        ("health_check", || Box::pin(health_check())),
-        ("get_set", || Box::pin(get_set())),
-        ("contains_del", || Box::pin(contains_del())),
-        ("incr", || Box::pin(incr())),
-        ("lists", || Box::pin(lists())),
-        ("sets", || Box::pin(sets())),
-    ];
+async fn run_all() {
+    let opts = TestOptions::default();
+    let res = run_selected_spawn!(
+        &opts,
+        health_check,
+        get_set,
+        contains_del,
+        incr,
+        lists,
+        sets
+    );
+    print_test_results(&res);
 
-    // Each of the test functions below are self-contained, and use independent keys,
-    // so it should be possible to run the test cases in any order,
-    // or in parallel. A future version of 'run_tests' may use
-    // different ordering or scheduling strategies.
-    let (passed, total) = run_tests(tests).await?;
-    if passed != total {
-        log::error!("Not all tests passed: ({}/{})", passed, total);
-    }
+    let passed = res.iter().filter(|tr| tr.pass).count();
+    let total = res.len();
+    assert_eq!(passed, total, "{} passed out of {}", passed, total);
 
-    Ok(())
+    // try to let the provider shut dowwn gracefully
+    let provider = test_provider().await;
+    let _ = provider.shutdown().await;
+}
+
+/// returns a new test key with the given prefix
+/// The purpose is to make sure different tests don't collide with each other
+fn new_key(prefix: &str) -> String {
+    format!("{}_{:x}", prefix, rand::random::<u32>())
 }
 
 // syntactic sugar for set
 async fn set<T1: ToString, T2: ToString>(
-    kv: &KeyValueSender<'_, ProviderProcess>,
+    kv: &KeyValueSender<Provider>,
     ctx: &Context,
     key: T1,
     value: T2,
@@ -50,7 +57,7 @@ async fn set<T1: ToString, T2: ToString>(
 }
 
 /// test that health check returns healthy
-async fn health_check() -> RpcResult<()> {
+async fn health_check(_opt: &TestOptions) -> RpcResult<()> {
     let prov = test_provider().await;
 
     // health check
@@ -60,124 +67,122 @@ async fn health_check() -> RpcResult<()> {
 }
 
 /// get and set
-async fn get_set() -> RpcResult<()> {
+async fn get_set(_opt: &TestOptions) -> RpcResult<()> {
     let prov = test_provider().await;
 
     // create client and ctx
-    let kv = KeyValueSender::new(prov);
+    let kv = KeyValueSender::via(prov);
     let ctx = Context::default();
 
-    const KEY: &str = "t_get_set";
+    let key = new_key("get");
     const VALUE: &str = "Alice";
-    // clear test value in case it's leftover from previous test run
-    let _ = kv.del(&ctx, KEY).await?;
 
-    let get_resp = kv.get(&ctx, KEY).await?;
+    let get_resp = kv.get(&ctx, &key).await?;
     check_eq!(get_resp.exists, false)?;
 
-    set(&kv, &ctx, KEY, VALUE).await?;
+    set(&kv, &ctx, &key, VALUE).await?;
 
-    let get_resp = kv.get(&ctx, KEY).await?;
+    let get_resp = kv.get(&ctx, &key).await?;
     check!(get_resp.exists)?;
     check_eq!(get_resp.value.as_str(), VALUE)?;
 
-    let _ = kv.del(&ctx, KEY).await?;
+    let _ = kv.del(&ctx, &key).await?;
 
     log::debug!("done!!!!");
 
+    // clean up
+    let _ = kv.del(&ctx, &key).await?;
     Ok(())
 }
 
 /// contains and del
-async fn contains_del() -> RpcResult<()> {
+async fn contains_del(_opt: &TestOptions) -> RpcResult<()> {
     let prov = test_provider().await;
 
     // create client and ctx
-    let kv = KeyValueSender::new(prov);
+    let kv = KeyValueSender::via(prov);
     let ctx = Context::default();
 
-    const KEY: &str = "t_contains";
+    let key = new_key("contains");
     const VALUE: &str = "Bob";
-    // clear test value in case it's leftover from previous test run
-    let _ = kv.del(&ctx, KEY).await?;
 
-    let empty = kv.contains(&ctx, KEY).await?;
-    check_eq!(empty, false)?;
+    let has_key_before_set = kv.contains(&ctx, &key).await?;
+    check_eq!(has_key_before_set, false)?;
 
-    set(&kv, &ctx, KEY, VALUE).await?;
+    set(&kv, &ctx, &key, VALUE).await?;
 
-    let not_empty = kv.contains(&ctx, KEY).await?;
-    check!(not_empty)?;
+    let has_key_after_set = kv.contains(&ctx, &key).await?;
+    check_eq!(has_key_after_set, true)?;
 
-    let _ = kv.del(&ctx, KEY).await?;
+    let _ = kv.del(&ctx, &key).await?;
 
-    let empty = kv.contains(&ctx, KEY).await?;
-    check!(!empty)?;
+    let has_key_after_del = kv.contains(&ctx, &key).await?;
+    check_eq!(has_key_after_del, false)?;
 
+    // clean up
+    let _ = kv.del(&ctx, &key).await?;
     Ok(())
 }
 
 /// increment (positive and negative)
-async fn incr() -> RpcResult<()> {
+async fn incr(_opt: &TestOptions) -> RpcResult<()> {
     let prov = test_provider().await;
 
     // create client and ctx
-    let kv = KeyValueSender::new(prov);
+    let kv = KeyValueSender::via(prov);
     let ctx = Context::default();
 
-    const KEY: &str = "t_incr";
+    let key = new_key("incr");
     const VALUE: &str = "0";
-    // clear test value in case it's leftover from previous test run
-    let _ = kv.del(&ctx, KEY).await?;
 
-    set(&kv, &ctx, KEY, VALUE).await?;
+    // initialize the counter to zero
+    set(&kv, &ctx, &key, VALUE).await?;
 
-    let get_resp = kv.get(&ctx, KEY).await?;
+    let get_resp = kv.get(&ctx, &key).await?;
     check!(get_resp.exists)?;
     check_eq!(get_resp.value.as_str(), "0")?;
 
     kv.increment(
         &ctx,
         &IncrementRequest {
-            key: KEY.to_string(),
+            key: key.clone(),
             value: 25,
         },
     )
     .await?;
 
-    let get_resp = kv.get(&ctx, KEY).await?;
+    let get_resp = kv.get(&ctx, &key).await?;
     check!(get_resp.exists)?;
     check_eq!(get_resp.value.as_str(), "25")?;
 
     kv.increment(
         &ctx,
         &IncrementRequest {
-            key: KEY.to_string(),
+            key: key.clone(),
             value: -5,
         },
     )
     .await?;
 
-    let get_resp = kv.get(&ctx, KEY).await?;
+    let get_resp = kv.get(&ctx, &key).await?;
     check!(get_resp.exists)?;
     check_eq!(get_resp.value.as_str(), "20")?;
 
+    // clean up
+    let _ = kv.del(&ctx, &key).await?;
     Ok(())
 }
 
 /// list : list_clear, list_add, list_del, list_range
-async fn lists() -> RpcResult<()> {
+async fn lists(_opt: &TestOptions) -> RpcResult<()> {
     let prov = test_provider().await;
 
     // create client and ctx
-    let kv = KeyValueSender::new(prov);
+    let kv = KeyValueSender::via(prov);
     let ctx = Context::default();
+    let key = new_key("list");
 
-    const KEY: &str = "t_list";
-
-    // clear test value in case it's leftover from previous test run
-    let _ = kv.list_clear(&ctx, KEY).await?;
-    let has_list = kv.contains(&ctx, KEY).await?;
+    let has_list = kv.contains(&ctx, &key).await?;
     check_eq!(has_list, false)?;
 
     for (i, name) in ["apple", "banana", "peach"].iter().enumerate() {
@@ -185,21 +190,21 @@ async fn lists() -> RpcResult<()> {
             .list_add(
                 &ctx,
                 &ListAddRequest {
-                    list_name: KEY.to_string(),
+                    list_name: key.clone(),
                     value: name.to_string(),
                 },
             )
             .await?;
         check_eq!(n, i as u32 + 1)?;
     }
-    let has_list = kv.contains(&ctx, KEY).await?;
+    let has_list = kv.contains(&ctx, &key).await?;
     check_eq!(has_list, true)?;
 
     let present = kv
         .list_del(
             &ctx,
             &ListDelRequest {
-                list_name: KEY.to_string(),
+                list_name: key.clone(),
                 value: "banana".to_string(),
             },
         )
@@ -210,7 +215,7 @@ async fn lists() -> RpcResult<()> {
         .list_del(
             &ctx,
             &ListDelRequest {
-                list_name: KEY.to_string(),
+                list_name: key.clone(),
                 value: "watermelon".to_string(),
             },
         )
@@ -221,7 +226,7 @@ async fn lists() -> RpcResult<()> {
         .list_range(
             &ctx,
             &ListRangeRequest {
-                list_name: KEY.to_string(),
+                list_name: key.clone(),
                 start: 0,
                 stop: 100,
             },
@@ -231,34 +236,33 @@ async fn lists() -> RpcResult<()> {
     check_eq!(values.get(0).unwrap(), "apple")?;
     check_eq!(values.get(1).unwrap(), "peach")?;
 
-    let _ = kv.list_clear(&ctx, KEY).await?;
+    let _ = kv.list_clear(&ctx, &key).await?;
 
-    let has_list = kv.contains(&ctx, KEY).await?;
+    let has_list = kv.contains(&ctx, &key).await?;
     check_eq!(has_list, false)?;
 
+    // clean up
+    let _ = kv.list_clear(&ctx, &key).await?;
     Ok(())
 }
 
 /// sets : set_add, set_del, set_union, set_intersect, set_clear
-async fn sets() -> RpcResult<()> {
+async fn sets(_opt: &TestOptions) -> RpcResult<()> {
     let prov = test_provider().await;
 
     // create client and ctx
-    let kv = KeyValueSender::new(prov);
+    let kv = KeyValueSender::via(prov);
     let ctx = Context::default();
 
-    const KEY1: &str = "t_set1";
-    let _ = kv.set_clear(&ctx, KEY1);
-    const KEY2: &str = "t_set2";
-    let _ = kv.set_clear(&ctx, KEY2);
-    const KEY3: &str = "t_set3";
-    let _ = kv.set_clear(&ctx, KEY3);
+    let key1 = new_key("set1");
+    let key2 = new_key("set2");
+    let key3 = new_key("set3");
 
     let n: u32 = kv
         .set_add(
             &ctx,
             &SetAddRequest {
-                set_name: KEY1.to_string(),
+                set_name: key1.clone(),
                 value: "Alice".to_string(),
             },
         )
@@ -271,7 +275,7 @@ async fn sets() -> RpcResult<()> {
         .set_add(
             &ctx,
             &SetAddRequest {
-                set_name: KEY1.to_string(),
+                set_name: key1.clone(),
                 value: "Bob".to_string(),
             },
         )
@@ -282,7 +286,7 @@ async fn sets() -> RpcResult<()> {
         .set_add(
             &ctx,
             &SetAddRequest {
-                set_name: KEY1.to_string(),
+                set_name: key1.clone(),
                 value: "Carol".to_string(),
             },
         )
@@ -294,7 +298,7 @@ async fn sets() -> RpcResult<()> {
         .set_add(
             &ctx,
             &SetAddRequest {
-                set_name: KEY1.to_string(),
+                set_name: key1.clone(),
                 value: "Carol".to_string(),
             },
         )
@@ -305,7 +309,7 @@ async fn sets() -> RpcResult<()> {
         .set_add(
             &ctx,
             &SetAddRequest {
-                set_name: KEY2.into(),
+                set_name: key2.clone(),
                 value: "Alice".into(),
             },
         )
@@ -315,7 +319,7 @@ async fn sets() -> RpcResult<()> {
         .set_add(
             &ctx,
             &SetAddRequest {
-                set_name: KEY3.into(),
+                set_name: key3.clone(),
                 value: "Daria".into(),
             },
         )
@@ -324,26 +328,20 @@ async fn sets() -> RpcResult<()> {
     // intersection
     //
     let inter_12 = kv
-        .set_intersection(&ctx, &vec![KEY1.to_string(), KEY2.to_string()])
+        .set_intersection(&ctx, &vec![key1.clone(), key2.clone()])
         .await?;
     check_eq!(inter_12.len(), 1)?;
     check_eq!(inter_12.get(0).unwrap(), "Alice")?;
 
     let inter_123 = kv
-        .set_intersection(
-            &ctx,
-            &vec![KEY1.to_string(), KEY2.to_string(), KEY3.to_string()],
-        )
+        .set_intersection(&ctx, &vec![key1.clone(), key2.clone(), key3.clone()])
         .await?;
     check_eq!(inter_123.len(), 0)?;
 
     // union
     //
     let union_123 = kv
-        .set_union(
-            &ctx,
-            &vec![KEY1.to_string(), KEY2.to_string(), KEY3.to_string()],
-        )
+        .set_union(&ctx, &vec![key1.clone(), key2.clone(), key3.clone()])
         .await?;
     check_eq!(union_123.len(), 4)?;
     // these could be in any order
@@ -354,7 +352,7 @@ async fn sets() -> RpcResult<()> {
 
     // query
     //
-    let q = kv.set_query(&ctx, KEY1).await?;
+    let q = kv.set_query(&ctx, &key1).await?;
     check_eq!(q.len(), 3)?;
     // these could be in any order
     check!(q.contains(&"Alice".to_string()))?;
@@ -367,23 +365,27 @@ async fn sets() -> RpcResult<()> {
         .set_del(
             &ctx,
             &SetDelRequest {
-                set_name: KEY1.into(),
+                set_name: key1.clone(),
                 value: "Alice".into(),
             },
         )
         .await;
-    let q = kv.set_query(&ctx, KEY1).await?;
+    let q = kv.set_query(&ctx, &key1).await?;
     check_eq!(q.len(), 2)?;
 
     // clear
     //
     // clear should work the first time, returning true
-    let has_key1 = kv.set_clear(&ctx, KEY1).await?;
+    let has_key1 = kv.set_clear(&ctx, &key1).await?;
     check_eq!(has_key1, true)?;
 
     // and return false the second time after it's been removed
-    let has_key1 = kv.set_clear(&ctx, KEY1).await?;
+    let has_key1 = kv.set_clear(&ctx, &key1).await?;
     check_eq!(has_key1, false)?;
 
+    // clean up
+    let _ = kv.set_clear(&ctx, &key1).await?;
+    let _ = kv.set_clear(&ctx, &key2).await?;
+    let _ = kv.set_clear(&ctx, &key2).await?;
     Ok(())
 }
