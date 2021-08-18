@@ -1,19 +1,15 @@
 # capability-provider/redis/Makefile
 
-CAPABILITY_ID = wasmcloud:keyvalue
-NAME = "KVRedis"
-VENDOR = "wasmCloud"
 PROJECT = kvredis
-VERSION = 0.2.0
+CAPABILITY_ID = wasmcloud:keyvalue
+VENDOR   = "wasmCloud"
+VERSION  = $(shell cargo metadata --no-deps --format-version 1 | jq -r '.packages[] .version' | head -1)
 REVISION = 0
+oci_url  = localhost:5000/v2/$(PROJECT):$(VERSION)
 
-# generate par file with release build and build tests
-all:
-	cargo build --bins --tests
+include ../build/makefiles/provider.mk
 
 test:
 	killall target/debug/kvredis
 	RUST_BACKTRACE=1 cargo test -- --nocapture
-
-include ../build/makefiles/provider.mk
 

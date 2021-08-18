@@ -27,6 +27,7 @@ wasmbus-rpc = "0.3"
 # test dependencies
 [dev-dependencies]
 wasmcloud-test-util = "0.1"
+rand = "0.8"
 
 [[bin]]
 name = "kvredis"
