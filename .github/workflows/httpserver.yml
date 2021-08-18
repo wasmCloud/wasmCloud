@@ -4,15 +4,15 @@ on:
   push:
     branches: [ main ]
     paths:
-    - "http-server/**"
+    - "httpserver-rs/**"
   pull_request:
     branches: [ main ]
     paths:
-    - "http-server/**"
+    - "httpserver-rs/**"
 
 env:
   CARGO_TERM_COLOR: always
-  working-directory: ./http-server
+  working-directory: ./httpserver-rs
 
 jobs:
   cargo_check:
