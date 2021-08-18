@@ -523,15 +523,13 @@ impl HostBridge {
     }
 }
 
-pub struct ProviderTransport<'transport> {
-    pub bridge: &'transport HostBridge,
-    pub ld: &'transport LinkDefinition,
+pub struct ProviderTransport<'send> {
+    pub bridge: &'send HostBridge,
+    pub ld: &'send LinkDefinition,
 }
 
-impl<'transport> ProviderTransport<'transport> {}
-
 #[async_trait]
-impl<'bridge> crate::Transport for ProviderTransport<'bridge> {
+impl<'send> crate::Transport for ProviderTransport<'send> {
     async fn send(
         &self,
         _ctx: &crate::Context,

@@ -145,12 +145,8 @@ pub trait ActorReceiver: MessageDispatch + Actor {
     async fn dispatch(&self, ctx: &Context, message: &Message<'_>) -> RpcResult<Message<'_>> {
         match message.method {
             "HealthRequest" => {
-                let value: HealthCheckRequest = deserialize(message.arg.as_ref()).map_err(|e| {
-                    RpcError::Deser(format!(
-                        "deserialization for message '{}': {}",
-                        message.method, e
-                    ))
-                })?;
+                let value: HealthCheckRequest = deserialize(message.arg.as_ref())
+                    .map_err(|e| RpcError::Deser(format!("message '{}': {}", message.method, e)))?;
                 let resp = Actor::health_request(self, ctx, &value).await?;
                 let buf = Cow::Owned(serialize(&resp)?);
                 Ok(Message {
@@ -168,19 +164,20 @@ pub trait ActorReceiver: MessageDispatch + Actor {
 
 /// ActorSender sends messages to a Actor service
 /// Actor service
+/// client for sending Actor messages
 #[derive(Debug)]
-pub struct ActorSender<'send, T> {
-    transport: &'send T,
+pub struct ActorSender<T: Transport> {
+    transport: T,
 }
 
-impl<'send, T: Transport> ActorSender<'send, T> {
-    pub fn new(transport: &'send T) -> Self {
-        ActorSender { transport }
+impl<T: Transport> ActorSender<T> {
+    /// Constructs a ActorSender with the specified transport
+    pub fn via(transport: T) -> Self {
+        Self { transport }
     }
 }
-
 #[async_trait]
-impl<'send, T: Transport + std::marker::Sync + std::marker::Send> Actor for ActorSender<'send, T> {
+impl<T: Transport + std::marker::Sync + std::marker::Send> Actor for ActorSender<T> {
     #[allow(unused)]
     /// Perform health check. Called at regular intervals by host
     async fn health_request(

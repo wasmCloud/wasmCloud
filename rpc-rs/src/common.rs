@@ -93,10 +93,6 @@ pub enum RpcError {
     #[error("the capability provider has not been initialized: {0}")]
     NotInitialized(String),
 
-    // The message was invalid
-    //#[error("the message was invalid")]
-    //Invalid(String),
-    //
     #[error("method not handled {0}")]
     MethodNotHandled(String),
 
@@ -155,55 +151,4 @@ pub trait MessageDispatch {
         ctx: &context::Context,
         message: Message<'_>,
     ) -> Result<Message<'_>, RpcError>;
-}
-
-//macro_rules! implement_service {
-//    ( ( $trait:ident, $impl:ident ),*) => {
-// need to do a few things
-//  1. build list of interfaces tha I respond to, so I can return my own api
-//  2. a: return list of serve() functions, so dispatcher can call them
-//  2. b: or, build my own dispatcher function that tries each one
-//
-//    };
-//}
-
-#[cfg(test)]
-mod test {
-
-    use super::*;
-    use client::SendOpts;
-
-    #[test]
-    fn send_config_constructor() {
-        let c = SendOpts::default();
-        assert_eq!(&c.target, "");
-        assert_eq!(&c.host, "default");
-        assert_eq!(c.idempotent, false);
-        assert_eq!(c.read_only, false);
-
-        let c = SendOpts::actor("a");
-        assert_eq!(&c.target, "a");
-        assert_eq!(&c.host, "default");
-        assert_eq!(c.idempotent, false);
-        assert_eq!(c.read_only, false);
-
-        let c = SendOpts::target("t");
-        assert_eq!(&c.target, "t");
-        assert_eq!(&c.host, "default");
-        assert_eq!(c.idempotent, false);
-        assert_eq!(c.read_only, false);
-    }
-
-    #[test]
-    fn send_config_builder() {
-        let c = SendOpts::actor("x").idempotent(true).read_only(true);
-        assert_eq!(&c.target, "x");
-        assert_eq!(&c.host, "default");
-        assert_eq!(c.idempotent, true);
-        assert_eq!(c.read_only, true);
-
-        let c = SendOpts::actor("x").idempotent(false).read_only(false);
-        assert_eq!(c.idempotent, false);
-        assert_eq!(c.read_only, false);
-    }
 }
