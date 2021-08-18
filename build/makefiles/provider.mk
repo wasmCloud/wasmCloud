@@ -1,7 +1,7 @@
-# provider.mak
+# provider.mk
 #
 # common rules for building capability providers
-# Some of these may depend on GNUMakefile >= 4.0
+# Some of these rules depend on GNUMakefile >= 4.0
 #
 # before including this, local project makefile should define the following
 # (to override defaults)
@@ -23,9 +23,15 @@ machine_id = $(shell uname -m )
 bin_name ?= $(PROJECT)
 dest_par ?= build/$(bin_name).par.gz
 
-# oci url generation assumes that vesion is first two parts of semver: x.y
-oci_url_base ?= localhost:5000/v1
-oci_url ?= $(oci_url_base)/$(bin_name):$(VERSION).$(REVISION)
+link_name ?= default
+
+# If name is not defined, used project
+NAME ?= $(PROJECT)
+
+WASH ?= wash
+
+oci_url_base ?= localhost:5000/v2
+oci_url      ?= $(oci_url_base)/$(bin_name):$(VERSION)
 ifeq ($(WASH_REG_USER),)
 	oci_insecure := --insecure
 endif
@@ -66,19 +72,16 @@ $(top_targets)::
 	done
 endif
 
-# this target must be listed first so that including this makefile
-# doesn't trigger other rules
-#all::
+# default target
+all:: $(dest_par)
 
-# build par file for current platform
-par: release $(dest_par) build/stub.exs
+par:: $(dest_par)
 
 # rebuild base par if target0 changes
-$(dest_par): $(bin_target0) Makefile
+$(dest_par): $(bin_target0) Makefile Cargo.toml
 	@mkdir -p $(dir $(dest_par))
-	rm -f $@
 	par_arch=`echo $(par_target0) | sed -E 's/([^-]+)-([^-]+)-([^-]+)(-gnu)?/\1-\3/'`
-	wash par create \
+	$(WASH) par create \
 		--arch $$par_arch \
 		--binary $(bin_target0) \
 		--capid $(CAPABILITY_ID) \
@@ -99,7 +102,7 @@ par-full: $(dest_par) $(bin_targets)
 	    par_arch=`echo -n $$target | sed -E 's/([^-]+)-([^-]+)-([^-]+)(-gnu)?/\1-\3/'`; \
 		echo building $$par_arch; \
 		if [ $${target_dest} != $(cross_target0) ] && [ -f $$target_dest ]; then \
-		    wash par insert --arch $$par_arch --binary $$target_dest $@; \
+		    $(WASH) par insert --arch $$par_arch --binary $$target_dest $@; \
 		fi; \
 	done
 
@@ -107,59 +110,51 @@ par-full: $(dest_par) $(bin_targets)
 ifeq ($(wildcard ./Cargo.toml),./Cargo.toml)
 
 # rust dependencies
-RUST_DEPS += $(wildcard src/*.rs) $(wildcard target/release/deps/*) Cargo.toml Makefile
+RUST_DEPS += $(wildcard src/*.rs) $(wildcard target/*/deps/*) Cargo.toml Makefile
 
 target/release/$(bin_name): $(RUST_DEPS)
 	cargo build --release
-	@rm -f $(dest_par)
 
 target/debug/$(bin_name): $(RUST_DEPS)
 	cargo build
-	@rm -f $(dest_par)
 
+# cross-compile target
 target/%/release/$(bin_name): $(RUST_DEPS)
 	tname=`echo -n $@ | sed -E 's_target/([^/]+)/release.*$$_\1_'` &&\
 	cross build --release --target $$tname
-	@rm -f $(dest_par)
 
 endif
 
-# make exs stub for provider
-build/stub.exs: $(dest_par)
-	@mkdir -p $(dir $@)
-	@cat <<- EOF > $@
-	%{
-		name: $(NAME),
-		path: "$(abspath $(dest_par))",
-		key: "$(shell wash par inspect $(dest_par) -o json | jq -r ".service")",
-		link: "default",
-		contract: "$(CAPABILITY_ID)",
-	},
-	EOF
-
 # push par file to registry
 push: $(dest_par)
-	wash reg push $(oci_insecure) $(oci_url) $(dest_par)
+	$(WASH) reg push $(oci_insecure) $(oci_url) $(dest_par)
 
-load:
-	wash ctl start provider -o json $(oci_url)
+
+
+
+# start provider
+start:
+	$(WASH) ctl start provider $(oci_url) \
+		--host-id $(shell $(WASH) ctl get hosts -o json | jq -r ".hosts[0].id") \
+		--link-name $(link_name) \
+		--timeout 3
 
 # inspect claims on par file
 inspect: $(dest_par)
-	wash par inspect $(dest_par)
+	$(WASH) par inspect $(dest_par)
 
+inventory:
+	$(WASH) ctl get inventory $(shell $(WASH) ctl get hosts -o json | jq -r ".hosts[0].id")
 
 clean::
-	rm -f build/*.par.gz build/*.exs
+	rm -f build/
 
 ifeq ($(wildcard ./Cargo.toml),./Cargo.toml)
 build::
 	cargo build
-	@rm -f $(dest_par)
 
 release::
 	cargo build --release
-	@rm -f $(dest_par)
 
 clean::
 	cargo clean
