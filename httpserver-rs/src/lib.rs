@@ -260,7 +260,7 @@ impl HttpServer {
         );
         let tx = ProviderTransport { bridge, ld: &ld };
         let ctx = wasmbus_rpc::Context::default();
-        let actor = HttpServerSender::new(&tx);
+        let actor = HttpServerSender::via(tx);
 
         let resp = actor.handle_request(&ctx, &req).await?;
         trace!(
