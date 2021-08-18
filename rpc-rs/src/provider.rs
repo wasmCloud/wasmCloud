@@ -258,6 +258,8 @@ impl HostBridge {
         let provider = provider.clone();
         while let Some(msg) = sub.next().await {
             let mut ctx = crate::Context::default();
+            let mut rpc_response = None;
+            // parse incoming message and validate
             let inv = match crate::deserialize::<Invocation>(&msg.payload) {
                 Ok(inv) => {
                     trace!(
@@ -265,58 +267,77 @@ impl HostBridge {
                         &inv.operation,
                         &inv.origin.public_key,
                     );
-                    inv
+                    if !self.is_linked(&inv.origin.public_key).await {
+                        warn!(
+                            "Ignoring RPC message from unlinked actor {} op:{}",
+                            &inv.origin.public_key, &inv.operation
+                        );
+                        rpc_response = Some(InvocationResponse {
+                            msg: Vec::new(),
+                            error: Some("Unauthorized: unlinked".to_string()),
+                            invocation_id: inv.id,
+                        });
+                        None
+                    } else {
+                        Some(inv)
+                    }
                 }
                 Err(e) => {
                     error!("received corrupt invocation: {}", e.to_string());
-                    continue;
-                }
-            };
-            let provider_msg = Message {
-                method: &inv.operation,
-                arg: Cow::from(inv.msg),
-            };
-            ctx.actor = Some(inv.origin.public_key);
-            let ir = match provider.dispatch(&ctx, provider_msg).await {
-                Ok(resp) => {
-                    trace!("operation {} succeeded. returning response", &inv.operation);
-                    InvocationResponse {
-                        msg: resp.arg.to_vec(),
-                        error: None,
-                        invocation_id: inv.id,
-                    }
-                }
-                Err(e) => {
-                    error!(
-                        "operation {} failed with error {}",
-                        &inv.operation,
-                        e.to_string()
-                    );
-                    InvocationResponse {
+                    rpc_response = Some(InvocationResponse {
                         msg: Vec::new(),
-                        error: Some(e.to_string()),
-                        invocation_id: inv.id,
-                    }
+                        error: Some(format!("Invalid message: {}", e.to_string())),
+                        invocation_id: "0".to_string(),
+                    });
+                    None
                 }
             };
+            // dispatch to provider handler
+            if rpc_response.is_none() {
+                let inv = inv.unwrap();
+                let provider_msg = Message {
+                    method: &inv.operation,
+                    arg: Cow::from(inv.msg),
+                };
+                ctx.actor = Some(inv.origin.public_key);
+                rpc_response = match provider.dispatch(&ctx, provider_msg).await {
+                    Ok(resp) => {
+                        trace!("operation {} succeeded. returning response", &inv.operation);
+                        Some(InvocationResponse {
+                            msg: resp.arg.to_vec(),
+                            error: None,
+                            invocation_id: inv.id,
+                        })
+                    }
+                    Err(e) => {
+                        error!(
+                            "operation {} failed with error {}",
+                            &inv.operation,
+                            e.to_string()
+                        );
+                        Some(InvocationResponse {
+                            msg: Vec::new(),
+                            error: Some(e.to_string()),
+                            invocation_id: inv.id,
+                        })
+                    }
+                };
+            }
+            // return response
             if let Some(reply_to) = msg.reply_to {
-                match crate::serialize(&ir) {
+                match crate::serialize(&rpc_response.unwrap()) {
                     Ok(t) => {
                         if let Err(e) = self.rpc_client.publish(&reply_to, &t).await {
                             error!(
-                                "failed sending response to op {}: {}",
-                                &inv.operation,
+                                "failed sending rpc response to {}: {}",
+                                &reply_to,
                                 e.to_string()
                             );
                         }
                     }
                     Err(e) => {
                         // extremely unlikely that InvocationResponse would fail to serialize
-                        error!(
-                            "failed serializing InvocationResponse to op:{} : {}",
-                            &inv.operation,
-                            e.to_string()
-                        );
+                        error!("failed serializing InvocationResponse: {}", e.to_string());
                     }
                 }
             }
