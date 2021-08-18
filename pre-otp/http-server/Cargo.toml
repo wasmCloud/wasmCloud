@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-httpserver"
-version = "0.12.2"
+version = "0.12.3"
 authors = ["wasmCloud Team"]
 edition = "2018"
 homepage = "https://wasmcloud.dev"
@@ -25,8 +25,8 @@ crate-type = ["cdylib", "rlib"]
 rmp-serde = "0.15.4"
 serde_bytes = "0.11.5"
 serde = { version = "1.0.124", features = ["derive"] }
-actix-cors = "0.5.4"
-actix-web = "3.3.2"
+actix-cors = "0.6.0-beta.2"
+actix-web = "4.0.0-beta.8"
 actix-rt = "2.1.0"
 env_logger = "0.8.3"
 log = "0.4.14"
