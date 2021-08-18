@@ -1,6 +1,5 @@
 use crate::{config::ModelSource, Error, Result};
 use atelier_core::model::Model;
-use downloader::Downloader;
 use reqwest::Url;
 use rustc_hash::FxHasher;
 use std::path::{Path, PathBuf};
@@ -103,6 +102,7 @@ pub(crate) fn sources_to_paths(
             }
         }
     }
+    #[cfg(not(target_arch = "wasm32"))]
     if !urls.is_empty() {
         let cached = urls_to_cached_files(urls)?;
         results.extend_from_slice(&cached);
@@ -112,6 +112,7 @@ pub(crate) fn sources_to_paths(
 
 /// Returns cache_path, relative to download directory
 /// format: host_dir/file_stem.HASH.ext
+#[cfg(not(target_arch = "wasm32"))]
 fn url_to_cache_path(url: &str) -> Result<PathBuf> {
     let origin = url.parse::<Url>().map_err(|e| bad_url(url, e))?;
     let host_dir = origin.host_str().ok_or_else(|| bad_url(url, "no-host"))?;
@@ -176,7 +177,7 @@ fn urls_to_cached_files(urls: Vec<String>) -> Result<Vec<PathBuf>> {
     }
 
     if !to_download.is_empty() {
-        let mut downloader = Downloader::builder()
+        let mut downloader = downloader::Downloader::builder()
             .download_folder(tmpdir.path())
             .parallel_requests(MAX_PARALLEL_DOWNLOADS)
             .build()

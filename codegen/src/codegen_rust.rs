@@ -709,6 +709,8 @@ impl<'model> RustCodeGen<'model> {
         w.write(b"#[async_trait]\npub trait ");
         self.write_ident(&mut w, service_id);
         w.write(b"{\n");
+        self.write_service_contract_getter(&mut w, service_id, service_traits)?;
+
         for operation in service.operations() {
             // if operation is not declared in this namespace, don't define it here
             if let Some(ref ns) = self.namespace {
@@ -724,6 +726,29 @@ impl<'model> RustCodeGen<'model> {
             w.write(b";\n");
         }
         w.write(b"}\n\n");
+        Ok(())
+    }
+
+    /// add getter for capability contract id
+    fn write_service_contract_getter(
+        &mut self,
+        w: &mut Writer,
+        _service_id: &Identifier,
+        service_traits: &AppliedTraits,
+    ) -> Result<()> {
+        if let Some(Wasmbus {
+            contract_id: Some(contract_id),
+            ..
+        }) = get_trait(service_traits, crate::model::wasmbus_trait())?
+        {
+            w.write(&format!(
+                r#"
+                /// returns the capability contract id for this interface
+                fn contract_id() -> &'static str {{ "{}" }}
+                "#,
+                contract_id
+            ));
+        }
         Ok(())
     }
 
@@ -840,7 +865,7 @@ impl<'model> RustCodeGen<'model> {
                 // TODO: should this be input.target?
                 self.write_type(&mut w, Ty::Shape(op.input().as_ref().unwrap()))?;
                 w.write(b" = deserialize(message.arg.as_ref())\
-                  .map_err(|e| RpcError::Deser(format!(\"deserialization for message '{}': {}\", message.method, e)))?;\n");
+                  .map_err(|e| RpcError::Deser(format!(\"message '{}': {}\", message.method, e)))?;\n");
             }
             // let resp = Trait::method(self, ctx, &value).await?;
             w.write(b"let resp = ");
@@ -884,26 +909,28 @@ impl<'model> RustCodeGen<'model> {
         );
         self.write_comment(&mut w, CommentKind::Documentation, &doc);
         self.apply_documentation_traits(&mut w, service_id, service_traits);
-        w.write(b"#[derive(Debug)]\npub struct ");
-        self.write_ident_with_suffix(&mut w, service_id, "Sender")?;
-        w.write(b"<'send,T> { transport: &'send T }\n\n");
+        w.write(&format!(
+            r#"/// client for sending {} messages
+              #[derive(Debug)]
+              pub struct {}Sender<T:Transport>  {{ transport: T }}
 
-        // implement constructor for TraitClient
-        w.write(b"impl<'send, T:Transport>  ");
-        self.write_ident_with_suffix(&mut w, service_id, "Sender")?;
-        w.write(b"<'send,T> { \n");
-        w.write(b" pub fn new(transport: &'send T) -> Self { ");
-        self.write_ident_with_suffix(&mut w, service_id, "Sender")?;
-        w.write(b"{ transport }\n}\n}\n\n");
+              impl<T:Transport> {}Sender<T> {{
+                  /// Constructs a {}Sender with the specified transport
+                   pub fn via(transport: T) -> Self {{
+                        Self{{ transport }}
+                   }}
+               }}
+            "#,
+            service_id, service_id, service_id, service_id,
+        ));
+        w.write(&self.actor_sender_constructors(service_id, service_traits)?);
 
         // implement Trait for TraitSender
-        w.write(
-            b"#[async_trait]\nimpl<'send, T:Transport + std::marker::Sync + std::marker::Send> ",
-        );
+        w.write(b"#[async_trait]\nimpl<T:Transport + std::marker::Sync + std::marker::Send> ");
         self.write_ident(&mut w, service_id);
         w.write(b" for ");
         self.write_ident_with_suffix(&mut w, service_id, "Sender")?;
-        w.write(b"<'send, T> {\n");
+        w.write(b"<T> {\n");
 
         for method_id in service.operations() {
             // TODO: if it's valid for a service to include operations from another namespace, then this isn't doing the right thing
@@ -949,6 +976,61 @@ impl<'model> RustCodeGen<'model> {
         }
         w.write(b"}\n\n");
         Ok(())
+    }
+
+    /// add sender constructors for actors calling providers
+    /// This is only used for wasm32 targets and for services that declare 'providerReceive'
+    #[cfg(feature = "wasmbus")]
+    fn actor_sender_constructors(
+        &mut self,
+        service_id: &Identifier,
+        service_traits: &AppliedTraits,
+    ) -> Result<String> {
+        let ctors = if let Some(Wasmbus {
+            provider_receive: true,
+            contract_id: Some(contract),
+            ..
+        }) = get_trait(service_traits, crate::model::wasmbus_trait())?
+        {
+            format!(
+                r#"
+                #[cfg(target_arch = "wasm32")]
+                impl {}Sender<{}::actor::prelude::WasmHost> {{
+
+                    /// Constructs a client for sending to a {} provider
+                    /// implementing the '{}' capability contract, with the "default" link
+                    pub fn new() -> Self {{
+                        let transport = {}::actor::prelude::WasmHost::to_provider("{}", "default").unwrap();
+                        Self {{ transport }}
+                    }}
+
+                    /// Constructs a client for sending to a {} provider
+                    /// implementing the '{}' capability contract, with the specified link name
+                    pub fn new_with_link(link_name: &str) -> wasmbus_rpc::RpcResult<Self> {{
+                        let transport =  {}::actor::prelude::WasmHost::to_provider("{}", link_name)?;
+                        Ok(Self {{ transport }})
+                    }}
+                }}
+                "#,
+                service_id,
+                &self.import_core,
+                service_id,
+                contract,
+                &self.import_core,
+                contract,
+                service_id,
+                contract,
+                &self.import_core,
+                contract,
+            )
+        } else {
+            String::new()
+        };
+        Ok(ctors)
+    }
+    #[cfg(not(feature = "wasmbus"))]
+    fn actor_sender_constructors(&mut self, _: &Identifier, _: &Appliedtraits) -> Result<String> {
+        Ok(String::new())
     }
 } // impl CodeGenRust
 
