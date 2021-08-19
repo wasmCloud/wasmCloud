@@ -167,7 +167,12 @@ impl HttpServer {
                         let response = match Self::send_actor(linkdefs, req, bridge).await {
                             Ok(resp) => resp,
                             Err(e) => {
-                                error!("error sending to actor (msg='{}'): {}", method, e);
+                                error!(
+                                    "sending HttpRequest to actor ({} {}): {}",
+                                    &method,
+                                    &path.as_str(),
+                                    e
+                                );
                                 HttpResponse {
                                     body: b"internal error. see logs for more info".to_vec(),
                                     header: Default::default(),
