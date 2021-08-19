@@ -36,7 +36,7 @@ pub const WASMBUS_RPC_VERSION: u32 = 0;
 
 /// import module for webassembly linking
 #[doc(hidden)]
-pub const WASMBUS_RPC_IMPORT_NAME: &str = "wapc";
+pub const WASMBUS_RPC_IMPORT_NAME: &str = "wasmbus";
 
 /// This crate's published version
 pub const WELD_CRATE_VERSION: &str = env!("CARGO_PKG_VERSION");

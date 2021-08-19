@@ -4,7 +4,7 @@
 use crate::{Message, RpcError, RpcResult, Transport};
 use async_trait::async_trait;
 
-#[link(wasm_import_module = "wapc")]
+#[link(wasm_import_module = "wasmbus")]
 extern "C" {
     pub fn __console_log(ptr: *const u8, len: usize);
     pub fn __host_call(
