@@ -82,7 +82,7 @@ pub fn derive_actor(input: TokenStream) -> TokenStream {
 
     let output = quote!(
 
-    #[link(wasm_import_module = "wapc")]
+    #[link(wasm_import_module = "wasmbus")]
     extern "C" {
         pub fn __guest_response(ptr: *const u8, len: usize);
         pub fn __guest_error(ptr: *const u8, len: usize);
