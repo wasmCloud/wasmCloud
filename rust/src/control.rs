@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 use std::{borrow::Cow, string::ToString};
 #[allow(unused_imports)]
 use wasmbus_rpc::{
-    context::Context, deserialize, serialize, Message, MessageDispatch, RpcError, RpcResult,
-    SendOpts, Transport,
+    deserialize, serialize, Context, Message, MessageDispatch, RpcError, RpcResult, SendOpts,
+    Transport,
 };
 
 pub const SMITHY_VERSION: &str = "1.0";
