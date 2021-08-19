@@ -19,7 +19,7 @@ pub mod provider;
 pub(crate) mod provider_main;
 mod wasmbus_model;
 pub mod model {
-    // re-export core lib as "core"
+    // re-export model lib as "model"
     pub use crate::wasmbus_model::*;
 }
 
