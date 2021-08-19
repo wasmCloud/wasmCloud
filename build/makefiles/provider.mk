@@ -137,7 +137,7 @@ start:
 	$(WASH) ctl start provider $(oci_url) \
 		--host-id $(shell $(WASH) ctl get hosts -o json | jq -r ".hosts[0].id") \
 		--link-name $(link_name) \
-		--timeout 3
+		--timeout 4
 
 # inspect claims on par file
 inspect: $(dest_par)
