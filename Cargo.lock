@@ -2310,6 +2310,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rmpv"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "de8813b3a2f95c5138fe5925bfb8784175d88d6bff059ba8ce090aa891319754"
+dependencies = [
+ "num-traits",
+ "rmp",
+]
+
+[[package]]
 name = "rustc-demangle"
 version = "0.1.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3105,14 +3115,18 @@ dependencies = [
 name = "wash-cli"
 version = "0.6.0"
 dependencies = [
+ "bytes 1.0.1",
  "env_logger 0.9.0",
  "envmnt",
  "log",
  "nats",
  "nkeys",
  "oci-distribution",
+ "once_cell",
  "provider-archive",
  "reqwest",
+ "rmp-serde",
+ "rmpv",
  "serde",
  "serde_json",
  "serde_yaml",

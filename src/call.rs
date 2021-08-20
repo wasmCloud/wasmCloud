@@ -32,9 +32,10 @@ pub(crate) async fn handle_command(cmd: CallCommand) -> Result<String> {
     let output_kind = cmd.output.kind;
     let is_test = cmd.test;
     let save_output = cmd.save.clone();
+    let bin = cmd.bin;
     let res = handle_call(cmd).await;
     //TODO: Evaluate from_utf8_lossy and use of format here
-    Ok(call_output(res, save_output, is_test, &output_kind))
+    Ok(call_output(res, save_output, bin, is_test, &output_kind))
 }
 
 #[derive(Debug, Clone, StructOpt)]
@@ -105,6 +106,10 @@ pub(crate) struct CallCommand {
     #[structopt(long)]
     pub(crate) save: Option<PathBuf>,
 
+    /// When using json output, display binary as binary('b'), string('s'), or both('2')
+    #[structopt(long, default_value = "b")]
+    pub(crate) bin: char,
+
     /// When invoking a test actor, interpret the response as TestResults
     #[structopt(long)]
     pub(crate) test: bool,
@@ -128,6 +133,11 @@ pub(crate) async fn handle_call(cmd: CallCommand) -> Result<Vec<u8>> {
         &cmd.operation,
         cmd.payload.join("")
     );
+    if !"bs2".contains(cmd.bin) {
+        return Err(Box::<dyn std::error::Error>::from(
+            "'bin' parameter must be 'b', 's', or '2'",
+        ));
+    }
 
     let origin = WasmCloudEntity::new_actor(WASH_ORIGIN_KEY)?;
     let target = WasmCloudEntity::new_actor(&cmd.actor_id)?;
@@ -183,6 +193,7 @@ pub(crate) async fn handle_call(cmd: CallCommand) -> Result<Vec<u8>> {
 pub(crate) fn call_output(
     response: Result<Vec<u8>>,
     save_output: Option<PathBuf>,
+    bin: char,
     is_test: bool,
     output_kind: &OutputKind,
 ) -> String {
@@ -216,7 +227,7 @@ pub(crate) fn call_output(
             }
             format_output(
                 format!("\nCall response (raw): {}", String::from_utf8_lossy(&msg)),
-                msgpack_to_json_val(&msg).unwrap_or_else(|e| json!({ "error": e.to_string() })),
+                msgpack_to_json_val(msg, bin),
                 output_kind,
             )
         }
@@ -254,6 +265,8 @@ mod test {
             DATA_FNAME,
             "--save",
             SAVE_FNAME,
+            "--bin",
+            "2",
             "--ns-prefix",
             NS_PREFIX,
             "--rpc-host",
@@ -272,6 +285,7 @@ mod test {
                 output,
                 data,
                 save,
+                bin,
                 test,
                 actor_id,
                 operation,
@@ -285,6 +299,7 @@ mod test {
                 assert_eq!(data, Some(PathBuf::from(DATA_FNAME)));
                 assert_eq!(save, Some(PathBuf::from(SAVE_FNAME)));
                 assert_eq!(test, true);
+                assert_eq!(bin, '2');
                 assert_eq!(actor_id, ACTOR_ID);
                 assert_eq!(operation, "HandleOperation");
                 assert_eq!(payload, vec!["{ \"hello\": \"world\"}".to_string()])
