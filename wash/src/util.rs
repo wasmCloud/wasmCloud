@@ -72,7 +72,7 @@ pub(crate) fn format_output(
 ) -> String {
     match output_kind {
         OutputKind::Text => text,
-        OutputKind::Json => format!("{}", json),
+        OutputKind::Json => serde_json::to_string(&json).unwrap(),
     }
 }
 
@@ -127,10 +127,58 @@ pub(crate) fn json_str_to_msgpack_bytes(payload: &str) -> Result<Vec<u8>> {
     Ok(payload)
 }
 
-/// transform msgpack bytes into a json string
-pub(crate) fn msgpack_to_json_val(msg: &[u8]) -> Result<serde_json::Value> {
-    let val: serde_json::Value = wasmbus_rpc::deserialize(msg)?;
-    Ok(val)
+use once_cell::sync::OnceCell;
+static BIN_STR: OnceCell<char> = OnceCell::new();
+
+fn msgpack_to_json(mval: rmpv::Value) -> serde_json::Value {
+    use rmpv::Value as RV;
+    use serde_json::Value as JV;
+    use std::iter::FromIterator;
+    match mval {
+        RV::String(s) => JV::String(s.to_string()),
+        RV::Boolean(b) => JV::Bool(b),
+        RV::Array(v) => JV::Array(Vec::from_iter(v.into_iter().map(msgpack_to_json))),
+        RV::F64(f) => JV::from(f),
+        RV::F32(f) => JV::from(f),
+        RV::Integer(i) => match (i.is_u64(), i.is_i64()) {
+            (true, _) => JV::from(i.as_u64().unwrap()),
+            (_, true) => JV::from(i.as_i64().unwrap()),
+            _ => JV::from(0u64),
+        },
+        RV::Map(vkv) => JV::Object(serde_json::Map::from_iter(vkv.into_iter().map(|(k, v)| {
+            (
+                k.as_str().unwrap_or_default().to_string(),
+                msgpack_to_json(v),
+            )
+        }))),
+        RV::Binary(v) => match BIN_STR.get().unwrap() {
+            's' => JV::String(String::from_utf8_lossy(&v).into_owned()),
+            '2' => serde_json::json!({
+                "str": String::from_utf8_lossy(&v),
+                "bin": v,
+            }),
+            'b' | _ => JV::Array(Vec::from_iter(v.into_iter().map(JV::from))),
+        },
+        RV::Ext(i, v) => serde_json::json!({
+            "type": i,
+            "data": v
+        }),
+        RV::Nil => JV::Bool(false),
+    }
+}
+
+/// transform msgpack bytes into json
+pub(crate) fn msgpack_to_json_val(msg: Vec<u8>, bin_str: char) -> serde_json::Value {
+    use bytes::Buf;
+
+    BIN_STR.set(bin_str).unwrap();
+
+    let bytes = bytes::Bytes::from(msg);
+    if let Ok(v) = rmpv::decode::value::read_value(&mut bytes.reader()) {
+        msgpack_to_json(v)
+    } else {
+        serde_json::json!({ "error": "Could not decode data" })
+    }
 }
 
 pub(crate) fn configure_table_style(table: &mut Table<'_>) {
