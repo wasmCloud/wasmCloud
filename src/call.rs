@@ -232,11 +232,14 @@ pub(crate) fn call_output(
 mod test {
     use super::{CallCli, CallCommand};
     use crate::util::Result;
+    use std::path::PathBuf;
     use structopt::StructOpt;
 
     const RPC_HOST: &str = "0.0.0.0";
     const RPC_PORT: &str = "4222";
     const NS_PREFIX: &str = "default";
+    const SAVE_FNAME: &str = "/dev/null";
+    const DATA_FNAME: &str = "/tmp/data.json";
 
     const ACTOR_ID: &str = "MDPDJEYIAK6MACO67PRFGOSSLODBISK4SCEYDY3HEOY4P5CVJN6UCWUK";
 
@@ -248,7 +251,9 @@ mod test {
             "json",
             "--test",
             "--data",
-            "some_filename.json",
+            DATA_FNAME,
+            "--save",
+            SAVE_FNAME,
             "--ns-prefix",
             NS_PREFIX,
             "--rpc-host",
@@ -266,6 +271,7 @@ mod test {
                 opts,
                 output,
                 data,
+                save,
                 test,
                 actor_id,
                 operation,
@@ -276,7 +282,8 @@ mod test {
                 assert_eq!(opts.ns_prefix, NS_PREFIX);
                 assert_eq!(opts.timeout, 0);
                 assert_eq!(output.kind, crate::util::OutputKind::Json);
-                assert_eq!(data, Some(PathBuf::from("some_filename.json")));
+                assert_eq!(data, Some(PathBuf::from(DATA_FNAME)));
+                assert_eq!(save, Some(PathBuf::from(SAVE_FNAME)));
                 assert_eq!(test, true);
                 assert_eq!(actor_id, ACTOR_ID);
                 assert_eq!(operation, "HandleOperation");
