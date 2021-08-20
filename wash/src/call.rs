@@ -1,9 +1,10 @@
 use crate::util::Result;
 use crate::util::{
     convert_rpc_error, extract_arg_value, format_output, json_str_to_msgpack_bytes,
-    nats_client_from_opts, Output, OutputKind,
+    msgpack_to_json_val, nats_client_from_opts, Output, OutputKind,
 };
 use serde_json::json;
+use std::path::PathBuf;
 use structopt::clap::AppSettings;
 use structopt::StructOpt;
 use wasmbus_rpc::{core::WasmCloudEntity, Message, RpcClient};
@@ -30,9 +31,10 @@ impl CallCli {
 pub(crate) async fn handle_command(cmd: CallCommand) -> Result<String> {
     let output_kind = cmd.output.kind;
     let is_test = cmd.test;
+    let save_output = cmd.save.clone();
     let res = handle_call(cmd).await;
     //TODO: Evaluate from_utf8_lossy and use of format here
-    Ok(call_output(res, is_test, &output_kind))
+    Ok(call_output(res, save_output, is_test, &output_kind))
 }
 
 #[derive(Debug, Clone, StructOpt)]
@@ -95,11 +97,15 @@ pub(crate) struct CallCommand {
     #[structopt(flatten)]
     pub(crate) output: Output,
 
-    /// optional json file data
+    /// Optional json file to send as the operation payload
     #[structopt(short, long)]
-    pub(crate) data: Option<std::path::PathBuf>,
+    pub(crate) data: Option<PathBuf>,
 
-    /// when invoking a test actor, interpret the response as TestResults
+    /// Optional file for saving binary response
+    #[structopt(long)]
+    pub(crate) save: Option<PathBuf>,
+
+    /// When invoking a test actor, interpret the response as TestResults
     #[structopt(long)]
     pub(crate) test: bool,
 
@@ -176,11 +182,22 @@ pub(crate) async fn handle_call(cmd: CallCommand) -> Result<Vec<u8>> {
 // Helper output functions, used to ensure consistent output between ctl & standalone commands
 pub(crate) fn call_output(
     response: Result<Vec<u8>>,
+    save_output: Option<PathBuf>,
     is_test: bool,
     output_kind: &OutputKind,
 ) -> String {
     match response {
         Ok(msg) => {
+            if let Some(ref save_path) = save_output {
+                return match std::fs::write(save_path, msg) {
+                    Ok(_) => String::new(),
+                    Err(e) => format!(
+                        "Error saving results to {}: {}",
+                        &save_path.display(),
+                        e.to_string(),
+                    ),
+                };
+            }
             if is_test {
                 // try to decode it as TestResults, otherwise dump as text
                 return match wasmbus_rpc::deserialize::<TestResults>(&msg) {
@@ -197,11 +214,9 @@ pub(crate) fn call_output(
                     }
                 };
             }
-            //TODO(issue #32): String::from_utf8_lossy should be decoder only if one is not available
-            let call_response = String::from_utf8_lossy(&msg);
             format_output(
-                format!("\nCall response (raw): {}", call_response),
-                json!({ "response": call_response }),
+                format!("\nCall response (raw): {}", String::from_utf8_lossy(&msg)),
+                msgpack_to_json_val(&msg).unwrap_or_else(|e| json!({ "error": e.to_string() })),
                 output_kind,
             )
         }
@@ -261,7 +276,7 @@ mod test {
                 assert_eq!(opts.ns_prefix, NS_PREFIX);
                 assert_eq!(opts.timeout, 0);
                 assert_eq!(output.kind, crate::util::OutputKind::Json);
-                assert_eq!(data, Some(std::path::PathBuf::from("some_filename.json")));
+                assert_eq!(data, Some(PathBuf::from("some_filename.json")));
                 assert_eq!(test, true);
                 assert_eq!(actor_id, ACTOR_ID);
                 assert_eq!(operation, "HandleOperation");
