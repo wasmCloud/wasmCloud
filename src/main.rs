@@ -26,7 +26,7 @@ const ASCII: &str = "
   \\ V  V / (_| \\__ \\ | | | | | |____| | (_) | |_| | (_| |  ____) | | | |  __/ | |
    \\_/\\_/ \\__,_|___/_| |_| |_|\\_____|_|\\___/ \\__,_|\\__,_| |_____/|_| |_|\\___|_|_|
 
-A single CLI to handle all of your wasmcloud tooling needs
+A single CLI to handle all of your wasmCloud tooling needs
 ";
 
 #[derive(Debug, Clone, StructOpt)]

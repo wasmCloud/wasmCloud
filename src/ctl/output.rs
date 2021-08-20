@@ -45,6 +45,14 @@ pub(crate) fn link_output(
     }
 }
 
+pub(crate) fn apply_manifest_output(results: Vec<String>, output_kind: &OutputKind) -> String {
+    format_output(
+        format!("\nManifest application results:\n{}", results.join("\n")),
+        json!({ "results": results }),
+        output_kind,
+    )
+}
+
 pub(crate) fn ctl_operation_output(
     accepted: bool,
     success: &str,
