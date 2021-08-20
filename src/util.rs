@@ -127,6 +127,12 @@ pub(crate) fn json_str_to_msgpack_bytes(payload: &str) -> Result<Vec<u8>> {
     Ok(payload)
 }
 
+/// transform msgpack bytes into a json string
+pub(crate) fn msgpack_to_json_val(msg: &[u8]) -> Result<serde_json::Value> {
+    let val: serde_json::Value = wasmbus_rpc::deserialize(msg)?;
+    Ok(val)
+}
+
 pub(crate) fn configure_table_style(table: &mut Table<'_>) {
     table.style = empty_table_style();
     table.separate_rows = false;
