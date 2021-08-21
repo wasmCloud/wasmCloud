@@ -347,19 +347,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "combine"
-version = "4.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a2d47c1b11006b87e492b53b313bb699ce60e16613c4dddaa91f8f7c220ab2fa"
-dependencies = [
- "bytes",
- "futures-util",
- "memchr",
- "pin-project-lite",
- "tokio",
-]
-
-[[package]]
 name = "concurrent-queue"
 version = "1.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -606,12 +593,6 @@ dependencies = [
  "thiserror",
  "tokio",
 ]
-
-[[package]]
-name = "dtoa"
-version = "0.4.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "56899898ce76aaf4a0f24d914c97ea6ed976d42fec6ad33fcbb0a1103e07b2b0"
 
 [[package]]
 name = "ed25519"
@@ -1971,26 +1952,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "redis"
-version = "0.21.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3bbc1838d8d0b423f325d6fac80c5f19109c7d16c8c37c584893dc17cf71c63d"
-dependencies = [
- "async-trait",
- "bytes",
- "combine",
- "dtoa",
- "futures-util",
- "itoa",
- "percent-encoding",
- "pin-project-lite",
- "sha1",
- "tokio",
- "tokio-util",
- "url",
-]
-
-[[package]]
 name = "redox_syscall"
 version = "0.2.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2269,12 +2230,6 @@ dependencies = [
  "fake-simd",
  "opaque-debug 0.2.3",
 ]
-
-[[package]]
-name = "sha1"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2579985fda508104f7587689507983eadd6a6e84dd35d6d115361f530916fa0d"
 
 [[package]]
 name = "sha2"
@@ -2830,13 +2785,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "wasmcloud-interface-keyvalue"
-version = "0.2.5"
+name = "wasmcloud-interface-httpclient"
+version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1a0635bbf8b5d6a372ffe5c8c9381d17f1be2a19b23ab040c6fa394da9020d99"
+checksum = "ebb11a8ea6cc05007a2bb5d54e97d9d54b9f65cefc59dace6353011d0068c1b6"
 dependencies = [
  "async-trait",
- "log",
+ "futures",
  "serde",
  "serde_bytes",
  "serde_json",
@@ -2860,7 +2815,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "wasmcloud-provider-kvredis"
+name = "wasmcloud-provider-httpclient"
 version = "0.2.0"
 dependencies = [
  "async-trait",
@@ -2871,8 +2826,7 @@ dependencies = [
  "futures",
  "log",
  "once_cell",
- "rand 0.8.4",
- "redis",
+ "reqwest",
  "rmp-serde",
  "serde",
  "serde_bytes",
@@ -2881,7 +2835,7 @@ dependencies = [
  "tokio",
  "toml",
  "wasmbus-rpc",
- "wasmcloud-interface-keyvalue",
+ "wasmcloud-interface-httpclient",
  "wasmcloud-test-util",
 ]
 
