@@ -1,12 +1,14 @@
 use crate::util::Result;
 use crate::util::{
     convert_rpc_error, extract_arg_value, format_output, json_str_to_msgpack_bytes,
-    nats_client_from_opts, Output, OutputKind,
+    msgpack_to_json_val, nats_client_from_opts, Output, OutputKind,
 };
 use serde_json::json;
+use std::path::PathBuf;
 use structopt::clap::AppSettings;
 use structopt::StructOpt;
 use wasmbus_rpc::{core::WasmCloudEntity, Message, RpcClient};
+use wasmcloud_test_util::testing::TestResults;
 
 /// fake key (not a real public key)  used to construct origin for invoking actors
 const WASH_ORIGIN_KEY: &str = "__WASH__";
@@ -28,9 +30,12 @@ impl CallCli {
 
 pub(crate) async fn handle_command(cmd: CallCommand) -> Result<String> {
     let output_kind = cmd.output.kind;
+    let is_test = cmd.test;
+    let save_output = cmd.save.clone();
+    let bin = cmd.bin;
     let res = handle_call(cmd).await;
     //TODO: Evaluate from_utf8_lossy and use of format here
-    Ok(call_output(res, &output_kind))
+    Ok(call_output(res, save_output, bin, is_test, &output_kind))
 }
 
 #[derive(Debug, Clone, StructOpt)]
@@ -93,6 +98,22 @@ pub(crate) struct CallCommand {
     #[structopt(flatten)]
     pub(crate) output: Output,
 
+    /// Optional json file to send as the operation payload
+    #[structopt(short, long)]
+    pub(crate) data: Option<PathBuf>,
+
+    /// Optional file for saving binary response
+    #[structopt(long)]
+    pub(crate) save: Option<PathBuf>,
+
+    /// When using json output, display binary as binary('b'), string('s'), or both('2')
+    #[structopt(long, default_value = "b")]
+    pub(crate) bin: char,
+
+    /// When invoking a test actor, interpret the response as TestResults
+    #[structopt(long)]
+    pub(crate) test: bool,
+
     /// Public key or OCI reference of actor
     #[structopt(name = "actor-id")]
     pub(crate) actor_id: String,
@@ -102,16 +123,21 @@ pub(crate) struct CallCommand {
     pub(crate) operation: String,
 
     /// Payload to send with operation (in the form of '{"field": "value"}' )
-    #[structopt(name = "data")]
-    pub(crate) data: Vec<String>,
+    #[structopt(name = "payload")]
+    pub(crate) payload: Vec<String>,
 }
 
 pub(crate) async fn handle_call(cmd: CallCommand) -> Result<Vec<u8>> {
     log::debug!(
         "calling actor with operation: {}, data: {}",
         &cmd.operation,
-        cmd.data.join("")
+        cmd.payload.join("")
     );
+    if !"bs2".contains(cmd.bin) {
+        return Err(Box::<dyn std::error::Error>::from(
+            "'bin' parameter must be 'b', 's', or '2'",
+        ));
+    }
 
     let origin = WasmCloudEntity::new_actor(WASH_ORIGIN_KEY)?;
     let target = WasmCloudEntity::new_actor(&cmd.actor_id)?;
@@ -129,12 +155,27 @@ pub(crate) async fn handle_call(cmd: CallCommand) -> Result<Vec<u8>> {
     )
     .await?;
 
+    if cmd.data.is_some() && !cmd.payload.is_empty() {
+        return Err(Box::<dyn std::error::Error>::from(
+            "you can use either -d/--data or the payload args, but not both.".to_string(),
+        ));
+    }
+    let payload = if let Some(fname) = cmd.data {
+        std::fs::read_to_string(fname)?
+    } else {
+        cmd.payload.join("")
+    };
+    log::debug!(
+        "calling actor with operation: {}, data: {}",
+        &cmd.operation,
+        &payload
+    );
+    let bytes = json_str_to_msgpack_bytes(&payload)?;
     let client = RpcClient::new_asynk(
         nc,
         &cmd.opts.ns_prefix,
         nkeys::KeyPair::from_seed(&extract_arg_value(&seed)?)?,
     );
-    let bytes = json_str_to_msgpack_bytes(cmd.data)?;
     client
         .send(
             origin,
@@ -149,14 +190,44 @@ pub(crate) async fn handle_call(cmd: CallCommand) -> Result<Vec<u8>> {
 }
 
 // Helper output functions, used to ensure consistent output between ctl & standalone commands
-pub(crate) fn call_output(response: Result<Vec<u8>>, output_kind: &OutputKind) -> String {
+pub(crate) fn call_output(
+    response: Result<Vec<u8>>,
+    save_output: Option<PathBuf>,
+    bin: char,
+    is_test: bool,
+    output_kind: &OutputKind,
+) -> String {
     match response {
         Ok(msg) => {
-            //TODO(issue #32): String::from_utf8_lossy should be decoder only if one is not available
-            let call_response = String::from_utf8_lossy(&msg);
+            if let Some(ref save_path) = save_output {
+                return match std::fs::write(save_path, msg) {
+                    Ok(_) => String::new(),
+                    Err(e) => format!(
+                        "Error saving results to {}: {}",
+                        &save_path.display(),
+                        e.to_string(),
+                    ),
+                };
+            }
+            if is_test {
+                // try to decode it as TestResults, otherwise dump as text
+                return match wasmbus_rpc::deserialize::<TestResults>(&msg) {
+                    Ok(tr) => {
+                        wasmcloud_test_util::cli::print_test_results(&tr);
+                        String::default()
+                    }
+                    Err(e) => {
+                        format!(
+                            "Error interpreting response as TestResults: {}. (raw): {}",
+                            e.to_string(),
+                            String::from_utf8_lossy(&msg)
+                        )
+                    }
+                };
+            }
             format_output(
-                format!("\nCall response (raw): {}", call_response),
-                json!({ "response": call_response }),
+                format!("\nCall response (raw): {}", String::from_utf8_lossy(&msg)),
+                msgpack_to_json_val(msg, bin),
                 output_kind,
             )
         }
@@ -172,11 +243,14 @@ pub(crate) fn call_output(response: Result<Vec<u8>>, output_kind: &OutputKind) -
 mod test {
     use super::{CallCli, CallCommand};
     use crate::util::Result;
+    use std::path::PathBuf;
     use structopt::StructOpt;
 
     const RPC_HOST: &str = "0.0.0.0";
     const RPC_PORT: &str = "4222";
     const NS_PREFIX: &str = "default";
+    const SAVE_FNAME: &str = "/dev/null";
+    const DATA_FNAME: &str = "/tmp/data.json";
 
     const ACTOR_ID: &str = "MDPDJEYIAK6MACO67PRFGOSSLODBISK4SCEYDY3HEOY4P5CVJN6UCWUK";
 
@@ -186,6 +260,13 @@ mod test {
             "call",
             "-o",
             "json",
+            "--test",
+            "--data",
+            DATA_FNAME,
+            "--save",
+            SAVE_FNAME,
+            "--bin",
+            "2",
             "--ns-prefix",
             NS_PREFIX,
             "--rpc-host",
@@ -202,18 +283,26 @@ mod test {
             CallCommand {
                 opts,
                 output,
+                data,
+                save,
+                bin,
+                test,
                 actor_id,
                 operation,
-                data,
+                payload,
             } => {
                 assert_eq!(opts.rpc_host, RPC_HOST);
                 assert_eq!(opts.rpc_port, RPC_PORT);
                 assert_eq!(opts.ns_prefix, NS_PREFIX);
                 assert_eq!(opts.timeout, 0);
                 assert_eq!(output.kind, crate::util::OutputKind::Json);
+                assert_eq!(data, Some(PathBuf::from(DATA_FNAME)));
+                assert_eq!(save, Some(PathBuf::from(SAVE_FNAME)));
+                assert_eq!(test, true);
+                assert_eq!(bin, '2');
                 assert_eq!(actor_id, ACTOR_ID);
                 assert_eq!(operation, "HandleOperation");
-                assert_eq!(data, vec!["{ \"hello\": \"world\"}".to_string()])
+                assert_eq!(payload, vec!["{ \"hello\": \"world\"}".to_string()])
             }
             #[allow(unreachable_patterns)]
             cmd => panic!("call constructed incorrect command: {:?}", cmd),
