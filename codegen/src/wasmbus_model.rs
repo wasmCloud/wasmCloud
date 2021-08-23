@@ -21,6 +21,9 @@ pub type I64 = i64;
 /// signed byte
 pub type I8 = i8;
 
+/// list of identifiers
+pub type IdentifierList = Vec<String>;
+
 /// unsigned 16-bit int
 pub type U16 = i16;
 
@@ -34,21 +37,30 @@ pub type U64 = i64;
 pub type U8 = i8;
 
 /// Rust codegen traits
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CodegenRust {
-    /// Instructs rust codegen to add `#[derive(Default)]`
-    /// If the codegenRust trait is not applied to a structure,
-    /// 'Default' is generated for that structure.
-    #[serde(rename = "deriveDefault")]
+    /// if true, disables deriving 'Default' trait
+    #[serde(rename = "noDeriveDefault")]
     #[serde(default)]
-    pub derive_default: bool,
+    pub no_derive_default: bool,
+    /// if true, disables deriving 'Eq' trait
+    #[serde(rename = "noDeriveEq")]
+    #[serde(default)]
+    pub no_derive_eq: bool,
+}
+
+/// indicates that a trait or class extends one or more bases
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Extends {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<IdentifierList>,
 }
 
 /// A non-empty string (minimum length 1)
 pub type NonEmptyString = String;
 
 /// Overrides for serializer & deserializer
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Serialization {
     /// (optional setting) Override field name when serializing and deserializing
     /// By default, (when `name` not specified) is the exact declared name without
@@ -61,16 +73,16 @@ pub struct Serialization {
 /// This trait doesn't have any functional impact on codegen. It is simply
 /// to document that the defined type is a synonym, and to silence
 /// the default validator that prints a notice for synonyms with no traits.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Synonym {}
 
 /// The unsignedInt trait indicates that one of the number types is unsigned
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct UnsignedInt {}
 
 /// a protocol defines the semantics
 /// of how a client and server communicate.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Wasmbus {
     /// indicates this service's operations are handled by an actor (default false)
     #[serde(rename = "actorReceive")]
@@ -89,5 +101,5 @@ pub struct Wasmbus {
 
 /// data sent via wasmbus
 /// This trait is required for all messages sent via wasmbus
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct WasmbusData {}

@@ -409,8 +409,8 @@ impl<'model> RustCodeGen<'model> {
                         SHAPE_SHORT | SHAPE_PRIMITIVESHORT => "i16",
                         SHAPE_INTEGER | SHAPE_PRIMITIVEINTEGER => "i32",
                         SHAPE_LONG | SHAPE_PRIMITIVELONG => "i64",
-                        SHAPE_FLOAT | SHAPE_PRIMITIVEFLOAT => "float32",
-                        SHAPE_DOUBLE | SHAPE_PRIMITIVEDOUBLE => "float64",
+                        SHAPE_FLOAT | SHAPE_PRIMITIVEFLOAT => "f32",
+                        SHAPE_DOUBLE | SHAPE_PRIMITIVEDOUBLE => "f64",
                         // if declared as members (of a struct, list, or map), we don't have trait data here to write
                         // as anything other than a blob. Instead, a type should be created for the Document that can have traits,
                         // and that type used for the member. This should probably be a lint rule.
@@ -584,17 +584,24 @@ impl<'model> RustCodeGen<'model> {
     ) -> Result<()> {
         let is_trait_struct = traits.contains_key(&prelude_shape_named(TRAIT_TRAIT).unwrap());
         self.apply_documentation_traits(&mut w, id, traits);
-        let derive_default =
-            if let Some(cg) = get_trait::<CodegenRust>(traits, codegen_rust_trait())? {
-                cg.derive_default
-            } else {
-                !is_trait_struct // default to true for all non-trait structures
-            };
-        w.write(b"#[derive(");
-        if derive_default {
-            w.write(b"Default, ")
+        let mut derive_list = vec!["Clone", "Debug", "PartialEq", "Serialize", "Deserialize"];
+        // derive(Default) is disabled for traits and enabled for all other structs
+        let mut derive_default = !is_trait_struct;
+        // derive(Eq) is enabled, unless specifically disabled in codegenRust
+        let mut derive_eq = true;
+        if let Some(cg) = get_trait::<CodegenRust>(traits, codegen_rust_trait())? {
+            derive_default = !cg.no_derive_default;
+            derive_eq = !cg.no_derive_eq;
         }
-        w.write(b"Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]\n");
+        if derive_default {
+            derive_list.push("Default");
+        }
+        if derive_eq {
+            derive_list.push("Eq");
+        }
+        derive_list.sort();
+        let derive_decl = format!("#[derive({})]\n", derive_list.join(","));
+        w.write(&derive_decl);
         w.write(b"pub struct ");
         self.write_ident(&mut w, id);
         w.write(b" {\n");
