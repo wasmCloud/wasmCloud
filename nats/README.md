@@ -1,6 +1,7 @@
 # Nats capability provider for wasmcloud:messaging
 
-The nats capability provider exposes publish and subscribe functionality to actors. To configure, use the following link settings:
+The nats capability provider exposes publish and subscribe functionality to actors.
+To configure, use the following link settings:
 
 - `SUBSCRIPTION` a comma-separated list of subscription topics. If a subscription is a queue subscription, follow the subscription with `|` and the queue group name. For example, the setting
     `SUBSCRIPTION=example.actor,example.task|work_queue`

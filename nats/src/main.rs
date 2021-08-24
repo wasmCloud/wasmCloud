@@ -122,10 +122,10 @@ impl NatsMessagingProvider {
                 ));
             }
         };
-        opts = opts.with_name("wasmcloud nats-messaging provider");
+        opts = opts.with_name("wasmCloud nats-messaging provider");
         let url = cfg.cluster_uris.get(0).unwrap();
         let conn = opts
-            .connect(&url)
+            .connect(url)
             .await
             .map_err(|e| RpcError::ProviderInit(format!("Nats connection to {}: {}", url, e)))?;
 

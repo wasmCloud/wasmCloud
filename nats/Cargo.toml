@@ -23,7 +23,7 @@ tokio = { version = "1", features = ["full"] }
 toml = "0.5"
 wascap = "0.6"
 wasmbus-rpc = "0.3"
-wasmcloud-interface-messaging = { path = "../../interfaces/messaging/rust" }
+wasmcloud-interface-messaging = "0.1"
 
 # test dependencies
 [dev-dependencies]
