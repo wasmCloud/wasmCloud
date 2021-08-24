@@ -13,5 +13,5 @@ all::
 	cargo build --tests --release
 
 test:
-	RUST_BACKTRACE=1 RUST_LOG=debug cargo test -- --nocapture
+	RUST_BACKTRACE=1 RUST_LOG=debug cargo test --release -- --nocapture
 

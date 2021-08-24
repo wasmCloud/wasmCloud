@@ -147,7 +147,7 @@ inventory:
 	$(WASH) ctl get inventory $(shell $(WASH) ctl get hosts -o json | jq -r ".hosts[0].id")
 
 clean::
-	rm -f build/
+	rm -rf build/
 
 ifeq ($(wildcard ./Cargo.toml),./Cargo.toml)
 build::
@@ -158,7 +158,7 @@ release::
 
 clean::
 	cargo clean
-	cross clean
+	cross clean || echo
 endif
 
 
