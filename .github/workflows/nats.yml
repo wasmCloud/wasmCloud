@@ -22,8 +22,10 @@ jobs:
     - name: Build
       run: cargo build --verbose
       working-directory: ${{env.working-directory}}
+    - name: Start nats container
+      run: docker run --rm -d -p 4222:4222 nats:2.3 
     - name: Run tests
-      run: cargo test --verbose
+      run: make test
       working-directory: ${{env.working-directory}}
     - name: Check fmt
       run: cargo fmt -- --check
