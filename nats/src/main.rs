@@ -57,14 +57,11 @@ impl ConnectionConfig {
             })?;
             serde_json::from_slice::<ConnectionConfig>(&bytes)
                 .map_err(|e| RpcError::InvalidParameter(format!("corrupt config_b64: {}", e)))?
+        } else if let Some(config) = values.get("config_json") {
+            serde_json::from_str::<ConnectionConfig>(config)
+                .map_err(|e| RpcError::InvalidParameter(format!("corrupt config_json: {}", e)))?
         } else {
-            if let Some(config) = values.get("config_json") {
-                serde_json::from_str::<ConnectionConfig>(config).map_err(|e| {
-                    RpcError::InvalidParameter(format!("corrupt config_json: {}", e))
-                })?
-            } else {
-                ConnectionConfig::default()
-            }
+            ConnectionConfig::default()
         };
         if let Some(sub) = values.get(ENV_NATS_SUBSCRIPTION) {
             config
