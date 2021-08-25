@@ -1,7 +1,6 @@
 //! Stream interface for async nats subscription
 //!
 
-pub use crate::events::ControlEvent;
 use crate::json_deserialize;
 use log::error;
 use nats::asynk::Subscription;

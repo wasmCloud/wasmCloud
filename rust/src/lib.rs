@@ -1,9 +1,8 @@
 pub mod broker;
 mod control;
-pub mod events;
 mod sub_stream;
 
-use crate::events::PublishedEvent;
+use cloudevents::event::Event;
 pub use control::*;
 use crossbeam_channel::{unbounded, Receiver};
 use futures::executor::block_on;
@@ -340,7 +339,7 @@ impl Client {
     }
 
     /// Returns the receiver end of a channel that subscribes to the lattice control event stream.
-    /// Any [`PublishedEvent`](struct@PublishedEvent)s that are published after this channel is created
+    /// Any [`Event`](struct@Event)s that are published after this channel is created
     /// will be added to the receiver channel's buffer, which can be observed or handled if needed.
     /// See the example for how you could use this receiver to handle events.
     ///
@@ -387,27 +386,24 @@ impl Client {
     ///   });
     /// };
     /// ```
-    pub async fn events_receiver(&self) -> Result<Receiver<PublishedEvent>> {
+    pub async fn events_receiver(&self) -> Result<Receiver<Event>> {
         let (sender, receiver) = unbounded();
         let sub = self
             .nc
             .subscribe(&broker::control_event(&self.nsprefix))
             .await?;
-        std::thread::spawn(|| async move {
-            loop {
-                if let Some(msg) = sub.next().await {
-                    //if let Some(msg) = block_on(&mut sub.next()) {
-                    match json_deserialize::<PublishedEvent>(&msg.data) {
-                        Ok(evt) => {
-                            trace!("received event: {:?}", evt);
-                            // If the channel is disconnected, stop sending events
-                            if sender.send(evt).is_err() {
-                                let _ = block_on(sub.unsubscribe());
-                                return;
-                            }
+        std::thread::spawn(move || loop {
+            if let Some(msg) = block_on(sub.next()) {
+                match json_deserialize::<Event>(&msg.data) {
+                    Ok(evt) => {
+                        trace!("received event: {:?}", evt);
+                        // If the channel is disconnected, stop sending events
+                        if sender.send(evt).is_err() {
+                            let _ = block_on(sub.unsubscribe());
+                            return;
                         }
-                        _ => error!("Object received on event stream was not a PublishedEvent"),
                     }
+                    _ => error!("Object received on event stream was not a CloudEvent"),
                 }
             }
         });
@@ -437,4 +433,28 @@ pub fn json_deserialize<'de, T: Deserialize<'de>>(
     buf: &'de [u8],
 ) -> ::std::result::Result<T, Box<dyn std::error::Error + Send + Sync>> {
     serde_json::from_slice(buf).map_err(|e| format!("JSON deserialization failure: {}", e).into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Note: This test is a means of manually watching the event stream as CloudEvents are received
+    /// It does not assert functionality, and so we've marked it as ignore to ensure it's not run by default
+    #[tokio::test]
+    #[ignore]
+    async fn test_events_receiver() {
+        let nc = nats::asynk::connect("0.0.0.0:4222").await.unwrap();
+        let client = Client::new(nc, None, std::time::Duration::from_millis(1000));
+        let receiver = client.events_receiver().await.unwrap();
+        std::thread::spawn(move || loop {
+            if let Ok(evt) = receiver.recv() {
+                println!("Event received: {:?}", evt);
+            } else {
+                println!("Channel closed");
+                break;
+            }
+        });
+        std::thread::park();
+    }
 }
