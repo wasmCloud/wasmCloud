@@ -146,13 +146,8 @@ impl NatsMessagingProvider {
             reply_to: nats_msg.reply,
             subject: nats_msg.subject,
         };
-        let tx = wasmbus_rpc::provider::ProviderTransport {
-            bridge: get_host_bridge(),
-            ld,
-        };
-        let ctx = Context::default();
-        let actor = MessageSubscriberSender::via(tx);
-        if let Err(e) = actor.handle_message(&ctx, &msg).await {
+        let actor = MessageSubscriberSender::for_actor(ld);
+        if let Err(e) = actor.handle_message(&Context::default(), &msg).await {
             error!(
                 "subscription sent to actor:{}, subject:{}, err: {}",
                 &ld.actor_id,
