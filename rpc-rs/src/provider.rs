@@ -549,6 +549,15 @@ pub struct ProviderTransport<'send> {
     pub ld: &'send LinkDefinition,
 }
 
+impl<'send> ProviderTransport<'send> {
+    /// constructs a ProviderTransport with the LinkDefinition and bridge.
+    /// If the bridge parameter is None, the current (static) bridge is used.
+    pub fn new(ld: &'send LinkDefinition, bridge: Option<&'send HostBridge>) -> Self {
+        let bridge = bridge.unwrap_or_else(|| crate::provider_main::get_host_bridge());
+        Self { bridge, ld }
+    }
+}
+
 #[async_trait]
 impl<'send> crate::Transport for ProviderTransport<'send> {
     async fn send(
