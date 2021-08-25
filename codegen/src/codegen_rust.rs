@@ -839,7 +839,7 @@ impl<'model> RustCodeGen<'model> {
         );
         self.write_comment(&mut w, CommentKind::Documentation, &doc);
         self.apply_documentation_traits(&mut w, service_id, service_traits);
-        w.write(b"#[async_trait]\npub trait ");
+        w.write(b"#[doc(hidden)]\n#[async_trait]\npub trait ");
         self.write_ident_with_suffix(&mut w, service_id, "Receiver")?;
         w.write(b" : MessageDispatch + ");
         self.write_ident(&mut w, service_id);
@@ -923,12 +923,20 @@ impl<'model> RustCodeGen<'model> {
 
               impl<T:Transport> {}Sender<T> {{
                   /// Constructs a {}Sender with the specified transport
-                   pub fn via(transport: T) -> Self {{
-                        Self{{ transport }}
-                   }}
-               }}
+                  pub fn via(transport: T) -> Self {{
+                      Self{{ transport }}
+                  }}
+              }}
+              #[cfg(not(target_arch="wasm32"))]
+              impl<'send> {}Sender<wasmbus_rpc::provider::ProviderTransport<'send>> {{
+                  /// Constructs a Sender using an actor's LinkDefinition,
+                  /// Uses the provider's HostBridge for rpc
+                  pub fn for_actor(ld: &'send wasmbus_rpc::core::LinkDefinition) -> Self {{
+                      Self{{ transport: wasmbus_rpc::provider::ProviderTransport::new(ld,None) }}
+                  }}
+              }}
             "#,
-            service_id, service_id, service_id, service_id,
+            service_id, service_id, service_id, service_id, service_id,
         ));
         w.write(&self.actor_sender_constructors(service_id, service_traits)?);
 
