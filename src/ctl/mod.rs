@@ -8,6 +8,7 @@ use std::{path::Path, time::Duration};
 use structopt::StructOpt;
 use wasmcloud_control_interface::{
     Client as CtlClient, CtlOperationAck, GetClaimsResponse, Host, HostInventory,
+    LinkDefinitionList,
 };
 mod manifest;
 mod output;
@@ -148,8 +149,53 @@ pub(crate) enum GetCommand {
     Claims(GetClaimsCommand),
 }
 
+#[derive(Debug, Clone, StructOpt)]
+pub(crate) enum LinkCommand {
+    /// Query established links
+    #[structopt(name = "query")]
+    Query(LinkQueryCommand),
+
+    /// Establish a link definition
+    #[structopt(name = "put")]
+    Put(LinkPutCommand),
+
+    /// Delete a link definition
+    #[structopt(name = "del")]
+    Del(LinkDelCommand),
+}
+
 #[derive(StructOpt, Debug, Clone)]
-pub(crate) struct LinkCommand {
+pub(crate) struct LinkQueryCommand {
+    #[structopt(flatten)]
+    opts: ConnectionOpts,
+
+    #[structopt(flatten)]
+    pub(crate) output: Output,
+}
+
+#[derive(StructOpt, Debug, Clone)]
+pub(crate) struct LinkDelCommand {
+    #[structopt(flatten)]
+    opts: ConnectionOpts,
+
+    #[structopt(flatten)]
+    pub(crate) output: Output,
+
+    /// Public key ID of actor
+    #[structopt(name = "actor-id")]
+    pub(crate) actor_id: String,
+
+    /// Capability contract ID between actor and provider
+    #[structopt(name = "contract-id")]
+    pub(crate) contract_id: String,
+
+    /// Link name, defaults to "default"
+    #[structopt(short = "l", long = "link-name")]
+    pub(crate) link_name: Option<String>,
+}
+
+#[derive(StructOpt, Debug, Clone)]
+pub(crate) struct LinkPutCommand {
     #[structopt(flatten)]
     opts: ConnectionOpts,
 
@@ -382,19 +428,48 @@ pub(crate) async fn handle_command(command: CtlCliCommand) -> Result<String> {
             let claims = get_claims(cmd).await?;
             get_claims_output(claims, &output.kind)
         }
-        Link(cmd) => {
+        Link(LinkCommand::Del(cmd)) => {
+            let link_name = &cmd
+                .link_name
+                .clone()
+                .unwrap_or_else(|| "default".to_string());
             sp = update_spinner_message(
                 sp,
                 format!(
-                    " Advertising link between {} and {} ... ",
+                    "Deleting link for {} on {} ({}) ... ",
+                    cmd.actor_id, cmd.contract_id, link_name,
+                ),
+                &cmd.output,
+            );
+            let failure = link_del(cmd.clone())
+                .await
+                .map_or_else(|e| Some(format!("{}", e)), |_| None);
+            link_del_output(
+                &cmd.actor_id,
+                &cmd.contract_id,
+                link_name,
+                failure,
+                &cmd.output.kind,
+            )
+        }
+        Link(LinkCommand::Put(cmd)) => {
+            sp = update_spinner_message(
+                sp,
+                format!(
+                    "Defining link between {} and {} ... ",
                     cmd.actor_id, cmd.provider_id
                 ),
                 &cmd.output,
             );
-            let failure = advertise_link(cmd.clone())
+            let failure = link_put(cmd.clone())
                 .await
                 .map_or_else(|e| Some(format!("{}", e)), |_| None);
-            link_output(&cmd.actor_id, &cmd.provider_id, failure, &cmd.output.kind)
+            link_put_output(&cmd.actor_id, &cmd.provider_id, failure, &cmd.output.kind)
+        }
+        Link(LinkCommand::Query(cmd)) => {
+            sp = update_spinner_message(sp, "Querying Links ... ".to_string(), &cmd.output);
+            let result = link_query(cmd.clone()).await?;
+            link_query_output(result, &cmd.output.kind)
         }
         Start(StartCommand::Actor(cmd)) => {
             let output = cmd.output;
@@ -500,7 +575,19 @@ pub(crate) async fn get_claims(cmd: GetClaimsCommand) -> Result<GetClaimsRespons
     client.get_claims().await.map_err(convert_error)
 }
 
-pub(crate) async fn advertise_link(cmd: LinkCommand) -> Result<CtlOperationAck> {
+pub(crate) async fn link_del(cmd: LinkDelCommand) -> Result<CtlOperationAck> {
+    let client = ctl_client_from_opts(cmd.opts).await?;
+    client
+        .remove_link(
+            &cmd.actor_id,
+            &cmd.contract_id,
+            &cmd.link_name.unwrap_or_else(|| "default".to_string()),
+        )
+        .await
+        .map_err(convert_error)
+}
+
+pub(crate) async fn link_put(cmd: LinkPutCommand) -> Result<CtlOperationAck> {
     let client = ctl_client_from_opts(cmd.opts).await?;
     client
         .advertise_link(
@@ -512,6 +599,11 @@ pub(crate) async fn advertise_link(cmd: LinkCommand) -> Result<CtlOperationAck> 
         )
         .await
         .map_err(convert_error)
+}
+
+pub(crate) async fn link_query(cmd: LinkQueryCommand) -> Result<LinkDefinitionList> {
+    let client = ctl_client_from_opts(cmd.opts).await?;
+    client.query_links().await.map_err(convert_error)
 }
 
 pub(crate) async fn start_actor(cmd: StartActorCommand) -> Result<CtlOperationAck> {
@@ -1005,6 +1097,7 @@ mod test {
         let link_all = CtlCli::from_iter_safe(&[
             "ctl",
             "link",
+            "put",
             "-o",
             "json",
             "--ns-prefix",
@@ -1023,7 +1116,7 @@ mod test {
             "THING=foo",
         ])?;
         match link_all.command {
-            CtlCliCommand::Link(LinkCommand {
+            CtlCliCommand::Link(LinkCommand::Put(LinkPutCommand {
                 opts,
                 output,
                 actor_id,
@@ -1031,7 +1124,7 @@ mod test {
                 contract_id,
                 link_name,
                 values,
-            }) => {
+            })) => {
                 assert_eq!(opts.ctl_host, CTL_HOST);
                 assert_eq!(opts.ctl_port, CTL_PORT);
                 assert_eq!(opts.ns_prefix, NS_PREFIX);
@@ -1043,7 +1136,7 @@ mod test {
                 assert_eq!(link_name.unwrap(), "default".to_string());
                 assert_eq!(values, vec!["THING=foo".to_string()]);
             }
-            cmd => panic!("ctl get claims constructed incorrect command {:?}", cmd),
+            cmd => panic!("ctl link put constructed incorrect command {:?}", cmd),
         }
         let update_all = CtlCli::from_iter_safe(&[
             "ctl",

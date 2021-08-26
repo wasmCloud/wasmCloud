@@ -10,19 +10,46 @@ pub(crate) fn get_hosts_output(hosts: Vec<Host>, output_kind: &OutputKind) -> St
         OutputKind::Json => format!("{}", json!({ "hosts": hosts })),
     }
 }
+
 pub(crate) fn get_host_inventory_output(inv: HostInventory, output_kind: &OutputKind) -> String {
     match *output_kind {
         OutputKind::Text => host_inventory_table(inv),
         OutputKind::Json => format!("{}", json!({ "inventory": inv })),
     }
 }
+
 pub(crate) fn get_claims_output(claims: GetClaimsResponse, output_kind: &OutputKind) -> String {
     match *output_kind {
         OutputKind::Text => claims_table(claims),
         OutputKind::Json => format!("{}", json!({ "claims": claims })),
     }
 }
-pub(crate) fn link_output(
+
+pub(crate) fn link_del_output(
+    actor_id: &str,
+    contract_id: &str,
+    link_name: &str,
+    failure: Option<String>,
+    output_kind: &OutputKind,
+) -> String {
+    match failure {
+        None => format_output(
+            format!(
+                "\nDeleted link for {} on {} ({}) successfully",
+                actor_id, contract_id, link_name
+            ),
+            json!({"actor_id": actor_id, "contract_id": contract_id, "link_name": link_name, "result": "published"}),
+            output_kind,
+        ),
+        Some(f) => format_output(
+            format!("\nError deleting link: {}", f),
+            json!({ "error": f }),
+            output_kind,
+        ),
+    }
+}
+
+pub(crate) fn link_put_output(
     actor_id: &str,
     provider_id: &str,
     failure: Option<String>,
@@ -31,7 +58,7 @@ pub(crate) fn link_output(
     match failure {
         None => format_output(
             format!(
-                "\nAdvertised link ({}) <-> ({}) successfully",
+                "\nPublished link ({}) <-> ({}) successfully",
                 actor_id, provider_id
             ),
             json!({"actor_id": actor_id, "provider_id": provider_id, "result": "published"}),
@@ -42,6 +69,13 @@ pub(crate) fn link_output(
             json!({ "error": f }),
             output_kind,
         ),
+    }
+}
+
+pub(crate) fn link_query_output(list: LinkDefinitionList, output_kind: &OutputKind) -> String {
+    match *output_kind {
+        OutputKind::Text => links_table(list),
+        OutputKind::Json => format!("{}", json!({ "links": list.links })),
     }
 }
 
@@ -74,7 +108,31 @@ pub(crate) fn ctl_operation_output(
     }
 }
 
-/// Helper function to print a Host list to stdout as a table
+/// Helper function to transform a LinkDefinitionList into a table string for printing
+pub(crate) fn links_table(list: LinkDefinitionList) -> String {
+    let mut table = Table::new();
+    crate::util::configure_table_style(&mut table);
+
+    table.add_row(Row::new(vec![
+        TableCell::new_with_alignment("Actor ID", 1, Alignment::Left),
+        TableCell::new_with_alignment("Provider ID", 1, Alignment::Left),
+        TableCell::new_with_alignment("Contract ID", 1, Alignment::Left),
+        TableCell::new_with_alignment("Link Name", 1, Alignment::Left),
+    ]));
+
+    list.links.iter().for_each(|l| {
+        table.add_row(Row::new(vec![
+            TableCell::new_with_alignment(l.actor_id.clone(), 1, Alignment::Left),
+            TableCell::new_with_alignment(l.provider_id.clone(), 1, Alignment::Left),
+            TableCell::new_with_alignment(l.contract_id.clone(), 1, Alignment::Left),
+            TableCell::new_with_alignment(l.link_name.clone(), 1, Alignment::Left),
+        ]))
+    });
+
+    table.render()
+}
+
+/// Helper function to transform a Host list into a table string for printing
 pub(crate) fn hosts_table(hosts: Vec<Host>) -> String {
     let mut table = Table::new();
     crate::util::configure_table_style(&mut table);
@@ -93,7 +151,7 @@ pub(crate) fn hosts_table(hosts: Vec<Host>) -> String {
     table.render()
 }
 
-/// Helper function to print a HostInventory to stdout as a table
+/// Helper function to transform a HostInventory into a table string for printing
 pub(crate) fn host_inventory_table(inv: HostInventory) -> String {
     let mut table = Table::new();
     crate::util::configure_table_style(&mut table);
@@ -182,7 +240,7 @@ pub(crate) fn host_inventory_table(inv: HostInventory) -> String {
     table.render()
 }
 
-/// Helper function to print a ClaimsList to stdout as a table
+/// Helper function to transform a ClaimsList into a table string for printing
 pub(crate) fn claims_table(list: GetClaimsResponse) -> String {
     let mut table = Table::new();
     crate::util::configure_table_style(&mut table);
