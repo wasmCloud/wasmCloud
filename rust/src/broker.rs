@@ -24,6 +24,10 @@ pub fn advertise_link(ns_prefix: &Option<String>) -> String {
     format!("{}.linkdefs.put", prefix(ns_prefix))
 }
 
+pub fn remove_link(ns_prefix: &Option<String>) -> String {
+    format!("{}.linkdefs.del", prefix(ns_prefix))
+}
+
 pub mod commands {
     use super::prefix;
 

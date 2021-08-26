@@ -185,30 +185,33 @@ impl Client {
         }
     }
 
-    //  Not currently supported
-    //     /// Publishes a request to remove a link definition to the lattice. All hosts in the lattice will
-    //     /// receive this message and, if the appropriate capability provider is in that host, it will have
-    //     /// the "remove actor" operation sent to it. The link definition will also be removed from the lattice
-    //     /// cache. No confirmation or acknowledgement is available for this operation, you will need to monitor events
-    //     /// and/or query the lattice to confirm that the link has been removed.
-    //     pub async fn remove_link(
-    //         &self,
-    //         actor_id: &str,
-    //         contract_id: &str,
-    //         link_name: &str,
-    //     ) -> Result<()> {
-    //         let subject = broker::remove_link(&self.nsprefix);
-    //         let ld = LinkDefinition {
-    //             actor_id: actor_id.to_string(),
-    //             contract_id: contract_id.to_string(),
-    //             link_name: link_name.to_string(),
-    //             ..Default::default()
-    //         };
-    //         let bytes = crate::json_serialize(&ld)?;
-    //         self.nc.publish(&subject, &bytes).await?;
-
-    //         Ok(())
-    //     }
+    /// Publishes a request to remove a link definition to the lattice.
+    pub async fn remove_link(
+        &self,
+        actor_id: &str,
+        contract_id: &str,
+        link_name: &str,
+    ) -> Result<CtlOperationAck> {
+        let subject = broker::remove_link(&self.nsprefix);
+        let ld = LinkDefinition {
+            actor_id: actor_id.to_string(),
+            contract_id: contract_id.to_string(),
+            link_name: link_name.to_string(),
+            ..Default::default()
+        };
+        let bytes = crate::json_serialize(&ld)?;
+        match self
+            .nc
+            .request_timeout(&subject, &bytes, self.timeout)
+            .await
+        {
+            Ok(msg) => {
+                let ack: CtlOperationAck = json_deserialize(&msg.data)?;
+                Ok(ack)
+            }
+            Err(e) => Err(format!("Did not receive remove link acknowledgement: {}", e).into()),
+        }
+    }
 
     /// Issue a command to a host instructing that it replace an existing actor (indicated by its
     /// public key) with a new actor indicated by an OCI image reference. The host will acknowledge
