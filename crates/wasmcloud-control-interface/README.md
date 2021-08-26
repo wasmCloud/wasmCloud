@@ -1,7 +1,7 @@
 # MOVED
 
 This crate has moved to a new location
-https://github.com/wasmCloud/control-interface
+[https://github.com/wasmCloud/control-interface](https://github.com/wasmCloud/control-interface)
 for otp development, in preparation for the wasmcloud 0.50 release.
 
 The 0.18-compatible crate is available on 
