@@ -45,6 +45,7 @@ wascap = "0.6.0"
 serde_bytes = "0.11.5"
 wasmcloud-actor-keyvalue = "0.2.0"
 wasmcloud-control-interface = "0.3.1"
+wasmcloud-actor-extras = "0.1.3"
 
 wasm3-provider = { version = "0.0.2", optional = true}
 wasmtime-provider = { version = "0.0.3" , optional = true}

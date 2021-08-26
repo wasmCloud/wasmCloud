@@ -3425,7 +3425,7 @@ dependencies = [
  "uuid",
  "wapc",
  "wascap",
- "wasmcloud-actor-extras",
+ "wasmcloud-actor-extras 0.1.2",
  "wasmcloud-actor-http-server",
  "wasmcloud-control-interface",
  "wasmcloud-host",
@@ -3463,6 +3463,16 @@ name = "wasmcloud-actor-extras"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "361fa326d332f86fef8c0605e0346dfe76728cf470ec2a3e1a5515ea97d29391"
+dependencies = [
+ "rmp-serde",
+ "serde",
+ "serde_bytes",
+ "serde_derive",
+]
+
+[[package]]
+name = "wasmcloud-actor-extras"
+version = "0.1.3"
 dependencies = [
  "rmp-serde",
  "serde",
@@ -3561,6 +3571,7 @@ dependencies = [
  "wapc",
  "wascap",
  "wasm3-provider",
+ "wasmcloud-actor-extras 0.1.3",
  "wasmcloud-actor-keyvalue",
  "wasmcloud-control-interface",
  "wasmcloud-nats-kvcache",

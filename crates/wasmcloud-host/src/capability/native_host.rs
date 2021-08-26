@@ -328,10 +328,10 @@ mod test {
     use crate::capability::native::NativeCapability;
     use crate::capability::native_host::NativeCapabilityHost;
     use crate::dispatch::{Invocation, WasmCloudEntity};
-    use crate::generated::extras::{GeneratorRequest, GeneratorResult};
     use crate::SYSTEM_ACTOR;
     use actix::prelude::*;
     use wascap::prelude::KeyPair;
+    use wasmcloud_actor_extras::{GeneratorRequest, GeneratorResult};
 
     #[actix_rt::test]
     async fn test_extras_actor() {
