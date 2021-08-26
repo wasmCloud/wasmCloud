@@ -213,6 +213,19 @@ impl Client {
         }
     }
 
+    /// Publishes a request to retrieve all current link definitions.
+    pub async fn query_links(&self) -> Result<LinkDefinitionList> {
+        let subject = broker::queries::link_definitions(&self.nsprefix);
+        match self
+            .nc
+            .request_timeout(&subject, vec![], self.timeout)
+            .await
+        {
+            Ok(msg) => json_deserialize(&msg.data),
+            Err(e) => Err(format!("Did not receive a response to links query: {}", e).into()),
+        }
+    }
+
     /// Issue a command to a host instructing that it replace an existing actor (indicated by its
     /// public key) with a new actor indicated by an OCI image reference. The host will acknowledge
     /// this request as soon as it verifies that the target actor is running. This acknowledgement
