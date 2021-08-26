@@ -33,10 +33,6 @@ default = ["wasm3"]
 wasmtime = ["wasmcloud-host/wasmtime"]
 wasm3 = ["wasmcloud-host/wasm3"]
 
-#[[test]]
-#name = "integration"
-#path = "tests/lib.rs"
-
 [badges]
 maintenance = { status = "actively-developed" }
 
