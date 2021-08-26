@@ -33,10 +33,6 @@ default = ["wasm3"]
 wasmtime = ["wasmcloud-host/wasmtime"]
 wasm3 = ["wasmcloud-host/wasm3"]
 
-[[test]]
-name = "integration"
-path = "tests/lib.rs"
-
 [badges]
 maintenance = { status = "actively-developed" }
 
@@ -67,13 +63,12 @@ uuid = { version = "0.8", features = ["serde", "v4"] }
 wascap = "0.6.0"
 wasmcloud-actor-extras = "0.1.1"
 wasmcloud-actor-http-server = "0.1.1"
-wasmcloud-control-interface = { path = "crates/wasmcloud-control-interface", version = "0.4.0" }
+wasmcloud-control-interface = "0.3.1"
 
 [workspace]
 members = [
     "crates/wasmcloud-provider-core",
     "crates/wasmcloud-host",
-    "crates/wasmcloud-control-interface",
     "crates/auth-nats-account",
     "crates/provider-archive",
     "samples/bench-actor",
