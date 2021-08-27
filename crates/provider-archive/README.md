@@ -11,7 +11,7 @@ In the absence of useful portable capability providers, we need the ability to s
 To give us the ability to store, retrieve, schedule, and _sign_ capability providers, we need a **Provider Archive** (PAR). This is a simple TAR file that contains a signed JWT, as well as a binary file for each of the supported OS/CPU combinations.
 
 ## Provider Archive File Format
-Each provider archive file contains a root `claims.jwt` file that holds a signed set of claims (see appendix). Also in the root directory of the archive are binary files containing the bytes of the native capability provider plugin with a filename of the format `[arch]-[os].bin`.
+Each provider archive file contains a root `claims.jwt` file that holds a signed set of claims (see appendix). Also in the root directory of the archive are binary files containing the bytes of the native capability provider executable with a filename of the format `[arch]-[os].bin`.
 
 The following is an example of the contents of a provider archive file:
 

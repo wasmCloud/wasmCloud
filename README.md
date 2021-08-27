@@ -1,16 +1,6 @@
-![Latest Release](https://img.shields.io/github/v/release/wasmcloud/wasmcloud?include_prereleases&sort=semver)
-[![Gitpod ready-to-code](https://img.shields.io/badge/Gitpod-ready--to--code-blue?logo=gitpod)](https://gitpod.io/#https://github.com/wasmcloud/wasmcloud)
-![Rust Build](https://img.shields.io/github/workflow/status/wasmcloud/wasmcloud/Rust/main)
-![Contributors](https://img.shields.io/github/contributors/wasmcloud/wasmcloud)
-![Good first issues](https://img.shields.io/github/issues/wasmcloud/wasmcloud/good%20first%20issue?label=good%20first%20issues)
-[![Documentation](https://img.shields.io/badge/Docs-Documentation-blue)](https://wasmcloud.dev)
-![Rustdocs](https://docs.rs/wasmcloud-host/badge.svg)
-
 # wasmCloud
 
 wasmCloud lets you focus on shipping _features_. Build secure, portable, re-usable components called **_actors_** and get rid of the headaches that come from being smothered by boilerplate, dependency hell, tight coupling, and making design decisions mandated by your infrastructure.
-
-[![Open in Gitpod](https://gitpod.io/button/open-in-gitpod.svg)](https://gitpod.io/#https://github.com/wasmcloud/wasmcloud)
 
 ## Distributed computing, _simplified_
 
@@ -20,9 +10,17 @@ If you're new to the wasmCloud ecosystem, a great place to start is the [getting
 
 You can also take a look at a wide range of [examples](https://github.com/wasmCloud/examples) in our Github repository, or look through the [reference applications](https://wasmcloud.dev/reference/refapps/) we've created as technology demonstrations to help illustrate a new way of designing, composing, and building applications.
 
-## Rust Runtime
+## Elixir/OTP Runtime 
 
-The wasmCloud host runtime is available both as a released binary and as a [Rust crate](https://crates.io/crates/wasmcloud-host) that you can incorporate in your own applications to create bespoke, fit-for-purpose hosts.
+The main cloud native wasmCloud host runtime is the [Elixir/OTP](https://github.com/wasmCloud/wasmcloud-otp) runtime.
+
+## JavaScript Runtime
+
+For running a wasmCloud host in a browser or embedding in a JavaScript V8 host, use the [JavaScript Runtime](https://github.com/wasmCloud/wasmcloud-js).
+
+## Rust Runtime - ⚠️ DEPRECATED
+
+The pure-Rust wasmCloud host runtime has been deprecated in favor of the new Elixir/OTP runtime.
 
 ## Contributing
 
