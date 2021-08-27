@@ -15,3 +15,7 @@ Every PR must be reviewed by at least one Core Maintainer of the project. Once a
 may be merged. While it is fine for non-maintainers to contribute their own code reviews, those
 reviews do not satisfy the above requirement.
 
+## Signoffs
+
+All code in this and every other repository must satisfy the Developer Certificate of Origin (DCO) signoff rules. To achieve this, just use the `-s` flag in your git commit. This is a requirement of the wasmCloud project being a part of the Cloud Native Computing Foundation.
+
