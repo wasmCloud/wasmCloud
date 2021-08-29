@@ -3,7 +3,6 @@
 //! This crate provides code generation and runtime support for wasmcloud rpc messages
 //! used by [wasmcloud](https://wasmcloud.dev) actors and capability providers.
 //!
-//#![feature(toowned_clone_into)]
 
 mod timestamp;
 pub use timestamp::Timestamp;
