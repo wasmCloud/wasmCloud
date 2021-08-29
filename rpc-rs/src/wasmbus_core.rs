@@ -140,6 +140,7 @@ pub trait Actor {
 
 /// ActorReceiver receives messages defined in the Actor service trait
 /// Actor service
+#[doc(hidden)]
 #[async_trait]
 pub trait ActorReceiver: MessageDispatch + Actor {
     async fn dispatch(&self, ctx: &Context, message: &Message<'_>) -> RpcResult<Message<'_>> {
@@ -174,6 +175,16 @@ impl<T: Transport> ActorSender<T> {
     /// Constructs a ActorSender with the specified transport
     pub fn via(transport: T) -> Self {
         Self { transport }
+    }
+}
+#[cfg(not(target_arch = "wasm32"))]
+impl<'send> ActorSender<crate::provider::ProviderTransport<'send>> {
+    /// Constructs a Sender using an actor's LinkDefinition,
+    /// Uses the provider's HostBridge for rpc
+    pub fn for_actor(ld: &'send crate::core::LinkDefinition) -> Self {
+        Self {
+            transport: crate::provider::ProviderTransport::new(ld, None),
+        }
     }
 }
 #[async_trait]
