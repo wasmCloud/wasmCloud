@@ -113,7 +113,16 @@ impl<'gen> Renderer<'gen> {
         Ok(())
     }
 
-    /// Render a template
+    /// render a template without registering it
+    pub fn render_template<T>(&self, template: &str, data: &T) -> Result<String, crate::Error>
+    where
+        T: Serialize,
+    {
+        let rendered = self.hb.render_template(template, data)?;
+        Ok(rendered)
+    }
+
+    /// Render a named template
     pub fn render<T, W>(
         &self,
         template_name: &str,

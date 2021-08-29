@@ -188,7 +188,13 @@ impl<'model> Generator {
                         Error::Io(format!("creating file {}: {}", &out_path.display(), e))
                     })?;
                     renderer.render(hbs, &params, &mut out)?;
-                    out.flush()?;
+                    out.flush().map_err(|e| {
+                        crate::Error::Io(format!(
+                            "saving output file {}:{}",
+                            &out_path.display(),
+                            e
+                        ))
+                    })?;
                 } else if let Some(model) = model {
                     let bytes = cgen.generate_file(model, file_config, &params)?;
                     std::fs::write(&out_path, &bytes).map_err(|e| {
@@ -467,7 +473,7 @@ pub fn find_files(dir: &Path, extension: &str) -> Result<Vec<PathBuf>> {
         for entry in std::fs::read_dir(dir)
             .map_err(|e| Error::Io(format!("reading directory {}: {}", dir.display(), e)))?
         {
-            let entry = entry?;
+            let entry = entry.map_err(|e| crate::Error::Io(format!("scanning folder: {}", e)))?;
             let path = entry.path();
             if path.is_dir() {
                 results.append(&mut find_files(&path, extension)?);

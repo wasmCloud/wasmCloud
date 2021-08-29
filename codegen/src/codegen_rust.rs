@@ -38,46 +38,6 @@ use std::{collections::HashMap, path::Path, str::FromStr, string::ToString};
 
 const WASMBUS_RPC_CRATE: &str = "wasmbus_rpc";
 
-/// Default templates
-pub const RUST_TEMPLATES: &[(&str, &str)] = &[
-    (
-        "rust.actor.manifest.yaml",
-        include_str!("../templates/rust/rust.actor.manifest.yaml.hbs"),
-    ),
-    (
-        "rust.actor.rs",
-        include_str!("../templates/rust/rust.actor.rs.hbs"),
-    ),
-    (
-        "rust.Cargo.toml",
-        include_str!("../templates/rust/rust.Cargo.toml.hbs"),
-    ),
-    (
-        "rust.cargo_config.toml",
-        include_str!("../templates/rust/rust.cargo_config.toml.hbs"),
-    ),
-    (
-        "rust.gitignore",
-        include_str!("../templates/rust/rust.gitignore.hbs"),
-    ),
-    (
-        "rust.build.rs",
-        include_str!("../templates/rust/rust.build.rs.hbs"),
-    ),
-    (
-        "hello.smithy",
-        include_str!("../templates/hello.smithy.hbs"),
-    ),
-    (
-        "rust.lib.rs",
-        include_str!("../templates/rust/rust.lib.rs.hbs"),
-    ),
-    (
-        "rust.Makefile",
-        include_str!("../templates/rust/rust.Makefile.hbs"),
-    ),
-];
-
 const DEFAULT_MAP_TYPE: &str = "std::collections::HashMap";
 const DEFAULT_LIST_TYPE: &str = "Vec";
 const DEFAULT_SET_TYPE: &str = "std::collections::BTreeSet";
@@ -138,11 +98,8 @@ impl<'model> CodeGen for RustCodeGen<'model> {
         model: Option<&Model>,
         _lc: &LanguageConfig,
         _output_dir: &Path,
-        renderer: &mut Renderer,
+        _renderer: &mut Renderer,
     ) -> std::result::Result<(), Error> {
-        for t in RUST_TEMPLATES.iter() {
-            renderer.add_template(*t)?;
-        }
         self.namespace = None;
         self.import_core = WASMBUS_RPC_CRATE.to_string();
 
@@ -599,7 +556,7 @@ impl<'model> RustCodeGen<'model> {
         if derive_eq {
             derive_list.push("Eq");
         }
-        derive_list.sort();
+        derive_list.sort_unstable();
         let derive_decl = format!("#[derive({})]\n", derive_list.join(","));
         w.write(&derive_decl);
         w.write(b"pub struct ");
@@ -928,15 +885,22 @@ impl<'model> RustCodeGen<'model> {
                   }}
               }}
               #[cfg(not(target_arch="wasm32"))]
-              impl<'send> {}Sender<wasmbus_rpc::provider::ProviderTransport<'send>> {{
+              impl<'send> {}Sender<{}::provider::ProviderTransport<'send>> {{
                   /// Constructs a Sender using an actor's LinkDefinition,
                   /// Uses the provider's HostBridge for rpc
-                  pub fn for_actor(ld: &'send wasmbus_rpc::core::LinkDefinition) -> Self {{
-                      Self{{ transport: wasmbus_rpc::provider::ProviderTransport::new(ld,None) }}
+                  pub fn for_actor(ld: &'send {}::core::LinkDefinition) -> Self {{
+                      Self{{ transport: {}::provider::ProviderTransport::new(ld,None) }}
                   }}
               }}
             "#,
-            service_id, service_id, service_id, service_id, service_id,
+            service_id,
+            service_id,
+            service_id,
+            service_id,
+            service_id,
+            &self.import_core,
+            &self.import_core,
+            &self.import_core,
         ));
         w.write(&self.actor_sender_constructors(service_id, service_traits)?);
 
@@ -1021,7 +985,7 @@ impl<'model> RustCodeGen<'model> {
 
                     /// Constructs a client for sending to a {} provider
                     /// implementing the '{}' capability contract, with the specified link name
-                    pub fn new_with_link(link_name: &str) -> wasmbus_rpc::RpcResult<Self> {{
+                    pub fn new_with_link(link_name: &str) -> {}::RpcResult<Self> {{
                         let transport =  {}::actor::prelude::WasmHost::to_provider("{}", link_name)?;
                         Ok(Self {{ transport }})
                     }}
@@ -1035,6 +999,7 @@ impl<'model> RustCodeGen<'model> {
                 contract,
                 service_id,
                 contract,
+                &self.import_core,
                 &self.import_core,
                 contract,
             )

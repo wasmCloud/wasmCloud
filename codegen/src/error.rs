@@ -64,11 +64,13 @@ pub enum Error {
     UnsupportedTimestamp,
 }
 
+/*
 impl From<std::io::Error> for Error {
     fn from(e: std::io::Error) -> Error {
         Error::Io(e.to_string())
     }
 }
+ */
 
 impl From<handlebars::TemplateError> for Error {
     fn from(e: handlebars::TemplateError) -> Error {

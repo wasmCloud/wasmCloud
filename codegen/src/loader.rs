@@ -170,7 +170,13 @@ fn urls_to_cached_files(urls: Vec<String>) -> Result<Vec<PathBuf>> {
         } else {
             // no cache file, download to temp dir
             let temp_path = tmpdir.path().join(&rel_path);
-            std::fs::create_dir_all(temp_path.parent().unwrap())?;
+            std::fs::create_dir_all(temp_path.parent().unwrap()).map_err(|e| {
+                crate::Error::Io(format!(
+                    "creating folder {}: {}",
+                    &temp_path.parent().unwrap().display(),
+                    e,
+                ))
+            })?;
             let dl = downloader::Download::new(url).file_name(&temp_path);
             to_download.push(dl);
         }
@@ -206,7 +212,15 @@ fn urls_to_cached_files(urls: Vec<String>) -> Result<Vec<PathBuf>> {
                                 Error::Other(format!("internal download error {}", e))
                             })?;
                             let cache_file = weld_cache.join(rel_path);
-                            std::fs::create_dir_all(&cache_file.parent().unwrap())?;
+                            std::fs::create_dir_all(&cache_file.parent().unwrap()).map_err(
+                                |e| {
+                                    Error::Io(format!(
+                                        "creating folder {}: {}",
+                                        &cache_file.parent().unwrap().display(),
+                                        e
+                                    ))
+                                },
+                            )?;
                             std::fs::copy(&downloaded_file, &cache_file).map_err(|e| {
                                 Error::Other(format!(
                                     "writing cache file {}: {}",

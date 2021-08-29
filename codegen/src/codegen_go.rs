@@ -38,9 +38,6 @@ use std::{collections::HashMap, path::Path, str::FromStr, string::ToString};
 
 const WASMBUS_RPC_CRATE: &str = "wasmbus_rpc";
 
-/// Default templates
-pub const GO_TEMPLATES: &[(&str, &str)] = &[];
-
 /// declarations for sorting. First sort key is the type (simple, then map, then struct).
 #[derive(Eq, Ord, PartialOrd, PartialEq)]
 struct Declaration(u8, BytesMut);
@@ -90,11 +87,8 @@ impl<'model> CodeGen for GoCodeGen<'model> {
         model: Option<&Model>,
         _lc: &LanguageConfig,
         _output_dir: &Path,
-        renderer: &mut Renderer,
+        _renderer: &mut Renderer,
     ) -> std::result::Result<(), Error> {
-        for t in GO_TEMPLATES.iter() {
-            renderer.add_template(*t)?;
-        }
         self.namespace = None;
         self.import_core = WASMBUS_RPC_CRATE.to_string();
 

@@ -9,7 +9,7 @@ pub mod docgen;
 pub(crate) mod gen;
 mod loader;
 pub(crate) mod model;
-pub(crate) mod render;
+pub mod render;
 pub mod writer;
 pub use gen::{templates_from_dir, Generator};
 pub(crate) use loader::sources_to_paths;
