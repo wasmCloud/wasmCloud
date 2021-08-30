@@ -830,7 +830,7 @@ fn update_spinner_message(
         sp.message(msg);
         Some(sp)
     } else if matches!(output.kind, OutputKind::Text) {
-        Some(Spinner::new(Spinners::Dots12, msg))
+        Some(Spinner::new(&Spinners::Dots12, msg))
     } else {
         None
     }

@@ -141,7 +141,7 @@ pub(crate) async fn handle_pull(cmd: PullCommand) -> Result<String, Box<dyn ::st
     let image: Reference = cmd.url.parse().unwrap();
     let spinner = match cmd.output.kind {
         OutputKind::Text => Some(Spinner::new(
-            Spinners::Dots12,
+            &Spinners::Dots12,
             format!(" Downloading {} ...", image.whole()),
         )),
         _ => None,
@@ -306,7 +306,7 @@ fn validate_provider_archive(
 pub(crate) async fn handle_push(cmd: PushCommand) -> Result<String, Box<dyn ::std::error::Error>> {
     let spinner = match cmd.output.kind {
         OutputKind::Text => Some(Spinner::new(
-            Spinners::Dots12,
+            &Spinners::Dots12,
             format!(" Pushing {} to {} ...", cmd.artifact, cmd.url),
         )),
         _ => None,
