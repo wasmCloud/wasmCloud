@@ -30,7 +30,8 @@ impl DrainCliCommand {
         match self.selection {
             DrainSelection::All(output)
             | DrainSelection::Lib(output)
-            | DrainSelection::Oci(output) => output.kind,
+            | DrainSelection::Oci(output)
+            | DrainSelection::Smithy(output) => output.kind,
         }
     }
 }
@@ -43,6 +44,8 @@ pub(crate) enum DrainSelection {
     Oci(Output),
     /// Remove cached binaries extracted from provider archives
     Lib(Output),
+    /// Remove cached smithy files downloaded from model urls
+    Smithy(Output),
 }
 
 impl IntoIterator for &DrainSelection {
@@ -52,13 +55,25 @@ impl IntoIterator for &DrainSelection {
     fn into_iter(self) -> Self::IntoIter {
         let paths = match self {
             DrainSelection::All(_) => vec![
-                env::temp_dir().join("wasmcloudcache"),
-                env::temp_dir().join("wasmcloud_ocicache"),
+                /* Lib    */ env::temp_dir().join("wasmcloudcache"),
+                /* Oci    */ env::temp_dir().join("wasmcloud_ocicache"),
+                /* Smithy */ model_cache_dir(),
             ],
-            DrainSelection::Oci(_) => vec![env::temp_dir().join("wasmcloud_ocicache")],
             DrainSelection::Lib(_) => vec![env::temp_dir().join("wasmcloudcache")],
+            DrainSelection::Oci(_) => vec![env::temp_dir().join("wasmcloud_ocicache")],
+            DrainSelection::Smithy(_) => vec![model_cache_dir()],
         };
         paths.into_iter()
+    }
+}
+
+fn model_cache_dir() -> PathBuf {
+    match weld_codegen::weld_cache_dir() {
+        Ok(path) => path,
+        Err(e) => {
+            eprintln!("{}", e.to_string());
+            "".into()
+        }
     }
 }
 
@@ -118,6 +133,11 @@ mod test {
         let oci = DrainCli::from_iter_safe(&["drain", "oci", "-o", "json"]).unwrap();
         match oci.command.selection {
             DrainSelection::Oci(output) => assert_eq!(output.kind, OutputKind::Json),
+            _ => panic!("drain constructed incorrect command"),
+        }
+        let smithy = DrainCli::from_iter_safe(&["drain", "smithy", "-o", "json"]).unwrap();
+        match smithy.command.selection {
+            DrainSelection::Smithy(output) => assert_eq!(output.kind, OutputKind::Json),
             _ => panic!("drain constructed incorrect command"),
         }
     }

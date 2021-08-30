@@ -185,20 +185,12 @@ pub(crate) fn process_template_dir(
                                 "If this is not a text file, you may want to add the path to the 'template.raw' list in project-generate.toml"
                             )
                         })?;
-                    let rendered =
-                        renderer
-                            .render_template(&contents, values)
-                            .map_err(|e| any_msg(&format!("rendering template file {}", &src_relative.display()), &e.to_string()))?;
-                            /*
-                            .with_context(|| {
-                                format!(
-                                    "{} {} `{}`",
-                                    emoji::ERROR,
-                                    style("Error rendering template file:").bold().red(),
-                                    style(&src_relative.display()).bold()
-                                )
-                            })?;
-                             */
+                    let rendered = renderer.render_template(&contents, values).map_err(|e| {
+                        any_msg(
+                            &format!("rendering template file {}", &src_relative.display()),
+                            &e.to_string(),
+                        )
+                    })?;
                     fs::write(&dest_path, rendered.as_bytes()).with_context(|| {
                         format!(
                             "{} {} `{}`",
@@ -236,14 +228,8 @@ mod test {
 
         let matcher = Matcher::new("/target", &template_config).unwrap();
 
-        assert_eq!(
-            matcher.rename_path(&PathBuf::from("README.txt")),
-            None
-        );
-        assert_eq!(
-            matcher.rename_path(&PathBuf::from("a.txt")),
-            Some("b.txt")
-        );
+        assert_eq!(matcher.rename_path(&PathBuf::from("README.txt")), None);
+        assert_eq!(matcher.rename_path(&PathBuf::from("a.txt")), Some("b.txt"));
     }
 
     #[test]

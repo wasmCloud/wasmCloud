@@ -108,11 +108,11 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::anyhow;
     use std::fs::File;
     use std::io::Write;
     use tempfile::tempdir;
     use toml::Value;
-    use anyhow::anyhow;
 
     fn parse_config(contents: &str) -> Result<Config> {
         toml::from_str::<Config>(contents).map_err(|e| anyhow!("invalid config syntax: {}", e))
@@ -176,11 +176,10 @@ mod tests {
         assert!(result.is_ok(), "Config should have parsed");
         let result = result.unwrap();
 
-        assert_eq!( result.placeholders.len(), 2 );
+        assert_eq!(result.placeholders.len(), 2);
 
-
-        let pa= result.placeholders.get(0).unwrap();
-        let pb= result.placeholders.get(1).unwrap();
+        let pa = result.placeholders.get(0).unwrap();
+        let pb = result.placeholders.get(1).unwrap();
 
         assert_eq!(pa.len(), 4);
         assert_eq!(pb.len(), 3);
@@ -193,6 +192,5 @@ mod tests {
         assert_eq!(pb.get("name"), Some(&Value::String("b".into())));
         assert_eq!(pb.get("type"), Some(&Value::String("string".to_string())));
         assert_eq!(pb.get("prompt"), Some(&Value::String("bar".to_string())));
-
     }
 }

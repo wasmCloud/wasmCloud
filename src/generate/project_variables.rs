@@ -178,7 +178,6 @@ fn expand_default_value(
     }
 }
 
-
 fn try_placeholder_into_slot(
     table: &TomlMap,
     values: &ParamMap,
@@ -600,7 +599,7 @@ mod tests {
             None,
             None,
             &ParamMap::default(),
-            &Renderer::default()
+            &Renderer::default(),
         );
 
         assert_eq!(result, Ok(None));
@@ -615,7 +614,7 @@ mod tests {
             Some(&toml::Value::Boolean(true)),
             None,
             &ParamMap::default(),
-            &Renderer::default()
+            &Renderer::default(),
         );
 
         assert_eq!(result, Ok(Some(SupportedVarValue::Bool(true))))
@@ -630,7 +629,7 @@ mod tests {
             Some(&toml::Value::String("bar".to_string())),
             None,
             &ParamMap::default(),
-            &Renderer::default()
+            &Renderer::default(),
         );
 
         assert_eq!(
@@ -650,7 +649,7 @@ mod tests {
             Some(&toml::Value::String("bar".to_string())),
             None,
             &ParamMap::default(),
-            &Renderer::default()
+            &Renderer::default(),
         );
 
         assert_eq!(
@@ -670,7 +669,7 @@ mod tests {
             Some(&toml::Value::String("0bar".to_string())),
             None,
             &ParamMap::default(),
-            &Renderer::default()
+            &Renderer::default(),
         );
 
         assert_eq!(
@@ -691,7 +690,7 @@ mod tests {
             Some(&toml::Value::String("bar".to_string())),
             Some(&vec!["zoo".to_string(), "far".to_string()]),
             &ParamMap::default(),
-            &Renderer::default()
+            &Renderer::default(),
         );
 
         assert_eq!(
@@ -713,7 +712,7 @@ mod tests {
             Some(&toml::Value::String("bar".to_string())),
             Some(&vec!["zoo".to_string(), "bar".to_string()]),
             &ParamMap::default(),
-            &Renderer::default()
+            &Renderer::default(),
         );
 
         assert_eq!(result, Ok(Some(SupportedVarValue::String("bar".into()))))
@@ -730,7 +729,7 @@ mod tests {
             Some(&toml::Value::String("bar".to_string())),
             Some(&vec!["zoo".to_string(), "bar".to_string()]),
             &ParamMap::default(),
-            &Renderer::default()
+            &Renderer::default(),
         );
 
         assert_eq!(result, Ok(Some(SupportedVarValue::String("bar".into()))))
@@ -745,7 +744,7 @@ mod tests {
             Some(&toml::Value::Integer(0)),
             None,
             &ParamMap::default(),
-            &Renderer::default()
+            &Renderer::default(),
         );
 
         assert_eq!(
@@ -767,7 +766,7 @@ mod tests {
             Some(&toml::Value::Integer(0)),
             None,
             &ParamMap::default(),
-            &Renderer::default()
+            &Renderer::default(),
         );
 
         assert_eq!(

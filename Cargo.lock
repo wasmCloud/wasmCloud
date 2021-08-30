@@ -118,11 +118,23 @@ version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7feecf8364a7d1c80f2323ea0d1abee09d7256a91dc5d29a1d171a52c17be36a"
 dependencies = [
- "atelier_core",
+ "atelier_core 0.2.22",
  "atelier_json",
  "atelier_smithy",
  "atelier_test",
  "log",
+]
+
+[[package]]
+name = "atelier_core"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0556fdb4ed9e33dad37897fb390ecede8c6d49eb4a08d93636101ee095c33e71"
+dependencies = [
+ "error-chain",
+ "heck",
+ "lazy_static",
+ "regex",
 ]
 
 [[package]]
@@ -140,13 +152,47 @@ dependencies = [
 ]
 
 [[package]]
+name = "atelier_describe"
+version = "0.1.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "619b6e73ec0159a741930b2fc6a7b81e1cce4abd2e9f340a804c089bdb9a3270"
+dependencies = [
+ "atelier_core 0.2.22",
+ "somedoc",
+]
+
+[[package]]
 name = "atelier_json"
 version = "0.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b86bad50f33038fa4dec1f5c4e83bc0a1174c17767defeff76b2eca0028ec4bf"
 dependencies = [
- "atelier_core",
+ "atelier_core 0.2.22",
  "serde_json",
+]
+
+[[package]]
+name = "atelier_lib"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3427842c496264b66eff419b15632f8415e2346f7cb524f9b2add4ce1ec689a4"
+dependencies = [
+ "atelier_assembler",
+ "atelier_core 0.2.22",
+ "atelier_describe",
+ "atelier_json",
+ "atelier_openapi",
+ "atelier_smithy",
+ "regex",
+]
+
+[[package]]
+name = "atelier_openapi"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e5b7065ef8310969ecfb39de889f5dbc7048abe1a04e532d581f6a6981e2167f"
+dependencies = [
+ "atelier_core 0.1.4",
 ]
 
 [[package]]
@@ -155,7 +201,7 @@ version = "0.2.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "56140a8133b56c021ee62e64d35015d1f51b71e0b5cdf401edf78a2a77f2f7e3"
 dependencies = [
- "atelier_core",
+ "atelier_core 0.2.22",
  "log",
  "pest",
  "pest_ascii_tree",
@@ -168,7 +214,7 @@ version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d81fd306eb92079fce9b7089abaf178c306877b72ec6e679ad331253ea9bfb00"
 dependencies = [
- "atelier_core",
+ "atelier_core 0.2.22",
  "pretty_assertions",
 ]
 
@@ -265,6 +311,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "031043d04099746d8db04daf1fa424b2bc8bd69d92b25962dcde24da39ab64a2"
 dependencies = [
  "typenum",
+]
+
+[[package]]
+name = "blob-uuid"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b04815249b103828116ca940ae26a198a79400e6f1805c19fe250078d0472fd4"
+dependencies = [
+ "base64 0.10.1",
+ "uuid",
 ]
 
 [[package]]
@@ -457,6 +513,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "cargo_atelier"
+version = "0.2.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aefb01beb1b798783825ebc64086ce8c410dc078478782bb753db450461155ed"
+dependencies = [
+ "atelier_lib",
+ "colored",
+ "somedoc",
+ "structopt",
+]
+
+[[package]]
 name = "cc"
 version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -541,6 +609,17 @@ dependencies = [
  "url 2.2.2",
  "uuid",
  "web-sys",
+]
+
+[[package]]
+name = "colored"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b3616f750b84d8f0de8a58bda93e08e2a81ad3f523089b05f1dffecab48c6cbd"
+dependencies = [
+ "atty",
+ "lazy_static",
+ "winapi",
 ]
 
 [[package]]
@@ -3261,6 +3340,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "somedoc"
+version = "0.2.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2eb3db06ff777b2e1cb223042be167b3d166ed0a24faffb35d11541c976af42e"
+dependencies = [
+ "blob-uuid",
+ "error-chain",
+ "lazy_static",
+ "regex",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "spin"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3871,8 +3964,10 @@ name = "wash-cli"
 version = "0.6.0"
 dependencies = [
  "anyhow",
+ "atelier_core 0.2.22",
  "bytes 1.1.0",
  "cargo",
+ "cargo_atelier",
  "console",
  "dialoguer",
  "dirs 3.0.2",
@@ -4008,9 +4103,9 @@ dependencies = [
 
 [[package]]
 name = "wasmbus-rpc"
-version = "0.3.7"
+version = "0.3.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6279dd57181d028e2e21d63cb0b10b91289d826b294a9b04a05d903e7f2f049a"
+checksum = "3d10a41bcb261e934ac66ee17122076cbe7c77b04e2518b3cae8c4b51d44a01d"
 dependencies = [
  "async-trait",
  "base64 0.13.0",
@@ -4121,13 +4216,13 @@ dependencies = [
 
 [[package]]
 name = "weld-codegen"
-version = "0.1.14"
+version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "81264b58bad00e2c3136e89f43e65cdc6910150cca60ade289b7bd24f4a7d7bb"
+checksum = "3fa9ee9e21d594c2b1e80b94de68a08d47dc423a2ca31314583da30da46b6eca"
 dependencies = [
  "Inflector",
  "atelier_assembler",
- "atelier_core",
+ "atelier_core 0.2.22",
  "atelier_json",
  "atelier_smithy",
  "bytes 1.1.0",

@@ -15,6 +15,8 @@ mod par;
 use par::ParCli;
 mod reg;
 use reg::RegCli;
+mod smithy;
+use smithy::{LintCli, ValidateCli};
 mod call;
 use call::CallCli;
 mod util;
@@ -67,6 +69,12 @@ enum CliCommand {
     /// Interact with OCI compliant registries
     #[structopt(name = "reg")]
     Reg(RegCli),
+    /// Perform lint checks on smithy models
+    #[structopt(name = "lint")]
+    Lint(LintCli),
+    /// Perform validation checks on smithy models
+    #[structopt(name = "validate")]
+    Validate(ValidateCli),
 }
 
 #[tokio::main]
@@ -83,6 +91,8 @@ async fn main() {
         CliCommand::New(newcli) => generate::handle_command(newcli.command()),
         CliCommand::Par(parcli) => par::handle_command(parcli.command()).await,
         CliCommand::Reg(regcli) => reg::handle_command(regcli.command()).await,
+        CliCommand::Lint(lint_cli) => smithy::handle_lint_command(lint_cli).await,
+        CliCommand::Validate(validate_cli) => smithy::handle_validate_command(validate_cli).await,
     };
 
     std::process::exit(match res {
