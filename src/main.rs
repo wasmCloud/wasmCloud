@@ -54,7 +54,7 @@ enum CliCommand {
     /// Interact with a wasmCloud control interface
     #[structopt(name = "ctl")]
     Ctl(CtlCli),
-    /// Manage contents of local wasmCloud cache
+    /// Manage contents of local wasmCloud caches
     #[structopt(name = "drain")]
     Drain(DrainCli),
     /// Utilities for generating and managing keys
