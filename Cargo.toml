@@ -63,6 +63,7 @@ weld-codegen = "0.1"
 [dev-dependencies]
 test_bin = "0.3.0"
 reqwest = { version = "0.11", features = ["json"] }
+tempfile = "3"
 
 [[bin]]
 name = "wash"
