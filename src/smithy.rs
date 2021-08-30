@@ -170,7 +170,7 @@ fn select_config(opt_config: &Option<PathBuf>) -> Result<CodegenConfig, anyhow::
                 .map_err(|e| anyhow!("reading config file {}: {}", path.display(), e))?,
             path.parent().unwrap().to_path_buf(),
         )
-    } else if PathBuf::from(CODEGEN_CONFIG_FILE ).is_file() {
+    } else if PathBuf::from(CODEGEN_CONFIG_FILE).is_file() {
         (
             std::fs::read_to_string(CODEGEN_CONFIG_FILE)
                 .map_err(|e| anyhow!("reading config file {}.toml: {}", CODEGEN_CONFIG_FILE, e))?,
