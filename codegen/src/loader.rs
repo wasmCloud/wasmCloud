@@ -144,7 +144,7 @@ fn url_to_cache_path(url: &str) -> Result<PathBuf> {
 pub fn weld_cache_dir() -> Result<PathBuf> {
     let dirs = directories::BaseDirs::new()
         .ok_or_else(|| Error::Other("invalid home directory".to_string()))?;
-    let weld_cache = dirs.cache_dir().join("weld");
+    let weld_cache = dirs.cache_dir().join("smithy");
     Ok(weld_cache)
 }
 
