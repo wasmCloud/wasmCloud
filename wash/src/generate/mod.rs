@@ -175,7 +175,6 @@ pub(crate) struct NewProjectArgs {
 pub(crate) fn handle_command(
     command: NewCliCommand,
 ) -> std::result::Result<String, Box<dyn std::error::Error>> {
-
     validate(&command)?;
 
     let kind = ProjectKind::from(&command);
@@ -361,7 +360,8 @@ pub(crate) fn make_project(
         &renderer,
         &values,
         &mut pbar,
-    ).map_err(|e| any_msg("generating project from templates:", &e.to_string()))?;
+    )
+    .map_err(|e| any_msg("generating project from templates:", &e.to_string()))?;
     pbar.join().unwrap();
 
     println!(
@@ -487,9 +487,8 @@ fn copy_path_template_into_temp(args: &NewProjectArgs) -> Result<TempDir> {
     if !path.is_dir() {
         return Err(any_msg(&format!("template path {} not found - please try another template or fix the favorites path", &path.display()),""));
     }
-    copy_dir_all(&path, &path_clone_dir.path(),
-    ).with_context(|| format!("copying template project from {}", &path.display()
-        ))?;
+    copy_dir_all(&path, &path_clone_dir.path())
+        .with_context(|| format!("copying template project from {}", &path.display()))?;
     Ok(path_clone_dir)
 }
 

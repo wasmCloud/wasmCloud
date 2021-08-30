@@ -131,8 +131,16 @@ pub(crate) fn pick_favorite(
                 type_favs
                     .into_iter()
                     .find(|f| &f.name == *name)
-                    .ok_or_else(|| any_msg(&format!("no {} template with the name '{}'.",
-                        &kind.to_string(), name),""))?
+                    .ok_or_else(|| {
+                        any_msg(
+                            &format!(
+                                "no {} template with the name '{}'.",
+                                &kind.to_string(),
+                                name
+                            ),
+                            "",
+                        )
+                    })?
             } else {
                 let index = if silent || type_favs.len() == 1 {
                     0
@@ -145,7 +153,7 @@ pub(crate) fn pick_favorite(
         _ => {
             return Err(any_msg(
                 "templates missing for project type",
-                &kind.to_string()
+                &kind.to_string(),
             ))
         }
     };

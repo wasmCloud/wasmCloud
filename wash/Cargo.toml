@@ -18,8 +18,10 @@ maintenance = { status = "actively-developed" }
 
 [dependencies]
 anyhow = "1.0"
+atelier_core = "0.2"
 bytes = "1.0"
 cargo = "0.55"
+cargo_atelier = "0.2"
 console = "0.14"
 dialoguer = "0.8"
 dirs = "3.0"
