@@ -157,7 +157,7 @@ fn msgpack_to_json(mval: rmpv::Value) -> serde_json::Value {
                 "str": String::from_utf8_lossy(&v),
                 "bin": v,
             }),
-            'b' | _ => JV::Array(Vec::from_iter(v.into_iter().map(JV::from))),
+            /*'b'|*/ _ => JV::Array(Vec::from_iter(v.into_iter().map(JV::from))),
         },
         RV::Ext(i, v) => serde_json::json!({
             "type": i,

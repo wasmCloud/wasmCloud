@@ -7,6 +7,8 @@ mod claims;
 use claims::ClaimsCli;
 mod ctl;
 use ctl::CtlCli;
+mod generate;
+use generate::NewCli;
 mod keys;
 use keys::KeysCli;
 mod par;
@@ -56,6 +58,9 @@ enum CliCommand {
     /// Utilities for generating and managing keys
     #[structopt(name = "keys", aliases = &["key"])]
     Keys(KeysCli),
+    /// Create a new project from template
+    #[structopt(name = "new")]
+    New(NewCli),
     /// Create, inspect, and modify capability provider archive files
     #[structopt(name = "par")]
     Par(ParCli),
@@ -75,6 +80,7 @@ async fn main() {
         CliCommand::Ctl(ctlcli) => ctl::handle_command(ctlcli.command()).await,
         CliCommand::Drain(draincmd) => drain::handle_command(draincmd.command()),
         CliCommand::Keys(keyscli) => keys::handle_command(keyscli.command()),
+        CliCommand::New(newcli) => generate::handle_command(newcli.command()),
         CliCommand::Par(parcli) => par::handle_command(parcli.command()).await,
         CliCommand::Reg(regcli) => reg::handle_command(regcli.command()).await,
     };
