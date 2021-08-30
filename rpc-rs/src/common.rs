@@ -134,17 +134,17 @@ pub enum RpcError {
     Other(String),
 }
 
-//impl From<String> for RpcError {
-//    fn from(s: String) -> RpcError {
-//        RpcError::Other(s)
-//    }
-//}
-//
-//impl From<&str> for RpcError {
-//    fn from(s: &str) -> RpcError {
-//        RpcError::Other(s.to_string())
-//    }
-//}
+impl From<String> for RpcError {
+    fn from(s: String) -> RpcError {
+        RpcError::Other(s)
+    }
+}
+
+impl From<&str> for RpcError {
+    fn from(s: &str) -> RpcError {
+        RpcError::Other(s.to_string())
+    }
+}
 
 #[async_trait]
 pub trait MessageDispatch {

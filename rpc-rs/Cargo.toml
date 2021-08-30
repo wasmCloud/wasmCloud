@@ -1,6 +1,6 @@
 [package]
 name = "wasmbus-rpc"
-version = "0.3.7"
+version = "0.3.8"
 edition = "2018"
 authors = [ "wasmcloud Team" ]
 license = "Apache-2.0"
