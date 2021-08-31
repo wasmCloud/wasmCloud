@@ -1,22 +1,17 @@
-# Weld - using Smithy models with wasmcloud
+# Weld - using Smithy models with wasmCloud
 
-Weld is a tool framework for using [Smithy IDL](https://awslabs.github.io/smithy/index.html) for [wasmcloud](https://github.com/wasmcloud/wasmcloud).
+Weld is a tool framework for using [Smithy IDL](https://awslabs.github.io/smithy/index.html) for [wasmCloud](https://wasmcloud.dev).
 
 This repository contains
 
-- The `weld` cli ([installation](doc/prerequisites.md/#weld)) ([source](./bin)) containing a code generator, html documentation generator, a model linter, and a model validator. 
+- The `weld` cli ([installation](doc/prerequisites.md/#weld)) ([source](./bin)) containing a code generator, html documentation generator, a model linter, and a model validator. Note that if you are looking for _ready-to-run_ code generation of wasmCloud actors, providers, and interfaces, you should be using [wash](https://github.com/wasmCloud/wash) rather than weld.
 - [wasmbus-rpc](./rpc-rs) library used by actors and capability providers to send and receive messages. This library also contains the generated interface library for the wasmcloud core models.
-- [wasmcloud core models](./models/smithy) shared Smithy models with definitions needed by actors and capability providers  
-- [examples](./examples) of models and generated interface libraries, actors, and capability providers.
-
 
 ## Documentation
 
 - Getting started
   - Install the [weld](doc/prerequisites.md#weld) cli tool and [prerequisites](doc/prerequisites.md)
-  - Look at the [examples](./examples/) folder for models, interface libraries, actors, and capability providers.
-  - Create a rust [actor](doc/getting_started.md#creating-an-actor) project
-  - Create a rust [interface](doc/getting_started.md#creating-an-interface-project) project
+  - Creating a new **actor**, **interface**, or **provider** should be done through [wash](https://github.com/wasmCloud/wash), a CLI that relies on various **weld** components.
     
 - Install the Visual Studio plugin for Smithy syntax highlighting (in extensions marketplace or from [github](https://github.com/awslabs/smithy-vscode))
   
@@ -36,7 +31,7 @@ This repository contains
   
 ## Rust-atelier
 
-Weld makes heavy use of [rust-atelier](https://github.com/johnstonskj/rust-atelier), a rust implementation of [AWS Smithy](https://awslabs.github.io/smithy/index.html).
+Weld makes heavy use of [rust-atelier](https://github.com/johnstonskj/rust-atelier), a Rust implementation of [AWS Smithy](https://awslabs.github.io/smithy/index.html).
 
 
 ## Smithy References and tools
@@ -53,10 +48,10 @@ Weld makes heavy use of [rust-atelier](https://github.com/johnstonskj/rust-ateli
 - [Rust-atelier](https://github.com/johnstonskj/rust-atelier)
   
 - SDKs (code generators and tools below are implemented in Java)
-  - go [github](https://github.com/aws/smithy-go)
-  - java sdk [github](https://github.com/awslabs) ( [javadoc](https://awslabs.github.io/smithy/javadoc/1.8.0/)  )
-  - rust [github](https://github.com/awslabs/smithy-rs) (Alpha status)
-  - typescript [github](https://github.com/awslabs/smithy-typescript)
+  - Go [github](https://github.com/aws/smithy-go)
+  - Java sdk [github](https://github.com/awslabs) ( [javadoc](https://awslabs.github.io/smithy/javadoc/1.8.0/)  )
+  - Rust [github](https://github.com/awslabs/smithy-rs) (Alpha status)
+  - TypeScript [github](https://github.com/awslabs/smithy-typescript)
 
 
 # Status
