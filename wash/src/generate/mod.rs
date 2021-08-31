@@ -36,7 +36,6 @@
 //   license: MIT/Apache-2.0
 //
 
-//use cargo::core::GitReference;
 use anyhow::{anyhow, Context, Result};
 use config::{Config, CONFIG_FILE_NAME};
 use console::style;
@@ -596,19 +595,7 @@ impl ProjectName {
         }
     }
 
-    //pub(crate) fn raw(&self) -> String {
-    //    self.user_input.to_owned()
-    //}
-
     pub(crate) fn kebab_case(&self) -> String {
         self.user_input.to_kebab_case()
     }
-
-    //pub(crate) fn snake_case(&self) -> String {
-    //    self.user_input.to_snake_case()
-    //}
-
-    //pub(crate) fn is_crate_name(&self) -> bool {
-    //    self.user_input == self.kebab_case()
-    //}
 }
