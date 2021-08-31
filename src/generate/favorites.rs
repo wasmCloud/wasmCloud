@@ -17,7 +17,7 @@
 //! name = "template name - required"
 //! description = "something about this template - required"
 //! path = "optional path to folder of template files on disk"
-//! git = "optional github url. Either github or path must be provided"
+//! git = "optional github repository url for templates"
 //! subfolder = "optional, subdirectory. Only applicable with git"
 //! branch = "optional git branch. Only applicable with git"
 //!

@@ -87,6 +87,7 @@ fn create_matcher<P: AsRef<Path>>(project_dir: P, patterns: &[String]) -> Result
     }
     Ok(builder.build()?)
 }
+
 pub(crate) fn spinner() -> ProgressStyle {
     ProgressStyle::default_spinner()
         .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ")
