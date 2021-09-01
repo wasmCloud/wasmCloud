@@ -845,9 +845,9 @@ impl<'model> RustCodeGen<'model> {
             // serialize result
             w.write(b"let buf = Cow::Owned(serialize(&resp)?);\n");
             //w.write(br#"console_log(format!("actor result {}b",buf.len())); "#);
-            w.write(b"Ok(Message { method: ");
+            w.write(b"Ok(Message { method: \"");
             w.write(&self.full_dispatch_name(service_id, method_ident));
-            w.write(b", arg: buf })},\n");
+            w.write(b"\", arg: buf })},\n");
         }
         w.write(b"_ => Err(RpcError::MethodNotHandled(format!(\"");
         self.write_ident(&mut w, service_id);
@@ -935,11 +935,10 @@ impl<'model> RustCodeGen<'model> {
                 w.write(b"let arg = *b\"\";\n");
             }
             w.write(b"let resp = self.transport.send(ctx, Message{ method: ");
-            // TODO: switch to quoted full method (increment api version # if not legacy)
-            //w.write(self.full_dispatch_name(trait_base.id(), method_id));
             // note: legacy is just the latter part
             w.write(b"\"");
-            w.write(&self.op_dispatch_name(method_ident));
+            w.write(&self.full_dispatch_name(service_id, method_ident));
+            //w.write(&self.op_dispatch_name(method_ident));
             w.write(b"\", arg: Cow::Borrowed(&arg)}, None).await?;\n");
             if op.has_output() {
                 w.write(
@@ -989,19 +988,36 @@ impl<'model> RustCodeGen<'model> {
                         let transport =  {}::actor::prelude::WasmHost::to_provider("{}", link_name)?;
                         Ok(Self {{ transport }})
                     }}
+
+                    /// Constructs a client for actor-to-actor messaging
+                    /// using the recipient actor's public key
+                    pub fn to_actor(actor_id: &str) -> Self {{
+                        let transport = {}::actor::prelude::WasmHost::to_actor(actor_id.to_string()).unwrap();
+                        Self{{ transport }}
+                    }}
+
                 }}
                 "#,
+                // impl declaration
                 service_id,
                 &self.import_core,
+
+                // new() (provider)
                 service_id,
                 contract,
                 &self.import_core,
                 contract,
+
+                // new_with_link()
                 service_id,
                 contract,
                 &self.import_core,
                 &self.import_core,
                 contract,
+
+                // to_actor()
+                &self.import_core,
+
             )
         } else {
             String::new()
