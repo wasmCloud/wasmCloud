@@ -38,7 +38,7 @@ jobs:
     needs: [github_release]
     runs-on: ubuntu-latest
     steps:
-        uses: actions/checkout@v1
+      - uses: actions/checkout@v1
       - id: crates-release-action
         uses: wasmcloud/common-actions/crates-release@main
         with:
