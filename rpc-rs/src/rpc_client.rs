@@ -46,8 +46,11 @@ pub(crate) enum NatsClientType {
     Async(Arc<crate::provider::NatsClient>),
 }
 
-/// returns rpc topic name for actor or provider target
-fn topic_for(entity: &WasmCloudEntity, lattice_prefix: &str) -> String {
+/// Returns the rpc topic (subject) name for sending to an actor or provider.
+/// A provider entity must have the public_key and link_name fields filled in.
+/// An actor entity must have a public_key and an empty link_name.
+#[doc(hidden)]
+pub fn rpc_topic(entity: &WasmCloudEntity, lattice_prefix: &str) -> String {
     if !entity.link_name.is_empty() {
         // provider target
         format!(
@@ -59,6 +62,7 @@ fn topic_for(entity: &WasmCloudEntity, lattice_prefix: &str) -> String {
         format!("wasmbus.rpc.{}.{}", lattice_prefix, entity.public_key)
     }
 }
+
 
 impl RpcClient {
     /// Constructs a new RpcClient for the async nats connection.
@@ -106,8 +110,8 @@ impl RpcClient {
         }
     }
 
-    // convenience method for returning async client
-    // If the client is not the correct type, returns None
+    /// convenience method for returning async client
+    /// If the client is not the correct type, returns None
     pub fn get_async(&self) -> Option<&ratsio::NatsClient> {
         use std::borrow::Borrow;
         match self.client.borrow() {
@@ -116,8 +120,8 @@ impl RpcClient {
         }
     }
 
-    // convenience method for returning nats::asynk Connection
-    // If the client is not the correct type, returns None
+    /// convenience method for returning nats::asynk Connection
+    /// If the client is not the correct type, returns None
     pub fn get_asynk(&self) -> Option<&nats::asynk::Connection> {
         use std::borrow::Borrow;
         match self.client.borrow() {
@@ -145,14 +149,48 @@ impl RpcClient {
         Ok(resp)
     }
 
-    /// Send an rpc message.
-    ///   target may be &str or String for sending to an actor, or a WasmCloudEntity (for actor or provider)
+    /// Send a wasmbus rpc message by wrapping with an Invocation before sending over nats.
+    /// 'target' may be &str or String for sending to an actor, or a WasmCloudEntity (for actor or provider)
     /// If nats client is sync, this can block the current thread
     pub async fn send<Target>(
         &self,
         origin: WasmCloudEntity,
         target: Target,
         message: Message<'_>,
+    ) -> Result<Vec<u8>, RpcError>
+        where
+            Target: Into<WasmCloudEntity>,
+    {
+        self.inner_rpc(origin, target, message, true).await
+    }
+
+    /// Send a wasmbus rpc message without waiting for response.
+    /// This has somewhat limited utility and is only useful if
+    /// the message is declared to return no args, or if the caller
+    /// doesn't care about the response.
+    /// 'target' may be &str or String for sending to an actor,
+    /// or a WasmCloudEntity (for actor or provider)
+    #[doc(hidden)]
+    pub async fn post<Target>(
+        &self,
+        origin: WasmCloudEntity,
+        target: Target,
+        message: Message<'_>,
+    ) -> Result<(), RpcError>
+        where
+            Target: Into<WasmCloudEntity>,
+    {
+        let _ = self.inner_rpc(origin, target, message, false).await?;
+        Ok(())
+    }
+
+    /// request or publish an rpc invocation
+    async fn inner_rpc<Target>(
+        &self,
+        origin: WasmCloudEntity,
+        target: Target,
+        message: Message<'_>,
+        expect_response: bool,
     ) -> Result<Vec<u8>, RpcError>
     where
         Target: Into<WasmCloudEntity>,
@@ -171,7 +209,7 @@ impl RpcClient {
             &invocation_hash(&target_url, &origin_url, &message.arg),
         );
 
-        let topic = topic_for(&target, &self.lattice_prefix);
+        let topic = rpc_topic(&target, &self.lattice_prefix);
         let method = message.method.to_string();
         let invocation = Invocation {
             origin,
@@ -186,28 +224,39 @@ impl RpcClient {
 
         let nats_body = crate::serialize(&invocation)?;
 
-        // TODO: request with timeout
-        let payload = self
-            .request(&topic, &nats_body)
-            .await
-            .map_err(|e| RpcError::Nats(format!("rpc send error: {}: {}", target_url, e)))?;
-        let inv_response = crate::deserialize::<InvocationResponse>(&payload)
-            .map_err(|e| RpcError::Deser(e.to_string()))?;
-        match inv_response.error {
-            None => {
-                trace!("rpc ok response from {}", &target_url);
-                Ok(inv_response.msg)
+        if expect_response {
+            // TODO: request with timeout
+            let payload = self
+                .request(&topic, &nats_body)
+                .await
+                .map_err(|e| RpcError::Nats(format!("rpc send error: {}: {}", target_url, e)))?;
+
+
+            let inv_response = crate::deserialize::<InvocationResponse>(&payload)
+                .map_err(|e| RpcError::Deser(e.to_string()))?;
+            match inv_response.error {
+                None => {
+                    trace!("rpc ok response from {}", &target_url);
+                    Ok(inv_response.msg)
+                }
+                Some(err) => {
+                    // if error is Some(_), we must ignore the msg field
+                    error!("rpc error response from {}: {}", &target_url, &err);
+                    Err(RpcError::Rpc(err))
+                }
             }
-            Some(err) => {
-                // if error is Some(_), we must ignore the msg field
-                error!("rpc error response from {}: {}", &target_url, &err);
-                Err(RpcError::Rpc(err))
-            }
+        } else {
+            self
+                .publish(&topic, &nats_body)
+                .await
+                .map_err(|e| RpcError::Nats(format!("rpc send error: {}: {}", target_url, e)))?;
+            Ok(Vec::new())
         }
     }
 
-    /// Send nats request wait for response.
-    /// If client is sync, this can block the current thread
+    /// Send a nats message and wait for the response.
+    /// This can be used for general nats messages, not just wasmbus actor/provider messages.
+    /// If the nats client is sync, this can block the current thread
     pub async fn request(&self, subject: &str, data: &[u8]) -> Result<Vec<u8>, RpcError> {
         use std::borrow::Borrow;
 
@@ -236,7 +285,8 @@ impl RpcClient {
         Ok(bytes)
     }
 
-    /// Send nats message with no reply-to
+    /// Send a nats message with no reply-to. Do not wait for a response.
+    /// This can be used for general nats messages, not just wasmbus actor/provider messages.
     pub async fn publish(&self, subject: &str, data: &[u8]) -> Result<(), RpcError> {
         use std::borrow::Borrow;
 
@@ -255,6 +305,7 @@ impl RpcClient {
         }
         Ok(())
     }
+
 }
 
 pub(crate) fn invocation_hash(target_url: &str, origin_url: &str, msg: &[u8]) -> String {
@@ -283,6 +334,7 @@ fn sha256_digest<R: Read>(mut reader: R) -> Result<Digest, Box<dyn std::error::E
 }
 
 /// Create a new random uuid for invocations
+#[doc(hidden)]
 pub fn make_uuid() -> String {
     use uuid::Uuid;
     // TODO: revisit whether this is using the right random

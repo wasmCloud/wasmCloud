@@ -25,7 +25,7 @@ pub mod model {
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod rpc_client;
 #[cfg(not(target_arch = "wasm32"))]
-pub use rpc_client::{RpcClient, RpcClientSync};
+pub use rpc_client::{rpc_topic, RpcClient, RpcClientSync};
 
 pub type RpcResult<T> = std::result::Result<T, RpcError>;
 

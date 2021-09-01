@@ -13,9 +13,11 @@ use crate::{
 use async_trait::async_trait;
 use futures::{future::JoinAll, StreamExt};
 use log::{debug, error, info, trace, warn};
-//use nats::{Connection as NatsClient, Subscription};
 use pin_utils::pin_mut;
-pub use ratsio::{NatsClient, NatsMessage};
+// re-export ratsio crate for simpler version compatibility
+pub use ratsio::{self, NatsClient};
+// re-export make_uuid
+pub use crate::rpc_client::make_uuid;
 use serde::de::DeserializeOwned;
 use std::{borrow::Cow, collections::HashMap, convert::Infallible, ops::Deref, sync::Arc};
 use tokio::sync::{oneshot, RwLock};
@@ -24,7 +26,7 @@ type SubscriptionId = ratsio::NatsSid;
 
 pub type HostShutdownEvent = String;
 
-trait Subscription: futures::stream::Stream<Item = NatsMessage> + Send + Sync {}
+pub trait Subscription: futures::stream::Stream<Item = ratsio::NatsMessage> + Send + Sync {}
 
 pub trait ProviderDispatch: MessageDispatch + ProviderHandler {}
 trait ProviderImpl: ProviderDispatch + Send + Sync + Clone + 'static {}
@@ -140,7 +142,13 @@ pub struct HostBridgeInner {
 }
 
 impl HostBridge {
-    /// Send an rpc message to the actor.
+
+    /// Returns a reference to the rpc client
+    fn rpc_client(&self) -> &crate::rpc_client::RpcClient {
+        &self.rpc_client
+    }
+
+    /// Sends an rpc message to the actor.
     pub async fn send_actor(
         &self,
         origin: WasmCloudEntity,
@@ -149,7 +157,7 @@ impl HostBridge {
     ) -> Result<Vec<u8>, RpcError> {
         debug!("host_bridge sending actor {}", message.method);
         let target = WasmCloudEntity::new_actor(actor_id)?;
-        self.rpc_client.send(origin, target, message).await
+        self.rpc_client().send(origin, target, message).await
     }
 
     /// Clear out all subscriptions
@@ -160,7 +168,7 @@ impl HostBridge {
             copy.append(&mut sub_lock);
         };
         // async nats client
-        let nc = self.rpc_client.get_async().unwrap();
+        let nc = self.rpc_client().get_async().unwrap();
         // unsubscribe each with server and de-register streams
         for sid in copy.iter() {
             // ignore return code; we're shutting down
@@ -179,7 +187,7 @@ impl HostBridge {
     // parse incoming subscription message
     // if it fails deserialization, we can't really respond;
     // so log the error
-    fn parse_msg<T: DeserializeOwned>(&self, msg: &NatsMessage, topic: &str) -> Option<T> {
+    fn parse_msg<T: DeserializeOwned>(&self, msg: &ratsio::NatsMessage, topic: &str) -> Option<T> {
         match if self.host_data.is_test() {
             serde_json::from_slice(&msg.payload).map_err(|e| RpcError::Deser(e.to_string()))
         } else {
@@ -247,7 +255,7 @@ impl HostBridge {
 
         debug!("subscribing for rpc : {}", &rpc_topic);
         let (sid, sub) = self
-            .rpc_client
+            .rpc_client()
             .get_async()
             .unwrap() // we are only async
             .subscribe(&rpc_topic)
@@ -327,7 +335,7 @@ impl HostBridge {
             if let Some(reply_to) = msg.reply_to {
                 match crate::serialize(&rpc_response.unwrap()) {
                     Ok(t) => {
-                        if let Err(e) = self.rpc_client.publish(&reply_to, &t).await {
+                        if let Err(e) = self.rpc_client().publish(&reply_to, &t).await {
                             error!(
                                 "failed sending rpc response to {}: {}",
                                 &reply_to,
@@ -359,7 +367,7 @@ impl HostBridge {
         );
         debug!("subscribing for shutdown : {}", &shutdown_topic);
         let (subscription_sid, mut sub) = self
-            .rpc_client
+            .rpc_client()
             .get_async()
             .unwrap() // we are only async
             .subscribe(&shutdown_topic)
@@ -390,7 +398,7 @@ impl HostBridge {
             // send ack to host
             if let Some(reply_to) = msg.reply_to.as_ref() {
                 let data = b"shutting down".to_vec();
-                if let Err(e) = self.rpc_client.publish(reply_to, &data).await {
+                if let Err(e) = self.rpc_client().publish(reply_to, &data).await {
                     error!(
                         "failed to send shutdown response to host: {}",
                         e.to_string()
@@ -402,7 +410,7 @@ impl HostBridge {
 
         // unsubscribe for shutdowns
         let _ignore = this
-            .rpc_client
+            .rpc_client()
             .get_async()
             .unwrap() // we are only async
             .un_subscribe(&subscription_sid)
@@ -426,7 +434,7 @@ impl HostBridge {
 
         debug!("subscribing for link put : {}", &ldput_topic);
         let (sid, mut sub) = self
-            .rpc_client
+            .rpc_client()
             .get_async()
             .unwrap() // we are only async
             .subscribe(&ldput_topic)
@@ -472,7 +480,7 @@ impl HostBridge {
         );
         debug!("subscribing for link del : {}", &link_del_topic);
         let (sid, mut sub) = self
-            .rpc_client
+            .rpc_client()
             .get_async()
             .unwrap() // we are only async
             .subscribe(&link_del_topic)
@@ -501,7 +509,7 @@ impl HostBridge {
         );
 
         let (sid, mut sub) = self
-            .rpc_client
+            .rpc_client()
             .get_async()
             .unwrap() // we are only async
             .subscribe(&topic)
@@ -529,7 +537,7 @@ impl HostBridge {
             match buf {
                 Ok(t) => {
                     if let Some(reply_to) = msg.reply_to.as_ref() {
-                        if let Err(e) = self.rpc_client.publish(reply_to, &t).await {
+                        if let Err(e) = self.rpc_client().publish(reply_to, &t).await {
                             error!("failed sending health check response: {}", e.to_string());
                         }
                     }
@@ -568,6 +576,6 @@ impl<'send> crate::Transport for ProviderTransport<'send> {
     ) -> std::result::Result<Vec<u8>, RpcError> {
         let origin = self.ld.provider_entity();
         let target = self.ld.actor_entity();
-        self.bridge.rpc_client.send(origin, target, req).await
+        self.bridge.rpc_client().send(origin, target, req).await
     }
 }

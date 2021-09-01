@@ -82,9 +82,9 @@ impl WasmHost {
     }
 
     /// constructs a WasmHost Transport for sending messages to another actor
-    pub fn to_actor<T1: ToString, T2: ToString, T3: ToString>(id: T1) -> RpcResult<Self> {
+    pub fn to_actor<T: ToString>(id: T) -> RpcResult<Self> {
         Ok(WasmHost {
-            target: crate::core::WasmCloudEntity::new_actor(id)?,
+            target: crate::core::WasmCloudEntity::new_actor(id.to_string())?,
         })
     }
 }

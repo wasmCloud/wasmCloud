@@ -202,7 +202,7 @@ impl<T: Transport + std::marker::Sync + std::marker::Send> Actor for ActorSender
             .send(
                 ctx,
                 Message {
-                    method: "HealthRequest",
+                    method: "Actor.HealthRequest",
                     arg: Cow::Borrowed(&arg),
                 },
                 None,
