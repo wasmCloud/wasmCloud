@@ -7,12 +7,16 @@ mod claims;
 use claims::ClaimsCli;
 mod ctl;
 use ctl::CtlCli;
+mod generate;
+use generate::NewCli;
 mod keys;
 use keys::KeysCli;
 mod par;
 use par::ParCli;
 mod reg;
 use reg::RegCli;
+mod smithy;
+use smithy::{LintCli, ValidateCli};
 mod call;
 use call::CallCli;
 mod util;
@@ -50,18 +54,27 @@ enum CliCommand {
     /// Interact with a wasmCloud control interface
     #[structopt(name = "ctl")]
     Ctl(CtlCli),
-    /// Manage contents of local wasmCloud cache
+    /// Manage contents of local wasmCloud caches
     #[structopt(name = "drain")]
     Drain(DrainCli),
     /// Utilities for generating and managing keys
     #[structopt(name = "keys", aliases = &["key"])]
     Keys(KeysCli),
+    /// Create a new project from template
+    #[structopt(name = "new")]
+    New(NewCli),
     /// Create, inspect, and modify capability provider archive files
     #[structopt(name = "par")]
     Par(ParCli),
     /// Interact with OCI compliant registries
     #[structopt(name = "reg")]
     Reg(RegCli),
+    /// Perform lint checks on smithy models
+    #[structopt(name = "lint")]
+    Lint(LintCli),
+    /// Perform validation checks on smithy models
+    #[structopt(name = "validate")]
+    Validate(ValidateCli),
 }
 
 #[tokio::main]
@@ -75,8 +88,11 @@ async fn main() {
         CliCommand::Ctl(ctlcli) => ctl::handle_command(ctlcli.command()).await,
         CliCommand::Drain(draincmd) => drain::handle_command(draincmd.command()),
         CliCommand::Keys(keyscli) => keys::handle_command(keyscli.command()),
+        CliCommand::New(newcli) => generate::handle_command(newcli.command()),
         CliCommand::Par(parcli) => par::handle_command(parcli.command()).await,
         CliCommand::Reg(regcli) => reg::handle_command(regcli.command()).await,
+        CliCommand::Lint(lint_cli) => smithy::handle_lint_command(lint_cli).await,
+        CliCommand::Validate(validate_cli) => smithy::handle_validate_command(validate_cli).await,
     };
 
     std::process::exit(match res {
