@@ -133,11 +133,10 @@ static BIN_STR: OnceCell<char> = OnceCell::new();
 fn msgpack_to_json(mval: rmpv::Value) -> serde_json::Value {
     use rmpv::Value as RV;
     use serde_json::Value as JV;
-    use std::iter::FromIterator;
     match mval {
         RV::String(s) => JV::String(s.to_string()),
         RV::Boolean(b) => JV::Bool(b),
-        RV::Array(v) => JV::Array(Vec::from_iter(v.into_iter().map(msgpack_to_json))),
+        RV::Array(v) => JV::Array(v.into_iter().map(msgpack_to_json).collect::<Vec<_>>()),
         RV::F64(f) => JV::from(f),
         RV::F32(f) => JV::from(f),
         RV::Integer(i) => match (i.is_u64(), i.is_i64()) {
@@ -145,19 +144,23 @@ fn msgpack_to_json(mval: rmpv::Value) -> serde_json::Value {
             (_, true) => JV::from(i.as_i64().unwrap()),
             _ => JV::from(0u64),
         },
-        RV::Map(vkv) => JV::Object(serde_json::Map::from_iter(vkv.into_iter().map(|(k, v)| {
-            (
-                k.as_str().unwrap_or_default().to_string(),
-                msgpack_to_json(v),
-            )
-        }))),
+        RV::Map(vkv) => JV::Object(
+            vkv.into_iter()
+                .map(|(k, v)| {
+                    (
+                        k.as_str().unwrap_or_default().to_string(),
+                        msgpack_to_json(v),
+                    )
+                })
+                .collect::<serde_json::Map<_, _>>(),
+        ),
         RV::Binary(v) => match BIN_STR.get().unwrap() {
             's' => JV::String(String::from_utf8_lossy(&v).into_owned()),
             '2' => serde_json::json!({
                 "str": String::from_utf8_lossy(&v),
                 "bin": v,
             }),
-            'b' | _ => JV::Array(Vec::from_iter(v.into_iter().map(JV::from))),
+            /*'b'|*/ _ => JV::Array(v.into_iter().map(JV::from).collect::<Vec<_>>()),
         },
         RV::Ext(i, v) => serde_json::json!({
             "type": i,
