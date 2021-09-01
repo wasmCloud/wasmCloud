@@ -15,7 +15,7 @@ jobs:
     steps:
     - uses: actions/checkout@v2
     - id: rust-check-action
-      uses: actions/rust-check-action@v1rc1
+      uses: wasmcloud/rust-check-action@v1rc1
       with:
         working-directory: ${{ env.working-directory }}
 
