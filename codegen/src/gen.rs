@@ -370,11 +370,11 @@ pub(crate) trait CodeGen {
         crate::strings::to_pascal_case(&id.to_string())
     }
 
-    /// The full operation name with service prefix, with surrounding quotes
+    /// The full operation name with service prefix
     /// The default implementation is provided and should not be overridden
     fn full_dispatch_name(&self, service_id: &Identifier, method_id: &Identifier) -> String {
         format!(
-            "\"{}.{}\"",
+            "{}.{}",
             &self.to_type_name(&service_id.to_string()),
             &self.op_dispatch_name(method_id)
         )
