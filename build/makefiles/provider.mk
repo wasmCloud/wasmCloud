@@ -44,6 +44,16 @@ par_targets ?= \
    	aarch64-apple-darwin \
    	x86_64-pc-windows-gnu
 
+# Lookup table from rust target triple to wasmcloud architecture doubles
+# Thanks to https://stackoverflow.com/a/40919906 for the pointer to
+# "constructed macro names".
+ARCH_LOOKUP_x86_64-unknown-linux-gnu=x86_64-linux
+ARCH_LOOKUP_x86_64-apple-darwin=x86_64-macos
+ARCH_LOOKUP_armv7-unknown-linux-gnueabihf=arm-linux
+ARCH_LOOKUP_aarch64-unknown-linux-gnu=aarch64-linux
+ARCH_LOOKUP_aarch64-apple-darwin=aarch64-macos
+ARCH_LOOKUP_x86_64-pc-windows-gnu=x86_64-windows
+
 bin_targets = $(foreach target,$(par_targets),target/$(target)/release/$(bin_name))
 
 # pick target0 for starting par
@@ -80,9 +90,8 @@ par:: $(dest_par)
 # rebuild base par if target0 changes
 $(dest_par): $(bin_target0) Makefile Cargo.toml
 	@mkdir -p $(dir $(dest_par))
-	par_arch=`echo $(par_target0) | sed -E 's/([^-]+)-([^-]+)-([^-]+)(-gnu)?/\1-\3/'`
 	$(WASH) par create \
-		--arch $$par_arch \
+		--arch $(ARCH_LOOKUP_$(par_target0)) \
 		--binary $(bin_target0) \
 		--capid $(CAPABILITY_ID) \
 		--name $(NAME) \

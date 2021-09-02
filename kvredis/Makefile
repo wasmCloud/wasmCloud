@@ -10,6 +10,5 @@ oci_url  = localhost:5000/v2/$(PROJECT):$(VERSION)
 include ../build/makefiles/provider.mk
 
 test:
-	killall target/debug/kvredis
+	killall target/debug/kvredis || true
 	RUST_BACKTRACE=1 cargo test -- --nocapture
-
