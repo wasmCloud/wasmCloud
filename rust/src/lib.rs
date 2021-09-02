@@ -125,6 +125,7 @@ impl Client {
             .await;
         Ok(providers)
     }
+
     /// Sends a request to the given host to start a given actor by its OCI reference. This returns an acknowledgement
     /// of _receipt_ of the command, not a confirmation that the actor started. An acknowledgement will either indicate
     /// some form of validation failure, or, if no failure occurs, the receipt of the command. To avoid blocking consumers,
