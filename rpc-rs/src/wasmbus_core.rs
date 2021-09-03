@@ -177,6 +177,7 @@ impl<T: Transport> ActorSender<T> {
         Self { transport }
     }
 }
+
 #[cfg(not(target_arch = "wasm32"))]
 impl<'send> ActorSender<crate::provider::ProviderTransport<'send>> {
     /// Constructs a Sender using an actor's LinkDefinition,
@@ -185,6 +186,15 @@ impl<'send> ActorSender<crate::provider::ProviderTransport<'send>> {
         Self {
             transport: crate::provider::ProviderTransport::new(ld, None),
         }
+    }
+}
+#[cfg(target_arch = "wasm32")]
+impl ActorSender<crate::actor::prelude::WasmHost> {
+    /// Constructs a client for actor-to-actor messaging
+    /// using the recipient actor's public key
+    pub fn to_actor(actor_id: &str) -> Self {
+        let transport = crate::actor::prelude::WasmHost::to_actor(actor_id.to_string()).unwrap();
+        Self { transport }
     }
 }
 #[async_trait]
