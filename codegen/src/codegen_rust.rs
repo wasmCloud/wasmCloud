@@ -884,25 +884,16 @@ impl<'model> RustCodeGen<'model> {
                       Self{{ transport }}
                   }}
               }}
-              #[cfg(not(target_arch="wasm32"))]
-              impl<'send> {}Sender<{}::provider::ProviderTransport<'send>> {{
-                  /// Constructs a Sender using an actor's LinkDefinition,
-                  /// Uses the provider's HostBridge for rpc
-                  pub fn for_actor(ld: &'send {}::core::LinkDefinition) -> Self {{
-                      Self{{ transport: {}::provider::ProviderTransport::new(ld,None) }}
-                  }}
-              }}
             "#,
             service_id,
             service_id,
             service_id,
             service_id,
-            service_id,
-            &self.import_core,
-            &self.import_core,
-            &self.import_core,
         ));
-        w.write(&self.actor_sender_constructors(service_id, service_traits)?);
+        #[cfg(feature = "wasmbus")]
+        w.write(&self.actor_receive_sender_constructors(service_id, service_traits)?);
+        #[cfg(feature = "wasmbus")]
+        w.write(&self.provider_receive_sender_constructors(service_id, service_traits)?);
 
         // implement Trait for TraitSender
         w.write(b"#[async_trait]\nimpl<T:Transport + std::marker::Sync + std::marker::Send> ");
@@ -956,10 +947,63 @@ impl<'model> RustCodeGen<'model> {
         Ok(())
     }
 
+    /// add sender constructors for calling actors, for services that declare actorReceive
+    #[cfg(feature = "wasmbus")]
+    fn actor_receive_sender_constructors(
+        &mut self,
+        service_id: &Identifier,
+        service_traits: &AppliedTraits,
+    ) -> Result<String> {
+        let ctors = if let Some(Wasmbus {
+                                    actor_receive: true,
+                                    ..
+                                }) = get_trait(service_traits, crate::model::wasmbus_trait())?
+        {
+            format!(
+                r#"
+                #[cfg(not(target_arch="wasm32"))]
+                impl<'send> {}Sender<{}::provider::ProviderTransport<'send>> {{
+                    /// Constructs a Sender using an actor's LinkDefinition,
+                    /// Uses the provider's HostBridge for rpc
+                    pub fn for_actor(ld: &'send {}::core::LinkDefinition) -> Self {{
+                        Self{{ transport: {}::provider::ProviderTransport::new(ld,None) }}
+                    }}
+                }}
+                #[cfg(target_arch = "wasm32")]
+                impl {}Sender<{}::actor::prelude::WasmHost> {{
+                    /// Constructs a client for actor-to-actor messaging
+                    /// using the recipient actor's public key
+                    pub fn to_actor(actor_id: &str) -> Self {{
+                        let transport = {}::actor::prelude::WasmHost::to_actor(actor_id.to_string()).unwrap();
+                        Self{{ transport }}
+                    }}
+
+                }}
+                "#,
+                // for_actor() (from provider)
+                service_id,
+                &self.import_core,
+                &self.import_core,
+                &self.import_core,
+
+                // impl declaration
+                service_id,
+                &self.import_core,
+
+                // to_actor() (from actor)
+                &self.import_core,
+
+            )
+        } else {
+            String::new()
+        };
+        Ok(ctors)
+    }
+
     /// add sender constructors for actors calling providers
     /// This is only used for wasm32 targets and for services that declare 'providerReceive'
     #[cfg(feature = "wasmbus")]
-    fn actor_sender_constructors(
+    fn provider_receive_sender_constructors(
         &mut self,
         service_id: &Identifier,
         service_traits: &AppliedTraits,
@@ -989,13 +1033,6 @@ impl<'model> RustCodeGen<'model> {
                         Ok(Self {{ transport }})
                     }}
 
-                    /// Constructs a client for actor-to-actor messaging
-                    /// using the recipient actor's public key
-                    pub fn to_actor(actor_id: &str) -> Self {{
-                        let transport = {}::actor::prelude::WasmHost::to_actor(actor_id.to_string()).unwrap();
-                        Self{{ transport }}
-                    }}
-
                 }}
                 "#,
                 // impl declaration
@@ -1014,19 +1051,11 @@ impl<'model> RustCodeGen<'model> {
                 &self.import_core,
                 &self.import_core,
                 contract,
-
-                // to_actor()
-                &self.import_core,
-
             )
         } else {
             String::new()
         };
         Ok(ctors)
-    }
-    #[cfg(not(feature = "wasmbus"))]
-    fn actor_sender_constructors(&mut self, _: &Identifier, _: &Appliedtraits) -> Result<String> {
-        Ok(String::new())
     }
 } // impl CodeGenRust
 
