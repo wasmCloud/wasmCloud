@@ -6,3 +6,4 @@ scratch
 .vscode
 TODO.md
 build
+*.bak.*
