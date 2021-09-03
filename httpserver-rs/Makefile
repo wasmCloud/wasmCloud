@@ -11,3 +11,5 @@ oci_url  = localhost:5000/v2/$(PROJECT):$(VERSION)
 
 include ../build/makefiles/provider.mk
 
+test:
+	cargo test -- --nocapture
