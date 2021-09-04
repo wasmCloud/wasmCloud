@@ -215,8 +215,14 @@ async fn send_http_body(_: &TestOptions) -> RpcResult<()> {
         .map_err(|e| RpcError::Deser(e.to_string()))?;
     assert_eq!(body.get("path").unwrap().as_str(), Some("/2"));
     assert_eq!(body.get("method").unwrap().as_str(), Some("PUT"));
-    assert_eq!(body.get("body_len").unwrap().as_u64(), Some(blob.len() as u64));
-    assert_eq!(body.get("body_hash").unwrap().as_str(), Some(expected_hash.as_str()));
+    assert_eq!(
+        body.get("body_len").unwrap().as_u64(),
+        Some(blob.len() as u64)
+    );
+    assert_eq!(
+        body.get("body_hash").unwrap().as_str(),
+        Some(expected_hash.as_str())
+    );
 
     Ok(())
 }
