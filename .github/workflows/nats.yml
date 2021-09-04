@@ -1,31 +1,30 @@
-# Replace all occurrences of "PROVIDER" with the provider name (e.g. HTTPCLIENT)
-# Replace workflow triggers with provider with the provider name, should be the same as the folder path
-name: PROVIDER
+name: NATS
 
 on:
   push:
     branches: [ main ]
     paths:
-    - "provider/**"
+    - "nats/**"
     tags:
-    - 'provider-v*'
+    - 'nats-v*'
   pull_request:
     branches: [ main ]
     paths:
-    - "provider/**"
+    - "nats/**"
 
 env:
   CARGO_TERM_COLOR: always
-  working-directory: ./provider
+  working-directory: ./nats
   WASH_ISSUER_KEY: ${{ secrets.WASMCLOUD_ACCOUNT_OFFICIAL }}
-  WASH_SUBJECT_KEY: ${{ secrets.WASMCLOUD_PROVIDER }}
+  WASH_SUBJECT_KEY: ${{ secrets.WASMCLOUD_NATS }}
 
 jobs:
   rust_check:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v2
-    # If your integration tests require nats or redis, run them here
+    - id: run-nats
+      uses: wasmcloud/common-actions/run-nats@main
     - id: rust-check-action
       uses: wasmcloud/common-actions/rust-check@main
       with:

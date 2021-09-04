@@ -1,4 +1,3 @@
-# Replace workflow triggers with provider with the provider name, should be the same as the folder path
 name: HTTPCLIENT
 
 on:
@@ -30,7 +29,6 @@ jobs:
       uses: wasmcloud/common-actions/rust-check@main
       with:
         working-directory: ${{ env.working-directory }}
-        with-nats: true
 
   github_release:
     if: startswith(github.ref, 'refs/tags/') # Only run on tag push
