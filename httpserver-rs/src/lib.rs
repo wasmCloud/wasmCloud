@@ -44,7 +44,7 @@ use tokio::{
 };
 use warp::{path::FullPath, Filter};
 use wasmbus_rpc::{core::LinkDefinition, provider::HostBridge, RpcError};
-use wasmcloud_interface_httpserver::{HttpRequest, HttpResponse, HttpServerSender};
+use wasmcloud_interface_httpserver::{HttpRequest, HttpResponse};
 
 mod settings;
 pub use settings::{load_settings, ServiceSettings};
@@ -256,7 +256,7 @@ impl HttpServer {
         bridge: &'static HostBridge,
     ) -> Result<HttpResponse, RpcError> {
         use wasmbus_rpc::provider::ProviderTransport;
-        use wasmcloud_interface_httpserver::HttpServer;
+        use wasmcloud_interface_httpserver::{HttpServer, HttpServerSender};
 
         trace!(
             "sending to actor {}: request url path={}",
@@ -266,7 +266,6 @@ impl HttpServer {
         let tx = ProviderTransport { bridge, ld: &ld };
         let ctx = wasmbus_rpc::Context::default();
         let actor = HttpServerSender::via(tx);
-
         let resp = actor.handle_request(&ctx, &req).await?;
         trace!(
             "received from actor {}: code={}",
