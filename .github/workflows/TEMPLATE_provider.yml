@@ -12,9 +12,6 @@ env:
   working-directory: ./provider
   WASH_ISSUER_KEY: ${{ secrets.WASMCLOUD_ACCOUNT_OFFICIAL }}
   WASH_SUBJECT_KEY: ${{ secrets.WASMCLOUD_PROVIDER }}
-  WASH_REG_USER:  ${{ secrets.AZURECR_PUSH_USER }}
-  WASH_REG_PASSWORD:  ${{ secrets.AZURECR_PUSH_PASSWORD }}
-  REVISION: ${{ github.run_number }}
 
 jobs:
   rust_check:
@@ -42,23 +39,36 @@ jobs:
         draft: false
         prerelease: true
 
-  artifact_release:
-    if: startswith(github.ref, 'refs/tags/') # Only run on tag push
+  build_artifact:
     needs: github_release
+    if: startswith(github.ref, 'refs/tags/') # Only run on tag push
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
       - uses: wasmcloud/common-actions/install-wash@main
       - uses: wasmcloud/common-actions/install-cross@main
+
       - name: Build full provider archive
         run: make par-full
         working-directory: ${{ env.working-directory }}
-      # Push artifact to https://AZURECR/provider:VERSION
-      - name: Push provider archive to AzureCR
+
+  artifact_release:
+    needs: build_artifact
+    if: startswith(github.ref, 'refs/tags/') # Only run on tag push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Determine artifact metadata
         run: |
-          VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].version')
-          NAME=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name')
-          TAGNAME=$(echo $NAME | sed 's/wasmcloud-provider-//')
-          URL=${{secrets.AZURECR_PUSH_URL}}/$TAGNAME:$VERSION
-          wash reg push $URL build/$NAME.par.gz
+          echo "oci-repository=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name' | sed 's/wasmcloud-provider-//')" >> $GITHUB_ENV
+          echo "oci-version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].version')" >> $GITHUB_ENV
         working-directory: ${{ env.working-directory }}
+
+      - name: Push provider archive to AzureCR
+        uses: wasmcloud/common-actions/oci-artifact-release@main
+        with:
+          artifact-path: ${{ env.working-directory }}/build/${{ env.oci-repository }}.par.gz
+          oci-url: ${{ secrets.AZURECR_PUSH_URL }}
+          oci-repository: ${{ env.oci-repository }}
+          oci-version: ${{ env.oci-version }}
+          oci-username: ${{ secrets.AZURECR_PUSH_USER }}
+          oci-password: ${{ secrets.AZURECR_PUSH_PASSWORD }}
