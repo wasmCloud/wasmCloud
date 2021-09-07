@@ -8,7 +8,7 @@ repository = "https://github.com/wasmCloud/interfaces"
 description = "This library is a convenient API for interacting with the lattice control interface."
 license = "Apache-2.0"
 documentation = "https://docs.rs/wasmcloud-control-interface"
-readme = "README.md"
+readme = "../README.md"
 keywords = ["webassembly", "wasm", "wasmcloud", "control", "ctl"]
 categories = ["wasm", "api-bindings"]
 # don't include build.rs on crates.io build

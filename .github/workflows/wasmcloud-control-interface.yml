@@ -1,10 +1,12 @@
-name: WASMCLOUD-CONTROL-INTERFACE
+name: CONTROL_INTERFACE
 
 on:
   push:
     branches: [ main ]
     paths:
     - "rust/**"
+    tags:
+    - 'wasmcloud-control-interface-v*'
   pull_request:
     branches: [ main ]
     paths:
@@ -23,3 +25,31 @@ jobs:
       uses: wasmcloud/common-actions/rust-check@main
       with:
         working-directory: ${{ env.working-directory }}
+
+  github_release:
+    if: startswith(github.ref, 'refs/tags/') # Only run on tag push
+    needs: rust_check
+    runs-on: ubuntu-latest
+    steps:
+    - name: Create Release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ github.ref }}
+        release_name: Release ${{ github.ref }}
+        draft: false
+        prerelease: true
+
+  crates_release:
+    if: startswith(github.ref, 'refs/tags/') # Only run on tag push
+    needs: github_release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v1
+      - id: crates-release-action
+        uses: wasmcloud/common-actions/crates-release@main
+        with:
+          working-directory: ${{ env.working-directory }}
+          crates-token: ${{ secrets.CRATES_PUBLISH_TOKEN }}
