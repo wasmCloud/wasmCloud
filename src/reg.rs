@@ -1,6 +1,6 @@
 extern crate oci_distribution;
 use crate::util::{format_output, Output, OutputKind};
-use log::{debug, info};
+use log::{debug, info, warn};
 use oci_distribution::client::*;
 use oci_distribution::secrets::RegistryAuth;
 use oci_distribution::Reference;
@@ -304,6 +304,10 @@ fn validate_provider_archive(
 }
 
 pub(crate) async fn handle_push(cmd: PushCommand) -> Result<String, Box<dyn ::std::error::Error>> {
+    if cmd.url.starts_with("localhost:") && !cmd.opts.insecure {
+        warn!(" Unless an SSL certificate has been installed, pushing to localhost without the --insecure option will fail")
+    }
+
     let spinner = match cmd.output.kind {
         OutputKind::Text => Some(Spinner::new(
             &Spinners::Dots12,
