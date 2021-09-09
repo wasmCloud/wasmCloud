@@ -1,8 +1,8 @@
 # codegen.toml
 
 [[models]]
-#path = "../../interfaces/core"
-url = "https://wasmcloud.github.io/interfaces/idl/org.wasmcloud"
+path = "../../interfaces/core"
+#url = "https://wasmcloud.github.io/interfaces/idl/org.wasmcloud"
 files = [ "wasmcloud-model.smithy", "wasmcloud-core.smithy" ]
 
 [rust]
