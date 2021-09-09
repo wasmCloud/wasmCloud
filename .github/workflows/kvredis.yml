@@ -33,24 +33,8 @@ jobs:
       with:
         working-directory: ${{ env.working-directory }}
 
-  github_release:
-    if: startswith(github.ref, 'refs/tags/') # Only run on tag push
-    needs: rust_check
-    runs-on: ubuntu-latest
-    steps:
-    - name: Create Release
-      id: create_release
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        tag_name: ${{ github.ref }}
-        release_name: Release ${{ github.ref }}
-        draft: false
-        prerelease: true
-
   build_artifact:
-    needs: github_release
+    needs: rust_check
     if: startswith(github.ref, 'refs/tags/') # Only run on tag push
     runs-on: ubuntu-latest
     steps:
@@ -61,12 +45,44 @@ jobs:
       - name: Build full provider archive
         run: make par-full
         working-directory: ${{ env.working-directory }}
+      
+      - name: Upload provider archive to GH Actions
+        uses: actions/upload-artifact@v2
+        with:
+          name: provider-archive
+          path: ${{ env.working-directory }}/build/*.par.gz
+
+  github_release:
+    if: startswith(github.ref, 'refs/tags/') # Only run on tag push
+    needs: build_artifact
+    runs-on: ubuntu-latest
+    steps:
+    - name: Download provider archive
+      uses: actions/download-artifact@v2
+      with:
+        name: provider-archive
+        path: ${{ env.working-directory }}/build
+
+    - name: Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: ${{ env.working-directory }}/build/*.par.gz
+        token: ${{ secrets.GITHUB_TOKEN }}
+        prerelease: true
+        draft: false
 
   artifact_release:
     needs: build_artifact
     if: startswith(github.ref, 'refs/tags/') # Only run on tag push
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v2
+      - name: Download provider archive
+        uses: actions/download-artifact@v2
+        with:
+          name: provider-archive
+          path: ${{ env.working-directory }}/build
+
       - name: Determine artifact metadata
         run: |
           echo "oci-repository=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name' | sed 's/wasmcloud-provider-//')" >> $GITHUB_ENV
