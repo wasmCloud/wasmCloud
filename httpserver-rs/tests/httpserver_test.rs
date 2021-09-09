@@ -32,7 +32,7 @@ use wasmcloud_test_util::{run_selected, run_selected_spawn};
 const SERVER_UNDER_TEST: &str = "http://localhost:9000";
 
 /// number of http requests in this test
-const NUM_RPC: u32 = 4;
+const NUM_RPC: u32 = 5;
 
 #[tokio::test]
 async fn run_all() -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -41,7 +41,7 @@ async fn run_all() -> std::result::Result<(), Box<dyn std::error::Error>> {
     // launch the mock actor thread
     let join = mock_echo_actor(NUM_RPC).await;
 
-    let res = run_selected_spawn!(&opts, health_check, send_http, send_http_body);
+    let res = run_selected_spawn!(&opts, health_check, send_http, send_http_body, test_timeout);
     print_test_results(&res);
 
     let passed = res.iter().filter(|tr| tr.pass).count();
@@ -101,6 +101,11 @@ async fn mock_echo_actor(num_requests: u32) -> tokio::task::JoinHandle<RpcResult
                     break;
                 }
                 let http_req: HttpRequest = deserialize(&inv.msg)?;
+
+                // for timeout test, denoted by "sleep" in the path, wait too long to send response
+                if http_req.path.contains("sleep") {
+                    tokio::time::sleep(std::time::Duration::from_millis(4000)).await;
+                }
                 let body = serde_json::to_vec(&serde_json::json!({
                     "msg_id": completed,
                     "method": http_req.method,
@@ -223,6 +228,21 @@ async fn send_http_body(_: &TestOptions) -> RpcResult<()> {
         body.get("body_hash").unwrap().as_str(),
         Some(expected_hash.as_str())
     );
+
+    Ok(())
+}
+
+async fn test_timeout(_: &TestOptions) -> RpcResult<()> {
+    // send GET request with "sleep" in the path to trigger the actor to wait too long
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(&format!("{}/sleep", SERVER_UNDER_TEST))
+        .send()
+        .await;
+
+    assert!(resp.is_ok(), "expect ok response");
+    let resp = resp.unwrap();
+    assert_eq!(resp.status().as_u16(), 503, "expected 503 timeout error");
 
     Ok(())
 }

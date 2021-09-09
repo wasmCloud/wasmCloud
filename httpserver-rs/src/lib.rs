@@ -35,7 +35,7 @@
 use bytes::Bytes;
 use http::header::HeaderMap;
 #[allow(unused_imports)]
-use log::{debug, error, info, trace};
+use log::{debug, error, info, trace, warn};
 use std::{convert::Infallible, sync::Arc};
 use thiserror::Error as ThisError;
 use tokio::{
@@ -126,6 +126,14 @@ impl HttpServer {
             let mut update = inner.write().await;
             update.signal = Some(shutdown_tx);
         }
+        let timeout = {
+            let rd = self.inner.read().await;
+            std::time::Duration::from_millis(
+                rd.settings
+                    .timeout_ms
+                    .unwrap_or(crate::settings::DEFAULT_TIMEOUT_MILLIS) as u64,
+            )
+        };
 
         let linkdefs = ld.clone();
         let route = warp::any()
@@ -164,7 +172,8 @@ impl HttpServer {
                         );
                         let read_guard = inner.read().await;
                         let bridge = read_guard.bridge;
-                        let response = match Self::send_actor(linkdefs, req, bridge).await {
+                        let response = match Self::send_actor(linkdefs, req, bridge, timeout).await
+                        {
                             Ok(resp) => resp,
                             Err(e) => {
                                 error!(
@@ -254,6 +263,7 @@ impl HttpServer {
         ld: LinkDefinition,
         req: HttpRequest,
         bridge: &'static HostBridge,
+        timeout: std::time::Duration,
     ) -> Result<HttpResponse, RpcError> {
         use wasmbus_rpc::provider::ProviderTransport;
         use wasmcloud_interface_httpserver::{HttpServer, HttpServerSender};
@@ -263,16 +273,38 @@ impl HttpServer {
             &ld.actor_id,
             &req.path
         );
-        let tx = ProviderTransport { bridge, ld: &ld };
+        let tx = ProviderTransport::new_with_timeout(&ld, Some(bridge), Some(timeout));
         let ctx = wasmbus_rpc::Context::default();
         let actor = HttpServerSender::via(tx);
-        let resp = actor.handle_request(&ctx, &req).await?;
-        trace!(
-            "received from actor {}: code={}",
-            &ld.actor_id,
-            &resp.status_code
-        );
-        Ok(resp)
+        match actor.handle_request(&ctx, &req).await {
+            Err(RpcError::Timeout(_)) => {
+                error!(
+                    "actor {} req path {} timed out: returning 503",
+                    &ld.actor_id, &req.path,
+                );
+                Ok(HttpResponse {
+                    status_code: 503,
+                    body: b"Actor took too long or was unavailable.".to_vec(),
+                    ..Default::default()
+                })
+            }
+            Ok(resp) => {
+                trace!(
+                    "http response received from actor {}: code={}",
+                    &ld.actor_id,
+                    &resp.status_code
+                );
+                Ok(resp)
+            }
+            Err(e) => {
+                warn!(
+                    "actor {} responded with error {}",
+                    &ld.actor_id,
+                    e.to_string()
+                );
+                Err(e)
+            }
+        }
     }
 }
 
