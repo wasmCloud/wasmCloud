@@ -127,6 +127,10 @@ pub enum RpcError {
     #[error("provider initialization or put-link: {0}")]
     ProviderInit(String),
 
+    /// Timeout occurred
+    #[error("timeout: {0}")]
+    Timeout(String),
+
     //#[error("IO error")]
     //IO([from] std::io::Error)
     /// Anything else

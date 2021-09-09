@@ -142,7 +142,6 @@ pub struct HostBridgeInner {
 }
 
 impl HostBridge {
-
     /// Returns a reference to the rpc client
     fn rpc_client(&self) -> &crate::rpc_client::RpcClient {
         &self.rpc_client
@@ -555,14 +554,30 @@ impl HostBridge {
 pub struct ProviderTransport<'send> {
     pub bridge: &'send HostBridge,
     pub ld: &'send LinkDefinition,
+    timeout: std::time::Duration,
 }
 
 impl<'send> ProviderTransport<'send> {
     /// constructs a ProviderTransport with the LinkDefinition and bridge.
     /// If the bridge parameter is None, the current (static) bridge is used.
     pub fn new(ld: &'send LinkDefinition, bridge: Option<&'send HostBridge>) -> Self {
+        Self::new_with_timeout(ld, bridge, None)
+    }
+
+    /// constructs a ProviderTransport with the LinkDefinition, bridge,
+    /// and an optional rpc timeout.
+    /// If the bridge parameter is None, the current (static) bridge is used.
+    pub fn new_with_timeout(
+        ld: &'send LinkDefinition,
+        bridge: Option<&'send HostBridge>,
+        timeout: Option<std::time::Duration>,
+    ) -> Self {
         let bridge = bridge.unwrap_or_else(|| crate::provider_main::get_host_bridge());
-        Self { bridge, ld }
+        Self {
+            bridge,
+            ld,
+            timeout: timeout.unwrap_or(crate::rpc_client::DEFAULT_RPC_TIMEOUT_MILLIS),
+        }
     }
 }
 
@@ -576,6 +591,9 @@ impl<'send> crate::Transport for ProviderTransport<'send> {
     ) -> std::result::Result<Vec<u8>, RpcError> {
         let origin = self.ld.provider_entity();
         let target = self.ld.actor_entity();
-        self.bridge.rpc_client().send(origin, target, req).await
+        self.bridge
+            .rpc_client()
+            .send_timeout(origin, target, req, self.timeout)
+            .await
     }
 }

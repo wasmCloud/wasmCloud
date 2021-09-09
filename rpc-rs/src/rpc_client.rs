@@ -13,7 +13,10 @@ use std::{
     io::Read,
     ops::Deref,
     sync::Arc,
+    time::Duration,
 };
+
+pub(crate) const DEFAULT_RPC_TIMEOUT_MILLIS: std::time::Duration = Duration::from_millis(2000);
 
 /// Send wasmbus rpc messages
 ///
@@ -62,7 +65,6 @@ pub fn rpc_topic(entity: &WasmCloudEntity, lattice_prefix: &str) -> String {
         format!("wasmbus.rpc.{}.{}", lattice_prefix, entity.public_key)
     }
 }
-
 
 impl RpcClient {
     /// Constructs a new RpcClient for the async nats connection.
@@ -151,17 +153,38 @@ impl RpcClient {
 
     /// Send a wasmbus rpc message by wrapping with an Invocation before sending over nats.
     /// 'target' may be &str or String for sending to an actor, or a WasmCloudEntity (for actor or provider)
-    /// If nats client is sync, this can block the current thread
+    /// If nats client is sync, this can block the current thread.
+    /// If a response is not received within the default timeout, the Error RpcError::Timeout is returned.
     pub async fn send<Target>(
         &self,
         origin: WasmCloudEntity,
         target: Target,
         message: Message<'_>,
     ) -> Result<Vec<u8>, RpcError>
-        where
-            Target: Into<WasmCloudEntity>,
+    where
+        Target: Into<WasmCloudEntity>,
     {
-        self.inner_rpc(origin, target, message, true).await
+        self.inner_rpc(origin, target, message, true, None).await
+    }
+
+    /// Send a wasmbus rpc message, with a timeout.
+    /// The rpc message is wrapped with an Invocation before sending over nats.
+    /// 'target' may be &str or String for sending to an actor, or a WasmCloudEntity (for actor or provider)
+    /// If nats client is sync, this can block the current thread until either the response is received,
+    /// or the timeout expires. If the timeout expires before the response is received,
+    /// this returns Error RpcError::Timeout.
+    pub async fn send_timeout<Target>(
+        &self,
+        origin: WasmCloudEntity,
+        target: Target,
+        message: Message<'_>,
+        timeout: Duration,
+    ) -> Result<Vec<u8>, RpcError>
+    where
+        Target: Into<WasmCloudEntity>,
+    {
+        self.inner_rpc(origin, target, message, true, Some(timeout))
+            .await
     }
 
     /// Send a wasmbus rpc message without waiting for response.
@@ -177,10 +200,10 @@ impl RpcClient {
         target: Target,
         message: Message<'_>,
     ) -> Result<(), RpcError>
-        where
-            Target: Into<WasmCloudEntity>,
+    where
+        Target: Into<WasmCloudEntity>,
     {
-        let _ = self.inner_rpc(origin, target, message, false).await?;
+        let _ = self.inner_rpc(origin, target, message, false, None).await?;
         Ok(())
     }
 
@@ -191,6 +214,7 @@ impl RpcClient {
         target: Target,
         message: Message<'_>,
         expect_response: bool,
+        timeout: Option<Duration>,
     ) -> Result<Vec<u8>, RpcError>
     where
         Target: Into<WasmCloudEntity>,
@@ -223,14 +247,24 @@ impl RpcClient {
         trace!("rpc send {}", &target_url);
 
         let nats_body = crate::serialize(&invocation)?;
+        let timeout = timeout.unwrap_or(DEFAULT_RPC_TIMEOUT_MILLIS);
 
         if expect_response {
-            // TODO: request with timeout
-            let payload = self
-                .request(&topic, &nats_body)
-                .await
-                .map_err(|e| RpcError::Nats(format!("rpc send error: {}: {}", target_url, e)))?;
-
+            let payload =
+                match tokio::time::timeout(timeout, self.request(&topic, &nats_body)).await {
+                    Ok(res) => res,
+                    Err(e) => {
+                        error!("rpc timeout: sending to {}: {}", &target_url, e);
+                        return Err(RpcError::Timeout(format!(
+                            "sending to {}: {}",
+                            &target_url,
+                            e.to_string()
+                        )));
+                    }
+                }
+                .map_err(|e| {
+                    RpcError::Nats(format!("rpc send error: {}: {}", target_url, e.to_string()))
+                })?;
 
             let inv_response = crate::deserialize::<InvocationResponse>(&payload)
                 .map_err(|e| RpcError::Deser(e.to_string()))?;
@@ -246,8 +280,7 @@ impl RpcClient {
                 }
             }
         } else {
-            self
-                .publish(&topic, &nats_body)
+            self.publish(&topic, &nats_body)
                 .await
                 .map_err(|e| RpcError::Nats(format!("rpc send error: {}: {}", target_url, e)))?;
             Ok(Vec::new())
@@ -305,7 +338,6 @@ impl RpcClient {
         }
         Ok(())
     }
-
 }
 
 pub(crate) fn invocation_hash(target_url: &str, origin_url: &str, msg: &[u8]) -> String {
