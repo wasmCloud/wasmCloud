@@ -1,4 +1,4 @@
-name: CONTROL_INTERFACE
+name: WASMBUS_RPC
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
     paths:
     - "rpc-rs/**"
     tags:
-    - 'rpc-rs-v*'
+    - 'wasmbus-rpc-v*'
   pull_request:
     branches: [ main ]
     paths:
