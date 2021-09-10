@@ -1,0 +1,37 @@
+# Template choices for new project creation
+#
+# Template type is `[[actor]]`, `[[interface]]`, or `[[provider]]`
+# There should be at least one of each template type in this file
+#
+# Settings per template:
+# ---------------------
+# name        short template name               - required
+# description one-line template description     - required
+# git         https or ssh uri                  - either git or path is required
+# subfolder   relative path within git repo     - optional if git uri is used
+# branch      git branch name                   - optional if git uri is used
+# path        path to template on disk          - either git or path is required
+
+[[actor]]
+name = "hello"
+description = "a hello-world actor that responds over an http connection"
+git = "wasmcloud/project-templates"
+subfolder = "actor/hello"
+
+[[interface]]
+name = "converter-interface"
+description = "an interface for actor-to-actor messages with a single Convert method"
+git = "wasmcloud/project-templates"
+subfolder = "interface/converter-actor"
+
+[[interface]]
+name = "factorial-interface"
+description = "an interface for a capability provider with capability contract"
+git = "wasmcloud/project-templates"
+subfolder = "interface/factorial"
+
+[[provider]]
+name = "factorial-provider"
+description = "a capability provider that computes factorials"
+git = "wasmcloud/project-templates"
+subfolder = "provider/factorial"

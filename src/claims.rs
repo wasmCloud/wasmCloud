@@ -564,7 +564,8 @@ fn generate_provider(provider: ProviderMetadata) -> Result<String, Box<dyn ::std
 }
 
 fn sign_file(cmd: SignCommand) -> Result<String, Box<dyn ::std::error::Error>> {
-    let mut sfile = File::open(&cmd.source).unwrap();
+    let mut sfile = File::open(&cmd.source)
+        .map_err(|e| format!("Failed to open file for signing '{}': {}", &cmd.source, e))?;
     let mut buf = Vec::new();
     sfile.read_to_end(&mut buf).unwrap();
 

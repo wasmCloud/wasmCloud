@@ -55,10 +55,10 @@ tokio = { version="1", features=["full"]}
 toml = "0.5"
 walkdir = "2.3"
 wascap = "0.6.0"
-wasmbus-rpc = "0.3"
+wasmbus-rpc = "0.3.10"
 wasmcloud-control-interface = { git = "https://github.com/wasmCloud/control-interface", version = "0.4.2" }
-wasmcloud-test-util = "0.1"
-weld-codegen = "0.1"
+wasmcloud-test-util = "0.1.4"
+weld-codegen = "0.1.17"
 
 [dev-dependencies]
 test_bin = "0.3.0"

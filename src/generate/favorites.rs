@@ -66,37 +66,8 @@ pub(crate) struct Favorites {
     pub(crate) templates: std::collections::HashMap<String, Vec<TemplateSource>>,
 }
 
-/// default favorites will be used if we don't find the default file in github.
-const DEFAULT_FAVORITES: &str = r#"
-[[actor]]
-name = "echo"
-description = "a simple actor that replies back over an http connection"
-git = "wasmcloud/project-templates"
-subfolder = "actor/echo"
-# branch
-
-[[interface]]
-name = "converter-actor"
-description = "an actor interface with a single Convert method"
-#path = ""
-git = "wasmcloud/project-templates"
-subfolder = "interface/converter-actor"
-# branch
-
-[[interface]]
-name = "factorial-provider"
-description = "an interface for a provider with capability contract"
-git = "wasmcloud/project-templates"
-subfolder = "interface/factorial"
-# branch
-
-[[provider]]
-name = "factorial"
-description = "a capability provider that computes factorials"
-git = "wasmcloud/project-templates"
-subfolder = "provider/factorial"
-# branch
-"#;
+/// default favorites will be used if one isn't provided on the command line
+const DEFAULT_FAVORITES: &str = include_str!("../../favorites.toml");
 
 /// try to load favorites from three sources:
 /// (1) the parameter
