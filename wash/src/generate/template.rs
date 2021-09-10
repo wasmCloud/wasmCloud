@@ -16,7 +16,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
-use walkdir::{DirEntry, WalkDir};
+use walkdir::WalkDir;
 use weld_codegen::render::Renderer;
 
 /// Matcher determines disposition of file: whether it should be copied, whether translated with template engine, and whether it is renamed
@@ -63,10 +63,20 @@ impl Matcher {
 
     /// determine renamed destination path
     fn rename_path(&self, rel_path: &Path) -> Option<&str> {
-        self.rename
+        let ren = self
+            .rename
             .iter()
             .find(|rc| rc.from == rel_path)
-            .map(|rc| rc.to.as_str())
+            .map(|rc| rc.to.as_str());
+        match ren {
+            None => {
+                println!("DBG: ren: {}: no", &rel_path.display());
+            }
+            Some(p) => {
+                println!("DBG: ren: {}: {}", &rel_path.display(), p);
+            }
+        }
+        ren
     }
 
     /// determine whether the file should be copied directly, or processed with the template engine
@@ -102,9 +112,8 @@ pub(crate) fn process_template_dir(
     values: &ParamMap,
     mp: &mut MultiProgress,
 ) -> Result<()> {
-    fn is_git_metadata(entry: &DirEntry) -> bool {
+    fn is_git_metadata(entry: &Path) -> bool {
         entry
-            .path()
             .components()
             .any(|c| c == std::path::Component::Normal(".git".as_ref()))
     }
@@ -118,9 +127,11 @@ pub(crate) fn process_template_dir(
         .follow_links(false) // do not follow symlinks
         .into_iter()
         .filter_map(Result::ok)
-        .filter(|e| !is_git_metadata(e))
+        .filter(|e| !is_git_metadata(e.path()))
         .filter(|e| e.path() != source_dir)
-        .collect::<Vec<_>>();
+        .map(|e| e.into_path())
+        .collect::<Vec<PathBuf>>();
+
     let total = files.len().to_string();
     for (progress, entry) in files.into_iter().enumerate() {
         let pb = mp.add(ProgressBar::new(50));
@@ -132,13 +143,13 @@ pub(crate) fn process_template_dir(
             width = total.len()
         ));
 
-        let filename = entry.path();
+        let filename = entry.as_path();
         let src_relative = filename.strip_prefix(source_dir)?;
         let f = src_relative.display();
         pb.set_message(format!("Processing: {}", f));
 
         if matcher.should_include(src_relative) {
-            if entry.file_type().is_file() {
+            if entry.is_file() {
                 let dest_rel_path = if let Some(rename_path) = matcher.rename_path(src_relative) {
                     // allow file paths to contain templates using previously defined variables
                     PathBuf::from(renderer.render_template(rename_path, values).with_context(
@@ -175,14 +186,14 @@ pub(crate) fn process_template_dir(
                 }
                 fs::create_dir_all(dest_path.parent().unwrap()).unwrap();
                 if matcher.is_raw(src_relative) {
-                    fs::copy(entry.path(), &dest_path)?;
+                    fs::copy(&entry, &dest_path)?;
                 } else {
-                    let contents = fs::read_to_string(entry.path()).with_context(|| {
+                    let contents = fs::read_to_string(&entry).with_context(|| {
                             format!(
                                 "{} {} `{}` {}",
                                 emoji::ERROR,
                                 style("Error reading template file.").bold().red(),
-                                style(&entry.path().display()).bold(),
+                                style(&entry.display()).bold(),
                                 "If this is not a text file, you may want to add the path to the 'template.raw' list in project-generate.toml"
                             )
                         })?;
