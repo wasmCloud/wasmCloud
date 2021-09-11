@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-provider-httpserver"
-version = "0.14.0"
+version = "0.14.1"
 edition = "2018"
 resolver = "2"
 
@@ -23,14 +23,14 @@ thiserror = "1.0"
 tokio = { version = "1", features = ["full"] }
 toml = "0.5"
 warp = {version="0.3", features=["tls"]}
-wasmcloud-interface-httpserver = "0.1.8"
-wasmbus-rpc = "0.3.10"
+wasmcloud-interface-httpserver = "0.1"
+wasmbus-rpc = "0.3.11"
 
 [dev-dependencies]
 assert_matches = "1.5"
 blake2 = "0.9"
 reqwest = { version = "0.11", features = ["json"]}
-wasmcloud-test-util = "0.1.4"
+wasmcloud-test-util = "0.1"
 
 [lib]
 name = "wasmcloud_provider_httpserver"

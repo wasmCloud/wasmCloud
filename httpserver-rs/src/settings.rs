@@ -33,6 +33,7 @@ const CORS_ALLOWED_HEADERS: &[&str] = &[
 ];
 const CORS_EXPOSED_HEADERS: &[&str] = &[];
 const CORS_DEFAULT_MAX_AGE_SECS: u64 = 300;
+pub(crate) const DEFAULT_TIMEOUT_MILLIS: u32 = 2000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ServiceSettings {
@@ -51,6 +52,11 @@ pub struct ServiceSettings {
     /// logging
     #[serde(default)]
     pub log: Log,
+
+    /// Rpc timeout - how long (milliseconds) to wait for actor's response
+    /// before returning a status 503 to the http client
+    #[serde(default)]
+    pub timeout_ms: Option<u32>,
 }
 
 impl Default for ServiceSettings {
@@ -60,6 +66,7 @@ impl Default for ServiceSettings {
             tls: Tls::default(),
             cors: Cors::default(),
             log: Log::default(),
+            timeout_ms: Some(DEFAULT_TIMEOUT_MILLIS),
         }
     }
 }
@@ -169,9 +176,20 @@ impl ServiceSettings {
 ///   config_file: load from file name. Interprets file as json, toml, yaml, based on file extension.
 ///   config_b64:  base64-encoded json string
 ///   config_json: raw json string
+/// Also accept "address" (a string representing SocketAddr) and "port", a localhost port
 /// If more than one key is provided, they are processed in the order above.
+///   (later names override earlier names in the list)
 ///
 pub fn load_settings(values: &HashMap<String, String>) -> Result<ServiceSettings, Error> {
+    use std::net::{IpAddr, Ipv4Addr};
+
+    // Allow keys to be UPPERCASE, as an accommodation
+    // for the lost souls who prefer ugly all-caps variable names.
+    let values = crate::make_case_insensitive(values).ok_or(Error::InvalidParameter(
+        "Key collision: httpserver settings (from linkdef.values) has one or more keys that are not unique based on case-insensitivity"
+            .to_string(),
+    ))?;
+
     let mut settings = ServiceSettings::default();
 
     if let Some(fpath) = values.get("config_file") {
@@ -186,6 +204,25 @@ pub fn load_settings(values: &HashMap<String, String>) -> Result<ServiceSettings
 
     if let Some(str) = values.get("config_json") {
         settings.merge(ServiceSettings::from_json(str.as_bytes())?);
+    }
+
+    // accept address as value parameter
+    if let Some(addr) = values.get("address") {
+        settings.address = Some(
+            SocketAddr::from_str(addr)
+                .map_err(|_| Error::InvalidParameter(format!("invalid address: {}", addr)))?,
+        );
+    }
+
+    // accept port, for compatibility with previous implementations
+    if let Some(addr) = values.get("port") {
+        let port = addr
+            .parse::<u16>()
+            .map_err(|_| Error::InvalidParameter(format!("Invalid port: {}", addr)))?;
+        settings.address = Some(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+            port,
+        ));
     }
 
     settings.validate()?;
