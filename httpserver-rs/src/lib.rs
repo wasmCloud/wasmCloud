@@ -284,7 +284,6 @@ impl HttpServer {
                 );
                 Ok(HttpResponse {
                     status_code: 503,
-                    body: b"Actor took too long or was unavailable.".to_vec(),
                     ..Default::default()
                 })
             }
