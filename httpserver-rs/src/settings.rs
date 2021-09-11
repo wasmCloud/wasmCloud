@@ -176,9 +176,13 @@ impl ServiceSettings {
 ///   config_file: load from file name. Interprets file as json, toml, yaml, based on file extension.
 ///   config_b64:  base64-encoded json string
 ///   config_json: raw json string
+/// Also accept "address" (a string represengint SocketAddr) and "PORT", a localhost port
 /// If more than one key is provided, they are processed in the order above.
+///   (later names override earlier names in the list)
 ///
 pub fn load_settings(values: &HashMap<String, String>) -> Result<ServiceSettings, Error> {
+    use std::net::{IpAddr, Ipv4Addr};
+
     let mut settings = ServiceSettings::default();
 
     if let Some(fpath) = values.get("config_file") {
@@ -193,6 +197,25 @@ pub fn load_settings(values: &HashMap<String, String>) -> Result<ServiceSettings
 
     if let Some(str) = values.get("config_json") {
         settings.merge(ServiceSettings::from_json(str.as_bytes())?);
+    }
+
+    // accept address as value parameter
+    if let Some(addr) = values.get("address") {
+        settings.address = Some(
+            SocketAddr::from_str(addr)
+                .map_err(|_| Error::InvalidParameter(format!("invalid address: {}", addr)))?,
+        );
+    }
+
+    // accept PORT, for compatibility with previous implementations
+    if let Some(addr) = values.get("PORT") {
+        let port = addr
+            .parse::<u16>()
+            .map_err(|_| Error::InvalidParameter(format!("Invalid port: {}", addr)))?;
+        settings.address = Some(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+            port,
+        ));
     }
 
     settings.validate()?;
