@@ -176,12 +176,19 @@ impl ServiceSettings {
 ///   config_file: load from file name. Interprets file as json, toml, yaml, based on file extension.
 ///   config_b64:  base64-encoded json string
 ///   config_json: raw json string
-/// Also accept "address" (a string represengint SocketAddr) and "PORT", a localhost port
+/// Also accept "address" (a string representing SocketAddr) and "port", a localhost port
 /// If more than one key is provided, they are processed in the order above.
 ///   (later names override earlier names in the list)
 ///
 pub fn load_settings(values: &HashMap<String, String>) -> Result<ServiceSettings, Error> {
     use std::net::{IpAddr, Ipv4Addr};
+
+    // Allow keys to be UPPERCASE, as an accommodation
+    // for the lost souls who prefer ugly all-caps variable names.
+    let values = crate::make_case_insensitive(values).ok_or(Error::InvalidParameter(
+        "Key collision: httpserver settings (from linkdef.values) has one or more keys that are not unique based on case-insensitivity"
+            .to_string(),
+    ))?;
 
     let mut settings = ServiceSettings::default();
 
@@ -207,8 +214,8 @@ pub fn load_settings(values: &HashMap<String, String>) -> Result<ServiceSettings
         );
     }
 
-    // accept PORT, for compatibility with previous implementations
-    if let Some(addr) = values.get("PORT") {
+    // accept port, for compatibility with previous implementations
+    if let Some(addr) = values.get("port") {
         let port = addr
             .parse::<u16>()
             .map_err(|_| Error::InvalidParameter(format!("Invalid port: {}", addr)))?;
