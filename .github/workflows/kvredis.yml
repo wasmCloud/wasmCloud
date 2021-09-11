@@ -1,30 +1,32 @@
-# Replace all occurrences of "PROVIDER" with the provider name (e.g. HTTPCLIENT)
-# Replace workflow triggers with provider with the provider name, should be the same as the folder path
-name: PROVIDER
+name: KVREDIS
 
 on:
   push:
     branches: [ main ]
     paths:
-    - "provider/**"
+    - "kvredis/**"
     tags:
-    - 'provider-v*'
+    - 'kvredis-v*'
   pull_request:
     branches: [ main ]
     paths:
-    - "provider/**"
+    - "kvredis/**"
 
 env:
   CARGO_TERM_COLOR: always
-  working-directory: ./provider
+  working-directory: ./kvredis
   WASH_ISSUER_KEY: ${{ secrets.WASMCLOUD_ACCOUNT_OFFICIAL }}
-  WASH_SUBJECT_KEY: ${{ secrets.WASMCLOUD_PROVIDER }}
+  WASH_SUBJECT_KEY: ${{ secrets.WASMCLOUD_REDIS }}
 
 jobs:
   rust_check:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v2
+    - id: run-nats
+      uses: wasmcloud/common-actions/run-nats@main
+    - id: run-redis
+      uses: wasmcloud/common-actions/run-redis@main
     # If your integration tests require nats or redis, run them here
     - id: rust-check-action
       uses: wasmcloud/common-actions/rust-check@main

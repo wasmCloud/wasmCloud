@@ -1,4 +1,3 @@
-# Replace workflow triggers with provider with the provider name, should be the same as the folder path
 name: HTTPCLIENT
 
 on:
@@ -18,9 +17,6 @@ env:
   working-directory: ./httpclient
   WASH_ISSUER_KEY: ${{ secrets.WASMCLOUD_ACCOUNT_OFFICIAL }}
   WASH_SUBJECT_KEY: ${{ secrets.WASMCLOUD_HTTPCLIENT }}
-  WASH_REG_USER:  ${{ secrets.AZURECR_PUSH_USER }}
-  WASH_REG_PASSWORD:  ${{ secrets.AZURECR_PUSH_PASSWORD }}
-  REVISION: ${{ github.run_number }}
 
 jobs:
   rust_check:
@@ -33,41 +29,69 @@ jobs:
       uses: wasmcloud/common-actions/rust-check@main
       with:
         working-directory: ${{ env.working-directory }}
-        with-nats: true
 
-  github_release:
-    if: startswith(github.ref, 'refs/tags/') # Only run on tag push
+  build_artifact:
     needs: rust_check
-    runs-on: ubuntu-latest
-    steps:
-    - name: Create Release
-      id: create_release
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        tag_name: ${{ github.ref }}
-        release_name: Release ${{ github.ref }}
-        draft: false
-        prerelease: true
-
-  artifact_release:
-    needs: github_release
     if: startswith(github.ref, 'refs/tags/') # Only run on tag push
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
       - uses: wasmcloud/common-actions/install-wash@main
       - uses: wasmcloud/common-actions/install-cross@main
+
       - name: Build full provider archive
         run: make par-full
         working-directory: ${{ env.working-directory }}
-      # Push artifact to https://AZURECR/provider:VERSION
-      - name: Push provider archive to AzureCR
+      
+      - name: Upload provider archive to GH Actions
+        uses: actions/upload-artifact@v2
+        with:
+          name: provider-archive
+          path: ${{ env.working-directory }}/build/*.par.gz
+
+  github_release:
+    if: startswith(github.ref, 'refs/tags/') # Only run on tag push
+    needs: build_artifact
+    runs-on: ubuntu-latest
+    steps:
+    - name: Download provider archive
+      uses: actions/download-artifact@v2
+      with:
+        name: provider-archive
+        path: ${{ env.working-directory }}/build
+
+    - name: Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: ${{ env.working-directory }}/build/*.par.gz
+        token: ${{ secrets.GITHUB_TOKEN }}
+        prerelease: true
+        draft: false
+
+  artifact_release:
+    needs: build_artifact
+    if: startswith(github.ref, 'refs/tags/') # Only run on tag push
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Download provider archive
+        uses: actions/download-artifact@v2
+        with:
+          name: provider-archive
+          path: ${{ env.working-directory }}/build
+
+      - name: Determine artifact metadata
         run: |
-          VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].version')
-          NAME=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name')
-          TAGNAME=$(echo $NAME | sed 's/wasmcloud-provider-//')
-          URL=${{secrets.AZURECR_PUSH_URL}}/$TAGNAME:$VERSION
-          wash reg push $URL build/$NAME.par.gz
+          echo "oci-repository=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name' | sed 's/wasmcloud-provider-//')" >> $GITHUB_ENV
+          echo "oci-version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].version')" >> $GITHUB_ENV
         working-directory: ${{ env.working-directory }}
+
+      - name: Push provider archive to AzureCR
+        uses: wasmcloud/common-actions/oci-artifact-release@main
+        with:
+          artifact-path: ${{ env.working-directory }}/build/${{ env.oci-repository }}.par.gz
+          oci-url: ${{ secrets.AZURECR_PUSH_URL }}
+          oci-repository: ${{ env.oci-repository }}
+          oci-version: ${{ env.oci-version }}
+          oci-username: ${{ secrets.AZURECR_PUSH_USER }}
+          oci-password: ${{ secrets.AZURECR_PUSH_PASSWORD }}

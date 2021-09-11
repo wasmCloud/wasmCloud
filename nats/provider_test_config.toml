@@ -2,7 +2,7 @@
 
 # name of compiled binary (usually project name unless overridden in [[bin]]
 # Required
-bin_path = "target/release/nats_messaging"
+bin_path = "target/debug/nats_messaging"
 
 # set RUST_LOG environment variable (default "info")
 rust_log = "debug"
