@@ -43,7 +43,7 @@ async fn get_request(_opt: &TestOptions) -> RpcResult<()> {
     let ctx = Context::default();
 
     let resp = client
-        .request(&ctx, &HttpRequest::get("https://wttr.in/London?format=3"))
+        .request(&ctx, &HttpRequest::get("https://wttr.in/London"))
         .await?;
     assert_eq!(resp.status_code, 200, "status code");
 
