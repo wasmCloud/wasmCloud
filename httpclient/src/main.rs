@@ -21,12 +21,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// HTTP client capability provider implementation
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Provider)]
+#[services(HttpClient)]
 struct HttpClientProvider {}
 
 /// use default implementations of provider message handlers
 impl ProviderDispatch for HttpClientProvider {}
-impl HttpClientReceiver for HttpClientProvider {}
 /// we don't need to override put_link, delete_link, or shutdown
 impl ProviderHandler for HttpClientProvider {}
 
@@ -152,28 +152,5 @@ fn convert_request_headers(
             };
             map.append(&name, value);
         }
-    }
-}
-
-/// Handle incoming rpc messages and dispatch to applicable trait handler.
-#[async_trait]
-impl MessageDispatch for HttpClientProvider {
-    async fn dispatch(&self, ctx: &Context, message: Message<'_>) -> RpcResult<Message<'_>> {
-        let op = match message.method.split_once('.') {
-            Some((cls, op)) if cls == "HttpClient" => op,
-            None => message.method,
-            _ => {
-                return Err(RpcError::MethodNotHandled(message.method.to_string()));
-            }
-        };
-        HttpClientReceiver::dispatch(
-            self,
-            ctx,
-            &Message {
-                method: op,
-                arg: message.arg,
-            },
-        )
-        .await
     }
 }
