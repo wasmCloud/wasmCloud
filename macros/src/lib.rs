@@ -174,22 +174,13 @@ pub fn derive_health_responder(input: TokenStream) -> TokenStream {
 
 fn gen_dispatch(traits: &[syn::Path], ident: &Ident) -> TokenStream2 {
     let mut methods = Vec::new();
-    let mut methods_legacy = Vec::new();
     let mut trait_receiver_impl = Vec::new();
-    //let ident_name = ident.to_string();
 
     for path in traits.iter() {
         let path_str = path.segments.to_token_stream().to_string();
         let id = format_ident!("{}Receiver", &path_str);
-        //let quoted_path = format!("\"{}\"", &path_str);
         methods.push(quote!(
             #path_str => #id::dispatch(self, ctx, &message).await
-        ));
-        methods_legacy.push(quote!(
-            match #id::dispatch(self, ctx, &message).await {
-                Err(RpcError::MethodNotHandled(_)) => {}, // continue
-                res => return res, // either Ok(_) or Err(_)
-            };
         ));
         trait_receiver_impl.push(quote!(
             impl #id for #ident { }
@@ -201,28 +192,21 @@ fn gen_dispatch(traits: &[syn::Path], ident: &Ident) -> TokenStream2 {
         impl MessageDispatch for #ident {
             async fn dispatch(
                 &self,
-                ctx: &wasmbus_rpc::Context,
+                ctx: &Context,
                 message: Message<'_>,
             ) -> Result<Message<'_>, RpcError> {
                 let (trait_name, trait_method) = message
                     .method
                     .rsplit_once('.')
                     .unwrap_or(("_", message.method));
-
                 let message = Message {
                     method: trait_method,
                     arg: message.arg,
                 };
                 match trait_name {
                    #( #methods, )*
-
-                    "_" => {
-                        // legacy handlers  - compatibility with no Trait prefix
-                        #( #methods_legacy )*
-                        Err(RpcError::MethodNotHandled(message.method.to_string()))
-                    },
                     _ => Err(RpcError::MethodNotHandled(
-                            format!("{} - unknown trait", message.method)))
+                            format!("{}.{} - unknown method", trait_name,message.method)))
                 }
             }
         }
@@ -251,52 +235,8 @@ pub fn derive_provider(input: TokenStream) -> TokenStream {
     let dispatch_impl = gen_dispatch(&traits, &ident);
     let output = quote!(
 
-    impl wasmcloud_provider_core::CapabilityProvider for #ident {
-        /// This function will be called on the provider when the host runtime is ready and has
-        /// configured a dispatcher. This function is only ever
-        /// called _once_ for a capability provider, regardless of the number of actors being
-        /// managed in the host
-        fn configure_dispatch( &self, dispatcher: Box<dyn provider::Dispatcher>,
-             ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-          let mut lock = self.dispatcher.write().unwrap();
-          *lock = Some(dispatcher);
-          Ok(())
-        }
-
-        /// Invoked when an actor has requested that a provider perform a given operation
-        fn handle_call(
-            &self,
-            actor: &str,
-            op: &str,
-            arg: &[u8],
-        ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-            let ctx = &wasmbus_rpc::Context {
-                actor: Some(actor),
-                ..Default::default()
-            };
-            let response = futures::executor::block_on(MessageDispatch::dispatch(
-                self,
-                &ctx,
-                Message {
-                    method: op,
-                    arg: std::borrow::Cow::Borrowed(arg),
-                },
-            ))?;
-            Ok(response.arg.to_vec())
-        }
-
-        /// This function is called to let the capability provider know that it is being removed
-        /// from the host runtime. This gives the provider an opportunity to clean up any
-        /// resources and stop any running threads.
-        /// WARNING: do not do anything in this function that can
-        /// cause a panic, including attempting to write to STDOUT while the host process is terminating
-        fn stop(&self) {
-                #ident :: stop(&self);
-        }
-    }
-
     #dispatch_impl
 
-        );
+    );
     output.into()
 }
