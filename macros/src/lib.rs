@@ -8,7 +8,7 @@ use syn::{
 };
 
 /// extract traits from attribute
-///  `#[services(Apple,Banana)]` returns vec![ Piano, Tuba ]
+///  `#[services(Piano,Tuba)]` returns vec![ Piano, Tuba ]
 ///  items in the vec are syn::Path, and may have more than one path segment,
 ///    as in instruments::Piano
 ///
@@ -215,6 +215,20 @@ fn gen_dispatch(traits: &[syn::Path], ident: &Ident) -> TokenStream2 {
     )
 }
 
+// for providers that do not implement any Service Receivers
+// (for example, HttpServer that sends only)
+// implement MessageDispatch that always return error if we receive rpc
+fn gen_empty_dispatch(ident: &Ident) -> TokenStream2 {
+    quote!(
+        #[async_trait]
+        impl MessageDispatch for #ident {
+            async fn dispatch(&self,_ctx: &Context,message: Message<'_>)->Result<Message<'_>, RpcError> {
+                Err(RpcError::MethodNotHandled(message.method.to_string()))
+            }
+        }
+    )
+}
+
 #[proc_macro_error]
 #[proc_macro_derive(Provider, attributes(services))]
 pub fn derive_provider(input: TokenStream) -> TokenStream {
@@ -224,19 +238,11 @@ pub fn derive_provider(input: TokenStream) -> TokenStream {
     for attr in provider_receiver.attrs.iter() {
         traits.extend(attr_traits(attr, "services"));
     }
-    if traits.is_empty() {
-        abort!(
-            provider_receiver.attrs_span,
-            "Missing list of traits. try `#[services(Trait1,Trait2)]`"
-        );
-    }
     let ident = provider_receiver.ident;
-    //let fields = actor_receiver.fields;
-    let dispatch_impl = gen_dispatch(&traits, &ident);
-    let output = quote!(
-
-    #dispatch_impl
-
-    );
+    let output = if traits.is_empty() {
+        gen_empty_dispatch(&ident)
+    } else {
+        gen_dispatch(&traits, &ident)
+    };
     output.into()
 }
