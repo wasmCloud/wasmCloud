@@ -16,11 +16,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// HttpServer provider implementation.
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Provider)]
 struct HttpServerProvider {
     // map to store http server (and its link parameters) for each linked actor
     actors: Arc<RwLock<HashMap<String, HttpServer>>>,
 }
+/// use default implementations of provider methods
+impl ProviderDispatch for HttpServerProvider {}
 
 /// Your provider can handle any of these methods
 /// to receive notification of new actor links, deleted links,
@@ -68,19 +70,5 @@ impl ProviderHandler for HttpServerProvider {
             server.begin_shutdown().await;
         }
         Ok(())
-    }
-}
-
-/// Handle RPC messages. This provider doesn't have any.
-impl ProviderDispatch for HttpServerProvider {}
-#[async_trait]
-impl MessageDispatch for HttpServerProvider {
-    async fn dispatch(
-        &self,
-        _ctx: &Context,
-        message: Message<'_>,
-    ) -> Result<Message<'_>, RpcError> {
-        // We don't implement an rpc receiver
-        Err(RpcError::MethodNotHandled(message.method.to_string()))
     }
 }
