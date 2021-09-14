@@ -11,7 +11,7 @@
 use redis::{aio::Connection, FromRedisValue, RedisError};
 use std::{collections::HashMap, convert::Infallible, ops::DerefMut, sync::Arc};
 use tokio::sync::RwLock;
-use wasmbus_rpc::{core::LinkDefinition, provider::prelude::*, MessageDispatch};
+use wasmbus_rpc::provider::prelude::*;
 use wasmcloud_interface_keyvalue::{
     GetResponse, IncrementRequest, KeyValue, KeyValueReceiver, ListAddRequest, ListDelRequest,
     ListRangeRequest, SetAddRequest, SetDelRequest, SetRequest, StringList,
@@ -30,14 +30,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Redis keyValue provider implementation.
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Provider)]
+#[services(KeyValue)]
 struct KvRedisProvider {
     // store redis connections per actor
     actors: Arc<RwLock<HashMap<String, RwLock<Connection>>>>,
 }
 /// use default implementations of provider message handlers
 impl ProviderDispatch for KvRedisProvider {}
-impl KeyValueReceiver for KvRedisProvider {}
 
 /// Handle provider control commands
 /// put_link (new actor link command), del_link (remove link command), and shutdown
@@ -280,28 +280,5 @@ impl KvRedisProvider {
         // get write lock on this actor's connection
         let mut con = rc.write().await;
         cmd.query_async(con.deref_mut()).await.map_err(to_rpc_err)
-    }
-}
-
-/// Handle incoming rpc messages and dispatch them to applicable trait handler.
-#[async_trait]
-impl MessageDispatch for KvRedisProvider {
-    async fn dispatch(&self, ctx: &Context, message: Message<'_>) -> RpcResult<Message<'_>> {
-        let op = match message.method.split_once('.') {
-            Some((cls, op)) if cls == "KeyValue" => op,
-            None => message.method,
-            _ => {
-                return Err(RpcError::MethodNotHandled(message.method.to_string()));
-            }
-        };
-        KeyValueReceiver::dispatch(
-            self,
-            ctx,
-            &Message {
-                method: op,
-                arg: message.arg,
-            },
-        )
-        .await
     }
 }

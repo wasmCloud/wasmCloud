@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, convert::Infallible, sync::Arc};
 use tokio::sync::RwLock;
 use wascap::prelude::KeyPair;
-use wasmbus_rpc::{core::LinkDefinition, provider::prelude::*, MessageDispatch};
+use wasmbus_rpc::{core::LinkDefinition, provider::prelude::*};
 use wasmcloud_interface_messaging::{
     MessageSubscriber, MessageSubscriberSender, Messaging, MessagingReceiver, PubMessage,
     ReplyMessage, RequestMessage, SubMessage,
@@ -90,14 +90,14 @@ impl ConnectionConfig {
 }
 
 /// Nats implementation for wasmcloud:messaging
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Provider)]
+#[services(Messaging)]
 struct NatsMessagingProvider {
     // store nats connection client per actor
     actors: Arc<RwLock<HashMap<String, Connection>>>,
 }
-/// use default implementations of provider message handlers
+// use default implementations of provider message handlers
 impl ProviderDispatch for NatsMessagingProvider {}
-impl MessagingReceiver for NatsMessagingProvider {}
 
 impl NatsMessagingProvider {
     /// attempt to connect to nats url (with jwt credentials, if provided)
@@ -270,28 +270,5 @@ impl Messaging for NatsMessagingProvider {
             reply_to: resp.reply,
             subject: resp.subject,
         })
-    }
-}
-
-/// Handle incoming rpc messages and dispatch them to applicable trait handler.
-#[async_trait]
-impl MessageDispatch for NatsMessagingProvider {
-    async fn dispatch(&self, ctx: &Context, message: Message<'_>) -> RpcResult<Message<'_>> {
-        let op = match message.method.split_once('.') {
-            Some((cls, op)) if cls == "Messaging" => op,
-            None => message.method,
-            _ => {
-                return Err(RpcError::MethodNotHandled(message.method.to_string()));
-            }
-        };
-        MessagingReceiver::dispatch(
-            self,
-            ctx,
-            &Message {
-                method: op,
-                arg: message.arg,
-            },
-        )
-        .await
     }
 }
