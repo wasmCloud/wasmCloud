@@ -43,12 +43,17 @@ async fn get_request(_opt: &TestOptions) -> RpcResult<()> {
     let ctx = Context::default();
 
     let resp = client
-        .request(&ctx, &HttpRequest::get("https://wttr.in/London"))
+        .request(&ctx, &HttpRequest::get("https://1.1.1.1/"))
         .await?;
     assert_eq!(resp.status_code, 200, "status code");
+    assert!(resp.header.get("content-type").is_some());
 
     let body = String::from_utf8_lossy(&resp.body);
-    assert!(body.contains("London"), "unexpected response: {}", &body);
+    assert!(
+        body.contains("DOCTYPE html"),
+        "expected to get html doc: {}",
+        &body
+    );
 
     Ok(())
 }
