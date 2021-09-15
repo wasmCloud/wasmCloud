@@ -1,14 +1,17 @@
 //! smithy model lint and validation
 //!
+use crate::generate::emoji;
 use anyhow::anyhow;
 use atelier_core::model::Model;
+use console::style;
 use std::path::PathBuf;
 use structopt::StructOpt;
 use weld_codegen::{
-    config::{CodegenConfig, ModelSource},
+    config::{CodegenConfig, ModelSource, OutputLanguage},
     default_config, sources_to_model,
 };
 
+type TomlValue = toml::Value;
 const CODEGEN_CONFIG_FILE: &str = "codegen.toml";
 
 /// Perform lint checks on smithy models
@@ -25,6 +28,14 @@ pub(crate) struct LintCli {
 pub(crate) struct ValidateCli {
     #[structopt(flatten)]
     opt: ValidateOptions,
+}
+
+/// Generate code from smithy IDL files
+#[derive(Debug, StructOpt, Clone)]
+#[structopt(name = "gen")]
+pub(crate) struct GenerateCli {
+    #[structopt(flatten)]
+    opt: GenerateOptions,
 }
 
 #[derive(Debug, Clone, StructOpt)]
@@ -55,6 +66,43 @@ pub(crate) struct ValidateOptions {
     verbose: bool,
 
     /// Input files to process (overrides codegen.toml)
+    #[structopt(name = "input")]
+    input: Vec<String>,
+}
+
+/// Generate code from smithy IDL files
+#[derive(Debug, Clone, StructOpt)]
+pub(crate) struct GenerateOptions {
+    /// Configuration file (toml). Defaults to "./codegen.toml"
+    #[structopt(short, long)]
+    config: Option<PathBuf>,
+
+    /// Output directory, defaults to current directory
+    #[structopt(short, long)]
+    output_dir: Option<PathBuf>,
+
+    /// Optionally, load templates from this folder.
+    /// Each template file name is its template name, for example, "header.hbs"
+    /// is registered with the name "header"
+    #[structopt(short = "T", long)]
+    template_dir: Option<PathBuf>,
+
+    /// Output language(s) to generate. May be specified more than once
+    /// If not specified, all languages in config file will be generated (`-l html -l rust`)
+    // number_of_values forces the user to use '-l' for each item
+    #[structopt(short, long, number_of_values = 1)]
+    lang: Vec<OutputLanguage>,
+
+    /// Additional defines in the form of key=value to be passed to renderer
+    /// Use `-D key=value` for each term to be added.
+    #[structopt(short = "D", parse(try_from_str = parse_key_val), number_of_values = 1)]
+    defines: Vec<(String, TomlValue)>,
+
+    /// Enable verbose logging
+    #[structopt(short, long)]
+    verbose: bool,
+
+    /// model files to process. Must specify either on command line or in 'models' array in codegen.toml
     #[structopt(name = "input")]
     input: Vec<String>,
 }
@@ -184,4 +232,71 @@ fn select_config(opt_config: &Option<PathBuf>) -> Result<CodegenConfig, anyhow::
     config.base_dir = folder;
 
     Ok(config)
+}
+
+pub(crate) fn handle_gen_command(
+    command: GenerateCli,
+) -> Result<String, Box<dyn ::std::error::Error>> {
+    let opt = command.opt;
+    if let Some(ref tdir) = opt.template_dir {
+        if !tdir.is_dir() {
+            return Err("template_dir parameter must be an existing directory".into());
+        }
+    }
+    let output_dir = match &opt.output_dir {
+        Some(pb) => pb.to_owned(),
+        _ => PathBuf::from("."),
+    };
+    let verbose = match opt.verbose {
+        true => 1u8,
+        false => 0u8,
+    };
+    let mut config = select_config(&opt.config)?;
+    if !opt.lang.is_empty() {
+        config.output_languages = opt.lang.clone()
+    }
+    let mut input_models = Vec::new();
+    std::mem::swap(&mut config.models, &mut input_models);
+    let model = build_model(opt.input, input_models, config.base_dir.clone(), verbose)?;
+
+    let templates = if let Some(ref tdir) = opt.template_dir {
+        println!(
+            "{} {} {}",
+            emoji::INFO,
+            style("Importing templates from ").bold(),
+            style(&tdir.display()).underlined()
+        );
+        weld_codegen::templates_from_dir(tdir)?
+    } else {
+        Vec::new()
+    };
+
+    let g = weld_codegen::Generator::default();
+    g.gen(Some(&model), config, templates, &output_dir, opt.defines)?;
+
+    Ok(String::new())
+}
+
+/// Parse a single key-value pair into (String,TomlValue)
+fn parse_key_val(
+    s: &str,
+) -> Result<(String, TomlValue), Box<dyn std::error::Error + Send + Sync + 'static>> {
+    let pos = s
+        .find('=')
+        .ok_or_else(|| format!("invalid KEY=value: no `=` found in `{}`", s))?;
+    Ok((s[..pos].to_string(), as_toml(&s[pos + 1..])))
+}
+
+// quick and easy conversion to toml for bool, int, or string
+fn as_toml(s: &str) -> TomlValue {
+    if s == "true" {
+        return true.into();
+    }
+    if s == "false" {
+        return false.into();
+    }
+    if let Ok(num) = s.parse::<i32>() {
+        return num.into();
+    };
+    TomlValue::String(s.to_string())
 }

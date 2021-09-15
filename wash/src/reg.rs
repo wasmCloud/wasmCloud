@@ -196,6 +196,7 @@ pub(crate) async fn pull_artifact(
         } else {
             ClientProtocol::Https
         },
+        ..Default::default()
     });
 
     let auth = match (user, password) {
@@ -398,6 +399,7 @@ pub(crate) async fn push_artifact(
         } else {
             ClientProtocol::Https
         },
+        ..Default::default()
     });
 
     let auth = match (user, password) {
