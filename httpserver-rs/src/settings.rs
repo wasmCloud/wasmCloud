@@ -185,7 +185,7 @@ pub fn load_settings(values: &HashMap<String, String>) -> Result<ServiceSettings
 
     // Allow keys to be UPPERCASE, as an accommodation
     // for the lost souls who prefer ugly all-caps variable names.
-    let values = crate::make_case_insensitive(values).ok_or(Error::InvalidParameter(
+    let values = crate::make_case_insensitive(values).ok_or_else(|| Error::InvalidParameter(
         "Key collision: httpserver settings (from linkdef.values) has one or more keys that are not unique based on case-insensitivity"
             .to_string(),
     ))?;
