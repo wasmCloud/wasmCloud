@@ -230,7 +230,7 @@ impl RpcClient {
             subject,
             &target_url,
             &origin_url,
-            &invocation_hash(&target_url, &origin_url, &message.arg),
+            &invocation_hash(&target_url, &origin_url, &message),
         );
 
         let topic = rpc_topic(&target, &self.lattice_prefix);
@@ -340,12 +340,13 @@ impl RpcClient {
     }
 }
 
-pub(crate) fn invocation_hash(target_url: &str, origin_url: &str, msg: &[u8]) -> String {
+pub(crate) fn invocation_hash(target_url: &str, origin_url: &str, msg: &Message) -> String {
     use std::io::Write;
     let mut cleanbytes: Vec<u8> = Vec::new();
     cleanbytes.write_all(origin_url.as_bytes()).unwrap();
     cleanbytes.write_all(target_url.as_bytes()).unwrap();
-    cleanbytes.write_all(msg).unwrap();
+    cleanbytes.write_all(msg.method.as_bytes()).unwrap();
+    cleanbytes.write_all(&msg.arg).unwrap();
     let digest = sha256_digest(cleanbytes.as_slice()).unwrap();
     data_encoding::HEXUPPER.encode(digest.as_ref())
 }
