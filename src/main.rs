@@ -57,7 +57,7 @@ enum CliCommand {
     /// Manage contents of local wasmCloud caches
     #[structopt(name = "drain")]
     Drain(DrainCli),
-    /// Generate code driven by codegen.toml file
+    /// Generate code from smithy IDL files
     #[structopt(name = "gen")]
     Gen(GenerateCli),
     /// Utilities for generating and managing keys

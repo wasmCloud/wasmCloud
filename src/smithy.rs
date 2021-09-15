@@ -1,7 +1,9 @@
 //! smithy model lint and validation
 //!
+use crate::generate::emoji;
 use anyhow::anyhow;
 use atelier_core::model::Model;
+use console::style;
 use std::path::PathBuf;
 use structopt::StructOpt;
 use weld_codegen::{
@@ -28,7 +30,7 @@ pub(crate) struct ValidateCli {
     opt: ValidateOptions,
 }
 
-/// Generate using codegen.toml
+/// Generate code from smithy IDL files
 #[derive(Debug, StructOpt, Clone)]
 #[structopt(name = "gen")]
 pub(crate) struct GenerateCli {
@@ -68,7 +70,7 @@ pub(crate) struct ValidateOptions {
     input: Vec<String>,
 }
 
-///
+/// Generate code from smithy IDL files
 #[derive(Debug, Clone, StructOpt)]
 pub(crate) struct GenerateOptions {
     /// Configuration file (toml). Defaults to "./codegen.toml"
@@ -79,7 +81,7 @@ pub(crate) struct GenerateOptions {
     #[structopt(short, long)]
     output_dir: Option<PathBuf>,
 
-    /// Optionally, load templates from this folder (overrides built-in templates).
+    /// Optionally, load templates from this folder.
     /// Each template file name is its template name, for example, "header.hbs"
     /// is registered with the name "header"
     #[structopt(short = "T", long)]
@@ -258,7 +260,12 @@ pub(crate) fn handle_gen_command(
     let model = build_model(opt.input, input_models, config.base_dir.clone(), verbose)?;
 
     let templates = if let Some(ref tdir) = opt.template_dir {
-        println!("importing templates from {}", &tdir.display());
+        println!(
+            "{} {} {}",
+            emoji::INFO,
+            style("Importing templates from ").bold(),
+            style(&tdir.display()).underlined()
+        );
         weld_codegen::templates_from_dir(tdir)?
     } else {
         Vec::new()
