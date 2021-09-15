@@ -185,9 +185,8 @@ impl HttpServer {
                                     e
                                 );
                                 HttpResponse {
-                                    body: b"internal error. see logs for more info".to_vec(),
-                                    header: Default::default(),
-                                    status_code: 500,
+                                    status_code: http::StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                                    ..Default::default()
                                 }
                             }
                         };
