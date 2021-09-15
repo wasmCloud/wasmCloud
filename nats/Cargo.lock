@@ -2825,13 +2825,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "wasmcloud-interface-httpclient"
-version = "0.1.8"
+name = "wasmcloud-interface-messaging"
+version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d7e3acba9773fca68c9ae5960b2d6062bbf0f53917e2d7d24dacda62e8690bd7"
+checksum = "5990de6679e3b56f0d60aaa99d5841fb546c8481b300b34fbdc3ea698219a894"
 dependencies = [
  "async-trait",
- "futures 0.3.17",
+ "log",
  "serde",
  "serde_bytes",
  "serde_json",
@@ -2855,8 +2855,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "wasmcloud-provider-httpclient"
-version = "0.3.2"
+name = "wasmcloud-provider-nats"
+version = "0.11.2"
 dependencies = [
  "async-trait",
  "base64",
@@ -2865,8 +2865,8 @@ dependencies = [
  "crossbeam",
  "futures 0.3.17",
  "log",
+ "nats",
  "once_cell",
- "reqwest",
  "rmp-serde",
  "serde",
  "serde_bytes",
@@ -2874,8 +2874,9 @@ dependencies = [
  "thiserror",
  "tokio",
  "toml",
+ "wascap",
  "wasmbus-rpc",
- "wasmcloud-interface-httpclient",
+ "wasmcloud-interface-messaging",
  "wasmcloud-test-util",
 ]
 
