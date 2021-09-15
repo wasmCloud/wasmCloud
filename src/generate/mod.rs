@@ -54,7 +54,7 @@ use tempfile::TempDir;
 use weld_codegen::render::Renderer;
 
 mod config;
-mod emoji;
+pub(crate) mod emoji;
 mod favorites;
 mod git;
 mod interactive;

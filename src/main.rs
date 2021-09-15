@@ -16,7 +16,7 @@ use par::ParCli;
 mod reg;
 use reg::RegCli;
 mod smithy;
-use smithy::{LintCli, ValidateCli};
+use smithy::{GenerateCli, LintCli, ValidateCli};
 mod call;
 use call::CallCli;
 mod util;
@@ -57,6 +57,9 @@ enum CliCommand {
     /// Manage contents of local wasmCloud caches
     #[structopt(name = "drain")]
     Drain(DrainCli),
+    /// Generate code from smithy IDL files
+    #[structopt(name = "gen")]
+    Gen(GenerateCli),
     /// Utilities for generating and managing keys
     #[structopt(name = "keys", aliases = &["key"])]
     Keys(KeysCli),
@@ -87,6 +90,7 @@ async fn main() {
         CliCommand::Claims(claimscli) => claims::handle_command(claimscli.command()).await,
         CliCommand::Ctl(ctlcli) => ctl::handle_command(ctlcli.command()).await,
         CliCommand::Drain(draincmd) => drain::handle_command(draincmd.command()),
+        CliCommand::Gen(generate_cli) => smithy::handle_gen_command(generate_cli),
         CliCommand::Keys(keyscli) => keys::handle_command(keyscli.command()),
         CliCommand::New(newcli) => generate::handle_command(newcli.command()),
         CliCommand::Par(parcli) => par::handle_command(parcli.command()).await,
