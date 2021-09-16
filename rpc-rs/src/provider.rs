@@ -108,8 +108,12 @@ impl HostBridge {
             wascap::prelude::KeyPair::from_seed(&host_data.invocation_seed)
                 .map_err(|e| RpcError::NotInitialized(format!("key failure: {}", e)))?
         };
-        let rpc_client =
-            crate::rpc_client::RpcClient::new(nats, &host_data.lattice_rpc_prefix, key);
+        let rpc_client = crate::rpc_client::RpcClient::new(
+            nats,
+            &host_data.lattice_rpc_prefix,
+            key,
+            host_data.host_id.clone(),
+        );
 
         Ok(HostBridge {
             inner: Arc::new(HostBridgeInner {

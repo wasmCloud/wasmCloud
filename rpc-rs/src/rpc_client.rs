@@ -40,6 +40,8 @@ pub struct RpcClient {
     lattice_prefix: String,
     /// secrets for signing invocations
     key: Arc<wascap::prelude::KeyPair>,
+    /// host id for invocations
+    host_id: String,
 }
 
 #[derive(Clone)]
@@ -69,16 +71,18 @@ pub fn rpc_topic(entity: &WasmCloudEntity, lattice_prefix: &str) -> String {
 impl RpcClient {
     /// Constructs a new RpcClient for the async nats connection.
     /// parameters: async nats client, lattice rpc prefix (usually "default"),
-    /// and secret key for signing messages
+    /// secret key for signing messages, and host_id
     pub fn new(
         nats: Arc<crate::provider::NatsClient>,
         lattice_prefix: &str,
         key: wascap::prelude::KeyPair,
+        host_id: String,
     ) -> Self {
         RpcClient {
             client: NatsClientType::Async(nats),
             lattice_prefix: lattice_prefix.to_string(),
             key: Arc::new(key),
+            host_id,
         }
     }
 
@@ -89,11 +93,13 @@ impl RpcClient {
         nats: nats::asynk::Connection,
         lattice_prefix: &str,
         key: wascap::prelude::KeyPair,
+        host_id: String,
     ) -> Self {
         RpcClient {
             client: NatsClientType::Asynk(nats),
             lattice_prefix: lattice_prefix.to_string(),
             key: Arc::new(key),
+            host_id,
         }
     }
 
@@ -104,11 +110,13 @@ impl RpcClient {
         nats: nats::Connection,
         lattice_prefix: &str,
         key: wascap::prelude::KeyPair,
+        host_id: String,
     ) -> Self {
         RpcClient {
             client: NatsClientType::Sync(nats),
             lattice_prefix: lattice_prefix.to_string(),
             key: Arc::new(key),
+            host_id,
         }
     }
 
@@ -227,7 +235,7 @@ impl RpcClient {
         debug!("rpc_client sending to {}", &target_url);
         let claims = wascap::prelude::Claims::<wascap::prelude::Invocation>::new(
             issuer.clone(),
-            subject,
+            subject.clone(),
             &target_url,
             &origin_url,
             &invocation_hash(&target_url, &origin_url, &message),
@@ -240,9 +248,9 @@ impl RpcClient {
             target,
             operation: method.clone(),
             msg: message.arg.into_owned(),
-            id: make_uuid(),
+            id: subject,
             encoded_claims: claims.encode(&self.key).unwrap(),
-            host_id: String::new(),
+            host_id: self.host_id.clone(),
         };
         trace!("rpc send {}", &target_url);
 
@@ -399,9 +407,10 @@ impl RpcClientSync {
         nats: nats::Connection,
         lattice_prefix: &str,
         key: wascap::prelude::KeyPair,
+        host_id: String,
     ) -> Self {
         RpcClientSync {
-            inner: RpcClient::new_sync(nats, lattice_prefix, key),
+            inner: RpcClient::new_sync(nats, lattice_prefix, key, host_id),
         }
     }
 
