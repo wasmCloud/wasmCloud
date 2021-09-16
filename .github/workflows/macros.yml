@@ -6,7 +6,7 @@ on:
     paths:
     - "macros/**"
     tags:
-    - 'macros-v*'
+    - 'wasmbus-macros-v*'
   pull_request:
     branches: [ main ]
     paths:

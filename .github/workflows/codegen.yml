@@ -6,7 +6,7 @@ on:
     paths:
     - "codegen/**"
     tags:
-    - 'codegen-v*'
+    - 'weld-codegen-v*'
   pull_request:
     branches: [ main ]
     paths:
