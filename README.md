@@ -20,7 +20,7 @@ For running a wasmCloud host in a browser or embedding in a JavaScript V8 host, 
 
 ## Rust Runtime - ⚠️ DEPRECATED
 
-The pure-Rust wasmCloud host runtime has been deprecated in favor of the new Elixir/OTP runtime.
+The pure-Rust wasmCloud host runtime has been deprecated in favor of the new Elixir/OTP runtime. If you're looking for tooling to support running resources with the pure-Rust wasmCloud host, please refer to the [resources](./RESOURCES.md) file for compatible versions.
 
 ## Contributing
 
