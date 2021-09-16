@@ -276,9 +276,9 @@ mod test {
     #[test]
     fn write_par() -> Result<()> {
         let mut arch = ProviderArchive::new(
-            "wascc:testing",
+            "wasmcloud:testing",
             "Testing",
-            "waSCC",
+            "wasmCloud",
             Some(1),
             Some("0.0.1".to_string()),
         );
@@ -296,9 +296,9 @@ mod test {
     #[test]
     fn error_on_no_providers() -> Result<()> {
         let mut arch = ProviderArchive::new(
-            "wascc:testing",
+            "wasmcloud:testing",
             "Testing",
-            "waSCC",
+            "wasmCloud",
             Some(2),
             Some("0.0.2".to_string()),
         );
@@ -327,9 +327,9 @@ mod test {
     fn round_trip() -> Result<()> {
         // Build an archive in memory the way a CLI wrapper might...
         let mut arch = ProviderArchive::new(
-            "wascc:testing",
+            "wasmcloud:testing",
             "Testing",
-            "waSCC",
+            "wasmCloud",
             Some(3),
             Some("0.0.3".to_string()),
         );
@@ -383,9 +383,9 @@ mod test {
     #[test]
     fn compression_roundtrip() -> Result<()> {
         let mut arch = ProviderArchive::new(
-            "wascc:testing",
+            "wasmcloud:testing",
             "Testing",
-            "waSCC",
+            "wasmCloud",
             Some(4),
             Some("0.0.4".to_string()),
         );
@@ -429,9 +429,9 @@ mod test {
     #[test]
     fn valid_decompression() -> Result<()> {
         let mut arch = ProviderArchive::new(
-            "wascc:testing",
+            "wasmcloud:testing",
             "Testing",
-            "waSCC",
+            "wasmCloud",
             Some(5),
             Some("0.0.5".to_string()),
         );
@@ -470,9 +470,9 @@ mod test {
     #[test]
     fn valid_write_compressed() -> Result<()> {
         let mut arch = ProviderArchive::new(
-            "wascc:testing",
+            "wasmcloud:testing",
             "Testing",
-            "waSCC",
+            "wasmCloud",
             Some(6),
             Some("0.0.6".to_string()),
         );
@@ -516,9 +516,9 @@ mod test {
     #[test]
     fn valid_write_compressed_with_suffix() -> Result<()> {
         let mut arch = ProviderArchive::new(
-            "wascc:testing",
+            "wasmcloud:testing",
             "Testing",
-            "waSCC",
+            "wasmCloud",
             Some(7),
             Some("0.0.7".to_string()),
         );
@@ -563,9 +563,9 @@ mod test {
     #[test]
     fn preserved_claims() -> Result<()> {
         // Build an archive in memory the way a CLI wrapper might...
-        let capid = "wascc:testing";
+        let capid = "wasmcloud:testing";
         let name = "Testing";
-        let vendor = "waSCC";
+        let vendor = "wasmCloud";
         let rev = 8;
         let ver = "0.0.8".to_string();
         let mut arch = ProviderArchive::new(capid, name, vendor, Some(rev), Some(ver.clone()));
