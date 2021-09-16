@@ -23,7 +23,6 @@ machine_id = $(shell uname -m )
 # name of compiled binary
 bin_name ?= $(PROJECT)
 dest_par ?= build/$(bin_name).par.gz
-
 link_name ?= default
 
 # If name is not defined, use project
@@ -36,6 +35,14 @@ oci_url      ?= $(oci_url_base)/$(bin_name):$(VERSION)
 ifeq ($(WASH_REG_USER),)
 	oci_insecure := --insecure
 endif
+
+# rules to print file name and path of build target
+target-path:
+	@echo $(dest_par)
+target-path-abs:
+	@echo $(abspath $(dest_par))
+target-file:
+	@echo $(notdir $(dest_par))
 
 par_targets ?= \
 	x86_64-unknown-linux-gnu \
