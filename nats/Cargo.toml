@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-provider-nats"
-version = "0.11.2"
+version = "0.11.3"
 edition = "2018"
 resolver = "2"
 
@@ -22,12 +22,12 @@ thiserror = "1.0"
 tokio = { version = "1", features = ["full"] }
 toml = "0.5"
 wascap = "0.6"
-wasmbus-rpc = "0.3.12"
-wasmcloud-interface-messaging = "0.1.5"
+wasmbus-rpc = "0.4.0"
+wasmcloud-interface-messaging = "0.1.6"
 
 # test dependencies
 [dev-dependencies]
-wasmcloud-test-util = "0.1.5"
+wasmcloud-test-util = "0.1.6"
 
 [[bin]]
 name = "nats_messaging"

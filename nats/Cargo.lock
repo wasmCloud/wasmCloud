@@ -1023,9 +1023,9 @@ checksum = "9a3a5bfb195931eeb336b2a7b4d761daec841b97f947d34394601737a7bba5e4"
 
 [[package]]
 name = "hyper"
-version = "0.14.12"
+version = "0.14.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "13f67199e765030fa08fe0bd581af683f0d5bc04ea09c2b1102012c5fb90e7fd"
+checksum = "15d1cfb9e4f68655fa04c01f59edb405b6074a0f7118ea881e5026e4a1cd8593"
 dependencies = [
  "bytes",
  "futures-channel",
@@ -2793,9 +2793,9 @@ dependencies = [
 
 [[package]]
 name = "wasmbus-rpc"
-version = "0.3.12"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "498eba316f468bf47e41ea7cbf3fdf8860bca511a70b1159aca5c22a44f94c0b"
+checksum = "94522818d93b1c317ccc96b71f4ffef9f5c1883361c6b2d22b25ba600e4a5a1e"
 dependencies = [
  "async-trait",
  "base64",
@@ -2826,9 +2826,9 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-interface-messaging"
-version = "0.1.5"
+version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5990de6679e3b56f0d60aaa99d5841fb546c8481b300b34fbdc3ea698219a894"
+checksum = "57e124c4465e94c715177931be9b6eff7c7d67f24bfc5de225ac1bc48b2d5e7c"
 dependencies = [
  "async-trait",
  "log",
@@ -2841,9 +2841,9 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-interface-testing"
-version = "0.1.4"
+version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca1817ee8ec2a177a4502ed022e7b8df4ce70dc661d186021c728e67d656f2f3"
+checksum = "1fe90e2e29b2384664585463fc7d0facad2b591d3a24703c88b2dc77cd2f9441"
 dependencies = [
  "async-trait",
  "regex",
@@ -2856,7 +2856,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-nats"
-version = "0.11.2"
+version = "0.11.3"
 dependencies = [
  "async-trait",
  "base64",
@@ -2882,9 +2882,9 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-test-util"
-version = "0.1.5"
+version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f7ab096749ea5d08610010d447585def9377b3dd47e67af6bc6add0a7732f87f"
+checksum = "7aa880013ba44b6db35d216d4773b86559cdfbfeab1fe392293a1cb40de75979"
 dependencies = [
  "anyhow",
  "async-trait",
