@@ -2856,7 +2856,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-httpclient"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "async-trait",
  "base64",
