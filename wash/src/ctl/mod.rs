@@ -302,6 +302,10 @@ pub(crate) struct StartActorCommand {
     /// Constraints for actor auction in the form of "label=value". If host-id is supplied, this list is ignored
     #[structopt(short = "c", long = "constraint", name = "constraints")]
     constraints: Option<Vec<String>>,
+
+    /// Timeout to await an auction response
+    #[structopt(long = "auction-timeout", default_value = "1")]
+    auction_timeout: u64,
 }
 
 #[derive(Debug, Clone, StructOpt)]
@@ -327,6 +331,10 @@ pub(crate) struct StartProviderCommand {
     /// Constraints for provider auction in the form of "label=value". If host-id is supplied, this list is ignored
     #[structopt(short = "c", long = "constraint", name = "constraints")]
     constraints: Option<Vec<String>>,
+
+    /// Timeout to await an auction response
+    #[structopt(long = "auction-timeout", default_value = "1")]
+    auction_timeout: u64,
 }
 
 #[derive(Debug, Clone, StructOpt)]
@@ -607,8 +615,15 @@ pub(crate) async fn link_query(cmd: LinkQueryCommand) -> Result<LinkDefinitionLi
 }
 
 pub(crate) async fn start_actor(cmd: StartActorCommand) -> Result<CtlOperationAck> {
-    let timeout = Duration::from_secs(cmd.opts.timeout);
-    let client = ctl_client_from_opts(cmd.opts).await?;
+    let opts = if cmd.opts.timeout == 1 {
+        ConnectionOpts {
+            timeout: 15,
+            ..cmd.opts
+        }
+    } else {
+        cmd.opts
+    };
+    let client = ctl_client_from_opts(opts).await?;
 
     let host = match cmd.host_id {
         Some(host) => host,
@@ -617,7 +632,7 @@ pub(crate) async fn start_actor(cmd: StartActorCommand) -> Result<CtlOperationAc
                 .perform_actor_auction(
                     &cmd.actor_ref,
                     labels_vec_to_hashmap(cmd.constraints.unwrap_or_default())?,
-                    timeout,
+                    Duration::from_secs(cmd.auction_timeout),
                 )
                 .await
                 .map_err(convert_error)?;
@@ -636,8 +651,15 @@ pub(crate) async fn start_actor(cmd: StartActorCommand) -> Result<CtlOperationAc
 }
 
 pub(crate) async fn start_provider(cmd: StartProviderCommand) -> Result<CtlOperationAck> {
-    let timeout = Duration::from_secs(cmd.opts.timeout);
-    let client = ctl_client_from_opts(cmd.opts).await?;
+    let opts = if cmd.opts.timeout == 1 {
+        ConnectionOpts {
+            timeout: 60,
+            ..cmd.opts
+        }
+    } else {
+        cmd.opts
+    };
+    let client = ctl_client_from_opts(opts).await?;
 
     let host = match cmd.host_id {
         Some(host) => host,
@@ -647,7 +669,7 @@ pub(crate) async fn start_provider(cmd: StartProviderCommand) -> Result<CtlOpera
                     &cmd.provider_ref,
                     &cmd.link_name,
                     labels_vec_to_hashmap(cmd.constraints.unwrap_or_default())?,
-                    timeout,
+                    Duration::from_secs(cmd.auction_timeout),
                 )
                 .await
                 .map_err(convert_error)?;
@@ -867,6 +889,8 @@ mod test {
             CTL_PORT,
             "--timeout",
             "1",
+            "--auction-timeout",
+            "1",
             "--constraint",
             "arch=x86_64",
             "--host-id",
@@ -880,11 +904,13 @@ mod test {
                 host_id,
                 actor_ref,
                 constraints,
+                auction_timeout,
             })) => {
                 assert_eq!(opts.ctl_host, CTL_HOST);
                 assert_eq!(opts.ctl_port, CTL_PORT);
                 assert_eq!(opts.ns_prefix, NS_PREFIX);
                 assert_eq!(opts.timeout, 1);
+                assert_eq!(auction_timeout, 1);
                 assert_eq!(output.kind, OutputKind::Json);
                 assert_eq!(host_id.unwrap(), HOST_ID.to_string());
                 assert_eq!(actor_ref, "wasmcloud.azurecr.io/actor:v1".to_string());
@@ -906,6 +932,8 @@ mod test {
             CTL_PORT,
             "--timeout",
             "1",
+            "--auction-timeout",
+            "1",
             "--constraint",
             "arch=x86_64",
             "--host-id",
@@ -922,11 +950,13 @@ mod test {
                 provider_ref,
                 link_name,
                 constraints,
+                auction_timeout,
             })) => {
                 assert_eq!(opts.ctl_host, CTL_HOST);
                 assert_eq!(opts.ctl_port, CTL_PORT);
                 assert_eq!(opts.ns_prefix, NS_PREFIX);
                 assert_eq!(opts.timeout, 1);
+                assert_eq!(auction_timeout, 1);
                 assert_eq!(output.kind, OutputKind::Json);
                 assert_eq!(link_name, "default".to_string());
                 assert_eq!(constraints.unwrap(), vec!["arch=x86_64".to_string()]);
