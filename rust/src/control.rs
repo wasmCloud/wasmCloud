@@ -10,13 +10,13 @@ use serde::{Deserialize, Serialize};
 use std::{borrow::Cow, string::ToString};
 #[allow(unused_imports)]
 use wasmbus_rpc::{
-    context::Context, deserialize, serialize, Message, MessageDispatch, RpcError, RpcResult,
-    SendOpts, Transport,
+    deserialize, serialize, Context, Message, MessageDispatch, RpcError, RpcResult, SendOpts,
+    Transport,
 };
 
 pub const SMITHY_VERSION: &str = "1.0";
 
-#[derive(Default, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ActorAuctionAck {
     #[serde(default)]
     pub actor_ref: String,
@@ -25,14 +25,14 @@ pub struct ActorAuctionAck {
     pub host_id: String,
 }
 
-#[derive(Default, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ActorAuctionRequest {
     #[serde(default)]
     pub actor_ref: String,
     pub constraints: ConstraintMap,
 }
 
-#[derive(Default, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ActorDescription {
     #[serde(default)]
     pub id: String,
@@ -52,7 +52,7 @@ pub type ClaimsMap = std::collections::HashMap<String, String>;
 pub type ConstraintMap = std::collections::HashMap<String, String>;
 
 /// Standard response for control interface operations
-#[derive(Default, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CtlOperationAck {
     #[serde(default)]
     pub accepted: bool,
@@ -61,12 +61,12 @@ pub struct CtlOperationAck {
 }
 
 /// response to get_claims
-#[derive(Default, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct GetClaimsResponse {
     pub claims: ClaimsList,
 }
 
-#[derive(Default, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Host {
     #[serde(default)]
     pub id: String,
@@ -74,7 +74,7 @@ pub struct Host {
     pub uptime_seconds: u64,
 }
 
-#[derive(Default, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct HostInventory {
     pub actors: ActorDescriptions,
     #[serde(default)]
@@ -87,12 +87,12 @@ pub type HostList = Vec<Host>;
 
 pub type LabelsMap = std::collections::HashMap<String, String>;
 
-#[derive(Default, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct LinkDefinitionList {
     pub links: wasmbus_rpc::core::ActorLinks,
 }
 
-#[derive(Default, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ProviderAuctionAck {
     #[serde(default)]
     pub host_id: String,
@@ -102,7 +102,7 @@ pub struct ProviderAuctionAck {
     pub provider_ref: String,
 }
 
-#[derive(Default, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ProviderAuctionRequest {
     pub constraints: ConstraintMap,
     #[serde(default)]
@@ -111,7 +111,7 @@ pub struct ProviderAuctionRequest {
     pub provider_ref: String,
 }
 
-#[derive(Default, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ProviderDescription {
     #[serde(default)]
     pub id: String,
@@ -126,7 +126,7 @@ pub struct ProviderDescription {
 
 pub type ProviderDescriptions = Vec<ProviderDescription>;
 
-#[derive(Default, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct StartActorCommand {
     #[serde(default)]
     pub actor_ref: String,
@@ -134,7 +134,7 @@ pub struct StartActorCommand {
     pub host_id: String,
 }
 
-#[derive(Default, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct StartProviderCommand {
     #[serde(default)]
     pub host_id: String,
@@ -144,7 +144,7 @@ pub struct StartProviderCommand {
     pub provider_ref: String,
 }
 
-#[derive(Default, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct StopActorCommand {
     #[serde(default)]
     pub actor_ref: String,
@@ -155,7 +155,7 @@ pub struct StopActorCommand {
     pub host_id: String,
 }
 
-#[derive(Default, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct StopProviderCommand {
     #[serde(default)]
     pub contract_id: String,
@@ -167,7 +167,7 @@ pub struct StopProviderCommand {
     pub provider_ref: String,
 }
 
-#[derive(Default, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct UpdateActorCommand {
     #[serde(default)]
     pub actor_id: String,
