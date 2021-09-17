@@ -4,7 +4,7 @@
 path = "control-interface.smithy"
 
 [[models]]
-url = "https://wasmcloud.github.io/models/org.wasmcloud" 
+url = "https://wasmcloud.github.io/interfaces/idl/org.wasmcloud" 
 files = [ "wasmcloud-core.smithy", "wasmcloud-model.smithy" ]
 
 ##
