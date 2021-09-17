@@ -185,7 +185,7 @@ impl<'model> CodeGen for RustCodeGen<'model> {
                 #[allow(unused_imports)]
                 use {}::{{
                     Context, deserialize, serialize, MessageDispatch, RpcError, RpcResult,
-                    Transport, Message, SendOpts,
+                    Timestamp, Transport, Message, SendOpts,
                 }};
                 #[allow(unused_imports)] use serde::{{Deserialize, Serialize}};
                 #[allow(unused_imports)] use async_trait::async_trait;
@@ -372,11 +372,7 @@ impl<'model> RustCodeGen<'model> {
                         // as anything other than a blob. Instead, a type should be created for the Document that can have traits,
                         // and that type used for the member. This should probably be a lint rule.
                         SHAPE_DOCUMENT => DEFAULT_DOCUMENT_TYPE,
-                        SHAPE_TIMESTAMP => {
-                            cfg_if::cfg_if! {
-                                if #[cfg(feature = "Timestamp")] { "Timestamp" } else { return Err(Error::UnsupportedTimestamp) }
-                            }
-                        }
+                        SHAPE_TIMESTAMP => "Timestamp",
                         SHAPE_BIGINTEGER => {
                             cfg_if::cfg_if! {
                                 if #[cfg(feature = "BigInteger")] { "BigInteger" } else { return Err(Error::UnsupportedBigInteger) }
@@ -471,12 +467,7 @@ impl<'model> RustCodeGen<'model> {
 
             // note: in the future, codegen traits may modify this
             Simple::Document => DEFAULT_DOCUMENT_TYPE,
-
-            Simple::Timestamp => {
-                cfg_if::cfg_if! {
-                    if #[cfg(feature = "Timestamp")] { "Timestamp" } else { return Err(Error::UnsupportedTimestamp) }
-                }
-            }
+            Simple::Timestamp => "Timestamp",
             Simple::BigInteger => {
                 cfg_if::cfg_if! {
                     if #[cfg(feature = "BigInteger")] { "BigInteger" } else { return Err(Error::UnsupportedBigInteger) }
@@ -885,10 +876,7 @@ impl<'model> RustCodeGen<'model> {
                   }}
               }}
             "#,
-            service_id,
-            service_id,
-            service_id,
-            service_id,
+            service_id, service_id, service_id, service_id,
         ));
         #[cfg(feature = "wasmbus")]
         w.write(&self.actor_receive_sender_constructors(service_id, service_traits)?);
@@ -955,9 +943,9 @@ impl<'model> RustCodeGen<'model> {
         service_traits: &AppliedTraits,
     ) -> Result<String> {
         let ctors = if let Some(Wasmbus {
-                                    actor_receive: true,
-                                    ..
-                                }) = get_trait(service_traits, crate::model::wasmbus_trait())?
+            actor_receive: true,
+            ..
+        }) = get_trait(service_traits, crate::model::wasmbus_trait())?
         {
             format!(
                 r#"
@@ -985,14 +973,11 @@ impl<'model> RustCodeGen<'model> {
                 &self.import_core,
                 &self.import_core,
                 &self.import_core,
-
                 // impl declaration
                 service_id,
                 &self.import_core,
-
                 // to_actor() (from actor)
                 &self.import_core,
-
             )
         } else {
             String::new()
@@ -1038,13 +1023,11 @@ impl<'model> RustCodeGen<'model> {
                 // impl declaration
                 service_id,
                 &self.import_core,
-
                 // new() (provider)
                 service_id,
                 contract,
                 &self.import_core,
                 contract,
-
                 // new_with_link()
                 service_id,
                 contract,

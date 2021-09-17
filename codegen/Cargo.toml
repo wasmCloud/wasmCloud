@@ -1,6 +1,6 @@
 [package]
 name = "weld-codegen"
-version = "0.1.17"
+version = "0.1.18"
 edition = "2018"
 authors = [ "wasmcloud Team" ]
 license = "Apache-2.0"
@@ -13,10 +13,9 @@ readme = "README.md"
 [features]
 default = [ "wasmbus" ]
 wasmbus = []
-experimental_types = [ "BigInteger", "BigDecimal", "Timestamp"]
+experimental_types = [ "BigInteger", "BigDecimal"]
 BigInteger = []
 BigDecimal = []
-Timestamp = []
 
 [dependencies]
 atelier_assembler = "0.1"

@@ -11,12 +11,15 @@
 
 use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
-use std::convert::TryFrom;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    cmp::Ordering,
+    convert::TryFrom,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 /// Timestamp - represents absolute time in UTC,
 /// as non-leap seconds and nanoseconds since the UNIX EPOCH
-#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Timestamp {
     /// The number of non-leap seconds since UNIX EPOCH in UTC
     pub sec: i64,
@@ -29,6 +32,29 @@ impl Timestamp {
     /// See [SystemTime](https://doc.rust-lang.org/std/time/struct.SystemTime.html) for platform implementations
     pub fn now() -> Timestamp {
         SystemTime::now().into()
+    }
+}
+
+impl Default for Timestamp {
+    /// constructs a time stamp from the current system time UTC
+    /// See [SystemTime](https://doc.rust-lang.org/std/time/struct.SystemTime.html) for platform implementations
+    fn default() -> Timestamp {
+        Self::now()
+    }
+}
+
+impl Ord for Timestamp {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match self.sec.cmp(&other.sec) {
+            Ordering::Equal => self.nsec.cmp(&other.nsec),
+            ord => ord,
+        }
+    }
+}
+
+impl PartialOrd for Timestamp {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
@@ -77,12 +103,6 @@ impl From<SystemTime> for Timestamp {
 }
 
 #[test]
-fn test_timestamp() {
-    let now = Timestamp::now();
-    assert!(now.sec > 1600000000 as i64);
-}
-
-#[test]
 fn timestamp_updates() {
     let now = Timestamp::now();
 
@@ -108,4 +128,50 @@ fn timestamp_to_datetime() {
 
     assert_eq!(&start.sec, &next.sec);
     assert_eq!(&start.nsec, &next.nsec);
+}
+
+#[test]
+fn timestamp_default() {
+    let t1 = Timestamp::default();
+    let t2 = Timestamp::now();
+
+    assert!(t1 == t2 || t1 < t2);
+
+    assert!(t1.sec > 1600000000);
+    assert!(t1.sec < 3000000000);
+
+    assert!(t2.sec > 1600000000);
+    assert!(t2.sec < 3000000000);
+}
+
+#[test]
+fn timestamp_ordering() {
+    // equals
+    let t1 = Timestamp {
+        sec: 100,
+        nsec: 100,
+    };
+    let t2 = Timestamp {
+        sec: 100,
+        nsec: 100,
+    };
+    assert_eq!(t1, t2);
+
+    // if sec differs, ignore nsec
+    let t3 = Timestamp { sec: 99, nsec: 400 };
+    assert!(t1 > t3);
+    let t3 = Timestamp { sec: 101, nsec: 40 };
+    assert!(t1 < t3);
+
+    // if sec same, use nsec
+    let t4 = Timestamp {
+        sec: 100,
+        nsec: 400,
+    };
+    assert!(t1 < t4);
+    let t4 = Timestamp { sec: 100, nsec: 40 };
+    assert!(t1 > t4);
+
+    // not equals
+    assert!(t1 != t4);
 }

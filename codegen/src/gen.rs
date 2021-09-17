@@ -20,21 +20,8 @@ use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-/// Common templates - not language specific
-pub const COMMON_TEMPLATES: &[(&str, &str)] = &[
-    (
-        "codegen.toml",
-        include_str!("../templates/codegen.toml.hbs"),
-    ),
-    (
-        "hello.smithy",
-        include_str!("../templates/hello.smithy.hbs"),
-    ),
-    (
-        "Makefile.interface",
-        include_str!("../templates/Makefile.interface.hbs"),
-    ),
-];
+/// Common templates compiled-in
+pub const COMMON_TEMPLATES: &[(&str, &str)] = &[];
 
 /// A Generator is a data-driven wrapper around code generator implementations,
 /// There are two main modes of generation:
@@ -87,8 +74,6 @@ impl<'model> Generator {
         };
         // create one renderer so we only need to parse templates once
         let mut renderer = Renderer::default();
-
-        // if defines.iter().any(|(k, _)| k == "create_interface") {
 
         for (name, template) in COMMON_TEMPLATES.iter() {
             renderer.add_template((name, template))?;
