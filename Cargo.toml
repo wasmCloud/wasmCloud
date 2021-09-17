@@ -1,6 +1,5 @@
 [workspace]
 members = [
-    "bin",
     "codegen",
     "macros",
     "rpc-rs",
