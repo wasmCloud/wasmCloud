@@ -10,7 +10,7 @@ use std::{
     path::Path,
 };
 
-// page name for doc template
+// default page name for doc template
 const DOC_TEMPLATE: &str = "namespace_doc";
 
 /// Default templates

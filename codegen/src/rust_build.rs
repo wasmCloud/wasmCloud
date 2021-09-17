@@ -7,7 +7,7 @@ use crate::error::Error;
 use std::path::PathBuf;
 
 /// wraps the logic inside build.rs
-pub fn rust_build<P: Into<PathBuf>> (
+pub fn rust_build<P: Into<PathBuf>>(
     config_path: P,
 ) -> std::result::Result<(), Box<dyn std::error::Error>> {
     use crate::{
