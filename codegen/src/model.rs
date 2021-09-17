@@ -16,7 +16,6 @@ use atelier_core::{
     },
     prelude::prelude_namespace_id,
 };
-use cfg_if::cfg_if;
 use lazy_static::lazy_static;
 use serde::{de::DeserializeOwned, Deserialize};
 use std::str::FromStr;
@@ -230,19 +229,30 @@ pub fn resolve<'model>(model: &'model Model, shape: &'model ShapeID) -> &'model 
 /// and empty sets, list, and maps.
 pub fn has_default(model: &'_ Model, member: &MemberShape) -> bool {
     let id = resolve(model, member.target());
+    #[allow(unused_mut)]
+    let mut has = false;
 
     if id.namespace().eq(prelude_namespace_id()) {
         let name = id.shape_name().to_string();
-        cfg_if! { if #[cfg(feature = "BigInteger")] { &name == "bigInteger" || } }
-        cfg_if! { if #[cfg(feature = "BigDecimal")] { &name == "bigDecimal" || } }
-        cfg_if! { if #[cfg(feature = "Timestamp")]  { &name == "timestamp"  || } }
-        matches!(
+        eprintln!("has_default name={}", &name);
+        cfg_if::cfg_if! {
+            if #[cfg(feature = "BigInteger")] {
+                has = has || &name == "bigInteger";
+            }
+        }
+        cfg_if::cfg_if! {
+            if #[cfg(feature = "BigDecimal")] {
+                has = has || &name == "bigDecimal";
+            }
+        }
+        has || matches!(
             name.as_str(),
             // some aggregate types
             "List" | "Set" | "Map"
             // most simple types
             | "Blob" | "Boolean" | "String" | "Byte" | "Short"
             | "Integer" | "Long" | "Float" | "Double"
+            | "Timestamp"
         )
         // excluded: Resource, Operation, Service, Document, Union
     } else {

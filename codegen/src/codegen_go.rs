@@ -361,25 +361,17 @@ impl<'model> GoCodeGen<'model> {
                         SHAPE_DOCUMENT => "[]byte", // FIXME
                         SHAPE_TIMESTAMP => {
                             // FIXME: NOT IMPLEMENTED
-                            cfg_if::cfg_if! {
-                                if #[cfg(feature = "Timestamp")] {
-                                    print_warning("'Timestamp' type is not implemented");
-                                } else { return Err(Error::UnsupportedTimestamp) }
-                            }
+                            return Err(Error::UnsupportedType(
+                                "Timestamp is unsupported for go".to_string(),
+                            ));
                         }
                         SHAPE_BIGINTEGER => {
-                            cfg_if::cfg_if! {
-                                if #[cfg(feature = "BigInteger")] {
-                                    print_warning("'BigInteger' type is not implemented");
-                                } else { return Err(Error::UnsupportedBigInteger) }
-                            }
+                            // FIXME: NOT IMPLEMENTED
+                            return Err(Error::UnsupportedBigInteger);
                         }
                         SHAPE_BIGDECIMAL => {
-                            cfg_if::cfg_if! {
-                                if #[cfg(feature = "BigDecimal")] {
-                                    print_warning("'BigDecimal' type is not implemented");
-                                } else { return Err(Error::UnsupportedBigDecimal) }
-                            }
+                            // FIXME: NOT IMPLEMENTED
+                            return Err(Error::UnsupportedBigDecimal);
                         }
                         _ => return Err(Error::UnsupportedType(name)),
                     };
@@ -469,28 +461,16 @@ impl<'model> GoCodeGen<'model> {
                 print_warning(&format!("'Document' type is not implemented ({})", id));
                 "[]byte"
             }
-
             Simple::Timestamp => {
-                cfg_if::cfg_if! {
-                    if #[cfg(feature = "Timestamp")] {
-                        print_warning(&format!("'Timestamp' type is not implemented ({})", id));
-                    } else { return Err(Error::UnsupportedTimestamp) }
-                }
+                return Err(Error::UnsupportedType(
+                    "Timestamp is unsupported for go".to_string(),
+                ));
             }
             Simple::BigInteger => {
-                cfg_if::cfg_if! {
-                    if #[cfg(feature = "BigInteger")] {
-                        print_warning(&format!("'BigInteger' type is not implemented ({})", id));
-
-                    } else { return Err(Error::UnsupportedBigInteger) }
-                }
+                return Err(Error::UnsupportedBigInteger);
             }
             Simple::BigDecimal => {
-                cfg_if::cfg_if! {
-                    if #[cfg(feature = "BigDecimal")] {
-                        print_warning(&format!("'BigDecimal' type is not implemented ({})", id));
-                        } else { return Err(Error::UnsupportedBigDecimal) }
-                }
+                return Err(Error::UnsupportedBigDecimal);
             }
         };
         w.write(ty);

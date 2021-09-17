@@ -27,8 +27,6 @@ pub enum Error {
     #[error("invalid model: {0}")]
     InvalidModel(String),
 
-    //#[error("Document is currently an unsupported type")]
-    //UnsupportedDocument,
     #[error("{0} is an unsupported type")]
     UnsupportedType(String),
 
@@ -49,19 +47,11 @@ pub enum Error {
     #[error("{0}")]
     Other(String),
 
-    //#[error("visitor: {0}")]
-    //Inner(String),
-    #[cfg(not(feature = "BigInteger"))]
     #[error("BigInteger is currently an unsupported type")]
     UnsupportedBigInteger,
 
-    #[cfg(not(feature = "BigDecimal"))]
     #[error("BigDecimal is currently an unsupported type")]
     UnsupportedBigDecimal,
-
-    #[cfg(not(feature = "Timestamp"))]
-    #[error("Timestamp is currently an unsupported type")]
-    UnsupportedTimestamp,
 }
 
 impl From<std::io::Error> for Error {
