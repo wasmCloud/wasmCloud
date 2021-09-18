@@ -51,6 +51,9 @@ pub(crate) enum RegCliCommand {
     /// Push an artifact to an OCI compliant registry
     #[structopt(name = "push")]
     Push(PushCommand),
+    /// Ping (test url) to see if the OCI url has an artifact
+    #[structopt(name = "ping")]
+    Ping(PingCommand),
 }
 
 #[derive(StructOpt, Debug, Clone)]
@@ -104,6 +107,16 @@ pub(crate) struct PushCommand {
 }
 
 #[derive(StructOpt, Debug, Clone)]
+pub(crate) struct PingCommand {
+    /// URL of artifact
+    #[structopt(name = "url")]
+    pub(crate) url: String,
+
+    #[structopt(flatten)]
+    pub(crate) opts: AuthOpts,
+}
+
+#[derive(StructOpt, Debug, Clone)]
 pub(crate) struct AuthOpts {
     /// OCI username, if omitted anonymous authentication will be used
     #[structopt(
@@ -134,6 +147,7 @@ pub(crate) async fn handle_command(
     match command {
         RegCliCommand::Pull(cmd) => handle_pull(cmd).await,
         RegCliCommand::Push(cmd) => handle_push(cmd).await,
+        RegCliCommand::Ping(cmd) => handle_ping(cmd).await,
     }
 }
 
@@ -235,6 +249,24 @@ pub(crate) async fn pull_artifact(
         .map(|l| l.data.clone())
         .flatten()
         .collect::<Vec<_>>())
+}
+
+pub(crate) async fn handle_ping(cmd: PingCommand) -> Result<String, Box<dyn ::std::error::Error>> {
+    let image: Reference = cmd.url.parse().unwrap();
+    let mut client = Client::new(ClientConfig {
+        protocol: if cmd.opts.insecure {
+            ClientProtocol::Http
+        } else {
+            ClientProtocol::Https
+        },
+        ..Default::default()
+    });
+    let auth = match (cmd.opts.user, cmd.opts.password) {
+        (Some(user), Some(password)) => RegistryAuth::Basic(user, password),
+        _ => RegistryAuth::Anonymous,
+    };
+    let (_, _) = client.pull_manifest(&image, &auth).await?;
+    Ok("Ok".to_string())
 }
 
 pub(crate) fn write_artifact(
