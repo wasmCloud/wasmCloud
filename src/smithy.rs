@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use structopt::StructOpt;
 use weld_codegen::{
     config::{CodegenConfig, ModelSource, OutputLanguage},
-    default_config, sources_to_model,
+    sources_to_model,
 };
 
 type TomlValue = toml::Value;
@@ -225,7 +225,7 @@ fn select_config(opt_config: &Option<PathBuf>) -> Result<CodegenConfig, anyhow::
             PathBuf::from("."),
         )
     } else {
-        (default_config().to_string(), PathBuf::from("."))
+        (String::new(), PathBuf::from("."))
     };
     let folder = std::fs::canonicalize(folder)?;
     let mut config = cfile.parse::<CodegenConfig>()?;
