@@ -29,7 +29,7 @@ jobs:
           args: --all-features
 
   snap_release:
-    depends_on: [cargo_check, clippy_check]
+    needs: [cargo_check, clippy_check]
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v2
