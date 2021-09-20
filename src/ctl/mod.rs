@@ -295,7 +295,7 @@ pub(crate) struct StartActorCommand {
     #[structopt(short = "h", long = "host-id", name = "host-id")]
     pub(crate) host_id: Option<String>,
 
-    /// Actor reference, e.g. the OCI URL for the actor. This can also be a signed local wasm file when using the REPL host
+    /// Actor reference, e.g. the OCI URL for the actor.
     #[structopt(name = "actor-ref")]
     pub(crate) actor_ref: String,
 
@@ -399,7 +399,7 @@ pub(crate) struct UpdateActorCommand {
     #[structopt(name = "actor-id")]
     pub(crate) actor_id: String,
 
-    /// Actor reference, e.g. the OCI URL for the actor. This can also be a signed local wasm file when using the REPL host
+    /// Actor reference, e.g. the OCI URL for the actor.
     #[structopt(name = "new-actor-ref")]
     pub(crate) new_actor_ref: String,
 }
