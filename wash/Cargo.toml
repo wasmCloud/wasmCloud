@@ -1,6 +1,6 @@
 [package]
 name = "wash-cli"
-version = "0.6.1"
+version = "0.6.2"
 authors = ["wasmCloud Team"]
 edition = "2018"
 repository = "https://github.com/wasmcloud/wash"
@@ -24,10 +24,10 @@ cargo = "0.56"
 cargo_atelier = "0.2"
 console = "0.14"
 dialoguer = "0.8"
-dirs = "3.0"
+dirs = "4.0"
 env_logger = "0.9"
 envmnt = "0.9.0"
-git2 = "0.13"
+git2 = { version="0.13.22", features=["vendored-libgit2"] }
 heck = "0.3"
 ignore = "0.4"
 indicatif = "0.16"
@@ -55,8 +55,8 @@ tokio = { version="1", features=["full"]}
 toml = "0.5"
 walkdir = "2.3"
 wascap = "0.6.0"
-wasmbus-rpc = "0.3.11"
-wasmcloud-control-interface = "0.4.3"
+wasmbus-rpc = "0.4"
+wasmcloud-control-interface = "0.4.4"
 wasmcloud-test-util = "0.1.4"
 weld-codegen = "0.1.17"
 

@@ -12,6 +12,8 @@ use wasmcloud_test_util::testing::TestResults;
 
 /// fake key (not a real public key)  used to construct origin for invoking actors
 const WASH_ORIGIN_KEY: &str = "__WASH__";
+/// hostname used for actor invocations
+const WASH_HOST_ID: &str = "NwashHostCallerId000000000000000000000000000000000000000";
 
 #[derive(Debug, StructOpt, Clone)]
 #[structopt(
@@ -175,6 +177,7 @@ pub(crate) async fn handle_call(cmd: CallCommand) -> Result<Vec<u8>> {
         nc,
         &cmd.opts.ns_prefix,
         nkeys::KeyPair::from_seed(&extract_arg_value(&seed)?)?,
+        WASH_HOST_ID.to_string(),
     );
     client
         .send(
