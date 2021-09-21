@@ -99,14 +99,14 @@ impl Transport for WasmHost {
     ) -> std::result::Result<Vec<u8>, RpcError> {
         let res = if !self.target.public_key.is_empty() {
             // actor-to-actor calls use namespace for the actor target identifier
-            host_call("", &self.target.public_key, req.method, req.arg.as_ref())?;
+            host_call("", &self.target.public_key, req.method, req.arg.as_ref())?
         } else {
             host_call(
                 &self.target.link_name,
                 &self.target.contract_id,
                 req.method,
                 req.arg.as_ref(),
-            )?;
+            )?
         };
         Ok(res)
     }
