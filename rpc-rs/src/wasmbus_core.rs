@@ -5,7 +5,7 @@
 #[allow(unused_imports)]
 use crate::{
     deserialize, serialize, Context, Message, MessageDispatch, RpcError, RpcResult, SendOpts,
-    Transport,
+    Timestamp, Transport,
 };
 #[allow(unused_imports)]
 use async_trait::async_trait;

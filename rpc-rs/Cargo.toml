@@ -1,13 +1,13 @@
 [package]
 name = "wasmbus-rpc"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2018"
 authors = [ "wasmcloud Team" ]
 license = "Apache-2.0"
 description = "Runtime library for actors and capability providers"
 homepage = "https://github.com/wasmcloud/weld"
 repository = "https://github.com/wasmcloud/weld"
-documentation = "https://docs.rs/wasmcloud-weld-rpc"
+documentation = "https://docs.rs/wasmbus-rpc"
 readme = "README.md"
 resolver = "2"
 
