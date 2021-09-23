@@ -36,7 +36,6 @@ pub(crate) async fn handle_command(cmd: CallCommand) -> Result<String> {
     let save_output = cmd.save.clone();
     let bin = cmd.bin;
     let res = handle_call(cmd).await;
-    //TODO: Evaluate from_utf8_lossy and use of format here
     Ok(call_output(res, save_output, bin, is_test, &output_kind))
 }
 
@@ -116,6 +115,11 @@ pub(crate) struct CallCommand {
     #[structopt(long)]
     pub(crate) test: bool,
 
+    /// wasmCloud host cluster seed. This cluster seed must match the cluster seed used to
+    /// launch the wasmCloud host in order to pass antiforgery checks made by the host
+    #[structopt(short = "c", long = "cluster-seed", env = "WASMCLOUD_CLUSTER_SEED")]
+    pub(crate) cluster_seed: String,
+
     /// Public key or OCI reference of actor
     #[structopt(name = "actor-id")]
     pub(crate) actor_id: String,
@@ -176,7 +180,7 @@ pub(crate) async fn handle_call(cmd: CallCommand) -> Result<Vec<u8>> {
     let client = RpcClient::new_asynk(
         nc,
         &cmd.opts.ns_prefix,
-        nkeys::KeyPair::from_seed(&extract_arg_value(&seed)?)?,
+        nkeys::KeyPair::from_seed(&extract_arg_value(&cmd.cluster_seed)?)?,
         WASH_HOST_ID.to_string(),
     );
     client
@@ -270,6 +274,8 @@ mod test {
             SAVE_FNAME,
             "--bin",
             "2",
+            "--cluster-seed",
+            "SCASDASDASD",
             "--ns-prefix",
             NS_PREFIX,
             "--rpc-host",
@@ -293,6 +299,7 @@ mod test {
                 actor_id,
                 operation,
                 payload,
+                cluster_seed,
             } => {
                 assert_eq!(opts.rpc_host, RPC_HOST);
                 assert_eq!(opts.rpc_port, RPC_PORT);
@@ -301,6 +308,7 @@ mod test {
                 assert_eq!(output.kind, crate::util::OutputKind::Json);
                 assert_eq!(data, Some(PathBuf::from(DATA_FNAME)));
                 assert_eq!(save, Some(PathBuf::from(SAVE_FNAME)));
+                assert_eq!(cluster_seed, "SCASDASDASD");
                 assert_eq!(test, true);
                 assert_eq!(bin, '2');
                 assert_eq!(actor_id, ACTOR_ID);
