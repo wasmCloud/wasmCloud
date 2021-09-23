@@ -36,14 +36,6 @@ ifeq ($(WASH_REG_USER),)
 	oci_insecure := --insecure
 endif
 
-# rules to print file name and path of build target
-target-path:
-	@echo $(dest_par)
-target-path-abs:
-	@echo $(abspath $(dest_par))
-target-file:
-	@echo $(notdir $(dest_par))
-
 par_targets ?= \
 	x86_64-unknown-linux-gnu \
    	x86_64-apple-darwin \
@@ -144,12 +136,18 @@ target/%/release/$(bin_name): $(RUST_DEPS)
 
 endif
 
+# rules to print file name and path of build target
+target-path:
+	@echo $(dest_par)
+target-path-abs:
+	@echo $(abspath $(dest_par))
+target-file:
+	@echo $(notdir $(dest_par))
+
+
 # push par file to registry
 push: $(dest_par)
 	$(WASH) reg push $(oci_insecure) $(oci_url) $(dest_par)
-
-
-
 
 # start provider
 start:
