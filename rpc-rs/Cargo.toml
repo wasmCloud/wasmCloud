@@ -1,6 +1,6 @@
 [package]
 name = "wasmbus-rpc"
-version = "0.4.3"
+version = "0.4.4"
 edition = "2018"
 authors = [ "wasmcloud Team" ]
 license = "Apache-2.0"
@@ -33,7 +33,7 @@ thiserror = "1.0"
 toml = "0.5"
 log = "0.4"
 cfg-if = "1.0"
-wasmbus-macros = "0.1"
+wasmbus-macros = "0.1.6"
 tokio-timer = "0.2"
 
 #[feature-dependencies]
@@ -60,4 +60,4 @@ pin-utils = "0.1"
 data-encoding = "2.3"
 
 [build-dependencies]
-weld-codegen = "0.1.17"
+weld-codegen = "0.1.18"

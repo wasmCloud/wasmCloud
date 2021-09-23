@@ -22,6 +22,9 @@ use serde::de::DeserializeOwned;
 use std::{borrow::Cow, collections::HashMap, convert::Infallible, ops::Deref, sync::Arc};
 use tokio::sync::{oneshot, RwLock};
 
+// name of nats queue group for rpc subscription
+const RPC_SUBSCRIPTION_QUEUE_GROUP: &str = "rpc";
+
 type SubscriptionId = ratsio::NatsSid;
 
 pub type HostShutdownEvent = String;
@@ -261,7 +264,7 @@ impl HostBridge {
             .rpc_client()
             .get_async()
             .unwrap() // we are only async
-            .subscribe(&rpc_topic)
+            .subscribe_with_group(rpc_topic.as_str(), RPC_SUBSCRIPTION_QUEUE_GROUP)
             .await
             .map_err(|e| RpcError::Nats(e.to_string()))?;
         self.add_subscription(sid).await;
