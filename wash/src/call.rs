@@ -184,13 +184,14 @@ pub(crate) async fn handle_call(cmd: CallCommand) -> Result<Vec<u8>> {
         WASH_HOST_ID.to_string(),
     );
     client
-        .send(
+        .send_timeout(
             origin,
             target,
             Message {
                 method: &cmd.operation,
                 arg: bytes.into(),
             },
+            std::time::Duration::from_secs(cmd.opts.timeout),
         )
         .await
         .map_err(convert_rpc_error)
