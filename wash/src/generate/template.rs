@@ -68,14 +68,6 @@ impl Matcher {
             .iter()
             .find(|rc| rc.from == rel_path)
             .map(|rc| rc.to.as_str());
-        match ren {
-            None => {
-                println!("DBG: ren: {}: no", &rel_path.display());
-            }
-            Some(p) => {
-                println!("DBG: ren: {}: {}", &rel_path.display(), p);
-            }
-        }
         ren
     }
 
