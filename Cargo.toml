@@ -1,6 +1,6 @@
 [package]
 name = "wash-cli"
-version = "0.6.3"
+version = "0.6.4"
 authors = ["wasmCloud Team"]
 edition = "2018"
 repository = "https://github.com/wasmcloud/wash"
