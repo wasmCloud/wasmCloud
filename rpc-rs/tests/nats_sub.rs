@@ -94,10 +94,10 @@ async fn listen_queue(
 
 #[tokio::test]
 async fn simple_sub() -> Result<(), Box<dyn std::error::Error>> {
-    // create random prefix for this test
-    let prefix = uuid::Uuid::new_v4().to_string();
+    // create unique subscription name for this test
+    let sub_name = uuid::Uuid::new_v4().to_string();
 
-    let topic = format!("{}_one", &prefix);
+    let topic = format!("one_{}", &sub_name);
     let l1 = listen(make_client().await?, &topic, "^abc").await;
 
     let sender = make_client().await.expect("creating sender");
@@ -134,9 +134,9 @@ async fn queue_sub() -> Result<(), Box<dyn std::error::Error>> {
     // This confirms that publishing to queue subscription divides the load,
     // and also confirms that a queue group name ('X') is only applicable
     // within a topic.
-    let prefix = uuid::Uuid::new_v4().to_string();
-    let topic_one = format!("one_{}", &prefix);
-    let topic_two = format!("two_{}", &prefix);
+    let sub_name = uuid::Uuid::new_v4().to_string();
+    let topic_one = format!("one_{}", &sub_name);
+    let topic_two = format!("two_{}", &sub_name);
 
     let thread1 = listen_queue(make_client().await?, &topic_one, "X", "^one").await;
     let thread2 = listen_queue(make_client().await?, &topic_one, "X", "^one").await;

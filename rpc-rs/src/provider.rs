@@ -271,75 +271,70 @@ impl HostBridge {
         pin_mut!(sub);
         let provider = provider.clone();
         while let Some(msg) = sub.next().await {
-            let mut ctx = crate::Context::default();
-            let mut rpc_response = None;
-            // parse incoming message and validate
-            let inv = match crate::deserialize::<Invocation>(&msg.payload) {
-                Ok(inv) => {
-                    trace!(
-                        "Received RPC Invocation: op:{} from:{}",
-                        &inv.operation,
-                        &inv.origin.public_key,
-                    );
-                    if !self.is_linked(&inv.origin.public_key).await {
-                        warn!(
-                            "Ignoring RPC message from unlinked actor {} op:{}",
-                            &inv.origin.public_key, &inv.operation
+            // parse and validate incoming message
+            let response = match crate::deserialize::<Invocation>(&msg.payload) {
+                Ok(inv) => match self.validate_invocation(&inv).await {
+                    Ok(()) => {
+                        trace!(
+                            "RPC Invocation: op:{} from:{}",
+                            &inv.operation,
+                            &inv.origin.public_key
                         );
-                        rpc_response = Some(InvocationResponse {
-                            msg: Vec::new(),
-                            error: Some("Unauthorized: unlinked".to_string()),
-                            invocation_id: inv.id,
-                        });
-                        None
-                    } else {
-                        Some(inv)
+                        match provider
+                            .dispatch(
+                                &crate::Context {
+                                    actor: Some(inv.origin.public_key.clone()),
+                                    ..Default::default()
+                                },
+                                Message {
+                                    method: &inv.operation,
+                                    arg: Cow::from(inv.msg),
+                                },
+                            )
+                            .await
+                        {
+                            Ok(msg) => InvocationResponse {
+                                invocation_id: inv.id,
+                                error: None,
+                                msg: msg.arg.to_vec(),
+                            },
+                            Err(e) => {
+                                error!(
+                                    "RPC Invocation failed: op:{} from:{}: {}",
+                                    &inv.operation, &inv.origin.public_key, e
+                                );
+                                InvocationResponse {
+                                    invocation_id: inv.id,
+                                    error: Some(e.to_string()),
+                                    msg: Vec::new(),
+                                }
+                            }
+                        }
                     }
-                }
+                    Err(s) => {
+                        error!(
+                            "Invocation validation failure: op:{} from:{} id:{} host:{}: {}",
+                            &inv.operation, &inv.origin.public_key, &inv.id, &inv.host_id, &s
+                        );
+                        InvocationResponse {
+                            invocation_id: inv.id,
+                            error: Some(s),
+                            msg: Vec::new(),
+                        }
+                    }
+                },
                 Err(e) => {
-                    error!("received corrupt invocation: {}", e.to_string());
-                    rpc_response = Some(InvocationResponse {
+                    error!("Invocation deserialization failure: {}", e.to_string());
+                    InvocationResponse {
+                        invocation_id: "invalid".to_string(),
+                        error: Some(format!("Corrupt invocation: {}", e.to_string())),
                         msg: Vec::new(),
-                        error: Some(format!("Invalid message: {}", e.to_string())),
-                        invocation_id: "0".to_string(),
-                    });
-                    None
+                    }
                 }
             };
-            // dispatch to provider handler
-            if rpc_response.is_none() {
-                let inv = inv.unwrap();
-                let provider_msg = Message {
-                    method: &inv.operation,
-                    arg: Cow::from(inv.msg),
-                };
-                ctx.actor = Some(inv.origin.public_key);
-                rpc_response = match provider.dispatch(&ctx, provider_msg).await {
-                    Ok(resp) => {
-                        trace!("operation {} succeeded. returning response", &inv.operation);
-                        Some(InvocationResponse {
-                            msg: resp.arg.to_vec(),
-                            error: None,
-                            invocation_id: inv.id,
-                        })
-                    }
-                    Err(e) => {
-                        error!(
-                            "operation {} failed with error {}",
-                            &inv.operation,
-                            e.to_string()
-                        );
-                        Some(InvocationResponse {
-                            msg: Vec::new(),
-                            error: Some(e.to_string()),
-                            invocation_id: inv.id,
-                        })
-                    }
-                };
-            }
             // return response
             if let Some(reply_to) = msg.reply_to {
-                match crate::serialize(&rpc_response.unwrap()) {
+                match crate::serialize(&response) {
                     Ok(t) => {
                         if let Err(e) = self.rpc_client().publish(&reply_to, &t).await {
                             error!(
@@ -355,6 +350,63 @@ impl HostBridge {
                     }
                 }
             }
+        }
+        Ok(())
+    }
+
+    pub async fn validate_invocation(&self, inv: &Invocation) -> Result<(), String> {
+        let vr = wascap::jwt::validate_token::<wascap::prelude::Invocation>(&inv.encoded_claims)
+            .map_err(|e| format!("{}", e))?;
+        if vr.expired {
+            return Err("Invocation claims token expired".into());
+        }
+        if !vr.signature_valid {
+            return Err("Invocation claims signature invalid".into());
+        }
+        if vr.cannot_use_yet {
+            return Err("Attempt to use invocation before claims token allows".into());
+        }
+        let target_url = format!("{}/{}", inv.target.url(), &inv.operation);
+        let hash = crate::rpc_client::invocation_hash(
+            &target_url,
+            &inv.origin.url(),
+            &inv.operation,
+            &inv.msg,
+        );
+        let claims =
+            wascap::prelude::Claims::<wascap::prelude::Invocation>::decode(&inv.encoded_claims)
+                .map_err(|e| format!("{}", e))?;
+        let inv_claims = claims
+            .metadata
+            .ok_or_else(|| "No wascap metadata found on claims".to_string())?;
+        if inv_claims.invocation_hash != hash {
+            return Err(format!(
+                "Invocation hash does not match signed claims hash ({} / {})",
+                inv_claims.invocation_hash, hash
+            ));
+        }
+        if !inv.host_id.starts_with('N') && inv.host_id.len() != 56 {
+            return Err(format!("Invalid host ID on invocation: '{}'", inv.host_id));
+        }
+        if inv_claims.target_url != target_url {
+            return Err(format!(
+                "Invocation claims and invocation target URL do not match: {} != {}",
+                &inv_claims.target_url, &target_url
+            ));
+        }
+        if inv_claims.origin_url != inv.origin.url() {
+            return Err("Invocation claims and invocation origin URL do not match".into());
+        }
+        // verify target public key is my key
+        if inv.target.public_key != self.host_data.provider_key {
+            return Err(format!(
+                "target key mismatch: {} != {}",
+                &inv.target.public_key, &self.host_data.host_id
+            ));
+        }
+        // verify that the sending actor is linked with this provider
+        if !self.is_linked(&inv.origin.public_key).await {
+            return Err(format!("unlinked actor: {}", &inv.origin.public_key));
         }
         Ok(())
     }

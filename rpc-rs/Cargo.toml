@@ -59,5 +59,8 @@ ring = "0.16"
 pin-utils = "0.1"
 data-encoding = "2.3"
 
+[dev-dependencies]
+regex = "1"
+
 [build-dependencies]
 weld-codegen = "0.1.18"
