@@ -3923,7 +3923,7 @@ dependencies = [
 
 [[package]]
 name = "wash-cli"
-version = "0.6.4"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "atelier_core 0.2.22",
