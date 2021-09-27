@@ -122,10 +122,10 @@ impl RpcClient {
 
     /// convenience method for returning async client
     /// If the client is not the correct type, returns None
-    pub fn get_async(&self) -> Option<&ratsio::NatsClient> {
+    pub fn get_async(&self) -> Option<Arc<crate::provider::NatsClient>> {
         use std::borrow::Borrow;
         match self.client.borrow() {
-            NatsClientType::Async(nats) => Some(nats),
+            NatsClientType::Async(nats) => Some(nats.clone()),
             _ => None,
         }
     }
@@ -238,7 +238,7 @@ impl RpcClient {
             subject.clone(),
             &target_url,
             &origin_url,
-            &invocation_hash(&target_url, &origin_url, &message),
+            &invocation_hash(&target_url, &origin_url, message.method, &message.arg),
         );
 
         let topic = rpc_topic(&target, &self.lattice_prefix);
@@ -288,9 +288,9 @@ impl RpcClient {
                 }
             }
         } else {
-            self.publish(&topic, &nats_body)
-                .await
-                .map_err(|e| RpcError::Nats(format!("rpc send error: {}: {}", target_url, e)))?;
+            self.publish(&topic, &nats_body).await.map_err(|e| {
+                RpcError::Nats(format!("rpc send error: {}: {}", target_url, e.to_string()))
+            })?;
             Ok(Vec::new())
         }
     }
@@ -348,13 +348,18 @@ impl RpcClient {
     }
 }
 
-pub(crate) fn invocation_hash(target_url: &str, origin_url: &str, msg: &Message) -> String {
+pub(crate) fn invocation_hash(
+    target_url: &str,
+    origin_url: &str,
+    method: &str,
+    args: &[u8],
+) -> String {
     use std::io::Write;
     let mut cleanbytes: Vec<u8> = Vec::new();
     cleanbytes.write_all(origin_url.as_bytes()).unwrap();
     cleanbytes.write_all(target_url.as_bytes()).unwrap();
-    cleanbytes.write_all(msg.method.as_bytes()).unwrap();
-    cleanbytes.write_all(&msg.arg).unwrap();
+    cleanbytes.write_all(method.as_bytes()).unwrap();
+    cleanbytes.write_all(args).unwrap();
     let digest = sha256_digest(cleanbytes.as_slice()).unwrap();
     data_encoding::HEXUPPER.encode(digest.as_ref())
 }

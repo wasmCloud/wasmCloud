@@ -84,6 +84,7 @@ cfg_if::cfg_if! {
 /// An error that can occur in the processing of an RPC. This is not request-specific errors but
 /// rather cross-cutting errors that can always occur.
 #[derive(thiserror::Error, Debug, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum RpcError {
     /// The request exceeded its deadline.
     #[error("the request exceeded its deadline: {0}")]

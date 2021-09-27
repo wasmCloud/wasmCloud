@@ -21,3 +21,10 @@ lint:
 # Run validation checks on all smithy models in the models/smithy folder
 validate:
 	$(WELD) validate
+
+test:
+	cargo fmt -- --check \
+	&& cargo clippy \
+	&& cargo test -- --nocapture
+
+
