@@ -141,7 +141,7 @@ pub(crate) enum TokenCommand {
 struct GenerateCommon {
     /// Location of key files for signing. Defaults to $WASH_KEYS ($HOME/.wash/keys)
     #[structopt(long = "directory", env = "WASH_KEYS", hide_env_values = true)]
-    directory: Option<String>,
+    directory: Option<PathBuf>,
 
     /// Indicates the token expires in the given amount of days. If this option is left off, the token will never expire
     #[structopt(short = "x", long = "expires")]
@@ -351,7 +351,7 @@ fn generate_token(cmd: TokenCommand) -> Result<String, Box<dyn ::std::error::Err
 
 fn get_keypair_vec(
     keys: &[String],
-    keys_dir: Option<String>,
+    keys_dir: Option<PathBuf>,
     keypair_type: KeyPairType,
     disable_keygen: bool,
 ) -> Vec<KeyPair> {
@@ -1101,7 +1101,7 @@ mod test {
             }) => {
                 assert_eq!(source, LOCAL_WASM);
                 assert_eq!(destination.unwrap(), "./myactor_s.wasm");
-                assert_eq!(metadata.common.directory.unwrap(), "./dir");
+                assert_eq!(metadata.common.directory.unwrap(), PathBuf::from("./dir"));
                 assert_eq!(metadata.common.expires_in_days.unwrap(), 3);
                 assert_eq!(metadata.common.not_before_days.unwrap(), 1);
                 assert!(metadata.common.disable_keygen);
@@ -1174,7 +1174,7 @@ mod test {
             }) => {
                 assert_eq!(source, LOCAL_WASM);
                 assert_eq!(destination.unwrap(), "./myactor_s.wasm");
-                assert_eq!(metadata.common.directory.unwrap(), "./dir");
+                assert_eq!(metadata.common.directory.unwrap(), PathBuf::from("./dir"));
                 assert_eq!(metadata.common.expires_in_days.unwrap(), 3);
                 assert_eq!(metadata.common.not_before_days.unwrap(), 1);
                 assert!(metadata.common.disable_keygen);
@@ -1247,7 +1247,7 @@ mod test {
                 ..
             })) => {
                 assert_eq!(name, "TokenName");
-                assert_eq!(common.directory.unwrap(), DIR);
+                assert_eq!(common.directory.unwrap(), PathBuf::from(DIR));
                 assert_eq!(
                     common.expires_in_days.unwrap(),
                     EXPR.parse::<u64>().unwrap()
@@ -1324,7 +1324,7 @@ mod test {
                 ..
             })) => {
                 assert_eq!(name, "TokenName");
-                assert_eq!(common.directory.unwrap(), DIR);
+                assert_eq!(common.directory.unwrap(), PathBuf::from(DIR));
                 assert_eq!(
                     common.expires_in_days.unwrap(),
                     EXPR.parse::<u64>().unwrap()
@@ -1384,7 +1384,7 @@ mod test {
                 ..
             })) => {
                 assert_eq!(name, "TokenName");
-                assert_eq!(common.directory.unwrap(), DIR);
+                assert_eq!(common.directory.unwrap(), PathBuf::from(DIR));
                 assert_eq!(
                     common.expires_in_days.unwrap(),
                     EXPR.parse::<u64>().unwrap()
@@ -1444,7 +1444,7 @@ mod test {
                 ..
             })) => {
                 assert_eq!(name, "TokenName");
-                assert_eq!(common.directory.unwrap(), DIR);
+                assert_eq!(common.directory.unwrap(), PathBuf::from(DIR));
                 assert_eq!(
                     common.expires_in_days.unwrap(),
                     EXPR.parse::<u64>().unwrap()

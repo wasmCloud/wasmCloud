@@ -65,7 +65,7 @@ pub(crate) struct CreateCommand {
         env = "WASH_KEYS",
         hide_env_values = true
     )]
-    directory: Option<String>,
+    directory: Option<PathBuf>,
 
     /// Path to issuer seed key (account). If this flag is not provided, the will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
     #[structopt(
@@ -174,7 +174,7 @@ pub(crate) struct InsertCommand {
         env = "WASH_KEYS",
         hide_env_values = true
     )]
-    directory: Option<String>,
+    directory: Option<PathBuf>,
 
     /// Path to issuer seed key (account). If this flag is not provided, the will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
     #[structopt(
@@ -494,7 +494,7 @@ mod test {
                 assert_eq!(capid, "wasmcloud:test");
                 assert_eq!(arch, "x86_64-testrunner");
                 assert_eq!(binary, "./testrunner.so");
-                assert_eq!(directory.unwrap(), "./tests/fixtures");
+                assert_eq!(directory.unwrap(), PathBuf::from("./tests/fixtures"));
                 assert_eq!(issuer.unwrap(), ISSUER);
                 assert_eq!(subject.unwrap(), SUBJECT);
                 assert_eq!(output.kind, OutputKind::Text);
@@ -557,7 +557,7 @@ mod test {
                 assert_eq!(capid, "wasmcloud:test");
                 assert_eq!(arch, "x86_64-testrunner");
                 assert_eq!(binary, "./testrunner.so");
-                assert_eq!(directory.unwrap(), "./tests/fixtures");
+                assert_eq!(directory.unwrap(), PathBuf::from("./tests/fixtures"));
                 assert_eq!(issuer.unwrap(), ISSUER);
                 assert_eq!(subject.unwrap(), SUBJECT);
                 assert_eq!(output.kind, OutputKind::Json);
@@ -612,7 +612,7 @@ mod test {
                 assert_eq!(archive, "libtest.par.gz");
                 assert_eq!(arch, "x86_64-testrunner");
                 assert_eq!(binary, "./testrunner.so");
-                assert_eq!(directory.unwrap(), "./tests/fixtures");
+                assert_eq!(directory.unwrap(), PathBuf::from("./tests/fixtures"));
                 assert_eq!(issuer.unwrap(), ISSUER);
                 assert_eq!(subject.unwrap(), SUBJECT);
                 assert_eq!(output.kind, OutputKind::Text);
@@ -652,7 +652,7 @@ mod test {
                 assert_eq!(archive, "libtest.par.gz");
                 assert_eq!(arch, "x86_64-testrunner");
                 assert_eq!(binary, "./testrunner.so");
-                assert_eq!(directory.unwrap(), "./tests/fixtures");
+                assert_eq!(directory.unwrap(), PathBuf::from("./tests/fixtures"));
                 assert_eq!(issuer.unwrap(), ISSUER);
                 assert_eq!(subject.unwrap(), SUBJECT);
                 assert_eq!(output.kind, OutputKind::Text);
