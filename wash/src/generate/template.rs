@@ -245,9 +245,8 @@ mod test {
         };
 
         let matcher = Matcher::new("/target", &template_config).unwrap();
-
-        assert_eq!(matcher.should_include(&PathBuf::from("a.txt")), false);
-        assert_eq!(matcher.should_include(&PathBuf::from("a.txt.html")), true);
+        assert!(!matcher.should_include(&PathBuf::from("a.txt")));
+        assert!(matcher.should_include(&PathBuf::from("a.txt.html")));
     }
 
     #[test]
@@ -263,8 +262,8 @@ mod test {
 
         let matcher = Matcher::new("/target", &template_config).unwrap();
 
-        assert_eq!(matcher.is_raw(&PathBuf::from("a.bin")), true);
-        assert_eq!(matcher.is_raw(&PathBuf::from("x.bin")), true);
-        assert_eq!(matcher.is_raw(&PathBuf::from("b.dat")), true);
+        assert!(matcher.is_raw(&PathBuf::from("a.bin")));
+        assert!(matcher.is_raw(&PathBuf::from("x.bin")));
+        assert!(matcher.is_raw(&PathBuf::from("b.dat")));
     }
 }

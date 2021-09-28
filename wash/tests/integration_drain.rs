@@ -1,7 +1,10 @@
 mod common;
 use common::{output_to_string, test_dir_file, test_dir_with_subfolder, wash};
-use std::fs::{create_dir_all, remove_dir_all, File};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use std::fs::create_dir_all;
+use std::fs::{remove_dir_all, File};
 use std::io::prelude::*;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::path::PathBuf;
 
 const LIB: &str = "wasmcloudcache";
@@ -151,6 +154,7 @@ fn integration_drain_all() {
     remove_dir_all(test_dir).unwrap();
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn path_to_test_file(smithy_cache_dir: &str) -> PathBuf {
     PathBuf::from(&format!("{}/junk.txt", &smithy_cache_dir))
 }
