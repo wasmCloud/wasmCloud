@@ -310,7 +310,7 @@ mod test {
                 assert_eq!(data, Some(PathBuf::from(DATA_FNAME)));
                 assert_eq!(save, Some(PathBuf::from(SAVE_FNAME)));
                 assert_eq!(cluster_seed, "SCASDASDASD");
-                assert_eq!(test, true);
+                assert!(test);
                 assert_eq!(bin, '2');
                 assert_eq!(actor_id, ACTOR_ID);
                 assert_eq!(operation, "HandleOperation");
