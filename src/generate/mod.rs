@@ -139,7 +139,7 @@ pub(crate) struct NewProjectArgs {
 
     /// Optional subfolder of the git repository
     #[structopt(long, alias = "subdir")]
-    pub(crate) subfolder: Option<String>,
+    pub(crate) subfolder: Option<PathBuf>,
 
     /// Optional github branch
     #[structopt(long)]
@@ -194,7 +194,7 @@ pub(crate) fn handle_command(
             path: fav.path.as_ref().map(PathBuf::from),
             git: fav.git.clone(),
             branch: fav.branch.clone(),
-            subfolder: fav.subfolder,
+            subfolder: fav.subfolder.as_ref().map(PathBuf::from),
             ..cmd
         }
     } else {
@@ -386,7 +386,7 @@ fn toml_to_json<T: Serialize>(map: &T) -> Result<ParamMap> {
 fn locate_project_config_file<T>(
     name: &str,
     template_folder: T,
-    subfolder: &Option<String>,
+    subfolder: &Option<PathBuf>,
 ) -> Result<PathBuf>
 where
     T: AsRef<Path>,
@@ -450,7 +450,12 @@ fn resolve_template_dir(template_base_dir: &TempDir, args: &NewProjectArgs) -> R
         Some(subfolder) => {
             let template_base_dir = fs::canonicalize(template_base_dir.path())
                 .map_err(|e| any_msg("Invalid template path:", &e.to_string()))?;
-            let template_dir = fs::canonicalize(template_base_dir.join(subfolder))
+            let mut template_dir = template_base_dir.clone();
+            // NOTE(thomastaylor312): Yeah, this is weird, but if you just `join` the PathBuf here
+            // then you end up with mixed slashes, which doesn't work when file paths are
+            // canonicalized on Windows
+            template_dir.extend(subfolder.iter());
+            let template_dir = fs::canonicalize(template_dir)
                 .map_err(|e| any_msg("Invalid subfolder path:", &e.to_string()))?;
 
             if !template_dir.starts_with(&template_base_dir) {
@@ -470,7 +475,7 @@ fn resolve_template_dir(template_base_dir: &TempDir, args: &NewProjectArgs) -> R
                 "{} {} `{}`{}",
                 emoji::WRENCH,
                 style("Using template subfolder").bold(),
-                style(subfolder).bold().yellow(),
+                style(subfolder.display()).bold().yellow(),
                 style("...").bold()
             );
             Ok(template_dir)
