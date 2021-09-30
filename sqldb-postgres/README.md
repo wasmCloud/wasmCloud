@@ -1,6 +1,6 @@
-# sqldb capability provider
+# sqldb-postgres capability provider
 
-This capability provider allows actors to use a Postgres-compatible
+This capability provider allows wasmCloud actors to use a Postgres-compatible
 database, and implements the "wasmcloud:sqldb" capability contract.
 
 ### Capabilities:
