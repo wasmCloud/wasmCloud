@@ -11,6 +11,17 @@ on:
     branches: [ main ]
     paths:
     - "sqldb-postgres/**"
+  workflow-dispatch:
+    inputs:
+      release:
+        description: 'Build github release (enter y)'
+        default: ''
+        required: true
+      artifact:
+        description: 'Build github release and push artifact (enter y)'
+        default: ''
+        required: true
+
 
 env:
   CARGO_TERM_COLOR: always
@@ -43,7 +54,8 @@ jobs:
 
   build_artifact:
     needs: [ rust_check, make_test ]
-    if: startswith(github.ref, 'refs/tags/') # Only run on tag push
+    # run on tag push or manual with 'y'
+    if: startswith(github.ref, 'refs/tags/') || github.events.inputs.artifact == 'y' || github.events.inputs.release == 'y'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
@@ -61,7 +73,7 @@ jobs:
           path: ${{ env.working-directory }}/build/*.par.gz
 
   github_release:
-    if: startswith(github.ref, 'refs/tags/') # Only run on tag push
+    if: startswith(github.ref, 'refs/tags/') || github.events.inputs.artifact == 'y' || github.events.inputs.release == 'y'
     needs: build_artifact
     runs-on: ubuntu-latest
     steps:
@@ -81,7 +93,7 @@ jobs:
 
   artifact_release:
     needs: build_artifact
-    if: startswith(github.ref, 'refs/tags/') # Only run on tag push
+    if: startswith(github.ref, 'refs/tags/') || github.events.inputs.artifact == 'y'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
