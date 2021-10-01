@@ -15,11 +15,11 @@ on:
     inputs:
       release:
         description: 'Build github release (enter y)'
-        default: ''
+        default: 'n'
         required: true
       artifact:
         description: 'Build github release and push artifact (enter y)'
-        default: ''
+        default: 'n'
         required: true
 
 
@@ -28,6 +28,7 @@ env:
   working-directory: ./sqldb-postgres
   WASH_ISSUER_KEY: ${{ secrets.WASMCLOUD_ACCOUNT_OFFICIAL }}
   WASH_SUBJECT_KEY: ${{ secrets.WASMCLOUD_SQLDB_POSTGRES }}
+  oci-repository: sqldb-postgres
 
 jobs:
   rust_check:
@@ -55,7 +56,7 @@ jobs:
   build_artifact:
     needs: [ rust_check, make_test ]
     # run on tag push or manual with 'y'
-    if: startswith(github.ref, 'refs/tags/') || github.events.inputs.artifact == 'y' || github.events.inputs.release == 'y'
+    if: ${{ ( startswith(github.ref, 'refs/tags/') || github.events.inputs.artifact == 'y' || github.events.inputs.release == 'y' ) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
@@ -73,7 +74,7 @@ jobs:
           path: ${{ env.working-directory }}/build/*.par.gz
 
   github_release:
-    if: startswith(github.ref, 'refs/tags/') || github.events.inputs.artifact == 'y' || github.events.inputs.release == 'y'
+    if: ${{ ( startswith(github.ref, 'refs/tags/') || github.events.inputs.artifact == 'y' || github.events.inputs.release == 'y' ) }}
     needs: build_artifact
     runs-on: ubuntu-latest
     steps:
@@ -93,7 +94,7 @@ jobs:
 
   artifact_release:
     needs: build_artifact
-    if: startswith(github.ref, 'refs/tags/') || github.events.inputs.artifact == 'y'
+    if: ${{ ( startswith(github.ref, 'refs/tags/') || github.events.inputs.artifact == 'y' ) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
@@ -105,7 +106,6 @@ jobs:
 
       - name: Determine artifact metadata
         run: |
-          echo "oci-repository=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name' | sed 's/wasmcloud-provider-//')" >> $GITHUB_ENV
           echo "oci-version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].version')" >> $GITHUB_ENV
         working-directory: ${{ env.working-directory }}
 
