@@ -14,7 +14,9 @@ use wasmcloud_test_util::{
 async fn run_all() {
     // start provider (not necessary to call this here since it is create lazily,
     // but debug output order makes more sense)
-    let _prov = test_provider().await;
+    let provider = test_provider().await;
+    // allow time for it to start up and finish linking before we send rpc
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
 
     let opts = TestOptions::default();
     let res = run_selected_spawn!(&opts, health_check, query, flavor_test);
@@ -25,7 +27,6 @@ async fn run_all() {
     assert_eq!(passed, total, "{} passed out of {}", passed, total);
 
     // ask the provider to shut down gracefully
-    let provider = test_provider().await;
     let _ = provider.shutdown().await;
 }
 
@@ -39,20 +40,21 @@ async fn health_check(_opt: &TestOptions) -> RpcResult<()> {
     Ok(())
 }
 
-/// response to "select first_name from customer"
+/// response to "select typname from pg_catalog.pg_type ..."
 #[derive(Decode)]
-struct Name {
+struct BuiltinTypes {
     #[n(0)]
-    first_name: String,
+    typname: String,
 }
 
 /// decode results from cbor to concrete structure, and print results
 fn process_results(resp: FetchResult) -> Result<(), SqlDbError> {
     println!("Received {} rows: ", resp.num_rows);
-    let rows: Vec<Name> = minicbor::decode(&resp.rows)?;
+    let rows: Vec<BuiltinTypes> = minicbor::decode(&resp.rows)?;
+    assert_eq!(resp.num_rows, 8, "should be 8 int* types");
 
     for r in rows.iter() {
-        println!("Name: {}", r.first_name);
+        println!("type: {}", r.typname,);
     }
     Ok(())
 }
@@ -66,10 +68,11 @@ async fn query(_opt: &TestOptions) -> RpcResult<()> {
     let client = SqlDbSender::via(prov);
     let ctx = Context::default();
 
+    // use a table that's alrady there - schema types in pg_catalog
     let resp = client
         .fetch(
             &ctx,
-            &"select first_name from customer limit 10".to_string(),
+            &"select typname from pg_catalog.pg_type where typname like 'int%'".to_string(),
         )
         .await?;
 
@@ -97,13 +100,13 @@ struct FlavorResult {
 async fn flavor_queries(ctx: &Context, client: &SqlDbSender<Provider>) -> Result<(), SqlDbError> {
     // remove it in case earlier test crashed
     let resp = client
-        .execute(&ctx, &"drop table if exists test_flavors".to_string())
+        .execute(ctx, &"drop table if exists test_flavors".to_string())
         .await?;
     assert_eq!(resp.rows_affected, 0);
 
     let resp = client
         .execute(
-            &ctx,
+            ctx,
             &r#"create table test_flavors
             ( 
               id INT4 NOT NULL,
@@ -116,7 +119,7 @@ async fn flavor_queries(ctx: &Context, client: &SqlDbSender<Provider>) -> Result
 
     let resp = client
         .execute(
-            &ctx,
+            ctx,
             &r#"insert into test_flavors (id,flavor) values
             (1, 'Vanilla'),
             (2, 'Chocolate'),
@@ -133,7 +136,7 @@ async fn flavor_queries(ctx: &Context, client: &SqlDbSender<Provider>) -> Result
 
     let resp = client
         .fetch(
-            &ctx,
+            ctx,
             &r#"select flavor from test_flavors 
                     where flavor like '%Chocolate%' order by id"#
                 .to_string(),
@@ -146,7 +149,7 @@ async fn flavor_queries(ctx: &Context, client: &SqlDbSender<Provider>) -> Result
     assert_eq!(&rows.get(1).unwrap().flavor, "Mint Chocolate Chip",);
 
     let _resp = client
-        .execute(&ctx, &"drop table if exists test_flavors".to_string())
+        .execute(ctx, &"drop table if exists test_flavors".to_string())
         .await?;
 
     Ok(())

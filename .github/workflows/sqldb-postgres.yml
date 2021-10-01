@@ -29,9 +29,22 @@ jobs:
       uses: wasmcloud/common-actions/rust-check@main
       with:
         working-directory: ${{ env.working-directory }}
+        # disable testing with "cargo test" since this will run 'make test'
+        test-options: --no-run
+
+  make_test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - id: run-nats
+      uses: wasmcloud/common-actions/run-nats@main
+    - name: Run tests via Makefile
+      run: make test
+      shell: bash
+      working-directory: ${{ env.working-directory }}
 
   build_artifact:
-    needs: rust_check
+    needs: [ rust_check, make_test ]
     if: startswith(github.ref, 'refs/tags/') # Only run on tag push
     runs-on: ubuntu-latest
     steps:
