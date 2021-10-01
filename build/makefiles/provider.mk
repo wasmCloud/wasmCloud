@@ -195,7 +195,6 @@ make-vars:
 	@echo "platform       : $(platform)"
 	@echo "machine_id     : $(machine_id)"
 	@echo "default-par    : $(par_target0)"
-	@echo "project_dir    : $(project_dir)"
 	@echo "subdirs        : $(subdirs)"
 	@echo "top_targets    : $(top_targets)"
 	@echo "NAME           : $(NAME)"
