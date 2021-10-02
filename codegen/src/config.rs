@@ -7,6 +7,7 @@ use std::str::FromStr;
 use toml::Value as TomlValue;
 
 /// Output languages for code generation
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum OutputLanguage {

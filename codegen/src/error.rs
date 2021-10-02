@@ -4,6 +4,7 @@ use thiserror::Error as ThisError;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+#[non_exhaustive]
 #[derive(Debug, ThisError)]
 pub enum Error {
     #[error("missing input file: {0}")]

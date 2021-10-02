@@ -83,6 +83,7 @@ impl<'model> RustCodeGen<'model> {
     }
 }
 
+#[non_exhaustive]
 enum MethodArgFlags {
     Normal,
     // arg is type ToString
@@ -161,7 +162,7 @@ impl<'model> CodeGen for RustCodeGen<'model> {
         _params: &ParamMap,
     ) -> Result<()> {
         w.write(
-            r#"// This file is generated automatically using wasmcloud-weld and smithy model definitions
+            r#"// This file is generated automatically using weld-codegen and smithy model definitions
                //
             "#);
         match &self.namespace {
@@ -873,6 +874,10 @@ impl<'model> RustCodeGen<'model> {
                   /// Constructs a {}Sender with the specified transport
                   pub fn via(transport: T) -> Self {{
                       Self{{ transport }}
+                  }}
+                  
+                  pub fn set_timeout(&self, interval: std::time::Duration) {{
+                    self.transport.set_timeout(interval);
                   }}
               }}
             "#,
