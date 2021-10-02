@@ -234,7 +234,6 @@ pub fn has_default(model: &'_ Model, member: &MemberShape) -> bool {
 
     if id.namespace().eq(prelude_namespace_id()) {
         let name = id.shape_name().to_string();
-        eprintln!("has_default name={}", &name);
         cfg_if::cfg_if! {
             if #[cfg(feature = "BigInteger")] {
                 has = has || &name == "bigInteger";
