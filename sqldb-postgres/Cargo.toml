@@ -36,9 +36,6 @@ wasmbus-rpc = "0.4.4"
 [dev-dependencies]
 wasmcloud-test-util = "0.1"
 
-[workspace]
-members = [ "examples/check-uri" ]
-
 [[bin]]
 name = "sqldb-postgres"
 path = "src/main.rs"
