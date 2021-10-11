@@ -49,6 +49,7 @@ pub struct LogRec {
     level: Level,
     target: String,
     args: String,
+    #[allow(dead_code)]
     module_path: Option<&'static str>,
     file: Option<&'static str>,
     line: Option<u32>,
