@@ -58,6 +58,9 @@ pub trait Transport: Send {
         req: Message<'_>,
         opts: Option<SendOpts>,
     ) -> std::result::Result<Vec<u8>, RpcError>;
+
+    /// Sets rpc timeout
+    fn set_timeout(&self, interval: std::time::Duration);
 }
 
 // select serialization/deserialization mode
@@ -69,6 +72,8 @@ cfg_if::cfg_if! {
 
         pub fn serialize<T: Serialize>(data: &T) -> Result<Vec<u8>, RpcError> {
             rmp_serde::to_vec_named(data).map_err(|e| RpcError::Ser(e.to_string()))
+            // for benchmarking: the following line uses msgpack without field names
+            //rmp_serde::to_vec(data).map_err(|e| RpcError::Ser(e.to_string()))
         }
     } else if #[cfg(feature = "ser_json")] {
         pub fn deserialize<'de, T: Deserialize<'de>>(buf: &'de [u8]) -> Result<T, RpcError> {
@@ -148,6 +153,24 @@ impl From<String> for RpcError {
 impl From<&str> for RpcError {
     fn from(s: &str) -> RpcError {
         RpcError::Other(s.to_string())
+    }
+}
+
+impl From<std::io::Error> for RpcError {
+    fn from(e: std::io::Error) -> RpcError {
+        RpcError::Other(format!("io: {}", e.to_string()))
+    }
+}
+
+impl From<minicbor::encode::Error<std::io::Error>> for RpcError {
+    fn from(e: minicbor::encode::Error<std::io::Error>) -> RpcError {
+        RpcError::Ser(format!("cbor-encode: {}", e))
+    }
+}
+
+impl From<minicbor::decode::Error> for RpcError {
+    fn from(e: minicbor::decode::Error) -> RpcError {
+        RpcError::Deser(format!("cbor-decode: {}", e))
     }
 }
 

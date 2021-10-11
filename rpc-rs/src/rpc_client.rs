@@ -16,7 +16,7 @@ use std::{
     time::Duration,
 };
 
-pub(crate) const DEFAULT_RPC_TIMEOUT_MILLIS: std::time::Duration = Duration::from_millis(2000);
+pub(crate) const DEFAULT_RPC_TIMEOUT_MILLIS: Duration = Duration::from_millis(2000);
 
 /// Send wasmbus rpc messages
 ///
@@ -42,6 +42,8 @@ pub struct RpcClient {
     key: Arc<wascap::prelude::KeyPair>,
     /// host id for invocations
     host_id: String,
+    /// timeout for rpc messages
+    timeout: Option<Duration>,
 }
 
 #[derive(Clone)]
@@ -77,12 +79,14 @@ impl RpcClient {
         lattice_prefix: &str,
         key: wascap::prelude::KeyPair,
         host_id: String,
+        timeout: Option<Duration>,
     ) -> Self {
         RpcClient {
             client: NatsClientType::Async(nats),
             lattice_prefix: lattice_prefix.to_string(),
             key: Arc::new(key),
             host_id,
+            timeout,
         }
     }
 
@@ -94,12 +98,14 @@ impl RpcClient {
         lattice_prefix: &str,
         key: wascap::prelude::KeyPair,
         host_id: String,
+        timeout: Option<Duration>,
     ) -> Self {
         RpcClient {
             client: NatsClientType::Asynk(nats),
             lattice_prefix: lattice_prefix.to_string(),
             key: Arc::new(key),
             host_id,
+            timeout,
         }
     }
 
@@ -111,12 +117,14 @@ impl RpcClient {
         lattice_prefix: &str,
         key: wascap::prelude::KeyPair,
         host_id: String,
+        timeout: Option<Duration>,
     ) -> Self {
         RpcClient {
             client: NatsClientType::Sync(nats),
             lattice_prefix: lattice_prefix.to_string(),
             key: Arc::new(key),
             host_id,
+            timeout,
         }
     }
 
@@ -138,6 +146,12 @@ impl RpcClient {
             NatsClientType::Asynk(nc) => Some(nc),
             _ => None,
         }
+    }
+
+    /// Replace the default timeout with the specified value.
+    /// If the parameter is None, unsets the default timeout
+    pub fn set_timeout(&mut self, timeout: Option<Duration>) {
+        self.timeout = timeout;
     }
 
     /// Send an rpc message using json-encoded data
@@ -163,6 +177,8 @@ impl RpcClient {
     /// 'target' may be &str or String for sending to an actor, or a WasmCloudEntity (for actor or provider)
     /// If nats client is sync, this can block the current thread.
     /// If a response is not received within the default timeout, the Error RpcError::Timeout is returned.
+    /// If the client timeout has been set, this call is equivalent to send_timeout passing in the
+    /// default timeout.
     pub async fn send<Target>(
         &self,
         origin: WasmCloudEntity,
@@ -172,7 +188,8 @@ impl RpcClient {
     where
         Target: Into<WasmCloudEntity>,
     {
-        self.inner_rpc(origin, target, message, true, None).await
+        self.inner_rpc(origin, target, message, true, self.timeout)
+            .await
     }
 
     /// Send a wasmbus rpc message, with a timeout.
@@ -255,10 +272,8 @@ impl RpcClient {
         trace!("rpc send {}", &target_url);
 
         let nats_body = crate::serialize(&invocation)?;
-        let timeout = timeout.unwrap_or(DEFAULT_RPC_TIMEOUT_MILLIS);
-
         if expect_response {
-            let payload =
+            let payload = if let Some(timeout) = timeout {
                 match tokio::time::timeout(timeout, self.request(&topic, &nats_body)).await {
                     Ok(res) => res,
                     Err(e) => {
@@ -272,7 +287,12 @@ impl RpcClient {
                 }
                 .map_err(|e| {
                     RpcError::Nats(format!("rpc send error: {}: {}", target_url, e.to_string()))
-                })?;
+                })?
+            } else {
+                self.request(&topic, &nats_body).await.map_err(|e| {
+                    RpcError::Nats(format!("rpc send error: {}: {}", target_url, e.to_string()))
+                })?
+            };
 
             let inv_response = crate::deserialize::<InvocationResponse>(&payload)
                 .map_err(|e| RpcError::Deser(e.to_string()))?;
@@ -413,9 +433,10 @@ impl RpcClientSync {
         lattice_prefix: &str,
         key: wascap::prelude::KeyPair,
         host_id: String,
+        timeout: Option<Duration>,
     ) -> Self {
         RpcClientSync {
-            inner: RpcClient::new_sync(nats, lattice_prefix, key, host_id),
+            inner: RpcClient::new_sync(nats, lattice_prefix, key, host_id, timeout),
         }
     }
 
