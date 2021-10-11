@@ -54,7 +54,7 @@ type ShapeList<'model> = Vec<(&'model ShapeID, &'model AppliedTraits, &'model Sh
 // This enum may be extended in the future if other variations are required.
 // It's recursively composable, so you could represent &Option<&Value>
 // with `Ty::Ref(Ty::Opt(Ty::Ref(id)))`
-enum Ty<'typ> {
+pub(crate) enum Ty<'typ> {
     /// write a plain shape declaration
     Shape(&'typ ShapeID),
     /// write a type wrapped in Option<>
@@ -66,10 +66,10 @@ enum Ty<'typ> {
 #[derive(Default)]
 pub struct RustCodeGen<'model> {
     /// if set, limits declaration output to this namespace only
-    namespace: Option<NamespaceID>,
-    packages: HashMap<String, PackageName>,
-    import_core: String,
-    model: Option<&'model Model>,
+    pub(crate) namespace: Option<NamespaceID>,
+    pub(crate) packages: HashMap<String, PackageName>,
+    pub(crate) import_core: String,
+    pub(crate) model: Option<&'model Model>,
 }
 
 impl<'model> RustCodeGen<'model> {
@@ -170,7 +170,7 @@ impl<'model> CodeGen for RustCodeGen<'model> {
                 // the base model has minimal dependencies
                 w.write(
                     r#"
-                #![allow(dead_code)]
+                #![allow(dead_code, clippy::needless_lifetimes)]
                 use serde::{{Deserialize, Serialize}};
              "#,
                 );
@@ -182,15 +182,14 @@ impl<'model> CodeGen for RustCodeGen<'model> {
                 // if the crate we are generating is "wasmbus_rpc" then we have to import it with "crate::".
                 w.write(&format!(
                     r#"
-                #![allow(clippy::ptr_arg)]
-                #[allow(unused_imports)]
+                #![allow(unused_imports, clippy::ptr_arg, clippy::needless_lifetimes)]
                 use {}::{{
                     Context, deserialize, serialize, MessageDispatch, RpcError, RpcResult,
-                    Timestamp, Transport, Message, SendOpts,
+                    Timestamp, Transport, Message, SendOpts, minicbor,
                 }};
-                #[allow(unused_imports)] use serde::{{Deserialize, Serialize}};
-                #[allow(unused_imports)] use async_trait::async_trait;
-                #[allow(unused_imports)] use std::{{borrow::Cow, string::ToString}};
+                use serde::{{Deserialize, Serialize}};
+                use async_trait::async_trait;
+                use std::{{borrow::Cow, io::Write, string::ToString}};
                 "#,
                     &self.import_core
                 ));
@@ -256,6 +255,8 @@ impl<'model> CodeGen for RustCodeGen<'model> {
                 | ShapeKind::Union(_)
                 | ShapeKind::Unresolved => {}
             }
+            self.declare_shape_encoder(&mut w, id, shape)?;
+            self.declare_shape_decoder(&mut w, id, shape)?;
         }
         Ok(())
     }
@@ -343,17 +344,26 @@ impl<'model> RustCodeGen<'model> {
         }
     }
 
+    /// field type, wrapped with Option if field is not required
+    pub(crate) fn field_type_string(&self, field: &MemberShape) -> Result<String> {
+        self.type_string(if is_optional_type(field) {
+            Ty::Opt(field.target())
+        } else {
+            Ty::Shape(field.target())
+        })
+    }
     /// Write a type name, a primitive or defined type, with or without deref('&') and with or without Option<>
-    fn write_type(&mut self, w: &mut Writer, ty: Ty<'_>) -> Result<()> {
+    pub(crate) fn type_string(&self, ty: Ty<'_>) -> Result<String> {
+        let mut s = String::new();
         match ty {
             Ty::Opt(id) => {
-                w.write(b"Option<");
-                self.write_type(w, Ty::Shape(id))?;
-                w.write(b">");
+                s.push_str("Option<");
+                s.push_str(&self.type_string(Ty::Shape(id))?);
+                s.push('>');
             }
             Ty::Ref(id) => {
-                w.write(b"&");
-                self.write_type(w, Ty::Shape(id))?;
+                s.push('&');
+                s.push_str(&self.type_string(Ty::Shape(id))?);
             }
             Ty::Shape(id) => {
                 let name = id.shape_name().to_string();
@@ -386,48 +396,54 @@ impl<'model> RustCodeGen<'model> {
                         }
                         _ => return Err(Error::UnsupportedType(name)),
                     };
-                    w.write(ty);
+                    s.push_str(ty);
                 } else if id.namespace() == wasmcloud_model_namespace() {
-                    match name.as_bytes() {
-                        b"U64" | b"U32" | b"U16" | b"U8" => {
-                            w.write(b"u");
-                            w.write(&name.as_bytes()[1..])
+                    match name.as_str() {
+                        "U64" | "U32" | "U16" | "U8" => {
+                            s.push('u');
+                            s.push_str(&name[1..])
                         }
-                        b"I64" | b"I32" | b"I16" | b"I8" => {
-                            w.write(b"i");
-                            w.write(&name.as_bytes()[1..])
+                        "I64" | "I32" | "I16" | "I8" => {
+                            s.push('i');
+                            s.push_str(&name[1..]);
                         }
                         _ => {
                             if self.namespace.is_none()
                                 || self.namespace.as_ref().unwrap() != wasmcloud_model_namespace()
                             {
-                                w.write(&self.import_core);
-                                w.write(b"::model::");
+                                s.push_str(&self.import_core);
+                                s.push_str("::model::");
                             }
-                            w.write(&self.to_type_name(&name));
+                            s.push_str(&self.to_type_name(&name));
                         }
                     };
                 } else if self.namespace.is_some()
                     && id.namespace() == self.namespace.as_ref().unwrap()
                 {
                     // we are in the same namespace so we don't need to specify namespace
-                    w.write(&self.to_type_name(&id.shape_name().to_string()));
+                    s.push_str(&self.to_type_name(&id.shape_name().to_string()));
                 } else {
                     match self.packages.get(&id.namespace().to_string()) {
                         Some(package) => {
                             // the crate name should be valid rust syntax. If not, they'll get an error with rustc
-                            w.write(&package.crate_name);
-                            w.write(b"::");
-                            w.write(&self.to_type_name(&id.shape_name().to_string()));
+                            s.push_str(&package.crate_name);
+                            s.push_str("::");
+                            s.push_str(&self.to_type_name(&id.shape_name().to_string()));
                         }
                         None => {
                             return Err(Error::Model(format!("undefined create for namespace {} for symbol {}. Make sure codegen.toml includes all dependent namespaces",
-                                    &id.namespace(), &id)));
+                                                            &id.namespace(), &id)));
                         }
                     }
                 }
             }
         }
+        Ok(s)
+    }
+
+    /// Write a type name, a primitive or defined type, with or without deref('&') and with or without Option<>
+    fn write_type(&mut self, w: &mut Writer, ty: Ty<'_>) -> Result<()> {
+        w.write(&self.type_string(ty)?);
         Ok(())
     }
 
@@ -626,26 +642,17 @@ impl<'model> RustCodeGen<'model> {
                 // See the comment for has_default for more info.
                 w.write(r#"  #[serde(default)] "#);
             }
-            w.write(b"  pub ");
-            w.write(&rust_field_name);
-            w.write(b": ");
-            self.write_field_type(&mut w, member)?;
-            w.write(b",\n");
+            w.write(
+                format!(
+                    "  pub {}: {},\n",
+                    &rust_field_name,
+                    self.field_type_string(member)?
+                )
+                .as_bytes(),
+            );
         }
         w.write(b"}\n\n");
         Ok(())
-    }
-
-    /// write field type, wrapping with Option if field is not required
-    fn write_field_type(&mut self, mut w: &mut Writer, field: &MemberShape) -> Result<()> {
-        self.write_type(
-            &mut w,
-            if is_optional_type(field) {
-                Ty::Opt(field.target())
-            } else {
-                Ty::Shape(field.target())
-            },
-        )
     }
 
     /// Declares the service as a rust Trait whose methods are the smithy service operations
@@ -1050,7 +1057,7 @@ impl<'model> RustCodeGen<'model> {
 /// is_optional_type determines whether the field should be wrapped in Option<>
 /// the value is true if it has an explicit `box` trait, or if it's
 /// un-annotated and not one of (boolean, byte, short, integer, long, float, double)
-fn is_optional_type(field: &MemberShape) -> bool {
+pub(crate) fn is_optional_type(field: &MemberShape) -> bool {
     field.is_boxed()
         || (!field.is_required()
             && ![
