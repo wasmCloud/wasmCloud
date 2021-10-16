@@ -57,7 +57,7 @@ const BASIC_TYPES: &[&str] = &[
 ///
 pub type Template<'template> = (&'template str, &'template str);
 
-#[derive(Debug)]
+#[derive(Default, Debug)]
 pub struct RenderConfig<'render> {
     /// Templates to be loaded for renderer. List of template name, data
     pub templates: Vec<Template<'render>>,
@@ -65,15 +65,6 @@ pub struct RenderConfig<'render> {
     ///   If true, a variable used in template that is undefined would raise an error
     ///   if false, an undefined variable would evaluate to 'falsey'
     pub strict_mode: bool,
-}
-
-impl<'render> Default for RenderConfig<'render> {
-    fn default() -> Self {
-        Self {
-            templates: Vec::default(),
-            strict_mode: false,
-        }
-    }
 }
 
 /// HBTemplate processor for code generation

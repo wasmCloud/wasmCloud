@@ -98,6 +98,7 @@ impl<'model> Generator {
                 } else {
                     config.base_dir.join(template_dir)
                 };
+                #[cfg(not(target_arch = "wasm32"))]
                 for (name, tmpl) in templates_from_dir(&template_dir)? {
                     renderer.add_template((&name, &tmpl))?;
                 }
@@ -299,11 +300,11 @@ pub(crate) trait CodeGen {
 
     /// Write documentation for item
     #[allow(unused_variables)]
-    fn write_documentation(&mut self, mut w: &mut Writer, _id: &Identifier, text: &str) {
+    fn write_documentation(&mut self, w: &mut Writer, _id: &Identifier, text: &str) {
         for line in text.split('\n') {
             // remove whitespace from end of line
             let line = line.trim_end_matches(|c| c == '\r' || c == ' ' || c == '\t');
-            self.write_comment(&mut w, CommentKind::Documentation, line);
+            self.write_comment(w, CommentKind::Documentation, line);
         }
     }
 

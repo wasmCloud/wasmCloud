@@ -18,7 +18,7 @@ async fn make_client() -> RpcResult<RpcClient> {
     .await
     .map_err(|e| RpcError::ProviderInit(format!("nats connection failed: {}", e.to_string())))?;
     let kp = wascap::prelude::KeyPair::new_user();
-    let client = RpcClient::new(nc, LATTICE_PREFIX, kp, HOST_ID.to_string());
+    let client = RpcClient::new(nc, LATTICE_PREFIX, kp, HOST_ID.to_string(), None);
     Ok(client)
 }
 

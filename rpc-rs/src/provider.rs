@@ -6,7 +6,7 @@
 use crate::{
     core::{
         HealthCheckRequest, HealthCheckResponse, HostData, Invocation, InvocationResponse,
-        LinkDefinition, WasmCloudEntity,
+        LinkDefinition,
     },
     Message, MessageDispatch, RpcError,
 };
@@ -19,7 +19,14 @@ pub use ratsio::{self, NatsClient};
 // re-export make_uuid
 pub use crate::rpc_client::make_uuid;
 use serde::de::DeserializeOwned;
-use std::{borrow::Cow, collections::HashMap, convert::Infallible, ops::Deref, sync::Arc};
+use std::time::Duration;
+use std::{
+    borrow::Cow,
+    collections::HashMap,
+    convert::Infallible,
+    ops::Deref,
+    sync::{Arc, Mutex as StdMutex},
+};
 use tokio::sync::{oneshot, RwLock};
 
 // name of nats queue group for rpc subscription
@@ -116,6 +123,7 @@ impl HostBridge {
             &host_data.lattice_rpc_prefix,
             key,
             host_data.host_id.clone(),
+            None,
         );
 
         Ok(HostBridge {
@@ -152,18 +160,6 @@ impl HostBridge {
     /// Returns a reference to the rpc client
     fn rpc_client(&self) -> &crate::rpc_client::RpcClient {
         &self.rpc_client
-    }
-
-    /// Sends an rpc message to the actor.
-    pub async fn send_actor(
-        &self,
-        origin: WasmCloudEntity,
-        actor_id: &str,
-        message: Message<'_>,
-    ) -> Result<Vec<u8>, RpcError> {
-        debug!("host_bridge sending actor {}", message.method);
-        let target = WasmCloudEntity::new_actor(actor_id)?;
-        self.rpc_client().send(origin, target, message).await
     }
 
     /// Clear out all subscriptions
@@ -387,6 +383,9 @@ impl HostBridge {
         }
         if !inv.host_id.starts_with('N') && inv.host_id.len() != 56 {
             return Err(format!("Invalid host ID on invocation: '{}'", inv.host_id));
+        }
+        if !self.host_data.cluster_issuers.contains(&claims.issuer) {
+            return Err("Issuer of this invocation is not in list of cluster issuers".into());
         }
         if inv_claims.target_url != target_url {
             return Err(format!(
@@ -613,7 +612,7 @@ impl HostBridge {
 pub struct ProviderTransport<'send> {
     pub bridge: &'send HostBridge,
     pub ld: &'send LinkDefinition,
-    timeout: std::time::Duration,
+    timeout: StdMutex<std::time::Duration>,
 }
 
 impl<'send> ProviderTransport<'send> {
@@ -631,11 +630,14 @@ impl<'send> ProviderTransport<'send> {
         bridge: Option<&'send HostBridge>,
         timeout: Option<std::time::Duration>,
     ) -> Self {
+        #[allow(clippy::redundant_closure)]
         let bridge = bridge.unwrap_or_else(|| crate::provider_main::get_host_bridge());
         Self {
             bridge,
             ld,
-            timeout: timeout.unwrap_or(crate::rpc_client::DEFAULT_RPC_TIMEOUT_MILLIS),
+            timeout: StdMutex::new(
+                timeout.unwrap_or(crate::rpc_client::DEFAULT_RPC_TIMEOUT_MILLIS),
+            ),
         }
     }
 }
@@ -650,9 +652,25 @@ impl<'send> crate::Transport for ProviderTransport<'send> {
     ) -> std::result::Result<Vec<u8>, RpcError> {
         let origin = self.ld.provider_entity();
         let target = self.ld.actor_entity();
+        let timeout = {
+            if let Ok(rd) = self.timeout.lock() {
+                *rd
+            } else {
+                // if lock is poisioned
+                warn!("rpc timeout mutex error - using default value");
+                crate::rpc_client::DEFAULT_RPC_TIMEOUT_MILLIS
+            }
+        };
         self.bridge
             .rpc_client()
-            .send_timeout(origin, target, req, self.timeout)
+            .send_timeout(origin, target, req, timeout)
             .await
+    }
+    fn set_timeout(&self, interval: Duration) {
+        if let Ok(mut write) = self.timeout.lock() {
+            *write = interval;
+        } else {
+            warn!("rpc timeout mutex error - unchanged")
+        }
     }
 }

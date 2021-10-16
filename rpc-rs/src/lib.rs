@@ -22,6 +22,9 @@ pub mod model {
     pub use crate::wasmbus_model::*;
 }
 
+// re-export
+pub use minicbor;
+
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod rpc_client;
 #[cfg(not(target_arch = "wasm32"))]
@@ -258,6 +261,9 @@ pub mod actor {
                 impl crate::Transport for WasmHost {
                     async fn send(&self, _ctx: &Context,
                                 _msg: Message<'_>, _opts: Option<crate::SendOpts> ) -> crate::RpcResult<Vec<u8>> {
+                       unimplemented!();
+                    }
+                    fn set_timeout(&self, _interval: std::time::Duration) {
                        unimplemented!();
                     }
                 }

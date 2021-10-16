@@ -1,10 +1,19 @@
+#![cfg(not(target_arch = "wasm32"))]
 use crate::{config::ModelSource, Error, Result};
 use atelier_core::model::Model;
 use reqwest::Url;
 use rustc_hash::FxHasher;
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
+/// maximum number of parallel downloader threads
 const MAX_PARALLEL_DOWNLOADS: u16 = 8;
+/// how long cached smithy file can be used before we attempt to download another
+const CACHED_FILE_MAX_AGE: Duration = Duration::from_secs(60 * 60 * 24); // one day
+const SMITHY_CACHE_ENV_VAR: &str = "SMITHY_CACHE";
+const SMITHY_CACHE_NO_EXPIRE: &str = "NO_EXPIRE";
 
 /// Load all model sources and merge into single model.
 /// - Sources may be a combination of files, directories, and urls.
@@ -148,11 +157,29 @@ pub fn weld_cache_dir() -> Result<PathBuf> {
     Ok(weld_cache)
 }
 
+/// Returns true if the file is older than the specified cache age.
+/// If the environment contains SMITHY_CACHE=NO_EXPIRE, the file age is ignored and false is returned.
+pub fn cache_expired(path: &Path) -> bool {
+    if let Ok(cache_flag) = std::env::var(SMITHY_CACHE_ENV_VAR) {
+        if cache_flag == SMITHY_CACHE_NO_EXPIRE {
+            return false;
+        }
+    }
+    if let Ok(md) = std::fs::metadata(path) {
+        if let Ok(modified) = md.modified() {
+            if let Ok(age) = modified.elapsed() {
+                return age >= CACHED_FILE_MAX_AGE;
+            }
+        }
+    }
+    // If the OS can't read the file timestamp, assume it's expired and return true.
+    true
+}
+
 /// Returns a list of cached files for a list of urls. Files that are not present in the cache are fetched
 /// with a parallel downloader. This function fails if any file cannot be retrieved.
 /// Files are downloaded into a temp dir, so that if there's a download error they don't overwrite
 /// any cached values
-/// TODO: use cache flag to override cache behavior
 fn urls_to_cached_files(urls: Vec<String>) -> Result<Vec<PathBuf>> {
     let mut results = Vec::new();
     let mut to_download = Vec::new();
@@ -164,11 +191,11 @@ fn urls_to_cached_files(urls: Vec<String>) -> Result<Vec<PathBuf>> {
     for url in urls.iter() {
         let rel_path = url_to_cache_path(url)?;
         let cache_path = weld_cache.join(&rel_path);
-        if cache_path.is_file() {
+        if cache_path.is_file() && !cache_expired(&cache_path) {
             // found cached file
             results.push(cache_path);
         } else {
-            // no cache file, download to temp dir
+            // no cache file (or expired), download to temp dir
             let temp_path = tmpdir.path().join(&rel_path);
             std::fs::create_dir_all(temp_path.parent().unwrap()).map_err(|e| {
                 crate::Error::Io(format!(
@@ -240,7 +267,7 @@ fn urls_to_cached_files(urls: Vec<String>) -> Result<Vec<PathBuf>> {
     }
     if results.len() != urls.len() {
         Err(Error::Other(format!(
-            "Quitting - {} model files could not be downloaded and were not found in the cache",
+            "Quitting - {} model files could not be downloaded and were not found in the cache. If you have previously built this project and are working \"offline\", try setting SMITHY_CACHE=NO_EXPIRE in the environment",
             urls.len() - results.len()
         )))
     } else {
