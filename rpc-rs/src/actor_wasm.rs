@@ -110,6 +110,10 @@ impl Transport for WasmHost {
         };
         Ok(res)
     }
+
+    fn set_timeout(&self, _interval: std::time::Duration) {
+        // not applicable here - host sets timeout, so ignore this
+    }
 }
 
 //#[cold]

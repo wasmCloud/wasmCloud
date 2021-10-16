@@ -384,6 +384,9 @@ impl HostBridge {
         if !inv.host_id.starts_with('N') && inv.host_id.len() != 56 {
             return Err(format!("Invalid host ID on invocation: '{}'", inv.host_id));
         }
+        if !self.host_data.cluster_issuers.contains(&claims.issuer) {
+            return Err("Issuer of this invocation is not in list of cluster issuers".into());
+        }
         if inv_claims.target_url != target_url {
             return Err(format!(
                 "Invocation claims and invocation target URL do not match: {} != {}",
@@ -627,6 +630,7 @@ impl<'send> ProviderTransport<'send> {
         bridge: Option<&'send HostBridge>,
         timeout: Option<std::time::Duration>,
     ) -> Self {
+        #[allow(clippy::redundant_closure)]
         let bridge = bridge.unwrap_or_else(|| crate::provider_main::get_host_bridge());
         Self {
             bridge,
@@ -650,7 +654,7 @@ impl<'send> crate::Transport for ProviderTransport<'send> {
         let target = self.ld.actor_entity();
         let timeout = {
             if let Ok(rd) = self.timeout.lock() {
-                rd.clone()
+                *rd
             } else {
                 // if lock is poisioned
                 warn!("rpc timeout mutex error - using default value");

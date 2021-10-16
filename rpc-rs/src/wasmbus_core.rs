@@ -19,6 +19,10 @@ pub const SMITHY_VERSION: &str = "1.0";
 /// List of linked actors for a provider
 pub type ActorLinks = Vec<LinkDefinition>;
 
+pub type ClusterIssuerKey = String;
+
+pub type ClusterIssuers = Vec<ClusterIssuerKey>;
+
 /// health check request parameter
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct HealthCheckRequest {}
@@ -37,6 +41,8 @@ pub struct HealthCheckResponse {
 /// initialization data for a capability provider
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct HostData {
+    /// list of cluster issuers
+    pub cluster_issuers: ClusterIssuers,
     pub env_values: HostEnvValues,
     #[serde(default)]
     pub host_id: String,
