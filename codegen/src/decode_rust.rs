@@ -1,3 +1,6 @@
+#![cfg(feature = "cbor")]
+//! CBOR Decode functions
+
 use crate::codegen_rust::{RustCodeGen, Ty};
 use crate::{
     codegen_rust::is_optional_type,
@@ -235,10 +238,9 @@ impl<'model> RustCodeGen<'model> {
             .members()
             .map(|m| m.to_owned())
             .collect::<Vec<MemberShape>>();
-        // FIXME: want to do field annotations with field numbers [n]
-        fields.sort_by_key(|f| f.id().to_owned());
-        // todo: lifetime constraints
+        //let as_array = crate::CBOR_STRUCT_ENCODING == crate::CborStructEncoding::Array;
         let mut s = String::new();
+        fields.sort_by_key(|f| f.id().to_owned());
         for field in fields.iter() {
             let field_name = self.to_field_name(field.id())?;
             let field_type = self.field_type_string(field)?;
@@ -257,15 +259,20 @@ impl<'model> RustCodeGen<'model> {
                 ))
             }
         }
+        s.push_str(&format!(r#"
+            let is_array = match d.datatype()? {{
+                minicbor::data::Type::Array => true,
+                minicbor::data::Type::Map => false,
+                dt => return Err(RpcError::Deser(format!("decoding struct {}, expected array or map, found {{}}",dt)))
+            }};
+            if is_array {{
+                let len = d.array()?.ok_or_else(||RpcError::Deser("decoding struct {}: indefinite array not supported".to_string()))?;
+                for __i in 0..(len as usize) {{
+                   match __i {{
+        "#, id.shape_name(), id.shape_name()));
         // we aren't doing the encoder optimization that omits None values
         // at the end of the struct, but we can still decode it if used
-        s.push_str(&format!(
-            r#"
-            if let Some(len) = d.array()? {{
-                for __i in 0..(len as usize) {{
-                    match __i {{
-                    "#
-        ));
+
         for (ix, field) in fields.iter().enumerate() {
             let field_name = self.to_field_name(field.id())?;
             let field_decoder = self.decode_shape_id(field.target())?;
@@ -292,11 +299,47 @@ impl<'model> RustCodeGen<'model> {
                     }}
                 }}
             }} else {{
-                return Err(RpcError::Deser("{}: indefinite arrays in struct are not supported".to_string()));
-            }}
+                let len = d.map()?.ok_or_else(||RpcError::Deser("decoding struct {}: indefinite map not supported".to_string()))?;
+                for __i in 0..(len as usize) {{
+                    match d.str()? {{
             "#,
             id.shape_name())
         );
+        for field in fields.iter() {
+            let field_name = self.to_field_name(field.id())?;
+            let field_decoder = self.decode_shape_id(field.target())?;
+            if is_optional_type(field) {
+                s.push_str(&format!(
+                    r#""{}" => {} = if minicbor::data::Type::Null == d.datatype()? {{
+                                        d.skip()?;
+                                        Some(None)
+                                    }} else {{
+                                        Some(Some( {} ))
+                                    }},
+                   "#,
+                    field.id().to_string(),
+                    field_name,
+                    field_decoder,
+                ));
+            } else {
+                s.push_str(&format!(
+                    r#"
+                    "{}" => {} = Some({}),
+                    "#,
+                    field.id().to_string(),
+                    field_name,
+                    field_decoder,
+                ));
+            }
+        }
+        s.push_str(
+            r#"         _ => d.skip()?,
+                    }
+                }
+            }
+            "#,
+        );
+
         // build the return struct
         s.push_str(&format!("{} {{\n", id.shape_name()));
         for (ix, field) in fields.iter().enumerate() {

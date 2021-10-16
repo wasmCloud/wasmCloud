@@ -1,4 +1,5 @@
-// Encode functions
+#![cfg(feature = "cbor")]
+// CBOR Encode functions
 //
 // Because we have all the type information for declared types,
 // we can invoke the appropriate encode_* functions for each
@@ -36,6 +37,16 @@ use atelier_core::{
     },
 };
 use std::string::ToString;
+
+#[derive(PartialEq)]
+pub(crate) enum CborStructEncoding {
+    Array,
+    Map,
+}
+
+// not sure if this should be switchable as a feature, build flag,
+// or leave it as a const here since we probably won't change often.
+pub(crate) const CBOR_STRUCT_ENCODING: CborStructEncoding = CborStructEncoding::Array;
 
 #[derive(Clone, Copy)]
 enum ValExpr<'s> {
@@ -278,21 +289,35 @@ impl<'model> RustCodeGen<'model> {
             .members()
             .map(|m| m.to_owned())
             .collect::<Vec<MemberShape>>();
-        // FIXME: want to do field annotations with field numbers [n]
-        fields.sort_by_key(|f| f.id().to_owned());
-
-        let mut s = format!("e.array({})?;\n", fields.len());
+        let as_array = CBOR_STRUCT_ENCODING == CborStructEncoding::Array;
+        let mut s = String::new();
+        if as_array {
+            fields.sort_by_key(|f| f.id().to_owned());
+            s.push_str(&format!("e.array({})?;\n", fields.len()));
+        } else {
+            s.push_str(&format!("e.map({})?;\n", fields.len()));
+        }
         for field in fields.iter() {
             let field_name = self.to_field_name(field.id())?;
+            // TODO: should this be 'self' or val(unquoted) instead of "val"?
+            let field_val = self.encode_shape_id(field.target(), ValExpr::Ref("val"))?;
             if is_optional_type(field) {
                 s.push_str(&format!(
                     "if let Some(val) =  {}.{}.as_ref() {{\n",
                     val.as_str(),
                     &field_name
                 ));
-                s.push_str(&self.encode_shape_id(field.target(), ValExpr::Ref("val"))?);
+                if !as_array {
+                    // map key is declared name, not target language name
+                    s.push_str(&format!("e.str(\"{}\")?;\n", field.id().to_string()));
+                }
+                s.push_str(&field_val);
                 s.push_str("} else { e.null()?; }\n");
             } else {
+                if !as_array {
+                    // map key is declared name, not target language name
+                    s.push_str(&format!("e.str(\"{}\")?;\n", field.id().to_string()));
+                }
                 let val = format!("{}.{}", val.as_str(), &field_name);
                 s.push_str(&self.encode_shape_id(field.target(), ValExpr::Plain(&val))?);
             }
@@ -324,8 +349,6 @@ impl<'model> RustCodeGen<'model> {
                 pub fn encode_{}<W>(e: &mut minicbor::Encoder<W>, val: &{}) -> Result<(),minicbor::encode::Error<W::Error>>
                 where
                     W: minicbor::encode::Write,
-                    //<W as minicbor::encode::Write>::Error: std::error::Error + 'static,
-                    //<W as minicbor::encode::Write>::Error: std::io::Write,
                 {{
                 "#,
                     self.to_method_name(name),

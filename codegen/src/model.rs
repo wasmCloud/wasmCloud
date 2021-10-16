@@ -187,7 +187,7 @@ pub fn trait_value<T: DeserializeOwned>(value: &NodeValue) -> Result<T> {
 pub fn value_to_json(value: &NodeValue) -> JsonValue {
     match value {
         NodeValue::None => JsonValue::Null,
-        NodeValue::Array(v) => JsonValue::Array(v.iter().map(|v| value_to_json(v)).collect()),
+        NodeValue::Array(v) => JsonValue::Array(v.iter().map(value_to_json).collect()),
         NodeValue::Object(v) => {
             let mut object = crate::JsonMap::default();
             for (k, v) in v {

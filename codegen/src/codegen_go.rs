@@ -105,7 +105,13 @@ impl<'model> CodeGen for GoCodeGen<'model> {
     }
 
     fn source_formatter(&self) -> Result<Box<dyn SourceFormatter>> {
-        Ok(Box::new(crate::format::GoSourceFormatter::default()))
+        cfg_if::cfg_if! {
+            if #[cfg(not(target_arch = "wasm32"))] {
+                Ok(Box::new(crate::format::GoSourceFormatter::default()))
+            } else {
+                Ok(Box::new(crate::format::NullFormatter::default()))
+            }
+        }
     }
 
     /// Perform any initialization required prior to code generation for a file
@@ -188,12 +194,7 @@ impl<'model> CodeGen for GoCodeGen<'model> {
         Ok(())
     }
 
-    fn declare_types(
-        &mut self,
-        mut w: &mut Writer,
-        model: &Model,
-        _params: &ParamMap,
-    ) -> Result<()> {
+    fn declare_types(&mut self, w: &mut Writer, model: &Model, _params: &ParamMap) -> Result<()> {
         let ns = self.namespace.clone();
 
         let mut shapes = model
@@ -208,13 +209,13 @@ impl<'model> CodeGen for GoCodeGen<'model> {
         for (id, traits, shape) in shapes.into_iter() {
             match shape {
                 ShapeKind::Simple(simple) => {
-                    self.declare_simple_shape(&mut w, id.shape_name(), traits, simple)?;
+                    self.declare_simple_shape(w, id.shape_name(), traits, simple)?;
                 }
                 ShapeKind::Map(map) => {
-                    self.declare_map_shape(&mut w, id.shape_name(), traits, map)?;
+                    self.declare_map_shape(w, id.shape_name(), traits, map)?;
                 }
                 ShapeKind::List(list) => {
-                    self.declare_list_shape(&mut w, id.shape_name(), traits, list)?;
+                    self.declare_list_shape(w, id.shape_name(), traits, list)?;
                 }
                 ShapeKind::Set(_set) => {
                     print_warning(&format!(
@@ -223,7 +224,7 @@ impl<'model> CodeGen for GoCodeGen<'model> {
                     ));
                     /*
                     self.declare_list_or_set_shape(
-                        &mut w,
+                        w,
                         id.shape_name(),
                         traits,
                         set,
@@ -246,7 +247,7 @@ impl<'model> CodeGen for GoCodeGen<'model> {
         for (id, traits, shape) in shapes.into_iter() {
             if let ShapeKind::Structure(strukt) = shape {
                 //if !traits.contains_key(&prelude_shape_named(TRAIT_TRAIT).unwrap()) {
-                self.declare_structure_shape(&mut w, id.shape_name(), traits, strukt)?;
+                self.declare_structure_shape(w, id.shape_name(), traits, strukt)?;
                 //}
             }
         }
@@ -255,12 +256,7 @@ impl<'model> CodeGen for GoCodeGen<'model> {
     }
 
     #[allow(unused_variables)]
-    fn write_services(
-        &mut self,
-        mut w: &mut Writer,
-        model: &Model,
-        params: &ParamMap,
-    ) -> Result<()> {
+    fn write_services(&mut self, w: &mut Writer, model: &Model, params: &ParamMap) -> Result<()> {
         let ns = self.namespace.clone();
         for (id, traits, shape) in model
             .shapes()
@@ -268,9 +264,9 @@ impl<'model> CodeGen for GoCodeGen<'model> {
             .map(|s| (s.id(), s.traits(), s.body()))
         {
             if let ShapeKind::Service(service) = shape {
-                self.write_service_interface(&mut w, model, id.shape_name(), traits, service)?;
-                self.write_service_receiver(&mut w, model, id.shape_name(), traits, service)?;
-                self.write_service_sender(&mut w, model, id.shape_name(), traits, service)?;
+                self.write_service_interface(w, model, id.shape_name(), traits, service)?;
+                self.write_service_receiver(w, model, id.shape_name(), traits, service)?;
+                self.write_service_sender(w, model, id.shape_name(), traits, service)?;
             }
         }
         Ok(())
@@ -305,21 +301,21 @@ impl<'model> GoCodeGen<'model> {
     /// Apply documentation traits: (documentation, deprecated, unstable)
     fn apply_documentation_traits(
         &mut self,
-        mut w: &mut Writer,
+        w: &mut Writer,
         id: &Identifier,
         traits: &AppliedTraits,
     ) {
         if let Some(Some(Value::String(text))) =
             traits.get(&prelude_shape_named(TRAIT_DOCUMENTATION).unwrap())
         {
-            self.write_documentation(&mut w, id, text);
+            self.write_documentation(w, id, text);
         }
 
         // deprecated
         if let Some(Some(Value::Object(_map))) =
             traits.get(&prelude_shape_named(TRAIT_DEPRECATED).unwrap())
         {
-            self.write_documentation(&mut w, id, "Deprecated");
+            self.write_documentation(w, id, "Deprecated");
         }
 
         // unstable
@@ -327,7 +323,7 @@ impl<'model> GoCodeGen<'model> {
             .get(&prelude_shape_named(TRAIT_UNSTABLE).unwrap())
             .is_some()
         {
-            self.write_documentation(&mut w, id, "Unstable");
+            self.write_documentation(w, id, "Unstable");
         }
     }
 
@@ -424,11 +420,11 @@ impl<'model> GoCodeGen<'model> {
     #[allow(dead_code)]
     fn write_ident_with_suffix(
         &mut self,
-        mut w: &mut Writer,
+        w: &mut Writer,
         id: &Identifier,
         suffix: &str,
     ) -> Result<()> {
-        self.write_ident(&mut w, id);
+        self.write_ident(w, id);
         w.write(suffix); // assume it's already PascalCalse
         Ok(())
     }
@@ -436,14 +432,14 @@ impl<'model> GoCodeGen<'model> {
     // declaration for simple type
     fn declare_simple_shape(
         &mut self,
-        mut w: &mut Writer,
+        w: &mut Writer,
         id: &Identifier,
         traits: &AppliedTraits,
         simple: &Simple,
     ) -> Result<()> {
-        self.apply_documentation_traits(&mut w, id, traits);
+        self.apply_documentation_traits(w, id, traits);
         w.write(b" ");
-        self.write_ident(&mut w, id);
+        self.write_ident(w, id);
         w.write(b" ");
         let ty = match simple {
             Simple::Blob => "[]byte",
@@ -480,50 +476,50 @@ impl<'model> GoCodeGen<'model> {
 
     fn declare_map_shape(
         &mut self,
-        mut w: &mut Writer,
+        w: &mut Writer,
         id: &Identifier,
         traits: &AppliedTraits,
         shape: &MapShape,
     ) -> Result<()> {
-        self.apply_documentation_traits(&mut w, id, traits);
+        self.apply_documentation_traits(w, id, traits);
         w.write(b" ");
-        self.write_ident(&mut w, id);
+        self.write_ident(w, id);
         w.write(b" map");
         w.write(b"[");
-        self.write_type(&mut w, Ty::Shape(shape.key().target()))?;
+        self.write_type(w, Ty::Shape(shape.key().target()))?;
         w.write(b"]");
-        self.write_type(&mut w, Ty::Shape(shape.value().target()))?;
+        self.write_type(w, Ty::Shape(shape.value().target()))?;
         w.write(b";\n");
         Ok(())
     }
 
     fn declare_list_shape(
         &mut self,
-        mut w: &mut Writer,
+        w: &mut Writer,
         id: &Identifier,
         traits: &AppliedTraits,
         shape: &ListOrSet,
     ) -> Result<()> {
-        self.apply_documentation_traits(&mut w, id, traits);
+        self.apply_documentation_traits(w, id, traits);
         w.write(b" ");
-        self.write_ident(&mut w, id);
+        self.write_ident(w, id);
         w.write(b" []");
-        self.write_type(&mut w, Ty::Shape(shape.member().target()))?;
+        self.write_type(w, Ty::Shape(shape.member().target()))?;
         w.write(b";\n");
         Ok(())
     }
 
     fn declare_structure_shape(
         &mut self,
-        mut w: &mut Writer,
+        w: &mut Writer,
         id: &Identifier,
         traits: &AppliedTraits,
         strukt: &StructureOrUnion,
     ) -> Result<()> {
         let is_trait_struct = traits.contains_key(&prelude_shape_named(TRAIT_TRAIT).unwrap());
-        self.apply_documentation_traits(&mut w, id, traits);
+        self.apply_documentation_traits(w, id, traits);
         w.write(b"type ");
-        self.write_ident(&mut w, id);
+        self.write_ident(w, id);
         w.write(b" struct {\n");
         // sort fields for deterministic output
         let mut fields = strukt
@@ -532,7 +528,7 @@ impl<'model> GoCodeGen<'model> {
             .collect::<Vec<MemberShape>>();
         fields.sort_by_key(|f| f.id().to_owned());
         for member in fields.iter() {
-            self.apply_documentation_traits(&mut w, member.id(), member.traits());
+            self.apply_documentation_traits(w, member.id(), member.traits());
 
             // use the declared name for serialization, unless an override is declared
             // with `@sesrialization(name: SNAME)`
@@ -551,7 +547,7 @@ impl<'model> GoCodeGen<'model> {
             let is_opt_label = if is_optional { ",omitempty" } else { "" };
             w.write(&go_field_name);
             w.write(b" ");
-            self.write_field_type(&mut w, member)?;
+            self.write_field_type(w, member)?;
 
             if ser_name != go_field_name {
                 w.write(&format!(
@@ -566,9 +562,9 @@ impl<'model> GoCodeGen<'model> {
     }
 
     /// write field type, wrapping with Option if field is not required
-    fn write_field_type(&mut self, mut w: &mut Writer, field: &MemberShape) -> Result<()> {
+    fn write_field_type(&mut self, w: &mut Writer, field: &MemberShape) -> Result<()> {
         self.write_type(
-            &mut w,
+            w,
             if is_optional_type(field) {
                 Ty::Opt(field.target())
             } else {
@@ -580,19 +576,19 @@ impl<'model> GoCodeGen<'model> {
     /// Declares the service as a rust Trait whose methods are the smithy service operations
     fn write_service_interface(
         &mut self,
-        mut w: &mut Writer,
+        w: &mut Writer,
         model: &Model,
         service_id: &Identifier,
         service_traits: &AppliedTraits,
         service: &Service,
     ) -> Result<()> {
-        self.apply_documentation_traits(&mut w, service_id, service_traits);
+        self.apply_documentation_traits(w, service_id, service_traits);
 
         #[cfg(feature = "wasmbus")]
-        self.add_wasmbus_comments(&mut w, service_id, service_traits)?;
+        self.add_wasmbus_comments(w, service_id, service_traits)?;
 
         w.write(b"type ");
-        self.write_ident(&mut w, service_id);
+        self.write_ident(w, service_id);
         w.write(b" interface {\n");
         for operation in service.operations() {
             // if operation is not declared in this namespace, don't define it here
@@ -605,7 +601,7 @@ impl<'model> GoCodeGen<'model> {
 
             // TODO: re-think what to do if operation is in another namespace and self.namespace is None
             let method_id = operation.shape_name();
-            self.write_method_signature(&mut w, method_id, op_traits, op)?;
+            self.write_method_signature(w, method_id, op_traits, op)?;
             w.write(b";\n");
         }
         w.write(b"}\n\n");
@@ -615,7 +611,7 @@ impl<'model> GoCodeGen<'model> {
     #[cfg(feature = "wasmbus")]
     fn add_wasmbus_comments(
         &mut self,
-        mut w: &mut Writer,
+        w: &mut Writer,
         service_id: &Identifier,
         service_traits: &AppliedTraits,
     ) -> Result<()> {
@@ -624,15 +620,15 @@ impl<'model> GoCodeGen<'model> {
         if let Some(wasmbus) = wasmbus {
             if let Some(contract) = wasmbus.contract_id {
                 let text = format!("wasmbus.contractId: {}", &contract);
-                self.write_documentation(&mut w, service_id, &text);
+                self.write_documentation(w, service_id, &text);
             }
             if wasmbus.provider_receive {
                 let text = "wasmbus.providerReceive";
-                self.write_documentation(&mut w, service_id, text);
+                self.write_documentation(w, service_id, text);
             }
             if wasmbus.actor_receive {
                 let text = "wasmbus.actorReceive";
-                self.write_documentation(&mut w, service_id, text);
+                self.write_documentation(w, service_id, text);
             }
         }
         Ok(())
@@ -642,23 +638,23 @@ impl<'model> GoCodeGen<'model> {
     /// does not write trailing semicolon so this can be used for declaration and implementation
     fn write_method_signature(
         &mut self,
-        mut w: &mut Writer,
+        w: &mut Writer,
         method_id: &Identifier,
         method_traits: &AppliedTraits,
         op: &Operation,
     ) -> Result<()> {
         let method_name = self.to_method_name(method_id)?;
-        self.apply_documentation_traits(&mut w, method_id, method_traits);
+        self.apply_documentation_traits(w, method_id, method_traits);
         w.write(b" ");
         w.write(&method_name);
         w.write(b"(ctx  &context.Context");
         if let Some(input_type) = op.input() {
             w.write(b", arg  "); // pass arg by reference
-            self.write_type(&mut w, Ty::Ref(input_type))?;
+            self.write_type(w, Ty::Ref(input_type))?;
         }
         w.write(b") ");
         if let Some(output_type) = op.output() {
-            self.write_type(&mut w, Ty::Shape(output_type))?;
+            self.write_type(w, Ty::Shape(output_type))?;
         }
         Ok(())
     }
@@ -666,7 +662,7 @@ impl<'model> GoCodeGen<'model> {
     // pub trait FooReceiver : MessageDispatch + Foo { ... }
     fn write_service_receiver(
         &mut self,
-        mut w: &mut Writer,
+        w: &mut Writer,
         _model: &Model,
         service_id: &Identifier,
         service_traits: &AppliedTraits,
@@ -676,15 +672,15 @@ impl<'model> GoCodeGen<'model> {
             "{}Receiver receives messages defined in the {} service trait",
             service_id, service_id
         );
-        self.write_comment(&mut w, CommentKind::Documentation, &doc);
-        self.apply_documentation_traits(&mut w, service_id, service_traits);
+        self.write_comment(w, CommentKind::Documentation, &doc);
+        self.apply_documentation_traits(w, service_id, service_traits);
         w.write(&format!("// {}Receiver not implemented\n", service_id));
 
         /*
         w.write(b"#[async_trait]\npub trait ");
-        self.write_ident_with_suffix(&mut w, service_id, "Receiver")?;
+        self.write_ident_with_suffix(w, service_id, "Receiver")?;
         w.write(b" : MessageDispatch + ");
-        self.write_ident(&mut w, service_id);
+        self.write_ident(w, service_id);
         w.write(
             br#"{
             async fn dispatch(
@@ -712,12 +708,12 @@ impl<'model> GoCodeGen<'model> {
                 // let value : InputType = deserialize(...)?;
                 w.write(b"let value: ");
                 // TODO: should this be input.target?
-                self.write_type(&mut w, Ty::Shape(op.input().as_ref().unwrap()))?;
+                self.write_type(w, Ty::Shape(op.input().as_ref().unwrap()))?;
                 w.write(b" = deserialize(message.arg.as_ref())?;\n");
             }
             // let resp = Trait::method(self, ctx, &value).await?;
             w.write(b"let resp = ");
-            self.write_ident(&mut w, service_id); // Service::method
+            self.write_ident(w, service_id); // Service::method
             w.write(b"::");
             w.write(&self.to_method_name(method_ident));
             w.write(b"(self, ctx");
@@ -734,7 +730,7 @@ impl<'model> GoCodeGen<'model> {
             w.write(b", arg: buf })},\n");
         }
         w.write(b"_ => Err(RpcError::MethodNotHandled(format!(\"");
-        self.write_ident(&mut w, service_id);
+        self.write_ident(w, service_id);
         w.write(b"::{}\", message.method))),\n");
         w.write(b"}\n}\n}\n\n"); // end match, end fn dispatch, end trait
          */
@@ -746,7 +742,7 @@ impl<'model> GoCodeGen<'model> {
     // pub struct FooSender{ ... }
     fn write_service_sender(
         &mut self,
-        mut w: &mut Writer,
+        w: &mut Writer,
         _model: &Model,
         service_id: &Identifier,
         service_traits: &AppliedTraits,
@@ -756,28 +752,28 @@ impl<'model> GoCodeGen<'model> {
             "{}Sender sends messages to a {} service",
             service_id, service_id
         );
-        self.write_comment(&mut w, CommentKind::Documentation, &doc);
-        self.apply_documentation_traits(&mut w, service_id, service_traits);
+        self.write_comment(w, CommentKind::Documentation, &doc);
+        self.apply_documentation_traits(w, service_id, service_traits);
 
         w.write(&format!("// {}Sender not implemented\n", service_id));
         /*
         w.write(b"#[derive(Debug)]\npub struct ");
-        self.write_ident_with_suffix(&mut w, service_id, "Sender")?;
+        self.write_ident_with_suffix(w, service_id, "Sender")?;
         w.write(b"<T> { transport: T, config: client::SendConfig }\n\n");
 
         // implement constructor for TraitClient
         w.write(b"impl<T:Transport>  ");
-        self.write_ident_with_suffix(&mut w, service_id, "Sender")?;
+        self.write_ident_with_suffix(w, service_id, "Sender")?;
         w.write(b"<T> { \n");
         w.write(b" pub fn new(config: client::SendConfig, transport: T) -> Self { ");
-        self.write_ident_with_suffix(&mut w, service_id, "Sender")?;
+        self.write_ident_with_suffix(w, service_id, "Sender")?;
         w.write(b"{ transport, config }\n}\n}\n\n");
 
         // implement Trait for TraitSender
         w.write(b"#[async_trait]\nimpl<T:Transport + std::marker::Sync + std::marker::Send> ");
-        self.write_ident(&mut w, service_id);
+        self.write_ident(w, service_id);
         w.write(b" for ");
-        self.write_ident_with_suffix(&mut w, service_id, "Sender")?;
+        self.write_ident_with_suffix(w, service_id, "Sender")?;
         w.write(b"<T> {\n");
 
         for method_id in service.operations() {
@@ -792,7 +788,7 @@ impl<'model> GoCodeGen<'model> {
 
             let (op, method_traits) = get_operation(model, method_id, service_id)?;
             w.write(b"#[allow(unused)]\n");
-            self.write_method_signature(&mut w, method_ident, method_traits, op)?;
+            self.write_method_signature(w, method_ident, method_traits, op)?;
             w.write(b" {\n");
 
             if op.has_input() {

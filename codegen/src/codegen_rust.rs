@@ -117,7 +117,13 @@ impl<'model> CodeGen for RustCodeGen<'model> {
     }
 
     fn source_formatter(&self) -> Result<Box<dyn SourceFormatter>> {
-        Ok(Box::new(crate::format::RustSourceFormatter::default()))
+        cfg_if::cfg_if! {
+            if #[cfg(not(target_arch = "wasm32"))] {
+                Ok(Box::new(crate::format::RustSourceFormatter::default()))
+            } else {
+                Ok(Box::new(crate::format::NullFormatter::default()))
+            }
+        }
     }
 
     /// Perform any initialization required prior to code generation for a file
@@ -161,8 +167,15 @@ impl<'model> CodeGen for RustCodeGen<'model> {
         model: &Model,
         _params: &ParamMap,
     ) -> Result<()> {
+        cfg_if::cfg_if! {
+            if #[cfg(feature = "cbor")] {
+                let import_cbor = "minicbor,";
+            }  else {
+                let import_cbor = "";
+            }
+        }
         w.write(
-            r#"// This file is generated automatically using weld-codegen and smithy model definitions
+            r#"// This file is generated automatically using wasmcloud/weld-codegen and smithy model definitions
                //
             "#);
         match &self.namespace {
@@ -185,13 +198,13 @@ impl<'model> CodeGen for RustCodeGen<'model> {
                 #![allow(unused_imports, clippy::ptr_arg, clippy::needless_lifetimes)]
                 use {}::{{
                     Context, deserialize, serialize, MessageDispatch, RpcError, RpcResult,
-                    Timestamp, Transport, Message, SendOpts, minicbor,
+                    Timestamp, Transport, Message, SendOpts, {}
                 }};
                 use serde::{{Deserialize, Serialize}};
                 use async_trait::async_trait;
                 use std::{{borrow::Cow, io::Write, string::ToString}};
                 "#,
-                    &self.import_core
+                    &self.import_core, import_cbor,
                 ));
             }
         }
@@ -202,12 +215,7 @@ impl<'model> CodeGen for RustCodeGen<'model> {
         Ok(())
     }
 
-    fn declare_types(
-        &mut self,
-        mut w: &mut Writer,
-        model: &Model,
-        _params: &ParamMap,
-    ) -> Result<()> {
+    fn declare_types(&mut self, w: &mut Writer, model: &Model, _params: &ParamMap) -> Result<()> {
         let ns = self.namespace.clone();
 
         let mut shapes = model
@@ -221,14 +229,14 @@ impl<'model> CodeGen for RustCodeGen<'model> {
         for (id, traits, shape) in shapes.into_iter() {
             match shape {
                 ShapeKind::Simple(simple) => {
-                    self.declare_simple_shape(&mut w, id.shape_name(), traits, simple)?;
+                    self.declare_simple_shape(w, id.shape_name(), traits, simple)?;
                 }
                 ShapeKind::Map(map) => {
-                    self.declare_map_shape(&mut w, id.shape_name(), traits, map)?;
+                    self.declare_map_shape(w, id.shape_name(), traits, map)?;
                 }
                 ShapeKind::List(list) => {
                     self.declare_list_or_set_shape(
-                        &mut w,
+                        w,
                         id.shape_name(),
                         traits,
                         list,
@@ -237,7 +245,7 @@ impl<'model> CodeGen for RustCodeGen<'model> {
                 }
                 ShapeKind::Set(set) => {
                     self.declare_list_or_set_shape(
-                        &mut w,
+                        w,
                         id.shape_name(),
                         traits,
                         set,
@@ -246,7 +254,7 @@ impl<'model> CodeGen for RustCodeGen<'model> {
                 }
                 ShapeKind::Structure(strukt) => {
                     //if !traits.contains_key(&prelude_shape_named(TRAIT_TRAIT).unwrap()) {
-                    self.declare_structure_shape(&mut w, id.shape_name(), traits, strukt)?;
+                    self.declare_structure_shape(w, id.shape_name(), traits, strukt)?;
                     //}
                 }
                 ShapeKind::Operation(_)
@@ -255,18 +263,17 @@ impl<'model> CodeGen for RustCodeGen<'model> {
                 | ShapeKind::Union(_)
                 | ShapeKind::Unresolved => {}
             }
-            self.declare_shape_encoder(&mut w, id, shape)?;
-            self.declare_shape_decoder(&mut w, id, shape)?;
+            cfg_if::cfg_if! {
+                if #[cfg(feature = "cbor")] {
+                    self.declare_shape_encoder(w, id, shape)?;
+                    self.declare_shape_decoder(w, id, shape)?;
+                }
+            }
         }
         Ok(())
     }
 
-    fn write_services(
-        &mut self,
-        mut w: &mut Writer,
-        model: &Model,
-        _params: &ParamMap,
-    ) -> Result<()> {
+    fn write_services(&mut self, w: &mut Writer, model: &Model, _params: &ParamMap) -> Result<()> {
         let ns = self.namespace.clone();
         for (id, traits, shape) in model
             .shapes()
@@ -274,9 +281,9 @@ impl<'model> CodeGen for RustCodeGen<'model> {
             .map(|s| (s.id(), s.traits(), s.body()))
         {
             if let ShapeKind::Service(service) = shape {
-                self.write_service_interface(&mut w, model, id.shape_name(), traits, service)?;
-                self.write_service_receiver(&mut w, model, id.shape_name(), traits, service)?;
-                self.write_service_sender(&mut w, model, id.shape_name(), traits, service)?;
+                self.write_service_interface(w, model, id.shape_name(), traits, service)?;
+                self.write_service_receiver(w, model, id.shape_name(), traits, service)?;
+                self.write_service_sender(w, model, id.shape_name(), traits, service)?;
             }
         }
         Ok(())
@@ -311,14 +318,14 @@ impl<'model> RustCodeGen<'model> {
     /// Apply documentation traits: (documentation, deprecated, unstable)
     fn apply_documentation_traits(
         &mut self,
-        mut w: &mut Writer,
+        w: &mut Writer,
         id: &Identifier,
         traits: &AppliedTraits,
     ) {
         if let Some(Some(Value::String(text))) =
             traits.get(&prelude_shape_named(TRAIT_DOCUMENTATION).unwrap())
         {
-            self.write_documentation(&mut w, id, text);
+            self.write_documentation(w, id, text);
         }
 
         // deprecated
@@ -340,7 +347,7 @@ impl<'model> RustCodeGen<'model> {
             .get(&prelude_shape_named(TRAIT_UNSTABLE).unwrap())
             .is_some()
         {
-            self.write_comment(&mut w, CommentKind::Documentation, "@unstable");
+            self.write_comment(w, CommentKind::Documentation, "@unstable");
         }
     }
 
@@ -450,11 +457,11 @@ impl<'model> RustCodeGen<'model> {
     /// append suffix to type name, for example "Game", "Context" -> "GameContext"
     fn write_ident_with_suffix(
         &mut self,
-        mut w: &mut Writer,
+        w: &mut Writer,
         id: &Identifier,
         suffix: &str,
     ) -> Result<()> {
-        self.write_ident(&mut w, id);
+        self.write_ident(w, id);
         w.write(suffix); // assume it's already PascalCalse
         Ok(())
     }
@@ -462,14 +469,14 @@ impl<'model> RustCodeGen<'model> {
     // declaration for simple type
     fn declare_simple_shape(
         &mut self,
-        mut w: &mut Writer,
+        w: &mut Writer,
         id: &Identifier,
         traits: &AppliedTraits,
         simple: &Simple,
     ) -> Result<()> {
-        self.apply_documentation_traits(&mut w, id, traits);
+        self.apply_documentation_traits(w, id, traits);
         w.write(b"pub type ");
-        self.write_ident(&mut w, id);
+        self.write_ident(w, id);
         w.write(b" = ");
         let ty = match simple {
             Simple::Blob => "Vec<u8>",
@@ -503,52 +510,52 @@ impl<'model> RustCodeGen<'model> {
 
     fn declare_map_shape(
         &mut self,
-        mut w: &mut Writer,
+        w: &mut Writer,
         id: &Identifier,
         traits: &AppliedTraits,
         shape: &MapShape,
     ) -> Result<()> {
-        self.apply_documentation_traits(&mut w, id, traits);
+        self.apply_documentation_traits(w, id, traits);
         w.write(b"pub type ");
-        self.write_ident(&mut w, id);
+        self.write_ident(w, id);
         w.write(b" = ");
         w.write(DEFAULT_MAP_TYPE);
         w.write(b"<");
-        self.write_type(&mut w, Ty::Shape(shape.key().target()))?;
+        self.write_type(w, Ty::Shape(shape.key().target()))?;
         w.write(b",");
-        self.write_type(&mut w, Ty::Shape(shape.value().target()))?;
+        self.write_type(w, Ty::Shape(shape.value().target()))?;
         w.write(b">;\n\n");
         Ok(())
     }
 
     fn declare_list_or_set_shape(
         &mut self,
-        mut w: &mut Writer,
+        w: &mut Writer,
         id: &Identifier,
         traits: &AppliedTraits,
         shape: &ListOrSet,
         typ: &str,
     ) -> Result<()> {
-        self.apply_documentation_traits(&mut w, id, traits);
+        self.apply_documentation_traits(w, id, traits);
         w.write(b"pub type ");
-        self.write_ident(&mut w, id);
+        self.write_ident(w, id);
         w.write(b" = ");
         w.write(typ);
         w.write(b"<");
-        self.write_type(&mut w, Ty::Shape(shape.member().target()))?;
+        self.write_type(w, Ty::Shape(shape.member().target()))?;
         w.write(b">;\n\n");
         Ok(())
     }
 
     fn declare_structure_shape(
         &mut self,
-        mut w: &mut Writer,
+        w: &mut Writer,
         id: &Identifier,
         traits: &AppliedTraits,
         strukt: &StructureOrUnion,
     ) -> Result<()> {
         let is_trait_struct = traits.contains_key(&prelude_shape_named(TRAIT_TRAIT).unwrap());
-        self.apply_documentation_traits(&mut w, id, traits);
+        self.apply_documentation_traits(w, id, traits);
         let mut derive_list = vec!["Clone", "Debug", "PartialEq", "Serialize", "Deserialize"];
         // derive(Default) is disabled for traits and enabled for all other structs
         let mut derive_default = !is_trait_struct;
@@ -568,7 +575,7 @@ impl<'model> RustCodeGen<'model> {
         let derive_decl = format!("#[derive({})]\n", derive_list.join(","));
         w.write(&derive_decl);
         w.write(b"pub struct ");
-        self.write_ident(&mut w, id);
+        self.write_ident(w, id);
         w.write(b" {\n");
         // sort fields for deterministic output
         let mut fields = strukt
@@ -577,7 +584,7 @@ impl<'model> RustCodeGen<'model> {
             .collect::<Vec<MemberShape>>();
         fields.sort_by_key(|f| f.id().to_owned());
         for member in fields.iter() {
-            self.apply_documentation_traits(&mut w, member.id(), member.traits());
+            self.apply_documentation_traits(w, member.id(), member.traits());
 
             // use the declared name for serialization, unless an override is declared
             // with `@sesrialization(name: SNAME)`
@@ -658,21 +665,21 @@ impl<'model> RustCodeGen<'model> {
     /// Declares the service as a rust Trait whose methods are the smithy service operations
     fn write_service_interface(
         &mut self,
-        mut w: &mut Writer,
+        w: &mut Writer,
         model: &Model,
         service_id: &Identifier,
         service_traits: &AppliedTraits,
         service: &Service,
     ) -> Result<()> {
-        self.apply_documentation_traits(&mut w, service_id, service_traits);
+        self.apply_documentation_traits(w, service_id, service_traits);
 
         #[cfg(feature = "wasmbus")]
-        self.add_wasmbus_comments(&mut w, service_id, service_traits)?;
+        self.add_wasmbus_comments(w, service_id, service_traits)?;
 
         w.write(b"#[async_trait]\npub trait ");
-        self.write_ident(&mut w, service_id);
+        self.write_ident(w, service_id);
         w.write(b"{\n");
-        self.write_service_contract_getter(&mut w, service_id, service_traits)?;
+        self.write_service_contract_getter(w, service_id, service_traits)?;
 
         for operation in service.operations() {
             // if operation is not declared in this namespace, don't define it here
@@ -685,7 +692,7 @@ impl<'model> RustCodeGen<'model> {
 
             // TODO: re-think what to do if operation is in another namespace and self.namespace is None
             let method_id = operation.shape_name();
-            let _flags = self.write_method_signature(&mut w, method_id, op_traits, op)?;
+            let _flags = self.write_method_signature(w, method_id, op_traits, op)?;
             w.write(b";\n");
         }
         w.write(b"}\n\n");
@@ -718,7 +725,7 @@ impl<'model> RustCodeGen<'model> {
     #[cfg(feature = "wasmbus")]
     fn add_wasmbus_comments(
         &mut self,
-        mut w: &mut Writer,
+        w: &mut Writer,
         service_id: &Identifier,
         service_traits: &AppliedTraits,
     ) -> Result<()> {
@@ -727,15 +734,15 @@ impl<'model> RustCodeGen<'model> {
         if let Some(wasmbus) = wasmbus {
             if let Some(contract) = wasmbus.contract_id {
                 let text = format!("wasmbus.contractId: {}", &contract);
-                self.write_documentation(&mut w, service_id, &text);
+                self.write_documentation(w, service_id, &text);
             }
             if wasmbus.provider_receive {
                 let text = "wasmbus.providerReceive";
-                self.write_documentation(&mut w, service_id, text);
+                self.write_documentation(w, service_id, text);
             }
             if wasmbus.actor_receive {
                 let text = "wasmbus.actorReceive";
-                self.write_documentation(&mut w, service_id, text);
+                self.write_documentation(w, service_id, text);
             }
         }
         Ok(())
@@ -745,14 +752,14 @@ impl<'model> RustCodeGen<'model> {
     /// does not write trailing semicolon so this can be used for declaration and implementation
     fn write_method_signature(
         &mut self,
-        mut w: &mut Writer,
+        w: &mut Writer,
         method_id: &Identifier,
         method_traits: &AppliedTraits,
         op: &Operation,
     ) -> Result<MethodArgFlags> {
         let method_name = self.to_method_name(method_id);
         let mut arg_flags = MethodArgFlags::Normal;
-        self.apply_documentation_traits(&mut w, method_id, method_traits);
+        self.apply_documentation_traits(w, method_id, method_traits);
         w.write(b"async fn ");
         w.write(&method_name);
         if let Some(input_type) = op.input() {
@@ -767,12 +774,12 @@ impl<'model> RustCodeGen<'model> {
             if matches!(arg_flags, MethodArgFlags::ToString) {
                 w.write(b"&TS");
             } else {
-                self.write_type(&mut w, Ty::Ref(input_type))?;
+                self.write_type(w, Ty::Ref(input_type))?;
             }
         }
         w.write(b") -> RpcResult<");
         if let Some(output_type) = op.output() {
-            self.write_type(&mut w, Ty::Shape(output_type))?;
+            self.write_type(w, Ty::Shape(output_type))?;
         } else {
             w.write(b"()");
         }
@@ -783,7 +790,7 @@ impl<'model> RustCodeGen<'model> {
     // pub trait FooReceiver : MessageDispatch + Foo { ... }
     fn write_service_receiver(
         &mut self,
-        mut w: &mut Writer,
+        w: &mut Writer,
         model: &Model,
         service_id: &Identifier,
         service_traits: &AppliedTraits,
@@ -793,12 +800,12 @@ impl<'model> RustCodeGen<'model> {
             "{}Receiver receives messages defined in the {} service trait",
             service_id, service_id
         );
-        self.write_comment(&mut w, CommentKind::Documentation, &doc);
-        self.apply_documentation_traits(&mut w, service_id, service_traits);
+        self.write_comment(w, CommentKind::Documentation, &doc);
+        self.apply_documentation_traits(w, service_id, service_traits);
         w.write(b"#[doc(hidden)]\n#[async_trait]\npub trait ");
-        self.write_ident_with_suffix(&mut w, service_id, "Receiver")?;
+        self.write_ident_with_suffix(w, service_id, "Receiver")?;
         w.write(b" : MessageDispatch + ");
-        self.write_ident(&mut w, service_id);
+        self.write_ident(w, service_id);
         w.write(
             br#"{
             async fn dispatch(
@@ -826,13 +833,13 @@ impl<'model> RustCodeGen<'model> {
                 // let value : InputType = deserialize(...)?;
                 w.write(b"let value: ");
                 // TODO: should this be input.target?
-                self.write_type(&mut w, Ty::Shape(op.input().as_ref().unwrap()))?;
+                self.write_type(w, Ty::Shape(op.input().as_ref().unwrap()))?;
                 w.write(b" = deserialize(message.arg.as_ref())\
                   .map_err(|e| RpcError::Deser(format!(\"message '{}': {}\", message.method, e)))?;\n");
             }
             // let resp = Trait::method(self, ctx, &value).await?;
             w.write(b"let resp = ");
-            self.write_ident(&mut w, service_id); // Service::method
+            self.write_ident(w, service_id); // Service::method
             w.write(b"::");
             w.write(&self.to_method_name(method_ident));
             w.write(b"(self, ctx");
@@ -849,7 +856,7 @@ impl<'model> RustCodeGen<'model> {
             w.write(b"\", arg: buf })},\n");
         }
         w.write(b"_ => Err(RpcError::MethodNotHandled(format!(\"");
-        self.write_ident(&mut w, service_id);
+        self.write_ident(w, service_id);
         w.write(b"::{}\", message.method))),\n");
         w.write(b"}\n}\n}\n\n"); // end match, end fn dispatch, end trait
 
@@ -860,7 +867,7 @@ impl<'model> RustCodeGen<'model> {
     // pub struct FooSender{ ... }
     fn write_service_sender(
         &mut self,
-        mut w: &mut Writer,
+        w: &mut Writer,
         model: &Model,
         service_id: &Identifier,
         service_traits: &AppliedTraits,
@@ -870,8 +877,8 @@ impl<'model> RustCodeGen<'model> {
             "{}Sender sends messages to a {} service",
             service_id, service_id
         );
-        self.write_comment(&mut w, CommentKind::Documentation, &doc);
-        self.apply_documentation_traits(&mut w, service_id, service_traits);
+        self.write_comment(w, CommentKind::Documentation, &doc);
+        self.apply_documentation_traits(w, service_id, service_traits);
         w.write(&format!(
             r#"/// client for sending {} messages
               #[derive(Debug)]
@@ -897,9 +904,9 @@ impl<'model> RustCodeGen<'model> {
 
         // implement Trait for TraitSender
         w.write(b"#[async_trait]\nimpl<T:Transport + std::marker::Sync + std::marker::Send> ");
-        self.write_ident(&mut w, service_id);
+        self.write_ident(w, service_id);
         w.write(b" for ");
-        self.write_ident_with_suffix(&mut w, service_id, "Sender")?;
+        self.write_ident_with_suffix(w, service_id, "Sender")?;
         w.write(b"<T> {\n");
 
         for method_id in service.operations() {
@@ -914,7 +921,7 @@ impl<'model> RustCodeGen<'model> {
 
             let (op, method_traits) = get_operation(model, method_id, service_id)?;
             w.write(b"#[allow(unused)]\n");
-            let arg_flags = self.write_method_signature(&mut w, method_ident, method_traits, op)?;
+            let arg_flags = self.write_method_signature(w, method_ident, method_traits, op)?;
             w.write(b" {\n");
             if op.has_input() {
                 if matches!(arg_flags, MethodArgFlags::ToString) {
