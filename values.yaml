@@ -39,7 +39,7 @@ nats:
     # Sets the nats container to operate in leafnode mode 
     enabled: false
     # The NATS cluster to connect to. Defaults to NGS
-    clusterUrl: "nats-leaf://connect.ngs.global"
+    clusterURL: "nats-leaf://connect.ngs.global"
     # Credentials to use
     credentials: ""
 
