@@ -367,7 +367,7 @@ fn val_is_trait(shape: &JsonValue) -> bool {
 #[derive(Clone, Copy)]
 struct TraitsHelper {}
 
-/// Retuns a copy of the shape's traits without documentation trait
+/// Returns a copy of the shape's traits without documentation trait
 impl HelperDef for TraitsHelper {
     fn call_inner<'reg: 'rc, 'rc>(
         &self,
@@ -386,7 +386,6 @@ impl HelperDef for TraitsHelper {
                 }
             }
         }
-        // TODO (later) - turn into an array with sorted keys
         Ok(ScopedJson::Derived(serde_json::Value::Object(
             traits_no_doc,
         )))
