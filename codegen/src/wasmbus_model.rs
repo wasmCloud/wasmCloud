@@ -56,6 +56,12 @@ pub struct Extends {
     pub base: Option<IdentifierList>,
 }
 
+/// Field sequence number. A zero-based field number for each member of a structure,
+/// to enable deterministic cbor serialization and improve forward and backward compatibility.
+/// Although the values are not required to be sequential, gaps are filled with nulls
+/// during encoding and so will slightly increase the encoding size.
+pub type N = i16;
+
 /// A non-empty string (minimum length 1)
 pub type NonEmptyString = String;
 
