@@ -25,7 +25,7 @@ use crate::{
 use atelier_core::model::shapes::ShapeKind;
 use atelier_core::{
     model::{
-        shapes::{MemberShape, Simple, StructureOrUnion},
+        shapes::{Simple, StructureOrUnion},
         HasIdentity, ShapeID,
     },
     prelude::{
@@ -38,24 +38,16 @@ use atelier_core::{
 };
 use std::string::ToString;
 
-#[derive(PartialEq)]
-pub(crate) enum CborStructEncoding {
-    Array,
-    Map,
-}
-
-// not sure if this should be switchable as a feature, build flag,
-// or leave it as a const here since we probably won't change often.
-pub(crate) const CBOR_STRUCT_ENCODING: CborStructEncoding = CborStructEncoding::Array;
+type IsEmptyStruct = bool;
 
 #[derive(Clone, Copy)]
-enum ValExpr<'s> {
+pub(crate) enum ValExpr<'s> {
     Plain(&'s str),
     Ref(&'s str),
 }
 impl<'s> ValExpr<'s> {
     /// returns borrowed reference to value
-    fn as_ref(&self) -> String {
+    pub(crate) fn as_ref(&self) -> String {
         match self {
             ValExpr::Plain(s) => format!("&{}", s),
             ValExpr::Ref(s) => s.to_string(),
@@ -63,10 +55,18 @@ impl<'s> ValExpr<'s> {
     }
 
     /// returns value as-is
-    fn as_str(&self) -> &str {
+    pub(crate) fn as_str(&self) -> &str {
         match self {
             ValExpr::Plain(s) => s,
             ValExpr::Ref(s) => s,
+        }
+    }
+
+    /// returns value for copyable types
+    pub(crate) fn as_copy(&self) -> String {
+        match self {
+            ValExpr::Plain(s) => s.to_string(),
+            ValExpr::Ref(s) => format!("*{}", s),
         }
     }
 }
@@ -77,34 +77,34 @@ fn encode_blob(val: ValExpr) -> String {
     format!("e.bytes({})?;\n", &val.as_ref())
 }
 fn encode_boolean(val: ValExpr) -> String {
-    format!("e.bool({})?;\n", val.as_str())
+    format!("e.bool({})?;\n", val.as_copy())
 }
 fn encode_str(val: ValExpr) -> String {
     format!("e.str({})?;\n", val.as_ref())
 }
 fn encode_byte(val: ValExpr) -> String {
-    format!("e.i8({})?;\n", val.as_str())
+    format!("e.i8({})?;\n", val.as_copy())
 }
 fn encode_unsigned_byte(val: ValExpr) -> String {
-    format!("e.u8({})?;\n", val.as_str())
+    format!("e.u8({})?;\n", val.as_copy())
 }
 fn encode_short(val: ValExpr) -> String {
-    format!("e.i16({})?;\n", val.as_str())
+    format!("e.i16({})?;\n", val.as_copy())
 }
 fn encode_unsigned_short(val: ValExpr) -> String {
-    format!("e.u16({})?;\n", val.as_str())
+    format!("e.u16({})?;\n", val.as_copy())
 }
 fn encode_integer(val: ValExpr) -> String {
-    format!("e.i32({})?;\n", val.as_str())
+    format!("e.i32({})?;\n", val.as_copy())
 }
 fn encode_unsigned_integer(val: ValExpr) -> String {
-    format!("e.u32({})?;\n", val.as_str())
+    format!("e.u32({})?;\n", val.as_copy())
 }
 fn encode_long(val: ValExpr) -> String {
-    format!("e.i64({})?;\n", val.as_str())
+    format!("e.i64({})?;\n", val.as_copy())
 }
 fn encode_unsigned_long(val: ValExpr) -> String {
-    format!("e.u64({})?;\n", val.as_str())
+    format!("e.u64({})?;\n", val.as_copy())
 }
 fn encode_float(val: ValExpr) -> String {
     format!("e.f32({})?;\n", val.as_str())
@@ -129,7 +129,7 @@ impl<'model> RustCodeGen<'model> {
     /// Generates cbor encode statements "e.func()" for the id.
     /// If id is a primitive type, writes the direct encode function, otherwise,
     /// delegates to an encode_* function created in the same module where the symbol is defined
-    fn encode_shape_id(&self, id: &ShapeID, val: ValExpr) -> Result<String> {
+    pub(crate) fn encode_shape_id(&self, id: &ShapeID, val: ValExpr) -> Result<String> {
         let name = id.shape_name().to_string();
         let stmt = if id.namespace() == prelude_namespace_id() {
             match name.as_ref() {
@@ -201,7 +201,15 @@ impl<'model> RustCodeGen<'model> {
         Ok(stmt)
     }
 
-    fn encode_shape_kind(&self, kind: &ShapeKind, val: ValExpr) -> Result<String> {
+    /// Generates statements to encode the shape.
+    /// Second Result field is true if structure has no fields, e.g., "MyStruct {}"
+    fn encode_shape_kind(
+        &self,
+        id: &ShapeID,
+        kind: &ShapeKind,
+        val: ValExpr,
+    ) -> Result<(String, IsEmptyStruct)> {
+        let mut empty_struct: IsEmptyStruct = false;
         let s = match kind {
             ShapeKind::Simple(simple) => match simple {
                 Simple::Blob => encode_blob(val),
@@ -270,7 +278,11 @@ impl<'model> RustCodeGen<'model> {
                 );
                 s
             }
-            ShapeKind::Structure(strukt) => self.encode_struct(strukt, val)?,
+            ShapeKind::Structure(struct_) => {
+                let (s, is_empty_struct) = self.encode_struct(id, struct_, val)?;
+                empty_struct = is_empty_struct;
+                s
+            }
             ShapeKind::Operation(_)
             | ShapeKind::Resource(_)
             | ShapeKind::Service(_)
@@ -280,26 +292,42 @@ impl<'model> RustCodeGen<'model> {
                 unimplemented!();
             }
         };
-        Ok(s)
+        Ok((s, empty_struct))
     }
 
-    /// write encode statements for a structure
-    fn encode_struct(&self, strukt: &StructureOrUnion, val: ValExpr) -> Result<String> {
-        let mut fields = strukt
-            .members()
-            .map(|m| m.to_owned())
-            .collect::<Vec<MemberShape>>();
-        let as_array = CBOR_STRUCT_ENCODING == CborStructEncoding::Array;
+    /// Generate string to encode structure.
+    /// Second Result field is true if structure has no fields, e.g., "MyStruct {}"
+    fn encode_struct(
+        &self,
+        id: &ShapeID,
+        strukt: &StructureOrUnion,
+        val: ValExpr,
+    ) -> Result<(String, IsEmptyStruct)> {
+        let (fields, is_numbered) = crate::model::get_sorted_fields(id.shape_name(), strukt)?;
+        // use array encoding if fields are declared with numbers
+        let as_array = is_numbered;
+        let field_max_index = if as_array && !fields.is_empty() {
+            fields.iter().map(|f| f.field_num().unwrap()).max().unwrap()
+        } else {
+            fields.len() as u16
+        };
         let mut s = String::new();
         if as_array {
-            fields.sort_by_key(|f| f.id().to_owned());
-            s.push_str(&format!("e.array({})?;\n", fields.len()));
+            s.push_str(&format!("e.array({})?;\n", field_max_index + 1));
         } else {
             s.push_str(&format!("e.map({})?;\n", fields.len()));
         }
+        let mut current_index = 0;
         for field in fields.iter() {
+            if let Some(field_num) = field.field_num() {
+                if as_array {
+                    while current_index < *field_num {
+                        s.push_str("e.null()?;\n");
+                        current_index += 1;
+                    }
+                }
+            }
             let field_name = self.to_field_name(field.id())?;
-            // TODO: should this be 'self' or val(unquoted) instead of "val"?
             let field_val = self.encode_shape_id(field.target(), ValExpr::Ref("val"))?;
             if is_optional_type(field) {
                 s.push_str(&format!(
@@ -321,8 +349,9 @@ impl<'model> RustCodeGen<'model> {
                 let val = format!("{}.{}", val.as_str(), &field_name);
                 s.push_str(&self.encode_shape_id(field.target(), ValExpr::Plain(&val))?);
             }
+            current_index += 1;
         }
-        Ok(s)
+        Ok((s, fields.is_empty()))
     }
 
     pub(crate) fn declare_shape_encoder(
@@ -335,7 +364,6 @@ impl<'model> RustCodeGen<'model> {
         // (camel cased for the fn name), and scoped to the module where S is defined. This could
         // have been implemented as 'impl Encode for TYPE ...', but that would make the code more
         // rust-specific. This code is structured to be easier to port to other target languages.
-
         match kind {
             ShapeKind::Simple(_)
             | ShapeKind::Structure(_)
@@ -343,18 +371,31 @@ impl<'model> RustCodeGen<'model> {
             | ShapeKind::List(_)
             | ShapeKind::Set(_) => {
                 let name = id.shape_name();
+                // use val-by-copy as param to encode if type is rust primitive "copy" type
+                // This is only relevant for aliases of primitive types in wasmbus-model namespace
+                let is_rust_copy = vec!["U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64"]
+                    .contains(&name.to_string().as_str());
+                //let val_or_copy = if is_rust_copy { "*val" } else { "val" };
+                // The purpose of is_empty_struct is to determine when the parameter is unused
+                // in the function body, and append '_' to the name to avoid a compiler warning.
+                let (body, is_empty_struct) =
+                    self.encode_shape_kind(id, kind, ValExpr::Ref("val"))?;
                 let mut s = format!(
-                    r#"
-                #[doc(hidden)]
-                pub fn encode_{}<W>(e: &mut minicbor::Encoder<W>, val: &{}) -> Result<(),minicbor::encode::Error<W::Error>>
+                    r#" 
+                // Encode {} as CBOR and append to output stream
+                // This is part of experimental cbor support
+                #[doc(hidden)] {}
+                pub fn encode_{}<W>(e: &mut minicbor::Encoder<W>, {}: &{}) -> Result<(),minicbor::encode::Error<W::Error>>
                 where
                     W: minicbor::encode::Write,
                 {{
                 "#,
+                    &name,
+                    if is_rust_copy { "#[inline]" } else { "" },
                     self.to_method_name(name),
+                    if is_empty_struct { "_val" } else { "val" },
                     &id.shape_name()
                 );
-                let body = self.encode_shape_kind(kind, ValExpr::Ref("val"))?;
                 s.push_str(&body);
                 s.push_str("Ok(())\n}\n");
                 w.write(s.as_bytes());
