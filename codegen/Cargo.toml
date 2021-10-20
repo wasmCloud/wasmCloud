@@ -1,6 +1,6 @@
 [package]
 name = "weld-codegen"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2018"
 authors = [ "wasmcloud Team" ]
 license = "Apache-2.0"
@@ -11,10 +11,13 @@ documentation = "https://docs.rs/weld-codegen"
 readme = "README.md"
 
 [features]
-default = [ "wasmbus" ]
+default = [ "wasmbus", "cbor" ]
 wasmbus = []
 experimental_types = [ "BigInteger", "BigDecimal"]
+# 'cbor' feature generates encoders and decoders (experimental)
 cbor = []
+# 'cbor-msg' uses cbor instead of msgpack for wasmbus serialization and deserialization (experimental)
+cbor-msg = ["cbor"]
 BigInteger = []
 BigDecimal = []
 
@@ -25,7 +28,8 @@ atelier_json = "0.2"
 atelier_smithy = "0.2"
 bytes = "1.0"
 cfg-if = "1.0"
-directories = "3.0"
+directories = "4.0"
+downloader = "0.2"
 handlebars = "4.0"
 Inflector = "0.11"
 lazy_static = "1.4"
@@ -34,10 +38,6 @@ reqwest = { version = "0.11", features = [ "blocking" ] }
 rustc-hash = { version = "1.1", default_features = false }
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
+tempfile = "3.2"
 thiserror = "1.0"
 toml = "0.5"
-
-# wasm32 support is incomplete - not really working yet
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-downloader = "0.2"
-tempfile = "3.2"
