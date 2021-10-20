@@ -11,13 +11,10 @@ mod loader;
 pub(crate) mod model;
 pub mod render;
 pub mod writer;
-#[cfg(not(target_arch = "wasm32"))]
 pub use gen::templates_from_dir;
 pub use gen::Generator;
 
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) use loader::sources_to_paths;
-#[cfg(not(target_arch = "wasm32"))]
 pub use loader::{sources_to_model, weld_cache_dir};
 pub use rust_build::rust_build;
 
