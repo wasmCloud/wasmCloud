@@ -105,13 +105,7 @@ impl<'model> CodeGen for GoCodeGen<'model> {
     }
 
     fn source_formatter(&self) -> Result<Box<dyn SourceFormatter>> {
-        cfg_if::cfg_if! {
-            if #[cfg(not(target_arch = "wasm32"))] {
-                Ok(Box::new(crate::format::GoSourceFormatter::default()))
-            } else {
-                Ok(Box::new(crate::format::NullFormatter::default()))
-            }
-        }
+        Ok(Box::new(crate::format::GoSourceFormatter::default()))
     }
 
     /// Perform any initialization required prior to code generation for a file
@@ -354,7 +348,7 @@ impl<'model> GoCodeGen<'model> {
                         // if declared as members (of a struct, list, or map), we don't have trait data here to write
                         // as anything other than a blob. Instead, a type should be created for the Document that can have traits,
                         // and that type used for the member. This should probably be a lint rule.
-                        SHAPE_DOCUMENT => "[]byte", // FIXME
+                        SHAPE_DOCUMENT => "[]byte",
                         SHAPE_TIMESTAMP => {
                             // FIXME: NOT IMPLEMENTED
                             return Err(Error::UnsupportedType(

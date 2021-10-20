@@ -7,8 +7,9 @@ use crate::{
     error::{print_warning, Error, Result},
     gen::{CodeGen, SourceFormatter},
     model::{
-        codegen_rust_trait, get_operation, get_trait, has_default, is_opt_namespace,
-        serialization_trait, value_to_json, wasmcloud_model_namespace, CommentKind, PackageName,
+        codegen_rust_trait, get_operation, get_sorted_fields, get_trait, has_default,
+        is_opt_namespace, serialization_trait, value_to_json, wasmcloud_model_namespace,
+        CommentKind, PackageName,
     },
     render::Renderer,
     wasmbus_model::{CodegenRust, Serialization},
@@ -117,13 +118,7 @@ impl<'model> CodeGen for RustCodeGen<'model> {
     }
 
     fn source_formatter(&self) -> Result<Box<dyn SourceFormatter>> {
-        cfg_if::cfg_if! {
-            if #[cfg(not(target_arch = "wasm32"))] {
-                Ok(Box::new(crate::format::RustSourceFormatter::default()))
-            } else {
-                Ok(Box::new(crate::format::NullFormatter::default()))
-            }
-        }
+        Ok(Box::new(crate::format::RustSourceFormatter::default()))
     }
 
     /// Perform any initialization required prior to code generation for a file
@@ -183,8 +178,9 @@ impl<'model> CodeGen for RustCodeGen<'model> {
                 // the base model has minimal dependencies
                 w.write(
                     r#"
-                #![allow(dead_code, clippy::needless_lifetimes)]
+                #![allow(dead_code, clippy::ptr_arg, clippy::needless_lifetimes)]
                 use serde::{{Deserialize, Serialize}};
+                use crate::RpcError;
              "#,
                 );
             }
@@ -253,9 +249,7 @@ impl<'model> CodeGen for RustCodeGen<'model> {
                     )?;
                 }
                 ShapeKind::Structure(strukt) => {
-                    //if !traits.contains_key(&prelude_shape_named(TRAIT_TRAIT).unwrap()) {
                     self.declare_structure_shape(w, id.shape_name(), traits, strukt)?;
-                    //}
                 }
                 ShapeKind::Operation(_)
                 | ShapeKind::Resource(_)
@@ -265,8 +259,10 @@ impl<'model> CodeGen for RustCodeGen<'model> {
             }
             cfg_if::cfg_if! {
                 if #[cfg(feature = "cbor")] {
-                    self.declare_shape_encoder(w, id, shape)?;
-                    self.declare_shape_decoder(w, id, shape)?;
+                    if !traits.contains_key(&prelude_shape_named(TRAIT_TRAIT).unwrap()) {
+                        self.declare_shape_encoder(w, id, shape)?;
+                        self.declare_shape_decoder(w, id, shape)?;
+                    }
                 }
             }
         }
@@ -577,15 +573,9 @@ impl<'model> RustCodeGen<'model> {
         w.write(b"pub struct ");
         self.write_ident(w, id);
         w.write(b" {\n");
-        // sort fields for deterministic output
-        let mut fields = strukt
-            .members()
-            .map(|m| m.to_owned())
-            .collect::<Vec<MemberShape>>();
-        fields.sort_by_key(|f| f.id().to_owned());
+        let (fields, _is_numbered) = get_sorted_fields(id, strukt)?;
         for member in fields.iter() {
             self.apply_documentation_traits(w, member.id(), member.traits());
-
             // use the declared name for serialization, unless an override is declared
             // with `@sesrialization(name: SNAME)`
             let ser_name = if let Some(Serialization {
@@ -596,7 +586,6 @@ impl<'model> RustCodeGen<'model> {
             } else {
                 member.id().to_string()
             };
-            //let declared_name = member.id().to_string();
             let rust_field_name = self.to_field_name(member.id())?;
             if ser_name != rust_field_name {
                 w.write(&format!("  #[serde(rename=\"{}\")] ", ser_name));
@@ -689,8 +678,6 @@ impl<'model> RustCodeGen<'model> {
                 }
             }
             let (op, op_traits) = get_operation(model, operation, service_id)?;
-
-            // TODO: re-think what to do if operation is in another namespace and self.namespace is None
             let method_id = operation.shape_name();
             let _flags = self.write_method_signature(w, method_id, op_traits, op)?;
             w.write(b";\n");
@@ -817,7 +804,6 @@ impl<'model> RustCodeGen<'model> {
         );
 
         for method_id in service.operations() {
-            // TODO: if it's valid for a service to include operations from another namespace, then this isn't doing the right thing
             // we don't add operations defined in another namespace
             if let Some(ref ns) = self.namespace {
                 if method_id.namespace() != ns {
@@ -829,16 +815,29 @@ impl<'model> RustCodeGen<'model> {
             w.write(b"\"");
             w.write(&self.op_dispatch_name(method_ident));
             w.write(b"\" => {\n");
-            if op.has_input() {
+            if let Some(op_input) = op.input() {
                 // let value : InputType = deserialize(...)?;
+                #[cfg(feature = "cbor-msg")]
+                w.write(b"let d = &mut minicbor::Decoder::new(&message.arg);\n");
                 w.write(b"let value: ");
-                // TODO: should this be input.target?
-                self.write_type(w, Ty::Shape(op.input().as_ref().unwrap()))?;
-                w.write(b" = deserialize(message.arg.as_ref())\
-                  .map_err(|e| RpcError::Deser(format!(\"message '{}': {}\", message.method, e)))?;\n");
+                self.write_type(w, Ty::Shape(op_input))?;
+                w.write(b" = ");
+                cfg_if::cfg_if! {
+                    if #[cfg(feature = "cbor-msg")] {
+                        w.write(&self.decode_shape_id(op_input)?);
+                        w.write(";\n");
+                    } else {
+                        w.write(b" deserialize(message.arg.as_ref())\
+                            .map_err(|e| RpcError::Deser(format!(\"message '{}': {}\", message.method, e)))?;\n");
+                    }
+                }
             }
             // let resp = Trait::method(self, ctx, &value).await?;
-            w.write(b"let resp = ");
+            if op.output().is_some() {
+                w.write(b"let resp = ");
+            } else {
+                w.write(b"let _resp = ");
+            }
             self.write_ident(w, service_id); // Service::method
             w.write(b"::");
             w.write(&self.to_method_name(method_ident));
@@ -848,12 +847,24 @@ impl<'model> RustCodeGen<'model> {
             }
             w.write(b").await?;\n");
 
-            // serialize result
-            w.write(b"let buf = Cow::Owned(serialize(&resp)?);\n");
+            if let Some(_op_output) = op.output() {
+                // serialize result
+                cfg_if::cfg_if! {
+                    if #[cfg(feature = "cbor-msg")] {
+                        w.write(b"let mut buf = Vec::new(); let e = &mut minicbor::Encoder::new(&mut buf);\n");
+                        let s = self.encode_shape_id(_op_output, crate::encode_rust::ValExpr::Plain("resp"))?;
+                        w.write(&s);
+                    } else {
+                        w.write("let buf = serialize(&resp)?;\n");
+                    }
+                }
+            } else {
+                w.write(b"let buf = Vec::new();\n");
+            }
             //w.write(br#"console_log(format!("actor result {}b",buf.len())); "#);
             w.write(b"Ok(Message { method: \"");
             w.write(&self.full_dispatch_name(service_id, method_ident));
-            w.write(b"\", arg: buf })},\n");
+            w.write(b"\", arg: Cow::Owned(buf) })},\n");
         }
         w.write(b"_ => Err(RpcError::MethodNotHandled(format!(\"");
         self.write_ident(w, service_id);
@@ -910,7 +921,6 @@ impl<'model> RustCodeGen<'model> {
         w.write(b"<T> {\n");
 
         for method_id in service.operations() {
-            // TODO: if it's valid for a service to include operations from another namespace, then this isn't doing the right thing
             // we don't add operations defined in another namespace
             if let Some(ref ns) = self.namespace {
                 if method_id.namespace() != ns {
@@ -922,29 +932,57 @@ impl<'model> RustCodeGen<'model> {
             let (op, method_traits) = get_operation(model, method_id, service_id)?;
             w.write(b"#[allow(unused)]\n");
             let arg_flags = self.write_method_signature(w, method_ident, method_traits, op)?;
+            let _arg_is_string = matches!(arg_flags, MethodArgFlags::ToString);
             w.write(b" {\n");
-            if op.has_input() {
-                if matches!(arg_flags, MethodArgFlags::ToString) {
-                    w.write(b"let arg = serialize(&arg.to_string())?;\n");
-                } else {
-                    w.write(b"let arg = serialize(arg)?;\n");
+            if let Some(_op_input) = op.input() {
+                cfg_if::cfg_if! {
+                    if #[cfg(feature = "cbor-msg")] {
+                        if _arg_is_string {
+                            w.write(b"let arg = arg.to_string();\n");
+                        }
+                        w.write(b"let mut buf = Vec::new(); let e = &mut minicbor::Encoder::new(&mut buf);\n");
+                        let s = self.encode_shape_id(_op_input,
+                            if _arg_is_string {
+                                crate::encode_rust::ValExpr::Ref("arg.as_ref()")
+                            } else {
+                                crate::encode_rust::ValExpr::Ref("arg")
+                            }
+                        )?;
+                        w.write(&s);
+                        //let tn = crate::strings::to_snake_case(&self.type_string(Ty::Shape(op.input().as_ref().unwrap()))?);
+                        //w.write(&format!("encode_{}(&mut e, arg)?;", tn));
+                    } else {
+                        if matches!(arg_flags, MethodArgFlags::ToString) {
+                            w.write(b"let buf = serialize(&arg.to_string())?;\n");
+                        } else {
+                            w.write(b"let buf = serialize(arg)?;\n");
+                        }
+                    }
                 }
             } else {
-                w.write(b"let arg = *b\"\";\n");
+                w.write(b"let buf = *b\"\";\n");
             }
             w.write(b"let resp = self.transport.send(ctx, Message{ method: ");
             // note: legacy is just the latter part
             w.write(b"\"");
             w.write(&self.full_dispatch_name(service_id, method_ident));
             //w.write(&self.op_dispatch_name(method_ident));
-            w.write(b"\", arg: Cow::Borrowed(&arg)}, None).await?;\n");
-            if op.has_output() {
-                w.write(
-                    b"let value = deserialize(&resp)\
-                   .map_err(|e| RpcError::Deser(format!(\"response to {}: {}\", \"",
-                );
-                w.write(&method_ident.to_string());
-                w.write(b"\", e)))?; Ok(value)");
+            w.write(b"\", arg: Cow::Borrowed(&buf)}, None).await?;\n");
+            if let Some(_op_output) = op.output() {
+                cfg_if::cfg_if! {
+                    if #[cfg(feature = "cbor-msg")] {
+                        w.write(b"let d = &mut minicbor::Decoder::new(&resp);\n");
+                        w.write(b"let value = ");
+                        w.write(&self.decode_shape_id(_op_output)?);
+                        w.write(b";");
+                    } else {
+                        w.write(b"let value = deserialize(&resp)");
+                        w.write(b".map_err(|e| RpcError::Deser(format!(\"response to {}: {}\", \"");
+                        w.write(&method_ident.to_string());
+                        w.write(b"\", e)))?;");
+                    }
+                }
+                w.write(b"Ok(value)");
             } else {
                 w.write(b"Ok(())");
             }
