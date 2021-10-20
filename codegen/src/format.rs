@@ -1,7 +1,5 @@
 //! implementations of source code formatters (rustfmt, gofmt)
 //!
-// TODO: find out if there's a version of rustfmt that works inside wasm
-// might need capability provider
 
 use crate::gen::SourceFormatter;
 use crate::{Error, Result};
@@ -12,7 +10,6 @@ pub struct NullFormatter {}
 impl SourceFormatter for NullFormatter {}
 
 /// Format rust source using rustfmt
-#[cfg(not(target_arch = "wasm32"))]
 pub struct RustSourceFormatter {
     /// either 'rustfmt', (the default, assumes ~/.cargo/bin is in your path,
     /// or a path to an executable
@@ -23,7 +20,6 @@ pub struct RustSourceFormatter {
     extra: Vec<String>,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl Default for RustSourceFormatter {
     fn default() -> Self {
         RustSourceFormatter {
@@ -34,7 +30,6 @@ impl Default for RustSourceFormatter {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl SourceFormatter for RustSourceFormatter {
     fn run(&self, source_files: &[&str]) -> Result<()> {
         if !matches!(self.edition.as_str(), "2015" | "2018" | "2021") {
@@ -56,7 +51,6 @@ impl SourceFormatter for RustSourceFormatter {
 }
 
 /// Formatter of go code using `gofmt`
-#[cfg(not(target_arch = "wasm32"))]
 pub struct GoSourceFormatter {
     /// either 'gofmt' or a path to an executable
     program: String,
@@ -64,7 +58,6 @@ pub struct GoSourceFormatter {
     extra: Vec<String>,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl Default for GoSourceFormatter {
     fn default() -> Self {
         GoSourceFormatter {
@@ -74,7 +67,6 @@ impl Default for GoSourceFormatter {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl SourceFormatter for GoSourceFormatter {
     fn run(&self, source_files: &[&str]) -> Result<()> {
         let mut args = vec!["-w"]; // write in place
