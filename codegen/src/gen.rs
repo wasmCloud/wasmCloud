@@ -98,7 +98,6 @@ impl<'model> Generator {
                 } else {
                     config.base_dir.join(template_dir)
                 };
-                #[cfg(not(target_arch = "wasm32"))]
                 for (name, tmpl) in templates_from_dir(&template_dir)? {
                     renderer.add_template((&name, &tmpl))?;
                 }
@@ -493,7 +492,6 @@ pub fn find_files(dir: &Path, extension: &str) -> Result<Vec<PathBuf>> {
 
 /// Add all templates from the specified folder, using the base file name
 /// as the template name. For example, "header.hbs" will be registered as "header"
-#[cfg(not(target_arch = "wasm32"))]
 pub fn templates_from_dir(start: &std::path::Path) -> Result<Vec<(String, String)>> {
     let mut templates = Vec::new();
 
