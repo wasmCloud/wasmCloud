@@ -12,7 +12,7 @@ use crate::{
 use atelier_core::model::shapes::ShapeKind;
 use atelier_core::{
     model::{
-        shapes::{MemberShape, Simple, StructureOrUnion},
+        shapes::{Simple, StructureOrUnion},
         HasIdentity, ShapeID,
     },
     prelude::{
@@ -83,7 +83,7 @@ impl<'model> RustCodeGen<'model> {
     /// Generates cbor decode expressions "d.func()" for the id.
     /// If id is a primitive type, writes the direct decode function, otherwise,
     /// delegates to a decode_* function created in the same module where the symbol is defined
-    fn decode_shape_id(&self, id: &ShapeID) -> Result<String> {
+    pub(crate) fn decode_shape_id(&self, id: &ShapeID) -> Result<String> {
         let name = id.shape_name().to_string();
         let stmt = if id.namespace() == prelude_namespace_id() {
             match name.as_ref() {
@@ -234,13 +234,8 @@ impl<'model> RustCodeGen<'model> {
     /// write decode statements for a structure
     /// This always occurs inside a dedicated function for the struct type
     fn decode_struct(&self, id: &ShapeID, strukt: &StructureOrUnion) -> Result<String> {
-        let mut fields = strukt
-            .members()
-            .map(|m| m.to_owned())
-            .collect::<Vec<MemberShape>>();
-        //let as_array = crate::CBOR_STRUCT_ENCODING == crate::CborStructEncoding::Array;
+        let (fields, _is_numbered) = crate::model::get_sorted_fields(id.shape_name(), strukt)?;
         let mut s = String::new();
-        fields.sort_by_key(|f| f.id().to_owned());
         for field in fields.iter() {
             let field_name = self.to_field_name(field.id())?;
             let field_type = self.field_type_string(field)?;
@@ -268,8 +263,20 @@ impl<'model> RustCodeGen<'model> {
             if is_array {{
                 let len = d.array()?.ok_or_else(||RpcError::Deser("decoding struct {}: indefinite array not supported".to_string()))?;
                 for __i in 0..(len as usize) {{
-                   match __i {{
         "#, id.shape_name(), id.shape_name()));
+        if fields.is_empty() {
+            s.push_str(
+                r#"
+                d.skip()?;
+            "#,
+            )
+        } else {
+            s.push_str(
+                r#"
+                   match __i {
+            "#,
+            )
+        }
         // we aren't doing the encoder optimization that omits None values
         // at the end of the struct, but we can still decode it if used
 
@@ -289,22 +296,45 @@ impl<'model> RustCodeGen<'model> {
                 ));
             } else {
                 s.push_str(&format!(
-                    "{} => {} = Some({}),\n",
+                    "{} => {} = Some({}),",
                     ix, field_name, field_decoder,
                 ));
             }
         }
+        if !fields.is_empty() {
+            // close match on array number
+            s.push_str(
+                r#"
+                    _ => d.skip()?,
+                    }
+            "#,
+            );
+        }
         s.push_str(&format!(
-            r#"         _ => d.skip()?,
-                    }}
+            r#" 
                 }}
             }} else {{
                 let len = d.map()?.ok_or_else(||RpcError::Deser("decoding struct {}: indefinite map not supported".to_string()))?;
                 for __i in 0..(len as usize) {{
-                    match d.str()? {{
             "#,
             id.shape_name())
         );
+        if fields.is_empty() {
+            // we think struct is empty (as of current definition),
+            // but if len is non-zero, read each field name and skip val
+            s.push_str(
+                r#"
+                    d.str()?; 
+                    d.skip()?;
+                    "#,
+            );
+        } else {
+            s.push_str(
+                r#"
+                match d.str()? {
+                "#,
+            );
+        }
         for field in fields.iter() {
             let field_name = self.to_field_name(field.id())?;
             let field_decoder = self.decode_shape_id(field.target())?;
@@ -323,18 +353,23 @@ impl<'model> RustCodeGen<'model> {
                 ));
             } else {
                 s.push_str(&format!(
-                    r#"
-                    "{}" => {} = Some({}),
-                    "#,
+                    r#""{}" => {} = Some({}),"#,
                     field.id().to_string(),
                     field_name,
                     field_decoder,
                 ));
             }
         }
-        s.push_str(
-            r#"         _ => d.skip()?,
+        if !fields.is_empty() {
+            // close match
+            s.push_str(
+                r#"         _ => d.skip()?,
                     }
+                    "#,
+            );
+        }
+        s.push_str(
+            r#"
                 }
             }
             "#,
@@ -380,12 +415,18 @@ impl<'model> RustCodeGen<'model> {
             | ShapeKind::List(_)
             | ShapeKind::Set(_) => {
                 let name = id.shape_name();
+                let is_rust_copy = vec!["U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64"]
+                    .contains(&name.to_string().as_str());
                 let mut s = format!(
                     r#"
-                #[doc(hidden)]
+                // Decode {} from cbor input stream
+                // This is part of experimental cbor support
+                #[doc(hidden)] {}
                 pub fn decode_{}<'b>(d: &mut minicbor::Decoder<'b>) -> Result<{},RpcError>
                 {{
                     let __result = {{ "#,
+                    &name,
+                    if is_rust_copy { "#[inline]" } else { "" },
                     self.to_method_name(name),
                     &id.shape_name()
                 );
