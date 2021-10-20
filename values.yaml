@@ -1,0 +1,93 @@
+replicaCount: 1
+
+wasmcloud:
+  # Config options for the wasmCloud Host. See
+  # https://wasmcloud.dev/reference/host-runtime/host_configure/ for full details
+  config:
+    rpcNatsHost: 127.0.0.1
+    rpcNatsPort: 4222
+    providerNatsHost: 127.0.0.1
+    providerNatsPort: 4222
+    controlNatsHost: 127.0.0.1
+    controlNatsPort: 4222
+    clusterIssuers: ""
+    clusterSeed: ""
+    hostKey: ""
+    latticePrefix: ""
+    rpcJWT: ""
+    rpcTimeout: ""
+    providerRpcJWT: ""
+    providerRpcTimeout: ""
+    ctlJWT: ""
+    providerShutdownDelay: ""
+    hostSeed: ""
+    rpcSeed: ""
+    providerRpcSeed: ""
+    ctlSeed: ""
+  image:
+    repository: wasmcloud/wasmcloud_host
+    pullPolicy: IfNotPresent
+    # Overrides the image tag whose default is the chart appVersion.
+    tag: ""
+  resources: {}
+
+nats:
+  # Enables the nats container (enabled by default). This can be disabled if you'd like to connect
+  # to another in-cluster NATS cluster
+  enabled: true
+  leafnode:
+    # Sets the nats container to operate in leafnode mode 
+    enabled: false
+    # The NATS cluster to connect to. Defaults to NGS
+    clusterUrl: "nats-leaf://connect.ngs.global"
+    # Credentials to use
+    credentials: ""
+
+  image:
+    repository: nats
+    pullPolicy: IfNotPresent
+    # NOTE: The alpine image is required if you are doing leafnode configuration. Otherwise the base
+    # nats image is missing the root certificates needed for validation
+    tag: "2.6-alpine"
+  resources: {}
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  # Specifies whether a service account should be created
+  create: true
+  # Annotations to add to the service account
+  annotations: {}
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name: ""
+
+podAnnotations: {}
+
+podSecurityContext: {}
+  # fsGroup: 2000
+
+securityContext: {}
+  # capabilities:
+  #   drop:
+  #   - ALL
+  # readOnlyRootFilesystem: true
+  # runAsNonRoot: true
+  # runAsUser: 1000
+
+service:
+  type: ClusterIP
+  washboardPort: 4000
+  natsPort: 8080
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+# Whether or not to expose the host and its NATS server as a service. This defaults to true for ease
+# of "kick the tires" use. For real deployments, this should likely be turned off
+useService: true
