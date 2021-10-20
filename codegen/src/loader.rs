@@ -1,4 +1,3 @@
-#![cfg(not(target_arch = "wasm32"))]
 use crate::{config::ModelSource, Error, Result};
 use atelier_core::model::Model;
 use reqwest::Url;
@@ -111,7 +110,6 @@ pub(crate) fn sources_to_paths(
             }
         }
     }
-    #[cfg(not(target_arch = "wasm32"))]
     if !urls.is_empty() {
         let cached = urls_to_cached_files(urls)?;
         results.extend_from_slice(&cached);
@@ -121,7 +119,6 @@ pub(crate) fn sources_to_paths(
 
 /// Returns cache_path, relative to download directory
 /// format: host_dir/file_stem.HASH.ext
-#[cfg(not(target_arch = "wasm32"))]
 fn url_to_cache_path(url: &str) -> Result<PathBuf> {
     let origin = url.parse::<Url>().map_err(|e| bad_url(url, e))?;
     let host_dir = origin.host_str().ok_or_else(|| bad_url(url, "no-host"))?;
