@@ -1,5 +1,5 @@
 use crate::{
-    config::{LanguageConfig, OutputFile},
+    config::{LanguageConfig, OutputFile, OutputLanguage},
     gen::{to_json, CodeGen},
     render::Renderer,
     Bytes, Error, JsonValue, ParamMap, Result,
@@ -26,6 +26,10 @@ pub const HTML_TEMPLATES: &[(&str, &str)] = &[
 pub(crate) struct DocGen {}
 
 impl CodeGen for DocGen {
+    fn output_language(&self) -> OutputLanguage {
+        OutputLanguage::Html
+    }
+
     /// Initialize code generator and renderer for language output.j
     /// This hook is called before any code is generated and can be used to initialize code generator
     /// and/or perform additional processing before output files are created.
