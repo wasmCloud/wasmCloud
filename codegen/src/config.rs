@@ -23,6 +23,10 @@ pub enum OutputLanguage {
     TinyGo,
     /// Go
     Go,
+    /// Python
+    Python,
+    /// C++
+    Clang,
 }
 
 impl std::str::FromStr for OutputLanguage {
@@ -33,9 +37,11 @@ impl std::str::FromStr for OutputLanguage {
             "poly" => Ok(OutputLanguage::Poly),
             "html" => Ok(OutputLanguage::Html),
             "rust" => Ok(OutputLanguage::Rust),
-            "assemblyscript" | "assembly" => Ok(OutputLanguage::AssemblyScript),
+            "assemblyscript" => Ok(OutputLanguage::AssemblyScript),
             "tinygo" => Ok(OutputLanguage::TinyGo),
             "go" => Ok(OutputLanguage::Go),
+            "python" => Ok(OutputLanguage::Python),
+            "c++" | "clang" => Ok(OutputLanguage::Clang),
             _ => Err(Error::UnsupportedLanguage(s.to_string())),
         }
     }
@@ -53,6 +59,8 @@ impl fmt::Display for OutputLanguage {
                 OutputLanguage::AssemblyScript => "AssemblyScript",
                 OutputLanguage::TinyGo => "TinyGo",
                 OutputLanguage::Go => "Go",
+                OutputLanguage::Python => "Python",
+                OutputLanguage::Clang => "Clang",
             }
         )
     }
