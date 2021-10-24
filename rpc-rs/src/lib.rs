@@ -66,9 +66,8 @@ pub mod core {
             /// number of unsuccessful pings before connection is deemed disconnected
             const NATS_PING_FAIL_COUNT: u16 = 8;
 
-            // TODO: is this milliseconds? - units not documented
-            /// time between connection retries
-            const NATS_RECONNECT_INTERVAL: u64 = 15;
+            /// time between connection retries (milliseconds)
+            const NATS_RECONNECT_INTERVAL_MS: u64 = 250;
 
             impl HostData {
                 /// returns whether the provider is running under test
@@ -81,7 +80,7 @@ pub mod core {
                     ratsio::NatsClientOptions {
                         ping_interval: NATS_PING_INTERVAL_SEC,
                         ping_max_out: NATS_PING_FAIL_COUNT,
-                        reconnect_timeout: NATS_RECONNECT_INTERVAL,
+                        reconnect_timeout: NATS_RECONNECT_INTERVAL_MS,
                         // if connect fails, keep trying, forever
                         ensure_connect: true,
                         // need to test whether this works

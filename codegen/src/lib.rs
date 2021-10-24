@@ -2,27 +2,29 @@
 
 mod error;
 pub use error::{Error, Result};
-pub(crate) mod codegen_go;
+#[cfg(feature = "cbor")]
+pub(crate) mod codegen_py;
 pub(crate) mod codegen_rust;
 pub mod config;
+#[cfg(feature = "cbor")]
+pub(crate) mod decode_py;
+pub(crate) mod decode_rust;
 pub mod docgen;
+#[cfg(feature = "cbor")]
+pub(crate) mod encode_py;
+pub(crate) mod encode_rust;
 pub(crate) mod gen;
 mod loader;
 pub(crate) mod model;
 pub mod render;
 pub mod writer;
-#[cfg(not(target_arch = "wasm32"))]
 pub use gen::templates_from_dir;
 pub use gen::Generator;
 
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) use loader::sources_to_paths;
-#[cfg(not(target_arch = "wasm32"))]
 pub use loader::{sources_to_model, weld_cache_dir};
 pub use rust_build::rust_build;
 
-mod decode_rust;
-mod encode_rust;
 pub mod format;
 mod rust_build;
 

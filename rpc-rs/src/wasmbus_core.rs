@@ -37,29 +37,29 @@ pub struct HealthCheckResponse {
 /// initialization data for a capability provider
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct HostData {
-    /// list of cluster issuers
-    pub cluster_issuers: ClusterIssuers,
-    pub env_values: HostEnvValues,
     #[serde(default)]
     pub host_id: String,
     #[serde(default)]
-    pub instance_id: String,
-    #[serde(default)]
-    pub invocation_seed: String,
-    #[serde(default)]
     pub lattice_rpc_prefix: String,
     #[serde(default)]
-    pub lattice_rpc_url: String,
+    pub link_name: String,
     #[serde(default)]
     pub lattice_rpc_user_jwt: String,
     #[serde(default)]
     pub lattice_rpc_user_seed: String,
-    /// initial list of links for provider
-    pub link_definitions: ActorLinks,
     #[serde(default)]
-    pub link_name: String,
+    pub lattice_rpc_url: String,
     #[serde(default)]
     pub provider_key: String,
+    #[serde(default)]
+    pub invocation_seed: String,
+    pub env_values: HostEnvValues,
+    #[serde(default)]
+    pub instance_id: String,
+    /// initial list of links for provider
+    pub link_definitions: ActorLinks,
+    /// list of cluster issuers
+    pub cluster_issuers: ClusterIssuers,
 }
 
 /// Environment settings for initializing a capability provider
@@ -68,34 +68,34 @@ pub type HostEnvValues = std::collections::HashMap<String, String>;
 /// RPC message to capability provider
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Invocation {
+    pub origin: WasmCloudEntity,
+    pub target: WasmCloudEntity,
     #[serde(default)]
-    pub encoded_claims: String,
-    #[serde(default)]
-    pub host_id: String,
-    #[serde(default)]
-    pub id: String,
+    pub operation: String,
     #[serde(with = "serde_bytes")]
     #[serde(default)]
     pub msg: Vec<u8>,
     #[serde(default)]
-    pub operation: String,
-    pub origin: WasmCloudEntity,
-    pub target: WasmCloudEntity,
+    pub id: String,
+    #[serde(default)]
+    pub encoded_claims: String,
+    #[serde(default)]
+    pub host_id: String,
 }
 
 /// Response to an invocation
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct InvocationResponse {
-    /// optional error message
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-    /// id connecting this response to the invocation
-    #[serde(default)]
-    pub invocation_id: String,
     /// serialize response message
     #[serde(with = "serde_bytes")]
     #[serde(default)]
     pub msg: Vec<u8>,
+    /// id connecting this response to the invocation
+    #[serde(default)]
+    pub invocation_id: String,
+    /// optional error message
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 /// Link definition for binding actor to provider
@@ -104,15 +104,15 @@ pub struct LinkDefinition {
     /// actor public key
     #[serde(default)]
     pub actor_id: String,
-    /// contract id
-    #[serde(default)]
-    pub contract_id: String,
-    /// link name
-    #[serde(default)]
-    pub link_name: String,
     /// provider public key
     #[serde(default)]
     pub provider_id: String,
+    /// link name
+    #[serde(default)]
+    pub link_name: String,
+    /// contract id
+    #[serde(default)]
+    pub contract_id: String,
     pub values: LinkSettings,
 }
 
@@ -121,11 +121,11 @@ pub type LinkSettings = std::collections::HashMap<String, String>;
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct WasmCloudEntity {
-    pub contract_id: crate::model::CapabilityContractId,
-    #[serde(default)]
-    pub link_name: String,
     #[serde(default)]
     pub public_key: String,
+    #[serde(default)]
+    pub link_name: String,
+    pub contract_id: crate::model::CapabilityContractId,
 }
 
 /// Actor service
@@ -151,10 +151,10 @@ pub trait ActorReceiver: MessageDispatch + Actor {
                 let value: HealthCheckRequest = deserialize(message.arg.as_ref())
                     .map_err(|e| RpcError::Deser(format!("message '{}': {}", message.method, e)))?;
                 let resp = Actor::health_request(self, ctx, &value).await?;
-                let buf = Cow::Owned(serialize(&resp)?);
+                let buf = serialize(&resp)?;
                 Ok(Message {
                     method: "Actor.HealthRequest",
-                    arg: buf,
+                    arg: Cow::Owned(buf),
                 })
             }
             _ => Err(RpcError::MethodNotHandled(format!(
@@ -212,14 +212,14 @@ impl<T: Transport + std::marker::Sync + std::marker::Send> Actor for ActorSender
         ctx: &Context,
         arg: &HealthCheckRequest,
     ) -> RpcResult<HealthCheckResponse> {
-        let arg = serialize(arg)?;
+        let buf = serialize(arg)?;
         let resp = self
             .transport
             .send(
                 ctx,
                 Message {
                     method: "Actor.HealthRequest",
-                    arg: Cow::Borrowed(&arg),
+                    arg: Cow::Borrowed(&buf),
                 },
                 None,
             )

@@ -323,7 +323,7 @@ impl HostBridge {
                     error!("Invocation deserialization failure: {}", e.to_string());
                     InvocationResponse {
                         invocation_id: "invalid".to_string(),
-                        error: Some(format!("Corrupt invocation: {}", e.to_string())),
+                        error: Some(format!("Corrupt invocation: {}", e)),
                         msg: Vec::new(),
                     }
                 }
@@ -437,13 +437,12 @@ impl HostBridge {
         // validate the host signature, and loop if validation fails.
         #[allow(clippy::never_loop)]
         while let Some(msg) = sub.next().await {
-            // TODO: verify host's signature before quitting
-            // (not sure if host is signing these syet)
-            // if not a valid signed message, keep waiting for message
-            // if !msg.is_valid() { continue; }
-
+            // Shutdown messages are unsigned (see https://github.com/wasmCloud/wasmcloud-otp/issues/256)
+            // so we can't verify that this came from a trusted source.
+            // When the above issue is fixed, verify the source and keep looping if it's invalid.
             debug!("Received termination signal. Shutting down capability provider.");
-            // tell provider to shutdown - before we shut down nats subscriptions,
+
+            // Tell provider to shutdown - before we shut down nats subscriptions,
             // in case it needs to do any message passing during shutdown
             if let Err(e) = provider.shutdown().await {
                 error!("during provider shutdown processing, got error: {}", e);

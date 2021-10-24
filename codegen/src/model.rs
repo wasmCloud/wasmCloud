@@ -3,11 +3,13 @@
 //! - ModelIndex is a "cache" of a smithy model grouped by shape kind and sorted by identifier name
 //! - various macros used in the codegen crate
 //!
+use std::ops::Deref;
 //use crate::strings::{to_pascal_case, to_snake_case};
 use crate::{
     error::{Error, Result},
     JsonValue,
 };
+use atelier_core::model::shapes::StructureOrUnion;
 use atelier_core::{
     model::{
         shapes::{AppliedTraits, HasTraits, MemberShape, Operation, ShapeKind},
@@ -30,6 +32,8 @@ const TRAIT_CODEGEN_RUST: &str = "codegenRust";
 const TRAIT_SERIALIZATION: &str = "serialization";
 const TRAIT_WASMBUS: &str = "wasmbus";
 const TRAIT_WASMBUS_DATA: &str = "wasmbusData";
+const TRAIT_FIELD_NUM: &str = "n";
+const TRAIT_RENAME: &str = "rename";
 //const TRAIT_SERIALIZE_RENAME: &str = "rename";
 
 lazy_static! {
@@ -55,6 +59,16 @@ lazy_static! {
     static ref WASMBUS_DATA_TRAIT_ID: ShapeID = ShapeID::new(
         NamespaceID::new_unchecked(WASMCLOUD_MODEL_NAMESPACE),
         Identifier::from_str(TRAIT_WASMBUS_DATA).unwrap(),
+        None
+    );
+    static ref FIELD_NUM_TRAIT_ID: ShapeID = ShapeID::new(
+        NamespaceID::new_unchecked(WASMCLOUD_MODEL_NAMESPACE),
+        Identifier::from_str(TRAIT_FIELD_NUM).unwrap(),
+        None
+    );
+    static ref RENAME_TRAIT_ID: ShapeID = ShapeID::new(
+        NamespaceID::new_unchecked(WASMCLOUD_MODEL_NAMESPACE),
+        Identifier::from_str(TRAIT_RENAME).unwrap(),
         None
     );
 }
@@ -87,12 +101,36 @@ pub fn codegen_rust_trait() -> &'static ShapeID {
     &CODEGEN_RUST_TRAIT_ID
 }
 
+/// shape id of trait @n
+pub fn field_num_trait() -> &'static ShapeID {
+    &FIELD_NUM_TRAIT_ID
+}
+
+/// shape id of trait @rename
+pub fn rename_trait() -> &'static ShapeID {
+    &RENAME_TRAIT_ID
+}
+
 #[allow(dead_code)]
 pub enum CommentKind {
     Inner,
     Documentation,
+    /// inside a multi-line quote, as in python
+    InQuote,
 }
 
+// Modifiers on data type
+// This enum may be extended in the future if other variations are required.
+// It's recursively composable, so you could represent &Option<&Value>
+// with `Ty::Ref(Ty::Opt(Ty::Ref(id)))`
+pub(crate) enum Ty<'typ> {
+    /// write a plain shape declaration
+    Shape(&'typ ShapeID),
+    /// write a type wrapped in Option<>
+    Opt(&'typ ShapeID),
+    /// write a reference type: preceeded by &
+    Ref(&'typ ShapeID),
+}
 // verify that the model doesn't contain unsupported types
 #[macro_export]
 macro_rules! expect_empty {
@@ -262,6 +300,82 @@ pub fn has_default(model: &'_ Model, member: &MemberShape) -> bool {
     }
 }
 
+pub(crate) struct NumberedMember {
+    field_num: Option<u16>,
+    shape: MemberShape,
+}
+
+impl NumberedMember {
+    pub(crate) fn new(member: &MemberShape) -> Result<Self> {
+        Ok(NumberedMember {
+            shape: member.to_owned(),
+            field_num: get_trait::<u16>(member.traits(), field_num_trait()).map_err(|e| {
+                Error::Model(format!(
+                    "invalid field number @n() for field '{}': {}",
+                    member.id(),
+                    e
+                ))
+            })?,
+        })
+    }
+    pub(crate) fn field_num(&self) -> &Option<u16> {
+        &self.field_num
+    }
+}
+
+impl Deref for NumberedMember {
+    type Target = MemberShape;
+
+    fn deref(&self) -> &Self::Target {
+        &self.shape
+    }
+}
+
+use std::iter::Iterator;
+/// Returns sorted list of fields for the structure, and whether it is numbered.
+/// If there are any errors in numbering, returns Error::Model
+pub(crate) fn get_sorted_fields(
+    id: &Identifier,
+    strukt: &StructureOrUnion,
+) -> Result<(Vec<NumberedMember>, bool)> {
+    let mut fields = strukt
+        .members()
+        .map(NumberedMember::new)
+        .collect::<Result<Vec<NumberedMember>>>()?;
+    let has_numbers = crate::model::has_field_numbers(&fields, &id.to_string())?;
+    // Sort fields for deterministic output
+    // by number, if declared with numbers, otherwise by name
+    if has_numbers {
+        fields.sort_by_key(|f| f.field_num().unwrap());
+    } else {
+        fields.sort_by_key(|f| f.id().to_owned());
+    }
+    Ok((fields, has_numbers))
+}
+
+/// Checks whether a struct has complete and valid field numbers.
+/// Returns true if all fields have unique numbers.
+/// Returns false if no fields are numbered.
+/// Returns Err if fields are incompletely numbered, or there are duplicate numbers.
+pub(crate) fn has_field_numbers(fields: &[NumberedMember], name: &str) -> Result<bool> {
+    let mut numbered = std::collections::BTreeSet::default();
+    for f in fields.iter() {
+        if let Some(n) = f.field_num() {
+            numbered.insert(*n);
+        }
+    }
+    if numbered.is_empty() {
+        Ok(false)
+    } else if numbered.len() == fields.len() {
+        // all fields are numbered uniquely
+        Ok(true)
+    } else {
+        Err(crate::Error::Model(
+                format!("structure {} has incomplete or invalid field numbers: either some fields are missing the '@n()' trait, or some fields have duplicate numbers.", name)
+            ))
+    }
+}
+
 /*
 pub fn get_metadata(model: &Model) -> JsonMap {
     let mut metadata_map = JsonMap::default();
@@ -279,5 +393,7 @@ pub fn get_metadata(model: &Model) -> JsonMap {
 pub struct PackageName {
     pub namespace: String,
     #[serde(rename = "crate")]
-    pub crate_name: String,
+    pub crate_name: Option<String>,
+    #[serde(rename = "py_module")]
+    pub py_module: Option<String>,
 }

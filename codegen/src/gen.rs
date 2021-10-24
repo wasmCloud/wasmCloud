@@ -2,23 +2,26 @@
 //! and [CodeGen](#CodeGen), the trait for language-specific code-driven code generation.
 //!
 //!
-use crate::Bytes;
+#[cfg(feature = "cbor")]
+use crate::codegen_py::PythonCodeGen;
 use crate::{
-    codegen_go::GoCodeGen,
     codegen_rust::RustCodeGen,
     config::{CodegenConfig, LanguageConfig, OutputFile, OutputLanguage},
     docgen::DocGen,
     error::{Error, Result},
-    model::CommentKind,
+    model::{get_trait, CommentKind},
     render::Renderer,
     writer::Writer,
-    JsonValue, ParamMap, TomlValue,
+    Bytes, JsonValue, ParamMap, TomlValue,
 };
+use atelier_core::model::shapes::AppliedTraits;
 use atelier_core::model::{Identifier, Model};
-use std::borrow::Borrow;
-use std::collections::BTreeMap;
-use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::{
+    borrow::Borrow,
+    collections::BTreeMap,
+    io::Write,
+    path::{Path, PathBuf},
+};
 
 /// Common templates compiled-in
 pub const COMMON_TEMPLATES: &[(&str, &str)] = &[];
@@ -98,7 +101,6 @@ impl<'model> Generator {
                 } else {
                     config.base_dir.join(template_dir)
                 };
-                #[cfg(not(target_arch = "wasm32"))]
                 for (name, tmpl) in templates_from_dir(&template_dir)? {
                     renderer.add_template((&name, &tmpl))?;
                 }
@@ -206,7 +208,9 @@ fn gen_for_language<'model>(
         OutputLanguage::Rust => Box::new(RustCodeGen::new(model)),
         OutputLanguage::Html => Box::new(DocGen::default()),
         OutputLanguage::Poly => Box::new(PolyGen::default()),
-        OutputLanguage::Go => Box::new(GoCodeGen::new(model)),
+        #[cfg(feature = "cbor")]
+        // python requires cbor feature
+        OutputLanguage::Python => Box::new(PythonCodeGen::new(model)),
         _ => {
             crate::error::print_warning(&format!("Target language {} not implemented", language));
             Box::new(NoCodeGen::default())
@@ -327,6 +331,22 @@ pub(crate) trait CodeGen {
     // Returns the current buffer, zeroing out self
     //fn take(&mut self) -> BytesMut;
 
+    /// Returns current output language
+    fn output_language(&self) -> OutputLanguage;
+
+    fn has_rename_trait(&self, traits: &AppliedTraits) -> Option<String> {
+        if let Ok(Some(items)) =
+            get_trait::<Vec<crate::wasmbus_model::RenameItem>>(traits, crate::model::rename_trait())
+        {
+            let lang = self.output_language().to_string();
+            return items
+                .iter()
+                .find(|i| i.lang == lang)
+                .map(|i| i.name.clone());
+        }
+        None
+    }
+
     /// returns file extension of source files for this language
     fn get_file_extension(&self) -> &'static str {
         ""
@@ -340,14 +360,26 @@ pub(crate) trait CodeGen {
 
     /// Convert method name to its target-language-idiomatic case style
     /// Default implementation uses snake_case
-    fn to_method_name(&self, method_id: &Identifier) -> String {
-        crate::strings::to_snake_case(&method_id.to_string())
+    fn to_method_name(&self, method_id: &Identifier, method_traits: &AppliedTraits) -> String {
+        if let Some(name) = self.has_rename_trait(method_traits) {
+            name
+        } else {
+            crate::strings::to_snake_case(&method_id.to_string())
+        }
     }
 
     /// Convert field name to its target-language-idiomatic case style
     /// Default implementation uses snake_case
-    fn to_field_name(&self, member_id: &Identifier) -> std::result::Result<String, Error> {
-        Ok(crate::strings::to_snake_case(&member_id.to_string()))
+    fn to_field_name(
+        &self,
+        member_id: &Identifier,
+        member_traits: &AppliedTraits,
+    ) -> std::result::Result<String, Error> {
+        if let Some(name) = self.has_rename_trait(member_traits) {
+            Ok(name)
+        } else {
+            Ok(crate::strings::to_snake_case(&member_id.to_string()))
+        }
     }
 
     /// The operation name used in dispatch, from method
@@ -436,7 +468,18 @@ fn ensure_files_exist(source_files: &[std::path::PathBuf]) -> Result<()> {
 
 #[derive(Debug, Default)]
 struct PolyGen {}
-impl CodeGen for PolyGen {}
+impl CodeGen for PolyGen {
+    fn output_language(&self) -> OutputLanguage {
+        OutputLanguage::Poly
+    }
+}
+
+#[allow(dead_code)]
+/// helper function for indenting code (used by python codegen)
+pub fn spaces(indent_level: u8) -> &'static str {
+    const SP: &str = "                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                ";
+    &SP[0..((indent_level * 4) as usize)]
+}
 
 // convert from TOML map to JSON map so it's usable by handlebars
 //pub fn toml_to_json(map: &BTreeMap<String, TomlValue>) -> Result<ParamMap> {
@@ -493,7 +536,6 @@ pub fn find_files(dir: &Path, extension: &str) -> Result<Vec<PathBuf>> {
 
 /// Add all templates from the specified folder, using the base file name
 /// as the template name. For example, "header.hbs" will be registered as "header"
-#[cfg(not(target_arch = "wasm32"))]
 pub fn templates_from_dir(start: &std::path::Path) -> Result<Vec<(String, String)>> {
     let mut templates = Vec::new();
 
@@ -514,6 +556,9 @@ pub fn templates_from_dir(start: &std::path::Path) -> Result<Vec<(String, String
 #[derive(Default)]
 struct NoCodeGen {}
 impl CodeGen for NoCodeGen {
+    fn output_language(&self) -> OutputLanguage {
+        OutputLanguage::Poly
+    }
     fn get_file_extension(&self) -> &'static str {
         ""
     }

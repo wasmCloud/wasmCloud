@@ -71,11 +71,7 @@ where
     let nc = NatsClient::new(host_data.nats_options())
         .await
         .map_err(|e| {
-            RpcError::ProviderInit(format!(
-                "nats connection to {} failed: {}",
-                nats_addr,
-                e.to_string()
-            ))
+            RpcError::ProviderInit(format!("nats connection to {} failed: {}", nats_addr, e))
         })?;
 
     // initialize HostBridge
@@ -103,10 +99,7 @@ where
         .connect(provider_dispatch, shutdown_tx)
         .await
         .map_err(|e| {
-            RpcError::ProviderInit(format!(
-                "fatal error setting up subscriptions: {}",
-                e.to_string()
-            ))
+            RpcError::ProviderInit(format!("fatal error setting up subscriptions: {}", e))
         })?;
 
     // process subscription events and log messages, waiting for shutdown signal

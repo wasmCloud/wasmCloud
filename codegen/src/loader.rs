@@ -1,4 +1,3 @@
-#![cfg(not(target_arch = "wasm32"))]
 use crate::{config::ModelSource, Error, Result};
 use atelier_core::model::Model;
 use reqwest::Url;
@@ -25,8 +24,6 @@ const SMITHY_CACHE_NO_EXPIRE: &str = "NO_EXPIRE";
 /// necessarily the current directory of the OS process)
 /// Returns single merged model.
 pub fn sources_to_model(sources: &[ModelSource], base_dir: &Path, verbose: u8) -> Result<Model> {
-    use std::convert::TryInto;
-
     let paths = sources_to_paths(sources, base_dir, verbose)?;
     let mut assembler = atelier_assembler::ModelAssembler::default();
     for path in paths.iter() {
@@ -111,7 +108,6 @@ pub(crate) fn sources_to_paths(
             }
         }
     }
-    #[cfg(not(target_arch = "wasm32"))]
     if !urls.is_empty() {
         let cached = urls_to_cached_files(urls)?;
         results.extend_from_slice(&cached);
@@ -121,7 +117,6 @@ pub(crate) fn sources_to_paths(
 
 /// Returns cache_path, relative to download directory
 /// format: host_dir/file_stem.HASH.ext
-#[cfg(not(target_arch = "wasm32"))]
 fn url_to_cache_path(url: &str) -> Result<PathBuf> {
     let origin = url.parse::<Url>().map_err(|e| bad_url(url, e))?;
     let host_dir = origin.host_str().ok_or_else(|| bad_url(url, "no-host"))?;
@@ -214,21 +209,16 @@ fn urls_to_cached_files(urls: Vec<String>) -> Result<Vec<PathBuf>> {
             .download_folder(tmpdir.path())
             .parallel_requests(MAX_PARALLEL_DOWNLOADS)
             .build()
-            .map_err(|e| {
-                Error::Other(format!(
-                    "internal error: download failure: {}",
-                    e.to_string()
-                ))
-            })?;
+            .map_err(|e| Error::Other(format!("internal error: download failure: {}", e)))?;
         // invoke parallel downloader, returns when all have been read
         let result = downloader
             .download(&to_download)
-            .map_err(|e| Error::Other(format!("download error: {}", e.to_string())))?;
+            .map_err(|e| Error::Other(format!("download error: {}", e)))?;
 
         for r in result.iter() {
             match r {
                 Err(e) => {
-                    println!("Failure downloading: {}", e.to_string());
+                    println!("Failure downloading: {}", e);
                 }
                 Ok(summary) => {
                     for status in summary.status.iter() {
