@@ -278,23 +278,21 @@ impl RpcClient {
                     Ok(Ok(result)) => Ok(result),
                     Ok(Err(rpc_err)) => Err(RpcError::Nats(format!(
                         "rpc send error: {}: {}",
-                        target_url,
-                        rpc_err.to_string()
+                        target_url, rpc_err
                     ))),
                     Err(timeout_err) => {
                         error!("rpc timeout: sending to {}: {}", &target_url, timeout_err);
                         Err(RpcError::Timeout(format!(
                             "sending to {}: {}",
-                            &target_url,
-                            timeout_err.to_string()
+                            &target_url, timeout_err
                         )))
                     }
                 }
             } else {
                 // no timeout, wait indefinitely or until host times out
-                self.request(&topic, &nats_body).await.map_err(|e| {
-                    RpcError::Nats(format!("rpc send error: {}: {}", target_url, e.to_string()))
-                })
+                self.request(&topic, &nats_body)
+                    .await
+                    .map_err(|e| RpcError::Nats(format!("rpc send error: {}: {}", target_url, e)))
             }?;
 
             let inv_response = crate::deserialize::<InvocationResponse>(&payload)
@@ -311,9 +309,9 @@ impl RpcClient {
                 }
             }
         } else {
-            self.publish(&topic, &nats_body).await.map_err(|e| {
-                RpcError::Nats(format!("rpc send error: {}: {}", target_url, e.to_string()))
-            })?;
+            self.publish(&topic, &nats_body)
+                .await
+                .map_err(|e| RpcError::Nats(format!("rpc send error: {}: {}", target_url, e)))?;
             Ok(Vec::new())
         }
     }

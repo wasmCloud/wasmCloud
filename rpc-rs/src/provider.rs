@@ -323,7 +323,7 @@ impl HostBridge {
                     error!("Invocation deserialization failure: {}", e.to_string());
                     InvocationResponse {
                         invocation_id: "invalid".to_string(),
-                        error: Some(format!("Corrupt invocation: {}", e.to_string())),
+                        error: Some(format!("Corrupt invocation: {}", e)),
                         msg: Vec::new(),
                     }
                 }

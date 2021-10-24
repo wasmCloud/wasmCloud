@@ -158,7 +158,7 @@ impl From<&str> for RpcError {
 
 impl From<std::io::Error> for RpcError {
     fn from(e: std::io::Error) -> RpcError {
-        RpcError::Other(format!("io: {}", e.to_string()))
+        RpcError::Other(format!("io: {}", e))
     }
 }
 
