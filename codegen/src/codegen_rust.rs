@@ -3,13 +3,13 @@
 #[cfg(feature = "wasmbus")]
 use crate::wasmbus_model::Wasmbus;
 use crate::{
-    config::LanguageConfig,
+    config::{LanguageConfig, OutputLanguage},
     error::{print_warning, Error, Result},
     gen::{CodeGen, SourceFormatter},
     model::{
         codegen_rust_trait, get_operation, get_sorted_fields, get_trait, has_default,
         is_opt_namespace, serialization_trait, value_to_json, wasmcloud_model_namespace,
-        CommentKind, PackageName,
+        CommentKind, PackageName, Ty,
     },
     render::Renderer,
     wasmbus_model::{CodegenRust, Serialization},
@@ -51,19 +51,6 @@ struct Declaration(u8, BytesMut);
 
 type ShapeList<'model> = Vec<(&'model ShapeID, &'model AppliedTraits, &'model ShapeKind)>;
 
-// Modifiers on data type
-// This enum may be extended in the future if other variations are required.
-// It's recursively composable, so you could represent &Option<&Value>
-// with `Ty::Ref(Ty::Opt(Ty::Ref(id)))`
-pub(crate) enum Ty<'typ> {
-    /// write a plain shape declaration
-    Shape(&'typ ShapeID),
-    /// write a type wrapped in Option<>
-    Opt(&'typ ShapeID),
-    /// write a reference type: preceeded by &
-    Ref(&'typ ShapeID),
-}
-
 #[derive(Default)]
 pub struct RustCodeGen<'model> {
     /// if set, limits declaration output to this namespace only
@@ -92,6 +79,9 @@ enum MethodArgFlags {
 }
 
 impl<'model> CodeGen for RustCodeGen<'model> {
+    fn output_language(&self) -> OutputLanguage {
+        OutputLanguage::Rust
+    }
     /// Initialize code generator and renderer for language output.j
     /// This hook is called before any code is generated and can be used to initialize code generator
     /// and/or perform additional processing before output files are created.
@@ -178,9 +168,8 @@ impl<'model> CodeGen for RustCodeGen<'model> {
                 // the base model has minimal dependencies
                 w.write(
                     r#"
-                #![allow(dead_code, clippy::ptr_arg, clippy::needless_lifetimes)]
+                #![allow(dead_code, unused_imports, clippy::ptr_arg, clippy::needless_lifetimes)]
                 use serde::{{Deserialize, Serialize}};
-                use crate::RpcError;
              "#,
                 );
             }
@@ -290,6 +279,7 @@ impl<'model> CodeGen for RustCodeGen<'model> {
         w.write(match kind {
             CommentKind::Documentation => "/// ",
             CommentKind::Inner => "// ",
+            CommentKind::InQuote => "// ", // not applicable for Rust
         });
         w.write(line);
         w.write(b"\n");
@@ -412,7 +402,7 @@ impl<'model> RustCodeGen<'model> {
                         }
                         _ => {
                             if self.namespace.is_none()
-                                || self.namespace.as_ref().unwrap() != wasmcloud_model_namespace()
+                                || self.namespace.as_ref().unwrap() != id.namespace()
                             {
                                 s.push_str(&self.import_core);
                                 s.push_str("::model::");
@@ -427,14 +417,17 @@ impl<'model> RustCodeGen<'model> {
                     s.push_str(&self.to_type_name(&id.shape_name().to_string()));
                 } else {
                     match self.packages.get(&id.namespace().to_string()) {
-                        Some(package) => {
+                        Some(PackageName {
+                            crate_name: Some(crate_name),
+                            ..
+                        }) => {
                             // the crate name should be valid rust syntax. If not, they'll get an error with rustc
-                            s.push_str(&package.crate_name);
+                            s.push_str(crate_name);
                             s.push_str("::");
                             s.push_str(&self.to_type_name(&id.shape_name().to_string()));
                         }
-                        None => {
-                            return Err(Error::Model(format!("undefined create for namespace {} for symbol {}. Make sure codegen.toml includes all dependent namespaces",
+                        _ => {
+                            return Err(Error::Model(format!("undefined crate for namespace {} for symbol {}. Make sure codegen.toml includes all dependent namespaces, and that the dependent .smithy file contains package metadata with crate: value",
                                                             &id.namespace(), &id)));
                         }
                     }
@@ -586,7 +579,7 @@ impl<'model> RustCodeGen<'model> {
             } else {
                 member.id().to_string()
             };
-            let rust_field_name = self.to_field_name(member.id())?;
+            let rust_field_name = self.to_field_name(member.id(), member.traits())?;
             if ser_name != rust_field_name {
                 w.write(&format!("  #[serde(rename=\"{}\")] ", ser_name));
             }
@@ -744,7 +737,7 @@ impl<'model> RustCodeGen<'model> {
         method_traits: &AppliedTraits,
         op: &Operation,
     ) -> Result<MethodArgFlags> {
-        let method_name = self.to_method_name(method_id);
+        let method_name = self.to_method_name(method_id, method_traits);
         let mut arg_flags = MethodArgFlags::Normal;
         self.apply_documentation_traits(w, method_id, method_traits);
         w.write(b"async fn ");
@@ -811,7 +804,7 @@ impl<'model> RustCodeGen<'model> {
                 }
             }
             let method_ident = method_id.shape_name();
-            let (op, _) = get_operation(model, method_id, service_id)?;
+            let (op, method_traits) = get_operation(model, method_id, service_id)?;
             w.write(b"\"");
             w.write(&self.op_dispatch_name(method_ident));
             w.write(b"\" => {\n");
@@ -838,9 +831,10 @@ impl<'model> RustCodeGen<'model> {
             } else {
                 w.write(b"let _resp = ");
             }
+            let method_name = self.to_method_name(method_ident, method_traits);
             self.write_ident(w, service_id); // Service::method
             w.write(b"::");
-            w.write(&self.to_method_name(method_ident));
+            w.write(&method_name);
             w.write(b"(self, ctx");
             if op.has_input() {
                 w.write(b", &value");
