@@ -25,7 +25,7 @@ use crate::{
 use atelier_core::model::shapes::ShapeKind;
 use atelier_core::{
     model::{
-        shapes::{Simple, StructureOrUnion},
+        shapes::{HasTraits, Simple, StructureOrUnion},
         HasIdentity, ShapeID,
     },
     prelude::{
@@ -167,8 +167,8 @@ impl<'model> RustCodeGen<'model> {
                         s.push_str("::model::");
                     }
                     s.push_str(&format!(
-                        "encode_{}(e, {})?;",
-                        self.to_method_name(id.shape_name()),
+                        "encode_{}(e, {})?;\n",
+                        crate::strings::to_snake_case(&id.shape_name().to_string()),
                         val.as_ref()
                     ));
                     s
@@ -177,23 +177,25 @@ impl<'model> RustCodeGen<'model> {
         } else if self.namespace.is_some() && id.namespace() == self.namespace.as_ref().unwrap() {
             format!(
                 "encode_{}(e, {})?;\n",
-                self.to_method_name(id.shape_name()),
+                crate::strings::to_snake_case(&id.shape_name().to_string()),
                 val.as_ref()
             )
         } else {
             match self.packages.get(&id.namespace().to_string()) {
-                Some(package) => {
-                    let mut s = package.crate_name.clone();
-                    s.push_str("::");
-                    s.push_str(&format!(
-                        "encode_{}(e, {})?;",
-                        self.to_method_name(id.shape_name()),
-                        val.as_ref()
-                    ));
-                    s
+                Some(crate::model::PackageName {
+                    crate_name: Some(crate_name),
+                    ..
+                }) => {
+                    // the crate name should be valid rust syntax. If not, they'll get an error with rustc
+                    format!(
+                        "{}::encode_{}(e, {})?;\n",
+                        &crate_name,
+                        crate::strings::to_snake_case(&id.shape_name().to_string()),
+                        val.as_ref(),
+                    )
                 }
-                None => {
-                    return Err(Error::Model(format!("undefined create for namespace {} for symbol {}. Make sure codegen.toml includes all dependent namespaces",
+                _ => {
+                    return Err(Error::Model(format!("undefined crate for namespace {} for symbol {}. Make sure codegen.toml includes all dependent namespaces, and that the dependent .smithy file contains package metadata with crate: value",
                                                     &id.namespace(), &id)));
                 }
             }
@@ -224,7 +226,7 @@ impl<'model> RustCodeGen<'model> {
                 Simple::Timestamp => encode_timestamp(val),
                 Simple::BigInteger => encode_big_integer(val),
                 Simple::BigDecimal => encode_big_decimal(val),
-                Simple::Document => encode_blob(val),
+                Simple::Document => encode_document(val),
             },
             ShapeKind::Map(map) => {
                 let mut s = format!(
@@ -327,7 +329,7 @@ impl<'model> RustCodeGen<'model> {
                     }
                 }
             }
-            let field_name = self.to_field_name(field.id())?;
+            let field_name = self.to_field_name(field.id(), field.traits())?;
             let field_val = self.encode_shape_id(field.target(), ValExpr::Ref("val"))?;
             if is_optional_type(field) {
                 s.push_str(&format!(
@@ -392,7 +394,7 @@ impl<'model> RustCodeGen<'model> {
                 "#,
                     &name,
                     if is_rust_copy { "#[inline]" } else { "" },
-                    self.to_method_name(name),
+                    crate::strings::to_snake_case(&name.to_string()),
                     if is_empty_struct { "_val" } else { "val" },
                     &id.shape_name()
                 );
