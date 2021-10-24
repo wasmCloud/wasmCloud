@@ -1,18 +1,17 @@
 #![cfg(feature = "cbor")]
 //! CBOR Decode functions
 
-use crate::codegen_rust::{RustCodeGen, Ty};
+use crate::codegen_rust::RustCodeGen;
 use crate::{
     codegen_rust::is_optional_type,
     error::{Error, Result},
     gen::CodeGen,
-    model::wasmcloud_model_namespace,
+    model::{wasmcloud_model_namespace, Ty},
     writer::Writer,
 };
-use atelier_core::model::shapes::ShapeKind;
 use atelier_core::{
     model::{
-        shapes::{Simple, StructureOrUnion},
+        shapes::{HasTraits, ShapeKind, Simple, StructureOrUnion},
         HasIdentity, ShapeID,
     },
     prelude::{
@@ -123,26 +122,31 @@ impl<'model> RustCodeGen<'model> {
                     }
                     s.push_str(&format!(
                         "decode_{}(d)?",
-                        self.to_method_name(id.shape_name()),
+                        crate::strings::to_snake_case(&id.shape_name().to_string()),
                     ));
                     s
                 }
             }
         } else if self.namespace.is_some() && id.namespace() == self.namespace.as_ref().unwrap() {
-            format!("decode_{}(d)?", self.to_method_name(id.shape_name()),)
+            format!(
+                "decode_{}(d)?",
+                crate::strings::to_snake_case(&id.shape_name().to_string())
+            )
         } else {
             match self.packages.get(&id.namespace().to_string()) {
-                Some(package) => {
-                    let mut s = package.crate_name.clone();
-                    s.push_str("::");
-                    s.push_str(&format!(
-                        "decode_{}(d)?",
-                        self.to_method_name(id.shape_name()),
-                    ));
-                    s
+                Some(crate::model::PackageName {
+                    crate_name: Some(crate_name),
+                    ..
+                }) => {
+                    // the crate name should be valid rust syntax. If not, they'll get an error with rustc
+                    format!(
+                        "{}::decode_{}(d)?",
+                        &crate_name,
+                        crate::strings::to_snake_case(&id.shape_name().to_string())
+                    )
                 }
-                None => {
-                    return Err(Error::Model(format!("undefined create for namespace {} for symbol {}. Make sure codegen.toml includes all dependent namespaces",
+                _ => {
+                    return Err(Error::Model(format!("undefined crate for namespace {} for symbol {}. Make sure codegen.toml includes all dependent namespaces, and that the dependent .smithy file contains package metadata with crate: value",
                                                     &id.namespace(), &id)));
                 }
             }
@@ -180,7 +184,7 @@ impl<'model> RustCodeGen<'model> {
                                 m.insert(k,v);
                             }}
                         }} else {{
-                            return Err(RpcError::Deser("indefinite maps not supported".to_string()));
+                            return Err(minicbor::decode::Error::Message("indefinite maps not supported"));
                         }}
                         m
                     }}
@@ -237,7 +241,7 @@ impl<'model> RustCodeGen<'model> {
         let (fields, _is_numbered) = crate::model::get_sorted_fields(id.shape_name(), strukt)?;
         let mut s = String::new();
         for field in fields.iter() {
-            let field_name = self.to_field_name(field.id())?;
+            let field_name = self.to_field_name(field.id(), field.traits())?;
             let field_type = self.field_type_string(field)?;
             if is_optional_type(field) {
                 // allows adding Optional fields at end of struct
@@ -258,10 +262,10 @@ impl<'model> RustCodeGen<'model> {
             let is_array = match d.datatype()? {{
                 minicbor::data::Type::Array => true,
                 minicbor::data::Type::Map => false,
-                dt => return Err(RpcError::Deser(format!("decoding struct {}, expected array or map, found {{}}",dt)))
+                _ => return Err(minicbor::decode::Error::Message("decoding struct {}, expected array or map"))
             }};
             if is_array {{
-                let len = d.array()?.ok_or_else(||RpcError::Deser("decoding struct {}: indefinite array not supported".to_string()))?;
+                let len = d.array()?.ok_or_else(||minicbor::decode::Error::Message("decoding struct {}: indefinite array not supported"))?;
                 for __i in 0..(len as usize) {{
         "#, id.shape_name(), id.shape_name()));
         if fields.is_empty() {
@@ -281,7 +285,7 @@ impl<'model> RustCodeGen<'model> {
         // at the end of the struct, but we can still decode it if used
 
         for (ix, field) in fields.iter().enumerate() {
-            let field_name = self.to_field_name(field.id())?;
+            let field_name = self.to_field_name(field.id(), field.traits())?;
             let field_decoder = self.decode_shape_id(field.target())?;
             if is_optional_type(field) {
                 s.push_str(&format!(
@@ -314,7 +318,7 @@ impl<'model> RustCodeGen<'model> {
             r#" 
                 }}
             }} else {{
-                let len = d.map()?.ok_or_else(||RpcError::Deser("decoding struct {}: indefinite map not supported".to_string()))?;
+                let len = d.map()?.ok_or_else(||minicbor::decode::Error::Message("decoding struct {}: indefinite map not supported"))?;
                 for __i in 0..(len as usize) {{
             "#,
             id.shape_name())
@@ -336,7 +340,7 @@ impl<'model> RustCodeGen<'model> {
             );
         }
         for field in fields.iter() {
-            let field_name = self.to_field_name(field.id())?;
+            let field_name = self.to_field_name(field.id(), field.traits())?;
             let field_decoder = self.decode_shape_id(field.target())?;
             if is_optional_type(field) {
                 s.push_str(&format!(
@@ -378,13 +382,13 @@ impl<'model> RustCodeGen<'model> {
         // build the return struct
         s.push_str(&format!("{} {{\n", id.shape_name()));
         for (ix, field) in fields.iter().enumerate() {
-            let field_name = self.to_field_name(field.id())?;
+            let field_name = self.to_field_name(field.id(), field.traits())?;
             s.push_str(&format!(
                 r#"
                 {}: if let Some(__x) = {} {{
                     __x 
                 }} else {{
-                    return Err(RpcError::Deser("missing field {}::{} (#{})".to_string()));
+                    return Err(minicbor::decode::Error::Message("missing field {}::{} (#{})"));
                 }},
                 "#,
                 &field_name,
@@ -422,12 +426,12 @@ impl<'model> RustCodeGen<'model> {
                 // Decode {} from cbor input stream
                 // This is part of experimental cbor support
                 #[doc(hidden)] {}
-                pub fn decode_{}<'b>(d: &mut minicbor::Decoder<'b>) -> Result<{},RpcError>
+                pub fn decode_{}<'b>(d: &mut minicbor::Decoder<'b>) -> Result<{},minicbor::decode::Error>
                 {{
                     let __result = {{ "#,
                     &name,
                     if is_rust_copy { "#[inline]" } else { "" },
-                    self.to_method_name(name),
+                    crate::strings::to_snake_case(&name.to_string()),
                     &id.shape_name()
                 );
                 let body = self.decode_shape_kind(id, kind)?;
