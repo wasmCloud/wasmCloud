@@ -1,7 +1,7 @@
 [package]
 name = "wasmbus-rpc"
-version = "0.5.1"
-edition = "2018"
+version = "0.5.2"
+edition = "2021"
 authors = [ "wasmcloud Team" ]
 license = "Apache-2.0"
 description = "Runtime library for actors and capability providers"
@@ -9,7 +9,6 @@ homepage = "https://github.com/wasmcloud/weld"
 repository = "https://github.com/wasmcloud/weld"
 documentation = "https://docs.rs/wasmbus-rpc"
 readme = "README.md"
-resolver = "2"
 
 # don't push build.rs
 exclude = [ "build.rs" ]
