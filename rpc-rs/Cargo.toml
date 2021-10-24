@@ -63,4 +63,4 @@ data-encoding = "2.3"
 regex = "1"
 
 [build-dependencies]
-weld-codegen = { version="0.2",path="../codegen" }
+weld-codegen = "0.2.3"
