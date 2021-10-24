@@ -33,6 +33,7 @@ const TRAIT_SERIALIZATION: &str = "serialization";
 const TRAIT_WASMBUS: &str = "wasmbus";
 const TRAIT_WASMBUS_DATA: &str = "wasmbusData";
 const TRAIT_FIELD_NUM: &str = "n";
+const TRAIT_RENAME: &str = "rename";
 //const TRAIT_SERIALIZE_RENAME: &str = "rename";
 
 lazy_static! {
@@ -63,6 +64,11 @@ lazy_static! {
     static ref FIELD_NUM_TRAIT_ID: ShapeID = ShapeID::new(
         NamespaceID::new_unchecked(WASMCLOUD_MODEL_NAMESPACE),
         Identifier::from_str(TRAIT_FIELD_NUM).unwrap(),
+        None
+    );
+    static ref RENAME_TRAIT_ID: ShapeID = ShapeID::new(
+        NamespaceID::new_unchecked(WASMCLOUD_MODEL_NAMESPACE),
+        Identifier::from_str(TRAIT_RENAME).unwrap(),
         None
     );
 }
@@ -100,12 +106,31 @@ pub fn field_num_trait() -> &'static ShapeID {
     &FIELD_NUM_TRAIT_ID
 }
 
+/// shape id of trait @rename
+pub fn rename_trait() -> &'static ShapeID {
+    &RENAME_TRAIT_ID
+}
+
 #[allow(dead_code)]
 pub enum CommentKind {
     Inner,
     Documentation,
+    /// inside a multi-line quote, as in python
+    InQuote,
 }
 
+// Modifiers on data type
+// This enum may be extended in the future if other variations are required.
+// It's recursively composable, so you could represent &Option<&Value>
+// with `Ty::Ref(Ty::Opt(Ty::Ref(id)))`
+pub(crate) enum Ty<'typ> {
+    /// write a plain shape declaration
+    Shape(&'typ ShapeID),
+    /// write a type wrapped in Option<>
+    Opt(&'typ ShapeID),
+    /// write a reference type: preceeded by &
+    Ref(&'typ ShapeID),
+}
 // verify that the model doesn't contain unsupported types
 #[macro_export]
 macro_rules! expect_empty {
@@ -368,5 +393,7 @@ pub fn get_metadata(model: &Model) -> JsonMap {
 pub struct PackageName {
     pub namespace: String,
     #[serde(rename = "crate")]
-    pub crate_name: String,
+    pub crate_name: Option<String>,
+    #[serde(rename = "py_module")]
+    pub py_module: Option<String>,
 }
