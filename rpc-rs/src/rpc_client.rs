@@ -275,24 +275,27 @@ impl RpcClient {
         if expect_response {
             let payload = if let Some(timeout) = timeout {
                 match tokio::time::timeout(timeout, self.request(&topic, &nats_body)).await {
-                    Ok(res) => res,
-                    Err(e) => {
-                        error!("rpc timeout: sending to {}: {}", &target_url, e);
-                        return Err(RpcError::Timeout(format!(
+                    Ok(Ok(result)) => Ok(result),
+                    Ok(Err(rpc_err)) => Err(RpcError::Nats(format!(
+                        "rpc send error: {}: {}",
+                        target_url,
+                        rpc_err.to_string()
+                    ))),
+                    Err(timeout_err) => {
+                        error!("rpc timeout: sending to {}: {}", &target_url, timeout_err);
+                        Err(RpcError::Timeout(format!(
                             "sending to {}: {}",
                             &target_url,
-                            e.to_string()
-                        )));
+                            timeout_err.to_string()
+                        )))
                     }
                 }
-                .map_err(|e| {
-                    RpcError::Nats(format!("rpc send error: {}: {}", target_url, e.to_string()))
-                })?
             } else {
+                // no timeout, wait indefinitely or until host times out
                 self.request(&topic, &nats_body).await.map_err(|e| {
                     RpcError::Nats(format!("rpc send error: {}: {}", target_url, e.to_string()))
-                })?
-            };
+                })
+            }?;
 
             let inv_response = crate::deserialize::<InvocationResponse>(&payload)
                 .map_err(|e| RpcError::Deser(e.to_string()))?;
@@ -399,13 +402,15 @@ fn sha256_digest<R: Read>(mut reader: R) -> Result<Digest, Box<dyn std::error::E
     Ok(context.finish())
 }
 
-/// Create a new random uuid for invocations
+/// Create a new random uuid for invocations.
+/// Internally this (currently) uses the uuid crate, which uses 'getrandom',
+/// which uses the operating system's random number generator.
+/// See https://docs.rs/getrandom/0.2.3/getrandom/ for details
 #[doc(hidden)]
 pub fn make_uuid() -> String {
     use uuid::Uuid;
-    // TODO: revisit whether this is using the right random
-    // all providers should use make_uuid() so we can change generation later if necessary
-
+    // uuid uses getrandom, which uses the operating system's RNG
+    // as the source of random numbers.
     Uuid::new_v4()
         .to_simple()
         .encode_lower(&mut Uuid::encode_buffer())
