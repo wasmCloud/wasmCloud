@@ -24,8 +24,6 @@ const SMITHY_CACHE_NO_EXPIRE: &str = "NO_EXPIRE";
 /// necessarily the current directory of the OS process)
 /// Returns single merged model.
 pub fn sources_to_model(sources: &[ModelSource], base_dir: &Path, verbose: u8) -> Result<Model> {
-    use std::convert::TryInto;
-
     let paths = sources_to_paths(sources, base_dir, verbose)?;
     let mut assembler = atelier_assembler::ModelAssembler::default();
     for path in paths.iter() {
