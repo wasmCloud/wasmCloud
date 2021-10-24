@@ -312,8 +312,8 @@ impl NumberedMember {
             field_num: get_trait::<u16>(member.traits(), field_num_trait()).map_err(|e| {
                 Error::Model(format!(
                     "invalid field number @n() for field '{}': {}",
-                    member.id().to_string(),
-                    e.to_string()
+                    member.id(),
+                    e
                 ))
             })?,
         })

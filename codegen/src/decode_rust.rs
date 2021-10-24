@@ -351,14 +351,14 @@ impl<'model> RustCodeGen<'model> {
                                         Some(Some( {} ))
                                     }},
                    "#,
-                    field.id().to_string(),
+                    field.id(),
                     field_name,
                     field_decoder,
                 ));
             } else {
                 s.push_str(&format!(
                     r#""{}" => {} = Some({}),"#,
-                    field.id().to_string(),
+                    field.id(),
                     field_name,
                     field_decoder,
                 ));

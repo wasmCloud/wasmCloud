@@ -98,7 +98,7 @@ impl<'model> CodeGen for RustCodeGen<'model> {
         if let Some(model) = model {
             if let Some(packages) = model.metadata_value("package") {
                 let packages: Vec<PackageName> = serde_json::from_value(value_to_json(packages))
-                    .map_err(|e| Error::Model(format!("invalid metadata format for package, expecting format '[{{namespace:\"org.example\",crate:\"path::module\"}}]':  {}", e.to_string())))?;
+                    .map_err(|e| Error::Model(format!("invalid metadata format for package, expecting format '[{{namespace:\"org.example\",crate:\"path::module\"}}]':  {}", e)))?;
                 for p in packages.iter() {
                     self.packages.insert(p.namespace.to_string(), p.clone());
                 }
@@ -195,7 +195,7 @@ impl<'model> CodeGen for RustCodeGen<'model> {
         }
         w.write(&format!(
             "\npub const SMITHY_VERSION : &str = \"{}\";\n\n",
-            model.smithy_version().to_string()
+            model.smithy_version()
         ));
         Ok(())
     }

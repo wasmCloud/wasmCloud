@@ -339,14 +339,14 @@ impl<'model> RustCodeGen<'model> {
                 ));
                 if !as_array {
                     // map key is declared name, not target language name
-                    s.push_str(&format!("e.str(\"{}\")?;\n", field.id().to_string()));
+                    s.push_str(&format!("e.str(\"{}\")?;\n", field.id()));
                 }
                 s.push_str(&field_val);
                 s.push_str("} else { e.null()?; }\n");
             } else {
                 if !as_array {
                     // map key is declared name, not target language name
-                    s.push_str(&format!("e.str(\"{}\")?;\n", field.id().to_string()));
+                    s.push_str(&format!("e.str(\"{}\")?;\n", field.id()));
                 }
                 let val = format!("{}.{}", val.as_str(), &field_name);
                 s.push_str(&self.encode_shape_id(field.target(), ValExpr::Plain(&val))?);

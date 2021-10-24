@@ -98,7 +98,7 @@ impl<'model> CodeGen for PythonCodeGen<'model> {
         if let Some(model) = model {
             if let Some(packages) = model.metadata_value("package") {
                 let packages: Vec<PackageName> = serde_json::from_value(value_to_json(packages))
-                    .map_err(|e| Error::Model(format!("invalid metadata format for package, expecting format '[{{namespace:\"org.example\",crate:\"path::module\"}}]':  {}", e.to_string())))?;
+                    .map_err(|e| Error::Model(format!("invalid metadata format for package, expecting format '[{{namespace:\"org.example\",crate:\"path::module\"}}]':  {}", e)))?;
                 for p in packages.iter() {
                     self.packages.insert(p.namespace.to_string(), p.clone());
                 }
@@ -163,7 +163,7 @@ impl<'model> CodeGen for PythonCodeGen<'model> {
         // we will write the top of the header later so we can add necessary imports
         w.write(&format!(
             "SMITHY_VERSION = \"{}\"\n\n",
-            model.smithy_version().to_string()
+            model.smithy_version()
         ));
         Ok(())
     }
@@ -366,7 +366,7 @@ impl<'model> PythonCodeGen<'model> {
             Ty::Opt(id) => {
                 s.push_str("Optional[");
                 s.push_str(&self.type_string(Ty::Shape(id))?);
-                s.push_str("]");
+                s.push(']');
             }
             Ty::Ref(id) | Ty::Shape(id) => {
                 let name = id.shape_name().to_string();
@@ -428,8 +428,8 @@ impl<'model> PythonCodeGen<'model> {
                             ..
                         }) => {
                             // the crate name should be valid rust syntax. If not, they'll get an error with rustc
-                            s.push_str(&py_module);
-                            s.push_str(".");
+                            s.push_str(py_module);
+                            s.push('.');
                             s.push_str(&self.to_type_name(&id.shape_name().to_string()));
                             py_module.to_string()
                         }
@@ -569,13 +569,12 @@ impl<'model> PythonCodeGen<'model> {
         }
 
         // constructor
+        w.write(spaces(self.indent_level));
         if fields.is_empty() {
-            w.write(spaces(self.indent_level));
             w.write("def __init__(self) -> None:\n");
             w.write(spaces(self.indent_level + 1));
             w.write("pass\n\n");
         } else {
-            w.write(spaces(self.indent_level));
             w.write(&format!("def __init__(self,{}) -> None:\n", &init_fields));
 
             self.indent_level += 1;
@@ -713,11 +712,11 @@ impl<'model> PythonCodeGen<'model> {
             }
             if wasmbus.provider_receive {
                 let text = "wasmbus.providerReceive";
-                self.write_comment(w, CommentKind::Inner, &text);
+                self.write_comment(w, CommentKind::Inner, text);
             }
             if wasmbus.actor_receive {
                 let text = "wasmbus.actorReceive";
-                self.write_comment(w, CommentKind::Inner, &text);
+                self.write_comment(w, CommentKind::Inner, text);
             }
         }
         Ok(())

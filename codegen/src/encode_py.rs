@@ -173,7 +173,7 @@ impl<'model> PythonCodeGen<'model> {
     /// Generates and writes statements to encode the shape.
     fn encode_shape_kind(
         &mut self,
-        mut w: &mut Writer,
+        w: &mut Writer,
         id: &ShapeID,
         kind: &ShapeKind,
         val: ValExpr,
@@ -236,7 +236,7 @@ impl<'model> PythonCodeGen<'model> {
                 }
             }
             ShapeKind::Structure(struct_) => {
-                self.encode_struct(&mut w, id, struct_, val)?;
+                self.encode_struct(w, id, struct_, val)?;
             }
             ShapeKind::Operation(_)
             | ShapeKind::Resource(_)
@@ -298,10 +298,7 @@ impl<'model> PythonCodeGen<'model> {
                     if !as_array {
                         // map key is declared name, not target language name
                         w.write(spaces(self.indent_level));
-                        w.write(&format!(
-                            "e.encode_string(\"{}\")\n",
-                            field.id().to_string()
-                        ));
+                        w.write(&format!("e.encode_string(\"{}\")\n", field.id()));
                     }
                     w.write(spaces(self.indent_level));
                     w.write(&field_val);
@@ -315,10 +312,7 @@ impl<'model> PythonCodeGen<'model> {
                 if !as_array {
                     w.write(spaces(self.indent_level));
                     // map key is declared name, not target language name
-                    w.write(&format!(
-                        "e.encode_string(\"{}\")\n",
-                        field.id().to_string()
-                    ));
+                    w.write(&format!("e.encode_string(\"{}\")\n", field.id()));
                 }
                 let val = format!("{}.{}", val.as_str(), &field_name);
                 w.write(spaces(self.indent_level));
@@ -331,7 +325,7 @@ impl<'model> PythonCodeGen<'model> {
 
     pub(crate) fn declare_shape_encoder(
         &mut self,
-        mut w: &mut Writer,
+        w: &mut Writer,
         id: &ShapeID,
         kind: &ShapeKind,
     ) -> Result<()> {
@@ -355,7 +349,7 @@ impl<'model> PythonCodeGen<'model> {
                     self.to_type_name(&name.to_string())
                 ));
                 self.indent_level += 1;
-                self.encode_shape_kind(&mut w, id, kind, ValExpr::Ref("val"))?;
+                self.encode_shape_kind(w, id, kind, ValExpr::Ref("val"))?;
                 w.write(b"\n\n");
                 self.indent_level -= 1;
             }

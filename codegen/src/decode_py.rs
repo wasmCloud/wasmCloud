@@ -107,12 +107,7 @@ impl<'model> PythonCodeGen<'model> {
         Ok(stmt)
     }
 
-    fn decode_shape_kind(
-        &mut self,
-        mut w: &mut Writer,
-        id: &ShapeID,
-        kind: &ShapeKind,
-    ) -> Result<()> {
+    fn decode_shape_kind(&mut self, w: &mut Writer, id: &ShapeID, kind: &ShapeKind) -> Result<()> {
         match kind {
             ShapeKind::Simple(_) => {
                 w.write(spaces(self.indent_level));
@@ -190,7 +185,7 @@ impl<'model> PythonCodeGen<'model> {
                 w.write("return items\n");
             }
             ShapeKind::Structure(strukt) => {
-                self.decode_struct(&mut w, id, strukt)?;
+                self.decode_struct(w, id, strukt)?;
             }
             ShapeKind::Operation(_)
             | ShapeKind::Resource(_)
@@ -244,18 +239,16 @@ impl<'model> PythonCodeGen<'model> {
                         w.write(&format!("{} = {}\n", field_name, field_decoder));
                     }
                 }
-                if fields.is_empty() {
-                    // we think struct is empty but array is not empty,
-                    // so generate skip for each item
-                    w.write(spaces(self.indent_level));
-                    w.write(b"d.decode() #skip\n");
-                } else {
+                // if no fields, generate skip for every item
+                w.write(spaces(self.indent_level));
+                if !fields.is_empty() {
                     // after chain of if/elif .., catch extra values
-                    w.write(spaces(self.indent_level));
                     w.write(b"else:\n");
+                    // note extra indent here before falling through to decode
                     w.write(spaces(self.indent_level + 1));
-                    w.write(b"d.decode() #skip\n");
                 }
+                w.write(b"d.decode() #skip\n");
+
                 self.indent_level -= 1; // end field counter
             }
             self.indent_level -= 1; // end array items
@@ -278,26 +271,24 @@ impl<'model> PythonCodeGen<'model> {
                     if ix != 0 {
                         w.write(b"el"); // 'elif'
                     }
-                    w.write(&format!("if __key == \"{}\":\n", field.id().to_string()));
+                    w.write(&format!("if __key == \"{}\":\n", field.id()));
                     {
                         w.write(spaces(self.indent_level + 1));
                         w.write(&format!("{} = {}\n", field_name, field_decoder));
                     }
                 }
+                w.write(spaces(self.indent_level));
                 if fields.is_empty() {
                     // we think struct is empty but array is not empty,
                     // so generate skip for each item
-                    w.write(spaces(self.indent_level));
                     w.write(b"d.decode() #skip key\n");
                     w.write(spaces(self.indent_level));
-                    w.write(b"d.decode() #skip val\n");
                 } else {
                     // after chain of if/elif .., catch extra values
-                    w.write(spaces(self.indent_level));
                     w.write(b"else:\n");
                     w.write(spaces(self.indent_level + 1));
-                    w.write(b"d.decode() #skip val\n");
                 }
+                w.write(b"d.decode() #skip val\n");
                 self.indent_level -= 1; // end field counter
             }
             self.indent_level -= 1; // end map items
@@ -332,7 +323,7 @@ impl<'model> PythonCodeGen<'model> {
     /// be found by prefixing the function name with the module path.
     pub(crate) fn declare_shape_decoder(
         &mut self,
-        mut w: &mut Writer,
+        w: &mut Writer,
         id: &ShapeID,
         kind: &ShapeKind,
     ) -> Result<()> {
@@ -352,7 +343,7 @@ impl<'model> PythonCodeGen<'model> {
                     self.to_type_name(&name.to_string())
                 ));
                 self.indent_level += 1;
-                self.decode_shape_kind(&mut w, id, kind)?;
+                self.decode_shape_kind(w, id, kind)?;
                 w.write(b"\n\n");
                 self.indent_level -= 1;
             }

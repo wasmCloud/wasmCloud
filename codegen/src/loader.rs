@@ -209,21 +209,16 @@ fn urls_to_cached_files(urls: Vec<String>) -> Result<Vec<PathBuf>> {
             .download_folder(tmpdir.path())
             .parallel_requests(MAX_PARALLEL_DOWNLOADS)
             .build()
-            .map_err(|e| {
-                Error::Other(format!(
-                    "internal error: download failure: {}",
-                    e.to_string()
-                ))
-            })?;
+            .map_err(|e| Error::Other(format!("internal error: download failure: {}", e)))?;
         // invoke parallel downloader, returns when all have been read
         let result = downloader
             .download(&to_download)
-            .map_err(|e| Error::Other(format!("download error: {}", e.to_string())))?;
+            .map_err(|e| Error::Other(format!("download error: {}", e)))?;
 
         for r in result.iter() {
             match r {
                 Err(e) => {
-                    println!("Failure downloading: {}", e.to_string());
+                    println!("Failure downloading: {}", e);
                 }
                 Ok(summary) => {
                     for status in summary.status.iter() {
