@@ -50,38 +50,8 @@ impl SourceFormatter for RustSourceFormatter {
     }
 }
 
-/// Formatter of go code using `gofmt`
-pub struct GoSourceFormatter {
-    /// either 'gofmt' or a path to an executable
-    program: String,
-    /// any additional args
-    extra: Vec<String>,
-}
-
-impl Default for GoSourceFormatter {
-    fn default() -> Self {
-        GoSourceFormatter {
-            program: "gofmt".to_string(),
-            extra: Vec::new(),
-        }
-    }
-}
-
-impl SourceFormatter for GoSourceFormatter {
-    fn run(&self, source_files: &[&str]) -> Result<()> {
-        let mut args = vec!["-w"]; // write in place
-        args.extend(self.extra.iter().map(|s| s.as_str()));
-        args.extend(source_files.iter());
-        run_command(&self.program, &args)?;
-        Ok(())
-    }
-    fn include(&self, path: &std::path::Path) -> bool {
-        crate::codegen_go::is_go_source(path)
-    }
-}
-
 /// execute the program with args
-fn run_command(program: &str, args: &[&str]) -> Result<()> {
+pub(crate) fn run_command(program: &str, args: &[&str]) -> Result<()> {
     let mut child = std::process::Command::new(program)
         .args(args.iter())
         .spawn()
