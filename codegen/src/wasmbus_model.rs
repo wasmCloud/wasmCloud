@@ -1,7 +1,7 @@
-// This file is generated automatically using wasmcloud-weld and smithy model definitions
+// This file is generated automatically using wasmcloud/weld-codegen and smithy model definitions
 //
 
-#![allow(dead_code)]
+#![allow(dead_code, unused_imports, clippy::ptr_arg, clippy::needless_lifetimes)]
 use serde::{Deserialize, Serialize};
 
 pub const SMITHY_VERSION: &str = "1.0";
@@ -64,6 +64,23 @@ pub type N = i16;
 
 /// A non-empty string (minimum length 1)
 pub type NonEmptyString = String;
+
+/// Rename item(s) in target language.
+/// Useful if the item name (operation, or field) conflicts with a keyword in the target language.
+/// example: @rename({lang:"python",name:"delete"})
+pub type Rename = Vec<RenameItem>;
+
+/// list element of trait @rename. the item name in the target language
+/// see '@rename'
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RenameItem {
+    /// language
+    #[serde(default)]
+    pub lang: String,
+    /// the name of the structure/operation/field
+    #[serde(default)]
+    pub name: String,
+}
 
 /// Overrides for serializer & deserializer
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
