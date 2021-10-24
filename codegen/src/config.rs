@@ -17,15 +17,15 @@ pub enum OutputLanguage {
     Html,
     /// Rust
     Rust,
-    /// Assembly Scrip
+    /// AssemblyScript (not currently supported)
     AssemblyScript,
-    /// TinyGo
+    /// TinyGo (not currently supported)
     TinyGo,
-    /// Go
+    /// Go (not currently supported)
     Go,
     /// Python
     Python,
-    /// C++
+    /// C++ (not currently supported)
     Clang,
 }
 
