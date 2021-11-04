@@ -135,7 +135,7 @@ fn timestamp_default() {
     let t1 = Timestamp::default();
     let t2 = Timestamp::now();
 
-    assert!(t1 == t2 || t1 < t2);
+    assert!(t1 <= t2);
 
     assert!(t1.sec > 1600000000);
     assert!(t1.sec < 3000000000);

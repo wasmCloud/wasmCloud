@@ -5,12 +5,11 @@ use crate::{
 };
 #[allow(unused_imports)]
 use log::{debug, error, trace};
-use ring::digest::{Context, Digest, SHA256};
+use ring::digest::{Context, SHA256};
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value as JsonValue;
 use std::{
     convert::{TryFrom, TryInto},
-    io::Read,
     ops::Deref,
     sync::Arc,
     time::Duration,
@@ -296,7 +295,7 @@ impl RpcClient {
             }?;
 
             let inv_response = crate::deserialize::<InvocationResponse>(&payload)
-                .map_err(|e| RpcError::Deser(e.to_string()))?;
+                .map_err(|e| RpcError::Deser(format!("response: {}", &e.to_string())))?;
             match inv_response.error {
                 None => {
                     trace!("rpc ok response from {}", &target_url);
@@ -375,29 +374,13 @@ pub(crate) fn invocation_hash(
     method: &str,
     args: &[u8],
 ) -> String {
-    use std::io::Write;
-    let mut cleanbytes: Vec<u8> = Vec::new();
-    cleanbytes.write_all(origin_url.as_bytes()).unwrap();
-    cleanbytes.write_all(target_url.as_bytes()).unwrap();
-    cleanbytes.write_all(method.as_bytes()).unwrap();
-    cleanbytes.write_all(args).unwrap();
-    let digest = sha256_digest(cleanbytes.as_slice()).unwrap();
-    data_encoding::HEXUPPER.encode(digest.as_ref())
-}
-
-fn sha256_digest<R: Read>(mut reader: R) -> Result<Digest, Box<dyn std::error::Error>> {
     let mut context = Context::new(&SHA256);
-    let mut buffer = [0; 1024];
-
-    loop {
-        let count = reader.read(&mut buffer).map_err(|e| format!("{}", e))?;
-        if count == 0 {
-            break;
-        }
-        context.update(&buffer[..count]);
-    }
-
-    Ok(context.finish())
+    context.update(origin_url.as_bytes());
+    context.update(target_url.as_bytes());
+    context.update(method.as_bytes());
+    context.update(args);
+    let digest = context.finish();
+    data_encoding::HEXUPPER.encode(digest.as_ref())
 }
 
 /// Create a new random uuid for invocations.
@@ -484,6 +467,8 @@ impl RpcClientSync {
 struct JsonMessage<'m>(&'m str, JsonValue);
 
 impl<'m> TryFrom<JsonMessage<'m>> for Message<'m> {
+    type Error = RpcError;
+
     /// convert json message to rpc message (msgpack)
     fn try_from(jm: JsonMessage<'m>) -> Result<Message<'m>, Self::Error> {
         let arg = json_to_args::<JsonValue>(jm.1)?;
@@ -492,8 +477,6 @@ impl<'m> TryFrom<JsonMessage<'m>> for Message<'m> {
             arg: std::borrow::Cow::Owned(arg),
         })
     }
-
-    type Error = RpcError;
 }
 
 /// convert json args to msgpack

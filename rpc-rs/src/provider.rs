@@ -19,13 +19,13 @@ pub use ratsio::{self, NatsClient};
 // re-export make_uuid
 pub use crate::rpc_client::make_uuid;
 use serde::de::DeserializeOwned;
-use std::time::Duration;
 use std::{
     borrow::Cow,
     collections::HashMap,
     convert::Infallible,
     ops::Deref,
     sync::{Arc, Mutex as StdMutex},
+    time::Duration,
 };
 use tokio::sync::{oneshot, RwLock};
 
@@ -42,9 +42,9 @@ pub trait ProviderDispatch: MessageDispatch + ProviderHandler {}
 trait ProviderImpl: ProviderDispatch + Send + Sync + Clone + 'static {}
 
 pub mod prelude {
-    pub use crate::provider::{HostBridge, NatsClient, ProviderDispatch, ProviderHandler};
     pub use crate::{
         core::LinkDefinition,
+        provider::{HostBridge, NatsClient, ProviderDispatch, ProviderHandler},
         provider_main::{get_host_bridge, load_host_data, provider_main, provider_run},
         Context, Message, MessageDispatch, RpcError, RpcResult, SendOpts,
     };
@@ -665,6 +665,7 @@ impl<'send> crate::Transport for ProviderTransport<'send> {
             .send_timeout(origin, target, req, timeout)
             .await
     }
+
     fn set_timeout(&self, interval: Duration) {
         if let Ok(mut write) = self.timeout.lock() {
             *write = interval;

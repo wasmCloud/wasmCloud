@@ -115,6 +115,7 @@ pub mod core {
                 link_name: String::default(),
             }
         }
+
         pub fn provider_entity(&self) -> WasmCloudEntity {
             WasmCloudEntity {
                 public_key: self.provider_id.clone(),
@@ -212,6 +213,7 @@ pub mod core {
 
     impl TryFrom<&str> for WasmCloudEntity {
         type Error = RpcError;
+
         /// converts string into actor entity
         fn try_from(target: &str) -> Result<WasmCloudEntity, Self::Error> {
             WasmCloudEntity::new_actor(target.to_string())
@@ -220,6 +222,7 @@ pub mod core {
 
     impl TryFrom<String> for WasmCloudEntity {
         type Error = RpcError;
+
         /// converts string into actor entity
         fn try_from(target: String) -> Result<WasmCloudEntity, Self::Error> {
             WasmCloudEntity::new_actor(target)
@@ -232,7 +235,7 @@ pub mod actor {
     pub mod prelude {
         pub use crate::{
             core::{Actor, ActorReceiver},
-            Context, Message, MessageDispatch, RpcError, RpcResult,
+            Context, Message, MessageDispatch, RpcError, RpcResult, Transport,
         };
 
         // re-export async_trait
