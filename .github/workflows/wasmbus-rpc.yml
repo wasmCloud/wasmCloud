@@ -24,9 +24,9 @@ jobs:
     - name: update_rust
       run: rustup update
     - name: run_all_tests_clippy_fmt
-      run: make test
-      with:
-        working-directory: ${{ env.working-directory }}
+      run: |
+        cd ${{ env.working-directory }}
+        make test
 
   github_release:
     if: startswith(github.ref, 'refs/tags/') # Only run on tag push
