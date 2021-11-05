@@ -22,7 +22,7 @@ jobs:
     steps:
     - uses: actions/checkout@v2
     - name: update_rust
-      run: rustup update
+      run: rustup update stable nightly
     - name: run_all_tests_clippy_fmt
       run: |
         cd ${{ env.working-directory }}
