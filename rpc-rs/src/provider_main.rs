@@ -134,7 +134,8 @@ pub fn load_host_data() -> Result<HostData, RpcError> {
     }
     let bytes = base64::decode(buffer.as_bytes()).map_err(|e| {
         RpcError::Rpc(format!(
-            "host data configuration passed through stdin has invalid encoding (expected base64): {}",
+            "host data configuration passed through stdin has invalid encoding (expected base64): \
+             {}",
             e
         ))
     })?;

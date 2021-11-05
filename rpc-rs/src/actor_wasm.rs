@@ -1,7 +1,7 @@
 //! imports/exports for WebAssembly actors
 #![cfg(target_arch = "wasm32")]
 
-use crate::{Message, RpcError, RpcResult, Transport};
+use crate::{Message, RpcError, RpcResult};
 use async_trait::async_trait;
 
 #[link(wasm_import_module = "wasmbus")]
@@ -90,7 +90,7 @@ impl WasmHost {
 }
 
 #[async_trait]
-impl Transport for WasmHost {
+impl crate::Transport for WasmHost {
     async fn send(
         &self,
         _ctx: &crate::Context,

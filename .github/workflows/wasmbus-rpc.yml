@@ -17,20 +17,20 @@ env:
   working-directory: ./rpc-rs
 
 jobs:
-  rust_check:
+  rust_test:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v2
-    - id: run-nats
-      uses: wasmcloud/common-actions/run-nats@main
-    - id: rust-check-action
-      uses: wasmcloud/common-actions/rust-check@main
-      with:
-        working-directory: ${{ env.working-directory }}
+    - name: update_rust
+      run: rustup update
+    - name: run_all_tests_clippy_fmt
+      run: |
+        cd ${{ env.working-directory }}
+        make test
 
   github_release:
     if: startswith(github.ref, 'refs/tags/') # Only run on tag push
-    needs: rust_check
+    needs: rust_test
     runs-on: ubuntu-latest
     steps:
     - name: Create Release
