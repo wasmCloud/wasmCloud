@@ -294,8 +294,9 @@ impl RpcClient {
                     .map_err(|e| RpcError::Nats(format!("rpc send error: {}: {}", target_url, e)))
             }?;
 
-            let inv_response = crate::deserialize::<InvocationResponse>(&payload)
-                .map_err(|e| RpcError::Deser(format!("response: {}", &e.to_string())))?;
+            let inv_response = crate::deserialize::<InvocationResponse>(&payload).map_err(|e| {
+                RpcError::Deser(format!("response to {}: {}", &method, &e.to_string()))
+            })?;
             match inv_response.error {
                 None => {
                     trace!("rpc ok response from {}", &target_url);
