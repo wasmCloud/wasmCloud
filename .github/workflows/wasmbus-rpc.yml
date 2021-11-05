@@ -21,12 +21,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v2
-    - id: update_rust
+    - name: update_rust
       run: rustup update
-    - id: run_all_tests_clippy_fmt
+    - name: run_all_tests_clippy_fmt
+      run: make test
       with:
         working-directory: ${{ env.working-directory }}
-      run: make test
 
   github_release:
     if: startswith(github.ref, 'refs/tags/') # Only run on tag push
