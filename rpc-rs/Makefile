@@ -29,4 +29,8 @@ test::
 	cargo test -- --nocapture
 endif
 
+test::
+	cargo clippy --all-features --all-targets
+	rustfmt --edition 2021 --check src/*.rs
+
 .PHONY: all build release clean lint validate
