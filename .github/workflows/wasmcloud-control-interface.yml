@@ -4,17 +4,17 @@ on:
   push:
     branches: [ main ]
     paths:
-    - "rust/**"
+    - "/**"
     tags:
     - 'wasmcloud-control-interface-v*'
   pull_request:
     branches: [ main ]
     paths:
-    - "rust/**"
+    - "/**"
 
 env:
   CARGO_TERM_COLOR: always
-  working-directory: ./rust
+  working-directory: ./
 
 jobs:
   rust_check:

@@ -1,9 +1,8 @@
 pub mod broker;
-mod control;
+pub use wasmcloud_interface_lattice_control::*;
 mod sub_stream;
 
 use cloudevents::event::Event;
-pub use control::*;
 use crossbeam_channel::{unbounded, Receiver};
 use futures::executor::block_on;
 use log::{error, trace};
@@ -132,12 +131,18 @@ impl Client {
     /// wasmCloud hosts will acknowledge the start actor command prior to fetching the actor's OCI bytes. If a client needs
     /// deterministic results as to whether the actor completed its startup process, the client will have to monitor
     /// the appropriate event in the control event stream
-    pub async fn start_actor(&self, host_id: &str, actor_ref: &str) -> Result<CtlOperationAck> {
+    pub async fn start_actor(
+        &self,
+        host_id: &str,
+        actor_ref: &str,
+        annotations: Option<HashMap<String, String>>,
+    ) -> Result<CtlOperationAck> {
         let subject = broker::commands::start_actor(&self.nsprefix, host_id);
         trace!("start_actor:request {}", &subject);
         let bytes = json_serialize(StartActorCommand {
             actor_ref: actor_ref.to_string(),
             host_id: host_id.to_string(),
+            annotations,
         })?;
         match self
             .nc
@@ -240,6 +245,7 @@ impl Client {
         host_id: &str,
         existing_actor_id: &str,
         new_actor_ref: &str,
+        annotations: Option<HashMap<String, String>>,
     ) -> Result<CtlOperationAck> {
         let subject = broker::commands::update_actor(&self.nsprefix, host_id);
         trace!("update_actor:request {}", &subject);
@@ -247,6 +253,7 @@ impl Client {
             host_id: host_id.to_string(),
             actor_id: existing_actor_id.to_string(),
             new_actor_ref: new_actor_ref.to_string(),
+            annotations,
         })?;
         match self
             .nc
@@ -272,6 +279,8 @@ impl Client {
         host_id: &str,
         provider_ref: &str,
         link_name: Option<String>,
+        annotations: Option<HashMap<String, String>>,
+        provider_configuration: Option<String>,
     ) -> Result<CtlOperationAck> {
         let subject = broker::commands::start_provider(&self.nsprefix, host_id);
         trace!("start_provider:request {}", &subject);
@@ -279,6 +288,8 @@ impl Client {
             host_id: host_id.to_string(),
             provider_ref: provider_ref.to_string(),
             link_name: link_name.unwrap_or_else(|| "default".to_string()),
+            annotations,
+            configuration: provider_configuration,
         })?;
         match self
             .nc
@@ -303,6 +314,7 @@ impl Client {
         provider_ref: &str,
         link_name: &str,
         contract_id: &str,
+        annotations: Option<HashMap<String, String>>,
     ) -> Result<CtlOperationAck> {
         let subject = broker::commands::stop_provider(&self.nsprefix, host_id);
         trace!("stop_provider:request {}", &subject);
@@ -311,6 +323,7 @@ impl Client {
             provider_ref: provider_ref.to_string(),
             link_name: link_name.to_string(),
             contract_id: contract_id.to_string(),
+            annotations,
         })?;
         match self
             .nc
@@ -334,6 +347,7 @@ impl Client {
         host_id: &str,
         actor_ref: &str,
         count: u16,
+        annotations: Option<HashMap<String, String>>,
     ) -> Result<CtlOperationAck> {
         let subject = broker::commands::stop_actor(&self.nsprefix, host_id);
         trace!("stop_actor:request {}", &subject);
@@ -341,6 +355,7 @@ impl Client {
             host_id: host_id.to_string(),
             actor_ref: actor_ref.to_string(),
             count: Some(count),
+            annotations,
         })?;
         match self
             .nc
