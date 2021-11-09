@@ -376,7 +376,6 @@ fn opt_raw_query() -> impl Filter<Extract = (String,), Error = Infallible> + Cop
 
 /// build warp Cors filter from settings
 fn cors_filter(settings: &settings::ServiceSettings) -> Result<warp::filters::cors::Cors, Error> {
-    use std::convert::TryFrom;
     use warp::filters::cors::Builder;
 
     let mut cors: Builder = warp::cors();

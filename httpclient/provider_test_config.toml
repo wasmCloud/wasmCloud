@@ -24,3 +24,6 @@ rust_backtrace = "1"
 
 # name of contract under test
 contract_id = "wasmcloud:httpclient"
+
+# optional delay to wait for provider to start
+#start_delay_sec = 2

@@ -41,9 +41,7 @@ impl ProviderHandler for HttpServerProvider {
         http_server.start(ld.clone()).await.map_err(|e| {
             RpcError::ProviderInit(format!(
                 "starting httpserver for {} {:?}: {}",
-                &ld.actor_id,
-                &settings.address,
-                e.to_string()
+                &ld.actor_id, &settings.address, e
             ))
         })?;
 

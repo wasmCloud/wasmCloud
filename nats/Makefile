@@ -9,9 +9,6 @@ oci_url  = localhost:5000/v2/$(PROJECT):$(VERSION)
 
 include ../build/makefiles/provider.mk
 
-all::
-	cargo build --tests
-
 test:
 	RUST_BACKTRACE=1 RUST_LOG=debug cargo test -- --nocapture
 

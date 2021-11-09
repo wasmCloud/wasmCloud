@@ -85,7 +85,7 @@ impl ProviderHandler for KvRedisProvider {
 }
 
 fn to_rpc_err(e: RedisError) -> RpcError {
-    RpcError::Other(format!("redis error: {}", e.to_string()))
+    RpcError::Other(format!("redis error: {}", e))
 }
 
 // There are two api styles you can use for invoking redis. You can build any raw command

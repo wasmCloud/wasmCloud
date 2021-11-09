@@ -11,11 +11,14 @@ use wasmcloud_test_util::{run_selected, run_selected_spawn};
 
 #[tokio::test]
 async fn run_all() {
+    // load the first time
+    let _prov = test_provider().await;
     let opts = TestOptions::default();
+
     let res = run_selected_spawn!(&opts, health_check, get_request,);
     print_test_results(&res);
 
-    let passed = res.iter().filter(|tr| tr.pass).count();
+    let passed = res.iter().filter(|tr| tr.passed).count();
     let total = res.len();
     assert_eq!(passed, total, "{} passed out of {}", passed, total);
 

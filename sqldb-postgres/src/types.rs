@@ -6,7 +6,7 @@ use tokio_postgres::Row;
 
 /// encode query result into CBOR arroy-of-arrays
 pub(crate) fn encode_rows<W>(
-    mut enc: &mut Encoder<W>,
+    enc: &mut Encoder<W>,
     rows: &[Row],
 ) -> Result<(), Box<dyn std::error::Error>>
 where
@@ -19,7 +19,7 @@ where
         for (i, col) in row.columns().iter().enumerate() {
             // TODO: check col.kind() to see if it's an array
             //   then load with array_from_sql()
-            encode_val(&mut enc, row, col.type_(), i)?
+            encode_val(enc, row, col.type_(), i)?
         }
     }
     Ok(())

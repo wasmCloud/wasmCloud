@@ -15,7 +15,7 @@ async fn run_all() {
     let res = run_selected_spawn!(&opts, health_check, send_request, send_publish,);
     print_test_results(&res);
 
-    let passed = res.iter().filter(|tr| tr.pass).count();
+    let passed = res.iter().filter(|tr| tr.passed).count();
     let total = res.len();
     assert_eq!(passed, total, "{} passed out of {}", passed, total);
 
@@ -66,7 +66,7 @@ async fn make_responder(
             };
             if let Some(reply) = &msg.reply {
                 let response = format!("{}:{}", completed, &String::from_utf8_lossy(&msg.data));
-                if let Err(e) = conn.publish(&reply, response.as_bytes()).await {
+                if let Err(e) = conn.publish(reply, response.as_bytes()).await {
                     eprintln!("responder failed replying #{}: {}", &completed, e);
                 }
             }

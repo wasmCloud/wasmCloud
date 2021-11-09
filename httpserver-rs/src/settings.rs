@@ -124,7 +124,6 @@ impl ServiceSettings {
     /// Several checks have already been done during deserialization.
     /// All errors found are combined into a single error message
     fn validate(&self) -> Result<(), Error> {
-        use std::convert::TryFrom;
         let mut errors = Vec::new();
         // 1. amke sure address is valid
         if self.address.is_none() {

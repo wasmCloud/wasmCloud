@@ -15,6 +15,7 @@
 //!     If it has one or more processes called 'target/debug/httpserver', they're from this test.
 //!     Try `killall httpserver` to kill them.
 //!
+use std::time::Instant;
 use wasmbus_rpc::core::InvocationResponse;
 use wasmbus_rpc::provider::prelude::*;
 use wasmcloud_interface_httpserver::*;
@@ -34,7 +35,7 @@ const SERVER_UNDER_TEST: &str = "http://localhost:9000";
 /// number of http requests in this test
 const NUM_RPC: u32 = 5;
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn run_all() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let opts = TestOptions::default();
 
@@ -44,7 +45,7 @@ async fn run_all() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let res = run_selected_spawn!(&opts, health_check, send_http, send_http_body, test_timeout);
     print_test_results(&res);
 
-    let passed = res.iter().filter(|tr| tr.pass).count();
+    let passed = res.iter().filter(|tr| tr.passed).count();
     let total = res.len();
     assert_eq!(passed, total, "{} passed out of {}", passed, total);
 
@@ -104,6 +105,7 @@ async fn mock_echo_actor(num_requests: u32) -> tokio::task::JoinHandle<RpcResult
 
                 // for timeout test, denoted by "sleep" in the path, wait too long to send response
                 if http_req.path.contains("sleep") {
+                    eprintln!("httpserver /sleep test: expect timeouts in log");
                     tokio::time::sleep(std::time::Duration::from_millis(4000)).await;
                 }
                 let body = serde_json::to_vec(&serde_json::json!({
@@ -121,11 +123,12 @@ async fn mock_echo_actor(num_requests: u32) -> tokio::task::JoinHandle<RpcResult
                     body,
                     ..Default::default()
                 };
+                let buf = serialize(&http_resp)?;
                 if let Some(ref reply_to) = msg.reply_to {
                     let ir = InvocationResponse {
                         error: None,
                         invocation_id: inv.id,
-                        msg: serialize(&http_resp)?,
+                        msg: buf,
                     };
                     prov.rpc_client.publish(reply_to, &serialize(&ir)?).await?;
                 }
@@ -144,11 +147,14 @@ async fn send_http(_: &TestOptions) -> RpcResult<()> {
 
     // send GET request
     let client = reqwest::Client::new();
+    let start_time = Instant::now();
     let resp = client
         .get(&format!("{}/abc", SERVER_UNDER_TEST))
         .send()
         .await
         .map_err(|e| RpcError::Other(e.to_string()))?;
+    let elapsed = start_time.elapsed();
+    eprintln!("GET /abc returned in {} ms", &elapsed.as_millis());
     assert_eq!(resp.status().as_u16(), 200);
 
     let body = resp
@@ -160,11 +166,14 @@ async fn send_http(_: &TestOptions) -> RpcResult<()> {
 
     // send GET request with query
     let client = reqwest::Client::new();
+    let start_time = Instant::now();
     let resp = client
         .get(&format!("{}/def?name=Carol&thing=one", SERVER_UNDER_TEST))
         .send()
         .await
         .map_err(|e| RpcError::Other(e.to_string()))?;
+    let elapsed = start_time.elapsed();
+    eprintln!("GET /def returned in {} ms", &elapsed.as_millis());
     assert_eq!(resp.status().as_u16(), 200);
 
     let body = resp
@@ -185,11 +194,14 @@ async fn send_http_body(_: &TestOptions) -> RpcResult<()> {
 
     // send POST request with empty body
     let client = reqwest::Client::new();
+    let start_time = Instant::now();
     let resp = client
         .post(&format!("{}/1", SERVER_UNDER_TEST))
         .send()
         .await
         .map_err(|e| RpcError::Other(e.to_string()))?;
+    let elapsed = start_time.elapsed();
+    eprintln!("POST /1 returned in {} ms", &elapsed.as_millis());
     assert_eq!(resp.status().as_u16(), 200);
     let body = resp
         .json::<JsonData>()
@@ -201,18 +213,21 @@ async fn send_http_body(_: &TestOptions) -> RpcResult<()> {
 
     // send PUT request with binary(non-ascii) data
     let mut blob = [0u8; 700];
-    for i in 0..blob.len() {
-        blob[i] = (i % 256) as u8;
+    for (i, item) in blob.iter_mut().enumerate() {
+        *item = (i % 256) as u8;
     }
     let expected_hash = hash(&blob);
 
     let client = reqwest::Client::new();
+    let start_time = Instant::now();
     let resp = client
         .put(&format!("{}/2", SERVER_UNDER_TEST))
         .body(blob.to_vec())
         .send()
         .await
         .map_err(|e| RpcError::Other(e.to_string()))?;
+    let elapsed = start_time.elapsed();
+    eprintln!("POST /2 returned in {} ms", &elapsed.as_millis());
     assert_eq!(resp.status().as_u16(), 200);
     let body = resp
         .json::<JsonData>()
@@ -235,10 +250,14 @@ async fn send_http_body(_: &TestOptions) -> RpcResult<()> {
 async fn test_timeout(_: &TestOptions) -> RpcResult<()> {
     // send GET request with "sleep" in the path to trigger the actor to wait too long
     let client = reqwest::Client::new();
+    let start_time = Instant::now();
     let resp = client
         .get(&format!("{}/sleep", SERVER_UNDER_TEST))
         .send()
         .await;
+    let elapsed = start_time.elapsed();
+    eprintln!("GET /sleep returned in {} ms", &elapsed.as_millis());
+    eprintln!("DEBUG /sleep response after timeout: {:#?}", &resp);
 
     assert!(resp.is_ok(), "expect ok response");
     let resp = resp.unwrap();

@@ -95,9 +95,8 @@ pub(crate) fn load_config(ld: &LinkDefinition) -> Result<Config, RpcError> {
 /// Create the connection pool based on config settings. This function will not return
 /// until the required number of idle connections has been established.
 pub(crate) async fn create_pool(config: Config) -> Result<crate::Pool, RpcError> {
-    let mut pg_config = tokio_postgres::Config::from_str(&config.uri).map_err(|e| {
-        RpcError::ProviderInit(format!("Invalid db connect string: {}", e.to_string()))
-    })?;
+    let mut pg_config = tokio_postgres::Config::from_str(&config.uri)
+        .map_err(|e| RpcError::ProviderInit(format!("Invalid db connect string: {}", e)))?;
     pg_config.keepalives_idle(DEFAULT_KEEPALIVE_IDLE);
 
     /*

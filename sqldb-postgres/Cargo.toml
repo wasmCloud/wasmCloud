@@ -1,10 +1,9 @@
 [package]
 name = "wasmcloud-provider-sqldb-postgres"
-version = "0.1.0"
+version = "0.1.1"
 description = "Postgres SQL Database capability provider for contract wasmcloud:sqldb"
 readme = "README.md"
-edition = "2018"
-resolver = "2"
+edition = "2021"
 
 [dependencies]
 async-trait = "0.1"
@@ -29,12 +28,12 @@ uuid = "0.8"
 #postgres-native-tls = "0.5"
 native-tls = "0.2"
 toml = "0.5"
-wasmcloud-interface-sqldb = "0.1"
-wasmbus-rpc = "0.4.4"
+wasmcloud-interface-sqldb = "0.2.0"
+wasmbus-rpc = "0.5.2"
 
 # test dependencies
 [dev-dependencies]
-wasmcloud-test-util = "0.1"
+wasmcloud-test-util = "0.1.8"
 
 [[bin]]
 name = "sqldb-postgres"
