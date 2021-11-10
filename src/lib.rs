@@ -370,6 +370,35 @@ impl Client {
         }
     }
 
+    /// Issues a command to a specific host to perform a graceful termination. The target host
+    /// will acknowledge receipt of the command before it attempts a shutdown. To deterministically
+    /// verify that the host is down, a client should monitor for the "host stopped" event or
+    /// passively detect the host down by way of a lack of heartbeat receipts
+    pub async fn stop_host(
+        &self,
+        host_id: &str,
+        timeout_ms: Option<u64>,
+    ) -> Result<CtlOperationAck> {
+        let subject = broker::commands::stop_host(&self.nsprefix, host_id);
+        trace!("stop_host:request {}", &subject);
+        let bytes = json_serialize(StopHostCommand {
+            host_id: host_id.to_owned(),
+            timeout: timeout_ms,
+        })?;
+
+        match self
+            .nc
+            .request_timeout(&subject, &bytes, self.timeout)
+            .await
+        {
+            Ok(msg) => {
+                let ack: CtlOperationAck = json_deserialize(&msg.data)?;
+                Ok(ack)
+            }
+            Err(e) => Err(format!("Did not receive stop host acknowledgement: {}", e).into()),
+        }
+    }
+
     /// Returns the receiver end of a channel that subscribes to the lattice control event stream.
     /// Any [`Event`](struct@Event)s that are published after this channel is created
     /// will be added to the receiver channel's buffer, which can be observed or handled if needed.

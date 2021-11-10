@@ -51,6 +51,10 @@ pub mod commands {
     pub fn update_actor(nsprefix: &Option<String>, host: &str) -> String {
         format!("{}.cmd.{}.upd", prefix(nsprefix), host)
     }
+
+    pub fn stop_host(nsprefix: &Option<String>, host: &str) -> String {
+        format!("{}.cmd.{}.stop", prefix(nsprefix), host)
+    }
 }
 
 pub mod queries {
