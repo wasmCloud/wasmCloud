@@ -5,6 +5,7 @@ use crate::util::{
 };
 use serde_json::json;
 use std::path::PathBuf;
+use std::time::Duration;
 use structopt::clap::AppSettings;
 use structopt::StructOpt;
 use wasmbus_rpc::{core::WasmCloudEntity, Message, RpcClient};
@@ -12,6 +13,7 @@ use wasmcloud_test_util::testing::TestResults;
 
 /// fake key (not a real public key)  used to construct origin for invoking actors
 const WASH_ORIGIN_KEY: &str = "__WASH__";
+
 /// hostname used for actor invocations
 const WASH_HOST_ID: &str = "NwashHostCallerId000000000000000000000000000000000000000";
 
@@ -182,6 +184,7 @@ pub(crate) async fn handle_call(cmd: CallCommand) -> Result<Vec<u8>> {
         &cmd.opts.ns_prefix,
         nkeys::KeyPair::from_seed(&extract_arg_value(&cmd.cluster_seed)?)?,
         WASH_HOST_ID.to_string(),
+        Some(Duration::from_secs(cmd.opts.timeout)),
     );
     client
         .send_timeout(
