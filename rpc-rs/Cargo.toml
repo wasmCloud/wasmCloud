@@ -1,6 +1,6 @@
 [package]
 name = "wasmbus-rpc"
-version = "0.5.3"
+version = "0.5.4"
 authors = [ "wasmcloud Team" ]
 license = "Apache-2.0"
 description = "Runtime library for actors and capability providers"
@@ -45,7 +45,7 @@ num-bigint = { version = "0.4", optional = true }
 bigdecimal = { version = "0.3", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-nats = "0.13"
+nats = "0.16"
 tokio = { version = "1", features = ["full"]}
 futures = "0.3"
 # work-around "conflicting implementations of From<std::io::Error>" in ratsio build
