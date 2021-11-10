@@ -1,13 +1,15 @@
 .DEFAULT_GOAL:=help
 
+.PHONY: test test-integration test-all clean help
+
 ##@ Testing
 
 test: ## Run unit test suite
-	cargo test --no-fail-fast --verbose --bin wash -- --nocapture
+	cargo test --no-fail-fast --bin wash -- --nocapture
 
 test-integration: ##Run integration test suite
 	docker-compose -f ./tools/docker-compose.yml up --detach
-	cargo test --no-fail-fast --verbose --test "integration*" -- --nocapture
+	cargo test --no-fail-fast --test "integration*" -- --nocapture
 	docker-compose -f ./tools/docker-compose.yml down
 
 test-all: test test-integration ## Run all tests

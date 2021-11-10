@@ -100,7 +100,7 @@ pub(crate) enum CtlCliCommand {
     #[structopt(name = "start")]
     Start(StartCommand),
 
-    /// Stop an actor or a provider
+    /// Stop an actor, provider, or host
     #[structopt(name = "stop")]
     Stop(StopCommand),
 
@@ -243,6 +243,10 @@ pub(crate) enum StopCommand {
     /// Stop a provider running in a host
     #[structopt(name = "provider")]
     Provider(StopProviderCommand),
+
+    /// Purge and stop a running host
+    #[structopt(name = "host")]
+    Host(StopHostCommand),
 }
 
 #[derive(Debug, Clone, StructOpt)]
@@ -381,6 +385,23 @@ pub(crate) struct StopProviderCommand {
     /// Capability contract Id of provider
     #[structopt(name = "contract-id")]
     pub(crate) contract_id: String,
+}
+
+#[derive(Debug, Clone, StructOpt)]
+pub(crate) struct StopHostCommand {
+    #[structopt(flatten)]
+    opts: ConnectionOpts,
+
+    #[structopt(flatten)]
+    pub(crate) output: Output,
+
+    /// Id of host
+    #[structopt(name = "host-id")]
+    host_id: String,
+
+    /// The timeout in ms for how much time to give the host for graceful shutdown
+    #[structopt(short = "h", long = "host-timeout")]
+    host_shutdown_timeout: Option<u64>,
 }
 
 #[derive(Debug, Clone, StructOpt)]
@@ -537,6 +558,18 @@ pub(crate) async fn handle_command(command: CtlCliCommand) -> Result<String> {
                 &output.kind,
             )
         }
+        Stop(StopCommand::Host(cmd)) => {
+            let output = cmd.output;
+            sp =
+                update_spinner_message(sp, format!(" Stopping host {} ... ", cmd.host_id), &output);
+            let ack = stop_host(cmd.clone()).await?;
+            ctl_operation_output(
+                ack.accepted,
+                &format!("Host {} acknowledged stop request", cmd.host_id),
+                &ack.error,
+                &output.kind,
+            )
+        }
         Update(UpdateCommand::Actor(cmd)) => {
             let output = cmd.output;
             sp = update_spinner_message(
@@ -645,7 +678,7 @@ pub(crate) async fn start_actor(cmd: StartActorCommand) -> Result<CtlOperationAc
     };
 
     client
-        .start_actor(&host, &cmd.actor_ref)
+        .start_actor(&host, &cmd.actor_ref, None)
         .await
         .map_err(convert_error)
 }
@@ -684,7 +717,7 @@ pub(crate) async fn start_provider(cmd: StartProviderCommand) -> Result<CtlOpera
     };
 
     client
-        .start_provider(&host, &cmd.provider_ref, Some(cmd.link_name))
+        .start_provider(&host, &cmd.provider_ref, Some(cmd.link_name), None, None)
         .await
         .map_err(convert_error)
 }
@@ -697,6 +730,7 @@ pub(crate) async fn stop_provider(cmd: StopProviderCommand) -> Result<CtlOperati
             &cmd.provider_id,
             &cmd.link_name,
             &cmd.contract_id,
+            None,
         )
         .await
         .map_err(convert_error)
@@ -705,7 +739,15 @@ pub(crate) async fn stop_provider(cmd: StopProviderCommand) -> Result<CtlOperati
 pub(crate) async fn stop_actor(cmd: StopActorCommand) -> Result<CtlOperationAck> {
     let client = ctl_client_from_opts(cmd.opts).await?;
     client
-        .stop_actor(&cmd.host_id, &cmd.actor_id, cmd.count)
+        .stop_actor(&cmd.host_id, &cmd.actor_id, cmd.count, None)
+        .await
+        .map_err(convert_error)
+}
+
+pub(crate) async fn stop_host(cmd: StopHostCommand) -> Result<CtlOperationAck> {
+    let client = ctl_client_from_opts(cmd.opts).await?;
+    client
+        .stop_host(&cmd.host_id, cmd.host_shutdown_timeout)
         .await
         .map_err(convert_error)
 }
@@ -713,7 +755,7 @@ pub(crate) async fn stop_actor(cmd: StopActorCommand) -> Result<CtlOperationAck>
 pub(crate) async fn update_actor(cmd: UpdateActorCommand) -> Result<CtlOperationAck> {
     let client = ctl_client_from_opts(cmd.opts).await?;
     client
-        .update_actor(&cmd.host_id, &cmd.actor_id, &cmd.new_actor_ref)
+        .update_actor(&cmd.host_id, &cmd.actor_id, &cmd.new_actor_ref, None)
         .await
         .map_err(convert_error)
 }
@@ -739,7 +781,7 @@ async fn apply_manifest_actors(
     let mut results = vec![];
 
     for actor in hm.actors.iter() {
-        match client.start_actor(host_id, actor).await {
+        match client.start_actor(host_id, actor, None).await {
             Ok(ack) => {
                 if ack.accepted {
                     results.push(format!(
@@ -803,7 +845,7 @@ async fn apply_manifest_providers(
 
     for cap in hm.capabilities.iter() {
         match client
-            .start_provider(host_id, &cap.image_ref, cap.link_name.clone())
+            .start_provider(host_id, &cap.image_ref, cap.link_name.clone(), None, None)
             .await
         {
             Ok(ack) => {
