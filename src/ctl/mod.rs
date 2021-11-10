@@ -565,7 +565,7 @@ pub(crate) async fn handle_command(command: CtlCliCommand) -> Result<String> {
             let ack = stop_host(cmd.clone()).await?;
             ctl_operation_output(
                 ack.accepted,
-                &format!("Host {} stopped successfully", cmd.host_id),
+                &format!("Host {} acknowledged stop request", cmd.host_id),
                 &ack.error,
                 &output.kind,
             )
