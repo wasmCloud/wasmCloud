@@ -15,6 +15,8 @@ wasmCloud team.
 | [httpclient](./httpclient) | [`wasmcloud:httpclient`](https://github.com/wasmCloud/interfaces/tree/main/httpclient) | HTTP client built in Rust |
 | [redis](./kvredis) | [`wasmcloud:keyvalue`](https://github.com/wasmCloud/interfaces/tree/main/keyvalue) | Redis-backed key-value implementation |
 | [nats](./nats) | [`wasmcloud:messaging`](https://github.com/wasmCloud/interfaces/tree/main/messaging) | [NATS](https://nats.io)-based message broker |
+| [lattice-controller](./lattice-controller) | [`wasmcloud:latticecontroller`](https://github.com/wasmCloud/interfaces/tree/main/lattice-controller) | Lattice Controller interface |
+| [postgres](./sqldb-postgres) | [`wasmcloud:sqldb`](https://github.com/wasmCloud/interfaces/tree/main/sqldb) | Postgres-based SQL database capability provider |
 
 ## Built-in Capability Providers
 The following capability providers are included automatically in every host runtime:
