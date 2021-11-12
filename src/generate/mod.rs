@@ -57,8 +57,8 @@ mod config;
 pub(crate) mod emoji;
 mod favorites;
 mod git;
-mod interactive;
-mod project_variables;
+pub(crate) mod interactive;
+pub(crate) mod project_variables;
 mod template;
 
 pub(crate) type TomlMap = std::collections::BTreeMap<String, toml::Value>;

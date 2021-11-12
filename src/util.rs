@@ -5,11 +5,17 @@ use std::error::Error;
 use std::fmt;
 use std::fs::File;
 use std::io::Read;
+use std::path::PathBuf;
 use std::str::FromStr;
 use structopt::StructOpt;
 use term_table::{Table, TableStyle};
 
 pub(crate) type Result<T> = ::std::result::Result<T, Box<dyn ::std::error::Error>>;
+
+pub const DEFAULT_NATS_HOST: &str = "127.0.0.1";
+pub const DEFAULT_NATS_PORT: &str = "4222";
+pub const DEFAULT_LATTICE_PREFIX: &str = "default";
+pub const DEFAULT_NATS_TIMEOUT: u64 = 2_000;
 
 #[derive(StructOpt, Debug, Copy, Clone, Deserialize, Serialize)]
 pub(crate) struct Output {
@@ -210,7 +216,7 @@ pub(crate) async fn nats_client_from_opts(
     port: &str,
     jwt: Option<String>,
     seed: Option<String>,
-    credsfile: Option<String>,
+    credsfile: Option<PathBuf>,
 ) -> Result<Connection> {
     let nats_url = format!("{}:{}", host, port);
 
@@ -228,6 +234,11 @@ pub(crate) async fn nats_client_from_opts(
         )
         .connect(&nats_url)
         .await?
+    } else if let Some(seed) = seed {
+        let kp = nkeys::KeyPair::from_seed(&extract_arg_value(&seed)?)?;
+        nats::asynk::Options::with_nkey(&kp.public_key(), move |nonce| kp.sign(nonce).unwrap())
+            .connect(&nats_url)
+            .await?
     } else if let Some(credsfile_path) = credsfile {
         nats::asynk::Options::with_credentials(credsfile_path)
             .connect(&nats_url)
