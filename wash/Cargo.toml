@@ -1,6 +1,6 @@
 [package]
 name = "wash-cli"
-version = "0.6.6"
+version = "0.7.0"
 authors = ["wasmCloud Team"]
 edition = "2018"
 repository = "https://github.com/wasmcloud/wash"
@@ -42,10 +42,12 @@ regex = "1.5"
 remove_dir_all = "0.7"
 rmp-serde = "0.15"
 rmpv = "1.0"
+sanitize-filename = "0.3.0"
 semver = "1.0"
 serde_json = { version = "1.0", features = ["raw_value"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.8.17"
+serde_with = "1.11.0"
 spinners = "2.0"
 structopt = "0.3.21"
 tempfile = "3.2"
@@ -59,6 +61,7 @@ wasmbus-rpc = "0.5"
 wasmcloud-control-interface = "0.6"
 wasmcloud-test-util = "0.1.4"
 weld-codegen = "0.1.17"
+which = "4.2.2"
 
 [dev-dependencies]
 test_bin = "0.3.0"

@@ -19,6 +19,8 @@ mod smithy;
 use smithy::{GenerateCli, LintCli, ValidateCli};
 mod call;
 use call::CallCli;
+mod ctx;
+use ctx::CtxCli;
 mod util;
 
 /// This renders appropriately with escape characters
@@ -54,6 +56,9 @@ enum CliCommand {
     /// Interact with a wasmCloud control interface
     #[structopt(name = "ctl")]
     Ctl(CtlCli),
+    /// Manage wasmCloud host configuration contexts
+    #[structopt(name = "ctx")]
+    Ctx(CtxCli),
     /// Manage contents of local wasmCloud caches
     #[structopt(name = "drain")]
     Drain(DrainCli),
@@ -89,6 +94,7 @@ async fn main() {
         CliCommand::Call(callcli) => call::handle_command(callcli.command()).await,
         CliCommand::Claims(claimscli) => claims::handle_command(claimscli.command()).await,
         CliCommand::Ctl(ctlcli) => ctl::handle_command(ctlcli.command()).await,
+        CliCommand::Ctx(ctxcli) => ctx::handle_command(ctxcli.command()).await,
         CliCommand::Drain(draincmd) => drain::handle_command(draincmd.command()),
         CliCommand::Gen(generate_cli) => smithy::handle_gen_command(generate_cli),
         CliCommand::Keys(keyscli) => keys::handle_command(keyscli.command()),
