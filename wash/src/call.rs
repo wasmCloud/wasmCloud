@@ -48,7 +48,7 @@ pub(crate) struct ConnectionOpts {
         short = "r",
         long = "rpc-host",
         default_value = "0.0.0.0",
-        env = "WASH_RPC_HOST"
+        env = "WASMCLOUD_RPC_HOST"
     )]
     rpc_host: String,
 
@@ -57,16 +57,16 @@ pub(crate) struct ConnectionOpts {
         short = "p",
         long = "rpc-port",
         default_value = "4222",
-        env = "WASH_RPC_PORT"
+        env = "WASMCLOUD_RPC_PORT"
     )]
     rpc_port: String,
 
     /// JWT file for RPC authentication. Must be supplied with rpc_seed.
-    #[structopt(long = "rpc-jwt", env = "WASH_RPC_JWT", hide_env_values = true)]
+    #[structopt(long = "rpc-jwt", env = "WASMCLOUD_RPC_JWT", hide_env_values = true)]
     rpc_jwt: Option<String>,
 
     /// Seed file or literal for RPC authentication. Must be supplied with rpc_jwt.
-    #[structopt(long = "rpc-seed", env = "WASH_RPC_SEED", hide_env_values = true)]
+    #[structopt(long = "rpc-seed", env = "WASMCLOUD_RPC_SEED", hide_env_values = true)]
     rpc_seed: Option<String>,
 
     /// Credsfile for RPC authentication. Combines rpc_seed and rpc_jwt.
@@ -74,23 +74,23 @@ pub(crate) struct ConnectionOpts {
     #[structopt(long = "rpc-credsfile", env = "WASH_RPC_CREDS", hide_env_values = true)]
     rpc_credsfile: Option<String>,
 
-    /// Namespace prefix for wasmcloud command interface
+    /// Lattice prefix for wasmcloud command interface
     #[structopt(
-        short = "n",
-        long = "ns-prefix",
+        short = "x",
+        long = "lattice-prefix",
         default_value = "default",
-        env = "WASH_RPC_NSPREFIX"
+        env = "WASMCLOUD_LATTICE_PREFIX"
     )]
-    ns_prefix: String,
+    lattice_prefix: String,
 
-    /// Timeout length for RPC, defaults to 1 second
+    /// Timeout length for RPC, defaults to 1000 milliseconds
     #[structopt(
         short = "t",
-        long = "rpc-timeout",
-        default_value = "1",
-        env = "WASH_RPC_TIMEOUT"
+        long = "rpc-timeout-ms",
+        default_value = "1000",
+        env = "WASMCLOUD_RPC_TIMEOUT_MS"
     )]
-    timeout: u64,
+    timeout_ms: u64,
 }
 
 #[derive(StructOpt, Debug, Clone)]
@@ -181,10 +181,10 @@ pub(crate) async fn handle_call(cmd: CallCommand) -> Result<Vec<u8>> {
     let bytes = json_str_to_msgpack_bytes(&payload)?;
     let client = RpcClient::new_asynk(
         nc,
-        &cmd.opts.ns_prefix,
+        &cmd.opts.lattice_prefix,
         nkeys::KeyPair::from_seed(&extract_arg_value(&cmd.cluster_seed)?)?,
         WASH_HOST_ID.to_string(),
-        Some(Duration::from_secs(cmd.opts.timeout)),
+        Some(Duration::from_millis(cmd.opts.timeout_ms)),
     );
     client
         .send_timeout(
@@ -194,7 +194,7 @@ pub(crate) async fn handle_call(cmd: CallCommand) -> Result<Vec<u8>> {
                 method: &cmd.operation,
                 arg: bytes.into(),
             },
-            std::time::Duration::from_secs(cmd.opts.timeout),
+            std::time::Duration::from_millis(cmd.opts.timeout_ms),
         )
         .await
         .map_err(convert_rpc_error)
@@ -259,7 +259,7 @@ mod test {
 
     const RPC_HOST: &str = "0.0.0.0";
     const RPC_PORT: &str = "4222";
-    const NS_PREFIX: &str = "default";
+    const LATTICE_PREFIX: &str = "default";
     const SAVE_FNAME: &str = "/dev/null";
     const DATA_FNAME: &str = "/tmp/data.json";
 
@@ -280,13 +280,13 @@ mod test {
             "2",
             "--cluster-seed",
             "SCASDASDASD",
-            "--ns-prefix",
-            NS_PREFIX,
+            "--lattice-prefix",
+            LATTICE_PREFIX,
             "--rpc-host",
             RPC_HOST,
             "--rpc-port",
             RPC_PORT,
-            "--rpc-timeout",
+            "--rpc-timeout-ms",
             "0",
             ACTOR_ID,
             "HandleOperation",
@@ -307,8 +307,8 @@ mod test {
             } => {
                 assert_eq!(opts.rpc_host, RPC_HOST);
                 assert_eq!(opts.rpc_port, RPC_PORT);
-                assert_eq!(opts.ns_prefix, NS_PREFIX);
-                assert_eq!(opts.timeout, 0);
+                assert_eq!(opts.lattice_prefix, LATTICE_PREFIX);
+                assert_eq!(opts.timeout_ms, 0);
                 assert_eq!(output.kind, crate::util::OutputKind::Json);
                 assert_eq!(data, Some(PathBuf::from(DATA_FNAME)));
                 assert_eq!(save, Some(PathBuf::from(SAVE_FNAME)));

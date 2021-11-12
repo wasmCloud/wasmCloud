@@ -32,7 +32,7 @@ pub(crate) struct ConnectionOpts {
         short = "r",
         long = "ctl-host",
         default_value = "0.0.0.0",
-        env = "WASH_CTL_HOST"
+        env = "WASMCLOUD_CTL_HOST"
     )]
     ctl_host: String,
 
@@ -41,16 +41,16 @@ pub(crate) struct ConnectionOpts {
         short = "p",
         long = "ctl-port",
         default_value = "4222",
-        env = "WASH_CTL_PORT"
+        env = "WASMCLOUD_CTL_PORT"
     )]
     ctl_port: String,
 
     /// JWT file for CTL authentication. Must be supplied with ctl_seed.
-    #[structopt(long = "ctl-jwt", env = "WASH_CTL_JWT", hide_env_values = true)]
+    #[structopt(long = "ctl-jwt", env = "WASMCLOUD_CTL_JWT", hide_env_values = true)]
     ctl_jwt: Option<String>,
 
     /// Seed file or literal for CTL authentication. Must be supplied with ctl_jwt.
-    #[structopt(long = "ctl-seed", env = "WASH_CTL_SEED", hide_env_values = true)]
+    #[structopt(long = "ctl-seed", env = "WASMCLOUD_CTL_SEED", hide_env_values = true)]
     ctl_seed: Option<String>,
 
     /// Credsfile for CTL authentication. Combines ctl_seed and ctl_jwt.
@@ -58,18 +58,23 @@ pub(crate) struct ConnectionOpts {
     #[structopt(long = "ctl-credsfile", env = "WASH_CTL_CREDS", hide_env_values = true)]
     ctl_credsfile: Option<String>,
 
-    /// Namespace prefix for wasmcloud control interface
+    /// Lattice prefix for wasmcloud control interface
     #[structopt(
-        short = "n",
-        long = "ns-prefix",
+        short = "x",
+        long = "lattice-prefix",
         default_value = "default",
-        env = "WASH_CTL_NSPREFIX"
+        env = "WASMCLOUD_LATTICE_PREFIX"
     )]
-    ns_prefix: String,
+    lattice_prefix: String,
 
     /// Timeout length to await a control interface response
-    #[structopt(long = "timeout", default_value = "1")]
-    timeout: u64,
+    #[structopt(
+        short = "t",
+        long = "timeout-ms",
+        default_value = "1000",
+        env = "WASMCLOUD_CTL_TIMEOUT_MS"
+    )]
+    timeout_ms: u64,
 }
 
 impl Default for ConnectionOpts {
@@ -80,8 +85,8 @@ impl Default for ConnectionOpts {
             ctl_jwt: None,
             ctl_seed: None,
             ctl_credsfile: None,
-            ns_prefix: "default".to_string(),
-            timeout: 1,
+            lattice_prefix: "default".to_string(),
+            timeout_ms: 1000,
         }
     }
 }
@@ -308,8 +313,8 @@ pub(crate) struct StartActorCommand {
     constraints: Option<Vec<String>>,
 
     /// Timeout to await an auction response
-    #[structopt(long = "auction-timeout", default_value = "1")]
-    auction_timeout: u64,
+    #[structopt(long = "auction-timeout-ms", default_value = "1000")]
+    auction_timeout_ms: u64,
 }
 
 #[derive(Debug, Clone, StructOpt)]
@@ -337,8 +342,8 @@ pub(crate) struct StartProviderCommand {
     constraints: Option<Vec<String>>,
 
     /// Timeout to await an auction response
-    #[structopt(long = "auction-timeout", default_value = "1")]
-    auction_timeout: u64,
+    #[structopt(long = "auction-timeout-ms", default_value = "1000")]
+    auction_timeout_ms: u64,
 }
 
 #[derive(Debug, Clone, StructOpt)]
@@ -598,7 +603,7 @@ pub(crate) async fn handle_command(command: CtlCliCommand) -> Result<String> {
 }
 
 pub(crate) async fn get_hosts(cmd: GetHostsCommand) -> Result<Vec<Host>> {
-    let timeout = Duration::from_secs(cmd.opts.timeout);
+    let timeout = Duration::from_millis(cmd.opts.timeout_ms);
     let client = ctl_client_from_opts(cmd.opts).await?;
     client.get_hosts(timeout).await.map_err(convert_error)
 }
@@ -648,9 +653,9 @@ pub(crate) async fn link_query(cmd: LinkQueryCommand) -> Result<LinkDefinitionLi
 }
 
 pub(crate) async fn start_actor(cmd: StartActorCommand) -> Result<CtlOperationAck> {
-    let opts = if cmd.opts.timeout == 1 {
+    let opts = if cmd.opts.timeout_ms == 1000 {
         ConnectionOpts {
-            timeout: 15,
+            timeout_ms: 15000,
             ..cmd.opts
         }
     } else {
@@ -665,7 +670,7 @@ pub(crate) async fn start_actor(cmd: StartActorCommand) -> Result<CtlOperationAc
                 .perform_actor_auction(
                     &cmd.actor_ref,
                     labels_vec_to_hashmap(cmd.constraints.unwrap_or_default())?,
-                    Duration::from_secs(cmd.auction_timeout),
+                    Duration::from_millis(cmd.auction_timeout_ms),
                 )
                 .await
                 .map_err(convert_error)?;
@@ -684,9 +689,9 @@ pub(crate) async fn start_actor(cmd: StartActorCommand) -> Result<CtlOperationAc
 }
 
 pub(crate) async fn start_provider(cmd: StartProviderCommand) -> Result<CtlOperationAck> {
-    let opts = if cmd.opts.timeout == 1 {
+    let opts = if cmd.opts.timeout_ms == 1000 {
         ConnectionOpts {
-            timeout: 60,
+            timeout_ms: 60000,
             ..cmd.opts
         }
     } else {
@@ -702,7 +707,7 @@ pub(crate) async fn start_provider(cmd: StartProviderCommand) -> Result<CtlOpera
                     &cmd.provider_ref,
                     &cmd.link_name,
                     labels_vec_to_hashmap(cmd.constraints.unwrap_or_default())?,
-                    Duration::from_secs(cmd.auction_timeout),
+                    Duration::from_millis(cmd.auction_timeout_ms),
                 )
                 .await
                 .map_err(convert_error)?;
@@ -869,7 +874,7 @@ async fn apply_manifest_providers(
 }
 
 async fn ctl_client_from_opts(opts: ConnectionOpts) -> Result<CtlClient> {
-    let timeout = Duration::from_secs(opts.timeout);
+    let timeout = Duration::from_millis(opts.timeout_ms);
     let nc = crate::util::nats_client_from_opts(
         &opts.ctl_host,
         &opts.ctl_port,
@@ -878,7 +883,7 @@ async fn ctl_client_from_opts(opts: ConnectionOpts) -> Result<CtlClient> {
         opts.ctl_credsfile,
     )
     .await?;
-    let ctl_client = CtlClient::new(nc, Some(opts.ns_prefix.clone()), timeout);
+    let ctl_client = CtlClient::new(nc, Some(opts.lattice_prefix.clone()), timeout);
 
     Ok(ctl_client)
 }
@@ -906,7 +911,7 @@ mod test {
 
     const CTL_HOST: &str = "0.0.0.0";
     const CTL_PORT: &str = "4222";
-    const NS_PREFIX: &str = "default";
+    const LATTICE_PREFIX: &str = "default";
 
     const ACTOR_ID: &str = "MDPDJEYIAK6MACO67PRFGOSSLODBISK4SCEYDY3HEOY4P5CVJN6UCWUK";
     const PROVIDER_ID: &str = "VBKTSBG2WKP6RJWLQ5O7RDVIIB4LMW6U5R67A7QMIDBZDGZWYTUE3TSI";
@@ -923,16 +928,16 @@ mod test {
             "actor",
             "-o",
             "json",
-            "--ns-prefix",
-            NS_PREFIX,
+            "--lattice-prefix",
+            LATTICE_PREFIX,
             "--ctl-host",
             CTL_HOST,
             "--ctl-port",
             CTL_PORT,
-            "--timeout",
-            "1",
-            "--auction-timeout",
-            "1",
+            "--timeout-ms",
+            "1000",
+            "--auction-timeout-ms",
+            "1000",
             "--constraint",
             "arch=x86_64",
             "--host-id",
@@ -946,13 +951,13 @@ mod test {
                 host_id,
                 actor_ref,
                 constraints,
-                auction_timeout,
+                auction_timeout_ms,
             })) => {
                 assert_eq!(opts.ctl_host, CTL_HOST);
                 assert_eq!(opts.ctl_port, CTL_PORT);
-                assert_eq!(opts.ns_prefix, NS_PREFIX);
-                assert_eq!(opts.timeout, 1);
-                assert_eq!(auction_timeout, 1);
+                assert_eq!(opts.lattice_prefix, LATTICE_PREFIX);
+                assert_eq!(opts.timeout_ms, 1000);
+                assert_eq!(auction_timeout_ms, 1000);
                 assert_eq!(output.kind, OutputKind::Json);
                 assert_eq!(host_id.unwrap(), HOST_ID.to_string());
                 assert_eq!(actor_ref, "wasmcloud.azurecr.io/actor:v1".to_string());
@@ -966,16 +971,16 @@ mod test {
             "provider",
             "-o",
             "json",
-            "--ns-prefix",
-            NS_PREFIX,
+            "--lattice-prefix",
+            LATTICE_PREFIX,
             "--ctl-host",
             CTL_HOST,
             "--ctl-port",
             CTL_PORT,
-            "--timeout",
-            "1",
-            "--auction-timeout",
-            "1",
+            "--timeout-ms",
+            "1000",
+            "--auction-timeout-ms",
+            "1000",
             "--constraint",
             "arch=x86_64",
             "--host-id",
@@ -992,13 +997,13 @@ mod test {
                 provider_ref,
                 link_name,
                 constraints,
-                auction_timeout,
+                auction_timeout_ms,
             })) => {
                 assert_eq!(opts.ctl_host, CTL_HOST);
                 assert_eq!(opts.ctl_port, CTL_PORT);
-                assert_eq!(opts.ns_prefix, NS_PREFIX);
-                assert_eq!(opts.timeout, 1);
-                assert_eq!(auction_timeout, 1);
+                assert_eq!(opts.lattice_prefix, LATTICE_PREFIX);
+                assert_eq!(opts.timeout_ms, 1000);
+                assert_eq!(auction_timeout_ms, 1000);
                 assert_eq!(output.kind, OutputKind::Json);
                 assert_eq!(link_name, "default".to_string());
                 assert_eq!(constraints.unwrap(), vec!["arch=x86_64".to_string()]);
@@ -1013,14 +1018,14 @@ mod test {
             "actor",
             "-o",
             "json",
-            "--ns-prefix",
-            NS_PREFIX,
+            "--lattice-prefix",
+            LATTICE_PREFIX,
             "--ctl-host",
             CTL_HOST,
             "--ctl-port",
             CTL_PORT,
-            "--timeout",
-            "1",
+            "--timeout-ms",
+            "1000",
             "--count",
             "2",
             HOST_ID,
@@ -1036,8 +1041,8 @@ mod test {
             })) => {
                 assert_eq!(opts.ctl_host, CTL_HOST);
                 assert_eq!(opts.ctl_port, CTL_PORT);
-                assert_eq!(opts.ns_prefix, NS_PREFIX);
-                assert_eq!(opts.timeout, 1);
+                assert_eq!(opts.lattice_prefix, LATTICE_PREFIX);
+                assert_eq!(opts.timeout_ms, 1000);
                 assert_eq!(output.kind, OutputKind::Json);
                 assert_eq!(host_id, HOST_ID.to_string());
                 assert_eq!(actor_id, ACTOR_ID.to_string());
@@ -1051,14 +1056,14 @@ mod test {
             "provider",
             "-o",
             "json",
-            "--ns-prefix",
-            NS_PREFIX,
+            "--lattice-prefix",
+            LATTICE_PREFIX,
             "--ctl-host",
             CTL_HOST,
             "--ctl-port",
             CTL_PORT,
-            "--timeout",
-            "1",
+            "--timeout-ms",
+            "1000",
             HOST_ID,
             PROVIDER_ID,
             "default",
@@ -1075,8 +1080,8 @@ mod test {
             })) => {
                 assert_eq!(opts.ctl_host, CTL_HOST);
                 assert_eq!(opts.ctl_port, CTL_PORT);
-                assert_eq!(opts.ns_prefix, NS_PREFIX);
-                assert_eq!(opts.timeout, 1);
+                assert_eq!(opts.lattice_prefix, LATTICE_PREFIX);
+                assert_eq!(opts.timeout_ms, 1000);
                 assert_eq!(output.kind, OutputKind::Json);
                 assert_eq!(host_id, HOST_ID.to_string());
                 assert_eq!(provider_id, PROVIDER_ID.to_string());
@@ -1091,21 +1096,21 @@ mod test {
             "hosts",
             "-o",
             "json",
-            "--ns-prefix",
-            NS_PREFIX,
+            "--lattice-prefix",
+            LATTICE_PREFIX,
             "--ctl-host",
             CTL_HOST,
             "--ctl-port",
             CTL_PORT,
-            "--timeout",
-            "1",
+            "--timeout-ms",
+            "1000",
         ])?;
         match get_hosts_all.command {
             CtlCliCommand::Get(GetCommand::Hosts(GetHostsCommand { opts, output })) => {
                 assert_eq!(opts.ctl_host, CTL_HOST);
                 assert_eq!(opts.ctl_port, CTL_PORT);
-                assert_eq!(opts.ns_prefix, NS_PREFIX);
-                assert_eq!(opts.timeout, 1);
+                assert_eq!(opts.lattice_prefix, LATTICE_PREFIX);
+                assert_eq!(opts.timeout_ms, 1000);
                 assert_eq!(output.kind, OutputKind::Json);
             }
             cmd => panic!("ctl get hosts constructed incorrect command {:?}", cmd),
@@ -1116,14 +1121,14 @@ mod test {
             "inventory",
             "-o",
             "json",
-            "--ns-prefix",
-            NS_PREFIX,
+            "--lattice-prefix",
+            LATTICE_PREFIX,
             "--ctl-host",
             CTL_HOST,
             "--ctl-port",
             CTL_PORT,
-            "--timeout",
-            "1",
+            "--timeout-ms",
+            "1000",
             HOST_ID,
         ])?;
         match get_host_inventory_all.command {
@@ -1134,8 +1139,8 @@ mod test {
             })) => {
                 assert_eq!(opts.ctl_host, CTL_HOST);
                 assert_eq!(opts.ctl_port, CTL_PORT);
-                assert_eq!(opts.ns_prefix, NS_PREFIX);
-                assert_eq!(opts.timeout, 1);
+                assert_eq!(opts.lattice_prefix, LATTICE_PREFIX);
+                assert_eq!(opts.timeout_ms, 1000);
                 assert_eq!(output.kind, OutputKind::Json);
                 assert_eq!(host_id, HOST_ID.to_string());
             }
@@ -1147,21 +1152,21 @@ mod test {
             "claims",
             "-o",
             "json",
-            "--ns-prefix",
-            NS_PREFIX,
+            "--lattice-prefix",
+            LATTICE_PREFIX,
             "--ctl-host",
             CTL_HOST,
             "--ctl-port",
             CTL_PORT,
-            "--timeout",
-            "1",
+            "--timeout-ms",
+            "1000",
         ])?;
         match get_claims_all.command {
             CtlCliCommand::Get(GetCommand::Claims(GetClaimsCommand { opts, output })) => {
                 assert_eq!(opts.ctl_host, CTL_HOST);
                 assert_eq!(opts.ctl_port, CTL_PORT);
-                assert_eq!(opts.ns_prefix, NS_PREFIX);
-                assert_eq!(opts.timeout, 1);
+                assert_eq!(opts.lattice_prefix, LATTICE_PREFIX);
+                assert_eq!(opts.timeout_ms, 1000);
                 assert_eq!(output.kind, OutputKind::Json);
             }
             cmd => panic!("ctl get claims constructed incorrect command {:?}", cmd),
@@ -1172,14 +1177,14 @@ mod test {
             "put",
             "-o",
             "json",
-            "--ns-prefix",
-            NS_PREFIX,
+            "--lattice-prefix",
+            LATTICE_PREFIX,
             "--ctl-host",
             CTL_HOST,
             "--ctl-port",
             CTL_PORT,
-            "--timeout",
-            "1",
+            "--timeout-ms",
+            "1000",
             "--link-name",
             "default",
             ACTOR_ID,
@@ -1199,8 +1204,8 @@ mod test {
             })) => {
                 assert_eq!(opts.ctl_host, CTL_HOST);
                 assert_eq!(opts.ctl_port, CTL_PORT);
-                assert_eq!(opts.ns_prefix, NS_PREFIX);
-                assert_eq!(opts.timeout, 1);
+                assert_eq!(opts.lattice_prefix, LATTICE_PREFIX);
+                assert_eq!(opts.timeout_ms, 1000);
                 assert_eq!(output.kind, OutputKind::Json);
                 assert_eq!(actor_id, ACTOR_ID.to_string());
                 assert_eq!(provider_id, PROVIDER_ID.to_string());
@@ -1216,14 +1221,14 @@ mod test {
             "actor",
             "-o",
             "json",
-            "--ns-prefix",
-            NS_PREFIX,
+            "--lattice-prefix",
+            LATTICE_PREFIX,
             "--ctl-host",
             CTL_HOST,
             "--ctl-port",
             CTL_PORT,
-            "--timeout",
-            "1",
+            "--timeout-ms",
+            "1000",
             HOST_ID,
             ACTOR_ID,
             "wasmcloud.azurecr.io/actor:v2",
@@ -1238,8 +1243,8 @@ mod test {
             })) => {
                 assert_eq!(opts.ctl_host, CTL_HOST);
                 assert_eq!(opts.ctl_port, CTL_PORT);
-                assert_eq!(opts.ns_prefix, NS_PREFIX);
-                assert_eq!(opts.timeout, 1);
+                assert_eq!(opts.lattice_prefix, LATTICE_PREFIX);
+                assert_eq!(opts.timeout_ms, 1000);
                 assert_eq!(output.kind, OutputKind::Json);
                 assert_eq!(host_id, HOST_ID.to_string());
                 assert_eq!(actor_id, ACTOR_ID.to_string());
