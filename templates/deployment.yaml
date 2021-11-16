@@ -52,7 +52,6 @@ spec:
             - name: WASMCLOUD_CLUSTER_SEED
               value: {{ .Values.wasmcloud.config.clusterSeed | quote }}
             {{- end }}
-            #here
             {{- if .Values.wasmcloud.config.hostKey }}
             - name: WASMCLOUD_HOST_KEY
               value: {{ .Values.wasmcloud.config.hostKey | quote }}
@@ -85,6 +84,10 @@ spec:
             - name: WASMCLOUD_LATTICE_PREFIX
               value: {{ .Values.wasmcloud.config.latticePrefix | quote }}
             {{- end }}
+            {{- if .Values.wasmcloud.config.jetstreamDomain }}
+            - name: WASMCLOUD_JS_DOMAIN
+              value: {{ .Values.wasmcloud.config.jetstreamDomain | quote }}
+            {{- end }}
             {{- if .Values.wasmcloud.config.hostSeed }}
             - name: WASMCLOUD_HOST_SEED
               valueFrom:
@@ -113,7 +116,6 @@ spec:
                   name: {{ include "wasmcloud_host.fullname" . }}
                   key: ctlSeed
             {{- end }}
-            # TODO: All the other config options
           ports:
             - name: host
               containerPort: 8080

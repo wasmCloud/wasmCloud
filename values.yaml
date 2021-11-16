@@ -24,6 +24,7 @@ wasmcloud:
     rpcSeed: ""
     providerRpcSeed: ""
     ctlSeed: ""
+    jetstreamDomain: ""
   image:
     repository: wasmcloud/wasmcloud_host
     pullPolicy: IfNotPresent
@@ -35,6 +36,9 @@ nats:
   # Enables the nats container (enabled by default). This can be disabled if you'd like to connect
   # to another in-cluster NATS cluster
   enabled: true
+  # The jetstream domain to use for distributed cache data. You'll likely need this if running in
+  # production. This is different than the domain used for the host
+  jetstreamDomain: ""
   leafnode:
     # Sets the nats container to operate in leafnode mode 
     enabled: false

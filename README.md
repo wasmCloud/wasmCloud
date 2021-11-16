@@ -58,10 +58,11 @@ is a common deployment practice when connecting with something like [NGS](https:
 To use this method, you'll need to set `nats.leafnode.enabled` to `true`. Additionally, you'll need
 to set the following values on the command line or in a values file:
 
-| Value                       | Purpose                                                                                                             |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `nats.leafnode.clusterURL`  | The URL of the NATS cluster to connect to                                                                           |
-| `nats.leafnode.credentials` | The credentials for connecting to the NATS cluster. If passing on the command line, we recommend using `--set-file` |
+| Value                       | Purpose                                                                                                                                                                 |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `nats.leafnode.clusterURL`  | The URL of the NATS cluster to connect to                                                                                                                               |
+| `nats.leafnode.credentials` | The credentials for connecting to the NATS cluster. If passing on the command line, we recommend using `--set-file`                                                     |
+| `nats.jetstreamDomain`      | The JetStream domain to use for distributing cache data. If you are using domains, you will also need to set a different domain for `.wasmcloud.config.jetstreamDomain` |
 
 ##### External NATS Server
 

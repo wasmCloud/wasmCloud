@@ -7,6 +7,11 @@ metadata:
     {{- include "wasmcloud_host.labels" . | nindent 4 }}
 data:
   nats.conf: |-
+    {{ if .Values.nats.jetstreamDomain -}}
+    jetstream {
+      domain: {{ .Values.nats.jetstreamDomain }}
+    }
+    {{- end }}
     leafnodes {
       remotes = [
         {
