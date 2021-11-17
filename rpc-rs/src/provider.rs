@@ -136,6 +136,21 @@ impl HostBridge {
             host_data: host_data.clone(),
         })
     }
+
+    /// Returns the provider's public key
+    pub fn provider_key(&self) -> &str {
+        self.host_data.provider_key.as_str()
+    }
+
+    /// Returns the host id that launched this provider
+    pub fn host_id(&self) -> &str {
+        self.host_data.host_id.as_str()
+    }
+
+    /// Returns the link_name for this provider
+    pub fn link_name(&self) -> &str {
+        self.host_data.link_name.as_str()
+    }
 }
 
 impl Deref for HostBridge {
