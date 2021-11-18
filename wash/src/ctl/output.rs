@@ -4,6 +4,8 @@ use serde_json::json;
 use term_table::{row::Row, table_cell::*, Table};
 use wasmcloud_control_interface::*;
 
+use super::id::{ModuleId, ServiceId};
+
 pub(crate) fn get_hosts_output(hosts: Vec<Host>, output_kind: &OutputKind) -> String {
     match *output_kind {
         OutputKind::Text => hosts_table(hosts),
@@ -26,7 +28,7 @@ pub(crate) fn get_claims_output(claims: GetClaimsResponse, output_kind: &OutputK
 }
 
 pub(crate) fn link_del_output(
-    actor_id: &str,
+    actor_id: &ModuleId,
     contract_id: &str,
     link_name: &str,
     failure: Option<String>,
@@ -50,8 +52,8 @@ pub(crate) fn link_del_output(
 }
 
 pub(crate) fn link_put_output(
-    actor_id: &str,
-    provider_id: &str,
+    actor_id: &ModuleId,
+    provider_id: &ServiceId,
     failure: Option<String>,
     output_kind: &OutputKind,
 ) -> String {

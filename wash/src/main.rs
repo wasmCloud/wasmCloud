@@ -23,17 +23,16 @@ mod ctx;
 use ctx::CtxCli;
 mod util;
 
-/// This renders appropriately with escape characters
-const ASCII: &str = "
+const ASCII: &str = r#"
                                _____ _                 _    _____ _          _ _
                               / ____| |               | |  / ____| |        | | |
  __      ____ _ ___ _ __ ___ | |    | | ___  _   _  __| | | (___ | |__   ___| | |
- \\ \\ /\\ / / _` / __| '_ ` _ \\| |    | |/ _ \\| | | |/ _` |  \\___ \\| '_ \\ / _ \\ | |
-  \\ V  V / (_| \\__ \\ | | | | | |____| | (_) | |_| | (_| |  ____) | | | |  __/ | |
-   \\_/\\_/ \\__,_|___/_| |_| |_|\\_____|_|\\___/ \\__,_|\\__,_| |_____/|_| |_|\\___|_|_|
+ \ \ /\ / / _` / __| '_ ` _ \| |    | |/ _ \| | | |/ _` |  \___ \| '_ \ / _ \ | |
+  \ V  V / (_| \__ \ | | | | | |____| | (_) | |_| | (_| |  ____) | | | |  __/ | |
+   \_/\_/ \__,_|___/_| |_| |_|\_____|_|\___/ \__,_|\__,_| |_____/|_| |_|\___|_|_|
 
 A single CLI to handle all of your wasmCloud tooling needs
-";
+"#;
 
 #[derive(Debug, Clone, StructOpt)]
 #[structopt(global_settings(&[AppSettings::ColoredHelp, AppSettings::VersionlessSubcommands, AppSettings::DisableHelpSubcommand]),
@@ -91,16 +90,16 @@ async fn main() {
     let cli = Cli::from_args();
 
     let res = match cli.command {
-        CliCommand::Call(callcli) => call::handle_command(callcli.command()).await,
-        CliCommand::Claims(claimscli) => claims::handle_command(claimscli.command()).await,
-        CliCommand::Ctl(ctlcli) => ctl::handle_command(ctlcli.command()).await,
-        CliCommand::Ctx(ctxcli) => ctx::handle_command(ctxcli.command()).await,
-        CliCommand::Drain(draincmd) => drain::handle_command(draincmd.command()),
+        CliCommand::Call(call_cli) => call::handle_command(call_cli.command()).await,
+        CliCommand::Claims(claims_cli) => claims::handle_command(claims_cli.command()).await,
+        CliCommand::Ctl(ctl_cli) => ctl::handle_command(ctl_cli.command()).await,
+        CliCommand::Ctx(ctx_cli) => ctx::handle_command(ctx_cli.command()).await,
+        CliCommand::Drain(drain_cmd) => drain::handle_command(drain_cmd.command()),
         CliCommand::Gen(generate_cli) => smithy::handle_gen_command(generate_cli),
-        CliCommand::Keys(keyscli) => keys::handle_command(keyscli.command()),
-        CliCommand::New(newcli) => generate::handle_command(newcli.command()),
-        CliCommand::Par(parcli) => par::handle_command(parcli.command()).await,
-        CliCommand::Reg(regcli) => reg::handle_command(regcli.command()).await,
+        CliCommand::Keys(keys_cli) => keys::handle_command(keys_cli.command()),
+        CliCommand::New(new_cli) => generate::handle_command(new_cli.command()),
+        CliCommand::Par(par_cli) => par::handle_command(par_cli.command()).await,
+        CliCommand::Reg(reg_cli) => reg::handle_command(reg_cli.command()).await,
         CliCommand::Lint(lint_cli) => smithy::handle_lint_command(lint_cli).await,
         CliCommand::Validate(validate_cli) => smithy::handle_validate_command(validate_cli).await,
     };
