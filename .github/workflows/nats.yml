@@ -82,12 +82,13 @@ jobs:
 
       - name: Determine artifact metadata
         run: |
-          echo "oci-repository=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name' | sed 's/wasmcloud-provider-//')" >> $GITHUB_ENV
           echo "oci-version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].version')" >> $GITHUB_ENV
         working-directory: ${{ env.working-directory }}
 
       - name: Push provider archive to AzureCR
         uses: wasmcloud/common-actions/oci-artifact-release@main
+        env:
+          oci-repository: "nats_messaging"
         with:
           artifact-path: ${{ env.working-directory }}/build/${{ env.oci-repository }}.par.gz
           oci-url: ${{ secrets.AZURECR_PUSH_URL }}
