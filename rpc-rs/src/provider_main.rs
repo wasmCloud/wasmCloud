@@ -30,12 +30,31 @@ pub fn provider_main<P>(provider_dispatch: P) -> Result<(), Box<dyn std::error::
 where
     P: ProviderDispatch + Send + Sync + Clone + 'static,
 {
+    // get lattice configuration from host
+    let host_data = match load_host_data() {
+        Ok(hd) => hd,
+        Err(e) => {
+            eprintln!("error loading host data: {}", &e.to_string());
+            return Err(Box::new(e));
+        }
+    };
+    provider_start(provider_dispatch, host_data)
+}
+
+/// Start provider services: tokio runtime, logger, nats, and rpc subscriptions,
+pub fn provider_start<P>(
+    provider_dispatch: P,
+    host_data: HostData,
+) -> Result<(), Box<dyn std::error::Error>>
+where
+    P: ProviderDispatch + Send + Sync + Clone + 'static,
+{
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         //.enable_io()
         .build()?;
 
-    runtime.block_on(async { provider_run(provider_dispatch).await })?;
+    runtime.block_on(async { provider_run(provider_dispatch, host_data).await })?;
     // in the unlikely case there are any stuck threads,
     // close them so the process has a clean exit
     runtime.shutdown_timeout(core::time::Duration::from_secs(10));
@@ -43,7 +62,10 @@ where
 }
 
 /// Async provider initialization
-pub async fn provider_run<P>(provider_dispatch: P) -> Result<(), Box<dyn std::error::Error>>
+pub async fn provider_run<P>(
+    provider_dispatch: P,
+    host_data: HostData,
+) -> Result<(), Box<dyn std::error::Error>>
 where
     P: ProviderDispatch + Send + Sync + Clone + 'static,
 {
@@ -51,9 +73,6 @@ where
     let log_rx = crate::channel_log::init_logger()
         .map_err(|_| RpcError::ProviderInit("log already initialized".to_string()))?;
     crate::channel_log::init_receiver(log_rx);
-
-    // get lattice configuration from host
-    let mut host_data = load_host_data()?;
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
     eprintln!(
@@ -81,8 +100,7 @@ where
 
     // pre-populate provider and bridge with initial set of link definitions
     // initialization of any link is fatal for provider startup
-    let mut initial_links = Vec::new();
-    std::mem::swap(&mut initial_links, &mut host_data.link_definitions);
+    let initial_links = host_data.link_definitions.clone();
     for ld in initial_links.into_iter() {
         if let Err(e) = provider_dispatch.put_link(&ld).await {
             eprintln!(

@@ -45,7 +45,9 @@ pub mod prelude {
     pub use crate::{
         core::LinkDefinition,
         provider::{HostBridge, NatsClient, ProviderDispatch, ProviderHandler},
-        provider_main::{get_host_bridge, load_host_data, provider_main, provider_run},
+        provider_main::{
+            get_host_bridge, load_host_data, provider_main, provider_run, provider_start,
+        },
         Context, Message, MessageDispatch, RpcError, RpcResult, SendOpts,
     };
 
