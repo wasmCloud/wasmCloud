@@ -67,7 +67,7 @@ pub(crate) struct Favorites {
 }
 
 /// default favorites will be used if one isn't provided on the command line
-const DEFAULT_FAVORITES: &str = include_str!("../../favorites.toml");
+const DEFAULT_FAVORITES: &str = include_str!("./favorites.toml");
 
 /// try to load favorites from three sources:
 /// (1) the parameter

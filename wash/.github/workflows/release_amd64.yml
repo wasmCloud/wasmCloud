@@ -40,12 +40,15 @@ jobs:
       - name: Compile wash
         run: cargo build --release
       - name: Install NFPM
-        run: curl -sfL https://install.goreleaser.com/github.com/goreleaser/nfpm.sh | sh
+        run: |
+          echo 'deb [trusted=yes] https://repo.goreleaser.com/apt/ /' | sudo tee /etc/apt/sources.list.d/goreleaser.list
+          sudo apt update
+          sudo apt install nfpm
       - name: Package amd64 (Debian)
         run: |
           export VERSION=$(echo $REF | cut -d/ -f3)
-          ./bin/nfpm pkg --packager deb -f build/nfpm.amd64.yaml
-          ./bin/nfpm pkg --packager rpm -f build/nfpm.amd64.yaml
+          nfpm pkg --packager deb -f build/nfpm.amd64.yaml
+          nfpm pkg --packager rpm -f build/nfpm.amd64.yaml
       - name: Push amd64 (deb)
         run: |
           debs=(35 150 155 156 190 203 206 207 210 215 219)
