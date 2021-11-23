@@ -463,6 +463,20 @@ pub(crate) async fn handle_command(command: CtlCliCommand) -> Result<String> {
                 .link_name
                 .clone()
                 .unwrap_or_else(|| "default".to_string());
+            // Check if the contract ID parameter is a 56 character key and suggest that the user
+            // give the contract ID instead
+            //
+            // NOTE: `len` is ok here because keys are only ascii characters that take up a single
+            // byte.
+            if cmd.contract_id.len() == 56 && cmd.contract_id.starts_with('V') {
+                link_del_output(
+                    &cmd.actor_id,
+                    &cmd.contract_id,
+                    link_name,
+                    Some("It looks like you used a Provider ID (e.g. VABC...) instead of a contract ID (e.g. wasmcloud:httpserver)".into()),
+                    &cmd.output.kind,
+                )?;
+            }
             sp = update_spinner_message(
                 sp,
                 format!(
@@ -480,7 +494,7 @@ pub(crate) async fn handle_command(command: CtlCliCommand) -> Result<String> {
                 link_name,
                 failure,
                 &cmd.output.kind,
-            )
+            )?
         }
         Link(LinkCommand::Put(cmd)) => {
             sp = update_spinner_message(
