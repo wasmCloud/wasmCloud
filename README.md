@@ -20,12 +20,16 @@ recommend deploying your main NATS server with another chart.
 
 ## Running the chart
 
-Right now this chart is not available within a chart repository. We will find a place for it soon
-and update installation instructions. To use this chart, you'll need to clone the repository and
-then run from the root of the repo:
+The chart is available in a hosted Helm repository. To add the repository, run the following:
 
 ```console
-$ helm install <RELEASE_NAME> wasmcloud_host/chart
+$ helm repo add wasmcloud https://wasmcloud.github.io/wasmcloud-otp/
+```
+
+Then you can install the chart:
+
+```console
+$ helm install <RELEASE_NAME> wasmcloud/wasmcloud-host
 ```
 
 This will get you up and going with a wasmCloud Host and NATS server so you can kick the tires and
