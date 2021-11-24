@@ -33,21 +33,21 @@ pub(crate) fn link_del_output(
     link_name: &str,
     failure: Option<String>,
     output_kind: &OutputKind,
-) -> String {
+) -> std::result::Result<String, String> {
     match failure {
-        None => format_output(
+        None => Ok(format_output(
             format!(
                 "\nDeleted link for {} on {} ({}) successfully",
                 actor_id, contract_id, link_name
             ),
             json!({"actor_id": actor_id, "contract_id": contract_id, "link_name": link_name, "result": "published"}),
             output_kind,
-        ),
-        Some(f) => format_output(
+        )),
+        Some(f) => Err(format_output(
             format!("\nError deleting link: {}", f),
             json!({ "error": f }),
             output_kind,
-        ),
+        )),
     }
 }
 
