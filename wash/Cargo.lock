@@ -4064,7 +4064,7 @@ dependencies = [
 
 [[package]]
 name = "wash-cli"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "atelier_core 0.2.22",

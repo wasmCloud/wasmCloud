@@ -75,6 +75,10 @@ pub(crate) struct ConnectionOpts {
     #[structopt(short = "t", long = "rpc-timeout-ms", env = "WASMCLOUD_RPC_TIMEOUT_MS")]
     timeout_ms: Option<u64>,
 
+    /// DEPRECATED: Timeout length for RPC in seconds
+    #[structopt(long = "rpc-timeout", env = "WASMCLOUD_RPC_TIMEOUT")]
+    timeout: Option<u64>,
+
     /// Path to a context with values to use for RPC connection, authentication, and cluster seed invocation signing
     #[structopt(long = "context")]
     pub(crate) context: Option<PathBuf>,
@@ -233,11 +237,18 @@ async fn rpc_client_from_opts(
 
     // Determine connection parameters, taking explicitly provided flags,
     // then provided context values, lastly using defaults
-    let timeout = opts.timeout_ms.unwrap_or_else(|| {
-        ctx.as_ref()
+    //TODO: Deprecate the `opts.timeout` in `v0.8.0`
+    let timeout = match (opts.timeout_ms, opts.timeout) {
+        (Some(t), _) => t,
+        (None, Some(t)) => {
+            log::warn!("--timeout is deprecated and will be removed in v0.8.0");
+            t * 1_000
+        }
+        (None, None) => ctx
+            .as_ref()
             .map(|c| c.rpc_timeout)
-            .unwrap_or(DEFAULT_NATS_TIMEOUT)
-    });
+            .unwrap_or(DEFAULT_NATS_TIMEOUT),
+    };
 
     let lattice_prefix = opts.lattice_prefix.unwrap_or_else(|| {
         ctx.as_ref()
