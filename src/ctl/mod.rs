@@ -67,6 +67,10 @@ pub(crate) struct ConnectionOpts {
     #[structopt(short = "t", long = "timeout-ms", env = "WASMCLOUD_CTL_TIMEOUT_MS")]
     timeout_ms: Option<u64>,
 
+    /// DEPRECATED: Timeout length to await a control interface response, in seconds
+    #[structopt(long = "timeout", env = "WASMCLOUD_CTL_TIMEOUT")]
+    timeout: Option<u64>,
+
     /// Path to a context with values to use for CTL connection and authentication
     #[structopt(long = "context")]
     pub(crate) context: Option<PathBuf>,
@@ -81,6 +85,8 @@ impl Default for ConnectionOpts {
             ctl_seed: None,
             ctl_credsfile: None,
             lattice_prefix: Some(DEFAULT_LATTICE_PREFIX.to_string()),
+            //TODO: Deprecate me in v0.8.0
+            timeout: None,
             timeout_ms: Some(DEFAULT_NATS_TIMEOUT),
             context: None,
         }
@@ -311,6 +317,10 @@ pub(crate) struct StartActorCommand {
     /// Timeout to await an auction response, defaults to 2000 milliseconds
     #[structopt(long = "auction-timeout-ms")]
     auction_timeout_ms: Option<u64>,
+
+    /// DEPRECATED: Timeout length for auction in seconds
+    #[structopt(long = "auction-timeout")]
+    auction_timeout: Option<u64>,
 }
 
 #[derive(Debug, Clone, StructOpt)]
@@ -340,6 +350,10 @@ pub(crate) struct StartProviderCommand {
     /// Timeout to await an auction response, defaults to 2000 milliseconds
     #[structopt(long = "auction-timeout-ms")]
     auction_timeout_ms: Option<u64>,
+
+    /// DEPRECATED: Timeout length for auction in seconds
+    #[structopt(long = "auction-timeout")]
+    auction_timeout: Option<u64>,
 }
 
 #[derive(Debug, Clone, StructOpt)]
@@ -613,7 +627,11 @@ pub(crate) async fn handle_command(command: CtlCliCommand) -> Result<String> {
 }
 
 pub(crate) async fn get_hosts(cmd: GetHostsCommand) -> Result<Vec<Host>> {
-    let timeout = Duration::from_millis(cmd.opts.timeout_ms.unwrap_or(DEFAULT_NATS_TIMEOUT));
+    let timeout = match (cmd.opts.timeout_ms, cmd.opts.timeout) {
+        (Some(t), _) => Duration::from_millis(t),
+        (None, Some(t)) => Duration::from_secs(t),
+        (None, None) => Duration::from_millis(DEFAULT_NATS_TIMEOUT),
+    };
     let client = ctl_client_from_opts(cmd.opts).await?;
     client.get_hosts(timeout).await.map_err(convert_error)
 }
@@ -665,24 +683,38 @@ pub(crate) async fn link_query(cmd: LinkQueryCommand) -> Result<LinkDefinitionLi
 pub(crate) async fn start_actor(cmd: StartActorCommand) -> Result<CtlOperationAck> {
     // If timeout isn't supplied, override with a reasonably long timeout to account for
     // OCI downloads and response
-    let opts = if cmd.opts.timeout_ms.is_none() {
-        ConnectionOpts {
-            timeout_ms: Some(15000),
-            ..cmd.opts
+    let opts = match (cmd.opts.timeout_ms, cmd.opts.timeout) {
+        (Some(_t), _) => cmd.opts,
+        (None, Some(t)) => {
+            log::warn!("--timeout is deprecated and will be removed in v0.8.0");
+            ConnectionOpts {
+                timeout_ms: Some(t * 1_000),
+                ..cmd.opts
+            }
         }
-    } else {
-        cmd.opts
+        (None, None) => ConnectionOpts {
+            timeout_ms: Some(15_000),
+            ..cmd.opts
+        },
     };
     let client = ctl_client_from_opts(opts).await?;
 
     let host = match cmd.host_id {
         Some(host) => host,
         None => {
+            let auction_timeout_ms = match (cmd.auction_timeout_ms, cmd.auction_timeout) {
+                (Some(t), _) => t,
+                (None, Some(t)) => {
+                    log::warn!("--timeout is deprecated and will be removed in v0.8.0");
+                    t * 1_000
+                }
+                (None, None) => DEFAULT_NATS_TIMEOUT,
+            };
             let suitable_hosts = client
                 .perform_actor_auction(
                     &cmd.actor_ref,
                     labels_vec_to_hashmap(cmd.constraints.unwrap_or_default())?,
-                    Duration::from_millis(cmd.auction_timeout_ms.unwrap_or(DEFAULT_NATS_TIMEOUT)),
+                    Duration::from_millis(auction_timeout_ms),
                 )
                 .await
                 .map_err(convert_error)?;
@@ -703,25 +735,39 @@ pub(crate) async fn start_actor(cmd: StartActorCommand) -> Result<CtlOperationAc
 pub(crate) async fn start_provider(cmd: StartProviderCommand) -> Result<CtlOperationAck> {
     // If timeout isn't supplied, override with a reasonably long timeout to account for
     // OCI downloads and response
-    let opts = if cmd.opts.timeout_ms.is_none() {
-        ConnectionOpts {
-            timeout_ms: Some(60000),
-            ..cmd.opts
+    let opts = match (cmd.opts.timeout_ms, cmd.opts.timeout) {
+        (Some(_t), _) => cmd.opts,
+        (None, Some(t)) => {
+            log::warn!("--timeout is deprecated and will be removed in v0.8.0");
+            ConnectionOpts {
+                timeout_ms: Some(t * 1_000),
+                ..cmd.opts
+            }
         }
-    } else {
-        cmd.opts
+        (None, None) => ConnectionOpts {
+            timeout_ms: Some(60_000),
+            ..cmd.opts
+        },
     };
     let client = ctl_client_from_opts(opts).await?;
 
     let host = match cmd.host_id {
         Some(host) => host,
         None => {
+            let auction_timeout_ms = match (cmd.auction_timeout_ms, cmd.auction_timeout) {
+                (Some(t), _) => t,
+                (None, Some(t)) => {
+                    log::warn!("--timeout is deprecated and will be removed in v0.8.0");
+                    t * 1_000
+                }
+                (None, None) => DEFAULT_NATS_TIMEOUT,
+            };
             let suitable_hosts = client
                 .perform_provider_auction(
                     &cmd.provider_ref,
                     &cmd.link_name,
                     labels_vec_to_hashmap(cmd.constraints.unwrap_or_default())?,
-                    Duration::from_millis(cmd.auction_timeout_ms.unwrap_or(DEFAULT_NATS_TIMEOUT)),
+                    Duration::from_millis(auction_timeout_ms),
                 )
                 .await
                 .map_err(convert_error)?;
@@ -921,12 +967,18 @@ async fn ctl_client_from_opts(opts: ConnectionOpts) -> Result<CtlClient> {
 
     // Determine connection parameters, taking explicitly provided flags,
     // then provided context values, lastly using defaults
-
-    let timeout = opts.timeout_ms.unwrap_or_else(|| {
-        ctx.as_ref()
-            .map(|c| c.ctl_timeout)
-            .unwrap_or(DEFAULT_NATS_TIMEOUT)
-    });
+    //TODO: Deprecate the `opts.timeout` in `v0.8.0`
+    let timeout = match (opts.timeout_ms, opts.timeout) {
+        (Some(t), _) => t,
+        (None, Some(t)) => {
+            log::warn!("--timeout is deprecated and will be removed in v0.8.0");
+            t * 1_000
+        }
+        (None, None) => ctx
+            .as_ref()
+            .map(|c| c.rpc_timeout)
+            .unwrap_or(DEFAULT_NATS_TIMEOUT),
+    };
 
     let lattice_prefix = opts.lattice_prefix.unwrap_or_else(|| {
         ctx.as_ref()
@@ -1038,6 +1090,7 @@ mod test {
                 actor_ref,
                 constraints,
                 auction_timeout_ms,
+                auction_timeout: _,
             })) => {
                 assert_eq!(&opts.ctl_host.unwrap(), CTL_HOST);
                 assert_eq!(&opts.ctl_port.unwrap(), CTL_PORT);
@@ -1084,6 +1137,7 @@ mod test {
                 link_name,
                 constraints,
                 auction_timeout_ms,
+                auction_timeout: _,
             })) => {
                 assert_eq!(&opts.ctl_host.unwrap(), CTL_HOST);
                 assert_eq!(&opts.ctl_port.unwrap(), CTL_PORT);
