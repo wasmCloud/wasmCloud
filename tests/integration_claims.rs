@@ -1,6 +1,8 @@
 mod common;
+
 use common::{output_to_string, test_dir_file, test_dir_with_subfolder, wash};
-use std::fs::remove_dir_all;
+use std::env::temp_dir;
+use std::fs::{remove_dir_all, remove_file};
 
 #[test]
 fn integration_claims_sign() {
@@ -155,6 +157,71 @@ fn integration_claims_inspect() {
     assert!(remote_inspect_output.contains("\"version\":\"0.2.1\""));
 
     remove_dir_all(inspect_dir).unwrap();
+}
+
+#[test]
+fn integration_claims_inspect_cached() {
+    const ECHO_OCI: &str = "wasmcloud.azurecr.io/echo:0.2.1";
+    const ECHO_FAKE_OCI: &str = "foo.bar.io/echo:0.2.1";
+    const ECHO_FAKE_CACHED: &str = "foo_bar_io_echo_0_2_1";
+    const ECHO_ACC: &str = "ACOJJN6WUP4ODD75XEBKKTCCUJJCY5ZKQ56XVKYK4BEJWGVAOOQHZMCW";
+    const ECHO_MOD: &str = "MBCFOPM6JW2APJLXJD3Z5O4CN7CPYJ2B4FTKLJUR5YR5MITIU7HD3WD5";
+
+    let mut echo_cache_path = temp_dir().join("wasmcloud_ocicache").join(ECHO_FAKE_CACHED);
+    let _ = ::std::fs::create_dir_all(&echo_cache_path);
+    echo_cache_path.set_extension("bin");
+
+    let get_hello_wasm = wash()
+        .args(&[
+            "reg",
+            "pull",
+            ECHO_OCI,
+            "--destination",
+            echo_cache_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("failed to pull echo for claims sign test");
+    assert!(get_hello_wasm.status.success());
+
+    let remote_inspect = wash()
+        .args(&[
+            "claims",
+            "inspect",
+            ECHO_FAKE_OCI,
+            "--digest",
+            "sha256:55689502d1bc9c48f22b278c54efeee206a839b8e8eedd4ea6b19e6861f66b3c",
+            "-o",
+            "json",
+        ])
+        .output()
+        .expect("failed to inspect remote cached registry");
+    assert!(remote_inspect.status.success());
+    let remote_inspect_output = output_to_string(remote_inspect);
+    assert!(remote_inspect_output.contains(&format!("\"account\":\"{}\"", ECHO_ACC)));
+    assert!(remote_inspect_output.contains(&format!("\"module\":\"{}\"", ECHO_MOD)));
+    assert!(remote_inspect_output.contains("\"can_be_used\":\"immediately\""));
+    assert!(remote_inspect_output.contains("\"capabilities\":[\"HTTP Server\"]"));
+    assert!(remote_inspect_output.contains("\"expires\":\"never\""));
+    assert!(remote_inspect_output.contains("\"tags\":\"None\""));
+    assert!(remote_inspect_output.contains("\"version\":\"0.2.1\""));
+
+    let remote_inspect_no_cache = wash()
+        .args(&[
+            "claims",
+            "inspect",
+            ECHO_FAKE_OCI,
+            "--digest",
+            "sha256:55689502d1bc9c48f22b278c54efeee206a839b8e8eedd4ea6b19e6861f66b3c",
+            "-o",
+            "json",
+            "--no-cache",
+        ])
+        .output()
+        .expect("failed to inspect remote cached registry");
+
+    assert!(!remote_inspect_no_cache.status.success());
+
+    remove_file(echo_cache_path).unwrap();
 }
 
 #[test]

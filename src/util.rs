@@ -1,6 +1,7 @@
 use nats::asynk::Connection;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::env::temp_dir;
 use std::error::Error;
 use std::fmt;
 use std::fs::File;
@@ -247,4 +248,21 @@ pub(crate) async fn nats_client_from_opts(
         nats::asynk::connect(&nats_url).await?
     };
     Ok(nc)
+}
+
+pub(crate) const OCI_CACHE_DIR: &str = "wasmcloud_ocicache";
+
+pub(crate) fn cached_file(img: &str) -> PathBuf {
+    let path = temp_dir();
+    let path = path.join(OCI_CACHE_DIR);
+    let _ = ::std::fs::create_dir_all(&path);
+    // should produce a file like wasmcloud_azurecr_io_kvcounter_v1.bin
+    let mut path = path.join(img_name_to_file_name(img));
+    path.set_extension("bin");
+
+    path
+}
+
+pub(crate) fn img_name_to_file_name(img: &str) -> String {
+    img.replace(":", "_").replace("/", "_").replace(".", "_")
 }

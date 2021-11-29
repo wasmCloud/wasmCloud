@@ -1,6 +1,8 @@
 mod common;
+
 use common::{output_to_string, test_dir_file, test_dir_with_subfolder, wash};
-use std::fs::{remove_dir_all, File};
+use std::env::temp_dir;
+use std::fs::{remove_dir_all, remove_file, File};
 use std::io::prelude::*;
 
 #[test]
@@ -201,31 +203,31 @@ fn integration_par_insert(issuer: &str, subject: &str, archive: &str) {
 
 #[test]
 fn integration_par_inspect() {
-    const SUBFOLDER: &str = "claims_inspect";
-    const ECHO_OCI: &str = "wasmcloud.azurecr.io/echo:0.2.1";
-    const ECHO_ACC: &str = "ACOJJN6WUP4ODD75XEBKKTCCUJJCY5ZKQ56XVKYK4BEJWGVAOOQHZMCW";
-    const ECHO_MOD: &str = "MBCFOPM6JW2APJLXJD3Z5O4CN7CPYJ2B4FTKLJUR5YR5MITIU7HD3WD5";
+    const SUBFOLDER: &str = "par_inspect";
+    const HTTP_OCI: &str = "wasmcloud.azurecr.io/httpclient:0.3.5";
+    const HTTP_ISSUER: &str = "ACOJJN6WUP4ODD75XEBKKTCCUJJCY5ZKQ56XVKYK4BEJWGVAOOQHZMCW";
+    const HTTP_SERVICE: &str = "VCCVLH4XWGI3SGARFNYKYT2A32SUYA2KVAIV2U2Q34DQA7WWJPFRKIKM";
     let inspect_dir = test_dir_with_subfolder(SUBFOLDER);
 
     // Pull the echo module and push to local registry to test local inspect
-    let echo = test_dir_file(SUBFOLDER, "echo.wasm");
-    let get_hello_wasm = wash()
+    let local_http_client_path = test_dir_file(SUBFOLDER, "httpclient.wasm");
+    let get_http_client = wash()
         .args(&[
             "reg",
             "pull",
-            ECHO_OCI,
+            HTTP_OCI,
             "--destination",
-            echo.to_str().unwrap(),
+            local_http_client_path.to_str().unwrap(),
         ])
         .output()
-        .expect("failed to pull echo for claims sign test");
-    assert!(get_hello_wasm.status.success());
+        .expect("failed to pull https server for par inspect test");
+    assert!(get_http_client.status.success());
     let push_echo = wash()
         .args(&[
             "reg",
             "push",
-            "localhost:5000/echo:claimsinspect",
-            echo.to_str().unwrap(),
+            "localhost:5000/httpclient:parinspect",
+            local_http_client_path.to_str().unwrap(),
             "--insecure",
         ])
         .output()
@@ -238,29 +240,25 @@ fn integration_par_inspect() {
     // from the command output
     let local_inspect = wash()
         .args(&[
-            "claims",
+            "par",
             "inspect",
-            echo.to_str().unwrap(),
+            local_http_client_path.to_str().unwrap(),
             "--output",
             "json",
         ])
         .output()
-        .expect("failed to inspect local wasm");
+        .expect("failed to inspect local http server");
     assert!(local_inspect.status.success());
     let local_inspect_output = output_to_string(local_inspect);
-    assert!(local_inspect_output.contains(&format!("\"account\":\"{}\"", ECHO_ACC)));
-    assert!(local_inspect_output.contains(&format!("\"module\":\"{}\"", ECHO_MOD)));
-    assert!(local_inspect_output.contains("\"can_be_used\":\"immediately\""));
-    assert!(local_inspect_output.contains("\"capabilities\":[\"HTTP Server\"]"));
-    assert!(local_inspect_output.contains("\"expires\":\"never\""));
-    assert!(local_inspect_output.contains("\"tags\":\"None\""));
-    assert!(local_inspect_output.contains("\"version\":\"0.2.1\""));
+    assert!(local_inspect_output.contains(&format!("\"issuer\":\"{}\"", HTTP_ISSUER)));
+    assert!(local_inspect_output.contains(&format!("\"service\":\"{}\"", HTTP_SERVICE)));
+    assert!(local_inspect_output.contains("\"capability_contract_id\":\"wasmcloud:httpclient\""));
 
     let local_reg_inspect = wash()
         .args(&[
-            "claims",
+            "par",
             "inspect",
-            "localhost:5000/echo:claimsinspect",
+            "localhost:5000/httpclient:parinspect",
             "--insecure",
             "-o",
             "json",
@@ -269,35 +267,65 @@ fn integration_par_inspect() {
         .expect("failed to inspect local registry wasm");
     assert!(local_reg_inspect.status.success());
     let local_reg_inspect_output = output_to_string(local_reg_inspect);
-    assert!(local_reg_inspect_output.contains(&format!("\"account\":\"{}\"", ECHO_ACC)));
-    assert!(local_reg_inspect_output.contains(&format!("\"module\":\"{}\"", ECHO_MOD)));
-    assert!(local_reg_inspect_output.contains("\"can_be_used\":\"immediately\""));
-    assert!(local_reg_inspect_output.contains("\"capabilities\":[\"HTTP Server\"]"));
-    assert!(local_reg_inspect_output.contains("\"expires\":\"never\""));
-    assert!(local_reg_inspect_output.contains("\"tags\":\"None\""));
-    assert!(local_reg_inspect_output.contains("\"version\":\"0.2.1\""));
+    assert!(local_reg_inspect_output.contains(&format!("\"issuer\":\"{}\"", HTTP_ISSUER)));
+    assert!(local_reg_inspect_output.contains(&format!("\"service\":\"{}\"", HTTP_SERVICE)));
+    assert!(
+        local_reg_inspect_output.contains("\"capability_contract_id\":\"wasmcloud:httpclient\"")
+    );
 
     let remote_inspect = wash()
-        .args(&[
-            "claims",
-            "inspect",
-            ECHO_OCI,
-            "--digest",
-            "sha256:55689502d1bc9c48f22b278c54efeee206a839b8e8eedd4ea6b19e6861f66b3c",
-            "-o",
-            "json",
-        ])
+        .args(&["par", "inspect", HTTP_OCI, "-o", "json"])
         .output()
         .expect("failed to inspect local registry wasm");
     assert!(remote_inspect.status.success());
     let remote_inspect_output = output_to_string(remote_inspect);
-    assert!(remote_inspect_output.contains(&format!("\"account\":\"{}\"", ECHO_ACC)));
-    assert!(remote_inspect_output.contains(&format!("\"module\":\"{}\"", ECHO_MOD)));
-    assert!(remote_inspect_output.contains("\"can_be_used\":\"immediately\""));
-    assert!(remote_inspect_output.contains("\"capabilities\":[\"HTTP Server\"]"));
-    assert!(remote_inspect_output.contains("\"expires\":\"never\""));
-    assert!(remote_inspect_output.contains("\"tags\":\"None\""));
-    assert!(remote_inspect_output.contains("\"version\":\"0.2.1\""));
+    assert!(remote_inspect_output.contains(&format!("\"issuer\":\"{}\"", HTTP_ISSUER)));
+    assert!(remote_inspect_output.contains(&format!("\"service\":\"{}\"", HTTP_SERVICE)));
+    assert!(remote_inspect_output.contains("\"capability_contract_id\":\"wasmcloud:httpclient\""));
 
     remove_dir_all(inspect_dir).unwrap();
+}
+
+#[test]
+fn integration_par_inspect_cached() {
+    const HTTP_OCI: &str = "wasmcloud.azurecr.io/httpclient:0.3.5";
+    const HTTP_FAKE_OCI: &str = "foo.bar.io/httpclient:0.3.5";
+    const HTTP_FAKE_CACHED: &str = "foo_bar_io_httpclient_0_3_5";
+    const HTTP_ISSUER: &str = "ACOJJN6WUP4ODD75XEBKKTCCUJJCY5ZKQ56XVKYK4BEJWGVAOOQHZMCW";
+    const HTTP_SERVICE: &str = "VCCVLH4XWGI3SGARFNYKYT2A32SUYA2KVAIV2U2Q34DQA7WWJPFRKIKM";
+
+    let mut http_client_cache_path = temp_dir().join("wasmcloud_ocicache").join(HTTP_FAKE_CACHED);
+    let _ = ::std::fs::create_dir_all(&http_client_cache_path);
+    http_client_cache_path.set_extension("bin");
+
+    let get_http_client = wash()
+        .args(&[
+            "reg",
+            "pull",
+            HTTP_OCI,
+            "--destination",
+            http_client_cache_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("failed to pull echo for claims sign test");
+    assert!(get_http_client.status.success());
+
+    let remote_inspect = wash()
+        .args(&["par", "inspect", HTTP_FAKE_OCI, "-o", "json"])
+        .output()
+        .expect("failed to inspect remote cached registry");
+    assert!(remote_inspect.status.success());
+    let remote_inspect_output = output_to_string(remote_inspect);
+    assert!(remote_inspect_output.contains(&format!("\"issuer\":\"{}\"", HTTP_ISSUER)));
+    assert!(remote_inspect_output.contains(&format!("\"service\":\"{}\"", HTTP_SERVICE)));
+    assert!(remote_inspect_output.contains("\"capability_contract_id\":\"wasmcloud:httpclient\""));
+
+    let remote_inspect_no_cache = wash()
+        .args(&["par", "inspect", HTTP_FAKE_OCI, "-o", "json", "--no-cache"])
+        .output()
+        .expect("failed to inspect remote cached registry");
+
+    assert!(!remote_inspect_no_cache.status.success());
+
+    remove_file(http_client_cache_path).unwrap();
 }

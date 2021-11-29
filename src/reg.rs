@@ -1,5 +1,6 @@
 extern crate oci_distribution;
-use crate::util::{format_output, Output, OutputKind};
+
+use crate::util::{cached_file, format_output, Output, OutputKind};
 use log::{debug, info, warn};
 use oci_distribution::client::*;
 use oci_distribution::secrets::RegistryAuth;
@@ -185,6 +186,30 @@ pub(crate) async fn handle_pull(cmd: PullCommand) -> Result<String, Box<dyn ::st
         json!({"result": "success", "file": outfile}),
         &cmd.output.kind,
     ))
+}
+
+/// Attempts to return a local artifact, then a cached one.
+/// Falls back to pull from registry if neither is found.
+pub(crate) async fn get_artifact(
+    url: String,
+    digest: Option<String>,
+    allow_latest: bool,
+    user: Option<String>,
+    password: Option<String>,
+    insecure: bool,
+    no_cache: bool,
+) -> Result<Vec<u8>, Box<dyn ::std::error::Error>> {
+    if let Ok(mut local_artifact) = File::open(url.clone()) {
+        let mut buf = Vec::new();
+        local_artifact.read_to_end(&mut buf)?;
+        Ok(buf)
+    } else if let (Ok(mut cached_artifact), false) = (File::open(cached_file(&url)), no_cache) {
+        let mut buf = Vec::new();
+        cached_artifact.read_to_end(&mut buf)?;
+        Ok(buf)
+    } else {
+        pull_artifact(url.clone(), digest, allow_latest, user, password, insecure).await
+    }
 }
 
 pub(crate) async fn pull_artifact(
