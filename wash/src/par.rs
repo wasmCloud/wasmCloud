@@ -149,6 +149,10 @@ pub(crate) struct InspectCommand {
     #[structopt(long = "insecure")]
     insecure: bool,
 
+    /// skip the local OCI cache
+    #[structopt(long = "no-cache")]
+    no_cache: bool,
+
     #[structopt(flatten)]
     pub(crate) output: Output,
 }
@@ -277,26 +281,18 @@ pub(crate) fn handle_create(cmd: CreateCommand) -> Result<String> {
 
 /// Loads a provider archive and outputs the contents of the claims
 pub(crate) async fn handle_inspect(cmd: InspectCommand) -> Result<String> {
-    let archive = match File::open(&cmd.archive) {
-        Ok(mut f) => {
-            let mut buf = Vec::new();
-            f.read_to_end(&mut buf)?;
-            ProviderArchive::try_load(&buf).map_err(|e| format!("{}", e))?
-        }
-        Err(_) => {
-            let artifact = crate::reg::pull_artifact(
-                cmd.archive,
-                cmd.digest,
-                cmd.allow_latest,
-                cmd.user,
-                cmd.password,
-                cmd.insecure,
-            )
-            .await?;
-            ProviderArchive::try_load(&artifact).map_err(|e| format!("{}", e))?
-        }
-    };
-    let claims = archive.claims().unwrap();
+    let artifact_bytes = crate::reg::get_artifact(
+        cmd.archive,
+        cmd.digest,
+        cmd.allow_latest,
+        cmd.user,
+        cmd.password,
+        cmd.insecure,
+        cmd.no_cache,
+    )
+    .await?;
+    let artifact = ProviderArchive::try_load(&artifact_bytes).map_err(|e| format!("{}", e))?;
+    let claims = artifact.claims().unwrap();
     let metadata = claims.metadata.unwrap();
 
     let output = match cmd.output.kind {
@@ -316,7 +312,7 @@ pub(crate) async fn handle_inspect(cmd: InspectCommand) -> Result<String> {
                     "vendor": metadata.vendor,
                     "ver": friendly_ver,
                     "rev": friendly_rev,
-                    "targets": archive.targets()})
+                    "targets": artifact.targets()})
             )
         }
         OutputKind::Text => {
@@ -371,7 +367,7 @@ pub(crate) async fn handle_inspect(cmd: InspectCommand) -> Result<String> {
             )]));
 
             table.add_row(Row::new(vec![TableCell::new_with_alignment(
-                archive.targets().join("\n"),
+                artifact.targets().join("\n"),
                 2,
                 Alignment::Left,
             )]));
@@ -681,6 +677,7 @@ mod test {
             "secret",
             "--user",
             "name",
+            "--no-cache",
         ])
         .unwrap();
         match inspect_long.command {
@@ -692,6 +689,7 @@ mod test {
                 password,
                 insecure,
                 output,
+                no_cache,
             }) => {
                 assert_eq!(archive, LOCAL);
                 assert_eq!(digest.unwrap(), "sha256:blah");
@@ -700,6 +698,7 @@ mod test {
                 assert_eq!(user.unwrap(), "name");
                 assert_eq!(password.unwrap(), "secret");
                 assert_eq!(output.kind, OutputKind::Json);
+                assert!(no_cache);
             }
             cmd => panic!("par inspect constructed incorrect command {:?}", cmd),
         }
@@ -717,6 +716,7 @@ mod test {
             "name",
             "--allow-latest",
             "--insecure",
+            "--no-cache",
         ])
         .unwrap();
         match inspect_short.command {
@@ -728,6 +728,7 @@ mod test {
                 password,
                 insecure,
                 output,
+                no_cache,
             }) => {
                 assert_eq!(archive, REMOTE);
                 assert_eq!(digest.unwrap(), "sha256:blah");
@@ -736,6 +737,7 @@ mod test {
                 assert_eq!(user.unwrap(), "name");
                 assert_eq!(password.unwrap(), "secret");
                 assert_eq!(output.kind, OutputKind::Json);
+                assert!(no_cache);
             }
             cmd => panic!("par inspect constructed incorrect command {:?}", cmd),
         }

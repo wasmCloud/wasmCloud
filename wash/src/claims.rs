@@ -104,6 +104,10 @@ pub(crate) struct InspectCommand {
     #[structopt(long = "insecure")]
     insecure: bool,
 
+    /// skip the local OCI cache
+    #[structopt(long = "no-cache")]
+    no_cache: bool,
+
     #[structopt(flatten)]
     pub(crate) output: Output,
 }
@@ -674,27 +678,19 @@ fn sign_file(cmd: SignCommand) -> Result<String, Box<dyn ::std::error::Error>> {
 async fn get_caps(
     cmd: &InspectCommand,
 ) -> Result<Option<Token<Actor>>, Box<dyn ::std::error::Error>> {
-    let module_bytes = match File::open(&cmd.module) {
-        Ok(mut f) => {
-            let mut buf = Vec::new();
-            f.read_to_end(&mut buf).unwrap();
-            buf
-        }
-        Err(_) => {
-            crate::reg::pull_artifact(
-                cmd.module.to_string(),
-                cmd.digest.clone(),
-                cmd.allow_latest,
-                cmd.user.clone(),
-                cmd.password.clone(),
-                cmd.insecure,
-            )
-            .await?
-        }
-    };
+    let artifact_bytes = crate::reg::get_artifact(
+        cmd.module.to_string(),
+        cmd.digest.clone(),
+        cmd.allow_latest,
+        cmd.user.clone(),
+        cmd.password.clone(),
+        cmd.insecure,
+        cmd.no_cache,
+    )
+    .await?;
 
     // Extract will return an error if it encounters an invalid hash in the claims
-    let claims = wascap::wasm::extract_claims(&module_bytes);
+    let claims = wascap::wasm::extract_claims(&artifact_bytes);
     match claims {
         Ok(token) => Ok(token),
         Err(e) => Err(Box::new(e)),
@@ -971,6 +967,7 @@ mod test {
             "--allow-latest",
             "--insecure",
             "--jwt-only",
+            "--no-cache",
         ])
         .unwrap();
 
@@ -984,6 +981,7 @@ mod test {
                 password,
                 insecure,
                 output,
+                no_cache,
             }) => {
                 assert_eq!(module, SUBSCRIBER_OCI);
                 assert_eq!(
@@ -996,6 +994,7 @@ mod test {
                 assert!(allow_latest);
                 assert!(insecure);
                 assert!(jwt_only);
+                assert!(no_cache);
             }
             cmd => panic!("claims constructed incorrect command: {:?}", cmd),
         }
@@ -1015,6 +1014,7 @@ mod test {
             "--allow-latest",
             "--insecure",
             "--jwt-only",
+            "--no-cache",
         ])
         .unwrap();
 
@@ -1028,6 +1028,7 @@ mod test {
                 password,
                 insecure,
                 output,
+                no_cache,
             }) => {
                 assert_eq!(module, SUBSCRIBER_OCI);
                 assert_eq!(
@@ -1040,6 +1041,7 @@ mod test {
                 assert!(allow_latest);
                 assert!(insecure);
                 assert!(jwt_only);
+                assert!(no_cache);
             }
             cmd => panic!("claims constructed incorrect command: {:?}", cmd),
         }
