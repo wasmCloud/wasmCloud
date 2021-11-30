@@ -95,7 +95,7 @@ impl<'model> CodeGen for RustCodeGen<'model> {
         self.import_core = WASMBUS_RPC_CRATE.to_string();
 
         if let Some(model) = model {
-            if let Some(Value::Array(codegen_min)) = model.metadata_value("codegen_version") {
+            if let Some(Value::Array(codegen_min)) = model.metadata_value("codegen") {
                 let current_ver =
                     semver::Version::parse(env!("CARGO_PKG_VERSION")).map_err(|e| {
                         Error::InvalidModel(format!(
@@ -104,18 +104,30 @@ impl<'model> CodeGen for RustCodeGen<'model> {
                         ))
                     })?;
                 for val in codegen_min.iter() {
-                    if let Value::String(val) = val {
-                        let min_ver = semver::Version::parse(val).map_err(|e| {
-                            Error::InvalidModel(format!(
-                                "metadata parse error for 'codegen_version' '{}': {}",
-                                val, e
-                            ))
-                        })?;
-                        if min_ver.gt(&current_ver) {
-                            return Err(Error::Model(format!(
-                                "model requires weld-codegen version >= {}",
-                                min_ver
-                            )));
+                    if let Value::Object(map) = val {
+                        if let Some(Value::String(lang)) = map.get("language") {
+                            if lang.as_str() == "rust" {
+                                if let Some(Value::String(ver)) = map.get("min_version") {
+                                    let min_ver = semver::Version::parse(ver).map_err(|e| {
+                                        Error::InvalidModel(format!(
+                                            "metadata parse error for codegen {{ language=rust, \
+                                             min_version={} }}: {}",
+                                            ver, e
+                                        ))
+                                    })?;
+                                    if min_ver.gt(&current_ver) {
+                                        return Err(Error::Model(format!(
+                                            "model requires weld-codegen version >= {}",
+                                            min_ver
+                                        )));
+                                    }
+                                } else {
+                                    return Err(Error::Model(
+                                        "missing 'min_version' in metadata.codegen for lang=rust"
+                                            .to_string(),
+                                    ));
+                                }
+                            }
                         }
                     }
                 }
