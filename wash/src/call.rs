@@ -1,16 +1,16 @@
-use crate::ctx::{context_dir, get_default_context, load_context};
-use crate::util::Result;
-use crate::util::{
-    convert_rpc_error, extract_arg_value, format_output, json_str_to_msgpack_bytes,
-    msgpack_to_json_val, nats_client_from_opts, Output, OutputKind, DEFAULT_LATTICE_PREFIX,
-    DEFAULT_NATS_HOST, DEFAULT_NATS_PORT, DEFAULT_NATS_TIMEOUT,
+use crate::{
+    ctx::{context_dir, get_default_context, load_context},
+    id::ClusterSeed,
+    util::{
+        convert_rpc_error, extract_arg_value, format_output, json_str_to_msgpack_bytes,
+        msgpack_to_json_val, nats_client_from_opts, Output, OutputKind, Result,
+        DEFAULT_LATTICE_PREFIX, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT, DEFAULT_NATS_TIMEOUT,
+    },
 };
 use log::{debug, error};
 use serde_json::json;
-use std::path::PathBuf;
-use std::time::Duration;
-use structopt::clap::AppSettings;
-use structopt::StructOpt;
+use std::{path::PathBuf, time::Duration};
+use structopt::{clap::AppSettings, StructOpt};
 use wasmbus_rpc::{core::WasmCloudEntity, Message, RpcClient};
 use wasmcloud_test_util::testing::TestResults;
 
@@ -111,8 +111,13 @@ pub(crate) struct CallCommand {
     /// wasmCloud host cluster seed. This cluster seed must match the cluster seed used to
     /// launch the wasmCloud host in order to pass antiforgery checks made by the host
     /// This is only optional if a default context is available or a context is provided
-    #[structopt(short = "c", long = "cluster-seed", env = "WASMCLOUD_CLUSTER_SEED")]
-    pub(crate) cluster_seed: Option<String>,
+    #[structopt(
+        short = "c",
+        long = "cluster-seed",
+        env = "WASMCLOUD_CLUSTER_SEED",
+        parse(try_from_str)
+    )]
+    pub(crate) cluster_seed: Option<ClusterSeed>,
 
     /// Public key or OCI reference of actor
     #[structopt(name = "actor-id")]
@@ -225,7 +230,7 @@ pub(crate) fn call_output(
 
 async fn rpc_client_from_opts(
     opts: ConnectionOpts,
-    cmd_cluster_seed: Option<String>,
+    cmd_cluster_seed: Option<ClusterSeed>,
 ) -> Result<(RpcClient, u64)> {
     let ctx = if let Some(context) = opts.context {
         load_context(&context).ok()
@@ -299,7 +304,7 @@ async fn rpc_client_from_opts(
                     error!(
                         "No cluster seed provided and no context available, this RPC will fail."
                     );
-                    "".to_string()
+                    ClusterSeed::default()
                 })
             })
             .unwrap_or_default()
@@ -310,7 +315,7 @@ async fn rpc_client_from_opts(
         RpcClient::new_asynk(
             nc,
             &lattice_prefix,
-            nkeys::KeyPair::from_seed(&extract_arg_value(&cluster_seed)?)?,
+            nkeys::KeyPair::from_seed(&extract_arg_value(&cluster_seed.to_string())?)?,
             WASH_HOST_ID.to_string(),
             Some(Duration::from_millis(timeout)),
         ),
@@ -349,7 +354,7 @@ mod test {
             "--context",
             "~/.wash/contexts/default.json",
             "--cluster-seed",
-            "SCASDASDASD",
+            "SCAMSVN4M2NZ65RWGYE42BZZ7VYEFEAAHGLIY7R4W7CRHORSMXTDJRKXLY",
             "--lattice-prefix",
             LATTICE_PREFIX,
             "--rpc-host",
@@ -386,7 +391,12 @@ mod test {
                 assert_eq!(output.kind, crate::util::OutputKind::Json);
                 assert_eq!(data, Some(PathBuf::from(DATA_FNAME)));
                 assert_eq!(save, Some(PathBuf::from(SAVE_FNAME)));
-                assert_eq!(cluster_seed.unwrap(), "SCASDASDASD");
+                assert_eq!(
+                    cluster_seed.unwrap(),
+                    "SCAMSVN4M2NZ65RWGYE42BZZ7VYEFEAAHGLIY7R4W7CRHORSMXTDJRKXLY"
+                        .parse()
+                        .unwrap()
+                );
                 assert!(test);
                 assert_eq!(bin, '2');
                 assert_eq!(actor_id, ACTOR_ID);

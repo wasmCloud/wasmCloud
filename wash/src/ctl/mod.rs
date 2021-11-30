@@ -1,5 +1,6 @@
 extern crate wasmcloud_control_interface;
 use crate::ctx::{context_dir, get_default_context, load_context};
+use crate::id::{ModuleId, ServerId, ServiceId};
 use crate::{
     ctl::manifest::HostManifest,
     util::{
@@ -7,7 +8,6 @@ use crate::{
         DEFAULT_NATS_HOST, DEFAULT_NATS_PORT, DEFAULT_NATS_TIMEOUT,
     },
 };
-use id::{ModuleId, ServerId, ServiceId};
 pub(crate) use output::*;
 use spinners::{Spinner, Spinners};
 use std::{
@@ -20,7 +20,6 @@ use wasmcloud_control_interface::{
     LinkDefinitionList,
 };
 
-mod id;
 mod manifest;
 mod output;
 

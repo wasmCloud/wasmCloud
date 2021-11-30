@@ -1,26 +1,26 @@
-use structopt::clap::AppSettings;
-use structopt::StructOpt;
-
-mod drain;
-use drain::DrainCli;
-mod claims;
-use claims::ClaimsCli;
-mod ctl;
-use ctl::CtlCli;
-mod generate;
-use generate::NewCli;
-mod keys;
-use keys::KeysCli;
-mod par;
-use par::ParCli;
-mod reg;
-use reg::RegCli;
-mod smithy;
-use smithy::{GenerateCli, LintCli, ValidateCli};
-mod call;
 use call::CallCli;
-mod ctx;
+use claims::ClaimsCli;
+use ctl::CtlCli;
 use ctx::CtxCli;
+use drain::DrainCli;
+use generate::NewCli;
+use keys::KeysCli;
+use par::ParCli;
+use reg::RegCli;
+use smithy::{GenerateCli, LintCli, ValidateCli};
+use structopt::{clap::AppSettings, StructOpt};
+
+mod call;
+mod claims;
+mod ctl;
+mod ctx;
+mod drain;
+mod generate;
+mod id;
+mod keys;
+mod par;
+mod reg;
+mod smithy;
 mod util;
 
 const ASCII: &str = r#"

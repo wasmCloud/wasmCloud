@@ -1,5 +1,6 @@
-use crate::util::{
-    DEFAULT_LATTICE_PREFIX, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT, DEFAULT_NATS_TIMEOUT,
+use crate::{
+    id::ClusterSeed,
+    util::{DEFAULT_LATTICE_PREFIX, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT, DEFAULT_NATS_TIMEOUT},
 };
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -21,7 +22,7 @@ pub(crate) struct WashContext {
     #[serde(default)]
     pub name: String,
     #[serde(with = "serde_with::rust::string_empty_as_none")]
-    pub cluster_seed: Option<String>,
+    pub cluster_seed: Option<ClusterSeed>,
 
     #[serde(default = "default_nats_host")]
     pub ctl_host: String,
@@ -65,7 +66,7 @@ impl WashContext {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         name: String,
-        cluster_seed: Option<String>,
+        cluster_seed: Option<ClusterSeed>,
         ctl_host: String,
         ctl_port: u16,
         ctl_jwt: Option<String>,
