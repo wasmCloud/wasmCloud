@@ -2,10 +2,10 @@
 //!
 #![cfg(feature = "cbor")]
 
-use crate::codegen_rust::is_optional_type;
 #[cfg(feature = "wasmbus")]
 use crate::wasmbus_model::Wasmbus;
 use crate::{
+    codegen_rust::is_optional_type,
     config::{LanguageConfig, OutputLanguage},
     error::{print_warning, Error, Result},
     gen::{spaces, CodeGen, SourceFormatter},
@@ -17,12 +17,11 @@ use crate::{
     writer::Writer,
     BytesMut, ParamMap,
 };
-use atelier_core::model::shapes::{MemberShape, ShapeKind};
 use atelier_core::{
     model::{
         shapes::{
-            AppliedTraits, HasTraits, ListOrSet, Map as MapShape, Operation, Service, Simple,
-            StructureOrUnion,
+            AppliedTraits, HasTraits, ListOrSet, Map as MapShape, MemberShape, Operation, Service,
+            ShapeKind, Simple, StructureOrUnion,
         },
         values::Value,
         HasIdentity, Identifier, Model, NamespaceID, ShapeID,
@@ -98,7 +97,13 @@ impl<'model> CodeGen for PythonCodeGen<'model> {
         if let Some(model) = model {
             if let Some(packages) = model.metadata_value("package") {
                 let packages: Vec<PackageName> = serde_json::from_value(value_to_json(packages))
-                    .map_err(|e| Error::Model(format!("invalid metadata format for package, expecting format '[{{namespace:\"org.example\",crate:\"path::module\"}}]':  {}", e)))?;
+                    .map_err(|e| {
+                        Error::Model(format!(
+                            "invalid metadata format for package, expecting format \
+                             '[{{namespace:\"org.example\",crate:\"path::module\"}}]':  {}",
+                            e
+                        ))
+                    })?;
                 for p in packages.iter() {
                     self.packages.insert(p.namespace.to_string(), p.clone());
                 }
@@ -434,8 +439,14 @@ impl<'model> PythonCodeGen<'model> {
                             py_module.to_string()
                         }
                         _ => {
-                            return Err(Error::Model(format!("undefined py_module for namespace {} for symbol {}. Make sure codegen.toml includes all dependent namespaces, and that the dependent .smithy file contains package metadata with py_module: value",
-                                                            &id.namespace(), &id)));
+                            return Err(Error::Model(format!(
+                                "undefined py_module for namespace {} for symbol {}. Make sure \
+                                 codegen.toml includes all dependent namespaces, and that the \
+                                 dependent .smithy file contains package metadata with py_module: \
+                                 value",
+                                &id.namespace(),
+                                &id
+                            )));
                         }
                     };
                     self.add_package_import(&import_pkg);
@@ -960,6 +971,7 @@ impl SourceFormatter for PythonSourceFormatter {
         crate::format::run_command(&self.program, &args)?;
         Ok(())
     }
+
     fn include(&self, path: &std::path::Path) -> bool {
         crate::codegen_py::is_python_source(path)
     }

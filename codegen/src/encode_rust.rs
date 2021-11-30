@@ -14,18 +14,16 @@
 
 // The encoder is written as a plain function "encode_<S>" where S is the type name
 // (camel cased for the fn name), and scoped to the module where S is defined.
-use crate::codegen_rust::RustCodeGen;
 use crate::{
-    codegen_rust::is_optional_type,
+    codegen_rust::{is_optional_type, RustCodeGen},
     error::{Error, Result},
     gen::CodeGen,
     model::wasmcloud_model_namespace,
     writer::Writer,
 };
-use atelier_core::model::shapes::ShapeKind;
 use atelier_core::{
     model::{
-        shapes::{HasTraits, Simple, StructureOrUnion},
+        shapes::{HasTraits, ShapeKind, Simple, StructureOrUnion},
         HasIdentity, ShapeID,
     },
     prelude::{
@@ -195,8 +193,13 @@ impl<'model> RustCodeGen<'model> {
                     )
                 }
                 _ => {
-                    return Err(Error::Model(format!("undefined crate for namespace {} for symbol {}. Make sure codegen.toml includes all dependent namespaces, and that the dependent .smithy file contains package metadata with crate: value",
-                                                    &id.namespace(), &id)));
+                    return Err(Error::Model(format!(
+                        "undefined crate for namespace {} for symbol {}. Make sure codegen.toml \
+                         includes all dependent namespaces, and that the dependent .smithy file \
+                         contains package metadata with crate: value",
+                        &id.namespace(),
+                        &id
+                    )));
                 }
             }
         };

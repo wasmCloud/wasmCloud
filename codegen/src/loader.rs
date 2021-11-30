@@ -257,7 +257,9 @@ fn urls_to_cached_files(urls: Vec<String>) -> Result<Vec<PathBuf>> {
     }
     if results.len() != urls.len() {
         Err(Error::Other(format!(
-            "Quitting - {} model files could not be downloaded and were not found in the cache. If you have previously built this project and are working \"offline\", try setting SMITHY_CACHE=NO_EXPIRE in the environment",
+            "Quitting - {} model files could not be downloaded and were not found in the cache. \
+             If you have previously built this project and are working \"offline\", try setting \
+             SMITHY_CACHE=NO_EXPIRE in the environment",
             urls.len() - results.len()
         )))
     } else {
