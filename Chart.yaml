@@ -9,12 +9,12 @@ keywords:
   - wasmcloud
 
 home: https://wasmcloud.dev
-sources: 
+sources:
   - https://github.com/wasmCloud/wasmcloud-otp
 icon: https://github.com/wasmCloud/wasmcloud.com-dev/raw/main/static/images/wasmcloud-logo.png
 
 type: application
 
-version: 0.1.0
+version: 0.1.1
 
 appVersion: "0.50.3"
