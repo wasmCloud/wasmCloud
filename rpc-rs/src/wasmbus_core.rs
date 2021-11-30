@@ -81,6 +81,8 @@ pub struct Invocation {
     pub encoded_claims: String,
     #[serde(default)]
     pub host_id: String,
+    #[serde(default)]
+    pub api_version: u32,
 }
 
 /// Response to an invocation
