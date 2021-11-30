@@ -100,7 +100,7 @@ impl<'model> CodeGen for RustCodeGen<'model> {
                     semver::Version::parse(env!("CARGO_PKG_VERSION")).map_err(|e| {
                         Error::InvalidModel(format!(
                             "parse error for weld-codegen package version: {}",
-                            e.to_string()
+                            e
                         ))
                     })?;
                 for val in codegen_min.iter() {
@@ -108,14 +108,13 @@ impl<'model> CodeGen for RustCodeGen<'model> {
                         let min_ver = semver::Version::parse(val).map_err(|e| {
                             Error::InvalidModel(format!(
                                 "metadata parse error for 'codegen_version' '{}': {}",
-                                val,
-                                e.to_string()
+                                val, e
                             ))
                         })?;
                         if min_ver.gt(&current_ver) {
                             return Err(Error::Model(format!(
                                 "model requires weld-codegen version >= {}",
-                                min_ver.to_string()
+                                min_ver
                             )));
                         }
                     }
