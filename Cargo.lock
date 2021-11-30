@@ -3653,6 +3653,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "test-case"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7cad0a06f9a61e94355aa3b3dc92d85ab9c83406722b1ca5e918d4297c12c23"
+dependencies = [
+ "cfg-if 1.0.0",
+ "proc-macro2 1.0.32",
+ "quote 1.0.10",
+ "syn 1.0.81",
+ "version_check 0.9.3",
+]
+
+[[package]]
 name = "test_bin"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4103,6 +4116,7 @@ dependencies = [
  "structopt",
  "tempfile",
  "term-table",
+ "test-case",
  "test_bin",
  "thiserror",
  "tokio",

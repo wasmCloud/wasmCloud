@@ -1,10 +1,11 @@
 extern crate wasmcloud_control_interface;
-use crate::util::{format_optional, format_output, OutputKind};
+use crate::{
+    id::{ModuleId, ServiceId},
+    util::{format_optional, format_output, OutputKind},
+};
 use serde_json::json;
 use term_table::{row::Row, table_cell::*, Table};
 use wasmcloud_control_interface::*;
-
-use super::id::{ModuleId, ServiceId};
 
 pub(crate) fn get_hosts_output(hosts: Vec<Host>, output_kind: &OutputKind) -> String {
     match *output_kind {
