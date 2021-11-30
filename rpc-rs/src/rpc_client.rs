@@ -215,6 +215,7 @@ impl RpcClient {
             id: subject,
             encoded_claims: claims.encode(&self.key).unwrap(),
             host_id: self.host_id.clone(),
+            api_version: crate::WASMBUS_RPC_VERSION,
         };
         trace!("rpc send {}", &target_url);
 
