@@ -31,7 +31,7 @@ pub type RpcResult<T> = std::result::Result<T, RpcError>;
 
 /// Version number of this api
 #[doc(hidden)]
-pub const WASMBUS_RPC_VERSION: u32 = 0;
+pub(crate) const WASMBUS_RPC_VERSION: u32 = 0;
 
 /// import module for webassembly linking
 #[doc(hidden)]
