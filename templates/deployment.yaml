@@ -124,11 +124,11 @@ spec:
               protocol: TCP
           livenessProbe:
             httpGet:
-              path: /
+              path: /api/livez
               port: washboard
           readinessProbe:
             httpGet:
-              path: /
+              path: /api/readyz
               port: washboard
           resources:
             {{- toYaml .Values.wasmcloud.resources | nindent 12 }}
