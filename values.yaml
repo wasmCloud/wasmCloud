@@ -25,6 +25,10 @@ wasmcloud:
     providerRpcSeed: ""
     ctlSeed: ""
     jetstreamDomain: ""
+    # Sets the username and password for use with a private registry
+    registry:
+      username: ""
+      password: ""
   image:
     repository: wasmcloud/wasmcloud_host
     pullPolicy: IfNotPresent
@@ -40,7 +44,7 @@ nats:
   # production. This is different than the domain used for the host
   jetstreamDomain: ""
   leafnode:
-    # Sets the nats container to operate in leafnode mode 
+    # Sets the nats container to operate in leafnode mode
     enabled: false
     # The NATS cluster to connect to. Defaults to NGS
     clusterURL: "nats-leaf://connect.ngs.global"
@@ -70,10 +74,12 @@ serviceAccount:
 
 podAnnotations: {}
 
-podSecurityContext: {}
+podSecurityContext:
+  {}
   # fsGroup: 2000
 
-securityContext: {}
+securityContext:
+  {}
   # capabilities:
   #   drop:
   #   - ALL

@@ -88,6 +88,10 @@ spec:
             - name: WASMCLOUD_JS_DOMAIN
               value: {{ .Values.wasmcloud.config.jetstreamDomain | quote }}
             {{- end }}
+            {{- if .Values.wasmcloud.config.registry.username }}
+            - name: OCI_REGISTRY_USER
+              value: {{ .Values.wasmcloud.config.registry.username | quote }}
+            {{- end }}
             {{- if .Values.wasmcloud.config.hostSeed }}
             - name: WASMCLOUD_HOST_SEED
               valueFrom:
@@ -115,6 +119,13 @@ spec:
                 secretKeyRef:
                   name: {{ include "wasmcloud_host.fullname" . }}
                   key: ctlSeed
+            {{- end }}
+            {{- if .Values.wasmcloud.config.registry.password }}
+            - name: OCI_REGISTRY_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "wasmcloud_host.fullname" . }}
+                  key: registryPassword
             {{- end }}
           ports:
             - name: host
