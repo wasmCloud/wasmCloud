@@ -10,7 +10,7 @@ use nats::asynk::Connection;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, time::Duration};
 use sub_stream::SubscriptionStream;
-pub use wasmbus_rpc::{core::LinkDefinition, RpcClient};
+pub use wasmbus_rpc::core::LinkDefinition;
 
 type Result<T> = ::std::result::Result<T, Box<dyn ::std::error::Error + Send + Sync>>;
 
@@ -135,6 +135,7 @@ impl Client {
         &self,
         host_id: &str,
         actor_ref: &str,
+        count: u16,
         annotations: Option<HashMap<String, String>>,
     ) -> Result<CtlOperationAck> {
         let subject = broker::commands::start_actor(&self.nsprefix, host_id);
@@ -143,6 +144,7 @@ impl Client {
             actor_ref: actor_ref.to_string(),
             host_id: host_id.to_string(),
             annotations,
+            count,
         })?;
         match self
             .nc
@@ -354,7 +356,7 @@ impl Client {
         let bytes = json_serialize(StopActorCommand {
             host_id: host_id.to_string(),
             actor_ref: actor_ref.to_string(),
-            count: Some(count),
+            count,
             annotations,
         })?;
         match self
