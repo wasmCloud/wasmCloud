@@ -4,8 +4,7 @@
 //   license: MIT/Apache-2.0
 //
 use crate::generate::{config::Config, ParamMap, TomlMap, PROJECT_NAME_REGEX};
-use anyhow::anyhow;
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use regex::Regex;
 use serde_json::Value;
 use thiserror::Error;

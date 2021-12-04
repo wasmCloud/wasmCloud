@@ -44,8 +44,8 @@ use heck::KebabCase;
 use indicatif::MultiProgress;
 use project_variables::*;
 use serde::Serialize;
-use std::borrow::Borrow;
 use std::{
+    borrow::Borrow,
     fmt, fs,
     path::{Path, PathBuf},
 };

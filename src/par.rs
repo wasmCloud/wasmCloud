@@ -1,14 +1,13 @@
 extern crate provider_archive;
-use crate::keys::extract_keypair;
-use crate::util::{convert_error, format_output, Output, OutputKind, Result};
+use crate::{
+    keys::extract_keypair,
+    util::{convert_error, format_output, Output, OutputKind, Result},
+};
 use nkeys::KeyPairType;
 use provider_archive::*;
 use serde_json::json;
-use std::fs::File;
-use std::io::prelude::*;
-use std::path::PathBuf;
-use structopt::clap::AppSettings;
-use structopt::StructOpt;
+use std::{fs::File, io::prelude::*, path::PathBuf};
+use structopt::{clap::AppSettings, StructOpt};
 
 const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
 
@@ -254,8 +253,7 @@ pub(crate) fn handle_create(cmd: CreateCommand) -> Result<String> {
                 .file_stem()
                 .unwrap()
                 .to_str()
-                .unwrap()
-                .to_string(),
+                .unwrap(),
             extension
         ),
     };
@@ -316,9 +314,7 @@ pub(crate) async fn handle_inspect(cmd: InspectCommand) -> Result<String> {
             )
         }
         OutputKind::Text => {
-            use term_table::row::Row;
-            use term_table::table_cell::*;
-            use term_table::Table;
+            use term_table::{row::Row, table_cell::*, Table};
 
             let mut table = Table::new();
             crate::util::configure_table_style(&mut table);

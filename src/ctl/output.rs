@@ -296,7 +296,7 @@ pub(crate) fn claims_table(list: GetClaimsResponse) -> String {
             ),
         ]));
         table.add_row(Row::new(vec![TableCell::new_with_alignment(
-            format!(""),
+            String::new(),
             2,
             Alignment::Center,
         )]));

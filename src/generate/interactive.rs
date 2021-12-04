@@ -4,11 +4,12 @@
 //   license: MIT/Apache-2.0
 //
 use crate::generate::{
+    any_msg, emoji,
     project_variables::{StringEntry, TemplateSlots, VarInfo},
-    PROJECT_NAME_REGEX, {any_msg, emoji},
+    PROJECT_NAME_REGEX,
 };
 use anyhow::{anyhow, Result};
-use console::{style, Term};
+use console::style;
 use dialoguer::{theme::ColorfulTheme, Input};
 use serde_json::Value;
 use std::ops::Index;
@@ -63,7 +64,6 @@ pub(crate) fn prompt_for_choice(entry: &StringEntry, prompt: &str) -> Result<usi
         0
     };
     let chosen = Select::with_theme(&ColorfulTheme::default())
-        .paged(choices.len() > Term::stdout().size().0 as usize)
         .items(choices)
         .with_prompt(prompt)
         .default(default)

@@ -1,8 +1,8 @@
 extern crate wasmcloud_control_interface;
-use crate::ctx::{context_dir, get_default_context, load_context};
-use crate::id::{ModuleId, ServerId, ServiceId};
 use crate::{
     ctl::manifest::HostManifest,
+    ctx::{context_dir, get_default_context, load_context},
+    id::{ModuleId, ServerId, ServiceId},
     util::{
         convert_error, labels_vec_to_hashmap, Output, OutputKind, Result, DEFAULT_LATTICE_PREFIX,
         DEFAULT_NATS_HOST, DEFAULT_NATS_PORT, DEFAULT_NATS_TIMEOUT,
@@ -22,6 +22,9 @@ use wasmcloud_control_interface::{
 
 mod manifest;
 mod output;
+
+// default start actor command starts with one actor
+const ONE_ACTOR: u16 = 1;
 
 #[derive(Debug, Clone, StructOpt)]
 pub(crate) struct CtlCli {
@@ -726,7 +729,7 @@ pub(crate) async fn start_actor(cmd: StartActorCommand) -> Result<CtlOperationAc
     };
 
     client
-        .start_actor(&host.to_string(), &cmd.actor_ref, None)
+        .start_actor(&host.to_string(), &cmd.actor_ref, ONE_ACTOR, None)
         .await
         .map_err(convert_error)
 }
@@ -861,7 +864,10 @@ async fn apply_manifest_actors(
     let mut results = vec![];
 
     for actor in hm.actors.iter() {
-        match client.start_actor(&host_id.to_string(), actor, None).await {
+        match client
+            .start_actor(&host_id.to_string(), actor, ONE_ACTOR, None)
+            .await
+        {
             Ok(ack) => {
                 if ack.accepted {
                     results.push(format!(

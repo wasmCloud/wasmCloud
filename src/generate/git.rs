@@ -8,8 +8,7 @@ use anyhow::{Context, Result};
 use cargo::core::GitReference;
 use console::style;
 use git2::{
-    build::RepoBuilder,
-    ErrorCode, {Cred, FetchOptions, ProxyOptions, RemoteCallbacks, Repository},
+    build::RepoBuilder, Cred, ErrorCode, FetchOptions, ProxyOptions, RemoteCallbacks, Repository,
 };
 use log::warn;
 use remove_dir_all::remove_dir_all;

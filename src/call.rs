@@ -191,11 +191,7 @@ pub(crate) fn call_output(
             if let Some(ref save_path) = save_output {
                 return match std::fs::write(save_path, msg) {
                     Ok(_) => String::new(),
-                    Err(e) => format!(
-                        "Error saving results to {}: {}",
-                        &save_path.display(),
-                        e.to_string(),
-                    ),
+                    Err(e) => format!("Error saving results to {}: {}", &save_path.display(), e),
                 };
             }
             if is_test {
@@ -208,7 +204,7 @@ pub(crate) fn call_output(
                     Err(e) => {
                         format!(
                             "Error interpreting response as TestResults: {}. (raw): {}",
-                            e.to_string(),
+                            e,
                             String::from_utf8_lossy(&msg)
                         )
                     }

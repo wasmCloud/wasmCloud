@@ -12,29 +12,32 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::keys::extract_keypair;
-use crate::util::{format_output, Output, OutputKind};
+use crate::{
+    keys::extract_keypair,
+    util::{format_output, Output, OutputKind},
+};
 use nkeys::{KeyPair, KeyPairType};
-use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::json;
-use std::collections::HashMap;
-use std::fs::File;
-use std::io::Read;
-use std::io::Write;
-use std::path::PathBuf;
-use structopt::clap::AppSettings;
-use structopt::StructOpt;
+use std::{
+    collections::HashMap,
+    fs::File,
+    io::{Read, Write},
+    path::PathBuf,
+};
+use structopt::{clap::AppSettings, StructOpt};
 use term_table::{
     row::Row,
     table_cell::{Alignment, TableCell},
     Table,
 };
-use wascap::caps::*;
-use wascap::jwt::{
-    Account, Actor, CapabilityProvider, Claims, Operator, Token, TokenValidation, WascapEntity,
+use wascap::{
+    caps::*,
+    jwt::{
+        Account, Actor, CapabilityProvider, Claims, Operator, Token, TokenValidation, WascapEntity,
+    },
+    wasm::{days_from_now_to_jwt_time, sign_buffer_with_claims},
 };
-use wascap::wasm::{days_from_now_to_jwt_time, sign_buffer_with_claims};
 
 #[derive(Debug, StructOpt, Clone)]
 #[structopt(
