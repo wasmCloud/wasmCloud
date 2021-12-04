@@ -1,9 +1,9 @@
-use crate::util::format_output;
-use crate::util::{Output, OutputKind};
+use crate::util::{format_output, Output, OutputKind};
 use serde_json::json;
-use std::env;
-use std::path::Path;
-use std::{fs, path::PathBuf};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+};
 use structopt::StructOpt;
 
 #[derive(Debug, Clone, StructOpt)]
@@ -71,7 +71,7 @@ fn model_cache_dir() -> PathBuf {
     match weld_codegen::weld_cache_dir() {
         Ok(path) => path,
         Err(e) => {
-            eprintln!("{}", e.to_string());
+            eprintln!("{}", e);
             "".into()
         }
     }

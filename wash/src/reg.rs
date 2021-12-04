@@ -2,16 +2,12 @@ extern crate oci_distribution;
 
 use crate::util::{cached_file, format_output, Output, OutputKind};
 use log::{debug, info, warn};
-use oci_distribution::client::*;
-use oci_distribution::secrets::RegistryAuth;
-use oci_distribution::Reference;
+use oci_distribution::{client::*, secrets::RegistryAuth, Reference};
 use provider_archive::ProviderArchive;
 use serde_json::json;
 use spinners::{Spinner, Spinners};
-use std::fs::File;
-use std::io::prelude::*;
-use structopt::clap::AppSettings;
-use structopt::StructOpt;
+use std::{fs::File, io::prelude::*};
+use structopt::{clap::AppSettings, StructOpt};
 
 const PROVIDER_ARCHIVE_MEDIA_TYPE: &str = "application/vnd.wasmcloud.provider.archive.layer.v1+par";
 const PROVIDER_ARCHIVE_CONFIG_MEDIA_TYPE: &str =
@@ -312,8 +308,7 @@ pub(crate) fn write_artifact(
             .split('/')
             .collect::<Vec<_>>()
             .pop()
-            .unwrap()
-            .to_string(),
+            .unwrap(),
         file_extension
     ));
     let mut f = File::create(outfile.clone())?;

@@ -1,11 +1,12 @@
 use crate::util::{format_output, Output, OutputKind};
 use nkeys::{KeyPair, KeyPairType};
 use serde_json::json;
-use std::fs;
-use std::fs::File;
-use std::io::prelude::*;
-use std::io::Error;
-use std::path::{Path, PathBuf};
+use std::{
+    fs,
+    fs::File,
+    io::{prelude::*, Error},
+    path::{Path, PathBuf},
+};
 use structopt::StructOpt;
 
 #[derive(Debug, Clone, StructOpt)]

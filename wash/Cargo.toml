@@ -1,17 +1,14 @@
 [package]
+name = "wash-cli"
+version = "0.7.2"
 authors = ["wasmCloud Team"]
 categories = ["wasm", "command-line-utilities"]
 description = "wasmcloud Shell (wash) CLI tool"
-edition = "2018"
+edition = "2021"
 keywords = ["webassembly", "wasmcloud", "wash", "cli"]
 license = "Apache-2.0"
-name = "wash-cli"
 readme = "README.md"
 repository = "https://github.com/wasmcloud/wash"
-version = "0.7.1"
-
-[features]
-default = []
 
 [badges]
 maintenance = {status = "actively-developed"}
@@ -20,11 +17,11 @@ maintenance = {status = "actively-developed"}
 anyhow = "1.0"
 atelier_core = "0.2"
 bytes = "1.0"
-cargo = "0.56"
+cargo = "0.58"
 cargo_atelier = "0.2"
-console = "0.14"
+console = "0.15"
 derive_more = {version = "0.99.16", default_features = false, features = ["display"]}
-dialoguer = "0.8"
+dialoguer = "0.9"
 dirs = "4.0"
 env_logger = "0.9"
 envmnt = "0.9.0"
@@ -35,7 +32,7 @@ indicatif = "0.16"
 log = "0.4"
 nats = "0.16"
 nkeys = "0.1.0"
-oci-distribution = "0.7.0"
+oci-distribution = "0.8.0"
 once_cell = "1.8"
 path-absolutize = {version = "3.0", features = ["once_cell_cache"]}
 provider-archive = "0.4.0"
@@ -59,9 +56,9 @@ toml = "0.5"
 walkdir = "2.3"
 wascap = "0.6.0"
 wasmbus-rpc = "0.5"
-wasmcloud-control-interface = "0.6"
-wasmcloud-test-util = "0.1.4"
-weld-codegen = "0.1.17"
+wasmcloud-control-interface = "0.7"
+wasmcloud-test-util = "0.1"
+weld-codegen = "0.2"
 which = "4.2.2"
 
 [dev-dependencies]

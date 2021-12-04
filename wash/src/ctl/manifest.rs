@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::{fs::File, io::Read, path::Path};
+use std::{collections::HashMap, fs::File, io::Read, path::Path};
 
 /// A host manifest contains a declarative profile of the host's desired state. The manifest
 /// can specify a list of actors, a list of capability providers, and a list of

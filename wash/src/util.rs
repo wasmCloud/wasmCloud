@@ -1,13 +1,9 @@
 use nats::asynk::Connection;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::env::temp_dir;
-use std::error::Error;
-use std::fmt;
-use std::fs::File;
-use std::io::Read;
-use std::path::PathBuf;
-use std::str::FromStr;
+use std::{
+    collections::HashMap, env::temp_dir, error::Error, fmt, fs::File, io::Read, path::PathBuf,
+    str::FromStr,
+};
 use structopt::StructOpt;
 use term_table::{Table, TableStyle};
 
