@@ -82,7 +82,8 @@ pub fn derive_actor(input: TokenStream) -> TokenStream {
 
     let output = quote!(
 
-    const RPC_VERSION : u32 = 1;
+    // version of the host-actor api
+    pub const HOST_API_VERSION : u32 = 1;
 
     #[link(wasm_import_module = "wasmbus")]
     extern "C" {
@@ -93,7 +94,7 @@ pub fn derive_actor(input: TokenStream) -> TokenStream {
 
     #[no_mangle]
     pub extern "C" fn __wasmbus_rpc_version() -> u32 {
-        RPC_VERSION
+        HOST_API_VERSION
     }
 
     // invocation for api_version == 0
