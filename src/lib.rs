@@ -141,10 +141,10 @@ impl Client {
         let subject = broker::commands::start_actor(&self.nsprefix, host_id);
         trace!("start_actor:request {}", &subject);
         let bytes = json_serialize(StartActorCommand {
+            count,
             actor_ref: actor_ref.to_string(),
             host_id: host_id.to_string(),
-            annotations,
-            count,
+            annotations,            
         })?;
         match self
             .nc

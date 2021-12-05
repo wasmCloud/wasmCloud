@@ -1,10 +1,10 @@
 [package]
 name = "wasmcloud-control-interface"
-version = "0.7.0"
+version = "0.7.1"
 authors = ["wasmCloud Team"]
 edition = "2021"
 homepage = "https://wasmcloud.dev"
-repository = "https://github.com/wasmCloud/interfaces"
+repository = "https://github.com/wasmCloud/control-interface-client"
 description = "This library, when combined with a NATS client, allows interaction with the lattice control interface"
 license = "Apache-2.0"
 documentation = "https://docs.rs/wasmcloud-control-interface"
@@ -28,5 +28,5 @@ serde = { version = "1.0.118", features = ["derive"] }
 serde_json = "1.0.60"
 uuid = {version = "0.8", features  = ["serde", "v4"]}
 wascap = "0.6.0"
-wasmbus-rpc = "0.5.3"
-wasmcloud-interface-lattice-control = "0.3.0"
+wasmbus-rpc = "0.6.0"
+wasmcloud-interface-lattice-control = "0.3.1"
