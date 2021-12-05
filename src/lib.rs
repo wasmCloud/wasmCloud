@@ -144,7 +144,7 @@ impl Client {
             count,
             actor_ref: actor_ref.to_string(),
             host_id: host_id.to_string(),
-            annotations,            
+            annotations,
         })?;
         match self
             .nc
