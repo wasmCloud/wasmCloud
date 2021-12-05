@@ -83,7 +83,10 @@ async fn listen_bin(client: RpcClient, subject: &str) -> tokio::task::JoinHandle
 }
 
 async fn listen_queue(
-    client: RpcClient, subject: &str, queue: &str, pattern: &str,
+    client: RpcClient,
+    subject: &str,
+    queue: &str,
+    pattern: &str,
 ) -> tokio::task::JoinHandle<u64> {
     let subject = subject.to_string();
     let queue = queue.to_string();
@@ -172,11 +175,14 @@ async fn test_message_size() -> Result<(), Box<dyn std::error::Error>> {
                 Ok(Err(rpc_err)) => {
                     eprintln!("rpc send error on msg size {}: {}", *size, rpc_err);
                     continue;
-                },
+                }
                 Err(timeout_err) => {
-                    eprintln!("rpc timeout: sending msg of size {}: {}", *size, timeout_err);
+                    eprintln!(
+                        "rpc timeout: sending msg of size {}: {}",
+                        *size, timeout_err
+                    );
                     continue;
-                },
+                }
             };
         let sbody = String::from_utf8_lossy(&resp);
         let received_size = sbody.parse::<u32>().expect("response contains int size");
@@ -189,7 +195,11 @@ async fn test_message_size() -> Result<(), Box<dyn std::error::Error>> {
     }
     assert_eq!(pass_count, TEST_SIZES.len(), "some size tests did not pass");
     let val = l1.await.expect("join");
-    assert_eq!(val as usize, TEST_SIZES.len(), "some messages were not received");
+    assert_eq!(
+        val as usize,
+        TEST_SIZES.len(),
+        "some messages were not received"
+    );
     Ok(())
 }
 
@@ -252,7 +262,8 @@ async fn queue_sub() -> Result<(), Box<dyn std::error::Error>> {
 const TWO_SEC: Duration = Duration::from_secs(2);
 
 async fn wait_for<O, F: futures::Future<Output = O>>(
-    f: F, timeout: Duration,
+    f: F,
+    timeout: Duration,
 ) -> Result<O, Box<dyn std::error::Error>> {
     let res: O = tokio::time::timeout(timeout, f).await?;
     Ok(res)

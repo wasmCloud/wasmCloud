@@ -60,6 +60,10 @@ pub struct HostData {
     pub link_definitions: ActorLinks,
     /// list of cluster issuers
     pub cluster_issuers: ClusterIssuers,
+    /// Optional configuration JSON sent to a given link name of a provider
+    /// without an actor context
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_json: Option<String>,
 }
 
 /// Environment settings for initializing a capability provider
