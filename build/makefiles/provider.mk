@@ -56,17 +56,8 @@ ARCH_LOOKUP_x86_64-pc-windows-gnu=x86_64-windows
 
 bin_targets = $(foreach target,$(par_targets),target/$(target)/release/$(bin_name))
 
-# pick target0 for starting par
-ifeq ($(machine_id)-$(platform_id),x86_64-Linux)
-	par_target0 = x86_64-unknown-linux-gnu
-else
-	ifeq ($(machine_id)-$(platform_id),x86_64-Darwin)
-		par_target0 = x86_64-apple-darwin
-	else
-		# default to x86_64-linux
-		par_target0=x86_64-unknown-linux-gnu
-	endif
-endif
+# pick target0 for starting par based on default rust target
+par_target0 ?= $(shell rustup show | grep 'Default host' | sed "s/Default host: //")
 
 # the target of the current platform, as defined by cross
 cross_target0=target/$(par_target0)/release/$(bin_name)
