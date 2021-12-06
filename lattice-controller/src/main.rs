@@ -4,7 +4,6 @@
 use std::{collections::HashMap, convert::Infallible, sync::Arc, time::Duration};
 use tokio::sync::RwLock;
 
-use log::debug;
 use nats::asynk::{self, Connection};
 use serde::{Deserialize, Serialize};
 use wascap::prelude::KeyPair;
@@ -23,7 +22,7 @@ const DEFAULT_TIMEOUT_MS: u64 = 2000;
 
 /// Configuration for connecting a nats client.
 /// More options are available if you use the json than variables in the values string map.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct ConnectionConfig {
     #[serde(default)]
     cluster_uris: Vec<String>,
@@ -38,6 +37,19 @@ struct ConnectionConfig {
     timeout_ms: u64,
 
     auction_timeout_ms: u64,
+}
+
+impl Default for ConnectionConfig {
+    fn default() -> Self {
+        Self {
+            cluster_uris: vec![DEFAULT_NATS_URI.to_owned()],
+            auth_jwt: None,
+            auth_seed: None,
+            lattice_prefix: "default".to_owned(),
+            timeout_ms: DEFAULT_TIMEOUT_MS,
+            auction_timeout_ms: 3 * DEFAULT_TIMEOUT_MS,
+        }
+    }
 }
 
 impl ConnectionConfig {
@@ -106,7 +118,18 @@ impl ConnectionConfig {
 // and returns only when it receives a shutdown message
 //
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    provider_main(LatticeControllerProvider::default())?;
+    let hd = load_host_data()?;
+    let mut lp = LatticeControllerProvider::default();
+
+    if let Some(s) = hd.config_json.as_ref() {
+        let mut hm = HashMap::new();
+        hm.insert("config_b64".to_string(), s.to_owned());
+        if let Ok(c) = ConnectionConfig::new_from(&hm) {
+            lp.fallback_config = c;
+        }
+    }
+
+    provider_start(lp, hd)?;
 
     eprintln!("Lattice Controller capability provider exiting");
     Ok(())
@@ -117,6 +140,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[services(LatticeController)]
 struct LatticeControllerProvider {
     configs: Arc<RwLock<HashMap<String, ConnectionConfig>>>,
+    fallback_config: ConnectionConfig,
 }
 
 impl LatticeControllerProvider {
@@ -137,7 +161,7 @@ impl LatticeControllerProvider {
                 ));
             }
         };
-        opts = opts.with_name("wasmCloud nats-messaging provider");
+        opts = opts.with_name("wasmCloud Lattice Controller provider");
         let url = cfg.cluster_uris.get(0).unwrap();
         let conn = opts
             .connect(url)
@@ -150,13 +174,20 @@ impl LatticeControllerProvider {
 
 /// use default implementations of provider message handlers
 impl ProviderDispatch for LatticeControllerProvider {}
+
 #[async_trait]
 impl ProviderHandler for LatticeControllerProvider {
     async fn put_link(&self, ld: &LinkDefinition) -> RpcResult<bool> {
-        let config = ConnectionConfig::new_from(&ld.values)?;
+        // If an actor is bound to this provider with no configuration
+        // values, then the "fallback" configuration will be used, allowing
+        // for a single lattice connection for all bound actors for a given
+        // link name
+        if ld.values.contains_key("config_b64") || ld.values.contains_key("config_json") {
+            let config = ConnectionConfig::new_from(&ld.values)?;
 
-        let mut configs = self.configs.write().await;
-        configs.insert(ld.actor_id.to_string(), config);
+            let mut configs = self.configs.write().await;
+            configs.insert(ld.actor_id.to_string(), config);
+        }
 
         Ok(true)
     }
@@ -184,7 +215,12 @@ fn get_actor(ctx: &Context) -> RpcResult<String> {
 }
 
 async fn get_config(lc: &LatticeControllerProvider, actor_id: &str) -> ConnectionConfig {
-    lc.configs.read().await.get(actor_id).unwrap().clone()
+    lc.configs
+        .read()
+        .await
+        .get(actor_id)
+        .unwrap_or(&lc.fallback_config)
+        .clone()
 }
 
 // You might ask yourself, "Self, why would we want produce a new client upon every single
@@ -202,11 +238,7 @@ async fn create_client(
     let conn = lc.connect(config.clone()).await?;
     let timeout = Duration::from_millis(config.timeout_ms);
     Ok((
-        Client::new(
-            conn.clone(),
-            Some(config.lattice_prefix.to_owned()),
-            timeout,
-        ),
+        Client::new(conn, Some(config.lattice_prefix.to_owned()), timeout),
         config,
     ))
 }
@@ -282,8 +314,9 @@ impl LatticeController for LatticeControllerProvider {
         arg: &StartActorCommand,
     ) -> RpcResult<CtlOperationAck> {
         let (client, _config) = create_client(ctx, self).await?;
+        let count = if arg.count == 0 { 1 } else { arg.count };
         client
-            .start_actor(&arg.host_id, &arg.actor_ref, arg.annotations.clone())
+            .start_actor(&arg.host_id, &arg.actor_ref, count, arg.annotations.clone())
             .await
             .map_err(|e| RpcError::Nats(format!("{}", e)))
     }
@@ -389,7 +422,7 @@ impl LatticeController for LatticeControllerProvider {
             .stop_actor(
                 &arg.host_id,
                 &arg.actor_ref,
-                arg.count.unwrap_or(0),
+                arg.count,
                 arg.annotations.clone(),
             )
             .await

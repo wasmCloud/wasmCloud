@@ -1,8 +1,7 @@
 [package]
 name = "wasmcloud-provider-lattice-controller"
-version = "0.1.0"
-edition = "2018"
-resolver = "2"
+version = "0.1.1"
+edition = "2021"
 
 [dependencies]
 async-trait = "0.1"
@@ -21,14 +20,16 @@ serde = {version = "1.0", features = ["derive"] }
 thiserror = "1.0"
 tokio = { version = "1", features = ["full"] }
 toml = "0.5"
-wasmbus-rpc = "0.5.3"
+wasmbus-rpc = "0.6.0"
 wascap = "0.6.1"
-wasmcloud-interface-lattice-control = "0.2.1"
-wasmcloud-control-interface = "0.6.0"
+wasmcloud-interface-lattice-control = "0.3.1"
+wasmcloud-control-interface = "0.7.1"
 nats = "0.16"
 # test dependencies
 [dev-dependencies]
-wasmcloud-test-util = "0.1"
+wasmcloud-test-util = "0.1.9"
+
+
 
 [[bin]]
 name = "lattice_controller"

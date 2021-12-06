@@ -2,6 +2,7 @@
 
 PROJECT = lattice_controller
 CAPABILITY_ID = wasmcloud:latticecontrol
+NAME = "Lattice Controller Provider"
 VENDOR   = "wasmCloud"
 VERSION  = $(shell cargo metadata --no-deps --format-version 1 | jq -r '.packages[] .version' | head -1)
 REVISION = 0
