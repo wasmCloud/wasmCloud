@@ -16,7 +16,7 @@ env:
   CARGO_TERM_COLOR: always
   working-directory: ./lattice-controller
   WASH_ISSUER_KEY: ${{ secrets.WASMCLOUD_ACCOUNT_OFFICIAL }}
-  WASH_SUBJECT_KEY: ${{ secrets.WASMCLOUD_PROVIDER }}
+  WASH_SUBJECT_KEY: ${{ secrets.WASMCLOUD_LATTICECONTROLLER }}
 
 jobs:
   rust_check:
