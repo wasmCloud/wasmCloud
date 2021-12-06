@@ -32,5 +32,5 @@ wasmcloud-test-util = "0.1.9"
 
 
 [[bin]]
-name = "lattice_controller"
+name = "lattice-controller"
 path = "src/main.rs"

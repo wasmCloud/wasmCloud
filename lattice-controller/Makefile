@@ -1,6 +1,6 @@
 # capability-provider/lattice-controller/Makefile
 
-PROJECT = lattice_controller
+PROJECT = lattice-controller
 CAPABILITY_ID = wasmcloud:latticecontrol
 NAME = "Lattice Controller Provider"
 VENDOR   = "wasmCloud"
