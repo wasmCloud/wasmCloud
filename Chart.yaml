@@ -15,6 +15,6 @@ icon: https://github.com/wasmCloud/wasmcloud.com-dev/raw/main/static/images/wasm
 
 type: application
 
-version: 0.2.2
+version: 0.2.3
 
-appVersion: "0.51.3"
+appVersion: "0.51.4"
