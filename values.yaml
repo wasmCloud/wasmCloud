@@ -29,6 +29,10 @@ wasmcloud:
     registry:
       username: ""
       password: ""
+    # A map of key value pairs to use as wasmCloud Host labels. These map to environment variable
+    # names, so the `.` character is not allowed
+    hostLabels:
+      kubernetes: "true"
   image:
     repository: wasmcloud/wasmcloud_host
     pullPolicy: IfNotPresent

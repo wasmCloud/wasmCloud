@@ -127,9 +127,11 @@ spec:
                   name: {{ include "wasmcloud_host.fullname" . }}
                   key: registryPassword
             {{- end }}
+            {{- range $k, $v := .Values.wasmcloud.config.hostLabels }}
+            - name: HOST_{{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
           ports:
-            - name: host
-              containerPort: 8080
             - name: washboard
               containerPort: 4000
               protocol: TCP
