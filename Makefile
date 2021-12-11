@@ -11,8 +11,13 @@ MODEL_OUTPUT := codegen/src/wasmbus_model.rs rpc-rs/src/wasmbus_model.rs
 
 all: build
 
-build clean test:
+build clean:
 	cargo $@
+
+test:
+	# run clippy on all features and tests, and fail on warnings
+	cargo clippy --all-targets --all-features -- -D warnings
+	cargo test
 
 release:
 	cargo build --release

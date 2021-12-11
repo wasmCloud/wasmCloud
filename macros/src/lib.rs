@@ -82,6 +82,9 @@ pub fn derive_actor(input: TokenStream) -> TokenStream {
 
     let output = quote!(
 
+    // version of the host-actor api
+    pub const HOST_API_VERSION : u32 = 1;
+
     #[link(wasm_import_module = "wasmbus")]
     extern "C" {
         pub fn __guest_response(ptr: *const u8, len: usize);
@@ -90,8 +93,8 @@ pub fn derive_actor(input: TokenStream) -> TokenStream {
     }
 
     #[no_mangle]
-    pub extern "C" fn __actor_api_version() -> u32 {
-        wasmbus_rpc::WASMBUS_RPC_VERSION
+    pub extern "C" fn __wasmbus_rpc_version() -> u32 {
+        HOST_API_VERSION
     }
 
     #[no_mangle]

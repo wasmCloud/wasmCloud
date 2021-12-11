@@ -133,7 +133,7 @@ impl<'model> Generator {
             //   override per-language settings.
 
             // The parameter dict is cleared after each iteration to avoid one file's override
-            // from leaking into the next file in the iteration. There are two "optimiations"
+            // from leaking into the next file in the iteration. There are two "optimizations"
             // in the loop below.
             // - The handlebars renderer only parses templates once, so it is shared across output files,
             // - The smithy model is parsed and validated once. After using it for one file, we pull it
@@ -476,7 +476,12 @@ impl CodeGen for PolyGen {
 #[allow(dead_code)]
 /// helper function for indenting code (used by python codegen)
 pub fn spaces(indent_level: u8) -> &'static str {
-    const SP: &str = "                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                ";
+    const SP: &str =
+        "                                                                                         \
+         \
+                                                                                                  \
+                                                                                                  \
+                                                                                                  ";
     &SP[0..((indent_level * 4) as usize)]
 }
 

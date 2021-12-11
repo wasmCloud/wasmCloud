@@ -88,7 +88,7 @@ pub struct Serialization {
     /// (optional setting) Override field name when serializing and deserializing
     /// By default, (when `name` not specified) is the exact declared name without
     /// casing transformations. This setting does not affect the field name
-    /// produced in code generation, which is always lanaguage-idiomatic
+    /// produced in code generation, which is always language-idiomatic
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
 }

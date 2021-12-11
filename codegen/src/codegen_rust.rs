@@ -37,7 +37,6 @@ use atelier_core::{
 use std::{collections::HashMap, path::Path, str::FromStr, string::ToString};
 
 const WASMBUS_RPC_CRATE: &str = "wasmbus_rpc";
-
 const DEFAULT_MAP_TYPE: &str = "std::collections::HashMap";
 const DEFAULT_LIST_TYPE: &str = "Vec";
 const DEFAULT_SET_TYPE: &str = "std::collections::BTreeSet";
@@ -95,9 +94,52 @@ impl<'model> CodeGen for RustCodeGen<'model> {
         self.import_core = WASMBUS_RPC_CRATE.to_string();
 
         if let Some(model) = model {
+            if let Some(Value::Array(codegen_min)) = model.metadata_value("codegen") {
+                let current_ver =
+                    semver::Version::parse(env!("CARGO_PKG_VERSION")).map_err(|e| {
+                        Error::InvalidModel(format!(
+                            "parse error for weld-codegen package version: {}",
+                            e
+                        ))
+                    })?;
+                for val in codegen_min.iter() {
+                    if let Value::Object(map) = val {
+                        if let Some(Value::String(lang)) = map.get("language") {
+                            if lang.as_str() == "rust" {
+                                if let Some(Value::String(ver)) = map.get("min_version") {
+                                    let min_ver = semver::Version::parse(ver).map_err(|e| {
+                                        Error::InvalidModel(format!(
+                                            "metadata parse error for codegen {{ language=rust, \
+                                             min_version={} }}: {}",
+                                            ver, e
+                                        ))
+                                    })?;
+                                    if min_ver.gt(&current_ver) {
+                                        return Err(Error::Model(format!(
+                                            "model requires weld-codegen version >= {}",
+                                            min_ver
+                                        )));
+                                    }
+                                } else {
+                                    return Err(Error::Model(
+                                        "missing 'min_version' in metadata.codegen for lang=rust"
+                                            .to_string(),
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             if let Some(packages) = model.metadata_value("package") {
                 let packages: Vec<PackageName> = serde_json::from_value(value_to_json(packages))
-                    .map_err(|e| Error::Model(format!("invalid metadata format for package, expecting format '[{{namespace:\"org.example\",crate:\"path::module\"}}]':  {}", e)))?;
+                    .map_err(|e| {
+                        Error::Model(format!(
+                            "invalid metadata format for package, expecting format \
+                             '[{{namespace:\"org.example\",crate:\"path::module\"}}]':  {}",
+                            e
+                        ))
+                    })?;
                 for p in packages.iter() {
                     self.packages.insert(p.namespace.to_string(), p.clone());
                 }
@@ -432,8 +474,14 @@ impl<'model> RustCodeGen<'model> {
                             s.push_str(&self.to_type_name(&id.shape_name().to_string()));
                         }
                         _ => {
-                            return Err(Error::Model(format!("undefined crate for namespace {} for symbol {}. Make sure codegen.toml includes all dependent namespaces, and that the dependent .smithy file contains package metadata with crate: value",
-                                                            &id.namespace(), &id)));
+                            return Err(Error::Model(format!(
+                                "undefined crate for namespace {} for symbol {}. Make sure \
+                                 codegen.toml includes all dependent namespaces, and that the \
+                                 dependent .smithy file contains package metadata with crate: \
+                                 value",
+                                &id.namespace(),
+                                &id
+                            )));
                         }
                     }
                 }
@@ -1121,3 +1169,15 @@ Opt   @required   @box    bool/int/...
 x     1           1       0
 x     1           1       1
 */
+
+// check that the codegen package has a parseable version
+#[test]
+fn package_semver() {
+    let package_version = env!("CARGO_PKG_VERSION");
+    let version = semver::Version::parse(package_version);
+    assert!(
+        version.is_ok(),
+        "package version {} has unexpected format",
+        package_version
+    );
+}

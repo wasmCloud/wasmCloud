@@ -8,7 +8,7 @@ use std::borrow::Cow;
 pub struct Message<'m> {
     /// Message name, usually in the form 'Trait.method'
     pub method: &'m str,
-    /// parameter serialized as a byte array. If the method takes no args, the arraya will be
+    /// parameter serialized as a byte array. If the method takes no args, the array will be
     /// zero length.
     pub arg: Cow<'m, [u8]>,
 }
