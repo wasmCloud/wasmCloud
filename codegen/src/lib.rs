@@ -18,17 +18,19 @@ mod loader;
 pub(crate) mod model;
 pub mod render;
 pub mod writer;
-pub use gen::templates_from_dir;
-pub use gen::Generator;
+pub use gen::{templates_from_dir, Generator};
 
 pub(crate) use loader::sources_to_paths;
 pub use loader::{sources_to_model, weld_cache_dir};
-pub use rust_build::rust_build;
+pub use rust_build::{rust_build, rust_build_into};
 
 pub mod format;
 mod rust_build;
 
-pub(crate) mod wasmbus_model;
+#[allow(dead_code)]
+pub(crate) mod wasmbus_model {
+    include!("./wasmbus_model.rs");
+}
 
 // re-export
 pub use bytes::Bytes;

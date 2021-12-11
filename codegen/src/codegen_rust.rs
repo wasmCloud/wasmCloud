@@ -16,12 +16,11 @@ use crate::{
     writer::Writer,
     BytesMut, JsonValue, ParamMap,
 };
-use atelier_core::model::shapes::ShapeKind;
 use atelier_core::{
     model::{
         shapes::{
             AppliedTraits, HasTraits, ListOrSet, Map as MapShape, MemberShape, Operation, Service,
-            Simple, StructureOrUnion,
+            ShapeKind, Simple, StructureOrUnion,
         },
         values::Value,
         HasIdentity, Identifier, Model, NamespaceID, ShapeID,
@@ -51,7 +50,6 @@ struct Declaration(u8, BytesMut);
 
 type ShapeList<'model> = Vec<(&'model ShapeID, &'model AppliedTraits, &'model ShapeKind)>;
 
-#[derive(Default)]
 pub struct RustCodeGen<'model> {
     /// if set, limits declaration output to this namespace only
     pub(crate) namespace: Option<NamespaceID>,
@@ -82,6 +80,7 @@ impl<'model> CodeGen for RustCodeGen<'model> {
     fn output_language(&self) -> OutputLanguage {
         OutputLanguage::Rust
     }
+
     /// Initialize code generator and renderer for language output.j
     /// This hook is called before any code is generated and can be used to initialize code generator
     /// and/or perform additional processing before output files are created.
@@ -113,7 +112,6 @@ impl<'model> CodeGen for RustCodeGen<'model> {
 
     /// Perform any initialization required prior to code generation for a file
     /// `model` may be used to check model metadata
-    /// `id` is a tag from codegen.toml that indicates which source file is to be written
     /// `namespace` is the namespace in the model to generate
     #[allow(unused_variables)]
     fn init_file(
@@ -168,7 +166,7 @@ impl<'model> CodeGen for RustCodeGen<'model> {
                 // the base model has minimal dependencies
                 w.write(
                     r#"
-                #![allow(dead_code, unused_imports, clippy::ptr_arg, clippy::needless_lifetimes)]
+                #[allow(unused_imports)]
                 use serde::{{Deserialize, Serialize}};
              "#,
                 );
@@ -180,13 +178,19 @@ impl<'model> CodeGen for RustCodeGen<'model> {
                 // if the crate we are generating is "wasmbus_rpc" then we have to import it with "crate::".
                 w.write(&format!(
                     r#"
-                #![allow(unused_imports, clippy::ptr_arg, clippy::needless_lifetimes)]
+                #[allow(unused_imports)]
                 use {}::{{
-                    Context, deserialize, serialize, MessageDispatch, RpcError, RpcResult,
-                    Timestamp, Transport, Message, SendOpts, {}
+                    RpcError,RpcResult,Timestamp,
+                    common::{{
+                    Context, deserialize, serialize, MessageDispatch,
+                    Transport, Message, SendOpts, {}
+                    }}
                 }};
+                #[allow(unused_imports)]
                 use serde::{{Deserialize, Serialize}};
+                #[allow(unused_imports)]
                 use async_trait::async_trait;
+                #[allow(unused_imports)]
                 use std::{{borrow::Cow, io::Write, string::ToString}};
                 "#,
                     &self.import_core, import_cbor,
@@ -345,6 +349,7 @@ impl<'model> RustCodeGen<'model> {
             Ty::Shape(field.target())
         })
     }
+
     /// Write a type name, a primitive or defined type, with or without deref('&') and with or without Option<>
     pub(crate) fn type_string(&self, ty: Ty<'_>) -> Result<String> {
         let mut s = String::new();

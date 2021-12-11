@@ -10,6 +10,18 @@ use std::path::PathBuf;
 pub fn rust_build<P: Into<PathBuf>>(
     config_path: P,
 ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    rust_build_into(config_path, ".")
+}
+
+/// Generate rust code using the codegen.toml config file and output directory.
+/// `config_path` should be relative to the directory containing build.rs (or absolute).
+/// `output_relative_dir`, the location of generated files, should either be an absolute path,
+/// or a path relative to the folder containing the codegen.toml file.
+/// To use rustc's build folder, from inside build.rs, use `&std::env::var("OUT_DIR").unwrap()`
+pub fn rust_build_into<CFG: Into<PathBuf>, OUT: Into<PathBuf>>(
+    config_path: CFG,
+    output_relative_dir: OUT,
+) -> std::result::Result<(), Box<dyn std::error::Error>> {
     use crate::{
         config::{CodegenConfig, OutputLanguage},
         Generator,
@@ -35,9 +47,6 @@ pub fn rust_build<P: Into<PathBuf>>(
     // tell cargo to rebuild if codegen.toml changes
     println!("cargo:rerun-if-changed={}", &config_path.display());
 
-    //let out_dir = std::path::PathBuf::from(&std::env::var("OUT_DIR").unwrap());
-    let out_dir = PathBuf::from("."); // current directory
-
     let model = crate::sources_to_model(&config.models, &config.base_dir, 0)?;
 
     // the second time we do this it should be faster since no downloading is required,
@@ -55,7 +64,13 @@ pub fn rust_build<P: Into<PathBuf>>(
         }
     }
 
-    Generator::default().gen(Some(&model), config, Vec::new(), &out_dir, Vec::new())?;
+    Generator::default().gen(
+        Some(&model),
+        config,
+        Vec::new(),
+        &output_relative_dir.into(),
+        Vec::new(),
+    )?;
 
     Ok(())
 }
