@@ -1,13 +1,16 @@
 // This file is generated automatically using wasmcloud/weld-codegen and smithy model definitions
 //
 
-#![allow(unused_imports, clippy::ptr_arg, clippy::needless_lifetimes)]
+#[allow(unused_imports)]
 use crate::{
-    deserialize, serialize, Context, Message, MessageDispatch, RpcError, RpcResult, SendOpts,
-    Timestamp, Transport,
+    common::{deserialize, serialize, Context, Message, MessageDispatch, SendOpts, Transport},
+    RpcError, RpcResult, Timestamp,
 };
+#[allow(unused_imports)]
 use async_trait::async_trait;
+#[allow(unused_imports)]
 use serde::{Deserialize, Serialize};
+#[allow(unused_imports)]
 use std::{borrow::Cow, io::Write, string::ToString};
 
 pub const SMITHY_VERSION: &str = "1.0";
