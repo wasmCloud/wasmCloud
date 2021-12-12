@@ -68,6 +68,24 @@ impl<'model> RustCodeGen<'model> {
     }
 }
 
+struct ServiceInfo<'model> {
+    id: &'model Identifier,
+    traits: &'model AppliedTraits,
+    service: &'model Service,
+}
+
+impl<'model> ServiceInfo<'model> {
+    fn wasmbus_contract_id(&self) -> Option<String> {
+        match get_trait(self.traits, crate::model::wasmbus_trait()) {
+            Ok(Some(Wasmbus {
+                contract_id: Some(contract_id),
+                ..
+            })) => Some(contract_id),
+            _ => None,
+        }
+    }
+}
+
 #[non_exhaustive]
 enum MethodArgFlags {
     Normal,
@@ -312,9 +330,14 @@ impl<'model> CodeGen for RustCodeGen<'model> {
             .map(|s| (s.id(), s.traits(), s.body()))
         {
             if let ShapeKind::Service(service) = shape {
-                self.write_service_interface(w, model, id.shape_name(), traits, service)?;
-                self.write_service_receiver(w, model, id.shape_name(), traits, service)?;
-                self.write_service_sender(w, model, id.shape_name(), traits, service)?;
+                let service = ServiceInfo {
+                    id: id.shape_name(),
+                    service,
+                    traits,
+                };
+                self.write_service_interface(w, model, &service)?;
+                self.write_service_receiver(w, model, &service)?;
+                self.write_service_sender(w, model, &service)?;
             }
         }
         Ok(())
@@ -702,28 +725,26 @@ impl<'model> RustCodeGen<'model> {
         &mut self,
         w: &mut Writer,
         model: &Model,
-        service_id: &Identifier,
-        service_traits: &AppliedTraits,
-        service: &Service,
+        service: &ServiceInfo,
     ) -> Result<()> {
-        self.apply_documentation_traits(w, service_id, service_traits);
+        self.apply_documentation_traits(w, service.id, service.traits);
 
         #[cfg(feature = "wasmbus")]
-        self.add_wasmbus_comments(w, service_id, service_traits)?;
+        self.add_wasmbus_comments(w, service)?;
 
         w.write(b"#[async_trait]\npub trait ");
-        self.write_ident(w, service_id);
+        self.write_ident(w, service.id);
         w.write(b"{\n");
-        self.write_service_contract_getter(w, service_id, service_traits)?;
+        self.write_service_contract_getter(w, service)?;
 
-        for operation in service.operations() {
+        for operation in service.service.operations() {
             // if operation is not declared in this namespace, don't define it here
             if let Some(ref ns) = self.namespace {
                 if operation.namespace() != ns {
                     continue;
                 }
             }
-            let (op, op_traits) = get_operation(model, operation, service_id)?;
+            let (op, op_traits) = get_operation(model, operation, service.id)?;
             let method_id = operation.shape_name();
             let _flags = self.write_method_signature(w, method_id, op_traits, op)?;
             w.write(b";\n");
@@ -736,14 +757,9 @@ impl<'model> RustCodeGen<'model> {
     fn write_service_contract_getter(
         &mut self,
         w: &mut Writer,
-        _service_id: &Identifier,
-        service_traits: &AppliedTraits,
+        service: &ServiceInfo,
     ) -> Result<()> {
-        if let Some(Wasmbus {
-            contract_id: Some(contract_id),
-            ..
-        }) = get_trait(service_traits, crate::model::wasmbus_trait())?
-        {
+        if let Some(contract_id) = service.wasmbus_contract_id() {
             w.write(&format!(
                 r#"
                 /// returns the capability contract id for this interface
@@ -756,26 +772,21 @@ impl<'model> RustCodeGen<'model> {
     }
 
     #[cfg(feature = "wasmbus")]
-    fn add_wasmbus_comments(
-        &mut self,
-        w: &mut Writer,
-        service_id: &Identifier,
-        service_traits: &AppliedTraits,
-    ) -> Result<()> {
+    fn add_wasmbus_comments(&mut self, w: &mut Writer, service: &ServiceInfo) -> Result<()> {
         // currently the only thing we do with Wasmbus in codegen is add comments
-        let wasmbus: Option<Wasmbus> = get_trait(service_traits, crate::model::wasmbus_trait())?;
+        let wasmbus: Option<Wasmbus> = get_trait(service.traits, crate::model::wasmbus_trait())?;
         if let Some(wasmbus) = wasmbus {
-            if let Some(contract) = wasmbus.contract_id {
-                let text = format!("wasmbus.contractId: {}", &contract);
-                self.write_documentation(w, service_id, &text);
+            if let Some(contract_id) = service.wasmbus_contract_id() {
+                let text = format!("wasmbus.contractId: {}", contract_id);
+                self.write_documentation(w, service.id, &text);
             }
             if wasmbus.provider_receive {
                 let text = "wasmbus.providerReceive";
-                self.write_documentation(w, service_id, text);
+                self.write_documentation(w, service.id, text);
             }
             if wasmbus.actor_receive {
                 let text = "wasmbus.actorReceive";
-                self.write_documentation(w, service_id, text);
+                self.write_documentation(w, service.id, text);
             }
         }
         Ok(())
@@ -825,20 +836,18 @@ impl<'model> RustCodeGen<'model> {
         &mut self,
         w: &mut Writer,
         model: &Model,
-        service_id: &Identifier,
-        service_traits: &AppliedTraits,
-        service: &Service,
+        service: &ServiceInfo,
     ) -> Result<()> {
         let doc = format!(
             "{}Receiver receives messages defined in the {} service trait",
-            service_id, service_id
+            service.id, service.id
         );
         self.write_comment(w, CommentKind::Documentation, &doc);
-        self.apply_documentation_traits(w, service_id, service_traits);
+        self.apply_documentation_traits(w, service.id, service.traits);
         w.write(b"#[doc(hidden)]\n#[async_trait]\npub trait ");
-        self.write_ident_with_suffix(w, service_id, "Receiver")?;
+        self.write_ident_with_suffix(w, service.id, "Receiver")?;
         w.write(b" : MessageDispatch + ");
-        self.write_ident(w, service_id);
+        self.write_ident(w, service.id);
         w.write(
             br#"{
             async fn dispatch(
@@ -849,7 +858,7 @@ impl<'model> RustCodeGen<'model> {
         "#,
         );
 
-        for method_id in service.operations() {
+        for method_id in service.service.operations() {
             // we don't add operations defined in another namespace
             if let Some(ref ns) = self.namespace {
                 if method_id.namespace() != ns {
@@ -857,7 +866,7 @@ impl<'model> RustCodeGen<'model> {
                 }
             }
             let method_ident = method_id.shape_name();
-            let (op, method_traits) = get_operation(model, method_id, service_id)?;
+            let (op, method_traits) = get_operation(model, method_id, service.id)?;
             w.write(b"\"");
             w.write(&self.op_dispatch_name(method_ident));
             w.write(b"\" => {\n");
@@ -885,7 +894,7 @@ impl<'model> RustCodeGen<'model> {
                 w.write(b"let _resp = ");
             }
             let method_name = self.to_method_name(method_ident, method_traits);
-            self.write_ident(w, service_id); // Service::method
+            self.write_ident(w, service.id); // Service::method
             w.write(b"::");
             w.write(&method_name);
             w.write(b"(self, ctx");
@@ -910,11 +919,11 @@ impl<'model> RustCodeGen<'model> {
             }
             //w.write(br#"console_log(format!("actor result {}b",buf.len())); "#);
             w.write(b"Ok(Message { method: \"");
-            w.write(&self.full_dispatch_name(service_id, method_ident));
+            w.write(&self.full_dispatch_name(service.id, method_ident));
             w.write(b"\", arg: Cow::Owned(buf) })},\n");
         }
         w.write(b"_ => Err(RpcError::MethodNotHandled(format!(\"");
-        self.write_ident(w, service_id);
+        self.write_ident(w, service.id);
         w.write(b"::{}\", message.method))),\n");
         w.write(b"}\n}\n}\n\n"); // end match, end fn dispatch, end trait
 
@@ -927,16 +936,14 @@ impl<'model> RustCodeGen<'model> {
         &mut self,
         w: &mut Writer,
         model: &Model,
-        service_id: &Identifier,
-        service_traits: &AppliedTraits,
-        service: &Service,
+        service: &ServiceInfo,
     ) -> Result<()> {
         let doc = format!(
             "{}Sender sends messages to a {} service",
-            service_id, service_id
+            service.id, service.id
         );
         self.write_comment(w, CommentKind::Documentation, &doc);
-        self.apply_documentation_traits(w, service_id, service_traits);
+        self.apply_documentation_traits(w, service.id, service.traits);
         w.write(&format!(
             r#"/// client for sending {} messages
               #[derive(Debug)]
@@ -953,21 +960,21 @@ impl<'model> RustCodeGen<'model> {
                   }}
               }}
             "#,
-            service_id, service_id, service_id, service_id,
+            service.id, service.id, service.id, service.id,
         ));
         #[cfg(feature = "wasmbus")]
-        w.write(&self.actor_receive_sender_constructors(service_id, service_traits)?);
+        w.write(&self.actor_receive_sender_constructors(service.id, service.traits)?);
         #[cfg(feature = "wasmbus")]
-        w.write(&self.provider_receive_sender_constructors(service_id, service_traits)?);
+        w.write(&self.provider_receive_sender_constructors(service.id, service.traits)?);
 
         // implement Trait for TraitSender
         w.write(b"#[async_trait]\nimpl<T:Transport + std::marker::Sync + std::marker::Send> ");
-        self.write_ident(w, service_id);
+        self.write_ident(w, service.id);
         w.write(b" for ");
-        self.write_ident_with_suffix(w, service_id, "Sender")?;
+        self.write_ident_with_suffix(w, service.id, "Sender")?;
         w.write(b"<T> {\n");
 
-        for method_id in service.operations() {
+        for method_id in service.service.operations() {
             // we don't add operations defined in another namespace
             if let Some(ref ns) = self.namespace {
                 if method_id.namespace() != ns {
@@ -976,7 +983,7 @@ impl<'model> RustCodeGen<'model> {
             }
             let method_ident = method_id.shape_name();
 
-            let (op, method_traits) = get_operation(model, method_id, service_id)?;
+            let (op, method_traits) = get_operation(model, method_id, service.id)?;
             w.write(b"#[allow(unused)]\n");
             let arg_flags = self.write_method_signature(w, method_ident, method_traits, op)?;
             let _arg_is_string = matches!(arg_flags, MethodArgFlags::ToString);
@@ -1012,7 +1019,7 @@ impl<'model> RustCodeGen<'model> {
             w.write(b"let resp = self.transport.send(ctx, Message{ method: ");
             // note: legacy is just the latter part
             w.write(b"\"");
-            w.write(&self.full_dispatch_name(service_id, method_ident));
+            w.write(&self.full_dispatch_name(service.id, method_ident));
             //w.write(&self.op_dispatch_name(method_ident));
             w.write(b"\", arg: Cow::Borrowed(&buf)}, None).await?;\n");
             if let Some(_op_output) = op.output() {
