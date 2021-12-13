@@ -1,4 +1,5 @@
 use crate::{
+    cfg::cfg_dir,
     generate::{
         interactive::{prompt_for_choice, user_question},
         project_variables::StringEntry,
@@ -21,9 +22,9 @@ use structopt::{clap::AppSettings, StructOpt};
 pub mod context;
 use context::{DefaultContext, WashContext};
 
-const CTX_DIR: &str = ".wash/contexts";
+const CTX_DIR_NAME: &str = "contexts";
 const INDEX_JSON: &str = "index.json";
-const HOST_CONFIG_PATH: &str = ".wash/host_config.json";
+const HOST_CONFIG_FILE: &str = "host_config.json";
 const HOST_CONFIG_NAME: &str = "host_config";
 
 #[derive(Debug, StructOpt, Clone)]
@@ -348,7 +349,7 @@ fn ensure_host_config_context(context_dir: &Path) -> Result<()> {
 
 /// Load the host configuration file and create a context called `host_config` from it
 fn create_host_config_context(context_dir: &Path) -> Result<()> {
-    let host_config_path = home_dir()?.join(HOST_CONFIG_PATH);
+    let host_config_path = cfg_dir()?.join(HOST_CONFIG_FILE);
     let host_config_ctx = WashContext {
         name: HOST_CONFIG_NAME.to_string(),
         ..load_context(&host_config_path)?
@@ -406,22 +407,14 @@ pub(crate) fn context_dir(cmd_dir: Option<PathBuf>) -> Result<PathBuf> {
     let dir = if let Some(dir) = cmd_dir {
         dir
     } else {
-        home_dir()?.join(CTX_DIR)
+        cfg_dir()?.join(CTX_DIR_NAME)
     };
+
     // Ensure user supplied context exists
     if std::fs::metadata(&dir).is_err() {
-        let _ = std::fs::create_dir(&dir);
+        let _ = std::fs::create_dir_all(&dir);
     }
     Ok(dir)
-}
-
-fn home_dir() -> Result<PathBuf> {
-    Ok(dirs::home_dir().ok_or_else(|| {
-        Error::new(
-            ErrorKind::NotFound,
-            "Context directory not found, please set $HOME or $WASH_CONTEXTS for managed contexts",
-        )
-    })?)
 }
 
 /// Helper function to properly format the path to a context JSON file

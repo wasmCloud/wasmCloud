@@ -16,3 +16,4 @@
 *.par.gz
 *.gz
 flake.lock
+.vscode
