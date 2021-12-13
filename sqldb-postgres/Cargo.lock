@@ -1292,7 +1292,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0d6ec902eedf729792bd1ebe43e757691f956165c6db429deb26640925054de9"
 dependencies = [
  "half",
- "minicbor-derive",
+ "minicbor-derive 0.7.1",
+]
+
+[[package]]
+name = "minicbor"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e65793a7836177614428b01e00d7089af2f308e8ad2fae92f324b2ee3c5d3bd9"
+dependencies = [
+ "half",
+ "minicbor-derive 0.8.0",
 ]
 
 [[package]]
@@ -1300,6 +1310,17 @@ name = "minicbor-derive"
 version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "355264ec26c23aae1d8d4599356cbd7e84134182b8feb9573acbd6d68c09c73e"
+dependencies = [
+ "proc-macro2 1.0.32",
+ "quote 1.0.10",
+ "syn 1.0.81",
+]
+
+[[package]]
+name = "minicbor-derive"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "58f79d5d3fb4f93c77ef7b97065fb65efe6abe670795ad8bc5be9c0e12005290"
 dependencies = [
  "proc-macro2 1.0.32",
  "quote 1.0.10",
@@ -1364,9 +1385,9 @@ dependencies = [
 
 [[package]]
 name = "nats"
-version = "0.13.1"
+version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "33f47fab79b62a75d2bf97663f049bfd1ade8c9c5fdae1512ec65a66d0b6c282"
+checksum = "9d777a1844c3c5f4148df755a978fd99bb27c898d9bf016de723cf3ffcea5f5d"
 dependencies = [
  "base64",
  "base64-url",
@@ -1388,6 +1409,7 @@ dependencies = [
  "rustls-native-certs",
  "serde",
  "serde_json",
+ "url",
  "webpki",
  "winapi",
 ]
@@ -2965,9 +2987,9 @@ dependencies = [
 
 [[package]]
 name = "wasmbus-rpc"
-version = "0.5.2"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8875f45e1c7a1b75a0a9dc66a570524ead1b298f9919ec3b7a768941974e4524"
+checksum = "408aa0284ccf21dceee06ee2dff52ac4260aa492995f83ad597b8df712cd8ba5"
 dependencies = [
  "async-trait",
  "base64",
@@ -2977,7 +2999,7 @@ dependencies = [
  "data-encoding",
  "futures 0.3.17",
  "log",
- "minicbor",
+ "minicbor 0.12.0",
  "nats",
  "once_cell",
  "pin-utils",
@@ -2999,13 +3021,13 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-interface-sqldb"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2fc4740cb22c411aa63b7a90e6e2d49e90ee13b4bcd39254ca04cc95fec7f240"
+checksum = "dbae0122e06239cf45040fe72e02e1c328ad9585084d48263398dbe8f8934603"
 dependencies = [
  "async-trait",
  "futures 0.3.17",
- "minicbor",
+ "minicbor 0.11.4",
  "serde",
  "serde_bytes",
  "serde_json",
@@ -3015,9 +3037,9 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-interface-testing"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fdc16ad3b26d695de9d3fa0486f1f88b80f5bce24d16c3ea0ed5035a5c838bd1"
+checksum = "fce471a0da171e8bf9f76af6ae8b295c510d34ef45ddf1ab7a235bda627510e4"
 dependencies = [
  "async-trait",
  "regex",
@@ -3030,7 +3052,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-sqldb-postgres"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-trait",
  "base64",
@@ -3041,7 +3063,7 @@ dependencies = [
  "crossbeam",
  "futures 0.3.17",
  "log",
- "minicbor",
+ "minicbor 0.11.4",
  "native-tls",
  "once_cell",
  "rmp-serde",
@@ -3060,9 +3082,9 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-test-util"
-version = "0.1.8"
+version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fe93a280c17eda592e3d3809a82cbc56faaba4a963564c3d8aad0bbfc0aeaff2"
+checksum = "8c50d01ff3b125f956441b4d7c257673703be0ddb757a17f72a01c680ef52816"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3118,7 +3140,7 @@ dependencies = [
  "handlebars",
  "lazy_static",
  "lexical-sort",
- "minicbor",
+ "minicbor 0.11.4",
  "reqwest",
  "rustc-hash",
  "serde",
