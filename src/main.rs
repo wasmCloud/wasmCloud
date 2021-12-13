@@ -11,6 +11,7 @@ use smithy::{GenerateCli, LintCli, ValidateCli};
 use structopt::{clap::AppSettings, StructOpt};
 
 mod call;
+mod cfg;
 mod claims;
 mod ctl;
 mod ctx;
