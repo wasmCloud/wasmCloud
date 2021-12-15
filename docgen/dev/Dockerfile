@@ -1,4 +1,4 @@
-FROM node:12
+FROM node:16.11
 
 COPY package.json /project/
 
