@@ -1,19 +1,16 @@
-#!/bin/sh
+#!/bin/sh -ex
 
-OUT=$(mktemp -d)
-mkdir $OUT/css
-chmod 755 $OUT
-chmod 777 $OUT/css
-
-docker run --rm \
-    -v $PWD/../../codegen/templates/html:/templates:ro \
-    -v $PWD/conf:/project/conf:ro \
-    -v $PWD/src:/project/src:ro \
-    -v $OUT:/public \
-    css-dev npm run build-all
+rm -f dist/*.css
+docker run --rm -it \
+    -v "$PWD/../../codegen/templates/html:/templates:ro" \
+    -v "$PWD:/project:rw" \
+    -v "$OUT:/public:rw" \
+    --user "$(id -u):$(id -g)" \
+    --workdir /project \
+    node:latest /project/build-tailwind-css.sh
 
 mkdir -p ./gen/css
-cp -v $OUT/css/*.css ./gen/css/
+cp -v ./dist/*.css ./gen/css/
 
 
 

@@ -13,9 +13,8 @@
     "tailwindcss": "^2.1.4"
   },
   "scripts": {
-    "build": "npx tailwindcss-cli@latest build src/css/styles.css -c conf/tailwind.config.js -o dist/tailwind.css",
+    "build": "npx -y tailwindcss-cli@latest build src/css/styles.css -c conf/tailwind.config.js -o dist/tailwind.css",
     "build-prod": "NODE_ENV=production npx tailwindcss-cli@latest build src/css/styles.css -c conf/tailwind.config.js -o dist/tailwind.min.css",
-    "dist": "cp dist/tailwind*.css ../public/css/",
     "build-all": "npm run build && npm run build-prod && npm run dist",
     "clean": "rm -rf dist/*.css node_modules/.bin node_modules/*",
     "test": "echo \"Error: no test specified\" && exit 1"
