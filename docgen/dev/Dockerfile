@@ -1,4 +1,4 @@
-FROM node:17
+FROM node:current-bullseye-slim
 
 COPY package.json /project/
 
