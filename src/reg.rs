@@ -149,7 +149,7 @@ pub(crate) async fn handle_command(
 }
 
 pub(crate) async fn handle_pull(cmd: PullCommand) -> Result<String, Box<dyn ::std::error::Error>> {
-    let image: Reference = cmd.url.parse().unwrap();
+    let image: Reference = cmd.url.parse()?;
     let spinner = match cmd.output.kind {
         OutputKind::Text => Some(Spinner::new(
             &Spinners::Dots12,
@@ -273,7 +273,8 @@ pub(crate) async fn pull_artifact(
 }
 
 pub(crate) async fn handle_ping(cmd: PingCommand) -> Result<String, Box<dyn ::std::error::Error>> {
-    let image: Reference = cmd.url.parse().unwrap();
+    let image: Reference = cmd.url.parse()?;
+
     let mut client = Client::new(ClientConfig {
         protocol: if cmd.opts.insecure {
             ClientProtocol::Http
@@ -403,7 +404,7 @@ pub(crate) async fn push_artifact(
     password: Option<String>,
     insecure: bool,
 ) -> Result<(), Box<dyn ::std::error::Error>> {
-    let image: Reference = url.parse().unwrap();
+    let image: Reference = url.parse()?;
 
     if image.tag().unwrap() == "latest" && !allow_latest {
         return Err(
