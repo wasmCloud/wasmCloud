@@ -1,6 +1,6 @@
 # Resources
 
-Despite the deprecation of the pure-Rust wasmCloud host, we have pinned versions of our tooling that can still be used. These resources will not be actively maintained, and they are here primarily for reference and to aid in the migration process to the [OTP Host](https://github.com/wasmCloud/wasmcloud-otp).
+Despite archiving the pure-Rust wasmCloud host, we have pinned versions of our tooling that can still be used. These resources will not be actively maintained, and they are here primarily for reference and to aid in the migration process to the [OTP Host](https://github.com/wasmCloud/wasmcloud-otp).
 
 ## Crates
 | Name | Version | 

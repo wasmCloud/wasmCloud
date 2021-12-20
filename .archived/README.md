@@ -1,2 +1,2 @@
-# Deprecated Files
+# Archived Files
 What you see in this directory and all of its subdirectories is a rough snapshot of what this repository looked like during the `0.18` and earlier releases. While we could have simply deleted everything and relied on git commit history to provide a record of the transition, we felt it might be more helpful to developers making the transition from `0.18` to `0.50` to leave this directory in place for a while as a reference.
