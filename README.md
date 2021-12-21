@@ -3,6 +3,7 @@
 [![Rust Version](https://img.shields.io/badge/rustc-1.57.0-orange.svg)](https://blog.rust-lang.org/2021/12/02/Rust-1.57.0.html) 
 [![Contributors](https://img.shields.io/github/contributors/wasmcloud/wash)](https://github.com/wasmCloud/wash/graphs/contributors)
 [![Good first issues](https://img.shields.io/github/issues/wasmcloud/wash/good%20first%20issue?label=good%20first%20issues)](https://github.com/wasmCloud/wash/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22)
+[![wash-cli](https://img.shields.io/crates/v/wash-cli)](https://crates.io/crates/wash-cli) 
 ```
                                      _                 _    _____ _          _ _ 
                                 ____| |               | |  / ____| |        | | |
