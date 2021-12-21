@@ -17,6 +17,9 @@ spec:
       {{- end }}
       labels:
         {{- include "wasmcloud_host.selectorLabels" . | nindent 8 }}
+        {{- if .Values.wasmcloud.customLabels }}
+        {{- toYaml .Values.wasmcloud.customLabels | nindent 8 }}
+        {{- end }}
     spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
