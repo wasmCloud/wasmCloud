@@ -538,7 +538,7 @@ pub(crate) async fn handle_command(command: CtlCliCommand) -> Result<String> {
             let ack = start_actor(cmd).await?;
             ctl_operation_output(
                 ack.accepted,
-                &format!("Actor {} started successfully", actor_ref),
+                &format!("Start actor request received: {}", actor_ref),
                 &ack.error,
                 &output.kind,
             )
@@ -554,7 +554,7 @@ pub(crate) async fn handle_command(command: CtlCliCommand) -> Result<String> {
             let ack = start_provider(cmd).await?;
             ctl_operation_output(
                 ack.accepted,
-                &format!("Provider {} started successfully", provider_ref),
+                &format!("Start provider request received: {}", provider_ref),
                 &ack.error,
                 &output.kind,
             )
