@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-provider-httpclient"
-version = "0.3.6"
+version = "0.3.7"
 edition = "2021"
 
 [dependencies]

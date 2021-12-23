@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-provider-lattice-controller"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 
 [dependencies]
@@ -20,7 +20,7 @@ serde = {version = "1.0", features = ["derive"] }
 thiserror = "1.0"
 tokio = { version = "1", features = ["full"] }
 toml = "0.5"
-wasmbus-rpc = "0.6.0"
+wasmbus-rpc = "0.6"
 wascap = "0.6.1"
 wasmcloud-interface-lattice-control = "0.3"
 wasmcloud-control-interface = "0.7.1"

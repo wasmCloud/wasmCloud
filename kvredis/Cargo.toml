@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-provider-kvredis"
-version = "0.14.6"
+version = "0.14.7"
 edition = "2021"
 
 [dependencies]
