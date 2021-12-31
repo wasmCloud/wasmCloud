@@ -2,7 +2,13 @@ use anyhow::{anyhow, bail, Result};
 use nats::asynk::Connection;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap, env::temp_dir, error::Error, fmt, fs::File, io::Read, path::PathBuf,
+    collections::HashMap,
+    env::temp_dir,
+    error::Error,
+    fmt, fs,
+    fs::File,
+    io::Read,
+    path::{Path, PathBuf},
     str::FromStr,
 };
 use term_table::{Table, TableStyle};
@@ -285,4 +291,22 @@ pub fn validate_contract_id(contract_id: &str) -> Result<()> {
     } else {
         Ok(())
     }
+}
+
+#[cfg(all(unix))]
+/// Set file and folder permissions for keys.
+pub(crate) fn set_permissions_keys(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let metadata = path.metadata()?;
+    match metadata.file_type().is_dir() {
+        true => fs::set_permissions(path, fs::Permissions::from_mode(0o700))?,
+        false => fs::set_permissions(path, fs::Permissions::from_mode(0o600))?,
+    };
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn set_permissions(path: &PathBuf) -> Result<()> {
+    Ok(())
 }
