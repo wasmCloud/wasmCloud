@@ -1,6 +1,6 @@
 use crate::{
     cfg::cfg_dir,
-    util::{CommandOutput, OutputKind},
+    util::{set_permissions_keys, CommandOutput, OutputKind},
 };
 use anyhow::{bail, Context, Result};
 use nkeys::{KeyPair, KeyPairType};
@@ -206,9 +206,12 @@ pub(crate) fn extract_keypair(
 
                 let kp = KeyPair::new(keygen_type);
                 let seed = kp.seed()?;
-                fs::create_dir_all(Path::new(&path).parent().unwrap())?;
-                let mut f = File::create(path)?;
+                let key_path = Path::new(&path).parent().unwrap();
+                fs::create_dir_all(key_path)?;
+                set_permissions_keys(key_path)?;
+                let mut f = File::create(path.clone())?;
                 f.write_all(seed.as_bytes())?;
+                set_permissions_keys(&path)?;
                 seed
             }
             _ => {
