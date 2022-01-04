@@ -1,6 +1,7 @@
 use crate::{
     ctx::{context_dir, get_default_context, load_context},
     id::ClusterSeed,
+    id::ModuleId,
     util::{
         convert_rpc_error, extract_arg_value, format_output, json_str_to_msgpack_bytes,
         msgpack_to_json_val, nats_client_from_opts, Output, OutputKind, Result,
@@ -121,7 +122,7 @@ pub(crate) struct CallCommand {
 
     /// Public key or OCI reference of actor
     #[structopt(name = "actor-id")]
-    pub(crate) actor_id: String,
+    pub(crate) actor_id: ModuleId,
 
     /// Operation to invoke on actor
     #[structopt(name = "operation")]
@@ -322,8 +323,10 @@ async fn rpc_client_from_opts(
 #[cfg(test)]
 mod test {
     use super::{CallCli, CallCommand};
+    use crate::id::ModuleId;
     use crate::util::Result;
     use std::path::PathBuf;
+    use std::str::FromStr;
     use structopt::StructOpt;
 
     const RPC_HOST: &str = "127.0.0.1";
@@ -395,7 +398,7 @@ mod test {
                 );
                 assert!(test);
                 assert_eq!(bin, '2');
-                assert_eq!(actor_id, ACTOR_ID);
+                assert_eq!(actor_id, ModuleId::from_str(ACTOR_ID).unwrap());
                 assert_eq!(operation, "HandleOperation");
                 assert_eq!(payload, vec!["{ \"hello\": \"world\"}".to_string()])
             }

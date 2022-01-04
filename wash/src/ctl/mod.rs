@@ -1,23 +1,27 @@
 extern crate wasmcloud_control_interface;
+
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
+
+use spinners::{Spinner, Spinners};
+use structopt::StructOpt;
+use wasmcloud_control_interface::{
+    Client as CtlClient, CtlOperationAck, GetClaimsResponse, Host, HostInventory,
+    LinkDefinitionList,
+};
+
+pub(crate) use output::*;
+
 use crate::{
     ctl::manifest::HostManifest,
     ctx::{context_dir, get_default_context, load_context},
     id::{ModuleId, ServerId, ServiceId},
     util::{
-        convert_error, labels_vec_to_hashmap, Output, OutputKind, Result, DEFAULT_LATTICE_PREFIX,
-        DEFAULT_NATS_HOST, DEFAULT_NATS_PORT, DEFAULT_NATS_TIMEOUT,
+        convert_error, labels_vec_to_hashmap, validate_contract_id, Output, OutputKind, Result,
+        DEFAULT_LATTICE_PREFIX, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT, DEFAULT_NATS_TIMEOUT,
     },
-};
-pub(crate) use output::*;
-use spinners::{Spinner, Spinners};
-use std::{
-    path::{Path, PathBuf},
-    time::Duration,
-};
-use structopt::StructOpt;
-use wasmcloud_control_interface::{
-    Client as CtlClient, CtlOperationAck, GetClaimsResponse, Host, HostInventory,
-    LinkDefinitionList,
 };
 
 mod manifest;
@@ -479,20 +483,9 @@ pub(crate) async fn handle_command(command: CtlCliCommand) -> Result<String> {
                 .link_name
                 .clone()
                 .unwrap_or_else(|| "default".to_string());
-            // Check if the contract ID parameter is a 56 character key and suggest that the user
-            // give the contract ID instead
-            //
-            // NOTE: `len` is ok here because keys are only ascii characters that take up a single
-            // byte.
-            if cmd.contract_id.len() == 56 && cmd.contract_id.starts_with('V') {
-                link_del_output(
-                    &cmd.actor_id,
-                    &cmd.contract_id,
-                    link_name,
-                    Some("It looks like you used a Provider ID (e.g. VABC...) instead of a contract ID (e.g. wasmcloud:httpserver)".into()),
-                    &cmd.output.kind,
-                )?;
-            }
+
+            validate_contract_id(&cmd.contract_id)?;
+
             sp = update_spinner_message(
                 sp,
                 format!(
@@ -513,6 +506,8 @@ pub(crate) async fn handle_command(command: CtlCliCommand) -> Result<String> {
             )?
         }
         Link(LinkCommand::Put(cmd)) => {
+            validate_contract_id(&cmd.contract_id)?;
+
             sp = update_spinner_message(
                 sp,
                 format!(
@@ -796,6 +791,7 @@ pub(crate) async fn start_provider(cmd: StartProviderCommand) -> Result<CtlOpera
 }
 
 pub(crate) async fn stop_provider(cmd: StopProviderCommand) -> Result<CtlOperationAck> {
+    validate_contract_id(&cmd.contract_id)?;
     let client = ctl_client_from_opts(cmd.opts).await?;
     client
         .stop_provider(
