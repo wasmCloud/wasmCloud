@@ -262,3 +262,20 @@ pub(crate) fn cached_file(img: &str) -> PathBuf {
 pub(crate) fn img_name_to_file_name(img: &str) -> String {
     img.replace(":", "_").replace("/", "_").replace(".", "_")
 }
+
+// Check if the contract ID parameter is a 56 character key and suggest that the user
+// give the contract ID instead
+//
+// NOTE: `len` is ok here because keys are only ascii characters that take up a single
+// byte.
+pub fn validate_contract_id(contract_id: &str) -> Result<()> {
+    if contract_id.len() == 56
+        && contract_id
+            .chars()
+            .all(|c| c.is_ascii_digit() || c.is_ascii_uppercase())
+    {
+        Err(Box::<dyn std::error::Error>::from("It looks like you used an Actor or Provider ID (e.g. VABC...) instead of a contract ID (e.g. wasmcloud:httpserver)"))
+    } else {
+        Ok(())
+    }
+}
