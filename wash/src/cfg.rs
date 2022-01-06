@@ -1,4 +1,4 @@
-use crate::util::Result;
+use anyhow::Result;
 use std::{
     fs,
     io::{Error, ErrorKind},

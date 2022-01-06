@@ -3,14 +3,14 @@ use crate::{
     id::ClusterSeed,
     id::ModuleId,
     util::{
-        convert_rpc_error, extract_arg_value, format_output, json_str_to_msgpack_bytes,
-        msgpack_to_json_val, nats_client_from_opts, Output, OutputKind, Result,
-        DEFAULT_LATTICE_PREFIX, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT, DEFAULT_NATS_TIMEOUT,
+        extract_arg_value, json_str_to_msgpack_bytes, msgpack_to_json_val, nats_client_from_opts,
+        CommandOutput, DEFAULT_LATTICE_PREFIX, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT,
+        DEFAULT_NATS_TIMEOUT,
     },
 };
+use anyhow::{bail, Context, Result};
 use log::{debug, error};
-use serde_json::json;
-use std::{path::PathBuf, time::Duration};
+use std::{collections::HashMap, path::PathBuf, time::Duration};
 use structopt::{clap::AppSettings, StructOpt};
 use wasmbus_rpc::{core::WasmCloudEntity, Message, RpcClient};
 use wasmcloud_test_util::testing::TestResults;
@@ -36,13 +36,12 @@ impl CallCli {
     }
 }
 
-pub(crate) async fn handle_command(cmd: CallCommand) -> Result<String> {
-    let output_kind = cmd.output.kind;
+pub(crate) async fn handle_command(cmd: CallCommand) -> Result<CommandOutput> {
     let is_test = cmd.test;
     let save_output = cmd.save.clone();
     let bin = cmd.bin;
-    let res = handle_call(cmd).await;
-    Ok(call_output(res, save_output, bin, is_test, &output_kind))
+    let res = handle_call(cmd).await?;
+    call_output(res, save_output, bin, is_test)
 }
 
 #[derive(Debug, Clone, StructOpt)]
@@ -89,9 +88,6 @@ pub(crate) struct ConnectionOpts {
 pub(crate) struct CallCommand {
     #[structopt(flatten)]
     opts: ConnectionOpts,
-
-    #[structopt(flatten)]
-    pub(crate) output: Output,
 
     /// Optional json file to send as the operation payload
     #[structopt(short, long)]
@@ -140,18 +136,14 @@ pub(crate) async fn handle_call(cmd: CallCommand) -> Result<Vec<u8>> {
         cmd.payload.join("")
     );
     if !"bs2".contains(cmd.bin) {
-        return Err(Box::<dyn std::error::Error>::from(
-            "'bin' parameter must be 'b', 's', or '2'",
-        ));
+        bail!("'bin' parameter must be 'b', 's', or '2'");
     }
 
     let origin = WasmCloudEntity::new_actor(WASH_ORIGIN_KEY)?;
     let target = WasmCloudEntity::new_actor(&cmd.actor_id)?;
 
     if cmd.data.is_some() && !cmd.payload.is_empty() {
-        return Err(Box::<dyn std::error::Error>::from(
-            "you can use either -d/--data or the payload args, but not both.".to_string(),
-        ));
+        bail!("you can use either -d/--data or the payload args, but not both.");
     }
     let payload = if let Some(fname) = cmd.data {
         std::fs::read_to_string(fname)?
@@ -165,7 +157,7 @@ pub(crate) async fn handle_call(cmd: CallCommand) -> Result<Vec<u8>> {
     let bytes = json_str_to_msgpack_bytes(&payload)?;
 
     let (client, timeout) = rpc_client_from_opts(cmd.opts, cmd.cluster_seed).await?;
-    client
+    Ok(client
         .send_timeout(
             origin,
             target,
@@ -175,54 +167,55 @@ pub(crate) async fn handle_call(cmd: CallCommand) -> Result<Vec<u8>> {
             },
             Duration::from_millis(timeout),
         )
-        .await
-        .map_err(convert_rpc_error)
+        .await?)
 }
 
 // Helper output functions, used to ensure consistent output between call & standalone commands
 pub(crate) fn call_output(
-    response: Result<Vec<u8>>,
+    response: Vec<u8>,
     save_output: Option<PathBuf>,
     bin: char,
     is_test: bool,
-    output_kind: &OutputKind,
-) -> String {
-    match response {
-        Ok(msg) => {
-            if let Some(ref save_path) = save_output {
-                return match std::fs::write(save_path, msg) {
-                    Ok(_) => String::new(),
-                    Err(e) => format!("Error saving results to {}: {}", &save_path.display(), e),
-                };
-            }
-            if is_test {
-                // try to decode it as TestResults, otherwise dump as text
-                return match wasmbus_rpc::deserialize::<TestResults>(&msg) {
-                    Ok(tr) => {
-                        wasmcloud_test_util::cli::print_test_results(&tr);
-                        String::default()
-                    }
-                    Err(e) => {
-                        format!(
-                            "Error interpreting response as TestResults: {}. (raw): {}",
-                            e,
-                            String::from_utf8_lossy(&msg)
-                        )
-                    }
-                };
-            }
-            format_output(
-                format!("\nCall response (raw): {}", String::from_utf8_lossy(&msg)),
-                msgpack_to_json_val(msg, bin),
-                output_kind,
-            )
-        }
-        Err(e) => format_output(
-            format!("\nError invoking actor: {}", e),
-            json!({ "error": format!("{}", e) }),
-            output_kind,
-        ),
+) -> Result<CommandOutput> {
+    if let Some(ref save_path) = save_output {
+        std::fs::write(save_path, response)
+            .with_context(|| format!("Error saving results to {}", &save_path.display()))?;
+
+        return Ok(CommandOutput::new(
+            String::new(),
+            HashMap::<String, serde_json::Value>::new(),
+        ));
     }
+    if is_test {
+        // try to decode it as TestResults, otherwise dump as text
+        let test_results =
+            wasmbus_rpc::deserialize::<TestResults>(&response).with_context(|| {
+                format!(
+                    "Error interpreting response as TestResults. Response: {}",
+                    String::from_utf8_lossy(&response)
+                )
+            })?;
+
+        wasmcloud_test_util::cli::print_test_results(&test_results);
+        return Ok(CommandOutput::new(
+            String::new(),
+            HashMap::<String, serde_json::Value>::new(),
+        ));
+    }
+
+    let mut json = HashMap::new();
+    json.insert(
+        "response".to_string(),
+        msgpack_to_json_val(response.clone(), bin),
+    );
+
+    Ok(CommandOutput::new(
+        format!(
+            "\nCall response (raw): {}",
+            String::from_utf8_lossy(&response)
+        ),
+        json,
+    ))
 }
 
 async fn rpc_client_from_opts(
@@ -230,9 +223,9 @@ async fn rpc_client_from_opts(
     cmd_cluster_seed: Option<ClusterSeed>,
 ) -> Result<(RpcClient, u64)> {
     let ctx = if let Some(context) = opts.context {
-        load_context(&context).ok()
+        load_context(context.as_path()).ok()
     } else if let Ok(ctx_dir) = context_dir(None) {
-        get_default_context(&ctx_dir).ok()
+        get_default_context(ctx_dir.as_path()).ok()
     } else {
         None
     };
@@ -324,7 +317,7 @@ async fn rpc_client_from_opts(
 mod test {
     use super::{CallCli, CallCommand};
     use crate::id::ModuleId;
-    use crate::util::Result;
+    use anyhow::Result;
     use std::path::PathBuf;
     use std::str::FromStr;
     use structopt::StructOpt;
@@ -341,8 +334,6 @@ mod test {
     fn test_rpc_comprehensive() -> Result<()> {
         let call_all = CallCli::from_iter_safe(&[
             "call",
-            "-o",
-            "json",
             "--test",
             "--data",
             DATA_FNAME,
@@ -369,7 +360,6 @@ mod test {
         match call_all.command {
             CallCommand {
                 opts,
-                output,
                 data,
                 save,
                 bin,
@@ -387,7 +377,6 @@ mod test {
                     opts.context,
                     Some(PathBuf::from("~/.wash/contexts/default.json"))
                 );
-                assert_eq!(output.kind, crate::util::OutputKind::Json);
                 assert_eq!(data, Some(PathBuf::from(DATA_FNAME)));
                 assert_eq!(save, Some(PathBuf::from(SAVE_FNAME)));
                 assert_eq!(

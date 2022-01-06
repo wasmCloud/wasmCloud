@@ -1,5 +1,7 @@
 mod common;
-use common::{output_to_string, test_dir_file, test_dir_with_subfolder, wash};
+use assert_json_diff::assert_json_include;
+use common::{get_json_output, output_to_string, test_dir_file, test_dir_with_subfolder, wash};
+use serde_json::json;
 use std::fs::{remove_dir_all, File};
 use std::io::prelude::*;
 
@@ -25,7 +27,7 @@ fn integration_keys_gen_comprehensive() {
             .output()
             .unwrap_or_else(|_| panic!("failed to generate key type {} with text output", cmd));
         assert!(key_gen_command.status.success());
-        let output = output_to_string(key_gen_command);
+        let output = output_to_string(key_gen_command).unwrap();
         assert!(output.contains("Public Key:"));
         assert!(output.contains("Seed:"));
         assert!(output.contains("Remember that the seed is private, treat it as a secret."));
@@ -37,7 +39,7 @@ fn integration_keys_gen_comprehensive() {
             .output()
             .unwrap_or_else(|_| panic!("failed to generate key type {} with json output", cmd));
         assert!(key_gen_command.status.success());
-        let output = output_to_string(key_gen_command);
+        let output = output_to_string(key_gen_command).unwrap();
         assert!(output.contains("\"public_key\":"));
         assert!(output.contains("\"seed\":"));
     });
@@ -66,7 +68,7 @@ fn integration_keys_get_basic() {
         .expect("failed to read key with keys get");
     assert!(key_output.status.success());
     assert_eq!(
-        output_to_string(key_output).trim(),
+        output_to_string(key_output).unwrap().trim(),
         String::from_utf8(KEYCONTENTS.to_vec()).unwrap()
     );
 
@@ -97,13 +99,11 @@ fn integration_keys_get_comprehensive() {
         .output()
         .expect("failed to read key with keys get");
     assert!(key_output.status.success());
-    assert_eq!(
-        output_to_string(key_output).trim(),
-        format!(
-            "{{\"seed\":\"{}\"}}",
-            String::from_utf8(KEYCONTENTS.to_vec()).unwrap()
-        )
-    );
+    let json_output = get_json_output(key_output).unwrap();
+    let expected_output = json!({
+        "seed": String::from_utf8(KEYCONTENTS.to_vec()).unwrap()
+    });
+    assert_json_include!(actual: json_output, expected: expected_output);
 
     remove_dir_all(get_comprehensive_dir).unwrap();
 }
@@ -140,7 +140,7 @@ fn integration_list_comprehensive() {
         .output()
         .expect("failed to list keys with keys list");
     assert!(list_output.status.success());
-    let output = output_to_string(list_output);
+    let output = output_to_string(list_output).unwrap();
     assert!(output.contains(&format!(
         "====== Keys found in {} ======",
         list_comprehensive_dir.to_str().unwrap()
@@ -162,7 +162,7 @@ fn integration_list_comprehensive() {
         .expect("failed to list keys with keys list with json output");
 
     assert!(list_output_json.status.success());
-    let output_json = output_to_string(list_output_json);
+    let output_json = output_to_string(list_output_json).unwrap();
     assert!(output_json.contains(KEYONE));
     assert!(output_json.contains(KEYTWO));
     assert!(output_json.contains(KEYTHREE));

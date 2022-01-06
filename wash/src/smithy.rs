@@ -1,7 +1,10 @@
 //! smithy model lint and validation
 //!
 use crate::generate::emoji;
+use crate::util::CommandOutput;
 use anyhow::anyhow;
+use anyhow::bail;
+use anyhow::Result;
 use atelier_core::model::Model;
 use console::style;
 use std::path::PathBuf;
@@ -78,7 +81,7 @@ pub(crate) struct GenerateOptions {
     config: Option<PathBuf>,
 
     /// Output directory, defaults to current directory
-    #[structopt(short, long)]
+    #[structopt(long)]
     output_dir: Option<PathBuf>,
 
     /// Optionally, load templates from this folder.
@@ -107,9 +110,7 @@ pub(crate) struct GenerateOptions {
     input: Vec<String>,
 }
 
-pub(crate) async fn handle_lint_command(
-    command: LintCli,
-) -> Result<String, Box<dyn ::std::error::Error>> {
+pub(crate) async fn handle_lint_command(command: LintCli) -> Result<CommandOutput> {
     let opt = command.opt;
     let verbose = match opt.verbose {
         true => 1u8,
@@ -128,15 +129,14 @@ pub(crate) async fn handle_lint_command(
     )
     .map_err(|e| anyhow!("lint error: {}", e.to_string()))?;
 
+    // TODO: make this return the report instead of printing directly
     cargo_atelier::report::report_action_issues(report, true)
         .map_err(|e| anyhow!("report error: {}", e))?;
 
-    Ok(String::new())
+    Ok(CommandOutput::default())
 }
 
-pub(crate) async fn handle_validate_command(
-    command: ValidateCli,
-) -> Result<String, Box<dyn ::std::error::Error>> {
+pub(crate) async fn handle_validate_command(command: ValidateCli) -> Result<CommandOutput> {
     use atelier_core::action::validate::{
         run_validation_actions, CorrectTypeReferences, NoUnresolvedReferences,
     };
@@ -169,7 +169,7 @@ pub(crate) async fn handle_validate_command(
     cargo_atelier::report::report_action_issues(report, true)
         .map_err(|e| anyhow!("report error: {}", e))?;
 
-    Ok(String::new())
+    Ok(CommandOutput::default())
 }
 
 /// build model from input files and/or files listed in codegen.toml.
@@ -234,13 +234,11 @@ fn select_config(opt_config: &Option<PathBuf>) -> Result<CodegenConfig, anyhow::
     Ok(config)
 }
 
-pub(crate) fn handle_gen_command(
-    command: GenerateCli,
-) -> Result<String, Box<dyn ::std::error::Error>> {
+pub(crate) fn handle_gen_command(command: GenerateCli) -> Result<CommandOutput> {
     let opt = command.opt;
     if let Some(ref tdir) = opt.template_dir {
         if !tdir.is_dir() {
-            return Err("template_dir parameter must be an existing directory".into());
+            bail!("template_dir parameter must be an existing directory");
         }
     }
     let output_dir = match &opt.output_dir {
@@ -274,7 +272,7 @@ pub(crate) fn handle_gen_command(
     let g = weld_codegen::Generator::default();
     g.gen(Some(&model), config, templates, &output_dir, opt.defines)?;
 
-    Ok(String::new())
+    Ok(CommandOutput::default())
 }
 
 /// Parse a single key-value pair into (String,TomlValue)
