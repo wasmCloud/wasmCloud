@@ -1,9 +1,7 @@
+use anyhow::{Context, Result};
 use std::env;
 use std::fs::{create_dir_all, remove_dir_all};
 use std::path::PathBuf;
-
-#[allow(unused)]
-pub(crate) type Result<T> = ::std::result::Result<T, Box<dyn ::std::error::Error + Send + Sync>>;
 
 /// Helper function to create the `wash` binary process
 #[allow(unused)]
@@ -12,8 +10,18 @@ pub(crate) fn wash() -> std::process::Command {
 }
 
 #[allow(unused)]
-pub(crate) fn output_to_string(output: std::process::Output) -> String {
-    String::from_utf8(output.stdout).expect("failed to convert output bytes to String")
+pub(crate) fn output_to_string(output: std::process::Output) -> Result<String> {
+    String::from_utf8(output.stdout).with_context(|| "Failed to convert output bytes to String")
+}
+
+#[allow(unused)]
+pub(crate) fn get_json_output(output: std::process::Output) -> Result<serde_json::Value> {
+    let output_str = output_to_string(output)?;
+
+    let json: serde_json::Value = serde_json::from_str(&output_str)
+        .with_context(|| "Failed to parse json from output string")?;
+
+    Ok(json)
 }
 
 #[allow(unused)]

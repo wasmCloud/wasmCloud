@@ -1,5 +1,7 @@
 mod common;
-use common::{output_to_string, test_dir_file, test_dir_with_subfolder, wash};
+use assert_json_diff::assert_json_include;
+use common::{get_json_output, test_dir_file, test_dir_with_subfolder, wash};
+use serde_json::json;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::fs::create_dir_all;
 use std::fs::{remove_dir_all, File};
@@ -58,10 +60,13 @@ fn integration_drain_lib() {
         .output()
         .unwrap_or_else(|_| panic!("failed to drain {:?}", lib_dir.clone()));
     assert!(drain_basic.status.success());
-    assert_eq!(
-        output_to_string(drain_basic),
-        format!("{{\"drained\":[\"{}\"]}}\n", lib_dir.to_str().unwrap())
-    );
+
+    let drain_output = get_json_output(drain_basic).unwrap();
+    let expected_output = json!({
+        "drained": [ lib_dir.to_str().unwrap() ],
+    });
+    assert_json_include!(actual: drain_output, expected: expected_output);
+
     // Ensures that the directory is empty (files have been removed)
     assert!(lib_dir.read_dir().unwrap().next().is_none());
 
@@ -94,10 +99,13 @@ fn integration_drain_oci() {
         .output()
         .unwrap_or_else(|_| panic!("failed to drain {:?}", oci_dir.clone()));
     assert!(drain_basic.status.success());
-    assert_eq!(
-        output_to_string(drain_basic),
-        format!("{{\"drained\":[\"{}\"]}}\n", oci_dir.to_str().unwrap())
-    );
+
+    let drain_output = get_json_output(drain_basic).unwrap();
+    let expected_output = json!({
+        "drained": [ oci_dir.to_str().unwrap() ],
+    });
+    assert_json_include!(actual: drain_output, expected: expected_output);
+
     // Ensures that the directory is empty (files have been removed)
     assert!(oci_dir.read_dir().unwrap().next().is_none());
 
@@ -137,15 +145,11 @@ fn integration_drain_all() {
         .unwrap_or_else(|_| panic!("failed to drain {:?}", oci_dir.clone()));
     assert!(drain_basic.status.success());
 
-    assert_eq!(
-        output_to_string(drain_basic),
-        format!(
-            "{{\"drained\":[\"{}\",\"{}\",\"{}\"]}}\n",
-            lib_dir.to_str().unwrap(),
-            oci_dir.to_str().unwrap(),
-            &smithy_cache,
-        )
-    );
+    let drain_output = get_json_output(drain_basic).unwrap();
+    let expected_output = json!({
+        "drained": [ lib_dir.to_str().unwrap(), oci_dir.to_str().unwrap(), smithy_cache ],
+    });
+    assert_json_include!(actual: drain_output, expected: expected_output);
 
     // Ensures that the directory is empty (files have been removed)
     assert!(lib_dir.read_dir().unwrap().next().is_none());
@@ -191,10 +195,12 @@ fn test_smithy_cache_drain() {
         .unwrap_or_else(|_| panic!("failed to drain {:?}", &smithy_cache));
     assert!(drain_basic.status.success());
 
-    assert_eq!(
-        output_to_string(drain_basic),
-        format!("{{\"drained\":[\"{}\"]}}\n", &smithy_cache)
-    );
+    let drain_output = get_json_output(drain_basic).unwrap();
+    let expected_output = json!({
+        "drained": [ &smithy_cache ],
+    });
+    assert_json_include!(actual: drain_output, expected: expected_output);
+
     // check that junk file is gone
     assert!(
         !path_to_test_file(&smithy_cache).exists(),

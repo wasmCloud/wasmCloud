@@ -1,31 +1,31 @@
 extern crate wasmcloud_control_interface;
+use std::collections::HashMap;
+
 use crate::{
     id::{ModuleId, ServiceId},
-    util::{format_optional, format_output, OutputKind},
+    util::{format_optional, CommandOutput},
 };
+use anyhow::{bail, Result};
 use serde_json::json;
 use term_table::{row::Row, table_cell::*, Table};
 use wasmcloud_control_interface::*;
 
-pub(crate) fn get_hosts_output(hosts: Vec<Host>, output_kind: &OutputKind) -> String {
-    match *output_kind {
-        OutputKind::Text => hosts_table(hosts),
-        OutputKind::Json => format!("{}", json!({ "hosts": hosts })),
-    }
+pub(crate) fn get_hosts_output(hosts: Vec<Host>) -> CommandOutput {
+    let mut map = HashMap::new();
+    map.insert("hosts".to_string(), json!(hosts));
+    CommandOutput::new(hosts_table(hosts), map)
 }
 
-pub(crate) fn get_host_inventory_output(inv: HostInventory, output_kind: &OutputKind) -> String {
-    match *output_kind {
-        OutputKind::Text => host_inventory_table(inv),
-        OutputKind::Json => format!("{}", json!({ "inventory": inv })),
-    }
+pub(crate) fn get_host_inventory_output(inv: HostInventory) -> CommandOutput {
+    let mut map = HashMap::new();
+    map.insert("inventory".to_string(), json!(inv));
+    CommandOutput::new(host_inventory_table(inv), map)
 }
 
-pub(crate) fn get_claims_output(claims: GetClaimsResponse, output_kind: &OutputKind) -> String {
-    match *output_kind {
-        OutputKind::Text => claims_table(claims),
-        OutputKind::Json => format!("{}", json!({ "claims": claims })),
-    }
+pub(crate) fn get_claims_output(claims: GetClaimsResponse) -> CommandOutput {
+    let mut map = HashMap::new();
+    map.insert("claims".to_string(), json!(claims));
+    CommandOutput::new(claims_table(claims), map)
 }
 
 pub(crate) fn link_del_output(
@@ -33,22 +33,22 @@ pub(crate) fn link_del_output(
     contract_id: &str,
     link_name: &str,
     failure: Option<String>,
-    output_kind: &OutputKind,
-) -> std::result::Result<String, String> {
+) -> Result<CommandOutput> {
     match failure {
-        None => Ok(format_output(
-            format!(
-                "\nDeleted link for {} on {} ({}) successfully",
-                actor_id, contract_id, link_name
-            ),
-            json!({"actor_id": actor_id, "contract_id": contract_id, "link_name": link_name, "result": "published"}),
-            output_kind,
-        )),
-        Some(f) => Err(format_output(
-            format!("\nError deleting link: {}", f),
-            json!({ "error": f }),
-            output_kind,
-        )),
+        None => {
+            let mut map = HashMap::new();
+            map.insert("actor_id".to_string(), json!(actor_id));
+            map.insert("contract_id".to_string(), json!(contract_id));
+            map.insert("link_name".to_string(), json!(link_name));
+            Ok(CommandOutput::new(
+                format!(
+                    "Deleted link for {} on {} ({}) successfully",
+                    actor_id, contract_id, link_name
+                ),
+                map,
+            ))
+        }
+        Some(f) => bail!("Error deleting link: {}", f),
     }
 }
 
@@ -56,59 +56,38 @@ pub(crate) fn link_put_output(
     actor_id: &ModuleId,
     provider_id: &ServiceId,
     failure: Option<String>,
-    output_kind: &OutputKind,
-) -> String {
+) -> Result<CommandOutput> {
     match failure {
-        None => format_output(
-            format!(
-                "\nPublished link ({}) <-> ({}) successfully",
-                actor_id, provider_id
-            ),
-            json!({"actor_id": actor_id, "provider_id": provider_id, "result": "published"}),
-            output_kind,
-        ),
-        Some(f) => format_output(
-            format!("\nError advertising link: {}", f),
-            json!({ "error": f }),
-            output_kind,
-        ),
+        None => {
+            let mut map = HashMap::new();
+            map.insert("actor_id".to_string(), json!(actor_id));
+            map.insert("provider_id".to_string(), json!(provider_id));
+            Ok(CommandOutput::new(
+                format!(
+                    "Published link ({}) <-> ({}) successfully",
+                    actor_id, provider_id
+                ),
+                map,
+            ))
+        }
+        Some(f) => bail!("Error advertising link: {}", f),
     }
 }
 
-pub(crate) fn link_query_output(list: LinkDefinitionList, output_kind: &OutputKind) -> String {
-    match *output_kind {
-        OutputKind::Text => links_table(list),
-        OutputKind::Json => format!("{}", json!({ "links": list.links })),
-    }
+pub(crate) fn link_query_output(list: LinkDefinitionList) -> CommandOutput {
+    let mut map = HashMap::new();
+    map.insert("links".to_string(), json!(list.links));
+    CommandOutput::new(links_table(list), map)
 }
 
-pub(crate) fn apply_manifest_output(results: Vec<String>, output_kind: &OutputKind) -> String {
-    format_output(
+pub(crate) fn apply_manifest_output(results: Vec<String>) -> CommandOutput {
+    let mut map = HashMap::new();
+    map.insert("results".to_string(), json!(results));
+
+    CommandOutput::new(
         format!("\nManifest application results:\n{}", results.join("\n")),
-        json!({ "results": results }),
-        output_kind,
+        map,
     )
-}
-
-pub(crate) fn ctl_operation_output(
-    accepted: bool,
-    success: &str,
-    error: &str,
-    output_kind: &OutputKind,
-) -> String {
-    if accepted {
-        format_output(
-            format!("\n{}", success),
-            json!({ "accepted": accepted, "error": ""}),
-            output_kind,
-        )
-    } else {
-        format_output(
-            format!("\n{}", error),
-            json!({ "accepted": accepted, "error": error}),
-            output_kind,
-        )
-    }
 }
 
 /// Helper function to transform a LinkDefinitionList into a table string for printing

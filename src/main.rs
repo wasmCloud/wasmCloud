@@ -1,3 +1,6 @@
+use std::collections::HashMap;
+
+use anyhow::Result;
 use call::CallCli;
 use claims::ClaimsCli;
 use ctl::CtlCli;
@@ -7,8 +10,12 @@ use generate::NewCli;
 use keys::KeysCli;
 use par::ParCli;
 use reg::RegCli;
+use serde_json::json;
 use smithy::{GenerateCli, LintCli, ValidateCli};
 use structopt::{clap::AppSettings, StructOpt};
+use util::CommandOutput;
+
+use crate::util::OutputKind;
 
 mod call;
 mod cfg;
@@ -40,6 +47,15 @@ A single CLI to handle all of your wasmCloud tooling needs
             name = "wash",
             about = ASCII)]
 struct Cli {
+    #[structopt(
+        short = "o",
+        long = "output",
+        default_value = "text",
+        help = "Specify output format (text or json)",
+        global = true
+    )]
+    pub(crate) output: OutputKind,
+
     #[structopt(flatten)]
     command: CliCommand,
 }
@@ -90,28 +106,66 @@ async fn main() {
     if env_logger::try_init().is_err() {}
     let cli = Cli::from_args();
 
-    let res = match cli.command {
+    let output_kind = cli.output;
+
+    let res: Result<CommandOutput> = match cli.command {
         CliCommand::Call(call_cli) => call::handle_command(call_cli.command()).await,
-        CliCommand::Claims(claims_cli) => claims::handle_command(claims_cli.command()).await,
-        CliCommand::Ctl(ctl_cli) => ctl::handle_command(ctl_cli.command()).await,
+        CliCommand::Claims(claims_cli) => {
+            claims::handle_command(claims_cli.command(), output_kind).await
+        }
+        CliCommand::Ctl(ctl_cli) => ctl::handle_command(ctl_cli.command(), output_kind).await,
         CliCommand::Ctx(ctx_cli) => ctx::handle_command(ctx_cli.command()).await,
         CliCommand::Drain(drain_cmd) => drain::handle_command(drain_cmd.command()),
         CliCommand::Gen(generate_cli) => smithy::handle_gen_command(generate_cli),
         CliCommand::Keys(keys_cli) => keys::handle_command(keys_cli.command()),
         CliCommand::New(new_cli) => generate::handle_command(new_cli.command()),
-        CliCommand::Par(par_cli) => par::handle_command(par_cli.command()).await,
-        CliCommand::Reg(reg_cli) => reg::handle_command(reg_cli.command()).await,
+        CliCommand::Par(par_cli) => par::handle_command(par_cli.command(), output_kind).await,
+        CliCommand::Reg(reg_cli) => reg::handle_command(reg_cli.command(), output_kind).await,
         CliCommand::Lint(lint_cli) => smithy::handle_lint_command(lint_cli).await,
         CliCommand::Validate(validate_cli) => smithy::handle_validate_command(validate_cli).await,
     };
 
     std::process::exit(match res {
         Ok(out) => {
-            println!("{}", out);
+            match output_kind {
+                OutputKind::Json => {
+                    let mut map = out.map;
+                    map.insert("success".to_string(), json!(true));
+                    println!("{}", serde_json::to_string_pretty(&map).unwrap());
+                }
+                OutputKind::Text => {
+                    println!("{}", out.text);
+                }
+            }
+
             0
         }
         Err(e) => {
-            eprintln!("Error: {}", e);
+            let trace = e
+                .chain()
+                .skip(1)
+                .map(|e| format!("{}", e))
+                .collect::<Vec<String>>();
+
+            match output_kind {
+                OutputKind::Json => {
+                    let mut map = HashMap::new();
+                    map.insert("success".to_string(), json!(false));
+                    map.insert("error".to_string(), json!(e.to_string()));
+                    if !trace.is_empty() {
+                        map.insert("trace".to_string(), json!(trace));
+                    }
+
+                    eprintln!("{}", serde_json::to_string_pretty(&map).unwrap());
+                }
+                OutputKind::Text => {
+                    eprintln!("{}", e);
+                    if !trace.is_empty() {
+                        eprintln!("Error trace:");
+                        eprintln!("{}", trace.join("\n"));
+                    }
+                }
+            }
             1
         }
     })

@@ -1,6 +1,8 @@
 mod common;
 
-use common::{output_to_string, test_dir_file, test_dir_with_subfolder, wash};
+use assert_json_diff::assert_json_include;
+use common::{get_json_output, output_to_string, test_dir_file, test_dir_with_subfolder, wash};
+use serde_json::json;
 use std::env::temp_dir;
 use std::fs::{remove_dir_all, remove_file, File};
 use std::io::prelude::*;
@@ -60,7 +62,7 @@ fn integration_par_create(issuer: &str, subject: &str, archive: &str) {
         .expect("failed to create provider archive file");
     assert!(create.status.success());
     assert_eq!(
-        output_to_string(create),
+        output_to_string(create).unwrap(),
         format!("Successfully created archive {}\n", archive)
     );
 
@@ -69,19 +71,18 @@ fn integration_par_create(issuer: &str, subject: &str, archive: &str) {
         .output()
         .expect("failed to inspect created provider archive file");
     assert!(inspect_created.status.success());
-    let output = output_to_string(inspect_created);
-    assert!(output.contains("\"capability_contract_id\":\"wasmcloud:testing\""));
-    assert!(output.contains("\"name\":\"Test parJEEzy\""));
-    assert!(
-        output.contains("\"service\":\"VBM5JMFOVUJDHGTOJSPUJ33ZGHCRCJ3LYHUJ3HND5ZMRVORYCMAVPZQF\"")
-    );
-    assert!(
-        output.contains("\"issuer\":\"AA7R5L74E45BJ4XVUYTELQ56P5VCOSPOAA474L7QWH4ZAILLKTZFWYYW\"")
-    );
-    assert!(output.contains("\"rev\":\"42\""));
-    assert!(output.contains("\"targets\":[\"x86_64-linux\"]"));
-    assert!(output.contains("\"vendor\":\"TestRunner\""));
-    assert!(output.contains("\"ver\":\"3.2.1\""));
+    let output = get_json_output(inspect_created).unwrap();
+    let expected = json!({
+        "capability_contract_id": "wasmcloud:testing",
+        "name": "Test parJEEzy",
+        "service": "VBM5JMFOVUJDHGTOJSPUJ33ZGHCRCJ3LYHUJ3HND5ZMRVORYCMAVPZQF",
+        "issuer": "AA7R5L74E45BJ4XVUYTELQ56P5VCOSPOAA474L7QWH4ZAILLKTZFWYYW",
+        "revision": "42",
+        "targets": ["x86_64-linux"],
+        "vendor": "TestRunner",
+        "version": "3.2.1"
+    });
+    assert_json_include!(actual: output, expected: expected);
 
     remove_dir_all(bin_folder).unwrap();
 }
@@ -121,7 +122,7 @@ fn integration_par_insert(issuer: &str, subject: &str, archive: &str) {
         .expect("failed to insert binary into provider archive");
     assert!(insert_bin1.status.success());
     assert_eq!(
-        output_to_string(insert_bin1),
+        output_to_string(insert_bin1).unwrap(),
         format!(
             "Successfully inserted {} into archive {}\n",
             bin1.to_str().unwrap(),
@@ -133,21 +134,27 @@ fn integration_par_insert(issuer: &str, subject: &str, archive: &str) {
         .output()
         .expect("failed to inspect created provider archive file");
     assert!(inspect_after_bin1.status.success());
-    let output = output_to_string(inspect_after_bin1);
-    assert!(output.contains("\"capability_contract_id\":\"wasmcloud:testing\""));
-    assert!(output.contains("\"name\":\"Test parJEEzy\""));
-    assert!(
-        output.contains("\"service\":\"VBM5JMFOVUJDHGTOJSPUJ33ZGHCRCJ3LYHUJ3HND5ZMRVORYCMAVPZQF\"")
-    );
-    assert!(
-        output.contains("\"issuer\":\"AA7R5L74E45BJ4XVUYTELQ56P5VCOSPOAA474L7QWH4ZAILLKTZFWYYW\"")
-    );
-    assert!(output.contains("\"rev\":\"42\""));
-    assert!(output.contains("\"targets\":["));
-    assert!(output.contains("\"x86_64-linux\""));
-    assert!(output.contains("\"mips64-android\""));
-    assert!(output.contains("\"vendor\":\"TestRunner\""));
-    assert!(output.contains("\"ver\":\"3.2.1\""));
+    let output = get_json_output(inspect_after_bin1).unwrap();
+    let expected = json!({
+        "capability_contract_id": "wasmcloud:testing",
+        "name": "Test parJEEzy",
+        "service": "VBM5JMFOVUJDHGTOJSPUJ33ZGHCRCJ3LYHUJ3HND5ZMRVORYCMAVPZQF",
+        "issuer": "AA7R5L74E45BJ4XVUYTELQ56P5VCOSPOAA474L7QWH4ZAILLKTZFWYYW",
+        "revision": "42",
+        "vendor": "TestRunner",
+        "version": "3.2.1"
+    });
+    assert_json_include!(actual: output.clone(), expected: expected);
+    let targets: Vec<String> = output
+        .get("targets")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t.as_str().unwrap().to_string())
+        .collect();
+    assert!(targets.contains(&ARCH1.to_string()));
+    assert!(targets.contains(&"x86_64-linux".to_string()));
 
     let insert_bin2 = wash()
         .args(&[
@@ -168,7 +175,7 @@ fn integration_par_insert(issuer: &str, subject: &str, archive: &str) {
         .expect("failed to insert binary into provider archive");
     assert!(insert_bin2.status.success());
     assert_eq!(
-        output_to_string(insert_bin2),
+        output_to_string(insert_bin2).unwrap(),
         format!(
             "Successfully inserted {} into archive {}\n",
             bin2.to_str().unwrap(),
@@ -181,22 +188,28 @@ fn integration_par_insert(issuer: &str, subject: &str, archive: &str) {
         .output()
         .expect("failed to inspect created provider archive file");
     assert!(inspect_after_bin2.status.success());
-    let output = output_to_string(inspect_after_bin2);
-    assert!(output.contains("\"capability_contract_id\":\"wasmcloud:testing\""));
-    assert!(output.contains("\"name\":\"Test parJEEzy\""));
-    assert!(
-        output.contains("\"service\":\"VBM5JMFOVUJDHGTOJSPUJ33ZGHCRCJ3LYHUJ3HND5ZMRVORYCMAVPZQF\"")
-    );
-    assert!(
-        output.contains("\"issuer\":\"AA7R5L74E45BJ4XVUYTELQ56P5VCOSPOAA474L7QWH4ZAILLKTZFWYYW\"")
-    );
-    assert!(output.contains("\"rev\":\"42\""));
-    assert!(output.contains("\"targets\":["));
-    assert!(output.contains("\"x86_64-linux\""));
-    assert!(output.contains("\"aarch64-ios\""));
-    assert!(output.contains("\"mips64-android\""));
-    assert!(output.contains("\"vendor\":\"TestRunner\""));
-    assert!(output.contains("\"ver\":\"3.2.1\""));
+    let output = get_json_output(inspect_after_bin2).unwrap();
+    let expected = json!({
+        "capability_contract_id": "wasmcloud:testing",
+        "name": "Test parJEEzy",
+        "service": "VBM5JMFOVUJDHGTOJSPUJ33ZGHCRCJ3LYHUJ3HND5ZMRVORYCMAVPZQF",
+        "issuer": "AA7R5L74E45BJ4XVUYTELQ56P5VCOSPOAA474L7QWH4ZAILLKTZFWYYW",
+        "revision": "42",
+        "vendor": "TestRunner",
+        "version": "3.2.1"
+    });
+    assert_json_include!(actual: output.clone(), expected: expected);
+    let targets: Vec<String> = output
+        .get("targets")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t.as_str().unwrap().to_string())
+        .collect();
+    assert!(targets.contains(&ARCH1.to_string()));
+    assert!(targets.contains(&ARCH2.to_string()));
+    assert!(targets.contains(&"x86_64-linux".to_string()));
 
     remove_dir_all(insert_dir).unwrap();
 }
@@ -249,10 +262,13 @@ fn integration_par_inspect() {
         .output()
         .expect("failed to inspect local http server");
     assert!(local_inspect.status.success());
-    let local_inspect_output = output_to_string(local_inspect);
-    assert!(local_inspect_output.contains(&format!("\"issuer\":\"{}\"", HTTP_ISSUER)));
-    assert!(local_inspect_output.contains(&format!("\"service\":\"{}\"", HTTP_SERVICE)));
-    assert!(local_inspect_output.contains("\"capability_contract_id\":\"wasmcloud:httpclient\""));
+    let local_inspect_output = get_json_output(local_inspect).unwrap();
+    let inspect_expected = json!({
+        "issuer": HTTP_ISSUER,
+        "service": HTTP_SERVICE,
+        "capability_contract_id": "wasmcloud:httpclient",
+    });
+    assert_json_include!(actual: local_inspect_output, expected: inspect_expected.clone());
 
     let local_reg_inspect = wash()
         .args(&[
@@ -266,22 +282,16 @@ fn integration_par_inspect() {
         .output()
         .expect("failed to inspect local registry wasm");
     assert!(local_reg_inspect.status.success());
-    let local_reg_inspect_output = output_to_string(local_reg_inspect);
-    assert!(local_reg_inspect_output.contains(&format!("\"issuer\":\"{}\"", HTTP_ISSUER)));
-    assert!(local_reg_inspect_output.contains(&format!("\"service\":\"{}\"", HTTP_SERVICE)));
-    assert!(
-        local_reg_inspect_output.contains("\"capability_contract_id\":\"wasmcloud:httpclient\"")
-    );
+    let local_reg_inspect_output = get_json_output(local_reg_inspect).unwrap();
+    assert_json_include!(actual: local_reg_inspect_output, expected: inspect_expected.clone());
 
     let remote_inspect = wash()
         .args(&["par", "inspect", HTTP_OCI, "-o", "json"])
         .output()
         .expect("failed to inspect local registry wasm");
     assert!(remote_inspect.status.success());
-    let remote_inspect_output = output_to_string(remote_inspect);
-    assert!(remote_inspect_output.contains(&format!("\"issuer\":\"{}\"", HTTP_ISSUER)));
-    assert!(remote_inspect_output.contains(&format!("\"service\":\"{}\"", HTTP_SERVICE)));
-    assert!(remote_inspect_output.contains("\"capability_contract_id\":\"wasmcloud:httpclient\""));
+    let remote_inspect_output = get_json_output(remote_inspect).unwrap();
+    assert_json_include!(actual: remote_inspect_output, expected: inspect_expected);
 
     remove_dir_all(inspect_dir).unwrap();
 }
@@ -315,10 +325,13 @@ fn integration_par_inspect_cached() {
         .output()
         .expect("failed to inspect remote cached registry");
     assert!(remote_inspect.status.success());
-    let remote_inspect_output = output_to_string(remote_inspect);
-    assert!(remote_inspect_output.contains(&format!("\"issuer\":\"{}\"", HTTP_ISSUER)));
-    assert!(remote_inspect_output.contains(&format!("\"service\":\"{}\"", HTTP_SERVICE)));
-    assert!(remote_inspect_output.contains("\"capability_contract_id\":\"wasmcloud:httpclient\""));
+    let remote_inspect_output = get_json_output(remote_inspect).unwrap();
+    let expected_output = json!({
+        "issuer": HTTP_ISSUER,
+        "service": HTTP_SERVICE,
+        "capability_contract_id": "wasmcloud:httpclient",
+    });
+    assert_json_include!(actual: remote_inspect_output, expected: expected_output);
 
     let remote_inspect_no_cache = wash()
         .args(&["par", "inspect", HTTP_FAKE_OCI, "-o", "json", "--no-cache"])

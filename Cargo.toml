@@ -14,7 +14,7 @@ repository = "https://github.com/wasmcloud/wash"
 maintenance = {status = "actively-developed"}
 
 [dependencies]
-anyhow = "1.0"
+anyhow = "1.0.51"
 atelier_core = "0.2"
 bytes = "1.0"
 cargo = "0.58"
@@ -66,6 +66,7 @@ reqwest = {version = "0.11", features = ["json"]}
 tempfile = "3"
 test-case = "1.2.1"
 test_bin = "0.3.0"
+assert-json-diff = "2.0.1"
 
 [[bin]]
 bench = true
