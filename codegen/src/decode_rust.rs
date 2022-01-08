@@ -1,4 +1,3 @@
-#![cfg(feature = "cbor")]
 //! CBOR Decode functions
 
 use crate::{
@@ -128,8 +127,9 @@ impl<'model> RustCodeGen<'model> {
             }
         } else if self.namespace.is_some() && id.namespace() == self.namespace.as_ref().unwrap() {
             format!(
-                "decode_{}(d)?",
-                crate::strings::to_snake_case(&id.shape_name().to_string())
+                "decode_{}(d).map_err(|e| format!(\"decoding '{}': {{}}\", e))?",
+                crate::strings::to_snake_case(&id.shape_name().to_string()),
+                &id.shape_name().to_string()
             )
         } else {
             match self.packages.get(&id.namespace().to_string()) {
@@ -139,9 +139,11 @@ impl<'model> RustCodeGen<'model> {
                 }) => {
                     // the crate name should be valid rust syntax. If not, they'll get an error with rustc
                     format!(
-                        "{}::decode_{}(d)?",
+                        "{}::decode_{}(d).map_err(|e| format!(\"decoding '{}::{}': {{}}\", e))",
                         &crate_name,
-                        crate::strings::to_snake_case(&id.shape_name().to_string())
+                        crate::strings::to_snake_case(&id.shape_name().to_string()),
+                        &crate_name,
+                        &id.shape_name().to_string()
                     )
                 }
                 _ => {
@@ -158,6 +160,7 @@ impl<'model> RustCodeGen<'model> {
         Ok(stmt)
     }
 
+    #[allow(dead_code)]
     fn decode_shape_kind(&self, id: &ShapeID, kind: &ShapeKind) -> Result<String> {
         let s = match kind {
             ShapeKind::Simple(simple) => match simple {
@@ -188,7 +191,7 @@ impl<'model> RustCodeGen<'model> {
                                 m.insert(k,v);
                             }}
                         }} else {{
-                            return Err(minicbor::decode::Error::Message("indefinite maps not supported"));
+                            return Err(RpcError::Deser("indefinite maps not supported".to_string()));
                         }}
                         m
                     }}
@@ -216,14 +219,14 @@ impl<'model> RustCodeGen<'model> {
                         loop {{
                             match d.datatype() {{
                                 Err(_) => break,
-                                Ok(minicbor::data::Type::Break) => break,
+                                Ok({}::cbor::Type::Break) => break,
                                 Ok(_) => arr.push({})
                             }}
                         }}
                         arr
                     }}
                     "#,
-                    &member_type, &member_decoder, &member_type, &member_decoder,
+                    &member_type, &member_decoder, &member_type, self.import_core, &member_decoder,
                 )
             }
             ShapeKind::Structure(strukt) => self.decode_struct(id, strukt)?,
@@ -241,6 +244,7 @@ impl<'model> RustCodeGen<'model> {
 
     /// write decode statements for a structure
     /// This always occurs inside a dedicated function for the struct type
+    #[allow(dead_code)]
     fn decode_struct(&self, id: &ShapeID, strukt: &StructureOrUnion) -> Result<String> {
         let (fields, _is_numbered) = crate::model::get_sorted_fields(id.shape_name(), strukt)?;
         let mut s = String::new();
@@ -264,14 +268,14 @@ impl<'model> RustCodeGen<'model> {
         }
         s.push_str(&format!(r#"
             let is_array = match d.datatype()? {{
-                minicbor::data::Type::Array => true,
-                minicbor::data::Type::Map => false,
-                _ => return Err(minicbor::decode::Error::Message("decoding struct {}, expected array or map"))
+                {}::cbor::Type::Array => true,
+                {}::cbor::Type::Map => false,
+                _ => return Err(RpcError::Deser("decoding struct {}, expected array or map".to_string()))
             }};
             if is_array {{
-                let len = d.array()?.ok_or_else(||minicbor::decode::Error::Message("decoding struct {}: indefinite array not supported"))?;
+                let len = d.array()?.ok_or_else(||RpcError::Deser("decoding struct {}: indefinite array not supported".to_string()))?;
                 for __i in 0..(len as usize) {{
-        "#, id.shape_name(), id.shape_name()));
+        "#, self.import_core, self.import_core, id.shape_name(), id.shape_name()));
         if fields.is_empty() {
             s.push_str(
                 r#"
@@ -293,14 +297,14 @@ impl<'model> RustCodeGen<'model> {
             let field_decoder = self.decode_shape_id(field.target())?;
             if is_optional_type(field) {
                 s.push_str(&format!(
-                    r#"{} => {} = if minicbor::data::Type::Null == d.datatype()? {{
+                    r#"{} => {} = if {}::cbor::Type::Null == d.datatype()? {{
                                         d.skip()?;
                                         Some(None)
                                     }} else {{
                                         Some(Some( {} ))
                                     }},
                    "#,
-                    ix, field_name, field_decoder,
+                    ix, field_name, self.import_core, field_decoder,
                 ));
             } else {
                 s.push_str(&format!(
@@ -322,7 +326,7 @@ impl<'model> RustCodeGen<'model> {
             r#" 
                 }}
             }} else {{
-                let len = d.map()?.ok_or_else(||minicbor::decode::Error::Message("decoding struct {}: indefinite map not supported"))?;
+                let len = d.map()?.ok_or_else(||RpcError::Deser("decoding struct {}: indefinite map not supported".to_string()))?;
                 for __i in 0..(len as usize) {{
             "#,
             id.shape_name())
@@ -348,7 +352,7 @@ impl<'model> RustCodeGen<'model> {
             let field_decoder = self.decode_shape_id(field.target())?;
             if is_optional_type(field) {
                 s.push_str(&format!(
-                    r#""{}" => {} = if minicbor::data::Type::Null == d.datatype()? {{
+                    r#""{}" => {} = if {}::cbor::Type::Null == d.datatype()? {{
                                         d.skip()?;
                                         Some(None)
                                     }} else {{
@@ -357,6 +361,7 @@ impl<'model> RustCodeGen<'model> {
                    "#,
                     field.id(),
                     field_name,
+                    self.import_core,
                     field_decoder,
                 ));
             } else {
@@ -387,20 +392,24 @@ impl<'model> RustCodeGen<'model> {
         s.push_str(&format!("{} {{\n", id.shape_name()));
         for (ix, field) in fields.iter().enumerate() {
             let field_name = self.to_field_name(field.id(), field.traits())?;
-            s.push_str(&format!(
-                r#"
+            if is_optional_type(field) {
+                s.push_str(&format!("{}: {}.unwrap(),\n", &field_name, &field_name));
+            } else {
+                s.push_str(&format!(
+                    r#"
                 {}: if let Some(__x) = {} {{
                     __x 
                 }} else {{
-                    return Err(minicbor::decode::Error::Message("missing field {}::{} (#{})"));
+                    return Err(RpcError::Deser("missing field {}.{} (#{})".to_string()));
                 }},
                 "#,
-                &field_name,
-                &field_name,
-                id.shape_name(),
-                &field_name,
-                ix,
-            ));
+                    &field_name,
+                    &field_name,
+                    id.shape_name(),
+                    &field_name,
+                    ix,
+                ));
+            }
         }
         s.push_str("}\n"); // close struct initializer and Ok(...)
         Ok(s)
@@ -410,6 +419,7 @@ impl<'model> RustCodeGen<'model> {
     /// name of the function is encode_<S> where <S> is the camel_case type name
     /// It is generated in the module that declared type S, so it can always
     /// be found by prefixing the function name with the module path.
+    #[allow(dead_code)]
     pub(crate) fn declare_shape_decoder(
         &self,
         w: &mut Writer,
@@ -430,18 +440,39 @@ impl<'model> RustCodeGen<'model> {
                 // Decode {} from cbor input stream
                 // This is part of experimental cbor support
                 #[doc(hidden)] {}
-                pub fn decode_{}<'b>(d: &mut minicbor::Decoder<'b>) -> Result<{},minicbor::decode::Error>
+                pub fn decode_{}<'b>(d: &mut {}::cbor::Decoder<'b>) -> Result<{},RpcError>
                 {{
                     let __result = {{ "#,
                     &name,
                     if is_rust_copy { "#[inline]" } else { "" },
                     crate::strings::to_snake_case(&name.to_string()),
+                    self.import_core,
                     &id.shape_name()
                 );
                 let body = self.decode_shape_kind(id, kind)?;
                 s.push_str(&body);
                 s.push_str("};\n Ok(__result)\n}\n");
                 w.write(s.as_bytes());
+
+                /***
+                if !is_rust_copy {
+                    let cbor_decode_impl = format!(
+                        r#"
+                        impl {}::common::Decode for {} {{
+                            fn decode(d: &mut {}::cbor::Decoder) -> Result<{}, RpcError> {{
+                                decode_{}(d)
+                            }}
+                        }}
+                        "#,
+                        self.import_core,
+                        name,
+                        self.import_core,
+                        name,
+                        crate::strings::to_snake_case(&name.to_string()),
+                    );
+                    w.write(&cbor_decode_impl);
+                }
+                ***/
             }
             ShapeKind::Operation(_)
             | ShapeKind::Resource(_)

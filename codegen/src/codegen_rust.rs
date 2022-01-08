@@ -210,13 +210,6 @@ impl<'model> CodeGen for RustCodeGen<'model> {
         model: &Model,
         _params: &ParamMap,
     ) -> Result<()> {
-        cfg_if::cfg_if! {
-            if #[cfg(feature = "cbor")] {
-                let import_cbor = "minicbor,";
-            }  else {
-                let import_cbor = "";
-            }
-        }
         w.write(
             r#"// This file is generated automatically using wasmcloud/weld-codegen and smithy model definitions
                //
@@ -224,12 +217,14 @@ impl<'model> CodeGen for RustCodeGen<'model> {
         match &self.namespace {
             Some(n) if n == wasmcloud_model_namespace() => {
                 // the base model has minimal dependencies
-                w.write(
+                w.write(&format!(
                     r#"
                 #[allow(unused_imports)]
                 use serde::{{Deserialize, Serialize}};
+                use {}::RpcError;
              "#,
-                );
+                    self.import_core,
+                ));
             }
             _ => {
                 // all others use standard frontmatter
@@ -240,10 +235,10 @@ impl<'model> CodeGen for RustCodeGen<'model> {
                     r#"
                 #[allow(unused_imports)]
                 use {}::{{
-                    RpcError,RpcResult,Timestamp,
+                    cbor::*, RpcError,RpcResult,Timestamp, 
                     common::{{
-                    Context, deserialize, serialize, MessageDispatch,
-                    Transport, Message, SendOpts, {}
+                        Context, deserialize, Message, MessageFormat, message_format, 
+                        MessageDispatch, SendOpts, serialize, Transport,
                     }}
                 }};
                 #[allow(unused_imports)]
@@ -251,9 +246,9 @@ impl<'model> CodeGen for RustCodeGen<'model> {
                 #[allow(unused_imports)]
                 use async_trait::async_trait;
                 #[allow(unused_imports)]
-                use std::{{borrow::Cow, io::Write, string::ToString}};
+                use std::{{borrow::Borrow, borrow::Cow, io::Write, string::ToString}};
                 "#,
-                    &self.import_core, import_cbor,
+                    &self.import_core,
                 ));
             }
         }
@@ -310,13 +305,13 @@ impl<'model> CodeGen for RustCodeGen<'model> {
                 | ShapeKind::Union(_)
                 | ShapeKind::Unresolved => {}
             }
-            cfg_if::cfg_if! {
-                if #[cfg(feature = "cbor")] {
-                    if !traits.contains_key(&prelude_shape_named(TRAIT_TRAIT).unwrap()) {
+            if !traits.contains_key(&prelude_shape_named(TRAIT_TRAIT).unwrap()) {
+                cfg_if::cfg_if! {
+                    if #[cfg(feature = "cbor")] {
                         self.declare_shape_encoder(w, id, shape)?;
-                        self.declare_shape_decoder(w, id, shape)?;
                     }
                 }
+                self.declare_shape_decoder(w, id, shape)?;
             }
         }
         Ok(())
@@ -361,7 +356,6 @@ impl<'model> CodeGen for RustCodeGen<'model> {
 }
 
 /// returns true if the file path ends in ".rs"
-#[allow(clippy::ptr_arg)]
 pub(crate) fn is_rust_source(path: &Path) -> bool {
     match path.extension() {
         Some(s) => s.to_string_lossy().as_ref() == "rs",
@@ -383,7 +377,7 @@ impl<'model> RustCodeGen<'model> {
             self.write_documentation(w, id, text);
         }
 
-        // deprecated
+        // '@deprecated' trait
         if let Some(Some(Value::Object(map))) =
             traits.get(&prelude_shape_named(TRAIT_DEPRECATED).unwrap())
         {
@@ -397,7 +391,7 @@ impl<'model> RustCodeGen<'model> {
             w.write(b")\n");
         }
 
-        // unstable
+        // '@unstable' trait
         if traits
             .get(&prelude_shape_named(TRAIT_UNSTABLE).unwrap())
             .is_some()
@@ -682,9 +676,7 @@ impl<'model> RustCodeGen<'model> {
             // even if msgpack is not used for serialization, so it seems like
             // an acceptable simplification.
             #[cfg(feature = "wasmbus")]
-            if member.target() == &ShapeID::new_unchecked("smithy.api", "Blob", None)
-            //&& traits.get(wasmbus_data_trait()).is_some()
-            {
+            if member.target() == &ShapeID::new_unchecked("smithy.api", "Blob", None) {
                 w.write(r#"  #[serde(with="serde_bytes")] "#);
             }
 
@@ -871,21 +863,18 @@ impl<'model> RustCodeGen<'model> {
             w.write(&self.op_dispatch_name(method_ident));
             w.write(b"\" => {\n");
             if let Some(op_input) = op.input() {
+                let symbol = op_input.shape_name().to_string();
                 // let value : InputType = deserialize(...)?;
-                #[cfg(feature = "cbor-msg")]
-                w.write(b"let d = &mut minicbor::Decoder::new(&message.arg);\n");
-                w.write(b"let value: ");
-                self.write_type(w, Ty::Shape(op_input))?;
-                w.write(b" = ");
-                cfg_if::cfg_if! {
-                    if #[cfg(feature = "cbor-msg")] {
-                        w.write(&self.decode_shape_id(op_input)?);
-                        w.write(";\n");
-                    } else {
-                        w.write(b" deserialize(message.arg.as_ref())\
-                            .map_err(|e| RpcError::Deser(format!(\"message '{}': {}\", message.method, e)))?;\n");
-                    }
-                }
+                w.write(&format!(
+                    r#"
+                    let value : {} = {}::common::decode(&message.arg, &decode_{})
+                      .map_err(|e| RpcError::Deser(format!("'{}': {{}}", e)))?;
+                    "#,
+                    self.type_string(Ty::Shape(op_input))?,
+                    self.import_core,
+                    crate::strings::to_snake_case(&symbol),
+                    &symbol,
+                ));
             }
             // let resp = Trait::method(self, ctx, &value).await?;
             if op.output().is_some() {
@@ -907,7 +896,7 @@ impl<'model> RustCodeGen<'model> {
                 // serialize result
                 cfg_if::cfg_if! {
                     if #[cfg(feature = "cbor-msg")] {
-                        w.write(b"let mut buf = Vec::new(); let e = &mut minicbor::Encoder::new(&mut buf);\n");
+                        w.write(b"let mut buf = Vec::new(); let e = &mut wasmbus_rpc::cbor::Encoder::new(&mut buf);\n");
                         let s = self.encode_shape_id(_op_output, crate::encode_rust::ValExpr::Plain("resp"))?;
                         w.write(&s);
                     } else {
@@ -994,7 +983,7 @@ impl<'model> RustCodeGen<'model> {
                         if _arg_is_string {
                             w.write(b"let arg = arg.to_string();\n");
                         }
-                        w.write(b"let mut buf = Vec::new(); let e = &mut minicbor::Encoder::new(&mut buf);\n");
+                        w.write(b"let mut buf = Vec::new(); let e = &mut wasmbus_rpc::cbor::Encoder::new(&mut buf);\n");
                         let s = self.encode_shape_id(_op_input,
                             if _arg_is_string {
                                 crate::encode_rust::ValExpr::Ref("arg.as_ref()")
@@ -1022,21 +1011,19 @@ impl<'model> RustCodeGen<'model> {
             w.write(&self.full_dispatch_name(service.id, method_ident));
             //w.write(&self.op_dispatch_name(method_ident));
             w.write(b"\", arg: Cow::Borrowed(&buf)}, None).await?;\n");
-            if let Some(_op_output) = op.output() {
-                cfg_if::cfg_if! {
-                    if #[cfg(feature = "cbor-msg")] {
-                        w.write(b"let d = &mut minicbor::Decoder::new(&resp);\n");
-                        w.write(b"let value = ");
-                        w.write(&self.decode_shape_id(_op_output)?);
-                        w.write(b";");
-                    } else {
-                        w.write(b"let value = deserialize(&resp)");
-                        w.write(b".map_err(|e| RpcError::Deser(format!(\"response to {}: {}\", \"");
-                        w.write(&method_ident.to_string());
-                        w.write(b"\", e)))?;");
-                    }
-                }
-                w.write(b"Ok(value)");
+            if let Some(op_output) = op.output() {
+                let symbol = op_output.shape_name().to_string();
+                w.write(&format!(
+                    r#"
+                    let value : {} = {}::common::decode(&resp, &decode_{})
+                        .map_err(|e| RpcError::Deser(format!("'{{}}': {}", e)))?;
+                    Ok(value)
+                    "#,
+                    self.type_string(Ty::Shape(op_output))?,
+                    self.import_core,
+                    crate::strings::to_snake_case(&symbol),
+                    &symbol,
+                ));
             } else {
                 w.write(b"Ok(())");
             }

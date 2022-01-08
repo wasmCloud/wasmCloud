@@ -4,13 +4,9 @@
 // Because we have all the type information for declared types,
 // we can invoke the appropriate encode_* functions for each
 // simple type, structure, map, and array. (later: enums).
-// If we had leveraged minicbor's Encoder trait , we could have let
-// the rust compiler do the work to invoke nested encoders for complex types.
-// Instead, we generate encode_* functions for each non-simple data type
-// and call them directly. It is hoped that this will simplify ports to other
-// target languages, if those languages don't have traits, and the cbor libraries
-// in those languages can't #[derive] encoders and decoders for arbitrary
-// structures.
+// For Rust, it would have been a little easier to use serde code generation,
+// but we want to create a code base that is easy to port to other languages
+// that don't have serde.
 
 // The encoder is written as a plain function "encode_<S>" where S is the type name
 // (camel cased for the fn name), and scoped to the module where S is defined.
@@ -390,16 +386,18 @@ impl<'model> RustCodeGen<'model> {
                 // Encode {} as CBOR and append to output stream
                 // This is part of experimental cbor support
                 #[doc(hidden)] {}
-                pub fn encode_{}<W>(e: &mut minicbor::Encoder<W>, {}: &{}) -> Result<(),minicbor::encode::Error<W::Error>>
+                pub fn encode_{}<W>(e: &mut {}::cbor::Encoder<W>, {}: &{}) -> RpcResult<()>
                 where
-                    W: minicbor::encode::Write,
+                    W: {}::cbor::Write,
                 {{
                 "#,
                     &name,
                     if is_rust_copy { "#[inline]" } else { "" },
                     crate::strings::to_snake_case(&name.to_string()),
+                    self.import_core,
                     if is_empty_struct { "_val" } else { "val" },
-                    &id.shape_name()
+                    &id.shape_name(),
+                    self.import_core,
                 );
                 s.push_str(&body);
                 s.push_str("Ok(())\n}\n");

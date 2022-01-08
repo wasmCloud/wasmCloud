@@ -1,17 +1,6 @@
 #![cfg(feature = "cbor")]
 // CBOR Encode functions
 //
-// Because we have all the type information for declared types,
-// we can invoke the appropriate encode_* functions for each
-// simple type, structure, map, and array. (later: enums).
-// If we had leveraged minicbor's Encoder trait , we could have let
-// the rust compiler do the work to invoke nested encoders for complex types.
-// Instead, we generate encode_* functions for each non-simple data type
-// and call them directly. It is hoped that this will simplify ports to other
-// target languages, if those languages don't have traits, and the cbor libraries
-// in those languages can't #[derive] encoders and decoders for arbitrary
-// structures.
-
 // The encoder is written as a plain function "encode_<S>" where S is the type name
 // (camel cased for the fn name), and scoped to the module where S is defined.
 use crate::{
