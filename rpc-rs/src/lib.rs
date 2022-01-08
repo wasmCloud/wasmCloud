@@ -19,14 +19,10 @@ pub mod model {
     // re-export model lib as "model"
     pub use crate::wasmbus_model::*;
 }
-
-// re-export
-pub use minicbor;
+pub mod cbor;
 
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) mod rpc_client;
-#[cfg(not(target_arch = "wasm32"))]
-pub use rpc_client::{rpc_topic, RpcClient, RpcClientSync};
+pub mod rpc_client;
 
 pub type RpcResult<T> = std::result::Result<T, RpcError>;
 
@@ -347,9 +343,23 @@ impl From<std::io::Error> for RpcError {
     }
 }
 
-impl From<minicbor::encode::Error<std::io::Error>> for RpcError {
-    fn from(e: minicbor::encode::Error<std::io::Error>) -> RpcError {
-        RpcError::Ser(format!("cbor-encode: {}", e))
+//impl From<minicbor::encode::Error<std::io::Error>> for RpcError {
+//    fn from(e: minicbor::encode::Error<std::io::Error>) -> RpcError {
+//        RpcError::Ser(format!("cbor-encode: {}", e))
+//    }
+//}
+
+impl<W> From<minicbor::encode::Error<W>> for RpcError {
+    fn from(e: minicbor::encode::Error<W>) -> RpcError {
+        match e {
+            minicbor::encode::Error::Write(_) => {
+                RpcError::Ser("cbor-encode: error writing output".to_string())
+            }
+            minicbor::encode::Error::Message(m) => RpcError::Ser(format!("cbor-encode: {}", m)),
+            // minicbor::encode::Error is non-exhaustive, so we must have a catch-all
+            // this two variants above are complete as of v0.12.0
+            _ => RpcError::Ser("unspecified cbor-encode error".to_string()),
+        }
     }
 }
 

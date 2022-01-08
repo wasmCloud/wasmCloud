@@ -4,7 +4,7 @@
 use futures::StreamExt;
 use ratsio::{NatsClient, NatsClientOptions};
 use tokio::time::Duration;
-use wasmbus_rpc::{RpcClient, RpcError, RpcResult};
+use wasmbus_rpc::{rpc_client::RpcClient, RpcError, RpcResult};
 
 const DEFAULT_NATS_ADDR: &str = "0.0.0.0:4222";
 const LATTICE_PREFIX: &str = "test_nats_sub";
