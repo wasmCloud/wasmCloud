@@ -49,15 +49,8 @@ pub mod core {
 
             // allow testing provider outside host
             const TEST_HARNESS: &str = "_TEST_";
-
-            /// how often we will ping nats server for keep-alive
-            const NATS_PING_INTERVAL_SEC: u16 = 15;
-
-            /// number of unsuccessful pings before connection is deemed disconnected
-            const NATS_PING_FAIL_COUNT: u16 = 8;
-
-            /// time between connection retries (milliseconds)
-            const NATS_RECONNECT_INTERVAL_MS: u64 = 250;
+            // fallback nats address if host doesn't pass one to provider
+            const DEFAULT_NATS_ADDR: &str = "nats://127.0.0.1:4222";
 
             impl HostData {
                 /// returns whether the provider is running under test
@@ -65,24 +58,27 @@ pub mod core {
                     self.host_id == TEST_HARNESS
                 }
 
-                /// obtain NatsClientOptions pre-populated with connection data from the host.
-                pub fn nats_options(&self) -> ratsio::NatsClientOptions {
-                    ratsio::NatsClientOptions {
-                        ping_interval: NATS_PING_INTERVAL_SEC,
-                        ping_max_out: NATS_PING_FAIL_COUNT,
-                        reconnect_timeout: NATS_RECONNECT_INTERVAL_MS,
-                        // if connect fails, keep trying, forever
-                        ensure_connect: true,
-                        // need to test whether this works
-                        subscribe_on_reconnect: true,
-                        cluster_uris: if self.lattice_rpc_url.is_empty() {
-                            Vec::new()
-                        } else {
-                            vec![self.lattice_rpc_url.clone()]
-                        }
-                        .into(),
-                        ..Default::default()
-                    }
+                /// Connect to nats using options provided by host
+                pub async fn nats_connect(&self) -> RpcResult<crate::anats::Connection> {
+                    use std::str::FromStr as _;
+                    let nats_addr = if !self.lattice_rpc_url.is_empty() {
+                        self.lattice_rpc_url.as_str()
+                    } else {
+                        DEFAULT_NATS_ADDR
+                    };
+                    let nats_server = nats_aflowt::ServerAddress::from_str(nats_addr).map_err(|e| {
+                        RpcError::InvalidParameter(format!("Invalid nats server url '{}': {}", nats_addr, e))
+                    })?;
+
+                    // Connect to nats
+                    let nc = nats_aflowt::Options::default()
+                        .max_reconnects(None)
+                        .connect(vec![nats_server])
+                        .await
+                        .map_err(|e| {
+                            RpcError::ProviderInit(format!("nats connection to {} failed: {}", nats_addr, e))
+                        })?;
+                    Ok(nc)
                 }
             }
         }
@@ -176,10 +172,10 @@ pub mod core {
                     "{}://{}/{}/{}",
                     URL_SCHEME,
                     self.contract_id
-                        .replace(":", "/")
-                        .replace(" ", "_")
+                        .replace(':', "/")
+                        .replace(' ', "_")
                         .to_lowercase(),
-                    self.link_name.replace(" ", "_").to_lowercase(),
+                    self.link_name.replace(' ', "_").to_lowercase(),
                     self.public_key
                 )
             }
@@ -219,6 +215,10 @@ pub mod core {
         }
     }
 }
+
+// re-export nats-aflowt
+#[cfg(not(target_arch = "wasm32"))]
+pub use nats_aflowt as anats;
 
 pub mod actor {
 
@@ -264,107 +264,5 @@ pub mod actor {
                 pub fn console_log(_s: &str) {}
             }
         }
-    }
-}
-
-/// An error that can occur in the processing of an RPC. This is not request-specific errors but
-/// rather cross-cutting errors that can always occur.
-#[derive(thiserror::Error, Debug, serde::Serialize, serde::Deserialize)]
-#[non_exhaustive]
-pub enum RpcError {
-    /// The request exceeded its deadline.
-    #[error("the request exceeded its deadline: {0}")]
-    DeadlineExceeded(String),
-
-    /// A capability provider was called before its configure_dispatch was called.
-    #[error("the capability provider has not been initialized: {0}")]
-    NotInitialized(String),
-
-    #[error("method not handled {0}")]
-    MethodNotHandled(String),
-
-    /// Error that can be returned if server has not implemented
-    /// an optional interface method
-    #[error("method not implemented")]
-    NotImplemented,
-
-    #[error("Host send error {0}")]
-    HostError(String),
-
-    #[error("deserialization: {0}")]
-    Deser(String),
-
-    #[error("serialization: {0}")]
-    Ser(String),
-
-    #[error("rpc: {0}")]
-    Rpc(String),
-
-    #[error("nats: {0}")]
-    Nats(String),
-
-    #[error("invalid parameter: {0}")]
-    InvalidParameter(String),
-
-    /// Error occurred in actor's rpc handler
-    #[error("actor: {0}")]
-    ActorHandler(String),
-
-    /// Error occurred during provider initialization or put-link
-    #[error("provider initialization or put-link: {0}")]
-    ProviderInit(String),
-
-    /// Timeout occurred
-    #[error("timeout: {0}")]
-    Timeout(String),
-
-    //#[error("IO error")]
-    //IO([from] std::io::Error)
-    /// Anything else
-    #[error("{0}")]
-    Other(String),
-}
-
-impl From<String> for RpcError {
-    fn from(s: String) -> RpcError {
-        RpcError::Other(s)
-    }
-}
-
-impl From<&str> for RpcError {
-    fn from(s: &str) -> RpcError {
-        RpcError::Other(s.to_string())
-    }
-}
-
-impl From<std::io::Error> for RpcError {
-    fn from(e: std::io::Error) -> RpcError {
-        RpcError::Other(format!("io: {}", e))
-    }
-}
-
-//impl From<minicbor::encode::Error<std::io::Error>> for RpcError {
-//    fn from(e: minicbor::encode::Error<std::io::Error>) -> RpcError {
-//        RpcError::Ser(format!("cbor-encode: {}", e))
-//    }
-//}
-
-impl<W> From<minicbor::encode::Error<W>> for RpcError {
-    fn from(e: minicbor::encode::Error<W>) -> RpcError {
-        match e {
-            minicbor::encode::Error::Write(_) => {
-                RpcError::Ser("cbor-encode: error writing output".to_string())
-            }
-            minicbor::encode::Error::Message(m) => RpcError::Ser(format!("cbor-encode: {}", m)),
-            // minicbor::encode::Error is non-exhaustive, so we must have a catch-all
-            // this two variants above are complete as of v0.12.0
-            _ => RpcError::Ser("unspecified cbor-encode error".to_string()),
-        }
-    }
-}
-
-impl From<minicbor::decode::Error> for RpcError {
-    fn from(e: minicbor::decode::Error) -> RpcError {
-        RpcError::Deser(format!("cbor-decode: {}", e))
     }
 }
