@@ -19,15 +19,8 @@ lint:
 validate:
 	$(WELD) validate
 
-ifeq ($(shell docker ps | grep --regexp "nats:2.*/nats-server.* Up "),)
-test::
-	docker run --rm -d --name rpc_test_nats -p 127.0.0.1:4222:4222 nats:2.6 -js
-	cargo test -- --nocapture
-	docker stop rpc_test_nats
-else
 test::
 	cargo test -- --nocapture
-endif
 
 test::
 	cargo clippy --all-features --all-targets
