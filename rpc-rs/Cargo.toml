@@ -45,12 +45,9 @@ num-bigint = { version = "0.4", optional = true }
 bigdecimal = { version = "0.3", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-nats = "0.16"
 tokio = { version = "1", features = ["full"]}
 futures = "0.3"
-# work-around "conflicting implementations of From<std::io::Error>" in ratsio build
-#ratsio = "0.4.0-alpha.1"
-ratsio = { version = "0.4.1", package="ratsio_fork_040" }
+nats-aflowt = "0.16.101"
 once_cell = "1.8"
 crossbeam = "0.8"
 uuid = { version = "0.8", features=["v4", "serde"] }
