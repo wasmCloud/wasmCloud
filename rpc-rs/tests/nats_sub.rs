@@ -1,25 +1,35 @@
 //! test nats subscriptions (queue and non-queue) with rpc_client
 #![cfg(test)]
 
-use futures::StreamExt;
-use ratsio::{NatsClient, NatsClientOptions};
-use tokio::time::Duration;
-use wasmbus_rpc::{rpc_client::RpcClient, RpcError, RpcResult};
+use std::{str::FromStr as _, time::Duration};
+use wasmbus_rpc::{RpcClient, RpcError, RpcResult};
 
-const DEFAULT_NATS_ADDR: &str = "0.0.0.0:4222";
+//const DEFAULT_NATS_ADDR: &str = "nats://127.0.0.1:4222";
+const TEST_NATS_ADDR: &str = "demo.nats.io";
 const LATTICE_PREFIX: &str = "test_nats_sub";
 const HOST_ID: &str = "HOST_test_nats_sub";
 
 /// create async nats client for test (sender or receiver)
 async fn make_client() -> RpcResult<RpcClient> {
-    let nc = NatsClient::new(NatsClientOptions {
-        cluster_uris: DEFAULT_NATS_ADDR.into(),
-        ..Default::default()
-    })
-    .await
-    .map_err(|e| RpcError::ProviderInit(format!("nats connection failed: {}", e)))?;
+    let server_addr = wasmbus_rpc::anats::ServerAddress::from_str(TEST_NATS_ADDR).unwrap();
+    let nc = wasmbus_rpc::anats::Options::default()
+        .max_reconnects(None)
+        .connect(vec![server_addr])
+        .await
+        .map_err(|e| {
+            RpcError::ProviderInit(format!(
+                "nats connection to {} failed: {}",
+                TEST_NATS_ADDR, e
+            ))
+        })?;
     let kp = wascap::prelude::KeyPair::new_user();
-    let client = RpcClient::new(nc, LATTICE_PREFIX, kp, HOST_ID.to_string(), None);
+    let client = RpcClient::new(
+        nc,
+        LATTICE_PREFIX,
+        kp,
+        HOST_ID.to_string(),
+        Some(Duration::from_secs(5)),
+    );
     Ok(client)
 }
 
@@ -28,28 +38,26 @@ async fn listen(client: RpcClient, subject: &str, pattern: &str) -> tokio::task:
     let pattern = pattern.to_string();
     let nc = client.get_async().unwrap();
 
+    let pattern = regex::Regex::new(&pattern).unwrap();
+    let sub = nc.subscribe(&subject).await.expect("subscriber");
+
     tokio::task::spawn(async move {
         let mut count: u64 = 0;
-        let pattern = regex::Regex::new(&pattern).unwrap();
-        let (sid, mut sub) = nc.subscribe(&subject).await.expect("subscriber");
-        println!("{:?} listening subj: {}", &sid, &subject);
         while let Some(msg) = sub.next().await {
-            let payload = String::from_utf8_lossy(&msg.payload);
-            if !pattern.is_match(&payload) && &payload != "exit" {
+            let payload = String::from_utf8_lossy(&msg.data);
+            if !pattern.is_match(payload.as_ref()) && &payload != "exit" {
                 println!("ERROR: payload on {}: {}", &subject, &payload);
-                break;
             }
-            if let Some(reply_to) = msg.reply_to {
+            if let Some(reply_to) = msg.reply {
                 client.publish(&reply_to, b"ok").await.expect("reply");
-                //let _ = nc.publish(reply_to, b"ok").await.expect("reply");
             }
-            if &payload == "exit" {
-                let _ = nc.un_subscribe(&sid).await;
+            if payload == "exit" {
                 break;
             }
             count += 1;
         }
-        println!("{:?} exiting: {}", &sid, count);
+        println!("exiting: {}", count);
+        let _ = sub.close().await;
         count
     })
 }
@@ -58,14 +66,14 @@ async fn listen_bin(client: RpcClient, subject: &str) -> tokio::task::JoinHandle
     let subject = subject.to_string();
     let nc = client.get_async().unwrap();
 
+    let sub = nc.subscribe(&subject).await.expect("subscriber");
     tokio::task::spawn(async move {
         let mut count: u64 = 0;
-        let (sid, mut sub) = nc.subscribe(&subject).await.expect("subscriber");
-        println!("{:?} listening subj: {}", &sid, &subject);
+        println!("listening subj: {}", &subject);
         while let Some(msg) = sub.next().await {
-            let size = msg.payload.len();
+            let size = msg.data.len();
             let response = format!("{}", size);
-            if let Some(reply_to) = msg.reply_to {
+            if let Some(reply_to) = msg.reply {
                 client
                     .publish(&reply_to, response.as_bytes())
                     .await
@@ -73,11 +81,11 @@ async fn listen_bin(client: RpcClient, subject: &str) -> tokio::task::JoinHandle
             }
             count += 1;
             if size == 1 {
-                let _ = nc.un_subscribe(&sid).await;
                 break;
             }
         }
-        println!("{:?} exiting: {}", &sid, count);
+        let _ = sub.close().await;
+        println!("exiting: {}", count);
         count
     })
 }
@@ -96,27 +104,27 @@ async fn listen_queue(
     tokio::task::spawn(async move {
         let mut count: u64 = 0;
         let pattern = regex::Regex::new(&pattern).unwrap();
-        let (sid, mut sub) = nc
-            .subscribe_with_group(&subject, &queue)
+        let sub = nc
+            .queue_subscribe(&subject, &queue)
             .await
             .expect("group subscriber");
-        println!("{:?} listening subj: {} queue: {}", &sid, &subject, &queue);
+        println!("listening subj: {} queue: {}", &subject, &queue);
         while let Some(msg) = sub.next().await {
-            let payload = String::from_utf8_lossy(&msg.payload);
-            if !pattern.is_match(&payload) && &payload != "exit" {
+            let payload = String::from_utf8_lossy(&msg.data);
+            if !pattern.is_match(payload.as_ref()) && &payload != "exit" {
                 println!("ERROR: payload on {}: {}", &subject, &payload);
                 break;
             }
-            if let Some(reply_to) = msg.reply_to {
+            if let Some(reply_to) = msg.reply {
                 client.publish(&reply_to, b"ok").await.expect("reply");
             }
             if &payload == "exit" {
-                let _ = nc.un_subscribe(&sid).await;
+                let _ = sub.close().await;
                 break;
             }
             count += 1;
         }
-        println!("{:?} exiting: {}", &sid, count);
+        println!("exiting: {}", count);
         count
     })
 }
@@ -151,17 +159,14 @@ async fn test_message_size() -> Result<(), Box<dyn std::error::Error>> {
     let mut pass_count = 0;
     let sender = make_client().await.expect("creating bin sender");
     const TEST_SIZES: &[u32] = &[
-        100_000,
-        200_000,
-        300_000,
-        400_000,
-        500_000,
-        600_000,
-        700_000,
-        800_000,
-        900_000,
-        1_000_000,
-        (1024 * 1024),
+        100, 200,
+        // NOTE: if using 'demo.nats.io' as the test server,
+        // don't abuse it by running this test - only use larger sizes
+        // if testing against a local nats server.
+        //
+        // 100_000, 200_000, 300_000, 400_000, 500_000, 600_000, 700_000, 800_000, 900_000,
+        //1_000_000, (1024 * 1024),
+        // The last size must be 1: signal to listen_bin to exit
         1,
     ];
     for size in TEST_SIZES.iter() {
@@ -232,10 +237,12 @@ async fn queue_sub() -> Result<(), Box<dyn std::error::Error>> {
     let topic_one = format!("one_{}", &sub_name);
     let topic_two = format!("two_{}", &sub_name);
 
-    let thread1 = listen_queue(make_client().await?, &topic_one, "X", "^one").await;
-    let thread2 = listen_queue(make_client().await?, &topic_one, "X", "^one").await;
-    let thread3 = listen_queue(make_client().await?, &topic_two, "X", "^two").await;
-    sleep(1000).await;
+    let queue_name = uuid::Uuid::new_v4().to_string();
+
+    let thread1 = listen_queue(make_client().await?, &topic_one, &queue_name, "^one").await;
+    let thread2 = listen_queue(make_client().await?, &topic_one, &queue_name, "^one").await;
+    let thread3 = listen_queue(make_client().await?, &topic_two, &queue_name, "^two").await;
+    sleep(2000).await;
 
     let sender = make_client().await?;
     const SPLIT_TOTAL: usize = 6;
