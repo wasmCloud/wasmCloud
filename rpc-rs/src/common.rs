@@ -34,11 +34,13 @@ pub struct SendOpts {
 }
 
 impl SendOpts {
+    #[must_use]
     pub fn idempotent(mut self, val: bool) -> SendOpts {
         self.idempotent = val;
         self
     }
 
+    #[must_use]
     pub fn read_only(mut self, val: bool) -> SendOpts {
         self.read_only = val;
         self
