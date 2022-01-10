@@ -10,7 +10,6 @@ use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value as JsonValue;
 use std::{
     convert::{TryFrom, TryInto},
-    ops::Deref,
     sync::Arc,
     time::Duration,
 };
@@ -47,9 +46,7 @@ pub struct RpcClient {
 
 #[derive(Clone)]
 pub(crate) enum NatsClientType {
-    Sync(nats::Connection),
-    Asynk(nats::asynk::Connection),
-    Async(Arc<crate::provider::NatsClient>),
+    Async(crate::anats::Connection),
 }
 
 /// Returns the rpc topic (subject) name for sending to an actor or provider.
@@ -74,7 +71,7 @@ impl RpcClient {
     /// parameters: async nats client, lattice rpc prefix (usually "default"),
     /// secret key for signing messages, and host_id
     pub fn new(
-        nats: Arc<crate::provider::NatsClient>,
+        nats: crate::anats::Connection,
         lattice_prefix: &str,
         key: wascap::prelude::KeyPair,
         host_id: String,
@@ -89,61 +86,12 @@ impl RpcClient {
         }
     }
 
-    /// Constructs a new RpcClient for a nats::asynk connection.
-    /// parameters: async nats client, lattice rpc prefix (usually "default"),
-    /// and secret key for signing messages
-    pub fn new_asynk(
-        nats: nats::asynk::Connection,
-        lattice_prefix: &str,
-        key: wascap::prelude::KeyPair,
-        host_id: String,
-        timeout: Option<Duration>,
-    ) -> Self {
-        RpcClient {
-            client: NatsClientType::Asynk(nats),
-            lattice_prefix: lattice_prefix.to_string(),
-            key: Arc::new(key),
-            host_id,
-            timeout,
-        }
-    }
-
-    /// Constructs a new RpcClient using an async nats connection
-    /// parameters: synch nats client connection, lattice rpc prefix (usually "default"),
-    /// and secret key for signing messages
-    fn new_sync(
-        nats: nats::Connection,
-        lattice_prefix: &str,
-        key: wascap::prelude::KeyPair,
-        host_id: String,
-        timeout: Option<Duration>,
-    ) -> Self {
-        RpcClient {
-            client: NatsClientType::Sync(nats),
-            lattice_prefix: lattice_prefix.to_string(),
-            key: Arc::new(key),
-            host_id,
-            timeout,
-        }
-    }
-
     /// convenience method for returning async client
     /// If the client is not the correct type, returns None
-    pub fn get_async(&self) -> Option<Arc<crate::provider::NatsClient>> {
+    pub fn get_async(&self) -> Option<crate::anats::Connection> {
         use std::borrow::Borrow;
         match self.client.borrow() {
             NatsClientType::Async(nats) => Some(nats.clone()),
-            _ => None,
-        }
-    }
-
-    /// convenience method for returning nats::asynk Connection
-    /// If the client is not the correct type, returns None
-    pub fn get_asynk(&self) -> Option<&nats::asynk::Connection> {
-        use std::borrow::Borrow;
-        match self.client.borrow() {
-            NatsClientType::Asynk(nc) => Some(nc),
-            _ => None,
         }
     }
 
@@ -318,30 +266,23 @@ impl RpcClient {
 
     /// Send a nats message and wait for the response.
     /// This can be used for general nats messages, not just wasmbus actor/provider messages.
-    /// If the nats client is sync, this can block the current thread
+    /// If this client has a default timeout, and a response is not received within
+    /// the appropriate time, an error will be returned.
     pub async fn request(&self, subject: &str, data: &[u8]) -> Result<Vec<u8>, RpcError> {
-        use std::borrow::Borrow;
+        use std::borrow::Borrow as _;
 
         let bytes = match self.client.borrow() {
             NatsClientType::Async(ref nats) => {
-                let resp = nats
-                    .request(subject, data)
-                    .await
-                    .map_err(|e| RpcError::Nats(e.to_string()))?;
-                resp.payload
-            }
-            NatsClientType::Sync(ref connection) => {
-                let message = connection
-                    .request(subject, data)
-                    .map_err(|e| RpcError::Nats(e.to_string()))?;
-                message.data
-            }
-            NatsClientType::Asynk(ref connection) => {
-                let message = connection
-                    .request(subject, data)
-                    .await
-                    .map_err(|e| RpcError::Nats(e.to_string()))?;
-                message.data
+                let resp = if let Some(timeout) = self.timeout {
+                    nats.request_timeout(subject, data, timeout)
+                        .await
+                        .map_err(|e| RpcError::Nats(e.to_string()))?
+                } else {
+                    nats.request(subject, data)
+                        .await
+                        .map_err(|e| RpcError::Nats(e.to_string()))?
+                };
+                resp.data
             }
         };
         Ok(bytes)
@@ -350,17 +291,10 @@ impl RpcClient {
     /// Send a nats message with no reply-to. Do not wait for a response.
     /// This can be used for general nats messages, not just wasmbus actor/provider messages.
     pub async fn publish(&self, subject: &str, data: &[u8]) -> Result<(), RpcError> {
-        use std::borrow::Borrow;
+        use std::borrow::Borrow as _;
 
         match self.client.borrow() {
             NatsClientType::Async(nats) => nats
-                .publish(subject, data)
-                .await
-                .map_err(|e| RpcError::Nats(e.to_string()))?,
-            NatsClientType::Sync(connection) => connection
-                .publish(subject, data)
-                .map_err(|e| RpcError::Nats(e.to_string()))?,
-            NatsClientType::Asynk(connection) => connection
                 .publish(subject, data)
                 .await
                 .map_err(|e| RpcError::Nats(e.to_string()))?,
@@ -397,71 +331,6 @@ pub fn make_uuid() -> String {
         .to_simple()
         .encode_lower(&mut Uuid::encode_buffer())
         .to_string()
-}
-
-impl Deref for RpcClientSync {
-    type Target = RpcClient;
-
-    fn deref(&self) -> &RpcClient {
-        &self.inner
-    }
-}
-
-pub struct RpcClientSync {
-    inner: RpcClient,
-}
-
-impl RpcClientSync {
-    /// Constructs a new synchronous RpcClient
-    /// parameters: nats client connection, lattice rpc prefix (usually "default"),
-    /// and secret key for signing messages
-    pub fn new(
-        nats: nats::Connection,
-        lattice_prefix: &str,
-        key: wascap::prelude::KeyPair,
-        host_id: String,
-        timeout: Option<Duration>,
-    ) -> Self {
-        RpcClientSync {
-            inner: RpcClient::new_sync(nats, lattice_prefix, key, host_id, timeout),
-        }
-    }
-
-    /// Send an rpc message using json-encoded data.
-    /// Blocks the current thread until response is received.
-    pub async fn send_json<Target, Arg, Resp>(
-        &self,
-        origin: WasmCloudEntity,
-        target: Target,
-        method: &str,
-        data: JsonValue,
-    ) -> Result<JsonValue, RpcError>
-    where
-        Arg: DeserializeOwned + Serialize,
-        Resp: DeserializeOwned + Serialize,
-        Target: Into<WasmCloudEntity>,
-    {
-        let msg = JsonMessage(method, data).try_into()?;
-        let bytes = self.send(origin, target, msg)?;
-        let resp = response_to_json::<Resp>(&bytes)?;
-        Ok(resp)
-    }
-
-    /// Send an rpc message.
-    /// Blocks the current thread until response is received.
-    pub fn send<Target>(
-        &self,
-        origin: WasmCloudEntity,
-        target: Target,
-        message: Message<'_>,
-    ) -> Result<Vec<u8>, RpcError>
-    where
-        Target: Into<WasmCloudEntity>,
-    {
-        let this = self.inner.clone();
-        let handle = tokio::runtime::Handle::current();
-        handle.block_on(async move { this.send(origin, target, message).await })
-    }
 }
 
 /// A Json message (method, args)
