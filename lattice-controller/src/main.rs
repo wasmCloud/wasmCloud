@@ -8,8 +8,7 @@ use nats::asynk::{self, Connection};
 use serde::{Deserialize, Serialize};
 use wascap::prelude::KeyPair;
 use wasmbus_rpc::provider::prelude::*;
-use wasmcloud_control_interface::Client;
-use wasmcloud_interface_lattice_control::*;
+use wasmcloud_control_interface::*;
 
 const DEFAULT_NATS_URI: &str = "0.0.0.0:4222";
 const ENV_NATS_URI: &str = "URI";
@@ -317,6 +316,23 @@ impl LatticeController for LatticeControllerProvider {
         let count = if arg.count == 0 { 1 } else { arg.count };
         client
             .start_actor(&arg.host_id, &arg.actor_ref, count, arg.annotations.clone())
+            .await
+            .map_err(|e| RpcError::Nats(format!("{}", e)))
+    }
+
+    async fn scale_actor(
+        &self,
+        ctx: &Context,
+        arg: &ScaleActorCommand,
+    ) -> RpcResult<CtlOperationAck> {
+        let (client, _config) = create_client(ctx, self).await?;
+        client
+            .scale_actor(
+                &arg.host_id,
+                &arg.actor_ref,
+                arg.count,
+                arg.annotations.clone(),
+            )
             .await
             .map_err(|e| RpcError::Nats(format!("{}", e)))
     }
