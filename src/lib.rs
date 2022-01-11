@@ -159,6 +159,40 @@ impl Client {
         }
     }
 
+    /// Sends a request to the given host to scale a given actor. This returns an acknowledgement of _receipt_ of the
+    /// command, not a confirmation that the actor scaled. An acknowledgement will either indicate some form of
+    /// validation failure, or, if no failure occurs, the receipt of the command. To avoid blocking consumers,
+    /// wasmCloud hosts will acknowledge the scale actor command prior to fetching the actor's OCI bytes. If a client
+    /// needs deterministic results as to whether the actor completed its startup process, the client will have to
+    /// monitor the appropriate event in the control event stream
+    pub async fn scale_actor(
+        &self,
+        host_id: &str,
+        actor_ref: &str,
+        count: u16,
+        annotations: Option<HashMap<String, String>>,
+    ) -> Result<CtlOperationAck> {
+        let subject = broker::commands::scale_actor(&self.nsprefix, host_id);
+        trace!("scale_actor:request {}", &subject);
+        let bytes = json_serialize(ScaleActorCommand {
+            count,
+            actor_ref: actor_ref.to_string(),
+            host_id: host_id.to_string(),
+            annotations,
+        })?;
+        match self
+            .nc
+            .request_timeout(&subject, &bytes, self.timeout)
+            .await
+        {
+            Ok(msg) => {
+                let ack: CtlOperationAck = json_deserialize(&msg.data)?;
+                Ok(ack)
+            }
+            Err(e) => Err(format!("Did not receive scale actor acknowledgement: {}", e).into()),
+        }
+    }
+
     /// Publishes the link advertisement message to the lattice that is published when code invokes the `set_link`
     /// function on a `Host` struct instance. No confirmation or acknowledgement is available for this operation
     /// because it is publish-only.

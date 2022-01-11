@@ -36,6 +36,10 @@ pub mod commands {
         format!("{}.cmd.{}.la", prefix(nsprefix), host) // la - launch actor
     }
 
+    pub fn scale_actor(nsprefix: &Option<String>, host: &str) -> String {
+        format!("{}.cmd.{}.scale", prefix(nsprefix), host)
+    }
+
     pub fn stop_actor(nsprefix: &Option<String>, host: &str) -> String {
         format!("{}.cmd.{}.sa", prefix(nsprefix), host) // sa - stop actor
     }

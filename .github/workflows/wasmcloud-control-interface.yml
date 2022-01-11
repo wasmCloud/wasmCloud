@@ -3,14 +3,10 @@ name: CONTROL_INTERFACE
 on:
   push:
     branches: [ main ]
-    paths:
-    - "/**"
     tags:
     - 'wasmcloud-control-interface-v*'
   pull_request:
     branches: [ main ]
-    paths:
-    - "/**"
 
 env:
   CARGO_TERM_COLOR: always

@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-control-interface"
-version = "0.7.1"
+version = "0.8.0"
 authors = ["wasmCloud Team"]
 edition = "2021"
 homepage = "https://wasmcloud.dev"
@@ -28,5 +28,5 @@ serde = { version = "1.0.118", features = ["derive"] }
 serde_json = "1.0.60"
 uuid = {version = "0.8", features  = ["serde", "v4"]}
 wascap = "0.6.0"
-wasmbus-rpc = "0.6.0"
-wasmcloud-interface-lattice-control = "0.3.1"
+wasmbus-rpc = "0.6"
+wasmcloud-interface-lattice-control = "0.4.0"
