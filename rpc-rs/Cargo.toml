@@ -47,7 +47,7 @@ bigdecimal = { version = "0.3", optional = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { version = "1", features = ["full"]}
 futures = "0.3"
-nats-aflowt = "0.16.102"
+nats-aflowt = "0.16.103"
 once_cell = "1.8"
 crossbeam = "0.8"
 uuid = { version = "0.8", features=["v4", "serde"] }
