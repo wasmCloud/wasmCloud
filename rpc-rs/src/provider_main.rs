@@ -23,7 +23,7 @@ pub fn get_host_bridge() -> &'static HostBridge {
 }
 
 /// nats address to use if not included in initial HostData
-const DEFAULT_NATS_ADDR: &str = "nats://0.0.0.0:4222";
+const DEFAULT_NATS_ADDR: &str = "nats://127.0.0.1:4222";
 
 /// Start provider services: tokio runtime, logger, nats, and rpc subscriptions
 pub fn provider_main<P>(provider_dispatch: P) -> Result<(), Box<dyn std::error::Error>>
