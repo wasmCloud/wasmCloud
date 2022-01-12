@@ -169,6 +169,7 @@ impl Client {
         &self,
         host_id: &str,
         actor_ref: &str,
+        actor_id: &str,
         count: u16,
         annotations: Option<HashMap<String, String>>,
     ) -> Result<CtlOperationAck> {
@@ -178,6 +179,7 @@ impl Client {
             count,
             actor_ref: actor_ref.to_string(),
             host_id: host_id.to_string(),
+            actor_id: actor_id.to_string(),
             annotations,
         })?;
         match self
