@@ -4,6 +4,7 @@
 use std::{collections::HashMap, convert::Infallible, sync::Arc, time::Duration};
 use tokio::sync::RwLock;
 
+use log::info;
 use nats::asynk::{self, Connection};
 use serde::{Deserialize, Serialize};
 use wascap::prelude::KeyPair;
@@ -330,6 +331,7 @@ impl LatticeController for LatticeControllerProvider {
             .scale_actor(
                 &arg.host_id,
                 &arg.actor_ref,
+                &arg.actor_id,
                 arg.count,
                 arg.annotations.clone(),
             )

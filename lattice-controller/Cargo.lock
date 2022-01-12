@@ -2980,7 +2980,9 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-control-interface"
-version = "0.7.1"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cb52310bd202bc0e6c8b8c92b273cbc6ae1123b23fd154facfc682ce1fff14e5"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3003,7 +3005,9 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-interface-lattice-control"
-version = "0.3.1"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "672ec916215ce2f4893f1613508b721ece58c66199e44335bfcce9774ce8d2e5"
 dependencies = [
  "async-trait",
  "data-encoding",
@@ -3033,7 +3037,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-lattice-controller"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "base64 0.13.0",
