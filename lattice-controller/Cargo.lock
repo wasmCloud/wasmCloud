@@ -75,6 +75,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-stream"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "171374e7e3b2504e0e5236e3b59260560f9fe94bfe9ac39ba5e4e929c5590625"
+dependencies = [
+ "async-stream-impl",
+ "futures-core",
+]
+
+[[package]]
+name = "async-stream-impl"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "648ed8c8d2ce5409ccd57453d9d1b214b342a0d69376a6feda1fd6cae3299308"
+dependencies = [
+ "proc-macro2 1.0.36",
+ "quote 1.0.14",
+ "syn 1.0.85",
+]
+
+[[package]]
 name = "async-task"
 version = "4.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1404,9 +1425,50 @@ dependencies = [
  "parking_lot",
  "regex",
  "rustls 0.19.1",
- "rustls-native-certs",
+ "rustls-native-certs 0.5.0",
  "serde",
  "serde_json",
+ "url",
+ "webpki 0.21.4",
+ "winapi",
+]
+
+[[package]]
+name = "nats-aflowt"
+version = "0.16.103"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c6839c016b9c37329d9c1d72c192b6a1f129803b0c4ce71f198d2273a3d7e054"
+dependencies = [
+ "async-stream",
+ "async-trait",
+ "base64 0.13.0",
+ "base64-url",
+ "blocking",
+ "chrono",
+ "fastrand",
+ "futures 0.3.19",
+ "itoa 0.4.8",
+ "json",
+ "lazy_static",
+ "libc",
+ "log",
+ "memchr",
+ "nkeys",
+ "nuid",
+ "once_cell",
+ "parking_lot",
+ "pin-project",
+ "pin-utils",
+ "regex",
+ "rustls-native-certs 0.6.1",
+ "rustls-pemfile",
+ "serde",
+ "serde_json",
+ "serde_nanos",
+ "serde_repr",
+ "tokio",
+ "tokio-rustls",
+ "tokio-stream",
  "url",
  "webpki 0.21.4",
  "winapi",
@@ -1528,9 +1590,9 @@ dependencies = [
 
 [[package]]
 name = "openssl-probe"
-version = "0.1.4"
+version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "28988d872ab76095a6e6ac88d99b54fd267702734fd7ffe610ca27f533ddb95a"
+checksum = "ff011a302c396a5197692431fc1948019154afc178baf7d8e37367442a4601cf"
 
 [[package]]
 name = "openssl-sys"
@@ -2246,6 +2308,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustls-native-certs"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5ca9ebdfa27d3fc180e42879037b5338ab1c040c06affd00d8338598e7800943"
+dependencies = [
+ "openssl-probe",
+ "rustls-pemfile",
+ "schannel",
+ "security-framework",
+]
+
+[[package]]
 name = "rustls-pemfile"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2357,6 +2431,26 @@ dependencies = [
  "itoa 1.0.1",
  "ryu",
  "serde",
+]
+
+[[package]]
+name = "serde_nanos"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7ef330a626d4b4ae91d624677b11d485288b69df5cda4b0725434d133065fff5"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "serde_repr"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "98d0516900518c29efa217c298fa1f4e6c6ffc85ae29fd7f4ee48f176e1a9ed5"
+dependencies = [
+ "proc-macro2 1.0.36",
+ "quote 1.0.14",
+ "syn 1.0.85",
 ]
 
 [[package]]
@@ -2655,6 +2749,17 @@ dependencies = [
  "rustls 0.20.2",
  "tokio",
  "webpki 0.22.0",
+]
+
+[[package]]
+name = "tokio-stream"
+version = "0.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "50145484efff8818b5ccd256697f36863f587da82cf8b409c53adf1e840798e3"
+dependencies = [
+ "futures-core",
+ "pin-project-lite",
+ "tokio",
 ]
 
 [[package]]
@@ -2979,10 +3084,43 @@ dependencies = [
 ]
 
 [[package]]
-name = "wasmcloud-control-interface"
-version = "0.8.0"
+name = "wasmbus-rpc"
+version = "0.7.0-alpha.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb52310bd202bc0e6c8b8c92b273cbc6ae1123b23fd154facfc682ce1fff14e5"
+checksum = "24d21f248da115aae610e1ec127551638cea77dd063dde6622cde1c8f7c9019f"
+dependencies = [
+ "async-trait",
+ "base64 0.13.0",
+ "cfg-if 1.0.0",
+ "chrono",
+ "crossbeam",
+ "data-encoding",
+ "futures 0.3.19",
+ "log",
+ "minicbor 0.12.1",
+ "nats-aflowt",
+ "once_cell",
+ "pin-utils",
+ "ring",
+ "rmp-serde",
+ "serde",
+ "serde_bytes",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tokio-timer",
+ "toml",
+ "uuid",
+ "wascap",
+ "wasmbus-macros",
+ "weld-codegen",
+]
+
+[[package]]
+name = "wasmcloud-control-interface"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d8e9d230e22fd404c20725c50814589f9d132e7b2e6b1f7616126824f5d7f246"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2991,7 +3129,6 @@ dependencies = [
  "data-encoding",
  "futures 0.3.19",
  "log",
- "nats",
  "ring",
  "rmp-serde",
  "serde",
@@ -2999,15 +3136,16 @@ dependencies = [
  "tokio",
  "uuid",
  "wascap",
- "wasmbus-rpc",
+ "wasmbus-rpc 0.6.1",
+ "wasmbus-rpc 0.7.0-alpha.1",
  "wasmcloud-interface-lattice-control",
 ]
 
 [[package]]
 name = "wasmcloud-interface-lattice-control"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "672ec916215ce2f4893f1613508b721ece58c66199e44335bfcce9774ce8d2e5"
+checksum = "b7b073a12f35115fd82afee0ed4a8b7b4f2b1b02e71c2e31cb9ad585167147f3"
 dependencies = [
  "async-trait",
  "data-encoding",
@@ -3016,7 +3154,7 @@ dependencies = [
  "ring",
  "rmp-serde",
  "serde",
- "wasmbus-rpc",
+ "wasmbus-rpc 0.6.1",
  "weld-codegen",
 ]
 
@@ -3031,13 +3169,13 @@ dependencies = [
  "serde",
  "serde_bytes",
  "serde_json",
- "wasmbus-rpc",
+ "wasmbus-rpc 0.6.1",
  "weld-codegen",
 ]
 
 [[package]]
 name = "wasmcloud-provider-lattice-controller"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "base64 0.13.0",
@@ -3046,7 +3184,6 @@ dependencies = [
  "crossbeam",
  "futures 0.3.19",
  "log",
- "nats",
  "once_cell",
  "reqwest",
  "rmp-serde",
@@ -3057,7 +3194,8 @@ dependencies = [
  "tokio",
  "toml",
  "wascap",
- "wasmbus-rpc",
+ "wasmbus-rpc 0.6.1",
+ "wasmbus-rpc 0.7.0-alpha.1",
  "wasmcloud-control-interface",
  "wasmcloud-test-util",
 ]
@@ -3080,7 +3218,7 @@ dependencies = [
  "tokio",
  "toml",
  "wascap",
- "wasmbus-rpc",
+ "wasmbus-rpc 0.6.1",
  "wasmcloud-interface-testing",
 ]
 
