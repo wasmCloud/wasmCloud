@@ -9,8 +9,8 @@ use log::{error, trace};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, time::Duration};
 use sub_stream::collect_timeout;
-pub use wasmbus_rpc::core::LinkDefinition;
-use wasmbus_rpc_nats_aflowt::anats;
+use wasmbus_rpc::anats;
+pub use wasmbus_rpc_06::core::LinkDefinition;
 
 type Result<T> = ::std::result::Result<T, Box<dyn ::std::error::Error + Send + Sync>>;
 
@@ -442,9 +442,11 @@ impl Client {
     /// # Example
     /// ```rust
     /// use wasmcloud_control_interface::Client;
+    /// use wasmbus_rpc::anats;
     /// async {
-    ///   let nc = nats::connect("0.0.0.0:4222").await.unwrap();
-    ///   let client = Client::new(nc, None, std::time::Duration::from_millis(1000));
+    ///   let nc = anats::connect("127.0.0.1:4222").await.unwrap();
+    ///   let client = Client::new(nc, None, std::time::Duration::from_millis(1000),
+    ///                        std::time::Duration::from_millis(1000));
     ///   let receiver = client.events_receiver().await.unwrap();
     ///   std::thread::spawn(move || loop {
     ///     if let Ok(evt) = receiver.recv() {
@@ -466,9 +468,11 @@ impl Client {
     /// # Example
     /// ```rust
     /// use wasmcloud_control_interface::Client;
+    /// use wasmbus_rpc::anats;
     /// async {
-    ///   let nc = nats::connect("0.0.0.0:4222").await.unwrap();
-    ///   let client = Client::new(nc, None, std::time::Duration::from_millis(1000));
+    ///   let nc = anats::connect("0.0.0.0:4222").await.unwrap();
+    ///   let client = Client::new(nc, None, std::time::Duration::from_millis(1000),
+    ///                   std::time::Duration::from_millis(1000));
     ///   let receiver = client.events_receiver().await.unwrap();
     ///   std::thread::spawn(move || {
     ///     if let Ok(evt) = receiver.recv() {
@@ -534,6 +538,7 @@ pub fn json_deserialize<'de, T: Deserialize<'de>>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wasmbus_rpc::anats;
 
     /// Note: This test is a means of manually watching the event stream as CloudEvents are received
     /// It does not assert functionality, and so we've marked it as ignore to ensure it's not run by default
@@ -541,7 +546,12 @@ mod tests {
     #[ignore]
     async fn test_events_receiver() {
         let nc = anats::connect("127.0.0.1:4222").await.unwrap();
-        let client = Client::new(nc, None, std::time::Duration::from_millis(1000));
+        let client = Client::new(
+            nc,
+            None,
+            std::time::Duration::from_millis(1000),
+            std::time::Duration::from_millis(1000),
+        );
         let receiver = client.events_receiver().await.unwrap();
         std::thread::spawn(move || loop {
             if let Ok(evt) = receiver.recv() {

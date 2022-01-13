@@ -2,7 +2,7 @@ use crate::json_deserialize;
 use log::error;
 use serde::de::DeserializeOwned;
 use std::time::{Duration, Instant};
-use wasmbus_rpc_nats_aflowt::anats::Subscription;
+use wasmbus_rpc::anats::Subscription;
 
 /// Collect results until timeout has elapsed
 pub async fn collect_timeout<T: DeserializeOwned>(
