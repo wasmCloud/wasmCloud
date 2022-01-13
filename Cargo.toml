@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-control-interface"
-version = "0.9.0"
+version = "0.10.0"
 authors = ["wasmCloud Team"]
 edition = "2021"
 homepage = "https://wasmcloud.dev"
@@ -20,7 +20,7 @@ cloudevents-sdk = "0.4.0"
 futures = "0.3"
 log = "0.4.14"
 crossbeam-channel = "0.5.1"
-nats = "0.16.0"
+#nats = { version = "0.16.101", package = "nats-aflowt" }
 ring = "0.16.20"
 rmp-serde = "0.15.0"
 tokio = {version="1.9", features=["time"]}
@@ -29,4 +29,5 @@ serde_json = "1.0.60"
 uuid = {version = "0.8", features  = ["serde", "v4"]}
 wascap = "0.6.0"
 wasmbus-rpc = "0.6"
+wasmbus-rpc-nats-aflowt = { version = "0.7.0-alpha.1", package="wasmbus-rpc" }
 wasmcloud-interface-lattice-control = "0.5.0"
