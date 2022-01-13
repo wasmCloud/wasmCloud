@@ -6,7 +6,6 @@
 
 mod timestamp;
 pub use timestamp::Timestamp;
-
 mod actor_wasm;
 mod common;
 pub use common::{
@@ -28,7 +27,7 @@ pub use minicbor;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod rpc_client;
 #[cfg(not(target_arch = "wasm32"))]
-pub use rpc_client::{rpc_topic, RpcClient, RpcClientSync};
+pub use rpc_client::{rpc_topic, RpcClient};
 
 pub type RpcResult<T> = std::result::Result<T, RpcError>;
 
@@ -59,15 +58,8 @@ pub mod core {
 
             // allow testing provider outside host
             const TEST_HARNESS: &str = "_TEST_";
-
-            /// how often we will ping nats server for keep-alive
-            const NATS_PING_INTERVAL_SEC: u16 = 15;
-
-            /// number of unsuccessful pings before connection is deemed disconnected
-            const NATS_PING_FAIL_COUNT: u16 = 8;
-
-            /// time between connection retries (milliseconds)
-            const NATS_RECONNECT_INTERVAL_MS: u64 = 250;
+            // fallback nats address if host doesn't pass one to provider
+            const DEFAULT_NATS_ADDR: &str = "nats://127.0.0.1:4222";
 
             impl HostData {
                 /// returns whether the provider is running under test
@@ -75,24 +67,27 @@ pub mod core {
                     self.host_id == TEST_HARNESS
                 }
 
-                /// obtain NatsClientOptions pre-populated with connection data from the host.
-                pub fn nats_options(&self) -> ratsio::NatsClientOptions {
-                    ratsio::NatsClientOptions {
-                        ping_interval: NATS_PING_INTERVAL_SEC,
-                        ping_max_out: NATS_PING_FAIL_COUNT,
-                        reconnect_timeout: NATS_RECONNECT_INTERVAL_MS,
-                        // if connect fails, keep trying, forever
-                        ensure_connect: true,
-                        // need to test whether this works
-                        subscribe_on_reconnect: true,
-                        cluster_uris: if self.lattice_rpc_url.is_empty() {
-                            Vec::new()
-                        } else {
-                            vec![self.lattice_rpc_url.clone()]
-                        }
-                        .into(),
-                        ..Default::default()
-                    }
+                /// Connect to nats using options provided by host
+                pub async fn nats_connect(&self) -> RpcResult<crate::anats::Connection> {
+                    use std::str::FromStr as _;
+                    let nats_addr = if !self.lattice_rpc_url.is_empty() {
+                        self.lattice_rpc_url.as_str()
+                    } else {
+                        DEFAULT_NATS_ADDR
+                    };
+                    let nats_server = nats_aflowt::ServerAddress::from_str(nats_addr).map_err(|e| {
+                        RpcError::InvalidParameter(format!("Invalid nats server url '{}': {}", nats_addr, e))
+                    })?;
+
+                    // Connect to nats
+                    let nc = nats_aflowt::Options::default()
+                        .max_reconnects(None)
+                        .connect(vec![nats_server])
+                        .await
+                        .map_err(|e| {
+                            RpcError::ProviderInit(format!("nats connection to {} failed: {}", nats_addr, e))
+                        })?;
+                    Ok(nc)
                 }
             }
         }
@@ -186,10 +181,10 @@ pub mod core {
                     "{}://{}/{}/{}",
                     URL_SCHEME,
                     self.contract_id
-                        .replace(":", "/")
-                        .replace(" ", "_")
+                        .replace(':', "/")
+                        .replace(' ', "_")
                         .to_lowercase(),
-                    self.link_name.replace(" ", "_").to_lowercase(),
+                    self.link_name.replace(' ', "_").to_lowercase(),
                     self.public_key
                 )
             }
@@ -229,6 +224,10 @@ pub mod core {
         }
     }
 }
+
+// re-export nats-aflowt
+#[cfg(not(target_arch = "wasm32"))]
+pub use nats_aflowt as anats;
 
 pub mod actor {
 

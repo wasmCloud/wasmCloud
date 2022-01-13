@@ -2,7 +2,7 @@
 
 use crate::{
     core::HostData,
-    provider::{HostBridge, NatsClient, ProviderDispatch},
+    provider::{HostBridge, ProviderDispatch},
     RpcError,
 };
 use once_cell::sync::OnceCell;
@@ -23,7 +23,7 @@ pub fn get_host_bridge() -> &'static HostBridge {
 }
 
 /// nats address to use if not included in initial HostData
-const DEFAULT_NATS_ADDR: &str = "0.0.0.0:4222";
+const DEFAULT_NATS_ADDR: &str = "nats://127.0.0.1:4222";
 
 /// Start provider services: tokio runtime, logger, nats, and rpc subscriptions
 pub fn provider_main<P>(provider_dispatch: P) -> Result<(), Box<dyn std::error::Error>>
@@ -69,6 +69,8 @@ pub async fn provider_run<P>(
 where
     P: ProviderDispatch + Send + Sync + Clone + 'static,
 {
+    use std::str::FromStr as _;
+
     // initialize logger
     let log_rx = crate::channel_log::init_logger()
         .map_err(|_| RpcError::ProviderInit("log already initialized".to_string()))?;
@@ -81,13 +83,18 @@ where
     );
 
     let nats_addr = if !host_data.lattice_rpc_url.is_empty() {
-        &host_data.lattice_rpc_url
+        host_data.lattice_rpc_url.as_str()
     } else {
         DEFAULT_NATS_ADDR
     };
+    let nats_server = nats_aflowt::ServerAddress::from_str(nats_addr).map_err(|e| {
+        RpcError::InvalidParameter(format!("Invalid nats server url '{}': {}", nats_addr, e))
+    })?;
 
     // Connect to nats
-    let nc = NatsClient::new(host_data.nats_options())
+    let nc = nats_aflowt::Options::default()
+        .max_reconnects(None)
+        .connect(vec![nats_server])
         .await
         .map_err(|e| {
             RpcError::ProviderInit(format!("nats connection to {} failed: {}", nats_addr, e))
