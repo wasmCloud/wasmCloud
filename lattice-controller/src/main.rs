@@ -232,14 +232,14 @@ impl ProviderHandler for LatticeControllerProvider {
 
     /// Handle notification that a link is dropped
     async fn delete_link(&self, actor_id: &str) {
-        let mut configs = self.connections.write().await;
-        let _ = configs.remove(actor_id);
+        let mut connections = self.connections.write().await;
+        let _ = connections.remove(actor_id);
     }
 
     /// Handle shutdown request
     async fn shutdown(&self) -> Result<(), Infallible> {
-        let mut configs = self.connections.write().await;
-        configs.clear();
+        let mut connections = self.connections.write().await;
+        connections.clear();
 
         Ok(())
     }
