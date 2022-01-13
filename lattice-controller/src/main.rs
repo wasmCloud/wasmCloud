@@ -4,14 +4,13 @@
 use std::{collections::HashMap, convert::Infallible, sync::Arc, time::Duration};
 use tokio::sync::RwLock;
 
-use log::info;
-use nats::asynk::{self, Connection};
 use serde::{Deserialize, Serialize};
 use wascap::prelude::KeyPair;
 use wasmbus_rpc::provider::prelude::*;
+use wasmbus_rpc_nats_aflowt::anats;
 use wasmcloud_control_interface::*;
 
-const DEFAULT_NATS_URI: &str = "0.0.0.0:4222";
+const DEFAULT_NATS_URI: &str = "127.0.0.1:4222";
 const ENV_NATS_URI: &str = "URI";
 const ENV_NATS_CLIENT_JWT: &str = "CLIENT_JWT";
 const ENV_NATS_CLIENT_SEED: &str = "CLIENT_SEED";
@@ -53,7 +52,10 @@ impl Default for ConnectionConfig {
 }
 
 impl ConnectionConfig {
-    fn new_from(values: &HashMap<String, String>) -> RpcResult<ConnectionConfig> {
+    fn new_from(
+        values: &HashMap<String, String>,
+        mut nats_uris: Vec<String>,
+    ) -> RpcResult<ConnectionConfig> {
         let mut config = if let Some(config_b64) = values.get("config_b64") {
             let bytes = base64::decode(config_b64.as_bytes()).map_err(|e| {
                 RpcError::InvalidParameter(format!("invalid base64 encoding: {}", e))
@@ -82,7 +84,7 @@ impl ConnectionConfig {
             ));
         }
         if config.cluster_uris.is_empty() {
-            config.cluster_uris.push(DEFAULT_NATS_URI.to_string());
+            config.cluster_uris.append(&mut nats_uris);
         }
 
         if let Some(nsprefix) = values.get(ENV_LATTICE_PREFIX) {
@@ -121,10 +123,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let hd = load_host_data()?;
     let mut lp = LatticeControllerProvider::default();
 
+    // use the same nats for lattice control as we do for rpc,
+    // unless it is overridden below by linkdefs
+    let nats_addr = if !hd.lattice_rpc_url.is_empty() {
+        hd.lattice_rpc_url.as_str()
+    } else {
+        DEFAULT_NATS_URI
+    };
+
     if let Some(s) = hd.config_json.as_ref() {
         let mut hm = HashMap::new();
         hm.insert("config_b64".to_string(), s.to_owned());
-        if let Ok(c) = ConnectionConfig::new_from(&hm) {
+        if let Ok(c) = ConnectionConfig::new_from(&hm, vec![nats_addr.to_string()]) {
             lp.fallback_config = c;
         }
     }
@@ -139,37 +149,61 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[derive(Default, Clone, Provider)]
 #[services(LatticeController)]
 struct LatticeControllerProvider {
-    configs: Arc<RwLock<HashMap<String, ConnectionConfig>>>,
+    connections: Arc<RwLock<HashMap<String, Client>>>,
     fallback_config: ConnectionConfig,
 }
 
 impl LatticeControllerProvider {
-    async fn connect(&self, cfg: ConnectionConfig) -> Result<Connection, RpcError> {
-        let mut opts = match (cfg.auth_jwt, cfg.auth_seed) {
-            (Some(jwt), Some(seed)) => {
-                let kp = KeyPair::from_seed(&seed)
-                    .map_err(|e| RpcError::ProviderInit(format!("key init: {}", e)))?;
-                asynk::Options::with_jwt(
-                    move || Ok(jwt.clone()),
-                    move |nonce| kp.sign(nonce).unwrap(),
-                )
-            }
-            (None, None) => asynk::Options::new(),
-            _ => {
-                return Err(RpcError::InvalidParameter(
-                    "must provide both jwt and seed for jwt authentication".into(),
-                ));
-            }
-        };
-        opts = opts.with_name("wasmCloud Lattice Controller provider");
-        let url = cfg.cluster_uris.get(0).unwrap();
-        let conn = opts
-            .connect(url)
-            .await
-            .map_err(|e| RpcError::ProviderInit(format!("Nats connection to {}: {}", url, e)))?;
-
-        Ok(conn)
+    /// Create a nats connection and a Lattice controller client
+    async fn create_client(&self, config: ConnectionConfig) -> RpcResult<Client> {
+        let timeout = Duration::from_millis(config.timeout_ms);
+        let auction_timeout = Duration::from_millis(config.auction_timeout_ms);
+        let lattice_prefix = config.lattice_prefix.clone();
+        let conn = connect(config).await?;
+        let client = Client::new(conn, Some(lattice_prefix), timeout, auction_timeout);
+        Ok(client)
     }
+
+    async fn lookup_client(&self, ctx: &Context) -> RpcResult<Client> {
+        let actor_id = ctx
+            .actor
+            .as_ref()
+            .ok_or_else(|| RpcError::InvalidParameter("no actor in request".to_string()))?;
+        let rd = self.connections.read().await;
+        let client = rd
+            .get(actor_id)
+            .ok_or_else(|| RpcError::InvalidParameter(format!("actor not linked:{}", actor_id)))?;
+        Ok(client.clone())
+    }
+}
+
+/// Create a new nats connection
+async fn connect(cfg: ConnectionConfig) -> RpcResult<anats::Connection> {
+    let mut opts = match (cfg.auth_jwt, cfg.auth_seed) {
+        (Some(jwt), Some(seed)) => {
+            let kp = KeyPair::from_seed(&seed)
+                .map_err(|e| RpcError::ProviderInit(format!("key init: {}", e)))?;
+
+            anats::Options::with_jwt(
+                move || Ok(jwt.clone()),
+                move |nonce| kp.sign(nonce).unwrap(),
+            )
+        }
+        (None, None) => anats::Options::default(),
+        _ => {
+            return Err(RpcError::InvalidParameter(
+                "must provide both jwt and seed for jwt authentication".into(),
+            ));
+        }
+    };
+    opts = opts.with_name("wasmCloud Lattice Controller provider");
+    let url = cfg.cluster_uris.get(0).unwrap();
+    let conn = opts
+        .connect(url)
+        .await
+        .map_err(|e| RpcError::ProviderInit(format!("Nats connection to {}: {}", url, e)))?;
+
+    Ok(conn)
 }
 
 /// use default implementations of provider message handlers
@@ -178,69 +212,37 @@ impl ProviderDispatch for LatticeControllerProvider {}
 #[async_trait]
 impl ProviderHandler for LatticeControllerProvider {
     async fn put_link(&self, ld: &LinkDefinition) -> RpcResult<bool> {
-        // If an actor is bound to this provider with no configuration
-        // values, then the "fallback" configuration will be used, allowing
-        // for a single lattice connection for all bound actors for a given
-        // link name
+        // Create one client (and nats connection) per actor_id.
+        // This allows each actor's linkdef to have its own jwt credentials and/or nats urls.
+        // Potential optimization not implemented:
+        //   If multiple actors use the same credentials (or multiple actors use no credentials),
+        //   a single nats connection could be shared by multiple actors ids,
+        //   and the index in the HashMap could be hash(creds) instead of actor id.
+        //   Since there aren't many actors linked to this provider, it's simpler
+        //   to follow the pattern used by other capability providers: connections are indexed by actor id.
         if ld.values.contains_key("config_b64") || ld.values.contains_key("config_json") {
-            let config = ConnectionConfig::new_from(&ld.values)?;
-
-            let mut configs = self.configs.write().await;
-            configs.insert(ld.actor_id.to_string(), config);
+            let config =
+                ConnectionConfig::new_from(&ld.values, self.fallback_config.cluster_uris.clone())?;
+            let client = self.create_client(config).await?;
+            let mut connections = self.connections.write().await;
+            connections.insert(ld.actor_id.to_string(), client);
         }
-
         Ok(true)
     }
 
     /// Handle notification that a link is dropped
     async fn delete_link(&self, actor_id: &str) {
-        let mut configs = self.configs.write().await;
+        let mut configs = self.connections.write().await;
         let _ = configs.remove(actor_id);
     }
 
     /// Handle shutdown request
     async fn shutdown(&self) -> Result<(), Infallible> {
-        let mut configs = self.configs.write().await;
+        let mut configs = self.connections.write().await;
         configs.clear();
 
         Ok(())
     }
-}
-
-fn get_actor(ctx: &Context) -> RpcResult<String> {
-    ctx.actor
-        .as_ref()
-        .ok_or_else(|| RpcError::InvalidParameter("no actor in request".to_string()))
-        .map(|s| s.to_string())
-}
-
-async fn get_config(lc: &LatticeControllerProvider, actor_id: &str) -> ConnectionConfig {
-    lc.configs
-        .read()
-        .await
-        .get(actor_id)
-        .unwrap_or(&lc.fallback_config)
-        .clone()
-}
-
-// You might ask yourself, "Self, why would we want produce a new client upon every single
-// request to the capability provider, rather than reuse existing ones?" That would be a good question!
-// In environments subject to sporadic, unpredictable network partition events, it's much safer to bring up a new,
-// clean connection, do work, and dispose rather than attempt to leave a persistent TCP connection
-// running, which could become stale or "corrupt". Since we're not subscribing to anything,
-// this is safer than maintaining a "live" connection per actor configured.
-async fn create_client(
-    ctx: &Context,
-    lc: &LatticeControllerProvider,
-) -> RpcResult<(Client, ConnectionConfig)> {
-    let actor_id = get_actor(ctx)?;
-    let config = get_config(lc, &actor_id).await;
-    let conn = lc.connect(config.clone()).await?;
-    let timeout = Duration::from_millis(config.timeout_ms);
-    Ok((
-        Client::new(conn, Some(config.lattice_prefix.to_owned()), timeout),
-        config,
-    ))
 }
 
 /// Handle LatticeController methods
@@ -251,15 +253,9 @@ impl LatticeController for LatticeControllerProvider {
         ctx: &Context,
         arg: &ProviderAuctionRequest,
     ) -> RpcResult<ProviderAuctionAcks> {
-        let (client, config) = create_client(ctx, self).await?;
-        let timeout = Duration::from_millis(config.auction_timeout_ms);
-        client
-            .perform_provider_auction(
-                &arg.provider_ref,
-                &arg.link_name,
-                arg.constraints.clone(),
-                timeout,
-            )
+        self.lookup_client(ctx)
+            .await?
+            .perform_provider_auction(&arg.provider_ref, &arg.link_name, arg.constraints.clone())
             .await
             .map_err(|e| RpcError::Nats(format!("{}", e)))
     }
@@ -269,21 +265,17 @@ impl LatticeController for LatticeControllerProvider {
         ctx: &Context,
         arg: &ActorAuctionRequest,
     ) -> RpcResult<ActorAuctionAcks> {
-        let (client, config) = create_client(ctx, self).await?;
-        let timeout = Duration::from_millis(config.auction_timeout_ms);
-
-        client
-            .perform_actor_auction(&arg.actor_ref, arg.constraints.clone(), timeout)
+        self.lookup_client(ctx)
+            .await?
+            .perform_actor_auction(&arg.actor_ref, arg.constraints.clone())
             .await
             .map_err(|e| RpcError::Nats(format!("{}", e)))
     }
 
     async fn get_hosts(&self, ctx: &Context) -> RpcResult<Hosts> {
-        let (client, config) = create_client(ctx, self).await?;
-        let timeout = Duration::from_millis(config.auction_timeout_ms);
-
-        client
-            .get_hosts(timeout)
+        self.lookup_client(ctx)
+            .await?
+            .get_hosts()
             .await
             .map_err(|e| RpcError::Nats(format!("{}", e)))
     }
@@ -293,16 +285,16 @@ impl LatticeController for LatticeControllerProvider {
         ctx: &Context,
         arg: &TS,
     ) -> RpcResult<HostInventory> {
-        let (client, _config) = create_client(ctx, self).await?;
-        client
+        self.lookup_client(ctx)
+            .await?
             .get_host_inventory(&arg.to_string())
             .await
             .map_err(|e| RpcError::Nats(format!("{}", e)))
     }
 
     async fn get_claims(&self, ctx: &Context) -> RpcResult<GetClaimsResponse> {
-        let (client, _config) = create_client(ctx, self).await?;
-        client
+        self.lookup_client(ctx)
+            .await?
             .get_claims()
             .await
             .map_err(|e| RpcError::Nats(format!("{}", e)))
@@ -313,10 +305,14 @@ impl LatticeController for LatticeControllerProvider {
         ctx: &Context,
         arg: &StartActorCommand,
     ) -> RpcResult<CtlOperationAck> {
-        let (client, _config) = create_client(ctx, self).await?;
-        let count = if arg.count == 0 { 1 } else { arg.count };
-        client
-            .start_actor(&arg.host_id, &arg.actor_ref, count, arg.annotations.clone())
+        self.lookup_client(ctx)
+            .await?
+            .start_actor(
+                &arg.host_id,
+                &arg.actor_ref,
+                arg.count,
+                arg.annotations.clone(),
+            )
             .await
             .map_err(|e| RpcError::Nats(format!("{}", e)))
     }
@@ -326,8 +322,8 @@ impl LatticeController for LatticeControllerProvider {
         ctx: &Context,
         arg: &ScaleActorCommand,
     ) -> RpcResult<CtlOperationAck> {
-        let (client, _config) = create_client(ctx, self).await?;
-        client
+        self.lookup_client(ctx)
+            .await?
             .scale_actor(
                 &arg.host_id,
                 &arg.actor_ref,
@@ -344,8 +340,8 @@ impl LatticeController for LatticeControllerProvider {
         ctx: &Context,
         arg: &wasmbus_rpc::core::LinkDefinition,
     ) -> RpcResult<CtlOperationAck> {
-        let (client, _config) = create_client(ctx, self).await?;
-        client
+        self.lookup_client(ctx)
+            .await?
             .advertise_link(
                 &arg.actor_id,
                 &arg.provider_id,
@@ -362,16 +358,16 @@ impl LatticeController for LatticeControllerProvider {
         ctx: &Context,
         arg: &RemoveLinkDefinitionRequest,
     ) -> RpcResult<CtlOperationAck> {
-        let (client, _config) = create_client(ctx, self).await?;
-        client
+        self.lookup_client(ctx)
+            .await?
             .remove_link(&arg.actor_id, &arg.contract_id, &arg.link_name)
             .await
             .map_err(|e| RpcError::Nats(format!("{}", e)))
     }
 
     async fn get_links(&self, ctx: &Context) -> RpcResult<LinkDefinitionList> {
-        let (client, _config) = create_client(ctx, self).await?;
-        client
+        self.lookup_client(ctx)
+            .await?
             .query_links()
             .await
             .map_err(|e| RpcError::Nats(format!("{}", e)))
@@ -382,8 +378,8 @@ impl LatticeController for LatticeControllerProvider {
         ctx: &Context,
         arg: &UpdateActorCommand,
     ) -> RpcResult<CtlOperationAck> {
-        let (client, _config) = create_client(ctx, self).await?;
-        client
+        self.lookup_client(ctx)
+            .await?
             .update_actor(
                 &arg.host_id,
                 &arg.actor_id,
@@ -399,8 +395,8 @@ impl LatticeController for LatticeControllerProvider {
         ctx: &Context,
         arg: &StartProviderCommand,
     ) -> RpcResult<CtlOperationAck> {
-        let (client, _config) = create_client(ctx, self).await?;
-        client
+        self.lookup_client(ctx)
+            .await?
             .start_provider(
                 &arg.host_id,
                 &arg.provider_ref,
@@ -417,8 +413,8 @@ impl LatticeController for LatticeControllerProvider {
         ctx: &Context,
         arg: &StopProviderCommand,
     ) -> RpcResult<CtlOperationAck> {
-        let (client, _config) = create_client(ctx, self).await?;
-        client
+        self.lookup_client(ctx)
+            .await?
             .stop_provider(
                 &arg.host_id,
                 &arg.provider_ref,
@@ -435,8 +431,8 @@ impl LatticeController for LatticeControllerProvider {
         ctx: &Context,
         arg: &StopActorCommand,
     ) -> RpcResult<CtlOperationAck> {
-        let (client, _config) = create_client(ctx, self).await?;
-        client
+        self.lookup_client(ctx)
+            .await?
             .stop_actor(
                 &arg.host_id,
                 &arg.actor_ref,
@@ -448,8 +444,8 @@ impl LatticeController for LatticeControllerProvider {
     }
 
     async fn stop_host(&self, ctx: &Context, arg: &StopHostCommand) -> RpcResult<CtlOperationAck> {
-        let (client, _config) = create_client(ctx, self).await?;
-        client
+        self.lookup_client(ctx)
+            .await?
             .stop_host(&arg.host_id, arg.timeout)
             .await
             .map_err(|e| RpcError::Nats(format!("{}", e)))
