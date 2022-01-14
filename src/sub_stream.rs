@@ -20,6 +20,9 @@ pub async fn collect_timeout<T: DeserializeOwned>(
         // keep collecting while there is time remaining
         match sub.next_timeout(timeout - elapsed).await {
             Ok(msg) => {
+                if msg.data.is_empty() {
+                    break;
+                }
                 let item = match json_deserialize::<T>(&msg.data) {
                     Ok(item) => item,
                     Err(e) => {
