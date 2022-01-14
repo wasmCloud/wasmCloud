@@ -4,10 +4,12 @@ use common::{get_json_output, test_dir_file, test_dir_with_subfolder, wash};
 use serde_json::json;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::fs::create_dir_all;
-use std::fs::{remove_dir_all, File};
-use std::io::prelude::*;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::path::PathBuf;
+use std::{
+    fs::{remove_dir_all, File},
+    io::prelude::*,
+};
 
 const LIB: &str = "wasmcloudcache";
 const OCI: &str = "wasmcloud_ocicache";

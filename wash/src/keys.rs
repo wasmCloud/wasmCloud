@@ -3,6 +3,7 @@ use crate::{
     util::{set_permissions_keys, CommandOutput, OutputKind},
 };
 use anyhow::{bail, Context, Result};
+use clap::Subcommand;
 use nkeys::{KeyPair, KeyPairType};
 use serde_json::json;
 use std::{
@@ -12,35 +13,22 @@ use std::{
     io::prelude::*,
     path::{Path, PathBuf},
 };
-use structopt::StructOpt;
 
-#[derive(Debug, Clone, StructOpt)]
-pub(crate) struct KeysCli {
-    #[structopt(flatten)]
-    command: KeysCliCommand,
-}
-
-impl KeysCli {
-    pub(crate) fn command(self) -> KeysCliCommand {
-        self.command
-    }
-}
-
-#[derive(Debug, Clone, StructOpt)]
+#[derive(Debug, Clone, Subcommand)]
 #[allow(clippy::enum_variant_names)]
 pub(crate) enum KeysCliCommand {
-    #[structopt(name = "gen", about = "Generates a keypair")]
+    #[clap(name = "gen", about = "Generates a keypair")]
     GenCommand {
         /// The type of keypair to generate. May be Account, User, Module (Actor), Service (Capability Provider), Server, Operator, Cluster
-        #[structopt(case_insensitive = true)]
+        #[clap(ignore_case = true)]
         keytype: KeyPairType,
     },
-    #[structopt(name = "get", about = "Retrieves a keypair and prints the contents")]
+    #[clap(name = "get", about = "Retrieves a keypair and prints the contents")]
     GetCommand {
-        #[structopt(help = "The name of the key to output")]
+        #[clap(help = "The name of the key to output")]
         keyname: String,
-        #[structopt(
-            short = "d",
+        #[clap(
+            short = 'd',
             long = "directory",
             env = "WASH_KEYS",
             hide_env_values = true,
@@ -48,10 +36,10 @@ pub(crate) enum KeysCliCommand {
         )]
         directory: Option<PathBuf>,
     },
-    #[structopt(name = "list", about = "Lists all keypairs in a directory")]
+    #[clap(name = "list", about = "Lists all keypairs in a directory")]
     ListCommand {
-        #[structopt(
-            short = "d",
+        #[clap(
+            short = 'd',
             long = "directory",
             env = "WASH_KEYS",
             hide_env_values = true,
@@ -243,12 +231,17 @@ fn keypair_type_to_string(keypair_type: KeyPairType) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{generate, KeysCli, KeysCliCommand};
+    use super::{generate, KeysCliCommand};
+    use clap::Parser;
     use nkeys::KeyPairType;
     use serde::Deserialize;
     use std::path::PathBuf;
-    use structopt::StructOpt;
 
+    #[derive(Debug, Parser)]
+    struct Cmd {
+        #[clap(subcommand)]
+        keys: KeysCliCommand,
+    }
     #[test]
     fn test_generate_basic_test() {
         let kt = KeyPairType::Account;
@@ -382,8 +375,8 @@ mod tests {
         ];
 
         key_gen_types.iter().for_each(|cmd| {
-            let gen_cmd = KeysCli::from_iter(&["keys", "gen", cmd]);
-            match gen_cmd.command {
+            let gen_cmd: Cmd = clap::Parser::try_parse_from(&["keys", "gen", cmd]).unwrap();
+            match gen_cmd.keys {
                 KeysCliCommand::GenCommand { keytype } => {
                     use KeyPairType::*;
                     match keytype {
@@ -401,8 +394,8 @@ mod tests {
         });
 
         key_gen_types.iter().for_each(|cmd| {
-            let gen_cmd = KeysCli::from_iter(&["keys", "gen", cmd]);
-            match gen_cmd.command {
+            let gen_cmd: Cmd = clap::Parser::try_parse_from(&["keys", "gen", cmd]).unwrap();
+            match gen_cmd.keys {
                 KeysCliCommand::GenCommand { keytype } => {
                     use KeyPairType::*;
                     match keytype {
@@ -425,8 +418,10 @@ mod tests {
         const KEYNAME: &str = "get_basic_test.nk";
         const KEYPATH: &str = "./tests/fixtures";
 
-        let get_basic = KeysCli::from_iter(&["keys", "get", KEYNAME, "--directory", KEYPATH]);
-        match get_basic.command {
+        let gen_basic: Cmd =
+            clap::Parser::try_parse_from(&["keys", "get", KEYNAME, "--directory", KEYPATH])
+                .unwrap();
+        match gen_basic.keys {
             KeysCliCommand::GetCommand { keyname, .. } => assert_eq!(keyname, KEYNAME),
             other_cmd => panic!("keys get generated other command {:?}", other_cmd),
         }
@@ -440,8 +435,9 @@ mod tests {
         const KEYPATH: &str = "./tests/fixtures";
         const KEYNAME: &str = "get_comprehensive_test.nk";
 
-        let get_all_flags = KeysCli::from_iter(&["keys", "get", KEYNAME, "-d", KEYPATH]);
-        match get_all_flags.command {
+        let get_all_flags: Cmd =
+            clap::Parser::try_parse_from(&["keys", "get", KEYNAME, "-d", KEYPATH]).unwrap();
+        match get_all_flags.keys {
             KeysCliCommand::GetCommand { keyname, directory } => {
                 assert_eq!(keyname, KEYNAME);
                 assert_eq!(directory, Some(PathBuf::from(KEYPATH)));
@@ -457,14 +453,16 @@ mod tests {
     fn test_list_comprehensive() {
         const KEYPATH: &str = "./";
 
-        let list_basic = KeysCli::from_iter(&["keys", "list", "-d", KEYPATH]);
-        match list_basic.command {
+        let list_basic: Cmd =
+            clap::Parser::try_parse_from(&["keys", "list", "-d", KEYPATH]).unwrap();
+        match list_basic.keys {
             KeysCliCommand::ListCommand { .. } => (),
             other_cmd => panic!("keys get generated other command {:?}", other_cmd),
         }
 
-        let list_all_flags = KeysCli::from_iter(&["keys", "list", "-d", KEYPATH]);
-        match list_all_flags.command {
+        let list_all_flags: Cmd =
+            clap::Parser::try_parse_from(&["keys", "list", "-d", KEYPATH]).unwrap();
+        match list_all_flags.keys {
             KeysCliCommand::ListCommand { directory } => {
                 assert_eq!(directory, Some(PathBuf::from(KEYPATH)));
             }

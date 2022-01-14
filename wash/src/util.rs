@@ -1,5 +1,4 @@
 use anyhow::{anyhow, bail, Result};
-use nats::asynk::Connection;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -12,11 +11,13 @@ use std::{
     str::FromStr,
 };
 use term_table::{Table, TableStyle};
+use wasmbus_rpc::anats;
 
 pub const DEFAULT_NATS_HOST: &str = "127.0.0.1";
 pub const DEFAULT_NATS_PORT: &str = "4222";
 pub const DEFAULT_LATTICE_PREFIX: &str = "default";
-pub const DEFAULT_NATS_TIMEOUT: u64 = 2_000;
+pub const DEFAULT_NATS_TIMEOUT_MS: u64 = 2_000;
+pub const DEFAULT_START_PROVIDER_TIMEOUT_MS: u64 = 60_000;
 
 /// Used for displaying human-readable output vs JSON format
 #[derive(Debug, Copy, Clone, Serialize, Deserialize, PartialEq)]
@@ -114,6 +115,10 @@ impl Default for CommandOutput {
             text: "".to_string(),
         }
     }
+}
+
+pub(crate) fn default_timeout_ms() -> u64 {
+    DEFAULT_NATS_TIMEOUT_MS
 }
 
 /// Converts error from Send + Sync error to standard anyhow error
@@ -227,7 +232,7 @@ pub(crate) async fn nats_client_from_opts(
     jwt: Option<String>,
     seed: Option<String>,
     credsfile: Option<PathBuf>,
-) -> Result<Connection> {
+) -> Result<anats::Connection> {
     let nats_url = format!("{}:{}", host, port);
 
     let nc = if let Some(jwt_file) = jwt {
@@ -237,8 +242,9 @@ pub(crate) async fn nats_client_from_opts(
         } else {
             nkeys::KeyPair::new_user()
         };
+
         // You must provide the JWT via a closure
-        nats::asynk::Options::with_jwt(
+        anats::Options::with_jwt(
             move || Ok(jwt_contents.clone()),
             move |nonce| kp.sign(nonce).unwrap(),
         )
@@ -246,15 +252,15 @@ pub(crate) async fn nats_client_from_opts(
         .await?
     } else if let Some(seed) = seed {
         let kp = nkeys::KeyPair::from_seed(&extract_arg_value(&seed)?)?;
-        nats::asynk::Options::with_nkey(&kp.public_key(), move |nonce| kp.sign(nonce).unwrap())
+        anats::Options::with_nkey(&kp.public_key(), move |nonce| kp.sign(nonce).unwrap())
             .connect(&nats_url)
             .await?
     } else if let Some(credsfile_path) = credsfile {
-        nats::asynk::Options::with_credentials(credsfile_path)
+        anats::Options::with_credentials(credsfile_path)
             .connect(&nats_url)
             .await?
     } else {
-        nats::asynk::connect(&nats_url).await?
+        anats::connect(&nats_url).await?
     };
     Ok(nc)
 }
@@ -273,7 +279,7 @@ pub(crate) fn cached_file(img: &str) -> PathBuf {
 }
 
 pub(crate) fn img_name_to_file_name(img: &str) -> String {
-    img.replace(":", "_").replace("/", "_").replace(".", "_")
+    img.replace(':', "_").replace('/', "_").replace('.', "_")
 }
 
 // Check if the contract ID parameter is a 56 character key and suggest that the user

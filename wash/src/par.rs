@@ -4,64 +4,49 @@ use crate::{
     util::{self, convert_error, CommandOutput, OutputKind},
 };
 use anyhow::{anyhow, bail, Context, Result};
+use clap::{Parser, Subcommand};
 use nkeys::KeyPairType;
 use provider_archive::*;
 use serde_json::json;
 use std::{collections::HashMap, fs::File, io::prelude::*, path::PathBuf};
-use structopt::{clap::AppSettings, StructOpt};
 use term_table::{row::Row, table_cell::*, Table};
 
 const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
 
-#[derive(Debug, StructOpt, Clone)]
-#[structopt(
-    global_settings(&[AppSettings::ColoredHelp, AppSettings::VersionlessSubcommands]),
-    name = "par")]
-pub(crate) struct ParCli {
-    #[structopt(flatten)]
-    command: ParCliCommand,
-}
-
-impl ParCli {
-    pub(crate) fn command(self) -> ParCliCommand {
-        self.command
-    }
-}
-
-#[derive(Debug, Clone, StructOpt)]
+#[derive(Debug, Clone, Subcommand)]
 pub(crate) enum ParCliCommand {
     /// Build a provider archive file
-    #[structopt(name = "create")]
+    #[clap(name = "create")]
     Create(CreateCommand),
     /// Inspect a provider archive file
-    #[structopt(name = "inspect")]
+    #[clap(name = "inspect")]
     Inspect(InspectCommand),
     /// Insert a provider into a provider archive file
-    #[structopt(name = "insert")]
+    #[clap(name = "insert")]
     Insert(InsertCommand),
 }
 
-#[derive(StructOpt, Debug, Clone)]
+#[derive(Parser, Debug, Clone)]
 pub(crate) struct CreateCommand {
     /// Capability contract ID (e.g. wasmcloud:messaging or wasmcloud:keyvalue).
-    #[structopt(short = "c", long = "capid")]
+    #[clap(short = 'c', long = "capid")]
     capid: String,
 
     /// Vendor string to help identify the publisher of the provider (e.g. Redis, Cassandra, wasmcloud, etc). Not unique.
-    #[structopt(short = "v", long = "vendor")]
+    #[clap(short = 'v', long = "vendor")]
     vendor: String,
 
     /// Monotonically increasing revision number
-    #[structopt(short = "r", long = "revision")]
+    #[clap(short = 'r', long = "revision")]
     revision: Option<i32>,
 
     /// Human friendly version string
-    #[structopt(long = "version")]
+    #[clap(long = "version")]
     version: Option<String>,
 
     /// Location of key files for signing. Defaults to $WASH_KEYS ($HOME/.wash/keys)
-    #[structopt(
-        short = "d",
+    #[clap(
+        short = 'd',
         long = "directory",
         env = "WASH_KEYS",
         hide_env_values = true
@@ -69,8 +54,8 @@ pub(crate) struct CreateCommand {
     directory: Option<PathBuf>,
 
     /// Path to issuer seed key (account). If this flag is not provided, the will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
-    #[structopt(
-        short = "i",
+    #[clap(
+        short = 'i',
         long = "issuer",
         env = "WASH_ISSUER_KEY",
         hide_env_values = true
@@ -78,8 +63,8 @@ pub(crate) struct CreateCommand {
     issuer: Option<String>,
 
     /// Path to subject seed key (service). If this flag is not provided, the will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
-    #[structopt(
-        short = "s",
+    #[clap(
+        short = 's',
         long = "subject",
         env = "WASH_SUBJECT_KEY",
         hide_env_values = true
@@ -87,47 +72,47 @@ pub(crate) struct CreateCommand {
     subject: Option<String>,
 
     /// Name of the capability provider
-    #[structopt(short = "n", long = "name")]
+    #[clap(short = 'n', long = "name")]
     name: String,
 
     /// Architecture of provider binary in format ARCH-OS (e.g. x86_64-linux)
-    #[structopt(short = "a", long = "arch")]
+    #[clap(short = 'a', long = "arch")]
     arch: String,
 
     /// Path to provider binary for populating the archive
-    #[structopt(short = "b", long = "binary")]
+    #[clap(short = 'b', long = "binary")]
     binary: String,
 
     /// File output destination path
-    #[structopt(long = "destination")]
+    #[clap(long = "destination")]
     destination: Option<String>,
 
     /// Include a compressed provider archive
-    #[structopt(long = "compress")]
+    #[clap(long = "compress")]
     compress: bool,
 
     /// Disables autogeneration of signing keys
-    #[structopt(long = "disable-keygen")]
+    #[clap(long = "disable-keygen")]
     disable_keygen: bool,
 }
 
-#[derive(StructOpt, Debug, Clone)]
+#[derive(Parser, Debug, Clone)]
 pub(crate) struct InspectCommand {
     /// Path to provider archive or OCI URL of provider archive
-    #[structopt(name = "archive")]
+    #[clap(name = "archive")]
     archive: String,
 
     /// Digest to verify artifact against (if OCI URL is provided for <archive>)
-    #[structopt(short = "d", long = "digest")]
+    #[clap(short = 'd', long = "digest")]
     digest: Option<String>,
 
     /// Allow latest artifact tags (if OCI URL is provided for <archive>)
-    #[structopt(long = "allow-latest")]
+    #[clap(long = "allow-latest")]
     allow_latest: bool,
 
     /// OCI username, if omitted anonymous authentication will be used
-    #[structopt(
-        short = "u",
+    #[clap(
+        short = 'u',
         long = "user",
         env = "WASH_REG_USER",
         hide_env_values = true
@@ -135,8 +120,8 @@ pub(crate) struct InspectCommand {
     user: Option<String>,
 
     /// OCI password, if omitted anonymous authentication will be used
-    #[structopt(
-        short = "p",
+    #[clap(
+        short = 'p',
         long = "password",
         env = "WASH_REG_PASSWORD",
         hide_env_values = true
@@ -144,31 +129,31 @@ pub(crate) struct InspectCommand {
     password: Option<String>,
 
     /// Allow insecure (HTTP) registry connections
-    #[structopt(long = "insecure")]
+    #[clap(long = "insecure")]
     insecure: bool,
 
     /// skip the local OCI cache
-    #[structopt(long = "no-cache")]
+    #[clap(long = "no-cache")]
     no_cache: bool,
 }
 
-#[derive(StructOpt, Debug, Clone)]
+#[derive(Parser, Debug, Clone)]
 pub(crate) struct InsertCommand {
     /// Path to provider archive
-    #[structopt(name = "archive")]
+    #[clap(name = "archive")]
     archive: String,
 
     /// Architecture of binary in format ARCH-OS (e.g. x86_64-linux)
-    #[structopt(short = "a", long = "arch")]
+    #[clap(short = 'a', long = "arch")]
     arch: String,
 
     /// Path to provider binary to insert into archive
-    #[structopt(short = "b", long = "binary")]
+    #[clap(short = 'b', long = "binary")]
     binary: String,
 
     /// Location of key files for signing. Defaults to $WASH_KEYS ($HOME/.wash/keys)
-    #[structopt(
-        short = "d",
+    #[clap(
+        short = 'd',
         long = "directory",
         env = "WASH_KEYS",
         hide_env_values = true
@@ -176,8 +161,8 @@ pub(crate) struct InsertCommand {
     directory: Option<PathBuf>,
 
     /// Path to issuer seed key (account). If this flag is not provided, the will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
-    #[structopt(
-        short = "i",
+    #[clap(
+        short = 'i',
         long = "issuer",
         env = "WASH_ISSUER_KEY",
         hide_env_values = true
@@ -185,8 +170,8 @@ pub(crate) struct InsertCommand {
     issuer: Option<String>,
 
     /// Path to subject seed key (service). If this flag is not provided, the will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
-    #[structopt(
-        short = "s",
+    #[clap(
+        short = 's',
         long = "subject",
         env = "WASH_SUBJECT_KEY",
         hide_env_values = true
@@ -194,7 +179,7 @@ pub(crate) struct InsertCommand {
     subject: Option<String>,
 
     /// Disables autogeneration of signing keys
-    #[structopt(long = "disable-keygen")]
+    #[clap(long = "disable-keygen")]
     disable_keygen: bool,
 }
 
@@ -418,13 +403,19 @@ fn is_compressed(input: &[u8]) -> Result<bool> {
 mod test {
     use super::*;
 
+    #[derive(Parser, Debug)]
+    struct Cmd {
+        #[clap(subcommand)]
+        par: ParCliCommand,
+    }
+
     // Uses all flags and options of the `par create` command
     // to ensure API does not change between versions
     #[test]
     fn test_par_create_comprehensive() {
         const ISSUER: &str = "SAAJLQZDZO57THPTIIEELEY7FJYOJZQWQD7FF4J67TUYTSCOXTF7R4Y3VY";
         const SUBJECT: &str = "SVAH7IN6QE6XODCGIIWZQDZ5LNSSS4FNEO6SNHZSSASW4BBBKSZ6KWTKWY";
-        let create_long = ParCli::from_iter_safe(&[
+        let create_long: Cmd = clap::Parser::try_parse_from(&[
             "par",
             "create",
             "--arch",
@@ -453,7 +444,7 @@ mod test {
             "--compress",
         ])
         .unwrap();
-        match create_long.command {
+        match create_long.par {
             ParCliCommand::Create(CreateCommand {
                 capid,
                 vendor,
@@ -485,7 +476,7 @@ mod test {
             }
             cmd => panic!("par insert constructed incorrect command {:?}", cmd),
         }
-        let create_short = ParCli::from_iter_safe(&[
+        let create_short: Cmd = clap::Parser::try_parse_from(&[
             "par",
             "create",
             "-a",
@@ -512,7 +503,7 @@ mod test {
             SUBJECT,
         ])
         .unwrap();
-        match create_short.command {
+        match create_short.par {
             ParCliCommand::Create(CreateCommand {
                 capid,
                 vendor,
@@ -552,7 +543,7 @@ mod test {
     fn test_par_insert_comprehensive() {
         const ISSUER: &str = "SAAJLQZDZO57THPTQLEELEY7FJYOJZQWQD7FF4J67TUYTSCOXTF7R4Y3VY";
         const SUBJECT: &str = "SVAH7IN6QE6XODCGQAWZQDZ5LNSSS4FNEO6SNHZSSASW4BBBKSZ6KWTKWY";
-        let insert_short = ParCli::from_iter_safe(&[
+        let insert_short: Cmd = clap::Parser::try_parse_from(&[
             "par",
             "insert",
             "libtest.par.gz",
@@ -569,7 +560,7 @@ mod test {
             "--disable-keygen",
         ])
         .unwrap();
-        match insert_short.command {
+        match insert_short.par {
             ParCliCommand::Insert(InsertCommand {
                 archive,
                 arch,
@@ -589,7 +580,7 @@ mod test {
             }
             cmd => panic!("par insert constructed incorrect command {:?}", cmd),
         }
-        let insert_long = ParCli::from_iter_safe(&[
+        let insert_long: Cmd = clap::Parser::try_parse_from(&[
             "par",
             "insert",
             "libtest.par.gz",
@@ -605,7 +596,7 @@ mod test {
             SUBJECT,
         ])
         .unwrap();
-        match insert_long.command {
+        match insert_long.par {
             ParCliCommand::Insert(InsertCommand {
                 archive,
                 arch,
@@ -634,7 +625,7 @@ mod test {
         const LOCAL: &str = "./coolthing.par.gz";
         const REMOTE: &str = "wasmcloud.azurecr.io/coolthing.par.gz";
 
-        let inspect_long = ParCli::from_iter_safe(&[
+        let inspect_long: Cmd = clap::Parser::try_parse_from(&[
             "par",
             "inspect",
             LOCAL,
@@ -647,7 +638,7 @@ mod test {
             "--no-cache",
         ])
         .unwrap();
-        match inspect_long.command {
+        match inspect_long.par {
             ParCliCommand::Inspect(InspectCommand {
                 archive,
                 digest,
@@ -667,7 +658,7 @@ mod test {
             }
             cmd => panic!("par inspect constructed incorrect command {:?}", cmd),
         }
-        let inspect_short = ParCli::from_iter_safe(&[
+        let inspect_short: Cmd = clap::Parser::try_parse_from(&[
             "par",
             "inspect",
             REMOTE,
@@ -682,7 +673,7 @@ mod test {
             "--no-cache",
         ])
         .unwrap();
-        match inspect_short.command {
+        match inspect_short.par {
             ParCliCommand::Inspect(InspectCommand {
                 archive,
                 digest,

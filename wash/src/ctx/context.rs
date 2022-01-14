@@ -1,6 +1,9 @@
 use crate::{
     id::ClusterSeed,
-    util::{DEFAULT_LATTICE_PREFIX, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT, DEFAULT_NATS_TIMEOUT},
+    util::{
+        default_timeout_ms, DEFAULT_LATTICE_PREFIX, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT,
+        DEFAULT_NATS_TIMEOUT_MS,
+    },
 };
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -33,7 +36,8 @@ pub(crate) struct WashContext {
     #[serde(with = "serde_with::rust::string_empty_as_none")]
     pub ctl_seed: Option<String>,
     pub ctl_credsfile: Option<PathBuf>,
-    #[serde(default = "default_timeout")]
+    /// timeout in milliseconds
+    #[serde(default = "default_timeout_ms")]
     pub ctl_timeout: u64,
 
     #[serde(default = "default_lattice_prefix")]
@@ -48,7 +52,8 @@ pub(crate) struct WashContext {
     #[serde(with = "serde_with::rust::string_empty_as_none")]
     pub rpc_seed: Option<String>,
     pub rpc_credsfile: Option<PathBuf>,
-    #[serde(default = "default_timeout")]
+    /// rpc timeout in milliseconds
+    #[serde(default = "default_timeout_ms")]
     pub rpc_timeout: u64,
 
     #[serde(default = "default_lattice_prefix")]
@@ -113,14 +118,14 @@ impl Default for WashContext {
             ctl_jwt: None,
             ctl_seed: None,
             ctl_credsfile: None,
-            ctl_timeout: DEFAULT_NATS_TIMEOUT,
+            ctl_timeout: DEFAULT_NATS_TIMEOUT_MS,
             ctl_lattice_prefix: DEFAULT_LATTICE_PREFIX.to_string(),
             rpc_host: DEFAULT_NATS_HOST.to_string(),
             rpc_port: DEFAULT_NATS_PORT.parse().unwrap(),
             rpc_jwt: None,
             rpc_seed: None,
             rpc_credsfile: None,
-            rpc_timeout: DEFAULT_NATS_TIMEOUT,
+            rpc_timeout: DEFAULT_NATS_TIMEOUT_MS,
             rpc_lattice_prefix: DEFAULT_LATTICE_PREFIX.to_string(),
         }
     }
@@ -138,8 +143,4 @@ fn default_nats_port() -> u16 {
 
 fn default_lattice_prefix() -> String {
     DEFAULT_LATTICE_PREFIX.to_string()
-}
-
-fn default_timeout() -> u64 {
-    DEFAULT_NATS_TIMEOUT
 }

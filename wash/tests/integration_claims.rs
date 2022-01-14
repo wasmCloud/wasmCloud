@@ -2,8 +2,10 @@ mod common;
 use assert_json_diff::assert_json_include;
 use common::{get_json_output, output_to_string, test_dir_file, test_dir_with_subfolder, wash};
 use serde_json::json;
-use std::env::temp_dir;
-use std::fs::{remove_dir_all, remove_file};
+use std::{
+    env::temp_dir,
+    fs::{remove_dir_all, remove_file},
+};
 
 #[test]
 fn integration_claims_sign() {
