@@ -1,32 +1,14 @@
 use crate::util::CommandOutput;
 use anyhow::Result;
+use clap::Subcommand;
 use serde_json::json;
 use std::{
     collections::HashMap,
     env, fs,
     path::{Path, PathBuf},
 };
-use structopt::StructOpt;
 
-#[derive(Debug, Clone, StructOpt)]
-pub(crate) struct DrainCli {
-    #[structopt(flatten)]
-    command: DrainCliCommand,
-}
-
-impl DrainCli {
-    pub(crate) fn command(self) -> DrainCliCommand {
-        self.command
-    }
-}
-
-#[derive(StructOpt, Debug, Clone)]
-pub(crate) struct DrainCliCommand {
-    #[structopt(subcommand)]
-    selection: DrainSelection,
-}
-
-#[derive(StructOpt, Debug, Clone)]
+#[derive(Subcommand, Debug, Clone)]
 pub(crate) enum DrainSelection {
     /// Remove all cached files created by wasmcloud
     All,
@@ -67,10 +49,9 @@ fn model_cache_dir() -> PathBuf {
     }
 }
 
-impl DrainCliCommand {
+impl DrainSelection {
     fn drain(&self) -> Result<CommandOutput> {
         let cleared = self
-            .selection
             .into_iter()
             .filter(|path| path.exists())
             .map(remove_dir_contents)
@@ -85,7 +66,7 @@ impl DrainCliCommand {
     }
 }
 
-pub(crate) fn handle_command(cmd: DrainCliCommand) -> Result<CommandOutput> {
+pub(crate) fn handle_command(cmd: DrainSelection) -> Result<CommandOutput> {
     cmd.drain()
 }
 
@@ -104,27 +85,35 @@ fn remove_dir_contents<P: AsRef<Path>>(path: P) -> Result<String> {
 #[cfg(test)]
 mod test {
     use super::*;
+    use clap::Parser;
+
+    #[derive(Parser)]
+    struct Cmd {
+        #[clap(subcommand)]
+        drain: DrainSelection,
+    }
+
     #[test]
     // Enumerates all options of drain subcommands to ensure
     // changes are not made to the drain API
     fn test_drain_comprehensive() {
-        let all = DrainCli::from_iter_safe(&["drain", "all"]).unwrap();
-        match all.command.selection {
+        let all: Cmd = Parser::try_parse_from(&["drain", "all"]).unwrap();
+        match all.drain {
             DrainSelection::All => {}
             _ => panic!("drain constructed incorrect command"),
         }
-        let lib = DrainCli::from_iter_safe(&["drain", "lib"]).unwrap();
-        match lib.command.selection {
+        let lib: Cmd = Parser::try_parse_from(&["drain", "lib"]).unwrap();
+        match lib.drain {
             DrainSelection::Lib => {}
             _ => panic!("drain constructed incorrect command"),
         }
-        let oci = DrainCli::from_iter_safe(&["drain", "oci"]).unwrap();
-        match oci.command.selection {
+        let oci: Cmd = Parser::try_parse_from(&["drain", "oci"]).unwrap();
+        match oci.drain {
             DrainSelection::Oci => {}
             _ => panic!("drain constructed incorrect command"),
         }
-        let smithy = DrainCli::from_iter_safe(&["drain", "smithy"]).unwrap();
-        match smithy.command.selection {
+        let smithy: Cmd = Parser::try_parse_from(&["drain", "smithy"]).unwrap();
+        match smithy.drain {
             DrainSelection::Smithy => {}
             _ => panic!("drain constructed incorrect command"),
         }

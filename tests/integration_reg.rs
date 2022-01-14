@@ -1,8 +1,10 @@
 mod common;
 use common::{get_json_output, output_to_string, test_dir_file, test_dir_with_subfolder, wash};
 use serde_json::json;
-use std::fs::{remove_dir_all, File};
-use std::io::prelude::*;
+use std::{
+    fs::{remove_dir_all, File},
+    io::prelude::*,
+};
 
 const ECHO_WASM: &str = "wasmcloud.azurecr.io/echo:0.2.0";
 const LOGGING_PAR: &str = "wasmcloud.azurecr.io/logging:0.9.1";

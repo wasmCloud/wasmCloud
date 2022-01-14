@@ -37,10 +37,10 @@
 //
 
 use anyhow::{anyhow, Context, Result};
+use clap::{ArgEnum, Args, Subcommand};
 use config::{Config, CONFIG_FILE_NAME};
 use console::style;
 use git::GitConfig;
-use heck::KebabCase;
 use indicatif::MultiProgress;
 use project_variables::*;
 use serde::Serialize;
@@ -49,7 +49,6 @@ use std::{
     fmt, fs,
     path::{Path, PathBuf},
 };
-use structopt::StructOpt;
 use tempfile::TempDir;
 use weld_codegen::render::Renderer;
 
@@ -70,35 +69,23 @@ pub(crate) type ParamMap = std::collections::BTreeMap<String, serde_json::Value>
 pub(crate) const PROJECT_NAME_REGEX: &str = r"^([a-zA-Z][a-zA-Z0-9_-]+)$";
 
 /// Create a new project from template
-#[derive(Debug, Clone, StructOpt)]
-pub(crate) struct NewCli {
-    #[structopt(flatten)]
-    command: NewCliCommand,
-}
-
-impl NewCli {
-    pub(crate) fn command(self) -> NewCliCommand {
-        self.command
-    }
-}
-
-#[derive(Debug, Clone, StructOpt)]
+#[derive(Debug, Clone, Subcommand)]
 pub(crate) enum NewCliCommand {
     /// Generate actor project
-    #[structopt(name = "actor")]
+    #[clap(name = "actor")]
     Actor(NewProjectArgs),
 
     /// Generate a new interface project
-    #[structopt(name = "interface")]
+    #[clap(name = "interface")]
     Interface(NewProjectArgs),
 
     /// Generate a new capability provider project
-    #[structopt(name = "provider")]
+    #[clap(name = "provider")]
     Provider(NewProjectArgs),
 }
 
 /// Type of project to be generated
-#[derive(Debug)]
+#[derive(Debug, Clone, ArgEnum)]
 pub(crate) enum ProjectKind {
     Actor,
     Interface,
@@ -129,47 +116,47 @@ impl fmt::Display for ProjectKind {
     }
 }
 
-#[derive(StructOpt, Debug, Default, Clone)]
+#[derive(Args, Debug, Default, Clone)]
 pub(crate) struct NewProjectArgs {
     /// Project name
-    #[structopt(help = "Project name")]
+    #[clap(help = "Project name")]
     pub(crate) project_name: Option<String>,
 
     /// Github repository url
-    #[structopt(long)]
+    #[clap(long)]
     pub(crate) git: Option<String>,
 
     /// Optional subfolder of the git repository
-    #[structopt(long, alias = "subdir")]
+    #[clap(long, alias = "subdir")]
     pub(crate) subfolder: Option<PathBuf>,
 
     /// Optional github branch
-    #[structopt(long)]
+    #[clap(long)]
     pub(crate) branch: Option<String>,
 
     /// Optional path for template project
-    #[structopt(short, long)]
+    #[clap(short, long)]
     pub(crate) path: Option<PathBuf>,
 
     /// optional path to file containing placeholder values
-    #[structopt(short, long)]
+    #[clap(short, long)]
     pub(crate) values: Option<PathBuf>,
 
     /// ssh identity file, for ssh authentication
-    #[structopt(short = "i", long)]
+    #[clap(short = 'i', long)]
     pub(crate) ssh_identity: Option<PathBuf>,
 
     /// silent - do not prompt user. Placeholder values in the templates
     /// will be resolved from a '--values' file and placeholder defaults.
-    #[structopt(long)]
+    #[clap(long)]
     pub(crate) silent: bool,
 
     /// favorites file - to use for project selection
-    #[structopt(long)]
+    #[clap(long)]
     pub(crate) favorites: Option<PathBuf>,
 
     /// template name - name of template to use
-    #[structopt(short, long)]
+    #[clap(short, long)]
     pub(crate) template_name: Option<String>,
 }
 
@@ -602,6 +589,7 @@ impl ProjectName {
     }
 
     pub(crate) fn kebab_case(&self) -> String {
+        use heck::ToKebabCase as _;
         self.user_input.to_kebab_case()
     }
 }

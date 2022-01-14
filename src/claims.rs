@@ -17,6 +17,7 @@ use crate::{
     util::{CommandOutput, OutputKind},
 };
 use anyhow::{bail, Context, Result};
+use clap::{AppSettings, Args, Parser, Subcommand};
 use nkeys::{KeyPair, KeyPairType};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::json;
@@ -26,7 +27,6 @@ use std::{
     io::{Read, Write},
     path::PathBuf,
 };
-use structopt::{clap::AppSettings, StructOpt};
 use term_table::{
     row::Row,
     table_cell::{Alignment, TableCell},
@@ -40,55 +40,41 @@ use wascap::{
     wasm::{days_from_now_to_jwt_time, sign_buffer_with_claims},
 };
 
-#[derive(Debug, StructOpt, Clone)]
-#[structopt(
-    global_settings(&[AppSettings::ColoredHelp, AppSettings::VersionlessSubcommands]),
-    name = "claims")]
-pub(crate) struct ClaimsCli {
-    #[structopt(flatten)]
-    command: ClaimsCliCommand,
-}
-
-impl ClaimsCli {
-    pub(crate) fn command(self) -> ClaimsCliCommand {
-        self.command
-    }
-}
-
-#[derive(Debug, Clone, StructOpt)]
+#[derive(Debug, Clone, Subcommand)]
+#[clap(setting(AppSettings::DisableHelpFlag))]
 pub(crate) enum ClaimsCliCommand {
     /// Examine the capabilities of a WebAssembly module
-    #[structopt(name = "inspect")]
+    #[clap(name = "inspect")]
     Inspect(InspectCommand),
     /// Sign a WebAssembly module, specifying capabilities and other claims
     /// including expiration, tags, and additional metadata
-    #[structopt(name = "sign")]
+    #[clap(name = "sign")]
     Sign(SignCommand),
     /// Generate a signed JWT by supplying basic token information, a signing seed key, and metadata
-    #[structopt(name = "token")]
+    #[clap(name = "token", subcommand)]
     Token(TokenCommand),
 }
 
-#[derive(StructOpt, Debug, Clone)]
+#[derive(Args, Debug, Clone)]
 pub(crate) struct InspectCommand {
     /// Path to signed actor module or OCI URL of signed actor module
     pub(crate) module: String,
 
     /// Extract the raw JWT from the file and print to stdout
-    #[structopt(name = "jwt_only", long = "jwt-only")]
+    #[clap(name = "jwt_only", long = "jwt-only")]
     jwt_only: bool,
 
     /// Digest to verify artifact against (if OCI URL is provided for <module>)
-    #[structopt(short = "d", long = "digest")]
+    #[clap(short = 'd', long = "digest")]
     digest: Option<String>,
 
     /// Allow latest artifact tags (if OCI URL is provided for <module>)
-    #[structopt(long = "allow-latest")]
+    #[clap(long = "allow-latest")]
     allow_latest: bool,
 
     /// OCI username, if omitted anonymous authentication will be used
-    #[structopt(
-        short = "u",
+    #[clap(
+        short = 'u',
         long = "user",
         env = "WASH_REG_USER",
         hide_env_values = true
@@ -96,8 +82,8 @@ pub(crate) struct InspectCommand {
     user: Option<String>,
 
     /// OCI password, if omitted anonymous authentication will be used
-    #[structopt(
-        short = "p",
+    #[clap(
+        short = 'p',
         long = "password",
         env = "WASH_REG_PASSWORD",
         hide_env_values = true
@@ -105,71 +91,71 @@ pub(crate) struct InspectCommand {
     password: Option<String>,
 
     /// Allow insecure (HTTP) registry connections
-    #[structopt(long = "insecure")]
+    #[clap(long = "insecure")]
     insecure: bool,
 
     /// skip the local OCI cache
-    #[structopt(long = "no-cache")]
+    #[clap(long = "no-cache")]
     no_cache: bool,
 }
 
-#[derive(StructOpt, Debug, Clone)]
+#[derive(Parser, Debug, Clone)]
 pub(crate) struct SignCommand {
     /// File to read
     pub(crate) source: String,
 
     /// Destination for signed module. If this flag is not provided, the signed module will be placed in the same directory as the source with a "_s" suffix
-    #[structopt(short = "d", long = "destination")]
+    #[clap(short = 'd', long = "destination")]
     destination: Option<String>,
 
-    #[structopt(flatten)]
+    #[clap(flatten)]
     metadata: ActorMetadata,
 }
 
-#[derive(Debug, Clone, StructOpt)]
+#[derive(Debug, Clone, Subcommand)]
 pub(crate) enum TokenCommand {
     /// Generate a signed JWT for an actor module
-    #[structopt(name = "actor")]
+    #[clap(name = "actor")]
     Actor(ActorMetadata),
     /// Generate a signed JWT for an operator
-    #[structopt(name = "operator")]
+    #[clap(name = "operator")]
     Operator(OperatorMetadata),
     /// Generate a signed JWT for an account
-    #[structopt(name = "account")]
+    #[clap(name = "account")]
     Account(AccountMetadata),
     /// Generate a signed JWT for a service (capability provider)
-    #[structopt(name = "provider")]
+    #[clap(name = "provider")]
     Provider(ProviderMetadata),
 }
 
-#[derive(Debug, Clone, StructOpt, Serialize, Deserialize)]
+#[derive(Debug, Clone, Parser, Serialize, Deserialize)]
 struct GenerateCommon {
     /// Location of key files for signing. Defaults to $WASH_KEYS ($HOME/.wash/keys)
-    #[structopt(long = "directory", env = "WASH_KEYS", hide_env_values = true)]
+    #[clap(long = "directory", env = "WASH_KEYS", hide_env_values = true)]
     directory: Option<PathBuf>,
 
     /// Indicates the token expires in the given amount of days. If this option is left off, the token will never expire
-    #[structopt(short = "x", long = "expires")]
+    #[clap(short = 'x', long = "expires")]
     expires_in_days: Option<u64>,
 
     /// Period in days that must elapse before this token is valid. If this option is left off, the token will be valid immediately
-    #[structopt(short = "b", long = "nbf")]
+    #[clap(short = 'b', long = "nbf")]
     not_before_days: Option<u64>,
 
     /// Disables autogeneration of keys if seed(s) are not provided
-    #[structopt(long = "disable-keygen")]
+    #[clap(long = "disable-keygen")]
     disable_keygen: bool,
 }
 
-#[derive(Debug, Clone, StructOpt)]
+#[derive(Debug, Clone, Parser)]
 pub(crate) struct OperatorMetadata {
     /// A descriptive name for the operator
-    #[structopt(short = "n", long = "name")]
+    #[clap(short = 'n', long = "name")]
     name: String,
 
     /// Path to issuer seed key (self signing operator). If this flag is not provided, the will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
-    #[structopt(
-        short = "i",
+    #[clap(
+        short = 'i',
         long = "issuer",
         env = "WASH_ISSUER_KEY",
         hide_env_values = true
@@ -178,22 +164,22 @@ pub(crate) struct OperatorMetadata {
 
     /// Additional keys to add to valid signers list
     /// Can either be seed value or path to seed file
-    #[structopt(short = "a", long = "additional-key", name = "additional-keys")]
+    #[clap(short = 'a', long = "additional-key", name = "additional-keys")]
     additional_signing_keys: Option<Vec<String>>,
 
-    #[structopt(flatten)]
+    #[clap(flatten)]
     common: GenerateCommon,
 }
 
-#[derive(Debug, Clone, StructOpt)]
+#[derive(Debug, Clone, Parser)]
 pub(crate) struct AccountMetadata {
     /// A descriptive name for the account
-    #[structopt(short = "n", long = "name")]
+    #[clap(short = 'n', long = "name")]
     name: String,
 
     /// Path to issuer seed key (operator). If this flag is not provided, the will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
-    #[structopt(
-        short = "i",
+    #[clap(
+        short = 'i',
         long = "issuer",
         env = "WASH_ISSUER_KEY",
         hide_env_values = true
@@ -201,8 +187,8 @@ pub(crate) struct AccountMetadata {
     issuer: Option<String>,
 
     /// Path to subject seed key (account). If this flag is not provided, the will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
-    #[structopt(
-        short = "s",
+    #[clap(
+        short = 's',
         long = "subject",
         env = "WASH_SUBJECT_KEY",
         hide_env_values = true
@@ -211,38 +197,38 @@ pub(crate) struct AccountMetadata {
 
     /// Additional keys to add to valid signers list.
     /// Can either be seed value or path to seed file
-    #[structopt(short = "a", long = "additional-key", name = "additional-keys")]
+    #[clap(short = 'a', long = "additional-key", name = "additional-keys")]
     additional_signing_keys: Option<Vec<String>>,
 
-    #[structopt(flatten)]
+    #[clap(flatten)]
     common: GenerateCommon,
 }
 
-#[derive(Debug, Clone, StructOpt)]
+#[derive(Debug, Clone, Parser)]
 pub(crate) struct ProviderMetadata {
     /// A descriptive name for the provider
-    #[structopt(short = "n", long = "name")]
+    #[clap(short = 'n', long = "name")]
     name: String,
 
     /// Capability contract ID that this provider supports
-    #[structopt(short = "c", long = "capid")]
+    #[clap(short = 'c', long = "capid")]
     capid: String,
 
     /// A human-readable string identifying the vendor of this provider (e.g. Redis or Cassandra or NATS etc)
-    #[structopt(short = "v", long = "vendor")]
+    #[clap(short = 'v', long = "vendor")]
     vendor: String,
 
     /// Monotonically increasing revision number
-    #[structopt(short = "r", long = "revision")]
+    #[clap(short = 'r', long = "revision")]
     revision: Option<i32>,
 
     /// Human-friendly version string
-    #[structopt(short = "e", long = "version")]
+    #[clap(short = 'e', long = "version")]
     version: Option<String>,
 
     /// Path to issuer seed key (account). If this flag is not provided, the will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
-    #[structopt(
-        short = "i",
+    #[clap(
+        short = 'i',
         long = "issuer",
         env = "WASH_ISSUER_KEY",
         hide_env_values = true
@@ -250,69 +236,70 @@ pub(crate) struct ProviderMetadata {
     issuer: Option<String>,
 
     /// Path to subject seed key (service). If this flag is not provided, the will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
-    #[structopt(
-        short = "s",
+    #[clap(
+        short = 's',
         long = "subject",
         env = "WASH_SUBJECT_KEY",
         hide_env_values = true
     )]
     subject: Option<String>,
 
-    #[structopt(flatten)]
+    #[clap(flatten)]
     common: GenerateCommon,
 }
 
-#[derive(StructOpt, Debug, Clone, Serialize, Deserialize)]
+#[derive(Parser, Debug, Clone, Serialize, Deserialize)]
+#[clap(setting(AppSettings::DisableHelpFlag))]
 pub(crate) struct ActorMetadata {
     /// Enable the Key/Value Store standard capability
-    #[structopt(short = "k", long = "keyvalue")]
+    #[clap(short = 'k', long = "keyvalue")]
     keyvalue: bool,
     /// Enable the Message broker standard capability
-    #[structopt(short = "g", long = "msg")]
+    #[clap(short = 'g', long = "msg")]
     msg_broker: bool,
     /// Enable the HTTP server standard capability
-    #[structopt(short = "q", long = "http_server")]
+    #[clap(short = 'q', long = "http_server")]
     http_server: bool,
     /// Enable the HTTP client standard capability
-    #[structopt(short = "h", long = "http_client")]
+    #[clap(short = 'h', long = "http_client")]
     http_client: bool,
     /// Enable access to the blob store capability
-    #[structopt(short = "f", long = "blob_store")]
+    #[clap(short = 'f', long = "blob_store")]
     blob_store: bool,
     /// Enable access to the extras functionality (random nos, guids, etc)
-    #[structopt(short = "z", long = "extras")]
+    #[clap(short = 'z', long = "extras")]
     extras: bool,
     /// Enable access to logging capability
-    #[structopt(short = "l", long = "logging")]
+    #[clap(short = 'l', long = "logging")]
     logging: bool,
     /// Enable access to an append-only event stream provider
-    #[structopt(short = "e", long = "events")]
+    #[clap(short = 'e', long = "events")]
     eventstream: bool,
     /// A human-readable, descriptive name for the token
-    #[structopt(short = "n", long = "name")]
+    #[clap(short = 'n', long = "name")]
     name: String,
     /// Add custom capabilities
-    #[structopt(short = "c", long = "cap", name = "capabilities")]
+    #[clap(short = 'c', long = "cap", name = "capabilities")]
     custom_caps: Vec<String>,
     /// A list of arbitrary tags to be embedded in the token
-    #[structopt(short = "t", long = "tag")]
+    #[clap(short = 't', long = "tag")]
     tags: Vec<String>,
     /// Indicates whether the signed module is a capability provider instead of an actor (the default is actor)
-    #[structopt(short = "p", long = "prov")]
+    #[clap(short = 'p', long = "prov")]
     provider: bool,
     /// Revision number
-    #[structopt(short = "r", long = "rev")]
+    #[clap(short = 'r', long = "rev")]
     rev: Option<i32>,
     /// Human-readable version string
-    #[structopt(short = "v", long = "ver")]
+    #[clap(short = 'v', long = "ver")]
     ver: Option<String>,
     /// Developer or human friendly unique alias used for invoking an actor, consisting of lowercase alphanumeric characters, underscores '_' and slashes '/'
-    #[structopt(short = "a", long = "call-alias")]
+    #[clap(short = 'a', long = "call-alias")]
     call_alias: Option<String>,
 
     /// Path to issuer seed key (account). If this flag is not provided, the will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
-    #[structopt(
-        short = "i",
+    #[clap(
+        short = 'i',
         long = "issuer",
         env = "WASH_ISSUER_KEY",
         hide_env_values = true
@@ -320,15 +307,15 @@ pub(crate) struct ActorMetadata {
     issuer: Option<String>,
 
     /// Path to subject seed key (module). If this flag is not provided, the will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
-    #[structopt(
-        short = "s",
+    #[clap(
+        short = 's',
         long = "subject",
         env = "WASH_SUBJECT_KEY",
         hide_env_values = true
     )]
     subject: Option<String>,
 
-    #[structopt(flatten)]
+    #[clap(flatten)]
     common: GenerateCommon,
 }
 
@@ -748,7 +735,7 @@ pub(crate) fn render_actor_claims(
 
     let iss_label = token_label(&claims.issuer).to_ascii_lowercase();
     let sub_label = token_label(&claims.subject).to_ascii_lowercase();
-    let provider_json = provider.replace(" ", "_").to_ascii_lowercase();
+    let provider_json = provider.replace(' ', "_").to_ascii_lowercase();
 
     let mut map = HashMap::new();
     map.insert(iss_label, json!(claims.issuer));
@@ -881,6 +868,14 @@ fn sanitize_alias(call_alias: Option<String>) -> Result<Option<String>> {
 #[cfg(test)]
 mod test {
     use super::*;
+    use clap::Parser;
+
+    #[derive(Parser)]
+    struct Cmd {
+        #[clap(subcommand)]
+        claims: ClaimsCliCommand,
+    }
+
     const SUBSCRIBER_OCI: &str = "wasmcloud.azurecr.io/subscriber:0.2.0";
 
     #[test]
@@ -938,7 +933,7 @@ mod test {
     /// Enumerates all options and flags of the `claims inspect` command
     /// to ensure command line arguments do not change between versions
     fn test_claims_inspect_comprehensive() {
-        let cmd = ClaimsCli::from_iter_safe(&[
+        let cmd: Cmd = Parser::try_parse_from(&[
             "claims",
             "inspect",
             SUBSCRIBER_OCI,
@@ -955,7 +950,7 @@ mod test {
         ])
         .unwrap();
 
-        match cmd.command {
+        match cmd.claims {
             ClaimsCliCommand::Inspect(InspectCommand {
                 module,
                 jwt_only,
@@ -981,7 +976,7 @@ mod test {
             cmd => panic!("claims constructed incorrect command: {:?}", cmd),
         }
 
-        let short_cmd = ClaimsCli::from_iter_safe(&[
+        let short_cmd: Cmd = Parser::try_parse_from(&[
             "claims",
             "inspect",
             SUBSCRIBER_OCI,
@@ -998,7 +993,7 @@ mod test {
         ])
         .unwrap();
 
-        match short_cmd.command {
+        match short_cmd.claims {
             ClaimsCliCommand::Inspect(InspectCommand {
                 module,
                 jwt_only,
@@ -1032,7 +1027,7 @@ mod test {
         const LOCAL_WASM: &str = "./myactor.wasm";
         const ISSUER_KEY: &str = "SAAOBYD6BLELXSNN4S3TXUM7STGPB3A5HYU3D5T7XA4WHGVQBDBD4LJPOM";
         const SUBJECT_KEY: &str = "SMAMA4ABHIJUYQR54BDFHEMXIIGQATUXK6RYU6XLTFHDNCRVWT4KSDDSVE";
-        let long_cmd = ClaimsCli::from_iter_safe(&[
+        let long_cmd: Cmd = Parser::try_parse_from(&[
             "claims",
             "sign",
             LOCAL_WASM,
@@ -1071,7 +1066,7 @@ mod test {
         ])
         .unwrap();
 
-        match long_cmd.command {
+        match long_cmd.claims {
             ClaimsCliCommand::Sign(SignCommand {
                 source,
                 destination,
@@ -1102,7 +1097,7 @@ mod test {
             }
             cmd => panic!("claims constructed incorrect command: {:?}", cmd),
         }
-        let short_cmd = ClaimsCli::from_iter_safe(&[
+        let short_cmd: Cmd = Parser::try_parse_from(&[
             "claims",
             "sign",
             LOCAL_WASM,
@@ -1141,7 +1136,7 @@ mod test {
         ])
         .unwrap();
 
-        match short_cmd.command {
+        match short_cmd.claims {
             ClaimsCliCommand::Sign(SignCommand {
                 source,
                 destination,
@@ -1187,7 +1182,7 @@ mod test {
         const ACTOR_KEY: &str = "SMAA2XB7UP7FZLPLO27NJB65PKYISNQAH7PZ6PJUHR6CUARVANXZ4OTZOU";
         const PROVIDER_KEY: &str = "SVAKIVYER6D2LZS7QJFOU7LQYLRAMJ5DZE4B7BJHX6QFJIY24KN43JZGN4";
 
-        let account_cmd = ClaimsCli::from_iter_safe(&[
+        let account_cmd: Cmd = Parser::try_parse_from(&[
             "claims",
             "token",
             "account",
@@ -1208,7 +1203,7 @@ mod test {
             OPERATOR_TWO_KEY,
         ])
         .unwrap();
-        match account_cmd.command {
+        match account_cmd.claims {
             ClaimsCliCommand::Token(TokenCommand::Account(AccountMetadata {
                 name,
                 issuer,
@@ -1236,7 +1231,7 @@ mod test {
             }
             cmd => panic!("claims constructed incorrect command: {:?}", cmd),
         }
-        let actor_cmd = ClaimsCli::from_iter_safe(&[
+        let actor_cmd: Cmd = Parser::try_parse_from(&[
             "claims",
             "token",
             "actor",
@@ -1271,7 +1266,7 @@ mod test {
             "--msg",
         ])
         .unwrap();
-        match actor_cmd.command {
+        match actor_cmd.claims {
             ClaimsCliCommand::Token(TokenCommand::Actor(ActorMetadata {
                 name,
                 issuer,
@@ -1321,7 +1316,7 @@ mod test {
             }
             cmd => panic!("claims constructed incorrect command: {:?}", cmd),
         }
-        let operator_cmd = ClaimsCli::from_iter_safe(&[
+        let operator_cmd: Cmd = Parser::try_parse_from(&[
             "claims",
             "token",
             "operator",
@@ -1340,7 +1335,7 @@ mod test {
             OPERATOR_TWO_KEY,
         ])
         .unwrap();
-        match operator_cmd.command {
+        match operator_cmd.claims {
             ClaimsCliCommand::Token(TokenCommand::Operator(OperatorMetadata {
                 name,
                 issuer,
@@ -1366,7 +1361,7 @@ mod test {
             }
             cmd => panic!("claims constructed incorrect command: {:?}", cmd),
         }
-        let provider_cmd = ClaimsCli::from_iter_safe(&[
+        let provider_cmd: Cmd = Parser::try_parse_from(&[
             "claims",
             "token",
             "provider",
@@ -1393,7 +1388,7 @@ mod test {
             "1.2.3",
         ])
         .unwrap();
-        match provider_cmd.command {
+        match provider_cmd.claims {
             ClaimsCliCommand::Token(TokenCommand::Provider(ProviderMetadata {
                 name,
                 issuer,

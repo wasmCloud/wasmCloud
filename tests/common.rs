@@ -1,7 +1,9 @@
 use anyhow::{Context, Result};
-use std::env;
-use std::fs::{create_dir_all, remove_dir_all};
-use std::path::PathBuf;
+use std::{
+    env,
+    fs::{create_dir_all, remove_dir_all},
+    path::PathBuf,
+};
 
 /// Helper function to create the `wash` binary process
 #[allow(unused)]

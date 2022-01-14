@@ -1,14 +1,11 @@
 //! smithy model lint and validation
 //!
-use crate::generate::emoji;
-use crate::util::CommandOutput;
-use anyhow::anyhow;
-use anyhow::bail;
-use anyhow::Result;
+use crate::{generate::emoji, util::CommandOutput};
+use anyhow::{anyhow, bail, Result};
 use atelier_core::model::Model;
+use clap::Parser;
 use console::style;
 use std::path::PathBuf;
-use structopt::StructOpt;
 use weld_codegen::{
     config::{CodegenConfig, ModelSource, OutputLanguage},
     sources_to_model,
@@ -18,95 +15,95 @@ type TomlValue = toml::Value;
 const CODEGEN_CONFIG_FILE: &str = "codegen.toml";
 
 /// Perform lint checks on smithy models
-#[derive(Debug, StructOpt, Clone)]
-#[structopt(name = "lint")]
+#[derive(Debug, Parser, Clone)]
+#[clap(name = "lint")]
 pub(crate) struct LintCli {
-    #[structopt(flatten)]
+    #[clap(flatten)]
     opt: LintOptions,
 }
 
 /// Perform validation checks on smithy models
-#[derive(Debug, StructOpt, Clone)]
-#[structopt(name = "validate")]
+#[derive(Debug, Parser, Clone)]
+#[clap(name = "validate")]
 pub(crate) struct ValidateCli {
-    #[structopt(flatten)]
+    #[clap(flatten)]
     opt: ValidateOptions,
 }
 
 /// Generate code from smithy IDL files
-#[derive(Debug, StructOpt, Clone)]
-#[structopt(name = "gen")]
+#[derive(Debug, Parser, Clone)]
+#[clap(name = "gen")]
 pub(crate) struct GenerateCli {
-    #[structopt(flatten)]
+    #[clap(flatten)]
     opt: GenerateOptions,
 }
 
-#[derive(Debug, Clone, StructOpt)]
+#[derive(Debug, Clone, Parser)]
 pub(crate) struct LintOptions {
     /// Configuration file. Defaults to "./codegen.toml".
     /// Used to get model files only if input files are not specified on the command line.
-    #[structopt(short, long)]
+    #[clap(short, long)]
     config: Option<PathBuf>,
 
     /// Enable verbose logging
-    #[structopt(short, long)]
+    #[clap(short, long)]
     verbose: bool,
 
     /// Input files to process (overrides codegen.toml)
-    #[structopt(name = "input")]
+    #[clap(name = "input")]
     input: Vec<String>,
 }
 
-#[derive(Debug, Clone, StructOpt)]
+#[derive(Debug, Clone, Parser)]
 pub(crate) struct ValidateOptions {
     /// Configuration file. Defaults to "./codegen.toml".
     /// Used to get model files only if input files are not specified on the command line.
-    #[structopt(short, long)]
+    #[clap(short, long)]
     config: Option<PathBuf>,
 
     /// Enable verbose logging
-    #[structopt(short, long)]
+    #[clap(short, long)]
     verbose: bool,
 
     /// Input files to process (overrides codegen.toml)
-    #[structopt(name = "input")]
+    #[clap(name = "input")]
     input: Vec<String>,
 }
 
 /// Generate code from smithy IDL files
-#[derive(Debug, Clone, StructOpt)]
+#[derive(Debug, Clone, Parser)]
 pub(crate) struct GenerateOptions {
     /// Configuration file (toml). Defaults to "./codegen.toml"
-    #[structopt(short, long)]
+    #[clap(short, long)]
     config: Option<PathBuf>,
 
     /// Output directory, defaults to current directory
-    #[structopt(long)]
+    #[clap(long)]
     output_dir: Option<PathBuf>,
 
     /// Optionally, load templates from this folder.
     /// Each template file name is its template name, for example, "header.hbs"
     /// is registered with the name "header"
-    #[structopt(short = "T", long)]
+    #[clap(short = 'T', long)]
     template_dir: Option<PathBuf>,
 
     /// Output language(s) to generate. May be specified more than once
     /// If not specified, all languages in config file will be generated (`-l html -l rust`)
     // number_of_values forces the user to use '-l' for each item
-    #[structopt(short, long, number_of_values = 1)]
+    #[clap(short, long, number_of_values = 1)]
     lang: Vec<OutputLanguage>,
 
     /// Additional defines in the form of key=value to be passed to renderer
     /// Use `-D key=value` for each term to be added.
-    #[structopt(short = "D", parse(try_from_str = parse_key_val), number_of_values = 1)]
+    #[clap(short = 'D', parse(try_from_str = parse_key_val), number_of_values = 1)]
     defines: Vec<(String, TomlValue)>,
 
     /// Enable verbose logging
-    #[structopt(short, long)]
+    #[clap(short, long)]
     verbose: bool,
 
     /// model files to process. Must specify either on command line or in 'models' array in codegen.toml
-    #[structopt(name = "input")]
+    #[clap(name = "input")]
     input: Vec<String>,
 }
 

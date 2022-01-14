@@ -2,13 +2,13 @@ extern crate oci_distribution;
 
 use crate::util::{cached_file, CommandOutput, OutputKind};
 use anyhow::{anyhow, bail, Result};
+use clap::{Parser, Subcommand};
 use log::{debug, info, warn};
 use oci_distribution::{client::*, secrets::RegistryAuth, Reference};
 use provider_archive::ProviderArchive;
 use serde_json::json;
 use spinners::{Spinner, Spinners};
 use std::{collections::HashMap, fs::File, io::prelude::*};
-use structopt::{clap::AppSettings, StructOpt};
 
 const PROVIDER_ARCHIVE_MEDIA_TYPE: &str = "application/vnd.wasmcloud.provider.archive.layer.v1+par";
 const PROVIDER_ARCHIVE_CONFIG_MEDIA_TYPE: &str =
@@ -26,93 +26,78 @@ pub(crate) enum SupportedArtifacts {
     Wasm,
 }
 
-#[derive(Debug, StructOpt, Clone)]
-#[structopt(
-    global_settings(&[AppSettings::ColoredHelp, AppSettings::VersionlessSubcommands]),
-    name = "reg")]
-pub(crate) struct RegCli {
-    #[structopt(flatten)]
-    command: RegCliCommand,
-}
-
-impl RegCli {
-    pub(crate) fn command(self) -> RegCliCommand {
-        self.command
-    }
-}
-
-#[derive(Debug, Clone, StructOpt)]
+#[derive(Debug, Clone, Subcommand)]
 pub(crate) enum RegCliCommand {
     /// Pull an artifact from an OCI compliant registry
-    #[structopt(name = "pull")]
+    #[clap(name = "pull")]
     Pull(PullCommand),
     /// Push an artifact to an OCI compliant registry
-    #[structopt(name = "push")]
+    #[clap(name = "push")]
     Push(PushCommand),
     /// Ping (test url) to see if the OCI url has an artifact
-    #[structopt(name = "ping")]
+    #[clap(name = "ping")]
     Ping(PingCommand),
 }
 
-#[derive(StructOpt, Debug, Clone)]
+#[derive(Parser, Debug, Clone)]
 pub(crate) struct PullCommand {
     /// URL of artifact
-    #[structopt(name = "url")]
+    #[clap(name = "url")]
     pub(crate) url: String,
 
     /// File destination of artifact
-    #[structopt(long = "destination")]
+    #[clap(long = "destination")]
     pub(crate) destination: Option<String>,
 
     /// Digest to verify artifact against
-    #[structopt(short = "d", long = "digest")]
+    #[clap(short = 'd', long = "digest")]
     pub(crate) digest: Option<String>,
 
     /// Allow latest artifact tags
-    #[structopt(long = "allow-latest")]
+    #[clap(long = "allow-latest")]
     pub(crate) allow_latest: bool,
 
-    #[structopt(flatten)]
+    #[clap(flatten)]
     pub(crate) opts: AuthOpts,
 }
 
-#[derive(StructOpt, Debug, Clone)]
+#[derive(Parser, Debug, Clone)]
 pub(crate) struct PushCommand {
     /// URL to push artifact to
-    #[structopt(name = "url")]
+    #[clap(name = "url")]
     pub(crate) url: String,
 
     /// Path to artifact to push
-    #[structopt(name = "artifact")]
+    #[clap(name = "artifact")]
     pub(crate) artifact: String,
 
     /// Path to config file, if omitted will default to a blank configuration
-    #[structopt(short = "c", long = "config")]
+    #[clap(short = 'c', long = "config")]
     pub(crate) config: Option<String>,
 
     /// Allow latest artifact tags
-    #[structopt(long = "allow-latest")]
+    #[clap(long = "allow-latest")]
     pub(crate) allow_latest: bool,
 
-    #[structopt(flatten)]
+    #[clap(flatten)]
     pub(crate) opts: AuthOpts,
 }
 
-#[derive(StructOpt, Debug, Clone)]
+#[derive(Parser, Debug, Clone)]
 pub(crate) struct PingCommand {
     /// URL of artifact
-    #[structopt(name = "url")]
+    #[clap(name = "url")]
     pub(crate) url: String,
 
-    #[structopt(flatten)]
+    #[clap(flatten)]
     pub(crate) opts: AuthOpts,
 }
 
-#[derive(StructOpt, Debug, Clone)]
+#[derive(Parser, Debug, Clone)]
 pub(crate) struct AuthOpts {
     /// OCI username, if omitted anonymous authentication will be used
-    #[structopt(
-        short = "u",
+    #[clap(
+        short = 'u',
         long = "user",
         env = "WASH_REG_USER",
         hide_env_values = true
@@ -120,8 +105,8 @@ pub(crate) struct AuthOpts {
     pub(crate) user: Option<String>,
 
     /// OCI password, if omitted anonymous authentication will be used
-    #[structopt(
-        short = "p",
+    #[clap(
+        short = 'p',
         long = "password",
         env = "WASH_REG_PASSWORD",
         hide_env_values = true
@@ -129,7 +114,7 @@ pub(crate) struct AuthOpts {
     pub(crate) password: Option<String>,
 
     /// Allow insecure (HTTP) registry connections
-    #[structopt(long = "insecure")]
+    #[clap(long = "insecure")]
     pub(crate) insecure: bool,
 }
 
@@ -265,8 +250,7 @@ pub(crate) async fn pull_artifact(
     Ok(image_data
         .layers
         .iter()
-        .map(|l| l.data.clone())
-        .flatten()
+        .flat_map(|l| l.data.clone())
         .collect::<Vec<_>>())
 }
 
@@ -467,11 +451,17 @@ pub(crate) async fn push_artifact(
 
 #[cfg(test)]
 mod tests {
-    use super::{PullCommand, PushCommand, RegCli, RegCliCommand};
-    use structopt::StructOpt;
+    use super::{PullCommand, PushCommand, RegCliCommand};
+    use clap::Parser;
 
     const ECHO_WASM: &str = "wasmcloud.azurecr.io/echo:0.2.0";
     const LOCAL_REGISTRY: &str = "localhost:5000";
+
+    #[derive(Debug, Parser)]
+    struct Cmd {
+        #[clap(subcommand)]
+        reg: RegCliCommand,
+    }
 
     #[test]
     /// Enumerates multiple options of the `pull` command to ensure API doesn't
@@ -481,10 +471,11 @@ mod tests {
         // Not explicitly used, just a placeholder for a directory
         const TESTDIR: &str = "./tests/fixtures";
 
-        let pull_basic = RegCli::from_iter(&["reg", "pull", ECHO_WASM]);
-        let pull_all_flags =
-            RegCli::from_iter(&["reg", "pull", ECHO_WASM, "--allow-latest", "--insecure"]);
-        let pull_all_options = RegCli::from_iter(&[
+        let pull_basic: Cmd = Parser::try_parse_from(&["reg", "pull", ECHO_WASM]).unwrap();
+        let pull_all_flags: Cmd =
+            Parser::try_parse_from(&["reg", "pull", ECHO_WASM, "--allow-latest", "--insecure"])
+                .unwrap();
+        let pull_all_options: Cmd = Parser::try_parse_from(&[
             "reg",
             "pull",
             ECHO_WASM,
@@ -496,15 +487,16 @@ mod tests {
             "password",
             "--user",
             "user",
-        ]);
-        match pull_basic.command {
+        ])
+        .unwrap();
+        match pull_basic.reg {
             RegCliCommand::Pull(PullCommand { url, .. }) => {
                 assert_eq!(url, ECHO_WASM);
             }
             _ => panic!("`reg pull` constructed incorrect command"),
         };
 
-        match pull_all_flags.command {
+        match pull_all_flags.reg {
             RegCliCommand::Pull(PullCommand {
                 url,
                 allow_latest,
@@ -518,7 +510,7 @@ mod tests {
             _ => panic!("`reg pull` constructed incorrect command"),
         };
 
-        match pull_all_options.command {
+        match pull_all_options.reg {
             RegCliCommand::Pull(PullCommand {
                 url,
                 destination,
@@ -549,14 +541,15 @@ mod tests {
 
         // Push echo.wasm and pull from local registry
         let echo_push_basic = &format!("{}/echo:pushbasic", LOCAL_REGISTRY);
-        let push_basic = RegCli::from_iter(&[
+        let push_basic: Cmd = Parser::try_parse_from(&[
             "reg",
             "push",
             echo_push_basic,
             &format!("{}/echopush.wasm", TESTDIR),
             "--insecure",
-        ]);
-        match push_basic.command {
+        ])
+        .unwrap();
+        match push_basic.reg {
             RegCliCommand::Push(PushCommand {
                 url,
                 artifact,
@@ -572,15 +565,16 @@ mod tests {
 
         // Push logging.par.gz and pull from local registry
         let logging_push_all_flags = &format!("{}/logging:allflags", LOCAL_REGISTRY);
-        let push_all_flags = RegCli::from_iter(&[
+        let push_all_flags: Cmd = Parser::try_parse_from(&[
             "reg",
             "push",
             logging_push_all_flags,
             &format!("{}/logging.par.gz", TESTDIR),
             "--insecure",
             "--allow-latest",
-        ]);
-        match push_all_flags.command {
+        ])
+        .unwrap();
+        match push_all_flags.reg {
             RegCliCommand::Push(PushCommand {
                 url,
                 artifact,
@@ -598,7 +592,7 @@ mod tests {
 
         // Push logging.par.gz to different tag and pull to confirm successful push
         let logging_push_all_options = &format!("{}/logging:alloptions", LOCAL_REGISTRY);
-        let push_all_options = RegCli::from_iter(&[
+        let push_all_options: Cmd = Parser::try_parse_from(&[
             "reg",
             "push",
             logging_push_all_options,
@@ -611,8 +605,9 @@ mod tests {
             "supers3cr3t",
             "--user",
             "localuser",
-        ]);
-        match push_all_options.command {
+        ])
+        .unwrap();
+        match push_all_options.reg {
             RegCliCommand::Push(PushCommand {
                 url,
                 artifact,
