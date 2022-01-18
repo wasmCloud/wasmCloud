@@ -280,6 +280,10 @@ pub(crate) struct StartActorCommand {
     #[clap(name = "actor-ref")]
     pub(crate) actor_ref: String,
 
+    /// Number of actors to start
+    #[clap(long = "count", default_value = "1")]
+    pub(crate) count: u16,
+
     /// Constraints for actor auction in the form of "label=value". If host-id is supplied, this list is ignored
     #[clap(short = 'c', long = "constraint", name = "constraints")]
     constraints: Option<Vec<String>>,
@@ -650,7 +654,7 @@ pub(crate) async fn start_actor(mut cmd: StartActorCommand) -> Result<CtlOperati
     };
 
     client
-        .start_actor(&host.to_string(), &cmd.actor_ref, ONE_ACTOR, None)
+        .start_actor(&host.to_string(), &cmd.actor_ref, cmd.count, None)
         .await
         .map_err(convert_error)
 }
