@@ -10,23 +10,31 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  cargo_check:
-    runs-on: ubuntu-latest
+  rust_check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-20.04, windows-2019, macos-10.15]
+        include:
+          - os: ubuntu-20.04
+            test-options: '--no-fail-fast --bin wash --test "integration*"'
+            name: 'Unit and integration tests'
+          - os: windows-2019
+            test-options: '--no-fail-fast --bin wash'
+            name: 'Unit tests'
+          - os: macos-10.15
+            test-options: '--no-fail-fast --bin wash'
+            name: 'Unit tests'
+    runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v2
-      - name: Build
-        run: cargo build --verbose
-      - name: Run tests
-        run: make test-all
-      - name: Check fmt
-        run: cargo fmt -- --check
-
-  clippy_check:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-      - run: rustup component add clippy
-      - uses: actions-rs/clippy-check@v1
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          args: --all-features
+    - uses: actions/checkout@v2
+    - name: Launch integration test services
+      if: ${{ startswith(matrix.os, 'ubuntu') }}
+      uses: sudo-bot/action-docker-compose@latest
+      with:
+        cli-args: "-f ./tools/docker-compose.yml up --detach"
+    - id: rust-check-action
+      name: ${{ matrix.name }}
+      uses: wasmcloud/common-actions/rust-check@main
+      with:
+        test-options: ${{ matrix.test-options }}

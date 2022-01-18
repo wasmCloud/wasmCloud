@@ -313,6 +313,6 @@ pub(crate) fn set_permissions_keys(path: &Path) -> Result<()> {
 }
 
 #[cfg(target_os = "windows")]
-pub(crate) fn set_permissions(path: &PathBuf) -> Result<()> {
+pub(crate) fn set_permissions_keys(path: &Path) -> Result<()> {
     Ok(())
 }
