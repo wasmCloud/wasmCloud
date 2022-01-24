@@ -29,11 +29,11 @@ COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=builder /etc/passwd /etc/passwd
 COPY --from=builder /etc/group /etc/group
 
-COPY --from=builder /lib/ld-musl-x86_64.so.1 /lib/ld-musl-x86_64.so.1
-COPY --from=builder /usr/lib/libssl.so.48 /usr/lib/libssl.so.48
-COPY --from=builder /usr/lib/libcrypto.so.46 /usr/lib/libcrypto.so.46
-COPY --from=builder /usr/lib/libgcc_s.so.1 /usr/lib/libgcc_s.so.1
-COPY --from=builder /lib/ld-musl-x86_64.so.1 /lib/ld-musl-x86_64.so.1
+COPY --from=builder /lib/ld-musl-x86_64.so.* /lib/
+COPY --from=builder /usr/lib/libssl.so.* /usr/lib/
+COPY --from=builder /usr/lib/libcrypto.so.* /usr/lib/
+COPY --from=builder /usr/lib/libgcc_s.so.* /usr/lib/
+COPY --from=builder /lib/ld-musl-x86_64.so.* /lib/
 
 COPY --from=builder /build/target/release/wash /usr/local/bin/
 
