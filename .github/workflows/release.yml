@@ -27,14 +27,33 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           args: --all-features
 
+  windows_build:
+    runs-on: windows-latest
+    needs: [cargo_check]
+    steps:
+      - uses: actions/checkout@v2
+      - name: Compile wash
+        run: cargo build --release
+      - name: Upload artifact
+        uses: actions/upload-artifact@v2
+        with:
+          name: windows
+          path: target/release/wash.exe
+
   release:
-    needs: [cargo_check, clippy_check]
+    needs: [cargo_check, clippy_check, windows_build]
     runs-on: ubuntu-latest
     steps:
+      # We need to put windows on the release so that chocolatey can download it
+      - name: Download windows release
+        uses: actions/download-artifact@v2
+        with:
+          path: release
       - name: Release
         id: create_release
         uses: softprops/action-gh-release@v1
         with:
+          files: release/windows/wash.exe
           tag_name: ${{ github.ref }}
           release_name: Release ${{ github.ref }}
           token: ${{ secrets.GITHUB_TOKEN }}
