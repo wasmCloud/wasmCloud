@@ -90,8 +90,8 @@ pub fn derive_actor(input: TokenStream) -> TokenStream {
     }
 
     #[no_mangle]
-    pub extern "C" fn __actor_api_version() -> u32 {
-        wasmbus_rpc::WASMBUS_RPC_VERSION
+    pub extern "C" fn __wasmbus_rpc_version() -> u32 {
+        HOST_API_VERSION
     }
 
     #[no_mangle]

@@ -9,10 +9,9 @@ use crate::{
     error::{Error, Result},
     JsonValue,
 };
-use atelier_core::model::shapes::StructureOrUnion;
 use atelier_core::{
     model::{
-        shapes::{AppliedTraits, HasTraits, MemberShape, Operation, ShapeKind},
+        shapes::{AppliedTraits, HasTraits, MemberShape, Operation, ShapeKind, StructureOrUnion},
         values::{Number, Value as NodeValue},
         HasIdentity, Identifier, Model, NamespaceID, ShapeID,
     },
@@ -269,9 +268,9 @@ pub fn has_default(model: &'_ Model, member: &MemberShape) -> bool {
     let id = resolve(model, member.target());
     #[allow(unused_mut)]
     let mut has = false;
+    let name = id.shape_name().to_string();
 
     if id.namespace().eq(prelude_namespace_id()) {
-        let name = id.shape_name().to_string();
         cfg_if::cfg_if! {
             if #[cfg(feature = "BigInteger")] {
                 has = has || &name == "bigInteger";
@@ -292,6 +291,11 @@ pub fn has_default(model: &'_ Model, member: &MemberShape) -> bool {
             | "Timestamp"
         )
         // excluded: Resource, Operation, Service, Document, Union
+    } else if id.namespace() == wasmcloud_model_namespace() {
+        matches!(
+            name.as_str(),
+            "U64" | "U32" | "U16" | "U8" | "I64" | "I32" | "I16" | "I8"
+        )
     } else {
         false
         // for any other type, return false.
@@ -318,6 +322,7 @@ impl NumberedMember {
             })?,
         })
     }
+
     pub(crate) fn field_num(&self) -> &Option<u16> {
         &self.field_num
     }
@@ -370,9 +375,11 @@ pub(crate) fn has_field_numbers(fields: &[NumberedMember], name: &str) -> Result
         // all fields are numbered uniquely
         Ok(true)
     } else {
-        Err(crate::Error::Model(
-                format!("structure {} has incomplete or invalid field numbers: either some fields are missing the '@n()' trait, or some fields have duplicate numbers.", name)
-            ))
+        Err(crate::Error::Model(format!(
+            "structure {} has incomplete or invalid field numbers: either some fields are missing \
+             the '@n()' trait, or some fields have duplicate numbers.",
+            name
+        )))
     }
 }
 

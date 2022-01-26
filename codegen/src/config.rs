@@ -1,9 +1,6 @@
 use crate::error::Error;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
-use std::fmt;
-use std::path::PathBuf;
-use std::str::FromStr;
+use std::{collections::BTreeMap, fmt, path::PathBuf, str::FromStr};
 use toml::Value as TomlValue;
 
 /// Output languages for code generation

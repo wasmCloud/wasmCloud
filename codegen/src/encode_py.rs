@@ -14,18 +14,17 @@
 
 // The encoder is written as a plain function "encode_<S>" where S is the type name
 // (camel cased for the fn name), and scoped to the module where S is defined.
-use crate::codegen_py::PythonCodeGen;
 use crate::{
+    codegen_py::PythonCodeGen,
     codegen_rust::is_optional_type,
     error::{Error, Result},
     gen::{spaces, CodeGen},
     model::wasmcloud_model_namespace,
     writer::Writer,
 };
-use atelier_core::model::shapes::ShapeKind;
 use atelier_core::{
     model::{
-        shapes::{HasTraits, Simple, StructureOrUnion},
+        shapes::{HasTraits, ShapeKind, Simple, StructureOrUnion},
         HasIdentity, ShapeID,
     },
     prelude::{
@@ -162,8 +161,13 @@ impl<'model> PythonCodeGen<'model> {
                     )
                 }
                 _ => {
-                    return Err(Error::Model(format!("undefined py_module for namespace {} for symbol {}. Make sure codegen.toml includes all dependent namespaces, and that the dependent .smithy file contains package metadata with py_module: value",
-                                                    &id.namespace(), &id)));
+                    return Err(Error::Model(format!(
+                        "undefined py_module for namespace {} for symbol {}. Make sure \
+                         codegen.toml includes all dependent namespaces, and that the dependent \
+                         .smithy file contains package metadata with py_module: value",
+                        &id.namespace(),
+                        &id
+                    )));
                 }
             }
         };
