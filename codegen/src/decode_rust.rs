@@ -438,7 +438,6 @@ impl<'model> RustCodeGen<'model> {
                 let mut s = format!(
                     r#"
                 // Decode {} from cbor input stream
-                // This is part of experimental cbor support
                 #[doc(hidden)] {}
                 pub fn decode_{}<'b>(d: &mut {}::cbor::Decoder<'b>) -> Result<{},RpcError>
                 {{

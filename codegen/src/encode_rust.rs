@@ -384,7 +384,6 @@ impl<'model> RustCodeGen<'model> {
                 let mut s = format!(
                     r#" 
                 // Encode {} as CBOR and append to output stream
-                // This is part of experimental cbor support
                 #[doc(hidden)] {}
                 pub fn encode_{}<W>(e: &mut {}::cbor::Encoder<W>, {}: &{}) -> RpcResult<()>
                 where
