@@ -2259,6 +2259,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "rmp-serde"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f3eedffbfcc6a428f230c04baf8f59bd73c1781361e4286111fe900849aaddaf"
+dependencies = [
+ "byteorder",
+ "rmp",
+ "serde",
+]
+
+[[package]]
 name = "rustc-demangle"
 version = "0.1.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3069,7 +3080,7 @@ dependencies = [
  "pin-utils",
  "ratsio_fork_040",
  "ring",
- "rmp-serde",
+ "rmp-serde 0.15.5",
  "serde",
  "serde_bytes",
  "serde_json",
@@ -3102,7 +3113,7 @@ dependencies = [
  "once_cell",
  "pin-utils",
  "ring",
- "rmp-serde",
+ "rmp-serde 0.15.5",
  "serde",
  "serde_bytes",
  "serde_json",
@@ -3118,9 +3129,9 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-control-interface"
-version = "0.10.0"
+version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d8e9d230e22fd404c20725c50814589f9d132e7b2e6b1f7616126824f5d7f246"
+checksum = "f4352307cc0226eca6baff7a3d2d7dab0ddf1a03e6ff2c6a407e081ee570670d"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3130,7 +3141,7 @@ dependencies = [
  "futures 0.3.19",
  "log",
  "ring",
- "rmp-serde",
+ "rmp-serde 1.0.0",
  "serde",
  "serde_json",
  "tokio",
@@ -3152,7 +3163,7 @@ dependencies = [
  "futures 0.3.19",
  "log",
  "ring",
- "rmp-serde",
+ "rmp-serde 0.15.5",
  "serde",
  "wasmbus-rpc 0.6.1",
  "weld-codegen",
@@ -3186,7 +3197,7 @@ dependencies = [
  "log",
  "once_cell",
  "reqwest",
- "rmp-serde",
+ "rmp-serde 0.15.5",
  "serde",
  "serde_bytes",
  "serde_json",

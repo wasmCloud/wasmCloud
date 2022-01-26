@@ -22,7 +22,7 @@ tokio = { version = "1", features = ["full"] }
 toml = "0.5"
 wasmbus-rpc = "0.6"
 wascap = "0.6.1"
-wasmcloud-control-interface = "0.10.0"
+wasmcloud-control-interface = "0.10.2"
 wasmbus-rpc-nats-aflowt = { version = "0.7.0-alpha.1", package="wasmbus-rpc" }
 
 # test dependencies
