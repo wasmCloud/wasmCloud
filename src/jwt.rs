@@ -664,25 +664,24 @@ fn from_jwt_segment<B: AsRef<str>, T: DeserializeOwned>(encoded: B) -> Result<T>
 }
 
 fn stamp_to_human(stamp: Option<u64>) -> Option<String> {
-    use std::convert::TryInto;
     stamp.map(|s| {
         let now = since_the_epoch().as_secs() as i64;
         let diff_sec = (now - (s as i64)).abs();
 
         // calculate roundoff
-        let diff = if diff_sec >= 86400 {
+        let diff_sec = if diff_sec >= 86400 {
             // round to days
-            Duration::from_secs((diff_sec - (diff_sec % 86400)).try_into().unwrap())
+            diff_sec - (diff_sec % 86400)
         } else if diff_sec >= 3600 {
             // round to hours
-            Duration::from_secs((diff_sec - (diff_sec % 3600)).try_into().unwrap())
+            diff_sec - (diff_sec % 3600)
         } else if diff_sec >= 60 {
             // round to minutes
-            Duration::from_secs((diff_sec - (diff_sec % 60)).try_into().unwrap())
+            diff_sec - (diff_sec % 60)
         } else {
-            Duration::from_secs(diff_sec.try_into().unwrap())
+            diff_sec
         };
-        let ht = humantime::format_duration(diff);
+        let ht = humantime::format_duration(Duration::from_secs(diff_sec as u64));
 
         if now as u64 > s {
             format!("{} ago", ht)
