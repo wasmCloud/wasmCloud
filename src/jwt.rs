@@ -310,6 +310,7 @@ impl Claims<Account> {
 }
 
 impl Claims<CapabilityProvider> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         name: String,
         issuer: String,
@@ -325,6 +326,7 @@ impl Claims<CapabilityProvider> {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn with_dates(
         name: String,
         issuer: String,
@@ -423,6 +425,7 @@ impl Claims<Cluster> {
 }
 
 impl Claims<Actor> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         name: String,
         issuer: String,
@@ -439,6 +442,7 @@ impl Claims<Actor> {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn with_dates(
         name: String,
         issuer: String,
@@ -611,7 +615,7 @@ fn validate_expiration(exp: Option<u64>) -> Result<()> {
     }
 }
 
-fn validate_issuer(iss: &String) -> Result<()> {
+fn validate_issuer(iss: &str) -> Result<()> {
     if iss.is_empty() {
         Err(errors::new(ErrorKind::MissingIssuer))
     } else {
@@ -619,7 +623,7 @@ fn validate_issuer(iss: &String) -> Result<()> {
     }
 }
 
-fn validate_subject(sub: &String) -> Result<()> {
+fn validate_subject(sub: &str) -> Result<()> {
     if sub.is_empty() {
         Err(errors::new(ErrorKind::MissingSubject))
     } else {
@@ -693,9 +697,9 @@ fn normalize_call_alias(alias: Option<String>) -> Option<String> {
         let mut n = a.to_lowercase();
         n = n.trim().to_string();
         n = n.replace(|c: char| !c.is_ascii(), "");
-        n = n.replace(" ", "_");
-        n = n.replace("-", "_");
-        n = n.replace(".", "_");
+        n = n.replace(' ', "_");
+        n = n.replace('-', "_");
+        n = n.replace('.', "_");
         n
     })
 }

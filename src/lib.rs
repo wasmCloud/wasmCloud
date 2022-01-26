@@ -71,10 +71,10 @@ pub mod wasm;
 pub mod prelude {
     //! Public re-exports of the most commonly used wascap types
     pub use super::{Error as WascapError, Result as WascapResult};
-    pub use crate::caps;
-    pub use crate::jwt::{
-        validate_token, Account, Actor, Claims, ClaimsBuilder, Invocation, Operator,
+    pub use crate::{
+        caps,
+        jwt::{validate_token, Account, Actor, Claims, ClaimsBuilder, Invocation, Operator},
+        wasm,
     };
-    pub use crate::wasm;
     pub use nkeys::KeyPair;
 }
