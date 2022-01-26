@@ -1,15 +1,13 @@
 //! Claims encoding, decoding, and validation for JSON Web Tokens (JWT)
 
-use crate::errors;
-use crate::errors::ErrorKind;
-use crate::Result;
-use chrono::NaiveDateTime;
+use crate::{errors, errors::ErrorKind, Result};
 use nkeys::KeyPair;
-use serde::de::DeserializeOwned;
-use serde::Serialize;
+use serde::{de::DeserializeOwned, Serialize};
 use serde_json::{from_str, to_string};
-use std::collections::HashMap;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::{
+    collections::HashMap,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 const HEADER_TYPE: &str = "jwt";
 const HEADER_ALGORITHM: &str = "Ed25519";
@@ -662,14 +660,31 @@ fn from_jwt_segment<B: AsRef<str>, T: DeserializeOwned>(encoded: B) -> Result<T>
 }
 
 fn stamp_to_human(stamp: Option<u64>) -> Option<String> {
+    use std::convert::TryInto;
     stamp.map(|s| {
-        let now = NaiveDateTime::from_timestamp(since_the_epoch().as_secs() as i64, 0);
-        let then = NaiveDateTime::from_timestamp(s as i64, 0);
+        let now = since_the_epoch().as_secs() as i64;
+        let diff_sec = (now - (s as i64)).abs();
 
-        let diff = then - now;
+        // calculate roundoff
+        let diff = if diff_sec >= 86400 {
+            // round to days
+            Duration::from_secs((diff_sec - (diff_sec % 86400)).try_into().unwrap())
+        } else if diff_sec >= 3600 {
+            // round to hours
+            Duration::from_secs((diff_sec - (diff_sec % 3600)).try_into().unwrap())
+        } else if diff_sec >= 60 {
+            // round to minutes
+            Duration::from_secs((diff_sec - (diff_sec % 60)).try_into().unwrap())
+        } else {
+            Duration::from_secs(diff_sec.try_into().unwrap())
+        };
+        let ht = humantime::format_duration(diff);
 
-        let ht = chrono_humanize::HumanTime::from(diff);
-        format!("{}", ht)
+        if now as u64 > s {
+            format!("{} ago", ht)
+        } else {
+            format!("in {}", ht)
+        }
     })
 }
 
@@ -768,9 +783,10 @@ impl Invocation {
 #[cfg(test)]
 mod test {
     use super::{Account, Actor, Claims, ErrorKind, Invocation, KeyPair, Operator};
-    use crate::caps::{KEY_VALUE, LOGGING, MESSAGING};
-    use crate::jwt::{since_the_epoch, CapabilityProvider, ClaimsBuilder};
-    use crate::jwt::{validate_token, Cluster};
+    use crate::{
+        caps::{KEY_VALUE, LOGGING, MESSAGING},
+        jwt::{since_the_epoch, validate_token, CapabilityProvider, ClaimsBuilder, Cluster},
+    };
     use std::collections::HashMap;
 
     #[test]
@@ -800,7 +816,7 @@ mod test {
         if let Ok(v) = vres {
             assert_eq!(v.expired, false);
             assert_eq!(v.cannot_use_yet, true);
-            assert_eq!(v.not_before_human, "in 16 minutes");
+            assert_eq!(v.not_before_human, "in 16m");
         }
     }
 
@@ -831,7 +847,7 @@ mod test {
         if let Ok(v) = vres {
             assert!(v.expired);
             assert_eq!(v.cannot_use_yet, false);
-            assert_eq!(v.expires_human, "8 hours ago");
+            assert_eq!(v.expires_human, "8h ago");
         }
     }
 
@@ -853,7 +869,7 @@ mod test {
         if let Ok(v) = vres {
             assert!(v.expired);
             assert_eq!(v.cannot_use_yet, false);
-            assert_eq!(v.expires_human, "8 hours ago");
+            assert_eq!(v.expires_human, "8h ago");
         }
     }
 
