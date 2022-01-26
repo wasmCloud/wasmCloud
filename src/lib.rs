@@ -41,10 +41,7 @@ impl Client {
 
     /// Queries the lattice for all responsive hosts, waiting for the full period specified by _timeout_.
     pub async fn get_hosts(&self) -> Result<Vec<Host>> {
-        let subject = broker::queries::hosts(&self.nsprefix);
-        let sub = self.nc.request_multi(&subject, vec![]).await?;
-        trace!("get_hosts: subscribing to {}", &subject);
-        Ok(collect_timeout(sub, self.auction_timeout, "hosts").await)
+        get_hosts_(&self.nc, &self.nsprefix, self.auction_timeout).await
     }
 
     /// Retrieves the contents of a running host
@@ -308,7 +305,8 @@ impl Client {
     /// of this command _before_ downloading the provider's bytes from the OCI registry, indicating either
     /// a validation failure or success. If a client needs deterministic guarantees that the provider has
     /// completed its startup process, such a client needs to monitor the control event stream for the
-    /// appropriate event
+    /// appropriate event. If a host ID is not supplied (empty string), then this function will return
+    /// an early acknowledgement, go find a host, and then submit the start request to a target host.
     pub async fn start_provider(
         &self,
         host_id: &str,
@@ -317,25 +315,57 @@ impl Client {
         annotations: Option<HashMap<String, String>>,
         provider_configuration: Option<String>,
     ) -> Result<CtlOperationAck> {
-        let subject = broker::commands::start_provider(&self.nsprefix, host_id);
-        trace!("start_provider:request {}", &subject);
-        let bytes = json_serialize(StartProviderCommand {
-            host_id: host_id.to_string(),
-            provider_ref: provider_ref.to_string(),
-            link_name: link_name.unwrap_or_else(|| "default".to_string()),
-            annotations,
-            configuration: provider_configuration,
-        })?;
-        match self
-            .nc
-            .request_timeout(&subject, &bytes, self.timeout)
+        let client = self.nc.clone();
+        let nsprefix = self.nsprefix.clone();
+        let timeout = self.timeout.clone();
+        let provider_ref = provider_ref.to_string();
+
+        if !host_id.trim().is_empty() {
+            start_provider_(
+                &client,
+                &nsprefix,
+                timeout,
+                host_id,
+                &provider_ref,
+                link_name,
+                annotations,
+                provider_configuration,
+            )
             .await
-        {
-            Ok(msg) => {
-                let ack: CtlOperationAck = json_deserialize(&msg.data)?;
-                Ok(ack)
-            }
-            Err(e) => Err(format!("Did not receive start provider acknowledgement: {}", e).into()),
+        } else {
+            // If a host isn't supplied, ack early and go find one
+            let client = self.nc.clone();
+            let auction_timeout = self.auction_timeout;
+            trace!("start_provider:deferred (no-host) request");
+            tokio::spawn(async move {
+                let hosts = get_hosts_(&client, &nsprefix, auction_timeout).await;
+                match hosts {
+                    Ok(hs) => {
+                        if hs.len() > 0 {
+                            let _ = start_provider_(
+                                &client,
+                                &nsprefix,
+                                timeout,
+                                &hs[0].id,
+                                &provider_ref,
+                                link_name,
+                                annotations,
+                                provider_configuration,
+                            )
+                            .await;
+                        } else {
+                            error!("No hosts detected in in no-host provider start.");
+                        }
+                    }
+                    Err(e) => {
+                        error!("Failed to query hosts for no-host provider start: {}", e);
+                    }
+                }
+            });
+            Ok(CtlOperationAck {
+                accepted: true,
+                error: String::default(),
+            })
         }
     }
 
@@ -533,6 +563,47 @@ pub fn json_deserialize<'de, T: Deserialize<'de>>(
     buf: &'de [u8],
 ) -> ::std::result::Result<T, Box<dyn std::error::Error + Send + Sync>> {
     serde_json::from_slice(buf).map_err(|e| format!("JSON deserialization failure: {}", e).into())
+}
+
+// "selfless" function to obtain a list of hosts
+async fn get_hosts_(
+    client: &anats::Connection,
+    nsprefix: &Option<String>,
+    timeout: Duration,
+) -> Result<Vec<Host>> {
+    let subject = broker::queries::hosts(nsprefix);
+    let sub = client.request_multi(&subject, vec![]).await?;
+    trace!("get_hosts: subscribing to {}", &subject);
+    Ok(collect_timeout(sub, timeout, "hosts").await)
+}
+
+// "selfless" helper function that submits a start provider request to a host
+async fn start_provider_(
+    client: &anats::Connection,
+    nsprefix: &Option<String>,
+    timeout: Duration,
+    host_id: &str,
+    provider_ref: &str,
+    link_name: Option<String>,
+    annotations: Option<HashMap<String, String>>,
+    provider_configuration: Option<String>,
+) -> Result<CtlOperationAck> {
+    let subject = broker::commands::start_provider(nsprefix, host_id);
+    trace!("start_provider:request {}", &subject);
+    let bytes = json_serialize(StartProviderCommand {
+        host_id: host_id.to_string(),
+        provider_ref: provider_ref.to_string(),
+        link_name: link_name.unwrap_or_else(|| "default".to_string()),
+        annotations,
+        configuration: provider_configuration,
+    })?;
+    match client.request_timeout(&subject, &bytes, timeout).await {
+        Ok(msg) => {
+            let ack: CtlOperationAck = json_deserialize(&msg.data)?;
+            Ok(ack)
+        }
+        Err(e) => Err(format!("Did not receive start provider acknowledgement: {}", e).into()),
+    }
 }
 
 #[cfg(test)]
