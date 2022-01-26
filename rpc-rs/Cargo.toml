@@ -15,29 +15,25 @@ exclude = [ "build.rs" ]
 
 [features]
 # Warning: Don't change serialization - things will break
-default = [ "ser_msgpack" ]
+default = [ ]
 BigInteger = [ "num-bigint" ]
 BigDecimal = [ "bigdecimal" ]
-ser_msgpack = [ "rmp-serde" ]
-ser_json = [ ]
 
 [dependencies]
 async-trait = "0.1"
 base64 = "0.13"
+cfg-if = "1.0"
 chrono = "0.4"
-serde = { version = "1.0", features = ["derive"] }
+log = "0.4"
+minicbor = { version = "0.12", features = ["derive", "std", "half" ] }
+rmp-serde = { version = "0.15.4" }
 serde_bytes = "0.11"
 serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
 thiserror = "1.0"
-minicbor = { version = "0.12", features = ["derive", "std", "half" ] }
-toml = "0.5"
-log = "0.4"
-cfg-if = "1.0"
-wasmbus-macros = "0.1.6"
 tokio-timer = "0.2"
-
-#[feature-dependencies]
-rmp-serde = { version = "0.15.4", optional = true }
+toml = "0.5"
+wasmbus-macros = "0.1.6"
 
 #BigInteger support
 num-bigint = { version = "0.4", optional = true }
