@@ -62,26 +62,14 @@ pub trait Transport: Send {
 }
 
 // select serialization/deserialization mode
-cfg_if::cfg_if! {
-    if #[cfg(feature = "ser_msgpack")] {
-        pub fn deserialize<'de, T: Deserialize<'de>>(buf: &'de [u8]) -> Result<T, RpcError> {
-            rmp_serde::from_read_ref(buf).map_err(|e| RpcError::Deser(e.to_string()))
-        }
+pub fn deserialize<'de, T: Deserialize<'de>>(buf: &'de [u8]) -> Result<T, RpcError> {
+    rmp_serde::from_read_ref(buf).map_err(|e| RpcError::Deser(e.to_string()))
+}
 
-        pub fn serialize<T: Serialize>(data: &T) -> Result<Vec<u8>, RpcError> {
-            rmp_serde::to_vec_named(data).map_err(|e| RpcError::Ser(e.to_string()))
-            // for benchmarking: the following line uses msgpack without field names
-            //rmp_serde::to_vec(data).map_err(|e| RpcError::Ser(e.to_string()))
-        }
-    } else if #[cfg(feature = "ser_json")] {
-        pub fn deserialize<'de, T: Deserialize<'de>>(buf: &'de [u8]) -> Result<T, RpcError> {
-            serde_json::from_slice(buf).map_err(|e| RpcError::Deser(e.to_string()))
-        }
-
-        pub fn serialize<T: Serialize>(data: &T) -> Result<Vec<u8>, RpcError> {
-            serde_json::to_vec(data).map_err(|e| RpcError::Ser(e.to_string()))
-        }
-    }
+pub fn serialize<T: Serialize>(data: &T) -> Result<Vec<u8>, RpcError> {
+    rmp_serde::to_vec_named(data).map_err(|e| RpcError::Ser(e.to_string()))
+    // for benchmarking: the following line uses msgpack without field names
+    //rmp_serde::to_vec(data).map_err(|e| RpcError::Ser(e.to_string()))
 }
 
 /// An error that can occur in the processing of an RPC. This is not request-specific errors but
@@ -232,6 +220,6 @@ pub fn decode<T: serde::de::DeserializeOwned>(
         (MessageFormat::Msgpack, offset) => deserialize(&buf[offset..])
             .map_err(|e| RpcError::Deser(format!("decoding '{}': {{}}", e)))?,
         _ => return Err(RpcError::Deser("invalid encoding for '{}'".to_string())),
-    };
+    }ser_msgpack;
     Ok(value)
 }

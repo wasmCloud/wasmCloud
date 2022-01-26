@@ -11,7 +11,6 @@ pub const SMITHY_VERSION: &str = "1.0";
 pub type CapabilityContractId = String;
 
 // Decode CapabilityContractId from cbor input stream
-// This is part of experimental cbor support
 #[doc(hidden)]
 pub fn decode_capability_contract_id<'b>(
     d: &mut crate::cbor::Decoder<'b>,
@@ -23,7 +22,6 @@ pub fn decode_capability_contract_id<'b>(
 pub type I16 = i16;
 
 // Decode I16 from cbor input stream
-// This is part of experimental cbor support
 #[doc(hidden)]
 #[inline]
 pub fn decode_i16<'b>(d: &mut crate::cbor::Decoder<'b>) -> Result<I16, RpcError> {
@@ -34,7 +32,6 @@ pub fn decode_i16<'b>(d: &mut crate::cbor::Decoder<'b>) -> Result<I16, RpcError>
 pub type I32 = i32;
 
 // Decode I32 from cbor input stream
-// This is part of experimental cbor support
 #[doc(hidden)]
 #[inline]
 pub fn decode_i32<'b>(d: &mut crate::cbor::Decoder<'b>) -> Result<I32, RpcError> {
@@ -45,7 +42,6 @@ pub fn decode_i32<'b>(d: &mut crate::cbor::Decoder<'b>) -> Result<I32, RpcError>
 pub type I64 = i64;
 
 // Decode I64 from cbor input stream
-// This is part of experimental cbor support
 #[doc(hidden)]
 #[inline]
 pub fn decode_i64<'b>(d: &mut crate::cbor::Decoder<'b>) -> Result<I64, RpcError> {
@@ -56,7 +52,6 @@ pub fn decode_i64<'b>(d: &mut crate::cbor::Decoder<'b>) -> Result<I64, RpcError>
 pub type I8 = i8;
 
 // Decode I8 from cbor input stream
-// This is part of experimental cbor support
 #[doc(hidden)]
 #[inline]
 pub fn decode_i8<'b>(d: &mut crate::cbor::Decoder<'b>) -> Result<I8, RpcError> {
@@ -67,7 +62,6 @@ pub fn decode_i8<'b>(d: &mut crate::cbor::Decoder<'b>) -> Result<I8, RpcError> {
 pub type IdentifierList = Vec<String>;
 
 // Decode IdentifierList from cbor input stream
-// This is part of experimental cbor support
 #[doc(hidden)]
 pub fn decode_identifier_list<'b>(
     d: &mut crate::cbor::Decoder<'b>,
@@ -98,7 +92,6 @@ pub fn decode_identifier_list<'b>(
 pub type U16 = i16;
 
 // Decode U16 from cbor input stream
-// This is part of experimental cbor support
 #[doc(hidden)]
 #[inline]
 pub fn decode_u16<'b>(d: &mut crate::cbor::Decoder<'b>) -> Result<U16, RpcError> {
@@ -109,7 +102,6 @@ pub fn decode_u16<'b>(d: &mut crate::cbor::Decoder<'b>) -> Result<U16, RpcError>
 pub type U32 = i32;
 
 // Decode U32 from cbor input stream
-// This is part of experimental cbor support
 #[doc(hidden)]
 #[inline]
 pub fn decode_u32<'b>(d: &mut crate::cbor::Decoder<'b>) -> Result<U32, RpcError> {
@@ -120,7 +112,6 @@ pub fn decode_u32<'b>(d: &mut crate::cbor::Decoder<'b>) -> Result<U32, RpcError>
 pub type U64 = i64;
 
 // Decode U64 from cbor input stream
-// This is part of experimental cbor support
 #[doc(hidden)]
 #[inline]
 pub fn decode_u64<'b>(d: &mut crate::cbor::Decoder<'b>) -> Result<U64, RpcError> {
@@ -131,7 +122,6 @@ pub fn decode_u64<'b>(d: &mut crate::cbor::Decoder<'b>) -> Result<U64, RpcError>
 pub type U8 = i8;
 
 // Decode U8 from cbor input stream
-// This is part of experimental cbor support
 #[doc(hidden)]
 #[inline]
 pub fn decode_u8<'b>(d: &mut crate::cbor::Decoder<'b>) -> Result<U8, RpcError> {

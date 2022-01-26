@@ -22,6 +22,14 @@ pub mod model {
 // re-export
 pub use minicbor;
 
+// re-export nats-aflowt
+#[cfg(not(target_arch = "wasm32"))]
+pub use nats_aflowt as anats;
+
+/// This will be removed in a later version - use cbor instead to avoid dependence on minicbor crate
+/// @deprecated
+pub use minicbor;
+
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod rpc_client;
 #[cfg(not(target_arch = "wasm32"))]
@@ -219,10 +227,6 @@ pub mod core {
     }
 }
 
-// re-export nats-aflowt
-#[cfg(not(target_arch = "wasm32"))]
-pub use nats_aflowt as anats;
-
 pub mod actor {
 
     pub mod prelude {
@@ -348,6 +352,12 @@ impl From<std::io::Error> for RpcError {
 
 impl From<minicbor::encode::Error<std::io::Error>> for RpcError {
     fn from(e: minicbor::encode::Error<std::io::Error>) -> RpcError {
+        RpcError::Ser(format!("cbor-encode: {}", e))
+    }
+}
+
+impl From<minicbor::encode::Error<RpcError>> for RpcError {
+    fn from(e: minicbor::encode::Error<RpcError>) -> RpcError {
         RpcError::Ser(format!("cbor-encode: {}", e))
     }
 }

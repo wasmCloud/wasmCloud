@@ -6,9 +6,8 @@
 //!
 #![allow(dead_code)]
 
-use std::fmt::Debug;
-// cbor
 use crate::{RpcError, RpcResult};
+use std::fmt::Debug;
 
 #[derive(Clone)]
 pub struct Decoder<'b> {

@@ -23,7 +23,6 @@ pub const SMITHY_VERSION: &str = "1.0";
 pub type ActorLinks = Vec<LinkDefinition>;
 
 // Decode ActorLinks from cbor input stream
-// This is part of experimental cbor support
 #[doc(hidden)]
 pub fn decode_actor_links<'b>(d: &mut crate::cbor::Decoder<'b>) -> Result<ActorLinks, RpcError> {
     let __result = {
@@ -57,7 +56,6 @@ pub fn decode_actor_links<'b>(d: &mut crate::cbor::Decoder<'b>) -> Result<ActorL
 pub type ClusterIssuerKey = String;
 
 // Decode ClusterIssuerKey from cbor input stream
-// This is part of experimental cbor support
 #[doc(hidden)]
 pub fn decode_cluster_issuer_key<'b>(
     d: &mut crate::cbor::Decoder<'b>,
@@ -68,7 +66,6 @@ pub fn decode_cluster_issuer_key<'b>(
 pub type ClusterIssuers = Vec<ClusterIssuerKey>;
 
 // Decode ClusterIssuers from cbor input stream
-// This is part of experimental cbor support
 #[doc(hidden)]
 pub fn decode_cluster_issuers<'b>(
     d: &mut crate::cbor::Decoder<'b>,
@@ -106,7 +103,6 @@ pub fn decode_cluster_issuers<'b>(
 pub struct HealthCheckRequest {}
 
 // Decode HealthCheckRequest from cbor input stream
-// This is part of experimental cbor support
 #[doc(hidden)]
 pub fn decode_health_check_request<'b>(
     d: &mut crate::cbor::Decoder<'b>,
@@ -158,7 +154,6 @@ pub struct HealthCheckResponse {
 }
 
 // Decode HealthCheckResponse from cbor input stream
-// This is part of experimental cbor support
 #[doc(hidden)]
 pub fn decode_health_check_response<'b>(
     d: &mut crate::cbor::Decoder<'b>,
@@ -265,7 +260,6 @@ pub struct HostData {
 }
 
 // Decode HostData from cbor input stream
-// This is part of experimental cbor support
 #[doc(hidden)]
 pub fn decode_host_data<'b>(d: &mut crate::cbor::Decoder<'b>) -> Result<HostData, RpcError> {
     let __result = {
@@ -491,7 +485,6 @@ pub fn decode_host_data<'b>(d: &mut crate::cbor::Decoder<'b>) -> Result<HostData
 pub type HostEnvValues = std::collections::HashMap<String, String>;
 
 // Decode HostEnvValues from cbor input stream
-// This is part of experimental cbor support
 #[doc(hidden)]
 pub fn decode_host_env_values<'b>(
     d: &mut crate::cbor::Decoder<'b>,
@@ -533,7 +526,6 @@ pub struct Invocation {
 }
 
 // Decode Invocation from cbor input stream
-// This is part of experimental cbor support
 #[doc(hidden)]
 pub fn decode_invocation<'b>(d: &mut crate::cbor::Decoder<'b>) -> Result<Invocation, RpcError> {
     let __result = {
@@ -687,7 +679,6 @@ pub struct InvocationResponse {
 }
 
 // Decode InvocationResponse from cbor input stream
-// This is part of experimental cbor support
 #[doc(hidden)]
 pub fn decode_invocation_response<'b>(
     d: &mut crate::cbor::Decoder<'b>,
@@ -791,7 +782,6 @@ pub struct LinkDefinition {
 }
 
 // Decode LinkDefinition from cbor input stream
-// This is part of experimental cbor support
 #[doc(hidden)]
 pub fn decode_link_definition<'b>(
     d: &mut crate::cbor::Decoder<'b>,
@@ -903,7 +893,6 @@ pub fn decode_link_definition<'b>(
 pub type LinkSettings = std::collections::HashMap<String, String>;
 
 // Decode LinkSettings from cbor input stream
-// This is part of experimental cbor support
 #[doc(hidden)]
 pub fn decode_link_settings<'b>(
     d: &mut crate::cbor::Decoder<'b>,
@@ -936,7 +925,6 @@ pub struct WasmCloudEntity {
 }
 
 // Decode WasmCloudEntity from cbor input stream
-// This is part of experimental cbor support
 #[doc(hidden)]
 pub fn decode_wasm_cloud_entity<'b>(
     d: &mut crate::cbor::Decoder<'b>,
