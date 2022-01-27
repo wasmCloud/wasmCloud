@@ -1,15 +1,13 @@
 //! Claims encoding, decoding, and validation for JSON Web Tokens (JWT)
 
-use crate::errors;
-use crate::errors::ErrorKind;
-use crate::Result;
-use chrono::NaiveDateTime;
+use crate::{errors, errors::ErrorKind, Result};
 use nkeys::KeyPair;
-use serde::de::DeserializeOwned;
-use serde::Serialize;
+use serde::{de::DeserializeOwned, Serialize};
 use serde_json::{from_str, to_string};
-use std::collections::HashMap;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::{
+    collections::HashMap,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 const HEADER_TYPE: &str = "jwt";
 const HEADER_ALGORITHM: &str = "Ed25519";
@@ -312,6 +310,7 @@ impl Claims<Account> {
 }
 
 impl Claims<CapabilityProvider> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         name: String,
         issuer: String,
@@ -327,6 +326,7 @@ impl Claims<CapabilityProvider> {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn with_dates(
         name: String,
         issuer: String,
@@ -425,6 +425,7 @@ impl Claims<Cluster> {
 }
 
 impl Claims<Actor> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         name: String,
         issuer: String,
@@ -441,6 +442,7 @@ impl Claims<Actor> {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn with_dates(
         name: String,
         issuer: String,
@@ -613,7 +615,7 @@ fn validate_expiration(exp: Option<u64>) -> Result<()> {
     }
 }
 
-fn validate_issuer(iss: &String) -> Result<()> {
+fn validate_issuer(iss: &str) -> Result<()> {
     if iss.is_empty() {
         Err(errors::new(ErrorKind::MissingIssuer))
     } else {
@@ -621,7 +623,7 @@ fn validate_issuer(iss: &String) -> Result<()> {
     }
 }
 
-fn validate_subject(sub: &String) -> Result<()> {
+fn validate_subject(sub: &str) -> Result<()> {
     if sub.is_empty() {
         Err(errors::new(ErrorKind::MissingSubject))
     } else {
@@ -663,13 +665,29 @@ fn from_jwt_segment<B: AsRef<str>, T: DeserializeOwned>(encoded: B) -> Result<T>
 
 fn stamp_to_human(stamp: Option<u64>) -> Option<String> {
     stamp.map(|s| {
-        let now = NaiveDateTime::from_timestamp(since_the_epoch().as_secs() as i64, 0);
-        let then = NaiveDateTime::from_timestamp(s as i64, 0);
+        let now = since_the_epoch().as_secs() as i64;
+        let diff_sec = (now - (s as i64)).abs();
 
-        let diff = then - now;
+        // calculate roundoff
+        let diff_sec = if diff_sec >= 86400 {
+            // round to days
+            diff_sec - (diff_sec % 86400)
+        } else if diff_sec >= 3600 {
+            // round to hours
+            diff_sec - (diff_sec % 3600)
+        } else if diff_sec >= 60 {
+            // round to minutes
+            diff_sec - (diff_sec % 60)
+        } else {
+            diff_sec
+        };
+        let ht = humantime::format_duration(Duration::from_secs(diff_sec as u64));
 
-        let ht = chrono_humanize::HumanTime::from(diff);
-        format!("{}", ht)
+        if now as u64 > s {
+            format!("{} ago", ht)
+        } else {
+            format!("in {}", ht)
+        }
     })
 }
 
@@ -678,9 +696,9 @@ fn normalize_call_alias(alias: Option<String>) -> Option<String> {
         let mut n = a.to_lowercase();
         n = n.trim().to_string();
         n = n.replace(|c: char| !c.is_ascii(), "");
-        n = n.replace(" ", "_");
-        n = n.replace("-", "_");
-        n = n.replace(".", "_");
+        n = n.replace(' ', "_");
+        n = n.replace('-', "_");
+        n = n.replace('.', "_");
         n
     })
 }
@@ -768,9 +786,10 @@ impl Invocation {
 #[cfg(test)]
 mod test {
     use super::{Account, Actor, Claims, ErrorKind, Invocation, KeyPair, Operator};
-    use crate::caps::{KEY_VALUE, LOGGING, MESSAGING};
-    use crate::jwt::{since_the_epoch, CapabilityProvider, ClaimsBuilder};
-    use crate::jwt::{validate_token, Cluster};
+    use crate::{
+        caps::{KEY_VALUE, LOGGING, MESSAGING},
+        jwt::{since_the_epoch, validate_token, CapabilityProvider, ClaimsBuilder, Cluster},
+    };
     use std::collections::HashMap;
 
     #[test]
@@ -800,7 +819,7 @@ mod test {
         if let Ok(v) = vres {
             assert_eq!(v.expired, false);
             assert_eq!(v.cannot_use_yet, true);
-            assert_eq!(v.not_before_human, "in 16 minutes");
+            assert_eq!(v.not_before_human, "in 16m");
         }
     }
 
@@ -831,7 +850,7 @@ mod test {
         if let Ok(v) = vres {
             assert!(v.expired);
             assert_eq!(v.cannot_use_yet, false);
-            assert_eq!(v.expires_human, "8 hours ago");
+            assert_eq!(v.expires_human, "8h ago");
         }
     }
 
@@ -853,7 +872,7 @@ mod test {
         if let Ok(v) = vres {
             assert!(v.expired);
             assert_eq!(v.cannot_use_yet, false);
-            assert_eq!(v.expires_human, "8 hours ago");
+            assert_eq!(v.expires_human, "8h ago");
         }
     }
 

@@ -1,20 +1,22 @@
 //! Functions for extracting and embedding claims within a WebAssembly module
 
-use crate::errors::{self, ErrorKind};
-use crate::jwt::Token;
-use crate::jwt::{Actor, Claims};
-use crate::Result;
+use crate::{
+    errors::{self, ErrorKind},
+    jwt::{Actor, Claims, Token},
+    Result,
+};
 use data_encoding::HEXUPPER;
 use nkeys::KeyPair;
-use parity_wasm::elements::CustomSection;
 use parity_wasm::{
     deserialize_buffer,
-    elements::{Module, Serialize},
+    elements::{CustomSection, Module, Serialize},
     serialize,
 };
 use ring::digest::{Context, Digest, SHA256};
-use std::io::Read;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    io::Read,
+    time::{SystemTime, UNIX_EPOCH},
+};
 const SECS_PER_DAY: u64 = 86400;
 
 /// Extracts a set of claims from the raw bytes of a WebAssembly module. In the case where no
@@ -72,7 +74,7 @@ pub fn embed_claims(orig_bytecode: &[u8], claims: &Claims<Actor>, kp: &KeyPair) 
     });
     claims.metadata = meta;
 
-    let encoded = claims.encode(&kp)?;
+    let encoded = claims.encode(kp)?;
     let encvec = encoded.as_bytes().to_vec();
     let mut m: Module = deserialize_buffer(orig_bytecode)?;
     m.set_custom_section("jwt", encvec);
@@ -82,6 +84,7 @@ pub fn embed_claims(orig_bytecode: &[u8], claims: &Claims<Actor>, kp: &KeyPair) 
     Ok(buf)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn sign_buffer_with_claims(
     name: String,
     buf: impl AsRef<[u8]>,
@@ -150,8 +153,10 @@ fn compute_hash_without_jwt(module: Module) -> Result<String> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::caps::{KEY_VALUE, LOGGING, MESSAGING};
-    use crate::jwt::{Actor, Claims};
+    use crate::{
+        caps::{KEY_VALUE, LOGGING, MESSAGING},
+        jwt::{Actor, Claims},
+    };
     use base64::decode;
     use parity_wasm::serialize;
 
