@@ -1,8 +1,9 @@
 use crate::{
     config::{LanguageConfig, OutputFile, OutputLanguage},
+    error::Result,
     gen::{to_json, CodeGen},
     render::Renderer,
-    Bytes, Error, JsonValue, ParamMap, Result,
+    Bytes, Error, JsonValue, ParamMap,
 };
 use atelier_core::model::Model;
 use std::{

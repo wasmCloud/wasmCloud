@@ -439,7 +439,7 @@ impl<'model> RustCodeGen<'model> {
                     r#"
                 // Decode {} from cbor input stream
                 #[doc(hidden)] {}
-                pub fn decode_{}<'b>(d: &mut {}::cbor::Decoder<'b>) -> Result<{},RpcError>
+                pub fn decode_{}(d: &mut {}::cbor::Decoder<'_>) -> Result<{},RpcError>
                 {{
                     let __result = {{ "#,
                     &name,

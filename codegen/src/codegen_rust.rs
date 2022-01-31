@@ -235,11 +235,13 @@ impl<'model> CodeGen for RustCodeGen<'model> {
                     r#"
                 #[allow(unused_imports)]
                 use {}::{{
-                    cbor::*, RpcError,RpcResult,Timestamp, 
+                    cbor::*,
                     common::{{
                         Context, deserialize, Message, MessageFormat, message_format, 
                         MessageDispatch, SendOpts, serialize, Transport,
-                    }}
+                    }},
+                    error::{{RpcError,RpcResult}},
+                    Timestamp,
                 }};
                 #[allow(unused_imports)]
                 use serde::{{Deserialize, Serialize}};

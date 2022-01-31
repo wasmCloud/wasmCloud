@@ -1,7 +1,10 @@
 //! imports/exports for WebAssembly actors
 #![cfg(target_arch = "wasm32")]
 
-use crate::{Message, RpcError, RpcResult};
+use crate::{
+    error::{RpcError, RpcResult},
+    Message,
+};
 use async_trait::async_trait;
 
 #[link(wasm_import_module = "wasmbus")]

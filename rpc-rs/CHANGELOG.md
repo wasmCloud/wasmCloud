@@ -2,12 +2,17 @@
 
 ## 0.7.0-alpha.2
 
-- The `common` module is now a public export, and structures in it that had been reexported from the crate top-level
-  (Message,Context) must now be imported as `common::Message` and `common::Context`. This is technically a breaking
-  change, although for most users these are imported from either `actor::prelude::*` or `provider::prelude::*`,
-  so only a recompile should be necessary in most cases. This change should help avoid some of the build problems
-  related to linking different versions of wasmbus-rpc in dependency graph.
+### Breaking changes (since 0.6.x)
 
+- Some of the crate exported symbols have moved to sub-modules. The intent is to resolve some linking problems
+  resulting from multiple inconsistent references to these symbols.
+  Most of these changes will require only a recompile, for Actors and Providers 
+  that import `wasmbus_rpc::actor::prelude::*` or `wasmbus_rpc::provider::prelude::*`, respectively.
+  - wasmbus_rpc::{RpcError,RpcResult} -> wasmbus_rpc::error::{RpcError,RpcResult}
+  - wasmbus_rpc::{Message,MessageDispatch,Transport} -> wasmbus_rpc::common::{Message,MessageDispatch,Transport}
+  - wasmbus_rpc::context::Context -> wasmbus_rpc::common::Context
+  - To help avoid external breakage, the crate-level symbols have been marked deprecated
+  
 - removed feature options [ser_json] and [ser_msgpack] - ser_msgpack was always, and remains, the default.
 
 - added a `cbor` module to wrap `minicor`, so the choice of cbor implementation is not exposed.
