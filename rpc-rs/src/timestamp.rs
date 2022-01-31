@@ -9,13 +9,13 @@
 //! the [chrono](https://crates.io/crate/chrono) crate is recommended.
 //!
 
-use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use std::{
     cmp::Ordering,
     convert::TryFrom,
     time::{SystemTime, UNIX_EPOCH},
 };
+use time::OffsetDateTime;
 
 /// Timestamp - represents absolute time in UTC,
 /// as non-leap seconds and nanoseconds since the UNIX EPOCH
@@ -61,27 +61,25 @@ impl PartialOrd for Timestamp {
 /// Error returned if time valid provided is invalid
 pub const INVALID_DATETIME: &str = "Invalid DateTime";
 
-impl TryFrom<Timestamp> for DateTime<Utc> {
+impl TryFrom<Timestamp> for OffsetDateTime {
     type Error = &'static str;
 
-    ///
-    /// Returns the DateTime, or an error if the parameter is invalid.
-    fn try_from(ts: Timestamp) -> Result<DateTime<Utc>, Self::Error> {
-        //) -> Option<chrono::DateTime<chrono::Timestamp::UTC>> {
-        match NaiveDateTime::from_timestamp_opt(ts.sec, ts.nsec) {
-            Some(dt) => Ok(Utc.from_utc_datetime(&dt)),
-            None => Err(INVALID_DATETIME),
-        }
+    // Returns the DateTime, or an error if the parameter is invalid.
+    fn try_from(ts: Timestamp) -> Result<OffsetDateTime, Self::Error> {
+        Ok(
+            OffsetDateTime::from_unix_timestamp(ts.sec).map_err(|_| INVALID_DATETIME)?
+                + std::time::Duration::from_nanos(ts.nsec as u64),
+        )
     }
 }
 
-impl From<DateTime<Utc>> for Timestamp {
+impl From<OffsetDateTime> for Timestamp {
     /// Creates a Timestamp from chrono DateTime
-    fn from(dt: DateTime<Utc>) -> Timestamp {
-        const NANOSECONDS_PER_SECOND: i64 = 1_000_000_000;
-        let nanos = dt.timestamp_nanos();
+    fn from(dt: OffsetDateTime) -> Timestamp {
+        const NANOSECONDS_PER_SECOND: i128 = 1_000_000_000;
+        let nanos = dt.unix_timestamp_nanos();
         Timestamp {
-            sec: nanos / NANOSECONDS_PER_SECOND,
+            sec: (nanos / NANOSECONDS_PER_SECOND) as i64,
             nsec: (nanos % NANOSECONDS_PER_SECOND) as u32,
         }
     }
@@ -114,15 +112,15 @@ fn timestamp_updates() {
 
 #[test]
 fn timestamp_to_datetime() {
-    use chrono::{DateTime, Utc};
     use std::convert::TryInto;
+    use time::OffsetDateTime;
 
     let start: Timestamp = Timestamp {
         sec: 2_000_000_000,
         nsec: 100_000,
     };
 
-    let dt: DateTime<Utc> = start.try_into().unwrap();
+    let dt: OffsetDateTime = start.try_into().unwrap();
 
     let next: Timestamp = dt.into();
 

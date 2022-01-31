@@ -8,7 +8,8 @@ use crate::{
         deserialize, message_format, serialize, Context, Message, MessageDispatch, MessageFormat,
         SendOpts, Transport,
     },
-    RpcError, RpcResult, Timestamp,
+    error::{RpcError, RpcResult},
+    Timestamp,
 };
 #[allow(unused_imports)]
 use async_trait::async_trait;
@@ -24,7 +25,7 @@ pub type ActorLinks = Vec<LinkDefinition>;
 
 // Decode ActorLinks from cbor input stream
 #[doc(hidden)]
-pub fn decode_actor_links<'b>(d: &mut crate::cbor::Decoder<'b>) -> Result<ActorLinks, RpcError> {
+pub fn decode_actor_links(d: &mut crate::cbor::Decoder<'_>) -> Result<ActorLinks, RpcError> {
     let __result = {
         if let Some(n) = d.array()? {
             let mut arr: Vec<LinkDefinition> = Vec::with_capacity(n as usize);
@@ -57,8 +58,8 @@ pub type ClusterIssuerKey = String;
 
 // Decode ClusterIssuerKey from cbor input stream
 #[doc(hidden)]
-pub fn decode_cluster_issuer_key<'b>(
-    d: &mut crate::cbor::Decoder<'b>,
+pub fn decode_cluster_issuer_key(
+    d: &mut crate::cbor::Decoder<'_>,
 ) -> Result<ClusterIssuerKey, RpcError> {
     let __result = { d.str()?.to_string() };
     Ok(__result)
@@ -67,8 +68,8 @@ pub type ClusterIssuers = Vec<ClusterIssuerKey>;
 
 // Decode ClusterIssuers from cbor input stream
 #[doc(hidden)]
-pub fn decode_cluster_issuers<'b>(
-    d: &mut crate::cbor::Decoder<'b>,
+pub fn decode_cluster_issuers(
+    d: &mut crate::cbor::Decoder<'_>,
 ) -> Result<ClusterIssuers, RpcError> {
     let __result = {
         if let Some(n) = d.array()? {
@@ -104,8 +105,8 @@ pub struct HealthCheckRequest {}
 
 // Decode HealthCheckRequest from cbor input stream
 #[doc(hidden)]
-pub fn decode_health_check_request<'b>(
-    d: &mut crate::cbor::Decoder<'b>,
+pub fn decode_health_check_request(
+    d: &mut crate::cbor::Decoder<'_>,
 ) -> Result<HealthCheckRequest, RpcError> {
     let __result = {
         let is_array = match d.datatype()? {
@@ -155,8 +156,8 @@ pub struct HealthCheckResponse {
 
 // Decode HealthCheckResponse from cbor input stream
 #[doc(hidden)]
-pub fn decode_health_check_response<'b>(
-    d: &mut crate::cbor::Decoder<'b>,
+pub fn decode_health_check_response(
+    d: &mut crate::cbor::Decoder<'_>,
 ) -> Result<HealthCheckResponse, RpcError> {
     let __result = {
         let mut healthy: Option<bool> = None;
@@ -261,7 +262,7 @@ pub struct HostData {
 
 // Decode HostData from cbor input stream
 #[doc(hidden)]
-pub fn decode_host_data<'b>(d: &mut crate::cbor::Decoder<'b>) -> Result<HostData, RpcError> {
+pub fn decode_host_data(d: &mut crate::cbor::Decoder<'_>) -> Result<HostData, RpcError> {
     let __result = {
         let mut host_id: Option<String> = None;
         let mut lattice_rpc_prefix: Option<String> = None;
@@ -486,9 +487,7 @@ pub type HostEnvValues = std::collections::HashMap<String, String>;
 
 // Decode HostEnvValues from cbor input stream
 #[doc(hidden)]
-pub fn decode_host_env_values<'b>(
-    d: &mut crate::cbor::Decoder<'b>,
-) -> Result<HostEnvValues, RpcError> {
+pub fn decode_host_env_values(d: &mut crate::cbor::Decoder<'_>) -> Result<HostEnvValues, RpcError> {
     let __result = {
         {
             let mut m: std::collections::HashMap<String, String> =
@@ -527,7 +526,7 @@ pub struct Invocation {
 
 // Decode Invocation from cbor input stream
 #[doc(hidden)]
-pub fn decode_invocation<'b>(d: &mut crate::cbor::Decoder<'b>) -> Result<Invocation, RpcError> {
+pub fn decode_invocation(d: &mut crate::cbor::Decoder<'_>) -> Result<Invocation, RpcError> {
     let __result = {
         let mut origin: Option<WasmCloudEntity> = None;
         let mut target: Option<WasmCloudEntity> = None;
@@ -680,8 +679,8 @@ pub struct InvocationResponse {
 
 // Decode InvocationResponse from cbor input stream
 #[doc(hidden)]
-pub fn decode_invocation_response<'b>(
-    d: &mut crate::cbor::Decoder<'b>,
+pub fn decode_invocation_response(
+    d: &mut crate::cbor::Decoder<'_>,
 ) -> Result<InvocationResponse, RpcError> {
     let __result = {
         let mut msg: Option<Vec<u8>> = None;
@@ -783,8 +782,8 @@ pub struct LinkDefinition {
 
 // Decode LinkDefinition from cbor input stream
 #[doc(hidden)]
-pub fn decode_link_definition<'b>(
-    d: &mut crate::cbor::Decoder<'b>,
+pub fn decode_link_definition(
+    d: &mut crate::cbor::Decoder<'_>,
 ) -> Result<LinkDefinition, RpcError> {
     let __result = {
         let mut actor_id: Option<String> = None;
@@ -894,9 +893,7 @@ pub type LinkSettings = std::collections::HashMap<String, String>;
 
 // Decode LinkSettings from cbor input stream
 #[doc(hidden)]
-pub fn decode_link_settings<'b>(
-    d: &mut crate::cbor::Decoder<'b>,
-) -> Result<LinkSettings, RpcError> {
+pub fn decode_link_settings(d: &mut crate::cbor::Decoder<'_>) -> Result<LinkSettings, RpcError> {
     let __result = {
         {
             let mut m: std::collections::HashMap<String, String> =
@@ -926,8 +923,8 @@ pub struct WasmCloudEntity {
 
 // Decode WasmCloudEntity from cbor input stream
 #[doc(hidden)]
-pub fn decode_wasm_cloud_entity<'b>(
-    d: &mut crate::cbor::Decoder<'b>,
+pub fn decode_wasm_cloud_entity(
+    d: &mut crate::cbor::Decoder<'_>,
 ) -> Result<WasmCloudEntity, RpcError> {
     let __result = {
         let mut public_key: Option<String> = None;

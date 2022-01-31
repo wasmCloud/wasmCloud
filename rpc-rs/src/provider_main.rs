@@ -2,8 +2,8 @@
 
 use crate::{
     core::HostData,
+    error::RpcError,
     provider::{HostBridge, ProviderDispatch},
-    RpcError,
 };
 use once_cell::sync::OnceCell;
 

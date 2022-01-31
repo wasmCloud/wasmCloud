@@ -2,7 +2,10 @@
 #![cfg(test)]
 
 use std::{str::FromStr as _, time::Duration};
-use wasmbus_rpc::{RpcClient, RpcError, RpcResult};
+use wasmbus_rpc::{
+    error::{RpcError, RpcResult},
+    rpc_client::RpcClient,
+};
 
 //const DEFAULT_NATS_ADDR: &str = "nats://127.0.0.1:4222";
 const TEST_NATS_ADDR: &str = "demo.nats.io";

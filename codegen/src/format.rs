@@ -1,7 +1,10 @@
 //! implementations of source code formatters (rustfmt, gofmt)
 //!
 
-use crate::{gen::SourceFormatter, Error, Result};
+use crate::{
+    error::{Error, Result},
+    gen::SourceFormatter,
+};
 
 /// A formatter that does not format any code
 #[derive(Default)]

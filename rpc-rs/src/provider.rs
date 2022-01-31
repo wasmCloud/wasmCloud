@@ -5,11 +5,13 @@
 
 pub use crate::rpc_client::make_uuid;
 use crate::{
+    common::{Context, Message, MessageDispatch, SendOpts},
     core::{
         HealthCheckRequest, HealthCheckResponse, HostData, Invocation, InvocationResponse,
         LinkDefinition,
     },
-    Message, MessageDispatch, RpcClient, RpcError,
+    error::RpcError,
+    rpc_client::RpcClient,
 };
 use async_trait::async_trait;
 use futures::future::JoinAll;
@@ -37,11 +39,11 @@ pub mod prelude {
     pub use crate::{
         common::{Context, Message, MessageDispatch, SendOpts},
         core::LinkDefinition,
+        error::{RpcError, RpcResult},
         provider::{HostBridge, ProviderDispatch, ProviderHandler},
         provider_main::{
             get_host_bridge, load_host_data, provider_main, provider_run, provider_start,
         },
-        RpcError, RpcResult,
     };
 
     pub use async_trait::async_trait;
@@ -294,7 +296,7 @@ impl HostBridge {
                                 );
                                 let response = match provider
                                     .dispatch(
-                                        &crate::Context {
+                                        &Context {
                                             actor: Some(inv.origin.public_key.clone()),
                                             ..Default::default()
                                         },
@@ -698,12 +700,12 @@ impl<'send> ProviderTransport<'send> {
 }
 
 #[async_trait]
-impl<'send> crate::Transport for ProviderTransport<'send> {
+impl<'send> crate::common::Transport for ProviderTransport<'send> {
     async fn send(
         &self,
-        _ctx: &crate::Context,
+        _ctx: &Context,
         req: Message<'_>,
-        _opts: Option<crate::SendOpts>,
+        _opts: Option<SendOpts>,
     ) -> std::result::Result<Vec<u8>, RpcError> {
         let origin = self.ld.provider_entity();
         let target = self.ld.actor_entity();

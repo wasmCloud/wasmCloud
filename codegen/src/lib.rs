@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
-mod error;
-pub use error::{Error, Result};
+pub mod error;
+use error::Error;
 #[cfg(feature = "cbor")]
 pub(crate) mod codegen_py;
 pub(crate) mod codegen_rust;

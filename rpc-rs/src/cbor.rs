@@ -6,7 +6,7 @@
 //!
 #![allow(dead_code)]
 
-use crate::{RpcError, RpcResult};
+use crate::error::{RpcError, RpcResult};
 use std::fmt::Debug;
 
 #[derive(Clone)]
@@ -155,7 +155,7 @@ impl<W: Write> Write for WriteX<W> {
     fn write_all(&mut self, buf: &[u8]) -> Result<(), RpcError> {
         self.writer
             .write_all(buf)
-            .map_err(|e| RpcError::Ser(format!("encoder write: {}", e.to_string())))
+            .map_err(|e| RpcError::Ser(format!("encoder write: {}", e)))
     }
 }
 
@@ -165,7 +165,7 @@ impl<W: Write> minicbor::encode::write::Write for WriteX<W> {
     fn write_all(&mut self, buf: &[u8]) -> Result<(), Self::Error> {
         self.writer
             .write_all(buf)
-            .map_err(|e| RpcError::Ser(format!("encoding: {}", e.to_string())))
+            .map_err(|e| RpcError::Ser(format!("encoding: {}", e)))
     }
 }
 
@@ -423,39 +423,39 @@ impl std::fmt::Display for Type {
 
 #[inline]
 pub fn decode_u8(d: &mut Decoder<'_>) -> RpcResult<u8> {
-    Ok(d.u8()?)
+    d.u8()
 }
 #[inline]
 pub fn decode_u16(d: &mut Decoder<'_>) -> RpcResult<u16> {
-    Ok(d.u16()?)
+    d.u16()
 }
 #[inline]
 pub fn decode_u32(d: &mut Decoder<'_>) -> RpcResult<u32> {
-    Ok(d.u32()?)
+    d.u32()
 }
 #[inline]
 pub fn decode_u64(d: &mut Decoder<'_>) -> RpcResult<u64> {
-    Ok(d.u64()?)
+    d.u64()
 }
 #[inline]
 pub fn decode_i8(d: &mut Decoder<'_>) -> RpcResult<i8> {
-    Ok(d.i8()?)
+    d.i8()
 }
 #[inline]
 pub fn decode_i16(d: &mut Decoder<'_>) -> RpcResult<i16> {
-    Ok(d.i16()?)
+    d.i16()
 }
 #[inline]
 pub fn decode_i32(d: &mut Decoder<'_>) -> RpcResult<i32> {
-    Ok(d.i32()?)
+    d.i32()
 }
 #[inline]
 pub fn decode_i64(d: &mut Decoder<'_>) -> RpcResult<i64> {
-    Ok(d.i64()?)
+    d.i64()
 }
 #[inline]
 pub fn decode_boolean(d: &mut Decoder<'_>) -> RpcResult<bool> {
-    Ok(d.bool()?)
+    d.bool()
 }
 #[inline]
 pub fn decode_string(d: &mut Decoder<'_>) -> RpcResult<String> {
@@ -467,25 +467,25 @@ pub fn decode_blob(d: &mut Decoder<'_>) -> RpcResult<Vec<u8>> {
 }
 #[inline]
 pub fn decode_byte(d: &mut Decoder<'_>) -> RpcResult<u8> {
-    Ok(d.u8()?)
+    d.u8()
 }
 #[inline]
 pub fn decode_char(d: &mut Decoder<'_>) -> RpcResult<char> {
-    Ok(d.char()?)
+    d.char()
 }
 #[inline]
 pub fn decode_integer(d: &mut Decoder<'_>) -> RpcResult<i32> {
-    Ok(d.i32()?)
+    d.i32()
 }
 #[inline]
 pub fn decode_long(d: &mut Decoder<'_>) -> RpcResult<i64> {
-    Ok(d.i64()?)
+    d.i64()
 }
 #[inline]
 pub fn decode_float(d: &mut Decoder<'_>) -> RpcResult<f32> {
-    Ok(d.f32()?)
+    d.f32()
 }
 #[inline]
 pub fn decode_double(d: &mut Decoder<'_>) -> RpcResult<f64> {
-    Ok(d.f64()?)
+    d.f64()
 }

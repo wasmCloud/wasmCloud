@@ -7,10 +7,10 @@
 mod timestamp;
 // re-export Timestamp
 pub use timestamp::Timestamp;
+
 mod actor_wasm;
-pub mod common;
-use common::{deserialize, serialize, Context, Message, MessageDispatch, SendOpts, Transport};
 pub mod channel_log;
+pub mod common;
 pub mod provider;
 pub(crate) mod provider_main;
 mod wasmbus_model;
@@ -18,9 +18,49 @@ pub mod model {
     // re-export model lib as "model"
     pub use crate::wasmbus_model::*;
 }
+pub mod cbor;
+pub mod error;
 
-// re-export
-pub use minicbor;
+#[deprecated(
+    since = "0.7.0-alpha.2",
+    note = "use wasmbus_rpc::common::deserialize instead of wasmbus_rpc::deseerialize"
+)]
+pub use common::deserialize;
+#[deprecated(
+    since = "0.7.0-alpha.2",
+    note = "use wasmbus_rpc::common::serialize instead of wasmbus_rpc::serialize"
+)]
+pub use common::serialize;
+#[deprecated(
+    since = "0.7.0-alpha.2",
+    note = "use wasmbus_rpc::common::Context instead of wasmbus_rpc::Context"
+)]
+pub use common::Context;
+#[deprecated(
+    since = "0.7.0-alpha.2",
+    note = "use wasmbus_rpc::common::Message instead of wasmbus_rpc::Message"
+)]
+pub use common::Message;
+#[deprecated(
+    since = "0.7.0-alpha.2",
+    note = "use wasmbus_rpc::common::SendOpts instead of wasmbus_rpc::SendOpts"
+)]
+pub use common::SendOpts;
+#[deprecated(
+    since = "0.7.0-alpha.2",
+    note = "use wasmbus_rpc::common::Transport instead of wasmbus_rpc::Transport"
+)]
+pub use common::Transport;
+#[deprecated(
+    since = "0.7.0-alpha.2",
+    note = "use wasmbus_rpc::error::RpcError instead of wasmbus_rpc::RpcError"
+)]
+pub use error::RpcError;
+#[deprecated(
+    since = "0.7.0-alpha.2",
+    note = "use wasmbus_rpc::error::RpcResult instead of wasmbus_rpc::RpcResult"
+)]
+pub use error::RpcResult;
 
 // re-export nats-aflowt
 #[cfg(not(target_arch = "wasm32"))]
@@ -31,11 +71,7 @@ pub use nats_aflowt as anats;
 pub use minicbor;
 
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) mod rpc_client;
-#[cfg(not(target_arch = "wasm32"))]
-pub use rpc_client::{rpc_topic, RpcClient};
-
-pub type RpcResult<T> = std::result::Result<T, RpcError>;
+pub mod rpc_client;
 
 /// import module for webassembly linking
 #[doc(hidden)]
@@ -51,8 +87,8 @@ pub type TomlMap = toml::value::Map<String, toml::value::Value>;
 mod wasmbus_core;
 pub mod core {
     // re-export core lib as "core"
+    use crate::error::{RpcError, RpcResult};
     pub use crate::wasmbus_core::*;
-    use crate::{RpcError, RpcResult};
     use std::convert::TryFrom;
 
     cfg_if::cfg_if! {
@@ -231,9 +267,9 @@ pub mod actor {
 
     pub mod prelude {
         pub use crate::{
-            common::{Context, Message, MessageDispatch, Transport},
+            common::{Context, Message, MessageDispatch, SendOpts, Transport},
             core::{Actor, ActorReceiver},
-            RpcError, RpcResult,
+            error::{RpcError, RpcResult},
         };
 
         // re-export async_trait
@@ -258,9 +294,9 @@ pub mod actor {
                 pub struct WasmHost {}
 
                 #[async_trait]
-                impl crate::Transport for WasmHost {
+                impl crate::common::Transport for WasmHost {
                     async fn send(&self, _ctx: &Context,
-                                _msg: Message<'_>, _opts: Option<crate::SendOpts> ) -> crate::RpcResult<Vec<u8>> {
+                                _msg: Message<'_>, _opts: Option<SendOpts> ) -> RpcResult<Vec<u8>> {
                        unimplemented!();
                     }
                     fn set_timeout(&self, _interval: std::time::Duration) {
@@ -271,99 +307,5 @@ pub mod actor {
                 pub fn console_log(_s: &str) {}
             }
         }
-    }
-}
-
-/// An error that can occur in the processing of an RPC. This is not request-specific errors but
-/// rather cross-cutting errors that can always occur.
-#[derive(thiserror::Error, Debug, serde::Serialize, serde::Deserialize)]
-#[non_exhaustive]
-pub enum RpcError {
-    /// The request exceeded its deadline.
-    #[error("the request exceeded its deadline: {0}")]
-    DeadlineExceeded(String),
-
-    /// A capability provider was called before its configure_dispatch was called.
-    #[error("the capability provider has not been initialized: {0}")]
-    NotInitialized(String),
-
-    #[error("method not handled {0}")]
-    MethodNotHandled(String),
-
-    /// Error that can be returned if server has not implemented
-    /// an optional interface method
-    #[error("method not implemented")]
-    NotImplemented,
-
-    #[error("Host send error {0}")]
-    HostError(String),
-
-    #[error("deserialization: {0}")]
-    Deser(String),
-
-    #[error("serialization: {0}")]
-    Ser(String),
-
-    #[error("rpc: {0}")]
-    Rpc(String),
-
-    #[error("nats: {0}")]
-    Nats(String),
-
-    #[error("invalid parameter: {0}")]
-    InvalidParameter(String),
-
-    /// Error occurred in actor's rpc handler
-    #[error("actor: {0}")]
-    ActorHandler(String),
-
-    /// Error occurred during provider initialization or put-link
-    #[error("provider initialization or put-link: {0}")]
-    ProviderInit(String),
-
-    /// Timeout occurred
-    #[error("timeout: {0}")]
-    Timeout(String),
-
-    //#[error("IO error")]
-    //IO([from] std::io::Error)
-    /// Anything else
-    #[error("{0}")]
-    Other(String),
-}
-
-impl From<String> for RpcError {
-    fn from(s: String) -> RpcError {
-        RpcError::Other(s)
-    }
-}
-
-impl From<&str> for RpcError {
-    fn from(s: &str) -> RpcError {
-        RpcError::Other(s.to_string())
-    }
-}
-
-impl From<std::io::Error> for RpcError {
-    fn from(e: std::io::Error) -> RpcError {
-        RpcError::Other(format!("io: {}", e))
-    }
-}
-
-impl From<minicbor::encode::Error<std::io::Error>> for RpcError {
-    fn from(e: minicbor::encode::Error<std::io::Error>) -> RpcError {
-        RpcError::Ser(format!("cbor-encode: {}", e))
-    }
-}
-
-impl From<minicbor::encode::Error<RpcError>> for RpcError {
-    fn from(e: minicbor::encode::Error<RpcError>) -> RpcError {
-        RpcError::Ser(format!("cbor-encode: {}", e))
-    }
-}
-
-impl From<minicbor::decode::Error> for RpcError {
-    fn from(e: minicbor::decode::Error) -> RpcError {
-        RpcError::Deser(format!("cbor-decode: {}", e))
     }
 }

@@ -1,4 +1,7 @@
-use crate::{config::ModelSource, Error, Result};
+use crate::{
+    config::ModelSource,
+    error::{Error, Result},
+};
 use atelier_core::model::Model;
 use reqwest::Url;
 use rustc_hash::FxHasher;
