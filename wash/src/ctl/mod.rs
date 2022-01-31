@@ -318,6 +318,10 @@ pub(crate) struct StartProviderCommand {
     /// Timeout to await an auction response, defaults to 2000 milliseconds
     #[clap(long = "auction-timeout-ms", default_value_t = default_timeout_ms())]
     auction_timeout_ms: u64,
+
+    /// Path to provider configuration JSON file
+    #[clap(long = "config-json")]
+    config_json: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Parser)]
@@ -686,13 +690,29 @@ pub(crate) async fn start_provider(mut cmd: StartProviderCommand) -> Result<CtlO
         }
     };
 
+    let config_json = if let Some(config_path) = cmd.config_json {
+        let config_str = match std::fs::read_to_string(&config_path) {
+            Ok(s) => s,
+            Err(e) => bail!("Error reading provider configuration: {}", e),
+        };
+        match serde_json::from_str::<serde_json::Value>(&config_str) {
+            Ok(_v) => Some(config_str),
+            _ => bail!(
+                "Configuration path provided but was invalid JSON: {}",
+                config_path.display()
+            ),
+        }
+    } else {
+        None
+    };
+
     client
         .start_provider(
             &host.to_string(),
             &cmd.provider_ref,
             Some(cmd.link_name),
             None,
-            None,
+            config_json,
         )
         .await
         .map_err(convert_error)
@@ -1040,11 +1060,13 @@ mod test {
                 link_name,
                 constraints,
                 auction_timeout_ms,
+                config_json,
             })) => {
                 assert_eq!(&opts.ctl_host.unwrap(), CTL_HOST);
                 assert_eq!(&opts.ctl_port.unwrap(), CTL_PORT);
                 assert_eq!(&opts.lattice_prefix.unwrap(), LATTICE_PREFIX);
                 assert_eq!(opts.timeout_ms, 2001);
+                assert_eq!(config_json, None);
                 assert_eq!(auction_timeout_ms, 2002);
                 assert_eq!(link_name, "default".to_string());
                 assert_eq!(constraints.unwrap(), vec!["arch=x86_64".to_string()]);
