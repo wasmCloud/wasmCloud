@@ -91,8 +91,23 @@ where
         RpcError::InvalidParameter(format!("Invalid nats server url '{}': {}", nats_addr, e))
     })?;
 
+    let nats_opts = match (
+        host_data.lattice_rpc_user_jwt.trim(),
+        host_data.lattice_rpc_user_seed.trim(),
+    ) {
+        ("", "") => nats_aflowt::Options::default(),
+        (rpc_jwt, rpc_seed) => {
+            let kp = nkeys::KeyPair::from_seed(rpc_seed).unwrap();
+            let jwt = rpc_jwt.to_owned();
+            nats_aflowt::Options::with_jwt(
+                move || Ok(jwt.to_owned()),
+                move |nonce| kp.sign(nonce).unwrap(),
+            )
+        }
+    };
+
     // Connect to nats
-    let nc = nats_aflowt::Options::default()
+    let nc = nats_opts
         .max_reconnects(None)
         .connect(vec![nats_server])
         .await
