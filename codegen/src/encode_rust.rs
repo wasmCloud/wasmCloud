@@ -1,4 +1,3 @@
-#![cfg(feature = "cbor")]
 // CBOR Encode functions
 //
 // Because we have all the type information for declared types,

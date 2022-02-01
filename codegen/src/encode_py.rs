@@ -1,4 +1,3 @@
-#![cfg(feature = "cbor")]
 // CBOR Encode functions
 //
 // The encoder is written as a plain function "encode_<S>" where S is the type name

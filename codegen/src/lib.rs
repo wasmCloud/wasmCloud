@@ -2,15 +2,12 @@
 
 pub mod error;
 use error::Error;
-#[cfg(feature = "cbor")]
 pub(crate) mod codegen_py;
 pub(crate) mod codegen_rust;
 pub mod config;
-#[cfg(feature = "cbor")]
 pub(crate) mod decode_py;
 pub(crate) mod decode_rust;
 pub mod docgen;
-#[cfg(feature = "cbor")]
 pub(crate) mod encode_py;
 pub(crate) mod encode_rust;
 pub(crate) mod gen;

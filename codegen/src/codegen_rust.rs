@@ -185,6 +185,7 @@ impl<'model> CodeGen for RustCodeGen<'model> {
             Some(ns) => Some(NamespaceID::from_str(ns)?),
             None => None,
         };
+        //self.protocol = model.wasmbus_
         if let Some(ref ns) = self.namespace {
             if self.packages.get(&ns.to_string()).is_none() {
                 print_warning(&format!(
@@ -208,23 +209,19 @@ impl<'model> CodeGen for RustCodeGen<'model> {
         &mut self,
         w: &mut Writer,
         model: &Model,
-        _params: &ParamMap,
+        params: &ParamMap,
     ) -> Result<()> {
-        w.write(
-            r#"// This file is generated automatically using wasmcloud/weld-codegen and smithy model definitions
-               //
-            "#);
+        w.write(&format!(
+            "// This file is generated automatically using wasmcloud/weld-codegen {}\n",
+            env!("CARGO_PKG_VERSION")
+        ));
         match &self.namespace {
             Some(n) if n == wasmcloud_model_namespace() => {
                 // the base model has minimal dependencies
-                w.write(&format!(
-                    r#"
-                #[allow(unused_imports)]
-                use serde::{{Deserialize, Serialize}};
-                use {}::RpcError;
-             "#,
-                    self.import_core,
-                ));
+                w.write("#[allow(unused_imports)] use serde::{{Deserialize, Serialize}};\n");
+                if !params.contains_key("no_serde") && env!("CARGO_PKG_NAME") != "weld-codegen" {
+                    w.write(&format!("use {}::RpcError'\n", self.import_core));
+                }
             }
             _ => {
                 // all others use standard frontmatter
@@ -261,7 +258,7 @@ impl<'model> CodeGen for RustCodeGen<'model> {
         Ok(())
     }
 
-    fn declare_types(&mut self, w: &mut Writer, model: &Model, _params: &ParamMap) -> Result<()> {
+    fn declare_types(&mut self, w: &mut Writer, model: &Model, params: &ParamMap) -> Result<()> {
         let ns = self.namespace.clone();
 
         let mut shapes = model
@@ -307,12 +304,18 @@ impl<'model> CodeGen for RustCodeGen<'model> {
                 | ShapeKind::Union(_)
                 | ShapeKind::Unresolved => {}
             }
-            if !traits.contains_key(&prelude_shape_named(TRAIT_TRAIT).unwrap()) {
-                cfg_if::cfg_if! {
-                    if #[cfg(feature = "cbor")] {
-                        self.declare_shape_encoder(w, id, shape)?;
-                    }
-                }
+
+            // If the shape is not a trait, and ser-deser isn't disabled, generate encoder and decoder
+            // It's ok to declare cbor shape encoders & decoders even if not used by
+            // this service's protocol version, because this shape might be used in other interfaces
+            // that _do_ use cbor, and because the cbor en-/de- coders won't be added
+            // to the compiler output of they aren't used
+            if !traits.contains_key(&prelude_shape_named(TRAIT_TRAIT).unwrap())
+                && !params.contains_key("no_serde")
+                && env!("CARGO_PKG_NAME") != "weld-codegen"
+            // wasmbus-rpc can't be as dependency of weld-codegen or it creates circular dependencies
+            {
+                self.declare_shape_encoder(w, id, shape)?;
                 self.declare_shape_decoder(w, id, shape)?;
             }
         }
@@ -842,6 +845,7 @@ impl<'model> RustCodeGen<'model> {
         self.write_ident_with_suffix(w, service.id, "Receiver")?;
         w.write(b" : MessageDispatch + ");
         self.write_ident(w, service.id);
+        let proto = crate::model::wasmbus_proto(service.traits)?;
         w.write(
             br#"{
             async fn dispatch(
@@ -867,16 +871,28 @@ impl<'model> RustCodeGen<'model> {
             if let Some(op_input) = op.input() {
                 let symbol = op_input.shape_name().to_string();
                 // let value : InputType = deserialize(...)?;
-                w.write(&format!(
-                    r#"
+                if proto.has_cbor() {
+                    w.write(&format!(
+                        r#"
                     let value : {} = {}::common::decode(&message.arg, &decode_{})
                       .map_err(|e| RpcError::Deser(format!("'{}': {{}}", e)))?;
                     "#,
-                    self.type_string(Ty::Shape(op_input))?,
-                    self.import_core,
-                    crate::strings::to_snake_case(&symbol),
-                    &symbol,
-                ));
+                        self.type_string(Ty::Shape(op_input))?,
+                        self.import_core,
+                        crate::strings::to_snake_case(&symbol),
+                        &symbol,
+                    ));
+                } else {
+                    w.write(&format!(
+                        r#"
+                        let value: {} = {}::common::deserialize(&message.arg)
+                      .map_err(|e| RpcError::Deser(format!("'{}': {{}}", e)))?;
+                        "#,
+                        self.type_string(Ty::Shape(op_input))?,
+                        self.import_core,
+                        &symbol,
+                    ))
+                }
             }
             // let resp = Trait::method(self, ctx, &value).await?;
             if op.output().is_some() {
@@ -896,14 +912,20 @@ impl<'model> RustCodeGen<'model> {
 
             if let Some(_op_output) = op.output() {
                 // serialize result
-                cfg_if::cfg_if! {
-                    if #[cfg(feature = "cbor-msg")] {
-                        w.write(b"let mut buf = Vec::new(); let e = &mut wasmbus_rpc::cbor::Encoder::new(&mut buf);\n");
-                        let s = self.encode_shape_id(_op_output, crate::encode_rust::ValExpr::Plain("resp"))?;
-                        w.write(&s);
-                    } else {
-                        w.write("let buf = serialize(&resp)?;\n");
-                    }
+                if proto.has_cbor() {
+                    w.write(&format!(
+                        "let mut buf = Vec::new(); let e = &mut {}::cbor::Encoder::new(&mut \
+                         buf);\n",
+                        &self.import_core,
+                    ));
+                    let s = self
+                        .encode_shape_id(_op_output, crate::encode_rust::ValExpr::Plain("resp"))?;
+                    w.write(&s);
+                } else {
+                    w.write(&format!(
+                        "let buf = {}::common::serialize(&resp)?;\n",
+                        &self.import_core
+                    ));
                 }
             } else {
                 w.write(b"let buf = Vec::new();\n");
@@ -935,6 +957,7 @@ impl<'model> RustCodeGen<'model> {
         );
         self.write_comment(w, CommentKind::Documentation, &doc);
         self.apply_documentation_traits(w, service.id, service.traits);
+        let proto = crate::model::wasmbus_proto(service.traits)?;
         w.write(&format!(
             r#"/// client for sending {} messages
               #[derive(Debug)]
@@ -980,29 +1003,36 @@ impl<'model> RustCodeGen<'model> {
             let _arg_is_string = matches!(arg_flags, MethodArgFlags::ToString);
             w.write(b" {\n");
             if let Some(_op_input) = op.input() {
-                cfg_if::cfg_if! {
-                    if #[cfg(feature = "cbor-msg")] {
-                        if _arg_is_string {
-                            w.write(b"let arg = arg.to_string();\n");
-                        }
-                        w.write(b"let mut buf = Vec::new(); let e = &mut wasmbus_rpc::cbor::Encoder::new(&mut buf);\n");
-                        let s = self.encode_shape_id(_op_input,
-                            if _arg_is_string {
-                                crate::encode_rust::ValExpr::Ref("arg.as_ref()")
-                            } else {
-                                crate::encode_rust::ValExpr::Ref("arg")
-                            }
-                        )?;
-                        w.write(&s);
-                        //let tn = crate::strings::to_snake_case(&self.type_string(Ty::Shape(op.input().as_ref().unwrap()))?);
-                        //w.write(&format!("encode_{}(&mut e, arg)?;", tn));
-                    } else {
-                        if matches!(arg_flags, MethodArgFlags::ToString) {
-                            w.write(b"let buf = serialize(&arg.to_string())?;\n");
-                        } else {
-                            w.write(b"let buf = serialize(arg)?;\n");
-                        }
+                if proto.has_cbor() {
+                    if _arg_is_string {
+                        w.write(b"let arg = arg.to_string();\n");
                     }
+                    w.write(&format!(
+                        "let mut buf = Vec::new(); let e = &mut {}::cbor::Encoder::new(&mut \
+                         buf);\n",
+                        &self.import_core
+                    ));
+                    let s = self.encode_shape_id(
+                        _op_input,
+                        if _arg_is_string {
+                            crate::encode_rust::ValExpr::Ref("arg.as_ref()")
+                        } else {
+                            crate::encode_rust::ValExpr::Ref("arg")
+                        },
+                    )?;
+                    w.write(&s);
+                    //let tn = crate::strings::to_snake_case(&self.type_string(Ty::Shape(op.input().as_ref().unwrap()))?);
+                    //w.write(&format!("encode_{}(&mut e, arg)?;", tn));
+                } else if matches!(arg_flags, MethodArgFlags::ToString) {
+                    w.write(&format!(
+                        "let buf = {}::common::serialize(&arg.to_string())?;\n",
+                        &self.import_core
+                    ));
+                } else {
+                    w.write(&format!(
+                        "let buf = {}::common::serialize(arg)?;\n",
+                        &self.import_core
+                    ));
                 }
             } else {
                 w.write(b"let buf = *b\"\";\n");
@@ -1015,17 +1045,30 @@ impl<'model> RustCodeGen<'model> {
             w.write(b"\", arg: Cow::Borrowed(&buf)}, None).await?;\n");
             if let Some(op_output) = op.output() {
                 let symbol = op_output.shape_name().to_string();
-                w.write(&format!(
-                    r#"
+                if proto.has_cbor() {
+                    w.write(&format!(
+                        r#"
                     let value : {} = {}::common::decode(&resp, &decode_{})
                         .map_err(|e| RpcError::Deser(format!("'{{}}': {}", e)))?;
                     Ok(value)
                     "#,
-                    self.type_string(Ty::Shape(op_output))?,
-                    self.import_core,
-                    crate::strings::to_snake_case(&symbol),
-                    &symbol,
-                ));
+                        self.type_string(Ty::Shape(op_output))?,
+                        self.import_core,
+                        crate::strings::to_snake_case(&symbol),
+                        &symbol,
+                    ));
+                } else {
+                    w.write(&format!(
+                        r#"
+                    let value : {} = {}::common::deserialize(&resp)
+                        .map_err(|e| RpcError::Deser(format!("'{{}}': {}", e)))?;
+                    Ok(value)
+                    "#,
+                        self.type_string(Ty::Shape(op_output))?,
+                        self.import_core,
+                        &symbol,
+                    ));
+                }
             } else {
                 w.write(b"Ok(())");
             }

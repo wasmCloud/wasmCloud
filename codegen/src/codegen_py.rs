@@ -1,6 +1,5 @@
 //! Python language code-generator
 //!
-#![cfg(feature = "cbor")]
 
 #[cfg(feature = "wasmbus")]
 use crate::wasmbus_model::Wasmbus;

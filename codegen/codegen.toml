@@ -4,7 +4,8 @@
 [[models]]
 url = "https://cdn.jsdelivr.net/gh/wasmcloud/interfaces@wasmcloud-core-interface-v0.2.0/core/wasmcloud-core.smithy"
 [[models]]
-url = "https://cdn.jsdelivr.net/gh/wasmcloud/interfaces@wasmcloud-model-interface-v0.2.0/core/wasmcloud-model.smithy"
+#url = "https://cdn.jsdelivr.net/gh/wasmcloud/interfaces@wasmcloud-model-interface-v0.2.0/core/wasmcloud-model.smithy"
+url = "https://raw.githubusercontent.com/wasmCloud/interfaces/proto-version/core/wasmcloud-model.smithy"
 
 [rust]
 output_dir = "."
@@ -12,3 +13,4 @@ output_dir = "."
 [[rust.files]]
 path = "src/wasmbus_model.rs"
 namespace = "org.wasmcloud.model"
+params = { no_serde = true } # don't generate proto serialization & deserialization for this model

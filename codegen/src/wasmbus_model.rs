@@ -1,6 +1,4 @@
-// This file is generated automatically using wasmcloud/weld-codegen and smithy model definitions
-//
-
+// This file is generated automatically using wasmcloud/weld-codegen 0.2.4
 #[allow(unused_imports)]
 use serde::{Deserialize, Serialize};
 
@@ -88,7 +86,7 @@ pub struct Serialization {
     /// (optional setting) Override field name when serializing and deserializing
     /// By default, (when `name` not specified) is the exact declared name without
     /// casing transformations. This setting does not affect the field name
-    /// produced in code generation, which is always language-idiomatic
+    /// produced in code generation, which is always lanaguage-idiomatic
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
 }
@@ -116,6 +114,11 @@ pub struct Wasmbus {
     #[serde(rename = "contractId")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub contract_id: Option<CapabilityContractId>,
+    /// Binary message protocol version. Defaults to "0" if unset.
+    /// Be aware that changing this value can break binary compatibility unless
+    /// all users of this interface recompile
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol: Option<String>,
     /// indicates this service's operations are handled by an provider (default false)
     #[serde(rename = "providerReceive")]
     #[serde(default)]
