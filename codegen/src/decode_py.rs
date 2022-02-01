@@ -1,4 +1,3 @@
-#![cfg(feature = "cbor")]
 //! CBOR Decode functions
 
 use crate::{

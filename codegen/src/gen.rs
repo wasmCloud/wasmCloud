@@ -2,9 +2,8 @@
 //! and [CodeGen](#CodeGen), the trait for language-specific code-driven code generation.
 //!
 //!
-#[cfg(feature = "cbor")]
-use crate::codegen_py::PythonCodeGen;
 use crate::{
+    codegen_py::PythonCodeGen,
     codegen_rust::RustCodeGen,
     config::{CodegenConfig, LanguageConfig, OutputFile, OutputLanguage},
     docgen::DocGen,
@@ -207,8 +206,6 @@ fn gen_for_language<'model>(
         OutputLanguage::Rust => Box::new(RustCodeGen::new(model)),
         OutputLanguage::Html => Box::new(DocGen::default()),
         OutputLanguage::Poly => Box::new(PolyGen::default()),
-        #[cfg(feature = "cbor")]
-        // python requires cbor feature
         OutputLanguage::Python => Box::new(PythonCodeGen::new(model)),
         _ => {
             crate::error::print_warning(&format!("Target language {} not implemented", language));

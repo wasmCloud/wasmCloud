@@ -14,10 +14,6 @@ readme = "README.md"
 default = [ "wasmbus" ]
 wasmbus = []
 experimental_types = [ "BigInteger", "BigDecimal"]
-# 'cbor' feature generates cbor encoders and decoders (experimental)
-cbor = [ ]
-# 'cbor-msg' uses cbor instead of msgpack for wasmbus serialization and deserialization (experimental)
-cbor-msg = ["cbor"]
 BigInteger = []
 BigDecimal = []
 

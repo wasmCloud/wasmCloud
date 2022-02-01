@@ -3,8 +3,6 @@
 //! - ModelIndex is a "cache" of a smithy model grouped by shape kind and sorted by identifier name
 //! - various macros used in the codegen crate
 //!
-use std::ops::Deref;
-//use crate::strings::{to_pascal_case, to_snake_case};
 use crate::{
     error::{Error, Result},
     JsonValue,
@@ -19,7 +17,7 @@ use atelier_core::{
 };
 use lazy_static::lazy_static;
 use serde::{de::DeserializeOwned, Deserialize};
-use std::str::FromStr;
+use std::{fmt, ops::Deref, str::FromStr};
 
 const WASMCLOUD_MODEL_NAMESPACE: &str = "org.wasmcloud.model";
 const WASMCLOUD_CORE_NAMESPACE: &str = "org.wasmcloud.core";
@@ -118,6 +116,43 @@ pub enum CommentKind {
     InQuote,
 }
 
+#[derive(Default, Clone, PartialEq)]
+pub struct WasmbusProtoVersion {
+    base: u8, // base number
+}
+
+impl TryFrom<&str> for WasmbusProtoVersion {
+    type Error = crate::error::Error;
+
+    fn try_from(value: &str) -> std::result::Result<Self, Self::Error> {
+        match value {
+            "0" => Ok(WasmbusProtoVersion { base: 0 }),
+            "2" => Ok(WasmbusProtoVersion { base: 2 }),
+            _ => Err(Error::Model(format!(
+                "Invalid wasmbus.protocol: '{}'. The default value is \"0\".",
+                value
+            ))),
+        }
+    }
+}
+impl fmt::Debug for WasmbusProtoVersion {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(&self.to_string())
+    }
+}
+
+impl ToString for WasmbusProtoVersion {
+    fn to_string(&self) -> String {
+        format!("{}", self.base)
+    }
+}
+
+impl WasmbusProtoVersion {
+    pub fn has_cbor(&self) -> bool {
+        self.base >= 2
+    }
+}
+
 // Modifiers on data type
 // This enum may be extended in the future if other variations are required.
 // It's recursively composable, so you could represent &Option<&Value>
@@ -210,6 +245,16 @@ pub fn get_trait<T: DeserializeOwned>(traits: &AppliedTraits, id: &ShapeID) -> R
         },
         Some(None) => Ok(None),
         None => Ok(None),
+    }
+}
+
+pub fn wasmbus_proto(traits: &AppliedTraits) -> Result<WasmbusProtoVersion> {
+    match get_trait(traits, wasmbus_trait()) {
+        Ok(Some(Wasmbus {
+            protocol: Some(version),
+            ..
+        })) => WasmbusProtoVersion::try_from(version.as_str()),
+        _ => Ok(WasmbusProtoVersion::default()),
     }
 }
 
@@ -336,7 +381,9 @@ impl Deref for NumberedMember {
     }
 }
 
+use crate::wasmbus_model::Wasmbus;
 use std::iter::Iterator;
+
 /// Returns sorted list of fields for the structure, and whether it is numbered.
 /// If there are any errors in numbering, returns Error::Model
 pub(crate) fn get_sorted_fields(
