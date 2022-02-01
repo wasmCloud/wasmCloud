@@ -267,6 +267,12 @@ impl<W: Write + 'static> Encoder<W> {
         Ok(self)
     }
 
+    /// Encode a null
+    pub fn null(&mut self) -> Result<&mut Self, RpcError> {
+        self.inner.null()?;
+        Ok(self)
+    }
+
     /// Begin encoding an array with `len` elements
     pub fn array(&mut self, len: u64) -> Result<&mut Self, RpcError> {
         self.inner.array(len)?;
