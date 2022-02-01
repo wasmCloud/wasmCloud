@@ -219,8 +219,11 @@ impl<'model> CodeGen for RustCodeGen<'model> {
             Some(n) if n == wasmcloud_model_namespace() => {
                 // the base model has minimal dependencies
                 w.write("#[allow(unused_imports)] use serde::{{Deserialize, Serialize}};\n");
-                if !params.contains_key("no_serde") && env!("CARGO_PKG_NAME") != "weld-codegen" {
-                    w.write(&format!("use {}::RpcError'\n", self.import_core));
+                if !params.contains_key("no_serde") {
+                    w.write(&format!(
+                        "#[allow(unused_imports)] use {}::error::{{RpcError,RpcResult}};\n",
+                        self.import_core
+                    ));
                 }
             }
             _ => {
@@ -312,7 +315,7 @@ impl<'model> CodeGen for RustCodeGen<'model> {
             // to the compiler output of they aren't used
             if !traits.contains_key(&prelude_shape_named(TRAIT_TRAIT).unwrap())
                 && !params.contains_key("no_serde")
-                && env!("CARGO_PKG_NAME") != "weld-codegen"
+            //&& env!("CARGO_PKG_NAME") != "weld-codegen"
             // wasmbus-rpc can't be as dependency of weld-codegen or it creates circular dependencies
             {
                 self.declare_shape_encoder(w, id, shape)?;

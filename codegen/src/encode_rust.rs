@@ -386,7 +386,7 @@ impl<'model> RustCodeGen<'model> {
                 #[doc(hidden)] {}
                 pub fn encode_{}<W>(e: &mut {}::cbor::Encoder<W>, {}: &{}) -> RpcResult<()>
                 where
-                    W: {}::cbor::Write,
+                    W: {}::cbor::Write + 'static,
                 {{
                 "#,
                     &name,
