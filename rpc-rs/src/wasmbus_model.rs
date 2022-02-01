@@ -1,7 +1,6 @@
-// This file is generated automatically using wasmcloud/weld-codegen and smithy model definitions
-//
-
-use crate::RpcError;
+// This file is generated automatically using wasmcloud/weld-codegen 0.2.4
+#[allow(unused_imports)]
+use crate::error::{RpcError, RpcResult};
 #[allow(unused_imports)]
 use serde::{Deserialize, Serialize};
 
@@ -9,6 +8,19 @@ pub const SMITHY_VERSION: &str = "1.0";
 
 /// Capability contract id, e.g. 'wasmcloud:httpserver'
 pub type CapabilityContractId = String;
+
+// Encode CapabilityContractId as CBOR and append to output stream
+#[doc(hidden)]
+pub fn encode_capability_contract_id<W>(
+    e: &mut crate::cbor::Encoder<W>,
+    val: &CapabilityContractId,
+) -> RpcResult<()>
+where
+    W: crate::cbor::Write + 'static,
+{
+    e.str(val)?;
+    Ok(())
+}
 
 // Decode CapabilityContractId from cbor input stream
 #[doc(hidden)]
@@ -21,6 +33,17 @@ pub fn decode_capability_contract_id(
 /// signed 16-bit int
 pub type I16 = i16;
 
+// Encode I16 as CBOR and append to output stream
+#[doc(hidden)]
+#[inline]
+pub fn encode_i16<W>(e: &mut crate::cbor::Encoder<W>, val: &I16) -> RpcResult<()>
+where
+    W: crate::cbor::Write + 'static,
+{
+    e.i16(*val)?;
+    Ok(())
+}
+
 // Decode I16 from cbor input stream
 #[doc(hidden)]
 #[inline]
@@ -30,6 +53,17 @@ pub fn decode_i16(d: &mut crate::cbor::Decoder<'_>) -> Result<I16, RpcError> {
 }
 /// signed 32-bit int
 pub type I32 = i32;
+
+// Encode I32 as CBOR and append to output stream
+#[doc(hidden)]
+#[inline]
+pub fn encode_i32<W>(e: &mut crate::cbor::Encoder<W>, val: &I32) -> RpcResult<()>
+where
+    W: crate::cbor::Write + 'static,
+{
+    e.i32(*val)?;
+    Ok(())
+}
 
 // Decode I32 from cbor input stream
 #[doc(hidden)]
@@ -41,6 +75,17 @@ pub fn decode_i32(d: &mut crate::cbor::Decoder<'_>) -> Result<I32, RpcError> {
 /// signed 64-bit int
 pub type I64 = i64;
 
+// Encode I64 as CBOR and append to output stream
+#[doc(hidden)]
+#[inline]
+pub fn encode_i64<W>(e: &mut crate::cbor::Encoder<W>, val: &I64) -> RpcResult<()>
+where
+    W: crate::cbor::Write + 'static,
+{
+    e.i64(*val)?;
+    Ok(())
+}
+
 // Decode I64 from cbor input stream
 #[doc(hidden)]
 #[inline]
@@ -51,6 +96,17 @@ pub fn decode_i64(d: &mut crate::cbor::Decoder<'_>) -> Result<I64, RpcError> {
 /// signed byte
 pub type I8 = i8;
 
+// Encode I8 as CBOR and append to output stream
+#[doc(hidden)]
+#[inline]
+pub fn encode_i8<W>(e: &mut crate::cbor::Encoder<W>, val: &I8) -> RpcResult<()>
+where
+    W: crate::cbor::Write + 'static,
+{
+    e.i8(*val)?;
+    Ok(())
+}
+
 // Decode I8 from cbor input stream
 #[doc(hidden)]
 #[inline]
@@ -60,6 +116,22 @@ pub fn decode_i8(d: &mut crate::cbor::Decoder<'_>) -> Result<I8, RpcError> {
 }
 /// list of identifiers
 pub type IdentifierList = Vec<String>;
+
+// Encode IdentifierList as CBOR and append to output stream
+#[doc(hidden)]
+pub fn encode_identifier_list<W>(
+    e: &mut crate::cbor::Encoder<W>,
+    val: &IdentifierList,
+) -> RpcResult<()>
+where
+    W: crate::cbor::Write + 'static,
+{
+    e.array(val.len() as u64)?;
+    for item in val.iter() {
+        e.str(item)?;
+    }
+    Ok(())
+}
 
 // Decode IdentifierList from cbor input stream
 #[doc(hidden)]
@@ -91,6 +163,17 @@ pub fn decode_identifier_list(
 /// unsigned 16-bit int
 pub type U16 = i16;
 
+// Encode U16 as CBOR and append to output stream
+#[doc(hidden)]
+#[inline]
+pub fn encode_u16<W>(e: &mut crate::cbor::Encoder<W>, val: &U16) -> RpcResult<()>
+where
+    W: crate::cbor::Write + 'static,
+{
+    e.i16(*val)?;
+    Ok(())
+}
+
 // Decode U16 from cbor input stream
 #[doc(hidden)]
 #[inline]
@@ -100,6 +183,17 @@ pub fn decode_u16(d: &mut crate::cbor::Decoder<'_>) -> Result<U16, RpcError> {
 }
 /// unsigned 32-bit int
 pub type U32 = i32;
+
+// Encode U32 as CBOR and append to output stream
+#[doc(hidden)]
+#[inline]
+pub fn encode_u32<W>(e: &mut crate::cbor::Encoder<W>, val: &U32) -> RpcResult<()>
+where
+    W: crate::cbor::Write + 'static,
+{
+    e.i32(*val)?;
+    Ok(())
+}
 
 // Decode U32 from cbor input stream
 #[doc(hidden)]
@@ -111,6 +205,17 @@ pub fn decode_u32(d: &mut crate::cbor::Decoder<'_>) -> Result<U32, RpcError> {
 /// unsigned 64-bit int
 pub type U64 = i64;
 
+// Encode U64 as CBOR and append to output stream
+#[doc(hidden)]
+#[inline]
+pub fn encode_u64<W>(e: &mut crate::cbor::Encoder<W>, val: &U64) -> RpcResult<()>
+where
+    W: crate::cbor::Write + 'static,
+{
+    e.i64(*val)?;
+    Ok(())
+}
+
 // Decode U64 from cbor input stream
 #[doc(hidden)]
 #[inline]
@@ -120,6 +225,17 @@ pub fn decode_u64(d: &mut crate::cbor::Decoder<'_>) -> Result<U64, RpcError> {
 }
 /// unsigned byte
 pub type U8 = i8;
+
+// Encode U8 as CBOR and append to output stream
+#[doc(hidden)]
+#[inline]
+pub fn encode_u8<W>(e: &mut crate::cbor::Encoder<W>, val: &U8) -> RpcResult<()>
+where
+    W: crate::cbor::Write + 'static,
+{
+    e.i8(*val)?;
+    Ok(())
+}
 
 // Decode U8 from cbor input stream
 #[doc(hidden)]

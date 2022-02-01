@@ -1,5 +1,4 @@
-// This file is generated automatically using wasmcloud/weld-codegen and smithy model definitions
-//
+// This file is generated automatically using wasmcloud/weld-codegen 0.2.4
 
 #[allow(unused_imports)]
 use crate::{
@@ -22,6 +21,19 @@ pub const SMITHY_VERSION: &str = "1.0";
 
 /// List of linked actors for a provider
 pub type ActorLinks = Vec<LinkDefinition>;
+
+// Encode ActorLinks as CBOR and append to output stream
+#[doc(hidden)]
+pub fn encode_actor_links<W>(e: &mut crate::cbor::Encoder<W>, val: &ActorLinks) -> RpcResult<()>
+where
+    W: crate::cbor::Write + 'static,
+{
+    e.array(val.len() as u64)?;
+    for item in val.iter() {
+        encode_link_definition(e, item)?;
+    }
+    Ok(())
+}
 
 // Decode ActorLinks from cbor input stream
 #[doc(hidden)]
@@ -56,6 +68,19 @@ pub fn decode_actor_links(d: &mut crate::cbor::Decoder<'_>) -> Result<ActorLinks
 }
 pub type ClusterIssuerKey = String;
 
+// Encode ClusterIssuerKey as CBOR and append to output stream
+#[doc(hidden)]
+pub fn encode_cluster_issuer_key<W>(
+    e: &mut crate::cbor::Encoder<W>,
+    val: &ClusterIssuerKey,
+) -> RpcResult<()>
+where
+    W: crate::cbor::Write + 'static,
+{
+    e.str(val)?;
+    Ok(())
+}
+
 // Decode ClusterIssuerKey from cbor input stream
 #[doc(hidden)]
 pub fn decode_cluster_issuer_key(
@@ -65,6 +90,22 @@ pub fn decode_cluster_issuer_key(
     Ok(__result)
 }
 pub type ClusterIssuers = Vec<ClusterIssuerKey>;
+
+// Encode ClusterIssuers as CBOR and append to output stream
+#[doc(hidden)]
+pub fn encode_cluster_issuers<W>(
+    e: &mut crate::cbor::Encoder<W>,
+    val: &ClusterIssuers,
+) -> RpcResult<()>
+where
+    W: crate::cbor::Write + 'static,
+{
+    e.array(val.len() as u64)?;
+    for item in val.iter() {
+        encode_cluster_issuer_key(e, item)?;
+    }
+    Ok(())
+}
 
 // Decode ClusterIssuers from cbor input stream
 #[doc(hidden)]
@@ -102,6 +143,19 @@ pub fn decode_cluster_issuers(
 /// health check request parameter
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct HealthCheckRequest {}
+
+// Encode HealthCheckRequest as CBOR and append to output stream
+#[doc(hidden)]
+pub fn encode_health_check_request<W>(
+    e: &mut crate::cbor::Encoder<W>,
+    _val: &HealthCheckRequest,
+) -> RpcResult<()>
+where
+    W: crate::cbor::Write + 'static,
+{
+    e.map(0)?;
+    Ok(())
+}
 
 // Decode HealthCheckRequest from cbor input stream
 #[doc(hidden)]
@@ -152,6 +206,25 @@ pub struct HealthCheckResponse {
     /// A message containing additional information about the actors health
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+}
+
+// Encode HealthCheckResponse as CBOR and append to output stream
+#[doc(hidden)]
+pub fn encode_health_check_response<W>(
+    e: &mut crate::cbor::Encoder<W>,
+    val: &HealthCheckResponse,
+) -> RpcResult<()>
+where
+    W: crate::cbor::Write + 'static,
+{
+    e.array(2)?;
+    e.bool(val.healthy)?;
+    if let Some(val) = val.message.as_ref() {
+        e.str(val)?;
+    } else {
+        e.null()?;
+    }
+    Ok(())
 }
 
 // Decode HealthCheckResponse from cbor input stream
@@ -258,6 +331,33 @@ pub struct HostData {
     /// without an actor context
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_json: Option<String>,
+}
+
+// Encode HostData as CBOR and append to output stream
+#[doc(hidden)]
+pub fn encode_host_data<W>(e: &mut crate::cbor::Encoder<W>, val: &HostData) -> RpcResult<()>
+where
+    W: crate::cbor::Write + 'static,
+{
+    e.array(13)?;
+    e.str(&val.host_id)?;
+    e.str(&val.lattice_rpc_prefix)?;
+    e.str(&val.link_name)?;
+    e.str(&val.lattice_rpc_user_jwt)?;
+    e.str(&val.lattice_rpc_user_seed)?;
+    e.str(&val.lattice_rpc_url)?;
+    e.str(&val.provider_key)?;
+    e.str(&val.invocation_seed)?;
+    encode_host_env_values(e, &val.env_values)?;
+    e.str(&val.instance_id)?;
+    encode_actor_links(e, &val.link_definitions)?;
+    encode_cluster_issuers(e, &val.cluster_issuers)?;
+    if let Some(val) = val.config_json.as_ref() {
+        e.str(val)?;
+    } else {
+        e.null()?;
+    }
+    Ok(())
 }
 
 // Decode HostData from cbor input stream
@@ -485,6 +585,23 @@ pub fn decode_host_data(d: &mut crate::cbor::Decoder<'_>) -> Result<HostData, Rp
 /// Environment settings for initializing a capability provider
 pub type HostEnvValues = std::collections::HashMap<String, String>;
 
+// Encode HostEnvValues as CBOR and append to output stream
+#[doc(hidden)]
+pub fn encode_host_env_values<W>(
+    e: &mut crate::cbor::Encoder<W>,
+    val: &HostEnvValues,
+) -> RpcResult<()>
+where
+    W: crate::cbor::Write + 'static,
+{
+    e.map(val.len() as u64)?;
+    for (k, v) in val {
+        e.str(k)?;
+        e.str(v)?;
+    }
+    Ok(())
+}
+
 // Decode HostEnvValues from cbor input stream
 #[doc(hidden)]
 pub fn decode_host_env_values(d: &mut crate::cbor::Decoder<'_>) -> Result<HostEnvValues, RpcError> {
@@ -522,6 +639,23 @@ pub struct Invocation {
     pub encoded_claims: String,
     #[serde(default)]
     pub host_id: String,
+}
+
+// Encode Invocation as CBOR and append to output stream
+#[doc(hidden)]
+pub fn encode_invocation<W>(e: &mut crate::cbor::Encoder<W>, val: &Invocation) -> RpcResult<()>
+where
+    W: crate::cbor::Write + 'static,
+{
+    e.array(7)?;
+    encode_wasm_cloud_entity(e, &val.origin)?;
+    encode_wasm_cloud_entity(e, &val.target)?;
+    e.str(&val.operation)?;
+    e.bytes(&val.msg)?;
+    e.str(&val.id)?;
+    e.str(&val.encoded_claims)?;
+    e.str(&val.host_id)?;
+    Ok(())
 }
 
 // Decode Invocation from cbor input stream
@@ -677,6 +811,26 @@ pub struct InvocationResponse {
     pub error: Option<String>,
 }
 
+// Encode InvocationResponse as CBOR and append to output stream
+#[doc(hidden)]
+pub fn encode_invocation_response<W>(
+    e: &mut crate::cbor::Encoder<W>,
+    val: &InvocationResponse,
+) -> RpcResult<()>
+where
+    W: crate::cbor::Write + 'static,
+{
+    e.array(3)?;
+    e.bytes(&val.msg)?;
+    e.str(&val.invocation_id)?;
+    if let Some(val) = val.error.as_ref() {
+        e.str(val)?;
+    } else {
+        e.null()?;
+    }
+    Ok(())
+}
+
 // Decode InvocationResponse from cbor input stream
 #[doc(hidden)]
 pub fn decode_invocation_response(
@@ -778,6 +932,24 @@ pub struct LinkDefinition {
     #[serde(default)]
     pub contract_id: String,
     pub values: LinkSettings,
+}
+
+// Encode LinkDefinition as CBOR and append to output stream
+#[doc(hidden)]
+pub fn encode_link_definition<W>(
+    e: &mut crate::cbor::Encoder<W>,
+    val: &LinkDefinition,
+) -> RpcResult<()>
+where
+    W: crate::cbor::Write + 'static,
+{
+    e.array(5)?;
+    e.str(&val.actor_id)?;
+    e.str(&val.provider_id)?;
+    e.str(&val.link_name)?;
+    e.str(&val.contract_id)?;
+    encode_link_settings(e, &val.values)?;
+    Ok(())
 }
 
 // Decode LinkDefinition from cbor input stream
@@ -891,6 +1063,20 @@ pub fn decode_link_definition(
 /// Settings associated with an actor-provider link
 pub type LinkSettings = std::collections::HashMap<String, String>;
 
+// Encode LinkSettings as CBOR and append to output stream
+#[doc(hidden)]
+pub fn encode_link_settings<W>(e: &mut crate::cbor::Encoder<W>, val: &LinkSettings) -> RpcResult<()>
+where
+    W: crate::cbor::Write + 'static,
+{
+    e.map(val.len() as u64)?;
+    for (k, v) in val {
+        e.str(k)?;
+        e.str(v)?;
+    }
+    Ok(())
+}
+
 // Decode LinkSettings from cbor input stream
 #[doc(hidden)]
 pub fn decode_link_settings(d: &mut crate::cbor::Decoder<'_>) -> Result<LinkSettings, RpcError> {
@@ -919,6 +1105,22 @@ pub struct WasmCloudEntity {
     #[serde(default)]
     pub link_name: String,
     pub contract_id: crate::model::CapabilityContractId,
+}
+
+// Encode WasmCloudEntity as CBOR and append to output stream
+#[doc(hidden)]
+pub fn encode_wasm_cloud_entity<W>(
+    e: &mut crate::cbor::Encoder<W>,
+    val: &WasmCloudEntity,
+) -> RpcResult<()>
+where
+    W: crate::cbor::Write + 'static,
+{
+    e.array(3)?;
+    e.str(&val.public_key)?;
+    e.str(&val.link_name)?;
+    crate::model::encode_capability_contract_id(e, &val.contract_id)?;
+    Ok(())
 }
 
 // Decode WasmCloudEntity from cbor input stream
@@ -1019,11 +1221,10 @@ pub trait ActorReceiver: MessageDispatch + Actor {
     async fn dispatch(&self, ctx: &Context, message: &Message<'_>) -> RpcResult<Message<'_>> {
         match message.method {
             "HealthRequest" => {
-                let value: HealthCheckRequest =
-                    crate::common::decode(&message.arg, &decode_health_check_request)
-                        .map_err(|e| RpcError::Deser(format!("'HealthCheckRequest': {}", e)))?;
+                let value: HealthCheckRequest = crate::common::deserialize(&message.arg)
+                    .map_err(|e| RpcError::Deser(format!("'HealthCheckRequest': {}", e)))?;
                 let resp = Actor::health_request(self, ctx, &value).await?;
-                let buf = serialize(&resp)?;
+                let buf = crate::common::serialize(&resp)?;
                 Ok(Message {
                     method: "Actor.HealthRequest",
                     arg: Cow::Owned(buf),
@@ -1084,7 +1285,7 @@ impl<T: Transport + std::marker::Sync + std::marker::Send> Actor for ActorSender
         ctx: &Context,
         arg: &HealthCheckRequest,
     ) -> RpcResult<HealthCheckResponse> {
-        let buf = serialize(arg)?;
+        let buf = crate::common::serialize(arg)?;
         let resp = self
             .transport
             .send(
@@ -1097,9 +1298,8 @@ impl<T: Transport + std::marker::Sync + std::marker::Send> Actor for ActorSender
             )
             .await?;
 
-        let value: HealthCheckResponse =
-            crate::common::decode(&resp, &decode_health_check_response)
-                .map_err(|e| RpcError::Deser(format!("'{}': HealthCheckResponse", e)))?;
+        let value: HealthCheckResponse = crate::common::deserialize(&resp)
+            .map_err(|e| RpcError::Deser(format!("'{}': HealthCheckResponse", e)))?;
         Ok(value)
     }
 }
