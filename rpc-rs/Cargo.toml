@@ -1,6 +1,6 @@
 [package]
 name = "wasmbus-rpc"
-version = "0.7.0-alpha-2"
+version = "0.7.0-alpha-3"
 authors = [ "wasmcloud Team" ]
 license = "Apache-2.0"
 description = "Runtime library for actors and capability providers"
@@ -24,7 +24,7 @@ async-trait = "0.1"
 base64 = "0.13"
 cfg-if = "1.0"
 log = "0.4"
-minicbor = { version = "0.12", features = ["derive", "std", "half" ] }
+minicbor = { version = "0.13", features = ["std", "partial-skip-support" ] }
 rmp-serde = { version = "0.15.4" }
 serde_bytes = "0.11"
 serde_json = "1.0"
@@ -33,7 +33,7 @@ thiserror = "1.0"
 time = "0.3.7"
 tokio-timer = "0.2"
 toml = "0.5"
-wasmbus-macros = "0.1.6"
+wasmbus-macros = { path = "../macros" }
 
 #BigInteger support
 num-bigint = { version = "0.4", optional = true }
@@ -58,4 +58,4 @@ env_logger = "0.9.0"
 
 [build-dependencies]
 # Temporary change - still in draft pr branch
-weld-codegen = { path="../codegen" }
+weld-codegen = { path = "../codegen" }
