@@ -1,7 +1,7 @@
 // This file is generated automatically using wasmcloud/weld-codegen and smithy model definitions
 //
 
-#[allow(unused_imports)]
+#![allow(dead_code, unused_imports, clippy::ptr_arg, clippy::needless_lifetimes)]
 use serde::{Deserialize, Serialize};
 
 pub const SMITHY_VERSION: &str = "1.0";
