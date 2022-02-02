@@ -1,7 +1,8 @@
 // This file is generated automatically using wasmcloud/weld-codegen and smithy model definitions
 //
 
-#![allow(dead_code, unused_imports, clippy::ptr_arg, clippy::needless_lifetimes)]
+use crate::RpcError;
+#[allow(unused_imports)]
 use serde::{Deserialize, Serialize};
 
 pub const SMITHY_VERSION: &str = "1.0";
@@ -9,33 +10,134 @@ pub const SMITHY_VERSION: &str = "1.0";
 /// Capability contract id, e.g. 'wasmcloud:httpserver'
 pub type CapabilityContractId = String;
 
+// Decode CapabilityContractId from cbor input stream
+// This is part of experimental cbor support
+#[doc(hidden)]
+pub fn decode_capability_contract_id<'b>(
+    d: &mut crate::cbor::Decoder<'b>,
+) -> Result<CapabilityContractId, RpcError> {
+    let __result = { d.str()?.to_string() };
+    Ok(__result)
+}
 /// signed 16-bit int
 pub type I16 = i16;
 
+// Decode I16 from cbor input stream
+// This is part of experimental cbor support
+#[doc(hidden)]
+#[inline]
+pub fn decode_i16<'b>(d: &mut crate::cbor::Decoder<'b>) -> Result<I16, RpcError> {
+    let __result = { d.i16()? };
+    Ok(__result)
+}
 /// signed 32-bit int
 pub type I32 = i32;
 
+// Decode I32 from cbor input stream
+// This is part of experimental cbor support
+#[doc(hidden)]
+#[inline]
+pub fn decode_i32<'b>(d: &mut crate::cbor::Decoder<'b>) -> Result<I32, RpcError> {
+    let __result = { d.i32()? };
+    Ok(__result)
+}
 /// signed 64-bit int
 pub type I64 = i64;
 
+// Decode I64 from cbor input stream
+// This is part of experimental cbor support
+#[doc(hidden)]
+#[inline]
+pub fn decode_i64<'b>(d: &mut crate::cbor::Decoder<'b>) -> Result<I64, RpcError> {
+    let __result = { d.i64()? };
+    Ok(__result)
+}
 /// signed byte
 pub type I8 = i8;
 
+// Decode I8 from cbor input stream
+// This is part of experimental cbor support
+#[doc(hidden)]
+#[inline]
+pub fn decode_i8<'b>(d: &mut crate::cbor::Decoder<'b>) -> Result<I8, RpcError> {
+    let __result = { d.i8()? };
+    Ok(__result)
+}
 /// list of identifiers
 pub type IdentifierList = Vec<String>;
 
+// Decode IdentifierList from cbor input stream
+// This is part of experimental cbor support
+#[doc(hidden)]
+pub fn decode_identifier_list<'b>(
+    d: &mut crate::cbor::Decoder<'b>,
+) -> Result<IdentifierList, RpcError> {
+    let __result = {
+        if let Some(n) = d.array()? {
+            let mut arr: Vec<String> = Vec::with_capacity(n as usize);
+            for _ in 0..(n as usize) {
+                arr.push(d.str()?.to_string())
+            }
+            arr
+        } else {
+            // indefinite array
+            let mut arr: Vec<String> = Vec::new();
+            loop {
+                match d.datatype() {
+                    Err(_) => break,
+                    Ok(crate::cbor::Type::Break) => break,
+                    Ok(_) => arr.push(d.str()?.to_string()),
+                }
+            }
+            arr
+        }
+    };
+    Ok(__result)
+}
 /// unsigned 16-bit int
 pub type U16 = i16;
 
+// Decode U16 from cbor input stream
+// This is part of experimental cbor support
+#[doc(hidden)]
+#[inline]
+pub fn decode_u16<'b>(d: &mut crate::cbor::Decoder<'b>) -> Result<U16, RpcError> {
+    let __result = { d.i16()? };
+    Ok(__result)
+}
 /// unsigned 32-bit int
 pub type U32 = i32;
 
+// Decode U32 from cbor input stream
+// This is part of experimental cbor support
+#[doc(hidden)]
+#[inline]
+pub fn decode_u32<'b>(d: &mut crate::cbor::Decoder<'b>) -> Result<U32, RpcError> {
+    let __result = { d.i32()? };
+    Ok(__result)
+}
 /// unsigned 64-bit int
 pub type U64 = i64;
 
+// Decode U64 from cbor input stream
+// This is part of experimental cbor support
+#[doc(hidden)]
+#[inline]
+pub fn decode_u64<'b>(d: &mut crate::cbor::Decoder<'b>) -> Result<U64, RpcError> {
+    let __result = { d.i64()? };
+    Ok(__result)
+}
 /// unsigned byte
 pub type U8 = i8;
 
+// Decode U8 from cbor input stream
+// This is part of experimental cbor support
+#[doc(hidden)]
+#[inline]
+pub fn decode_u8<'b>(d: &mut crate::cbor::Decoder<'b>) -> Result<U8, RpcError> {
+    let __result = { d.i8()? };
+    Ok(__result)
+}
 /// Rust codegen traits
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CodegenRust {
@@ -88,7 +190,7 @@ pub struct Serialization {
     /// (optional setting) Override field name when serializing and deserializing
     /// By default, (when `name` not specified) is the exact declared name without
     /// casing transformations. This setting does not affect the field name
-    /// produced in code generation, which is always language-idiomatic
+    /// produced in code generation, which is always lanaguage-idiomatic
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
 }
