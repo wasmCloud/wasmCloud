@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, time::Duration};
 use sub_stream::collect_timeout;
 use wasmbus_rpc::anats;
-pub use wasmbus_rpc_06::core::LinkDefinition;
+pub use wasmbus_rpc::core::LinkDefinition;
 
 type Result<T> = ::std::result::Result<T, Box<dyn ::std::error::Error + Send + Sync>>;
 
@@ -317,7 +317,7 @@ impl Client {
     ) -> Result<CtlOperationAck> {
         let client = self.nc.clone();
         let nsprefix = self.nsprefix.clone();
-        let timeout = self.timeout.clone();
+        let timeout = self.timeout;
         let provider_ref = provider_ref.to_string();
 
         if !host_id.trim().is_empty() {
@@ -341,7 +341,7 @@ impl Client {
                 let hosts = get_hosts_(&client, &nsprefix, auction_timeout).await;
                 match hosts {
                     Ok(hs) => {
-                        if hs.len() > 0 {
+                        if !hs.is_empty() {
                             let _ = start_provider_(
                                 &client,
                                 &nsprefix,
@@ -578,6 +578,7 @@ async fn get_hosts_(
 }
 
 // "selfless" helper function that submits a start provider request to a host
+#[allow(clippy::too_many_arguments)]
 async fn start_provider_(
     client: &anats::Connection,
     nsprefix: &Option<String>,
