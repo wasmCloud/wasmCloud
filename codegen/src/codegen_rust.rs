@@ -219,6 +219,7 @@ impl<'model> CodeGen for RustCodeGen<'model> {
             Some(n) if n == wasmcloud_model_namespace() => {
                 // the base model has minimal dependencies
                 w.write("#[allow(unused_imports)] use serde::{{Deserialize, Serialize}};\n");
+                w.write(b"#[allow(unused_imports)] use minicbor::{Encode,encode::Write};\n");
                 if !params.contains_key("no_serde") {
                     w.write(&format!(
                         "#[allow(unused_imports)] use {}::error::{{RpcError,RpcResult}};\n",
@@ -917,13 +918,16 @@ impl<'model> RustCodeGen<'model> {
                 // serialize result
                 if proto.has_cbor() {
                     w.write(&format!(
-                        "let mut buf = Vec::new(); let e = &mut {}::cbor::Encoder::new(&mut \
-                         buf);\n",
-                        &self.import_core,
+                        "let mut e = {}::cbor::vec_encoder();\n",
+                        &self.import_core
                     ));
-                    let s = self
-                        .encode_shape_id(_op_output, crate::encode_rust::ValExpr::Plain("resp"))?;
+                    let s = self.encode_shape_id(
+                        _op_output,
+                        crate::encode_rust::ValExpr::Plain("resp"),
+                        true,
+                    )?;
                     w.write(&s);
+                    w.write(b"let buf = e.into_inner();\n");
                 } else {
                     w.write(&format!(
                         "let buf = {}::common::serialize(&resp)?;\n",
@@ -1011,8 +1015,7 @@ impl<'model> RustCodeGen<'model> {
                         w.write(b"let arg = arg.to_string();\n");
                     }
                     w.write(&format!(
-                        "let mut buf = Vec::new(); let e = &mut {}::cbor::Encoder::new(&mut \
-                         buf);\n",
+                        "let mut e = {}::cbor::vec_encoder();\n",
                         &self.import_core
                     ));
                     let s = self.encode_shape_id(
@@ -1022,8 +1025,10 @@ impl<'model> RustCodeGen<'model> {
                         } else {
                             crate::encode_rust::ValExpr::Ref("arg")
                         },
+                        true,
                     )?;
                     w.write(&s);
+                    w.write(b"let buf = e.into_inner(); \n");
                     //let tn = crate::strings::to_snake_case(&self.type_string(Ty::Shape(op.input().as_ref().unwrap()))?);
                     //w.write(&format!("encode_{}(&mut e, arg)?;", tn));
                 } else if matches!(arg_flags, MethodArgFlags::ToString) {
