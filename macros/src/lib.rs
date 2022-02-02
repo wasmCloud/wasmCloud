@@ -82,6 +82,8 @@ pub fn derive_actor(input: TokenStream) -> TokenStream {
 
     let output = quote!(
 
+    const RPC_VERSION : u32 = 1;
+
     #[link(wasm_import_module = "wasmbus")]
     extern "C" {
         pub fn __guest_response(ptr: *const u8, len: usize);
@@ -91,11 +93,22 @@ pub fn derive_actor(input: TokenStream) -> TokenStream {
 
     #[no_mangle]
     pub extern "C" fn __wasmbus_rpc_version() -> u32 {
-        HOST_API_VERSION
+        RPC_VERSION
     }
 
+    // invocation for api_version == 0
     #[no_mangle]
     pub extern "C" fn __guest_call(op_len: i32, req_len: i32) -> i32 {
+        guest_call(op_len, req_len, 0)
+    }
+
+    // for rpc api version >=1, guest_call_v is used to pass in api_version of the caller
+    #[no_mangle]
+    pub extern "C" fn __guest_call_v(op_len: i32, req_len: i32, api_version: u32) -> i32 {
+        guest_call(op_len, req_len, api_version)
+    }
+
+    fn guest_call(op_len: i32, req_len: i32, _api_version: u32) -> i32 {
         use std::slice;
 
         let buf: Vec<u8> = Vec::with_capacity(req_len as _);
