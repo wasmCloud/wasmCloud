@@ -479,8 +479,6 @@ pub fn spaces(indent_level: u8) -> &'static str {
     const SP: &str =
         "                                                                                         \
          \
-                                                                                                  \
-                                                                                                  \
                                                                                                   ";
     &SP[0..((indent_level * 4) as usize)]
 }
