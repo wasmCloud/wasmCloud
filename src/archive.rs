@@ -1,16 +1,17 @@
 use crate::Result;
 use data_encoding::HEXUPPER;
-use flate2::read::GzDecoder;
-use flate2::write::GzEncoder;
-use flate2::Compression;
+use flate2::{read::GzDecoder, write::GzEncoder, Compression};
 use ring::digest::{Context, Digest, SHA256};
-use std::collections::HashMap;
-use std::fs::File;
-use std::io::prelude::*;
-use std::io::{copy, Cursor, Read};
-use std::path::PathBuf;
-use wascap::jwt::{CapabilityProvider, Claims};
-use wascap::prelude::KeyPair;
+use std::{
+    collections::HashMap,
+    fs::File,
+    io::{copy, prelude::*, Cursor, Read},
+    path::PathBuf,
+};
+use wascap::{
+    jwt::{CapabilityProvider, Claims},
+    prelude::KeyPair,
+};
 
 const CLAIMS_JWT_FILE: &str = "claims.jwt";
 
@@ -105,7 +106,7 @@ impl ProviderArchive {
                 .unwrap()
                 .to_string();
             if target == "claims" {
-                c = Some(Claims::<CapabilityProvider>::decode(&std::str::from_utf8(
+                c = Some(Claims::<CapabilityProvider>::decode(std::str::from_utf8(
                     &bytes,
                 )?)?);
             } else {
@@ -113,7 +114,7 @@ impl ProviderArchive {
             }
         }
 
-        if c == None || libraries.len() < 1 {
+        if c == None || libraries.is_empty() {
             // we need at least claims.jwt and one plugin binary
             libraries.clear();
             return Err(
@@ -171,13 +172,13 @@ impl ProviderArchive {
             subject.public_key(),
             self.capid.to_string(),
             self.vendor.to_string(),
-            self.rev.clone(),
+            self.rev,
             self.ver.clone(),
             generate_hashes(&self.libraries),
         );
         self.claims = Some(claims.clone());
 
-        let claims_file = claims.encode(&issuer)?;
+        let claims_file = claims.encode(issuer)?;
 
         let mut header = tar::Header::new_gnu();
         header.set_path(CLAIMS_JWT_FILE)?;
@@ -188,10 +189,10 @@ impl ProviderArchive {
         for (tgt, lib) in self.libraries.iter() {
             let mut header = tar::Header::new_gnu();
             let path = format!("{}.bin", tgt);
-            header.set_path(path.to_string())?;
+            header.set_path(&path)?;
             header.set_size(lib.len() as u64);
             header.set_cksum();
-            par.append_data(&mut header, path.to_string(), Cursor::new(lib))?;
+            par.append_data(&mut header, &path, Cursor::new(lib))?;
         }
 
         // Completes the process of packing a .par archive
@@ -209,7 +210,7 @@ fn validate_hashes(
 
     for (tgt, library) in libraries.iter() {
         let file_hash = file_hashes.get(tgt).cloned().unwrap();
-        let check_hash = hash_bytes(&library);
+        let check_hash = hash_bytes(library);
         if file_hash != check_hash {
             return Err(format!("File hash and verify hash do not match for '{}'", tgt).into());
         }
@@ -249,14 +250,12 @@ fn sha256_digest<R: Read>(mut reader: R) -> Result<Digest> {
 
 #[cfg(test)]
 mod test {
-    use crate::ProviderArchive;
-    use crate::Result;
-    use flate2::read::GzDecoder;
-    use flate2::write::GzEncoder;
-    use flate2::Compression;
-    use std::fs::File;
-    use std::io::prelude::*;
-    use std::io::Read;
+    use crate::{ProviderArchive, Result};
+    use flate2::{read::GzDecoder, write::GzEncoder, Compression};
+    use std::{
+        fs::File,
+        io::{prelude::*, Read},
+    };
     use wascap::prelude::KeyPair;
 
     fn compress(par: &[u8]) -> Result<Vec<u8>> {
