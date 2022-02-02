@@ -2,6 +2,8 @@
 #[allow(unused_imports)]
 use crate::error::{RpcError, RpcResult};
 #[allow(unused_imports)]
+use minicbor::{encode::Write, Encode};
+#[allow(unused_imports)]
 use serde::{Deserialize, Serialize};
 
 pub const SMITHY_VERSION: &str = "1.0";
@@ -11,13 +13,10 @@ pub type CapabilityContractId = String;
 
 // Encode CapabilityContractId as CBOR and append to output stream
 #[doc(hidden)]
-pub fn encode_capability_contract_id<W>(
+pub fn encode_capability_contract_id<W: crate::cbor::Write>(
     e: &mut crate::cbor::Encoder<W>,
     val: &CapabilityContractId,
-) -> RpcResult<()>
-where
-    W: crate::cbor::Write + 'static,
-{
+) -> RpcResult<()> {
     e.str(val)?;
     Ok(())
 }
@@ -36,10 +35,10 @@ pub type I16 = i16;
 // Encode I16 as CBOR and append to output stream
 #[doc(hidden)]
 #[inline]
-pub fn encode_i16<W>(e: &mut crate::cbor::Encoder<W>, val: &I16) -> RpcResult<()>
-where
-    W: crate::cbor::Write + 'static,
-{
+pub fn encode_i16<W: crate::cbor::Write>(
+    e: &mut crate::cbor::Encoder<W>,
+    val: &I16,
+) -> RpcResult<()> {
     e.i16(*val)?;
     Ok(())
 }
@@ -57,10 +56,10 @@ pub type I32 = i32;
 // Encode I32 as CBOR and append to output stream
 #[doc(hidden)]
 #[inline]
-pub fn encode_i32<W>(e: &mut crate::cbor::Encoder<W>, val: &I32) -> RpcResult<()>
-where
-    W: crate::cbor::Write + 'static,
-{
+pub fn encode_i32<W: crate::cbor::Write>(
+    e: &mut crate::cbor::Encoder<W>,
+    val: &I32,
+) -> RpcResult<()> {
     e.i32(*val)?;
     Ok(())
 }
@@ -78,10 +77,10 @@ pub type I64 = i64;
 // Encode I64 as CBOR and append to output stream
 #[doc(hidden)]
 #[inline]
-pub fn encode_i64<W>(e: &mut crate::cbor::Encoder<W>, val: &I64) -> RpcResult<()>
-where
-    W: crate::cbor::Write + 'static,
-{
+pub fn encode_i64<W: crate::cbor::Write>(
+    e: &mut crate::cbor::Encoder<W>,
+    val: &I64,
+) -> RpcResult<()> {
     e.i64(*val)?;
     Ok(())
 }
@@ -99,10 +98,10 @@ pub type I8 = i8;
 // Encode I8 as CBOR and append to output stream
 #[doc(hidden)]
 #[inline]
-pub fn encode_i8<W>(e: &mut crate::cbor::Encoder<W>, val: &I8) -> RpcResult<()>
-where
-    W: crate::cbor::Write + 'static,
-{
+pub fn encode_i8<W: crate::cbor::Write>(
+    e: &mut crate::cbor::Encoder<W>,
+    val: &I8,
+) -> RpcResult<()> {
     e.i8(*val)?;
     Ok(())
 }
@@ -119,13 +118,10 @@ pub type IdentifierList = Vec<String>;
 
 // Encode IdentifierList as CBOR and append to output stream
 #[doc(hidden)]
-pub fn encode_identifier_list<W>(
+pub fn encode_identifier_list<W: crate::cbor::Write>(
     e: &mut crate::cbor::Encoder<W>,
     val: &IdentifierList,
-) -> RpcResult<()>
-where
-    W: crate::cbor::Write + 'static,
-{
+) -> RpcResult<()> {
     e.array(val.len() as u64)?;
     for item in val.iter() {
         e.str(item)?;
@@ -166,10 +162,10 @@ pub type U16 = i16;
 // Encode U16 as CBOR and append to output stream
 #[doc(hidden)]
 #[inline]
-pub fn encode_u16<W>(e: &mut crate::cbor::Encoder<W>, val: &U16) -> RpcResult<()>
-where
-    W: crate::cbor::Write + 'static,
-{
+pub fn encode_u16<W: crate::cbor::Write>(
+    e: &mut crate::cbor::Encoder<W>,
+    val: &U16,
+) -> RpcResult<()> {
     e.i16(*val)?;
     Ok(())
 }
@@ -187,10 +183,10 @@ pub type U32 = i32;
 // Encode U32 as CBOR and append to output stream
 #[doc(hidden)]
 #[inline]
-pub fn encode_u32<W>(e: &mut crate::cbor::Encoder<W>, val: &U32) -> RpcResult<()>
-where
-    W: crate::cbor::Write + 'static,
-{
+pub fn encode_u32<W: crate::cbor::Write>(
+    e: &mut crate::cbor::Encoder<W>,
+    val: &U32,
+) -> RpcResult<()> {
     e.i32(*val)?;
     Ok(())
 }
@@ -208,10 +204,10 @@ pub type U64 = i64;
 // Encode U64 as CBOR and append to output stream
 #[doc(hidden)]
 #[inline]
-pub fn encode_u64<W>(e: &mut crate::cbor::Encoder<W>, val: &U64) -> RpcResult<()>
-where
-    W: crate::cbor::Write + 'static,
-{
+pub fn encode_u64<W: crate::cbor::Write>(
+    e: &mut crate::cbor::Encoder<W>,
+    val: &U64,
+) -> RpcResult<()> {
     e.i64(*val)?;
     Ok(())
 }
@@ -229,10 +225,10 @@ pub type U8 = i8;
 // Encode U8 as CBOR and append to output stream
 #[doc(hidden)]
 #[inline]
-pub fn encode_u8<W>(e: &mut crate::cbor::Encoder<W>, val: &U8) -> RpcResult<()>
-where
-    W: crate::cbor::Write + 'static,
-{
+pub fn encode_u8<W: crate::cbor::Write>(
+    e: &mut crate::cbor::Encoder<W>,
+    val: &U8,
+) -> RpcResult<()> {
     e.i8(*val)?;
     Ok(())
 }

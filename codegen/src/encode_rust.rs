@@ -122,7 +122,12 @@ impl<'model> RustCodeGen<'model> {
     /// Generates cbor encode statements "e.func()" for the id.
     /// If id is a primitive type, writes the direct encode function, otherwise,
     /// delegates to an encode_* function created in the same module where the symbol is defined
-    pub(crate) fn encode_shape_id(&self, id: &ShapeID, val: ValExpr) -> Result<String> {
+    pub(crate) fn encode_shape_id(
+        &self,
+        id: &ShapeID,
+        val: ValExpr,
+        enc_owned: bool, // true if encoder is owned in current fn
+    ) -> Result<String> {
         let name = id.shape_name().to_string();
         let stmt = if id.namespace() == prelude_namespace_id() {
             match name.as_ref() {
@@ -160,7 +165,7 @@ impl<'model> RustCodeGen<'model> {
                         s.push_str("::model::");
                     }
                     s.push_str(&format!(
-                        "encode_{}(e, {})?;\n",
+                        "encode_{}( e, {})?;\n",
                         crate::strings::to_snake_case(&id.shape_name().to_string()),
                         val.as_ref()
                     ));
@@ -169,8 +174,9 @@ impl<'model> RustCodeGen<'model> {
             }
         } else if self.namespace.is_some() && id.namespace() == self.namespace.as_ref().unwrap() {
             format!(
-                "encode_{}(e, {})?;\n",
+                "encode_{}({} e, {})?;\n",
                 crate::strings::to_snake_case(&id.shape_name().to_string()),
+                if enc_owned { "&mut " } else { "" },
                 val.as_ref()
             )
         } else {
@@ -181,9 +187,10 @@ impl<'model> RustCodeGen<'model> {
                 }) => {
                     // the crate name should be valid rust syntax. If not, they'll get an error with rustc
                     format!(
-                        "{}::encode_{}(e, {})?;\n",
+                        "{}::encode_{}( {} e, {})?;\n",
                         &crate_name,
                         crate::strings::to_snake_case(&id.shape_name().to_string()),
+                        if enc_owned { "&mut " } else { "" },
                         val.as_ref(),
                     )
                 }
@@ -235,8 +242,12 @@ impl<'model> RustCodeGen<'model> {
                     val.as_str(),
                     val.as_str()
                 );
-                s.push_str(&self.encode_shape_id(map.key().target(), ValExpr::Ref("k"))?);
-                s.push_str(&self.encode_shape_id(map.value().target(), ValExpr::Ref("v"))?);
+                s.push_str(&self.encode_shape_id(map.key().target(), ValExpr::Ref("k"), false)?);
+                s.push_str(&self.encode_shape_id(
+                    map.value().target(),
+                    ValExpr::Ref("v"),
+                    false,
+                )?);
                 s.push_str(
                     r#"
                     }
@@ -253,7 +264,11 @@ impl<'model> RustCodeGen<'model> {
                     val.as_str(),
                     val.as_str()
                 );
-                s.push_str(&self.encode_shape_id(list.member().target(), ValExpr::Ref("item"))?);
+                s.push_str(&self.encode_shape_id(
+                    list.member().target(),
+                    ValExpr::Ref("item"),
+                    false,
+                )?);
                 s.push_str(
                     r#"
                     }
@@ -270,7 +285,11 @@ impl<'model> RustCodeGen<'model> {
                     val.as_str(),
                     val.as_str()
                 );
-                s.push_str(&self.encode_shape_id(set.member().target(), ValExpr::Ref("v"))?);
+                s.push_str(&self.encode_shape_id(
+                    set.member().target(),
+                    ValExpr::Ref("v"),
+                    false,
+                )?);
                 s.push_str(
                     r#"
                     }
@@ -328,7 +347,7 @@ impl<'model> RustCodeGen<'model> {
                 }
             }
             let field_name = self.to_field_name(field.id(), field.traits())?;
-            let field_val = self.encode_shape_id(field.target(), ValExpr::Ref("val"))?;
+            let field_val = self.encode_shape_id(field.target(), ValExpr::Ref("val"), false)?;
             if is_optional_type(field) {
                 s.push_str(&format!(
                     "if let Some(val) =  {}.{}.as_ref() {{\n",
@@ -347,7 +366,7 @@ impl<'model> RustCodeGen<'model> {
                     s.push_str(&format!("e.str(\"{}\")?;\n", field.id()));
                 }
                 let val = format!("{}.{}", val.as_str(), &field_name);
-                s.push_str(&self.encode_shape_id(field.target(), ValExpr::Plain(&val))?);
+                s.push_str(&self.encode_shape_id(field.target(), ValExpr::Plain(&val), false)?);
             }
             current_index += 1;
         }
@@ -384,18 +403,16 @@ impl<'model> RustCodeGen<'model> {
                     r#" 
                 // Encode {} as CBOR and append to output stream
                 #[doc(hidden)] {}
-                pub fn encode_{}<W>(e: &mut {}::cbor::Encoder<W>, {}: &{}) -> RpcResult<()>
-                where
-                    W: {}::cbor::Write + 'static,
+                pub fn encode_{}<W: {}::cbor::Write>(e: &mut {}::cbor::Encoder<W>, {}: &{}) -> RpcResult<()>
                 {{
                 "#,
                     &name,
                     if is_rust_copy { "#[inline]" } else { "" },
                     crate::strings::to_snake_case(&name.to_string()),
                     self.import_core,
+                    self.import_core,
                     if is_empty_struct { "_val" } else { "val" },
                     &id.shape_name(),
-                    self.import_core,
                 );
                 s.push_str(&body);
                 s.push_str("Ok(())\n}\n");

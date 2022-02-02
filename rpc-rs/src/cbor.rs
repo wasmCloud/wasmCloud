@@ -88,6 +88,11 @@ impl<'b> Decoder<'b> {
         Ok(self.inner.str()?)
     }
 
+    /// Decode a null
+    pub fn null(&mut self) -> RpcResult<()> {
+        Ok(self.inner.null()?)
+    }
+
     /// Decode a byte slice
     pub fn bytes(&mut self) -> RpcResult<&'b [u8]> {
         Ok(self.inner.bytes()?)
@@ -133,188 +138,228 @@ impl<'b> Debug for Decoder<'b> {
     }
 }
 
-/// A type that accepts byte slices for writing
-pub trait Write {
-    type Error: std::fmt::Display;
-    fn write_all(&mut self, buf: &[u8]) -> Result<(), Self::Error>;
-}
+// A type that accepts byte slices for writing
+//pub trait Write {
+//    type Error: std::fmt::Display;
+//    fn write_all(&mut self, buf: &[u8]) -> Result<(), Self::Error>;
+//}
 
-struct WriteX<W: Write> {
-    writer: Box<dyn Write<Error = W::Error>>,
-}
-
-impl<W: Write> WriteX<W> {
-    pub fn new(writer: Box<dyn Write<Error = W::Error>>) -> Self {
-        Self { writer }
-    }
-}
-
-impl<W: Write> Write for WriteX<W> {
-    type Error = RpcError;
-
-    fn write_all(&mut self, buf: &[u8]) -> Result<(), RpcError> {
-        self.writer
-            .write_all(buf)
-            .map_err(|e| RpcError::Ser(format!("encoder write: {}", e)))
-    }
-}
-
-impl<W: Write> minicbor::encode::write::Write for WriteX<W> {
-    type Error = RpcError;
+/*
+impl Write for Vec<u8> {
+    type Error = std::convert::Infallible;
 
     fn write_all(&mut self, buf: &[u8]) -> Result<(), Self::Error> {
-        self.writer
-            .write_all(buf)
-            .map_err(|e| RpcError::Ser(format!("encoding: {}", e)))
+        self.extend_from_slice(buf);
+        Ok(())
+    }
+}
+ */
+
+//struct WriteX<W: Write> {
+//    writer: Box<dyn Write<Error = W::Error>>,
+//}
+
+//impl<W: Write> WriteX<W> {
+//    pub fn new(writer: Box<dyn Write<Error = W::Error>>) -> Self {
+//        Self { writer }
+//    }
+//}
+
+//impl<W: Write> Write for WriteX<W> {
+//    type Error = RpcError;
+//
+//    fn write_all(&mut self, buf: &[u8]) -> Result<(), RpcError> {
+//        self.writer
+//            .write_all(buf)
+//            .map_err(|e| RpcError::Ser(format!("encoder write: {}", &e.to_string())))
+//    }
+//}
+//
+//impl<W: Write> minicbor::encode::write::Write for WriteX<W> {
+//    type Error = RpcError;
+//
+//    fn write_all(&mut self, buf: &[u8]) -> Result<(), Self::Error> {
+//        self.writer
+//            .write_all(buf)
+//            .map_err(|e| RpcError::Ser(format!("encoding: {}", e)))
+//    }
+//}
+
+/*
+impl Write for Vec<u8> {
+    type Error = std::convert::Infallible;
+
+    fn write_all(&mut self, buf: &[u8]) -> Result<(), Self::Error> {
+        self.extend_from_slice(buf);
+        Ok(())
     }
 }
 
+ */
+
+//impl<W: std::io::Write> Write for W {
+//    type Error = std::io::Error;
+//
+//    fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
+//        std::io::Write::write_all(self, buf)
+//    }
+//}
+
+pub use minicbor::encode::Write;
+
 pub struct Encoder<W: Write> {
-    inner: minicbor::Encoder<WriteX<W>>,
+    pub inner: minicbor::Encoder<W>,
+}
+
+pub fn vec_encoder() -> Encoder<Vec<u8>> {
+    let buf = Vec::new();
+    Encoder {
+        inner: minicbor::Encoder::new(buf),
+    }
 }
 
 /// A non-allocating CBOR encoder
-impl<W: Write + 'static> Encoder<W> {
-    /// Construct an Encoder that writes to the given `Write` sink
-    pub fn new(writer: W) -> Encoder<W> {
-        let writer = WriteX::new(Box::new(writer));
-        Self {
-            inner: minicbor::Encoder::new(writer),
-        }
-    }
-
+impl<W: Write> Encoder<W>
+where
+    RpcError: From<minicbor::encode::Error<<W as minicbor::encode::Write>::Error>>,
+{
     /// Encode a bool value
-    pub fn bool(&mut self, x: bool) -> Result<&mut Self, RpcError> {
+    pub fn bool(&mut self, x: bool) -> RpcResult<&mut Self> {
         self.inner.bool(x)?;
         Ok(self)
     }
 
     /// Encode a u8 value
-    pub fn u8(&mut self, x: u8) -> Result<&mut Self, RpcError> {
+    pub fn u8(&mut self, x: u8) -> RpcResult<&mut Self> {
         self.inner.u8(x)?;
         Ok(self)
     }
 
     /// Encode a u16 value
-    pub fn u16(&mut self, x: u16) -> Result<&mut Self, RpcError> {
+    pub fn u16(&mut self, x: u16) -> RpcResult<&mut Self> {
         self.inner.u16(x)?;
         Ok(self)
     }
 
     /// Encode a u32 value
-    pub fn u32(&mut self, x: u32) -> Result<&mut Self, RpcError> {
+    pub fn u32(&mut self, x: u32) -> RpcResult<&mut Self> {
         self.inner.u32(x)?;
         Ok(self)
     }
 
     /// Encode a u64 value
-    pub fn u64(&mut self, x: u64) -> Result<&mut Self, RpcError> {
+    pub fn u64(&mut self, x: u64) -> RpcResult<&mut Self> {
         self.inner.u64(x)?;
         Ok(self)
     }
 
     /// Encode an i8 value
-    pub fn i8(&mut self, x: i8) -> Result<&mut Self, RpcError> {
+    pub fn i8(&mut self, x: i8) -> RpcResult<&mut Self> {
         self.inner.i8(x)?;
         Ok(self)
     }
 
     /// Encode an i16 value
-    pub fn i16(&mut self, x: i16) -> Result<&mut Self, RpcError> {
+    pub fn i16(&mut self, x: i16) -> RpcResult<&mut Self> {
         self.inner.i16(x)?;
         Ok(self)
     }
 
     /// Encode an i32 value
-    pub fn i32(&mut self, x: i32) -> Result<&mut Self, RpcError> {
+    pub fn i32(&mut self, x: i32) -> RpcResult<&mut Self> {
         self.inner.i32(x)?;
         Ok(self)
     }
 
     /// Encode an i64 value
-    pub fn i64(&mut self, x: i64) -> Result<&mut Self, RpcError> {
+    pub fn i64(&mut self, x: i64) -> RpcResult<&mut Self> {
         self.inner.i64(x)?;
         Ok(self)
     }
 
     /// Encode an f32 value
-    pub fn f32(&mut self, x: f32) -> Result<&mut Self, RpcError> {
+    pub fn f32(&mut self, x: f32) -> RpcResult<&mut Self> {
         self.inner.f32(x)?;
         Ok(self)
     }
 
     /// Encode an f64 value
-    pub fn f64(&mut self, x: f64) -> Result<&mut Self, RpcError> {
+    pub fn f64(&mut self, x: f64) -> RpcResult<&mut Self> {
         self.inner.f64(x)?;
         Ok(self)
     }
 
     /// Encode a char value
-    pub fn char(&mut self, x: char) -> Result<&mut Self, RpcError> {
+    pub fn char(&mut self, x: char) -> RpcResult<&mut Self> {
         self.inner.char(x)?;
         Ok(self)
     }
 
     /// Encode a byte slice
-    pub fn bytes(&mut self, x: &[u8]) -> Result<&mut Self, RpcError> {
+    pub fn bytes(&mut self, x: &[u8]) -> RpcResult<&mut Self> {
         self.inner.bytes(x)?;
         Ok(self)
     }
 
     /// Encode a string slice
-    pub fn str(&mut self, x: &str) -> Result<&mut Self, RpcError> {
+    pub fn str(&mut self, x: &str) -> RpcResult<&mut Self> {
         self.inner.str(x)?;
         Ok(self)
     }
 
     /// Encode a null
-    pub fn null(&mut self) -> Result<&mut Self, RpcError> {
+    pub fn null(&mut self) -> RpcResult<&mut Self> {
         self.inner.null()?;
         Ok(self)
     }
 
     /// Begin encoding an array with `len` elements
-    pub fn array(&mut self, len: u64) -> Result<&mut Self, RpcError> {
+    pub fn array(&mut self, len: u64) -> RpcResult<&mut Self> {
         self.inner.array(len)?;
         Ok(self)
     }
 
     /// Begin encoding an array with indefinite length
-    pub fn begin_array(&mut self) -> Result<&mut Self, RpcError> {
+    pub fn begin_array(&mut self) -> RpcResult<&mut Self> {
         self.inner.begin_array()?;
         Ok(self)
     }
 
     /// Begin encoding a map with `len` elements
-    pub fn map(&mut self, len: u64) -> Result<&mut Self, RpcError> {
+    pub fn map(&mut self, len: u64) -> RpcResult<&mut Self> {
         self.inner.map(len)?;
         Ok(self)
     }
 
     /// Begin encoding a map with indefinite length
-    pub fn begin_map(&mut self) -> Result<&mut Self, RpcError> {
+    pub fn begin_map(&mut self) -> RpcResult<&mut Self> {
         self.inner.begin_map()?;
         Ok(self)
     }
 
     /// Begin encoding a byte slice with indefinite length
     /// Use Encoder::end to terminate
-    pub fn begin_bytes(&mut self) -> Result<&mut Self, RpcError> {
+    pub fn begin_bytes(&mut self) -> RpcResult<&mut Self> {
         self.inner.begin_bytes()?;
         Ok(self)
     }
 
     /// Begin encoding an indefinite number of string slices
     /// Use Encoder::end to terminate
-    pub fn begin_str(&mut self) -> Result<&mut Self, RpcError> {
+    pub fn begin_str(&mut self) -> RpcResult<&mut Self> {
         self.inner.begin_str()?;
         Ok(self)
     }
 
     /// Terminate an indefinite collection
-    pub fn end(&mut self) -> Result<&mut Self, RpcError> {
+    pub fn end(&mut self) -> RpcResult<&mut Self> {
         self.inner.end()?;
         Ok(self)
+    }
+
+    /// Returns the inner writer
+    pub fn into_inner(self) -> W {
+        self.inner.into_inner()
     }
 
     // Pierce the veil.
@@ -466,6 +511,10 @@ pub fn decode_boolean(d: &mut Decoder<'_>) -> RpcResult<bool> {
 #[inline]
 pub fn decode_string(d: &mut Decoder<'_>) -> RpcResult<String> {
     Ok(d.str()?.to_string())
+}
+#[inline]
+pub fn decode_null(d: &mut Decoder<'_>) -> RpcResult<()> {
+    d.null()
 }
 #[inline]
 pub fn decode_blob(d: &mut Decoder<'_>) -> RpcResult<Vec<u8>> {

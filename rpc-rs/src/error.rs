@@ -78,20 +78,46 @@ impl From<std::io::Error> for RpcError {
     }
 }
 
-impl From<minicbor::encode::Error<std::io::Error>> for RpcError {
-    fn from(e: minicbor::encode::Error<std::io::Error>) -> RpcError {
-        RpcError::Ser(format!("cbor-encode: {}", e))
+impl<E> core::convert::From<minicbor::encode::Error<E>> for RpcError {
+    fn from(e: minicbor::encode::Error<E>) -> Self {
+        let msg = match e {
+            minicbor::encode::Error::Write(_) => "writing to buffer",
+            minicbor::encode::Error::Message(s) => s,
+            _ => "unspecified encoding error",
+        }
+        .to_string();
+        RpcError::Ser(format!("encode: {}", msg))
     }
 }
 
-impl From<minicbor::encode::Error<RpcError>> for RpcError {
-    fn from(e: minicbor::encode::Error<RpcError>) -> RpcError {
-        RpcError::Ser(format!("cbor-encode: {}", e))
+impl core::convert::From<minicbor::decode::Error> for RpcError {
+    fn from(e: minicbor::decode::Error) -> Self {
+        RpcError::Ser(format!("decode: {}", e))
     }
 }
 
-impl From<minicbor::decode::Error> for RpcError {
-    fn from(e: minicbor::decode::Error) -> RpcError {
-        RpcError::Deser(format!("cbor-decode: {}", e))
+/*
+impl<W: minicbor::encode::Write, E: W::Error<W>>> From<minicbor::encode::Error<W::Error>> for RpcError {
+    fn from(_ee: Error<<dyn minicbor::encode::Write>::Error>) -> RpcError {
+        RpcError::Other("help".to_string())
     }
 }
+ */
+
+/*
+impl<W: std::io::Write> From<minicbor::encode::Error<W>> for RpcError {
+    fn from(e: minicbor::encode::Error<W>) -> RpcError
+    where
+        W: minicbor::encode::Write,
+    {
+        RpcError::Ser(
+            match e {
+                minicbor::encode::Error::Write(_) => "writing to buffer",
+                minicbor::encode::Error::Message(s) => s,
+                _ => "unspecified encoding error",
+            }
+            .to_string(),
+        )
+    }
+}
+ */

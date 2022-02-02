@@ -139,7 +139,7 @@ impl<'model> RustCodeGen<'model> {
                 }) => {
                     // the crate name should be valid rust syntax. If not, they'll get an error with rustc
                     format!(
-                        "{}::decode_{}(d).map_err(|e| format!(\"decoding '{}::{}': {{}}\", e))",
+                        "{}::decode_{}(d).map_err(|e| format!(\"decoding '{}::{}': {{}}\", e))?",
                         &crate_name,
                         crate::strings::to_snake_case(&id.shape_name().to_string()),
                         &crate_name,

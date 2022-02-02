@@ -24,10 +24,10 @@ pub type ActorLinks = Vec<LinkDefinition>;
 
 // Encode ActorLinks as CBOR and append to output stream
 #[doc(hidden)]
-pub fn encode_actor_links<W>(e: &mut crate::cbor::Encoder<W>, val: &ActorLinks) -> RpcResult<()>
-where
-    W: crate::cbor::Write + 'static,
-{
+pub fn encode_actor_links<W: crate::cbor::Write>(
+    e: &mut crate::cbor::Encoder<W>,
+    val: &ActorLinks,
+) -> RpcResult<()> {
     e.array(val.len() as u64)?;
     for item in val.iter() {
         encode_link_definition(e, item)?;
@@ -70,13 +70,10 @@ pub type ClusterIssuerKey = String;
 
 // Encode ClusterIssuerKey as CBOR and append to output stream
 #[doc(hidden)]
-pub fn encode_cluster_issuer_key<W>(
+pub fn encode_cluster_issuer_key<W: crate::cbor::Write>(
     e: &mut crate::cbor::Encoder<W>,
     val: &ClusterIssuerKey,
-) -> RpcResult<()>
-where
-    W: crate::cbor::Write + 'static,
-{
+) -> RpcResult<()> {
     e.str(val)?;
     Ok(())
 }
@@ -93,13 +90,10 @@ pub type ClusterIssuers = Vec<ClusterIssuerKey>;
 
 // Encode ClusterIssuers as CBOR and append to output stream
 #[doc(hidden)]
-pub fn encode_cluster_issuers<W>(
+pub fn encode_cluster_issuers<W: crate::cbor::Write>(
     e: &mut crate::cbor::Encoder<W>,
     val: &ClusterIssuers,
-) -> RpcResult<()>
-where
-    W: crate::cbor::Write + 'static,
-{
+) -> RpcResult<()> {
     e.array(val.len() as u64)?;
     for item in val.iter() {
         encode_cluster_issuer_key(e, item)?;
@@ -146,13 +140,10 @@ pub struct HealthCheckRequest {}
 
 // Encode HealthCheckRequest as CBOR and append to output stream
 #[doc(hidden)]
-pub fn encode_health_check_request<W>(
+pub fn encode_health_check_request<W: crate::cbor::Write>(
     e: &mut crate::cbor::Encoder<W>,
     _val: &HealthCheckRequest,
-) -> RpcResult<()>
-where
-    W: crate::cbor::Write + 'static,
-{
+) -> RpcResult<()> {
     e.map(0)?;
     Ok(())
 }
@@ -210,13 +201,10 @@ pub struct HealthCheckResponse {
 
 // Encode HealthCheckResponse as CBOR and append to output stream
 #[doc(hidden)]
-pub fn encode_health_check_response<W>(
+pub fn encode_health_check_response<W: crate::cbor::Write>(
     e: &mut crate::cbor::Encoder<W>,
     val: &HealthCheckResponse,
-) -> RpcResult<()>
-where
-    W: crate::cbor::Write + 'static,
-{
+) -> RpcResult<()> {
     e.array(2)?;
     e.bool(val.healthy)?;
     if let Some(val) = val.message.as_ref() {
@@ -335,10 +323,10 @@ pub struct HostData {
 
 // Encode HostData as CBOR and append to output stream
 #[doc(hidden)]
-pub fn encode_host_data<W>(e: &mut crate::cbor::Encoder<W>, val: &HostData) -> RpcResult<()>
-where
-    W: crate::cbor::Write + 'static,
-{
+pub fn encode_host_data<W: crate::cbor::Write>(
+    e: &mut crate::cbor::Encoder<W>,
+    val: &HostData,
+) -> RpcResult<()> {
     e.array(13)?;
     e.str(&val.host_id)?;
     e.str(&val.lattice_rpc_prefix)?;
@@ -587,13 +575,10 @@ pub type HostEnvValues = std::collections::HashMap<String, String>;
 
 // Encode HostEnvValues as CBOR and append to output stream
 #[doc(hidden)]
-pub fn encode_host_env_values<W>(
+pub fn encode_host_env_values<W: crate::cbor::Write>(
     e: &mut crate::cbor::Encoder<W>,
     val: &HostEnvValues,
-) -> RpcResult<()>
-where
-    W: crate::cbor::Write + 'static,
-{
+) -> RpcResult<()> {
     e.map(val.len() as u64)?;
     for (k, v) in val {
         e.str(k)?;
@@ -643,10 +628,10 @@ pub struct Invocation {
 
 // Encode Invocation as CBOR and append to output stream
 #[doc(hidden)]
-pub fn encode_invocation<W>(e: &mut crate::cbor::Encoder<W>, val: &Invocation) -> RpcResult<()>
-where
-    W: crate::cbor::Write + 'static,
-{
+pub fn encode_invocation<W: crate::cbor::Write>(
+    e: &mut crate::cbor::Encoder<W>,
+    val: &Invocation,
+) -> RpcResult<()> {
     e.array(7)?;
     encode_wasm_cloud_entity(e, &val.origin)?;
     encode_wasm_cloud_entity(e, &val.target)?;
@@ -813,13 +798,10 @@ pub struct InvocationResponse {
 
 // Encode InvocationResponse as CBOR and append to output stream
 #[doc(hidden)]
-pub fn encode_invocation_response<W>(
+pub fn encode_invocation_response<W: crate::cbor::Write>(
     e: &mut crate::cbor::Encoder<W>,
     val: &InvocationResponse,
-) -> RpcResult<()>
-where
-    W: crate::cbor::Write + 'static,
-{
+) -> RpcResult<()> {
     e.array(3)?;
     e.bytes(&val.msg)?;
     e.str(&val.invocation_id)?;
@@ -936,13 +918,10 @@ pub struct LinkDefinition {
 
 // Encode LinkDefinition as CBOR and append to output stream
 #[doc(hidden)]
-pub fn encode_link_definition<W>(
+pub fn encode_link_definition<W: crate::cbor::Write>(
     e: &mut crate::cbor::Encoder<W>,
     val: &LinkDefinition,
-) -> RpcResult<()>
-where
-    W: crate::cbor::Write + 'static,
-{
+) -> RpcResult<()> {
     e.array(5)?;
     e.str(&val.actor_id)?;
     e.str(&val.provider_id)?;
@@ -1065,10 +1044,10 @@ pub type LinkSettings = std::collections::HashMap<String, String>;
 
 // Encode LinkSettings as CBOR and append to output stream
 #[doc(hidden)]
-pub fn encode_link_settings<W>(e: &mut crate::cbor::Encoder<W>, val: &LinkSettings) -> RpcResult<()>
-where
-    W: crate::cbor::Write + 'static,
-{
+pub fn encode_link_settings<W: crate::cbor::Write>(
+    e: &mut crate::cbor::Encoder<W>,
+    val: &LinkSettings,
+) -> RpcResult<()> {
     e.map(val.len() as u64)?;
     for (k, v) in val {
         e.str(k)?;
@@ -1109,13 +1088,10 @@ pub struct WasmCloudEntity {
 
 // Encode WasmCloudEntity as CBOR and append to output stream
 #[doc(hidden)]
-pub fn encode_wasm_cloud_entity<W>(
+pub fn encode_wasm_cloud_entity<W: crate::cbor::Write>(
     e: &mut crate::cbor::Encoder<W>,
     val: &WasmCloudEntity,
-) -> RpcResult<()>
-where
-    W: crate::cbor::Write + 'static,
-{
+) -> RpcResult<()> {
     e.array(3)?;
     e.str(&val.public_key)?;
     e.str(&val.link_name)?;
