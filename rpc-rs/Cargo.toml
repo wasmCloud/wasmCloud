@@ -33,7 +33,7 @@ minicbor = { version = "0.12", features = ["derive", "std", "half" ] }
 toml = "0.5"
 log = "0.4"
 cfg-if = "1.0"
-wasmbus-macros = "0.1.6"
+wasmbus-macros = { path = "../macros" }
 tokio-timer = "0.2"
 
 #[feature-dependencies]
