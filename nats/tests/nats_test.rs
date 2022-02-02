@@ -41,10 +41,7 @@ async fn make_responder(
 ) -> (oneshot::Receiver<()>, tokio::task::JoinHandle<usize>) {
     let (tx, rx) = oneshot::channel();
     let join = tokio::spawn(async move {
-        let conn = match nats::asynk::Options::default()
-            .connect("0.0.0.0:4222")
-            .await
-        {
+        let conn = match nats::Options::default().connect("127.0.0.1:4222").await {
             Ok(c) => c,
             Err(e) => {
                 eprintln!("ERROR: failed to connect test responder to nats: {}", e);

@@ -85,20 +85,25 @@ async fn mock_echo_actor(num_requests: u32) -> tokio::task::JoinHandle<RpcResult
             let prov = test_provider().await;
             let topic = rpc_topic(&prov.origin(), &prov.host_data.lattice_rpc_prefix);
             // subscribe() returns a Stream of nats messages
-            let (_sid, mut sub) = prov
+            let sub = prov
                 .nats_client
-                .subscribe(topic)
+                .subscribe(&topic)
                 .await
                 .map_err(|e| RpcError::Nats(e.to_string()))?;
+            let mut stream = sub.stream();
             while completed < num_requests {
-                let msg = match sub.next().await {
-                    None => break,
+                let msg = match stream.next().await {
+                    None => {
+                        drop(stream);
+                        break;
+                    }
                     Some(msg) => msg,
                 };
 
-                let inv: Invocation = deserialize(&msg.payload)?;
+                let inv: Invocation = deserialize(&msg.data)?;
                 if &inv.operation != "HttpServer.HandleRequest" {
                     eprintln!("Unexpected method received by actor: {}", &inv.operation);
+                    drop(stream);
                     break;
                 }
                 let http_req: HttpRequest = deserialize(&inv.msg)?;
@@ -124,7 +129,7 @@ async fn mock_echo_actor(num_requests: u32) -> tokio::task::JoinHandle<RpcResult
                     ..Default::default()
                 };
                 let buf = serialize(&http_resp)?;
-                if let Some(ref reply_to) = msg.reply_to {
+                if let Some(ref reply_to) = msg.reply {
                     let ir = InvocationResponse {
                         error: None,
                         invocation_id: inv.id,
@@ -134,6 +139,7 @@ async fn mock_echo_actor(num_requests: u32) -> tokio::task::JoinHandle<RpcResult
                 }
                 completed += 1;
             }
+            let _ = sub.close().await;
             Ok(())
         } {
             eprintln!("mock_actor got error: {}. quitting actor thread", e);

@@ -2,7 +2,6 @@
 //!
 
 use log::error;
-use nats::asynk::{self, Message as NatsMessage};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, convert::Infallible, sync::Arc};
 use tokio::sync::RwLock;
@@ -12,8 +11,6 @@ use wasmcloud_interface_messaging::{
     MessageSubscriber, MessageSubscriberSender, Messaging, MessagingReceiver, PubMessage,
     ReplyMessage, RequestMessage, SubMessage,
 };
-
-type Connection = asynk::Connection;
 
 const DEFAULT_NATS_URI: &str = "0.0.0.0:4222";
 const ENV_NATS_SUBSCRIPTION: &str = "SUBSCRIPTION";
@@ -94,7 +91,7 @@ impl ConnectionConfig {
 #[services(Messaging)]
 struct NatsMessagingProvider {
     // store nats connection client per actor
-    actors: Arc<RwLock<HashMap<String, Connection>>>,
+    actors: Arc<RwLock<HashMap<String, nats::Connection>>>,
 }
 // use default implementations of provider message handlers
 impl ProviderDispatch for NatsMessagingProvider {}
@@ -105,17 +102,17 @@ impl NatsMessagingProvider {
         &self,
         cfg: ConnectionConfig,
         ld: &LinkDefinition,
-    ) -> Result<Connection, RpcError> {
+    ) -> Result<nats::Connection, RpcError> {
         let mut opts = match (cfg.auth_jwt, cfg.auth_seed) {
             (Some(jwt), Some(seed)) => {
                 let kp = KeyPair::from_seed(&seed)
                     .map_err(|e| RpcError::ProviderInit(format!("key init: {}", e)))?;
-                asynk::Options::with_jwt(
+                nats::Options::with_jwt(
                     move || Ok(jwt.clone()),
                     move |nonce| kp.sign(nonce).unwrap(),
                 )
             }
-            (None, None) => asynk::Options::new(),
+            (None, None) => nats::Options::new(),
             _ => {
                 return Err(RpcError::InvalidParameter(
                     "must provide both jwt and seed for jwt authentication".into(),
@@ -140,7 +137,7 @@ impl NatsMessagingProvider {
     }
 
     /// send message to subscriber
-    async fn dispatch_msg(&self, ld: &LinkDefinition, nats_msg: NatsMessage) {
+    async fn dispatch_msg(&self, ld: &LinkDefinition, nats_msg: nats::Message) {
         let msg = SubMessage {
             body: nats_msg.data,
             reply_to: nats_msg.reply,
@@ -160,7 +157,7 @@ impl NatsMessagingProvider {
     /// Add a regular or queue subscription
     async fn subscribe(
         &self,
-        conn: &Connection,
+        conn: &nats::Connection,
         ld: &LinkDefinition,
         sub: &str,
         queue: Option<&str>,

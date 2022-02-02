@@ -66,7 +66,7 @@ impl HttpClient for HttpClientProvider {
                     &req.url,
                     e.to_string()
                 );
-                RpcError::Other(format!("sending request: {}", e.to_string()))
+                RpcError::Other(format!("sending request: {}", e))
             })?;
 
         let headers = convert_response_headers(response.headers());
@@ -74,7 +74,7 @@ impl HttpClient for HttpClientProvider {
         let body = response.bytes().await.map_err(|e|
                 // error receiving the body could occur if the connection was
                 // closed before it was fully received
-                RpcError::Other(format!("receiving response body: {}", e.to_string())))?;
+                RpcError::Other(format!("receiving response body: {}", e)))?;
         if (200..300).contains(&(status_code as usize)) {
             trace!(
                 "httpclient {} to {}: returned {}",
