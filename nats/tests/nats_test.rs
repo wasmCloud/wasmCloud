@@ -1,5 +1,5 @@
 use tokio::sync::oneshot;
-use wasmbus_rpc::provider::prelude::*;
+use wasmbus_rpc::{anats, provider::prelude::*};
 use wasmcloud_interface_messaging::*;
 use wasmcloud_test_util::{
     check,
