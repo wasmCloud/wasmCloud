@@ -17,14 +17,19 @@ env:
   working-directory: ./codegen
 
 jobs:
-  rust_check:
+  rust_test:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v2
-    - id: rust-check-action
-      uses: wasmcloud/common-actions/rust-check@main
-      with:
-        working-directory: ${{ env.working-directory }}
+    - name: update_rust
+      run: |
+        rustup toolchain install nightly
+        rustup update stable nightly
+        rustup component add --toolchain nightly rustfmt 
+    - name: run_all_tests_clippy_fmt
+      run: |
+        cd ${{ env.working-directory }}
+        make test
 
   github_release:
     if: startswith(github.ref, 'refs/tags/') # Only run on tag push
