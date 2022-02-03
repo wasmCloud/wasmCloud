@@ -1,9 +1,9 @@
 # codegen.toml
 
 [[models]]
-url = "https://cdn.jsdelivr.net/gh/wasmcloud/interfaces@wasmcloud-core-interface-v0.2.0/core/wasmcloud-core.smithy"
+url = "https://cdn.jsdelivr.net/gh/wasmcloud/interfaces@6750c952166d61f71/core/wasmcloud-core.smithy"
 [[models]]
-url = "https://cdn.jsdelivr.net/gh/wasmcloud/interfaces@wasmcloud-model-interface-v0.2.0/core/wasmcloud-model.smithy"
+url = "https://cdn.jsdelivr.net/gh/wasmcloud/interfaces@374e5bcc63267f3ad/core/wasmcloud-model.smithy"
 
 [rust]
 output_dir = "."

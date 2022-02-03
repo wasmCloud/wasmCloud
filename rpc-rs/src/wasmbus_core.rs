@@ -1,4 +1,4 @@
-// This file is generated automatically using wasmcloud/weld-codegen 0.2.4
+// This file is generated automatically using wasmcloud/weld-codegen 0.3.0
 
 #[allow(unused_imports)]
 use crate::{

@@ -1,4 +1,4 @@
-// This file is generated automatically using wasmcloud/weld-codegen 0.2.4
+// This file is generated automatically using wasmcloud/weld-codegen 0.3.0
 #[allow(unused_imports)]
 use crate::error::{RpcError, RpcResult};
 #[allow(unused_imports)]
@@ -320,6 +320,11 @@ pub struct Wasmbus {
     #[serde(rename = "contractId")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub contract_id: Option<CapabilityContractId>,
+    /// Binary message protocol version. Defaults to "0" if unset.
+    /// Be aware that changing this value can break binary compatibility unless
+    /// all users of this interface recompile
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol: Option<String>,
     /// indicates this service's operations are handled by an provider (default false)
     #[serde(rename = "providerReceive")]
     #[serde(default)]
