@@ -90,20 +90,11 @@ async fn mock_echo_actor(num_requests: u32) -> tokio::task::JoinHandle<RpcResult
                 .subscribe(&topic)
                 .await
                 .map_err(|e| RpcError::Nats(e.to_string()))?;
-            let mut stream = sub.stream();
-            while completed < num_requests {
-                let msg = match stream.next().await {
-                    None => {
-                        drop(stream);
-                        break;
-                    }
-                    Some(msg) => msg,
-                };
-
+            while let Some(msg) = sub.next().await {
                 let inv: Invocation = deserialize(&msg.data)?;
                 if &inv.operation != "HttpServer.HandleRequest" {
                     eprintln!("Unexpected method received by actor: {}", &inv.operation);
-                    drop(stream);
+                    //drop(stream);
                     break;
                 }
                 let http_req: HttpRequest = deserialize(&inv.msg)?;
