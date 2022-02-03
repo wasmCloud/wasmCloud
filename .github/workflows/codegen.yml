@@ -29,7 +29,8 @@ jobs:
     - name: run_all_tests_clippy_fmt
       run: |
         cd ${{ env.working-directory }}
-        make test
+        cargo clippy --all-targets --all-features
+        rustfmt --check src/*.rs src/*/*.rs
 
   github_release:
     if: startswith(github.ref, 'refs/tags/') # Only run on tag push
