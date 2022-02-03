@@ -26,11 +26,12 @@ jobs:
         rustup toolchain install nightly
         rustup update stable nightly
         rustup component add --toolchain nightly rustfmt 
+        rustup default nightly
     - name: run_all_tests_clippy_fmt
       run: |
         cd ${{ env.working-directory }}
         cargo clippy --all-targets --all-features
-        rustfmt --check src/*.rs src/*/*.rs
+        rustfmt --check src/*.rs
 
   github_release:
     if: startswith(github.ref, 'refs/tags/') # Only run on tag push

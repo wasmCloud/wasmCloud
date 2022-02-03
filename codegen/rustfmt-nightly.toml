@@ -1,5 +1,5 @@
 # rustfmt prefs
-#
+# This contains some flags that are only available on nightly 
 
 edition = "2021"
 
