@@ -74,11 +74,11 @@ async fn health_check(_opt: &TestOptions) -> RpcResult<()> {
 /// The thread quits if the number of expected messages has been completed,
 /// or if there was any error.
 async fn mock_echo_actor(num_requests: u32) -> tokio::task::JoinHandle<RpcResult<u32>> {
-    use futures::StreamExt;
     use wasmbus_rpc::rpc_client::rpc_topic;
     use wasmbus_rpc::{core::Invocation, deserialize, serialize};
 
-    tokio::spawn(async move {
+    let handle = tokio::runtime::Handle::current();
+    handle.spawn(async move {
         let mut completed = 0u32;
 
         if let Err::<(), RpcError>(e) = {
@@ -94,7 +94,6 @@ async fn mock_echo_actor(num_requests: u32) -> tokio::task::JoinHandle<RpcResult
                 let inv: Invocation = deserialize(&msg.data)?;
                 if &inv.operation != "HttpServer.HandleRequest" {
                     eprintln!("Unexpected method received by actor: {}", &inv.operation);
-                    //drop(stream);
                     break;
                 }
                 let http_req: HttpRequest = deserialize(&inv.msg)?;
@@ -129,6 +128,9 @@ async fn mock_echo_actor(num_requests: u32) -> tokio::task::JoinHandle<RpcResult
                     prov.rpc_client.publish(reply_to, &serialize(&ir)?).await?;
                 }
                 completed += 1;
+                if completed >= num_requests {
+                    break;
+                }
             }
             let _ = sub.close().await;
             Ok(())
