@@ -21,14 +21,14 @@ thiserror = "1.0"
 tokio = { version = "1", features = ["full"] }
 toml = "0.5"
 warp = {version="0.3", features=["tls"]}
-wasmcloud-interface-httpserver = { path = "../../interfaces/httpserver/rust" }
-wasmbus-rpc = { path = "../../weld/rpc-rs" }
+wasmcloud-interface-httpserver = "0.4"
+wasmbus-rpc = "0.7"
 
 [dev-dependencies]
 assert_matches = "1.5"
 blake2 = "0.9"
 reqwest = { version = "0.11", features = ["json"]}
-wasmcloud-test-util = { path = "../../wasmcloud-test/wasmcloud-test-util" }
+wasmcloud-test-util = "0.2"
 
 [lib]
 name = "wasmcloud_provider_httpserver"
