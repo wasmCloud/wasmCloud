@@ -1,6 +1,6 @@
 # wasmbus-rpc Changelog
 
-## 0.7.0-alpha.2
+## 0.7.0
 
 ### Breaking changes (since 0.6.x)
 
@@ -14,8 +14,8 @@
   - To help avoid external breakage, the crate-level symbols have been marked deprecated
   
 - removed feature options [ser_json] and [ser_msgpack] - ser_msgpack was always, and remains, the default.
-
 - added a `cbor` module to wrap `minicor`, so the choice of cbor implementation is not exposed.
+- Depends on codegen-0.3.0
 
 
 ## 0.7.0-alpha.1
