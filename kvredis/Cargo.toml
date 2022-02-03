@@ -20,12 +20,12 @@ serde = {version = "1.0", features = ["derive"] }
 thiserror = "1.0"
 tokio = { version = "1", features = ["full"] }
 toml = "0.5"
-wasmcloud-interface-keyvalue = { path = "../../interfaces/keyvalue/rust" }
-wasmbus-rpc = { path = "../../weld/rpc-rs" }
+wasmcloud-interface-keyvalue = "0.5"
+wasmbus-rpc = "0.7.1"
 
 # test dependencies
 [dev-dependencies]
-wasmcloud-test-util = { path = "../../wasmcloud-test/wasmcloud-test-util" }
+wasmcloud-test-util = "0.2"
 rand = "0.8"
 
 [[bin]]

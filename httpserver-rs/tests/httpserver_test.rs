@@ -75,7 +75,7 @@ async fn health_check(_opt: &TestOptions) -> RpcResult<()> {
 /// or if there was any error.
 async fn mock_echo_actor(num_requests: u32) -> tokio::task::JoinHandle<RpcResult<u32>> {
     use futures::StreamExt;
-    use wasmbus_rpc::rpc_topic;
+    use wasmbus_rpc::rpc_client::rpc_topic;
     use wasmbus_rpc::{core::Invocation, deserialize, serialize};
 
     tokio::spawn(async move {

@@ -21,13 +21,12 @@ thiserror = "1.0"
 tokio = { version = "1", features = ["full"] }
 toml = "0.5"
 wascap = "0.8.0"
-wasmbus-rpc = { path = "../../weld/rpc-rs" }
-wasmcloud-control-interface = { path="../../control-interface-client" }
-wasmbus-rpc-nats-aflowt = { version = "0.7.0-alpha.1", package="wasmbus-rpc" }
+wasmbus-rpc = "0.7.1"
+wasmcloud-control-interface = "0.11"
 
 # test dependencies
 [dev-dependencies]
-wasmcloud-test-util = { path = "../../wasmcloud-test/wasmcloud-test-util/" }
+wasmcloud-test-util = "0.2"
 
 [[bin]]
 name = "lattice-controller"
