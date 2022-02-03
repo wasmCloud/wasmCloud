@@ -25,7 +25,7 @@ jobs:
       run: |
         rustup toolchain install nightly
         rustup update stable nightly
-        rustup component add --toolchain nightly rustfmt 
+        rustup component add --toolchain nightly rustfmt clippy
         rustup default nightly
     - name: run_all_tests_clippy_fmt
       run: |
