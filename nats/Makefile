@@ -9,6 +9,13 @@ oci_url  = localhost:5000/v2/$(PROJECT):$(VERSION)
 
 include ../build/makefiles/provider.mk
 
-test:
-	RUST_BACKTRACE=1 RUST_LOG=debug cargo test -- --nocapture
+ifeq ($(shell nc -czt -w1 127.0.0.1 4222 || echo fail),fail)
+test::
+	docker run --rm -d --name nats-provider-test -p 127.0.0.1:4222:4222 nats:2.6 -js
+	cargo test -- --nocapture
+	docker stop nats-provider-test
+else
+test::
+	cargo test -- --nocapture
+endif
 

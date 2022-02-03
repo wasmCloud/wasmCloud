@@ -74,29 +74,24 @@ async fn health_check(_opt: &TestOptions) -> RpcResult<()> {
 /// The thread quits if the number of expected messages has been completed,
 /// or if there was any error.
 async fn mock_echo_actor(num_requests: u32) -> tokio::task::JoinHandle<RpcResult<u32>> {
-    use futures::StreamExt;
-    use wasmbus_rpc::rpc_topic;
+    use wasmbus_rpc::rpc_client::rpc_topic;
     use wasmbus_rpc::{core::Invocation, deserialize, serialize};
 
-    tokio::spawn(async move {
+    let handle = tokio::runtime::Handle::current();
+    handle.spawn(async move {
         let mut completed = 0u32;
 
         if let Err::<(), RpcError>(e) = {
             let prov = test_provider().await;
             let topic = rpc_topic(&prov.origin(), &prov.host_data.lattice_rpc_prefix);
             // subscribe() returns a Stream of nats messages
-            let (_sid, mut sub) = prov
+            let sub = prov
                 .nats_client
-                .subscribe(topic)
+                .subscribe(&topic)
                 .await
                 .map_err(|e| RpcError::Nats(e.to_string()))?;
-            while completed < num_requests {
-                let msg = match sub.next().await {
-                    None => break,
-                    Some(msg) => msg,
-                };
-
-                let inv: Invocation = deserialize(&msg.payload)?;
+            while let Some(msg) = sub.next().await {
+                let inv: Invocation = deserialize(&msg.data)?;
                 if &inv.operation != "HttpServer.HandleRequest" {
                     eprintln!("Unexpected method received by actor: {}", &inv.operation);
                     break;
@@ -124,7 +119,7 @@ async fn mock_echo_actor(num_requests: u32) -> tokio::task::JoinHandle<RpcResult
                     ..Default::default()
                 };
                 let buf = serialize(&http_resp)?;
-                if let Some(ref reply_to) = msg.reply_to {
+                if let Some(ref reply_to) = msg.reply {
                     let ir = InvocationResponse {
                         error: None,
                         invocation_id: inv.id,
@@ -133,7 +128,11 @@ async fn mock_echo_actor(num_requests: u32) -> tokio::task::JoinHandle<RpcResult
                     prov.rpc_client.publish(reply_to, &serialize(&ir)?).await?;
                 }
                 completed += 1;
+                if completed >= num_requests {
+                    break;
+                }
             }
+            let _ = sub.close().await;
             Ok(())
         } {
             eprintln!("mock_actor got error: {}. quitting actor thread", e);
