@@ -6,8 +6,8 @@ use tokio::sync::RwLock;
 
 use serde::{Deserialize, Serialize};
 use wascap::prelude::KeyPair;
+use wasmbus_rpc::anats;
 use wasmbus_rpc::provider::prelude::*;
-use wasmbus_rpc_nats_aflowt::anats;
 use wasmcloud_control_interface::*;
 
 const DEFAULT_NATS_URI: &str = "127.0.0.1:4222";
