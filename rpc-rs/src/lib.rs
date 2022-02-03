@@ -77,6 +77,10 @@ pub mod rpc_client;
 #[doc(hidden)]
 pub const WASMBUS_RPC_IMPORT_NAME: &str = "wasmbus";
 
+/// Version number of this api
+#[doc(hidden)]
+pub const WASMBUS_RPC_VERSION: u32 = 0;
+
 /// This crate's published version
 pub const WELD_CRATE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
