@@ -401,9 +401,6 @@ fn generate_actor(actor: ActorMetadata, output_kind: OutputKind) -> Result<Comma
     if actor.eventstream {
         caps_list.push(wascap::caps::EVENTSTREAMS.to_string());
     }
-    if actor.extras {
-        caps_list.push(wascap::caps::EXTRAS.to_string());
-    }
     caps_list.extend(actor.custom_caps.iter().cloned());
 
     if actor.provider && caps_list.len() > 1 {
@@ -586,9 +583,6 @@ fn sign_file(cmd: SignCommand, output_kind: OutputKind) -> Result<CommandOutput>
     }
     if cmd.metadata.logging {
         caps_list.push(wascap::caps::LOGGING.to_string());
-    }
-    if cmd.metadata.extras {
-        caps_list.push(wascap::caps::EXTRAS.to_string());
     }
     if cmd.metadata.eventstream {
         caps_list.push(wascap::caps::EVENTSTREAMS.to_string());
