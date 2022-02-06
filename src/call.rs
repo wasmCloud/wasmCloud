@@ -11,7 +11,7 @@ use anyhow::{bail, Context, Result};
 use clap::Args;
 use log::{debug, error};
 use std::{collections::HashMap, path::PathBuf, time::Duration};
-use wasmbus_rpc::{core::WasmCloudEntity, Message, RpcClient};
+use wasmbus_rpc::{core::WasmCloudEntity, rpc_client::RpcClient, Message};
 use wasmcloud_test_util::testing::TestResults;
 
 /// fake key (not a real public key)  used to construct origin for invoking actors

@@ -585,7 +585,7 @@ pub(crate) async fn handle_command(
 
 pub(crate) async fn get_hosts(cmd: GetHostsCommand) -> Result<Vec<Host>> {
     let client = ctl_client_from_opts(cmd.opts, None).await?;
-    Ok(client.get_hosts().await.map_err(convert_error)?)
+    client.get_hosts().await.map_err(convert_error)
 }
 
 pub(crate) async fn get_host_inventory(cmd: GetHostInventoryCommand) -> Result<HostInventory> {
