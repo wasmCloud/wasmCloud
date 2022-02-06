@@ -29,7 +29,7 @@ jobs:
         run: cargo clippy --all-features
 
   release:
-    depends-on: [cargo_check, clippy_check]
+    needs: [cargo_check, clippy_check]
     runs-on: ubuntu-latest
     steps:
     - name: Create Release
