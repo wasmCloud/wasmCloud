@@ -10,7 +10,7 @@
 // The encoder is written as a plain function "encode_<S>" where S is the type name
 // (camel cased for the fn name), and scoped to the module where S is defined.
 use crate::{
-    codegen_rust::{is_optional_type, RustCodeGen},
+    codegen_rust::{is_optional_type, is_rust_primitive, RustCodeGen},
     error::{Error, Result},
     gen::CodeGen,
     model::wasmcloud_model_namespace,
@@ -100,10 +100,10 @@ fn encode_unsigned_long(val: ValExpr) -> String {
     format!("e.u64({})?;\n", val.as_copy())
 }
 fn encode_float(val: ValExpr) -> String {
-    format!("e.f32({})?;\n", val.as_str())
+    format!("e.f32({})?;\n", val.as_copy())
 }
 fn encode_double(val: ValExpr) -> String {
-    format!("e.f64({})?;\n", val.as_str())
+    format!("e.f64({})?;\n", val.as_copy())
 }
 fn encode_document(val: ValExpr) -> String {
     format!("e.bytes({})?;\n", val.as_ref())
@@ -156,6 +156,8 @@ impl<'model> RustCodeGen<'model> {
                 b"I32" => encode_integer(val),
                 b"I16" => encode_short(val),
                 b"I8" => encode_byte(val),
+                b"F64" => encode_double(val),
+                b"F32" => encode_float(val),
                 _ => {
                     let mut s = String::new();
                     if self.namespace.is_none()
@@ -264,16 +266,13 @@ impl<'model> RustCodeGen<'model> {
                     val.as_str(),
                     val.as_str()
                 );
+
                 s.push_str(&self.encode_shape_id(
                     list.member().target(),
                     ValExpr::Ref("item"),
                     false,
                 )?);
-                s.push_str(
-                    r#"
-                    }
-                    "#,
-                );
+                s.push('}');
                 s
             }
             ShapeKind::Set(set) => {
@@ -302,16 +301,39 @@ impl<'model> RustCodeGen<'model> {
                 empty_struct = is_empty_struct;
                 s
             }
+            ShapeKind::Union(union_) => {
+                let (s, _) = self.encode_union(id, union_, val)?;
+                s
+            }
             ShapeKind::Operation(_)
             | ShapeKind::Resource(_)
             | ShapeKind::Service(_)
             | ShapeKind::Unresolved => String::new(),
-
-            ShapeKind::Union(_) => {
-                unimplemented!();
-            }
         };
         Ok((s, empty_struct))
+    }
+
+    /// Generate string to encode union.
+    fn encode_union(
+        &self,
+        id: &ShapeID,
+        strukt: &StructureOrUnion,
+        val: ValExpr,
+    ) -> Result<(String, IsEmptyStruct)> {
+        let (fields, _) = crate::model::get_sorted_fields(id.shape_name(), strukt)?;
+        let mut s = String::new();
+        s.push_str(&format!("// encoding union {}\n", id.shape_name()));
+        s.push_str("e.array(2)?;\n");
+        s.push_str(&format!("match {} {{\n", val.as_str()));
+        for field in fields.iter() {
+            let field_name = self.to_type_name(&field.id().to_string());
+            s.push_str(&format!("{}::{}(v) => {{", id.shape_name(), &field_name));
+            s.push_str(&format!("e.u16({})?;\n", &field.field_num().unwrap()));
+            s.push_str(&self.encode_shape_id(field.target(), ValExpr::Ref("v"), false)?);
+            s.push_str("},\n");
+        }
+        s.push_str("}\n");
+        Ok((s, fields.is_empty()))
     }
 
     /// Generate string to encode structure.
@@ -386,14 +408,14 @@ impl<'model> RustCodeGen<'model> {
         match kind {
             ShapeKind::Simple(_)
             | ShapeKind::Structure(_)
+            | ShapeKind::Union(_)
             | ShapeKind::Map(_)
             | ShapeKind::List(_)
             | ShapeKind::Set(_) => {
                 let name = id.shape_name();
                 // use val-by-copy as param to encode if type is rust primitive "copy" type
                 // This is only relevant for aliases of primitive types in wasmbus-model namespace
-                let is_rust_copy = vec!["U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64"]
-                    .contains(&name.to_string().as_str());
+                let is_rust_copy = is_rust_primitive(id);
                 //let val_or_copy = if is_rust_copy { "*val" } else { "val" };
                 // The purpose of is_empty_struct is to determine when the parameter is unused
                 // in the function body, and append '_' to the name to avoid a compiler warning.
@@ -421,7 +443,6 @@ impl<'model> RustCodeGen<'model> {
             ShapeKind::Operation(_)
             | ShapeKind::Resource(_)
             | ShapeKind::Service(_)
-            | ShapeKind::Union(_)
             | ShapeKind::Unresolved => { /* write nothing */ }
         }
         Ok(())

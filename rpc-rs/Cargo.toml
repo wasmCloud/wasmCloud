@@ -1,6 +1,6 @@
 [package]
 name = "wasmbus-rpc"
-version = "0.7.1"
+version = "0.7.2"
 authors = [ "wasmcloud Team" ]
 license = "Apache-2.0"
 description = "Runtime library for actors and capability providers"
@@ -44,7 +44,7 @@ bigdecimal = { version = "0.3", optional = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { version = "1", features = ["full"]}
 futures = "0.3"
-nats-aflowt = "0.16.103"
+nats-aflowt = "0.16.104"
 once_cell = "1.8"
 crossbeam = "0.8"
 uuid = { version = "0.8", features=["v4", "serde"] }

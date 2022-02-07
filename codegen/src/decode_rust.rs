@@ -1,7 +1,7 @@
 //! CBOR Decode functions
 
 use crate::{
-    codegen_rust::{is_optional_type, RustCodeGen},
+    codegen_rust::{is_optional_type, is_rust_primitive, RustCodeGen},
     error::{Error, Result},
     gen::CodeGen,
     model::{wasmcloud_model_namespace, Ty},
@@ -110,6 +110,8 @@ impl<'model> RustCodeGen<'model> {
                 b"I32" => decode_integer().to_string(),
                 b"I16" => decode_short().to_string(),
                 b"I8" => decode_byte().to_string(),
+                b"F64" => decode_double().to_string(),
+                b"F32" => decode_float().to_string(),
                 _ => {
                     let mut s = String::new();
                     if self.namespace.is_none()
@@ -160,7 +162,6 @@ impl<'model> RustCodeGen<'model> {
         Ok(stmt)
     }
 
-    #[allow(dead_code)]
     fn decode_shape_kind(&self, id: &ShapeID, kind: &ShapeKind) -> Result<String> {
         let s = match kind {
             ShapeKind::Simple(simple) => match simple {
@@ -230,21 +231,50 @@ impl<'model> RustCodeGen<'model> {
                 )
             }
             ShapeKind::Structure(strukt) => self.decode_struct(id, strukt)?,
+            ShapeKind::Union(union_) => self.decode_union(id, union_)?,
             ShapeKind::Operation(_)
             | ShapeKind::Resource(_)
             | ShapeKind::Service(_)
             | ShapeKind::Unresolved => String::new(),
-
-            ShapeKind::Union(_) => {
-                unimplemented!();
-            }
         };
+        Ok(s)
+    }
+
+    fn decode_union(&self, id: &ShapeID, strukt: &StructureOrUnion) -> Result<String> {
+        let (fields, _) = crate::model::get_sorted_fields(id.shape_name(), strukt)?;
+        let enum_name = id.shape_name();
+        let mut s = format!(
+            r#"
+            // decoding union {}
+            let len = d.array()?.ok_or_else(||RpcError::Deser("decoding union '{}': indefinite array not supported".to_string()))?;
+            if len != 2 {{ return Err(RpcError::Deser("decoding union '{}': expected 2-array".to_string())); }}
+            match d.u16()? {{
+        "#,
+            enum_name, enum_name, enum_name
+        );
+        for field in fields.iter() {
+            let field_num = field.field_num().unwrap();
+            let field_name = self.to_type_name(&field.id().to_string());
+            let field_decoder = self.decode_shape_id(field.target())?;
+            s.push_str(&format!(
+                r#"
+            {} => {{
+                let val = {};
+                {}::{}(val)
+            }},
+            "#,
+                &field_num, field_decoder, enum_name, field_name
+            ));
+        }
+        s.push_str(&format!(r#"
+            n => {{ return Err(RpcError::Deser(format!("invalid field number for union '{}':{{}}", n))); }},
+            }}
+        "#, id));
         Ok(s)
     }
 
     /// write decode statements for a structure
     /// This always occurs inside a dedicated function for the struct type
-    #[allow(dead_code)]
     fn decode_struct(&self, id: &ShapeID, strukt: &StructureOrUnion) -> Result<String> {
         let (fields, _is_numbered) = crate::model::get_sorted_fields(id.shape_name(), strukt)?;
         let mut s = String::new();
@@ -419,7 +449,6 @@ impl<'model> RustCodeGen<'model> {
     /// name of the function is encode_<S> where <S> is the camel_case type name
     /// It is generated in the module that declared type S, so it can always
     /// be found by prefixing the function name with the module path.
-    #[allow(dead_code)]
     pub(crate) fn declare_shape_decoder(
         &self,
         w: &mut Writer,
@@ -429,12 +458,12 @@ impl<'model> RustCodeGen<'model> {
         match kind {
             ShapeKind::Simple(_)
             | ShapeKind::Structure(_)
+            | ShapeKind::Union(_)
             | ShapeKind::Map(_)
             | ShapeKind::List(_)
             | ShapeKind::Set(_) => {
                 let name = id.shape_name();
-                let is_rust_copy = vec!["U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64"]
-                    .contains(&name.to_string().as_str());
+                let is_rust_copy = is_rust_primitive(id);
                 let mut s = format!(
                     r#"
                 // Decode {} from cbor input stream
@@ -452,31 +481,10 @@ impl<'model> RustCodeGen<'model> {
                 s.push_str(&body);
                 s.push_str("};\n Ok(__result)\n}\n");
                 w.write(s.as_bytes());
-
-                /***
-                if !is_rust_copy {
-                    let cbor_decode_impl = format!(
-                        r#"
-                        impl {}::common::Decode for {} {{
-                            fn decode(d: &mut {}::cbor::Decoder) -> Result<{}, RpcError> {{
-                                decode_{}(d)
-                            }}
-                        }}
-                        "#,
-                        self.import_core,
-                        name,
-                        self.import_core,
-                        name,
-                        crate::strings::to_snake_case(&name.to_string()),
-                    );
-                    w.write(&cbor_decode_impl);
-                }
-                ***/
             }
             ShapeKind::Operation(_)
             | ShapeKind::Resource(_)
             | ShapeKind::Service(_)
-            | ShapeKind::Union(_)
             | ShapeKind::Unresolved => { /* write nothing */ }
         }
         Ok(())

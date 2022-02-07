@@ -49,6 +49,10 @@ pub fn rust_build_into<CFG: Into<PathBuf>, OUT: Into<PathBuf>>(
 
     let model = crate::sources_to_model(&config.models, &config.base_dir, 0)?;
 
+    if let Err(msgs) = crate::validate::validate(&model) {
+        return Err(Box::new(Error::Build(msgs.join("\n"))));
+    }
+
     // the second time we do this it should be faster since no downloading is required,
     // and we also don't invoke assembler to traverse directories
     for path in crate::sources_to_paths(&config.models, &config.base_dir, 0)?.into_iter() {

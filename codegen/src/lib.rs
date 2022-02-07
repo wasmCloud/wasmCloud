@@ -14,6 +14,7 @@ pub(crate) mod gen;
 mod loader;
 pub(crate) mod model;
 pub mod render;
+pub(crate) mod validate;
 pub mod writer;
 pub use gen::{templates_from_dir, Generator};
 

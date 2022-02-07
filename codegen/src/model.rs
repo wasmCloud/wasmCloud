@@ -22,16 +22,12 @@ use std::{fmt, ops::Deref, str::FromStr};
 const WASMCLOUD_MODEL_NAMESPACE: &str = "org.wasmcloud.model";
 const WASMCLOUD_CORE_NAMESPACE: &str = "org.wasmcloud.core";
 
-//const TRAIT_ACTOR_RECEIVER: &str = "actorReceiver";
-//const TRAIT_CAPABILITY: &str = "capability";
-//const TRAIT_PROVIDER_RECEIVER: &str = "providerReceiver";
 const TRAIT_CODEGEN_RUST: &str = "codegenRust";
 const TRAIT_SERIALIZATION: &str = "serialization";
 const TRAIT_WASMBUS: &str = "wasmbus";
 const TRAIT_WASMBUS_DATA: &str = "wasmbusData";
 const TRAIT_FIELD_NUM: &str = "n";
 const TRAIT_RENAME: &str = "rename";
-//const TRAIT_SERIALIZE_RENAME: &str = "rename";
 
 lazy_static! {
     static ref WASMCLOUD_MODEL_NAMESPACE_ID: NamespaceID =
@@ -135,6 +131,7 @@ impl TryFrom<&str> for WasmbusProtoVersion {
         }
     }
 }
+
 impl fmt::Debug for WasmbusProtoVersion {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str(&self.to_string())
@@ -165,6 +162,7 @@ pub(crate) enum Ty<'typ> {
     /// write a reference type: preceeded by &
     Ref(&'typ ShapeID),
 }
+
 // verify that the model doesn't contain unsupported types
 #[macro_export]
 macro_rules! expect_empty {
@@ -248,13 +246,17 @@ pub fn get_trait<T: DeserializeOwned>(traits: &AppliedTraits, id: &ShapeID) -> R
     }
 }
 
-pub fn wasmbus_proto(traits: &AppliedTraits) -> Result<WasmbusProtoVersion> {
+/// Returns Ok(Some( version )) if this is a service with the wasmbus protocol trait
+/// Returns Ok(None) if this is not a wasmbus service
+/// Returns Err() if there was an error parsing the declarataion
+pub fn wasmbus_proto(traits: &AppliedTraits) -> Result<Option<WasmbusProtoVersion>> {
     match get_trait(traits, wasmbus_trait()) {
         Ok(Some(Wasmbus {
             protocol: Some(version),
             ..
-        })) => WasmbusProtoVersion::try_from(version.as_str()),
-        _ => Ok(WasmbusProtoVersion::default()),
+        })) => Ok(Some(WasmbusProtoVersion::try_from(version.as_str())?)),
+        Ok(_) => Ok(Some(WasmbusProtoVersion::default())),
+        _ => Ok(None),
     }
 }
 
@@ -339,7 +341,7 @@ pub fn has_default(model: &'_ Model, member: &MemberShape) -> bool {
     } else if id.namespace() == wasmcloud_model_namespace() {
         matches!(
             name.as_str(),
-            "U64" | "U32" | "U16" | "U8" | "I64" | "I32" | "I16" | "I8"
+            "U64" | "U32" | "U16" | "U8" | "I64" | "I32" | "I16" | "I8" | "F64" | "F32"
         )
     } else {
         false

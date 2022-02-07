@@ -22,42 +22,42 @@ pub mod cbor;
 pub mod error;
 
 #[deprecated(
-    since = "0.7.0-alpha.2",
+    since = "0.7.0",
     note = "use wasmbus_rpc::common::deserialize instead of wasmbus_rpc::deseerialize"
 )]
 pub use common::deserialize;
 #[deprecated(
-    since = "0.7.0-alpha.2",
+    since = "0.7.0",
     note = "use wasmbus_rpc::common::serialize instead of wasmbus_rpc::serialize"
 )]
 pub use common::serialize;
 #[deprecated(
-    since = "0.7.0-alpha.2",
+    since = "0.7.0",
     note = "use wasmbus_rpc::common::Context instead of wasmbus_rpc::Context"
 )]
 pub use common::Context;
 #[deprecated(
-    since = "0.7.0-alpha.2",
+    since = "0.7.0",
     note = "use wasmbus_rpc::common::Message instead of wasmbus_rpc::Message"
 )]
 pub use common::Message;
 #[deprecated(
-    since = "0.7.0-alpha.2",
+    since = "0.7.0",
     note = "use wasmbus_rpc::common::SendOpts instead of wasmbus_rpc::SendOpts"
 )]
 pub use common::SendOpts;
 #[deprecated(
-    since = "0.7.0-alpha.2",
+    since = "0.7.0",
     note = "use wasmbus_rpc::common::Transport instead of wasmbus_rpc::Transport"
 )]
 pub use common::Transport;
 #[deprecated(
-    since = "0.7.0-alpha.2",
+    since = "0.7.0",
     note = "use wasmbus_rpc::error::RpcError instead of wasmbus_rpc::RpcError"
 )]
 pub use error::RpcError;
 #[deprecated(
-    since = "0.7.0-alpha.2",
+    since = "0.7.0",
     note = "use wasmbus_rpc::error::RpcResult instead of wasmbus_rpc::RpcResult"
 )]
 pub use error::RpcResult;

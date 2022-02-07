@@ -93,6 +93,20 @@ enum MethodArgFlags {
     ToString,
 }
 
+/// Returns true if the type is a rust primitive
+pub fn is_rust_primitive(id: &ShapeID) -> bool {
+    (id.namespace() == prelude_namespace_id()
+        && matches!(
+            id.shape_name().to_string().as_str(),
+            "Boolean" | "Byte" | "Short" | "Integer" | "Long" | "Float" | "Double"
+        ))
+        || (id.namespace() == wasmcloud_model_namespace()
+            && matches!(
+                id.shape_name().to_string().as_str(),
+                "U64" | "U32" | "U16" | "U8" | "I64" | "I32" | "I16" | "I8" | "F64" | "F32"
+            ))
+}
+
 impl<'model> CodeGen for RustCodeGen<'model> {
     fn output_language(&self) -> OutputLanguage {
         OutputLanguage::Rust
@@ -185,7 +199,6 @@ impl<'model> CodeGen for RustCodeGen<'model> {
             Some(ns) => Some(NamespaceID::from_str(ns)?),
             None => None,
         };
-        //self.protocol = model.wasmbus_
         if let Some(ref ns) = self.namespace {
             if self.packages.get(&ns.to_string()).is_none() {
                 print_warning(&format!(
@@ -302,10 +315,12 @@ impl<'model> CodeGen for RustCodeGen<'model> {
                 ShapeKind::Structure(strukt) => {
                     self.declare_structure_shape(w, id.shape_name(), traits, strukt)?;
                 }
+                ShapeKind::Union(strukt) => {
+                    self.declare_union_shape(w, id.shape_name(), traits, strukt)?;
+                }
                 ShapeKind::Operation(_)
                 | ShapeKind::Resource(_)
                 | ShapeKind::Service(_)
-                | ShapeKind::Union(_)
                 | ShapeKind::Unresolved => {}
             }
 
@@ -473,6 +488,8 @@ impl<'model> RustCodeGen<'model> {
                             s.push('i');
                             s.push_str(&name[1..]);
                         }
+                        "F64" => s.push_str("f64"),
+                        "F32" => s.push_str("f32"),
                         _ => {
                             if self.namespace.is_none()
                                 || self.namespace.as_ref().unwrap() != id.namespace()
@@ -721,6 +738,40 @@ impl<'model> RustCodeGen<'model> {
         Ok(())
     }
 
+    fn declare_union_shape(
+        &mut self,
+        w: &mut Writer,
+        id: &Identifier,
+        traits: &AppliedTraits,
+        strukt: &StructureOrUnion,
+    ) -> Result<()> {
+        let (fields, is_numbered) = get_sorted_fields(id, strukt)?;
+        if !is_numbered {
+            return Err(Error::Model(format!(
+                "union {} must have numbered fields",
+                id
+            )));
+        }
+        self.apply_documentation_traits(w, id, traits);
+        w.write(b"#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]\n");
+        println!("Union: {}:\n:{:#?}", id, strukt);
+
+        w.write(b"pub enum ");
+        self.write_ident(w, id);
+        w.write(b" {\n");
+        for member in fields.iter() {
+            self.apply_documentation_traits(w, member.id(), member.traits());
+            let variant_name = self.to_type_name(&member.id().to_string());
+            w.write(&format!(
+                "{}({}),\n",
+                variant_name,
+                self.type_string(Ty::Shape(member.target()))?
+            )); // TODO: Ty::Ref ?
+        }
+        w.write(b"}\n\n");
+        Ok(())
+    }
+
     /// Declares the service as a rust Trait whose methods are the smithy service operations
     fn write_service_interface(
         &mut self,
@@ -850,6 +901,7 @@ impl<'model> RustCodeGen<'model> {
         w.write(b" : MessageDispatch + ");
         self.write_ident(w, service.id);
         let proto = crate::model::wasmbus_proto(service.traits)?;
+        let has_cbor = proto.map(|pv| pv.has_cbor()).unwrap_or(false);
         w.write(
             br#"{
             async fn dispatch(
@@ -875,7 +927,7 @@ impl<'model> RustCodeGen<'model> {
             if let Some(op_input) = op.input() {
                 let symbol = op_input.shape_name().to_string();
                 // let value : InputType = deserialize(...)?;
-                if proto.has_cbor() {
+                if has_cbor {
                     w.write(&format!(
                         r#"
                     let value : {} = {}::common::decode(&message.arg, &decode_{})
@@ -916,7 +968,7 @@ impl<'model> RustCodeGen<'model> {
 
             if let Some(_op_output) = op.output() {
                 // serialize result
-                if proto.has_cbor() {
+                if has_cbor {
                     w.write(&format!(
                         "let mut e = {}::cbor::vec_encoder();\n",
                         &self.import_core
@@ -965,6 +1017,7 @@ impl<'model> RustCodeGen<'model> {
         self.write_comment(w, CommentKind::Documentation, &doc);
         self.apply_documentation_traits(w, service.id, service.traits);
         let proto = crate::model::wasmbus_proto(service.traits)?;
+        let has_cbor = proto.map(|pv| pv.has_cbor()).unwrap_or(false);
         w.write(&format!(
             r#"/// client for sending {} messages
               #[derive(Debug)]
@@ -1010,7 +1063,7 @@ impl<'model> RustCodeGen<'model> {
             let _arg_is_string = matches!(arg_flags, MethodArgFlags::ToString);
             w.write(b" {\n");
             if let Some(_op_input) = op.input() {
-                if proto.has_cbor() {
+                if has_cbor {
                     if _arg_is_string {
                         w.write(b"let arg = arg.to_string();\n");
                     }
@@ -1053,7 +1106,7 @@ impl<'model> RustCodeGen<'model> {
             w.write(b"\", arg: Cow::Borrowed(&buf)}, None).await?;\n");
             if let Some(op_output) = op.output() {
                 let symbol = op_output.shape_name().to_string();
-                if proto.has_cbor() {
+                if has_cbor {
                     w.write(&format!(
                         r#"
                     let value : {} = {}::common::decode(&resp, &decode_{})
