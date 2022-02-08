@@ -1,6 +1,6 @@
 [package]
 name = "wasmbus-rpc"
-version = "0.7.2"
+version = "0.7.3"
 authors = [ "wasmcloud Team" ]
 license = "Apache-2.0"
 description = "Runtime library for actors and capability providers"
@@ -34,7 +34,7 @@ thiserror = "1.0"
 time = "0.3.7"
 tokio-timer = "0.2"
 toml = "0.5"
-wasmbus-macros = "0.1.6"
+wasmbus-macros = { path = "../macros", version = "0.1.7" }
 
 #BigInteger support
 num-bigint = { version = "0.4", optional = true }

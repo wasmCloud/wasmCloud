@@ -86,6 +86,7 @@ pub fn derive_actor(input: TokenStream) -> TokenStream {
     pub const HOST_API_VERSION : u32 = 1;
 
     #[link(wasm_import_module = "wasmbus")]
+    #[cfg(target_arch = "wasm32")]
     extern "C" {
         pub fn __guest_response(ptr: *const u8, len: usize);
         pub fn __guest_error(ptr: *const u8, len: usize);
@@ -98,6 +99,7 @@ pub fn derive_actor(input: TokenStream) -> TokenStream {
     }
 
     #[no_mangle]
+    #[cfg(target_arch = "wasm32")]
     pub extern "C" fn __guest_call(op_len: i32, req_len: i32) -> i32 {
         use std::slice;
 
