@@ -3,7 +3,7 @@
 [[models]]
 url = "https://cdn.jsdelivr.net/gh/wasmcloud/interfaces@6750c952166d61f71/core/wasmcloud-core.smithy"
 [[models]]
-url = "https://cdn.jsdelivr.net/gh/wasmcloud/interfaces@374e5bcc63267f3ad/core/wasmcloud-model.smithy"
+url = "https://cdn.jsdelivr.net/gh/wasmcloud/interfaces@77317ba3c1c6b65c9f3eb7e8ab3d2b44248f6182/core/wasmcloud-model.smithy"
 
 [rust]
 output_dir = "."

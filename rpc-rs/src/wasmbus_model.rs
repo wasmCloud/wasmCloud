@@ -29,6 +29,48 @@ pub fn decode_capability_contract_id(
     let __result = { d.str()?.to_string() };
     Ok(__result)
 }
+/// 32-bit float
+pub type F32 = f32;
+
+// Encode F32 as CBOR and append to output stream
+#[doc(hidden)]
+#[inline]
+pub fn encode_f32<W: crate::cbor::Write>(
+    e: &mut crate::cbor::Encoder<W>,
+    val: &F32,
+) -> RpcResult<()> {
+    e.f32(*val)?;
+    Ok(())
+}
+
+// Decode F32 from cbor input stream
+#[doc(hidden)]
+#[inline]
+pub fn decode_f32(d: &mut crate::cbor::Decoder<'_>) -> Result<F32, RpcError> {
+    let __result = { d.f32()? };
+    Ok(__result)
+}
+/// 64-bit float aka double
+pub type F64 = f64;
+
+// Encode F64 as CBOR and append to output stream
+#[doc(hidden)]
+#[inline]
+pub fn encode_f64<W: crate::cbor::Write>(
+    e: &mut crate::cbor::Encoder<W>,
+    val: &F64,
+) -> RpcResult<()> {
+    e.f64(*val)?;
+    Ok(())
+}
+
+// Decode F64 from cbor input stream
+#[doc(hidden)]
+#[inline]
+pub fn decode_f64(d: &mut crate::cbor::Decoder<'_>) -> Result<F64, RpcError> {
+    let __result = { d.f64()? };
+    Ok(__result)
+}
 /// signed 16-bit int
 pub type I16 = i16;
 
