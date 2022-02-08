@@ -223,6 +223,13 @@ impl<W: Write> Encoder<W>
 where
     RpcError: From<minicbor::encode::Error<<W as minicbor::encode::Write>::Error>>,
 {
+    /// Constructs an Encoder around the writer
+    pub fn new(writer: W) -> Self {
+        Self {
+            inner: minicbor::Encoder::new(writer),
+        }
+    }
+
     /// Encode a bool value
     pub fn bool(&mut self, x: bool) -> RpcResult<&mut Self> {
         self.inner.bool(x)?;
