@@ -1,6 +1,6 @@
 [package]
 name = "weld-codegen"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
 authors = [ "wasmcloud Team" ]
 license = "Apache-2.0"
@@ -30,7 +30,7 @@ handlebars = "4.0"
 Inflector = "0.11"
 lazy_static = "1.4"
 lexical-sort = "0.3"
-minicbor = { version = "0.11", features = ["derive", "std", "half" ] }
+minicbor = { version = "0.13", features = ["derive", "std", "half" ] }
 reqwest = { version = "0.11", default-features = false, features = [ "blocking", "rustls-tls" ] }
 rustc-hash = { version = "1.1", default_features = false }
 semver = "1.0"

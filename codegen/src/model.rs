@@ -159,7 +159,7 @@ pub(crate) enum Ty<'typ> {
     Shape(&'typ ShapeID),
     /// write a type wrapped in Option<>
     Opt(&'typ ShapeID),
-    /// write a reference type: preceeded by &
+    /// write a reference type: preceded by &
     Ref(&'typ ShapeID),
 }
 

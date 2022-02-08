@@ -1,4 +1,4 @@
-// This file is generated automatically using wasmcloud/weld-codegen 0.2.4
+// This file is generated automatically using wasmcloud/weld-codegen 0.3.1
 #[allow(unused_imports)]
 use serde::{Deserialize, Serialize};
 
@@ -6,6 +6,12 @@ pub const SMITHY_VERSION: &str = "1.0";
 
 /// Capability contract id, e.g. 'wasmcloud:httpserver'
 pub type CapabilityContractId = String;
+
+/// 32-bit float
+pub type F32 = f32;
+
+/// 64-bit float aka double
+pub type F64 = f64;
 
 /// signed 16-bit int
 pub type I16 = i16;

@@ -416,9 +416,8 @@ impl<'model> RustCodeGen<'model> {
                 // use val-by-copy as param to encode if type is rust primitive "copy" type
                 // This is only relevant for aliases of primitive types in wasmbus-model namespace
                 let is_rust_copy = is_rust_primitive(id);
-                //let val_or_copy = if is_rust_copy { "*val" } else { "val" };
                 // The purpose of is_empty_struct is to determine when the parameter is unused
-                // in the function body, and append '_' to the name to avoid a compiler warning.
+                // in the function body, and prepend '_' to the name to avoid a compiler warning.
                 let (body, is_empty_struct) =
                     self.encode_shape_kind(id, kind, ValExpr::Ref("val"))?;
                 let mut s = format!(

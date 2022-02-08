@@ -2,10 +2,9 @@
 # ensures that src/wasmbus_model.rs is up-to-date
 
 [[models]]
-url = "https://cdn.jsdelivr.net/gh/wasmcloud/interfaces@wasmcloud-core-interface-v0.2.0/core/wasmcloud-core.smithy"
+url = "https://cdn.jsdelivr.net/gh/wasmcloud/interfaces@6750c952166d61f713abf8cdb57edf9636e1e295/core/wasmcloud-core.smithy"
 [[models]]
-#url = "https://cdn.jsdelivr.net/gh/wasmcloud/interfaces@wasmcloud-model-interface-v0.2.0/core/wasmcloud-model.smithy"
-url = "https://raw.githubusercontent.com/wasmCloud/interfaces/proto-version/core/wasmcloud-model.smithy"
+url = "https://cdn.jsdelivr.net/gh/wasmcloud/interfaces@77317ba3c1c6b65c9f3eb7e8ab3d2b44248f6182/core/wasmcloud-model.smithy"
 
 [rust]
 output_dir = "."
