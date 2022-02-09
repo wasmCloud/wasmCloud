@@ -111,6 +111,9 @@ pub(crate) enum CtlCliCommand {
     /// Apply a manifest file to a target host
     #[clap(name = "apply")]
     Apply(ApplyCommand),
+
+    #[clap(name = "scale", subcommand)]
+    Scale(ScaleCommand),
 }
 
 #[derive(Args, Debug, Clone)]
@@ -242,6 +245,34 @@ pub(crate) enum UpdateCommand {
     /// Update an actor running in a host
     #[clap(name = "actor")]
     Actor(UpdateActorCommand),
+}
+
+#[derive(Debug, Clone, Parser)]
+pub(crate) enum ScaleCommand {
+    /// Scale an actor running in a host
+    #[clap(name = "actor")]
+    Actor(ScaleActorCommand),
+}
+
+#[derive(Debug, Clone, Parser)]
+pub struct ScaleActorCommand {
+    /// Actor Id, e.g. the public key for the actor
+    #[clap(name = "actor-id", parse(try_from_str))]
+    pub(crate) actor_id: ModuleId,
+
+    /// Actor reference, e.g. the OCI URL for the actor.
+    #[clap(name = "actor-ref")]
+    pub(crate) actor_ref: String,
+
+    pub annotations: Option<HashMap<String, String>>,
+
+    /// Number of actors to scale to.
+    #[clap(short = 'n', long = "count", default_value = "1")]
+    pub count: u16,
+
+    /// Id of host, if omitted the provider will be auctioned in the lattice to find a suitable host
+    #[clap(short = 'h', long = "host-id", name = "host-id", parse(try_from_str))]
+    host_id: Option<ServerId>,
 }
 
 #[derive(Debug, Clone, Parser)]
