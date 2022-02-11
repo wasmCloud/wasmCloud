@@ -1,7 +1,7 @@
 # capability-provider/httpclient/Makefile
 
 CAPABILITY_ID = wasmcloud:httpclient
-NAME = "HttpClient"
+NAME = "HTTP Client"
 VENDOR = "wasmcloud"
 PROJECT = httpclient
 VERSION = $(shell cargo metadata --no-deps --format-version 1 | jq -r '.packages[] .version' | head -1)
