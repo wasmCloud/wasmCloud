@@ -19,6 +19,7 @@ use time::OffsetDateTime;
 
 /// Timestamp - represents absolute time in UTC,
 /// as non-leap seconds and nanoseconds since the UNIX EPOCH
+/// It is recommended to use the `new` constructor to check parameters for validity
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Timestamp {
     /// The number of non-leap seconds since UNIX EPOCH in UTC
@@ -28,10 +29,24 @@ pub struct Timestamp {
 }
 
 impl Timestamp {
+    /// Constructs a timestamp, with parameter validation
+    pub fn new(sec: i64, nsec: u32) -> Result<Self, &'static str> {
+        if sec > 0 && (sec < i64::MAX / 1_000_000_001) && nsec < 1_000_000_000 {
+            Ok(Self { sec, nsec })
+        } else {
+            Err(INVALID_DATETIME)
+        }
+    }
+
     /// constructs a time stamp from the current system time UTC
     /// See [SystemTime](https://doc.rust-lang.org/std/time/struct.SystemTime.html) for platform implementations
     pub fn now() -> Timestamp {
         SystemTime::now().into()
+    }
+
+    /// Returns time in nanoseconds
+    pub fn as_nanos(&self) -> u128 {
+        (self.sec as u128 * 1_000_000_000) + self.nsec as u128
     }
 }
 
@@ -100,6 +115,33 @@ impl From<SystemTime> for Timestamp {
     }
 }
 
+impl TryInto<SystemTime> for Timestamp {
+    type Error = &'static str;
+
+    fn try_into(self) -> Result<SystemTime, Self::Error> {
+        use std::time::Duration;
+
+        let sys_now = SystemTime::now();
+        let now = Self::from(sys_now.clone()).as_nanos();
+        let then = self.as_nanos();
+        if now >= then {
+            let delta_past = now - then;
+            sys_now
+                .checked_sub(Duration::from_nanos(delta_past as u64))
+                .ok_or(INVALID_DATETIME)
+        } else {
+            let delta_fut = then - now; // future time
+            if delta_fut > i64::MAX as u128 {
+                Err(INVALID_DATETIME)
+            } else {
+                sys_now
+                    .checked_add(Duration::from_nanos(delta_fut as u64))
+                    .ok_or(INVALID_DATETIME)
+            }
+        }
+    }
+}
+
 #[test]
 fn timestamp_updates() {
     let now = Timestamp::now();
@@ -112,7 +154,6 @@ fn timestamp_updates() {
 
 #[test]
 fn timestamp_to_datetime() {
-    use std::convert::TryInto;
     use time::OffsetDateTime;
 
     let start: Timestamp = Timestamp {
@@ -120,12 +161,30 @@ fn timestamp_to_datetime() {
         nsec: 100_000,
     };
 
-    let dt: OffsetDateTime = start.try_into().unwrap();
+    let dt: OffsetDateTime = OffsetDateTime::try_from(start).unwrap();
 
     let next: Timestamp = dt.into();
 
     assert_eq!(&start.sec, &next.sec);
     assert_eq!(&start.nsec, &next.nsec);
+}
+
+#[test]
+fn timestamp_system_time() {
+    // past
+    let st = SystemTime::now()
+        .checked_sub(std::time::Duration::from_secs(86_400 * 365 * 5))
+        .unwrap();
+    let t = Timestamp::from(st.clone());
+    assert_eq!(t.try_into(), Ok(st));
+
+    // future
+    let st = SystemTime::now()
+        .checked_add(std::time::Duration::from_secs(86_400 * 365))
+        .unwrap();
+    let t = Timestamp::from(st.clone());
+    let st_check: SystemTime = t.try_into().unwrap();
+    assert_eq!(st_check, st);
 }
 
 #[test]
