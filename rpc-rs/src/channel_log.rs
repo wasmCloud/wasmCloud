@@ -11,7 +11,6 @@ use log::{Level, Metadata, Record};
 use once_cell::sync::OnceCell;
 use std::{
     fmt,
-    str::FromStr,
     sync::atomic::{AtomicUsize, Ordering},
 };
 
@@ -116,14 +115,6 @@ pub fn init_logger() -> Result<Receiver, String> {
     ) {
         Err(format!("logger init error: {}", e))
     } else {
-        let mut detail_level = log::LevelFilter::Info;
-        if let Ok(level) = std::env::var("RUST_LOG") {
-            if let Ok(level) = log::LevelFilter::from_str(&level) {
-                detail_level = level;
-            }
-        }
-        eprintln!("Initializing logging at level {}\r", &detail_level);
-        log::set_max_level(detail_level);
         Ok(rx)
     }
 }
