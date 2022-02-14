@@ -29,7 +29,7 @@ wasmcloud-interface-blobstore = { version="0.1.0", path="../../interfaces/blobst
 # test dependencies
 [dev-dependencies]
 wasmcloud-test-util = "0.2"
-rand = "0.8"t
+rand = "0.8"
 
 
 [lib]
