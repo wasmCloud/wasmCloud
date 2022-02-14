@@ -1,4 +1,4 @@
-// This file is generated automatically using wasmcloud/weld-codegen 0.3.2
+// This file is generated automatically using wasmcloud/weld-codegen 0.3.3
 #[allow(unused_imports)]
 use crate::error::{RpcError, RpcResult};
 #[allow(unused_imports)]

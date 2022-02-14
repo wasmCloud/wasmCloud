@@ -122,7 +122,7 @@ impl TryInto<SystemTime> for Timestamp {
         use std::time::Duration;
 
         let sys_now = SystemTime::now();
-        let now = Self::from(sys_now.clone()).as_nanos();
+        let now = Self::from(sys_now).as_nanos();
         let then = self.as_nanos();
         if now >= then {
             let delta_past = now - then;
@@ -175,14 +175,14 @@ fn timestamp_system_time() {
     let st = SystemTime::now()
         .checked_sub(std::time::Duration::from_secs(86_400 * 365 * 5))
         .unwrap();
-    let t = Timestamp::from(st.clone());
+    let t = Timestamp::from(st);
     assert_eq!(t.try_into(), Ok(st));
 
     // future
     let st = SystemTime::now()
         .checked_add(std::time::Duration::from_secs(86_400 * 365))
         .unwrap();
-    let t = Timestamp::from(st.clone());
+    let t = Timestamp::from(st);
     let st_check: SystemTime = t.try_into().unwrap();
     assert_eq!(st_check, st);
 }
