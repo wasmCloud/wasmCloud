@@ -1,8 +1,7 @@
 # configuration for nats test
 
 # name of compiled binary (usually project name unless overridden in [[bin]]
-# Required
-bin_path = "target/debug/blobstore-s3"
+bin_path = "target/release/blobstore-s3"
 
 # set RUST_LOG environment variable (default "info")
 rust_log = "debug"
