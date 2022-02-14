@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 /// An error that can occur in the processing of an RPC. This is not request-specific errors but
 /// rather cross-cutting errors that can always occur.
-#[derive(thiserror::Error, Debug, Serialize, Deserialize)]
+#[derive(thiserror::Error, Debug, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum RpcError {
     /// The request exceeded its deadline.

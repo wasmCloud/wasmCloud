@@ -64,7 +64,7 @@ fn decode_double() -> &'static str {
     "d.f64()?"
 }
 fn decode_timestamp() -> &'static str {
-    todo!(); // tag timestamp
+    "wasmbus_rpc::Timestamp{ sec: d.i64()?, nsec: d.u32()? }"
 }
 fn decode_big_integer() -> &'static str {
     todo!(); // tag big int

@@ -108,8 +108,12 @@ fn encode_double(val: ValExpr) -> String {
 fn encode_document(val: ValExpr) -> String {
     format!("e.bytes({})?;\n", val.as_ref())
 }
-fn encode_timestamp(_val: ValExpr) -> String {
-    todo!(); // tag timestamp
+fn encode_timestamp(val: ValExpr) -> String {
+    format!(
+        "e.i64({}.sec)?;\ne.u32({}.nsec)?;\n",
+        val.as_str(),
+        val.as_str()
+    )
 }
 fn encode_big_integer(_val: ValExpr) -> String {
     todo!(); // tag big int
