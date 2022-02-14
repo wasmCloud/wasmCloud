@@ -24,7 +24,7 @@ async fn test_create_container() {
 }
 
 /// Tests
-/// - create_object
+/// - put_object
 /// - remove_object
 /// - object_exists
 #[tokio::test]
@@ -154,6 +154,99 @@ async fn test_list_objects() {
     assert_eq!(&meta.container_id, &bucket);
     assert_eq!(meta.size as usize, object_bytes.len());
     assert_eq!(&meta.object_id, "object.1");
+
+    s3.remove_containers(&ctx, &vec![bucket])
+        .await
+        .expect("remove containers");
+}
+
+/// Tests
+/// - get_object_range
+#[tokio::test]
+async fn test_get_object_range() {
+    let s3 = StorageClient::async_default().await;
+    let ctx = wasmbus_rpc::common::Context::default();
+    let num = rand::random::<u64>();
+    let bucket = format!("test.{}.hello", num);
+
+    s3.create_container(&ctx, &bucket).await.unwrap();
+    let object_bytes = b"abcdefghijklmnopqrstuvwxyz".to_vec();
+    let _ = s3
+        .put_object(
+            &ctx,
+            &PutObjectRequest {
+                chunk: Chunk {
+                    bytes: object_bytes.clone(),
+                    container_id: bucket.clone(),
+                    is_last: true,
+                    object_id: "object.1".to_string(),
+                    offset: 0,
+                },
+                content_encoding: None,
+                content_type: None,
+            },
+        )
+        .await
+        .expect("put object");
+
+    let range_mid = s3
+        .get_object(
+            &ctx,
+            &GetObjectRequest {
+                container_id: bucket.clone(),
+                object_id: "object.1".to_string(),
+                range_start: Some(6),
+                range_end: Some(12),
+                chunk_size: None,
+            },
+        )
+        .await
+        .expect("get-object-range-0");
+    assert_eq!(range_mid.content_length, 7);
+    assert_eq!(
+        range_mid.initial_chunk.as_ref().unwrap().bytes,
+        b"ghijklm".to_vec()
+    );
+
+    // range with omitted end
+    let range_to_end = s3
+        .get_object(
+            &ctx,
+            &GetObjectRequest {
+                container_id: bucket.clone(),
+                object_id: "object.1".to_string(),
+                range_start: Some(22),
+                range_end: None,
+                chunk_size: None,
+            },
+        )
+        .await
+        .expect("get-object-range-2");
+    assert_eq!(range_to_end.content_length, 4);
+    assert_eq!(
+        range_to_end.initial_chunk.as_ref().unwrap().bytes,
+        b"wxyz".to_vec()
+    );
+
+    // range with omitted begin
+    let range_from_start = s3
+        .get_object(
+            &ctx,
+            &GetObjectRequest {
+                container_id: bucket.clone(),
+                object_id: "object.1".to_string(),
+                range_start: None,
+                range_end: Some(3),
+                chunk_size: None,
+            },
+        )
+        .await
+        .expect("get-object-range-1");
+    assert_eq!(
+        range_from_start.initial_chunk.as_ref().unwrap().bytes,
+        b"abcd".to_vec()
+    );
+    //assert_eq!(range_from_start.content_length, 4);
 
     s3.remove_containers(&ctx, &vec![bucket])
         .await
