@@ -13,24 +13,13 @@
 //! assume role http request https://docs.aws.amazon.com/cli/latest/reference/sts/assume-role.html
 //! get session token https://docs.aws.amazon.com/cli/latest/reference/sts/get-session-token.html
 
-// using IAM role in AWS CLI https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-role.html
-// assume IAM role using AWS CLI https://aws.amazon.com/premiumsupport/knowledge-center/iam-assume-role-cli/
-// https://docs.aws.amazon.com/cli/latest/reference/sts/assume-role.html
-
-// Principal for STSAssumeRole
-// Principal/role : arn:aws:iam::123456789012:role/some-role
-// Principal/service: "ec2.amazonaws.com"
-// activate STS for region
-// region: 'us-east-1'
-// endpoint: 'https://sts.us-east-1.amazonaws.com'
-
 use aws_sdk_s3::{
     error::{HeadBucketError, HeadBucketErrorKind, HeadObjectError, HeadObjectErrorKind},
     model::ObjectIdentifier,
     output::{CreateBucketOutput, ListBucketsOutput},
     ByteStream, SdkError,
 };
-use log::{debug, error, warn};
+use log::{debug, error, info, warn};
 use wasmbus_rpc::{core::LinkDefinition, provider::prelude::*};
 use wasmcloud_interface_blobstore::{
     self as blobstore, Blobstore, Chunk, ChunkReceiver, ChunkReceiverSender, ContainerId,
@@ -42,42 +31,6 @@ pub use config::StorageConfig;
 
 #[derive(Clone)]
 pub struct StorageClient(pub aws_sdk_s3::Client, pub Option<LinkDefinition>);
-
-// enforce some of the S3 bucket naming rules.
-// per https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucketnamingrules.html
-// We don't enforce all of them (assuming amazon will also return an error),
-// and we only enforce during `create_bucket`
-fn validate_bucket_name(bucket: &str) -> Result<(), &'static str> {
-    if !(3usize..=63).contains(&bucket.len()) {
-        return Err("bucket name must be between 3(min) and 63(max) characters");
-    }
-    if !bucket
-        .chars()
-        .all(|c| c == '.' || c == '-' || ('a'..='z').contains(&c) || ('0'..='9').contains(&c))
-    {
-        return Err(
-            "bucket names can only contain lowercase letters, numbers, dots('.') and hyphens('-')",
-        );
-    }
-    let c = bucket.chars().next().unwrap();
-    if !(('a'..='z').contains(&c) || ('0'..='9').contains(&c)) {
-        return Err("bucket names must begin with a letter or number");
-    }
-    let c = bucket.chars().last().unwrap();
-    if !(('a'..='z').contains(&c) || ('0'..='9').contains(&c)) {
-        return Err("bucket names must end with a letter or number");
-    }
-    if bucket.starts_with("xn--") {
-        return Err("bucket name must not begin with 'xn--'");
-    }
-    if bucket.ends_with("-s3alias") {
-        return Err("bucket name must not end with '-s3alias'");
-    }
-    // there are a couple
-    // IPv4 address is not allowed
-
-    Ok(())
-}
 
 impl StorageClient {
     pub async fn new(config: StorageConfig, ld: Option<LinkDefinition>) -> Self {
@@ -133,26 +86,10 @@ impl StorageClient {
                         };
                         // increment for next iteration
                         offset += chunk_len;
-                        /*
-                        let ld = {
-                            let rd = this.actors.read().await;
-                            let client = match rd.get(actor_id) {
-                                Some(c) => c,
-                                None => {
-                                    error!(
-                                        "Actor {} became unlinked while streaming download",
-                                        actor_id
-                                    );
-                                    return;
-                                }
-                            };
-                            client.1.clone().unwrap()
-                        };
-                         */
                         let ld = this.1.clone().unwrap();
                         let receiver = ChunkReceiverSender::for_actor(&ld);
                         if let Err(e) = receiver.receive_chunk(&ctx, &chunk).await {
-                            error!("sending chunk error. stopping streaming download. '{}' '{}' to '{}': {}",
+                            error!("sending chunk error. stopping streaming download. Bucket({}) Object({}) to Actor({}): {}",
                                     &container_object.container_id,
                                     &container_object.object_id,
                                     actor_id,
@@ -190,7 +127,7 @@ impl Blobstore for StorageClient {
                 ..
             }) => Ok(false),
             Err(e) => {
-                error!("container_exists '{}': error: {}", arg, e);
+                error!("container_exists Bucket({}): error: {}", arg, e);
                 Err(RpcError::Other(e.to_string()))
             }
         }
@@ -204,7 +141,7 @@ impl Blobstore for StorageClient {
                 if let Err(msg) = validate_bucket_name(arg) {
                     error!("invalid bucket name: {}", arg);
                     return Err(RpcError::InvalidParameter(format!(
-                        "Invalid bucket name '{}': {}",
+                        "Invalid bucket name Bucket({}): {}",
                         arg, msg
                     )));
                 }
@@ -214,12 +151,12 @@ impl Blobstore for StorageClient {
                         Ok(())
                     }
                     Err(SdkError::ServiceError { err, .. }) => {
-                        error!("create_container '{}': {}", arg, &err.to_string());
+                        error!("create_container Bucket({}): {}", arg, &err.to_string());
                         Err(RpcError::Other(err.to_string()))
                     }
                     Err(e) => {
                         error!(
-                            "create_container '{}' unexpected_error: {}",
+                            "create_container Bucket({}) unexpected_error: {}",
                             arg,
                             &e.to_string()
                         );
@@ -315,7 +252,7 @@ impl Blobstore for StorageClient {
             }) => Ok(false),
             Err(e) => {
                 error!(
-                    "unexpected error for object_exists '{}' '{}': error: {}",
+                    "unexpected error for object_exists Bucket({}) Object({}): error: {}",
                     arg.container_id, arg.object_id, e
                 );
                 Err(RpcError::Other(e.to_string()))
@@ -365,7 +302,11 @@ impl Blobstore for StorageClient {
                 })
             }
             Err(e) => {
-                error!("list_objects '{}': {}", &arg.container_id, &e.to_string(),);
+                error!(
+                    "list_objects Bucket({}): {}",
+                    &arg.container_id,
+                    &e.to_string(),
+                );
                 Err(RpcError::Other(e.to_string()))
             }
         }
@@ -457,7 +398,7 @@ impl Blobstore for StorageClient {
             Ok(_) => Ok(PutObjectResponse::default()),
             Err(e) => {
                 error!(
-                    "put_object: '{}' '{}': {}",
+                    "put_object: Bucket({}) Object({}): {}",
                     &arg.chunk.container_id,
                     &arg.chunk.object_id,
                     &e.to_string(),
@@ -467,25 +408,18 @@ impl Blobstore for StorageClient {
         }
     }
 
+    /// Retrieve object from s3 storage.
     async fn get_object(
         &self,
         ctx: &Context,
         arg: &blobstore::GetObjectRequest,
     ) -> RpcResult<GetObjectResponse> {
-        let range = match (arg.region_start, arg.region_end) {
-            (Some(start), Some(end)) => Some(format!("bytes={}-{}", start, end)),
-            (Some(start), None) => Some(format!("bytes={}-", start)),
-            (None, Some(end)) => Some(format!("bytes=-{}", end)),
-            (None, None) => None,
-        };
-        let mut get_object_req = self
+        let get_object_req = self
             .0
             .get_object()
             .bucket(&arg.container_id)
-            .key(&arg.object_id);
-        if let Some(range) = range {
-            get_object_req = get_object_req.range(range);
-        }
+            .key(&arg.object_id)
+            .set_range(to_range_header(arg.range_start, arg.range_end));
         match get_object_req.send().await {
             Ok(mut object_output) => {
                 let len = object_output.content_length as u64;
@@ -495,27 +429,42 @@ impl Blobstore for StorageClient {
                     .unwrap_or_default();
                 let chunk_len = bytes.len();
                 if (chunk_len as u64) < len {
-                    // set up streaming response
-                    self.stream_download(
-                        ctx,
-                        ContainerObject {
-                            container_id: arg.container_id.clone(),
-                            object_id: arg.object_id.clone(),
-                        },
-                        arg.region_start.unwrap_or(0) as usize + chunk_len,
-                        len as usize,
-                        object_output.body,
-                    )
-                    .await;
+                    info!("get_object Bucket({}) Object({}) beginning streaming response. Initial chunk contains {} bytes out of {}",
+                        &arg.container_id,
+                        &arg.object_id,
+                        chunk_len, len
+                    );
+                    if self.1.is_some() {
+                        // create task to deliver remaining chunks
+                        self.stream_download(
+                            ctx,
+                            ContainerObject {
+                                container_id: arg.container_id.clone(),
+                                object_id: arg.object_id.clone(),
+                            },
+                            arg.range_start.unwrap_or(0) as usize + chunk_len,
+                            len as usize,
+                            object_output.body,
+                        )
+                        .await;
+                    } else {
+                        let msg = format!("Returning first chunk of {} bytes (out of {}) for Bucket({}) Object({}). Remaining chunks will not be sent to ChunkReceiver because linkdef was not initialized. This is most likely due to invoking 'getObject' with an improper configuration for testing.",
+                            chunk_len, len,
+                            &arg.container_id,
+                            &arg.object_id,
+                        );
+                        error!("{}", &msg);
+                    }
                 }
+                // return first chunk
                 Ok(blobstore::GetObjectResponse {
                     success: true,
                     initial_chunk: Some(Chunk {
                         bytes: bytes.to_vec(),
                         container_id: arg.container_id.clone(),
-                        is_last: (bytes.len() as u64 >= len),
+                        is_last: (chunk_len as u64) >= len,
                         object_id: arg.object_id.clone(),
-                        offset: arg.region_start.unwrap_or(0),
+                        offset: arg.range_start.unwrap_or(0),
                     }),
                     content_length: object_output.content_length as u64,
                     content_type: object_output.content_type.clone(),
@@ -525,7 +474,7 @@ impl Blobstore for StorageClient {
             }
             Err(e) => {
                 error!(
-                    "get_object '{}' '{}' failed: {}",
+                    "get_object Bucket({}) Object({}): {}",
                     &arg.container_id,
                     &arg.object_id,
                     &e.to_string()
@@ -541,6 +490,8 @@ impl Blobstore for StorageClient {
     }
 }
 
+/// translate optional s3 DateTime to optional Timestamp.
+/// Invalid times return None.
 fn to_timestamp(dt: Option<aws_sdk_s3::DateTime>) -> Option<wasmbus_rpc::Timestamp> {
     match dt {
         Some(dt) => match wasmbus_rpc::Timestamp::new(dt.secs(), dt.subsec_nanos()) {
@@ -549,6 +500,73 @@ fn to_timestamp(dt: Option<aws_sdk_s3::DateTime>) -> Option<wasmbus_rpc::Timesta
         },
         None => None,
     }
+}
+
+// enforce some of the S3 bucket naming rules.
+// per https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucketnamingrules.html
+// We don't enforce all of them (assuming amazon will also return an error),
+// and we only enforce during `create_bucket`
+fn validate_bucket_name(bucket: &str) -> Result<(), &'static str> {
+    if !(3usize..=63).contains(&bucket.len()) {
+        return Err("bucket name must be between 3(min) and 63(max) characters");
+    }
+    if !bucket
+        .chars()
+        .all(|c| c == '.' || c == '-' || ('a'..='z').contains(&c) || ('0'..='9').contains(&c))
+    {
+        return Err(
+            "bucket names can only contain lowercase letters, numbers, dots('.') and hyphens('-')",
+        );
+    }
+    let c = bucket.chars().next().unwrap();
+    if !(('a'..='z').contains(&c) || ('0'..='9').contains(&c)) {
+        return Err("bucket names must begin with a letter or number");
+    }
+    let c = bucket.chars().last().unwrap();
+    if !(('a'..='z').contains(&c) || ('0'..='9').contains(&c)) {
+        return Err("bucket names must end with a letter or number");
+    }
+    if bucket.starts_with("xn--") {
+        return Err("bucket name must not begin with 'xn--'");
+    }
+    if bucket.ends_with("-s3alias") {
+        return Err("bucket name must not end with '-s3alias'");
+    }
+    // there are a couple
+    // IPv4 address is not allowed
+
+    Ok(())
+}
+
+/// convert optional start/end to an http range request header value
+/// If end is before start, the range is invalid, and per spec (https://www.w3.org/Protocols/rfc2616/rfc2616-sec14.html#sec14.35),
+/// the range will be ignored.
+/// If end is specified and start is None, start value of 0 is used. (Otherwise "bytes=-x" is interpreted as the last x bytes)
+fn to_range_header(start: Option<u64>, end: Option<u64>) -> Option<String> {
+    match (start, end) {
+        (Some(start), Some(end)) if start <= end => Some(format!("bytes={}-{}", start, end)),
+        (Some(start), None) => Some(format!("bytes={}-", start)),
+        (None, Some(end)) => Some(format!("bytes=0-{}", end)),
+        _ => None,
+    }
+}
+
+#[test]
+fn range_header() {
+    assert_eq!(
+        to_range_header(Some(1), Some(99)),
+        Some("bytes=1-99".to_string())
+    );
+    assert_eq!(to_range_header(Some(10), Some(5)), None);
+    assert_eq!(
+        to_range_header(None, Some(99)),
+        Some("bytes=0-99".to_string())
+    );
+    assert_eq!(
+        to_range_header(Some(99), None),
+        Some("bytes=99-".to_string())
+    );
+    assert_eq!(to_range_header(None, None), None);
 }
 
 #[test]
