@@ -46,14 +46,15 @@ async fn get_request(_opt: &TestOptions) -> RpcResult<()> {
     let ctx = Context::default();
 
     let resp = client
-        .request(&ctx, &HttpRequest::get("https://1.1.1.1/"))
+        .request(&ctx, &HttpRequest::get("https://google.com/"))
         .await?;
     assert_eq!(resp.status_code, 200, "status code");
     assert!(resp.header.get("content-type").is_some());
 
-    let body = String::from_utf8_lossy(&resp.body);
+    // Check the first 1k characters for an html indicator
+    let body = String::from_utf8_lossy(&resp.body)[0..1024].to_ascii_lowercase();
     assert!(
-        body.contains("DOCTYPE html"),
+        body.contains("doctype html"),
         "expected to get html doc: {}",
         &body
     );
