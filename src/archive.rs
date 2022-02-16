@@ -1,13 +1,21 @@
 use crate::Result;
+use async_compression::{
+    tokio::{bufread::GzipDecoder, write::GzipEncoder},
+    Level,
+};
 use data_encoding::HEXUPPER;
-use flate2::{read::GzDecoder, write::GzEncoder, Compression};
 use ring::digest::{Context, Digest, SHA256};
 use std::{
     collections::HashMap,
-    fs::File,
-    io::{copy, prelude::*, Cursor, Read},
-    path::PathBuf,
+    io::{Cursor, Read},
+    path::{Path, PathBuf},
 };
+use tokio::{
+    fs::File,
+    io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt, AsyncWrite, AsyncWriteExt, BufReader},
+};
+use tokio_stream::StreamExt;
+use tokio_tar::Archive;
 use wascap::{
     jwt::{CapabilityProvider, Claims},
     prelude::KeyPair,
@@ -74,43 +82,132 @@ impl ProviderArchive {
         self.claims.clone()
     }
 
-    /// Attempts to read a Provider Archive (PAR) file's bytes to analyze and verify its contents. The embedded claims
-    /// in this archive will be validated, and the file hashes contained in those claims will be compared and
-    /// verified against hashes computed at load time. This prevents the contents of the archive from being modified
-    /// without the embedded claims being re-signed
-    pub fn try_load(input: &[u8]) -> Result<ProviderArchive> {
+    /// Attempts to read a Provider Archive (PAR) file's bytes to analyze and verify its contents.
+    ///
+    /// The embedded claims in this archive will be validated, and the file hashes contained in
+    /// those claims will be compared and verified against hashes computed at load time. This
+    /// prevents the contents of the archive from being modified without the embedded claims being
+    /// re-signed. This will load all binaries into memory in the returned `ProviderArchive`.
+    ///
+    /// Please note that this method requires that you have _all_ of the provider archive bytes in
+    /// memory, which will likely be really hefty if you are just trying to load a specific binary
+    /// to run
+    pub async fn try_load(input: &[u8]) -> Result<ProviderArchive> {
+        let mut cursor = Cursor::new(input);
+        Self::load(&mut cursor, None).await
+    }
+
+    /// Attempts to read a Provider Archive (PAR) file's bytes to analyze and verify its contents,
+    /// loading _only_ the specified target.
+    ///
+    /// This is useful when loading a provider archive for consumption and you know the target OS
+    /// you need. The embedded claims in this archive will be validated, and the file hashes
+    /// contained in those claims will be compared and verified against hashes computed at load
+    /// time. This prevents the contents of the archive from being modified without the embedded
+    /// claims being re-signed
+    ///
+    /// Please note that this method requires that you have _all_ of the provider archive bytes in
+    /// memory, which will likely be really hefty if you are just trying to load a specific binary
+    /// to run
+    pub async fn try_load_target(input: &[u8], target: &str) -> Result<ProviderArchive> {
+        let mut cursor = Cursor::new(input);
+        Self::load(&mut cursor, Some(target)).await
+    }
+
+    /// Attempts to read a Provider Archive (PAR) file to analyze and verify its contents.
+    ///
+    /// The embedded claims in this archive will be validated, and the file hashes contained in
+    /// those claims will be compared and verified against hashes computed at load time. This
+    /// prevents the contents of the archive from being modified without the embedded claims being
+    /// re-signed. This will load all binaries into memory in the returned `ProviderArchive`. Use
+    /// [`load`] or [`try_load_target_from_file`]  methods if you only want to load a single binary
+    /// into memory.
+    pub async fn try_load_file(path: impl AsRef<Path>) -> Result<ProviderArchive> {
+        let mut file = File::open(path).await?;
+        Self::load(&mut file, None).await
+    }
+
+    /// Attempts to read a Provider Archive (PAR) file to analyze and verify its contents.
+    ///
+    /// The embedded claims in this archive will be validated, and the file hashes contained in
+    /// those claims will be compared and verified against hashes computed at load time. This
+    /// prevents the contents of the archive from being modified without the embedded claims being
+    /// re-signed. This will only read a single binary into memory.
+    ///
+    /// It is recommended to use this method or the [`load`] method when consuming a provider
+    /// archive. Otherwise all binaries will be loaded into memory
+    pub async fn try_load_target_from_file(
+        path: impl AsRef<Path>,
+        target: &str,
+    ) -> Result<ProviderArchive> {
+        let mut file = File::open(path).await?;
+        Self::load(&mut file, Some(target)).await
+    }
+
+    /// Attempts to read a Provider Archive (PAR) from a Reader to analyze and verify its contents.
+    /// The optional `target` parameter allows you to select a single binary to load
+    ///
+    /// The embedded claims in this archive will be validated, and the file hashes contained in
+    /// those claims will be compared and verified against hashes computed at load time. This
+    /// prevents the contents of the archive from being modified without the embedded claims being
+    /// re-signed. If a `target` is specified, this will only read a single binary into memory.
+    ///
+    /// This is the most generic loading option available and allows you to load from anything that
+    /// implements `AsyncRead` and `AsyncSeek`
+    pub async fn load<R: AsyncRead + AsyncSeek + Unpin + Send + Sync>(
+        input: &mut R,
+        target: Option<&str>,
+    ) -> Result<ProviderArchive> {
         let mut libraries = HashMap::new();
 
-        if input.len() < 2 {
-            return Err("Not enough bytes to be a valid PAR file".into());
+        let mut magic = [0; 2];
+        if let Err(e) = input.read_exact(&mut magic).await {
+            // If we can't fill the buffer, it isn't a valid par file
+            if matches!(e.kind(), std::io::ErrorKind::UnexpectedEof) {
+                return Err("Not enough bytes to be a valid PAR file".into());
+            }
+            return Err(e.into());
         }
 
-        let mut par = tar::Archive::new(if input[0..2] == GZIP_MAGIC {
-            Box::new(GzDecoder::new(input)) as Box<dyn Read>
+        // Seek back to beginning
+        input.rewind().await?;
+
+        let mut par = Archive::new(if magic == GZIP_MAGIC {
+            Box::new(GzipDecoder::new(BufReader::new(input)))
+                as Box<dyn AsyncRead + Unpin + Sync + Send>
         } else {
-            Box::new(Cursor::new(input)) as Box<dyn Read>
+            Box::new(input) as Box<dyn AsyncRead + Unpin + Sync + Send>
         });
 
         let mut c: Option<Claims<CapabilityProvider>> = None;
 
-        let entries = par.entries()?;
+        let mut entries = par.entries()?;
 
-        for f in entries {
-            let mut file = f.unwrap();
+        while let Some(res) = entries.next().await {
+            let mut entry = res?;
             let mut bytes = Vec::new();
-            copy(&mut file, &mut bytes)?;
-            let target = PathBuf::from(file.path()?)
+            let file_target = PathBuf::from(entry.path()?)
                 .file_stem()
                 .unwrap()
                 .to_str()
                 .unwrap()
                 .to_string();
-            if target == "claims" {
+            if file_target == "claims" {
+                tokio::io::copy(&mut entry, &mut bytes).await?;
                 c = Some(Claims::<CapabilityProvider>::decode(std::str::from_utf8(
                     &bytes,
                 )?)?);
+            } else if let Some(t) = target {
+                // If loading only a specific target, only copy in bytes if it is the target. We still
+                // need to iterate through the rest so we can be sure to find the claims
+                if file_target == t {
+                    tokio::io::copy(&mut entry, &mut bytes).await?;
+                    libraries.insert(file_target.to_string(), bytes);
+                }
+                continue;
             } else {
-                libraries.insert(target.to_string(), bytes.to_vec());
+                tokio::io::copy(&mut entry, &mut bytes).await?;
+                libraries.insert(file_target.to_string(), bytes);
             }
         }
 
@@ -147,23 +244,33 @@ impl ProviderArchive {
     }
 
     /// Generates a Provider Archive (PAR) file with all of the library files and a signed set of claims in an embedded JWT
-    pub fn write(
+    pub async fn write(
         &mut self,
-        destination: &str,
+        destination: impl AsRef<Path>,
         issuer: &KeyPair,
         subject: &KeyPair,
         compress_par: bool,
     ) -> Result<()> {
-        let file = File::create(if compress_par && !destination.ends_with(".gz") {
-            format!("{}.gz", destination)
-        } else {
-            destination.to_string()
-        })?;
+        let file = File::create(
+            if compress_par && destination.as_ref().extension().unwrap_or_default() != "gz" {
+                let mut file_name = destination
+                    .as_ref()
+                    .file_name()
+                    .ok_or("Destination is not a file")?
+                    .to_owned();
+                file_name.push(".gz");
+                destination.as_ref().with_file_name(file_name)
+            } else {
+                destination.as_ref().to_owned()
+            },
+        )
+        .await?;
 
-        let mut par = tar::Builder::new(if compress_par {
-            Box::new(GzEncoder::new(file, Compression::best())) as Box<dyn Write>
+        let mut par = tokio_tar::Builder::new(if compress_par {
+            Box::new(GzipEncoder::with_quality(file, Level::Best))
+                as Box<dyn AsyncWrite + Send + Sync + Unpin>
         } else {
-            Box::new(file) as Box<dyn Write>
+            Box::new(file) as Box<dyn AsyncWrite + Send + Sync + Unpin>
         });
 
         let claims = Claims::<CapabilityProvider>::new(
@@ -180,23 +287,28 @@ impl ProviderArchive {
 
         let claims_file = claims.encode(issuer)?;
 
-        let mut header = tar::Header::new_gnu();
+        let mut header = tokio_tar::Header::new_gnu();
         header.set_path(CLAIMS_JWT_FILE)?;
         header.set_size(claims_file.as_bytes().len() as u64);
         header.set_cksum();
-        par.append_data(&mut header, CLAIMS_JWT_FILE, Cursor::new(claims_file))?;
+        par.append_data(&mut header, CLAIMS_JWT_FILE, Cursor::new(claims_file))
+            .await?;
 
         for (tgt, lib) in self.libraries.iter() {
-            let mut header = tar::Header::new_gnu();
+            let mut header = tokio_tar::Header::new_gnu();
             let path = format!("{}.bin", tgt);
             header.set_path(&path)?;
             header.set_size(lib.len() as u64);
             header.set_cksum();
-            par.append_data(&mut header, &path, Cursor::new(lib))?;
+            par.append_data(&mut header, &path, Cursor::new(lib))
+                .await?;
         }
 
         // Completes the process of packing a .par archive
-        par.into_inner()?;
+        let mut inner = par.into_inner().await?;
+        // Make sure everything is flushed to disk, otherwise we might miss closing data block
+        inner.flush().await?;
+        inner.shutdown().await?;
 
         Ok(())
     }
@@ -250,30 +362,12 @@ fn sha256_digest<R: Read>(mut reader: R) -> Result<Digest> {
 
 #[cfg(test)]
 mod test {
-    use crate::{ProviderArchive, Result};
-    use flate2::{read::GzDecoder, write::GzEncoder, Compression};
-    use std::{
-        fs::File,
-        io::{prelude::*, Read},
-    };
+    use super::*;
     use wascap::prelude::KeyPair;
 
-    fn compress(par: &[u8]) -> Result<Vec<u8>> {
-        let mut e = GzEncoder::new(Vec::new(), Compression::best());
-        e.write_all(par).unwrap();
-        e.finish().map_err(|e| e.into())
-    }
-
-    fn decompress(par: &[u8]) -> Result<Vec<u8>> {
-        let mut d = GzDecoder::new(par);
-        let mut buf = Vec::new();
-        d.read_to_end(&mut buf)?;
-
-        Ok(buf)
-    }
-
-    #[test]
-    fn write_par() -> Result<()> {
+    #[tokio::test]
+    async fn write_par() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
         let mut arch = ProviderArchive::new(
             "wasmcloud:testing",
             "Testing",
@@ -286,14 +380,17 @@ mod test {
         let issuer = KeyPair::new_account();
         let subject = KeyPair::new_service();
 
-        arch.write("./writetest.par", &issuer, &subject, false)?;
+        let outpath = tempdir.path().join("writetest.par");
+        arch.write(&outpath, &issuer, &subject, false).await?;
+        tokio::fs::metadata(outpath)
+            .await
+            .expect("Unable to locate newly created par file");
 
-        let _ = std::fs::remove_file("./writetest.par");
         Ok(())
     }
 
-    #[test]
-    fn error_on_no_providers() -> Result<()> {
+    #[tokio::test]
+    async fn error_on_no_providers() -> Result<()> {
         let mut arch = ProviderArchive::new(
             "wasmcloud:testing",
             "Testing",
@@ -302,28 +399,30 @@ mod test {
             Some("0.0.2".to_string()),
         );
 
+        let tempdir = tempfile::tempdir()?;
+
         let issuer = KeyPair::new_account();
         let subject = KeyPair::new_service();
 
-        arch.write("./shoulderr.par", &issuer, &subject, false)?;
+        let outpath = tempdir.path().join("shoulderr.par");
+        arch.write(&outpath, &issuer, &subject, false).await?;
 
         let mut buf2 = Vec::new();
-        let mut f2 = File::open("./shoulderr.par")?;
-        f2.read_to_end(&mut buf2)?;
+        let mut f2 = File::open(outpath).await?;
+        f2.read_to_end(&mut buf2).await?;
 
-        let arch2 = ProviderArchive::try_load(&buf2);
+        let arch2 = ProviderArchive::try_load(&buf2).await;
 
         match arch2 {
             Ok(_notok) => panic!("Loading an archive without any libraries should fail"),
             Err(_e) => (),
         }
 
-        let _ = std::fs::remove_file("./shoulderr.par");
         Ok(())
     }
 
-    #[test]
-    fn round_trip() -> Result<()> {
+    #[tokio::test]
+    async fn round_trip() -> Result<()> {
         // Build an archive in memory the way a CLI wrapper might...
         let mut arch = ProviderArchive::new(
             "wasmcloud:testing",
@@ -339,32 +438,66 @@ mod test {
         let issuer = KeyPair::new_account();
         let subject = KeyPair::new_service();
 
+        let tempdir = tempfile::tempdir()?;
+
+        let firstpath = tempdir.path().join("firstarchive.par");
+        let secondpath = tempdir.path().join("secondarchive.par");
+
         // Generate the .par file with embedded claims.jwt file (needs a service and an account key)
-        arch.write("./firstarchive.par", &issuer, &subject, false)?;
+        arch.write(&firstpath, &issuer, &subject, false).await?;
 
-        let mut buf2 = Vec::new();
-        let mut f2 = File::open("./firstarchive.par")?;
-        f2.read_to_end(&mut buf2)?;
-
-        // Make sure the file we wrote can be read back in with no data loss
-        let mut arch2 = ProviderArchive::try_load(&buf2)?;
+        // Try loading from file
+        let arch2 = ProviderArchive::try_load_file(&firstpath).await?;
         assert_eq!(arch.capid, arch2.capid);
         assert_eq!(
-            arch.libraries[&"aarch64-linux".to_string()],
-            arch2.libraries[&"aarch64-linux".to_string()]
+            arch.libraries.get("aarch64-linux"),
+            arch2.libraries.get("aarch64-linux")
+        );
+        assert_eq!(
+            arch.libraries.get("x86_64-macos"),
+            arch2.libraries.get("x86_64-macos")
+        );
+        assert_eq!(arch.claims().unwrap().subject, subject.public_key());
+
+        // Load just one of the binaries
+        let arch2 = ProviderArchive::try_load_target_from_file(&firstpath, "aarch64-linux").await?;
+        assert_eq!(
+            arch.libraries.get("aarch64-linux"),
+            arch2.libraries.get("aarch64-linux")
+        );
+        assert!(
+            arch2.libraries.get("x86_64-macos").is_none(),
+            "Should have loaded only one binary"
+        );
+        assert_eq!(
+            arch.claims().unwrap().subject,
+            subject.public_key(),
+            "Claims should still load"
+        );
+
+        let mut buf2 = Vec::new();
+        let mut f2 = File::open(&firstpath).await?;
+        f2.read_to_end(&mut buf2).await?;
+
+        // Make sure the file we wrote can be read back in with no data loss
+        let mut arch2 = ProviderArchive::try_load(&buf2).await?;
+        assert_eq!(arch.capid, arch2.capid);
+        assert_eq!(
+            arch.libraries.get("aarch64-linux"),
+            arch2.libraries.get("aarch64-linux")
         );
         assert_eq!(arch.claims().unwrap().subject, subject.public_key());
 
         // Another common task - read an existing archive and add another library file to it
         arch2.add_library("mips-linux", b"bluhbluh")?;
-        arch2.write("./secondarchive.par", &issuer, &subject, false)?;
+        arch2.write(&secondpath, &issuer, &subject, false).await?;
 
         let mut buf3 = Vec::new();
-        let mut f3 = File::open("./secondarchive.par")?;
-        f3.read_to_end(&mut buf3)?;
+        let mut f3 = File::open(&secondpath).await?;
+        f3.read_to_end(&mut buf3).await?;
 
         // Make sure the re-written/modified archive looks the way we expect
-        let arch3 = ProviderArchive::try_load(&buf3)?;
+        let arch3 = ProviderArchive::try_load(&buf3).await?;
         assert_eq!(arch3.capid, arch2.capid);
         assert_eq!(
             arch3.libraries[&"aarch64-linux".to_string()],
@@ -373,14 +506,11 @@ mod test {
         assert_eq!(arch3.claims().unwrap().subject, subject.public_key());
         assert_eq!(arch3.targets().len(), 4);
 
-        let _ = std::fs::remove_file("./firstarchive.par");
-        let _ = std::fs::remove_file("./secondarchive.par");
-
         Ok(())
     }
 
-    #[test]
-    fn compression_roundtrip() -> Result<()> {
+    #[tokio::test]
+    async fn compression_roundtrip() -> Result<()> {
         let mut arch = ProviderArchive::new(
             "wasmcloud:testing",
             "Testing",
@@ -397,22 +527,24 @@ mod test {
 
         let filename = "computers";
 
-        arch.write(&format!("{}.par", filename), &issuer, &subject, false)?;
+        let tempdir = tempfile::tempdir()?;
+
+        let parpath = tempdir.path().join(format!("{}.par", filename));
+        let cheezypath = tempdir.path().join(format!("{}.par.gz", filename));
+
+        arch.write(&parpath, &issuer, &subject, false).await?;
+        arch.write(&cheezypath, &issuer, &subject, true).await?;
 
         let mut buf2 = Vec::new();
-        let mut f2 = File::open(&format!("{}.par", filename))?;
-        f2.read_to_end(&mut buf2)?;
-
-        let compressed = compress(&buf2)?;
-        let mut file = File::create(&format!("{}.par.gz", filename))?;
-        file.write_all(&compressed)?;
+        let mut f2 = File::open(&parpath).await?;
+        f2.read_to_end(&mut buf2).await?;
 
         let mut buf3 = Vec::new();
-        let mut f3 = File::open(&format!("{}.par.gz", filename))?;
-        f3.read_to_end(&mut buf3)?;
+        let mut f3 = File::open(&cheezypath).await?;
+        f3.read_to_end(&mut buf3).await?;
 
         // Make sure the file we wrote compressed can be read back in with no data loss
-        let arch2 = ProviderArchive::try_load(&buf3)?;
+        let arch2 = ProviderArchive::try_load(&buf3).await?;
         assert_eq!(arch.capid, arch2.capid);
         assert_eq!(
             arch.libraries[&"aarch64-linux".to_string()],
@@ -420,54 +552,20 @@ mod test {
         );
         assert_eq!(arch.claims().unwrap().subject, subject.public_key());
 
-        let _ = std::fs::remove_file(&format!("{}.par", filename));
-        let _ = std::fs::remove_file(&format!("{}.par.gz", filename));
-        Ok(())
-    }
-
-    #[test]
-    fn valid_decompression() -> Result<()> {
-        let mut arch = ProviderArchive::new(
-            "wasmcloud:testing",
-            "Testing",
-            "wasmCloud",
-            Some(5),
-            Some("0.0.5".to_string()),
+        // Try loading from file as well
+        let arch2 = ProviderArchive::try_load_file(&cheezypath).await?;
+        assert_eq!(arch.capid, arch2.capid);
+        assert_eq!(
+            arch.libraries.get("aarch64-linux"),
+            arch2.libraries.get("aarch64-linux")
         );
-        arch.add_library("aarch64-linux", b"cool-linux")?;
-        arch.add_library("x86_64-linux", b"linux")?;
-        arch.add_library("x86_64-macos", b"macos")?;
+        assert_eq!(arch.claims().unwrap().subject, subject.public_key());
 
-        let issuer = KeyPair::new_account();
-        let subject = KeyPair::new_service();
-
-        let filename = "operatingsystem";
-
-        arch.write(&format!("{}.par", filename), &issuer, &subject, false)?;
-
-        let mut buf2 = Vec::new();
-        let mut f2 = File::open(&format!("{}.par", filename))?;
-        f2.read_to_end(&mut buf2)?;
-
-        let compressed = compress(&buf2)?;
-        let mut file = File::create(&format!("{}.par.gz", filename))?;
-        file.write_all(&compressed)?;
-
-        let mut buf3 = Vec::new();
-        let mut f3 = File::open(&format!("{}.par.gz", filename))?;
-        f3.read_to_end(&mut buf3)?;
-
-        let decompressed = decompress(&buf3)?;
-
-        assert_eq!(buf2, decompressed);
-
-        let _ = std::fs::remove_file(&format!("{}.par", filename));
-        let _ = std::fs::remove_file(&format!("{}.par.gz", filename));
         Ok(())
     }
 
-    #[test]
-    fn valid_write_compressed() -> Result<()> {
+    #[tokio::test]
+    async fn valid_write_compressed() -> Result<()> {
         let mut arch = ProviderArchive::new(
             "wasmcloud:testing",
             "Testing",
@@ -484,13 +582,19 @@ mod test {
         let issuer = KeyPair::new_account();
         let subject = KeyPair::new_service();
 
-        arch.write(&format!("{}.par", filename), &issuer, &subject, true)?;
+        let tempdir = tempfile::tempdir()?;
 
-        let mut buf = Vec::new();
-        let mut f = File::open(format!("{}.par.gz", filename))?;
-        f.read_to_end(&mut buf)?;
+        arch.write(
+            tempdir.path().join(format!("{}.par", filename)),
+            &issuer,
+            &subject,
+            true,
+        )
+        .await?;
 
-        let arch2 = ProviderArchive::try_load(&buf)?;
+        let arch2 =
+            ProviderArchive::try_load_file(tempdir.path().join(format!("{}.par.gz", filename)))
+                .await?;
 
         assert_eq!(
             arch.libraries[&"x86_64-linux".to_string()],
@@ -506,14 +610,11 @@ mod test {
         );
         assert_eq!(arch.claims(), arch2.claims());
 
-        let _ = std::fs::remove_file(format!("{}.par", filename));
-        let _ = std::fs::remove_file(format!("{}.par.gz", filename));
-
         Ok(())
     }
 
-    #[test]
-    fn valid_write_compressed_with_suffix() -> Result<()> {
+    #[tokio::test]
+    async fn valid_write_compressed_with_suffix() -> Result<()> {
         let mut arch = ProviderArchive::new(
             "wasmcloud:testing",
             "Testing",
@@ -530,14 +631,17 @@ mod test {
         let issuer = KeyPair::new_account();
         let subject = KeyPair::new_service();
 
+        let tempdir = tempfile::tempdir()?;
+        let cheezypath = tempdir.path().join(format!("{}.par.gz", filename));
+
         // the gz suffix is explicitly provided to write
-        arch.write(&format!("{}.par.gz", filename), &issuer, &subject, true)?;
+        arch.write(&cheezypath, &issuer, &subject, true)
+            .await
+            .expect("Unable to write parcheezy");
 
-        let mut buf = Vec::new();
-        let mut f = File::open(format!("{}.par.gz", filename))?;
-        f.read_to_end(&mut buf)?;
-
-        let arch2 = ProviderArchive::try_load(&buf)?;
+        let arch2 = ProviderArchive::try_load_file(&cheezypath)
+            .await
+            .expect("Unable to load parcheezy from file");
 
         assert_eq!(
             arch.libraries[&"x86_64-linux".to_string()],
@@ -553,14 +657,11 @@ mod test {
         );
         assert_eq!(arch.claims(), arch2.claims());
 
-        let _ = std::fs::remove_file(format!("{}.par", filename));
-        let _ = std::fs::remove_file(format!("{}.par.gz", filename));
-
         Ok(())
     }
 
-    #[test]
-    fn preserved_claims() -> Result<()> {
+    #[tokio::test]
+    async fn preserved_claims() -> Result<()> {
         // Build an archive in memory the way a CLI wrapper might...
         let capid = "wasmcloud:testing";
         let name = "Testing";
@@ -575,14 +676,14 @@ mod test {
         let issuer = KeyPair::new_account();
         let subject = KeyPair::new_service();
 
-        arch.write("./original.par.gz", &issuer, &subject, true)?;
+        let tempdir = tempfile::tempdir()?;
+        let originalpath = tempdir.path().join("original.par.gz");
+        let addedpath = tempdir.path().join("linuxadded.par.gz");
 
-        let mut buf2 = Vec::new();
-        let mut f2 = File::open("./original.par.gz")?;
-        f2.read_to_end(&mut buf2)?;
+        arch.write(&originalpath, &issuer, &subject, true).await?;
 
         // Make sure the file we wrote can be read back in with no claims loss
-        let mut arch2 = ProviderArchive::try_load(&buf2)?;
+        let mut arch2 = ProviderArchive::try_load_file(&originalpath).await?;
 
         assert_eq!(arch.capid, arch2.capid);
         assert_eq!(
@@ -599,14 +700,10 @@ mod test {
 
         // Another common task - read an existing archive and add another library file to it
         arch2.add_library("mips-linux", b"bluhbluh")?;
-        arch2.write("./linuxadded.par.gz", &issuer, &subject, true)?;
-
-        let mut buf3 = Vec::new();
-        let mut f3 = File::open("./linuxadded.par.gz")?;
-        f3.read_to_end(&mut buf3)?;
+        arch2.write(&addedpath, &issuer, &subject, true).await?;
 
         // Make sure the re-written/modified archive looks the way we expect
-        let arch3 = ProviderArchive::try_load(&buf3)?;
+        let arch3 = ProviderArchive::try_load_file(&addedpath).await?;
         assert_eq!(arch3.capid, arch2.capid);
         assert_eq!(
             arch3.libraries[&"aarch64-linux".to_string()],
@@ -620,9 +717,6 @@ mod test {
         assert_eq!(arch3.claims().unwrap().metadata.unwrap().vendor, vendor);
         assert_eq!(arch3.claims().unwrap().metadata.unwrap().capid, capid);
         assert_eq!(arch3.targets().len(), 4);
-
-        let _ = std::fs::remove_file("./original.par.gz");
-        let _ = std::fs::remove_file("./linuxadded.par.gz");
 
         Ok(())
     }
