@@ -87,8 +87,7 @@ impl ProviderArchive {
     /// The embedded claims in this archive will be validated, and the file hashes contained in
     /// those claims will be compared and verified against hashes computed at load time. This
     /// prevents the contents of the archive from being modified without the embedded claims being
-    /// re-signed. This will load all binaries into memory in the returned `ProviderArchive`. Use
-    /// one of the `try_load*_one` methods if you only want to load a single binary into memory.
+    /// re-signed. This will load all binaries into memory in the returned `ProviderArchive`.
     ///
     /// Please note that this method requires that you have _all_ of the provider archive bytes in
     /// memory, which will likely be really hefty if you are just trying to load a specific binary
@@ -110,7 +109,7 @@ impl ProviderArchive {
     /// Please note that this method requires that you have _all_ of the provider archive bytes in
     /// memory, which will likely be really hefty if you are just trying to load a specific binary
     /// to run
-    pub async fn try_load_one(input: &[u8], target: &str) -> Result<ProviderArchive> {
+    pub async fn try_load_target(input: &[u8], target: &str) -> Result<ProviderArchive> {
         let mut cursor = Cursor::new(input);
         Self::load(&mut cursor, Some(target)).await
     }
@@ -121,7 +120,8 @@ impl ProviderArchive {
     /// those claims will be compared and verified against hashes computed at load time. This
     /// prevents the contents of the archive from being modified without the embedded claims being
     /// re-signed. This will load all binaries into memory in the returned `ProviderArchive`. Use
-    /// one of the `try_load*_one` methods if you only want to load a single binary into memory.
+    /// [`load`] or [`try_load_target_from_file`]  methods if you only want to load a single binary
+    /// into memory.
     pub async fn try_load_file(path: impl AsRef<Path>) -> Result<ProviderArchive> {
         let mut file = File::open(path).await?;
         Self::load(&mut file, None).await
@@ -136,7 +136,7 @@ impl ProviderArchive {
     ///
     /// It is recommended to use this method or the [`load`] method when consuming a provider
     /// archive. Otherwise all binaries will be loaded into memory
-    pub async fn try_load_file_one(
+    pub async fn try_load_target_from_file(
         path: impl AsRef<Path>,
         target: &str,
     ) -> Result<ProviderArchive> {
@@ -256,7 +256,7 @@ impl ProviderArchive {
                 let mut file_name = destination
                     .as_ref()
                     .file_name()
-                    .ok_or_else(|| "Destination is not a file")?
+                    .ok_or("Destination is not a file")?
                     .to_owned();
                 file_name.push(".gz");
                 destination.as_ref().with_file_name(file_name)
@@ -460,7 +460,7 @@ mod test {
         assert_eq!(arch.claims().unwrap().subject, subject.public_key());
 
         // Load just one of the binaries
-        let arch2 = ProviderArchive::try_load_file_one(&firstpath, "aarch64-linux").await?;
+        let arch2 = ProviderArchive::try_load_target_from_file(&firstpath, "aarch64-linux").await?;
         assert_eq!(
             arch.libraries.get("aarch64-linux"),
             arch2.libraries.get("aarch64-linux")
