@@ -23,13 +23,15 @@ tokio = { version = "1", features = ["full"] }
 tokio-stream = { version = "0.1.8"}
 tokio-util = { version = "0.7.0", features = ["io"] }
 toml = "0.5"
-wasmbus-rpc = { path="../../weld/rpc-rs" }
-wasmcloud-interface-blobstore = { version="0.1.0", path="../../interfaces/blobstore/rust" }
+wasmbus-rpc = "0.7.4"
 
 # test dependencies
 [dev-dependencies]
-wasmcloud-test-util = "0.2"
+#wasmcloud-test-util = "0.2"
 rand = "0.8"
+
+[build-dependencies]
+weld-codegen = "0.3.3"
 
 
 [lib]

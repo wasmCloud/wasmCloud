@@ -1,20 +1,23 @@
+//! Configuration for blobstore-s3 capability provider
+//!
+//! The simplest and preferred way to set configuration is to set environment variables
+//! - `AWS_ACCESS_KEY_ID`
+//! - `AWS_SECRET_ACCESS_KEY`
+//! - and, optionally, `AWS_SESSION_TOKEN`
+//! If STS AssumeRole is to be used, the same environment variables
+//! will be used to create in initial environment, and then the
+//! settings fom `sts_config` will be used to create a session for the assumed role
+//!
 use aws_types::{
     config::Config as AwsConfig, credentials::SharedCredentialsProvider, region::Region,
 };
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::{collections::HashMap, env};
 use wasmbus_rpc::error::{RpcError, RpcResult};
 
 const DEFAULT_STS_SESSION: &str = "blobstore_s3_provider";
 
 /// Configuration for connecting to S3.
-/// The simplest and preferred way to set configuration is to set environment variables
-/// - `AWS_ACCESS_KEY_ID`
-/// - `AWS_SECRET_ACCESS_KEY`
-/// - and, optionally, `AWS_SESSION_TOKEN`
-/// If STS AssumeRole is to be used, the same environment variables
-/// will be used to create in initial environment, and then the
-/// settings fom `sts_config` will be used to create a session for the assumed role
 ///
 #[derive(Clone, Default, Deserialize)]
 pub struct StorageConfig {
@@ -34,7 +37,7 @@ pub struct StorageConfig {
 
 #[derive(Clone, Default, Deserialize)]
 pub struct StsAssumeRoleConfig {
-    /// Role to assume
+    /// Role to assume (AWS_ASSUME_ROLE_ARN)
     /// Should be in the form "arn:aws:iam::123456789012:role/example"
     pub role: String,
     /// AWS Region for using sts, not for S3
@@ -48,7 +51,7 @@ pub struct StsAssumeRoleConfig {
 impl StorageConfig {
     /// initialize from linkdef values
     pub fn from_values(values: &HashMap<String, String>) -> RpcResult<StorageConfig> {
-        let config = if let Some(config_b64) = values.get("config_b64") {
+        let mut config = if let Some(config_b64) = values.get("config_b64") {
             let bytes = base64::decode(config_b64.as_bytes()).map_err(|e| {
                 RpcError::InvalidParameter(format!("invalid base64 encoding: {}", e))
             })?;
@@ -60,6 +63,20 @@ impl StorageConfig {
         } else {
             StorageConfig::default()
         };
+        if let Ok(arn) = env::var("AWS_ASSUME_ROLE_ARN") {
+            let mut sts_config = config.sts_config.unwrap_or_default();
+            sts_config.role = arn;
+            if let Ok(region) = env::var("AWS_ASSUME_ROLE_REGION") {
+                sts_config.region = Some(region);
+            }
+            if let Ok(session) = env::var("AWS_ASSUME_ROLE_SESSION") {
+                sts_config.session = Some(session);
+            }
+            if let Ok(external_id) = env::var("AWS_ASSUME_ROLE_EXTERNAL_ID") {
+                sts_config.external_id = Some(external_id);
+            }
+            config.sts_config = Some(sts_config);
+        }
         Ok(config)
     }
 

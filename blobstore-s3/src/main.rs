@@ -1,40 +1,18 @@
-//! AWS S3 implementation for wasmcloud:blobstore
+//! main process for blobstore-s3 provider
+//! This is a thin wrapper around the blobstore-s3 library
 //!
-//! TODO:
-//! - multipart upload is not yet implemented, and has some complications:
-//!   - the S3 api for multipart upload requires a minimum 5MB per "part",
-//!     and the file may have up to 10,000 parts. With a default nats message limit of 1MB,
-//!     chunks uploaded from an actor need to be aggregated either in memory,
-//!     or as smaller unique S3 files that get copied into parts.
-//!   - aggregating 5MB parts in the memory of the capability provider would be simple,
-//!     but we can't keep state in provider memory because there could be multiple instances.
-//!   - complete_multipart_upload can discard errors https://github.com/rusoto/rusoto/issues/1936
-//!
-//! assume role http request https://docs.aws.amazon.com/cli/latest/reference/sts/assume-role.html
-//! get session token https://docs.aws.amazon.com/cli/latest/reference/sts/get-session-token.html
-
-// using IAM role in AWS CLI https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-role.html
-// assume IAM role using AWS CLI https://aws.amazon.com/premiumsupport/knowledge-center/iam-assume-role-cli/
-// https://docs.aws.amazon.com/cli/latest/reference/sts/assume-role.html
-
-// Principal for STSAssumeRole
-// Principal/role : arn:aws:iam::123456789012:role/some-role
-// Principal/service: "ec2.amazonaws.com"
-// activate STS for region
-// region: 'us-east-1'
-// endpoint: 'https://sts.us-east-1.amazonaws.com'
-
+use blobstore_s3_lib::{
+    wasmcloud_interface_blobstore::{
+        Blobstore, BlobstoreReceiver, ContainerId, ContainerIds, ContainerMetadata,
+        ContainerObject, ContainersInfo, GetObjectRequest, GetObjectResponse, ListObjectsRequest,
+        ListObjectsResponse, MultiResult, ObjectMetadata, PutChunkRequest, PutObjectRequest,
+        PutObjectResponse, RemoveObjectsRequest,
+    },
+    StorageClient, StorageConfig,
+};
 use std::{collections::HashMap, convert::Infallible, sync::Arc};
 use tokio::sync::RwLock;
 use wasmbus_rpc::{core::LinkDefinition, provider::prelude::*};
-use wasmcloud_interface_blobstore::{
-    Blobstore, BlobstoreReceiver, ContainerId, ContainerIds, ContainerMetadata, ContainerObject,
-    ContainersInfo, GetObjectRequest, GetObjectResponse, ListObjectsRequest, ListObjectsResponse,
-    MultiResult, PutChunkRequest, PutObjectRequest, PutObjectResponse, RemoveObjectsRequest,
-};
-//mod config;
-//use config::StorageConfig;
-use blobstore_s3_lib::{StorageClient, StorageConfig};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // handle lattice control messages and forward rpc to the provider dispatch
@@ -145,6 +123,15 @@ impl Blobstore for S3BlobstoreProvider {
     ) -> RpcResult<ContainerMetadata> {
         let client = self.s3_client(ctx).await?;
         client.get_container_info(ctx, arg).await
+    }
+
+    async fn get_object_info(
+        &self,
+        ctx: &Context,
+        arg: &ContainerObject,
+    ) -> RpcResult<ObjectMetadata> {
+        let client = self.s3_client(ctx).await?;
+        client.get_object_info(ctx, arg).await
     }
 
     async fn list_containers(&self, ctx: &Context) -> RpcResult<ContainersInfo> {

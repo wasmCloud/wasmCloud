@@ -1,5 +1,4 @@
-use blobstore_s3_lib::StorageClient;
-use wasmcloud_interface_blobstore::*;
+use blobstore_s3_lib::{wasmcloud_interface_blobstore::*, StorageClient};
 
 /// Tests
 /// - create_container
@@ -11,7 +10,7 @@ async fn test_create_container() {
     let ctx = wasmbus_rpc::common::Context::default();
 
     let num = rand::random::<u64>();
-    let bucket = format!("test.{}.hello", num);
+    let bucket = format!("test.{}.bucket", num);
 
     assert_eq!(s3.container_exists(&ctx, &bucket).await, Ok(false));
     s3.create_container(&ctx, &bucket).await.unwrap();
@@ -33,7 +32,7 @@ async fn test_create_object() {
     let ctx = wasmbus_rpc::common::Context::default();
 
     let num = rand::random::<u64>();
-    let bucket = format!("test.{}.hello", num);
+    let bucket = format!("test.{}.object", num);
 
     s3.create_container(&ctx, &bucket).await.unwrap();
 
@@ -104,7 +103,7 @@ async fn test_list_objects() {
     let ctx = wasmbus_rpc::common::Context::default();
 
     let num = rand::random::<u64>();
-    let bucket = format!("test.{}.hello", num);
+    let bucket = format!("test.{}.list.objects", num);
 
     s3.create_container(&ctx, &bucket).await.unwrap();
 
@@ -152,7 +151,7 @@ async fn test_list_objects() {
     let objs = s3.list_objects(&ctx, &req).await.expect("list objects");
     let meta = objs.objects.get(0).unwrap();
     assert_eq!(&meta.container_id, &bucket);
-    assert_eq!(meta.size as usize, object_bytes.len());
+    assert_eq!(meta.content_length as usize, object_bytes.len());
     assert_eq!(&meta.object_id, "object.1");
 
     s3.remove_containers(&ctx, &vec![bucket])
@@ -167,7 +166,7 @@ async fn test_get_object_range() {
     let s3 = StorageClient::async_default().await;
     let ctx = wasmbus_rpc::common::Context::default();
     let num = rand::random::<u64>();
-    let bucket = format!("test.{}.hello", num);
+    let bucket = format!("test.{}.get.object.range", num);
 
     s3.create_container(&ctx, &bucket).await.unwrap();
     let object_bytes = b"abcdefghijklmnopqrstuvwxyz".to_vec();
@@ -197,7 +196,6 @@ async fn test_get_object_range() {
                 object_id: "object.1".to_string(),
                 range_start: Some(6),
                 range_end: Some(12),
-                chunk_size: None,
             },
         )
         .await
@@ -217,7 +215,6 @@ async fn test_get_object_range() {
                 object_id: "object.1".to_string(),
                 range_start: Some(22),
                 range_end: None,
-                chunk_size: None,
             },
         )
         .await
@@ -237,7 +234,6 @@ async fn test_get_object_range() {
                 object_id: "object.1".to_string(),
                 range_start: None,
                 range_end: Some(3),
-                chunk_size: None,
             },
         )
         .await
@@ -251,4 +247,65 @@ async fn test_get_object_range() {
     s3.remove_containers(&ctx, &vec![bucket])
         .await
         .expect("remove containers");
+}
+
+/// Tests
+/// - get_object with chunked response
+#[tokio::test]
+async fn test_get_object_chunks() {
+    let s3 = StorageClient::async_default().await;
+    let ctx = wasmbus_rpc::common::Context::default();
+    let num = rand::random::<u64>();
+    let bucket = format!("test.{}.chunk", num);
+
+    s3.create_container(&ctx, &bucket).await.unwrap();
+
+    for count in vec![4, 40, 400, 4000].iter() {
+        let fname = format!("file_{}", (count * 25));
+        let object_bytes = b"abcdefghijklmnopqrstuvwxy".repeat(*count);
+        let _ = s3
+            .put_object(
+                &ctx,
+                &PutObjectRequest {
+                    chunk: Chunk {
+                        bytes: object_bytes,
+                        container_id: bucket.clone(),
+                        is_last: true,
+                        object_id: fname,
+                        offset: 0,
+                    },
+                    content_encoding: None,
+                    content_type: None,
+                },
+            )
+            .await
+            .expect("put object");
+    }
+
+    let obj = s3
+        .get_object(
+            &ctx,
+            &GetObjectRequest {
+                container_id: bucket.clone(),
+                object_id: "file_1000".to_string(),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("get-object-chunk");
+    assert!(obj.initial_chunk.unwrap().bytes.len() >= 1000);
+
+    std::env::set_var("MAX_CHUNK_SIZE", "300");
+    let obj = s3
+        .get_object(
+            &ctx,
+            &GetObjectRequest {
+                container_id: bucket.clone(),
+                object_id: "file_100000".to_string(),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("get-object-chunk");
+    assert_eq!(obj.initial_chunk.unwrap().bytes.len(), 300);
 }
