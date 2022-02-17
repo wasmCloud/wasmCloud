@@ -13,11 +13,10 @@
 //! assume role http request https://docs.aws.amazon.com/cli/latest/reference/sts/assume-role.html
 //! get session token https://docs.aws.amazon.com/cli/latest/reference/sts/get-session-token.html
 
-use aws_sdk_s3::output::HeadObjectOutput;
 use aws_sdk_s3::{
     error::{HeadBucketError, HeadBucketErrorKind, HeadObjectError, HeadObjectErrorKind},
     model::ObjectIdentifier,
-    output::{CreateBucketOutput, ListBucketsOutput},
+    output::{CreateBucketOutput, HeadObjectOutput, ListBucketsOutput},
     ByteStream, SdkError,
 };
 use log::{debug, error, info, warn};
@@ -507,8 +506,8 @@ impl Blobstore for StorageClient {
             .await
         {
             Ok(output) => {
-                let mut results = Vec::with_capacity(arg.objects.len());
                 if let Some(errors) = output.errors {
+                    let mut results = Vec::with_capacity(errors.len());
                     for e in errors.iter() {
                         results.push(blobstore::ItemResult {
                             key: e.key.clone().unwrap_or_default(),
@@ -516,15 +515,17 @@ impl Blobstore for StorageClient {
                             success: false,
                         });
                     }
+                    if !results.is_empty() {
+                        error!(
+                            "delete_objects returned {}/{} errors",
+                            results.len(),
+                            arg.objects.len()
+                        );
+                    }
+                    Ok(results)
+                } else {
+                    Ok(Vec::new())
                 }
-                if !results.is_empty() {
-                    error!(
-                        "delete_objects returned {}/{} errors",
-                        results.len(),
-                        arg.objects.len()
-                    );
-                }
-                Ok(results)
             }
             Err(e) => {
                 error!("delete_objects: {}", &e.to_string());
@@ -651,10 +652,13 @@ impl Blobstore for StorageClient {
                 let bytes = if (bytes.len() as u64) < bytes_requested
                     || bytes.len() > max_chunk_size as usize
                 {
-                    info!("get_object Bucket({}) Object({}) beginning streaming response. Initial S3 chunk contains {} bytes out of {}",
+                    info!(
+                        "get_object Bucket({}) Object({}) beginning streaming response. Initial \
+                         S3 chunk contains {} bytes out of {}",
                         &arg.container_id,
                         &arg.object_id,
-                        bytes.len(), bytes_requested,
+                        bytes.len(),
+                        bytes_requested,
                     );
                     let (bytes, excess) = if bytes.len() > max_chunk_size {
                         (
@@ -680,8 +684,14 @@ impl Blobstore for StorageClient {
                         )
                         .await;
                     } else {
-                        let msg = format!("Returning first chunk of {} bytes (out of {}) for Bucket({}) Object({}). Remaining chunks will not be sent to ChunkReceiver because linkdef was not initialized. This is most likely due to invoking 'getObject' with an improper configuration for testing.",
-                            bytes.len(), bytes_requested,
+                        let msg = format!(
+                            r#"Returning first chunk of {} bytes (out of {}) for 
+                               Bucket({}) Object({}). 
+                               Remaining chunks will not be sent to ChunkReceiver
+                               because linkdef was not initialized. This is most likely due to
+                               invoking 'getObject' with an improper configuration for testing."#,
+                            bytes.len(),
+                            bytes_requested,
                             &arg.container_id,
                             &arg.object_id,
                         );

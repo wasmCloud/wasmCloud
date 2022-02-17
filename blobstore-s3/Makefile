@@ -6,6 +6,7 @@ VENDOR   = "wasmcloud"
 VERSION  = $(shell cargo metadata --no-deps --format-version 1 | jq -r '.packages[] .version' | head -1)
 REVISION = 0
 oci_url  = localhost:5000/v2/$(PROJECT):$(VERSION)
+NAME = "Blobstore for AWS S3"
 
 # builds are 'release'
 # If using debug builds, change bin_path in provider_test_config.toml
