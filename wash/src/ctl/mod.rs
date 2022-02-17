@@ -111,6 +111,9 @@ pub(crate) enum CtlCliCommand {
     /// Apply a manifest file to a target host
     #[clap(name = "apply")]
     Apply(ApplyCommand),
+
+    #[clap(name = "scale", subcommand)]
+    Scale(ScaleCommand),
 }
 
 #[derive(Args, Debug, Clone)]
@@ -242,6 +245,40 @@ pub(crate) enum UpdateCommand {
     /// Update an actor running in a host
     #[clap(name = "actor")]
     Actor(UpdateActorCommand),
+}
+
+#[derive(Debug, Clone, Parser)]
+pub(crate) enum ScaleCommand {
+    /// Scale an actor running in a host
+    #[clap(name = "actor")]
+    Actor(ScaleActorCommand),
+}
+
+#[derive(Debug, Clone, Parser)]
+pub struct ScaleActorCommand {
+    #[clap(flatten)]
+    opts: ConnectionOpts,
+
+    /// Id of host
+    #[clap(name = "host-id", parse(try_from_str))]
+    host_id: ServerId,
+
+    /// Actor Id, e.g. the public key for the actor
+    #[clap(name = "actor-id", parse(try_from_str))]
+    pub(crate) actor_id: ModuleId,
+
+    /// Actor reference, e.g. the OCI URL for the actor.
+    #[clap(name = "actor-ref")]
+    pub(crate) actor_ref: String,
+
+    /// Number of actors to scale to.
+    #[clap(short = 'c', long = "count", default_value = "1")]
+    pub count: u16,
+
+    /// Optional set of annotations used to describe the nature of this actor scale command.
+    /// For example, autonomous agents may wish to “tag” scale requests as part of a given deployment
+    #[clap(short = 'a', long = "annotations")]
+    pub annotations: Vec<String>,
 }
 
 #[derive(Debug, Clone, Parser)]
@@ -574,6 +611,27 @@ pub(crate) async fn handle_command(
                 format!("Actor {} updated to {}", cmd.actor_id, cmd.new_actor_ref),
             )
         }
+        Scale(ScaleCommand::Actor(cmd)) => {
+            sp = update_spinner_message(
+                sp,
+                format!(
+                    " Scaling Actor {} to {} instances ... ",
+                    cmd.actor_id, cmd.count
+                ),
+                &output_kind,
+            );
+
+            let ack = scale_actor(cmd.clone()).await?;
+
+            if !ack.accepted {
+                bail!("Operation failed: {}", ack.error);
+            }
+
+            CommandOutput::from_key_and_text(
+                "result",
+                format!("Actor {} scaled to {} instances", cmd.actor_id, cmd.count),
+            )
+        }
     };
 
     if sp.is_some() {
@@ -713,6 +771,23 @@ pub(crate) async fn start_provider(mut cmd: StartProviderCommand) -> Result<CtlO
             Some(cmd.link_name),
             None,
             config_json,
+        )
+        .await
+        .map_err(convert_error)
+}
+
+pub(crate) async fn scale_actor(cmd: ScaleActorCommand) -> Result<CtlOperationAck> {
+    let client = ctl_client_from_opts(cmd.opts, None).await?;
+
+    let annotations = labels_vec_to_hashmap(cmd.annotations)?;
+
+    client
+        .scale_actor(
+            &cmd.host_id.to_string(),
+            &cmd.actor_ref,
+            &cmd.actor_id.to_string(),
+            cmd.count,
+            Some(annotations),
         )
         .await
         .map_err(convert_error)
@@ -1288,6 +1363,49 @@ mod test {
                 assert_eq!(new_actor_ref, "wasmcloud.azurecr.io/actor:v2".to_string());
             }
             cmd => panic!("ctl get claims constructed incorrect command {:?}", cmd),
+        }
+
+        let scale_actor_all: Cmd = Parser::try_parse_from(&[
+            "ctl",
+            "scale",
+            "actor",
+            "--lattice-prefix",
+            LATTICE_PREFIX,
+            "--ctl-host",
+            CTL_HOST,
+            "--ctl-port",
+            CTL_PORT,
+            "--timeout-ms",
+            "2001",
+            HOST_ID,
+            ACTOR_ID,
+            "wasmcloud.azurecr.io/actor:v2",
+            "--count",
+            "1",
+            "--annotations",
+            "foo=bar",
+        ])?;
+
+        match scale_actor_all.command {
+            CtlCliCommand::Scale(ScaleCommand::Actor(super::ScaleActorCommand {
+                opts,
+                host_id,
+                actor_id,
+                actor_ref,
+                count,
+                annotations,
+            })) => {
+                assert_eq!(&opts.ctl_host.unwrap(), CTL_HOST);
+                assert_eq!(&opts.ctl_port.unwrap(), CTL_PORT);
+                assert_eq!(&opts.lattice_prefix.unwrap(), LATTICE_PREFIX);
+                assert_eq!(opts.timeout_ms, 2001);
+                assert_eq!(host_id, HOST_ID.parse()?);
+                assert_eq!(actor_id, ACTOR_ID.parse()?);
+                assert_eq!(actor_ref, "wasmcloud.azurecr.io/actor:v2".to_string());
+                assert_eq!(count, 1);
+                assert_eq!(annotations, vec!["foo=bar".to_string()]);
+            }
+            cmd => panic!("ctl scale actor constructed incorrect command {:?}", cmd),
         }
 
         Ok(())
