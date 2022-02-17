@@ -772,14 +772,9 @@ fn validate_bucket_name(bucket: &str) -> Result<(), &'static str> {
     if !(('a'..='z').contains(&c) || ('0'..='9').contains(&c)) {
         return Err("bucket names must end with a letter or number");
     }
-    if bucket.starts_with("xn--") {
-        return Err("bucket name must not begin with 'xn--'");
-    }
-    if bucket.ends_with("-s3alias") {
-        return Err("bucket name must not end with '-s3alias'");
-    }
-    // there are a couple
-    // IPv4 address is not allowed
+
+    // Not all s3 validity rules are enforced here. For example, a plain IPv4 address is not allowed.
+    // Rather than keep up with all the rules, we'll let the aws sdk check and return other errors.
 
     Ok(())
 }
