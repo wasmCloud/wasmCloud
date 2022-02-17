@@ -115,6 +115,19 @@ pub fn init_logger() -> Result<Receiver, String> {
     ) {
         Err(format!("logger init error: {}", e))
     } else {
+        use std::str::FromStr as _;
+        let mut detail_level = log::LevelFilter::Info;
+        if let Ok(level) = std::env::var("RUST_LOG") {
+            let level = if let Some((left, _)) = level.split_once(',') {
+                left
+            } else {
+                &level
+            };
+            if let Ok(level) = log::LevelFilter::from_str(level) {
+                detail_level = level;
+            }
+        }
+        log::set_max_level(detail_level);
         Ok(rx)
     }
 }
