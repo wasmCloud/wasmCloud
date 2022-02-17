@@ -275,6 +275,8 @@ pub struct ScaleActorCommand {
     #[clap(short = 'c', long = "count", default_value = "1")]
     pub count: u16,
 
+    /// Optional set of annotations used to describe the nature of this actor scale command.
+    /// For example, autonomous agents may wish to “tag” scale requests as part of a given deployment
     #[clap(short = 'a', long = "annotations")]
     pub annotations: Vec<String>,
 }
