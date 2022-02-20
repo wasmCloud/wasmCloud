@@ -158,6 +158,10 @@ pub(crate) struct NewProjectArgs {
     /// template name - name of template to use
     #[clap(short, long)]
     pub(crate) template_name: Option<String>,
+
+    /// Don't create a git repository. Will create one if this is not passed.
+    #[clap(long)]
+    pub(crate) no_git_init: bool,
 }
 
 pub(crate) fn handle_command(command: NewCliCommand) -> Result<CommandOutput> {
@@ -349,6 +353,11 @@ pub(crate) fn make_project(
         &mut pbar,
     )
     .map_err(|e| any_msg("generating project from templates:", &e.to_string()))?;
+
+    if !args.no_git_init {
+        git2::Repository::init(&project_dir)?;
+    }
+
     pbar.join().unwrap();
 
     println!(
