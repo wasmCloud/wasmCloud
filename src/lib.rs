@@ -189,6 +189,26 @@ impl Client {
         }
     }
 
+    /// Publishes a registry credential map to the control interface of the lattice.
+    /// All hosts will be listening and all will overwrite their registry credential
+    /// map with the new information. It is highly recommended you use TLS connections
+    /// with NATS and isolate the control interface credentials when using this
+    /// function in production as the data contains secrets
+    pub async fn put_registries(&self, registries: RegistryCredentialMap) -> Result<()> {
+        let subject = broker::publish_registries(&self.nsprefix);
+        trace!("put_registries {}", &subject);
+        let bytes = json_serialize(&registries)?;
+        if let Err(e) = self
+            .nc
+            .request_timeout(&subject, &bytes, self.timeout)
+            .await
+        {
+            Err(format!("Failed to push registry credential map: {}", e).into())
+        } else {
+            Ok(())
+        }
+    }
+
     /// Publishes the link advertisement message to the lattice that is published when code invokes the `set_link`
     /// function on a `Host` struct instance. No confirmation or acknowledgement is available for this operation
     /// because it is publish-only.

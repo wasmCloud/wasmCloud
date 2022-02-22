@@ -28,6 +28,10 @@ pub fn remove_link(ns_prefix: &Option<String>) -> String {
     format!("{}.linkdefs.del", prefix(ns_prefix))
 }
 
+pub fn publish_registries(ns_prefix: &Option<String>) -> String {
+    format!("{}.registries.put", prefix(ns_prefix))
+}
+
 pub mod commands {
     use super::prefix;
 
