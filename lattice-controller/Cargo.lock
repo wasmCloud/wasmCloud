@@ -2689,9 +2689,9 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-control-interface"
-version = "0.11.0"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fd00169107e1aeafac2cd65b4704a9793a2387a3bb68804093b88791a8b26649"
+checksum = "e3ac9a819078e1eb65a971d775521aa4b2b5533372eaa8c825bc34a2c8ab320f"
 dependencies = [
  "async-trait",
  "cloudevents-sdk",
@@ -2712,16 +2712,16 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-interface-lattice-control"
-version = "0.7.0"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c4f5482cd31b6f7f28037926599c6db8cc268284e893b930361057245f804ba7"
+checksum = "ef615d9aff689adab46f4bb3ddb6516aade7a0d0dbe30fa3029549e8c01a7edc"
 dependencies = [
  "async-trait",
  "data-encoding",
  "futures 0.3.19",
  "log",
  "ring",
- "rmp-serde 0.15.5",
+ "rmp-serde 1.0.0",
  "serde",
  "wasmbus-rpc",
  "weld-codegen",
@@ -2744,7 +2744,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-lattice-controller"
-version = "0.3.3"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "base64 0.13.0",
@@ -2755,7 +2755,7 @@ dependencies = [
  "log",
  "once_cell",
  "reqwest",
- "rmp-serde 0.15.5",
+ "rmp-serde 1.0.0",
  "serde",
  "serde_bytes",
  "serde_json",

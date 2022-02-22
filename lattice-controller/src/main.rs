@@ -248,6 +248,18 @@ impl ProviderHandler for LatticeControllerProvider {
 /// Handle LatticeController methods
 #[async_trait]
 impl LatticeController for LatticeControllerProvider {
+    async fn set_registry_credentials(
+        &self,
+        ctx: &Context,
+        arg: &RegistryCredentialMap,
+    ) -> RpcResult<()> {
+        self.lookup_client(ctx)
+            .await?
+            .put_registries(arg.clone())
+            .await
+            .map_err(|e| RpcError::Nats(format!("{}", e)))
+    }
+
     async fn auction_provider(
         &self,
         ctx: &Context,
