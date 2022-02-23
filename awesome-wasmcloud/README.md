@@ -12,7 +12,6 @@ Community projects built with wasmCloud that are certified awesome.
 ## Games
 | Project | Description | Repository | Author | Link (if applicable) | 
 |---|---|---|---|---|
-| 2048 | Reworked 2048 with WASM frontend and wasmCloud backend | Coming soon | [jhagmar](https://github.com/jhagmar) | https://twenty48.pwatrip.eu/ | 
 | Codenames | Hybrid Codenames game with a wasmCloud backend | [matthewtgilbride/codenames](https://github.com/matthewtgilbride/codenames/tree/main/service/wasm) | [matthewtgilbride](https://github.com/matthewtgilbride) | https://codenames.mattgilbride.com/ |
 | QQ party | Multiplayer browser game with the Bevy ECS compiled to actors | [alanpoon/qq_party](https://github.com/alanpoon/qq_party) | [alanpoon](https://github.com/alanpoon) | N/A |
 
