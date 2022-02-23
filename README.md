@@ -33,6 +33,10 @@ For running a wasmCloud host in a browser or embedding in a JavaScript V8 host, 
 
 For more information on how to contribute and our contributor guidelines, check out the [contributing readme](./CONTRIBUTING.md).
 
+## 💥 Awesome wasmCloud
+ 
+Check out some awesome projects using wasmCloud that come from our community members! [Awesome wasmCloud](./awesome-wasmcloud)
+
 ### 🦀️ Rust Runtime - Archived
 
 The pure-Rust wasmCloud host runtime has been archived in favor of the new Elixir/OTP runtime. If you're looking for tooling to support running resources with the pure-Rust wasmCloud host, please refer to the [archived resources](./.archived/RESOURCES.md) file for compatible versions.
