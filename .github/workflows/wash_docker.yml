@@ -3,6 +3,8 @@ on:
   push:
     branches:
       - main
+    tags:
+      - v[0-9].[0-9]+.[0-9]+
         
 jobs:
   push_to_registry:
@@ -13,42 +15,62 @@ jobs:
         name: Check out the repo
         uses: actions/checkout@v2
       - 
-        name: Determine Short SHA
-        run: echo ${{ github.sha }} | tail -c 8 | (read; echo SHORT_SHA=$REPLY) >> $GITHUB_ENV
-      -
-        name: Sanitize Repo Name for Tagging
-        run: echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]' | (read; echo REPO_LOWER=$REPLY) >> $GITHUB_ENV
-      - 
         name: Set up QEMU
         uses: docker/setup-qemu-action@v1
       - 
         name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v1
       -
+        uses: docker/login-action@v1
+        if: github.repository == 'wasmCloud/wash'
+        with:
+          username: ${{ secrets.DOCKERHUB_PUSH_USER }}
+          password: ${{ secrets.DOCKERHUB_PUSH_PASSWORD }}
+      -
         uses: azure/docker-login@v1
+        if: github.repository == 'wasmCloud/wash'
         with:
           login-server: ${{ secrets.AZURECR_PUSH_URL }}
           username: ${{ secrets.AZURECR_PUSH_USER }}
           password: ${{ secrets.AZURECR_PUSH_PASSWORD }}
       -
-        uses: docker/login-action@v1
+        name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v3
         with:
-          username: ${{ secrets.DOCKERHUB_PUSH_USER }}
-          password: ${{ secrets.DOCKERHUB_PUSH_PASSWORD }}
+          images: |
+            wasmcloud/wash
+            wasmcloud.azurecr.io/wash
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha
+          flavor: |
+            latest=auto
+          labels: |
+            org.opencontainers.image.title=wash
+            org.opencontainers.image.description=WAsmcloud SHell
+            org.opencontainers.image.vendor=wasmCloud
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
       - 
         name: Build and push
+        id: docker_build_builder
+        uses: docker/build-push-action@v2
+        with:
+          file: 'Dockerfile'
+          push: ${{ github.repository == 'wasmCloud/wash' }}
+          target: release-alpine
+          tags: |
+            wasmcloud/wash:alpine
+          labels: ${{ steps.meta.outputs.labels }}
+      - 
+        name: Build and push - scratch
         id: docker_build
         uses: docker/build-push-action@v2
         with:
           file: 'Dockerfile'
-          push: true
-          tags: |
-            wasmcloud.azurecr.io/wash:latest
-            wasmcloud.azurecr.io/wash:${{ env.SHORT_SHA }}
-            wasmcloud/wash:latest
-            wasmcloud/wash:${{ env.SHORT_SHA }}
-          labels: |
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          push: ${{ github.repository == 'wasmcloud/wash' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
       - 
         name: Image digest
         run: echo ${{ steps.docker_build.outputs.digest }}
