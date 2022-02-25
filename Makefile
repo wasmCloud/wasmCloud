@@ -1,5 +1,5 @@
 # capability-providers/Makefile
 
-subdirs = httpclient httpserver-rs kvredis nats sqldb-postgres lattice-controller
+subdirs = httpclient httpserver-rs kvredis kv-vault nats sqldb-postgres lattice-controller
 
 include build/makefiles/recurse.mk

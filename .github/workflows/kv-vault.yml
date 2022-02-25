@@ -1,0 +1,120 @@
+name: KV_VAULT
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+    - "kv-vault/**"
+    tags:
+    - 'kv-vault-v*'
+  pull_request:
+    branches: [ main ]
+    paths:
+    - "kv-vault/**"
+  workflow_dispatch:
+    inputs:
+      release:
+        description: 'Build github release (enter y)'
+        default: 'n'
+        required: true
+      artifact:
+        description: 'Build github release and push artifact (enter y)'
+        default: 'n'
+        required: true
+
+
+env:
+  CARGO_TERM_COLOR: always
+  working-directory: ./kv-vault
+  WASH_ISSUER_KEY: ${{ secrets.WASMCLOUD_ACCOUNT_OFFICIAL }}
+  WASH_SUBJECT_KEY: ${{ secrets.WASMCLOUD_KV_VAULT }}
+  oci-repository: kv-vault
+
+jobs:
+  rust_check:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - id: rust-check-action
+      uses: wasmcloud/common-actions/rust-check@main
+      with:
+        working-directory: ${{ env.working-directory }}
+        # disable testing with "cargo test" since this will run 'make test'
+        test-options: --no-run
+
+  make_test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - id: run-nats
+      uses: wasmcloud/common-actions/run-nats@main
+    - name: Run tests via Makefile
+      run: make test
+      shell: bash
+      working-directory: ${{ env.working-directory }}
+
+  build_artifact:
+    needs: [ rust_check, make_test ]
+    # run on tag push or manual with 'y'
+    if: ${{ ( startswith(github.ref, 'refs/tags/') || github.events.inputs.artifact == 'y' || github.events.inputs.release == 'y' ) }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: wasmcloud/common-actions/install-wash@main
+      - uses: wasmcloud/common-actions/install-cross@main
+
+      - name: Build full provider archive
+        run: make par-full
+        working-directory: ${{ env.working-directory }}
+      
+      - name: Upload provider archive to GH Actions
+        uses: actions/upload-artifact@v2
+        with:
+          name: provider-archive
+          path: ${{ env.working-directory }}/build/*.par.gz
+
+  github_release:
+    if: ${{ ( startswith(github.ref, 'refs/tags/') || github.events.inputs.artifact == 'y' || github.events.inputs.release == 'y' ) }}
+    needs: build_artifact
+    runs-on: ubuntu-latest
+    steps:
+    - name: Download provider archive
+      uses: actions/download-artifact@v2
+      with:
+        name: provider-archive
+        path: ${{ env.working-directory }}/build
+
+    - name: Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: ${{ env.working-directory }}/build/*.par.gz
+        token: ${{ secrets.GITHUB_TOKEN }}
+        prerelease: true
+        draft: false
+
+  artifact_release:
+    needs: build_artifact
+    if: ${{ ( startswith(github.ref, 'refs/tags/') || github.events.inputs.artifact == 'y' ) }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Download provider archive
+        uses: actions/download-artifact@v2
+        with:
+          name: provider-archive
+          path: ${{ env.working-directory }}/build
+
+      - name: Determine artifact metadata
+        run: |
+          echo "oci-version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].version')" >> $GITHUB_ENV
+        working-directory: ${{ env.working-directory }}
+
+      - name: Push provider archive to AzureCR
+        uses: wasmcloud/common-actions/oci-artifact-release@main
+        with:
+          artifact-path: ${{ env.working-directory }}/build/${{ env.oci-repository }}.par.gz
+          oci-url: ${{ secrets.AZURECR_PUSH_URL }}
+          oci-repository: ${{ env.oci-repository }}
+          oci-version: ${{ env.oci-version }}
+          oci-username: ${{ secrets.AZURECR_PUSH_USER }}
+          oci-password: ${{ secrets.AZURECR_PUSH_PASSWORD }}
