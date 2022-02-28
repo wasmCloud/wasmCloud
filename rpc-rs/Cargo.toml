@@ -1,6 +1,6 @@
 [package]
 name = "wasmbus-rpc"
-version = "0.8.0"
+version = "0.8.1"
 authors = [ "wasmcloud Team" ]
 license = "Apache-2.0"
 description = "Runtime library for actors and capability providers"
@@ -63,4 +63,4 @@ regex = "1"
 env_logger = "0.9.0"
 
 [build-dependencies]
-weld-codegen = { version = "0.4.0", path = "../codegen" }
+weld-codegen = { version = "0.4.1", path = "../codegen" }
