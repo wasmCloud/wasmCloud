@@ -1,4 +1,4 @@
-// This file is generated automatically using wasmcloud/weld-codegen 0.3.3
+// This file is generated automatically using wasmcloud/weld-codegen 0.4.0
 #[allow(unused_imports)]
 use crate::error::{RpcError, RpcResult};
 #[allow(unused_imports)]
@@ -293,6 +293,10 @@ pub struct CodegenRust {
     #[serde(rename = "noDeriveEq")]
     #[serde(default)]
     pub no_derive_eq: bool,
+    /// adds `[#non_exhaustive]` attribute to a struct declaration
+    #[serde(rename = "nonExhaustive")]
+    #[serde(default)]
+    pub non_exhaustive: bool,
 }
 
 /// indicates that a trait or class extends one or more bases

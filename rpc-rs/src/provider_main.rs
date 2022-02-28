@@ -4,6 +4,7 @@ use crate::{
     core::HostData,
     error::RpcError,
     provider::{HostBridge, ProviderDispatch},
+    rpc_client::NatsClientType,
 };
 use once_cell::sync::OnceCell;
 
@@ -22,8 +23,11 @@ pub fn get_host_bridge() -> &'static HostBridge {
     }
 }
 
-/// nats address to use if not included in initial HostData
-const DEFAULT_NATS_ADDR: &str = "nats://127.0.0.1:4222";
+#[doc(hidden)]
+/// Sets the bridge, return Err if it was already set
+pub(crate) fn set_host_bridge(hb: HostBridge) -> Result<(), ()> {
+    BRIDGE.set(hb).map_err(|_| ())
+}
 
 /// Start provider services: tokio runtime, logger, nats, and rpc subscriptions
 pub fn provider_main<P>(provider_dispatch: P) -> Result<(), Box<dyn std::error::Error>>
@@ -31,13 +35,10 @@ where
     P: ProviderDispatch + Send + Sync + Clone + 'static,
 {
     // get lattice configuration from host
-    let host_data = match load_host_data() {
-        Ok(hd) => hd,
-        Err(e) => {
-            eprintln!("error loading host data: {}", &e.to_string());
-            return Err(Box::new(e));
-        }
-    };
+    let host_data = load_host_data().map_err(|e| {
+        eprintln!("error loading host data: {}", &e.to_string());
+        Box::new(e)
+    })?;
     provider_start(provider_dispatch, host_data)
 }
 
@@ -85,39 +86,51 @@ where
     let nats_addr = if !host_data.lattice_rpc_url.is_empty() {
         host_data.lattice_rpc_url.as_str()
     } else {
-        DEFAULT_NATS_ADDR
+        crate::provider::DEFAULT_NATS_ADDR
     };
     let nats_server = nats_aflowt::ServerAddress::from_str(nats_addr).map_err(|e| {
         RpcError::InvalidParameter(format!("Invalid nats server url '{}': {}", nats_addr, e))
     })?;
 
-    let nats_opts = match (
-        host_data.lattice_rpc_user_jwt.trim(),
-        host_data.lattice_rpc_user_seed.trim(),
-    ) {
-        ("", "") => nats_aflowt::Options::default(),
-        (rpc_jwt, rpc_seed) => {
-            let kp = nkeys::KeyPair::from_seed(rpc_seed).unwrap();
-            let jwt = rpc_jwt.to_owned();
-            nats_aflowt::Options::with_jwt(
-                move || Ok(jwt.to_owned()),
-                move |nonce| kp.sign(nonce).unwrap(),
-            )
+    let nc = {
+        cfg_if::cfg_if! {
+            if #[cfg(feature="async_rewrite")] {
+
+                NatsClientType::AsyncRewrite(nats_experimental::connect(nats_addr).await
+                    .map_err(|e| {
+                        RpcError::ProviderInit(format!("nats connection to {} failed: {}", nats_addr, e))
+                    })?)
+
+            } else {
+                let nats_opts = match (
+                    host_data.lattice_rpc_user_jwt.trim(),
+                    host_data.lattice_rpc_user_seed.trim(),
+                ) {
+                    ("", "") => nats_aflowt::Options::default(),
+                    (rpc_jwt, rpc_seed) => {
+                        let kp = nkeys::KeyPair::from_seed(rpc_seed).unwrap();
+                        let jwt = rpc_jwt.to_owned();
+                        nats_aflowt::Options::with_jwt(
+                            move || Ok(jwt.to_owned()),
+                            move |nonce| kp.sign(nonce).unwrap(),
+                        )
+                    }
+                };
+                // Connect to nats
+                NatsClientType::Async(nats_opts
+                    .max_reconnects(None)
+                    .connect(vec![nats_server])
+                    .await
+                    .map_err(|e| {
+                        RpcError::ProviderInit(format!("nats connection to {} failed: {}", nats_addr, e))
+                    })?)
+            }
         }
     };
 
-    // Connect to nats
-    let nc = nats_opts
-        .max_reconnects(None)
-        .connect(vec![nats_server])
-        .await
-        .map_err(|e| {
-            RpcError::ProviderInit(format!("nats connection to {} failed: {}", nats_addr, e))
-        })?;
-
     // initialize HostBridge
-    let bridge = HostBridge::new(nc, &host_data)?;
-    let _ = BRIDGE.set(bridge);
+    let bridge = HostBridge::new_client(nc, &host_data)?;
+    set_host_bridge(bridge).ok();
     let bridge = get_host_bridge();
 
     // pre-populate provider and bridge with initial set of link definitions
@@ -144,6 +157,11 @@ where
 
     // process subscription events and log messages, waiting for shutdown signal
     let _ = shutdown_rx.await;
+
+    // close chunkifiers
+    #[cfg(feature = "chunkify")]
+    crate::chunkify::shutdown();
+
     // stop the logger thread
     //let _ = stop_log_thread.send(());
     crate::channel_log::stop_receiver();

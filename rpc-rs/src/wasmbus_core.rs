@@ -1,4 +1,4 @@
-// This file is generated automatically using wasmcloud/weld-codegen 0.3.3
+// This file is generated automatically using wasmcloud/weld-codegen 0.4.0
 
 #[allow(unused_imports)]
 use crate::{
@@ -291,6 +291,7 @@ pub fn decode_health_check_response(
 }
 /// initialization data for a capability provider
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[non_exhaustive]
 pub struct HostData {
     #[serde(default)]
     pub host_id: String,
@@ -319,6 +320,9 @@ pub struct HostData {
     /// without an actor context
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_json: Option<String>,
+    /// Optional. Default RPC timeout in milliseconds. Default = 2000
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_rpc_timeout_ms: Option<u32>,
 }
 
 // Encode HostData as CBOR and append to output stream
@@ -327,7 +331,7 @@ pub fn encode_host_data<W: crate::cbor::Write>(
     e: &mut crate::cbor::Encoder<W>,
     val: &HostData,
 ) -> RpcResult<()> {
-    e.array(13)?;
+    e.array(14)?;
     e.str(&val.host_id)?;
     e.str(&val.lattice_rpc_prefix)?;
     e.str(&val.link_name)?;
@@ -342,6 +346,11 @@ pub fn encode_host_data<W: crate::cbor::Write>(
     encode_cluster_issuers(e, &val.cluster_issuers)?;
     if let Some(val) = val.config_json.as_ref() {
         e.str(val)?;
+    } else {
+        e.null()?;
+    }
+    if let Some(val) = val.default_rpc_timeout_ms.as_ref() {
+        e.u32(*val)?;
     } else {
         e.null()?;
     }
@@ -365,6 +374,7 @@ pub fn decode_host_data(d: &mut crate::cbor::Decoder<'_>) -> Result<HostData, Rp
         let mut link_definitions: Option<ActorLinks> = None;
         let mut cluster_issuers: Option<ClusterIssuers> = None;
         let mut config_json: Option<Option<String>> = Some(None);
+        let mut default_rpc_timeout_ms: Option<Option<u32>> = Some(None);
 
         let is_array = match d.datatype()? {
             crate::cbor::Type::Array => true,
@@ -418,6 +428,14 @@ pub fn decode_host_data(d: &mut crate::cbor::Decoder<'_>) -> Result<HostData, Rp
                             Some(Some(d.str()?.to_string()))
                         }
                     }
+                    13 => {
+                        default_rpc_timeout_ms = if crate::cbor::Type::Null == d.datatype()? {
+                            d.skip()?;
+                            Some(None)
+                        } else {
+                            Some(Some(d.u32()?))
+                        }
+                    }
 
                     _ => d.skip()?,
                 }
@@ -463,6 +481,14 @@ pub fn decode_host_data(d: &mut crate::cbor::Decoder<'_>) -> Result<HostData, Rp
                             Some(None)
                         } else {
                             Some(Some(d.str()?.to_string()))
+                        }
+                    }
+                    "defaultRpcTimeoutMs" => {
+                        default_rpc_timeout_ms = if crate::cbor::Type::Null == d.datatype()? {
+                            d.skip()?;
+                            Some(None)
+                        } else {
+                            Some(Some(d.u32()?))
                         }
                     }
                     _ => d.skip()?,
@@ -566,6 +592,7 @@ pub fn decode_host_data(d: &mut crate::cbor::Decoder<'_>) -> Result<HostData, Rp
                 ));
             },
             config_json: config_json.unwrap(),
+            default_rpc_timeout_ms: default_rpc_timeout_ms.unwrap(),
         }
     };
     Ok(__result)
@@ -610,6 +637,7 @@ pub fn decode_host_env_values(d: &mut crate::cbor::Decoder<'_>) -> Result<HostEn
 }
 /// RPC message to capability provider
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[non_exhaustive]
 pub struct Invocation {
     pub origin: WasmCloudEntity,
     pub target: WasmCloudEntity,
@@ -624,6 +652,9 @@ pub struct Invocation {
     pub encoded_claims: String,
     #[serde(default)]
     pub host_id: String,
+    /// total message size (optional)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_length: Option<u64>,
 }
 
 // Encode Invocation as CBOR and append to output stream
@@ -632,7 +663,7 @@ pub fn encode_invocation<W: crate::cbor::Write>(
     e: &mut crate::cbor::Encoder<W>,
     val: &Invocation,
 ) -> RpcResult<()> {
-    e.array(7)?;
+    e.array(8)?;
     encode_wasm_cloud_entity(e, &val.origin)?;
     encode_wasm_cloud_entity(e, &val.target)?;
     e.str(&val.operation)?;
@@ -640,6 +671,11 @@ pub fn encode_invocation<W: crate::cbor::Write>(
     e.str(&val.id)?;
     e.str(&val.encoded_claims)?;
     e.str(&val.host_id)?;
+    if let Some(val) = val.content_length.as_ref() {
+        e.u64(*val)?;
+    } else {
+        e.null()?;
+    }
     Ok(())
 }
 
@@ -654,6 +690,7 @@ pub fn decode_invocation(d: &mut crate::cbor::Decoder<'_>) -> Result<Invocation,
         let mut id: Option<String> = None;
         let mut encoded_claims: Option<String> = None;
         let mut host_id: Option<String> = None;
+        let mut content_length: Option<Option<u64>> = Some(None);
 
         let is_array = match d.datatype()? {
             crate::cbor::Type::Array => true,
@@ -689,6 +726,15 @@ pub fn decode_invocation(d: &mut crate::cbor::Decoder<'_>) -> Result<Invocation,
                     4 => id = Some(d.str()?.to_string()),
                     5 => encoded_claims = Some(d.str()?.to_string()),
                     6 => host_id = Some(d.str()?.to_string()),
+                    7 => {
+                        content_length = if crate::cbor::Type::Null == d.datatype()? {
+                            d.skip()?;
+                            Some(None)
+                        } else {
+                            Some(Some(d.u64()?))
+                        }
+                    }
+
                     _ => d.skip()?,
                 }
             }
@@ -717,6 +763,14 @@ pub fn decode_invocation(d: &mut crate::cbor::Decoder<'_>) -> Result<Invocation,
                     "id" => id = Some(d.str()?.to_string()),
                     "encodedClaims" => encoded_claims = Some(d.str()?.to_string()),
                     "hostId" => host_id = Some(d.str()?.to_string()),
+                    "contentLength" => {
+                        content_length = if crate::cbor::Type::Null == d.datatype()? {
+                            d.skip()?;
+                            Some(None)
+                        } else {
+                            Some(Some(d.u64()?))
+                        }
+                    }
                     _ => d.skip()?,
                 }
             }
@@ -777,12 +831,14 @@ pub fn decode_invocation(d: &mut crate::cbor::Decoder<'_>) -> Result<Invocation,
                     "missing field Invocation.host_id (#6)".to_string(),
                 ));
             },
+            content_length: content_length.unwrap(),
         }
     };
     Ok(__result)
 }
 /// Response to an invocation
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[non_exhaustive]
 pub struct InvocationResponse {
     /// serialize response message
     #[serde(with = "serde_bytes")]
@@ -794,6 +850,9 @@ pub struct InvocationResponse {
     /// optional error message
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// total message size (optional)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_length: Option<u64>,
 }
 
 // Encode InvocationResponse as CBOR and append to output stream
@@ -802,11 +861,16 @@ pub fn encode_invocation_response<W: crate::cbor::Write>(
     e: &mut crate::cbor::Encoder<W>,
     val: &InvocationResponse,
 ) -> RpcResult<()> {
-    e.array(3)?;
+    e.array(4)?;
     e.bytes(&val.msg)?;
     e.str(&val.invocation_id)?;
     if let Some(val) = val.error.as_ref() {
         e.str(val)?;
+    } else {
+        e.null()?;
+    }
+    if let Some(val) = val.content_length.as_ref() {
+        e.u64(*val)?;
     } else {
         e.null()?;
     }
@@ -822,6 +886,7 @@ pub fn decode_invocation_response(
         let mut msg: Option<Vec<u8>> = None;
         let mut invocation_id: Option<String> = None;
         let mut error: Option<Option<String>> = Some(None);
+        let mut content_length: Option<Option<u64>> = Some(None);
 
         let is_array = match d.datatype()? {
             crate::cbor::Type::Array => true,
@@ -851,6 +916,14 @@ pub fn decode_invocation_response(
                             Some(Some(d.str()?.to_string()))
                         }
                     }
+                    3 => {
+                        content_length = if crate::cbor::Type::Null == d.datatype()? {
+                            d.skip()?;
+                            Some(None)
+                        } else {
+                            Some(Some(d.u64()?))
+                        }
+                    }
 
                     _ => d.skip()?,
                 }
@@ -871,6 +944,14 @@ pub fn decode_invocation_response(
                             Some(None)
                         } else {
                             Some(Some(d.str()?.to_string()))
+                        }
+                    }
+                    "contentLength" => {
+                        content_length = if crate::cbor::Type::Null == d.datatype()? {
+                            d.skip()?;
+                            Some(None)
+                        } else {
+                            Some(Some(d.u64()?))
                         }
                     }
                     _ => d.skip()?,
@@ -894,6 +975,7 @@ pub fn decode_invocation_response(
                 ));
             },
             error: error.unwrap(),
+            content_length: content_length.unwrap(),
         }
     };
     Ok(__result)
@@ -1194,7 +1276,11 @@ pub trait Actor {
 #[doc(hidden)]
 #[async_trait]
 pub trait ActorReceiver: MessageDispatch + Actor {
-    async fn dispatch(&self, ctx: &Context, message: &Message<'_>) -> RpcResult<Message<'_>> {
+    async fn dispatch<'disp__, 'ctx__, 'msg__>(
+        &'disp__ self,
+        ctx: &'ctx__ Context,
+        message: &Message<'msg__>,
+    ) -> Result<Message<'msg__>, RpcError> {
         match message.method {
             "HealthRequest" => {
                 let value: HealthCheckRequest = crate::common::deserialize(&message.arg)

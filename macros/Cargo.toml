@@ -1,6 +1,6 @@
 [package]
 name = "wasmbus-macros"
-version = "0.1.7"
+version = "0.1.8"
 edition = "2021"
 authors = [ "wasmcloud Team" ]
 license = "Apache-2.0"

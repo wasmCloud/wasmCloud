@@ -211,8 +211,16 @@ pub struct Encoder<W: Write> {
     pub inner: minicbor::Encoder<W>,
 }
 
-pub fn vec_encoder() -> Encoder<Vec<u8>> {
-    let buf = Vec::new();
+pub fn vec_encoder(header: bool) -> Encoder<Vec<u8>> {
+    let buf = if header {
+        let mut buf = Vec::new();
+        crate::common::MessageFormat::Cbor
+            .write_header(&mut buf)
+            .unwrap();
+        buf
+    } else {
+        Vec::new()
+    };
     Encoder {
         inner: minicbor::Encoder::new(buf),
     }

@@ -1,6 +1,6 @@
 [package]
 name = "weld-codegen"
-version = "0.3.3"
+version = "0.4.0"
 edition = "2021"
 authors = [ "wasmcloud Team" ]
 license = "Apache-2.0"
@@ -39,3 +39,11 @@ serde = { version = "1.0", features = ["derive"] }
 tempfile = "3.2"
 thiserror = "1.0"
 toml = "0.5"
+
+[lib]
+name = "weld_codegen"
+path = "src/lib.rs"
+
+[[bin]]
+name = "codegen"
+path = "bin/gen.rs"

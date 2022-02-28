@@ -117,7 +117,7 @@ pub fn derive_actor(input: TokenStream) -> TokenStream {
             )
         };
         let method = String::from_utf8_lossy(op);
-        let context = wasmbus_rpc::Context::default();
+        let context = wasmbus_rpc::common::Context::default();
         let actor = #actor_ident ::default();
         let resp = futures::executor::block_on({
             MessageDispatch::dispatch(
@@ -195,11 +195,11 @@ fn gen_dispatch(traits: &[syn::Path], ident: &Ident) -> TokenStream2 {
     quote!(
         #[async_trait]
         impl MessageDispatch for #ident {
-            async fn dispatch(
-                &self,
-                ctx: &Context,
-                message: Message<'_>,
-            ) -> Result<Message<'_>, RpcError> {
+            async fn dispatch<'disp,'ctx,'msg>(
+                &'disp self,
+                ctx: &'ctx Context,
+                message: Message<'msg>,
+            ) -> std::result::Result<Message<'msg>, RpcError> {
                 let (trait_name, trait_method) = message
                     .method
                     .rsplit_once('.')
@@ -227,7 +227,7 @@ fn gen_empty_dispatch(ident: &Ident) -> TokenStream2 {
     quote!(
         #[async_trait]
         impl MessageDispatch for #ident {
-            async fn dispatch(&self,_ctx: &Context,message: Message<'_>)->Result<Message<'_>, RpcError> {
+            async fn dispatch(&self,_ctx: &Context,message: Message<'_>)->std::result::Result<Message<'_>, RpcError> {
                 Err(RpcError::MethodNotHandled(message.method.to_string()))
             }
         }

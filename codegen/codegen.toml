@@ -2,9 +2,9 @@
 # ensures that src/wasmbus_model.rs is up-to-date
 
 [[models]]
-url = "https://cdn.jsdelivr.net/gh/wasmcloud/interfaces@6750c952166d61f713abf8cdb57edf9636e1e295/core/wasmcloud-core.smithy"
+url = "https://cdn.jsdelivr.net/gh/wasmcloud/interfaces@d6ae2dd196aae3c2486e747eb1b3cd188ea71132/core/wasmcloud-core.smithy"
 [[models]]
-url = "https://cdn.jsdelivr.net/gh/wasmcloud/interfaces@77317ba3c1c6b65c9f3eb7e8ab3d2b44248f6182/core/wasmcloud-model.smithy"
+url = "https://cdn.jsdelivr.net/gh/wasmcloud/interfaces@cb504c8b7cfcee0a8c5ecdedf75757f4718ad4e6/core/wasmcloud-model.smithy"
 
 [rust]
 output_dir = "."
@@ -12,4 +12,4 @@ output_dir = "."
 [[rust.files]]
 path = "src/wasmbus_model.rs"
 namespace = "org.wasmcloud.model"
-params = { no_serde = true } # don't generate proto serialization & deserialization for this model
+no_serde = true # don't generate proto serialization & deserialization for this model

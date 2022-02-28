@@ -21,47 +21,6 @@ pub mod model {
 pub mod cbor;
 pub mod error;
 
-#[deprecated(
-    since = "0.7.0",
-    note = "use wasmbus_rpc::common::deserialize instead of wasmbus_rpc::deseerialize"
-)]
-pub use common::deserialize;
-#[deprecated(
-    since = "0.7.0",
-    note = "use wasmbus_rpc::common::serialize instead of wasmbus_rpc::serialize"
-)]
-pub use common::serialize;
-#[deprecated(
-    since = "0.7.0",
-    note = "use wasmbus_rpc::common::Context instead of wasmbus_rpc::Context"
-)]
-pub use common::Context;
-#[deprecated(
-    since = "0.7.0",
-    note = "use wasmbus_rpc::common::Message instead of wasmbus_rpc::Message"
-)]
-pub use common::Message;
-#[deprecated(
-    since = "0.7.0",
-    note = "use wasmbus_rpc::common::SendOpts instead of wasmbus_rpc::SendOpts"
-)]
-pub use common::SendOpts;
-#[deprecated(
-    since = "0.7.0",
-    note = "use wasmbus_rpc::common::Transport instead of wasmbus_rpc::Transport"
-)]
-pub use common::Transport;
-#[deprecated(
-    since = "0.7.0",
-    note = "use wasmbus_rpc::error::RpcError instead of wasmbus_rpc::RpcError"
-)]
-pub use error::RpcError;
-#[deprecated(
-    since = "0.7.0",
-    note = "use wasmbus_rpc::error::RpcResult instead of wasmbus_rpc::RpcResult"
-)]
-pub use error::RpcResult;
-
 // re-export nats-aflowt
 #[cfg(not(target_arch = "wasm32"))]
 pub use nats_aflowt as anats;
@@ -88,7 +47,10 @@ pub type CallResult = std::result::Result<Vec<u8>, Box<dyn std::error::Error + S
 pub type HandlerResult<T> = std::result::Result<T, Box<dyn std::error::Error + Sync + Send>>;
 pub type TomlMap = toml::value::Map<String, toml::value::Value>;
 
+#[cfg(feature = "chunkify")]
+pub(crate) mod chunkify;
 mod wasmbus_core;
+
 pub mod core {
     // re-export core lib as "core"
     use crate::error::{RpcError, RpcResult};
@@ -100,8 +62,6 @@ pub mod core {
 
             // allow testing provider outside host
             const TEST_HARNESS: &str = "_TEST_";
-            // fallback nats address if host doesn't pass one to provider
-            const DEFAULT_NATS_ADDR: &str = "nats://127.0.0.1:4222";
 
             impl HostData {
                 /// returns whether the provider is running under test
@@ -115,7 +75,7 @@ pub mod core {
                     let nats_addr = if !self.lattice_rpc_url.is_empty() {
                         self.lattice_rpc_url.as_str()
                     } else {
-                        DEFAULT_NATS_ADDR
+                        crate::provider::DEFAULT_NATS_ADDR
                     };
                     let nats_server = nats_aflowt::ServerAddress::from_str(nats_addr).map_err(|e| {
                         RpcError::InvalidParameter(format!("Invalid nats server url '{}': {}", nats_addr, e))

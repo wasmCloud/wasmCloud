@@ -3,17 +3,20 @@
 //! common provider wasmbus support
 //!
 
+#[cfg(feature = "chunkify")]
+use crate::chunkify::chunkify_endpoint;
 pub use crate::rpc_client::make_uuid;
 use crate::{
-    common::{Context, Message, MessageDispatch, SendOpts},
+    common::{deserialize, serialize, Context, Message, MessageDispatch, SendOpts, Transport},
     core::{
         HealthCheckRequest, HealthCheckResponse, HostData, Invocation, InvocationResponse,
         LinkDefinition,
     },
-    error::RpcError,
-    rpc_client::RpcClient,
+    error::{RpcError, RpcResult},
+    rpc_client::{NatsClientType, RpcClient, DEFAULT_RPC_TIMEOUT_MILLIS},
 };
 use async_trait::async_trait;
+use cfg_if::cfg_if;
 use futures::future::JoinAll;
 use log::{debug, error, info, trace, warn};
 use serde::de::DeserializeOwned;
@@ -29,6 +32,9 @@ use tokio::sync::{oneshot, RwLock};
 
 // name of nats queue group for rpc subscription
 const RPC_SUBSCRIPTION_QUEUE_GROUP: &str = "rpc";
+
+/// nats address to use if not included in initial HostData
+pub(crate) const DEFAULT_NATS_ADDR: &str = "nats://127.0.0.1:4222";
 
 pub type HostShutdownEvent = String;
 
@@ -66,7 +72,7 @@ pub trait ProviderHandler: Sync {
     /// This message is idempotent - provider must be able to handle
     /// duplicates
     #[allow(unused_variables)]
-    async fn put_link(&self, ld: &LinkDefinition) -> Result<bool, RpcError> {
+    async fn put_link(&self, ld: &LinkDefinition) -> RpcResult<bool> {
         Ok(true)
     }
 
@@ -77,10 +83,7 @@ pub trait ProviderHandler: Sync {
     /// Perform health check. Called at regular intervals by host
     /// Default implementation always returns healthy
     #[allow(unused_variables)]
-    async fn health_request(
-        &self,
-        arg: &HealthCheckRequest,
-    ) -> Result<HealthCheckResponse, RpcError> {
+    async fn health_request(&self, arg: &HealthCheckRequest) -> RpcResult<HealthCheckResponse> {
         Ok(HealthCheckResponse {
             healthy: true,
             message: None,
@@ -107,17 +110,54 @@ pub struct HostBridge {
 }
 
 impl HostBridge {
-    pub fn new(
-        nats: crate::anats::Connection,
-        host_data: &HostData,
-    ) -> Result<HostBridge, RpcError> {
+    pub fn new(nats: crate::anats::Connection, host_data: &HostData) -> RpcResult<HostBridge> {
+        Self::new_client(NatsClientType::Async(nats), host_data)
+    }
+
+    #[cfg(feature = "chunkify")]
+    pub(crate) fn new_sync_client(&self) -> RpcResult<nats::Connection> {
+        //let key = if self.host_data.is_test() {
+        //    wascap::prelude::KeyPair::new_user()
+        //} else {
+        //    wascap::prelude::KeyPair::from_seed(&self.host_data.invocation_seed)
+        //        .map_err(|e| RpcError::NotInitialized(format!("key failure: {}", e)))?
+        //};
+        let nats_addr = if !self.host_data.lattice_rpc_url.is_empty() {
+            self.host_data.lattice_rpc_url.as_str()
+        } else {
+            DEFAULT_NATS_ADDR
+        };
+        let nats_opts = match (
+            self.host_data.lattice_rpc_user_jwt.trim(),
+            self.host_data.lattice_rpc_user_seed.trim(),
+        ) {
+            ("", "") => nats::Options::default(),
+            (rpc_jwt, rpc_seed) => {
+                let kp = nkeys::KeyPair::from_seed(rpc_seed).unwrap();
+                let jwt = rpc_jwt.to_owned();
+                nats::Options::with_jwt(
+                    move || Ok(jwt.to_owned()),
+                    move |nonce| kp.sign(nonce).unwrap(),
+                )
+            }
+        };
+        // Connect to nats
+        nats_opts
+            .max_reconnects(None)
+            .connect(nats_addr)
+            .map_err(|e| {
+                RpcError::ProviderInit(format!("nats connection to {} failed: {}", nats_addr, e))
+            })
+    }
+
+    pub(crate) fn new_client(nats: NatsClientType, host_data: &HostData) -> RpcResult<HostBridge> {
         let key = if host_data.is_test() {
             wascap::prelude::KeyPair::new_user()
         } else {
             wascap::prelude::KeyPair::from_seed(&host_data.invocation_seed)
                 .map_err(|e| RpcError::NotInitialized(format!("key failure: {}", e)))?
         };
-        let rpc_client = crate::rpc_client::RpcClient::new(
+        let rpc_client = RpcClient::new_client(
             nats,
             &host_data.lattice_rpc_prefix,
             key,
@@ -161,18 +201,32 @@ impl Deref for HostBridge {
 }
 
 #[doc(hidden)]
+/// Initialize host bridge for use by wasmbus-test-util.
+/// The purpose is so that test code can get the nats configuration
+/// This is never called inside a provider process (and will fail if a provider calls it)
+pub fn init_host_bridge_for_test(
+    nc: crate::anats::Connection,
+    host_data: &HostData,
+) -> crate::error::RpcResult<()> {
+    let hb = HostBridge::new(nc, host_data)?;
+    crate::provider_main::set_host_bridge(hb)
+        .map_err(|_| RpcError::Other("HostBridge already initialized".to_string()))?;
+    Ok(())
+}
+
+#[doc(hidden)]
 pub struct HostBridgeInner {
     subs: RwLock<Vec<crate::anats::Subscription>>,
     /// Table of actors that are bound to this provider
     /// Key is actor_id / actor public key
     links: RwLock<HashMap<String, LinkDefinition>>,
-    rpc_client: crate::rpc_client::RpcClient,
+    rpc_client: RpcClient,
     lattice_prefix: String,
 }
 
 impl HostBridge {
     /// Returns a reference to the rpc client
-    fn rpc_client(&self) -> &crate::rpc_client::RpcClient {
+    fn rpc_client(&self) -> &RpcClient {
         &self.rpc_client
     }
 
@@ -209,7 +263,7 @@ impl HostBridge {
         match if self.host_data.is_test() {
             serde_json::from_slice(&msg.data).map_err(|e| RpcError::Deser(e.to_string()))
         } else {
-            crate::deserialize(&msg.data)
+            deserialize(&msg.data)
         } {
             Ok(item) => Some(item),
             Err(e) => {
@@ -248,7 +302,7 @@ impl HostBridge {
         &'static self,
         provider: P,
         shutdown_tx: oneshot::Sender<HostShutdownEvent>,
-    ) -> Result<JoinAll<tokio::task::JoinHandle<Result<(), RpcError>>>, RpcError>
+    ) -> RpcResult<JoinAll<tokio::task::JoinHandle<RpcResult<()>>>>
     where
         P: ProviderDispatch + Send + Sync + Clone + 'static,
     {
@@ -262,7 +316,7 @@ impl HostBridge {
         Ok(join)
     }
 
-    async fn subscribe_rpc<P>(&self, provider: P) -> Result<(), RpcError>
+    async fn subscribe_rpc<P>(&self, provider: P) -> RpcResult<()>
     where
         P: ProviderDispatch + Send + Sync + Clone + 'static,
     {
@@ -283,78 +337,86 @@ impl HostBridge {
         let this = self.clone();
         tokio::spawn(async move {
             while let Some(msg) = sub.next().await {
-                match crate::deserialize::<Invocation>(&msg.data) {
-                    Ok(inv) => match this.validate_invocation(&inv).await {
-                        Ok(()) => {
-                            let provider = provider.clone();
-                            let rpc_client = this.rpc_client().clone();
-                            tokio::task::spawn(async move {
-                                trace!(
-                                    "RPC Invocation: op:{} from:{}",
-                                    &inv.operation,
-                                    &inv.origin.public_key
-                                );
-                                let response = match provider
-                                    .dispatch(
-                                        &Context {
-                                            actor: Some(inv.origin.public_key.clone()),
+                match deserialize::<Invocation>(&msg.data) {
+                    Ok(mut inv) => {
+                        match this.dechunk_validate(&mut inv).await {
+                            Ok(()) => {
+                                let provider = provider.clone();
+                                let rpc_client = this.rpc_client().clone();
+                                tokio::task::spawn(async move {
+                                    trace!(
+                                        "RPC Invocation: op:{} from:{}",
+                                        &inv.operation,
+                                        &inv.origin.public_key
+                                    );
+                                    let response = match provider
+                                        .dispatch(
+                                            &Context {
+                                                actor: Some(inv.origin.public_key.clone()),
+                                                ..Default::default()
+                                            },
+                                            Message {
+                                                method: &inv.operation,
+                                                arg: Cow::from(inv.msg),
+                                            },
+                                        )
+                                        .await
+                                    {
+                                        Ok(msg) => InvocationResponse {
+                                            invocation_id: inv.id,
+                                            msg: msg.arg.to_vec(),
                                             ..Default::default()
                                         },
-                                        Message {
-                                            method: &inv.operation,
-                                            arg: Cow::from(inv.msg),
-                                        },
-                                    )
-                                    .await
-                                {
-                                    Ok(msg) => InvocationResponse {
-                                        invocation_id: inv.id,
-                                        error: None,
-                                        msg: msg.arg.to_vec(),
-                                    },
-                                    Err(e) => {
-                                        error!(
-                                            "RPC Invocation failed: op:{} from:{}: {}",
-                                            &inv.operation, &inv.origin.public_key, e
-                                        );
-                                        InvocationResponse {
-                                            invocation_id: inv.id,
-                                            error: Some(e.to_string()),
-                                            msg: Vec::new(),
+                                        Err(e) => {
+                                            error!(
+                                                "RPC Invocation failed: op:{} from:{}: {}",
+                                                &inv.operation, &inv.origin.public_key, e,
+                                            );
+                                            InvocationResponse {
+                                                invocation_id: inv.id,
+                                                error: Some(e.to_string()),
+                                                ..Default::default()
+                                            }
                                         }
+                                    };
+                                    if let Some(reply_to) = msg.reply {
+                                        // Errors are published from inside the function, safe to ignore Result
+                                        let _ = publish_invocation_response(
+                                            &rpc_client,
+                                            reply_to,
+                                            response,
+                                        )
+                                        .await;
                                     }
-                                };
+                                });
+                            }
+                            Err(s) => {
+                                error!(
+                                    "Invocation validation failure: op:{} from:{} id:{} host:{}: \
+                                     {}",
+                                    &inv.operation,
+                                    &inv.origin.public_key,
+                                    &inv.id,
+                                    &inv.host_id,
+                                    &s
+                                );
+
                                 if let Some(reply_to) = msg.reply {
                                     // Errors are published from inside the function, safe to ignore Result
                                     let _ = publish_invocation_response(
-                                        &rpc_client,
+                                        this.rpc_client(),
                                         reply_to,
-                                        response,
+                                        InvocationResponse {
+                                            invocation_id: inv.id,
+                                            error: Some(s.to_string()),
+                                            ..Default::default()
+                                        },
                                     )
                                     .await;
                                 }
-                            });
-                        }
-                        Err(s) => {
-                            error!(
-                                "Invocation validation failure: op:{} from:{} id:{} host:{}: {}",
-                                &inv.operation, &inv.origin.public_key, &inv.id, &inv.host_id, &s
-                            );
-                            if let Some(reply_to) = msg.reply {
-                                // Errors are published from inside the function, safe to ignore Result
-                                let _ = publish_invocation_response(
-                                    this.rpc_client(),
-                                    reply_to,
-                                    InvocationResponse {
-                                        invocation_id: inv.id,
-                                        error: Some(s),
-                                        msg: Vec::new(),
-                                    },
-                                )
-                                .await;
                             }
                         }
-                    },
+                    }
                     Err(e) => {
                         error!("Invocation deserialization failure: {}", e.to_string());
                         if let Some(reply_to) = msg.reply {
@@ -364,7 +426,7 @@ impl HostBridge {
                                 InvocationResponse {
                                     invocation_id: "invalid".to_string(),
                                     error: Some(format!("Corrupt invocation: {}", e)),
-                                    msg: Vec::new(),
+                                    ..Default::default()
                                 },
                             )
                             .await
@@ -379,7 +441,24 @@ impl HostBridge {
         Ok(())
     }
 
-    pub async fn validate_invocation(&self, inv: &Invocation) -> Result<(), String> {
+    async fn dechunk_validate(&self, inv: &mut Invocation) -> RpcResult<()> {
+        #[cfg(feature = "chunkify")]
+        if inv.content_length.is_some() && inv.content_length.unwrap() > inv.msg.len() as u64 {
+            let inv_id = inv.id.clone();
+            let lattice = self.rpc_client.lattice_prefix().to_string();
+            inv.msg = tokio::task::spawn_blocking(move || {
+                let ce = chunkify_endpoint(None, lattice)
+                    .map_err(|e| format!("connecting for de-chunkifying: {}", &e.to_string()))?;
+                ce.get_unchunkified(&inv_id).map_err(|e| e.to_string())
+            })
+            .await
+            .map_err(|je| format!("join/dechunk-validate: {}", je))??;
+        }
+        self.validate_invocation(inv).await.map_err(RpcError::Rpc)?;
+        Ok(())
+    }
+
+    async fn validate_invocation(&self, inv: &Invocation) -> Result<(), String> {
         let vr = wascap::jwt::validate_token::<wascap::prelude::Invocation>(&inv.encoded_claims)
             .map_err(|e| format!("{}", e))?;
         if vr.expired {
@@ -434,7 +513,7 @@ impl HostBridge {
         }
         // verify that the sending actor is linked with this provider
         if !self.is_linked(&inv.origin.public_key).await {
-            return Err(format!("unlinked actor: {}", &inv.origin.public_key));
+            return Err(format!("unlinked actor: '{}'", &inv.origin.public_key));
         }
         Ok(())
     }
@@ -443,7 +522,7 @@ impl HostBridge {
         &self,
         provider: P,
         shutdown_tx: oneshot::Sender<HostShutdownEvent>,
-    ) -> Result<(), RpcError>
+    ) -> RpcResult<()>
     where
         P: ProviderDispatch + Send + Sync + Clone + 'static,
     {
@@ -465,6 +544,7 @@ impl HostBridge {
         // Shutdown messages are unsigned (see https://github.com/wasmCloud/wasmcloud-otp/issues/256)
         // so we can't verify that this came from a trusted source.
         // When the above issue is fixed, verify the source and keep looping if it's invalid.
+        eprintln!("Received termination signal. Shutting down capability provider.");
         debug!("Received termination signal. Shutting down capability provider.");
         let (this, provider) = (self.clone(), provider.clone());
         if let Err(e) = tokio::spawn(async move {
@@ -489,10 +569,7 @@ impl HostBridge {
         {
             let data = b"shutting down".to_vec();
             if let Err(e) = self.rpc_client().publish(reply_to, &data).await {
-                error!(
-                    "failed to send shutdown response to host: {}",
-                    e.to_string()
-                );
+                error!("failed to send shutdown ack: {}", e.to_string());
             }
         }
 
@@ -506,7 +583,7 @@ impl HostBridge {
         Ok(())
     }
 
-    async fn subscribe_link_put<P>(&self, provider: P) -> Result<(), RpcError>
+    async fn subscribe_link_put<P>(&self, provider: P) -> RpcResult<()>
     where
         P: ProviderDispatch + Send + Sync + Clone + 'static,
     {
@@ -556,7 +633,7 @@ impl HostBridge {
         Ok(())
     }
 
-    async fn subscribe_link_del<P>(&self, provider: P) -> Result<(), RpcError>
+    async fn subscribe_link_del<P>(&self, provider: P) -> RpcResult<()>
     where
         P: ProviderDispatch + Send + Sync + Clone + 'static,
     {
@@ -587,7 +664,7 @@ impl HostBridge {
         Ok(())
     }
 
-    async fn subscribe_health<P>(&self, provider: P) -> Result<(), RpcError>
+    async fn subscribe_health<P>(&self, provider: P) -> RpcResult<()>
     where
         P: ProviderDispatch + Send + Sync + Clone + 'static,
     {
@@ -622,7 +699,7 @@ impl HostBridge {
                 let buf = if this.host_data.is_test() {
                     Ok(serde_json::to_vec(&resp).unwrap())
                 } else {
-                    crate::serialize(&resp)
+                    serialize(&resp)
                 };
                 match buf {
                     Ok(t) => {
@@ -648,7 +725,45 @@ async fn publish_invocation_response(
     reply_to: String,
     response: InvocationResponse,
 ) -> Result<(), String> {
-    match crate::serialize(&response) {
+    let content_length = Some(response.msg.len() as u64);
+
+    let response = {
+        cfg_if! {
+            if #[cfg(feature="chunkify")] {
+                let inv_id = response.invocation_id.clone();
+                if crate::chunkify::needs_chunking(response.msg.len()) {
+                    let msg = response.msg;
+                    let lattice = rpc_client.lattice_prefix().to_string();
+            tokio::task::spawn_blocking(move || {
+                let ce = chunkify_endpoint(None, lattice)
+                    .map_err(|e| format!("connecting for chunkifying: {}", &e.to_string()))?;
+                ce.chunkify_response(&inv_id, &mut msg.as_slice())
+                    .map_err(|e| e.to_string())
+            })
+            .await
+            .map_err(|je| format!("join/response-chunk: {}", je))??;
+            InvocationResponse {
+                msg: Vec::new(),
+                content_length,
+                ..response
+            }
+        } else {
+            InvocationResponse {
+                content_length,
+                ..response
+            }
+        }
+
+                } else {
+                    InvocationResponse {
+                        content_length,
+                        ..response
+                    }
+                }
+            }
+    };
+
+    match serialize(&response) {
         Ok(t) => {
             if let Err(e) = rpc_client.publish(&reply_to, &t).await {
                 error!(
@@ -692,21 +807,25 @@ impl<'send> ProviderTransport<'send> {
         Self {
             bridge,
             ld,
-            timeout: StdMutex::new(
-                timeout.unwrap_or(crate::rpc_client::DEFAULT_RPC_TIMEOUT_MILLIS),
-            ),
+            timeout: StdMutex::new(timeout.unwrap_or_else(|| {
+                bridge
+                    .host_data
+                    .default_rpc_timeout_ms
+                    .map(|t| Duration::from_millis(t as u64))
+                    .unwrap_or(DEFAULT_RPC_TIMEOUT_MILLIS)
+            })),
         }
     }
 }
 
 #[async_trait]
-impl<'send> crate::common::Transport for ProviderTransport<'send> {
+impl<'send> Transport for ProviderTransport<'send> {
     async fn send(
         &self,
         _ctx: &Context,
         req: Message<'_>,
         _opts: Option<SendOpts>,
-    ) -> std::result::Result<Vec<u8>, RpcError> {
+    ) -> RpcResult<Vec<u8>> {
         let origin = self.ld.provider_entity();
         let target = self.ld.actor_entity();
         let timeout = {
@@ -715,7 +834,11 @@ impl<'send> crate::common::Transport for ProviderTransport<'send> {
             } else {
                 // if lock is poisioned
                 warn!("rpc timeout mutex error - using default value");
-                crate::rpc_client::DEFAULT_RPC_TIMEOUT_MILLIS
+                self.bridge
+                    .host_data
+                    .default_rpc_timeout_ms
+                    .map(|t| Duration::from_millis(t as u64))
+                    .unwrap_or(DEFAULT_RPC_TIMEOUT_MILLIS)
             }
         };
         self.bridge

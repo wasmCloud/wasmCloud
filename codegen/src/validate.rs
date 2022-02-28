@@ -1,13 +1,15 @@
 //! utilities for model validation
 //!
 //!
-use atelier_core::model::shapes::{
-    AppliedTraits, ListOrSet, Operation, Service, Simple, StructureOrUnion,
+use atelier_core::model::{
+    shapes::{AppliedTraits, ListOrSet, Operation, Service, Simple, StructureOrUnion},
+    visitor::{walk_model, ModelVisitor},
+    Model, ShapeID,
 };
-use atelier_core::model::visitor::{walk_model, ModelVisitor};
-use atelier_core::model::{Model, ShapeID};
-use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, BTreeSet},
+};
 
 const MAX_DEPTH: usize = 8;
 
@@ -224,9 +226,11 @@ impl Node {
             typ: NodeType::Unknown,
         }
     }
+
     fn add_parent(&mut self, parent: ShapeID) {
         self.parents.insert(parent);
     }
+
     fn add_child(&mut self, child: ShapeID) {
         self.children.insert(child);
     }
@@ -250,8 +254,12 @@ pub(crate) fn check_cbor_dependencies(model: &Model) -> Result<(), String> {
             let node = tree.get(service_id).unwrap();
             if let Some(reason) = tree.has_cbor_only(node, 0) {
                 return Err(format!(
-                    "Service {}.{} must be declared @wasmbus{{protocol: \"2\"}} due to a dependency on {}",
-                    service_id.namespace(), service_id.shape_name(), reason));
+                    "Service {}.{} must be declared @wasmbus{{protocol: \"2\"}} due to a \
+                     dependency on {}",
+                    service_id.namespace(),
+                    service_id.shape_name(),
+                    reason
+                ));
             }
         }
     }

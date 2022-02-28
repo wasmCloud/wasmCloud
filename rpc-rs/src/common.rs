@@ -1,7 +1,7 @@
 use crate::error::{RpcError, RpcResult};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use std::borrow::Cow;
+use std::{borrow::Cow, fmt};
 
 /// A wasmcloud message
 #[derive(Debug)]
@@ -75,15 +75,48 @@ pub fn serialize<T: Serialize>(data: &T) -> Result<Vec<u8>, RpcError> {
 
 #[async_trait]
 pub trait MessageDispatch {
-    async fn dispatch(&self, ctx: &Context, message: Message<'_>) -> Result<Message<'_>, RpcError>;
+    async fn dispatch<'disp, 'ctx, 'msg>(
+        &'disp self,
+        ctx: &'ctx Context,
+        message: Message<'msg>,
+    ) -> Result<Message<'msg>, RpcError>;
 }
 
-/// Message encodingn format
+/// Message encoding format
+#[derive(Clone, PartialEq)]
 pub enum MessageFormat {
     Msgpack,
     Cbor,
     Empty,
     Unknown,
+}
+
+impl fmt::Display for MessageFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            MessageFormat::Msgpack => "msgpack",
+            MessageFormat::Cbor => "cbor",
+            MessageFormat::Empty => "empty",
+            MessageFormat::Unknown => "unknown",
+        })
+    }
+}
+
+impl fmt::Debug for MessageFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.to_string())
+    }
+}
+
+impl MessageFormat {
+    pub fn write_header<W: std::io::Write>(&self, mut buf: W) -> std::io::Result<usize> {
+        match self {
+            MessageFormat::Cbor => buf.write(&[127u8]),    // 0x7f
+            MessageFormat::Msgpack => buf.write(&[193u8]), // 0xc1
+            MessageFormat::Empty => Ok(0),
+            MessageFormat::Unknown => Ok(0),
+        }
+    }
 }
 
 /// returns serialization format,
@@ -109,9 +142,9 @@ pub fn message_format(data: &[u8]) -> (MessageFormat, usize) {
         1 => (MessageFormat::Msgpack, 0), // 1-byte msgpack legacy
         _ => {
             match data[0] {
-                0x00 => (MessageFormat::Cbor, 1),           // prefix + cbor
+                0x7f => (MessageFormat::Cbor, 1),           // prefix + cbor
                 0xc1 => (MessageFormat::Msgpack, 1),        // prefix + msgpack
-                0x01..=0x7f => (MessageFormat::Unknown, 0), // RESERVED
+                0x00..=0x7e => (MessageFormat::Unknown, 0), // RESERVED
                 0xc0 => (MessageFormat::Unknown, 0),        // RESERVED
                 _ => (MessageFormat::Msgpack, 0),           // legacy
             }
@@ -135,4 +168,79 @@ pub fn decode<T: serde::de::DeserializeOwned>(
         _ => return Err(RpcError::Deser("invalid encoding for '{}'".to_string())),
     };
     Ok(value)
+}
+
+pub trait DecodeOwned: for<'de> crate::minicbor::Decode<'de> {}
+impl<T> DecodeOwned for T where T: for<'de> crate::minicbor::Decode<'de> {}
+
+/// Wasmbus rpc sender that can send any message and cbor-serializable payload
+/// requires Protocol="2"
+pub struct AnySender<T: Transport> {
+    transport: T,
+}
+
+impl<T: Transport> AnySender<T> {
+    pub fn new(transport: T) -> Self {
+        Self { transport }
+    }
+}
+
+impl<T: Transport + Sync + Send> AnySender<T> {
+    /// Send enoded payload
+    #[inline]
+    async fn send_raw<'s, 'ctx, 'msg>(
+        &'s self,
+        ctx: &'ctx Context,
+        msg: Message<'msg>,
+    ) -> RpcResult<Vec<u8>> {
+        self.transport.send(ctx, msg, None).await
+    }
+
+    /// Send rpc with serializable payload
+    pub async fn send<In: Serialize, Out: serde::de::DeserializeOwned>(
+        &self,
+        ctx: &Context,
+        method: &str,
+        arg: &In,
+    ) -> RpcResult<Out> {
+        let mut buf = Vec::new();
+        MessageFormat::Cbor.write_header(&mut buf).unwrap();
+        minicbor_ser::to_writer(arg, &mut buf).map_err(|e| RpcError::Ser(e.to_string()))?;
+        let resp = self
+            .send_raw(
+                ctx,
+                Message {
+                    method,
+                    arg: Cow::Borrowed(&buf),
+                },
+            )
+            .await?;
+        let result: Out =
+            minicbor_ser::from_slice(&resp).map_err(|e| RpcError::Deser(e.to_string()))?;
+        Ok(result)
+    }
+
+    /// Send rpc with serializable payload using cbor encode/decode
+    pub async fn send_cbor<'de, In: crate::minicbor::Encode, Out: DecodeOwned>(
+        &self,
+        ctx: &Context,
+        method: &str,
+        arg: &In,
+    ) -> RpcResult<Out> {
+        let mut buf = Vec::new();
+        MessageFormat::Cbor.write_header(&mut buf).unwrap();
+        crate::minicbor::encode(arg, &mut buf).map_err(|e| RpcError::Ser(e.to_string()))?;
+        let resp = self
+            .send_raw(
+                ctx,
+                Message {
+                    method,
+                    arg: Cow::Borrowed(&buf),
+                },
+            )
+            .await?;
+        let result: Out =
+            crate::minicbor::decode(&resp).map_err(|e| RpcError::Deser(e.to_string()))?;
+        Ok(result)
+    }
 }

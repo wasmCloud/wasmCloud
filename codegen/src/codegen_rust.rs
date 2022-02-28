@@ -343,11 +343,14 @@ impl<'model> CodeGen for RustCodeGen<'model> {
 
     fn write_services(&mut self, w: &mut Writer, model: &Model, _params: &ParamMap) -> Result<()> {
         let ns = self.namespace.clone();
-        for (id, traits, shape) in model
+        let mut services: Vec<(&ShapeID, &AppliedTraits, &ShapeKind)> = model
             .shapes()
             .filter(|s| is_opt_namespace(s.id(), &ns))
             .map(|s| (s.id(), s.traits(), s.body()))
-        {
+            .collect();
+        // sort services in this namespace, so output order is deterministic
+        services.sort_by_key(|me| me.0);
+        for (id, traits, shape) in services.iter() {
             if let ShapeKind::Service(service) = shape {
                 let service = ServiceInfo {
                     id: id.shape_name(),
@@ -646,9 +649,12 @@ impl<'model> RustCodeGen<'model> {
         let mut derive_default = !is_trait_struct;
         // derive(Eq) is enabled, unless specifically disabled in codegenRust
         let mut derive_eq = true;
+        let mut non_exhaustive = false;
+
         if let Some(cg) = get_trait::<CodegenRust>(traits, codegen_rust_trait())? {
             derive_default = !cg.no_derive_default;
             derive_eq = !cg.no_derive_eq;
+            non_exhaustive = cg.non_exhaustive;
         }
         if derive_default {
             derive_list.push("Default");
@@ -659,6 +665,9 @@ impl<'model> RustCodeGen<'model> {
         derive_list.sort_unstable();
         let derive_decl = format!("#[derive({})]\n", derive_list.join(","));
         w.write(&derive_decl);
+        if non_exhaustive {
+            w.write(b"#[non_exhaustive]\n");
+        }
         w.write(b"pub struct ");
         self.write_ident(w, id);
         w.write(b" {\n");
@@ -904,10 +913,10 @@ impl<'model> RustCodeGen<'model> {
         let has_cbor = proto.map(|pv| pv.has_cbor()).unwrap_or(false);
         w.write(
             br#"{
-            async fn dispatch(
-                &self,
-                ctx: &Context,
-                message: &Message<'_> ) -> RpcResult< Message<'_>> {
+            async fn dispatch<'disp__,'ctx__,'msg__>(
+                &'disp__ self,
+                ctx: &'ctx__ Context,
+                message: &Message<'msg__> ) -> Result<Message<'msg__>, RpcError> {
                 match message.method {
         "#,
         );
@@ -970,7 +979,7 @@ impl<'model> RustCodeGen<'model> {
                 // serialize result
                 if has_cbor {
                     w.write(&format!(
-                        "let mut e = {}::cbor::vec_encoder();\n",
+                        "let mut e = {}::cbor::vec_encoder(true);\n",
                         &self.import_core
                     ));
                     let s = self.encode_shape_id(
@@ -1068,7 +1077,7 @@ impl<'model> RustCodeGen<'model> {
                         w.write(b"let arg = arg.to_string();\n");
                     }
                     w.write(&format!(
-                        "let mut e = {}::cbor::vec_encoder();\n",
+                        "let mut e = {}::cbor::vec_encoder(true);\n",
                         &self.import_core
                     ));
                     let s = self.encode_shape_id(

@@ -88,8 +88,14 @@ impl log::Log for ChannelLogger {
                 // not allowed - this is our close signal
                 return;
             }
-            if let Err(e) = self.tx.send(record.into()) {
-                eprintln!("log send err: {:?}", e);
+            if self.tx.send(record.into()).is_err() {
+                // log channel closed, send to stderr instead
+                eprintln!(
+                    "{}:{} -- {}",
+                    record.level(),
+                    record.target(),
+                    record.args()
+                );
             }
         }
     }
@@ -228,7 +234,7 @@ impl ToString for LogRec {
             value: target,
             width: max_width,
         };
-        format!(" {} {} > {}{}", self.level, target, &self.args, NEWLINE)
+        format!("{} {} > {}{}", self.level, target, &self.args, NEWLINE)
     }
 }
 

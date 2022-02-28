@@ -1,6 +1,6 @@
 [package]
 name = "wasmbus-rpc"
-version = "0.7.5"
+version = "0.8.0"
 authors = [ "wasmcloud Team" ]
 license = "Apache-2.0"
 description = "Runtime library for actors and capability providers"
@@ -14,10 +14,12 @@ edition = "2021"
 exclude = [ "build.rs" ]
 
 [features]
-# Warning: Don't change serialization - things will break
-default = [ ]
+default = [ "chunkify" ]
 BigInteger = [ "num-bigint" ]
 BigDecimal = [ "bigdecimal" ]
+# non-working feature - used for internal testing of async-rewrite branch of nats-io/nats.rs
+#async_rewrite = [ "nats-experimental" ]
+chunkify = [ "nats" ]
 
 [dependencies]
 async-trait = "0.1"
@@ -34,7 +36,8 @@ thiserror = "1.0"
 time = "0.3.7"
 tokio-timer = "0.2"
 toml = "0.5"
-wasmbus-macros = { path = "../macros", version = "0.1.7" }
+wasmbus-macros = { path = "../macros", version = "0.1.8" }
+minicbor-ser = "0.1.2"
 
 #BigInteger support
 num-bigint = { version = "0.4", optional = true }
@@ -45,6 +48,7 @@ bigdecimal = { version = "0.3", optional = true }
 tokio = { version = "1", features = ["full"]}
 futures = "0.3"
 nats-aflowt = "0.16.104"
+nats = { version = "0.17", optional=true }
 once_cell = "1.8"
 crossbeam = "0.8"
 uuid = { version = "0.8", features=["v4", "serde"] }
@@ -53,9 +57,10 @@ ring = "0.16"
 pin-utils = "0.1"
 data-encoding = "2.3"
 
+
 [dev-dependencies]
 regex = "1"
 env_logger = "0.9.0"
 
 [build-dependencies]
-weld-codegen = "0.3.3"
+weld-codegen = { version = "0.4.0", path = "../codegen" }
