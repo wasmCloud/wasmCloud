@@ -1226,7 +1226,7 @@ impl<'model> RustCodeGen<'model> {
 
                     /// Constructs a client for sending to a {} provider
                     /// implementing the '{}' capability contract, with the specified link name
-                    pub fn new_with_link(link_name: &str) -> {}::RpcResult<Self> {{
+                    pub fn new_with_link(link_name: &str) -> {}::error::RpcResult<Self> {{
                         let transport =  {}::actor::prelude::WasmHost::to_provider("{}", link_name)?;
                         Ok(Self {{ transport }})
                     }}
