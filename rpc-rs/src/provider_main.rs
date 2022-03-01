@@ -159,7 +159,7 @@ where
     let _ = shutdown_rx.await;
 
     // close chunkifiers
-    #[cfg(feature = "chunkify")]
+    #[cfg(all(feature = "chunkify", not(target_arch = "wasm32")))]
     crate::chunkify::shutdown();
 
     // stop the logger thread

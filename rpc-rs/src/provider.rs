@@ -3,7 +3,7 @@
 //! common provider wasmbus support
 //!
 
-#[cfg(feature = "chunkify")]
+#[cfg(all(feature = "chunkify", not(target_arch = "wasm32")))]
 use crate::chunkify::chunkify_endpoint;
 pub use crate::rpc_client::make_uuid;
 use crate::{
@@ -114,7 +114,7 @@ impl HostBridge {
         Self::new_client(NatsClientType::Async(nats), host_data)
     }
 
-    #[cfg(feature = "chunkify")]
+    #[cfg(all(feature = "chunkify", not(target_arch = "wasm32")))]
     pub(crate) fn new_sync_client(&self) -> RpcResult<nats::Connection> {
         //let key = if self.host_data.is_test() {
         //    wascap::prelude::KeyPair::new_user()
@@ -442,7 +442,7 @@ impl HostBridge {
     }
 
     async fn dechunk_validate(&self, inv: &mut Invocation) -> RpcResult<()> {
-        #[cfg(feature = "chunkify")]
+        #[cfg(all(feature = "chunkify", not(target_arch = "wasm32")))]
         if inv.content_length.is_some() && inv.content_length.unwrap() > inv.msg.len() as u64 {
             let inv_id = inv.id.clone();
             let lattice = self.rpc_client.lattice_prefix().to_string();
@@ -729,7 +729,7 @@ async fn publish_invocation_response(
 
     let response = {
         cfg_if! {
-            if #[cfg(feature="chunkify")] {
+            if #[cfg(all(feature = "chunkify", not(target_arch = "wasm32")))] {
                 let inv_id = response.invocation_id.clone();
                 if crate::chunkify::needs_chunking(response.msg.len()) {
                     let msg = response.msg;

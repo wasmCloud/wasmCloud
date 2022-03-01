@@ -1,6 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-#[cfg(feature = "chunkify")]
+#[cfg(all(feature = "chunkify", not(target_arch = "wasm32")))]
 use crate::chunkify::chunkify_endpoint;
 use crate::{
     common::Message,
@@ -258,7 +258,7 @@ impl RpcClient {
         let len = message.arg.len();
         let chunkify = {
             cfg_if::cfg_if! {
-                if #[cfg(feature = "chunkify")] {
+                if #[cfg(all(feature = "chunkify", not(target_arch = "wasm32")))] {
                     crate::chunkify::needs_chunking(len)
                 } else {
                     false
@@ -287,7 +287,7 @@ impl RpcClient {
         };
         let nats_body = crate::common::serialize(&invocation)?;
 
-        #[cfg(feature = "chunkify")]
+        #[cfg(all(feature = "chunkify", not(target_arch = "wasm32")))]
         if let Some(body) = body {
             let inv_id = invocation.id.clone();
             debug!("chunkifying inv {} size {}", &inv_id, len);
@@ -344,7 +344,7 @@ impl RpcClient {
             match inv_response.error {
                 None => {
                     // was response chunked?
-                    #[cfg(feature = "chunkify")]
+                    #[cfg(all(feature = "chunkify", not(target_arch = "wasm32")))]
                     let msg = if inv_response.content_length.is_some()
                         && inv_response.content_length.unwrap() > inv_response.msg.len() as u64
                     {
@@ -418,8 +418,6 @@ impl RpcClient {
             // These two never get invoked
             #[cfg(feature = "async_rewrite")]
             NatsClientType::AsyncRewrite(_) => unimplemented!(),
-            //#[cfg(feature = "chunkify")]
-            //NatsClientType::Sync(_) => unimplemented!(),
         }
         Ok(())
     }

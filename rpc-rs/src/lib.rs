@@ -47,7 +47,7 @@ pub type CallResult = std::result::Result<Vec<u8>, Box<dyn std::error::Error + S
 pub type HandlerResult<T> = std::result::Result<T, Box<dyn std::error::Error + Sync + Send>>;
 pub type TomlMap = toml::value::Map<String, toml::value::Value>;
 
-#[cfg(feature = "chunkify")]
+#[cfg(all(feature = "chunkify", not(target_arch = "wasm32")))]
 pub(crate) mod chunkify;
 mod wasmbus_core;
 

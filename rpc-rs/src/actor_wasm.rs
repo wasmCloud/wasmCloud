@@ -2,8 +2,8 @@
 #![cfg(target_arch = "wasm32")]
 
 use crate::{
+    common::Message,
     error::{RpcError, RpcResult},
-    Message,
 };
 use async_trait::async_trait;
 

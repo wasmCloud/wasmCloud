@@ -1,4 +1,4 @@
-#![cfg(feature = "chunkify")]
+#![cfg(all(feature = "chunkify", not(target_arch = "wasm32")))]
 
 // You strike me as a message that has never been chunkified
 // I'm sure I don't know what you mean, You forget yourself
