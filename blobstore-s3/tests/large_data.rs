@@ -5,9 +5,7 @@ use wasmbus_rpc::{
     common::{Context, Message, Transport},
     error::{RpcError, RpcResult},
 };
-use wasmcloud_interface_blobstore::{
-    Blobstore, BlobstoreSender, Chunk, GetObjectRequest, PutObjectRequest,
-};
+use wasmcloud_interface_blobstore::{Blobstore, BlobstoreSender, Chunk, PutObjectRequest};
 //use wasmcloud_interface_blobstore::{Blobstore, BlobstoreSender};
 #[allow(unused_imports)]
 use wasmcloud_test_util::{
@@ -66,7 +64,7 @@ async fn send_receive<T: Transport + Sync>(
 ) -> RpcResult<()> {
     let ctx = wasmbus_rpc::common::Context::default();
 
-    let (arr, sum) = gen_bytes(len);
+    let (arr, _sum) = gen_bytes(len);
     debug!("sending object {}", len);
     s3.put_object(
         &ctx,

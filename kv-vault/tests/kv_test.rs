@@ -1,7 +1,10 @@
 //! Tests kv-vault
 //!
 use kv_vault_lib::{wasmcloud_interface_keyvalue::*, STRING_VALUE_MARKER};
-use wasmbus_rpc::provider::prelude::*;
+use wasmbus_rpc::{
+    error::{RpcError, RpcResult},
+    provider::prelude::Context,
+};
 use wasmcloud_test_util::{
     check, check_eq,
     cli::print_test_results,
@@ -12,8 +15,12 @@ use wasmcloud_test_util::{
 
 #[tokio::test]
 async fn run_all() {
+    let _prov = test_provider().await;
+    // allow time for put_link
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
     let opts = TestOptions::default();
-    let res = run_selected_spawn!(&opts, health_check, get_set, contains_del, json_values,);
+    let res = run_selected_spawn!(opts, health_check, get_set, contains_del, json_values,);
     print_test_results(&res);
 
     let passed = res.iter().filter(|tr| tr.passed).count();

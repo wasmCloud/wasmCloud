@@ -1,7 +1,7 @@
 # codegen.toml
 
 [[models]]
-url = "https://cdn.jsdelivr.net/gh/wasmcloud/interfaces@8310dedc8614720c9cd4ac3069603f8c6ee73adc/blobstore/blobstore.smithy"
+url = "https://cdn.jsdelivr.net/gh/wasmcloud/interfaces@10f71d127ba11e580ae912f3128761c6d4e02ca4/blobstore/blobstore.smithy"
 
 [[models]]
 url = "https://cdn.jsdelivr.net/gh/wasmcloud/interfaces/core"

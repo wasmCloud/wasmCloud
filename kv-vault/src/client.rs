@@ -1,12 +1,10 @@
 //! Hashicorp vault client
 //!
 use serde::{de::DeserializeOwned, Serialize};
-use std::string::ToString;
-use std::sync::Arc;
+use std::{string::ToString, sync::Arc};
 use vaultrs::api::kv2::responses::SecretVersionMetadata;
 
-use crate::config::Config;
-use crate::error::VaultError;
+use crate::{config::Config, error::VaultError};
 
 /// Vault HTTP api version. As of Vault 1.9.x (Feb 2022), all http api calls use version 1
 const API_VERSION: u8 = 1;

@@ -15,6 +15,11 @@ use tokio::sync::RwLock;
 use wasmbus_rpc::{core::LinkDefinition, provider::prelude::*};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut vars: Vec<(String, String)> = std::env::vars().collect();
+    vars.sort_by(|v, other| String::cmp(&v.0, &other.0));
+    for (var, value) in vars.iter() {
+        println!("(stdout) blobstore-s3: env: {}={}", &var, &value);
+    }
     // handle lattice control messages and forward rpc to the provider dispatch
     // returns when provider receives a shutdown control message
     provider_main(S3BlobstoreProvider::default())?;
@@ -23,7 +28,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Nats implementation for wasmcloud:messaging
 #[derive(Default, Clone, Provider)]
 #[services(Blobstore)]
 struct S3BlobstoreProvider {

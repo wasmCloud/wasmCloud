@@ -63,13 +63,21 @@ impl StorageConfig {
         } else {
             StorageConfig::default()
         };
-        if let Ok(arn) = env::var("AWS_ASSUME_ROLE_ARN") {
+        // load environment variables from file
+        if let Some(env_file) = values.get("env") {
+            let data = std::fs::read_to_string(env_file).map_err(|e| {
+                RpcError::ProviderInit(format!("reading env file '{}': {}", env_file, e))
+            })?;
+            simple_env_load::parse_and_set(&data, |k, v| std::env::set_var(k, v));
+        }
+
+        if let Ok(arn) = env::var("AWS_ROLE_ARN") {
             let mut sts_config = config.sts_config.unwrap_or_default();
             sts_config.role = arn;
             if let Ok(region) = env::var("AWS_ASSUME_ROLE_REGION") {
                 sts_config.region = Some(region);
             }
-            if let Ok(session) = env::var("AWS_ASSUME_ROLE_SESSION") {
+            if let Ok(session) = env::var("AWS_IAM_ROLE_SESSION_NAME") {
                 sts_config.session = Some(session);
             }
             if let Ok(external_id) = env::var("AWS_ASSUME_ROLE_EXTERNAL_ID") {

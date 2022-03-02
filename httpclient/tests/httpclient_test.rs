@@ -22,7 +22,7 @@ async fn run_all() {
     let total = res.len();
     assert_eq!(passed, total, "{} passed out of {}", passed, total);
 
-    // try to let the provider shut dowwn gracefully
+    // try to let the provider shut down gracefully
     let provider = test_provider().await;
     let _ = provider.shutdown().await;
 }

@@ -1,32 +1,22 @@
 //! AWS S3 implementation for wasmcloud:blobstore
 //!
-//! TODO:
-//! - multipart upload is not yet implemented, and has some complications:
-//!   - the S3 api for multipart upload requires a minimum 5MB per "part",
-//!     and the file may have up to 10,000 parts. With a default nats message limit of 1MB,
-//!     chunks uploaded from an actor need to be aggregated either in memory,
-//!     or as smaller unique S3 files that get copied into parts.
-//!   - aggregating 5MB parts in the memory of the capability provider would be simple,
-//!     but we can't keep state in provider memory because there could be multiple instances.
-//!   - complete_multipart_upload can discard errors https://github.com/rusoto/rusoto/issues/1936
-//!
 //! assume role http request https://docs.aws.amazon.com/cli/latest/reference/sts/assume-role.html
 //! get session token https://docs.aws.amazon.com/cli/latest/reference/sts/get-session-token.html
 
-use aws_sdk_s3::{
-    error::{HeadBucketError, HeadBucketErrorKind, HeadObjectError, HeadObjectErrorKind},
-    model::ObjectIdentifier,
-    output::{CreateBucketOutput, HeadObjectOutput, ListBucketsOutput},
-    ByteStream, SdkError,
-};
-use log::{debug, error, info, warn};
-use tokio_stream::StreamExt;
-use wasmbus_rpc::{core::LinkDefinition, provider::prelude::*};
-use wasmcloud_interface_blobstore::{
+use crate::wasmcloud_interface_blobstore::{
     self as blobstore, Blobstore, Chunk, ChunkReceiver, ChunkReceiverSender, ContainerId,
     ContainerIds, ContainerMetadata, ContainerObject, ContainersInfo, GetObjectResponse,
     MultiResult, ObjectMetadata, PutChunkRequest, PutObjectResponse, RemoveObjectsRequest,
 };
+use aws_sdk_s3::{
+    error::{HeadBucketError, HeadBucketErrorKind, HeadObjectError, HeadObjectErrorKind},
+    model::ObjectIdentifier,
+    output::{CreateBucketOutput, HeadObjectOutput, ListBucketsOutput},
+    types::{ByteStream, SdkError},
+};
+use log::{debug, error, info, warn};
+use tokio_stream::StreamExt;
+use wasmbus_rpc::{core::LinkDefinition, provider::prelude::*};
 
 mod config;
 pub use config::StorageConfig;
@@ -37,8 +27,8 @@ pub mod wasmcloud_interface_blobstore {
     include!(concat!(env!("OUT_DIR"), "/gen/blobstore.rs"));
 }
 
-/// maximum size of message that we'll return from s3
-const MAX_CHUNK_SIZE: usize = 990_000;
+/// maximum size of message that we'll return from s3 (500MB)
+const MAX_CHUNK_SIZE: usize = 500 * 1024 * 1024;
 
 #[derive(Clone)]
 pub struct StorageClient(pub aws_sdk_s3::Client, pub Option<LinkDefinition>);
@@ -738,7 +728,7 @@ impl Blobstore for StorageClient {
 
 /// translate optional s3 DateTime to optional Timestamp.
 /// Invalid times return None.
-fn to_timestamp(dt: Option<aws_sdk_s3::DateTime>) -> Option<wasmbus_rpc::Timestamp> {
+fn to_timestamp(dt: Option<aws_sdk_s3::types::DateTime>) -> Option<wasmbus_rpc::Timestamp> {
     match dt {
         Some(dt) => match wasmbus_rpc::Timestamp::new(dt.secs(), dt.subsec_nanos()) {
             Ok(t) => Some(t),
