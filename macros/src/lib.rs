@@ -195,11 +195,11 @@ fn gen_dispatch(traits: &[syn::Path], ident: &Ident) -> TokenStream2 {
     quote!(
         #[async_trait]
         impl MessageDispatch for #ident {
-            async fn dispatch<'disp,'ctx,'msg>(
-                &'disp self,
-                ctx: &'ctx Context,
-                message: Message<'msg>,
-            ) -> std::result::Result<Message<'msg>, RpcError> {
+            async fn dispatch<'disp__,'ctx__,'msg__>(
+                &'disp__ self,
+                ctx: &'ctx__ Context,
+                message: Message<'msg__>,
+            ) -> std::result::Result<Message<'msg__>, RpcError> {
                 let (trait_name, trait_method) = message
                     .method
                     .rsplit_once('.')
@@ -227,7 +227,7 @@ fn gen_empty_dispatch(ident: &Ident) -> TokenStream2 {
     quote!(
         #[async_trait]
         impl MessageDispatch for #ident {
-            async fn dispatch(&self,_ctx: &Context,message: Message<'_>)->std::result::Result<Message<'_>, RpcError> {
+            async fn dispatch<'disp__,'ctx__,'msg__>(&'disp__ self, _ctx: &'ctx__ Context, message: wasmbus_rpc::common::Message<'msg__>) -> std::result::Result<Message<'msg__>, RpcError> {
                 Err(RpcError::MethodNotHandled(message.method.to_string()))
             }
         }
