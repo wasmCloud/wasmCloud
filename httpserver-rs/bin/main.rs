@@ -1,10 +1,11 @@
 //! Http Server implementation for wasmcloud:httpserver
 //!
 //!
+use async_trait::async_trait;
 use std::{collections::HashMap, convert::Infallible, sync::Arc};
 use tokio::sync::RwLock;
-use wasmbus_rpc::{core::LinkDefinition, provider::prelude::*};
-use wasmcloud_provider_httpserver::{load_settings, HttpServer};
+use wasmbus_rpc::{core::LinkDefinition, error::RpcError, provider::prelude::*};
+use wasmcloud_provider_httpserver::{load_settings, HttpServerCore};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // handle lattice control messages and forward rpc to the provider dispatch
@@ -16,12 +17,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// HttpServer provider implementation.
-#[derive(Default, Clone, Provider)]
+#[derive(Clone, Default, Provider)]
 struct HttpServerProvider {
     // map to store http server (and its link parameters) for each linked actor
-    actors: Arc<RwLock<HashMap<String, HttpServer>>>,
+    actors: Arc<RwLock<HashMap<String, HttpServerCore>>>,
 }
-/// use default implementations of provider methods
+
 impl ProviderDispatch for HttpServerProvider {}
 
 /// Your provider can handle any of these methods
@@ -37,7 +38,7 @@ impl ProviderHandler for HttpServerProvider {
         let settings =
             load_settings(&ld.values).map_err(|e| RpcError::ProviderInit(e.to_string()))?;
 
-        let http_server = HttpServer::new(settings.clone(), get_host_bridge());
+        let http_server = HttpServerCore::new(settings.clone(), get_host_bridge());
         http_server.start(ld.clone()).await.map_err(|e| {
             RpcError::ProviderInit(format!(
                 "starting httpserver for {} {:?}: {}",

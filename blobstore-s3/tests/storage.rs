@@ -10,7 +10,7 @@ async fn test_create_container() {
     let ctx = wasmbus_rpc::common::Context::default();
 
     let num = rand::random::<u64>();
-    let bucket = format!("test.{}.bucket", num);
+    let bucket = format!("test.bucket.{}", num);
 
     assert_eq!(s3.container_exists(&ctx, &bucket).await, Ok(false));
     s3.create_container(&ctx, &bucket).await.unwrap();
@@ -32,7 +32,7 @@ async fn test_create_object() {
     let ctx = wasmbus_rpc::common::Context::default();
 
     let num = rand::random::<u64>();
-    let bucket = format!("test.{}.object", num);
+    let bucket = format!("test.object.{}", num);
 
     s3.create_container(&ctx, &bucket).await.unwrap();
 
@@ -103,7 +103,7 @@ async fn test_list_objects() {
     let ctx = wasmbus_rpc::common::Context::default();
 
     let num = rand::random::<u64>();
-    let bucket = format!("test.{}.list.objects", num);
+    let bucket = format!("test.list.{}", num);
 
     s3.create_container(&ctx, &bucket).await.unwrap();
 
@@ -166,7 +166,7 @@ async fn test_get_object_range() {
     let s3 = StorageClient::async_default().await;
     let ctx = wasmbus_rpc::common::Context::default();
     let num = rand::random::<u64>();
-    let bucket = format!("test.{}.get.object.range", num);
+    let bucket = format!("test.range.{}", num);
 
     s3.create_container(&ctx, &bucket).await.unwrap();
     let object_bytes = b"abcdefghijklmnopqrstuvwxyz".to_vec();
@@ -256,7 +256,7 @@ async fn test_get_object_chunks() {
     let s3 = StorageClient::async_default().await;
     let ctx = wasmbus_rpc::common::Context::default();
     let num = rand::random::<u64>();
-    let bucket = format!("test.{}.chunk", num);
+    let bucket = format!("test.chunk.{}", num);
 
     s3.create_container(&ctx, &bucket).await.unwrap();
 

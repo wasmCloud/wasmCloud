@@ -16,8 +16,7 @@
 //!     Try `killall httpserver` to kill them.
 //!
 use std::time::Instant;
-use wasmbus_rpc::core::InvocationResponse;
-use wasmbus_rpc::provider::prelude::*;
+use wasmbus_rpc::{core::InvocationResponse, provider::prelude::*};
 use wasmcloud_interface_httpserver::*;
 use wasmcloud_test_util::{
     check,
@@ -74,8 +73,11 @@ async fn health_check(_opt: &TestOptions) -> RpcResult<()> {
 /// The thread quits if the number of expected messages has been completed,
 /// or if there was any error.
 async fn mock_echo_actor(num_requests: u32) -> tokio::task::JoinHandle<RpcResult<u32>> {
-    use wasmbus_rpc::rpc_client::rpc_topic;
-    use wasmbus_rpc::{core::Invocation, deserialize, serialize};
+    use wasmbus_rpc::{
+        common::{deserialize, serialize},
+        core::Invocation,
+        rpc_client::rpc_topic,
+    };
 
     let handle = tokio::runtime::Handle::current();
     handle.spawn(async move {
@@ -120,11 +122,9 @@ async fn mock_echo_actor(num_requests: u32) -> tokio::task::JoinHandle<RpcResult
                 };
                 let buf = serialize(&http_resp)?;
                 if let Some(ref reply_to) = msg.reply {
-                    let ir = InvocationResponse {
-                        error: None,
-                        invocation_id: inv.id,
-                        msg: buf,
-                    };
+                    let mut ir = InvocationResponse::default();
+                    ir.invocation_id = inv.id;
+                    ir.msg = buf;
                     prov.rpc_client.publish(reply_to, &serialize(&ir)?).await?;
                 }
                 completed += 1;

@@ -43,8 +43,8 @@ use tokio::{
     task::JoinHandle,
 };
 use warp::{path::FullPath, Filter};
-use wasmbus_rpc::{core::LinkDefinition, provider::HostBridge, RpcError};
-use wasmcloud_interface_httpserver::{HttpRequest, HttpResponse};
+use wasmbus_rpc::{common::Context, core::LinkDefinition, error::RpcError, provider::*};
+use wasmcloud_interface_httpserver::{HttpRequest, HttpResponse, HttpServer, HttpServerSender};
 
 mod settings;
 pub use settings::{load_settings, ServiceSettings};
@@ -85,11 +85,11 @@ struct Inner {
 ///   tokio::task::spawn(task);
 /// ```
 #[derive(Clone)]
-pub struct HttpServer {
+pub struct HttpServerCore {
     inner: Arc<RwLock<Inner>>,
 }
 
-impl HttpServer {
+impl HttpServerCore {
     /// Initializes server with settings
     pub fn new(settings: ServiceSettings, bridge: &'static HostBridge) -> Self {
         Self {
@@ -266,16 +266,13 @@ impl HttpServer {
         bridge: &'static HostBridge,
         timeout: std::time::Duration,
     ) -> Result<HttpResponse, RpcError> {
-        use wasmbus_rpc::provider::ProviderTransport;
-        use wasmcloud_interface_httpserver::{HttpServer, HttpServerSender};
-
         trace!(
             "sending to actor {}: request url path={}",
             &ld.actor_id,
             &req.path
         );
         let tx = ProviderTransport::new_with_timeout(&ld, Some(bridge), Some(timeout));
-        let ctx = wasmbus_rpc::Context::default();
+        let ctx = Context::default();
         let actor = HttpServerSender::via(tx);
         match actor.handle_request(&ctx, &req).await {
             Err(RpcError::Timeout(_)) => {
