@@ -1,12 +1,10 @@
-use minicbor::Decode;
-use wasmbus_rpc::provider::prelude::*;
+use wasmbus_rpc::{minicbor::Decode, provider::prelude::*};
 use wasmcloud_interface_sqldb::*;
-use wasmcloud_test_util::provider_test::Provider;
-use wasmcloud_test_util::run_selected_spawn;
 use wasmcloud_test_util::{
     check,
     cli::print_test_results,
-    provider_test::test_provider,
+    provider_test::{test_provider, Provider},
+    run_selected_spawn,
     testing::{TestOptions, TestResult},
 };
 
@@ -48,7 +46,7 @@ struct BuiltinTypes {
 }
 
 /// decode results from cbor to concrete structure, and print results
-fn process_results(resp: FetchResult) -> Result<(), SqlDbError> {
+fn process_results(resp: QueryResult) -> Result<(), SqlDbError> {
     println!("Received {} rows: ", resp.num_rows);
     let rows: Vec<BuiltinTypes> = minicbor::decode(&resp.rows)?;
     assert_eq!(resp.num_rows, 8, "should be 8 int* types");
@@ -70,9 +68,12 @@ async fn query(_opt: &TestOptions) -> RpcResult<()> {
 
     // use a table that's alrady there - schema types in pg_catalog
     let resp = client
-        .fetch(
+        .query(
             &ctx,
-            &"select typname from pg_catalog.pg_type where typname like 'int%'".to_string(),
+            &Statement {
+                sql: "select typname from pg_catalog.pg_type where typname like 'int%'".to_string(),
+                ..Default::default()
+            },
         )
         .await?;
 
@@ -100,19 +101,12 @@ struct FlavorResult {
 async fn flavor_queries(ctx: &Context, client: &SqlDbSender<Provider>) -> Result<(), SqlDbError> {
     // remove it in case earlier test crashed
     let resp = client
-        .execute(ctx, &"drop table if exists test_flavors".to_string())
-        .await?;
-    assert_eq!(resp.rows_affected, 0);
-
-    let resp = client
         .execute(
             ctx,
-            &r#"create table test_flavors
-            ( 
-              id INT4 NOT NULL,
-              flavor VARCHAR(30) NOT NULL
-             );"#
-            .to_string(),
+            &Statement {
+                sql: "drop table if exists test_flavors".to_string(),
+                ..Default::default()
+            },
         )
         .await?;
     assert_eq!(resp.rows_affected, 0);
@@ -120,7 +114,24 @@ async fn flavor_queries(ctx: &Context, client: &SqlDbSender<Provider>) -> Result
     let resp = client
         .execute(
             ctx,
-            &r#"insert into test_flavors (id,flavor) values
+            &Statement {
+                sql: r#"create table test_flavors
+            ( 
+              id INT4 NOT NULL,
+              flavor VARCHAR(30) NOT NULL
+             );"#
+                .to_string(),
+                ..Default::default()
+            },
+        )
+        .await?;
+    assert_eq!(resp.rows_affected, 0);
+
+    let resp = client
+        .execute(
+            ctx,
+            &Statement {
+                sql: r#"insert into test_flavors (id,flavor) values
             (1, 'Vanilla'),
             (2, 'Chocolate'),
             (3, 'Mint Chocolate Chip'),
@@ -129,17 +140,22 @@ async fn flavor_queries(ctx: &Context, client: &SqlDbSender<Provider>) -> Result
             (6, 'Rum Raisin')
             ;
             "#
-            .to_string(),
+                .to_string(),
+                ..Default::default()
+            },
         )
         .await?;
     assert_eq!(resp.rows_affected, 6, "6 rows inserted");
 
     let resp = client
-        .fetch(
+        .query(
             ctx,
-            &r#"select flavor from test_flavors 
+            &Statement {
+                sql: r#"select flavor from test_flavors 
                     where flavor like '%Chocolate%' order by id"#
-                .to_string(),
+                    .to_string(),
+                ..Default::default()
+            },
         )
         .await?;
     assert_eq!(resp.num_rows, 2, "select should have returned 2 rows");
@@ -149,7 +165,13 @@ async fn flavor_queries(ctx: &Context, client: &SqlDbSender<Provider>) -> Result
     assert_eq!(&rows.get(1).unwrap().flavor, "Mint Chocolate Chip",);
 
     let _resp = client
-        .execute(ctx, &"drop table if exists test_flavors".to_string())
+        .execute(
+            ctx,
+            &Statement {
+                sql: "drop table if exists test_flavors".to_string(),
+                ..Default::default()
+            },
+        )
         .await?;
 
     Ok(())

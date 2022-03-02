@@ -10,7 +10,9 @@ use log::{debug, error, info, trace};
 use std::{collections::HashMap, convert::Infallible, sync::Arc};
 use tokio::sync::RwLock;
 use wasmbus_rpc::provider::prelude::*;
-use wasmcloud_interface_sqldb::{Column, ExecuteResult, FetchResult, Query, SqlDb, SqlDbReceiver};
+use wasmcloud_interface_sqldb::{
+    Column, ExecuteResult, QueryResult, SqlDb, SqlDbReceiver, Statement,
+};
 
 mod config;
 mod error;
@@ -90,7 +92,7 @@ fn actor_id(ctx: &Context) -> Result<&String, RpcError> {
 /// wasmbus.providerReceive
 #[async_trait]
 impl SqlDb for SqlDbProvider {
-    async fn execute(&self, ctx: &Context, query: &Query) -> RpcResult<ExecuteResult> {
+    async fn execute(&self, ctx: &Context, stmt: &Statement) -> RpcResult<ExecuteResult> {
         let actor_id = actor_id(ctx)?;
         let rd = self.actors.read().await;
         let pool = rd
@@ -105,16 +107,16 @@ impl SqlDb for SqlDbProvider {
                 })
             }
         };
-        match conn.execute(query.as_str(), &[]).await {
+        match conn.execute(&stmt.sql, &[]).await {
             Ok(res) => Ok(ExecuteResult {
                 rows_affected: res,
                 ..Default::default()
             }),
             Err(db_err) => {
                 error!(
-                    "{} query:'{}' error:{}",
+                    "{} stmt:'{:?}' error:{}",
                     actor_id,
-                    query,
+                    stmt,
                     &db_err.to_string()
                 );
                 Ok(ExecuteResult {
@@ -126,7 +128,7 @@ impl SqlDb for SqlDbProvider {
     }
 
     /// perform select query on database, returning all result rows
-    async fn fetch(&self, ctx: &Context, query: &Query) -> RpcResult<FetchResult> {
+    async fn query(&self, ctx: &Context, stmt: &Statement) -> RpcResult<QueryResult> {
         let actor_id = actor_id(ctx)?;
         let rd = self.actors.read().await;
         let pool = rd
@@ -135,17 +137,17 @@ impl SqlDb for SqlDbProvider {
         let conn = match pool.get().await {
             Ok(conn) => conn,
             Err(e) => {
-                return Ok(FetchResult {
+                return Ok(QueryResult {
                     error: Some(DbError::Io(format!("connection pool: {}", e)).into()),
                     ..Default::default()
                 });
             }
         };
 
-        match conn.query(query.as_str(), &[]).await {
+        match conn.query(&stmt.sql, &[]).await {
             Ok(rows) => {
                 if rows.is_empty() {
-                    Ok(FetchResult::default())
+                    Ok(QueryResult::default())
                 } else {
                     let cols = rows
                         .get(0)
@@ -160,13 +162,13 @@ impl SqlDb for SqlDbProvider {
                         })
                         .collect::<Vec<Column>>();
                     match encode_result_set(&rows) {
-                        Ok(buf) => Ok(FetchResult {
+                        Ok(buf) => Ok(QueryResult {
                             columns: cols,
                             num_rows: rows.len() as u64,
                             error: None,
                             rows: buf,
                         }),
-                        Err(e) => Ok(FetchResult {
+                        Err(e) => Ok(QueryResult {
                             error: Some(e.into()),
                             ..Default::default()
                         }),
@@ -175,12 +177,12 @@ impl SqlDb for SqlDbProvider {
             }
             Err(db_err) => {
                 error!(
-                    "{} query:'{}' error:{}",
+                    "{} query:'{:?}' error:{}",
                     actor_id,
-                    query,
+                    stmt,
                     &db_err.to_string()
                 );
-                Ok(FetchResult {
+                Ok(QueryResult {
                     error: Some(DbError::from(db_err).into()),
                     ..Default::default()
                 })

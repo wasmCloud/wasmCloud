@@ -1,11 +1,9 @@
 //! Configuration for sqldb-postgres capability provider
 //!
-use wasmbus_rpc::{core::LinkDefinition, RpcError};
-//use native_tls::{Certificate,TlsConnector};
-use bb8_postgres::tokio_postgres::NoTls;
-use bb8_postgres::{bb8, tokio_postgres};
+use bb8_postgres::{bb8, tokio_postgres, tokio_postgres::NoTls};
 use serde::Deserialize;
 use std::{str::FromStr, time::Duration};
+use wasmbus_rpc::{core::LinkDefinition, error::RpcError};
 
 /// Configuration for this provider (from link definitions)
 /// For complete documentation on the uri syntax,

@@ -1,8 +1,6 @@
 use chrono::{DateTime, NaiveDateTime, Utc};
-use minicbor::encode::Write;
-use minicbor::Encoder;
-use tokio_postgres::types::Type;
-use tokio_postgres::Row;
+use minicbor::{encode::Write, Encoder};
+use tokio_postgres::{types::Type, Row};
 
 /// encode query result into CBOR arroy-of-arrays
 pub(crate) fn encode_rows<W>(
