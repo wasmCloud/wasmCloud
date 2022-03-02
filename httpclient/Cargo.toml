@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-provider-httpclient"
-version = "0.3.9"
+version = "0.4.0"
 edition = "2021"
 
 [dependencies]
@@ -21,12 +21,12 @@ thiserror = "1.0"
 tokio = { version = "1", features = ["full"] }
 toml = "0.5"
 
-wasmcloud-interface-httpclient = "0.4"
-wasmbus-rpc = "0.7"
+wasmcloud-interface-httpclient = "0.5"
+wasmbus-rpc = "0.8.2"
 
 # test dependencies
 [dev-dependencies]
-wasmcloud-test-util = "0.2"
+wasmcloud-test-util = "0.3.1"
 
 [[bin]]
 name = "httpclient"

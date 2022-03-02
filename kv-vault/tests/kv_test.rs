@@ -1,7 +1,7 @@
 //! Tests kv-vault
 //!
 use kv_vault_lib::{wasmcloud_interface_keyvalue::*, STRING_VALUE_MARKER};
-use wasmbus_rpc::{provider::prelude::Context, RpcResult};
+use wasmbus_rpc::provider::prelude::*;
 use wasmcloud_test_util::{
     check, check_eq,
     cli::print_test_results,

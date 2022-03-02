@@ -1,4 +1,4 @@
-use wasmbus_rpc::{provider::prelude::Context, RpcResult};
+use wasmbus_rpc::provider::prelude::*;
 use wasmcloud_interface_keyvalue::*;
 use wasmcloud_test_util::{
     check, check_eq,

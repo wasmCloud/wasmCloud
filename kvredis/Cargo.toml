@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-provider-kvredis"
-version = "0.14.9"
+version = "0.15.0"
 edition = "2021"
 
 [dependencies]
@@ -20,12 +20,12 @@ serde = {version = "1.0", features = ["derive"] }
 thiserror = "1.0"
 tokio = { version = "1", features = ["full"] }
 toml = "0.5"
-wasmcloud-interface-keyvalue = "0.5"
-wasmbus-rpc = "0.7.1"
+wasmcloud-interface-keyvalue = "0.6"
+wasmbus-rpc = "0.8.2"
 
 # test dependencies
 [dev-dependencies]
-wasmcloud-test-util = "0.2"
+wasmcloud-test-util = "0.3.1"
 rand = "0.8"
 
 [[bin]]
