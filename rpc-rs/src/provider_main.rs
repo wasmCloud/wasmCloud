@@ -73,9 +73,15 @@ where
     use std::str::FromStr as _;
 
     // initialize logger
-    let log_rx = crate::channel_log::init_logger()
-        .map_err(|_| RpcError::ProviderInit("log already initialized".to_string()))?;
-    crate::channel_log::init_receiver(log_rx);
+    match crate::channel_log::init_logger() {
+        Ok(log_rx) => crate::channel_log::init_receiver(log_rx),
+        // TODO(thomastaylor312): This is brittle, but the init_logger function is public and this
+        // is a bug fix. For the next major release, we should create an enum return type
+        Err(e) if e.contains("logger init error") => {
+            eprintln!("Logger was already created by provider, skipping receiver initialization");
+        }
+        Err(e) => return Err(e.into()),
+    }
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
     eprintln!(
