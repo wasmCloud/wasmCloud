@@ -1,13 +1,13 @@
 extern crate oci_distribution;
 
+use crate::appearance::spinner::Spinner;
 use crate::util::{cached_file, CommandOutput, OutputKind};
 use anyhow::{anyhow, bail, Result};
 use clap::{Parser, Subcommand};
-use log::{debug, info, warn};
+use log::{debug, warn};
 use oci_distribution::{client::*, secrets::RegistryAuth, Reference};
 use provider_archive::ProviderArchive;
 use serde_json::json;
-use spinners::{Spinner, Spinners};
 use std::{collections::HashMap, fs::File, io::prelude::*};
 
 const PROVIDER_ARCHIVE_MEDIA_TYPE: &str = "application/vnd.wasmcloud.provider.archive.layer.v1+par";
@@ -134,14 +134,10 @@ pub(crate) async fn handle_pull(
     output_kind: OutputKind,
 ) -> Result<CommandOutput> {
     let image: Reference = cmd.url.parse()?;
-    let spinner = match output_kind {
-        OutputKind::Text => Some(Spinner::new(
-            &Spinners::Dots12,
-            format!(" Downloading {} ...", image.whole()),
-        )),
-        _ => None,
-    };
-    info!("Downloading {}", image.whole());
+
+    let spinner = Spinner::new(&output_kind);
+    spinner.update_spinner_message(format!(" Downloading {} ...", image.whole()));
+
     let artifact = pull_artifact(
         cmd.url,
         cmd.digest,
@@ -154,9 +150,8 @@ pub(crate) async fn handle_pull(
 
     let outfile = write_artifact(&artifact, &image, cmd.destination)?;
 
-    if spinner.is_some() {
-        spinner.unwrap().stop();
-    }
+    spinner.finish_and_clear();
+
     let mut map = HashMap::new();
     map.insert("file".to_string(), json!(outfile));
     Ok(CommandOutput::new(
@@ -337,14 +332,8 @@ pub(crate) async fn handle_push(
         warn!(" Unless an SSL certificate has been installed, pushing to localhost without the --insecure option will fail")
     }
 
-    let spinner = match output_kind {
-        OutputKind::Text => Some(Spinner::new(
-            &Spinners::Dots12,
-            format!(" Pushing {} to {} ...", cmd.artifact, cmd.url),
-        )),
-        _ => None,
-    };
-    info!(" Pushing {} to {} ...", cmd.artifact, cmd.url);
+    let spinner = Spinner::new(&output_kind);
+    spinner.update_spinner_message(format!(" Pushing {} to {} ...", cmd.artifact, cmd.url));
 
     push_artifact(
         cmd.url.clone(),
@@ -357,9 +346,7 @@ pub(crate) async fn handle_push(
     )
     .await?;
 
-    if spinner.is_some() {
-        spinner.unwrap().stop();
-    }
+    spinner.finish_and_clear();
 
     let mut map = HashMap::new();
     map.insert("url".to_string(), json!(cmd.url));

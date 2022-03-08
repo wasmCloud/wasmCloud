@@ -35,7 +35,6 @@
 //   version: 0.9.0
 //   license: MIT/Apache-2.0
 //
-
 use anyhow::{anyhow, Context, Result};
 use clap::{ArgEnum, Args, Subcommand};
 use config::{Config, CONFIG_FILE_NAME};
@@ -52,10 +51,10 @@ use std::{
 use tempfile::TempDir;
 use weld_codegen::render::Renderer;
 
+use crate::appearance::emoji;
 use crate::util::CommandOutput;
 
 mod config;
-pub(crate) mod emoji;
 mod favorites;
 mod git;
 pub(crate) mod interactive;

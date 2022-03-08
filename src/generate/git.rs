@@ -3,7 +3,8 @@
 //   version: 0.9.0
 //   license: MIT/Apache-2.0
 //
-use crate::generate::{any_msg, copy_dir_all, emoji};
+use crate::appearance::emoji;
+use crate::generate::{any_msg, copy_dir_all};
 use anyhow::{Context, Result};
 use cargo::core::GitReference;
 use console::style;

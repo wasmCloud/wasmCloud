@@ -17,6 +17,7 @@ use util::CommandOutput;
 
 use crate::util::OutputKind;
 
+mod appearance;
 mod call;
 mod cfg;
 mod claims;
