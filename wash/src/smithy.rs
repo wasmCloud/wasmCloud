@@ -1,6 +1,6 @@
 //! smithy model lint and validation
 //!
-use crate::{generate::emoji, util::CommandOutput};
+use crate::{appearance::emoji, util::CommandOutput};
 use anyhow::{anyhow, bail, Result};
 use atelier_core::model::Model;
 use clap::Parser;

@@ -1,6 +1,7 @@
 extern crate wasmcloud_control_interface;
 
 use crate::{
+    appearance::spinner::Spinner,
     ctl::manifest::HostManifest,
     ctx::{context_dir, get_default_context, load_context},
     id::{ModuleId, ServerId, ServiceId},
@@ -13,7 +14,6 @@ use crate::{
 use anyhow::{bail, Result};
 use clap::{AppSettings, ArgEnum, Args, Parser, Subcommand};
 pub(crate) use output::*;
-use spinners::{Spinner, Spinners};
 use std::{
     path::{Path, PathBuf},
     time::Duration,
@@ -442,29 +442,28 @@ pub(crate) async fn handle_command(
     output_kind: OutputKind,
 ) -> Result<CommandOutput> {
     use CtlCliCommand::*;
-    let mut sp: Option<Spinner> = None;
+    let sp: Spinner = Spinner::new(&output_kind);
     let out: CommandOutput = match command {
         Apply(cmd) => {
-            sp = update_spinner_message(sp, " Applying manifest ...".to_string(), &output_kind);
+            sp.update_spinner_message(" Applying manifest ...".to_string());
             let results = apply_manifest(cmd).await?;
             apply_manifest_output(results)
         }
         Get(GetCommand::Hosts(cmd)) => {
-            sp = update_spinner_message(sp, " Retrieving Hosts ...".to_string(), &output_kind);
+            sp.update_spinner_message(" Retrieving Hosts ...".to_string());
             let hosts = get_hosts(cmd).await?;
             get_hosts_output(hosts)
         }
         Get(GetCommand::HostInventory(cmd)) => {
-            sp = update_spinner_message(
-                sp,
-                format!(" Retrieving inventory for host {} ...", cmd.host_id),
-                &output_kind,
-            );
+            sp.update_spinner_message(format!(
+                " Retrieving inventory for host {} ...",
+                cmd.host_id
+            ));
             let inv = get_host_inventory(cmd).await?;
             get_host_inventory_output(inv)
         }
         Get(GetCommand::Claims(cmd)) => {
-            sp = update_spinner_message(sp, " Retrieving claims ... ".to_string(), &output_kind);
+            sp.update_spinner_message(" Retrieving claims ... ".to_string());
             let claims = get_claims(cmd).await?;
             get_claims_output(claims)
         }
@@ -476,14 +475,11 @@ pub(crate) async fn handle_command(
 
             validate_contract_id(&cmd.contract_id)?;
 
-            sp = update_spinner_message(
-                sp,
-                format!(
-                    "Deleting link for {} on {} ({}) ... ",
-                    cmd.actor_id, cmd.contract_id, link_name,
-                ),
-                &output_kind,
-            );
+            sp.update_spinner_message(format!(
+                "Deleting link for {} on {} ({}) ... ",
+                cmd.actor_id, cmd.contract_id, link_name,
+            ));
+
             let failure = link_del(cmd.clone())
                 .await
                 .map_or_else(|e| Some(format!("{}", e)), |_| None);
@@ -492,31 +488,26 @@ pub(crate) async fn handle_command(
         Link(LinkCommand::Put(cmd)) => {
             validate_contract_id(&cmd.contract_id)?;
 
-            sp = update_spinner_message(
-                sp,
-                format!(
-                    "Defining link between {} and {} ... ",
-                    cmd.actor_id, cmd.provider_id
-                ),
-                &output_kind,
-            );
+            sp.update_spinner_message(format!(
+                "Defining link between {} and {} ... ",
+                cmd.actor_id, cmd.provider_id
+            ));
+
             let failure = link_put(cmd.clone())
                 .await
                 .map_or_else(|e| Some(format!("{}", e)), |_| None);
             link_put_output(&cmd.actor_id, &cmd.provider_id, failure)?
         }
         Link(LinkCommand::Query(cmd)) => {
-            sp = update_spinner_message(sp, "Querying Links ... ".to_string(), &output_kind);
+            sp.update_spinner_message("Querying Links ... ".to_string());
             let result = link_query(cmd.clone()).await?;
             link_query_output(result)
         }
         Start(StartCommand::Actor(cmd)) => {
             let actor_ref = &cmd.actor_ref.to_string();
-            sp = update_spinner_message(
-                sp,
-                format!(" Starting actor {} ... ", actor_ref),
-                &output_kind,
-            );
+
+            sp.update_spinner_message(format!(" Starting actor {} ... ", actor_ref));
+
             let ack = start_actor(cmd).await?;
             if !ack.accepted {
                 bail!("Operation failed: {}", ack.error);
@@ -529,11 +520,9 @@ pub(crate) async fn handle_command(
         }
         Start(StartCommand::Provider(cmd)) => {
             let provider_ref = &cmd.provider_ref.to_string();
-            sp = update_spinner_message(
-                sp,
-                format!(" Starting provider {} ... ", provider_ref),
-                &output_kind,
-            );
+
+            sp.update_spinner_message(format!(" Starting provider {} ... ", provider_ref));
+
             let ack = start_provider(cmd).await?;
             if !ack.accepted {
                 bail!("Operation failed: {}", ack.error);
@@ -545,11 +534,8 @@ pub(crate) async fn handle_command(
             )
         }
         Stop(StopCommand::Actor(cmd)) => {
-            sp = update_spinner_message(
-                sp,
-                format!(" Stopping actor {} ... ", cmd.actor_id),
-                &output_kind,
-            );
+            sp.update_spinner_message(format!(" Stopping actor {} ... ", cmd.actor_id));
+
             let ack = stop_actor(cmd.clone()).await?;
             if !ack.accepted {
                 bail!("Operation failed: {}", ack.error);
@@ -561,11 +547,8 @@ pub(crate) async fn handle_command(
             )
         }
         Stop(StopCommand::Provider(cmd)) => {
-            sp = update_spinner_message(
-                sp,
-                format!(" Stopping provider {} ... ", cmd.provider_id),
-                &output_kind,
-            );
+            sp.update_spinner_message(format!(" Stopping provider {} ... ", cmd.provider_id));
+
             let ack = stop_provider(cmd.clone()).await?;
             if !ack.accepted {
                 bail!("Operation failed: {}", ack.error);
@@ -577,11 +560,8 @@ pub(crate) async fn handle_command(
             )
         }
         Stop(StopCommand::Host(cmd)) => {
-            sp = update_spinner_message(
-                sp,
-                format!(" Stopping host {} ... ", cmd.host_id),
-                &output_kind,
-            );
+            sp.update_spinner_message(format!(" Stopping host {} ... ", cmd.host_id));
+
             let ack = stop_host(cmd.clone()).await?;
             if !ack.accepted {
                 bail!("Operation failed: {}", ack.error);
@@ -593,14 +573,11 @@ pub(crate) async fn handle_command(
             )
         }
         Update(UpdateCommand::Actor(cmd)) => {
-            sp = update_spinner_message(
-                sp,
-                format!(
-                    " Updating Actor {} to {} ... ",
-                    cmd.actor_id, cmd.new_actor_ref
-                ),
-                &output_kind,
-            );
+            sp.update_spinner_message(format!(
+                " Updating Actor {} to {} ... ",
+                cmd.actor_id, cmd.new_actor_ref
+            ));
+
             let ack = update_actor(cmd.clone()).await?;
             if !ack.accepted {
                 bail!("Operation failed: {}", ack.error);
@@ -612,17 +589,12 @@ pub(crate) async fn handle_command(
             )
         }
         Scale(ScaleCommand::Actor(cmd)) => {
-            sp = update_spinner_message(
-                sp,
-                format!(
-                    " Scaling Actor {} to {} instances ... ",
-                    cmd.actor_id, cmd.count
-                ),
-                &output_kind,
-            );
+            sp.update_spinner_message(format!(
+                " Scaling Actor {} to {} instances ... ",
+                cmd.actor_id, cmd.count
+            ));
 
             let ack = scale_actor(cmd.clone()).await?;
-
             if !ack.accepted {
                 bail!("Operation failed: {}", ack.error);
             }
@@ -634,9 +606,7 @@ pub(crate) async fn handle_command(
         }
     };
 
-    if sp.is_some() {
-        sp.unwrap().stop()
-    }
+    sp.finish_and_clear();
 
     Ok(out)
 }
@@ -1022,23 +992,6 @@ async fn ctl_client_from_opts(
     );
 
     Ok(ctl_client)
-}
-
-/// Handles updating the spinner for text output
-/// JSON output will be corrupted with a spinner
-fn update_spinner_message(
-    spinner: Option<Spinner>,
-    msg: String,
-    output_kind: &OutputKind,
-) -> Option<Spinner> {
-    if let Some(sp) = spinner {
-        sp.message(msg);
-        Some(sp)
-    } else if matches!(output_kind, OutputKind::Text) {
-        Some(Spinner::new(&Spinners::Dots12, msg))
-    } else {
-        None
-    }
 }
 
 #[cfg(test)]

@@ -3,8 +3,9 @@
 //   version: 0.9.0
 //   license: MIT/Apache-2.0
 //
+use crate::appearance::emoji;
 use crate::generate::{
-    any_msg, emoji,
+    any_msg,
     project_variables::{StringEntry, TemplateSlots, VarInfo},
     PROJECT_NAME_REGEX,
 };
