@@ -1,12 +1,7 @@
 //! Configuration for blobstore-s3 capability provider
 //!
-//! The simplest and preferred way to set configuration is to set environment variables
-//! - `AWS_ACCESS_KEY_ID`
-//! - `AWS_SECRET_ACCESS_KEY`
-//! - and, optionally, `AWS_SESSION_TOKEN`
-//! If STS AssumeRole is to be used, the same environment variables
-//! will be used to create in initial environment, and then the
-//! settings fom `sts_config` will be used to create a session for the assumed role
+//! See README.md for configuration options using environment variables, aws credentials files,
+//! and EC2 IAM authorizations.
 //!
 use aws_types::{
     config::Config as AwsConfig, credentials::SharedCredentialsProvider, region::Region,
@@ -31,8 +26,11 @@ pub struct StorageConfig {
     pub region: Option<String>,
     /// override default max_attempts (3) for retries
     pub max_attempts: Option<u32>,
-
+    /// optional configuration for STS Assume Role
     pub sts_config: Option<StsAssumeRoleConfig>,
+    /// optional map of bucket aliases to names
+    #[serde(default)]
+    pub aliases: HashMap<String, String>,
 }
 
 #[derive(Clone, Default, Deserialize)]
@@ -74,17 +72,18 @@ impl StorageConfig {
         if let Ok(arn) = env::var("AWS_ROLE_ARN") {
             let mut sts_config = config.sts_config.unwrap_or_default();
             sts_config.role = arn;
-            if let Ok(region) = env::var("AWS_ASSUME_ROLE_REGION") {
+            if let Ok(region) = env::var("AWS_ROLE_REGION") {
                 sts_config.region = Some(region);
             }
-            if let Ok(session) = env::var("AWS_IAM_ROLE_SESSION_NAME") {
+            if let Ok(session) = env::var("AWS_ROLE_SESSION_NAME") {
                 sts_config.session = Some(session);
             }
-            if let Ok(external_id) = env::var("AWS_ASSUME_ROLE_EXTERNAL_ID") {
+            if let Ok(external_id) = env::var("AWS_ROLE_EXTERNAL_ID") {
                 sts_config.external_id = Some(external_id);
             }
             config.sts_config = Some(sts_config);
         }
+        // aliases are added from linkdefs in StorageClient::new()
         Ok(config)
     }
 

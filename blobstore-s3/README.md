@@ -7,7 +7,7 @@ from different actors configured with different access roles and policies.
 ## Configuration
 
 - The standard variables are used for connecting to AWS services:
-  - `AWS_ACCESS_KEY` (required)
+  - `AWS_ACCESS_KEY_ID` (required)
   - `AWS_SECRET_ACCESS_KEY` (required)
   - `AWS_SESSION_TOKEN` (optional)
   - `AWS_REGION` (optional)
@@ -19,9 +19,9 @@ from different actors configured with different access roles and policies.
 
 - If you intend to use STS Assumed Role authentication, the user or role for the above credentials should have an IAM role that is allowed to AssumeRole
   - `AWS_ROLE_ARN` - (required, if using STS AssumedRole Authentication) the role to assume, of the form  "arn:aws:iam::123456789012:role/example". This is the role that should have allowed policies for S3
-  - `AWS_IAM_ROLE_SESSION_NAME` - (optional) the session name for the assumed role. Default value is blobstore_s3_provider
-  - `AWS_ASSUME_ROLE_REGION` - (optional) the region that will be used for the assumed role (for using S3). Note that `AWS_REGION` is the region used for contacting STS
-  - `AWS_ASSUME_ROLE_EXTERNAL_ID` - (optional) the external id to be associated with the role. This can be used if your auth policy requires a value for externalId
+  - `AWS_ROLE_SESSION_NAME` - (optional) the session name for the assumed role. Default value is blobstore_s3_provider
+  - `AWS_ROLE_REGION` - (optional) the region that will be used for the assumed role (for using S3). Note that `AWS_REGION` is the region used for contacting STS
+  - `AWS_ROLE_EXTERNAL_ID` - (optional) the external id to be associated with the role. This can be used if your auth policy requires a value for externalId
 
 
 ### with 'env' file (actor link definition)
@@ -67,6 +67,19 @@ Note that the field names in the json structure, defined by `StorageConfig` in s
 are different from the environment variable names.
 
 Json settings take precedence over environment variables and 'env' file values.
+
+
+## Aliases
+
+Link definitions can optionally contain bucket name aliases which replace an alias with a different name.
+For example, if the link definition contains the setting "alias_backup=backup.20220101", then for any api
+where the actor saves an object to the bucket "backup", it will actually be stored in the bucket "backup.20220101".
+The use case for this is to allow the actor to hard-code a small number of symbolic names that can be remapped
+by an administrator when linking the actor to this provider. If an alias is defined, it is in effect for all api methods.
+Any use of a bucket name not in the alias map is passed on without change. As a convention, it is recommended
+to use the prefix "alias_" for bucket names within actor code, to clarify to readers that use of an alias is intended;
+however, the prefix is not required.
+
 
 ## Known issues
 

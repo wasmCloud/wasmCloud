@@ -16,6 +16,10 @@ all::
 
 include ../build/makefiles/provider.mk
 
+run:
+	killall wasmcloud_blobstore || true
+	$(MAKE) all push start && sleep 3
+
 ifeq ($(shell nc -zt -w1 127.0.0.1 4222 || echo fail),fail)
 test::
 	@killall --quiet blobstore-s3

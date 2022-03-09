@@ -32,7 +32,7 @@ async fn run_all() {
 
     // initialize provider
     let _prov = test_provider().await;
-    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
     let res = run_selected_spawn!(&opts, health_check, get_set_large,);
     print_test_results(&res);
