@@ -12,8 +12,7 @@ Community projects built with wasmCloud that are certified awesome.
 ## Developer Experience
 | Project | Description | Repository | Author | Link (if applicable) | 
 |---|---|---|---|---|
-| template-wasmcloud | A wasmCloud template configured for ephemeral development environments on Gitpod | [emattiza/template-wasmcloud](https://github.com/emattiza/template-wasmcloud) | [emattiza](https://github.com/emattiza) | [![Open in Gitpod](https://gitpod.io/button/open-in-gitpod.svg)](https://gitpod.io/#https://github.com/emattiza/template-wasmcloud)
- |
+| template-wasmcloud | A wasmCloud template configured for ephemeral development environments on Gitpod | [emattiza/template-wasmcloud](https://github.com/emattiza/template-wasmcloud) | [emattiza](https://github.com/emattiza) | [![Open in Gitpod](https://gitpod.io/button/open-in-gitpod.svg)](https://gitpod.io/#https://github.com/emattiza/template-wasmcloud) |
 
 ## Games
 | Project | Description | Repository | Author | Link (if applicable) | 
