@@ -9,6 +9,12 @@ Community projects built with wasmCloud that are certified awesome.
 | wasmcloud-k8s-demo | An investigation into the developer experience of using wasmcloud in a multi-cloud kubernetes environment | [redbadger/wasmcloud-k8s-demo](https://github.com/redbadger/wasmcloud-k8s-demo) | [redbadger](https://github.com/redbadger) | https://www.youtube.com/watch?v=krbx09oJ2Q8 |
 | rpi-wasmcloud-demo | A demo of a wasmCloud lattice running across an Apple MacBook Pro and 2 x Raspberry Pi 4B | [redbadger/rpi-wasmcloud-demo](https://github.com/redbadger/rpi-wasmcloud-demo) | [redbadger](https://github.com/redbadger) | N/A |
 
+## Developer Experience
+| Project | Description | Repository | Author | Link (if applicable) | 
+|---|---|---|---|---|
+| template-wasmcloud | A wasmCloud template configured for ephemeral development environments on Gitpod | [emattiza/template-wasmcloud](https://github.com/emattiza/template-wasmcloud) | [emattiza](https://github.com/emattiza) | [![Open in Gitpod](https://gitpod.io/button/open-in-gitpod.svg)](https://gitpod.io/#https://github.com/emattiza/template-wasmcloud)
+ |
+
 ## Games
 | Project | Description | Repository | Author | Link (if applicable) | 
 |---|---|---|---|---|
