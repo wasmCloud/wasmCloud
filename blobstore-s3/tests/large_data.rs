@@ -1,5 +1,5 @@
-use log::debug;
 use std::iter::repeat_with;
+use tracing::debug;
 #[allow(unused_imports)]
 use wasmbus_rpc::{
     common::{Context, Message, Transport},
@@ -34,7 +34,7 @@ async fn run_all() {
     let _prov = test_provider().await;
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
-    let res = run_selected_spawn!(&opts, health_check, get_set_large,);
+    let res = run_selected_spawn!(opts, health_check, get_set_large,);
     print_test_results(&res);
 
     let passed = res.iter().filter(|tr| tr.passed).count();
@@ -65,7 +65,7 @@ async fn send_receive<T: Transport + Sync>(
     let ctx = wasmbus_rpc::common::Context::default();
 
     let (arr, _sum) = gen_bytes(len);
-    debug!("sending object {}", len);
+    debug!(%len, "sending object");
     s3.put_object(
         &ctx,
         &PutObjectRequest {

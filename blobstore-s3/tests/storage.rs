@@ -117,7 +117,7 @@ async fn test_list_objects() {
     };
     let objs = s3.list_objects(&ctx, &req).await.expect("list objects");
     assert_eq!(objs.continuation, None);
-    assert_eq!(objs.is_last, true);
+    assert!(objs.is_last);
     assert_eq!(objs.objects.len(), 0);
 
     let object_bytes = b"hello-world!".to_vec();

@@ -15,6 +15,12 @@ use tokio::sync::RwLock;
 use wasmbus_rpc::{core::LinkDefinition, provider::prelude::*};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_ansi(atty::is(atty::Stream::Stderr))
+        .init();
+
     let mut vars: Vec<(String, String)> = std::env::vars().collect();
     vars.sort_by(|v, other| String::cmp(&v.0, &other.0));
     for (var, value) in vars.iter() {

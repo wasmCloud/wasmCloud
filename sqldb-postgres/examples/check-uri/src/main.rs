@@ -3,7 +3,7 @@ use tokio_postgres::NoTls;
 #[tokio::main]
 async fn main() {
     if let Err(e) = run().await {
-        eprintln!("ERROR: {}", e.to_string());
+        eprintln!("ERROR: {}", e);
     }
 }
 
