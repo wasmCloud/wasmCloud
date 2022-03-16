@@ -2,9 +2,10 @@
 //!
 //!
 use std::{collections::HashMap, convert::Infallible, sync::Arc, time::Duration};
-use tokio::sync::RwLock;
 
 use serde::{Deserialize, Serialize};
+use tokio::sync::RwLock;
+use tracing::instrument;
 use wascap::prelude::KeyPair;
 use wasmbus_rpc::anats;
 use wasmbus_rpc::provider::prelude::*;
@@ -120,6 +121,11 @@ impl ConnectionConfig {
 // and returns only when it receives a shutdown message
 //
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_ansi(atty::is(atty::Stream::Stderr))
+        .init();
     let hd = load_host_data()?;
     let mut lp = LatticeControllerProvider::default();
 
@@ -211,6 +217,7 @@ impl ProviderDispatch for LatticeControllerProvider {}
 
 #[async_trait]
 impl ProviderHandler for LatticeControllerProvider {
+    #[instrument(level = "debug", skip(self, ld), fields(actor_id = %ld.actor_id))]
     async fn put_link(&self, ld: &LinkDefinition) -> RpcResult<bool> {
         // Create one client (and nats connection) per actor_id.
         // This allows each actor's linkdef to have its own jwt credentials and/or nats urls.
@@ -231,6 +238,7 @@ impl ProviderHandler for LatticeControllerProvider {
     }
 
     /// Handle notification that a link is dropped
+    #[instrument(level = "debug", skip(self))]
     async fn delete_link(&self, actor_id: &str) {
         let mut connections = self.connections.write().await;
         let _ = connections.remove(actor_id);
@@ -248,6 +256,7 @@ impl ProviderHandler for LatticeControllerProvider {
 /// Handle LatticeController methods
 #[async_trait]
 impl LatticeController for LatticeControllerProvider {
+    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor))]
     async fn set_registry_credentials(
         &self,
         ctx: &Context,
@@ -260,6 +269,7 @@ impl LatticeController for LatticeControllerProvider {
             .map_err(|e| RpcError::Nats(format!("{}", e)))
     }
 
+    #[instrument(level = "debug", skip(self, ctx), fields(actor_id = ?ctx.actor))]
     async fn auction_provider(
         &self,
         ctx: &Context,
@@ -272,6 +282,7 @@ impl LatticeController for LatticeControllerProvider {
             .map_err(|e| RpcError::Nats(format!("{}", e)))
     }
 
+    #[instrument(level = "debug", skip(self, ctx), fields(actor_id = ?ctx.actor))]
     async fn auction_actor(
         &self,
         ctx: &Context,
@@ -284,6 +295,7 @@ impl LatticeController for LatticeControllerProvider {
             .map_err(|e| RpcError::Nats(format!("{}", e)))
     }
 
+    #[instrument(level = "debug", skip(self, ctx), fields(actor_id = ?ctx.actor))]
     async fn get_hosts(&self, ctx: &Context) -> RpcResult<Hosts> {
         self.lookup_client(ctx)
             .await?
@@ -292,6 +304,7 @@ impl LatticeController for LatticeControllerProvider {
             .map_err(|e| RpcError::Nats(format!("{}", e)))
     }
 
+    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, host = %arg.to_string()))]
     async fn get_host_inventory<TS: ToString + ?Sized + std::marker::Sync>(
         &self,
         ctx: &Context,
@@ -304,6 +317,7 @@ impl LatticeController for LatticeControllerProvider {
             .map_err(|e| RpcError::Nats(format!("{}", e)))
     }
 
+    #[instrument(level = "debug", skip(self, ctx), fields(actor_id = ?ctx.actor))]
     async fn get_claims(&self, ctx: &Context) -> RpcResult<GetClaimsResponse> {
         self.lookup_client(ctx)
             .await?
@@ -312,6 +326,7 @@ impl LatticeController for LatticeControllerProvider {
             .map_err(|e| RpcError::Nats(format!("{}", e)))
     }
 
+    #[instrument(level = "debug", skip(self, ctx), fields(actor_id = ?ctx.actor))]
     async fn start_actor(
         &self,
         ctx: &Context,
@@ -329,6 +344,7 @@ impl LatticeController for LatticeControllerProvider {
             .map_err(|e| RpcError::Nats(format!("{}", e)))
     }
 
+    #[instrument(level = "debug", skip(self, ctx), fields(actor_id = ?ctx.actor))]
     async fn scale_actor(
         &self,
         ctx: &Context,
@@ -347,6 +363,7 @@ impl LatticeController for LatticeControllerProvider {
             .map_err(|e| RpcError::Nats(format!("{}", e)))
     }
 
+    #[instrument(level = "debug", skip(self, ctx), fields(actor_id = ?ctx.actor))]
     async fn advertise_link(
         &self,
         ctx: &Context,
@@ -365,6 +382,7 @@ impl LatticeController for LatticeControllerProvider {
             .map_err(|e| RpcError::Nats(format!("{}", e)))
     }
 
+    #[instrument(level = "debug", skip(self, ctx), fields(actor_id = ?ctx.actor))]
     async fn remove_link(
         &self,
         ctx: &Context,
@@ -377,6 +395,7 @@ impl LatticeController for LatticeControllerProvider {
             .map_err(|e| RpcError::Nats(format!("{}", e)))
     }
 
+    #[instrument(level = "debug", skip(self, ctx), fields(actor_id = ?ctx.actor))]
     async fn get_links(&self, ctx: &Context) -> RpcResult<LinkDefinitionList> {
         self.lookup_client(ctx)
             .await?
@@ -385,6 +404,7 @@ impl LatticeController for LatticeControllerProvider {
             .map_err(|e| RpcError::Nats(format!("{}", e)))
     }
 
+    #[instrument(level = "debug", skip(self, ctx), fields(actor_id = ?ctx.actor))]
     async fn update_actor(
         &self,
         ctx: &Context,
@@ -402,6 +422,7 @@ impl LatticeController for LatticeControllerProvider {
             .map_err(|e| RpcError::Nats(format!("{}", e)))
     }
 
+    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, host_id = %arg.host_id, provider_ref = %arg.provider_ref, link_name = %arg.link_name))]
     async fn start_provider(
         &self,
         ctx: &Context,
@@ -420,6 +441,7 @@ impl LatticeController for LatticeControllerProvider {
             .map_err(|e| RpcError::Nats(format!("{}", e)))
     }
 
+    #[instrument(level = "debug", skip(self, ctx), fields(actor_id = ?ctx.actor))]
     async fn stop_provider(
         &self,
         ctx: &Context,
@@ -438,6 +460,7 @@ impl LatticeController for LatticeControllerProvider {
             .map_err(|e| RpcError::Nats(format!("{}", e)))
     }
 
+    #[instrument(level = "debug", skip(self, ctx), fields(actor_id = ?ctx.actor))]
     async fn stop_actor(
         &self,
         ctx: &Context,
@@ -455,6 +478,7 @@ impl LatticeController for LatticeControllerProvider {
             .map_err(|e| RpcError::Nats(format!("{}", e)))
     }
 
+    #[instrument(level = "debug", skip(self, ctx), fields(actor_id = ?ctx.actor))]
     async fn stop_host(&self, ctx: &Context, arg: &StopHostCommand) -> RpcResult<CtlOperationAck> {
         self.lookup_client(ctx)
             .await?

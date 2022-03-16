@@ -1,10 +1,11 @@
 //! Nats implementation for wasmcloud:messaging.
 //!
-
-use log::error;
-use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, convert::Infallible, sync::Arc};
+
+use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
+use tracing::{error, info, instrument};
+use tracing_futures::Instrument;
 use wascap::prelude::KeyPair;
 use wasmbus_rpc::{anats, core::LinkDefinition, provider::prelude::*};
 use wasmcloud_interface_messaging::{
@@ -19,6 +20,11 @@ const ENV_NATS_CLIENT_JWT: &str = "CLIENT_JWT";
 const ENV_NATS_CLIENT_SEED: &str = "CLIENT_SEED";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_ansi(atty::is(atty::Stream::Stderr))
+        .init();
     // handle lattice control messages and forward rpc to the provider dispatch
     // returns when provider receives a shutdown control message
     provider_main(NatsMessagingProvider::default())?;
@@ -137,6 +143,7 @@ impl NatsMessagingProvider {
     }
 
     /// send message to subscriber
+    #[instrument(level = "debug", skip(self, ld, nats_msg), fields(actor_id = %ld.actor_id, subject = %nats_msg.subject, reply_to = ?nats_msg.reply))]
     async fn dispatch_msg(&self, ld: &LinkDefinition, nats_msg: anats::Message) {
         let msg = SubMessage {
             body: nats_msg.data,
@@ -146,10 +153,8 @@ impl NatsMessagingProvider {
         let actor = MessageSubscriberSender::for_actor(ld);
         if let Err(e) = actor.handle_message(&Context::default(), &msg).await {
             error!(
-                "subscription sent to actor:{}, subject:{}, err: {}",
-                &ld.actor_id,
-                msg.subject,
-                e.to_string()
+                error = %e,
+                "Unable to send subscription"
             );
         }
     }
@@ -162,21 +167,26 @@ impl NatsMessagingProvider {
         sub: &str,
         queue: Option<&str>,
     ) -> RpcResult<()> {
-        let sub = match queue {
+        let subscription = match queue {
             Some(queue) => conn.queue_subscribe(sub, queue).await,
             None => conn.subscribe(sub).await,
         }
         .map_err(|e| {
-            error!("subscribing to {}: {}", sub, e);
+            error!(subject = %sub, error = %e, "error subscribing subscribing");
             RpcError::Nats(format!("subscription to {}: {}", sub, e))
         })?;
         let this = self.clone();
         let link_def = ld.clone();
-        let _join_handle = tokio::spawn(async move {
-            while let Some(msg) = sub.next().await {
-                this.dispatch_msg(&link_def, msg).await;
+        let _join_handle = tokio::spawn(
+            async move {
+                while let Some(msg) = subscription.next().await {
+                    this.dispatch_msg(&link_def, msg).await;
+                }
             }
-        });
+            .instrument(
+                tracing::debug_span!("subscription", actor_id = %ld.actor_id, subject = %sub),
+            ),
+        );
         Ok(())
     }
 }
@@ -188,6 +198,7 @@ impl ProviderHandler for NatsMessagingProvider {
     /// Provider should perform any operations needed for a new link,
     /// including setting up per-actor resources, and checking authorization.
     /// If the link is allowed, return true, otherwise return false to deny the link.
+    #[instrument(level = "debug", skip(self, ld), fields(actor_id = %ld.actor_id))]
     async fn put_link(&self, ld: &LinkDefinition) -> RpcResult<bool> {
         let config = ConnectionConfig::new_from(&ld.values)?;
         let conn = self.connect(config, ld).await?;
@@ -199,10 +210,11 @@ impl ProviderHandler for NatsMessagingProvider {
     }
 
     /// Handle notification that a link is dropped: close the connection
+    #[instrument(level = "info", skip(self))]
     async fn delete_link(&self, actor_id: &str) {
         let mut aw = self.actors.write().await;
         if let Some(conn) = aw.remove(actor_id) {
-            log::info!("nats closing connection for actor {}", actor_id);
+            info!("nats closing connection for actor {}", actor_id);
             // close and drop the connection
             let _ = conn.close().await;
         }
@@ -223,6 +235,7 @@ impl ProviderHandler for NatsMessagingProvider {
 /// Handle Messaging methods that interact with redis
 #[async_trait]
 impl Messaging for NatsMessagingProvider {
+    #[instrument(level = "debug", skip(self, ctx, msg), fields(actor_id = ?ctx.actor, subject = %msg.subject, reply_to = ?msg.reply_to, body_len = %msg.body.len()))]
     async fn publish(&self, ctx: &Context, msg: &PubMessage) -> RpcResult<()> {
         let actor_id = ctx
             .actor
@@ -244,6 +257,7 @@ impl Messaging for NatsMessagingProvider {
         Ok(())
     }
 
+    #[instrument(level = "debug", skip(self, ctx, msg), fields(actor_id = ?ctx.actor, subject = %msg.subject))]
     async fn request(&self, ctx: &Context, msg: &RequestMessage) -> RpcResult<ReplyMessage> {
         let actor_id = ctx
             .actor

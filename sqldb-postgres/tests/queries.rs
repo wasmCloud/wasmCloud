@@ -17,7 +17,7 @@ async fn run_all() {
     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
 
     let opts = TestOptions::default();
-    let res = run_selected_spawn!(&opts, health_check, query, flavor_test);
+    let res = run_selected_spawn!(opts, health_check, query, flavor_test);
     print_test_results(&res);
 
     let passed = res.iter().filter(|tr| tr.passed).count();

@@ -17,3 +17,5 @@ pre-otp
 
 # for n00bz using Intellij
 .idea
+
+.vscode/

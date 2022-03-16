@@ -1,5 +1,7 @@
 //! Hashicorp Vault implementation of the wasmcloud KeyValue capability contract wasmcloud:keyvalue
 //!
+use std::collections::HashMap;
+
 use kv_vault_lib::{
     client::Client,
     config::Config,
@@ -10,12 +12,16 @@ use kv_vault_lib::{
     },
     STRING_VALUE_MARKER,
 };
-use log::{debug, info};
-use std::collections::HashMap;
 use tokio::sync::RwLock;
+use tracing::{debug, info, instrument};
 use wasmbus_rpc::provider::prelude::*;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_ansi(atty::is(atty::Stream::Stderr))
+        .init();
     // handle lattice control messages and forward rpc to the provider dispatch
     // returns when provider receives a shutdown control message
     provider_main(KvVaultProvider::default())?;
@@ -41,20 +47,22 @@ impl ProviderHandler for KvVaultProvider {
     /// Provider should perform any operations needed for a new link,
     /// including setting up per-actor resources, and checking authorization.
     /// If the link is allowed, return true, otherwise return false to deny the link.
+    #[instrument(level = "debug", skip(self, ld), fields(actor_id = %ld.actor_id))]
     async fn put_link(&self, ld: &LinkDefinition) -> RpcResult<bool> {
         let config = Config::from_values(&ld.values)?;
         let client = Client::new(config).map_err(to_rpc_err)?;
         let mut update_map = self.actors.write().await;
-        info!("adding link for actor {}", &ld.actor_id);
+        info!("adding link for actor");
         update_map.insert(ld.actor_id.to_string(), RwLock::new(client));
         Ok(true)
     }
 
     /// Handle notification that a link is dropped - close the connection
+    #[instrument(level = "debug", skip(self))]
     async fn delete_link(&self, actor_id: &str) {
         let mut aw = self.actors.write().await;
         if let Some(client) = aw.remove(actor_id) {
-            info!("deleting link for actor {}", actor_id);
+            info!("deleting link for actor");
             drop(client)
         }
     }
@@ -83,6 +91,7 @@ impl KeyValue for KvVaultProvider {
     }
 
     /// Returns true if the store contains the key
+    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, arg = %arg.to_string()))]
     async fn contains<TS: ToString + ?Sized + Sync>(
         &self,
         ctx: &Context,
@@ -95,17 +104,18 @@ impl KeyValue for KvVaultProvider {
     }
 
     /// Deletes a key, returning true if the key was deleted
+    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, arg = %arg.to_string()))]
     async fn del<TS: ToString + ?Sized + Sync>(&self, ctx: &Context, arg: &TS) -> RpcResult<bool> {
         let client = self.get_client(ctx).await?;
 
         match client.delete_latest::<String>(&arg.to_string()).await {
             Ok(_) => Ok(true),
             Err(VaultError::NotFound { namespace, path }) => {
-                debug!("vault del NotFound error ns:{}, path:{}", &namespace, &path);
+                debug!(%namespace, %path, "vault delete NotFound error");
                 Ok(false)
             }
             Err(e) => {
-                debug!("vault del: other error: {}", &e.to_string());
+                debug!(error = %e, "Error while deleting from vault");
                 Err(to_rpc_err(e))
             }
         }
@@ -116,6 +126,7 @@ impl KeyValue for KvVaultProvider {
     /// If it's any other map, the entire map is returned as a serialized json string
     /// If the stored value is a plain string, returns the plain value
     /// All other values are returned as serialized json
+    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, arg = %arg.to_string()))]
     async fn get<TS: ToString + ?Sized + Sync>(
         &self,
         ctx: &Context,
@@ -147,8 +158,8 @@ impl KeyValue for KvVaultProvider {
             }),
             Err(VaultError::NotFound { namespace, path }) => {
                 debug!(
-                    "vault read NotFound error ns:{}, path:{}",
-                    &namespace, &path
+                    %namespace, %path,
+                    "vault read NotFound error"
                 );
                 Ok(GetResponse {
                     exists: false,
@@ -156,7 +167,7 @@ impl KeyValue for KvVaultProvider {
                 })
             }
             Err(e) => {
-                debug!("vault read: other error: {}", &e.to_string());
+                debug!(error = %e, "vault read: other error");
                 Err(to_rpc_err(e))
             }
         }
@@ -193,6 +204,7 @@ impl KeyValue for KvVaultProvider {
 
     /// Sets the value of a key.
     /// expiration times are not supported by this api and should be 0.
+    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.key))]
     async fn set(&self, ctx: &Context, arg: &SetRequest) -> RpcResult<()> {
         use serde_json::Value;
         let client = self.get_client(ctx).await?;
@@ -211,13 +223,13 @@ impl KeyValue for KvVaultProvider {
             }
             Err(VaultError::NotFound { namespace, path }) => {
                 debug!(
-                    "vault set: NotFound error ns:{}, path:{} for list, returning empty results",
-                    &namespace, &path
+                    %namespace, %path,
+                    "write secret returned not found, returning empty results",
                 );
                 Ok(())
             }
             Err(e) => {
-                debug!("vault set: other error: {}", &e.to_string());
+                debug!(error = %e, "vault set: other error");
                 Err(to_rpc_err(e))
             }
         }
@@ -242,6 +254,7 @@ impl KeyValue for KvVaultProvider {
     }
 
     /// returns a list of all secrets at the path
+    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, arg = %arg.to_string()))]
     async fn set_query<TS: ToString + ?Sized + Sync>(
         &self,
         ctx: &Context,
@@ -252,13 +265,13 @@ impl KeyValue for KvVaultProvider {
             Ok(list) => Ok(list),
             Err(VaultError::NotFound { namespace, path }) => {
                 debug!(
-                    "vault list: NotFound error ns:{}, path:{} for list, returning empty results",
-                    &namespace, &path
+                    %namespace, %path,
+                    "list secrets not found, returning empty results",
                 );
                 Ok(Vec::new())
             }
             Err(e) => {
-                debug!("vault list: other error: {}", &e.to_string());
+                debug!(error = %e, "vault list: other error");
                 Err(to_rpc_err(e))
             }
         }

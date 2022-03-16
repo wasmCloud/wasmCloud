@@ -32,16 +32,16 @@
 //! Tokio can manage a thread pool (of OS threads) to be shared
 //! by the all of the server green threads.
 //!
+use std::{convert::Infallible, sync::Arc};
+
 use bytes::Bytes;
 use http::header::HeaderMap;
-#[allow(unused_imports)]
-use log::{debug, error, info, trace, warn};
-use std::{convert::Infallible, sync::Arc};
 use thiserror::Error as ThisError;
 use tokio::{
     sync::{oneshot, RwLock},
     task::JoinHandle,
 };
+use tracing::{error, info, instrument, trace, warn};
 use warp::{path::FullPath, Filter};
 use wasmbus_rpc::{common::Context, core::LinkDefinition, error::RpcError, provider::*};
 use wasmcloud_interface_httpserver::{HttpRequest, HttpResponse, HttpServer, HttpServerSender};
@@ -138,6 +138,7 @@ impl HttpServerCore {
         };
 
         let linkdefs = ld.clone();
+        let actor_id = ld.actor_id.clone();
         let route = warp::any()
             .and(warp::header::headers_cloned())
             .and(warp::method())
@@ -152,13 +153,8 @@ impl HttpServerCore {
                       query: String| {
                     let inner = Arc::clone(&inner);
                     let linkdefs = linkdefs.clone();
+                    tracing::span::Span::current().record("query", &tracing::field::display(&query));
                     async move {
-                        trace!(
-                            "httpserver handling request {} {} q={}",
-                            method.as_str(),
-                            path.as_str(),
-                            &query
-                        );
                         let hmap = convert_request_headers(&headers);
                         let req = HttpRequest {
                             body: body.to_vec(),
@@ -168,9 +164,8 @@ impl HttpServerCore {
                             query_string: query,
                         };
                         trace!(
-                            "httpserver calling actor {}, req: {:?}",
-                            &linkdefs.actor_id,
-                            &req
+                            ?req,
+                            "httpserver calling actor"
                         );
                         let read_guard = inner.read().await;
                         let bridge = read_guard.bridge;
@@ -179,10 +174,8 @@ impl HttpServerCore {
                             Ok(resp) => resp,
                             Err(e) => {
                                 error!(
-                                    "sending HttpRequest to actor ({} {}): {}",
-                                    &method,
-                                    &path.as_str(),
-                                    e
+                                    error = %e,
+                                    "Error sending HttpRequest to actor"
                                 );
                                 HttpResponse {
                                     status_code: http::StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
@@ -195,9 +188,9 @@ impl HttpServerCore {
                             Ok(status_code) => status_code,
                             Err(e) => {
                                 error!(
-                                    "invalid response status code: '{}': {} - changing to 500",
-                                    &response.status_code.to_string(),
-                                    &e.to_string()
+                                    status_code = %response.status_code,
+                                    error = %e,
+                                    "invalid response status code, changing to 500"
                                 );
                                 http::StatusCode::INTERNAL_SERVER_ERROR
                             }
@@ -207,16 +200,23 @@ impl HttpServerCore {
                         Ok::<_, warp::Rejection>(http_response)
                     }
                 },
-            );
+            ).with(warp::trace(move |req_info| {
+                let span = tracing::debug_span!("request", method = %req_info.method(), path = %req_info.path(), query = tracing::field::Empty, %actor_id);
+                if let Some(remote_addr) = req_info.remote_addr() {
+                    span.record("remote_addr", &tracing::field::display(remote_addr));
+                }
+
+                span
+            }));
 
         let addr = {
             let rd = self.inner.read().await;
             rd.settings.address.unwrap()
         };
         info!(
-            "httpserver starting listener on {} for actor {}",
-            &addr.to_string(),
-            &ld.actor_id
+            %addr,
+            actor_id = %ld.actor_id,
+            "httpserver starting listener for actor",
         );
 
         // add Cors configuration, if enabled, and spawn either TlsServer or Server
@@ -235,7 +235,7 @@ impl HttpServerCore {
                 // attempt to bind to the address
                 .bind_with_graceful_shutdown(addr, async move {
                     if let Err(e) = shutdown_rx.await {
-                        error!("shutting down httpserver listener: {}", e);
+                        error!(error = %e, "shutting down httpserver listener");
                     }
                 });
             handle.spawn(async move { fut.await })
@@ -243,7 +243,7 @@ impl HttpServerCore {
             let (_, fut) = server
                 .try_bind_with_graceful_shutdown(addr, async move {
                     if let Err(e) = shutdown_rx.await {
-                        error!("shutting down httpserver listener: {}", e);
+                        error!(error = %e, "shutting down httpserver listener");
                     }
                 })
                 .map_err(|e| {
@@ -260,26 +260,20 @@ impl HttpServerCore {
     }
 
     /// forward HttpRequest to actor.
+    #[instrument(level = "debug", skip(ld, req, bridge), fields(actor_id = %ld.actor_id, path = %req.path))]
     async fn send_actor(
         ld: LinkDefinition,
         req: HttpRequest,
         bridge: &'static HostBridge,
         timeout: std::time::Duration,
     ) -> Result<HttpResponse, RpcError> {
-        trace!(
-            "sending to actor {}: request url path={}",
-            &ld.actor_id,
-            &req.path
-        );
+        trace!("sending request to actor");
         let tx = ProviderTransport::new_with_timeout(&ld, Some(bridge), Some(timeout));
         let ctx = Context::default();
         let actor = HttpServerSender::via(tx);
         match actor.handle_request(&ctx, &req).await {
             Err(RpcError::Timeout(_)) => {
-                error!(
-                    "actor {} req path {} timed out: returning 503",
-                    &ld.actor_id, &req.path,
-                );
+                error!("actor request timed out: returning 503",);
                 Ok(HttpResponse {
                     status_code: 503,
                     ..Default::default()
@@ -287,17 +281,15 @@ impl HttpServerCore {
             }
             Ok(resp) => {
                 trace!(
-                    "http response received from actor {}: code={}",
-                    &ld.actor_id,
-                    &resp.status_code
+                    status_code = %resp.status_code,
+                    "http response received from actor"
                 );
                 Ok(resp)
             }
             Err(e) => {
                 warn!(
-                    "actor {} responded with error {}",
-                    &ld.actor_id,
-                    e.to_string()
+                    error = %e,
+                    "actor responded with error"
                 );
                 Err(e)
             }
@@ -338,9 +330,9 @@ fn convert_response_headers(
             Ok(name) => name,
             Err(e) => {
                 error!(
-                    "invalid response header name: '{}': {} - sending without this header",
-                    &k,
-                    &e.to_string()
+                    header_name = %k,
+                    error = %e,
+                    "invalid response header name, sending without this header"
                 );
                 continue;
             }
@@ -350,9 +342,9 @@ fn convert_response_headers(
                 Ok(value) => value,
                 Err(e) => {
                     error!(
-                        "Non-ascii header value: '{}': {} - skipping this header",
-                        &val,
-                        &e.to_string()
+                        header_value = %val,
+                        error = %e,
+                        "Non-ascii header value, skipping this header"
                     );
                     continue;
                 }

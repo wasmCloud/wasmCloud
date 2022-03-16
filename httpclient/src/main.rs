@@ -2,10 +2,11 @@
 //!
 //! This implementation is multi-threaded and requests from different actors
 //! use different connections and can run in parallel.
-//!
-#[allow(unused_imports)]
-use log::{debug, error, info, trace, warn};
+use std::str::FromStr;
+
 use reqwest::header as http;
+use reqwest::header::HeaderMap as HttpHeaderMap;
+use tracing::{error, instrument, trace, warn};
 use wasmbus_rpc::provider::prelude::*;
 use wasmcloud_interface_httpclient::{HttpClient, HttpClientReceiver, HttpRequest, HttpResponse};
 
@@ -14,6 +15,12 @@ use wasmcloud_interface_httpclient::{HttpClient, HttpClientReceiver, HttpRequest
 // and returns only when it receives a shutdown message
 //
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_ansi(atty::is(atty::Stream::Stderr))
+        .init();
+
     provider_main(HttpClientProvider::default())?;
 
     eprintln!("HttpClient provider exiting");
@@ -38,10 +45,8 @@ impl HttpClient for HttpClientProvider {
     /// error sending the request. If the remote server returned an http
     /// error (status other than 2xx), returns Ok with the status code and
     /// body returned from the remote server.
+    #[instrument(level = "debug", skip(self, _ctx, req), fields(actor_id = ?_ctx.actor, method = %req.method, url = %req.url))]
     async fn request(&self, _ctx: &Context, req: &HttpRequest) -> RpcResult<HttpResponse> {
-        use reqwest::header::HeaderMap as HttpHeaderMap;
-        use std::str::FromStr;
-
         let mut headers: HttpHeaderMap = HttpHeaderMap::default();
         convert_request_headers(&req.headers, &mut headers);
         let body = req.body.to_vec();
@@ -61,10 +66,8 @@ impl HttpClient for HttpClientProvider {
                 // status) and the caller should receive an error
                 // (needs to be tested).
                 error!(
-                    "httpclient network error attempting to send {} to {}: {}",
-                    &req.method,
-                    &req.url,
-                    e.to_string()
+                    error = %e,
+                    "httpclient network error attempting to send"
                 );
                 RpcError::Other(format!("sending request: {}", e))
             })?;
@@ -77,15 +80,13 @@ impl HttpClient for HttpClientProvider {
                 RpcError::Other(format!("receiving response body: {}", e)))?;
         if (200..300).contains(&(status_code as usize)) {
             trace!(
-                "httpclient {} to {}: returned {}",
-                &req.method,
-                &req.url,
-                status_code
+                %status_code,
+                "http request completed",
             );
         } else {
             warn!(
-                "httpclient {} to {}: returned {}",
-                &req.method, &req.url, status_code
+                %status_code,
+                "http request completed with non-200 status"
             );
         }
         Ok(HttpResponse {
@@ -131,9 +132,9 @@ fn convert_request_headers(
             Ok(name) => name,
             Err(e) => {
                 error!(
-                    "invalid response header name: '{}': {} - sending without this header",
-                    &k,
-                    &e.to_string()
+                    error = %e,
+                    header_name = %k,
+                    "invalid response header name, sending without this header"
                 );
                 continue;
             }
@@ -143,9 +144,9 @@ fn convert_request_headers(
                 Ok(value) => value,
                 Err(e) => {
                     error!(
-                        "Non-ascii header value: '{}': {} - skipping this header",
-                        &val,
-                        &e.to_string()
+                        error = %e,
+                        header_value = %val,
+                        "Non-ascii header value, skipping this header",
                     );
                     continue;
                 }

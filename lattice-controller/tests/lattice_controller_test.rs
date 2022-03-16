@@ -11,7 +11,7 @@ use wasmcloud_test_util::{run_selected, run_selected_spawn};
 #[tokio::test]
 async fn run_all() {
     let opts = TestOptions::default();
-    let res = run_selected_spawn!(&opts, health_check);
+    let res = run_selected_spawn!(opts, health_check);
     print_test_results(&res);
 
     let passed = res.iter().filter(|tr| tr.passed).count();

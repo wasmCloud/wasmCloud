@@ -41,7 +41,7 @@ async fn run_all() -> std::result::Result<(), Box<dyn std::error::Error>> {
     // launch the mock actor thread
     let join = mock_echo_actor(NUM_RPC).await;
 
-    let res = run_selected_spawn!(&opts, health_check, send_http, send_http_body, test_timeout);
+    let res = run_selected_spawn!(opts, health_check, send_http, send_http_body, test_timeout);
     print_test_results(&res);
 
     let passed = res.iter().filter(|tr| tr.passed).count();

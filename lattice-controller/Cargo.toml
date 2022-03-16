@@ -5,10 +5,10 @@ edition = "2021"
 
 [dependencies]
 async-trait = "0.1"
+atty = "0.2"
 base64 = "0.13"
 bytes = "1.0"
 futures = "0.3"
-log = "0.4"
 once_cell = "1.8"
 reqwest = "0.11"
 rmp-serde = "1.0.0"
@@ -18,8 +18,10 @@ serde = {version = "1.0", features = ["derive"] }
 thiserror = "1.0"
 tokio = { version = "1", features = ["full"] }
 toml = "0.5"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 wascap = "0.8.0"
-wasmbus-rpc = "0.8.2"
+wasmbus-rpc = "0.8"
 wasmcloud-control-interface = "0.13.0"
 
 # test dependencies

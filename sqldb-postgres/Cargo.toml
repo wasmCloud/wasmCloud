@@ -7,11 +7,11 @@ edition = "2021"
 
 [dependencies]
 async-trait = "0.1"
+atty = "0.2"
 base64 = "0.13"
 bytes = "1.0"
 chrono = "0.4"
 futures = "0.3"
-log = "0.4"
 minicbor = { version = "0.13", features = ["derive", "std", "half"] }
 once_cell = "1.8"
 rmp-serde = "0.15"
@@ -27,6 +27,8 @@ uuid = "0.8"
 #postgres-native-tls = "0.5"
 native-tls = "0.2"
 toml = "0.5"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 wasmcloud-interface-sqldb = "0.5.0"
 wasmbus-rpc = "0.8.2"
 

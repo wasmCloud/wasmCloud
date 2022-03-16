@@ -14,9 +14,10 @@ use aws_sdk_s3::{
     output::{CreateBucketOutput, HeadObjectOutput, ListBucketsOutput},
     types::{ByteStream, SdkError},
 };
-use log::{debug, error, info, warn};
 use std::collections::HashMap;
 use tokio_stream::StreamExt;
+use tracing::{debug, error, instrument, warn};
+use tracing_futures::Instrument;
 use wasmbus_rpc::{core::LinkDefinition, provider::prelude::*};
 
 mod config;
@@ -72,10 +73,7 @@ impl StorageClient {
     ///   will remap them to the real bucket name
     /// The 'alias_' prefix is not required, so this also works as a general redirect capability
     pub(crate) fn unalias<'n, 's: 'n>(&'s self, bucket_or_alias: &'n str) -> &'n str {
-        debug!(
-            "unalias in: {}, aliases: {:?}",
-            bucket_or_alias, &self.aliases
-        );
+        debug!(%bucket_or_alias, aliases = ?self.aliases);
         let name = bucket_or_alias
             .strip_prefix(ALIAS_PREFIX)
             .unwrap_or(bucket_or_alias);
@@ -104,13 +102,14 @@ impl StorageClient {
     /// Perform any cleanup necessary for a link + s3 connection
     pub async fn close(&self) {
         if let Some(ld) = &self.ld {
-            debug!("blobstore-s3 dropping linkdef for {}", ld.actor_id);
+            debug!(actor_id = %ld.actor_id, "blobstore-s3 dropping linkdef");
         }
         // If there were any https clients, caches, or other link-specific data,
         // we would delete those here
     }
 
     /// Retrieves metadata about the object
+    #[instrument(level = "debug", skip(self, _ctx), fields(actor_id = ?_ctx.actor))]
     async fn get_object_metadata(
         &self,
         _ctx: &Context,
@@ -160,6 +159,7 @@ impl StorageClient {
 
     /// Sends bytes to actor in a single rpc message.
     /// If successful, returns number of bytes sent (same as chunk.content_length)
+    #[instrument(level = "debug", skip(self, ctx, chunk), fields(actor_id = ?ctx.actor, object_id = %chunk.object_id, container_id = %self.unalias(&chunk.container_id)))]
     async fn send_chunk(&self, ctx: &Context, mut chunk: Chunk) -> Result<u64, RpcError> {
         chunk.container_id = self.unalias(&chunk.container_id).to_string();
         let ld = self.ld.clone().unwrap();
@@ -169,7 +169,7 @@ impl StorageClient {
                 "sending chunk error: Bucket({}) Object({}) to Actor({}): {}",
                 &chunk.container_id, &chunk.object_id, &ld.actor_id, e
             );
-            error!("{}", &err);
+            error!(error = %e, "sending chunk error");
             Err(RpcError::Rpc(err))
         } else {
             Ok(chunk.bytes.len() as u64)
@@ -179,6 +179,7 @@ impl StorageClient {
     /// send any-size array of bytes to actor via streaming api,
     /// as one or more chunks of length <= MAX_CHUNK_SIZE
     /// Returns total number of bytes sent: (bytes.len())
+    #[instrument(level = "debug", skip(self, ctx, cobj, bytes), fields(actor_id = ?ctx.actor, bucket_id = %self.unalias(&cobj.container_id), object_id = %cobj.object_id))]
     async fn stream_bytes(
         &self,
         ctx: &Context,
@@ -230,37 +231,49 @@ impl StorageClient {
         let ctx = ctx.clone();
         let this = self.clone();
         container_object.container_id = self.unalias(&container_object.container_id).to_string();
-        let _ = tokio::spawn(async move {
-            let mut offset = offset;
-            if !excess.is_empty() {
-                offset += this
-                    .stream_bytes(&ctx, offset, end_range, &container_object, &excess)
-                    .await?;
-                if offset > end_range {
-                    return Ok::<(), RpcError>(());
+        let actor_id = ctx.actor.clone();
+        let excess_len = excess.len();
+        let _ = tokio::spawn(
+            async move {
+                let mut offset = offset;
+                if !excess.is_empty() {
+                    offset += this
+                        .stream_bytes(&ctx, offset, end_range, &container_object, &excess)
+                        .await?;
+                    if offset > end_range {
+                        return Ok::<(), RpcError>(());
+                    }
                 }
-            }
 
-            while let Some(Ok(bytes)) = stream.next().await {
-                if bytes.is_empty() {
-                    warn!("object stream returned zero bytes, quitting stream");
-                    break;
+                while let Some(Ok(bytes)) = stream.next().await {
+                    if bytes.is_empty() {
+                        warn!("object stream returned zero bytes, quitting stream");
+                        break;
+                    }
+                    offset += this
+                        .stream_bytes(&ctx, offset, end_range, &container_object, &bytes)
+                        .await?;
+                    if offset > end_range {
+                        break;
+                    }
                 }
-                offset += this
-                    .stream_bytes(&ctx, offset, end_range, &container_object, &bytes)
-                    .await?;
-                if offset > end_range {
-                    break;
-                }
+                Ok(())
             }
-            Ok(())
-        });
+            .instrument(tracing::debug_span!(
+                "stream_from_s3",
+                ?actor_id,
+                ?excess_len,
+                offset,
+                end_range
+            )),
+        );
     }
 }
 
 #[async_trait]
 impl Blobstore for StorageClient {
     /// Find out whether container exists
+    #[instrument(level = "debug", skip(self, _ctx, arg), fields(actor_id = ?_ctx.actor, bucket_id = %self.unalias(arg)))]
     async fn container_exists(&self, _ctx: &Context, arg: &ContainerId) -> RpcResult<bool> {
         let bucket_id = self.unalias(arg);
         match self.s3_client.head_bucket().bucket(bucket_id).send().await {
@@ -274,20 +287,21 @@ impl Blobstore for StorageClient {
                 ..
             }) => Ok(false),
             Err(e) => {
-                error!("container_exists Bucket({}): error: {}", bucket_id, e);
+                error!(error = %e, "Unable to head bucket");
                 Err(RpcError::Other(e.to_string()))
             }
         }
     }
 
     /// Creates container if it does not exist
+    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, bucket_id = %self.unalias(arg)))]
     async fn create_container(&self, ctx: &Context, arg: &ContainerId) -> RpcResult<()> {
         let bucket_id = self.unalias(arg);
         match self.container_exists(ctx, &bucket_id.to_string()).await {
             Ok(true) => Ok(()),
             _ => {
                 if let Err(msg) = validate_bucket_name(bucket_id) {
-                    error!("invalid bucket name: {}", bucket_id);
+                    error!("invalid bucket name");
                     return Err(RpcError::InvalidParameter(format!(
                         "Invalid bucket name Bucket({}): {}",
                         bucket_id, msg
@@ -301,22 +315,20 @@ impl Blobstore for StorageClient {
                     .await
                 {
                     Ok(CreateBucketOutput { location, .. }) => {
-                        debug!("bucket created in {}", location.unwrap_or_default());
+                        debug!(?location, "bucket created");
                         Ok(())
                     }
                     Err(SdkError::ServiceError { err, .. }) => {
                         error!(
-                            "create_container Bucket({}): {}",
-                            bucket_id,
-                            &err.to_string()
+                            error = %err,
+                            "Got service error",
                         );
                         Err(RpcError::Other(err.to_string()))
                     }
                     Err(e) => {
                         error!(
-                            "create_container Bucket({}) unexpected_error: {}",
-                            bucket_id,
-                            &e.to_string()
+                            error = %e,
+                            "unexpected_error",
                         );
                         Err(RpcError::Other(e.to_string()))
                     }
@@ -325,6 +337,7 @@ impl Blobstore for StorageClient {
         }
     }
 
+    #[instrument(level = "debug", skip(self, _ctx, arg), fields(actor_id = ?_ctx.actor, bucket_id = %self.unalias(arg)))]
     async fn get_container_info(
         &self,
         _ctx: &Context,
@@ -350,6 +363,7 @@ impl Blobstore for StorageClient {
         }
     }
 
+    #[instrument(level = "debug", skip(self, _ctx), fields(actor_id = ?_ctx.actor))]
     async fn list_containers(&self, _ctx: &Context) -> RpcResult<ContainersInfo> {
         match self.s3_client.list_buckets().send().await {
             Ok(ListBucketsOutput {
@@ -364,16 +378,17 @@ impl Blobstore for StorageClient {
                 .collect()),
             Ok(ListBucketsOutput { buckets: None, .. }) => Ok(Vec::new()),
             Err(SdkError::ServiceError { err, .. }) => {
-                error!("list_containers: {}", &err.to_string());
+                error!(error = %err, "Service error");
                 Err(RpcError::Other(err.to_string()))
             }
             Err(e) => {
-                error!("list_containers: unexpected error {}", &e.to_string());
+                error!(error = %e, "unexpected error");
                 Err(RpcError::Other(e.to_string()))
             }
         }
     }
 
+    #[instrument(level = "debug", skip(self, _ctx), fields(actor_id = ?_ctx.actor))]
     async fn remove_containers(
         &self,
         _ctx: &Context,
@@ -392,7 +407,7 @@ impl Blobstore for StorageClient {
                     });
                 }
                 Err(e) => {
-                    error!("remove_containers: unexpected error: {}", &e.to_string());
+                    error!(error = %e, "unexpected error");
                     return Err(RpcError::Other(format!("unexpected error: {}", e)));
                 }
             }
@@ -408,6 +423,7 @@ impl Blobstore for StorageClient {
     }
 
     /// Find out whether object exists
+    #[instrument(level = "debug", skip(self, _ctx, arg), fields(actor_id = ?_ctx.actor, bucket_id = %self.unalias(&arg.container_id), object_id = %arg.object_id))]
     async fn object_exists(&self, _ctx: &Context, arg: &ContainerObject) -> RpcResult<bool> {
         let bucket_id = self.unalias(&arg.container_id);
         match self
@@ -429,8 +445,8 @@ impl Blobstore for StorageClient {
             }) => Ok(false),
             Err(e) => {
                 error!(
-                    "unexpected error for object_exists Bucket({}) Object({}): error: {}",
-                    bucket_id, arg.object_id, e
+                    error = %e,
+                    "unexpected error for object_exists"
                 );
                 Err(RpcError::Other(e.to_string()))
             }
@@ -438,6 +454,7 @@ impl Blobstore for StorageClient {
     }
 
     /// Retrieves metadata about the object
+    #[instrument(level = "debug", skip(self, _ctx, arg), fields(actor_id = ?_ctx.actor, bucket_id = %self.unalias(&arg.container_id), object_id = %arg.object_id))]
     async fn get_object_info(
         &self,
         _ctx: &Context,
@@ -484,6 +501,7 @@ impl Blobstore for StorageClient {
         }
     }
 
+    #[instrument(level = "debug", skip(self, _ctx, arg), fields(actor_id = ?_ctx.actor, bucket_id = %self.unalias(&arg.container_id), max_items = arg.max_items))]
     async fn list_objects(
         &self,
         _ctx: &Context,
@@ -537,12 +555,13 @@ impl Blobstore for StorageClient {
                 })
             }
             Err(e) => {
-                error!("list_objects Bucket({}): {}", bucket_id, &e.to_string(),);
+                error!(error = %e, "unable to list objects");
                 Err(RpcError::Other(e.to_string()))
             }
         }
     }
 
+    #[instrument(level = "debug", skip(self, _ctx, arg), fields(actor_id = ?_ctx.actor, bucket_id = %self.unalias(&arg.container_id)))]
     async fn remove_objects(
         &self,
         _ctx: &Context,
@@ -590,12 +609,17 @@ impl Blobstore for StorageClient {
                 }
             }
             Err(e) => {
-                error!("delete_objects: {}", &e.to_string());
+                error!(error = %e, "Unable to delete objects");
                 Err(RpcError::Other(e.to_string()))
             }
         }
     }
 
+    #[instrument(
+        level = "debug",
+        skip(self, _ctx, arg),
+        fields(actor_id = ?_ctx.actor, bucket_id = %self.unalias(&arg.chunk.container_id), object_id = %arg.chunk.object_id, offset = %arg.chunk.offset, is_last = %arg.chunk.is_last)
+    )]
     async fn put_object(
         &self,
         _ctx: &Context,
@@ -633,10 +657,8 @@ impl Blobstore for StorageClient {
             Ok(_) => Ok(PutObjectResponse::default()),
             Err(e) => {
                 error!(
-                    "put_object: Bucket({}) Object({}): {}",
-                    bucket_id,
-                    &arg.chunk.object_id,
-                    &e.to_string(),
+                    error = %e,
+                    "Error putting object",
                 );
                 Err(RpcError::Other(e.to_string()))
             }
@@ -644,6 +666,7 @@ impl Blobstore for StorageClient {
     }
 
     /// Retrieve object from s3 storage.
+    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, bucket_id = %self.unalias(&arg.container_id), object_id = %arg.object_id, bytes_requested = tracing::field::Empty))]
     async fn get_object(
         &self,
         ctx: &Context,
@@ -665,6 +688,10 @@ impl Blobstore for StorageClient {
             (None, None) => meta.content_length,
             _ => 0,
         };
+        tracing::span::Span::current().record(
+            "bytes_requested",
+            &tracing::field::display(&bytes_requested),
+        );
         if bytes_requested == 0 {
             return Ok(GetObjectResponse {
                 content_length: 0,
@@ -681,6 +708,7 @@ impl Blobstore for StorageClient {
                 error: None,
             });
         }
+
         let get_object_req = self
             .s3_client
             .get_object()
@@ -694,13 +722,14 @@ impl Blobstore for StorageClient {
                     // either the math is wrong above, or we misunderstood the api.
                     // docs say content_length is "Size of the body in bytes"
                     error!(
-                        "requested {} bytes but more bytes {} were returned!",
-                        bytes_requested, len
+                        %len,
+                        "requested {} bytes but more bytes were returned!",
+                        bytes_requested
                     );
                 }
                 let bytes: Vec<u8> = match object_output.body.next().await {
                     Some(Ok(bytes)) => {
-                        debug!("initial chunk len {} received", bytes.len());
+                        debug!(chunk_len = %bytes.len(), "initial chunk received");
                         bytes.to_vec()
                     }
                     None => {
@@ -708,7 +737,7 @@ impl Blobstore for StorageClient {
                         return Err(RpcError::Other("no data received from s3".to_string()));
                     }
                     Some(Err(e)) => {
-                        error!("chunk.try_next returned {}", e.to_string());
+                        error!(error = %e, "chunk.try_next returned error");
                         return Err(RpcError::Other(e.to_string()));
                     }
                 };
@@ -716,11 +745,9 @@ impl Blobstore for StorageClient {
                 let bytes = if (bytes.len() as u64) < bytes_requested
                     || bytes.len() > max_chunk_size as usize
                 {
-                    info!(
-                        "get_object Bucket({}) Object({}) beginning streaming response. Initial \
-                         S3 chunk contains {} bytes out of {}",
-                        bucket_id,
-                        &arg.object_id,
+                    debug!(
+                        chunk_len = %bytes.len(),
+                        "Beginning streaming response. Initial S3 chunk contains {} bytes out of {}",
                         bytes.len(),
                         bytes_requested,
                     );
@@ -749,15 +776,12 @@ impl Blobstore for StorageClient {
                         .await;
                     } else {
                         let msg = format!(
-                            r#"Returning first chunk of {} bytes (out of {}) for 
-                               Bucket({}) Object({}). 
+                            r#"Returning first chunk of {} bytes (out of {}).
                                Remaining chunks will not be sent to ChunkReceiver
                                because linkdef was not initialized. This is most likely due to
                                invoking 'getObject' with an improper configuration for testing."#,
                             bytes.len(),
                             bytes_requested,
-                            bucket_id,
-                            &arg.object_id,
                         );
                         error!("{}", &msg);
                     }
@@ -784,10 +808,8 @@ impl Blobstore for StorageClient {
             }
             Err(e) => {
                 error!(
-                    "get_object Bucket({}) Object({}): {}",
-                    bucket_id,
-                    &arg.object_id,
-                    &e.to_string()
+                    error = %e,
+                    "Error when getting object"
                 );
                 Err(RpcError::Other(e.to_string()))
             }

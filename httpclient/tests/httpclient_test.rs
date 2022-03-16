@@ -15,7 +15,7 @@ async fn run_all() {
     let _prov = test_provider().await;
     let opts = TestOptions::default();
 
-    let res = run_selected_spawn!(&opts, health_check, get_request,);
+    let res = run_selected_spawn!(opts, health_check, get_request,);
     print_test_results(&res);
 
     let passed = res.iter().filter(|tr| tr.passed).count();

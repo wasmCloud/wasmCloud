@@ -1,13 +1,20 @@
 //! Http Server implementation for wasmcloud:httpserver
 //!
 //!
-use async_trait::async_trait;
 use std::{collections::HashMap, convert::Infallible, sync::Arc};
+
+use async_trait::async_trait;
 use tokio::sync::RwLock;
 use wasmbus_rpc::{core::LinkDefinition, error::RpcError, provider::prelude::*};
 use wasmcloud_provider_httpserver::{load_settings, HttpServerCore};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_ansi(atty::is(atty::Stream::Stderr))
+        .init();
+
     // handle lattice control messages and forward rpc to the provider dispatch
     // returns when provider receives a shutdown control message
     provider_main(HttpServerProvider::default())?;
@@ -56,7 +63,7 @@ impl ProviderHandler for HttpServerProvider {
     async fn delete_link(&self, actor_id: &str) {
         let mut aw = self.actors.write().await;
         if let Some(server) = aw.remove(actor_id) {
-            log::info!("httpserver stopping listener for actor {}", actor_id);
+            tracing::info!(%actor_id, "httpserver stopping listener for actor");
             server.begin_shutdown().await;
         }
     }

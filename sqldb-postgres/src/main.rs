@@ -3,12 +3,11 @@
 //! Enables actors to access postgres back-end database through the
 //! 'wasmcloud:sqldb' capability.
 //!
+use std::{collections::HashMap, convert::Infallible, sync::Arc};
 
 use bb8_postgres::tokio_postgres::NoTls;
-#[allow(unused_imports)]
-use log::{debug, error, info, trace};
-use std::{collections::HashMap, convert::Infallible, sync::Arc};
 use tokio::sync::RwLock;
+use tracing::{error, instrument};
 use wasmbus_rpc::provider::prelude::*;
 use wasmcloud_interface_sqldb::{
     Column, ExecuteResult, QueryResult, SqlDb, SqlDbReceiver, Statement,
@@ -25,6 +24,11 @@ mod types;
 // and returns only when it receives a shutdown message
 //
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_ansi(atty::is(atty::Stream::Stderr))
+        .init();
     provider_main(SqlDbProvider::default())?;
 
     eprintln!("sqldb provider exiting");
@@ -51,6 +55,7 @@ impl ProviderHandler for SqlDbProvider {
     /// Provider should perform any operations needed for a new link,
     /// including setting up per-actor resources, and checking authorization.
     /// If the link is allowed, return true, otherwise return false to deny the link.
+    #[instrument(level = "debug", skip(self), fields(actor_id = %ld.actor_id))]
     async fn put_link(&self, ld: &LinkDefinition) -> RpcResult<bool> {
         let config = config::load_config(ld)?;
         let pool = config::create_pool(config).await?;
@@ -60,6 +65,7 @@ impl ProviderHandler for SqlDbProvider {
     }
 
     /// Handle notification that a link is dropped - close the connection
+    #[instrument(level = "debug", skip(self))]
     async fn delete_link(&self, actor_id: &str) {
         let mut aw = self.actors.write().await;
         if let Some(conn) = aw.remove(actor_id) {
@@ -92,6 +98,7 @@ fn actor_id(ctx: &Context) -> Result<&String, RpcError> {
 /// wasmbus.providerReceive
 #[async_trait]
 impl SqlDb for SqlDbProvider {
+    #[instrument(level = "debug", skip(self, ctx, stmt), fields(actor_id = ?ctx.actor))]
     async fn execute(&self, ctx: &Context, stmt: &Statement) -> RpcResult<ExecuteResult> {
         let actor_id = actor_id(ctx)?;
         let rd = self.actors.read().await;
@@ -114,10 +121,9 @@ impl SqlDb for SqlDbProvider {
             }),
             Err(db_err) => {
                 error!(
-                    "{} stmt:'{:?}' error:{}",
-                    actor_id,
-                    stmt,
-                    &db_err.to_string()
+                    statement = ?stmt,
+                    error = %db_err,
+                    "Error executing statement"
                 );
                 Ok(ExecuteResult {
                     error: Some(DbError::from(db_err).into()),
@@ -128,6 +134,7 @@ impl SqlDb for SqlDbProvider {
     }
 
     /// perform select query on database, returning all result rows
+    #[instrument(level = "debug", skip(self, ctx, stmt), fields(actor_id = ?ctx.actor))]
     async fn query(&self, ctx: &Context, stmt: &Statement) -> RpcResult<QueryResult> {
         let actor_id = actor_id(ctx)?;
         let rd = self.actors.read().await;
@@ -177,10 +184,9 @@ impl SqlDb for SqlDbProvider {
             }
             Err(db_err) => {
                 error!(
-                    "{} query:'{:?}' error:{}",
-                    actor_id,
-                    stmt,
-                    &db_err.to_string()
+                    statement = ?stmt,
+                    error = %db_err,
+                    "Error executing query"
                 );
                 Ok(QueryResult {
                     error: Some(DbError::from(db_err).into()),

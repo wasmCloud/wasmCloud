@@ -8,9 +8,11 @@
 //! on the [exec](#exec) function for more information.
 //!
 //!
-use redis::{aio::Connection, FromRedisValue, RedisError};
 use std::{collections::HashMap, convert::Infallible, ops::DerefMut, sync::Arc};
+
+use redis::{aio::Connection, FromRedisValue, RedisError};
 use tokio::sync::RwLock;
+use tracing::{info, instrument};
 use wasmbus_rpc::provider::prelude::*;
 use wasmcloud_interface_keyvalue::{
     GetResponse, IncrementRequest, KeyValue, KeyValueReceiver, ListAddRequest, ListDelRequest,
@@ -21,6 +23,11 @@ const REDIS_URL_KEY: &str = "URL";
 const DEFAULT_CONNECT_URL: &str = "redis://0.0.0.0:6379/";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_ansi(atty::is(atty::Stream::Stderr))
+        .init();
     // handle lattice control messages and forward rpc to the provider dispatch
     // returns when provider receives a shutdown control message
     provider_main(KvRedisProvider::default())?;
@@ -46,6 +53,7 @@ impl ProviderHandler for KvRedisProvider {
     /// Provider should perform any operations needed for a new link,
     /// including setting up per-actor resources, and checking authorization.
     /// If the link is allowed, return true, otherwise return false to deny the link.
+    #[instrument(level = "debug", skip(self, ld), fields(actor_id = %ld.actor_id))]
     async fn put_link(&self, ld: &LinkDefinition) -> RpcResult<bool> {
         let redis_url = match ld.values.get(REDIS_URL_KEY) {
             Some(v) => v.as_str(),
@@ -65,10 +73,11 @@ impl ProviderHandler for KvRedisProvider {
     }
 
     /// Handle notification that a link is dropped - close the connection
+    #[instrument(level = "info", skip(self))]
     async fn delete_link(&self, actor_id: &str) {
         let mut aw = self.actors.write().await;
         if let Some(conn) = aw.remove(actor_id) {
-            log::info!("redis closing connection for actor {}", actor_id);
+            info!("redis closing connection for actor {}", actor_id);
             drop(conn)
         }
     }
@@ -107,6 +116,7 @@ fn to_rpc_err(e: RedisError) -> RpcError {
 #[async_trait]
 impl KeyValue for KvRedisProvider {
     /// Increments a numeric value, returning the new value
+    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.key))]
     async fn increment(&self, ctx: &Context, arg: &IncrementRequest) -> RpcResult<i32> {
         let mut cmd = redis::Cmd::incr(&arg.key, &arg.value);
         let val: i32 = self.exec(ctx, &mut cmd).await?;
@@ -114,6 +124,7 @@ impl KeyValue for KvRedisProvider {
     }
 
     /// Returns true if the store contains the key
+    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.to_string()))]
     async fn contains<TS: ToString + ?Sized + Sync>(
         &self,
         ctx: &Context,
@@ -125,6 +136,7 @@ impl KeyValue for KvRedisProvider {
     }
 
     /// Deletes a key, returning true if the key was deleted
+    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.to_string()))]
     async fn del<TS: ToString + ?Sized + Sync>(&self, ctx: &Context, arg: &TS) -> RpcResult<bool> {
         let mut cmd = redis::Cmd::del(arg.to_string());
         let val: i32 = self.exec(ctx, &mut cmd).await?;
@@ -134,6 +146,7 @@ impl KeyValue for KvRedisProvider {
     /// Gets a value for a specified key. If the key exists,
     /// the return structure contains exists: true and the value,
     /// otherwise the return structure contains exists == false.
+    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.to_string()))]
     async fn get<TS: ToString + ?Sized + Sync>(
         &self,
         ctx: &Context,
@@ -155,6 +168,7 @@ impl KeyValue for KvRedisProvider {
     }
 
     /// Append a value onto the end of a list. Returns the new list size
+    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.list_name))]
     async fn list_add(&self, ctx: &Context, arg: &ListAddRequest) -> RpcResult<u32> {
         let mut cmd = redis::Cmd::rpush(&arg.list_name, &arg.value);
         let val: u32 = self.exec(ctx, &mut cmd).await?;
@@ -164,6 +178,7 @@ impl KeyValue for KvRedisProvider {
     /// Deletes a list and its contents
     /// input: list name
     /// returns: true if the list existed and was deleted
+    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.to_string()))]
     async fn list_clear<TS: ToString + ?Sized + Sync>(
         &self,
         ctx: &Context,
@@ -173,6 +188,7 @@ impl KeyValue for KvRedisProvider {
     }
 
     /// Deletes an item from a list. Returns true if the item was removed.
+    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.list_name))]
     async fn list_del(&self, ctx: &Context, arg: &ListDelRequest) -> RpcResult<bool> {
         let mut cmd = redis::Cmd::lrem(&arg.list_name, 1, &arg.value);
         let val: u32 = self.exec(ctx, &mut cmd).await?;
@@ -183,6 +199,7 @@ impl KeyValue for KvRedisProvider {
     /// Start and end values are inclusive, for example, (0,10) returns
     /// 11 items if the list contains at least 11 items. If the stop value
     /// is beyond the end of the list, it is treated as the end of the list.
+    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.list_name))]
     async fn list_range(&self, ctx: &Context, arg: &ListRangeRequest) -> RpcResult<StringList> {
         let mut cmd = redis::Cmd::lrange(&arg.list_name, arg.start as isize, arg.stop as isize);
         let val: StringList = self.exec(ctx, &mut cmd).await?;
@@ -192,6 +209,7 @@ impl KeyValue for KvRedisProvider {
     /// Sets the value of a key.
     /// expires is an optional number of seconds before the value should be automatically deleted,
     /// or 0 for no expiration.
+    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.key))]
     async fn set(&self, ctx: &Context, arg: &SetRequest) -> RpcResult<()> {
         let mut cmd = redis::Cmd::set(&arg.key, &arg.value);
         let _value: Option<String> = self.exec(ctx, &mut cmd).await?;
@@ -199,6 +217,7 @@ impl KeyValue for KvRedisProvider {
     }
 
     /// Add an item into a set. Returns number of items added
+    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.set_name))]
     async fn set_add(&self, ctx: &Context, arg: &SetAddRequest) -> RpcResult<u32> {
         let mut cmd = redis::Cmd::sadd(&arg.set_name, &arg.value);
         let value: u32 = self.exec(ctx, &mut cmd).await?;
@@ -206,6 +225,7 @@ impl KeyValue for KvRedisProvider {
     }
 
     /// Remove a item from the set. Returns
+    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.set_name))]
     async fn set_del(&self, ctx: &Context, arg: &SetDelRequest) -> RpcResult<u32> {
         let mut cmd = redis::Cmd::srem(&arg.set_name, &arg.value);
         let value: u32 = self.exec(ctx, &mut cmd).await?;
@@ -215,6 +235,7 @@ impl KeyValue for KvRedisProvider {
     /// Deletes a set and its contents
     /// input: set name
     /// returns: true if the set existed and was deleted
+    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.to_string()))]
     async fn set_clear<TS: ToString + ?Sized + Sync>(
         &self,
         ctx: &Context,
@@ -223,6 +244,7 @@ impl KeyValue for KvRedisProvider {
         self.del(ctx, arg).await
     }
 
+    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, keys = ?arg))]
     async fn set_intersection(
         &self,
         ctx: &Context,
@@ -233,6 +255,7 @@ impl KeyValue for KvRedisProvider {
         Ok(value)
     }
 
+    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.to_string()))]
     async fn set_query<TS: ToString + ?Sized + Sync>(
         &self,
         ctx: &Context,
@@ -243,6 +266,7 @@ impl KeyValue for KvRedisProvider {
         Ok(values)
     }
 
+    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, keys = ?arg))]
     async fn set_union(&self, ctx: &Context, arg: &StringList) -> RpcResult<StringList> {
         let mut cmd = redis::Cmd::sunion(arg);
         let values: Vec<String> = self.exec(ctx, &mut cmd).await?;
