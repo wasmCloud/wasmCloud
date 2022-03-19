@@ -130,7 +130,7 @@ pub(crate) fn convert_error(e: Box<dyn ::std::error::Error + Send + Sync>) -> an
 pub(crate) fn labels_vec_to_hashmap(constraints: Vec<String>) -> Result<HashMap<String, String>> {
     let mut hm: HashMap<String, String> = HashMap::new();
     for constraint in constraints {
-        let key_value = constraint.split('=').collect::<Vec<_>>();
+        let key_value = constraint.splitn(2, '=').collect::<Vec<_>>();
         if key_value.len() < 2 {
             bail!(
                 "Constraints were not properly formatted. Ensure they are formatted as label=value",
