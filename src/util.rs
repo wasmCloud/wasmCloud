@@ -316,3 +316,19 @@ pub(crate) fn set_permissions_keys(path: &Path) -> Result<()> {
 pub(crate) fn set_permissions_keys(path: &Path) -> Result<()> {
     Ok(())
 }
+
+mod test {
+    use super::labels_vec_to_hashmap;
+    use std::collections::HashMap;
+    #[test]
+    fn test_safe_base64_parse_option() {
+        let base64_option = "config_b64=eyJhZGRyZXNzIjogIjAuMC4wLjA6ODA4MCJ9Cg==".to_string();
+        let mut expected = HashMap::new();
+        expected.insert(
+            "config_b64".to_string(),
+            "eyJhZGRyZXNzIjogIjAuMC4wLjA6ODA4MCJ9Cg==".to_string(),
+        );
+        let output = labels_vec_to_hashmap(vec![base64_option]).unwrap();
+        assert_eq!(expected, output);
+    }
+}
