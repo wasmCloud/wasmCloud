@@ -130,13 +130,14 @@ pub(crate) fn convert_error(e: Box<dyn ::std::error::Error + Send + Sync>) -> an
 pub(crate) fn labels_vec_to_hashmap(constraints: Vec<String>) -> Result<HashMap<String, String>> {
     let mut hm: HashMap<String, String> = HashMap::new();
     for constraint in constraints {
-        let key_value = constraint.split('=').collect::<Vec<_>>();
-        if key_value.len() < 2 {
-            bail!(
-                "Constraints were not properly formatted. Ensure they are formatted as label=value",
-            );
-        }
-        hm.insert(key_value[0].to_string(), key_value[1].to_string()); // [0] key, [1] value
+        match constraint.split_once('=') {
+            Some((key, value)) => {
+                hm.insert(key.to_string(), value.to_string());
+            }
+            None => {
+                bail!("Constraints were not properly formatted. Ensure they are formatted as label=value")
+            }
+        };
     }
     Ok(hm)
 }
@@ -315,4 +316,20 @@ pub(crate) fn set_permissions_keys(path: &Path) -> Result<()> {
 #[cfg(target_os = "windows")]
 pub(crate) fn set_permissions_keys(path: &Path) -> Result<()> {
     Ok(())
+}
+
+mod test {
+    use super::labels_vec_to_hashmap;
+    use std::collections::HashMap;
+    #[test]
+    fn test_safe_base64_parse_option() {
+        let base64_option = "config_b64=eyJhZGRyZXNzIjogIjAuMC4wLjA6ODA4MCJ9Cg==".to_string();
+        let mut expected = HashMap::new();
+        expected.insert(
+            "config_b64".to_string(),
+            "eyJhZGRyZXNzIjogIjAuMC4wLjA6ODA4MCJ9Cg==".to_string(),
+        );
+        let output = labels_vec_to_hashmap(vec![base64_option]).unwrap();
+        assert_eq!(expected, output);
+    }
 }
