@@ -9,7 +9,6 @@ mod timestamp;
 pub use timestamp::Timestamp;
 
 mod actor_wasm;
-pub mod channel_log;
 pub mod common;
 pub mod provider;
 pub(crate) mod provider_main;

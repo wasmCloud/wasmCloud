@@ -17,20 +17,23 @@
 //
 // I will always be chunkified ...
 
-use crate::{
-    error::{RpcError, RpcResult},
-    provider_main::get_host_bridge,
+use std::{
+    collections::HashMap,
+    io::Read,
+    sync::{Arc, RwLock},
 };
-use log::{debug, error};
+
 use nats::{
     jetstream::JetStream,
     object_store::{Config, ObjectStore},
     JetStreamOptions,
 };
 use once_cell::sync::OnceCell;
-use std::{
-    collections::HashMap,
-    sync::{Arc, RwLock},
+use tracing::{debug, error, instrument};
+
+use crate::{
+    error::{RpcError, RpcResult},
+    provider_main::get_host_bridge,
 };
 
 /// Maximum size of a message payload before it will be chunked
@@ -72,12 +75,11 @@ impl ChunkEndpoint {
     }
 
     /// load the message after de-chunking
+    #[instrument(level = "trace", skip(self))]
     pub fn get_unchunkified(&self, inv_id: &str) -> RpcResult<Vec<u8>> {
-        use std::io::Read as _;
-
         let mut result = Vec::new();
         let store = self.create_or_reuse_store()?;
-        debug!("chunkify starting to receive: '{}'", inv_id,);
+        debug!(invocation_id = %inv_id, "chunkify starting to receive");
         let mut obj = store.get(inv_id).map_err(|e| {
             RpcError::Nats(format!(
                 "error starting to receive chunked stream for inv {}:{}",
@@ -94,7 +96,7 @@ impl ChunkEndpoint {
         if let Err(e) = store.delete(inv_id) {
             // not deleting will be a non-fatal error for the receiver,
             // if all the bytes have been received
-            error!("deleting chunks for inv {}: {}", inv_id, e);
+            error!(invocation_id = %inv_id, error = %e, "deleting chunks for inv");
         }
         Ok(result)
     }
@@ -106,17 +108,14 @@ impl ChunkEndpoint {
     }
 
     /// chunkify a message
-    pub fn chunkify(&self, inv_id: &str, bytes: &mut impl std::io::Read) -> RpcResult<()> {
+    #[instrument(level = "trace", skip(self, bytes))]
+    pub fn chunkify(&self, inv_id: &str, bytes: &mut impl Read) -> RpcResult<()> {
         let store = self.create_or_reuse_store()?;
-        debug!("chunkify starting to send: '{}'", inv_id,);
+        debug!(invocation_id = %inv_id, "chunkify starting to send");
         let info = store
             .put(inv_id, bytes)
             .map_err(|e| RpcError::Nats(format!("writing chunkified for {}: {}", inv_id, e)))?;
-        // try getting info to confirm it's been written
-        //let _info2 = store
-        //    .info(inv_id)
-        //    .map_err(|e| RpcError::Nats(format!("couldn't read info for {}", inv_id)))?;
-        debug!("chunkify completed writing: '{}': {:?}", inv_id, info);
+        debug!(?info, invocation_id = %inv_id, "chunkify completed writing");
 
         Ok(())
     }

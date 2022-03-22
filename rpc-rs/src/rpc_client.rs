@@ -1,20 +1,22 @@
 #![cfg(not(target_arch = "wasm32"))]
 
+use std::{
+    convert::{TryFrom, TryInto},
+    sync::Arc,
+    time::Duration,
+};
+
+use ring::digest::{Context, SHA256};
+use serde::{de::DeserializeOwned, Serialize};
+use serde_json::Value as JsonValue;
+use tracing::{debug, error, instrument, trace};
+
 #[cfg(all(feature = "chunkify", not(target_arch = "wasm32")))]
 use crate::chunkify::chunkify_endpoint;
 use crate::{
     common::Message,
     core::{Invocation, InvocationResponse, WasmCloudEntity},
     error::{RpcError, RpcResult},
-};
-use log::{debug, error, trace};
-use ring::digest::{Context, SHA256};
-use serde::{de::DeserializeOwned, Serialize};
-use serde_json::Value as JsonValue;
-use std::{
-    convert::{TryFrom, TryInto},
-    sync::Arc,
-    time::Duration,
 };
 
 pub(crate) const DEFAULT_RPC_TIMEOUT_MILLIS: Duration = Duration::from_millis(2000);
@@ -228,6 +230,7 @@ impl RpcClient {
     }
 
     /// request or publish an rpc invocation
+    #[instrument(level = "debug", skip(self, origin, target, message), fields(issuer = tracing::field::Empty, origin_url = tracing::field::Empty, subject = tracing::field::Empty, target_url = tracing::field::Empty, method = tracing::field::Empty))]
     async fn inner_rpc<Target>(
         &self,
         origin: WasmCloudEntity,
@@ -243,8 +246,19 @@ impl RpcClient {
         let origin_url = origin.url();
         let subject = make_uuid();
         let issuer = &self.key.public_key();
-        let target_url = format!("{}/{}", target.url(), &message.method);
-        debug!("rpc_client sending to {}", &target_url);
+        let raw_target_url = target.url();
+        let target_url = format!("{}/{}", raw_target_url, &message.method);
+
+        // Record all of the fields on the span. To avoid extra allocations, we are only going to
+        // record here after we generate/derive the values
+        let current_span = tracing::span::Span::current();
+        current_span.record("issuer", &tracing::field::display(issuer));
+        current_span.record("origin_url", &tracing::field::display(&origin_url));
+        current_span.record("subject", &tracing::field::display(&subject));
+        current_span.record("target_url", &tracing::field::display(&raw_target_url));
+        current_span.record("method", &tracing::field::display(message.method));
+
+        debug!("rpc_client sending");
         let claims = wascap::prelude::Claims::<wascap::prelude::Invocation>::new(
             issuer.clone(),
             subject.clone(),
@@ -290,7 +304,7 @@ impl RpcClient {
         #[cfg(all(feature = "chunkify", not(target_arch = "wasm32")))]
         if let Some(body) = body {
             let inv_id = invocation.id.clone();
-            debug!("chunkifying inv {} size {}", &inv_id, len);
+            debug!(invocation_id = %inv_id, %len, "chunkifying invocation");
             // start chunking thread
             let lattice = self.lattice_prefix().to_string();
             tokio::task::spawn_blocking(move || {
@@ -311,7 +325,7 @@ impl RpcClient {
         } else {
             timeout
         };
-        trace!("rpc send {}", &target_url);
+        trace!("rpc send");
 
         if expect_response {
             let payload = if let Some(timeout) = timeout {
@@ -323,7 +337,7 @@ impl RpcClient {
                         target_url, rpc_err
                     ))),
                     Err(timeout_err) => {
-                        error!("rpc timeout: sending to {}: {}", &target_url, timeout_err);
+                        error!(error = %timeout_err, "rpc timeout: sending to target");
                         Err(RpcError::Timeout(format!(
                             "sending to {}: {}",
                             &target_url, timeout_err
@@ -360,12 +374,12 @@ impl RpcClient {
                     };
                     #[cfg(not(feature = "chunkify"))]
                     let msg = inv_response.msg;
-                    trace!("rpc ok response from {}", &target_url);
+                    trace!("rpc ok response");
                     Ok(msg)
                 }
                 Some(err) => {
                     // if error is Some(_), we must ignore the msg field
-                    error!("rpc error response from {}: {}", &target_url, &err);
+                    error!(error = %err, "rpc error response");
                     Err(RpcError::Rpc(err))
                 }
             }

@@ -4,7 +4,8 @@
 const THREE_SEC: Duration = Duration::from_secs(3);
 
 use std::{str::FromStr as _, time::Duration};
-use log::debug;
+
+use tracing::debug;
 use wasmbus_rpc::{
     error::{RpcError, RpcResult},
     rpc_client::RpcClient,
@@ -274,7 +275,6 @@ async fn queue_sub() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(v3, SINGLE_TOTAL as u64, "no overlap between queues");
     Ok(())
 }
-
 
 async fn wait_for<O, F: futures::Future<Output = O>>(
     f: F,

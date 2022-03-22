@@ -1,5 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
+use std::str::FromStr;
+
 use crate::{
     core::HostData,
     error::RpcError,
@@ -7,6 +9,7 @@ use crate::{
     rpc_client::NatsClientType,
 };
 use once_cell::sync::OnceCell;
+use tracing_subscriber::EnvFilter;
 
 /// singleton host bridge for communicating with the host.
 static BRIDGE: OnceCell<HostBridge> = OnceCell::new();
@@ -70,17 +73,21 @@ pub async fn provider_run<P>(
 where
     P: ProviderDispatch + Send + Sync + Clone + 'static,
 {
-    use std::str::FromStr as _;
-
-    // initialize logger
-    match crate::channel_log::init_logger() {
-        Ok(log_rx) => crate::channel_log::init_receiver(log_rx),
-        // TODO(thomastaylor312): This is brittle, but the init_logger function is public and this
-        // is a bug fix. For the next major release, we should create an enum return type
-        Err(e) if e.contains("logger init error") => {
-            eprintln!("Logger was already created by provider, skipping receiver initialization");
+    let filter = match EnvFilter::try_from_default_env() {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("RUST_LOG was not set or the given directive was invalid: {:?}\nDefaulting logger to `info` level", e);
+            EnvFilter::default().add_directive(tracing_subscriber::filter::LevelFilter::INFO.into())
         }
-        Err(e) => return Err(e.into()),
+    };
+
+    if let Err(e) = tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_env_filter(filter)
+        .with_ansi(atty::is(atty::Stream::Stderr))
+        .try_init()
+    {
+        eprintln!("Logger was already created by provider, continuing: {}", e);
     }
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
@@ -167,10 +174,6 @@ where
     // close chunkifiers
     #[cfg(all(feature = "chunkify", not(target_arch = "wasm32")))]
     crate::chunkify::shutdown();
-
-    // stop the logger thread
-    //let _ = stop_log_thread.send(());
-    crate::channel_log::stop_receiver();
 
     Ok(())
 }
