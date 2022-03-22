@@ -1,6 +1,6 @@
 [package]
 name = "weld-codegen"
-version = "0.4.2"
+version = "0.4.3"
 edition = "2021"
 authors = [ "wasmcloud Team" ]
 license = "Apache-2.0"
@@ -18,12 +18,14 @@ BigInteger = []
 BigDecimal = []
 
 [dependencies]
+anyhow = "1.0"
 atelier_assembler = "0.1"
 atelier_core = "0.2"
 atelier_json = "0.2"
 atelier_smithy = "0.2"
 bytes = "1.0"
 cfg-if = "1.0"
+clap = { version = "3.1", features = [ "derive" ] }
 directories = "4.0"
 downloader = { version = "0.2", features = ["rustls-tls"], default-features = false }
 handlebars = "4.0"
@@ -47,3 +49,7 @@ path = "src/lib.rs"
 [[bin]]
 name = "codegen"
 path = "bin/gen.rs"
+
+[[bin]]
+name = "dump-smithy-model"
+path = "bin/dump-smithy-model.rs"

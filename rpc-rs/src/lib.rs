@@ -16,8 +16,12 @@ mod wasmbus_model;
 pub mod model {
     // re-export model lib as "model"
     pub use crate::wasmbus_model::*;
+
+    // declare unit type
+    pub type Unit = ();
 }
 pub mod cbor;
+pub(crate) mod document;
 pub mod error;
 
 // re-export nats-aflowt

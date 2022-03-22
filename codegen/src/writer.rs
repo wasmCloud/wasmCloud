@@ -15,6 +15,16 @@ impl Writer {
     pub fn take(&mut self) -> BytesMut {
         self.writer.split_to(self.writer.len())
     }
+
+    /// Returns current position
+    pub fn pos(&self) -> usize {
+        self.writer.len()
+    }
+
+    /// Returns slice from writer
+    pub fn get_slice(&self, start_pos: usize, end_pos: usize) -> &[u8] {
+        &self.writer[start_pos..end_pos]
+    }
 }
 
 pub trait ToBytes {

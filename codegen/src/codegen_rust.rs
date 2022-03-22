@@ -34,13 +34,17 @@ use atelier_core::{
         TRAIT_DOCUMENTATION, TRAIT_TRAIT, TRAIT_UNSTABLE,
     },
 };
-use std::{collections::HashMap, path::Path, str::FromStr, string::ToString};
+use std::{
+    collections::{BTreeMap, HashMap},
+    path::Path,
+    str::FromStr,
+    string::ToString,
+};
 
 const WASMBUS_RPC_CRATE: &str = "wasmbus_rpc";
 const DEFAULT_MAP_TYPE: &str = "std::collections::HashMap";
 const DEFAULT_LIST_TYPE: &str = "Vec";
 const DEFAULT_SET_TYPE: &str = "std::collections::BTreeSet";
-const DEFAULT_DOCUMENT_TYPE: &str = "Vec<u8>";
 
 /// declarations for sorting. First sort key is the type (simple, then map, then struct).
 /// In rust, sorting by BytesMut as the second key will result in sort by item name.
@@ -55,6 +59,7 @@ pub struct RustCodeGen<'model> {
     pub(crate) packages: HashMap<String, PackageName>,
     pub(crate) import_core: String,
     pub(crate) model: Option<&'model Model>,
+    pub(crate) with_lifetime: BTreeMap<ShapeID, bool>,
 }
 
 impl<'model> RustCodeGen<'model> {
@@ -64,6 +69,7 @@ impl<'model> RustCodeGen<'model> {
             namespace: None,
             packages: HashMap::default(),
             import_core: String::default(),
+            with_lifetime: BTreeMap::default(),
         }
     }
 }
@@ -91,6 +97,39 @@ enum MethodArgFlags {
     Normal,
     // arg is type ToString
     ToString,
+}
+
+/// Optional lifetime.
+/// When used as a parameter to a codegen function, the function adds the lifetime
+/// annotation to any identifiers generated _only if_ the identifier is required to have
+/// a lifetime. (based on self.has_lifetime(shape_id))
+#[derive(Copy)]
+pub(crate) enum Lifetime<'lt> {
+    None,        // no lifetime
+    Any,         // '_
+    L(&'lt str), // 'x (str contains the symbol only)
+}
+
+impl<'lt> Lifetime<'lt> {
+    /// returns one of `""`, `"<'_>"`, or `"<'x>"` where `x` is the L variant value
+    pub(crate) fn annotate(&self) -> String {
+        match self {
+            Lifetime::None => String::default(),
+            Lifetime::Any => "<'_>".to_string(),
+            Lifetime::L(s) => format!("<'{}>", s),
+        }
+    }
+
+    /// returns true if
+    pub(crate) fn is_some(&self) -> bool {
+        !matches!(self, Lifetime::None)
+    }
+}
+
+impl<'lt> Clone for Lifetime<'lt> {
+    fn clone(&self) -> Self {
+        *self
+    }
 }
 
 /// Returns true if the type is a rust primitive
@@ -176,6 +215,7 @@ impl<'model> CodeGen for RustCodeGen<'model> {
                     self.packages.insert(p.namespace.to_string(), p.clone());
                 }
             }
+            self.map_lifetimes(model);
         }
         Ok(())
     }
@@ -269,7 +309,7 @@ impl<'model> CodeGen for RustCodeGen<'model> {
             }
         }
         w.write(&format!(
-            "\npub const SMITHY_VERSION : &str = \"{}\";\n\n",
+            "\n#[allow(dead_code)] pub const SMITHY_VERSION : &str = \"{}\";\n\n",
             model.smithy_version()
         ));
         Ok(())
@@ -287,12 +327,21 @@ impl<'model> CodeGen for RustCodeGen<'model> {
         shapes.sort_by_key(|v| v.0);
 
         for (id, traits, shape) in shapes.into_iter() {
+            if let Some(cg) = get_trait::<CodegenRust>(traits, codegen_rust_trait())? {
+                if cg.skip {
+                    continue;
+                }
+            }
+            let lt = match self.has_lifetime(id) {
+                true => Lifetime::L("v"),
+                false => Lifetime::None,
+            };
             match shape {
                 ShapeKind::Simple(simple) => {
-                    self.declare_simple_shape(w, id.shape_name(), traits, simple)?;
+                    self.declare_simple_shape(w, id.shape_name(), traits, simple, lt)?;
                 }
                 ShapeKind::Map(map) => {
-                    self.declare_map_shape(w, id.shape_name(), traits, map)?;
+                    self.declare_map_shape(w, id.shape_name(), traits, map, lt)?;
                 }
                 ShapeKind::List(list) => {
                     self.declare_list_or_set_shape(
@@ -301,6 +350,7 @@ impl<'model> CodeGen for RustCodeGen<'model> {
                         traits,
                         list,
                         DEFAULT_LIST_TYPE,
+                        lt,
                     )?;
                 }
                 ShapeKind::Set(set) => {
@@ -310,13 +360,14 @@ impl<'model> CodeGen for RustCodeGen<'model> {
                         traits,
                         set,
                         DEFAULT_SET_TYPE,
+                        lt,
                     )?;
                 }
                 ShapeKind::Structure(strukt) => {
-                    self.declare_structure_shape(w, id.shape_name(), traits, strukt)?;
+                    self.declare_structure_shape(w, id, traits, strukt, lt)?;
                 }
                 ShapeKind::Union(strukt) => {
-                    self.declare_union_shape(w, id.shape_name(), traits, strukt)?;
+                    self.declare_union_shape(w, id, traits, strukt, lt)?;
                 }
                 ShapeKind::Operation(_)
                 | ShapeKind::Resource(_)
@@ -391,6 +442,100 @@ pub(crate) fn is_rust_source(path: &Path) -> bool {
 }
 
 impl<'model> RustCodeGen<'model> {
+    /// populate `with_lifetime` with every shape that requires a lifetime declaration
+    /// Save both positive and negative results to minimize re-evaluating shapes.
+    /// at the moment, this only works for values that are input parameters,
+    /// because we can't return a ref to the vec created inside a receiver or sender-response
+    fn map_lifetime(
+        &mut self,
+        model: &Model,
+        id: &ShapeID,
+        _traits: &AppliedTraits,
+        shape: &ShapeKind,
+    ) -> bool {
+        if let Some(val) = self.with_lifetime.get(id) {
+            return *val;
+        }
+        // FUTURE: add codegenRust trait "borrowed" (or array of lifetimes?)
+        // and check that here. If we use array of Lifetimes, a struct
+        // could define more than one
+        // if has-trait-borrowed { self.with_lifetime.insert(); return true }
+        // then, get rid of special case code for DocumentRef,
+        // and add the borrowed/lifetime trait to wasmcloud-common.smithy
+        match shape {
+            ShapeKind::Simple(_) => {}
+            ShapeKind::Map(map) => {
+                let value = map.value().target();
+                if let Some(target) = model.shape(value) {
+                    if self.map_lifetime(model, value, target.traits(), target.body()) {
+                        self.with_lifetime.insert(id.clone(), true);
+                        return true;
+                    }
+                } else if self.has_lifetime(value) {
+                    self.with_lifetime.insert(id.clone(), true);
+                    return true;
+                }
+                let key = map.key().target();
+                if let Some(target) = model.shape(key) {
+                    if self.map_lifetime(model, key, target.traits(), target.body()) {
+                        self.with_lifetime.insert(id.clone(), true);
+                        return true;
+                    }
+                } else if self.has_lifetime(key) {
+                    self.with_lifetime.insert(id.clone(), true);
+                    return true;
+                }
+            }
+            ShapeKind::List(list_or_set) | ShapeKind::Set(list_or_set) => {
+                let member = list_or_set.member().target();
+                if let Some(target) = model.shape(member) {
+                    if self.map_lifetime(model, member, target.traits(), target.body()) {
+                        self.with_lifetime.insert(id.clone(), true);
+                        return true;
+                    }
+                } else if self.has_lifetime(member) {
+                    self.with_lifetime.insert(id.clone(), true);
+                    return true;
+                }
+            }
+            ShapeKind::Structure(struct_or_union) | ShapeKind::Union(struct_or_union) => {
+                for member in struct_or_union.members() {
+                    let field = member.target();
+                    if let Some(target) = model.shape(field) {
+                        if self.map_lifetime(model, field, target.traits(), target.body()) {
+                            self.with_lifetime.insert(id.clone(), true);
+                            return true;
+                        }
+                    } else if self.has_lifetime(field) {
+                        self.with_lifetime.insert(id.clone(), true);
+                        return true;
+                    }
+                }
+            }
+            ShapeKind::Operation(_)
+            | ShapeKind::Resource(_)
+            | ShapeKind::Service(_)
+            | ShapeKind::Unresolved => {}
+        }
+        self.with_lifetime.insert(id.clone(), false);
+        false
+    }
+
+    pub(crate) fn map_lifetimes(&mut self, model: &Model) {
+        // Initialize with any types that require lifetimes in their declarations
+        // TODO: remove DocumentRef here and use trait in smithy file instead
+        let document_ref = ShapeID::new_unchecked("org.wasmcloud.common", "DocumentRef", None);
+        self.with_lifetime.insert(document_ref, true);
+        for (id, traits, shape) in model.shapes().map(|s| (s.id(), s.traits(), s.body())) {
+            self.map_lifetime(model, id, traits, shape);
+        }
+    }
+
+    /// Checks whether the shape should have a lifetime annotation.
+    pub(crate) fn has_lifetime(&self, id: &ShapeID) -> bool {
+        *self.with_lifetime.get(id).unwrap_or(&false)
+    }
+
     /// Apply documentation traits: (documentation, deprecated, unstable)
     fn apply_documentation_traits(
         &mut self,
@@ -428,32 +573,40 @@ impl<'model> RustCodeGen<'model> {
     }
 
     /// field type, wrapped with Option if field is not required
-    pub(crate) fn field_type_string(&self, field: &MemberShape) -> Result<String> {
-        self.type_string(if is_optional_type(field) {
-            Ty::Opt(field.target())
-        } else {
-            Ty::Shape(field.target())
-        })
+    pub(crate) fn field_type_string(
+        &self,
+        field: &MemberShape,
+        lt: Lifetime<'_>,
+    ) -> Result<String> {
+        let target = field.target();
+        self.type_string(
+            if is_optional_type(field) {
+                Ty::Opt(target)
+            } else {
+                Ty::Shape(target)
+            },
+            lt,
+        )
     }
 
     /// Write a type name, a primitive or defined type, with or without deref('&') and with or without Option<>
-    pub(crate) fn type_string(&self, ty: Ty<'_>) -> Result<String> {
+    /// The lifetime parameter will only be used if the type requires a lifetime
+    pub(crate) fn type_string(&self, ty: Ty<'_>, lt: Lifetime<'_>) -> Result<String> {
         let mut s = String::new();
         match ty {
             Ty::Opt(id) => {
                 s.push_str("Option<");
-                s.push_str(&self.type_string(Ty::Shape(id))?);
+                s.push_str(&self.type_string(Ty::Shape(id), lt)?);
                 s.push('>');
             }
             Ty::Ref(id) => {
                 s.push('&');
-                s.push_str(&self.type_string(Ty::Shape(id))?);
+                s.push_str(&self.type_string(Ty::Shape(id), lt)?);
             }
             Ty::Shape(id) => {
                 let name = id.shape_name().to_string();
                 if id.namespace() == prelude_namespace_id() {
                     let ty = match name.as_ref() {
-                        // Document are  Blob
                         SHAPE_BLOB => "Vec<u8>",
                         SHAPE_BOOLEAN | SHAPE_PRIMITIVEBOOLEAN => "bool",
                         SHAPE_STRING => "String",
@@ -463,10 +616,10 @@ impl<'model> RustCodeGen<'model> {
                         SHAPE_LONG | SHAPE_PRIMITIVELONG => "i64",
                         SHAPE_FLOAT | SHAPE_PRIMITIVEFLOAT => "f32",
                         SHAPE_DOUBLE | SHAPE_PRIMITIVEDOUBLE => "f64",
-                        // if declared as members (of a struct, list, or map), we don't have trait data here to write
-                        // as anything other than a blob. Instead, a type should be created for the Document that can have traits,
-                        // and that type used for the member. This should probably be a lint rule.
-                        SHAPE_DOCUMENT => DEFAULT_DOCUMENT_TYPE,
+                        SHAPE_DOCUMENT => {
+                            s.push_str(&self.import_core);
+                            "::common::Document"
+                        }
                         SHAPE_TIMESTAMP => "Timestamp",
                         SHAPE_BIGINTEGER => {
                             cfg_if::cfg_if! {
@@ -508,27 +661,14 @@ impl<'model> RustCodeGen<'model> {
                 {
                     // we are in the same namespace so we don't need to specify namespace
                     s.push_str(&self.to_type_name(&id.shape_name().to_string()));
+                    if self.has_lifetime(id) {
+                        s.push_str(&lt.annotate());
+                    }
                 } else {
-                    match self.packages.get(&id.namespace().to_string()) {
-                        Some(PackageName {
-                            crate_name: Some(crate_name),
-                            ..
-                        }) => {
-                            // the crate name should be valid rust syntax. If not, they'll get an error with rustc
-                            s.push_str(crate_name);
-                            s.push_str("::");
-                            s.push_str(&self.to_type_name(&id.shape_name().to_string()));
-                        }
-                        _ => {
-                            return Err(Error::Model(format!(
-                                "undefined crate for namespace {} for symbol {}. Make sure \
-                                 codegen.toml includes all dependent namespaces, and that the \
-                                 dependent .smithy file contains package metadata with crate: \
-                                 value",
-                                &id.namespace(),
-                                &id
-                            )));
-                        }
+                    s.push_str(&self.get_crate_path(id)?);
+                    s.push_str(&self.to_type_name(&id.shape_name().to_string()));
+                    if self.has_lifetime(id) {
+                        s.push_str(&lt.annotate());
                     }
                 }
             }
@@ -537,8 +677,8 @@ impl<'model> RustCodeGen<'model> {
     }
 
     /// Write a type name, a primitive or defined type, with or without deref('&') and with or without Option<>
-    fn write_type(&mut self, w: &mut Writer, ty: Ty<'_>) -> Result<()> {
-        w.write(&self.type_string(ty)?);
+    fn write_type(&mut self, w: &mut Writer, ty: Ty<'_>, lt: Lifetime<'_>) -> Result<()> {
+        w.write(&self.type_string(ty, lt)?);
         Ok(())
     }
 
@@ -561,10 +701,14 @@ impl<'model> RustCodeGen<'model> {
         id: &Identifier,
         traits: &AppliedTraits,
         simple: &Simple,
+        lt: Lifetime,
     ) -> Result<()> {
         self.apply_documentation_traits(w, id, traits);
         w.write(b"pub type ");
         self.write_ident(w, id);
+        if lt.is_some() {
+            w.write(lt.annotate().as_bytes());
+        }
         w.write(b" = ");
         let ty = match simple {
             Simple::Blob => "Vec<u8>",
@@ -576,9 +720,10 @@ impl<'model> RustCodeGen<'model> {
             Simple::Long => "i64",
             Simple::Float => "f32",
             Simple::Double => "f64",
-
-            // note: in the future, codegen traits may modify this
-            Simple::Document => DEFAULT_DOCUMENT_TYPE,
+            Simple::Document => {
+                w.write(&self.import_core);
+                "::common::Document"
+            }
             Simple::Timestamp => "Timestamp",
             Simple::BigInteger => {
                 cfg_if::cfg_if! {
@@ -592,6 +737,9 @@ impl<'model> RustCodeGen<'model> {
             }
         };
         w.write(ty);
+        //let end_mark = w.pos();
+        //self.type_aliases
+        //    .insert(id.to_string(), w.get_slice(start_pos, end_pos).to_string());
         w.write(b";\n\n");
         Ok(())
     }
@@ -602,16 +750,20 @@ impl<'model> RustCodeGen<'model> {
         id: &Identifier,
         traits: &AppliedTraits,
         shape: &MapShape,
+        lt: Lifetime<'_>,
     ) -> Result<()> {
         self.apply_documentation_traits(w, id, traits);
         w.write(b"pub type ");
         self.write_ident(w, id);
+        if lt.is_some() {
+            w.write(lt.annotate().as_bytes());
+        }
         w.write(b" = ");
         w.write(DEFAULT_MAP_TYPE);
         w.write(b"<");
-        self.write_type(w, Ty::Shape(shape.key().target()))?;
+        self.write_type(w, Ty::Shape(shape.key().target()), lt)?;
         w.write(b",");
-        self.write_type(w, Ty::Shape(shape.value().target()))?;
+        self.write_type(w, Ty::Shape(shape.value().target()), lt)?;
         w.write(b">;\n\n");
         Ok(())
     }
@@ -623,14 +775,18 @@ impl<'model> RustCodeGen<'model> {
         traits: &AppliedTraits,
         shape: &ListOrSet,
         typ: &str,
+        lt: Lifetime<'_>,
     ) -> Result<()> {
         self.apply_documentation_traits(w, id, traits);
         w.write(b"pub type ");
         self.write_ident(w, id);
+        if lt.is_some() {
+            w.write(lt.annotate().as_bytes());
+        }
         w.write(b" = ");
         w.write(typ);
         w.write(b"<");
-        self.write_type(w, Ty::Shape(shape.member().target()))?;
+        self.write_type(w, Ty::Shape(shape.member().target()), lt)?;
         w.write(b">;\n\n");
         Ok(())
     }
@@ -638,40 +794,24 @@ impl<'model> RustCodeGen<'model> {
     fn declare_structure_shape(
         &mut self,
         w: &mut Writer,
-        id: &Identifier,
+        id: &ShapeID,
         traits: &AppliedTraits,
         strukt: &StructureOrUnion,
+        lt: Lifetime<'_>,
     ) -> Result<()> {
         let is_trait_struct = traits.contains_key(&prelude_shape_named(TRAIT_TRAIT).unwrap());
-        self.apply_documentation_traits(w, id, traits);
-        let mut derive_list = vec!["Clone", "Debug", "PartialEq", "Serialize", "Deserialize"];
-        // derive(Default) is disabled for traits and enabled for all other structs
-        let mut derive_default = !is_trait_struct;
-        // derive(Eq) is enabled, unless specifically disabled in codegenRust
-        let mut derive_eq = true;
-        let mut non_exhaustive = false;
-
-        if let Some(cg) = get_trait::<CodegenRust>(traits, codegen_rust_trait())? {
-            derive_default = !cg.no_derive_default;
-            derive_eq = !cg.no_derive_eq;
-            non_exhaustive = cg.non_exhaustive;
-        }
-        if derive_default {
-            derive_list.push("Default");
-        }
-        if derive_eq {
-            derive_list.push("Eq");
-        }
-        derive_list.sort_unstable();
-        let derive_decl = format!("#[derive({})]\n", derive_list.join(","));
-        w.write(&derive_decl);
-        if non_exhaustive {
+        let ident = id.shape_name();
+        self.apply_documentation_traits(w, ident, traits);
+        let preface = self.build_preface(id, traits);
+        w.write(&preface.derives());
+        if preface.non_exhaustive {
             w.write(b"#[non_exhaustive]\n");
         }
         w.write(b"pub struct ");
-        self.write_ident(w, id);
+        self.write_ident(w, ident);
+        w.write(&lt.annotate());
         w.write(b" {\n");
-        let (fields, _is_numbered) = get_sorted_fields(id, strukt)?;
+        let (fields, _is_numbered) = get_sorted_fields(ident, strukt)?;
         for member in fields.iter() {
             self.apply_documentation_traits(w, member.id(), member.traits());
             // use the declared name for serialization, unless an override is declared
@@ -688,6 +828,11 @@ impl<'model> RustCodeGen<'model> {
             if ser_name != rust_field_name {
                 w.write(&format!("  #[serde(rename=\"{}\")] ", ser_name));
             }
+            let lt = if self.has_lifetime(member.target()) {
+                lt
+            } else {
+                Lifetime::None
+            };
 
             // for rmp-msgpack - need to use serde_bytes serializer for Blob (and Option<Blob>)
             // otherwise Vec<u8> is written as an array of individual bytes, not a memory slice.
@@ -719,6 +864,8 @@ impl<'model> RustCodeGen<'model> {
                 w.write(r#"  #[serde(default, skip_serializing_if = "Option::is_none")] "#);
             } else if (is_trait_struct && !member.is_required())
                 || has_default(self.model.unwrap(), member)
+                || (member.target()
+                    == &ShapeID::new_unchecked(PRELUDE_NAMESPACE, SHAPE_DOCUMENT, None))
             {
                 // trait structs are deserialized only and need default values
                 // on deserialization, so always add [serde(default)] for trait structs.
@@ -738,7 +885,7 @@ impl<'model> RustCodeGen<'model> {
                 format!(
                     "  pub {}: {},\n",
                     &rust_field_name,
-                    self.field_type_string(member)?
+                    self.field_type_string(member, lt)?
                 )
                 .as_bytes(),
             );
@@ -750,32 +897,46 @@ impl<'model> RustCodeGen<'model> {
     fn declare_union_shape(
         &mut self,
         w: &mut Writer,
-        id: &Identifier,
+        id: &ShapeID,
         traits: &AppliedTraits,
         strukt: &StructureOrUnion,
+        lt: Lifetime<'_>,
     ) -> Result<()> {
-        let (fields, is_numbered) = get_sorted_fields(id, strukt)?;
+        let ident = id.shape_name();
+        let (fields, is_numbered) = get_sorted_fields(ident, strukt)?;
         if !is_numbered {
             return Err(Error::Model(format!(
                 "union {} must have numbered fields",
-                id
+                ident
             )));
         }
-        self.apply_documentation_traits(w, id, traits);
-        w.write(b"#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]\n");
-        println!("Union: {}:\n:{:#?}", id, strukt);
-
+        self.apply_documentation_traits(w, ident, traits);
+        let mut preface = self.build_preface(id, traits);
+        preface.default = false;
+        w.write(&preface.derives());
+        if preface.non_exhaustive {
+            w.write(b"#[non_exhaustive]\n");
+        }
         w.write(b"pub enum ");
-        self.write_ident(w, id);
+        self.write_ident(w, ident);
+        if lt.is_some() {
+            w.write(lt.annotate().as_bytes());
+        }
         w.write(b" {\n");
         for member in fields.iter() {
             self.apply_documentation_traits(w, member.id(), member.traits());
+            let field_num = member.field_num().unwrap();
+            w.write(&format!("/// n({})\n", field_num));
             let variant_name = self.to_type_name(&member.id().to_string());
-            w.write(&format!(
-                "{}({}),\n",
-                variant_name,
-                self.type_string(Ty::Shape(member.target()))?
-            )); // TODO: Ty::Ref ?
+            if member.target() == crate::model::unit_shape() {
+                w.write(&format!("{},\n", variant_name,));
+            } else {
+                w.write(&format!(
+                    "{}({}),\n",
+                    variant_name,
+                    self.type_string(Ty::Shape(member.target()), lt)?
+                ));
+            }
         }
         w.write(b"}\n\n");
         Ok(())
@@ -865,12 +1026,30 @@ impl<'model> RustCodeGen<'model> {
         let method_name = self.to_method_name(method_id, method_traits);
         let mut arg_flags = MethodArgFlags::Normal;
         self.apply_documentation_traits(w, method_id, method_traits);
+        let input_lt = if let Some(input_type) = op.input() {
+            self.has_lifetime(input_type)
+        } else {
+            false
+        };
+        let output_lt = if let Some(output_type) = op.output() {
+            self.has_lifetime(output_type)
+        } else {
+            false
+        };
+        let func_lt = if input_lt { "'vin," } else { "" };
         w.write(b"async fn ");
         w.write(&method_name);
         if let Some(input_type) = op.input() {
             if input_type == &ShapeID::new_unchecked(PRELUDE_NAMESPACE, SHAPE_STRING, None) {
                 arg_flags = MethodArgFlags::ToString;
-                w.write("<TS:ToString + ?Sized + std::marker::Sync>");
+                w.write(&format!(
+                    "<{}TS:ToString + ?Sized + std::marker::Sync>",
+                    func_lt
+                ));
+            } else if input_lt {
+                w.write(b"<");
+                w.write(func_lt.as_bytes());
+                w.write(b">");
             }
         }
         w.write(b"(&self, ctx: &Context");
@@ -879,12 +1058,28 @@ impl<'model> RustCodeGen<'model> {
             if matches!(arg_flags, MethodArgFlags::ToString) {
                 w.write(b"&TS");
             } else {
-                self.write_type(w, Ty::Ref(input_type))?;
+                self.write_type(
+                    w,
+                    Ty::Ref(input_type),
+                    if input_lt {
+                        Lifetime::L("vin")
+                    } else {
+                        Lifetime::None
+                    },
+                )?;
             }
         }
         w.write(b") -> RpcResult<");
         if let Some(output_type) = op.output() {
-            self.write_type(w, Ty::Shape(output_type))?;
+            self.write_type(
+                w,
+                Ty::Shape(output_type),
+                if output_lt {
+                    Lifetime::L("static")
+                } else {
+                    Lifetime::None
+                },
+            )?;
         } else {
             w.write(b"()");
         }
@@ -934,16 +1129,23 @@ impl<'model> RustCodeGen<'model> {
             w.write(&self.op_dispatch_name(method_ident));
             w.write(b"\" => {\n");
             if let Some(op_input) = op.input() {
+                let borrowed = self.has_lifetime(op_input);
                 let symbol = op_input.shape_name().to_string();
-                // let value : InputType = deserialize(...)?;
                 if has_cbor {
+                    let crate_prefix = self.get_crate_path(op_input)?;
                     w.write(&format!(
                         r#"
-                    let value : {} = {}::common::decode(&message.arg, &decode_{})
+                    let value : {} = {}::common::{}(&message.arg, &{}decode_{})
                       .map_err(|e| RpcError::Deser(format!("'{}': {{}}", e)))?;
                     "#,
-                        self.type_string(Ty::Shape(op_input))?,
+                        self.type_string(Ty::Shape(op_input), Lifetime::Any)?,
                         self.import_core,
+                        if borrowed {
+                            "decode_borrowed"
+                        } else {
+                            "decode"
+                        },
+                        &crate_prefix,
                         crate::strings::to_snake_case(&symbol),
                         &symbol,
                     ));
@@ -953,7 +1155,7 @@ impl<'model> RustCodeGen<'model> {
                         let value: {} = {}::common::deserialize(&message.arg)
                       .map_err(|e| RpcError::Deser(format!("'{}': {{}}", e)))?;
                         "#,
-                        self.type_string(Ty::Shape(op_input))?,
+                        self.type_string(Ty::Shape(op_input), Lifetime::Any)?,
                         self.import_core,
                         &symbol,
                     ))
@@ -1116,14 +1318,21 @@ impl<'model> RustCodeGen<'model> {
             if let Some(op_output) = op.output() {
                 let symbol = op_output.shape_name().to_string();
                 if has_cbor {
+                    let crate_prefix = self.get_crate_path(op_output)?;
                     w.write(&format!(
                         r#"
-                    let value : {} = {}::common::decode(&resp, &decode_{})
+                    let value : {} = {}::common::{}(&resp, &{}decode_{})
                         .map_err(|e| RpcError::Deser(format!("'{{}}': {}", e)))?;
                     Ok(value)
                     "#,
-                        self.type_string(Ty::Shape(op_output))?,
+                        self.type_string(Ty::Shape(op_output), Lifetime::L("static"))?,
                         self.import_core,
+                        if self.has_lifetime(op_output) {
+                            "decode_owned"
+                        } else {
+                            "decode"
+                        },
+                        &crate_prefix,
                         crate::strings::to_snake_case(&symbol),
                         &symbol,
                     ));
@@ -1134,7 +1343,7 @@ impl<'model> RustCodeGen<'model> {
                         .map_err(|e| RpcError::Deser(format!("'{{}}': {}", e)))?;
                     Ok(value)
                     "#,
-                        self.type_string(Ty::Shape(op_output))?,
+                        self.type_string(Ty::Shape(op_output), Lifetime::Any)?,
                         self.import_core,
                         &symbol,
                     ));
@@ -1253,7 +1462,146 @@ impl<'model> RustCodeGen<'model> {
         };
         Ok(ctors)
     }
+
+    /// returns the Rust package prefix for the symbol, using metadata crate declarations
+    pub(crate) fn get_crate_path(&self, id: &ShapeID) -> Result<String> {
+        let namespace = id.namespace();
+        // special case for Document
+        if id == &ShapeID::new_unchecked(PRELUDE_NAMESPACE, "Document", None) {
+            return Ok("wasmbus_rpc::common::".to_string());
+        }
+
+        // no prefix required for prelude (smithy.api) or wasmbus_model,
+        // because they are always imported
+        if namespace == prelude_namespace_id()
+            || namespace == wasmcloud_model_namespace()
+            // no prefix required if namespace is the namespace of
+            // the file we are generating
+            || (self.namespace.is_some()
+            && namespace == self.namespace.as_ref().unwrap())
+        {
+            return Ok(String::new());
+        }
+
+        // look up the crate name
+        // the crate name should be valid rust syntax. If not, they'll get an error with rustc
+        match self.packages.get(&namespace.to_string()) {
+            Some(crate::model::PackageName {
+                crate_name: Some(crate_name),
+                ..
+            }) => Ok(format!("{}::", crate_name)),
+            _ => Err(Error::Model(format!(
+                "undefined crate for namespace '{}' symbol '{}'. Make sure codegen.toml includes \
+                 all dependent namespaces, and that the dependent .smithy file contains package \
+                 metadata with crate: value",
+                namespace,
+                id.shape_name(),
+            ))),
+        }
+    }
+
+    /// returns crate prefix for model namespace
+    pub(crate) fn get_model_crate(&self) -> String {
+        if self.namespace.is_none()
+            || self.namespace.as_ref().unwrap() != wasmcloud_model_namespace()
+        {
+            format!("{}::model::", &self.import_core)
+        } else {
+            String::new()
+        }
+    }
+
+    fn build_preface(&self, id: &ShapeID, traits: &AppliedTraits) -> StructPreface {
+        let mut preface = StructPreface::default();
+        if self.has_lifetime(id) {
+            preface.deserialize = false;
+        }
+        // derive(Default) is disabled for traits and enabled for all other structs
+        let is_trait_struct = traits.contains_key(&prelude_shape_named(TRAIT_TRAIT).unwrap());
+        if is_trait_struct {
+            preface.default = false
+        }
+
+        if let Ok(Some(cg)) = get_trait::<CodegenRust>(traits, codegen_rust_trait()) {
+            preface.default = !cg.no_derive_default;
+            preface.eq = !cg.no_derive_eq;
+            preface.non_exhaustive = cg.non_exhaustive;
+        }
+        preface
+    }
 } // impl CodeGenRust
+
+/// flags used to build `#[derive(...)]` and `#[non_exhaustive]` annotations for struct and enum
+struct StructPreface {
+    clone: bool,
+    copy: bool,
+    debug: bool,
+    default: bool,
+    eq: bool,
+    partial_eq: bool,
+    serialize: bool,
+    deserialize: bool,
+    non_exhaustive: bool,
+}
+impl Default for StructPreface {
+    fn default() -> Self {
+        StructPreface {
+            clone: true,
+            copy: false,
+            debug: true,
+            default: true,
+            eq: true,
+            partial_eq: true,
+            serialize: true,
+            deserialize: true,
+            non_exhaustive: false,
+        }
+    }
+}
+impl StructPreface {
+    /// Return `#[derive(...)]` attribute for struct or enum
+    fn derives(&self) -> String {
+        if self.clone
+            || self.copy
+            || self.debug
+            || self.default
+            || self.eq
+            || self.partial_eq
+            || self.serialize
+            || self.deserialize
+        {
+            let mut s = "#[derive(".to_string();
+            if self.clone {
+                s.push_str("Clone,");
+            }
+            if self.copy {
+                s.push_str("Copy,");
+            }
+            if self.debug {
+                s.push_str("Debug,");
+            }
+            if self.default {
+                s.push_str("Default,");
+            }
+            if self.deserialize {
+                s.push_str("Deserialize,");
+            }
+            if self.eq {
+                s.push_str("Eq,");
+            }
+            if self.partial_eq {
+                s.push_str("PartialEq,");
+            }
+            if self.serialize {
+                s.push_str("Serialize,");
+            }
+            s.push_str(")]\n");
+            s
+        } else {
+            String::new()
+        }
+    }
+}
 
 /// is_optional_type determines whether the field should be wrapped in Option<>
 /// the value is true if it has an explicit `box` trait, or if it's

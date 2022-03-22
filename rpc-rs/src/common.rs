@@ -3,6 +3,11 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::{borrow::Cow, fmt};
 
+pub use crate::document::{
+    decode_document, decode_number, encode_document, encode_document_ref, encode_number, Document,
+    DocumentRef, Number,
+};
+
 /// A wasmcloud message
 #[derive(Debug)]
 pub struct Message<'m> {
@@ -154,6 +159,8 @@ pub fn message_format(data: &[u8]) -> (MessageFormat, usize) {
 
 pub type CborDecodeFn<T> = dyn Fn(&mut crate::cbor::Decoder<'_>) -> RpcResult<T>;
 
+pub type CborDecodeFnLt<'de, T> = dyn Fn(&mut crate::cbor::Decoder<'de>) -> RpcResult<T>;
+
 pub fn decode<T: serde::de::DeserializeOwned>(
     buf: &[u8],
     cbor_dec: &CborDecodeFn<T>,
@@ -165,13 +172,46 @@ pub fn decode<T: serde::de::DeserializeOwned>(
         }
         (MessageFormat::Msgpack, offset) => deserialize(&buf[offset..])
             .map_err(|e| RpcError::Deser(format!("decoding '{}': {{}}", e)))?,
-        _ => return Err(RpcError::Deser("invalid encoding for '{}'".to_string())),
+        _ => return Err(RpcError::Deser("invalid encoding".to_string())),
     };
     Ok(value)
 }
 
-pub trait DecodeOwned: for<'de> crate::minicbor::Decode<'de> {}
-impl<T> DecodeOwned for T where T: for<'de> crate::minicbor::Decode<'de> {}
+pub fn decode_borrowed<'de, T>(
+    buf: &'de [u8],
+    cbor_dec: &'de CborDecodeFnLt<'de, T>,
+) -> RpcResult<T> {
+    match message_format(buf) {
+        (MessageFormat::Cbor, offset) => {
+            let d = &mut crate::cbor::Decoder::new(&buf[offset..]);
+            Ok(cbor_dec(d)?)
+        }
+        _ => Err(RpcError::Deser("invalid encoding (borrowed)".to_string())),
+    }
+}
+
+pub fn decode_owned<'vin, T: Clone>(
+    buf: &'vin [u8],
+    cbor_dec: &CborDecodeFnLt<'vin, T>,
+) -> RpcResult<T> {
+    match message_format(buf) {
+        (MessageFormat::Cbor, offset) => {
+            let d = &mut crate::cbor::Decoder::new(&buf[offset..]);
+            let out: T = cbor_dec(d)?;
+            Ok(out)
+        }
+        _ => Err(RpcError::Deser("invalid encoding (borrowed)".to_string())),
+    }
+}
+
+/*
+pub fn decode_owned<T>(d: &mut crate::cbor::Decoder) -> RpcResult<T>
+where
+    T: crate::cbor::DecodeOwned + Sized,
+{
+    T::decode(d) // .map_err(|e| RpcError::Deser(e.to_string()))
+}
+ */
 
 /// Wasmbus rpc sender that can send any message and cbor-serializable payload
 /// requires Protocol="2"
@@ -186,7 +226,7 @@ impl<T: Transport> AnySender<T> {
 }
 
 impl<T: Transport + Sync + Send> AnySender<T> {
-    /// Send enoded payload
+    /// Send encoded payload
     #[inline]
     async fn send_raw<'s, 'ctx, 'msg>(
         &'s self,
@@ -221,7 +261,7 @@ impl<T: Transport + Sync + Send> AnySender<T> {
     }
 
     /// Send rpc with serializable payload using cbor encode/decode
-    pub async fn send_cbor<'de, In: crate::minicbor::Encode, Out: DecodeOwned>(
+    pub async fn send_cbor<'de, In: crate::minicbor::Encode, Out: crate::cbor::MDecodeOwned>(
         &self,
         ctx: &Context,
         method: &str,
@@ -244,3 +284,5 @@ impl<T: Transport + Sync + Send> AnySender<T> {
         Ok(result)
     }
 }
+
+pub type Unit = ();

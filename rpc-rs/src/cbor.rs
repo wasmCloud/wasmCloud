@@ -104,10 +104,24 @@ impl<'b> Decoder<'b> {
         Ok(self.inner.array()?)
     }
 
+    /// Begin decoding an array of known length
+    pub fn fixed_array(&mut self) -> RpcResult<u64> {
+        self.inner
+            .array()?
+            .ok_or_else(|| RpcError::Deser("indefinite array not expected".to_string()))
+    }
+
     /// Begin decoding a map. If the size is known,
     /// it is returned as `Some`. For indefinite maps, `None` is returned.
     pub fn map(&mut self) -> RpcResult<Option<u64>> {
         Ok(self.inner.map()?)
+    }
+
+    /// Begin decoding a map of known size
+    pub fn fixed_map(&mut self) -> RpcResult<u64> {
+        self.inner
+            .map()?
+            .ok_or_else(|| RpcError::Deser("indefinite map not expected".to_string()))
     }
 
     /// Inspect the CBOR type at the current position
@@ -126,7 +140,7 @@ impl<'b> Decoder<'b> {
     // around a cbor implementation. This function breaks that abstraction,
     // and any use of it outside the wasmbus-rpc crate risks breaking
     // if there is a change to the underlying implementation.
-    //#[hidden]
+    //#[doc(hidden)]
     //pub(crate) fn inner(&mut self) -> &mut minicbor::Decoder {
     //    &self.inner
     //}
@@ -138,72 +152,40 @@ impl<'b> Debug for Decoder<'b> {
     }
 }
 
-// A type that accepts byte slices for writing
-//pub trait Write {
-//    type Error: std::fmt::Display;
-//    fn write_all(&mut self, buf: &[u8]) -> Result<(), Self::Error>;
-//}
+/// A type that can be decoded from CBOR.
+pub trait Decode<'b>: Sized {
+    /// Decode a value using the given `Decoder`.
+    fn decode(d: &mut Decoder<'b>) -> Result<Self, RpcError>;
 
-/*
-impl Write for Vec<u8> {
-    type Error = std::convert::Infallible;
-
-    fn write_all(&mut self, buf: &[u8]) -> Result<(), Self::Error> {
-        self.extend_from_slice(buf);
-        Ok(())
-    }
-}
- */
-
-//struct WriteX<W: Write> {
-//    writer: Box<dyn Write<Error = W::Error>>,
-//}
-
-//impl<W: Write> WriteX<W> {
-//    pub fn new(writer: Box<dyn Write<Error = W::Error>>) -> Self {
-//        Self { writer }
-//    }
-//}
-
-//impl<W: Write> Write for WriteX<W> {
-//    type Error = RpcError;
-//
-//    fn write_all(&mut self, buf: &[u8]) -> Result<(), RpcError> {
-//        self.writer
-//            .write_all(buf)
-//            .map_err(|e| RpcError::Ser(format!("encoder write: {}", &e.to_string())))
-//    }
-//}
-//
-//impl<W: Write> minicbor::encode::write::Write for WriteX<W> {
-//    type Error = RpcError;
-//
-//    fn write_all(&mut self, buf: &[u8]) -> Result<(), Self::Error> {
-//        self.writer
-//            .write_all(buf)
-//            .map_err(|e| RpcError::Ser(format!("encoding: {}", e)))
-//    }
-//}
-
-/*
-impl Write for Vec<u8> {
-    type Error = std::convert::Infallible;
-
-    fn write_all(&mut self, buf: &[u8]) -> Result<(), Self::Error> {
-        self.extend_from_slice(buf);
-        Ok(())
+    /// If possible, return a nil value of `Self`.
+    ///
+    /// This method is primarily used by `minicbor-derive` and allows
+    /// creating a special value denoting the absence of a "real" value if
+    /// no CBOR value is present. The canonical example of a type where
+    /// this is sensible is the `Option` type, whose `Decode::nil` method
+    /// would return `Some(None)`.
+    ///
+    /// With the exception of `Option<_>` all types `T` are considered
+    /// mandatory by default, i.e. `T::nil()` returns `None`. Missing values
+    /// of `T` therefore cause decoding errors in derived `Decode`
+    /// implementations.
+    ///
+    /// NB: A type implementing `Decode` with an overriden `Decode::nil`
+    /// method should also override `Encode::is_nil` if it implements `Encode`
+    /// at all.
+    fn nil() -> Option<Self> {
+        None
     }
 }
 
- */
+pub trait MDecodeOwned: for<'de> crate::minicbor::Decode<'de> {}
+impl<T> MDecodeOwned for T where T: for<'de> crate::minicbor::Decode<'de> {}
 
-//impl<W: std::io::Write> Write for W {
-//    type Error = std::io::Error;
-//
-//    fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
-//        std::io::Write::write_all(self, buf)
-//    }
-//}
+pub trait DecodeOwned: for<'de> crate::cbor::Decode<'de> {}
+impl<T> DecodeOwned for T where T: for<'de> crate::cbor::Decode<'de> {}
+
+//pub trait DecodeOwned: for<'de> Decode<'de> {}
+//impl<T> DecodeOwned for T where T: for<'de> Decode<'de> {}
 
 pub use minicbor::encode::Write;
 
@@ -377,13 +359,19 @@ where
         self.inner.into_inner()
     }
 
+    /// Write a tag
+    pub fn tag(&mut self, tag: u64) -> RpcResult<&mut Self> {
+        self.inner.tag(minicbor::data::Tag::Unassigned(tag))?;
+        Ok(self)
+    }
+
     // Pierce the veil.
     // This module exposes public functions to support code generated
     // by `weld-codegen`. Its purpose is to create an abstraction layer
     // around a cbor implementation. This function breaks that abstraction,
     // and any use of it outside the wasmbus-rpc crate risks breaking
     // if there is a change to the underlying implementation.
-    //#[hidden]
+    //#[doc(hidden)]
     //pub(crate) fn inner(&mut self) -> &mut minicbor::Encoder {
     //    &self.inner
     //}
@@ -415,8 +403,8 @@ pub enum Type {
     ArrayIndef,
     Map,
     MapIndef,
-    Tag,
     Break,
+    Tag,
     Unknown(u8),
 }
 

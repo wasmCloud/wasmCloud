@@ -41,7 +41,7 @@ const WASMBUS_RPC_CRATE: &str = "wasmbus_rpc";
 const DEFAULT_MAP_TYPE: &str = "dict"; // python 3.9+
 const DEFAULT_LIST_TYPE: &str = "list"; // python 3.9+
 const DEFAULT_SET_TYPE: &str = "set"; // python 3.9+
-const DEFAULT_DOCUMENT_TYPE: &str = "bytes";
+const DEFAULT_DOCUMENT_TYPE: &str = "Document";
 
 /// declarations for sorting. First sort key is the type (simple, then map, then struct).
 /// In rust, sorting by BytesMut as the second key will result in sort by item name.

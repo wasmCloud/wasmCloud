@@ -1,4 +1,4 @@
-// This file is generated automatically using wasmcloud/weld-codegen 0.4.2
+// This file is generated automatically using wasmcloud/weld-codegen 0.4.3
 
 #[allow(unused_imports)]
 use crate::{
@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 #[allow(unused_imports)]
 use std::{borrow::Borrow, borrow::Cow, io::Write, string::ToString};
 
+#[allow(dead_code)]
 pub const SMITHY_VERSION: &str = "1.0";
 
 /// List of linked actors for a provider
@@ -24,8 +25,9 @@ pub type ActorLinks = Vec<LinkDefinition>;
 
 // Encode ActorLinks as CBOR and append to output stream
 #[doc(hidden)]
+#[allow(unused_mut)]
 pub fn encode_actor_links<W: crate::cbor::Write>(
-    e: &mut crate::cbor::Encoder<W>,
+    mut e: &mut crate::cbor::Encoder<W>,
     val: &ActorLinks,
 ) -> RpcResult<()> {
     e.array(val.len() as u64)?;
@@ -38,40 +40,40 @@ pub fn encode_actor_links<W: crate::cbor::Write>(
 // Decode ActorLinks from cbor input stream
 #[doc(hidden)]
 pub fn decode_actor_links(d: &mut crate::cbor::Decoder<'_>) -> Result<ActorLinks, RpcError> {
-    let __result = {
-        if let Some(n) = d.array()? {
-            let mut arr: Vec<LinkDefinition> = Vec::with_capacity(n as usize);
-            for _ in 0..(n as usize) {
-                arr.push(
-                    decode_link_definition(d)
-                        .map_err(|e| format!("decoding 'LinkDefinition': {}", e))?,
-                )
-            }
-            arr
-        } else {
-            // indefinite array
-            let mut arr: Vec<LinkDefinition> = Vec::new();
-            loop {
-                match d.datatype() {
-                    Err(_) => break,
-                    Ok(crate::cbor::Type::Break) => break,
-                    Ok(_) => arr.push(
-                        decode_link_definition(d)
-                            .map_err(|e| format!("decoding 'LinkDefinition': {}", e))?,
-                    ),
+    let __result =
+        {
+            if let Some(n) = d.array()? {
+                let mut arr: Vec<LinkDefinition> = Vec::with_capacity(n as usize);
+                for _ in 0..(n as usize) {
+                    arr.push(decode_link_definition(d).map_err(|e| {
+                        format!("decoding 'org.wasmcloud.core#LinkDefinition': {}", e)
+                    })?)
                 }
+                arr
+            } else {
+                // indefinite array
+                let mut arr: Vec<LinkDefinition> = Vec::new();
+                loop {
+                    match d.datatype() {
+                        Err(_) => break,
+                        Ok(crate::cbor::Type::Break) => break,
+                        Ok(_) => arr.push(decode_link_definition(d).map_err(|e| {
+                            format!("decoding 'org.wasmcloud.core#LinkDefinition': {}", e)
+                        })?),
+                    }
+                }
+                arr
             }
-            arr
-        }
-    };
+        };
     Ok(__result)
 }
 pub type ClusterIssuerKey = String;
 
 // Encode ClusterIssuerKey as CBOR and append to output stream
 #[doc(hidden)]
+#[allow(unused_mut)]
 pub fn encode_cluster_issuer_key<W: crate::cbor::Write>(
-    e: &mut crate::cbor::Encoder<W>,
+    mut e: &mut crate::cbor::Encoder<W>,
     val: &ClusterIssuerKey,
 ) -> RpcResult<()> {
     e.str(val)?;
@@ -90,8 +92,9 @@ pub type ClusterIssuers = Vec<ClusterIssuerKey>;
 
 // Encode ClusterIssuers as CBOR and append to output stream
 #[doc(hidden)]
+#[allow(unused_mut)]
 pub fn encode_cluster_issuers<W: crate::cbor::Write>(
-    e: &mut crate::cbor::Encoder<W>,
+    mut e: &mut crate::cbor::Encoder<W>,
     val: &ClusterIssuers,
 ) -> RpcResult<()> {
     e.array(val.len() as u64)?;
@@ -110,10 +113,9 @@ pub fn decode_cluster_issuers(
         if let Some(n) = d.array()? {
             let mut arr: Vec<ClusterIssuerKey> = Vec::with_capacity(n as usize);
             for _ in 0..(n as usize) {
-                arr.push(
-                    decode_cluster_issuer_key(d)
-                        .map_err(|e| format!("decoding 'ClusterIssuerKey': {}", e))?,
-                )
+                arr.push(decode_cluster_issuer_key(d).map_err(|e| {
+                    format!("decoding 'org.wasmcloud.core#ClusterIssuerKey': {}", e)
+                })?)
             }
             arr
         } else {
@@ -123,10 +125,9 @@ pub fn decode_cluster_issuers(
                 match d.datatype() {
                     Err(_) => break,
                     Ok(crate::cbor::Type::Break) => break,
-                    Ok(_) => arr.push(
-                        decode_cluster_issuer_key(d)
-                            .map_err(|e| format!("decoding 'ClusterIssuerKey': {}", e))?,
-                    ),
+                    Ok(_) => arr.push(decode_cluster_issuer_key(d).map_err(|e| {
+                        format!("decoding 'org.wasmcloud.core#ClusterIssuerKey': {}", e)
+                    })?),
                 }
             }
             arr
@@ -140,8 +141,9 @@ pub struct HealthCheckRequest {}
 
 // Encode HealthCheckRequest as CBOR and append to output stream
 #[doc(hidden)]
+#[allow(unused_mut)]
 pub fn encode_health_check_request<W: crate::cbor::Write>(
-    e: &mut crate::cbor::Encoder<W>,
+    mut e: &mut crate::cbor::Encoder<W>,
     _val: &HealthCheckRequest,
 ) -> RpcResult<()> {
     e.map(0)?;
@@ -164,21 +166,12 @@ pub fn decode_health_check_request(
             }
         };
         if is_array {
-            let len = d.array()?.ok_or_else(|| {
-                RpcError::Deser(
-                    "decoding struct HealthCheckRequest: indefinite array not supported"
-                        .to_string(),
-                )
-            })?;
+            let len = d.fixed_array()?;
             for __i in 0..(len as usize) {
                 d.skip()?;
             }
         } else {
-            let len = d.map()?.ok_or_else(|| {
-                RpcError::Deser(
-                    "decoding struct HealthCheckRequest: indefinite map not supported".to_string(),
-                )
-            })?;
+            let len = d.fixed_map()?;
             for __i in 0..(len as usize) {
                 d.str()?;
                 d.skip()?;
@@ -201,8 +194,9 @@ pub struct HealthCheckResponse {
 
 // Encode HealthCheckResponse as CBOR and append to output stream
 #[doc(hidden)]
+#[allow(unused_mut)]
 pub fn encode_health_check_response<W: crate::cbor::Write>(
-    e: &mut crate::cbor::Encoder<W>,
+    mut e: &mut crate::cbor::Encoder<W>,
     val: &HealthCheckResponse,
 ) -> RpcResult<()> {
     e.array(2)?;
@@ -234,12 +228,7 @@ pub fn decode_health_check_response(
             }
         };
         if is_array {
-            let len = d.array()?.ok_or_else(|| {
-                RpcError::Deser(
-                    "decoding struct HealthCheckResponse: indefinite array not supported"
-                        .to_string(),
-                )
-            })?;
+            let len = d.fixed_array()?;
             for __i in 0..(len as usize) {
                 match __i {
                     0 => healthy = Some(d.bool()?),
@@ -256,11 +245,7 @@ pub fn decode_health_check_response(
                 }
             }
         } else {
-            let len = d.map()?.ok_or_else(|| {
-                RpcError::Deser(
-                    "decoding struct HealthCheckResponse: indefinite map not supported".to_string(),
-                )
-            })?;
+            let len = d.fixed_map()?;
             for __i in 0..(len as usize) {
                 match d.str()? {
                     "healthy" => healthy = Some(d.bool()?),
@@ -327,8 +312,9 @@ pub struct HostData {
 
 // Encode HostData as CBOR and append to output stream
 #[doc(hidden)]
+#[allow(unused_mut)]
 pub fn encode_host_data<W: crate::cbor::Write>(
-    e: &mut crate::cbor::Encoder<W>,
+    mut e: &mut crate::cbor::Encoder<W>,
     val: &HostData,
 ) -> RpcResult<()> {
     e.array(14)?;
@@ -386,11 +372,7 @@ pub fn decode_host_data(d: &mut crate::cbor::Decoder<'_>) -> Result<HostData, Rp
             }
         };
         if is_array {
-            let len = d.array()?.ok_or_else(|| {
-                RpcError::Deser(
-                    "decoding struct HostData: indefinite array not supported".to_string(),
-                )
-            })?;
+            let len = d.fixed_array()?;
             for __i in 0..(len as usize) {
                 match __i {
                     0 => host_id = Some(d.str()?.to_string()),
@@ -402,23 +384,20 @@ pub fn decode_host_data(d: &mut crate::cbor::Decoder<'_>) -> Result<HostData, Rp
                     6 => provider_key = Some(d.str()?.to_string()),
                     7 => invocation_seed = Some(d.str()?.to_string()),
                     8 => {
-                        env_values = Some(
-                            decode_host_env_values(d)
-                                .map_err(|e| format!("decoding 'HostEnvValues': {}", e))?,
-                        )
+                        env_values = Some(decode_host_env_values(d).map_err(|e| {
+                            format!("decoding 'org.wasmcloud.core#HostEnvValues': {}", e)
+                        })?)
                     }
                     9 => instance_id = Some(d.str()?.to_string()),
                     10 => {
-                        link_definitions = Some(
-                            decode_actor_links(d)
-                                .map_err(|e| format!("decoding 'ActorLinks': {}", e))?,
-                        )
+                        link_definitions = Some(decode_actor_links(d).map_err(|e| {
+                            format!("decoding 'org.wasmcloud.core#ActorLinks': {}", e)
+                        })?)
                     }
                     11 => {
-                        cluster_issuers = Some(
-                            decode_cluster_issuers(d)
-                                .map_err(|e| format!("decoding 'ClusterIssuers': {}", e))?,
-                        )
+                        cluster_issuers = Some(decode_cluster_issuers(d).map_err(|e| {
+                            format!("decoding 'org.wasmcloud.core#ClusterIssuers': {}", e)
+                        })?)
                     }
                     12 => {
                         config_json = if crate::cbor::Type::Null == d.datatype()? {
@@ -441,11 +420,7 @@ pub fn decode_host_data(d: &mut crate::cbor::Decoder<'_>) -> Result<HostData, Rp
                 }
             }
         } else {
-            let len = d.map()?.ok_or_else(|| {
-                RpcError::Deser(
-                    "decoding struct HostData: indefinite map not supported".to_string(),
-                )
-            })?;
+            let len = d.fixed_map()?;
             for __i in 0..(len as usize) {
                 match d.str()? {
                     "hostId" => host_id = Some(d.str()?.to_string()),
@@ -457,23 +432,20 @@ pub fn decode_host_data(d: &mut crate::cbor::Decoder<'_>) -> Result<HostData, Rp
                     "providerKey" => provider_key = Some(d.str()?.to_string()),
                     "invocationSeed" => invocation_seed = Some(d.str()?.to_string()),
                     "envValues" => {
-                        env_values = Some(
-                            decode_host_env_values(d)
-                                .map_err(|e| format!("decoding 'HostEnvValues': {}", e))?,
-                        )
+                        env_values = Some(decode_host_env_values(d).map_err(|e| {
+                            format!("decoding 'org.wasmcloud.core#HostEnvValues': {}", e)
+                        })?)
                     }
                     "instanceId" => instance_id = Some(d.str()?.to_string()),
                     "linkDefinitions" => {
-                        link_definitions = Some(
-                            decode_actor_links(d)
-                                .map_err(|e| format!("decoding 'ActorLinks': {}", e))?,
-                        )
+                        link_definitions = Some(decode_actor_links(d).map_err(|e| {
+                            format!("decoding 'org.wasmcloud.core#ActorLinks': {}", e)
+                        })?)
                     }
                     "clusterIssuers" => {
-                        cluster_issuers = Some(
-                            decode_cluster_issuers(d)
-                                .map_err(|e| format!("decoding 'ClusterIssuers': {}", e))?,
-                        )
+                        cluster_issuers = Some(decode_cluster_issuers(d).map_err(|e| {
+                            format!("decoding 'org.wasmcloud.core#ClusterIssuers': {}", e)
+                        })?)
                     }
                     "configJson" => {
                         config_json = if crate::cbor::Type::Null == d.datatype()? {
@@ -602,8 +574,9 @@ pub type HostEnvValues = std::collections::HashMap<String, String>;
 
 // Encode HostEnvValues as CBOR and append to output stream
 #[doc(hidden)]
+#[allow(unused_mut)]
 pub fn encode_host_env_values<W: crate::cbor::Write>(
-    e: &mut crate::cbor::Encoder<W>,
+    mut e: &mut crate::cbor::Encoder<W>,
     val: &HostEnvValues,
 ) -> RpcResult<()> {
     e.map(val.len() as u64)?;
@@ -619,16 +592,13 @@ pub fn encode_host_env_values<W: crate::cbor::Write>(
 pub fn decode_host_env_values(d: &mut crate::cbor::Decoder<'_>) -> Result<HostEnvValues, RpcError> {
     let __result = {
         {
+            let map_len = d.fixed_map()? as usize;
             let mut m: std::collections::HashMap<String, String> =
-                std::collections::HashMap::default();
-            if let Some(n) = d.map()? {
-                for _ in 0..(n as usize) {
-                    let k = d.str()?.to_string();
-                    let v = d.str()?.to_string();
-                    m.insert(k, v);
-                }
-            } else {
-                return Err(RpcError::Deser("indefinite maps not supported".to_string()));
+                std::collections::HashMap::with_capacity(map_len);
+            for _ in 0..map_len {
+                let k = d.str()?.to_string();
+                let v = d.str()?.to_string();
+                m.insert(k, v);
             }
             m
         }
@@ -659,8 +629,9 @@ pub struct Invocation {
 
 // Encode Invocation as CBOR and append to output stream
 #[doc(hidden)]
+#[allow(unused_mut)]
 pub fn encode_invocation<W: crate::cbor::Write>(
-    e: &mut crate::cbor::Encoder<W>,
+    mut e: &mut crate::cbor::Encoder<W>,
     val: &Invocation,
 ) -> RpcResult<()> {
     e.array(8)?;
@@ -702,24 +673,18 @@ pub fn decode_invocation(d: &mut crate::cbor::Decoder<'_>) -> Result<Invocation,
             }
         };
         if is_array {
-            let len = d.array()?.ok_or_else(|| {
-                RpcError::Deser(
-                    "decoding struct Invocation: indefinite array not supported".to_string(),
-                )
-            })?;
+            let len = d.fixed_array()?;
             for __i in 0..(len as usize) {
                 match __i {
                     0 => {
-                        origin = Some(
-                            decode_wasm_cloud_entity(d)
-                                .map_err(|e| format!("decoding 'WasmCloudEntity': {}", e))?,
-                        )
+                        origin = Some(decode_wasm_cloud_entity(d).map_err(|e| {
+                            format!("decoding 'org.wasmcloud.core#WasmCloudEntity': {}", e)
+                        })?)
                     }
                     1 => {
-                        target = Some(
-                            decode_wasm_cloud_entity(d)
-                                .map_err(|e| format!("decoding 'WasmCloudEntity': {}", e))?,
-                        )
+                        target = Some(decode_wasm_cloud_entity(d).map_err(|e| {
+                            format!("decoding 'org.wasmcloud.core#WasmCloudEntity': {}", e)
+                        })?)
                     }
                     2 => operation = Some(d.str()?.to_string()),
                     3 => msg = Some(d.bytes()?.to_vec()),
@@ -739,24 +704,18 @@ pub fn decode_invocation(d: &mut crate::cbor::Decoder<'_>) -> Result<Invocation,
                 }
             }
         } else {
-            let len = d.map()?.ok_or_else(|| {
-                RpcError::Deser(
-                    "decoding struct Invocation: indefinite map not supported".to_string(),
-                )
-            })?;
+            let len = d.fixed_map()?;
             for __i in 0..(len as usize) {
                 match d.str()? {
                     "origin" => {
-                        origin = Some(
-                            decode_wasm_cloud_entity(d)
-                                .map_err(|e| format!("decoding 'WasmCloudEntity': {}", e))?,
-                        )
+                        origin = Some(decode_wasm_cloud_entity(d).map_err(|e| {
+                            format!("decoding 'org.wasmcloud.core#WasmCloudEntity': {}", e)
+                        })?)
                     }
                     "target" => {
-                        target = Some(
-                            decode_wasm_cloud_entity(d)
-                                .map_err(|e| format!("decoding 'WasmCloudEntity': {}", e))?,
-                        )
+                        target = Some(decode_wasm_cloud_entity(d).map_err(|e| {
+                            format!("decoding 'org.wasmcloud.core#WasmCloudEntity': {}", e)
+                        })?)
                     }
                     "operation" => operation = Some(d.str()?.to_string()),
                     "msg" => msg = Some(d.bytes()?.to_vec()),
@@ -857,8 +816,9 @@ pub struct InvocationResponse {
 
 // Encode InvocationResponse as CBOR and append to output stream
 #[doc(hidden)]
+#[allow(unused_mut)]
 pub fn encode_invocation_response<W: crate::cbor::Write>(
-    e: &mut crate::cbor::Encoder<W>,
+    mut e: &mut crate::cbor::Encoder<W>,
     val: &InvocationResponse,
 ) -> RpcResult<()> {
     e.array(4)?;
@@ -898,12 +858,7 @@ pub fn decode_invocation_response(
             }
         };
         if is_array {
-            let len = d.array()?.ok_or_else(|| {
-                RpcError::Deser(
-                    "decoding struct InvocationResponse: indefinite array not supported"
-                        .to_string(),
-                )
-            })?;
+            let len = d.fixed_array()?;
             for __i in 0..(len as usize) {
                 match __i {
                     0 => msg = Some(d.bytes()?.to_vec()),
@@ -929,11 +884,7 @@ pub fn decode_invocation_response(
                 }
             }
         } else {
-            let len = d.map()?.ok_or_else(|| {
-                RpcError::Deser(
-                    "decoding struct InvocationResponse: indefinite map not supported".to_string(),
-                )
-            })?;
+            let len = d.fixed_map()?;
             for __i in 0..(len as usize) {
                 match d.str()? {
                     "msg" => msg = Some(d.bytes()?.to_vec()),
@@ -1000,8 +951,9 @@ pub struct LinkDefinition {
 
 // Encode LinkDefinition as CBOR and append to output stream
 #[doc(hidden)]
+#[allow(unused_mut)]
 pub fn encode_link_definition<W: crate::cbor::Write>(
-    e: &mut crate::cbor::Encoder<W>,
+    mut e: &mut crate::cbor::Encoder<W>,
     val: &LinkDefinition,
 ) -> RpcResult<()> {
     e.array(5)?;
@@ -1035,11 +987,7 @@ pub fn decode_link_definition(
             }
         };
         if is_array {
-            let len = d.array()?.ok_or_else(|| {
-                RpcError::Deser(
-                    "decoding struct LinkDefinition: indefinite array not supported".to_string(),
-                )
-            })?;
+            let len = d.fixed_array()?;
             for __i in 0..(len as usize) {
                 match __i {
                     0 => actor_id = Some(d.str()?.to_string()),
@@ -1047,20 +995,15 @@ pub fn decode_link_definition(
                     2 => link_name = Some(d.str()?.to_string()),
                     3 => contract_id = Some(d.str()?.to_string()),
                     4 => {
-                        values = Some(
-                            decode_link_settings(d)
-                                .map_err(|e| format!("decoding 'LinkSettings': {}", e))?,
-                        )
+                        values = Some(decode_link_settings(d).map_err(|e| {
+                            format!("decoding 'org.wasmcloud.core#LinkSettings': {}", e)
+                        })?)
                     }
                     _ => d.skip()?,
                 }
             }
         } else {
-            let len = d.map()?.ok_or_else(|| {
-                RpcError::Deser(
-                    "decoding struct LinkDefinition: indefinite map not supported".to_string(),
-                )
-            })?;
+            let len = d.fixed_map()?;
             for __i in 0..(len as usize) {
                 match d.str()? {
                     "actorId" => actor_id = Some(d.str()?.to_string()),
@@ -1068,10 +1011,9 @@ pub fn decode_link_definition(
                     "linkName" => link_name = Some(d.str()?.to_string()),
                     "contractId" => contract_id = Some(d.str()?.to_string()),
                     "values" => {
-                        values = Some(
-                            decode_link_settings(d)
-                                .map_err(|e| format!("decoding 'LinkSettings': {}", e))?,
-                        )
+                        values = Some(decode_link_settings(d).map_err(|e| {
+                            format!("decoding 'org.wasmcloud.core#LinkSettings': {}", e)
+                        })?)
                     }
                     _ => d.skip()?,
                 }
@@ -1126,8 +1068,9 @@ pub type LinkSettings = std::collections::HashMap<String, String>;
 
 // Encode LinkSettings as CBOR and append to output stream
 #[doc(hidden)]
+#[allow(unused_mut)]
 pub fn encode_link_settings<W: crate::cbor::Write>(
-    e: &mut crate::cbor::Encoder<W>,
+    mut e: &mut crate::cbor::Encoder<W>,
     val: &LinkSettings,
 ) -> RpcResult<()> {
     e.map(val.len() as u64)?;
@@ -1143,16 +1086,13 @@ pub fn encode_link_settings<W: crate::cbor::Write>(
 pub fn decode_link_settings(d: &mut crate::cbor::Decoder<'_>) -> Result<LinkSettings, RpcError> {
     let __result = {
         {
+            let map_len = d.fixed_map()? as usize;
             let mut m: std::collections::HashMap<String, String> =
-                std::collections::HashMap::default();
-            if let Some(n) = d.map()? {
-                for _ in 0..(n as usize) {
-                    let k = d.str()?.to_string();
-                    let v = d.str()?.to_string();
-                    m.insert(k, v);
-                }
-            } else {
-                return Err(RpcError::Deser("indefinite maps not supported".to_string()));
+                std::collections::HashMap::with_capacity(map_len);
+            for _ in 0..map_len {
+                let k = d.str()?.to_string();
+                let v = d.str()?.to_string();
+                m.insert(k, v);
             }
             m
         }
@@ -1170,8 +1110,9 @@ pub struct WasmCloudEntity {
 
 // Encode WasmCloudEntity as CBOR and append to output stream
 #[doc(hidden)]
+#[allow(unused_mut)]
 pub fn encode_wasm_cloud_entity<W: crate::cbor::Write>(
-    e: &mut crate::cbor::Encoder<W>,
+    mut e: &mut crate::cbor::Encoder<W>,
     val: &WasmCloudEntity,
 ) -> RpcResult<()> {
     e.array(3)?;
@@ -1201,11 +1142,7 @@ pub fn decode_wasm_cloud_entity(
             }
         };
         if is_array {
-            let len = d.array()?.ok_or_else(|| {
-                RpcError::Deser(
-                    "decoding struct WasmCloudEntity: indefinite array not supported".to_string(),
-                )
-            })?;
+            let len = d.fixed_array()?;
             for __i in 0..(len as usize) {
                 match __i {
                     0 => public_key = Some(d.str()?.to_string()),
@@ -1215,11 +1152,7 @@ pub fn decode_wasm_cloud_entity(
                 }
             }
         } else {
-            let len = d.map()?.ok_or_else(|| {
-                RpcError::Deser(
-                    "decoding struct WasmCloudEntity: indefinite map not supported".to_string(),
-                )
-            })?;
+            let len = d.fixed_map()?;
             for __i in 0..(len as usize) {
                 match d.str()? {
                     "publicKey" => public_key = Some(d.str()?.to_string()),

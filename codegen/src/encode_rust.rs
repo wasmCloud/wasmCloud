@@ -106,7 +106,13 @@ fn encode_double(val: ValExpr) -> String {
     format!("e.f64({})?;\n", val.as_copy())
 }
 fn encode_document(val: ValExpr) -> String {
-    format!("e.bytes({})?;\n", val.as_ref())
+    format!(
+        "wasmbus_rpc::common::encode_document(&mut e, {})?;\n",
+        val.as_ref()
+    )
+}
+fn encode_unit() -> String {
+    "e.null()?;\n".to_string()
 }
 fn encode_timestamp(val: ValExpr) -> String {
     format!(
@@ -162,54 +168,21 @@ impl<'model> RustCodeGen<'model> {
                 b"I8" => encode_byte(val),
                 b"F64" => encode_double(val),
                 b"F32" => encode_float(val),
-                _ => {
-                    let mut s = String::new();
-                    if self.namespace.is_none()
-                        || self.namespace.as_ref().unwrap() != wasmcloud_model_namespace()
-                    {
-                        s.push_str(&self.import_core);
-                        s.push_str("::model::");
-                    }
-                    s.push_str(&format!(
-                        "encode_{}( e, {})?;\n",
-                        crate::strings::to_snake_case(&id.shape_name().to_string()),
-                        val.as_ref()
-                    ));
-                    s
-                }
+                _ => format!(
+                    "{}encode_{}( e, {})?;\n",
+                    &self.get_model_crate(),
+                    crate::strings::to_snake_case(&id.shape_name().to_string()),
+                    val.as_ref()
+                ),
             }
-        } else if self.namespace.is_some() && id.namespace() == self.namespace.as_ref().unwrap() {
+        } else {
             format!(
-                "encode_{}({} e, {})?;\n",
+                "{}encode_{}({} e, {})?;\n",
+                self.get_crate_path(id)?,
                 crate::strings::to_snake_case(&id.shape_name().to_string()),
                 if enc_owned { "&mut " } else { "" },
-                val.as_ref()
+                val.as_ref(),
             )
-        } else {
-            match self.packages.get(&id.namespace().to_string()) {
-                Some(crate::model::PackageName {
-                    crate_name: Some(crate_name),
-                    ..
-                }) => {
-                    // the crate name should be valid rust syntax. If not, they'll get an error with rustc
-                    format!(
-                        "{}::encode_{}( {} e, {})?;\n",
-                        &crate_name,
-                        crate::strings::to_snake_case(&id.shape_name().to_string()),
-                        if enc_owned { "&mut " } else { "" },
-                        val.as_ref(),
-                    )
-                }
-                _ => {
-                    return Err(Error::Model(format!(
-                        "undefined crate for namespace {} for symbol {}. Make sure codegen.toml \
-                         includes all dependent namespaces, and that the dependent .smithy file \
-                         contains package metadata with crate: value",
-                        &id.namespace(),
-                        &id
-                    )));
-                }
-            }
         };
         Ok(stmt)
     }
@@ -301,9 +274,13 @@ impl<'model> RustCodeGen<'model> {
                 s
             }
             ShapeKind::Structure(struct_) => {
-                let (s, is_empty_struct) = self.encode_struct(id, struct_, val)?;
-                empty_struct = is_empty_struct;
-                s
+                if id != crate::model::unit_shape() {
+                    let (s, is_empty_struct) = self.encode_struct(id, struct_, val)?;
+                    empty_struct = is_empty_struct;
+                    s
+                } else {
+                    encode_unit()
+                }
             }
             ShapeKind::Union(union_) => {
                 let (s, _) = self.encode_union(id, union_, val)?;
@@ -325,15 +302,30 @@ impl<'model> RustCodeGen<'model> {
         val: ValExpr,
     ) -> Result<(String, IsEmptyStruct)> {
         let (fields, _) = crate::model::get_sorted_fields(id.shape_name(), strukt)?;
+        // FUTURE: if all variants are unit, this can be encoded as an int, not array
+        //   .. but decoder would have to peek to distinguish array from int
+        //let is_all_unit = fields
+        //    .iter()
+        //    .all(|f| f.target() == crate::model::unit_shape());
+        let is_all_unit = false; // for now, stick with array
         let mut s = String::new();
         s.push_str(&format!("// encoding union {}\n", id.shape_name()));
         s.push_str("e.array(2)?;\n");
         s.push_str(&format!("match {} {{\n", val.as_str()));
         for field in fields.iter() {
+            let target = field.target();
             let field_name = self.to_type_name(&field.id().to_string());
-            s.push_str(&format!("{}::{}(v) => {{", id.shape_name(), &field_name));
-            s.push_str(&format!("e.u16({})?;\n", &field.field_num().unwrap()));
-            s.push_str(&self.encode_shape_id(field.target(), ValExpr::Ref("v"), false)?);
+            if target == crate::model::unit_shape() {
+                s.push_str(&format!("{}::{} => {{", id.shape_name(), &field_name));
+                s.push_str(&format!("e.u16({})?;\n", &field.field_num().unwrap()));
+                if !is_all_unit {
+                    s.push_str(&encode_unit());
+                }
+            } else {
+                s.push_str(&format!("{}::{}(v) => {{", id.shape_name(), &field_name));
+                s.push_str(&format!("e.u16({})?;\n", &field.field_num().unwrap()));
+                s.push_str(&self.encode_shape_id(target, ValExpr::Ref("v"), false)?);
+            }
             s.push_str("},\n");
         }
         s.push_str("}\n");
@@ -427,8 +419,9 @@ impl<'model> RustCodeGen<'model> {
                 let mut s = format!(
                     r#" 
                 // Encode {} as CBOR and append to output stream
-                #[doc(hidden)] {}
-                pub fn encode_{}<W: {}::cbor::Write>(e: &mut {}::cbor::Encoder<W>, {}: &{}) -> RpcResult<()>
+                #[doc(hidden)] #[allow(unused_mut)] {}
+                pub fn encode_{}<W: {}::cbor::Write>(
+                    mut e: &mut {}::cbor::Encoder<W>, {}: &{}) -> RpcResult<()>
                 {{
                 "#,
                     &name,

@@ -1,4 +1,4 @@
-// This file is generated automatically using wasmcloud/weld-codegen 0.4.2
+// This file is generated automatically using wasmcloud/weld-codegen 0.4.3
 #[allow(unused_imports)]
 use crate::error::{RpcError, RpcResult};
 #[allow(unused_imports)]
@@ -6,6 +6,7 @@ use minicbor::{encode::Write, Encode};
 #[allow(unused_imports)]
 use serde::{Deserialize, Serialize};
 
+#[allow(dead_code)]
 pub const SMITHY_VERSION: &str = "1.0";
 
 /// Capability contract id, e.g. 'wasmcloud:httpserver'
@@ -13,8 +14,9 @@ pub type CapabilityContractId = String;
 
 // Encode CapabilityContractId as CBOR and append to output stream
 #[doc(hidden)]
+#[allow(unused_mut)]
 pub fn encode_capability_contract_id<W: crate::cbor::Write>(
-    e: &mut crate::cbor::Encoder<W>,
+    mut e: &mut crate::cbor::Encoder<W>,
     val: &CapabilityContractId,
 ) -> RpcResult<()> {
     e.str(val)?;
@@ -34,9 +36,10 @@ pub type F32 = f32;
 
 // Encode F32 as CBOR and append to output stream
 #[doc(hidden)]
+#[allow(unused_mut)]
 #[inline]
 pub fn encode_f32<W: crate::cbor::Write>(
-    e: &mut crate::cbor::Encoder<W>,
+    mut e: &mut crate::cbor::Encoder<W>,
     val: &F32,
 ) -> RpcResult<()> {
     e.f32(*val)?;
@@ -55,9 +58,10 @@ pub type F64 = f64;
 
 // Encode F64 as CBOR and append to output stream
 #[doc(hidden)]
+#[allow(unused_mut)]
 #[inline]
 pub fn encode_f64<W: crate::cbor::Write>(
-    e: &mut crate::cbor::Encoder<W>,
+    mut e: &mut crate::cbor::Encoder<W>,
     val: &F64,
 ) -> RpcResult<()> {
     e.f64(*val)?;
@@ -76,9 +80,10 @@ pub type I16 = i16;
 
 // Encode I16 as CBOR and append to output stream
 #[doc(hidden)]
+#[allow(unused_mut)]
 #[inline]
 pub fn encode_i16<W: crate::cbor::Write>(
-    e: &mut crate::cbor::Encoder<W>,
+    mut e: &mut crate::cbor::Encoder<W>,
     val: &I16,
 ) -> RpcResult<()> {
     e.i16(*val)?;
@@ -97,9 +102,10 @@ pub type I32 = i32;
 
 // Encode I32 as CBOR and append to output stream
 #[doc(hidden)]
+#[allow(unused_mut)]
 #[inline]
 pub fn encode_i32<W: crate::cbor::Write>(
-    e: &mut crate::cbor::Encoder<W>,
+    mut e: &mut crate::cbor::Encoder<W>,
     val: &I32,
 ) -> RpcResult<()> {
     e.i32(*val)?;
@@ -118,9 +124,10 @@ pub type I64 = i64;
 
 // Encode I64 as CBOR and append to output stream
 #[doc(hidden)]
+#[allow(unused_mut)]
 #[inline]
 pub fn encode_i64<W: crate::cbor::Write>(
-    e: &mut crate::cbor::Encoder<W>,
+    mut e: &mut crate::cbor::Encoder<W>,
     val: &I64,
 ) -> RpcResult<()> {
     e.i64(*val)?;
@@ -139,9 +146,10 @@ pub type I8 = i8;
 
 // Encode I8 as CBOR and append to output stream
 #[doc(hidden)]
+#[allow(unused_mut)]
 #[inline]
 pub fn encode_i8<W: crate::cbor::Write>(
-    e: &mut crate::cbor::Encoder<W>,
+    mut e: &mut crate::cbor::Encoder<W>,
     val: &I8,
 ) -> RpcResult<()> {
     e.i8(*val)?;
@@ -160,8 +168,9 @@ pub type IdentifierList = Vec<String>;
 
 // Encode IdentifierList as CBOR and append to output stream
 #[doc(hidden)]
+#[allow(unused_mut)]
 pub fn encode_identifier_list<W: crate::cbor::Write>(
-    e: &mut crate::cbor::Encoder<W>,
+    mut e: &mut crate::cbor::Encoder<W>,
     val: &IdentifierList,
 ) -> RpcResult<()> {
     e.array(val.len() as u64)?;
@@ -203,9 +212,10 @@ pub type U16 = i16;
 
 // Encode U16 as CBOR and append to output stream
 #[doc(hidden)]
+#[allow(unused_mut)]
 #[inline]
 pub fn encode_u16<W: crate::cbor::Write>(
-    e: &mut crate::cbor::Encoder<W>,
+    mut e: &mut crate::cbor::Encoder<W>,
     val: &U16,
 ) -> RpcResult<()> {
     e.i16(*val)?;
@@ -224,9 +234,10 @@ pub type U32 = i32;
 
 // Encode U32 as CBOR and append to output stream
 #[doc(hidden)]
+#[allow(unused_mut)]
 #[inline]
 pub fn encode_u32<W: crate::cbor::Write>(
-    e: &mut crate::cbor::Encoder<W>,
+    mut e: &mut crate::cbor::Encoder<W>,
     val: &U32,
 ) -> RpcResult<()> {
     e.i32(*val)?;
@@ -245,9 +256,10 @@ pub type U64 = i64;
 
 // Encode U64 as CBOR and append to output stream
 #[doc(hidden)]
+#[allow(unused_mut)]
 #[inline]
 pub fn encode_u64<W: crate::cbor::Write>(
-    e: &mut crate::cbor::Encoder<W>,
+    mut e: &mut crate::cbor::Encoder<W>,
     val: &U64,
 ) -> RpcResult<()> {
     e.i64(*val)?;
@@ -266,9 +278,10 @@ pub type U8 = i8;
 
 // Encode U8 as CBOR and append to output stream
 #[doc(hidden)]
+#[allow(unused_mut)]
 #[inline]
 pub fn encode_u8<W: crate::cbor::Write>(
-    e: &mut crate::cbor::Encoder<W>,
+    mut e: &mut crate::cbor::Encoder<W>,
     val: &U8,
 ) -> RpcResult<()> {
     e.i8(*val)?;
@@ -297,6 +310,10 @@ pub struct CodegenRust {
     #[serde(rename = "nonExhaustive")]
     #[serde(default)]
     pub non_exhaustive: bool,
+    /// if true, do not generate code for this item.
+    /// This trait can be used if an item needs to be hand-generated
+    #[serde(default)]
+    pub skip: bool,
 }
 
 /// indicates that a trait or class extends one or more bases

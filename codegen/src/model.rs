@@ -64,6 +64,7 @@ lazy_static! {
         Identifier::from_str(TRAIT_RENAME).unwrap(),
         None
     );
+    static ref UNIT_ID: ShapeID = ShapeID::new_unchecked(WASMCLOUD_MODEL_NAMESPACE, "Unit", None);
 }
 
 /// namespace for org.wasmcloud.model
@@ -102,6 +103,10 @@ pub fn field_num_trait() -> &'static ShapeID {
 /// shape id of trait @rename
 pub fn rename_trait() -> &'static ShapeID {
     &RENAME_TRAIT_ID
+}
+
+pub fn unit_shape() -> &'static ShapeID {
+    &UNIT_ID
 }
 
 #[allow(dead_code)]

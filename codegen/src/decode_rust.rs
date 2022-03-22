@@ -1,7 +1,7 @@
 //! CBOR Decode functions
 
 use crate::{
-    codegen_rust::{is_optional_type, is_rust_primitive, RustCodeGen},
+    codegen_rust::{is_optional_type, is_rust_primitive, Lifetime, RustCodeGen},
     error::{Error, Result},
     gen::CodeGen,
     model::{wasmcloud_model_namespace, Ty},
@@ -73,7 +73,10 @@ fn decode_big_decimal() -> &'static str {
     todo!() // tag big decimal
 }
 fn decode_document() -> &'static str {
-    "d.bytes()?"
+    "wasmbus_rpc::common::decode_document(d)?"
+}
+fn decode_unit() -> &'static str {
+    "d.null()?"
 }
 
 impl<'model> RustCodeGen<'model> {
@@ -112,52 +115,19 @@ impl<'model> RustCodeGen<'model> {
                 b"I8" => decode_byte().to_string(),
                 b"F64" => decode_double().to_string(),
                 b"F32" => decode_float().to_string(),
-                _ => {
-                    let mut s = String::new();
-                    if self.namespace.is_none()
-                        || self.namespace.as_ref().unwrap() != wasmcloud_model_namespace()
-                    {
-                        s.push_str(&self.import_core);
-                        s.push_str("::model::");
-                    }
-                    s.push_str(&format!(
-                        "decode_{}(d)?",
-                        crate::strings::to_snake_case(&id.shape_name().to_string()),
-                    ));
-                    s
-                }
+                _ => format!(
+                    "{}decode_{}(d)?",
+                    self.get_model_crate(),
+                    crate::strings::to_snake_case(&id.shape_name().to_string()),
+                ),
             }
-        } else if self.namespace.is_some() && id.namespace() == self.namespace.as_ref().unwrap() {
-            format!(
-                "decode_{}(d).map_err(|e| format!(\"decoding '{}': {{}}\", e))?",
-                crate::strings::to_snake_case(&id.shape_name().to_string()),
-                &id.shape_name().to_string()
-            )
         } else {
-            match self.packages.get(&id.namespace().to_string()) {
-                Some(crate::model::PackageName {
-                    crate_name: Some(crate_name),
-                    ..
-                }) => {
-                    // the crate name should be valid rust syntax. If not, they'll get an error with rustc
-                    format!(
-                        "{}::decode_{}(d).map_err(|e| format!(\"decoding '{}::{}': {{}}\", e))?",
-                        &crate_name,
-                        crate::strings::to_snake_case(&id.shape_name().to_string()),
-                        &crate_name,
-                        &id.shape_name().to_string()
-                    )
-                }
-                _ => {
-                    return Err(Error::Model(format!(
-                        "undefined crate for namespace {} for symbol {}. Make sure codegen.toml \
-                         includes all dependent namespaces, and that the dependent .smithy file \
-                         contains package metadata with crate: value",
-                        &id.namespace(),
-                        &id
-                    )));
-                }
-            }
+            format!(
+                "{}decode_{}(d).map_err(|e| format!(\"decoding '{}': {{}}\", e))?",
+                self.get_crate_path(id)?,
+                crate::strings::to_snake_case(&id.shape_name().to_string()),
+                &id.to_string()
+            )
         };
         Ok(stmt)
     }
@@ -177,35 +147,33 @@ impl<'model> RustCodeGen<'model> {
                 Simple::Timestamp => decode_timestamp(),
                 Simple::BigInteger => decode_big_integer(),
                 Simple::BigDecimal => decode_big_decimal(),
-                Simple::Document => decode_blob(),
+                Simple::Document => decode_document(),
             }
             .to_string(),
             ShapeKind::Map(map) => {
                 format!(
                     r#"
                     {{
-                        let mut m: std::collections::HashMap<{},{}> = std::collections::HashMap::default();
-                        if let Some(n) = d.map()? {{
-                            for _ in 0..(n as usize) {{
-                                let k = {};
-                                let v = {};
-                                m.insert(k,v);
-                            }}
-                        }} else {{
-                            return Err(RpcError::Deser("indefinite maps not supported".to_string()));
+                        let map_len = d.fixed_map()? as usize;
+                        let mut m: std::collections::HashMap<{},{}> = std::collections::HashMap::with_capacity(map_len);
+                        for _ in 0..map_len {{
+                            let k = {};
+                            let v = {};
+                            m.insert(k,v);
                         }}
                         m
                     }}
                     "#,
-                    &self.type_string(Ty::Shape(map.key().target()))?,
-                    &self.type_string(Ty::Shape(map.value().target()))?,
+                    &self.type_string(Ty::Shape(map.key().target()), Lifetime::Any)?,
+                    &self.type_string(Ty::Shape(map.value().target()), Lifetime::Any)?,
                     &self.decode_shape_id(map.key().target())?,
                     &self.decode_shape_id(map.value().target())?,
                 )
             }
             ShapeKind::List(list) | ShapeKind::Set(list) => {
                 let member_decoder = self.decode_shape_id(list.member().target())?;
-                let member_type = self.type_string(Ty::Shape(list.member().target()))?;
+                let member_type =
+                    self.type_string(Ty::Shape(list.member().target()), Lifetime::Any)?;
                 format!(
                     r#"
                     if let Some(n) = d.array()? {{
@@ -230,7 +198,13 @@ impl<'model> RustCodeGen<'model> {
                     &member_type, &member_decoder, &member_type, self.import_core, &member_decoder,
                 )
             }
-            ShapeKind::Structure(strukt) => self.decode_struct(id, strukt)?,
+            ShapeKind::Structure(strukt) => {
+                if id == crate::model::unit_shape() {
+                    decode_unit().to_string()
+                } else {
+                    self.decode_struct(id, strukt)?
+                }
+            }
             ShapeKind::Union(union_) => self.decode_union(id, union_)?,
             ShapeKind::Operation(_)
             | ShapeKind::Resource(_)
@@ -246,25 +220,41 @@ impl<'model> RustCodeGen<'model> {
         let mut s = format!(
             r#"
             // decoding union {}
-            let len = d.array()?.ok_or_else(||RpcError::Deser("decoding union '{}': indefinite array not supported".to_string()))?;
+            let len = d.fixed_array()?;
             if len != 2 {{ return Err(RpcError::Deser("decoding union '{}': expected 2-array".to_string())); }}
             match d.u16()? {{
         "#,
-            enum_name, enum_name, enum_name
+            enum_name, enum_name,
         );
         for field in fields.iter() {
             let field_num = field.field_num().unwrap();
+            let target = field.target();
             let field_name = self.to_type_name(&field.id().to_string());
-            let field_decoder = self.decode_shape_id(field.target())?;
-            s.push_str(&format!(
-                r#"
-            {} => {{
-                let val = {};
-                {}::{}(val)
-            }},
-            "#,
-                &field_num, field_decoder, enum_name, field_name
-            ));
+            if target == crate::model::unit_shape() {
+                s.push_str(&format!(
+                    r#"
+                    {} => {{ 
+                            {};
+                            {}::{}
+                          }},
+                    "#,
+                    &field_num,
+                    &decode_unit(),
+                    enum_name,
+                    field_name
+                ));
+            } else {
+                let field_decoder = self.decode_shape_id(target)?;
+                s.push_str(&format!(
+                    r#"
+                    {} => {{
+                        let val = {};
+                        {}::{}(val)
+                    }},
+                    "#,
+                    &field_num, field_decoder, enum_name, field_name
+                ));
+            }
         }
         s.push_str(&format!(r#"
             n => {{ return Err(RpcError::Deser(format!("invalid field number for union '{}':{{}}", n))); }},
@@ -278,9 +268,13 @@ impl<'model> RustCodeGen<'model> {
     fn decode_struct(&self, id: &ShapeID, strukt: &StructureOrUnion) -> Result<String> {
         let (fields, _is_numbered) = crate::model::get_sorted_fields(id.shape_name(), strukt)?;
         let mut s = String::new();
+        let lt = match self.has_lifetime(id) {
+            true => Lifetime::L("v"),
+            false => Lifetime::None,
+        };
         for field in fields.iter() {
             let field_name = self.to_field_name(field.id(), field.traits())?;
-            let field_type = self.field_type_string(field)?;
+            let field_type = self.field_type_string(field, lt)?;
             if is_optional_type(field) {
                 // allows adding Optional fields at end of struct
                 // and maintaining backwards compatibility to read structs
@@ -303,9 +297,9 @@ impl<'model> RustCodeGen<'model> {
                 _ => return Err(RpcError::Deser("decoding struct {}, expected array or map".to_string()))
             }};
             if is_array {{
-                let len = d.array()?.ok_or_else(||RpcError::Deser("decoding struct {}: indefinite array not supported".to_string()))?;
+                let len = d.fixed_array()?;
                 for __i in 0..(len as usize) {{
-        "#, self.import_core, self.import_core, id.shape_name(), id.shape_name()));
+        "#, self.import_core, self.import_core, id.shape_name() ));
         if fields.is_empty() {
             s.push_str(
                 r#"
@@ -352,14 +346,13 @@ impl<'model> RustCodeGen<'model> {
             "#,
             );
         }
-        s.push_str(&format!(
+        s.push_str(
             r#" 
-                }}
-            }} else {{
-                let len = d.map()?.ok_or_else(||RpcError::Deser("decoding struct {}: indefinite map not supported".to_string()))?;
-                for __i in 0..(len as usize) {{
+                }
+            } else {
+                let len = d.fixed_map()?;
+                for __i in 0..(len as usize) {
             "#,
-            id.shape_name())
         );
         if fields.is_empty() {
             // we think struct is empty (as of current definition),
@@ -446,7 +439,7 @@ impl<'model> RustCodeGen<'model> {
     }
 
     /// generate decode_* function for every declared type
-    /// name of the function is encode_<S> where <S> is the camel_case type name
+    /// name of the function is decode_<S> where <S> is the camel_case type name
     /// It is generated in the module that declared type S, so it can always
     /// be found by prefixing the function name with the module path.
     pub(crate) fn declare_shape_decoder(
@@ -455,6 +448,11 @@ impl<'model> RustCodeGen<'model> {
         id: &ShapeID,
         kind: &ShapeKind,
     ) -> Result<()> {
+        let has_lifetime = self.has_lifetime(id);
+        // since we don't have borrowing decoders yet, skip it if there are lifetimes
+        if has_lifetime {
+            return Ok(());
+        }
         match kind {
             ShapeKind::Simple(_)
             | ShapeKind::Structure(_)
@@ -468,14 +466,17 @@ impl<'model> RustCodeGen<'model> {
                     r#"
                 // Decode {} from cbor input stream
                 #[doc(hidden)] {}
-                pub fn decode_{}(d: &mut {}::cbor::Decoder<'_>) -> Result<{},RpcError>
+                pub fn decode_{}{}(d: &mut {}::cbor::Decoder{}) -> Result<{}{},RpcError>
                 {{
                     let __result = {{ "#,
                     &name,
                     if is_rust_copy { "#[inline]" } else { "" },
                     crate::strings::to_snake_case(&name.to_string()),
+                    if has_lifetime { "<'v>" } else { "" },
                     self.import_core,
-                    &id.shape_name()
+                    if has_lifetime { "<'v>" } else { "<'_>" },
+                    self.to_type_name(&id.shape_name().to_string()),
+                    if has_lifetime { "<'v>" } else { "" },
                 );
                 let body = self.decode_shape_kind(id, kind)?;
                 s.push_str(&body);

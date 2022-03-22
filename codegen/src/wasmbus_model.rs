@@ -1,9 +1,10 @@
-// This file is generated automatically using wasmcloud/weld-codegen 0.4.0
+// This file is generated automatically using wasmcloud/weld-codegen 0.4.3
 #[allow(unused_imports)]
 use minicbor::{encode::Write, Encode};
 #[allow(unused_imports)]
 use serde::{Deserialize, Serialize};
 
+#[allow(dead_code)]
 pub const SMITHY_VERSION: &str = "1.0";
 
 /// Capability contract id, e.g. 'wasmcloud:httpserver'
@@ -57,6 +58,10 @@ pub struct CodegenRust {
     #[serde(rename = "nonExhaustive")]
     #[serde(default)]
     pub non_exhaustive: bool,
+    /// if true, do not generate code for this item.
+    /// This trait can be used if an item needs to be hand-generated
+    #[serde(default)]
+    pub skip: bool,
 }
 
 /// indicates that a trait or class extends one or more bases
