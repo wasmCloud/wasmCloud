@@ -128,10 +128,10 @@ async fn main() {
                 OutputKind::Json => {
                     let mut map = out.map;
                     map.insert("success".to_string(), json!(true));
-                    println!("{}", serde_json::to_string_pretty(&map).unwrap());
+                    println!("\n{}", serde_json::to_string_pretty(&map).unwrap());
                 }
                 OutputKind::Text => {
-                    println!("{}", out.text);
+                    println!("\n{}", out.text);
                 }
             }
 
@@ -153,10 +153,10 @@ async fn main() {
                         map.insert("trace".to_string(), json!(trace));
                     }
 
-                    eprintln!("{}", serde_json::to_string_pretty(&map).unwrap());
+                    eprintln!("\n{}", serde_json::to_string_pretty(&map).unwrap());
                 }
                 OutputKind::Text => {
-                    eprintln!("{}", e);
+                    eprintln!("\n{}", e);
                     if !trace.is_empty() {
                         eprintln!("Error trace:");
                         eprintln!("{}", trace.join("\n"));

@@ -3761,7 +3761,7 @@ dependencies = [
 
 [[package]]
 name = "wash-cli"
-version = "0.10.0"
+version = "0.10.0-alpha.1"
 dependencies = [
  "anyhow",
  "assert-json-diff",
@@ -3770,7 +3770,9 @@ dependencies = [
  "cargo",
  "cargo_atelier",
  "clap 3.1.6",
+ "cloudevents-sdk",
  "console",
+ "crossbeam-channel",
  "derive_more",
  "dialoguer",
  "dirs",
