@@ -65,7 +65,7 @@ fn integration_par_create(issuer: &str, subject: &str, archive: &str) {
     assert!(create.status.success());
     assert_eq!(
         output_to_string(create).unwrap(),
-        format!("Successfully created archive {}\n", archive)
+        format!("\nSuccessfully created archive {}\n", archive)
     );
 
     let inspect_created = wash()
@@ -126,7 +126,7 @@ fn integration_par_insert(issuer: &str, subject: &str, archive: &str) {
     assert_eq!(
         output_to_string(insert_bin1).unwrap(),
         format!(
-            "Successfully inserted {} into archive {}\n",
+            "\nSuccessfully inserted {} into archive {}\n",
             bin1.to_str().unwrap(),
             archive
         )
@@ -179,7 +179,7 @@ fn integration_par_insert(issuer: &str, subject: &str, archive: &str) {
     assert_eq!(
         output_to_string(insert_bin2).unwrap(),
         format!(
-            "Successfully inserted {} into archive {}\n",
+            "\nSuccessfully inserted {} into archive {}\n",
             bin2.to_str().unwrap(),
             archive
         )

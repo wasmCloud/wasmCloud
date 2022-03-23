@@ -54,7 +54,7 @@ fn integration_claims_sign() {
     assert_eq!(
         output_to_string(sign_echo).unwrap(),
         format!(
-            "Successfully signed {} with capabilities: wasmcloud:httpserver\n",
+            "\nSuccessfully signed {} with capabilities: wasmcloud:httpserver\n",
             signed_wasm_path.to_str().unwrap()
         )
     );
@@ -292,7 +292,7 @@ fn integration_claims_call_alias() {
     assert_eq!(
         output_to_string(sign_logger).unwrap(),
         format!(
-            "Successfully signed {} with capabilities: wasmcloud:httpserver,wasmcloud:builtin:logging\n",
+            "\nSuccessfully signed {} with capabilities: wasmcloud:httpserver,wasmcloud:builtin:logging\n",
             signed_wasm_path.to_str().unwrap()
         )
     );
