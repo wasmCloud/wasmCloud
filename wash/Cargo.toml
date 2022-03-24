@@ -1,6 +1,6 @@
 [package]
 name = "wash-cli"
-version = "0.10.0-alpha.1"
+version = "0.10.0-alpha.2"
 authors = ["wasmCloud Team"]
 categories = ["wasm", "command-line-utilities"]
 description = "wasmcloud Shell (wash) CLI tool"

@@ -3761,7 +3761,7 @@ dependencies = [
 
 [[package]]
 name = "wash-cli"
-version = "0.10.0-alpha.1"
+version = "0.10.0-alpha.2"
 dependencies = [
  "anyhow",
  "assert-json-diff",
