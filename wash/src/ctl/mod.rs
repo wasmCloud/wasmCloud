@@ -195,6 +195,9 @@ pub(crate) struct LinkDelCommand {
 }
 
 #[derive(Parser, Debug, Clone)]
+#[clap(
+    override_usage = "wash ctl link put --link-name <LINK_NAME> [OPTIONS] <actor-id> <provider-id> <contract-id> [values]..."
+)]
 pub(crate) struct LinkPutCommand {
     #[clap(flatten)]
     opts: ConnectionOpts,
