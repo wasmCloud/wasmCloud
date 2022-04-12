@@ -273,8 +273,10 @@ pub(crate) async fn handle_inspect(cmd: InspectCommand) -> Result<CommandOutput>
     let artifact = ProviderArchive::try_load(&artifact_bytes).map_err(|e| anyhow!("{}", e))?;
     let claims = artifact
         .claims()
-        .ok_or(anyhow!("No claims found in artifact"))?;
-    let metadata = claims.metadata.ok_or(anyhow!("No metadata found"))?;
+        .ok_or_else(|| anyhow!("No claims found in artifact"))?;
+    let metadata = claims
+        .metadata
+        .ok_or_else(|| anyhow!("No metadata found"))?;
 
     let friendly_rev = match metadata.rev {
         Some(rev) => format!("{}", rev),
