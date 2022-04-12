@@ -91,9 +91,9 @@ pub(crate) fn wait_for_actor_start_event(
                         cloud_event
                             .data
                             .get("error")
-                            .ok_or(anyhow!("No error found in data"))?
+                            .ok_or_else(|| anyhow!("No error found in data"))?
                             .as_str()
-                            .ok_or(anyhow!("error is not a string"))?
+                            .ok_or_else(|| anyhow!("error is not a string"))?
                     );
 
                     return Ok(EventCheckOutcome::Failure(error));
@@ -146,9 +146,9 @@ pub fn wait_for_provider_start_event(
                         cloud_event
                             .data
                             .get("error")
-                            .ok_or(anyhow!("No error found in data"))?
+                            .ok_or_else(|| anyhow!("No error found in data"))?
                             .as_str()
-                            .ok_or(anyhow!("error is not a string"))?
+                            .ok_or_else(|| anyhow!("error is not a string"))?
                     );
 
                     return Ok(EventCheckOutcome::Failure(error));
@@ -202,9 +202,9 @@ pub fn wait_for_provider_stop_event(
                         cloud_event
                             .data
                             .get("error")
-                            .ok_or(anyhow!("No error found in data"))?
+                            .ok_or_else(|| anyhow!("No error found in data"))?
                             .as_str()
-                            .ok_or(anyhow!("error is not a string"))?
+                            .ok_or_else(|| anyhow!("error is not a string"))?
                     );
 
                     return Ok(EventCheckOutcome::Failure(error));
@@ -256,9 +256,9 @@ pub fn wait_for_actor_stop_event(
                         cloud_event
                             .data
                             .get("error")
-                            .ok_or(anyhow!("No error found in data"))?
+                            .ok_or_else(|| anyhow!("No error found in data"))?
                             .as_str()
-                            .ok_or(anyhow!("error is not a string"))?
+                            .ok_or_else(|| anyhow!("error is not a string"))?
                     );
 
                     return Ok(EventCheckOutcome::Failure(error));
@@ -285,7 +285,7 @@ struct CloudEventData {
 fn get_wasmbus_event_info(event: Event) -> Result<CloudEventData> {
     let data: serde_json::Value = event
         .data()
-        .ok_or(anyhow!("No data in event"))?
+        .ok_or_else(|| anyhow!("No data in event"))?
         .clone()
         .try_into()?;
 
