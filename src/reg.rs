@@ -1,10 +1,11 @@
 extern crate oci_distribution;
 
 use crate::appearance::spinner::Spinner;
-use crate::util::{cached_file, CommandOutput, OutputKind};
+use crate::util::{cached_file, labels_vec_to_hashmap, CommandOutput, OutputKind};
 use anyhow::{anyhow, bail, Result};
 use clap::{Parser, Subcommand};
 use log::{debug, warn};
+use oci_distribution::manifest::{OciDescriptor, OciManifest};
 use oci_distribution::{client::*, secrets::RegistryAuth, Reference};
 use provider_archive::ProviderArchive;
 use serde_json::json;
@@ -78,6 +79,10 @@ pub(crate) struct PushCommand {
     /// Allow latest artifact tags
     #[clap(long = "allow-latest")]
     pub(crate) allow_latest: bool,
+
+    /// Optional set of annotations to apply to the OCI artifact manifest
+    #[clap(short = 'a', long = "annotation", name = "annotations")]
+    pub(crate) annotations: Option<Vec<String>>,
 
     #[clap(flatten)]
     pub(crate) opts: AuthOpts,
@@ -343,6 +348,7 @@ pub(crate) async fn handle_push(
         cmd.opts.user,
         cmd.opts.password,
         cmd.opts.insecure,
+        cmd.annotations,
     )
     .await?;
 
@@ -367,6 +373,7 @@ pub(crate) async fn push_artifact(
     user: Option<String>,
     password: Option<String>,
     insecure: bool,
+    annotations: Option<Vec<String>>,
 ) -> Result<()> {
     let image: Reference = url.parse()?;
 
@@ -423,6 +430,13 @@ pub(crate) async fn push_artifact(
         _ => RegistryAuth::Anonymous,
     };
 
+    let manifest = generate_manifest(
+        &image_data,
+        &config_buf,
+        config_media_type,
+        annotations.unwrap_or_default(),
+    );
+
     client
         .push(
             &image,
@@ -430,10 +444,58 @@ pub(crate) async fn push_artifact(
             &config_buf,
             config_media_type,
             &auth,
-            None,
+            Some(manifest),
         )
         .await?;
     Ok(())
+}
+
+/// Modified version of oci_distribution::generate_manifest to support additional annotations
+fn generate_manifest(
+    image_data: &ImageData,
+    config_data: &[u8],
+    config_media_type: &str,
+    custom_annotations: Vec<String>,
+) -> OciManifest {
+    let mut manifest = OciManifest::default();
+
+    manifest.config.media_type = config_media_type.to_string();
+    manifest.config.size = config_data.len() as i64;
+    manifest.config.digest = sha256_digest(config_data);
+
+    // Insert additional annotations into this manifest
+    if let Ok(additional_annotations) = labels_vec_to_hashmap(custom_annotations) {
+        manifest.annotations = Some(additional_annotations);
+    }
+
+    // We only support one layer for actors and providers at this time
+    if let Some(layer) = image_data.layers.get(0) {
+        let digest = sha256_digest(&layer.data);
+
+        let mut annotations = HashMap::new();
+        annotations.insert(
+            "org.opencontainers.image.title".to_string(),
+            digest.to_string(),
+        );
+
+        let descriptor = OciDescriptor {
+            size: layer.data.len() as i64,
+            digest,
+            media_type: layer.media_type.clone(),
+            annotations: Some(annotations),
+            ..Default::default()
+        };
+
+        manifest.layers.push(descriptor);
+    }
+
+    manifest
+}
+
+/// Computes the SHA256 digest of a byte vector
+use sha2::Digest;
+fn sha256_digest(bytes: &[u8]) -> String {
+    format!("sha256:{:x}", sha2::Sha256::digest(bytes))
 }
 
 #[cfg(test)]
