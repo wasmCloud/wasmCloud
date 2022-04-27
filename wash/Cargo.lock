@@ -3777,7 +3777,7 @@ dependencies = [
 
 [[package]]
 name = "wash-cli"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "anyhow",
  "assert-json-diff",
@@ -3815,6 +3815,7 @@ dependencies = [
  "serde_json",
  "serde_with",
  "serde_yaml",
+ "sha2",
  "tempfile",
  "term-table",
  "test-case",
