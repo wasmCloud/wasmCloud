@@ -13,7 +13,7 @@
    \_/\_/ \__,_|___/_| |_| |_|\_____|_|\___/ \__,_|\__,_| |_____/|_| |_|\___|_|_|
 ```
 ## Why wash
-`wash` is a bundle of command line tools that, together, form a comprehensive CLI for [wasmCloud](https://wasmcloud.dev) development. Everything from generating signing keys to a fully interactive REPL environment is contained within the subcommands of `wash`. Our goal with `wash` is to encapsulate our tools into a single binary to make developing WebAssembly with wasmCloud painless and simple.
+`wash` is a bundle of command line tools that, together, form a comprehensive CLI for [wasmCloud](https://wasmcloud.dev) development. Everything from generating new wasmCloud projects, managing cryptographic signing keys, and interacting with OCI compliant registries is contained within the subcommands of `wash`. Our goal with `wash` is to encapsulate our tools into a single binary to make developing WebAssembly with wasmCloud painless and simple.
 
 ## Installing wash
 ### Cargo
@@ -38,6 +38,10 @@ sudo snap install wash --edge --devmode
 brew tap wasmcloud/wasmcloud
 brew install wasmcloud wash
 ```
+### Windows (choco)
+```powershell
+choco install wash
+```
 ### NixOS
 ```
 nix run github:wasmCloud/wash
@@ -51,6 +55,8 @@ Invoke a wasmCloud actor directly with a specified payload. This allows you to t
 Generate JWTs for actors, capability providers, accounts and operators. Sign actor modules with claims including capability IDs, expiration, and keys to verify identity. Inspect actor modules to view their claims.
 ### ctl
 Interact directly with a wasmCloud [control-interface](https://github.com/wasmCloud/control-interface), allowing you to imperatively schedule actors, providers and modify configurations of a wasmCloud host. Can be used to interact with local and remote control-interfaces.
+### ctx
+Automatically connect to your previously launched wasmCloud lattice with a managed context or use contexts to administer remote wasmCloud lattices.
 ### drain
 Manage contents of the local wasmCloud cache. wasmCloud manages a local cache that will avoid redundant fetching of content when possible. `drain` allows you to manually clear that cache to ensure you're always pulling the latest versions of actors and providers that are hosted in remote OCI registries.
 ### gen
