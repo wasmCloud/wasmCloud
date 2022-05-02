@@ -9,10 +9,9 @@ use wasmcloud_test_util::{
     check, check_eq,
     cli::print_test_results,
     provider_test::{test_provider, Provider},
+    run_selected_spawn,
     testing::{TestOptions, TestResult},
 };
-#[allow(unused_imports)]
-use wasmcloud_test_util::{run_selected, run_selected_spawn};
 
 #[tokio::test]
 async fn run_all() {
