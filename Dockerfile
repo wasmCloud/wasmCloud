@@ -25,7 +25,7 @@ RUN cargo build --release
 
 FROM alpine as release-alpine
 WORKDIR /home/user
-RUN apk add --no-cache bash libgcc libressl-dev ca-certificates musl-dev
+RUN apk add --no-cache bash curl libgcc libressl-dev ca-certificates musl-dev
 
 COPY --from=builder /etc/passwd /etc/passwd
 COPY --from=builder /etc/group /etc/group
