@@ -33,7 +33,6 @@ const CORS_ALLOWED_HEADERS: &[&str] = &[
 ];
 const CORS_EXPOSED_HEADERS: &[&str] = &[];
 const CORS_DEFAULT_MAX_AGE_SECS: u64 = 300;
-pub(crate) const DEFAULT_TIMEOUT_MILLIS: u32 = 2000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ServiceSettings {
@@ -55,8 +54,9 @@ pub struct ServiceSettings {
 
     /// Rpc timeout - how long (milliseconds) to wait for actor's response
     /// before returning a status 503 to the http client
+    /// If not set, uses the system-wide rpc timeout
     #[serde(default)]
-    pub timeout_ms: Option<u32>,
+    pub timeout_ms: Option<u64>,
 }
 
 impl Default for ServiceSettings {
@@ -66,7 +66,7 @@ impl Default for ServiceSettings {
             tls: Tls::default(),
             cors: Cors::default(),
             log: Log::default(),
-            timeout_ms: Some(DEFAULT_TIMEOUT_MILLIS),
+            timeout_ms: None,
         }
     }
 }

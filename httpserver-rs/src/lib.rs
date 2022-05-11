@@ -130,11 +130,7 @@ impl HttpServerCore {
         }
         let timeout = {
             let rd = self.inner.read().await;
-            std::time::Duration::from_millis(
-                rd.settings
-                    .timeout_ms
-                    .unwrap_or(crate::settings::DEFAULT_TIMEOUT_MILLIS) as u64,
-            )
+            rd.settings.timeout_ms.map(std::time::Duration::from_millis)
         };
 
         let linkdefs = ld.clone();
@@ -265,10 +261,10 @@ impl HttpServerCore {
         ld: LinkDefinition,
         req: HttpRequest,
         bridge: &'static HostBridge,
-        timeout: std::time::Duration,
+        timeout: Option<std::time::Duration>,
     ) -> Result<HttpResponse, RpcError> {
         trace!("sending request to actor");
-        let tx = ProviderTransport::new_with_timeout(&ld, Some(bridge), Some(timeout));
+        let tx = ProviderTransport::new_with_timeout(&ld, Some(bridge), timeout);
         let ctx = Context::default();
         let actor = HttpServerSender::via(tx);
         match actor.handle_request(&ctx, &req).await {
