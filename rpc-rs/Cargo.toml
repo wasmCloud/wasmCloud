@@ -1,6 +1,6 @@
 [package]
 name = "wasmbus-rpc"
-version = "0.8.4"
+version = "0.8.5"
 authors = [ "wasmcloud Team" ]
 license = "Apache-2.0"
 description = "Runtime library for actors and capability providers"
@@ -34,7 +34,7 @@ thiserror = "1.0"
 time = "0.3.7"
 tokio-timer = "0.2"
 toml = "0.5"
-tracing = { version = "0.1", features = ["log"] }
+tracing = { version = "0.1.34", features = ["log"] }
 tracing-futures = "0.2"
 wasmbus-macros = { path = "../macros", version = "0.1.8" }
 minicbor-ser = "0.1.2"

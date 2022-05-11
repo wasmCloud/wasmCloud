@@ -164,7 +164,9 @@ impl HostBridge {
             &host_data.lattice_rpc_prefix,
             key,
             host_data.host_id.clone(),
-            None,
+            host_data
+                .default_rpc_timeout_ms
+                .map(|ms| Duration::from_millis(ms as u64)),
         );
 
         Ok(HostBridge {
@@ -832,16 +834,17 @@ impl<'send> ProviderTransport<'send> {
     ) -> Self {
         #[allow(clippy::redundant_closure)]
         let bridge = bridge.unwrap_or_else(|| crate::provider_main::get_host_bridge());
+        let timeout = StdMutex::new(timeout.unwrap_or_else(|| {
+            bridge
+                .host_data
+                .default_rpc_timeout_ms
+                .map(|t| Duration::from_millis(t as u64))
+                .unwrap_or(DEFAULT_RPC_TIMEOUT_MILLIS)
+        }));
         Self {
             bridge,
             ld,
-            timeout: StdMutex::new(timeout.unwrap_or_else(|| {
-                bridge
-                    .host_data
-                    .default_rpc_timeout_ms
-                    .map(|t| Duration::from_millis(t as u64))
-                    .unwrap_or(DEFAULT_RPC_TIMEOUT_MILLIS)
-            })),
+            timeout,
         }
     }
 }
