@@ -3092,7 +3092,6 @@ dependencies = [
  "futures 0.3.21",
  "http",
  "reqwest",
- "rmp-serde",
  "serde",
  "serde_bytes",
  "serde_json",
