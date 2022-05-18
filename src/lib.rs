@@ -198,11 +198,7 @@ impl Client {
         let subject = broker::publish_registries(&self.nsprefix);
         trace!("put_registries {}", &subject);
         let bytes = json_serialize(&registries)?;
-        if let Err(e) = self
-            .nc
-            .request_timeout(&subject, &bytes, self.timeout)
-            .await
-        {
+        if let Err(e) = self.nc.publish(&subject, &bytes).await {
             Err(format!("Failed to push registry credential map: {}", e).into())
         } else {
             Ok(())
@@ -210,8 +206,9 @@ impl Client {
     }
 
     /// Publishes the link advertisement message to the lattice that is published when code invokes the `set_link`
-    /// function on a `Host` struct instance. No confirmation or acknowledgement is available for this operation
-    /// because it is publish-only.
+    /// function on a `Host` struct instance. This operation pushes to a queue-subscribed topic, and therefore
+    /// awaits confirmation from the single psuedo-randomly chosen recipient host. If that one host fails to acknowledge,
+    /// or if no hosts acknowledge within the timeout period, this operation is considered a failure
     pub async fn advertise_link(
         &self,
         actor_id: &str,
