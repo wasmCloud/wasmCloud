@@ -2971,7 +2971,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-lattice-controller"
-version = "0.6.0-alpha.2"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "atty",

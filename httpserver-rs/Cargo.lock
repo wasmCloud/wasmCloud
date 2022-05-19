@@ -81,32 +81,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "async-nats"
-version = "0.13.0"
-source = "git+https://github.com/cosmonic/nats.rs?branch=fix/remove-more-mut#0ebe78b9d26d1f2caaaddd64b7c40907ea8fb9fa"
-dependencies = [
- "base64-url",
- "bytes",
- "futures 0.3.21",
- "http",
- "itoa 1.0.1",
- "nkeys 0.2.0",
- "nuid",
- "once_cell",
- "regex",
- "rustls-pemfile 0.3.0",
- "serde",
- "serde_json",
- "serde_repr",
- "subslice",
- "tokio",
- "tokio-rustls 0.23.4",
- "tokio-util 0.7.1",
- "url",
- "webpki-roots",
-]
-
-[[package]]
 name = "async-stream"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -643,7 +617,7 @@ checksum = "c762bae6dcaf24c4c84667b8579785430908723d5c889f469d76a41d59cc7a9d"
 dependencies = [
  "curve25519-dalek",
  "ed25519",
- "sha2 0.9.9",
+ "sha2",
  "zeroize",
 ]
 
@@ -1241,12 +1215,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "minicbor"
-version = "0.16.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "08de72a57f15d959ab3a3b73fc94572eb954bfcfeb3809cf83cc1bd7d0aa774b"
-
-[[package]]
 name = "minicbor-derive"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1345,41 +1313,6 @@ dependencies = [
  "nuid",
  "once_cell",
  "parking_lot 0.11.2",
- "regex",
- "rustls 0.19.1",
- "rustls-native-certs 0.5.0",
- "rustls-pemfile 0.2.1",
- "serde",
- "serde_json",
- "serde_nanos",
- "serde_repr",
- "time",
- "url",
- "webpki 0.21.4",
- "winapi",
-]
-
-[[package]]
-name = "nats"
-version = "0.19.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b2fa5d18c4246c056db53f826d3919fc93817dd850a7f2c4c211306218c82a9e"
-dependencies = [
- "base64",
- "base64-url",
- "blocking",
- "crossbeam-channel",
- "fastrand",
- "itoa 1.0.1",
- "json",
- "lazy_static",
- "libc",
- "log",
- "memchr",
- "nkeys 0.2.0",
- "nuid",
- "once_cell",
- "parking_lot 0.12.0",
  "regex",
  "rustls 0.19.1",
  "rustls-native-certs 0.5.0",
@@ -2031,13 +1964,12 @@ dependencies = [
 
 [[package]]
 name = "rmp"
-version = "0.8.11"
+version = "0.8.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "44519172358fd6d58656c86ab8e7fbc9e1490c3e8f14d35ed78ca0dd07403c9f"
+checksum = "4f55e5fa1446c4d5dd1f5daeed2a4fe193071771a2636274d0d7a3b082aa7ad6"
 dependencies = [
  "byteorder",
  "num-traits",
- "paste",
 ]
 
 [[package]]
@@ -2045,17 +1977,6 @@ name = "rmp-serde"
 version = "0.15.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "723ecff9ad04f4ad92fe1c8ca6c20d2196d9286e9c60727c4cb5511629260e9d"
-dependencies = [
- "byteorder",
- "rmp",
- "serde",
-]
-
-[[package]]
-name = "rmp-serde"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "25786b0d276110195fa3d6f3f31299900cf71dfbd6c28450f3f58a0e7f7a347e"
 dependencies = [
  "byteorder",
  "rmp",
@@ -2355,17 +2276,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sha2"
-version = "0.10.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "55deaec60f81eefe3cce0dc50bda92d6d8e88f2a27df7c5033b42afeb1ed2676"
-dependencies = [
- "cfg-if 1.0.0",
- "cpufeatures",
- "digest 0.10.3",
-]
-
-[[package]]
 name = "sharded-slab"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2455,15 +2365,6 @@ name = "strsim"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "73473c0e59e6d5812c5dfe2a064a6444949f089e20eec9a2e5506596494e4623"
-
-[[package]]
-name = "subslice"
-version = "0.2.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e0a8e4809a3bb02de01f1f7faf1ba01a83af9e8eabcd4d31dd6e413d14d56aae"
-dependencies = [
- "memchr",
-]
 
 [[package]]
 name = "subtle"
@@ -2930,16 +2831,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "uuid"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8cfcd319456c4d6ea10087ed423473267e1a071f3bc0aa89f80d60997843c6f0"
-dependencies = [
- "getrandom 0.2.6",
- "serde",
-]
-
-[[package]]
 name = "valuable"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3112,16 +3003,6 @@ checksum = "d554b7f530dee5964d9a9468d95c1f8b8acae4f282807e7d27d4b03099a46744"
 [[package]]
 name = "wasmbus-macros"
 version = "0.1.9"
-dependencies = [
- "proc-macro-error",
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
-name = "wasmbus-macros"
-version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac4546364f1055f1dd0bcff8f3de216df725e3ad8876a67c4aadbf731d9dfc14"
 dependencies = [
@@ -3145,12 +3026,12 @@ dependencies = [
  "futures 0.3.21",
  "minicbor 0.13.2",
  "minicbor-ser",
- "nats 0.18.1",
+ "nats",
  "nats-aflowt",
  "nkeys 0.2.0",
  "once_cell",
  "ring",
- "rmp-serde 0.15.5",
+ "rmp-serde",
  "serde",
  "serde_bytes",
  "serde_json",
@@ -3162,59 +3043,24 @@ dependencies = [
  "tracing",
  "tracing-futures",
  "tracing-subscriber",
- "uuid 0.8.2",
+ "uuid",
  "wascap",
- "wasmbus-macros 0.1.9 (registry+https://github.com/rust-lang/crates.io-index)",
- "weld-codegen 0.4.3",
-]
-
-[[package]]
-name = "wasmbus-rpc"
-version = "0.9.0"
-dependencies = [
- "anyhow",
- "async-nats",
- "async-trait",
- "atty",
- "base64",
- "bytes",
- "cfg-if 1.0.0",
- "data-encoding",
- "futures 0.3.21",
- "minicbor 0.16.0",
- "minicbor-ser",
- "nats 0.19.1",
- "nkeys 0.2.0",
- "once_cell",
- "rmp-serde 1.1.0",
- "serde",
- "serde_bytes",
- "serde_json",
- "sha2 0.10.2",
- "thiserror",
- "time",
- "tokio",
- "tokio-timer",
- "toml",
- "tracing",
- "tracing-futures",
- "tracing-subscriber",
- "uuid 1.0.0",
- "wascap",
- "wasmbus-macros 0.1.9",
- "weld-codegen 0.4.4",
+ "wasmbus-macros",
+ "weld-codegen",
 ]
 
 [[package]]
 name = "wasmcloud-interface-httpserver"
-version = "0.6.0"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3e55273782d229e4eba751fe5150b1d5158e23047b9f75b3e4c7c260c522193f"
 dependencies = [
  "async-trait",
  "serde",
  "serde_bytes",
  "serde_json",
- "wasmbus-rpc 0.9.0",
- "weld-codegen 0.4.4",
+ "wasmbus-rpc",
+ "weld-codegen",
 ]
 
 [[package]]
@@ -3228,8 +3074,8 @@ dependencies = [
  "serde",
  "serde_bytes",
  "serde_json",
- "wasmbus-rpc 0.8.5",
- "weld-codegen 0.4.3",
+ "wasmbus-rpc",
+ "weld-codegen",
 ]
 
 [[package]]
@@ -3245,6 +3091,7 @@ dependencies = [
  "futures 0.3.21",
  "http",
  "reqwest",
+ "rmp",
  "serde",
  "serde_bytes",
  "serde_json",
@@ -3254,7 +3101,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "warp",
- "wasmbus-rpc 0.9.0",
+ "wasmbus-rpc",
  "wasmcloud-interface-httpserver",
  "wasmcloud-test-util",
 ]
@@ -3277,7 +3124,7 @@ dependencies = [
  "tokio",
  "toml",
  "wascap",
- "wasmbus-rpc 0.8.5",
+ "wasmbus-rpc",
  "wasmcloud-interface-testing",
 ]
 
@@ -3341,34 +3188,6 @@ dependencies = [
  "lazy_static",
  "lexical-sort",
  "minicbor 0.13.2",
- "reqwest",
- "rustc-hash",
- "semver",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror",
- "toml",
-]
-
-[[package]]
-name = "weld-codegen"
-version = "0.4.4"
-dependencies = [
- "Inflector",
- "anyhow",
- "atelier_assembler",
- "atelier_core",
- "atelier_json",
- "atelier_smithy",
- "bytes",
- "cfg-if 1.0.0",
- "clap",
- "directories",
- "downloader",
- "handlebars",
- "lazy_static",
- "lexical-sort",
  "reqwest",
  "rustc-hash",
  "semver",
