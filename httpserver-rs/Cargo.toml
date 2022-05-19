@@ -22,6 +22,10 @@ warp = { version="0.3", features=["tls"] }
 wasmcloud-interface-httpserver = { path = "../../interfaces/httpserver/rust" }
 wasmbus-rpc = { path = "../../weld/rpc-rs" }
 
+[target.'cfg(all(target_arch = "aarch64", target_os = "linux"))'.dependencies]
+# We don't use rmp directly, but we pin to a version that works with aarch64-linux
+rmp = "=0.8.10"
+
 [dev-dependencies]
 assert_matches = "1.5"
 blake2 = "0.9"
