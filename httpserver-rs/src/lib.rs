@@ -267,7 +267,8 @@ impl HttpServerCore {
         let tx = ProviderTransport::new_with_timeout(&ld, Some(bridge), timeout);
         let ctx = Context::default();
         let actor = HttpServerSender::via(tx);
-        match actor.handle_request(&ctx, &req).await {
+        info!("Sending request to actor");
+        let res = match actor.handle_request(&ctx, &req).await {
             Err(RpcError::Timeout(_)) => {
                 error!("actor request timed out: returning 503",);
                 Ok(HttpResponse {
@@ -289,7 +290,9 @@ impl HttpServerCore {
                 );
                 Err(e)
             }
-        }
+        };
+        info!("done sending, error or not");
+        res
     }
 }
 
