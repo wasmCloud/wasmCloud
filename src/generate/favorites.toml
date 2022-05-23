@@ -14,9 +14,15 @@
 
 [[actor]]
 name = "hello"
-description = "a hello-world actor that responds over an http connection"
+description = "a hello-world actor (in Rust) that responds over an http connection"
 git = "wasmcloud/project-templates"
 subfolder = "actor/hello"
+
+[[actor]]
+name = "echo-tinygo"
+description = "a hello-world actor (in TinyGo) that responds over an http connection"
+git = "wasmcloud/project-templates"
+subfolder = "actor/echo-tinygo"
 
 [[interface]]
 name = "converter-interface"
