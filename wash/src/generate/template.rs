@@ -137,7 +137,11 @@ pub(crate) fn process_template_dir(
         ));
 
         let filename = entry.as_path();
-        let src_relative = filename.strip_prefix(source_dir)?;
+        let src_relative = if filename.starts_with(source_dir) {
+            filename.strip_prefix(source_dir)?
+        } else {
+            filename
+        };
         let f = src_relative.display();
         pb.set_message(format!("Processing: {}", f));
 

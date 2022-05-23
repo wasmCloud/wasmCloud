@@ -51,8 +51,7 @@ use std::{
 use tempfile::TempDir;
 use weld_codegen::render::Renderer;
 
-use crate::appearance::emoji;
-use crate::util::CommandOutput;
+use crate::{appearance::emoji, util::CommandOutput};
 
 mod config;
 mod favorites;
@@ -316,10 +315,13 @@ pub(crate) fn make_project(
     let mut config = Config::from_path(&project_config_path)?;
     // prevent copying config file to project dir by adding it to the exclude list
     config.exclude(
-        project_config_path
-            .strip_prefix(&template_folder)?
-            .to_string_lossy()
-            .to_string(),
+        if project_config_path.starts_with(&template_folder) {
+            project_config_path.strip_prefix(&template_folder)?
+        } else {
+            &project_config_path
+        }
+        .to_string_lossy()
+        .to_string(),
     );
 
     // resolve all project values, prompting if necessary,
