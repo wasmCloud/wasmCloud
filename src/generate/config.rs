@@ -170,7 +170,7 @@ mod tests {
             "#,
         );
         if let Err(e) = &result {
-            eprintln!("result error: {}", e.to_string());
+            eprintln!("result error: {}", e);
         }
         assert!(result.is_ok(), "Config should have parsed");
         let result = result.unwrap();
