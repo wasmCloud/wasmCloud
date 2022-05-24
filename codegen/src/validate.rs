@@ -1,14 +1,15 @@
 //! utilities for model validation
 //!
 //!
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, BTreeSet},
+};
+
 use atelier_core::model::{
     shapes::{AppliedTraits, ListOrSet, Operation, Service, Simple, StructureOrUnion},
     visitor::{walk_model, ModelVisitor},
     Model, ShapeID,
-};
-use std::{
-    cell::RefCell,
-    collections::{BTreeMap, BTreeSet},
 };
 
 const MAX_DEPTH: usize = 8;
@@ -91,9 +92,7 @@ impl Tree {
             node.children
                 .iter()
                 .filter_map(|child_id| {
-                    self.nodes
-                        .get(child_id)
-                        .and_then(|c| self.has_cbor_only(c, depth + 1))
+                    self.nodes.get(child_id).and_then(|c| self.has_cbor_only(c, depth + 1))
                 })
                 .next()
         } else {
@@ -242,7 +241,7 @@ impl Node {
 pub(crate) fn check_cbor_dependencies(model: &Model) -> Result<(), String> {
     use atelier_core::model::shapes::HasTraits as _;
     let visitor = ShapeTree::default();
-    let _ = walk_model(model, &visitor).expect("walk model");
+    walk_model(model, &visitor).expect("walk model");
     for service_id in visitor.services.borrow().iter() {
         let service = model.shape(service_id).unwrap();
         let traits = service.traits();

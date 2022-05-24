@@ -3,10 +3,8 @@
 //! - ModelIndex is a "cache" of a smithy model grouped by shape kind and sorted by identifier name
 //! - various macros used in the codegen crate
 //!
-use crate::{
-    error::{Error, Result},
-    JsonValue,
-};
+use std::{fmt, ops::Deref, str::FromStr};
+
 use atelier_core::{
     model::{
         shapes::{AppliedTraits, HasTraits, MemberShape, Operation, ShapeKind, StructureOrUnion},
@@ -17,12 +15,21 @@ use atelier_core::{
 };
 use lazy_static::lazy_static;
 use serde::{de::DeserializeOwned, Deserialize};
-use std::{fmt, ops::Deref, str::FromStr};
+
+use crate::{
+    error::{Error, Result},
+    JsonValue,
+};
 
 const WASMCLOUD_MODEL_NAMESPACE: &str = "org.wasmcloud.model";
 const WASMCLOUD_CORE_NAMESPACE: &str = "org.wasmcloud.core";
 
 const TRAIT_CODEGEN_RUST: &str = "codegenRust";
+// If any of these are needed, they would have to be defined in core namespace
+//const TRAIT_CODEGEN_ASM: &str = "codegenAsm";
+//const TRAIT_CODEGEN_GO: &str = "codegenGo";
+//const TRAIT_CODEGEN_TINYGO: &str = "codegenTinyGo";
+
 const TRAIT_SERIALIZATION: &str = "serialization";
 const TRAIT_WASMBUS: &str = "wasmbus";
 const TRAIT_WASMBUS_DATA: &str = "wasmbusData";
@@ -70,6 +77,9 @@ lazy_static! {
 /// namespace for org.wasmcloud.model
 pub fn wasmcloud_model_namespace() -> &'static NamespaceID {
     &WASMCLOUD_MODEL_NAMESPACE_ID
+}
+pub fn wasmcloud_core_namespace() -> &'static NamespaceID {
+    &WASMCLOUD_CORE_NAMESPACE_ID
 }
 
 #[cfg(feature = "wasmbus")]
@@ -166,6 +176,9 @@ pub(crate) enum Ty<'typ> {
     Opt(&'typ ShapeID),
     /// write a reference type: preceded by &
     Ref(&'typ ShapeID),
+
+    /// write a ptr type: preceded by *
+    Ptr(&'typ ShapeID),
 }
 
 // verify that the model doesn't contain unsupported types
@@ -176,11 +189,7 @@ macro_rules! expect_empty {
             return Err(Error::InvalidModel(format!(
                 "{}: {}",
                 $msg,
-                $list
-                    .keys()
-                    .map(|k| k.to_string())
-                    .collect::<Vec<String>>()
-                    .join(",")
+                $list.keys().map(|k| k.to_string()).collect::<Vec<String>>().join(",")
             )));
         }
     };
@@ -196,7 +205,7 @@ macro_rules! unsupported_shape {
             traits: &AppliedTraits,
             shape: &$shape_type,
         ) -> Result<()> {
-            return Err(crate::error::Error::UnsupportedShape(
+            return Err(weld_codegen::error::Error::UnsupportedShape(
                 id.to_string(),
                 $doc.to_string(),
             ));
@@ -256,10 +265,9 @@ pub fn get_trait<T: DeserializeOwned>(traits: &AppliedTraits, id: &ShapeID) -> R
 /// Returns Err() if there was an error parsing the declarataion
 pub fn wasmbus_proto(traits: &AppliedTraits) -> Result<Option<WasmbusProtoVersion>> {
     match get_trait(traits, wasmbus_trait()) {
-        Ok(Some(Wasmbus {
-            protocol: Some(version),
-            ..
-        })) => Ok(Some(WasmbusProtoVersion::try_from(version.as_str())?)),
+        Ok(Some(Wasmbus { protocol: Some(version), .. })) => {
+            Ok(Some(WasmbusProtoVersion::try_from(version.as_str())?))
+        }
         Ok(_) => Ok(Some(WasmbusProtoVersion::default())),
         _ => Ok(None),
     }
@@ -388,8 +396,9 @@ impl Deref for NumberedMember {
     }
 }
 
-use crate::wasmbus_model::Wasmbus;
 use std::iter::Iterator;
+
+use crate::wasmbus_model::Wasmbus;
 
 /// Returns sorted list of fields for the structure, and whether it is numbered.
 /// If there are any errors in numbering, returns Error::Model
@@ -457,4 +466,6 @@ pub struct PackageName {
     pub crate_name: Option<String>,
     #[serde(rename = "py_module")]
     pub py_module: Option<String>,
+    pub go_package: Option<String>,
+    pub doc: Option<String>,
 }

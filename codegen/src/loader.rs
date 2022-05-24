@@ -1,13 +1,15 @@
-use crate::{
-    config::ModelSource,
-    error::{Error, Result},
-};
-use atelier_core::model::Model;
-use reqwest::Url;
-use rustc_hash::FxHasher;
 use std::{
     path::{Path, PathBuf},
     time::Duration,
+};
+
+use atelier_core::model::Model;
+use reqwest::Url;
+use rustc_hash::FxHasher;
+
+use crate::{
+    config::ModelSource,
+    error::{Error, Result},
 };
 
 /// maximum number of parallel downloader threads
@@ -95,11 +97,7 @@ pub(crate) fn sources_to_paths(
                         let url = format!(
                             "{}{}{}",
                             url,
-                            if !url.ends_with('/') && !file.starts_with('/') {
-                                "/"
-                            } else {
-                                ""
-                            },
+                            if !url.ends_with('/') && !file.starts_with('/') { "/" } else { "" },
                             file
                         );
                         if verbose > 0 {
@@ -316,19 +314,13 @@ fn test_cache_path() -> TestResult {
 
     assert_eq!(
         "127.0.0.1/foo.3f066558cb61d00f.raw",
-        url_to_cache_path("http://127.0.0.1/path/foo")
-            .unwrap()
-            .to_str()
-            .unwrap(),
+        url_to_cache_path("http://127.0.0.1/path/foo").unwrap().to_str().unwrap(),
         "generate .raw for missing extension",
     );
 
     assert_eq!(
         "127.0.0.1/index.ce34ccb3ff9b34cd.raw",
-        url_to_cache_path("http://127.0.0.1/dir/")
-            .unwrap()
-            .to_str()
-            .unwrap(),
+        url_to_cache_path("http://127.0.0.1/dir/").unwrap().to_str().unwrap(),
         "generate index.raw for missing filename",
     );
 

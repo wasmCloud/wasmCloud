@@ -51,6 +51,20 @@ impl ToBytes for BytesMut {
     }
 }
 
+impl std::fmt::Write for Writer {
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        self.write(s.as_bytes());
+        Ok(())
+    }
+
+    fn write_char(&mut self, c: char) -> std::fmt::Result {
+        let mut chars = [0u8; 4];
+        let s = c.encode_utf8(&mut chars);
+        self.write(s.as_bytes());
+        Ok(())
+    }
+}
+
 impl<const N: usize> ToBytes for &[u8; N] {
     fn to_bytes(&self) -> &[u8] {
         *self

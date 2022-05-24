@@ -1,21 +1,8 @@
 //! Python language code-generator
 //!
 
-#[cfg(feature = "wasmbus")]
-use crate::wasmbus_model::Wasmbus;
-use crate::{
-    codegen_rust::is_optional_type,
-    config::{LanguageConfig, OutputLanguage},
-    error::{print_warning, Error, Result},
-    gen::{spaces, CodeGen, SourceFormatter},
-    model::{
-        get_operation, get_sorted_fields, get_trait, is_opt_namespace, value_to_json,
-        wasmcloud_model_namespace, CommentKind, PackageName, Ty,
-    },
-    render::Renderer,
-    writer::Writer,
-    BytesMut, ParamMap,
-};
+use std::{collections::HashMap, path::Path, str::FromStr, string::ToString};
+
 use atelier_core::{
     model::{
         shapes::{
@@ -34,7 +21,22 @@ use atelier_core::{
         TRAIT_TRAIT, TRAIT_UNSTABLE,
     },
 };
-use std::{collections::HashMap, path::Path, str::FromStr, string::ToString};
+
+#[cfg(feature = "wasmbus")]
+use crate::wasmbus_model::Wasmbus;
+use crate::{
+    codegen_rust::is_optional_type,
+    config::{LanguageConfig, OutputLanguage},
+    error::{print_warning, Error, Result},
+    gen::{spaces, CodeGen, SourceFormatter},
+    model::{
+        get_operation, get_sorted_fields, get_trait, is_opt_namespace, value_to_json,
+        wasmcloud_model_namespace, CommentKind, PackageName, Ty,
+    },
+    render::Renderer,
+    writer::Writer,
+    BytesMut, ParamMap,
+};
 
 const WASMBUS_RPC_CRATE: &str = "wasmbus_rpc";
 
@@ -268,34 +270,18 @@ impl<'model> CodeGen for PythonCodeGen<'model> {
     }
 
     /// Convert field name to its target-language-idiomatic case style
-    fn to_field_name(
-        &self,
-        member_id: &Identifier,
-        member_traits: &AppliedTraits,
-    ) -> std::result::Result<String, Error> {
-        if let Some(name) = self.has_rename_trait(member_traits) {
-            Ok(name)
-        } else {
-            Ok(crate::strings::to_camel_case(&member_id.to_string()))
-        }
+    fn to_field_name_case(&self, name: &str) -> String {
+        crate::strings::to_camel_case(name)
     }
 
     /// Convert method name to its target-language-idiomatic case style
-    fn to_method_name(&self, method_id: &Identifier, method_traits: &AppliedTraits) -> String {
-        if let Some(name) = self.has_rename_trait(method_traits) {
-            name
-        } else {
-            crate::strings::to_camel_case(&method_id.to_string())
-        }
+    fn to_method_name_case(&self, name: &str) -> String {
+        crate::strings::to_camel_case(name)
     }
-}
 
-/// returns true if the file path ends in ".py"
-#[allow(clippy::ptr_arg)]
-pub(crate) fn is_python_source(path: &Path) -> bool {
-    match path.extension() {
-        Some(s) => s.to_string_lossy().as_ref() == "py",
-        _ => false,
+    /// Convert type name to its target-language-idiomatic case style
+    fn to_type_name_case(&self, name: &str) -> String {
+        crate::strings::to_pascal_case(name)
     }
 }
 
@@ -315,11 +301,7 @@ impl<'model> PythonCodeGen<'model> {
     }
 
     fn add_package_import(&mut self, p: &str) {
-        let pkg_name = if let Some((before, _)) = p.split_once('.') {
-            before
-        } else {
-            p
-        };
+        let pkg_name = if let Some((before, _)) = p.split_once('.') { before } else { p };
         self.imported_packages.insert(pkg_name.to_string());
     }
 
@@ -355,10 +337,7 @@ impl<'model> PythonCodeGen<'model> {
         }
 
         // unstable
-        if traits
-            .get(&prelude_shape_named(TRAIT_UNSTABLE).unwrap())
-            .is_some()
-        {
+        if traits.get(&prelude_shape_named(TRAIT_UNSTABLE).unwrap()).is_some() {
             self.write_comment(w, CommentKind::Documentation, "@unstable");
         }
     }
@@ -414,7 +393,7 @@ impl<'model> PythonCodeGen<'model> {
                                 s.push_str("wasmbus_model.");
                                 self.add_package_import("wasmbus_model");
                             }
-                            s.push_str(self.to_type_name(&name).trim_matches('\''));
+                            s.push_str(self.to_type_name_case(&name).trim_matches('\''));
                         }
                     }
                 } else if self.namespace.is_some()
@@ -423,18 +402,15 @@ impl<'model> PythonCodeGen<'model> {
                     // we are in the same namespace so we don't need to specify namespace
                     // but enclose in '' in case we need a forward reference
                     s.push('\'');
-                    s.push_str(&self.to_type_name(&id.shape_name().to_string()));
+                    s.push_str(&self.to_type_name_case(&id.shape_name().to_string()));
                     s.push('\'');
                 } else {
                     let import_pkg = match self.packages.get(&id.namespace().to_string()) {
-                        Some(PackageName {
-                            py_module: Some(py_module),
-                            ..
-                        }) => {
+                        Some(PackageName { py_module: Some(py_module), .. }) => {
                             // the crate name should be valid rust syntax. If not, they'll get an error with rustc
                             s.push_str(py_module);
                             s.push('.');
-                            s.push_str(&self.to_type_name(&id.shape_name().to_string()));
+                            s.push_str(&self.to_type_name_case(&id.shape_name().to_string()));
                             py_module.to_string()
                         }
                         _ => {
@@ -450,6 +426,9 @@ impl<'model> PythonCodeGen<'model> {
                     };
                     self.add_package_import(&import_pkg);
                 }
+            }
+            Ty::Ptr(_) => {
+                unreachable!()
             }
         }
         Ok(s)
@@ -500,12 +479,8 @@ impl<'model> PythonCodeGen<'model> {
         let map_type = format!(
             "{}['{}', '{}']",
             DEFAULT_MAP_TYPE,
-            &self
-                .type_string(Ty::Shape(shape.key().target()))?
-                .trim_matches('\''),
-            &self
-                .type_string(Ty::Shape(shape.value().target()))?
-                .trim_matches('\''),
+            &self.type_string(Ty::Shape(shape.key().target()))?.trim_matches('\''),
+            &self.type_string(Ty::Shape(shape.value().target()))?.trim_matches('\''),
         );
         self.declare_subtype(w, id, traits, &map_type)?;
         Ok(())
@@ -522,8 +497,7 @@ impl<'model> PythonCodeGen<'model> {
         let list_type = format!(
             "{}['{}']",
             typ,
-            self.type_string(Ty::Shape(shape.member().target()))?
-                .trim_matches('\'')
+            self.type_string(Ty::Shape(shape.member().target()))?.trim_matches('\'')
         );
         self.declare_subtype(w, id, traits, &list_type)?;
         Ok(())
@@ -687,10 +661,8 @@ impl<'model> PythonCodeGen<'model> {
         _service_id: &Identifier,
         service_traits: &AppliedTraits,
     ) -> Result<()> {
-        if let Some(Wasmbus {
-            contract_id: Some(contract_id),
-            ..
-        }) = get_trait(service_traits, crate::model::wasmbus_trait())?
+        if let Some(Wasmbus { contract_id: Some(contract_id), .. }) =
+            get_trait(service_traits, crate::model::wasmbus_trait())?
         {
             w.write(spaces(self.indent_level));
             w.write(b"# returns the capability contract id for this interface\n");
@@ -969,9 +941,5 @@ impl SourceFormatter for PythonSourceFormatter {
         args.extend(source_files.iter());
         crate::format::run_command(&self.program, &args)?;
         Ok(())
-    }
-
-    fn include(&self, path: &std::path::Path) -> bool {
-        crate::codegen_py::is_python_source(path)
     }
 }

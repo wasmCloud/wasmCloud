@@ -1,7 +1,9 @@
-use crate::error::Error;
-use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fmt, path::PathBuf, str::FromStr};
+
+use serde::{Deserialize, Serialize};
 use toml::Value as TomlValue;
+
+use crate::error::Error;
 
 /// Output languages for code generation
 #[non_exhaustive]
@@ -46,20 +48,31 @@ impl std::str::FromStr for OutputLanguage {
 
 impl fmt::Display for OutputLanguage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{}",
-            match self {
-                OutputLanguage::Poly => "Poly",
-                OutputLanguage::Html => "Html",
-                OutputLanguage::Rust => "Rust",
-                OutputLanguage::AssemblyScript => "AssemblyScript",
-                OutputLanguage::TinyGo => "TinyGo",
-                OutputLanguage::Go => "Go",
-                OutputLanguage::Python => "Python",
-                OutputLanguage::Clang => "Clang",
-            }
-        )
+        write!(f, "{}", match self {
+            OutputLanguage::Poly => "Poly",
+            OutputLanguage::Html => "Html",
+            OutputLanguage::Rust => "Rust",
+            OutputLanguage::AssemblyScript => "AssemblyScript",
+            OutputLanguage::TinyGo => "TinyGo",
+            OutputLanguage::Go => "Go",
+            OutputLanguage::Python => "Python",
+            OutputLanguage::Clang => "Clang",
+        })
+    }
+}
+
+impl OutputLanguage {
+    // returns the primary extension for the langauge
+    pub fn extension(&self) -> &'static str {
+        match self {
+            OutputLanguage::Rust => "rs",
+            OutputLanguage::TinyGo | OutputLanguage::Go => "go",
+            OutputLanguage::AssemblyScript => "rs",
+            OutputLanguage::Python => "rs",
+            OutputLanguage::Poly => "",
+            OutputLanguage::Html => "html",
+            OutputLanguage::Clang => "c",
+        }
     }
 }
 
@@ -120,10 +133,7 @@ impl FromStr for ModelSource {
                 files: Vec::default(),
             }
         } else {
-            ModelSource::Path {
-                path: s.into(),
-                files: Vec::default(),
-            }
+            ModelSource::Path { path: s.into(), files: Vec::default() }
         })
     }
 }
@@ -131,23 +141,16 @@ impl FromStr for ModelSource {
 impl ModelSource {
     /// convenience function to create a ModelSource for a single file path
     pub fn from_file<P: Into<std::path::PathBuf>>(path: P) -> ModelSource {
-        ModelSource::Path {
-            path: path.into(),
-            files: Vec::default(),
-        }
+        ModelSource::Path { path: path.into(), files: Vec::default() }
     }
 }
 
 impl fmt::Display for ModelSource {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{}",
-            match self {
-                ModelSource::Url { url, files: _ } => format!("url({})", url),
-                ModelSource::Path { path, files: _ } => format!("path({})", path.display()),
-            }
-        )
+        write!(f, "{}", match self {
+            ModelSource::Url { url, files: _ } => format!("url({})", url),
+            ModelSource::Path { path, files: _ } => format!("path({})", path.display()),
+        })
     }
 }
 

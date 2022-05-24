@@ -9,13 +9,8 @@
 
 // The encoder is written as a plain function "encode_<S>" where S is the type name
 // (camel cased for the fn name), and scoped to the module where S is defined.
-use crate::{
-    codegen_rust::{is_optional_type, is_rust_primitive, RustCodeGen},
-    error::{Error, Result},
-    gen::CodeGen,
-    model::wasmcloud_model_namespace,
-    writer::Writer,
-};
+use std::{fmt::Write as _, string::ToString};
+
 use atelier_core::{
     model::{
         shapes::{HasTraits, ShapeKind, Simple, StructureOrUnion},
@@ -29,7 +24,14 @@ use atelier_core::{
         SHAPE_STRING, SHAPE_TIMESTAMP,
     },
 };
-use std::string::ToString;
+
+use crate::{
+    codegen_rust::{is_optional_type, is_rust_primitive, RustCodeGen},
+    error::{Error, Result},
+    gen::CodeGen,
+    model::wasmcloud_model_namespace,
+    writer::Writer,
+};
 
 type IsEmptyStruct = bool;
 
@@ -309,21 +311,37 @@ impl<'model> RustCodeGen<'model> {
         //    .all(|f| f.target() == crate::model::unit_shape());
         let is_all_unit = false; // for now, stick with array
         let mut s = String::new();
-        s.push_str(&format!("// encoding union {}\n", id.shape_name()));
-        s.push_str("e.array(2)?;\n");
-        s.push_str(&format!("match {} {{\n", val.as_str()));
+        writeln!(
+            s,
+            "// encoding union {}\n e.array(2)?;\n match {} {{",
+            id.shape_name(),
+            val.as_str()
+        )
+        .unwrap();
         for field in fields.iter() {
             let target = field.target();
-            let field_name = self.to_type_name(&field.id().to_string());
+            let field_name = self.to_type_name_case(&field.id().to_string());
             if target == crate::model::unit_shape() {
-                s.push_str(&format!("{}::{} => {{", id.shape_name(), &field_name));
-                s.push_str(&format!("e.u16({})?;\n", &field.field_num().unwrap()));
+                writeln!(
+                    s,
+                    "{}::{} => {{ e.u16({})?;",
+                    id.shape_name(),
+                    &field_name,
+                    &field.field_num().unwrap()
+                )
+                .unwrap();
                 if !is_all_unit {
                     s.push_str(&encode_unit());
                 }
             } else {
-                s.push_str(&format!("{}::{}(v) => {{", id.shape_name(), &field_name));
-                s.push_str(&format!("e.u16({})?;\n", &field.field_num().unwrap()));
+                writeln!(
+                    s,
+                    "{}::{}(v) => {{ e.u16({})?;",
+                    id.shape_name(),
+                    &field_name,
+                    &field.field_num().unwrap()
+                )
+                .unwrap();
                 s.push_str(&self.encode_shape_id(target, ValExpr::Ref("v"), false)?);
             }
             s.push_str("},\n");
@@ -350,16 +368,16 @@ impl<'model> RustCodeGen<'model> {
         };
         let mut s = String::new();
         if as_array {
-            s.push_str(&format!("e.array({})?;\n", field_max_index + 1));
+            writeln!(s, "e.array({})?;", field_max_index + 1).unwrap();
         } else {
-            s.push_str(&format!("e.map({})?;\n", fields.len()));
+            writeln!(s, "e.map({})?;", fields.len()).unwrap();
         }
         let mut current_index = 0;
         for field in fields.iter() {
             if let Some(field_num) = field.field_num() {
                 if as_array {
                     while current_index < *field_num {
-                        s.push_str("e.null()?;\n");
+                        writeln!(s, "e.null()?;").unwrap();
                         current_index += 1;
                     }
                 }
@@ -367,21 +385,22 @@ impl<'model> RustCodeGen<'model> {
             let field_name = self.to_field_name(field.id(), field.traits())?;
             let field_val = self.encode_shape_id(field.target(), ValExpr::Ref("val"), false)?;
             if is_optional_type(field) {
-                s.push_str(&format!(
-                    "if let Some(val) =  {}.{}.as_ref() {{\n",
+                writeln!(
+                    s,
+                    "if let Some(val) =  {}.{}.as_ref() {{",
                     val.as_str(),
                     &field_name
-                ));
+                )
+                .unwrap();
                 if !as_array {
                     // map key is declared name, not target language name
-                    s.push_str(&format!("e.str(\"{}\")?;\n", field.id()));
+                    writeln!(s, "e.str(\"{}\")?;", field.id()).unwrap();
                 }
-                s.push_str(&field_val);
-                s.push_str("} else { e.null()?; }\n");
+                writeln!(s, "{} }} else {{ e.null()?; }}", &field_val).unwrap();
             } else {
                 if !as_array {
                     // map key is declared name, not target language name
-                    s.push_str(&format!("e.str(\"{}\")?;\n", field.id()));
+                    writeln!(s, "e.str(\"{}\")?;", field.id()).unwrap();
                 }
                 let val = format!("{}.{}", val.as_str(), &field_name);
                 s.push_str(&self.encode_shape_id(field.target(), ValExpr::Plain(&val), false)?);
@@ -422,6 +441,7 @@ impl<'model> RustCodeGen<'model> {
                 #[doc(hidden)] #[allow(unused_mut)] {}
                 pub fn encode_{}<W: {}::cbor::Write>(
                     mut e: &mut {}::cbor::Encoder<W>, {}: &{}) -> RpcResult<()>
+                    where <W as {}::cbor::Write>::Error: std::fmt::Display
                 {{
                 "#,
                     &name,
@@ -431,6 +451,7 @@ impl<'model> RustCodeGen<'model> {
                     self.import_core,
                     if is_empty_struct { "_val" } else { "val" },
                     &id.shape_name(),
+                    self.import_core,
                 );
                 s.push_str(&body);
                 s.push_str("Ok(())\n}\n");

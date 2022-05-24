@@ -1,14 +1,16 @@
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
+
+use atelier_core::model::Model;
+
 use crate::{
     config::{LanguageConfig, OutputFile, OutputLanguage},
     error::Result,
     gen::{to_json, CodeGen},
     render::Renderer,
     Bytes, Error, JsonValue, ParamMap,
-};
-use atelier_core::model::Model;
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    path::Path,
 };
 
 // default page name for doc template
@@ -109,8 +111,17 @@ impl CodeGen for DocGen {
     }
 
     // never called
-    #[doc(hidden)]
     fn get_file_extension(&self) -> &'static str {
         "html"
+    }
+
+    fn to_method_name_case(&self, name: &str) -> String {
+        name.into()
+    }
+    fn to_field_name_case(&self, name: &str) -> String {
+        name.into()
+    }
+    fn to_type_name_case(&self, name: &str) -> String {
+        name.into()
     }
 }

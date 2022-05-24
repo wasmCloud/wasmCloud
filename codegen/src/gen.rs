@@ -2,23 +2,30 @@
 //! and [CodeGen](#CodeGen), the trait for language-specific code-driven code generation.
 //!
 //!
-use crate::{
-    codegen_py::PythonCodeGen,
-    codegen_rust::RustCodeGen,
-    config::{CodegenConfig, LanguageConfig, OutputFile, OutputLanguage},
-    docgen::DocGen,
-    error::{Error, Result},
-    model::{get_trait, CommentKind},
-    render::Renderer,
-    writer::Writer,
-    Bytes, JsonValue, ParamMap, TomlValue,
-};
-use atelier_core::model::{shapes::AppliedTraits, Identifier, Model};
 use std::{
     borrow::Borrow,
     collections::BTreeMap,
     io::Write,
     path::{Path, PathBuf},
+};
+
+use atelier_core::model::{
+    shapes::{AppliedTraits, HasTraits as _},
+    HasIdentity as _, Identifier, Model,
+};
+
+use crate::{
+    codegen_go::GoCodeGen,
+    codegen_py::PythonCodeGen,
+    codegen_rust::RustCodeGen,
+    config::{CodegenConfig, LanguageConfig, OutputFile, OutputLanguage},
+    docgen::DocGen,
+    error::{Error, Result},
+    model::{get_trait, serialization_trait, CommentKind, NumberedMember},
+    render::Renderer,
+    wasmbus_model::{RenameItem, Serialization},
+    writer::Writer,
+    Bytes, JsonValue, ParamMap, TomlValue,
 };
 
 /// Common templates compiled-in
@@ -107,9 +114,19 @@ impl<'model> Generator {
             for (name, template) in templates.iter() {
                 renderer.add_template((name, template))?;
             }
-            // append language output_dir to project output_dir
-            let output_dir = output_dir.join(&lc.output_dir);
-
+            // if language output_dir is relative, append it, otherwise use it
+            let output_dir = if lc.output_dir.is_absolute() {
+                std::fs::create_dir_all(&lc.output_dir).map_err(|e| {
+                    Error::Io(format!(
+                        "creating directory {}: {}",
+                        &lc.output_dir.display(),
+                        e
+                    ))
+                })?;
+                lc.output_dir.clone()
+            } else {
+                output_dir.join(&lc.output_dir)
+            };
             // add command-line overrides
             for (k, v) in defines.iter() {
                 lc.parameters.insert(k.to_string(), v.clone());
@@ -204,9 +221,12 @@ fn gen_for_language<'model>(
 ) -> Box<dyn CodeGen + 'model> {
     match language {
         OutputLanguage::Rust => Box::new(RustCodeGen::new(model)),
+        //OutputLanguage::AssemblyScript => Box::new(AsmCodeGen::new(model)),
+        OutputLanguage::Python => Box::new(PythonCodeGen::new(model)),
+        OutputLanguage::TinyGo => Box::new(GoCodeGen::new(model, true)),
+        OutputLanguage::Go => Box::new(GoCodeGen::new(model, false)),
         OutputLanguage::Html => Box::new(DocGen::default()),
         OutputLanguage::Poly => Box::new(PolyGen::default()),
-        OutputLanguage::Python => Box::new(PythonCodeGen::new(model)),
         _ => {
             crate::error::print_warning(&format!("Target language {} not implemented", language));
             Box::new(NoCodeGen::default())
@@ -318,7 +338,19 @@ pub(crate) trait CodeGen {
     }
 
     fn write_ident(&self, w: &mut Writer, id: &Identifier) {
-        w.write(&self.to_type_name(&id.to_string()));
+        w.write(&self.to_type_name_case(&id.to_string()));
+    }
+
+    /// append suffix to type name, for example "Game", "Context" -> "GameContext"
+    fn write_ident_with_suffix(
+        &mut self,
+        w: &mut Writer,
+        id: &Identifier,
+        suffix: &str,
+    ) -> Result<()> {
+        self.write_ident(w, id);
+        w.write(suffix); // assume it's already PascalCase
+        Ok(())
     }
 
     // Writes info the the current output writer
@@ -331,41 +363,37 @@ pub(crate) trait CodeGen {
     fn output_language(&self) -> OutputLanguage;
 
     fn has_rename_trait(&self, traits: &AppliedTraits) -> Option<String> {
-        if let Ok(Some(items)) =
-            get_trait::<Vec<crate::wasmbus_model::RenameItem>>(traits, crate::model::rename_trait())
+        if let Ok(Some(items)) = get_trait::<Vec<RenameItem>>(traits, crate::model::rename_trait())
         {
             let lang = self.output_language().to_string();
-            return items
-                .iter()
-                .find(|i| i.lang == lang)
-                .map(|i| i.name.clone());
+            return items.iter().find(|i| i.lang == lang).map(|i| i.name.clone());
         }
         None
     }
 
     /// returns file extension of source files for this language
     fn get_file_extension(&self) -> &'static str {
-        ""
-    }
-
-    /// Convert type name to its target-language-idiomatic case style
-    /// The default implementation uses UpperPascalCase
-    fn to_type_name(&self, s: &str) -> String {
-        crate::strings::to_pascal_case(s)
+        self.output_language().extension()
     }
 
     /// Convert method name to its target-language-idiomatic case style
-    /// Default implementation uses snake_case
+    fn to_method_name_case(&self, name: &str) -> String;
+
+    /// Convert method name to its target-language-idiomatic case style
+    /// implementors should override to_method_name_case
     fn to_method_name(&self, method_id: &Identifier, method_traits: &AppliedTraits) -> String {
         if let Some(name) = self.has_rename_trait(method_traits) {
             name
         } else {
-            crate::strings::to_snake_case(&method_id.to_string())
+            self.to_method_name_case(&method_id.to_string())
         }
     }
 
     /// Convert field name to its target-language-idiomatic case style
-    /// Default implementation uses snake_case
+    fn to_field_name_case(&self, name: &str) -> String;
+
+    /// Convert field name to its target-language-idiomatic case style
+    /// implementors should override to_field_name_case
     fn to_field_name(
         &self,
         member_id: &Identifier,
@@ -374,8 +402,23 @@ pub(crate) trait CodeGen {
         if let Some(name) = self.has_rename_trait(member_traits) {
             Ok(name)
         } else {
-            Ok(crate::strings::to_snake_case(&member_id.to_string()))
+            Ok(self.to_field_name_case(&member_id.to_string()))
         }
+    }
+
+    /// Convert type name to its target-language-idiomatic case style
+    fn to_type_name_case(&self, s: &str) -> String;
+
+    fn get_field_name_and_ser_name(&self, field: &NumberedMember) -> Result<(String, String)> {
+        let field_name = self.to_field_name(field.id(), field.traits())?;
+        let ser_name = if let Some(Serialization { name: Some(ser_name) }) =
+            get_trait(field.traits(), serialization_trait())?
+        {
+            ser_name
+        } else {
+            field.id().to_string()
+        };
+        Ok((field_name, ser_name))
     }
 
     /// The operation name used in dispatch, from method
@@ -389,7 +432,7 @@ pub(crate) trait CodeGen {
     fn full_dispatch_name(&self, service_id: &Identifier, method_id: &Identifier) -> String {
         format!(
             "{}.{}",
-            &self.to_type_name(&service_id.to_string()),
+            &self.to_type_name_case(&service_id.to_string()),
             &self.op_dispatch_name(method_id)
         )
     }
@@ -412,9 +455,13 @@ pub(crate) trait CodeGen {
             // minor nit: we don't check the _config-only flag so there could be some false positives here, but rustfmt is safe to use anyway
             let formatter = self.source_formatter()?;
 
+            let extension = self.output_language().extension();
             let sources = files
                 .into_iter()
-                .filter(|f| formatter.include(f))
+                .filter(|path| match path.extension() {
+                    Some(s) => s.to_string_lossy().as_ref() == extension,
+                    _ => false,
+                })
                 .collect::<Vec<PathBuf>>();
 
             if !sources.is_empty() {
@@ -437,12 +484,6 @@ pub trait SourceFormatter {
     /// Default implementation does nothing
     fn run(&self, source_files: &[&str]) -> Result<()> {
         Ok(())
-    }
-
-    /// returns true if the file should be included in the set to be formatted
-    /// default implementation returns false for all files
-    fn include(&self, path: &std::path::Path) -> bool {
-        true
     }
 }
 
@@ -467,6 +508,20 @@ struct PolyGen {}
 impl CodeGen for PolyGen {
     fn output_language(&self) -> OutputLanguage {
         OutputLanguage::Poly
+    }
+    /// generate method name
+    fn to_method_name_case(&self, name: &str) -> String {
+        crate::strings::to_snake_case(name)
+    }
+
+    /// generate field name
+    fn to_field_name_case(&self, name: &str) -> String {
+        crate::strings::to_snake_case(name)
+    }
+
+    /// generate type name
+    fn to_type_name_case(&self, name: &str) -> String {
+        crate::strings::to_pascal_case(name)
     }
 }
 
@@ -561,5 +616,17 @@ impl CodeGen for NoCodeGen {
 
     fn get_file_extension(&self) -> &'static str {
         ""
+    }
+
+    fn to_method_name_case(&self, name: &str) -> String {
+        crate::strings::to_snake_case(name)
+    }
+
+    fn to_field_name_case(&self, name: &str) -> String {
+        crate::strings::to_snake_case(name)
+    }
+
+    fn to_type_name_case(&self, name: &str) -> String {
+        crate::strings::to_pascal_case(name)
     }
 }

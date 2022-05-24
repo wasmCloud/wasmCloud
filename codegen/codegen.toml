@@ -2,9 +2,14 @@
 # ensures that src/wasmbus_model.rs is up-to-date
 
 [[models]]
-url = "https://cdn.jsdelivr.net/gh/wasmcloud/interfaces@d6ae2dd196aae3c2486e747eb1b3cd188ea71132/core/wasmcloud-core.smithy"
+#url = "https://cdn.jsdelivr.net/gh/wasmcloud/interfaces@d6ae2dd196aae3c2486e747eb1b3cd188ea71132/core/wasmcloud-core.smithy"
+path = "../../interfaces/core"
+files = [ "wasmcloud-core.smithy"]
+
 [[models]]
-url = "https://cdn.jsdelivr.net/gh/wasmcloud/interfaces@e0f205da8a0e1549497571c3e994a1851480621c/core/wasmcloud-model.smithy"
+#url = "https://cdn.jsdelivr.net/gh/wasmcloud/interfaces@e0f205da8a0e1549497571c3e994a1851480621c/core/wasmcloud-model.smithy"
+path = "../../interfaces/core"
+files = [ "wasmcloud-model.smithy"]
 
 [rust]
 output_dir = "."
@@ -13,3 +18,11 @@ output_dir = "."
 path = "src/wasmbus_model.rs"
 namespace = "org.wasmcloud.model"
 no_serde = true # don't generate proto serialization & deserialization for this model
+
+[tinygo]
+output_dir = "../../interfaces/core"
+files = [
+    { path = "tinygo/core.go", package="actor", namespace = "org.wasmcloud.core" },
+    { path = "tinygo/model.go", package="actor", namespace = "org.wasmcloud.model" },
+]
+

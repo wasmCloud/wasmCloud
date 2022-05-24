@@ -2,14 +2,8 @@
 //
 // The encoder is written as a plain function "encode_<S>" where S is the type name
 // (camel cased for the fn name), and scoped to the module where S is defined.
-use crate::{
-    codegen_py::PythonCodeGen,
-    codegen_rust::is_optional_type,
-    error::{Error, Result},
-    gen::{spaces, CodeGen},
-    model::wasmcloud_model_namespace,
-    writer::Writer,
-};
+use std::{fmt::Write as _, string::ToString};
+
 use atelier_core::{
     model::{
         shapes::{HasTraits, ShapeKind, Simple, StructureOrUnion},
@@ -23,7 +17,15 @@ use atelier_core::{
         SHAPE_STRING, SHAPE_TIMESTAMP,
     },
 };
-use std::string::ToString;
+
+use crate::{
+    codegen_py::PythonCodeGen,
+    codegen_rust::is_optional_type,
+    error::{Error, Result},
+    gen::{spaces, CodeGen},
+    model::wasmcloud_model_namespace,
+    writer::Writer,
+};
 
 #[derive(Clone, Copy)]
 pub(crate) enum ValExpr<'s> {
@@ -120,11 +122,13 @@ impl<'model> PythonCodeGen<'model> {
                         s.push_str(&self.import_core);
                         s.push('.');
                     }
-                    s.push_str(&format!(
-                        "encode_{}(e,{})\n",
+                    writeln!(
+                        s,
+                        "encode_{}(e,{})",
                         crate::strings::to_camel_case(&id.shape_name().to_string()),
                         val.as_ref()
-                    ));
+                    )
+                    .unwrap();
                     s
                 }
             }
@@ -136,10 +140,7 @@ impl<'model> PythonCodeGen<'model> {
             )
         } else {
             match self.packages.get(&id.namespace().to_string()) {
-                Some(crate::model::PackageName {
-                    py_module: Some(py_module),
-                    ..
-                }) => {
+                Some(crate::model::PackageName { py_module: Some(py_module), .. }) => {
                     // the crate name should be valid rust syntax. If not, they'll get an error with rustc
                     format!(
                         "{}::encode_{}(e, {})\n",
@@ -338,7 +339,7 @@ impl<'model> PythonCodeGen<'model> {
                 w.write(&format!(
                     "def encode_{}(e, val: {}):\n",
                     crate::strings::to_snake_case(&name.to_string()),
-                    self.to_type_name(&name.to_string())
+                    self.to_type_name_case(&name.to_string())
                 ));
                 self.indent_level += 1;
                 self.encode_shape_kind(w, id, kind, ValExpr::Ref("val"))?;

@@ -3,8 +3,9 @@
 //! instructions to cargo so model is only rebuilt if either codegen.toml
 //! or one of the model files changes.
 
-use crate::error::Error;
 use std::path::PathBuf;
+
+use crate::error::Error;
 
 /// wraps the logic inside build.rs
 pub fn rust_build<P: Into<PathBuf>>(

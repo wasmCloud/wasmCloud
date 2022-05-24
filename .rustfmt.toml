@@ -1,0 +1,11 @@
+edition = "2021"
+max_width = 100
+reorder_imports = true
+chain_width = 75
+imports_granularity = "Crate"
+overflow_delimited_expr = true
+single_line_if_else_max_width = 70
+group_imports = "StdExternalCrate"
+struct_lit_width = 40
+struct_variant_width = 55
+#unstable_fetures = false

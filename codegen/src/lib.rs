@@ -2,14 +2,19 @@
 
 pub mod error;
 use error::Error;
+pub mod config;
+pub mod docgen;
+
+pub(crate) mod codegen_go;
 pub(crate) mod codegen_py;
 pub(crate) mod codegen_rust;
-pub mod config;
+
 pub(crate) mod decode_py;
 pub(crate) mod decode_rust;
-pub mod docgen;
+
 pub(crate) mod encode_py;
 pub(crate) mod encode_rust;
+
 pub(crate) mod gen;
 mod loader;
 pub(crate) mod model;
@@ -17,7 +22,6 @@ pub mod render;
 pub(crate) mod validate;
 pub mod writer;
 pub use gen::{templates_from_dir, Generator};
-
 pub(crate) use loader::sources_to_paths;
 pub use loader::{sources_to_model, weld_cache_dir};
 pub use rust_build::{rust_build, rust_build_into};

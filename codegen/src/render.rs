@@ -1,15 +1,16 @@
 //! Code generation
 //!
-use crate::{strings, JsonMap, JsonValue};
+use std::str::FromStr;
+
 use atelier_core::model::{Identifier, NamespaceID, ShapeID};
+pub use handlebars::RenderError;
 use handlebars::{
     Context, Handlebars, Helper, HelperDef, HelperResult, Output, RenderContext, ScopedJson,
 };
 use serde::Serialize;
 use serde_json::Value;
-use std::str::FromStr;
 
-pub use handlebars::RenderError;
+use crate::{strings, JsonMap, JsonValue};
 
 // these defaults can be overridden by the config file
 

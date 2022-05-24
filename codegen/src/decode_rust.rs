@@ -1,12 +1,7 @@
 //! CBOR Decode functions
 
-use crate::{
-    codegen_rust::{is_optional_type, is_rust_primitive, Lifetime, RustCodeGen},
-    error::{Error, Result},
-    gen::CodeGen,
-    model::{wasmcloud_model_namespace, Ty},
-    writer::Writer,
-};
+use std::{fmt::Write as _, string::ToString};
+
 use atelier_core::{
     model::{
         shapes::{HasTraits, ShapeKind, Simple, StructureOrUnion},
@@ -20,7 +15,14 @@ use atelier_core::{
         SHAPE_STRING, SHAPE_TIMESTAMP,
     },
 };
-use std::string::ToString;
+
+use crate::{
+    codegen_rust::{is_optional_type, is_rust_primitive, Lifetime, RustCodeGen},
+    error::{Error, Result},
+    gen::CodeGen,
+    model::{wasmcloud_model_namespace, Ty},
+    writer::Writer,
+};
 
 // decodes byte slice of definite length; returns <&'b [u8]>
 fn decode_blob() -> &'static str {
@@ -229,9 +231,10 @@ impl<'model> RustCodeGen<'model> {
         for field in fields.iter() {
             let field_num = field.field_num().unwrap();
             let target = field.target();
-            let field_name = self.to_type_name(&field.id().to_string());
+            let field_name = self.to_type_name_case(&field.id().to_string());
             if target == crate::model::unit_shape() {
-                s.push_str(&format!(
+                write!(
+                    s,
                     r#"
                     {} => {{ 
                             {};
@@ -242,10 +245,12 @@ impl<'model> RustCodeGen<'model> {
                     &decode_unit(),
                     enum_name,
                     field_name
-                ));
+                )
+                .unwrap();
             } else {
                 let field_decoder = self.decode_shape_id(target)?;
-                s.push_str(&format!(
+                write!(
+                    s,
                     r#"
                     {} => {{
                         let val = {};
@@ -253,13 +258,17 @@ impl<'model> RustCodeGen<'model> {
                     }},
                     "#,
                     &field_num, field_decoder, enum_name, field_name
-                ));
+                )
+                .unwrap();
             }
         }
-        s.push_str(&format!(r#"
+        writeln!(
+            s,
+            r#"
             n => {{ return Err(RpcError::Deser(format!("invalid field number for union '{}':{{}}", n))); }},
-            }}
-        "#, id));
+            }}"#,
+            id
+        ).unwrap();
         Ok(s)
     }
 
@@ -279,18 +288,17 @@ impl<'model> RustCodeGen<'model> {
                 // allows adding Optional fields at end of struct
                 // and maintaining backwards compatibility to read structs
                 // that did not define those fields.
-                s.push_str(&format!(
-                    "let mut {}: Option<{}> = Some(None);\n",
+                writeln!(
+                    s,
+                    "let mut {}: Option<{}> = Some(None);",
                     field_name, field_type
-                ))
+                )
+                .unwrap()
             } else {
-                s.push_str(&format!(
-                    "let mut {}: Option<{}> = None;\n",
-                    field_name, field_type
-                ))
+                writeln!(s, "let mut {}: Option<{}> = None;", field_name, field_type).unwrap()
             }
         }
-        s.push_str(&format!(r#"
+        write!(s, r#"
             let is_array = match d.datatype()? {{
                 {}::cbor::Type::Array => true,
                 {}::cbor::Type::Map => false,
@@ -299,7 +307,7 @@ impl<'model> RustCodeGen<'model> {
             if is_array {{
                 let len = d.fixed_array()?;
                 for __i in 0..(len as usize) {{
-        "#, self.import_core, self.import_core, id.shape_name() ));
+        "#, self.import_core, self.import_core, id.shape_name() ).unwrap();
         if fields.is_empty() {
             s.push_str(
                 r#"
@@ -320,7 +328,8 @@ impl<'model> RustCodeGen<'model> {
             let field_name = self.to_field_name(field.id(), field.traits())?;
             let field_decoder = self.decode_shape_id(field.target())?;
             if is_optional_type(field) {
-                s.push_str(&format!(
+                write!(
+                    s,
                     r#"{} => {} = if {}::cbor::Type::Null == d.datatype()? {{
                                         d.skip()?;
                                         Some(None)
@@ -329,12 +338,10 @@ impl<'model> RustCodeGen<'model> {
                                     }},
                    "#,
                     ix, field_name, self.import_core, field_decoder,
-                ));
+                )
+                .unwrap();
             } else {
-                s.push_str(&format!(
-                    "{} => {} = Some({}),",
-                    ix, field_name, field_decoder,
-                ));
+                write!(s, "{} => {} = Some({}),", ix, field_name, field_decoder,).unwrap();
             }
         }
         if !fields.is_empty() {
@@ -374,7 +381,8 @@ impl<'model> RustCodeGen<'model> {
             let field_name = self.to_field_name(field.id(), field.traits())?;
             let field_decoder = self.decode_shape_id(field.target())?;
             if is_optional_type(field) {
-                s.push_str(&format!(
+                write!(
+                    s,
                     r#""{}" => {} = if {}::cbor::Type::Null == d.datatype()? {{
                                         d.skip()?;
                                         Some(None)
@@ -386,14 +394,17 @@ impl<'model> RustCodeGen<'model> {
                     field_name,
                     self.import_core,
                     field_decoder,
-                ));
+                )
+                .unwrap();
             } else {
-                s.push_str(&format!(
+                write!(
+                    s,
                     r#""{}" => {} = Some({}),"#,
                     field.id(),
                     field_name,
                     field_decoder,
-                ));
+                )
+                .unwrap();
             }
         }
         if !fields.is_empty() {
@@ -412,16 +423,17 @@ impl<'model> RustCodeGen<'model> {
         );
 
         // build the return struct
-        s.push_str(&format!("{} {{\n", id.shape_name()));
+        writeln!(s, "{} {{", id.shape_name()).unwrap();
         for (ix, field) in fields.iter().enumerate() {
             let field_name = self.to_field_name(field.id(), field.traits())?;
             if is_optional_type(field) {
-                s.push_str(&format!("{}: {}.unwrap(),\n", &field_name, &field_name));
+                writeln!(s, "{}: {}.unwrap(),", &field_name, &field_name).unwrap();
             } else {
-                s.push_str(&format!(
+                write!(
+                    s,
                     r#"
                 {}: if let Some(__x) = {} {{
-                    __x 
+                    __x
                 }} else {{
                     return Err(RpcError::Deser("missing field {}.{} (#{})".to_string()));
                 }},
@@ -431,7 +443,8 @@ impl<'model> RustCodeGen<'model> {
                     id.shape_name(),
                     &field_name,
                     ix,
-                ));
+                )
+                .unwrap();
             }
         }
         s.push_str("}\n"); // close struct initializer and Ok(...)
@@ -475,7 +488,7 @@ impl<'model> RustCodeGen<'model> {
                     if has_lifetime { "<'v>" } else { "" },
                     self.import_core,
                     if has_lifetime { "<'v>" } else { "<'_>" },
-                    self.to_type_name(&id.shape_name().to_string()),
+                    self.to_type_name_case(&id.shape_name().to_string()),
                     if has_lifetime { "<'v>" } else { "" },
                 );
                 let body = self.decode_shape_kind(id, kind)?;
