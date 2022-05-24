@@ -23,8 +23,8 @@ wasmcloud-interface-httpserver = "0.5.0"
 wasmbus-rpc = "0.8.5"
 
 [target.'cfg(all(target_arch = "aarch64", target_os = "linux"))'.dependencies]
-# We don't use rmp directly, but we pin to a version that works with aarch64-linux
-rmp = "=0.8.10"
+# We don't use paste directly, but we pin to a version that works with aarch64-linux
+paste = "=1.0.6"
 
 [dev-dependencies]
 assert_matches = "1.5"

@@ -17,12 +17,13 @@ thiserror = "1.0"
 tokio = { version = "1", features = ["sync", "rt"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+url = "2.2.2"
 vaultrs = "0.6.0"
 wasmbus-rpc = "0.8.2"
 
 [target.'cfg(all(target_arch = "aarch64", target_os = "linux"))'.dependencies]
-# We don't use rmp directly, but we pin to a version that works with aarch64-linux
-rmp = "=0.8.10"
+# We don't use paste directly, but we pin to a version that works with aarch64-linux
+paste = "=1.0.6"
 
 # test dependencies
 [dev-dependencies]

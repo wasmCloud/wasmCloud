@@ -121,9 +121,11 @@ target/debug/$(bin_name): $(RUST_DEPS)
 
 # cross-compile target, remove intermediate build artifacts before build
 target/%/release/$(bin_name): $(RUST_DEPS)
+	mkdir -p ${HOME}/.cache
 	tname=`echo -n $@ | sed -E 's_target/([^/]+)/release.*$$_\1_'` &&\
 	rm -rf target/release/build &&\
-	cross build --release --target $$tname
+	rm -rf target/release/deps &&\
+	XDG_CACHE_HOME=${HOME}/.cache cross build --release --target $$tname
 
 endif
 

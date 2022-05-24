@@ -31,6 +31,7 @@ impl Client {
                 verify: false,
                 version: API_VERSION,
                 wrapping: false,
+                timeout: None,
             })?),
             namespace: config.mount,
         })
