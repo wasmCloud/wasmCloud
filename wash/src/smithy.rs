@@ -210,8 +210,9 @@ fn select_config(opt_config: &Option<PathBuf>) -> Result<CodegenConfig, anyhow::
     // if --config is not specified in the command-line, try the current directory.
     // if it's not found use the default
     let (cfile, folder) = if let Some(path) = &opt_config {
+        let path = std::fs::canonicalize(path)?;
         (
-            std::fs::read_to_string(path)
+            std::fs::read_to_string(&path)
                 .map_err(|e| anyhow!("reading config file {}: {}", path.display(), e))?,
             path.parent().unwrap().to_path_buf(),
         )

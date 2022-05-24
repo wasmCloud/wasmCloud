@@ -58,7 +58,7 @@ wasmcloud-control-interface = "0.11.0"
 wasmbus-rpc = "0.7.1"
 
 wasmcloud-test-util = "0.2.0"
-weld-codegen = "0.3.0"
+weld-codegen = "0.4.4"
 which = "4.2.2"
 crossbeam-channel = "0.5.2"
 cloudevents-sdk = "0.4.0"
