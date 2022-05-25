@@ -48,16 +48,20 @@ impl std::str::FromStr for OutputLanguage {
 
 impl fmt::Display for OutputLanguage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", match self {
-            OutputLanguage::Poly => "Poly",
-            OutputLanguage::Html => "Html",
-            OutputLanguage::Rust => "Rust",
-            OutputLanguage::AssemblyScript => "AssemblyScript",
-            OutputLanguage::TinyGo => "TinyGo",
-            OutputLanguage::Go => "Go",
-            OutputLanguage::Python => "Python",
-            OutputLanguage::Clang => "Clang",
-        })
+        write!(
+            f,
+            "{}",
+            match self {
+                OutputLanguage::Poly => "Poly",
+                OutputLanguage::Html => "Html",
+                OutputLanguage::Rust => "Rust",
+                OutputLanguage::AssemblyScript => "AssemblyScript",
+                OutputLanguage::TinyGo => "TinyGo",
+                OutputLanguage::Go => "Go",
+                OutputLanguage::Python => "Python",
+                OutputLanguage::Clang => "Clang",
+            }
+        )
     }
 }
 
@@ -147,10 +151,14 @@ impl ModelSource {
 
 impl fmt::Display for ModelSource {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", match self {
-            ModelSource::Url { url, files: _ } => format!("url({})", url),
-            ModelSource::Path { path, files: _ } => format!("path({})", path.display()),
-        })
+        write!(
+            f,
+            "{}",
+            match self {
+                ModelSource::Url { url, files: _ } => format!("url({})", url),
+                ModelSource::Path { path, files: _ } => format!("path({})", path.display()),
+            }
+        )
     }
 }
 
@@ -168,6 +176,14 @@ pub struct LanguageConfig {
     /// Additional parameters
     #[serde(default)]
     pub parameters: BTreeMap<String, TomlValue>,
+
+    /// source-code formatter
+    /// first item in vec should be program, rest are args
+    /// For languages other than rust, the formatter _only_ runs if defined in codegen.toml
+    /// example: [ "goimports", "-w" ]
+    /// example: [ "rustfmt", "--edition", "2021" ]
+    #[serde(default)]
+    pub formatter: Vec<String>,
 
     /// Settings specific to individual output files
     #[serde(default)]

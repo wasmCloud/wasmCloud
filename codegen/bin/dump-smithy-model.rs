@@ -15,9 +15,7 @@ struct Args {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    let config_path = args
-        .config
-        .unwrap_or_else(|| PathBuf::from("./codegen.toml"));
+    let config_path = args.config.unwrap_or_else(|| PathBuf::from("./codegen.toml"));
     if !config_path.is_file() {
         return Err(anyhow!("missing config file {}", &config_path.display()));
     }

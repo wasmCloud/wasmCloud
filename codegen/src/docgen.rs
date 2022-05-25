@@ -8,6 +8,7 @@ use atelier_core::model::Model;
 use crate::{
     config::{LanguageConfig, OutputFile, OutputLanguage},
     error::Result,
+    format::SourceFormatter,
     gen::{to_json, CodeGen},
     render::Renderer,
     Bytes, Error, JsonValue, ParamMap,
@@ -123,5 +124,8 @@ impl CodeGen for DocGen {
     }
     fn to_type_name_case(&self, name: &str) -> String {
         name.into()
+    }
+    fn source_formatter(&self, _: Vec<String>) -> Result<Box<dyn SourceFormatter>> {
+        Ok(Box::new(crate::format::NullFormatter::default()))
     }
 }

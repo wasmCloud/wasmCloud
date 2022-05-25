@@ -21,6 +21,7 @@ use crate::{
     config::{CodegenConfig, LanguageConfig, OutputFile, OutputLanguage},
     docgen::DocGen,
     error::{Error, Result},
+    format::{NullFormatter, SourceFormatter},
     model::{get_trait, serialization_trait, CommentKind, NumberedMember},
     render::Renderer,
     wasmbus_model::{RenameItem, Serialization},
@@ -208,7 +209,7 @@ impl<'model> Generator {
                 // retrieve json_model for the next iteration
                 json_model = params.remove("model").unwrap();
             }
-            cgen.format(updated_files, &lc.parameters)?;
+            cgen.format(updated_files, &lc)?;
         }
 
         Ok(())
@@ -437,23 +438,22 @@ pub(crate) trait CodeGen {
         )
     }
 
-    fn source_formatter(&self) -> Result<Box<dyn SourceFormatter>> {
-        Ok(Box::new(crate::format::NullFormatter::default()))
-    }
+    fn source_formatter(&self, formatter: Vec<String>) -> Result<Box<dyn SourceFormatter>>;
 
     /// After code generation has completed for all files, this method is called once per output language
     /// to allow code formatters to run. The `files` parameter contains a list of all files written or updated.
     fn format(
         &mut self,
         files: Vec<PathBuf>,
-        lc_params: &BTreeMap<String, TomlValue>,
+        lc: &LanguageConfig,
+        //lc_params: &BTreeMap<String, TomlValue>,
     ) -> Result<()> {
         // if we just created an interface project, don't run rustfmt yet
         // because we haven't generated the other rust file yet, so rustfmt will fail.
-        if !lc_params.contains_key("create_interface") {
+        if !lc.parameters.contains_key("create_interface") {
             // make a list of all output files with ".rs" extension so we can fix formatting with rustfmt
             // minor nit: we don't check the _config-only flag so there could be some false positives here, but rustfmt is safe to use anyway
-            let formatter = self.source_formatter()?;
+            let formatter = self.source_formatter(lc.formatter.clone())?;
 
             let extension = self.output_language().extension();
             let sources = files
@@ -473,16 +473,6 @@ pub(crate) trait CodeGen {
                 formatter.run(&borrowed)?;
             }
         }
-        Ok(())
-    }
-}
-
-/// Formats source code
-#[allow(unused_variables)]
-pub trait SourceFormatter {
-    /// run formatter on all files
-    /// Default implementation does nothing
-    fn run(&self, source_files: &[&str]) -> Result<()> {
         Ok(())
     }
 }
@@ -522,6 +512,10 @@ impl CodeGen for PolyGen {
     /// generate type name
     fn to_type_name_case(&self, name: &str) -> String {
         crate::strings::to_pascal_case(name)
+    }
+
+    fn source_formatter(&self, _: Vec<String>) -> Result<Box<dyn SourceFormatter>> {
+        Ok(Box::new(NullFormatter::default()))
     }
 }
 
@@ -628,5 +622,9 @@ impl CodeGen for NoCodeGen {
 
     fn to_type_name_case(&self, name: &str) -> String {
         crate::strings::to_pascal_case(name)
+    }
+
+    fn source_formatter(&self, _: Vec<String>) -> Result<Box<dyn SourceFormatter>> {
+        Ok(Box::new(NullFormatter::default()))
     }
 }

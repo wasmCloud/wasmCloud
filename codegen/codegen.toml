@@ -20,6 +20,7 @@ namespace = "org.wasmcloud.model"
 no_serde = true # don't generate proto serialization & deserialization for this model
 
 [tinygo]
+formatter = [ "goimports", "-w" ]
 output_dir = "../../interfaces/core"
 files = [
     { path = "tinygo/core.go", package="actor", namespace = "org.wasmcloud.core" },

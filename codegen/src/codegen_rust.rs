@@ -32,7 +32,8 @@ use crate::wasmbus_model::Wasmbus;
 use crate::{
     config::{LanguageConfig, OutputLanguage},
     error::{print_warning, Error, Result},
-    gen::{CodeGen, SourceFormatter},
+    format::{self, SourceFormatter},
+    gen::CodeGen,
     model::{
         codegen_rust_trait, get_operation, get_sorted_fields, get_trait, has_default,
         is_opt_namespace, value_to_json, wasmcloud_model_namespace, CommentKind, PackageName, Ty,
@@ -219,8 +220,16 @@ impl<'model> CodeGen for RustCodeGen<'model> {
         Ok(())
     }
 
-    fn source_formatter(&self) -> Result<Box<dyn SourceFormatter>> {
-        Ok(Box::new(crate::format::RustSourceFormatter::default()))
+    /// Set up go formatter based on 'rust.formatter' settings in codegen.toml,
+    /// or use default if formatter is undefined or empty
+    fn source_formatter(&self, mut args: Vec<String>) -> Result<Box<dyn SourceFormatter>> {
+        let formatter = if args.is_empty() {
+            RustSourceFormatter::default()
+        } else {
+            let program = args.remove(0);
+            RustSourceFormatter { program, args }
+        };
+        Ok(Box::new(formatter))
     }
 
     /// Perform any initialization required prior to code generation for a file
@@ -1624,4 +1633,31 @@ fn package_semver() {
         "package version {} has unexpected format",
         package_version
     );
+}
+
+/// Format rust source using rustfmt
+pub struct RustSourceFormatter {
+    /// either 'rustfmt', (the default, assumes ~/.cargo/bin is in your path,
+    /// or a path to an executable
+    program: String,
+    /// any additional args
+    args: Vec<String>,
+}
+
+impl Default for RustSourceFormatter {
+    fn default() -> Self {
+        RustSourceFormatter {
+            program: "rustfmt".into(),
+            args: vec!["--edition".into(), "2021".into()],
+        }
+    }
+}
+
+impl SourceFormatter for RustSourceFormatter {
+    fn run(&self, source_files: &[&str]) -> Result<()> {
+        let mut args: Vec<&str> = self.args.iter().map(|s| s.as_str()).collect();
+        args.extend(source_files.iter());
+        format::run_command(&self.program, &args)?;
+        Ok(())
+    }
 }

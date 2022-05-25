@@ -20,6 +20,6 @@ test::
 
 rust-check::
 	cargo clippy --all-features --all-targets
-	rustfmt --edition 2021 --check src/*.rs
+	rustfmt --edition 2021 --check src/*.rs bin/*.rs
 
 .PHONY: all build release clean lint validate test update rust-check

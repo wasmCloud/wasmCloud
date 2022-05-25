@@ -28,7 +28,8 @@ use crate::{
     codegen_rust::is_optional_type,
     config::{LanguageConfig, OutputLanguage},
     error::{print_warning, Error, Result},
-    gen::{spaces, CodeGen, SourceFormatter},
+    format::SourceFormatter,
+    gen::{spaces, CodeGen},
     model::{
         get_operation, get_sorted_fields, get_trait, is_opt_namespace, value_to_json,
         wasmcloud_model_namespace, CommentKind, PackageName, Ty,
@@ -113,7 +114,7 @@ impl<'model> CodeGen for PythonCodeGen<'model> {
         Ok(())
     }
 
-    fn source_formatter(&self) -> Result<Box<dyn SourceFormatter>> {
+    fn source_formatter(&self, _: Vec<String>) -> Result<Box<dyn SourceFormatter>> {
         Ok(Box::new(PythonSourceFormatter::default()))
     }
 

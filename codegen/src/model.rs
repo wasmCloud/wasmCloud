@@ -127,7 +127,7 @@ pub enum CommentKind {
     InQuote,
 }
 
-#[derive(Default, Clone, PartialEq)]
+#[derive(Default, Clone, PartialEq, Eq)]
 pub struct WasmbusProtoVersion {
     base: u8, // base number
 }
