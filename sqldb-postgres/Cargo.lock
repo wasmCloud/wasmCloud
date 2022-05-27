@@ -3014,7 +3014,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-sqldb-postgres"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "atty",
