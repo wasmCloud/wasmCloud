@@ -21,7 +21,7 @@ use std::{
     time::Duration,
 };
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 enum RepoKind {
     LocalFolder,
     RemoteHttp,

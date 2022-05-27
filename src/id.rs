@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::{convert::AsRef, str::FromStr};
 use thiserror::Error;
 
-#[derive(Error, Debug, PartialEq)]
+#[derive(Error, Debug, Eq, PartialEq)]
 pub enum ParseError {
     #[error(r#"found the prefix "{found}", but expected "{expected}""#)]
     InvalidKeyType { found: String, expected: String },

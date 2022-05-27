@@ -11,7 +11,7 @@ use anyhow::{bail, Context, Result};
 use clap::Args;
 use log::{debug, error};
 use std::{collections::HashMap, path::PathBuf, time::Duration};
-use wasmbus_rpc::{core::WasmCloudEntity, rpc_client::RpcClient, Message};
+use wasmbus_rpc::{common::Message, core::WasmCloudEntity, rpc_client::RpcClient};
 use wasmcloud_test_util::testing::TestResults;
 
 /// fake key (not a real public key)  used to construct origin for invoking actors
@@ -186,8 +186,8 @@ pub(crate) fn call_output(
     }
     if is_test {
         // try to decode it as TestResults, otherwise dump as text
-        let test_results =
-            wasmbus_rpc::deserialize::<TestResults>(&response).with_context(|| {
+        let test_results = wasmbus_rpc::common::deserialize::<TestResults>(&response)
+            .with_context(|| {
                 format!(
                     "Error interpreting response as TestResults. Response: {}",
                     String::from_utf8_lossy(&response)
@@ -292,7 +292,7 @@ async fn rpc_client_from_opts(
         RpcClient::new(
             nc,
             &lattice_prefix,
-            nkeys::KeyPair::from_seed(&extract_arg_value(&cluster_seed.to_string())?)?,
+            nkeys::KeyPair::from_seed(&extract_arg_value(cluster_seed.as_ref())?)?,
             WASH_HOST_ID.to_string(),
             Some(Duration::from_millis(opts.timeout_ms)),
         ),
