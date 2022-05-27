@@ -1,13 +1,7 @@
 use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
-    env::temp_dir,
-    error::Error,
-    fmt, fs,
-    fs::File,
-    io::Read,
-    path::{Path, PathBuf},
+    collections::HashMap, env::temp_dir, error::Error, fmt, fs::File, io::Read, path::PathBuf,
     str::FromStr,
 };
 use term_table::{Table, TableStyle};
@@ -20,7 +14,7 @@ pub const DEFAULT_NATS_TIMEOUT_MS: u64 = 2_000;
 pub const DEFAULT_START_PROVIDER_TIMEOUT_MS: u64 = 60_000;
 
 /// Used for displaying human-readable output vs JSON format
-#[derive(Debug, Copy, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Copy, Clone, Eq, Serialize, Deserialize, PartialEq)]
 pub(crate) enum OutputKind {
     Text,
     Json,
@@ -145,7 +139,7 @@ pub(crate) fn labels_vec_to_hashmap(constraints: Vec<String>) -> Result<HashMap<
 /// Transform a json string (e.g. "{"hello": "world"}") into msgpack bytes
 pub(crate) fn json_str_to_msgpack_bytes(payload: &str) -> Result<Vec<u8>> {
     let json = serde_json::from_str::<serde_json::Value>(payload)?;
-    let payload = wasmbus_rpc::serialize(&json)?;
+    let payload = wasmbus_rpc::common::serialize(&json)?;
     Ok(payload)
 }
 
@@ -302,19 +296,19 @@ pub fn validate_contract_id(contract_id: &str) -> Result<()> {
 
 #[cfg(all(unix))]
 /// Set file and folder permissions for keys.
-pub(crate) fn set_permissions_keys(path: &Path) -> Result<()> {
+pub(crate) fn set_permissions_keys(path: &std::path::Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
     let metadata = path.metadata()?;
     match metadata.file_type().is_dir() {
-        true => fs::set_permissions(path, fs::Permissions::from_mode(0o700))?,
-        false => fs::set_permissions(path, fs::Permissions::from_mode(0o600))?,
+        true => std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?,
+        false => std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?,
     };
     Ok(())
 }
 
 #[cfg(target_os = "windows")]
-pub(crate) fn set_permissions_keys(path: &Path) -> Result<()> {
+pub(crate) fn set_permissions_keys(_path: &std::path::Path) -> Result<()> {
     Ok(())
 }
 

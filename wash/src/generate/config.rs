@@ -32,7 +32,7 @@ pub(crate) struct ConfigValues {
 }
 
 /// template parameters for a project
-#[derive(Default, Deserialize, Debug, PartialEq)]
+#[derive(Default, Deserialize, Debug, Eq, PartialEq)]
 pub(crate) struct TemplateConfig {
     /// list of files or file patterns to omit.
     /// syntax for paths is the same as for `.gitignore` files.
@@ -63,7 +63,7 @@ pub(crate) struct TemplateConfig {
     pub(crate) rename: Vec<RenameConfig>,
 }
 
-#[derive(Clone, Deserialize, Debug, PartialEq)]
+#[derive(Clone, Deserialize, Debug, Eq, PartialEq)]
 pub(crate) struct RenameConfig {
     pub(crate) from: PathBuf,
     pub(crate) to: String,

@@ -30,7 +30,7 @@ pub(crate) struct StringEntry {
     pub(crate) regex: Option<Regex>,
 }
 
-#[derive(Error, Debug, PartialEq)]
+#[derive(Error, Debug, Eq, PartialEq)]
 pub enum ConversionError {
     #[error("parameter `{parameter}` of placeholder `{var_name}` should be a `{correct_type}`")]
     WrongTypeParameter {
@@ -80,13 +80,13 @@ pub(crate) fn validate_project_name(name: &str) -> Result<()> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 enum SupportedVarValue {
     Bool(bool),
     String(String),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
 enum SupportedVarType {
     Bool,
     String,

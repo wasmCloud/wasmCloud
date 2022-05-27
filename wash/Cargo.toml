@@ -1,6 +1,6 @@
 [package]
 name = "wash-cli"
-version = "0.11.0-alpha.2"
+version = "0.11.0"
 authors = ["wasmCloud Team"]
 categories = ["wasm", "command-line-utilities"]
 description = "wasmcloud Shell (wash) CLI tool"
@@ -26,7 +26,7 @@ dialoguer = "0.9"
 dirs = "4.0"
 env_logger = "0.9"
 envmnt = "0.9.0"
-git2 = {version = "0.13.22", default_features = false}
+git2 = {version = "0.13.25", features = ["vendored-libgit2"]}
 heck = "0.4"
 ignore = "0.4"
 indicatif = "0.16"
@@ -54,11 +54,11 @@ tokio = {version = "1", features = ["full"]}
 toml = "0.5"
 walkdir = "2.3"
 wascap = "0.8.0"
-wasmcloud-control-interface = "0.11.0"
-wasmbus-rpc = "0.7.1"
+wasmcloud-control-interface = "0.14.0"
+wasmbus-rpc = "0.8.5"
 
-wasmcloud-test-util = "0.2.0"
-weld-codegen = "0.4.4"
+wasmcloud-test-util = "0.3.3"
+weld-codegen = "0.4.5"
 which = "4.2.2"
 crossbeam-channel = "0.5.2"
 cloudevents-sdk = "0.4.0"

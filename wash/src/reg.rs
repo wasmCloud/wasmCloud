@@ -372,6 +372,7 @@ pub(crate) async fn handle_push(
     ))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn push_artifact(
     url: String,
     artifact: String,
