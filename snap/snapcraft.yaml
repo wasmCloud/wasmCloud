@@ -1,6 +1,6 @@
 name: wash
 base: core20 # the base snap is the execution environment for this snap
-version: '0.10.0'
+version: "0.11.0"
 summary: WAsmcloud SHell - A multi-tool for wasmCloud development.
 icon: snap/local/icon.png
 description: |
@@ -15,8 +15,8 @@ apps:
 parts:
   wash:
     plugin: rust
-    source: https://github.com/wasmCloud/wash.git 
+    source: https://github.com/wasmCloud/wash.git
     build-packages:
-    - libssl-dev
-    - pkg-config
-    - clang
+      - libssl-dev
+      - pkg-config
+      - clang
