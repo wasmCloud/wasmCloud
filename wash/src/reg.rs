@@ -19,8 +19,6 @@ const WASM_MEDIA_TYPE: &str = "application/vnd.module.wasm.content.layer.v1+wasm
 const WASM_CONFIG_MEDIA_TYPE: &str = "application/vnd.wasmcloud.actor.archive.config";
 const OCI_MEDIA_TYPE: &str = "application/vnd.oci.image.layer.v1.tar";
 const WASM_FILE_EXTENSION: &str = ".wasm";
-// Default to 4MB to support a popular use case, GitHub Container Registry
-const MAX_LAYER_SIZE: usize = 4_000_000;
 
 pub(crate) const SHOWER_EMOJI: &str = "\u{1F6BF}";
 
@@ -85,10 +83,6 @@ pub(crate) struct PushCommand {
     /// Optional set of annotations to apply to the OCI artifact manifest
     #[clap(short = 'a', long = "annotation", name = "annotations")]
     pub(crate) annotations: Option<Vec<String>>,
-
-    /// Optional parameter to specify the size to divide an artifact up into layers, default 4MB
-    #[clap(short = 'm', long = "max-layer-size")]
-    pub(crate) max_layer_size: Option<usize>,
 
     #[clap(flatten)]
     pub(crate) opts: AuthOpts,
@@ -355,7 +349,6 @@ pub(crate) async fn handle_push(
         cmd.opts.password,
         cmd.opts.insecure,
         cmd.annotations,
-        cmd.max_layer_size.unwrap_or(MAX_LAYER_SIZE),
     )
     .await?;
 
@@ -382,7 +375,6 @@ pub(crate) async fn push_artifact(
     password: Option<String>,
     insecure: bool,
     annotations: Option<Vec<String>>,
-    max_layer_size: usize,
 ) -> Result<()> {
     let image: Reference = url.parse()?;
 
@@ -422,23 +414,11 @@ pub(crate) async fn push_artifact(
         annotations: None,
     };
 
-    // Automatically chunk artifact into layers if it exceeds the max layer size
-    let layers = if artifact_buf.len() > max_layer_size {
-        artifact_buf
-            .chunks(max_layer_size)
-            .map(|chunk| ImageLayer {
-                data: chunk.to_vec(),
-                media_type: artifact_media_type.to_string(),
-                annotations: None,
-            })
-            .collect()
-    } else {
-        vec![ImageLayer {
-            data: artifact_buf,
-            media_type: artifact_media_type.to_string(),
-            annotations: None,
-        }]
-    };
+    let layer = vec![ImageLayer {
+        data: artifact_buf,
+        media_type: artifact_media_type.to_string(),
+        annotations: None,
+    }];
 
     let mut client = Client::new(ClientConfig {
         protocol: if insecure {
@@ -455,13 +435,13 @@ pub(crate) async fn push_artifact(
     };
 
     let manifest = OciImageManifest::build(
-        &layers,
+        &layer,
         &config,
         labels_vec_to_hashmap(annotations.unwrap_or_default()).ok(),
     );
 
     client
-        .push(&image, &layers, config, &auth, Some(manifest))
+        .push(&image, &layer, config, &auth, Some(manifest))
         .await?;
     Ok(())
 }
