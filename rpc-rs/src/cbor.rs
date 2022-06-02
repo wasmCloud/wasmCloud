@@ -18,9 +18,7 @@ pub struct Decoder<'b> {
 impl<'b> Decoder<'b> {
     /// Construct a Decoder for the given byte slice
     pub fn new(bytes: &'b [u8]) -> Self {
-        Self {
-            inner: minicbor::Decoder::new(bytes),
-        }
+        Self { inner: minicbor::Decoder::new(bytes) }
     }
 
     /// Decode a bool value
@@ -196,16 +194,12 @@ pub struct Encoder<W: Write> {
 pub fn vec_encoder(header: bool) -> Encoder<Vec<u8>> {
     let buf = if header {
         let mut buf = Vec::new();
-        crate::common::MessageFormat::Cbor
-            .write_header(&mut buf)
-            .unwrap();
+        crate::common::MessageFormat::Cbor.write_header(&mut buf).unwrap();
         buf
     } else {
         Vec::new()
     };
-    Encoder {
-        inner: minicbor::Encoder::new(buf),
-    }
+    Encoder { inner: minicbor::Encoder::new(buf) }
 }
 
 /// A non-allocating CBOR encoder
@@ -215,9 +209,7 @@ where
 {
     /// Constructs an Encoder around the writer
     pub fn new(writer: W) -> Self {
-        Self {
-            inner: minicbor::Encoder::new(writer),
-        }
+        Self { inner: minicbor::Encoder::new(writer) }
     }
 
     /// Encode a bool value

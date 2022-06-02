@@ -50,9 +50,7 @@ type JsMap = HashMap<String, JetStream>;
 
 fn jetstream_map() -> Arc<RwLock<JsMap>> {
     static INSTANCE: OnceCell<Arc<RwLock<JsMap>>> = OnceCell::new();
-    INSTANCE
-        .get_or_init(|| Arc::new(RwLock::new(JsMap::new())))
-        .clone()
+    INSTANCE.get_or_init(|| Arc::new(RwLock::new(JsMap::new()))).clone()
 }
 
 pub(crate) fn shutdown() {

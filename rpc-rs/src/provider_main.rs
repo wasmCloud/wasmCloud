@@ -205,12 +205,9 @@ where
     }
 
     // subscribe to nats topics
-    let _join = bridge
-        .connect(provider_dispatch, shutdown_tx)
-        .await
-        .map_err(|e| {
-            RpcError::ProviderInit(format!("fatal error setting up subscriptions: {}", e))
-        })?;
+    let _join = bridge.connect(provider_dispatch, shutdown_tx).await.map_err(|e| {
+        RpcError::ProviderInit(format!("fatal error setting up subscriptions: {}", e))
+    })?;
 
     // process subscription events and log messages, waiting for shutdown signal
     let _ = shutdown_rx.await;

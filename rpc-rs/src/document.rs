@@ -79,11 +79,9 @@ impl Default for DocumentRef<'_> {
 impl<'v> DocumentRef<'v> {
     pub fn to_owned(&self) -> Document {
         match self {
-            DocumentRef::Object(o) => Document::Object(
-                o.iter()
-                    .map(|(k, v)| (k.to_owned(), v.to_owned()))
-                    .collect(),
-            ),
+            DocumentRef::Object(o) => {
+                Document::Object(o.iter().map(|(k, v)| (k.to_owned(), v.to_owned())).collect())
+            }
             DocumentRef::Blob(b) => Document::Blob(b.to_vec()),
             DocumentRef::Array(a) => Document::Array(a.iter().map(|v| v.to_owned()).collect()),
             DocumentRef::Number(n) => Document::Number(*n),
