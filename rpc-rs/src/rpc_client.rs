@@ -259,7 +259,6 @@ impl RpcClient {
         current_span.record("target_url", &tracing::field::display(&raw_target_url));
         current_span.record("method", &tracing::field::display(message.method));
 
-        debug!("rpc_client sending");
         let claims = wascap::prelude::Claims::<wascap::prelude::Invocation>::new(
             issuer.clone(),
             subject.clone(),
