@@ -625,6 +625,8 @@ impl HostBridge {
                     provider_id = tracing::field::Empty
                 );
                 let _enter = span.enter();
+                #[cfg(feature = "otel")]
+                crate::otel::attach_span_context(&msg);
                 if let Some(ld) = this.parse_msg::<LinkDefinition>(&msg, "link.put") {
                     span.record("actor_id", &tracing::field::display(&ld.actor_id));
                     span.record("provider_id", &tracing::field::display(&ld.provider_id));
