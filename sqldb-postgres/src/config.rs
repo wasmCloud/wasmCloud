@@ -34,6 +34,8 @@ const DEFAULT_IDLE_TIMEOUT_SEC: u32 = 600;
 /// period of inactivity after which keepalive message is sent to the backend server
 /// This value is not configurable in settings
 const DEFAULT_KEEPALIVE_IDLE: Duration = Duration::from_secs(15 * 60);
+/// amount of time to wait to receive a connection from the pool
+const DEFAULT_CONNECTION_TIMEOUT_MILLIS: u32 = 1000;
 
 /// Options for configuring connection pool
 #[derive(Debug, Default, Deserialize)]
@@ -58,6 +60,11 @@ pub(crate) struct PoolOptions {
     /// For usage-based database server billing, this can be a cost saver.
     /// Default: 600 (10 minutes)
     idle_timeout_secs: Option<u32>,
+
+    /// maximum time to wait for a connection from the pool before assuming
+    /// the database isunreachable.
+    /// Default: 1000ms
+    connection_timeout_millis: Option<u32>,
 }
 
 /// Load configuration from 'values' field of LinkDefinition.
@@ -128,6 +135,12 @@ pub(crate) async fn create_pool(config: Config) -> Result<crate::Pool, RpcError>
                 .idle_timeout_secs
                 .unwrap_or(DEFAULT_IDLE_TIMEOUT_SEC) as u64,
         )))
+        .connection_timeout(std::time::Duration::from_millis(
+            config
+                .pool
+                .connection_timeout_millis
+                .unwrap_or(DEFAULT_CONNECTION_TIMEOUT_MILLIS) as u64,
+        ))
         .build(bb8_postgres::PostgresConnectionManager::new(
             pg_config, NoTls,
         ))

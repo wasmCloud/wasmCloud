@@ -7,7 +7,7 @@ use std::{collections::HashMap, convert::Infallible, sync::Arc};
 
 use bb8_postgres::tokio_postgres::NoTls;
 use tokio::sync::RwLock;
-use tracing::{error, instrument};
+use tracing::{debug, error, instrument};
 use wasmbus_rpc::provider::prelude::*;
 use wasmcloud_interface_sqldb::{
     Column, ExecuteResult, QueryResult, SqlDb, SqlDbReceiver, Statement,
@@ -100,20 +100,17 @@ fn actor_id(ctx: &Context) -> Result<&String, RpcError> {
 impl SqlDb for SqlDbProvider {
     #[instrument(level = "debug", skip(self, ctx, stmt), fields(actor_id = ?ctx.actor))]
     async fn execute(&self, ctx: &Context, stmt: &Statement) -> RpcResult<ExecuteResult> {
+        debug!("executing statement");
         let actor_id = actor_id(ctx)?;
         let rd = self.actors.read().await;
         let pool = rd
             .get(actor_id)
             .ok_or_else(|| RpcError::InvalidParameter(format!("actor not linked:{}", actor_id)))?;
-        let conn = match pool.get().await {
-            Ok(conn) => conn,
-            Err(e) => {
-                return Ok(ExecuteResult {
-                    error: Some(DbError::Io(format!("connection pool: {}", e)).into()),
-                    ..Default::default()
-                })
-            }
-        };
+        let conn = pool.get().await.map_err(|e| {
+            let err_msg = "failed to get connection from pool";
+            error!(error = %e, err_msg);
+            RpcError::Other(err_msg.to_string())
+        })?;
         match conn.execute(&stmt.sql, &[]).await {
             Ok(res) => Ok(ExecuteResult {
                 rows_affected: res,
@@ -136,20 +133,17 @@ impl SqlDb for SqlDbProvider {
     /// perform select query on database, returning all result rows
     #[instrument(level = "debug", skip(self, ctx, stmt), fields(actor_id = ?ctx.actor))]
     async fn query(&self, ctx: &Context, stmt: &Statement) -> RpcResult<QueryResult> {
+        debug!("executing read query");
         let actor_id = actor_id(ctx)?;
         let rd = self.actors.read().await;
         let pool = rd
             .get(actor_id)
             .ok_or_else(|| RpcError::InvalidParameter(format!("actor not linked:{}", actor_id)))?;
-        let conn = match pool.get().await {
-            Ok(conn) => conn,
-            Err(e) => {
-                return Ok(QueryResult {
-                    error: Some(DbError::Io(format!("connection pool: {}", e)).into()),
-                    ..Default::default()
-                });
-            }
-        };
+        let conn = pool.get().await.map_err(|e| {
+            let err_msg = "failed to get connection from pool";
+            error!(error = %e, err_msg);
+            RpcError::Other(err_msg.to_string())
+        })?;
 
         match conn.query(&stmt.sql, &[]).await {
             Ok(rows) => {
