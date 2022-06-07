@@ -6,6 +6,7 @@ use std::{
     time::Duration,
 };
 
+use nats_aflowt::{header::HeaderMap, Connection};
 use ring::digest::{Context, SHA256};
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value as JsonValue;
@@ -13,6 +14,8 @@ use tracing::{debug, error, instrument, trace};
 
 #[cfg(all(feature = "chunkify", not(target_arch = "wasm32")))]
 use crate::chunkify::chunkify_endpoint;
+#[cfg(feature = "otel")]
+use crate::otel::OtelHeaderInjector;
 use crate::{
     common::Message,
     core::{Invocation, InvocationResponse, WasmCloudEntity},
@@ -185,8 +188,7 @@ impl RpcClient {
     where
         Target: Into<WasmCloudEntity>,
     {
-        self.inner_rpc(origin, target, message, true, self.timeout)
-            .await
+        self.inner_rpc(origin, target, message, true, self.timeout).await
     }
 
     /// Send a wasmbus rpc message, with a timeout.
@@ -205,8 +207,7 @@ impl RpcClient {
     where
         Target: Into<WasmCloudEntity>,
     {
-        self.inner_rpc(origin, target, message, true, Some(timeout))
-            .await
+        self.inner_rpc(origin, target, message, true, Some(timeout)).await
     }
 
     /// Send a wasmbus rpc message without waiting for response.
@@ -258,7 +259,6 @@ impl RpcClient {
         current_span.record("target_url", &tracing::field::display(&raw_target_url));
         current_span.record("method", &tracing::field::display(message.method));
 
-        debug!("rpc_client sending");
         let claims = wascap::prelude::Claims::<wascap::prelude::Invocation>::new(
             issuer.clone(),
             subject.clone(),
@@ -400,15 +400,20 @@ impl RpcClient {
 
         let bytes = match self.client.borrow() {
             NatsClientType::Async(ref nats) => {
-                let resp = if let Some(timeout) = self.timeout {
-                    nats.request_timeout(subject, data, timeout)
-                        .await
-                        .map_err(|e| RpcError::Nats(e.to_string()))?
-                } else {
-                    nats.request(subject, data)
-                        .await
-                        .map_err(|e| RpcError::Nats(e.to_string()))?
-                };
+                #[cfg(feature = "otel")]
+                let headers: Option<HeaderMap> =
+                    Some(OtelHeaderInjector::default_with_span().into());
+                #[cfg(not(feature = "otel"))]
+                let headers: Option<HeaderMap> = None;
+                let resp = request_with_headers_or_timeout(
+                    nats,
+                    subject,
+                    headers.as_ref(),
+                    self.timeout,
+                    data,
+                )
+                .await
+                .map_err(|e| RpcError::Nats(e.to_string()))?;
                 resp.data
             }
             // These two never get invoked
@@ -425,16 +430,58 @@ impl RpcClient {
         use std::borrow::Borrow as _;
 
         match self.client.borrow() {
-            NatsClientType::Async(nats) => nats
-                .publish(subject, data)
-                .await
-                .map_err(|e| RpcError::Nats(e.to_string()))?,
+            NatsClientType::Async(nats) => {
+                #[cfg(feature = "otel")]
+                let headers: Option<HeaderMap> =
+                    Some(OtelHeaderInjector::default_with_span().into());
+                #[cfg(not(feature = "otel"))]
+                let headers: Option<HeaderMap> = None;
+                nats.publish_with_reply_or_headers(subject, None, headers.as_ref(), data)
+                    .await
+                    .map_err(|e| RpcError::Nats(e.to_string()))?
+            }
             // These two never get invoked
             #[cfg(feature = "async_rewrite")]
             NatsClientType::AsyncRewrite(_) => unimplemented!(),
         }
         Ok(())
     }
+}
+
+/// Copied straight from aflowt because the function isn't public
+async fn request_with_headers_or_timeout(
+    nats: &Connection,
+    subject: &str,
+    maybe_headers: Option<&HeaderMap>,
+    maybe_timeout: Option<Duration>,
+    msg: impl AsRef<[u8]>,
+) -> std::io::Result<nats_aflowt::Message> {
+    // Publish a request.
+    let reply = nats.new_inbox();
+    let sub = nats.subscribe(&reply).await?;
+    nats.publish_with_reply_or_headers(subject, Some(reply.as_str()), maybe_headers, msg)
+        .await?;
+
+    // Wait for the response
+    let result = if let Some(timeout) = maybe_timeout {
+        sub.next_timeout(timeout).await
+    } else if let Some(msg) = sub.next().await {
+        Ok(msg)
+    } else {
+        Err(std::io::ErrorKind::ConnectionReset.into())
+    };
+
+    // Check for no responder status.
+    if let Ok(msg) = result.as_ref() {
+        if msg.is_no_responders() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "no responders",
+            ));
+        }
+    }
+
+    result
 }
 
 pub(crate) fn invocation_hash(

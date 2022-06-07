@@ -20,6 +20,7 @@ BigDecimal = [ "bigdecimal" ]
 # non-working feature - used for internal testing of async-rewrite branch of nats-io/nats.rs
 #async_rewrite = [ "nats-experimental" ]
 chunkify = [ "nats" ]
+otel = ["opentelemetry", "tracing-opentelemetry", "nats", "opentelemetry-otlp"]
 
 [dependencies]
 async-trait = "0.1"
@@ -48,15 +49,19 @@ bigdecimal = { version = "0.3", optional = true }
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"
 nats-aflowt = "0.16.104"
-nats = { version = "0.18", optional = true }
+nats = { version = "0.20", optional = true }
 nkeys = "0.2"
 once_cell = "1.8"
 uuid = { version = "0.8", features = ["v4", "serde"] }
 wascap = "0.8.0"
 ring = "0.16"
 data-encoding = "2.3"
-tracing-subscriber = { version = "0.3.7", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3.7", features = ["env-filter", "json"] }
 atty = "0.2"
+opentelemetry = { version = "0.17", features = ["rt-tokio"], optional = true }
+tracing-opentelemetry = { version = "0.17", optional = true }
+lazy_static = "1.4"
+opentelemetry-otlp = { version = "0.10", features = ["http-proto", "reqwest-client"], optional = true }
 
 [dev-dependencies]
 regex = "1"

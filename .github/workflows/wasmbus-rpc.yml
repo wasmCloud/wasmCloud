@@ -2,15 +2,15 @@ name: WASMBUS_RPC
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
     paths:
-    - "rpc-rs/**"
+      - "rpc-rs/**"
     tags:
-    - 'wasmbus-rpc-v*'
+      - "wasmbus-rpc-v*"
   pull_request:
-    branches: [ main ]
+    branches: [main]
     paths:
-    - "rpc-rs/**"
+      - "rpc-rs/**"
 
 env:
   CARGO_TERM_COLOR: always
@@ -20,32 +20,30 @@ jobs:
   rust_test:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v2
-    - name: update_rust
-      run: |
-        rustup toolchain install nightly
-        rustup update stable nightly
-        rustup component add --toolchain nightly rustfmt 
-    - name: run_all_tests_clippy_fmt
-      run: |
-        cd ${{ env.working-directory }}
-        make test
+      - uses: actions/checkout@v2
+      - name: update_rust
+        run: |
+          rustup update
+      - name: run_all_tests_clippy_fmt
+        run: |
+          cd ${{ env.working-directory }}
+          make test
 
   github_release:
     if: startswith(github.ref, 'refs/tags/') # Only run on tag push
     needs: rust_test
     runs-on: ubuntu-latest
     steps:
-    - name: Create Release
-      id: create_release
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        tag_name: ${{ github.ref }}
-        release_name: Release ${{ github.ref }}
-        draft: false
-        prerelease: true
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: Release ${{ github.ref }}
+          draft: false
+          prerelease: true
 
   crates_release:
     if: startswith(github.ref, 'refs/tags/') # Only run on tag push

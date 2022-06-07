@@ -156,10 +156,7 @@ fn timestamp_updates() {
 fn timestamp_to_datetime() {
     use time::OffsetDateTime;
 
-    let start: Timestamp = Timestamp {
-        sec: 2_000_000_000,
-        nsec: 100_000,
-    };
+    let start: Timestamp = Timestamp { sec: 2_000_000_000, nsec: 100_000 };
 
     let dt: OffsetDateTime = OffsetDateTime::try_from(start).unwrap();
 
@@ -204,14 +201,8 @@ fn timestamp_default() {
 #[test]
 fn timestamp_ordering() {
     // equals
-    let t1 = Timestamp {
-        sec: 100,
-        nsec: 100,
-    };
-    let t2 = Timestamp {
-        sec: 100,
-        nsec: 100,
-    };
+    let t1 = Timestamp { sec: 100, nsec: 100 };
+    let t2 = Timestamp { sec: 100, nsec: 100 };
     assert_eq!(t1, t2);
 
     // if sec differs, ignore nsec
@@ -221,10 +212,7 @@ fn timestamp_ordering() {
     assert!(t1 < t3);
 
     // if sec same, use nsec
-    let t4 = Timestamp {
-        sec: 100,
-        nsec: 400,
-    };
+    let t4 = Timestamp { sec: 100, nsec: 400 };
     assert!(t1 < t4);
     let t4 = Timestamp { sec: 100, nsec: 40 };
     assert!(t1 > t4);

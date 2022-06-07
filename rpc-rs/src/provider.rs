@@ -86,10 +86,7 @@ pub trait ProviderHandler: Sync {
     /// Default implementation always returns healthy
     #[allow(unused_variables)]
     async fn health_request(&self, arg: &HealthCheckRequest) -> RpcResult<HealthCheckResponse> {
-        Ok(HealthCheckResponse {
-            healthy: true,
-            message: None,
-        })
+        Ok(HealthCheckResponse { healthy: true, message: None })
     }
 
     /// Handle system shutdown message
@@ -144,12 +141,9 @@ impl HostBridge {
             }
         };
         // Connect to nats
-        nats_opts
-            .max_reconnects(None)
-            .connect(nats_addr)
-            .map_err(|e| {
-                RpcError::ProviderInit(format!("nats connection to {} failed: {}", nats_addr, e))
-            })
+        nats_opts.max_reconnects(None).connect(nats_addr).map_err(|e| {
+            RpcError::ProviderInit(format!("nats connection to {} failed: {}", nats_addr, e))
+        })
     }
 
     pub(crate) fn new_client(nats: NatsClientType, host_data: &HostData) -> RpcResult<HostBridge> {
@@ -164,9 +158,7 @@ impl HostBridge {
             &host_data.lattice_rpc_prefix,
             key,
             host_data.host_id.clone(),
-            host_data
-                .default_rpc_timeout_ms
-                .map(|ms| Duration::from_millis(ms as u64)),
+            host_data.default_rpc_timeout_ms.map(|ms| Duration::from_millis(ms as u64)),
         );
 
         Ok(HostBridge {
@@ -341,8 +333,10 @@ impl HostBridge {
         let this = self.clone();
         tokio::spawn(async move {
             while let Some(msg) = sub.next().await {
-                let span = tracing::trace_span!("subscribe_rpc", %rpc_topic);
+                let span = tracing::debug_span!("subscribe_rpc", %rpc_topic);
                 let _enter = span.enter();
+                #[cfg(feature = "otel")]
+                crate::otel::attach_span_context(&msg);
                 match deserialize::<Invocation>(&msg.data) {
                     Ok(mut inv) => {
                         match this.dechunk_validate(&mut inv).in_current_span().await {
@@ -585,11 +579,7 @@ impl HostBridge {
             error!(error = %e, "joining thread shutdown/unsubscribe task");
         }
         // send ack to host
-        if let Some(crate::anats::Message {
-            reply: Some(reply_to),
-            ..
-        }) = msg.as_ref()
-        {
+        if let Some(crate::anats::Message { reply: Some(reply_to), .. }) = msg.as_ref() {
             let data = b"shutting down".to_vec();
             if let Err(e) = self.rpc_client().publish(reply_to, &data).await {
                 error!(error = %e, "failed to send shutdown ack");
@@ -635,6 +625,8 @@ impl HostBridge {
                     provider_id = tracing::field::Empty
                 );
                 let _enter = span.enter();
+                #[cfg(feature = "otel")]
+                crate::otel::attach_span_context(&msg);
                 if let Some(ld) = this.parse_msg::<LinkDefinition>(&msg, "link.put") {
                     span.record("actor_id", &tracing::field::display(&ld.actor_id));
                     span.record("provider_id", &tracing::field::display(&ld.provider_id));
@@ -841,11 +833,7 @@ impl<'send> ProviderTransport<'send> {
                 .map(|t| Duration::from_millis(t as u64))
                 .unwrap_or(DEFAULT_RPC_TIMEOUT_MILLIS)
         }));
-        Self {
-            bridge,
-            ld,
-            timeout,
-        }
+        Self { bridge, ld, timeout }
     }
 }
 
@@ -872,10 +860,7 @@ impl<'send> Transport for ProviderTransport<'send> {
                     .unwrap_or(DEFAULT_RPC_TIMEOUT_MILLIS)
             }
         };
-        self.bridge
-            .rpc_client()
-            .send_timeout(origin, target, req, timeout)
-            .await
+        self.bridge.rpc_client().send_timeout(origin, target, req, timeout).await
     }
 
     fn set_timeout(&self, interval: Duration) {

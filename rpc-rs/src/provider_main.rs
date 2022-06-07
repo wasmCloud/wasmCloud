@@ -1,6 +1,27 @@
 #![cfg(not(target_arch = "wasm32"))]
 
+use std::io::{StderrLock, Write};
 use std::str::FromStr;
+
+use once_cell::sync::OnceCell;
+#[cfg(feature = "otel")]
+use opentelemetry::sdk::{
+    trace::{self, IdGenerator, Sampler},
+    Resource,
+};
+#[cfg(feature = "otel")]
+use opentelemetry_otlp::{Protocol, WithExportConfig};
+use tracing::{Event, Subscriber};
+use tracing_subscriber::fmt::{
+    format::{Format, Full, Json, Writer},
+    time::SystemTime,
+    FmtContext, FormatEvent, FormatFields,
+};
+use tracing_subscriber::{
+    layer::{Layered, SubscriberExt},
+    registry::LookupSpan,
+    EnvFilter, Layer, Registry,
+};
 
 use crate::{
     core::HostData,
@@ -8,8 +29,38 @@ use crate::{
     provider::{HostBridge, ProviderDispatch},
     rpc_client::NatsClientType,
 };
-use once_cell::sync::OnceCell;
-use tracing_subscriber::EnvFilter;
+
+lazy_static::lazy_static! {
+    static ref STDERR: std::io::Stderr = std::io::stderr();
+}
+
+struct LockedWriter<'a> {
+    stderr: StderrLock<'a>,
+}
+
+impl<'a> LockedWriter<'a> {
+    fn new() -> Self {
+        LockedWriter { stderr: STDERR.lock() }
+    }
+}
+
+impl<'a> Write for LockedWriter<'a> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.stderr.write(buf)
+    }
+
+    /// DIRTY HACK: when flushing, write a carriage return so the output is clean and then flush
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.stderr.write_all(&[13])?;
+        self.stderr.flush()
+    }
+}
+
+impl<'a> Drop for LockedWriter<'a> {
+    fn drop(&mut self) {
+        let _ = self.flush();
+    }
+}
 
 /// singleton host bridge for communicating with the host.
 static BRIDGE: OnceCell<HostBridge> = OnceCell::new();
@@ -33,7 +84,10 @@ pub(crate) fn set_host_bridge(hb: HostBridge) -> Result<(), ()> {
 }
 
 /// Start provider services: tokio runtime, logger, nats, and rpc subscriptions
-pub fn provider_main<P>(provider_dispatch: P) -> Result<(), Box<dyn std::error::Error>>
+pub fn provider_main<P>(
+    provider_dispatch: P,
+    friendly_name: Option<String>,
+) -> Result<(), Box<dyn std::error::Error>>
 where
     P: ProviderDispatch + Send + Sync + Clone + 'static,
 {
@@ -42,13 +96,14 @@ where
         eprintln!("error loading host data: {}", &e.to_string());
         Box::new(e)
     })?;
-    provider_start(provider_dispatch, host_data)
+    provider_start(provider_dispatch, host_data, friendly_name)
 }
 
 /// Start provider services: tokio runtime, logger, nats, and rpc subscriptions,
 pub fn provider_start<P>(
     provider_dispatch: P,
     host_data: HostData,
+    friendly_name: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>>
 where
     P: ProviderDispatch + Send + Sync + Clone + 'static,
@@ -58,7 +113,7 @@ where
         //.enable_io()
         .build()?;
 
-    runtime.block_on(async { provider_run(provider_dispatch, host_data).await })?;
+    runtime.block_on(async { provider_run(provider_dispatch, host_data, friendly_name).await })?;
     // in the unlikely case there are any stuck threads,
     // close them so the process has a clean exit
     runtime.shutdown_timeout(core::time::Duration::from_secs(10));
@@ -69,26 +124,15 @@ where
 pub async fn provider_run<P>(
     provider_dispatch: P,
     host_data: HostData,
+    friendly_name: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>>
 where
     P: ProviderDispatch + Send + Sync + Clone + 'static,
 {
-    let filter = match EnvFilter::try_from_default_env() {
-        Ok(f) => f,
-        Err(e) => {
-            eprintln!("RUST_LOG was not set or the given directive was invalid: {:?}\nDefaulting logger to `info` level", e);
-            EnvFilter::default().add_directive(tracing_subscriber::filter::LevelFilter::INFO.into())
-        }
-    };
-
-    if let Err(e) = tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .with_env_filter(filter)
-        .with_ansi(atty::is(atty::Stream::Stderr))
-        .try_init()
-    {
-        eprintln!("Logger was already created by provider, continuing: {}", e);
-    }
+    configure_tracing(
+        friendly_name.unwrap_or_else(|| host_data.provider_key.clone()),
+        host_data.structured_logging_enabled,
+    );
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
     eprintln!(
@@ -161,12 +205,9 @@ where
     }
 
     // subscribe to nats topics
-    let _join = bridge
-        .connect(provider_dispatch, shutdown_tx)
-        .await
-        .map_err(|e| {
-            RpcError::ProviderInit(format!("fatal error setting up subscriptions: {}", e))
-        })?;
+    let _join = bridge.connect(provider_dispatch, shutdown_tx).await.map_err(|e| {
+        RpcError::ProviderInit(format!("fatal error setting up subscriptions: {}", e))
+    })?;
 
     // process subscription events and log messages, waiting for shutdown signal
     let _ = shutdown_rx.await;
@@ -214,4 +255,127 @@ pub fn load_host_data() -> Result<HostData, RpcError> {
         ))
     })?;
     Ok(host_data)
+}
+
+#[cfg(feature = "otel")]
+const TRACING_PATH: &str = "/v1/traces";
+
+/// A struct that allows us to dynamically choose JSON formatting without using dynamic dispatch.
+/// This is just so we avoid any sort of possible slow down in logging code
+enum JsonOrNot {
+    Not(Format<Full, SystemTime>),
+    Json(Format<Json, SystemTime>),
+}
+
+impl<S, N> FormatEvent<S, N> for JsonOrNot
+where
+    S: Subscriber + for<'lookup> LookupSpan<'lookup>,
+    N: for<'writer> FormatFields<'writer> + 'static,
+{
+    fn format_event(
+        &self,
+        ctx: &FmtContext<'_, S, N>,
+        writer: Writer<'_>,
+        event: &Event<'_>,
+    ) -> std::fmt::Result
+    where
+        S: Subscriber + for<'a> LookupSpan<'a>,
+    {
+        match self {
+            JsonOrNot::Not(f) => f.format_event(ctx, writer, event),
+            JsonOrNot::Json(f) => f.format_event(ctx, writer, event),
+        }
+    }
+}
+
+#[cfg(not(feature = "otel"))]
+fn configure_tracing(_: String, structured_logging_enabled: bool) {
+    let filter = get_env_filter();
+    let layer = get_log_layer(structured_logging_enabled);
+    let subscriber = tracing_subscriber::Registry::default().with(filter).with(layer);
+    if let Err(e) = tracing::subscriber::set_global_default(subscriber) {
+        eprintln!("Logger was already created by provider, continuing: {}", e);
+    }
+}
+
+#[cfg(feature = "otel")]
+fn configure_tracing(provider_name: String, structured_logging_enabled: bool) {
+    let env_filter_layer = get_env_filter();
+    let log_layer = get_log_layer(structured_logging_enabled);
+    let subscriber = tracing_subscriber::Registry::default()
+        .with(env_filter_layer)
+        .with(log_layer);
+    let res = if std::env::var_os("OTEL_TRACES_EXPORTER")
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        == "otlp"
+    {
+        let mut tracing_endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
+            .unwrap_or_else(|_| format!("http://localhost:55681{}", TRACING_PATH));
+        if !tracing_endpoint.ends_with(TRACING_PATH) {
+            tracing_endpoint.push_str(TRACING_PATH);
+        }
+        match opentelemetry_otlp::new_pipeline()
+            .tracing()
+            .with_exporter(
+                opentelemetry_otlp::new_exporter()
+                    .http()
+                    .with_endpoint(tracing_endpoint)
+                    .with_protocol(Protocol::HttpBinary),
+            )
+            .with_trace_config(
+                trace::config()
+                    .with_sampler(Sampler::AlwaysOn)
+                    .with_id_generator(IdGenerator::default())
+                    .with_max_events_per_span(64)
+                    .with_max_attributes_per_span(16)
+                    .with_max_events_per_span(16)
+                    .with_resource(Resource::new(vec![opentelemetry::KeyValue::new(
+                        "service.name",
+                        provider_name,
+                    )])),
+            )
+            .install_batch(opentelemetry::runtime::Tokio)
+        {
+            Ok(t) => tracing::subscriber::set_global_default(
+                subscriber.with(tracing_opentelemetry::layer().with_tracer(t)),
+            ),
+            Err(e) => {
+                eprintln!(
+                    "Unable to configure OTEL tracing, defaulting to logging only: {:?}",
+                    e
+                );
+                tracing::subscriber::set_global_default(subscriber)
+            }
+        }
+    } else {
+        tracing::subscriber::set_global_default(subscriber)
+    };
+    if let Err(e) = res {
+        eprintln!(
+            "Logger/tracer was already created by provider, continuing: {}",
+            e
+        );
+    }
+}
+
+fn get_log_layer(structured_logging_enabled: bool) -> impl Layer<Layered<EnvFilter, Registry>> {
+    let log_layer = tracing_subscriber::fmt::layer()
+        .with_writer(LockedWriter::new)
+        .with_ansi(atty::is(atty::Stream::Stderr));
+    if structured_logging_enabled {
+        log_layer.event_format(JsonOrNot::Json(Format::default().json()))
+    } else {
+        log_layer.event_format(JsonOrNot::Not(Format::default()))
+    }
+}
+
+fn get_env_filter() -> EnvFilter {
+    match EnvFilter::try_from_default_env() {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("RUST_LOG was not set or the given directive was invalid: {:?}\nDefaulting logger to `info` level", e);
+            EnvFilter::default().add_directive(tracing_subscriber::filter::LevelFilter::INFO.into())
+        }
+    }
 }

@@ -12,7 +12,7 @@ use wasmbus_rpc::{
 };
 
 //const DEFAULT_NATS_ADDR: &str = "nats://127.0.0.1:4222";
-const TEST_NATS_ADDR: &str = "demo.nats.io";
+const TEST_NATS_ADDR: &str = "nats://127.0.0.1:4222";
 const LATTICE_PREFIX: &str = "test_nats_sub";
 const HOST_ID: &str = "HOST_test_nats_sub";
 
@@ -81,10 +81,7 @@ async fn listen_bin(client: RpcClient, subject: &str) -> tokio::task::JoinHandle
             let size = msg.data.len();
             let response = format!("{}", size);
             if let Some(reply_to) = msg.reply {
-                client
-                    .publish(&reply_to, response.as_bytes())
-                    .await
-                    .expect("reply");
+                client.publish(&reply_to, response.as_bytes()).await.expect("reply");
             }
             count += 1;
             if size == 1 {
@@ -111,10 +108,7 @@ async fn listen_queue(
     tokio::task::spawn(async move {
         let mut count: u64 = 0;
         let pattern = regex::Regex::new(&pattern).unwrap();
-        let sub = nc
-            .queue_subscribe(&subject, &queue)
-            .await
-            .expect("group subscriber");
+        let sub = nc.queue_subscribe(&subject, &queue).await.expect("group subscriber");
         debug!("listening subj: {} queue: {}", &subject, &queue);
         while let Some(msg) = sub.next().await {
             let payload = String::from_utf8_lossy(&msg.data);

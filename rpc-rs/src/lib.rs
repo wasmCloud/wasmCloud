@@ -10,6 +10,8 @@ pub use timestamp::Timestamp;
 
 mod actor_wasm;
 pub mod common;
+#[cfg(feature = "otel")]
+pub mod otel;
 pub mod provider;
 pub(crate) mod provider_main;
 mod wasmbus_model;
@@ -185,10 +187,7 @@ pub mod core {
                 format!(
                     "{}://{}/{}/{}",
                     URL_SCHEME,
-                    self.contract_id
-                        .replace(':', "/")
-                        .replace(' ', "_")
-                        .to_lowercase(),
+                    self.contract_id.replace(':', "/").replace(' ', "_").to_lowercase(),
                     self.link_name.replace(' ', "_").to_lowercase(),
                     self.public_key
                 )
