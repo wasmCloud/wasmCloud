@@ -40,28 +40,28 @@ const ONE_ACTOR: u16 = 1;
 pub(crate) struct ConnectionOpts {
     /// CTL Host for connection, defaults to 127.0.0.1 for local nats
     #[clap(short = 'r', long = "ctl-host", env = "WASMCLOUD_CTL_HOST")]
-    ctl_host: Option<String>,
+    pub(crate) ctl_host: Option<String>,
 
     /// CTL Port for connections, defaults to 4222 for local nats
     #[clap(short = 'p', long = "ctl-port", env = "WASMCLOUD_CTL_PORT")]
-    ctl_port: Option<String>,
+    pub(crate) ctl_port: Option<String>,
 
     /// JWT file for CTL authentication. Must be supplied with ctl_seed.
     #[clap(long = "ctl-jwt", env = "WASMCLOUD_CTL_JWT", hide_env_values = true)]
-    ctl_jwt: Option<String>,
+    pub(crate) ctl_jwt: Option<String>,
 
     /// Seed file or literal for CTL authentication. Must be supplied with ctl_jwt.
     #[clap(long = "ctl-seed", env = "WASMCLOUD_CTL_SEED", hide_env_values = true)]
-    ctl_seed: Option<String>,
+    pub(crate) ctl_seed: Option<String>,
 
     /// Credsfile for CTL authentication. Combines ctl_seed and ctl_jwt.
     /// See https://docs.nats.io/developing-with-nats/security/creds for details.
     #[clap(long = "ctl-credsfile", env = "WASH_CTL_CREDS", hide_env_values = true)]
-    ctl_credsfile: Option<PathBuf>,
+    pub(crate) ctl_credsfile: Option<PathBuf>,
 
     /// Lattice prefix for wasmcloud control interface, defaults to "default"
     #[clap(short = 'x', long = "lattice-prefix", env = "WASMCLOUD_LATTICE_PREFIX")]
-    lattice_prefix: Option<String>,
+    pub(crate) lattice_prefix: Option<String>,
 
     /// Timeout length to await a control interface response, defaults to 2000 milliseconds
     #[clap(
@@ -70,7 +70,7 @@ pub(crate) struct ConnectionOpts {
         default_value_t = default_timeout_ms(),
         env = "WASMCLOUD_CTL_TIMEOUT_MS"
     )]
-    ack_timeout_ms: u64,
+    pub(crate) ack_timeout_ms: u64,
 
     /// Path to a context with values to use for CTL connection and authentication
     #[clap(long = "context")]
