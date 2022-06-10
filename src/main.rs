@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
+use app::AppCliCommand;
 use call::CallCli;
 use claims::ClaimsCliCommand;
 use clap::{Parser, Subcommand};
@@ -17,6 +18,7 @@ use util::CommandOutput;
 
 use crate::util::OutputKind;
 
+mod app;
 mod appearance;
 mod call;
 mod cfg;
@@ -62,6 +64,9 @@ struct Cli {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Subcommand)]
 enum CliCommand {
+    /// Perform operations against managed applications and deployments (wadm) (experimental)
+    #[clap(name = "app", subcommand)]
+    App(AppCliCommand),
     /// Invoke a wasmCloud actor
     #[clap(name = "call")]
     Call(CallCli),
@@ -120,6 +125,7 @@ async fn main() {
         CliCommand::Reg(reg_cli) => reg::handle_command(reg_cli, output_kind).await,
         CliCommand::Lint(lint_cli) => smithy::handle_lint_command(lint_cli).await,
         CliCommand::Validate(validate_cli) => smithy::handle_validate_command(validate_cli).await,
+        CliCommand::App(app_cli) => app::handle_command(app_cli, output_kind).await,
     };
 
     std::process::exit(match res {
