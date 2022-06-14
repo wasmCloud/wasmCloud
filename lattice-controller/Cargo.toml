@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-provider-lattice-controller"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2021"
 
 [dependencies]
@@ -22,7 +22,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 wascap = "0.8.0"
 wasmbus-rpc = "0.8"
-wasmcloud-control-interface = "0.14.0"
+wasmcloud-control-interface = "0.15.0"
 
 [target.'cfg(all(target_arch = "aarch64", target_os = "linux"))'.dependencies]
 # We don't use paste directly, but we pin to a version that works with aarch64-linux

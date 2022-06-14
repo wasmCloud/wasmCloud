@@ -1918,12 +1918,13 @@ dependencies = [
 
 [[package]]
 name = "rmp"
-version = "0.8.10"
+version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4f55e5fa1446c4d5dd1f5daeed2a4fe193071771a2636274d0d7a3b082aa7ad6"
+checksum = "44519172358fd6d58656c86ab8e7fbc9e1490c3e8f14d35ed78ca0dd07403c9f"
 dependencies = [
  "byteorder",
  "num-traits",
+ "paste",
 ]
 
 [[package]]
@@ -1939,9 +1940,9 @@ dependencies = [
 
 [[package]]
 name = "rmp-serde"
-version = "1.0.0"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3eedffbfcc6a428f230c04baf8f59bd73c1781361e4286111fe900849aaddaf"
+checksum = "25786b0d276110195fa3d6f3f31299900cf71dfbd6c28450f3f58a0e7f7a347e"
 dependencies = [
  "byteorder",
  "rmp",
@@ -2916,9 +2917,9 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-control-interface"
-version = "0.14.0"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eb5640fa1e849a6105b1be790c38ab57b752327dd734185bd01b5ed3e3c2cd32"
+checksum = "3218b5120963a8ccd385400c48fa67e6c0348e35344a2dbd3ee753ebab429440"
 dependencies = [
  "async-trait",
  "cloudevents-sdk",
@@ -2927,7 +2928,7 @@ dependencies = [
  "futures 0.3.21",
  "log",
  "ring",
- "rmp-serde 1.0.0",
+ "rmp-serde 1.1.0",
  "serde",
  "serde_json",
  "tokio",
@@ -2939,16 +2940,15 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-interface-lattice-control"
-version = "0.10.0"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "796274eabb968baafaedfd323ec4df048366064a3ea3dae0808e181efd057ddd"
+checksum = "7c3717c690e28f85944c0a2179adbc77f8cefcca440b85f1b0d6b0f340b350af"
 dependencies = [
  "async-trait",
  "data-encoding",
  "futures 0.3.21",
  "log",
- "ring",
- "rmp-serde 1.0.0",
+ "rmp-serde 1.1.0",
  "serde",
  "wasmbus-rpc",
  "weld-codegen",
@@ -2971,7 +2971,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-lattice-controller"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "async-trait",
  "atty",
@@ -2981,7 +2981,7 @@ dependencies = [
  "once_cell",
  "paste",
  "reqwest",
- "rmp-serde 1.0.0",
+ "rmp-serde 1.1.0",
  "serde",
  "serde_bytes",
  "serde_json",
