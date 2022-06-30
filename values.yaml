@@ -25,8 +25,15 @@ wasmcloud:
     providerRpcSeed: ""
     ctlSeed: ""
     jetstreamDomain: ""
+    logging:
+      structuredLoggingEnabled: false
+      logLevel: ""
+    otel:
+      exporter: ""
+      endpoint: ""
     # Sets the username and password for use with a private registry
     registry:
+      url: ""
       username: ""
       password: ""
     # A map of key value pairs to use as wasmCloud Host labels. These map to environment variable

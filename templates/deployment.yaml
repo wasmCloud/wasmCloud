@@ -91,9 +91,36 @@ spec:
             - name: WASMCLOUD_JS_DOMAIN
               value: {{ .Values.wasmcloud.config.jetstreamDomain | quote }}
             {{- end }}
+            {{- if .Values.wasmcloud.logging.structuredLoggingEnabled }}
+            - name: WASMCLOUD_STRUCTURED_LOGGING_ENABLED
+              value: {{ .Values.wasmcloud.config.logging.structuredLoggingEnabled | quote }}
+            {{- end }}
+            {{- if .Values.wasmcloud.logging.logLevel }}
+            - name: WASMCLOUD_STRUCTURED_LOG_LEVEL
+              value: {{ .Values.wasmcloud.config.logging.logLevel | quote }}
+            {{- end }}
+            {{- if .Values.wasmcloud.config.otel.exporter }}
+            - name: OTEL_TRACES_EXPORTER
+              value: {{ .Values.wasmcloud.config.otel.exporter | quote }}
+            {{- end }}
+            {{- if .Values.wasmcloud.config.otel.endpoint }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ .Values.wasmcloud.config.otel.endpoint | quote }}
+            {{- end }}
+            {{- if .Values.wasmcloud.config.registry.url }}
+            - name: OCI_REGISTRY
+              value: {{ .Values.wasmcloud.config.registry.url | quote }}
+            {{- end }}
             {{- if .Values.wasmcloud.config.registry.username }}
             - name: OCI_REGISTRY_USER
               value: {{ .Values.wasmcloud.config.registry.username | quote }}
+            {{- end }}
+            {{- if .Values.wasmcloud.config.registry.password }}
+            - name: OCI_REGISTRY_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "wasmcloud_host.fullname" . }}
+                  key: registryPassword
             {{- end }}
             {{- if .Values.wasmcloud.config.hostSeed }}
             - name: WASMCLOUD_HOST_SEED
@@ -122,13 +149,6 @@ spec:
                 secretKeyRef:
                   name: {{ include "wasmcloud_host.fullname" . }}
                   key: ctlSeed
-            {{- end }}
-            {{- if .Values.wasmcloud.config.registry.password }}
-            - name: OCI_REGISTRY_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "wasmcloud_host.fullname" . }}
-                  key: registryPassword
             {{- end }}
             {{- range $k, $v := .Values.wasmcloud.config.hostLabels }}
             - name: HOST_{{ $k }}
