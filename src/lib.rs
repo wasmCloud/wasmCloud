@@ -3,21 +3,19 @@ pub use wasmcloud_interface_lattice_control::*;
 mod sub_stream;
 
 use cloudevents::event::Event;
-use crossbeam_channel::{unbounded, Receiver};
-use futures::executor::block_on;
-use log::{error, trace};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, time::Duration};
 use sub_stream::collect_timeout;
-use wasmbus_rpc::anats;
-pub use wasmbus_rpc::core::LinkDefinition;
+use tokio::sync::mpsc::Receiver;
+use tracing::{error, trace};
+use wasmbus_rpc::core::LinkDefinition;
 
-type Result<T> = ::std::result::Result<T, Box<dyn ::std::error::Error + Send + Sync>>;
+type Result<T> = ::std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 /// Lattice control interface client
 #[derive(Clone)]
 pub struct Client {
-    nc: anats::Connection,
+    nc: async_nats::Client,
     nsprefix: Option<String>,
     timeout: Duration,
     auction_timeout: Duration,
@@ -26,7 +24,7 @@ pub struct Client {
 impl Client {
     /// Creates a new lattice control interface client
     pub fn new(
-        nc: anats::Connection,
+        nc: async_nats::Client,
         nsprefix: Option<String>,
         timeout: Duration,
         auction_timeout: Duration,
@@ -39,6 +37,22 @@ impl Client {
         }
     }
 
+    pub(crate) async fn request_timeout(
+        &self,
+        subject: String,
+        payload: Vec<u8>,
+        timeout: Duration,
+    ) -> Result<async_nats::Message> {
+        match tokio::time::timeout(timeout, self.nc.request(subject, payload.into())).await {
+            Err(_) => Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "timed out",
+            ))),
+            Ok(Ok(message)) => Ok(message),
+            Ok(Err(e)) => Err(e),
+        }
+    }
+
     /// Queries the lattice for all responsive hosts, waiting for the full period specified by _timeout_.
     pub async fn get_hosts(&self) -> Result<Vec<Host>> {
         get_hosts_(&self.nc, &self.nsprefix, self.auction_timeout).await
@@ -48,13 +62,9 @@ impl Client {
     pub async fn get_host_inventory(&self, host_id: &str) -> Result<HostInventory> {
         let subject = broker::queries::host_inventory(&self.nsprefix, host_id);
         trace!("get_host_inventory:request {}", &subject);
-        match self
-            .nc
-            .request_timeout(&subject, vec![], self.timeout)
-            .await
-        {
+        match self.request_timeout(subject, vec![], self.timeout).await {
             Ok(msg) => {
-                let hi: HostInventory = json_deserialize(&msg.data)?;
+                let hi: HostInventory = json_deserialize(&msg.payload)?;
                 Ok(hi)
             }
             Err(e) => Err(format!("Did not receive host inventory from target host: {}", e).into()),
@@ -66,13 +76,9 @@ impl Client {
     pub async fn get_claims(&self) -> Result<GetClaimsResponse> {
         let subject = broker::queries::claims(&self.nsprefix);
         trace!("get_claims:request {}", &subject);
-        match self
-            .nc
-            .request_timeout(&subject, vec![], self.timeout)
-            .await
-        {
+        match self.request_timeout(subject, vec![], self.timeout).await {
             Ok(msg) => {
-                let list: GetClaimsResponse = json_deserialize(&msg.data)?;
+                let list: GetClaimsResponse = json_deserialize(&msg.payload)?;
                 Ok(list)
             }
             Err(e) => Err(format!("Did not receive claims from lattice: {}", e).into()),
@@ -94,7 +100,9 @@ impl Client {
             constraints,
         })?;
         trace!("actor_auction: subscribing to {}", &subject);
-        let sub = self.nc.request_multi(&subject, bytes).await?;
+        let inbox = self.nc.new_inbox();
+        self.nc.publish(subject, bytes.into()).await?;
+        let sub = self.nc.subscribe(inbox).await?;
         Ok(collect_timeout(sub, self.auction_timeout, "actor").await)
     }
 
@@ -115,7 +123,9 @@ impl Client {
             constraints,
         })?;
         trace!("provider_auction: subscribing to {}", &subject);
-        let sub = self.nc.request_multi(&subject, bytes).await?;
+        let inbox = self.nc.new_inbox();
+        self.nc.publish(subject, bytes.into()).await?;
+        let sub = self.nc.subscribe(inbox).await?;
         Ok(collect_timeout(sub, self.auction_timeout, "provider").await)
     }
 
@@ -140,13 +150,9 @@ impl Client {
             host_id: host_id.to_string(),
             annotations,
         })?;
-        match self
-            .nc
-            .request_timeout(&subject, &bytes, self.timeout)
-            .await
-        {
+        match self.request_timeout(subject, bytes, self.timeout).await {
             Ok(msg) => {
-                let ack: CtlOperationAck = json_deserialize(&msg.data)?;
+                let ack: CtlOperationAck = json_deserialize(&msg.payload)?;
                 Ok(ack)
             }
             Err(e) => Err(format!("Did not receive start actor acknowledgement: {}", e).into()),
@@ -176,13 +182,9 @@ impl Client {
             actor_id: actor_id.to_string(),
             annotations,
         })?;
-        match self
-            .nc
-            .request_timeout(&subject, &bytes, self.timeout)
-            .await
-        {
+        match self.request_timeout(subject, bytes, self.timeout).await {
             Ok(msg) => {
-                let ack: CtlOperationAck = json_deserialize(&msg.data)?;
+                let ack: CtlOperationAck = json_deserialize(&msg.payload)?;
                 Ok(ack)
             }
             Err(e) => Err(format!("Did not receive scale actor acknowledgement: {}", e).into()),
@@ -198,7 +200,7 @@ impl Client {
         let subject = broker::publish_registries(&self.nsprefix);
         trace!("put_registries {}", &subject);
         let bytes = json_serialize(&registries)?;
-        if let Err(e) = self.nc.publish(&subject, &bytes).await {
+        if let Err(e) = self.nc.publish(subject, bytes.into()).await {
             Err(format!("Failed to push registry credential map: {}", e).into())
         } else {
             Ok(())
@@ -219,21 +221,16 @@ impl Client {
     ) -> Result<CtlOperationAck> {
         let subject = broker::advertise_link(&self.nsprefix);
         trace!("advertise_link:publish {}", &subject);
-        let ld = LinkDefinition {
-            actor_id: actor_id.to_string(),
-            provider_id: provider_id.to_string(),
-            contract_id: contract_id.to_string(),
-            link_name: link_name.to_string(),
-            values,
-        };
+        let mut ld = LinkDefinition::default();
+        ld.actor_id = actor_id.to_string();
+        ld.provider_id = provider_id.to_string();
+        ld.contract_id = contract_id.to_string();
+        ld.link_name = link_name.to_string();
+        ld.values = values;
         let bytes = crate::json_serialize(&ld)?;
-        match self
-            .nc
-            .request_timeout(&subject, &bytes, self.timeout)
-            .await
-        {
+        match self.request_timeout(subject, bytes, self.timeout).await {
             Ok(msg) => {
-                let ack: CtlOperationAck = json_deserialize(&msg.data)?;
+                let ack: CtlOperationAck = json_deserialize(&msg.payload)?;
                 Ok(ack)
             }
             Err(e) => Err(format!("Did not receive advertise link acknowledgement: {}", e).into()),
@@ -248,20 +245,14 @@ impl Client {
         link_name: &str,
     ) -> Result<CtlOperationAck> {
         let subject = broker::remove_link(&self.nsprefix);
-        let ld = LinkDefinition {
-            actor_id: actor_id.to_string(),
-            contract_id: contract_id.to_string(),
-            link_name: link_name.to_string(),
-            ..Default::default()
-        };
+        let mut ld = LinkDefinition::default();
+        ld.actor_id = actor_id.to_string();
+        ld.contract_id = contract_id.to_string();
+        ld.link_name = link_name.to_string();
         let bytes = crate::json_serialize(&ld)?;
-        match self
-            .nc
-            .request_timeout(&subject, &bytes, self.timeout)
-            .await
-        {
+        match self.request_timeout(subject, bytes, self.timeout).await {
             Ok(msg) => {
-                let ack: CtlOperationAck = json_deserialize(&msg.data)?;
+                let ack: CtlOperationAck = json_deserialize(&msg.payload)?;
                 Ok(ack)
             }
             Err(e) => Err(format!("Did not receive remove link acknowledgement: {}", e).into()),
@@ -271,12 +262,8 @@ impl Client {
     /// Publishes a request to retrieve all current link definitions.
     pub async fn query_links(&self) -> Result<LinkDefinitionList> {
         let subject = broker::queries::link_definitions(&self.nsprefix);
-        match self
-            .nc
-            .request_timeout(&subject, vec![], self.timeout)
-            .await
-        {
-            Ok(msg) => json_deserialize(&msg.data),
+        match self.request_timeout(subject, vec![], self.timeout).await {
+            Ok(msg) => json_deserialize(&msg.payload),
             Err(e) => Err(format!("Did not receive a response to links query: {}", e).into()),
         }
     }
@@ -304,13 +291,9 @@ impl Client {
             new_actor_ref: new_actor_ref.to_string(),
             annotations,
         })?;
-        match self
-            .nc
-            .request_timeout(&subject, &bytes, self.timeout)
-            .await
-        {
+        match self.request_timeout(subject, bytes, self.timeout).await {
             Ok(msg) => {
-                let ack: CtlOperationAck = json_deserialize(&msg.data)?;
+                let ack: CtlOperationAck = json_deserialize(&msg.payload)?;
                 Ok(ack)
             }
             Err(e) => Err(format!("Did not receive update actor acknowledgement: {}", e).into()),
@@ -336,7 +319,6 @@ impl Client {
         let nsprefix = self.nsprefix.clone();
         let timeout = self.timeout;
         let provider_ref = provider_ref.to_string();
-
         if !host_id.trim().is_empty() {
             start_provider_(
                 &client,
@@ -350,38 +332,43 @@ impl Client {
             )
             .await
         } else {
-            // If a host isn't supplied, ack early and go find one
+            // If a host isn't supplied, try to find one via auction.
+            // If no host is found, return error.
+            // If a host is found, start brackground request to start provider and return Ack
+            let mut error = String::new();
             let client = self.nc.clone();
             let auction_timeout = self.auction_timeout;
             trace!("start_provider:deferred (no-host) request");
-            tokio::spawn(async move {
-                let hosts = get_hosts_(&client, &nsprefix, auction_timeout).await;
-                match hosts {
-                    Ok(hs) => {
-                        if !hs.is_empty() {
-                            let _ = start_provider_(
-                                &client,
-                                &nsprefix,
-                                timeout,
-                                &hs[0].id,
-                                &provider_ref,
-                                link_name,
-                                annotations,
-                                provider_configuration,
-                            )
-                            .await;
-                        } else {
-                            error!("No hosts detected in in no-host provider start.");
-                        }
-                    }
-                    Err(e) => {
-                        error!("Failed to query hosts for no-host provider start: {}", e);
-                    }
+            let host = match get_hosts_(&client, &nsprefix, auction_timeout).await {
+                Err(e) => {
+                    error = format!("failed to query hosts for no-host provider start: {}", e);
+                    None
                 }
-            });
+                Ok(hs) => hs.into_iter().next(),
+            };
+            if let Some(host) = host {
+                tokio::spawn(async move {
+                    let _ = start_provider_(
+                        &client,
+                        &nsprefix,
+                        timeout,
+                        &host.id,
+                        &provider_ref,
+                        link_name,
+                        annotations,
+                        provider_configuration,
+                    )
+                    .await;
+                });
+            } else if error.is_empty() {
+                error = "No hosts detected in in no-host provider start.".to_string();
+            }
+            if !error.is_empty() {
+                error!("{}", error);
+            }
             Ok(CtlOperationAck {
                 accepted: true,
-                error: String::default(),
+                error,
             })
         }
     }
@@ -407,13 +394,9 @@ impl Client {
             contract_id: contract_id.to_string(),
             annotations,
         })?;
-        match self
-            .nc
-            .request_timeout(&subject, &bytes, self.timeout)
-            .await
-        {
+        match self.request_timeout(subject, bytes, self.timeout).await {
             Ok(msg) => {
-                let ack: CtlOperationAck = json_deserialize(&msg.data)?;
+                let ack: CtlOperationAck = json_deserialize(&msg.payload)?;
                 Ok(ack)
             }
             Err(e) => Err(format!("Did not receive stop provider acknowledgement: {}", e).into()),
@@ -439,13 +422,9 @@ impl Client {
             count,
             annotations,
         })?;
-        match self
-            .nc
-            .request_timeout(&subject, &bytes, self.timeout)
-            .await
-        {
+        match self.request_timeout(subject, bytes, self.timeout).await {
             Ok(msg) => {
-                let ack: CtlOperationAck = json_deserialize(&msg.data)?;
+                let ack: CtlOperationAck = json_deserialize(&msg.payload)?;
                 Ok(ack)
             }
             Err(e) => Err(format!("Did not receive stop actor acknowledgement: {}", e).into()),
@@ -468,13 +447,9 @@ impl Client {
             timeout: timeout_ms,
         })?;
 
-        match self
-            .nc
-            .request_timeout(&subject, &bytes, self.timeout)
-            .await
-        {
+        match self.request_timeout(subject, bytes, self.timeout).await {
             Ok(msg) => {
-                let ack: CtlOperationAck = json_deserialize(&msg.data)?;
+                let ack: CtlOperationAck = json_deserialize(&msg.payload)?;
                 Ok(ack)
             }
             Err(e) => Err(format!("Did not receive stop host acknowledgement: {}", e).into()),
@@ -489,19 +464,15 @@ impl Client {
     /// # Example
     /// ```rust
     /// use wasmcloud_control_interface::Client;
-    /// use wasmbus_rpc::anats;
     /// async {
-    ///   let nc = anats::connect("127.0.0.1:4222").await.unwrap();
+    ///   let nc = async_nats::connect("127.0.0.1:4222").await.unwrap();
     ///   let client = Client::new(nc, None, std::time::Duration::from_millis(1000),
     ///                        std::time::Duration::from_millis(1000));
-    ///   let receiver = client.events_receiver().await.unwrap();
-    ///   std::thread::spawn(move || loop {
-    ///     if let Ok(evt) = receiver.recv() {
-    ///       println!("Event received: {:?}", evt);
-    ///     } else {
-    ///       // channel is closed
-    ///       break;
-    ///     }
+    ///   let mut receiver = client.events_receiver().await.unwrap();
+    ///   tokio::spawn( async move {
+    ///       while let Some(evt) = receiver.recv().await {
+    ///           println!("Event received: {:?}", evt);
+    ///       }
     ///   });
     ///   // perform other operations on client
     ///   client.get_host_inventory("NAEXHW...").await.unwrap();
@@ -515,42 +486,41 @@ impl Client {
     /// # Example
     /// ```rust
     /// use wasmcloud_control_interface::Client;
-    /// use wasmbus_rpc::anats;
     /// async {
-    ///   let nc = anats::connect("0.0.0.0:4222").await.unwrap();
+    ///   let nc = async_nats::connect("0.0.0.0:4222").await.unwrap();
     ///   let client = Client::new(nc, None, std::time::Duration::from_millis(1000),
     ///                   std::time::Duration::from_millis(1000));
-    ///   let receiver = client.events_receiver().await.unwrap();
-    ///   std::thread::spawn(move || {
-    ///     if let Ok(evt) = receiver.recv() {
+    ///   let mut receiver = client.events_receiver().await.unwrap();
+    ///   // read the docs for flume receiver. You can use it in either sync or async code
+    ///   // The receiver can be cloned() as needed.
+    ///   // If you drop the receiver. The subscriber will exit
+    ///   // If the nats connection ic closed, the loop below will exit.
+    ///   while let Some(evt) = receiver.recv().await {
     ///       println!("Event received: {:?}", evt);
-    ///       // We received our one event, now close the channel
-    ///       drop(receiver);
-    ///     } else {
-    ///       // channel is closed
-    ///       return;
-    ///     }
-    ///   });
+    ///   }
     /// };
     /// ```
     pub async fn events_receiver(&self) -> Result<Receiver<Event>> {
-        let (sender, receiver) = unbounded();
-        let sub = self
+        use futures::StreamExt as _;
+        let (sender, receiver) = tokio::sync::mpsc::channel(5000);
+        let mut sub = self
             .nc
-            .subscribe(&broker::control_event(&self.nsprefix))
+            .subscribe(broker::control_event(&self.nsprefix))
             .await?;
-        std::thread::spawn(move || loop {
-            if let Some(msg) = block_on(sub.next()) {
-                match json_deserialize::<Event>(&msg.data) {
-                    Ok(evt) => {
-                        trace!("received event: {:?}", evt);
-                        // If the channel is disconnected, stop sending events
-                        if sender.send(evt).is_err() {
-                            let _ = block_on(sub.unsubscribe());
-                            return;
-                        }
+        tokio::spawn(async move {
+            while let Some(msg) = sub.next().await {
+                let evt = match json_deserialize::<Event>(&msg.payload) {
+                    Ok(evt) => evt,
+                    Err(_) => {
+                        error!("Object received on event stream was not a CloudEvent");
+                        continue;
                     }
-                    _ => error!("Object received on event stream was not a CloudEvent"),
+                };
+                trace!("received event: {:?}", evt);
+                // If the channel is disconnected, stop sending events
+                if sender.send(evt).await.is_err() {
+                    let _ = sub.unsubscribe().await;
+                    break;
                 }
             }
         });
@@ -579,25 +549,35 @@ where
 pub fn json_deserialize<'de, T: Deserialize<'de>>(
     buf: &'de [u8],
 ) -> ::std::result::Result<T, Box<dyn std::error::Error + Send + Sync>> {
-    serde_json::from_slice(buf).map_err(|e| format!("JSON deserialization failure: {}", e).into())
+    serde_json::from_slice(buf).map_err(|e| {
+        {
+            std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("JSON deserialization failure: {}", e),
+            )
+        }
+        .into()
+    })
 }
 
 // "selfless" function to obtain a list of hosts
 async fn get_hosts_(
-    client: &anats::Connection,
+    client: &async_nats::Client,
     nsprefix: &Option<String>,
     timeout: Duration,
 ) -> Result<Vec<Host>> {
     let subject = broker::queries::hosts(nsprefix);
-    let sub = client.request_multi(&subject, vec![]).await?;
     trace!("get_hosts: subscribing to {}", &subject);
+    let inbox = client.new_inbox();
+    client.publish(subject, Vec::new().into()).await?;
+    let sub = client.subscribe(inbox).await?;
     Ok(collect_timeout(sub, timeout, "hosts").await)
 }
 
 // "selfless" helper function that submits a start provider request to a host
 #[allow(clippy::too_many_arguments)]
 async fn start_provider_(
-    client: &anats::Connection,
+    client: &async_nats::Client,
     nsprefix: &Option<String>,
     timeout: Duration,
     host_id: &str,
@@ -615,41 +595,40 @@ async fn start_provider_(
         annotations,
         configuration: provider_configuration,
     })?;
-    match client.request_timeout(&subject, &bytes, timeout).await {
-        Ok(msg) => {
-            let ack: CtlOperationAck = json_deserialize(&msg.data)?;
+    match tokio::time::timeout(timeout, client.request(subject, bytes.into())).await {
+        Err(e) => Err(format!("Did not receive start provider acknowledgement: {}", e).into()),
+        Ok(Err(e)) => Err(format!("Error sending or receiving message: {}", e).into()),
+        Ok(Ok(msg)) => {
+            let ack: CtlOperationAck = json_deserialize(&msg.payload)?;
             Ok(ack)
         }
-        Err(e) => Err(format!("Did not receive start provider acknowledgement: {}", e).into()),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wasmbus_rpc::anats;
 
     /// Note: This test is a means of manually watching the event stream as CloudEvents are received
     /// It does not assert functionality, and so we've marked it as ignore to ensure it's not run by default
+    /// It currently listens for 120 seconds then exits
     #[tokio::test]
     #[ignore]
     async fn test_events_receiver() {
-        let nc = anats::connect("127.0.0.1:4222").await.unwrap();
+        let nc = async_nats::connect("127.0.0.1:4222").await.unwrap();
         let client = Client::new(
             nc,
             None,
             std::time::Duration::from_millis(1000),
             std::time::Duration::from_millis(1000),
         );
-        let receiver = client.events_receiver().await.unwrap();
-        std::thread::spawn(move || loop {
-            if let Ok(evt) = receiver.recv() {
+        let mut receiver = client.events_receiver().await.unwrap();
+        tokio::spawn(async move {
+            while let Some(evt) = receiver.recv().await {
                 println!("Event received: {:?}", evt);
-            } else {
-                println!("Channel closed");
-                break;
             }
         });
-        std::thread::park();
+        println!("Listening to Cloud Events for 120 seconds. Then we will quit.");
+        tokio::time::sleep(std::time::Duration::from_secs(120)).await;
     }
 }

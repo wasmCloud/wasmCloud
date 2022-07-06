@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-control-interface"
-version = "0.15.0"
+version = "0.16.0"
 authors = ["wasmCloud Team"]
 edition = "2021"
 homepage = "https://wasmcloud.dev"
@@ -14,17 +14,17 @@ categories = ["wasm", "api-bindings"]
 
 [dependencies]
 async-trait = "0.1"
+async-nats = "0.15.0"
 data-encoding = "2.3.1"
 cloudevents-sdk = "0.4.0"
 futures = "0.3"
-log = "0.4.14"
-crossbeam-channel = "0.5.1"
 ring = "0.16.20"
 rmp-serde = "1.0.0"
 tokio = {version="1.9", features=["time"]}
 serde = { version = "1.0.118", features = ["derive"] }
 serde_json = "1.0.60"
+tracing = "0.1.35"
 uuid = {version = "1.0.0", features  = ["serde", "v4"]}
 wascap = "0.8.0"
-wasmbus-rpc = "0.8.2"
-wasmcloud-interface-lattice-control = "0.11.0"
+wasmbus-rpc = "0.9.0"
+wasmcloud-interface-lattice-control = "0.12.0"
