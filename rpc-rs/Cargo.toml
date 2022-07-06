@@ -1,6 +1,6 @@
 [package]
 name = "wasmbus-rpc"
-version = "0.8.5"
+version = "0.9.0-alpha.1.1"
 authors = [ "wasmcloud Team" ]
 license = "Apache-2.0"
 description = "Runtime library for actors and capability providers"
@@ -14,20 +14,20 @@ edition = "2021"
 exclude = [ "build.rs" ]
 
 [features]
-default = [ "chunkify" ]
+default = [ ]
 BigInteger = [ "num-bigint" ]
 BigDecimal = [ "bigdecimal" ]
-# non-working feature - used for internal testing of async-rewrite branch of nats-io/nats.rs
-#async_rewrite = [ "nats-experimental" ]
-chunkify = [ "nats" ]
-otel = ["opentelemetry", "tracing-opentelemetry", "nats", "opentelemetry-otlp"]
+prometheus = [ "dep:prometheus" ]
+otel = ["opentelemetry", "tracing-opentelemetry", "opentelemetry-otlp"]
 
 [dependencies]
+anyhow = "1.0.57"
 async-trait = "0.1"
 base64 = "0.13"
+bytes = "1.1.0"
 cfg-if = "1.0"
-minicbor = { version = "0.13", features = ["std", "partial-skip-support"] }
-rmp-serde = { version = "0.15.4" }
+minicbor = { version = "0.17.1", features = ["std"] }
+rmp-serde = "1.1.0"
 serde_bytes = "0.11"
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
@@ -40,21 +40,21 @@ tracing-futures = "0.2"
 wasmbus-macros = { path = "../macros", version = "0.1.8" }
 minicbor-ser = "0.1.2"
 
-#BigInteger support
+# BigInteger support
 num-bigint = { version = "0.4", optional = true }
-#BigDecimal support
+# BigDecimal support
 bigdecimal = { version = "0.3", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"
-nats-aflowt = "0.16.104"
-nats = { version = "0.20", optional = true }
+async-nats = "0.15.0"
+nats = "0.20.1"
 nkeys = "0.2"
 once_cell = "1.8"
-uuid = { version = "0.8", features = ["v4", "serde"] }
+uuid = { version = "1.0", features = ["v4", "serde"] }
 wascap = "0.8.0"
-ring = "0.16"
+sha2 = "0.10.2"
 data-encoding = "2.3"
 tracing-subscriber = { version = "0.3.7", features = ["env-filter", "json"] }
 atty = "0.2"
@@ -63,9 +63,11 @@ tracing-opentelemetry = { version = "0.17", optional = true }
 lazy_static = "1.4"
 opentelemetry-otlp = { version = "0.10", features = ["http-proto", "reqwest-client"], optional = true }
 
+prometheus = { version = "0.13", optional = true }
+
 [dev-dependencies]
 regex = "1"
-env_logger = "0.9.0"
+clap = { version = "3.2.5", features = ["derive"] }
 
 [build-dependencies]
 weld-codegen = { version = "0.4.3", path = "../codegen" }

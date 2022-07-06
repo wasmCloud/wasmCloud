@@ -30,12 +30,7 @@ extern "C" {
 }
 
 /// The function through which all host calls (from actors) take place.
-pub fn host_call(
-    binding: &str,
-    ns: &str,
-    op: &str,
-    msg: &[u8],
-) -> crate::error::RpcResult<Vec<u8>> {
+pub fn host_call(binding: &str, ns: &str, op: &str, msg: &[u8]) -> RpcResult<Vec<u8>> {
     let callresult = unsafe {
         __host_call(
             binding.as_ptr() as _,
@@ -104,7 +99,7 @@ impl crate::common::Transport for WasmHost {
         _ctx: &crate::common::Context,
         req: Message<'_>,
         _opts: Option<crate::common::SendOpts>,
-    ) -> std::result::Result<Vec<u8>, RpcError> {
+    ) -> Result<Vec<u8>, RpcError> {
         let res = if !self.target.public_key.is_empty() {
             // actor-to-actor calls use namespace for the actor target identifier
             host_call("", &self.target.public_key, req.method, req.arg.as_ref())?

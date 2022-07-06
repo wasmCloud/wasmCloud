@@ -531,7 +531,7 @@ macro_rules! from_num_fn {
 }
 
 macro_rules! impl_try_from {
-    ($t:ty, $p: ident) => {
+    ($t:ty, $p:ident) => {
         impl TryFrom<Document> for $t {
             type Error = Document;
 
@@ -561,7 +561,7 @@ macro_rules! impl_try_from_num {
 }
 
 macro_rules! impl_try_from_ref {
-    ($t:ty, $p: ident) => {
+    ($t:ty, $p:ident) => {
         impl<'v> TryFrom<DocumentRef<'v>> for $t {
             type Error = DocumentRef<'v>;
 
@@ -682,7 +682,10 @@ impl FromIterator<Document> for Document {
 pub fn encode_document<W: crate::cbor::Write>(
     e: &mut crate::cbor::Encoder<W>,
     val: &Document,
-) -> RpcResult<()> {
+) -> RpcResult<()>
+where
+    <W as crate::cbor::Write>::Error: std::fmt::Display,
+{
     e.array(2)?;
     match val {
         Document::Object(map) => {
@@ -728,7 +731,10 @@ pub fn encode_document<W: crate::cbor::Write>(
 pub fn encode_document_ref<'v, W: crate::cbor::Write>(
     e: &mut crate::cbor::Encoder<W>,
     val: &DocumentRef<'v>,
-) -> RpcResult<()> {
+) -> RpcResult<()>
+where
+    <W as crate::cbor::Write>::Error: std::fmt::Display,
+{
     e.array(2)?;
     match val {
         DocumentRef::Object(map) => {
@@ -775,7 +781,10 @@ pub fn encode_document_ref<'v, W: crate::cbor::Write>(
 pub fn encode_number<W: crate::cbor::Write>(
     e: &mut crate::cbor::Encoder<W>,
     val: &Number,
-) -> RpcResult<()> {
+) -> RpcResult<()>
+where
+    <W as crate::cbor::Write>::Error: std::fmt::Display,
+{
     e.array(2)?;
     match val {
         Number::PosInt(val) => {
@@ -804,7 +813,7 @@ pub fn decode_document(d: &mut crate::cbor::Decoder<'_>) -> RpcResult<Document> 
         0 => {
             // Object
             let map_len = d.fixed_map()? as usize;
-            let mut map = std::collections::HashMap::with_capacity(map_len);
+            let mut map = HashMap::with_capacity(map_len);
             for _ in 0..map_len {
                 let k = d.str()?.to_string();
                 let v = decode_document(d)?;

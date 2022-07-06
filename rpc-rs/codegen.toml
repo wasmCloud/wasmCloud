@@ -2,11 +2,11 @@
 
 [[models]]
 # wasmbus-core
-url = "https://cdn.jsdelivr.net/gh/wasmcloud/interfaces@e69a8b22ce46457dbc48f8bbffd4734b68b739ce/core/wasmcloud-core.smithy"
+url = "https://cdn.jsdelivr.net/gh/wasmcloud/interfaces@2c89bb706c6f2785a926dcde78ebc6a511a33206/core/wasmcloud-core.smithy"
 
 [[models]]
 # wasmbus-model
-url = "https://cdn.jsdelivr.net/gh/wasmcloud/interfaces@e0f205da8a0e1549497571c3e994a1851480621c/core/wasmcloud-model.smithy"
+url = "https://cdn.jsdelivr.net/gh/wasmcloud/interfaces/core/wasmcloud-model.smithy"
 
 [rust]
 output_dir = "."

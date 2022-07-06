@@ -39,9 +39,7 @@ impl syn::parse::Parse for ReceiverDef {
     fn parse(input: syn::parse::ParseStream) -> ParseResult<Self> {
         let derive_input: syn::DeriveInput = input.parse()?;
         let attrs_span = derive_input.span();
-        let syn::DeriveInput {
-            attrs, ident, data, ..
-        } = derive_input;
+        let syn::DeriveInput { attrs, ident, data, .. } = derive_input;
         let ident_span = ident.span();
         let fields = match data {
             syn::Data::Struct(data) => data.fields,

@@ -176,8 +176,8 @@ pub trait Decode<'b>: Sized {
     }
 }
 
-pub trait MDecodeOwned: for<'de> crate::minicbor::Decode<'de> {}
-impl<T> MDecodeOwned for T where T: for<'de> crate::minicbor::Decode<'de> {}
+pub trait MDecodeOwned<C>: for<'de> crate::minicbor::Decode<'de, C> {}
+impl<T, C> MDecodeOwned<C> for T where T: for<'de> crate::minicbor::Decode<'de, C> {}
 
 pub trait DecodeOwned: for<'de> crate::cbor::Decode<'de> {}
 impl<T> DecodeOwned for T where T: for<'de> crate::cbor::Decode<'de> {}
@@ -203,9 +203,10 @@ pub fn vec_encoder(header: bool) -> Encoder<Vec<u8>> {
 }
 
 /// A non-allocating CBOR encoder
-impl<W: Write> Encoder<W>
+impl<W> Encoder<W>
 where
-    RpcError: From<minicbor::encode::Error<<W as minicbor::encode::Write>::Error>>,
+    W::Error: std::fmt::Display,
+    W: Write,
 {
     /// Constructs an Encoder around the writer
     pub fn new(writer: W) -> Self {
@@ -348,7 +349,7 @@ where
 
     /// Returns the inner writer
     pub fn into_inner(self) -> W {
-        self.inner.into_inner()
+        self.inner.into_writer()
     }
 
     /// Write a tag
@@ -383,6 +384,7 @@ pub enum Type {
     I16,
     I32,
     I64,
+    Int,
     F16,
     F32,
     F64,
@@ -415,6 +417,7 @@ impl From<MT> for Type {
             MT::I16 => Type::I16,
             MT::I32 => Type::I32,
             MT::I64 => Type::I64,
+            MT::Int => Type::Int,
             MT::F16 => Type::F16,
             MT::F32 => Type::F32,
             MT::F64 => Type::F64,
@@ -448,6 +451,7 @@ impl std::fmt::Display for Type {
             Type::I16 => f.write_str("i16"),
             Type::I32 => f.write_str("i32"),
             Type::I64 => f.write_str("i64"),
+            Type::Int => f.write_str("int"),
             Type::F16 => f.write_str("f16"),
             Type::F32 => f.write_str("f32"),
             Type::F64 => f.write_str("f64"),

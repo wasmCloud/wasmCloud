@@ -1,4 +1,4 @@
-#![cfg(all(feature = "chunkify", not(target_arch = "wasm32")))]
+#![cfg(not(target_arch = "wasm32"))]
 
 // You strike me as a message that has never been chunkified
 // I'm sure I don't know what you mean, You forget yourself
@@ -119,11 +119,7 @@ impl ChunkEndpoint {
     }
 
     /// chunkify a portion of a response
-    pub fn chunkify_response(
-        &self,
-        inv_id: &str,
-        bytes: &mut impl std::io::Read,
-    ) -> Result<(), RpcError> {
+    pub fn chunkify_response(&self, inv_id: &str, bytes: &mut impl Read) -> Result<(), RpcError> {
         self.chunkify(&format!("{}-r", inv_id), bytes)
     }
 

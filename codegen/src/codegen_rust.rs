@@ -309,7 +309,7 @@ impl<'model> CodeGen for RustCodeGen<'model> {
                     r#"
                 #[allow(unused_imports)]
                 use {}::{{
-                    //cbor::*,
+                    cbor::*,
                     common::{{
                         Context, deserialize, Message, MessageFormat, message_format, 
                         MessageDispatch, SendOpts, serialize, Transport,

@@ -1,4 +1,4 @@
-//! Wasmcloud Weld runtime library
+//! wasmcloud-rpc runtime library
 //!
 //! This crate provides code generation and runtime support for wasmcloud rpc messages
 //! used by [wasmcloud](https://wasmcloud.dev) actors and capability providers.
@@ -7,31 +7,23 @@
 mod timestamp;
 // re-export Timestamp
 pub use timestamp::Timestamp;
+// re-export wascap crate
+#[cfg(not(target_arch = "wasm32"))]
+pub use wascap;
+
+#[cfg(all(not(target_arch = "wasm32"), feature = "otel"))]
+#[macro_use]
+pub mod otel;
 
 mod actor_wasm;
+pub mod cbor;
 pub mod common;
-#[cfg(feature = "otel")]
-pub mod otel;
+pub(crate) mod document;
+pub mod error;
 pub mod provider;
 pub(crate) mod provider_main;
 mod wasmbus_model;
-pub mod model {
-    // re-export model lib as "model"
-    pub use crate::wasmbus_model::*;
 
-    // declare unit type
-    pub type Unit = ();
-}
-pub mod cbor;
-pub(crate) mod document;
-pub mod error;
-
-// re-export nats-aflowt
-#[cfg(not(target_arch = "wasm32"))]
-pub use nats_aflowt as anats;
-
-/// This will be removed in a later version - use cbor instead to avoid dependence on minicbor crate
-/// @deprecated
 pub use minicbor;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -48,13 +40,20 @@ pub const WASMBUS_RPC_VERSION: u32 = 0;
 /// This crate's published version
 pub const WELD_CRATE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-pub type CallResult = std::result::Result<Vec<u8>, Box<dyn std::error::Error + Sync + Send>>;
-pub type HandlerResult<T> = std::result::Result<T, Box<dyn std::error::Error + Sync + Send>>;
+pub type CallResult = Result<Vec<u8>, Box<dyn std::error::Error + Sync + Send>>;
+pub type HandlerResult<T> = Result<T, Box<dyn std::error::Error + Sync + Send>>;
 pub type TomlMap = toml::value::Map<String, toml::value::Value>;
 
-#[cfg(all(feature = "chunkify", not(target_arch = "wasm32")))]
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod chunkify;
 mod wasmbus_core;
+
+#[macro_use]
+
+pub mod model {
+    // re-export model lib as "model"
+    pub use crate::wasmbus_model::*;
+}
 
 pub mod core {
     // re-export core lib as "core"
@@ -75,21 +74,20 @@ pub mod core {
                 }
 
                 /// Connect to nats using options provided by host
-                pub async fn nats_connect(&self) -> RpcResult<crate::anats::Connection> {
+                pub async fn nats_connect(&self) -> RpcResult<async_nats::Client> {
                     use std::str::FromStr as _;
                     let nats_addr = if !self.lattice_rpc_url.is_empty() {
                         self.lattice_rpc_url.as_str()
                     } else {
                         crate::provider::DEFAULT_NATS_ADDR
                     };
-                    let nats_server = nats_aflowt::ServerAddress::from_str(nats_addr).map_err(|e| {
+                    let nats_server = async_nats::ServerAddr::from_str(nats_addr).map_err(|e| {
                         RpcError::InvalidParameter(format!("Invalid nats server url '{}': {}", nats_addr, e))
                     })?;
 
                     // Connect to nats
-                    let nc = nats_aflowt::Options::default()
-                        .max_reconnects(None)
-                        .connect(vec![nats_server])
+                    let nc = async_nats::ConnectOptions::default()
+                        .connect(nats_server)
                         .await
                         .map_err(|e| {
                             RpcError::ProviderInit(format!("nats connection to {} failed: {}", nats_addr, e))
@@ -143,17 +141,6 @@ pub mod core {
             })
         }
 
-        /*
-        /// create provider entity from link definition
-        pub fn from_link(link: &LinkDefinition) -> Self {
-            WasmCloudEntity {
-                public_key: link.provider_id.clone(),
-                contract_id: link.contract_id.clone(),
-                link_name: link.link_name.clone(),
-            }
-        }
-         */
-
         /// constructor for capability provider entity
         /// all parameters are required
         pub fn new_provider<T1: ToString, T2: ToString>(
@@ -182,7 +169,7 @@ pub mod core {
         /// Returns URL of the entity
         pub fn url(&self) -> String {
             if self.public_key.to_uppercase().starts_with('M') {
-                format!("{}://{}", crate::core::URL_SCHEME, self.public_key)
+                format!("{}://{}", URL_SCHEME, self.public_key)
             } else {
                 format!(
                     "{}://{}/{}/{}",
@@ -271,6 +258,91 @@ pub mod actor {
                 }
 
                 pub fn console_log(_s: &str) {}
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use anyhow::anyhow;
+
+    fn ret_rpc_err(val: u8) -> Result<u8, crate::error::RpcError> {
+        let x = match val {
+            0 => Ok(0),
+            10 | 11 => Err(crate::error::RpcError::Other(format!("rpc:{}", val))),
+            _ => Ok(255),
+        }?;
+        Ok(x)
+    }
+
+    fn ret_any(val: u8) -> anyhow::Result<u8> {
+        let x = match val {
+            0 => Ok(0),
+            20 | 21 => Err(anyhow!("any:{}", val)),
+            _ => Ok(255),
+        }?;
+        Ok(x)
+    }
+
+    fn either(val: u8) -> anyhow::Result<u8> {
+        let x = match val {
+            0 => 0,
+            10 | 11 => ret_rpc_err(val)?,
+            20 | 21 => ret_any(val)?,
+            _ => 255,
+        };
+        Ok(x)
+    }
+
+    #[test]
+    fn values() {
+        use crate::error::RpcError;
+
+        let v0 = ret_rpc_err(0);
+        assert_eq!(v0.ok().unwrap(), 0);
+
+        let v10 = either(10);
+        assert!(v10.is_err());
+        assert_eq!(v10.as_ref().err().unwrap().to_string().as_str(), "rpc:10");
+        if let Err(e) = &v10 {
+            if let Some(rpc_err) = e.downcast_ref::<RpcError>() {
+                eprintln!("10 is rpc error (ok)");
+                match rpc_err {
+                    RpcError::Other(s) => {
+                        eprintln!("RpcError::Other({})", s);
+                    }
+                    RpcError::Nats(s) => {
+                        eprintln!("RpcError::Nats({})", s);
+                    }
+                    _ => {
+                        eprintln!("RpcError::unknown {}", rpc_err);
+                    }
+                }
+            } else {
+                eprintln!("10 is not rpc error. value={}", e);
+            }
+        }
+
+        let v20 = either(20);
+        assert!(v20.is_err());
+        assert_eq!(v20.as_ref().err().unwrap().to_string().as_str(), "any:20");
+        if let Err(e) = &v20 {
+            if let Some(rpc_err) = e.downcast_ref::<RpcError>() {
+                eprintln!("20 is rpc error (ok)");
+                match rpc_err {
+                    RpcError::Other(s) => {
+                        eprintln!("RpcError::Other({})", s);
+                    }
+                    RpcError::Nats(s) => {
+                        eprintln!("RpcError::Nats({})", s);
+                    }
+                    _ => {
+                        eprintln!("RpcError::unknown {}", rpc_err);
+                    }
+                }
+            } else {
+                eprintln!("20 is not rpc error. value={}", e);
             }
         }
     }

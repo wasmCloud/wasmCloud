@@ -1,8 +1,6 @@
-use serde::{Deserialize, Serialize};
-
 /// An error that can occur in the processing of an RPC. This is not request-specific errors but
 /// rather cross-cutting errors that can always occur.
-#[derive(thiserror::Error, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(thiserror::Error, Debug)]
 #[non_exhaustive]
 pub enum RpcError {
     /// The request exceeded its deadline.
@@ -51,8 +49,6 @@ pub enum RpcError {
     #[error("timeout: {0}")]
     Timeout(String),
 
-    //#[error("IO error")]
-    //IO([from] std::io::Error)
     /// Anything else
     #[error("{0}")]
     Other(String),
@@ -78,46 +74,14 @@ impl From<std::io::Error> for RpcError {
     }
 }
 
-impl<E> core::convert::From<minicbor::encode::Error<E>> for RpcError {
-    fn from(e: minicbor::encode::Error<E>) -> Self {
-        let msg = match e {
-            minicbor::encode::Error::Write(_) => "writing to buffer",
-            minicbor::encode::Error::Message(s) => s,
-            _ => "unspecified encoding error",
-        }
-        .to_string();
-        RpcError::Ser(format!("encode: {}", msg))
+impl<E: std::fmt::Display> From<minicbor::encode::Error<E>> for RpcError {
+    fn from(e: minicbor::encode::Error<E>) -> RpcError {
+        RpcError::Other(format!("encode: {}", e))
     }
 }
 
-impl core::convert::From<minicbor::decode::Error> for RpcError {
-    fn from(e: minicbor::decode::Error) -> Self {
-        RpcError::Ser(format!("decode: {}", e))
+impl From<minicbor::decode::Error> for RpcError {
+    fn from(e: minicbor::decode::Error) -> RpcError {
+        RpcError::Other(format!("decode: {}", e))
     }
 }
-
-/*
-impl<W: minicbor::encode::Write, E: W::Error<W>>> From<minicbor::encode::Error<W::Error>> for RpcError {
-    fn from(_ee: Error<<dyn minicbor::encode::Write>::Error>) -> RpcError {
-        RpcError::Other("help".to_string())
-    }
-}
- */
-
-/*
-impl<W: std::io::Write> From<minicbor::encode::Error<W>> for RpcError {
-    fn from(e: minicbor::encode::Error<W>) -> RpcError
-    where
-        W: minicbor::encode::Write,
-    {
-        RpcError::Ser(
-            match e {
-                minicbor::encode::Error::Write(_) => "writing to buffer",
-                minicbor::encode::Error::Message(s) => s,
-                _ => "unspecified encoding error",
-            }
-            .to_string(),
-        )
-    }
-}
- */

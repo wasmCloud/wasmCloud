@@ -218,5 +218,5 @@ fn timestamp_ordering() {
     assert!(t1 > t4);
 
     // not equals
-    assert!(t1 != t4);
+    assert_ne!(t1, t4);
 }

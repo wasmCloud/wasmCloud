@@ -1,10 +1,45 @@
 # wasmbus-rpc Changelog
 
+## BREAKING CHANGES from 0.8.x to 0.9.0
+
+- provider_main has a new parameter: friendly_name, which is displayed on OTEL tracing dashboards.
+   Instead of `provider_main(MyAwesomeProvider::default())`, use:
+   `provider_main(MyAwesomeProvider::default(), Some("My Awesome Provider".to_string()))` 
+   
+- nats-aflowt is replaced with async-nats!
+  - removed 'wasmbus_rpc::anats'
+  - anats::ServerAddress renamed to async_nats::ServerAddr
+  - anats::Subscription is not public, replaced with async_nats::Subscriber
+  - anats::Subscription.close() replaced with async_nats::Subscriber.unsubscribe()
+  - anats::Options renamed to async_nats::ConnectOptions
+  - anats::Connection is no longer public. Use async_nats::Client instead.
+  - anats::Message.data renamed to async_nats::Message.payload
+- HostBridge::new() changes
+  - first parameter is async_nats::Client instead of anats::Connection
+- RpcClient::new() changes 
+  - new() parameter takes async_nats Client instead of anats::Client
+  - lattice prefix removed from constructor, added in to some of the method parameters
+- got rid of enum NatsClientType, replaced with async_nats::Client
+- removed feature "chunkify" (it is always enabled for non-wasm32 targets)
+
+- RpcError does not implement Serialize, Deserialize, or PartialEq
+  (unless/until we can find a good reason to support these) 
+
+
+## non-breaking changes
+- new feature flag "otel" enables OpenTelemetry tracing spans
+  - set environment variable `OTEL_TRACES_EXPORTER` to "otlp"
+  - set environment variable `OTEL_EXPORTER_OTLP_ENDPOINT` to the desired collector. Defaults to "http://127.0.0.1:55681/v1/traces"
+    - ("/v1/traces" will always be appended to this setting if it doesn't already end with "/v1/traces")
+- dependencies (minicbor, uuid, and others)
+- replaced ring with sha2 for sha256
+
+
 ## 0.7.0
 
 ### Breaking changes (since 0.6.x)
 
-- Some of the crate exported symbols have moved to sub-modules. The intent is to resolve some linking problems
+- Some of the crate's exported symbols have moved to submodules. The intent is to resolve some linking problems
   resulting from multiple inconsistent references to these symbols.
   Most of these changes will require only a recompile, for Actors and Providers 
   that import `wasmbus_rpc::actor::prelude::*` or `wasmbus_rpc::provider::prelude::*`, respectively.
