@@ -1,8 +1,4 @@
-use std::{
-    collections::HashMap,
-    path::{Path, PathBuf},
-    time::Duration,
-};
+use std::{collections::HashMap, path::PathBuf, time::Duration};
 
 use crate::{
     appearance::spinner::Spinner,
@@ -171,11 +167,7 @@ pub(crate) async fn handle_command(
 async fn undeploy_model(cmd: UndeployCommand) -> Result<bool> {
     let res = json_request(cmd.opts, &["undeploy", &cmd.model_name], json!({})).await?;
 
-    if res.is_some() {
-        Ok(true)
-    } else {
-        Ok(false)
-    }
+    Ok(res.is_some())
 }
 
 async fn deploy_model(cmd: DeployCommand) -> Result<bool> {
@@ -267,7 +259,7 @@ fn list_models_output(results: Vec<ModelSummary>) -> CommandOutput {
     CommandOutput::new(output::list_models_table(results), map)
 }
 
-fn show_model_output(raw: String, vetted: String, md: ModelDetails) -> CommandOutput {
+fn show_model_output(raw: PathBuf, vetted: PathBuf, md: ModelDetails) -> CommandOutput {
     let mut map = HashMap::new();
     map.insert("model".to_string(), json!(md));
     CommandOutput::new(output::show_model_details(raw, vetted), map)
@@ -329,19 +321,18 @@ fn show_model_history(results: Vec<ModelRevision>) -> CommandOutput {
     CommandOutput::new(output::list_revisions_table(results), map)
 }
 
-fn write_model(model: ModelDetails) -> Result<(String, String)> {
+fn write_model(model: ModelDetails) -> Result<(PathBuf, PathBuf)> {
     let name = model.vetted["name"].as_str().unwrap_or("");
     let version = model.vetted["version"].as_str().unwrap_or("");
     let json_filename = format!("{}_v{}.json", name, version);
     let raw_filename = format!("{}_v{}.txt", name, version);
 
-    let json_path = Path::new(&json_filename);
-    let raw_path = Path::new(&raw_filename);
+    let json_buf = PathBuf::from(json_filename);
+    let raw_buf = PathBuf::from(raw_filename);
+    let _ = std::fs::write(&json_buf, serde_json::to_vec(&model.vetted).unwrap());
+    let _ = std::fs::write(&raw_buf, model.raw);
 
-    let _ = std::fs::write(json_path, serde_json::to_vec(&model.vetted).unwrap());
-    let _ = std::fs::write(raw_path, model.raw);
-
-    Ok((raw_filename, json_filename))
+    Ok((raw_buf, json_buf))
 }
 
 async fn nats_client_from_opts(opts: ConnectionOpts) -> Result<(Connection, Duration)> {
