@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use term_table::{
     row::Row,
     table_cell::{Alignment, TableCell},
@@ -6,9 +8,11 @@ use term_table::{
 
 use super::{ModelRevision, ModelSummary};
 
-pub(crate) fn show_model_details(raw: String, vetted: String) -> String {
+pub(crate) fn show_model_details(raw: PathBuf, vetted: PathBuf) -> String {
+    // TODO: in a forthcoming release, do something more meaningful than just
+    // dump the file paths
     format!(
-        "Wrote model details to files:\nRaw: {}\nJSON: {}",
+        "Wrote model details to files:\nRaw: {:?}\nJSON: {:?}",
         raw, vetted
     )
 }
