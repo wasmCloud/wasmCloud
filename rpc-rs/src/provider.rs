@@ -20,7 +20,7 @@ use async_trait::async_trait;
 use futures::{future::JoinAll, StreamExt};
 use serde::de::DeserializeOwned;
 use tokio::sync::RwLock;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, instrument, warn};
 use tracing_futures::Instrument;
 
 pub use crate::rpc_client::make_uuid;
@@ -380,23 +380,33 @@ impl HostBridge {
                         let this = this.clone();
                         let provider = provider.clone();
                         let lattice = lattice.clone();
+                        let span = tracing::debug_span!("rpc",
+                            operation = tracing::field::Empty,
+                            lattice_id = tracing::field::Empty,
+                            actor_id = tracing::field::Empty,
+                            inv_id = tracing::field::Empty,
+                            host_id = tracing::field::Empty,
+                            provider_id = tracing::field::Empty,
+                            contract_id = tracing::field::Empty,
+                            link_name = tracing::field::Empty,
+                            payload_size = tracing::field::Empty
+                        );
                         tokio::spawn( async move {
-                            let span = tracing::debug_span!("rpc");
-                            let _enter = span.enter();
                             #[cfg(feature = "otel")]
                             crate::otel::attach_span_context(&msg);
                             match crate::common::deserialize::<Invocation>(&msg.payload) {
                                 Ok(inv) => {
                                     let inv_id = inv.id.clone();
-                                    span.record("operation", &tracing::field::display(&inv.operation));
-                                    span.record("lattice_id", &tracing::field::display(&lattice));
-                                    span.record("actor_id", &tracing::field::display(&inv.origin));
-                                    span.record("inv_id", &tracing::field::display(&inv.id));
-                                    span.record("host_id", &tracing::field::display(&inv.host_id));
-                                    span.record("provider_id", &tracing::field::display(&inv.target.public_key));
-                                    span.record("contract_id", &tracing::field::display(&inv.target.contract_id));
-                                    span.record("link_name", &tracing::field::display(&inv.target.link_name));
-                                    span.record("payload_size", &tracing::field::display(&inv.content_length.unwrap_or_default()));
+                                    let current = tracing::Span::current();
+                                    current.record("operation", &tracing::field::display(&inv.operation));
+                                    current.record("lattice_id", &tracing::field::display(&lattice));
+                                    current.record("actor_id", &tracing::field::display(&inv.origin));
+                                    current.record("inv_id", &tracing::field::display(&inv.id));
+                                    current.record("host_id", &tracing::field::display(&inv.host_id));
+                                    current.record("provider_id", &tracing::field::display(&inv.target.public_key));
+                                    current.record("contract_id", &tracing::field::display(&inv.target.contract_id));
+                                    current.record("link_name", &tracing::field::display(&inv.target.link_name));
+                                    current.record("payload_size", &tracing::field::display(&inv.content_length.unwrap_or_default()));
                                     let provider = provider.clone();
                                     let resp = match this.handle_rpc(provider, inv).in_current_span().await {
                                         Err(error) => {
@@ -442,7 +452,7 @@ impl HostBridge {
                                     }
                                 }
                             };
-                        }); /* spawn */
+                        }.instrument(span)); /* spawn */
                     } /* next */
                 }
             } /* loop */
@@ -560,37 +570,40 @@ impl HostBridge {
             .map_err(|e| RpcError::Nats(e.to_string()))?;
         let (this, provider) = (self.clone(), provider.clone());
         process_until_quit!(sub, quit, msg, {
-            let span = tracing::error_span!(
-                "subscribe_link_put",
-                actor_id = tracing::field::Empty,
-                provider_id = tracing::field::Empty
-            );
-            let _enter = span.enter();
-            if let Some(ld) = this.parse_msg::<LinkDefinition>(&msg, "link.put") {
-                span.record("actor_id", &tracing::field::display(&ld.actor_id));
-                span.record("provider_id", &tracing::field::display(&ld.provider_id));
-                span.record("contract_id", &tracing::field::display(&ld.contract_id));
-                span.record("link_name", &tracing::field::display(&ld.link_name));
-                if this.is_linked(&ld.actor_id).await {
-                    warn!("Ignoring duplicate link put");
-                } else {
-                    info!("Linking actor with provider");
-                    match provider.put_link(&ld).await {
-                        Ok(true) => {
-                            this.put_link(ld).await;
-                        }
-                        Ok(false) => {
-                            // authorization failed or parameters were invalid
-                            warn!("put_link denied");
-                        }
-                        Err(error) => {
-                            error!(%error, "put_link failed");
-                        }
-                    }
-                }
-            } // msg is "link.put"
+            this.handle_link_put(msg, &provider).await
         }); // process until quit
         Ok(())
+    }
+
+    #[instrument(level = "debug", skip_all, fields(actor_id = tracing::field::Empty, provider_id = tracing::field::Empty, contract_id = tracing::field::Empty, link_name = tracing::field::Empty))]
+    async fn handle_link_put<P>(&self, msg: async_nats::Message, provider: &P)
+    where
+        P: ProviderDispatch + Send + Sync + Clone + 'static,
+    {
+        if let Some(ld) = self.parse_msg::<LinkDefinition>(&msg, "link.put") {
+            let span = tracing::Span::current();
+            span.record("actor_id", &tracing::field::display(&ld.actor_id));
+            span.record("provider_id", &tracing::field::display(&ld.provider_id));
+            span.record("contract_id", &tracing::field::display(&ld.contract_id));
+            span.record("link_name", &tracing::field::display(&ld.link_name));
+            if self.is_linked(&ld.actor_id).await {
+                warn!("Ignoring duplicate link put");
+            } else {
+                info!("Linking actor with provider");
+                match provider.put_link(&ld).await {
+                    Ok(true) => {
+                        self.put_link(ld).await;
+                    }
+                    Ok(false) => {
+                        // authorization failed or parameters were invalid
+                        warn!("put_link denied");
+                    }
+                    Err(error) => {
+                        error!(%error, "put_link failed");
+                    }
+                }
+            }
+        }
     }
 
     async fn subscribe_link_del<P>(&self, provider: P, mut quit: QuitSignal) -> RpcResult<()>
@@ -612,11 +625,10 @@ impl HostBridge {
         let (this, provider) = (self.clone(), provider.clone());
         process_until_quit!(sub, quit, msg, {
             let span = tracing::trace_span!("subscribe_link_del", topic = %link_del_topic);
-            let _enter = span.enter();
             if let Some(ld) = &this.parse_msg::<LinkDefinition>(&msg, "link.del") {
-                this.delete_link(&ld.actor_id).await;
+                this.delete_link(&ld.actor_id).instrument(span.clone()).await;
                 // notify provider that link is deleted
-                provider.delete_link(&ld.actor_id).await;
+                provider.delete_link(&ld.actor_id).instrument(span).await;
             }
         });
         Ok(())
