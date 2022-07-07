@@ -127,7 +127,7 @@ pub(crate) async fn handle_command(
     let sp: Spinner = Spinner::new(&output_kind);
     let out: CommandOutput = match command {
         List(cmd) => {
-            sp.update_spinner_message(" Querying app spec list ...".to_string());
+            sp.update_spinner_message("Querying app spec list ...".to_string());
             let results = get_models(cmd).await?;
             list_models_output(results)
         }
@@ -169,12 +169,7 @@ pub(crate) async fn handle_command(
 }
 
 async fn undeploy_model(cmd: UndeployCommand) -> Result<bool> {
-    let nc = nats_client_from_opts(cmd.opts.clone()).await?;
-    let timeout = Duration::from_millis(cmd.opts.ack_timeout_ms);
-    let prefix = cmd.opts.lattice_prefix.unwrap_or("default".to_string());
-    let topic = format!("wadm.api.{}.model.undeploy.{}", prefix, cmd.model_name);
-
-    let res = json_request(&nc, &topic, json!({}), timeout).await?;
+    let res = json_request(cmd.opts, &["undeploy", &cmd.model_name], json!({})).await?;
 
     if res.is_some() {
         Ok(true)
@@ -184,18 +179,12 @@ async fn undeploy_model(cmd: UndeployCommand) -> Result<bool> {
 }
 
 async fn deploy_model(cmd: DeployCommand) -> Result<bool> {
-    let nc = nats_client_from_opts(cmd.opts.clone()).await?;
-    let timeout = Duration::from_millis(cmd.opts.ack_timeout_ms);
-    let prefix = cmd.opts.lattice_prefix.unwrap_or("default".to_string());
-    let topic = format!("wadm.api.{}.model.deploy.{}", prefix, cmd.model_name);
-
     let res = json_request(
-        &nc,
-        &topic,
+        cmd.opts,
+        &["deploy", &cmd.model_name],
         json!({
             "version": cmd.version
         }),
-        timeout,
     )
     .await?;
 
@@ -207,19 +196,81 @@ async fn deploy_model(cmd: DeployCommand) -> Result<bool> {
 }
 
 async fn put_model(cmd: PutCommand) -> Result<PutReply> {
-    let nc = nats_client_from_opts(cmd.opts.clone()).await?;
-    let timeout = Duration::from_millis(cmd.opts.ack_timeout_ms);
-    let prefix = cmd.opts.lattice_prefix.unwrap_or("default".to_string());
-    let topic = format!("wadm.api.{}.model.put", prefix);
-
     let raw = std::fs::read_to_string(&cmd.source)?;
-    let res = raw_request(&nc, &topic, raw.as_bytes(), timeout).await?;
+    let res = raw_request(cmd.opts, &["put"], raw.as_bytes()).await?;
     if let Some(v) = res {
         let r: PutReply = serde_json::from_value(v)?;
         Ok(r)
     } else {
         bail!("Failed to put app specification");
     }
+}
+
+async fn get_model_history(cmd: HistoryCommand) -> Result<Vec<ModelRevision>> {
+    let res = json_request(cmd.opts, &["versions", &cmd.model_name], json!({})).await?;
+    if let Some(v) = res {
+        let revs: Vec<ModelRevision> = serde_json::from_value(v)?;
+        Ok(revs)
+    } else {
+        bail!("Failed to get model history");
+    }
+}
+
+async fn get_model_details(cmd: GetCommand) -> Result<ModelDetails> {
+    let res = json_request(
+        cmd.opts,
+        &["get", &cmd.model_name],
+        json!({
+            "version": cmd.version
+        }),
+    )
+    .await?;
+    if let Some(v) = res {
+        let md: ModelDetails = serde_json::from_value(v)?;
+        Ok(md)
+    } else {
+        bail!("Failed to obtain reply from wadm");
+    }
+}
+
+async fn delete_model_version(cmd: DeleteCommand) -> Result<bool> {
+    let res = json_request(
+        cmd.opts,
+        &["del", &cmd.model_name],
+        json!({
+            "version": cmd.version
+        }),
+    )
+    .await?;
+
+    if res.is_none() {
+        Ok(false)
+    } else {
+        Ok(true)
+    }
+}
+
+async fn get_models(cmd: ListCommand) -> Result<Vec<ModelSummary>> {
+    let res = json_request(cmd.opts, &["list"], json!({})).await?;
+
+    if let Some(v) = res {
+        let v: Vec<ModelSummary> = serde_json::from_value(v)?;
+        Ok(v)
+    } else {
+        bail!("Failed to obtain reply from wadm");
+    }
+}
+
+fn list_models_output(results: Vec<ModelSummary>) -> CommandOutput {
+    let mut map = HashMap::new();
+    map.insert("apps".to_string(), json!(results));
+    CommandOutput::new(output::list_models_table(results), map)
+}
+
+fn show_model_output(raw: String, vetted: String, md: ModelDetails) -> CommandOutput {
+    let mut map = HashMap::new();
+    map.insert("model".to_string(), json!(md));
+    CommandOutput::new(output::show_model_details(raw, vetted), map)
 }
 
 fn show_put_results(results: PutReply) -> CommandOutput {
@@ -245,91 +296,6 @@ fn show_undeploy_results(results: bool) -> CommandOutput {
         },
         map,
     )
-}
-
-async fn get_model_history(cmd: HistoryCommand) -> Result<Vec<ModelRevision>> {
-    let nc = nats_client_from_opts(cmd.opts.clone()).await?;
-    let timeout = Duration::from_millis(cmd.opts.ack_timeout_ms);
-    let prefix = cmd.opts.lattice_prefix.unwrap_or("default".to_string());
-    let topic = format!("wadm.api.{}.model.versions.{}", prefix, cmd.model_name);
-    let res = json_request(&nc, &topic, json!({}), timeout).await?;
-    if let Some(v) = res {
-        let revs: Vec<ModelRevision> = serde_json::from_value(v)?;
-        Ok(revs)
-    } else {
-        bail!("Failed to get model history");
-    }
-}
-
-async fn get_model_details(cmd: GetCommand) -> Result<ModelDetails> {
-    let nc = nats_client_from_opts(cmd.opts.clone()).await?;
-    let timeout = Duration::from_millis(cmd.opts.ack_timeout_ms);
-    let prefix = cmd.opts.lattice_prefix.unwrap_or("default".to_string());
-    let topic = format!("wadm.api.{}.model.get.{}", prefix, cmd.model_name);
-    let res = json_request(
-        &nc,
-        &topic,
-        json!({
-            "version": cmd.version
-        }),
-        timeout,
-    )
-    .await?;
-    if let Some(v) = res {
-        let md: ModelDetails = serde_json::from_value(v)?;
-        Ok(md)
-    } else {
-        bail!("Failed to obtain reply from wadm");
-    }
-}
-
-async fn delete_model_version(cmd: DeleteCommand) -> Result<bool> {
-    let nc = nats_client_from_opts(cmd.opts.clone()).await?;
-    let timeout = Duration::from_millis(cmd.opts.ack_timeout_ms);
-    let prefix = cmd.opts.lattice_prefix.unwrap_or("default".to_string());
-    let topic = format!("wadm.api.{}.model.del.{}", prefix, cmd.model_name);
-    let res = json_request(
-        &nc,
-        &topic,
-        json!({
-            "version": cmd.version
-        }),
-        timeout,
-    )
-    .await?;
-
-    if res.is_none() {
-        Ok(false)
-    } else {
-        Ok(true)
-    }
-}
-
-async fn get_models(cmd: ListCommand) -> Result<Vec<ModelSummary>> {
-    let nc = nats_client_from_opts(cmd.opts.clone()).await?;
-    let timeout = Duration::from_millis(cmd.opts.ack_timeout_ms);
-    let prefix = cmd.opts.lattice_prefix.unwrap_or("default".to_string());
-    let topic = format!("wadm.api.{}.model.list", prefix);
-    let res = json_request(&nc, &topic, json!({}), timeout).await?;
-
-    if let Some(v) = res {
-        let v: Vec<ModelSummary> = serde_json::from_value(v)?;
-        Ok(v)
-    } else {
-        bail!("Failed to obtain reply from wadm");
-    }
-}
-
-fn list_models_output(results: Vec<ModelSummary>) -> CommandOutput {
-    let mut map = HashMap::new();
-    map.insert("apps".to_string(), json!(results));
-    CommandOutput::new(output::list_models_table(results), map)
-}
-
-fn show_model_output(raw: String, vetted: String, md: ModelDetails) -> CommandOutput {
-    let mut map = HashMap::new();
-    map.insert("model".to_string(), json!(md));
-    CommandOutput::new(output::show_model_details(raw, vetted), map)
 }
 
 fn show_del_results(results: bool) -> CommandOutput {
@@ -378,7 +344,7 @@ fn write_model(model: ModelDetails) -> Result<(String, String)> {
     Ok((raw_filename, json_filename))
 }
 
-async fn nats_client_from_opts(opts: ConnectionOpts) -> Result<Connection> {
+async fn nats_client_from_opts(opts: ConnectionOpts) -> Result<(Connection, Duration)> {
     // Attempt to load a context, falling back on the default if not supplied
     let ctx = if let Some(context) = opts.context {
         load_context(&context).ok()
@@ -424,7 +390,14 @@ async fn nats_client_from_opts(opts: ConnectionOpts) -> Result<Connection> {
         crate::util::nats_client_from_opts(&ctl_host, &ctl_port, ctl_jwt, ctl_seed, ctl_credsfile)
             .await?;
 
-    Ok(nc)
+    let timeout = Duration::from_millis(opts.ack_timeout_ms);
+
+    Ok((nc, timeout))
+}
+
+fn generate_topic(prefix: Option<String>, elements: &[&str]) -> String {
+    let prefix = prefix.unwrap_or_else(|| "default".to_string());
+    format!("wadm.api.{}.model.{}", prefix, elements.join("."))
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -462,26 +435,27 @@ pub(crate) struct PutReply {
 }
 
 async fn raw_request(
-    nc: &Connection,
-    topic: &str,
+    opts: ConnectionOpts,
+    elements: &[&str],
     req: &[u8],
-    timeout: Duration,
 ) -> Result<Option<serde_json::Value>> {
-    let res = nc.request_timeout(topic, req, timeout).await?;
+    let (nc, timeout) = nats_client_from_opts(opts.clone()).await?;
+    let topic = generate_topic(opts.lattice_prefix, elements);
+
+    let res = nc.request_timeout(&topic, req, timeout).await?;
     let env: WadmEnvelope = serde_json::from_slice(&res.data)?;
     if env.result == "success" {
         Ok(env.data)
     } else {
-        bail!("{}", env.message.unwrap_or("".to_string()))
+        bail!("{}", env.message.unwrap_or_else(|| "".to_string()))
     }
 }
 
 async fn json_request(
-    nc: &Connection,
-    topic: &str,
+    opts: ConnectionOpts,
+    elements: &[&str],
     req: serde_json::Value,
-    timeout: Duration,
 ) -> Result<Option<serde_json::Value>> {
     let msg = serde_json::to_vec(&req)?;
-    raw_request(nc, topic, &msg, timeout).await
+    raw_request(opts, elements, &msg).await
 }
