@@ -7,8 +7,10 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, time::Duration};
 use sub_stream::collect_timeout;
 use tokio::sync::mpsc::Receiver;
-use tracing::{error, trace};
+use tracing::{debug, error, instrument, trace};
+use tracing_futures::Instrument;
 use wasmbus_rpc::core::LinkDefinition;
+use wasmbus_rpc::otel::OtelHeaderInjector;
 
 type Result<T> = ::std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -37,31 +39,52 @@ impl Client {
         }
     }
 
+    #[instrument(level = "debug", skip_all)]
     pub(crate) async fn request_timeout(
         &self,
         subject: String,
         payload: Vec<u8>,
         timeout: Duration,
     ) -> Result<async_nats::Message> {
-        match tokio::time::timeout(timeout, self.nc.request(subject, payload.into())).await {
-            Err(_) => Err(Box::new(std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                "timed out",
-            ))),
+        match tokio::time::timeout(
+            timeout,
+            self.nc.request_with_headers(
+                subject,
+                OtelHeaderInjector::default_with_span().into(),
+                payload.into(),
+            ),
+        )
+        .await
+        {
+            Err(_) => Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "timed out").into()),
             Ok(Ok(message)) => Ok(message),
             Ok(Err(e)) => Err(e),
         }
     }
 
     /// Queries the lattice for all responsive hosts, waiting for the full period specified by _timeout_.
+    #[instrument(level = "debug", skip_all)]
     pub async fn get_hosts(&self) -> Result<Vec<Host>> {
-        get_hosts_(&self.nc, &self.nsprefix, self.auction_timeout).await
+        let subject = broker::queries::hosts(&self.nsprefix);
+        debug!("get_hosts:publish {}", &subject);
+        let reply = self.nc.new_inbox();
+        let sub = self.nc.subscribe(reply.clone()).await?;
+        self.nc
+            .publish_with_reply_and_headers(
+                subject,
+                reply,
+                OtelHeaderInjector::default_with_span().into(),
+                Vec::new().into(),
+            )
+            .await?;
+        Ok(collect_timeout::<Host>(sub, self.auction_timeout, "hosts").await)
     }
 
     /// Retrieves the contents of a running host
+    #[instrument(level = "debug", skip_all)]
     pub async fn get_host_inventory(&self, host_id: &str) -> Result<HostInventory> {
         let subject = broker::queries::host_inventory(&self.nsprefix, host_id);
-        trace!("get_host_inventory:request {}", &subject);
+        debug!("get_host_inventory:request {}", &subject);
         match self.request_timeout(subject, vec![], self.timeout).await {
             Ok(msg) => {
                 let hi: HostInventory = json_deserialize(&msg.payload)?;
@@ -73,9 +96,10 @@ impl Client {
 
     /// Retrieves the full set of all cached claims in the lattice by getting a response from the first
     /// host that answers this query
+    #[instrument(level = "debug", skip_all)]
     pub async fn get_claims(&self) -> Result<GetClaimsResponse> {
         let subject = broker::queries::claims(&self.nsprefix);
-        trace!("get_claims:request {}", &subject);
+        debug!("get_claims:request {}", &subject);
         match self.request_timeout(subject, vec![], self.timeout).await {
             Ok(msg) => {
                 let list: GetClaimsResponse = json_deserialize(&msg.payload)?;
@@ -89,6 +113,7 @@ impl Client {
     /// in question. This will always wait for the full period specified by _duration_, and then return the set of
     /// gathered results. It is then up to the client to choose from among the "auction winners" to issue the appropriate
     /// command to start an actor. Clients cannot assume that auctions will always return at least one result.
+    #[instrument(level = "debug", skip_all)]
     pub async fn perform_actor_auction(
         &self,
         actor_ref: &str,
@@ -99,10 +124,17 @@ impl Client {
             actor_ref: actor_ref.to_string(),
             constraints,
         })?;
-        trace!("actor_auction: subscribing to {}", &subject);
-        let inbox = self.nc.new_inbox();
-        self.nc.publish(subject, bytes.into()).await?;
-        let sub = self.nc.subscribe(inbox).await?;
+        debug!("actor_auction:publish {}", &subject);
+        let reply = self.nc.new_inbox();
+        let sub = self.nc.subscribe(reply.clone()).await?;
+        self.nc
+            .publish_with_reply_and_headers(
+                subject,
+                reply,
+                OtelHeaderInjector::default_with_span().into(),
+                bytes.into(),
+            )
+            .await?;
         Ok(collect_timeout(sub, self.auction_timeout, "actor").await)
     }
 
@@ -110,6 +142,7 @@ impl Client {
     /// in question. This will always wait for the full period specified by _duration_, and then return the set of gathered
     /// results. It is then up to the client to choose from among the "auction winners" and issue the appropriate command
     /// to start a provider. Clients cannot assume that auctions will always return at least one result.
+    #[instrument(level = "debug", skip_all)]
     pub async fn perform_provider_auction(
         &self,
         provider_ref: &str,
@@ -122,10 +155,17 @@ impl Client {
             link_name: link_name.to_string(),
             constraints,
         })?;
-        trace!("provider_auction: subscribing to {}", &subject);
-        let inbox = self.nc.new_inbox();
-        self.nc.publish(subject, bytes.into()).await?;
-        let sub = self.nc.subscribe(inbox).await?;
+        debug!("provider_auction:publish {}", &subject);
+        let reply = self.nc.new_inbox();
+        let sub = self.nc.subscribe(reply.clone()).await?;
+        self.nc
+            .publish_with_reply_and_headers(
+                subject,
+                reply,
+                OtelHeaderInjector::default_with_span().into(),
+                bytes.into(),
+            )
+            .await?;
         Ok(collect_timeout(sub, self.auction_timeout, "provider").await)
     }
 
@@ -135,6 +175,7 @@ impl Client {
     /// wasmCloud hosts will acknowledge the start actor command prior to fetching the actor's OCI bytes. If a client needs
     /// deterministic results as to whether the actor completed its startup process, the client will have to monitor
     /// the appropriate event in the control event stream
+    #[instrument(level = "debug", skip_all)]
     pub async fn start_actor(
         &self,
         host_id: &str,
@@ -143,7 +184,7 @@ impl Client {
         annotations: Option<HashMap<String, String>>,
     ) -> Result<CtlOperationAck> {
         let subject = broker::commands::start_actor(&self.nsprefix, host_id);
-        trace!("start_actor:request {}", &subject);
+        debug!("start_actor:request {}", &subject);
         let bytes = json_serialize(StartActorCommand {
             count,
             actor_ref: actor_ref.to_string(),
@@ -165,6 +206,7 @@ impl Client {
     /// wasmCloud hosts will acknowledge the scale actor command prior to fetching the actor's OCI bytes. If a client
     /// needs deterministic results as to whether the actor completed its startup process, the client will have to
     /// monitor the appropriate event in the control event stream
+    #[instrument(level = "debug", skip_all)]
     pub async fn scale_actor(
         &self,
         host_id: &str,
@@ -174,7 +216,7 @@ impl Client {
         annotations: Option<HashMap<String, String>>,
     ) -> Result<CtlOperationAck> {
         let subject = broker::commands::scale_actor(&self.nsprefix, host_id);
-        trace!("scale_actor:request {}", &subject);
+        debug!("scale_actor:request {}", &subject);
         let bytes = json_serialize(ScaleActorCommand {
             count,
             actor_ref: actor_ref.to_string(),
@@ -196,11 +238,20 @@ impl Client {
     /// map with the new information. It is highly recommended you use TLS connections
     /// with NATS and isolate the control interface credentials when using this
     /// function in production as the data contains secrets
+    #[instrument(level = "debug", skip_all)]
     pub async fn put_registries(&self, registries: RegistryCredentialMap) -> Result<()> {
         let subject = broker::publish_registries(&self.nsprefix);
-        trace!("put_registries {}", &subject);
+        debug!("put_registries:publish {}", &subject);
         let bytes = json_serialize(&registries)?;
-        if let Err(e) = self.nc.publish(subject, bytes.into()).await {
+        let resp = self
+            .nc
+            .publish_with_headers(
+                subject,
+                OtelHeaderInjector::default_with_span().into(),
+                bytes.into(),
+            )
+            .await;
+        if let Err(e) = resp {
             Err(format!("Failed to push registry credential map: {}", e).into())
         } else {
             Ok(())
@@ -211,6 +262,7 @@ impl Client {
     /// function on a `Host` struct instance. This operation pushes to a queue-subscribed topic, and therefore
     /// awaits confirmation from the single psuedo-randomly chosen recipient host. If that one host fails to acknowledge,
     /// or if no hosts acknowledge within the timeout period, this operation is considered a failure
+    #[instrument(level = "debug", skip_all)]
     pub async fn advertise_link(
         &self,
         actor_id: &str,
@@ -220,7 +272,7 @@ impl Client {
         values: HashMap<String, String>,
     ) -> Result<CtlOperationAck> {
         let subject = broker::advertise_link(&self.nsprefix);
-        trace!("advertise_link:publish {}", &subject);
+        debug!("advertise_link:request {}", &subject);
         let mut ld = LinkDefinition::default();
         ld.actor_id = actor_id.to_string();
         ld.provider_id = provider_id.to_string();
@@ -238,6 +290,7 @@ impl Client {
     }
 
     /// Publishes a request to remove a link definition to the lattice.
+    #[instrument(level = "debug", skip_all)]
     pub async fn remove_link(
         &self,
         actor_id: &str,
@@ -245,6 +298,7 @@ impl Client {
         link_name: &str,
     ) -> Result<CtlOperationAck> {
         let subject = broker::remove_link(&self.nsprefix);
+        debug!("remove_link:request {}", &subject);
         let mut ld = LinkDefinition::default();
         ld.actor_id = actor_id.to_string();
         ld.contract_id = contract_id.to_string();
@@ -260,8 +314,10 @@ impl Client {
     }
 
     /// Publishes a request to retrieve all current link definitions.
+    #[instrument(level = "debug", skip_all)]
     pub async fn query_links(&self) -> Result<LinkDefinitionList> {
         let subject = broker::queries::link_definitions(&self.nsprefix);
+        debug!("query_links:request {}", &subject);
         match self.request_timeout(subject, vec![], self.timeout).await {
             Ok(msg) => json_deserialize(&msg.payload),
             Err(e) => Err(format!("Did not receive a response to links query: {}", e).into()),
@@ -276,6 +332,7 @@ impl Client {
     /// later. If you need to verify that the actor has been updated, you will want to set up a
     /// listener for the appropriate **PublishedEvent** which will be published on the control events
     /// channel in JSON
+    #[instrument(level = "debug", skip_all)]
     pub async fn update_actor(
         &self,
         host_id: &str,
@@ -284,7 +341,7 @@ impl Client {
         annotations: Option<HashMap<String, String>>,
     ) -> Result<CtlOperationAck> {
         let subject = broker::commands::update_actor(&self.nsprefix, host_id);
-        trace!("update_actor:request {}", &subject);
+        debug!("update_actor:request {}", &subject);
         let bytes = json_serialize(UpdateActorCommand {
             host_id: host_id.to_string(),
             actor_id: existing_actor_id.to_string(),
@@ -307,6 +364,7 @@ impl Client {
     /// completed its startup process, such a client needs to monitor the control event stream for the
     /// appropriate event. If a host ID is not supplied (empty string), then this function will return
     /// an early acknowledgement, go find a host, and then submit the start request to a target host.
+    #[instrument(level = "debug", skip_all)]
     pub async fn start_provider(
         &self,
         host_id: &str,
@@ -315,31 +373,27 @@ impl Client {
         annotations: Option<HashMap<String, String>>,
         provider_configuration: Option<String>,
     ) -> Result<CtlOperationAck> {
-        let client = self.nc.clone();
-        let nsprefix = self.nsprefix.clone();
-        let timeout = self.timeout;
         let provider_ref = provider_ref.to_string();
         if !host_id.trim().is_empty() {
             start_provider_(
-                &client,
-                &nsprefix,
-                timeout,
+                &self.nc,
+                &self.nsprefix,
+                self.timeout,
                 host_id,
                 &provider_ref,
                 link_name,
                 annotations,
                 provider_configuration,
             )
+            .in_current_span()
             .await
         } else {
             // If a host isn't supplied, try to find one via auction.
             // If no host is found, return error.
             // If a host is found, start brackground request to start provider and return Ack
             let mut error = String::new();
-            let client = self.nc.clone();
-            let auction_timeout = self.auction_timeout;
-            trace!("start_provider:deferred (no-host) request");
-            let host = match get_hosts_(&client, &nsprefix, auction_timeout).await {
+            debug!("start_provider:deferred (no-host) request");
+            let host = match self.get_hosts().await {
                 Err(e) => {
                     error = format!("failed to query hosts for no-host provider start: {}", e);
                     None
@@ -347,11 +401,12 @@ impl Client {
                 Ok(hs) => hs.into_iter().next(),
             };
             if let Some(host) = host {
+                let this = self.clone();
                 tokio::spawn(async move {
                     let _ = start_provider_(
-                        &client,
-                        &nsprefix,
-                        timeout,
+                        &this.nc,
+                        &this.nsprefix,
+                        this.timeout,
                         &host.id,
                         &provider_ref,
                         link_name,
@@ -359,7 +414,7 @@ impl Client {
                         provider_configuration,
                     )
                     .await;
-                });
+                }).instrument(tracing::Span::current());
             } else if error.is_empty() {
                 error = "No hosts detected in in no-host provider start.".to_string();
             }
@@ -377,6 +432,7 @@ impl Client {
     /// target wasmCloud host will acknowledge the receipt of this command, and _will not_ supply a discrete
     /// confirmation that a provider has terminated. For that kind of information, the client must also monitor
     /// the control event stream
+    #[instrument(level = "debug", skip_all)]
     pub async fn stop_provider(
         &self,
         host_id: &str,
@@ -386,7 +442,7 @@ impl Client {
         annotations: Option<HashMap<String, String>>,
     ) -> Result<CtlOperationAck> {
         let subject = broker::commands::stop_provider(&self.nsprefix, host_id);
-        trace!("stop_provider:request {}", &subject);
+        debug!("stop_provider:request {}", &subject);
         let bytes = json_serialize(StopProviderCommand {
             host_id: host_id.to_string(),
             provider_ref: provider_ref.to_string(),
@@ -407,6 +463,7 @@ impl Client {
     /// target wasmCloud host will acknowledge the receipt of this command, and _will not_ supply a discrete
     /// confirmation that the actor has terminated. For that kind of information, the client must also monitor
     /// the control event stream
+    #[instrument(level = "debug", skip_all)]
     pub async fn stop_actor(
         &self,
         host_id: &str,
@@ -415,7 +472,7 @@ impl Client {
         annotations: Option<HashMap<String, String>>,
     ) -> Result<CtlOperationAck> {
         let subject = broker::commands::stop_actor(&self.nsprefix, host_id);
-        trace!("stop_actor:request {}", &subject);
+        debug!("stop_actor:request {}", &subject);
         let bytes = json_serialize(StopActorCommand {
             host_id: host_id.to_string(),
             actor_ref: actor_ref.to_string(),
@@ -435,13 +492,14 @@ impl Client {
     /// will acknowledge receipt of the command before it attempts a shutdown. To deterministically
     /// verify that the host is down, a client should monitor for the "host stopped" event or
     /// passively detect the host down by way of a lack of heartbeat receipts
+    #[instrument(level = "debug", skip_all)]
     pub async fn stop_host(
         &self,
         host_id: &str,
         timeout_ms: Option<u64>,
     ) -> Result<CtlOperationAck> {
         let subject = broker::commands::stop_host(&self.nsprefix, host_id);
-        trace!("stop_host:request {}", &subject);
+        debug!("stop_host:request {}", &subject);
         let bytes = json_serialize(StopHostCommand {
             host_id: host_id.to_owned(),
             timeout: timeout_ms,
@@ -560,20 +618,6 @@ pub fn json_deserialize<'de, T: Deserialize<'de>>(
     })
 }
 
-// "selfless" function to obtain a list of hosts
-async fn get_hosts_(
-    client: &async_nats::Client,
-    nsprefix: &Option<String>,
-    timeout: Duration,
-) -> Result<Vec<Host>> {
-    let subject = broker::queries::hosts(nsprefix);
-    trace!("get_hosts: subscribing to {}", &subject);
-    let inbox = client.new_inbox();
-    client.publish(subject, Vec::new().into()).await?;
-    let sub = client.subscribe(inbox).await?;
-    Ok(collect_timeout(sub, timeout, "hosts").await)
-}
-
 // "selfless" helper function that submits a start provider request to a host
 #[allow(clippy::too_many_arguments)]
 async fn start_provider_(
@@ -587,7 +631,7 @@ async fn start_provider_(
     provider_configuration: Option<String>,
 ) -> Result<CtlOperationAck> {
     let subject = broker::commands::start_provider(nsprefix, host_id);
-    trace!("start_provider:request {}", &subject);
+    debug!("start_provider:request {}", &subject);
     let bytes = json_serialize(StartProviderCommand {
         host_id: host_id.to_string(),
         provider_ref: provider_ref.to_string(),
@@ -595,7 +639,16 @@ async fn start_provider_(
         annotations,
         configuration: provider_configuration,
     })?;
-    match tokio::time::timeout(timeout, client.request(subject, bytes.into())).await {
+    match tokio::time::timeout(
+        timeout,
+        client.request_with_headers(
+            subject,
+            OtelHeaderInjector::default_with_span().into(),
+            bytes.into(),
+        ),
+    )
+    .await
+    {
         Err(e) => Err(format!("Did not receive start provider acknowledgement: {}", e).into()),
         Ok(Err(e)) => Err(format!("Error sending or receiving message: {}", e).into()),
         Ok(Ok(msg)) => {
