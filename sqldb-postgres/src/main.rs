@@ -24,12 +24,10 @@ mod types;
 // and returns only when it receives a shutdown message
 //
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .with_ansi(atty::is(atty::Stream::Stderr))
-        .init();
-    provider_main(SqlDbProvider::default())?;
+    provider_main(
+        SqlDbProvider::default(),
+        Some("SQLDB Postgres Provider".to_string()),
+    )?;
 
     eprintln!("sqldb provider exiting");
     Ok(())

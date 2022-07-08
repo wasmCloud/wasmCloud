@@ -1,13 +1,13 @@
 //! Nats implementation for wasmcloud:messaging.
 //!
-use std::{collections::HashMap, convert::Infallible, sync::Arc};
+use std::{collections::HashMap, convert::Infallible, sync::Arc, time::Duration};
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tracing::{error, info, instrument};
 use tracing_futures::Instrument;
 use wascap::prelude::KeyPair;
-use wasmbus_rpc::{anats, core::LinkDefinition, provider::prelude::*};
+use wasmbus_rpc::{core::LinkDefinition, otel::OtelHeaderInjector, provider::prelude::*};
 use wasmcloud_interface_messaging::{
     MessageSubscriber, MessageSubscriberSender, Messaging, MessagingReceiver, PubMessage,
     ReplyMessage, RequestMessage, SubMessage,
@@ -20,14 +20,12 @@ const ENV_NATS_CLIENT_JWT: &str = "CLIENT_JWT";
 const ENV_NATS_CLIENT_SEED: &str = "CLIENT_SEED";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .with_ansi(atty::is(atty::Stream::Stderr))
-        .init();
     // handle lattice control messages and forward rpc to the provider dispatch
     // returns when provider receives a shutdown control message
-    provider_main(NatsMessagingProvider::default())?;
+    provider_main(
+        NatsMessagingProvider::default(),
+        Some("Nats Messaging Provider".to_string()),
+    )?;
 
     eprintln!("Nats-messaging provider exiting");
     Ok(())
@@ -97,7 +95,7 @@ impl ConnectionConfig {
 #[services(Messaging)]
 struct NatsMessagingProvider {
     // store nats connection client per actor
-    actors: Arc<RwLock<HashMap<String, anats::Connection>>>,
+    actors: Arc<RwLock<HashMap<String, async_nats::Client>>>,
 }
 // use default implementations of provider message handlers
 impl ProviderDispatch for NatsMessagingProvider {}
@@ -108,24 +106,25 @@ impl NatsMessagingProvider {
         &self,
         cfg: ConnectionConfig,
         ld: &LinkDefinition,
-    ) -> Result<anats::Connection, RpcError> {
-        let mut opts = match (cfg.auth_jwt, cfg.auth_seed) {
+    ) -> Result<async_nats::Client, RpcError> {
+        let opts = match (cfg.auth_jwt, cfg.auth_seed) {
             (Some(jwt), Some(seed)) => {
-                let kp = KeyPair::from_seed(&seed)
-                    .map_err(|e| RpcError::ProviderInit(format!("key init: {}", e)))?;
-                anats::Options::with_jwt(
-                    move || Ok(jwt.clone()),
-                    move |nonce| kp.sign(nonce).unwrap(),
-                )
+                let key_pair = std::sync::Arc::new(
+                    KeyPair::from_seed(&seed)
+                        .map_err(|e| RpcError::ProviderInit(format!("key init: {}", e)))?,
+                );
+                async_nats::ConnectOptions::with_jwt(jwt, move |nonce| {
+                    let key_pair = key_pair.clone();
+                    async move { key_pair.sign(&nonce).map_err(async_nats::AuthError::new) }
+                })
             }
-            (None, None) => anats::Options::new(),
+            (None, None) => async_nats::ConnectOptions::default(),
             _ => {
                 return Err(RpcError::InvalidParameter(
                     "must provide both jwt and seed for jwt authentication".into(),
                 ));
             }
         };
-        opts = opts.with_name("wasmCloud nats-messaging provider");
         let url = cfg.cluster_uris.get(0).unwrap();
         let conn = opts
             .connect(url)
@@ -134,19 +133,19 @@ impl NatsMessagingProvider {
 
         for sub in cfg.subscriptions.iter().filter(|s| !s.is_empty()) {
             let (sub, queue) = match sub.split_once('|') {
-                Some((sub, queue)) => (sub, Some(queue)),
+                Some((sub, queue)) => (sub, Some(queue.to_string())),
                 None => (sub.as_str(), None),
             };
-            self.subscribe(&conn, ld, sub, queue).await?;
+            self.subscribe(&conn, ld, sub.to_string(), queue).await?;
         }
         Ok(conn)
     }
 
     /// send message to subscriber
     #[instrument(level = "debug", skip(self, ld, nats_msg), fields(actor_id = %ld.actor_id, subject = %nats_msg.subject, reply_to = ?nats_msg.reply))]
-    async fn dispatch_msg(&self, ld: &LinkDefinition, nats_msg: anats::Message) {
+    async fn dispatch_msg(&self, ld: &LinkDefinition, nats_msg: async_nats::Message) {
         let msg = SubMessage {
-            body: nats_msg.data,
+            body: nats_msg.payload.to_vec(),
             reply_to: nats_msg.reply,
             subject: nats_msg.subject,
         };
@@ -162,14 +161,15 @@ impl NatsMessagingProvider {
     /// Add a regular or queue subscription
     async fn subscribe(
         &self,
-        conn: &anats::Connection,
+        conn: &async_nats::Client,
         ld: &LinkDefinition,
-        sub: &str,
-        queue: Option<&str>,
+        sub: String,
+        queue: Option<String>,
     ) -> RpcResult<()> {
-        let subscription = match queue {
-            Some(queue) => conn.queue_subscribe(sub, queue).await,
-            None => conn.subscribe(sub).await,
+        use futures::StreamExt as _;
+        let mut subscription = match queue {
+            Some(queue) => conn.queue_subscribe(sub.clone(), queue).await,
+            None => conn.subscribe(sub.clone()).await,
         }
         .map_err(|e| {
             error!(subject = %sub, error = %e, "error subscribing subscribing");
@@ -177,16 +177,15 @@ impl NatsMessagingProvider {
         })?;
         let this = self.clone();
         let link_def = ld.clone();
-        let _join_handle = tokio::spawn(
-            async move {
-                while let Some(msg) = subscription.next().await {
-                    this.dispatch_msg(&link_def, msg).await;
-                }
+        let _join_handle = tokio::spawn(async move {
+            while let Some(msg) = subscription.next().await {
+                let span = tracing::debug_span!("subscribe");
+                span.in_scope(|| {
+                    wasmbus_rpc::otel::attach_span_context(&msg);
+                });
+                this.dispatch_msg(&link_def, msg).instrument(span).await;
             }
-            .instrument(
-                tracing::debug_span!("subscription", actor_id = %ld.actor_id, subject = %sub),
-            ),
-        );
+        });
         Ok(())
     }
 }
@@ -213,21 +212,19 @@ impl ProviderHandler for NatsMessagingProvider {
     #[instrument(level = "info", skip(self))]
     async fn delete_link(&self, actor_id: &str) {
         let mut aw = self.actors.write().await;
-        if let Some(conn) = aw.remove(actor_id) {
+        if aw.remove(actor_id).is_some() {
             info!("nats closing connection for actor {}", actor_id);
             // close and drop the connection
-            let _ = conn.close().await;
-        }
+            // dropping the client should close it
+        } // else ignore: it's already been dropped
     }
 
     /// Handle shutdown request by closing all connections
     async fn shutdown(&self) -> Result<(), Infallible> {
         let mut aw = self.actors.write().await;
         // empty the actor link data and stop all servers
-        for (_, conn) in aw.drain() {
-            // close and drop each connection
-            let _ = conn.close().await;
-        }
+        aw.clear();
+        // dropping all connections should send unsubscribes and close the connections.
         Ok(())
     }
 }
@@ -241,20 +238,29 @@ impl Messaging for NatsMessagingProvider {
             .actor
             .as_ref()
             .ok_or_else(|| RpcError::InvalidParameter("no actor in request".to_string()))?;
-        // get read lock on actor-client hashmap
-        let rd = self.actors.read().await;
-        let conn = rd
+        // get read lock on actor-client hashmap to get the connection, then drop it
+        let _rd = self.actors.read().await;
+        let conn = _rd
             .get(actor_id)
-            .ok_or_else(|| RpcError::InvalidParameter(format!("actor not linked:{}", actor_id)))?;
-        match &msg.reply_to {
-            Some(reply_to) => {
-                conn.publish_request(&msg.subject, reply_to, &msg.body)
-                    .await
-            }
-            None => conn.publish(&msg.subject, &msg.body).await,
+            .ok_or_else(|| RpcError::InvalidParameter(format!("actor not linked:{}", actor_id)))?
+            .clone();
+        drop(_rd);
+        let headers = OtelHeaderInjector::default_with_span().into();
+        match msg.reply_to.clone() {
+            Some(reply_to) => conn
+                .publish_with_reply_and_headers(
+                    msg.subject.to_string(),
+                    reply_to,
+                    headers,
+                    msg.body.clone().into(),
+                )
+                .await
+                .map_err(|e| RpcError::Nats(e.to_string())),
+            None => conn
+                .publish_with_headers(msg.subject.to_string(), headers, msg.body.clone().into())
+                .await
+                .map_err(|e| RpcError::Nats(e.to_string())),
         }
-        .map_err(|e| RpcError::Nats(e.to_string()))?;
-        Ok(())
     }
 
     #[instrument(level = "debug", skip(self, ctx, msg), fields(actor_id = ?ctx.actor, subject = %msg.subject))]
@@ -264,22 +270,25 @@ impl Messaging for NatsMessagingProvider {
             .as_ref()
             .ok_or_else(|| RpcError::InvalidParameter("no actor in request".to_string()))?;
         // get read lock on actor-client hashmap
-        let rd = self.actors.read().await;
-        let conn = rd
+        let _rd = self.actors.read().await;
+        let conn = _rd
             .get(actor_id)
-            .ok_or_else(|| RpcError::InvalidParameter(format!("actor not linked:{}", actor_id)))?;
-        let resp = conn
-            .request_timeout(
-                &msg.subject,
-                &msg.body,
-                std::time::Duration::from_millis(msg.timeout_ms as u64),
-            )
-            .await
-            .map_err(|e| RpcError::Nats(e.to_string()))?;
-        Ok(ReplyMessage {
-            body: resp.data,
-            reply_to: resp.reply,
-            subject: resp.subject,
-        })
+            .ok_or_else(|| RpcError::InvalidParameter(format!("actor not linked:{}", actor_id)))?
+            .clone();
+        drop(_rd);
+        match tokio::time::timeout(
+            Duration::from_millis(msg.timeout_ms as u64),
+            conn.request(msg.subject.to_string(), msg.body.clone().into()),
+        )
+        .await
+        {
+            Err(_timeout_err) => Err(RpcError::Timeout("nats request timed out".to_string())),
+            Ok(Err(send_err)) => Err(RpcError::Nats(format!("nats send error: {}", send_err))),
+            Ok(Ok(resp)) => Ok(ReplyMessage {
+                body: resp.payload.to_vec(),
+                reply_to: resp.reply,
+                subject: resp.subject,
+            }),
+        }
     }
 }

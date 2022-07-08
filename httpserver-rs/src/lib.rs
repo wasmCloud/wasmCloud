@@ -41,7 +41,7 @@ use tokio::{
     sync::{oneshot, RwLock},
     task::JoinHandle,
 };
-use tracing::{error, info, instrument, trace, warn};
+use tracing::{error, info, instrument, trace, warn, Instrument};
 use warp::{path::FullPath, Filter};
 use wasmbus_rpc::{common::Context, core::LinkDefinition, error::RpcError, provider::*};
 use wasmcloud_interface_httpserver::{HttpRequest, HttpResponse, HttpServer, HttpServerSender};
@@ -149,7 +149,12 @@ impl HttpServerCore {
                       query: String| {
                     let inner = Arc::clone(&inner);
                     let linkdefs = linkdefs.clone();
-                    tracing::span::Span::current().record("query", &tracing::field::display(&query));
+                    //let tracer = opentelemetry::global::tracer("HttpServer");
+                    let span = tracing::debug_span!("http request");
+                    span.record("method", &tracing::field::display(method.to_string().as_str()));
+                    span.record("path", &tracing::field::display(path.as_str()));
+                    span.record("query", &tracing::field::display(query.as_str()));
+                    //span.record("actor_id", &tracing::field::display(actor_id.as_str()));
                     async move {
                         let hmap = convert_request_headers(&headers);
                         let req = HttpRequest {
@@ -163,9 +168,9 @@ impl HttpServerCore {
                             ?req,
                             "httpserver calling actor"
                         );
-                        let read_guard = inner.read().await;
+                        let read_guard = async { inner.read().await }.in_current_span().await;
                         let bridge = read_guard.bridge;
-                        let response = match Self::send_actor(linkdefs, req, bridge, timeout).await
+                        let response = match async { Self::send_actor(linkdefs, req, bridge, timeout).await }.in_current_span().await
                         {
                             Ok(resp) => resp,
                             Err(e) => {
@@ -256,7 +261,7 @@ impl HttpServerCore {
     }
 
     /// forward HttpRequest to actor.
-    #[instrument(level = "debug", skip(ld, req, bridge), fields(actor_id = %ld.actor_id, path = %req.path))]
+    #[instrument(level = "debug", skip(ld, req, bridge), fields(actor_id = %ld.actor_id))]
     async fn send_actor(
         ld: LinkDefinition,
         req: HttpRequest,

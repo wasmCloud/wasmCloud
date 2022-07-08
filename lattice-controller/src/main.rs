@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tracing::instrument;
 use wascap::prelude::KeyPair;
-use wasmbus_rpc::anats;
 use wasmbus_rpc::provider::prelude::*;
 use wasmcloud_control_interface::*;
 
@@ -121,11 +120,6 @@ impl ConnectionConfig {
 // and returns only when it receives a shutdown message
 //
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .with_ansi(atty::is(atty::Stream::Stderr))
-        .init();
     let hd = load_host_data()?;
     let mut lp = LatticeControllerProvider::default();
 
@@ -145,7 +139,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    provider_start(lp, hd)?;
+    provider_start(lp, hd, Some("Lattice Control Provider".to_string()))?;
 
     eprintln!("Lattice Controller capability provider exiting");
     Ok(())
@@ -161,12 +155,20 @@ struct LatticeControllerProvider {
 
 impl LatticeControllerProvider {
     /// Create a nats connection and a Lattice controller client
-    async fn create_client(&self, config: ConnectionConfig) -> RpcResult<Client> {
+    async fn create_client(
+        &self,
+        config: ConnectionConfig,
+    ) -> RpcResult<wasmcloud_control_interface::Client> {
         let timeout = Duration::from_millis(config.timeout_ms);
         let auction_timeout = Duration::from_millis(config.auction_timeout_ms);
         let lattice_prefix = config.lattice_prefix.clone();
         let conn = connect(config).await?;
-        let client = Client::new(conn, Some(lattice_prefix), timeout, auction_timeout);
+        let client = wasmcloud_control_interface::Client::new(
+            conn,
+            Some(lattice_prefix),
+            timeout,
+            auction_timeout,
+        );
         Ok(client)
     }
 
@@ -184,25 +186,25 @@ impl LatticeControllerProvider {
 }
 
 /// Create a new nats connection
-async fn connect(cfg: ConnectionConfig) -> RpcResult<anats::Connection> {
-    let mut opts = match (cfg.auth_jwt, cfg.auth_seed) {
+async fn connect(cfg: ConnectionConfig) -> RpcResult<async_nats::Client> {
+    let opts = match (cfg.auth_jwt, cfg.auth_seed) {
         (Some(jwt), Some(seed)) => {
-            let kp = KeyPair::from_seed(&seed)
-                .map_err(|e| RpcError::ProviderInit(format!("key init: {}", e)))?;
-
-            anats::Options::with_jwt(
-                move || Ok(jwt.clone()),
-                move |nonce| kp.sign(nonce).unwrap(),
-            )
+            let key_pair = std::sync::Arc::new(
+                KeyPair::from_seed(&seed)
+                    .map_err(|e| RpcError::ProviderInit(format!("key init: {}", e)))?,
+            );
+            async_nats::ConnectOptions::with_jwt(jwt, move |nonce| {
+                let key_pair = key_pair.clone();
+                async move { key_pair.sign(&nonce).map_err(async_nats::AuthError::new) }
+            })
         }
-        (None, None) => anats::Options::default(),
+        (None, None) => async_nats::ConnectOptions::default(),
         _ => {
             return Err(RpcError::InvalidParameter(
                 "must provide both jwt and seed for jwt authentication".into(),
             ));
         }
     };
-    opts = opts.with_name("wasmCloud Lattice Controller provider");
     let url = cfg.cluster_uris.get(0).unwrap();
     let conn = opts
         .connect(url)

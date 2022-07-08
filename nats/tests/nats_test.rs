@@ -1,5 +1,5 @@
 use tokio::sync::oneshot;
-use wasmbus_rpc::{anats, provider::prelude::*};
+use wasmbus_rpc::provider::prelude::*;
 use wasmcloud_interface_messaging::*;
 use wasmcloud_test_util::{
     check,
@@ -27,6 +27,7 @@ async fn run_all() {
 /// test that health check returns healthy
 async fn health_check(_opt: &TestOptions) -> RpcResult<()> {
     let prov = test_provider().await;
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
     // health check
     let hc = prov.health_check().await;
@@ -39,16 +40,20 @@ async fn make_responder(
     topic: String,
     count: usize,
 ) -> (oneshot::Receiver<()>, tokio::task::JoinHandle<usize>) {
+    use futures::StreamExt as _;
     let (tx, rx) = oneshot::channel();
     let join = tokio::spawn(async move {
-        let conn = match anats::Options::default().connect("127.0.0.1:4222").await {
+        let conn = match async_nats::ConnectOptions::default()
+            .connect("127.0.0.1:4222")
+            .await
+        {
             Ok(c) => c,
             Err(e) => {
                 eprintln!("ERROR: failed to connect test responder to nats: {}", e);
                 return 0;
             }
         };
-        let sub = match conn.subscribe(&topic).await {
+        let mut sub = match conn.subscribe(topic).await {
             Err(e) => {
                 eprintln!("ERROR: test failed to subscribe: {}", e);
                 return 0;
@@ -61,9 +66,9 @@ async fn make_responder(
                 None => break,
                 Some(msg) => msg,
             };
-            if let Some(reply) = &msg.reply {
-                let response = format!("{}:{}", completed, &String::from_utf8_lossy(&msg.data));
-                if let Err(e) = conn.publish(reply, response.as_bytes()).await {
+            if let Some(reply) = msg.reply {
+                let response = format!("{}:{}", completed, &String::from_utf8_lossy(&msg.payload));
+                if let Err(e) = conn.publish(reply, response.into_bytes().into()).await {
                     eprintln!("responder failed replying #{}: {}", &completed, e);
                 }
             }
@@ -77,7 +82,7 @@ async fn make_responder(
 async fn send_request(_opt: &TestOptions) -> RpcResult<()> {
     const TEST_SUB_REQ: &str = "test.nats.req";
     let prov = test_provider().await;
-    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
     // create client and ctx
     let client = MessagingSender::via(prov);
@@ -109,7 +114,7 @@ async fn send_request(_opt: &TestOptions) -> RpcResult<()> {
 async fn send_publish(_opt: &TestOptions) -> RpcResult<()> {
     const TEST_SUB_PUB: &str = "test.nats.pub";
     let prov = test_provider().await;
-    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
     // start responder thread
     let (rx, responder) = make_responder(TEST_SUB_PUB.to_string(), 1).await;

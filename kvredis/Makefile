@@ -7,6 +7,7 @@ NAME     = "Redis KeyValue Store"
 VERSION  = $(shell cargo metadata --no-deps --format-version 1 | jq -r '.packages[] .version' | head -1)
 REVISION = 0
 oci_url  = localhost:5000/v2/$(PROJECT):$(VERSION)
+oci_insecure = --insecure
 
 include ../build/makefiles/provider.mk
 

@@ -17,14 +17,12 @@ use tracing::{debug, info, instrument};
 use wasmbus_rpc::provider::prelude::*;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .with_ansi(atty::is(atty::Stream::Stderr))
-        .init();
     // handle lattice control messages and forward rpc to the provider dispatch
     // returns when provider receives a shutdown control message
-    provider_main(KvVaultProvider::default())?;
+    provider_main(
+        KvVaultProvider::default(),
+        Some("KV-Vault Provider".to_string()),
+    )?;
 
     eprintln!("KvVault provider exiting");
     Ok(())
@@ -305,7 +303,7 @@ impl KvVaultProvider {
         let client_rw = rd
             .get(actor_id)
             .ok_or_else(|| RpcError::InvalidParameter(format!("actor not linked:{}", actor_id)))?;
-        let x = Ok(client_rw.read().await.clone());
-        x
+        let client = client_rw.read().await.clone();
+        Ok(client)
     }
 }

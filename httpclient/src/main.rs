@@ -15,13 +15,10 @@ use wasmcloud_interface_httpclient::{HttpClient, HttpClientReceiver, HttpRequest
 // and returns only when it receives a shutdown message
 //
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .with_ansi(atty::is(atty::Stream::Stderr))
-        .init();
-
-    provider_main(HttpClientProvider::default())?;
+    provider_main(
+        HttpClientProvider::default(),
+        Some("HttpClient Provider".to_string()),
+    )?;
 
     eprintln!("HttpClient provider exiting");
     Ok(())

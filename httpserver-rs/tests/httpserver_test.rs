@@ -73,6 +73,7 @@ async fn health_check(_opt: &TestOptions) -> RpcResult<()> {
 /// The thread quits if the number of expected messages has been completed,
 /// or if there was any error.
 async fn mock_echo_actor(num_requests: u32) -> tokio::task::JoinHandle<RpcResult<u32>> {
+    use futures::StreamExt as _;
     use wasmbus_rpc::{
         common::{deserialize, serialize},
         core::Invocation,
@@ -87,13 +88,13 @@ async fn mock_echo_actor(num_requests: u32) -> tokio::task::JoinHandle<RpcResult
             let prov = test_provider().await;
             let topic = rpc_topic(&prov.origin(), &prov.host_data.lattice_rpc_prefix);
             // subscribe() returns a Stream of nats messages
-            let sub = prov
+            let mut sub = prov
                 .nats_client
-                .subscribe(&topic)
+                .subscribe(topic)
                 .await
                 .map_err(|e| RpcError::Nats(e.to_string()))?;
             while let Some(msg) = sub.next().await {
-                let inv: Invocation = deserialize(&msg.data)?;
+                let inv: Invocation = deserialize(&msg.payload)?;
                 if &inv.operation != "HttpServer.HandleRequest" {
                     eprintln!("Unexpected method received by actor: {}", &inv.operation);
                     break;
@@ -125,14 +126,16 @@ async fn mock_echo_actor(num_requests: u32) -> tokio::task::JoinHandle<RpcResult
                     let mut ir = InvocationResponse::default();
                     ir.invocation_id = inv.id;
                     ir.msg = buf;
-                    prov.rpc_client.publish(reply_to, &serialize(&ir)?).await?;
+                    prov.rpc_client
+                        .publish(reply_to.to_string(), serialize(&ir)?)
+                        .await?;
                 }
                 completed += 1;
                 if completed >= num_requests {
                     break;
                 }
             }
-            let _ = sub.close().await;
+            let _ = sub.unsubscribe().await;
             Ok(())
         } {
             eprintln!("mock_actor got error: {}. quitting actor thread", e);

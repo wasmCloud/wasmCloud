@@ -23,14 +23,12 @@ const REDIS_URL_KEY: &str = "URL";
 const DEFAULT_CONNECT_URL: &str = "redis://0.0.0.0:6379/";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .with_ansi(atty::is(atty::Stream::Stderr))
-        .init();
     // handle lattice control messages and forward rpc to the provider dispatch
     // returns when provider receives a shutdown control message
-    provider_main(KvRedisProvider::default())?;
+    provider_main(
+        KvRedisProvider::default(),
+        Some("KeyValue Redis Provider".to_string()),
+    )?;
 
     eprintln!("KVRedis provider exiting");
     Ok(())

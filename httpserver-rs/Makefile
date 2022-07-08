@@ -9,6 +9,7 @@ VERSION  = $(shell cargo metadata --no-deps --format-version 1 | jq -r '.package
 # During development iterations, REVISION should be incremented each build
 REVISION = 0
 oci_url  = localhost:5000/v2/$(PROJECT):$(VERSION)
+oci_insecure = --insecure
 
 include ../build/makefiles/provider.mk
 

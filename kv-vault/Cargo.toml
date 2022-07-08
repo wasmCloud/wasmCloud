@@ -2,7 +2,7 @@
 name = "wasmcloud-provider-kv-vault"
 description = "Hashicorp Vault capability provider for the wasmcloud KeyValue capability contract wasmcloud:keyvalue"
 authors = [ "wasmcloud Team" ]
-version = "0.1.2"
+version = "0.2.0"
 edition = "2021"
 readme = "README.md"
 repository = "https://github.com/wasmcloud/capability-providers"
@@ -19,7 +19,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2.2.2"
 vaultrs = "0.6.0"
-wasmbus-rpc = "0.8.2"
+wasmbus-rpc = { version = "0.9", features = ["otel"] }
 
 [target.'cfg(all(target_arch = "aarch64", target_os = "linux"))'.dependencies]
 # We don't use paste directly, but we pin to a version that works with aarch64-linux
@@ -29,11 +29,11 @@ paste = "=1.0.6"
 [dev-dependencies]
 rand = "0.8"
 env_logger = "0.9"
-wasmcloud-test-util = "0.3.1"
+wasmcloud-test-util = "0.4.0"
 
 [build-dependencies]
 # for local code generation of wasmbus-interface-keyvalue
-weld-codegen = "0.4.2"
+weld-codegen = "0.4.6"
 
 [lib]
 name = "kv_vault_lib"
