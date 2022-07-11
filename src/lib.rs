@@ -393,6 +393,7 @@ impl Client {
             // If a host is found, start brackground request to start provider and return Ack
             let mut error = String::new();
             debug!("start_provider:deferred (no-host) request");
+            let current_span = tracing::Span::current();
             let host = match self.get_hosts().await {
                 Err(e) => {
                     error = format!("failed to query hosts for no-host provider start: {}", e);
@@ -413,9 +414,9 @@ impl Client {
                         annotations,
                         provider_configuration,
                     )
+                    .instrument(current_span)
                     .await;
-                })
-                .instrument(tracing::Span::current());
+                });
             } else if error.is_empty() {
                 error = "No hosts detected in in no-host provider start.".to_string();
             }
