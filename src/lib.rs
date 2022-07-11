@@ -414,7 +414,8 @@ impl Client {
                         provider_configuration,
                     )
                     .await;
-                }).instrument(tracing::Span::current());
+                })
+                .instrument(tracing::Span::current());
             } else if error.is_empty() {
                 error = "No hosts detected in in no-host provider start.".to_string();
             }
