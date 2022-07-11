@@ -171,10 +171,10 @@ async fn get_set_large(_opt: &TestOptions) -> RpcResult<()> {
         .await
         .expect("5MB");
 
-    // 50MB bytes
-    send_receive(&s3, &bucket, 50 * 1024 * 1024, "arr50MB")
+    // 10MB bytes
+    send_receive(&s3, &bucket, 10 * 1024 * 1024, "arr10MB")
         .await
-        .expect("50MB");
+        .expect("10MB");
 
     // clean up
     s3.remove_containers(&ctx, &vec![bucket])

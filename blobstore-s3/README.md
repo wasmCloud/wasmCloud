@@ -11,6 +11,7 @@ from different actors configured with different access roles and policies.
   - `AWS_SECRET_ACCESS_KEY` (required)
   - `AWS_SESSION_TOKEN` (optional)
   - `AWS_REGION` (optional)
+  - `AWS_ENDPOINT` (optional, static endpoint to override for resolving s3. For local testing purposes only, should not be used in production)
 
 - If the credentials are not found in the environment, the following locations are searched:
   - `~/.aws/config`, `~/.aws/credentials` (see [Configuration and credential file settings](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html))
@@ -95,3 +96,25 @@ however, the prefix is not required.
 ## Wish list
 
 - support ifModifiedSince
+
+
+## Running the Tests
+To run `make test` successfully, this provider requires either:
+- AWS configuration (see [Configuration](#Configuration) above)
+- A running s3 replacement like minio
+
+To test locally without AWS configuration, you can run minio with:
+```shell
+docker run -p 9000:9000 --name minio \
+    --env MINIO_ROOT_USER="minioadmin" \
+    --env MINIO_ROOT_PASSWORD="minioadmin" bitnami/minio:latest
+```
+
+Then set your environment variables and run the test
+```shell
+export AWS_REGION=us-east-1
+export AWS_ACCESS_KEY_ID=minioadmin
+export AWS_SECRET_ACCESS_KEY=minioadmin
+export AWS_ENDPOINT=http://localhost:9000
+make test
+```

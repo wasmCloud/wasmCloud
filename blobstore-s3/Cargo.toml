@@ -6,9 +6,10 @@ edition = "2021"
 [dependencies]
 async-trait = "0.1"
 atty = "0.2"
-aws-sdk-s3 = "0.8.0"
-aws-config = "0.8.0"
-aws-types = { version = "0.8.0", features = ["hardcoded-credentials"] }
+aws-sdk-s3 = "0.15.0"
+aws-config = "0.15.0"
+aws-types = { version = "0.15.0", features = ["hardcoded-credentials"] }
+aws-smithy-http = "0.45.0"
 aws-smithy-types = "0.38.0"
 base64 = "0.13"
 bytes = "1.0"

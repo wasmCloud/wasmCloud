@@ -928,10 +928,8 @@ mod test {
     async fn aliases() {
         let mut map = HashMap::new();
         map.insert(format!("{}foo", ALIAS_PREFIX), "bar".to_string());
-        let ld = LinkDefinition {
-            values: map,
-            ..Default::default()
-        };
+        let mut ld = LinkDefinition::default();
+        ld.values = map;
         let client = StorageClient::new(StorageConfig::default(), Some(ld)).await;
 
         // no alias

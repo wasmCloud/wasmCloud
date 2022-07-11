@@ -23,7 +23,7 @@ run:
 ifeq ($(shell nc -zt -w1 127.0.0.1 4222 || echo fail),fail)
 test::
 	@killall blobstore-s3 || true
-	docker run --rm -d --name s3-provider-test -p 127.0.0.1:4222:4222 nats:2.7.2 -js
+	docker run --rm -d --name s3-provider-test -p 127.0.0.1:4222:4222 nats:2.8.4-alpine -js
 	RUST_BACKTRACE=1 RUST_LOG=debug cargo test $(RELEASE) -- --nocapture
 	docker stop s3-provider-test
 else

@@ -3,6 +3,7 @@
 //! See README.md for configuration options using environment variables, aws credentials files,
 //! and EC2 IAM authorizations.
 //!
+use aws_smithy_http::endpoint::Endpoint;
 use aws_types::{
     config::Config as AwsConfig, credentials::SharedCredentialsProvider, region::Region,
 };
@@ -28,6 +29,8 @@ pub struct StorageConfig {
     pub max_attempts: Option<u32>,
     /// optional configuration for STS Assume Role
     pub sts_config: Option<StsAssumeRoleConfig>,
+    /// optional override for the AWS endpoint
+    pub endpoint: Option<String>,
     /// optional map of bucket aliases to names
     #[serde(default)]
     pub aliases: HashMap<String, String>,
@@ -83,6 +86,10 @@ impl StorageConfig {
             }
             config.sts_config = Some(sts_config);
         }
+
+        if let Ok(endpoint) = env::var("AWS_ENDPOINT") {
+            config.endpoint = Some(endpoint)
+        }
         // aliases are added from linkdefs in StorageClient::new()
         Ok(config)
     }
@@ -134,10 +141,19 @@ impl StorageConfig {
         if let Some(max_attempts) = self.max_attempts {
             retry_config = retry_config.with_max_attempts(max_attempts);
         }
-        let loader = aws_config::from_env()
+        let mut loader = aws_config::from_env()
             .region(region)
             .credentials_provider(cred_provider)
             .retry_config(retry_config);
+
+        if let Some(endpoint) = self.endpoint {
+            if let Ok(parsed_endpoint) = endpoint.parse() {
+                loader = loader.endpoint_resolver(Endpoint::immutable(parsed_endpoint));
+            } else {
+                tracing::warn!("Endpoint {} could not be parsed, ignoring", endpoint);
+            }
+        }
+
         loader.load().await
     }
 }

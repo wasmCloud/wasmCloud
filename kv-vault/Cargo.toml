@@ -35,10 +35,11 @@ wasmcloud-test-util = "0.4.0"
 # for local code generation of wasmbus-interface-keyvalue
 weld-codegen = "0.4.6"
 
-[lib]
-name = "kv_vault_lib"
-path = "src/lib.rs"
-
 [[bin]]
 name = "kv-vault"
 path = "src/main.rs"
+
+
+[lib]
+name = "kv_vault_lib"
+path = "src/lib.rs"
