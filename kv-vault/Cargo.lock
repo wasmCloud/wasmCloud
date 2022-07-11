@@ -2940,9 +2940,9 @@ dependencies = [
 
 [[package]]
 name = "wasmbus-rpc"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2df664ef8e11410284657147b78e8172d119839b23b27c71a4eca6b0be083d21"
+checksum = "b48e60b5648e8137a8fea7342f33d885cd693bbb6ddbb68272070691ed8029e7"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -2999,7 +2999,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-kv-vault"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "atty",

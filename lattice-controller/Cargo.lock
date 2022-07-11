@@ -3044,9 +3044,9 @@ dependencies = [
 
 [[package]]
 name = "wasmbus-rpc"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2df664ef8e11410284657147b78e8172d119839b23b27c71a4eca6b0be083d21"
+checksum = "b48e60b5648e8137a8fea7342f33d885cd693bbb6ddbb68272070691ed8029e7"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -3087,9 +3087,9 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-control-interface"
-version = "0.16.0"
+version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "477db429a1bfde9d87076bbbc0e2cf10f701779d893373a9380c0f0b06184325"
+checksum = "0709ca1aa946336da2582e1422e2df0b44be458e98768d13ea415ba9490b216b"
 dependencies = [
  "async-nats",
  "async-trait",
@@ -3102,6 +3102,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+ "tracing-futures",
  "uuid 1.1.2",
  "wascap",
  "wasmbus-rpc",
@@ -3110,9 +3111,9 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-interface-lattice-control"
-version = "0.12.0"
+version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "29cc0545a84030c8194e97ee7417ca8e59104f721f4521b64449004c6852b204"
+checksum = "efabb0277fca7ef91b340ec0a2de0b7208645747f91951000c3f8ecd89d27ce3"
 dependencies = [
  "async-trait",
  "data-encoding",
@@ -3142,7 +3143,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-lattice-controller"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "async-nats",
  "async-trait",
