@@ -2,7 +2,7 @@
 name = "wasmcloud-provider-kv-vault"
 description = "Hashicorp Vault capability provider for the wasmcloud KeyValue capability contract wasmcloud:keyvalue"
 authors = [ "wasmcloud Team" ]
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 readme = "README.md"
 repository = "https://github.com/wasmcloud/capability-providers"
