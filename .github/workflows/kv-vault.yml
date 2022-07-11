@@ -86,7 +86,7 @@ jobs:
 
       - name: Determine artifact name
         run: |
-          echo "artifact-name=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].targets[0].name')" >> $GITHUB_ENV
+          echo "artifact-name=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].targets[1].name')" >> $GITHUB_ENV
         working-directory: ${{ env.working-directory }}
 
       - name: Build native executable
