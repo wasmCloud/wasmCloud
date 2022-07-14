@@ -32,7 +32,11 @@ async fn main() -> Result<()> {
 
     println!("Subscribing to {}", &args.subject);
 
-    let mut sub = client.client().subscribe(args.subject).await?;
+    let mut sub = client
+        .client()
+        .subscribe(args.subject)
+        .await
+        .map_err(|e| anyhow!("subscribe error: {}", e))?;
     while let Some(msg) = sub.next().await {
         println!("{}", String::from_utf8_lossy(&msg.payload));
     }

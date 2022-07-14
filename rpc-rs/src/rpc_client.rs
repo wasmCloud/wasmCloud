@@ -478,6 +478,12 @@ impl RpcClient {
             }
         })
         .await?;
+        let nc = self.client();
+        tokio::spawn(async move {
+            if let Err(error) = nc.flush().await {
+                error!(%error, "flush after publish");
+            }
+        });
         Ok(())
     }
 
@@ -524,6 +530,12 @@ impl RpcClient {
                         "failed sending rpc response",
                     );
                 }
+                let nc = self.client();
+                tokio::spawn(async move {
+                    if let Err(error) = nc.flush().await {
+                        error!(%error, "flush after publishing invocation response");
+                    }
+                });
             }
             Err(e) => {
                 // extremely unlikely that InvocationResponse would fail to serialize
