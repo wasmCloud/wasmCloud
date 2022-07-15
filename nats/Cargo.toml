@@ -1,10 +1,10 @@
 [package]
 name = "wasmcloud-provider-nats"
-version = "0.14.1"
+version = "0.14.2"
 edition = "2021"
 
 [dependencies]
-async-nats = "0.15.0"
+async-nats = "0.17.0"
 async-trait = "0.1"
 atty = "0.2"
 base64 = "0.13"
