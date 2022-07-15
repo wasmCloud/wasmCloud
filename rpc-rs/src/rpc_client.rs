@@ -644,7 +644,6 @@ pub fn with_connection_event_logging(
     .reconnect_callback(|| async { info!("nats connection has been reestablished.") })
     .error_callback(|error| async move { error!(%error, "nats connection encountered error ") })
     .lame_duck_callback(|| async { warn!("nats connection has entered lame duck mode") })
-    .ping_interval(Duration::from_secs(17))
 }
 
 #[derive(Clone)]
