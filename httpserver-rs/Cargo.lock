@@ -82,9 +82,9 @@ dependencies = [
 
 [[package]]
 name = "async-nats"
-version = "0.15.0"
+version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23f02c8b692d7eea2cfcdf58b43031b163efd93aa99c01d2a9e796168d37dcf1"
+checksum = "5b7a978fbbf815c3dc2e36be3af06eadd69182c299a71eacfed7529c7c5b0778"
 dependencies = [
  "base64-url",
  "bytes",
@@ -95,6 +95,7 @@ dependencies = [
  "nuid",
  "once_cell",
  "regex",
+ "rustls-native-certs 0.6.2",
  "rustls-pemfile 0.3.0",
  "serde",
  "serde_json",
@@ -106,7 +107,6 @@ dependencies = [
  "tokio-rustls 0.23.4",
  "tokio-util 0.7.3",
  "url",
- "webpki-roots",
 ]
 
 [[package]]
@@ -1324,9 +1324,9 @@ dependencies = [
 
 [[package]]
 name = "nats"
-version = "0.20.1"
+version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "25a916657662da9799246f1ac8dda022c48c4d1c97a9208121ffecc658cef20f"
+checksum = "4f42b51fc2560ec17f242ca715a3ece4e97704e6d798162b91f99c3cabef8980"
 dependencies = [
  "base64",
  "base64-url",
@@ -1345,7 +1345,7 @@ dependencies = [
  "parking_lot",
  "regex",
  "rustls 0.19.1",
- "rustls-native-certs",
+ "rustls-native-certs 0.5.0",
  "rustls-pemfile 0.2.1",
  "serde",
  "serde_json",
@@ -2068,6 +2068,18 @@ checksum = "5a07b7c1885bd8ed3831c289b7870b13ef46fe0e856d288c30d9cc17d75a2092"
 dependencies = [
  "openssl-probe",
  "rustls 0.19.1",
+ "schannel",
+ "security-framework",
+]
+
+[[package]]
+name = "rustls-native-certs"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0167bac7a9f490495f3c33013e7722b53cb087ecbe082fb0c6387c96f634ea50"
+dependencies = [
+ "openssl-probe",
+ "rustls-pemfile 1.0.0",
  "schannel",
  "security-framework",
 ]
@@ -3141,9 +3153,9 @@ dependencies = [
 
 [[package]]
 name = "wasmbus-rpc"
-version = "0.9.1"
+version = "0.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b48e60b5648e8137a8fea7342f33d885cd693bbb6ddbb68272070691ed8029e7"
+checksum = "7b9100d3016021468b0687561010f666679c1364e9367889b0b118827e46685e"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -3214,7 +3226,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-httpserver"
-version = "0.16.1"
+version = "0.16.2"
 dependencies = [
  "assert_matches",
  "async-trait",
@@ -3243,9 +3255,9 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-test-util"
-version = "0.4.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e36bde37f146a2902def5b47c19c633c2ffbf6d078b7f0143815a45e581f3aeb"
+checksum = "fd40034ec8efead88765601b57ae04430289a8ba2c1bb4d4208daea5a99a2337"
 dependencies = [
  "anyhow",
  "async-nats",
