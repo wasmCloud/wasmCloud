@@ -3,7 +3,7 @@ pub use wasmcloud_interface_lattice_control::*;
 mod sub_stream;
 
 use cloudevents::event::Event;
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{collections::HashMap, time::Duration};
 use sub_stream::collect_timeout;
 use tokio::sync::mpsc::Receiver;
@@ -67,17 +67,7 @@ impl Client {
     pub async fn get_hosts(&self) -> Result<Vec<Host>> {
         let subject = broker::queries::hosts(&self.nsprefix);
         debug!("get_hosts:publish {}", &subject);
-        let reply = self.nc.new_inbox();
-        let sub = self.nc.subscribe(reply.clone()).await?;
-        self.nc
-            .publish_with_reply_and_headers(
-                subject,
-                reply,
-                OtelHeaderInjector::default_with_span().into(),
-                Vec::new().into(),
-            )
-            .await?;
-        Ok(collect_timeout::<Host>(sub, self.auction_timeout, "hosts").await)
+        self.publish_and_wait(subject, Vec::new()).await
     }
 
     /// Retrieves the contents of a running host
@@ -125,17 +115,7 @@ impl Client {
             constraints,
         })?;
         debug!("actor_auction:publish {}", &subject);
-        let reply = self.nc.new_inbox();
-        let sub = self.nc.subscribe(reply.clone()).await?;
-        self.nc
-            .publish_with_reply_and_headers(
-                subject,
-                reply,
-                OtelHeaderInjector::default_with_span().into(),
-                bytes.into(),
-            )
-            .await?;
-        Ok(collect_timeout(sub, self.auction_timeout, "actor").await)
+        self.publish_and_wait(subject, bytes).await
     }
 
     /// Performs a provider auction within the lattice, publishing a set of constraints and the metadata for the provider
@@ -156,17 +136,7 @@ impl Client {
             constraints,
         })?;
         debug!("provider_auction:publish {}", &subject);
-        let reply = self.nc.new_inbox();
-        let sub = self.nc.subscribe(reply.clone()).await?;
-        self.nc
-            .publish_with_reply_and_headers(
-                subject,
-                reply,
-                OtelHeaderInjector::default_with_span().into(),
-                bytes.into(),
-            )
-            .await?;
-        Ok(collect_timeout(sub, self.auction_timeout, "provider").await)
+        self.publish_and_wait(subject, bytes).await
     }
 
     /// Sends a request to the given host to start a given actor by its OCI reference. This returns an acknowledgement
@@ -514,6 +484,30 @@ impl Client {
             }
             Err(e) => Err(format!("Did not receive stop host acknowledgement: {}", e).into()),
         }
+    }
+
+    async fn publish_and_wait<T: DeserializeOwned>(
+        &self,
+        subject: String,
+        payload: Vec<u8>,
+    ) -> Result<Vec<T>> {
+        let reply = self.nc.new_inbox();
+        let sub = self.nc.subscribe(reply.clone()).await?;
+        self.nc
+            .publish_with_reply_and_headers(
+                subject.clone(),
+                reply,
+                OtelHeaderInjector::default_with_span().into(),
+                payload.into(),
+            )
+            .await?;
+        let nc = self.nc.clone();
+        tokio::spawn(async move {
+            if let Err(error) = nc.flush().await {
+                error!(%error, "flush after publish");
+            }
+        });
+        Ok(collect_timeout::<T>(sub, self.auction_timeout, subject.as_str()).await)
     }
 
     /// Returns the receiver end of a channel that subscribes to the lattice control event stream.

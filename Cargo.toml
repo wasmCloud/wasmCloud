@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-control-interface"
-version = "0.16.1"
+version = "0.16.2"
 authors = ["wasmCloud Team"]
 edition = "2021"
 homepage = "https://wasmcloud.dev"
@@ -14,7 +14,7 @@ categories = ["wasm", "api-bindings"]
 
 [dependencies]
 async-trait = "0.1"
-async-nats = "0.15.0"
+async-nats = "0.17.0"
 data-encoding = "2.3.1"
 cloudevents-sdk = "0.4.0"
 futures = "0.3"
