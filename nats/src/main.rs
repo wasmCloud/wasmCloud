@@ -3,8 +3,8 @@
 use std::{collections::HashMap, convert::Infallible, sync::Arc, time::Duration};
 
 use serde::{Deserialize, Serialize};
-use tokio::sync::RwLock;
-use tracing::{error, info, instrument};
+use tokio::sync::{OwnedSemaphorePermit, RwLock, Semaphore};
+use tracing::{error, info, instrument, warn};
 use tracing_futures::Instrument;
 use wascap::prelude::KeyPair;
 use wasmbus_rpc::{core::LinkDefinition, otel::OtelHeaderInjector, provider::prelude::*};
@@ -141,23 +141,6 @@ impl NatsMessagingProvider {
         Ok(conn)
     }
 
-    /// send message to subscriber
-    #[instrument(level = "debug", skip(self, ld, nats_msg), fields(actor_id = %ld.actor_id, subject = %nats_msg.subject, reply_to = ?nats_msg.reply))]
-    async fn dispatch_msg(&self, ld: &LinkDefinition, nats_msg: async_nats::Message) {
-        let msg = SubMessage {
-            body: nats_msg.payload.to_vec(),
-            reply_to: nats_msg.reply,
-            subject: nats_msg.subject,
-        };
-        let actor = MessageSubscriberSender::for_actor(ld);
-        if let Err(e) = actor.handle_message(&Context::default(), &msg).await {
-            error!(
-                error = %e,
-                "Unable to send subscription"
-            );
-        }
-    }
-
     /// Add a regular or queue subscription
     async fn subscribe(
         &self,
@@ -175,18 +158,52 @@ impl NatsMessagingProvider {
             error!(subject = %sub, error = %e, "error subscribing subscribing");
             RpcError::Nats(format!("subscription to {}: {}", sub, e))
         })?;
-        let this = self.clone();
-        let link_def = ld.clone();
+        let link_def = ld.to_owned();
         let _join_handle = tokio::spawn(async move {
+            // MAGIC NUMBER: Based on our benchmark testing, this seems to be a good upper limit
+            // where we start to get diminishing returns. We can consider making this
+            // configurable down the line.
+            // NOTE (thomastaylor312): It may be better to have a semaphore pool on the
+            // NatsMessagingProvider struct that has a global limit of permits so that we don't end
+            // up with 20 subscriptions all getting slammed with up to 75 tasks, but we should wait
+            // to do anything until we see what happens with real world usage and benchmarking
+            let semaphore = Arc::new(Semaphore::new(75));
             while let Some(msg) = subscription.next().await {
-                let span = tracing::debug_span!("subscribe");
+                let span = tracing::debug_span!("handle_message", actor_id = %link_def.actor_id);
                 span.in_scope(|| {
                     wasmbus_rpc::otel::attach_span_context(&msg);
                 });
-                this.dispatch_msg(&link_def, msg).instrument(span).await;
+                let permit = match semaphore.clone().acquire_owned().await {
+                    Ok(p) => p,
+                    Err(_) => {
+                        warn!("Work pool has been closed, exiting queue subscribe");
+                        break;
+                    }
+                };
+                tokio::spawn(dispatch_msg(link_def.clone(), msg, permit).instrument(span));
             }
         });
         Ok(())
+    }
+}
+
+#[instrument(level = "debug", skip_all, fields(actor_id = %link_def.actor_id, subject = %nats_msg.subject, reply_to = ?nats_msg.reply))]
+async fn dispatch_msg(
+    link_def: LinkDefinition,
+    nats_msg: async_nats::Message,
+    _permit: OwnedSemaphorePermit,
+) {
+    let msg = SubMessage {
+        body: nats_msg.payload.to_vec(),
+        reply_to: nats_msg.reply,
+        subject: nats_msg.subject,
+    };
+    let actor = MessageSubscriberSender::for_actor(&link_def);
+    if let Err(e) = actor.handle_message(&Context::default(), &msg).await {
+        error!(
+            error = %e,
+            "Unable to send subscription"
+        );
     }
 }
 

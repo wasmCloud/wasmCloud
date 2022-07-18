@@ -12,7 +12,7 @@ include ../build/makefiles/provider.mk
 
 ifeq ($(shell nc -czt -w1 127.0.0.1 4222 || echo fail),fail)
 test::
-	docker run --rm -d --name nats-provider-test -p 127.0.0.1:4222:4222 nats:2.6 -js
+	docker run --rm -d --name nats-provider-test -p 127.0.0.1:4222:4222 nats:2.8 -js
 	cargo test -- --nocapture
 	docker stop nats-provider-test
 else
