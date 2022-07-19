@@ -7,10 +7,10 @@ use crate::{
     util::{CommandOutput, OutputKind, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT},
 };
 use anyhow::{bail, Result};
+use async_nats::Client;
 use clap::{Args, Subcommand};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use wasmbus_rpc::anats::Connection;
 
 mod output;
 
@@ -335,7 +335,7 @@ fn write_model(model: ModelDetails) -> Result<(PathBuf, PathBuf)> {
     Ok((raw_buf, json_buf))
 }
 
-async fn nats_client_from_opts(opts: ConnectionOpts) -> Result<(Connection, Duration)> {
+async fn nats_client_from_opts(opts: ConnectionOpts) -> Result<(Client, Duration)> {
     // Attempt to load a context, falling back on the default if not supplied
     let ctx = if let Some(context) = opts.context {
         load_context(&context).ok()
@@ -381,7 +381,7 @@ async fn nats_client_from_opts(opts: ConnectionOpts) -> Result<(Connection, Dura
         crate::util::nats_client_from_opts(&ctl_host, &ctl_port, ctl_jwt, ctl_seed, ctl_credsfile)
             .await?;
 
-    let timeout = Duration::from_millis(opts.ack_timeout_ms);
+    let timeout = Duration::from_millis(opts.timeout_ms);
 
     Ok((nc, timeout))
 }
@@ -433,12 +433,17 @@ async fn raw_request(
     let (nc, timeout) = nats_client_from_opts(opts.clone()).await?;
     let topic = generate_topic(opts.lattice_prefix, elements);
 
-    let res = nc.request_timeout(&topic, req, timeout).await?;
-    let env: WadmEnvelope = serde_json::from_slice(&res.data)?;
-    if env.result == "success" {
-        Ok(env.data)
-    } else {
-        bail!("{}", env.message.unwrap_or_else(|| "".to_string()))
+    match tokio::time::timeout(timeout, nc.request(topic, req.to_vec().into())).await {
+        Ok(Ok(res)) => {
+            let env: WadmEnvelope = serde_json::from_slice(&res.payload)?;
+            if env.result == "success" {
+                Ok(env.data)
+            } else {
+                bail!("{}", env.message.unwrap_or_else(|| "".to_string()))
+            }
+        }
+        Ok(Err(e)) => bail!("Error making message request: {}", e),
+        Err(e) => bail!("Request timed out:  {}", e),
     }
 }
 

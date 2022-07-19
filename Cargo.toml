@@ -1,6 +1,6 @@
 [package]
 name = "wash-cli"
-version = "0.11.0"
+version = "0.12.0-alpha.1"
 authors = ["wasmCloud Team"]
 categories = ["wasm", "command-line-utilities"]
 description = "wasmcloud Shell (wash) CLI tool"
@@ -15,6 +15,7 @@ maintenance = {status = "actively-developed"}
 
 [dependencies]
 anyhow = "1.0.51"
+async-nats = "0.17.0"
 atelier_core = "0.2"
 bytes = "1.0"
 cargo_atelier = "0.2"
@@ -52,15 +53,14 @@ thiserror = "1.0"
 tokio = {version = "1", features = ["full"]}
 toml = "0.5"
 walkdir = "2.3"
-wascap = "0.8.0"
-wasmcloud-control-interface = "0.14.0"
-wasmbus-rpc = "0.8.5"
-
-wasmcloud-test-util = "0.3.3"
-weld-codegen = "0.4.5"
 which = "4.2.2"
-crossbeam-channel = "0.5.2"
 cloudevents-sdk = "0.4.0"
+
+wascap = "0.8.0"
+weld-codegen = "0.4.6"
+wasmcloud-control-interface = "0.16.2"
+wasmbus-rpc = "0.9"
+wasmcloud-test-util = "0.4.1"
 
 [dev-dependencies]
 reqwest = {version = "0.11", default-features = false, features = ["json", "rustls-tls"]}

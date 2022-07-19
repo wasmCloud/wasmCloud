@@ -1,7 +1,7 @@
 use anyhow::{anyhow, bail, Result};
 use cloudevents::{event::Event, AttributesReader};
-use crossbeam_channel::Receiver;
 use std::time::{Duration, Instant};
+use tokio::sync::mpsc::Receiver;
 
 /// Uses the NATS reciever to read events being published to the wasmCloud lattice event subject, up until the given timeout duration.
 ///
@@ -13,8 +13,8 @@ use std::time::{Duration, Instant};
 /// If the timeout is reached or another error occurs, the `Err` variant of the `Result` will be returned.
 ///
 /// You can use the generics in `EventCheckOutcome` and `FindEventOutcome` to return any data from the event out of your `check_function`.
-fn find_event<T>(
-    receiver: &Receiver<Event>,
+async fn find_event<T>(
+    receiver: &mut Receiver<Event>,
     timeout: Duration,
     check_function: impl Fn(Event) -> Result<EventCheckOutcome<T>>,
 ) -> Result<FindEventOutcome<T>> {
@@ -25,16 +25,30 @@ fn find_event<T>(
             bail!("Timeout waiting for event");
         }
 
-        let event = receiver.recv_timeout(timeout - elapsed)?;
+        match tokio::time::timeout(timeout - elapsed, receiver.recv()).await {
+            Ok(Some(event)) => {
+                let outcome = check_function(event)?;
 
-        let outcome = check_function(event)?;
-
-        match outcome {
-            EventCheckOutcome::Success(success_data) => {
-                return Ok(FindEventOutcome::Success(success_data))
+                match outcome {
+                    EventCheckOutcome::Success(success_data) => {
+                        return Ok(FindEventOutcome::Success(success_data))
+                    }
+                    EventCheckOutcome::Failure(e) => return Ok(FindEventOutcome::Failure(e)),
+                    EventCheckOutcome::NotApplicable => continue,
+                }
             }
-            EventCheckOutcome::Failure(e) => return Ok(FindEventOutcome::Failure(e)),
-            EventCheckOutcome::NotApplicable => continue,
+            Err(_e) => {
+                return Ok(FindEventOutcome::Failure(anyhow!(
+                    "Timed out waiting for applicable event, operation may have failed"
+                )))
+            }
+            // Should only happen due to an internal failure with the events receiver
+            Ok(None) => {
+                return Ok(FindEventOutcome::Failure(anyhow!(
+                    "Channel dropped before event was received, please report this at https://github.com/wasmCloud/wash/issues with details to reproduce"
+                )))
+            }
+
         }
     }
 }
@@ -61,8 +75,8 @@ enum EventCheckOutcome<T> {
 /// with the `FindEventOutcome` enum containing the success or failure state of the event.
 ///
 /// If the timeout is reached or another error occurs, the `Err` variant of the `Result` will be returned.
-pub(crate) fn wait_for_actor_start_event(
-    receiver: &Receiver<Event>,
+pub(crate) async fn wait_for_actor_start_event(
+    receiver: &mut Receiver<Event>,
     timeout: Duration,
     host_id: String,
     actor_ref: String,
@@ -105,7 +119,7 @@ pub(crate) fn wait_for_actor_start_event(
         Ok(EventCheckOutcome::NotApplicable)
     };
 
-    let event = find_event(receiver, timeout, check_function)?;
+    let event = find_event(receiver, timeout, check_function).await?;
     Ok(event)
 }
 
@@ -115,8 +129,8 @@ pub(crate) fn wait_for_actor_start_event(
 /// with the `FindEventOutcome` enum containing the success or failure state of the event.
 ///
 /// If the timeout is reached or another error occurs, the `Err` variant of the `Result` will be returned.
-pub fn wait_for_provider_start_event(
-    receiver: &Receiver<Event>,
+pub async fn wait_for_provider_start_event(
+    receiver: &mut Receiver<Event>,
     timeout: Duration,
     host_id: String,
     provider_ref: String,
@@ -160,7 +174,7 @@ pub fn wait_for_provider_start_event(
         Ok(EventCheckOutcome::NotApplicable)
     };
 
-    let event = find_event(receiver, timeout, check_function)?;
+    let event = find_event(receiver, timeout, check_function).await?;
     Ok(event)
 }
 
@@ -170,8 +184,8 @@ pub fn wait_for_provider_start_event(
 /// with the `FindEventOutcome` enum containing the success or failure state of the event.
 ///
 /// If the timeout is reached or another error occurs, the `Err` variant of the `Result` will be returned.
-pub fn wait_for_provider_stop_event(
-    receiver: &Receiver<Event>,
+pub async fn wait_for_provider_stop_event(
+    receiver: &mut Receiver<Event>,
     timeout: Duration,
     host_id: String,
     provider_id: String,
@@ -216,7 +230,7 @@ pub fn wait_for_provider_stop_event(
         Ok(EventCheckOutcome::NotApplicable)
     };
 
-    let event = find_event(receiver, timeout, check_function)?;
+    let event = find_event(receiver, timeout, check_function).await?;
     Ok(event)
 }
 
@@ -226,8 +240,8 @@ pub fn wait_for_provider_stop_event(
 /// with the `FindEventOutcome` enum containing the success or failure state of the event.
 ///
 /// If the timeout is reached or another error occurs, the `Err` variant of the `Result` will be returned.
-pub fn wait_for_actor_stop_event(
-    receiver: &Receiver<Event>,
+pub async fn wait_for_actor_stop_event(
+    receiver: &mut Receiver<Event>,
     timeout: Duration,
     host_id: String,
     actor_id: String,
@@ -270,7 +284,7 @@ pub fn wait_for_actor_stop_event(
         Ok(EventCheckOutcome::NotApplicable)
     };
 
-    let event = find_event(receiver, timeout, check_function)?;
+    let event = find_event(receiver, timeout, check_function).await?;
     Ok(event)
 }
 

@@ -5,12 +5,12 @@ use std::{
     str::FromStr,
 };
 use term_table::{Table, TableStyle};
-use wasmbus_rpc::anats;
 
 pub const DEFAULT_NATS_HOST: &str = "127.0.0.1";
 pub const DEFAULT_NATS_PORT: &str = "4222";
 pub const DEFAULT_LATTICE_PREFIX: &str = "default";
 pub const DEFAULT_NATS_TIMEOUT_MS: u64 = 2_000;
+pub const DEFAULT_START_ACTOR_TIMEOUT_MS: u64 = 5_000;
 pub const DEFAULT_START_PROVIDER_TIMEOUT_MS: u64 = 60_000;
 
 /// Used for displaying human-readable output vs JSON format
@@ -227,35 +227,32 @@ pub(crate) async fn nats_client_from_opts(
     jwt: Option<String>,
     seed: Option<String>,
     credsfile: Option<PathBuf>,
-) -> Result<anats::Connection> {
+) -> Result<async_nats::Client> {
     let nats_url = format!("{}:{}", host, port);
+    use async_nats::ConnectOptions;
 
     let nc = if let Some(jwt_file) = jwt {
         let jwt_contents = extract_arg_value(&jwt_file)?;
-        let kp = if let Some(seed) = seed {
+        let kp = std::sync::Arc::new(if let Some(seed) = seed {
             nkeys::KeyPair::from_seed(&extract_arg_value(&seed)?)?
         } else {
             nkeys::KeyPair::new_user()
-        };
+        });
 
         // You must provide the JWT via a closure
-        anats::Options::with_jwt(
-            move || Ok(jwt_contents.clone()),
-            move |nonce| kp.sign(nonce).unwrap(),
-        )
+        async_nats::ConnectOptions::with_jwt(jwt_contents, move |nonce| {
+            let key_pair = kp.clone();
+            async move { key_pair.sign(&nonce).map_err(async_nats::AuthError::new) }
+        })
         .connect(&nats_url)
         .await?
-    } else if let Some(seed) = seed {
-        let kp = nkeys::KeyPair::from_seed(&extract_arg_value(&seed)?)?;
-        anats::Options::with_nkey(&kp.public_key(), move |nonce| kp.sign(nonce).unwrap())
-            .connect(&nats_url)
-            .await?
     } else if let Some(credsfile_path) = credsfile {
-        anats::Options::with_credentials(credsfile_path)
+        ConnectOptions::with_credentials_file(credsfile_path)
+            .await?
             .connect(&nats_url)
             .await?
     } else {
-        anats::connect(&nats_url).await?
+        async_nats::connect(&nats_url).await?
     };
     Ok(nc)
 }
