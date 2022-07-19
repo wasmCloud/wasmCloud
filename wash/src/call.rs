@@ -153,12 +153,18 @@ pub(crate) async fn handle_call(cmd: CallCommand) -> Result<Vec<u8>> {
         &cmd.operation, &payload
     );
     let bytes = json_str_to_msgpack_bytes(&payload)?;
+    let lattice_prefix = cmd
+        .opts
+        .lattice_prefix
+        .clone()
+        .unwrap_or_else(|| DEFAULT_LATTICE_PREFIX.to_string());
 
     let (client, timeout_ms) = rpc_client_from_opts(cmd.opts, cmd.cluster_seed).await?;
     Ok(client
         .send_timeout(
             origin,
             target,
+            &lattice_prefix,
             Message {
                 method: &cmd.operation,
                 arg: bytes.into(),
@@ -231,12 +237,6 @@ async fn rpc_client_from_opts(
     // Determine connection parameters, taking explicitly provided flags,
     // then provided context values, lastly using defaults
 
-    let lattice_prefix = opts.lattice_prefix.unwrap_or_else(|| {
-        ctx.as_ref()
-            .map(|c| c.rpc_lattice_prefix.clone())
-            .unwrap_or_else(|| DEFAULT_LATTICE_PREFIX.to_string())
-    });
-
     let rpc_host = opts.rpc_host.unwrap_or_else(|| {
         ctx.as_ref()
             .map(|c| c.rpc_host.clone())
@@ -291,10 +291,11 @@ async fn rpc_client_from_opts(
     Ok((
         RpcClient::new(
             nc,
-            &lattice_prefix,
-            nkeys::KeyPair::from_seed(&extract_arg_value(cluster_seed.as_ref())?)?,
             WASH_HOST_ID.to_string(),
             Some(Duration::from_millis(opts.timeout_ms)),
+            std::sync::Arc::new(nkeys::KeyPair::from_seed(&extract_arg_value(
+                cluster_seed.as_ref(),
+            )?)?),
         ),
         opts.timeout_ms,
     ))
