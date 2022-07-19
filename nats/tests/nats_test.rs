@@ -124,7 +124,7 @@ async fn send_publish(_opt: &TestOptions) -> RpcResult<()> {
     let client = MessagingSender::via(prov);
     let ctx = Context::default();
 
-    let _ = client
+    client
         .publish(
             &ctx,
             &PubMessage {
