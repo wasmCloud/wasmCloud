@@ -10,6 +10,7 @@ docker-compose.yml
 
 # Files created during tests
 /tests/fixtures
+/tmp/
 
 # ide
 .idea

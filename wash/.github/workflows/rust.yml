@@ -14,27 +14,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-20.04, windows-2019, macos-10.15]
-        include:
-          - os: ubuntu-20.04
-            test-options: '--no-fail-fast --bin wash --test "integration*"'
-            name: 'Unit and integration tests'
-          - os: windows-2019
-            test-options: '--no-fail-fast --bin wash'
-            name: 'Unit tests'
-          - os: macos-10.15
-            test-options: '--no-fail-fast --bin wash'
-            name: 'Unit tests'
+        os: [ubuntu-20.04, windows-2022, macos-11]
     runs-on: ${{ matrix.os }}
     steps:
-    - uses: actions/checkout@v2
-    - name: Launch integration test services
-      if: ${{ startswith(matrix.os, 'ubuntu') }}
-      uses: sudo-bot/action-docker-compose@latest
-      with:
-        cli-args: "-f ./tools/docker-compose.yml up --detach"
-    - id: rust-check-action
-      name: ${{ matrix.name }}
-      uses: wasmcloud/common-actions/rust-check@main
-      with:
-        test-options: ${{ matrix.test-options }}
+      - uses: actions/checkout@v2
+      - name: Run Rust check + clippy
+        run: make rust-check
+      - name: Run unit tests
+        run: make test
+      - name: Launch integration test services
+        if: ${{ startswith(matrix.os, 'ubuntu') }}
+        uses: sudo-bot/action-docker-compose@latest
+        with:
+          cli-args: "-f ./tools/docker-compose.yml up --detach"
+      - name: Run integration tests
+        if: ${{ startswith(matrix.os, 'ubuntu') }}
+        run: cargo test --no-fail-fast --bin wash --test "integration*" -- --nocapture

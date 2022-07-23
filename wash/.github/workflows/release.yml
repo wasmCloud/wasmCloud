@@ -60,15 +60,12 @@ jobs:
           draft: false
           prerelease: true
 
-  crates:
+  release_wash_cli:
     needs: release
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-      - name: Cargo login
-        env:
-          CRATES_TOKEN: ${{ secrets.CRATES_PUBLISH_TOKEN }}
-        run: cargo login ${{ env.CRATES_TOKEN }}
-      - name: Cargo publish
-        run: cargo publish --no-verify
+      - uses: actions/checkout@v1
+      - id: crates-release-action
+        uses: wasmcloud/common-actions/crates-release@main
+        with:
+          crates-token: ${{ secrets.CRATES_PUBLISH_TOKEN }}

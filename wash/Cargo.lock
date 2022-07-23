@@ -85,6 +85,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-compression"
+version = "0.3.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "345fd392ab01f746c717b1357165b76f0b67a60192007b234058c9045fdcf695"
+dependencies = [
+ "flate2",
+ "futures-core",
+ "memchr",
+ "pin-project-lite",
+ "tokio",
+]
+
+[[package]]
 name = "async-nats"
 version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3299,6 +3312,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokio-tar"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a50188549787c32c1c3d9c8c71ad7e003ccf2f102489c5a96e385c84760477f4"
+dependencies = [
+ "filetime",
+ "futures-core",
+ "libc",
+ "redox_syscall",
+ "tokio",
+ "tokio-stream",
+ "xattr",
+]
+
+[[package]]
 name = "tokio-timer"
 version = "0.2.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3773,11 +3801,26 @@ dependencies = [
  "toml",
  "walkdir",
  "wascap",
+ "wash-lib",
  "wasmbus-rpc",
  "wasmcloud-control-interface",
  "wasmcloud-test-util",
  "weld-codegen",
  "which",
+]
+
+[[package]]
+name = "wash-lib"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-compression",
+ "futures 0.3.21",
+ "log",
+ "reqwest",
+ "tokio",
+ "tokio-stream",
+ "tokio-tar",
 ]
 
 [[package]]
