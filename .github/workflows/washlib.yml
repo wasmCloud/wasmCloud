@@ -1,0 +1,37 @@
+name: Wash Lib Release
+
+on:
+  push:
+    tags:
+      - "wash-lib-v*" # Push events to matching v*, i.e. v1.0, v20.15.10
+
+env:
+  working-directory: ./crates/wash-lib
+jobs:
+  rust_check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-20.04, windows-2022, macos-10.15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v2
+      - id: rust-check-action
+        name: wash-lib check (${{ matrix.name }})
+        uses: wasmcloud/common-actions/rust-check@main
+        with:
+          test-options: --no-fail-fast -p wash-lib -- --nocapture
+
+  release_wash_lib:
+    needs: rust_check
+    if: startswith(github.ref, 'refs/tags/') # Only run on tag push
+    runs-on: ubuntu-latest
+    env:
+      working-directory: ./crates/wash-lib
+    steps:
+      - uses: actions/checkout@v1
+      - id: crates-release-action
+        uses: wasmcloud/common-actions/crates-release@main
+        with:
+          working-directory: ${{ env.working-directory }}
+          crates-token: ${{ secrets.CRATES_PUBLISH_TOKEN }}

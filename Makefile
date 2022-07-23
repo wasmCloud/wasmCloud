@@ -6,6 +6,7 @@
 
 test: ## Run unit test suite
 	cargo test --no-fail-fast --bin wash -- --nocapture
+	cargo test --no-fail-fast -p wash-lib -- --nocapture
 
 test-integration: ##Run integration test suite
 	docker compose -f ./tools/docker-compose.yml up --detach
@@ -13,8 +14,8 @@ test-integration: ##Run integration test suite
 	docker compose -f ./tools/docker-compose.yml down
 
 rust-check:
-	rustfmt --edition 2021 --check src/*.rs src/*/*.rs 
-	cargo clippy --all-features --all-targets
+	cargo fmt --all --check
+	cargo clippy --all-features --all-targets --workspace
 
 # run all tests
 test-all:
