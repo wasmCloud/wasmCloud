@@ -5,12 +5,14 @@ on:
     branches: [main]
     paths:
       - "blobstore-s3/**"
+      - ".github/workflows/blobstore-s3.yml"
     tags:
       - "blobstore-s3*"
   pull_request:
     branches: [main]
     paths:
       - "blobstore-s3/**"
+      - ".github/workflows/blobstore-s3.yml"
   workflow_dispatch:
     inputs:
       release:
@@ -63,29 +65,99 @@ jobs:
         shell: bash
         working-directory: ${{ env.working-directory }}
 
+  install_cross:
+    if: startswith(github.ref, 'refs/tags/') # Only run on tag push
+    runs-on: ubuntu-latest
+    steps:
+      - uses: wasmcloud/common-actions/install-cross@main
+      - name: Upload cross binary
+        uses: actions/upload-artifact@v3
+        with:
+          name: cross
+          path: ~/.cargo/bin/cross
+
   build_artifact:
-    needs: [rust_check, make_test]
-    # run on tag push or manual with 'y'
-    if: ${{ ( startswith(github.ref, 'refs/tags/') || github.events.inputs.artifact == 'y' || github.events.inputs.release == 'y' ) }}
+    needs: install_cross
+    if: startswith(github.ref, 'refs/tags/') # Only run on tag push
+    strategy:
+      matrix:
+        target:
+          - x86_64-unknown-linux-gnu
+          - x86_64-apple-darwin
+          - aarch64-unknown-linux-gnu
+          - aarch64-apple-darwin
+          - armv7-unknown-linux-gnueabihf
+          - x86_64-pc-windows-gnu
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Download cross binary
+        uses: actions/download-artifact@v3
+        with:
+          name: cross
+          path: ~/.cargo/bin
+
+      - name: Determine artifact name
+        run: |
+          echo "artifact-name=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].targets[1].name')" >> $GITHUB_ENV
+        working-directory: ${{ env.working-directory }}
+
+      - name: Build native executable
+        run: |
+          chmod +x ~/.cargo/bin/cross
+          cross build --release --target ${{ matrix.target }}
+        working-directory: ${{ env.working-directory }}
+
+      - name: Upload executable to GH Actions
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ matrix.target }}
+          if-no-files-found: error
+          path: |
+            ${{ env.working-directory }}/target/${{ matrix.target }}/release/${{ env.artifact-name }}
+            ${{ env.working-directory }}/target/${{ matrix.target }}/release/${{ env.artifact-name }}.exe
+
+  assemble_provider_archive:
+    needs: [build_artifact]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
       - uses: wasmcloud/common-actions/install-wash@main
-      - uses: wasmcloud/common-actions/install-cross@main
+      # Downloads all artifacts
+      - uses: actions/download-artifact@v3
+        with:
+          path: ${{ env.working-directory }}
 
-      - name: Build full provider archive
-        run: make par-full
+      - name: Determine artifact name
+        run: |
+          echo "artifact-name=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].targets[1].name')" >> $GITHUB_ENV
         working-directory: ${{ env.working-directory }}
+
+      - name: Create provider archive
+        working-directory: ${{ env.working-directory }}
+        run: |
+          mkdir -p target/release
+          mv x86_64-unknown-linux-gnu/${{ env.artifact-name }} target/release/
+          make par
+
+      - name: Insert provider archive targets
+        working-directory: ${{ env.working-directory }}
+        run: |
+          wash par insert --arch x86_64-macos   --binary x86_64-apple-darwin/${{ env.artifact-name }} build/${{ env.artifact-name }}.par.gz
+          wash par insert --arch aarch64-linux  --binary aarch64-unknown-linux-gnu/${{ env.artifact-name }} build/${{ env.artifact-name }}.par.gz
+          wash par insert --arch aarch64-macos  --binary aarch64-apple-darwin/${{ env.artifact-name }} build/${{ env.artifact-name }}.par.gz
+          wash par insert --arch armv7-linux    --binary armv7-unknown-linux-gnueabihf/${{ env.artifact-name }} build/${{ env.artifact-name }}.par.gz
+          wash par insert --arch x86_64-windows --binary x86_64-pc-windows-gnu/${{ env.artifact-name }}.exe build/${{ env.artifact-name }}.par.gz
 
       - name: Upload provider archive to GH Actions
         uses: actions/upload-artifact@v2
         with:
           name: provider-archive
-          path: ${{ env.working-directory }}/build/*.par.gz
+          path: ${{ env.working-directory }}/build/${{ env.artifact-name }}.par.gz
 
   github_release:
     if: ${{ ( startswith(github.ref, 'refs/tags/') || github.events.inputs.artifact == 'y' || github.events.inputs.release == 'y' ) }}
-    needs: build_artifact
+    needs: [make_test, assemble_provider_archive]
     runs-on: ubuntu-latest
     steps:
       - name: Download provider archive
@@ -103,19 +175,20 @@ jobs:
           draft: false
 
   artifact_release:
-    needs: build_artifact
+    needs: [rust_check, assemble_provider_archive]
     if: ${{ ( startswith(github.ref, 'refs/tags/') || github.events.inputs.artifact == 'y' ) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
       - name: Download provider archive
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: provider-archive
           path: ${{ env.working-directory }}/build
 
       - name: Determine artifact metadata
         run: |
+          echo "oci-repository=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name' | sed 's/wasmcloud-provider-//')" >> $GITHUB_ENV
           echo "oci-version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].version')" >> $GITHUB_ENV
         working-directory: ${{ env.working-directory }}
 

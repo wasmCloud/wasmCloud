@@ -9,8 +9,8 @@ on:
       - "httpserver-v*"
   pull_request:
     branches: [main]
-    # paths:
-    #   - "httpserver-rs/**"
+    paths:
+      - "httpserver-rs/**"
 
 env:
   CARGO_TERM_COLOR: always
