@@ -1,10 +1,11 @@
 //! Tests kv-vault
 //!
-use kv_vault_lib::{wasmcloud_interface_keyvalue::*, STRING_VALUE_MARKER};
+use kv_vault_lib::STRING_VALUE_MARKER;
 use wasmbus_rpc::{
     error::{RpcError, RpcResult},
     provider::prelude::Context,
 };
+use wasmcloud_interface_keyvalue::*;
 use wasmcloud_test_util::{
     check, check_eq,
     cli::print_test_results,

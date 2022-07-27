@@ -1,8 +1,10 @@
 //! Hashicorp vault client
 //!
-use serde::{de::DeserializeOwned, Serialize};
 use std::{string::ToString, sync::Arc};
+
+use serde::{de::DeserializeOwned, Serialize};
 use vaultrs::api::kv2::responses::SecretVersionMetadata;
+use vaultrs::client::{VaultClient, VaultClientSettings};
 
 use crate::{config::Config, error::VaultError};
 
@@ -22,7 +24,6 @@ impl Client {
     /// Note that this constructor does not attempt to connect to the vault server,
     /// so the vault server does not need to be running at the time a LinkDefinition to this provider is created.
     pub fn new(config: Config) -> Result<Self, VaultError> {
-        use vaultrs::client::{VaultClient, VaultClientSettings};
         Ok(Client {
             inner: Arc::new(VaultClient::new(VaultClientSettings {
                 token: config.token,
@@ -57,13 +58,17 @@ impl Client {
         path: &str,
         data: &T,
     ) -> Result<SecretVersionMetadata, VaultError> {
-        Ok(vaultrs::kv2::set(self.inner.as_ref(), &self.namespace, path, data).await?)
+        vaultrs::kv2::set(self.inner.as_ref(), &self.namespace, path, data)
+            .await
+            .map_err(VaultError::from)
     }
 
     /// Deletes the latest version of the secret. Note that if versions are in use, only the latest is deleted
     /// Returns Ok if the key was deleted, or Err for any other error including key not found
     pub async fn delete_latest<T: Serialize>(&self, path: &str) -> Result<(), VaultError> {
-        Ok(vaultrs::kv2::delete_latest(self.inner.as_ref(), &self.namespace, path).await?)
+        vaultrs::kv2::delete_latest(self.inner.as_ref(), &self.namespace, path)
+            .await
+            .map_err(VaultError::from)
     }
 
     /// Lists keys at the path

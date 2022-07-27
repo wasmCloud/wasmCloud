@@ -46,7 +46,9 @@ impl HttpClient for HttpClientProvider {
     async fn request(&self, _ctx: &Context, req: &HttpRequest) -> RpcResult<HttpResponse> {
         let mut headers: HttpHeaderMap = HttpHeaderMap::default();
         convert_request_headers(&req.headers, &mut headers);
-        let body = req.body.to_vec();
+        // TODO: We need to make `request` take an owned `HttpRequest` so we don't have to copy the
+        // whole request (which could be quite large)
+        let body = req.body.to_owned();
         let method = reqwest::Method::from_str(&req.method)
             .map_err(|e| RpcError::InvalidParameter(format!("method: {}:{}", &req.method, e)))?;
         trace!("forwarding {} request to {}", &req.method, &req.url);
@@ -87,7 +89,7 @@ impl HttpClient for HttpClientProvider {
             );
         }
         Ok(HttpResponse {
-            body: body.to_vec(),
+            body: Vec::from(body),
             header: headers,
             status_code,
         })

@@ -19,6 +19,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2.2.2"
 vaultrs = "0.6.0"
+wasmcloud-interface-keyvalue = "0.7"
 wasmbus-rpc = { version = "0.9", features = ["otel"] }
 
 [target.'cfg(all(target_arch = "aarch64", target_os = "linux"))'.dependencies]

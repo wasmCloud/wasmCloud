@@ -1,8 +1,9 @@
 //! Configuration for sqldb-postgres capability provider
 //!
+use std::{str::FromStr, time::Duration};
+
 use bb8_postgres::{bb8, tokio_postgres, tokio_postgres::NoTls};
 use serde::Deserialize;
-use std::{str::FromStr, time::Duration};
 use wasmbus_rpc::{core::LinkDefinition, error::RpcError};
 
 /// Configuration for this provider (from link definitions)

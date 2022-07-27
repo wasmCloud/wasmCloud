@@ -2,6 +2,7 @@
 //!
 use std::{collections::HashMap, convert::Infallible, sync::Arc, time::Duration};
 
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{OwnedSemaphorePermit, RwLock, Semaphore};
 use tracing::{error, info, instrument, warn};
@@ -149,7 +150,6 @@ impl NatsMessagingProvider {
         sub: String,
         queue: Option<String>,
     ) -> RpcResult<()> {
-        use futures::StreamExt as _;
         let mut subscription = match queue {
             Some(queue) => conn.queue_subscribe(sub.clone(), queue).await,
             None => conn.subscribe(sub.clone()).await,
@@ -194,7 +194,7 @@ async fn dispatch_msg(
     _permit: OwnedSemaphorePermit,
 ) {
     let msg = SubMessage {
-        body: nats_msg.payload.to_vec(),
+        body: nats_msg.payload.into(),
         reply_to: nats_msg.reply,
         subject: nats_msg.subject,
     };

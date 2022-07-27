@@ -3,22 +3,26 @@
 //! assume role http request https://docs.aws.amazon.com/cli/latest/reference/sts/assume-role.html
 //! get session token https://docs.aws.amazon.com/cli/latest/reference/sts/get-session-token.html
 
-use crate::wasmcloud_interface_blobstore::{
-    self as blobstore, Blobstore, Chunk, ChunkReceiver, ChunkReceiverSender, ContainerId,
-    ContainerIds, ContainerMetadata, ContainerObject, ContainersInfo, GetObjectResponse,
-    MultiResult, ObjectMetadata, PutChunkRequest, PutObjectResponse, RemoveObjectsRequest,
-};
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use aws_sdk_s3::{
     error::{HeadBucketError, HeadBucketErrorKind, HeadObjectError, HeadObjectErrorKind},
     model::ObjectIdentifier,
     output::{CreateBucketOutput, HeadObjectOutput, ListBucketsOutput},
     types::{ByteStream, SdkError},
 };
-use std::collections::HashMap;
+use bytes::Bytes;
 use tokio_stream::StreamExt;
 use tracing::{debug, error, instrument, warn};
 use tracing_futures::Instrument;
 use wasmbus_rpc::{core::LinkDefinition, provider::prelude::*};
+
+use crate::wasmcloud_interface_blobstore::{
+    self as blobstore, Blobstore, Chunk, ChunkReceiver, ChunkReceiverSender, ContainerId,
+    ContainerIds, ContainerMetadata, ContainerObject, ContainersInfo, GetObjectResponse,
+    MultiResult, ObjectMetadata, PutChunkRequest, PutObjectResponse, RemoveObjectsRequest,
+};
 
 mod config;
 pub use config::StorageConfig;
@@ -40,30 +44,28 @@ const MAX_CHUNK_SIZE: usize = 500 * 1024 * 1024;
 #[derive(Clone)]
 pub struct StorageClient {
     s3_client: aws_sdk_s3::Client,
-    ld: Option<LinkDefinition>,
-    aliases: HashMap<String, String>,
+    ld: Arc<LinkDefinition>,
+    aliases: Arc<HashMap<String, String>>,
 }
 
 impl StorageClient {
-    pub async fn new(config: StorageConfig, ld: Option<LinkDefinition>) -> Self {
+    pub async fn new(config: StorageConfig, ld: LinkDefinition) -> Self {
         let mut aliases = config.aliases.clone();
         let s3_config = aws_sdk_s3::Config::from(&config.configure_aws().await);
         let s3_client = aws_sdk_s3::Client::from_conf(s3_config);
-        if let Some(ref ld) = ld {
-            for (k, v) in ld.values.iter() {
-                if let Some(alias) = k.strip_prefix(ALIAS_PREFIX) {
-                    if alias.is_empty() || v.is_empty() {
-                        error!("invalid bucket alias_ key and value must not be empty");
-                    } else {
-                        aliases.insert(alias.to_string(), v.to_string());
-                    }
+        for (k, v) in ld.values.iter() {
+            if let Some(alias) = k.strip_prefix(ALIAS_PREFIX) {
+                if alias.is_empty() || v.is_empty() {
+                    error!("invalid bucket alias_ key and value must not be empty");
+                } else {
+                    aliases.insert(alias.to_string(), v.to_string());
                 }
             }
         }
         StorageClient {
             s3_client,
-            ld,
-            aliases,
+            ld: Arc::new(ld),
+            aliases: Arc::new(aliases),
         }
     }
 
@@ -94,16 +96,9 @@ impl StorageClient {
         MAX_CHUNK_SIZE
     }
 
-    /// async implementation of Default
-    pub async fn async_default() -> Self {
-        Self::new(StorageConfig::default(), None).await
-    }
-
     /// Perform any cleanup necessary for a link + s3 connection
     pub async fn close(&self) {
-        if let Some(ld) = &self.ld {
-            debug!(actor_id = %ld.actor_id, "blobstore-s3 dropping linkdef");
-        }
+        debug!(actor_id = %self.ld.actor_id, "blobstore-s3 dropping linkdef");
         // If there were any https clients, caches, or other link-specific data,
         // we would delete those here
     }
@@ -162,12 +157,11 @@ impl StorageClient {
     #[instrument(level = "debug", skip(self, ctx, chunk), fields(actor_id = ?ctx.actor, object_id = %chunk.object_id, container_id = %self.unalias(&chunk.container_id)))]
     async fn send_chunk(&self, ctx: &Context, mut chunk: Chunk) -> Result<u64, RpcError> {
         chunk.container_id = self.unalias(&chunk.container_id).to_string();
-        let ld = self.ld.clone().unwrap();
-        let receiver = ChunkReceiverSender::for_actor(&ld);
+        let receiver = ChunkReceiverSender::for_actor(self.ld.as_ref());
         if let Err(e) = receiver.receive_chunk(ctx, &chunk).await {
             let err = format!(
                 "sending chunk error: Bucket({}) Object({}) to Actor({}): {}",
-                &chunk.container_id, &chunk.object_id, &ld.actor_id, e
+                &chunk.container_id, &chunk.object_id, &self.ld.actor_id, e
             );
             error!(error = %e, "sending chunk error");
             Err(RpcError::Rpc(err))
@@ -644,6 +638,7 @@ impl Blobstore for StorageClient {
                 "cannot put zero-length objects".to_string(),
             ));
         }
+        // TODO: make sure put_object takes an owned `PutObjectRequest` to avoid cloning the whole chunk
         let bytes = arg.chunk.bytes.to_owned();
         match self
             .s3_client
@@ -727,10 +722,10 @@ impl Blobstore for StorageClient {
                         bytes_requested
                     );
                 }
-                let bytes: Vec<u8> = match object_output.body.next().await {
+                let mut bytes = match object_output.body.next().await {
                     Some(Ok(bytes)) => {
                         debug!(chunk_len = %bytes.len(), "initial chunk received");
-                        bytes.to_vec()
+                        bytes
                     }
                     None => {
                         error!("stream ended before getting first chunk from s3");
@@ -752,43 +747,29 @@ impl Blobstore for StorageClient {
                         bytes_requested,
                     );
                     let (bytes, excess) = if bytes.len() > max_chunk_size {
-                        (
-                            bytes[..max_chunk_size].to_vec(),
-                            bytes[max_chunk_size..].to_vec(),
-                        )
+                        let excess = bytes.split_off(max_chunk_size);
+                        (bytes, excess)
                     } else {
-                        (bytes, Vec::new())
+                        (bytes, Bytes::new())
                     };
-                    if self.ld.is_some() {
-                        // create task to deliver remaining chunks
-                        let offset = arg.range_start.unwrap_or(0) + bytes.len() as u64;
-                        self.stream_from_s3(
-                            ctx,
-                            ContainerObject {
-                                container_id: bucket_id.to_string(),
-                                object_id: arg.object_id.clone(),
-                            },
-                            excess.to_vec(),
-                            offset,
-                            offset + bytes_requested,
-                            object_output.body,
-                        )
-                        .await;
-                    } else {
-                        let msg = format!(
-                            r#"Returning first chunk of {} bytes (out of {}).
-                               Remaining chunks will not be sent to ChunkReceiver
-                               because linkdef was not initialized. This is most likely due to
-                               invoking 'getObject' with an improper configuration for testing."#,
-                            bytes.len(),
-                            bytes_requested,
-                        );
-                        error!("{}", &msg);
-                    }
-                    bytes
+                    // create task to deliver remaining chunks
+                    let offset = arg.range_start.unwrap_or(0) + bytes.len() as u64;
+                    self.stream_from_s3(
+                        ctx,
+                        ContainerObject {
+                            container_id: bucket_id.to_string(),
+                            object_id: arg.object_id.clone(),
+                        },
+                        excess.into(),
+                        offset,
+                        offset + bytes_requested,
+                        object_output.body,
+                    )
+                    .await;
+                    Vec::from(bytes)
                 } else {
                     // no streaming required - everything in first chunk
-                    bytes
+                    Vec::from(bytes)
                 };
                 // return first chunk
                 Ok(blobstore::GetObjectResponse {
@@ -930,7 +911,7 @@ mod test {
         map.insert(format!("{}foo", ALIAS_PREFIX), "bar".to_string());
         let mut ld = LinkDefinition::default();
         ld.values = map;
-        let client = StorageClient::new(StorageConfig::default(), Some(ld)).await;
+        let client = StorageClient::new(StorageConfig::default(), ld).await;
 
         // no alias
         assert_eq!(client.unalias("boo"), "boo");
