@@ -4,6 +4,7 @@
 //! which determine how the configuration is parsed.
 //!
 //! For the key...
+use std::net::{IpAddr, Ipv4Addr};
 ///   config_file:       load configuration from file name.
 ///                      Interprets file as json or toml, based on file extension.
 ///   config_b64:        Configuration is a base64-encoded json string
@@ -15,10 +16,12 @@
 ///   (see constants below).
 /// - Default listener is bound to 127.0.0.1 port 8000.
 ///
-use crate::Error;
-use serde::{de::Deserializer, de::Visitor, Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::Path;
 use std::{collections::HashMap, fmt, io::ErrorKind, net::SocketAddr, ops::Deref, str::FromStr};
+
+use serde::{de::Deserializer, de::Visitor, Deserialize, Serialize};
+
+use crate::Error;
 
 const DEFAULT_ADDR: &str = "127.0.0.1:8000";
 const DEFAULT_LOG_LEVEL: LogLevel = LogLevel::Debug;
@@ -83,11 +86,11 @@ macro_rules! merge {
 
 impl ServiceSettings {
     /// load Settings from a file with .toml or .json extension
-    fn from_file<P: Into<PathBuf>>(fpath: P) -> Result<Self, Error> {
-        let fpath: PathBuf = fpath.into();
-        let data = std::fs::read(&fpath)
-            .map_err(|e| Error::Settings(format!("reading file {}: {}", &fpath.display(), e)))?;
-        if let Some(ext) = fpath.extension() {
+    fn from_file<P: AsRef<Path>>(fpath: P) -> Result<Self, Error> {
+        let data = std::fs::read(&fpath).map_err(|e| {
+            Error::Settings(format!("reading file {}: {}", &fpath.as_ref().display(), e))
+        })?;
+        if let Some(ext) = fpath.as_ref().extension() {
             let ext = ext.to_string_lossy();
             match ext.as_ref() {
                 "json" => ServiceSettings::from_json(&data),
@@ -97,7 +100,7 @@ impl ServiceSettings {
         } else {
             Err(Error::Settings(format!(
                 "unrecognized file type {}",
-                &fpath.display()
+                &fpath.as_ref().display()
             )))
         }
     }
@@ -136,7 +139,7 @@ impl ServiceSettings {
             }
             (Some(cert_file), Some(key_file)) => {
                 for f in [("cert_file", &cert_file), ("priv_key_file", &key_file)].iter() {
-                    let path = PathBuf::from(f.1);
+                    let path: &Path = f.1.as_ref();
                     if !path.is_file() {
                         errors.push(format!(
                             "missing tls.{} '{}'{}",
@@ -180,8 +183,6 @@ impl ServiceSettings {
 ///   (later names override earlier names in the list)
 ///
 pub fn load_settings(values: &HashMap<String, String>) -> Result<ServiceSettings, Error> {
-    use std::net::{IpAddr, Ipv4Addr};
-
     // Allow keys to be UPPERCASE, as an accommodation
     // for the lost souls who prefer ugly all-caps variable names.
     let values = crate::make_case_insensitive(values).ok_or_else(|| Error::InvalidParameter(

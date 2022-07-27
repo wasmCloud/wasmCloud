@@ -2,19 +2,15 @@
 //!
 use std::collections::HashMap;
 
-use kv_vault_lib::{
-    client::Client,
-    config::Config,
-    error::VaultError,
-    wasmcloud_interface_keyvalue::{
-        GetResponse, IncrementRequest, KeyValue, KeyValueReceiver, ListAddRequest, ListDelRequest,
-        ListRangeRequest, SetAddRequest, SetDelRequest, SetRequest, StringList,
-    },
-    STRING_VALUE_MARKER,
-};
+use kv_vault_lib::{client::Client, config::Config, error::VaultError, STRING_VALUE_MARKER};
+use serde_json::Value;
 use tokio::sync::RwLock;
 use tracing::{debug, info, instrument};
 use wasmbus_rpc::provider::prelude::*;
+use wasmcloud_interface_keyvalue::{
+    GetResponse, IncrementRequest, KeyValue, KeyValueReceiver, ListAddRequest, ListDelRequest,
+    ListRangeRequest, SetAddRequest, SetDelRequest, SetRequest, StringList,
+};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // handle lattice control messages and forward rpc to the provider dispatch
@@ -130,13 +126,12 @@ impl KeyValue for KvVaultProvider {
         ctx: &Context,
         arg: &TS,
     ) -> RpcResult<GetResponse> {
-        use serde_json::Value;
         let client = self.get_client(ctx).await?;
         match client.read_secret::<Value>(&arg.to_string()).await {
-            Ok(Value::Object(map)) => {
-                if let Some(Value::String(value)) = map.get(STRING_VALUE_MARKER) {
+            Ok(Value::Object(mut map)) => {
+                if let Some(Value::String(value)) = map.remove(STRING_VALUE_MARKER) {
                     Ok(GetResponse {
-                        value: value.clone(),
+                        value,
                         exists: true,
                     })
                 } else {
@@ -204,7 +199,6 @@ impl KeyValue for KvVaultProvider {
     /// expiration times are not supported by this api and should be 0.
     #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.key))]
     async fn set(&self, ctx: &Context, arg: &SetRequest) -> RpcResult<()> {
-        use serde_json::Value;
         let client = self.get_client(ctx).await?;
         let value: Value = serde_json::from_str(&arg.value).unwrap_or_else(|_| {
             let mut map = serde_json::Map::new();
@@ -216,7 +210,7 @@ impl KeyValue for KvVaultProvider {
         });
         match client.write_secret(&arg.key, &value).await {
             Ok(metadata) => {
-                debug!("set returned metadata: {:#?}", &metadata);
+                debug!(?metadata, "set returned metadata");
                 Ok(())
             }
             Err(VaultError::NotFound { namespace, path }) => {

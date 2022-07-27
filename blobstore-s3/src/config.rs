@@ -4,9 +4,7 @@
 //! and EC2 IAM authorizations.
 //!
 use aws_smithy_http::endpoint::Endpoint;
-use aws_types::{
-    config::Config as AwsConfig, credentials::SharedCredentialsProvider, region::Region,
-};
+use aws_types::{credentials::SharedCredentialsProvider, region::Region, SdkConfig as AwsConfig};
 use serde::Deserialize;
 use std::{collections::HashMap, env};
 use wasmbus_rpc::error::{RpcError, RpcResult};

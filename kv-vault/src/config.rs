@@ -58,7 +58,7 @@ impl Config {
             mount: env::var("VAULT_MOUNT")
                 .ok()
                 .or_else(|| values.get("mount").cloned())
-                .or_else(|| values.get("mount").cloned())
+                .or_else(|| values.get("MOUNT").cloned())
                 .unwrap_or_else(|| "secret".to_string()),
             certs: match env::var("VAULT_CERTS")
                 .ok()

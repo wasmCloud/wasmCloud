@@ -42,7 +42,7 @@ use tokio::{
     task::JoinHandle,
 };
 use tracing::{error, info, instrument, trace, warn, Instrument};
-use warp::{path::FullPath, Filter};
+use warp::{filters::cors::Builder, path::FullPath, Filter};
 use wasmbus_rpc::{common::Context, core::LinkDefinition, error::RpcError, provider::*};
 use wasmcloud_interface_httpserver::{HttpRequest, HttpResponse, HttpServer, HttpServerSender};
 
@@ -132,7 +132,7 @@ impl HttpServerCore {
             let rd = self.inner.read().await;
             rd.settings.timeout_ms.map(std::time::Duration::from_millis)
         };
-
+        let ld = Arc::new(ld);
         let linkdefs = ld.clone();
         let actor_id = ld.actor_id.clone();
         let route = warp::any()
@@ -148,19 +148,14 @@ impl HttpServerCore {
                       path: FullPath,
                       query: String| {
                     let inner = Arc::clone(&inner);
-                    let linkdefs = linkdefs.clone();
-                    //let tracer = opentelemetry::global::tracer("HttpServer");
-                    let span = tracing::debug_span!("http request");
-                    span.record("method", &tracing::field::display(method.to_string().as_str()));
-                    span.record("path", &tracing::field::display(path.as_str()));
-                    span.record("query", &tracing::field::display(query.as_str()));
-                    //span.record("actor_id", &tracing::field::display(actor_id.as_str()));
+                    let span = tracing::debug_span!("http request", %method, path = %path.as_str(), %query);
+                    let ld_ref = linkdefs.clone();
                     async move {
                         let hmap = convert_request_headers(&headers);
                         let req = HttpRequest {
-                            body: body.to_vec(),
+                            body: Vec::from(body),
                             header: hmap,
-                            method: method.to_string().to_ascii_uppercase(),
+                            method: method.as_str().to_ascii_uppercase(),
                             path: path.as_str().to_string(),
                             query_string: query,
                         };
@@ -168,9 +163,9 @@ impl HttpServerCore {
                             ?req,
                             "httpserver calling actor"
                         );
-                        let read_guard = async { inner.read().await }.in_current_span().await;
+                        let read_guard = inner.read().in_current_span().await;
                         let bridge = read_guard.bridge;
-                        let response = match async { Self::send_actor(linkdefs, req, bridge, timeout).await }.in_current_span().await
+                        let response = match Self::send_actor(ld_ref, req, bridge, timeout).in_current_span().await
                         {
                             Ok(resp) => resp,
                             Err(e) => {
@@ -184,6 +179,7 @@ impl HttpServerCore {
                                 }
                             }
                         };
+                        drop(read_guard);
                         let mut http_response = http::response::Response::new(response.body);
                         let status = match http::StatusCode::from_u16(response.status_code) {
                             Ok(status_code) => status_code,
@@ -197,9 +193,9 @@ impl HttpServerCore {
                             }
                         };
                         *http_response.status_mut() = status;
-                        convert_response_headers(&response.header, http_response.headers_mut());
+                        convert_response_headers(response.header, http_response.headers_mut());
                         Ok::<_, warp::Rejection>(http_response)
-                    }
+                    }.instrument(span)
                 },
             ).with(warp::trace(move |req_info| {
                 let span = tracing::debug_span!("request", method = %req_info.method(), path = %req_info.path(), query = tracing::field::Empty, %actor_id);
@@ -263,13 +259,13 @@ impl HttpServerCore {
     /// forward HttpRequest to actor.
     #[instrument(level = "debug", skip(ld, req, bridge), fields(actor_id = %ld.actor_id))]
     async fn send_actor(
-        ld: LinkDefinition,
+        ld: Arc<LinkDefinition>,
         req: HttpRequest,
         bridge: &'static HostBridge,
         timeout: Option<std::time::Duration>,
     ) -> Result<HttpResponse, RpcError> {
         trace!("sending request to actor");
-        let tx = ProviderTransport::new_with_timeout(&ld, Some(bridge), timeout);
+        let tx = ProviderTransport::new_with_timeout(ld.as_ref(), Some(bridge), timeout);
         let ctx = Context::default();
         let actor = HttpServerSender::via(tx);
         match actor.handle_request(&ctx, &req).await {
@@ -322,11 +318,11 @@ fn convert_request_headers(headers: &http::HeaderMap) -> wasmcloud_interface_htt
 
 /// convert HeaderMap from actor into warp's HeaderMap for returning to http client
 fn convert_response_headers(
-    header: &wasmcloud_interface_httpserver::HeaderMap,
+    header: wasmcloud_interface_httpserver::HeaderMap,
     headers_mut: &mut http::header::HeaderMap,
 ) {
     let map = headers_mut;
-    for (k, vals) in header.iter() {
+    for (k, vals) in header.into_iter() {
         let name = match http::header::HeaderName::from_bytes(k.as_bytes()) {
             Ok(name) => name,
             Err(e) => {
@@ -338,12 +334,11 @@ fn convert_response_headers(
                 continue;
             }
         };
-        for val in vals.iter() {
-            let value = match http::header::HeaderValue::from_str(val) {
+        for val in vals.into_iter() {
+            let value = match http::header::HeaderValue::try_from(val) {
                 Ok(value) => value,
                 Err(e) => {
                     error!(
-                        header_value = %val,
                         error = %e,
                         "Non-ascii header value, skipping this header"
                     );
@@ -366,8 +361,6 @@ fn opt_raw_query() -> impl Filter<Extract = (String,), Error = Infallible> + Cop
 
 /// build warp Cors filter from settings
 fn cors_filter(settings: &settings::ServiceSettings) -> Result<warp::filters::cors::Cors, Error> {
-    use warp::filters::cors::Builder;
-
     let mut cors: Builder = warp::cors();
 
     match settings.cors.allowed_origins {

@@ -1,14 +1,17 @@
+use std::env;
+
 use blobstore_s3_lib::{wasmcloud_interface_blobstore::*, StorageClient, StorageConfig};
 
 /// Helper function to create a StorageClient with local testing overrides
 async fn test_client() -> StorageClient {
-    use std::env;
-    let mut conf = StorageConfig::default();
-    conf.endpoint = env::var("AWS_ENDPOINT").ok();
-    conf.access_key_id = env::var("AWS_ACCESS_KEY_ID").ok();
-    conf.secret_access_key = env::var("AWS_SECRET_ACCESS_KEY").ok();
+    let conf = StorageConfig {
+        endpoint: env::var("AWS_ENDPOINT").ok(),
+        access_key_id: env::var("AWS_ACCESS_KEY_ID").ok(),
+        secret_access_key: env::var("AWS_SECRET_ACCESS_KEY").ok(),
+        ..Default::default()
+    };
 
-    StorageClient::new(conf, None).await
+    StorageClient::new(conf, Default::default()).await
 }
 
 /// Tests
@@ -23,10 +26,16 @@ async fn test_create_container() {
     let num = rand::random::<u64>();
     let bucket = format!("test.bucket.{}", num);
 
-    assert_eq!(s3.container_exists(&ctx, &bucket).await.unwrap(), false);
+    assert!(
+        !s3.container_exists(&ctx, &bucket).await.unwrap(),
+        "Container should not exist"
+    );
     s3.create_container(&ctx, &bucket).await.unwrap();
 
-    assert_eq!(s3.container_exists(&ctx, &bucket).await.unwrap(), true);
+    assert!(
+        s3.container_exists(&ctx, &bucket).await.unwrap(),
+        "Container should exist"
+    );
 
     s3.remove_containers(&ctx, &vec![bucket])
         .await
@@ -67,7 +76,7 @@ async fn test_create_object() {
         .expect("put object");
     assert_eq!(resp.stream_id, None);
 
-    assert_eq!(
+    assert!(
         s3.object_exists(
             &ctx,
             &ContainerObject {
@@ -76,8 +85,8 @@ async fn test_create_object() {
             },
         )
         .await
-        .unwrap(),
-        true
+        .expect("unable to check that object exists"),
+        "Object should not exist"
     );
 
     s3.remove_objects(
@@ -90,8 +99,8 @@ async fn test_create_object() {
     .await
     .expect("remove object");
 
-    assert_eq!(
-        s3.object_exists(
+    assert!(
+        !s3.object_exists(
             &ctx,
             &ContainerObject {
                 container_id: bucket.clone(),
@@ -99,8 +108,8 @@ async fn test_create_object() {
             },
         )
         .await
-        .unwrap(),
-        false
+        .expect("unable to check that object exists"),
+        "Object should exist"
     );
 
     s3.remove_containers(&ctx, &vec![bucket])
@@ -308,7 +317,7 @@ async fn test_get_object_chunks() {
         .expect("get-object-chunk");
     assert!(obj.initial_chunk.unwrap().bytes.len() >= 1000);
 
-    std::env::set_var("MAX_CHUNK_SIZE", "300");
+    env::set_var("MAX_CHUNK_SIZE", "300");
     let obj = s3
         .get_object(
             &ctx,

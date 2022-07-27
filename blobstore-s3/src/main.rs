@@ -15,11 +15,6 @@ use tokio::sync::RwLock;
 use wasmbus_rpc::{core::LinkDefinition, provider::prelude::*};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut vars: Vec<(String, String)> = std::env::vars().collect();
-    vars.sort_by(|v, other| String::cmp(&v.0, &other.0));
-    for (var, value) in vars.iter() {
-        println!("(stdout) blobstore-s3: env: {}={}", &var, &value);
-    }
     // handle lattice control messages and forward rpc to the provider dispatch
     // returns when provider receives a shutdown control message
     provider_main(
@@ -65,7 +60,7 @@ impl ProviderHandler for S3BlobstoreProvider {
     /// If the link is allowed, return true, otherwise return false to deny the link.
     async fn put_link(&self, ld: &LinkDefinition) -> RpcResult<bool> {
         let config = StorageConfig::from_values(&ld.values)?;
-        let link = StorageClient::new(config, Some(ld.clone())).await;
+        let link = StorageClient::new(config, ld.to_owned()).await;
 
         let mut update_map = self.actors.write().await;
         update_map.insert(ld.actor_id.to_string(), link);
