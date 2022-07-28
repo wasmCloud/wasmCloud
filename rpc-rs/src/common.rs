@@ -80,11 +80,7 @@ pub fn serialize<T: Serialize>(data: &T) -> Result<Vec<u8>, RpcError> {
 
 #[async_trait]
 pub trait MessageDispatch {
-    async fn dispatch<'disp, 'ctx, 'msg>(
-        &'disp self,
-        ctx: &'ctx Context,
-        message: Message<'msg>,
-    ) -> Result<Message<'msg>, RpcError>;
+    async fn dispatch(&self, ctx: &Context, message: Message<'_>) -> Result<Vec<u8>, RpcError>;
 }
 
 /// Message encoding format

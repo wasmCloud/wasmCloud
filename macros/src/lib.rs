@@ -118,19 +118,19 @@ pub fn derive_actor(input: TokenStream) -> TokenStream {
         let context = wasmbus_rpc::common::Context::default();
         let actor = #actor_ident ::default();
         let resp = futures::executor::block_on({
-            MessageDispatch::dispatch(
+            wasmbus_rpc::common::MessageDispatch::dispatch(
                 &actor,
                 &context,
-                Message {
+                wasmbus_rpc::common::Message {
                     method: &method,
                     arg: std::borrow::Cow::Borrowed(slice),
                 },
             )
         });
         match resp {
-            Ok(Message { arg, .. }) => {
+            Ok(data) => {
                 unsafe {
-                    __guest_response(arg.as_ptr(), arg.len() as _);
+                    __guest_response(data.as_ptr(), data.len() as _);
                 }
                 1
             }
@@ -162,9 +162,9 @@ pub fn derive_health_responder(input: TokenStream) -> TokenStream {
         impl Actor for #actor_ident {
             async fn health_request(
                 &self,
-                ctx: &Context,
+                ctx: &wasmbus_rpc::common::Context,
                 arg: &wasmbus_rpc::core::HealthCheckRequest,
-            ) -> RpcResult<wasmbus_rpc::core::HealthCheckResponse> {
+            ) -> wasmbus_rpc::error::RpcResult<wasmbus_rpc::core::HealthCheckResponse> {
                 Ok(wasmbus_rpc::core::HealthCheckResponse {
                     healthy: true,
                     message: None,
@@ -183,7 +183,7 @@ fn gen_dispatch(traits: &[syn::Path], ident: &Ident) -> TokenStream2 {
         let path_str = path.segments.to_token_stream().to_string();
         let id = format_ident!("{}Receiver", &path_str);
         methods.push(quote!(
-            #path_str => #id::dispatch(self, ctx, &message).await
+            #path_str => #id::dispatch(self, ctx, message).await
         ));
         trait_receiver_impl.push(quote!(
             impl #id for #ident { }
@@ -192,23 +192,23 @@ fn gen_dispatch(traits: &[syn::Path], ident: &Ident) -> TokenStream2 {
 
     quote!(
         #[async_trait]
-        impl MessageDispatch for #ident {
-            async fn dispatch<'disp__,'ctx__,'msg__>(
-                &'disp__ self,
-                ctx: &'ctx__ Context,
-                message: Message<'msg__>,
-            ) -> std::result::Result<Message<'msg__>, RpcError> {
+        impl wasmbus_rpc::common::MessageDispatch for #ident {
+            async fn dispatch(
+                &self,
+                ctx: &wasmbus_rpc::common::Context,
+                message: wasmbus_rpc::common::Message<'_>,
+            ) -> std::result::Result<Vec<u8>, wasmbus_rpc::error::RpcError> {
                 let (trait_name, trait_method) = message
                     .method
                     .rsplit_once('.')
                     .unwrap_or(("_", message.method));
-                let message = Message {
+                let message = wasmbus_rpc::common::Message {
                     method: trait_method,
                     arg: message.arg,
                 };
                 match trait_name {
                    #( #methods, )*
-                    _ => Err(RpcError::MethodNotHandled(
+                    _ => Err(wasmbus_rpc::error::RpcError::MethodNotHandled(
                             format!("{}.{} - unknown method", trait_name,message.method)))
                 }
             }
@@ -224,9 +224,9 @@ fn gen_dispatch(traits: &[syn::Path], ident: &Ident) -> TokenStream2 {
 fn gen_empty_dispatch(ident: &Ident) -> TokenStream2 {
     quote!(
         #[async_trait]
-        impl MessageDispatch for #ident {
-            async fn dispatch<'disp__,'ctx__,'msg__>(&'disp__ self, _ctx: &'ctx__ Context, message: wasmbus_rpc::common::Message<'msg__>) -> std::result::Result<Message<'msg__>, RpcError> {
-                Err(RpcError::MethodNotHandled(message.method.to_string()))
+        impl wasmbus_rpc::common::MessageDispatch for #ident {
+            async fn dispatch(&self, _ctx: &wasmbus_rpc::common::Context, message: wasmbus_rpc::common::Message<'_>) -> std::result::Result<Vec<u8>, wasmbus_rpc::error::RpcError> {
+                Err(wasmbus_rpc::error::RpcError::MethodNotHandled(message.method.to_string()))
             }
         }
     )

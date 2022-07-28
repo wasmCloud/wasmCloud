@@ -6,20 +6,10 @@
 
 subdirs = codegen macros rpc-rs
 
-MODEL_OUTPUT := codegen/src/wasmbus_model.rs rpc-rs/src/wasmbus_model.rs
-#MODEL_SRC    := examples/interface/wasmbus-core/wasmcloud-model.smithy \
-#				examples/interface/wasmbus-core/codegen.toml
-
 all build release clean test update lint validate rust-check::
 	for dir in $(subdirs); do \
 		$(MAKE) -C $$dir $@ ; \
 	done
-
-test::
-	$(MAKE) check-model
-
-check-model: $(MODEL_OUTPUT)
-	@diff $(MODEL_OUTPUT) || (echo ERROR: Model files differ && exit 1)
 
 gen:
 	$(MAKE) -C codegen release
@@ -31,5 +21,5 @@ gen:
 #target/debug/weld: $(WELD_SRC)
 #	cargo build --package weld-bin
 
-.PHONY: all build release clean test check-model
+.PHONY: all build release clean test
 .NOTPARALLEL:

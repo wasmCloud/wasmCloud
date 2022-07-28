@@ -242,7 +242,7 @@ impl Document {
     }
 
     pub fn to_float(self) -> Option<f64> {
-        (&self).as_float()
+        self.as_float()
     }
 
     /// returns true if the Document is a float
@@ -426,7 +426,7 @@ impl<'v> DocumentRef<'v> {
     }
 
     pub fn to_float(self) -> Option<f64> {
-        (&self).as_float()
+        self.as_float()
     }
 
     /// returns true if the Document is a float

@@ -1,4 +1,5 @@
 #![cfg(not(target_arch = "wasm32"))]
+#![allow(clippy::let_and_return)] // fixes some false-positive clippy warnings with feature flags
 
 use std::{
     convert::{TryFrom, TryInto},

@@ -67,6 +67,6 @@ impl std::fmt::Write for Writer {
 
 impl<const N: usize> ToBytes for &[u8; N] {
     fn to_bytes(&self) -> &[u8] {
-        *self
+        self.as_slice()
     }
 }

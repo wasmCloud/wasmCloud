@@ -1096,10 +1096,7 @@ impl<'model> RustCodeGen<'model> {
         let has_cbor = proto.map(|pv| pv.has_cbor()).unwrap_or(false);
         w.write(
             br#"{
-            async fn dispatch<'disp__,'ctx__,'msg__>(
-                &'disp__ self,
-                ctx: &'ctx__ Context,
-                message: &Message<'msg__> ) -> Result<Message<'msg__>, RpcError> {
+            async fn dispatch(&self, ctx:&Context, message:Message<'_>) -> Result<Vec<u8>, RpcError> {
                 match message.method {
         "#,
         );
@@ -1191,10 +1188,7 @@ impl<'model> RustCodeGen<'model> {
             } else {
                 w.write(b"let buf = Vec::new();\n");
             }
-            //w.write(br#"console_log(format!("actor result {}b",buf.len())); "#);
-            w.write(b"Ok(Message { method: \"");
-            w.write(&self.full_dispatch_name(service.id, method_ident));
-            w.write(b"\", arg: Cow::Owned(buf) })},\n");
+            w.write(b"Ok(buf)\n}\n");
         }
         w.write(b"_ => Err(RpcError::MethodNotHandled(format!(\"");
         self.write_ident(w, service.id);

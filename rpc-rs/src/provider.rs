@@ -488,8 +488,7 @@ impl HostBridge {
                 },
             )
             .instrument(tracing::debug_span!("dispatch", public_key = %inv.origin.public_key, operation = %inv.operation))
-            .await
-            .map(|m| m.arg.to_vec());
+            .await;
 
         #[cfg(feature = "prometheus")]
         match &rc {
