@@ -1,5 +1,7 @@
 use anyhow::{anyhow, Result};
 use async_compression::tokio::bufread::GzipDecoder;
+#[cfg(target_family = "unix")]
+use command_group::AsyncCommandGroup;
 use futures::future::join_all;
 use std::collections::HashMap;
 use std::io::Cursor;
@@ -20,7 +22,7 @@ pub(crate) const WASMCLOUD_HOST_BIN: &str = "bin/wasmcloud_host";
 pub(crate) const WASMCLOUD_HOST_BIN: &str = "bin\\wasmcloud_host.bat";
 
 /// A wrapper around the [ensure_wasmcloud_for_os_arch_pair] function that uses the
-/// architecture and operating system of the current host.
+/// architecture and operating system of the current host machine.
 ///
 /// # Arguments
 ///
@@ -82,6 +84,66 @@ where
         return Ok(dir.as_ref().join(WASMCLOUD_HOST_BIN));
     }
     // Download wasmCloud host tarball
+    download_wasmcloud_for_os_arch_pair(os, arch, version, dir).await
+}
+
+/// A wrapper around the [download_wasmcloud_for_os_arch_pair] function that uses the
+/// architecture and operating system of the current host machine.
+///
+/// # Arguments
+///
+/// * `version` - Specifies the version of the binary to download in the form of `vX.Y.Z`
+/// * `dir` - Where to unpack the wasmCloud host contents into
+/// # Examples
+///
+/// ```no_run
+/// # #[tokio::main]
+/// # async fn main() {
+/// use wash_lib::start::download_wasmcloud;
+/// let res = download_wasmcloud("v0.55.1", "/tmp/wasmcloud/").await;
+/// assert!(res.is_ok());
+/// assert!(res.unwrap().to_string_lossy() == "/tmp/wasmcloud/bin/wasmcloud_host".to_string());
+/// # }
+/// ```
+pub async fn download_wasmcloud<P>(version: &str, dir: P) -> Result<PathBuf>
+where
+    P: AsRef<Path>,
+{
+    download_wasmcloud_for_os_arch_pair(std::env::consts::OS, std::env::consts::ARCH, version, dir)
+        .await
+}
+
+/// Downloads the specified GitHub release version of the wasmCloud host from <https://github.com/wasmCloud/wasmcloud-otp/releases/>
+/// and unpacking the contents for a specified OS/ARCH pair to a directory. Returns the path to the Elixir executable.
+///
+/// # Arguments
+///
+/// * `os` - Specifies the operating system of the binary to download, e.g. `linux`
+/// * `arch` - Specifies the architecture of the binary to download, e.g. `amd64`
+/// * `version` - Specifies the version of the binary to download in the form of `vX.Y.Z`
+/// * `dir` - Where to unpack the wasmCloud host contents into
+/// # Examples
+///
+/// ```no_run
+/// # #[tokio::main]
+/// # async fn main() {
+/// use wash_lib::start::download_wasmcloud_for_os_arch_pair;
+/// let os = std::env::consts::OS;
+/// let arch = std::env::consts::ARCH;
+/// let res = download_wasmcloud_for_os_arch_pair(os, arch, "v0.55.1", "/tmp/wasmcloud/").await;
+/// assert!(res.is_ok());
+/// assert!(res.unwrap().to_string_lossy() == "/tmp/wasmcloud/bin/wasmcloud_host".to_string());
+/// # }
+/// ```
+pub async fn download_wasmcloud_for_os_arch_pair<P>(
+    os: &str,
+    arch: &str,
+    version: &str,
+    dir: P,
+) -> Result<PathBuf>
+where
+    P: AsRef<Path>,
+{
     let url = wasmcloud_url(os, arch, version);
     let body = reqwest::get(url).await?.bytes().await?;
     let cursor = Cursor::new(body);
@@ -104,11 +166,12 @@ where
                 create_dir_all(parent_folder).await?;
             }
             if let Ok(mut wasmcloud_file) = File::create(&file_path).await {
-                if let Some(file_name) = file_path.file_name() {
+                // This isn't an `if let` to avoid a Windows lint warning
+                if file_path.file_name().is_some() {
                     // Set permissions of executable files and binaries to allow executing
                     #[cfg(target_family = "unix")]
                     {
-                        let file_name = file_name.to_string_lossy();
+                        let file_name = file_path.file_name().unwrap().to_string_lossy();
                         if file_path.to_string_lossy().contains("bin")
                             || file_name.contains(".sh")
                             || file_name.contains(".bat")
@@ -141,7 +204,6 @@ where
         )),
     }
 }
-
 /// Helper function to start a wasmCloud host given the path to the elixir release script
 /// /// # Arguments
 ///
@@ -160,9 +222,6 @@ where
     T: Into<Stdio>,
     S: Into<Stdio>,
 {
-    // wasmCloud host logs are sent to stderr as of https://github.com/wasmCloud/wasmcloud-otp/pull/418
-    let mut cmd = &mut Command::new(bin_path.as_ref());
-
     // If we can connect to the local port, a wasmCloud host won't be able to listen on that port
     let port = env_vars
         .get("PORT")
@@ -173,14 +232,9 @@ where
         .is_ok()
     {
         return Err(anyhow!(
-            "Could not start wasmCloud, a host is already listening on 127.0.0.1:{}",
+            "Could not start wasmCloud, a process is already listening on 127.0.0.1:{}",
             port
         ));
-    }
-
-    // Insert environment
-    for (k, v) in env_vars {
-        cmd = cmd.env(k, v)
     }
 
     // Windows powershell will ping forever if it's the first command,
@@ -219,12 +273,23 @@ where
         _ => (),
     }
 
-    // Spawn in the foreground so we can capture logs to a specified location
-    cmd.stderr(stderr)
+    // Constructing this object in one step results in a temporary value that's dropped
+    let mut cmd = Command::new(bin_path.as_ref());
+    let cmd = cmd
+        // wasmCloud host logs are sent to stderr as of https://github.com/wasmCloud/wasmcloud-otp/pull/418
+        .stderr(stderr)
         .stdout(stdout)
-        .arg("foreground")
-        .spawn()
-        .map_err(|e| anyhow!(e))
+        .envs(&env_vars)
+        .arg("foreground");
+
+    #[cfg(target_family = "unix")]
+    {
+        Ok(cmd.group_spawn()?.into_inner())
+    }
+    #[cfg(target_family = "windows")]
+    {
+        Ok(cmd.spawn()?)
+    }
 }
 
 /// Helper function to indicate if the wasmCloud host tarball is successfully
@@ -259,7 +324,8 @@ mod test {
     use super::{ensure_wasmcloud, wasmcloud_url};
     use crate::start::{
         ensure_nats_server, ensure_wasmcloud_for_os_arch_pair, is_nats_installed,
-        is_wasmcloud_installed, start_nats_server, start_wasmcloud_host, NATS_SERVER_BINARY,
+        is_wasmcloud_installed, start_nats_server, start_wasmcloud_host, NatsConfig,
+        NATS_SERVER_BINARY,
     };
     use reqwest::StatusCode;
     use std::{collections::HashMap, env::temp_dir};
@@ -319,10 +385,11 @@ mod test {
             .await
             .is_ok());
         assert!(is_nats_installed(&install_dir).await);
+        let config = NatsConfig::new_standalone("127.0.0.1", nats_port, None);
         let nats_child = start_nats_server(
             install_dir.join(NATS_SERVER_BINARY),
             std::process::Stdio::null(),
-            nats_port,
+            config,
         )
         .await;
         assert!(nats_child.is_ok());

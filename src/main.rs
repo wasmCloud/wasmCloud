@@ -14,6 +14,7 @@ use par::ParCliCommand;
 use reg::RegCliCommand;
 use serde_json::json;
 use smithy::{GenerateCli, LintCli, ValidateCli};
+use up::UpCommand;
 use util::CommandOutput;
 
 use crate::util::OutputKind;
@@ -32,6 +33,7 @@ mod keys;
 mod par;
 mod reg;
 mod smithy;
+mod up;
 mod util;
 
 const ASCII: &str = r#"
@@ -64,7 +66,7 @@ struct Cli {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Subcommand)]
 enum CliCommand {
-    /// Perform operations against managed applications and deployments (wadm) (experimental)
+    /// Manage declarative applications and deployments (wadm) (experimental)
     #[clap(name = "app", subcommand)]
     App(AppCliCommand),
     /// Invoke a wasmCloud actor
@@ -88,6 +90,9 @@ enum CliCommand {
     /// Utilities for generating and managing keys
     #[clap(name = "keys", subcommand)]
     Keys(KeysCliCommand),
+    /// Perform lint checks on smithy models
+    #[clap(name = "lint")]
+    Lint(LintCli),
     /// Create a new project from template
     #[clap(name = "new", subcommand)]
     New(NewCliCommand),
@@ -97,9 +102,9 @@ enum CliCommand {
     /// Interact with OCI compliant registries
     #[clap(name = "reg", subcommand)]
     Reg(RegCliCommand),
-    /// Perform lint checks on smithy models
-    #[clap(name = "lint")]
-    Lint(LintCli),
+    /// Bootstrap a wasmCloud environment
+    #[clap(name = "up")]
+    Up(UpCommand),
     /// Perform validation checks on smithy models
     #[clap(name = "validate")]
     Validate(ValidateCli),
@@ -113,19 +118,20 @@ async fn main() {
     let output_kind = cli.output;
 
     let res: Result<CommandOutput> = match cli.command {
+        CliCommand::App(app_cli) => app::handle_command(app_cli, output_kind).await,
         CliCommand::Call(call_cli) => call::handle_command(call_cli.command()).await,
         CliCommand::Claims(claims_cli) => claims::handle_command(claims_cli, output_kind).await,
         CliCommand::Ctl(ctl_cli) => ctl::handle_command(ctl_cli, output_kind).await,
         CliCommand::Ctx(ctx_cli) => ctx::handle_command(ctx_cli).await,
-        CliCommand::Drain(drain_cmd) => drain::handle_command(drain_cmd),
+        CliCommand::Drain(drain_cli) => drain::handle_command(drain_cli),
         CliCommand::Gen(generate_cli) => smithy::handle_gen_command(generate_cli),
         CliCommand::Keys(keys_cli) => keys::handle_command(keys_cli),
+        CliCommand::Lint(lint_cli) => smithy::handle_lint_command(lint_cli).await,
         CliCommand::New(new_cli) => generate::handle_command(new_cli),
         CliCommand::Par(par_cli) => par::handle_command(par_cli, output_kind).await,
         CliCommand::Reg(reg_cli) => reg::handle_command(reg_cli, output_kind).await,
-        CliCommand::Lint(lint_cli) => smithy::handle_lint_command(lint_cli).await,
+        CliCommand::Up(up_cli) => up::handle_command(up_cli, output_kind).await,
         CliCommand::Validate(validate_cli) => smithy::handle_validate_command(validate_cli).await,
-        CliCommand::App(app_cli) => app::handle_command(app_cli, output_kind).await,
     };
 
     std::process::exit(match res {

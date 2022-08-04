@@ -8,7 +8,8 @@
 //!     start_wasmcloud_host,
 //!     start_nats_server,
 //!     ensure_nats_server,
-//!     ensure_wasmcloud
+//!     ensure_wasmcloud,
+//!     NatsConfig
 //! };
 //! use std::path::PathBuf;
 //!
@@ -22,10 +23,11 @@
 //!     // Start NATS server, redirecting output to a log file
 //!     let nats_log_path = install_dir.join("nats.log");
 //!     let nats_log_file = tokio::fs::File::create(&nats_log_path).await?.into_std().await;
+//!     let config = NatsConfig::new_standalone("127.0.0.1", 4222, None);
 //!     let mut nats_process = start_nats_server(
 //!         nats_binary,
 //!         nats_log_file,
-//!         4222,
+//!         config,
 //!     ).await?;
 //!     
 //!     // Download wasmCloud if not already installed
