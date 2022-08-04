@@ -1,6 +1,6 @@
 [package]
 name = "wash-cli"
-version = "0.12.0-alpha.1"
+version = "0.12.0-alpha.2"
 authors = ["wasmCloud Team"]
 categories = ["wasm", "command-line-utilities"]
 description = "wasmcloud Shell (wash) CLI tool"
@@ -20,7 +20,9 @@ atelier_core = "0.2"
 bytes = "1.0"
 cargo_atelier = "0.2"
 clap = { version="3", features=["derive", "env"] }
+cloudevents-sdk = "0.4.0"
 console = "0.15"
+ctrlc = "3.2.2"
 derive_more = {version = "0.99.16", default-features = false, features = ["display"]}
 dialoguer = "0.9"
 dirs = "4.0"
@@ -54,7 +56,6 @@ tokio = {version = "1", features = ["full"]}
 toml = "0.5"
 walkdir = "2.3"
 which = "4.2.2"
-cloudevents-sdk = "0.4.0"
 
 wash-lib = { version = "0.1.0", path = "./crates/wash-lib" }
 wascap = "0.8.0"

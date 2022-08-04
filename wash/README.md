@@ -1,6 +1,6 @@
 [![Latest Release](https://img.shields.io/github/v/release/wasmcloud/wash?color=success&include_prereleases)](https://github.com/wasmCloud/wash/releases)
 [![Rust Build](https://img.shields.io/github/workflow/status/wasmcloud/wash/Rust/main)](https://github.com/wasmCloud/wash/actions/workflows/rust.yml)
-[![Rust Version](https://img.shields.io/badge/rustc-1.60.0-orange.svg)](https://blog.rust-lang.org/2022/04/07/Rust-1.60.0.html) 
+[![Rust Version](https://img.shields.io/badge/rustc-1.62.0-orange.svg)](https://blog.rust-lang.org/2022/04/07/Rust-1.62.0.html) 
 [![Contributors](https://img.shields.io/github/contributors/wasmcloud/wash)](https://github.com/wasmCloud/wash/graphs/contributors)
 [![Good first issues](https://img.shields.io/github/issues/wasmcloud/wash/good%20first%20issue?label=good%20first%20issues)](https://github.com/wasmCloud/wash/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22)
 [![wash-cli](https://img.shields.io/crates/v/wash-cli)](https://crates.io/crates/wash-cli) 
@@ -71,6 +71,8 @@ Create new wasmCloud projects from predefined [templates](https://github.com/was
 Create, modify and inspect [provider archives](https://github.com/wasmCloud/wasmCloud/tree/main/crates/provider-archive), a TAR format that contains a signed JWT and OS/Architecture specific binaries for native capability providers.
 ### reg
 Push and Pull actors and capability providers to/from OCI compliant registries. Used extensively in our own CI/CD and in local development, where a local registry is used to store your development artifacts.
+### up
+Bootstrap a wasmCloud environment in one easy command, supporting both launching NATS and wasmCloud in the background as well as an "interactive" mode for shorter lived hosts.
 ### validate
 Perform validation checks on .smithy models, ensuring that your interfaces are valid and usable for codegen and development.
 
