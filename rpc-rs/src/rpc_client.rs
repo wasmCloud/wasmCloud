@@ -635,16 +635,21 @@ impl RpcClient {
     }
 }
 
-/// helper method to add logging to a nats connection. Logs disconnection (warn level), reconnection (info level), error (error), and lame duck(warn) events.
+/// helper method to add logging to a nats connection. Logs disconnection (warn level), reconnection (info level), error (error), slow consumer, and lame duck(warn) events.
 pub fn with_connection_event_logging(
     opts: async_nats::ConnectOptions,
 ) -> async_nats::ConnectOptions {
-    opts.disconnect_callback(|| async {
-        warn!("nats connection has disconnected. Attempting reconnection ...");
+    use async_nats::Event;
+    opts.event_callback(|event| async move {
+        match event {
+            Event::Disconnect => warn!("nats client disconnected"),
+            Event::Reconnect => info!("nats client reconnected"),
+            Event::ClientError(err) => error!("nats client error: '{:?}'", err),
+            Event::ServerError(err) => error!("nats server error: '{:?}'", err),
+            Event::SlowConsumer(val) => warn!("nats slow consumer detected ({})", val),
+            Event::LameDuckMode => warn!("nats lame duck mode"),
+        }
     })
-    .reconnect_callback(|| async { info!("nats connection has been reestablished.") })
-    .error_callback(|error| async move { error!(%error, "nats connection encountered error ") })
-    .lame_duck_callback(|| async { warn!("nats connection has entered lame duck mode") })
 }
 
 #[derive(Clone)]
