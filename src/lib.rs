@@ -1,6 +1,8 @@
 pub mod broker;
-pub use wasmcloud_interface_lattice_control::*;
 mod sub_stream;
+mod types;
+
+pub use types::*;
 
 use cloudevents::event::Event;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
