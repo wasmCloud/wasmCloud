@@ -91,11 +91,11 @@ spec:
             - name: WASMCLOUD_JS_DOMAIN
               value: {{ .Values.wasmcloud.config.jetstreamDomain | quote }}
             {{- end }}
-            {{- if .Values.wasmcloud.logging.structuredLoggingEnabled }}
+            {{- if .Values.wasmcloud.config.logging.structuredLoggingEnabled }}
             - name: WASMCLOUD_STRUCTURED_LOGGING_ENABLED
               value: {{ .Values.wasmcloud.config.logging.structuredLoggingEnabled | quote }}
             {{- end }}
-            {{- if .Values.wasmcloud.logging.logLevel }}
+            {{- if .Values.wasmcloud.config.logging.logLevel }}
             - name: WASMCLOUD_STRUCTURED_LOG_LEVEL
               value: {{ .Values.wasmcloud.config.logging.logLevel | quote }}
             {{- end }}
