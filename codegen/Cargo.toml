@@ -9,6 +9,7 @@ homepage = "https://github.com/wasmcloud/weld"
 repository = "https://github.com/wasmcloud/weld"
 documentation = "https://docs.rs/weld-codegen"
 readme = "README.md"
+rust-version = "1.57.0"
 
 [features]
 default = [ "wasmbus" ]

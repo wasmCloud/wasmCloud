@@ -9,6 +9,8 @@ repository = "https://github.com/wasmcloud/weld"
 documentation = "https://docs.rs/wasmbus-rpc"
 readme = "README.md"
 edition = "2021"
+# MSRV
+rust-version = "1.58.1"
 
 # don't push build.rs
 exclude = [ "build.rs" ]
@@ -17,7 +19,7 @@ exclude = [ "build.rs" ]
 default = [ ]
 BigInteger = [ "num-bigint" ]
 BigDecimal = [ "bigdecimal" ]
-prometheus = [ "dep:prometheus" ]
+metrics = [ "prometheus" ]
 otel = ["opentelemetry", "tracing-opentelemetry", "opentelemetry-otlp"]
 
 [dependencies]

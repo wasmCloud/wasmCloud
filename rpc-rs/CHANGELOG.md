@@ -1,5 +1,11 @@
 # wasmbus-rpc Changelog
 
+## 0.10.0
+
+- upgrade to async-nats 0.18.0
+- declare MSRV (rust 1.58.1)
+
+
 ## BREAKING CHANGES from 0.8.x to 0.9.0
 
 - provider_main has a new parameter: friendly_name, which is displayed on OTEL tracing dashboards.
