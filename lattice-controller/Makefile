@@ -1,3 +1,4 @@
+
 # capability-provider/lattice-controller/Makefile
 
 PROJECT = lattice-controller
@@ -12,4 +13,3 @@ include ../build/makefiles/provider.mk
 
 test:
 	cargo test -- --nocapture
-
