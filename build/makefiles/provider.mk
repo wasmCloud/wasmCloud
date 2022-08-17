@@ -38,11 +38,12 @@ endif
 
 par_targets ?= \
 	x86_64-unknown-linux-gnu \
-   	x86_64-apple-darwin \
-   	aarch64-unknown-linux-gnu \
-   	aarch64-apple-darwin \
+	x86_64-apple-darwin \
+	aarch64-unknown-linux-gnu \
+	aarch64-apple-darwin \
 	armv7-unknown-linux-gnueabihf \
-   	x86_64-pc-windows-gnu
+	x86_64-pc-windows-gnu \
+	x86_64-pc-windows-msvc
 
 # Lookup table from rust target triple to wasmcloud architecture doubles
 # Thanks to https://stackoverflow.com/a/40919906 for the pointer to
@@ -53,6 +54,7 @@ ARCH_LOOKUP_armv7-unknown-linux-gnueabihf=arm-linux
 ARCH_LOOKUP_aarch64-unknown-linux-gnu=aarch64-linux
 ARCH_LOOKUP_aarch64-apple-darwin=aarch64-macos
 ARCH_LOOKUP_x86_64-pc-windows-gnu=x86_64-windows
+ARCH_LOOKUP_x86_64-pc-windows-msvc=x86_64-windows
 
 bin_targets = $(foreach target,$(par_targets),target/$(target)/release/$(bin_name))
 
@@ -81,9 +83,14 @@ par:: $(dest_par)
 # rebuild base par if target0 changes
 $(dest_par): $(bin_target0) Makefile Cargo.toml
 	@mkdir -p $(dir $(dest_par))
+	bin_src=$(bin_target0);  \
+	if [ $(par_target0) = "x86_64-pc-windows-gnu" ] || \
+	   [ $(par_target0) = "x86_64-pc-windows-msvc" ] ; then \
+		bin_src=$$bin_src.exe;  \
+	fi; \
 	$(WASH) par create \
 		--arch $(ARCH_LOOKUP_$(par_target0)) \
-		--binary $(bin_target0) \
+		--binary $$bin_src \
 		--capid $(CAPABILITY_ID) \
 		--name $(NAME) \
 		--vendor $(VENDOR) \
