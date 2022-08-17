@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-provider-httpserver"
-version = "0.16.2"
+version = "0.16.3"
 edition = "2021"
 
 [dependencies]
@@ -20,18 +20,14 @@ toml = "0.5"
 tracing = "0.1.34"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 warp = { version="0.3", features=["tls"] }
-wasmcloud-interface-httpserver = "0.6.0"
-wasmbus-rpc = { version = "0.9", features = ["otel"]}
-
-[target.'cfg(all(target_arch = "aarch64", target_os = "linux"))'.dependencies]
-# We don't use paste directly, but we pin to a version that works with aarch64-linux
-paste = "=1.0.6"
+wasmcloud-interface-httpserver = "0.7.0"
+wasmbus-rpc = { version = "0.10.0", features = ["otel"]}
 
 [dev-dependencies]
 assert_matches = "1.5"
-blake2 = "0.9"
+blake2 = "0.10.4"
 reqwest = { version = "0.11", features = ["json"]}
-wasmcloud-test-util = "0.4.0"
+wasmcloud-test-util = "0.5.0"
 
 [lib]
 name = "wasmcloud_provider_httpserver"
@@ -40,4 +36,3 @@ path = "src/lib.rs"
 [[bin]]
 name = "httpserver"
 path = "bin/main.rs"
-

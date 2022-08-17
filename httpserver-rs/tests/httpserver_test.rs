@@ -270,8 +270,8 @@ async fn test_timeout(_: &TestOptions) -> RpcResult<()> {
 
 /// compute hash of data
 fn hash(buf: &[u8]) -> String {
-    use blake2::{Blake2b, Digest};
-    let mut hasher = Blake2b::new();
+    use blake2::{Blake2s256, Digest};
+    let mut hasher = Blake2s256::new();
     hasher.update(buf);
     let res = hasher.finalize();
     format!("{:x}", res)

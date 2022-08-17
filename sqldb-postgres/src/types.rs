@@ -23,7 +23,7 @@ where
     Ok(())
 }
 
-/// cbor enode a single value based on the database column type
+/// cbor encode a single value based on the database column type
 #[inline]
 fn encode_val<'r, W>(
     enc: &mut Encoder<W>,

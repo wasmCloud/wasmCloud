@@ -20,22 +20,17 @@ pub(crate) enum DbError {
     Other(String),
 }
 
+/*
 /// convert cbor encoding errors to DbError
 impl<W: std::io::Write> From<minicbor::encode::Error<W>> for DbError {
     fn from(e: minicbor::encode::Error<W>) -> DbError
     where
         W: minicbor::encode::Write,
     {
-        DbError::Encoding(
-            match e {
-                minicbor::encode::Error::Write(_) => "writing to buffer",
-                minicbor::encode::Error::Message(s) => s,
-                _ => "unspecified encoding error",
-            }
-            .to_string(),
-        )
+        DbError::Encoding(e.to_string())
     }
 }
+ */
 
 /// convert std::io errors to DbError
 impl From<std::io::Error> for DbError {
