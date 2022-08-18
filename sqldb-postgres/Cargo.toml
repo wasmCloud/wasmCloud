@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-provider-sqldb-postgres"
-version = "0.3.3"
+version = "0.3.4"
 description = "Postgres SQL Database capability provider for contract wasmcloud:sqldb"
 readme = "README.md"
 edition = "2021"

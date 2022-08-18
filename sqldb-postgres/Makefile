@@ -4,7 +4,7 @@ PROJECT = sqldb-postgres
 CAPABILITY_ID = "wasmcloud:sqldb"
 NAME = "Postgres SQL"
 VENDOR = "wasmcloud"
-VERSION = 0.1.0
+VERSION  = $(shell cargo metadata --no-deps --format-version 1 | jq -r '.packages[] .version' | head -1)
 REVISION = 0
 
 include ../build/makefiles/provider.mk
