@@ -6,6 +6,7 @@ use crate::{
     },
 };
 use serde::{Deserialize, Serialize};
+use serde_with::{serde_as, NoneAsEmptyString};
 use std::path::PathBuf;
 
 #[derive(Clone, Deserialize, Serialize, Debug)]
@@ -20,20 +21,21 @@ impl DefaultContext {
     }
 }
 
+#[serde_as]
 #[derive(Clone, Deserialize, Serialize, Debug)]
 pub(crate) struct WashContext {
     #[serde(default)]
     pub name: String,
-    #[serde(with = "serde_with::rust::string_empty_as_none")]
+    #[serde_as(as = "NoneAsEmptyString")]
     pub cluster_seed: Option<ClusterSeed>,
 
     #[serde(default = "default_nats_host")]
     pub ctl_host: String,
     #[serde(default = "default_nats_port")]
     pub ctl_port: u16,
-    #[serde(with = "serde_with::rust::string_empty_as_none")]
+    #[serde_as(as = "NoneAsEmptyString")]
     pub ctl_jwt: Option<String>,
-    #[serde(with = "serde_with::rust::string_empty_as_none")]
+    #[serde_as(as = "NoneAsEmptyString")]
     pub ctl_seed: Option<String>,
     pub ctl_credsfile: Option<PathBuf>,
     /// timeout in milliseconds
@@ -47,9 +49,9 @@ pub(crate) struct WashContext {
     pub rpc_host: String,
     #[serde(default = "default_nats_port")]
     pub rpc_port: u16,
-    #[serde(with = "serde_with::rust::string_empty_as_none")]
+    #[serde_as(as = "NoneAsEmptyString")]
     pub rpc_jwt: Option<String>,
-    #[serde(with = "serde_with::rust::string_empty_as_none")]
+    #[serde_as(as = "NoneAsEmptyString")]
     pub rpc_seed: Option<String>,
     pub rpc_credsfile: Option<PathBuf>,
     /// rpc timeout in milliseconds

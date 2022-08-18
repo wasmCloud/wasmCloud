@@ -188,14 +188,17 @@ pub(crate) async fn handle_command(
     output_kind: OutputKind,
 ) -> Result<CommandOutput> {
     match command {
-        ParCliCommand::Create(cmd) => handle_create(cmd, output_kind),
+        ParCliCommand::Create(cmd) => handle_create(cmd, output_kind).await,
         ParCliCommand::Inspect(cmd) => handle_inspect(cmd).await,
-        ParCliCommand::Insert(cmd) => handle_insert(cmd, output_kind),
+        ParCliCommand::Insert(cmd) => handle_insert(cmd, output_kind).await,
     }
 }
 
 /// Creates a provider archive using an initial architecture target, provider, and signing keys
-pub(crate) fn handle_create(cmd: CreateCommand, output_kind: OutputKind) -> Result<CommandOutput> {
+pub(crate) async fn handle_create(
+    cmd: CreateCommand,
+    output_kind: OutputKind,
+) -> Result<CommandOutput> {
     let mut par = ProviderArchive::new(
         &cmd.capid,
         &cmd.name,
@@ -242,6 +245,7 @@ pub(crate) fn handle_create(cmd: CreateCommand, output_kind: OutputKind) -> Resu
     };
 
     par.write(&outfile, &issuer, &subject, cmd.compress)
+        .await
         .map_err(|e| anyhow!("{}", e))
         .with_context(|| {
             format!(
@@ -270,7 +274,9 @@ pub(crate) async fn handle_inspect(cmd: InspectCommand) -> Result<CommandOutput>
         cmd.no_cache,
     )
     .await?;
-    let artifact = ProviderArchive::try_load(&artifact_bytes).map_err(|e| anyhow!("{}", e))?;
+    let artifact = ProviderArchive::try_load(&artifact_bytes)
+        .await
+        .map_err(|e| anyhow!("{}", e))?;
     let claims = artifact
         .claims()
         .ok_or_else(|| anyhow!("No claims found in artifact"))?;
@@ -349,12 +355,17 @@ pub(crate) async fn handle_inspect(cmd: InspectCommand) -> Result<CommandOutput>
 }
 
 /// Loads a provider archive and attempts to insert an additional provider into it
-pub(crate) fn handle_insert(cmd: InsertCommand, output_kind: OutputKind) -> Result<CommandOutput> {
+pub(crate) async fn handle_insert(
+    cmd: InsertCommand,
+    output_kind: OutputKind,
+) -> Result<CommandOutput> {
     let mut buf = Vec::new();
     let mut f = File::open(cmd.archive.clone())?;
     f.read_to_end(&mut buf)?;
 
-    let mut par = ProviderArchive::try_load(&buf).map_err(convert_error)?;
+    let mut par = ProviderArchive::try_load(&buf)
+        .await
+        .map_err(convert_error)?;
 
     let issuer = extract_keypair(
         cmd.issuer,
@@ -380,6 +391,7 @@ pub(crate) fn handle_insert(cmd: InsertCommand, output_kind: OutputKind) -> Resu
     par.add_library(&cmd.arch, &lib).map_err(convert_error)?;
 
     par.write(&cmd.archive, &issuer, &subject, is_compressed(&buf)?)
+        .await
         .map_err(convert_error)?;
 
     let mut map = HashMap::new();

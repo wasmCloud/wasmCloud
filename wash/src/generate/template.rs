@@ -91,10 +91,10 @@ fn create_matcher<P: AsRef<Path>>(project_dir: P, patterns: &[String]) -> Result
     Ok(builder.build()?)
 }
 
-pub(crate) fn spinner() -> ProgressStyle {
-    ProgressStyle::default_spinner()
+pub(crate) fn spinner() -> Result<ProgressStyle> {
+    Ok(ProgressStyle::default_spinner()
         .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ")
-        .template("{prefix:.bold.dim} {spinner} {wide_msg}")
+        .template("{prefix:.bold.dim} {spinner} {wide_msg}")?)
 }
 
 pub(crate) fn process_template_dir(
@@ -112,7 +112,7 @@ pub(crate) fn process_template_dir(
     }
 
     let matcher = Matcher::new(source_dir, template_config)?;
-    let spinner_style = spinner();
+    let spinner_style = spinner()?;
 
     let files = WalkDir::new(source_dir)
         .sort_by_file_name() // ensure deterministic order and easier-to-read progress output
