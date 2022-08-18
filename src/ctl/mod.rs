@@ -469,7 +469,7 @@ pub(crate) async fn handle_command(
     output_kind: OutputKind,
 ) -> Result<CommandOutput> {
     use CtlCliCommand::*;
-    let sp: Spinner = Spinner::new(&output_kind);
+    let sp: Spinner = Spinner::new(&output_kind)?;
     let out: CommandOutput = match command {
         Apply(cmd) => {
             sp.update_spinner_message(" Applying manifest ...".to_string());

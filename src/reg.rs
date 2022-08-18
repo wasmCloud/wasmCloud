@@ -140,7 +140,7 @@ pub(crate) async fn handle_pull(
 ) -> Result<CommandOutput> {
     let image: Reference = cmd.url.parse()?;
 
-    let spinner = Spinner::new(&output_kind);
+    let spinner = Spinner::new(&output_kind)?;
     spinner.update_spinner_message(format!(" Downloading {} ...", image.whole()));
 
     let artifact = pull_artifact(
@@ -153,7 +153,7 @@ pub(crate) async fn handle_pull(
     )
     .await?;
 
-    let outfile = write_artifact(&artifact, &image, cmd.destination)?;
+    let outfile = write_artifact(&artifact, &image, cmd.destination).await?;
 
     spinner.finish_and_clear();
 
@@ -272,12 +272,12 @@ pub(crate) async fn handle_ping(cmd: PingCommand) -> Result<CommandOutput> {
     Ok(CommandOutput::from("Pong!"))
 }
 
-pub(crate) fn write_artifact(
+pub(crate) async fn write_artifact(
     artifact: &[u8],
     image: &Reference,
     output: Option<String>,
 ) -> Result<String> {
-    let file_extension = match validate_artifact(artifact, image.repository())? {
+    let file_extension = match validate_artifact(artifact, image.repository()).await? {
         SupportedArtifacts::Par => PROVIDER_ARCHIVE_FILE_EXTENSION,
         SupportedArtifacts::Wasm => WASM_FILE_EXTENSION,
     };
@@ -300,10 +300,10 @@ pub(crate) fn write_artifact(
 
 /// Helper function to determine artifact type and validate that it is
 /// a valid artifact of that type
-pub(crate) fn validate_artifact(artifact: &[u8], name: &str) -> Result<SupportedArtifacts> {
+pub(crate) async fn validate_artifact(artifact: &[u8], name: &str) -> Result<SupportedArtifacts> {
     match validate_actor_module(artifact, name) {
         Ok(_) => Ok(SupportedArtifacts::Wasm),
-        Err(_) => match validate_provider_archive(artifact, name) {
+        Err(_) => match validate_provider_archive(artifact, name).await {
             Ok(_) => Ok(SupportedArtifacts::Par),
             Err(_) => bail!("Unsupported artifact type"),
         },
@@ -322,8 +322,8 @@ fn validate_actor_module(artifact: &[u8], module: &str) -> Result<()> {
 
 /// Attempts to unpack a provider archive
 /// Will fail without claims or if the archive is invalid
-fn validate_provider_archive(artifact: &[u8], archive: &str) -> Result<()> {
-    match ProviderArchive::try_load(artifact) {
+async fn validate_provider_archive(artifact: &[u8], archive: &str) -> Result<()> {
+    match ProviderArchive::try_load(artifact).await {
         Ok(_par) => Ok(()),
         Err(_e) => bail!("Invalid provider archive : {}", archive),
     }
@@ -337,7 +337,7 @@ pub(crate) async fn handle_push(
         warn!(" Unless an SSL certificate has been installed, pushing to localhost without the --insecure option will fail")
     }
 
-    let spinner = Spinner::new(&output_kind);
+    let spinner = Spinner::new(&output_kind)?;
     spinner.update_spinner_message(format!(" Pushing {} to {} ...", cmd.artifact, cmd.url));
 
     push_artifact(
@@ -389,7 +389,7 @@ pub(crate) async fn push_artifact(
     f.read_to_end(&mut artifact_buf)?;
 
     let (artifact_media_type, config_media_type) =
-        match validate_artifact(&artifact_buf, &artifact)? {
+        match validate_artifact(&artifact_buf, &artifact).await? {
             SupportedArtifacts::Wasm => (WASM_MEDIA_TYPE, WASM_CONFIG_MEDIA_TYPE),
             SupportedArtifacts::Par => (
                 PROVIDER_ARCHIVE_MEDIA_TYPE,

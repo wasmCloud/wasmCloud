@@ -1,4 +1,5 @@
 use crate::util::OutputKind;
+use anyhow::Result;
 use indicatif::{ProgressBar, ProgressStyle};
 
 // For more spinners check out the cli-spinners project:
@@ -15,21 +16,21 @@ pub struct Spinner {
 }
 
 impl Spinner {
-    pub(crate) fn new(output_kind: &OutputKind) -> Self {
+    pub(crate) fn new(output_kind: &OutputKind) -> Result<Self> {
         match output_kind {
             OutputKind::Text => {
                 let style = ProgressStyle::default_spinner()
                     .tick_strings(DOTS_12)
-                    .template("{prefix:.bold.dim} {spinner:.bold.dim} {wide_msg:.bold.dim}");
+                    .template("{prefix:.bold.dim} {spinner:.bold.dim} {wide_msg:.bold.dim}")?;
 
                 let spinner = ProgressBar::new_spinner().with_style(style);
 
-                spinner.enable_steady_tick(80);
-                Self {
+                spinner.enable_steady_tick(std::time::Duration::from_millis(200));
+                Ok(Self {
                     spinner: Some(spinner),
-                }
+                })
             }
-            OutputKind::Json => Self { spinner: None },
+            OutputKind::Json => Ok(Self { spinner: None }),
         }
     }
 

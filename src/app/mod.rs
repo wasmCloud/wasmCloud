@@ -120,7 +120,7 @@ pub(crate) async fn handle_command(
     output_kind: OutputKind,
 ) -> Result<CommandOutput> {
     use AppCliCommand::*;
-    let sp: Spinner = Spinner::new(&output_kind);
+    let sp: Spinner = Spinner::new(&output_kind)?;
     let out: CommandOutput = match command {
         List(cmd) => {
             sp.update_spinner_message("Querying app spec list ...".to_string());

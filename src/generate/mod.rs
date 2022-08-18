@@ -359,7 +359,7 @@ pub(crate) fn make_project(
         git2::Repository::init(&project_dir)?;
     }
 
-    pbar.join().unwrap();
+    pbar.clear().ok();
 
     println!(
         "{} {} {} {}",
