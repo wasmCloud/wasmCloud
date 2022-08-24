@@ -1,6 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::io::{StderrLock, Write};
+use std::io::{BufRead, StderrLock, Write};
 use std::str::FromStr;
 
 use once_cell::sync::OnceCell;
@@ -32,6 +32,8 @@ use crate::{
 lazy_static::lazy_static! {
     static ref STDERR: std::io::Stderr = std::io::stderr();
 }
+
+static HOST_DATA: OnceCell<HostData> = OnceCell::new();
 
 struct LockedWriter<'a> {
     stderr: StderrLock<'a>,
@@ -107,10 +109,7 @@ pub fn provider_start<P>(
 where
     P: ProviderDispatch + Send + Sync + Clone + 'static,
 {
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        //.enable_io()
-        .build()?;
+    let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
 
     runtime.block_on(async { provider_run(provider_dispatch, host_data, friendly_name).await })?;
     // in the unlikely case there are any stuck threads,
@@ -208,9 +207,20 @@ where
     Ok(())
 }
 
+/// Loads configuration data sent from the host over stdin. The returned host data contains all the
+/// configuration information needed to connect to the lattice and any additional configuration
+/// provided to this provider (like `config_json`).
+///
+/// NOTE: this function will read the data from stdin exactly once. If this function is called more
+/// than once, it will return a copy of the original data fetched
 pub fn load_host_data() -> Result<HostData, RpcError> {
-    use std::io::BufRead;
+    // TODO(thomastaylor312): Next time we release a non-patch release, we should have this return a
+    // borrowed copy of host data instead rather than cloning every time
+    HOST_DATA.get_or_try_init(_load_host_data).cloned()
+}
 
+// Internal function for populating the host data
+pub fn _load_host_data() -> Result<HostData, RpcError> {
     let mut buffer = String::new();
     let stdin = std::io::stdin();
     {
