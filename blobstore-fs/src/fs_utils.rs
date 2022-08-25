@@ -1,48 +1,39 @@
-
 use std::path::{Path, PathBuf};
 use std::vec::Vec;
 
-/// Traverses a file system starting at location `root` and returning a list of all directories 
+/// Traverses a file system starting at location `root` and returning a list of all directories
 /// contained in that directory, recursively, relative to the original root at level 0.
-pub fn all_dirs(root: &Path, prefix: &Path) -> Vec<PathBuf>{
-
+pub fn all_dirs(root: &Path, prefix: &Path) -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = match std::fs::read_dir(root) {
-        Ok(rd) => {
-            rd.filter(|e| {
-                match e {
-                    Ok(entry) => match entry.file_type() {
-                        Ok(ft) => ft.is_dir(),
-                        _ => false
-                    },
-                    _ => false
-                }
+        Ok(rd) => rd
+            .filter(|e| match e {
+                Ok(entry) => match entry.file_type() {
+                    Ok(ft) => ft.is_dir(),
+                    _ => false,
+                },
+                _ => false,
             })
-            .map(|e| {
-                PathBuf::from(e.unwrap().path().as_path().strip_prefix(prefix).unwrap())
-            })
-            .collect()
-    
-        },
+            .map(|e| PathBuf::from(e.unwrap().path().as_path().strip_prefix(prefix).unwrap()))
+            .collect(),
         Err(e) => {
             panic!("Could not read directories at {:?}: {}", root, e)
         }
     };
 
     // Now recursively go in all directories and collect all sub-directories
-    let mut  subdirs: Vec<PathBuf> = Vec::new();
+    let mut subdirs: Vec<PathBuf> = Vec::new();
     for dir in &dirs {
         let mut local_subdirs = all_dirs(prefix.join(dir.as_path()).as_path(), prefix);
         subdirs.append(&mut local_subdirs);
     }
     dirs.append(&mut subdirs);
     dirs
-
 }
 
 #[cfg(test)]
 mod tests {
-    use std::fs::File;
     use super::*;
+    use std::fs::File;
     use std::fs::{create_dir_all, remove_dir_all};
 
     fn clear_state(r: &Path) {
@@ -56,7 +47,11 @@ mod tests {
         // give each test a different root otherwise they can't run in parallel
         let root = Path::new("/tmp/rust_test/test1");
         if let Err(e) = create_dir_all(root.join("dir1").as_path()) {
-            panic!("Error in create_dir_all({:?}): {}", root.join("dir1").as_path(), e);
+            panic!(
+                "Error in create_dir_all({:?}): {}",
+                root.join("dir1").as_path(),
+                e
+            );
         }
 
         let dirs = all_dirs(root, root);
@@ -64,7 +59,6 @@ mod tests {
         clear_state(root);
 
         assert_eq!(dirs, vec![PathBuf::from(r"dir1")]);
-        
     }
 
     #[test]
@@ -81,11 +75,10 @@ mod tests {
         let dirs = all_dirs(root, root);
 
         clear_state(root);
-        
+
         assert!(dirs.contains(&PathBuf::from(r"dir1")));
         assert!(dirs.contains(&PathBuf::from(r"dir2")));
         assert!(dirs.contains(&PathBuf::from(r"dir2/dir3")));
-
     }
 
     #[test]
@@ -104,12 +97,10 @@ mod tests {
         let dirs = all_dirs(root, root);
 
         clear_state(root);
-        
+
         assert!(dirs.contains(&PathBuf::from(r"dir1")));
         assert!(dirs.contains(&PathBuf::from(r"dir2")));
         assert!(!dirs.contains(&PathBuf::from(r"foo.txt")));
         assert!(dirs.contains(&PathBuf::from(r"dir2/dir3")));
-
     }
-
 }

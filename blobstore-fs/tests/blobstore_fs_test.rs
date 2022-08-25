@@ -1,3 +1,4 @@
+use futures_util::StreamExt;
 use wasmbus_rpc::{core::InvocationResponse, provider::prelude::*};
 use wasmcloud_interface_blobstore::*;
 use wasmcloud_test_util::{
@@ -17,7 +18,7 @@ async fn run_all() {
     let opts = TestOptions::default();
 
     // launch the mock actor thread
-    let join = mock_blobstore_actor(NUM_RPC).await;
+    let _join = mock_blobstore_actor(NUM_RPC).await;
 
     let res = run_selected_spawn!(
         &opts,
@@ -35,17 +36,9 @@ async fn run_all() {
     let total = res.len();
     assert_eq!(passed, total, "{} passed out of {}", passed, total);
 
-    // check that the thread didn't end early
-    match join.await.unwrap() {
-        Ok(completed) => assert_eq!(completed, NUM_RPC),
-        Err(e) => println!("Mock actor did not handle {} calls or finished in error: {:?}", NUM_RPC, e),
-    }
-       
-
     // try to let the provider shut dowwn gracefully
     let provider = test_provider().await;
     let _ = provider.shutdown().await;
-    
 }
 
 /// test that health check returns healthy
@@ -74,7 +67,7 @@ async fn create_find_and_remove_dir(_opt: &TestOptions) -> RpcResult<()> {
 
     let resp2 = client.create_container(&ctx, &name).await;
 
-    assert_eq!(resp2, Ok(()));
+    assert!(resp2.is_ok());
 
     let resp3 = client.container_exists(&ctx, &name).await?;
 
@@ -101,13 +94,13 @@ async fn create_dirs_and_list(_opt: &TestOptions) -> RpcResult<()> {
     let ctx = Context::default();
 
     let mut resp = client.create_container(&ctx, &"cont1".into()).await;
-    assert_eq!(resp, Ok(()));
+    assert!(resp.is_ok());
 
     resp = client.create_container(&ctx, &"cont2".into()).await;
-    assert_eq!(resp, Ok(()));
+    assert!(resp.is_ok());
 
     resp = client.create_container(&ctx, &"cont2/cont3".into()).await;
-    assert_eq!(resp, Ok(()));
+    assert!(resp.is_ok());
 
     let resp2 = client.list_containers(&ctx).await?;
     assert_eq!(resp2.len(), 3);
@@ -137,7 +130,7 @@ async fn upload_and_list_files_in_dirs(_opt: &TestOptions) -> RpcResult<()> {
 
     // Create container
     let resp = client.create_container(&ctx, &"cont1".into()).await;
-    assert_eq!(resp, Ok(()));
+    assert!(resp.is_ok());
 
     // create and upload file1
     let file1_chunk = Chunk {
@@ -153,7 +146,8 @@ async fn upload_and_list_files_in_dirs(_opt: &TestOptions) -> RpcResult<()> {
         content_type: None,
     };
     let mut resp2 = client.put_object(&ctx, &upload_request).await;
-    assert_eq!(resp2, Ok(PutObjectResponse { stream_id: None }));
+    assert!(resp2.is_ok());
+    assert_eq!(resp2.unwrap().stream_id, None);
 
     // create and upload file2
     let file2_chunk = Chunk {
@@ -169,7 +163,8 @@ async fn upload_and_list_files_in_dirs(_opt: &TestOptions) -> RpcResult<()> {
         content_type: None,
     };
     resp2 = client.put_object(&ctx, &upload_request2).await;
-    assert_eq!(resp2, Ok(PutObjectResponse { stream_id: None }));
+    assert!(resp2.is_ok());
+    assert_eq!(resp2.unwrap().stream_id, None);
 
     // list objects (files) in container cont1
     let mut list_object_request = ListObjectsRequest::default();
@@ -242,7 +237,7 @@ async fn upload_and_download_file(_opt: &TestOptions) -> RpcResult<()> {
 
     // Create container
     let resp = client.create_container(&ctx, &"cont1".into()).await;
-    assert_eq!(resp, Ok(()));
+    assert!(resp.is_ok());
 
     // create and upload file1
     let file1_chunk = Chunk {
@@ -258,7 +253,8 @@ async fn upload_and_download_file(_opt: &TestOptions) -> RpcResult<()> {
         content_type: None,
     };
     let resp2 = client.put_object(&ctx, &upload_request).await;
-    assert_eq!(resp2, Ok(PutObjectResponse { stream_id: None }));
+    assert!(resp2.is_ok());
+    assert_eq!(resp2.unwrap().stream_id, None);
 
     // file is created. Now retrieve it again using get_object
     let get_object_request = GetObjectRequest {
@@ -266,7 +262,6 @@ async fn upload_and_download_file(_opt: &TestOptions) -> RpcResult<()> {
         container_id: "cont1".into(),
         range_start: Some(0),
         range_end: None,
-        async_reply: false,
     };
     let o = client.get_object(&ctx, &get_object_request).await?;
     assert_eq!(o.content_length, 6);
@@ -297,7 +292,7 @@ async fn upload_chunked_download_file(_opt: &TestOptions) -> RpcResult<()> {
 
     // Create container cont1
     let resp = client.create_container(&ctx, &"cont1".into()).await;
-    assert_eq!(resp, Ok(()));
+    assert!(resp.is_ok());
 
     // create and upload file1 part 1
     let file_chunk1 = Chunk {
@@ -334,7 +329,7 @@ async fn upload_chunked_download_file(_opt: &TestOptions) -> RpcResult<()> {
         cancel_and_remove: false,
     };
     let resp3 = client.put_chunk(&ctx, &upload_2nd_chunk_request).await;
-    assert_eq!(resp3, Ok(()));
+    assert!(resp3.is_ok());
 
     // create and upload file1 part 3
     let file_chunk3 = Chunk {
@@ -350,7 +345,7 @@ async fn upload_chunked_download_file(_opt: &TestOptions) -> RpcResult<()> {
         cancel_and_remove: false,
     };
     let resp4 = client.put_chunk(&ctx, &upload_3rd_chunk_request).await;
-    assert_eq!(resp4, Ok(()));
+    assert!(resp4.is_ok());
 
     // file is created. Now retrieve it again using get_object assuming it will come back in one chunk
     let get_object_request = GetObjectRequest {
@@ -358,11 +353,8 @@ async fn upload_chunked_download_file(_opt: &TestOptions) -> RpcResult<()> {
         container_id: "cont1".into(),
         range_start: Some(0),
         range_end: None,
-        async_reply: false,
     };
     let o = client.get_object(&ctx, &get_object_request).await?;
-
-
 
     assert_eq!(o.content_length, 20);
     assert_eq!(o.success, true);
@@ -396,7 +388,7 @@ async fn upload_download_chunked_file(_opt: &TestOptions) -> RpcResult<()> {
 
     // Create container cont1
     let resp = client.create_container(&ctx, &"cont1".into()).await;
-    assert_eq!(resp, Ok(()));
+    assert!(resp.is_ok());
 
     // create and upload file1 part 1
     let file_chunk1 = Chunk {
@@ -421,8 +413,7 @@ async fn upload_download_chunked_file(_opt: &TestOptions) -> RpcResult<()> {
         object_id: "file1".into(),
         container_id: "cont1".into(),
         range_start: Some(0),
-        range_end: Some(5),     // inclusive
-        async_reply: false,
+        range_end: Some(5), // inclusive
     };
     let mut o = client.get_object(&ctx, &get_object_request1).await?;
     assert_eq!(o.content_length, 6);
@@ -438,8 +429,7 @@ async fn upload_download_chunked_file(_opt: &TestOptions) -> RpcResult<()> {
         object_id: "file1".into(),
         container_id: "cont1".into(),
         range_start: Some(6),
-        range_end: Some(11),     // inclusive
-        async_reply: false,
+        range_end: Some(11), // inclusive
     };
     o = client.get_object(&ctx, &get_object_request2).await?;
     assert_eq!(o.content_length, 6);
@@ -454,8 +444,7 @@ async fn upload_download_chunked_file(_opt: &TestOptions) -> RpcResult<()> {
         object_id: "file1".into(),
         container_id: "cont1".into(),
         range_start: Some(12),
-        range_end: Some(100),     // inclusive
-        async_reply: false,
+        range_end: Some(100), // inclusive
     };
     o = client.get_object(&ctx, &get_object_request3).await?;
     assert_ne!(o.initial_chunk, None);
@@ -465,20 +454,6 @@ async fn upload_download_chunked_file(_opt: &TestOptions) -> RpcResult<()> {
     combined.append(&mut s.clone());
 
     assert_eq!(file_chunk1.bytes, combined);
-
-    // now try it with asynchronous retrieval
-    let get_object_request4 = GetObjectRequest {
-        object_id: "file1".into(),
-        container_id: "cont1".into(),
-        range_start: None,
-        range_end: None,     
-        async_reply: true,
-    };
-    o = client.get_object(&ctx, &get_object_request4).await?;
-    
-    assert_eq!(o.initial_chunk, None); // there should be no chunk as it is asynchronous
-
-
 
     // remove container (which now should be rmpty)
     let conts: ContainerIds = vec!["cont1".into(), "cont2".into()];
@@ -512,21 +487,20 @@ async fn mock_blobstore_actor(num_requests: u32) -> tokio::task::JoinHandle<RpcR
             // subscribe() returns a Stream of nats messages
 
             println!("topic: {:?}", &topic);
-            let sub = prov
+            let mut sub = prov
                 .nats_client
-                .subscribe(&topic)
+                .subscribe(topic)
                 .await
                 .map_err(|e| RpcError::Nats(e.to_string()))?;
             while let Some(msg) = sub.next().await {
-                let inv: Invocation = deserialize(&msg.data)?;
+                let inv: Invocation = deserialize(&msg.payload)?;
                 if &inv.operation != "ChunkReceiver.ReceiveChunk" {
                     eprintln!("Unexpected method received by actor: {}", &inv.operation);
                     break;
                 }
 
                 let rec_chunk: Chunk = wasmbus_rpc::common::decode(&inv.msg, &decode_chunk)
-                .map_err(|e| RpcError::Deser(format!("'Chunk': {}", e)))?;
-                
+                    .map_err(|e| RpcError::Deser(format!("'Chunk': {}", e)))?;
 
                 // do something with chunk
                 assert_eq!(rec_chunk.is_last, true);
@@ -541,14 +515,16 @@ async fn mock_blobstore_actor(num_requests: u32) -> tokio::task::JoinHandle<RpcR
                     let mut ir = InvocationResponse::default();
                     ir.invocation_id = inv.id;
                     ir.msg = buf;
-                    prov.rpc_client.publish(reply_to, &serialize(&ir)?).await?;
+                    prov.rpc_client
+                        .publish(reply_to.to_string(), serialize(&ir)?)
+                        .await?;
                 }
                 completed += 1;
                 if completed >= num_requests {
                     break;
                 }
             }
-            let _ = sub.close().await;
+            let _ = sub.unsubscribe().await;
             Ok(())
         } {
             eprintln!("mock_actor got error: {}. quitting actor thread", e);

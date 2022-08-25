@@ -31,13 +31,7 @@ const FIRST_SEQ_NBR: u64 = 0;
 // listens to lattice rpcs, handles actor links,
 // and returns only when it receives a shutdown message
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .with_ansi(atty::is(atty::Stream::Stderr))
-        .init();
-
-    provider_main(FsProvider::default())?;
+    provider_main(FsProvider::default(), Some("Blobstore FS".to_string()))?;
 
     eprintln!("fs provider exiting");
     Ok(())
@@ -195,18 +189,22 @@ impl FsProvider {
     /// If successful, returns number of bytes sent (same as chunk.content_length)
     #[allow(unused)]
     async fn send_chunk(&self, ctx: &Context, chunk: &Chunk) -> Result<u64, RpcError> {
-
-        info!("Send chunk: container = {:?}, object = {:?}", chunk.container_id, chunk.object_id);
+        info!(
+            "Send chunk: container = {:?}, object = {:?}",
+            chunk.container_id, chunk.object_id
+        );
 
         let ld = self.get_ld(ctx).await?;
         let receiver = ChunkReceiverSender::for_actor(&ld);
 
         match receiver.receive_chunk(ctx, chunk).await {
-            Ok(cr) => if cr.cancel_download {
-                                        Ok(0)
-                                    } else {
-                                        Ok(chunk.bytes.len() as u64)
-                                    },
+            Ok(cr) => {
+                if cr.cancel_download {
+                    Ok(0)
+                } else {
+                    Ok(chunk.bytes.len() as u64)
+                }
+            }
             Err(e) => {
                 let err = format!(
                     "sending chunk error: Container({}) Object({}) to Actor({}): {:?}",
@@ -217,7 +215,6 @@ impl FsProvider {
             }
         }
     }
-
 }
 
 /// use default implementations of provider message handlers
@@ -238,7 +235,7 @@ impl ProviderHandler for FsProvider {
             None => "/tmp",
             Some(r) => r.as_str(),
         };
-    
+
         let config = FsProviderConfig {
             ld: ld.clone(),
             root: PathBuf::from(root_val),
@@ -246,7 +243,10 @@ impl ProviderHandler for FsProvider {
 
         info!("Config: {:?}", config);
 
-        info!("File System Blob Store Container Root: '{:?}'", &config.root);
+        info!(
+            "File System Blob Store Container Root: '{:?}'",
+            &config.root
+        );
 
         self.config
             .write()
@@ -263,7 +263,6 @@ impl ProviderHandler for FsProvider {
                 e
             ))),
         }
-
     }
 }
 
@@ -531,7 +530,10 @@ impl Blobstore for FsProvider {
         ctx: &Context,
         arg: &PutObjectRequest,
     ) -> RpcResult<PutObjectResponse> {
-        info!("Called put_object(): container={:?}, object={:?}", arg.chunk.container_id, arg.chunk.object_id);
+        info!(
+            "Called put_object(): container={:?}, object={:?}",
+            arg.chunk.container_id, arg.chunk.object_id
+        );
 
         if arg.chunk.bytes.is_empty() {
             error!("put_object with zero bytes");
@@ -569,16 +571,18 @@ impl Blobstore for FsProvider {
             let root = &self.get_root(ctx).await?;
             let cdir = Path::new(root).join(&arg.chunk.container_id);
             let file_path = Path::join(&cdir, &arg.chunk.object_id);
-            
-            remove_file(file_path.as_path())
-            .map_err(|e| RpcError::InvalidParameter(format!("Could not cancel and remove file: {:?}", file_path))) 
 
+            remove_file(file_path.as_path()).map_err(|e| {
+                RpcError::InvalidParameter(format!(
+                    "Could not cancel and remove file: {:?}",
+                    file_path
+                ))
+            })
         } else {
-            // happy path 
+            // happy path
             self.store_chunk(ctx, &arg.chunk, &arg.stream_id).await?;
-            Ok(())    
+            Ok(())
         }
-
     }
 
     /// Requests to retrieve an object. If the object is large, the provider
@@ -590,7 +594,6 @@ impl Blobstore for FsProvider {
         ctx: &Context,
         arg: &GetObjectRequest,
     ) -> RpcResult<GetObjectResponse> {
-
         info!("Called get_object: {:?}", arg);
 
         let root = &self.get_root(ctx).await?;
@@ -605,10 +608,9 @@ impl Blobstore for FsProvider {
         };
 
         let end_offset = match arg.range_end {
-            Some(o) => std::cmp::min(o as usize + 1, file.len() ),
-            None => file.len(), 
+            Some(o) => std::cmp::min(o as usize + 1, file.len()),
+            None => file.len(),
         };
-        
 
         let mut dcm = self.download_chunks.write().await;
 
@@ -616,66 +618,27 @@ impl Blobstore for FsProvider {
 
         let slice = &file[start_offset..end_offset];
 
-        info!("Retriving chunk start offset: {}, end offset: {} (exclusive)", start_offset, end_offset);
+        info!(
+            "Retriving chunk start offset: {}, end offset: {} (exclusive)",
+            start_offset, end_offset
+        );
 
-        if arg.async_reply {
+        let chunk = Chunk {
+            object_id: arg.object_id.clone(),
+            container_id: arg.container_id.clone(),
+            bytes: slice.to_vec(),
+            offset: start_offset as u64,
+            is_last: end_offset >= file.len(),
+        };
 
-            let this = self.clone();
-            let ctx = ctx.clone();
-            let oid =  arg.object_id.clone();
-            let cid = arg.container_id.clone();
-            let islast = end_offset >= file.len();
-            let slice_vec = slice.to_vec();
-
-            let h = tokio::spawn(async move {
-                let chunk = Chunk {
-                    object_id: oid,
-                    container_id: cid,
-                    bytes: slice_vec,
-                    offset: start_offset as u64,
-                    is_last: islast,
-                };
-
-                this.send_chunk(&ctx, &chunk).await
-                
-            });
-            
-            let sent_bytes = match h.await {
-                Ok(sb) => sb?,
-                Err(e) => return Err(RpcError::InvalidParameter(format!("{:?}", e))),
-            };
-
-            Ok(GetObjectResponse {
-                content_encoding: None,
-                content_length: sent_bytes,
-                content_type: None,
-                error: None,
-                initial_chunk: None,
-                success: true,
-            })
-
-        } else {
-
-            let chunk = Chunk {
-                object_id: arg.object_id.clone(),
-                container_id: arg.container_id.clone(),
-                bytes: slice.to_vec(),
-                offset: start_offset as u64,
-                is_last: end_offset >= file.len(),
-            };
-    
-
-            Ok(GetObjectResponse {
-                content_encoding: None,
-                content_length: chunk.bytes.len() as u64,
-                content_type: None,
-                error: None,
-                initial_chunk: Some(chunk.clone()),
-                success: true,
-            })
-   
-        }
-
+        Ok(GetObjectResponse {
+            content_encoding: None,
+            content_length: chunk.bytes.len() as u64,
+            content_type: None,
+            error: None,
+            initial_chunk: Some(chunk.clone()),
+            success: true,
+        })
     }
 
     fn contract_id() -> &'static str {

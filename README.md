@@ -11,6 +11,8 @@ wasmCloud team.
 
 | Provider | Contract | Description |
 | :--- | :--- | :--- |
+| [blobstore-fs](./blobstore-fs) | [`wasmcloud:blobstore`](https://github.com/wasmCloud/interfaces/tree/main/blobstore-fs) | Blobstore implementation where blobs are local files and containers are folders |
+| [blobstore-s3](./blobstore-s3) | [`wasmcloud:blobstore`](https://github.com/wasmCloud/interfaces/tree/main/blobstore-s3) | Blobstore implementation with AWS S3|
 | [httpserver](./httpserver-rs) | [`wasmcloud:httpserver`](https://github.com/wasmCloud/interfaces/tree/main/httpserver) | HTTP web server built with Rust and warp/hyper |
 | [httpclient](./httpclient) | [`wasmcloud:httpclient`](https://github.com/wasmCloud/interfaces/tree/main/httpclient) | HTTP client built in Rust |
 | [redis](./kvredis) | [`wasmcloud:keyvalue`](https://github.com/wasmCloud/interfaces/tree/main/keyvalue) | Redis-backed key-value implementation |

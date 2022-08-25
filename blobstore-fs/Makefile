@@ -13,6 +13,15 @@ TEST_FLAGS := --release -- --nocapture
 
 include ../build/makefiles/provider.mk
 
-test::
-	cargo test $(TEST_FLAGS)
 
+ifeq ($(shell nc -zt -w1 127.0.0.1 4222 || echo fail),fail)
+test::
+	@killall blobstore_fs || true
+	docker run --rm -d --name fs-provider-test -p 127.0.0.1:4222:4222 nats:2.8.4-alpine -js
+	RUST_BACKTRACE=1 RUST_LOG=debug cargo test $(TEST_FLAGS) 
+	docker stop fs-provider-test
+else
+test::
+	@killall blobstore_fs || true
+	cargo test $(TEST_FLAGS)
+endif
