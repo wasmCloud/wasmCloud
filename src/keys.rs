@@ -87,10 +87,7 @@ pub(crate) fn get(keyname: &str, directory: Option<PathBuf>) -> Result<CommandOu
         Err(e) => Err(e),
     }?;
 
-    Ok(CommandOutput::from_key_and_text(
-        "seed",
-        seed.trim().to_string(),
-    ))
+    Ok(CommandOutput::from_key_and_text("seed", seed.trim()))
 }
 
 /// Lists all keypairs (file extension .nk) in a specified directory or $WASH_KEYS($HOME/.wash/keys) if directory is not specified

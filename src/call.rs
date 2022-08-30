@@ -186,7 +186,7 @@ pub(crate) fn call_output(
             .with_context(|| format!("Error saving results to {}", &save_path.display()))?;
 
         return Ok(CommandOutput::new(
-            String::new(),
+            "",
             HashMap::<String, serde_json::Value>::new(),
         ));
     }
@@ -202,7 +202,7 @@ pub(crate) fn call_output(
 
         wasmcloud_test_util::cli::print_test_results(&test_results);
         return Ok(CommandOutput::new(
-            String::new(),
+            "",
             HashMap::<String, serde_json::Value>::new(),
         ));
     }
