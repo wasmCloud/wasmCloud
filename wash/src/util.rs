@@ -68,18 +68,25 @@ pub(crate) struct CommandOutput {
 }
 
 impl CommandOutput {
-    pub(crate) fn new(
-        text: String,
+    pub(crate) fn new<S: Into<String>>(
+        text: S,
         map: std::collections::HashMap<String, serde_json::Value>,
     ) -> Self {
-        CommandOutput { map, text }
+        CommandOutput {
+            map,
+            text: text.into(),
+        }
     }
 
     /// shorthand to create a new CommandOutput with a single key-value pair for JSON, and simply the text for text output.
-    pub fn from_key_and_text(key: &str, text: String) -> Self {
+    pub fn from_key_and_text<K: Into<String>, S: Into<String>>(key: K, text: S) -> Self {
+        let text_string: String = text.into();
         let mut map = std::collections::HashMap::new();
-        map.insert(key.to_string(), serde_json::Value::String(text.clone()));
-        CommandOutput { map, text }
+        map.insert(key.into(), serde_json::Value::String(text_string.clone()));
+        CommandOutput {
+            map,
+            text: text_string,
+        }
     }
 }
 

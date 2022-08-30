@@ -282,9 +282,9 @@ fn show_undeploy_results(results: bool) -> CommandOutput {
     map.insert("results".to_string(), json!(results));
     CommandOutput::new(
         if results {
-            "Undeploy request acknowledged".to_string()
+            "Undeploy request acknowledged"
         } else {
-            "Undeploy request not acknowledged".to_string()
+            "Undeploy request not acknowledged"
         },
         map,
     )
@@ -293,13 +293,14 @@ fn show_undeploy_results(results: bool) -> CommandOutput {
 fn show_del_results(results: bool) -> CommandOutput {
     let mut map = HashMap::new();
     map.insert("deleted".to_string(), json!(results));
-    let txt = if results {
-        "Model version deleted"
-    } else {
-        "Model version was not deleted"
-    }
-    .to_string();
-    CommandOutput::new(txt, map)
+    CommandOutput::new(
+        if results {
+            "Model version deleted"
+        } else {
+            "Model version was not deleted"
+        },
+        map,
+    )
 }
 
 fn show_deploy_results(results: bool) -> CommandOutput {
