@@ -356,7 +356,8 @@ pub(crate) fn make_project(
     .map_err(|e| any_msg("generating project from templates:", &e.to_string()))?;
 
     if !args.no_git_init {
-        git2::Repository::init(&project_dir)?;
+        let repo = git2::Repository::init(&project_dir)?;
+        repo.set_head("refs/heads/main")?;
     }
 
     pbar.clear().ok();
