@@ -29,7 +29,7 @@ dialoguer = "0.10.2"
 dirs = "4.0"
 env_logger = "0.9"
 envmnt = "0.10.2"
-git2 = {version = "0.15.0", features = ["vendored-libgit2"]}
+git2 = "0.15.0"
 heck = "0.4"
 ignore = "0.4"
 indicatif = "0.17.0"
