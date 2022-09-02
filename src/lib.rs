@@ -1,4 +1,4 @@
-pub mod broker;
+mod broker;
 mod sub_stream;
 mod types;
 
@@ -20,7 +20,8 @@ type Result<T> = ::std::result::Result<T, Box<dyn std::error::Error + Send + Syn
 #[derive(Clone)]
 pub struct Client {
     nc: async_nats::Client,
-    nsprefix: Option<String>,
+    topic_prefix: Option<String>,
+    ns_prefix: Option<String>,
     timeout: Duration,
     auction_timeout: Duration,
 }
@@ -29,13 +30,34 @@ impl Client {
     /// Creates a new lattice control interface client
     pub fn new(
         nc: async_nats::Client,
-        nsprefix: Option<String>,
+        ns_prefix: Option<String>,
         timeout: Duration,
         auction_timeout: Duration,
     ) -> Self {
         Client {
             nc,
-            nsprefix,
+            topic_prefix: None,
+            ns_prefix,
+            timeout,
+            auction_timeout,
+        }
+    }
+
+    /// Creates a new lattice control interface client with a control interface topic
+    /// prefix. This is an advanced use case, and this function should only be used
+    /// if you're interacting with wasmcloud hosts that have a configured control interface topic prefix.
+    /// In most cases, [Client::new] should be used instead.
+    pub fn new_with_topic_prefix(
+        nc: async_nats::Client,
+        topic_prefix: &str,
+        ns_prefix: Option<String>,
+        timeout: Duration,
+        auction_timeout: Duration,
+    ) -> Self {
+        Client {
+            nc,
+            topic_prefix: Some(topic_prefix.to_owned()),
+            ns_prefix,
             timeout,
             auction_timeout,
         }
@@ -67,7 +89,7 @@ impl Client {
     /// Queries the lattice for all responsive hosts, waiting for the full period specified by _timeout_.
     #[instrument(level = "debug", skip_all)]
     pub async fn get_hosts(&self) -> Result<Vec<Host>> {
-        let subject = broker::queries::hosts(&self.nsprefix);
+        let subject = broker::queries::hosts(&self.topic_prefix, &self.ns_prefix);
         debug!("get_hosts:publish {}", &subject);
         self.publish_and_wait(subject, Vec::new()).await
     }
@@ -75,7 +97,7 @@ impl Client {
     /// Retrieves the contents of a running host
     #[instrument(level = "debug", skip_all)]
     pub async fn get_host_inventory(&self, host_id: &str) -> Result<HostInventory> {
-        let subject = broker::queries::host_inventory(&self.nsprefix, host_id);
+        let subject = broker::queries::host_inventory(&self.topic_prefix, &self.ns_prefix, host_id);
         debug!("get_host_inventory:request {}", &subject);
         match self.request_timeout(subject, vec![], self.timeout).await {
             Ok(msg) => {
@@ -90,7 +112,7 @@ impl Client {
     /// host that answers this query
     #[instrument(level = "debug", skip_all)]
     pub async fn get_claims(&self) -> Result<GetClaimsResponse> {
-        let subject = broker::queries::claims(&self.nsprefix);
+        let subject = broker::queries::claims(&self.topic_prefix, &self.ns_prefix);
         debug!("get_claims:request {}", &subject);
         match self.request_timeout(subject, vec![], self.timeout).await {
             Ok(msg) => {
@@ -111,7 +133,7 @@ impl Client {
         actor_ref: &str,
         constraints: HashMap<String, String>,
     ) -> Result<Vec<ActorAuctionAck>> {
-        let subject = broker::actor_auction_subject(&self.nsprefix);
+        let subject = broker::actor_auction_subject(&self.topic_prefix, &self.ns_prefix);
         let bytes = json_serialize(ActorAuctionRequest {
             actor_ref: actor_ref.to_string(),
             constraints,
@@ -131,7 +153,7 @@ impl Client {
         link_name: &str,
         constraints: HashMap<String, String>,
     ) -> Result<Vec<ProviderAuctionAck>> {
-        let subject = broker::provider_auction_subject(&self.nsprefix);
+        let subject = broker::provider_auction_subject(&self.topic_prefix, &self.ns_prefix);
         let bytes = json_serialize(ProviderAuctionRequest {
             provider_ref: provider_ref.to_string(),
             link_name: link_name.to_string(),
@@ -155,7 +177,7 @@ impl Client {
         count: u16,
         annotations: Option<HashMap<String, String>>,
     ) -> Result<CtlOperationAck> {
-        let subject = broker::commands::start_actor(&self.nsprefix, host_id);
+        let subject = broker::commands::start_actor(&self.topic_prefix, &self.ns_prefix, host_id);
         debug!("start_actor:request {}", &subject);
         let bytes = json_serialize(StartActorCommand {
             count,
@@ -187,7 +209,7 @@ impl Client {
         count: u16,
         annotations: Option<HashMap<String, String>>,
     ) -> Result<CtlOperationAck> {
-        let subject = broker::commands::scale_actor(&self.nsprefix, host_id);
+        let subject = broker::commands::scale_actor(&self.topic_prefix, &self.ns_prefix, host_id);
         debug!("scale_actor:request {}", &subject);
         let bytes = json_serialize(ScaleActorCommand {
             count,
@@ -212,7 +234,7 @@ impl Client {
     /// function in production as the data contains secrets
     #[instrument(level = "debug", skip_all)]
     pub async fn put_registries(&self, registries: RegistryCredentialMap) -> Result<()> {
-        let subject = broker::publish_registries(&self.nsprefix);
+        let subject = broker::publish_registries(&self.topic_prefix, &self.ns_prefix);
         debug!("put_registries:publish {}", &subject);
         let bytes = json_serialize(&registries)?;
         let resp = self
@@ -243,7 +265,7 @@ impl Client {
         link_name: &str,
         values: HashMap<String, String>,
     ) -> Result<CtlOperationAck> {
-        let subject = broker::advertise_link(&self.nsprefix);
+        let subject = broker::advertise_link(&self.topic_prefix, &self.ns_prefix);
         debug!("advertise_link:request {}", &subject);
         let mut ld = LinkDefinition::default();
         ld.actor_id = actor_id.to_string();
@@ -269,7 +291,7 @@ impl Client {
         contract_id: &str,
         link_name: &str,
     ) -> Result<CtlOperationAck> {
-        let subject = broker::remove_link(&self.nsprefix);
+        let subject = broker::remove_link(&self.topic_prefix, &self.ns_prefix);
         debug!("remove_link:request {}", &subject);
         let mut ld = LinkDefinition::default();
         ld.actor_id = actor_id.to_string();
@@ -288,7 +310,7 @@ impl Client {
     /// Publishes a request to retrieve all current link definitions.
     #[instrument(level = "debug", skip_all)]
     pub async fn query_links(&self) -> Result<LinkDefinitionList> {
-        let subject = broker::queries::link_definitions(&self.nsprefix);
+        let subject = broker::queries::link_definitions(&self.topic_prefix, &self.ns_prefix);
         debug!("query_links:request {}", &subject);
         match self.request_timeout(subject, vec![], self.timeout).await {
             Ok(msg) => json_deserialize(&msg.payload),
@@ -312,7 +334,7 @@ impl Client {
         new_actor_ref: &str,
         annotations: Option<HashMap<String, String>>,
     ) -> Result<CtlOperationAck> {
-        let subject = broker::commands::update_actor(&self.nsprefix, host_id);
+        let subject = broker::commands::update_actor(&self.topic_prefix, &self.ns_prefix, host_id);
         debug!("update_actor:request {}", &subject);
         let bytes = json_serialize(UpdateActorCommand {
             host_id: host_id.to_string(),
@@ -349,7 +371,8 @@ impl Client {
         if !host_id.trim().is_empty() {
             start_provider_(
                 &self.nc,
-                &self.nsprefix,
+                &self.topic_prefix,
+                &self.ns_prefix,
                 self.timeout,
                 host_id,
                 &provider_ref,
@@ -378,7 +401,8 @@ impl Client {
                 tokio::spawn(async move {
                     let _ = start_provider_(
                         &this.nc,
-                        &this.nsprefix,
+                        &this.topic_prefix,
+                        &this.ns_prefix,
                         this.timeout,
                         &host.id,
                         &provider_ref,
@@ -415,7 +439,7 @@ impl Client {
         contract_id: &str,
         annotations: Option<HashMap<String, String>>,
     ) -> Result<CtlOperationAck> {
-        let subject = broker::commands::stop_provider(&self.nsprefix, host_id);
+        let subject = broker::commands::stop_provider(&self.topic_prefix, &self.ns_prefix, host_id);
         debug!("stop_provider:request {}", &subject);
         let bytes = json_serialize(StopProviderCommand {
             host_id: host_id.to_string(),
@@ -445,7 +469,7 @@ impl Client {
         count: u16,
         annotations: Option<HashMap<String, String>>,
     ) -> Result<CtlOperationAck> {
-        let subject = broker::commands::stop_actor(&self.nsprefix, host_id);
+        let subject = broker::commands::stop_actor(&self.topic_prefix, &self.ns_prefix, host_id);
         debug!("stop_actor:request {}", &subject);
         let bytes = json_serialize(StopActorCommand {
             host_id: host_id.to_string(),
@@ -472,7 +496,7 @@ impl Client {
         host_id: &str,
         timeout_ms: Option<u64>,
     ) -> Result<CtlOperationAck> {
-        let subject = broker::commands::stop_host(&self.nsprefix, host_id);
+        let subject = broker::commands::stop_host(&self.topic_prefix, &self.ns_prefix, host_id);
         debug!("stop_host:request {}", &subject);
         let bytes = json_serialize(StopHostCommand {
             host_id: host_id.to_owned(),
@@ -561,7 +585,7 @@ impl Client {
         let (sender, receiver) = tokio::sync::mpsc::channel(5000);
         let mut sub = self
             .nc
-            .subscribe(broker::control_event(&self.nsprefix))
+            .subscribe(broker::control_event(&self.ns_prefix))
             .await?;
         tokio::spawn(async move {
             while let Some(msg) = sub.next().await {
@@ -620,7 +644,8 @@ pub fn json_deserialize<'de, T: Deserialize<'de>>(
 #[allow(clippy::too_many_arguments)]
 async fn start_provider_(
     client: &async_nats::Client,
-    nsprefix: &Option<String>,
+    topic_prefix: &Option<String>,
+    ns_prefix: &Option<String>,
     timeout: Duration,
     host_id: &str,
     provider_ref: &str,
@@ -628,7 +653,7 @@ async fn start_provider_(
     annotations: Option<HashMap<String, String>>,
     provider_configuration: Option<String>,
 ) -> Result<CtlOperationAck> {
-    let subject = broker::commands::start_provider(nsprefix, host_id);
+    let subject = broker::commands::start_provider(topic_prefix, ns_prefix, host_id);
     debug!("start_provider:request {}", &subject);
     let bytes = json_serialize(StartProviderCommand {
         host_id: host_id.to_string(),
