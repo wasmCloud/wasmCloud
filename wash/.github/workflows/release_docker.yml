@@ -1,40 +1,34 @@
-name: Build and Deploy Docker Artifact
+name: Build and Release Docker Artifact
 on:
   push:
     branches:
       - main
     tags:
       - v[0-9].[0-9]+.[0-9]+
-        
+
 jobs:
   push_to_registry:
     name: Push Docker image to Azure and Docker Hub
     runs-on: ubuntu-latest
     steps:
-      - 
-        name: Check out the repo
+      - name: Check out the repo
         uses: actions/checkout@v2
-      - 
-        name: Set up QEMU
+      - name: Set up QEMU
         uses: docker/setup-qemu-action@v1
-      - 
-        name: Set up Docker Buildx
+      - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v1
-      -
-        uses: azure/docker-login@v1
+      - uses: azure/docker-login@v1
         if: github.repository == 'wasmCloud/wash'
         with:
           login-server: ${{ secrets.AZURECR_PUSH_URL }}
           username: ${{ secrets.AZURECR_PUSH_USER }}
           password: ${{ secrets.AZURECR_PUSH_PASSWORD }}
-      -
-        uses: docker/login-action@v1
+      - uses: docker/login-action@v1
         if: github.repository == 'wasmCloud/wash'
         with:
           username: ${{ secrets.DOCKERHUB_PUSH_USER }}
           password: ${{ secrets.DOCKERHUB_PUSH_PASSWORD }}
-      -
-        name: Docker metadata
+      - name: Docker metadata
         id: meta
         uses: docker/metadata-action@v3
         with:
@@ -51,26 +45,23 @@ jobs:
             org.opencontainers.image.description=WAsmcloud SHell
             org.opencontainers.image.vendor=wasmCloud
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
-      - 
-        name: Build and push
+      - name: Build and push
         id: docker_build_builder
         uses: docker/build-push-action@v2
         with:
-          file: 'Dockerfile'
+          file: "Dockerfile"
           push: ${{ github.repository == 'wasmCloud/wash' }}
           target: release-alpine
           tags: |
             wasmcloud/wash:alpine
           labels: ${{ steps.meta.outputs.labels }}
-      - 
-        name: Build and push - scratch
+      - name: Build and push - scratch
         id: docker_build
         uses: docker/build-push-action@v2
         with:
-          file: 'Dockerfile'
+          file: "Dockerfile"
           push: ${{ github.repository == 'wasmcloud/wash' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-      - 
-        name: Image digest
+      - name: Image digest
         run: echo ${{ steps.docker_build.outputs.digest }}
