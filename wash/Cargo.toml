@@ -15,7 +15,7 @@ rust-version = "1.60.0"
 maintenance = {status = "actively-developed"}
 
 [dependencies]
-anyhow = "1.0.51"
+anyhow = {version = "1.0.51", features = ["backtrace"]}
 async-nats = "0.18.0"
 atelier_core = "0.2"
 bytes = "1.0"
