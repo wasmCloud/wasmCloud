@@ -150,29 +150,32 @@ async fn main() {
             0
         }
         Err(e) => {
-            let trace = e
-                .chain()
-                .skip(1)
-                .map(|e| format!("{}", e))
-                .collect::<Vec<String>>();
-
             match output_kind {
                 OutputKind::Json => {
                     let mut map = HashMap::new();
                     map.insert("success".to_string(), json!(false));
                     map.insert("error".to_string(), json!(e.to_string()));
-                    if !trace.is_empty() {
-                        map.insert("trace".to_string(), json!(trace));
+
+                    let error_chain = e
+                        .chain()
+                        .skip(1)
+                        .map(|e| format!("{}", e))
+                        .collect::<Vec<String>>();
+
+                    if !error_chain.is_empty() {
+                        map.insert("error_chain".to_string(), json!(error_chain));
+                    }
+
+                    let backtrace = e.backtrace().to_string();
+
+                    if !backtrace.is_empty() && backtrace != "disabled backtrace" {
+                        map.insert("backtrace".to_string(), json!(backtrace));
                     }
 
                     eprintln!("\n{}", serde_json::to_string_pretty(&map).unwrap());
                 }
                 OutputKind::Text => {
-                    eprintln!("\n{}", e);
-                    if !trace.is_empty() {
-                        eprintln!("Error trace:");
-                        eprintln!("{}", trace.join("\n"));
-                    }
+                    eprintln!("\n{:?}", e);
                 }
             }
             1
