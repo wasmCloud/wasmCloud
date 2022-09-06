@@ -1,0 +1,46 @@
+name: Docker
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build_image:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v2
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v1
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v1
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v3
+        with:
+          images: |
+            wasmcloud/wash
+            wasmcloud.azurecr.io/wash
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha
+          flavor: |
+            latest=auto
+          labels: |
+            org.opencontainers.image.title=wash
+            org.opencontainers.image.description=WAsmcloud SHell
+            org.opencontainers.image.vendor=wasmCloud
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+      - name: Build
+        id: docker_build_builder
+        uses: docker/build-push-action@v2
+        with:
+          file: "Dockerfile"
+          target: release-alpine
+          tags: |
+            wasmcloud/wash:alpine
+          labels: ${{ steps.meta.outputs.labels }}
+          push: false
