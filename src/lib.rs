@@ -17,7 +17,7 @@ use wasmbus_rpc::otel::OtelHeaderInjector;
 type Result<T> = ::std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 /// Lattice control interface client
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Client {
     nc: async_nats::Client,
     topic_prefix: Option<String>,
