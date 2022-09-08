@@ -2939,7 +2939,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-nats"
-version = "0.14.4"
+version = "0.14.5"
 dependencies = [
  "async-nats",
  "async-trait",

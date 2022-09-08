@@ -293,9 +293,10 @@ impl Messaging for NatsMessagingProvider {
             .ok_or_else(|| RpcError::InvalidParameter(format!("actor not linked:{}", actor_id)))?
             .clone();
         drop(_rd);
+        let headers = OtelHeaderInjector::default_with_span().into();
         match tokio::time::timeout(
             Duration::from_millis(msg.timeout_ms as u64),
-            conn.request(msg.subject.to_string(), msg.body.clone().into()),
+            conn.request_with_headers(msg.subject.to_string(), headers, msg.body.clone().into()),
         )
         .await
         {
