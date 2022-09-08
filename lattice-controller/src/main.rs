@@ -279,6 +279,7 @@ impl LatticeController for LatticeControllerProvider {
                     .providers
                     .into_iter()
                     .map(|pd| ProviderDescription {
+                        annotations: pd.annotations,
                         id: pd.id,
                         image_ref: pd.image_ref,
                         link_name: pd.link_name,
