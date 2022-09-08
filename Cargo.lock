@@ -3990,8 +3990,6 @@ dependencies = [
  "nats",
  "nkeys",
  "once_cell",
- "opentelemetry",
- "opentelemetry-otlp",
  "rmp-serde 1.1.0",
  "serde",
  "serde_bytes",
@@ -4004,7 +4002,6 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-futures",
- "tracing-opentelemetry",
  "tracing-subscriber",
  "uuid 1.1.2",
  "wascap",
@@ -4033,6 +4030,8 @@ dependencies = [
  "nats",
  "nkeys",
  "once_cell",
+ "opentelemetry",
+ "opentelemetry-otlp",
  "rmp-serde 1.1.0",
  "serde",
  "serde_bytes",
@@ -4045,6 +4044,7 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-futures",
+ "tracing-opentelemetry",
  "tracing-subscriber",
  "uuid 1.1.2",
  "wascap",
@@ -4054,25 +4054,20 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-control-interface"
-version = "0.17.0"
+version = "0.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4a9491a845c203a84fdc5aa7444ebfd0a30c41dfc4812529e3038e2346d59d60"
+checksum = "55b5cfe6639a35e90871dee70673a11d70726ce2a17eb8114c07962df75f3ace"
 dependencies = [
  "async-nats 0.18.0",
- "async-trait",
  "cloudevents-sdk",
- "data-encoding",
  "futures 0.3.23",
- "ring",
  "rmp-serde 1.1.0",
  "serde",
  "serde_json",
  "tokio",
  "tracing",
  "tracing-futures",
- "uuid 1.1.2",
- "wascap",
- "wasmbus-rpc 0.9.3",
+ "wasmbus-rpc 0.10.0",
 ]
 
 [[package]]
