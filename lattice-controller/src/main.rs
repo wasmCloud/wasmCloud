@@ -75,8 +75,8 @@ impl ProviderDispatch for LatticeControllerProvider {}
 
 #[async_trait]
 impl ProviderHandler for LatticeControllerProvider {
-    #[instrument(level = "debug", skip(self, ld), fields(actor_id = %ld.actor_id))]
-    async fn put_link(&self, ld: &LinkDefinition) -> RpcResult<bool> {
+    #[instrument(level = "debug", skip(self, _ld), fields(actor_id = %_ld.actor_id))]
+    async fn put_link(&self, _ld: &LinkDefinition) -> RpcResult<bool> {
         // In this multiplexed version of the capability provider, link definitions
         // contain no data
 
@@ -84,8 +84,8 @@ impl ProviderHandler for LatticeControllerProvider {
     }
 
     /// Handle notification that a link is dropped
-    #[instrument(level = "debug", skip(self), fields(actor_id = ?actor_id))]
-    async fn delete_link(&self, actor_id: &str) {
+    #[instrument(level = "debug", skip(self), fields(actor_id = ?_actor_id))]
+    async fn delete_link(&self, _actor_id: &str) {
         // Nothing extra is necessary here since link definitions are not
         // the unit of correlation to NATS connections
     }
@@ -102,10 +102,10 @@ impl ProviderHandler for LatticeControllerProvider {
 impl LatticeController for LatticeControllerProvider {
     /// Sets lattice credentials and stores them in the cache to be used to create a
     /// connection in the next operation that requires one
-    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, lattice_id = ?arg.lattice_id))]
+    #[instrument(level = "debug", skip(self, _ctx, arg), fields(actor_id = ?_ctx.actor, lattice_id = ?arg.lattice_id))]
     async fn set_lattice_credentials(
         &self,
-        ctx: &Context,
+        _ctx: &Context,
         arg: &SetLatticeCredentialsRequest,
     ) -> RpcResult<CtlOperationAck> {
         self.connections
@@ -131,10 +131,10 @@ impl LatticeController for LatticeControllerProvider {
         })
     }
 
-    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, lattice_id = ?arg.lattice_id))]
+    #[instrument(level = "debug", skip(self, _ctx, arg), fields(actor_id = ?_ctx.actor, lattice_id = ?arg.lattice_id))]
     async fn set_registry_credentials(
         &self,
-        ctx: &Context,
+        _ctx: &Context,
         arg: &SetRegistryCredentialsRequest,
     ) -> RpcResult<()> {
         let client = self.connections.get_client(&arg.lattice_id).await?;
@@ -159,10 +159,10 @@ impl LatticeController for LatticeControllerProvider {
         Ok(())
     }
 
-    #[instrument(level = "debug", skip(self, ctx), fields(actor_id = ?ctx.actor, lattice_id = ?arg.lattice_id))]
+    #[instrument(level = "debug", skip(self, _ctx), fields(actor_id = ?_ctx.actor, lattice_id = ?arg.lattice_id))]
     async fn auction_provider(
         &self,
-        ctx: &Context,
+        _ctx: &Context,
         arg: &ProviderAuctionRequest,
     ) -> RpcResult<ProviderAuctionAcks> {
         Ok(self
@@ -183,10 +183,10 @@ impl LatticeController for LatticeControllerProvider {
             .map_err(|e| RpcError::Nats(e.to_string()))?)
     }
 
-    #[instrument(level = "debug", skip(self, ctx), fields(actor_id = ?ctx.actor, lattice_id = ?arg.lattice_id))]
+    #[instrument(level = "debug", skip(self, _ctx), fields(actor_id = ?_ctx.actor, lattice_id = ?arg.lattice_id))]
     async fn auction_actor(
         &self,
-        ctx: &Context,
+        _ctx: &Context,
         arg: &ActorAuctionRequest,
     ) -> RpcResult<ActorAuctionAcks> {
         Ok(self
@@ -206,10 +206,10 @@ impl LatticeController for LatticeControllerProvider {
             .map_err(|e| RpcError::Nats(e.to_string()))?)
     }
 
-    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, lattice_id = %arg.to_string()))]
+    #[instrument(level = "debug", skip(self, _ctx, arg), fields(actor_id = ?_ctx.actor, lattice_id = %arg.to_string()))]
     async fn get_hosts<TS: ToString + ?Sized + std::marker::Sync>(
         &self,
-        ctx: &Context,
+        _ctx: &Context,
         arg: &TS,
     ) -> RpcResult<Hosts> {
         Ok(self
@@ -242,10 +242,10 @@ impl LatticeController for LatticeControllerProvider {
     // we pay for not tightly coupling the consumer of this API to to the API
     // of the control client struct. This will continue to pay dividends if/when
     // the provider contract changes yet the lattice control client API does not.
-    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, host = ?arg.host_id, lattice_id = ?arg.lattice_id))]
+    #[instrument(level = "debug", skip(self, _ctx, arg), fields(actor_id = ?_ctx.actor, host = ?arg.host_id, lattice_id = ?arg.lattice_id))]
     async fn get_host_inventory(
         &self,
-        ctx: &Context,
+        _ctx: &Context,
         arg: &GetHostInventoryRequest,
     ) -> RpcResult<HostInventory> {
         Ok(self
@@ -291,10 +291,10 @@ impl LatticeController for LatticeControllerProvider {
             .map_err(|e| RpcError::Nats(e.to_string()))?)
     }
 
-    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, lattice_id = %arg.to_string()))]
+    #[instrument(level = "debug", skip(self, _ctx, arg), fields(actor_id = ?_ctx.actor, lattice_id = %arg.to_string()))]
     async fn get_claims<TS: ToString + ?Sized + std::marker::Sync>(
         &self,
-        ctx: &Context,
+        _ctx: &Context,
         arg: &TS,
     ) -> RpcResult<GetClaimsResponse> {
         Ok(self
@@ -307,10 +307,10 @@ impl LatticeController for LatticeControllerProvider {
             .map_err(|e| RpcError::Nats(e.to_string()))?)
     }
 
-    #[instrument(level = "debug", skip(self, ctx), fields(actor_id = ?ctx.actor, lattice_id = ?arg.lattice_id))]
+    #[instrument(level = "debug", skip(self, _ctx), fields(actor_id = ?_ctx.actor, lattice_id = ?arg.lattice_id))]
     async fn start_actor(
         &self,
-        ctx: &Context,
+        _ctx: &Context,
         arg: &StartActorCommand,
     ) -> RpcResult<CtlOperationAck> {
         Ok(self
@@ -331,10 +331,10 @@ impl LatticeController for LatticeControllerProvider {
             .map_err(|e| RpcError::Nats(e.to_string()))?)
     }
 
-    #[instrument(level = "debug", skip(self, ctx), fields(actor_id = ?ctx.actor, lattice_id = ?arg.lattice_id))]
+    #[instrument(level = "debug", skip(self, _ctx), fields(actor_id = ?_ctx.actor, lattice_id = ?arg.lattice_id))]
     async fn scale_actor(
         &self,
-        ctx: &Context,
+        _ctx: &Context,
         arg: &ScaleActorCommand,
     ) -> RpcResult<CtlOperationAck> {
         Ok(self
@@ -356,10 +356,10 @@ impl LatticeController for LatticeControllerProvider {
             .map_err(|e| RpcError::Nats(e.to_string()))?)
     }
 
-    #[instrument(level = "debug", skip(self, ctx), fields(actor_id = ?ctx.actor, lattice_id = ?arg.lattice_id))]
+    #[instrument(level = "debug", skip(self, _ctx), fields(actor_id = ?_ctx.actor, lattice_id = ?arg.lattice_id))]
     async fn advertise_link(
         &self,
-        ctx: &Context,
+        _ctx: &Context,
         arg: &AdvertiseLinkRequest,
     ) -> RpcResult<CtlOperationAck> {
         Ok(self
@@ -381,10 +381,10 @@ impl LatticeController for LatticeControllerProvider {
             .map_err(|e| RpcError::Nats(e.to_string()))?)
     }
 
-    #[instrument(level = "debug", skip(self, ctx), fields(actor_id = ?ctx.actor, lattice_id = ?arg.lattice_id))]
+    #[instrument(level = "debug", skip(self, _ctx), fields(actor_id = ?_ctx.actor, lattice_id = ?arg.lattice_id))]
     async fn remove_link(
         &self,
-        ctx: &Context,
+        _ctx: &Context,
         arg: &RemoveLinkDefinitionRequest,
     ) -> RpcResult<CtlOperationAck> {
         Ok(self
@@ -400,10 +400,10 @@ impl LatticeController for LatticeControllerProvider {
             .map_err(|e| RpcError::Nats(e.to_string()))?)
     }
 
-    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, lattice_id = %arg.to_string()))]
+    #[instrument(level = "debug", skip(self, _ctx, arg), fields(actor_id = ?_ctx.actor, lattice_id = %arg.to_string()))]
     async fn get_links<TS: ToString + ?Sized + std::marker::Sync>(
         &self,
-        ctx: &Context,
+        _ctx: &Context,
         arg: &TS,
     ) -> RpcResult<LinkDefinitionList> {
         Ok(self
@@ -416,10 +416,10 @@ impl LatticeController for LatticeControllerProvider {
             .map_err(|e| RpcError::Nats(e.to_string()))?)
     }
 
-    #[instrument(level = "debug", skip(self, ctx), fields(actor_id = ?ctx.actor, lattice_id = ?arg.lattice_id))]
+    #[instrument(level = "debug", skip(self, _ctx), fields(actor_id = ?_ctx.actor, lattice_id = ?arg.lattice_id))]
     async fn update_actor(
         &self,
-        ctx: &Context,
+        _ctx: &Context,
         arg: &UpdateActorCommand,
     ) -> RpcResult<CtlOperationAck> {
         Ok(self
@@ -440,10 +440,10 @@ impl LatticeController for LatticeControllerProvider {
             .map_err(|e| RpcError::Nats(e.to_string()))?)
     }
 
-    #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, host_id = %arg.host_id, provider_ref = %arg.provider_ref, link_name = %arg.link_name, lattice_id = ?arg.lattice_id))]
+    #[instrument(level = "debug", skip(self, _ctx, arg), fields(actor_id = ?_ctx.actor, host_id = %arg.host_id, provider_ref = %arg.provider_ref, link_name = %arg.link_name, lattice_id = ?arg.lattice_id))]
     async fn start_provider(
         &self,
-        ctx: &Context,
+        _ctx: &Context,
         arg: &StartProviderCommand,
     ) -> RpcResult<CtlOperationAck> {
         Ok(self
@@ -465,10 +465,10 @@ impl LatticeController for LatticeControllerProvider {
             .map_err(|e| RpcError::Nats(e.to_string()))?)
     }
 
-    #[instrument(level = "debug", skip(self, ctx), fields(actor_id = ?ctx.actor, lattice_id = ?arg.lattice_id))]
+    #[instrument(level = "debug", skip(self, _ctx), fields(actor_id = ?_ctx.actor, lattice_id = ?arg.lattice_id))]
     async fn stop_provider(
         &self,
-        ctx: &Context,
+        _ctx: &Context,
         arg: &StopProviderCommand,
     ) -> RpcResult<CtlOperationAck> {
         Ok(self
@@ -490,10 +490,10 @@ impl LatticeController for LatticeControllerProvider {
             .map_err(|e| RpcError::Nats(e.to_string()))?)
     }
 
-    #[instrument(level = "debug", skip(self, ctx), fields(actor_id = ?ctx.actor, lattice_id = ?arg.lattice_id))]
+    #[instrument(level = "debug", skip(self, _ctx), fields(actor_id = ?_ctx.actor, lattice_id = ?arg.lattice_id))]
     async fn stop_actor(
         &self,
-        ctx: &Context,
+        _ctx: &Context,
         arg: &StopActorCommand,
     ) -> RpcResult<CtlOperationAck> {
         Ok(self
@@ -514,8 +514,8 @@ impl LatticeController for LatticeControllerProvider {
             .map_err(|e| RpcError::Nats(e.to_string()))?)
     }
 
-    #[instrument(level = "debug", skip(self, ctx), fields(actor_id = ?ctx.actor, lattice_id = ?arg.lattice_id))]
-    async fn stop_host(&self, ctx: &Context, arg: &StopHostCommand) -> RpcResult<CtlOperationAck> {
+    #[instrument(level = "debug", skip(self, _ctx), fields(actor_id = ?_ctx.actor, lattice_id = ?arg.lattice_id))]
+    async fn stop_host(&self, _ctx: &Context, arg: &StopHostCommand) -> RpcResult<CtlOperationAck> {
         Ok(self
             .connections
             .get_client(&arg.lattice_id.to_string())
