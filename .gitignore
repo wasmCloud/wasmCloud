@@ -21,3 +21,6 @@ docker-compose.yml
 *.gz
 flake.lock
 .vscode
+
+# Host config files
+host_config.json
