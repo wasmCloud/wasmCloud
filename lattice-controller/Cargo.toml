@@ -1,7 +1,7 @@
 [package]
 name = "wasmcloud-provider-lattice-controller"
 description = "Capability provider that allows actors to interact with lattice control interfaces"
-version = "0.9.0"
+version = "0.9.1"
 edition = "2021"
 
 [dependencies]
@@ -22,9 +22,9 @@ toml = "0.5"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 wascap = "0.8.0"
-wasmbus-rpc = { version = "0.9", features = ["otel"] }
-wasmcloud-control-interface = "0.17.0" # lattice client
-wasmcloud-interface-lattice-control = "0.13.1" # provider contract
+wasmbus-rpc = { version = "0.10", features = ["otel"] }
+wasmcloud-control-interface = "0.20.1" # lattice client
+wasmcloud-interface-lattice-control = "0.14.1" # provider contract
 
 [target.'cfg(all(target_arch = "aarch64", target_os = "linux"))'.dependencies]
 # We don't use paste directly, but we pin to a version that works with aarch64-linux
@@ -32,7 +32,7 @@ paste = "=1.0.6"
 
 # test dependencies
 [dev-dependencies]
-wasmcloud-test-util = "0.4.0"
+wasmcloud-test-util = "0.5.0"
 
 [[bin]]
 name = "lattice-controller"
