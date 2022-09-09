@@ -168,6 +168,10 @@ pub struct ProviderAuctionRequest {
 /// A summary description of a capability provider within a host inventory
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ProviderDescription {
+    /// The annotations that were used in the start request that produced
+    /// this provider instance
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<AnnotationMap>,
     /// Provider's unique 56-character ID
     #[serde(default)]
     pub id: String,
