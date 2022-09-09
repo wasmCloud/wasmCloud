@@ -31,7 +31,7 @@
 //!     ).await?;
 //!     
 //!     // Download wasmCloud if not already installed
-//!     let wasmcloud_executable = ensure_wasmcloud("v0.55.1", &install_dir).await?;
+//!     let wasmcloud_executable = ensure_wasmcloud("v0.57.1", &install_dir).await?;
 //!     
 //!     // Redirect output (which is on stderr) to a log file
 //!     let log_path = install_dir.join("wasmcloud_stderr.log");

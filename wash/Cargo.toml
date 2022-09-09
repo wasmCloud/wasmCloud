@@ -1,6 +1,6 @@
 [package]
 name = "wash-cli"
-version = "0.12.0-alpha.2"
+version = "0.12.0"
 authors = ["wasmCloud Team"]
 categories = ["wasm", "command-line-utilities"]
 description = "wasmcloud Shell (wash) CLI tool"
@@ -58,7 +58,7 @@ toml = "0.5"
 walkdir = "2.3"
 which = "4.2.2"
 
-wash-lib = { version = "0.1.0", path = "./crates/wash-lib" }
+wash-lib = { version = "0.2.0", path = "./crates/wash-lib" }
 wascap = "0.8.0"
 weld-codegen = "0.4.6"
 wasmcloud-control-interface = "0.17.0"

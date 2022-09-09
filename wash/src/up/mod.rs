@@ -457,7 +457,7 @@ async fn run_wasmcloud_interactive(
         tokio::spawn(async {
             let mut lines = BufReader::new(stderr).lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                //TODO(brooksmtownsend): in the future, would be great print these in a prettier format
+                //TODO(brooksmtownsend): in the future, would be great to print these in a prettier format
                 println!("{}", line)
             }
         })
@@ -477,24 +477,16 @@ async fn stop_wasmcloud<P>(bin_path: P) -> Result<()>
 where
     P: AsRef<Path>,
 {
-    let child = Command::new(bin_path.as_ref())
+    if !Command::new(bin_path.as_ref())
         .stdout(Stdio::piped())
         .arg("stop")
-        .spawn()?;
-
-    // Wait for the stop command to return "ok", then exit
-    tokio::spawn(async {
-        if let Some(stdout) = child.stdout {
-            let mut lines = BufReader::new(stdout).lines();
-
-            while let Ok(Some(line)) = lines.next_line().await {
-                if line == "ok" {
-                    return;
-                }
-            }
-        }
-    })
-    .await?;
+        .output()
+        .await?
+        .status
+        .success()
+    {
+        log::warn!("wasmCloud exited with a non-zero exit status, processes may need to be cleaned up manually")
+    }
 
     Ok(())
 }
@@ -580,7 +572,7 @@ mod tests {
             "--wasmcloud-js-domain",
             "domain",
             "--wasmcloud-version",
-            "v0.55.1",
+            "v0.57.1",
             "--lattice-prefix",
             "anotherprefix",
         ])?;
@@ -658,7 +650,7 @@ mod tests {
         );
         assert_eq!(
             up_all_flags.wasmcloud_opts.wasmcloud_version,
-            "v0.55.1".to_string()
+            "v0.57.1".to_string()
         );
         assert_eq!(
             up_all_flags.wasmcloud_opts.lattice_prefix,
