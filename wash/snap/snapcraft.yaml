@@ -1,7 +1,7 @@
 name: wash
 base: core20 # the base snap is the execution environment for this snap
-version: "0.11.0"
-summary: WAsmcloud SHell - A multi-tool for wasmCloud development.
+version: "0.12.0"
+summary: WAsmcloud SHell - a comprehensive command-line tool for wasmCloud development
 icon: snap/local/icon.png
 description: |
   wash is a bundle of command line tools that, together, form a comprehensive CLI for wasmcloud development.
