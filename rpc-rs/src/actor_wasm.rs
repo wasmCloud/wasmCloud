@@ -30,6 +30,7 @@ extern "C" {
 }
 
 /// The function through which all host calls (from actors) take place.
+#[doc(hidden)]
 pub fn host_call(binding: &str, ns: &str, op: &str, msg: &[u8]) -> RpcResult<Vec<u8>> {
     let callresult = unsafe {
         __host_call(

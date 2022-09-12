@@ -239,7 +239,7 @@ pub mod actor {
         cfg_if::cfg_if! {
 
             if #[cfg(target_arch = "wasm32")] {
-                pub use crate::actor_wasm::{console_log, WasmHost};
+                pub use crate::actor_wasm::{console_log, host_call, WasmHost};
             } else {
                 // this code is non-functional, since actors only run in wasm32,
                 // but it reduces compiler errors if you are building a cargo multi-project workspace for non-wasm32
