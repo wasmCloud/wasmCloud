@@ -150,6 +150,14 @@ spec:
                   name: {{ include "wasmcloud_host.fullname" . }}
                   key: ctlSeed
             {{- end }}
+            {{- if .Values.wasmcloud.config.ociAllowedInsecure }}
+            - name: WASMCLOUD_OCI_ALLOWED_INSECURE
+              value: {{ .Values.wasmcloud.config.ociAllowedInsecure | quote }}
+            {{- end }}
+            {{- if .Values.wasmcloud.config.ociAllowLatest }}
+            - name: WASMCLOUD_OCI_ALLOW_LATEST
+              value: {{ .Values.wasmcloud.config.ociAllowLatest | quote }}
+            {{- end }}
             {{- range $k, $v := .Values.wasmcloud.config.hostLabels }}
             - name: HOST_{{ $k }}
               value: {{ $v | quote }}

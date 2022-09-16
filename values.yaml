@@ -31,6 +31,8 @@ wasmcloud:
     otel:
       exporter: ""
       endpoint: ""
+    ociAllowedInsecure: ""
+    ociAllowLatest: false
     # Sets the username and password for use with a private registry
     registry:
       url: ""
