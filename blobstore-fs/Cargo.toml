@@ -7,7 +7,7 @@ resolver = "2"
 [dependencies]
 async-trait = "0.1"
 atty = "0.2"
-log = "0.4"
+tracing = "0.1.36"
 wasmcloud-interface-blobstore = "0.4"
 wasmbus-rpc = "0.10"
 tokio = "1.17.0"

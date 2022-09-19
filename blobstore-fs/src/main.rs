@@ -2,7 +2,6 @@
 //!
 //!
 
-use log::{error, info};
 #[allow(unused_imports)]
 use serde::Deserialize;
 use std::time::SystemTime;
@@ -16,6 +15,7 @@ use std::{
     sync::Arc,
 };
 use tokio::sync::RwLock;
+use tracing::{error, info};
 use wasmbus_rpc::provider::prelude::*;
 use wasmbus_rpc::Timestamp;
 use wasmcloud_interface_blobstore::*;
@@ -122,7 +122,7 @@ impl FsProvider {
 
         // create an empty file if it's the first chunk
         if chunk.offset == 0 {
-            let resp = std::fs::write(&bfile, &[]);
+            let resp = File::create(&bfile);
             if resp.is_err() {
                 let error_string = format!("Could not create file: {:?}", bfile).to_string();
                 error!("{:?}", &error_string);
@@ -231,7 +231,7 @@ impl ProviderHandler for FsProvider {
             info!("ld conf {:?}", val);
         }
 
-        let root_val = match values.get("root") {
+        let root_val = match values.get("ROOT") {
             None => "/tmp",
             Some(r) => r.as_str(),
         };
