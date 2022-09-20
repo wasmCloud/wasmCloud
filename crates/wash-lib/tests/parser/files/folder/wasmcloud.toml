@@ -1,0 +1,17 @@
+language = "rust"
+type = "actor"
+name = "testactor"
+version = "0.1.0"
+
+[actor]
+claims = ["wasmcloud:httpserver"]
+registry = "localhost:8080"
+push_insecure = false
+key_directory = "./keys"
+filename = "testactor.wasm"
+wasm_target = "wasm32-unknown-unknown"
+call_alias = "testactor"
+
+[rust]
+cargo_path = "./cargo"
+target_path = "./target"

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 use app::AppCliCommand;
+use build::BuildCommand;
 use call::CallCli;
 use claims::ClaimsCliCommand;
 use clap::{Parser, Subcommand};
@@ -21,6 +22,7 @@ use crate::util::OutputKind;
 
 mod app;
 mod appearance;
+mod build;
 mod call;
 mod cfg;
 mod claims;
@@ -69,6 +71,9 @@ enum CliCommand {
     /// Manage declarative applications and deployments (wadm) (experimental)
     #[clap(name = "app", subcommand)]
     App(AppCliCommand),
+    /// Build (and sign) a wasmCloud actor, provider, or interface
+    #[clap(name = "build")]
+    Build(BuildCommand),
     /// Invoke a wasmCloud actor
     #[clap(name = "call")]
     Call(CallCli),
@@ -119,6 +124,7 @@ async fn main() {
 
     let res: Result<CommandOutput> = match cli.command {
         CliCommand::App(app_cli) => app::handle_command(app_cli, output_kind).await,
+        CliCommand::Build(build_cli) => build::handle_command(build_cli, output_kind),
         CliCommand::Call(call_cli) => call::handle_command(call_cli.command()).await,
         CliCommand::Claims(claims_cli) => claims::handle_command(claims_cli, output_kind).await,
         CliCommand::Ctl(ctl_cli) => ctl::handle_command(ctl_cli, output_kind).await,

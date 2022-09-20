@@ -1,6 +1,6 @@
 [package]
 name = "wash-cli"
-version = "0.12.0"
+version = "0.13.0-alpha.1"
 authors = ["wasmCloud Team"]
 categories = ["wasm", "command-line-utilities"]
 description = "wasmcloud Shell (wash) CLI tool"
@@ -57,13 +57,12 @@ tokio = {version = "1", features = ["full"]}
 toml = "0.5"
 walkdir = "2.3"
 which = "4.2.2"
-
-wash-lib = { version = "0.2.0", path = "./crates/wash-lib" }
+wash-lib = { version = "0.3.0", path = "./crates/wash-lib" }
 wascap = "0.8.0"
-weld-codegen = "0.4.6"
+weld-codegen = "0.5.0"
 wasmcloud-control-interface = "0.20.1"
 wasmbus-rpc = "0.10.0"
-wasmcloud-test-util = "0.4.1"
+wasmcloud-test-util = "0.5.0"
 
 [dev-dependencies]
 reqwest = {version = "0.11", default-features = false, features = ["json", "rustls-tls"]}
@@ -71,6 +70,8 @@ tempfile = "3"
 test-case = "2.2.1"
 test_bin = "0.4.0"
 assert-json-diff = "2.0.1"
+scopeguard = "1.1.0"
+serial_test = "0.9.0"
 
 [[bin]]
 bench = true
