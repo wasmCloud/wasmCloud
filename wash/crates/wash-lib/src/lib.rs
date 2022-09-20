@@ -5,3 +5,6 @@
 
 #[cfg(feature = "start")]
 pub mod start;
+
+#[cfg(feature = "parser")]
+pub mod parser;

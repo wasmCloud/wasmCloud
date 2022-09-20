@@ -23,7 +23,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::json;
 use std::{
     collections::HashMap,
-    fs::File,
+    fs::{self, File},
     io::{Read, Write},
     path::PathBuf,
 };
@@ -105,10 +105,10 @@ pub(crate) struct SignCommand {
 
     /// Destination for signed module. If this flag is not provided, the signed module will be placed in the same directory as the source with a "_s" suffix
     #[clap(short = 'd', long = "destination")]
-    destination: Option<String>,
+    pub(crate) destination: Option<String>,
 
     #[clap(flatten)]
-    metadata: ActorMetadata,
+    pub(crate) metadata: ActorMetadata,
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -127,23 +127,23 @@ pub(crate) enum TokenCommand {
     Provider(ProviderMetadata),
 }
 
-#[derive(Debug, Clone, Parser, Serialize, Deserialize)]
-struct GenerateCommon {
+#[derive(Debug, Clone, Parser, Serialize, Deserialize, Default)]
+pub struct GenerateCommon {
     /// Location of key files for signing. Defaults to $WASH_KEYS ($HOME/.wash/keys)
     #[clap(long = "directory", env = "WASH_KEYS", hide_env_values = true)]
-    directory: Option<PathBuf>,
+    pub directory: Option<PathBuf>,
 
     /// Indicates the token expires in the given amount of days. If this option is left off, the token will never expire
     #[clap(short = 'x', long = "expires")]
-    expires_in_days: Option<u64>,
+    pub expires_in_days: Option<u64>,
 
     /// Period in days that must elapse before this token is valid. If this option is left off, the token will be valid immediately
     #[clap(short = 'b', long = "nbf")]
-    not_before_days: Option<u64>,
+    pub not_before_days: Option<u64>,
 
     /// Disables autogeneration of keys if seed(s) are not provided
     #[clap(long = "disable-keygen")]
-    disable_keygen: bool,
+    pub disable_keygen: bool,
 }
 
 #[derive(Debug, Clone, Parser)]
@@ -247,53 +247,53 @@ pub(crate) struct ProviderMetadata {
     common: GenerateCommon,
 }
 
-#[derive(Parser, Debug, Clone, Serialize, Deserialize)]
+#[derive(Parser, Debug, Clone, Serialize, Deserialize, Default)]
 pub(crate) struct ActorMetadata {
     /// Enable the Key/Value Store standard capability
     #[clap(short = 'k', long = "keyvalue")]
-    keyvalue: bool,
+    pub keyvalue: bool,
     /// Enable the Message broker standard capability
     #[clap(short = 'g', long = "msg")]
-    msg_broker: bool,
+    pub msg_broker: bool,
     /// Enable the HTTP server standard capability
     #[clap(short = 'q', long = "http_server")]
-    http_server: bool,
+    pub http_server: bool,
     /// Enable the HTTP client standard capability
     #[clap(long = "http_client")]
-    http_client: bool,
+    pub http_client: bool,
     /// Enable access to the blob store capability
     #[clap(short = 'f', long = "blob_store")]
-    blob_store: bool,
+    pub blob_store: bool,
     /// Enable access to the extras functionality (random nos, guids, etc)
     #[clap(short = 'z', long = "extras")]
-    extras: bool,
+    pub extras: bool,
     /// Enable access to logging capability
     #[clap(short = 'l', long = "logging")]
-    logging: bool,
+    pub logging: bool,
     /// Enable access to an append-only event stream provider
     #[clap(short = 'e', long = "events")]
-    eventstream: bool,
+    pub eventstream: bool,
     /// A human-readable, descriptive name for the token
     #[clap(short = 'n', long = "name")]
-    name: String,
+    pub name: String,
     /// Add custom capabilities
     #[clap(short = 'c', long = "cap", name = "capabilities")]
-    custom_caps: Vec<String>,
+    pub custom_caps: Vec<String>,
     /// A list of arbitrary tags to be embedded in the token
     #[clap(short = 't', long = "tag")]
-    tags: Vec<String>,
+    pub tags: Vec<String>,
     /// Indicates whether the signed module is a capability provider instead of an actor (the default is actor)
     #[clap(short = 'p', long = "prov")]
-    provider: bool,
+    pub provider: bool,
     /// Revision number
     #[clap(short = 'r', long = "rev")]
-    rev: Option<i32>,
+    pub rev: Option<i32>,
     /// Human-readable version string
     #[clap(short = 'v', long = "ver")]
-    ver: Option<String>,
+    pub ver: Option<String>,
     /// Developer or human friendly unique alias used for invoking an actor, consisting of lowercase alphanumeric characters, underscores '_' and slashes '/'
     #[clap(short = 'a', long = "call-alias")]
-    call_alias: Option<String>,
+    pub call_alias: Option<String>,
 
     /// Path to issuer seed key (account). If this flag is not provided, the will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
     #[clap(
@@ -302,7 +302,7 @@ pub(crate) struct ActorMetadata {
         env = "WASH_ISSUER_KEY",
         hide_env_values = true
     )]
-    issuer: Option<String>,
+    pub issuer: Option<String>,
 
     /// Path to subject seed key (module). If this flag is not provided, the will be sourced from $WASH_KEYS ($HOME/.wash/keys) or generated for you if it cannot be found.
     #[clap(
@@ -311,10 +311,10 @@ pub(crate) struct ActorMetadata {
         env = "WASH_SUBJECT_KEY",
         hide_env_values = true
     )]
-    subject: Option<String>,
+    pub subject: Option<String>,
 
     #[clap(flatten)]
-    common: GenerateCommon,
+    pub common: GenerateCommon,
 }
 
 pub(crate) async fn handle_command(
@@ -540,7 +540,7 @@ fn generate_provider(provider: ProviderMetadata, output_kind: OutputKind) -> Res
     Ok(CommandOutput::from_key_and_text("token", jwt))
 }
 
-fn sign_file(cmd: SignCommand, output_kind: OutputKind) -> Result<CommandOutput> {
+pub(crate) fn sign_file(cmd: SignCommand, output_kind: OutputKind) -> Result<CommandOutput> {
     let mut sfile = File::open(&cmd.source)
         .with_context(|| format!("Failed to open file for signing '{}'", &cmd.source))?;
     let mut buf = Vec::new();
@@ -609,18 +609,10 @@ fn sign_file(cmd: SignCommand, output_kind: OutputKind) -> Result<CommandOutput>
     let destination = match cmd.destination.clone() {
         Some(d) => d,
         None => {
-            let path = PathBuf::from(cmd.source.clone())
-                .parent()
-                .unwrap()
-                .to_str()
-                .unwrap()
-                .to_string();
-            let module_name = PathBuf::from(cmd.source.clone())
-                .file_stem()
-                .unwrap()
-                .to_str()
-                .unwrap()
-                .to_string();
+            let path_buf = PathBuf::from(cmd.source.clone());
+
+            let path = path_buf.parent().unwrap().to_str().unwrap().to_string();
+            let module_name = path_buf.file_stem().unwrap().to_str().unwrap().to_string();
             // If path is empty, user supplied module in current directory
             if path.is_empty() {
                 format!("./{}_s.wasm", module_name)
@@ -630,7 +622,13 @@ fn sign_file(cmd: SignCommand, output_kind: OutputKind) -> Result<CommandOutput>
         }
     };
 
-    let mut outfile = File::create(&destination).unwrap();
+    let destination_path = PathBuf::from(destination.clone());
+
+    if let Some(p) = destination_path.parent() {
+        fs::create_dir_all(p)?;
+    }
+
+    let mut outfile = File::create(destination_path).unwrap();
 
     let output = match outfile.write(&signed) {
         Ok(_) => {
