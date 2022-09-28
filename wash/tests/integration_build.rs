@@ -34,7 +34,7 @@ fn build_rust_actor() -> Result<()> {
             "--git",
             "wasmcloud/project-templates",
             "--subfolder",
-            "actor/hello-build",
+            "actor/hello",
             "--silent",
             "--no-git-init",
         ])
@@ -89,7 +89,7 @@ fn build_and_sign_rust_actor() -> Result<()> {
             "--git",
             "wasmcloud/project-templates",
             "--subfolder",
-            "actor/hello-build",
+            "actor/hello",
             "--silent",
             "--no-git-init",
         ])
@@ -141,7 +141,7 @@ fn build_and_sign_tinygo_actor() -> Result<()> {
             "--git",
             "wasmcloud/project-templates",
             "--subfolder",
-            "actor/echo-tinygo-build",
+            "actor/echo-tinygo",
             "--silent",
             "--no-git-init",
         ])
