@@ -146,7 +146,7 @@ fn integration_par_insert(issuer: &str, subject: &str, archive: &str) {
         "vendor": "TestRunner",
         "version": "3.2.1"
     });
-    assert_json_include!(actual: output.clone(), expected: expected);
+    assert_json_include!(actual: output, expected: expected);
     let targets: Vec<String> = output
         .get("targets")
         .unwrap()
@@ -200,7 +200,7 @@ fn integration_par_insert(issuer: &str, subject: &str, archive: &str) {
         "vendor": "TestRunner",
         "version": "3.2.1"
     });
-    assert_json_include!(actual: output.clone(), expected: expected);
+    assert_json_include!(actual: output, expected: expected);
     let targets: Vec<String> = output
         .get("targets")
         .unwrap()
@@ -270,7 +270,7 @@ fn integration_par_inspect() {
         "service": HTTP_SERVICE,
         "capability_contract_id": "wasmcloud:httpclient",
     });
-    assert_json_include!(actual: local_inspect_output, expected: inspect_expected.clone());
+    assert_json_include!(actual: local_inspect_output, expected: inspect_expected);
 
     let local_reg_inspect = wash()
         .args(&[
@@ -285,7 +285,7 @@ fn integration_par_inspect() {
         .expect("failed to inspect local registry wasm");
     assert!(local_reg_inspect.status.success());
     let local_reg_inspect_output = get_json_output(local_reg_inspect).unwrap();
-    assert_json_include!(actual: local_reg_inspect_output, expected: inspect_expected.clone());
+    assert_json_include!(actual: local_reg_inspect_output, expected: inspect_expected);
 
     let remote_inspect = wash()
         .args(&["par", "inspect", HTTP_OCI, "-o", "json"])

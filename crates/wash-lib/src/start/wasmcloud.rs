@@ -244,18 +244,15 @@ where
     }
 
     #[cfg(target_family = "unix")]
-    match Command::new(bin_path.as_ref()).arg("pid").output().await {
-        Ok(output) => {
-            // Stderr will include :nodedown if no other host is running, otherwise
-            // stdout will contain the PID
-            if !String::from_utf8_lossy(&output.stderr).contains(":nodedown") {
-                return Err(anyhow!(
-                    "Another wasmCloud host is already running on this machine with PID {}",
-                    String::from_utf8_lossy(&output.stdout)
-                ));
-            }
+    if let Ok(output) = Command::new(bin_path.as_ref()).arg("pid").output().await {
+        // Stderr will include :nodedown if no other host is running, otherwise
+        // stdout will contain the PID
+        if !String::from_utf8_lossy(&output.stderr).contains(":nodedown") {
+            return Err(anyhow!(
+                "Another wasmCloud host is already running on this machine with PID {}",
+                String::from_utf8_lossy(&output.stdout)
+            ));
         }
-        _ => (),
     }
 
     // Constructing this object in one step results in a temporary value that's dropped
@@ -333,7 +330,7 @@ mod test {
         NATS_SERVER_BINARY,
     };
     use reqwest::StatusCode;
-    use std::{collections::HashMap, env::temp_dir, process::Stdio};
+    use std::{collections::HashMap, env::temp_dir};
     use tokio::fs::{create_dir_all, remove_dir_all};
     const WASMCLOUD_VERSION: &str = "v0.57.1";
 
