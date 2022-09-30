@@ -95,7 +95,7 @@ pub(crate) struct GenerateOptions {
 
     /// Additional defines in the form of key=value to be passed to renderer
     /// Use `-D key=value` for each term to be added.
-    #[clap(short = 'D', parse(try_from_str = parse_key_val), number_of_values = 1)]
+    #[clap(short = 'D', value_parser = parse_key_val, number_of_values = 1)]
     defines: Vec<(String, TomlValue)>,
 
     /// Enable verbose logging
