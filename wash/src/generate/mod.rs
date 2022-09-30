@@ -36,7 +36,7 @@
 //   license: MIT/Apache-2.0
 //
 use anyhow::{anyhow, Context, Result};
-use clap::{ArgEnum, Args, Subcommand};
+use clap::{Args, Subcommand, ValueEnum};
 use config::{Config, CONFIG_FILE_NAME};
 use console::style;
 use git::GitConfig;
@@ -83,7 +83,7 @@ pub(crate) enum NewCliCommand {
 }
 
 /// Type of project to be generated
-#[derive(Debug, Clone, ArgEnum)]
+#[derive(Debug, Clone, ValueEnum)]
 pub(crate) enum ProjectKind {
     Actor,
     Interface,

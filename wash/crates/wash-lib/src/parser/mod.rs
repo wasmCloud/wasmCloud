@@ -3,14 +3,14 @@ use config::Config;
 use semver::Version;
 use std::{fs, path::PathBuf};
 
-#[derive(serde::Deserialize, Debug, PartialEq, Clone)]
+#[derive(serde::Deserialize, Debug, PartialEq, Eq, Clone)]
 #[serde(rename_all = "snake_case")]
 pub enum LanguageConfig {
     Rust(RustConfig),
     TinyGo(TinyGoConfig),
 }
 
-#[derive(serde::Deserialize, Debug, PartialEq, Clone)]
+#[derive(serde::Deserialize, Debug, PartialEq, Eq, Clone)]
 #[serde(rename_all = "snake_case")]
 pub enum TypeConfig {
     Actor(ActorConfig),
@@ -30,7 +30,7 @@ pub struct ProjectConfig {
     pub common: CommonConfig,
 }
 
-#[derive(serde::Deserialize, Debug, PartialEq, Clone, Default)]
+#[derive(serde::Deserialize, Debug, PartialEq, Eq, Clone, Default)]
 pub struct ActorConfig {
     /// The list of provider claims that this actor requires. eg. ["wasmcloud:httpserver", "wasmcloud:blobstore"]
     pub claims: Vec<String>,
@@ -84,7 +84,7 @@ impl TryFrom<RawActorConfig> for ActorConfig {
         })
     }
 }
-#[derive(serde::Deserialize, Debug, PartialEq, Clone, Default)]
+#[derive(serde::Deserialize, Debug, PartialEq, Eq, Clone, Default)]
 pub struct ProviderConfig {
     /// The capability ID of the provider.
     pub capability_id: String,
@@ -110,7 +110,7 @@ impl TryFrom<RawProviderConfig> for ProviderConfig {
     }
 }
 
-#[derive(serde::Deserialize, Debug, PartialEq, Clone, Default)]
+#[derive(serde::Deserialize, Debug, PartialEq, Eq, Clone, Default)]
 pub struct InterfaceConfig {
     /// Directory to output HTML.
     pub html_target: PathBuf,
@@ -141,7 +141,7 @@ impl TryFrom<RawInterfaceConfig> for InterfaceConfig {
     }
 }
 
-#[derive(serde::Deserialize, Debug, PartialEq, Clone, Default)]
+#[derive(serde::Deserialize, Debug, PartialEq, Eq, Clone, Default)]
 pub struct RustConfig {
     /// The path to the cargo binary. Optional, will default to search the user's `PATH` for `cargo` if not specified.
     pub cargo_path: Option<PathBuf>,
@@ -169,7 +169,7 @@ impl TryFrom<RawRustConfig> for RustConfig {
 }
 
 /// Configuration common amoung all project types & languages.
-#[derive(serde::Deserialize, Debug, PartialEq, Clone)]
+#[derive(serde::Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct CommonConfig {
     /// Name of the project.
     pub name: String,
@@ -196,7 +196,7 @@ struct RawProjectConfig {
     pub tinygo: Option<RawTinyGoConfig>,
 }
 
-#[derive(serde::Deserialize, Debug, PartialEq, Clone, Default)]
+#[derive(serde::Deserialize, Debug, PartialEq, Eq, Clone, Default)]
 pub struct TinyGoConfig {
     /// The path to the tinygo binary. Optional, will default to `tinygo` if not specified.
     pub tinygo_path: Option<PathBuf>,
