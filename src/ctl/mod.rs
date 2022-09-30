@@ -124,7 +124,7 @@ pub(crate) enum CtlCliCommand {
 #[derive(Args, Debug, Clone)]
 pub(crate) struct ApplyCommand {
     /// Public key of the target host for the manifest application
-    #[clap(name = "host-key", parse(try_from_str))]
+    #[clap(name = "host-key", value_parser)]
     pub(crate) host_key: ServerId,
 
     /// Path to the manifest file. Note that all the entries in this file are imperative instructions, and all actor and provider references MUST be valid OCI references.
@@ -181,7 +181,7 @@ pub(crate) struct LinkDelCommand {
     opts: ConnectionOpts,
 
     /// Public key ID of actor
-    #[clap(name = "actor-id", parse(try_from_str))]
+    #[clap(name = "actor-id", value_parser)]
     pub(crate) actor_id: ModuleId,
 
     /// Capability contract ID between actor and provider
@@ -202,11 +202,11 @@ pub(crate) struct LinkPutCommand {
     opts: ConnectionOpts,
 
     /// Public key ID of actor
-    #[clap(name = "actor-id", parse(try_from_str))]
+    #[clap(name = "actor-id", value_parser)]
     pub(crate) actor_id: ModuleId,
 
     /// Public key ID of provider
-    #[clap(name = "provider-id", parse(try_from_str))]
+    #[clap(name = "provider-id", value_parser)]
     pub(crate) provider_id: ServiceId,
 
     /// Capability contract ID between actor and provider
@@ -268,11 +268,11 @@ pub struct ScaleActorCommand {
     opts: ConnectionOpts,
 
     /// Id of host
-    #[clap(name = "host-id", parse(try_from_str))]
+    #[clap(name = "host-id", value_parser)]
     host_id: ServerId,
 
     /// Actor Id, e.g. the public key for the actor
-    #[clap(name = "actor-id", parse(try_from_str))]
+    #[clap(name = "actor-id", value_parser)]
     pub(crate) actor_id: ModuleId,
 
     /// Actor reference, e.g. the OCI URL for the actor.
@@ -301,7 +301,7 @@ pub(crate) struct GetHostInventoryCommand {
     opts: ConnectionOpts,
 
     /// Id of host
-    #[clap(name = "host-id", parse(try_from_str))]
+    #[clap(name = "host-id", value_parser)]
     pub(crate) host_id: ServerId,
 }
 
@@ -317,7 +317,7 @@ pub(crate) struct StartActorCommand {
     opts: ConnectionOpts,
 
     /// Id of host, if omitted the actor will be auctioned in the lattice to find a suitable host
-    #[clap(long = "host-id", name = "host-id", parse(try_from_str))]
+    #[clap(long = "host-id", name = "host-id", value_parser)]
     pub(crate) host_id: Option<ServerId>,
 
     /// Actor reference, e.g. the OCI URL for the actor.
@@ -349,7 +349,7 @@ pub(crate) struct StartProviderCommand {
     opts: ConnectionOpts,
 
     /// Id of host, if omitted the provider will be auctioned in the lattice to find a suitable host
-    #[clap(long = "host-id", name = "host-id", parse(try_from_str))]
+    #[clap(long = "host-id", name = "host-id", value_parser)]
     host_id: Option<ServerId>,
 
     /// Provider reference, e.g. the OCI URL for the provider
@@ -385,11 +385,11 @@ pub(crate) struct StopActorCommand {
     opts: ConnectionOpts,
 
     /// Id of host
-    #[clap(name = "host-id", parse(try_from_str))]
+    #[clap(name = "host-id", value_parser)]
     pub(crate) host_id: ServerId,
 
     /// Actor Id, e.g. the public key for the actor
-    #[clap(name = "actor-id", parse(try_from_str))]
+    #[clap(name = "actor-id", value_parser)]
     pub(crate) actor_id: ModuleId,
 
     /// Number of actors to stop
@@ -408,11 +408,11 @@ pub(crate) struct StopProviderCommand {
     opts: ConnectionOpts,
 
     /// Id of host
-    #[clap(name = "host-id", parse(try_from_str))]
+    #[clap(name = "host-id", value_parser)]
     host_id: ServerId,
 
     /// Provider Id, e.g. the public key for the provider
-    #[clap(name = "provider-id", parse(try_from_str))]
+    #[clap(name = "provider-id", value_parser)]
     pub(crate) provider_id: ServiceId,
 
     /// Link name of provider
@@ -435,7 +435,7 @@ pub(crate) struct StopHostCommand {
     opts: ConnectionOpts,
 
     /// Id of host
-    #[clap(name = "host-id", parse(try_from_str))]
+    #[clap(name = "host-id", value_parser)]
     host_id: ServerId,
 
     /// The timeout in ms for how much time to give the host for graceful shutdown
@@ -452,11 +452,11 @@ pub(crate) struct UpdateActorCommand {
     opts: ConnectionOpts,
 
     /// Id of host
-    #[clap(name = "host-id", parse(try_from_str))]
+    #[clap(name = "host-id", value_parser)]
     pub(crate) host_id: ServerId,
 
     /// Actor Id, e.g. the public key for the actor
-    #[clap(name = "actor-id", parse(try_from_str))]
+    #[clap(name = "actor-id", value_parser)]
     pub(crate) actor_id: ModuleId,
 
     /// Actor reference, e.g. the OCI URL for the actor.

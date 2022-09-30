@@ -110,7 +110,7 @@ pub(crate) struct CallCommand {
         short = 'c',
         long = "cluster-seed",
         env = "WASMCLOUD_CLUSTER_SEED",
-        parse(try_from_str)
+        value_parser
     )]
     pub(crate) cluster_seed: Option<ClusterSeed>,
 

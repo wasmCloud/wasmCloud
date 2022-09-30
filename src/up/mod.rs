@@ -40,11 +40,27 @@ pub(crate) struct UpCommand {
 
 #[derive(Parser, Debug, Clone)]
 pub(crate) struct NatsOpts {
+    /// Optional path to a NATS credentials file to authenticate and extend existing NATS infrastructure.
+    #[clap(
+        long = "nats-credsfile",
+        env = "NATS_CREDSFILE",
+        requires = "nats_remote_url"
+    )]
+    pub(crate) nats_credsfile: Option<PathBuf>,
+
+    /// Optional remote URL of existing NATS infrastructure to extend.
+    #[clap(
+        long = "nats-remote-url",
+        env = "NATS_REMOTE_URL",
+        requires = "nats_credsfile"
+    )]
+    pub(crate) nats_remote_url: Option<String>,
+
     /// If a connection can't be established, exit and don't start a NATS server. Will be ignored if a remote_url and credsfile are specified
     #[clap(
         long = "nats-connect-only",
         env = "NATS_CONNECT_ONLY",
-        conflicts_with = "nats-remote-url"
+        conflicts_with = "nats_remote_url"
     )]
     pub(crate) connect_only: bool,
 
@@ -63,22 +79,6 @@ pub(crate) struct NatsOpts {
     /// NATS Server Jetstream domain, defaults to `core`
     #[clap(long = "nats-js-domain", env = "NATS_JS_DOMAIN")]
     pub(crate) nats_js_domain: Option<String>,
-
-    /// Optional remote URL of existing NATS infrastructure to extend.
-    #[clap(
-        long = "nats-remote-url",
-        env = "NATS_REMOTE_URL",
-        requires = "nats-credsfile"
-    )]
-    pub(crate) nats_remote_url: Option<String>,
-
-    /// Optional path to a NATS credentials file to authenticate and extend existing NATS infrastructure.
-    #[clap(
-        long = "nats-credsfile",
-        env = "NATS_CREDSFILE",
-        requires = "nats-remote-url"
-    )]
-    pub(crate) nats_credsfile: Option<PathBuf>,
 }
 
 impl From<NatsOpts> for NatsConfig {
@@ -121,7 +121,7 @@ pub(crate) struct WasmcloudOpts {
     pub(crate) rpc_port: Option<u16>,
 
     /// A seed nkey to use to authenticate to NATS for RPC messages
-    #[clap(long = "rpc-seed", env = WASMCLOUD_RPC_SEED, requires = "rpc-jwt")]
+    #[clap(long = "rpc-seed", env = WASMCLOUD_RPC_SEED, requires = "rpc_jwt")]
     pub(crate) rpc_seed: Option<String>,
 
     /// Timeout in milliseconds for all RPC calls
@@ -129,7 +129,7 @@ pub(crate) struct WasmcloudOpts {
     pub(crate) rpc_timeout_ms: u32,
 
     /// A user JWT to use to authenticate to NATS for RPC messages
-    #[clap(long = "rpc-jwt", env = WASMCLOUD_RPC_JWT, requires = "rpc-seed")]
+    #[clap(long = "rpc-jwt", env = WASMCLOUD_RPC_JWT, requires = "rpc_seed")]
     pub(crate) rpc_jwt: Option<String>,
 
     /// Optional flag to enable host communication with a NATS server over TLS for RPC messages
@@ -149,7 +149,7 @@ pub(crate) struct WasmcloudOpts {
     pub(crate) prov_rpc_port: Option<u16>,
 
     /// A seed nkey to use to authenticate to NATS for Provider RPC messages
-    #[clap(long = "prov-rpc-seed", env = WASMCLOUD_PROV_RPC_SEED, requires = "prov-rpc-jwt")]
+    #[clap(long = "prov-rpc-seed", env = WASMCLOUD_PROV_RPC_SEED, requires = "prov_rpc_jwt")]
     pub(crate) prov_rpc_seed: Option<String>,
 
     /// Optional flag to enable host communication with a NATS server over TLS for Provider RPC messages
@@ -157,7 +157,7 @@ pub(crate) struct WasmcloudOpts {
     pub(crate) prov_rpc_tls: bool,
 
     /// A user JWT to use to authenticate to NATS for Provider RPC messages
-    #[clap(long = "prov-rpc-jwt", env = WASMCLOUD_PROV_RPC_JWT, requires = "prov-rpc-seed")]
+    #[clap(long = "prov-rpc-jwt", env = WASMCLOUD_PROV_RPC_JWT, requires = "prov_rpc_seed")]
     pub(crate) prov_rpc_jwt: Option<String>,
 
     /// Convenience flag for Provider RPC authentication, internally this parses the JWT and seed from the credsfile
@@ -173,11 +173,11 @@ pub(crate) struct WasmcloudOpts {
     pub(crate) ctl_port: Option<u16>,
 
     /// A seed nkey to use to authenticate to NATS for CTL messages
-    #[clap(long = "ctl-seed", env = WASMCLOUD_CTL_SEED, requires = "ctl-jwt")]
+    #[clap(long = "ctl-seed", env = WASMCLOUD_CTL_SEED, requires = "ctl_jwt")]
     pub(crate) ctl_seed: Option<String>,
 
     /// A user JWT to use to authenticate to NATS for CTL messages
-    #[clap(long = "ctl-jwt", env = WASMCLOUD_CTL_JWT, requires = "ctl-seed")]
+    #[clap(long = "ctl-jwt", env = WASMCLOUD_CTL_JWT, requires = "ctl_seed")]
     pub(crate) ctl_jwt: Option<String>,
 
     /// Convenience flag for CTL authentication, internally this parses the JWT and seed from the credsfile

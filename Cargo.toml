@@ -20,7 +20,7 @@ async-nats = "0.18.0"
 atelier_core = "0.2"
 bytes = "1.0"
 cargo_atelier = "0.2"
-clap = { version="3", features=["derive", "env"] }
+clap = { version="4", features=["derive", "env"] }
 cloudevents-sdk = "0.5.0"
 console = "0.15"
 ctrlc = "3.2.2"
