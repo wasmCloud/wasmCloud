@@ -123,7 +123,7 @@ fn integration_claims_inspect() {
 
     assert_json_include!(
         actual: local_inspect_output,
-        expected: expected_inspect_output.clone()
+        expected: expected_inspect_output
     );
 
     let local_reg_inspect = wash()
@@ -142,7 +142,7 @@ fn integration_claims_inspect() {
 
     assert_json_include!(
         actual: local_reg_inspect_output,
-        expected: expected_inspect_output.clone()
+        expected: expected_inspect_output
     );
 
     let remote_inspect = wash()
