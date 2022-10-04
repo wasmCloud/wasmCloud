@@ -12,7 +12,7 @@ use std::{collections::HashMap, convert::Infallible, ops::DerefMut, sync::Arc};
 
 use redis::{aio::Connection, FromRedisValue, RedisError};
 use tokio::sync::RwLock;
-use tracing::{info, instrument};
+use tracing::{info, instrument, warn};
 use wasmbus_rpc::provider::prelude::*;
 use wasmcloud_interface_keyvalue::{
     GetResponse, IncrementRequest, KeyValue, KeyValueReceiver, ListAddRequest, ListDelRequest,
@@ -57,15 +57,23 @@ impl ProviderHandler for KvRedisProvider {
             Some(v) => v.as_str(),
             None => DEFAULT_CONNECT_URL,
         };
-        let client = redis::Client::open(redis_url).map_err(|e| {
-            RpcError::ProviderInit(format!("redis connection to {}: {}", redis_url, e))
-        })?;
-        let connection = client.get_async_connection().await.map_err(|e| {
-            RpcError::ProviderInit(format!("redis connection to {}: {}", redis_url, e))
-        })?;
 
-        let mut update_map = self.actors.write().await;
-        update_map.insert(ld.actor_id.to_string(), RwLock::new(connection));
+        if let Ok(client) = redis::Client::open(redis_url) {
+            if let Ok(connection) = client.get_async_connection().await {
+                let mut update_map = self.actors.write().await;
+                update_map.insert(ld.actor_id.to_string(), RwLock::new(connection));
+            } else {
+                warn!(
+                    "Could not create Redis connection for actor {}, keyvalue operations will fail",
+                    ld.actor_id
+                )
+            }
+        } else {
+            warn!(
+                "Could not create Redis client for actor {}, keyvalue operations will fail",
+                ld.actor_id
+            )
+        }
 
         Ok(true)
     }
@@ -301,7 +309,7 @@ impl KvRedisProvider {
         let rd = self.actors.read().await;
         let rc = rd
             .get(actor_id)
-            .ok_or_else(|| RpcError::InvalidParameter(format!("actor not linked:{}", actor_id)))?;
+            .ok_or_else(|| RpcError::InvalidParameter(format!("No Redis connection found for {}. Please ensure the URL supplied in the link definition is a valid Redis URL", actor_id)))?;
         // get write lock on this actor's connection
         let mut con = rc.write().await;
         cmd.query_async(con.deref_mut()).await.map_err(to_rpc_err)
