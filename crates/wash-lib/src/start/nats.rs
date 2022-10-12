@@ -275,8 +275,8 @@ impl NatsConfig {
             (Some(url), Some(creds)) => format!(
                 r#"
 leafnodes {{
-    remotes = [ 
-        {{ 
+    remotes = [
+        {{
             url: "{}"
             credentials: "{}"
         }}
@@ -330,6 +330,7 @@ where
         config.write_to_path(&config_path).await?;
         Command::new(bin_path.as_ref())
             .stderr(stderr)
+            .stdin(Stdio::null())
             .arg("-js")
             .arg("--config")
             .arg(config_path)

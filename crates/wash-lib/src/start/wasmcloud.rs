@@ -261,6 +261,7 @@ where
         // wasmCloud host logs are sent to stderr as of https://github.com/wasmCloud/wasmcloud-otp/pull/418
         .stderr(stderr)
         .stdout(stdout)
+        .stdin(Stdio::null())
         .envs(&env_vars)
         .arg("start");
 
