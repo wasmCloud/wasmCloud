@@ -435,12 +435,16 @@ async fn run_wasmcloud_interactive(
     mut wasmcloud_child: Child,
     output_kind: OutputKind,
 ) -> Result<()> {
+    use std::sync::mpsc::channel;
+    let (running_sender, running_receiver) = channel();
+
     let running = Arc::new(AtomicBool::new(true));
     let r = running.clone();
 
     ctrlc::set_handler(move || {
         if r.load(Ordering::SeqCst) {
             r.store(false, Ordering::SeqCst);
+            let _ = running_sender.send(true);
         } else {
             log::warn!("\nRepeated CTRL+C received, killing wasmCloud and NATS. This may result in zombie processes")
         }
@@ -464,7 +468,8 @@ async fn run_wasmcloud_interactive(
     });
 
     // Wait for the user to send Ctrl+C in a thread where blocking is acceptable
-    tokio::task::spawn_blocking(move || while running.load(Ordering::SeqCst) {}).await?;
+    let _ = running_receiver.recv();
+
     // Prevent extraneous messages from the host getting printed as the host shuts down
     if let Some(handle) = handle {
         handle.abort()

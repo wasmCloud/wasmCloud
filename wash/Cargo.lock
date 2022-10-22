@@ -540,13 +540,13 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.0.4"
+version = "4.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f78ad8e84aa8e8aa3e821857be40eb4b925ff232de430d4dd2ae6aa058cbd92"
+checksum = "335867764ed2de42325fafe6d18b8af74ba97ee0c590fa016f157535b42ab04b"
 dependencies = [
  "atty",
  "bitflags",
- "clap_derive 4.0.1",
+ "clap_derive 4.0.18",
  "clap_lex 0.3.0",
  "once_cell",
  "strsim 0.10.0",
@@ -568,9 +568,9 @@ dependencies = [
 
 [[package]]
 name = "clap_derive"
-version = "4.0.1"
+version = "4.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca689d7434ce44517a12a89456b2be4d1ea1cafcd8f581978c03d45f5a5c12a7"
+checksum = "16a1b0f6422af32d5da0c58e2703320f379216ee70198241c84173a8c5ac28f3"
 dependencies = [
  "heck 0.4.0",
  "proc-macro-error",
@@ -3961,7 +3961,7 @@ dependencies = [
 
 [[package]]
 name = "wash-cli"
-version = "0.13.0-alpha.1"
+version = "0.13.0-alpha.2"
 dependencies = [
  "anyhow",
  "assert-json-diff",
@@ -3969,7 +3969,7 @@ dependencies = [
  "atelier_core 0.2.22",
  "bytes",
  "cargo_atelier",
- "clap 4.0.4",
+ "clap 4.0.18",
  "cloudevents-sdk",
  "console",
  "ctrlc",
