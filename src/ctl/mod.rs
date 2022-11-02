@@ -1109,12 +1109,23 @@ async fn ctl_client_from_opts(
     let nc =
         crate::util::nats_client_from_opts(&ctl_host, &ctl_port, ctl_jwt, ctl_seed, ctl_credsfile)
             .await?;
-    let ctl_client = CtlClient::new(
-        nc,
-        Some(lattice_prefix),
-        Duration::from_millis(opts.timeout_ms),
-        Duration::from_millis(auction_timeout_ms),
-    );
+
+    let ctl_client = if let Ok(topic_prefix) = std::env::var("WASMCLOUD_CTL_TOPIC_PREFIX") {
+        CtlClient::new_with_topic_prefix(
+            nc,
+            &topic_prefix,
+            Some(lattice_prefix),
+            Duration::from_millis(opts.timeout_ms),
+            Duration::from_millis(auction_timeout_ms),
+        )
+    } else {
+        CtlClient::new(
+            nc,
+            Some(lattice_prefix),
+            Duration::from_millis(opts.timeout_ms),
+            Duration::from_millis(auction_timeout_ms),
+        )
+    };
 
     Ok(ctl_client)
 }
