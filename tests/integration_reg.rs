@@ -54,10 +54,6 @@ fn integration_pull_comprehensive() {
             "sha256:a17a163afa8447622055deb049587641a9e23243a6cc4411eb33bd4267214cf3",
             "--output",
             "json",
-            "--password",
-            "password",
-            "--user",
-            "user",
         ])
         .output()
         .unwrap_or_else(|_| panic!("failed to pull {}", ECHO_WASM));
@@ -80,10 +76,6 @@ fn integration_pull_comprehensive() {
             "sha256:169f2764e529c2b57ad20abb87e0854d67bf6f0912896865e2911dee1bf6af98",
             "--output",
             "json",
-            "--password",
-            "password",
-            "--user",
-            "user",
         ])
         .output()
         .unwrap_or_else(|_| panic!("failed to pull {}", ECHO_WASM));
