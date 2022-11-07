@@ -18,7 +18,7 @@ use crate::wascap::{
 };
 use async_trait::async_trait;
 use futures::{future::JoinAll, StreamExt};
-use serde::de::DeserializeOwned;
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, instrument, warn};
 use tracing_futures::Instrument;
@@ -101,6 +101,12 @@ pub trait ProviderHandler: Sync {
 pub type LogEntry = (tracing::Level, String);
 
 pub type QuitSignal = tokio::sync::broadcast::Receiver<bool>;
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct ShutdownMessage {
+    /// The ID of the host that sent the message
+    pub host_id: String,
+}
 
 #[doc(hidden)]
 /// Process subscription, until closed or exhausted, or value is received on the channel.
@@ -521,34 +527,43 @@ impl HostBridge {
             .subscribe(shutdown_topic)
             .await
             .map_err(|e| RpcError::Nats(e.to_string()))?;
-        let msg = sub.next().await;
-        // TODO: there should be validation on this message, but it's not signed by host yet
-        // Shutdown messages are unsigned (see https://github.com/wasmCloud/wasmcloud-otp/issues/256)
-        // so we can't verify that this came from a trusted source.
-        // When the above issue is fixed, verify the source and keep looping if it's invalid.
 
-        info!("Received termination signal. Shutting down capability provider.");
-        // Tell provider to shutdown - before we shut down nats subscriptions,
-        // in case it needs to do any message passing during shutdown
-        if let Err(e) = provider.shutdown().await {
-            error!(error = %e, "got error during provider shutdown processing");
-        }
-        // send ack to host
-        if let Some(async_nats::Message { reply: Some(reply_to), .. }) = msg {
-            let data = b"shutting down".to_vec();
-            if let Err(e) = self.rpc_client().publish(reply_to, data).await {
-                error!(error = %e, "failed to send shutdown ack");
+        loop {
+            let msg = sub.next().await;
+            // TODO: there should be validation on this message, but it's not signed by host yet
+            // Shutdown messages are unsigned (see https://github.com/wasmCloud/wasmcloud-otp/issues/256)
+            // so we can't verify that this came from a trusted source.
+            // When the above issue is fixed, verify the source and keep looping if it's invalid.
+
+            info!("Received termination signal.");
+
+            // Check if we really need to shut down
+            if let Some(async_nats::Message { reply: Some(reply_to), payload, .. }) = msg {
+                let shutmsg: ShutdownMessage = serde_json::from_slice(&payload).unwrap_or_default();
+                if shutmsg.host_id == self.host_data.host_id {
+                    info!("Terminating (host match)");
+                    // Tell provider to shutdown - before we shut down nats subscriptions,
+                    // in case it needs to do any message passing during shutdown
+                    if let Err(e) = provider.shutdown().await {
+                        error!(error = %e, "got error during provider shutdown processing");
+                    }
+                    let data = b"shutting down".to_vec();
+                    if let Err(e) = self.rpc_client().publish(reply_to, data).await {
+                        error!(error = %e, "failed to send shutdown ack");
+                    }
+                    // unsubscribe from shutdown topic
+                    let _ = sub.unsubscribe().await;
+
+                    // send shutdown signal to all listeners: quit all subscribers and signal main thread to quit
+                    if let Err(e) = shutdown_tx.send(true) {
+                        error!(error = %e, "Problem shutting down:  failure to send signal");
+                    }
+                    break;
+                } else {
+                    debug!("Ignoring termination signal (no host match)");
+                }
             }
         }
-
-        // unsubscribe from shutdown topic
-        let _ = sub.unsubscribe().await;
-
-        // send shutdown signal to all listeners: quit all subscribers and signal main thread to quit
-        if let Err(e) = shutdown_tx.send(true) {
-            error!(error = %e, "Problem shutting down:  failure to send signal");
-        }
-
         Ok(())
     }
 
