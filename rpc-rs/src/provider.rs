@@ -20,7 +20,7 @@ use async_trait::async_trait;
 use futures::{future::JoinAll, StreamExt};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tokio::sync::RwLock;
-use tracing::{debug, error, info, instrument, warn};
+use tracing::{debug, error, info, instrument, trace, warn};
 use tracing_futures::Instrument;
 
 pub use crate::rpc_client::make_uuid;
@@ -535,15 +535,13 @@ impl HostBridge {
             // so we can't verify that this came from a trusted source.
             // When the above issue is fixed, verify the source and keep looping if it's invalid.
 
-            info!("Received termination signal.");
-
             // Check if we really need to shut down
             if let Some(async_nats::Message { reply: Some(reply_to), payload, .. }) = msg {
                 let shutmsg: ShutdownMessage = serde_json::from_slice(&payload).unwrap_or_default();
                 // Backwards compatibility - if no host (or payload) is supplied, default
                 // to shutting down unconditionally
                 if shutmsg.host_id == self.host_data.host_id || shutmsg.host_id.is_empty() {
-                    info!("Terminating (host match)");
+                    info!("Received termination signal and stopping");
                     // Tell provider to shutdown - before we shut down nats subscriptions,
                     // in case it needs to do any message passing during shutdown
                     if let Err(e) = provider.shutdown().await {
@@ -562,7 +560,7 @@ impl HostBridge {
                     }
                     break;
                 } else {
-                    debug!("Ignoring termination signal (no host match)");
+                    trace!("Ignoring termination signal (request targeted for different host)");
                 }
             }
         }
