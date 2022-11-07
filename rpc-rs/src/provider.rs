@@ -540,7 +540,9 @@ impl HostBridge {
             // Check if we really need to shut down
             if let Some(async_nats::Message { reply: Some(reply_to), payload, .. }) = msg {
                 let shutmsg: ShutdownMessage = serde_json::from_slice(&payload).unwrap_or_default();
-                if shutmsg.host_id == self.host_data.host_id {
+                // Backwards compatibility - if no host (or payload) is supplied, default
+                // to shutting down unconditionally
+                if shutmsg.host_id == self.host_data.host_id || shutmsg.host_id.is_empty() {
                     info!("Terminating (host match)");
                     // Tell provider to shutdown - before we shut down nats subscriptions,
                     // in case it needs to do any message passing during shutdown
