@@ -1,167 +1,59 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
+use cmd_lib::run_cmd;
 
 mod common;
-use common::wash;
 use scopeguard::defer;
 use serial_test::serial;
 use std::{
     env::temp_dir,
     fs::{create_dir_all, remove_dir_all},
+    path::PathBuf,
 };
 
 #[test]
 #[serial]
-fn build_rust_actor() -> Result<()> {
-    const SUBFOLDER: &str = "build_rust_actor";
-
-    let test_dir = temp_dir().join(SUBFOLDER);
-    if test_dir.exists() {
-        remove_dir_all(&test_dir)?;
-    }
-    create_dir_all(&test_dir)?;
-
-    defer! {
-        remove_dir_all(&test_dir).unwrap();
-    }
-
-    std::env::set_current_dir(&test_dir)?;
-
-    let status = wash()
-        .args(&[
-            "new",
-            "actor",
-            "hello",
-            "--git",
-            "wasmcloud/project-templates",
-            "--subfolder",
-            "actor/hello",
-            "--silent",
-            "--no-git-init",
-        ])
-        .status()
-        .expect("Failed to generate project");
-
-    assert!(status.success());
-
-    std::env::set_current_dir(&test_dir.join("hello"))?;
-
-    let status = wash()
-        .args(&["build", "--no-sign"])
-        .status()
-        .expect("Failed to build project");
-
-    assert!(status.success());
-
-    let unsigned_file = test_dir.join("hello/build/hello.wasm");
-    assert!(unsigned_file.exists(), "unsigned file not found!");
-
-    let signed_file = test_dir.join("hello/build/hello_s.wasm");
-    assert!(
-        !signed_file.exists(),
-        "signed file should not exist when using --no-sign!"
-    );
-
-    Ok(())
+fn build_rust_actor_unsigned() -> Result<()> {
+    build_new_project("actor/hello", "hello", "build/hello.wasm", false)
 }
 
 #[test]
 #[serial]
-fn build_and_sign_rust_actor() -> Result<()> {
-    const SUBFOLDER: &str = "build_and_sign_rust_actor";
-
-    let test_dir = temp_dir().join(SUBFOLDER);
-    if test_dir.exists() {
-        remove_dir_all(&test_dir)?;
-    }
-    create_dir_all(&test_dir)?;
-
-    defer! {
-        remove_dir_all(&test_dir).unwrap();
-    }
-
-    std::env::set_current_dir(&test_dir)?;
-
-    let status = wash()
-        .args(&[
-            "new",
-            "actor",
-            "hello",
-            "--git",
-            "wasmcloud/project-templates",
-            "--subfolder",
-            "actor/hello",
-            "--silent",
-            "--no-git-init",
-        ])
-        .status()
-        .expect("Failed to generate project");
-
-    assert!(status.success());
-
-    std::env::set_current_dir(&test_dir.join("hello"))?;
-
-    let status = wash()
-        .args(&["build"])
-        .status()
-        .expect("Failed to build project");
-
-    assert!(status.success());
-
-    let unsigned_file = test_dir.join("hello/build/hello.wasm");
-    assert!(unsigned_file.exists(), "unsigned file not found!");
-
-    let signed_file = test_dir.join("hello/build/hello_s.wasm");
-    assert!(signed_file.exists(), "signed file not found!");
-
-    Ok(())
+fn build_rust_actor_signed() -> Result<()> {
+    build_new_project("actor/hello", "hello", "build/hello_s.wasm", true)
 }
 
 #[test]
 #[serial]
-fn build_and_sign_tinygo_actor() -> Result<()> {
-    const SUBFOLDER: &str = "build_and_sign_tinygo_actor";
+fn build_tinygo_actor() -> Result<()> {
+    build_new_project("actor/echo-tinygo", "echo", "build/echo_s.wasm", true)
+}
 
-    let test_dir = temp_dir().join(SUBFOLDER);
+fn build_new_project(template: &str, subdir: &str, build_result: &str, signed: bool) -> Result<()> {
+    let test_dir = temp_dir().join(template.replace('/', "_"));
     if test_dir.exists() {
         remove_dir_all(&test_dir)?;
     }
     create_dir_all(&test_dir)?;
-
     defer! {
         remove_dir_all(&test_dir).unwrap();
     }
 
     std::env::set_current_dir(&test_dir)?;
+    let wash = env!("CARGO_BIN_EXE_wash");
+    run_cmd!(
+        $wash new actor $subdir --git wasmcloud/project-templates --subfolder $template --silent --no-git-init
+    ).map_err(|e| anyhow!("wash new actor failed: {}", e))?;
 
-    let status = wash()
-        .args(&[
-            "new",
-            "actor",
-            "echo",
-            "--git",
-            "wasmcloud/project-templates",
-            "--subfolder",
-            "actor/echo-tinygo",
-            "--silent",
-            "--no-git-init",
-        ])
-        .status()
-        .expect("Failed to generate project");
+    std::env::set_current_dir(test_dir.join(subdir))?;
+    if signed {
+        run_cmd!( $wash build )
+    } else {
+        run_cmd!( $wash build --no-sign )
+    }
+    .map_err(|e| anyhow!("wash build failed: {}", e))?;
 
-    assert!(status.success());
-
-    std::env::set_current_dir(&test_dir.join("echo"))?;
-
-    wash()
-        .args(&["build"])
-        .status()
-        .expect("Failed to build project");
-
-    let unsigned_file = test_dir.join("echo/build/echo.wasm");
-    assert!(unsigned_file.exists(), "unsigned file not found!");
-
-    let signed_file = test_dir.join("echo/build/echo_s.wasm");
-    assert!(signed_file.exists(), "signed file not found!");
+    let build_result = PathBuf::from(build_result);
+    assert!(build_result.exists(), "build result missing");
 
     Ok(())
 }

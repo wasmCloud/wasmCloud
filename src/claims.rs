@@ -664,7 +664,7 @@ async fn get_caps(cmd: &InspectCommand) -> Result<Option<Token<Actor>>> {
     .await?;
 
     // Extract will return an error if it encounters an invalid hash in the claims
-    Ok(wascap::wasm::extract_claims(&artifact_bytes)?)
+    Ok(wascap::wasm::extract_claims(artifact_bytes)?)
 }
 
 async fn render_caps(cmd: InspectCommand) -> Result<CommandOutput> {

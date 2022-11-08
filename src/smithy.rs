@@ -118,8 +118,8 @@ pub(crate) async fn handle_lint_command(command: LintCli) -> Result<CommandOutpu
     let model = build_model(opt.input, config.models, config.base_dir, verbose)?;
     let report = run_linter_actions(
         &mut [
-            Box::new(NamingConventions::default()),
-            Box::new(UnwelcomeTerms::default()),
+            Box::<NamingConventions>::default(),
+            Box::<UnwelcomeTerms>::default(),
         ],
         &model,
         false,
@@ -156,8 +156,8 @@ pub(crate) async fn handle_validate_command(command: ValidateCli) -> Result<Comm
 
     let report = run_validation_actions(
         &mut [
-            Box::new(CorrectTypeReferences::default()),
-            Box::new(NoUnresolvedReferences::default()),
+            Box::<CorrectTypeReferences>::default(),
+            Box::<NoUnresolvedReferences>::default(),
         ],
         &model,
         false,

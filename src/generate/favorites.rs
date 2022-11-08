@@ -76,7 +76,7 @@ const DEFAULT_FAVORITES: &str = include_str!("./favorites.toml");
 pub(crate) fn load_favorites(path: Option<&PathBuf>) -> Result<Favorites> {
     // load parameter file, if provided
     let data = if let Some(path) = path {
-        fs::read_to_string(&path)
+        fs::read_to_string(path)
             .with_context(|| format!("reading favorites file {}", &path.display()))?
     } else {
         DEFAULT_FAVORITES.to_string()

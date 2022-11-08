@@ -1,6 +1,6 @@
 [package]
 name = "wash-cli"
-version = "0.13.0"
+version = "0.14.0-alpha.1"
 authors = ["wasmCloud Team"]
 categories = ["wasm", "command-line-utilities"]
 description = "wasmcloud Shell (wash) CLI tool"
@@ -29,7 +29,6 @@ dialoguer = "0.10.2"
 dirs = "4.0"
 env_logger = "0.9"
 envmnt = "0.10.2"
-git2 = "0.15.0"
 heck = "0.4"
 ignore = "0.4"
 indicatif = "0.17.0"
@@ -60,11 +59,12 @@ which = "4.2.2"
 wash-lib = { version = "0.3.1", path = "./crates/wash-lib" }
 wascap = "0.8.0"
 weld-codegen = "0.5.0"
-wasmcloud-control-interface = "0.20.1"
+wasmcloud-control-interface = "0.21.0"
 wasmbus-rpc = "0.10.0"
 wasmcloud-test-util = "0.5.0"
 
 [dev-dependencies]
+cmd_lib = "1.3.0"
 reqwest = {version = "0.11", default-features = false, features = ["json", "rustls-tls"]}
 tempfile = "3"
 test-case = "2.2.1"
