@@ -437,13 +437,11 @@ async fn run_wasmcloud_interactive(
 ) -> Result<()> {
     use std::sync::mpsc::channel;
     let (running_sender, running_receiver) = channel();
-
     let running = Arc::new(AtomicBool::new(true));
-    let r = running.clone();
 
     ctrlc::set_handler(move || {
-        if r.load(Ordering::SeqCst) {
-            r.store(false, Ordering::SeqCst);
+        if running.load(Ordering::SeqCst) {
+            running.store(false, Ordering::SeqCst);
             let _ = running_sender.send(true);
         } else {
             log::warn!("\nRepeated CTRL+C received, killing wasmCloud and NATS. This may result in zombie processes")

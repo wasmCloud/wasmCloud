@@ -440,7 +440,7 @@ async fn raw_request(
             if env.result == "success" {
                 Ok(env.data)
             } else {
-                bail!("{}", env.message.unwrap_or_else(|| "".to_string()))
+                bail!("{}", env.message.unwrap_or_default())
             }
         }
         Ok(Err(e)) => bail!("Error making message request: {}", e),

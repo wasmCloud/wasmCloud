@@ -313,7 +313,7 @@ pub(crate) async fn validate_artifact(artifact: &[u8], name: &str) -> Result<Sup
 /// Attempts to inspect the claims of an actor module
 /// Will fail without actor claims, or if the artifact is invalid
 fn validate_actor_module(artifact: &[u8], module: &str) -> Result<()> {
-    match wascap::wasm::extract_claims(&artifact) {
+    match wascap::wasm::extract_claims(artifact) {
         Ok(Some(_token)) => Ok(()),
         Ok(None) => bail!("No capabilities discovered in actor module : {}", &module),
         Err(e) => Err(anyhow!("{}", e)),

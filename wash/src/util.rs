@@ -278,7 +278,7 @@ pub(crate) fn cached_file(img: &str) -> PathBuf {
 }
 
 pub(crate) fn img_name_to_file_name(img: &str) -> String {
-    img.replace(':', "_").replace('/', "_").replace('.', "_")
+    img.replace([':', '/', '.'], "_")
 }
 
 // Check if the contract ID parameter is a 56 character key and suggest that the user
