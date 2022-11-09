@@ -4,7 +4,7 @@
   "description": "build tailwind css",
   "main": "postcss.config.js",
   "dependencies": {
-    "@tailwindcss/typography": "^0.4.0",
+    "@tailwindcss/typography": "^0.5.7",
     "alpinejs": "^2.8.0"
   },
   "devDependencies": {
