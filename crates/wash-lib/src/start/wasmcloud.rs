@@ -244,7 +244,12 @@ where
     }
 
     #[cfg(target_family = "unix")]
-    if let Ok(output) = Command::new(bin_path.as_ref()).arg("pid").output().await {
+    if let Ok(output) = Command::new(bin_path.as_ref())
+        .envs(&env_vars)
+        .arg("pid")
+        .output()
+        .await
+    {
         // Stderr will include :nodedown if no other host is running, otherwise
         // stdout will contain the PID
         if !String::from_utf8_lossy(&output.stderr).contains(":nodedown") {
