@@ -278,7 +278,7 @@ leafnodes {{
     remotes = [
         {{
             url: "{}"
-            credentials: "{}"
+            credentials: {:?}
         }}
     ]
 }}
@@ -378,8 +378,11 @@ mod test {
         ensure_nats_server, is_nats_installed, start_nats_server, NatsConfig, NATS_SERVER_BINARY,
     };
     use anyhow::Result;
-    use std::env::temp_dir;
-    use tokio::fs::{create_dir_all, remove_dir_all};
+    use std::{env::temp_dir, path::PathBuf};
+    use tokio::{
+        fs::{create_dir_all, remove_dir_all},
+        io::AsyncReadExt,
+    };
 
     const NATS_SERVER_VERSION: &str = "v2.8.4";
 
@@ -466,6 +469,40 @@ mod test {
         nats_one.unwrap().kill().await?;
         let _ = remove_dir_all(install_dir).await;
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn can_write_properly_formed_credsfile() -> Result<()> {
+        let install_dir = temp_dir().join("can_write_properly_formed_credsfile");
+        let _ = remove_dir_all(&install_dir).await;
+        create_dir_all(&install_dir).await?;
+        assert!(!is_nats_installed(&install_dir).await);
+
+        let res = ensure_nats_server(NATS_SERVER_VERSION, &install_dir).await;
+        assert!(res.is_ok());
+
+        let creds = PathBuf::from(dirs::home_dir().unwrap().join("nats.creds"));
+        let config: NatsConfig = NatsConfig::new_leaf(
+            "127.0.0.1",
+            4243,
+            None,
+            "connect.ngs.global".to_string(),
+            creds.clone(),
+        );
+
+        config.write_to_path(creds.clone()).await?;
+
+        let mut credsfile = tokio::fs::File::open(creds.clone()).await?;
+        let mut contents = String::new();
+        credsfile.read_to_string(&mut contents).await?;
+
+        assert_eq!(contents, format!("\njetstream {{\n    domain={}\n}}\n\nleafnodes {{\n    remotes = [\n        {{\n            url: \"{}\"\n            credentials: {:?}\n        }}\n    ]\n}}\n                \n", "core", "connect.ngs.global", creds.to_string_lossy()));
+        // A simple check to ensure we are properly escaping quotes, this is unescaped and checks for "\\"
+        #[cfg(target_family = "windows")]
+        assert!(creds.to_string_lossy().contains("\\"));
+
+        let _ = remove_dir_all(install_dir).await;
         Ok(())
     }
 }
