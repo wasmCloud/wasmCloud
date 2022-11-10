@@ -47,6 +47,7 @@ COPY --from=builder /usr/lib/libssl.so.* /usr/lib/
 COPY --from=builder /usr/lib/libcrypto.so.* /usr/lib/
 COPY --from=builder /usr/lib/libgcc_s.so.* /usr/lib/
 COPY --from=builder /lib/ld-musl-x86_64.so.* /lib/
+COPY --from=builder /lib/libz.so.* /lib/
 
 COPY --from=builder /build/target/release/wash /usr/local/bin/
 
