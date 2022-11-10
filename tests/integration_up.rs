@@ -1,9 +1,6 @@
 mod common;
 use common::{output_to_string, test_dir_with_subfolder, wash};
-use std::{
-    fs::{read_to_string, remove_dir_all},
-    process::Command,
-};
+use std::fs::{read_to_string, remove_dir_all};
 
 #[test]
 fn integration_up_can_start_wasmcloud_and_actor() {
@@ -55,11 +52,11 @@ fn integration_up_can_start_wasmcloud_and_actor() {
         .contains("Actor wasmcloud.azurecr.io/echo:0.3.4 started on host N"));
 
     let kill_cmd = kill_cmd.to_string();
-    let (wasmcloud_stop, nats_kill) = kill_cmd.trim_matches('"').split_once(';').unwrap();
-    let (cmd, arg) = wasmcloud_stop.trim().split_once(' ').unwrap();
-    Command::new(cmd).arg(arg).output().unwrap();
-    let (cmd, arg) = nats_kill.trim().split_once(' ').unwrap();
-    Command::new(cmd).arg(arg).output().unwrap();
+    let (_wash, down) = kill_cmd.trim_matches('"').split_once(' ').unwrap();
+    wash()
+        .args(vec![down])
+        .output()
+        .expect("Could not spawn wash down process");
 
     remove_dir_all(dir).unwrap();
 }

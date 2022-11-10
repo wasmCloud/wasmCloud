@@ -17,9 +17,9 @@ use tokio_tar::Archive;
 const WASMCLOUD_GITHUB_RELEASE_URL: &str =
     "https://github.com/wasmCloud/wasmcloud-otp/releases/download";
 #[cfg(target_family = "unix")]
-pub(crate) const WASMCLOUD_HOST_BIN: &str = "bin/wasmcloud_host";
+pub const WASMCLOUD_HOST_BIN: &str = "bin/wasmcloud_host";
 #[cfg(target_family = "windows")]
-pub(crate) const WASMCLOUD_HOST_BIN: &str = "bin\\wasmcloud_host.bat";
+pub const WASMCLOUD_HOST_BIN: &str = "bin\\wasmcloud_host.bat";
 
 // Any version of wasmCloud under 0.57.0 uses distillery releases and is incompatible
 const MINIMUM_WASMCLOUD_VERSION: &str = "0.57.0";

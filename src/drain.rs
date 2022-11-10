@@ -1,4 +1,4 @@
-use crate::util::CommandOutput;
+use crate::{cfg::cfg_dir, up::DOWNLOADS_DIR, util::CommandOutput};
 use anyhow::Result;
 use clap::Subcommand;
 use serde_json::json;
@@ -12,12 +12,14 @@ use std::{
 pub(crate) enum DrainSelection {
     /// Remove all cached files created by wasmcloud
     All,
-    /// Remove cached files downloaded from OCI registries by wasmcloud
+    /// Remove cached files downloaded from OCI registries by wasmCloud
     Oci,
     /// Remove cached binaries extracted from provider archives
     Lib,
     /// Remove cached smithy files downloaded from model urls
     Smithy,
+    /// Remove downloaded and generated files from launching wasmCloud hosts
+    Downloads,
 }
 
 impl IntoIterator for &DrainSelection {
@@ -30,10 +32,12 @@ impl IntoIterator for &DrainSelection {
                 /* Lib    */ env::temp_dir().join("wasmcloudcache"),
                 /* Oci    */ env::temp_dir().join("wasmcloud_ocicache"),
                 /* Smithy */ model_cache_dir(),
+                /* Downloads */ downloads_dir(),
             ],
             DrainSelection::Lib => vec![env::temp_dir().join("wasmcloudcache")],
             DrainSelection::Oci => vec![env::temp_dir().join("wasmcloud_ocicache")],
             DrainSelection::Smithy => vec![model_cache_dir()],
+            DrainSelection::Downloads => vec![downloads_dir()],
         };
         paths.into_iter()
     }
@@ -42,6 +46,16 @@ impl IntoIterator for &DrainSelection {
 fn model_cache_dir() -> PathBuf {
     match weld_codegen::weld_cache_dir() {
         Ok(path) => path,
+        Err(e) => {
+            eprintln!("{}", e);
+            "".into()
+        }
+    }
+}
+
+fn downloads_dir() -> PathBuf {
+    match cfg_dir() {
+        Ok(path) => path.join(DOWNLOADS_DIR),
         Err(e) => {
             eprintln!("{}", e);
             "".into()
