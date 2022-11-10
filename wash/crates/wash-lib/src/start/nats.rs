@@ -11,11 +11,12 @@ use tokio_stream::StreamExt;
 use tokio_tar::Archive;
 
 const NATS_GITHUB_RELEASE_URL: &str = "https://github.com/nats-io/nats-server/releases/download";
-pub(crate) const NATS_SERVER_CONF: &str = "nats.conf";
+pub const NATS_SERVER_CONF: &str = "nats.conf";
+pub const NATS_SERVER_PID: &str = "nats.pid";
 #[cfg(target_family = "unix")]
-pub(crate) const NATS_SERVER_BINARY: &str = "nats-server";
+pub const NATS_SERVER_BINARY: &str = "nats-server";
 #[cfg(target_family = "windows")]
-pub(crate) const NATS_SERVER_BINARY: &str = "nats-server.exe";
+pub const NATS_SERVER_BINARY: &str = "nats-server.exe";
 
 /// A wrapper around the [ensure_nats_server_for_os_arch_pair] function that uses the
 /// architecture and operating system of the current host machine.
@@ -324,7 +325,8 @@ where
             config.port
         ));
     }
-    if let Some(config_path) = bin_path.as_ref().parent().map(|p| p.join(NATS_SERVER_CONF)) {
+    if let Some(parent_path) = bin_path.as_ref().parent() {
+        let config_path = parent_path.join(NATS_SERVER_CONF);
         let host = config.host.to_owned();
         let port = config.port;
         config.write_to_path(&config_path).await?;
@@ -338,10 +340,14 @@ where
             .arg(host)
             .arg("--port")
             .arg(port.to_string())
+            .arg("--pid")
+            .arg(parent_path.join(NATS_SERVER_PID))
             .spawn()
-            .map_err(|e| anyhow!(e))
+            .map_err(anyhow::Error::from)
     } else {
-        Err(anyhow!("Could not write config to disk"))
+        Err(anyhow!(
+            "Could not write config to disk, couldn't find download directory"
+        ))
     }
 }
 

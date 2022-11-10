@@ -8,6 +8,7 @@ use claims::ClaimsCliCommand;
 use clap::{Parser, Subcommand};
 use ctl::CtlCliCommand;
 use ctx::CtxCommand;
+use down::DownCommand;
 use drain::DrainSelection;
 use generate::NewCliCommand;
 use keys::KeysCliCommand;
@@ -28,6 +29,7 @@ mod cfg;
 mod claims;
 mod ctl;
 mod ctx;
+mod down;
 mod drain;
 mod generate;
 mod id;
@@ -86,6 +88,9 @@ enum CliCommand {
     /// Manage wasmCloud host configuration contexts
     #[clap(name = "ctx", subcommand)]
     Ctx(CtxCommand),
+    /// Tear down a wasmCloud environment launched with wash up
+    #[clap(name = "down")]
+    Down(DownCommand),
     /// Manage contents of local wasmCloud caches
     #[clap(name = "drain", subcommand)]
     Drain(DrainSelection),
@@ -129,6 +134,7 @@ async fn main() {
         CliCommand::Claims(claims_cli) => claims::handle_command(claims_cli, output_kind).await,
         CliCommand::Ctl(ctl_cli) => ctl::handle_command(ctl_cli, output_kind).await,
         CliCommand::Ctx(ctx_cli) => ctx::handle_command(ctx_cli).await,
+        CliCommand::Down(down_cli) => down::handle_command(down_cli, output_kind).await,
         CliCommand::Drain(drain_cli) => drain::handle_command(drain_cli),
         CliCommand::Gen(generate_cli) => smithy::handle_gen_command(generate_cli),
         CliCommand::Keys(keys_cli) => keys::handle_command(keys_cli),

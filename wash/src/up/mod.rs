@@ -1,3 +1,6 @@
+use anyhow::{anyhow, Result};
+use clap::Parser;
+use serde_json::json;
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::path::Path;
@@ -7,28 +10,27 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-
-use crate::appearance::spinner::Spinner;
-use crate::cfg::cfg_dir;
-use crate::util::{CommandOutput, OutputKind};
-use anyhow::{anyhow, Result};
-use clap::Parser;
-use serde_json::json;
 use tokio::fs::create_dir_all;
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
-    process::{Child, Command},
+    process::Child,
 };
 
+use crate::appearance::spinner::Spinner;
+use crate::cfg::cfg_dir;
+use crate::down::stop_nats;
+use crate::down::stop_wasmcloud;
+use crate::util::{CommandOutput, OutputKind};
 use wash_lib::start::*;
 mod config;
 mod credsfile;
+pub use config::DOWNLOADS_DIR;
 use config::*;
 
 #[derive(Parser, Debug, Clone)]
 pub(crate) struct UpCommand {
     /// Launch NATS and wasmCloud detached from the current terminal as background processes
-    #[clap(short = 'd', long = "detached")]
+    #[clap(short = 'd', long = "detached", alias = "detach")]
     pub(crate) detached: bool,
 
     #[clap(flatten)]
@@ -253,7 +255,7 @@ pub(crate) async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result
     // Avoid downloading + starting NATS if the user already runs their own server. Ignore connect_only
     // if this server has a remote and credsfile as we have to start a leafnode in that scenario
     let nats_opts = cmd.nats_opts.clone();
-    let mut nats_process = if !cmd.nats_opts.connect_only
+    let nats_bin = if !cmd.nats_opts.connect_only
         || cmd.nats_opts.nats_remote_url.is_some() && cmd.nats_opts.nats_credsfile.is_some()
     {
         // Download NATS if not already installed
@@ -261,7 +263,8 @@ pub(crate) async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result
         let nats_binary = ensure_nats_server(&cmd.nats_opts.nats_version, &install_dir).await?;
 
         spinner.update_spinner_message(" Starting NATS ...".to_string());
-        Some(start_nats(&install_dir, &nats_binary, cmd.nats_opts.clone()).await?)
+        start_nats(&install_dir, &nats_binary, cmd.nats_opts.clone()).await?;
+        Some(nats_binary)
     } else {
         // If we can connect to NATS, return None as we aren't managing the child process.
         // Otherwise, exit with error since --nats-connect-only was specified
@@ -282,8 +285,8 @@ pub(crate) async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result
         ensure_wasmcloud(&cmd.wasmcloud_opts.wasmcloud_version, &install_dir).await?
     } else {
         // Ensure we clean up the NATS server if we can't start wasmCloud
-        if let Some(mut process) = nats_process {
-            process.kill().await?;
+        if nats_bin.is_some() {
+            stop_nats(install_dir).await?;
         }
         return Err(anyhow!("wasmCloud was not installed, exiting without downloading as --wasmcloud-start-only was set"));
     };
@@ -313,9 +316,7 @@ pub(crate) async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result
         Ok(child) => child,
         Err(e) => {
             // Ensure we clean up the NATS server if we can't start wasmCloud
-            if let Some(mut process) = nats_process {
-                process.kill().await?;
-            }
+            stop_nats(install_dir).await?;
             return Err(e);
         }
     };
@@ -330,14 +331,12 @@ pub(crate) async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result
         );
 
         // Terminate wasmCloud and NATS processes
-        stop_wasmcloud(wasmcloud_executable.clone()).await?;
-
-        if let Some(process) = nats_process.as_mut() {
-            match process.try_wait() {
-                Ok(Some(_)) => (),
-                _ => process.kill().await?,
-            }
+        let output = stop_wasmcloud(wasmcloud_executable.clone()).await?;
+        if !output.status.success() {
+            log::warn!("wasmCloud exited with a non-zero exit status, processes may need to be cleaned up manually")
         }
+
+        stop_nats(install_dir).await?;
 
         spinner.finish_and_clear();
     }
@@ -348,50 +347,24 @@ pub(crate) async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result
     out_json.insert("success".to_string(), json!(true));
     out_text.push_str("🛁 wash up completed successfully");
 
-    let nats_pid = if let Some(Some(pid)) = nats_process.map(|child| child.id()) {
-        out_json.insert("nats_pid".to_string(), json!(pid));
+    if cmd.detached {
+        let url = "http://localhost:4000";
+        out_json.insert("wasmcloud_url".to_string(), json!(url));
+        out_json.insert("wasmcloud_log".to_string(), json!(wasmcloud_log_path));
+        out_json.insert("kill_cmd".to_string(), json!("wash down"));
         out_json.insert("nats_url".to_string(), json!(nats_listen_address));
+
         let _ = write!(
             out_text,
             "\n🕸  NATS is running in the background at http://{}",
             nats_listen_address
         );
-        Some(pid)
-    } else {
-        None
-    };
-    if cmd.detached {
-        let url = "http://localhost:4000";
-        out_json.insert("wasmcloud_url".to_string(), json!(url));
-        out_json.insert("wasmcloud_log".to_string(), json!(wasmcloud_log_path));
-
         let _ = write!(
             out_text,
             "\n🌐 The wasmCloud dashboard is running at {}\n📜 Logs for the host are being written to {}",
             url, wasmcloud_log_path.to_string_lossy()
         );
-    }
-
-    if let Some(pid) = nats_pid {
-        let kill_cmd = format!(
-            "{} stop; kill {}",
-            wasmcloud_executable.to_string_lossy(),
-            pid,
-        );
-        out_json.insert("kill_cmd".to_string(), json!(kill_cmd));
-        let _ = write!(
-            out_text,
-            "\n\n🛑 To stop the wasmCloud host and the NATS server, run:\n{}",
-            kill_cmd
-        );
-    } else if cmd.detached {
-        let kill_cmd = format!("{} stop", wasmcloud_executable.to_string_lossy());
-        out_json.insert("kill_cmd".to_string(), json!(kill_cmd));
-        let _ = write!(
-            out_text,
-            "\n\n🛑 To stop the wasmCloud host, run:\n{}",
-            kill_cmd
-        );
+        let _ = write!(out_text, "\n\n🛑 To stop wasmCloud, run \"wash down\"");
     }
 
     Ok(CommandOutput::new(out_text, out_json))
@@ -472,25 +445,6 @@ async fn run_wasmcloud_interactive(
     if let Some(handle) = handle {
         handle.abort()
     };
-    Ok(())
-}
-
-/// Helper function to send wasmCloud the `stop` command and wait for it to clean up
-async fn stop_wasmcloud<P>(bin_path: P) -> Result<()>
-where
-    P: AsRef<Path>,
-{
-    if !Command::new(bin_path.as_ref())
-        .stdout(Stdio::piped())
-        .arg("stop")
-        .output()
-        .await?
-        .status
-        .success()
-    {
-        log::warn!("wasmCloud exited with a non-zero exit status, processes may need to be cleaned up manually")
-    }
-
     Ok(())
 }
 

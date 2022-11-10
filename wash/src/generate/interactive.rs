@@ -9,7 +9,7 @@ use crate::generate::{
     project_variables::{StringEntry, TemplateSlots, VarInfo},
     PROJECT_NAME_REGEX,
 };
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use console::style;
 use dialoguer::{theme::ColorfulTheme, Input};
 use serde_json::Value;
@@ -38,7 +38,7 @@ pub(crate) fn user_question(prompt: &str, default: &Option<String>) -> Result<St
     if let Some(s) = default {
         i.default(s.to_owned());
     }
-    i.interact().map_err(|e| anyhow!("{}", e))
+    i.interact().map_err(anyhow::Error::from)
 }
 
 fn extract_default(variable: &VarInfo) -> Option<String> {
