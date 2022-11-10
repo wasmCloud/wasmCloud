@@ -4020,6 +4020,7 @@ dependencies = [
  "claims",
  "command-group",
  "config",
+ "dirs",
  "futures 0.3.25",
  "log",
  "reqwest",
