@@ -17,6 +17,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v2
+    - name: Update rust
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        components: rustfmt, clippy
+    - name: install_protoc
+      run: sudo apt-get install -y protobuf-compiler
     - id: rust-check-action
       uses: wasmcloud/common-actions/rust-check@main
       with:
