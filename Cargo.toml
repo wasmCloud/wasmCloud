@@ -13,7 +13,7 @@ keywords = ["webassembly", "wasm", "wasmcloud", "control", "ctl"]
 categories = ["wasm", "api-bindings"]
 
 [dependencies]
-async-nats = "0.22.0"
+async-nats = "0.22.1"
 cloudevents-sdk = "0.6.0"
 futures = "0.3"
 rmp-serde = "1.0.0"
