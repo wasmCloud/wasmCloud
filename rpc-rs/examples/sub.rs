@@ -8,14 +8,14 @@ use wasmbus_rpc::rpc_client::RpcClient;
 
 /// RpcClient test CLI for connection and subscription
 #[derive(Parser)]
-#[clap(version, about, long_about = None)]
+#[command(version, about, long_about = None)]
 struct Args {
     /// Nats uri. Defaults to 'nats://127.0.0.1:4222'
-    #[clap(short, long)]
+    #[arg(short, long)]
     nats: Option<String>,
 
     /// Subject (topic)
-    #[clap(value_parser)]
+    #[arg(value_parser)]
     subject: String,
 }
 

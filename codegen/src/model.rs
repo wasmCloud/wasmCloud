@@ -23,6 +23,7 @@ use crate::{
 
 const WASMCLOUD_MODEL_NAMESPACE: &str = "org.wasmcloud.model";
 const WASMCLOUD_CORE_NAMESPACE: &str = "org.wasmcloud.core";
+const WASMCLOUD_ACTOR_NAMESPACE: &str = "org.wasmcloud.actor";
 
 const TRAIT_CODEGEN_RUST: &str = "codegenRust";
 // If any of these are needed, they would have to be defined in core namespace
@@ -41,6 +42,8 @@ lazy_static! {
         NamespaceID::new_unchecked(WASMCLOUD_MODEL_NAMESPACE);
     static ref WASMCLOUD_CORE_NAMESPACE_ID: NamespaceID =
         NamespaceID::new_unchecked(WASMCLOUD_CORE_NAMESPACE);
+    static ref WASMCLOUD_ACTOR_NAMESPACE_ID: NamespaceID =
+        NamespaceID::new_unchecked(WASMCLOUD_ACTOR_NAMESPACE);
     static ref SERIALIZATION_TRAIT_ID: ShapeID = ShapeID::new(
         NamespaceID::new_unchecked(WASMCLOUD_MODEL_NAMESPACE),
         Identifier::from_str(TRAIT_SERIALIZATION).unwrap(),
@@ -80,6 +83,9 @@ pub fn wasmcloud_model_namespace() -> &'static NamespaceID {
 }
 pub fn wasmcloud_core_namespace() -> &'static NamespaceID {
     &WASMCLOUD_CORE_NAMESPACE_ID
+}
+pub fn wasmcloud_actor_namespace() -> &'static NamespaceID {
+    &WASMCLOUD_ACTOR_NAMESPACE_ID
 }
 
 #[cfg(feature = "wasmbus")]

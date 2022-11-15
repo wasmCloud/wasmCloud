@@ -249,7 +249,7 @@ impl HelperDef for NamespaceHelper {
     ) -> Result<ScopedJson<'reg, 'rc>, RenderError> {
         let namespace = arg_as_string(h, 0, "filter_namespace")?;
         let namespace = NamespaceID::from_str(namespace)
-            .map_err(|e| RenderError::new(&format!("invalid namespace {}", e)))?;
+            .map_err(|e| RenderError::new(format!("invalid namespace {}", e)))?;
         let obj = arg_as_obj(h, 1, "filter_namespace")?;
 
         let shapes = obj
@@ -466,7 +466,7 @@ fn add_base_helpers(hb: &mut Handlebars) {
                 // get first arg as string
                 let id = arg_as_string(h, 0, "namespace")?;
                 let id = ShapeID::from_str(id).map_err(|e| {
-                    RenderError::new(&format!("invalid shape id {} for namespace_name", e))
+                    RenderError::new(format!("invalid shape id {} for namespace_name", e))
                 })?;
                 out.write(&id.namespace().to_string())?;
                 Ok(())
@@ -530,7 +530,7 @@ fn add_base_helpers(hb: &mut Handlebars) {
              -> HelperResult {
                 let id = arg_as_string(h, 0, "shape_name")?;
                 let id = ShapeID::from_str(id).map_err(|e| {
-                    RenderError::new(&format!("invalid shape id {} for shape_name", e))
+                    RenderError::new(format!("invalid shape id {} for shape_name", e))
                 })?;
                 out.write(&id.shape_name().to_string())?;
                 Ok(())
@@ -552,7 +552,7 @@ fn add_base_helpers(hb: &mut Handlebars) {
              -> HelperResult {
                 let id = arg_as_string(h, 0, "member_name")?;
                 let id = Identifier::from_str(id).map_err(|e| {
-                    RenderError::new(&format!("invalid member id {} for member_name", e))
+                    RenderError::new(format!("invalid member id {} for member_name", e))
                 })?;
                 out.write(&id.to_string())?;
                 Ok(())

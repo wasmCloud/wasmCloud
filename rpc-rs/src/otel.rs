@@ -18,29 +18,41 @@ lazy_static::lazy_static! {
 #[derive(Debug)]
 pub struct OtelHeaderExtractor<'a> {
     inner: &'a HeaderMap,
+    keys: Vec<String>,
 }
 
 impl<'a> OtelHeaderExtractor<'a> {
     /// Creates a new extractor using the given [`HeaderMap`]
     pub fn new(headers: &'a HeaderMap) -> Self {
-        OtelHeaderExtractor { inner: headers }
+        OtelHeaderExtractor {
+            inner: headers,
+            keys: headers
+                .iter()
+                .map(|(k, _)| String::from_utf8_lossy(k.as_ref()).to_string())
+                .collect(),
+        }
     }
 
     /// Creates a new extractor using the given message
     pub fn new_from_message(msg: &'a async_nats::Message) -> Self {
+        let inner = msg.headers.as_ref().unwrap_or(&EMPTY_HEADERS);
         OtelHeaderExtractor {
-            inner: msg.headers.as_ref().unwrap_or(&EMPTY_HEADERS),
+            inner,
+            keys: inner
+                .iter()
+                .map(|(k, _)| String::from_utf8_lossy(k.as_ref()).to_string())
+                .collect(),
         }
     }
 }
 
 impl<'a> Extractor for OtelHeaderExtractor<'a> {
     fn get(&self, key: &str) -> Option<&str> {
-        self.inner.get(key).and_then(|s| s.to_str().ok())
+        self.inner.get(key).and_then(|s| s.iter().next().map(|s| s.as_str()))
     }
 
     fn keys(&self) -> Vec<&str> {
-        self.inner.keys().map(|s| s.as_str()).collect()
+        self.keys.iter().map(|k| k.as_str()).collect()
     }
 }
 
@@ -87,19 +99,7 @@ impl OtelHeaderInjector {
 
 impl Injector for OtelHeaderInjector {
     fn set(&mut self, key: &str, value: String) {
-        // NOTE: Because the underlying headers are an http header, we are going to escape any
-        // unicode values and non-printable ASCII chars, which sounds better than just silently
-        // ignoring or using an empty string. Unfortunately this adds an extra allocation that is
-        // probably ok for now as it is freed at the end, but I prefer telemetry stuff to be as
-        // little overhead as possible. If anyone has a better idea of how to handle this, please PR
-        // it in
-        let header_name = key.escape_default().to_string().into_bytes();
-        let escaped = value.escape_default().to_string().into_bytes();
-        // SAFETY: All chars escaped above
-        self.inner.insert(
-            async_nats::header::HeaderName::from_bytes(&header_name).unwrap(),
-            async_nats::HeaderValue::from_bytes(&escaped).unwrap(),
-        );
+        self.inner.insert(key, value.as_ref());
     }
 }
 

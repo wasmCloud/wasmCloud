@@ -6,10 +6,10 @@ use std::path::PathBuf;
 use weld_codegen::{config::CodegenConfig, sources_to_model};
 
 #[derive(Parser, Debug)]
-#[clap(author, version, about, long_about = None)]
+#[command(author, version, about, long_about = None)]
 struct Args {
     /// codegen.toml file (default: "./codegen.toml")
-    #[clap(short, long)]
+    #[arg(short, long)]
     config: Option<PathBuf>,
 }
 

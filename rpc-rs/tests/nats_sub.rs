@@ -3,24 +3,21 @@
 
 use std::{str::FromStr, sync::Arc, time::Duration};
 
-use tracing::{debug, error};
+use test_log::test;
+use tracing::{debug, error, info};
 use wascap::prelude::KeyPair;
 use wasmbus_rpc::{
     error::{RpcError, RpcResult},
-    rpc_client::RpcClient,
+    rpc_client::{with_connection_event_logging, RpcClient},
 };
 
 const ONE_SEC: Duration = Duration::from_secs(1);
-const THREE_SEC: Duration = Duration::from_secs(3);
+const FIVE_SEC: Duration = Duration::from_secs(5);
 const TEST_NATS_ADDR: &str = "nats://127.0.0.1:4222";
 const HOST_ID: &str = "HOST_test_nats_sub";
 
 fn nats_url() -> String {
-    if let Ok(addr) = std::env::var("NATS_URL") {
-        addr
-    } else {
-        TEST_NATS_ADDR.to_string()
-    }
+    std::env::var("NATS_URL").unwrap_or_else(|_| TEST_NATS_ADDR.into())
 }
 
 fn is_demo() -> bool {
@@ -32,7 +29,7 @@ fn is_demo() -> bool {
 async fn make_client(timeout: Option<Duration>) -> RpcResult<RpcClient> {
     let nats_url = nats_url();
     let server_addr = async_nats::ServerAddr::from_str(&nats_url).unwrap();
-    let nc = async_nats::ConnectOptions::default()
+    let nc = with_connection_event_logging(async_nats::ConnectOptions::default())
         .connect(server_addr)
         .await
         .map_err(|e| {
@@ -59,7 +56,7 @@ async fn listen(client: RpcClient, subject: &str, pattern: &str) -> tokio::task:
         while let Some(msg) = sub.next().await {
             let payload = String::from_utf8_lossy(&msg.payload);
             if !pattern.is_match(payload.as_ref()) && &payload != "exit" {
-                println!("ERROR: payload on {}: {}", subject, &payload);
+                error!("payload on {}: {}", subject, &payload);
             }
             if let Some(reply_to) = msg.reply {
                 client.publish(reply_to, b"ok".to_vec()).await.expect("reply");
@@ -69,7 +66,7 @@ async fn listen(client: RpcClient, subject: &str, pattern: &str) -> tokio::task:
             }
             count += 1;
         }
-        println!("received {} message(s)", count);
+        info!("listener received {} message(s)", count);
         count
     })
 }
@@ -96,7 +93,7 @@ async fn listen_bin(client: RpcClient, subject: &str) -> tokio::task::JoinHandle
             }
         }
         let _ = sub.unsubscribe().await;
-        debug!("listen_bin exiting with count {}", count);
+        info!("listen_bin exiting with count {}", count);
         count
     })
 }
@@ -123,7 +120,7 @@ async fn listen_queue(
         while let Some(msg) = sub.next().await {
             let payload = String::from_utf8_lossy(&msg.payload);
             if !pattern.is_match(payload.as_ref()) && &payload != "exit" {
-                debug!("ERROR: payload on {}: {}", &subject, &payload);
+                error!("payload on {}: {}", &subject, &payload);
                 break;
             }
             if let Some(reply_to) = msg.reply {
@@ -136,12 +133,12 @@ async fn listen_queue(
             }
             count += 1;
         }
-        println!("subscriber '{}' exiting count={}", &subject, count);
+        info!("subscriber '{}' exiting count={}", &subject, count);
         count
     })
 }
 
-#[tokio::test]
+#[test(tokio::test(flavor = "multi_thread"))]
 async fn simple_sub() -> Result<(), Box<dyn std::error::Error>> {
     // create unique subscription name for this test
     let sub_name = uuid::Uuid::new_v4().to_string();
@@ -159,23 +156,23 @@ async fn simple_sub() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// send large messages - this uses request() and does not test chunking
-#[tokio::test]
+#[test(tokio::test)]
 async fn test_message_size() -> Result<(), Box<dyn std::error::Error>> {
     // create unique subscription name for this test
     let sub_name = uuid::Uuid::new_v4().to_string();
 
     let topic = format!("bin_{}", &sub_name);
-    let l1 = listen_bin(make_client(Some(THREE_SEC)).await?, &topic).await;
+    let l1 = listen_bin(make_client(Some(FIVE_SEC)).await?, &topic).await;
 
     let mut pass_count = 0;
-    let sender = make_client(Some(THREE_SEC)).await.expect("creating bin sender");
+    let sender = make_client(Some(FIVE_SEC)).await.expect("creating bin sender");
     //  messages sizes to test
     let test_sizes = if is_demo() {
         // if using 'demo.nats.io' as the test server,
         // don't abuse it by running this test with very large sizes
         //
         // The last size must be 1 to signal to listen_bin to exit
-        &[10u32, 25, 100, 200, 500, 1000, 1]
+        &[10u32, 100, 200, 500, 1000, 8000, 1]
     } else {
         // The last size must be 1 to signal to listen_bin to exit
         &[10u32, 25, 500, 10_000, 800_000, 1_000_000, 1]
@@ -183,15 +180,14 @@ async fn test_message_size() -> Result<(), Box<dyn std::error::Error>> {
     for size in test_sizes.iter() {
         let mut data = Vec::with_capacity(*size as usize);
         data.resize(*size as usize, 255u8);
-        let resp = match tokio::time::timeout(THREE_SEC, sender.request(topic.clone(), data)).await
-        {
+        let resp = match tokio::time::timeout(FIVE_SEC, sender.request(topic.clone(), data)).await {
             Ok(Ok(result)) => result,
             Ok(Err(rpc_err)) => {
-                eprintln!("send error on msg size {}: {}", *size, rpc_err);
+                error!("send error on msg size {}: {}", *size, rpc_err);
                 continue;
             }
             Err(timeout_err) => {
-                eprintln!(
+                error!(
                     "rpc timeout: sending msg of size {}: {}",
                     *size, timeout_err
                 );
@@ -201,10 +197,10 @@ async fn test_message_size() -> Result<(), Box<dyn std::error::Error>> {
         let sbody = String::from_utf8_lossy(&resp);
         let received_size = sbody.parse::<u32>().expect("response contains int size");
         if *size == received_size {
-            eprintln!("PASS: message_size: {}", size);
+            info!("PASS: message_size: {}", size);
             pass_count += 1;
         } else {
-            eprintln!("FAIL: message_size: {}, got: {}", size, received_size);
+            error!("FAIL: message_size: {}, got: {}", size, received_size);
         }
     }
     assert_eq!(pass_count, test_sizes.len(), "some size tests did not pass");
@@ -230,7 +226,7 @@ fn check_ok(data: Vec<u8>) -> Result<(), RpcError> {
     }
 }
 
-#[tokio::test]
+#[test(tokio::test)]
 async fn queue_sub() -> Result<(), Box<dyn std::error::Error>> {
     // in this test, there are two queue subscribers.
     // on topic "one..." with the same queue group X,

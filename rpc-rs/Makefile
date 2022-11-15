@@ -21,7 +21,7 @@ test::
 	docker stop wasmbus-rpc-test
 else
 test::
-	cargo test -- --nocapture
+	WASMBUS_RPC_TIMEOUT_MS=4000 cargo test -- --nocapture
 	cargo clippy --all-features --all-targets
 	rustfmt --edition 2021 --check src/*.rs
 endif

@@ -110,7 +110,7 @@ impl From<SystemTime> for Timestamp {
             .expect("system time before Unix epoch");
         Timestamp {
             sec: d.as_secs() as i64,
-            nsec: d.subsec_nanos() as u32,
+            nsec: d.subsec_nanos(),
         }
     }
 }

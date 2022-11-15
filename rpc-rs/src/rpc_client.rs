@@ -18,13 +18,13 @@ use tracing::{debug, error, info, instrument, trace, warn};
 
 #[cfg(feature = "otel")]
 use crate::otel::OtelHeaderInjector;
-
-use crate::wascap::{jwt, prelude::Claims};
 use crate::{
-    chunkify,
+    chunkify::{needs_chunking, ChunkEndpoint},
     common::Message,
     core::{Invocation, InvocationResponse, WasmCloudEntity},
     error::{RpcError, RpcResult},
+    provider_main::get_host_bridge_safe,
+    wascap::{jwt, prelude::Claims},
 };
 
 pub(crate) const DEFAULT_RPC_TIMEOUT_MILLIS: Duration = Duration::from_millis(2000);
@@ -256,7 +256,7 @@ impl RpcClient {
     }
 
     /// request or publish an rpc invocation
-    #[instrument(level = "debug", skip(self, origin, target, message), fields(issuer = tracing::field::Empty, origin_url = tracing::field::Empty, inv_id = tracing::field::Empty, target_url = tracing::field::Empty, method = tracing::field::Empty, provider_id = tracing::field::Empty))]
+    #[instrument(level = "debug", skip(self, origin, target, message), fields( provider_id = tracing::field::Empty, method = tracing::field::Empty, lattice_id = tracing::field::Empty, subject = tracing::field::Empty, issuer = tracing::field::Empty, sender_key = tracing::field::Empty, contract_id = tracing::field::Empty, link_name = tracing::field::Empty, target_key = tracing::field::Empty ))]
     async fn inner_rpc<Target>(
         &self,
         origin: WasmCloudEntity,
@@ -279,13 +279,25 @@ impl RpcClient {
         // Record all of the fields on the span. To avoid extra allocations, we are only going to
         // record here after we generate/derive the values
         let span = tracing::span::Span::current();
-        span.record("provider_id", &tracing::field::display(&issuer));
+        if let Some(hb) = get_host_bridge_safe() {
+            span.record("provider_id", &tracing::field::display(&hb.provider_key()));
+        }
         span.record("method", &tracing::field::display(&message.method));
         span.record("lattice_id", &tracing::field::display(&lattice));
-        span.record("target_id", &tracing::field::display(&target.public_key));
         span.record("subject", &tracing::field::display(&subject));
         span.record("issuer", &tracing::field::display(&issuer));
-
+        if !origin.public_key.is_empty() {
+            span.record("sender_key", &tracing::field::display(&origin.public_key));
+        }
+        if !target.contract_id.is_empty() {
+            span.record("contract_id", &tracing::field::display(&target.contract_id));
+        }
+        if !target.link_name.is_empty() {
+            span.record("link_name", &tracing::field::display(&target.link_name));
+        }
+        if !target.public_key.is_empty() {
+            span.record("target_key", &tracing::field::display(&target.public_key));
+        }
         //debug!("rpc_client sending");
         let claims = Claims::<jwt::Invocation>::new(
             issuer.clone(),
@@ -298,7 +310,7 @@ impl RpcClient {
         let topic = rpc_topic(&target, lattice);
         let method = message.method.to_string();
         let len = message.arg.len();
-        let chunkify = chunkify::needs_chunking(len);
+        let chunkify = needs_chunking(len);
 
         let (invocation, body) = {
             let mut inv = Invocation {
@@ -324,12 +336,9 @@ impl RpcClient {
             debug!(invocation_id = %inv_id, %len, "chunkifying invocation");
             // start chunking thread
             let lattice = lattice.to_string();
-            if let Err(error) = tokio::task::spawn_blocking(move || {
-                let ce = chunkify::chunkify_endpoint(None, lattice)?;
-                ce.chunkify(&inv_id, &mut body.as_slice())
-            })
-            .await
-            .map_err(|join_e| RpcError::Other(join_e.to_string()))?
+            if let Err(error) = ChunkEndpoint::with_client(lattice, self.client(), None)
+                .chunkify(&inv_id, &mut body.as_slice())
+                .await
             {
                 error!(%error, "chunking error");
                 return Err(RpcError::Other(error.to_string()));
@@ -387,10 +396,8 @@ impl RpcClient {
             match inv_response.error {
                 None => {
                     #[cfg(feature = "prometheus")]
-                    {
-                        if let Some(len) = inv_response.content_length {
-                            self.stats.rpc_sent_resp_bytes.inc_by(len);
-                        }
+                    if let Some(len) = inv_response.content_length {
+                        self.stats.rpc_sent_resp_bytes.inc_by(len);
                     }
                     // was response chunked?
                     let msg = if inv_response.content_length.is_some()
@@ -401,12 +408,9 @@ impl RpcClient {
                         {
                             self.stats.rpc_sent_resp_chunky.inc();
                         }
-                        tokio::task::spawn_blocking(move || {
-                            let ce = chunkify::chunkify_endpoint(None, lattice)?;
-                            ce.get_unchunkified_response(&inv_response.invocation_id)
-                        })
-                        .await
-                        .map_err(|je| RpcError::Other(format!("join/resp-chunk: {}", je)))??
+                        ChunkEndpoint::with_client(lattice, self.client(), None)
+                            .get_unchunkified_response(&inv_response.invocation_id)
+                            .await?
                     } else {
                         inv_response.msg
                     };
@@ -480,6 +484,10 @@ impl RpcClient {
         })
         .await?;
         let nc = self.client();
+        // TODO: revisit after doing some performance tuning and review of callers of pubish().
+        // For high throughput use cases, it may be better to change the flush interval timer
+        // instead of flushing after every publish.
+        // Flushing here is good for low traffic use cases when optimizing for latency.
         tokio::spawn(async move {
             if let Err(error) = nc.flush().await {
                 error!(%error, "flush after publish");
@@ -493,25 +501,19 @@ impl RpcClient {
         reply_to: String,
         response: InvocationResponse,
         lattice: &str,
-    ) -> Result<(), String> {
+    ) -> RpcResult<()> {
         let content_length = Some(response.msg.len() as u64);
         let response = {
             let inv_id = response.invocation_id.clone();
-            if chunkify::needs_chunking(response.msg.len()) {
+            if needs_chunking(response.msg.len()) {
                 #[cfg(feature = "prometheus")]
                 {
                     self.stats.rpc_recv_resp_chunky.inc();
                 }
-                let msg = response.msg;
-                let lattice = lattice.to_string();
-                tokio::task::spawn_blocking(move || {
-                    let ce = chunkify::chunkify_endpoint(None, lattice)
-                        .map_err(|e| format!("connecting for chunkifying: {}", &e.to_string()))?;
-                    ce.chunkify_response(&inv_id, &mut msg.as_slice())
-                        .map_err(|e| e.to_string())
-                })
-                .await
-                .map_err(|je| format!("join/response-chunk: {}", je))??;
+                let buf = response.msg;
+                ChunkEndpoint::with_client(lattice.to_string(), self.client(), None)
+                    .chunkify_response(&inv_id, &mut buf.as_slice())
+                    .await?;
                 InvocationResponse {
                     msg: Vec::new(),
                     content_length,
@@ -523,27 +525,12 @@ impl RpcClient {
         };
 
         match crate::common::serialize(&response) {
-            Ok(t) => {
-                if let Err(e) = self.client().publish(reply_to.clone(), t.into()).await {
-                    error!(
-                        %reply_to,
-                        error = %e,
-                        "failed sending rpc response",
-                    );
-                }
-                let nc = self.client();
-                tokio::spawn(async move {
-                    if let Err(error) = nc.flush().await {
-                        error!(%error, "flush after publishing invocation response");
-                    }
-                });
-            }
+            Ok(t) => Ok(self.publish(reply_to, t).await?),
             Err(e) => {
                 // extremely unlikely that InvocationResponse would fail to serialize
-                error!(error = %e, "failed serializing InvocationResponse");
+                Err(RpcError::Ser(format!("InvocationResponse: {}", e)))
             }
         }
-        Ok(())
     }
 
     pub async fn dechunk(&self, mut inv: Invocation, lattice: &str) -> RpcResult<Invocation> {
@@ -552,15 +539,10 @@ impl RpcClient {
             {
                 self.stats.rpc_recv_chunky.inc();
             }
-            let inv_id = inv.id.clone();
-            let lattice = lattice.to_string();
-            inv.msg = tokio::task::spawn_blocking(move || {
-                let ce = chunkify::chunkify_endpoint(None, lattice)
-                    .map_err(|e| format!("connecting for de-chunkifying: {}", &e.to_string()))?;
-                ce.get_unchunkified(&inv_id).map_err(|e| e.to_string())
-            })
-            .await
-            .map_err(|je| format!("join/dechunk-validate: {}", je))??;
+            inv.msg = ChunkEndpoint::with_client(lattice.to_string(), self.client(), None)
+                .get_unchunkified(&inv.id.clone())
+                .await
+                .map_err(|e| e.to_string())?;
         }
         Ok(inv)
     }
@@ -642,8 +624,8 @@ pub fn with_connection_event_logging(
     use async_nats::Event;
     opts.event_callback(|event| async move {
         match event {
-            Event::Disconnect => warn!("nats client disconnected"),
-            Event::Reconnect => info!("nats client reconnected"),
+            Event::Disconnected => warn!("nats client disconnected"),
+            Event::Connected => info!("nats client connected"),
             Event::ClientError(err) => error!("nats client error: '{:?}'", err),
             Event::ServerError(err) => error!("nats server error: '{:?}'", err),
             Event::SlowConsumer(val) => warn!("nats slow consumer detected ({})", val),

@@ -14,12 +14,12 @@ use atelier_core::model::{
     HasIdentity as _, Identifier, Model,
 };
 
+use crate::docgen::DocGen;
 use crate::{
     codegen_go::GoCodeGen,
     codegen_py::PythonCodeGen,
     codegen_rust::RustCodeGen,
     config::{CodegenConfig, LanguageConfig, OutputFile, OutputLanguage},
-    docgen::DocGen,
     error::{Error, Result},
     format::{NullFormatter, SourceFormatter},
     model::{get_trait, serialization_trait, CommentKind, NumberedMember},
@@ -226,11 +226,11 @@ fn gen_for_language<'model>(
         OutputLanguage::Python => Box::new(PythonCodeGen::new(model)),
         OutputLanguage::TinyGo => Box::new(GoCodeGen::new(model, true)),
         OutputLanguage::Go => Box::new(GoCodeGen::new(model, false)),
-        OutputLanguage::Html => Box::new(DocGen::default()),
-        OutputLanguage::Poly => Box::new(PolyGen::default()),
+        OutputLanguage::Html => Box::<DocGen>::default(),
+        OutputLanguage::Poly => Box::<PolyCodeGen>::default(),
         _ => {
             crate::error::print_warning(&format!("Target language {} not implemented", language));
-            Box::new(NoCodeGen::default())
+            Box::<NoCodeGen>::default()
         }
     }
 }
@@ -494,8 +494,8 @@ fn ensure_files_exist(source_files: &[std::path::PathBuf]) -> Result<()> {
 }
 
 #[derive(Debug, Default)]
-struct PolyGen {}
-impl CodeGen for PolyGen {
+struct PolyCodeGen {}
+impl CodeGen for PolyCodeGen {
     fn output_language(&self) -> OutputLanguage {
         OutputLanguage::Poly
     }
@@ -515,7 +515,7 @@ impl CodeGen for PolyGen {
     }
 
     fn source_formatter(&self, _: Vec<String>) -> Result<Box<dyn SourceFormatter>> {
-        Ok(Box::new(NullFormatter::default()))
+        Ok(Box::<NullFormatter>::default())
     }
 }
 
@@ -625,6 +625,6 @@ impl CodeGen for NoCodeGen {
     }
 
     fn source_formatter(&self, _: Vec<String>) -> Result<Box<dyn SourceFormatter>> {
-        Ok(Box::new(NullFormatter::default()))
+        Ok(Box::<NullFormatter>::default())
     }
 }

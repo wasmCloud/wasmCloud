@@ -5,6 +5,7 @@ use std::{
 
 use atelier_core::model::Model;
 
+use crate::format::NullFormatter;
 use crate::{
     config::{LanguageConfig, OutputFile, OutputLanguage},
     error::Result,
@@ -74,7 +75,7 @@ impl CodeGen for DocGen {
             .map(|id| id.to_string())
             .collect::<BTreeSet<String>>();
 
-        std::fs::create_dir_all(&output_dir).map_err(|e| {
+        std::fs::create_dir_all(output_dir).map_err(|e| {
             Error::Io(format!(
                 "creating directory {}: {}",
                 output_dir.display(),
@@ -126,6 +127,6 @@ impl CodeGen for DocGen {
         name.into()
     }
     fn source_formatter(&self, _: Vec<String>) -> Result<Box<dyn SourceFormatter>> {
-        Ok(Box::new(crate::format::NullFormatter::default()))
+        Ok(Box::<NullFormatter>::default())
     }
 }

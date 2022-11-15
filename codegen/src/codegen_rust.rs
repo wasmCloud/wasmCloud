@@ -56,6 +56,7 @@ struct Declaration(u8, BytesMut);
 
 type ShapeList<'model> = Vec<(&'model ShapeID, &'model AppliedTraits, &'model ShapeKind)>;
 
+#[derive(Default)]
 pub struct RustCodeGen<'model> {
     /// if set, limits declaration output to this namespace only
     pub(crate) namespace: Option<NamespaceID>,

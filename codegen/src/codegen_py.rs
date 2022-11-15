@@ -115,7 +115,7 @@ impl<'model> CodeGen for PythonCodeGen<'model> {
     }
 
     fn source_formatter(&self, _: Vec<String>) -> Result<Box<dyn SourceFormatter>> {
-        Ok(Box::new(PythonSourceFormatter::default()))
+        Ok(Box::<PythonSourceFormatter>::default())
     }
 
     /// Perform any initialization required prior to code generation for a file

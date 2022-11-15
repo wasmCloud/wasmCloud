@@ -9,6 +9,7 @@ homepage = "https://github.com/wasmcloud/weld"
 repository = "https://github.com/wasmcloud/weld"
 documentation = "https://docs.rs/wasmcloud-weld-macros"
 readme = "README.md"
+rust-version = "1.56.1"
 
 [lib]
 proc-macro = true

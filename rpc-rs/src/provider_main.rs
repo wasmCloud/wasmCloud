@@ -6,7 +6,7 @@ use std::str::FromStr;
 use once_cell::sync::OnceCell;
 #[cfg(feature = "otel")]
 use opentelemetry::sdk::{
-    trace::{self, IdGenerator, Sampler},
+    trace::{self, RandomIdGenerator, Sampler},
     Resource,
 };
 #[cfg(feature = "otel")]
@@ -68,14 +68,17 @@ static BRIDGE: OnceCell<HostBridge> = OnceCell::new();
 
 // this may be called any time after initialization
 pub fn get_host_bridge() -> &'static HostBridge {
-    match BRIDGE.get() {
-        Some(b) => b,
-        None => {
-            // initialized first thing, so this shouldn't happen
-            eprintln!("BRIDGE not initialized");
-            panic!();
-        }
-    }
+    BRIDGE.get().unwrap_or_else(|| {
+        // initialized first thing, so this shouldn't happen
+        eprintln!("BRIDGE not initialized");
+        panic!();
+    })
+}
+
+// like get_host_bridge but doesn't panic if it's not initialized
+// This could be a valid condition if RpcClient is used outside capability providers
+pub fn get_host_bridge_safe() -> Option<&'static HostBridge> {
+    BRIDGE.get()
 }
 
 #[doc(hidden)]
@@ -325,7 +328,7 @@ fn configure_tracing(provider_name: String, structured_logging_enabled: bool) {
             .with_trace_config(
                 trace::config()
                     .with_sampler(Sampler::AlwaysOn)
-                    .with_id_generator(IdGenerator::default())
+                    .with_id_generator(RandomIdGenerator::default())
                     .with_max_events_per_span(64)
                     .with_max_attributes_per_span(16)
                     .with_max_events_per_span(16)
@@ -370,11 +373,8 @@ fn get_log_layer(structured_logging_enabled: bool) -> impl Layer<Layered<EnvFilt
 }
 
 fn get_env_filter() -> EnvFilter {
-    match EnvFilter::try_from_default_env() {
-        Ok(f) => f,
-        Err(e) => {
-            eprintln!("RUST_LOG was not set or the given directive was invalid: {:?}\nDefaulting logger to `info` level", e);
-            EnvFilter::default().add_directive(tracing_subscriber::filter::LevelFilter::INFO.into())
-        }
-    }
+    EnvFilter::try_from_default_env().unwrap_or_else(|e| {
+        eprintln!("RUST_LOG was not set or the given directive was invalid: {:?}\nDefaulting logger to `info` level", e);
+        EnvFilter::default().add_directive(tracing_subscriber::filter::LevelFilter::INFO.into())
+    })
 }

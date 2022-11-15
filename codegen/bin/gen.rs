@@ -19,7 +19,7 @@ fn main() -> Result<()> {
 }
 
 fn load_config(path: &Path) -> Result<CodegenConfig> {
-    let cfile = std::fs::read_to_string(&path)
+    let cfile = std::fs::read_to_string(path)
         .with_context(|| format!("reading config file at {}", &path.display()))?;
     let folder = path.parent().unwrap().to_path_buf();
     let folder = std::fs::canonicalize(folder)?;
