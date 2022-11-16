@@ -9,7 +9,6 @@ use clap::{Parser, Subcommand};
 use ctl::CtlCliCommand;
 use ctx::CtxCommand;
 use down::DownCommand;
-use drain::DrainSelection;
 use generate::NewCliCommand;
 use keys::KeysCliCommand;
 use par::ParCliCommand;
@@ -18,6 +17,7 @@ use serde_json::json;
 use smithy::{GenerateCli, LintCli, ValidateCli};
 use up::UpCommand;
 use util::CommandOutput;
+use wash_lib::drain::Drain as DrainSelection;
 
 use crate::util::OutputKind;
 
