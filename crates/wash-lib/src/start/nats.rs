@@ -384,7 +384,7 @@ mod test {
         ensure_nats_server, is_nats_installed, start_nats_server, NatsConfig, NATS_SERVER_BINARY,
     };
     use anyhow::Result;
-    use std::{env::temp_dir, path::PathBuf};
+    use std::env::temp_dir;
     use tokio::{
         fs::{create_dir_all, remove_dir_all},
         io::AsyncReadExt,
@@ -483,12 +483,15 @@ mod test {
         let install_dir = temp_dir().join("can_write_properly_formed_credsfile");
         let _ = remove_dir_all(&install_dir).await;
         create_dir_all(&install_dir).await?;
-        assert!(!is_nats_installed(&install_dir).await);
+        assert!(
+            !is_nats_installed(&install_dir).await,
+            "NATS should not be installed"
+        );
 
         let res = ensure_nats_server(NATS_SERVER_VERSION, &install_dir).await;
-        assert!(res.is_ok());
+        assert!(res.is_ok(), "NATS should be able to start");
 
-        let creds = PathBuf::from(dirs::home_dir().unwrap().join("nats.creds"));
+        let creds = dirs::home_dir().unwrap().join("nats.creds");
         let config: NatsConfig = NatsConfig::new_leaf(
             "127.0.0.1",
             4243,

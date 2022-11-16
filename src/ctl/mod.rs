@@ -1,4 +1,18 @@
-extern crate wasmcloud_control_interface;
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
+
+use anyhow::{bail, Result};
+use clap::{Args, Parser, Subcommand};
+use wash_lib::config::{
+    DEFAULT_LATTICE_PREFIX, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT, DEFAULT_NATS_TIMEOUT_MS,
+    DEFAULT_START_ACTOR_TIMEOUT_MS, DEFAULT_START_PROVIDER_TIMEOUT_MS,
+};
+use wasmcloud_control_interface::{
+    Client as CtlClient, CtlOperationAck, GetClaimsResponse, Host, HostInventory,
+    LinkDefinitionList,
+};
 
 use crate::{
     appearance::spinner::Spinner,
@@ -7,23 +21,11 @@ use crate::{
     id::{ModuleId, ServerId, ServiceId},
     util::{
         convert_error, default_timeout_ms, labels_vec_to_hashmap, validate_contract_id,
-        CommandOutput, OutputKind, DEFAULT_LATTICE_PREFIX, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT,
-        DEFAULT_NATS_TIMEOUT_MS, DEFAULT_START_ACTOR_TIMEOUT_MS, DEFAULT_START_PROVIDER_TIMEOUT_MS,
+        CommandOutput, OutputKind,
     },
 };
-use anyhow::{bail, Result};
-use clap::{Args, Parser, Subcommand};
 pub(crate) use output::*;
-use std::{
-    path::{Path, PathBuf},
-    time::Duration,
-};
-use wasmcloud_control_interface::{
-    Client as CtlClient, CtlOperationAck, GetClaimsResponse, Host, HostInventory,
-    LinkDefinitionList,
-};
-
-use self::wait::{
+use wait::{
     wait_for_actor_start_event, wait_for_actor_stop_event, wait_for_provider_start_event,
     wait_for_provider_stop_event, FindEventOutcome,
 };

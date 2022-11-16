@@ -4018,6 +4018,7 @@ dependencies = [
  "anyhow",
  "async-compression",
  "claims",
+ "clap 4.0.18",
  "command-group",
  "config",
  "dirs",
@@ -4027,9 +4028,11 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tokio-stream",
  "tokio-tar",
+ "weld-codegen",
 ]
 
 [[package]]
