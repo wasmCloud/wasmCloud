@@ -18,31 +18,18 @@ lazy_static::lazy_static! {
 #[derive(Debug)]
 pub struct OtelHeaderExtractor<'a> {
     inner: &'a HeaderMap,
-    keys: Vec<String>,
 }
 
 impl<'a> OtelHeaderExtractor<'a> {
     /// Creates a new extractor using the given [`HeaderMap`]
     pub fn new(headers: &'a HeaderMap) -> Self {
-        OtelHeaderExtractor {
-            inner: headers,
-            keys: headers
-                .iter()
-                .map(|(k, _)| String::from_utf8_lossy(k.as_ref()).to_string())
-                .collect(),
-        }
+        OtelHeaderExtractor { inner: headers }
     }
 
     /// Creates a new extractor using the given message
     pub fn new_from_message(msg: &'a async_nats::Message) -> Self {
         let inner = msg.headers.as_ref().unwrap_or(&EMPTY_HEADERS);
-        OtelHeaderExtractor {
-            inner,
-            keys: inner
-                .iter()
-                .map(|(k, _)| String::from_utf8_lossy(k.as_ref()).to_string())
-                .collect(),
-        }
+        OtelHeaderExtractor { inner }
     }
 }
 
@@ -52,7 +39,11 @@ impl<'a> Extractor for OtelHeaderExtractor<'a> {
     }
 
     fn keys(&self) -> Vec<&str> {
-        self.keys.iter().map(|k| k.as_str()).collect()
+        self.inner
+            .iter()
+            // The underlying type is a string and this should never fail, but we unwrap to an empty string anyway
+            .map(|(k, _)| std::str::from_utf8(k.as_ref()).unwrap_or_default())
+            .collect()
     }
 }
 
