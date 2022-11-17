@@ -32,7 +32,6 @@ mod ctx;
 mod down;
 mod drain;
 mod generate;
-mod id;
 mod keys;
 mod par;
 mod reg;

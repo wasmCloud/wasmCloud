@@ -1,29 +1,59 @@
-use crate::{
-    id::ClusterSeed,
-    util::{
-        default_timeout_ms, DEFAULT_LATTICE_PREFIX, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT,
-        DEFAULT_NATS_TIMEOUT_MS,
-    },
-};
-use serde::{Deserialize, Serialize};
-use serde_with::{serde_as, NoneAsEmptyString};
+//! Types and methods for handling wash contexts, the configuration files for interacting with
+//! lattices
+
 use std::path::PathBuf;
 
-#[derive(Clone, Deserialize, Serialize, Debug)]
-pub(crate) struct DefaultContext {
-    /// Name of the default context
-    pub name: String,
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
+use serde_with::{serde_as, NoneAsEmptyString};
+
+use crate::{
+    config::{
+        DEFAULT_LATTICE_PREFIX, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT, DEFAULT_NATS_TIMEOUT_MS,
+    },
+    id::ClusterSeed,
+};
+
+pub mod fs;
+
+pub const HOST_CONFIG_NAME: &str = "host_config";
+
+/// A trait that can be implemented by any type that wants to load, save, and otherwise manage wash
+/// contexts (e.g. from a database or a config store
+// NOTE(thomastaylor312): We may want to make this an async trait in the future since any other
+// implementation than the fs one will likely involve networking
+pub trait ContextManager {
+    /// Returns the name of the currently set default context
+    fn default_context(&self) -> Result<String>;
+
+    /// Sets the current default context to the given name. Should error if it doesn't exist
+    fn set_default_context(&self, name: &str) -> Result<()>;
+
+    /// Saves the given context
+    fn save_context(&self, ctx: &WashContext) -> Result<()>;
+
+    /// Deletes named context
+    fn delete_context(&self, name: &str) -> Result<()>;
+
+    /// Loads the currently set default context
+    fn load_default_context(&self) -> Result<WashContext>;
+
+    /// Loads the named context
+    fn load_context(&self, name: &str) -> Result<WashContext>;
+
+    /// Returns a list of all context names
+    fn list_contexts(&self) -> Result<Vec<String>>;
 }
 
-impl DefaultContext {
-    pub fn new(name: String) -> Self {
-        DefaultContext { name }
-    }
+#[derive(Clone, Deserialize, Serialize, Debug)]
+pub(crate) struct DefaultContext<'a> {
+    /// Name of the default context
+    pub name: &'a str,
 }
 
 #[serde_as]
 #[derive(Clone, Deserialize, Serialize, Debug)]
-pub(crate) struct WashContext {
+pub struct WashContext {
     #[serde(default)]
     pub name: String,
     #[serde_as(as = "NoneAsEmptyString")]
@@ -63,49 +93,11 @@ pub(crate) struct WashContext {
 }
 
 impl WashContext {
-    pub(crate) fn named(name: String) -> Self {
+    /// Create a new default context with the given name
+    pub fn named(name: String) -> Self {
         WashContext {
             name,
             ..Self::default()
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn new(
-        name: String,
-        cluster_seed: Option<ClusterSeed>,
-        ctl_host: String,
-        ctl_port: u16,
-        ctl_jwt: Option<String>,
-        ctl_seed: Option<String>,
-        ctl_credsfile: Option<PathBuf>,
-        ctl_timeout: u64,
-        ctl_lattice_prefix: String,
-        rpc_host: String,
-        rpc_port: u16,
-        rpc_jwt: Option<String>,
-        rpc_seed: Option<String>,
-        rpc_credsfile: Option<PathBuf>,
-        rpc_timeout: u64,
-        rpc_lattice_prefix: String,
-    ) -> Self {
-        WashContext {
-            name,
-            cluster_seed,
-            ctl_host,
-            ctl_port,
-            ctl_jwt,
-            ctl_seed,
-            ctl_credsfile,
-            ctl_timeout,
-            ctl_lattice_prefix,
-            rpc_host,
-            rpc_port,
-            rpc_jwt,
-            rpc_seed,
-            rpc_credsfile,
-            rpc_timeout,
-            rpc_lattice_prefix,
         }
     }
 }
@@ -145,4 +137,8 @@ fn default_nats_port() -> u16 {
 
 fn default_lattice_prefix() -> String {
     DEFAULT_LATTICE_PREFIX.to_string()
+}
+
+fn default_timeout_ms() -> u64 {
+    DEFAULT_NATS_TIMEOUT_MS
 }

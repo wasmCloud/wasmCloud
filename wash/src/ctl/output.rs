@@ -1,14 +1,12 @@
-extern crate wasmcloud_control_interface;
 use std::collections::HashMap;
 
-use crate::{
-    id::{ModuleId, ServiceId},
-    util::{format_optional, CommandOutput},
-};
 use anyhow::{bail, Result};
 use serde_json::json;
 use term_table::{row::Row, table_cell::*, Table};
+use wash_lib::id::{ModuleId, ServiceId};
 use wasmcloud_control_interface::*;
+
+use crate::util::{format_optional, CommandOutput};
 
 pub(crate) fn get_hosts_output(hosts: Vec<Host>) -> CommandOutput {
     let mut map = HashMap::new();
