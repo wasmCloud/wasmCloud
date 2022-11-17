@@ -18,9 +18,6 @@ pub enum Drain {
     Downloads,
 }
 
-// Drain::All.drain()
-// drain(DrainType::All)
-
 impl IntoIterator for &Drain {
     type Item = PathBuf;
     type IntoIter = std::vec::IntoIter<Self::Item>;

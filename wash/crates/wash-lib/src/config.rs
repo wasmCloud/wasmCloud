@@ -7,7 +7,7 @@ use std::{
 
 const WASH_DIR: &str = ".wash";
 
-pub const DOWNLOADS_DIR: &str = "downloads";
+const DOWNLOADS_DIR: &str = "downloads";
 pub const DEFAULT_NATS_HOST: &str = "127.0.0.1";
 pub const DEFAULT_NATS_PORT: &str = "4222";
 pub const DEFAULT_LATTICE_PREFIX: &str = "default";
@@ -33,10 +33,12 @@ pub fn cfg_dir() -> IoResult<PathBuf> {
     Ok(wash)
 }
 
+/// Returns the path to the caching directory for smithy files
 pub fn model_cache_dir() -> IoResult<PathBuf> {
     weld_codegen::weld_cache_dir().map_err(|e| Error::new(ErrorKind::Other, e.to_string()))
 }
 
+/// The path to the downloads directory for wash
 pub fn downloads_dir() -> IoResult<PathBuf> {
     cfg_dir().map(|p| p.join(DOWNLOADS_DIR))
 }
