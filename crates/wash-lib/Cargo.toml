@@ -17,23 +17,28 @@ maintenance = {status = "actively-developed"}
 default = ["start", "parser"]
 start = ["semver"]
 parser = ["config", "semver", "serde", "serde_json"]
+cli = ["clap"]
 
 [dependencies]
-command-group = { version = "1.0.8", features = ["with-tokio"] }
 anyhow = "1.0.58"
-futures = "0.3"
-tokio = {version = "1", default-features = false, features = ["process"]}
-reqwest = {version = "0.11", default-features = false, features = ["json", "rustls-tls", "stream"]}
 async-compression = { version = "0.3", default-features = false, features = ["tokio", "gzip"] }
-tokio-tar = "0.3"
-tokio-stream = "0.1"
+clap = { version = "4", features = ["derive", "env"], optional = true }
+command-group = { version = "1.0.8", features = ["with-tokio"] }
+config = { version = "0.13.1", features = ["toml"], optional = true }
+dirs = "4.0"
+futures = "0.3"
 log = "0.4"
-config = {version = "0.13.1", features = ["toml"], optional = true}
-semver = { version = "1.0.12", features = ["serde"], optional = true}
-serde = { version = "1", features = ["derive"], optional = true}
-serde_json = {version = "1.0.82", optional = true}
+reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls", "stream"] }
+semver = { version = "1.0.12", features = ["serde"], optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1.0.82", optional = true }
+tokio = { version = "1", default-features = false, features = ["process"] }
+tokio-stream = "0.1"
+tokio-tar = "0.3"
+weld-codegen = "0.5.0"
 
 [dev-dependencies]
 dirs = "4.0"
 tokio = {version = "1", features = ["full"]}
 claims = "0.7.1"
+tempfile = "3"

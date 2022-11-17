@@ -10,8 +10,6 @@ pub const DEFAULT_NATS_HOST: &str = "127.0.0.1";
 pub const DEFAULT_NATS_PORT: &str = "4222";
 pub const DEFAULT_LATTICE_PREFIX: &str = "default";
 pub const DEFAULT_NATS_TIMEOUT_MS: u64 = 2_000;
-pub const DEFAULT_START_ACTOR_TIMEOUT_MS: u64 = 5_000;
-pub const DEFAULT_START_PROVIDER_TIMEOUT_MS: u64 = 60_000;
 
 /// Used for displaying human-readable output vs JSON format
 #[derive(Debug, Copy, Clone, Eq, Serialize, Deserialize, PartialEq)]
