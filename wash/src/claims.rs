@@ -690,6 +690,7 @@ pub(crate) fn render_actor_claims(
     validation: TokenValidation,
 ) -> CommandOutput {
     let md = claims.metadata.clone().unwrap();
+    let name = md.name();
     let friendly_rev = md.rev.unwrap_or(0);
     let friendly_ver = md.ver.unwrap_or_else(|| "None".to_string());
     let friendly = format!("{} ({})", friendly_ver, friendly_rev);
@@ -740,6 +741,7 @@ pub(crate) fn render_actor_claims(
     map.insert(provider_json, json!(friendly_caps));
     map.insert("tags".to_string(), json!(tags));
     map.insert("call_alias".to_string(), json!(call_alias));
+    map.insert("name".to_string(), json!(name));
 
     let mut table = render_core(&claims, validation);
 
