@@ -58,7 +58,7 @@ fn integration_drain_lib() {
     std::env::set_var("TMP", test_dir.clone());
 
     let drain_basic = wash()
-        .args(&["drain", "lib", "-o", "json"])
+        .args(["drain", "lib", "-o", "json"])
         .output()
         .unwrap_or_else(|_| panic!("failed to drain {:?}", lib_dir.clone()));
     assert!(drain_basic.status.success());
@@ -97,7 +97,7 @@ fn integration_drain_oci() {
     std::env::set_var("TMP", test_dir.clone());
 
     let drain_basic = wash()
-        .args(&["drain", "oci", "-o", "json"])
+        .args(["drain", "oci", "-o", "json"])
         .output()
         .unwrap_or_else(|_| panic!("failed to drain {:?}", oci_dir.clone()));
     assert!(drain_basic.status.success());
@@ -142,7 +142,7 @@ fn integration_drain_all() {
     std::env::set_var("TMP", test_dir.clone());
 
     let drain_basic = wash()
-        .args(&["drain", "all", "-o", "json"])
+        .args(["drain", "all", "-o", "json"])
         .output()
         .unwrap_or_else(|_| panic!("failed to drain {:?}", oci_dir.clone()));
     assert!(drain_basic.status.success());
@@ -192,7 +192,7 @@ fn test_smithy_cache_drain() {
     println!("temp dir is {}", &std::env::temp_dir().display());
     let (_sys_tmp_cache, smithy_cache) = set_smithy_cache_dir();
     let drain_basic = wash()
-        .args(&["drain", "smithy", "-o", "json"])
+        .args(["drain", "smithy", "-o", "json"])
         .output()
         .unwrap_or_else(|_| panic!("failed to drain {:?}", &smithy_cache));
     assert!(drain_basic.status.success());

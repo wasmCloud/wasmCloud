@@ -429,7 +429,7 @@ mod test {
     fn test_par_create_comprehensive() {
         const ISSUER: &str = "SAAJLQZDZO57THPTIIEELEY7FJYOJZQWQD7FF4J67TUYTSCOXTF7R4Y3VY";
         const SUBJECT: &str = "SVAH7IN6QE6XODCGIIWZQDZ5LNSSS4FNEO6SNHZSSASW4BBBKSZ6KWTKWY";
-        let create_long: Cmd = clap::Parser::try_parse_from(&[
+        let create_long: Cmd = clap::Parser::try_parse_from([
             "par",
             "create",
             "--arch",
@@ -490,7 +490,7 @@ mod test {
             }
             cmd => panic!("par insert constructed incorrect command {:?}", cmd),
         }
-        let create_short: Cmd = clap::Parser::try_parse_from(&[
+        let create_short: Cmd = clap::Parser::try_parse_from([
             "par",
             "create",
             "-a",
@@ -557,7 +557,7 @@ mod test {
     fn test_par_insert_comprehensive() {
         const ISSUER: &str = "SAAJLQZDZO57THPTQLEELEY7FJYOJZQWQD7FF4J67TUYTSCOXTF7R4Y3VY";
         const SUBJECT: &str = "SVAH7IN6QE6XODCGQAWZQDZ5LNSSS4FNEO6SNHZSSASW4BBBKSZ6KWTKWY";
-        let insert_short: Cmd = clap::Parser::try_parse_from(&[
+        let insert_short: Cmd = clap::Parser::try_parse_from([
             "par",
             "insert",
             "libtest.par.gz",
@@ -594,7 +594,7 @@ mod test {
             }
             cmd => panic!("par insert constructed incorrect command {:?}", cmd),
         }
-        let insert_long: Cmd = clap::Parser::try_parse_from(&[
+        let insert_long: Cmd = clap::Parser::try_parse_from([
             "par",
             "insert",
             "libtest.par.gz",
@@ -639,7 +639,7 @@ mod test {
         const LOCAL: &str = "./coolthing.par.gz";
         const REMOTE: &str = "wasmcloud.azurecr.io/coolthing.par.gz";
 
-        let inspect_long: Cmd = clap::Parser::try_parse_from(&[
+        let inspect_long: Cmd = clap::Parser::try_parse_from([
             "par",
             "inspect",
             LOCAL,
@@ -672,7 +672,7 @@ mod test {
             }
             cmd => panic!("par inspect constructed incorrect command {:?}", cmd),
         }
-        let inspect_short: Cmd = clap::Parser::try_parse_from(&[
+        let inspect_short: Cmd = clap::Parser::try_parse_from([
             "par",
             "inspect",
             REMOTE,
