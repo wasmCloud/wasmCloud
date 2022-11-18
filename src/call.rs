@@ -1,18 +1,24 @@
+use std::{collections::HashMap, path::PathBuf, time::Duration};
+
+use anyhow::{bail, Context, Result};
+use clap::Args;
+use log::{debug, error};
+use wash_lib::context::{
+    fs::{load_context, ContextDir},
+    ContextManager,
+};
+use wash_lib::id::{ClusterSeed, ModuleId};
+use wasmbus_rpc::{common::Message, core::WasmCloudEntity, rpc_client::RpcClient};
+use wasmcloud_test_util::testing::TestResults;
+
 use crate::{
-    ctx::{context_dir, get_default_context, load_context},
-    id::{ClusterSeed, ModuleId},
+    ctx::{context_dir, ensure_host_config_context},
     util::{
         default_timeout_ms, extract_arg_value, json_str_to_msgpack_bytes, msgpack_to_json_val,
         nats_client_from_opts, CommandOutput, DEFAULT_LATTICE_PREFIX, DEFAULT_NATS_HOST,
         DEFAULT_NATS_PORT,
     },
 };
-use anyhow::{bail, Context, Result};
-use clap::Args;
-use log::{debug, error};
-use std::{collections::HashMap, path::PathBuf, time::Duration};
-use wasmbus_rpc::{common::Message, core::WasmCloudEntity, rpc_client::RpcClient};
-use wasmcloud_test_util::testing::TestResults;
 
 /// fake key (not a real public key)  used to construct origin for invoking actors
 const WASH_ORIGIN_KEY: &str = "__WASH__";
@@ -227,9 +233,11 @@ async fn rpc_client_from_opts(
     cmd_cluster_seed: Option<ClusterSeed>,
 ) -> Result<(RpcClient, u64)> {
     let ctx = if let Some(context) = opts.context {
-        load_context(context.as_path()).ok()
+        Some(load_context(context)?)
     } else if let Ok(ctx_dir) = context_dir(None) {
-        get_default_context(ctx_dir.as_path()).ok()
+        let ctx_dir = ContextDir::new(ctx_dir)?;
+        ensure_host_config_context(&ctx_dir)?;
+        Some(ctx_dir.load_default_context()?)
     } else {
         None
     };
@@ -304,10 +312,10 @@ async fn rpc_client_from_opts(
 #[cfg(test)]
 mod test {
     use super::CallCommand;
-    use crate::id::ModuleId;
     use anyhow::Result;
     use clap::Parser;
     use std::{path::PathBuf, str::FromStr};
+    use wash_lib::id::ModuleId;
 
     const RPC_HOST: &str = "127.0.0.1";
     const RPC_PORT: &str = "4222";

@@ -1,22 +1,33 @@
-use derive_more::Display;
+//! Types and tools for basic validation of seeds and IDs used in configuration
+
+use std::{convert::AsRef, fmt::Display, str::FromStr};
+
 use serde::{Deserialize, Serialize};
-use std::{convert::AsRef, str::FromStr};
 use thiserror::Error;
 
+/// An error type describing the types of errors when parsing an ID
 #[derive(Error, Debug, Eq, PartialEq)]
 pub enum ParseError {
+    /// The key is the wrong type of ID or seed
     #[error(r#"found the prefix "{found}", but expected "{expected}""#)]
     InvalidKeyType { found: String, expected: String },
+    /// The key does not have the proper length
     #[error("the key should be {expected} characters, but was {found} characters")]
     InvalidLength { found: usize, expected: usize },
 }
 
+/// A module (i.e. Actor) ID
 pub type ModuleId = Id<'M'>;
+/// A host ID
 pub type ServerId = Id<'N'>;
+/// A service (i.e. Provider) ID
 pub type ServiceId = Id<'V'>;
+/// A private key for a server
 pub type ClusterSeed = Seed<'C'>;
 
-#[derive(Clone, Debug, Display, Eq, PartialEq, Serialize, Deserialize)]
+/// A wrapper around specific ID types. This is not meant to be a full nkey, but simple validation
+/// for use in serialized/deserialized types
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Id<const PREFIX: char>(String);
 
 impl<const PREFIX: char> FromStr for Id<PREFIX> {
@@ -27,8 +38,24 @@ impl<const PREFIX: char> FromStr for Id<PREFIX> {
     }
 }
 
-#[derive(Clone, Debug, Display, Eq, PartialEq, Serialize, Deserialize)]
+impl<const PREFIX: char> Display for Id<PREFIX> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+/// A wrapper around specific seed types. This is not meant to be a full nkey, but simple validation
+/// for use in serialized/deserialized types
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Seed<const PREFIX: char>(String);
+
+impl<const PREFIX: char> Display for Seed<PREFIX> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // NOTE: We may want to make this not print the key in the future (maybe by only
+        // implementing ToString rather than display)
+        self.0.fmt(f)
+    }
+}
 
 impl<const PREFIX: char> Default for Seed<PREFIX> {
     fn default() -> Self {
