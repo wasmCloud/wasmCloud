@@ -925,7 +925,7 @@ mod test {
     /// Enumerates all options and flags of the `claims inspect` command
     /// to ensure command line arguments do not change between versions
     fn test_claims_inspect_comprehensive() {
-        let cmd: Cmd = Parser::try_parse_from(&[
+        let cmd: Cmd = Parser::try_parse_from([
             "claims",
             "inspect",
             SUBSCRIBER_OCI,
@@ -968,7 +968,7 @@ mod test {
             cmd => panic!("claims constructed incorrect command: {:?}", cmd),
         }
 
-        let short_cmd: Cmd = Parser::try_parse_from(&[
+        let short_cmd: Cmd = Parser::try_parse_from([
             "claims",
             "inspect",
             SUBSCRIBER_OCI,
@@ -1019,7 +1019,7 @@ mod test {
         const LOCAL_WASM: &str = "./myactor.wasm";
         const ISSUER_KEY: &str = "SAAOBYD6BLELXSNN4S3TXUM7STGPB3A5HYU3D5T7XA4WHGVQBDBD4LJPOM";
         const SUBJECT_KEY: &str = "SMAMA4ABHIJUYQR54BDFHEMXIIGQATUXK6RYU6XLTFHDNCRVWT4KSDDSVE";
-        let long_cmd: Cmd = Parser::try_parse_from(&[
+        let long_cmd: Cmd = Parser::try_parse_from([
             "claims",
             "sign",
             LOCAL_WASM,
@@ -1089,7 +1089,7 @@ mod test {
             }
             cmd => panic!("claims constructed incorrect command: {:?}", cmd),
         }
-        let short_cmd: Cmd = Parser::try_parse_from(&[
+        let short_cmd: Cmd = Parser::try_parse_from([
             "claims",
             "sign",
             LOCAL_WASM,
@@ -1172,7 +1172,7 @@ mod test {
         const ACTOR_KEY: &str = "SMAA2XB7UP7FZLPLO27NJB65PKYISNQAH7PZ6PJUHR6CUARVANXZ4OTZOU";
         const PROVIDER_KEY: &str = "SVAKIVYER6D2LZS7QJFOU7LQYLRAMJ5DZE4B7BJHX6QFJIY24KN43JZGN4";
 
-        let account_cmd: Cmd = Parser::try_parse_from(&[
+        let account_cmd: Cmd = Parser::try_parse_from([
             "claims",
             "token",
             "account",
@@ -1221,7 +1221,7 @@ mod test {
             }
             cmd => panic!("claims constructed incorrect command: {:?}", cmd),
         }
-        let actor_cmd: Cmd = Parser::try_parse_from(&[
+        let actor_cmd: Cmd = Parser::try_parse_from([
             "claims",
             "token",
             "actor",
@@ -1306,7 +1306,7 @@ mod test {
             }
             cmd => panic!("claims constructed incorrect command: {:?}", cmd),
         }
-        let operator_cmd: Cmd = Parser::try_parse_from(&[
+        let operator_cmd: Cmd = Parser::try_parse_from([
             "claims",
             "token",
             "operator",
@@ -1351,7 +1351,7 @@ mod test {
             }
             cmd => panic!("claims constructed incorrect command: {:?}", cmd),
         }
-        let provider_cmd: Cmd = Parser::try_parse_from(&[
+        let provider_cmd: Cmd = Parser::try_parse_from([
             "claims",
             "token",
             "provider",

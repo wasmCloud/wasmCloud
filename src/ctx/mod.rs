@@ -434,7 +434,7 @@ mod test {
     // Enumerates all options of ctx subcommands to ensure
     // changes are not made to the ctx API
     fn test_ctx_comprehensive() {
-        let cmd: Cmd = Parser::try_parse_from(&[
+        let cmd: Cmd = Parser::try_parse_from([
             "ctx",
             "new",
             "my_name",
@@ -453,7 +453,7 @@ mod test {
             _ => panic!("ctx constructed incorrect command"),
         }
 
-        let cmd: Cmd = Parser::try_parse_from(&[
+        let cmd: Cmd = Parser::try_parse_from([
             "ctx",
             "edit",
             "my_context",
@@ -473,7 +473,7 @@ mod test {
         }
 
         let cmd: Cmd =
-            Parser::try_parse_from(&["ctx", "del", "my_context", "--directory", "./contexts"])
+            Parser::try_parse_from(["ctx", "del", "my_context", "--directory", "./contexts"])
                 .unwrap();
         match cmd.cmd {
             CtxCommand::Del(cmd) => {
@@ -484,7 +484,7 @@ mod test {
         }
 
         let cmd: Cmd =
-            Parser::try_parse_from(&["ctx", "list", "--directory", "./contexts"]).unwrap();
+            Parser::try_parse_from(["ctx", "list", "--directory", "./contexts"]).unwrap();
         match cmd.cmd {
             CtxCommand::List(cmd) => {
                 assert_eq!(cmd.directory.unwrap(), PathBuf::from("./contexts"));
@@ -493,7 +493,7 @@ mod test {
         }
 
         let cmd: Cmd =
-            Parser::try_parse_from(&["ctx", "default", "host_config", "--directory", "./contexts"])
+            Parser::try_parse_from(["ctx", "default", "host_config", "--directory", "./contexts"])
                 .unwrap();
         match cmd.cmd {
             CtxCommand::Default(cmd) => {

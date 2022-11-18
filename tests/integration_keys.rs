@@ -10,7 +10,7 @@ use std::{
 #[test]
 fn integration_keys_gen_basic() {
     let keys_gen_account = wash()
-        .args(&["keys", "gen", "account"])
+        .args(["keys", "gen", "account"])
         .output()
         .expect("failed to generate account key");
 
@@ -25,7 +25,7 @@ fn integration_keys_gen_comprehensive() {
 
     key_gen_types.iter().for_each(|cmd| {
         let key_gen_command = wash()
-            .args(&["keys", "gen", cmd])
+            .args(["keys", "gen", cmd])
             .output()
             .unwrap_or_else(|_| panic!("failed to generate key type {} with text output", cmd));
         assert!(key_gen_command.status.success());
@@ -37,7 +37,7 @@ fn integration_keys_gen_comprehensive() {
 
     key_gen_types.iter().for_each(|cmd| {
         let key_gen_command = wash()
-            .args(&["keys", "gen", cmd, "-o", "json"])
+            .args(["keys", "gen", cmd, "-o", "json"])
             .output()
             .unwrap_or_else(|_| panic!("failed to generate key type {} with json output", cmd));
         assert!(key_gen_command.status.success());
@@ -59,7 +59,7 @@ fn integration_keys_get_basic() {
     file.write_all(KEYCONTENTS).unwrap();
 
     let key_output = wash()
-        .args(&[
+        .args([
             "keys",
             "get",
             KEYNAME,
@@ -89,7 +89,7 @@ fn integration_keys_get_comprehensive() {
     file.write_all(KEYCONTENTS).unwrap();
 
     let key_output = wash()
-        .args(&[
+        .args([
             "keys",
             "get",
             KEYNAME,
@@ -133,7 +133,7 @@ fn integration_list_comprehensive() {
     file.write_all(KEYTHREECONTENTS).unwrap();
 
     let list_output = wash()
-        .args(&[
+        .args([
             "keys",
             "list",
             "-d",
@@ -152,7 +152,7 @@ fn integration_list_comprehensive() {
     assert!(output.contains(KEYTHREE));
 
     let list_output_json = wash()
-        .args(&[
+        .args([
             "keys",
             "list",
             "-d",

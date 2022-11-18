@@ -1164,7 +1164,7 @@ mod test {
     /// change between versions. This test will fail if any subcommand of `wash ctl`
     /// changes syntax, ordering of required elements, or flags.
     fn test_ctl_comprehensive() -> Result<()> {
-        let start_actor_all: Cmd = Parser::try_parse_from(&[
+        let start_actor_all: Cmd = Parser::try_parse_from([
             "ctl",
             "start",
             "actor",
@@ -1203,7 +1203,7 @@ mod test {
             }
             cmd => panic!("ctl start actor constructed incorrect command {:?}", cmd),
         }
-        let start_provider_all: Cmd = Parser::try_parse_from(&[
+        let start_provider_all: Cmd = Parser::try_parse_from([
             "ctl",
             "start",
             "provider",
@@ -1251,7 +1251,7 @@ mod test {
             }
             cmd => panic!("ctl start provider constructed incorrect command {:?}", cmd),
         }
-        let stop_actor_all: Cmd = Parser::try_parse_from(&[
+        let stop_actor_all: Cmd = Parser::try_parse_from([
             "ctl",
             "stop",
             "actor",
@@ -1287,7 +1287,7 @@ mod test {
             }
             cmd => panic!("ctl stop actor constructed incorrect command {:?}", cmd),
         }
-        let stop_provider_all: Cmd = Parser::try_parse_from(&[
+        let stop_provider_all: Cmd = Parser::try_parse_from([
             "ctl",
             "stop",
             "provider",
@@ -1325,7 +1325,7 @@ mod test {
             }
             cmd => panic!("ctl stop actor constructed incorrect command {:?}", cmd),
         }
-        let get_hosts_all: Cmd = Parser::try_parse_from(&[
+        let get_hosts_all: Cmd = Parser::try_parse_from([
             "ctl",
             "get",
             "hosts",
@@ -1347,7 +1347,7 @@ mod test {
             }
             cmd => panic!("ctl get hosts constructed incorrect command {:?}", cmd),
         }
-        let get_host_inventory_all: Cmd = Parser::try_parse_from(&[
+        let get_host_inventory_all: Cmd = Parser::try_parse_from([
             "ctl",
             "get",
             "inventory",
@@ -1374,7 +1374,7 @@ mod test {
             }
             cmd => panic!("ctl get inventory constructed incorrect command {:?}", cmd),
         }
-        let get_claims_all: Cmd = Parser::try_parse_from(&[
+        let get_claims_all: Cmd = Parser::try_parse_from([
             "ctl",
             "get",
             "claims",
@@ -1396,7 +1396,7 @@ mod test {
             }
             cmd => panic!("ctl get claims constructed incorrect command {:?}", cmd),
         }
-        let link_all: Cmd = Parser::try_parse_from(&[
+        let link_all: Cmd = Parser::try_parse_from([
             "ctl",
             "link",
             "put",
@@ -1436,7 +1436,7 @@ mod test {
             }
             cmd => panic!("ctl link put constructed incorrect command {:?}", cmd),
         }
-        let update_all: Cmd = Parser::try_parse_from(&[
+        let update_all: Cmd = Parser::try_parse_from([
             "ctl",
             "update",
             "actor",
@@ -1470,7 +1470,7 @@ mod test {
             cmd => panic!("ctl get claims constructed incorrect command {:?}", cmd),
         }
 
-        let scale_actor_all: Cmd = Parser::try_parse_from(&[
+        let scale_actor_all: Cmd = Parser::try_parse_from([
             "ctl",
             "scale",
             "actor",
