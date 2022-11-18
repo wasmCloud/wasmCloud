@@ -138,13 +138,14 @@ pub(crate) async fn handle_pull(
     cmd: PullCommand,
     output_kind: OutputKind,
 ) -> Result<CommandOutput> {
-    let image: Reference = cmd.url.parse()?;
+    let artifact_url = cmd.url.to_ascii_lowercase();
+    let image: Reference = artifact_url.parse()?;
 
     let spinner = Spinner::new(&output_kind)?;
     spinner.update_spinner_message(format!(" Downloading {} ...", image.whole()));
 
     let artifact = pull_artifact(
-        cmd.url,
+        artifact_url,
         cmd.digest,
         cmd.allow_latest,
         cmd.opts.user,
@@ -333,15 +334,16 @@ pub(crate) async fn handle_push(
     cmd: PushCommand,
     output_kind: OutputKind,
 ) -> Result<CommandOutput> {
-    if cmd.url.starts_with("localhost:") && !cmd.opts.insecure {
+    let artifact_url = cmd.url.to_ascii_lowercase();
+    if artifact_url.starts_with("localhost:") && !cmd.opts.insecure {
         warn!(" Unless an SSL certificate has been installed, pushing to localhost without the --insecure option will fail")
     }
 
     let spinner = Spinner::new(&output_kind)?;
-    spinner.update_spinner_message(format!(" Pushing {} to {} ...", cmd.artifact, cmd.url));
+    spinner.update_spinner_message(format!(" Pushing {} to {} ...", cmd.artifact, artifact_url));
 
     push_artifact(
-        cmd.url.clone(),
+        artifact_url.clone(),
         cmd.artifact,
         cmd.config,
         cmd.allow_latest,
@@ -359,7 +361,7 @@ pub(crate) async fn handle_push(
     Ok(CommandOutput::new(
         format!(
             "{} Successfully validated and pushed to {}",
-            SHOWER_EMOJI, cmd.url
+            SHOWER_EMOJI, artifact_url
         ),
         map,
     ))
