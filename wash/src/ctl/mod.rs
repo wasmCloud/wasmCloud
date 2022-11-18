@@ -5,9 +5,16 @@ use std::{
 
 use anyhow::{bail, Result};
 use clap::{Args, Parser, Subcommand};
-use wash_lib::config::{
-    DEFAULT_LATTICE_PREFIX, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT, DEFAULT_NATS_TIMEOUT_MS,
-    DEFAULT_START_ACTOR_TIMEOUT_MS, DEFAULT_START_PROVIDER_TIMEOUT_MS,
+use wash_lib::{
+    config::{
+        DEFAULT_LATTICE_PREFIX, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT, DEFAULT_NATS_TIMEOUT_MS,
+        DEFAULT_START_ACTOR_TIMEOUT_MS, DEFAULT_START_PROVIDER_TIMEOUT_MS,
+    },
+    context::{
+        fs::{load_context, ContextDir},
+        ContextManager,
+    },
+    id::{ModuleId, ServerId, ServiceId},
 };
 use wasmcloud_control_interface::{
     Client as CtlClient, CtlOperationAck, GetClaimsResponse, Host, HostInventory,
@@ -17,8 +24,7 @@ use wasmcloud_control_interface::{
 use crate::{
     appearance::spinner::Spinner,
     ctl::manifest::HostManifest,
-    ctx::{context_dir, get_default_context, load_context},
-    id::{ModuleId, ServerId, ServiceId},
+    ctx::{context_dir, ensure_host_config_context},
     util::{
         convert_error, default_timeout_ms, labels_vec_to_hashmap, validate_contract_id,
         CommandOutput, OutputKind,
@@ -1062,9 +1068,11 @@ async fn ctl_client_from_opts(
 ) -> Result<CtlClient> {
     // Attempt to load a context, falling back on the default if not supplied
     let ctx = if let Some(context) = opts.context {
-        load_context(&context).ok()
+        Some(load_context(context)?)
     } else if let Ok(ctx_dir) = context_dir(None) {
-        get_default_context(&ctx_dir).ok()
+        let ctx_dir = ContextDir::new(ctx_dir)?;
+        ensure_host_config_context(&ctx_dir)?;
+        Some(ctx_dir.load_default_context()?)
     } else {
         None
     };

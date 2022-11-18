@@ -1,33 +1,35 @@
+use std::{
+    collections::HashMap,
+    io::{Error, ErrorKind},
+    path::PathBuf,
+    process::Command,
+};
+
+use anyhow::{bail, Result};
+use clap::{Args, Subcommand};
+use log::warn;
+use serde_json::json;
+use wash_lib::{
+    config::{
+        cfg_dir, DEFAULT_LATTICE_PREFIX, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT,
+        DEFAULT_NATS_TIMEOUT_MS,
+    },
+    context::{
+        fs::{load_context, ContextDir},
+        ContextManager, WashContext, HOST_CONFIG_NAME,
+    },
+    id::ClusterSeed,
+};
+
 use crate::{
-    cfg::cfg_dir,
     generate::{
         interactive::{prompt_for_choice, user_question},
         project_variables::StringEntry,
     },
-    id::ClusterSeed,
-    util::{
-        CommandOutput, DEFAULT_LATTICE_PREFIX, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT,
-        DEFAULT_NATS_TIMEOUT_MS,
-    },
+    util::CommandOutput,
 };
-use clap::{Args, Subcommand};
-use log::warn;
-use serde_json::json;
-use std::{
-    collections::HashMap,
-    fs::File,
-    io::{BufReader, Error, ErrorKind},
-    path::{Path, PathBuf},
-    process::Command,
-};
-pub mod context;
-use anyhow::{bail, Context, Result};
-use context::{DefaultContext, WashContext};
 
 const CTX_DIR_NAME: &str = "contexts";
-const INDEX_JSON: &str = "index.json";
-const HOST_CONFIG_FILE: &str = "host_config.json";
-const HOST_CONFIG_NAME: &str = "host_config";
 
 pub(crate) async fn handle_command(ctx_cmd: CtxCommand) -> Result<CommandOutput> {
     use CtxCommand::*;
@@ -121,34 +123,29 @@ pub(crate) struct EditCommand {
 /// Lists all JSON files found in the context directory, with the exception of `index.json`
 /// Being present in this list does not guarantee a valid context
 fn handle_list(cmd: ListCommand) -> Result<CommandOutput> {
-    let dir = context_dir(cmd.directory)?;
-    let _ = ensure_host_config_context(&dir);
+    let dir = ContextDir::new(context_dir(cmd.directory)?)?;
+    ensure_host_config_context(&dir)?;
 
-    let index = get_index(&dir);
-    let contexts = context_filestems_from_path(get_contexts(&dir)?);
+    let default_context = dir
+        .default_context()?
+        .unwrap_or_else(|| HOST_CONFIG_NAME.to_string());
+    let contexts = dir.list_contexts()?;
 
-    let text_contexts = match &index {
-        Ok(default_context) => contexts
-            .clone()
-            .into_iter()
-            .map(|f| {
-                if f == default_context.name {
-                    format!("{} (default)", f)
-                } else {
-                    f
-                }
-            })
-            .collect::<Vec<String>>()
-            .join("\n"),
-        Err(_) => contexts.join("\n"),
-    };
+    let text_contexts = contexts
+        .iter()
+        .map(|f| {
+            if f == &default_context {
+                format!("{} (default)", f)
+            } else {
+                f.clone()
+            }
+        })
+        .collect::<Vec<String>>()
+        .join("\n");
 
     let mut map = HashMap::new();
     map.insert("contexts".to_string(), json!(contexts));
-    map.insert(
-        "default".to_string(),
-        json!(index.map(|i| i.name).unwrap_or_else(|_| "N/A".to_string())),
-    );
+    map.insert("default".to_string(), json!(default_context));
 
     Ok(CommandOutput::new(
         format!(
@@ -162,62 +159,43 @@ fn handle_list(cmd: ListCommand) -> Result<CommandOutput> {
 
 /// Handles selecting a default context, which can be selected in the terminal or provided as an argument
 fn handle_default(cmd: DefaultCommand) -> Result<CommandOutput> {
-    let dir = context_dir(cmd.directory)?;
-    let _ = ensure_host_config_context(&dir);
-    let contexts = get_contexts(&dir)?;
+    let dir = ContextDir::new(context_dir(cmd.directory)?)?;
+    ensure_host_config_context(&dir)?;
 
-    let new_default = cmd.name.unwrap_or_else(|| {
-        select_context(contexts.clone(), &dir, "Select a default context:").unwrap_or_default()
-    });
-
-    if contexts.contains(&context_path_from_name(&dir, &new_default)) {
-        set_default_context(&dir, new_default)?;
-
-        Ok(CommandOutput::from("Set new context successfully"))
+    let new_default = if let Some(n) = cmd.name {
+        n
     } else {
-        Err(Error::new(
-            ErrorKind::NotFound,
-            "Failed to set new default, context supplied was not found".to_string(),
-        )
-        .into())
-    }
+        select_context(&dir, "Select a default context:")?.unwrap_or_default()
+    };
+
+    dir.set_default_context(&new_default)?;
+    Ok(CommandOutput::from("Set new context successfully"))
 }
 
 /// Handles deleting an existing context
 fn handle_del(cmd: DelCommand) -> Result<CommandOutput> {
-    let dir = context_dir(cmd.directory)?;
-    let contexts = get_contexts(&dir)?;
+    let dir = ContextDir::new(context_dir(cmd.directory)?)?;
 
-    let ctx_to_delete = cmd.name.unwrap_or_else(|| {
-        select_context(contexts.clone(), &dir, "Select a context to delete:").unwrap_or_default()
-    });
-
-    let path = context_path_from_name(&dir, &ctx_to_delete);
-
-    if contexts.contains(&path) {
-        std::fs::remove_file(path)?;
-
-        Ok(CommandOutput::from("Removed file successfully"))
+    let ctx_to_delete = if let Some(n) = cmd.name {
+        n
     } else {
-        Err(Error::new(
-            ErrorKind::NotFound,
-            "Failed to delete, no context found".to_string(),
-        )
-        .into())
-    }
+        select_context(&dir, "Select a context to delete:")?.unwrap_or_default()
+    };
+
+    dir.delete_context(&ctx_to_delete)?;
+    Ok(CommandOutput::from("Removed file successfully"))
 }
 
 /// Handles creating a new context by writing the default WashContext object to the specified path
 fn handle_new(cmd: NewCommand) -> Result<CommandOutput> {
-    let dir = context_dir(cmd.directory.clone())?;
+    let dir = ContextDir::new(context_dir(cmd.directory)?)?;
 
-    let new_context = if cmd.interactive {
+    let mut new_context = if cmd.interactive {
         prompt_for_context()?
     } else {
         WashContext::named(cmd.name.unwrap())
     };
 
-    let filename = format!("{}.json", new_context.name);
     let options = sanitize_filename::Options {
         truncate: true,
         windows: true,
@@ -225,40 +203,41 @@ fn handle_new(cmd: NewCommand) -> Result<CommandOutput> {
     };
 
     // Ensure filename doesn't include uphill/downhill\ slashes, or reserved prefixes
-    let sanitized = sanitize_filename::sanitize_with_options(filename, options);
-    let context_path = dir.join(sanitized.clone());
-
-    serde_json::to_writer(&File::create(context_path)?, &new_context)?;
+    let sanitized = sanitize_filename::sanitize_with_options(&new_context.name, options);
+    new_context.name = sanitized;
+    dir.save_context(&new_context)?;
     Ok(CommandOutput::from(format!(
         "Created context {} with default values",
-        sanitized
+        new_context.name
     )))
 }
 
 /// Handles editing a context by opening the JSON file in the user's text editor of choice
 fn handle_edit(cmd: EditCommand) -> Result<CommandOutput> {
-    let dir = context_dir(cmd.directory.clone())?;
+    let dir = ContextDir::new(context_dir(cmd.directory)?)?;
     let editor = which::which(cmd.editor)?;
 
-    let _ = ensure_host_config_context(&dir);
+    ensure_host_config_context(&dir)?;
+
+    let mut ctx_name = String::new();
 
     let ctx = if let Some(ctx) = cmd.name {
-        // Ensure user supplied context exists
-        std::fs::metadata(context_path_from_name(&dir, &ctx))
-            .ok()
-            .map(|_| ctx)
+        let path = dir.get_context_path(&ctx)?;
+        ctx_name = ctx;
+        path
+    } else if let Some(name) = select_context(&dir, "Select a context to edit:")? {
+        let path = dir.get_context_path(&name)?;
+        ctx_name = name;
+        path
     } else {
-        let contexts = get_contexts(&dir)?;
-        select_context(contexts, &dir, "Select a context to edit:")
+        None
     };
 
-    if let Some(ctx_name) = ctx {
+    if let Some(path) = ctx {
         if ctx_name == HOST_CONFIG_NAME {
             warn!("Edits to the host_config context will be overwritten, make changes to the host config instead");
         }
-        let status = Command::new(editor)
-            .arg(&context_path_from_name(&dir, &ctx_name))
-            .status()?;
+        let status = Command::new(editor).arg(&path).status()?;
 
         match status.success() {
             true => Ok(CommandOutput::from("Finished editing context successfully")),
@@ -273,145 +252,55 @@ fn handle_edit(cmd: EditCommand) -> Result<CommandOutput> {
     }
 }
 
-/// Takes an absolute path to a directory containing an index.json and returns an DefaultContext object
-fn get_index(context_dir: &Path) -> Result<DefaultContext> {
-    let file = std::fs::File::open(context_dir.join(INDEX_JSON))?;
-    let reader = BufReader::new(file);
-    let index = serde_json::from_reader(reader)?;
-    Ok(index)
-}
-
-/// Set the default context by overwriting the current index.json file in the contexts directory
-fn set_default_context(context_dir: &Path, default_context: String) -> Result<()> {
-    let index = DefaultContext::new(default_context);
-    let context_path = context_dir.join(INDEX_JSON);
-    serde_json::to_writer(&File::create(context_path)?, &index).map_err(|e| e.into())
-}
-
-/// Loads the default context, according to index.json, into a WashContext object
-pub(crate) fn get_default_context(context_dir: &Path) -> Result<WashContext> {
-    match get_index(context_dir) {
-        Ok(index) if index.name == HOST_CONFIG_NAME => {
-            create_host_config_context(context_dir)?;
-            load_context(&context_path_from_name(context_dir, HOST_CONFIG_NAME))
-        }
-        Ok(index) => load_context(&context_path_from_name(context_dir, &index.name)),
-        _ => {
-            create_host_config_context(context_dir)?;
-            set_default_context(context_dir, HOST_CONFIG_NAME.to_string())?;
-            load_context(&context_path_from_name(context_dir, HOST_CONFIG_NAME))
-        }
-    }
-}
-
-/// Load a file and return a Result containing the WashContext object.
-pub(crate) fn load_context(context_path: &Path) -> Result<WashContext> {
-    let file = std::fs::File::open(context_path)?;
-    let reader = BufReader::new(file);
-    let ctx = serde_json::from_reader(reader)?;
-    Ok(ctx)
-}
-
-/// Ensures the host config context exists, setting it as a default if a default context
-/// is not configured. The `host_config` context will be overwritten with the values found
-/// in the `~/.wash/host_config.json` file.
-fn ensure_host_config_context(context_dir: &Path) -> Result<()> {
-    create_host_config_context(context_dir)?;
-
-    // No default context is set, set to `host_config` context
-    if get_default_context(context_dir).is_err() {
-        set_default_context(context_dir, HOST_CONFIG_NAME.to_string())?;
-    }
-    Ok(())
+/// Ensures the host config context exists
+pub(crate) fn ensure_host_config_context(context_dir: &ContextDir) -> Result<()> {
+    create_host_config_context(context_dir)
 }
 
 /// Load the host configuration file and create a context called `host_config` from it
-fn create_host_config_context(context_dir: &Path) -> Result<()> {
-    let host_config_path = cfg_dir()?.join(HOST_CONFIG_FILE);
+fn create_host_config_context(context_dir: &ContextDir) -> Result<()> {
+    println!("My context dir is: {}", context_dir.display());
     let host_config_ctx = WashContext {
         name: HOST_CONFIG_NAME.to_string(),
-        ..load_context(&host_config_path)?
+        ..load_context(cfg_dir()?.join(format!("{}.json", HOST_CONFIG_NAME)))?
     };
-    let output_ctx_path = context_path_from_name(context_dir, HOST_CONFIG_NAME);
-    serde_json::to_writer(&File::create(output_ctx_path)?, &host_config_ctx).map_err(|e| e.into())
-}
-
-/// Given a context directory, retrieve all contexts in the form of their absolute paths
-fn get_contexts(context_dir: &Path) -> Result<Vec<PathBuf>> {
-    let paths = std::fs::read_dir(context_dir)
-        .with_context(|| format!("please ensure directory {} exists", context_dir.display()))?;
-
-    let index = std::ffi::OsString::from(INDEX_JSON);
-    Ok(paths
-        .filter_map(|p| {
-            if let Ok(ctx_entry) = p {
-                let path = ctx_entry.path();
-                let ctx_filename = ctx_entry.file_name();
-                match path.extension().map(|os| os.to_str()).unwrap_or_default() {
-                    // Don't include index in the list of contexts
-                    Some("json") if ctx_filename == index => None,
-                    Some("json") => Some(path),
-                    _ => None,
-                }
-            } else {
-                None
-            }
-        })
-        .collect())
-}
-
-/// Converts a list of absolute paths to contexts to their human-readable filestems
-fn context_filestems_from_path(contexts: Vec<PathBuf>) -> Vec<String> {
-    contexts
-        .iter()
-        .filter_map(|p| {
-            p.file_stem()
-                .unwrap_or_default()
-                .to_os_string()
-                .into_string()
-                .ok()
-        })
-        .collect()
+    context_dir.save_context(&host_config_ctx)?;
+    // Set the default context if it isn't set yet
+    if context_dir.default_context()?.is_none() {
+        context_dir.set_default_context(HOST_CONFIG_NAME)?;
+    }
+    Ok(())
 }
 
 /// Given an optional supplied directory, determine the context directory either from the supplied
 /// directory or using the home directory and the predefined `.wash/contexts` folder.
 pub(crate) fn context_dir(cmd_dir: Option<PathBuf>) -> Result<PathBuf> {
-    let dir = if let Some(dir) = cmd_dir {
-        dir
+    if let Some(dir) = cmd_dir {
+        Ok(dir)
     } else {
-        cfg_dir()?.join(CTX_DIR_NAME)
-    };
-
-    // Ensure user supplied context exists
-    if std::fs::metadata(&dir).is_err() {
-        let _ = std::fs::create_dir_all(&dir);
+        Ok(cfg_dir()?.join(CTX_DIR_NAME))
     }
-    Ok(dir)
-}
-
-/// Helper function to properly format the path to a context JSON file
-fn context_path_from_name(dir: &Path, name: &str) -> PathBuf {
-    dir.join(format!("{}.json", name))
 }
 
 /// Prompts the user with the provided `contexts` choices and returns the user's response.
 /// This can be used to determine which context to delete, edit, or set as a default, for example
-fn select_context(contexts: Vec<PathBuf>, dir: &Path, prompt: &str) -> Option<String> {
-    let default = get_index(dir).ok().map(|i| i.name);
+fn select_context(dir: &ContextDir, prompt: &str) -> Result<Option<String>> {
+    let default = dir
+        .default_context()?
+        .unwrap_or_else(|| HOST_CONFIG_NAME.to_string());
 
-    let choices: Vec<String> = context_filestems_from_path(contexts);
+    let choices: Vec<String> = dir.list_contexts()?;
 
     let entry = StringEntry {
-        default,
+        default: Some(default),
         choices: Some(choices.clone()),
         regex: None,
     };
 
     if let Ok(choice) = prompt_for_choice(&entry, prompt) {
-        choices.get(choice).map(|c| c.to_string())
+        Ok(choices.get(choice).map(|c| c.to_string()))
     } else {
-        None
+        Ok(None)
     }
 }
 
@@ -511,24 +400,24 @@ fn prompt_for_context() -> Result<WashContext> {
         &Some(DEFAULT_LATTICE_PREFIX.to_string()),
     )?;
 
-    Ok(WashContext::new(
+    Ok(WashContext {
         name,
         cluster_seed,
         ctl_host,
-        ctl_port.parse().unwrap_or_default(),
+        ctl_port: ctl_port.parse().unwrap_or_default(),
         ctl_jwt,
         ctl_seed,
-        ctl_credsfile.map(PathBuf::from),
-        ctl_timeout.parse()?,
+        ctl_credsfile: ctl_credsfile.map(PathBuf::from),
+        ctl_timeout: ctl_timeout.parse()?,
         ctl_lattice_prefix,
         rpc_host,
-        rpc_port.parse().unwrap_or_default(),
+        rpc_port: rpc_port.parse().unwrap_or_default(),
         rpc_jwt,
         rpc_seed,
-        rpc_credsfile.map(PathBuf::from),
-        rpc_timeout.parse()?,
+        rpc_credsfile: rpc_credsfile.map(PathBuf::from),
+        rpc_timeout: rpc_timeout.parse()?,
         rpc_lattice_prefix,
-    ))
+    })
 }
 
 #[cfg(test)]
