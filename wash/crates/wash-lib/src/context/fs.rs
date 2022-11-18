@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
-use super::{ContextManager, DefaultContext, WashContext, HOST_CONFIG_NAME};
+use super::{ContextManager, DefaultContext, WashContext};
 
 const INDEX_JSON: &str = "index.json";
 
@@ -82,16 +82,14 @@ impl ContextDir {
 
 impl ContextManager for ContextDir {
     /// Returns the name of the currently set default context
-    fn default_context(&self) -> Result<String> {
+    fn default_context(&self) -> Result<Option<String>> {
         let raw = match std::fs::read(self.index_path()) {
             Ok(b) => b,
-            Err(e) if matches!(e.kind(), std::io::ErrorKind::NotFound) => {
-                return Ok(HOST_CONFIG_NAME.to_string())
-            }
+            Err(e) if matches!(e.kind(), std::io::ErrorKind::NotFound) => return Ok(None),
             Err(e) => return Err(anyhow::Error::from(e)),
         };
         let index: DefaultContext = serde_json::from_slice(&raw)?;
-        Ok(index.name.to_owned())
+        Ok(Some(index.name.to_owned()))
     }
 
     /// Sets the current default context to the given name. Will error if it doesn't exist
@@ -121,7 +119,7 @@ impl ContextManager for ContextDir {
         let path = context_path_from_name(&self.0, name);
         std::fs::remove_file(path)?;
         let current_context = match self.default_context() {
-            Ok(c) => c,
+            Ok(c) => c.unwrap_or_default(),
             // This isn't an error we care about. If for some reason we fail, it is fine
             Err(_) => return Ok(()),
         };
@@ -134,7 +132,9 @@ impl ContextManager for ContextDir {
 
     /// Loads the currently set default context
     fn load_default_context(&self) -> Result<WashContext> {
-        let context = self.default_context()?;
+        let context = self
+            .default_context()?
+            .ok_or_else(|| anyhow::anyhow!("No default context currently set"))?;
         load_context(context_path_from_name(&self.0, &context))
     }
 
@@ -243,7 +243,8 @@ mod test {
         assert_eq!(
             ctx_dir
                 .default_context()
-                .expect("Should be able to load default context"),
+                .expect("Should be able to load default context")
+                .unwrap(),
             "happy_gilmore",
             "Default context should be correct"
         );
@@ -310,13 +311,12 @@ mod test {
         let tempdir = tempfile::tempdir().expect("Unable to create tempdir");
         let ctx_dir = ContextDir::new(&tempdir).expect("Should be able to create context dir");
 
-        assert_eq!(
+        assert!(
             ctx_dir
                 .default_context()
-                .expect("Should be able to get a default context with nothing set"),
-            HOST_CONFIG_NAME,
-            "Default context name should be {}",
-            HOST_CONFIG_NAME
+                .expect("Should be able to get a default context with nothing set")
+                .is_none(),
+            "Unset context should return none",
         );
 
         ctx_dir

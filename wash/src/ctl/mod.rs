@@ -24,7 +24,7 @@ use wasmcloud_control_interface::{
 use crate::{
     appearance::spinner::Spinner,
     ctl::manifest::HostManifest,
-    ctx::context_dir,
+    ctx::{context_dir, ensure_host_config_context},
     util::{
         convert_error, default_timeout_ms, labels_vec_to_hashmap, validate_contract_id,
         CommandOutput, OutputKind,
@@ -1070,7 +1070,9 @@ async fn ctl_client_from_opts(
     let ctx = if let Some(context) = opts.context {
         Some(load_context(context)?)
     } else if let Ok(ctx_dir) = context_dir(None) {
-        Some(ContextDir::new(ctx_dir)?.load_default_context()?)
+        let ctx_dir = ContextDir::new(ctx_dir)?;
+        ensure_host_config_context(&ctx_dir)?;
+        Some(ctx_dir.load_default_context()?)
     } else {
         None
     };

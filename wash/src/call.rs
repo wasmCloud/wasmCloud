@@ -12,7 +12,7 @@ use wasmbus_rpc::{common::Message, core::WasmCloudEntity, rpc_client::RpcClient}
 use wasmcloud_test_util::testing::TestResults;
 
 use crate::{
-    ctx::context_dir,
+    ctx::{context_dir, ensure_host_config_context},
     util::{
         default_timeout_ms, extract_arg_value, json_str_to_msgpack_bytes, msgpack_to_json_val,
         nats_client_from_opts, CommandOutput, DEFAULT_LATTICE_PREFIX, DEFAULT_NATS_HOST,
@@ -235,7 +235,9 @@ async fn rpc_client_from_opts(
     let ctx = if let Some(context) = opts.context {
         Some(load_context(context)?)
     } else if let Ok(ctx_dir) = context_dir(None) {
-        Some(ContextDir::new(ctx_dir)?.load_default_context()?)
+        let ctx_dir = ContextDir::new(ctx_dir)?;
+        ensure_host_config_context(&ctx_dir)?;
+        Some(ctx_dir.load_default_context()?)
     } else {
         None
     };
