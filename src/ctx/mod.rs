@@ -126,7 +126,9 @@ fn handle_list(cmd: ListCommand) -> Result<CommandOutput> {
     let dir = ContextDir::new(context_dir(cmd.directory)?)?;
     ensure_host_config_context(&dir)?;
 
-    let default_context = dir.default_context()?;
+    let default_context = dir
+        .default_context()?
+        .unwrap_or_else(|| HOST_CONFIG_NAME.to_string());
     let contexts = dir.list_contexts()?;
 
     let text_contexts = contexts
@@ -251,17 +253,23 @@ fn handle_edit(cmd: EditCommand) -> Result<CommandOutput> {
 }
 
 /// Ensures the host config context exists
-fn ensure_host_config_context(context_dir: &ContextDir) -> Result<()> {
+pub(crate) fn ensure_host_config_context(context_dir: &ContextDir) -> Result<()> {
     create_host_config_context(context_dir)
 }
 
 /// Load the host configuration file and create a context called `host_config` from it
 fn create_host_config_context(context_dir: &ContextDir) -> Result<()> {
+    println!("My context dir is: {}", context_dir.display());
     let host_config_ctx = WashContext {
         name: HOST_CONFIG_NAME.to_string(),
-        ..load_context(cfg_dir()?.join(HOST_CONFIG_NAME))?
+        ..load_context(cfg_dir()?.join(format!("{}.json", HOST_CONFIG_NAME)))?
     };
-    context_dir.save_context(&host_config_ctx)
+    context_dir.save_context(&host_config_ctx)?;
+    // Set the default context if it isn't set yet
+    if context_dir.default_context()?.is_none() {
+        context_dir.set_default_context(HOST_CONFIG_NAME)?;
+    }
+    Ok(())
 }
 
 /// Given an optional supplied directory, determine the context directory either from the supplied
@@ -277,7 +285,9 @@ pub(crate) fn context_dir(cmd_dir: Option<PathBuf>) -> Result<PathBuf> {
 /// Prompts the user with the provided `contexts` choices and returns the user's response.
 /// This can be used to determine which context to delete, edit, or set as a default, for example
 fn select_context(dir: &ContextDir, prompt: &str) -> Result<Option<String>> {
-    let default = dir.default_context()?;
+    let default = dir
+        .default_context()?
+        .unwrap_or_else(|| HOST_CONFIG_NAME.to_string());
 
     let choices: Vec<String> = dir.list_contexts()?;
 

@@ -44,11 +44,9 @@ fn integration_up_can_start_wasmcloud_and_actor() {
             "--ctl-port",
             "5893",
         ])
-        .env("RUST_LOG", "debug")
         .output()
         .expect("could not start echo actor on new host");
 
-    println!("Output: {:?}", start_echo);
     assert!(output_to_string(start_echo)
         .expect("could not retrieve output from echo start")
         .contains("Actor wasmcloud.azurecr.io/echo:0.3.4 started on host N"));

@@ -23,9 +23,8 @@ pub const HOST_CONFIG_NAME: &str = "host_config";
 // NOTE(thomastaylor312): We may want to make this an async trait in the future since any other
 // implementation than the fs one will likely involve networking
 pub trait ContextManager {
-    /// Returns the name of the currently set default context. Should return a default context name
-    /// if none is set
-    fn default_context(&self) -> Result<String>;
+    /// Returns the name of the currently set default context.
+    fn default_context(&self) -> Result<Option<String>>;
 
     /// Sets the current default context to the given name. Should error if it doesn't exist
     fn set_default_context(&self, name: &str) -> Result<()>;

@@ -1,11 +1,5 @@
 use std::{collections::HashMap, path::PathBuf, time::Duration};
 
-use crate::{
-    appearance::spinner::Spinner,
-    ctl::ConnectionOpts,
-    ctx::context_dir,
-    util::{CommandOutput, OutputKind, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT},
-};
 use anyhow::{bail, Result};
 use async_nats::Client;
 use clap::{Args, Subcommand};
@@ -14,6 +8,13 @@ use serde_json::json;
 use wash_lib::context::{
     fs::{load_context, ContextDir},
     ContextManager,
+};
+
+use crate::{
+    appearance::spinner::Spinner,
+    ctl::ConnectionOpts,
+    ctx::{context_dir, ensure_host_config_context},
+    util::{CommandOutput, OutputKind, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT},
 };
 
 mod output;
@@ -345,7 +346,9 @@ async fn nats_client_from_opts(opts: ConnectionOpts) -> Result<(Client, Duration
     let ctx = if let Some(context) = opts.context {
         Some(load_context(context)?)
     } else if let Ok(ctx_dir) = context_dir(None) {
-        Some(ContextDir::new(ctx_dir)?.load_default_context()?)
+        let ctx_dir = ContextDir::new(ctx_dir)?;
+        ensure_host_config_context(&ctx_dir)?;
+        Some(ctx_dir.load_default_context()?)
     } else {
         None
     };
