@@ -74,12 +74,16 @@ impl ContextDir {
             .into_iter()
             .find(|p| p.file_stem().unwrap_or_default() == name))
     }
+
+    fn index_path(&self) -> PathBuf {
+        self.0.join(INDEX_JSON)
+    }
 }
 
 impl ContextManager for ContextDir {
     /// Returns the name of the currently set default context
     fn default_context(&self) -> Result<String> {
-        let raw = match std::fs::read(self.0.join(INDEX_JSON)) {
+        let raw = match std::fs::read(self.index_path()) {
             Ok(b) => b,
             Err(e) if matches!(e.kind(), std::io::ErrorKind::NotFound) => {
                 return Ok(HOST_CONFIG_NAME.to_string())
@@ -92,7 +96,7 @@ impl ContextManager for ContextDir {
 
     /// Sets the current default context to the given name. Will error if it doesn't exist
     fn set_default_context(&self, name: &str) -> Result<()> {
-        let file = File::create(self.0.join(INDEX_JSON))?;
+        let file = File::create(self.index_path())?;
         if !self
             .list_contexts()
             .map_err(|e| {
@@ -115,7 +119,17 @@ impl ContextManager for ContextDir {
 
     fn delete_context(&self, name: &str) -> Result<()> {
         let path = context_path_from_name(&self.0, name);
-        std::fs::remove_file(path).map_err(anyhow::Error::from)
+        std::fs::remove_file(path)?;
+        let current_context = match self.default_context() {
+            Ok(c) => c,
+            // This isn't an error we care about. If for some reason we fail, it is fine
+            Err(_) => return Ok(()),
+        };
+        if current_context == name {
+            // Once again, not the end of the world if this fails, so ignore the error
+            let _ = std::fs::remove_file(self.index_path());
+        }
+        Ok(())
     }
 
     /// Loads the currently set default context
@@ -329,6 +343,48 @@ mod test {
         assert!(
             ctx.name == "host_config" && ctx.ctl_port == 5893,
             "Should read the correct data from disk"
+        );
+    }
+
+    #[test]
+    fn delete_default_context() {
+        let tempdir = tempfile::tempdir().expect("Unable to create tempdir");
+        let ctx_dir = ContextDir::new(&tempdir).expect("Should be able to create context dir");
+
+        let mut ctx = WashContext {
+            name: "deleteme".to_string(),
+            ..Default::default()
+        };
+
+        ctx_dir
+            .save_context(&ctx)
+            .expect("Should be able to save a context to disk");
+        ctx.name = "keepme".to_string();
+        ctx_dir
+            .save_context(&ctx)
+            .expect("Should be able to save a context to disk");
+
+        ctx_dir
+            .set_default_context("deleteme")
+            .expect("Should be able to set default context");
+
+        assert_eq!(
+            tempdir.path().read_dir().unwrap().count(),
+            3,
+            "Directory should have 3 entries"
+        );
+
+        ctx_dir
+            .delete_context("deleteme")
+            .expect("Should be able to delete context");
+
+        assert!(
+            !tempdir
+                .path()
+                .read_dir()
+                .unwrap()
+                .any(|r| r.unwrap().path() == ctx_dir.index_path()),
+            "Index file should no longer exist"
         );
     }
 }
