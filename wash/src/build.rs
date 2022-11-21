@@ -245,13 +245,13 @@ mod test {
 
     #[test]
     fn test_build_comprehensive() {
-        let cmd: BuildCommand = Parser::try_parse_from(&["build", "--push"]).unwrap();
+        let cmd: BuildCommand = Parser::try_parse_from(["build", "--push"]).unwrap();
         assert!(cmd.push);
 
-        let cmd: BuildCommand = Parser::try_parse_from(&["build", "--no-sign"]).unwrap();
+        let cmd: BuildCommand = Parser::try_parse_from(["build", "--no-sign"]).unwrap();
         assert!(cmd.no_sign);
 
-        let cmd: BuildCommand = Parser::try_parse_from(&["build"]).unwrap();
+        let cmd: BuildCommand = Parser::try_parse_from(["build"]).unwrap();
         assert!(!cmd.push);
         assert!(!cmd.no_sign);
     }

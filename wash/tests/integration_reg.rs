@@ -18,7 +18,7 @@ fn integration_pull_basic() {
     let basic_echo = test_dir_file(SUBFOLDER, "basic_echo.wasm");
 
     let pull_basic = wash()
-        .args(&[
+        .args([
             "reg",
             "pull",
             ECHO_WASM,
@@ -44,7 +44,7 @@ fn integration_pull_comprehensive() {
     let comprehensive_logging = test_dir_file(SUBFOLDER, "comprehensive_logging.par.gz");
 
     let pull_echo_comprehensive = wash()
-        .args(&[
+        .args([
             "reg",
             "pull",
             ECHO_WASM,
@@ -66,7 +66,7 @@ fn integration_pull_comprehensive() {
     assert_eq!(output, expected_json);
 
     let pull_logging_comprehensive = wash()
-        .args(&[
+        .args([
             "reg",
             "pull",
             LOGGING_PAR,
@@ -99,7 +99,7 @@ fn integration_push_basic() {
 
     // Pull echo.wasm for push tests
     wash()
-        .args(&[
+        .args([
             "reg",
             "pull",
             ECHO_WASM,
@@ -113,7 +113,7 @@ fn integration_push_basic() {
     let echo_push_basic = &format!("{}/echo:pushbasic", LOCAL_REGISTRY);
     let localregistry_echo_wasm = test_dir_file(SUBFOLDER, "echo_local.wasm");
     let push_echo = wash()
-        .args(&[
+        .args([
             "reg",
             "push",
             echo_push_basic,
@@ -125,7 +125,7 @@ fn integration_push_basic() {
     assert!(push_echo.status.success());
 
     let pull_local_registry_echo = wash()
-        .args(&[
+        .args([
             "reg",
             "pull",
             echo_push_basic,
@@ -151,7 +151,7 @@ fn integration_push_comprehensive() {
 
     // Pull echo.wasm and logging.par.gz for push tests
     wash()
-        .args(&[
+        .args([
             "reg",
             "pull",
             ECHO_WASM,
@@ -161,7 +161,7 @@ fn integration_push_comprehensive() {
         .output()
         .unwrap_or_else(|_| panic!("failed to pull {} for push basic", ECHO_WASM));
     wash()
-        .args(&[
+        .args([
             "reg",
             "pull",
             LOGGING_PAR,
@@ -177,7 +177,7 @@ fn integration_push_comprehensive() {
 
     let logging_push_all_options = &format!("{}/logging:alloptions", LOCAL_REGISTRY);
     let push_all_options = wash()
-        .args(&[
+        .args([
             "reg",
             "push",
             logging_push_all_options,

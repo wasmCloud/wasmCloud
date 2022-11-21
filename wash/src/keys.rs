@@ -372,7 +372,7 @@ mod tests {
         ];
 
         key_gen_types.iter().for_each(|cmd| {
-            let gen_cmd: Cmd = clap::Parser::try_parse_from(&["keys", "gen", cmd]).unwrap();
+            let gen_cmd: Cmd = clap::Parser::try_parse_from(["keys", "gen", cmd]).unwrap();
             match gen_cmd.keys {
                 KeysCliCommand::GenCommand { keytype } => {
                     use KeyPairType::*;
@@ -391,7 +391,7 @@ mod tests {
         });
 
         key_gen_types.iter().for_each(|cmd| {
-            let gen_cmd: Cmd = clap::Parser::try_parse_from(&["keys", "gen", cmd]).unwrap();
+            let gen_cmd: Cmd = clap::Parser::try_parse_from(["keys", "gen", cmd]).unwrap();
             match gen_cmd.keys {
                 KeysCliCommand::GenCommand { keytype } => {
                     use KeyPairType::*;
@@ -416,8 +416,7 @@ mod tests {
         const KEYPATH: &str = "./tests/fixtures";
 
         let gen_basic: Cmd =
-            clap::Parser::try_parse_from(&["keys", "get", KEYNAME, "--directory", KEYPATH])
-                .unwrap();
+            clap::Parser::try_parse_from(["keys", "get", KEYNAME, "--directory", KEYPATH]).unwrap();
         match gen_basic.keys {
             KeysCliCommand::GetCommand { keyname, .. } => assert_eq!(keyname, KEYNAME),
             other_cmd => panic!("keys get generated other command {:?}", other_cmd),
@@ -433,7 +432,7 @@ mod tests {
         const KEYNAME: &str = "get_comprehensive_test.nk";
 
         let get_all_flags: Cmd =
-            clap::Parser::try_parse_from(&["keys", "get", KEYNAME, "-d", KEYPATH]).unwrap();
+            clap::Parser::try_parse_from(["keys", "get", KEYNAME, "-d", KEYPATH]).unwrap();
         match get_all_flags.keys {
             KeysCliCommand::GetCommand { keyname, directory } => {
                 assert_eq!(keyname, KEYNAME);
@@ -451,14 +450,14 @@ mod tests {
         const KEYPATH: &str = "./";
 
         let list_basic: Cmd =
-            clap::Parser::try_parse_from(&["keys", "list", "-d", KEYPATH]).unwrap();
+            clap::Parser::try_parse_from(["keys", "list", "-d", KEYPATH]).unwrap();
         match list_basic.keys {
             KeysCliCommand::ListCommand { .. } => (),
             other_cmd => panic!("keys get generated other command {:?}", other_cmd),
         }
 
         let list_all_flags: Cmd =
-            clap::Parser::try_parse_from(&["keys", "list", "-d", KEYPATH]).unwrap();
+            clap::Parser::try_parse_from(["keys", "list", "-d", KEYPATH]).unwrap();
         match list_all_flags.keys {
             KeysCliCommand::ListCommand { directory } => {
                 assert_eq!(directory, Some(PathBuf::from(KEYPATH)));

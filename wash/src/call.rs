@@ -333,7 +333,7 @@ mod test {
 
     #[test]
     fn test_rpc_comprehensive() -> Result<()> {
-        let call_all: Cmd = Parser::try_parse_from(&[
+        let call_all: Cmd = Parser::try_parse_from([
             "call",
             "--test",
             "--data",

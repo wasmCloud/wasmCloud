@@ -460,7 +460,7 @@ mod tests {
         // Not explicitly used, just a placeholder for a directory
         const TESTDIR: &str = "./tests/fixtures";
 
-        let up_all_flags: UpCommand = Parser::try_parse_from(&[
+        let up_all_flags: UpCommand = Parser::try_parse_from([
             "up",
             "--allow-latest",
             "--allowed-insecure",
