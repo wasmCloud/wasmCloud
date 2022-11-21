@@ -31,22 +31,22 @@ mod test {
     // Enumerates all options of drain subcommands to ensure
     // changes are not made to the drain API
     fn test_drain_comprehensive() {
-        let all: Cmd = Parser::try_parse_from(&["drain", "all"]).unwrap();
+        let all: Cmd = Parser::try_parse_from(["drain", "all"]).unwrap();
         match all.drain {
             Drain::All => {}
             _ => panic!("drain constructed incorrect command"),
         }
-        let lib: Cmd = Parser::try_parse_from(&["drain", "lib"]).unwrap();
+        let lib: Cmd = Parser::try_parse_from(["drain", "lib"]).unwrap();
         match lib.drain {
             Drain::Lib => {}
             _ => panic!("drain constructed incorrect command"),
         }
-        let oci: Cmd = Parser::try_parse_from(&["drain", "oci"]).unwrap();
+        let oci: Cmd = Parser::try_parse_from(["drain", "oci"]).unwrap();
         match oci.drain {
             Drain::Oci => {}
             _ => panic!("drain constructed incorrect command"),
         }
-        let smithy: Cmd = Parser::try_parse_from(&["drain", "smithy"]).unwrap();
+        let smithy: Cmd = Parser::try_parse_from(["drain", "smithy"]).unwrap();
         match smithy.drain {
             Drain::Smithy => {}
             _ => panic!("drain constructed incorrect command"),

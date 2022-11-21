@@ -34,7 +34,7 @@ fn integration_par_create(issuer: &str, subject: &str, archive: &str) {
     bin_file.write_all(b"01100010 01110100 01110111").unwrap();
 
     let create = wash()
-        .args(&[
+        .args([
             "par",
             "create",
             "-a",
@@ -69,7 +69,7 @@ fn integration_par_create(issuer: &str, subject: &str, archive: &str) {
     );
 
     let inspect_created = wash()
-        .args(&["par", "inspect", archive, "-o", "json"])
+        .args(["par", "inspect", archive, "-o", "json"])
         .output()
         .expect("failed to inspect created provider archive file");
     assert!(inspect_created.status.success());
@@ -106,7 +106,7 @@ fn integration_par_insert(issuer: &str, subject: &str, archive: &str) {
     bin2_file.write_all(b"01101001 01101111 01110011").unwrap();
 
     let insert_bin1 = wash()
-        .args(&[
+        .args([
             "par",
             "insert",
             archive,
@@ -132,7 +132,7 @@ fn integration_par_insert(issuer: &str, subject: &str, archive: &str) {
         )
     );
     let inspect_after_bin1 = wash()
-        .args(&["par", "inspect", archive, "-o", "json"])
+        .args(["par", "inspect", archive, "-o", "json"])
         .output()
         .expect("failed to inspect created provider archive file");
     assert!(inspect_after_bin1.status.success());
@@ -159,7 +159,7 @@ fn integration_par_insert(issuer: &str, subject: &str, archive: &str) {
     assert!(targets.contains(&"x86_64-linux".to_string()));
 
     let insert_bin2 = wash()
-        .args(&[
+        .args([
             "par",
             "insert",
             archive,
@@ -186,7 +186,7 @@ fn integration_par_insert(issuer: &str, subject: &str, archive: &str) {
     );
 
     let inspect_after_bin2 = wash()
-        .args(&["par", "inspect", archive, "-o", "json"])
+        .args(["par", "inspect", archive, "-o", "json"])
         .output()
         .expect("failed to inspect created provider archive file");
     assert!(inspect_after_bin2.status.success());
@@ -227,7 +227,7 @@ fn integration_par_inspect() {
     // Pull the echo module and push to local registry to test local inspect
     let local_http_client_path = test_dir_file(SUBFOLDER, "httpclient.wasm");
     let get_http_client = wash()
-        .args(&[
+        .args([
             "reg",
             "pull",
             HTTP_OCI,
@@ -238,7 +238,7 @@ fn integration_par_inspect() {
         .expect("failed to pull https server for par inspect test");
     assert!(get_http_client.status.success());
     let push_echo = wash()
-        .args(&[
+        .args([
             "reg",
             "push",
             "localhost:5000/httpclient:parinspect",
@@ -254,7 +254,7 @@ fn integration_par_inspect() {
     // This also allows tests to pass if information is _added_ but not if information is _omitted_
     // from the command output
     let local_inspect = wash()
-        .args(&[
+        .args([
             "par",
             "inspect",
             local_http_client_path.to_str().unwrap(),
@@ -273,7 +273,7 @@ fn integration_par_inspect() {
     assert_json_include!(actual: local_inspect_output, expected: inspect_expected);
 
     let local_reg_inspect = wash()
-        .args(&[
+        .args([
             "par",
             "inspect",
             "localhost:5000/httpclient:parinspect",
@@ -288,7 +288,7 @@ fn integration_par_inspect() {
     assert_json_include!(actual: local_reg_inspect_output, expected: inspect_expected);
 
     let remote_inspect = wash()
-        .args(&["par", "inspect", HTTP_OCI, "-o", "json"])
+        .args(["par", "inspect", HTTP_OCI, "-o", "json"])
         .output()
         .expect("failed to inspect local registry wasm");
     assert!(remote_inspect.status.success());
@@ -311,7 +311,7 @@ fn integration_par_inspect_cached() {
     http_client_cache_path.set_extension("bin");
 
     let get_http_client = wash()
-        .args(&[
+        .args([
             "reg",
             "pull",
             HTTP_OCI,
@@ -323,7 +323,7 @@ fn integration_par_inspect_cached() {
     assert!(get_http_client.status.success());
 
     let remote_inspect = wash()
-        .args(&["par", "inspect", HTTP_FAKE_OCI, "-o", "json"])
+        .args(["par", "inspect", HTTP_FAKE_OCI, "-o", "json"])
         .output()
         .expect("failed to inspect remote cached registry");
     assert!(remote_inspect.status.success());
@@ -336,7 +336,7 @@ fn integration_par_inspect_cached() {
     assert_json_include!(actual: remote_inspect_output, expected: expected_output);
 
     let remote_inspect_no_cache = wash()
-        .args(&["par", "inspect", HTTP_FAKE_OCI, "-o", "json", "--no-cache"])
+        .args(["par", "inspect", HTTP_FAKE_OCI, "-o", "json", "--no-cache"])
         .output()
         .expect("failed to inspect remote cached registry");
 
