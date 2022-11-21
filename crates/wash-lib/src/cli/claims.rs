@@ -1,32 +1,18 @@
-// Copyright 2015-2018 Capital One Services, LLC
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-use crate::{
-    keys::extract_keypair,
-    util::{CommandOutput, OutputKind},
-};
-use anyhow::{bail, Context, Result};
-use clap::{Args, Parser, Subcommand};
-use nkeys::{KeyPair, KeyPairType};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use serde_json::json;
 use std::{
     collections::HashMap,
     fs::{self, File},
     io::{Read, Write},
     path::PathBuf,
 };
+
+use crate::registry::OciPullOptions;
+
+use super::{extract_keypair, CommandOutput, OutputKind};
+use anyhow::{bail, Context, Result};
+use clap::{Args, Parser, Subcommand};
+use nkeys::{KeyPair, KeyPairType};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde_json::json;
 use term_table::{
     row::Row,
     table_cell::{Alignment, TableCell},
@@ -41,7 +27,7 @@ use wascap::{
 };
 
 #[derive(Debug, Clone, Subcommand)]
-pub(crate) enum ClaimsCliCommand {
+pub enum ClaimsCliCommand {
     /// Examine the capabilities of a WebAssembly module
     #[clap(name = "inspect")]
     Inspect(InspectCommand),
@@ -55,9 +41,9 @@ pub(crate) enum ClaimsCliCommand {
 }
 
 #[derive(Args, Debug, Clone)]
-pub(crate) struct InspectCommand {
+pub struct InspectCommand {
     /// Path to signed actor module or OCI URL of signed actor module
-    pub(crate) module: String,
+    pub module: String,
 
     /// Extract the raw JWT from the file and print to stdout
     #[clap(name = "jwt_only", long = "jwt-only")]
@@ -99,20 +85,20 @@ pub(crate) struct InspectCommand {
 }
 
 #[derive(Parser, Debug, Clone)]
-pub(crate) struct SignCommand {
+pub struct SignCommand {
     /// File to read
-    pub(crate) source: String,
+    pub source: String,
 
     /// Destination for signed module. If this flag is not provided, the signed module will be placed in the same directory as the source with a "_s" suffix
     #[clap(short = 'd', long = "destination")]
-    pub(crate) destination: Option<String>,
+    pub destination: Option<String>,
 
     #[clap(flatten)]
-    pub(crate) metadata: ActorMetadata,
+    pub metadata: ActorMetadata,
 }
 
 #[derive(Debug, Clone, Subcommand)]
-pub(crate) enum TokenCommand {
+pub enum TokenCommand {
     /// Generate a signed JWT for an actor module
     #[clap(name = "actor")]
     Actor(ActorMetadata),
@@ -147,7 +133,7 @@ pub struct GenerateCommon {
 }
 
 #[derive(Debug, Clone, Parser)]
-pub(crate) struct OperatorMetadata {
+pub struct OperatorMetadata {
     /// A descriptive name for the operator
     #[clap(short = 'n', long = "name")]
     name: String,
@@ -171,7 +157,7 @@ pub(crate) struct OperatorMetadata {
 }
 
 #[derive(Debug, Clone, Parser)]
-pub(crate) struct AccountMetadata {
+pub struct AccountMetadata {
     /// A descriptive name for the account
     #[clap(short = 'n', long = "name")]
     name: String,
@@ -204,7 +190,7 @@ pub(crate) struct AccountMetadata {
 }
 
 #[derive(Debug, Clone, Parser)]
-pub(crate) struct ProviderMetadata {
+pub struct ProviderMetadata {
     /// A descriptive name for the provider
     #[clap(short = 'n', long = "name")]
     name: String,
@@ -248,7 +234,7 @@ pub(crate) struct ProviderMetadata {
 }
 
 #[derive(Parser, Debug, Clone, Serialize, Deserialize, Default)]
-pub(crate) struct ActorMetadata {
+pub struct ActorMetadata {
     /// Enable the Key/Value Store standard capability
     #[clap(short = 'k', long = "keyvalue")]
     pub keyvalue: bool,
@@ -317,7 +303,7 @@ pub(crate) struct ActorMetadata {
     pub common: GenerateCommon,
 }
 
-pub(crate) async fn handle_command(
+pub async fn handle_command(
     command: ClaimsCliCommand,
     output_kind: OutputKind,
 ) -> Result<CommandOutput> {
@@ -540,7 +526,7 @@ fn generate_provider(provider: ProviderMetadata, output_kind: OutputKind) -> Res
     Ok(CommandOutput::from_key_and_text("token", jwt))
 }
 
-pub(crate) fn sign_file(cmd: SignCommand, output_kind: OutputKind) -> Result<CommandOutput> {
+pub fn sign_file(cmd: SignCommand, output_kind: OutputKind) -> Result<CommandOutput> {
     let mut sfile = File::open(&cmd.source)
         .with_context(|| format!("Failed to open file for signing '{}'", &cmd.source))?;
     let mut buf = Vec::new();
@@ -651,15 +637,18 @@ pub(crate) fn sign_file(cmd: SignCommand, output_kind: OutputKind) -> Result<Com
     Ok(output)
 }
 
-async fn get_caps(cmd: &InspectCommand) -> Result<Option<Token<Actor>>> {
-    let artifact_bytes = crate::reg::get_artifact(
-        cmd.module.to_string(),
-        cmd.digest.clone(),
-        cmd.allow_latest,
-        cmd.user.clone(),
-        cmd.password.clone(),
-        cmd.insecure,
-        cmd.no_cache,
+async fn get_caps(cmd: InspectCommand) -> Result<Option<Token<Actor>>> {
+    let cache_path = (!cmd.no_cache).then(|| super::cached_oci_file(&cmd.module));
+    let artifact_bytes = crate::registry::get_oci_artifact(
+        cmd.module,
+        cache_path,
+        OciPullOptions {
+            digest: cmd.digest,
+            allow_latest: cmd.allow_latest,
+            user: cmd.user,
+            password: cmd.password,
+            insecure: cmd.insecure,
+        },
     )
     .await?;
 
@@ -668,18 +657,20 @@ async fn get_caps(cmd: &InspectCommand) -> Result<Option<Token<Actor>>> {
 }
 
 async fn render_caps(cmd: InspectCommand) -> Result<CommandOutput> {
-    let caps = get_caps(&cmd).await?;
+    let module_name = cmd.module.clone();
+    let jwt_only = cmd.jwt_only;
+    let caps = get_caps(cmd).await?;
 
     let out = match caps {
         Some(token) => {
-            if cmd.jwt_only {
+            if jwt_only {
                 CommandOutput::from_key_and_text("token", token.jwt)
             } else {
                 let validation = wascap::jwt::validate_token::<Actor>(&token.jwt)?;
                 render_actor_claims(token.claims, validation)
             }
         }
-        None => bail!("No capabilities discovered in : {}", &cmd.module),
+        None => bail!("No capabilities discovered in : {}", module_name),
     };
     Ok(out)
 }
@@ -801,7 +792,7 @@ where
     T: serde::Serialize + DeserializeOwned + WascapEntity,
 {
     let mut table = Table::new();
-    crate::util::configure_table_style(&mut table);
+    super::configure_table_style(&mut table);
 
     let headline = format!("{} - {}", claims.name(), token_label(&claims.subject));
     table.add_row(Row::new(vec![TableCell::new_with_alignment(

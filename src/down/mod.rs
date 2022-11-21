@@ -7,12 +7,12 @@ use anyhow::Result;
 use clap::Parser;
 use serde_json::json;
 use tokio::process::Command;
+use wash_lib::cli::{CommandOutput, OutputKind};
+use wash_lib::start::*;
 
 use crate::appearance::spinner::Spinner;
 use crate::cfg::cfg_dir;
 use crate::up::DOWNLOADS_DIR;
-use crate::util::{CommandOutput, OutputKind};
-use wash_lib::start::*;
 
 #[derive(Parser, Debug, Clone)]
 pub(crate) struct DownCommand {}

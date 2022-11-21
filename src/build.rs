@@ -1,15 +1,16 @@
 use std::{collections::HashMap, fs, path::PathBuf, process};
 
-use crate::{
-    claims::{sign_file, ActorMetadata, SignCommand},
-    util::{CommandOutput, OutputKind},
-};
 use anyhow::{anyhow, bail, Result};
 use clap::Parser;
 use serde_json::json;
 use wash_lib::parser::{
     ActorConfig, CommonConfig, InterfaceConfig, LanguageConfig, ProviderConfig, RustConfig,
     TinyGoConfig, TypeConfig,
+};
+
+use wash_lib::cli::{
+    claims::{sign_file, ActorMetadata, SignCommand},
+    CommandOutput, OutputKind,
 };
 
 /// Build (and sign) a wasmCloud actor, provider, or interface

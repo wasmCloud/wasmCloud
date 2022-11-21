@@ -3,10 +3,11 @@ use std::collections::HashMap;
 use anyhow::{bail, Result};
 use serde_json::json;
 use term_table::{row::Row, table_cell::*, Table};
+use wash_lib::cli::CommandOutput;
 use wash_lib::id::{ModuleId, ServiceId};
 use wasmcloud_control_interface::*;
 
-use crate::util::{format_optional, CommandOutput};
+use crate::util::format_optional;
 
 pub(crate) fn get_hosts_output(hosts: Vec<Host>) -> CommandOutput {
     let mut map = HashMap::new();

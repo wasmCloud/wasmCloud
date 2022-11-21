@@ -1,18 +1,12 @@
 use std::{collections::HashMap, path::PathBuf};
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use clap::Subcommand;
 use nkeys::{KeyPair, KeyPairType};
 use serde_json::json;
-use wash_lib::keys::{
-    fs::{read_key, KeyDir},
-    KeyManager,
-};
-
-use crate::{
-    cfg::cfg_dir,
-    util::{CommandOutput, OutputKind},
-};
+use wash_lib::cli::CommandOutput;
+use wash_lib::config::cfg_dir;
+use wash_lib::keys::{fs::KeyDir, KeyManager};
 
 const NKEYS_EXTENSION: &str = ".nk";
 
@@ -112,95 +106,6 @@ fn determine_directory(directory: Option<PathBuf>) -> Result<PathBuf> {
     } else {
         let d = cfg_dir()?.join("keys");
         Ok(d)
-    }
-}
-
-/// Helper function to locate and extract keypair from user input
-/// Returns a tuple of the keypair and optional autogenerate message
-pub(crate) fn extract_keypair(
-    input: Option<String>,
-    module_path: Option<String>,
-    directory: Option<PathBuf>,
-    keygen_type: KeyPairType,
-    disable_keygen: bool,
-    output_kind: OutputKind,
-) -> Result<KeyPair> {
-    if let Some(input_str) = input {
-        match read_key(&input_str) {
-            // User provided file path to seed as argument
-            Ok(k) => Ok(k),
-            // User provided seed as an argument
-            Err(e) if matches!(e.kind(), std::io::ErrorKind::NotFound) => {
-                KeyPair::from_seed(&input_str).map_err(anyhow::Error::from)
-            }
-            // There was an actual error reading the file
-            Err(e) => Err(e.into()),
-        }
-    } else if let Some(module) = module_path {
-        // No seed value provided, attempting to source from provided or default directory
-        let key_dir = KeyDir::new(determine_directory(directory)?)?;
-        // Account key should be re-used, and will attempt to generate based on the terminal USER
-        let module_name = match keygen_type {
-            KeyPairType::Account => std::env::var("USER").unwrap_or_else(|_| "user".to_string()),
-            _ => PathBuf::from(module)
-                .file_stem()
-                .unwrap()
-                .to_str()
-                .unwrap()
-                .to_string(),
-        };
-        let keyname = format!(
-            "{}_{}",
-            module_name,
-            keypair_type_to_string(keygen_type.clone())
-        );
-        let path = key_dir.join(format!("{}{}", keyname, NKEYS_EXTENSION));
-        match key_dir.get(&keyname)? {
-            // Default key found
-            Some(k) => Ok(k),
-            // No default key, generating for user
-            None if !disable_keygen => {
-                match output_kind {
-                    OutputKind::Text => println!(
-                        "No keypair found in \"{}\".
-                    We will generate one for you and place it there.
-                    If you'd like to use alternative keys, you can supply them as a flag.\n",
-                        path.display()
-                    ),
-                    OutputKind::Json => {
-                        println!(
-                            "{}",
-                            json!({"status": "No keypair found", "path": path, "keygen": "true"})
-                        )
-                    }
-                }
-
-                let kp = KeyPair::new(keygen_type);
-                key_dir.save(&keyname, &kp)?;
-                Ok(kp)
-            }
-            None => {
-                bail!(
-                    "No keypair found in {}, please ensure key exists or supply one as a flag",
-                    path.display()
-                );
-            }
-        }
-    } else {
-        bail!("Keypair path or string not supplied. Ensure provided keypair is valid");
-    }
-}
-
-fn keypair_type_to_string(keypair_type: KeyPairType) -> String {
-    use KeyPairType::*;
-    match keypair_type {
-        Account => "account".to_string(),
-        Cluster => "cluster".to_string(),
-        Service => "service".to_string(),
-        Module => "module".to_string(),
-        Server => "server".to_string(),
-        Operator => "operator".to_string(),
-        User => "user".to_string(),
     }
 }
 

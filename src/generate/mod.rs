@@ -3,6 +3,12 @@
 //! This module contains code for `wash new ...` commands
 //! to creating a new project from a template.
 //!
+use std::{
+    borrow::Borrow,
+    fmt, fs,
+    path::{Path, PathBuf},
+};
+
 use anyhow::{anyhow, Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
 use config::{Config, CONFIG_FILE_NAME};
@@ -10,16 +16,12 @@ use console::style;
 use indicatif::MultiProgress;
 use project_variables::*;
 use serde::Serialize;
-use std::{
-    borrow::Borrow,
-    fmt, fs,
-    path::{Path, PathBuf},
-};
 use tempfile::TempDir;
 use tokio::process::Command;
+use wash_lib::cli::CommandOutput;
 use weld_codegen::render::Renderer;
 
-use crate::{appearance::emoji, util::CommandOutput};
+use crate::appearance::emoji;
 
 mod config;
 mod favorites;

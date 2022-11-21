@@ -4,7 +4,6 @@ use anyhow::Result;
 use app::AppCliCommand;
 use build::BuildCommand;
 use call::CallCli;
-use claims::ClaimsCliCommand;
 use clap::{Parser, Subcommand};
 use ctl::CtlCliCommand;
 use ctx::CtxCommand;
@@ -16,17 +15,15 @@ use reg::RegCliCommand;
 use serde_json::json;
 use smithy::{GenerateCli, LintCli, ValidateCli};
 use up::UpCommand;
-use util::CommandOutput;
+use wash_lib::cli::claims::ClaimsCliCommand;
+use wash_lib::cli::{CommandOutput, OutputKind};
 use wash_lib::drain::Drain as DrainSelection;
-
-use crate::util::OutputKind;
 
 mod app;
 mod appearance;
 mod build;
 mod call;
 mod cfg;
-mod claims;
 mod ctl;
 mod ctx;
 mod down;
@@ -132,7 +129,9 @@ async fn main() {
         CliCommand::App(app_cli) => app::handle_command(app_cli, output_kind).await,
         CliCommand::Build(build_cli) => build::handle_command(build_cli, output_kind),
         CliCommand::Call(call_cli) => call::handle_command(call_cli.command()).await,
-        CliCommand::Claims(claims_cli) => claims::handle_command(claims_cli, output_kind).await,
+        CliCommand::Claims(claims_cli) => {
+            wash_lib::cli::claims::handle_command(claims_cli, output_kind).await
+        }
         CliCommand::Ctl(ctl_cli) => ctl::handle_command(ctl_cli, output_kind).await,
         CliCommand::Ctx(ctx_cli) => ctx::handle_command(ctx_cli).await,
         CliCommand::Down(down_cli) => down::handle_command(down_cli, output_kind).await,
