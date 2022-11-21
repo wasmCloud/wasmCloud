@@ -537,13 +537,13 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.0.18"
+version = "4.0.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "335867764ed2de42325fafe6d18b8af74ba97ee0c590fa016f157535b42ab04b"
+checksum = "2148adefda54e14492fb9bddcc600b4344c5d1a3123bd666dcb939c6f0e0e57e"
 dependencies = [
  "atty",
  "bitflags",
- "clap_derive 4.0.18",
+ "clap_derive 4.0.21",
  "clap_lex 0.3.0",
  "once_cell",
  "strsim 0.10.0",
@@ -565,9 +565,9 @@ dependencies = [
 
 [[package]]
 name = "clap_derive"
-version = "4.0.18"
+version = "4.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "16a1b0f6422af32d5da0c58e2703320f379216ee70198241c84173a8c5ac28f3"
+checksum = "0177313f9f02afc995627906bbd8967e2be069f5261954222dac78290c2b9014"
 dependencies = [
  "heck 0.4.0",
  "proc-macro-error",
@@ -3961,7 +3961,7 @@ dependencies = [
  "atelier_core 0.2.22",
  "bytes",
  "cargo_atelier",
- "clap 4.0.18",
+ "clap 4.0.26",
  "cloudevents-sdk",
  "cmd_lib",
  "console",
@@ -4018,24 +4018,28 @@ dependencies = [
  "anyhow",
  "async-compression",
  "claims",
- "clap 4.0.18",
+ "clap 4.0.26",
  "command-group",
  "config",
  "dirs",
  "futures 0.3.25",
  "log",
  "nkeys",
+ "oci-distribution",
+ "provider-archive",
  "reqwest",
  "semver",
  "serde",
  "serde_json",
  "serde_with",
  "tempfile",
+ "term-table",
  "test-case",
  "thiserror",
  "tokio",
  "tokio-stream",
  "tokio-tar",
+ "wascap",
  "weld-codegen",
 ]
 
