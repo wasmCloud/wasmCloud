@@ -28,6 +28,7 @@ config = { version = "0.13.1", features = ["toml"], optional = true }
 dirs = "4.0"
 futures = "0.3"
 log = "0.4"
+nkeys = "0.2.0"
 reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls", "stream"] }
 semver = { version = "1.0.12", features = ["serde"], optional = true }
 serde = { version = "1", features = ["derive"], optional = true }

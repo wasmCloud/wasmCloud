@@ -1,18 +1,20 @@
-use crate::{
-    cfg::cfg_dir,
-    util::{set_permissions_keys, CommandOutput, OutputKind},
-};
-use anyhow::{bail, Context, Result};
+use std::{collections::HashMap, path::PathBuf};
+
+use anyhow::{bail, Result};
 use clap::Subcommand;
 use nkeys::{KeyPair, KeyPairType};
 use serde_json::json;
-use std::{
-    collections::HashMap,
-    fs,
-    fs::File,
-    io::prelude::*,
-    path::{Path, PathBuf},
+use wash_lib::keys::{
+    fs::{read_key, KeyDir},
+    KeyManager,
 };
+
+use crate::{
+    cfg::cfg_dir,
+    util::{CommandOutput, OutputKind},
+};
+
+const NKEYS_EXTENSION: &str = ".nk";
 
 #[derive(Debug, Clone, Subcommand)]
 #[allow(clippy::enum_variant_names)]
@@ -77,40 +79,27 @@ pub(crate) fn generate(kt: &KeyPairType) -> Result<CommandOutput> {
 
 /// Retrieves a keypair by name in a specified directory, or $WASH_KEYS ($HOME/.wash/keys) if directory is not specified
 pub(crate) fn get(keyname: &str, directory: Option<PathBuf>) -> Result<CommandOutput> {
-    let keyfile = determine_directory(directory)?.join(keyname);
-    let mut f = File::open(&keyfile)
-        .with_context(|| format!("Please ensure {} exists.", keyfile.display()))?;
+    let key_dir = KeyDir::new(determine_directory(directory)?)?;
+    // Trim off the ".nk" for backwards compat
+    let key = key_dir
+        .get(keyname.trim_end_matches(NKEYS_EXTENSION))?
+        .ok_or_else(|| anyhow::anyhow!("Key {} doesn't exist", keyname))?;
 
-    let mut s = String::new();
-    let seed = match f.read_to_string(&mut s) {
-        Ok(_) => Ok(s),
-        Err(e) => Err(e),
-    }?;
-
-    Ok(CommandOutput::from_key_and_text("seed", seed.trim()))
+    Ok(CommandOutput::from_key_and_text("seed", key.seed()?))
 }
 
 /// Lists all keypairs (file extension .nk) in a specified directory or $WASH_KEYS($HOME/.wash/keys) if directory is not specified
 pub(crate) fn list(directory: Option<PathBuf>) -> Result<CommandOutput> {
-    let dir = determine_directory(directory)?;
+    let key_dir = KeyDir::new(determine_directory(directory)?)?;
 
-    let mut keys = vec![];
-    let paths = fs::read_dir(dir.clone())
-        .with_context(|| format!("please ensure directory {} exists", dir.display()))?;
-
-    for path in paths {
-        let f = String::from(path.unwrap().file_name().to_str().unwrap());
-        if f.ends_with(".nk") {
-            keys.push(f);
-        }
-    }
+    let keys = key_dir.list_names()?;
 
     let mut map = HashMap::new();
     map.insert("keys".to_string(), json!(keys));
     Ok(CommandOutput::new(
         format!(
             "====== Keys found in {} ======\n{}",
-            dir.display(),
+            key_dir.display(),
             keys.join("\n")
         ),
         map,
@@ -136,20 +125,20 @@ pub(crate) fn extract_keypair(
     disable_keygen: bool,
     output_kind: OutputKind,
 ) -> Result<KeyPair> {
-    let seed = if let Some(input_str) = input {
-        match File::open(input_str.clone()) {
+    if let Some(input_str) = input {
+        match read_key(&input_str) {
             // User provided file path to seed as argument
-            Ok(mut f) => {
-                let mut s = String::new();
-                f.read_to_string(&mut s)?;
-                s
-            }
+            Ok(k) => Ok(k),
             // User provided seed as an argument
-            Err(_e) => input_str,
+            Err(e) if matches!(e.kind(), std::io::ErrorKind::NotFound) => {
+                KeyPair::from_seed(&input_str).map_err(anyhow::Error::from)
+            }
+            // There was an actual error reading the file
+            Err(e) => Err(e.into()),
         }
     } else if let Some(module) = module_path {
         // No seed value provided, attempting to source from provided or default directory
-        let dir = determine_directory(directory)?;
+        let key_dir = KeyDir::new(determine_directory(directory)?)?;
         // Account key should be re-used, and will attempt to generate based on the terminal USER
         let module_name = match keygen_type {
             KeyPairType::Account => std::env::var("USER").unwrap_or_else(|_| "user".to_string()),
@@ -160,20 +149,17 @@ pub(crate) fn extract_keypair(
                 .unwrap()
                 .to_string(),
         };
-        let path = dir.join(format!(
-            "{}_{}.nk",
+        let keyname = format!(
+            "{}_{}",
             module_name,
             keypair_type_to_string(keygen_type.clone())
-        ));
-        match File::open(path.clone()) {
+        );
+        let path = key_dir.join(format!("{}{}", keyname, NKEYS_EXTENSION));
+        match key_dir.get(&keyname)? {
             // Default key found
-            Ok(mut f) => {
-                let mut s = String::new();
-                f.read_to_string(&mut s)?;
-                s
-            }
+            Some(k) => Ok(k),
             // No default key, generating for user
-            Err(_e) if !disable_keygen => {
+            None if !disable_keygen => {
                 match output_kind {
                     OutputKind::Text => println!(
                         "No keypair found in \"{}\".
@@ -190,16 +176,10 @@ pub(crate) fn extract_keypair(
                 }
 
                 let kp = KeyPair::new(keygen_type);
-                let seed = kp.seed()?;
-                let key_path = Path::new(&path).parent().unwrap();
-                fs::create_dir_all(key_path)?;
-                set_permissions_keys(key_path)?;
-                let mut f = File::create(path.clone())?;
-                f.write_all(seed.as_bytes())?;
-                set_permissions_keys(&path)?;
-                seed
+                key_dir.save(&keyname, &kp)?;
+                Ok(kp)
             }
-            _ => {
+            None => {
                 bail!(
                     "No keypair found in {}, please ensure key exists or supply one as a flag",
                     path.display()
@@ -208,9 +188,7 @@ pub(crate) fn extract_keypair(
         }
     } else {
         bail!("Keypair path or string not supplied. Ensure provided keypair is valid");
-    };
-
-    Ok(KeyPair::from_seed(&seed)?)
+    }
 }
 
 fn keypair_type_to_string(keypair_type: KeyPairType) -> String {

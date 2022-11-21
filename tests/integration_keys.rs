@@ -49,7 +49,7 @@ fn integration_keys_gen_comprehensive() {
 
 #[test]
 fn integration_keys_get_basic() {
-    const KEYCONTENTS: &[u8] = b"SMAGCRMDVSCIK5TGBAESKJUTWNJKCRRWJK5FQXQZ2POTYWA3JSS63HILFU";
+    const KEYCONTENTS: &[u8] = b"SMAAGJ4DY4FNV4VJWA6QU7UQIL7DKJR4Z3UH7NBMNTH22V6VEIJGJUBQN4";
     const KEYNAME: &str = "keys_get_basic.nk";
     const TESTDIR: &str = "integration_get_basic";
 
@@ -79,7 +79,7 @@ fn integration_keys_get_basic() {
 
 #[test]
 fn integration_keys_get_comprehensive() {
-    const KEYCONTENTS: &[u8] = b"SMAGCRMDVSCKDLSJBAESKJUTWNJKCRRWJK5FQXQZ2POTYWA3JSS63HILFU";
+    const KEYCONTENTS: &[u8] = b"SMAAGJ4DY4FNV4VJWA6QU7UQIL7DKJR4Z3UH7NBMNTH22V6VEIJGJUBQN4";
     const KEYNAME: &str = "keys_get_comprehensive.nk";
     const TESTDIR: &str = "integration_get_comprehensive";
 
@@ -112,18 +112,18 @@ fn integration_keys_get_comprehensive() {
 
 #[test]
 fn integration_list_comprehensive() {
-    const KEYONE: &str = "listcomprehensive_test_keyone.nk";
-    const KEYTWO: &str = "listcomprehensive_test_keytwo.nk";
-    const KEYTHREE: &str = "listcomprehensive_test_keythree.nk";
-    const KEYONECONTENTS: &[u8] = b"SMAGCRMDVSCKDLSJBAESKJUTWNJKCRRWJK5FQXQZ2POTYWA3JSS63HILFU";
-    const KEYTWOCONTENTS: &[u8] = b"SMAGCRMDVSCKDLSJBAESKJUTWNJKCRRWJK5FQXQZ2POTYWA3JSS63HILFU";
-    const KEYTHREECONTENTS: &[u8] = b"SMAGCRMDVSCKDLSJBAESKJUTWNJKCRRWJK5FQXQZ2POTYWA3JSS63HILFU";
+    const KEYONE: &str = "listcomprehensive_test_keyone";
+    const KEYTWO: &str = "listcomprehensive_test_keytwo";
+    const KEYTHREE: &str = "listcomprehensive_test_keythree";
+    const KEYONECONTENTS: &[u8] = b"SMAPZS3ZZB5IEVTFKIYVMHTQ7GWTA6K5DC47LRVVWQW2WXRRUISA63Q2DA";
+    const KEYTWOCONTENTS: &[u8] = b"SMACCDXTF7C4Q4AV7UU2U7J6PRLDQ4DTSVJNATO53RDIQCIZQ2JSLGYQRI";
+    const KEYTHREECONTENTS: &[u8] = b"SMANLG7XYYUWLMZSNHG2I7XWFS67RDRRDV632XCUKD4W6IQEJ33HAG6P74";
     const TESTDIR: &str = "integration_list_comprehensive";
 
     let list_comprehensive_dir = test_dir_with_subfolder(TESTDIR);
-    let keyonefile = test_dir_file(TESTDIR, KEYONE);
-    let keytwofile = test_dir_file(TESTDIR, KEYTWO);
-    let keythreefile = test_dir_file(TESTDIR, KEYTHREE);
+    let keyonefile = test_dir_file(TESTDIR, &format!("{}.nk", KEYONE));
+    let keytwofile = test_dir_file(TESTDIR, &format!("{}.nk", KEYTWO));
+    let keythreefile = test_dir_file(TESTDIR, &format!("{}.nk", KEYTHREE));
 
     let mut file = File::create(keyonefile).unwrap();
     file.write_all(KEYONECONTENTS).unwrap();
