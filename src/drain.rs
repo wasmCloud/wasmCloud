@@ -2,9 +2,8 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 use serde_json::json;
+use wash_lib::cli::CommandOutput;
 use wash_lib::drain::Drain;
-
-use crate::util::CommandOutput;
 
 pub(crate) fn handle_command(cmd: Drain) -> Result<CommandOutput> {
     let paths = cmd.drain()?;

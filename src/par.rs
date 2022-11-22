@@ -1,15 +1,17 @@
-extern crate provider_archive;
-use crate::{
-    keys::extract_keypair,
-    util::{self, convert_error, CommandOutput, OutputKind},
-};
+use std::{collections::HashMap, fs::File, io::prelude::*, path::PathBuf};
+
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand};
 use nkeys::KeyPairType;
 use provider_archive::*;
 use serde_json::json;
-use std::{collections::HashMap, fs::File, io::prelude::*, path::PathBuf};
 use term_table::{row::Row, table_cell::*, Table};
+use wash_lib::{
+    cli::{cached_oci_file, extract_keypair, CommandOutput, OutputKind},
+    registry::OciPullOptions,
+};
+
+use crate::util::{self, convert_error};
 
 const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
 
@@ -264,14 +266,17 @@ pub(crate) async fn handle_create(
 
 /// Loads a provider archive and outputs the contents of the claims
 pub(crate) async fn handle_inspect(cmd: InspectCommand) -> Result<CommandOutput> {
-    let artifact_bytes = crate::reg::get_artifact(
+    let cache_file = (!cmd.no_cache).then(|| cached_oci_file(&cmd.archive));
+    let artifact_bytes = wash_lib::registry::get_oci_artifact(
         cmd.archive,
-        cmd.digest,
-        cmd.allow_latest,
-        cmd.user,
-        cmd.password,
-        cmd.insecure,
-        cmd.no_cache,
+        cache_file,
+        OciPullOptions {
+            digest: cmd.digest,
+            allow_latest: cmd.allow_latest,
+            user: cmd.user,
+            password: cmd.password,
+            insecure: cmd.insecure,
+        },
     )
     .await?;
     let artifact = ProviderArchive::try_load(&artifact_bytes)

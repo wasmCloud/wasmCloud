@@ -5,6 +5,8 @@ use async_nats::Client;
 use clap::{Args, Subcommand};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use wash_lib::cli::{CommandOutput, OutputKind};
+use wash_lib::config::{DEFAULT_NATS_HOST, DEFAULT_NATS_PORT};
 use wash_lib::context::{
     fs::{load_context, ContextDir},
     ContextManager,
@@ -14,7 +16,6 @@ use crate::{
     appearance::spinner::Spinner,
     ctl::ConnectionOpts,
     ctx::{context_dir, ensure_host_config_context},
-    util::{CommandOutput, OutputKind, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT},
 };
 
 mod output;

@@ -6,6 +6,7 @@ use std::{
 use anyhow::{bail, Result};
 use clap::{Args, Parser, Subcommand};
 use wash_lib::{
+    cli::{labels_vec_to_hashmap, CommandOutput, OutputKind},
     config::{
         DEFAULT_LATTICE_PREFIX, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT, DEFAULT_NATS_TIMEOUT_MS,
         DEFAULT_START_ACTOR_TIMEOUT_MS, DEFAULT_START_PROVIDER_TIMEOUT_MS,
@@ -25,10 +26,7 @@ use crate::{
     appearance::spinner::Spinner,
     ctl::manifest::HostManifest,
     ctx::{context_dir, ensure_host_config_context},
-    util::{
-        convert_error, default_timeout_ms, labels_vec_to_hashmap, validate_contract_id,
-        CommandOutput, OutputKind,
-    },
+    util::{convert_error, default_timeout_ms, validate_contract_id},
 };
 pub(crate) use output::*;
 use wait::{
