@@ -296,24 +296,6 @@ pub fn validate_contract_id(contract_id: &str) -> Result<()> {
     }
 }
 
-#[cfg(all(unix))]
-/// Set file and folder permissions for keys.
-pub(crate) fn set_permissions_keys(path: &std::path::Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-
-    let metadata = path.metadata()?;
-    match metadata.file_type().is_dir() {
-        true => std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?,
-        false => std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?,
-    };
-    Ok(())
-}
-
-#[cfg(target_os = "windows")]
-pub(crate) fn set_permissions_keys(_path: &std::path::Path) -> Result<()> {
-    Ok(())
-}
-
 mod test {
     #[test]
     fn test_safe_base64_parse_option() {

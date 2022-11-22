@@ -4024,6 +4024,7 @@ dependencies = [
  "dirs",
  "futures 0.3.25",
  "log",
+ "nkeys",
  "reqwest",
  "semver",
  "serde",
