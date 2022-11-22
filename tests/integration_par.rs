@@ -62,6 +62,7 @@ fn integration_par_create(issuer: &str, subject: &str, archive: &str) {
         ])
         .output()
         .expect("failed to create provider archive file");
+
     assert!(create.status.success());
     assert_eq!(
         output_to_string(create).unwrap(),
