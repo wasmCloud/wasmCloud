@@ -9,8 +9,12 @@ pub mod start;
 #[cfg(feature = "parser")]
 pub mod parser;
 
+#[cfg(feature = "cli")]
+pub mod cli;
+
 pub mod config;
 pub mod context;
 pub mod drain;
 pub mod id;
 pub mod keys;
+pub mod registry;

@@ -1,15 +1,18 @@
 //! smithy model lint and validation
 //!
-use crate::{appearance::emoji, util::CommandOutput};
+use std::path::PathBuf;
+
 use anyhow::{anyhow, bail, Result};
 use atelier_core::model::Model;
 use clap::Parser;
 use console::style;
-use std::path::PathBuf;
+use wash_lib::cli::CommandOutput;
 use weld_codegen::{
     config::{CodegenConfig, ModelSource, OutputLanguage},
     sources_to_model,
 };
+
+use crate::appearance::emoji;
 
 type TomlValue = toml::Value;
 const CODEGEN_CONFIG_FILE: &str = "codegen.toml";

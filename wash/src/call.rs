@@ -3,6 +3,8 @@ use std::{collections::HashMap, path::PathBuf, time::Duration};
 use anyhow::{bail, Context, Result};
 use clap::Args;
 use log::{debug, error};
+use wash_lib::cli::CommandOutput;
+use wash_lib::config::{DEFAULT_LATTICE_PREFIX, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT};
 use wash_lib::context::{
     fs::{load_context, ContextDir},
     ContextManager,
@@ -15,8 +17,7 @@ use crate::{
     ctx::{context_dir, ensure_host_config_context},
     util::{
         default_timeout_ms, extract_arg_value, json_str_to_msgpack_bytes, msgpack_to_json_val,
-        nats_client_from_opts, CommandOutput, DEFAULT_LATTICE_PREFIX, DEFAULT_NATS_HOST,
-        DEFAULT_NATS_PORT,
+        nats_client_from_opts,
     },
 };
 

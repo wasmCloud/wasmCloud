@@ -10,6 +10,7 @@ use clap::{Args, Subcommand};
 use log::warn;
 use serde_json::json;
 use wash_lib::{
+    cli::CommandOutput,
     config::{
         cfg_dir, DEFAULT_LATTICE_PREFIX, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT,
         DEFAULT_NATS_TIMEOUT_MS,
@@ -21,12 +22,9 @@ use wash_lib::{
     id::ClusterSeed,
 };
 
-use crate::{
-    generate::{
-        interactive::{prompt_for_choice, user_question},
-        project_variables::StringEntry,
-    },
-    util::CommandOutput,
+use crate::generate::{
+    interactive::{prompt_for_choice, user_question},
+    project_variables::StringEntry,
 };
 
 const CTX_DIR_NAME: &str = "contexts";

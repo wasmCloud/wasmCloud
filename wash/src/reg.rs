@@ -1,31 +1,24 @@
-extern crate oci_distribution;
+use std::{collections::HashMap, path::PathBuf};
+
+use anyhow::Result;
+use clap::{Parser, Subcommand};
+use log::warn;
+use oci_distribution::{client::*, secrets::RegistryAuth, Reference};
+use serde_json::json;
+use tokio::fs::File;
+use tokio::io::AsyncWriteExt;
+use wash_lib::cli::{labels_vec_to_hashmap, CommandOutput, OutputKind};
+use wash_lib::registry::{
+    pull_oci_artifact, push_oci_artifact, validate_artifact, OciPullOptions, OciPushOptions,
+    SupportedArtifacts,
+};
 
 use crate::appearance::spinner::Spinner;
-use crate::util::{cached_file, labels_vec_to_hashmap, CommandOutput, OutputKind};
-use anyhow::{anyhow, bail, Result};
-use clap::{Parser, Subcommand};
-use log::{debug, warn};
-use oci_distribution::manifest::OciImageManifest;
-use oci_distribution::{client::*, secrets::RegistryAuth, Reference};
-use provider_archive::ProviderArchive;
-use serde_json::json;
-use std::{collections::HashMap, fs::File, io::prelude::*};
 
-const PROVIDER_ARCHIVE_MEDIA_TYPE: &str = "application/vnd.wasmcloud.provider.archive.layer.v1+par";
-const PROVIDER_ARCHIVE_CONFIG_MEDIA_TYPE: &str =
-    "application/vnd.wasmcloud.provider.archive.config";
 const PROVIDER_ARCHIVE_FILE_EXTENSION: &str = ".par.gz";
-const WASM_MEDIA_TYPE: &str = "application/vnd.module.wasm.content.layer.v1+wasm";
-const WASM_CONFIG_MEDIA_TYPE: &str = "application/vnd.wasmcloud.actor.archive.config";
-const OCI_MEDIA_TYPE: &str = "application/vnd.oci.image.layer.v1.tar";
 const WASM_FILE_EXTENSION: &str = ".wasm";
 
 pub(crate) const SHOWER_EMOJI: &str = "\u{1F6BF}";
-
-pub(crate) enum SupportedArtifacts {
-    Par,
-    Wasm,
-}
 
 #[derive(Debug, Clone, Subcommand)]
 pub(crate) enum RegCliCommand {
@@ -144,13 +137,15 @@ pub(crate) async fn handle_pull(
     let spinner = Spinner::new(&output_kind)?;
     spinner.update_spinner_message(format!(" Downloading {} ...", image.whole()));
 
-    let artifact = pull_artifact(
+    let artifact = pull_oci_artifact(
         artifact_url,
-        cmd.digest,
-        cmd.allow_latest,
-        cmd.opts.user,
-        cmd.opts.password,
-        cmd.opts.insecure,
+        OciPullOptions {
+            digest: cmd.digest,
+            allow_latest: cmd.allow_latest,
+            user: cmd.opts.user,
+            password: cmd.opts.password,
+            insecure: cmd.opts.insecure,
+        },
     )
     .await?;
 
@@ -167,92 +162,6 @@ pub(crate) async fn handle_pull(
         ),
         map,
     ))
-}
-
-/// Attempts to return a local artifact, then a cached one.
-/// Falls back to pull from registry if neither is found.
-pub(crate) async fn get_artifact(
-    url: String,
-    digest: Option<String>,
-    allow_latest: bool,
-    user: Option<String>,
-    password: Option<String>,
-    insecure: bool,
-    no_cache: bool,
-) -> Result<Vec<u8>> {
-    if let Ok(mut local_artifact) = File::open(url.clone()) {
-        let mut buf = Vec::new();
-        local_artifact.read_to_end(&mut buf)?;
-        Ok(buf)
-    } else if let (Ok(mut cached_artifact), false) = (File::open(cached_file(&url)), no_cache) {
-        let mut buf = Vec::new();
-        cached_artifact.read_to_end(&mut buf)?;
-        Ok(buf)
-    } else {
-        pull_artifact(url.clone(), digest, allow_latest, user, password, insecure).await
-    }
-}
-
-pub(crate) async fn pull_artifact(
-    url: String,
-    digest: Option<String>,
-    allow_latest: bool,
-    user: Option<String>,
-    password: Option<String>,
-    insecure: bool,
-) -> Result<Vec<u8>> {
-    let image: Reference = url.parse()?;
-
-    if image.tag().unwrap_or("latest") == "latest" && !allow_latest {
-        bail!(
-            "Pulling artifacts with tag 'latest' is prohibited. This can be overriden with the flag --allow-latest"
-        );
-    };
-
-    let mut client = Client::new(ClientConfig {
-        protocol: if insecure {
-            ClientProtocol::Http
-        } else {
-            ClientProtocol::Https
-        },
-        ..Default::default()
-    });
-
-    let auth = match (user, password) {
-        (Some(user), Some(password)) => RegistryAuth::Basic(user, password),
-        _ => RegistryAuth::Anonymous,
-    };
-
-    let image_data = client
-        .pull(
-            &image,
-            &auth,
-            vec![PROVIDER_ARCHIVE_MEDIA_TYPE, WASM_MEDIA_TYPE, OCI_MEDIA_TYPE],
-        )
-        .await?;
-
-    // Reformatting digest in case the sha256: prefix is left off
-    let digest = match digest {
-        Some(d) if d.starts_with("sha256:") => Some(d),
-        Some(d) => Some(format!("sha256:{}", d)),
-        None => None,
-    };
-
-    match (digest, image_data.digest) {
-        (Some(digest), Some(image_digest)) if digest != image_digest => Err(anyhow!(
-            "Image digest did not match provided digest, aborting"
-        )),
-        _ => {
-            debug!("Image digest validated against provided digest");
-            Ok(())
-        }
-    }?;
-
-    Ok(image_data
-        .layers
-        .iter()
-        .flat_map(|l| l.data.clone())
-        .collect::<Vec<_>>())
 }
 
 pub(crate) async fn handle_ping(cmd: PingCommand) -> Result<CommandOutput> {
@@ -278,7 +187,7 @@ pub(crate) async fn write_artifact(
     image: &Reference,
     output: Option<String>,
 ) -> Result<String> {
-    let file_extension = match validate_artifact(artifact, image.repository()).await? {
+    let file_extension = match validate_artifact(artifact).await? {
         SupportedArtifacts::Par => PROVIDER_ARCHIVE_FILE_EXTENSION,
         SupportedArtifacts::Wasm => WASM_FILE_EXTENSION,
     };
@@ -294,40 +203,9 @@ pub(crate) async fn write_artifact(
             .unwrap(),
         file_extension
     ));
-    let mut f = File::create(outfile.clone())?;
-    f.write_all(artifact)?;
+    let mut f = File::create(outfile.clone()).await?;
+    f.write_all(artifact).await?;
     Ok(outfile)
-}
-
-/// Helper function to determine artifact type and validate that it is
-/// a valid artifact of that type
-pub(crate) async fn validate_artifact(artifact: &[u8], name: &str) -> Result<SupportedArtifacts> {
-    match validate_actor_module(artifact, name) {
-        Ok(_) => Ok(SupportedArtifacts::Wasm),
-        Err(_) => match validate_provider_archive(artifact, name).await {
-            Ok(_) => Ok(SupportedArtifacts::Par),
-            Err(_) => bail!("Unsupported artifact type"),
-        },
-    }
-}
-
-/// Attempts to inspect the claims of an actor module
-/// Will fail without actor claims, or if the artifact is invalid
-fn validate_actor_module(artifact: &[u8], module: &str) -> Result<()> {
-    match wascap::wasm::extract_claims(artifact) {
-        Ok(Some(_token)) => Ok(()),
-        Ok(None) => bail!("No capabilities discovered in actor module : {}", &module),
-        Err(e) => Err(anyhow!("{}", e)),
-    }
-}
-
-/// Attempts to unpack a provider archive
-/// Will fail without claims or if the archive is invalid
-async fn validate_provider_archive(artifact: &[u8], archive: &str) -> Result<()> {
-    match ProviderArchive::try_load(artifact).await {
-        Ok(_par) => Ok(()),
-        Err(_e) => bail!("Invalid provider archive : {}", archive),
-    }
 }
 
 pub(crate) async fn handle_push(
@@ -342,15 +220,19 @@ pub(crate) async fn handle_push(
     let spinner = Spinner::new(&output_kind)?;
     spinner.update_spinner_message(format!(" Pushing {} to {} ...", cmd.artifact, artifact_url));
 
-    push_artifact(
+    let annotations = labels_vec_to_hashmap(cmd.annotations.unwrap_or_default())?;
+
+    push_oci_artifact(
         artifact_url.clone(),
         cmd.artifact,
-        cmd.config,
-        cmd.allow_latest,
-        cmd.opts.user,
-        cmd.opts.password,
-        cmd.opts.insecure,
-        cmd.annotations,
+        OciPushOptions {
+            config: cmd.config.map(PathBuf::from),
+            allow_latest: cmd.allow_latest,
+            user: cmd.opts.user,
+            password: cmd.opts.password,
+            insecure: cmd.opts.insecure,
+            annotations: Some(annotations),
+        },
     )
     .await?;
 
@@ -365,87 +247,6 @@ pub(crate) async fn handle_push(
         ),
         map,
     ))
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn push_artifact(
-    url: String,
-    artifact: String,
-    config: Option<String>,
-    allow_latest: bool,
-    user: Option<String>,
-    password: Option<String>,
-    insecure: bool,
-    annotations: Option<Vec<String>>,
-) -> Result<()> {
-    let image: Reference = url.parse()?;
-
-    if image.tag().unwrap() == "latest" && !allow_latest {
-        bail!(
-            "Pushing artifacts with tag 'latest' is prohibited. This can be overriden with the flag --allow-latest"
-        );
-    };
-
-    let mut artifact_buf = vec![];
-    let mut f = File::open(artifact.clone())?;
-    f.read_to_end(&mut artifact_buf)?;
-
-    let (artifact_media_type, config_media_type) =
-        match validate_artifact(&artifact_buf, &artifact).await? {
-            SupportedArtifacts::Wasm => (WASM_MEDIA_TYPE, WASM_CONFIG_MEDIA_TYPE),
-            SupportedArtifacts::Par => (
-                PROVIDER_ARCHIVE_MEDIA_TYPE,
-                PROVIDER_ARCHIVE_CONFIG_MEDIA_TYPE,
-            ),
-        };
-
-    let mut config_buf = vec![];
-    match config {
-        Some(config_file) => {
-            let mut f = File::open(config_file)?;
-            f.read_to_end(&mut config_buf)?;
-        }
-        None => {
-            // If no config provided, send blank config
-            config_buf = b"{}".to_vec();
-        }
-    };
-    let config = Config {
-        data: config_buf,
-        media_type: config_media_type.to_string(),
-        annotations: None,
-    };
-
-    let layer = vec![ImageLayer {
-        data: artifact_buf,
-        media_type: artifact_media_type.to_string(),
-        annotations: None,
-    }];
-
-    let mut client = Client::new(ClientConfig {
-        protocol: if insecure {
-            ClientProtocol::Http
-        } else {
-            ClientProtocol::Https
-        },
-        ..Default::default()
-    });
-
-    let auth = match (user, password) {
-        (Some(user), Some(password)) => RegistryAuth::Basic(user, password),
-        _ => RegistryAuth::Anonymous,
-    };
-
-    let manifest = OciImageManifest::build(
-        &layer,
-        &config,
-        labels_vec_to_hashmap(annotations.unwrap_or_default()).ok(),
-    );
-
-    client
-        .push(&image, &layer, config, &auth, Some(manifest))
-        .await?;
-    Ok(())
 }
 
 #[cfg(test)]

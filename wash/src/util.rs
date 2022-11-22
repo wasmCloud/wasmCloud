@@ -1,48 +1,8 @@
+use std::{fs::File, io::Read, path::PathBuf};
+
 use anyhow::{anyhow, bail, Result};
-use serde::{Deserialize, Serialize};
-use std::{
-    collections::HashMap, env::temp_dir, error::Error, fmt, fs::File, io::Read, path::PathBuf,
-    str::FromStr,
-};
 use term_table::{Table, TableStyle};
-
-pub const DEFAULT_NATS_HOST: &str = "127.0.0.1";
-pub const DEFAULT_NATS_PORT: &str = "4222";
-pub const DEFAULT_LATTICE_PREFIX: &str = "default";
-pub const DEFAULT_NATS_TIMEOUT_MS: u64 = 2_000;
-
-/// Used for displaying human-readable output vs JSON format
-#[derive(Debug, Copy, Clone, Eq, Serialize, Deserialize, PartialEq)]
-pub(crate) enum OutputKind {
-    Text,
-    Json,
-}
-
-impl FromStr for OutputKind {
-    type Err = OutputParseErr;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        match s {
-            "json" => Ok(OutputKind::Json),
-            "text" => Ok(OutputKind::Text),
-            _ => Err(OutputParseErr),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct OutputParseErr;
-
-impl Error for OutputParseErr {}
-
-impl fmt::Display for OutputParseErr {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "error parsing output type, see help for the list of accepted outputs"
-        )
-    }
-}
+use wash_lib::config::DEFAULT_NATS_TIMEOUT_MS;
 
 pub(crate) fn format_optional(value: Option<String>) -> String {
     value.unwrap_or_else(|| "N/A".into())
@@ -60,62 +20,6 @@ pub(crate) fn extract_arg_value(arg: &str) -> Result<String> {
     }
 }
 
-pub(crate) struct CommandOutput {
-    pub map: std::collections::HashMap<String, serde_json::Value>,
-    pub text: String,
-}
-
-impl CommandOutput {
-    pub(crate) fn new<S: Into<String>>(
-        text: S,
-        map: std::collections::HashMap<String, serde_json::Value>,
-    ) -> Self {
-        CommandOutput {
-            map,
-            text: text.into(),
-        }
-    }
-
-    /// shorthand to create a new CommandOutput with a single key-value pair for JSON, and simply the text for text output.
-    pub fn from_key_and_text<K: Into<String>, S: Into<String>>(key: K, text: S) -> Self {
-        let text_string: String = text.into();
-        let mut map = std::collections::HashMap::new();
-        map.insert(key.into(), serde_json::Value::String(text_string.clone()));
-        CommandOutput {
-            map,
-            text: text_string,
-        }
-    }
-}
-
-impl From<String> for CommandOutput {
-    /// Create a basic CommandOutput from a String. Puts the string a a "result" key in the JSON output.
-    fn from(text: String) -> Self {
-        let mut map = std::collections::HashMap::new();
-        map.insert(
-            "result".to_string(),
-            serde_json::Value::String(text.clone()),
-        );
-        CommandOutput { map, text }
-    }
-}
-
-impl From<&str> for CommandOutput {
-    /// Create a basic CommandOutput from a &str. Puts the string a a "result" key in the JSON output.
-    fn from(text: &str) -> Self {
-        CommandOutput::from(text.to_string())
-    }
-}
-
-impl Default for CommandOutput {
-    fn default() -> Self {
-        CommandOutput {
-            map: std::collections::HashMap::new(),
-            text: "".to_string(),
-        }
-    }
-}
-
 pub(crate) fn default_timeout_ms() -> u64 {
     DEFAULT_NATS_TIMEOUT_MS
 }
@@ -123,22 +27,6 @@ pub(crate) fn default_timeout_ms() -> u64 {
 /// Converts error from Send + Sync error to standard anyhow error
 pub(crate) fn convert_error(e: Box<dyn ::std::error::Error + Send + Sync>) -> anyhow::Error {
     anyhow!(e.to_string())
-}
-
-/// Transforms a list of labels in the form of (label=value) to a hashmap
-pub(crate) fn labels_vec_to_hashmap(constraints: Vec<String>) -> Result<HashMap<String, String>> {
-    let mut hm: HashMap<String, String> = HashMap::new();
-    for constraint in constraints {
-        match constraint.split_once('=') {
-            Some((key, value)) => {
-                hm.insert(key.to_string(), value.to_string());
-            }
-            None => {
-                bail!("Constraints were not properly formatted. Ensure they are formatted as label=value")
-            }
-        };
-    }
-    Ok(hm)
 }
 
 /// Transform a json string (e.g. "{"hello": "world"}") into msgpack bytes
@@ -262,23 +150,6 @@ pub(crate) async fn nats_client_from_opts(
     Ok(nc)
 }
 
-pub(crate) const OCI_CACHE_DIR: &str = "wasmcloud_ocicache";
-
-pub(crate) fn cached_file(img: &str) -> PathBuf {
-    let path = temp_dir();
-    let path = path.join(OCI_CACHE_DIR);
-    let _ = ::std::fs::create_dir_all(&path);
-    // should produce a file like wasmcloud_azurecr_io_kvcounter_v1.bin
-    let mut path = path.join(img_name_to_file_name(img));
-    path.set_extension("bin");
-
-    path
-}
-
-pub(crate) fn img_name_to_file_name(img: &str) -> String {
-    img.replace([':', '/', '.'], "_")
-}
-
 // Check if the contract ID parameter is a 56 character key and suggest that the user
 // give the contract ID instead
 //
@@ -305,7 +176,7 @@ mod test {
             "config_b64".to_string(),
             "eyJhZGRyZXNzIjogIjAuMC4wLjA6ODA4MCJ9Cg==".to_string(),
         );
-        let output = super::labels_vec_to_hashmap(vec![base64_option]).unwrap();
+        let output = wash_lib::cli::labels_vec_to_hashmap(vec![base64_option]).unwrap();
         assert_eq!(expected, output);
     }
 }

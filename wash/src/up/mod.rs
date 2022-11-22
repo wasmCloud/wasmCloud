@@ -1,6 +1,3 @@
-use anyhow::{anyhow, Result};
-use clap::Parser;
-use serde_json::json;
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::path::Path;
@@ -10,18 +7,24 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
+
+use anyhow::{anyhow, Result};
+use clap::Parser;
+use serde_json::json;
+
 use tokio::fs::create_dir_all;
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
     process::Child,
 };
+use wash_lib::cli::{CommandOutput, OutputKind};
+use wash_lib::start::*;
 
 use crate::appearance::spinner::Spinner;
 use crate::cfg::cfg_dir;
 use crate::down::stop_nats;
 use crate::down::stop_wasmcloud;
-use crate::util::{CommandOutput, OutputKind};
-use wash_lib::start::*;
+
 mod config;
 mod credsfile;
 pub use config::DOWNLOADS_DIR;
