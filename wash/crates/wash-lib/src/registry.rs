@@ -87,7 +87,7 @@ pub async fn get_oci_artifact(
 
 /// Pull down the artifact from the given url and additional options
 pub async fn pull_oci_artifact(url: String, options: OciPullOptions) -> Result<Vec<u8>> {
-    let image: Reference = url.parse()?;
+    let image: Reference = url.to_lowercase().parse()?;
 
     if image.tag().unwrap_or("latest") == "latest" && !options.allow_latest {
         bail!("Pulling artifacts with tag 'latest' is prohibited.");
@@ -143,7 +143,7 @@ pub async fn push_oci_artifact(
     artifact: impl AsRef<Path>,
     options: OciPushOptions,
 ) -> Result<()> {
-    let image: Reference = url.parse()?;
+    let image: Reference = url.to_lowercase().parse()?;
 
     if image.tag().unwrap() == "latest" && !options.allow_latest {
         bail!("Pushing artifacts with tag 'latest' is prohibited");
