@@ -1,6 +1,6 @@
 [package]
 name = "wasmbus-rpc"
-version = "0.11.1"
+version = "0.11.2"
 authors = [ "wasmcloud Team" ]
 license = "Apache-2.0"
 description = "Runtime library for actors and capability providers"
@@ -46,7 +46,7 @@ num-bigint = { version = "0.4", optional = true }
 bigdecimal = { version = "0.3", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-async-nats = "0.22.0"
+async-nats = "0.23.0"
 atty = "0.2"
 data-encoding = "2.3"
 futures = "0.3"
