@@ -6,7 +6,7 @@ use std::str::FromStr;
 use once_cell::sync::OnceCell;
 #[cfg(feature = "otel")]
 use opentelemetry::sdk::{
-    trace::{self, RandomIdGenerator, Sampler},
+    trace::{self, IdGenerator, Sampler},
     Resource,
 };
 #[cfg(feature = "otel")]
@@ -328,7 +328,7 @@ fn configure_tracing(provider_name: String, structured_logging_enabled: bool) {
             .with_trace_config(
                 trace::config()
                     .with_sampler(Sampler::AlwaysOn)
-                    .with_id_generator(RandomIdGenerator::default())
+                    .with_id_generator(IdGenerator::default())
                     .with_max_events_per_span(64)
                     .with_max_attributes_per_span(16)
                     .with_max_events_per_span(16)

@@ -26,8 +26,6 @@ jobs:
         with:
           toolchain: stable
           components: rustfmt, clippy
-      - name: install_protoc
-        run: sudo apt-get install -y protobuf-compiler
       - name: run_all_tests_clippy_fmt
         working-directory: ${{ env.working-directory }}
         run: make test
