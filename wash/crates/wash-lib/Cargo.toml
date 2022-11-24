@@ -1,6 +1,6 @@
 [package]
 name = "wash-lib"
-version = "0.4.0-alpha.1"
+version = "0.4.0-alpha.2"
 authors = ["wasmCloud Team"]
 categories = ["wasm", "wasmcloud"]
 description = "wasmcloud Shell (wash) libraries"
@@ -20,7 +20,7 @@ parser = ["config", "semver", "serde", "serde_json"]
 cli = ["clap", "term-table"]
 
 [dependencies]
-anyhow = "1.0.58"
+anyhow = "1.0.66"
 async-compression = { version = "0.3", default-features = false, features = ["tokio", "gzip"] }
 clap = { version = "4", features = ["derive", "env"], optional = true }
 command-group = { version = "1.0.8", features = ["with-tokio"] }
@@ -43,7 +43,7 @@ tokio = { version = "1", default-features = false, features = ["process"] }
 tokio-stream = "0.1"
 tokio-tar = "0.3"
 wascap = "0.8.0"
-weld-codegen = "0.5.0"
+weld-codegen = "0.6.0"
 
 [dev-dependencies]
 dirs = "4.0"
