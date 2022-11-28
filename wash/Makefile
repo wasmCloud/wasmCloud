@@ -26,6 +26,7 @@ test-all:
 ##@ Helpers
 
 clean:
+	cargo clean
 	wash drain all
 
 
