@@ -12,10 +12,10 @@ use tokio::{
 };
 use tracing::{debug, trace};
 use wascap::prelude::KeyPair;
-use wasmbus_rpc::error::RpcError;
+use wasmbus_rpc::error::{RpcError, RpcResult};
 use wasmcloud_control_interface::Client;
 
-use crate::{ConnectionConfig, RpcResult};
+use crate::ConnectionConfig;
 
 pub(crate) const CACHE_EXPIRE_MINUTES: u64 = 10;
 
@@ -179,8 +179,8 @@ async fn connect(cfg: &ConnectionConfig) -> RpcResult<async_nats::Client> {
         .event_callback(|event| async move {
             // lattice prefix/ID will already be on the span from earlier calls
             match event {
-                async_nats::Event::Disconnect => debug!("NATS client disconnected"),
-                async_nats::Event::Reconnect => debug!("NATS client reconnected"),
+                async_nats::Event::Disconnected => debug!("NATS client disconnected"),
+                async_nats::Event::Connected => debug!("NATS client reconnected"),
                 async_nats::Event::ClientError(err) => {
                     debug!("NATS client error occurred: {}", err)
                 }

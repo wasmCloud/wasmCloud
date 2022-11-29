@@ -9,4 +9,9 @@ $(top_targets)::
 	done
 endif
 
+cargo-update:
+	for dir in $(subdirs); do \
+		(cd $$dir && cargo update) ; \
+	done
+
 .PHONY: all par par-full test clean

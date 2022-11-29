@@ -64,10 +64,13 @@ where
         Type::UUID => enc.str(&row.get::<'r, usize, uuid::Uuid>(i).to_string()),
 
         // timestamp as iso3339 string in UTC
-        Type::TIMESTAMP | Type::TIMESTAMPTZ => enc.str(
-            &DateTime::<Utc>::from_utc(NaiveDateTime::from_timestamp(row.get(i), 0), Utc)
-                .to_rfc3339(),
-        ),
+        Type::TIMESTAMP | Type::TIMESTAMPTZ => {
+            if let Some(ndt) = NaiveDateTime::from_timestamp_opt(row.get(i), 0) {
+                enc.str(&DateTime::<Utc>::from_utc(ndt, Utc).to_string())
+            } else {
+                enc.str("")
+            }
+        }
         // date and time to string
         Type::DATE => enc.str(&row.get::<'r, usize, chrono::NaiveDate>(i).to_string()),
 

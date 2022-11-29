@@ -135,7 +135,7 @@ impl StorageConfig {
             cred_provider = SharedCredentialsProvider::new(role.build(cred_provider));
         }
 
-        let mut retry_config = aws_config::RetryConfig::new();
+        let mut retry_config = aws_config::retry::RetryConfig::standard();
         if let Some(max_attempts) = self.max_attempts {
             retry_config = retry_config.with_max_attempts(max_attempts);
         }

@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-provider-kvredis"
-version = "0.18.0"
+version = "0.19.0"
 edition = "2021"
 
 [dependencies]
@@ -12,7 +12,7 @@ chrono = "0.4"
 crossbeam = "0.8"
 futures = "0.3"
 once_cell = "1.8"
-redis = { version = "0.21", features = ["tokio-comp", "aio", "connection-manager"] }
+redis = { version = "0.22.1", features = ["tokio-comp", "aio", "connection-manager"] }
 rmp-serde = "1.1.0"
 serde_bytes = "0.11"
 serde_json = "1.0"
@@ -22,12 +22,12 @@ tokio = { version = "1", features = ["full"] }
 toml = "0.5"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-wasmcloud-interface-keyvalue = "0.8.0"
-wasmbus-rpc = { version = "0.10.0", features = ["otel"] }
+wasmcloud-interface-keyvalue = "0.9.1"
+wasmbus-rpc = { version = "0.11.2", features = ["otel"] }
 
 # test dependencies
 [dev-dependencies]
-wasmcloud-test-util = "0.5.0"
+wasmcloud-test-util = "0.6.4"
 rand = "0.8"
 
 [[bin]]

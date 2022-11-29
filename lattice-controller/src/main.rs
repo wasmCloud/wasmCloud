@@ -147,6 +147,7 @@ impl LatticeController for LatticeControllerProvider {
                         password: v.password.clone(),
                         token: v.token.clone(),
                         username: v.username.clone(),
+                        registry_type: "".to_string(),
                     },
                 );
             }
