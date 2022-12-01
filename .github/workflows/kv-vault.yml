@@ -31,7 +31,7 @@ env:
 
 jobs:
   rust_check:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04
     steps:
       - uses: actions/checkout@v2
       - id: rust-check-action
@@ -42,7 +42,7 @@ jobs:
           test-options: --no-run
 
   make_test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04
     steps:
       - uses: actions/checkout@v2
       - id: run-nats
@@ -54,7 +54,7 @@ jobs:
 
   install_cross:
     if: startswith(github.ref, 'refs/tags/') # Only run on tag push
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04
     steps:
       - uses: wasmcloud/common-actions/install-cross@main
       - name: Upload cross binary
@@ -75,7 +75,7 @@ jobs:
           - aarch64-apple-darwin
           - armv7-unknown-linux-gnueabihf
           - x86_64-pc-windows-gnu
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04
     steps:
       - uses: actions/checkout@v2
       - name: Download cross binary
@@ -107,7 +107,7 @@ jobs:
 
   assemble_provider_archive:
     needs: [build_artifact]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04
     steps:
       - uses: actions/checkout@v2
       - uses: wasmcloud/common-actions/install-wash@main
@@ -146,7 +146,7 @@ jobs:
   github_release:
     if: startswith(github.ref, 'refs/tags/') # Only run on tag push
     needs: [rust_check, assemble_provider_archive]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04
     steps:
       - name: Download provider archive
         uses: actions/download-artifact@v3
@@ -165,7 +165,7 @@ jobs:
   artifact_release:
     needs: [rust_check, assemble_provider_archive]
     if: startswith(github.ref, 'refs/tags/') # Only run on tag push
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04
     steps:
       - uses: actions/checkout@v2
       - name: Download provider archive
