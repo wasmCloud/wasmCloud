@@ -44,6 +44,7 @@ tokio-stream = "0.1"
 tokio-tar = "0.3"
 wascap = "0.8.0"
 weld-codegen = "0.6.0"
+cargo_toml = "0.13.0"
 
 [dev-dependencies]
 dirs = "4.0"

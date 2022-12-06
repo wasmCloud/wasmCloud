@@ -261,3 +261,44 @@ fn minimal_rust_actor() {
         }
     )
 }
+
+#[test]
+fn cargo_toml_actor() {
+    let result = get_config(
+        Some(PathBuf::from(
+            "./tests/parser/files/withcargotoml/minimal_rust_actor_with_cargo.toml",
+        )),
+        None,
+    );
+
+    let config = assert_ok!(result);
+
+    assert_eq!(
+        config.language,
+        LanguageConfig::Rust(RustConfig {
+            cargo_path: None,
+            target_path: None,
+        })
+    );
+
+    assert_eq!(
+        config.project_type,
+        TypeConfig::Actor(ActorConfig {
+            claims: vec!["wasmcloud:httpserver".to_string()],
+            registry: None,
+            push_insecure: false,
+            key_directory: PathBuf::from("./keys"),
+            filename: None,
+            wasm_target: "wasm32-unknown-unknown".to_string(),
+            call_alias: None
+        })
+    );
+
+    assert_eq!(
+        config.common,
+        CommonConfig {
+            name: "withcargotoml".to_string(),
+            version: Version::parse("0.200.0").unwrap(),
+        }
+    )
+}

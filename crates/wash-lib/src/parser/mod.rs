@@ -1,4 +1,5 @@
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
+use cargo_toml::Manifest;
 use config::Config;
 use semver::Version;
 use std::{fs, path::PathBuf};
@@ -186,9 +187,9 @@ struct RawProjectConfig {
     #[serde(rename = "type")]
     pub project_type: String,
     /// Name of the project.
-    pub name: String,
+    pub name: Option<String>,
     /// Semantic version of the project.
-    pub version: Version,
+    pub version: Option<Version>,
     pub actor: Option<RawActorConfig>,
     pub provider: Option<RawProviderConfig>,
     pub rust: Option<RawRustConfig>,
@@ -272,73 +273,97 @@ pub fn get_config(opt_path: Option<PathBuf>, use_env: Option<bool>) -> Result<Pr
     let raw_project_config: RawProjectConfig = serde_json::from_value(json_value)?;
 
     raw_project_config
-        .try_into()
+        .convert(path.clone())
         .map_err(|e: anyhow::Error| anyhow!("{} in {}", e, path.display()))
 }
 
-impl TryFrom<RawProjectConfig> for ProjectConfig {
-    type Error = anyhow::Error;
-
-    fn try_from(raw_project_config: RawProjectConfig) -> Result<Self> {
-        let project_type_config = match raw_project_config
-            .project_type
-            .trim()
-            .to_lowercase()
-            .as_str()
-        {
+impl RawProjectConfig {
+    pub fn convert(self, path: PathBuf) -> Result<ProjectConfig> {
+        let project_type_config = match self.project_type.trim().to_lowercase().as_str() {
             "actor" => {
-                let actor_config = raw_project_config
-                    .actor
-                    .ok_or_else(|| anyhow!("Missing actor config"))?;
+                let actor_config = self.actor.ok_or_else(|| anyhow!("Missing actor config"))?;
                 TypeConfig::Actor(actor_config.try_into()?)
             }
 
             "provider" => {
-                let provider_config = raw_project_config
+                let provider_config = self
                     .provider
                     .ok_or_else(|| anyhow!("Missing provider config"))?;
                 TypeConfig::Provider(provider_config.try_into()?)
             }
 
             "interface" => {
-                let interface_config = raw_project_config
+                let interface_config = self
                     .interface
                     .ok_or_else(|| anyhow!("Missing interface config"))?;
                 TypeConfig::Interface(interface_config.try_into()?)
             }
 
             _ => {
-                return Err(anyhow!(
-                    "Unknown project type: {}",
-                    raw_project_config.project_type
-                ));
+                return Err(anyhow!("Unknown project type: {}", self.project_type));
             }
         };
 
-        let language_config = match raw_project_config.language.trim().to_lowercase().as_str() {
-            "rust" => match raw_project_config.rust {
+        let language_config = match self.language.trim().to_lowercase().as_str() {
+            "rust" => match self.rust {
                 Some(rust_config) => LanguageConfig::Rust(rust_config.try_into()?),
                 None => LanguageConfig::Rust(RustConfig::default()),
             },
-            "tinygo" => match raw_project_config.tinygo {
+            "tinygo" => match self.tinygo {
                 Some(tinygo_config) => LanguageConfig::TinyGo(tinygo_config.try_into()?),
                 None => LanguageConfig::TinyGo(TinyGoConfig::default()),
             },
             _ => {
                 return Err(anyhow!(
                     "Unknown language in wasmcloud.toml: {}",
-                    raw_project_config.language
+                    self.language
                 ));
             }
         };
 
-        Ok(Self {
+        let common_config_result: Result<CommonConfig> =
+            // don't depend on language files if we don't have to.
+            if self.name.is_some() && self.version.is_some() {
+                Ok(CommonConfig {
+                    name: self.name.unwrap(),
+                    version: self.version.unwrap(),
+                })
+            } else {
+                match language_config {
+                    LanguageConfig::Rust(_) => {
+                        let cargo_toml_path = path.parent().unwrap().join("Cargo.toml");
+                        if !cargo_toml_path.is_file() {
+                            bail!("No Cargo.toml file found in the current directory");
+                        }
+
+                        let cargo_toml = Manifest::from_path(cargo_toml_path)?
+                            .package
+                            .ok_or_else(|| anyhow!("Missing package information in Cargo.toml"))?;
+
+                        let version = match self.version {
+                            Some(version) => version,
+                            None => Version::parse(cargo_toml.version.get()?.as_str())?,
+                        };
+
+                        let name = self.name.unwrap_or(cargo_toml.name);
+
+                        Ok(CommonConfig { name, version })
+                    }
+                    LanguageConfig::TinyGo(_) => Ok(CommonConfig {
+                        name: self
+                            .name
+                            .ok_or_else(|| anyhow!("Missing name in wasmcloud.toml"))?,
+                        version: self
+                            .version
+                            .ok_or_else(|| anyhow!("Missing version in wasmcloud.toml"))?,
+                    }),
+                }
+            };
+
+        Ok(ProjectConfig {
             language: language_config,
             project_type: project_type_config,
-            common: CommonConfig {
-                name: raw_project_config.name,
-                version: raw_project_config.version,
-            },
+            common: common_config_result?,
         })
     }
 }
