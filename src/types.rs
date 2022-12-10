@@ -178,6 +178,9 @@ pub struct ProviderDescription {
     /// Image reference for this provider, if applicable
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image_ref: Option<String>,
+    /// Provider's contract ID
+    #[serde(default)]
+    pub contract_id: String,
     /// Provider's link name
     #[serde(default)]
     pub link_name: String,
