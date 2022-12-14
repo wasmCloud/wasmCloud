@@ -2,22 +2,21 @@
 
 use crate::{
     errors::{self, ErrorKind},
-    jwt::{Actor, Claims, Token},
+    jwt::{Actor, Claims, Token, MIN_WASCAP_INTERNAL_REVISION},
     Result,
 };
 use data_encoding::HEXUPPER;
 use nkeys::KeyPair;
-use parity_wasm::{
-    deserialize_buffer,
-    elements::{CustomSection, Module, Serialize},
-    serialize,
-};
 use ring::digest::{Context, Digest, SHA256};
 use std::{
     io::Read,
     time::{SystemTime, UNIX_EPOCH},
 };
+use wasmparser::BinaryReaderError;
+use wasmparser::Payload::*;
 const SECS_PER_DAY: u64 = 86400;
+const SECTION_JWT: &str = "jwt";
+const SECTION_WC_JWT: &str = "wasmcloud_jwt";
 
 /// Extracts a set of claims from the raw bytes of a WebAssembly module. In the case where no
 /// JWT is discovered in the module, this function returns `None`.
@@ -25,34 +24,35 @@ const SECS_PER_DAY: u64 = 86400;
 /// containing both the raw JWT and the decoded claims.
 ///
 /// # Errors
-/// Will return errors if the file cannot be read, cannot be parsed, contains an improperly
-/// forms JWT, or the `module_hash` claim inside the decoded JWT does not match the hash
-/// of the file.
+/// Will return an error if hash computation fails or it can't read the JWT from inside
+/// a section's data, etc
 pub fn extract_claims(contents: impl AsRef<[u8]>) -> Result<Option<Token<Actor>>> {
-    let module: Module = deserialize_buffer(contents.as_ref())?;
-
-    let sections: Vec<&CustomSection> = module
-        .custom_sections()
-        .filter(|sect| sect.name() == "jwt")
-        .collect();
-
-    if sections.is_empty() {
-        Ok(None)
-    } else {
-        let jwt = String::from_utf8(sections[0].payload().to_vec())?;
-        let claims: Claims<Actor> = Claims::decode(&jwt)?;
-        let hash = compute_hash_without_jwt(module)?;
-
-        if let Some(ref meta) = claims.metadata {
-            if meta.module_hash != hash {
-                Err(errors::new(ErrorKind::InvalidModuleHash))
-            } else {
-                Ok(Some(Token { jwt, claims }))
+    let parser = wasmparser::Parser::new(0);
+    for payload in parser.parse_all(contents.as_ref()) {
+        match payload? {
+            wasmparser::Payload::CustomSection(reader) => {
+                if reader.name() == SECTION_JWT || reader.name() == SECTION_WC_JWT {
+                    let jwt = String::from_utf8(reader.data().to_vec())?;
+                    let claims: Claims<Actor> = Claims::decode(&jwt)?;
+                    let hash = compute_hash_without_jwt(contents.as_ref())?;
+                    if let Some(ref meta) = claims.metadata {
+                        if meta.module_hash != hash
+                            && claims.wascap_revision.unwrap_or_default()
+                                >= MIN_WASCAP_INTERNAL_REVISION
+                        {
+                            return Err(errors::new(ErrorKind::InvalidModuleHash));
+                        } else {
+                            return Ok(Some(Token { jwt, claims }));
+                        }
+                    } else {
+                        return Err(errors::new(ErrorKind::InvalidAlgorithm));
+                    }
+                }
             }
-        } else {
-            Err(errors::new(ErrorKind::InvalidAlgorithm))
+            _ => {}
         }
     }
+    Ok(None)
 }
 
 /// This function will embed a set of claims inside the bytecode of a WebAssembly module. The claims
@@ -62,26 +62,21 @@ pub fn extract_claims(contents: impl AsRef<[u8]>) -> Result<Option<Token<Actor>>
 /// parsers or interpreters. Returns a vector of bytes representing the new WebAssembly module which can
 /// be saved to a `.wasm` file
 pub fn embed_claims(orig_bytecode: &[u8], claims: &Claims<Actor>, kp: &KeyPair) -> Result<Vec<u8>> {
-    let mut module: Module = deserialize_buffer(orig_bytecode)?;
-    module.clear_custom_section("jwt");
-    let cleanbytes = serialize(module)?;
+    let mut bytes = orig_bytecode.to_vec();
 
-    let digest = sha256_digest(cleanbytes.as_slice())?;
+    let hash = compute_hash_without_jwt(orig_bytecode)?;
     let mut claims = (*claims).clone();
     let meta = claims.metadata.map(|md| Actor {
-        module_hash: HEXUPPER.encode(digest.as_ref()),
+        module_hash: hash,
         ..md
     });
     claims.metadata = meta;
 
     let encoded = claims.encode(kp)?;
     let encvec = encoded.as_bytes().to_vec();
-    let mut m: Module = deserialize_buffer(orig_bytecode)?;
-    m.set_custom_section("jwt", encvec);
-    let mut buf = Vec::new();
-    m.serialize(&mut buf)?;
+    wasm_gen::write_custom_section(&mut bytes, SECTION_WC_JWT, &encvec);
 
-    Ok(buf)
+    Ok(bytes)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -141,12 +136,37 @@ fn sha256_digest<R: Read>(mut reader: R) -> Result<Digest> {
     Ok(context.finish())
 }
 
-fn compute_hash_without_jwt(module: Module) -> Result<String> {
-    let mut refmod = module;
-    refmod.clear_custom_section("jwt");
-    let modbytes = serialize(refmod)?;
+// NOTE: we don't need to compute a hash of the entire file, we just need
+// to compute the hash if the things that indicate tampering, like code and
+// custom sections
+fn compute_hash_without_jwt(modbytes: &[u8]) -> Result<String> {
+    let mut binary: Vec<u8> = Vec::new();
+    let parser = wasmparser::Parser::new(0);
 
-    let digest = sha256_digest(modbytes.as_slice())?;
+    for payload in parser.parse_all(modbytes) {
+        match payload? {
+            CodeSectionEntry(fb) => {
+                let mut rdr = fb.get_binary_reader();
+                let remaining = rdr.bytes_remaining();
+                binary.extend_from_slice(
+                    rdr.read_bytes(remaining)
+                        .map_err(|e| BinaryReaderError::from(e))?,
+                );
+            }
+            DataSection(mut reader) => {
+                binary
+                    .extend_from_slice(reader.read().map_err(|e| BinaryReaderError::from(e))?.data);
+            }
+            CustomSection(reader) => {
+                if reader.name() != SECTION_JWT && reader.name() != SECTION_WC_JWT {
+                    binary.extend_from_slice(reader.data());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let digest = sha256_digest(binary.as_slice())?;
     Ok(HEXUPPER.encode(digest.as_ref()))
 }
 
@@ -155,10 +175,9 @@ mod test {
     use super::*;
     use crate::{
         caps::{KEY_VALUE, LOGGING, MESSAGING},
-        jwt::{Actor, Claims},
+        jwt::{Actor, Claims, WASCAP_INTERNAL_REVISION},
     };
     use base64::decode;
-    use parity_wasm::serialize;
 
     const WASM_BASE64: &str =
         "AGFzbQEAAAAADAZkeWxpbmuAgMACAAGKgICAAAJgAn9/AX9gAAACwYCAgAAEA2VudgptZW1vcnlCYXNl\
@@ -172,8 +191,6 @@ mod test {
         // Serialize and de-serialize this because the module loader adds bytes to
         // the above base64 encoded module.
         let dec_module = decode(WASM_BASE64).unwrap();
-        let m: Module = deserialize_buffer(&dec_module).unwrap();
-        let raw_module = serialize(m).unwrap();
 
         let kp = KeyPair::new_account();
         let claims = Claims {
@@ -192,24 +209,19 @@ mod test {
             issuer: kp.public_key(),
             subject: "test.wasm".to_string(),
             not_before: None,
+            wascap_revision: Some(WASCAP_INTERNAL_REVISION),
         };
-        let modified_bytecode = embed_claims(&raw_module, &claims, &kp).unwrap();
+        let modified_bytecode = embed_claims(&dec_module, &claims, &kp).unwrap();
         println!(
             "Added {} bytes in custom section.",
-            modified_bytecode.len() - raw_module.len()
+            modified_bytecode.len() - dec_module.len()
         );
         if let Some(token) = extract_claims(&modified_bytecode).unwrap() {
             assert_eq!(claims.issuer, token.claims.issuer);
-        /*     assert_eq!(
-            claims.metadata.as_ref().unwrap().caps,
-            token.claims.metadata.as_ref().unwrap().caps
-        );
-        */
-        /* assert_ne!(
-            claims.metadata.as_ref().unwrap().module_hash,
-            token.claims.metadata.as_ref().unwrap().module_hash
-        );
-        */
+            assert_eq!(
+                claims.metadata.as_ref().unwrap().caps,
+                token.claims.metadata.as_ref().unwrap().caps
+            );
         } else {
             unreachable!()
         }
@@ -220,8 +232,6 @@ mod test {
         // Serialize and de-serialize this because the module loader adds bytes to
         // the above base64 encoded module.
         let dec_module = decode(WASM_BASE64).unwrap();
-        let m: Module = deserialize_buffer(&dec_module).unwrap();
-        let raw_module = serialize(m).unwrap();
 
         let kp = KeyPair::new_account();
         let claims = Claims {
@@ -240,14 +250,16 @@ mod test {
             issuer: kp.public_key(),
             subject: "test.wasm".to_string(),
             not_before: None,
+            wascap_revision: Some(WASCAP_INTERNAL_REVISION),
         };
-        let modified_bytecode = embed_claims(&raw_module, &claims, &kp).unwrap();
+        let modified_bytecode = embed_claims(&dec_module, &claims, &kp).unwrap();
         println!(
             "Added {} bytes in custom section.",
-            modified_bytecode.len() - raw_module.len()
+            modified_bytecode.len() - dec_module.len()
         );
         if let Some(token) = extract_claims(&modified_bytecode).unwrap() {
             assert_eq!(claims.issuer, token.claims.issuer);
+            assert_eq!(claims.subject, token.claims.subject);
         } else {
             unreachable!()
         }

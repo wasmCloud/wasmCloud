@@ -1,9 +1,9 @@
 [package]
 name = "wascap"
-version = "0.8.0"
+version = "0.9.0"
 authors = ["wasmCloud Team"]
 edition = "2018"
-description = "Wascap - WebAssembly Standard Capabilities. Library for extracting, embedding, and validating claims"
+description = "Wascap - wasmCloud Capabilities. Library for extracting, embedding, and validating claims"
 license = "Apache-2.0"
 homepage = "https://wasmcloud.com"
 documentation = "https://docs.rs/wascap"
@@ -13,14 +13,16 @@ categories = ["cryptography", "authentication", "wasm"]
 
 [dependencies]
 log = "0.4.14"
-env_logger = "0.8.2"
+env_logger = "0.9.3"
 serde_derive = "1.0.123"
 serde = "1.0.123"
 nkeys = "0.2.0"
 base64 = "0.13.0"
 serde_json = "1.0.61"
-nuid = "0.3.0"
-parity-wasm = "0.42.1"
+nuid = "0.4.1"
+wasmparser = "0.94.0"
+wasm-gen = "0.1.4"
+wasm-encoder = "0.19.1"
 lazy_static = "1.4.0"
 ring = "0.16.20"
 data-encoding = "2.3.2"

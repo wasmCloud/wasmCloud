@@ -12,6 +12,12 @@ use std::{
 const HEADER_TYPE: &str = "jwt";
 const HEADER_ALGORITHM: &str = "Ed25519";
 
+// Current internal revision number that will go into embedded claims
+pub(crate) const WASCAP_INTERNAL_REVISION: u32 = 2;
+
+// Minimum revision number at which we verify module hashes
+pub(crate) const MIN_WASCAP_INTERNAL_REVISION: u32 = 2;
+
 /// A structure containing a JWT and its associated decoded claims
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
 pub struct Token<T> {
@@ -168,6 +174,10 @@ pub struct Claims<T> {
     /// Custom jwt claims in the `wascap` namespace
     #[serde(rename = "wascap", skip_serializing_if = "Option::is_none")]
     pub metadata: Option<T>,
+
+    /// Internal revision number used to aid in parsing and validating claims
+    #[serde(rename = "wascap_revision", skip_serializing_if = "Option::is_none")]
+    pub(crate) wascap_revision: Option<u32>,
 }
 
 /// The result of the validation process perform on a JWT
@@ -305,6 +315,7 @@ impl Claims<Account> {
             issuer,
             subject,
             not_before,
+            wascap_revision: Some(WASCAP_INTERNAL_REVISION),
         }
     }
 }
@@ -354,6 +365,7 @@ impl Claims<CapabilityProvider> {
             issuer,
             subject,
             not_before,
+            wascap_revision: Some(WASCAP_INTERNAL_REVISION),
         }
     }
 }
@@ -387,6 +399,7 @@ impl Claims<Operator> {
             issuer,
             subject,
             not_before,
+            wascap_revision: Some(WASCAP_INTERNAL_REVISION),
         }
     }
 }
@@ -420,6 +433,7 @@ impl Claims<Cluster> {
             issuer,
             subject,
             not_before,
+            wascap_revision: Some(WASCAP_INTERNAL_REVISION),
         }
     }
 }
@@ -464,6 +478,7 @@ impl Claims<Actor> {
             issuer,
             subject,
             not_before,
+            wascap_revision: Some(WASCAP_INTERNAL_REVISION),
         }
     }
 }
@@ -500,6 +515,7 @@ impl Claims<Invocation> {
             issuer,
             subject,
             not_before,
+            wascap_revision: Some(WASCAP_INTERNAL_REVISION),
         }
     }
 }
@@ -788,7 +804,10 @@ mod test {
     use super::{Account, Actor, Claims, ErrorKind, Invocation, KeyPair, Operator};
     use crate::{
         caps::{KEY_VALUE, LOGGING, MESSAGING},
-        jwt::{since_the_epoch, validate_token, CapabilityProvider, ClaimsBuilder, Cluster},
+        jwt::{
+            since_the_epoch, validate_token, CapabilityProvider, ClaimsBuilder, Cluster,
+            WASCAP_INTERNAL_REVISION,
+        },
     };
     use std::collections::HashMap;
 
@@ -811,6 +830,7 @@ mod test {
             issuer: kp.public_key(),
             subject: "test.wasm".to_string(),
             not_before: Some(since_the_epoch().as_secs() + 1000),
+            wascap_revision: Some(WASCAP_INTERNAL_REVISION),
         };
 
         let encoded = claims.encode(&kp).unwrap();
@@ -842,6 +862,7 @@ mod test {
             issuer: kp.public_key(),
             subject: "test.wasm".to_string(),
             not_before: None,
+            wascap_revision: Some(WASCAP_INTERNAL_REVISION),
         };
 
         let encoded = claims.encode(&kp).unwrap();
@@ -865,6 +886,7 @@ mod test {
             issuer: issuer.public_key(),
             subject: "foo".to_string(),
             not_before: None,
+            wascap_revision: Some(WASCAP_INTERNAL_REVISION),
         };
         let encoded = claims.encode(&issuer).unwrap();
         let vres = validate_token::<Account>(&encoded);
@@ -891,6 +913,7 @@ mod test {
             issued_at: 0,
             issuer: issuer.public_key(),
             subject: "invocation1".to_string(),
+            wascap_revision: Some(WASCAP_INTERNAL_REVISION),
         };
         let encoded = claims.encode(&issuer).unwrap();
         let vres = validate_token::<Invocation>(&encoded);
@@ -921,6 +944,7 @@ mod test {
             issuer: kp.public_key(),
             subject: "test.wasm".to_string(),
             not_before: None,
+            wascap_revision: Some(WASCAP_INTERNAL_REVISION),
         };
 
         let encoded = claims.encode(&kp).unwrap();
@@ -939,6 +963,7 @@ mod test {
             issuer: "foo".to_string(),
             subject: "test".to_string(),
             not_before: None,
+            wascap_revision: Some(WASCAP_INTERNAL_REVISION),
         };
         let encoded = claims.encode(&issuer).unwrap();
         let decoded = Claims::<Actor>::decode(&encoded);
@@ -964,6 +989,7 @@ mod test {
             issuer: kp.public_key(),
             subject: "test.wasm".to_string(),
             not_before: None,
+            wascap_revision: Some(WASCAP_INTERNAL_REVISION),
         };
         let encoded = claims.encode(&kp).unwrap();
         let decoded = Claims::<Operator>::decode(&encoded);
@@ -990,6 +1016,7 @@ mod test {
             issuer: kp.public_key(),
             subject: "test.wasm".to_string(),
             not_before: None,
+            wascap_revision: Some(WASCAP_INTERNAL_REVISION),
         };
 
         let encoded = claims.encode(&kp).unwrap();
@@ -1054,6 +1081,7 @@ mod test {
             issuer: kp.public_key(),
             subject: "test.wasm".to_string(),
             not_before: None,
+            wascap_revision: Some(WASCAP_INTERNAL_REVISION),
         };
 
         let encoded = claims.encode(&kp).unwrap();
@@ -1118,6 +1146,7 @@ mod test {
             issuer: kp.public_key(),
             subject: "test.wasm".to_string(),
             not_before: None,
+            wascap_revision: Some(WASCAP_INTERNAL_REVISION),
         };
 
         let encoded_nosep = claims.encode(&kp).unwrap().replace(".", "");
@@ -1153,6 +1182,7 @@ mod test {
             issuer: kp.public_key(),
             subject: "test.wasm".to_string(),
             not_before: None,
+            wascap_revision: Some(WASCAP_INTERNAL_REVISION),
         };
 
         let encoded = claims.encode(&kp).unwrap();
@@ -1190,6 +1220,7 @@ mod test {
             issuer: kp.public_key(),
             subject: "test.wasm".to_string(),
             not_before: None,
+            wascap_revision: Some(WASCAP_INTERNAL_REVISION),
         };
 
         claims.subject = String::new();

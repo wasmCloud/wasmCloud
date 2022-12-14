@@ -14,6 +14,8 @@
 
 use std::{error::Error as StdError, fmt};
 
+use wasmparser::BinaryReaderError;
+
 /// An error that can contain wascap-specific context
 #[derive(Debug)]
 pub struct Error(Box<ErrorKind>);
@@ -30,7 +32,7 @@ pub enum ErrorKind {
     UTF8(std::string::FromUtf8Error),
     Token(String),
     InvalidCapability,
-    WasmElement(parity_wasm::elements::Error),
+    WasmElement(String),
     IO(std::io::Error),
     InvalidModuleHash,
     ExpiredToken,
@@ -78,7 +80,7 @@ impl StdError for Error {
             ErrorKind::UTF8(ref err) => Some(err),
             ErrorKind::Token(_) => None,
             ErrorKind::InvalidCapability => None,
-            ErrorKind::WasmElement(ref err) => Some(err),
+            ErrorKind::WasmElement(_) => None,
             ErrorKind::IO(ref err) => Some(err),
             ErrorKind::InvalidModuleHash => None,
             ErrorKind::ExpiredToken => None,
@@ -126,9 +128,10 @@ impl From<std::io::Error> for Error {
     }
 }
 
-impl From<parity_wasm::elements::Error> for Error {
-    fn from(source: parity_wasm::elements::Error) -> Error {
-        Error(Box::new(ErrorKind::WasmElement(source)))
+impl From<BinaryReaderError> for Error {
+    fn from(source: BinaryReaderError) -> Error {
+        let io_error = ::std::io::Error::new(::std::io::ErrorKind::Other, source.to_string());
+        Error(Box::new(ErrorKind::IO(io_error)))
     }
 }
 
