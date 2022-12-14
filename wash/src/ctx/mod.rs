@@ -257,7 +257,6 @@ pub(crate) fn ensure_host_config_context(context_dir: &ContextDir) -> Result<()>
 
 /// Load the host configuration file and create a context called `host_config` from it
 fn create_host_config_context(context_dir: &ContextDir) -> Result<()> {
-    println!("My context dir is: {}", context_dir.display());
     let host_config_ctx = WashContext {
         name: HOST_CONFIG_NAME.to_string(),
         ..load_context(cfg_dir()?.join(format!("{}.json", HOST_CONFIG_NAME)))?

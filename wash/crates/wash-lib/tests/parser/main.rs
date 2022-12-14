@@ -42,6 +42,9 @@ fn rust_actor() {
         CommonConfig {
             name: "testactor".to_string(),
             version: Version::parse("0.1.0").unwrap(),
+            path: PathBuf::from("./tests/parser/files/")
+                .canonicalize()
+                .unwrap()
         }
     );
 }
@@ -80,6 +83,9 @@ fn tinygo_actor() {
         CommonConfig {
             name: "testactor".to_string(),
             version: Version::parse("0.1.0").unwrap(),
+            path: PathBuf::from("./tests/parser/files/")
+                .canonicalize()
+                .unwrap()
         }
     );
 }
@@ -258,6 +264,9 @@ fn minimal_rust_actor() {
         CommonConfig {
             name: "testactor".to_string(),
             version: Version::parse("0.1.0").unwrap(),
+            path: PathBuf::from("./tests/parser/files/")
+                .canonicalize()
+                .unwrap()
         }
     )
 }
@@ -299,6 +308,9 @@ fn cargo_toml_actor() {
         CommonConfig {
             name: "withcargotoml".to_string(),
             version: Version::parse("0.200.0").unwrap(),
+            path: PathBuf::from("./tests/parser/files/withcargotoml")
+                .canonicalize()
+                .unwrap()
         }
     )
 }

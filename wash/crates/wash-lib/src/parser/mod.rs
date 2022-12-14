@@ -176,6 +176,8 @@ pub struct CommonConfig {
     pub name: String,
     /// Semantic version of the project.
     pub version: Version,
+    /// Path to the project directory to determine where built and signed artifacts should be
+    pub path: PathBuf,
 }
 
 #[derive(serde::Deserialize, Debug)]
@@ -237,8 +239,7 @@ pub fn get_config(opt_path: Option<PathBuf>, use_env: Option<bool>) -> Result<Pr
     }
 
     path = fs::canonicalize(path)?;
-
-    if path.is_dir() {
+    let (project_path, wasmcloud_path) = if path.is_dir() {
         let wasmcloud_path = path.join("wasmcloud.toml");
         if !wasmcloud_path.is_file() {
             return Err(anyhow!(
@@ -246,14 +247,22 @@ pub fn get_config(opt_path: Option<PathBuf>, use_env: Option<bool>) -> Result<Pr
                 path.display()
             ));
         }
-        path = wasmcloud_path;
-    }
+        (path, wasmcloud_path)
+    } else if path.is_file() {
+        (
+            path.parent()
+                .ok_or_else(|| anyhow!("Could not get parent path of wasmcloud.toml file"))?
+                .to_path_buf(),
+            path,
+        )
+    } else {
+        return Err(anyhow!(
+            "No wasmcloud.toml file found in {}",
+            path.display()
+        ));
+    };
 
-    if !path.is_file() {
-        return Err(anyhow!("No config file found at {}", path.display()));
-    }
-
-    let mut config = Config::builder().add_source(config::File::from(path.clone()));
+    let mut config = Config::builder().add_source(config::File::from(wasmcloud_path.clone()));
 
     if use_env.unwrap_or(true) {
         config = config.add_source(config::Environment::with_prefix("WASMCLOUD"));
@@ -263,7 +272,7 @@ pub fn get_config(opt_path: Option<PathBuf>, use_env: Option<bool>) -> Result<Pr
         .build()
         .map_err(|e| {
             if e.to_string().contains("is not of a registered file format") {
-                return anyhow!("Invalid config file: {}", path.display());
+                return anyhow!("Invalid config file: {}", wasmcloud_path.display());
             }
 
             anyhow!("{}", e)
@@ -273,12 +282,12 @@ pub fn get_config(opt_path: Option<PathBuf>, use_env: Option<bool>) -> Result<Pr
     let raw_project_config: RawProjectConfig = serde_json::from_value(json_value)?;
 
     raw_project_config
-        .convert(path.clone())
-        .map_err(|e: anyhow::Error| anyhow!("{} in {}", e, path.display()))
+        .convert(project_path.clone())
+        .map_err(|e: anyhow::Error| anyhow!("{} in {}", e, wasmcloud_path.display()))
 }
 
 impl RawProjectConfig {
-    pub fn convert(self, path: PathBuf) -> Result<ProjectConfig> {
+    pub fn convert(self, project_path: PathBuf) -> Result<ProjectConfig> {
         let project_type_config = match self.project_type.trim().to_lowercase().as_str() {
             "actor" => {
                 let actor_config = self.actor.ok_or_else(|| anyhow!("Missing actor config"))?;
@@ -327,11 +336,12 @@ impl RawProjectConfig {
                 Ok(CommonConfig {
                     name: self.name.unwrap(),
                     version: self.version.unwrap(),
+                    path: project_path
                 })
             } else {
                 match language_config {
                     LanguageConfig::Rust(_) => {
-                        let cargo_toml_path = path.parent().unwrap().join("Cargo.toml");
+                        let cargo_toml_path = project_path.join("Cargo.toml");
                         if !cargo_toml_path.is_file() {
                             bail!("No Cargo.toml file found in the current directory");
                         }
@@ -347,7 +357,7 @@ impl RawProjectConfig {
 
                         let name = self.name.unwrap_or(cargo_toml.name);
 
-                        Ok(CommonConfig { name, version })
+                        Ok(CommonConfig { name, version, path: project_path})
                     }
                     LanguageConfig::TinyGo(_) => Ok(CommonConfig {
                         name: self
@@ -356,6 +366,7 @@ impl RawProjectConfig {
                         version: self
                             .version
                             .ok_or_else(|| anyhow!("Missing version in wasmcloud.toml"))?,
+                        path: project_path,
                     }),
                 }
             };

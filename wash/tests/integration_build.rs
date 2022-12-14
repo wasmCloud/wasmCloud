@@ -48,7 +48,7 @@ fn build_new_project(template: &str, subdir: &str, build_result: &str, signed: b
     if signed {
         run_cmd!( $wash build )
     } else {
-        run_cmd!( $wash build --no-sign )
+        run_cmd!( $wash build --build-only )
     }
     .map_err(|e| anyhow!("wash build failed: {}", e))?;
 
