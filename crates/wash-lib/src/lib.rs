@@ -10,6 +10,8 @@ pub mod start;
 pub mod parser;
 
 #[cfg(feature = "cli")]
+pub mod build;
+#[cfg(feature = "cli")]
 pub mod cli;
 
 pub mod config;
