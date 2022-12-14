@@ -188,7 +188,7 @@ mod test {
 
         let mut orig_ctx = WashContext {
             name: "happy_path".to_string(),
-            rpc_lattice_prefix: "foobar".to_string(),
+            lattice_prefix: "foobar".to_string(),
             ..Default::default()
         };
 
@@ -219,14 +219,13 @@ mod test {
             .load_context("happy_path")
             .expect("Should be able to load context from disk");
         assert!(
-            orig_ctx.name == loaded.name
-                && orig_ctx.rpc_lattice_prefix == loaded.rpc_lattice_prefix,
+            orig_ctx.name == loaded.name && orig_ctx.lattice_prefix == loaded.lattice_prefix,
             "Should have loaded the correct context from disk"
         );
 
         // Save one more context
         orig_ctx.name = "happy_gilmore".to_string();
-        orig_ctx.rpc_lattice_prefix = "baz".to_string();
+        orig_ctx.lattice_prefix = "baz".to_string();
         ctx_dir
             .save_context(&orig_ctx)
             .expect("Should be able to save second context");
@@ -254,8 +253,7 @@ mod test {
             .load_default_context()
             .expect("Should be able to load default context from disk");
         assert!(
-            orig_ctx.name == loaded.name
-                && orig_ctx.rpc_lattice_prefix == loaded.rpc_lattice_prefix,
+            orig_ctx.name == loaded.name && orig_ctx.lattice_prefix == loaded.lattice_prefix,
             "Should have loaded the correct context from disk"
         );
 

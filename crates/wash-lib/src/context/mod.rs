@@ -74,7 +74,9 @@ pub struct WashContext {
     pub ctl_timeout: u64,
 
     #[serde(default = "default_lattice_prefix")]
-    pub ctl_lattice_prefix: String,
+    pub lattice_prefix: String,
+
+    pub js_domain: Option<String>,
 
     #[serde(default = "default_nats_host")]
     pub rpc_host: String,
@@ -88,9 +90,6 @@ pub struct WashContext {
     /// rpc timeout in milliseconds
     #[serde(default = "default_timeout_ms")]
     pub rpc_timeout: u64,
-
-    #[serde(default = "default_lattice_prefix")]
-    pub rpc_lattice_prefix: String,
 }
 
 impl WashContext {
@@ -114,14 +113,14 @@ impl Default for WashContext {
             ctl_seed: None,
             ctl_credsfile: None,
             ctl_timeout: DEFAULT_NATS_TIMEOUT_MS,
-            ctl_lattice_prefix: DEFAULT_LATTICE_PREFIX.to_string(),
+            lattice_prefix: DEFAULT_LATTICE_PREFIX.to_string(),
+            js_domain: None,
             rpc_host: DEFAULT_NATS_HOST.to_string(),
             rpc_port: DEFAULT_NATS_PORT.parse().unwrap(),
             rpc_jwt: None,
             rpc_seed: None,
             rpc_credsfile: None,
             rpc_timeout: DEFAULT_NATS_TIMEOUT_MS,
-            rpc_lattice_prefix: DEFAULT_LATTICE_PREFIX.to_string(),
         }
     }
 }
