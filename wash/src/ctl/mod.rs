@@ -1077,7 +1077,7 @@ async fn ctl_client_from_opts(
 
     let lattice_prefix = opts.lattice_prefix.unwrap_or_else(|| {
         ctx.as_ref()
-            .map(|c| c.ctl_lattice_prefix.clone())
+            .map(|c| c.lattice_prefix.clone())
             .unwrap_or_else(|| DEFAULT_LATTICE_PREFIX.to_string())
     });
 
