@@ -1,4 +1,4 @@
-FROM rust:alpine as builder
+FROM rust:1.65-alpine3.16 as builder
 
 WORKDIR /build
 RUN apk add --no-cache clang clang-dev libressl-dev ca-certificates musl-dev llvm-dev clang-libs curl gcompat libgit2-dev

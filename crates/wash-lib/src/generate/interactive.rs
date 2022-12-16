@@ -1,9 +1,9 @@
+//! Helpful utilities for retrieving user input from the command line
 // This file is lightly modified from interactive.rs from cargo-generate
 //   source: https://github.com/cargo-generate/cargo-generate
 //   version: 0.9.0
 //   license: MIT/Apache-2.0
 //
-use crate::appearance::emoji;
 use crate::generate::{
     any_msg,
     project_variables::{StringEntry, TemplateSlots, VarInfo},
@@ -32,7 +32,7 @@ pub(crate) fn name() -> Result<String> {
     prompt_for_variable(&project_var)
 }
 
-pub(crate) fn user_question(prompt: &str, default: &Option<String>) -> Result<String> {
+pub fn user_question(prompt: &str, default: &Option<String>) -> Result<String> {
     let mut i = Input::<String>::new();
     i.with_prompt(prompt.to_string());
     if let Some(s) = default {
@@ -55,7 +55,7 @@ fn extract_default(variable: &VarInfo) -> Option<String> {
     }
 }
 
-pub(crate) fn prompt_for_choice(entry: &StringEntry, prompt: &str) -> Result<usize> {
+pub fn prompt_for_choice(entry: &StringEntry, prompt: &str) -> Result<usize> {
     use dialoguer::Select;
     let choices = entry.choices.as_ref().unwrap();
 
@@ -73,7 +73,11 @@ pub(crate) fn prompt_for_choice(entry: &StringEntry, prompt: &str) -> Result<usi
 }
 
 pub(crate) fn prompt_for_variable(variable: &TemplateSlots) -> Result<String> {
-    let prompt = format!("{} {}", emoji::SHRUG, style(&variable.prompt).bold(),);
+    let prompt = format!(
+        "{} {}",
+        crate::generate::emoji::SHRUG,
+        style(&variable.prompt).bold(),
+    );
 
     if let VarInfo::String { entry } = &variable.var_info {
         if let Some(choices) = &entry.choices {
@@ -92,7 +96,7 @@ pub(crate) fn prompt_for_variable(variable: &TemplateSlots) -> Result<String> {
         } else {
             eprintln!(
                 "{} {} \"{}\" {}",
-                emoji::WARN,
+                crate::generate::emoji::WARN,
                 style("Sorry,").bold().red(),
                 style(&user_entry).bold().yellow(),
                 style(format!("is not a valid value for {}", variable.var_name))

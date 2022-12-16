@@ -22,7 +22,7 @@ use wash_lib::{
     id::ClusterSeed,
 };
 
-use crate::generate::{
+use wash_lib::generate::{
     interactive::{prompt_for_choice, user_question},
     project_variables::StringEntry,
 };

@@ -1,9 +1,10 @@
+//! Variables that assist the [crate::generate::interactive] module
 // This file is lightly modified from project_variables.rs from cargo-generate
 //   source: https://github.com/cargo-generate/cargo-generate
 //   version: 0.9.0
 //   license: MIT/Apache-2.0
 //
-use crate::generate::{config::Config, ParamMap, TomlMap, PROJECT_NAME_REGEX};
+use crate::generate::{genconfig::Config, ParamMap, TomlMap, PROJECT_NAME_REGEX};
 use anyhow::{anyhow, Result};
 use regex::Regex;
 use serde_json::Value;
@@ -24,10 +25,10 @@ pub(crate) enum VarInfo {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct StringEntry {
-    pub(crate) default: Option<String>,
-    pub(crate) choices: Option<Vec<String>>,
-    pub(crate) regex: Option<Regex>,
+pub struct StringEntry {
+    pub default: Option<String>,
+    pub choices: Option<Vec<String>>,
+    pub regex: Option<Regex>,
 }
 
 #[derive(Error, Debug, Eq, PartialEq)]

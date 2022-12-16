@@ -12,7 +12,7 @@ use weld_codegen::{
     sources_to_model,
 };
 
-use crate::appearance::emoji;
+use wash_lib::generate::emoji;
 
 type TomlValue = toml::Value;
 const CODEGEN_CONFIG_FILE: &str = "codegen.toml";

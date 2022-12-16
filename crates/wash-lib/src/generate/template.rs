@@ -1,10 +1,9 @@
 //! template.rs
 //! Process files in template folder to build project folder
 //!
-use crate::appearance::emoji;
 use crate::generate::{
     any_msg,
-    config::{RenameConfig, TemplateConfig},
+    genconfig::{RenameConfig, TemplateConfig},
     ParamMap,
 };
 use anyhow::{anyhow, Context, Result};
@@ -188,7 +187,7 @@ pub(crate) fn process_template_dir(
                     let contents = fs::read_to_string(&entry).with_context(|| {
                             format!(
                                 "{} {} `{}` {}",
-                                emoji::ERROR,
+                                crate::generate::emoji::ERROR,
                                 style("Error reading template file.").bold().red(),
                                 style(&entry.display()).bold(),
                                 "If this is not a text file, you may want to add the path to the 'template.raw' list in project-generate.toml"
@@ -203,7 +202,7 @@ pub(crate) fn process_template_dir(
                     fs::write(&dest_path, rendered.as_bytes()).with_context(|| {
                         format!(
                             "{} {} `{}`",
-                            emoji::ERROR,
+                            crate::generate::emoji::ERROR,
                             style("Error saving rendered file:").bold().red(),
                             style(dest_path.display()).bold()
                         )
