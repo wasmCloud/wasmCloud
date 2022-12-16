@@ -1,4 +1,4 @@
-# Template choices for new project creation
+# Default template choices for project generation
 #
 # Template type is `[[actor]]`, `[[interface]]`, or `[[provider]]`
 # There should be at least one of each template type in this file
@@ -41,3 +41,9 @@ name = "factorial-provider"
 description = "a capability provider that computes factorials"
 git = "wasmcloud/project-templates"
 subfolder = "provider/factorial"
+
+[[provider]]
+name = "messaging-provider"
+description = "a capability provider that implements pubsub messaging"
+git = "wasmcloud/project-templates"
+subfolder = "provider/messaging"

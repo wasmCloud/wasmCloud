@@ -1,3 +1,6 @@
+//! Parse wasmcloud.toml files which specify key information for building and signing
+//! WebAssembly modules and native capability provider binaries
+
 use anyhow::{anyhow, bail, Result};
 use cargo_toml::Manifest;
 use config::Config;

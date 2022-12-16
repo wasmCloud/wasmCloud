@@ -1,3 +1,5 @@
+//! Remove cached wasmCloud files like OCI artifacts or downloaded binaries
+
 use std::{env, fs, io::Result, path::PathBuf};
 
 use crate::config::{downloads_dir, model_cache_dir};

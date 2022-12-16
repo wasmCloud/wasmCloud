@@ -13,6 +13,8 @@ pub mod parser;
 pub mod build;
 #[cfg(feature = "cli")]
 pub mod cli;
+#[cfg(feature = "cli")]
+pub mod generate;
 
 pub mod config;
 pub mod context;
