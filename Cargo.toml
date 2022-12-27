@@ -1,9 +1,9 @@
 [package]
 name = "wasmcloud-control-interface"
-version = "0.22.3"
+version = "0.23.0"
 authors = ["wasmCloud Team"]
 edition = "2021"
-homepage = "https://wasmcloud.dev"
+homepage = "https://wasmcloud.com"
 repository = "https://github.com/wasmCloud/control-interface-client"
 description = "A client library for communicating with hosts on a wasmCloud lattice"
 license = "Apache-2.0"
@@ -14,6 +14,8 @@ categories = ["wasm", "api-bindings"]
 
 [dependencies]
 async-nats = "0.23"
+data-encoding = "2.3.3"
+ring = "0.16.20"
 cloudevents-sdk = "0.6.0"
 futures = "0.3"
 rmp-serde = "1.0.0"

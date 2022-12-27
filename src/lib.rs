@@ -1,9 +1,17 @@
+//! # Control Interface Client
+//!
+//! This library provides a client API for consuming the wasmCloud control interface over a
+//! NATS connection. This library can be used by multiple types of tools, and is also used
+//! by the control interface capability provider and the wash CLI
+
 mod broker;
+mod kv;
 mod sub_stream;
 mod types;
 
 pub use types::*;
 
+use async_nats::jetstream::kv::Store;
 use cloudevents::event::Event;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{collections::HashMap, time::Duration};
@@ -21,13 +29,111 @@ type Result<T> = ::std::result::Result<T, Box<dyn std::error::Error + Send + Syn
 pub struct Client {
     nc: async_nats::Client,
     topic_prefix: Option<String>,
-    ns_prefix: Option<String>,
+    ns_prefix: String,
     timeout: Duration,
     auction_timeout: Duration,
+    kvstore: Option<Store>,
+}
+
+/// A client builder that can be used to fluently provide configuration settings used to construct
+/// the control interface client
+pub struct ClientBuilder {
+    nc: Option<async_nats::Client>,
+    topic_prefix: Option<String>,
+    ns_prefix: String,
+    timeout: Duration,
+    auction_timeout: Duration,
+    js_domain: Option<String>,
+}
+
+impl Default for ClientBuilder {
+    fn default() -> Self {
+        Self {
+            nc: None,
+            topic_prefix: None,
+            ns_prefix: "default".to_string(),
+            timeout: Duration::from_secs(2),
+            auction_timeout: Duration::from_secs(5),
+            js_domain: None,
+        }
+    }
+}
+
+impl ClientBuilder {
+    /// Creates a new client builder
+    pub fn new(nc: async_nats::Client) -> ClientBuilder {
+        ClientBuilder {
+            nc: Some(nc),
+            ..Default::default()
+        }
+    }
+
+    /// Sets the topic prefix for the NATS topic used for all control requests. Not to be confused with lattice ID/prefix
+    pub fn topic_prefix(self, prefix: impl Into<String>) -> ClientBuilder {
+        ClientBuilder {
+            topic_prefix: Some(prefix.into()),
+            ..self
+        }
+    }
+
+    /// The lattice ID/prefix used for this client. If this function is not invoked, the prefix will be set to `default`
+    pub fn lattice_prefix(self, prefix: impl Into<String>) -> ClientBuilder {
+        ClientBuilder {
+            ns_prefix: prefix.into(),
+            ..self
+        }
+    }
+
+    /// Sets the timeout for standard calls and RPC invocations used by the client. If not set, the default will be 2 seconds
+    pub fn rpc_timeout(self, timeout: Duration) -> ClientBuilder {
+        ClientBuilder {
+            timeout: timeout,
+            ..self
+        }
+    }
+
+    /// Sets the timeout for auction (scatter/gather) operations. If not set, the default will be 5 seconds
+    pub fn auction_timeout(self, timeout: Duration) -> ClientBuilder {
+        ClientBuilder {
+            auction_timeout: timeout,
+            ..self
+        }
+    }
+
+    /// Sets the JetStream domain for this client, which can be critical for locating the right key-value bucket
+    /// for lattice metadata storage. If this is skipped, then the JS domain will be `None`
+    pub fn js_domain(self, domain: impl Into<String>) -> ClientBuilder {
+        ClientBuilder {
+            js_domain: Some(domain.into()),
+            ..self
+        }
+    }
+
+    /// Completes the generation of a control interface client. This function is async because it will attempt
+    /// to locate and attach to a metadata key-value bucket (`LATTICEDATA_{prefix}`) when starting. If this bucket
+    /// is not discovered during build time, all subsequent client calls will operate in "legacy" mode against the
+    /// deprecated control interface topics
+    pub async fn build(self) -> Result<Client> {
+        if let Some(nc) = self.nc {
+            Ok(Client {
+                nc: nc.clone(),
+                topic_prefix: self.topic_prefix,
+                ns_prefix: self.ns_prefix.clone(),
+                timeout: self.timeout,
+                auction_timeout: self.auction_timeout,
+                kvstore: kv::get_kv_store(nc, &self.ns_prefix, self.js_domain).await,
+            })
+        } else {
+            Err("Cannot create a control interface client without a NATS client".into())
+        }
+    }
 }
 
 impl Client {
-    /// Creates a new lattice control interface client
+    /// Creates a new lattice control interface client. You should use [ClientBuilder::new] instead. This
+    /// function will also not attempt to communicate with a key-value store containing the lattice metadata
+    /// and will only ever use the deprecated methods of host/lattice interaction
+    #[deprecated(since = "0.23.0", note = "please use the client builder instead")]
     pub fn new(
         nc: async_nats::Client,
         ns_prefix: Option<String>,
@@ -37,16 +143,18 @@ impl Client {
         Client {
             nc,
             topic_prefix: None,
-            ns_prefix,
+            ns_prefix: ns_prefix.unwrap_or_else(|| "default".to_string()),
             timeout,
             auction_timeout,
+            kvstore: None,
         }
     }
 
     /// Creates a new lattice control interface client with a control interface topic
-    /// prefix. This is an advanced use case, and this function should only be used
-    /// if you're interacting with wasmcloud hosts that have a configured control interface topic prefix.
-    /// In most cases, [Client::new] should be used instead.
+    /// prefix. You should use [ClientBuilder::new] instead.  This
+    /// function will also not attempt to communicate with a key-value store containing the lattice metadata
+    /// and will only ever use the deprecated methods of host/lattice interaction
+    #[deprecated(since = "0.23.0", note = "please use the client builder instead")]
     pub fn new_with_topic_prefix(
         nc: async_nats::Client,
         topic_prefix: &str,
@@ -57,9 +165,10 @@ impl Client {
         Client {
             nc,
             topic_prefix: Some(topic_prefix.to_owned()),
-            ns_prefix,
+            ns_prefix: ns_prefix.unwrap_or_else(|| "default".to_string()),
             timeout,
             auction_timeout,
+            kvstore: None,
         }
     }
 
@@ -108,18 +217,23 @@ impl Client {
         }
     }
 
-    /// Retrieves the full set of all cached claims in the lattice by getting a response from the first
-    /// host that answers this query
+    /// Retrieves the full set of all cached claims in the lattice. If a suitable key-value bucket for metadata
+    /// was discovered at client creation time, then that bucket will be queried directly for the claims. If not,
+    /// then the claims will be queried by issuing a request on a queue-subscribed topic to the listening hosts.    
     #[instrument(level = "debug", skip_all)]
     pub async fn get_claims(&self) -> Result<GetClaimsResponse> {
-        let subject = broker::queries::claims(&self.topic_prefix, &self.ns_prefix);
-        debug!("get_claims:request {}", &subject);
-        match self.request_timeout(subject, vec![], self.timeout).await {
-            Ok(msg) => {
-                let list: GetClaimsResponse = json_deserialize(&msg.payload)?;
-                Ok(list)
+        if let Some(ref store) = self.kvstore {
+            kv::get_claims(store).await
+        } else {
+            let subject = broker::queries::claims(&self.topic_prefix, &self.ns_prefix);
+            debug!("get_claims:request {}", &subject);
+            match self.request_timeout(subject, vec![], self.timeout).await {
+                Ok(msg) => {
+                    let list: GetClaimsResponse = json_deserialize(&msg.payload)?;
+                    Ok(list)
+                }
+                Err(e) => Err(format!("Did not receive claims from lattice: {}", e).into()),
             }
-            Err(e) => Err(format!("Did not receive claims from lattice: {}", e).into()),
         }
     }
 
@@ -252,10 +366,10 @@ impl Client {
         }
     }
 
-    /// Publishes the link advertisement message to the lattice that is published when code invokes the `set_link`
-    /// function on a `Host` struct instance. This operation pushes to a queue-subscribed topic, and therefore
-    /// awaits confirmation from the single psuedo-randomly chosen recipient host. If that one host fails to acknowledge,
-    /// or if no hosts acknowledge within the timeout period, this operation is considered a failure
+    /// If a key-value bucket was discovered at client construction time, then the link data will be written directly
+    /// to the bucket and interested parties will be notified indirectly by virtue of key subscription/monitoring. If
+    /// no bucket was discovered, then the "old" behavior will be performed of publishing the link data on the
+    /// appropriate topic.    
     #[instrument(level = "debug", skip_all)]
     pub async fn advertise_link(
         &self,
@@ -265,25 +379,38 @@ impl Client {
         link_name: &str,
         values: HashMap<String, String>,
     ) -> Result<CtlOperationAck> {
-        let subject = broker::advertise_link(&self.topic_prefix, &self.ns_prefix);
-        debug!("advertise_link:request {}", &subject);
         let mut ld = LinkDefinition::default();
         ld.actor_id = actor_id.to_string();
         ld.provider_id = provider_id.to_string();
         ld.contract_id = contract_id.to_string();
         ld.link_name = link_name.to_string();
         ld.values = values;
-        let bytes = crate::json_serialize(&ld)?;
-        match self.request_timeout(subject, bytes, self.timeout).await {
-            Ok(msg) => {
-                let ack: CtlOperationAck = json_deserialize(&msg.payload)?;
-                Ok(ack)
+
+        if let Some(ref store) = self.kvstore {
+            kv::put_link(store, ld).await.map(|_| CtlOperationAck {
+                accepted: true,
+                error: "".to_string(),
+            })
+        } else {
+            let subject = broker::advertise_link(&self.topic_prefix, &self.ns_prefix);
+            debug!("advertise_link:request {}", &subject);
+
+            let bytes = crate::json_serialize(&ld)?;
+            match self.request_timeout(subject, bytes, self.timeout).await {
+                Ok(msg) => {
+                    let ack: CtlOperationAck = json_deserialize(&msg.payload)?;
+                    Ok(ack)
+                }
+                Err(e) => {
+                    Err(format!("Did not receive advertise link acknowledgement: {}", e).into())
+                }
             }
-            Err(e) => Err(format!("Did not receive advertise link acknowledgement: {}", e).into()),
         }
     }
 
-    /// Publishes a request to remove a link definition to the lattice.
+    /// If a key-value bucket is being used, then the link definition will be removed from that bucket directly. If not,
+    /// then this function will fall back to publishing a link definition removal request on the right lattice control
+    /// interface topic.
     #[instrument(level = "debug", skip_all)]
     pub async fn remove_link(
         &self,
@@ -291,30 +418,49 @@ impl Client {
         contract_id: &str,
         link_name: &str,
     ) -> Result<CtlOperationAck> {
-        let subject = broker::remove_link(&self.topic_prefix, &self.ns_prefix);
-        debug!("remove_link:request {}", &subject);
-        let mut ld = LinkDefinition::default();
-        ld.actor_id = actor_id.to_string();
-        ld.contract_id = contract_id.to_string();
-        ld.link_name = link_name.to_string();
-        let bytes = crate::json_serialize(&ld)?;
-        match self.request_timeout(subject, bytes, self.timeout).await {
-            Ok(msg) => {
-                let ack: CtlOperationAck = json_deserialize(&msg.payload)?;
-                Ok(ack)
+        if let Some(ref store) = self.kvstore {
+            match kv::delete_link(store, actor_id, contract_id, link_name).await {
+                Ok(_) => Ok(CtlOperationAck {
+                    accepted: true,
+                    error: "".to_string(),
+                }),
+                Err(e) => Ok(CtlOperationAck {
+                    accepted: false,
+                    error: format!("{}", e),
+                }),
             }
-            Err(e) => Err(format!("Did not receive remove link acknowledgement: {}", e).into()),
+        } else {
+            let subject = broker::remove_link(&self.topic_prefix, &self.ns_prefix);
+            debug!("remove_link:request {}", &subject);
+            let mut ld = LinkDefinition::default();
+            ld.actor_id = actor_id.to_string();
+            ld.contract_id = contract_id.to_string();
+            ld.link_name = link_name.to_string();
+            let bytes = crate::json_serialize(&ld)?;
+            match self.request_timeout(subject, bytes, self.timeout).await {
+                Ok(msg) => {
+                    let ack: CtlOperationAck = json_deserialize(&msg.payload)?;
+                    Ok(ack)
+                }
+                Err(e) => Err(format!("Did not receive remove link acknowledgement: {}", e).into()),
+            }
         }
     }
 
-    /// Publishes a request to retrieve all current link definitions.
+    /// Retrieves the list of link definitions stored in the lattice metadata key-value bucket. If no such bucket was discovered
+    /// at client creation time, then it will issue a "legacy" request on the appropriate topic to request link definitions
+    /// from the first host that answers that request.    
     #[instrument(level = "debug", skip_all)]
     pub async fn query_links(&self) -> Result<LinkDefinitionList> {
-        let subject = broker::queries::link_definitions(&self.topic_prefix, &self.ns_prefix);
-        debug!("query_links:request {}", &subject);
-        match self.request_timeout(subject, vec![], self.timeout).await {
-            Ok(msg) => json_deserialize(&msg.payload),
-            Err(e) => Err(format!("Did not receive a response to links query: {}", e).into()),
+        if let Some(ref store) = self.kvstore {
+            kv::get_links(store).await
+        } else {
+            let subject = broker::queries::link_definitions(&self.topic_prefix, &self.ns_prefix);
+            debug!("query_links:request {}", &subject);
+            match self.request_timeout(subject, vec![], self.timeout).await {
+                Ok(msg) => json_deserialize(&msg.payload),
+                Err(e) => Err(format!("Did not receive a response to links query: {}", e).into()),
+            }
         }
     }
 
@@ -543,11 +689,13 @@ impl Client {
     ///
     /// # Example
     /// ```rust
-    /// use wasmcloud_control_interface::Client;
+    /// use wasmcloud_control_interface::{Client, ClientBuilder};
     /// async {
     ///   let nc = async_nats::connect("127.0.0.1:4222").await.unwrap();
-    ///   let client = Client::new(nc, None, std::time::Duration::from_millis(1000),
-    ///                        std::time::Duration::from_millis(1000));
+    ///   let client = ClientBuilder::new(nc)
+    ///                 .rpc_timeout(std::time::Duration::from_millis(1000))
+    ///                 .auction_timeout(std::time::Duration::from_millis(1000))
+    ///                 .build().await.unwrap();
     ///   let mut receiver = client.events_receiver().await.unwrap();
     ///   tokio::spawn( async move {
     ///       while let Some(evt) = receiver.recv().await {
@@ -565,11 +713,13 @@ impl Client {
     ///
     /// # Example
     /// ```rust
-    /// use wasmcloud_control_interface::Client;
+    /// use wasmcloud_control_interface::{Client, ClientBuilder};
     /// async {
     ///   let nc = async_nats::connect("0.0.0.0:4222").await.unwrap();
-    ///   let client = Client::new(nc, None, std::time::Duration::from_millis(1000),
-    ///                   std::time::Duration::from_millis(1000));
+    ///   let client = ClientBuilder::new(nc)
+    ///                 .rpc_timeout(std::time::Duration::from_millis(1000))
+    ///                 .auction_timeout(std::time::Duration::from_millis(1000))
+    ///                 .build().await.unwrap();    
     ///   let mut receiver = client.events_receiver().await.unwrap();
     ///   // read the docs for flume receiver. You can use it in either sync or async code
     ///   // The receiver can be cloned() as needed.
@@ -645,7 +795,7 @@ pub fn json_deserialize<'de, T: Deserialize<'de>>(
 async fn start_provider_(
     client: &async_nats::Client,
     topic_prefix: &Option<String>,
-    ns_prefix: &Option<String>,
+    ns_prefix: &str,
     timeout: Duration,
     host_id: &str,
     provider_ref: &str,
@@ -684,6 +834,7 @@ async fn start_provider_(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     /// Note: This test is a means of manually watching the event stream as CloudEvents are received
     /// It does not assert functionality, and so we've marked it as ignore to ensure it's not run by default
@@ -692,12 +843,12 @@ mod tests {
     #[ignore]
     async fn test_events_receiver() {
         let nc = async_nats::connect("127.0.0.1:4222").await.unwrap();
-        let client = Client::new(
-            nc,
-            None,
-            std::time::Duration::from_millis(1000),
-            std::time::Duration::from_millis(1000),
-        );
+        let client = ClientBuilder::new(nc)
+            .rpc_timeout(Duration::from_millis(1000))
+            .auction_timeout(Duration::from_millis(1000))
+            .build()
+            .await
+            .unwrap();
         let mut receiver = client.events_receiver().await.unwrap();
         tokio::spawn(async move {
             while let Some(evt) = receiver.recv().await {
