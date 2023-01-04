@@ -137,12 +137,20 @@ async fn create_client(
     let auction_timeout = Duration::from_millis(config.auction_timeout_ms);
     let lattice_prefix = config.lattice_prefix.clone();
     let conn = connect(config).await?;
-    let client = wasmcloud_control_interface::Client::new(
-        conn,
-        Some(lattice_prefix),
-        timeout,
-        auction_timeout,
-    );
+
+    let mut builder = wasmcloud_control_interface::ClientBuilder::new(conn)
+        .lattice_prefix(lattice_prefix)
+        .rpc_timeout(timeout)
+        .auction_timeout(auction_timeout);
+    if let Some(domain) = config.js_domain.as_ref() {
+        builder = builder.js_domain(domain.to_string());
+    }
+
+    let client = builder
+        .build()
+        .await
+        .map_err(|e| RpcError::Nats(format!("Unable to create NATS client: {:?}", e)))?;
+
     Ok(client)
 }
 

@@ -36,6 +36,9 @@ struct ConnectionConfig {
     #[serde(default)]
     lattice_prefix: String,
 
+    #[serde(default)]
+    js_domain: Option<String>,
+
     timeout_ms: u64,
 
     auction_timeout_ms: u64,
@@ -46,6 +49,7 @@ impl Default for ConnectionConfig {
         Self {
             cluster_uris: vec![DEFAULT_NATS_URI.to_owned()],
             auth_jwt: None,
+            js_domain: None,
             auth_seed: None,
             lattice_prefix: "default".to_owned(),
             timeout_ms: DEFAULT_TIMEOUT_MS,
@@ -121,6 +125,7 @@ impl LatticeController for LatticeControllerProvider {
                     lattice_prefix: arg.lattice_id.to_string(),
                     timeout_ms: 2_000,
                     auction_timeout_ms: 5_000,
+                    js_domain: arg.js_domain.clone(),
                 },
             )
             .await;
