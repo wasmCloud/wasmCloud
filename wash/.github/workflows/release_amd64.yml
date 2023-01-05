@@ -51,13 +51,13 @@ jobs:
           nfpm pkg --packager rpm -f build/nfpm.amd64.yaml
       - name: Push amd64 (deb)
         run: |
-          debs=(35 150 155 156 190 203 206 207 210 215 219)
+          debs=(35 203 206 207 210 215 219 220 221 233 235 237 261)
           for distro_version in "${debs[@]}"; do
             curl -F "package[distro_version_id]=${distro_version}" -F "package[package_file]=@$(ls wash_*_amd64.deb)" https://$PACKAGECLOUD_TOKEN:@packagecloud.io/api/v1/repos/wasmcloud/core/packages.json;
           done
       - name: Push x86_64 (rpm)
         run: |
-          rpms=(140 141 146 194 204 205 209 216)
+          rpms=(194 204 209 216 226 231 236 239 240 244 260)
           for distro_version in "${rpms[@]}"; do 
             curl -F "package[distro_version_id]=${distro_version}" -F "package[package_file]=@$(ls wash-*.x86_64.rpm)" https://$PACKAGECLOUD_TOKEN:@packagecloud.io/api/v1/repos/wasmcloud/core/packages.json;
           done
