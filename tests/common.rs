@@ -5,6 +5,9 @@ use std::{
     path::PathBuf,
 };
 
+#[allow(unused)]
+pub(crate) const LOCAL_REGISTRY: &str = "localhost:5001";
+
 /// Helper function to create the `wash` binary process
 #[allow(unused)]
 pub(crate) fn wash() -> std::process::Command {
