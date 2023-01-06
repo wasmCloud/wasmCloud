@@ -13,7 +13,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 const SECS_PER_DAY: u64 = 86400;
-const SECTION_JWT: &str = "jwt";
+const SECTION_JWT: &str = "jwt"; // Versions of wascap prior to 0.9 used this section
 const SECTION_WC_JWT: &str = "wasmcloud_jwt";
 
 /// Extracts a set of claims from the raw bytes of a WebAssembly module. In the case where no
@@ -112,6 +112,7 @@ pub fn sign_buffer_with_claims(
 pub(crate) fn strip_custom_section(buf: &[u8]) -> Result<Vec<u8>> {
     let mut m = walrus::Module::from_buffer(buf)
         .map_err(|e| errors::new(ErrorKind::WasmElement(e.to_string())))?;
+    m.customs.remove_raw(SECTION_JWT);
     m.customs.remove_raw(SECTION_WC_JWT);
 
     Ok(m.emit_wasm())
