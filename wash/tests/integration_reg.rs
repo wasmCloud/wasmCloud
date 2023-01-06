@@ -8,7 +8,7 @@ use std::{
 
 const ECHO_WASM: &str = "wasmcloud.azurecr.io/echo:0.2.0";
 const LOGGING_PAR: &str = "wasmcloud.azurecr.io/logging:0.9.1";
-const LOCAL_REGISTRY: &str = "localhost:5000";
+const LOCAL_REGISTRY: &str = "localhost:5001";
 
 #[test]
 fn integration_pull_basic() {

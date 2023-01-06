@@ -457,6 +457,8 @@ mod tests {
     use anyhow::Result;
     use clap::Parser;
 
+    const LOCAL_REGISTRY: &str = "localhost:5001";
+
     // Assert that our API doesn't unknowingly drift
     #[test]
     fn test_up_comprehensive() -> Result<()> {
@@ -467,7 +469,7 @@ mod tests {
             "up",
             "--allow-latest",
             "--allowed-insecure",
-            "localhost:5000",
+            LOCAL_REGISTRY,
             "--cluster-issuers",
             "CBZZ6BLE7PIJNCEJMXOHAJ65KIXRVXDA74W6LUKXC4EPFHTJREXQCOYI",
             "--cluster-seed",
@@ -539,7 +541,7 @@ mod tests {
         assert!(up_all_flags.wasmcloud_opts.allow_latest);
         assert_eq!(
             up_all_flags.wasmcloud_opts.allowed_insecure,
-            Some(vec!["localhost:5000".to_string()])
+            Some(vec![LOCAL_REGISTRY.to_string()])
         );
         assert_eq!(
             up_all_flags.wasmcloud_opts.cluster_issuers,

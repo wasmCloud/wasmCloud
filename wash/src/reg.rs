@@ -255,7 +255,7 @@ mod tests {
     use clap::Parser;
 
     const ECHO_WASM: &str = "wasmcloud.azurecr.io/echo:0.2.0";
-    const LOCAL_REGISTRY: &str = "localhost:5000";
+    const LOCAL_REGISTRY: &str = "localhost:5001";
 
     #[derive(Debug, Parser)]
     struct Cmd {
