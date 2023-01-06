@@ -154,6 +154,7 @@ mod test {
 
     use super::*;
     use crate::{
+        caps::capability_name,
         caps::{KEY_VALUE, LOGGING, MESSAGING},
         jwt::{Actor, Claims, WASCAP_INTERNAL_REVISION},
     };
@@ -298,12 +299,12 @@ mod test {
         let claims = Claims {
             metadata: Some(Actor::new(
                 "testing".to_string(),
-                Some(vec![MESSAGING.to_string(), LOGGING.to_string()]),
+                Some(vec![capability_name(MESSAGING), capability_name(LOGGING)]),
                 Some(vec![]),
                 false,
                 Some(1),
                 Some("".to_string()),
-                None,
+                Some("somealias".to_string()),
             )),
             expires: None,
             id: nuid::next(),
@@ -321,6 +322,12 @@ mod test {
         if let Some(token) = extract_claims(&modified_bytecode).unwrap() {
             assert_eq!(claims.issuer, token.claims.issuer);
             assert_eq!(claims.subject, token.claims.subject);
+
+            let claims_met = claims.metadata.as_ref().unwrap();
+            let token_met = token.claims.metadata.as_ref().unwrap();
+
+            assert_eq!(claims_met.caps, token_met.caps);
+            assert_eq!(claims_met.call_alias, token_met.call_alias);
         } else {
             unreachable!()
         }
