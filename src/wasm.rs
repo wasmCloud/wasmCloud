@@ -12,8 +12,6 @@ use std::{
     io::Read,
     time::{SystemTime, UNIX_EPOCH},
 };
-use wasmparser::BinaryReaderError;
-use wasmparser::Payload::*;
 const SECS_PER_DAY: u64 = 86400;
 const SECTION_JWT: &str = "jwt";
 const SECTION_WC_JWT: &str = "wasmcloud_jwt";
@@ -27,6 +25,7 @@ const SECTION_WC_JWT: &str = "wasmcloud_jwt";
 /// Will return an error if hash computation fails or it can't read the JWT from inside
 /// a section's data, etc
 pub fn extract_claims(contents: impl AsRef<[u8]>) -> Result<Option<Token<Actor>>> {
+    let target_hash = compute_hash(&strip_custom_section(contents.as_ref())?)?;
     let parser = wasmparser::Parser::new(0);
     for payload in parser.parse_all(contents.as_ref()) {
         match payload? {
@@ -34,9 +33,8 @@ pub fn extract_claims(contents: impl AsRef<[u8]>) -> Result<Option<Token<Actor>>
                 if reader.name() == SECTION_JWT || reader.name() == SECTION_WC_JWT {
                     let jwt = String::from_utf8(reader.data().to_vec())?;
                     let claims: Claims<Actor> = Claims::decode(&jwt)?;
-                    let hash = compute_hash_without_jwt(contents.as_ref())?;
                     if let Some(ref meta) = claims.metadata {
-                        if meta.module_hash != hash
+                        if meta.module_hash != target_hash
                             && claims.wascap_revision.unwrap_or_default()
                                 >= MIN_WASCAP_INTERNAL_REVISION
                         {
@@ -63,8 +61,9 @@ pub fn extract_claims(contents: impl AsRef<[u8]>) -> Result<Option<Token<Actor>>
 /// be saved to a `.wasm` file
 pub fn embed_claims(orig_bytecode: &[u8], claims: &Claims<Actor>, kp: &KeyPair) -> Result<Vec<u8>> {
     let mut bytes = orig_bytecode.to_vec();
+    bytes = strip_custom_section(&bytes)?;
 
-    let hash = compute_hash_without_jwt(orig_bytecode)?;
+    let hash = compute_hash(&bytes)?;
     let mut claims = (*claims).clone();
     let meta = claims.metadata.map(|md| Actor {
         module_hash: hash,
@@ -110,6 +109,14 @@ pub fn sign_buffer_with_claims(
     embed_claims(buf.as_ref(), &claims, &acct_kp)
 }
 
+pub(crate) fn strip_custom_section(buf: &[u8]) -> Result<Vec<u8>> {
+    let mut m = walrus::Module::from_buffer(buf)
+        .map_err(|e| errors::new(ErrorKind::WasmElement(e.to_string())))?;
+    m.customs.remove_raw(SECTION_WC_JWT);
+
+    Ok(m.emit_wasm())
+}
+
 fn since_the_epoch() -> std::time::Duration {
     let start = SystemTime::now();
     start
@@ -136,42 +143,15 @@ fn sha256_digest<R: Read>(mut reader: R) -> Result<Digest> {
     Ok(context.finish())
 }
 
-// NOTE: we don't need to compute a hash of the entire file, we just need
-// to compute the hash if the things that indicate tampering, like code and
-// custom sections
-fn compute_hash_without_jwt(modbytes: &[u8]) -> Result<String> {
-    let mut binary: Vec<u8> = Vec::new();
-    let parser = wasmparser::Parser::new(0);
-
-    for payload in parser.parse_all(modbytes) {
-        match payload? {
-            CodeSectionEntry(fb) => {
-                let mut rdr = fb.get_binary_reader();
-                let remaining = rdr.bytes_remaining();
-                binary.extend_from_slice(
-                    rdr.read_bytes(remaining)
-                        .map_err(|e| BinaryReaderError::from(e))?,
-                );
-            }
-            DataSection(mut reader) => {
-                binary
-                    .extend_from_slice(reader.read().map_err(|e| BinaryReaderError::from(e))?.data);
-            }
-            CustomSection(reader) => {
-                if reader.name() != SECTION_JWT && reader.name() != SECTION_WC_JWT {
-                    binary.extend_from_slice(reader.data());
-                }
-            }
-            _ => {}
-        }
-    }
-
-    let digest = sha256_digest(binary.as_slice())?;
+fn compute_hash(modbytes: &[u8]) -> Result<String> {
+    let digest = sha256_digest(modbytes)?;
     Ok(HEXUPPER.encode(digest.as_ref()))
 }
 
 #[cfg(test)]
 mod test {
+    use std::fs::File;
+
     use super::*;
     use crate::{
         caps::{KEY_VALUE, LOGGING, MESSAGING},
@@ -185,6 +165,45 @@ mod test {
          4CAgAACfwFBAAt/AUEACwejgICAAAIKX3RyYW5zZm9ybQAAEl9fcG9zdF9pbnN0YW50aWF0ZQACCYGAgI\
          AAAArpgICAAAPBgICAAAECfwJ/IABBAEoEQEEAIQIFIAAPCwNAIAEgAmoiAywAAEHpAEYEQCADQfkAOgA\
          ACyACQQFqIgIgAEcNAAsgAAsLg4CAgAAAAQuVgICAAAACQCMAJAIjAkGAgMACaiQDEAELCw==";
+
+    #[test]
+    fn strip_custom() {
+        let dec_module = decode(WASM_BASE64).unwrap();
+        let kp = KeyPair::new_account();
+        let claims = Claims {
+            metadata: Some(Actor::new(
+                "testing".to_string(),
+                Some(vec![MESSAGING.to_string(), LOGGING.to_string()]),
+                Some(vec![]),
+                false,
+                Some(1),
+                Some("".to_string()),
+                None,
+            )),
+            expires: None,
+            id: nuid::next(),
+            issued_at: 0,
+            issuer: kp.public_key(),
+            subject: "test.wasm".to_string(),
+            not_before: None,
+            wascap_revision: Some(WASCAP_INTERNAL_REVISION),
+        };
+        let modified_bytecode = embed_claims(&dec_module, &claims, &kp).unwrap();
+
+        super::strip_custom_section(&modified_bytecode).unwrap();
+    }
+
+    #[test]
+    fn legacy_modules_still_extract() {
+        // Ensure that we can still extract claims from legacy (signed prior to 0.9.0) modules without
+        // a hash violation error
+        let mut f = File::open("./fixtures/logger.wasm").unwrap();
+        let mut buffer = Vec::new();
+        f.read_to_end(&mut buffer).unwrap();
+
+        let t = extract_claims(&buffer).unwrap();
+        assert!(t.is_some());
+    }
 
     #[test]
     fn claims_roundtrip() {
@@ -222,6 +241,48 @@ mod test {
                 claims.metadata.as_ref().unwrap().caps,
                 token.claims.metadata.as_ref().unwrap().caps
             );
+        } else {
+            unreachable!()
+        }
+    }
+
+    #[test]
+    fn claims_doublesign_roundtrip() {
+        // Verify that we can sign a previously signed module by stripping the old
+        // custom JWT and maintaining valid hashes
+        let dec_module = decode(WASM_BASE64).unwrap();
+
+        let kp = KeyPair::new_account();
+        let claims = Claims {
+            metadata: Some(Actor::new(
+                "testing".to_string(),
+                Some(vec![MESSAGING.to_string(), KEY_VALUE.to_string()]),
+                Some(vec![]),
+                false,
+                Some(1),
+                Some("".to_string()),
+                None,
+            )),
+            expires: None,
+            id: nuid::next(),
+            issued_at: 0,
+            issuer: kp.public_key(),
+            subject: "test.wasm".to_string(),
+            not_before: None,
+            wascap_revision: Some(WASCAP_INTERNAL_REVISION),
+        };
+        let c2 = claims.clone();
+        let modified_bytecode = embed_claims(&dec_module, &claims, &kp).unwrap();
+
+        let new_claims = Claims {
+            subject: "altered.wasm".to_string(),
+            ..claims
+        };
+
+        let modified_bytecode2 = embed_claims(&modified_bytecode, &new_claims, &kp).unwrap();
+        if let Some(token) = extract_claims(&modified_bytecode2).unwrap() {
+            assert_eq!(c2.issuer, token.claims.issuer);
+            assert_eq!(token.claims.subject, "altered.wasm");
         } else {
             unreachable!()
         }
