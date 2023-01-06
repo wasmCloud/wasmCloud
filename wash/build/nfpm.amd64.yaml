@@ -9,10 +9,9 @@ section: default
 priority: extra
 maintainer: Bill Young <bill@byoung.io>
 description: |
-  wasmcloud Shell
-   A single CLI to handle all of your wasmcloud tooling needs
+  WAsmcloud SHell - the comprehensive command-line tool for wasmCloud development
 vendor: wasmcloud
-homepage: https://wasmcloud.dev
+homepage: https://wasmcloud.com
 license: Apache-2.0
 contents:
   - src: target/release/wash
