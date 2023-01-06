@@ -32,7 +32,7 @@ jobs:
     strategy:
       matrix:
         arch: [arm64, amd64]
-        with:
+        include:
           - arch: arm64
             rpmarch: aarch64
           - arch: amd64
