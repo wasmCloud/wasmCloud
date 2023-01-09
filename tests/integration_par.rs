@@ -1,5 +1,6 @@
 mod common;
 
+use crate::common::LOCAL_REGISTRY;
 use assert_json_diff::assert_json_include;
 use common::{get_json_output, output_to_string, test_dir_file, test_dir_with_subfolder, wash};
 use serde_json::json;
@@ -224,6 +225,7 @@ fn integration_par_inspect() {
     const HTTP_ISSUER: &str = "ACOJJN6WUP4ODD75XEBKKTCCUJJCY5ZKQ56XVKYK4BEJWGVAOOQHZMCW";
     const HTTP_SERVICE: &str = "VCCVLH4XWGI3SGARFNYKYT2A32SUYA2KVAIV2U2Q34DQA7WWJPFRKIKM";
     let inspect_dir = test_dir_with_subfolder(SUBFOLDER);
+    let httpclient_parinspect = &format!("{}/httpclient:parinspect", LOCAL_REGISTRY);
 
     // Pull the echo module and push to local registry to test local inspect
     let local_http_client_path = test_dir_file(SUBFOLDER, "httpclient.wasm");
@@ -242,7 +244,7 @@ fn integration_par_inspect() {
         .args([
             "reg",
             "push",
-            "localhost:5000/httpclient:parinspect",
+            httpclient_parinspect,
             local_http_client_path.to_str().unwrap(),
             "--insecure",
         ])
@@ -277,7 +279,7 @@ fn integration_par_inspect() {
         .args([
             "par",
             "inspect",
-            "localhost:5000/httpclient:parinspect",
+            httpclient_parinspect,
             "--insecure",
             "-o",
             "json",

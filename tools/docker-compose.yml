@@ -3,7 +3,7 @@ services:
   registry:
     image: registry:2
     ports:
-     - "5000:5000"
+     - "5001:5000"
   nats:
     image: nats:2.1.9
     ports:
