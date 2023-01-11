@@ -182,6 +182,7 @@ where
                             || file_name.eq("iex")
                             || file_name.eq("elixir")
                             || file_name.eq("wasmcloud_host")
+                            || file_name.eq("mac_listener")
                         {
                             let mut perms = wasmcloud_file.metadata().await?.permissions();
                             perms.set_mode(0o755);
@@ -357,14 +358,43 @@ mod test {
         }
     }
 
+    #[cfg(target_family = "unix")]
+    use std::os::unix::prelude::PermissionsExt;
+
     #[tokio::test]
     async fn can_download_wasmcloud_tarball() {
         let download_dir = temp_dir().join("can_download_wasmcloud_tarball");
         let res =
             ensure_wasmcloud_for_os_arch_pair("macos", "aarch64", WASMCLOUD_VERSION, &download_dir)
                 .await;
+
         assert!(res.is_ok());
         assert!(is_wasmcloud_installed(&download_dir).await);
+
+        // Permit execution of file-watching on macos.
+        #[cfg(target_family = "unix")]
+        {
+            let mut fs_dir: Option<std::path::PathBuf> = None;
+            let mut entries = tokio::fs::read_dir(download_dir.join("lib")).await.unwrap();
+
+            while let Some(entry) = entries.next_entry().await.unwrap() {
+                let dir = entry.path();
+                let file_name = dir.file_name().unwrap().to_string_lossy();
+
+                if file_name.contains("file_system") {
+                    fs_dir = Some(dir);
+                    break;
+                }
+            }
+
+            let path = fs_dir.unwrap().join("priv/mac_listener");
+            let file = tokio::fs::File::open(path).await.unwrap();
+            let metadata = file.metadata().await.unwrap();
+            let perms = metadata.permissions();
+
+            assert_eq!(perms.mode(), 0o100755);
+        }
+
         let _ = remove_dir_all(download_dir).await;
     }
 
