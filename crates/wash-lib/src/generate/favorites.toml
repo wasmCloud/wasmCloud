@@ -24,6 +24,12 @@ description = "a hello-world actor (in TinyGo) that responds over an http connec
 git = "wasmcloud/project-templates"
 subfolder = "actor/echo-tinygo"
 
+[[actor]]
+name = "echo-messaging"
+description = "a hello-world actor (in Rust) that echoes a request back over a NATS connection"
+git = "wasmcloud/project-templates"
+subfolder = "actor/echo-messaging"
+
 [[interface]]
 name = "converter-interface"
 description = "an interface for actor-to-actor messages with a single Convert method"
