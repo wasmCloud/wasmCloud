@@ -33,6 +33,10 @@ For running a wasmCloud host in a browser or embedding in a JavaScript V8 host, 
 
 For more information on how to contribute and our contributor guidelines, check out the [contributing readme](./CONTRIBUTING.md).
 
+## 🗺️ Roadmap and Vision
+
+We have plenty of ideas and things going on in the wasmCloud project. Please check out the [Roadmap doc](ROADMAP.md) for more information!
+
 ## 💥 Awesome wasmCloud
  
 Check out some awesome projects using wasmCloud that come from our community members! [Awesome wasmCloud](./awesome-wasmcloud)
