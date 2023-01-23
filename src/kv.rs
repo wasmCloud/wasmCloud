@@ -40,19 +40,19 @@ pub(crate) async fn get_kv_store(
 
 pub(crate) async fn get_claims(store: &Store) -> Result<GetClaimsResponse> {
     let mut claims = Vec::new();
-    let mut entries = store.keys().await?;
-    while let Some(key) = entries.next() {
+    let entries = store.keys().await?;
+    for key in entries {
         if key.starts_with(CLAIMS_PREFIX) {
             add_claim(&mut claims, store.get(key).await?).await?;
         }
     }
-    Ok(GetClaimsResponse { claims: claims })
+    Ok(GetClaimsResponse { claims })
 }
 
 pub(crate) async fn get_links(store: &Store) -> Result<LinkDefinitionList> {
     let mut links = Vec::new();
-    let mut entries = store.keys().await?;
-    while let Some(key) = entries.next() {
+    let entries = store.keys().await?;
+    for key in entries {
         if key.starts_with(LINKDEF_PREFIX) {
             add_linkdef(&mut links, store.get(key).await?).await?;
         }
