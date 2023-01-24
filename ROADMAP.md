@@ -18,7 +18,14 @@ This category contains things we are currently (or will very soon be) working on
 is very narrow so you know exactly what is coming next 
 
 - SQL V2 contract
+  - We are trying to align with current webassembly standards for this contract
+  - Mitigate the possibility of injection attacks
 - Finishing up [wadm](https://github.com/wasmCloud/wadm)
+  - Validating design assumptions
+  - Supporting custom scaling algorithms
+  - Deployment and infra docs
+  - Getting started and advanced guides and examples
+  - Removing dependency on Redis (NATS only if possible)
 
 ## Next
 
@@ -45,8 +52,7 @@ as we move them into the [Next](#next) section.
 
 - JavaScript Actors (probably with QuickJS)
 - Unit tests for actors (of any language preferably)
-- Separate actor and provider SDKs (wasmbus refactor)
-- Components and the elimination of wasmbus RPC
+- Components implementation and SDK
 - JS host
 - Embedded-first host
 - Multi-tenant wasmcloud host
