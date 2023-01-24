@@ -3399,7 +3399,7 @@ dependencies = [
  "signal-hook-registry",
  "socket2",
  "tokio-macros",
- "windows-sys 0.42.0",
+ "windows-sys",
 ]
 
 [[package]]
@@ -3959,7 +3959,7 @@ dependencies = [
 
 [[package]]
 name = "wash-lib"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "async-compression",
