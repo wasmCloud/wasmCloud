@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use async_nats::{jetstream::kv::Store, Client};
+use tracing::debug;
 use wasmbus_rpc::core::LinkDefinition;
 
 use data_encoding::HEXUPPER;
@@ -25,24 +26,33 @@ pub(crate) async fn get_kv_store(
         async_nats::jetstream::new(nc)
     };
     let bucket = format!("{}{}", BUCKET_PREFIX, lattice_prefix);
-    jetstream.get_key_value(bucket).await.ok()
+    let store_opt = jetstream.get_key_value(bucket).await.ok();
+    match &store_opt {
+        Some(_) => {
+            debug!(%lattice_prefix, "Using direct bucket access for lattice metadata queries")
+        }
+        None => {
+            debug!(%lattice_prefix, "Using deprecated control interface commands for lattice metadata queries")
+        }
+    }
+    store_opt
 }
 
 pub(crate) async fn get_claims(store: &Store) -> Result<GetClaimsResponse> {
     let mut claims = Vec::new();
-    let mut entries = store.keys().await?;
-    while let Some(key) = entries.next() {
+    let entries = store.keys().await?;
+    for key in entries {
         if key.starts_with(CLAIMS_PREFIX) {
             add_claim(&mut claims, store.get(key).await?).await?;
         }
     }
-    Ok(GetClaimsResponse { claims: claims })
+    Ok(GetClaimsResponse { claims })
 }
 
 pub(crate) async fn get_links(store: &Store) -> Result<LinkDefinitionList> {
     let mut links = Vec::new();
-    let mut entries = store.keys().await?;
-    while let Some(key) = entries.next() {
+    let entries = store.keys().await?;
+    for key in entries {
         if key.starts_with(LINKDEF_PREFIX) {
             add_linkdef(&mut links, store.get(key).await?).await?;
         }

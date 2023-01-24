@@ -86,10 +86,7 @@ impl ClientBuilder {
 
     /// Sets the timeout for standard calls and RPC invocations used by the client. If not set, the default will be 2 seconds
     pub fn rpc_timeout(self, timeout: Duration) -> ClientBuilder {
-        ClientBuilder {
-            timeout: timeout,
-            ..self
-        }
+        ClientBuilder { timeout, ..self }
     }
 
     /// Sets the timeout for auction (scatter/gather) operations. If not set, the default will be 5 seconds
