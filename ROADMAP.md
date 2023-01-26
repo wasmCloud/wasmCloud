@@ -43,6 +43,7 @@ these done relatively soon. If any of these interest you and you'd like to help,
 - Completely revamp wasmbus rpc
   - Split out into actor and provider SDKs, fix things like owned vs borrowed data, make initting
     logging better, etc.
+- Infra/setup guides for running wasmCloud
 
 ## Ideas List
 
