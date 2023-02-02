@@ -3,6 +3,7 @@ use async_compression::tokio::bufread::GzipDecoder;
 #[cfg(target_family = "unix")]
 use command_group::AsyncCommandGroup;
 use futures::future::join_all;
+use log::warn;
 use std::collections::HashMap;
 use std::io::Cursor;
 #[cfg(target_family = "unix")]
@@ -314,6 +315,10 @@ fn wasmcloud_url(os: &str, arch: &str, version: &str) -> String {
 fn check_version(version: &str) -> Result<()> {
     let version_req = semver::VersionReq::parse(&format!(">={}", MINIMUM_WASMCLOUD_VERSION))?;
     match semver::Version::parse(version.trim_start_matches('v')) {
+        Ok(parsed_version) if !parsed_version.pre.is_empty() => {
+            warn!("Using prerelease version {} of wasmCloud", version);
+            Ok(())
+        }
         Ok(parsed_version) if !version_req.matches(&parsed_version) => Err(anyhow!(
             "wasmCloud version {} is earlier than the minimum supported version of v{}",
             version,
@@ -535,6 +540,11 @@ mod test {
         assert!(check_version("v0.58.0").is_ok());
         assert!(check_version("v0.100.0").is_ok());
         assert!(check_version("v0.203.0").is_ok());
+
+        // Ensure we allow prerelease tags for testing
+        assert!(check_version("v0.60.0-rc.1").is_ok());
+        assert!(check_version("v0.60.0-alpha.23").is_ok());
+        assert!(check_version("v0.60.0-beta.0").is_ok());
 
         // Ensure we deny versions < 0.57.0
         assert!(check_version("v0.48.0").is_err());
