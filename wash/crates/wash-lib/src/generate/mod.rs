@@ -135,7 +135,7 @@ fn validate(project: &Project) -> Result<()> {
         && (project.git.is_some() || project.subfolder.is_some() || project.branch.is_some())
     {
         return Err(anyhow!("Error in 'new {}' options: You may use --path or --git ( --branch, --subfolder ) to specify a template source, but not both. If neither is specified, you will be prompted to select a project template.",
-            &ProjectKind::from(project.kind)
+            project.kind
         ));
     }
     if let Some(name) = &project.project_name {
