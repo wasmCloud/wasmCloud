@@ -285,7 +285,7 @@ pub fn get_config(opt_path: Option<PathBuf>, use_env: Option<bool>) -> Result<Pr
     let raw_project_config: RawProjectConfig = serde_json::from_value(json_value)?;
 
     raw_project_config
-        .convert(project_path.clone())
+        .convert(project_path)
         .map_err(|e: anyhow::Error| anyhow!("{} in {}", e, wasmcloud_path.display()))
 }
 
