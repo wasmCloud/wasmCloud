@@ -10,7 +10,7 @@ use std::{
     collections::HashMap,
     fs::OpenOptions,
     fs::{metadata, read, read_dir, remove_file, File},
-    io::{BufReader, Write},
+    io::{BufReader, Write, Error as IOError, ErrorKind as IOErrorKind},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -53,6 +53,41 @@ struct FsProvider {
     config: Arc<RwLock<HashMap<String, FsProviderConfig>>>,
     upload_chunks: Arc<RwLock<HashMap<String, u64>>>, // kee track of the next offset for chunks to be uploaded
     download_chunks: Arc<RwLock<HashMap<ChunkOffsetKey, Chunk>>>,
+}
+
+impl FsProvider {
+    /// Resolve a path with two components (base & root),
+    /// ensuring that the path is below the given root.
+    fn resolve_subpath<P>(&self, root: &PathBuf, path: P) -> Result<PathBuf, IOError>
+    where P: AsRef<Path>
+    {
+        let root_abs = root.canonicalize()?;
+        let joined = root_abs.join(Path::new(path.as_ref()));
+        let joined_abs = joined.canonicalize()?;
+
+        // If the path is shorter we know something is wrong
+        let mut joined_abs_iter = joined_abs.components();
+        for root_part in root_abs.components() {
+            let joined_part = joined_abs_iter.next();
+
+            // If the joined absolute path is shorter or doesn't match, we're out
+            if joined_part.is_none() || joined_part != Some(root_part) {
+                return Err(IOError::new(
+                    IOErrorKind::PermissionDenied,
+                    format!(
+                        "Invalid path [{}], is not contained by root path [{}]",
+                        path.as_ref().to_path_buf().to_string_lossy(),
+                        root.to_string_lossy(),
+                    ),
+                ));
+            }
+        }
+
+        // At this point, the root iterator has ben exhausted and the remaining components
+        // are the paths underneath the root
+
+        Ok(joined_abs)
+    }
 }
 
 impl Default for FsProvider {
@@ -117,14 +152,15 @@ impl FsProvider {
         stream_id: &Option<String>,
     ) -> RpcResult<()> {
         let root = self.get_root(ctx).await?;
-        let cdir = Path::new(&root).join(&chunk.container_id);
-        let bfile = Path::join(&cdir, &chunk.object_id);
+
+        let container_dir = self.resolve_subpath(&root, &chunk.container_id)?;
+        let binary_file = self.resolve_subpath(&container_dir, &chunk.object_id)?;
 
         // create an empty file if it's the first chunk
         if chunk.offset == 0 {
-            let resp = File::create(&bfile);
+            let resp = File::create(&binary_file);
             if resp.is_err() {
-                let error_string = format!("Could not create file: {:?}", bfile).to_string();
+                let error_string = format!("Could not create file: {:?}", binary_file).to_string();
                 error!("{:?}", &error_string);
                 return Err(RpcError::InvalidParameter(error_string));
             }
@@ -254,9 +290,9 @@ impl ProviderHandler for FsProvider {
             .insert(ld.actor_id.clone(), config.clone());
 
         // Create a directory named from the actor id:
-        let cdir = Path::new(&config.root).join(Path::new(&ld.actor_id));
+        let actor_dir = self.resolve_subpath(&config.root, &ld.actor_id)?;
 
-        match std::fs::create_dir_all(cdir.as_path()) {
+        match std::fs::create_dir_all(actor_dir.as_path()) {
             Ok(()) => Ok(true),
             Err(e) => Err(RpcError::InvalidParameter(format!(
                 "Could not create actor directory: {:?}",
@@ -643,5 +679,25 @@ impl Blobstore for FsProvider {
 
     fn contract_id() -> &'static str {
         "wasmcloud:blobstore"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FsProvider;
+    use std::path::PathBuf;
+
+    /// Ensure that only safe subpaths are resolved
+    #[test]
+    fn resolve_safe_samepath() {
+        let provider = FsProvider::default();
+        assert!(matches!(provider.resolve_subpath(&PathBuf::from("./"), "./././"), Ok(_)));
+    }
+
+    /// Ensure that ancestor paths are not allowed to be resolved as subpaths
+    #[test]
+    fn resolve_fail_ancestor() {
+        let provider = FsProvider::default();
+        assert!(matches!(provider.resolve_subpath(&PathBuf::from("./"), "./././"), Ok(_)));
     }
 }
