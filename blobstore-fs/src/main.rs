@@ -65,12 +65,13 @@ impl FsProvider {
         let joined = root_abs.join(Path::new(path.as_ref()));
         let joined_abs = joined.canonicalize()?;
 
-        // If the path is shorter we know something is wrong
+        // Check components of either path
         let mut joined_abs_iter = joined_abs.components();
         for root_part in root_abs.components() {
             let joined_part = joined_abs_iter.next();
 
-            // If the joined absolute path is shorter or doesn't match, we're out
+            // If the joined path is shorter or doesn't match
+            // for the duration of the root, path is suspect
             if joined_part.is_none() || joined_part != Some(root_part) {
                 return Err(IOError::new(
                     IOErrorKind::PermissionDenied,
