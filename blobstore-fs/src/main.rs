@@ -686,6 +686,7 @@ impl Blobstore for FsProvider {
 mod tests {
     use super::FsProvider;
     use std::path::PathBuf;
+    use std::io::ErrorKind as IOErrorKind;
 
     /// Ensure that only safe subpaths are resolved
     #[test]
@@ -698,6 +699,7 @@ mod tests {
     #[test]
     fn resolve_fail_ancestor() {
         let provider = FsProvider::default();
-        assert!(matches!(provider.resolve_subpath(&PathBuf::from("./"), "./././"), Ok(_)));
+        let res = provider.resolve_subpath(&PathBuf::from("./"), "../").unwrap_err();
+        assert_eq!(res.kind(), IOErrorKind::PermissionDenied);
     }
 }
