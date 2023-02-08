@@ -196,9 +196,10 @@ impl FsProvider {
             upload_chunks.insert(s_id.clone(), next_offset);
         }
 
-        let bpath = Path::join(&Path::join(&root, &chunk.container_id), &chunk.object_id);
+        let chunk_obj_subpath = Path::join(Path::new(&chunk.container_id), &chunk.object_id);
+        let chunk_obj_path = self.resolve_subpath(&root, &chunk_obj_subpath)?;
 
-        let mut file = OpenOptions::new().create(false).append(true).open(bpath)?;
+        let mut file = OpenOptions::new().create(false).append(true).open(chunk_obj_path)?;
         info!(
             "Receiving file chunk offset {} for {}/{}, size {}",
             chunk.offset,
@@ -307,13 +308,13 @@ impl ProviderHandler for FsProvider {
 impl Blobstore for FsProvider {
     /// Returns whether the container exists
     #[allow(unused)]
-    async fn container_exists(&self, ctx: &Context, arg: &ContainerId) -> RpcResult<bool> {
-        info!("Called container_exists({:?})", arg);
+    async fn container_exists(&self, ctx: &Context, container_id: &ContainerId) -> RpcResult<bool> {
+        info!("Called container_exists({:?})", container_id);
 
         let root = self.get_root(ctx).await?;
-        let cdir = Path::new(&root).join(&arg);
+        let chunk_dir = self.resolve_subpath(&root, &container_id)?;
 
-        match read_dir(&cdir) {
+        match read_dir(&chunk_dir) {
             Ok(_) => Ok(true),
             Err(_) => Ok(false),
         }
@@ -322,13 +323,13 @@ impl Blobstore for FsProvider {
     /// Creates a container by name, returning success if it worked
     /// Note that container names may not be globally unique - just unique within the
     /// "namespace" of the connecting actor and linkdef
-    async fn create_container(&self, ctx: &Context, arg: &ContainerId) -> RpcResult<()> {
+    async fn create_container(&self, ctx: &Context, container_id: &ContainerId) -> RpcResult<()> {
         let root = self.get_root(ctx).await?;
-        let cdir = Path::new(&root).join(arg.to_string());
+        let chunk_dir = self.resolve_subpath(&root, &container_id)?;
 
-        info!("create dir: {:?}", cdir);
+        info!("create dir: {:?}", chunk_dir);
 
-        match std::fs::create_dir_all(cdir) {
+        match std::fs::create_dir_all(chunk_dir) {
             Ok(()) => Ok(()),
             Err(e) => Err(RpcError::InvalidParameter(format!(
                 "Could not create container: {:?}",
@@ -343,11 +344,10 @@ impl Blobstore for FsProvider {
     async fn get_container_info(
         &self,
         ctx: &Context,
-        arg: &ContainerId,
+        container_id: &ContainerId,
     ) -> RpcResult<ContainerMetadata> {
         let root = self.get_root(ctx).await?;
-        let dir_path = Path::new(&root).join(&arg);
-
+        let dir_path = self.resolve_subpath(&root, &container_id)?;
         let dir_info = metadata(dir_path)?;
 
         let modified = match dir_info.modified()?.duration_since(SystemTime::UNIX_EPOCH) {
@@ -359,7 +359,7 @@ impl Blobstore for FsProvider {
         };
 
         Ok(ContainerMetadata {
-            container_id: arg.clone(),
+            container_id: container_id.clone(),
             created_at: Some(modified),
         })
     }
@@ -412,13 +412,12 @@ impl Blobstore for FsProvider {
 
     /// Returns whether the object exists
     #[allow(unused)]
-    async fn object_exists(&self, ctx: &Context, arg: &ContainerObject) -> RpcResult<bool> {
-        info!("Called object_exists({:?})", arg);
+    async fn object_exists(&self, ctx: &Context, container: &ContainerObject) -> RpcResult<bool> {
+        info!("Called object_exists({:?})", container);
 
         let root = self.get_root(ctx).await?;
-        let file_path = Path::new(&root)
-            .join(&arg.container_id)
-            .join(&arg.object_id);
+        let file_subpath = Path::join(Path::new(&container.container_id), &container.object_id);
+        let file_path = self.resolve_subpath(&root, &file_subpath)?;
 
         match File::open(file_path) {
             Ok(_) => Ok(true),
@@ -432,14 +431,13 @@ impl Blobstore for FsProvider {
     async fn get_object_info(
         &self,
         ctx: &Context,
-        arg: &ContainerObject,
+        container: &ContainerObject,
     ) -> RpcResult<ObjectMetadata> {
-        info!("Called get_object_info({:?})", arg);
+        info!("Called get_object_info({:?})", container);
 
         let root = self.get_root(ctx).await?;
-        let file_path = Path::new(&root)
-            .join(&arg.container_id)
-            .join(&arg.object_id);
+        let file_subpath = Path::join(Path::new(&container.container_id), &container.object_id);
+        let file_path = self.resolve_subpath(&root, &file_subpath)?;
 
         let metadata = metadata(file_path)?;
 
@@ -452,12 +450,12 @@ impl Blobstore for FsProvider {
         };
 
         Ok(ObjectMetadata {
-            container_id: arg.container_id.clone(),
+            container_id: container.container_id.clone(),
             content_encoding: None,
             content_length: metadata.len() as u64,
             content_type: None,
             last_modified: Some(modified),
-            object_id: arg.object_id.clone(),
+            object_id: container.object_id.clone(),
         })
     }
 
@@ -476,16 +474,16 @@ impl Blobstore for FsProvider {
     async fn list_objects(
         &self,
         ctx: &Context,
-        arg: &ListObjectsRequest,
+        req: &ListObjectsRequest,
     ) -> RpcResult<ListObjectsResponse> {
-        info!("Called list_objects({:?})", arg);
+        info!("Called list_objects({:?})", req);
 
         let root = self.get_root(ctx).await?;
-        let cdir = Path::new(&root).join(&arg.container_id);
+        let chunk_dir = self.resolve_subpath(&root, &req.container_id)?;
 
         let mut objects = Vec::new();
 
-        for entry in read_dir(&cdir)? {
+        for entry in read_dir(&chunk_dir)? {
             let entry = entry?;
             let path = entry.path();
 
@@ -512,7 +510,7 @@ impl Blobstore for FsProvider {
                 };
 
                 objects.push(ObjectMetadata {
-                    container_id: arg.container_id.clone(),
+                    container_id: req.container_id.clone(),
                     content_encoding: None,
                     content_length: entry.metadata()?.len(),
                     content_type: None,
@@ -545,11 +543,13 @@ impl Blobstore for FsProvider {
         let mut errors = Vec::new();
 
         for object in &arg.objects {
-            let opath = Path::join(&Path::join(&root, &arg.container_id), &object);
-            if let Err(e) = remove_file(opath.as_path()) {
+            let object_subpath = Path::join(Path::new(&arg.container_id), &object);
+            let object_path = self.resolve_subpath(&root, &object_subpath)?;
+
+            if let Err(e) = remove_file(object_path.as_path()) {
                 errors.push(ItemResult {
                     error: Some(format!("{:?}", e)),
-                    key: format!("{:?}", opath),
+                    key: format!("{:?}", object_path),
                     success: false,
                 })
             }
@@ -601,24 +601,24 @@ impl Blobstore for FsProvider {
     async fn put_chunk(&self, ctx: &Context, arg: &PutChunkRequest) -> RpcResult<()> {
         info!("Called put_chunk: {:?}", arg);
 
-        if arg.cancel_and_remove {
-            // ancel upload and remove file
-
-            let root = &self.get_root(ctx).await?;
-            let cdir = Path::new(root).join(&arg.chunk.container_id);
-            let file_path = Path::join(&cdir, &arg.chunk.object_id);
-
-            remove_file(file_path.as_path()).map_err(|e| {
-                RpcError::InvalidParameter(format!(
-                    "Could not cancel and remove file: {:?}",
-                    file_path
-                ))
-            })
-        } else {
-            // happy path
+        // Early return of storing the chunk simply (happy path)
+        if !arg.cancel_and_remove {
             self.store_chunk(ctx, &arg.chunk, &arg.stream_id).await?;
-            Ok(())
+            return Ok(());
         }
+
+        // Determine the path to the file
+        let root = &self.get_root(ctx).await?;
+        let file_subpath = Path::join(Path::new(&arg.chunk.container_id), &arg.chunk.object_id);
+        let file_path = self.resolve_subpath(&root, &file_subpath)?;
+
+        // Remove the file
+        remove_file(file_path.as_path()).map_err(|e| {
+            RpcError::InvalidParameter(format!(
+                "Could not cancel and remove file: {:?}",
+                file_path
+            ))
+        })
     }
 
     /// Requests to retrieve an object. If the object is large, the provider
@@ -628,22 +628,24 @@ impl Blobstore for FsProvider {
     async fn get_object(
         &self,
         ctx: &Context,
-        arg: &GetObjectRequest,
+        req: &GetObjectRequest,
     ) -> RpcResult<GetObjectResponse> {
-        info!("Called get_object: {:?}", arg);
+        info!("Called get_object: {:?}", req);
 
+        // Determine path to object file
         let root = &self.get_root(ctx).await?;
-        let cdir = Path::new(root).join(&arg.container_id);
-        let file_path = Path::join(&cdir, &arg.object_id);
+        let object_subpath = Path::join(Path::new(&req.container_id), &req.object_id); 
+        let file_path = self.resolve_subpath(&root, &object_subpath)?;
 
+        // Read the file in
         let file = read(file_path)?;
 
-        let start_offset = match arg.range_start {
+        let start_offset = match req.range_start {
             Some(o) => o as usize,
             None => 0,
         };
 
-        let end_offset = match arg.range_end {
+        let end_offset = match req.range_end {
             Some(o) => std::cmp::min(o as usize + 1, file.len()),
             None => file.len(),
         };
@@ -660,8 +662,8 @@ impl Blobstore for FsProvider {
         );
 
         let chunk = Chunk {
-            object_id: arg.object_id.clone(),
-            container_id: arg.container_id.clone(),
+            object_id: req.object_id.clone(),
+            container_id: req.container_id.clone(),
             bytes: slice.to_vec(),
             offset: start_offset as u64,
             is_last: end_offset >= file.len(),
