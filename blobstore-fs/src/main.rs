@@ -196,7 +196,7 @@ impl FsProvider {
             upload_chunks.insert(s_id.clone(), next_offset);
         }
 
-        let chunk_obj_subpath = Path::join(Path::new(&chunk.container_id), &chunk.object_id);
+        let chunk_obj_subpath = Path::new(&chunk.container_id).join(&chunk.object_id);
         let chunk_obj_path = self.resolve_subpath(&root, &chunk_obj_subpath)?;
 
         let mut file = OpenOptions::new().create(false).append(true).open(chunk_obj_path)?;
@@ -416,7 +416,7 @@ impl Blobstore for FsProvider {
         info!("Called object_exists({:?})", container);
 
         let root = self.get_root(ctx).await?;
-        let file_subpath = Path::join(Path::new(&container.container_id), &container.object_id);
+        let file_subpath = Path::new(&container.container_id).join(&container.object_id);
         let file_path = self.resolve_subpath(&root, &file_subpath)?;
 
         match File::open(file_path) {
@@ -436,7 +436,7 @@ impl Blobstore for FsProvider {
         info!("Called get_object_info({:?})", container);
 
         let root = self.get_root(ctx).await?;
-        let file_subpath = Path::join(Path::new(&container.container_id), &container.object_id);
+        let file_subpath = Path::new(&container.container_id).join(&container.object_id);
         let file_path = self.resolve_subpath(&root, &file_subpath)?;
 
         let metadata = metadata(file_path)?;
@@ -543,7 +543,7 @@ impl Blobstore for FsProvider {
         let mut errors = Vec::new();
 
         for object in &arg.objects {
-            let object_subpath = Path::join(Path::new(&arg.container_id), &object);
+            let object_subpath = Path::new(&arg.container_id).join(&object);
             let object_path = self.resolve_subpath(&root, &object_subpath)?;
 
             if let Err(e) = remove_file(object_path.as_path()) {
@@ -609,7 +609,7 @@ impl Blobstore for FsProvider {
 
         // Determine the path to the file
         let root = &self.get_root(ctx).await?;
-        let file_subpath = Path::join(Path::new(&arg.chunk.container_id), &arg.chunk.object_id);
+        let file_subpath = Path::new(&arg.chunk.container_id).join(&arg.chunk.object_id);
         let file_path = self.resolve_subpath(&root, &file_subpath)?;
 
         // Remove the file
@@ -634,7 +634,7 @@ impl Blobstore for FsProvider {
 
         // Determine path to object file
         let root = &self.get_root(ctx).await?;
-        let object_subpath = Path::join(Path::new(&req.container_id), &req.object_id); 
+        let object_subpath = Path::new(&req.container_id).join(&req.object_id);
         let file_path = self.resolve_subpath(&root, &object_subpath)?;
 
         // Read the file in
