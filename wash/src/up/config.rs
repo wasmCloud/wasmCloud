@@ -4,7 +4,7 @@ use crate::up::{credsfile::parse_credsfile, NatsOpts, WasmcloudOpts};
 
 pub const DOWNLOADS_DIR: &str = "downloads";
 // NATS configuration values
-pub(crate) const NATS_SERVER_VERSION: &str = "v2.8.4";
+pub(crate) const NATS_SERVER_VERSION: &str = "v2.9.14";
 pub(crate) const DEFAULT_NATS_HOST: &str = "127.0.0.1";
 pub(crate) const DEFAULT_NATS_PORT: &str = "4222";
 // wasmCloud configuration values, https://wasmcloud.dev/reference/host-runtime/host_configure/
