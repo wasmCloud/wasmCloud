@@ -602,7 +602,7 @@ impl Blobstore for FsProvider {
     async fn put_chunk(&self, ctx: &Context, arg: &PutChunkRequest) -> RpcResult<()> {
         info!("Called put_chunk: {:?}", arg);
 
-        // Early return of storing the chunk simply (happy path)
+        // In the simplest case we can simply store the chunk (happy path)
         if !arg.cancel_and_remove {
             self.store_chunk(ctx, &arg.chunk, &arg.stream_id).await?;
             return Ok(());
