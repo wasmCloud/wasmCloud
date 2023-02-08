@@ -84,8 +84,8 @@ impl FsProvider {
             }
         }
 
-        // At this point, the root iterator has ben exhausted and the remaining components
-        // are the paths underneath the root
+        // At this point, the root iterator has ben exhausted
+        // and the remaining components are the paths beneath the root
 
         Ok(joined_abs)
     }
