@@ -8,7 +8,7 @@
 # top_targets      # list of targets that are applicable for this project
 #
 
-top_targets     ?= all par par-full test clean 
+top_targets     ?= all par par-full test clean
 
 platform_id = $(shell uname -s)
 platform = $$( \
@@ -29,6 +29,7 @@ link_name ?= default
 NAME ?= $(PROJECT)
 
 WASH ?= wash
+CARGO ?= cargo
 
 oci_url_base ?= localhost:5000/v2
 oci_url      ?= $(oci_url_base)/$(bin_name):$(VERSION)
@@ -85,7 +86,7 @@ $(dest_par): $(bin_target0) Makefile Cargo.toml
 	@mkdir -p $(dir $(dest_par))
 	bin_src=$(bin_target0);  \
 	if [ $(par_target0) = "x86_64-pc-windows-gnu" ] || \
-	   [ $(par_target0) = "x86_64-pc-windows-msvc" ] ; then \
+		 [ $(par_target0) = "x86_64-pc-windows-msvc" ] ; then \
 		bin_src=$$bin_src.exe;  \
 	fi; \
 	$(WASH) par create \
@@ -103,14 +104,14 @@ $(dest_par): $(bin_target0) Makefile Cargo.toml
 # par-full adds all the other targets to the base par
 par-full: $(dest_par) $(bin_targets)
 	for target in $(par_targets); do \
-	    target_dest=target/$${target}/release/$(bin_name);  \
+			target_dest=target/$${target}/release/$(bin_name);  \
 		if [ $$target = "x86_64-pc-windows-gnu" ]; then \
 			target_dest=$$target_dest.exe;  \
 		fi; \
-	    par_arch=`echo -n $$target | sed -E 's/([^-]+)-([^-]+)-([^-]+)(-gnu.*)?/\1-\3/' | sed 's/darwin/macos/'`; \
+			par_arch=`echo -n $$target | sed -E 's/([^-]+)-([^-]+)-([^-]+)(-gnu.*)?/\1-\3/' | sed 's/darwin/macos/'`; \
 		echo building $$par_arch; \
 		if [ $$target_dest != $(cross_target0) ] && [ -f $$target_dest ]; then \
-		    $(WASH) par insert --arch $$par_arch --binary $$target_dest $(dest_par); \
+				$(WASH) par insert --arch $$par_arch --binary $$target_dest $(dest_par); \
 		fi; \
 	done
 
@@ -172,6 +173,9 @@ endif
 
 
 ifeq ($(wildcard ./Cargo.toml),./Cargo.toml)
+dev::
+	$(CARGO) watch
+
 build::
 	cargo build
 
