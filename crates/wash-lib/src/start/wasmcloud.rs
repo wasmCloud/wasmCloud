@@ -89,9 +89,9 @@ where
     P: AsRef<Path>,
 {
     check_version(version)?;
-    if is_wasmcloud_installed(&dir, version).await {
+    if let Some(dir) = find_wasmcloud_binary(&dir, version).await {
         // wasmCloud already exists, return early
-        return Ok(dir.as_ref().join(version).join(WASMCLOUD_HOST_BIN));
+        return Ok(dir);
     }
     // Download wasmCloud host tarball
     download_wasmcloud_for_os_arch_pair(os, arch, version, dir).await
@@ -124,15 +124,17 @@ where
         .await
 }
 
-/// Downloads the specified GitHub release version of the wasmCloud host from <https://github.com/wasmCloud/wasmcloud-otp/releases/>
-/// and unpacking the contents for a specified OS/ARCH pair to a directory. Returns the path to the Elixir executable.
+/// Downloads the specified GitHub release version of the wasmCloud host from
+/// <https://github.com/wasmCloud/wasmcloud-otp/releases/> and unpacking the contents for a
+/// specified OS/ARCH pair to a directory. Returns the path to the Elixir executable.
 ///
 /// # Arguments
 ///
 /// * `os` - Specifies the operating system of the binary to download, e.g. `linux`
 /// * `arch` - Specifies the architecture of the binary to download, e.g. `amd64`
 /// * `version` - Specifies the version of the binary to download in the form of `vX.Y.Z`
-/// * `dir` - Where to unpack the wasmCloud host contents into
+/// * `dir` - Where to unpack the wasmCloud host contents into. This should be the root level
+///   directory where to store hosts. Each host will be stored in a directory maching its version
 /// # Examples
 ///
 /// ```no_run
@@ -160,8 +162,8 @@ where
     let cursor = Cursor::new(body);
     let mut wasmcloud_host = Archive::new(Box::new(GzipDecoder::new(cursor)));
     let mut entries = wasmcloud_host.entries()?;
+    let version_dir = dir.as_ref().join(version);
     // Copy all of the files out of the tarball into the bin directory
-    let mut executable_path = None;
     while let Some(res) = entries.next().await {
         let mut entry = res.map_err(|_e| {
             anyhow!(
@@ -170,7 +172,7 @@ where
             )
         })?;
         if let Ok(path) = entry.path() {
-            let file_path = dir.as_ref().join(version).join(path);
+            let file_path = version_dir.join(path);
             if let Some(parent_folder) = file_path.parent() {
                 // If the user doesn't have permission to create files in the provided directory,
                 // this will bubble the error up noting permission denied
@@ -196,11 +198,6 @@ where
                             wasmcloud_file.set_permissions(perms).await?;
                         }
                     }
-
-                    // Set the executable path for return
-                    if file_path.ends_with(WASMCLOUD_HOST_BIN) {
-                        executable_path = Some(file_path.clone())
-                    }
                 }
                 tokio::io::copy(&mut entry, &mut wasmcloud_file).await?;
             }
@@ -208,12 +205,9 @@ where
     }
 
     // Return success if wasmCloud components exist, error otherwise
-    match (is_wasmcloud_installed(&dir, version).await, executable_path) {
-        (true, Some(path)) => Ok(path),
-        (true, None) => Err(anyhow!(
-            "wasmCloud was installed but the binary could not be located"
-        )),
-        (false, _) => Err(anyhow!(
+    match find_wasmcloud_binary(&dir, version).await {
+        Some(path) => Ok(path),
+        None => Err(anyhow!(
             "wasmCloud was not installed successfully, please see logs"
         )),
     }
@@ -289,24 +283,28 @@ where
 }
 
 /// Helper function to indicate if the wasmCloud host tarball is successfully
-/// installed in a directory
-pub async fn is_wasmcloud_installed<P>(dir: P, version: &str) -> bool
+/// installed in a directory. Returns the path to the binary if it exists
+pub async fn find_wasmcloud_binary<P>(dir: P, version: &str) -> Option<PathBuf>
 where
     P: AsRef<Path>,
 {
     let versioned_dir = dir.as_ref().join(version);
     let bin_dir = versioned_dir.join("bin");
-    let release_script = versioned_dir.join(WASMCLOUD_HOST_BIN);
+    let bin_file = versioned_dir.join(WASMCLOUD_HOST_BIN);
     let lib_dir = versioned_dir.join("lib");
     let releases_dir = versioned_dir.join("releases");
     let file_checks = vec![
         metadata(versioned_dir),
         metadata(bin_dir),
-        metadata(release_script),
+        metadata(bin_file.clone()),
         metadata(lib_dir),
         metadata(releases_dir),
     ];
-    join_all(file_checks).await.iter().all(|i| i.is_ok())
+    join_all(file_checks)
+        .await
+        .iter()
+        .all(|i| i.is_ok())
+        .then_some(bin_file)
 }
 
 /// Helper function to determine the wasmCloud host release path given an os/arch and version
@@ -344,9 +342,8 @@ fn check_version(version: &str) -> Result<()> {
 mod test {
     use super::{check_version, ensure_wasmcloud, wasmcloud_url};
     use crate::start::{
-        ensure_nats_server, ensure_wasmcloud_for_os_arch_pair, is_nats_installed,
-        is_wasmcloud_installed, start_nats_server, start_wasmcloud_host, NatsConfig,
-        NATS_SERVER_BINARY,
+        ensure_nats_server, ensure_wasmcloud_for_os_arch_pair, find_wasmcloud_binary,
+        is_nats_installed, start_nats_server, start_wasmcloud_host, NatsConfig, NATS_SERVER_BINARY,
     };
     use reqwest::StatusCode;
     use std::{collections::HashMap, env::temp_dir};
@@ -378,10 +375,16 @@ mod test {
         let download_dir = temp_dir().join("can_download_wasmcloud_tarball");
         let res =
             ensure_wasmcloud_for_os_arch_pair("macos", "aarch64", WASMCLOUD_VERSION, &download_dir)
-                .await;
+                .await
+                .expect("Should be able to download tarball");
 
-        assert!(res.is_ok());
-        assert!(is_wasmcloud_installed(&download_dir, WASMCLOUD_VERSION).await);
+        // Make sure we can find the binary and that it matches the path we got back from ensure
+        assert_eq!(
+            find_wasmcloud_binary(&download_dir, WASMCLOUD_VERSION)
+                .await
+                .expect("Should have found installed wasmcloud"),
+            res
+        );
 
         // Permit execution of file-watching on macos.
         #[cfg(target_family = "unix")]
@@ -429,7 +432,9 @@ mod test {
             .expect("Should be able to download host");
 
         assert!(
-            is_wasmcloud_installed(&download_dir, WASMCLOUD_VERSION).await,
+            find_wasmcloud_binary(&download_dir, WASMCLOUD_VERSION)
+                .await
+                .is_some(),
             "wasmCloud should be installed"
         );
 
@@ -438,7 +443,9 @@ mod test {
             .expect("Should be able to download host");
 
         assert!(
-            is_wasmcloud_installed(&download_dir, "v0.59.0").await,
+            find_wasmcloud_binary(&download_dir, "v0.59.0")
+                .await
+                .is_some(),
             "wasmCloud should be installed"
         );
 
@@ -470,7 +477,9 @@ mod test {
         let install_dir = std::env::current_dir()?.join("can_download_and_start_wasmcloud");
         let _ = remove_dir_all(&install_dir).await;
         create_dir_all(&install_dir).await?;
-        assert!(!is_wasmcloud_installed(&install_dir, WASMCLOUD_HOST_VERSION).await);
+        assert!(find_wasmcloud_binary(&install_dir, WASMCLOUD_HOST_VERSION)
+            .await
+            .is_none());
 
         // Install and start NATS server for this test
         let nats_port = 10004;
