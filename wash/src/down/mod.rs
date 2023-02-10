@@ -12,7 +12,7 @@ use wash_lib::start::*;
 
 use crate::appearance::spinner::Spinner;
 use crate::cfg::cfg_dir;
-use crate::up::DOWNLOADS_DIR;
+use crate::up::{DOWNLOADS_DIR, WASMCLOUD_PID_FILE};
 
 #[derive(Parser, Debug, Clone)]
 pub(crate) struct DownCommand {}
@@ -33,7 +33,14 @@ pub(crate) async fn handle_down(
 
     let mut out_json = HashMap::new();
     let mut out_text = String::from("");
-    let host_bin = install_dir.join(WASMCLOUD_HOST_BIN);
+    let version = tokio::fs::read_to_string(install_dir.join(WASMCLOUD_PID_FILE))
+        .await
+        .map_err(|e| {
+            anyhow::anyhow!("Unable to find wasmcloud pid file for stopping process: {e}")
+        })?;
+    let host_bin = find_wasmcloud_binary(&install_dir, &version)
+        .await
+        .ok_or_else(|| anyhow::anyhow!("Couldn't find path to wasmCloud binary. Is it running?"))?;
     if host_bin.is_file() {
         sp.update_spinner_message(" Stopping host ...".to_string());
         if let Ok(output) = stop_wasmcloud(host_bin).await {

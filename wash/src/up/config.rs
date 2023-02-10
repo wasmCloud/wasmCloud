@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use crate::up::{credsfile::parse_credsfile, NatsOpts, WasmcloudOpts};
 
 pub const DOWNLOADS_DIR: &str = "downloads";
+pub const WASMCLOUD_PID_FILE: &str = "wasmcloud.pid";
 // NATS configuration values
 pub(crate) const NATS_SERVER_VERSION: &str = "v2.9.14";
 pub(crate) const DEFAULT_NATS_HOST: &str = "127.0.0.1";
