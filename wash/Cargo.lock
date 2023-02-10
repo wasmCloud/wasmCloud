@@ -1936,6 +1936,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ntapi"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc51db7b362b205941f71232e56c625156eb9a929f8cf74a428fd5bc094a4afc"
+dependencies = [
+ "winapi",
+]
+
+[[package]]
 name = "nu-ansi-term"
 version = "0.46.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3224,6 +3233,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "sysinfo"
+version = "0.27.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "975fe381e0ecba475d4acff52466906d95b153a40324956552e027b2a9eaa89e"
+dependencies = [
+ "cfg-if",
+ "core-foundation-sys",
+ "libc",
+ "ntapi",
+ "once_cell",
+ "rayon",
+ "winapi",
+]
+
+[[package]]
 name = "tempfile"
 version = "3.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3905,7 +3929,7 @@ dependencies = [
 
 [[package]]
 name = "wash-cli"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "anyhow",
  "assert-json-diff",
@@ -3941,6 +3965,7 @@ dependencies = [
  "serde_yaml",
  "serial_test",
  "sha2 0.10.6",
+ "sysinfo",
  "tempfile",
  "term-table",
  "test-case",

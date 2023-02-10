@@ -28,6 +28,7 @@ use crate::down::stop_wasmcloud;
 mod config;
 mod credsfile;
 pub use config::DOWNLOADS_DIR;
+pub use config::WASMCLOUD_PID_FILE;
 use config::*;
 
 #[derive(Parser, Debug, Clone)]
@@ -306,7 +307,7 @@ pub(crate) async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result
     } else {
         Stdio::piped()
     };
-
+    let version = cmd.wasmcloud_opts.wasmcloud_version.clone();
     let host_env = configure_host_env(nats_opts, cmd.wasmcloud_opts).await;
     let wasmcloud_child = match start_wasmcloud_host(
         &wasmcloud_executable,
@@ -339,7 +340,7 @@ pub(crate) async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result
             log::warn!("wasmCloud exited with a non-zero exit status, processes may need to be cleaned up manually")
         }
 
-        stop_nats(install_dir).await?;
+        stop_nats(&install_dir).await?;
 
         spinner.finish_and_clear();
     }
@@ -351,6 +352,8 @@ pub(crate) async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result
     out_text.push_str("🛁 wash up completed successfully");
 
     if cmd.detached {
+        // Write the pid file with the selected version
+        tokio::fs::write(install_dir.join(config::WASMCLOUD_PID_FILE), version).await?;
         let url = "http://localhost:4000";
         out_json.insert("wasmcloud_url".to_string(), json!(url));
         out_json.insert("wasmcloud_log".to_string(), json!(wasmcloud_log_path));
