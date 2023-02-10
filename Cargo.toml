@@ -1,6 +1,6 @@
 [package]
 name = "wash-cli"
-version = "0.15.0"
+version = "0.15.1"
 authors = ["wasmCloud Team"]
 categories = ["wasm", "command-line-utilities"]
 description = "wasmcloud Shell (wash) CLI tool"
@@ -65,6 +65,7 @@ test_bin = "0.4.0"
 assert-json-diff = "2.0.1"
 scopeguard = "1.1.0"
 serial_test = "0.9.0"
+sysinfo = "0.27"
 
 [[bin]]
 bench = true
