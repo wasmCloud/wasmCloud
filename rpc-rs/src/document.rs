@@ -8,7 +8,7 @@ use std::collections::HashMap;
 /// Open content is useful for modeling unstructured data that has no schema, data that can't be
 /// modeled using rigid types, or data that has a schema that evolves outside of the purview of a model.
 /// The serialization format of a document is an implementation detail of a protocol.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
 pub enum Document {
     /// object
     // n(0)
@@ -30,13 +30,8 @@ pub enum Document {
     Bool(bool),
     /// null
     // n(6)
+    #[default]
     Null,
-}
-
-impl Default for Document {
-    fn default() -> Self {
-        Document::Null
-    }
 }
 
 /// Borrowed Document Type
@@ -45,7 +40,7 @@ impl Default for Document {
 /// Open content is useful for modeling unstructured data that has no schema, data that can't be
 /// modeled using rigid types, or data that has a schema that evolves outside of the purview of a model.
 /// The serialization format of a document is an implementation detail of a protocol.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Default)]
 pub enum DocumentRef<'v> {
     /// object
     // n(0)
@@ -67,13 +62,8 @@ pub enum DocumentRef<'v> {
     Bool(bool),
     /// null
     // n(6)
+    #[default]
     Null,
-}
-
-impl Default for DocumentRef<'_> {
-    fn default() -> Self {
-        DocumentRef::Null
-    }
 }
 
 impl<'v> DocumentRef<'v> {
@@ -728,9 +718,9 @@ where
 }
 /// Encode DocumentRef as cbor
 #[doc(hidden)]
-pub fn encode_document_ref<'v, W: crate::cbor::Write>(
+pub fn encode_document_ref<W: crate::cbor::Write>(
     e: &mut crate::cbor::Encoder<W>,
-    val: &DocumentRef<'v>,
+    val: &DocumentRef<'_>,
 ) -> RpcResult<()>
 where
     <W as crate::cbor::Write>::Error: std::fmt::Display,

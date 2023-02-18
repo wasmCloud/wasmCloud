@@ -70,18 +70,18 @@ impl From<&str> for RpcError {
 
 impl From<std::io::Error> for RpcError {
     fn from(e: std::io::Error) -> RpcError {
-        RpcError::Other(format!("io: {}", e))
+        RpcError::Other(format!("io: {e}"))
     }
 }
 
 impl<E: std::fmt::Display> From<minicbor::encode::Error<E>> for RpcError {
     fn from(e: minicbor::encode::Error<E>) -> RpcError {
-        RpcError::Other(format!("encode: {}", e))
+        RpcError::Other(format!("encode: {e}"))
     }
 }
 
 impl From<minicbor::decode::Error> for RpcError {
     fn from(e: minicbor::decode::Error) -> RpcError {
-        RpcError::Other(format!("decode: {}", e))
+        RpcError::Other(format!("decode: {e}"))
     }
 }

@@ -23,11 +23,11 @@ pub(crate) fn run_command(program: &str, args: &[&str]) -> Result<()> {
     let mut child = std::process::Command::new(program)
         .args(args.iter())
         .spawn()
-        .map_err(|e| Error::Formatter(format!("failed to start: {}", e)))?;
+        .map_err(|e| Error::Formatter(format!("failed to start: {e}")))?;
 
     let code = child
         .wait()
-        .map_err(|e| Error::Formatter(format!("failed waiting for formatter: {}", e)))?;
+        .map_err(|e| Error::Formatter(format!("failed waiting for formatter: {e}")))?;
     if !code.success() {
         return Err(Error::Formatter(code.to_string()));
     }

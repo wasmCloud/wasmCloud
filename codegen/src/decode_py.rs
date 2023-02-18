@@ -216,7 +216,7 @@ impl<'model> PythonCodeGen<'model> {
             let field_name = self.to_field_name(field.id(), field.traits())?;
             //let field_type = self.field_type_string(field)?;
             w.write(spaces(self.indent_level));
-            w.write(&format!("{} = None\n", field_name));
+            w.write(&format!("{field_name} = None\n"));
         }
         //if is_optional_type(field) {
         w.write(spaces(self.indent_level));
@@ -237,10 +237,10 @@ impl<'model> PythonCodeGen<'model> {
                     if ix != 0 {
                         w.write(b"el"); // 'elif'
                     }
-                    w.write(&format!("if __i == {}:\n", ix));
+                    w.write(&format!("if __i == {ix}:\n"));
                     {
                         w.write(spaces(self.indent_level + 1));
-                        w.write(&format!("{} = {}\n", field_name, field_decoder));
+                        w.write(&format!("{field_name} = {field_decoder}\n"));
                     }
                 }
                 // if no fields, generate skip for every item
@@ -278,7 +278,7 @@ impl<'model> PythonCodeGen<'model> {
                     w.write(&format!("if __key == \"{}\":\n", field.id()));
                     {
                         w.write(spaces(self.indent_level + 1));
-                        w.write(&format!("{} = {}\n", field_name, field_decoder));
+                        w.write(&format!("{field_name} = {field_decoder}\n"));
                     }
                 }
                 w.write(spaces(self.indent_level));

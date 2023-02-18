@@ -42,7 +42,7 @@ pub fn sources_to_model(sources: &[ModelSource], base_dir: &Path, verbose: u8) -
     }
     let model: Model = assembler
         .try_into()
-        .map_err(|e| Error::Model(format!("assembling model: {:#?}", e)))?;
+        .map_err(|e| Error::Model(format!("assembling model: {e:#?}")))?;
     Ok(model)
 }
 
@@ -89,7 +89,7 @@ pub(crate) fn sources_to_paths(
             ModelSource::Url { url, files } => {
                 if files.is_empty() {
                     if verbose > 0 {
-                        println!("DEBUG: adding url: {}", url);
+                        println!("DEBUG: adding url: {url}");
                     }
                     urls.push(url.to_string());
                 } else {
@@ -183,7 +183,7 @@ fn urls_to_cached_files(urls: Vec<String>) -> Result<Vec<PathBuf>> {
     let weld_cache = weld_cache_dir()?;
 
     let tmpdir =
-        tempfile::tempdir().map_err(|e| Error::Io(format!("creating temp folder: {}", e)))?;
+        tempfile::tempdir().map_err(|e| Error::Io(format!("creating temp folder: {e}")))?;
     for url in urls.iter() {
         let rel_path = url_to_cache_path(url)?;
         let cache_path = weld_cache.join(&rel_path);
@@ -210,16 +210,16 @@ fn urls_to_cached_files(urls: Vec<String>) -> Result<Vec<PathBuf>> {
             .download_folder(tmpdir.path())
             .parallel_requests(MAX_PARALLEL_DOWNLOADS)
             .build()
-            .map_err(|e| Error::Other(format!("internal error: download failure: {}", e)))?;
+            .map_err(|e| Error::Other(format!("internal error: download failure: {e}")))?;
         // invoke parallel downloader, returns when all have been read
         let result = downloader
             .download(&to_download)
-            .map_err(|e| Error::Other(format!("download error: {}", e)))?;
+            .map_err(|e| Error::Other(format!("download error: {e}")))?;
 
         for r in result.iter() {
             match r {
                 Err(e) => {
-                    println!("Failure downloading: {}", e);
+                    println!("Failure downloading: {e}");
                 }
                 Ok(summary) => {
                     for status in summary.status.iter() {
@@ -227,7 +227,7 @@ fn urls_to_cached_files(urls: Vec<String>) -> Result<Vec<PathBuf>> {
                             // take first with status ok
                             let downloaded_file = &summary.file_name;
                             let rel_path = downloaded_file.strip_prefix(&tmpdir).map_err(|e| {
-                                Error::Other(format!("internal download error {}", e))
+                                Error::Other(format!("internal download error {e}"))
                             })?;
                             let cache_file = weld_cache.join(rel_path);
                             std::fs::create_dir_all(cache_file.parent().unwrap()).map_err(|e| {
@@ -267,7 +267,7 @@ fn urls_to_cached_files(urls: Vec<String>) -> Result<Vec<PathBuf>> {
 }
 
 fn bad_url<E: std::fmt::Display>(s: &str, e: E) -> Error {
-    Error::Other(format!("bad url {}: {}", s, e))
+    Error::Other(format!("bad url {s}: {e}"))
 }
 
 #[cfg(test)]

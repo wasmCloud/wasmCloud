@@ -41,7 +41,7 @@ pub fn rust_build_into<CFG: Into<PathBuf>, OUT: Into<PathBuf>>(
     })?;
     let mut config = config_file
         .parse::<CodegenConfig>()
-        .map_err(|e| Error::Build(format!("parsing config: {}", e)))?;
+        .map_err(|e| Error::Build(format!("parsing config: {e}")))?;
     config.base_dir = config_path.parent().unwrap().to_path_buf();
     config.output_languages = vec![OutputLanguage::Rust];
 

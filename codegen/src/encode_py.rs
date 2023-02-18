@@ -262,7 +262,7 @@ impl<'model> PythonCodeGen<'model> {
 
         w.write(spaces(self.indent_level));
         if as_array {
-            w.write(&format!("e.encode_length(4, {})\n", field_max_index));
+            w.write(&format!("e.encode_length(4, {field_max_index})\n"));
         } else {
             w.write(&format!("e.encode_length(5, len({}))\n", val.as_str()));
         }

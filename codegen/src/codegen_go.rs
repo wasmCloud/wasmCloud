@@ -220,8 +220,7 @@ impl<'model> CodeGen for GoCodeGen<'model> {
                 let current_ver =
                     semver::Version::parse(env!("CARGO_PKG_VERSION")).map_err(|e| {
                         Error::InvalidModel(format!(
-                            "parse error for weld-codegen package version: {}",
-                            e
+                            "parse error for weld-codegen package version: {e}"
                         ))
                     })?;
                 for val in codegen_min.iter() {
@@ -232,14 +231,12 @@ impl<'model> CodeGen for GoCodeGen<'model> {
                                     let min_ver = semver::Version::parse(ver).map_err(|e| {
                                         Error::InvalidModel(format!(
                                             "metadata parse error for codegen {{ language=go, \
-                                             min_version={} }}: {}",
-                                            ver, e
+                                             min_version={ver} }}: {e}"
                                         ))
                                     })?;
                                     if min_ver.gt(&current_ver) {
                                         return Err(Error::Model(format!(
-                                            "model requires weld-codegen version >= {}",
-                                            min_ver
+                                            "model requires weld-codegen version >= {min_ver}"
                                         )));
                                     }
                                 } else {
@@ -258,8 +255,7 @@ impl<'model> CodeGen for GoCodeGen<'model> {
                     .map_err(|e| {
                         Error::Model(format!(
                             "invalid metadata format for package, expecting format \
-                             '[{{namespace:\"org.example\",crate:\"path::module\"}}]':  {}",
-                            e
+                             '[{{namespace:\"org.example\",crate:\"path::module\"}}]':  {e}"
                         ))
                     })?;
                 for p in packages.iter() {
@@ -472,7 +468,7 @@ impl<'model> CodeGen for GoCodeGen<'model> {
     /// Write a single-line comment
     fn write_comment(&mut self, w: &mut Writer, _kind: CommentKind, line: &str) {
         // all comment types same for Go
-        writeln!(w, "// {}", line).unwrap();
+        writeln!(w, "// {line}").unwrap();
     }
 
     /// generate Go method name: capitalized to make public
@@ -602,10 +598,10 @@ impl<'model> GoCodeGen<'model> {
         {
             w.write(b"// @deprecated ");
             if let Some(Value::String(since)) = map.get("since") {
-                w.write(&format!("since=\"{}\"\n", since));
+                w.write(&format!("since=\"{since}\"\n"));
             }
             if let Some(Value::String(message)) = map.get("message") {
-                w.write(&format!("note=\"{}\"\n", message));
+                w.write(&format!("note=\"{message}\"\n"));
             }
             w.write(b")\n");
         }
@@ -790,7 +786,7 @@ impl<'model> GoCodeGen<'model> {
             self.apply_documentation_traits(w, member.id(), member.traits());
             let (field_name, ser_name) = self.get_field_name_and_ser_name(member)?;
             let target = member.target();
-            let field_tags = format!(r#"`json:"{}"`"#, ser_name);
+            let field_tags = format!(r#"`json:"{ser_name}"`"#);
             writeln!(
                 w,
                 "  {} {} {}",
@@ -820,13 +816,12 @@ impl<'model> GoCodeGen<'model> {
         let (fields, is_numbered) = get_sorted_fields(ident, strukt)?;
         if !is_numbered {
             return Err(Error::Model(format!(
-                "union {} must have numbered fields",
-                ident
+                "union {ident} must have numbered fields"
             )));
         }
         self.apply_documentation_traits(w, ident, traits);
-        writeln!(w, "// enum {}", ident).unwrap();
-        writeln!(w, "type {} uint16", ident).unwrap();
+        writeln!(w, "// enum {ident}").unwrap();
+        writeln!(w, "type {ident} uint16").unwrap();
         writeln!(w, "const (").unwrap();
         let mut first_value = true;
         for member in fields.iter() {
@@ -835,10 +830,10 @@ impl<'model> GoCodeGen<'model> {
             let variant_name = self.to_type_name_case(&member.id().to_string());
             if member.target() == crate::model::unit_shape() {
                 if first_value {
-                    writeln!(w, "    {} {} = {}", variant_name, ident, field_num).unwrap();
+                    writeln!(w, "    {variant_name} {ident} = {field_num}").unwrap();
                     first_value = false;
                 } else {
-                    writeln!(w, "    {} = {}", variant_name, field_num).unwrap();
+                    writeln!(w, "    {variant_name} = {field_num}").unwrap();
                 }
             } else {
                 // TODO: not supported yet
@@ -852,14 +847,13 @@ impl<'model> GoCodeGen<'model> {
         w.write(b")\n\n");
 
         // generate String method
-        writeln!(w, "func (x {}) String() string {{", ident).unwrap();
+        writeln!(w, "func (x {ident}) String() string {{").unwrap();
         w.write(b"  switch x {\n");
         for member in fields.iter() {
             let variant_name = self.to_type_name_case(&member.id().to_string());
             writeln!(
                 w,
-                "    case {}:\n      return \"{}\"",
-                variant_name, variant_name
+                "    case {variant_name}:\n      return \"{variant_name}\""
             )
             .unwrap();
         }
@@ -948,7 +942,7 @@ impl<'model> GoCodeGen<'model> {
         self.apply_documentation_traits(w, method_id, method_traits);
         match sig_type {
             MethodSigType::Interface => {}
-            MethodSigType::Sender(s) => write!(w, "func (s *{}Sender) ", s).unwrap(),
+            MethodSigType::Sender(s) => write!(w, "func (s *{s}Sender) ").unwrap(),
         }
         w.write(&method_name);
         write!(w, "(ctx *{}Context", &self.import_core).unwrap();
@@ -1285,7 +1279,7 @@ impl<'model> GoCodeGen<'model> {
         // look up the crate name, which should be valid go syntax
         match self.packages.get(&namespace.to_string()) {
             Some(crate::model::PackageName { go_package: Some(go_package), .. }) => {
-                Ok(format!("{}.", go_package))
+                Ok(format!("{go_package}."))
             }
             _ => Err(Error::Model(format!(
                 "undefined go_package for namespace '{}' symbol '{}'. Make sure codegen.toml includes \
@@ -1369,7 +1363,7 @@ impl<'model> GoCodeGen<'model> {
         .unwrap();
         for field in fields.iter() {
             let (field_name, ser_name) = self.get_field_name_and_ser_name(field)?;
-            writeln!(s, "case \"{}\":", ser_name).unwrap();
+            writeln!(s, "case \"{ser_name}\":").unwrap();
             if is_optional_field(field, self.shape_kind(field.target())) {
                 writeln!(
                     s,
@@ -1716,20 +1710,20 @@ impl<'model> GoCodeGen<'model> {
         let serde_fn = codec_pfx(has_cbor);
         let stmt = if id.namespace() == prelude_namespace_id() {
             match name.as_ref() {
-                SHAPE_BLOB => format!("{}.WriteByteArray({})", e, val),
-                SHAPE_BOOLEAN | SHAPE_PRIMITIVEBOOLEAN => format!("{}.WriteBool({})", e, val),
-                SHAPE_STRING => format!("{}.WriteString({})", e, val),
-                SHAPE_BYTE | SHAPE_PRIMITIVEBYTE => format!("{}.WriteUint8({})", e, val),
-                SHAPE_SHORT | SHAPE_PRIMITIVESHORT => format!("{}.WriteUint16({})", e, val),
+                SHAPE_BLOB => format!("{e}.WriteByteArray({val})"),
+                SHAPE_BOOLEAN | SHAPE_PRIMITIVEBOOLEAN => format!("{e}.WriteBool({val})"),
+                SHAPE_STRING => format!("{e}.WriteString({val})"),
+                SHAPE_BYTE | SHAPE_PRIMITIVEBYTE => format!("{e}.WriteUint8({val})"),
+                SHAPE_SHORT | SHAPE_PRIMITIVESHORT => format!("{e}.WriteUint16({val})"),
                 SHAPE_INTEGER | SHAPE_PRIMITIVEINTEGER => {
-                    format!("{}.WriteUint32({})", e, val)
+                    format!("{e}.WriteUint32({val})")
                 }
-                SHAPE_LONG | SHAPE_PRIMITIVELONG => format!("{}.WriteUint64({})", e, val),
-                SHAPE_FLOAT | SHAPE_PRIMITIVEFLOAT => format!("{}.WriteFloat32({})", e, val),
+                SHAPE_LONG | SHAPE_PRIMITIVELONG => format!("{e}.WriteUint64({val})"),
+                SHAPE_FLOAT | SHAPE_PRIMITIVEFLOAT => format!("{e}.WriteFloat32({val})"),
                 SHAPE_DOUBLE | SHAPE_PRIMITIVEDOUBLE => {
-                    format!("{}.WriteFloat64({})", e, val)
+                    format!("{e}.WriteFloat64({val})")
                 }
-                SHAPE_TIMESTAMP => format!("{}.{}Encode({})", val, serde_fn, e),
+                SHAPE_TIMESTAMP => format!("{val}.{serde_fn}Encode({e})"),
                 //SHAPE_DOCUMENT => todo!(),
                 //SHAPE_BIGINTEGER => todo!(),
                 //SHAPE_BIGDECIMAL => todo!(),
@@ -1737,20 +1731,20 @@ impl<'model> GoCodeGen<'model> {
             }
         } else if id.namespace() == wasmcloud_model_namespace() {
             match name.as_bytes() {
-                b"U64" => format!("{}.WriteUint64({})", e, val),
-                b"U32" => format!("{}.WriteUint32({})", e, val),
-                b"U16" => format!("{}.WriteUint16({})", e, val),
-                b"U8" => format!("{}.WriteUint8({})", e, val),
-                b"I64" => format!("{}.WriteInt64({})", e, val),
-                b"I32" => format!("{}.WriteInt32({})", e, val),
-                b"I16" => format!("{}.WriteInt16({})", e, val),
-                b"I8" => format!("{}.WriteInt8({})", e, val),
-                b"F64" => format!("{}.WriteFloat64({})", e, val),
-                b"F32" => format!("{}.WriteFloat32({})", e, val),
-                _ => format!("{}.{}Encode({})", val, serde_fn, e,),
+                b"U64" => format!("{e}.WriteUint64({val})"),
+                b"U32" => format!("{e}.WriteUint32({val})"),
+                b"U16" => format!("{e}.WriteUint16({val})"),
+                b"U8" => format!("{e}.WriteUint8({val})"),
+                b"I64" => format!("{e}.WriteInt64({val})"),
+                b"I32" => format!("{e}.WriteInt32({val})"),
+                b"I16" => format!("{e}.WriteInt16({val})"),
+                b"I8" => format!("{e}.WriteInt8({val})"),
+                b"F64" => format!("{e}.WriteFloat64({val})"),
+                b"F32" => format!("{e}.WriteFloat32({val})"),
+                _ => format!("{val}.{serde_fn}Encode({e})",),
             }
         } else {
-            format!("{}.{}Encode({})", val, serde_fn, e)
+            format!("{val}.{serde_fn}Encode({e})")
         };
         Ok(stmt)
     }
@@ -1852,8 +1846,7 @@ fn package_semver() {
     let version = semver::Version::parse(package_version);
     assert!(
         version.is_ok(),
-        "package version {} has unexpected format",
-        package_version
+        "package version {package_version} has unexpected format"
     );
 }
 

@@ -221,12 +221,11 @@ impl<'model> RustCodeGen<'model> {
         let enum_name = id.shape_name();
         let mut s = format!(
             r#"
-            // decoding union {}
+            // decoding union {enum_name}
             let len = d.fixed_array()?;
-            if len != 2 {{ return Err(RpcError::Deser("decoding union '{}': expected 2-array".to_string())); }}
+            if len != 2 {{ return Err(RpcError::Deser("decoding union '{enum_name}': expected 2-array".to_string())); }}
             match d.u16()? {{
         "#,
-            enum_name, enum_name,
         );
         for field in fields.iter() {
             let field_num = field.field_num().unwrap();
@@ -265,9 +264,8 @@ impl<'model> RustCodeGen<'model> {
         writeln!(
             s,
             r#"
-            n => {{ return Err(RpcError::Deser(format!("invalid field number for union '{}':{{}}", n))); }},
-            }}"#,
-            id
+            n => {{ return Err(RpcError::Deser(format!("invalid field number for union '{id}':{{}}", n))); }},
+            }}"#
         ).unwrap();
         Ok(s)
     }
@@ -290,12 +288,11 @@ impl<'model> RustCodeGen<'model> {
                 // that did not define those fields.
                 writeln!(
                     s,
-                    "let mut {}: Option<{}> = Some(None);",
-                    field_name, field_type
+                    "let mut {field_name}: Option<{field_type}> = Some(None);"
                 )
                 .unwrap()
             } else {
-                writeln!(s, "let mut {}: Option<{}> = None;", field_name, field_type).unwrap()
+                writeln!(s, "let mut {field_name}: Option<{field_type}> = None;").unwrap()
             }
         }
         write!(s, r#"
@@ -341,7 +338,7 @@ impl<'model> RustCodeGen<'model> {
                 )
                 .unwrap();
             } else {
-                write!(s, "{} => {} = Some({}),", ix, field_name, field_decoder,).unwrap();
+                write!(s, "{ix} => {field_name} = Some({field_decoder}),",).unwrap();
             }
         }
         if !fields.is_empty() {

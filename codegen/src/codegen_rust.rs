@@ -117,7 +117,7 @@ impl<'lt> Lifetime<'lt> {
         match self {
             Lifetime::None => String::default(),
             Lifetime::Any => "<'_>".to_string(),
-            Lifetime::L(s) => format!("<'{}>", s),
+            Lifetime::L(s) => format!("<'{s}>"),
         }
     }
 
@@ -170,8 +170,7 @@ impl<'model> CodeGen for RustCodeGen<'model> {
                 let current_ver =
                     semver::Version::parse(env!("CARGO_PKG_VERSION")).map_err(|e| {
                         Error::InvalidModel(format!(
-                            "parse error for weld-codegen package version: {}",
-                            e
+                            "parse error for weld-codegen package version: {e}"
                         ))
                     })?;
                 for val in codegen_min.iter() {
@@ -182,14 +181,12 @@ impl<'model> CodeGen for RustCodeGen<'model> {
                                     let min_ver = semver::Version::parse(ver).map_err(|e| {
                                         Error::InvalidModel(format!(
                                             "metadata parse error for codegen {{ language=rust, \
-                                             min_version={} }}: {}",
-                                            ver, e
+                                             min_version={ver} }}: {e}"
                                         ))
                                     })?;
                                     if min_ver.gt(&current_ver) {
                                         return Err(Error::Model(format!(
-                                            "model requires weld-codegen version >= {}",
-                                            min_ver
+                                            "model requires weld-codegen version >= {min_ver}"
                                         )));
                                     }
                                 } else {
@@ -208,8 +205,7 @@ impl<'model> CodeGen for RustCodeGen<'model> {
                     .map_err(|e| {
                         Error::Model(format!(
                             "invalid metadata format for package, expecting format \
-                             '[{{namespace:\"org.example\",crate:\"path::module\"}}]':  {}",
-                            e
+                             '[{{namespace:\"org.example\",crate:\"path::module\"}}]':  {e}"
                         ))
                     })?;
                 for p in packages.iter() {
@@ -282,7 +278,7 @@ impl<'model> CodeGen for RustCodeGen<'model> {
         )
         .unwrap();
         if let Some(ns) = &self.namespace {
-            writeln!(w, "// namespace: {}", ns).unwrap();
+            writeln!(w, "// namespace: {ns}").unwrap();
         }
         w.write(b"\n");
 
@@ -578,10 +574,10 @@ impl<'model> RustCodeGen<'model> {
         {
             w.write(b"#[deprecated(");
             if let Some(Value::String(since)) = map.get("since") {
-                writeln!(w, "since=\"{}\"", since).unwrap();
+                writeln!(w, "since=\"{since}\"").unwrap();
             }
             if let Some(Value::String(message)) = map.get("message") {
-                writeln!(w, "note=\"{}\"", message).unwrap();
+                writeln!(w, "note=\"{message}\"").unwrap();
             }
             w.write(b")\n");
         }
@@ -829,7 +825,7 @@ impl<'model> RustCodeGen<'model> {
             // with `@sesrialization(name: SNAME)`
             let (field_name, ser_name) = self.get_field_name_and_ser_name(member)?;
             if ser_name != field_name {
-                writeln!(w, "  #[serde(rename=\"{}\")] ", ser_name).unwrap();
+                writeln!(w, "  #[serde(rename=\"{ser_name}\")] ").unwrap();
             }
             let lt = if self.has_lifetime(member.target()) { lt } else { Lifetime::None };
 
@@ -905,8 +901,7 @@ impl<'model> RustCodeGen<'model> {
         let (fields, is_numbered) = get_sorted_fields(ident, strukt)?;
         if !is_numbered {
             return Err(Error::Model(format!(
-                "union {} must have numbered fields",
-                ident
+                "union {ident} must have numbered fields"
             )));
         }
         self.apply_documentation_traits(w, ident, traits);
@@ -925,10 +920,10 @@ impl<'model> RustCodeGen<'model> {
         for member in fields.iter() {
             self.apply_documentation_traits(w, member.id(), member.traits());
             let field_num = member.field_num().unwrap();
-            writeln!(w, "/// n({})", field_num).unwrap();
+            writeln!(w, "/// n({field_num})").unwrap();
             let variant_name = self.to_type_name_case(&member.id().to_string());
             if member.target() == crate::model::unit_shape() {
-                writeln!(w, "{},\n", variant_name).unwrap();
+                writeln!(w, "{variant_name},\n").unwrap();
             } else {
                 writeln!(
                     w,
@@ -987,8 +982,7 @@ impl<'model> RustCodeGen<'model> {
                 w,
                 r#"
                 /// returns the capability contract id for this interface
-                fn contract_id() -> &'static str {{ "{}" }}"#,
-                contract_id
+                fn contract_id() -> &'static str {{ "{contract_id}" }}"#
             )
             .unwrap();
         }
@@ -1001,7 +995,7 @@ impl<'model> RustCodeGen<'model> {
         let wasmbus: Option<Wasmbus> = get_trait(service.traits, crate::model::wasmbus_trait())?;
         if let Some(wasmbus) = wasmbus {
             if let Some(contract_id) = service.wasmbus_contract_id() {
-                let text = format!("wasmbus.contractId: {}", contract_id);
+                let text = format!("wasmbus.contractId: {contract_id}");
                 self.write_documentation(w, service.id, &text);
             }
             if wasmbus.provider_receive {
@@ -1044,9 +1038,9 @@ impl<'model> RustCodeGen<'model> {
         if let Some(input_type) = op.input() {
             if input_type == &ShapeID::new_unchecked(PRELUDE_NAMESPACE, SHAPE_STRING, None) {
                 arg_flags = MethodArgFlags::ToString;
-                write!(w, "<{}TS:ToString + ?Sized + std::marker::Sync>", func_lt).unwrap();
+                write!(w, "<{func_lt}TS:ToString + ?Sized + std::marker::Sync>").unwrap();
             } else if input_lt {
-                write!(w, "<{}>", func_lt).unwrap();
+                write!(w, "<{func_lt}>").unwrap();
             }
         }
         w.write(b"(&self, ctx: &Context");
@@ -1478,7 +1472,7 @@ impl<'model> RustCodeGen<'model> {
         // the crate name should be valid rust syntax. If not, they'll get an error with rustc
         match self.packages.get(&namespace.to_string()) {
             Some(crate::model::PackageName { crate_name: Some(crate_name), .. }) => {
-                Ok(format!("{}::", crate_name))
+                Ok(format!("{crate_name}::"))
             }
             _ => Err(Error::Model(format!(
                 "undefined crate for namespace '{}' symbol '{}'. Make sure codegen.toml includes \
@@ -1625,8 +1619,7 @@ fn package_semver() {
     let version = semver::Version::parse(package_version);
     assert!(
         version.is_ok(),
-        "package version {} has unexpected format",
-        package_version
+        "package version {package_version} has unexpected format"
     );
 }
 

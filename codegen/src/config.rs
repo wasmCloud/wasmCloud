@@ -155,7 +155,7 @@ impl fmt::Display for ModelSource {
             f,
             "{}",
             match self {
-                ModelSource::Url { url, files: _ } => format!("url({})", url),
+                ModelSource::Url { url, files: _ } => format!("url({url})"),
                 ModelSource::Path { path, files: _ } => format!("path({})", path.display()),
             }
         )
@@ -218,8 +218,7 @@ impl FromStr for CodegenConfig {
     type Err = Error;
 
     fn from_str(content: &str) -> std::result::Result<CodegenConfig, Self::Err> {
-        let config =
-            toml::from_str(content).map_err(|e| Error::Other(format!("codegen: {}", e)))?;
+        let config = toml::from_str(content).map_err(|e| Error::Other(format!("codegen: {e}")))?;
         Ok(config)
     }
 }

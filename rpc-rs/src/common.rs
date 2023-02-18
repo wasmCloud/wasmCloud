@@ -167,7 +167,7 @@ pub fn decode<T: serde::de::DeserializeOwned>(
             cbor_dec(d)?
         }
         (MessageFormat::Msgpack, offset) => deserialize(&buf[offset..])
-            .map_err(|e| RpcError::Deser(format!("decoding '{}': {{}}", e)))?,
+            .map_err(|e| RpcError::Deser(format!("decoding '{e}': {{}}")))?,
         _ => return Err(RpcError::Deser("invalid encoding".to_string())),
     };
     Ok(value)

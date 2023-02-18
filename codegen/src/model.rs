@@ -146,8 +146,7 @@ impl TryFrom<&str> for WasmbusProtoVersion {
             "0" => Ok(WasmbusProtoVersion { base: 0 }),
             "2" => Ok(WasmbusProtoVersion { base: 2 }),
             _ => Err(Error::Model(format!(
-                "Invalid wasmbus.protocol: '{}'. The default value is \"0\".",
-                value
+                "Invalid wasmbus.protocol: '{value}'. The default value is \"0\"."
             ))),
         }
     }
@@ -445,9 +444,8 @@ pub(crate) fn has_field_numbers(fields: &[NumberedMember], name: &str) -> Result
         Ok(true)
     } else {
         Err(crate::Error::Model(format!(
-            "structure {} has incomplete or invalid field numbers: either some fields are missing \
-             the '@n()' trait, or some fields have duplicate numbers.",
-            name
+            "structure {name} has incomplete or invalid field numbers: either some fields are missing \
+             the '@n()' trait, or some fields have duplicate numbers."
         )))
     }
 }

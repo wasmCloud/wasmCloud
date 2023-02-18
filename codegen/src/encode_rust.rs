@@ -44,7 +44,7 @@ impl<'s> ValExpr<'s> {
     /// returns borrowed reference to value
     pub(crate) fn as_ref(&self) -> String {
         match self {
-            ValExpr::Plain(s) => format!("&{}", s),
+            ValExpr::Plain(s) => format!("&{s}"),
             ValExpr::Ref(s) => s.to_string(),
         }
     }
@@ -61,7 +61,7 @@ impl<'s> ValExpr<'s> {
     pub(crate) fn as_copy(&self) -> String {
         match self {
             ValExpr::Plain(s) => s.to_string(),
-            ValExpr::Ref(s) => format!("*{}", s),
+            ValExpr::Ref(s) => format!("*{s}"),
         }
     }
 }

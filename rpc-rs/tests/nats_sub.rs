@@ -33,7 +33,7 @@ async fn make_client(timeout: Option<Duration>) -> RpcResult<RpcClient> {
         .connect(server_addr)
         .await
         .map_err(|e| {
-            RpcError::ProviderInit(format!("nats connection to {} failed: {}", nats_url, e))
+            RpcError::ProviderInit(format!("nats connection to {nats_url} failed: {e}"))
         })?;
 
     let key_pair = KeyPair::new_user();
@@ -81,7 +81,7 @@ async fn listen_bin(client: RpcClient, subject: &str) -> tokio::task::JoinHandle
         let mut count: u64 = 0;
         while let Some(msg) = sub.next().await {
             let size = msg.payload.len();
-            let response = format!("{}", size);
+            let response = format!("{size}");
             if let Some(reply_to) = msg.reply {
                 if let Err(e) = nc.publish(reply_to, response.as_bytes().to_vec().into()).await {
                     error!("error publishing subscriber response: {}", e);

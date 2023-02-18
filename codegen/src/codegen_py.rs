@@ -102,8 +102,7 @@ impl<'model> CodeGen for PythonCodeGen<'model> {
                     .map_err(|e| {
                         Error::Model(format!(
                             "invalid metadata format for package, expecting format \
-                             '[{{namespace:\"org.example\",crate:\"path::module\"}}]':  {}",
-                            e
+                             '[{{namespace:\"org.example\",crate:\"path::module\"}}]':  {e}"
                         ))
                     })?;
                 for p in packages.iter() {
@@ -296,7 +295,7 @@ impl<'model> PythonCodeGen<'model> {
         w.write(b"from typing import Optional\n");
         w.write(b"from wasmcloud import Message,Context,decode_map_or_array\n");
         for import in self.imported_packages.iter() {
-            w.write(&format!("import {}\n", import));
+            w.write(&format!("import {import}\n"));
         }
         Ok(w.take())
     }
@@ -329,10 +328,10 @@ impl<'model> PythonCodeGen<'model> {
         {
             w.write(b"#[deprecated(");
             if let Some(Value::String(since)) = map.get("since") {
-                w.write(&format!("since=\"{}\"\n", since));
+                w.write(&format!("since=\"{since}\"\n"));
             }
             if let Some(Value::String(message)) = map.get("message") {
-                w.write(&format!("note=\"{}\"\n", message));
+                w.write(&format!("note=\"{message}\"\n"));
             }
             w.write(b")\n");
         }
@@ -743,8 +742,7 @@ impl<'model> PythonCodeGen<'model> {
         service: &Service,
     ) -> Result<()> {
         let doc = format!(
-            "{}Receiver receives messages defined in the {} service trait",
-            service_id, service_id
+            "{service_id}Receiver receives messages defined in the {service_id} service trait"
         );
         self.write_comment(w, CommentKind::Documentation, &doc);
         self.apply_documentation_traits(w, service_id, service_traits);
@@ -845,10 +843,7 @@ impl<'model> PythonCodeGen<'model> {
         service_traits: &AppliedTraits,
         service: &Service,
     ) -> Result<()> {
-        let doc = format!(
-            "{}Sender sends messages to a {} service",
-            service_id, service_id
-        );
+        let doc = format!("{service_id}Sender sends messages to a {service_id} service");
         self.write_comment(w, CommentKind::Documentation, &doc);
         self.apply_documentation_traits(w, service_id, service_traits);
         w.write(spaces(self.indent_level));

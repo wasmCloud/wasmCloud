@@ -82,7 +82,7 @@ pub mod core {
                         crate::provider::DEFAULT_NATS_ADDR
                     };
                     let nats_server = async_nats::ServerAddr::from_str(nats_addr).map_err(|e| {
-                        RpcError::InvalidParameter(format!("Invalid nats server url '{}': {}", nats_addr, e))
+                        RpcError::InvalidParameter(format!("Invalid nats server url '{nats_addr}': {e}"))
                     })?;
 
                     // Connect to nats
@@ -90,7 +90,7 @@ pub mod core {
                         .connect(nats_server)
                         .await
                         .map_err(|e| {
-                            RpcError::ProviderInit(format!("nats connection to {} failed: {}", nats_addr, e))
+                            RpcError::ProviderInit(format!("nats connection to {nats_addr} failed: {e}"))
                         })?;
                     Ok(nc)
                 }
@@ -270,7 +270,7 @@ mod test {
     fn ret_rpc_err(val: u8) -> Result<u8, crate::error::RpcError> {
         let x = match val {
             0 => Ok(0),
-            10 | 11 => Err(crate::error::RpcError::Other(format!("rpc:{}", val))),
+            10 | 11 => Err(crate::error::RpcError::Other(format!("rpc:{val}"))),
             _ => Ok(255),
         }?;
         Ok(x)
@@ -310,17 +310,17 @@ mod test {
                 eprintln!("10 is rpc error (ok)");
                 match rpc_err {
                     RpcError::Other(s) => {
-                        eprintln!("RpcError::Other({})", s);
+                        eprintln!("RpcError::Other({s})");
                     }
                     RpcError::Nats(s) => {
-                        eprintln!("RpcError::Nats({})", s);
+                        eprintln!("RpcError::Nats({s})");
                     }
                     _ => {
-                        eprintln!("RpcError::unknown {}", rpc_err);
+                        eprintln!("RpcError::unknown {rpc_err}");
                     }
                 }
             } else {
-                eprintln!("10 is not rpc error. value={}", e);
+                eprintln!("10 is not rpc error. value={e}");
             }
         }
 
@@ -332,17 +332,17 @@ mod test {
                 eprintln!("20 is rpc error (ok)");
                 match rpc_err {
                     RpcError::Other(s) => {
-                        eprintln!("RpcError::Other({})", s);
+                        eprintln!("RpcError::Other({s})");
                     }
                     RpcError::Nats(s) => {
-                        eprintln!("RpcError::Nats({})", s);
+                        eprintln!("RpcError::Nats({s})");
                     }
                     _ => {
-                        eprintln!("RpcError::unknown {}", rpc_err);
+                        eprintln!("RpcError::unknown {rpc_err}");
                     }
                 }
             } else {
-                eprintln!("20 is not rpc error. value={}", e);
+                eprintln!("20 is not rpc error. value={e}");
             }
         }
     }

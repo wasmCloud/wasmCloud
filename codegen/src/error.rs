@@ -91,8 +91,8 @@ impl From<serde_json::Error> for Error {
 /// they are redirected to a build output folder, so use the cargo:warning stdout hook
 pub(crate) fn print_warning(msg: &str) {
     if std::env::var("OUT_DIR").is_ok() && std::env::var("CARGO").is_ok() {
-        println!("cargo:warning= {}", msg);
+        println!("cargo:warning= {msg}");
     } else {
-        eprintln!("Warning: {}", msg);
+        eprintln!("Warning: {msg}");
     }
 }

@@ -229,7 +229,7 @@ fn gen_for_language<'model>(
         OutputLanguage::Html => Box::<DocGen>::default(),
         OutputLanguage::Poly => Box::<PolyCodeGen>::default(),
         _ => {
-            crate::error::print_warning(&format!("Target language {} not implemented", language));
+            crate::error::print_warning(&format!("Target language {language} not implemented"));
             Box::<NoCodeGen>::default()
         }
     }
@@ -550,7 +550,7 @@ pub fn find_files(dir: &Path, extension: &str) -> Result<Vec<PathBuf>> {
         for entry in std::fs::read_dir(dir)
             .map_err(|e| Error::Io(format!("reading directory {}: {}", dir.display(), e)))?
         {
-            let entry = entry.map_err(|e| crate::Error::Io(format!("scanning folder: {}", e)))?;
+            let entry = entry.map_err(|e| crate::Error::Io(format!("scanning folder: {e}")))?;
             let path = entry.path();
             if path.is_dir() {
                 results.append(&mut find_files(&path, extension)?);

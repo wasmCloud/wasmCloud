@@ -51,7 +51,7 @@ pub fn decode_actor_links(d: &mut crate::cbor::Decoder<'_>) -> Result<ActorLinks
                 let mut arr: Vec<LinkDefinition> = Vec::with_capacity(n as usize);
                 for _ in 0..(n as usize) {
                     arr.push(decode_link_definition(d).map_err(|e| {
-                        format!("decoding 'org.wasmcloud.core#LinkDefinition': {}", e)
+                        format!("decoding 'org.wasmcloud.core#LinkDefinition': {e}")
                     })?)
                 }
                 arr
@@ -63,7 +63,7 @@ pub fn decode_actor_links(d: &mut crate::cbor::Decoder<'_>) -> Result<ActorLinks
                         Err(_) => break,
                         Ok(crate::cbor::Type::Break) => break,
                         Ok(_) => arr.push(decode_link_definition(d).map_err(|e| {
-                            format!("decoding 'org.wasmcloud.core#LinkDefinition': {}", e)
+                            format!("decoding 'org.wasmcloud.core#LinkDefinition': {e}")
                         })?),
                     }
                 }
@@ -120,30 +120,31 @@ where
 pub fn decode_cluster_issuers(
     d: &mut crate::cbor::Decoder<'_>,
 ) -> Result<ClusterIssuers, RpcError> {
-    let __result = {
-        if let Some(n) = d.array()? {
-            let mut arr: Vec<ClusterIssuerKey> = Vec::with_capacity(n as usize);
-            for _ in 0..(n as usize) {
-                arr.push(decode_cluster_issuer_key(d).map_err(|e| {
-                    format!("decoding 'org.wasmcloud.core#ClusterIssuerKey': {}", e)
-                })?)
-            }
-            arr
-        } else {
-            // indefinite array
-            let mut arr: Vec<ClusterIssuerKey> = Vec::new();
-            loop {
-                match d.datatype() {
-                    Err(_) => break,
-                    Ok(crate::cbor::Type::Break) => break,
-                    Ok(_) => arr.push(decode_cluster_issuer_key(d).map_err(|e| {
-                        format!("decoding 'org.wasmcloud.core#ClusterIssuerKey': {}", e)
-                    })?),
+    let __result =
+        {
+            if let Some(n) = d.array()? {
+                let mut arr: Vec<ClusterIssuerKey> = Vec::with_capacity(n as usize);
+                for _ in 0..(n as usize) {
+                    arr.push(decode_cluster_issuer_key(d).map_err(|e| {
+                        format!("decoding 'org.wasmcloud.core#ClusterIssuerKey': {e}")
+                    })?)
                 }
+                arr
+            } else {
+                // indefinite array
+                let mut arr: Vec<ClusterIssuerKey> = Vec::new();
+                loop {
+                    match d.datatype() {
+                        Err(_) => break,
+                        Ok(crate::cbor::Type::Break) => break,
+                        Ok(_) => arr.push(decode_cluster_issuer_key(d).map_err(|e| {
+                            format!("decoding 'org.wasmcloud.core#ClusterIssuerKey': {e}")
+                        })?),
+                    }
+                }
+                arr
             }
-            arr
-        }
-    };
+        };
     Ok(__result)
 }
 /// health check request parameter
@@ -410,18 +411,18 @@ pub fn decode_host_data(d: &mut crate::cbor::Decoder<'_>) -> Result<HostData, Rp
                     7 => invocation_seed = Some(d.str()?.to_string()),
                     8 => {
                         env_values = Some(decode_host_env_values(d).map_err(|e| {
-                            format!("decoding 'org.wasmcloud.core#HostEnvValues': {}", e)
+                            format!("decoding 'org.wasmcloud.core#HostEnvValues': {e}")
                         })?)
                     }
                     9 => instance_id = Some(d.str()?.to_string()),
                     10 => {
                         link_definitions = Some(decode_actor_links(d).map_err(|e| {
-                            format!("decoding 'org.wasmcloud.core#ActorLinks': {}", e)
+                            format!("decoding 'org.wasmcloud.core#ActorLinks': {e}")
                         })?)
                     }
                     11 => {
                         cluster_issuers = Some(decode_cluster_issuers(d).map_err(|e| {
-                            format!("decoding 'org.wasmcloud.core#ClusterIssuers': {}", e)
+                            format!("decoding 'org.wasmcloud.core#ClusterIssuers': {e}")
                         })?)
                     }
                     12 => {
@@ -458,18 +459,18 @@ pub fn decode_host_data(d: &mut crate::cbor::Decoder<'_>) -> Result<HostData, Rp
                     "invocationSeed" => invocation_seed = Some(d.str()?.to_string()),
                     "envValues" => {
                         env_values = Some(decode_host_env_values(d).map_err(|e| {
-                            format!("decoding 'org.wasmcloud.core#HostEnvValues': {}", e)
+                            format!("decoding 'org.wasmcloud.core#HostEnvValues': {e}")
                         })?)
                     }
                     "instanceId" => instance_id = Some(d.str()?.to_string()),
                     "linkDefinitions" => {
                         link_definitions = Some(decode_actor_links(d).map_err(|e| {
-                            format!("decoding 'org.wasmcloud.core#ActorLinks': {}", e)
+                            format!("decoding 'org.wasmcloud.core#ActorLinks': {e}")
                         })?)
                     }
                     "clusterIssuers" => {
                         cluster_issuers = Some(decode_cluster_issuers(d).map_err(|e| {
-                            format!("decoding 'org.wasmcloud.core#ClusterIssuers': {}", e)
+                            format!("decoding 'org.wasmcloud.core#ClusterIssuers': {e}")
                         })?)
                     }
                     "configJson" => {
@@ -728,12 +729,12 @@ pub fn decode_invocation(d: &mut crate::cbor::Decoder<'_>) -> Result<Invocation,
                 match __i {
                     0 => {
                         origin = Some(decode_wasm_cloud_entity(d).map_err(|e| {
-                            format!("decoding 'org.wasmcloud.core#WasmCloudEntity': {}", e)
+                            format!("decoding 'org.wasmcloud.core#WasmCloudEntity': {e}")
                         })?)
                     }
                     1 => {
                         target = Some(decode_wasm_cloud_entity(d).map_err(|e| {
-                            format!("decoding 'org.wasmcloud.core#WasmCloudEntity': {}", e)
+                            format!("decoding 'org.wasmcloud.core#WasmCloudEntity': {e}")
                         })?)
                     }
                     2 => operation = Some(d.str()?.to_string()),
@@ -755,7 +756,7 @@ pub fn decode_invocation(d: &mut crate::cbor::Decoder<'_>) -> Result<Invocation,
                             Some(None)
                         } else {
                             Some(Some(decode_trace_context(d).map_err(|e| {
-                                format!("decoding 'org.wasmcloud.core#TraceContext': {}", e)
+                                format!("decoding 'org.wasmcloud.core#TraceContext': {e}")
                             })?))
                         }
                     }
@@ -769,12 +770,12 @@ pub fn decode_invocation(d: &mut crate::cbor::Decoder<'_>) -> Result<Invocation,
                 match d.str()? {
                     "origin" => {
                         origin = Some(decode_wasm_cloud_entity(d).map_err(|e| {
-                            format!("decoding 'org.wasmcloud.core#WasmCloudEntity': {}", e)
+                            format!("decoding 'org.wasmcloud.core#WasmCloudEntity': {e}")
                         })?)
                     }
                     "target" => {
                         target = Some(decode_wasm_cloud_entity(d).map_err(|e| {
-                            format!("decoding 'org.wasmcloud.core#WasmCloudEntity': {}", e)
+                            format!("decoding 'org.wasmcloud.core#WasmCloudEntity': {e}")
                         })?)
                     }
                     "operation" => operation = Some(d.str()?.to_string()),
@@ -796,7 +797,7 @@ pub fn decode_invocation(d: &mut crate::cbor::Decoder<'_>) -> Result<Invocation,
                             Some(None)
                         } else {
                             Some(Some(decode_trace_context(d).map_err(|e| {
-                                format!("decoding 'org.wasmcloud.core#TraceContext': {}", e)
+                                format!("decoding 'org.wasmcloud.core#TraceContext': {e}")
                             })?))
                         }
                     }
@@ -1074,7 +1075,7 @@ pub fn decode_link_definition(
                     3 => contract_id = Some(d.str()?.to_string()),
                     4 => {
                         values = Some(decode_link_settings(d).map_err(|e| {
-                            format!("decoding 'org.wasmcloud.core#LinkSettings': {}", e)
+                            format!("decoding 'org.wasmcloud.core#LinkSettings': {e}")
                         })?)
                     }
                     _ => d.skip()?,
@@ -1090,7 +1091,7 @@ pub fn decode_link_definition(
                     "contractId" => contract_id = Some(d.str()?.to_string()),
                     "values" => {
                         values = Some(decode_link_settings(d).map_err(|e| {
-                            format!("decoding 'org.wasmcloud.core#LinkSettings': {}", e)
+                            format!("decoding 'org.wasmcloud.core#LinkSettings': {e}")
                         })?)
                     }
                     _ => d.skip()?,
@@ -1336,7 +1337,7 @@ pub trait ActorReceiver: MessageDispatch + Actor {
         match message.method {
             "HealthRequest" => {
                 let value: HealthCheckRequest = crate::common::deserialize(&message.arg)
-                    .map_err(|e| RpcError::Deser(format!("'HealthCheckRequest': {}", e)))?;
+                    .map_err(|e| RpcError::Deser(format!("'HealthCheckRequest': {e}")))?;
 
                 let resp = Actor::health_request(self, ctx, &value).await?;
                 let buf = crate::common::serialize(&resp)?;
@@ -1413,7 +1414,7 @@ impl<T: Transport + std::marker::Sync + std::marker::Send> Actor for ActorSender
             .await?;
 
         let value: HealthCheckResponse = crate::common::deserialize(&resp)
-            .map_err(|e| RpcError::Deser(format!("'{}': HealthCheckResponse", e)))?;
+            .map_err(|e| RpcError::Deser(format!("'{e}': HealthCheckResponse")))?;
         Ok(value)
     }
 }

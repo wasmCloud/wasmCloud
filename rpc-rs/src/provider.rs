@@ -159,7 +159,7 @@ impl HostBridge {
             KeyPair::new_user()
         } else {
             KeyPair::from_seed(&host_data.invocation_seed)
-                .map_err(|e| RpcError::NotInitialized(format!("key failure: {}", e)))?
+                .map_err(|e| RpcError::NotInitialized(format!("key failure: {e}")))?
         });
 
         let rpc_client = RpcClient::new_client(
@@ -430,7 +430,7 @@ impl HostBridge {
                                     if let Some(reply) = msg.reply {
                                         if let Err(e) = this.rpc_client().publish_invocation_response(reply,
                                             InvocationResponse{
-                                                error: Some(format!("deser error: {}", error)),
+                                                error: Some(format!("deser error: {error}")),
                                                 ..Default::default()
                                             },
                                             &lattice
