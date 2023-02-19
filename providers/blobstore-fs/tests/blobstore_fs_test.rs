@@ -4,7 +4,7 @@ use wasmcloud_interface_blobstore::*;
 use wasmcloud_test_util::{
     check,
     cli::print_test_results,
-    provider_test::test_provider,
+    provider_test::{self, log, Config, LogLevel, Provider},
     testing::{TestOptions, TestResult},
 };
 #[allow(unused_imports)]
@@ -12,6 +12,20 @@ use wasmcloud_test_util::{run_selected, run_selected_spawn};
 
 /// number of get_object requests in this test
 const NUM_RPC: u32 = 1;
+
+async fn test_provider() -> Provider {
+    provider_test::test_provider(
+        env!("CARGO_BIN_EXE_blobstore_fs"),
+        Config {
+            log_level: LogLevel(log::Level::Debug),
+            backtrace: true,
+            contract_id: "wasmcloud:blobstore".into(),
+            values: [("root".into(), "/tmp".into())].into(),
+            ..Default::default()
+        },
+    )
+    .await
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn run_all() {

@@ -21,7 +21,7 @@ use wasmcloud_interface_httpserver::*;
 use wasmcloud_test_util::{
     check,
     cli::print_test_results,
-    provider_test::test_provider,
+    provider_test::{self, log, Config, LogLevel, Provider},
     testing::{TestOptions, TestResult},
 };
 #[allow(unused_imports)]
@@ -33,6 +33,20 @@ const SERVER_UNDER_TEST: &str = "http://localhost:9000";
 
 /// number of http requests in this test
 const NUM_RPC: u32 = 5;
+
+async fn test_provider() -> Provider {
+    provider_test::test_provider(
+        env!("CARGO_BIN_EXE_httpserver"),
+        Config {
+            log_level: LogLevel(log::Level::Debug),
+            backtrace: true,
+            contract_id: "wasmcloud:httpserver".into(),
+            values: [("address".into(), "0.0.0.0:9000".into())].into(),
+            ..Default::default()
+        },
+    )
+    .await
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn run_all() -> std::result::Result<(), Box<dyn std::error::Error>> {

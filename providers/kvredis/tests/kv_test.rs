@@ -8,10 +8,23 @@ use wasmcloud_interface_keyvalue::*;
 use wasmcloud_test_util::{
     check, check_eq,
     cli::print_test_results,
-    provider_test::{test_provider, Provider},
+    provider_test::{self, log, Config, LogLevel, Provider},
     run_selected_spawn,
     testing::{TestOptions, TestResult},
 };
+
+async fn test_provider() -> Provider {
+    provider_test::test_provider(
+        env!("CARGO_BIN_EXE_kvredis"),
+        Config {
+            log_level: LogLevel(log::Level::Debug),
+            backtrace: true,
+            contract_id: "wasmcloud:keyvalue".into(),
+            ..Default::default()
+        },
+    )
+    .await
+}
 
 #[tokio::test]
 async fn run_all() {

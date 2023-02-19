@@ -164,7 +164,7 @@ wasmcloud-provider-kvredis = { path = "./providers/kvredis", artifact = "bin" }
 wasmcloud-provider-lattice-controller = { path = "./providers/lattice-controller", artifact = "bin" }
 wasmcloud-provider-nats = { path = "./providers/nats", artifact = "bin" }
 wasmcloud-provider-sqldb-postgres = { path = "./providers/sqldb-postgres", artifact = "bin" }
-wasmcloud-test-util = { version = "0.6.4", default-features = false }
+wasmcloud-test-util = { git = "https://github.com/rvolosatovs/wasmcloud-test", branch = "feat/runtime-config" }
 wasmparser = { version = "0.102.0", default-features = false }
 wasmtime = { git = "https://github.com/bytecodealliance/wasmtime", rev = "8d3a881b524d56498dfc71b65818b2abbeb1da44", default-features = false }
 wasmtime-wasi = { git = "https://github.com/bytecodealliance/wasmtime", rev = "8d3a881b524d56498dfc71b65818b2abbeb1da44", default-features = false }

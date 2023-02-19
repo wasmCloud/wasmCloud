@@ -11,12 +11,25 @@ use wasmcloud_interface_blobstore::{Blobstore, BlobstoreSender, Chunk, PutObject
 use wasmcloud_test_util::{
     check, check_eq,
     cli::print_test_results,
-    provider_test::test_provider,
+    provider_test::{self, log, Config, LogLevel, Provider},
     run_selected_spawn,
     testing::{TestOptions, TestResult},
 };
 
 const TYPE_OCTET_STREAM: &str = "application/octet-stream";
+
+async fn test_provider() -> Provider {
+    provider_test::test_provider(
+        env!("CARGO_BIN_EXE_blobstore-s3"),
+        Config {
+            log_level: LogLevel(log::Level::Debug),
+            backtrace: true,
+            contract_id: "wasmcloud:blobstore".into(),
+            ..Default::default()
+        },
+    )
+    .await
+}
 
 fn gen_bytes(len: usize) -> (Vec<u8>, u32) {
     let rng = fastrand::Rng::new();

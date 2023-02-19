@@ -3,11 +3,24 @@ use wasmcloud_interface_httpclient::*;
 use wasmcloud_test_util::{
     check,
     cli::print_test_results,
-    provider_test::test_provider,
+    provider_test::{self, log, Config, LogLevel, Provider},
     testing::{TestOptions, TestResult},
 };
 #[allow(unused_imports)]
 use wasmcloud_test_util::{run_selected, run_selected_spawn};
+
+async fn test_provider() -> Provider {
+    provider_test::test_provider(
+        env!("CARGO_BIN_EXE_httpclient"),
+        Config {
+            log_level: LogLevel(log::Level::Debug),
+            backtrace: true,
+            contract_id: "wasmcloud:httpclient".into(),
+            ..Default::default()
+        },
+    )
+    .await
+}
 
 #[tokio::test]
 async fn run_all() {

@@ -4,10 +4,23 @@ use wasmcloud_interface_messaging::*;
 use wasmcloud_test_util::{
     check,
     cli::print_test_results,
-    provider_test::test_provider,
+    provider_test::{self, log, Config, LogLevel, Provider},
     run_selected_spawn,
     testing::{TestOptions, TestResult},
 };
+
+async fn test_provider() -> Provider {
+    provider_test::test_provider(
+        env!("CARGO_BIN_EXE_nats_messaging"),
+        Config {
+            log_level: LogLevel(log::Level::Debug),
+            backtrace: true,
+            contract_id: "wasmcloud:messaging".into(),
+            ..Default::default()
+        },
+    )
+    .await
+}
 
 #[tokio::test]
 async fn run_all() {

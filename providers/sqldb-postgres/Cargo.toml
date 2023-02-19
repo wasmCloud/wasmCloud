@@ -32,6 +32,7 @@ wasmcloud-interface-sqldb = { workspace = true }
 
 # test dependencies
 [dev-dependencies]
+wasmcloud-provider-sqldb-postgres = { path = ".", artifact = "bin" }
 wasmcloud-test-util = { workspace = true }
 
 [[bin]]

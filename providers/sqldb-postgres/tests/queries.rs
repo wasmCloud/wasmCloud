@@ -1,12 +1,43 @@
+use serde_json::json;
 use wasmbus_rpc::{minicbor::Decode, provider::prelude::*};
 use wasmcloud_interface_sqldb::*;
 use wasmcloud_test_util::{
     check,
     cli::print_test_results,
-    provider_test::{test_provider, Provider},
+    provider_test::{self, log, Config, LogLevel, Provider},
     run_selected_spawn,
     testing::{TestOptions, TestResult},
 };
+
+async fn test_provider() -> Provider {
+    provider_test::test_provider(
+        env!("CARGO_BIN_EXE_sqldb-postgres"),
+        Config {
+            log_level: LogLevel(log::Level::Debug),
+            backtrace: true,
+            contract_id: "wasmcloud:sqldb".into(),
+            values: [
+                (
+                    "uri".into(),
+                    "postgresql://postgres:postgres@127.0.0.1:5433/postgres".into(),
+                ),
+                (
+                    "pool".into(),
+                    serde_json::to_string(&json!({
+                        "max_connections": 2,
+                        "min_idle": 1,
+                        "max_lifetime_secs": 300,
+                        "idle_timeout_secs": 300
+                    }))
+                    .unwrap(),
+                ),
+            ]
+            .into(),
+            ..Default::default()
+        },
+    )
+    .await
+}
 
 #[tokio::test]
 async fn run_all() {

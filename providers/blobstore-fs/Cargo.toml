@@ -17,9 +17,10 @@ wasmcloud-interface-blobstore = { workspace = true }
 
 # test dependencies
 [dev-dependencies]
-wasmcloud-test-util = { workspace = true }
-tokio = { workspace = true, features = [ "full" ] }
 futures-util = { workspace = true }
+tokio = { workspace = true, features = [ "full" ] }
+wasmcloud-provider-blobstore-fs = { path = ".", artifact = "bin" }
+wasmcloud-test-util = { workspace = true }
 
 [[bin]]
 name = "blobstore_fs"

@@ -28,6 +28,7 @@ assert_matches = { workspace = true }
 blake2 = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls-tls"] }
 wasmcloud-test-util = { workspace = true }
+wasmcloud-provider-httpserver = { path = ".", artifact = "bin" }
 
 [lib]
 name = "wasmcloud_provider_httpserver"
@@ -36,4 +37,3 @@ path = "src/lib.rs"
 [[bin]]
 name = "httpserver"
 path = "bin/main.rs"
-

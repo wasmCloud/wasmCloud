@@ -39,6 +39,7 @@ env_logger = { workspace = true }
 wasmcloud-test-util = { workspace = true }
 wasmcloud-interface-blobstore = { workspace = true }
 wasmcloud-interface-testing = { workspace = true }
+wasmcloud-provider-blobstore-s3 = { path = ".", artifact = "bin" }
 
 [build-dependencies]
 weld-codegen = { workspace = true }

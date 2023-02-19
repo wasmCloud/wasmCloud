@@ -29,6 +29,7 @@ wasmbus-rpc = { workspace = true, features = ["otel"] }
 # test dependencies
 [dev-dependencies]
 wasmcloud-test-util = { workspace = true }
+wasmcloud-provider-httpclient = { path = ".", artifact = "bin" }
 
 [[bin]]
 name = "httpclient"

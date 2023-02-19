@@ -27,6 +27,7 @@ wasmbus-rpc = { workspace = true, features = ["otel"] }
 rand = { workspace = true }
 env_logger = { workspace = true }
 wasmcloud-test-util = { workspace = true }
+wasmcloud-provider-kv-vault = { path = ".", artifact = "bin" }
 
 [build-dependencies]
 # for local code generation of wasmbus-interface-keyvalue
