@@ -18,7 +18,9 @@ use tokio::{
     process::Child,
 };
 use wash_lib::cli::{CommandOutput, OutputKind};
-use wash_lib::start::*;
+use wash_lib::start::{
+    ensure_nats_server, ensure_wasmcloud, start_nats_server, start_wasmcloud_host, NatsConfig,
+};
 
 use crate::appearance::spinner::Spinner;
 use crate::cfg::cfg_dir;

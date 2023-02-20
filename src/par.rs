@@ -3,9 +3,13 @@ use std::{collections::HashMap, fs::File, io::prelude::*, path::PathBuf};
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand};
 use nkeys::KeyPairType;
-use provider_archive::*;
+use provider_archive::ProviderArchive;
 use serde_json::json;
-use term_table::{row::Row, table_cell::*, Table};
+use term_table::{
+    row::Row,
+    table_cell::{Alignment, TableCell},
+    Table,
+};
 use wash_lib::{
     cli::{cached_oci_file, extract_keypair, CommandOutput, OutputKind},
     registry::OciPullOptions,

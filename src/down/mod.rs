@@ -8,7 +8,7 @@ use clap::Parser;
 use serde_json::json;
 use tokio::process::Command;
 use wash_lib::cli::{CommandOutput, OutputKind};
-use wash_lib::start::*;
+use wash_lib::start::{find_wasmcloud_binary, NATS_SERVER_BINARY, NATS_SERVER_PID};
 
 use crate::appearance::spinner::Spinner;
 use crate::cfg::cfg_dir;

@@ -3,7 +3,11 @@ use std::{collections::HashMap, path::PathBuf};
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use log::warn;
-use oci_distribution::{client::*, secrets::RegistryAuth, Reference};
+use oci_distribution::{
+    client::{Client, ClientConfig, ClientProtocol},
+    secrets::RegistryAuth,
+    Reference,
+};
 use serde_json::json;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
