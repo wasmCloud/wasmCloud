@@ -15,41 +15,41 @@
 [[actor]]
 name = "hello"
 description = "a hello-world actor (in Rust) that responds over an http connection"
-git = "wasmcloud/project-templates"
+git = "wasmCloud/project-templates"
 subfolder = "actor/hello"
 
 [[actor]]
 name = "echo-tinygo"
 description = "a hello-world actor (in TinyGo) that responds over an http connection"
-git = "wasmcloud/project-templates"
+git = "wasmCloud/project-templates"
 subfolder = "actor/echo-tinygo"
 
 [[actor]]
 name = "echo-messaging"
 description = "a hello-world actor (in Rust) that echoes a request back over a NATS connection"
-git = "wasmcloud/project-templates"
+git = "wasmCloud/project-templates"
 subfolder = "actor/echo-messaging"
 
 [[interface]]
 name = "converter-interface"
 description = "an interface for actor-to-actor messages with a single Convert method"
-git = "wasmcloud/project-templates"
+git = "wasmCloud/project-templates"
 subfolder = "interface/converter-actor"
 
 [[interface]]
 name = "factorial-interface"
 description = "an interface for a capability provider with capability contract"
-git = "wasmcloud/project-templates"
+git = "wasmCloud/project-templates"
 subfolder = "interface/factorial"
 
 [[provider]]
 name = "factorial-provider"
 description = "a capability provider that computes factorials"
-git = "wasmcloud/project-templates"
+git = "wasmCloud/project-templates"
 subfolder = "provider/factorial"
 
 [[provider]]
 name = "messaging-provider"
 description = "a capability provider that implements pubsub messaging"
-git = "wasmcloud/project-templates"
+git = "wasmCloud/project-templates"
 subfolder = "provider/messaging"

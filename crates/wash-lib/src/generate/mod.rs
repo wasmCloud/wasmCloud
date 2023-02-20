@@ -4,6 +4,7 @@ use std::{
     borrow::Borrow,
     fmt, fs,
     path::{Path, PathBuf},
+    process::Stdio,
 };
 
 use anyhow::{anyhow, Context, Result};
@@ -249,7 +250,7 @@ async fn make_project(project: Project) -> std::result::Result<PathBuf, anyhow::
     }
 
     println!(
-        "{} {} {}",
+        "{} {}{}",
         emoji::WRENCH,
         style("Generating template").bold(),
         style("...").bold()
@@ -271,6 +272,9 @@ async fn make_project(project: Project) -> std::result::Result<PathBuf, anyhow::
         let cmd_out = Command::new("git")
             .args(["init", "--initial-branch", "main", "."])
             .current_dir(tokio::fs::canonicalize(&project_dir).await?)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .spawn()?
             .wait_with_output()
             .await?;
@@ -345,6 +349,23 @@ async fn prepare_local_template(project: &Project) -> Result<(TempDir, PathBuf)>
         (Some(url), None) => {
             let template_base_dir = tempfile::tempdir()
                 .map_err(|e| any_msg("Creating temp folder for staging:", &e.to_string()))?;
+
+            println!(
+                "{} {} {}{}{}",
+                emoji::WRENCH,
+                style("Cloning template from repo").bold(),
+                style(url).bold().yellow(),
+                project.subfolder.clone().map_or_else(
+                    || style("".to_string()),
+                    |s| style(format!(
+                        " {} {}",
+                        style("subfolder").bold(),
+                        style(s).bold().yellow()
+                    ))
+                ),
+                style("...").bold()
+            );
+
             git::clone_git_template(git::CloneTemplate {
                 clone_tmp: template_base_dir.path().to_path_buf(),
                 repo_url: url.to_string(),
@@ -400,7 +421,7 @@ fn resolve_template_dir(template_base_dir: &TempDir, project: &Project) -> Resul
             }
 
             println!(
-                "{} {} `{}`{}",
+                "{} {} {}{}",
                 emoji::WRENCH,
                 style("Using template subfolder").bold(),
                 style(subfolder).bold().yellow(),

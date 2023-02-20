@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use std::path::PathBuf;
+use std::{path::PathBuf, process::Stdio};
 use tokio::process::Command;
 
 pub struct CloneTemplate {
@@ -42,6 +42,9 @@ pub async fn clone_git_template(opts: CloneTemplate) -> Result<()> {
 
     let cmd_out = Command::new("git")
         .args(["clone", &repo_url, "--depth", "1", "--no-checkout", "."])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()?
         .wait_with_output()
         .await?;
@@ -55,6 +58,9 @@ pub async fn clone_git_template(opts: CloneTemplate) -> Result<()> {
     if let Some(sub_folder) = opts.sub_folder {
         let cmd_out = Command::new("git")
             .args(["sparse-checkout", "set", &sub_folder])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .spawn()?
             .wait_with_output()
             .await?;
@@ -68,6 +74,9 @@ pub async fn clone_git_template(opts: CloneTemplate) -> Result<()> {
 
     let cmd_out = Command::new("git")
         .args(["checkout", &opts.repo_branch])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()?
         .wait_with_output()
         .await?;
