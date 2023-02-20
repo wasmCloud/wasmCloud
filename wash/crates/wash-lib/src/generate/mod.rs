@@ -10,7 +10,6 @@ use anyhow::{anyhow, Context, Result};
 use console::style;
 use genconfig::{Config, CONFIG_FILE_NAME};
 use indicatif::MultiProgress;
-use project_variables::*;
 use serde::Serialize;
 use tempfile::TempDir;
 use tokio::process::Command;
@@ -22,6 +21,7 @@ mod genconfig;
 mod git;
 pub mod interactive;
 pub mod project_variables;
+use project_variables::*;
 mod template;
 
 type TomlMap = std::collections::BTreeMap<String, toml::Value>;

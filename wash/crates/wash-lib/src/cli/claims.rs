@@ -19,7 +19,7 @@ use term_table::{
     Table,
 };
 use wascap::{
-    caps::*,
+    caps::capability_name,
     jwt::{
         Account, Actor, CapabilityProvider, Claims, Operator, Token, TokenValidation, WascapEntity,
     },

@@ -2,10 +2,14 @@ use std::collections::HashMap;
 
 use anyhow::{bail, Result};
 use serde_json::json;
-use term_table::{row::Row, table_cell::*, Table};
+use term_table::{
+    row::Row,
+    table_cell::{Alignment, TableCell},
+    Table,
+};
 use wash_lib::cli::CommandOutput;
 use wash_lib::id::{ModuleId, ServiceId};
-use wasmcloud_control_interface::*;
+use wasmcloud_control_interface::{GetClaimsResponse, Host, HostInventory, LinkDefinitionList};
 
 use crate::util::format_optional;
 

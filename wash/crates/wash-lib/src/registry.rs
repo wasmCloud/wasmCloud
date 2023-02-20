@@ -7,7 +7,11 @@ use std::{
 
 use anyhow::{anyhow, bail, Result};
 use oci_distribution::manifest::OciImageManifest;
-use oci_distribution::{client::*, secrets::RegistryAuth, Reference};
+use oci_distribution::{
+    client::{Client, ClientConfig, ClientProtocol, Config, ImageLayer},
+    secrets::RegistryAuth,
+    Reference,
+};
 use provider_archive::ProviderArchive;
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
