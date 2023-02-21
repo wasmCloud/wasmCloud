@@ -1,5 +1,5 @@
 [![Latest Release](https://img.shields.io/github/v/release/wasmcloud/wash?color=success&include_prereleases)](https://github.com/wasmCloud/wash/releases)
-[![Rust Build](https://img.shields.io/github/workflow/status/wasmcloud/wash/Rust/main)](https://github.com/wasmCloud/wash/actions/workflows/rust_ci.yml)
+[![Rust Build](https://img.shields.io/github/actions/workflow/status/wasmcloud/wash/rust_ci.yml?branch=main)](https://github.com/wasmCloud/wash/actions/workflows/rust_ci.yml)
 [![Rust Version](https://img.shields.io/badge/rustc-1.66.0-orange.svg)](https://blog.rust-lang.org/2022/12/15/Rust-1.66.0.html)
 [![Contributors](https://img.shields.io/github/contributors/wasmcloud/wash)](https://github.com/wasmCloud/wash/graphs/contributors)
 [![Good first issues](https://img.shields.io/github/issues/wasmcloud/wash/good%20first%20issue?label=good%20first%20issues)](https://github.com/wasmCloud/wash/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22)
