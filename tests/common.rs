@@ -35,7 +35,7 @@ pub(crate) fn get_json_output(output: std::process::Output) -> Result<serde_json
 /// uses std::fs::remove_dir_all to remove the subdirectory
 pub(crate) fn test_dir_with_subfolder(subfolder: &str) -> PathBuf {
     let root_dir = &env::var("CARGO_MANIFEST_DIR").expect("$CARGO_MANIFEST_DIR");
-    let with_subfolder = PathBuf::from(format!("{}/tests/fixtures/{}", root_dir, subfolder));
+    let with_subfolder = PathBuf::from(format!("{root_dir}/tests/fixtures/{subfolder}"));
     remove_dir_all(with_subfolder.clone());
     create_dir_all(with_subfolder.clone());
     with_subfolder
@@ -47,8 +47,5 @@ pub(crate) fn test_dir_with_subfolder(subfolder: &str) -> PathBuf {
 /// so the test is responsible for initialization and modification of this file
 pub(crate) fn test_dir_file(subfolder: &str, file: &str) -> PathBuf {
     let root_dir = &env::var("CARGO_MANIFEST_DIR").expect("$CARGO_MANIFEST_DIR");
-    PathBuf::from(format!(
-        "{}/tests/fixtures/{}/{}",
-        root_dir, subfolder, file
-    ))
+    PathBuf::from(format!("{root_dir}/tests/fixtures/{subfolder}/{file}"))
 }

@@ -64,7 +64,7 @@ impl KeyDir {
     }
 
     fn generate_file_path(&self, name: &str) -> PathBuf {
-        self.0.join(format!("{}.{}", name, KEY_FILE_EXTENSION))
+        self.0.join(format!("{name}.{KEY_FILE_EXTENSION}"))
     }
 }
 

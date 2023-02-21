@@ -110,7 +110,7 @@ fn folder_path() {
 fn get_full_path(path: &str) -> String {
     match fs::canonicalize(path) {
         Ok(path) => path.to_str().unwrap().to_string(),
-        Err(_) => panic!("get_full_path helper error. Could not find path: {}", path),
+        Err(_) => panic!("get_full_path helper error. Could not find path: {path}"),
     }
 }
 

@@ -302,7 +302,7 @@ mod tests {
             clap::Parser::try_parse_from(["keys", "get", KEYNAME, "--directory", KEYPATH]).unwrap();
         match gen_basic.keys {
             KeysCliCommand::GetCommand { keyname, .. } => assert_eq!(keyname, KEYNAME),
-            other_cmd => panic!("keys get generated other command {:?}", other_cmd),
+            other_cmd => panic!("keys get generated other command {other_cmd:?}"),
         }
     }
 
@@ -321,7 +321,7 @@ mod tests {
                 assert_eq!(keyname, KEYNAME);
                 assert_eq!(directory, Some(PathBuf::from(KEYPATH)));
             }
-            other_cmd => panic!("keys get generated other command {:?}", other_cmd),
+            other_cmd => panic!("keys get generated other command {other_cmd:?}"),
         }
     }
 
@@ -336,7 +336,7 @@ mod tests {
             clap::Parser::try_parse_from(["keys", "list", "-d", KEYPATH]).unwrap();
         match list_basic.keys {
             KeysCliCommand::ListCommand { .. } => (),
-            other_cmd => panic!("keys get generated other command {:?}", other_cmd),
+            other_cmd => panic!("keys get generated other command {other_cmd:?}"),
         }
 
         let list_all_flags: Cmd =
@@ -345,7 +345,7 @@ mod tests {
             KeysCliCommand::ListCommand { directory } => {
                 assert_eq!(directory, Some(PathBuf::from(KEYPATH)));
             }
-            other_cmd => panic!("keys get generated other command {:?}", other_cmd),
+            other_cmd => panic!("keys get generated other command {other_cmd:?}"),
         }
     }
 }

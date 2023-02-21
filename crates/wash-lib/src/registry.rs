@@ -122,7 +122,7 @@ pub async fn pull_oci_artifact(url: String, options: OciPullOptions) -> Result<V
     // Reformatting digest in case the sha256: prefix is left off
     let digest = match options.digest {
         Some(d) if d.starts_with("sha256:") => Some(d),
-        Some(d) => Some(format!("sha256:{}", d)),
+        Some(d) => Some(format!("sha256:{d}")),
         None => None,
     };
 

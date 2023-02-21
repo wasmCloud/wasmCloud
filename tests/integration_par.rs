@@ -67,7 +67,7 @@ fn integration_par_create(issuer: &str, subject: &str, archive: &str) {
     assert!(create.status.success());
     assert_eq!(
         output_to_string(create).unwrap(),
-        format!("\nSuccessfully created archive {}\n", archive)
+        format!("\nSuccessfully created archive {archive}\n")
     );
 
     let inspect_created = wash()
@@ -225,7 +225,7 @@ fn integration_par_inspect() {
     const HTTP_ISSUER: &str = "ACOJJN6WUP4ODD75XEBKKTCCUJJCY5ZKQ56XVKYK4BEJWGVAOOQHZMCW";
     const HTTP_SERVICE: &str = "VCCVLH4XWGI3SGARFNYKYT2A32SUYA2KVAIV2U2Q34DQA7WWJPFRKIKM";
     let inspect_dir = test_dir_with_subfolder(SUBFOLDER);
-    let httpclient_parinspect = &format!("{}/httpclient:parinspect", LOCAL_REGISTRY);
+    let httpclient_parinspect = &format!("{LOCAL_REGISTRY}/httpclient:parinspect");
 
     // Pull the echo module and push to local registry to test local inspect
     let local_http_client_path = test_dir_file(SUBFOLDER, "httpclient.wasm");

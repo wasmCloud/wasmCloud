@@ -394,7 +394,7 @@ mod test {
                 assert_eq!(payload, vec!["{ \"hello\": \"world\"}".to_string()])
             }
             #[allow(unreachable_patterns)]
-            cmd => panic!("call constructed incorrect command: {:?}", cmd),
+            cmd => panic!("call constructed incorrect command: {cmd:?}"),
         }
         Ok(())
     }
