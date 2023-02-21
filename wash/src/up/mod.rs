@@ -364,8 +364,7 @@ pub(crate) async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result
 
         let _ = write!(
             out_text,
-            "\n🕸  NATS is running in the background at http://{}",
-            nats_listen_address
+            "\n🕸  NATS is running in the background at http://{nats_listen_address}"
         );
         let _ = write!(
             out_text,
@@ -441,7 +440,7 @@ async fn run_wasmcloud_interactive(
             let mut lines = BufReader::new(stderr).lines();
             while let Ok(Some(line)) = lines.next_line().await {
                 //TODO(brooksmtownsend): in the future, would be great to print these in a prettier format
-                println!("{}", line)
+                println!("{line}")
             }
         })
     });

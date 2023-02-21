@@ -133,7 +133,7 @@ fn handle_list(cmd: ListCommand) -> Result<CommandOutput> {
         .iter()
         .map(|f| {
             if f == &default_context {
-                format!("{} (default)", f)
+                format!("{f} (default)")
             } else {
                 f.clone()
             }

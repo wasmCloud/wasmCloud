@@ -171,7 +171,7 @@ async fn main() {
                     let error_chain = e
                         .chain()
                         .skip(1)
-                        .map(|e| format!("{}", e))
+                        .map(|e| format!("{e}"))
                         .collect::<Vec<String>>();
 
                     if !error_chain.is_empty() {
@@ -187,7 +187,7 @@ async fn main() {
                     eprintln!("\n{}", serde_json::to_string_pretty(&map).unwrap());
                 }
                 OutputKind::Text => {
-                    eprintln!("\n{:?}", e);
+                    eprintln!("\n{e:?}");
                 }
             }
             1

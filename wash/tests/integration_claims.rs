@@ -70,7 +70,7 @@ fn integration_claims_inspect() {
     const ECHO_ACC: &str = "ACOJJN6WUP4ODD75XEBKKTCCUJJCY5ZKQ56XVKYK4BEJWGVAOOQHZMCW";
     const ECHO_MOD: &str = "MBCFOPM6JW2APJLXJD3Z5O4CN7CPYJ2B4FTKLJUR5YR5MITIU7HD3WD5";
     let inspect_dir = test_dir_with_subfolder(SUBFOLDER);
-    let echo_claims = &format!("{}/echo:claimsinspect", LOCAL_REGISTRY);
+    let echo_claims = &format!("{LOCAL_REGISTRY}/echo:claimsinspect");
 
     // Pull the echo module and push to local registry to test local inspect
     let echo = test_dir_file(SUBFOLDER, "echo.wasm");

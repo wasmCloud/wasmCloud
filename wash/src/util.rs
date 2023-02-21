@@ -122,7 +122,7 @@ pub(crate) async fn nats_client_from_opts(
     seed: Option<String>,
     credsfile: Option<PathBuf>,
 ) -> Result<async_nats::Client> {
-    let nats_url = format!("{}:{}", host, port);
+    let nats_url = format!("{host}:{port}");
     use async_nats::ConnectOptions;
 
     let nc = if let Some(jwt_file) = jwt {

@@ -10,7 +10,7 @@ pub(crate) fn handle_command(cmd: Drain) -> Result<CommandOutput> {
     let mut map = HashMap::new();
     map.insert("drained".to_string(), json!(paths));
     Ok(CommandOutput::new(
-        format!("Successfully cleared caches at: {:?}", paths),
+        format!("Successfully cleared caches at: {paths:?}"),
         map,
     ))
 }

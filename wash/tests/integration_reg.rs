@@ -27,7 +27,7 @@ fn integration_pull_basic() {
             "--allow-latest",
         ])
         .output()
-        .unwrap_or_else(|_| panic!("failed to pull {}", ECHO_WASM));
+        .unwrap_or_else(|_| panic!("failed to pull {ECHO_WASM}"));
     assert!(pull_basic.status.success());
     // Very important
     assert!(output_to_string(pull_basic).unwrap().contains('\u{1F6BF}'));
@@ -56,7 +56,7 @@ fn integration_pull_comprehensive() {
             "json",
         ])
         .output()
-        .unwrap_or_else(|_| panic!("failed to pull {}", ECHO_WASM));
+        .unwrap_or_else(|_| panic!("failed to pull {ECHO_WASM}"));
 
     assert!(pull_echo_comprehensive.status.success());
     let output = get_json_output(pull_echo_comprehensive).unwrap();
@@ -78,7 +78,7 @@ fn integration_pull_comprehensive() {
             "json",
         ])
         .output()
-        .unwrap_or_else(|_| panic!("failed to pull {}", ECHO_WASM));
+        .unwrap_or_else(|_| panic!("failed to pull {ECHO_WASM}"));
 
     assert!(pull_logging_comprehensive.status.success());
     let output = get_json_output(pull_logging_comprehensive).unwrap();
@@ -107,10 +107,10 @@ fn integration_push_basic() {
             pull_echo_wasm.to_str().unwrap(),
         ])
         .output()
-        .unwrap_or_else(|_| panic!("failed to pull {} for push basic", ECHO_WASM));
+        .unwrap_or_else(|_| panic!("failed to pull {ECHO_WASM} for push basic"));
 
     // Push echo.wasm and pull from local registry
-    let echo_push_basic = &format!("{}/echo:pushbasic", LOCAL_REGISTRY);
+    let echo_push_basic = &format!("{LOCAL_REGISTRY}/echo:pushbasic");
     let localregistry_echo_wasm = test_dir_file(SUBFOLDER, "echo_local.wasm");
     let push_echo = wash()
         .args([
@@ -159,7 +159,7 @@ fn integration_push_comprehensive() {
             pull_echo_wasm.to_str().unwrap(),
         ])
         .output()
-        .unwrap_or_else(|_| panic!("failed to pull {} for push basic", ECHO_WASM));
+        .unwrap_or_else(|_| panic!("failed to pull {ECHO_WASM} for push basic"));
     wash()
         .args([
             "reg",
@@ -169,13 +169,13 @@ fn integration_push_comprehensive() {
             pull_logging_par.to_str().unwrap(),
         ])
         .output()
-        .unwrap_or_else(|_| panic!("failed to pull {} for push basic", LOGGING_PAR));
+        .unwrap_or_else(|_| panic!("failed to pull {LOGGING_PAR} for push basic"));
 
     let config_json = test_dir_file(SUBFOLDER, "config.json");
     let mut config = File::create(config_json.clone()).unwrap();
     config.write_all(b"{}").unwrap();
 
-    let logging_push_all_options = &format!("{}/logging:alloptions", LOCAL_REGISTRY);
+    let logging_push_all_options = &format!("{LOCAL_REGISTRY}/logging:alloptions");
     let push_all_options = wash()
         .args([
             "reg",
@@ -194,7 +194,7 @@ fn integration_push_comprehensive() {
             "localuser",
         ])
         .output()
-        .unwrap_or_else(|_| panic!("failed to push {} for push comprehensive", LOGGING_PAR));
+        .unwrap_or_else(|_| panic!("failed to push {LOGGING_PAR} for push comprehensive"));
     assert!(push_all_options.status.success());
 
     let output = get_json_output(push_all_options).unwrap();

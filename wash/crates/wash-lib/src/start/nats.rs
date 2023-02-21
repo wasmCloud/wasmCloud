@@ -372,10 +372,7 @@ fn nats_url(os: &str, arch: &str, version: &str) -> String {
         "x86_64" => "amd64",
         _ => arch,
     };
-    format!(
-        "{}/{}/nats-server-{}-{}-{}.tar.gz",
-        NATS_GITHUB_RELEASE_URL, version, version, os, arch
-    )
+    format!("{NATS_GITHUB_RELEASE_URL}/{version}/nats-server-{version}-{os}-{arch}.tar.gz")
 }
 
 #[cfg(test)]

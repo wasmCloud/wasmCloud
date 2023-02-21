@@ -79,7 +79,7 @@ impl<const PREFIX: char> FromStr for Seed<PREFIX> {
 
 fn parse(value: &str, prefix: char, is_seed: bool) -> Result<String, ParseError> {
     let (len, prefix) = if is_seed {
-        (58, format!("S{}", prefix))
+        (58, format!("S{prefix}"))
     } else {
         (56, prefix.to_string())
     };

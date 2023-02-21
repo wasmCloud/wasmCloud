@@ -11,10 +11,7 @@ use super::{ModelRevision, ModelSummary};
 pub(crate) fn show_model_details(raw: PathBuf, vetted: PathBuf) -> String {
     // TODO: in a forthcoming release, do something more meaningful than just
     // dump the file paths
-    format!(
-        "Wrote model details to files:\nRaw: {:?}\nJSON: {:?}",
-        raw, vetted
-    )
+    format!("Wrote model details to files:\nRaw: {raw:?}\nJSON: {vetted:?}")
 }
 
 pub(crate) fn list_revisions_table(revisions: Vec<ModelRevision>) -> String {

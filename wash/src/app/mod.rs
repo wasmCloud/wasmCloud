@@ -331,8 +331,8 @@ fn show_model_history(results: Vec<ModelRevision>) -> CommandOutput {
 fn write_model(model: ModelDetails) -> Result<(PathBuf, PathBuf)> {
     let name = model.vetted["name"].as_str().unwrap_or("");
     let version = model.vetted["version"].as_str().unwrap_or("");
-    let json_filename = format!("{}_v{}.json", name, version);
-    let raw_filename = format!("{}_v{}.txt", name, version);
+    let json_filename = format!("{name}_v{version}.json");
+    let raw_filename = format!("{name}_v{version}.txt");
 
     let json_buf = PathBuf::from(json_filename);
     let raw_buf = PathBuf::from(raw_filename);

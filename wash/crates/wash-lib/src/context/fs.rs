@@ -167,7 +167,7 @@ pub fn load_context(path: impl AsRef<Path>) -> Result<WashContext> {
 
 /// Helper function to properly format the path to a context JSON file
 fn context_path_from_name(dir: impl AsRef<Path>, name: &str) -> PathBuf {
-    dir.as_ref().join(format!("{}.json", name))
+    dir.as_ref().join(format!("{name}.json"))
 }
 
 #[cfg(test)]

@@ -160,10 +160,7 @@ pub(crate) async fn handle_pull(
     let mut map = HashMap::new();
     map.insert("file".to_string(), json!(outfile));
     Ok(CommandOutput::new(
-        format!(
-            "\n{} Successfully pulled and validated {}",
-            SHOWER_EMOJI, outfile
-        ),
+        format!("\n{SHOWER_EMOJI} Successfully pulled and validated {outfile}"),
         map,
     ))
 }
@@ -245,10 +242,7 @@ pub(crate) async fn handle_push(
     let mut map = HashMap::new();
     map.insert("url".to_string(), json!(cmd.url));
     Ok(CommandOutput::new(
-        format!(
-            "{} Successfully validated and pushed to {}",
-            SHOWER_EMOJI, artifact_url
-        ),
+        format!("{SHOWER_EMOJI} Successfully validated and pushed to {artifact_url}"),
         map,
     ))
 }
@@ -344,12 +338,12 @@ mod tests {
         const TESTDIR: &str = "./tests/fixtures";
 
         // Push echo.wasm and pull from local registry
-        let echo_push_basic = &format!("{}/echo:pushbasic", LOCAL_REGISTRY);
+        let echo_push_basic = &format!("{LOCAL_REGISTRY}/echo:pushbasic");
         let push_basic: Cmd = Parser::try_parse_from([
             "reg",
             "push",
             echo_push_basic,
-            &format!("{}/echopush.wasm", TESTDIR),
+            &format!("{TESTDIR}/echopush.wasm"),
             "--insecure",
         ])
         .unwrap();
@@ -361,19 +355,19 @@ mod tests {
                 ..
             }) => {
                 assert_eq!(&url, echo_push_basic);
-                assert_eq!(artifact, format!("{}/echopush.wasm", TESTDIR));
+                assert_eq!(artifact, format!("{TESTDIR}/echopush.wasm"));
                 assert!(opts.insecure);
             }
             _ => panic!("`reg push` constructed incorrect command"),
         };
 
         // Push logging.par.gz and pull from local registry
-        let logging_push_all_flags = &format!("{}/logging:allflags", LOCAL_REGISTRY);
+        let logging_push_all_flags = &format!("{LOCAL_REGISTRY}/logging:allflags");
         let push_all_flags: Cmd = Parser::try_parse_from([
             "reg",
             "push",
             logging_push_all_flags,
-            &format!("{}/logging.par.gz", TESTDIR),
+            &format!("{TESTDIR}/logging.par.gz"),
             "--insecure",
             "--allow-latest",
         ])
@@ -387,7 +381,7 @@ mod tests {
                 ..
             }) => {
                 assert_eq!(&url, logging_push_all_flags);
-                assert_eq!(artifact, format!("{}/logging.par.gz", TESTDIR));
+                assert_eq!(artifact, format!("{TESTDIR}/logging.par.gz"));
                 assert!(opts.insecure);
                 assert!(allow_latest);
             }
@@ -395,16 +389,16 @@ mod tests {
         };
 
         // Push logging.par.gz to different tag and pull to confirm successful push
-        let logging_push_all_options = &format!("{}/logging:alloptions", LOCAL_REGISTRY);
+        let logging_push_all_options = &format!("{LOCAL_REGISTRY}/logging:alloptions");
         let push_all_options: Cmd = Parser::try_parse_from([
             "reg",
             "push",
             logging_push_all_options,
-            &format!("{}/logging.par.gz", TESTDIR),
+            &format!("{TESTDIR}/logging.par.gz"),
             "--allow-latest",
             "--insecure",
             "--config",
-            &format!("{}/config.json", TESTDIR),
+            &format!("{TESTDIR}/config.json"),
             "--password",
             "supers3cr3t",
             "--user",
@@ -421,10 +415,10 @@ mod tests {
                 ..
             }) => {
                 assert_eq!(&url, logging_push_all_options);
-                assert_eq!(artifact, format!("{}/logging.par.gz", TESTDIR));
+                assert_eq!(artifact, format!("{TESTDIR}/logging.par.gz"));
                 assert!(opts.insecure);
                 assert!(allow_latest);
-                assert_eq!(config.unwrap(), format!("{}/config.json", TESTDIR));
+                assert_eq!(config.unwrap(), format!("{TESTDIR}/config.json"));
                 assert_eq!(opts.user.unwrap(), "localuser");
                 assert_eq!(opts.password.unwrap(), "supers3cr3t");
             }

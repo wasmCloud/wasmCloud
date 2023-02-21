@@ -235,7 +235,7 @@ where
         .get("PORT")
         .cloned()
         .unwrap_or_else(|| "4000".to_string());
-    if tokio::net::TcpStream::connect(format!("localhost:{}", port))
+    if tokio::net::TcpStream::connect(format!("localhost:{port}"))
         .await
         .is_ok()
     {
@@ -309,16 +309,13 @@ where
 
 /// Helper function to determine the wasmCloud host release path given an os/arch and version
 fn wasmcloud_url(os: &str, arch: &str, version: &str) -> String {
-    format!(
-        "{}/{}/{}-{}.tar.gz",
-        WASMCLOUD_GITHUB_RELEASE_URL, version, arch, os
-    )
+    format!("{WASMCLOUD_GITHUB_RELEASE_URL}/{version}/{arch}-{os}.tar.gz")
 }
 
 /// Helper function to ensure the version of wasmCloud is above the minimum
 /// supported version (v0.57.0) that runs mix releases
 fn check_version(version: &str) -> Result<()> {
-    let version_req = semver::VersionReq::parse(&format!(">={}", MINIMUM_WASMCLOUD_VERSION))?;
+    let version_req = semver::VersionReq::parse(&format!(">={MINIMUM_WASMCLOUD_VERSION}"))?;
     match semver::Version::parse(version.trim_start_matches('v')) {
         Ok(parsed_version) if !parsed_version.pre.is_empty() => {
             warn!("Using prerelease version {} of wasmCloud", version);

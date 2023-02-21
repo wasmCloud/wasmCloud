@@ -40,9 +40,9 @@ fn integration_drain_comprehensive() {
 /// Ensures that `wash drain` empties the `wasmcloudcache` directory
 fn integration_drain_lib() {
     let test_dir = test_dir_with_subfolder("drain_lib");
-    let lib_subdir = &format!("drain_lib/{}", LIB);
+    let lib_subdir = &format!("drain_lib/{LIB}");
     let lib_dir = test_dir_with_subfolder(lib_subdir);
-    let _nested_dir = test_dir_with_subfolder(&format!("{}/a/b/c/d/e", lib_subdir));
+    let _nested_dir = test_dir_with_subfolder(&format!("{lib_subdir}/a/b/c/d/e"));
 
     // Create dummy wasm and parJEEzy files
     let wasm = test_dir_file(lib_subdir, "hello.wasm");
@@ -78,10 +78,10 @@ fn integration_drain_lib() {
 /// Ensures that `wash drain` empties the `wasmcloudcache` directory
 fn integration_drain_oci() {
     let test_dir = test_dir_with_subfolder("drain_oci");
-    let oci_subdir = &format!("drain_oci/{}", OCI);
+    let oci_subdir = &format!("drain_oci/{OCI}");
     let oci_dir = test_dir_with_subfolder(oci_subdir);
 
-    let _nested_dir = test_dir_with_subfolder(&format!("{}/a/b/c/d/e", oci_subdir));
+    let _nested_dir = test_dir_with_subfolder(&format!("{oci_subdir}/a/b/c/d/e"));
 
     // Create dummy wasm and parJEEzy files
     let wasm = test_dir_file(oci_subdir, "hello.wasm");
@@ -118,15 +118,15 @@ fn integration_drain_oci() {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn integration_drain_all() {
     let test_dir = test_dir_with_subfolder("drain_all");
-    let oci_subdir = &format!("drain_all/{}", OCI);
+    let oci_subdir = &format!("drain_all/{OCI}");
     let oci_dir = test_dir_with_subfolder(oci_subdir);
-    let lib_subdir = &format!("drain_all/{}", LIB);
+    let lib_subdir = &format!("drain_all/{LIB}");
     let lib_dir = test_dir_with_subfolder(lib_subdir);
 
     let (_sys_tmp_cache, smithy_cache) = set_smithy_cache_dir();
 
-    let _nested_dir = test_dir_with_subfolder(&format!("{}/a/b/c/d/e", oci_subdir));
-    let _nested_dir = test_dir_with_subfolder(&format!("{}/a/b/c/d/e", lib_subdir));
+    let _nested_dir = test_dir_with_subfolder(&format!("{oci_subdir}/a/b/c/d/e"));
+    let _nested_dir = test_dir_with_subfolder(&format!("{lib_subdir}/a/b/c/d/e"));
 
     // Create dummy wasm and parJEEzy files
     let wasm = test_dir_file(oci_subdir, "hello.wasm");

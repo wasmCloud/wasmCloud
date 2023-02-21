@@ -65,8 +65,7 @@ pub(crate) async fn handle_down(
         if let Err(e) = stop_nats(install_dir).await {
             out_json.insert("nats_stopped".to_string(), json!(false));
             out_text.push_str(&format!(
-                "❌ NATS server did not stop successfully: {:?}\n",
-                e
+                "❌ NATS server did not stop successfully: {e:?}\n"
             ));
         } else {
             out_json.insert("nats_stopped".to_string(), json!(true));

@@ -27,7 +27,7 @@ fn integration_keys_gen_comprehensive() {
         let key_gen_command = wash()
             .args(["keys", "gen", cmd])
             .output()
-            .unwrap_or_else(|_| panic!("failed to generate key type {} with text output", cmd));
+            .unwrap_or_else(|_| panic!("failed to generate key type {cmd} with text output"));
         assert!(key_gen_command.status.success());
         let output = output_to_string(key_gen_command).unwrap();
         assert!(output.contains("Public Key:"));
@@ -39,7 +39,7 @@ fn integration_keys_gen_comprehensive() {
         let key_gen_command = wash()
             .args(["keys", "gen", cmd, "-o", "json"])
             .output()
-            .unwrap_or_else(|_| panic!("failed to generate key type {} with json output", cmd));
+            .unwrap_or_else(|_| panic!("failed to generate key type {cmd} with json output"));
         assert!(key_gen_command.status.success());
         let output = output_to_string(key_gen_command).unwrap();
         assert!(output.contains("\"public_key\":"));
@@ -121,9 +121,9 @@ fn integration_list_comprehensive() {
     const TESTDIR: &str = "integration_list_comprehensive";
 
     let list_comprehensive_dir = test_dir_with_subfolder(TESTDIR);
-    let keyonefile = test_dir_file(TESTDIR, &format!("{}.nk", KEYONE));
-    let keytwofile = test_dir_file(TESTDIR, &format!("{}.nk", KEYTWO));
-    let keythreefile = test_dir_file(TESTDIR, &format!("{}.nk", KEYTHREE));
+    let keyonefile = test_dir_file(TESTDIR, &format!("{KEYONE}.nk"));
+    let keytwofile = test_dir_file(TESTDIR, &format!("{KEYTWO}.nk"));
+    let keythreefile = test_dir_file(TESTDIR, &format!("{KEYTHREE}.nk"));
 
     let mut file = File::create(keyonefile).unwrap();
     file.write_all(KEYONECONTENTS).unwrap();
