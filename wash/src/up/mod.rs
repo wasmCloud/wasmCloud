@@ -322,7 +322,9 @@ pub(crate) async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result
         Ok(child) => child,
         Err(e) => {
             // Ensure we clean up the NATS server if we can't start wasmCloud
-            stop_nats(install_dir).await?;
+            if !cmd.nats_opts.connect_only {
+                stop_nats(install_dir).await?;
+            }
             return Err(e);
         }
     };
@@ -341,8 +343,9 @@ pub(crate) async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result
         if !output.status.success() {
             log::warn!("wasmCloud exited with a non-zero exit status, processes may need to be cleaned up manually")
         }
-
-        stop_nats(&install_dir).await?;
+        if !cmd.nats_opts.connect_only {
+            stop_nats(&install_dir).await?;
+        }
 
         spinner.finish_and_clear();
     }
