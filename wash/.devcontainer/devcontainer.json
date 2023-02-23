@@ -1,0 +1,11 @@
+{
+	"name": "wash",
+	"image": "mcr.microsoft.com/devcontainers/base:bullseye",
+	"features": {
+		"ghcr.io/devcontainers/features/rust:1": {
+			"version": "latest"
+		}
+	},
+	"workspaceMount": "source=${localWorkspaceFolder},target=/wash,type=bind,consistency=cached",
+	"workspaceFolder": "/wash"
+}
