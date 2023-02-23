@@ -8,13 +8,13 @@ use std::time::SystemTime;
 #[allow(unused_imports)]
 use std::{
     collections::HashMap,
-    fs::OpenOptions,
     fs::File,
-    io::{BufReader, Write, Error as IoError, ErrorKind as IoErrorKind},
+    fs::OpenOptions,
+    io::{BufReader, Error as IoError, ErrorKind as IoErrorKind, Write},
     path::{Path, PathBuf},
     sync::Arc,
 };
-use tokio::fs::{create_dir_all, canonicalize, read_dir, remove_file, read, metadata};
+use tokio::fs::{canonicalize, create_dir_all, metadata, read, read_dir, remove_file};
 use tokio::sync::RwLock;
 use tracing::{error, info};
 use wasmbus_rpc::provider::prelude::*;
@@ -59,8 +59,11 @@ struct FsProvider {
 impl FsProvider {
     /// Resolve a path with two components (base & root),
     /// ensuring that the path is below the given root.
-    async fn resolve_subpath<P: AsRef<Path>>(&self, root: &PathBuf, path: P) -> Result<PathBuf, IoError>
-    {
+    async fn resolve_subpath<P: AsRef<Path>>(
+        &self,
+        root: &PathBuf,
+        path: P,
+    ) -> Result<PathBuf, IoError> {
         let root_abs = canonicalize(root).await?;
         let joined = root_abs.join(path.as_ref());
         let joined_abs = canonicalize(joined).await?;
@@ -155,7 +158,9 @@ impl FsProvider {
         let root = self.get_root(ctx).await?;
 
         let container_dir = self.resolve_subpath(&root, &chunk.container_id).await?;
-        let binary_file = self.resolve_subpath(&container_dir, &chunk.object_id).await?;
+        let binary_file = self
+            .resolve_subpath(&container_dir, &chunk.object_id)
+            .await?;
 
         // create an empty file if it's the first chunk
         if chunk.offset == 0 {
@@ -200,7 +205,10 @@ impl FsProvider {
         let chunk_obj_subpath = Path::new(&chunk.container_id).join(&chunk.object_id);
         let chunk_obj_path = self.resolve_subpath(&root, &chunk_obj_subpath).await?;
 
-        let mut file = OpenOptions::new().create(false).append(true).open(chunk_obj_path)?;
+        let mut file = OpenOptions::new()
+            .create(false)
+            .append(true)
+            .open(chunk_obj_path)?;
         info!(
             "Receiving file chunk offset {} for {}/{}, size {}",
             chunk.offset,
@@ -499,7 +507,8 @@ impl Blobstore for FsProvider {
                 };
 
                 let modified = match entry
-                    .metadata().await?
+                    .metadata()
+                    .await?
                     .modified()?
                     .duration_since(SystemTime::UNIX_EPOCH)
                 {
@@ -614,13 +623,8 @@ impl Blobstore for FsProvider {
         let file_path = self.resolve_subpath(&root, &file_subpath).await?;
 
         // Remove the file
-        remove_file(file_path.as_path())
-            .await
-            .map_err(|e| {
-            RpcError::InvalidParameter(format!(
-                "Could not cancel and remove file: {:?}",
-                file_path
-            ))
+        remove_file(file_path.as_path()).await.map_err(|e| {
+            RpcError::InvalidParameter(format!("Could not cancel and remove file: {:?}", file_path))
         })
     }
 
@@ -690,21 +694,28 @@ impl Blobstore for FsProvider {
 #[cfg(test)]
 mod tests {
     use super::FsProvider;
-    use std::path::PathBuf;
     use std::io::ErrorKind as IoErrorKind;
+    use std::path::PathBuf;
 
     /// Ensure that only safe subpaths are resolved
     #[test]
     fn resolve_safe_samepath() {
         let provider = FsProvider::default();
-        assert!(matches!(provider.resolve_subpath(&PathBuf::from("./"), "./././").await, Ok(_)));
+        assert!(matches!(
+            provider
+                .resolve_subpath(&PathBuf::from("./"), "./././")
+                .await,
+            Ok(_)
+        ));
     }
 
     /// Ensure that ancestor paths are not allowed to be resolved as subpaths
     #[test]
     fn resolve_fail_ancestor() {
         let provider = FsProvider::default();
-        let res = provider.resolve_subpath(&PathBuf::from("./"), "../").unwrap_err();
+        let res = provider
+            .resolve_subpath(&PathBuf::from("./"), "../")
+            .unwrap_err();
         assert_eq!(res.kind(), IoErrorKind::PermissionDenied);
     }
 }
