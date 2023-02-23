@@ -3,7 +3,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
 use wash_lib::{
     cli::{labels_vec_to_hashmap, CommandOutput, OutputKind},
@@ -18,8 +18,8 @@ use wash_lib::{
     id::{ModuleId, ServerId, ServiceId},
 };
 use wasmcloud_control_interface::{
-    Client as CtlClient, CtlOperationAck, GetClaimsResponse, Host, HostInventory,
-    LinkDefinitionList,
+    Client as CtlClient, ClientBuilder as CtlClientBuilder, CtlOperationAck, GetClaimsResponse,
+    Host, HostInventory, LinkDefinitionList,
 };
 
 use crate::{
@@ -1185,22 +1185,19 @@ async fn ctl_client_from_opts(
             .await
             .context("Failed to create NATS client")?;
 
-    let ctl_client = if let Ok(topic_prefix) = std::env::var("WASMCLOUD_CTL_TOPIC_PREFIX") {
-        CtlClient::new_with_topic_prefix(
-            nc,
-            &topic_prefix,
-            Some(lattice_prefix),
-            Duration::from_millis(opts.timeout_ms),
-            Duration::from_millis(auction_timeout_ms),
-        )
-    } else {
-        CtlClient::new(
-            nc,
-            Some(lattice_prefix),
-            Duration::from_millis(opts.timeout_ms),
-            Duration::from_millis(auction_timeout_ms),
-        )
-    };
+    let mut builder = CtlClientBuilder::new(nc)
+        .lattice_prefix(lattice_prefix)
+        .rpc_timeout(Duration::from_millis(opts.timeout_ms))
+        .auction_timeout(Duration::from_millis(auction_timeout_ms));
+
+    if let Ok(topic_prefix) = std::env::var("WASMCLOUD_CTL_TOPIC_PREFIX") {
+        builder = builder.topic_prefix(topic_prefix);
+    }
+
+    let ctl_client = builder
+        .build()
+        .await
+        .map_err(|err| anyhow!("Failed to create control interface client: {err:?}"))?;
 
     Ok(ctl_client)
 }
