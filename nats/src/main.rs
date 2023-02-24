@@ -23,10 +23,18 @@ const ENV_NATS_CLIENT_SEED: &str = "CLIENT_SEED";
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // handle lattice control messages and forward rpc to the provider dispatch
     // returns when provider receives a shutdown control message
-    provider_main(
-        NatsMessagingProvider::default(),
-        Some("Nats Messaging Provider".to_string()),
-    )?;
+    let host_data = load_host_data()?;
+    let provider = if let Some(c) = host_data.config_json.as_ref() {
+        let config: ConnectionConfig = serde_json::from_str(c)
+            .expect("JSON deserialization from connection config should have worked");
+        NatsMessagingProvider {
+            default_config: config,
+            ..Default::default()
+        }
+    } else {
+        NatsMessagingProvider::default()
+    };
+    provider_main(provider, Some("Nats Messaging Provider".to_string()))?;
 
     eprintln!("Nats-messaging provider exiting");
     Ok(())
@@ -34,7 +42,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 /// Configuration for connecting a nats client.
 /// More options are available if you use the json than variables in the values string map.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct ConnectionConfig {
     /// list of topics to subscribe to
     #[serde(default)]
@@ -49,6 +57,43 @@ struct ConnectionConfig {
     /// ping interval in seconds
     #[serde(default)]
     ping_interval_sec: Option<u16>,
+}
+
+impl ConnectionConfig {
+    fn merge(&self, extra: &ConnectionConfig) -> ConnectionConfig {
+        let mut out = self.clone();
+        if !extra.subscriptions.is_empty() {
+            out.subscriptions = extra.subscriptions.clone();
+        }
+        // If the default configuration has a URL in it, and then the link definition
+        // also provides a URL, the assumption is to replace/override rather than combine
+        // the two into a potentially incompatible set of URIs
+        if !extra.cluster_uris.is_empty() {
+            out.cluster_uris = extra.cluster_uris.clone();
+        }
+        if extra.auth_jwt.is_some() {
+            out.auth_jwt = extra.auth_jwt.clone()
+        }
+        if extra.auth_seed.is_some() {
+            out.auth_seed = extra.auth_seed.clone()
+        }
+        if extra.ping_interval_sec.is_some() {
+            out.ping_interval_sec = extra.ping_interval_sec.clone()
+        }
+        out
+    }
+}
+
+impl Default for ConnectionConfig {
+    fn default() -> ConnectionConfig {
+        ConnectionConfig {
+            subscriptions: vec![],
+            cluster_uris: vec![DEFAULT_NATS_URI.to_string()],
+            auth_jwt: None,
+            auth_seed: None,
+            ping_interval_sec: None,
+        }
+    }
 }
 
 impl ConnectionConfig {
@@ -97,7 +142,9 @@ impl ConnectionConfig {
 struct NatsMessagingProvider {
     // store nats connection client per actor
     actors: Arc<RwLock<HashMap<String, async_nats::Client>>>,
+    default_config: ConnectionConfig,
 }
+
 // use default implementations of provider message handlers
 impl ProviderDispatch for NatsMessagingProvider {}
 
@@ -216,7 +263,19 @@ impl ProviderHandler for NatsMessagingProvider {
     /// If the link is allowed, return true, otherwise return false to deny the link.
     #[instrument(level = "debug", skip(self, ld), fields(actor_id = %ld.actor_id))]
     async fn put_link(&self, ld: &LinkDefinition) -> RpcResult<bool> {
-        let config = ConnectionConfig::new_from(&ld.values)?;
+        // If the link definition values are empty, use the default connection configuration
+        let config = if ld.values.is_empty() {
+            self.default_config.clone()
+        } else {
+            // create a config from the supplied values and merge that with the existing default
+            match ConnectionConfig::new_from(&ld.values) {
+                Ok(cc) => self.default_config.merge(&cc),
+                Err(e) => {
+                    error!("Failed to build connection configuration: {e:?}");
+                    return Ok(false);
+                }
+            }
+        };
         let conn = self.connect(config, ld).await?;
 
         let mut update_map = self.actors.write().await;
@@ -308,5 +367,44 @@ impl Messaging for NatsMessagingProvider {
                 subject: resp.subject,
             }),
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::ConnectionConfig;
+
+    #[test]
+    fn test_default_connection_serialize() {
+        // test to verify that we can default a config with partial input
+        let input = r#"
+{
+    "cluster_uris": ["nats://soyvuh"],
+    "auth_jwt": "authy",
+    "auth_seed": "seedy"
+}        
+"#;
+
+        let config: ConnectionConfig = serde_json::from_str(&input).unwrap();
+        assert_eq!(config.auth_jwt.unwrap(), "authy");
+        assert_eq!(config.auth_seed.unwrap(), "seedy");
+        assert_eq!(config.cluster_uris, ["nats://soyvuh"]);
+        assert!(config.subscriptions.is_empty());
+        assert!(config.ping_interval_sec.is_none());
+    }
+
+    #[test]
+    fn test_connectionconfig_merge() {
+        // second > original, individual vec fields are replace not extend
+        let mut cc1 = ConnectionConfig::default();
+        cc1.cluster_uris = vec!["old_server".to_string()];
+        cc1.subscriptions = vec!["topic1".to_string()];
+        let mut cc2 = ConnectionConfig::default();
+        cc2.cluster_uris = vec!["server1".to_string(), "server2".to_string()];
+        cc2.auth_jwt = Some("jawty".to_string());
+        let cc3 = cc1.merge(&cc2);
+        assert_eq!(cc3.cluster_uris, cc2.cluster_uris);
+        assert_eq!(cc3.subscriptions, cc1.subscriptions);
+        assert_eq!(cc3.auth_jwt, Some("jawty".to_string()))
     }
 }
