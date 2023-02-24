@@ -153,14 +153,10 @@ struct NatsClientBundle {
     pub sub_handles: Vec<(NatsTopic, JoinHandle<()>)>,
 }
 
-impl NatsClientBundle {
-    fn new(
-        client: async_nats::Client,
-        sub_handles: Vec<(NatsTopic, JoinHandle<()>)>,
-    ) -> NatsClientBundle {
-        NatsClientBundle {
-            client,
-            sub_handles,
+impl Drop for NatsClientBundle {
+    fn drop(&mut self) {
+        for handle in &self.sub_handles {
+            handle.1.abort()
         }
     }
 }
@@ -327,16 +323,8 @@ impl ProviderHandler for NatsMessagingProvider {
             }
         };
 
-        let NatsClientBundle {
-            client,
-            sub_handles,
-        } = self.connect(config, ld).await?;
-
         let mut update_map = self.actors.write().await;
-        update_map.insert(
-            ld.actor_id.to_string(),
-            NatsClientBundle::new(client, sub_handles),
-        );
+        update_map.insert(ld.actor_id.to_string(), self.connect(config, ld).await?);
 
         Ok(true)
     }
@@ -346,21 +334,13 @@ impl ProviderHandler for NatsMessagingProvider {
     async fn delete_link(&self, actor_id: &str) {
         let mut aw = self.actors.write().await;
 
-        if let Some(NatsClientBundle { sub_handles, .. }) = aw.get(actor_id) {
+        if let Some(bundle) = aw.remove(actor_id) {
+            // Note: subscriptions will be closed via Drop on the NatsClientBundle
             debug!(
                 "closing [{}] NATS subscriptions for actor [{}]...",
-                sub_handles.len(),
+                &bundle.sub_handles.len(),
                 actor_id,
             );
-
-            // Stop every subscribe loop related to the actor
-            for (sub, handle) in sub_handles {
-                debug!("ending subscription to subject [{}]...", sub);
-                handle.abort();
-            }
-
-            // Remove the actor from the list
-            aw.remove(actor_id);
         }
 
         debug!("finished processing delete link for actor [{}]", actor_id);
