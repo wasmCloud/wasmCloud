@@ -718,6 +718,7 @@ mod tests {
         let provider = FsProvider::default();
         let res = provider
             .resolve_subpath(&PathBuf::from("./"), "../")
+            .await
             .unwrap_err();
         assert_eq!(res.kind(), IoErrorKind::PermissionDenied);
     }
