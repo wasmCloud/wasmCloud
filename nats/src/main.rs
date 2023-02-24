@@ -9,7 +9,11 @@ use tokio::task::JoinHandle;
 use tracing::{debug, error, instrument, warn};
 use tracing_futures::Instrument;
 use wascap::prelude::KeyPair;
-use wasmbus_rpc::{core::LinkDefinition, otel::OtelHeaderInjector, provider::prelude::*};
+use wasmbus_rpc::{
+    core::{HostData, LinkDefinition},
+    otel::OtelHeaderInjector,
+    provider::prelude::*,
+};
 use wasmcloud_interface_messaging::{
     MessageSubscriber, MessageSubscriberSender, Messaging, MessagingReceiver, PubMessage,
     ReplyMessage, RequestMessage, SubMessage,
@@ -25,40 +29,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // handle lattice control messages and forward rpc to the provider dispatch
     // returns when provider receives a shutdown control message
     let host_data = load_host_data()?;
-    let provider = if let Some(c) = host_data.config_json.as_ref() {
-        let config: ConnectionConfig = serde_json::from_str(c)
-            .expect("JSON deserialization from connection config should have worked");
-        NatsMessagingProvider {
-            default_config: config,
-            ..Default::default()
-        }
-    } else {
-        NatsMessagingProvider::default()
-    };
+    let provider = generate_provider(host_data);
     provider_main(provider, Some("Nats Messaging Provider".to_string()))?;
 
     eprintln!("Nats-messaging provider exiting");
     Ok(())
 }
 
-type NatsTopic = String;
-type ClusterUri = String;
-type AuthJwt = String;
-type AuthSeed = String;
+fn generate_provider(host_data: HostData) -> NatsMessagingProvider {
+    if let Some(c) = host_data.config_json.as_ref() {
+        // empty string becomes the default configuration
+        if c.trim().is_empty() {
+            NatsMessagingProvider::default()
+        } else {
+            let config: ConnectionConfig = serde_json::from_str(c)
+                .expect("JSON deserialization from connection config should have worked");
+            NatsMessagingProvider {
+                default_config: config,
+                ..Default::default()
+            }
+        }
+    } else {
+        NatsMessagingProvider::default()
+    }
+}
 
 /// Configuration for connecting a nats client.
 /// More options are available if you use the json than variables in the values string map.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 struct ConnectionConfig {
     /// list of topics to subscribe to
     #[serde(default)]
-    subscriptions: Vec<NatsTopic>,
+    subscriptions: Vec<String>,
     #[serde(default)]
-    cluster_uris: Vec<ClusterUri>,
+    cluster_uris: Vec<String>,
     #[serde(default)]
-    auth_jwt: Option<AuthJwt>,
+    auth_jwt: Option<String>,
     #[serde(default)]
-    auth_seed: Option<AuthSeed>,
+    auth_seed: Option<String>,
 
     /// ping interval in seconds
     #[serde(default)]
@@ -150,7 +158,7 @@ impl ConnectionConfig {
 #[derive(Debug)]
 struct NatsClientBundle {
     pub client: async_nats::Client,
-    pub sub_handles: Vec<(NatsTopic, JoinHandle<()>)>,
+    pub sub_handles: Vec<(String, JoinHandle<()>)>,
 }
 
 impl Drop for NatsClientBundle {
@@ -439,9 +447,13 @@ impl Messaging for NatsMessagingProvider {
 
 #[cfg(test)]
 mod test {
-    use super::*;
-    use crate::ConnectionConfig;
-    use wasmbus_rpc::provider::ProviderHandler;
+    use std::collections::HashMap;
+
+    use crate::{generate_provider, ConnectionConfig, NatsMessagingProvider};
+    use wasmbus_rpc::{
+        core::{HostData, LinkDefinition},
+        provider::ProviderHandler,
+    };
 
     #[test]
     fn test_default_connection_serialize() {
@@ -460,6 +472,22 @@ mod test {
         assert_eq!(config.cluster_uris, ["nats://soyvuh"]);
         assert!(config.subscriptions.is_empty());
         assert!(config.ping_interval_sec.is_none());
+    }
+
+    #[test]
+    fn test_generate_provider_works_with_empty_string() {
+        let mut host_data = HostData::default();
+        host_data.config_json = Some("".to_string());
+        let prov = generate_provider(host_data);
+        assert_eq!(prov.default_config, ConnectionConfig::default());
+    }
+
+    #[test]
+    fn test_generate_provider_works_with_none() {
+        let mut host_data = HostData::default();
+        host_data.config_json = None;
+        let prov = generate_provider(host_data);
+        assert_eq!(prov.default_config, ConnectionConfig::default());
     }
 
     #[test]
