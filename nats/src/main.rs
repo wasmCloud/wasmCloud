@@ -460,8 +460,8 @@ impl Messaging for NatsMessagingProvider {
 #[cfg(test)]
 mod test {
     use super::*;
-    use wasmbus_rpc::provider::ProviderHandler;
     use crate::ConnectionConfig;
+    use wasmbus_rpc::provider::ProviderHandler;
 
     #[test]
     fn test_default_connection_serialize() {
@@ -496,7 +496,6 @@ mod test {
         assert_eq!(cc3.subscriptions, cc1.subscriptions);
         assert_eq!(cc3.auth_jwt, Some("jawty".to_string()))
     }
-
 
     /// Ensure that unlink triggers subscription removal
     /// https://github.com/wasmCloud/capability-providers/issues/196
