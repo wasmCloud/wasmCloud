@@ -8,13 +8,15 @@ use std::time::SystemTime;
 #[allow(unused_imports)]
 use std::{
     collections::HashMap,
-    fs::File,
-    fs::OpenOptions,
     io::{BufReader, Error as IoError, ErrorKind as IoErrorKind, Write},
     path::{Path, PathBuf},
     sync::Arc,
 };
-use tokio::fs::{canonicalize, create_dir_all, metadata, read, read_dir, remove_file};
+use tokio::fs::{
+    canonicalize, create_dir_all, metadata, read, read_dir, remove_dir_all, remove_file, File,
+    OpenOptions,
+};
+use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock;
 use tracing::{error, info};
 use wasmbus_rpc::provider::prelude::*;
@@ -165,7 +167,7 @@ impl FsProvider {
         // create an empty file if it's the first chunk
         if chunk.offset == 0 {
             let resp = File::create(&binary_file);
-            if resp.is_err() {
+            if resp.await.is_err() {
                 let error_string = format!("Could not create file: {:?}", binary_file).to_string();
                 error!("{:?}", &error_string);
                 return Err(RpcError::InvalidParameter(error_string));
@@ -208,7 +210,8 @@ impl FsProvider {
         let mut file = OpenOptions::new()
             .create(false)
             .append(true)
-            .open(chunk_obj_path)?;
+            .open(chunk_obj_path)
+            .await?;
         info!(
             "Receiving file chunk offset {} for {}/{}, size {}",
             chunk.offset,
@@ -217,7 +220,7 @@ impl FsProvider {
             chunk.bytes.len()
         );
 
-        let count = file.write(chunk.bytes.as_ref())?;
+        let count = file.write(chunk.bytes.as_ref()).await?;
         if count != chunk.bytes.len() {
             let msg = format!(
                 "Failed to fully write chunk: {} of {} bytes",
@@ -338,7 +341,7 @@ impl Blobstore for FsProvider {
 
         info!("create dir: {:?}", chunk_dir);
 
-        match std::fs::create_dir_all(chunk_dir) {
+        match create_dir_all(chunk_dir).await {
             Ok(()) => Ok(()),
             Err(e) => Err(RpcError::InvalidParameter(format!(
                 "Could not create container: {:?}",
@@ -405,7 +408,7 @@ impl Blobstore for FsProvider {
             let mut croot = root.clone();
             croot.push(cid);
 
-            if let Err(e) = std::fs::remove_dir_all(&croot.as_path()) {
+            if let Err(e) = remove_dir_all(&croot.as_path()).await {
                 if read_dir(&croot.as_path()).await.is_ok() {
                     remove_errors.push(ItemResult {
                         error: Some(format!("{:?}", e.into_inner())),
@@ -428,7 +431,7 @@ impl Blobstore for FsProvider {
         let file_subpath = Path::new(&container.container_id).join(&container.object_id);
         let file_path = self.resolve_subpath(&root, &file_subpath).await?;
 
-        match File::open(file_path) {
+        match File::open(file_path).await {
             Ok(_) => Ok(true),
             Err(_) => Ok(false),
         }
@@ -642,7 +645,7 @@ impl Blobstore for FsProvider {
         // Determine path to object file
         let root = &self.get_root(ctx).await?;
         let object_subpath = Path::new(&req.container_id).join(&req.object_id);
-        let file_path = self.resolve_subpath(&root, &object_subpath).await?;
+        let file_path = self.resolve_subpath(root, &object_subpath).await?;
 
         // Read the file in
         let file = read(file_path).await?;
@@ -698,8 +701,8 @@ mod tests {
     use std::path::PathBuf;
 
     /// Ensure that only safe subpaths are resolved
-    #[test]
-    fn resolve_safe_samepath() {
+    #[tokio::test]
+    async fn resolve_safe_samepath() {
         let provider = FsProvider::default();
         assert!(matches!(
             provider
@@ -710,8 +713,8 @@ mod tests {
     }
 
     /// Ensure that ancestor paths are not allowed to be resolved as subpaths
-    #[test]
-    fn resolve_fail_ancestor() {
+    #[tokio::test]
+    async fn resolve_fail_ancestor() {
         let provider = FsProvider::default();
         let res = provider
             .resolve_subpath(&PathBuf::from("./"), "../")
