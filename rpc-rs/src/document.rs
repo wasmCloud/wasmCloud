@@ -8,7 +8,7 @@ use std::collections::HashMap;
 /// Open content is useful for modeling unstructured data that has no schema, data that can't be
 /// modeled using rigid types, or data that has a schema that evolves outside of the purview of a model.
 /// The serialization format of a document is an implementation detail of a protocol.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub enum Document {
     /// object
     // n(0)
@@ -40,7 +40,7 @@ pub enum Document {
 /// Open content is useful for modeling unstructured data that has no schema, data that can't be
 /// modeled using rigid types, or data that has a schema that evolves outside of the purview of a model.
 /// The serialization format of a document is an implementation detail of a protocol.
-#[derive(Clone, Debug, PartialEq, Serialize, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub enum DocumentRef<'v> {
     /// object
     // n(0)

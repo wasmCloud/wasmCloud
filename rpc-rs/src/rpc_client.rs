@@ -158,7 +158,7 @@ impl RpcClient {
     }
 
     /// Send an rpc message using json-encoded data
-    pub async fn send_json<Target, Arg, Resp>(
+    pub async fn send_json<Target, Resp>(
         &self,
         origin: WasmCloudEntity,
         target: Target,
@@ -167,7 +167,6 @@ impl RpcClient {
         data: JsonValue,
     ) -> RpcResult<JsonValue>
     where
-        Arg: DeserializeOwned + Serialize,
         Resp: DeserializeOwned + Serialize,
         Target: Into<WasmCloudEntity>,
     {
