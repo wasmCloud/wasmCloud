@@ -24,6 +24,7 @@ tracing = "0.1"
 tracing-futures = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 wascap = "0.8.0"
+anyhow = "1.0.69"
 
 wasmbus-rpc = { version = "0.11.2", features = [ "otel" ] }
 wasmcloud-interface-messaging = "0.8.1"

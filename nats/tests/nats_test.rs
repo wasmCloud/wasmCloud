@@ -12,7 +12,7 @@ use wasmcloud_test_util::{
 #[tokio::test]
 async fn run_all() {
     let opts = TestOptions::default();
-    let res = run_selected_spawn!(opts, health_check, send_request, send_publish,);
+    let res = run_selected_spawn!(opts, health_check, send_request, send_publish);
     print_test_results(&res);
 
     let passed = res.iter().filter(|tr| tr.passed).count();

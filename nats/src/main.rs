@@ -5,7 +5,8 @@ use std::{collections::HashMap, convert::Infallible, sync::Arc, time::Duration};
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{OwnedSemaphorePermit, RwLock, Semaphore};
-use tracing::{error, info, instrument, warn};
+use tokio::task::JoinHandle;
+use tracing::{debug, error, instrument, warn};
 use tracing_futures::Instrument;
 use wascap::prelude::KeyPair;
 use wasmbus_rpc::{core::LinkDefinition, otel::OtelHeaderInjector, provider::prelude::*};
@@ -40,19 +41,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+type NatsTopic = String;
+type ClusterUri = String;
+type AuthJwt = String;
+type AuthSeed = String;
+
 /// Configuration for connecting a nats client.
 /// More options are available if you use the json than variables in the values string map.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ConnectionConfig {
     /// list of topics to subscribe to
     #[serde(default)]
-    subscriptions: Vec<String>,
+    subscriptions: Vec<NatsTopic>,
     #[serde(default)]
-    cluster_uris: Vec<String>,
+    cluster_uris: Vec<ClusterUri>,
     #[serde(default)]
-    auth_jwt: Option<String>,
+    auth_jwt: Option<AuthJwt>,
     #[serde(default)]
-    auth_seed: Option<String>,
+    auth_seed: Option<AuthSeed>,
 
     /// ping interval in seconds
     #[serde(default)]
@@ -136,12 +142,31 @@ impl ConnectionConfig {
     }
 }
 
+/// NatsClientBundles hold a NATS client and information (subscriptions)
+/// related to it.
+///
+/// This struct is necssary because subscriptions are *not* automatically removed on client drop,
+/// meaning that we must keep track of all subscriptions to close once the client is done
+#[derive(Debug)]
+struct NatsClientBundle {
+    pub client: async_nats::Client,
+    pub sub_handles: Vec<(NatsTopic, JoinHandle<()>)>,
+}
+
+impl Drop for NatsClientBundle {
+    fn drop(&mut self) {
+        for handle in &self.sub_handles {
+            handle.1.abort()
+        }
+    }
+}
+
 /// Nats implementation for wasmcloud:messaging
 #[derive(Default, Clone, Provider)]
 #[services(Messaging)]
 struct NatsMessagingProvider {
     // store nats connection client per actor
-    actors: Arc<RwLock<HashMap<String, async_nats::Client>>>,
+    actors: Arc<RwLock<HashMap<String, NatsClientBundle>>>,
     default_config: ConnectionConfig,
 }
 
@@ -149,12 +174,12 @@ struct NatsMessagingProvider {
 impl ProviderDispatch for NatsMessagingProvider {}
 
 impl NatsMessagingProvider {
-    /// attempt to connect to nats url (with jwt credentials, if provided)
+    /// Attempt to connect to nats url (with jwt credentials, if provided)
     async fn connect(
         &self,
         cfg: ConnectionConfig,
         ld: &LinkDefinition,
-    ) -> Result<async_nats::Client, RpcError> {
+    ) -> Result<NatsClientBundle, RpcError> {
         let opts = match (cfg.auth_jwt, cfg.auth_seed) {
             (Some(jwt), Some(seed)) => {
                 let key_pair = std::sync::Arc::new(
@@ -174,39 +199,54 @@ impl NatsMessagingProvider {
             }
         };
         let url = cfg.cluster_uris.get(0).unwrap();
-        let conn = opts
+
+        let client = opts
             .connect(url)
             .await
             .map_err(|e| RpcError::ProviderInit(format!("Nats connection to {}: {}", url, e)))?;
 
+        // Connections
+        let mut sub_handles = Vec::new();
         for sub in cfg.subscriptions.iter().filter(|s| !s.is_empty()) {
             let (sub, queue) = match sub.split_once('|') {
                 Some((sub, queue)) => (sub, Some(queue.to_string())),
                 None => (sub.as_str(), None),
             };
-            self.subscribe(&conn, ld, sub.to_string(), queue).await?;
+
+            sub_handles.push((
+                sub.to_string(),
+                self.subscribe(&client, ld, sub.to_string(), queue).await?,
+            ));
         }
-        Ok(conn)
+
+        Ok(NatsClientBundle {
+            client,
+            sub_handles,
+        })
     }
 
     /// Add a regular or queue subscription
     async fn subscribe(
         &self,
-        conn: &async_nats::Client,
+        client: &async_nats::Client,
         ld: &LinkDefinition,
         sub: String,
         queue: Option<String>,
-    ) -> RpcResult<()> {
-        let mut subscription = match queue {
-            Some(queue) => conn.queue_subscribe(sub.clone(), queue).await,
-            None => conn.subscribe(sub.clone()).await,
+    ) -> RpcResult<JoinHandle<()>> {
+        let mut subscriber = match queue {
+            Some(queue) => client.queue_subscribe(sub.clone(), queue).await,
+            None => client.subscribe(sub.clone()).await,
         }
         .map_err(|e| {
             error!(subject = %sub, error = %e, "error subscribing subscribing");
             RpcError::Nats(format!("subscription to {}: {}", sub, e))
         })?;
+
         let link_def = ld.to_owned();
-        let _join_handle = tokio::spawn(async move {
+
+        // Spawn a thread that listens for messages coming from NATS
+        // this thread is expected to run the full duration that the provider is available
+        let join_handle = tokio::spawn(async move {
             // MAGIC NUMBER: Based on our benchmark testing, this seems to be a good upper limit
             // where we start to get diminishing returns. We can consider making this
             // configurable down the line.
@@ -215,11 +255,15 @@ impl NatsMessagingProvider {
             // up with 20 subscriptions all getting slammed with up to 75 tasks, but we should wait
             // to do anything until we see what happens with real world usage and benchmarking
             let semaphore = Arc::new(Semaphore::new(75));
-            while let Some(msg) = subscription.next().await {
+
+            // Listen for NATS message(s)
+            while let Some(msg) = subscriber.next().await {
+                // Set up tracing context for the NATS message
                 let span = tracing::debug_span!("handle_message", actor_id = %link_def.actor_id);
                 span.in_scope(|| {
                     wasmbus_rpc::otel::attach_span_context(&msg);
                 });
+
                 let permit = match semaphore.clone().acquire_owned().await {
                     Ok(p) => p,
                     Err(_) => {
@@ -227,10 +271,12 @@ impl NatsMessagingProvider {
                         break;
                     }
                 };
+
                 tokio::spawn(dispatch_msg(link_def.clone(), msg, permit).instrument(span));
             }
         });
-        Ok(())
+
+        Ok(join_handle)
     }
 }
 
@@ -276,10 +322,9 @@ impl ProviderHandler for NatsMessagingProvider {
                 }
             }
         };
-        let conn = self.connect(config, ld).await?;
 
         let mut update_map = self.actors.write().await;
-        update_map.insert(ld.actor_id.to_string(), conn);
+        update_map.insert(ld.actor_id.to_string(), self.connect(config, ld).await?);
 
         Ok(true)
     }
@@ -288,11 +333,17 @@ impl ProviderHandler for NatsMessagingProvider {
     #[instrument(level = "info", skip(self))]
     async fn delete_link(&self, actor_id: &str) {
         let mut aw = self.actors.write().await;
-        if aw.remove(actor_id).is_some() {
-            info!("nats closing connection for actor {}", actor_id);
-            // close and drop the connection
-            // dropping the client should close it
-        } // else ignore: it's already been dropped
+
+        if let Some(bundle) = aw.remove(actor_id) {
+            // Note: subscriptions will be closed via Drop on the NatsClientBundle
+            debug!(
+                "closing [{}] NATS subscriptions for actor [{}]...",
+                &bundle.sub_handles.len(),
+                actor_id,
+            );
+        }
+
+        debug!("finished processing delete link for actor [{}]", actor_id);
     }
 
     /// Handle shutdown request by closing all connections
@@ -314,16 +365,20 @@ impl Messaging for NatsMessagingProvider {
             .actor
             .as_ref()
             .ok_or_else(|| RpcError::InvalidParameter("no actor in request".to_string()))?;
+
         // get read lock on actor-client hashmap to get the connection, then drop it
         let _rd = self.actors.read().await;
-        let conn = _rd
+
+        let nats_bundle = _rd
             .get(actor_id)
-            .ok_or_else(|| RpcError::InvalidParameter(format!("actor not linked:{}", actor_id)))?
-            .clone();
+            .ok_or_else(|| RpcError::InvalidParameter(format!("actor not linked:{}", actor_id)))?;
+        let nats_client = nats_bundle.client.clone();
         drop(_rd);
+
         let headers = OtelHeaderInjector::default_with_span().into();
+
         match msg.reply_to.clone() {
-            Some(reply_to) => conn
+            Some(reply_to) => nats_client
                 .publish_with_reply_and_headers(
                     msg.subject.to_string(),
                     reply_to,
@@ -332,7 +387,7 @@ impl Messaging for NatsMessagingProvider {
                 )
                 .await
                 .map_err(|e| RpcError::Nats(e.to_string())),
-            None => conn
+            None => nats_client
                 .publish_with_headers(msg.subject.to_string(), headers, msg.body.clone().into())
                 .await
                 .map_err(|e| RpcError::Nats(e.to_string())),
@@ -345,20 +400,32 @@ impl Messaging for NatsMessagingProvider {
             .actor
             .as_ref()
             .ok_or_else(|| RpcError::InvalidParameter("no actor in request".to_string()))?;
-        // get read lock on actor-client hashmap
+        // Obtain read lock on actor-client hashmap
         let _rd = self.actors.read().await;
-        let conn = _rd
+
+        // Extract NATS client from bundle
+        let nats_client_bundle = _rd
             .get(actor_id)
-            .ok_or_else(|| RpcError::InvalidParameter(format!("actor not linked:{}", actor_id)))?
-            .clone();
-        drop(_rd);
+            .ok_or_else(|| RpcError::InvalidParameter(format!("actor not linked:{}", actor_id)))?;
+        let nats_client = nats_client_bundle.client.clone();
+        drop(_rd); // early release of actor-client map
+
+        // Inject OTEL headers
         let headers = OtelHeaderInjector::default_with_span().into();
-        match tokio::time::timeout(
+
+        // Perform the request with a timeout
+        let request_with_timeout = tokio::time::timeout(
             Duration::from_millis(msg.timeout_ms as u64),
-            conn.request_with_headers(msg.subject.to_string(), headers, msg.body.clone().into()),
+            nats_client.request_with_headers(
+                msg.subject.to_string(),
+                headers,
+                msg.body.clone().into(),
+            ),
         )
-        .await
-        {
+        .await;
+
+        // Process results of request
+        match request_with_timeout {
             Err(_timeout_err) => Err(RpcError::Timeout("nats request timed out".to_string())),
             Ok(Err(send_err)) => Err(RpcError::Nats(format!("nats send error: {}", send_err))),
             Ok(Ok(resp)) => Ok(ReplyMessage {
@@ -372,7 +439,9 @@ impl Messaging for NatsMessagingProvider {
 
 #[cfg(test)]
 mod test {
+    use super::*;
     use crate::ConnectionConfig;
+    use wasmbus_rpc::provider::ProviderHandler;
 
     #[test]
     fn test_default_connection_serialize() {
@@ -382,7 +451,7 @@ mod test {
     "cluster_uris": ["nats://soyvuh"],
     "auth_jwt": "authy",
     "auth_seed": "seedy"
-}        
+}
 "#;
 
         let config: ConnectionConfig = serde_json::from_str(&input).unwrap();
@@ -406,5 +475,51 @@ mod test {
         assert_eq!(cc3.cluster_uris, cc2.cluster_uris);
         assert_eq!(cc3.subscriptions, cc1.subscriptions);
         assert_eq!(cc3.auth_jwt, Some("jawty".to_string()))
+    }
+
+    /// Ensure that unlink triggers subscription removal
+    /// https://github.com/wasmCloud/capability-providers/issues/196
+    ///
+    /// NOTE: this is tested here for easy access to put_link/del_link without
+    /// the fuss of loading/managing individual actors in the lattice
+    #[tokio::test]
+    async fn test_unlink_unsub() {
+        // Build a nats messaging provider
+        let prov = NatsMessagingProvider::default();
+
+        // Actor should have no clients and no subs before hand
+        let actor_map = prov.actors.write().await;
+        assert_eq!(actor_map.len(), 0);
+        drop(actor_map);
+
+        // Add a provider
+        let mut ld = LinkDefinition::default();
+        ld.actor_id = String::from("???");
+        ld.link_name = String::from("test");
+        ld.contract_id = String::from("test");
+        ld.values = HashMap::<String, String>::from([
+            (
+                String::from("SUBSCRIPTION"),
+                String::from("test.wasmcloud.unlink"),
+            ),
+            (String::from("URI"), String::from("127.0.0.1:4222")),
+        ]);
+        let _ = prov.put_link(&ld).await;
+
+        // After putting a link there should be one sub
+        let actor_map = prov.actors.write().await;
+        assert_eq!(actor_map.len(), 1);
+        assert_eq!(actor_map.get("???").unwrap().sub_handles.len(), 1);
+        drop(actor_map);
+
+        // Remove link (this should kill the subscription)
+        let _ = prov.delete_link(&ld.actor_id).await;
+
+        // After removing a link there should be no subs
+        let actor_map = prov.actors.write().await;
+        assert_eq!(actor_map.len(), 0);
+        drop(actor_map);
+
+        let _ = prov.shutdown().await;
     }
 }

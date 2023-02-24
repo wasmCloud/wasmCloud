@@ -86,7 +86,7 @@ $(dest_par): $(bin_target0) Makefile Cargo.toml
 	@mkdir -p $(dir $(dest_par))
 	bin_src=$(bin_target0);  \
 	if [ $(par_target0) = "x86_64-pc-windows-gnu" ] || \
-	   [ $(par_target0) = "x86_64-pc-windows-msvc" ] ; then \
+		 [ $(par_target0) = "x86_64-pc-windows-msvc" ] ; then \
 		bin_src=$$bin_src.exe;  \
 	fi; \
 	$(WASH) par create \
@@ -104,14 +104,14 @@ $(dest_par): $(bin_target0) Makefile Cargo.toml
 # par-full adds all the other targets to the base par
 par-full: $(dest_par) $(bin_targets)
 	for target in $(par_targets); do \
-	    target_dest=target/$${target}/release/$(bin_name);  \
+			target_dest=target/$${target}/release/$(bin_name);  \
 		if [ $$target = "x86_64-pc-windows-gnu" ]; then \
 			target_dest=$$target_dest.exe;  \
 		fi; \
-	    par_arch=`echo -n $$target | sed -E 's/([^-]+)-([^-]+)-([^-]+)(-gnu.*)?/\1-\3/' | sed 's/darwin/macos/'`; \
+			par_arch=`echo -n $$target | sed -E 's/([^-]+)-([^-]+)-([^-]+)(-gnu.*)?/\1-\3/' | sed 's/darwin/macos/'`; \
 		echo building $$par_arch; \
 		if [ $$target_dest != $(cross_target0) ] && [ -f $$target_dest ]; then \
-		    $(WASH) par insert --arch $$par_arch --binary $$target_dest $(dest_par); \
+				$(WASH) par insert --arch $$par_arch --binary $$target_dest $(dest_par); \
 		fi; \
 	done
 
