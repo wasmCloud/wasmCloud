@@ -8,7 +8,7 @@
 # top_targets      # list of targets that are applicable for this project
 #
 
-top_targets     ?= all par par-full test clean 
+top_targets     ?= all par par-full test clean
 
 platform_id = $(shell uname -s)
 platform = $$( \
@@ -29,6 +29,7 @@ link_name ?= default
 NAME ?= $(PROJECT)
 
 WASH ?= wash
+CARGO ?= cargo
 
 oci_url_base ?= localhost:5000/v2
 oci_url      ?= $(oci_url_base)/$(bin_name):$(VERSION)
@@ -172,6 +173,9 @@ endif
 
 
 ifeq ($(wildcard ./Cargo.toml),./Cargo.toml)
+dev::
+	$(CARGO) watch
+
 build::
 	cargo build
 

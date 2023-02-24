@@ -8,12 +8,15 @@ use std::time::SystemTime;
 #[allow(unused_imports)]
 use std::{
     collections::HashMap,
-    fs::OpenOptions,
-    fs::{metadata, read, read_dir, remove_file, File},
-    io::{BufReader, Write},
+    io::{BufReader, Error as IoError, ErrorKind as IoErrorKind, Write},
     path::{Path, PathBuf},
     sync::Arc,
 };
+use tokio::fs::{
+    canonicalize, create_dir_all, metadata, read, read_dir, remove_dir_all, remove_file, File,
+    OpenOptions,
+};
+use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock;
 use tracing::{error, info};
 use wasmbus_rpc::provider::prelude::*;
@@ -53,6 +56,44 @@ struct FsProvider {
     config: Arc<RwLock<HashMap<String, FsProviderConfig>>>,
     upload_chunks: Arc<RwLock<HashMap<String, u64>>>, // kee track of the next offset for chunks to be uploaded
     download_chunks: Arc<RwLock<HashMap<ChunkOffsetKey, Chunk>>>,
+}
+
+impl FsProvider {
+    /// Resolve a path with two components (base & root),
+    /// ensuring that the path is below the given root.
+    async fn resolve_subpath<P: AsRef<Path>>(
+        &self,
+        root: &PathBuf,
+        path: P,
+    ) -> Result<PathBuf, IoError> {
+        let root_abs = canonicalize(root).await?;
+        let joined = root_abs.join(path.as_ref());
+        let joined_abs = canonicalize(joined).await?;
+
+        // Check components of either path
+        let mut joined_abs_iter = joined_abs.components();
+        for root_part in root_abs.components() {
+            let joined_part = joined_abs_iter.next();
+
+            // If the joined path is shorter or doesn't match
+            // for the duration of the root, path is suspect
+            if joined_part.is_none() || joined_part != Some(root_part) {
+                return Err(IoError::new(
+                    IoErrorKind::PermissionDenied,
+                    format!(
+                        "Invalid path [{}], is not contained by root path [{}]",
+                        path.as_ref().display(),
+                        root.display(),
+                    ),
+                ));
+            }
+        }
+
+        // At this point, the root iterator has ben exhausted
+        // and the remaining components are the paths beneath the root
+
+        Ok(joined_abs)
+    }
 }
 
 impl Default for FsProvider {
@@ -117,14 +158,17 @@ impl FsProvider {
         stream_id: &Option<String>,
     ) -> RpcResult<()> {
         let root = self.get_root(ctx).await?;
-        let cdir = Path::new(&root).join(&chunk.container_id);
-        let bfile = Path::join(&cdir, &chunk.object_id);
+
+        let container_dir = self.resolve_subpath(&root, &chunk.container_id).await?;
+        let binary_file = self
+            .resolve_subpath(&container_dir, &chunk.object_id)
+            .await?;
 
         // create an empty file if it's the first chunk
         if chunk.offset == 0 {
-            let resp = File::create(&bfile);
-            if resp.is_err() {
-                let error_string = format!("Could not create file: {:?}", bfile).to_string();
+            let resp = File::create(&binary_file);
+            if resp.await.is_err() {
+                let error_string = format!("Could not create file: {:?}", binary_file).to_string();
                 error!("{:?}", &error_string);
                 return Err(RpcError::InvalidParameter(error_string));
             }
@@ -160,9 +204,14 @@ impl FsProvider {
             upload_chunks.insert(s_id.clone(), next_offset);
         }
 
-        let bpath = Path::join(&Path::join(&root, &chunk.container_id), &chunk.object_id);
+        let chunk_obj_subpath = Path::new(&chunk.container_id).join(&chunk.object_id);
+        let chunk_obj_path = self.resolve_subpath(&root, &chunk_obj_subpath).await?;
 
-        let mut file = OpenOptions::new().create(false).append(true).open(bpath)?;
+        let mut file = OpenOptions::new()
+            .create(false)
+            .append(true)
+            .open(chunk_obj_path)
+            .await?;
         info!(
             "Receiving file chunk offset {} for {}/{}, size {}",
             chunk.offset,
@@ -171,7 +220,7 @@ impl FsProvider {
             chunk.bytes.len()
         );
 
-        let count = file.write(chunk.bytes.as_ref())?;
+        let count = file.write(chunk.bytes.as_ref()).await?;
         if count != chunk.bytes.len() {
             let msg = format!(
                 "Failed to fully write chunk: {} of {} bytes",
@@ -254,9 +303,9 @@ impl ProviderHandler for FsProvider {
             .insert(ld.actor_id.clone(), config.clone());
 
         // Create a directory named from the actor id:
-        let cdir = Path::new(&config.root).join(Path::new(&ld.actor_id));
+        let actor_dir = self.resolve_subpath(&config.root, &ld.actor_id).await?;
 
-        match std::fs::create_dir_all(cdir.as_path()) {
+        match create_dir_all(actor_dir.as_path()).await {
             Ok(()) => Ok(true),
             Err(e) => Err(RpcError::InvalidParameter(format!(
                 "Could not create actor directory: {:?}",
@@ -271,13 +320,13 @@ impl ProviderHandler for FsProvider {
 impl Blobstore for FsProvider {
     /// Returns whether the container exists
     #[allow(unused)]
-    async fn container_exists(&self, ctx: &Context, arg: &ContainerId) -> RpcResult<bool> {
-        info!("Called container_exists({:?})", arg);
+    async fn container_exists(&self, ctx: &Context, container_id: &ContainerId) -> RpcResult<bool> {
+        info!("Called container_exists({:?})", container_id);
 
         let root = self.get_root(ctx).await?;
-        let cdir = Path::new(&root).join(&arg);
+        let chunk_dir = self.resolve_subpath(&root, &container_id).await?;
 
-        match read_dir(&cdir) {
+        match read_dir(&chunk_dir).await {
             Ok(_) => Ok(true),
             Err(_) => Ok(false),
         }
@@ -286,13 +335,13 @@ impl Blobstore for FsProvider {
     /// Creates a container by name, returning success if it worked
     /// Note that container names may not be globally unique - just unique within the
     /// "namespace" of the connecting actor and linkdef
-    async fn create_container(&self, ctx: &Context, arg: &ContainerId) -> RpcResult<()> {
+    async fn create_container(&self, ctx: &Context, container_id: &ContainerId) -> RpcResult<()> {
         let root = self.get_root(ctx).await?;
-        let cdir = Path::new(&root).join(arg.to_string());
+        let chunk_dir = self.resolve_subpath(&root, &container_id).await?;
 
-        info!("create dir: {:?}", cdir);
+        info!("create dir: {:?}", chunk_dir);
 
-        match std::fs::create_dir_all(cdir) {
+        match create_dir_all(chunk_dir).await {
             Ok(()) => Ok(()),
             Err(e) => Err(RpcError::InvalidParameter(format!(
                 "Could not create container: {:?}",
@@ -307,12 +356,11 @@ impl Blobstore for FsProvider {
     async fn get_container_info(
         &self,
         ctx: &Context,
-        arg: &ContainerId,
+        container_id: &ContainerId,
     ) -> RpcResult<ContainerMetadata> {
         let root = self.get_root(ctx).await?;
-        let dir_path = Path::new(&root).join(&arg);
-
-        let dir_info = metadata(dir_path)?;
+        let dir_path = self.resolve_subpath(&root, &container_id).await?;
+        let dir_info = metadata(dir_path).await?;
 
         let modified = match dir_info.modified()?.duration_since(SystemTime::UNIX_EPOCH) {
             Ok(s) => Timestamp {
@@ -323,7 +371,7 @@ impl Blobstore for FsProvider {
         };
 
         Ok(ContainerMetadata {
-            container_id: arg.clone(),
+            container_id: container_id.clone(),
             created_at: Some(modified),
         })
     }
@@ -360,8 +408,8 @@ impl Blobstore for FsProvider {
             let mut croot = root.clone();
             croot.push(cid);
 
-            if let Err(e) = std::fs::remove_dir_all(&croot.as_path()) {
-                if read_dir(&croot.as_path()).is_ok() {
+            if let Err(e) = remove_dir_all(&croot.as_path()).await {
+                if read_dir(&croot.as_path()).await.is_ok() {
                     remove_errors.push(ItemResult {
                         error: Some(format!("{:?}", e.into_inner())),
                         key: cid.clone(),
@@ -376,15 +424,14 @@ impl Blobstore for FsProvider {
 
     /// Returns whether the object exists
     #[allow(unused)]
-    async fn object_exists(&self, ctx: &Context, arg: &ContainerObject) -> RpcResult<bool> {
-        info!("Called object_exists({:?})", arg);
+    async fn object_exists(&self, ctx: &Context, container: &ContainerObject) -> RpcResult<bool> {
+        info!("Called object_exists({:?})", container);
 
         let root = self.get_root(ctx).await?;
-        let file_path = Path::new(&root)
-            .join(&arg.container_id)
-            .join(&arg.object_id);
+        let file_subpath = Path::new(&container.container_id).join(&container.object_id);
+        let file_path = self.resolve_subpath(&root, &file_subpath).await?;
 
-        match File::open(file_path) {
+        match File::open(file_path).await {
             Ok(_) => Ok(true),
             Err(_) => Ok(false),
         }
@@ -396,16 +443,15 @@ impl Blobstore for FsProvider {
     async fn get_object_info(
         &self,
         ctx: &Context,
-        arg: &ContainerObject,
+        container: &ContainerObject,
     ) -> RpcResult<ObjectMetadata> {
-        info!("Called get_object_info({:?})", arg);
+        info!("Called get_object_info({:?})", container);
 
         let root = self.get_root(ctx).await?;
-        let file_path = Path::new(&root)
-            .join(&arg.container_id)
-            .join(&arg.object_id);
+        let file_subpath = Path::new(&container.container_id).join(&container.object_id);
+        let file_path = self.resolve_subpath(&root, &file_subpath).await?;
 
-        let metadata = metadata(file_path)?;
+        let metadata = metadata(file_path).await?;
 
         let modified = match metadata.modified()?.duration_since(SystemTime::UNIX_EPOCH) {
             Ok(s) => Timestamp {
@@ -416,12 +462,12 @@ impl Blobstore for FsProvider {
         };
 
         Ok(ObjectMetadata {
-            container_id: arg.container_id.clone(),
+            container_id: container.container_id.clone(),
             content_encoding: None,
             content_length: metadata.len() as u64,
             content_type: None,
             last_modified: Some(modified),
-            object_id: arg.object_id.clone(),
+            object_id: container.object_id.clone(),
         })
     }
 
@@ -440,17 +486,17 @@ impl Blobstore for FsProvider {
     async fn list_objects(
         &self,
         ctx: &Context,
-        arg: &ListObjectsRequest,
+        req: &ListObjectsRequest,
     ) -> RpcResult<ListObjectsResponse> {
-        info!("Called list_objects({:?})", arg);
+        info!("Called list_objects({:?})", req);
 
         let root = self.get_root(ctx).await?;
-        let cdir = Path::new(&root).join(&arg.container_id);
+        let chunk_dir = self.resolve_subpath(&root, &req.container_id).await?;
 
         let mut objects = Vec::new();
 
-        for entry in read_dir(&cdir)? {
-            let entry = entry?;
+        let mut entries = read_dir(&chunk_dir).await?;
+        while let Ok(Some(entry)) = entries.next_entry().await {
             let path = entry.path();
 
             if !path.is_dir() {
@@ -464,7 +510,8 @@ impl Blobstore for FsProvider {
                 };
 
                 let modified = match entry
-                    .metadata()?
+                    .metadata()
+                    .await?
                     .modified()?
                     .duration_since(SystemTime::UNIX_EPOCH)
                 {
@@ -476,9 +523,9 @@ impl Blobstore for FsProvider {
                 };
 
                 objects.push(ObjectMetadata {
-                    container_id: arg.container_id.clone(),
+                    container_id: req.container_id.clone(),
                     content_encoding: None,
-                    content_length: entry.metadata()?.len(),
+                    content_length: entry.metadata().await?.len(),
                     content_type: None,
                     last_modified: Some(modified),
                     object_id: file_name,
@@ -509,11 +556,13 @@ impl Blobstore for FsProvider {
         let mut errors = Vec::new();
 
         for object in &arg.objects {
-            let opath = Path::join(&Path::join(&root, &arg.container_id), &object);
-            if let Err(e) = remove_file(opath.as_path()) {
+            let object_subpath = Path::new(&arg.container_id).join(&object);
+            let object_path = self.resolve_subpath(&root, object_subpath).await?;
+
+            if let Err(e) = remove_file(object_path.as_path()).await {
                 errors.push(ItemResult {
                     error: Some(format!("{:?}", e)),
-                    key: format!("{:?}", opath),
+                    key: format!("{:?}", object_path),
                     success: false,
                 })
             }
@@ -565,24 +614,21 @@ impl Blobstore for FsProvider {
     async fn put_chunk(&self, ctx: &Context, arg: &PutChunkRequest) -> RpcResult<()> {
         info!("Called put_chunk: {:?}", arg);
 
-        if arg.cancel_and_remove {
-            // ancel upload and remove file
-
-            let root = &self.get_root(ctx).await?;
-            let cdir = Path::new(root).join(&arg.chunk.container_id);
-            let file_path = Path::join(&cdir, &arg.chunk.object_id);
-
-            remove_file(file_path.as_path()).map_err(|e| {
-                RpcError::InvalidParameter(format!(
-                    "Could not cancel and remove file: {:?}",
-                    file_path
-                ))
-            })
-        } else {
-            // happy path
+        // In the simplest case we can simply store the chunk (happy path)
+        if !arg.cancel_and_remove {
             self.store_chunk(ctx, &arg.chunk, &arg.stream_id).await?;
-            Ok(())
+            return Ok(());
         }
+
+        // Determine the path to the file
+        let root = &self.get_root(ctx).await?;
+        let file_subpath = Path::new(&arg.chunk.container_id).join(&arg.chunk.object_id);
+        let file_path = self.resolve_subpath(&root, &file_subpath).await?;
+
+        // Remove the file
+        remove_file(file_path.as_path()).await.map_err(|e| {
+            RpcError::InvalidParameter(format!("Could not cancel and remove file: {:?}", file_path))
+        })
     }
 
     /// Requests to retrieve an object. If the object is large, the provider
@@ -592,22 +638,24 @@ impl Blobstore for FsProvider {
     async fn get_object(
         &self,
         ctx: &Context,
-        arg: &GetObjectRequest,
+        req: &GetObjectRequest,
     ) -> RpcResult<GetObjectResponse> {
-        info!("Called get_object: {:?}", arg);
+        info!("Called get_object: {:?}", req);
 
+        // Determine path to object file
         let root = &self.get_root(ctx).await?;
-        let cdir = Path::new(root).join(&arg.container_id);
-        let file_path = Path::join(&cdir, &arg.object_id);
+        let object_subpath = Path::new(&req.container_id).join(&req.object_id);
+        let file_path = self.resolve_subpath(root, &object_subpath).await?;
 
-        let file = read(file_path)?;
+        // Read the file in
+        let file = read(file_path).await?;
 
-        let start_offset = match arg.range_start {
+        let start_offset = match req.range_start {
             Some(o) => o as usize,
             None => 0,
         };
 
-        let end_offset = match arg.range_end {
+        let end_offset = match req.range_end {
             Some(o) => std::cmp::min(o as usize + 1, file.len()),
             None => file.len(),
         };
@@ -624,8 +672,8 @@ impl Blobstore for FsProvider {
         );
 
         let chunk = Chunk {
-            object_id: arg.object_id.clone(),
-            container_id: arg.container_id.clone(),
+            object_id: req.object_id.clone(),
+            container_id: req.container_id.clone(),
             bytes: slice.to_vec(),
             offset: start_offset as u64,
             is_last: end_offset >= file.len(),
@@ -643,5 +691,35 @@ impl Blobstore for FsProvider {
 
     fn contract_id() -> &'static str {
         "wasmcloud:blobstore"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FsProvider;
+    use std::io::ErrorKind as IoErrorKind;
+    use std::path::PathBuf;
+
+    /// Ensure that only safe subpaths are resolved
+    #[tokio::test]
+    async fn resolve_safe_samepath() {
+        let provider = FsProvider::default();
+        assert!(matches!(
+            provider
+                .resolve_subpath(&PathBuf::from("./"), "./././")
+                .await,
+            Ok(_)
+        ));
+    }
+
+    /// Ensure that ancestor paths are not allowed to be resolved as subpaths
+    #[tokio::test]
+    async fn resolve_fail_ancestor() {
+        let provider = FsProvider::default();
+        let res = provider
+            .resolve_subpath(&PathBuf::from("./"), "../")
+            .await
+            .unwrap_err();
+        assert_eq!(res.kind(), IoErrorKind::PermissionDenied);
     }
 }
