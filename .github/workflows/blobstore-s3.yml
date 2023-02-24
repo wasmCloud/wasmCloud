@@ -105,7 +105,7 @@ jobs:
       - name: Build native executable
         run: |
           chmod +x ~/.cargo/bin/cross
-          cross build --release --target ${{ matrix.target }}
+          XDG_CACHE_HOME=${HOME}/.cache cross build --release --target ${{ matrix.target }}
         working-directory: ${{ env.working-directory }}
 
       - name: Upload executable to GH Actions
