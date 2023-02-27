@@ -23,7 +23,7 @@ jobs:
           login-server: ${{ secrets.AZURECR_PUSH_URL }}
           username: ${{ secrets.AZURECR_PUSH_USER }}
           password: ${{ secrets.AZURECR_PUSH_PASSWORD }}
-      - uses: docker/login-action@v1
+      - uses: docker/login-action@v2
         if: github.repository == 'wasmCloud/wash'
         with:
           username: ${{ secrets.DOCKERHUB_PUSH_USER }}
