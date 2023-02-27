@@ -30,7 +30,7 @@ jobs:
           password: ${{ secrets.DOCKERHUB_PUSH_PASSWORD }}
       - name: Docker metadata
         id: meta
-        uses: docker/metadata-action@v3
+        uses: docker/metadata-action@v4
         with:
           images: |
             wasmcloud/wash
