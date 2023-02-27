@@ -158,10 +158,10 @@ where
     // Look for nats-server binary and only extract that
     let mut entries = nats_server.entries()?;
     while let Some(res) = entries.next().await {
-        let mut entry = res.map_err(|_e| {
+        let mut entry = res.map_err(|e| {
             anyhow!(
-                "Failed to retrieve file from archive, ensure NATS server {} exists",
-                version
+                "Failed to retrieve file from archive, ensure NATS server {} exists. Original error: {}",
+                version, e
             )
         })?;
         if let Ok(tar_path) = entry.path() {

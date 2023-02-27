@@ -4,7 +4,7 @@ use std::{
 };
 
 use anyhow::{anyhow, Result};
-use common::{output_to_string, test_dir_with_subfolder, wash};
+use common::{test_dir_with_subfolder, wash};
 use serial_test::serial;
 use sysinfo::{ProcessExt, SystemExt};
 use tokio::process::Child;
