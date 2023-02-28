@@ -46,7 +46,7 @@ jobs:
     steps:
       # We need to put windows on the release so that chocolatey can download it
       - name: Download windows release
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           path: release
       - name: Release
