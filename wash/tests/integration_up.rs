@@ -1,14 +1,16 @@
-mod common;
-use anyhow::{anyhow, Result};
-use common::{output_to_string, test_dir_with_subfolder, wash};
-use serial_test::serial;
 use std::{
     fs::{read_to_string, remove_dir_all},
     path::PathBuf,
 };
+
+use anyhow::{anyhow, Result};
+use common::{test_dir_with_subfolder, wash};
+use serial_test::serial;
 use sysinfo::{ProcessExt, SystemExt};
 use tokio::process::Child;
 use wash_lib::start::{ensure_nats_server, start_nats_server, NatsConfig};
+
+mod common;
 
 #[test]
 #[serial]
@@ -52,13 +54,18 @@ fn integration_up_can_start_wasmcloud_and_actor() {
             "wasmcloud.azurecr.io/echo:0.3.4",
             "--ctl-port",
             "5893",
+            "--timeout-ms",
+            "10000", // Wait up to 10 seconds for slowpoke systems
         ])
         .output()
         .expect("could not start echo actor on new host");
 
-    assert!(output_to_string(start_echo)
-        .expect("could not retrieve output from echo start")
-        .contains("Actor wasmcloud.azurecr.io/echo:0.3.4 started on host N"));
+    let stdout = String::from_utf8_lossy(&start_echo.stdout);
+    assert!(
+        stdout.contains("Actor wasmcloud.azurecr.io/echo:0.3.4 started on host N"),
+        "Did not find the correct output when starting actor.\n stdout: {stdout}\nstderr: {}",
+        String::from_utf8_lossy(&start_echo.stderr)
+    );
 
     let kill_cmd = kill_cmd.to_string();
     let (_wash, down) = kill_cmd.trim_matches('"').split_once(' ').unwrap();
