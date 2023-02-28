@@ -1,59 +1,144 @@
-use anyhow::{anyhow, Result};
-use cmd_lib::run_cmd;
+use anyhow::Result;
 
 mod common;
-use scopeguard::defer;
+use common::wash;
 use serial_test::serial;
-use std::{
-    env::temp_dir,
-    fs::{create_dir_all, remove_dir_all},
-    path::PathBuf,
-};
+use std::path::PathBuf;
+use tempfile::TempDir;
 
 #[test]
 #[serial]
 fn build_rust_actor_unsigned() -> Result<()> {
-    build_new_project("actor/hello", "hello", "build/hello.wasm", false)
+    let test_setup = init(
+        /* actor_name= */ "hello", /* template_name= */ "hello",
+    )?;
+    let project_dir = test_setup.project_dir;
+
+    let status = wash()
+        .args(["build", "--build-only"])
+        .status()
+        .expect("Failed to build project");
+
+    assert!(status.success());
+    let unsigned_file = project_dir.join("build/hello.wasm");
+    assert!(unsigned_file.exists(), "unsigned file not found!");
+    let signed_file = project_dir.join("build/hello_s.wasm");
+    assert!(
+        !signed_file.exists(),
+        "signed file should not exist when using --build-only!"
+    );
+    Ok(())
 }
 
 #[test]
 #[serial]
 fn build_rust_actor_signed() -> Result<()> {
-    build_new_project("actor/hello", "hello", "build/hello_s.wasm", true)
+    let test_setup = init(
+        /* actor_name= */ "hello", /* template_name= */ "hello",
+    )?;
+    let project_dir = test_setup.project_dir;
+
+    let status = wash()
+        .args(["build"])
+        .status()
+        .expect("Failed to build project");
+
+    assert!(status.success());
+    let unsigned_file = project_dir.join("build/hello.wasm");
+    assert!(unsigned_file.exists(), "unsigned file not found!");
+    let signed_file = project_dir.join("build/hello_s.wasm");
+    assert!(signed_file.exists(), "signed file not found!");
+    Ok(())
 }
 
 #[test]
 #[serial]
-fn build_tinygo_actor() -> Result<()> {
-    build_new_project("actor/echo-tinygo", "echo", "build/echo_s.wasm", true)
+fn build_tinygo_actor_unsigned() -> Result<()> {
+    let test_setup = init(
+        /* actor_name= */ "echo",
+        /* template_name= */ "echo-tinygo",
+    )?;
+    let project_dir = test_setup.project_dir;
+
+    let status = wash()
+        .args(["build", "--build-only"])
+        .status()
+        .expect("Failed to build project");
+
+    assert!(status.success());
+    let unsigned_file = project_dir.join("build/echo.wasm");
+    assert!(unsigned_file.exists(), "unsigned file not found!");
+    let signed_file = project_dir.join("build/echo_s.wasm");
+    assert!(
+        !signed_file.exists(),
+        "signed file should not exist when using --build-only!"
+    );
+    Ok(())
 }
 
-fn build_new_project(template: &str, subdir: &str, build_result: &str, signed: bool) -> Result<()> {
-    let test_dir = temp_dir().join(template.replace('/', "_"));
-    if test_dir.exists() {
-        remove_dir_all(&test_dir)?;
-    }
-    create_dir_all(&test_dir)?;
-    defer! {
-        remove_dir_all(&test_dir).unwrap();
-    }
+#[test]
+#[serial]
+fn build_tinygo_actor_signed() -> Result<()> {
+    let test_setup = init(
+        /* actor_name= */ "echo",
+        /* template_name= */ "echo-tinygo",
+    )?;
+    let project_dir = test_setup.project_dir;
 
-    std::env::set_current_dir(&test_dir)?;
-    let wash = env!("CARGO_BIN_EXE_wash");
-    run_cmd!(
-        $wash new actor $subdir --git wasmcloud/project-templates --subfolder $template --silent --no-git-init
-    ).map_err(|e| anyhow!("wash new actor failed: {}", e))?;
+    let status = wash()
+        .args(["build"])
+        .status()
+        .expect("Failed to build project");
 
-    std::env::set_current_dir(test_dir.join(subdir))?;
-    if signed {
-        run_cmd!( $wash build )
-    } else {
-        run_cmd!( $wash build --build-only )
-    }
-    .map_err(|e| anyhow!("wash build failed: {}", e))?;
-
-    let build_result = PathBuf::from(build_result);
-    assert!(build_result.exists(), "build result missing");
-
+    assert!(status.success());
+    let unsigned_file = project_dir.join("build/echo.wasm");
+    assert!(unsigned_file.exists(), "unsigned file not found!");
+    let signed_file = project_dir.join("build/echo_s.wasm");
+    assert!(signed_file.exists(), "signed file not found!");
     Ok(())
+}
+
+struct TestSetup {
+    /// The path to the directory for the test.
+    /// Added here so that the directory is not deleted until the end of the test.
+    #[allow(dead_code)]
+    test_dir: TempDir,
+    /// The path to the created actor's directory.
+    project_dir: PathBuf,
+}
+
+/// Inits an actor build test by setting up a test directory and creating an actor from a template.
+/// Returns the paths of the test directory and actor directory.
+fn init(actor_name: &str, template_name: &str) -> Result<TestSetup> {
+    let test_dir = TempDir::new()?;
+    std::env::set_current_dir(&test_dir)?;
+    let project_dir = init_actor_from_template(actor_name, template_name)?;
+    std::env::set_current_dir(&project_dir)?;
+    Ok(TestSetup {
+        test_dir,
+        project_dir,
+    })
+}
+
+/// Initializes a new actor from a wasmCloud template, and sets the environment to use the created actor's directory.
+fn init_actor_from_template(actor_name: &str, template_name: &str) -> Result<PathBuf> {
+    let status = wash()
+        .args([
+            "new",
+            "actor",
+            actor_name,
+            "--git",
+            "wasmcloud/project-templates",
+            "--subfolder",
+            &format!("actor/{template_name}"),
+            "--silent",
+            "--no-git-init",
+        ])
+        .status()
+        .expect("Failed to generate project");
+
+    assert!(status.success());
+
+    let project_dir = std::env::current_dir()?.join(actor_name);
+    Ok(project_dir)
 }
