@@ -30,9 +30,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // returns when provider receives a shutdown control message
     let host_data = load_host_data()?;
     let provider = generate_provider(host_data);
-    provider_main(provider, Some("Nats Messaging Provider".to_string()))?;
+    provider_main(provider, Some("NATS Messaging Provider".to_string()))?;
 
-    eprintln!("Nats-messaging provider exiting");
+    eprintln!("NATS messaging provider exiting");
     Ok(())
 }
 
@@ -209,9 +209,10 @@ impl NatsMessagingProvider {
         let url = cfg.cluster_uris.get(0).unwrap();
 
         let client = opts
+            .name("NATS Messaging Provider") // allow this to show up uniquely in a NATS connection list
             .connect(url)
             .await
-            .map_err(|e| RpcError::ProviderInit(format!("Nats connection to {}: {}", url, e)))?;
+            .map_err(|e| RpcError::ProviderInit(format!("NATS connection to {}: {}", url, e)))?;
 
         // Connections
         let mut sub_handles = Vec::new();
@@ -386,15 +387,21 @@ impl Messaging for NatsMessagingProvider {
         let headers = OtelHeaderInjector::default_with_span().into();
 
         match msg.reply_to.clone() {
-            Some(reply_to) => nats_client
-                .publish_with_reply_and_headers(
-                    msg.subject.to_string(),
-                    reply_to,
-                    headers,
-                    msg.body.clone().into(),
-                )
-                .await
-                .map_err(|e| RpcError::Nats(e.to_string())),
+            Some(reply_to) => if should_strip_headers(&msg.subject) {
+                nats_client
+                    .publish_with_reply(msg.subject.to_string(), reply_to, msg.body.clone().into())
+                    .await
+            } else {
+                nats_client
+                    .publish_with_reply_and_headers(
+                        msg.subject.to_string(),
+                        reply_to,
+                        headers,
+                        msg.body.clone().into(),
+                    )
+                    .await
+            }
+            .map_err(|e| RpcError::Nats(e.to_string())),
             None => nats_client
                 .publish_with_headers(msg.subject.to_string(), headers, msg.body.clone().into())
                 .await
@@ -422,15 +429,23 @@ impl Messaging for NatsMessagingProvider {
         let headers = OtelHeaderInjector::default_with_span().into();
 
         // Perform the request with a timeout
-        let request_with_timeout = tokio::time::timeout(
-            Duration::from_millis(msg.timeout_ms as u64),
-            nats_client.request_with_headers(
-                msg.subject.to_string(),
-                headers,
-                msg.body.clone().into(),
-            ),
-        )
-        .await;
+        let request_with_timeout = if should_strip_headers(&msg.subject) {
+            tokio::time::timeout(
+                Duration::from_millis(msg.timeout_ms as u64),
+                nats_client.request(msg.subject.to_string(), msg.body.clone().into()),
+            )
+            .await
+        } else {
+            tokio::time::timeout(
+                Duration::from_millis(msg.timeout_ms as u64),
+                nats_client.request_with_headers(
+                    msg.subject.to_string(),
+                    headers,
+                    msg.body.clone().into(),
+                ),
+            )
+            .await
+        };
 
         // Process results of request
         match request_with_timeout {
@@ -443,6 +458,12 @@ impl Messaging for NatsMessagingProvider {
             }),
         }
     }
+}
+
+// In the current version of the NATS server, using headers on certain $SYS.REQ topics will cause server-side
+// parse failures
+fn should_strip_headers(topic: &str) -> bool {
+    topic.starts_with("$SYS")
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-provider-nats"
-version = "0.16.1"
+version = "0.16.2"
 edition = "2021"
 
 [dependencies]
