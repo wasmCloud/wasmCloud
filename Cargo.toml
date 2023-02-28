@@ -57,7 +57,6 @@ wasmbus-rpc = { workspace = true }
 wasmcloud-test-util = { workspace = true }
 
 [dev-dependencies]
-cmd_lib = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls-tls"] }
 tempfile = { workspace = true }
 test-case = { workspace = true }
@@ -88,7 +87,6 @@ cargo_toml = "0.13.0"
 claims = "0.7.1"
 clap = "4"
 cloudevents-sdk = "0.6.0"
-cmd_lib = "1.3.0"
 command-group = "1.0.8"
 config = "0.13.1"
 console = "0.15"
