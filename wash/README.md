@@ -56,7 +56,7 @@ brew install wasmcloud wash
 choco install wash
 ```
 
-### NixOS
+### Nix
 
 ```
 nix run github:wasmCloud/wash

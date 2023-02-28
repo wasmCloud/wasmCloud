@@ -19,7 +19,6 @@ docker-compose.yml
 *.par
 *.par.gz
 *.gz
-flake.lock
 .vscode
 
 # Host config files
