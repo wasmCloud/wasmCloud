@@ -14,15 +14,33 @@
 
         buildOverrides = {
           pkgs,
+          buildInputs ? [],
           nativeBuildInputs ? [],
+          depsBuildBuild ? [],
           ...
-        }: {
-          nativeBuildInputs =
-            nativeBuildInputs
-            ++ [
-              pkgs.protobuf # build dependency of prost-build v0.9.0
-            ];
-        };
+        } @ args:
+          with pkgs.lib;
+          with (args.pkgsCross or pkgs); {
+            buildInputs =
+              buildInputs
+              ++ optionals stdenv.hostPlatform.isDarwin [
+                pkgs.darwin.apple_sdk.frameworks.Security
+                pkgs.libiconv
+              ];
+
+            depsBuildBuild =
+              depsBuildBuild
+              ++ optionals stdenv.hostPlatform.isDarwin [
+                darwin.apple_sdk.frameworks.CoreFoundation
+                libiconv
+              ];
+
+            nativeBuildInputs =
+              nativeBuildInputs
+              ++ [
+                pkgs.protobuf # build dependency of prost-build v0.9.0
+              ];
+          };
 
         withDevShells = {
           pkgs,
