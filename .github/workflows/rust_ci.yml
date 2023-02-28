@@ -14,7 +14,7 @@ jobs:
     name: Fmt & Clippy Checks
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - name: Run Rust check + clippy
         run: make rust-check
   unit_tests:
@@ -25,14 +25,14 @@ jobs:
         os: [ubuntu-22.04, windows-2022, macos-11]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - name: Run unit tests
         run: make test
   integration_tests:
     name: Integration Tests
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - name: Setup tinygo
         run: |
           wget https://github.com/tinygo-org/tinygo/releases/download/v0.23.0/tinygo_0.23.0_amd64.deb
