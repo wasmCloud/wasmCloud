@@ -23,7 +23,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use async_nats::jetstream::{
+use crate::async_nats::jetstream::{
     self,
     object_store::{Config, ObjectStore},
     Context,
@@ -73,7 +73,7 @@ impl ChunkEndpoint {
 
     pub(crate) fn with_client(
         lattice: String,
-        nc: async_nats::Client,
+        nc: crate::async_nats::Client,
         domain: Option<String>,
     ) -> Self {
         let map = jetstream_map();

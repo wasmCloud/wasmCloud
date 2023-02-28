@@ -7,6 +7,7 @@ use test_log::test;
 use tracing::{debug, error, info};
 use wascap::prelude::KeyPair;
 use wasmbus_rpc::{
+    async_nats::{ConnectOptions, ServerAddr},
     error::{RpcError, RpcResult},
     rpc_client::{with_connection_event_logging, RpcClient},
 };
@@ -28,8 +29,8 @@ fn is_demo() -> bool {
 /// Parameter is optional RPC timeout
 async fn make_client(timeout: Option<Duration>) -> RpcResult<RpcClient> {
     let nats_url = nats_url();
-    let server_addr = async_nats::ServerAddr::from_str(&nats_url).unwrap();
-    let nc = with_connection_event_logging(async_nats::ConnectOptions::default())
+    let server_addr = ServerAddr::from_str(&nats_url).unwrap();
+    let nc = with_connection_event_logging(ConnectOptions::default())
         .connect(server_addr)
         .await
         .map_err(|e| {

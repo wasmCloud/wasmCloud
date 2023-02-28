@@ -1,6 +1,6 @@
 [package]
 name = "wasmbus-rpc"
-version = "0.11.2"
+version = "0.12.0"
 authors = [ "wasmcloud Team" ]
 license = "Apache-2.0"
 description = "Runtime library for actors and capability providers"
@@ -46,7 +46,7 @@ num-bigint = { version = "0.4", optional = true }
 bigdecimal = { version = "0.3", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-async-nats = "0.23.0"
+async-nats = "0.27.1"
 atty = "0.2"
 data-encoding = "2.3"
 futures = "0.3"
@@ -70,4 +70,4 @@ clap = { version = "4.0.22", features = ["derive"] }
 test-log = { version = "0.2.10", default-features = false, features = ["trace"] }
 
 [build-dependencies]
-weld-codegen = { version = "0.6.0", path = "../codegen" }
+weld-codegen = { version = "0.7.0", path = "../codegen" }

@@ -159,7 +159,7 @@ impl<'model> CodeGen for RustCodeGen<'model> {
         &mut self,
         model: Option<&Model>,
         _lc: &LanguageConfig,
-        _output_dir: &Path,
+        _output_dir: Option<&Path>,
         _renderer: &mut Renderer,
     ) -> std::result::Result<(), Error> {
         self.namespace = None;
@@ -1212,7 +1212,7 @@ impl<'model> RustCodeGen<'model> {
         writeln!(
             w,
             r#"/// client for sending {} messages
-              #[derive(Debug)]
+              #[derive(Clone, Debug)]
               pub struct {}Sender<T:Transport>  {{ transport: T }}
 
               impl<T:Transport> {}Sender<T> {{

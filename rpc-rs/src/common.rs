@@ -55,7 +55,7 @@ impl SendOpts {
 /// Transport determines how messages are sent
 /// Alternate implementations could be mock-server, or test-fuzz-server / test-fuzz-client
 #[async_trait]
-pub trait Transport: Send {
+pub trait Transport: Send + Sync + Clone {
     async fn send(
         &self,
         ctx: &Context,
@@ -221,7 +221,7 @@ impl<T: Transport> AnySender<T> {
     }
 }
 
-impl<T: Transport + Sync + Send> AnySender<T> {
+impl<T: Transport> AnySender<T> {
     /// Send encoded payload
     #[inline]
     async fn send_raw<'s, 'ctx, 'msg>(

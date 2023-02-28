@@ -4,7 +4,7 @@
 #    If you're on mac, `brew install make`
 #    and ensure `/usr/local/opt/make/libexec/gnubin` is in your PATH before /usr/bin
 
-subdirs = codegen macros rpc-rs
+subdirs = codegen macros smithy-bindgen rpc-rs
 
 all build release clean test update lint validate rust-check::
 	for dir in $(subdirs); do \

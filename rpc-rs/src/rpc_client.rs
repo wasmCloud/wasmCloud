@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-use async_nats::HeaderMap;
+use crate::async_nats::{Client, ConnectOptions, HeaderMap};
 use futures::Future;
 #[cfg(feature = "prometheus")]
 use prometheus::{IntCounter, Opts};
@@ -47,7 +47,7 @@ pub(crate) const CHUNK_RPC_EXTRA_TIME: Duration = Duration::from_secs(13);
 ///
 #[derive(Clone)]
 pub struct RpcClient {
-    client: async_nats::Client,
+    client: Client,
     key: Arc<wascap::prelude::KeyPair>,
     /// host id (public key) for invocations
     host_id: String,
@@ -119,7 +119,7 @@ impl RpcClient {
     /// parameters: async nats client, rpc timeout
     /// secret key for signing messages, host_id, and optional timeout.
     pub fn new(
-        nats: async_nats::Client,
+        nats: Client,
         host_id: String,
         timeout: Option<Duration>,
         key_pair: Arc<wascap::prelude::KeyPair>,
@@ -131,7 +131,7 @@ impl RpcClient {
     /// parameters: nats client, lattice rpc prefix (usually "default"),
     /// secret key for signing messages, host_id, and optional timeout.
     pub(crate) fn new_client(
-        nats: async_nats::Client,
+        nats: Client,
         host_id: String,
         timeout: Option<Duration>,
         key_pair: Arc<wascap::prelude::KeyPair>,
@@ -147,7 +147,7 @@ impl RpcClient {
     }
 
     /// convenience method for returning async client
-    pub fn client(&self) -> async_nats::Client {
+    pub fn client(&self) -> Client {
         self.client.clone()
     }
 
@@ -617,10 +617,8 @@ impl RpcClient {
 }
 
 /// helper method to add logging to a nats connection. Logs disconnection (warn level), reconnection (info level), error (error), slow consumer, and lame duck(warn) events.
-pub fn with_connection_event_logging(
-    opts: async_nats::ConnectOptions,
-) -> async_nats::ConnectOptions {
-    use async_nats::Event;
+pub fn with_connection_event_logging(opts: ConnectOptions) -> ConnectOptions {
+    use crate::async_nats::Event;
     opts.event_callback(|event| async move {
         match event {
             Event::Disconnected => warn!("nats client disconnected"),

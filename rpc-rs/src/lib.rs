@@ -11,6 +11,13 @@ pub use timestamp::Timestamp;
 #[cfg(not(target_arch = "wasm32"))]
 pub use wascap;
 
+// re-export async-nats. work-around for
+// https://github.com/rust-lang/rust/issues/44663 and https://rust-lang.github.io/rfcs/1977-public-private-dependencies.html
+// longer term: if public-private is not implemented,
+// split out rpc-client to separate lib, and make interfaces build locally (as wit-bindgen does)
+#[cfg(not(target_arch = "wasm32"))]
+pub use async_nats;
+
 #[cfg(all(not(target_arch = "wasm32"), feature = "otel"))]
 #[macro_use]
 pub mod otel;
@@ -74,19 +81,19 @@ pub mod core {
                 }
 
                 /// Connect to nats using options provided by host
-                pub async fn nats_connect(&self) -> RpcResult<async_nats::Client> {
+                pub async fn nats_connect(&self) -> RpcResult<crate::async_nats::Client> {
                     use std::str::FromStr as _;
                     let nats_addr = if !self.lattice_rpc_url.is_empty() {
                         self.lattice_rpc_url.as_str()
                     } else {
                         crate::provider::DEFAULT_NATS_ADDR
                     };
-                    let nats_server = async_nats::ServerAddr::from_str(nats_addr).map_err(|e| {
-                        RpcError::InvalidParameter(format!("Invalid nats server url '{nats_addr}': {e}"))
+                    let nats_server = crate::async_nats::ServerAddr::from_str(nats_addr).map_err(|e| {
+                        RpcError::InvalidParameter(format!("Invalid nats server url '{}': {}", nats_addr, e))
                     })?;
 
                     // Connect to nats
-                    let nc = async_nats::ConnectOptions::default()
+                    let nc = crate::async_nats::ConnectOptions::default()
                         .connect(nats_server)
                         .await
                         .map_err(|e| {

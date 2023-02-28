@@ -87,13 +87,6 @@ impl<'model> Generator {
         for (name, template) in COMMON_TEMPLATES.iter() {
             renderer.add_template((name, template))?;
         }
-        std::fs::create_dir_all(&output_dir).map_err(|e| {
-            Error::Io(format!(
-                "creating directory {}: {}",
-                &output_dir.display(),
-                e
-            ))
-        })?;
 
         for (language, mut lc) in config.languages.into_iter() {
             if !config.output_languages.is_empty() && !config.output_languages.contains(&language) {
@@ -117,27 +110,26 @@ impl<'model> Generator {
             }
             // if language output_dir is relative, append it, otherwise use it
             let output_dir = if lc.output_dir.is_absolute() {
-                std::fs::create_dir_all(&lc.output_dir).map_err(|e| {
-                    Error::Io(format!(
-                        "creating directory {}: {}",
-                        &lc.output_dir.display(),
-                        e
-                    ))
-                })?;
                 lc.output_dir.clone()
             } else {
                 output_dir.join(&lc.output_dir)
             };
+            std::fs::create_dir_all(&output_dir).map_err(|e| {
+                Error::Io(format!(
+                    "creating directory {}: {}",
+                    output_dir.display(),
+                    e
+                ))
+            })?;
             // add command-line overrides
             for (k, v) in defines.iter() {
                 lc.parameters.insert(k.to_string(), v.clone());
             }
             let base_params: BTreeMap<String, JsonValue> = to_json(&lc.parameters)?;
-
             let mut cgen = gen_for_language(&language, model);
 
             // initialize generator
-            cgen.init(model, &lc, &output_dir, &mut renderer)?;
+            cgen.init(model, &lc, Some(&output_dir), &mut renderer)?;
 
             // A common param dictionary is shared (read-only) by the renderer and the code generator,
             // Parameters include the following:
@@ -200,7 +192,8 @@ impl<'model> Generator {
                         ))
                     })?;
                 } else if let Some(model) = model {
-                    let bytes = cgen.generate_file(model, file_config, &params)?;
+                    let mut w: Writer = Writer::default();
+                    let bytes = cgen.generate_file(&mut w, model, file_config, &params)?;
                     std::fs::write(&out_path, &bytes).map_err(|e| {
                         Error::Io(format!("writing output file {}: {}", out_path.display(), e))
                     })?;
@@ -243,7 +236,7 @@ fn gen_for_language<'model>(
 /// - write_services()
 /// - finalize()
 ///
-pub(crate) trait CodeGen {
+pub trait CodeGen {
     /// Initialize code generator and renderer for language output.j
     /// This hook is called before any code is generated and can be used to initialize code generator
     /// and/or perform additional processing before output files are created.
@@ -252,7 +245,7 @@ pub(crate) trait CodeGen {
         &mut self,
         model: Option<&Model>,
         lc: &LanguageConfig,
-        output_dir: &Path,
+        output_dir: Option<&Path>,
         renderer: &mut Renderer,
     ) -> std::result::Result<(), Error> {
         Ok(())
@@ -263,17 +256,16 @@ pub(crate) trait CodeGen {
     /// The return value is Bytes containing the data that should be written to the output file.
     fn generate_file(
         &mut self,
+        w: &mut Writer,
         model: &Model,
         file_config: &OutputFile,
         params: &ParamMap,
     ) -> Result<Bytes> {
-        let mut w: Writer = Writer::default();
-
-        self.init_file(&mut w, model, file_config, params)?;
-        self.write_source_file_header(&mut w, model, params)?;
-        self.declare_types(&mut w, model, params)?;
-        self.write_services(&mut w, model, params)?;
-        self.finalize(&mut w)
+        self.init_file(w, model, file_config, params)?;
+        self.write_source_file_header(w, model, params)?;
+        self.declare_types(w, model, params)?;
+        self.write_services(w, model, params)?;
+        self.finalize(w)
     }
 
     /// Perform any initialization required prior to code generation for a file

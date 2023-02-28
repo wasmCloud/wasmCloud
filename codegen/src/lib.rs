@@ -34,6 +34,13 @@ pub(crate) mod wasmbus_model {
     include!("./wasmbus_model.rs");
 }
 
+// enable other tools to invoke codegen directly. Add other languages as needed
+pub mod generators {
+    pub use crate::codegen_go::GoCodeGen;
+    pub use crate::codegen_rust::RustCodeGen;
+    pub use crate::gen::CodeGen;
+}
+
 // re-export
 pub use bytes::Bytes;
 pub(crate) use bytes::BytesMut;

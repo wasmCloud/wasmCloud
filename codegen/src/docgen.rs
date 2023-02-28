@@ -12,6 +12,7 @@ use crate::{
     format::SourceFormatter,
     gen::{to_json, CodeGen},
     render::Renderer,
+    writer::Writer,
     Bytes, Error, JsonValue, ParamMap,
 };
 
@@ -42,9 +43,13 @@ impl CodeGen for DocGen {
         &mut self,
         model: Option<&Model>,
         lc: &LanguageConfig,
-        output_dir: &Path,
+        output_dir: Option<&Path>,
         renderer: &mut Renderer,
     ) -> std::result::Result<(), Error> {
+        let output_dir = match output_dir {
+            None => return Ok(()),
+            Some(d) => d,
+        };
         let model = match model {
             None => return Ok(()),
             Some(model) => model,
@@ -75,18 +80,9 @@ impl CodeGen for DocGen {
             .map(|id| id.to_string())
             .collect::<BTreeSet<String>>();
 
-        std::fs::create_dir_all(output_dir).map_err(|e| {
-            Error::Io(format!(
-                "creating directory {}: {}",
-                output_dir.display(),
-                e
-            ))
-        })?;
-
         for ns in namespaces.iter() {
             let output_file =
                 output_dir.join(format!("{}.html", crate::strings::to_snake_case(ns)));
-
             let mut out = std::fs::File::create(&output_file).map_err(|e| {
                 Error::Io(format!(
                     "writing output file {}: {}",
@@ -105,6 +101,7 @@ impl CodeGen for DocGen {
     /// DocGen doesn't do per-file generation so this is a no-op
     fn generate_file(
         &mut self,
+        _w: &mut Writer,
         _model: &Model,
         _file_config: &OutputFile,
         _params: &ParamMap,

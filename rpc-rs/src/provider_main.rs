@@ -1,5 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 
+use crate::async_nats::{AuthError, ConnectOptions};
 use std::io::{BufRead, StderrLock, Write};
 use std::str::FromStr;
 
@@ -156,13 +157,13 @@ where
             host_data.lattice_rpc_user_jwt.trim(),
             host_data.lattice_rpc_user_seed.trim(),
         ) {
-            ("", "") => async_nats::ConnectOptions::default(),
+            ("", "") => ConnectOptions::default(),
             (rpc_jwt, rpc_seed) => {
                 let key_pair = std::sync::Arc::new(nkeys::KeyPair::from_seed(rpc_seed).unwrap());
                 let jwt = rpc_jwt.to_owned();
-                async_nats::ConnectOptions::with_jwt(jwt, move |nonce| {
+                ConnectOptions::with_jwt(jwt, move |nonce| {
                     let key_pair = key_pair.clone();
-                    async move { key_pair.sign(&nonce).map_err(async_nats::AuthError::new) }
+                    async move { key_pair.sign(&nonce).map_err(AuthError::new) }
                 })
             }
         },

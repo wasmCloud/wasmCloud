@@ -2,7 +2,7 @@
 //! wasmbus-rpc calls. Please note that right now this is only supported for providers. This module
 //! is only available with the `otel` feature enabled
 
-use async_nats::header::HeaderMap;
+use crate::async_nats::header::HeaderMap;
 use opentelemetry::{
     propagation::{Extractor, Injector, TextMapPropagator},
     sdk::propagation::TraceContextPropagator,
@@ -27,7 +27,7 @@ impl<'a> OtelHeaderExtractor<'a> {
     }
 
     /// Creates a new extractor using the given message
-    pub fn new_from_message(msg: &'a async_nats::Message) -> Self {
+    pub fn new_from_message(msg: &'a crate::async_nats::Message) -> Self {
         let inner = msg.headers.as_ref().unwrap_or(&EMPTY_HEADERS);
         OtelHeaderExtractor { inner }
     }
@@ -115,7 +115,7 @@ impl From<OtelHeaderInjector> for HeaderMap {
 /// A convenience function that will extract the current context from NATS message headers and set
 /// the parent span for the current tracing Span. If you want to do something more advanced, use the
 /// [`OtelHeaderExtractor`] type directly
-pub fn attach_span_context(msg: &async_nats::Message) {
+pub fn attach_span_context(msg: &crate::async_nats::Message) {
     let header_map = OtelHeaderExtractor::new_from_message(msg);
     let ctx_propagator = TraceContextPropagator::new();
     let parent_ctx = ctx_propagator.extract(&header_map);

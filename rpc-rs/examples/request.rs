@@ -4,7 +4,7 @@ use nkeys::KeyPairType;
 use std::path::PathBuf;
 use std::sync::Arc;
 use wascap::prelude::KeyPair;
-use wasmbus_rpc::rpc_client::RpcClient;
+use wasmbus_rpc::{async_nats::connect, rpc_client::RpcClient};
 
 /// RpcClient test CLI for making nats request
 #[derive(Parser)]
@@ -54,7 +54,7 @@ async fn main() -> Result<()> {
     let timeout = args.timeout_ms.map(|n| std::time::Duration::from_millis(n as u64));
     let kp = Arc::new(KeyPair::new(KeyPairType::User));
     let nats_uri = args.nats.unwrap_or_else(|| "nats://127.0.0.1:4222".to_string());
-    let nc = async_nats::connect(&nats_uri).await?;
+    let nc = connect(&nats_uri).await?;
     let client = RpcClient::new(nc, "HOST".into(), timeout, kp);
 
     let resp = client.request(args.subject, data).await?;
