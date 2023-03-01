@@ -12,6 +12,8 @@
         name = "wash";
         src = ./.;
 
+        targets.wasm32-wasi = false; # `wash` does not compile for WASI
+
         buildOverrides = {
           pkgs,
           buildInputs ? [],
