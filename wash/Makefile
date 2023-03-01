@@ -14,6 +14,9 @@ clean: ## Clean all tests
 	cargo clean
 	wash drain all
 
+deps-check:
+	python3 tools/deps_check.py
+
 ##@ Building
 
 build: ## Build the project
