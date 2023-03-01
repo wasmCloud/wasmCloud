@@ -4,30 +4,30 @@ version = "0.17.0"
 edition = "2021"
 
 [dependencies]
-async-trait = "0.1.52"
-atty = "0.2"
-base64 = "0.13"
-bytes = "1.2"
-futures = "0.3"
-http = "0.2"
-opentelemetry = { version = "0.18.0", features = ["rt-tokio"] }
-serde_bytes = "0.11"
-serde_json = "1.0"
-serde = {version = "1.0", features = ["derive"] }
-thiserror = "1.0"
-tokio = { version = "1", features = ["full"] }
-toml = "0.5"
-tracing = "0.1.34"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-warp = { version="0.3", features=["tls"] }
-wasmcloud-interface-httpserver = "0.8.1"
-wasmbus-rpc = { version = "0.11.2", features = ["otel"] }
+async-trait = { workspace = true }
+atty = { workspace = true }
+base64 = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true }
+http = { workspace = true }
+opentelemetry = { workspace = true, features = ["rt-tokio"] }
+serde_bytes = { workspace = true }
+serde_json = { workspace = true }
+serde = {workspace = true, features = ["derive"] }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+toml = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+warp = { workspace = true, features=["tls"] }
+wasmcloud-interface-httpserver = { workspace = true }
+wasmbus-rpc = { workspace = true, features = ["otel"] }
 
 [dev-dependencies]
-assert_matches = "1.5"
-blake2 = "0.10.4"
-reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"]}
-wasmcloud-test-util = "0.6.4"
+assert_matches = { workspace = true }
+blake2 = { workspace = true }
+reqwest = { workspace = true, features = ["json", "rustls-tls"] }
+wasmcloud-test-util = { workspace = true }
 
 [lib]
 name = "wasmcloud_provider_httpserver"

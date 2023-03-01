@@ -67,6 +67,15 @@ tracing-subscriber = { workspace = true, features = ["ansi", "env-filter", "fmt"
 wasi_snapshot_preview1 = { workspace = true, features = ["reactor"] }
 wasm-compose = { workspace = true }
 wasmcloud-interface-httpserver = { workspace = true }
+wasmcloud-provider-blobstore-fs = { workspace = true }
+wasmcloud-provider-blobstore-s3 = { workspace = true }
+wasmcloud-provider-httpclient = { workspace = true }
+wasmcloud-provider-httpserver = { workspace = true }
+wasmcloud-provider-kv-vault = { workspace = true }
+wasmcloud-provider-kvredis = { workspace = true }
+wasmcloud-provider-lattice-controller = { workspace = true }
+wasmcloud-provider-nats = { workspace = true }
+wasmcloud-provider-sqldb-postgres = { workspace = true }
 wat = { workspace = true }
 wit-component = { workspace = true }
 
@@ -78,19 +87,56 @@ actor-foobar-host-component = { path = "./tests/actors/compat-component/foobar-h
 actor-http-log-rng-component = { path = "./tests/actors/http-log-rng-component", target = "wasm32-wasi", artifact = "cdylib" }
 actor-http-log-rng-module = { path = "./tests/actors/http-log-rng-module", target = "wasm32-unknown-unknown", artifact = "cdylib" }
 anyhow = { version = "1.0.69", default-features = false }
+assert_matches = { version = "1.5", default-features = false }
+async-nats = { version = "0.23", default-features = false }
 async-trait = { version = "0.1.66", default-features = false }
+atty = { version = "0.2", default-features = false }
+aws-config = { version = "0.51.0", default-features = false }
+aws-sdk-s3 = { version = "0.21.0", default-features = false }
+aws-smithy-http = { version = "0.51.0", default-features = false }
+aws-smithy-types = { version = "0.51.0", default-features = false }
+aws-types = { version = "0.51.0", default-features = false }
+base64 = { version = "0.13", default-features = false }
+bb8-postgres = { version = "0.8.1", default-features = false }
+bit-vec = { version = "0.6", default-features = false }
+blake2 = { version = "0.10.4", default-features = false }
+bytes = { version = "1.2", default-features = false }
 cbindgen = { version = "0.24.3", default-features = false }
+chrono = { version = "0.4", default-features = false }
+crc32fast = { version = "1.3.2", default-features = false }
+crossbeam = { version = "0.8", default-features = false }
+env_logger = { version = "0.9", default-features = false }
+fastrand = { version = "1.7", default-features = false }
 futures = { version = "0.3.26", default-features = false }
+futures-util = { version = "0.3.23", default-features = false }
 host = { git = "https://github.com/bytecodealliance/preview2-prototyping", rev = "24fa023d1848ca3a24b35ed80ff1514ea54dd219", default-features = false }
+http = { version = "0.2.6", default-features = false }
 log = { version = "0.4.17", default-features = false }
+minicbor = { version = "0.17.1", default-features = false }
+native-tls = { version = "0.2", default-features = false }
 once_cell = { version = "1.17.1", default-features = false }
+opentelemetry = { version = "0.18.0", default-features = false }
 rand = { version = "0.8.5", default-features = false }
+redis = { version = "0.22.1", default-features = false }
+reqwest = { version = "0.11", default-features = false }
+rmp-serde = { version = "1.1.0", default-features = false }
 serde = { version = "1.0.152", default-features = false }
+serde_bytes = { version = "0.11", default-features = false }
 serde_json = { version = "1.0.93", default-features = false }
+simple_env_load = { version = "0.2.0", default-features = false }
+thiserror = { version = "1.0", default-features = false }
 tokio = { version = "1.26.0", default-features = false }
+tokio-postgres = { version = "0.7", default-features = false }
+tokio-stream = { version = "0.1.8", default-features = false }
+tokio-util = { version = "0.7.0", default-features = false }
+toml = { version = "0.5", default-features = false }
 tracing = { version = "0.1.37", default-features = false }
+tracing-futures = { version = "0.2", default-features = false }
 tracing-subscriber = { version = "0.3.16", default-features = false }
+url = { version = "2.2.2", default-features = false }
 uuid = { version = "1.3.0", default-features = false }
+vaultrs = { version = "0.6.0", default-features = false }
+warp = { version = "0.3", default-features = false }
 wascap = { version = "0.10.0", default-features = false }
 wasi-cap-std-sync = { git = "https://github.com/bytecodealliance/preview2-prototyping", rev = "24fa023d1848ca3a24b35ed80ff1514ea54dd219", default-features = false }
 wasi-common = { git = "https://github.com/bytecodealliance/preview2-prototyping", rev = "24fa023d1848ca3a24b35ed80ff1514ea54dd219", default-features = false }
@@ -98,14 +144,33 @@ wasi_snapshot_preview1 = { git = "https://github.com/bytecodealliance/preview2-p
 wasm-compose = { version = "0.2.11", default-features = false }
 wasmbus-rpc = { version = "0.11.2", default-features = false }
 wasmcloud = { path = "." }
+wasmcloud-control-interface = { version = "0.23.0", default-features = false }
 wasmcloud-example-runner = { version = "0.4.0", default-features = false }
+wasmcloud-interface-blobstore = { version = "0.5.1", default-features = false }
+wasmcloud-interface-httpclient = { version = "0.8.1", default-features = false }
 wasmcloud-interface-httpserver = { version = "0.9.0", default-features = false }
+wasmcloud-interface-keyvalue = { version = "0.9.1", default-features = false }
+wasmcloud-interface-lattice-control = { version = "0.17.0", default-features = false }
 wasmcloud-interface-logging = { version = "0.8.1", default-features = false }
+wasmcloud-interface-messaging = { version = "0.8.1", default-features = false }
 wasmcloud-interface-numbergen = { version = "0.8.1", default-features = false }
+wasmcloud-interface-sqldb = { version = "0.8.1", default-features = false }
+wasmcloud-interface-testing = { version = "0.7.1", default-features = false }
+wasmcloud-provider-blobstore-fs = { path = "./providers/blobstore-fs", artifact = "bin" }
+wasmcloud-provider-blobstore-s3 = { path = "./providers/blobstore-s3", artifact = "bin" }
+wasmcloud-provider-httpclient = { path = "./providers/httpclient", artifact = "bin" }
+wasmcloud-provider-httpserver = { path = "./providers/httpserver-rs", artifact = "bin" }
+wasmcloud-provider-kv-vault = { path = "./providers/kv-vault", artifact = "bin" }
+wasmcloud-provider-kvredis = { path = "./providers/kvredis", artifact = "bin" }
+wasmcloud-provider-lattice-controller = { path = "./providers/lattice-controller", artifact = "bin" }
+wasmcloud-provider-nats = { path = "./providers/nats", artifact = "bin" }
+wasmcloud-provider-sqldb-postgres = { path = "./providers/sqldb-postgres", artifact = "bin" }
+wasmcloud-test-util = { version = "0.6.4", default-features = false }
 wasmparser = { version = "0.102.0", default-features = false }
 wasmtime = { git = "https://github.com/bytecodealliance/wasmtime", rev = "8d3a881b524d56498dfc71b65818b2abbeb1da44", default-features = false }
 wasmtime-wasi = { git = "https://github.com/bytecodealliance/wasmtime", rev = "8d3a881b524d56498dfc71b65818b2abbeb1da44", default-features = false }
 wat = { version = "1.0.61", default-features = false }
+weld-codegen = { version = "0.6.0", default-features = false }
 wit-bindgen = { version = "0.4.0", default-features = false }
 wit-component = { version = "0.7.4", default-features = false }
 

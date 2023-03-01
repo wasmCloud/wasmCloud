@@ -4,44 +4,44 @@ version = "0.3.0"
 edition = "2021"
 
 [dependencies]
-async-trait = "0.1"
-atty = "0.2"
-aws-sdk-s3 = "0.21.0"
-aws-config = "0.51.0"
-aws-types = { version = "0.51.0", features = ["hardcoded-credentials"] }
-aws-smithy-http = "0.51.0"
-aws-smithy-types = "0.51.0"
-base64 = "0.13"
-bytes = "1.0"
-http = "0.2.6"
-futures = "0.3"
-futures-util = "0.3.21"
-serde_bytes = "0.11"
-serde_json = "1.0"
-serde = {version = "1.0", features = ["derive"] }
-simple_env_load = "0.2.0"
-thiserror = "1.0"
-tokio = { version = "1", features = ["full"] }
-tokio-stream = { version = "0.1.8"}
-tokio-util = { version = "0.7.0", features = ["io"] }
-toml = "0.5"
-tracing = "0.1"
-tracing-futures = "0.2"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-wasmbus-rpc = { version = "0.11.2", features = ["otel"] }
+async-trait = { workspace = true }
+atty = { workspace = true }
+aws-sdk-s3 = { workspace = true }
+aws-config = { workspace = true }
+aws-types = { workspace = true, features = ["hardcoded-credentials"] }
+aws-smithy-http = { workspace = true }
+aws-smithy-types = { workspace = true }
+base64 = { workspace = true }
+bytes = { workspace = true }
+http = { workspace = true }
+futures = { workspace = true }
+futures-util = { workspace = true }
+serde_bytes = { workspace = true }
+serde_json = { workspace = true }
+serde = {workspace = true, features = ["derive"] }
+simple_env_load = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tokio-stream = { workspace = true }
+tokio-util = { workspace = true, features = ["io"] }
+toml = { workspace = true }
+tracing = { workspace = true }
+tracing-futures = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+wasmbus-rpc = { workspace = true, features = ["otel"] }
 
 # test dependencies
 [dev-dependencies]
-rand = "0.8"
-fastrand = "1.7"
-crc32fast = "1.3.2"
-env_logger = "0.9"
-wasmcloud-test-util = "0.6.4"
-wasmcloud-interface-blobstore = "0.5.1"
-wasmcloud-interface-testing = "0.7.1"
+rand = { workspace = true }
+fastrand = { workspace = true }
+crc32fast = { workspace = true }
+env_logger = { workspace = true }
+wasmcloud-test-util = { workspace = true }
+wasmcloud-interface-blobstore = { workspace = true }
+wasmcloud-interface-testing = { workspace = true }
 
 [build-dependencies]
-weld-codegen = "0.6.0"
+weld-codegen = { workspace = true }
 
 [lib]
 name = "blobstore_s3_lib"

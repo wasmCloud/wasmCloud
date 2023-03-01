@@ -6,8 +6,6 @@
 ## Build
 /build
 /dist/
-/target
-**target
 
 ## File system
 .DS_Store

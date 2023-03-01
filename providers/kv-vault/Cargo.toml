@@ -9,28 +9,28 @@ repository = "https://github.com/wasmcloud/capability-providers"
 publish = false
 
 [dependencies]
-async-trait = "0.1"
-atty = "0.2"
-serde = {version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-thiserror = "1.0"
-tokio = { version = "1", features = ["sync", "rt"] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-url = "2.2.2"
-vaultrs = "0.6.0"
-wasmcloud-interface-keyvalue = "0.9.1"
-wasmbus-rpc = { version = "0.11.2", features = ["otel"] }
+async-trait = { workspace = true }
+atty = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["sync", "rt"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+url = { workspace = true }
+vaultrs = { workspace = true }
+wasmcloud-interface-keyvalue = { workspace = true }
+wasmbus-rpc = { workspace = true, features = ["otel"] }
 
 # test dependencies
 [dev-dependencies]
-rand = "0.8"
-env_logger = "0.9"
-wasmcloud-test-util = "0.6.4"
+rand = { workspace = true }
+env_logger = { workspace = true }
+wasmcloud-test-util = { workspace = true }
 
 [build-dependencies]
 # for local code generation of wasmbus-interface-keyvalue
-weld-codegen = "0.6.0"
+weld-codegen = { workspace = true }
 
 [[bin]]
 name = "kv-vault"

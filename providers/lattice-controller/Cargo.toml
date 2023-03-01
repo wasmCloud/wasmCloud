@@ -5,30 +5,30 @@ version = "0.10.1"
 edition = "2021"
 
 [dependencies]
-async-nats = "0.23"
-async-trait = "0.1"
-atty = "0.2"
-base64 = "0.13"
-bytes = "1.0"
-futures = "0.3"
-once_cell = "1.8"
-rmp-serde = "1.0.0"
-serde_bytes = "0.11"
-serde_json = "1.0"
-serde = {version = "1.0", features = ["derive"] }
-thiserror = "1.0"
-tokio = { version = "1", features = ["full"] }
-toml = "0.5"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-wascap = "0.9.0"
-wasmbus-rpc = { version = "0.11.2", features = ["otel"] }
-wasmcloud-control-interface = "0.23.0"
-wasmcloud-interface-lattice-control = "0.17.0"
+async-nats = { workspace = true }
+async-trait = { workspace = true }
+atty = { workspace = true }
+base64 = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true }
+once_cell = { workspace = true }
+rmp-serde = { workspace = true }
+serde_bytes = { workspace = true }
+serde_json = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+toml = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+wascap = { workspace = true }
+wasmbus-rpc = { workspace = true, features = ["otel"] }
+wasmcloud-control-interface = { workspace = true }
+wasmcloud-interface-lattice-control = { workspace = true }
 
 # test dependencies
 [dev-dependencies]
-wasmcloud-test-util = "0.6.4"
+wasmcloud-test-util = { workspace = true }
 
 [[bin]]
 name = "lattice-controller"
