@@ -14,6 +14,31 @@
    \_/\_/ \__,_|___/_| |_| |_|\_____|_|\___/ \__,_|\__,_| |_____/|_| |_|\___|_|_|
 ```
 
+- [Why wash](#why-wash)
+- [Installing wash](#installing-wash)
+  - [Cargo](#cargo)
+  - [Linux (deb/rpm + apt)](#linux-debrpm--apt)
+  - [Linux (snap)](#linux-snap)
+  - [MacOS (brew)](#macos-brew)
+  - [Windows (choco)](#windows-choco)
+  - [Nix](#nix)
+- [Using wash](#using-wash)
+  - [call](#call)
+  - [claims](#claims)
+  - [ctl](#ctl)
+  - [ctx](#ctx)
+  - [drain](#drain)
+  - [gen](#gen)
+  - [keys](#keys)
+  - [lint](#lint)
+  - [new](#new)
+  - [par](#par)
+  - [reg](#reg)
+  - [up](#up)
+  - [validate](#validate)
+- [Contributing to wash](#contributing-to-wash)
+  - [Developer guide](#developer-guide)
+
 ## Why wash
 
 `wash` is a bundle of command line tools that, together, form a comprehensive CLI for [wasmCloud](https://wasmcloud.dev) development. Everything from generating new wasmCloud projects, managing cryptographic signing keys, and interacting with OCI compliant registries is contained within the subcommands of `wash`. Our goal with `wash` is to encapsulate our tools into a single binary to make developing WebAssembly with wasmCloud painless and simple.
@@ -124,4 +149,4 @@ If you have any feature suggestions, find any bugs, or otherwise have a question
 
 ### Developer guide
 
-For more information on getting started developing `wash`, see the [developers guide](./docs/guides/development/README.md).
+For more information on getting started developing `wash`, see the [developers guide](./docs/DEVELOPMENT.md).
