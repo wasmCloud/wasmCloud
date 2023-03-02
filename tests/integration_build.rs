@@ -2,12 +2,10 @@ use anyhow::Result;
 
 mod common;
 use common::wash;
-use serial_test::serial;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
 #[test]
-#[serial]
 fn build_rust_actor_unsigned() -> Result<()> {
     let test_setup = init(
         /* actor_name= */ "hello", /* template_name= */ "hello",
@@ -31,7 +29,6 @@ fn build_rust_actor_unsigned() -> Result<()> {
 }
 
 #[test]
-#[serial]
 fn build_rust_actor_signed() -> Result<()> {
     let test_setup = init(
         /* actor_name= */ "hello", /* template_name= */ "hello",
@@ -52,7 +49,6 @@ fn build_rust_actor_signed() -> Result<()> {
 }
 
 #[test]
-#[serial]
 fn build_tinygo_actor_unsigned() -> Result<()> {
     let test_setup = init(
         /* actor_name= */ "echo",
@@ -77,7 +73,6 @@ fn build_tinygo_actor_unsigned() -> Result<()> {
 }
 
 #[test]
-#[serial]
 fn build_tinygo_actor_signed() -> Result<()> {
     let test_setup = init(
         /* actor_name= */ "echo",

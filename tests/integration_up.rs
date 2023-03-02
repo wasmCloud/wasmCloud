@@ -5,7 +5,6 @@ use std::{
 
 use anyhow::{anyhow, Result};
 use common::{test_dir_with_subfolder, wash};
-use serial_test::serial;
 use sysinfo::{ProcessExt, SystemExt};
 use tokio::process::Child;
 use wash_lib::start::{ensure_nats_server, start_nats_server, NatsConfig};
@@ -13,7 +12,6 @@ use wash_lib::start::{ensure_nats_server, start_nats_server, NatsConfig};
 mod common;
 
 #[test]
-#[serial]
 fn integration_up_can_start_wasmcloud_and_actor() {
     let dir = test_dir_with_subfolder("can_start_wasmcloud");
     let path = dir.join("washup.log");
@@ -78,7 +76,6 @@ fn integration_up_can_start_wasmcloud_and_actor() {
 }
 
 #[test]
-#[serial]
 fn can_stop_detached_host() {
     let dir = test_dir_with_subfolder("can_stop_wasmcloud");
     let path = dir.join("washup.log");

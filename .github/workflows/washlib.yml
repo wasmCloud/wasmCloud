@@ -16,11 +16,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v3
-      - id: rust-check-action
-        name: wash-lib check (${{ matrix.name }})
-        uses: wasmcloud/common-actions/rust-check@main
-        with:
-          test-options: --no-fail-fast -p wash-lib -- --nocapture
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
+      - name: Run wash-lib unit tests (${{ matrix.name }})
+        run: cargo nextest run --profile ci -p wash-lib
 
   release_wash_lib:
     needs: rust_check
