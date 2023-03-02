@@ -26,8 +26,12 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v3
-      - name: Run unit tests
-        run: make test
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
+      - name: Run wash-lib unit tests
+        run: cargo nextest run --profile ci -p wash-lib
+      - name: Run wash unit tests
+        run: cargo nextest run --profile ci --bin wash
   integration_tests:
     name: Integration Tests
     runs-on: ubuntu-22.04
@@ -43,5 +47,7 @@ jobs:
         uses: sudo-bot/action-docker-compose@latest
         with:
           cli-args: "-f ./tools/docker-compose.yml up --detach"
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
       - name: Run integration tests
-        run: cargo test --no-fail-fast --bin wash --test "integration*" -- --nocapture
+        run: cargo nextest run --profile ci --bin wash -E 'kind(test)'

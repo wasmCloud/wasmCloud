@@ -26,4 +26,9 @@ if "error: no such command" in nextest_output:
     print('cargo nextest not found. Installing..."')
     subprocess.run('cargo install cargo-nextest --locked', shell=True)
 
+watch_output = subprocess.run("cargo watch --version", shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True).stdout
+if "error: no such command" in watch_output:
+    print('cargo watch not found. Installing..."')
+    subprocess.run('cargo install cargo-watch', shell=True)
+
 print("All dependencies are installed!")
