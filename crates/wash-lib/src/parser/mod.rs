@@ -2,7 +2,7 @@
 //! WebAssembly modules and native capability provider binaries
 
 use anyhow::{anyhow, bail, Result};
-use cargo_toml::Manifest;
+use cargo_toml::{Manifest, Product};
 use config::Config;
 use semver::Version;
 use std::{fs, path::PathBuf};
@@ -152,8 +152,8 @@ pub struct RustConfig {
     /// Path to cargo/rust's `target` directory. Optional, defaults to `./target`.
     pub target_path: Option<PathBuf>,
 }
-#[derive(serde::Deserialize, Debug, PartialEq, Default, Clone)]
 
+#[derive(serde::Deserialize, Debug, PartialEq, Default, Clone)]
 struct RawRustConfig {
     /// The path to the cargo binary. Optional, will default to search the user's `PATH` for `cargo` if not specified.
     pub cargo_path: Option<PathBuf>,
@@ -181,6 +181,9 @@ pub struct CommonConfig {
     pub version: Version,
     /// Path to the project directory to determine where built and signed artifacts should be
     pub path: PathBuf,
+    /// Expected name of the wasm module binary that will be generated
+    /// (if not present, name is expected to be used as a fallback)
+    pub wasm_bin_name: Option<String>,
 }
 
 #[derive(serde::Deserialize, Debug)]
@@ -290,6 +293,54 @@ pub fn get_config(opt_path: Option<PathBuf>, use_env: Option<bool>) -> Result<Pr
 }
 
 impl RawProjectConfig {
+    // Given a path to a valid cargo project, build an common_config enriched with Rust-specific information
+    fn build_common_config_from_cargo_project(
+        project_path: PathBuf,
+        name: Option<String>,
+        version: Option<Version>,
+    ) -> Result<CommonConfig> {
+        let cargo_toml_path = project_path.join("Cargo.toml");
+        if !cargo_toml_path.is_file() {
+            return Err(anyhow!(
+                "missing/invalid Cargo.toml path [{}]",
+                cargo_toml_path.display(),
+            ));
+        }
+
+        // Build the manifest
+        let mut cargo_toml = Manifest::from_path(cargo_toml_path)?;
+
+        // Populate Manifest with lib/bin information
+        cargo_toml.complete_from_path(&project_path)?;
+
+        let cargo_pkg = cargo_toml
+            .package
+            .ok_or_else(|| anyhow!("Missing package information in Cargo.toml"))?;
+
+        let version = match version {
+            Some(version) => version,
+            None => Version::parse(cargo_pkg.version.get()?.as_str())?,
+        };
+
+        let name = name.unwrap_or(cargo_pkg.name);
+
+        // Determine the wasm module name from the [lib] section of Cargo.toml
+        let wasm_bin_name = match cargo_toml.lib {
+            Some(Product {
+                name: Some(lib_name),
+                ..
+            }) => Some(lib_name),
+            _ => None,
+        };
+
+        Ok(CommonConfig {
+            name,
+            version,
+            path: project_path,
+            wasm_bin_name,
+        })
+    }
+
     pub fn convert(self, project_path: PathBuf) -> Result<ProjectConfig> {
         let project_type_config = match self.project_type.trim().to_lowercase().as_str() {
             "actor" => {
@@ -333,46 +384,41 @@ impl RawProjectConfig {
             }
         };
 
-        let common_config_result: Result<CommonConfig> =
-            // don't depend on language files if we don't have to.
-            if self.name.is_some() && self.version.is_some() {
-                Ok(CommonConfig {
-                    name: self.name.unwrap(),
-                    version: self.version.unwrap(),
-                    path: project_path
-                })
-            } else {
-                match language_config {
-                    LanguageConfig::Rust(_) => {
-                        let cargo_toml_path = project_path.join("Cargo.toml");
-                        if !cargo_toml_path.is_file() {
-                            bail!("No Cargo.toml file found in the current directory");
-                        }
+        let common_config_result: Result<CommonConfig> = match language_config {
+            LanguageConfig::Rust(_) => {
+                match Self::build_common_config_from_cargo_project(
+                    project_path.clone(),
+                    self.name.clone(),
+                    self.version.clone(),
+                ) {
+                    // Successfully built with cargo information
+                    Ok(cfg) => Ok(cfg),
 
-                        let cargo_toml = Manifest::from_path(cargo_toml_path)?
-                            .package
-                            .ok_or_else(|| anyhow!("Missing package information in Cargo.toml"))?;
-
-                        let version = match self.version {
-                            Some(version) => version,
-                            None => Version::parse(cargo_toml.version.get()?.as_str())?,
-                        };
-
-                        let name = self.name.unwrap_or(cargo_toml.name);
-
-                        Ok(CommonConfig { name, version, path: project_path})
-                    }
-                    LanguageConfig::TinyGo(_) => Ok(CommonConfig {
-                        name: self
-                            .name
-                            .ok_or_else(|| anyhow!("Missing name in wasmcloud.toml"))?,
-                        version: self
-                            .version
-                            .ok_or_else(|| anyhow!("Missing version in wasmcloud.toml"))?,
+                    // Fallback to non-specific language usage if we at least have a name & version
+                    Err(_) if self.name.is_some() && self.version.is_some() => Ok(CommonConfig {
+                        name: self.name.unwrap(),
+                        version: self.version.unwrap(),
                         path: project_path,
+                        wasm_bin_name: None,
                     }),
+
+                    Err(err) => {
+                        bail!("No Cargo.toml file found in the current directory, and name/version unspecified: {err}")
+                    }
                 }
-            };
+            }
+
+            LanguageConfig::TinyGo(_) => Ok(CommonConfig {
+                name: self
+                    .name
+                    .ok_or_else(|| anyhow!("Missing name in wasmcloud.toml"))?,
+                version: self
+                    .version
+                    .ok_or_else(|| anyhow!("Missing version in wasmcloud.toml"))?,
+                path: project_path,
+                wasm_bin_name: None,
+            }),
+        };
 
         Ok(ProjectConfig {
             language: language_config,

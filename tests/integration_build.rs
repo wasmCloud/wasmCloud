@@ -2,7 +2,8 @@ use anyhow::Result;
 
 mod common;
 use common::wash;
-use std::path::PathBuf;
+use serial_test::serial;
+use std::{fs::File, path::PathBuf};
 use tempfile::TempDir;
 
 #[test]
@@ -136,4 +137,39 @@ fn init_actor_from_template(actor_name: &str, template_name: &str) -> Result<Pat
 
     let project_dir = std::env::current_dir()?.join(actor_name);
     Ok(project_dir)
+}
+
+#[test]
+#[serial]
+fn integration_build_handles_dashed_names() -> Result<()> {
+    let actor_name = "dashed-actor";
+    // This tests runs against a temp directory since cargo gets confused
+    // about workspace projects if done from within wash
+    let root_dir = tempfile::tempdir()?;
+    let actor_dir = root_dir.path().join(actor_name);
+    let stdout_path = root_dir
+        .path()
+        .join(format!("wash-test.{actor_name}.stdout.log"));
+    let stdout = File::create(stdout_path)?;
+
+    // Execute wash new to create an actor with the given name
+    let mut new_cmd = wash()
+        .args(["new", "actor", "dashed-actor", "-t", "hello"])
+        .current_dir(&root_dir)
+        .stdout(stdout.try_clone()?)
+        .spawn()?;
+    assert!(new_cmd.wait()?.success());
+
+    // Ensure that the actor dir was created as expected
+    assert!(actor_dir.exists());
+
+    let mut build_cmd = wash()
+        .args(["build"])
+        .stdout(stdout)
+        .current_dir(&actor_dir)
+        .spawn()?;
+
+    assert!(build_cmd.wait()?.success());
+
+    Ok(())
 }
