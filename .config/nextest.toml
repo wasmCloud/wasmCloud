@@ -83,7 +83,7 @@ slow-timeout = { period = "60s" }
 leak-timeout = "100ms"
 
 [profile.ci]
-retries = { backoff = "exponential", count = 10, delay = "1s", jitter = true, max-delay = "10s" }
+retries = { backoff = "exponential", count = 3, delay = "30s", jitter = true, max-delay = "300s" }
 fail-fast = false
 
 [profile.integration]
