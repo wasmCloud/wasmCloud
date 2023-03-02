@@ -31,11 +31,21 @@ pub(crate) fn get_json_output(output: std::process::Output) -> Result<serde_json
 
 #[allow(unused)]
 /// Creates a subfolder in the test directory for use with a specific test
+pub(crate) fn test_dir() -> PathBuf {
+    let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("$CARGO_MANIFEST_DIR");
+    let test_dir = PathBuf::from(manifest_dir).join("tests/fixtures");
+    remove_dir_all(&test_dir);
+    create_dir_all(&test_dir);
+    test_dir
+}
+
+#[allow(unused)]
+/// Creates a subfolder in the test directory for use with a specific test
 /// It's preferred that the same test that calls this function also
 /// uses std::fs::remove_dir_all to remove the subdirectory
 pub(crate) fn test_dir_with_subfolder(subfolder: &str) -> PathBuf {
-    let root_dir = &env::var("CARGO_MANIFEST_DIR").expect("$CARGO_MANIFEST_DIR");
-    let with_subfolder = PathBuf::from(format!("{root_dir}/tests/fixtures/{subfolder}"));
+    let test_dir = test_dir();
+    let with_subfolder = test_dir.join(subfolder);
     remove_dir_all(with_subfolder.clone());
     create_dir_all(with_subfolder.clone());
     with_subfolder
@@ -46,6 +56,5 @@ pub(crate) fn test_dir_with_subfolder(subfolder: &str) -> PathBuf {
 /// to the test fixtures directory. This does _not_ create the file,
 /// so the test is responsible for initialization and modification of this file
 pub(crate) fn test_dir_file(subfolder: &str, file: &str) -> PathBuf {
-    let root_dir = &env::var("CARGO_MANIFEST_DIR").expect("$CARGO_MANIFEST_DIR");
-    PathBuf::from(format!("{root_dir}/tests/fixtures/{subfolder}/{file}"))
+    test_dir_with_subfolder(subfolder).join(file)
 }

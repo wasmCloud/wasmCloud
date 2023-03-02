@@ -64,6 +64,8 @@ test_bin = { workspace = true }
 assert-json-diff = { workspace = true }
 scopeguard = { workspace = true }
 sysinfo = { workspace = true }
+chrono = { workspace = true }
+serial_test = { workspace = true }
 
 [[bin]]
 bench = true
@@ -82,7 +84,7 @@ async-nats = "0.23.0"
 atelier_core = "0.2"
 bytes = "1.4"
 cargo_atelier = "0.2"
-cargo_toml = "0.13.0"
+cargo_toml = "0.15.2"
 claims = "0.7.1"
 clap = "4"
 cloudevents-sdk = "0.6.0"
@@ -136,3 +138,4 @@ wasmcloud-control-interface = "0.23"
 wasmcloud-test-util = "0.6.4"
 weld-codegen = "0.6.0"
 which = "4.2.2"
+chrono = "0.4.23"
