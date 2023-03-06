@@ -5,6 +5,7 @@ use app::AppCliCommand;
 use build::BuildCommand;
 use call::CallCli;
 use clap::{Parser, Subcommand};
+use completions::CompletionOpts;
 use ctl::CtlCliCommand;
 use ctx::CtxCommand;
 use down::DownCommand;
@@ -24,6 +25,7 @@ mod appearance;
 mod build;
 mod call;
 mod cfg;
+mod completions;
 mod ctl;
 mod ctx;
 mod down;
@@ -77,6 +79,9 @@ enum CliCommand {
     /// Invoke a wasmCloud actor
     #[clap(name = "call")]
     Call(CallCli),
+    /// Generate shell completions
+    #[clap(name = "completions")]
+    Completions(CompletionOpts),
     /// Generate and manage JWTs for wasmCloud actors
     #[clap(name = "claims", subcommand)]
     Claims(ClaimsCliCommand),
@@ -120,6 +125,7 @@ enum CliCommand {
 
 #[tokio::main]
 async fn main() {
+    use clap::CommandFactory;
     if env_logger::try_init().is_err() {}
     let cli: Cli = Parser::parse();
 
@@ -131,6 +137,9 @@ async fn main() {
         CliCommand::Call(call_cli) => call::handle_command(call_cli.command()).await,
         CliCommand::Claims(claims_cli) => {
             wash_lib::cli::claims::handle_command(claims_cli, output_kind).await
+        }
+        CliCommand::Completions(completions_cli) => {
+            completions::handle_command(completions_cli, Cli::command())
         }
         CliCommand::Ctl(ctl_cli) => ctl::handle_command(ctl_cli, output_kind).await,
         CliCommand::Ctx(ctx_cli) => ctx::handle_command(ctx_cli).await,
@@ -153,13 +162,28 @@ async fn main() {
                     let mut map = out.map;
                     map.insert("success".to_string(), json!(true));
                     println!("\n{}", serde_json::to_string_pretty(&map).unwrap());
+                    0
                 }
                 OutputKind::Text => {
                     println!("\n{}", out.text);
+                    // on the first non-error, non-json use of wash, print info about shell completions
+                    match completions::first_run_suggestion() {
+                        Ok(Some(suggestion)) => {
+                            println!("\n{}", suggestion);
+                            0
+                        }
+                        Ok(None) => {
+                            // >1st run,  no message
+                            0
+                        }
+                        Err(e) => {
+                            // error creating first-run token file
+                            eprintln!("\nError: {}", e);
+                            1
+                        }
+                    }
                 }
             }
-
-            0
         }
         Err(e) => {
             match output_kind {
