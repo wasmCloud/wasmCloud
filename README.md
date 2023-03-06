@@ -99,6 +99,10 @@ Invoke a wasmCloud actor directly with a specified payload. This allows you to t
 
 Generate JWTs for actors, capability providers, accounts and operators. Sign actor modules with claims including capability IDs, expiration, and keys to verify identity. Inspect actor modules to view their claims.
 
+### completions
+
+Generate shell completion files for Zsh, Bash, Fish, or PowerShell.
+
 ### ctl
 
 Interact directly with a wasmCloud [control-interface](https://github.com/wasmCloud/control-interface), allowing you to imperatively schedule actors, providers and modify configurations of a wasmCloud host. Can be used to interact with local and remote control-interfaces.
@@ -142,6 +146,14 @@ Bootstrap a wasmCloud environment in one easy command, supporting both launching
 ### validate
 
 Perform validation checks on .smithy models, ensuring that your interfaces are valid and usable for codegen and development.
+
+
+## Shell auto-complete
+
+`wash` has support for autocomplete for Zsh, Bash, Fish, and PowerShell.
+See [Completions](./Completions.md) for instructions for installing
+autocomplete for your shell.
+
 
 ## Contributing to wash
 

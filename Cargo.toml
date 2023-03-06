@@ -55,6 +55,7 @@ weld-codegen = { workspace = true }
 wasmcloud-control-interface = { workspace = true }
 wasmbus-rpc = { workspace = true }
 wasmcloud-test-util = { workspace = true }
+clap_complete = { workspace = true }
 
 [dev-dependencies]
 reqwest = { workspace = true, features = ["json", "rustls-tls"] }
@@ -140,3 +141,4 @@ wasmcloud-test-util = "0.6.4"
 weld-codegen = "0.6.0"
 which = "4.2.2"
 chrono = "0.4.23"
+clap_complete = "4.1.2"
