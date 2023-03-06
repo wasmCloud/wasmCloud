@@ -386,7 +386,7 @@ impl Messaging for NatsMessagingProvider {
 
         let headers = OtelHeaderInjector::default_with_span().into();
 
-        match msg.reply_to.clone() {
+        let res = match msg.reply_to.clone() {
             Some(reply_to) => if should_strip_headers(&msg.subject) {
                 nats_client
                     .publish_with_reply(msg.subject.to_string(), reply_to, msg.body.clone().into())
@@ -406,7 +406,9 @@ impl Messaging for NatsMessagingProvider {
                 .publish_with_headers(msg.subject.to_string(), headers, msg.body.clone().into())
                 .await
                 .map_err(|e| RpcError::Nats(e.to_string())),
-        }
+        };
+        let _ = nats_client.flush().await;
+        res
     }
 
     #[instrument(level = "debug", skip(self, ctx, msg), fields(actor_id = ?ctx.actor, subject = %msg.subject))]
