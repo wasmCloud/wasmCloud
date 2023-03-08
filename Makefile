@@ -28,9 +28,6 @@ build-watch: ## Continuously build the project
 
 ##@ Testing
 
-# Target to focus on for tests (enables running only one test)
-CARGO_TEST_TARGET ?= ""
-
 test: ## Run unit test suite
 	@$(CARGO) nextest run $(CARGO_TEST_TARGET) --no-fail-fast --bin wash
 	@$(CARGO) nextest run $(CARGO_TEST_TARGET) --no-fail-fast -p wash-lib

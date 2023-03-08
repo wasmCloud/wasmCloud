@@ -1,21 +1,13 @@
 use std::{collections::HashMap, fs::File, io::prelude::*, path::PathBuf};
 
+use crate::util::convert_error;
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand};
+use log::warn;
 use nkeys::KeyPairType;
 use provider_archive::ProviderArchive;
 use serde_json::json;
-use term_table::{
-    row::Row,
-    table_cell::{Alignment, TableCell},
-    Table,
-};
-use wash_lib::{
-    cli::{cached_oci_file, extract_keypair, CommandOutput, OutputKind},
-    registry::OciPullOptions,
-};
-
-use crate::util::{self, convert_error};
+use wash_lib::cli::{extract_keypair, inspect, CommandOutput, OutputKind};
 
 const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
 
@@ -189,13 +181,30 @@ pub(crate) struct InsertCommand {
     disable_keygen: bool,
 }
 
+impl From<InspectCommand> for inspect::InspectCliCommand {
+    fn from(cmd: InspectCommand) -> Self {
+        inspect::InspectCliCommand {
+            target: cmd.archive,
+            jwt_only: false,
+            digest: cmd.digest,
+            allow_latest: cmd.allow_latest,
+            user: cmd.user,
+            password: cmd.password,
+            insecure: cmd.insecure,
+            no_cache: cmd.no_cache,
+        }
+    }
+}
 pub(crate) async fn handle_command(
     command: ParCliCommand,
     output_kind: OutputKind,
 ) -> Result<CommandOutput> {
     match command {
         ParCliCommand::Create(cmd) => handle_create(cmd, output_kind).await,
-        ParCliCommand::Inspect(cmd) => handle_inspect(cmd).await,
+        ParCliCommand::Inspect(cmd) => {
+            warn!("par inspect will be deprecated in future versions. Use inspect instead.");
+            inspect::handle_command(cmd, output_kind).await
+        }
         ParCliCommand::Insert(cmd) => handle_insert(cmd, output_kind).await,
     }
 }
@@ -266,101 +275,6 @@ pub(crate) async fn handle_create(
         format!("Successfully created archive {outfile}"),
         map,
     ))
-}
-
-/// Loads a provider archive and outputs the contents of the claims
-pub(crate) async fn handle_inspect(cmd: InspectCommand) -> Result<CommandOutput> {
-    let cache_file = (!cmd.no_cache).then(|| cached_oci_file(&cmd.archive));
-    let artifact_bytes = wash_lib::registry::get_oci_artifact(
-        cmd.archive,
-        cache_file,
-        OciPullOptions {
-            digest: cmd.digest,
-            allow_latest: cmd.allow_latest,
-            user: cmd.user,
-            password: cmd.password,
-            insecure: cmd.insecure,
-        },
-    )
-    .await?;
-    let artifact = ProviderArchive::try_load(&artifact_bytes)
-        .await
-        .map_err(|e| anyhow!("{}", e))?;
-    let claims = artifact
-        .claims()
-        .ok_or_else(|| anyhow!("No claims found in artifact"))?;
-    let metadata = claims
-        .metadata
-        .ok_or_else(|| anyhow!("No metadata found"))?;
-
-    let friendly_rev = match metadata.rev {
-        Some(rev) => format!("{rev}"),
-        None => "None".to_string(),
-    };
-    let friendly_ver = metadata.ver.unwrap_or_else(|| "None".to_string());
-    let name = metadata.name.unwrap_or_else(|| "None".to_string());
-    let mut map = HashMap::new();
-    map.insert("name".to_string(), json!(name));
-    map.insert("issuer".to_string(), json!(claims.issuer));
-    map.insert("service".to_string(), json!(claims.subject));
-    map.insert("capability_contract_id".to_string(), json!(metadata.capid));
-    map.insert("vendor".to_string(), json!(metadata.vendor));
-    map.insert("version".to_string(), json!(friendly_ver));
-    map.insert("revision".to_string(), json!(friendly_rev));
-    map.insert("targets".to_string(), json!(artifact.targets()));
-    let text_table = {
-        let mut table = Table::new();
-        util::configure_table_style(&mut table);
-
-        table.add_row(Row::new(vec![TableCell::new_with_alignment(
-            format!("{name} - Provider Archive"),
-            2,
-            Alignment::Center,
-        )]));
-
-        table.add_row(Row::new(vec![
-            TableCell::new("Account"),
-            TableCell::new_with_alignment(claims.issuer, 1, Alignment::Right),
-        ]));
-        table.add_row(Row::new(vec![
-            TableCell::new("Service"),
-            TableCell::new_with_alignment(claims.subject, 1, Alignment::Right),
-        ]));
-        table.add_row(Row::new(vec![
-            TableCell::new("Capability Contract ID"),
-            TableCell::new_with_alignment(metadata.capid, 1, Alignment::Right),
-        ]));
-        table.add_row(Row::new(vec![
-            TableCell::new("Vendor"),
-            TableCell::new_with_alignment(metadata.vendor, 1, Alignment::Right),
-        ]));
-
-        table.add_row(Row::new(vec![
-            TableCell::new("Version"),
-            TableCell::new_with_alignment(friendly_ver, 1, Alignment::Right),
-        ]));
-
-        table.add_row(Row::new(vec![
-            TableCell::new("Revision"),
-            TableCell::new_with_alignment(friendly_rev, 1, Alignment::Right),
-        ]));
-
-        table.add_row(Row::new(vec![TableCell::new_with_alignment(
-            "Supported Architecture Targets",
-            2,
-            Alignment::Center,
-        )]));
-
-        table.add_row(Row::new(vec![TableCell::new_with_alignment(
-            artifact.targets().join("\n"),
-            2,
-            Alignment::Left,
-        )]));
-
-        table.render()
-    };
-
-    Ok(CommandOutput::new(text_table, map))
 }
 
 /// Loads a provider archive and attempts to insert an additional provider into it
