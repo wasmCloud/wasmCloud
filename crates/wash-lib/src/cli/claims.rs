@@ -5,24 +5,16 @@ use std::{
     path::PathBuf,
 };
 
-use crate::registry::OciPullOptions;
-
 use super::{extract_keypair, CommandOutput, OutputKind};
+use crate::cli::inspect;
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
+use log::warn;
 use nkeys::{KeyPair, KeyPairType};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use serde_json::json;
-use term_table::{
-    row::Row,
-    table_cell::{Alignment, TableCell},
-    Table,
-};
 use wascap::{
-    caps::capability_name,
-    jwt::{
-        Account, Actor, CapabilityProvider, Claims, Operator, Token, TokenValidation, WascapEntity,
-    },
+    jwt::{Account, Actor, CapabilityProvider, Claims, Operator},
     wasm::{days_from_now_to_jwt_time, sign_buffer_with_claims},
 };
 
@@ -47,15 +39,15 @@ pub struct InspectCommand {
 
     /// Extract the raw JWT from the file and print to stdout
     #[clap(name = "jwt_only", long = "jwt-only")]
-    jwt_only: bool,
+    pub(crate) jwt_only: bool,
 
     /// Digest to verify artifact against (if OCI URL is provided for <module>)
     #[clap(short = 'd', long = "digest")]
-    digest: Option<String>,
+    pub(crate) digest: Option<String>,
 
     /// Allow latest artifact tags (if OCI URL is provided for <module>)
     #[clap(long = "allow-latest")]
-    allow_latest: bool,
+    pub(crate) allow_latest: bool,
 
     /// OCI username, if omitted anonymous authentication will be used
     #[clap(
@@ -64,7 +56,7 @@ pub struct InspectCommand {
         env = "WASH_REG_USER",
         hide_env_values = true
     )]
-    user: Option<String>,
+    pub(crate) user: Option<String>,
 
     /// OCI password, if omitted anonymous authentication will be used
     #[clap(
@@ -73,15 +65,15 @@ pub struct InspectCommand {
         env = "WASH_REG_PASSWORD",
         hide_env_values = true
     )]
-    password: Option<String>,
+    pub(crate) password: Option<String>,
 
     /// Allow insecure (HTTP) registry connections
     #[clap(long = "insecure")]
-    insecure: bool,
+    pub(crate) insecure: bool,
 
     /// skip the local OCI cache
     #[clap(long = "no-cache")]
-    no_cache: bool,
+    pub(crate) no_cache: bool,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -303,12 +295,30 @@ pub struct ActorMetadata {
     pub common: GenerateCommon,
 }
 
+impl From<InspectCommand> for inspect::InspectCliCommand {
+    fn from(cmd: InspectCommand) -> Self {
+        inspect::InspectCliCommand {
+            target: cmd.module,
+            jwt_only: cmd.jwt_only,
+            digest: cmd.digest,
+            allow_latest: cmd.allow_latest,
+            user: cmd.user,
+            password: cmd.password,
+            insecure: cmd.insecure,
+            no_cache: cmd.no_cache,
+        }
+    }
+}
+
 pub async fn handle_command(
     command: ClaimsCliCommand,
     output_kind: OutputKind,
 ) -> Result<CommandOutput> {
     match command {
-        ClaimsCliCommand::Inspect(inspectcmd) => render_caps(inspectcmd).await,
+        ClaimsCliCommand::Inspect(inspectcmd) => {
+            warn!("claims inspect will be deprecated in future versions. Use inspect instead.");
+            inspect::handle_command(inspectcmd, output_kind).await
+        }
         ClaimsCliCommand::Sign(signcmd) => sign_file(signcmd, output_kind),
         ClaimsCliCommand::Token(gencmd) => generate_token(gencmd, output_kind),
     }
@@ -635,192 +645,6 @@ pub fn sign_file(cmd: SignCommand, output_kind: OutputKind) -> Result<CommandOut
     }?;
 
     Ok(output)
-}
-
-async fn get_caps(cmd: InspectCommand) -> Result<Option<Token<Actor>>> {
-    let cache_path = (!cmd.no_cache).then(|| super::cached_oci_file(&cmd.module));
-    let artifact_bytes = crate::registry::get_oci_artifact(
-        cmd.module,
-        cache_path,
-        OciPullOptions {
-            digest: cmd.digest,
-            allow_latest: cmd.allow_latest,
-            user: cmd.user,
-            password: cmd.password,
-            insecure: cmd.insecure,
-        },
-    )
-    .await?;
-
-    // Extract will return an error if it encounters an invalid hash in the claims
-    Ok(wascap::wasm::extract_claims(artifact_bytes)?)
-}
-
-async fn render_caps(cmd: InspectCommand) -> Result<CommandOutput> {
-    let module_name = cmd.module.clone();
-    let jwt_only = cmd.jwt_only;
-    let caps = get_caps(cmd).await?;
-
-    let out = match caps {
-        Some(token) => {
-            if jwt_only {
-                CommandOutput::from_key_and_text("token", token.jwt)
-            } else {
-                let validation = wascap::jwt::validate_token::<Actor>(&token.jwt)?;
-                render_actor_claims(token.claims, validation)
-            }
-        }
-        None => bail!("No capabilities discovered in : {}", module_name),
-    };
-    Ok(out)
-}
-
-/// Renders actor claims into provided output format
-pub(crate) fn render_actor_claims(
-    claims: Claims<Actor>,
-    validation: TokenValidation,
-) -> CommandOutput {
-    let md = claims.metadata.clone().unwrap();
-    let name = md.name();
-    let friendly_rev = md.rev.unwrap_or(0);
-    let friendly_ver = md.ver.unwrap_or_else(|| "None".to_string());
-    let friendly = format!("{} ({})", friendly_ver, friendly_rev);
-    let provider = if md.provider {
-        "Capability Provider"
-    } else {
-        "Capabilities"
-    };
-
-    let tags = if let Some(tags) = &claims.metadata.as_ref().unwrap().tags {
-        if tags.is_empty() {
-            "None".to_string()
-        } else {
-            tags.join(",")
-        }
-    } else {
-        "None".to_string()
-    };
-
-    let friendly_caps: Vec<String> = if let Some(caps) = &claims.metadata.as_ref().unwrap().caps {
-        caps.iter().map(|c| capability_name(c)).collect()
-    } else {
-        vec![]
-    };
-
-    let call_alias = claims
-        .metadata
-        .as_ref()
-        .unwrap()
-        .call_alias
-        .clone()
-        .unwrap_or_else(|| "(Not set)".to_string());
-
-    let iss_label = token_label(&claims.issuer).to_ascii_lowercase();
-    let sub_label = token_label(&claims.subject).to_ascii_lowercase();
-    let provider_json = provider.replace(' ', "_").to_ascii_lowercase();
-
-    let mut map = HashMap::new();
-    map.insert(iss_label, json!(claims.issuer));
-    map.insert(sub_label, json!(claims.subject));
-    map.insert("expires".to_string(), json!(validation.expires_human));
-    map.insert(
-        "can_be_used".to_string(),
-        json!(validation.not_before_human),
-    );
-    map.insert("version".to_string(), json!(friendly_ver));
-    map.insert("revision".to_string(), json!(friendly_rev));
-    map.insert(provider_json, json!(friendly_caps));
-    map.insert("tags".to_string(), json!(tags));
-    map.insert("call_alias".to_string(), json!(call_alias));
-    map.insert("name".to_string(), json!(name));
-
-    let mut table = render_core(&claims, validation);
-
-    table.add_row(Row::new(vec![
-        TableCell::new("Version"),
-        TableCell::new_with_alignment(friendly, 1, Alignment::Right),
-    ]));
-
-    table.add_row(Row::new(vec![
-        TableCell::new("Call Alias"),
-        TableCell::new_with_alignment(call_alias, 1, Alignment::Right),
-    ]));
-
-    table.add_row(Row::new(vec![TableCell::new_with_alignment(
-        provider,
-        2,
-        Alignment::Center,
-    )]));
-
-    table.add_row(Row::new(vec![TableCell::new_with_alignment(
-        friendly_caps.join("\n"),
-        2,
-        Alignment::Left,
-    )]));
-
-    table.add_row(Row::new(vec![TableCell::new_with_alignment(
-        "Tags",
-        2,
-        Alignment::Center,
-    )]));
-
-    table.add_row(Row::new(vec![TableCell::new_with_alignment(
-        tags,
-        2,
-        Alignment::Left,
-    )]));
-
-    CommandOutput::new(table.render(), map)
-}
-
-// * - we don't need render impls for Operator or Account because those tokens are never embedded into a module,
-// only actors.
-
-fn token_label(pk: &str) -> String {
-    match pk.chars().next().unwrap() {
-        'A' => "Account".to_string(),
-        'M' => "Module".to_string(),
-        'O' => "Operator".to_string(),
-        'S' => "Server".to_string(),
-        'U' => "User".to_string(),
-        _ => "<Unknown>".to_string(),
-    }
-}
-
-fn render_core<T>(claims: &Claims<T>, validation: TokenValidation) -> Table
-where
-    T: serde::Serialize + DeserializeOwned + WascapEntity,
-{
-    let mut table = Table::new();
-    super::configure_table_style(&mut table);
-
-    let headline = format!("{} - {}", claims.name(), token_label(&claims.subject));
-    table.add_row(Row::new(vec![TableCell::new_with_alignment(
-        headline,
-        2,
-        Alignment::Center,
-    )]));
-
-    table.add_row(Row::new(vec![
-        TableCell::new(token_label(&claims.issuer)),
-        TableCell::new_with_alignment(&claims.issuer, 1, Alignment::Right),
-    ]));
-    table.add_row(Row::new(vec![
-        TableCell::new(token_label(&claims.subject)),
-        TableCell::new_with_alignment(&claims.subject, 1, Alignment::Right),
-    ]));
-
-    table.add_row(Row::new(vec![
-        TableCell::new("Expires"),
-        TableCell::new_with_alignment(validation.expires_human, 1, Alignment::Right),
-    ]));
-
-    table.add_row(Row::new(vec![
-        TableCell::new("Can Be Used"),
-        TableCell::new_with_alignment(validation.not_before_human, 1, Alignment::Right),
-    ]));
-
-    table
 }
 
 fn sanitize_alias(call_alias: Option<String>) -> Result<Option<String>> {
