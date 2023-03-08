@@ -25,6 +25,7 @@ use crate::keys::{
 };
 
 pub mod claims;
+pub mod inspect;
 
 /// Used for displaying human-readable output vs JSON format
 #[derive(Debug, Copy, Clone, Eq, Serialize, Deserialize, PartialEq)]
