@@ -17,7 +17,7 @@ futures = { workspace = true, features = ["std"] }
 log = { workspace = true, optional = true }
 rand = { workspace = true, features = ["std"], optional = true }
 tokio = { workspace = true, features = ["fs", "macros", "rt"], optional = true }
-tracing = { workspace = true }
+tracing = { workspace = true, features = ["release_max_level_info"] }
 tracing-subscriber = { workspace = true, features = ["ansi", "env-filter", "fmt", "json", "std"], optional = true }
 uuid = { workspace = true }
 wascap = { workspace = true }
