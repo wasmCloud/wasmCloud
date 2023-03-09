@@ -19,6 +19,7 @@ pub use actor::{
     Response as ActorResponse,
 };
 pub use capability::{
-    Logging as LoggingCapability, Numbergen as NumbergenCapability, Provider as CapabilityProvider,
+    BuiltinHandler as BuiltinCapabilityHandler, Handler as CapabilityHandler,
+    Logging as LoggingCapability, Numbergen as NumbergenCapability,
 };
 pub use runtime::*;

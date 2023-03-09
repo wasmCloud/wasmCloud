@@ -9,7 +9,7 @@ use wasmbus_rpc::common::{deserialize, serialize};
 use wasmbus_rpc::wascap::prelude::{ClaimsBuilder, KeyPair};
 use wasmbus_rpc::wascap::wasm::embed_claims;
 use wasmbus_rpc::wascap::{caps, jwt};
-use wasmcloud::capability::{LogLogging, RandNumbergen, Uuid};
+use wasmcloud::capability::{BuiltinHandler, LogLogging, RandNumbergen, Uuid};
 use wasmcloud::{ActorInstanceConfig, ActorModule, ActorResponse, Runtime};
 use wasmcloud_interface_httpserver::{HttpRequest, HttpResponse};
 
@@ -53,9 +53,11 @@ async fn actor_http_log_rng() -> anyhow::Result<()> {
     let mut actor = actor
         .instantiate(
             ActorInstanceConfig::default(),
-            LogLogging::from(log::logger()),
-            RandNumbergen::from(thread_rng()),
-            (),
+            BuiltinHandler {
+                logging: LogLogging::from(log::logger()),
+                numbergen: RandNumbergen::from(thread_rng()),
+                external: (),
+            },
         )
         .expect("failed to instantiate actor");
 

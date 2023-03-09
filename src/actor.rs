@@ -1,4 +1,4 @@
-use crate::capability::{Logging, Numbergen, Provider};
+use crate::capability;
 use crate::Runtime;
 
 use core::fmt::{self, Debug};
@@ -8,9 +8,6 @@ use anyhow::{bail, ensure, Context, Result};
 use futures::AsyncReadExt;
 use tracing::{instrument, trace, trace_span, warn};
 use wascap::{jwt, wasm::extract_claims};
-use wasmbus_rpc::common::{deserialize, serialize};
-use wasmcloud_interface_logging::LogEntry;
-use wasmcloud_interface_numbergen::RangeLimit;
 
 mod wasm {
     #[allow(non_camel_case_types)]
@@ -31,7 +28,7 @@ mod guest_call {
     pub type State = (NonNull<[u8]>, NonNull<[u8]>);
 }
 
-struct Ctx<'a, L, N, P> {
+struct Ctx<'a, H> {
     wasi: wasmtime_wasi::WasiCtx,
     claims: &'a jwt::Claims<jwt::Actor>,
     console_log: Vec<String>,
@@ -40,12 +37,10 @@ struct Ctx<'a, L, N, P> {
     guest_response: Option<Vec<u8>>,
     host_error: Option<String>,
     host_response: Option<Vec<u8>>,
-    logging: L,
-    numbergen: N,
-    provider: P,
+    handler: H,
 }
 
-impl<L, N, P> Debug for Ctx<'_, L, N, P> {
+impl<H> Debug for Ctx<'_, H> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Ctx")
             .field("runtime", &"wasmtime")
@@ -60,13 +55,8 @@ impl<L, N, P> Debug for Ctx<'_, L, N, P> {
     }
 }
 
-impl<'a, L, N, P> Ctx<'a, L, N, P> {
-    fn new(
-        claims: &'a jwt::Claims<jwt::Actor>,
-        logging: L,
-        numbergen: N,
-        provider: P,
-    ) -> Result<Self> {
+impl<'a, H> Ctx<'a, H> {
+    fn new(claims: &'a jwt::Claims<jwt::Actor>, handler: H) -> Result<Self> {
         // TODO: Set stdio pipes
         let wasi = wasmtime_wasi::WasiCtxBuilder::new()
             .arg("main.wasm")
@@ -81,9 +71,7 @@ impl<'a, L, N, P> Ctx<'a, L, N, P> {
             guest_response: None,
             host_error: None,
             host_response: None,
-            logging,
-            numbergen,
-            provider,
+            handler,
         })
     }
 
@@ -153,25 +141,22 @@ fn write_bytes<T>(
 }
 
 #[instrument(skip(store, err))]
-fn set_host_error<L, N, P>(store: &mut wasmtime::Caller<'_, Ctx<L, N, P>>, err: impl ToString) {
+fn set_host_error<H>(store: &mut wasmtime::Caller<'_, Ctx<H>>, err: impl ToString) {
     let err = err.to_string();
     trace!(err, "set host error");
     store.data_mut().host_error = Some(err);
 }
 
 #[instrument(skip(store, res))]
-fn set_host_response<L, N, P>(
-    store: &mut wasmtime::Caller<'_, Ctx<L, N, P>>,
-    res: impl Into<Vec<u8>>,
-) {
+fn set_host_response<H>(store: &mut wasmtime::Caller<'_, Ctx<H>>, res: impl Into<Vec<u8>>) {
     let res = res.into();
     trace!(?res, "set host response");
     store.data_mut().host_response = Some(res);
 }
 
 #[instrument(skip(store))]
-fn console_log<L, N, P>(
-    mut store: wasmtime::Caller<'_, Ctx<L, N, P>>,
+fn console_log<H>(
+    mut store: wasmtime::Caller<'_, Ctx<H>>,
     log_ptr: wasm::ptr,
     log_len: wasm::usize,
 ) -> Result<()> {
@@ -184,8 +169,8 @@ fn console_log<L, N, P>(
 }
 
 #[instrument(skip(store))]
-fn guest_error<L, N, P>(
-    mut store: wasmtime::Caller<'_, Ctx<L, N, P>>,
+fn guest_error<H>(
+    mut store: wasmtime::Caller<'_, Ctx<H>>,
     err_ptr: wasm::ptr,
     err_len: wasm::usize,
 ) -> Result<()> {
@@ -198,8 +183,8 @@ fn guest_error<L, N, P>(
 }
 
 #[instrument(skip(store))]
-fn guest_request<L, N, P>(
-    mut store: wasmtime::Caller<'_, Ctx<L, N, P>>,
+fn guest_request<H>(
+    mut store: wasmtime::Caller<'_, Ctx<H>>,
     op_ptr: wasm::ptr,
     pld_ptr: wasm::ptr,
 ) -> Result<()> {
@@ -217,8 +202,8 @@ fn guest_request<L, N, P>(
 }
 
 #[instrument(skip(store))]
-fn guest_response<L, N, P>(
-    mut store: wasmtime::Caller<'_, Ctx<L, N, P>>,
+fn guest_response<H>(
+    mut store: wasmtime::Caller<'_, Ctx<H>>,
     res_ptr: wasm::ptr,
     res_len: wasm::usize,
 ) -> Result<()> {
@@ -230,50 +215,10 @@ fn guest_response<L, N, P>(
     Ok(())
 }
 
-trait ProviderResult {
-    fn into_wasm<L, N, P>(
-        self,
-        store: &mut wasmtime::Caller<'_, Ctx<L, N, P>>,
-    ) -> Result<wasm::usize>;
-}
-
-impl<E: ToString> ProviderResult for core::result::Result<(), E> {
-    fn into_wasm<L, N, P>(
-        self,
-        store: &mut wasmtime::Caller<'_, Ctx<L, N, P>>,
-    ) -> Result<wasm::usize> {
-        if let Err(err) = self {
-            set_host_error(store, err);
-            Ok(wasm::ERROR)
-        } else {
-            set_host_response(store, []);
-            Ok(wasm::SUCCESS)
-        }
-    }
-}
-
-impl<E: ToString> ProviderResult for core::result::Result<Vec<u8>, E> {
-    fn into_wasm<L, N, P>(
-        self,
-        store: &mut wasmtime::Caller<'_, Ctx<L, N, P>>,
-    ) -> Result<wasm::usize> {
-        match self {
-            Ok(buf) => {
-                set_host_response(store, buf);
-                Ok(wasm::SUCCESS)
-            }
-            Err(err) => {
-                set_host_error(store, err);
-                Ok(wasm::ERROR)
-            }
-        }
-    }
-}
-
 #[instrument(skip(store))]
 #[allow(clippy::too_many_arguments)]
-fn host_call<L: Logging, N: Numbergen, P: Provider>(
-    mut store: wasmtime::Caller<'_, Ctx<L, N, P>>,
+fn host_call<H: capability::Handler>(
+    mut store: wasmtime::Caller<'_, Ctx<H>>,
     bd_ptr: wasm::ptr,
     bd_len: wasm::usize,
     ns_ptr: wasm::ptr,
@@ -308,80 +253,23 @@ fn host_call<L: Logging, N: Numbergen, P: Provider>(
         "`{ns}` capability request unauthorized"
     );
 
-    trace_span!("call provider", bd, ns, op, ?pld).in_scope(|| {
-        match (bd.as_str(), ns.as_str(), op.as_str()) {
-            (_, "wasmcloud:builtin:logging", "Logging.WriteLog") => {
-                let LogEntry { level, text } =
-                    deserialize(&pld).context("failed to deserialize log entry")?;
-                match level.as_str() {
-                    "debug" => trace_span!("Logging::debug")
-                        .in_scope(|| store.data().logging.debug(text))
-                        .into_wasm(&mut store),
-                    "info" => trace_span!("Logging::info")
-                        .in_scope(|| store.data().logging.info(text))
-                        .into_wasm(&mut store),
-                    "warn" => trace_span!("Logging::warn")
-                        .in_scope(|| store.data().logging.warn(text))
-                        .into_wasm(&mut store),
-                    "error" => trace_span!("Logging::error")
-                        .in_scope(|| store.data().logging.error(text))
-                        .into_wasm(&mut store),
-                    _ => {
-                        bail!("log level `{level}` is not supported")
-                    }
-                }
-            }
-            (_, "wasmcloud:builtin:numbergen", "NumberGen.GenerateGuid") => {
-                match trace_span!("Numbergen::generate_guid")
-                    .in_scope(|| store.data().numbergen.generate_guid())
-                {
-                    Ok(guid) => serialize(&guid.to_string()).into_wasm(&mut store),
-                    Err(err) => {
-                        set_host_error(&mut store, err);
-                        Ok(wasm::ERROR)
-                    }
-                }
-            }
-            (_, "wasmcloud:builtin:numbergen", "NumberGen.RandomInRange") => {
-                let RangeLimit { min, max } =
-                    deserialize(&pld).context("failed to deserialize range limit")?;
-                match trace_span!("Numbergen::random_in_range")
-                    .in_scope(|| store.data().numbergen.random_in_range(min, max))
-                {
-                    Ok(v) => serialize(&v).into_wasm(&mut store),
-                    Err(err) => {
-                        set_host_error(&mut store, err);
-                        Ok(wasm::ERROR)
-                    }
-                }
-            }
-            (_, "wasmcloud:builtin:numbergen", "NumberGen.Random32") => {
-                match trace_span!("Numbergen::random_32")
-                    .in_scope(|| store.data().numbergen.random_32())
-                {
-                    Ok(v) => serialize(&v).into_wasm(&mut store),
-                    Err(err) => {
-                        set_host_error(&mut store, err);
-                        Ok(wasm::ERROR)
-                    }
-                }
-            }
-            _ => trace_span!("Provider::handle").in_scope(|| {
-                store
-                    .data()
-                    .provider
-                    .handle(bd, ns, op, pld)
-                    .into_wasm(&mut store)
-            }),
+    match trace_span!("capability::Handler::handle", bd, ns, op, ?pld)
+        .in_scope(|| store.data().handler.handle(bd, ns, op, pld))
+        .context("failed to handle provider invocation")?
+    {
+        Ok(buf) => {
+            set_host_response(&mut store, buf);
+            Ok(wasm::SUCCESS)
         }
-    })
+        Err(err) => {
+            set_host_error(&mut store, err);
+            Ok(wasm::ERROR)
+        }
+    }
 }
 
 #[instrument(skip(store))]
-fn host_error<L, N, P>(
-    mut store: wasmtime::Caller<'_, Ctx<L, N, P>>,
-    err_ptr: wasm::ptr,
-) -> Result<()> {
+fn host_error<H>(mut store: wasmtime::Caller<'_, Ctx<H>>, err_ptr: wasm::ptr) -> Result<()> {
     let err = store
         .data_mut()
         .host_error
@@ -395,7 +283,7 @@ fn host_error<L, N, P>(
 }
 
 #[instrument(skip(store))]
-fn host_error_len<L, N, P>(store: wasmtime::Caller<'_, Ctx<L, N, P>>) -> wasm::usize {
+fn host_error_len<H>(store: wasmtime::Caller<'_, Ctx<H>>) -> wasm::usize {
     let len = store
         .data()
         .host_error
@@ -416,10 +304,7 @@ fn host_error_len<L, N, P>(store: wasmtime::Caller<'_, Ctx<L, N, P>>) -> wasm::u
 }
 
 #[instrument(skip(store))]
-fn host_response<L, N, P>(
-    mut store: wasmtime::Caller<'_, Ctx<L, N, P>>,
-    res_ptr: wasm::ptr,
-) -> Result<()> {
+fn host_response<H>(mut store: wasmtime::Caller<'_, Ctx<H>>, res_ptr: wasm::ptr) -> Result<()> {
     let res = store
         .data_mut()
         .host_response
@@ -433,7 +318,7 @@ fn host_response<L, N, P>(
 }
 
 #[instrument(skip(store))]
-fn host_response_len<L, N, P>(store: wasmtime::Caller<'_, Ctx<L, N, P>>) -> wasm::usize {
+fn host_response_len<H>(store: wasmtime::Caller<'_, Ctx<H>>) -> wasm::usize {
     let len = store
         .data()
         .host_response
@@ -544,27 +429,22 @@ impl Module {
 
     /// Instantiates a [Module] given an [InstanceConfig] and returns the resulting [Instance].
     #[instrument(skip_all)]
-    pub fn instantiate<L, N, P>(
+    pub fn instantiate<H>(
         &self,
         InstanceConfig {
             min_memory_pages,
             max_memory_pages,
         }: InstanceConfig,
-        logging: L,
-        numbergen: N,
-        provider: P,
-    ) -> Result<Instance<L, N, P>>
+        handler: H,
+    ) -> Result<Instance<H>>
     where
-        L: Logging + 'static,
-        N: Numbergen + 'static,
-        P: Provider + 'static,
+        H: capability::Handler + 'static,
     {
         let engine = self.module.engine();
 
-        let cx = Ctx::new(&self.claims, logging, numbergen, provider)
-            .context("failed to construct store context")?;
+        let cx = Ctx::new(&self.claims, handler).context("failed to construct store context")?;
         let mut store = wasmtime::Store::new(engine, cx);
-        let mut linker = wasmtime::Linker::<Ctx<L, N, P>>::new(engine);
+        let mut linker = wasmtime::Linker::<Ctx<H>>::new(engine);
 
         wasmtime_wasi::add_to_linker(&mut linker, |cx| &mut cx.wasi)
             .context("failed to link WASI")?;
@@ -603,9 +483,9 @@ impl Module {
 }
 
 /// An instance of a [Module]
-pub struct Instance<'a, L, N, P> {
+pub struct Instance<'a, H> {
     func: wasmtime::TypedFunc<guest_call::Params, guest_call::Result>,
-    store: wasmtime::Store<Ctx<'a, L, N, P>>,
+    store: wasmtime::Store<Ctx<'a, H>>,
 }
 
 /// An actor [Instance] operation result returned in response to [`Instance::call`].
@@ -620,7 +500,7 @@ pub struct Response {
     pub console_log: Vec<String>,
 }
 
-impl<L, N, P> Instance<'_, L, N, P> {
+impl<H> Instance<'_, H> {
     /// Invoke an operation on an [Instance] producing a [Response].
     #[instrument(skip_all)]
     pub fn call(
@@ -668,7 +548,7 @@ impl<L, N, P> Instance<'_, L, N, P> {
 mod tests {
     use super::*;
 
-    use crate::capability::Uuid;
+    use crate::capability::{BuiltinHandler, Uuid};
     use crate::{capability, ActorInstanceConfig, ActorModule, ActorResponse, Runtime};
 
     use std::convert::Infallible;
@@ -796,7 +676,14 @@ mod tests {
         // Inject claims into actor directly to avoid (slow) recompilation of Wasm module
         actor.claims = claims;
         let mut actor = actor
-            .instantiate(ActorInstanceConfig::default(), Logging, Numbergen, ())
+            .instantiate(
+                ActorInstanceConfig::default(),
+                BuiltinHandler {
+                    logging: Logging,
+                    numbergen: Numbergen,
+                    external: (),
+                },
+            )
             .expect("failed to instantiate actor");
 
         let ActorResponse {

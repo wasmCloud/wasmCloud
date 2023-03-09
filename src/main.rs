@@ -9,7 +9,7 @@ use rand::thread_rng;
 use tokio::fs;
 use tokio::io::{stdin, AsyncReadExt};
 use tracing_subscriber::prelude::*;
-use wasmcloud::capability::{LogLogging, RandNumbergen};
+use wasmcloud::capability::{BuiltinHandler, LogLogging, RandNumbergen};
 use wasmcloud::{ActorInstanceConfig, ActorModule, ActorResponse, Runtime};
 
 #[tokio::main]
@@ -56,10 +56,12 @@ async fn main() -> anyhow::Result<()> {
         .context("failed to create actor")?
         .instantiate(
             ActorInstanceConfig::default(),
-            LogLogging::from(log::logger()),
-            RandNumbergen::from(thread_rng()),
-            |bd, ns, op, pld| -> anyhow::Result<[u8; 0]> {
-                bail!("cannot execute `{bd}.{ns}.{op}` with payload {pld:?}")
+            BuiltinHandler {
+                logging: LogLogging::from(log::logger()),
+                numbergen: RandNumbergen::from(thread_rng()),
+                external: |bd, ns, op, pld| -> anyhow::Result<anyhow::Result<[u8; 0]>> {
+                    bail!("cannot execute `{bd}.{ns}.{op}` with payload {pld:?}")
+                },
             },
         )
         .context("failed to instantiate actor")?

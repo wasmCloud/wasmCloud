@@ -6,7 +6,7 @@ use wasmbus_rpc::common::{deserialize, serialize};
 use wasmbus_rpc::wascap::prelude::{ClaimsBuilder, KeyPair};
 use wasmbus_rpc::wascap::wasm::embed_claims;
 use wasmbus_rpc::wascap::{caps, jwt};
-use wasmcloud::capability::{LogLogging, RandNumbergen};
+use wasmcloud::capability::{BuiltinHandler, LogLogging, RandNumbergen};
 use wasmcloud::{ActorInstanceConfig, ActorModule, ActorResponse, Runtime};
 use wasmcloud_interface_httpserver::{HttpRequest, HttpResponse};
 
@@ -32,9 +32,11 @@ fn main() -> anyhow::Result<()> {
     let mut actor = actor
         .instantiate(
             ActorInstanceConfig::default(),
-            LogLogging::from(log::logger()),
-            RandNumbergen::from(thread_rng()),
-            (),
+            BuiltinHandler {
+                logging: LogLogging::from(log::logger()),
+                numbergen: RandNumbergen::from(thread_rng()),
+                external: (),
+            },
         )
         .context("failed to instantiate actor")?;
     let buf = serialize(&HttpRequest::default()).context("failed to encode request")?;
