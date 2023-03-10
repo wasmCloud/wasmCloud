@@ -143,13 +143,13 @@ impl<H> Instance<'_, H> {
         let operation_len = operation
             .len()
             .try_into()
-            .context("operation string length does not fit in i32")?;
+            .context("operation string length does not fit in u32")?;
 
         let payload = payload.as_ref();
         let payload_len = payload
             .len()
             .try_into()
-            .context("payload length does not fit in i32")?;
+            .context("payload length does not fit in u32")?;
 
         self.store
             .data_mut()

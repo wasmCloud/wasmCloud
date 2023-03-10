@@ -299,7 +299,7 @@ fn host_error_len<H>(store: wasmtime::Caller<'_, super::Ctx<'_, H>>) -> wasm::us
         .try_into()
         .unwrap_or_else(|_| {
             warn!(
-                "`host_error_len` does not fit in i32, truncating to {}",
+                "`host_error_len` does not fit in u32, truncating to {}",
                 wasm::usize::MAX
             );
             wasm::usize::MAX
@@ -338,7 +338,7 @@ fn host_response_len<H>(store: wasmtime::Caller<'_, super::Ctx<'_, H>>) -> wasm:
         .try_into()
         .unwrap_or_else(|_| {
             warn!(
-                "`host_response_len` does not fit in i32, truncating to {}",
+                "`host_response_len` does not fit in u32, truncating to {}",
                 wasm::usize::MAX
             );
             wasm::usize::MAX

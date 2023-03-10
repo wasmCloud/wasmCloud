@@ -14,9 +14,9 @@ use wascap::wasm::extract_claims;
 
 mod wasm {
     #[allow(non_camel_case_types)]
-    pub type ptr = i32;
+    pub type ptr = u32;
     #[allow(non_camel_case_types)]
-    pub type usize = i32;
+    pub type usize = u32;
 
     pub const ERROR: usize = usize::MAX;
     pub const SUCCESS: usize = 1;
@@ -89,7 +89,7 @@ impl<'a, H> Ctx<'a, H> {
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Response {
     /// Code returned by an invocation of an operation on an actor [Instance].
-    pub code: i32,
+    pub code: u32,
     /// Binary guest operation invocation response if returned by the guest.
     pub response: Option<Vec<u8>>,
     /// Console logs produced by a [Instance] operation invocation. Note, that this functionality
