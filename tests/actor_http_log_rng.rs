@@ -10,7 +10,7 @@ use wasmbus_rpc::wascap::prelude::{ClaimsBuilder, KeyPair};
 use wasmbus_rpc::wascap::wasm::embed_claims;
 use wasmbus_rpc::wascap::{caps, jwt};
 use wasmcloud::capability::{BuiltinHandler, LogLogging, RandNumbergen, Uuid};
-use wasmcloud::{ActorInstanceConfig, ActorModule, ActorResponse, Runtime};
+use wasmcloud::{ActorModule, ActorResponse, Runtime};
 use wasmcloud_interface_httpserver::{HttpRequest, HttpResponse};
 
 #[derive(Deserialize)]
@@ -55,9 +55,7 @@ async fn actor_http_log_rng() -> anyhow::Result<()> {
 
     assert_eq!(actor.claims().subject, module.public_key());
 
-    let mut actor = actor
-        .instantiate(ActorInstanceConfig::default())
-        .expect("failed to instantiate actor");
+    let mut actor = actor.instantiate().expect("failed to instantiate actor");
 
     let body = serde_json::to_vec(&json!({
         "min": 42,

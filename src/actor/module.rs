@@ -1,8 +1,7 @@
 use super::guest_call;
-use super::{actor_claims, wasmbus, Ctx, InstanceConfig, Response};
+use super::{actor_claims, wasmbus, Ctx, Response};
 
-use crate::capability;
-use crate::Runtime;
+use crate::{capability, InstanceConfig, Runtime};
 
 use core::fmt::{self, Debug};
 
@@ -18,6 +17,7 @@ pub struct Module<H> {
     module: wasmtime::Module,
     claims: jwt::Claims<jwt::Actor>,
     handler: Arc<H>,
+    instance_config: InstanceConfig,
 }
 
 impl<H> Clone for Module<H> {
@@ -26,6 +26,7 @@ impl<H> Clone for Module<H> {
             module: self.module.clone(),
             claims: self.claims.clone(),
             handler: Arc::clone(&self.handler),
+            instance_config: self.instance_config,
         }
     }
 }
@@ -58,6 +59,7 @@ impl<H: capability::Handler + 'static> Module<H> {
             module,
             claims,
             handler: Arc::clone(&rt.handler),
+            instance_config: rt.instance_config,
         })
     }
 
@@ -84,13 +86,7 @@ impl<H: capability::Handler + 'static> Module<H> {
 
     /// Instantiates a [Module] given an [InstanceConfig] and returns the resulting [Instance].
     #[instrument(skip_all)]
-    pub fn instantiate(
-        &self,
-        InstanceConfig {
-            min_memory_pages,
-            max_memory_pages,
-        }: InstanceConfig,
-    ) -> Result<Instance<H>> {
+    pub fn instantiate(&self) -> Result<Instance<H>> {
         let engine = self.module.engine();
 
         let cx = Ctx::new(&self.claims, Arc::clone(&self.handler))
@@ -105,7 +101,10 @@ impl<H: capability::Handler + 'static> Module<H> {
         // TODO: allow configuration of min and max memory pages
         let memory = wasmtime::Memory::new(
             &mut store,
-            wasmtime::MemoryType::new(min_memory_pages, max_memory_pages),
+            wasmtime::MemoryType::new(
+                self.instance_config.min_memory_pages,
+                self.instance_config.max_memory_pages,
+            ),
         )
         .context("failed to initialize memory")?;
         linker
@@ -182,7 +181,7 @@ mod tests {
     use super::*;
 
     use crate::capability::{self, BuiltinHandler, Uuid};
-    use crate::{ActorInstanceConfig, ActorModule, ActorResponse, Runtime};
+    use crate::{ActorModule, ActorResponse, Runtime};
 
     use std::convert::Infallible;
 
@@ -323,9 +322,7 @@ mod tests {
         let mut actor = HTTP_LOG_RNG_MODULE.clone();
         // Inject claims into actor directly to avoid (slow) recompilation of Wasm module
         actor.claims = claims;
-        let mut actor = actor
-            .instantiate(ActorInstanceConfig::default())
-            .expect("failed to instantiate actor");
+        let mut actor = actor.instantiate().expect("failed to instantiate actor");
 
         let ActorResponse {
             code,

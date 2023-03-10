@@ -7,7 +7,7 @@ use wasmbus_rpc::wascap::prelude::{ClaimsBuilder, KeyPair};
 use wasmbus_rpc::wascap::wasm::embed_claims;
 use wasmbus_rpc::wascap::{caps, jwt};
 use wasmcloud::capability::{BuiltinHandler, LogLogging, RandNumbergen};
-use wasmcloud::{ActorInstanceConfig, ActorModule, ActorResponse, Runtime};
+use wasmcloud::{ActorModule, ActorResponse, Runtime};
 use wasmcloud_interface_httpserver::{HttpRequest, HttpResponse};
 
 fn main() -> anyhow::Result<()> {
@@ -34,9 +34,7 @@ fn main() -> anyhow::Result<()> {
     })
     .into();
     let actor = ActorModule::read(&rt, wasm.as_slice()).context("failed to read actor module")?;
-    let mut actor = actor
-        .instantiate(ActorInstanceConfig::default())
-        .context("failed to instantiate actor")?;
+    let mut actor = actor.instantiate().context("failed to instantiate actor")?;
     let buf = serialize(&HttpRequest::default()).context("failed to encode request")?;
     let ActorResponse {
         code,

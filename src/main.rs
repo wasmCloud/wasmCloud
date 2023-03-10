@@ -11,7 +11,7 @@ use tokio::io::{stdin, AsyncReadExt};
 use tracing_subscriber::prelude::*;
 use wascap::jwt;
 use wasmcloud::capability::{BuiltinHandler, LogLogging, RandNumbergen};
-use wasmcloud::{ActorInstanceConfig, ActorModule, ActorResponse, Runtime};
+use wasmcloud::{ActorModule, ActorResponse, Runtime};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -70,7 +70,7 @@ async fn main() -> anyhow::Result<()> {
         response,
     } = ActorModule::new(&rt, actor)
         .context("failed to create actor")?
-        .instantiate(ActorInstanceConfig::default())
+        .instantiate()
         .context("failed to instantiate actor")?
         .call(&op, &pld)
         .with_context(|| format!("failed to call `{op}` with payload {pld:?}"))?;

@@ -85,27 +85,6 @@ impl<'a, H> Ctx<'a, H> {
     }
 }
 
-/// Actor module instance config used by [`Module::instantiate`]
-pub struct InstanceConfig {
-    /// Minimum amount of WebAssembly memory pages to allocate for an actor instance.
-    ///
-    /// A WebAssembly memory page size is 64k.
-    pub min_memory_pages: u32,
-    /// WebAssembly memory page allocation limit for an actor instance.
-    ///
-    /// A WebAssembly memory page size is 64k.
-    pub max_memory_pages: Option<u32>,
-}
-
-impl Default for InstanceConfig {
-    fn default() -> Self {
-        Self {
-            min_memory_pages: 4,
-            max_memory_pages: None,
-        }
-    }
-}
-
 /// An actor [`ModuleInstance`] operation result returned in response to [`ModuleInstance::call`]
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Response {
