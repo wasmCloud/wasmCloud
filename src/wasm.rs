@@ -10,8 +10,13 @@ use nkeys::KeyPair;
 use ring::digest::{Context, Digest, SHA256};
 use std::{
     io::Read,
+    mem,
     time::{SystemTime, UNIX_EPOCH},
 };
+use wasm_encoder::ComponentSectionId;
+use wasm_encoder::Encode;
+use wasm_encoder::Section;
+use wasmparser::Parser;
 const SECS_PER_DAY: u64 = 86400;
 const SECTION_JWT: &str = "jwt"; // Versions of wascap prior to 0.9 used this section
 const SECTION_WC_JWT: &str = "wasmcloud_jwt";
@@ -27,24 +32,29 @@ const SECTION_WC_JWT: &str = "wasmcloud_jwt";
 pub fn extract_claims(contents: impl AsRef<[u8]>) -> Result<Option<Token<Actor>>> {
     let target_hash = compute_hash(&strip_custom_section(contents.as_ref())?)?;
     let parser = wasmparser::Parser::new(0);
+    let mut depth = 0;
     for payload in parser.parse_all(contents.as_ref()) {
-        match payload? {
-            wasmparser::Payload::CustomSection(reader) => {
-                if reader.name() == SECTION_JWT || reader.name() == SECTION_WC_JWT {
-                    let jwt = String::from_utf8(reader.data().to_vec())?;
-                    let claims: Claims<Actor> = Claims::decode(&jwt)?;
-                    if let Some(ref meta) = claims.metadata {
-                        if meta.module_hash != target_hash
-                            && claims.wascap_revision.unwrap_or_default()
-                                >= MIN_WASCAP_INTERNAL_REVISION
-                        {
-                            return Err(errors::new(ErrorKind::InvalidModuleHash));
-                        } else {
-                            return Ok(Some(Token { jwt, claims }));
-                        }
+        let payload = payload?;
+        use wasmparser::Payload::*;
+        match payload {
+            ModuleSection { .. } | ComponentSection { .. } => depth += 1,
+            End { .. } => depth -= 1,
+            CustomSection(c)
+                if (c.name() == SECTION_JWT) || (c.name() == SECTION_WC_JWT) && depth == 0 =>
+            {
+                let jwt = String::from_utf8(c.data().to_vec())?;
+                let claims: Claims<Actor> = Claims::decode(&jwt)?;
+                if let Some(ref meta) = claims.metadata {
+                    if meta.module_hash != target_hash
+                        && claims.wascap_revision.unwrap_or_default()
+                            >= MIN_WASCAP_INTERNAL_REVISION
+                    {
+                        return Err(errors::new(ErrorKind::InvalidModuleHash));
                     } else {
-                        return Err(errors::new(ErrorKind::InvalidAlgorithm));
+                        return Ok(Some(Token { jwt, claims }));
                     }
+                } else {
+                    return Err(errors::new(ErrorKind::InvalidAlgorithm));
                 }
             }
             _ => {}
@@ -110,12 +120,56 @@ pub fn sign_buffer_with_claims(
 }
 
 pub(crate) fn strip_custom_section(buf: &[u8]) -> Result<Vec<u8>> {
-    let mut m = walrus::Module::from_buffer(buf)
-        .map_err(|e| errors::new(ErrorKind::WasmElement(e.to_string())))?;
-    m.customs.remove_raw(SECTION_JWT);
-    m.customs.remove_raw(SECTION_WC_JWT);
+    let mut output: Vec<u8> = Vec::new();
+    let mut stack = Vec::new();
+    for payload in Parser::new(0).parse_all(buf) {
+        let payload = payload?;
+        use wasmparser::Payload::*;
+        match payload {
+            Version { encoding, .. } => {
+                output.extend_from_slice(match encoding {
+                    wasmparser::Encoding::Component => &wasm_encoder::Component::HEADER,
+                    wasmparser::Encoding::Module => &wasm_encoder::Module::HEADER,
+                });
+            }
+            ModuleSection { .. } | ComponentSection { .. } => {
+                stack.push(mem::take(&mut output));
+                continue;
+            }
+            End { .. } => {
+                let mut parent = match stack.pop() {
+                    Some(c) => c,
+                    None => break,
+                };
+                if output.starts_with(&wasm_encoder::Component::HEADER) {
+                    parent.push(ComponentSectionId::Component as u8);
+                    output.encode(&mut parent);
+                } else {
+                    parent.push(ComponentSectionId::CoreModule as u8);
+                    output.encode(&mut parent);
+                }
+                output = parent;
+            }
+            _ => {}
+        }
 
-    Ok(m.emit_wasm())
+        match payload {
+            CustomSection(c) if (c.name() == SECTION_JWT) || (c.name() == SECTION_WC_JWT) => {
+                // skip
+            }
+            _ => {
+                if let Some((id, range)) = payload.as_section() {
+                    wasm_encoder::RawSection {
+                        id,
+                        data: &buf[range],
+                    }
+                    .append_to(&mut output);
+                }
+            }
+        }
+    }
+
+    Ok(output)
 }
 
 fn since_the_epoch() -> std::time::Duration {
@@ -170,7 +224,12 @@ mod test {
 
     #[test]
     fn strip_custom() {
-        let dec_module = decode(WASM_BASE64).unwrap();
+        let mut f = File::open("./fixtures/guest.component.wasm").unwrap();
+        let mut buffer = Vec::new();
+        f.read_to_end(&mut buffer).unwrap();
+
+        //let dec_module = decode(WASM_BASE64).unwrap();
+
         let kp = KeyPair::new_account();
         let claims = Claims {
             metadata: Some(Actor::new(
@@ -190,7 +249,7 @@ mod test {
             not_before: None,
             wascap_revision: Some(WASCAP_INTERNAL_REVISION),
         };
-        let modified_bytecode = embed_claims(&dec_module, &claims, &kp).unwrap();
+        let modified_bytecode = embed_claims(&buffer, &claims, &kp).unwrap();
 
         super::strip_custom_section(&modified_bytecode).unwrap();
     }
@@ -205,6 +264,44 @@ mod test {
 
         let t = extract_claims(&buffer).unwrap();
         assert!(t.is_some());
+    }
+
+    #[test]
+    fn decode_wasi_preview() {
+        let mut f = File::open("./fixtures/guest.component.wasm").unwrap();
+        let mut buffer = Vec::new();
+        f.read_to_end(&mut buffer).unwrap();
+
+        let kp = KeyPair::new_account();
+        let claims = Claims {
+            metadata: Some(Actor::new(
+                "testing".to_string(),
+                Some(vec![MESSAGING.to_string(), KEY_VALUE.to_string()]),
+                Some(vec![]),
+                false,
+                Some(1),
+                Some("".to_string()),
+                None,
+            )),
+            expires: None,
+            id: nuid::next(),
+            issued_at: 0,
+            issuer: kp.public_key(),
+            subject: "test.wasm".to_string(),
+            not_before: None,
+            wascap_revision: Some(WASCAP_INTERNAL_REVISION),
+        };
+        let modified_bytecode = embed_claims(&buffer, &claims, &kp).unwrap();
+
+        if let Some(token) = extract_claims(&modified_bytecode).unwrap() {
+            assert_eq!(claims.issuer, token.claims.issuer);
+            assert_eq!(
+                claims.metadata.as_ref().unwrap().caps,
+                token.claims.metadata.as_ref().unwrap().caps
+            );
+        } else {
+            unreachable!()
+        }
     }
 
     #[test]
@@ -233,10 +330,7 @@ mod test {
             wascap_revision: Some(WASCAP_INTERNAL_REVISION),
         };
         let modified_bytecode = embed_claims(&dec_module, &claims, &kp).unwrap();
-        println!(
-            "Added {} bytes in custom section.",
-            modified_bytecode.len() - dec_module.len()
-        );
+
         if let Some(token) = extract_claims(&modified_bytecode).unwrap() {
             assert_eq!(claims.issuer, token.claims.issuer);
             assert_eq!(
@@ -316,10 +410,7 @@ mod test {
             wascap_revision: Some(WASCAP_INTERNAL_REVISION),
         };
         let modified_bytecode = embed_claims(&dec_module, &claims, &kp).unwrap();
-        println!(
-            "Added {} bytes in custom section.",
-            modified_bytecode.len() - dec_module.len()
-        );
+
         if let Some(token) = extract_claims(&modified_bytecode).unwrap() {
             assert_eq!(claims.issuer, token.claims.issuer);
             assert_eq!(claims.subject, token.claims.subject);
