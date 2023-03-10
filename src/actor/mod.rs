@@ -6,6 +6,8 @@ pub use module::{Instance as ModuleInstance, Module};
 use core::fmt::{self, Debug};
 use core::ptr::NonNull;
 
+use std::sync::Arc;
+
 use anyhow::{ensure, Context, Result};
 use wascap::jwt;
 use wascap::wasm::extract_claims;
@@ -64,7 +66,7 @@ impl<H> Debug for Ctx<'_, H> {
 }
 
 impl<'a, H> Ctx<'a, H> {
-    fn new(claims: &'a jwt::Claims<jwt::Actor>, handler: H) -> Result<Self> {
+    fn new(claims: &'a jwt::Claims<jwt::Actor>, handler: Arc<H>) -> Result<Self> {
         // TODO: Set stdio pipes
         let wasi = wasmtime_wasi::WasiCtxBuilder::new()
             .arg("main.wasm")

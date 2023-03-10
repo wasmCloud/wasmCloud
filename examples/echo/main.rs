@@ -27,17 +27,15 @@ fn main() -> anyhow::Result<()> {
         .build();
     let wasm = embed_claims(&wasm, &claims, &issuer).context("failed to embed actor claims")?;
 
-    let rt = Runtime::builder().into();
+    let rt = Runtime::builder(BuiltinHandler {
+        logging: LogLogging::from(log::logger()),
+        numbergen: RandNumbergen::from(thread_rng()),
+        external: (),
+    })
+    .into();
     let actor = ActorModule::read(&rt, wasm.as_slice()).context("failed to read actor module")?;
     let mut actor = actor
-        .instantiate(
-            ActorInstanceConfig::default(),
-            BuiltinHandler {
-                logging: LogLogging::from(log::logger()),
-                numbergen: RandNumbergen::from(thread_rng()),
-                external: (),
-            },
-        )
+        .instantiate(ActorInstanceConfig::default())
         .context("failed to instantiate actor")?;
     let buf = serialize(&HttpRequest::default()).context("failed to encode request")?;
     let ActorResponse {

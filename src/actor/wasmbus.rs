@@ -3,7 +3,9 @@ use super::{guest_call, wasm};
 use crate::capability;
 
 use core::fmt::{self, Debug};
+
 use std::ptr::NonNull;
+use std::sync::Arc;
 
 use anyhow::{ensure, Context, Result};
 use tracing::{instrument, trace, trace_span, warn};
@@ -16,7 +18,7 @@ pub struct Ctx<H> {
     guest_response: Option<Vec<u8>>,
     host_error: Option<String>,
     host_response: Option<Vec<u8>>,
-    handler: H,
+    handler: Arc<H>,
 }
 
 impl<H> Debug for Ctx<H> {
@@ -33,7 +35,7 @@ impl<H> Debug for Ctx<H> {
 }
 
 impl<H> Ctx<H> {
-    pub fn new(handler: H) -> Self {
+    pub fn new(handler: Arc<H>) -> Self {
         Self {
             console_log: Vec::default(),
             guest_call: None,

@@ -6,19 +6,31 @@ use crate::Runtime;
 
 use core::fmt::{self, Debug};
 
+use std::sync::Arc;
+
 use anyhow::{bail, Context, Result};
 use futures::AsyncReadExt;
 use tracing::{instrument, warn};
 use wascap::jwt;
 
 /// Pre-compiled actor [Module], which is cheapily-[Cloneable](Clone)
-#[derive(Clone)]
-pub struct Module {
+pub struct Module<H> {
     module: wasmtime::Module,
     claims: jwt::Claims<jwt::Actor>,
+    handler: Arc<H>,
 }
 
-impl Debug for Module {
+impl<H> Clone for Module<H> {
+    fn clone(&self) -> Self {
+        Self {
+            module: self.module.clone(),
+            claims: self.claims.clone(),
+            handler: Arc::clone(&self.handler),
+        }
+    }
+}
+
+impl<H> Debug for Module<H> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Module")
             .field("runtime", &"wasmtime")
@@ -27,26 +39,32 @@ impl Debug for Module {
     }
 }
 
-impl Module {
-    /// Extracts [Claims](jwt::Claims) from WebAssembly module and compiles it using [Runtime].
-    #[instrument(skip(wasm))]
-    pub fn new(rt: &Runtime, wasm: impl AsRef<[u8]>) -> Result<Self> {
-        let wasm = wasm.as_ref();
-        let claims = actor_claims(wasm)?;
-        let module = wasmtime::Module::new(&rt.engine, wasm).context("failed to compile module")?;
-        Ok(Self { module, claims })
-    }
-
+impl<H> Module<H> {
     /// [Claims](jwt::Claims) associated with this [Module].
     #[instrument]
     pub fn claims(&self) -> &jwt::Claims<jwt::Actor> {
         &self.claims
     }
+}
+
+impl<H: capability::Handler + 'static> Module<H> {
+    /// Extracts [Claims](jwt::Claims) from WebAssembly module and compiles it using [Runtime].
+    #[instrument(skip(wasm))]
+    pub fn new(rt: &Runtime<H>, wasm: impl AsRef<[u8]>) -> Result<Self> {
+        let wasm = wasm.as_ref();
+        let claims = actor_claims(wasm)?;
+        let module = wasmtime::Module::new(&rt.engine, wasm).context("failed to compile module")?;
+        Ok(Self {
+            module,
+            claims,
+            handler: Arc::clone(&rt.handler),
+        })
+    }
 
     /// Reads the WebAssembly module asynchronously and calls [Module::new].
     #[instrument(skip(wasm))]
     pub async fn read_async(
-        rt: &Runtime,
+        rt: &Runtime<H>,
         mut wasm: impl futures::AsyncRead + Unpin,
     ) -> Result<Self> {
         let mut buf = Vec::new();
@@ -58,7 +76,7 @@ impl Module {
 
     /// Reads the WebAssembly module synchronously and calls [Module::new].
     #[instrument(skip(wasm))]
-    pub fn read(rt: &Runtime, mut wasm: impl std::io::Read) -> Result<Self> {
+    pub fn read(rt: &Runtime<H>, mut wasm: impl std::io::Read) -> Result<Self> {
         let mut buf = Vec::new();
         wasm.read_to_end(&mut buf).context("failed to read Wasm")?;
         Self::new(rt, buf)
@@ -66,20 +84,17 @@ impl Module {
 
     /// Instantiates a [Module] given an [InstanceConfig] and returns the resulting [Instance].
     #[instrument(skip_all)]
-    pub fn instantiate<H>(
+    pub fn instantiate(
         &self,
         InstanceConfig {
             min_memory_pages,
             max_memory_pages,
         }: InstanceConfig,
-        handler: H,
-    ) -> Result<Instance<H>>
-    where
-        H: capability::Handler + 'static,
-    {
+    ) -> Result<Instance<H>> {
         let engine = self.module.engine();
 
-        let cx = Ctx::new(&self.claims, handler).context("failed to construct store context")?;
+        let cx = Ctx::new(&self.claims, Arc::clone(&self.handler))
+            .context("failed to construct store context")?;
         let mut store = wasmtime::Store::new(engine, cx);
         let mut linker = wasmtime::Linker::<Ctx<H>>::new(engine);
 
@@ -196,46 +211,6 @@ mod tests {
     });
     static UUID: Lazy<Uuid> = Lazy::new(Uuid::new_v4);
 
-    static RUNTIME: Lazy<Runtime> = Lazy::new(|| {
-        Runtime::builder()
-            .try_into()
-            .expect("failed to construct runtime")
-    });
-
-    static HTTP_LOG_RNG_REQUEST: Lazy<Vec<u8>> = Lazy::new(|| {
-        let body = serde_json::to_vec(&json!({
-            "min": 42,
-            "max": 4242,
-        }))
-        .expect("failed to encode body to JSON");
-        serialize(&HttpRequest {
-            body,
-            ..Default::default()
-        })
-        .expect("failed to serialize request")
-    });
-    static HTTP_LOG_RNG_MODULE: Lazy<Module> = Lazy::new(|| {
-        let wasm = std::fs::read(env!("CARGO_CDYLIB_FILE_ACTOR_HTTP_LOG_RNG"))
-            .expect("failed to read `{HTTP_LOG_RNG_WASM}`");
-
-        let issuer = KeyPair::new_account();
-        let module = KeyPair::new_module();
-
-        let claims = ClaimsBuilder::new()
-            .issuer(&issuer.public_key())
-            .subject(&module.public_key())
-            .with_metadata(jwt::Actor::default()) // this will be overriden by individual test cases
-            .build();
-        let wasm = embed_claims(&wasm, &claims, &issuer).expect("failed to embed actor claims");
-
-        let actor =
-            ActorModule::read(&RUNTIME, wasm.as_slice()).expect("failed to read actor module");
-
-        assert_eq!(actor.claims().subject, module.public_key());
-
-        actor
-    });
-
     struct Logging;
     impl capability::Logging for Logging {
         type Error = Infallible;
@@ -280,6 +255,52 @@ mod tests {
         }
     }
 
+    type TestHandler = BuiltinHandler<Logging, Numbergen, ()>;
+
+    static RUNTIME: Lazy<Runtime<TestHandler>> = Lazy::new(|| {
+        Runtime::builder(BuiltinHandler {
+            logging: Logging,
+            numbergen: Numbergen,
+            external: (),
+        })
+        .try_into()
+        .expect("failed to construct runtime")
+    });
+
+    static HTTP_LOG_RNG_REQUEST: Lazy<Vec<u8>> = Lazy::new(|| {
+        let body = serde_json::to_vec(&json!({
+            "min": 42,
+            "max": 4242,
+        }))
+        .expect("failed to encode body to JSON");
+        serialize(&HttpRequest {
+            body,
+            ..Default::default()
+        })
+        .expect("failed to serialize request")
+    });
+    static HTTP_LOG_RNG_MODULE: Lazy<Module<TestHandler>> = Lazy::new(|| {
+        let wasm = std::fs::read(env!("CARGO_CDYLIB_FILE_ACTOR_HTTP_LOG_RNG"))
+            .expect("failed to read `{HTTP_LOG_RNG_WASM}`");
+
+        let issuer = KeyPair::new_account();
+        let module = KeyPair::new_module();
+
+        let claims = ClaimsBuilder::new()
+            .issuer(&issuer.public_key())
+            .subject(&module.public_key())
+            .with_metadata(jwt::Actor::default()) // this will be overriden by individual test cases
+            .build();
+        let wasm = embed_claims(&wasm, &claims, &issuer).expect("failed to embed actor claims");
+
+        let actor =
+            ActorModule::read(&RUNTIME, wasm.as_slice()).expect("failed to read actor module");
+
+        assert_eq!(actor.claims().subject, module.public_key());
+
+        actor
+    });
+
     #[derive(Deserialize)]
     struct HttpLogRngResponse {
         guid: String,
@@ -303,14 +324,7 @@ mod tests {
         // Inject claims into actor directly to avoid (slow) recompilation of Wasm module
         actor.claims = claims;
         let mut actor = actor
-            .instantiate(
-                ActorInstanceConfig::default(),
-                BuiltinHandler {
-                    logging: Logging,
-                    numbergen: Numbergen,
-                    external: (),
-                },
-            )
+            .instantiate(ActorInstanceConfig::default())
             .expect("failed to instantiate actor");
 
         let ActorResponse {

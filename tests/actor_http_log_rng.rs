@@ -45,20 +45,18 @@ async fn actor_http_log_rng() -> anyhow::Result<()> {
         .build();
     let wasm = embed_claims(&wasm, &claims, &issuer).expect("failed to embed actor claims");
 
-    let rt = Runtime::builder().into();
+    let rt = Runtime::builder(BuiltinHandler {
+        logging: LogLogging::from(log::logger()),
+        numbergen: RandNumbergen::from(thread_rng()),
+        external: (),
+    })
+    .into();
     let actor = ActorModule::new(&rt, wasm).expect("failed to read actor module");
 
     assert_eq!(actor.claims().subject, module.public_key());
 
     let mut actor = actor
-        .instantiate(
-            ActorInstanceConfig::default(),
-            BuiltinHandler {
-                logging: LogLogging::from(log::logger()),
-                numbergen: RandNumbergen::from(thread_rng()),
-                external: (),
-            },
-        )
+        .instantiate(ActorInstanceConfig::default())
         .expect("failed to instantiate actor");
 
     let body = serde_json::to_vec(&json!({
