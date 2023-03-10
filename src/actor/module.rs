@@ -98,7 +98,6 @@ impl<H: capability::Handler + 'static> Module<H> {
             .context("failed to link WASI")?;
         wasmbus::add_to_linker(&mut linker).context("failed to link wasmbus")?;
 
-        // TODO: allow configuration of min and max memory pages
         let memory = wasmtime::Memory::new(
             &mut store,
             wasmtime::MemoryType::new(
