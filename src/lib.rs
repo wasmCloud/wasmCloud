@@ -15,7 +15,7 @@ pub mod capability;
 pub mod runtime;
 
 pub use actor::{
-    Instance as ActorInstance, InstanceConfig as ActorInstanceConfig, Module as ActorModule,
+    ModuleInstance as ActorModuleInstance, InstanceConfig as ActorInstanceConfig, Module as ActorModule,
     Response as ActorResponse,
 };
 pub use capability::{
