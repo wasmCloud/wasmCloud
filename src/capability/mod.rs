@@ -10,6 +10,7 @@ use core::fmt::Debug;
 
 use anyhow::{bail, Context};
 use tracing::{instrument, trace_span};
+use wascap::jwt;
 use wasmbus_rpc::common::{deserialize, serialize};
 use wasmcloud_interface_logging::LogEntry;
 use wasmcloud_interface_numbergen::RangeLimit;
@@ -29,6 +30,7 @@ pub trait Handler {
     /// guest as an application-layer error.
     fn handle(
         &self,
+        claims: &jwt::Claims<jwt::Actor>,
         binding: String,
         namespace: String,
         operation: String,
@@ -54,6 +56,7 @@ impl Handler for () {
 
     fn handle(
         &self,
+        _: &jwt::Claims<jwt::Actor>,
         _: String,
         _: String,
         _: String,
@@ -67,18 +70,25 @@ impl<T, E, F> Handler for F
 where
     T: Into<Vec<u8>>,
     E: ToString + Debug,
-    F: Fn(String, String, String, Vec<u8>) -> anyhow::Result<Result<T, E>>,
+    F: Fn(
+        &jwt::Claims<jwt::Actor>,
+        String,
+        String,
+        String,
+        Vec<u8>,
+    ) -> anyhow::Result<Result<T, E>>,
 {
     type Error = E;
 
     fn handle(
         &self,
+        claims: &jwt::Claims<jwt::Actor>,
         binding: String,
         namespace: String,
         operation: String,
         payload: Vec<u8>,
     ) -> anyhow::Result<Result<Vec<u8>, Self::Error>> {
-        match self(binding, namespace, operation, payload) {
+        match self(claims, binding, namespace, operation, payload) {
             Ok(Ok(res)) => Ok(Ok(res.into())),
             Ok(Err(err)) => Ok(Err(err)),
             Err(err) => Err(err),
@@ -97,6 +107,7 @@ where
     #[instrument(skip(self))]
     fn handle(
         &self,
+        claims: &jwt::Claims<jwt::Actor>,
         binding: String,
         namespace: String,
         operation: String,
@@ -106,15 +117,20 @@ where
             (_, "wasmcloud:builtin:logging", "Logging.WriteLog") => {
                 let LogEntry { level, text } =
                     deserialize(&payload).context("failed to deserialize log entry")?;
-                let res = match level.as_str() {
-                    "debug" => trace_span!("Logging::debug").in_scope(|| self.logging.debug(text)),
-                    "info" => trace_span!("Logging::info").in_scope(|| self.logging.info(text)),
-                    "warn" => trace_span!("Logging::warn").in_scope(|| self.logging.warn(text)),
-                    "error" => trace_span!("Logging::error").in_scope(|| self.logging.error(text)),
-                    _ => {
-                        bail!("log level `{level}` is not supported")
-                    }
-                };
+                let res =
+                    match level.as_str() {
+                        "debug" => trace_span!("Logging::debug")
+                            .in_scope(|| self.logging.debug(claims, text)),
+                        "info" => trace_span!("Logging::info")
+                            .in_scope(|| self.logging.info(claims, text)),
+                        "warn" => trace_span!("Logging::warn")
+                            .in_scope(|| self.logging.warn(claims, text)),
+                        "error" => trace_span!("Logging::error")
+                            .in_scope(|| self.logging.error(claims, text)),
+                        _ => {
+                            bail!("log level `{level}` is not supported")
+                        }
+                    };
                 match res {
                     Ok(()) => Ok(Ok(vec![])),
                     Err(err) => Ok(Err(err.to_string())),
@@ -122,7 +138,7 @@ where
             }
             (_, "wasmcloud:builtin:numbergen", "NumberGen.GenerateGuid") => {
                 match trace_span!("Numbergen::generate_guid")
-                    .in_scope(|| self.numbergen.generate_guid())
+                    .in_scope(|| self.numbergen.generate_guid(claims))
                 {
                     Ok(guid) => serialize(&guid.to_string())
                         .context("failed to serialize UUID")
@@ -134,21 +150,24 @@ where
                 let RangeLimit { min, max } =
                     deserialize(&payload).context("failed to deserialize range limit")?;
                 match trace_span!("Numbergen::random_in_range")
-                    .in_scope(|| self.numbergen.random_in_range(min, max))
+                    .in_scope(|| self.numbergen.random_in_range(claims, min, max))
                 {
                     Ok(v) => serialize(&v).context("failed to serialize number").map(Ok),
                     Err(err) => Ok(Err(err.to_string())),
                 }
             }
             (_, "wasmcloud:builtin:numbergen", "NumberGen.Random32") => {
-                match trace_span!("Numbergen::random_32").in_scope(|| self.numbergen.random_32()) {
+                match trace_span!("Numbergen::random_32")
+                    .in_scope(|| self.numbergen.random_32(claims))
+                {
                     Ok(v) => serialize(&v).context("failed to serialize number").map(Ok),
                     Err(err) => Ok(Err(err.to_string())),
                 }
             }
-            _ => match trace_span!("Handler::handle")
-                .in_scope(|| self.external.handle(binding, namespace, operation, payload))
-            {
+            _ => match trace_span!("Handler::handle").in_scope(|| {
+                self.external
+                    .handle(claims, binding, namespace, operation, payload)
+            }) {
                 Ok(Ok(res)) => Ok(Ok(res)),
                 Ok(Err(err)) => Ok(Err(err.to_string())),
                 Err(err) => Err(err),

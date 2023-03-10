@@ -4,6 +4,7 @@ use core::convert::Infallible;
 use core::ops::Deref;
 
 use log::{Level, Log, Record};
+use wascap::jwt;
 
 /// A logging capability wrapping an arbitrary [`log::Log`] implementation.
 pub struct Logging<T>(T);
@@ -23,11 +24,12 @@ impl<T> Deref for Logging<T> {
 }
 
 impl<T: Log> Logging<T> {
-    fn log_text(&self, level: Level, text: impl AsRef<str>) {
+    fn log_text(&self, level: Level, claims: &jwt::Claims<jwt::Actor>, text: impl AsRef<str>) {
         let text = text.as_ref();
         self.log(
             &Record::builder()
                 .level(level)
+                .target(&claims.subject)
                 .args(format_args!("{text}"))
                 .build(),
         );
@@ -37,23 +39,23 @@ impl<T: Log> Logging<T> {
 impl<T: Log> super::Logging for Logging<T> {
     type Error = Infallible;
 
-    fn debug(&self, text: String) -> Result<(), Self::Error> {
-        self.log_text(Level::Debug, text);
+    fn debug(&self, claims: &jwt::Claims<jwt::Actor>, text: String) -> Result<(), Self::Error> {
+        self.log_text(Level::Debug, claims, text);
         Ok(())
     }
 
-    fn info(&self, text: String) -> Result<(), Self::Error> {
-        self.log_text(Level::Info, text);
+    fn info(&self, claims: &jwt::Claims<jwt::Actor>, text: String) -> Result<(), Self::Error> {
+        self.log_text(Level::Info, claims, text);
         Ok(())
     }
 
-    fn warn(&self, text: String) -> Result<(), Self::Error> {
-        self.log_text(Level::Warn, text);
+    fn warn(&self, claims: &jwt::Claims<jwt::Actor>, text: String) -> Result<(), Self::Error> {
+        self.log_text(Level::Warn, claims, text);
         Ok(())
     }
 
-    fn error(&self, text: String) -> Result<(), Self::Error> {
-        self.log_text(Level::Error, text);
+    fn error(&self, claims: &jwt::Claims<jwt::Actor>, text: String) -> Result<(), Self::Error> {
+        self.log_text(Level::Error, claims, text);
         Ok(())
     }
 }

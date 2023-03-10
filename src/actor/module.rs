@@ -240,19 +240,19 @@ mod tests {
     impl capability::Logging for Logging {
         type Error = Infallible;
 
-        fn debug(&self, text: String) -> Result<(), Self::Error> {
+        fn debug(&self, _: &jwt::Claims<jwt::Actor>, text: String) -> Result<(), Self::Error> {
             assert_eq!(text, "debug");
             Ok(())
         }
-        fn info(&self, text: String) -> Result<(), Self::Error> {
+        fn info(&self, _: &jwt::Claims<jwt::Actor>, text: String) -> Result<(), Self::Error> {
             assert_eq!(text, "info");
             Ok(())
         }
-        fn warn(&self, text: String) -> Result<(), Self::Error> {
+        fn warn(&self, _: &jwt::Claims<jwt::Actor>, text: String) -> Result<(), Self::Error> {
             assert_eq!(text, "warn");
             Ok(())
         }
-        fn error(&self, text: String) -> Result<(), Self::Error> {
+        fn error(&self, _: &jwt::Claims<jwt::Actor>, text: String) -> Result<(), Self::Error> {
             assert_eq!(text, "error");
             Ok(())
         }
@@ -262,15 +262,20 @@ mod tests {
     impl capability::Numbergen for Numbergen {
         type Error = Infallible;
 
-        fn generate_guid(&self) -> Result<Uuid, Self::Error> {
+        fn generate_guid(&self, _: &jwt::Claims<jwt::Actor>) -> Result<Uuid, Self::Error> {
             Ok(*UUID)
         }
-        fn random_in_range(&self, min: u32, max: u32) -> Result<u32, Self::Error> {
+        fn random_in_range(
+            &self,
+            _: &jwt::Claims<jwt::Actor>,
+            min: u32,
+            max: u32,
+        ) -> Result<u32, Self::Error> {
             assert_eq!(min, 42);
             assert_eq!(max, 4242);
             Ok(42)
         }
-        fn random_32(&self) -> Result<u32, Self::Error> {
+        fn random_32(&self, _: &jwt::Claims<jwt::Actor>) -> Result<u32, Self::Error> {
             Ok(4242)
         }
     }

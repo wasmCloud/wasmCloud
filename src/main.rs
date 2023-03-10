@@ -9,6 +9,7 @@ use rand::thread_rng;
 use tokio::fs;
 use tokio::io::{stdin, AsyncReadExt};
 use tracing_subscriber::prelude::*;
+use wascap::jwt;
 use wasmcloud::capability::{BuiltinHandler, LogLogging, RandNumbergen};
 use wasmcloud::{ActorInstanceConfig, ActorModule, ActorResponse, Runtime};
 
@@ -59,8 +60,16 @@ async fn main() -> anyhow::Result<()> {
             BuiltinHandler {
                 logging: LogLogging::from(log::logger()),
                 numbergen: RandNumbergen::from(thread_rng()),
-                external: |bd, ns, op, pld| -> anyhow::Result<anyhow::Result<[u8; 0]>> {
-                    bail!("cannot execute `{bd}.{ns}.{op}` with payload {pld:?}")
+                external: |claims: &jwt::Claims<jwt::Actor>,
+                           bd,
+                           ns,
+                           op,
+                           pld|
+                 -> anyhow::Result<anyhow::Result<[u8; 0]>> {
+                    bail!(
+                        "cannot execute `{bd}.{ns}.{op}` with payload {pld:?} for actor `{}`",
+                        claims.subject
+                    )
                 },
             },
         )

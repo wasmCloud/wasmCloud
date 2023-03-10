@@ -249,7 +249,10 @@ fn host_call<H: capability::Handler>(
     );
 
     match trace_span!("capability::Handler::handle", bd, ns, op, ?pld)
-        .in_scope(|| store.data().wasmbus.handler.handle(bd, ns, op, pld))
+        .in_scope(|| {
+            let ctx = store.data();
+            ctx.wasmbus.handler.handle(ctx.claims, bd, ns, op, pld)
+        })
         .context("failed to handle provider invocation")?
     {
         Ok(buf) => {
