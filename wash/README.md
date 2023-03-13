@@ -59,7 +59,7 @@ curl -s https://packagecloud.io/install/repositories/wasmcloud/core/script.deb.s
 # Fedora (rpm)
 curl -s https://packagecloud.io/install/repositories/wasmcloud/core/script.rpm.sh | sudo bash
 
-sudo apt install wasmcloud wash
+sudo apt install wash
 ```
 
 ### Linux (snap)
@@ -72,7 +72,7 @@ sudo snap install wash --edge --devmode
 
 ```
 brew tap wasmcloud/wasmcloud
-brew install wasmcloud wash
+brew install wash
 ```
 
 ### Windows (choco)
