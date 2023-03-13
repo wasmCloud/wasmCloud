@@ -179,7 +179,7 @@ impl<H> Instance<'_, H> {
 mod tests {
     use super::*;
 
-    use crate::capability::{self, BuiltinHandler, Uuid};
+    use crate::capability::{self, HostHandler, Uuid};
     use crate::{ActorModule, ActorResponse, Runtime};
 
     use std::convert::Infallible;
@@ -253,10 +253,10 @@ mod tests {
         }
     }
 
-    type TestHandler = BuiltinHandler<Logging, Numbergen, ()>;
+    type TestHandler = HostHandler<Logging, Numbergen, ()>;
 
     static RUNTIME: Lazy<Runtime<TestHandler>> = Lazy::new(|| {
-        Runtime::builder(BuiltinHandler {
+        Runtime::builder(HostHandler {
             logging: Logging,
             numbergen: Numbergen,
             external: (),

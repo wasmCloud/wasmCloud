@@ -5,12 +5,11 @@
 use std::env::args;
 
 use anyhow::{self, bail, ensure, Context};
-use rand::thread_rng;
 use tokio::fs;
 use tokio::io::{stdin, AsyncReadExt};
 use tracing_subscriber::prelude::*;
 use wascap::jwt;
-use wasmcloud::capability::{BuiltinHandler, LogLogging, RandNumbergen};
+use wasmcloud::capability::HostHandlerBuilder;
 use wasmcloud::{ActorModule, ActorResponse, Runtime};
 
 #[tokio::main]
@@ -28,21 +27,22 @@ async fn main() -> anyhow::Result<()> {
     let name = args.next().context("argv[0] not set")?;
     let usage = || format!("Usage: {name} [--version | [actor-wasm op]]");
 
-    let rt: Runtime<_> = Runtime::builder(BuiltinHandler {
-        logging: LogLogging::from(log::logger()),
-        numbergen: RandNumbergen::from(thread_rng()),
-        external: |claims: &jwt::Claims<jwt::Actor>,
-                   bd,
-                   ns,
-                   op,
-                   pld|
-         -> anyhow::Result<anyhow::Result<[u8; 0]>> {
-            bail!(
-                "cannot execute `{bd}.{ns}.{op}` with payload {pld:?} for actor `{}`",
-                claims.subject
-            )
-        },
-    })
+    let rt: Runtime<_> = Runtime::builder(
+        HostHandlerBuilder::new(
+            |claims: &jwt::Claims<jwt::Actor>,
+             bd,
+             ns,
+             op,
+             pld|
+             -> anyhow::Result<anyhow::Result<[u8; 0]>> {
+                bail!(
+                    "cannot execute `{bd}.{ns}.{op}` with payload {pld:?} for actor `{}`",
+                    claims.subject
+                )
+            },
+        )
+        .build(),
+    )
     .into();
     let first = args.next().with_context(usage)?;
     let (actor, op) = match (first.as_str(), args.next(), args.next()) {

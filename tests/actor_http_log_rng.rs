@@ -1,7 +1,6 @@
 use std::str::FromStr;
 
 use anyhow::Context;
-use rand::thread_rng;
 use serde::Deserialize;
 use serde_json::json;
 use tokio::fs;
@@ -9,7 +8,7 @@ use wasmbus_rpc::common::{deserialize, serialize};
 use wasmbus_rpc::wascap::prelude::{ClaimsBuilder, KeyPair};
 use wasmbus_rpc::wascap::wasm::embed_claims;
 use wasmbus_rpc::wascap::{caps, jwt};
-use wasmcloud::capability::{BuiltinHandler, LogLogging, RandNumbergen, Uuid};
+use wasmcloud::capability::{HostHandlerBuilder, Uuid};
 use wasmcloud::{ActorModule, ActorResponse, Runtime};
 use wasmcloud_interface_httpserver::{HttpRequest, HttpResponse};
 
@@ -45,12 +44,7 @@ async fn actor_http_log_rng() -> anyhow::Result<()> {
         .build();
     let wasm = embed_claims(&wasm, &claims, &issuer).expect("failed to embed actor claims");
 
-    let rt = Runtime::builder(BuiltinHandler {
-        logging: LogLogging::from(log::logger()),
-        numbergen: RandNumbergen::from(thread_rng()),
-        external: (),
-    })
-    .into();
+    let rt = Runtime::builder(HostHandlerBuilder::new(()).build()).into();
     let actor = ActorModule::new(&rt, wasm).expect("failed to read actor module");
 
     assert_eq!(actor.claims().subject, module.public_key());

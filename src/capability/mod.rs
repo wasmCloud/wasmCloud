@@ -7,6 +7,7 @@ pub use logging::*;
 pub use numbergen::*;
 
 use core::fmt::Debug;
+use std::sync::Arc;
 
 use anyhow::{bail, Context};
 use tracing::{instrument, trace_span};
@@ -40,7 +41,7 @@ pub trait Handler {
 
 /// A [Handler], which handles all builtin capability invocations using [Logging], [Numbergen] and
 /// offloads all external capabilities to an arbitrary [Handler]
-pub struct BuiltinHandler<L, N, H> {
+pub struct HostHandler<L, N, H> {
     /// Logging capability provider, using which all known `wasmcloud:builtin:logging` operations will be handled
     pub logging: L,
 
@@ -49,6 +50,82 @@ pub struct BuiltinHandler<L, N, H> {
 
     /// External capability provider, using which all non-builtin calls will be handled
     pub external: H,
+}
+
+/// A builder for [`HostHandler`]
+pub struct HostHandlerBuilder<L, N, H> {
+    /// Logging capability provider, using which all known `wasmcloud:builtin:logging` operations will be handled
+    pub logging: L,
+
+    /// Random number generator capability provider, using which all known `wasmcloud:builtin:numbergen` operations will be handled
+    pub numbergen: N,
+
+    /// External capability provider, using which all non-builtin calls will be handled
+    pub external: H,
+}
+
+#[cfg(all(feature = "rand", feature = "log"))]
+impl<H>
+    HostHandlerBuilder<LogLogging<&'static dyn ::log::Log>, RandNumbergen<::rand::rngs::OsRng>, H>
+{
+    /// Creates a new [`HostHandler`] builder with preset defaults
+    pub fn new(hostcall: H) -> Self {
+        Self {
+            logging: LogLogging::from(::log::logger()),
+            numbergen: RandNumbergen::from(::rand::rngs::OsRng),
+            external: hostcall,
+        }
+    }
+}
+
+impl<L, N, H> From<HostHandlerBuilder<L, N, H>> for HostHandler<L, N, H> {
+    fn from(builder: HostHandlerBuilder<L, N, H>) -> Self {
+        builder.build()
+    }
+}
+
+impl<L, N, H> From<HostHandlerBuilder<L, N, H>> for Arc<HostHandler<L, N, H>> {
+    fn from(builder: HostHandlerBuilder<L, N, H>) -> Self {
+        builder.build().into()
+    }
+}
+
+impl<L, N, H> HostHandlerBuilder<L, N, H> {
+    /// Set [Logging] handler
+    pub fn logging<T: Logging>(self, logging: T) -> HostHandlerBuilder<T, N, H> {
+        HostHandlerBuilder {
+            logging,
+            numbergen: self.numbergen,
+            external: self.external,
+        }
+    }
+
+    /// Set [Numbergen] handler
+    pub fn numbergen<T: Numbergen>(self, numbergen: T) -> HostHandlerBuilder<L, T, H> {
+        HostHandlerBuilder {
+            numbergen,
+            logging: self.logging,
+            external: self.external,
+        }
+    }
+
+    /// Set host call [Handler]
+    pub fn hostcall<T: Handler>(self, hostcall: T) -> HostHandlerBuilder<L, N, T> {
+        HostHandlerBuilder {
+            external: hostcall,
+            numbergen: self.numbergen,
+            logging: self.logging,
+        }
+    }
+
+    /// Turns this builder into a [`HostHandler`]
+    pub fn build(self) -> HostHandler<L, N, H> {
+        HostHandler {
+            logging: self.logging,
+            numbergen: self.numbergen,
+            external: self.external,
+        }
+    }
 }
 
 impl Handler for () {
@@ -96,7 +173,7 @@ where
     }
 }
 
-impl<L, N, H> Handler for BuiltinHandler<L, N, H>
+impl<L, N, H> Handler for HostHandler<L, N, H>
 where
     L: Logging,
     N: Numbergen,
