@@ -47,6 +47,10 @@ spec:
               value: {{ .Values.wasmcloud.config.controlNatsHost | quote }}
             - name: WASMCLOUD_CTL_PORT
               value: {{ .Values.wasmcloud.config.controlNatsPort | quote }}
+            {{- if .Values.wasmcloud.config.controlTopicPrefix }}
+            - name: WASMCLOUD_CTL_TOPIC_PREFIX
+              value: {{ .Values.wasmcloud.config.controlTopicPrefix | quote }}
+            {{- end }}
             {{- if .Values.wasmcloud.config.clusterIssuers }}
             - name: WASMCLOUD_CLUSTER_ISSUERS
               value: {{ .Values.wasmcloud.config.clusterIssuers | quote }}

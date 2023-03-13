@@ -10,6 +10,7 @@ wasmcloud:
     providerNatsPort: 4222
     controlNatsHost: 127.0.0.1
     controlNatsPort: 4222
+    controlTopicPrefix: ""
     clusterIssuers: ""
     clusterSeed: ""
     hostKey: ""
@@ -77,7 +78,7 @@ nats:
     pullPolicy: IfNotPresent
     # NOTE: The alpine image is required if you are doing leafnode configuration. Otherwise the base
     # nats image is missing the root certificates needed for validation
-    tag: "2.7-alpine"
+    tag: "2.9-alpine"
   resources: {}
 
 imagePullSecrets: []
