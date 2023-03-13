@@ -3,6 +3,7 @@
 use core::convert::Infallible;
 use core::ops::Deref;
 
+use async_trait::async_trait;
 use log::{Level, Log, Record};
 use wascap::jwt;
 
@@ -36,25 +37,42 @@ impl<T: Log> Logging<T> {
     }
 }
 
+#[async_trait]
 impl<T: Log> super::Logging for Logging<T> {
     type Error = Infallible;
 
-    fn debug(&self, claims: &jwt::Claims<jwt::Actor>, text: String) -> Result<(), Self::Error> {
+    async fn debug(
+        &self,
+        claims: &jwt::Claims<jwt::Actor>,
+        text: String,
+    ) -> Result<(), Self::Error> {
         self.log_text(Level::Debug, claims, text);
         Ok(())
     }
 
-    fn info(&self, claims: &jwt::Claims<jwt::Actor>, text: String) -> Result<(), Self::Error> {
+    async fn info(
+        &self,
+        claims: &jwt::Claims<jwt::Actor>,
+        text: String,
+    ) -> Result<(), Self::Error> {
         self.log_text(Level::Info, claims, text);
         Ok(())
     }
 
-    fn warn(&self, claims: &jwt::Claims<jwt::Actor>, text: String) -> Result<(), Self::Error> {
+    async fn warn(
+        &self,
+        claims: &jwt::Claims<jwt::Actor>,
+        text: String,
+    ) -> Result<(), Self::Error> {
         self.log_text(Level::Warn, claims, text);
         Ok(())
     }
 
-    fn error(&self, claims: &jwt::Claims<jwt::Actor>, text: String) -> Result<(), Self::Error> {
+    async fn error(
+        &self,
+        claims: &jwt::Claims<jwt::Actor>,
+        text: String,
+    ) -> Result<(), Self::Error> {
         self.log_text(Level::Error, claims, text);
         Ok(())
     }

@@ -1,19 +1,33 @@
-use super::{guest_call, wasm};
-
 use crate::capability;
 
 use core::fmt::{self, Debug};
 
-use std::ptr::NonNull;
 use std::sync::Arc;
 
 use anyhow::{ensure, Context, Result};
 use tracing::{instrument, trace, trace_span, warn};
 use wascap::jwt;
 
+pub mod guest_call {
+    use super::wasm;
+
+    pub type Params = (wasm::usize, wasm::usize);
+    pub type Result = wasm::usize;
+}
+
+mod wasm {
+    #[allow(non_camel_case_types)]
+    pub type ptr = u32;
+    #[allow(non_camel_case_types)]
+    pub type usize = u32;
+
+    pub const ERROR: usize = usize::MAX;
+    pub const SUCCESS: usize = 1;
+}
+
 pub struct Ctx<H> {
     console_log: Vec<String>,
-    guest_call: Option<guest_call::State>,
+    guest_call: Option<(String, Vec<u8>)>,
     guest_error: Option<String>,
     guest_response: Option<Vec<u8>>,
     host_error: Option<String>,
@@ -56,7 +70,7 @@ impl<H> Ctx<H> {
         self.host_response = None;
     }
 
-    pub fn set_guest_call(&mut self, operation: NonNull<[u8]>, payload: NonNull<[u8]>) {
+    pub fn set_guest_call(&mut self, operation: String, payload: Vec<u8>) {
         self.guest_call = Some((operation, payload));
     }
 
@@ -192,9 +206,9 @@ fn guest_request<H>(
         .context("unexpected `__guest_request`")?;
 
     let memory = caller_memory(&mut store);
-    write_bytes(&mut store, &memory, op_ptr, unsafe { op.as_ref() })
+    write_bytes(&mut store, &memory, op_ptr, op)
         .context("failed to write `__guest_call` operation into guest memory")?;
-    write_bytes(&mut store, &memory, pld_ptr, unsafe { pld.as_ref() })
+    write_bytes(&mut store, &memory, pld_ptr, pld)
         .context("failed to write `__guest_call` payload into guest memory")
 }
 
@@ -214,7 +228,7 @@ fn guest_response<H>(
 
 #[instrument(skip(store))]
 #[allow(clippy::too_many_arguments)]
-fn host_call<H: capability::Handler>(
+async fn host_call<H: capability::Handler>(
     mut store: wasmtime::Caller<'_, super::Ctx<'_, H>>,
     bd_ptr: wasm::ptr,
     bd_len: wasm::usize,
@@ -235,6 +249,7 @@ fn host_call<H: capability::Handler>(
     let op = read_string(&mut store, &memory, op_ptr, op_len)
         .context("failed to read `__host_call` operation")?;
 
+    // TODO: make payload nullable
     let pld = read_bytes(&mut store, &memory, pld_ptr, pld_len)
         .context("failed to read `__host_call` payload")?;
 
@@ -253,12 +268,15 @@ fn host_call<H: capability::Handler>(
     match trace_span!("capability::Handler::handle", bd, ns, op, ?pld)
         .in_scope(|| {
             let ctx = store.data();
-            ctx.wasmbus.handler.handle(ctx.claims, bd, ns, op, pld)
+            ctx.wasmbus
+                .handler
+                .handle(ctx.claims, bd, ns, op, Some(pld))
         })
+        .await
         .context("failed to handle provider invocation")?
     {
         Ok(buf) => {
-            set_host_response(&mut store, buf);
+            set_host_response(&mut store, buf.unwrap_or_default());
             Ok(wasm::SUCCESS)
         }
         Err(err) => {
@@ -354,7 +372,15 @@ pub(super) fn add_to_linker(
     linker.func_wrap("wasmbus", "__guest_error", guest_error)?;
     linker.func_wrap("wasmbus", "__guest_request", guest_request)?;
     linker.func_wrap("wasmbus", "__guest_response", guest_response)?;
-    linker.func_wrap("wasmbus", "__host_call", host_call)?;
+    linker.func_wrap8_async(
+        "wasmbus",
+        "__host_call",
+        |store, bd_ptr, bd_len, ns_ptr, ns_len, op_ptr, op_len, pld_ptr, pld_len| {
+            Box::new(host_call(
+                store, bd_ptr, bd_len, ns_ptr, ns_len, op_ptr, op_len, pld_ptr, pld_len,
+            ))
+        },
+    )?;
     linker.func_wrap("wasmbus", "__host_error", host_error)?;
     linker.func_wrap("wasmbus", "__host_error_len", host_error_len)?;
     linker.func_wrap("wasmbus", "__host_response", host_response)?;

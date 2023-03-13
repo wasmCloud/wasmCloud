@@ -1,7 +1,10 @@
-use super::guest_call;
-use super::{actor_claims, wasmbus, Ctx, Response};
+mod wasmbus;
 
-use crate::{capability, InstanceConfig, Runtime};
+use self::wasmbus::guest_call;
+
+use super::actor_claims;
+
+use crate::{capability, Runtime};
 
 use core::fmt::{self, Debug};
 
@@ -12,12 +15,70 @@ use futures::AsyncReadExt;
 use tracing::{instrument, warn};
 use wascap::jwt;
 
+/// Actor module instance configuration
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct Config {
+    /// Minimum amount of WebAssembly memory pages to allocate for WebAssembly module instance.
+    ///
+    /// A WebAssembly memory page size is 64k.
+    pub min_memory_pages: u32,
+    /// WebAssembly memory page allocation limit for a WebAssembly module instance.
+    ///
+    /// A WebAssembly memory page size is 64k.
+    pub max_memory_pages: Option<u32>,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            min_memory_pages: 4,
+            max_memory_pages: None,
+        }
+    }
+}
+
+pub(super) struct Ctx<'a, H> {
+    pub wasi: wasmtime_wasi::WasiCtx,
+    pub claims: &'a jwt::Claims<jwt::Actor>,
+    pub wasmbus: wasmbus::Ctx<H>,
+}
+
+impl<H> Debug for Ctx<'_, H> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Ctx")
+            .field("runtime", &"wasmtime")
+            .field("wasmbus", &self.wasmbus)
+            .field("claims", &self.claims)
+            .finish()
+    }
+}
+
+impl<'a, H> Ctx<'a, H> {
+    fn new(claims: &'a jwt::Claims<jwt::Actor>, handler: Arc<H>) -> Result<Self> {
+        // TODO: Set stdio pipes
+        let wasi = wasmtime_wasi::WasiCtxBuilder::new()
+            .arg("main.wasm")
+            .context("failed to set argv[0]")?
+            .build();
+        let wasmbus = wasmbus::Ctx::new(handler);
+        Ok(Self {
+            wasi,
+            claims,
+            wasmbus,
+        })
+    }
+
+    fn reset(&mut self) {
+        self.wasmbus.reset();
+    }
+}
+
 /// Pre-compiled actor [Module], which is cheapily-[Cloneable](Clone)
 pub struct Module<H> {
     module: wasmtime::Module,
     claims: jwt::Claims<jwt::Actor>,
     handler: Arc<H>,
-    instance_config: InstanceConfig,
+    config: Config,
 }
 
 impl<H> Clone for Module<H> {
@@ -26,7 +87,7 @@ impl<H> Clone for Module<H> {
             module: self.module.clone(),
             claims: self.claims.clone(),
             handler: Arc::clone(&self.handler),
-            instance_config: self.instance_config,
+            config: self.config,
         }
     }
 }
@@ -36,6 +97,7 @@ impl<H> Debug for Module<H> {
         f.debug_struct("Module")
             .field("runtime", &"wasmtime")
             .field("claims", &self.claims)
+            .field("config", &self.config)
             .finish()
     }
 }
@@ -59,16 +121,13 @@ impl<H: capability::Handler + 'static> Module<H> {
             module,
             claims,
             handler: Arc::clone(&rt.handler),
-            instance_config: rt.instance_config,
+            config: rt.module_config,
         })
     }
 
     /// Reads the WebAssembly module asynchronously and calls [Module::new].
     #[instrument(skip(wasm))]
-    pub async fn read_async(
-        rt: &Runtime<H>,
-        mut wasm: impl futures::AsyncRead + Unpin,
-    ) -> Result<Self> {
+    pub async fn read(rt: &Runtime<H>, mut wasm: impl futures::AsyncRead + Unpin) -> Result<Self> {
         let mut buf = Vec::new();
         wasm.read_to_end(&mut buf)
             .await
@@ -78,7 +137,7 @@ impl<H: capability::Handler + 'static> Module<H> {
 
     /// Reads the WebAssembly module synchronously and calls [Module::new].
     #[instrument(skip(wasm))]
-    pub fn read(rt: &Runtime<H>, mut wasm: impl std::io::Read) -> Result<Self> {
+    pub fn read_sync(rt: &Runtime<H>, mut wasm: impl std::io::Read) -> Result<Self> {
         let mut buf = Vec::new();
         wasm.read_to_end(&mut buf).context("failed to read Wasm")?;
         Self::new(rt, buf)
@@ -86,7 +145,7 @@ impl<H: capability::Handler + 'static> Module<H> {
 
     /// Instantiates a [Module] given an [InstanceConfig] and returns the resulting [Instance].
     #[instrument(skip_all)]
-    pub fn instantiate(&self) -> Result<Instance<H>> {
+    pub async fn instantiate(&self) -> Result<Instance<H>> {
         let engine = self.module.engine();
 
         let cx = Ctx::new(&self.claims, Arc::clone(&self.handler))
@@ -100,10 +159,7 @@ impl<H: capability::Handler + 'static> Module<H> {
 
         let memory = wasmtime::Memory::new(
             &mut store,
-            wasmtime::MemoryType::new(
-                self.instance_config.min_memory_pages,
-                self.instance_config.max_memory_pages,
-            ),
+            wasmtime::MemoryType::new(self.config.min_memory_pages, self.config.max_memory_pages),
         )
         .context("failed to initialize memory")?;
         linker
@@ -111,7 +167,8 @@ impl<H: capability::Handler + 'static> Module<H> {
             .context("failed to define `memory`")?;
 
         let instance = linker
-            .instantiate(&mut store, &self.module)
+            .instantiate_async(&mut store, &self.module)
+            .await
             .context("failed to instantiate module")?;
 
         // TODO: call start etc.
@@ -123,29 +180,41 @@ impl<H: capability::Handler + 'static> Module<H> {
     }
 }
 
+/// An actor module [`Instance`] operation result returned in response to [`Instance::call`]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct Response {
+    /// Code returned by an invocation of an operation on an actor [Instance].
+    pub code: u32,
+    /// Binary guest operation invocation response if returned by the guest.
+    pub response: Option<Vec<u8>>,
+    /// Console logs produced by a [Instance] operation invocation. Note, that this functionality
+    /// is deprecated and should be empty in most cases.
+    pub console_log: Vec<String>,
+}
+
 /// An instance of a [Module]
 pub struct Instance<'a, H> {
     func: wasmtime::TypedFunc<guest_call::Params, guest_call::Result>,
     store: wasmtime::Store<Ctx<'a, H>>,
 }
 
-impl<H> Instance<'_, H> {
+impl<H: capability::Handler> Instance<'_, H> {
     /// Invoke an operation on an [Instance] producing a [Response].
     #[instrument(skip_all)]
-    pub fn call(
+    pub async fn call(
         &mut self,
-        operation: impl AsRef<str>,
-        payload: impl AsRef<[u8]>,
+        operation: impl Into<String>,
+        payload: impl Into<Vec<u8>>,
     ) -> Result<Response> {
         self.store.data_mut().reset();
 
-        let operation = operation.as_ref().as_bytes();
+        let operation = operation.into();
         let operation_len = operation
             .len()
             .try_into()
             .context("operation string length does not fit in u32")?;
 
-        let payload = payload.as_ref();
+        let payload = payload.into();
         let payload_len = payload
             .len()
             .try_into()
@@ -154,11 +223,12 @@ impl<H> Instance<'_, H> {
         self.store
             .data_mut()
             .wasmbus
-            .set_guest_call(operation.into(), payload.into());
+            .set_guest_call(operation, payload);
 
         let code = self
             .func
-            .call(&mut self.store, (operation_len, payload_len))
+            .call_async(&mut self.store, (operation_len, payload_len))
+            .await
             .context("failed to call `__guest_call`")?;
         if let Some(err) = self.store.data_mut().wasmbus.take_guest_error() {
             bail!(err)
@@ -180,11 +250,11 @@ mod tests {
     use super::*;
 
     use crate::capability::{self, HostHandler, Uuid};
-    use crate::{ActorModule, ActorResponse, Runtime};
 
     use std::convert::Infallible;
 
     use anyhow::Context;
+    use async_trait::async_trait;
     use once_cell::sync::Lazy;
     use serde::Deserialize;
     use serde_json::json;
@@ -201,7 +271,7 @@ mod tests {
             .with(
                 tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
                     tracing_subscriber::EnvFilter::new(
-                        "info,integration=trace,wasmcloud=trace,cranelift_codegen=warn",
+                        "info,wasmcloud=trace,cranelift_codegen=warn",
                     )
                 }),
             )
@@ -210,35 +280,47 @@ mod tests {
     static UUID: Lazy<Uuid> = Lazy::new(Uuid::new_v4);
 
     struct Logging;
+
+    #[async_trait]
     impl capability::Logging for Logging {
         type Error = Infallible;
 
-        fn debug(&self, _: &jwt::Claims<jwt::Actor>, text: String) -> Result<(), Self::Error> {
+        async fn debug(
+            &self,
+            _: &jwt::Claims<jwt::Actor>,
+            text: String,
+        ) -> Result<(), Self::Error> {
             assert_eq!(text, "debug");
             Ok(())
         }
-        fn info(&self, _: &jwt::Claims<jwt::Actor>, text: String) -> Result<(), Self::Error> {
+        async fn info(&self, _: &jwt::Claims<jwt::Actor>, text: String) -> Result<(), Self::Error> {
             assert_eq!(text, "info");
             Ok(())
         }
-        fn warn(&self, _: &jwt::Claims<jwt::Actor>, text: String) -> Result<(), Self::Error> {
+        async fn warn(&self, _: &jwt::Claims<jwt::Actor>, text: String) -> Result<(), Self::Error> {
             assert_eq!(text, "warn");
             Ok(())
         }
-        fn error(&self, _: &jwt::Claims<jwt::Actor>, text: String) -> Result<(), Self::Error> {
+        async fn error(
+            &self,
+            _: &jwt::Claims<jwt::Actor>,
+            text: String,
+        ) -> Result<(), Self::Error> {
             assert_eq!(text, "error");
             Ok(())
         }
     }
 
     struct Numbergen;
+
+    #[async_trait]
     impl capability::Numbergen for Numbergen {
         type Error = Infallible;
 
-        fn generate_guid(&self, _: &jwt::Claims<jwt::Actor>) -> Result<Uuid, Self::Error> {
+        async fn generate_guid(&self, _: &jwt::Claims<jwt::Actor>) -> Result<Uuid, Self::Error> {
             Ok(*UUID)
         }
-        fn random_in_range(
+        async fn random_in_range(
             &self,
             _: &jwt::Claims<jwt::Actor>,
             min: u32,
@@ -248,7 +330,7 @@ mod tests {
             assert_eq!(max, 4242);
             Ok(42)
         }
-        fn random_32(&self, _: &jwt::Claims<jwt::Actor>) -> Result<u32, Self::Error> {
+        async fn random_32(&self, _: &jwt::Claims<jwt::Actor>) -> Result<u32, Self::Error> {
             Ok(4242)
         }
     }
@@ -278,7 +360,7 @@ mod tests {
         .expect("failed to serialize request")
     });
     static HTTP_LOG_RNG_MODULE: Lazy<Module<TestHandler>> = Lazy::new(|| {
-        let wasm = std::fs::read(env!("CARGO_CDYLIB_FILE_ACTOR_HTTP_LOG_RNG"))
+        let wasm = std::fs::read(env!("CARGO_CDYLIB_FILE_ACTOR_HTTP_LOG_RNG_MODULE"))
             .expect("failed to read `{HTTP_LOG_RNG_WASM}`");
 
         let issuer = KeyPair::new_account();
@@ -292,7 +374,7 @@ mod tests {
         let wasm = embed_claims(&wasm, &claims, &issuer).expect("failed to embed actor claims");
 
         let actor =
-            ActorModule::read(&RUNTIME, wasm.as_slice()).expect("failed to read actor module");
+            Module::read_sync(&RUNTIME, wasm.as_slice()).expect("failed to read actor module");
 
         assert_eq!(actor.claims().subject, module.public_key());
 
@@ -306,7 +388,9 @@ mod tests {
         random_32: u32,
     }
 
-    fn run_http_log_rng<'a>(caps: Option<impl IntoIterator<Item = &'a str>>) -> anyhow::Result<()> {
+    async fn run_http_log_rng<'a>(
+        caps: Option<impl IntoIterator<Item = &'a str>>,
+    ) -> anyhow::Result<()> {
         _ = Lazy::force(&LOGGER);
 
         let claims = ClaimsBuilder::new()
@@ -321,13 +405,18 @@ mod tests {
         let mut actor = HTTP_LOG_RNG_MODULE.clone();
         // Inject claims into actor directly to avoid (slow) recompilation of Wasm module
         actor.claims = claims;
-        let mut actor = actor.instantiate().expect("failed to instantiate actor");
+        let mut actor = actor
+            .instantiate()
+            .await
+            .expect("failed to instantiate actor");
 
-        let ActorResponse {
+        let Response {
             code,
             console_log,
             response,
-        } = actor.call("HttpServer.HandleRequest", HTTP_LOG_RNG_REQUEST.as_slice())?;
+        } = actor
+            .call("HttpServer.HandleRequest", HTTP_LOG_RNG_REQUEST.as_slice())
+            .await?;
         assert_eq!(code, 1);
         assert!(console_log.is_empty());
 
@@ -352,28 +441,30 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn http_log_rng_valid() -> Result<()> {
-        run_http_log_rng(Some([caps::LOGGING, caps::NUMBERGEN]))
+    #[tokio::test]
+    async fn http_log_rng_valid() -> Result<()> {
+        run_http_log_rng(Some([caps::LOGGING, caps::NUMBERGEN])).await
     }
 
-    #[test]
-    fn http_log_rng_no_cap() {
-        assert!(run_http_log_rng(Option::<[&'static str; 0]>::None).is_err());
+    #[tokio::test]
+    async fn http_log_rng_no_cap() {
+        assert!(run_http_log_rng(Option::<[&'static str; 0]>::None)
+            .await
+            .is_err());
     }
 
-    #[test]
-    fn http_log_rng_empty_cap() {
-        assert!(run_http_log_rng(Some([])).is_err());
+    #[tokio::test]
+    async fn http_log_rng_empty_cap() {
+        assert!(run_http_log_rng(Some([])).await.is_err());
     }
 
-    #[test]
-    fn http_log_rng_no_numbergen_cap() {
-        assert!(run_http_log_rng(Some([caps::LOGGING])).is_err());
+    #[tokio::test]
+    async fn http_log_rng_no_numbergen_cap() {
+        assert!(run_http_log_rng(Some([caps::LOGGING])).await.is_err());
     }
 
-    #[test]
-    fn http_log_rng_no_logging_cap() {
-        assert!(run_http_log_rng(Some([caps::NUMBERGEN])).is_err());
+    #[tokio::test]
+    async fn http_log_rng_no_logging_cap() {
+        assert!(run_http_log_rng(Some([caps::NUMBERGEN])).await.is_err());
     }
 }

@@ -13,7 +13,9 @@ status = "actively-developed"
 
 [dependencies]
 anyhow = { workspace = true }
+async-trait = { workspace = true }
 futures = { workspace = true, features = ["std"] }
+host = { workspace = true, optional = true }
 log = { workspace = true, optional = true }
 rand = { workspace = true, features = ["std"], optional = true }
 tokio = { workspace = true, features = ["fs", "macros", "rt"], optional = true }
@@ -21,6 +23,8 @@ tracing = { workspace = true, features = ["release_max_level_info"] }
 tracing-subscriber = { workspace = true, features = ["ansi", "env-filter", "fmt", "json", "std"], optional = true }
 uuid = { workspace = true }
 wascap = { workspace = true }
+wasi-cap-std-sync = { workspace = true, optional = true }
+wasi-common = { workspace = true, optional = true }
 wasmbus-rpc = { workspace = true }
 wasmcloud-interface-logging = { workspace = true }
 wasmcloud-interface-numbergen = { workspace = true }
@@ -28,29 +32,54 @@ wasmtime = { workspace = true, features = ["async", "cache", "cranelift", "jitdu
 wasmtime-wasi = { workspace = true, features = ["sync"] }
 
 [features]
-default = ["bin", "log", "rand"]
-bin = ["log", "tracing-subscriber", "rand", "tokio"]
-log = ["dep:log", "tracing/log"]
+default = [
+    "bin",
+    "component-model",
+    "log",
+    "rand"
+]
+bin = [
+    "log",
+    "rand",
+    "tokio",
+    "tracing-subscriber"
+]
+component-model = [
+    "host",
+    "wasi-cap-std-sync",
+    "wasi-common",
+    "wasmtime/component-model"
+]
+log = [
+    "dep:log",
+    "tracing/log"
+]
 
 [build-dependencies]
 cbindgen = { workspace = true }
 
 [dev-dependencies]
-actor-echo = { workspace = true }
-actor-http-log-rng = { workspace = true }
+actor-echo-module = { workspace = true }
+actor-http-log-rng-component = { workspace = true }
+actor-http-log-rng-module = { workspace = true }
 once_cell = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["fs", "macros", "rt"] }
 tracing-subscriber = { workspace = true, features = ["ansi", "env-filter", "fmt", "json", "std"] }
 wasmcloud-interface-httpserver = { workspace = true }
+wat = { workspace = true }
+wit-component = { workspace = true }
 
 [workspace.dependencies]
-actor-echo = { path = "./tests/actors/echo", target = "wasm32-unknown-unknown", artifact = "cdylib" }
-actor-http-log-rng = { path = "./tests/actors/http-log-rng", target = "wasm32-unknown-unknown", artifact = "cdylib" }
+actor-echo-module = { path = "./tests/actors/echo-module", target = "wasm32-unknown-unknown", artifact = "cdylib" }
+actor-http-log-rng-component = { path = "./tests/actors/http-log-rng-component", target = "wasm32-wasi", artifact = "cdylib" }
+actor-http-log-rng-module = { path = "./tests/actors/http-log-rng-module", target = "wasm32-unknown-unknown", artifact = "cdylib" }
 anyhow = { version = "1.0.69", default-features = false }
+async-trait = { version = "0.1.66", default-features = false }
 cbindgen = { version = "0.24.3", default-features = false }
 futures = { version = "0.3.26", default-features = false }
+host = { git = "https://github.com/bytecodealliance/preview2-prototyping", rev = "24fa023d1848ca3a24b35ed80ff1514ea54dd219", default-features = false }
 log = { version = "0.4.17", default-features = false }
 once_cell = { version = "1.17.1", default-features = false }
 rand = { version = "0.8.5", default-features = false }
@@ -60,12 +89,17 @@ tokio = { version = "1.26.0", default-features = false }
 tracing = { version = "0.1.37", default-features = false }
 tracing-subscriber = { version = "0.3.16", default-features = false }
 uuid = { version = "1.3.0", default-features = false }
-wascap = { version = "0.9.2", default-features = false }
+wascap = { version = "0.10.0", default-features = false }
+wasi-cap-std-sync = { git = "https://github.com/bytecodealliance/preview2-prototyping", rev = "24fa023d1848ca3a24b35ed80ff1514ea54dd219", default-features = false }
+wasi-common = { git = "https://github.com/bytecodealliance/preview2-prototyping", rev = "24fa023d1848ca3a24b35ed80ff1514ea54dd219", default-features = false }
 wasmbus-rpc = { version = "0.11.2", default-features = false }
 wasmcloud = { path = "." }
 wasmcloud-example-runner = { version = "0.4.0", default-features = false }
 wasmcloud-interface-httpserver = { version = "0.9.0", default-features = false }
 wasmcloud-interface-logging = { version = "0.8.1", default-features = false }
 wasmcloud-interface-numbergen = { version = "0.8.1", default-features = false }
-wasmtime = { version = "6.0.0", default-features = false }
-wasmtime-wasi = { version = "6.0.0", default-features = false }
+wasmtime = { git = "https://github.com/bytecodealliance/wasmtime", rev = "8d3a881b524d56498dfc71b65818b2abbeb1da44", default-features = false }
+wasmtime-wasi = { git = "https://github.com/bytecodealliance/wasmtime", rev = "8d3a881b524d56498dfc71b65818b2abbeb1da44", default-features = false }
+wat = { version = "1.0.61", default-features = false }
+wit-bindgen = { version = "0.4.0", default-features = false }
+wit-component = { version = "0.7.4", default-features = false }
