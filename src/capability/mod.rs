@@ -40,7 +40,7 @@ pub trait Handler {
 }
 
 /// A [Handler], which handles all builtin capability invocations using [Logging], [Numbergen] and
-/// offloads all external capabilities to an arbitrary [Handler]
+/// offloads all host call capabilities to an arbitrary [Handler]
 pub struct HostHandler<L, N, H> {
     /// Logging capability provider, using which all known `wasmcloud:builtin:logging` operations will be handled
     pub logging: L,
@@ -48,8 +48,8 @@ pub struct HostHandler<L, N, H> {
     /// Random number generator capability provider, using which all known `wasmcloud:builtin:numbergen` operations will be handled
     pub numbergen: N,
 
-    /// External capability provider, using which all non-builtin calls will be handled
-    pub external: H,
+    /// Host call capability provider, using which all non-builtin calls will be handled
+    pub hostcall: H,
 }
 
 /// A builder for [`HostHandler`]
@@ -60,8 +60,8 @@ pub struct HostHandlerBuilder<L, N, H> {
     /// Random number generator capability provider, using which all known `wasmcloud:builtin:numbergen` operations will be handled
     pub numbergen: N,
 
-    /// External capability provider, using which all non-builtin calls will be handled
-    pub external: H,
+    /// Host call capability provider, using which all non-builtin calls will be handled
+    pub hostcall: H,
 }
 
 #[cfg(all(feature = "rand", feature = "log"))]
@@ -73,7 +73,7 @@ impl<H>
         Self {
             logging: LogLogging::from(::log::logger()),
             numbergen: RandNumbergen::from(::rand::rngs::OsRng),
-            external: hostcall,
+            hostcall,
         }
     }
 }
@@ -96,7 +96,7 @@ impl<L, N, H> HostHandlerBuilder<L, N, H> {
         HostHandlerBuilder {
             logging,
             numbergen: self.numbergen,
-            external: self.external,
+            hostcall: self.hostcall,
         }
     }
 
@@ -105,14 +105,14 @@ impl<L, N, H> HostHandlerBuilder<L, N, H> {
         HostHandlerBuilder {
             numbergen,
             logging: self.logging,
-            external: self.external,
+            hostcall: self.hostcall,
         }
     }
 
     /// Set host call [Handler]
     pub fn hostcall<T: Handler>(self, hostcall: T) -> HostHandlerBuilder<L, N, T> {
         HostHandlerBuilder {
-            external: hostcall,
+            hostcall,
             numbergen: self.numbergen,
             logging: self.logging,
         }
@@ -123,7 +123,7 @@ impl<L, N, H> HostHandlerBuilder<L, N, H> {
         HostHandler {
             logging: self.logging,
             numbergen: self.numbergen,
-            external: self.external,
+            hostcall: self.hostcall,
         }
     }
 }
@@ -242,7 +242,7 @@ where
                 }
             }
             _ => match trace_span!("Handler::handle").in_scope(|| {
-                self.external
+                self.hostcall
                     .handle(claims, binding, namespace, operation, payload)
             }) {
                 Ok(Ok(res)) => Ok(Ok(res)),

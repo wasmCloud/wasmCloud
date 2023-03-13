@@ -259,7 +259,7 @@ mod tests {
         Runtime::builder(HostHandler {
             logging: Logging,
             numbergen: Numbergen,
-            external: (),
+            hostcall: (),
         })
         .try_into()
         .expect("failed to construct runtime")
