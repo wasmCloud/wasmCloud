@@ -15,11 +15,11 @@ pub mod capability;
 pub mod runtime;
 
 pub use actor::{
-    Instance as ActorInstance, InstanceConfig as ActorInstanceConfig, Module as ActorModule,
-    Response as ActorResponse,
+    Module as ActorModule, ModuleInstance as ActorModuleInstance, Response as ActorResponse,
 };
 pub use capability::{
-    BuiltinHandler as BuiltinCapabilityHandler, Handler as CapabilityHandler,
-    Logging as LoggingCapability, Numbergen as NumbergenCapability,
+    Handler as CapabilityHandler, HostHandler as HostCapabilityHandler,
+    HostHandlerBuilder as HostCapabilityHandlerBuilder, Logging as LoggingCapability,
+    Numbergen as NumbergenCapability,
 };
 pub use runtime::*;

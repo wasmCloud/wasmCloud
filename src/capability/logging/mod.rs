@@ -10,6 +10,8 @@ pub use self::log::Logging as LogLogging;
 
 use core::fmt::Debug;
 
+use wascap::jwt;
+
 /// Builtin logging capability available within `wasmcloud:builtin:logging` namespace
 pub trait Logging {
     /// Error returned by logging operations
@@ -20,26 +22,26 @@ pub trait Logging {
     /// # Errors
     ///
     /// Returns [`Self::Error`] if the operation fails
-    fn debug(&self, text: String) -> Result<(), Self::Error>;
+    fn debug(&self, claims: &jwt::Claims<jwt::Actor>, text: String) -> Result<(), Self::Error>;
 
     /// Log at info level
     ///
     /// # Errors
     ///
     /// Returns [`Self::Error`] if the operation fails
-    fn info(&self, text: String) -> Result<(), Self::Error>;
+    fn info(&self, claims: &jwt::Claims<jwt::Actor>, text: String) -> Result<(), Self::Error>;
 
     /// Log at warn level
     ///
     /// # Errors
     ///
     /// Returns [`Self::Error`] if the operation fails
-    fn warn(&self, text: String) -> Result<(), Self::Error>;
+    fn warn(&self, claims: &jwt::Claims<jwt::Actor>, text: String) -> Result<(), Self::Error>;
 
     /// Log at error level
     ///
     /// # Errors
     ///
     /// Returns [`Self::Error`] if the operation fails
-    fn error(&self, text: String) -> Result<(), Self::Error>;
+    fn error(&self, claims: &jwt::Claims<jwt::Actor>, text: String) -> Result<(), Self::Error>;
 }

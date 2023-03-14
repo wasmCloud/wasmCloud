@@ -7,9 +7,11 @@ pub use logging::*;
 pub use numbergen::*;
 
 use core::fmt::Debug;
+use std::sync::Arc;
 
 use anyhow::{bail, Context};
 use tracing::{instrument, trace_span};
+use wascap::jwt;
 use wasmbus_rpc::common::{deserialize, serialize};
 use wasmcloud_interface_logging::LogEntry;
 use wasmcloud_interface_numbergen::RangeLimit;
@@ -29,6 +31,7 @@ pub trait Handler {
     /// guest as an application-layer error.
     fn handle(
         &self,
+        claims: &jwt::Claims<jwt::Actor>,
         binding: String,
         namespace: String,
         operation: String,
@@ -37,16 +40,92 @@ pub trait Handler {
 }
 
 /// A [Handler], which handles all builtin capability invocations using [Logging], [Numbergen] and
-/// offloads all external capabilities to an arbitrary [Handler]
-pub struct BuiltinHandler<L, N, H> {
+/// offloads all host call capabilities to an arbitrary [Handler]
+pub struct HostHandler<L, N, H> {
     /// Logging capability provider, using which all known `wasmcloud:builtin:logging` operations will be handled
     pub logging: L,
 
     /// Random number generator capability provider, using which all known `wasmcloud:builtin:numbergen` operations will be handled
     pub numbergen: N,
 
-    /// External capability provider, using which all non-builtin calls will be handled
-    pub external: H,
+    /// Host call capability provider, using which all non-builtin calls will be handled
+    pub hostcall: H,
+}
+
+/// A builder for [`HostHandler`]
+pub struct HostHandlerBuilder<L, N, H> {
+    /// Logging capability provider, using which all known `wasmcloud:builtin:logging` operations will be handled
+    pub logging: L,
+
+    /// Random number generator capability provider, using which all known `wasmcloud:builtin:numbergen` operations will be handled
+    pub numbergen: N,
+
+    /// Host call capability provider, using which all non-builtin calls will be handled
+    pub hostcall: H,
+}
+
+#[cfg(all(feature = "rand", feature = "log"))]
+impl<H>
+    HostHandlerBuilder<LogLogging<&'static dyn ::log::Log>, RandNumbergen<::rand::rngs::OsRng>, H>
+{
+    /// Creates a new [`HostHandler`] builder with preset defaults
+    pub fn new(hostcall: H) -> Self {
+        Self {
+            logging: LogLogging::from(::log::logger()),
+            numbergen: RandNumbergen::from(::rand::rngs::OsRng),
+            hostcall,
+        }
+    }
+}
+
+impl<L, N, H> From<HostHandlerBuilder<L, N, H>> for HostHandler<L, N, H> {
+    fn from(builder: HostHandlerBuilder<L, N, H>) -> Self {
+        builder.build()
+    }
+}
+
+impl<L, N, H> From<HostHandlerBuilder<L, N, H>> for Arc<HostHandler<L, N, H>> {
+    fn from(builder: HostHandlerBuilder<L, N, H>) -> Self {
+        builder.build().into()
+    }
+}
+
+impl<L, N, H> HostHandlerBuilder<L, N, H> {
+    /// Set [Logging] handler
+    pub fn logging<T: Logging>(self, logging: T) -> HostHandlerBuilder<T, N, H> {
+        HostHandlerBuilder {
+            logging,
+            numbergen: self.numbergen,
+            hostcall: self.hostcall,
+        }
+    }
+
+    /// Set [Numbergen] handler
+    pub fn numbergen<T: Numbergen>(self, numbergen: T) -> HostHandlerBuilder<L, T, H> {
+        HostHandlerBuilder {
+            numbergen,
+            logging: self.logging,
+            hostcall: self.hostcall,
+        }
+    }
+
+    /// Set host call [Handler]
+    pub fn hostcall<T: Handler>(self, hostcall: T) -> HostHandlerBuilder<L, N, T> {
+        HostHandlerBuilder {
+            hostcall,
+            numbergen: self.numbergen,
+            logging: self.logging,
+        }
+    }
+
+    /// Turns this builder into a [`HostHandler`]
+    pub fn build(self) -> HostHandler<L, N, H> {
+        HostHandler {
+            logging: self.logging,
+            numbergen: self.numbergen,
+            hostcall: self.hostcall,
+        }
+    }
 }
 
 impl Handler for () {
@@ -54,6 +133,7 @@ impl Handler for () {
 
     fn handle(
         &self,
+        _: &jwt::Claims<jwt::Actor>,
         _: String,
         _: String,
         _: String,
@@ -67,18 +147,25 @@ impl<T, E, F> Handler for F
 where
     T: Into<Vec<u8>>,
     E: ToString + Debug,
-    F: Fn(String, String, String, Vec<u8>) -> anyhow::Result<Result<T, E>>,
+    F: Fn(
+        &jwt::Claims<jwt::Actor>,
+        String,
+        String,
+        String,
+        Vec<u8>,
+    ) -> anyhow::Result<Result<T, E>>,
 {
     type Error = E;
 
     fn handle(
         &self,
+        claims: &jwt::Claims<jwt::Actor>,
         binding: String,
         namespace: String,
         operation: String,
         payload: Vec<u8>,
     ) -> anyhow::Result<Result<Vec<u8>, Self::Error>> {
-        match self(binding, namespace, operation, payload) {
+        match self(claims, binding, namespace, operation, payload) {
             Ok(Ok(res)) => Ok(Ok(res.into())),
             Ok(Err(err)) => Ok(Err(err)),
             Err(err) => Err(err),
@@ -86,7 +173,7 @@ where
     }
 }
 
-impl<L, N, H> Handler for BuiltinHandler<L, N, H>
+impl<L, N, H> Handler for HostHandler<L, N, H>
 where
     L: Logging,
     N: Numbergen,
@@ -97,6 +184,7 @@ where
     #[instrument(skip(self))]
     fn handle(
         &self,
+        claims: &jwt::Claims<jwt::Actor>,
         binding: String,
         namespace: String,
         operation: String,
@@ -106,15 +194,20 @@ where
             (_, "wasmcloud:builtin:logging", "Logging.WriteLog") => {
                 let LogEntry { level, text } =
                     deserialize(&payload).context("failed to deserialize log entry")?;
-                let res = match level.as_str() {
-                    "debug" => trace_span!("Logging::debug").in_scope(|| self.logging.debug(text)),
-                    "info" => trace_span!("Logging::info").in_scope(|| self.logging.info(text)),
-                    "warn" => trace_span!("Logging::warn").in_scope(|| self.logging.warn(text)),
-                    "error" => trace_span!("Logging::error").in_scope(|| self.logging.error(text)),
-                    _ => {
-                        bail!("log level `{level}` is not supported")
-                    }
-                };
+                let res =
+                    match level.as_str() {
+                        "debug" => trace_span!("Logging::debug")
+                            .in_scope(|| self.logging.debug(claims, text)),
+                        "info" => trace_span!("Logging::info")
+                            .in_scope(|| self.logging.info(claims, text)),
+                        "warn" => trace_span!("Logging::warn")
+                            .in_scope(|| self.logging.warn(claims, text)),
+                        "error" => trace_span!("Logging::error")
+                            .in_scope(|| self.logging.error(claims, text)),
+                        _ => {
+                            bail!("log level `{level}` is not supported")
+                        }
+                    };
                 match res {
                     Ok(()) => Ok(Ok(vec![])),
                     Err(err) => Ok(Err(err.to_string())),
@@ -122,7 +215,7 @@ where
             }
             (_, "wasmcloud:builtin:numbergen", "NumberGen.GenerateGuid") => {
                 match trace_span!("Numbergen::generate_guid")
-                    .in_scope(|| self.numbergen.generate_guid())
+                    .in_scope(|| self.numbergen.generate_guid(claims))
                 {
                     Ok(guid) => serialize(&guid.to_string())
                         .context("failed to serialize UUID")
@@ -134,21 +227,24 @@ where
                 let RangeLimit { min, max } =
                     deserialize(&payload).context("failed to deserialize range limit")?;
                 match trace_span!("Numbergen::random_in_range")
-                    .in_scope(|| self.numbergen.random_in_range(min, max))
+                    .in_scope(|| self.numbergen.random_in_range(claims, min, max))
                 {
                     Ok(v) => serialize(&v).context("failed to serialize number").map(Ok),
                     Err(err) => Ok(Err(err.to_string())),
                 }
             }
             (_, "wasmcloud:builtin:numbergen", "NumberGen.Random32") => {
-                match trace_span!("Numbergen::random_32").in_scope(|| self.numbergen.random_32()) {
+                match trace_span!("Numbergen::random_32")
+                    .in_scope(|| self.numbergen.random_32(claims))
+                {
                     Ok(v) => serialize(&v).context("failed to serialize number").map(Ok),
                     Err(err) => Ok(Err(err.to_string())),
                 }
             }
-            _ => match trace_span!("Handler::handle")
-                .in_scope(|| self.external.handle(binding, namespace, operation, payload))
-            {
+            _ => match trace_span!("Handler::handle").in_scope(|| {
+                self.hostcall
+                    .handle(claims, binding, namespace, operation, payload)
+            }) {
                 Ok(Ok(res)) => Ok(Ok(res)),
                 Ok(Err(err)) => Ok(Err(err.to_string())),
                 Err(err) => Err(err),
