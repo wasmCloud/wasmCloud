@@ -4,13 +4,13 @@
 
 use std::env::args;
 
-use anyhow::{self, bail, ensure, Context};
+use anyhow::{self, bail, Context};
 use tokio::fs;
 use tokio::io::{stdin, AsyncReadExt};
 use tracing_subscriber::prelude::*;
 use wascap::jwt;
 use wasmcloud::capability::HostHandlerBuilder;
-use wasmcloud::{ActorModule, ActorModuleResponse, Runtime};
+use wasmcloud::{Actor, Runtime};
 
 #[allow(clippy::unused_async)]
 async fn host_call(
@@ -66,24 +66,17 @@ async fn main() -> anyhow::Result<()> {
         .await
         .with_context(|| format!("failed to read `{actor}`"))?;
 
-    let ActorModuleResponse {
-        code,
-        console_log,
-        response,
-    } = ActorModule::new(&rt, actor)
+    match Actor::new(&rt, actor)
         .context("failed to create actor")?
-        .instantiate()
+        .call(op, Some(pld))
         .await
-        .context("failed to instantiate actor")?
-        .call(op, pld)
-        .await
-        .context("operation failed")?;
-    for log in console_log {
-        eprintln!("{log}");
+        .context("failed to call actor")?
+    {
+        Ok(Some(response)) => {
+            println!("{response:?}");
+            Ok(())
+        }
+        Ok(None) => Ok(()),
+        Err(err) => bail!("operation failed with: {err}"),
     }
-    if let Some(response) = response {
-        println!("{response:?}");
-    }
-    ensure!(code == 1, "actor returned code `{code}`");
-    Ok(())
 }
