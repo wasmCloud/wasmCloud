@@ -32,13 +32,19 @@ test: ## Run unit test suite
 	@$(CARGO) nextest run $(CARGO_TEST_TARGET) --no-fail-fast --bin wash
 	@$(CARGO) nextest run $(CARGO_TEST_TARGET) --no-fail-fast -p wash-lib
 
+test-wash-ci:
+	@$(CARGO) nextest run --profile ci --workspace --bin wash
+
 test-watch: ## Run unit tests continously, can optionally specify a target test filter.
 	@$(CARGO) watch -- $(CARGO) nextest run $(TARGET)
 
-test-integration: ## Run the entire integration test suite
+test-integration: ## Run the entire integration test suite (with docker compose)
 	@$(DOCKER) compose -f ./tools/docker-compose.yml up --detach
 	@$(CARGO) nextest run --profile integration -E 'kind(test)'
 	@$(DOCKER) compose -f ./tools/docker-compose.yml down
+
+test-integration-ci: ## Run the entire integration test suite only
+	@$(CARGO) nextest run --profile ci -E 'kind(test)'
 
 test-integration-watch: ## Run integration test suite continuously
 	@$(CARGO) watch -- $(MAKE) test-integration

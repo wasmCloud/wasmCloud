@@ -17,6 +17,7 @@ jobs:
       - uses: actions/checkout@v3
       - name: Run Rust check + clippy
         run: make rust-check
+
   unit_tests:
     name: Unit Tests
     strategy:
@@ -29,7 +30,8 @@ jobs:
       - name: Install nextest
         uses: taiki-e/install-action@nextest
       - name: Run all wash & wash-lib unit tests
-        run: cargo nextest run --profile ci --workspace --bin wash
+        run: make test-wash-ci
+
   integration_tests:
     name: Integration Tests
     runs-on: ubuntu-22.04
@@ -48,4 +50,4 @@ jobs:
       - name: Install nextest
         uses: taiki-e/install-action@nextest
       - name: Run integration tests
-        run: cargo nextest run --profile ci --workspace -E 'kind(test)'
+        run: make test-integration-ci
