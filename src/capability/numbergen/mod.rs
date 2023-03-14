@@ -10,10 +10,12 @@ pub use uuid::Uuid;
 
 use core::fmt::Debug;
 
+use async_trait::async_trait;
 use wascap::jwt;
 
 /// Builtin random number generation capability available within `wasmcloud:builtin:numbergen` namespace
-pub trait Numbergen {
+#[async_trait]
+pub trait Numbergen: Sync + Send {
     /// Error returned by random number generation operations
     type Error: ToString + Debug;
 
@@ -22,14 +24,14 @@ pub trait Numbergen {
     /// # Errors
     ///
     /// Returns [`Self::Error`] if the operation fails
-    fn generate_guid(&self, claims: &jwt::Claims<jwt::Actor>) -> Result<Uuid, Self::Error>;
+    async fn generate_guid(&self, claims: &jwt::Claims<jwt::Actor>) -> Result<Uuid, Self::Error>;
 
     /// Returns a random [u32] within inclusive range from `min` to `max`
     ///
     /// # Errors
     ///
     /// Returns [`Self::Error`] if the operation fails
-    fn random_in_range(
+    async fn random_in_range(
         &self,
         claims: &jwt::Claims<jwt::Actor>,
         min: u32,
@@ -41,5 +43,5 @@ pub trait Numbergen {
     /// # Errors
     ///
     /// Returns [`Self::Error`] if the operation fails
-    fn random_32(&self, claims: &jwt::Claims<jwt::Actor>) -> Result<u32, Self::Error>;
+    async fn random_32(&self, claims: &jwt::Claims<jwt::Actor>) -> Result<u32, Self::Error>;
 }

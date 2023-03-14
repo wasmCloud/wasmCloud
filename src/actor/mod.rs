@@ -1,35 +1,22 @@
+#[cfg(feature = "component-model")]
+mod component;
 mod module;
-mod wasmbus;
 
-pub use module::{Instance as ModuleInstance, Module};
+#[cfg(feature = "component-model")]
+pub use component::{Component, Instance as ComponentInstance};
+use futures::AsyncReadExt;
+pub use module::{
+    Config as ModuleConfig, Instance as ModuleInstance, Module, Response as ModuleResponse,
+};
 
-use core::fmt::{self, Debug};
-use core::ptr::NonNull;
+use crate::{capability, Runtime};
 
-use std::sync::Arc;
+use core::fmt::Debug;
 
 use anyhow::{ensure, Context, Result};
+use tracing::instrument;
 use wascap::jwt;
 use wascap::wasm::extract_claims;
-
-mod wasm {
-    #[allow(non_camel_case_types)]
-    pub type ptr = u32;
-    #[allow(non_camel_case_types)]
-    pub type usize = u32;
-
-    pub const ERROR: usize = usize::MAX;
-    pub const SUCCESS: usize = 1;
-}
-
-mod guest_call {
-    use super::{wasm, NonNull};
-
-    pub type Params = (wasm::usize, wasm::usize);
-    pub type Result = wasm::usize;
-
-    pub type State = (NonNull<[u8]>, NonNull<[u8]>);
-}
 
 /// Extracts and validates claims contained within `WebAssembly` module
 fn actor_claims(wasm: impl AsRef<[u8]>) -> Result<jwt::Claims<jwt::Actor>> {
@@ -49,50 +36,86 @@ fn actor_claims(wasm: impl AsRef<[u8]>) -> Result<jwt::Claims<jwt::Actor>> {
     Ok(claims.claims)
 }
 
-struct Ctx<'a, H> {
-    wasi: wasmtime_wasi::WasiCtx,
-    wasmbus: wasmbus::Ctx<H>,
-    claims: &'a jwt::Claims<jwt::Actor>,
+/// A pre-loaded wasmCloud actor, which is either a module or a component
+#[derive(Clone)]
+pub enum Actor<H = Box<dyn capability::Handler<Error = String>>> {
+    /// WebAssembly module containing an actor
+    Module(Module<H>),
+    /// WebAssembly component containing an actor
+    #[cfg(feature = "component-model")]
+    Component(Component<H>),
 }
 
-impl<H> Debug for Ctx<'_, H> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Ctx")
-            .field("runtime", &"wasmtime")
-            .field("wasmbus", &self.wasmbus)
-            .field("claims", &self.claims)
-            .finish()
+impl<H> Debug for Actor<H> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Module(module) => f.debug_tuple("Module").field(module).finish(),
+            Self::Component(component) => f.debug_tuple("Component").field(component).finish(),
+        }
     }
 }
 
-impl<'a, H> Ctx<'a, H> {
-    fn new(claims: &'a jwt::Claims<jwt::Actor>, handler: Arc<H>) -> Result<Self> {
-        // TODO: Set stdio pipes
-        let wasi = wasmtime_wasi::WasiCtxBuilder::new()
-            .arg("main.wasm")
-            .context("failed to set argv[0]")?
-            .build();
-        let wasmbus = wasmbus::Ctx::new(handler);
-        Ok(Self {
-            wasi,
-            wasmbus,
-            claims,
-        })
+impl<H: capability::Handler + 'static> Actor<H> {
+    /// Compiles WebAssembly binary using [Runtime].
+    #[instrument(skip(wasm))]
+    pub fn new(rt: &Runtime<H>, wasm: impl AsRef<[u8]>) -> Result<Self> {
+        let wasm = wasm.as_ref();
+        // TODO: Optimize parsing, add functionality to `wascap` to parse from a custom section
+        // directly
+        match wasmparser::Parser::new(0).parse_all(wasm).next() {
+            Some(Ok(wasmparser::Payload::Version {
+                encoding: wasmparser::Encoding::Component,
+                ..
+            })) => Component::new(rt, wasm).map(Self::Component),
+            // fallback to module type
+            _ => Module::new(rt, wasm).map(Self::Module),
+        }
     }
 
-    fn reset(&mut self) {
-        self.wasmbus.reset();
+    /// Reads the WebAssembly binary asynchronously and calls [Actor::new].
+    #[instrument(skip(wasm))]
+    pub async fn read(rt: &Runtime<H>, mut wasm: impl futures::AsyncRead + Unpin) -> Result<Self> {
+        let mut buf = Vec::new();
+        wasm.read_to_end(&mut buf)
+            .await
+            .context("failed to read Wasm")?;
+        Self::new(rt, buf)
     }
-}
 
-/// An actor [`ModuleInstance`] operation result returned in response to [`ModuleInstance::call`]
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct Response {
-    /// Code returned by an invocation of an operation on an actor [Instance].
-    pub code: u32,
-    /// Binary guest operation invocation response if returned by the guest.
-    pub response: Option<Vec<u8>>,
-    /// Console logs produced by a [Instance] operation invocation. Note, that this functionality
-    /// is deprecated and should be empty in most cases.
-    pub console_log: Vec<String>,
+    /// Reads the WebAssembly binary synchronously and calls [Actor::new].
+    #[instrument(skip(wasm))]
+    pub fn read_sync(rt: &Runtime<H>, mut wasm: impl std::io::Read) -> Result<Self> {
+        let mut buf = Vec::new();
+        wasm.read_to_end(&mut buf).context("failed to read Wasm")?;
+        Self::new(rt, buf)
+    }
+
+    /// [Claims](jwt::Claims) associated with this [Actor].
+    #[instrument]
+    pub fn claims(&self) -> &jwt::Claims<jwt::Actor> {
+        match self {
+            Self::Module(module) => module.claims(),
+            Self::Component(component) => component.claims(),
+        }
+    }
+
+    /// Instantiate the actor and invoke an operation on it.
+    #[instrument(skip(operation, payload))]
+    pub async fn call(
+        &self,
+        operation: impl AsRef<str>,
+        payload: Option<impl Into<Vec<u8>> + AsRef<[u8]>>,
+    ) -> anyhow::Result<Result<Option<Vec<u8>>, String>> {
+        let operation = operation.as_ref();
+        match self {
+            Actor::Module(module) => module
+                .call(operation, payload.map(Into::into).unwrap_or(vec![]))
+                .await
+                .context("failed to call operation `{operation}` on module"),
+            Actor::Component(component) => component
+                .call(operation, payload)
+                .await
+                .context("failed to call operation `{operation}` on component"),
+        }
+    }
 }

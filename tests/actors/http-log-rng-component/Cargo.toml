@@ -1,5 +1,5 @@
 [package]
-name = "actor-http-log-rng"
+name = "actor-http-log-rng-component"
 version = "0.1.0"
 edition = "2021"
 
@@ -7,10 +7,10 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-futures = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 wasmbus-rpc = { workspace = true }
 wasmcloud-interface-httpserver = { workspace = true }
 wasmcloud-interface-logging = { workspace = true }
 wasmcloud-interface-numbergen = { workspace = true }
+wit-bindgen = { workspace = true, features = ["default"] }

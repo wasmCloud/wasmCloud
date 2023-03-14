@@ -10,10 +10,12 @@ pub use self::log::Logging as LogLogging;
 
 use core::fmt::Debug;
 
+use async_trait::async_trait;
 use wascap::jwt;
 
 /// Builtin logging capability available within `wasmcloud:builtin:logging` namespace
-pub trait Logging {
+#[async_trait]
+pub trait Logging: Sync + Send {
     /// Error returned by logging operations
     type Error: ToString + Debug;
 
@@ -22,26 +24,36 @@ pub trait Logging {
     /// # Errors
     ///
     /// Returns [`Self::Error`] if the operation fails
-    fn debug(&self, claims: &jwt::Claims<jwt::Actor>, text: String) -> Result<(), Self::Error>;
+    async fn debug(
+        &self,
+        claims: &jwt::Claims<jwt::Actor>,
+        text: String,
+    ) -> Result<(), Self::Error>;
 
     /// Log at info level
     ///
     /// # Errors
     ///
     /// Returns [`Self::Error`] if the operation fails
-    fn info(&self, claims: &jwt::Claims<jwt::Actor>, text: String) -> Result<(), Self::Error>;
+    async fn info(&self, claims: &jwt::Claims<jwt::Actor>, text: String)
+        -> Result<(), Self::Error>;
 
     /// Log at warn level
     ///
     /// # Errors
     ///
     /// Returns [`Self::Error`] if the operation fails
-    fn warn(&self, claims: &jwt::Claims<jwt::Actor>, text: String) -> Result<(), Self::Error>;
+    async fn warn(&self, claims: &jwt::Claims<jwt::Actor>, text: String)
+        -> Result<(), Self::Error>;
 
     /// Log at error level
     ///
     /// # Errors
     ///
     /// Returns [`Self::Error`] if the operation fails
-    fn error(&self, claims: &jwt::Claims<jwt::Actor>, text: String) -> Result<(), Self::Error>;
+    async fn error(
+        &self,
+        claims: &jwt::Claims<jwt::Actor>,
+        text: String,
+    ) -> Result<(), Self::Error>;
 }

@@ -4,7 +4,9 @@ use super::{uuid, Uuid};
 
 use std::sync::{Mutex, MutexGuard};
 
+use async_trait::async_trait;
 use rand::{CryptoRng, Rng};
+use tracing::{instrument, trace};
 use wascap::jwt;
 
 /// A random number generation capability wrapping an arbitrary [`rand::Rng`] implementation.
@@ -24,27 +26,35 @@ impl<T> Numbergen<T> {
     }
 }
 
-impl<T: Rng + CryptoRng> super::Numbergen for Numbergen<T> {
+#[async_trait]
+impl<T: Rng + CryptoRng + Sync + Send> super::Numbergen for Numbergen<T> {
     type Error = &'static str;
 
-    fn generate_guid(&self, _: &jwt::Claims<jwt::Actor>) -> Result<Uuid, Self::Error> {
+    #[instrument(skip(self))]
+    async fn generate_guid(&self, _: &jwt::Claims<jwt::Actor>) -> Result<Uuid, Self::Error> {
         let mut buf = uuid::Bytes::default();
         self.lock()?.fill_bytes(&mut buf);
-        Ok(uuid::Builder::from_random_bytes(buf).into_uuid())
+        let guid = uuid::Builder::from_random_bytes(buf).into_uuid();
+        trace!(?guid, "generated GUID");
+        Ok(guid)
     }
 
-    fn random_in_range(
+    #[instrument(skip(self))]
+    async fn random_in_range(
         &self,
         _: &jwt::Claims<jwt::Actor>,
         min: u32,
         max: u32,
     ) -> Result<u32, Self::Error> {
         let v = self.lock()?.gen_range(min..=max);
+        trace!(v, "generated random u32 in range");
         Ok(v)
     }
 
-    fn random_32(&self, _: &jwt::Claims<jwt::Actor>) -> Result<u32, Self::Error> {
+    #[instrument(skip(self))]
+    async fn random_32(&self, _: &jwt::Claims<jwt::Actor>) -> Result<u32, Self::Error> {
         let v = self.lock()?.gen();
+        trace!(v, "generated random u32");
         Ok(v)
     }
 }

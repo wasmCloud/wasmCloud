@@ -4,13 +4,27 @@
 
 use std::env::args;
 
-use anyhow::{self, bail, ensure, Context};
+use anyhow::{self, bail, Context};
 use tokio::fs;
 use tokio::io::{stdin, AsyncReadExt};
 use tracing_subscriber::prelude::*;
 use wascap::jwt;
 use wasmcloud::capability::HostHandlerBuilder;
-use wasmcloud::{ActorModule, ActorResponse, Runtime};
+use wasmcloud::{Actor, Runtime};
+
+#[allow(clippy::unused_async)]
+async fn host_call(
+    claims: jwt::Claims<jwt::Actor>,
+    binding: String,
+    namespace: String,
+    operation: String,
+    payload: Option<Vec<u8>>,
+) -> anyhow::Result<anyhow::Result<Option<[u8; 0]>>> {
+    bail!(
+        "cannot execute `{binding}.{namespace}.{operation}` with payload {payload:?} for actor `{}`",
+        claims.subject
+    )
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -27,25 +41,13 @@ async fn main() -> anyhow::Result<()> {
     let name = args.next().context("argv[0] not set")?;
     let usage = || format!("Usage: {name} [--version | [actor-wasm op]]");
 
-    let rt: Runtime<_> = Runtime::builder(
-        HostHandlerBuilder::new(
-            |claims: &jwt::Claims<jwt::Actor>,
-             bd,
-             ns,
-             op,
-             pld|
-             -> anyhow::Result<anyhow::Result<[u8; 0]>> {
-                bail!(
-                    "cannot execute `{bd}.{ns}.{op}` with payload {pld:?} for actor `{}`",
-                    claims.subject
-                )
-            },
-        )
-        .build(),
-    )
-    .into();
+    let rt: Runtime<_> = Runtime::builder(HostHandlerBuilder::new(host_call).build())
+        .try_into()
+        .context("failed to construct runtime")?;
+
     let first = args.next().with_context(usage)?;
-    let (actor, op) = match (first.as_str(), args.next(), args.next()) {
+    let second = args.next();
+    let (actor, op) = match (first.as_str(), second, args.next()) {
         ("--version", None, None) => {
             println!("wasmCloud Runtime Version: {}", rt.version());
             return Ok(());
@@ -64,22 +66,17 @@ async fn main() -> anyhow::Result<()> {
         .await
         .with_context(|| format!("failed to read `{actor}`"))?;
 
-    let ActorResponse {
-        code,
-        console_log,
-        response,
-    } = ActorModule::new(&rt, actor)
+    match Actor::new(&rt, actor)
         .context("failed to create actor")?
-        .instantiate()
-        .context("failed to instantiate actor")?
-        .call(&op, &pld)
-        .with_context(|| format!("failed to call `{op}` with payload {pld:?}"))?;
-    for log in console_log {
-        eprintln!("{log}");
+        .call(op, Some(pld))
+        .await
+        .context("failed to call actor")?
+    {
+        Ok(Some(response)) => {
+            println!("{response:?}");
+            Ok(())
+        }
+        Ok(None) => Ok(()),
+        Err(err) => bail!("operation failed with: {err}"),
     }
-    if let Some(response) = response {
-        println!("{response:?}");
-    }
-    ensure!(code == 1, "actor returned code `{code}`");
-    Ok(())
 }
