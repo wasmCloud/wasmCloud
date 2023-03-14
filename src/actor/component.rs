@@ -8,7 +8,6 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use async_trait::async_trait;
-use futures::AsyncReadExt;
 use tracing::{instrument, warn};
 use wascap::jwt;
 
@@ -108,27 +107,6 @@ impl<H: capability::Handler + 'static> Component<H> {
         })
     }
 
-    /// Reads the WebAssembly module asynchronously and calls [Component::new].
-    #[instrument(skip(wasm))]
-    pub async fn read(
-        rt: &Runtime<H>,
-        mut wasm: impl futures::AsyncRead + Unpin,
-    ) -> anyhow::Result<Self> {
-        let mut buf = Vec::new();
-        wasm.read_to_end(&mut buf)
-            .await
-            .context("failed to read Wasm")?;
-        Self::new(rt, buf)
-    }
-
-    /// Reads the WebAssembly module synchronously and calls [Component::new].
-    #[instrument(skip(wasm))]
-    pub fn read_sync(rt: &Runtime<H>, mut wasm: impl std::io::Read) -> anyhow::Result<Self> {
-        let mut buf = Vec::new();
-        wasm.read_to_end(&mut buf).context("failed to read Wasm")?;
-        Self::new(rt, buf)
-    }
-
     /// Instantiates a [Component] and returns the resulting [Instance].
     #[instrument(skip_all)]
     pub async fn instantiate(&self) -> anyhow::Result<Instance<H>>
@@ -151,6 +129,24 @@ impl<H: capability::Handler + 'static> Component<H> {
             .context("failed to instantiate component")?;
         Ok(Instance { bindings, store })
     }
+
+    /// Instantiate a [Component] producing an [Instance] and invoke an operation on it using [Instance::call]
+    #[instrument(skip(operation, payload))]
+    pub async fn call(
+        &self,
+        operation: impl AsRef<str>,
+        payload: Option<impl AsRef<[u8]>>,
+    ) -> anyhow::Result<Result<Option<Vec<u8>>, String>> {
+        let operation = operation.as_ref();
+        let mut instance = self
+            .instantiate()
+            .await
+            .context("failed to instantiate component")?;
+        instance
+            .call(operation, payload)
+            .await
+            .context("failed to call operation `{operation}` on module")
+    }
 }
 
 /// An instance of a [Module]
@@ -159,7 +155,7 @@ pub struct Instance<'a, H> {
     store: wasmtime::Store<Ctx<'a, H>>,
 }
 
-impl<H: Sync + Send> Instance<'_, H> {
+impl<H: capability::Handler> Instance<'_, H> {
     /// Invoke an operation on an [Instance] producing a [Response].
     #[instrument(skip_all)]
     pub async fn call(

@@ -1,11 +1,11 @@
-use anyhow::Context;
+use anyhow::{bail, Context};
 use tokio::fs;
 use wasmbus_rpc::common::{deserialize, serialize};
 use wasmbus_rpc::wascap::prelude::{ClaimsBuilder, KeyPair};
 use wasmbus_rpc::wascap::wasm::embed_claims;
 use wasmbus_rpc::wascap::{caps, jwt};
 use wasmcloud::capability::HostHandlerBuilder;
-use wasmcloud::{ActorModule, ActorModuleResponse, Runtime};
+use wasmcloud::{Actor, Runtime};
 use wasmcloud_interface_httpserver::{HttpRequest, HttpResponse};
 
 #[tokio::main]
@@ -30,38 +30,30 @@ async fn main() -> anyhow::Result<()> {
         .try_into()
         .context("failed to construct runtime")?;
 
-    let actor = ActorModule::read(&rt, wasm.as_slice())
+    let actor = Actor::read(&rt, wasm.as_slice())
         .await
-        .context("failed to read actor module")?;
-    let mut actor = actor
-        .instantiate()
-        .await
-        .context("failed to instantiate actor")?;
+        .context("failed to construct actor")?;
     let buf = serialize(&HttpRequest::default()).context("failed to encode request")?;
-    let ActorModuleResponse {
-        code,
-        response,
-        console_log,
-    } = actor
-        .call("HttpServer.HandleRequest", buf)
+    match actor
+        .call("HttpServer.HandleRequest", Some(buf))
         .await
-        .context("failed to call `HttpServer.HandleRequest`")?;
-    eprintln!("Actor completed with return code {code}");
-    for log in console_log {
-        eprintln!("Log: {log}");
-    }
-    if let Some(response) = response {
-        let HttpResponse {
-            status_code,
-            header,
-            body,
-        } = deserialize(&response).context("failed to deserialize response")?;
-        println!("Status code: {status_code}");
-        for (k, v) in header {
-            println!("Header `{k}`: `{v:?}`");
+        .context("failed to call `HttpServer.HandleRequest`")?
+    {
+        Ok(Some(response)) => {
+            let HttpResponse {
+                status_code,
+                header,
+                body,
+            } = deserialize(&response).context("failed to deserialize response")?;
+            println!("Status code: {status_code}");
+            for (k, v) in header {
+                println!("Header `{k}`: `{v:?}`");
+            }
+            let body = String::from_utf8(body).context("failed to convert body to UTF-8")?;
+            println!("Body: {body}");
+            Ok(())
         }
-        let body = String::from_utf8(body).context("failed to convert body to UTF-8")?;
-        println!("Body: {body}");
+        Ok(None) => bail!("actor did not return a response"),
+        Err(err) => bail!("actor failed with: {err}"),
     }
-    Ok(())
 }

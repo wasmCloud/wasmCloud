@@ -11,7 +11,7 @@ use wascap::wasm::embed_claims;
 use wascap::{caps, jwt};
 use wasmbus_rpc::common::{deserialize, serialize};
 use wasmcloud::capability::{self, HostHandlerBuilder, Uuid};
-use wasmcloud::{ActorComponent, ActorModule, ActorModuleResponse, Runtime};
+use wasmcloud::{Actor, Runtime};
 use wasmcloud_interface_httpserver::{HttpRequest, HttpResponse};
 use wit_component::ComponentEncoder;
 
@@ -124,24 +124,14 @@ async fn actor_http_log_rng_module() -> anyhow::Result<()> {
     let (wasm, key) = sign(wasm).context("failed to sign module")?;
 
     let rt = new_runtime();
-    let actor = ActorModule::new(&rt, wasm).expect("failed to read actor module");
+    let actor = Actor::new(&rt, wasm).expect("failed to construct actor");
     assert_eq!(actor.claims().subject, key.public_key());
 
-    let mut actor = actor
-        .instantiate()
+    let response = actor
+        .call("HttpServer.HandleRequest", Some(REQUEST.as_slice()))
         .await
-        .expect("failed to instantiate actor module");
-
-    let ActorModuleResponse {
-        code,
-        console_log,
-        response,
-    } = actor
-        .call("HttpServer.HandleRequest", REQUEST.as_slice())
-        .await
-        .context("failed to call `HttpServer.HandleRequest`")?;
-    assert_eq!(code, 1);
-    assert!(console_log.is_empty());
+        .context("failed to call `HttpServer.HandleRequest`")?
+        .expect("`HttpServer.HandleRequest` must not fail");
     assert_response(response)
 }
 
@@ -165,13 +155,8 @@ async fn actor_http_log_rng_component() -> anyhow::Result<()> {
     let (wasm, key) = sign(wasm).context("failed to sign component")?;
 
     let rt = new_runtime();
-    let actor = ActorComponent::new(&rt, wasm).expect("failed to read actor component");
+    let actor = Actor::new(&rt, wasm).expect("failed to construct actor");
     assert_eq!(actor.claims().subject, key.public_key());
-
-    let mut actor = actor
-        .instantiate()
-        .await
-        .expect("failed to instantiate actor component");
 
     let response = actor
         .call("HttpServer.HandleRequest", Some(REQUEST.as_slice()))

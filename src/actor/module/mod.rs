@@ -10,9 +10,8 @@ use core::fmt::{self, Debug};
 
 use std::sync::Arc;
 
-use anyhow::{bail, Context, Result};
-use futures::AsyncReadExt;
-use tracing::{instrument, warn};
+use anyhow::{bail, ensure, Context, Result};
+use tracing::{instrument, trace, warn};
 use wascap::jwt;
 
 /// Actor module instance configuration
@@ -125,25 +124,7 @@ impl<H: capability::Handler + 'static> Module<H> {
         })
     }
 
-    /// Reads the WebAssembly module asynchronously and calls [Module::new].
-    #[instrument(skip(wasm))]
-    pub async fn read(rt: &Runtime<H>, mut wasm: impl futures::AsyncRead + Unpin) -> Result<Self> {
-        let mut buf = Vec::new();
-        wasm.read_to_end(&mut buf)
-            .await
-            .context("failed to read Wasm")?;
-        Self::new(rt, buf)
-    }
-
-    /// Reads the WebAssembly module synchronously and calls [Module::new].
-    #[instrument(skip(wasm))]
-    pub fn read_sync(rt: &Runtime<H>, mut wasm: impl std::io::Read) -> Result<Self> {
-        let mut buf = Vec::new();
-        wasm.read_to_end(&mut buf).context("failed to read Wasm")?;
-        Self::new(rt, buf)
-    }
-
-    /// Instantiates a [Module] given an [InstanceConfig] and returns the resulting [Instance].
+    /// Instantiates a [Module] and returns the resulting [Instance].
     #[instrument(skip_all)]
     pub async fn instantiate(&self) -> Result<Instance<H>> {
         let engine = self.module.engine();
@@ -177,6 +158,33 @@ impl<H: capability::Handler + 'static> Module<H> {
             .get_typed_func(&mut store, "__guest_call")
             .context("failed to get `__guest_call` export")?;
         Ok(Instance { func, store })
+    }
+
+    /// Instantiate a [Module] producing an [Instance] and invoke an operation on it using [Instance::call]
+    #[instrument(skip(operation, payload))]
+    pub async fn call(
+        &self,
+        operation: impl AsRef<str>,
+        payload: impl Into<Vec<u8>>,
+    ) -> anyhow::Result<Result<Option<Vec<u8>>, String>> {
+        let operation = operation.as_ref();
+        let mut instance = self
+            .instantiate()
+            .await
+            .context("failed to instantiate module")?;
+        let Response {
+            code,
+            console_log,
+            response,
+        } = instance
+            .call(operation, payload)
+            .await
+            .context("failed to call operation `{operation}` on module")?;
+        ensure!(code == 1, "operation failed with exit code `{code}`");
+        if !console_log.is_empty() {
+            trace!(?console_log);
+        }
+        Ok(Ok(response))
     }
 }
 
@@ -373,9 +381,7 @@ mod tests {
             .build();
         let wasm = embed_claims(&wasm, &claims, &issuer).expect("failed to embed actor claims");
 
-        let actor =
-            Module::read_sync(&RUNTIME, wasm.as_slice()).expect("failed to read actor module");
-
+        let actor = Module::new(&RUNTIME, wasm.as_slice()).expect("failed to read actor module");
         assert_eq!(actor.claims().subject, module.public_key());
 
         actor
