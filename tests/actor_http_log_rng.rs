@@ -144,7 +144,7 @@ async fn actor_http_log_rng_component() -> anyhow::Result<()> {
         .context("failed to encode binary")?
         .adapter(
             "wasi_snapshot_preview1",
-            include_bytes!("adapters/wasi_snapshot_preview1.reactor.wasm"),
+            include_bytes!(env!("CARGO_CDYLIB_FILE_WASI_SNAPSHOT_PREVIEW1")),
         )
         .context("failed to add WASI adapter")?
         .encode()

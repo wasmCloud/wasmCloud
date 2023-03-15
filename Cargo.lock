@@ -249,7 +249,7 @@ dependencies = [
  "cfg-if",
  "libc",
  "miniz_oxide",
- "object",
+ "object 0.30.3",
  "rustc-demangle",
 ]
 
@@ -318,6 +318,11 @@ name = "bumpalo"
 version = "3.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0d261e256854913907f67ed06efbc3338dfe6179796deefc1ff763fc1aee5535"
+
+[[package]]
+name = "byte-array"
+version = "0.0.0"
+source = "git+https://github.com/bytecodealliance/preview2-prototyping?rev=24fa023d1848ca3a24b35ed80ff1514ea54dd219#24fa023d1848ca3a24b35ed80ff1514ea54dd219"
 
 [[package]]
 name = "byteorder"
@@ -1644,6 +1649,15 @@ dependencies = [
 
 [[package]]
 name = "object"
+version = "0.29.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "21158b2c33aa6d4561f1c0a6ea283ca92bc54802a93b263e910746d679a7eb53"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
+name = "object"
 version = "0.30.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ea86265d3d3dcb6a27fc51bd29a4bf387fae9d2986b823079d4986af253eb439"
@@ -2923,7 +2937,7 @@ dependencies = [
  "serde",
  "serde_derive",
  "serde_json",
- "wasm-encoder",
+ "wasm-encoder 0.25.0",
  "wasm-gen",
  "wasmparser",
 ]
@@ -3019,6 +3033,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasi_snapshot_preview1"
+version = "0.0.0"
+source = "git+https://github.com/bytecodealliance/preview2-prototyping?rev=24fa023d1848ca3a24b35ed80ff1514ea54dd219#24fa023d1848ca3a24b35ed80ff1514ea54dd219"
+dependencies = [
+ "byte-array",
+ "object 0.29.0",
+ "wasi",
+ "wasm-encoder 0.24.1",
+ "wit-bindgen",
+]
+
+[[package]]
 name = "wasm-bindgen"
 version = "0.2.84"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3086,6 +3112,15 @@ checksum = "0046fef7e28c3804e5e38bfa31ea2a0f73905319b677e57ebe37e49358989b5d"
 
 [[package]]
 name = "wasm-encoder"
+version = "0.24.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "68f7d56227d910901ce12dfd19acc40c12687994dfb3f57c90690f80be946ec5"
+dependencies = [
+ "leb128",
+]
+
+[[package]]
+name = "wasm-encoder"
 version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4eff853c4f09eec94d76af527eddad4e9de13b11d6286a1ef7134bc30135a2b7"
@@ -3112,7 +3147,7 @@ dependencies = [
  "anyhow",
  "indexmap",
  "serde",
- "wasm-encoder",
+ "wasm-encoder 0.25.0",
  "wasmparser",
 ]
 
@@ -3189,6 +3224,7 @@ dependencies = [
  "wascap 0.10.0",
  "wasi-cap-std-sync 0.0.0",
  "wasi-common 0.0.0",
+ "wasi_snapshot_preview1",
  "wasmbus-rpc",
  "wasmcloud-interface-httpserver",
  "wasmcloud-interface-logging",
@@ -3278,7 +3314,7 @@ dependencies = [
  "indexmap",
  "libc",
  "log",
- "object",
+ "object 0.30.3",
  "once_cell",
  "paste",
  "psm",
@@ -3357,7 +3393,7 @@ dependencies = [
  "cranelift-wasm",
  "gimli",
  "log",
- "object",
+ "object 0.30.3",
  "target-lexicon",
  "thiserror",
  "wasmparser",
@@ -3374,11 +3410,11 @@ dependencies = [
  "gimli",
  "indexmap",
  "log",
- "object",
+ "object 0.30.3",
  "serde",
  "target-lexicon",
  "thiserror",
- "wasm-encoder",
+ "wasm-encoder 0.25.0",
  "wasmparser",
  "wasmprinter",
  "wasmtime-component-util",
@@ -3410,7 +3446,7 @@ dependencies = [
  "gimli",
  "ittapi",
  "log",
- "object",
+ "object 0.30.3",
  "rustc-demangle",
  "serde",
  "target-lexicon",
@@ -3426,7 +3462,7 @@ name = "wasmtime-jit-debug"
 version = "8.0.0"
 source = "git+https://github.com/bytecodealliance/wasmtime?rev=8d3a881b524d56498dfc71b65818b2abbeb1da44#8d3a881b524d56498dfc71b65818b2abbeb1da44"
 dependencies = [
- "object",
+ "object 0.30.3",
  "once_cell",
  "rustix",
 ]
@@ -3518,7 +3554,7 @@ dependencies = [
  "leb128",
  "memchr",
  "unicode-width",
- "wasm-encoder",
+ "wasm-encoder 0.25.0",
 ]
 
 [[package]]
@@ -3859,7 +3895,7 @@ dependencies = [
  "indexmap",
  "log",
  "url",
- "wasm-encoder",
+ "wasm-encoder 0.25.0",
  "wasm-metadata",
  "wasmparser",
  "wit-parser",
