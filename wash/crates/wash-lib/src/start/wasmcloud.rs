@@ -460,7 +460,7 @@ mod test {
     }
 
     const NATS_SERVER_VERSION: &str = "v2.8.4";
-    const WASMCLOUD_HOST_VERSION: &str = "v0.60.0";
+    const WASMCLOUD_HOST_VERSION: &str = "v0.61.0";
 
     #[tokio::test]
     async fn can_download_and_start_wasmcloud() -> anyhow::Result<()> {
