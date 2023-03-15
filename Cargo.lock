@@ -23,6 +23,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "actor-foobar-component"
+version = "0.1.0"
+dependencies = [
+ "wit-bindgen",
+]
+
+[[package]]
+name = "actor-foobar-guest-component"
+version = "0.1.0"
+dependencies = [
+ "wit-bindgen",
+]
+
+[[package]]
+name = "actor-foobar-host-component"
+version = "0.1.0"
+dependencies = [
+ "wit-bindgen",
+]
+
+[[package]]
 name = "actor-http-log-rng-component"
 version = "0.1.0"
 dependencies = [
@@ -968,6 +989,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "fixedbitset"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ce7134b9999ecaf8bcd65542e436736ef32ddca1b3e06094cb6ec5755203b80"
+
+[[package]]
 name = "fnv"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1462,6 +1489,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "99227334921fae1a979cf0bfdfcc6b3e5ce376ef57e16fb6fb3ea2ed6095f80c"
 
 [[package]]
+name = "linked-hash-map"
+version = "0.5.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0717cef1bc8b636c6e1c1bbdefc09e6322da8a9321966e8928ef80d20f7f770f"
+
+[[package]]
 name = "linux-raw-sys"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1811,6 +1844,16 @@ dependencies = [
  "once_cell",
  "pest",
  "sha2 0.10.6",
+]
+
+[[package]]
+name = "petgraph"
+version = "0.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4dd7d28ee937e54fe3080c91faa1c3a46c06de6252988a7f4592ba2310ef22a4"
+dependencies = [
+ "fixedbitset",
+ "indexmap",
 ]
 
 [[package]]
@@ -2326,6 +2369,18 @@ dependencies = [
  "itoa",
  "ryu",
  "serde",
+]
+
+[[package]]
+name = "serde_yaml"
+version = "0.8.26"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "578a7433b776b56a35785ed5ce9a7e777ac0598aac5a6dd1b4b18a307c7fc71b"
+dependencies = [
+ "indexmap",
+ "ryu",
+ "serde",
+ "yaml-rust",
 ]
 
 [[package]]
@@ -3111,6 +3166,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0046fef7e28c3804e5e38bfa31ea2a0f73905319b677e57ebe37e49358989b5d"
 
 [[package]]
+name = "wasm-compose"
+version = "0.2.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f6cf019e5e4a996c6510e8c47ea9543236d8e9f10fa1f6a099f740e96bcbeb76"
+dependencies = [
+ "anyhow",
+ "heck 0.4.1",
+ "indexmap",
+ "log",
+ "petgraph",
+ "serde",
+ "serde_yaml",
+ "smallvec",
+ "wasm-encoder 0.25.0",
+ "wasmparser",
+ "wat",
+]
+
+[[package]]
 name = "wasm-encoder"
 version = "0.24.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3205,6 +3279,9 @@ name = "wasmcloud"
 version = "0.1.0"
 dependencies = [
  "actor-echo-module",
+ "actor-foobar-component",
+ "actor-foobar-guest-component",
+ "actor-foobar-host-component",
  "actor-http-log-rng-component",
  "actor-http-log-rng-module",
  "anyhow",
@@ -3225,6 +3302,7 @@ dependencies = [
  "wasi-cap-std-sync 0.0.0",
  "wasi-common 0.0.0",
  "wasi_snapshot_preview1",
+ "wasm-compose",
  "wasmbus-rpc",
  "wasmcloud-interface-httpserver",
  "wasmcloud-interface-logging",
@@ -3925,6 +4003,15 @@ dependencies = [
  "log",
  "thiserror",
  "wast 35.0.2",
+]
+
+[[package]]
+name = "yaml-rust"
+version = "0.4.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "56c1936c4cc7a1c9ab21a1ebb602eb942ba868cbd44a99cb7cdc5892335e1c85"
+dependencies = [
+ "linked-hash-map",
 ]
 
 [[package]]

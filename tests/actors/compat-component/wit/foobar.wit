@@ -1,0 +1,12 @@
+interface host {
+    foo: func() -> string
+}
+
+interface guest {
+    foobar: func() -> string
+}
+
+default world foobar {
+    import foobar-host: self.host
+    export foobar-guest: self.guest
+}
