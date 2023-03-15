@@ -7,6 +7,7 @@ interface actor {
 }
 
 default world wasmcloud {
+    import wasi-stderr: pkg.wasi-stderr
     import host: self.host
     export actor: self.actor
 }

@@ -45,6 +45,14 @@ impl<'a> Ctx<'a> {
 }
 
 #[async_trait]
+impl crate::actor::component::wasi_stderr::Host for Ctx<'_> {
+    async fn print(&mut self, msg: String) -> anyhow::Result<()> {
+        eprintln!("{msg}");
+        Ok(())
+    }
+}
+
+#[async_trait]
 impl host::Host for Ctx<'_> {
     async fn host_call(
         &mut self,
@@ -123,6 +131,7 @@ impl Component {
         let (bindings, _) = Wasmcloud::instantiate_async(&mut store, &self.component, &linker)
             .await
             .context("failed to instantiate component")?;
+
         Ok(Instance { bindings, store })
     }
 

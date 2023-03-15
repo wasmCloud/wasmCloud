@@ -1,0 +1,7 @@
+default interface wasi-stderr {
+  print: func(message: string)
+}
+
+default world wasmcloud-wasi-stderr {
+  import print: self.wasi-stderr
+}
