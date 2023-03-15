@@ -53,7 +53,7 @@ jobs:
       with:
         path: /nix
         key: nix
-    - uses: nixbuild/nix-quick-install-action@v21
+    - uses: nixbuild/nix-quick-install-action@v22
       with:
         nix_conf: |
           experimental-features = nix-command flakes
