@@ -54,6 +54,9 @@ cbindgen = { workspace = true }
 
 [dev-dependencies]
 actor-echo-module = { workspace = true }
+actor-foobar-component = { workspace = true }
+actor-foobar-guest-component = { workspace = true }
+actor-foobar-host-component = { workspace = true }
 actor-http-log-rng-component = { workspace = true }
 actor-http-log-rng-module = { workspace = true }
 once_cell = { workspace = true }
@@ -62,12 +65,16 @@ serde_json = { workspace = true }
 tokio = { workspace = true, features = ["fs", "macros", "rt"] }
 tracing-subscriber = { workspace = true, features = ["ansi", "env-filter", "fmt", "json", "std"] }
 wasi_snapshot_preview1 = { workspace = true, features = ["reactor"] }
+wasm-compose = { workspace = true }
 wasmcloud-interface-httpserver = { workspace = true }
 wat = { workspace = true }
 wit-component = { workspace = true }
 
 [workspace.dependencies]
 actor-echo-module = { path = "./tests/actors/echo-module", target = "wasm32-unknown-unknown", artifact = "cdylib" }
+actor-foobar-component = { path = "./tests/actors/compat-component/foobar", target = "wasm32-wasi", artifact = "cdylib" }
+actor-foobar-guest-component = { path = "./tests/actors/compat-component/foobar-guest", target = "wasm32-wasi", artifact = "cdylib" }
+actor-foobar-host-component = { path = "./tests/actors/compat-component/foobar-host", target = "wasm32-wasi", artifact = "cdylib" }
 actor-http-log-rng-component = { path = "./tests/actors/http-log-rng-component", target = "wasm32-wasi", artifact = "cdylib" }
 actor-http-log-rng-module = { path = "./tests/actors/http-log-rng-module", target = "wasm32-unknown-unknown", artifact = "cdylib" }
 anyhow = { version = "1.0.69", default-features = false }
@@ -88,6 +95,7 @@ wascap = { version = "0.10.0", default-features = false }
 wasi-cap-std-sync = { git = "https://github.com/bytecodealliance/preview2-prototyping", rev = "24fa023d1848ca3a24b35ed80ff1514ea54dd219", default-features = false }
 wasi-common = { git = "https://github.com/bytecodealliance/preview2-prototyping", rev = "24fa023d1848ca3a24b35ed80ff1514ea54dd219", default-features = false }
 wasi_snapshot_preview1 = { git = "https://github.com/bytecodealliance/preview2-prototyping", rev = "24fa023d1848ca3a24b35ed80ff1514ea54dd219", default-features = false, target = "wasm32-unknown-unknown", artifact = "cdylib" }
+wasm-compose = { version = "0.2.11", default-features = false }
 wasmbus-rpc = { version = "0.11.2", default-features = false }
 wasmcloud = { path = "." }
 wasmcloud-example-runner = { version = "0.4.0", default-features = false }
