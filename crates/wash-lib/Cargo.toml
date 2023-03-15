@@ -57,7 +57,6 @@ cargo_toml = { workspace = true }
 
 [dev-dependencies]
 claims = { workspace = true }
-inspect = { workspace = true }
 dirs = { workspace = true }
 tempfile = { workspace = true }
 test-case = { workspace = true }

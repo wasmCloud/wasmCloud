@@ -1599,12 +1599,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "inspect"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0ffe1795f3bb174cb0068e89f829ac8fbef920d8bc1d1a78112c5990bb56c0c"
-
-[[package]]
 name = "instant"
 version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4013,7 +4007,6 @@ dependencies = [
  "heck 0.4.1",
  "ignore",
  "indicatif",
- "inspect",
  "log",
  "nkeys",
  "oci-distribution",
