@@ -1,47 +1,60 @@
 /// [rand](::rand) crate adaptors for random number generation capability
-#[cfg(feature = "rand")]
 pub mod rand;
 
-#[cfg(feature = "rand")]
 pub use self::rand::Numbergen as RandNumbergen;
 
-pub use uuid;
-pub use uuid::Uuid;
+pub use uuid::{self, Uuid};
 
 use core::fmt::Debug;
 
-use async_trait::async_trait;
-use wascap::jwt;
+use anyhow::{bail, Context, Error, Result};
+use serde::Serialize;
+use wasmbus_rpc::common::{deserialize, serialize};
+use wasmcloud_interface_numbergen::RangeLimit;
 
-/// Builtin random number generation capability available within `wasmcloud:builtin:numbergen` namespace
-#[async_trait]
-pub trait Numbergen: Sync + Send {
-    /// Error returned by random number generation operations
-    type Error: ToString + Debug;
-
+#[derive(Clone, Debug)]
+/// Random number generator invocation
+pub enum Invocation {
     /// Generates a v4 [Uuid]
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Self::Error`] if the operation fails
-    async fn generate_guid(&self, claims: &jwt::Claims<jwt::Actor>) -> Result<Uuid, Self::Error>;
-
+    GenerateGuid,
     /// Returns a random [u32] within inclusive range from `min` to `max`
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Self::Error`] if the operation fails
-    async fn random_in_range(
-        &self,
-        claims: &jwt::Claims<jwt::Actor>,
+    RandomInRange {
+        /// Minimum [u32] to return
         min: u32,
+        /// Maximum [u32] to return
         max: u32,
-    ) -> Result<u32, Self::Error>;
-
+    },
     /// Returns a random [u32]
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Self::Error`] if the operation fails
-    async fn random_32(&self, claims: &jwt::Claims<jwt::Actor>) -> Result<u32, Self::Error>;
+    Random32,
+}
+
+impl<O, P> TryFrom<(O, Option<P>)> for Invocation
+where
+    O: AsRef<str>,
+    P: AsRef<[u8]>,
+{
+    type Error = Error;
+
+    fn try_from((operation, payload): (O, Option<P>)) -> Result<Self> {
+        match operation.as_ref() {
+            "NumberGen.GenerateGuid" => Ok(Self::GenerateGuid),
+            "NumberGen.RandomInRange" => {
+                let payload = payload.context("payload cannot be empty")?;
+                let RangeLimit { min, max } =
+                    deserialize(payload.as_ref()).context("failed to deserialize range limit")?;
+                Ok(Self::RandomInRange { min, max })
+            }
+            "NumberGen.Random32" => Ok(Self::Random32),
+            operation => bail!("unknown operation: `{operation}`"),
+        }
+    }
+}
+
+/// Serialize response to format expected by the actor
+///
+/// # Errors
+///
+/// Returns an [Error] if serialization fails
+pub fn serialize_response(res: &impl Serialize) -> Result<Vec<u8>> {
+    serialize(res).context("failed to serialize value")
 }

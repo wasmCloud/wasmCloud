@@ -10,7 +10,8 @@ use wascap::prelude::{ClaimsBuilder, KeyPair};
 use wascap::wasm::embed_claims;
 use wascap::{caps, jwt};
 use wasmbus_rpc::common::{deserialize, serialize};
-use wasmcloud::capability::{self, HostHandlerBuilder, Uuid};
+use wasmcloud::capability::numbergen::Uuid;
+use wasmcloud::capability::{HandlerFunc, HostInvocation};
 use wasmcloud::{Actor, Runtime};
 use wasmcloud_interface_httpserver::{HttpRequest, HttpResponse};
 use wit_component::ComponentEncoder;
@@ -44,20 +45,16 @@ static REQUEST: Lazy<Vec<u8>> = Lazy::new(|| {
 async fn host_call(
     claims: jwt::Claims<jwt::Actor>,
     binding: String,
-    namespace: String,
-    operation: String,
-    payload: Option<Vec<u8>>,
-) -> anyhow::Result<anyhow::Result<Option<[u8; 0]>>> {
+    invocation: HostInvocation,
+) -> anyhow::Result<Option<[u8; 0]>> {
     bail!(
-        "cannot execute `{binding}.{namespace}.{operation}` with payload {payload:?} for actor `{}`",
+        "cannot execute `{invocation:?}` within binding `{binding}` for actor `{}`",
         claims.subject
     )
 }
 
-fn new_runtime() -> Runtime<impl capability::Handler> {
-    Runtime::builder(HostHandlerBuilder::new(host_call).build())
-        .try_into()
-        .expect("failed to construct runtime")
+fn new_runtime() -> Runtime {
+    Runtime::from_host_handler(HandlerFunc::from(host_call)).expect("failed to construct runtime")
 }
 
 fn assert_response(response: Option<impl AsRef<[u8]>>) -> anyhow::Result<()> {

@@ -1,6 +1,7 @@
 use super::actor_claims;
 
-use crate::{capability, Runtime};
+use crate::capability::{Handle, Invocation};
+use crate::Runtime;
 
 use core::fmt::{self, Debug};
 
@@ -16,13 +17,13 @@ wasmtime::component::bindgen!({
     async: true,
 });
 
-pub(super) struct Ctx<'a, H> {
+pub(super) struct Ctx<'a> {
     pub wasi: ::host::WasiCtx,
     pub claims: &'a jwt::Claims<jwt::Actor>,
-    pub handler: Arc<H>,
+    pub handler: Arc<Box<dyn Handle<Invocation>>>,
 }
 
-impl<H> Debug for Ctx<'_, H> {
+impl Debug for Ctx<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Ctx")
             .field("runtime", &"wasmtime")
@@ -31,8 +32,8 @@ impl<H> Debug for Ctx<'_, H> {
     }
 }
 
-impl<'a, H> Ctx<'a, H> {
-    fn new(claims: &'a jwt::Claims<jwt::Actor>, handler: Arc<H>) -> Self {
+impl<'a> Ctx<'a> {
+    fn new(claims: &'a jwt::Claims<jwt::Actor>, handler: Arc<Box<dyn Handle<Invocation>>>) -> Self {
         // TODO: Set stdio pipes
         let wasi = wasi_cap_std_sync::WasiCtxBuilder::new().build();
         Self {
@@ -44,7 +45,7 @@ impl<'a, H> Ctx<'a, H> {
 }
 
 #[async_trait]
-impl<H: capability::Handler> host::Host for Ctx<'_, H> {
+impl host::Host for Ctx<'_> {
     async fn host_call(
         &mut self,
         binding: String,
@@ -52,28 +53,26 @@ impl<H: capability::Handler> host::Host for Ctx<'_, H> {
         operation: String,
         payload: Option<Vec<u8>>,
     ) -> anyhow::Result<Result<Option<Vec<u8>>, String>> {
-        match self
-            .handler
-            .handle(self.claims, binding, namespace, operation, payload)
-            .await
-        {
-            Err(err) => Err(err),
-            Ok(Err(err)) => Ok(Err(err.to_string())),
-            Ok(Ok(res)) => Ok(Ok(res)),
+        let invocation = (namespace, operation, payload)
+            .try_into()
+            .context("failed to parse invocation")?;
+        match self.handler.handle(self.claims, binding, invocation).await {
+            Err(err) => Ok(Err(err.to_string())),
+            Ok(res) => Ok(Ok(res)),
         }
     }
 }
 
 /// Pre-compiled actor [Component], which is cheapily-[Cloneable](Clone)
 #[derive(Clone)]
-pub struct Component<H> {
+pub struct Component {
     component: wasmtime::component::Component,
     engine: wasmtime::Engine,
     claims: jwt::Claims<jwt::Actor>,
-    handler: Arc<H>,
+    handler: Arc<Box<dyn Handle<Invocation>>>,
 }
 
-impl<H> Debug for Component<H> {
+impl Debug for Component {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Component")
             .field("runtime", &"wasmtime")
@@ -82,7 +81,7 @@ impl<H> Debug for Component<H> {
     }
 }
 
-impl<H> Component<H> {
+impl Component {
     /// [Claims](jwt::Claims) associated with this [Component].
     #[instrument]
     pub fn claims(&self) -> &jwt::Claims<jwt::Actor> {
@@ -90,10 +89,10 @@ impl<H> Component<H> {
     }
 }
 
-impl<H: capability::Handler + 'static> Component<H> {
+impl Component {
     /// Extracts [Claims](jwt::Claims) from WebAssembly component and compiles it using [Runtime].
     #[instrument(skip(wasm))]
-    pub fn new(rt: &Runtime<H>, wasm: impl AsRef<[u8]>) -> anyhow::Result<Self> {
+    pub fn new(rt: &Runtime, wasm: impl AsRef<[u8]>) -> anyhow::Result<Self> {
         let wasm = wasm.as_ref();
         let engine = rt.engine.clone();
         let claims = actor_claims(wasm)?;
@@ -109,16 +108,13 @@ impl<H: capability::Handler + 'static> Component<H> {
 
     /// Instantiates a [Component] and returns the resulting [Instance].
     #[instrument(skip_all)]
-    pub async fn instantiate(&self) -> anyhow::Result<Instance<H>>
-    where
-        H: capability::Handler + Sync + Send + 'static,
-    {
+    pub async fn instantiate(&self) -> anyhow::Result<Instance> {
         let mut linker = wasmtime::component::Linker::new(&self.engine);
 
-        Wasmcloud::add_to_linker(&mut linker, |ctx: &mut Ctx<'_, H>| ctx)
+        Wasmcloud::add_to_linker(&mut linker, |ctx: &mut Ctx<'_>| ctx)
             .context("failed to link `Wasmcloud` interface")?;
 
-        ::host::add_to_linker(&mut linker, |ctx: &mut Ctx<'_, H>| &mut ctx.wasi)
+        ::host::add_to_linker(&mut linker, |ctx: &mut Ctx<'_>| &mut ctx.wasi)
             .context("failed to link `WASI` interface")?;
 
         let cx = Ctx::new(&self.claims, Arc::clone(&self.handler));
@@ -150,12 +146,12 @@ impl<H: capability::Handler + 'static> Component<H> {
 }
 
 /// An instance of a [Component]
-pub struct Instance<'a, H> {
+pub struct Instance<'a> {
     bindings: Wasmcloud,
-    store: wasmtime::Store<Ctx<'a, H>>,
+    store: wasmtime::Store<Ctx<'a>>,
 }
 
-impl<H: capability::Handler> Instance<'_, H> {
+impl Instance<'_> {
     /// Invoke an operation on an [Instance] producing a result, where outermost error represents
     /// a WebAssembly execution error and innermost - the component operation error
     #[instrument(skip_all)]

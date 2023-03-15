@@ -9,7 +9,7 @@ pub use module::{
     Config as ModuleConfig, Instance as ModuleInstance, Module, Response as ModuleResponse,
 };
 
-use crate::{capability, Runtime};
+use crate::Runtime;
 
 use core::fmt::Debug;
 
@@ -38,15 +38,15 @@ fn actor_claims(wasm: impl AsRef<[u8]>) -> Result<jwt::Claims<jwt::Actor>> {
 
 /// A pre-loaded wasmCloud actor, which is either a module or a component
 #[derive(Clone)]
-pub enum Actor<H = Box<dyn capability::Handler<Error = String>>> {
+pub enum Actor {
     /// WebAssembly module containing an actor
-    Module(Module<H>),
+    Module(Module),
     /// WebAssembly component containing an actor
     #[cfg(feature = "component-model")]
-    Component(Component<H>),
+    Component(Component),
 }
 
-impl<H> Debug for Actor<H> {
+impl Debug for Actor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Module(module) => f.debug_tuple("Module").field(module).finish(),
@@ -55,10 +55,10 @@ impl<H> Debug for Actor<H> {
     }
 }
 
-impl<H: capability::Handler + 'static> Actor<H> {
+impl Actor {
     /// Compiles WebAssembly binary using [Runtime].
     #[instrument(skip(wasm))]
-    pub fn new(rt: &Runtime<H>, wasm: impl AsRef<[u8]>) -> Result<Self> {
+    pub fn new(rt: &Runtime, wasm: impl AsRef<[u8]>) -> Result<Self> {
         let wasm = wasm.as_ref();
         // TODO: Optimize parsing, add functionality to `wascap` to parse from a custom section
         // directly
@@ -74,7 +74,7 @@ impl<H: capability::Handler + 'static> Actor<H> {
 
     /// Reads the WebAssembly binary asynchronously and calls [Actor::new].
     #[instrument(skip(wasm))]
-    pub async fn read(rt: &Runtime<H>, mut wasm: impl futures::AsyncRead + Unpin) -> Result<Self> {
+    pub async fn read(rt: &Runtime, mut wasm: impl futures::AsyncRead + Unpin) -> Result<Self> {
         let mut buf = Vec::new();
         wasm.read_to_end(&mut buf)
             .await
@@ -84,7 +84,7 @@ impl<H: capability::Handler + 'static> Actor<H> {
 
     /// Reads the WebAssembly binary synchronously and calls [Actor::new].
     #[instrument(skip(wasm))]
-    pub fn read_sync(rt: &Runtime<H>, mut wasm: impl std::io::Read) -> Result<Self> {
+    pub fn read_sync(rt: &Runtime, mut wasm: impl std::io::Read) -> Result<Self> {
         let mut buf = Vec::new();
         wasm.read_to_end(&mut buf).context("failed to read Wasm")?;
         Self::new(rt, buf)

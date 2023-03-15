@@ -9,19 +9,17 @@ use tokio::fs;
 use tokio::io::{stdin, AsyncReadExt};
 use tracing_subscriber::prelude::*;
 use wascap::jwt;
-use wasmcloud::capability::HostHandlerBuilder;
+use wasmcloud::capability::{HandlerFunc, HostInvocation};
 use wasmcloud::{Actor, Runtime};
 
 #[allow(clippy::unused_async)]
 async fn host_call(
     claims: jwt::Claims<jwt::Actor>,
     binding: String,
-    namespace: String,
-    operation: String,
-    payload: Option<Vec<u8>>,
-) -> anyhow::Result<anyhow::Result<Option<[u8; 0]>>> {
+    invocation: HostInvocation,
+) -> anyhow::Result<Option<[u8; 0]>> {
     bail!(
-        "cannot execute `{binding}.{namespace}.{operation}` with payload {payload:?} for actor `{}`",
+        "cannot execute `{invocation:?}` within binding `{binding}` for actor `{}`",
         claims.subject
     )
 }
@@ -41,8 +39,7 @@ async fn main() -> anyhow::Result<()> {
     let name = args.next().context("argv[0] not set")?;
     let usage = || format!("Usage: {name} [--version | [actor-wasm op]]");
 
-    let rt: Runtime<_> = Runtime::builder(HostHandlerBuilder::new(host_call).build())
-        .try_into()
+    let rt = Runtime::from_host_handler(HandlerFunc::from(host_call))
         .context("failed to construct runtime")?;
 
     let first = args.next().with_context(usage)?;

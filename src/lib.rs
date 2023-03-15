@@ -14,10 +14,6 @@ pub mod capability;
 /// Shared wasmCloud runtime engine
 pub mod runtime;
 
-pub use actor::Actor;
-pub use capability::{
-    Handler as CapabilityHandler, HostHandler as HostCapabilityHandler,
-    HostHandlerBuilder as HostCapabilityHandlerBuilder, Logging as LoggingCapability,
-    Numbergen as NumbergenCapability,
-};
+pub use actor::*;
+pub use capability::*;
 pub use runtime::*;
