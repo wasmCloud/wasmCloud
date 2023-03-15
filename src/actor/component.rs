@@ -149,14 +149,15 @@ impl<H: capability::Handler + 'static> Component<H> {
     }
 }
 
-/// An instance of a [Module]
+/// An instance of a [Component]
 pub struct Instance<'a, H> {
     bindings: Wasmcloud,
     store: wasmtime::Store<Ctx<'a, H>>,
 }
 
 impl<H: capability::Handler> Instance<'_, H> {
-    /// Invoke an operation on an [Instance] producing a [Response].
+    /// Invoke an operation on an [Instance] producing a result, where outermost error represents
+    /// a WebAssembly execution error and innermost - the component operation error
     #[instrument(skip_all)]
     pub async fn call(
         &mut self,
