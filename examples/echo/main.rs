@@ -1,12 +1,24 @@
 use anyhow::{bail, Context};
 use tokio::fs;
+use wascap::prelude::{ClaimsBuilder, KeyPair};
+use wascap::wasm::embed_claims;
+use wascap::{caps, jwt};
 use wasmbus_rpc::common::{deserialize, serialize};
-use wasmbus_rpc::wascap::prelude::{ClaimsBuilder, KeyPair};
-use wasmbus_rpc::wascap::wasm::embed_claims;
-use wasmbus_rpc::wascap::{caps, jwt};
-use wasmcloud::capability::HostHandlerBuilder;
+use wasmcloud::capability::{HandlerFunc, HostInvocation};
 use wasmcloud::{Actor, Runtime};
 use wasmcloud_interface_httpserver::{HttpRequest, HttpResponse};
+
+#[allow(clippy::unused_async)]
+async fn host_call(
+    claims: jwt::Claims<jwt::Actor>,
+    binding: String,
+    invocation: HostInvocation,
+) -> anyhow::Result<Option<[u8; 0]>> {
+    bail!(
+        "cannot execute `{invocation:?}` within binding `{binding}` for actor `{}`",
+        claims.subject
+    )
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -26,8 +38,7 @@ async fn main() -> anyhow::Result<()> {
         .build();
     let wasm = embed_claims(&wasm, &claims, &issuer).context("failed to embed actor claims")?;
 
-    let rt = Runtime::builder(HostHandlerBuilder::new(()).build())
-        .try_into()
+    let rt = Runtime::from_host_handler(HandlerFunc::from(host_call))
         .context("failed to construct runtime")?;
 
     let actor = Actor::read(&rt, wasm.as_slice())

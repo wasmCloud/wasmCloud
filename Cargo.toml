@@ -12,14 +12,15 @@ repository = "https://github.com/wasmCloud/wasmCloud"
 status = "actively-developed"
 
 [dependencies]
-anyhow = { workspace = true }
+anyhow = { workspace = true, features = ["std"] }
 async-trait = { workspace = true }
 futures = { workspace = true, features = ["std"] }
 host = { workspace = true, optional = true }
-log = { workspace = true, optional = true }
-rand = { workspace = true, features = ["std"], optional = true }
+log = { workspace = true }
+rand = { workspace = true, features = ["std"] }
+serde = { workspace = true }
 tokio = { workspace = true, features = ["fs", "macros", "rt"], optional = true }
-tracing = { workspace = true, features = ["release_max_level_info"] }
+tracing = { workspace = true, features = ["log", "release_max_level_info"] }
 tracing-subscriber = { workspace = true, features = ["ansi", "env-filter", "fmt", "json", "std"], optional = true }
 uuid = { workspace = true }
 wascap = { workspace = true }
@@ -36,12 +37,8 @@ wasmtime-wasi = { workspace = true, features = ["sync"] }
 default = [
     "bin",
     "component-model",
-    "log",
-    "rand"
 ]
 bin = [
-    "log",
-    "rand",
     "tokio",
     "tracing-subscriber"
 ]
@@ -50,10 +47,6 @@ component-model = [
     "wasi-cap-std-sync",
     "wasi-common",
     "wasmtime/component-model"
-]
-log = [
-    "dep:log",
-    "tracing/log"
 ]
 
 [build-dependencies]

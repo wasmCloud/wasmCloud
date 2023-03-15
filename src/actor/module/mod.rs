@@ -4,7 +4,8 @@ use self::wasmbus::guest_call;
 
 use super::actor_claims;
 
-use crate::{capability, Runtime};
+use crate::capability::{Handle, Invocation};
+use crate::Runtime;
 
 use core::fmt::{self, Debug};
 
@@ -36,13 +37,13 @@ impl Default for Config {
     }
 }
 
-pub(super) struct Ctx<'a, H> {
+pub(super) struct Ctx<'a> {
     pub wasi: wasmtime_wasi::WasiCtx,
     pub claims: &'a jwt::Claims<jwt::Actor>,
-    pub wasmbus: wasmbus::Ctx<H>,
+    pub wasmbus: wasmbus::Ctx,
 }
 
-impl<H> Debug for Ctx<'_, H> {
+impl Debug for Ctx<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Ctx")
             .field("runtime", &"wasmtime")
@@ -52,8 +53,11 @@ impl<H> Debug for Ctx<'_, H> {
     }
 }
 
-impl<'a, H> Ctx<'a, H> {
-    fn new(claims: &'a jwt::Claims<jwt::Actor>, handler: Arc<H>) -> Result<Self> {
+impl<'a> Ctx<'a> {
+    fn new(
+        claims: &'a jwt::Claims<jwt::Actor>,
+        handler: Arc<Box<dyn Handle<Invocation>>>,
+    ) -> Result<Self> {
         // TODO: Set stdio pipes
         let wasi = wasmtime_wasi::WasiCtxBuilder::new()
             .arg("main.wasm")
@@ -73,14 +77,14 @@ impl<'a, H> Ctx<'a, H> {
 }
 
 /// Pre-compiled actor [Module], which is cheapily-[Cloneable](Clone)
-pub struct Module<H> {
+pub struct Module {
     module: wasmtime::Module,
     claims: jwt::Claims<jwt::Actor>,
-    handler: Arc<H>,
+    handler: Arc<Box<dyn Handle<Invocation>>>,
     config: Config,
 }
 
-impl<H> Clone for Module<H> {
+impl Clone for Module {
     fn clone(&self) -> Self {
         Self {
             module: self.module.clone(),
@@ -91,7 +95,7 @@ impl<H> Clone for Module<H> {
     }
 }
 
-impl<H> Debug for Module<H> {
+impl Debug for Module {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Module")
             .field("runtime", &"wasmtime")
@@ -101,7 +105,7 @@ impl<H> Debug for Module<H> {
     }
 }
 
-impl<H> Module<H> {
+impl Module {
     /// [Claims](jwt::Claims) associated with this [Module].
     #[instrument]
     pub fn claims(&self) -> &jwt::Claims<jwt::Actor> {
@@ -109,10 +113,10 @@ impl<H> Module<H> {
     }
 }
 
-impl<H: capability::Handler + 'static> Module<H> {
+impl Module {
     /// Extracts [Claims](jwt::Claims) from WebAssembly module and compiles it using [Runtime].
     #[instrument(skip(wasm))]
-    pub fn new(rt: &Runtime<H>, wasm: impl AsRef<[u8]>) -> Result<Self> {
+    pub fn new(rt: &Runtime, wasm: impl AsRef<[u8]>) -> Result<Self> {
         let wasm = wasm.as_ref();
         let claims = actor_claims(wasm)?;
         let module = wasmtime::Module::new(&rt.engine, wasm).context("failed to compile module")?;
@@ -126,13 +130,13 @@ impl<H: capability::Handler + 'static> Module<H> {
 
     /// Instantiates a [Module] and returns the resulting [Instance].
     #[instrument(skip_all)]
-    pub async fn instantiate(&self) -> Result<Instance<H>> {
+    pub async fn instantiate(&self) -> Result<Instance> {
         let engine = self.module.engine();
 
         let cx = Ctx::new(&self.claims, Arc::clone(&self.handler))
             .context("failed to construct store context")?;
         let mut store = wasmtime::Store::new(engine, cx);
-        let mut linker = wasmtime::Linker::<Ctx<H>>::new(engine);
+        let mut linker = wasmtime::Linker::<Ctx>::new(engine);
 
         wasmtime_wasi::add_to_linker(&mut linker, |cx| &mut cx.wasi)
             .context("failed to link WASI")?;
@@ -201,12 +205,12 @@ pub struct Response {
 }
 
 /// An instance of a [Module]
-pub struct Instance<'a, H> {
+pub struct Instance<'a> {
     func: wasmtime::TypedFunc<guest_call::Params, guest_call::Result>,
-    store: wasmtime::Store<Ctx<'a, H>>,
+    store: wasmtime::Store<Ctx<'a>>,
 }
 
-impl<H: capability::Handler> Instance<'_, H> {
+impl Instance<'_> {
     /// Invoke an operation on an [Instance] producing a [Response].
     #[instrument(skip_all)]
     pub async fn call(
@@ -257,9 +261,11 @@ impl<H: capability::Handler> Instance<'_, H> {
 mod tests {
     use super::*;
 
-    use crate::capability::{self, HostHandler, Uuid};
-
-    use std::convert::Infallible;
+    use crate::capability::logging::Level;
+    use crate::capability::numbergen::{self, Uuid};
+    use crate::capability::{
+        Handler, HandlerFunc, HostInvocation, LoggingInvocation, NumbergenInvocation,
+    };
 
     use anyhow::Context;
     use async_trait::async_trait;
@@ -290,68 +296,99 @@ mod tests {
     struct Logging;
 
     #[async_trait]
-    impl capability::Logging for Logging {
-        type Error = Infallible;
-
-        async fn debug(
+    impl Handle<LoggingInvocation> for Logging {
+        #[instrument(skip(self))]
+        async fn handle(
             &self,
             _: &jwt::Claims<jwt::Actor>,
-            text: String,
-        ) -> Result<(), Self::Error> {
-            assert_eq!(text, "debug");
-            Ok(())
-        }
-        async fn info(&self, _: &jwt::Claims<jwt::Actor>, text: String) -> Result<(), Self::Error> {
-            assert_eq!(text, "info");
-            Ok(())
-        }
-        async fn warn(&self, _: &jwt::Claims<jwt::Actor>, text: String) -> Result<(), Self::Error> {
-            assert_eq!(text, "warn");
-            Ok(())
-        }
-        async fn error(
-            &self,
-            _: &jwt::Claims<jwt::Actor>,
-            text: String,
-        ) -> Result<(), Self::Error> {
-            assert_eq!(text, "error");
-            Ok(())
+            _: String,
+            invocation: LoggingInvocation,
+        ) -> Result<Option<Vec<u8>>> {
+            match invocation {
+                LoggingInvocation::WriteLog {
+                    level: Level::Debug,
+                    text,
+                } => {
+                    assert_eq!(text, "debug");
+                    Ok(None)
+                }
+                LoggingInvocation::WriteLog {
+                    level: Level::Info,
+                    text,
+                } => {
+                    assert_eq!(text, "info");
+                    Ok(None)
+                }
+                LoggingInvocation::WriteLog {
+                    level: Level::Warn,
+                    text,
+                } => {
+                    assert_eq!(text, "warn");
+                    Ok(None)
+                }
+                LoggingInvocation::WriteLog {
+                    level: Level::Error,
+                    text,
+                } => {
+                    assert_eq!(text, "error");
+                    Ok(None)
+                }
+            }
         }
     }
 
     struct Numbergen;
 
     #[async_trait]
-    impl capability::Numbergen for Numbergen {
-        type Error = Infallible;
-
-        async fn generate_guid(&self, _: &jwt::Claims<jwt::Actor>) -> Result<Uuid, Self::Error> {
-            Ok(*UUID)
-        }
-        async fn random_in_range(
+    impl Handle<NumbergenInvocation> for Numbergen {
+        #[instrument(skip(self))]
+        async fn handle(
             &self,
             _: &jwt::Claims<jwt::Actor>,
-            min: u32,
-            max: u32,
-        ) -> Result<u32, Self::Error> {
-            assert_eq!(min, 42);
-            assert_eq!(max, 4242);
-            Ok(42)
-        }
-        async fn random_32(&self, _: &jwt::Claims<jwt::Actor>) -> Result<u32, Self::Error> {
-            Ok(4242)
+            _: String,
+            invocation: NumbergenInvocation,
+        ) -> Result<Option<Vec<u8>>> {
+            match invocation {
+                NumbergenInvocation::GenerateGuid => {
+                    let guid = numbergen::serialize_response(&UUID.to_string())
+                        .expect("failed to serialize response");
+                    Ok(Some(guid))
+                }
+                NumbergenInvocation::RandomInRange { min, max } => {
+                    assert_eq!(min, 42);
+                    assert_eq!(max, 4242);
+                    let v = numbergen::serialize_response(&42u32)
+                        .expect("failed to serialize response");
+                    Ok(Some(v))
+                }
+                NumbergenInvocation::Random32 => {
+                    let v = numbergen::serialize_response(&4242u32)
+                        .expect("failed to serialize response");
+                    Ok(Some(v))
+                }
+            }
         }
     }
 
-    type TestHandler = HostHandler<Logging, Numbergen, ()>;
+    #[allow(clippy::unused_async)]
+    #[instrument]
+    async fn host_call(
+        claims: jwt::Claims<jwt::Actor>,
+        binding: String,
+        invocation: HostInvocation,
+    ) -> anyhow::Result<Option<[u8; 0]>> {
+        panic!(
+            "cannot execute `{invocation:?}` within binding `{binding}` for actor `{}`",
+            claims.subject
+        )
+    }
 
-    static RUNTIME: Lazy<Runtime<TestHandler>> = Lazy::new(|| {
-        Runtime::builder(HostHandler {
+    static RUNTIME: Lazy<Runtime> = Lazy::new(|| {
+        Runtime::new(Handler {
             logging: Logging,
             numbergen: Numbergen,
-            hostcall: (),
+            host: HandlerFunc::from(host_call),
         })
-        .try_into()
         .expect("failed to construct runtime")
     });
 
@@ -367,7 +404,7 @@ mod tests {
         })
         .expect("failed to serialize request")
     });
-    static HTTP_LOG_RNG_MODULE: Lazy<Module<TestHandler>> = Lazy::new(|| {
+    static HTTP_LOG_RNG_MODULE: Lazy<Module> = Lazy::new(|| {
         let wasm = std::fs::read(env!("CARGO_CDYLIB_FILE_ACTOR_HTTP_LOG_RNG_MODULE"))
             .expect("failed to read `{HTTP_LOG_RNG_WASM}`");
 

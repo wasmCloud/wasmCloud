@@ -1,14 +1,17 @@
-#![cfg(feature = "log")]
+use super::Invocation;
 
-use core::convert::Infallible;
-use core::ops::Deref;
+use crate::capability::Handle;
 
+use core::ops::{Deref, DerefMut};
+
+use anyhow::Result;
 use async_trait::async_trait;
 use log::{Level, Log, Record};
+use tracing::instrument;
 use wascap::jwt;
 
 /// A logging capability wrapping an arbitrary [`log::Log`] implementation.
-pub struct Logging<T>(T);
+pub struct Logging<T = &'static dyn ::log::Log>(T);
 
 impl<T: Log> From<T> for Logging<T> {
     fn from(l: T) -> Self {
@@ -24,56 +27,49 @@ impl<T> Deref for Logging<T> {
     }
 }
 
-impl<T: Log> Logging<T> {
-    fn log_text(&self, level: Level, claims: &jwt::Claims<jwt::Actor>, text: impl AsRef<str>) {
-        let text = text.as_ref();
-        self.log(
-            &Record::builder()
-                .level(level)
-                .target(&claims.subject)
-                .args(format_args!("{text}"))
-                .build(),
-        );
+impl<T> DerefMut for Logging<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl Default for Logging {
+    fn default() -> Self {
+        Self(::log::logger())
+    }
+}
+
+impl From<super::Level> for ::log::Level {
+    fn from(level: super::Level) -> Self {
+        match level {
+            super::Level::Debug => Level::Debug,
+            super::Level::Info => Level::Info,
+            super::Level::Warn => Level::Warn,
+            super::Level::Error => Level::Error,
+        }
     }
 }
 
 #[async_trait]
-impl<T: Log> super::Logging for Logging<T> {
-    type Error = Infallible;
-
-    async fn debug(
+impl<T: Log> Handle<Invocation> for Logging<T> {
+    #[instrument(skip(self))]
+    async fn handle(
         &self,
         claims: &jwt::Claims<jwt::Actor>,
-        text: String,
-    ) -> Result<(), Self::Error> {
-        self.log_text(Level::Debug, claims, text);
-        Ok(())
-    }
-
-    async fn info(
-        &self,
-        claims: &jwt::Claims<jwt::Actor>,
-        text: String,
-    ) -> Result<(), Self::Error> {
-        self.log_text(Level::Info, claims, text);
-        Ok(())
-    }
-
-    async fn warn(
-        &self,
-        claims: &jwt::Claims<jwt::Actor>,
-        text: String,
-    ) -> Result<(), Self::Error> {
-        self.log_text(Level::Warn, claims, text);
-        Ok(())
-    }
-
-    async fn error(
-        &self,
-        claims: &jwt::Claims<jwt::Actor>,
-        text: String,
-    ) -> Result<(), Self::Error> {
-        self.log_text(Level::Error, claims, text);
-        Ok(())
+        _binding: String,
+        invocation: Invocation,
+    ) -> Result<Option<Vec<u8>>> {
+        match invocation {
+            Invocation::WriteLog { level, text } => {
+                self.log(
+                    &Record::builder()
+                        .level(level.into())
+                        .target(&claims.subject)
+                        .args(format_args!("{text}"))
+                        .build(),
+                );
+                Ok(None)
+            }
+        }
     }
 }

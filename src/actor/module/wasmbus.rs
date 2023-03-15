@@ -1,4 +1,4 @@
-use crate::capability;
+use crate::capability::{Handle, Invocation};
 
 use core::fmt::{self, Debug};
 
@@ -25,17 +25,17 @@ mod wasm {
     pub const SUCCESS: usize = 1;
 }
 
-pub struct Ctx<H> {
+pub struct Ctx {
     console_log: Vec<String>,
     guest_call: Option<(String, Vec<u8>)>,
     guest_error: Option<String>,
     guest_response: Option<Vec<u8>>,
     host_error: Option<String>,
     host_response: Option<Vec<u8>>,
-    handler: Arc<H>,
+    handler: Arc<Box<dyn Handle<Invocation>>>,
 }
 
-impl<H> Debug for Ctx<H> {
+impl Debug for Ctx {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Ctx")
             .field("console_log", &self.console_log)
@@ -48,8 +48,8 @@ impl<H> Debug for Ctx<H> {
     }
 }
 
-impl<H> Ctx<H> {
-    pub fn new(handler: Arc<H>) -> Self {
+impl Ctx {
+    pub fn new(handler: Arc<Box<dyn Handle<Invocation>>>) -> Self {
         Self {
             console_log: Vec::default(),
             guest_call: None,
@@ -148,25 +148,22 @@ fn write_bytes<T>(
 }
 
 #[instrument(skip(store, err))]
-fn set_host_error<H>(store: &mut wasmtime::Caller<'_, super::Ctx<'_, H>>, err: impl ToString) {
+fn set_host_error(store: &mut wasmtime::Caller<'_, super::Ctx<'_>>, err: impl ToString) {
     let err = err.to_string();
     trace!(err, "set host error");
     store.data_mut().wasmbus.host_error = Some(err);
 }
 
 #[instrument(skip(store, res))]
-fn set_host_response<H>(
-    store: &mut wasmtime::Caller<'_, super::Ctx<'_, H>>,
-    res: impl Into<Vec<u8>>,
-) {
+fn set_host_response(store: &mut wasmtime::Caller<'_, super::Ctx<'_>>, res: impl Into<Vec<u8>>) {
     let res = res.into();
     trace!(?res, "set host response");
     store.data_mut().wasmbus.host_response = Some(res);
 }
 
 #[instrument(skip(store))]
-fn console_log<H>(
-    mut store: wasmtime::Caller<'_, super::Ctx<'_, H>>,
+fn console_log(
+    mut store: wasmtime::Caller<'_, super::Ctx<'_>>,
     log_ptr: wasm::ptr,
     log_len: wasm::usize,
 ) -> Result<()> {
@@ -179,8 +176,8 @@ fn console_log<H>(
 }
 
 #[instrument(skip(store))]
-fn guest_error<H>(
-    mut store: wasmtime::Caller<'_, super::Ctx<'_, H>>,
+fn guest_error(
+    mut store: wasmtime::Caller<'_, super::Ctx<'_>>,
     err_ptr: wasm::ptr,
     err_len: wasm::usize,
 ) -> Result<()> {
@@ -193,8 +190,8 @@ fn guest_error<H>(
 }
 
 #[instrument(skip(store))]
-fn guest_request<H>(
-    mut store: wasmtime::Caller<'_, super::Ctx<'_, H>>,
+fn guest_request(
+    mut store: wasmtime::Caller<'_, super::Ctx<'_>>,
     op_ptr: wasm::ptr,
     pld_ptr: wasm::ptr,
 ) -> Result<()> {
@@ -213,8 +210,8 @@ fn guest_request<H>(
 }
 
 #[instrument(skip(store))]
-fn guest_response<H>(
-    mut store: wasmtime::Caller<'_, super::Ctx<'_, H>>,
+fn guest_response(
+    mut store: wasmtime::Caller<'_, super::Ctx<'_>>,
     res_ptr: wasm::ptr,
     res_len: wasm::usize,
 ) -> Result<()> {
@@ -228,8 +225,8 @@ fn guest_response<H>(
 
 #[instrument(skip(store))]
 #[allow(clippy::too_many_arguments)]
-async fn host_call<H: capability::Handler>(
-    mut store: wasmtime::Caller<'_, super::Ctx<'_, H>>,
+async fn host_call(
+    mut store: wasmtime::Caller<'_, super::Ctx<'_>>,
     bd_ptr: wasm::ptr,
     bd_len: wasm::usize,
     ns_ptr: wasm::ptr,
@@ -265,15 +262,15 @@ async fn host_call<H: capability::Handler>(
         "`{ns}` capability request unauthorized"
     );
 
-    match trace_span!("capability::Handler::handle", bd, ns, op, ?pld)
+    let invocation = (ns, op, Some(pld))
+        .try_into()
+        .context("failed to parse invocation")?;
+    match trace_span!("Handle::handle")
         .in_scope(|| {
             let ctx = store.data();
-            ctx.wasmbus
-                .handler
-                .handle(ctx.claims, bd, ns, op, Some(pld))
+            ctx.wasmbus.handler.handle(ctx.claims, bd, invocation)
         })
         .await
-        .context("failed to handle provider invocation")?
     {
         Ok(buf) => {
             set_host_response(&mut store, buf.unwrap_or_default());
@@ -287,10 +284,7 @@ async fn host_call<H: capability::Handler>(
 }
 
 #[instrument(skip(store))]
-fn host_error<H>(
-    mut store: wasmtime::Caller<'_, super::Ctx<'_, H>>,
-    err_ptr: wasm::ptr,
-) -> Result<()> {
+fn host_error(mut store: wasmtime::Caller<'_, super::Ctx<'_>>, err_ptr: wasm::ptr) -> Result<()> {
     let err = store
         .data_mut()
         .wasmbus
@@ -305,7 +299,7 @@ fn host_error<H>(
 }
 
 #[instrument(skip(store))]
-fn host_error_len<H>(store: wasmtime::Caller<'_, super::Ctx<'_, H>>) -> wasm::usize {
+fn host_error_len(store: wasmtime::Caller<'_, super::Ctx<'_>>) -> wasm::usize {
     let len = store
         .data()
         .wasmbus
@@ -327,8 +321,8 @@ fn host_error_len<H>(store: wasmtime::Caller<'_, super::Ctx<'_, H>>) -> wasm::us
 }
 
 #[instrument(skip(store))]
-fn host_response<H>(
-    mut store: wasmtime::Caller<'_, super::Ctx<'_, H>>,
+fn host_response(
+    mut store: wasmtime::Caller<'_, super::Ctx<'_>>,
     res_ptr: wasm::ptr,
 ) -> Result<()> {
     let res = store
@@ -345,7 +339,7 @@ fn host_response<H>(
 }
 
 #[instrument(skip(store))]
-fn host_response_len<H>(store: wasmtime::Caller<'_, super::Ctx<'_, H>>) -> wasm::usize {
+fn host_response_len(store: wasmtime::Caller<'_, super::Ctx<'_>>) -> wasm::usize {
     let len = store
         .data()
         .wasmbus
@@ -365,9 +359,7 @@ fn host_response_len<H>(store: wasmtime::Caller<'_, super::Ctx<'_, H>>) -> wasm:
     len
 }
 
-pub(super) fn add_to_linker(
-    linker: &mut wasmtime::Linker<super::Ctx<'_, impl capability::Handler + 'static>>,
-) -> Result<()> {
+pub(super) fn add_to_linker(linker: &mut wasmtime::Linker<super::Ctx<'_>>) -> Result<()> {
     linker.func_wrap("wasmbus", "__console_log", console_log)?;
     linker.func_wrap("wasmbus", "__guest_error", guest_error)?;
     linker.func_wrap("wasmbus", "__guest_request", guest_request)?;
