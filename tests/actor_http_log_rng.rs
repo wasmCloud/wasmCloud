@@ -1,3 +1,6 @@
+mod common;
+use common::*;
+
 use std::str::FromStr;
 
 use anyhow::{bail, ensure, Context};
@@ -5,29 +8,10 @@ use once_cell::sync::Lazy;
 use serde::Deserialize;
 use serde_json::json;
 use tokio::fs;
-use tracing_subscriber::prelude::*;
-use wascap::prelude::{ClaimsBuilder, KeyPair};
-use wascap::wasm::embed_claims;
-use wascap::{caps, jwt};
-use wasmbus_rpc::common::{deserialize, serialize};
 use wasmcloud::capability::numbergen::Uuid;
 use wasmcloud::capability::{HandlerFunc, HostInvocation};
 use wasmcloud::{Actor, Runtime};
 use wasmcloud_interface_httpserver::{HttpRequest, HttpResponse};
-use wit_component::ComponentEncoder;
-
-static LOGGER: Lazy<()> = Lazy::new(|| {
-    tracing_subscriber::registry()
-        .with(tracing_subscriber::fmt::layer().pretty().without_time())
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                tracing_subscriber::EnvFilter::new(
-                    "info,integration=trace,wasmcloud=trace,cranelift_codegen=warn",
-                )
-            }),
-        )
-        .init();
-});
 
 static REQUEST: Lazy<Vec<u8>> = Lazy::new(|| {
     let body = serde_json::to_vec(&json!({
@@ -90,37 +74,20 @@ fn assert_response(response: Option<impl AsRef<[u8]>>) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn sign(wasm: impl AsRef<[u8]>) -> anyhow::Result<(Vec<u8>, KeyPair)> {
-    let issuer = KeyPair::new_account();
-    let module = KeyPair::new_module();
-
-    let claims = ClaimsBuilder::new()
-        .issuer(&issuer.public_key())
-        .subject(&module.public_key())
-        .with_metadata(jwt::Actor {
-            name: Some("http_log_rng".into()),
-            caps: Some(vec![
-                caps::HTTP_SERVER.into(),
-                caps::LOGGING.into(),
-                caps::NUMBERGEN.into(),
-            ]),
-            ..Default::default()
-        })
-        .build();
-    let wasm =
-        embed_claims(wasm.as_ref(), &claims, &issuer).context("failed to embed actor claims")?;
-    Ok((wasm, module))
-}
-
 #[tokio::test]
 async fn actor_http_log_rng_module() -> anyhow::Result<()> {
-    _ = Lazy::force(&LOGGER);
+    init();
 
     const WASM: &str = env!("CARGO_CDYLIB_FILE_ACTOR_HTTP_LOG_RNG_MODULE");
     let wasm = fs::read(WASM)
         .await
         .unwrap_or_else(|_| panic!("failed to read `{WASM}`"));
-    let (wasm, key) = sign(wasm).context("failed to sign module")?;
+    let (wasm, key) = sign(
+        wasm,
+        "http_log_rng",
+        [caps::HTTP_SERVER, caps::LOGGING, caps::NUMBERGEN],
+    )
+    .context("failed to sign module")?;
 
     let rt = new_runtime();
     let actor = Actor::new(&rt, wasm).expect("failed to construct actor");
@@ -136,22 +103,17 @@ async fn actor_http_log_rng_module() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn actor_http_log_rng_component() -> anyhow::Result<()> {
-    _ = Lazy::force(&LOGGER);
+    init();
 
-    const WASM: &str = env!("CARGO_CDYLIB_FILE_ACTOR_HTTP_LOG_RNG_COMPONENT");
-    let wasm = wat::parse_file(WASM).context("failed to parse binary")?;
-    let wasm = ComponentEncoder::default()
-        .validate(true)
-        .module(&wasm)
-        .context("failed to encode binary")?
-        .adapter(
-            "wasi_snapshot_preview1",
-            include_bytes!(env!("CARGO_CDYLIB_FILE_WASI_SNAPSHOT_PREVIEW1")),
-        )
-        .context("failed to add WASI adapter")?
-        .encode()
-        .context("failed to encode a component")?;
-    let (wasm, key) = sign(wasm).context("failed to sign component")?;
+    let wat = wat::parse_file(env!("CARGO_CDYLIB_FILE_ACTOR_HTTP_LOG_RNG_COMPONENT"))
+        .context("failed to parse binary")?;
+    let wasm = encode_component(&wat, true)?;
+    let (wasm, key) = sign(
+        wasm,
+        "http_log_rng",
+        [caps::HTTP_SERVER, caps::LOGGING, caps::NUMBERGEN],
+    )
+    .context("failed to sign component")?;
 
     let rt = new_runtime();
     let actor = Actor::new(&rt, wasm).expect("failed to construct actor");
