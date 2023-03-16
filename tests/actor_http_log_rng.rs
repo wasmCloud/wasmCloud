@@ -41,8 +41,24 @@ fn new_runtime() -> Runtime {
     Runtime::from_host_handler(HandlerFunc::from(host_call)).expect("failed to construct runtime")
 }
 
-fn assert_response(response: Option<impl AsRef<[u8]>>) -> anyhow::Result<()> {
-    let response = response.context("response missing")?;
+async fn run(wasm: impl AsRef<[u8]>) -> anyhow::Result<()> {
+    let (wasm, key) = sign(
+        wasm,
+        "http_log_rng",
+        [caps::HTTP_SERVER, caps::LOGGING, caps::NUMBERGEN],
+    )
+    .context("failed to sign Wasm")?;
+
+    let rt = new_runtime();
+    let actor = Actor::new(&rt, wasm).expect("failed to construct actor");
+    assert_eq!(actor.claims().subject, key.public_key());
+
+    let response = actor
+        .call("HttpServer.HandleRequest", Some(REQUEST.as_slice()))
+        .await
+        .context("failed to call `HttpServer.HandleRequest`")?
+        .expect("`HttpServer.HandleRequest` must not fail")
+        .context("response missing")?;
 
     #[derive(Deserialize)]
     struct Response {
@@ -82,47 +98,24 @@ async fn actor_http_log_rng_module() -> anyhow::Result<()> {
     let wasm = fs::read(WASM)
         .await
         .unwrap_or_else(|_| panic!("failed to read `{WASM}`"));
-    let (wasm, key) = sign(
-        wasm,
-        "http_log_rng",
-        [caps::HTTP_SERVER, caps::LOGGING, caps::NUMBERGEN],
-    )
-    .context("failed to sign module")?;
-
-    let rt = new_runtime();
-    let actor = Actor::new(&rt, wasm).expect("failed to construct actor");
-    assert_eq!(actor.claims().subject, key.public_key());
-
-    let response = actor
-        .call("HttpServer.HandleRequest", Some(REQUEST.as_slice()))
-        .await
-        .context("failed to call `HttpServer.HandleRequest`")?
-        .expect("`HttpServer.HandleRequest` must not fail");
-    assert_response(response)
+    run(wasm).await
 }
 
 #[tokio::test]
-async fn actor_http_log_rng_component() -> anyhow::Result<()> {
+async fn actor_http_log_rng_component_lib() -> anyhow::Result<()> {
     init();
 
     let wat = wat::parse_file(env!("CARGO_CDYLIB_FILE_ACTOR_HTTP_LOG_RNG_COMPONENT"))
         .context("failed to parse binary")?;
-    let wasm = encode_component(&wat, true)?;
-    let (wasm, key) = sign(
-        wasm,
-        "http_log_rng",
-        [caps::HTTP_SERVER, caps::LOGGING, caps::NUMBERGEN],
-    )
-    .context("failed to sign component")?;
+    let wasm = encode_component_lib(&wat, true)?;
+    run(wasm).await
+}
 
-    let rt = new_runtime();
-    let actor = Actor::new(&rt, wasm).expect("failed to construct actor");
-    assert_eq!(actor.claims().subject, key.public_key());
+#[tokio::test]
+async fn actor_http_log_rng_component_bin() -> anyhow::Result<()> {
+    init();
 
-    let response = actor
-        .call("HttpServer.HandleRequest", Some(REQUEST.as_slice()))
-        .await
-        .context("failed to call `HttpServer.HandleRequest`")?
-        .expect("`HttpServer.HandleRequest` must not fail");
-    assert_response(response)
+    let wasm =
+        encode_component_bin(env!("CARGO_CDYLIB_FILE_ACTOR_HTTP_LOG_RNG_COMPONENT"), true).await?;
+    run(wasm).await
 }
