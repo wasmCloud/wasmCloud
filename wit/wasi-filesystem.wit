@@ -1,0 +1,54 @@
+default interface wasi-filesystem {
+  use pkg.wasi-io.{output-stream}
+
+  type descriptor = u32
+
+  type filesize = u64
+
+  enum errno {
+    access,
+    again,
+    already,
+    badf,
+    busy,
+    deadlk,
+    dquot,
+    exist,
+    fbig,
+    ilseq,
+    inprogress,
+    intr,
+    inval,
+    io,
+    isdir,
+    loop,
+    mlink,
+    msgsize,
+    nametoolong,
+    nodev,
+    noent,
+    nolck,
+    nomem,
+    nospc,
+    nosys,
+    notdir,
+    notempty,
+    notrecoverable,
+    notsup,
+    notty,
+    nxio,
+    overflow,
+    perm,
+    pipe,
+    rofs,
+    spipe,
+    txtbsy,
+    xdev,
+  }
+
+  write-via-stream: func(this: descriptor, offset: filesize) -> result<output-stream, errno>
+
+  append-via-stream: func(this: descriptor) -> result<output-stream, errno>
+
+  drop-descriptor: func(this: descriptor)
+}

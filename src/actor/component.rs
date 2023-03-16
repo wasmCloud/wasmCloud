@@ -12,6 +12,14 @@ use async_trait::async_trait;
 use tracing::{instrument, warn};
 use wascap::jwt;
 
+use crate::actor::component::wasi_io::InputStream;
+use crate::actor::component::wasi_io::OutputStream;
+use crate::actor::component::wasi_io::StreamError;
+
+use crate::actor::component::wasi_filesystem::Descriptor;
+use crate::actor::component::wasi_filesystem::Filesize;
+use crate::actor::component::wasi_filesystem::Errno;
+
 wasmtime::component::bindgen!({
     world: "wasmcloud",
     async: true,
@@ -49,6 +57,58 @@ impl crate::actor::component::wasi_stderr::Host for Ctx<'_> {
     async fn print(&mut self, msg: String) -> anyhow::Result<()> {
         eprintln!("{msg}");
         Ok(())
+    }
+}
+
+#[async_trait]
+impl crate::actor::component::wasi_io::Host for Ctx<'_> {
+    async fn drop_input_stream(&mut self, _is: InputStream) -> anyhow::Result<()> {
+        // TODO: IMPLEMENT STUB
+        Ok(())
+    }
+
+    async fn drop_output_stream(&mut self, _is: OutputStream) -> anyhow::Result<()> {
+        // TODO: IMPLEMENT STUB
+        Ok(())
+    }
+
+    async fn write(&mut self, _os: OutputStream, _buf: Vec<u8>) -> anyhow::Result<Result<u64, StreamError>> {
+        // TODO: IMPLEMENT STUB
+        anyhow::Result::Ok(Err(StreamError {}))
+    }
+}
+
+#[async_trait]
+impl crate::actor::component::wasi_filesystem::Host for Ctx<'_> {
+    async fn write_via_stream(&mut self, _fd: Descriptor, _offset: Filesize) -> anyhow::Result<Result<OutputStream, Errno>> {
+        // TODO: IMPLEMENT STUB
+        anyhow::Result::Ok(Err(Errno::Busy))
+    }
+
+    async fn append_via_stream(&mut self, _fd: Descriptor) -> anyhow::Result<Result<OutputStream, Errno>> {
+        // TODO: IMPLEMENT STUB
+        anyhow::Result::Ok(Err(Errno::Busy))
+    }
+
+    async fn drop_descriptor(&mut self, _fd: Descriptor) -> anyhow::Result<()> {
+        // TODO: IMPLEMENT STUB
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl crate::actor::component::wasi_exit::Host for Ctx<'_> {
+    async fn exit(&mut self, _status: Result<(),()>) -> anyhow::Result<()> {
+        // TODO: IMPLEMENT STUB
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl crate::actor::component::wasi_environment::Host for Ctx<'_> {
+    async fn get_environment(&mut self) -> anyhow::Result<Vec<(String, String)>> {
+        // TODO: IMPLEMENT STUB
+        Ok(Vec::new())
     }
 }
 

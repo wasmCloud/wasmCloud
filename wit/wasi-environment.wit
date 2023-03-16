@@ -1,0 +1,3 @@
+default interface wasi-environment {
+  get-environment: func() -> list<tuple<string, string>>
+}

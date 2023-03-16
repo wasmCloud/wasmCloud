@@ -1,0 +1,3 @@
+default interface wasi-exit {
+  exit: func(status: result)
+}

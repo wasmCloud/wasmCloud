@@ -1,0 +1,14 @@
+default interface wasi-io {
+  type input-stream = u32
+
+  type output-stream = u32
+
+  record stream-error {
+  }
+
+  drop-input-stream: func(this: input-stream)
+
+  write: func(this: output-stream, buf: list<u8>) -> result<u64, stream-error>
+
+  drop-output-stream: func(this: output-stream)
+}
