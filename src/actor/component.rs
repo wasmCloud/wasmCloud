@@ -1,5 +1,4 @@
-use super::actor_claims;
-
+use crate::actor::claims;
 use crate::capability::{Handle, Invocation};
 use crate::Runtime;
 
@@ -95,7 +94,7 @@ impl Component {
     pub fn new(rt: &Runtime, wasm: impl AsRef<[u8]>) -> anyhow::Result<Self> {
         let wasm = wasm.as_ref();
         let engine = rt.engine.clone();
-        let claims = actor_claims(wasm)?;
+        let claims = claims(wasm)?;
         let module = wasmtime::component::Component::new(&engine, wasm)
             .context("failed to compile component")?;
         Ok(Self {

@@ -4,9 +4,8 @@ use core::fmt::{self, Debug};
 
 use std::sync::Arc;
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result};
 use tracing::{instrument, trace, trace_span, warn};
-use wascap::jwt;
 
 pub mod guest_call {
     use super::wasm;
@@ -249,18 +248,6 @@ async fn host_call(
     // TODO: make payload nullable
     let pld = read_bytes(&mut store, &memory, pld_ptr, pld_len)
         .context("failed to read `__host_call` payload")?;
-
-    ensure!(
-        store
-            .data()
-            .claims
-            .metadata
-            .as_ref()
-            .map(|jwt::Actor { caps, .. }| caps.as_ref().map(|caps| caps.contains(&ns)))
-            .unwrap_or_default()
-            .unwrap_or_default(),
-        "`{ns}` capability request unauthorized"
-    );
 
     let invocation = (ns, op, Some(pld))
         .try_into()
