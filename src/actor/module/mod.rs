@@ -404,8 +404,9 @@ mod tests {
         .expect("failed to serialize request")
     });
     static HTTP_LOG_RNG_MODULE: Lazy<Module> = Lazy::new(|| {
-        let wasm = std::fs::read(env!("CARGO_CDYLIB_FILE_ACTOR_HTTP_LOG_RNG_MODULE"))
-            .expect(format!("failed to read `{HTTP_LOG_RNG_WASM}`"));
+        const HTTP_LOG_RNG_WASM: &str = env!("CARGO_CDYLIB_FILE_ACTOR_HTTP_LOG_RNG_MODULE");
+        let wasm = std::fs::read(HTTP_LOG_RNG_WASM)
+            .unwrap_or_else(|_| panic!("failed to read `{HTTP_LOG_RNG_WASM}`"));
 
         let issuer = KeyPair::new_account();
         let module = KeyPair::new_module();
