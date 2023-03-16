@@ -17,7 +17,7 @@ maintenance = {status = "actively-developed"}
 default = ["start", "parser"]
 start = ["semver"]
 parser = ["config", "semver", "serde", "serde_json"]
-cli = ["clap", "term-table", "console", "dialoguer", "heck", "ignore", "indicatif", "path-absolutize", "regex"]
+cli = ["clap", "term-table", "console", "dialoguer", "heck", "ignore", "indicatif", "path-absolutize"]
 
 [dependencies]
 anyhow = { workspace = true }
@@ -37,7 +37,7 @@ nkeys = { workspace = true }
 oci-distribution = { workspace = true, features = ["rustls-tls"] }
 path-absolutize = { workspace = true, features = ["once_cell_cache"], optional = true }
 provider-archive = { workspace = true }
-regex = { workspace = true, optional = true }
+regex = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls-tls", "stream"] }
 semver = { workspace = true, features = ["serde"], optional = true }
 serde = { workspace = true, features = ["derive"], optional = true }

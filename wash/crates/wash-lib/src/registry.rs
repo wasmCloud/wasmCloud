@@ -13,6 +13,7 @@ use oci_distribution::{
     Reference,
 };
 use provider_archive::ProviderArchive;
+use regex::RegexBuilder;
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 
@@ -22,6 +23,9 @@ const PROVIDER_ARCHIVE_CONFIG_MEDIA_TYPE: &str =
 const WASM_MEDIA_TYPE: &str = "application/vnd.module.wasm.content.layer.v1+wasm";
 const WASM_CONFIG_MEDIA_TYPE: &str = "application/vnd.wasmcloud.actor.archive.config";
 const OCI_MEDIA_TYPE: &str = "application/vnd.oci.image.layer.v1.tar";
+
+// straight up stolen from oci_distribution::Reference
+pub const REFERENCE_REGEXP: &str = r"^((?:(?:[a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9])(?:(?:\.(?:[a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]))+)?(?::[0-9]+)?/)?[a-z0-9]+(?:(?:(?:[._]|__|[-]*)[a-z0-9]+)+)?(?:(?:/[a-z0-9]+(?:(?:(?:[._]|__|[-]*)[a-z0-9]+)+)?)+)?)(?::([\w][\w.-]{0,127}))?(?:@([A-Za-z][A-Za-z0-9]*(?:[-_+.][A-Za-z][A-Za-z0-9]*)*[:][[:xdigit:]]{32,}))?$";
 
 /// Additional options for pulling an OCI artifact
 #[derive(Default)]
@@ -93,9 +97,28 @@ pub async fn get_oci_artifact(
 pub async fn pull_oci_artifact(url: String, options: OciPullOptions) -> Result<Vec<u8>> {
     let image: Reference = url.to_lowercase().parse()?;
 
-    if image.tag().unwrap_or("latest") == "latest" && !options.allow_latest {
-        bail!("Pulling artifacts with tag 'latest' is prohibited.");
-    };
+    // NOTE(ceejimus): the FromStr implementation for the oci_distribution "Reference"
+    // struct defaults the tag to "latest" if unspecified. Ideally, they would expose
+    // some method to check if our valid input string has a tag or not, but, alas ...
+    // earwax.
+    // They don't even make the regex string public, so I stole it. These lines shouldn't fail
+    // if the parsing for "image" doesn't. Unless of course the change it... what a pickle.
+    let re = RegexBuilder::new(REFERENCE_REGEXP)
+        .size_limit(10 * (1 << 21))
+        .build()?;
+    let input_tag = match re.captures(&url) {
+        Some(caps) => caps.get(2).map(|m| m.as_str().to_owned()),
+        None => bail!("Invalid OCI reference URL."),
+    }
+    .unwrap_or(String::from(""));
+
+    if !options.allow_latest {
+        if input_tag == "latest" {
+            bail!("Pulling artifacts with tag 'latest' is prohibited. This can be overriden with the flag '--allow-latest'.");
+        } else if input_tag.is_empty() {
+            bail!("Registry URLs must have explicit tag. To default missing tags to 'latest', use the flag '--allow-latest'.");
+        }
+    }
 
     let mut client = Client::new(ClientConfig {
         protocol: if options.insecure {
