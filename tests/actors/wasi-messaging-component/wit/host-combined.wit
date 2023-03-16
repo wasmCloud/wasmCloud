@@ -1,0 +1,58 @@
+/// This is here, because currently components exporting multiple interfaces fail to run in Wasmtime
+
+default interface host {
+    //// Types
+
+    /// A broker type that allows the exchange of messages.
+    type broker = u32
+    drop-broker: func(b: broker)
+    open-broker: func(name: string) -> result<broker, error>
+
+    /// An event type that follows the CloudEvents specification (https://github.com/cloudevents/spec/blob/main/cloudevents/spec.md). We
+    /// assume the type of the data is a byte sequence. It is up to the data schema to determine what type of the data payload the event 
+    /// contains.
+    record event {
+      specversion: string,
+      ty: string,
+      source: string,
+      id: string,
+      data: option<list<u8>>,
+      datacontenttype: option<string>,
+      dataschema: option<string>,
+      subject: option<string>,
+      time: option<string>,	
+      extensions: option<list<tuple<string, string>>>
+    }
+
+    /// Channels specify where a published message should land. There are two types of channels:
+    /// - queue: competitive consumers, and
+    /// - topic: non-competitive consumers.
+    variant channel {
+      queue(string),
+      topic(string)
+    }
+
+    /// A subscription token that allows receives from a specific subscription
+    type subscription-token = string
+
+    /// An error resource type.
+  	/// Currently, this provides only one function to return a string representation
+  	/// of the error. In the future, this will be extended to provide more information.
+  	// TODO: switch to `resource error { ... }`
+    type error = u32
+  	drop-error: func(e: error)
+  	trace: func(e: error) -> string
+
+    //// Consumer
+
+	/// Subscribes to a channel in a broker.
+  	subscribe: func(b: broker, c: channel) -> result<subscription-token, error>
+
+	/// Unsubscribes from a channel via subscription token.
+  	unsubscribe: func(b: broker, st: subscription-token) -> result<_, error>
+
+    //// Producer
+
+	/// Publishes an event to a channel in a broker.
+	publish: func(b: broker, c: channel, e: event) -> result<_, error>
+}

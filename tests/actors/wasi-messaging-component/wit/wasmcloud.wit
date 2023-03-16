@@ -1,0 +1,12 @@
+interface host {
+    host-call: func(binding: string, namespace: string, operation: string, payload: option<list<u8>>) -> result<option<list<u8>>, string>
+}
+
+interface actor {
+    guest-call: func(operation: string, payload: option<list<u8>>) -> result<option<list<u8>>, string>
+}
+
+default world wasmcloud {
+    import host: self.host
+    export actor: self.actor
+}

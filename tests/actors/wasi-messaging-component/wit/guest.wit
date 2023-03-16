@@ -1,0 +1,5 @@
+default world guest {
+  import handler: pkg.wasi-messaging-handler.handler
+
+  export actor: pkg.wasmcloud.actor
+}

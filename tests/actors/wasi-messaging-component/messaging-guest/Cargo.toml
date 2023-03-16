@@ -1,0 +1,10 @@
+[package]
+name = "actor-wasi-messaging-guest-component"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = { workspace = true, features = ["default"] }

@@ -1,0 +1,9 @@
+default world host {
+  // This is what it's supposed to look like, but exporting multiple interfaces is not allowed:
+  //export producer: pkg.wasi-messaging-producer.producer
+  //export consumer: pkg.wasi-messaging-consumer.consumer
+  //export messaging-types: pkg.types.messaging-types
+  export combined: pkg.host-combined
+
+  import host: pkg.wasmcloud.host
+}

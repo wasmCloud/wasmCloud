@@ -59,6 +59,9 @@ actor-foobar-guest-component = { workspace = true }
 actor-foobar-host-component = { workspace = true }
 actor-http-log-rng-component = { workspace = true }
 actor-http-log-rng-module = { workspace = true }
+actor-wasi-messaging-component = { workspace = true }
+actor-wasi-messaging-guest-component = { workspace = true }
+actor-wasi-messaging-host-component = { workspace = true }
 once_cell = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -79,6 +82,9 @@ actor-foobar-guest-component = { path = "./tests/actors/compat-component/foobar-
 actor-foobar-host-component = { path = "./tests/actors/compat-component/foobar-host", target = "wasm32-wasi", artifact = "cdylib" }
 actor-http-log-rng-component = { path = "./tests/actors/http-log-rng-component", target = "wasm32-wasi", artifact = "cdylib" }
 actor-http-log-rng-module = { path = "./tests/actors/http-log-rng-module", target = "wasm32-unknown-unknown", artifact = "cdylib" }
+actor-wasi-messaging-component = { path = "./tests/actors/wasi-messaging-component/wasi-messaging-demo/guest", package = "guest", target = "wasm32-wasi", artifact = "cdylib" }
+actor-wasi-messaging-guest-component = { path = "./tests/actors/wasi-messaging-component/messaging-guest", target = "wasm32-wasi", artifact = "cdylib" }
+actor-wasi-messaging-host-component = { path = "./tests/actors/wasi-messaging-component/messaging-host", target = "wasm32-wasi", artifact = "cdylib" }
 anyhow = { version = "1.0.69", default-features = false }
 async-trait = { version = "0.1.66", default-features = false }
 cbindgen = { version = "0.24.3", default-features = false }

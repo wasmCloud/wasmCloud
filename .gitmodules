@@ -1,0 +1,3 @@
+[submodule "tests/actors/wasi-messaging-component/wasi-messaging-demo"]
+	path = tests/actors/wasi-messaging-component/wasi-messaging-demo
+	url = https://github.com/danbugs/wasi-messaging-demo.git

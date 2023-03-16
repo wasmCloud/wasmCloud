@@ -26,21 +26,21 @@ dependencies = [
 name = "actor-foobar-component"
 version = "0.1.0"
 dependencies = [
- "wit-bindgen",
+ "wit-bindgen 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
 name = "actor-foobar-guest-component"
 version = "0.1.0"
 dependencies = [
- "wit-bindgen",
+ "wit-bindgen 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
 name = "actor-foobar-host-component"
 version = "0.1.0"
 dependencies = [
- "wit-bindgen",
+ "wit-bindgen 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -53,7 +53,7 @@ dependencies = [
  "wasmcloud-interface-httpserver",
  "wasmcloud-interface-logging",
  "wasmcloud-interface-numbergen",
- "wit-bindgen",
+ "wit-bindgen 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -67,6 +67,20 @@ dependencies = [
  "wasmcloud-interface-httpserver",
  "wasmcloud-interface-logging",
  "wasmcloud-interface-numbergen",
+]
+
+[[package]]
+name = "actor-wasi-messaging-guest-component"
+version = "0.1.0"
+dependencies = [
+ "wit-bindgen 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "actor-wasi-messaging-host-component"
+version = "0.1.0"
+dependencies = [
+ "wit-bindgen 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -1161,6 +1175,13 @@ dependencies = [
  "fallible-iterator",
  "indexmap",
  "stable_deref_trait",
+]
+
+[[package]]
+name = "guest"
+version = "0.1.0"
+dependencies = [
+ "wit-bindgen 0.4.0 (git+https://github.com/bytecodealliance/wit-bindgen)",
 ]
 
 [[package]]
@@ -3109,7 +3130,7 @@ dependencies = [
  "object 0.29.0",
  "wasi",
  "wasm-encoder 0.24.1",
- "wit-bindgen",
+ "wit-bindgen 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -3318,10 +3339,13 @@ dependencies = [
  "actor-foobar-host-component",
  "actor-http-log-rng-component",
  "actor-http-log-rng-module",
+ "actor-wasi-messaging-guest-component",
+ "actor-wasi-messaging-host-component",
  "anyhow",
  "async-trait",
  "cbindgen",
  "futures",
+ "guest",
  "host",
  "log",
  "once_cell",
@@ -3947,7 +3971,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e7cf57f8786216c5652e1228b25203af2ff523808b5e9d3671894eee2bf7264"
 dependencies = [
  "bitflags",
- "wit-bindgen-rust-macro",
+ "wit-bindgen-rust-macro 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "wit-bindgen"
+version = "0.4.0"
+source = "git+https://github.com/bytecodealliance/wit-bindgen#80d9ffaff064092b212bd68339a02e1c2f131416"
+dependencies = [
+ "bitflags",
+ "wit-bindgen-rust-macro 0.4.0 (git+https://github.com/bytecodealliance/wit-bindgen)",
 ]
 
 [[package]]
@@ -3962,6 +3995,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "wit-bindgen-core"
+version = "0.4.0"
+source = "git+https://github.com/bytecodealliance/wit-bindgen#80d9ffaff064092b212bd68339a02e1c2f131416"
+dependencies = [
+ "anyhow",
+ "wit-component",
+ "wit-parser",
+]
+
+[[package]]
 name = "wit-bindgen-rust"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3969,8 +4012,20 @@ checksum = "efdf5b00935b7b52d0e56cae1960f8ac13019a285f5aa762ff6bd7139a5c28a2"
 dependencies = [
  "heck 0.4.1",
  "wasm-metadata",
- "wit-bindgen-core",
- "wit-bindgen-rust-lib",
+ "wit-bindgen-core 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "wit-bindgen-rust-lib 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "wit-component",
+]
+
+[[package]]
+name = "wit-bindgen-rust"
+version = "0.4.0"
+source = "git+https://github.com/bytecodealliance/wit-bindgen#80d9ffaff064092b212bd68339a02e1c2f131416"
+dependencies = [
+ "heck 0.4.1",
+ "wasm-metadata",
+ "wit-bindgen-core 0.4.0 (git+https://github.com/bytecodealliance/wit-bindgen)",
+ "wit-bindgen-rust-lib 0.4.0 (git+https://github.com/bytecodealliance/wit-bindgen)",
  "wit-component",
 ]
 
@@ -3981,7 +4036,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab0a8f4b5fb1820b9d232beb122936425f72ec8fe6acb56e5d8782cfe55083da"
 dependencies = [
  "heck 0.4.1",
- "wit-bindgen-core",
+ "wit-bindgen-core 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "wit-bindgen-rust-lib"
+version = "0.4.0"
+source = "git+https://github.com/bytecodealliance/wit-bindgen#80d9ffaff064092b212bd68339a02e1c2f131416"
+dependencies = [
+ "heck 0.4.1",
+ "wit-bindgen-core 0.4.0 (git+https://github.com/bytecodealliance/wit-bindgen)",
 ]
 
 [[package]]
@@ -3993,8 +4057,21 @@ dependencies = [
  "anyhow",
  "proc-macro2",
  "syn",
- "wit-bindgen-core",
- "wit-bindgen-rust",
+ "wit-bindgen-core 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "wit-bindgen-rust 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "wit-component",
+]
+
+[[package]]
+name = "wit-bindgen-rust-macro"
+version = "0.4.0"
+source = "git+https://github.com/bytecodealliance/wit-bindgen#80d9ffaff064092b212bd68339a02e1c2f131416"
+dependencies = [
+ "anyhow",
+ "proc-macro2",
+ "syn",
+ "wit-bindgen-core 0.4.0 (git+https://github.com/bytecodealliance/wit-bindgen)",
+ "wit-bindgen-rust 0.4.0 (git+https://github.com/bytecodealliance/wit-bindgen)",
  "wit-component",
 ]
 
