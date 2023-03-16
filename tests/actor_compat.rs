@@ -33,19 +33,19 @@ async fn actor_compat_component() -> anyhow::Result<()> {
 
     let host = wat::parse_file(env!("CARGO_CDYLIB_FILE_ACTOR_FOOBAR_HOST_COMPONENT"))
         .context("failed to parse binary")?;
-    let host = encode_component(&host, true).context("failed to encode `host`")?;
+    let host = encode_component_lib(&host, true).context("failed to encode `host`")?;
     let host =
         graph::Component::from_bytes("$host", host).context("failed to parse `host` component")?;
 
     let foobar = wat::parse_file(env!("CARGO_CDYLIB_FILE_ACTOR_FOOBAR_COMPONENT"))
         .context("failed to parse binary")?;
-    let foobar = encode_component(&foobar, true).context("failed to encode `foobar`")?;
+    let foobar = encode_component_lib(&foobar, true).context("failed to encode `foobar`")?;
     let foobar = graph::Component::from_bytes("$foobar", foobar)
         .context("failed to parse `foobar` component")?;
 
     let guest = wat::parse_file(env!("CARGO_CDYLIB_FILE_ACTOR_FOOBAR_GUEST_COMPONENT"))
         .context("failed to parse binary")?;
-    let guest = encode_component(&guest, true).context("failed to encode `guest`")?;
+    let guest = encode_component_lib(&guest, true).context("failed to encode `guest`")?;
     let guest = graph::Component::from_bytes("$guest", guest)
         .context("failed to parse `foobar-guest` component")?;
 

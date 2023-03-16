@@ -100,11 +100,20 @@ async fn actor_http_log_rng_module() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn actor_http_log_rng_component() -> anyhow::Result<()> {
+async fn actor_http_log_rng_component_lib() -> anyhow::Result<()> {
     init();
 
     let wat = wat::parse_file(env!("CARGO_CDYLIB_FILE_ACTOR_HTTP_LOG_RNG_COMPONENT"))
         .context("failed to parse binary")?;
-    let wasm = encode_component(&wat, true)?;
+    let wasm = encode_component_lib(&wat, true)?;
+    run(wasm).await
+}
+
+#[tokio::test]
+async fn actor_http_log_rng_component_bin() -> anyhow::Result<()> {
+    init();
+
+    let wasm =
+        encode_component_bin(env!("CARGO_CDYLIB_FILE_ACTOR_HTTP_LOG_RNG_COMPONENT"), true).await?;
     run(wasm).await
 }

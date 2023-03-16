@@ -904,6 +904,19 @@ dependencies = [
 
 [[package]]
 name = "env_logger"
+version = "0.9.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a12e6657c4c97ebab115a42dcee77225f7f482cdd841cf7088c657a42e9e00e7"
+dependencies = [
+ "atty",
+ "humantime",
+ "log",
+ "regex",
+ "termcolor",
+]
+
+[[package]]
+name = "env_logger"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "85cdab6a89accf66733ad5a1693a4dcced6aeff64602b634530dd73c1f3ee9f0"
@@ -3226,6 +3239,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasm-tools"
+version = "1.0.28"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "95bc840daee6db104a44cf845c1bc99d2bc97255ec845042b1fd88ae4be6c9e9"
+dependencies = [
+ "anyhow",
+ "atty",
+ "clap 4.1.8",
+ "env_logger 0.9.3",
+ "log",
+ "tempfile",
+ "wasm-encoder 0.25.0",
+ "wasmparser",
+ "wasmprinter",
+ "wast 55.0.0",
+ "wat",
+ "wit-component",
+ "wit-parser",
+]
+
+[[package]]
 name = "wasmbus-macros"
 version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3294,6 +3328,7 @@ dependencies = [
  "rand",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -3303,6 +3338,7 @@ dependencies = [
  "wasi-common 0.0.0",
  "wasi_snapshot_preview1",
  "wasm-compose",
+ "wasm-tools",
  "wasmbus-rpc",
  "wasmcloud-interface-httpserver",
  "wasmcloud-interface-logging",
@@ -3976,6 +4012,7 @@ dependencies = [
  "wasm-encoder 0.25.0",
  "wasm-metadata",
  "wasmparser",
+ "wat",
  "wit-parser",
 ]
 
