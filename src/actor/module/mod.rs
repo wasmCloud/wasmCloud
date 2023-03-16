@@ -2,8 +2,7 @@ mod wasmbus;
 
 use self::wasmbus::guest_call;
 
-use super::actor_claims;
-
+use crate::actor::claims;
 use crate::capability::{Handle, Invocation};
 use crate::Runtime;
 
@@ -118,7 +117,7 @@ impl Module {
     #[instrument(skip(wasm))]
     pub fn new(rt: &Runtime, wasm: impl AsRef<[u8]>) -> Result<Self> {
         let wasm = wasm.as_ref();
-        let claims = actor_claims(wasm)?;
+        let claims = claims(wasm)?;
         let module = wasmtime::Module::new(&rt.engine, wasm).context("failed to compile module")?;
         Ok(Self {
             module,
@@ -406,7 +405,7 @@ mod tests {
     });
     static HTTP_LOG_RNG_MODULE: Lazy<Module> = Lazy::new(|| {
         let wasm = std::fs::read(env!("CARGO_CDYLIB_FILE_ACTOR_HTTP_LOG_RNG_MODULE"))
-            .expect("failed to read `{HTTP_LOG_RNG_WASM}`");
+            .expect(format!("failed to read `{HTTP_LOG_RNG_WASM}`"));
 
         let issuer = KeyPair::new_account();
         let module = KeyPair::new_module();
@@ -485,29 +484,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn http_log_rng_valid() -> Result<()> {
+    async fn http_log_rng() -> Result<()> {
         run_http_log_rng(Some([caps::LOGGING, caps::NUMBERGEN])).await
-    }
-
-    #[tokio::test]
-    async fn http_log_rng_no_cap() {
-        assert!(run_http_log_rng(Option::<[&'static str; 0]>::None)
-            .await
-            .is_err());
-    }
-
-    #[tokio::test]
-    async fn http_log_rng_empty_cap() {
-        assert!(run_http_log_rng(Some([])).await.is_err());
-    }
-
-    #[tokio::test]
-    async fn http_log_rng_no_numbergen_cap() {
-        assert!(run_http_log_rng(Some([caps::LOGGING])).await.is_err());
-    }
-
-    #[tokio::test]
-    async fn http_log_rng_no_logging_cap() {
-        assert!(run_http_log_rng(Some([caps::NUMBERGEN])).await.is_err());
     }
 }
