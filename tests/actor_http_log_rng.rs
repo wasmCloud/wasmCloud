@@ -117,7 +117,9 @@ async fn actor_http_log_rng_module() -> anyhow::Result<()> {
     _ = Lazy::force(&LOGGER);
 
     const WASM: &str = env!("CARGO_CDYLIB_FILE_ACTOR_HTTP_LOG_RNG_MODULE");
-    let wasm = fs::read(WASM).await.expect("failed to read `{WASM}`");
+    let wasm = fs::read(WASM)
+        .await
+        .unwrap_or_else(|_| panic!("failed to read `{WASM}`"));
     let (wasm, key) = sign(wasm).context("failed to sign module")?;
 
     let rt = new_runtime();
