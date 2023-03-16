@@ -23,7 +23,9 @@ async fn host_call(
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     const WASM: &str = env!("CARGO_CDYLIB_FILE_ACTOR_ECHO_MODULE");
-    let wasm = fs::read(WASM).await.context("failed to read `{WASM}`")?;
+    let wasm = fs::read(WASM)
+        .await
+        .with_context(|| format!("failed to read `{WASM}`"))?;
 
     let issuer = KeyPair::new_account();
     let module = KeyPair::new_module();

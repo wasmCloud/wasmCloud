@@ -111,11 +111,11 @@ impl Actor {
             Actor::Module(module) => module
                 .call(operation, payload.map(Into::into).unwrap_or(vec![]))
                 .await
-                .context("failed to call operation `{operation}` on module"),
+                .with_context(|| format!("failed to call operation `{operation}` on module")),
             Actor::Component(component) => component
                 .call(operation, payload)
                 .await
-                .context("failed to call operation `{operation}` on component"),
+                .with_context(|| format!("failed to call operation `{operation}` on component")),
         }
     }
 }
