@@ -141,7 +141,7 @@ impl Component {
         instance
             .call(operation, payload)
             .await
-            .context("failed to call operation `{operation}` on module")
+            .with_context(|| format!("failed to call operation `{operation}` on module"))
     }
 }
 

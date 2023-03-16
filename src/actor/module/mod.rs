@@ -183,7 +183,7 @@ impl Module {
         } = instance
             .call(operation, payload)
             .await
-            .context("failed to call operation `{operation}` on module")?;
+            .with_context(|| format!("failed to call operation `{operation}` on module"))?;
         ensure!(code == 1, "operation failed with exit code `{code}`");
         if !console_log.is_empty() {
             trace!(?console_log);
