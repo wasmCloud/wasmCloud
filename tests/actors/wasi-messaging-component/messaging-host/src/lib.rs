@@ -63,7 +63,7 @@ impl combined::Combined for Host {
             time,
             extensions,
         };
-        let message = rmp_serde::to_vec(&event).map_err(|e| {
+        let message = serde_json::to_vec(&event).map_err(|e| {
             println!("serialization of event: {e}");
             1u32
         })?;
@@ -103,7 +103,6 @@ impl combined::Combined for Host {
         let vec1 = rmp_serde::to_vec(&c).unwrap();
         println!("subscribe: serde encode: {}", vec1.len(),);
         let ret = host::host_call(
-            //let ret = wasmbus_rpc::actor::prelude::host_call(
             "default",                      // link name
             "wasmcloud:wasi:messaging",     // contract_id
             "Messaging.Consumer.subscribe", // method

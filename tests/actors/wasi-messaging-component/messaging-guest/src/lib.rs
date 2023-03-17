@@ -7,6 +7,12 @@ use handler::Event;
 
 struct Guest;
 
+#[derive(serde::Deserialize)]
+struct PubMessage {
+    subject: String,
+    message: Vec<u8>,
+}
+
 #[derive(serde::Deserialize, Debug)]
 struct GuestEvent {
     specversion: String,
@@ -27,7 +33,10 @@ impl actor::Actor for Guest {
             // op name is world.interface.method
             "Messaging.Handler.on_receive" => {
                 let payload = payload.unwrap_or_default();
-                let event = rmp_serde::from_slice::<GuestEvent>(&payload).unwrap();
+                let rpc = rmp_serde::from_slice::<PubMessage>(&payload)
+                    .map_err(|e| format!("deserializing {}: {e}", &operation))?;
+                let event = serde_json::from_slice::<GuestEvent>(&rpc.message)
+                    .map_err(|e| format!("deserializing Event: {e}"))?;
                 let res = Guest::on_receive(event);
                 if let Err(e) = res {
                     Err(format!("on_receive returned {e}"))
