@@ -7,4 +7,7 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
+rmp-serde = { workspace = true }
+wasmbus-rpc = { workspace = true }
+serde = { workspace = true, features = [ "derive" ] }
 wit-bindgen = { workspace = true, features = ["default"] }

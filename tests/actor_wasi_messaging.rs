@@ -6,6 +6,26 @@ use wasm_compose::graph::{self, CompositionGraph};
 use wasmcloud::capability::{HandlerFunc, HostInvocation};
 use wasmcloud::{Actor, Runtime};
 
+#[derive(serde::Serialize, serde::Deserialize, Debug, Eq, PartialEq)]
+struct GuestEvent {
+    specversion: String,
+    ty: String,
+    source: String,
+    id: String,
+    data: Option<Vec<u8>>,
+    datacontenttype: Option<String>,
+    dataschema: Option<String>,
+    subject: Option<String>,
+    time: Option<String>,
+    extensions: Option<Vec<(String, String)>>,
+}
+
+#[derive(serde::Deserialize, Debug, PartialEq, Eq)]
+struct PublishData {
+    subject: String,
+    message: Vec<u8>,
+}
+
 async fn host_call(
     _claims: jwt::Claims<jwt::Actor>,
     binding: String,
@@ -16,12 +36,46 @@ async fn host_call(
     }: HostInvocation,
 ) -> anyhow::Result<Option<&'static str>> {
     assert_eq!(binding, "default");
-    assert_eq!(namespace, "WasiMessaging");
-    assert_eq!(operation, "Producer.Publish");
-    let payload = payload.expect("missing payload");
-    let payload = String::from_utf8(payload).expect("payload is not utf-8");
-    assert_eq!(payload, "buzzbuzz");
-    Ok(None)
+    match (namespace.as_ref(), operation.as_ref()) {
+        ("wasmcloud:wasi:messaging", "Messaging.Producer.publish") => {
+            let payload = payload.expect("missing payload");
+            let PublishData { subject, message } =
+                rmp_serde::from_slice(&payload).expect("failed to decode publish data");
+            assert_eq!(subject, "rust");
+            let GuestEvent {
+                specversion,
+                ty,
+                source,
+                id,
+                data,
+                datacontenttype,
+                dataschema,
+                subject,
+                time,
+                extensions,
+            } = rmp_serde::from_slice(&message).expect("failed to decode event");
+            assert_eq!(specversion, "1.0");
+            assert_eq!(ty, "com.my-messaing.rust.fizzbuzz"); // note the typo
+            assert_eq!(source, "rust");
+            assert_eq!(id, "123");
+            assert_eq!(data, Some(b"buzzbuzz".to_vec()));
+            assert_eq!(datacontenttype, None);
+            assert_eq!(dataschema, None);
+            assert_eq!(subject, None);
+            assert_eq!(time, None);
+            assert_eq!(extensions, None);
+            Ok(None)
+        }
+        ("wasmcloud:wasi:messaging", "Messaging.Producer.subscribe") => {
+            println!("subscribe {payload:?}");
+            Ok(Some("subscribe-token"))
+        }
+        ("wasmcloud:wasi:messaging", "Messaging.Producer.unsubscribe") => {
+            println!("unsubscribe {payload:?}");
+            Ok(None)
+        }
+        _ => panic!("unsupported `{namespace}.{operation}` request"),
+    }
 }
 
 fn new_runtime() -> Runtime {
@@ -148,17 +202,36 @@ async fn actor_wasi_messaging_component() -> anyhow::Result<()> {
             validate: true,
         })
         .context("failed to encode graph")?;
+
+    tokio::fs::write("/tmp/msg.wasm", &wasm)
+        .await
+        .expect("failed to write messaging Wasm");
+
     let (wasm, key) = sign(wasm, "wasi-messaging", []).context("failed to sign component")?;
 
     let rt = new_runtime();
     let actor = Actor::new(&rt, wasm).expect("failed to construct actor");
     assert_eq!(actor.claims().subject, key.public_key());
 
+    let event = rmp_serde::to_vec(&GuestEvent {
+        specversion: "specversion".into(),
+        ty: "ty".into(),
+        source: "source".into(),
+        id: "id".into(),
+        data: Some("fizzbuzz".into()),
+        datacontenttype: Some("datacontenttype".into()),
+        dataschema: Some("dataschema".into()),
+        subject: Some("subject".into()),
+        time: Some("time".into()),
+        extensions: None,
+    })
+    .expect("failed to encode event");
+
     let response = actor
-        .call("Handler.OnReceive", Some("fizzbuzz"))
+        .call("Messaging.Handler.on_receive", Some(event))
         .await
-        .context("failed to call `Handler.OnReceive`")?
-        .expect("`Handler.OnReceive` must not fail");
+        .context("failed to call `Messaging.Handler.on_receive`")?
+        .expect("`Messaging.Handler.on_receive` must not fail");
     assert_eq!(response, None);
     Ok(())
 }

@@ -65,6 +65,7 @@ actor-wasi-messaging-host-component = { workspace = true }
 once_cell = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+rmp-serde = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["fs", "macros", "rt"] }
 tracing-subscriber = { workspace = true, features = ["ansi", "env-filter", "fmt", "json", "std"] }
@@ -93,6 +94,7 @@ host = { git = "https://github.com/bytecodealliance/preview2-prototyping", rev =
 log = { version = "0.4.17", default-features = false }
 once_cell = { version = "1.17.1", default-features = false }
 rand = { version = "0.8.5", default-features = false }
+rmp-serde = { version = "1.1.1" }
 serde = { version = "1.0.152", default-features = false }
 serde_json = { version = "1.0.93", default-features = false }
 tempfile = { version = "3.4.0", default-features = false }

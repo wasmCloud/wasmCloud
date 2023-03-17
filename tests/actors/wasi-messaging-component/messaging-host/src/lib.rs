@@ -7,6 +7,32 @@ wit_bindgen::generate!({
 
 struct Host;
 
+#[derive(serde::Serialize)]
+struct PublishData {
+    subject: String,
+    message: Vec<u8>,
+}
+
+#[derive(serde::Serialize)]
+enum Channel {
+    Queue(String),
+    Topic(String),
+}
+
+#[derive(serde::Serialize, Debug)]
+struct GuestEvent {
+    specversion: String,
+    ty: String,
+    source: String,
+    id: String,
+    data: Option<Vec<u8>>,
+    datacontenttype: Option<String>,
+    dataschema: Option<String>,
+    subject: Option<String>,
+    time: Option<String>,
+    extensions: Option<Vec<(String, String)>>,
+}
+
 impl combined::Combined for Host {
     fn publish(
         b: combined::Broker,
@@ -24,30 +50,43 @@ impl combined::Combined for Host {
             extensions,
         }: combined::Event,
     ) -> Result<(), combined::Error> {
-        assert_eq!(b, 42);
-
-        // From https://github.com/danbugs/wasi-messaging-demo/blob/5fa4e5ae95ee2a864fe005359e5f637f895d36fe/guest/src/lib.rs#L24-L35
-        match c {
-            combined::Channel::Topic(topic) => assert_eq!(topic, "rust"),
-            _ => panic!("unexpected channel {c:?}"),
-        }
-        assert_eq!(specversion, "1.0");
-        assert_eq!(ty, "com.my-messaing.rust.fizzbuzz"); // note the typo
-        assert_eq!(source, "rust");
-        assert_eq!(id, "123");
-        assert_eq!(datacontenttype, None);
-        assert_eq!(dataschema, None);
-        assert_eq!(subject, None);
-        assert_eq!(time, None);
-        assert_eq!(extensions, None);
-
+        println!(">>> called publish");
+        let event = GuestEvent {
+            specversion,
+            ty,
+            source,
+            id,
+            data,
+            datacontenttype,
+            dataschema,
+            subject,
+            time,
+            extensions,
+        };
+        let message = rmp_serde::to_vec(&event).map_err(|e| {
+            println!("serialization of event: {e}");
+            1u32
+        })?;
+        let rpc_message = PublishData {
+            subject: match c {
+                combined::Channel::Queue(s) => s,
+                combined::Channel::Topic(s) => s,
+            },
+            message,
+        };
+        let vec = rmp_serde::to_vec(&rpc_message).unwrap();
         host::host_call(
-            "default",
-            "WasiMessaging",
-            "Producer.Publish",
-            data.as_ref().map(Vec::as_slice),
+            "default",                    // link name
+            "wasmcloud:wasi:messaging",   // contract_id
+            "Messaging.Producer.publish", // method
+            Some(&vec),
         )
-        .expect("failed call `Producer.Publish` in the host");
+        .map_err(|e| {
+            // TODO: is this number supposed to be a pointer?
+            println!("publish error: {e}");
+            1u32
+        })?;
+        println!("publish: len {}", vec.len(),);
         Ok(())
     }
 
@@ -55,27 +94,49 @@ impl combined::Combined for Host {
         b: combined::Broker,
         c: combined::Channel,
     ) -> Result<combined::SubscriptionToken, combined::Error> {
-        host::host_call(
-            "default",
-            "WasiMessaging",
-            "Consumer.Subscribe",
-            Some(format!("{b:?} {c:?}").as_bytes()),
+        println!(">>> called subscribe, channel: {:?}", &c);
+        let c = match c {
+            combined::Channel::Queue(s) => Channel::Queue(s),
+            combined::Channel::Topic(s) => Channel::Topic(s),
+        };
+
+        let vec1 = rmp_serde::to_vec(&c).unwrap();
+        println!("subscribe: serde encode: {}", vec1.len(),);
+        let ret = host::host_call(
+            //let ret = wasmbus_rpc::actor::prelude::host_call(
+            "default",                      // link name
+            "wasmcloud:wasi:messaging",     // contract_id
+            "Messaging.Consumer.subscribe", // method
+            Some(&vec1),
         )
-        .expect("failed call `Consumer.Subscribe` in the host");
-        Ok("token".into())
+        .map_err(|e| {
+            // TODO: what is the subscribe error?
+            println!("subscribe error: {e}");
+            1u32
+        })?
+        .unwrap_or_default();
+        // on success, returns a String subscribe-token
+        let s = String::from_utf8_lossy(&ret);
+        Ok(s.to_string())
     }
 
     fn unsubscribe(
         b: combined::Broker,
         st: combined::SubscriptionToken,
     ) -> Result<(), combined::Error> {
-        host::host_call(
-            "default",
-            "WasiMessaging",
-            "Consumer.Unsubscribe",
-            Some(format!("{b:?} {st:?}").as_bytes()),
+        println!(">>> called unsubscribe, token: {:?}", &st);
+        let vec1 = rmp_serde::to_vec(&st).unwrap();
+        println!("unsubscribe: serde encode: {}", vec1.len(),);
+        let _ = host::host_call(
+            "default",                        // link name
+            "wasmcloud:wasi:messaging",       // contract_id
+            "Messaging.Consumer.unsubscribe", // method
+            Some(&vec1),
         )
-        .expect("failed call `Consumer.Unsubscribe` in the host");
+        .map_err(|e| {
+            println!("unsubscribe error: {e}");
+            0u32
+        })?;
         Ok(())
     }
 
@@ -83,7 +144,9 @@ impl combined::Combined for Host {
         format!("Error code {e}")
     }
 
-    fn drop_error(_e: combined::Error) {}
+    fn drop_error(e: combined::Error) {
+        println!("drop error: {e}")
+    }
 
     fn open_broker(_name: String) -> Result<combined::Broker, combined::Error> {
         Ok(42)

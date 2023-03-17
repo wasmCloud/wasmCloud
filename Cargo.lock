@@ -73,6 +73,9 @@ dependencies = [
 name = "actor-wasi-messaging-guest-component"
 version = "0.1.0"
 dependencies = [
+ "rmp-serde",
+ "serde",
+ "wasmbus-rpc",
  "wit-bindgen 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -80,6 +83,8 @@ dependencies = [
 name = "actor-wasi-messaging-host-component"
 version = "0.1.0"
 dependencies = [
+ "rmp-serde",
+ "serde",
  "wit-bindgen 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -3350,6 +3355,7 @@ dependencies = [
  "log",
  "once_cell",
  "rand",
+ "rmp-serde",
  "serde",
  "serde_json",
  "tempfile",
