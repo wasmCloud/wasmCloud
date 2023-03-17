@@ -10,4 +10,5 @@ crate-type = ["cdylib"]
 rmp-serde = { workspace = true }
 wasmbus-rpc = { workspace = true }
 serde = { workspace = true, features = [ "derive" ] }
+serde_json = { workspace = true }
 wit-bindgen = { workspace = true, features = ["default"] }
