@@ -24,7 +24,6 @@ tokio-postgres = { workspace = true, features = ["with-bit-vec-0_6", "with-chron
 bb8-postgres = { workspace = true }
 bit-vec = { workspace = true }
 uuid = { workspace = true }
-native-tls = { workspace = true }
 toml = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
