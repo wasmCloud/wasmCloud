@@ -1,0 +1,14 @@
+[target.armv7-unknown-linux-gnueabihf]
+image = "wasmcloud/cross:armv7-unknown-linux-gnueabihf"
+
+[target.aarch64-unknown-linux-gnu]
+image = "wasmcloud/cross:aarch64-unknown-linux-gnu"
+
+[target.x86_64-apple-darwin]
+image = "wasmcloud/cross:x86_64-apple-darwin"
+
+[target.aarch64-apple-darwin]
+image = "wasmcloud/cross:aarch64-apple-darwin"
+
+[target.x86_64-unknown-linux-gnu]
+image = "wasmcloud/cross:x86_64-unknown-linux-gnu"
