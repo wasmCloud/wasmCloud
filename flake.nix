@@ -33,7 +33,25 @@
             buildInputs =
               buildInputs
               ++ optional stdenv.targetPlatform.isDarwin darwin.apple_sdk.frameworks.Security;
+
+            nativeBuildInputs =
+              nativeBuildInputs
+              ++ [
+                pkgs.protobuf # build dependency of prost-build v0.9.0
+              ];
           };
+
+        withDevShells = {
+          pkgs,
+          devShells,
+          ...
+        }:
+          extendDerivations {
+            buildInputs = [
+              pkgs.protobuf # build dependency of prost-build v0.9.0
+            ];
+          }
+          devShells;
 
         targets.wasm32-wasi = false;
 
