@@ -15,6 +15,8 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v3
+      # Cache Rust builds between runs
+      - uses: Swatinem/rust-cache@v2
       - name: Run Rust check + clippy
         run: make rust-check
 
@@ -27,6 +29,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v3
+      # Cache Rust builds between runs
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Additional key to ensure OS specific caches are separated
+          key: "${{ matrix.os }}-cache"
       - name: Install nextest
         uses: taiki-e/install-action@nextest
       - name: Run all wash & wash-lib unit tests
@@ -37,6 +44,8 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v3
+      # Cache Rust builds between runs
+      - uses: Swatinem/rust-cache@v2
       - name: Setup tinygo
         run: |
           wget https://github.com/tinygo-org/tinygo/releases/download/v0.23.0/tinygo_0.23.0_amd64.deb
