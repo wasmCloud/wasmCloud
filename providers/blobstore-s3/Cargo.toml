@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 async-trait = { workspace = true }
 atty = { workspace = true }
-aws-sdk-s3 = { workspace = true }
+aws-sdk-s3 = { workspace = true, features = ["rustls"] }
 aws-config = { workspace = true }
 aws-types = { workspace = true, features = ["hardcoded-credentials"] }
 aws-smithy-http = { workspace = true }
