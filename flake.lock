@@ -17,17 +17,39 @@
         ]
       },
       "locked": {
-        "lastModified": 1678801266,
+        "lastModified": 1679255352,
         "narHash": "sha256-nkGwGuNkhNrnN33S4HIDV5NzkzMLU5mNStRn9sZwq8c=",
         "owner": "rvolosatovs",
         "repo": "crane",
-        "rev": "d36972efda1683244ce2b3fc96bf4d4475df4911",
+        "rev": "cec65880599a4ec6426186e24342e663464f5933",
         "type": "github"
       },
       "original": {
         "owner": "rvolosatovs",
         "ref": "feat/wit",
         "repo": "crane",
+        "type": "github"
+      }
+    },
+    "fenix": {
+      "inputs": {
+        "nixpkgs": [
+          "nixify",
+          "nixpkgs"
+        ],
+        "rust-analyzer-src": "rust-analyzer-src"
+      },
+      "locked": {
+        "lastModified": 1679552560,
+        "narHash": "sha256-L9Se/F1iLQBZFGrnQJO8c9wE5z0Mf8OiycPGP9Y96hA=",
+        "owner": "nix-community",
+        "repo": "fenix",
+        "rev": "fb49a9f5605ec512da947a21cc7e4551a3950397",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-community",
+        "repo": "fenix",
         "type": "github"
       }
     },
@@ -49,11 +71,11 @@
     },
     "flake-utils": {
       "locked": {
-        "lastModified": 1676283394,
-        "narHash": "sha256-XX2f9c3iySLCw54rJ/CZs+ZK6IQy7GXNY4nSOyu2QG4=",
+        "lastModified": 1678901627,
+        "narHash": "sha256-U02riOqrKKzwjsxc/400XnElV+UtPUQWpANPlyazjH0=",
         "owner": "numtide",
         "repo": "flake-utils",
-        "rev": "3db36a8b464d0c4532ba1c7dda728f4576d6d073",
+        "rev": "93a2b84fc4b70d9e089d029deacc3583435c2ed6",
         "type": "github"
       },
       "original": {
@@ -80,18 +102,21 @@
     "nixify": {
       "inputs": {
         "crane": "crane",
+        "fenix": "fenix",
         "flake-utils": "flake-utils",
         "nix-filter": "nix-filter",
-        "nixlib": "nixlib",
+        "nixlib": [
+          "nixlib"
+        ],
         "nixpkgs": "nixpkgs",
         "rust-overlay": "rust-overlay"
       },
       "locked": {
-        "lastModified": 1678801742,
-        "narHash": "sha256-sUh6v6IrfIa/7Vld3vRfYxz3+jLzTta5F4sJk9iZO2o=",
+        "lastModified": 1679711301,
+        "narHash": "sha256-/W1/pOgHpxjZa/E6pzW55LzA43Ln9s8zZj+4dTjbZxw=",
         "owner": "rvolosatovs",
         "repo": "nixify",
-        "rev": "451b012284c9d4e791f2bb76f2fc6e494660b94d",
+        "rev": "4b372c5e4fb532448e66236d3ff53569c4916af4",
         "type": "github"
       },
       "original": {
@@ -102,11 +127,11 @@
     },
     "nixlib": {
       "locked": {
-        "lastModified": 1678582451,
-        "narHash": "sha256-ORE3VMo7ZB5dFctdgVq3znAklUtJBmL3F4aUCFJumfk=",
+        "lastModified": 1679187309,
+        "narHash": "sha256-H8udmkg5wppL11d/05MMzOMryiYvc403axjDNZy1/TQ=",
         "owner": "nix-community",
         "repo": "nixpkgs.lib",
-        "rev": "14ad8df808e5dc13bf4664da1e24a36814c28c16",
+        "rev": "44214417fe4595438b31bdb9469be92536a61455",
         "type": "github"
       },
       "original": {
@@ -117,11 +142,11 @@
     },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1678742071,
-        "narHash": "sha256-LJQij9que0ePW8zdYedN1KEQPH3iKcaVCtURGOxcJos=",
+        "lastModified": 1679577639,
+        "narHash": "sha256-7u7bsNP0ApBnLgsHVROQ5ytoMqustmMVMgtaFS/P7EU=",
         "owner": "nixos",
         "repo": "nixpkgs",
-        "rev": "284d59a5189b12c51d6ceb75352da88c584b1813",
+        "rev": "8f1bcd72727c5d4cd775545595d068be410f2a7e",
         "type": "github"
       },
       "original": {
@@ -133,7 +158,28 @@
     },
     "root": {
       "inputs": {
-        "nixify": "nixify"
+        "nixify": "nixify",
+        "nixlib": "nixlib",
+        "wasmcloud-blobstore": "wasmcloud-blobstore",
+        "wasmcloud-core": "wasmcloud-core",
+        "wasmcloud-model": "wasmcloud-model"
+      }
+    },
+    "rust-analyzer-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1679520343,
+        "narHash": "sha256-AJGSGWRfoKWD5IVTu1wEsR990wHbX0kIaolPqNMEh0c=",
+        "owner": "rust-lang",
+        "repo": "rust-analyzer",
+        "rev": "eb791f31e688ae00908eb75d4c704ef60c430a92",
+        "type": "github"
+      },
+      "original": {
+        "owner": "rust-lang",
+        "ref": "nightly",
+        "repo": "rust-analyzer",
+        "type": "github"
       }
     },
     "rust-overlay": {
@@ -148,17 +194,53 @@
         ]
       },
       "locked": {
-        "lastModified": 1678760344,
-        "narHash": "sha256-N8u9/O0NWt3PUQc9xmCeod1SFilOFicALjtYtslib2g=",
+        "lastModified": 1679537973,
+        "narHash": "sha256-R6borgcKeyMIjjPeeYsfo+mT8UdS+OwwbhhStdCfEjg=",
         "owner": "oxalica",
         "repo": "rust-overlay",
-        "rev": "d907affef544f64bd6886fe6bcc5fa2495a82373",
+        "rev": "fbc7ae3f14d32e78c0e8d7865f865cc28a46b232",
         "type": "github"
       },
       "original": {
         "owner": "oxalica",
         "repo": "rust-overlay",
         "type": "github"
+      }
+    },
+    "wasmcloud-blobstore": {
+      "flake": false,
+      "locked": {
+        "narHash": "sha256-PL3VpbjvXh/zHIrfb5klfS1SRYPIXQn+TNniIyJQ7Ao=",
+        "type": "file",
+        "url": "https://cdn.jsdelivr.net/gh/wasmcloud/interfaces@10f71d127ba11e580ae912f3128761c6d4e02ca4/blobstore/blobstore.smithy"
+      },
+      "original": {
+        "type": "file",
+        "url": "https://cdn.jsdelivr.net/gh/wasmcloud/interfaces@10f71d127ba11e580ae912f3128761c6d4e02ca4/blobstore/blobstore.smithy"
+      }
+    },
+    "wasmcloud-core": {
+      "flake": false,
+      "locked": {
+        "narHash": "sha256-mwOjk/vCxqwj9s45VlhIzaoONDAPiHedsbQq92wXP8I=",
+        "type": "file",
+        "url": "https://cdn.jsdelivr.net/gh/wasmcloud/interfaces/core/wasmcloud-core.smithy"
+      },
+      "original": {
+        "type": "file",
+        "url": "https://cdn.jsdelivr.net/gh/wasmcloud/interfaces/core/wasmcloud-core.smithy"
+      }
+    },
+    "wasmcloud-model": {
+      "flake": false,
+      "locked": {
+        "narHash": "sha256-UPafGW8KyO3PZi6gXSAFlL3Botx231/BZzN6WG0btTY=",
+        "type": "file",
+        "url": "https://cdn.jsdelivr.net/gh/wasmcloud/interfaces/core/wasmcloud-model.smithy"
+      },
+      "original": {
+        "type": "file",
+        "url": "https://cdn.jsdelivr.net/gh/wasmcloud/interfaces/core/wasmcloud-model.smithy"
       }
     }
   },

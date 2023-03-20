@@ -24,10 +24,9 @@ runs:
   - uses: nixbuild/nix-quick-install-action@v22
     with:
       nix_conf: |
-        experimental-features = nix-command flakes
+        accept-flake-config = true
         access-tokens = github.com=${{ github.token }}
-        substituters = https://cache.nixos.org https://cache.garnix.io
-        trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY= cache.garnix.io:CTFPyKSLcx5RMJKfLo5EEPUObbA78b0YQ2DTCJXqr9g=
+        experimental-features = nix-command flakes
   - uses: cachix/cachix-action@v12
     continue-on-error: true
     with:
