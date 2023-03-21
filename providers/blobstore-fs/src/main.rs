@@ -168,7 +168,7 @@ impl FsProvider {
         if chunk.offset == 0 {
             let resp = File::create(&binary_file);
             if resp.await.is_err() {
-                let error_string = format!("Could not create file: {:?}", binary_file).to_string();
+                let error_string = format!("Could not create file: {:?}", binary_file);
                 error!("{:?}", &error_string);
                 return Err(RpcError::InvalidParameter(error_string));
             }
@@ -177,9 +177,9 @@ impl FsProvider {
                 let next_offset: u64 = 0;
                 upload_chunks.insert(s_id.clone(), next_offset);
             } else if !chunk.is_last {
-                return Err(RpcError::InvalidParameter(format!(
-                    "Chunked storage is missing stream id"
-                )));
+                return Err(RpcError::InvalidParameter(
+                    "Chunked storage is missing stream id".to_string(),
+                ));
             }
         }
 
@@ -381,7 +381,7 @@ impl Blobstore for FsProvider {
     async fn list_containers(&self, ctx: &Context) -> RpcResult<ContainersInfo> {
         let root = self.get_root(ctx).await?;
 
-        let containers = all_dirs(&Path::new(&root), &root)
+        let containers = all_dirs(Path::new(&root), &root)
             .iter()
             .map(|c| ContainerMetadata {
                 container_id: c.as_path().display().to_string(),
@@ -464,7 +464,7 @@ impl Blobstore for FsProvider {
         Ok(ObjectMetadata {
             container_id: container.container_id.clone(),
             content_encoding: None,
-            content_length: metadata.len() as u64,
+            content_length: metadata.len(),
             content_type: None,
             last_modified: Some(modified),
             object_id: container.object_id.clone(),
@@ -556,7 +556,7 @@ impl Blobstore for FsProvider {
         let mut errors = Vec::new();
 
         for object in &arg.objects {
-            let object_subpath = Path::new(&arg.container_id).join(&object);
+            let object_subpath = Path::new(&arg.container_id).join(object);
             let object_path = self.resolve_subpath(&root, object_subpath).await?;
 
             if let Err(e) = remove_file(object_path.as_path()).await {
@@ -623,7 +623,7 @@ impl Blobstore for FsProvider {
         // Determine the path to the file
         let root = &self.get_root(ctx).await?;
         let file_subpath = Path::new(&arg.chunk.container_id).join(&arg.chunk.object_id);
-        let file_path = self.resolve_subpath(&root, &file_subpath).await?;
+        let file_path = self.resolve_subpath(root, &file_subpath).await?;
 
         // Remove the file
         remove_file(file_path.as_path()).await.map_err(|e| {
@@ -684,7 +684,7 @@ impl Blobstore for FsProvider {
             content_length: chunk.bytes.len() as u64,
             content_type: None,
             error: None,
-            initial_chunk: Some(chunk.clone()),
+            initial_chunk: Some(chunk),
             success: true,
         })
     }

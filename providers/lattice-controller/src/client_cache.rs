@@ -249,7 +249,7 @@ mod test {
         // client should no longer be in the cache because it hasn't been utilized.
         // this will reconstitute the client
         let res = cache.get_client("test").await;
-        assert!(!res.is_err());
+        assert!(res.is_ok());
 
         tokio::time::sleep(Duration::from_secs(5)).await;
         cache.remove_config("test").await;

@@ -235,7 +235,7 @@ impl HttpServerCore {
                         error!(error = %e, "shutting down httpserver listener");
                     }
                 });
-            handle.spawn(async move { fut.await })
+            handle.spawn(fut)
         } else {
             let (_, fut) = server
                 .try_bind_with_graceful_shutdown(addr, async move {
@@ -250,7 +250,7 @@ impl HttpServerCore {
                         e
                     ))
                 })?;
-            handle.spawn(async move { fut.await })
+            handle.spawn(fut)
         };
 
         Ok(join)

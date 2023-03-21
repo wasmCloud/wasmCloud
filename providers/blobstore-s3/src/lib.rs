@@ -195,7 +195,7 @@ impl StorageClient {
                         is_last: offset + chunk_len > end_range,
                         bytes: bytes[bytes_sent as usize..(bytes_sent + chunk_len) as usize]
                             .to_vec(),
-                        offset: chunk_offset as u64,
+                        offset: chunk_offset,
                         container_id: bucket_id.to_string(),
                         object_id: cobj.object_id.clone(),
                     },
@@ -227,7 +227,7 @@ impl StorageClient {
         container_object.container_id = self.unalias(&container_object.container_id).to_string();
         let actor_id = ctx.actor.clone();
         let excess_len = excess.len();
-        let _ = tokio::spawn(
+        drop(tokio::spawn(
             async move {
                 let mut offset = offset;
                 if !excess.is_empty() {
@@ -260,7 +260,7 @@ impl StorageClient {
                 offset,
                 end_range
             )),
-        );
+        ));
     }
 }
 
@@ -738,7 +738,7 @@ impl Blobstore for StorageClient {
                 };
                 // determine if we need to stream additional chunks
                 let bytes = if (bytes.len() as u64) < bytes_requested
-                    || bytes.len() > max_chunk_size as usize
+                    || bytes.len() > max_chunk_size
                 {
                     debug!(
                         chunk_len = %bytes.len(),
@@ -825,18 +825,18 @@ fn validate_bucket_name(bucket: &str) -> Result<(), &'static str> {
     }
     if !bucket
         .chars()
-        .all(|c| c == '.' || c == '-' || ('a'..='z').contains(&c) || ('0'..='9').contains(&c))
+        .all(|c| c == '.' || c == '-' || c.is_ascii_lowercase() || c.is_ascii_digit())
     {
         return Err(
             "bucket names can only contain lowercase letters, numbers, dots('.') and hyphens('-')",
         );
     }
     let c = bucket.chars().next().unwrap();
-    if !(('a'..='z').contains(&c) || ('0'..='9').contains(&c)) {
+    if !(c.is_ascii_lowercase() || c.is_ascii_digit()) {
         return Err("bucket names must begin with a letter or number");
     }
     let c = bucket.chars().last().unwrap();
-    if !(('a'..='z').contains(&c) || ('0'..='9').contains(&c)) {
+    if !(c.is_ascii_lowercase() || c.is_ascii_digit()) {
         return Err("bucket names must end with a letter or number");
     }
 

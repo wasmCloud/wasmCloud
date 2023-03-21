@@ -92,7 +92,7 @@ impl ConnectionConfig {
             out.auth_seed = extra.auth_seed.clone()
         }
         if extra.ping_interval_sec.is_some() {
-            out.ping_interval_sec = extra.ping_interval_sec.clone()
+            out.ping_interval_sec = extra.ping_interval_sec
         }
         out
     }
@@ -489,7 +489,7 @@ mod test {
 }
 "#;
 
-        let config: ConnectionConfig = serde_json::from_str(&input).unwrap();
+        let config: ConnectionConfig = serde_json::from_str(input).unwrap();
         assert_eq!(config.auth_jwt.unwrap(), "authy");
         assert_eq!(config.auth_seed.unwrap(), "seedy");
         assert_eq!(config.cluster_uris, ["nats://soyvuh"]);
@@ -516,12 +516,16 @@ mod test {
     #[test]
     fn test_connectionconfig_merge() {
         // second > original, individual vec fields are replace not extend
-        let mut cc1 = ConnectionConfig::default();
-        cc1.cluster_uris = vec!["old_server".to_string()];
-        cc1.subscriptions = vec!["topic1".to_string()];
-        let mut cc2 = ConnectionConfig::default();
-        cc2.cluster_uris = vec!["server1".to_string(), "server2".to_string()];
-        cc2.auth_jwt = Some("jawty".to_string());
+        let cc1 = ConnectionConfig {
+            cluster_uris: vec!["old_server".into()],
+            subscriptions: vec!["topic1".into()],
+            ..Default::default()
+        };
+        let cc2 = ConnectionConfig {
+            cluster_uris: vec!["server1".into(), "server2".into()],
+            auth_jwt: Some("jawty".to_string()),
+            ..Default::default()
+        };
         let cc3 = cc1.merge(&cc2);
         assert_eq!(cc3.cluster_uris, cc2.cluster_uris);
         assert_eq!(cc3.subscriptions, cc1.subscriptions);
@@ -544,17 +548,17 @@ mod test {
         drop(actor_map);
 
         // Add a provider
-        let mut ld = LinkDefinition::default();
-        ld.actor_id = String::from("???");
-        ld.link_name = String::from("test");
-        ld.contract_id = String::from("test");
-        ld.values = HashMap::<String, String>::from([
-            (
-                String::from("SUBSCRIPTION"),
-                String::from("test.wasmcloud.unlink"),
-            ),
-            (String::from("URI"), String::from("127.0.0.1:4222")),
-        ]);
+        let ld = LinkDefinition {
+            actor_id: "???".into(),
+            link_name: "test".into(),
+            contract_id: "test".into(),
+            values: [
+                ("SUBSCRIPTION".into(), "test.wasmcloud.unlink".into()),
+                ("URI".into(), "127.0.0.1:4222".into()),
+            ]
+            .into(),
+            ..Default::default()
+        };
         let _ = prov.put_link(&ld).await;
 
         // After putting a link there should be one sub

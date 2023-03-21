@@ -63,7 +63,7 @@ async fn create_find_and_remove_dir(_opt: &TestOptions) -> RpcResult<()> {
 
     let resp = client.container_exists(&ctx, &name).await?;
 
-    assert_eq!(resp, false);
+    assert!(!resp);
 
     let resp2 = client.create_container(&ctx, &name).await;
 
@@ -71,7 +71,7 @@ async fn create_find_and_remove_dir(_opt: &TestOptions) -> RpcResult<()> {
 
     let resp3 = client.container_exists(&ctx, &name).await?;
 
-    assert_eq!(resp3, true);
+    assert!(resp3);
 
     let conts: ContainerIds = vec![name.clone()];
     let resp4 = client.remove_containers(&ctx, &conts).await?;
@@ -80,7 +80,7 @@ async fn create_find_and_remove_dir(_opt: &TestOptions) -> RpcResult<()> {
 
     let resp5 = client.container_exists(&ctx, &name).await?;
 
-    assert_eq!(resp5, false);
+    assert!(!resp5);
 
     Ok(())
 }
@@ -170,7 +170,7 @@ async fn upload_and_list_files_in_dirs(_opt: &TestOptions) -> RpcResult<()> {
     let mut list_object_request = ListObjectsRequest::default();
     list_object_request.container_id = "cont1".to_string();
     let mut list_object_response = client.list_objects(&ctx, &list_object_request).await?;
-    assert_eq!(list_object_response.is_last, true);
+    assert!(list_object_response.is_last);
     assert_eq!(list_object_response.continuation, None);
     let objects = list_object_response.objects;
     assert_eq!(objects.len(), 2);
@@ -180,14 +180,14 @@ async fn upload_and_list_files_in_dirs(_opt: &TestOptions) -> RpcResult<()> {
         object_id: "file2x".into(),
     };
     let mut exist = client.object_exists(&ctx, &container_object).await?;
-    assert_eq!(exist, false);
+    assert!(!exist);
 
     container_object = ContainerObject {
         container_id: "cont1".into(),
         object_id: "file2".into(),
     };
     exist = client.object_exists(&ctx, &container_object).await?;
-    assert_eq!(exist, true);
+    assert!(exist);
 
     let object_info = client.get_object_info(&ctx, &container_object).await?;
     assert_eq!(object_info.container_id, "cont1".to_string());
@@ -265,7 +265,7 @@ async fn upload_and_download_file(_opt: &TestOptions) -> RpcResult<()> {
     };
     let o = client.get_object(&ctx, &get_object_request).await?;
     assert_eq!(o.content_length, 6);
-    assert_eq!(o.success, true);
+    assert!(o.success);
     assert_ne!(o.initial_chunk, None);
     let c = o.initial_chunk.unwrap();
     assert_eq!(c.bytes, file1_chunk.bytes);
@@ -341,7 +341,7 @@ async fn upload_chunked_download_file(_opt: &TestOptions) -> RpcResult<()> {
     };
     let upload_3rd_chunk_request = PutChunkRequest {
         chunk: file_chunk3.clone(),
-        stream_id: stream_id,
+        stream_id,
         cancel_and_remove: false,
     };
     let resp4 = client.put_chunk(&ctx, &upload_3rd_chunk_request).await;
@@ -357,7 +357,7 @@ async fn upload_chunked_download_file(_opt: &TestOptions) -> RpcResult<()> {
     let o = client.get_object(&ctx, &get_object_request).await?;
 
     assert_eq!(o.content_length, 20);
-    assert_eq!(o.success, true);
+    assert!(o.success);
     assert_ne!(o.initial_chunk, None);
     let c = o.initial_chunk.unwrap();
     let mut combined = Vec::new();
@@ -417,7 +417,7 @@ async fn upload_download_chunked_file(_opt: &TestOptions) -> RpcResult<()> {
     };
     let mut o = client.get_object(&ctx, &get_object_request1).await?;
     assert_eq!(o.content_length, 6);
-    assert_eq!(o.success, true);
+    assert!(o.success);
     assert_ne!(o.initial_chunk, None);
 
     let mut s = o.initial_chunk.unwrap().bytes;
@@ -433,7 +433,7 @@ async fn upload_download_chunked_file(_opt: &TestOptions) -> RpcResult<()> {
     };
     o = client.get_object(&ctx, &get_object_request2).await?;
     assert_eq!(o.content_length, 6);
-    assert_eq!(o.success, true);
+    assert!(o.success);
     assert_ne!(o.initial_chunk, None);
 
     s = o.initial_chunk.unwrap().bytes;
@@ -503,7 +503,7 @@ async fn mock_blobstore_actor(num_requests: u32) -> tokio::task::JoinHandle<RpcR
                     .map_err(|e| RpcError::Deser(format!("'Chunk': {}", e)))?;
 
                 // do something with chunk
-                assert_eq!(rec_chunk.is_last, true);
+                assert!(rec_chunk.is_last);
 
                 let chunk_resp = ChunkResponse {
                     cancel_download: false,

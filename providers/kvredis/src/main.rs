@@ -34,7 +34,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let hd = load_host_data()?;
 
     let default_connect_url = if let Some(raw_config) = hd.config_json.as_ref() {
-        match serde_json::from_str(&raw_config) {
+        match serde_json::from_str(raw_config) {
             Ok(KvRedisConfig { url }) => url,
             _ => DEFAULT_CONNECT_URL.to_string(),
         }
@@ -150,7 +150,7 @@ impl KeyValue for KvRedisProvider {
     /// Increments a numeric value, returning the new value
     #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.key))]
     async fn increment(&self, ctx: &Context, arg: &IncrementRequest) -> RpcResult<i32> {
-        let mut cmd = redis::Cmd::incr(&arg.key, &arg.value);
+        let mut cmd = redis::Cmd::incr(&arg.key, arg.value);
         let val: i32 = self.exec(ctx, &mut cmd).await?;
         Ok(val)
     }
