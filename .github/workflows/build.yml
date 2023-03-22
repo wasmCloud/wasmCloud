@@ -44,28 +44,9 @@ jobs:
     runs-on: ${{ matrix.platform.host }}
     steps:
     - uses: actions/checkout@v3
-    - run: sudo mkdir -p /nix
-      if: ${{ runner.os == 'Linux' }}
-    - run: sudo chown $(whoami) /nix
-      if: ${{ runner.os == 'Linux' }}
-    - uses: actions/cache@v3
-      if: ${{ runner.os == 'Linux' }}
-      with:
-        path: /nix
-        key: nix
-    - uses: nixbuild/nix-quick-install-action@v22
-      with:
-        nix_conf: |
-          experimental-features = nix-command flakes
-          access-tokens = github.com=${{ github.token }}
-          substituters = https://cache.nixos.org https://cache.garnix.io
-          trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY= cache.garnix.io:CTFPyKSLcx5RMJKfLo5EEPUObbA78b0YQ2DTCJXqr9g=
-    - uses: cachix/cachix-action@v12
-      continue-on-error: true
-      with:
-        name: wasmcloud
-        authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
-
+    - uses: ./.github/actions/install-nix
+      with: 
+        cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
     - run: nix build -L --show-trace '.#wasmcloud-${{ matrix.platform.target }}'
     - run: nix run --inputs-from . 'nixpkgs#coreutils' -- --coreutils-prog=ginstall -p ./result/bin/wasmcloud "wasmcloud-${{ matrix.platform.target }}"
     - uses: actions/upload-artifact@v3
