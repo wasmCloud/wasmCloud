@@ -17,24 +17,9 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
     - uses: actions/checkout@v3
-    - run: sudo mkdir -p /nix
-    - run: sudo chown $(whoami) /nix
-    - uses: actions/cache@v3
-      with:
-        path: /nix
-        key: nix
-    - uses: nixbuild/nix-quick-install-action@v22
-      with:
-        nix_conf: |
-          experimental-features = nix-command flakes
-          access-tokens = github.com=${{ github.token }}
-          substituters = https://cache.nixos.org https://cache.garnix.io
-          trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY= cache.garnix.io:CTFPyKSLcx5RMJKfLo5EEPUObbA78b0YQ2DTCJXqr9g=
-    - uses: cachix/cachix-action@v12
-      continue-on-error: true
-      with:
-        name: wasmcloud
-        authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+    - uses: ./.github/actions/install-nix
+      with: 
+        cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
     - run: nix build -L .#checks.x86_64-linux.doc
     - run: tar xf ./result/target.tar.zst
     - run: rm -f target/doc/.lock
