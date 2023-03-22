@@ -1,0 +1,147 @@
+name: wasmCloud
+
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-linux:
+    strategy:
+      matrix:
+        platform:
+        - target: aarch64-unknown-linux-musl
+          test-bin: nix shell --inputs-from . 'nixpkgs#qemu' -c qemu-aarch64 ./result/bin/wasmcloud --version
+          test-oci: docker load < ./result
+          # TODO: Run aarch64 binary within OCI
+
+        - target: x86_64-unknown-linux-musl
+          test-bin: ./result/bin/wasmcloud --version
+          test-oci: |
+            docker load < ./result
+            docker run --rm wasmcloud:$(nix eval --raw .#wasmcloud-x86_64-unknown-linux-musl-oci.imageTag) wasmcloud --version
+
+    name: wasmcloud-${{ matrix.platform.target }}
+    runs-on: ubuntu-22.04
+    steps:
+    - uses: actions/checkout@v3
+    - uses: ./.github/actions/install-nix
+      with: 
+        cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+    - uses: ./.github/actions/build-nix
+      with:
+        package: wasmcloud-${{ matrix.platform.target }}
+        install-path: /bin/wasmcloud
+    - run: ${{ matrix.platform.test-bin }}
+    - uses: ./.github/actions/build-nix
+      with:
+        package: wasmcloud-${{ matrix.platform.target }}-oci
+    - run: ${{ matrix.platform.test-oci }}
+
+  build-mac:
+    strategy:
+      matrix:
+        platform:
+        - target: aarch64-apple-darwin
+          test: file ./result/bin/wasmcloud --version
+          # TODO: Run aarch64 binary on host system and via OCI
+
+        - target: x86_64-apple-darwin
+          test: ./result/bin/wasmcloud --version
+
+    name: wasmcloud-${{ matrix.platform.target }}
+    runs-on: macos-12
+    steps:
+    - uses: actions/checkout@v3
+    - uses: ./.github/actions/install-nix
+      with: 
+        cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+    - uses: ./.github/actions/build-nix
+      with:
+        package: wasmcloud-${{ matrix.platform.target }}
+        install-path: /bin/wasmcloud
+    - run: ${{ matrix.platform.test-bin }}
+    - uses: ./.github/actions/build-nix
+      with:
+        package: wasmcloud-${{ matrix.platform.target }}-oci
+    - run: ${{ matrix.platform.test-oci }}
+    # TODO: Test OCI on Mac
+
+  build-lipo:
+    name: wasmcloud-universal-darwin
+    needs: build-mac
+    runs-on: macos-12
+    steps:
+    - uses: actions/download-artifact@v3
+      with:
+        name: wasmcloud-aarch64-apple-darwin
+    - uses: actions/download-artifact@v3
+      with:
+        name: wasmcloud-x86_64-apple-darwin
+    - run: lipo -create ./wasmcloud-aarch64-apple-darwin ./wasmcloud-x86_64-apple-darwin -output ./wasmcloud-universal-darwin
+    - run: chmod +x ./wasmcloud-universal-darwin
+    - run: ./wasmcloud-universal-darwin --version
+    - uses: actions/upload-artifact@v3
+      with:
+        name: wasmcloud-universal-darwin
+        path: wasmcloud-universal-darwin
+
+  cargo:
+    strategy:
+      matrix:
+        check:
+        - fmt
+        - clippy
+        - nextest
+
+    name: cargo ${{ matrix.check }}
+    runs-on: ubuntu-22.04
+    steps:
+    - uses: actions/checkout@v3
+    - uses: ./.github/actions/install-nix
+      with: 
+        cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+    - run: nix build -L .#checks.x86_64-linux.${{ matrix.check }}
+
+  build-doc:
+    runs-on: ubuntu-22.04
+    steps:
+    - uses: actions/checkout@v3
+    - uses: ./.github/actions/install-nix
+      with: 
+        cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+    - run: nix build -L .#checks.x86_64-linux.doc
+    - run: tar xf ./result/target.tar.zst
+    - run: rm -f target/doc/.lock
+    - name: Create `.nojekyll`
+      run: touch target/doc/.nojekyll
+    - name: Write `index.html`
+      run: |
+        cat <<EOF > target/doc/index.html
+          <!DOCTYPE html>
+          <meta charset="utf-8">
+          <title>Redirecting to wasmcloud/index.html</title>
+          <meta http-equiv="refresh" content="0; URL=wasmcloud/index.html">
+          <link rel="canonical" href="https://${{ github.repository.owner }}.github.io/wasmCloud/wasmcloud/index.html">
+        EOF
+    - uses: actions/upload-pages-artifact@v1.0.8
+      with:
+        path: target/doc
+
+  deploy-doc:
+    runs-on: ubuntu-22.04
+    needs: build-doc
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    if: ${{ github.ref == 'refs/heads/main' }}
+    steps:
+    - uses: actions/deploy-pages@v2.0.0
+      id: deployment
