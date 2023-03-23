@@ -3,7 +3,8 @@
 ![license](https://img.shields.io/crates/l/wascap.svg)
 
 # ℹ️ Compatibility Information
-The hashes computed with v`0.9.0` and later of wascap are not compatible with the hashes signed by prior versions. As a result, modules signed with older versions of wascap will _not_ have their module hashes validated (they'll be ignored). Once the module has been signed with `0.9.0` or greater, it will go back to having its module hash verified.
+
+The hashes computed with v`0.10.1` and later of wascap are not compatible with the hashes signed by prior versions. As a result, modules signed with older versions of wascap will _not_ have their module hashes validated (they'll be ignored). Once the module has been signed with `0.10.1` or greater, it will go back to having its module hash verified.
 
 # wasmCloud Capabilities
 

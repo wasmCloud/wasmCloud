@@ -12,10 +12,10 @@ const HEADER_TYPE: &str = "jwt";
 const HEADER_ALGORITHM: &str = "Ed25519";
 
 // Current internal revision number that will go into embedded claims
-pub(crate) const WASCAP_INTERNAL_REVISION: u32 = 2;
+pub(crate) const WASCAP_INTERNAL_REVISION: u32 = 3;
 
 // Minimum revision number at which we verify module hashes
-pub(crate) const MIN_WASCAP_INTERNAL_REVISION: u32 = 2;
+pub(crate) const MIN_WASCAP_INTERNAL_REVISION: u32 = 3;
 
 /// A structure containing a JWT and its associated decoded claims
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
@@ -809,6 +809,7 @@ mod test {
         },
     };
     use std::collections::HashMap;
+    use std::io::Read;
 
     #[test]
     fn full_validation_nbf() {
@@ -1233,5 +1234,19 @@ mod test {
                 _ => panic!("failed to assert errors::ErrorKind::MissingSubject"),
             }
         }
+    }
+
+    #[test]
+    fn ensure_backwards_compatible() {
+        let mut echo_messaging_v9 = vec![];
+        let mut file = std::fs::File::open("./fixtures/echo_messaging_v0.9.0.wasm").unwrap();
+        file.read_to_end(&mut echo_messaging_v9).unwrap();
+
+        let extracted = crate::wasm::extract_claims(&echo_messaging_v9)
+            .unwrap()
+            .unwrap();
+
+        let vres = validate_token::<Actor>(&extracted.jwt);
+        assert!(vres.is_ok());
     }
 }
