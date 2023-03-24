@@ -4,6 +4,8 @@
 //! which determine how the configuration is parsed.
 //!
 //! For the key...
+use base64::{engine::Engine as _, prelude::BASE64_STANDARD_NO_PAD};
+use serde::{de::Deserializer, de::Visitor, Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr};
 ///   config_file:       load configuration from file name.
 ///                      Interprets file as json or toml, based on file extension.
@@ -18,8 +20,6 @@ use std::net::{IpAddr, Ipv4Addr};
 ///
 use std::path::Path;
 use std::{collections::HashMap, fmt, io::ErrorKind, net::SocketAddr, ops::Deref, str::FromStr};
-
-use serde::{de::Deserializer, de::Visitor, Deserialize, Serialize};
 
 use crate::Error;
 
@@ -36,6 +36,13 @@ const CORS_ALLOWED_HEADERS: &[&str] = &[
 ];
 const CORS_EXPOSED_HEADERS: &[&str] = &[];
 const CORS_DEFAULT_MAX_AGE_SECS: u64 = 300;
+// Maximum content length. Can be overridden in settings or link definition
+// Syntax: number, or number followed by 'K', 'M', or 'G'
+// Default value is 100M (100*1024*1024)
+pub const DEFAULT_MAX_CONTENT_LEN: u64 = 100 * 1024 * 1024;
+// max possible value of content length. If sending to wasm32, memory is limited to 2GB,
+// practically this should be quite a bit smaller. Setting to 1GB for now.
+pub const CONTENT_LEN_LIMIT: u64 = 1024 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ServiceSettings {
@@ -60,6 +67,21 @@ pub struct ServiceSettings {
     /// If not set, uses the system-wide rpc timeout
     #[serde(default)]
     pub timeout_ms: Option<u64>,
+
+    /// Max content length. Default "10m" (10MiB = 10485760 bytes)
+    /// Can be overridden by link def value max_content_len
+    /// Accepts number (bytes), or number with suffix 'k', 'm', or 'g', (upper or lower case)
+    /// representing multiples of 1024. For example,
+    /// - "500" = 5000 bytes,
+    /// - "5k" = 5 * 1024 bytes,
+    /// - "5m" = 5 * 1024*1024 bytes,
+    /// - "1g" = 1024*1024*1024 bytes
+    /// The value may not be higher than i32::MAX
+    pub max_content_len: Option<String>,
+
+    /// capture any other configuration values
+    #[serde(flatten)]
+    extra: HashMap<String, serde_json::Value>,
 }
 
 impl Default for ServiceSettings {
@@ -70,6 +92,8 @@ impl Default for ServiceSettings {
             cors: Cors::default(),
             log: Log::default(),
             timeout_ms: None,
+            max_content_len: Some(DEFAULT_MAX_CONTENT_LEN.to_string()),
+            extra: Default::default(),
         }
     }
 }
@@ -87,7 +111,7 @@ macro_rules! merge {
 impl ServiceSettings {
     /// load Settings from a file with .toml or .json extension
     fn from_file<P: AsRef<Path>>(fpath: P) -> Result<Self, Error> {
-        let data = std::fs::read(&fpath).map_err(|e| {
+        let data = std::fs::read_to_string(&fpath).map_err(|e| {
             Error::Settings(format!("reading file {}: {}", &fpath.as_ref().display(), e))
         })?;
         if let Some(ext) = fpath.as_ref().extension() {
@@ -106,13 +130,13 @@ impl ServiceSettings {
     }
 
     /// load settings from json
-    fn from_json(data: &[u8]) -> Result<Self, Error> {
-        serde_json::from_slice(data).map_err(|e| Error::Settings(format!("invalid json: {}", e)))
+    fn from_json(data: &str) -> Result<Self, Error> {
+        serde_json::from_str(data).map_err(|e| Error::Settings(format!("invalid json: {}", e)))
     }
 
     /// load settings from toml file
-    fn from_toml(data: &[u8]) -> Result<Self, Error> {
-        toml::from_slice(data).map_err(Error::SettingsToml)
+    fn from_toml(data: &str) -> Result<Self, Error> {
+        toml::from_str(data).map_err(Error::SettingsToml)
     }
 
     /// Merge settings from other into self
@@ -197,13 +221,16 @@ pub fn load_settings(values: &HashMap<String, String>) -> Result<ServiceSettings
     }
 
     if let Some(str) = values.get("config_b64") {
-        let bytes = base64::decode(str.as_bytes())
+        let bytes = BASE64_STANDARD_NO_PAD
+            .decode(str)
             .map_err(|e| Error::Settings(format!("invalid base64 encoding: {}", e)))?;
-        settings.merge(ServiceSettings::from_json(&bytes)?);
+        settings.merge(ServiceSettings::from_json(&String::from_utf8_lossy(
+            &bytes,
+        ))?);
     }
 
     if let Some(str) = values.get("config_json") {
-        settings.merge(ServiceSettings::from_json(str.as_bytes())?);
+        settings.merge(ServiceSettings::from_json(str)?);
     }
 
     // accept address as value parameter
@@ -599,12 +626,12 @@ mod test {
 
     #[test]
     fn settings_toml() {
-        let bytes = br#"
+        let toml = r#"
     [cors]
     allowed_methods = [ "GET" ]
     "#;
 
-        let s = ServiceSettings::from_toml(bytes).expect("parse_toml");
+        let s = ServiceSettings::from_toml(toml).expect("parse_toml");
         assert_eq!(s.cors.allowed_methods.as_ref().unwrap().0.len(), 1);
         assert_eq!(
             s.cors.allowed_methods.as_ref().unwrap().0.get(0).unwrap(),
@@ -614,13 +641,13 @@ mod test {
 
     #[test]
     fn settings_json() {
-        let bytes = br#"{
+        let json = r#"{
         "cors": {
             "allowed_headers": [ "X-Cookies" ]
          }
          }"#;
 
-        let s = ServiceSettings::from_json(bytes).expect("parse_json");
+        let s = ServiceSettings::from_json(json).expect("parse_json");
         assert_eq!(s.cors.allowed_headers.as_ref().unwrap().0.len(), 1);
         assert_eq!(
             s.cors.allowed_headers.as_ref().unwrap().0.get(0).unwrap(),

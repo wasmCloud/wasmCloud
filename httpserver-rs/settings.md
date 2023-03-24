@@ -12,7 +12,7 @@ Address is a string in the form "IP:PORT". The default bind address is "127.0.0.
 
 ### TLS
 
-An empty tls section, or no tls section, disables tls. To enable tls, both `cert_file` and `priv_key_file` must contain absolute paths to existing files.
+An empty tls section, or no tls section, disables tls. To enable TLS, both `cert_file` and `priv_key_file` must contain absolute paths to existing files.
 
 ### CORS
 
@@ -34,10 +34,18 @@ An empty tls section, or no tls section, disables tls. To enable tls, both `cert
 
 - `max_age_secs` - sets the `Access-Control-Max-Age` header. Default is 300 seconds.
 
+### Content length limit
+
+The http server is configured with a maximum content size that will be accepted for an incoming request. This is an important safety measure to prevent a caller from submitting unreasonably large requests to cause the server to run out of memory. By default, the content limit is 100MB (104857600 bytes).
+The value can be overridden with the setting `max_content_len`. The value of this setting is a json string containing a number, or a number followed immediately by a 'K', 'M', or 'G' (or lowercase 'k','m', or 'g'), representing *1024, *1048576, or *1073741824, respectively.
+For example, the following setting limits uploads to 20 MB.
+```json
+{ "max_content_len": "20M" }
+```
 
 ## Examples of settings files
 
-Bind to all IP interfaces and port 3000, no TLS
+Bind to all IP interfaces and port 3000, with TLS disabled
 
 ```json
 { "address":  "0.0.0.0:3000" }
@@ -60,13 +68,14 @@ Example with all settings
     "allowed_methods": [ "GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS" ],
     "exposed_headers": [],
     "max_age_secs": 300
-  }
+  },
+  "max_content_len": "100M"
 }
 ```
 
 ## Using the http server settings
 
-The link definition connecting an actor to a capability provider includes a key-value map called "values". (The location of this 'values' map is still tbd, possibly in a manifest file). "values" is currently defined as a map with string keys and string values, and there are a few options for specifying the httpserver settings within the values map.
+The link definition connecting an actor to a capability provider includes a key-value map called "values". "values" is currently defined as a map with string keys and string values, and there are a few options for specifying the httpserver settings within the values map.
 
 - use key `config_file`, with a value that is the absolute path to a json or toml file (file type detected by the `.json` or `.toml` extension). 
 
