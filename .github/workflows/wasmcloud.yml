@@ -19,6 +19,11 @@ jobs:
           test-oci: docker load < ./result
           # TODO: Run aarch64 binary within OCI
 
+        - target: x86_64-pc-windows-gnu
+          test-bin: nix shell --inputs-from . 'nixpkgs#wine64' -c wine64 ./result/bin/wasmcloud.exe --version
+          test-oci: docker load < ./result
+          # TODO: Run win64 binary within OCI
+
         - target: x86_64-unknown-linux-musl
           test-bin: ./result/bin/wasmcloud --version
           test-oci: |
