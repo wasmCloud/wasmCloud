@@ -103,7 +103,7 @@ pub struct Inner {
 
 /// An asynchronous HttpServer with support for CORS and TLS
 /// ```no_test
-///   use wasmcloud_httpserver_provider::{HttpServer, load_settings};
+///   use wasmcloud_provider_httpserver::{HttpServer, load_settings};
 ///   let settings = load_settings(ld.values)?;
 ///   let server = HttpServer::new(settings);
 ///   let task = server.serve()?;
@@ -159,7 +159,7 @@ impl HttpServerCore {
 
     /// Start the server in a new thread
     /// ```no_test
-    ///    use wasmcloud_httpserver_provider::{HttpServer, load_settings};
+    ///    use wasmcloud_provider_httpserver::{HttpServer, load_settings};
     ///    let settings = load_settings(&ld.values)?;
     ///    let server = HttpServer::new(settings);
     ///    let _ = server.start().await?;

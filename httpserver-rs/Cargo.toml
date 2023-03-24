@@ -1,5 +1,5 @@
 [package]
-name = "wasmcloud-httpserver-provider"
+name = "wasmcloud-provider-httpserver"
 description = "implementation of http server for wasmcloud, using warp"
 license = "Apache-2.0"
 authors = ["wasmCloud Team"]
@@ -35,7 +35,7 @@ reqwest = { version = "0.11", features = ["json"]}
 wasmcloud-test-util = "0.7.0"
 
 [lib]
-name = "wasmcloud_httpserver_provider"
+name = "wasmcloud_provider_httpserver"
 path = "src/lib.rs"
 
 [[bin]]

@@ -16,8 +16,9 @@
 //!     Try `killall httpserver` to kill them.
 //!
 use std::time::Instant;
+use tokio::time::Duration;
 use wasmbus_rpc::{core::InvocationResponse, provider::prelude::*};
-use wasmcloud_httpserver_provider::wasmcloud_interface_httpserver::{HttpRequest, HttpResponse};
+use wasmcloud_provider_httpserver::wasmcloud_interface_httpserver::{HttpRequest, HttpResponse};
 use wasmcloud_test_util::{
     check, cli::print_test_results, provider_test::test_provider, run_selected_spawn,
     testing::TestOptions,
@@ -50,6 +51,7 @@ async fn run_all() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
     // ask the provider to shut down
     let provider = test_provider().await;
+    tokio::time::sleep(Duration::from_secs(3)).await; // allow tests to complete
     let _ = provider.shutdown().await;
     Ok(())
 }
