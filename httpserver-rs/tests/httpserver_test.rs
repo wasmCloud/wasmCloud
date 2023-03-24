@@ -17,7 +17,7 @@
 //!
 use std::time::Instant;
 use wasmbus_rpc::{core::InvocationResponse, provider::prelude::*};
-use wasmcloud_provider_httpserver::wasmcloud_interface_httpserver::{HttpRequest, HttpResponse};
+use wasmcloud_httpserver_provider::wasmcloud_interface_httpserver::{HttpRequest, HttpResponse};
 use wasmcloud_test_util::{
     check, cli::print_test_results, provider_test::test_provider, run_selected_spawn,
     testing::TestOptions,

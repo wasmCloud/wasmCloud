@@ -8,7 +8,7 @@ use tracing::{error, instrument, trace, warn};
 use wasmbus_rpc::{
     core::LinkDefinition, error::RpcError, provider::prelude::*, provider::ProviderTransport,
 };
-use wasmcloud_provider_httpserver::{
+use wasmcloud_httpserver_provider::{
     load_settings,
     wasmcloud_interface_httpserver::{HttpRequest, HttpResponse, HttpServer, HttpServerSender},
     HttpServerCore,
