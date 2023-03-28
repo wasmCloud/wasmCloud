@@ -33,6 +33,7 @@ pub trait Handle<T>: Sync + Send {
         claims: &jwt::Claims<jwt::Actor>,
         binding: String,
         invocation: T,
+        call_context: &Option<Vec<u8>>,
     ) -> Result<Option<Vec<u8>>>;
 }
 
@@ -176,8 +177,9 @@ impl<T: ?Sized + Handle<HostInvocation>> Handle<HostInvocation> for Box<T> {
         claims: &jwt::Claims<jwt::Actor>,
         binding: String,
         invocation: HostInvocation,
+        call_context: &Option<Vec<u8>>,
     ) -> Result<Option<Vec<u8>>> {
-        self.handle(claims, binding, invocation).await
+        self.handle(claims, binding, invocation, call_context).await
     }
 }
 
@@ -188,8 +190,9 @@ impl<T: ?Sized + Handle<HostInvocation>> Handle<HostInvocation> for Arc<T> {
         claims: &jwt::Claims<jwt::Actor>,
         binding: String,
         invocation: HostInvocation,
+        call_context: &Option<Vec<u8>>,
     ) -> Result<Option<Vec<u8>>> {
-        self.handle(claims, binding, invocation).await
+        self.handle(claims, binding, invocation, call_context).await
     }
 }
 
@@ -200,8 +203,9 @@ impl<T: ?Sized + Handle<HostInvocation>> Handle<HostInvocation> for &T {
         claims: &jwt::Claims<jwt::Actor>,
         binding: String,
         invocation: HostInvocation,
+        call_context: &Option<Vec<u8>>,
     ) -> Result<Option<Vec<u8>>> {
-        self.handle(claims, binding, invocation).await
+        self.handle(claims, binding, invocation, call_context).await
     }
 }
 
@@ -212,8 +216,9 @@ impl<T: ?Sized + Handle<HostInvocation>> Handle<HostInvocation> for &mut T {
         claims: &jwt::Claims<jwt::Actor>,
         binding: String,
         invocation: HostInvocation,
+        call_context: &Option<Vec<u8>>,
     ) -> Result<Option<Vec<u8>>> {
-        self.handle(claims, binding, invocation).await
+        self.handle(claims, binding, invocation, call_context).await
     }
 }
 
@@ -279,21 +284,22 @@ where
         claims: &jwt::Claims<jwt::Actor>,
         binding: String,
         invocation: Invocation,
+        call_context: &Option<Vec<u8>>,
     ) -> Result<Option<Vec<u8>>> {
         match invocation {
             Invocation::Logging(invocation) => self
                 .logging
-                .handle(claims, binding, invocation)
+                .handle(claims, binding, invocation, call_context)
                 .await
                 .context("failed to handle logging invocation"),
             Invocation::Numbergen(invocation) => self
                 .numbergen
-                .handle(claims, binding, invocation)
+                .handle(claims, binding, invocation, call_context)
                 .await
                 .context("failed to handle numbergen invocation"),
             Invocation::Host(invocation) => self
                 .host
-                .handle(claims, binding, invocation)
+                .handle(claims, binding, invocation, call_context)
                 .await
                 .context("failed to handle host invocation"),
         }
@@ -319,7 +325,7 @@ impl<T, Fut, F> From<F> for HandlerFunc<F>
 where
     T: Into<Vec<u8>>,
     Fut: Future<Output = Result<Option<T>>> + Sync + Send,
-    F: Fn(jwt::Claims<jwt::Actor>, String, HostInvocation) -> Fut + Sync + Send,
+    F: Fn(jwt::Claims<jwt::Actor>, String, HostInvocation, Option<Vec<u8>>) -> Fut + Sync + Send,
 {
     fn from(func: F) -> Self {
         Self(func)
@@ -331,15 +337,16 @@ impl<T, Fut, F> Handle<HostInvocation> for HandlerFunc<F>
 where
     T: Into<Vec<u8>>,
     Fut: Future<Output = Result<Option<T>>> + Sync + Send,
-    F: Fn(jwt::Claims<jwt::Actor>, String, HostInvocation) -> Fut + Sync + Send,
+    F: Fn(jwt::Claims<jwt::Actor>, String, HostInvocation, Option<Vec<u8>>) -> Fut + Sync + Send,
 {
     async fn handle(
         &self,
         claims: &jwt::Claims<jwt::Actor>,
         binding: String,
         invocation: HostInvocation,
+        call_context: &Option<Vec<u8>>,
     ) -> Result<Option<Vec<u8>>> {
-        match self(claims.clone(), binding, invocation).await {
+        match self(claims.clone(), binding, invocation, call_context.clone()).await {
             Ok(Some(res)) => Ok(Some(res.into())),
             Ok(None) => Ok(None),
             Err(err) => Err(err),
@@ -372,15 +379,18 @@ where
 impl<T, F> Handle<HostInvocation> for HandlerFuncSync<F>
 where
     T: Into<Vec<u8>>,
-    F: Fn(&jwt::Claims<jwt::Actor>, String, HostInvocation) -> Result<Option<T>> + Sync + Send,
+    F: Fn(&jwt::Claims<jwt::Actor>, String, HostInvocation, &Option<Vec<u8>>) -> Result<Option<T>>
+        + Sync
+        + Send,
 {
     async fn handle(
         &self,
         claims: &jwt::Claims<jwt::Actor>,
         binding: String,
         invocation: HostInvocation,
+        call_context: &Option<Vec<u8>>,
     ) -> Result<Option<Vec<u8>>> {
-        match self(claims, binding, invocation) {
+        match self(claims, binding, invocation, call_context) {
             Ok(Some(res)) => Ok(Some(res.into())),
             Ok(None) => Ok(None),
             Err(err) => Err(err),

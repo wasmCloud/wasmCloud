@@ -255,7 +255,9 @@ async fn host_call(
     match trace_span!("Handle::handle")
         .in_scope(|| {
             let ctx = store.data();
-            ctx.wasmbus.handler.handle(ctx.claims, bd, invocation)
+            ctx.wasmbus
+                .handler
+                .handle(ctx.claims, bd, invocation, &store.data().call_context)
         })
         .await
     {

@@ -40,6 +40,8 @@ pub(super) struct Ctx<'a> {
     pub wasi: wasmtime_wasi::WasiCtx,
     pub claims: &'a jwt::Claims<jwt::Actor>,
     pub wasmbus: wasmbus::Ctx,
+    /// Opaque context that can be supplied upon initial invocation of an actor
+    pub call_context: Option<Vec<u8>>,
 }
 
 impl Debug for Ctx<'_> {
@@ -67,6 +69,7 @@ impl<'a> Ctx<'a> {
             wasi,
             claims,
             wasmbus,
+            call_context: None,
         })
     }
 
@@ -170,11 +173,45 @@ impl Module {
         operation: impl AsRef<str>,
         payload: impl Into<Vec<u8>>,
     ) -> anyhow::Result<Result<Option<Vec<u8>>, String>> {
-        let operation = operation.as_ref();
+        let instance = self
+            .instantiate()
+            .await
+            .context("failed to instantiate module")?;
+
+        Self::call_instance(instance, operation, payload).await
+    }
+
+    /// Instantiate a [Module] producing an [Instance] and invoke an operation on it using [Instance::call]
+    /// The `call_context` argument is an opaque byte array that can be used for additional
+    /// metadata around an actor call, like a parent span ID or invocation ID.
+    #[instrument(skip(operation, payload, call_context))]
+    pub async fn call_with_context(
+        &self,
+        operation: impl AsRef<str>,
+        payload: impl Into<Vec<u8>>,
+        call_context: impl Into<Vec<u8>>,
+    ) -> anyhow::Result<Result<Option<Vec<u8>>, String>> {
         let mut instance = self
             .instantiate()
             .await
             .context("failed to instantiate module")?;
+
+        let call_context = call_context.into();
+        if !call_context.is_empty() {
+            instance.store.data_mut().call_context = Some(call_context);
+        }
+
+        Self::call_instance(instance, operation, payload).await
+    }
+
+    /// Internal helper function to reduce code duplication between
+    /// `call` and `call_with_context`
+    async fn call_instance(
+        mut instance: Instance<'_>,
+        operation: impl AsRef<str>,
+        payload: impl Into<Vec<u8>>,
+    ) -> anyhow::Result<Result<Option<Vec<u8>>, String>> {
+        let operation = operation.as_ref();
         let Response {
             code,
             console_log,
@@ -254,6 +291,28 @@ impl Instance<'_> {
             console_log,
         })
     }
+
+    /// Invoke an operation on an [Instance] producing a [Response], supplying a `call_context`
+    /// argument. The `call_context` is an opaque byte array that can be used for additional
+    /// metadata around an actor call, like a parent span ID or invocation ID.
+    #[instrument(skip_all)]
+    pub async fn call_with_context(
+        &mut self,
+        operation: impl Into<String>,
+        payload: impl Into<Vec<u8>>,
+        call_context: impl Into<Vec<u8>>,
+    ) -> Result<Response> {
+        let call_context = call_context.into();
+        if !call_context.is_empty() {
+            self.store.data_mut().call_context = Some(call_context);
+        }
+
+        let response = self.call(operation, payload).await;
+
+        // Reset call context after call
+        self.store.data_mut().call_context = None;
+        response
+    }
 }
 
 #[cfg(test)]
@@ -302,6 +361,7 @@ mod tests {
             _: &jwt::Claims<jwt::Actor>,
             _: String,
             invocation: LoggingInvocation,
+            _call_context: &Option<Vec<u8>>,
         ) -> Result<Option<Vec<u8>>> {
             match invocation {
                 LoggingInvocation::WriteLog {
@@ -346,6 +406,7 @@ mod tests {
             _: &jwt::Claims<jwt::Actor>,
             _: String,
             invocation: NumbergenInvocation,
+            _call_context: &Option<Vec<u8>>,
         ) -> Result<Option<Vec<u8>>> {
             match invocation {
                 NumbergenInvocation::GenerateGuid => {
@@ -375,6 +436,7 @@ mod tests {
         claims: jwt::Claims<jwt::Actor>,
         binding: String,
         invocation: HostInvocation,
+        call_context: Option<Vec<u8>>,
     ) -> anyhow::Result<Option<[u8; 0]>> {
         panic!(
             "cannot execute `{invocation:?}` within binding `{binding}` for actor `{}`",

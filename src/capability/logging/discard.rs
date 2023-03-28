@@ -16,6 +16,7 @@ impl Handle<Invocation> for Logging {
         _: &jwt::Claims<jwt::Actor>,
         _: String,
         _: Invocation,
+        _: &Option<Vec<u8>>,
     ) -> Result<Option<Vec<u8>>> {
         Ok(None)
     }

@@ -20,6 +20,8 @@ pub(super) struct Ctx<'a> {
     pub wasi: ::host::WasiCtx,
     pub claims: &'a jwt::Claims<jwt::Actor>,
     pub handler: Arc<Box<dyn Handle<Invocation>>>,
+    /// Opaque context that can be supplied upon initial invocation of an actor
+    pub call_context: Option<Vec<u8>>,
 }
 
 impl Debug for Ctx<'_> {
@@ -39,6 +41,7 @@ impl<'a> Ctx<'a> {
             wasi,
             claims,
             handler,
+            call_context: None,
         }
     }
 }
@@ -55,7 +58,11 @@ impl host::Host for Ctx<'_> {
         let invocation = (namespace, operation, payload)
             .try_into()
             .context("failed to parse invocation")?;
-        match self.handler.handle(self.claims, binding, invocation).await {
+        match self
+            .handler
+            .handle(self.claims, binding, invocation, &self.call_context)
+            .await
+        {
             Err(err) => Ok(Err(err.to_string())),
             Ok(res) => Ok(Ok(res)),
         }
@@ -142,6 +149,31 @@ impl Component {
             .await
             .with_context(|| format!("failed to call operation `{operation}` on module"))
     }
+
+    /// Instantiate a [Component] producing an [Instance] and invoke an operation on it using [Instance::call]
+    /// The `call_context` argument is an opaque byte array that can be used for additional
+    /// metadata around an actor call, like a parent span ID or invocation ID.
+    #[instrument(skip(operation, payload, call_context))]
+    pub async fn call_with_context(
+        &self,
+        operation: impl AsRef<str>,
+        payload: Option<impl AsRef<[u8]>>,
+        call_context: impl AsRef<[u8]>,
+    ) -> anyhow::Result<Result<Option<Vec<u8>>, String>> {
+        let operation = operation.as_ref();
+        let mut instance = self
+            .instantiate()
+            .await
+            .context("failed to instantiate component")?;
+        if !call_context.as_ref().is_empty() {
+            instance.store.data_mut().call_context = Some(call_context.as_ref().to_vec());
+        }
+
+        instance
+            .call(operation, payload)
+            .await
+            .with_context(|| format!("failed to call operation `{operation}` on module"))
+    }
 }
 
 /// An instance of a [Component]
@@ -168,5 +200,22 @@ impl Instance<'_> {
             )
             .await
             .context("failed to call `guest-call`")
+    }
+
+    /// Invoke an operation on an [Instance] producing a result, where outermost error represents
+    /// a WebAssembly execution error and innermost - the component operation error
+    /// The `call_context` argument is an opaque byte array that can be used for additional
+    /// metadata around an actor call, like a parent span ID or invocation ID.
+    #[instrument(skip_all)]
+    pub async fn call_with_context(
+        &mut self,
+        operation: impl AsRef<str>,
+        payload: Option<impl AsRef<[u8]>>,
+        call_context: impl AsRef<[u8]>,
+    ) -> anyhow::Result<Result<Option<Vec<u8>>, String>> {
+        if !call_context.as_ref().is_empty() {
+            self.store.data_mut().call_context = Some(call_context.as_ref().to_vec());
+        }
+        self.call(operation, payload).await
     }
 }
