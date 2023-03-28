@@ -48,7 +48,6 @@
 
         targets.armv7-unknown-linux-musleabihf = false;
         targets.wasm32-wasi = false;
-        targets.x86_64-pc-windows-gnu = false;
 
         test.allTargets = true;
         test.workspace = true;
