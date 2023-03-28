@@ -13,7 +13,7 @@ jobs:
   build-linux:
     strategy:
       matrix:
-        platform:
+        config:
         - target: aarch64-unknown-linux-musl
           test-bin: nix shell --inputs-from . 'nixpkgs#qemu' -c qemu-aarch64 ./result/bin/wasmcloud --version
           test-oci: docker load < ./result
@@ -25,7 +25,7 @@ jobs:
             docker load < ./result
             docker run --rm wasmcloud:$(nix eval --raw .#wasmcloud-x86_64-unknown-linux-musl-oci.imageTag) wasmcloud --version
 
-    name: wasmcloud-${{ matrix.platform.target }}
+    name: wasmcloud-${{ matrix.config.target }}
     runs-on: ubuntu-22.04
     steps:
     - uses: actions/checkout@v3
@@ -34,18 +34,18 @@ jobs:
         cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
     - uses: ./.github/actions/build-nix
       with:
-        package: wasmcloud-${{ matrix.platform.target }}
+        package: wasmcloud-${{ matrix.config.target }}
         install-path: /bin/wasmcloud
-    - run: ${{ matrix.platform.test-bin }}
+    - run: ${{ matrix.config.test-bin }}
     - uses: ./.github/actions/build-nix
       with:
-        package: wasmcloud-${{ matrix.platform.target }}-oci
-    - run: ${{ matrix.platform.test-oci }}
+        package: wasmcloud-${{ matrix.config.target }}-oci
+    - run: ${{ matrix.config.test-oci }}
 
   build-mac:
     strategy:
       matrix:
-        platform:
+        config:
         - target: aarch64-apple-darwin
           test: file ./result/bin/wasmcloud --version
           # TODO: Run aarch64 binary on host system and via OCI
@@ -53,7 +53,7 @@ jobs:
         - target: x86_64-apple-darwin
           test: ./result/bin/wasmcloud --version
 
-    name: wasmcloud-${{ matrix.platform.target }}
+    name: wasmcloud-${{ matrix.config.target }}
     runs-on: macos-12
     steps:
     - uses: actions/checkout@v3
@@ -62,12 +62,12 @@ jobs:
         cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
     - uses: ./.github/actions/build-nix
       with:
-        package: wasmcloud-${{ matrix.platform.target }}
+        package: wasmcloud-${{ matrix.config.target }}
         install-path: /bin/wasmcloud
-    - run: ${{ matrix.platform.test-bin }}
+    - run: ${{ matrix.config.test-bin }}
     - uses: ./.github/actions/build-nix
       with:
-        package: wasmcloud-${{ matrix.platform.target }}-oci
+        package: wasmcloud-${{ matrix.config.target }}-oci
     - run: ${{ matrix.platform.test-oci }}
     # TODO: Test OCI on Mac
 
