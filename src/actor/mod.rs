@@ -118,4 +118,31 @@ impl Actor {
                 .with_context(|| format!("failed to call operation `{operation}` on component")),
         }
     }
+
+    /// Instantiate the actor and invoke an operation on it.
+    /// The `call_context` argument is an opaque byte array that can be used for additional
+    /// metadata around an actor call, like a parent span ID or invocation ID.
+    #[instrument(skip(operation, payload, call_context))]
+    pub async fn call_with_context(
+        &self,
+        operation: impl AsRef<str>,
+        payload: Option<impl Into<Vec<u8>> + AsRef<[u8]>>,
+        call_context: impl Into<Vec<u8>> + AsRef<[u8]>,
+    ) -> anyhow::Result<Result<Option<Vec<u8>>, String>> {
+        let operation = operation.as_ref();
+        match self {
+            Actor::Module(module) => module
+                .call_with_context(
+                    operation,
+                    payload.map(Into::into).unwrap_or(vec![]),
+                    call_context,
+                )
+                .await
+                .with_context(|| format!("failed to call operation `{operation}` on module")),
+            Actor::Component(component) => component
+                .call_with_context(operation, payload, call_context)
+                .await
+                .with_context(|| format!("failed to call operation `{operation}` on component")),
+        }
+    }
 }
