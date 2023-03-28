@@ -8,6 +8,8 @@
     "nix-community.cachix.org-1:mB9FSh9qf2dCimDSUo8Zy7bkq5CX+/rkCWyvRCYg3Fs="
   ];
 
+  inputs.fenix.url = github:nix-community/fenix/monthly;
+  inputs.nixify.inputs.fenix.follows = "fenix";
   inputs.nixify.url = github:rvolosatovs/nixify;
 
   outputs = {nixify, ...}:
@@ -33,30 +35,40 @@
           "SECURITY.md"
         ];
 
-        buildOverrides = {
-          pkgs,
-          buildInputs ? [],
-          nativeBuildInputs ? [],
-          ...
-        } @ args:
-          with pkgs.lib;
-          with (args.pkgsCross or pkgs); {
-            buildInputs =
-              buildInputs
-              ++ optional stdenv.targetPlatform.isDarwin darwin.apple_sdk.frameworks.Security;
-          };
+        doCheck = false; # testing is performed in checks via `nextest`
 
+        clippy.allTargets = true;
+        clippy.deny = ["warnings"];
+        clippy.workspace = true;
+
+        targets.armv7-unknown-linux-musleabihf = false;
         targets.wasm32-wasi = false;
+        targets.x86_64-pc-windows-gnu = false;
 
         test.allTargets = true;
         test.workspace = true;
 
-        clippy.allTargets = true;
-        clippy.workspace = true;
+        buildOverrides = {
+          pkgs,
+          pkgsCross ? pkgs,
+          ...
+        }: {
+          buildInputs ? [],
+          depsBuildBuild ? [],
+          ...
+        } @ args:
+          with pkgsCross;
+          with pkgs.lib; {
+            buildInputs =
+              buildInputs
+              ++ optional stdenv.targetPlatform.isDarwin pkgs.libiconv;
 
-        clippy.allow = [];
-        clippy.deny = ["warnings"];
-        clippy.forbid = [];
-        clippy.warn = [];
+            depsBuildBuild =
+              depsBuildBuild
+              ++ optionals stdenv.targetPlatform.isDarwin [
+                darwin.apple_sdk.frameworks.CoreFoundation
+                libiconv
+              ];
+          };
       };
 }
