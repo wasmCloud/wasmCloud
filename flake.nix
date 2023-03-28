@@ -1,4 +1,13 @@
 {
+  nixConfig.extra-substituters = [
+    "https://wasmcloud.cachix.org"
+    "https://nix-community.cachix.org"
+  ];
+  nixConfig.extra-trusted-public-keys = [
+    "wasmcloud.cachix.org-1:9gRBzsKh+x2HbVVspreFg/6iFRiD4aOcUQfXVDl3hiM="
+    "nix-community.cachix.org-1:mB9FSh9qf2dCimDSUo8Zy7bkq5CX+/rkCWyvRCYg3Fs="
+  ];
+
   inputs.nixify.url = github:rvolosatovs/nixify;
 
   outputs = {nixify, ...}:
