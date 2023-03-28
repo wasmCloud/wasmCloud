@@ -22,6 +22,8 @@
           "CODE_OF_CONDUCT.md"
           "CONTRIBUTING.md"
           "CONTRIBUTION_LADDER.md"
+          "flake.lock"
+          "flake.nix"
           "GOVERNANCE.md"
           "LICENSE"
           "OWNERS"
