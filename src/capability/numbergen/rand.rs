@@ -39,7 +39,6 @@ where
         claims: &jwt::Claims<jwt::Actor>,
         _binding: String,
         invocation: Invocation,
-        _call_context: &Option<Vec<u8>>,
     ) -> Result<Option<Vec<u8>>> {
         match invocation {
             Invocation::GenerateGuid => {

@@ -15,12 +15,10 @@ async fn host_call(
         operation,
         payload,
     }: HostInvocation,
-    call_context: Option<Vec<u8>>,
 ) -> anyhow::Result<Option<&'static str>> {
     assert_eq!(namespace, "FoobarHost");
     assert_eq!(operation, "Foobar.Foo");
     assert_eq!(payload, None);
-    assert_eq!(call_context, None);
     Ok(Some("foo"))
 }
 

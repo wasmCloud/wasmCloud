@@ -12,7 +12,6 @@ async fn host_call(
     claims: jwt::Claims<jwt::Actor>,
     binding: String,
     invocation: HostInvocation,
-    _call_context: Option<Vec<u8>>,
 ) -> anyhow::Result<Option<[u8; 0]>> {
     bail!(
         "cannot execute `{invocation:?}` within binding `{binding}` for actor `{}`",
