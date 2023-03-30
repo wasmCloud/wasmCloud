@@ -73,6 +73,9 @@ async fn run(wasm: impl AsRef<[u8]>) -> anyhow::Result<Vec<(logging::Level, Stri
         let actor = Actor::new(&rt, wasm).expect("failed to construct actor");
         assert_eq!(actor.claims().subject, key.public_key());
         actor
+            .configure()
+            .inherit_stdout()
+            .inherit_stderr()
             .call("HttpServer.HandleRequest", Some(REQUEST.as_slice()))
             .await
             .context("failed to call `HttpServer.HandleRequest`")?

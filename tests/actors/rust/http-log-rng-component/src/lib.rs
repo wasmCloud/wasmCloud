@@ -38,12 +38,13 @@ impl guest::Guest for Actor {
         logging::log(logging::Level::Warn, "warn-context", "warn");
         logging::log(logging::Level::Error, "error-context", "error");
 
-        let body = serde_json::to_vec(&json!({
+        let res = json!({
             "guid": HostRng::generate_guid().to_string(),
             "random_in_range": HostRng::random_in_range(min, max),
             "random_32": HostRng::random32(),
-        }))
-        .expect("failed to encode response to JSON");
+        });
+        eprintln!("response: `{res:?}`");
+        let body = serde_json::to_vec(&res).expect("failed to encode response to JSON");
 
         let res = serialize(&HttpResponse {
             body,
