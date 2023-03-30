@@ -1,0 +1,25 @@
+[package]
+name = "wasmcloud-actor"
+version = "0.1.0"
+description = "wasmCloud actor library giving access to interfaces provided by wasmCloud host runtime"
+
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = [
+    "rand",
+    "uuid",
+]
+
+[dependencies]
+rand = { workspace = true, optional = true }
+uuid = { workspace = true, optional = true }
+wit-bindgen = { workspace = true, features = ["macros"] }
+
+[build-dependencies]
+anyhow = { workspace = true }
+wit-deps = { workspace = true, features = ["sync"] }

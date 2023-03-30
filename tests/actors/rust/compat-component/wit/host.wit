@@ -1,4 +1,0 @@
-default world host {
-  export foobar-host: pkg.foobar.host
-  import host: pkg.wasmcloud.host
-}

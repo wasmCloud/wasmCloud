@@ -177,56 +177,20 @@ async fn install_rust_wasm32_wasi_actors(out_dir: impl AsRef<Path>) -> anyhow::R
         [
             "--manifest-path=./rust/Cargo.toml",
             "--target=wasm32-wasi",
-            "-p=actor-foobar-component",
-            "-p=actor-foobar-guest-component",
-            "-p=actor-foobar-host-component",
             "-p=actor-http-log-rng-component",
         ],
         |name, kind| {
-            [
-                "actor-foobar-component",
-                "actor-foobar-guest-component",
-                "actor-foobar-host-component",
-                "actor-http-log-rng-component",
-            ]
-            .contains(&name)
-                && kind.contains(&CrateType::Cdylib)
+            ["actor-http-log-rng-component"].contains(&name) && kind.contains(&CrateType::Cdylib)
         },
     )
     .await
     .context("failed to build `wasm32-wasi` actors")?;
-    match (
-        artifacts.next().deref_artifact(),
-        artifacts.next().deref_artifact(),
-        artifacts.next().deref_artifact(),
-        artifacts.next().deref_artifact(),
-        artifacts.next(),
-    ) {
-        (
-            Some(("actor-foobar-component", [foobar_path])),
-            Some(("actor-foobar-guest-component", [foobar_guest_path])),
-            Some(("actor-foobar-host-component", [foobar_host_path])),
-            Some(("actor-http-log-rng-component", [http_log_rng_path])),
-            None,
-        ) => {
-            try_join!(
-                copy(
-                    foobar_path,
-                    out_dir.join("actor-rust-foobar-component.wasm")
-                ),
-                copy(
-                    foobar_guest_path,
-                    out_dir.join("actor-rust-foobar-guest-component.wasm")
-                ),
-                copy(
-                    foobar_host_path,
-                    out_dir.join("actor-rust-foobar-host-component.wasm")
-                ),
-                copy(
-                    http_log_rng_path,
-                    out_dir.join("actor-rust-http-log-rng-component.wasm"),
-                )
-            )?;
+    match (artifacts.next().deref_artifact(), artifacts.next()) {
+        (Some(("actor-http-log-rng-component", [http_log_rng_path])), None) => {
+            try_join!(copy(
+                http_log_rng_path,
+                out_dir.join("actor-rust-http-log-rng-component.wasm"),
+            ))?;
             Ok(())
         }
         _ => bail!("invalid `wasm32-wasi` Rust actor build artifacts"),

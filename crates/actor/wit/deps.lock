@@ -1,0 +1,14 @@
+[logging]
+url = "https://github.com/WebAssembly/wasi-logging/archive/main.tar.gz"
+sha256 = "f378a2b6a36af096528ec5e7031da474990cecaec1949c663befc5066d719f6f"
+sha512 = "ba09307b12f5428c3058d878001c9fb15df21933c6203328f785d5009a4fc0cf304950271590d4146305a2d8b8988595f396d955961168cb6bfa7ea9af1cc362"
+
+[random]
+url = "https://github.com/WebAssembly/wasi-random/archive/main.tar.gz"
+sha256 = "79b6417bb1ab3c82c241c56021e717f258e2a0b3ab94db93907ca11d7f92ed66"
+sha512 = "1e657ac56420e65bde75eabea920a605a0ff4adc6f2ba8b7cf1c37a603710449bc1a29568dda2b61c04ae9889d2b1a82b9935d4b9d573eb48a83e0ecf9cad591"
+
+[wasmcloud]
+path = "../../../wit"
+sha256 = "d8915aa3d61123615bd62510c242fca4314e216842bf3debc334fb4bb4f6c82c"
+sha512 = "5cf495e8adc9e7e52543735cbdac0e81cabbf3e467ae68835b26111ec56b5893751691f1cfee3c2107dc34b4670e4fa059b253d39e0245afab632586e7251758"

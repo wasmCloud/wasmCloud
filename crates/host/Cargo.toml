@@ -1,0 +1,42 @@
+[package]
+name = "wasmcloud-host"
+version = "0.1.0"
+description = "wasmCloud host runtime library"
+
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[badges.maintenance]
+status = "actively-developed"
+
+[features]
+log = [
+    "tracing/log"
+]
+
+[dependencies]
+anyhow = { workspace = true, features = ["std"] }
+async-trait = { workspace = true }
+futures = { workspace = true, features = ["std"] }
+host = { workspace = true }
+log = { workspace = true }
+rand = { workspace = true, features = ["std"] }
+serde = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+wascap = { workspace = true }
+wasi-cap-std-sync = { workspace = true }
+wasi-common = { workspace = true }
+wasmbus-rpc = { workspace = true }
+wasmcloud-interface-logging = { workspace = true }
+wasmcloud-interface-numbergen = { workspace = true }
+wasmparser = { workspace = true }
+wasmtime = { workspace = true, features = ["async", "cache", "component-model", "cranelift", "jitdump", "parallel-compilation", "pooling-allocator", "vtune"] }
+wasmtime-wasi = { workspace = true, features = ["sync"] }
+
+[build-dependencies]
+anyhow = { workspace = true }
+wit-deps = { workspace = true, features = ["sync"] }

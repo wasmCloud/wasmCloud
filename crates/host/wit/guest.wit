@@ -1,0 +1,3 @@
+world actor {
+    export guest: wasmcloud.guest
+}
