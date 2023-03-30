@@ -10,7 +10,10 @@ crate-type = ["cdylib"]
 serde = { workspace = true }
 serde_json = { workspace = true }
 wasmbus-rpc = { workspace = true }
+wasmcloud-actor = { workspace = true }
 wasmcloud-interface-httpserver = { workspace = true }
-wasmcloud-interface-logging = { workspace = true }
-wasmcloud-interface-numbergen = { workspace = true }
 wit-bindgen = { workspace = true, features = ["default"] }
+
+[build-dependencies]
+anyhow = { workspace = true }
+wit-deps = { workspace = true, features = ["sync"] }

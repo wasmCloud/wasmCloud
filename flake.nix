@@ -23,7 +23,6 @@
         src = ./.;
 
         excludePaths = [
-          ".archived"
           ".gitignore"
           "awesome-wasmcloud"
           "CODE_OF_CONDUCT.md"
@@ -60,6 +59,7 @@
         }: {
           buildInputs ? [],
           depsBuildBuild ? [],
+          preBuild ? "",
           ...
         } @ args: let
           cargoLock.root = readTOML ./Cargo.lock;
@@ -78,11 +78,14 @@
 
             buildInputs =
               buildInputs
-              ++ optional stdenv.targetPlatform.isDarwin pkgs.libiconv;
+              ++ optionals stdenv.hostPlatform.isDarwin [
+                pkgs.darwin.apple_sdk.frameworks.Security
+                pkgs.libiconv
+              ];
 
             depsBuildBuild =
               depsBuildBuild
-              ++ optionals stdenv.targetPlatform.isDarwin [
+              ++ optionals stdenv.hostPlatform.isDarwin [
                 darwin.apple_sdk.frameworks.CoreFoundation
                 libiconv
               ];

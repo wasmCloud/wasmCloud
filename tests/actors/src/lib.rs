@@ -1,21 +1,6 @@
 pub const RUST_ECHO_MODULE: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/actor-rust-echo-module.wasm"));
 
-pub const RUST_FOOBAR_COMPONENT: &[u8] = include_bytes!(concat!(
-    env!("OUT_DIR"),
-    "/actor-rust-foobar-component.wasm"
-));
-
-pub const RUST_FOOBAR_GUEST_COMPONENT: &[u8] = include_bytes!(concat!(
-    env!("OUT_DIR"),
-    "/actor-rust-foobar-guest-component.wasm"
-));
-
-pub const RUST_FOOBAR_HOST_COMPONENT: &[u8] = include_bytes!(concat!(
-    env!("OUT_DIR"),
-    "/actor-rust-foobar-host-component.wasm"
-));
-
 pub const RUST_HTTP_LOG_RNG_COMPONENT: &[u8] = include_bytes!(concat!(
     env!("OUT_DIR"),
     "/actor-rust-http-log-rng-component.wasm"

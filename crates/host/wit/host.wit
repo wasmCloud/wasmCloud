@@ -1,0 +1,4 @@
+world interfaces {
+    import host: wasmcloud.host
+    import logging: logging.logging
+}

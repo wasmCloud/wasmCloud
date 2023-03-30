@@ -1,0 +1,6 @@
+default world interfaces {
+    import host: wasmcloud.host
+
+    import logging: logging.logging
+    import random: random.random
+}

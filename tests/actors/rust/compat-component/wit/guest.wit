@@ -1,4 +1,0 @@
-default world guest {
-  import foobar-guest: pkg.foobar.guest
-  export actor: pkg.wasmcloud.actor
-}
