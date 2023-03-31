@@ -516,15 +516,24 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.1.13"
+version = "4.1.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c911b090850d79fc64fe9ea01e28e465f65e821e08813ced95bced72f7a8a9b"
+checksum = "906f7fe1da4185b7a282b2bc90172a496f9def1aca4545fe7526810741591e14"
+dependencies = [
+ "clap_builder",
+ "clap_derive 4.1.14",
+ "once_cell",
+]
+
+[[package]]
+name = "clap_builder"
+version = "4.1.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "351f9ad9688141ed83dfd8f5fb998a06225ef444b48ff4dc43de6d409b7fd10b"
 dependencies = [
  "bitflags",
- "clap_derive 4.1.12",
- "clap_lex 0.3.0",
+ "clap_lex 0.4.1",
  "is-terminal",
- "once_cell",
  "strsim 0.10.0",
  "termcolor",
 ]
@@ -535,7 +544,7 @@ version = "4.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37686beaba5ac9f3ab01ee3172f792fc6ffdd685bfb9e63cfef02c0571a4e8e1"
 dependencies = [
- "clap 4.1.13",
+ "clap 4.1.14",
 ]
 
 [[package]]
@@ -553,9 +562,9 @@ dependencies = [
 
 [[package]]
 name = "clap_derive"
-version = "4.1.12"
+version = "4.1.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9a932373bab67b984c790ddf2c9ca295d8e3af3b7ef92de5a5bacdccdee4b09b"
+checksum = "81d7dc0031c3a59a04fc2ba395c8e2dd463cba1859275f065d225f6122221b45"
 dependencies = [
  "heck 0.4.1",
  "proc-macro2",
@@ -574,12 +583,9 @@ dependencies = [
 
 [[package]]
 name = "clap_lex"
-version = "0.3.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d4198f73e42b4936b35b5bb248d81d2b595ecb170da0bac7655c54eedfa8da8"
-dependencies = [
- "os_str_bytes",
-]
+checksum = "8a2dd5a6fe8c6e3502f568a6353e5273bbb15193ad9a89e457b9970798efbea1"
 
 [[package]]
 name = "cloudevents-sdk"
@@ -3960,7 +3966,7 @@ dependencies = [
  "bytes",
  "cargo_atelier",
  "chrono",
- "clap 4.1.13",
+ "clap 4.1.14",
  "clap_complete",
  "cloudevents-sdk",
  "console",
@@ -4013,7 +4019,7 @@ dependencies = [
  "async-compression",
  "cargo_toml",
  "claims",
- "clap 4.1.13",
+ "clap 4.1.14",
  "command-group",
  "config",
  "console",
@@ -4351,7 +4357,7 @@ dependencies = [
  "atelier_smithy",
  "bytes",
  "cfg-if",
- "clap 4.1.13",
+ "clap 4.1.14",
  "directories",
  "downloader",
  "handlebars",
