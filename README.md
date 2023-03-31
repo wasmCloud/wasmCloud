@@ -40,8 +40,3 @@ We have plenty of ideas and things going on in the wasmCloud project. Please che
 ## 💥 Awesome wasmCloud
  
 Check out some awesome projects using wasmCloud that come from our community members! [Awesome wasmCloud](./awesome-wasmcloud)
-
-### 🦀️ Rust Runtime - Archived
-
-The pure-Rust wasmCloud host runtime has been archived in favor of the new Elixir/OTP runtime. If you're looking for tooling to support running resources with the pure-Rust wasmCloud host, please refer to the [archived resources](./.archived/RESOURCES.md) file for compatible versions.
-
