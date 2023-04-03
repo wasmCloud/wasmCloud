@@ -29,7 +29,7 @@ type Result<T> = ::std::result::Result<T, Box<dyn std::error::Error + Send + Syn
 pub struct Client {
     nc: async_nats::Client,
     topic_prefix: Option<String>,
-    lattice_prefix: String,
+    pub lattice_prefix: String,
     timeout: Duration,
     auction_timeout: Duration,
     kvstore: Option<Store>,
