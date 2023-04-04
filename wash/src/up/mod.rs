@@ -19,7 +19,8 @@ use tokio::{
 };
 use wash_lib::cli::{CommandOutput, OutputKind};
 use wash_lib::start::{
-    ensure_nats_server, ensure_wasmcloud, start_nats_server, start_wasmcloud_host, NatsConfig,
+    ensure_nats_server, ensure_wasmcloud, start_nats_server, start_wasmcloud_host, wait_for_server,
+    NatsConfig,
 };
 
 use crate::appearance::spinner::Spinner;
@@ -369,6 +370,11 @@ pub(crate) async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result
             out_text,
             "\n🕸  NATS is running in the background at http://{nats_listen_address}"
         );
+
+        if let Ok(log) = wait_for_server(url, "Washboard").await {
+            println!("{:?}", log)
+        }
+
         let _ = write!(
             out_text,
             "\n🌐 The wasmCloud dashboard is running at {}\n📜 Logs for the host are being written to {}",
@@ -431,6 +437,11 @@ async fn run_wasmcloud_interactive(
         }
     })
     .expect("Error setting Ctrl-C handler, please file a bug issue https://github.com/wasmCloud/wash/issues/new/choose");
+
+    let url = "http://localhost:4000";
+    if let Ok(log) = wait_for_server(url, "Washboard").await {
+        println!("{:?}", log)
+    }
 
     if output_kind != OutputKind::Json {
         println!("🏃 Running in interactive mode, your host is running at http://localhost:4000",);
