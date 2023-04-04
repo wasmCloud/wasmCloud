@@ -1,3 +1,4 @@
+use crate::start::wait_for_server;
 use anyhow::{anyhow, Result};
 use async_compression::tokio::bufread::GzipDecoder;
 #[cfg(target_family = "unix")]
@@ -361,25 +362,6 @@ where
     metadata(dir.as_ref().join(NATS_SERVER_BINARY))
         .await
         .map_or(false, |m| m.is_file())
-}
-
-pub async fn wait_for_server(url: &str, service: &str) -> Result<()> {
-    let mut wait_count = 1;
-    loop {
-        // Magic number: 10 + 1, since we are starting at 1 for humans
-        if wait_count >= 11 {
-            anyhow::bail!("Ran out of retries waiting for host to start");
-        }
-        match tokio::net::TcpStream::connect(url).await {
-            Ok(_) => break,
-            Err(e) => {
-                log::debug!("Waiting for {} {} to come up, attempt {}. Will retry in 1 second. Got error {:?}",service, url, wait_count, e);
-                wait_count += 1;
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-            }
-        }
-    }
-    Ok(())
 }
 
 /// Helper function to determine the NATS server release path given an os/arch and version

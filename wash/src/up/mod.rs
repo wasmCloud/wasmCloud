@@ -330,6 +330,11 @@ pub(crate) async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result
         }
     };
 
+    let url = format!("{}:{}", "http://localhost:", WASMCLOUD_DASHBOARD_PORT);
+    if let Ok(log) = wait_for_server(&url, "Washboard").await {
+        println!("{:?}", log)
+    }
+
     spinner.finish_and_clear();
     if !cmd.detached {
         run_wasmcloud_interactive(wasmcloud_child, output_kind).await?;
@@ -360,7 +365,7 @@ pub(crate) async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result
     if cmd.detached {
         // Write the pid file with the selected version
         tokio::fs::write(install_dir.join(config::WASMCLOUD_PID_FILE), version).await?;
-        let url = "http://localhost:4000";
+        let url = format!("{}:{}", "http://localhost:", WASMCLOUD_DASHBOARD_PORT);
         out_json.insert("wasmcloud_url".to_string(), json!(url));
         out_json.insert("wasmcloud_log".to_string(), json!(wasmcloud_log_path));
         out_json.insert("kill_cmd".to_string(), json!("wash down"));
@@ -370,10 +375,6 @@ pub(crate) async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result
             out_text,
             "\n🕸  NATS is running in the background at http://{nats_listen_address}"
         );
-
-        if let Ok(log) = wait_for_server(url, "Washboard").await {
-            println!("{:?}", log)
-        }
 
         let _ = write!(
             out_text,
@@ -437,11 +438,6 @@ async fn run_wasmcloud_interactive(
         }
     })
     .expect("Error setting Ctrl-C handler, please file a bug issue https://github.com/wasmCloud/wash/issues/new/choose");
-
-    let url = "http://localhost:4000";
-    if let Ok(log) = wait_for_server(url, "Washboard").await {
-        println!("{:?}", log)
-    }
 
     if output_kind != OutputKind::Json {
         println!("🏃 Running in interactive mode, your host is running at http://localhost:4000",);
