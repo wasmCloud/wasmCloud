@@ -29,7 +29,7 @@ type Result<T> = ::std::result::Result<T, Box<dyn std::error::Error + Send + Syn
 pub struct Client {
     nc: async_nats::Client,
     topic_prefix: Option<String>,
-    ns_prefix: String,
+    pub lattice_prefix: String,
     timeout: Duration,
     auction_timeout: Duration,
     kvstore: Option<Store>,
@@ -40,7 +40,7 @@ pub struct Client {
 pub struct ClientBuilder {
     nc: Option<async_nats::Client>,
     topic_prefix: Option<String>,
-    ns_prefix: String,
+    lattice_prefix: String,
     timeout: Duration,
     auction_timeout: Duration,
     js_domain: Option<String>,
@@ -51,7 +51,7 @@ impl Default for ClientBuilder {
         Self {
             nc: None,
             topic_prefix: None,
-            ns_prefix: "default".to_string(),
+            lattice_prefix: "default".to_string(),
             timeout: Duration::from_secs(2),
             auction_timeout: Duration::from_secs(5),
             js_domain: None,
@@ -79,7 +79,7 @@ impl ClientBuilder {
     /// The lattice ID/prefix used for this client. If this function is not invoked, the prefix will be set to `default`
     pub fn lattice_prefix(self, prefix: impl Into<String>) -> ClientBuilder {
         ClientBuilder {
-            ns_prefix: prefix.into(),
+            lattice_prefix: prefix.into(),
             ..self
         }
     }
@@ -115,10 +115,10 @@ impl ClientBuilder {
             Ok(Client {
                 nc: nc.clone(),
                 topic_prefix: self.topic_prefix,
-                ns_prefix: self.ns_prefix.clone(),
+                lattice_prefix: self.lattice_prefix.clone(),
                 timeout: self.timeout,
                 auction_timeout: self.auction_timeout,
-                kvstore: kv::get_kv_store(nc, &self.ns_prefix, self.js_domain).await,
+                kvstore: kv::get_kv_store(nc, &self.lattice_prefix, self.js_domain).await,
             })
         } else {
             Err("Cannot create a control interface client without a NATS client".into())
@@ -133,14 +133,14 @@ impl Client {
     #[deprecated(since = "0.23.0", note = "please use the client builder instead")]
     pub fn new(
         nc: async_nats::Client,
-        ns_prefix: Option<String>,
+        lattice_prefix: Option<String>,
         timeout: Duration,
         auction_timeout: Duration,
     ) -> Self {
         Client {
             nc,
             topic_prefix: None,
-            ns_prefix: ns_prefix.unwrap_or_else(|| "default".to_string()),
+            lattice_prefix: lattice_prefix.unwrap_or_else(|| "default".to_string()),
             timeout,
             auction_timeout,
             kvstore: None,
@@ -155,14 +155,14 @@ impl Client {
     pub fn new_with_topic_prefix(
         nc: async_nats::Client,
         topic_prefix: &str,
-        ns_prefix: Option<String>,
+        lattice_prefix: Option<String>,
         timeout: Duration,
         auction_timeout: Duration,
     ) -> Self {
         Client {
             nc,
             topic_prefix: Some(topic_prefix.to_owned()),
-            ns_prefix: ns_prefix.unwrap_or_else(|| "default".to_string()),
+            lattice_prefix: lattice_prefix.unwrap_or_else(|| "default".to_string()),
             timeout,
             auction_timeout,
             kvstore: None,
@@ -195,7 +195,7 @@ impl Client {
     /// Queries the lattice for all responsive hosts, waiting for the full period specified by _timeout_.
     #[instrument(level = "debug", skip_all)]
     pub async fn get_hosts(&self) -> Result<Vec<Host>> {
-        let subject = broker::queries::hosts(&self.topic_prefix, &self.ns_prefix);
+        let subject = broker::queries::hosts(&self.topic_prefix, &self.lattice_prefix);
         debug!("get_hosts:publish {}", &subject);
         self.publish_and_wait(subject, Vec::new()).await
     }
@@ -203,7 +203,8 @@ impl Client {
     /// Retrieves the contents of a running host
     #[instrument(level = "debug", skip_all)]
     pub async fn get_host_inventory(&self, host_id: &str) -> Result<HostInventory> {
-        let subject = broker::queries::host_inventory(&self.topic_prefix, &self.ns_prefix, host_id);
+        let subject =
+            broker::queries::host_inventory(&self.topic_prefix, &self.lattice_prefix, host_id);
         debug!("get_host_inventory:request {}", &subject);
         match self.request_timeout(subject, vec![], self.timeout).await {
             Ok(msg) => {
@@ -222,7 +223,7 @@ impl Client {
         if let Some(ref store) = self.kvstore {
             kv::get_claims(store).await
         } else {
-            let subject = broker::queries::claims(&self.topic_prefix, &self.ns_prefix);
+            let subject = broker::queries::claims(&self.topic_prefix, &self.lattice_prefix);
             debug!("get_claims:request {}", &subject);
             match self.request_timeout(subject, vec![], self.timeout).await {
                 Ok(msg) => {
@@ -244,7 +245,7 @@ impl Client {
         actor_ref: &str,
         constraints: HashMap<String, String>,
     ) -> Result<Vec<ActorAuctionAck>> {
-        let subject = broker::actor_auction_subject(&self.topic_prefix, &self.ns_prefix);
+        let subject = broker::actor_auction_subject(&self.topic_prefix, &self.lattice_prefix);
         let bytes = json_serialize(ActorAuctionRequest {
             actor_ref: actor_ref.to_string(),
             constraints,
@@ -264,7 +265,7 @@ impl Client {
         link_name: &str,
         constraints: HashMap<String, String>,
     ) -> Result<Vec<ProviderAuctionAck>> {
-        let subject = broker::provider_auction_subject(&self.topic_prefix, &self.ns_prefix);
+        let subject = broker::provider_auction_subject(&self.topic_prefix, &self.lattice_prefix);
         let bytes = json_serialize(ProviderAuctionRequest {
             provider_ref: provider_ref.to_string(),
             link_name: link_name.to_string(),
@@ -288,7 +289,8 @@ impl Client {
         count: u16,
         annotations: Option<HashMap<String, String>>,
     ) -> Result<CtlOperationAck> {
-        let subject = broker::commands::start_actor(&self.topic_prefix, &self.ns_prefix, host_id);
+        let subject =
+            broker::commands::start_actor(&self.topic_prefix, &self.lattice_prefix, host_id);
         debug!("start_actor:request {}", &subject);
         let bytes = json_serialize(StartActorCommand {
             count,
@@ -320,7 +322,8 @@ impl Client {
         count: u16,
         annotations: Option<HashMap<String, String>>,
     ) -> Result<CtlOperationAck> {
-        let subject = broker::commands::scale_actor(&self.topic_prefix, &self.ns_prefix, host_id);
+        let subject =
+            broker::commands::scale_actor(&self.topic_prefix, &self.lattice_prefix, host_id);
         debug!("scale_actor:request {}", &subject);
         let bytes = json_serialize(ScaleActorCommand {
             count,
@@ -345,7 +348,7 @@ impl Client {
     /// function in production as the data contains secrets
     #[instrument(level = "debug", skip_all)]
     pub async fn put_registries(&self, registries: RegistryCredentialMap) -> Result<()> {
-        let subject = broker::publish_registries(&self.topic_prefix, &self.ns_prefix);
+        let subject = broker::publish_registries(&self.topic_prefix, &self.lattice_prefix);
         debug!("put_registries:publish {}", &subject);
         let bytes = json_serialize(&registries)?;
         let resp = self
@@ -389,7 +392,7 @@ impl Client {
                 error: "".to_string(),
             })
         } else {
-            let subject = broker::advertise_link(&self.topic_prefix, &self.ns_prefix);
+            let subject = broker::advertise_link(&self.topic_prefix, &self.lattice_prefix);
             debug!("advertise_link:request {}", &subject);
 
             let bytes = crate::json_serialize(&ld)?;
@@ -427,7 +430,7 @@ impl Client {
                 }),
             }
         } else {
-            let subject = broker::remove_link(&self.topic_prefix, &self.ns_prefix);
+            let subject = broker::remove_link(&self.topic_prefix, &self.lattice_prefix);
             debug!("remove_link:request {}", &subject);
             let mut ld = LinkDefinition::default();
             ld.actor_id = actor_id.to_string();
@@ -452,7 +455,8 @@ impl Client {
         if let Some(ref store) = self.kvstore {
             kv::get_links(store).await
         } else {
-            let subject = broker::queries::link_definitions(&self.topic_prefix, &self.ns_prefix);
+            let subject =
+                broker::queries::link_definitions(&self.topic_prefix, &self.lattice_prefix);
             debug!("query_links:request {}", &subject);
             match self.request_timeout(subject, vec![], self.timeout).await {
                 Ok(msg) => json_deserialize(&msg.payload),
@@ -477,7 +481,8 @@ impl Client {
         new_actor_ref: &str,
         annotations: Option<HashMap<String, String>>,
     ) -> Result<CtlOperationAck> {
-        let subject = broker::commands::update_actor(&self.topic_prefix, &self.ns_prefix, host_id);
+        let subject =
+            broker::commands::update_actor(&self.topic_prefix, &self.lattice_prefix, host_id);
         debug!("update_actor:request {}", &subject);
         let bytes = json_serialize(UpdateActorCommand {
             host_id: host_id.to_string(),
@@ -515,7 +520,7 @@ impl Client {
             start_provider_(
                 &self.nc,
                 &self.topic_prefix,
-                &self.ns_prefix,
+                &self.lattice_prefix,
                 self.timeout,
                 host_id,
                 &provider_ref,
@@ -545,7 +550,7 @@ impl Client {
                     let _ = start_provider_(
                         &this.nc,
                         &this.topic_prefix,
-                        &this.ns_prefix,
+                        &this.lattice_prefix,
                         this.timeout,
                         &host.id,
                         &provider_ref,
@@ -582,7 +587,8 @@ impl Client {
         contract_id: &str,
         annotations: Option<HashMap<String, String>>,
     ) -> Result<CtlOperationAck> {
-        let subject = broker::commands::stop_provider(&self.topic_prefix, &self.ns_prefix, host_id);
+        let subject =
+            broker::commands::stop_provider(&self.topic_prefix, &self.lattice_prefix, host_id);
         debug!("stop_provider:request {}", &subject);
         let bytes = json_serialize(StopProviderCommand {
             host_id: host_id.to_string(),
@@ -612,7 +618,8 @@ impl Client {
         count: u16,
         annotations: Option<HashMap<String, String>>,
     ) -> Result<CtlOperationAck> {
-        let subject = broker::commands::stop_actor(&self.topic_prefix, &self.ns_prefix, host_id);
+        let subject =
+            broker::commands::stop_actor(&self.topic_prefix, &self.lattice_prefix, host_id);
         debug!("stop_actor:request {}", &subject);
         let bytes = json_serialize(StopActorCommand {
             host_id: host_id.to_string(),
@@ -639,7 +646,8 @@ impl Client {
         host_id: &str,
         timeout_ms: Option<u64>,
     ) -> Result<CtlOperationAck> {
-        let subject = broker::commands::stop_host(&self.topic_prefix, &self.ns_prefix, host_id);
+        let subject =
+            broker::commands::stop_host(&self.topic_prefix, &self.lattice_prefix, host_id);
         debug!("stop_host:request {}", &subject);
         let bytes = json_serialize(StopHostCommand {
             host_id: host_id.to_owned(),
@@ -732,7 +740,7 @@ impl Client {
         let (sender, receiver) = tokio::sync::mpsc::channel(5000);
         let mut sub = self
             .nc
-            .subscribe(broker::control_event(&self.ns_prefix))
+            .subscribe(broker::control_event(&self.lattice_prefix))
             .await?;
         tokio::spawn(async move {
             while let Some(msg) = sub.next().await {
@@ -792,7 +800,7 @@ pub fn json_deserialize<'de, T: Deserialize<'de>>(
 async fn start_provider_(
     client: &async_nats::Client,
     topic_prefix: &Option<String>,
-    ns_prefix: &str,
+    lattice_prefix: &str,
     timeout: Duration,
     host_id: &str,
     provider_ref: &str,
@@ -800,7 +808,7 @@ async fn start_provider_(
     annotations: Option<HashMap<String, String>>,
     provider_configuration: Option<String>,
 ) -> Result<CtlOperationAck> {
-    let subject = broker::commands::start_provider(topic_prefix, ns_prefix, host_id);
+    let subject = broker::commands::start_provider(topic_prefix, lattice_prefix, host_id);
     debug!("start_provider:request {}", &subject);
     let bytes = json_serialize(StartProviderCommand {
         host_id: host_id.to_string(),
