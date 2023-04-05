@@ -330,10 +330,8 @@ pub(crate) async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result
         }
     };
 
-    let url = format!("{}:{}", "http://localhost:", WASMCLOUD_DASHBOARD_PORT);
-    if let Ok(log) = wait_for_server(&url, "Washboard").await {
-        println!("{:?}", log)
-    }
+    let url = format!("{}:{}", "127.0.0.1", WASMCLOUD_DASHBOARD_PORT);
+    wait_for_server(&url, "Washboard").await?;
 
     spinner.finish_and_clear();
     if !cmd.detached {
