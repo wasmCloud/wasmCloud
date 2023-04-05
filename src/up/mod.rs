@@ -368,7 +368,7 @@ pub(crate) async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result
     if cmd.detached {
         // Write the pid file with the selected version
         tokio::fs::write(install_dir.join(config::WASMCLOUD_PID_FILE), version).await?;
-        let url = format!("{}:{}", "http://localhost:", WASMCLOUD_DASHBOARD_PORT);
+        let url = format!("{}:{}", "http://localhost", WASMCLOUD_DASHBOARD_PORT);
         out_json.insert("wasmcloud_url".to_string(), json!(url));
         out_json.insert("wasmcloud_log".to_string(), json!(wasmcloud_log_path));
         out_json.insert("kill_cmd".to_string(), json!("wash down"));
