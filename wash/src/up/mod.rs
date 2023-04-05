@@ -331,7 +331,12 @@ pub(crate) async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result
     };
 
     let url = format!("{}:{}", "127.0.0.1", WASMCLOUD_DASHBOARD_PORT);
-    wait_for_server(&url, "Washboard").await?;
+    if wait_for_server(&url, "Washboard").await.is_err() {
+        if nats_bin.is_some() {
+            stop_nats(install_dir).await?;
+        }
+        return Err(anyhow!("wasmCloud host did not start. Failed to connect to washboard. Check host-logs at {:?}.", wasmcloud_log_path));
+    }
 
     spinner.finish_and_clear();
     if !cmd.detached {
