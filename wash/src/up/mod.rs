@@ -19,7 +19,8 @@ use tokio::{
 };
 use wash_lib::cli::{CommandOutput, OutputKind};
 use wash_lib::start::{
-    ensure_nats_server, ensure_wasmcloud, start_nats_server, start_wasmcloud_host, NatsConfig,
+    ensure_nats_server, ensure_wasmcloud, start_nats_server, start_wasmcloud_host, wait_for_server,
+    NatsConfig,
 };
 
 use crate::appearance::spinner::Spinner;
@@ -329,6 +330,14 @@ pub(crate) async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result
         }
     };
 
+    let url = format!("{}:{}", "127.0.0.1", WASMCLOUD_DASHBOARD_PORT);
+    if wait_for_server(&url, "Washboard").await.is_err() {
+        if nats_bin.is_some() {
+            stop_nats(install_dir).await?;
+        }
+        return Err(anyhow!("wasmCloud host did not start. Failed to connect to washboard. Check host-logs at {:?}.", wasmcloud_log_path));
+    }
+
     spinner.finish_and_clear();
     if !cmd.detached {
         run_wasmcloud_interactive(wasmcloud_child, output_kind).await?;
@@ -359,7 +368,7 @@ pub(crate) async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result
     if cmd.detached {
         // Write the pid file with the selected version
         tokio::fs::write(install_dir.join(config::WASMCLOUD_PID_FILE), version).await?;
-        let url = "http://localhost:4000";
+        let url = format!("{}:{}", "http://localhost", WASMCLOUD_DASHBOARD_PORT);
         out_json.insert("wasmcloud_url".to_string(), json!(url));
         out_json.insert("wasmcloud_log".to_string(), json!(wasmcloud_log_path));
         out_json.insert("kill_cmd".to_string(), json!("wash down"));
@@ -369,6 +378,7 @@ pub(crate) async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result
             out_text,
             "\n🕸  NATS is running in the background at http://{nats_listen_address}"
         );
+
         let _ = write!(
             out_text,
             "\n🌐 The wasmCloud dashboard is running at {}\n📜 Logs for the host are being written to {}",
