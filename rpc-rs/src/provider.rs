@@ -201,6 +201,10 @@ impl HostBridge {
         &self.host_data.lattice_rpc_prefix
     }
 
+    pub fn log_level(&self) -> Option<&str> {
+        self.host_data.log_level.as_deref()
+    }
+
     /// Returns the configuration values as a json string.
     /// Caller may need to deserialize, and may want to cache the results
     /// if the data is large or this method is called frequently.
