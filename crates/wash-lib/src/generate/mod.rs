@@ -32,8 +32,9 @@ type ParamMap = std::collections::BTreeMap<String, serde_json::Value>;
 const PROJECT_NAME_REGEX: &str = r"^([a-zA-Z][a-zA-Z0-9_-]+)$";
 
 /// Type of project to be generated
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy)]
 pub enum ProjectKind {
+    #[default]
     Actor,
     Interface,
     Provider,
@@ -50,12 +51,6 @@ impl fmt::Display for ProjectKind {
                 ProjectKind::Provider => "provider",
             }
         )
-    }
-}
-
-impl Default for ProjectKind {
-    fn default() -> Self {
-        ProjectKind::Actor
     }
 }
 
