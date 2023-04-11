@@ -445,6 +445,9 @@ fn get_level_filter(log_level_override: Option<String>) -> EnvFilter {
         Ok(filter) => filter,
         Err(err) => {
             eprintln!("Failed to parse log level: {err:?}\nDefaulting logger to `info` level");
+            // NOTE: we considered using parse_lossy here and decided against it, since parse_lossy
+            // will use partial successes from the parse. Instead, we want to give the user a clear
+            // sign that their log level config couldn't parse
             EnvFilter::default().add_directive(tracing_subscriber::filter::LevelFilter::INFO.into())
         }
     }
