@@ -430,9 +430,13 @@ fn get_json_log_layer() -> impl Layer<Layered<EnvFilter, Registry>> {
 fn get_level_filter(log_level_override: Option<String>) -> EnvFilter {
     let builder = EnvFilter::builder().with_default_directive(LevelFilter::INFO.into());
 
+    let rust_log = std::env::var("RUST_LOG");
     let directives = if let Some(log_level) = log_level_override {
+        if rust_log.is_ok() {
+            eprintln!("Log level is now provided by the host. RUST_LOG will be ignored");
+        }
         log_level
-    } else if let Ok(log_level) = std::env::var("RUST_LOG") {
+    } else if let Ok(log_level) = rust_log {
         // fallback to env var if host didn't provide level
         log_level
     } else {
