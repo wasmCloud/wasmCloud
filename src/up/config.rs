@@ -53,6 +53,8 @@ pub(crate) const WASMCLOUD_ENABLE_IPV6: &str = "WASMCLOUD_ENABLE_IPV6";
 pub(crate) const WASMCLOUD_STRUCTURED_LOGGING_ENABLED: &str =
     "WASMCLOUD_STRUCTURED_LOGGING_ENABLED";
 pub(crate) const WASMCLOUD_CONFIG_SERVICE: &str = "WASMCLOUD_CONFIG_SERVICE";
+pub(crate) const WASMCLOUD_ALLOW_FILE_LOAD: &str = "WASMCLOUD_ALLOW_FILE_LOAD";
+pub(crate) const DEFAULT_ALLOW_FILE_LOAD: &str = "true";
 
 /// Helper function to convert WasmcloudOpts to the host environment map.
 /// Takes NatsOpts as well to provide reasonable defaults
@@ -199,6 +201,9 @@ pub(crate) async fn configure_host_env(
     // Extras configuration
     if wasmcloud_opts.config_service_enabled {
         host_config.insert(WASMCLOUD_CONFIG_SERVICE.to_string(), "1".to_string());
+    }
+    if wasmcloud_opts.allow_file_load.unwrap_or_default() {
+        host_config.insert(WASMCLOUD_ALLOW_FILE_LOAD.to_string(), "1".to_string());
     }
     if wasmcloud_opts.enable_structured_logging {
         host_config.insert(
