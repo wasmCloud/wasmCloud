@@ -1,6 +1,5 @@
 
-[![homepage](https://img.shields.io/website?label=Homepage&url=https%3A%2F%2Fwasmcloud.com)](https://wasmcloud.com)
-[![documentation site](https://img.shields.io/website?label=Documentation&url=https%3A%2F%2Fwasmcloud.dev)](https://wasmcloud.dev)
+[![Homepage and Documentation](https://img.shields.io/website?label=Homepage&url=https%3A%2F%2Fwasmcloud.com)](https://wasmcloud.com)
 [![CNCF sandbox project](https://img.shields.io/website?label=CNCF%20Sandbox%20Project&url=https://landscape.cncf.io/?selected=wasm-cloud)](https://landscape.cncf.io/?selected=wasm-cloud)
 [![Stars](https://img.shields.io/github/stars/wasmcloud?color=gold&label=wasmCloud%20Org%20Stars)](https://github.com/wasmcloud/)
 ![Powered by WebAssembly](https://img.shields.io/badge/powered%20by-WebAssembly-orange.svg)<br />
@@ -17,7 +16,7 @@ wasmCloud lets you focus on shipping _features_. Build secure, portable, re-usab
 
 The wasmCloud runtime is a vessel for running actors and capability providers in the cloud, at the edge, in the browser, on small devices, and anywhere else you can imagine.
 
-If you're new to the wasmCloud ecosystem, a great place to start is the [getting started](https://wasmcloud.dev/overview/getting-started/) section of our [documentation](https://wasmcloud.dev).
+If you're new to the wasmCloud ecosystem, a great place to start is the [getting started](https://wasmcloud.com/docs/getting-started/) section of our [documentation](https://wasmcloud.com/docs/intro).
 
 You can also take a look at a wide range of [examples](https://github.com/wasmCloud/examples/) including our [Petclinic microservices demonstration](https://github.com/wasmCloud/examples/tree/main/petclinic) we've created to help illustrate a new way of designing, composing, and building applications.
 
