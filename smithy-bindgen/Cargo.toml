@@ -1,6 +1,6 @@
 [package]
 name = "smithy-bindgen"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 authors = [ "wasmcloud Team" ]
 license = "Apache-2.0"
@@ -26,6 +26,6 @@ weld-codegen = { version = "0.7.0", path = "../codegen" }
 
 # these crates are needed by code generated from smithy wasmcloud interfaces
 [dev-dependencies]
-wasmbus-rpc = { version = "0.12", path = "../rpc-rs" }
+wasmbus-rpc = { version = "0.13", path = "../rpc-rs" }
 async-trait = "0.1"
 serde_bytes = "0.11"
