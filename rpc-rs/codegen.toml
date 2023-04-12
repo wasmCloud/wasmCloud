@@ -2,9 +2,7 @@
 
 [[models]]
 # wasmbus-core
-# url = "https://cdn.jsdelivr.net/gh/wasmcloud/interfaces@2c89bb706c6f2785a926dcde78ebc6a511a33206/core/wasmcloud-core.smithy"
-path = "../../interfaces/core"
-files = [ "wasmcloud-core.smithy"]
+url = "https://cdn.jsdelivr.net/gh/wasmcloud/interfaces/core/wasmcloud-core.smithy"
 
 [[models]]
 # wasmbus-model
