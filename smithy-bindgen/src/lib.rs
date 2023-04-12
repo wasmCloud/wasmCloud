@@ -32,7 +32,7 @@ const MODEL_MODEL: &str = "core/wasmcloud-model.smithy";
 ///
 ///   ```
 ///   # use smithy_bindgen::smithy_bindgen;
-///   smithy_bindgen!("httpserver/httpserver.smithy", "org.wasmcloud.interfaces.httpserver");
+///   smithy_bindgen!("httpserver/httpserver.smithy", "org.wasmcloud.interface.httpserver");
 ///   ````
 ///
 ///   The above is shorthand for the following:
@@ -41,7 +41,7 @@ const MODEL_MODEL: &str = "core/wasmcloud-model.smithy";
 ///   smithy_bindgen!({
 ///     url: "https://cdn.jsdelivr.net/gh/wasmcloud/interfaces",
 ///     files: ["httpserver/httpserver.smithy"]
-///   }, "org.wasmcloud.interfaces.httpserver" );
+///   }, "org.wasmcloud.interface.httpserver" );
 ///   ```
 ///
 /// - one Model Source
