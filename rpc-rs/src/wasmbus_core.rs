@@ -328,6 +328,9 @@ pub struct HostData {
     /// True if structured logging is enabled for the host. Providers should use the same setting as the host.
     #[serde(default)]
     pub structured_logging: bool,
+    /// The log level providers should log at
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_level: Option<LogLevel>,
 }
 
 // Encode HostData as CBOR and append to output stream
@@ -340,7 +343,7 @@ pub fn encode_host_data<W: crate::cbor::Write>(
 where
     <W as crate::cbor::Write>::Error: std::fmt::Display,
 {
-    e.array(15)?;
+    e.array(16)?;
     e.str(&val.host_id)?;
     e.str(&val.lattice_rpc_prefix)?;
     e.str(&val.link_name)?;
@@ -364,6 +367,11 @@ where
         e.null()?;
     }
     e.bool(val.structured_logging)?;
+    if let Some(val) = val.log_level.as_ref() {
+        encode_log_level(e, val)?;
+    } else {
+        e.null()?;
+    }
     Ok(())
 }
 
@@ -386,6 +394,7 @@ pub fn decode_host_data(d: &mut crate::cbor::Decoder<'_>) -> Result<HostData, Rp
         let mut config_json: Option<Option<String>> = Some(None);
         let mut default_rpc_timeout_ms: Option<Option<u64>> = Some(None);
         let mut structured_logging: Option<bool> = None;
+        let mut log_level: Option<Option<LogLevel>> = Some(None);
 
         let is_array = match d.datatype()? {
             crate::cbor::Type::Array => true,
@@ -441,6 +450,17 @@ pub fn decode_host_data(d: &mut crate::cbor::Decoder<'_>) -> Result<HostData, Rp
                         }
                     }
                     14 => structured_logging = Some(d.bool()?),
+                    15 => {
+                        log_level = if crate::cbor::Type::Null == d.datatype()? {
+                            d.skip()?;
+                            Some(None)
+                        } else {
+                            Some(Some(decode_log_level(d).map_err(|e| {
+                                format!("decoding 'org.wasmcloud.core#LogLevel': {}", e)
+                            })?))
+                        }
+                    }
+
                     _ => d.skip()?,
                 }
             }
@@ -489,6 +509,16 @@ pub fn decode_host_data(d: &mut crate::cbor::Decoder<'_>) -> Result<HostData, Rp
                         }
                     }
                     "structuredLogging" => structured_logging = Some(d.bool()?),
+                    "logLevel" => {
+                        log_level = if crate::cbor::Type::Null == d.datatype()? {
+                            d.skip()?;
+                            Some(None)
+                        } else {
+                            Some(Some(decode_log_level(d).map_err(|e| {
+                                format!("decoding 'org.wasmcloud.core#LogLevel': {}", e)
+                            })?))
+                        }
+                    }
                     _ => d.skip()?,
                 }
             }
@@ -599,6 +629,7 @@ pub fn decode_host_data(d: &mut crate::cbor::Decoder<'_>) -> Result<HostData, Rp
                     "missing field HostData.structured_logging (#14)".to_string(),
                 ));
             },
+            log_level: log_level.unwrap(),
         }
     };
     Ok(__result)
@@ -1178,6 +1209,28 @@ pub fn decode_link_settings(d: &mut crate::cbor::Decoder<'_>) -> Result<LinkSett
             m
         }
     };
+    Ok(__result)
+}
+pub type LogLevel = String;
+
+// Encode LogLevel as CBOR and append to output stream
+#[doc(hidden)]
+#[allow(unused_mut)]
+pub fn encode_log_level<W: crate::cbor::Write>(
+    mut e: &mut crate::cbor::Encoder<W>,
+    val: &LogLevel,
+) -> RpcResult<()>
+where
+    <W as crate::cbor::Write>::Error: std::fmt::Display,
+{
+    e.str(val)?;
+    Ok(())
+}
+
+// Decode LogLevel from cbor input stream
+#[doc(hidden)]
+pub fn decode_log_level(d: &mut crate::cbor::Decoder<'_>) -> Result<LogLevel, RpcError> {
+    let __result = { d.str()?.to_string() };
     Ok(__result)
 }
 /// Environment settings for initializing a capability provider
