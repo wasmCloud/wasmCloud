@@ -188,7 +188,7 @@ impl Client {
         {
             Err(_) => Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "timed out").into()),
             Ok(Ok(message)) => Ok(message),
-            Ok(Err(e)) => Err(e),
+            Ok(Err(e)) => Err(e.into()),
         }
     }
 

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use async_nats::{jetstream::kv::Store, Client};
+use futures::TryStreamExt;
 use tracing::debug;
 use wasmbus_rpc::core::LinkDefinition;
 
@@ -40,7 +41,7 @@ pub(crate) async fn get_kv_store(
 
 pub(crate) async fn get_claims(store: &Store) -> Result<GetClaimsResponse> {
     let mut claims = Vec::new();
-    let entries = store.keys().await?;
+    let entries = store.keys().await?.try_collect::<Vec<String>>().await?;
     for key in entries {
         if key.starts_with(CLAIMS_PREFIX) {
             add_claim(&mut claims, store.get(key).await?).await?;
@@ -51,7 +52,7 @@ pub(crate) async fn get_claims(store: &Store) -> Result<GetClaimsResponse> {
 
 pub(crate) async fn get_links(store: &Store) -> Result<LinkDefinitionList> {
     let mut links = Vec::new();
-    let entries = store.keys().await?;
+    let entries = store.keys().await?.try_collect::<Vec<String>>().await?;
     for key in entries {
         if key.starts_with(LINKDEF_PREFIX) {
             add_linkdef(&mut links, store.get(key).await?).await?;
