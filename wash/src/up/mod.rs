@@ -225,6 +225,10 @@ pub(crate) struct WasmcloudOpts {
     #[clap(long = "config-service-enabled", env = WASMCLOUD_CONFIG_SERVICE)]
     pub(crate) config_service_enabled: bool,
 
+    /// Denotes if a wasmCloud host should allow starting actors from the file system
+    #[clap(long = "allow-file-load", default_value = DEFAULT_ALLOW_FILE_LOAD, env = WASMCLOUD_ALLOW_FILE_LOAD)]
+    pub(crate) allow_file_load: Option<bool>,
+
     /// Enable JSON structured logging from the wasmCloud host
     #[clap(
         long = "enable-structured-logging",
