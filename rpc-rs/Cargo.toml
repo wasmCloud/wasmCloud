@@ -46,7 +46,7 @@ num-bigint = { version = "0.4", optional = true }
 bigdecimal = { version = "0.3", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-async-nats = "0.27.1"
+async-nats = "0.29"
 atty = "0.2"
 data-encoding = "2.3"
 futures = "0.3"
