@@ -1,10 +1,10 @@
 [package]
 name = "wasmcloud-provider-nats"
-version = "0.16.3"
+version = "0.17.0"
 edition = "2021"
 
 [dependencies]
-async-nats = "0.23"
+async-nats = "0.29"
 async-trait = "0.1"
 atty = "0.2"
 base64 = "0.13"
@@ -26,12 +26,12 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 wascap = "0.8.0"
 anyhow = "1.0.69"
 
-wasmbus-rpc = { version = "0.11.2", features = [ "otel" ] }
-wasmcloud-interface-messaging = "0.8.1"
+wasmbus-rpc = { version = "0.13", features = [ "otel" ] }
+wasmcloud-interface-messaging = "0.9"
 
 # test dependencies
 [dev-dependencies]
-wasmcloud-test-util = "0.6.4"
+wasmcloud-test-util = "0.8"
 
 [[bin]]
 name = "nats_messaging"
