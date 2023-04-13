@@ -1,0 +1,15 @@
+[package]
+name = "test-actors"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = { workspace = true, features = ["std"] }
+actor-echo-module = { path = "./rust/echo-module", target = "wasm32-unknown-unknown", artifact = "cdylib" }
+actor-foobar-component = { path = "./rust/compat-component/foobar", target = "wasm32-wasi", artifact = "cdylib" }
+actor-foobar-guest-component = { path = "./rust/compat-component/foobar-guest", target = "wasm32-wasi", artifact = "cdylib" }
+actor-foobar-host-component = { path = "./rust/compat-component/foobar-host", target = "wasm32-wasi", artifact = "cdylib" }
+actor-http-log-rng-component = { path = "./rust/http-log-rng-component", target = "wasm32-wasi", artifact = "cdylib" }
+actor-http-log-rng-module = { path = "./rust/http-log-rng-module", target = "wasm32-unknown-unknown", artifact = "cdylib" }
+wasi_snapshot_preview1 = { git = "https://github.com/bytecodealliance/preview2-prototyping", rev = "24fa023d1848ca3a24b35ed80ff1514ea54dd219", default-features = false, target = "wasm32-unknown-unknown", artifact = "cdylib", features = ["reactor"] }
+wit-component = { workspace = true }

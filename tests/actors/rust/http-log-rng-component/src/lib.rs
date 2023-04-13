@@ -9,7 +9,7 @@ use wasmcloud_interface_numbergen::RangeLimit;
 
 wit_bindgen::generate!({
     world: "wasmcloud",
-    path: "../../../wit",
+    path: "../../../../wit",
 });
 
 struct Actor;
