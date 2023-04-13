@@ -7,7 +7,7 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-futures = { workspace = true }
+futures = { workspace = true, features = ["executor"] }
 serde_json = { workspace = true }
 wasmbus-rpc = { workspace = true }
 wasmcloud-interface-httpserver = { workspace = true }

@@ -33,7 +33,7 @@ async fn main() -> anyhow::Result<()> {
             ..Default::default()
         })
         .build();
-    let wasm = embed_claims(&test_actors::RUST_ECHO_MODULE, &claims, &issuer)
+    let wasm = embed_claims(test_actors::RUST_ECHO_MODULE, &claims, &issuer)
         .context("failed to embed actor claims")?;
 
     let rt = Runtime::from_host_handler(HandlerFunc::from(host_call))
