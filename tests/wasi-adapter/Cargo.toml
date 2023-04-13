@@ -1,0 +1,17 @@
+[package]
+name = "wasi-adapter"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+wasi_snapshot_preview1 = { git = "https://github.com/bytecodealliance/preview2-prototyping", rev = "24fa023d1848ca3a24b35ed80ff1514ea54dd219", default-features = false, target = "wasm32-unknown-unknown", artifact = "cdylib", features = ["reactor"] }
+
+[workspace]
+
+# From https://github.com/bytecodealliance/preview2-prototyping/blob/24fa023d1848ca3a24b35ed80ff1514ea54dd219/Cargo.toml#L52-L64
+[profile.dev.package.wasi_snapshot_preview1]
+incremental = false
+opt-level = 's'
+debug-assertions = false
+overflow-checks = false

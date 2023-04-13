@@ -478,7 +478,8 @@ mod tests {
             .subject(&module.public_key())
             .with_metadata(jwt::Actor::default()) // this will be overriden by individual test cases
             .build();
-        let wasm = embed_claims(&test_actors::RUST_HTTP_LOG_RNG_MODULE, &claims, &issuer).expect("failed to embed actor claims");
+        let wasm = embed_claims(test_actors::RUST_HTTP_LOG_RNG_MODULE, &claims, &issuer)
+            .expect("failed to embed actor claims");
 
         let actor = Module::new(&RUNTIME, wasm.as_slice()).expect("failed to read actor module");
         assert_eq!(actor.claims().subject, module.public_key());

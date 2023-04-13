@@ -1,0 +1,19 @@
+[workspace]
+members = [
+    "compat-component/foobar",
+    "compat-component/foobar-guest",
+    "compat-component/foobar-host",
+    "echo-module",
+    "http-log-rng-component",
+    "http-log-rng-module",
+]
+
+[workspace.dependencies]
+futures = { version = "0.3.26", default-features = false }
+serde = { version = "1.0.152", default-features = false }
+serde_json = { version = "1.0.93", default-features = false }
+wasmbus-rpc = { version = "0.11.2", default-features = false }
+wasmcloud-interface-httpserver = { version = "0.9.0", default-features = false }
+wasmcloud-interface-logging = { version = "0.8.1", default-features = false }
+wasmcloud-interface-numbergen = { version = "0.8.1", default-features = false }
+wit-bindgen = { version = "0.4.0", default-features = false }
