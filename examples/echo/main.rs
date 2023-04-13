@@ -1,5 +1,4 @@
 use anyhow::{bail, Context};
-use tokio::fs;
 use wascap::prelude::{ClaimsBuilder, KeyPair};
 use wascap::wasm::embed_claims;
 use wascap::{caps, jwt};
@@ -23,11 +22,6 @@ async fn host_call(
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    const WASM: &str = env!("CARGO_CDYLIB_FILE_ACTOR_ECHO_MODULE");
-    let wasm = fs::read(WASM)
-        .await
-        .with_context(|| format!("failed to read `{WASM}`"))?;
-
     let issuer = KeyPair::new_account();
     let module = KeyPair::new_module();
     let claims = ClaimsBuilder::new()
@@ -39,7 +33,8 @@ async fn main() -> anyhow::Result<()> {
             ..Default::default()
         })
         .build();
-    let wasm = embed_claims(&wasm, &claims, &issuer).context("failed to embed actor claims")?;
+    let wasm = embed_claims(&test_actors::RUST_ECHO_MODULE, &claims, &issuer)
+        .context("failed to embed actor claims")?;
 
     let rt = Runtime::from_host_handler(HandlerFunc::from(host_call))
         .context("failed to construct runtime")?;

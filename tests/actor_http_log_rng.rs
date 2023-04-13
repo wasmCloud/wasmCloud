@@ -7,7 +7,7 @@ use anyhow::{bail, ensure, Context};
 use once_cell::sync::Lazy;
 use serde::Deserialize;
 use serde_json::json;
-use tokio::fs;
+use test_actors::encode_component;
 use wasmcloud::capability::numbergen::Uuid;
 use wasmcloud::capability::{HandlerFunc, HostInvocation};
 use wasmcloud::{Actor, Runtime};
@@ -94,18 +94,12 @@ async fn run(wasm: impl AsRef<[u8]>) -> anyhow::Result<()> {
 #[tokio::test]
 async fn actor_http_log_rng_module() -> anyhow::Result<()> {
     init();
-
-    const WASM: &str = env!("CARGO_CDYLIB_FILE_ACTOR_HTTP_LOG_RNG_MODULE");
-    let wasm = fs::read(WASM).await.context("failed to read binary")?;
-    run(wasm).await
+    run(test_actors::RUST_HTTP_LOG_RNG_MODULE).await
 }
 
 #[tokio::test]
 async fn actor_http_log_rng_component() -> anyhow::Result<()> {
     init();
-
-    const WASM: &str = env!("CARGO_CDYLIB_FILE_ACTOR_HTTP_LOG_RNG_COMPONENT");
-    let wat = wat::parse_file(WASM).context("failed to parse binary")?;
-    let wasm = encode_component(&wat, true)?;
+    let wasm = encode_component(test_actors::RUST_HTTP_LOG_RNG_COMPONENT, true)?;
     run(wasm).await
 }

@@ -2593,6 +2593,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "test-actors"
+version = "0.1.0"
+dependencies = [
+ "actor-echo-module",
+ "actor-foobar-component",
+ "actor-foobar-guest-component",
+ "actor-foobar-host-component",
+ "actor-http-log-rng-component",
+ "actor-http-log-rng-module",
+ "anyhow",
+ "wasi_snapshot_preview1",
+ "wit-component",
+]
+
+[[package]]
 name = "textwrap"
 version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3278,12 +3293,6 @@ dependencies = [
 name = "wasmcloud"
 version = "0.1.0"
 dependencies = [
- "actor-echo-module",
- "actor-foobar-component",
- "actor-foobar-guest-component",
- "actor-foobar-host-component",
- "actor-http-log-rng-component",
- "actor-http-log-rng-module",
  "anyhow",
  "async-trait",
  "cbindgen",
@@ -3294,6 +3303,7 @@ dependencies = [
  "rand",
  "serde",
  "serde_json",
+ "test-actors",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -3301,7 +3311,6 @@ dependencies = [
  "wascap 0.10.0",
  "wasi-cap-std-sync 0.0.0",
  "wasi-common 0.0.0",
- "wasi_snapshot_preview1",
  "wasm-compose",
  "wasmbus-rpc",
  "wasmcloud-interface-httpserver",
@@ -3310,8 +3319,6 @@ dependencies = [
  "wasmparser",
  "wasmtime",
  "wasmtime-wasi",
- "wat",
- "wit-component",
 ]
 
 [[package]]

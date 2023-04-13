@@ -6,7 +6,6 @@ use once_cell::sync::Lazy;
 use tracing_subscriber::prelude::*;
 use wascap::prelude::{ClaimsBuilder, KeyPair};
 use wascap::wasm::embed_claims;
-use wit_component::ComponentEncoder;
 
 static LOGGER: Lazy<()> = Lazy::new(|| {
     tracing_subscriber::registry()
@@ -45,22 +44,4 @@ pub fn sign(
     let wasm =
         embed_claims(wasm.as_ref(), &claims, &issuer).context("failed to embed actor claims")?;
     Ok((wasm, module))
-}
-
-pub fn encode_component(module: &[u8], wasi: bool) -> anyhow::Result<Vec<u8>> {
-    let encoder = ComponentEncoder::default()
-        .validate(true)
-        .module(module)
-        .context("failed to set core component module")?;
-    let encoder = if wasi {
-        encoder
-            .adapter(
-                "wasi_snapshot_preview1",
-                include_bytes!(env!("CARGO_CDYLIB_FILE_WASI_SNAPSHOT_PREVIEW1")),
-            )
-            .context("failed to add WASI adapter")?
-    } else {
-        encoder
-    };
-    encoder.encode().context("failed to encode a component")
 }
