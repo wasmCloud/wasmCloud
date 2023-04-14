@@ -22,7 +22,7 @@ If you're using a wasmcloud first-party interface, you can specify its path name
 // smithy-bindgen = "0.1"
 
 mod httpserver {
-  smithy_bindgen::smithy_bindgen!("httpserver/httpserver.smithy","org.wasmcloud.interfaces.httpserver");
+  smithy_bindgen::smithy_bindgen!("httpserver/httpserver.smithy","org.wasmcloud.interface.httpserver");
 }
 use httpserver::{HttpRequest,HttpResponse};
 
@@ -55,15 +55,16 @@ The second parameter is the namespace used for code generation.
   The single-file parameter is a path relative to the wasmcloud interfaces git repo `wasmcloud/interfaces`
 
   ```
-  smithy_bindgen!("httpserver/httpserver.smithy", "org.wasmcloud.interfaces.httpserver");
-  ````
+  smithy_bindgen!("httpserver/httpserver.smithy", "org.wasmcloud.interface.httpserver");
+  ```
 
   The above is shorthand for the following:
+
   ```
   smithy_bindgen!({
     url: "https://cdn.jsdelivr.net/gh/wasmcloud/interfaces",
     files: ["httpserver/httpserver.smithy"]
-  }, "org.wasmcloud.interfaces.httpserver" );
+  }, "org.wasmcloud.interface.httpserver" );
   ```
 
 - one Model Source
