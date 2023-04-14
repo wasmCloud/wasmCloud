@@ -56,9 +56,21 @@
           buildInputs ? [],
           depsBuildBuild ? [],
           ...
-        } @ args:
+        } @ args: let
+          cargoLock.root = readTOML ./Cargo.lock;
+          cargoLock.actors-rust = readTOML ./tests/actors/rust/Cargo.lock;
+          cargoLock.wasi-adapter = readTOML ./tests/wasi-adapter/Cargo.lock;
+
+          lockPackages = cargoLock.root.package ++ cargoLock.actors-rust.package ++ cargoLock.wasi-adapter.package;
+        in
           with pkgsCross;
           with pkgs.lib; {
+            cargoLockParsed =
+              cargoLock.root
+              // {
+                package = lockPackages;
+              };
+
             buildInputs =
               buildInputs
               ++ optional stdenv.targetPlatform.isDarwin pkgs.libiconv;
