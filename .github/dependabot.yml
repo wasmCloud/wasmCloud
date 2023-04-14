@@ -4,6 +4,14 @@ updates:
   directory: "/"
   schedule:
     interval: "daily"
+- package-ecosystem: "cargo"
+  directory: "/tests/wasi-adapter"
+  schedule:
+    interval: "daily"
+- package-ecosystem: "cargo"
+  directory: "/tests/actors/rust"
+  schedule:
+    interval: "daily"
 - package-ecosystem: "github-actions"
   directory: "/"
   schedule:
