@@ -2,10 +2,12 @@
   nixConfig.extra-substituters = [
     "https://wasmcloud.cachix.org"
     "https://nix-community.cachix.org"
+    "https://cache.garnix.io"
   ];
   nixConfig.extra-trusted-public-keys = [
     "wasmcloud.cachix.org-1:9gRBzsKh+x2HbVVspreFg/6iFRiD4aOcUQfXVDl3hiM="
     "nix-community.cachix.org-1:mB9FSh9qf2dCimDSUo8Zy7bkq5CX+/rkCWyvRCYg3Fs="
+    "cache.garnix.io:CTFPyKSLcx5RMJKfLo5EEPUObbA78b0YQ2DTCJXqr9g="
   ];
 
   # TODO: Remove once https://github.com/bytecodealliance/preview2-prototyping/pull/136 is merged
