@@ -8,7 +8,10 @@
     "nix-community.cachix.org-1:mB9FSh9qf2dCimDSUo8Zy7bkq5CX+/rkCWyvRCYg3Fs="
   ];
 
+  # TODO: Remove once https://github.com/bytecodealliance/preview2-prototyping/pull/136 is merged
+  inputs.crane.url = github:rvolosatovs/crane/feat/wit;
   inputs.fenix.url = github:nix-community/fenix/monthly;
+  inputs.nixify.inputs.crane.follows = "crane";
   inputs.nixify.inputs.fenix.follows = "fenix";
   inputs.nixify.url = github:rvolosatovs/nixify;
 
