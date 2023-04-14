@@ -3303,7 +3303,7 @@ dependencies = [
  "wasmcloud-interface-httpserver",
  "wasmcloud-interface-logging",
  "wasmcloud-interface-numbergen",
- "wasmparser 0.102.0",
+ "wasmparser 0.103.0",
  "wasmtime",
  "wasmtime-wasi",
 ]
