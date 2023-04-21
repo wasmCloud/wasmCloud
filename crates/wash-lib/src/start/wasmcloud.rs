@@ -232,7 +232,7 @@ where
 {
     // If we can connect to the local port, a wasmCloud host won't be able to listen on that port
     let port = env_vars
-        .get("PORT")
+        .get("WASMCLOUD_DASHBOARD_PORT")
         .cloned()
         .unwrap_or_else(|| "4000".to_string());
     if tokio::net::TcpStream::connect(format!("localhost:{port}"))
@@ -568,7 +568,7 @@ mod test {
         // Windows is unable to properly check running erlang nodes with `pid`
         {
             let mut host_env = HashMap::new();
-            host_env.insert("PORT".to_string(), "4002".to_string());
+            host_env.insert("WASMCLOUD_DASHBOARD_PORT".to_string(), "4002".to_string());
             host_env.insert("WASMCLOUD_RPC_PORT".to_string(), nats_port.to_string());
             host_env.insert("WASMCLOUD_CTL_PORT".to_string(), nats_port.to_string());
             host_env.insert("WASMCLOUD_PROV_RPC_PORT".to_string(), nats_port.to_string());
