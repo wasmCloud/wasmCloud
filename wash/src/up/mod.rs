@@ -240,6 +240,10 @@ pub(crate) struct WasmcloudOpts {
     #[clap(long = "structured-log-level", default_value = DEFAULT_STRUCTURED_LOG_LEVEL, env = WASMCLOUD_STRUCTURED_LOG_LEVEL)]
     pub(crate) structured_log_level: String,
 
+    /// Port to listen on for the wasmCloud dashboard, defaults to 4000
+    #[clap(long = "dashboard-port", env = WASMCLOUD_DASHBOARD_PORT)]
+    pub(crate) dashboard_port: Option<u16>,
+
     /// Enables IPV6 addressing for wasmCloud hosts
     #[clap(long = "enable-ipv6", env = WASMCLOUD_ENABLE_IPV6)]
     pub(crate) enable_ipv6: bool,
@@ -314,6 +318,11 @@ pub(crate) async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result
     } else {
         Stdio::piped()
     };
+    let dashboard_port = cmd
+        .wasmcloud_opts
+        .dashboard_port
+        .map(|p| p.to_string())
+        .unwrap_or_else(|| DEFAULT_DASHBOARD_PORT.to_string());
     let version = cmd.wasmcloud_opts.wasmcloud_version.clone();
     let host_env = configure_host_env(nats_opts, cmd.wasmcloud_opts).await;
     let wasmcloud_child = match start_wasmcloud_host(
@@ -334,7 +343,7 @@ pub(crate) async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result
         }
     };
 
-    let url = format!("{}:{}", "127.0.0.1", WASMCLOUD_DASHBOARD_PORT);
+    let url = format!("{}:{}", "127.0.0.1", dashboard_port);
     if wait_for_server(&url, "Washboard").await.is_err() {
         if nats_bin.is_some() {
             stop_nats(install_dir).await?;
@@ -372,7 +381,7 @@ pub(crate) async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result
     if cmd.detached {
         // Write the pid file with the selected version
         tokio::fs::write(install_dir.join(config::WASMCLOUD_PID_FILE), version).await?;
-        let url = format!("{}:{}", "http://localhost", WASMCLOUD_DASHBOARD_PORT);
+        let url = format!("http://localhost:{}", dashboard_port);
         out_json.insert("wasmcloud_url".to_string(), json!(url));
         out_json.insert("wasmcloud_log".to_string(), json!(wasmcloud_log_path));
         out_json.insert("kill_cmd".to_string(), json!("wash down"));
