@@ -10,21 +10,13 @@ env:
 runs:
   using: composite
   steps:
-  - run: sudo mkdir -p /nix
-    if: ${{ runner.os == 'Linux' }}
-    shell: bash
-  - run: sudo chown $(whoami) /nix
-    if: ${{ runner.os == 'Linux' }}
-    shell: bash
-  - uses: actions/cache@v3
-    if: ${{ runner.os == 'Linux' }}
-    with:
-      path: /nix
-      key: nix
+  # Install Nix
   - uses: DeterminateSystems/nix-installer-action@v2
     with:
       extra-conf: |
         accept-flake-config = true
+
+  # Setup Cachix cache
   - uses: cachix/cachix-action@v12
     continue-on-error: true
     with:
