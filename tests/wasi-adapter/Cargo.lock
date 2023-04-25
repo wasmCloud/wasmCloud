@@ -23,7 +23,7 @@ checksum = "bef38d45163c2f1dde094a7dfd33ccf595c92905c8f8f4fdc18d06fb1037718a"
 [[package]]
 name = "byte-array"
 version = "0.0.0"
-source = "git+https://github.com/bytecodealliance/preview2-prototyping?rev=24fa023d1848ca3a24b35ed80ff1514ea54dd219#24fa023d1848ca3a24b35ed80ff1514ea54dd219"
+source = "git+https://github.com/bytecodealliance/preview2-prototyping?rev=900d65ccb22e1e8871a1e9e9d1bab0a1f81bf3b1#900d65ccb22e1e8871a1e9e9d1bab0a1f81bf3b1"
 
 [[package]]
 name = "cfg-if"
@@ -105,9 +105,9 @@ checksum = "2dffe52ecf27772e601905b7522cb4ef790d2cc203488bbd0e2fe85fcb74566d"
 
 [[package]]
 name = "object"
-version = "0.29.0"
+version = "0.30.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "21158b2c33aa6d4561f1c0a6ea283ca92bc54802a93b263e910746d679a7eb53"
+checksum = "ea86265d3d3dcb6a27fc51bd29a4bf387fae9d2986b823079d4986af253eb439"
 dependencies = [
  "memchr",
 ]
@@ -279,22 +279,13 @@ dependencies = [
 [[package]]
 name = "wasi_snapshot_preview1"
 version = "0.0.0"
-source = "git+https://github.com/bytecodealliance/preview2-prototyping?rev=24fa023d1848ca3a24b35ed80ff1514ea54dd219#24fa023d1848ca3a24b35ed80ff1514ea54dd219"
+source = "git+https://github.com/bytecodealliance/preview2-prototyping?rev=900d65ccb22e1e8871a1e9e9d1bab0a1f81bf3b1#900d65ccb22e1e8871a1e9e9d1bab0a1f81bf3b1"
 dependencies = [
  "byte-array",
  "object",
  "wasi",
- "wasm-encoder 0.24.1",
+ "wasm-encoder",
  "wit-bindgen",
-]
-
-[[package]]
-name = "wasm-encoder"
-version = "0.24.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68f7d56227d910901ce12dfd19acc40c12687994dfb3f57c90690f80be946ec5"
-dependencies = [
- "leb128",
 ]
 
 [[package]]
@@ -315,7 +306,7 @@ dependencies = [
  "anyhow",
  "indexmap",
  "serde",
- "wasm-encoder 0.25.0",
+ "wasm-encoder",
  "wasmparser",
 ]
 
@@ -398,7 +389,7 @@ dependencies = [
  "indexmap",
  "log",
  "url",
- "wasm-encoder 0.25.0",
+ "wasm-encoder",
  "wasm-metadata",
  "wasmparser",
  "wit-parser",

@@ -5,7 +5,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
-wasi_snapshot_preview1 = { git = "https://github.com/bytecodealliance/preview2-prototyping", rev = "24fa023d1848ca3a24b35ed80ff1514ea54dd219", default-features = false, target = "wasm32-unknown-unknown", artifact = "cdylib", features = ["reactor"] }
+wasi_snapshot_preview1 = { git = "https://github.com/bytecodealliance/preview2-prototyping", rev = "900d65ccb22e1e8871a1e9e9d1bab0a1f81bf3b1", default-features = false, target = "wasm32-unknown-unknown", artifact = "cdylib", features = ["reactor"] }
 
 [workspace]
 
