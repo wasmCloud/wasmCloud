@@ -1,4 +1,3 @@
-
 [![Homepage and Documentation](https://img.shields.io/website?label=Homepage&url=https%3A%2F%2Fwasmcloud.com)](https://wasmcloud.com)
 [![CNCF sandbox project](https://img.shields.io/website?label=CNCF%20Sandbox%20Project&url=https://landscape.cncf.io/?selected=wasm-cloud)](https://landscape.cncf.io/?selected=wasm-cloud)
 [![Stars](https://img.shields.io/github/stars/wasmcloud?color=gold&label=wasmCloud%20Org%20Stars)](https://github.com/wasmcloud/)
@@ -10,32 +9,70 @@
 
 ![wasmCloud logo](https://raw.githubusercontent.com/wasmCloud/branding/main/02.Horizontal%20Version/Pixel/PNG/Wasmcloud.Logo-Hrztl_Color.png)
 
-wasmCloud lets you focus on shipping _features_. Build secure, portable, re-usable components called **_actors_** and get rid of the headaches that come from being smothered by boilerplate, dependency hell, tight coupling, and making design decisions mandated by your infrastructure.
-
 # 💻 Distributed computing, _simplified_
 
-The wasmCloud runtime is a vessel for running actors and capability providers in the cloud, at the edge, in the browser, on small devices, and anywhere else you can imagine.
+The wasmCloud runtime is a vessel for running applications in the cloud, at the edge, in the browser, on small devices, and anywhere else you can imagine.
 
-If you're new to the wasmCloud ecosystem, a great place to start is the [getting started](https://wasmcloud.com/docs/getting-started/) section of our [documentation](https://wasmcloud.com/docs/intro).
+**We want to bring joy to distributed systems development without sacrificing enterprise-grade features.**
 
-You can also take a look at a wide range of [examples](https://github.com/wasmCloud/examples/) including our [Petclinic microservices demonstration](https://github.com/wasmCloud/examples/tree/main/petclinic) we've created to help illustrate a new way of designing, composing, and building applications.
+wasmCloud lets you focus on shipping _features_. Build secure, portable, re-usable components. Get rid of the headaches from being smothered by boilerplate, dependency hell, tight coupling, and designs mandated by your infrastructure.
 
-## ☁️ Elixir/OTP Runtime 
+## Core Tenets
 
-The main Cloud Native wasmCloud host runtime is the [Elixir/OTP](https://github.com/wasmCloud/wasmcloud-otp) runtime. wasmCloud leverages Elixir/OTP for its battle tested, massively scalable foundation; we leverage Rust for its zero-cost abstractions, safety, security, and WebAssembly support.
+- Productivity
+- Portability
+- Performance at any scale
+- Enterprise-grade security
+- Cost savings
 
-## 🕸 JavaScript Runtime
+# Getting Started
 
-For running a wasmCloud host in a browser or embedding in a JavaScript V8 host, use the [JavaScript Runtime](https://github.com/wasmCloud/wasmcloud-js).
+## Installation
 
-## 🧑‍💻 Contributing
+Install the wasmCloud Shell (`wash`) with [one command](https://wasmcloud.com/docs/installation).
 
-For more information on how to contribute and our contributor guidelines, check out the [contributing readme](./CONTRIBUTING.md).
+## Walkthrough
 
-## 🗺️ Roadmap and Vision
+If you're new to the wasmCloud ecosystem, a great place to start is the [getting started](https://wasmcloud.com/docs/getting-started/) walkthrough.
+
+## Examples
+
+You can also take a look at a wide range of [examples](https://github.com/wasmCloud/examples/).
+
+This includes actors, providers, interfaces, and full applications, including our [Petclinic microservices app](https://github.com/wasmCloud/examples/tree/main/petclinic) we've created to demonstrate how to design, compose, and build applications in wasmCloud.
+
+### 💥 Awesome wasmCloud
+
+For even more examples, check out [awesome projects](./awesome/wasmcloud) using wasmCloud from our community members!
+
+# 🗺️ Roadmap and Vision
 
 We have plenty of ideas and things going on in the wasmCloud project. Please check out the [Roadmap doc](ROADMAP.md) for more information!
 
-## 💥 Awesome wasmCloud
- 
-Check out some awesome projects using wasmCloud that come from our community members! [Awesome wasmCloud](./awesome-wasmcloud)
+# 🧑‍💻 Contributing
+
+Want to get involved? For more information on how to contribute and our contributor guidelines, check out the [contributing readme](./CONTRIBUTING.md).
+
+# 📚 Other Resources
+
+## Reference Documentation
+
+wasmCloud uses some terminology you might not be familiar with. Check out the [reference](https://wasmcloud.com/docs/category/reference) section of our docs for a deeper dive.
+
+## RPC Framework
+
+wasmCloud uses [wasmbus-rpc](https://github.com/wasmCloud/weld/tree/main/rpc-rs) to communicate between the host runtime, actors, and providers.
+
+## Declarative Deployments
+
+The **w**asmCloud **A**pplication **D**eployment **M**anager [wadm](https://github.com/wasmCloud/wadm) uses the Open Application Model to define and deploy application specifications.
+
+## Host Runtimes
+
+### ☁️ Elixir/OTP Runtime
+
+The primary Cloud Native wasmCloud host runtime is the [Elixir/OTP](https://github.com/wasmCloud/wasmcloud-otp) runtime. wasmCloud leverages Elixir/OTP for its battle-tested, massively-scalable foundation; we leverage Rust for its zero-cost abstractions, safety, security, and WebAssembly support.
+
+### 🕸 JavaScript Runtime (`Experimental`)
+
+For running a wasmCloud host in a browser or embedding in a JavaScript V8 host, use the [JavaScript Runtime](https://github.com/wasmCloud/wasmcloud-js).
