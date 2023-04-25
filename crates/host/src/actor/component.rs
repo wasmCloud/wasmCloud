@@ -167,7 +167,7 @@ impl ConfiguredComponent {
         Interfaces::add_to_linker(&mut linker, |ctx: &mut Ctx| &mut ctx.handler)
             .context("failed to link `Wasmcloud` interface")?;
 
-        ::host::command::add_to_linker(&mut linker, |ctx: &mut Ctx| &mut ctx.wasi)
+        ::host::wasi::command::add_to_linker(&mut linker, |ctx: &mut Ctx| &mut ctx.wasi)
             .context("failed to link `WASI` interface")?;
 
         let ctx = Ctx {
