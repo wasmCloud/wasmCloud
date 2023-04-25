@@ -10,23 +10,32 @@ env:
 runs:
   using: composite
   steps:
+  # Create `/nix`
   - run: sudo mkdir -p /nix
     if: ${{ runner.os == 'Linux' }}
     shell: bash
+
+  # Make runner the owner of `/nix`
   - run: sudo chown $(whoami) /nix
     if: ${{ runner.os == 'Linux' }}
     shell: bash
+
+  # Restore `/nix` cache
   - uses: actions/cache@v3
     if: ${{ runner.os == 'Linux' }}
     with:
       path: /nix
       key: nix
+
+  # Install Nix
   - uses: nixbuild/nix-quick-install-action@v22
     with:
       nix_conf: |
         accept-flake-config = true
         access-tokens = github.com=${{ github.token }}
         experimental-features = nix-command flakes
+
+  # Setup Cachix cache
   - uses: cachix/cachix-action@v12
     continue-on-error: true
     with:
