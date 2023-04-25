@@ -25,7 +25,9 @@ runs:
     if: ${{ runner.os == 'Linux' }}
     with:
       path: /nix
-      key: nix
+      key: nix-${{ runner.os }}-${{ github.sha }}
+      restore-keys: |
+        nix-${{ runner.os }}-
 
   # Install Nix
   - uses: nixbuild/nix-quick-install-action@v22
