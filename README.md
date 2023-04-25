@@ -43,7 +43,7 @@ This includes actors, providers, interfaces, and full applications, including ou
 
 ### 💥 Awesome wasmCloud
 
-For even more examples, check out [awesome projects](./awesome/wasmcloud) using wasmCloud from our community members!
+For even more examples, check out [awesome projects](./awesome-wasmcloud) using wasmCloud from our community members!
 
 # 🗺️ Roadmap and Vision
 
