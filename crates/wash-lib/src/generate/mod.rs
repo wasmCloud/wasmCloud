@@ -180,9 +180,9 @@ fn any_warn(s: &str) -> anyhow::Error {
 async fn make_project(project: Project) -> std::result::Result<PathBuf, anyhow::Error> {
     // load optional values file
     let mut values = if let Some(values_file) = &project.values {
-        let bytes = fs::read(values_file)
+        let string = fs::read_to_string(values_file)
             .with_context(|| format!("reading values file {}", &values_file.display()))?;
-        let tm = toml::from_slice::<TomlMap>(&bytes)
+        let tm = toml::from_str::<TomlMap>(&string)
             .with_context(|| format!("parsing values file {}", &values_file.display()))?;
         if let Some(toml::Value::Table(values)) = tm.get("values") {
             toml_to_json(values)?

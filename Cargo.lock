@@ -4016,13 +4016,13 @@ dependencies = [
  "test_bin",
  "thiserror",
  "tokio",
- "toml 0.5.10",
+ "toml 0.7.2",
  "wascap 0.10.1",
  "wash-lib",
  "wasmbus-rpc",
  "wasmcloud-control-interface",
  "wasmcloud-test-util",
- "weld-codegen 0.6.0",
+ "weld-codegen 0.7.0",
  "which",
 ]
 
@@ -4062,10 +4062,10 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tokio-tar",
- "toml 0.5.10",
+ "toml 0.7.2",
  "walkdir",
  "wascap 0.10.1",
- "weld-codegen 0.6.0",
+ "weld-codegen 0.7.0",
 ]
 
 [[package]]
@@ -4386,6 +4386,36 @@ dependencies = [
  "tempfile",
  "thiserror",
  "toml 0.5.10",
+]
+
+[[package]]
+name = "weld-codegen"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "66385fd8affabb09b678d2f826c78d995789cdb2fbb2dd02e6010dffe298797e"
+dependencies = [
+ "Inflector",
+ "anyhow",
+ "atelier_assembler",
+ "atelier_core 0.2.22",
+ "atelier_json",
+ "atelier_smithy",
+ "bytes",
+ "cfg-if",
+ "clap 4.1.14",
+ "directories",
+ "downloader",
+ "handlebars",
+ "lazy_static",
+ "lexical-sort",
+ "reqwest",
+ "rustc-hash",
+ "semver",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "toml 0.7.2",
 ]
 
 [[package]]
