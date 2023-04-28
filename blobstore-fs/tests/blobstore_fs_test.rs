@@ -2,10 +2,7 @@ use futures_util::StreamExt;
 use wasmbus_rpc::{core::InvocationResponse, provider::prelude::*};
 use wasmcloud_interface_blobstore::*;
 use wasmcloud_test_util::{
-    check,
-    cli::print_test_results,
-    provider_test::test_provider,
-    testing::{TestOptions, TestResult},
+    check, cli::print_test_results, provider_test::test_provider, testing::TestOptions,
 };
 #[allow(unused_imports)]
 use wasmcloud_test_util::{run_selected, run_selected_spawn};
@@ -34,7 +31,17 @@ async fn run_all() {
 
     let passed = res.iter().filter(|tr| tr.passed).count();
     let total = res.len();
-    assert_eq!(passed, total, "{} passed out of {}", passed, total);
+    assert_eq!(
+        passed,
+        total,
+        "{} passed out of {}, failures: {:?}",
+        passed,
+        total,
+        res.iter()
+            .filter(|tr| !tr.passed)
+            .map(|tr| tr.name.as_str())
+            .collect::<Vec<&str>>()
+    );
 
     // try to let the provider shut dowwn gracefully
     let provider = test_provider().await;
@@ -63,7 +70,7 @@ async fn create_find_and_remove_dir(_opt: &TestOptions) -> RpcResult<()> {
 
     let resp = client.container_exists(&ctx, &name).await?;
 
-    assert_eq!(resp, false);
+    assert!(!resp);
 
     let resp2 = client.create_container(&ctx, &name).await;
 
@@ -71,7 +78,7 @@ async fn create_find_and_remove_dir(_opt: &TestOptions) -> RpcResult<()> {
 
     let resp3 = client.container_exists(&ctx, &name).await?;
 
-    assert_eq!(resp3, true);
+    assert!(resp3);
 
     let conts: ContainerIds = vec![name.clone()];
     let resp4 = client.remove_containers(&ctx, &conts).await?;
@@ -80,7 +87,7 @@ async fn create_find_and_remove_dir(_opt: &TestOptions) -> RpcResult<()> {
 
     let resp5 = client.container_exists(&ctx, &name).await?;
 
-    assert_eq!(resp5, false);
+    assert!(!resp5);
 
     Ok(())
 }
@@ -125,8 +132,10 @@ async fn upload_and_list_files_in_dirs(_opt: &TestOptions) -> RpcResult<()> {
 
     // create client and ctx
     let client = BlobstoreSender::via(prov);
-    let mut ctx = Context::default();
-    ctx.actor = Some("actor_test".into());
+    let ctx = Context {
+        actor: Some("actor_test".into()),
+        ..Default::default()
+    };
 
     // Create container
     let resp = client.create_container(&ctx, &"cont1".into()).await;
@@ -167,10 +176,12 @@ async fn upload_and_list_files_in_dirs(_opt: &TestOptions) -> RpcResult<()> {
     assert_eq!(resp2.unwrap().stream_id, None);
 
     // list objects (files) in container cont1
-    let mut list_object_request = ListObjectsRequest::default();
-    list_object_request.container_id = "cont1".to_string();
+    let list_object_request = ListObjectsRequest {
+        container_id: "cont1".to_string(),
+        ..Default::default()
+    };
     let mut list_object_response = client.list_objects(&ctx, &list_object_request).await?;
-    assert_eq!(list_object_response.is_last, true);
+    assert!(list_object_response.is_last);
     assert_eq!(list_object_response.continuation, None);
     let objects = list_object_response.objects;
     assert_eq!(objects.len(), 2);
@@ -180,14 +191,14 @@ async fn upload_and_list_files_in_dirs(_opt: &TestOptions) -> RpcResult<()> {
         object_id: "file2x".into(),
     };
     let mut exist = client.object_exists(&ctx, &container_object).await?;
-    assert_eq!(exist, false);
+    assert!(!exist);
 
     container_object = ContainerObject {
         container_id: "cont1".into(),
         object_id: "file2".into(),
     };
     exist = client.object_exists(&ctx, &container_object).await?;
-    assert_eq!(exist, true);
+    assert!(exist);
 
     let object_info = client.get_object_info(&ctx, &container_object).await?;
     assert_eq!(object_info.container_id, "cont1".to_string());
@@ -232,8 +243,10 @@ async fn upload_and_download_file(_opt: &TestOptions) -> RpcResult<()> {
 
     // create client and ctx
     let client = BlobstoreSender::via(prov);
-    let mut ctx = Context::default();
-    ctx.actor = Some("actor_test".into());
+    let ctx = Context {
+        actor: Some("actor_test".into()),
+        ..Default::default()
+    };
 
     // Create container
     let resp = client.create_container(&ctx, &"cont1".into()).await;
@@ -265,7 +278,7 @@ async fn upload_and_download_file(_opt: &TestOptions) -> RpcResult<()> {
     };
     let o = client.get_object(&ctx, &get_object_request).await?;
     assert_eq!(o.content_length, 6);
-    assert_eq!(o.success, true);
+    assert!(o.success);
     assert_ne!(o.initial_chunk, None);
     let c = o.initial_chunk.unwrap();
     assert_eq!(c.bytes, file1_chunk.bytes);
@@ -287,8 +300,10 @@ async fn upload_chunked_download_file(_opt: &TestOptions) -> RpcResult<()> {
 
     // create client and ctx
     let client = BlobstoreSender::via(prov);
-    let mut ctx = Context::default();
-    ctx.actor = Some("actor_test".into());
+    let ctx = Context {
+        actor: Some("actor_test".into()),
+        ..Default::default()
+    };
 
     // Create container cont1
     let resp = client.create_container(&ctx, &"cont1".into()).await;
@@ -341,7 +356,7 @@ async fn upload_chunked_download_file(_opt: &TestOptions) -> RpcResult<()> {
     };
     let upload_3rd_chunk_request = PutChunkRequest {
         chunk: file_chunk3.clone(),
-        stream_id: stream_id,
+        stream_id,
         cancel_and_remove: false,
     };
     let resp4 = client.put_chunk(&ctx, &upload_3rd_chunk_request).await;
@@ -357,7 +372,7 @@ async fn upload_chunked_download_file(_opt: &TestOptions) -> RpcResult<()> {
     let o = client.get_object(&ctx, &get_object_request).await?;
 
     assert_eq!(o.content_length, 20);
-    assert_eq!(o.success, true);
+    assert!(o.success);
     assert_ne!(o.initial_chunk, None);
     let c = o.initial_chunk.unwrap();
     let mut combined = Vec::new();
@@ -383,8 +398,10 @@ async fn upload_download_chunked_file(_opt: &TestOptions) -> RpcResult<()> {
 
     // create client and ctx
     let client = BlobstoreSender::via(prov);
-    let mut ctx = Context::default();
-    ctx.actor = Some("actor_test".into());
+    let ctx = Context {
+        actor: Some("actor_test".into()),
+        ..Default::default()
+    };
 
     // Create container cont1
     let resp = client.create_container(&ctx, &"cont1".into()).await;
@@ -417,7 +434,7 @@ async fn upload_download_chunked_file(_opt: &TestOptions) -> RpcResult<()> {
     };
     let mut o = client.get_object(&ctx, &get_object_request1).await?;
     assert_eq!(o.content_length, 6);
-    assert_eq!(o.success, true);
+    assert!(o.success);
     assert_ne!(o.initial_chunk, None);
 
     let mut s = o.initial_chunk.unwrap().bytes;
@@ -433,7 +450,7 @@ async fn upload_download_chunked_file(_opt: &TestOptions) -> RpcResult<()> {
     };
     o = client.get_object(&ctx, &get_object_request2).await?;
     assert_eq!(o.content_length, 6);
-    assert_eq!(o.success, true);
+    assert!(o.success);
     assert_ne!(o.initial_chunk, None);
 
     s = o.initial_chunk.unwrap().bytes;
@@ -503,7 +520,7 @@ async fn mock_blobstore_actor(num_requests: u32) -> tokio::task::JoinHandle<RpcR
                     .map_err(|e| RpcError::Deser(format!("'Chunk': {}", e)))?;
 
                 // do something with chunk
-                assert_eq!(rec_chunk.is_last, true);
+                assert!(rec_chunk.is_last);
 
                 let chunk_resp = ChunkResponse {
                     cancel_download: false,
