@@ -1295,6 +1295,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d01a5bd0424d00070b0098dd17ebca6f961a959dead1dbcbbbc1d1cd8d3deeba"
 
 [[package]]
+name = "path-clean"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "17359afc20d7ab31fdb42bb844c8b3bb1dabd7dcf7e68428492da7f16966fcef"
+
+[[package]]
 name = "pem-rfc7468"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2749,12 +2755,13 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-blobstore-fs"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "async-trait",
  "atty",
  "base64 0.13.1",
  "futures-util",
+ "path-clean",
  "serde",
  "serde_json",
  "tokio",

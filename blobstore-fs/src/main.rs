@@ -2,19 +2,18 @@
 //!
 //!
 
-#[allow(unused_imports)]
-use serde::Deserialize;
 use std::time::SystemTime;
-#[allow(unused_imports)]
 use std::{
     collections::HashMap,
-    io::{BufReader, Error as IoError, ErrorKind as IoErrorKind, Write},
+    io::{Error as IoError, ErrorKind as IoErrorKind},
     path::{Path, PathBuf},
     sync::Arc,
 };
+
+use path_clean::PathClean;
+use serde::Deserialize;
 use tokio::fs::{
-    canonicalize, create_dir_all, metadata, read, read_dir, remove_dir_all, remove_file, File,
-    OpenOptions,
+    create_dir_all, metadata, read, read_dir, remove_dir_all, remove_file, File, OpenOptions,
 };
 use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock;
@@ -22,8 +21,9 @@ use tracing::{error, info};
 use wasmbus_rpc::provider::prelude::*;
 use wasmbus_rpc::Timestamp;
 use wasmcloud_interface_blobstore::*;
+
 mod fs_utils;
-pub use fs_utils::all_dirs;
+use fs_utils::all_dirs;
 
 #[allow(unused)]
 const CAPABILITY_ID: &str = "wasmcloud:blobstore";
@@ -54,7 +54,7 @@ struct FsProviderConfig {
 #[services(Blobstore)]
 struct FsProvider {
     config: Arc<RwLock<HashMap<String, FsProviderConfig>>>,
-    upload_chunks: Arc<RwLock<HashMap<String, u64>>>, // kee track of the next offset for chunks to be uploaded
+    upload_chunks: Arc<RwLock<HashMap<String, u64>>>, // keep track of the next offset for chunks to be uploaded
     download_chunks: Arc<RwLock<HashMap<ChunkOffsetKey, Chunk>>>,
 }
 
@@ -63,16 +63,15 @@ impl FsProvider {
     /// ensuring that the path is below the given root.
     async fn resolve_subpath<P: AsRef<Path>>(
         &self,
-        root: &PathBuf,
+        root: &Path,
         path: P,
     ) -> Result<PathBuf, IoError> {
-        let root_abs = canonicalize(root).await?;
-        let joined = root_abs.join(path.as_ref());
-        let joined_abs = canonicalize(joined).await?;
+        let joined = root.join(&path);
+        let joined = joined.clean();
 
         // Check components of either path
-        let mut joined_abs_iter = joined_abs.components();
-        for root_part in root_abs.components() {
+        let mut joined_abs_iter = joined.components();
+        for root_part in root.components() {
             let joined_part = joined_abs_iter.next();
 
             // If the joined path is shorter or doesn't match
@@ -91,8 +90,7 @@ impl FsProvider {
 
         // At this point, the root iterator has ben exhausted
         // and the remaining components are the paths beneath the root
-
-        Ok(joined_abs)
+        Ok(joined)
     }
 }
 
@@ -168,7 +166,7 @@ impl FsProvider {
         if chunk.offset == 0 {
             let resp = File::create(&binary_file);
             if resp.await.is_err() {
-                let error_string = format!("Could not create file: {:?}", binary_file).to_string();
+                let error_string = format!("Could not create file: {:?}", binary_file);
                 error!("{:?}", &error_string);
                 return Err(RpcError::InvalidParameter(error_string));
             }
@@ -177,9 +175,9 @@ impl FsProvider {
                 let next_offset: u64 = 0;
                 upload_chunks.insert(s_id.clone(), next_offset);
             } else if !chunk.is_last {
-                return Err(RpcError::InvalidParameter(format!(
-                    "Chunked storage is missing stream id"
-                )));
+                return Err(RpcError::InvalidParameter(
+                    "Chunked storage is missing stream id".to_string(),
+                ));
             }
         }
 
@@ -272,7 +270,6 @@ impl ProviderDispatch for FsProvider {}
 #[async_trait]
 impl ProviderHandler for FsProvider {
     /// The fs provider has one configuration parameter, the root of the file system
-    ///
     async fn put_link(&self, ld: &LinkDefinition) -> RpcResult<bool> {
         let values = &ld.values;
 
@@ -280,14 +277,14 @@ impl ProviderHandler for FsProvider {
             info!("ld conf {:?}", val);
         }
 
-        let root_val = match values.get("ROOT") {
-            None => "/tmp",
-            Some(r) => r.as_str(),
+        let root_val: PathBuf = match values.get("ROOT") {
+            None => "/tmp".into(),
+            Some(r) => r.into(),
         };
 
         let config = FsProviderConfig {
             ld: ld.clone(),
-            root: PathBuf::from(root_val),
+            root: root_val.clean(),
         };
 
         info!("Config: {:?}", config);
@@ -381,7 +378,7 @@ impl Blobstore for FsProvider {
     async fn list_containers(&self, ctx: &Context) -> RpcResult<ContainersInfo> {
         let root = self.get_root(ctx).await?;
 
-        let containers = all_dirs(&Path::new(&root), &root)
+        let containers = all_dirs(&root, &root)
             .iter()
             .map(|c| ContainerMetadata {
                 container_id: c.as_path().display().to_string(),
@@ -464,7 +461,7 @@ impl Blobstore for FsProvider {
         Ok(ObjectMetadata {
             container_id: container.container_id.clone(),
             content_encoding: None,
-            content_length: metadata.len() as u64,
+            content_length: metadata.len(),
             content_type: None,
             last_modified: Some(modified),
             object_id: container.object_id.clone(),
@@ -556,7 +553,7 @@ impl Blobstore for FsProvider {
         let mut errors = Vec::new();
 
         for object in &arg.objects {
-            let object_subpath = Path::new(&arg.container_id).join(&object);
+            let object_subpath = Path::new(&arg.container_id).join(object);
             let object_path = self.resolve_subpath(&root, object_subpath).await?;
 
             if let Err(e) = remove_file(object_path.as_path()).await {
@@ -623,7 +620,7 @@ impl Blobstore for FsProvider {
         // Determine the path to the file
         let root = &self.get_root(ctx).await?;
         let file_subpath = Path::new(&arg.chunk.container_id).join(&arg.chunk.object_id);
-        let file_path = self.resolve_subpath(&root, &file_subpath).await?;
+        let file_path = self.resolve_subpath(root, &file_subpath).await?;
 
         // Remove the file
         remove_file(file_path.as_path()).await.map_err(|e| {
@@ -684,7 +681,7 @@ impl Blobstore for FsProvider {
             content_length: chunk.bytes.len() as u64,
             content_type: None,
             error: None,
-            initial_chunk: Some(chunk.clone()),
+            initial_chunk: Some(chunk),
             success: true,
         })
     }
