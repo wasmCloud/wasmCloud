@@ -496,7 +496,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f83bc2e401ed041b7057345ebc488c005efa0341d5541ce7004d30458d0090b"
 dependencies = [
  "serde",
- "toml 0.7.2",
+ "toml 0.7.3",
 ]
 
 [[package]]
@@ -1970,15 +1970,6 @@ checksum = "e5507769c4919c998e69e49c839d9dc6e693ede4cc4290d6ad8b41d4f09c548c"
 dependencies = [
  "memchr",
  "minimal-lexical",
-]
-
-[[package]]
-name = "nom8"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae01545c9c7fc4486ab7debaf2aad7003ac19431791868fb2e8066df97fad2f8"
-dependencies = [
- "memchr",
 ]
 
 [[package]]
@@ -3638,9 +3629,9 @@ dependencies = [
 
 [[package]]
 name = "toml"
-version = "0.7.2"
+version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f7afcae9e3f0fe2c370fd4657108972cbb2fa9db1b9f84849cefd80741b01cb6"
+checksum = "b403acf6f2bb0859c93c7f0d967cb4a75a7ac552100f9322faf64dc047669b21"
 dependencies = [
  "serde",
  "serde_spanned",
@@ -3659,15 +3650,15 @@ dependencies = [
 
 [[package]]
 name = "toml_edit"
-version = "0.19.3"
+version = "0.19.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5e6a7712b49e1775fb9a7b998de6635b299237f48b404dde71704f2e0e7f37e5"
+checksum = "239410c8609e8125456927e6707163a3b1fdb40561e4b803bc041f466ccfdc13"
 dependencies = [
  "indexmap",
- "nom8",
  "serde",
  "serde_spanned",
  "toml_datetime",
+ "winnow",
 ]
 
 [[package]]
@@ -4082,7 +4073,7 @@ dependencies = [
  "test_bin",
  "thiserror",
  "tokio",
- "toml 0.7.2",
+ "toml 0.7.3",
  "wascap 0.10.1",
  "wash-lib",
  "wasmbus-rpc 0.13.0",
@@ -4128,7 +4119,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tokio-tar",
- "toml 0.7.2",
+ "toml 0.7.3",
  "walkdir",
  "wascap 0.10.1",
  "weld-codegen 0.7.0",
@@ -4518,7 +4509,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror",
- "toml 0.7.2",
+ "toml 0.7.3",
 ]
 
 [[package]]
@@ -4709,6 +4700,15 @@ name = "windows_x86_64_msvc"
 version = "0.48.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1a515f5799fe4961cb532f983ce2b23082366b898e52ffbce459c86f67c8378a"
+
+[[package]]
+name = "winnow"
+version = "0.4.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69af645a61644c6dd379ade8b77cc87efb5393c988707bad12d3c8e00c50f669"
+dependencies = [
+ "memchr",
+]
 
 [[package]]
 name = "winreg"
