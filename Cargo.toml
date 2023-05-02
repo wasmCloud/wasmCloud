@@ -78,7 +78,7 @@ test = true
 members = [ "./", "./crates/wash-lib"]
 
 [workspace.dependencies]
-anyhow = "1.0.70"
+anyhow = "1.0.71"
 assert-json-diff = "2.0.1"
 async-compression = { version = "0.3", default-features = false }
 async-nats = "0.29.0"
