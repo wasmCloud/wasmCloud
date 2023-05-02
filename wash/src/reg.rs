@@ -206,6 +206,9 @@ pub(crate) async fn write_artifact(
     ));
     let mut f = File::create(outfile.clone()).await?;
     f.write_all(artifact).await?;
+    // https://github.com/wasmCloud/wash/issues/382 resolved by this
+    // Files must be synced to ensure all bytes are written to disk
+    f.sync_all().await?;
     Ok(outfile)
 }
 
