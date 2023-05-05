@@ -39,7 +39,7 @@ mod smithy;
 mod up;
 mod util;
 
-const ASCII: &str = r#"
+const HELP: &str = r#"
 _________________________________________________________________________________
                                _____ _                 _    _____ _          _ _
                               / ____| |               | |  / ____| |        | | |
@@ -49,11 +49,44 @@ ________________________________________________________________________________
    \_/\_/ \__,_|___/_| |_| |_|\_____|_|\___/ \__,_|\__,_| |_____/|_| |_|\___|_|_|
 _________________________________________________________________________________
 
-A single CLI to handle all of your wasmCloud tooling needs
+Interact and manage wasmCloud applications, projects, and runtime environments
+
+Usage: wash [OPTIONS] <COMMAND>
+
+Applications:
+  app          Manage declarative applications and deployments (wadm) (experimental)
+  call         Invoke a wasmCloud actor
+  ctl          Interact with a wasmCloud control interface
+
+Projects:
+  build        Build (and sign) a wasmCloud actor, provider, or interface
+  claims       Generate and manage JWTs for wasmCloud actors
+  gen          Generate code from smithy IDL files
+  inspect      Inspect capability provider or actor module
+  lint         Perform lint checks on smithy models
+  new          Create a new project from template
+  par          Create, inspect, and modify capability provider archive files
+  reg          Push an actor or provider component to an OCI or Bindle registry
+  validate     Perform validation checks on smithy models
+
+Configuration:
+  completions  Generate shell completions
+  ctx          Manage wasmCloud host configuration contexts
+  drain        Manage contents of local wasmCloud caches
+  keys         Utilities for generating and managing keys
+
+Runtime environments:
+  up           Bootstrap a wasmCloud environment
+  down         Tear down a wasmCloud environment launched with wash up
+
+Options:
+  -o, --output <OUTPUT>  Specify output format (text or json) [default: text]
+  -h, --help             Print help
+  -V, --version          Print version
 "#;
 
 #[derive(Debug, Clone, Parser)]
-#[clap(name = "wash", about = ASCII, version)]
+#[clap(name = "wash", version, override_help = HELP)]
 struct Cli {
     #[clap(
         short = 'o',
@@ -68,6 +101,7 @@ struct Cli {
     command: CliCommand,
 }
 
+// NOTE: If you change the description here, ensure you also change it in the help text constant above
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Subcommand)]
 enum CliCommand {

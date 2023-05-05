@@ -9,7 +9,7 @@ keywords = ["webassembly", "wasmcloud", "wash", "cli"]
 license = "Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/wasmcloud/wash"
-rust-version = "1.60.0"
+rust-version = "1.65.0"
 
 [badges]
 maintenance = { status = "actively-developed" }
