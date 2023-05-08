@@ -7,7 +7,7 @@ use core::fmt::{self, Debug};
 use anyhow::Context;
 use tracing::{instrument, warn};
 use wascap::jwt;
-use wasi_cap_std_sync::WasiCtxBuilder;
+use wasmtime_wasi::preview2;
 
 wasmtime::component::bindgen!({
     world: "guest.actor",
@@ -16,7 +16,26 @@ wasmtime::component::bindgen!({
 
 pub(super) struct Ctx {
     pub handler: Handler,
-    pub wasi: ::host::WasiCtx,
+    pub wasi: preview2::WasiCtx,
+    pub table: preview2::Table,
+}
+
+impl preview2::WasiView for Ctx {
+    fn table(&self) -> &preview2::Table {
+        &self.table
+    }
+
+    fn table_mut(&mut self) -> &mut preview2::Table {
+        &mut self.table
+    }
+
+    fn ctx(&self) -> &preview2::WasiCtx {
+        &self.wasi
+    }
+
+    fn ctx_mut(&mut self) -> &mut preview2::WasiCtx {
+        &mut self.wasi
+    }
 }
 
 impl Debug for Ctx {
@@ -110,7 +129,7 @@ pub struct ConfiguredComponent {
     component: wasmtime::component::Component,
     engine: wasmtime::Engine,
     handler: HandlerBuilder,
-    wasi: WasiCtxBuilder,
+    wasi: preview2::WasiCtxBuilder,
 }
 
 impl Debug for ConfiguredComponent {
@@ -145,7 +164,8 @@ impl ConfiguredComponent {
     #[must_use]
     pub fn inherit_stdout(self) -> Self {
         Self {
-            wasi: self.wasi.inherit_stdout(),
+            // TODO: simplify once https://github.com/bytecodealliance/wasmtime/pull/6465 lands
+            wasi: self.wasi.set_stdout(preview2::stdio::stdout()),
             ..self
         }
     }
@@ -154,7 +174,8 @@ impl ConfiguredComponent {
     #[must_use]
     pub fn inherit_stderr(self) -> Self {
         Self {
-            wasi: self.wasi.inherit_stderr(),
+            // TODO: simplify once https://github.com/bytecodealliance/wasmtime/pull/6465 lands
+            wasi: self.wasi.set_stderr(preview2::stdio::stderr()),
             ..self
         }
     }
@@ -167,11 +188,17 @@ impl ConfiguredComponent {
         Interfaces::add_to_linker(&mut linker, |ctx: &mut Ctx| &mut ctx.handler)
             .context("failed to link `Wasmcloud` interface")?;
 
-        ::host::wasi::command::add_to_linker(&mut linker, |ctx: &mut Ctx| &mut ctx.wasi)
+        preview2::wasi::command::add_to_linker(&mut linker)
             .context("failed to link `WASI` interface")?;
 
+        let mut table = preview2::Table::new();
+        let wasi = self
+            .wasi
+            .build(&mut table)
+            .context("failed to build WASI")?;
         let ctx = Ctx {
-            wasi: self.wasi.build(),
+            wasi,
+            table,
             handler: self.handler.build(),
         };
         let store = wasmtime::Store::new(&self.engine, ctx);
@@ -212,7 +239,7 @@ impl From<Component> for ConfiguredComponent {
             component,
             engine,
             handler,
-            wasi: WasiCtxBuilder::new(),
+            wasi: preview2::WasiCtxBuilder::new(),
         }
     }
 }
@@ -231,7 +258,7 @@ impl From<Component> for (ConfiguredComponent, jwt::Claims<jwt::Actor>) {
                 component,
                 engine,
                 handler,
-                wasi: WasiCtxBuilder::new(),
+                wasi: preview2::WasiCtxBuilder::new(),
             },
             claims,
         )
@@ -251,7 +278,7 @@ impl From<&Component> for ConfiguredComponent {
             component: component.clone(),
             engine: engine.clone(),
             handler: handler.clone(),
-            wasi: WasiCtxBuilder::new(),
+            wasi: preview2::WasiCtxBuilder::new(),
         }
     }
 }

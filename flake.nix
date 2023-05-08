@@ -10,10 +10,7 @@
     "cache.garnix.io:CTFPyKSLcx5RMJKfLo5EEPUObbA78b0YQ2DTCJXqr9g="
   ];
 
-  # TODO: Remove once https://github.com/bytecodealliance/preview2-prototyping/pull/136 is merged
-  inputs.crane.url = github:rvolosatovs/crane/feat/wit;
   inputs.fenix.url = github:nix-community/fenix/monthly;
-  inputs.nixify.inputs.crane.follows = "crane";
   inputs.nixify.inputs.fenix.follows = "fenix";
   inputs.nixify.url = github:rvolosatovs/nixify;
 

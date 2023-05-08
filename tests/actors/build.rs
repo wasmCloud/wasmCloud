@@ -116,17 +116,20 @@ impl DerefArtifact for Option<(String, Vec<PathBuf>)> {
 async fn install_wasi_adapter(out_dir: impl AsRef<Path>) -> anyhow::Result<()> {
     let mut artifacts = build_artifacts(
         ["--manifest-path=../wasi-adapter/Cargo.toml", "-Z=bindeps"],
-        |name, kind| name == "wasi_snapshot_preview1" && kind.contains(&CrateType::Cdylib),
+        |name, kind| name == "wasi-preview1-component-adapter" && kind.contains(&CrateType::Cdylib),
     )
     .await
     .context("failed to build `wasi-adapter` crate")?;
     match (artifacts.next().deref_artifact(), artifacts.next()) {
-        (Some(("wasi_snapshot_preview1", [path])), None) => {
-            copy(path, out_dir.as_ref().join("wasi-snapshot-preview1.wasm"))
-                .await
-                .map(|_| ())
-        }
-        _ => bail!("invalid `wasi-snapshot-preview1` build artifacts"),
+        (Some(("wasi-preview1-component-adapter", [path])), None) => copy(
+            path,
+            out_dir
+                .as_ref()
+                .join("wasi-preview1-component-adapter.wasm"),
+        )
+        .await
+        .map(|_| ()),
+        _ => bail!("invalid `wasi-preview1-component-adapter` build artifacts"),
     }
 }
 

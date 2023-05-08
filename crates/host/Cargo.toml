@@ -21,7 +21,6 @@ log = [
 anyhow = { workspace = true, features = ["std"] }
 async-trait = { workspace = true }
 futures = { workspace = true, features = ["std"] }
-host = { workspace = true }
 log = { workspace = true }
 rand = { workspace = true, features = ["std"] }
 serde = { workspace = true }
@@ -35,7 +34,7 @@ wasmcloud-interface-logging = { workspace = true }
 wasmcloud-interface-numbergen = { workspace = true }
 wasmparser = { workspace = true }
 wasmtime = { workspace = true, features = ["async", "cache", "component-model", "cranelift", "jitdump", "parallel-compilation", "pooling-allocator", "vtune"] }
-wasmtime-wasi = { workspace = true, features = ["sync"] }
+wasmtime-wasi = { workspace = true, features = ["sync", "preview2"] }
 
 [build-dependencies]
 anyhow = { workspace = true }
