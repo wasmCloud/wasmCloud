@@ -5,12 +5,12 @@ edition = "2021"
 publish = false
 
 [dependencies]
-wasi_snapshot_preview1 = { git = "https://github.com/bytecodealliance/preview2-prototyping", rev = "900d65ccb22e1e8871a1e9e9d1bab0a1f81bf3b1", default-features = false, target = "wasm32-unknown-unknown", artifact = "cdylib", features = ["reactor"] }
+wasi-preview1-component-adapter = { git = "https://github.com/bytecodealliance/wasmtime", rev = "3b90faf4a7715a66e1b7298d50300d235604cf50", default-features = false, target = "wasm32-unknown-unknown", artifact = "cdylib", features = ["reactor"] }
 
 [workspace]
 
-# From https://github.com/bytecodealliance/preview2-prototyping/blob/24fa023d1848ca3a24b35ed80ff1514ea54dd219/Cargo.toml#L52-L64
-[profile.dev.package.wasi_snapshot_preview1]
+# From https://github.com/bytecodealliance/wasmtime/blob/3b90faf4a7715a66e1b7298d50300d235604cf50/Cargo.toml#L302-L312
+[profile.dev.package.wasi-preview1-component-adapter]
 incremental = false
 opt-level = 's'
 debug-assertions = false

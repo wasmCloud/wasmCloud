@@ -22,7 +22,10 @@ pub fn encode_component(module: &[u8], wasi: bool) -> anyhow::Result<Vec<u8>> {
         encoder
             .adapter(
                 "wasi_snapshot_preview1",
-                include_bytes!(concat!(env!("OUT_DIR"), "/wasi-snapshot-preview1.wasm")),
+                include_bytes!(concat!(
+                    env!("OUT_DIR"),
+                    "/wasi-preview1-component-adapter.wasm"
+                )),
             )
             .context("failed to add WASI adapter")?
     } else {
