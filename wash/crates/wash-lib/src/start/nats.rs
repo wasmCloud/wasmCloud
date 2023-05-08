@@ -1,15 +1,11 @@
 use crate::start::wait_for_server;
 use anyhow::{anyhow, Result};
-use async_compression::tokio::bufread::GzipDecoder;
-#[cfg(target_family = "unix")]
-use std::os::unix::prelude::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::{ffi::OsStr, io::Cursor};
-use tokio::fs::{create_dir_all, metadata, write, File};
+use tokio::fs::{metadata, write};
 use tokio::process::{Child, Command};
-use tokio_stream::StreamExt;
-use tokio_tar::Archive;
+
+use super::download_binary_from_github;
 
 const NATS_GITHUB_RELEASE_URL: &str = "https://github.com/nats-io/nats-server/releases/download";
 pub const NATS_SERVER_CONF: &str = "nats.conf";
@@ -19,8 +15,7 @@ pub const NATS_SERVER_BINARY: &str = "nats-server";
 #[cfg(target_family = "windows")]
 pub const NATS_SERVER_BINARY: &str = "nats-server.exe";
 
-/// A wrapper around the [ensure_nats_server_for_os_arch_pair] function that uses the
-/// architecture and operating system of the current host machine.
+/// Downloads the NATS binary for the architecture and operating system of the current host machine.
 ///
 /// # Arguments
 ///
@@ -82,11 +77,10 @@ where
         return Ok(nats_bin_path);
     }
     // Download NATS tarball
-    download_nats_server_for_os_arch_pair(os, arch, version, dir).await
+    download_binary_from_github(&nats_url(os, arch, version), dir, NATS_SERVER_BINARY).await
 }
 
-/// A wrapper around the [download_nats_server_for_os_arch_pair] function that uses the
-/// architecture and operating system of the current host machine.
+/// Downloads the NATS binary for the architecture and operating system of the current host machine.
 ///
 /// # Arguments
 ///
@@ -107,91 +101,12 @@ pub async fn download_nats_server<P>(version: &str, dir: P) -> Result<PathBuf>
 where
     P: AsRef<Path>,
 {
-    download_nats_server_for_os_arch_pair(
-        std::env::consts::OS,
-        std::env::consts::ARCH,
-        version,
+    download_binary_from_github(
+        &nats_url(std::env::consts::OS, std::env::consts::ARCH, version),
         dir,
+        NATS_SERVER_BINARY,
     )
     .await
-}
-
-/// Downloads the specified GitHub release version of nats-server from <https://github.com/nats-io/nats-server/releases/>
-/// and unpacking the binary for a specified OS/ARCH pair to a directory. Returns the path to the NATS executable.
-/// # Arguments
-///
-/// * `os` - Specifies the operating system of the binary to download, e.g. `linux`
-/// * `arch` - Specifies the architecture of the binary to download, e.g. `amd64`
-/// * `version` - Specifies the version of the binary to download in the form of `vX.Y.Z`
-/// * `dir` - Where to download the `nats-server` binary to
-/// # Examples
-///
-/// ```no_run
-/// # #[tokio::main]
-/// # async fn main() {
-/// use wash_lib::start::download_nats_server_for_os_arch_pair;
-/// let os = std::env::consts::OS;
-/// let arch = std::env::consts::ARCH;
-/// let res = download_nats_server_for_os_arch_pair(os, arch, "v2.8.4", "/tmp/").await;
-/// assert!(res.is_ok());
-/// assert!(res.unwrap().to_string_lossy() == "/tmp/nats-server");
-/// # }
-/// ```
-pub async fn download_nats_server_for_os_arch_pair<P>(
-    os: &str,
-    arch: &str,
-    version: &str,
-    dir: P,
-) -> Result<PathBuf>
-where
-    P: AsRef<Path>,
-{
-    let nats_bin_path = dir.as_ref().join(NATS_SERVER_BINARY);
-    // Download NATS tarball
-    let url = nats_url(os, arch, version);
-    let body = match reqwest::get(url).await {
-        Ok(resp) => resp.bytes().await?,
-        Err(e) => return Err(anyhow!("Failed to request NATS release: {:?}", e)),
-    };
-    let cursor = Cursor::new(body);
-    let mut nats_server = Archive::new(Box::new(GzipDecoder::new(cursor)));
-
-    // Look for nats-server binary and only extract that
-    let mut entries = nats_server.entries()?;
-    while let Some(res) = entries.next().await {
-        let mut entry = res.map_err(|e| {
-            anyhow!(
-                "Failed to retrieve file from archive, ensure NATS server {} exists. Original error: {}",
-                version, e
-            )
-        })?;
-        if let Ok(tar_path) = entry.path() {
-            match tar_path.file_name() {
-                Some(name) if name == OsStr::new(NATS_SERVER_BINARY) => {
-                    // Ensure target directory exists
-                    create_dir_all(&dir).await?;
-                    let mut nats_server = File::create(&nats_bin_path).await?;
-                    // Make nats-server executable
-                    #[cfg(target_family = "unix")]
-                    {
-                        let mut permissions = nats_server.metadata().await?.permissions();
-                        // Read/write/execute for owner and read/execute for others. This is what `cargo install` does
-                        permissions.set_mode(0o755);
-                        nats_server.set_permissions(permissions).await?;
-                    }
-
-                    tokio::io::copy(&mut entry, &mut nats_server).await?;
-                    return Ok(nats_bin_path);
-                }
-                // Ignore LICENSE and README in the NATS tarball
-                _ => (),
-            }
-        }
-    }
-
-    Err(anyhow!(
-        "NATS Server binary could not be installed, please see logs"
-    ))
 }
 
 /// Configuration for a NATS server that supports running either in "standalone" or "leaf" mode.
@@ -353,17 +268,6 @@ where
         .map(|_| child)
 }
 
-/// Helper function to indicate if the NATS server binary is successfully
-/// installed in a directory
-pub async fn is_nats_installed<P>(dir: P) -> bool
-where
-    P: AsRef<Path>,
-{
-    metadata(dir.as_ref().join(NATS_SERVER_BINARY))
-        .await
-        .map_or(false, |m| m.is_file())
-}
-
 /// Helper function to determine the NATS server release path given an os/arch and version
 fn nats_url(os: &str, arch: &str, version: &str) -> String {
     // Replace "macos" with "darwin" to match NATS release scheme
@@ -380,7 +284,7 @@ fn nats_url(os: &str, arch: &str, version: &str) -> String {
 #[cfg(test)]
 mod test {
     use crate::start::{
-        ensure_nats_server, is_nats_installed, start_nats_server, NatsConfig, NATS_SERVER_BINARY,
+        ensure_nats_server, is_bin_installed, start_nats_server, NatsConfig, NATS_SERVER_BINARY,
     };
     use anyhow::Result;
     use std::env::temp_dir;
@@ -396,7 +300,7 @@ mod test {
         let install_dir = temp_dir().join("can_handle_missing_nats_version");
         let _ = remove_dir_all(&install_dir).await;
         create_dir_all(&install_dir).await?;
-        assert!(!is_nats_installed(&install_dir).await);
+        assert!(!is_bin_installed(&install_dir, NATS_SERVER_BINARY).await);
 
         let res = ensure_nats_server("v300.22.1111223", &install_dir).await;
         assert!(res.is_err());
@@ -410,7 +314,7 @@ mod test {
         let install_dir = temp_dir().join("can_download_and_start_nats");
         let _ = remove_dir_all(&install_dir).await;
         create_dir_all(&install_dir).await?;
-        assert!(!is_nats_installed(&install_dir).await);
+        assert!(!is_bin_installed(&install_dir, NATS_SERVER_BINARY).await);
 
         let res = ensure_nats_server(NATS_SERVER_VERSION, &install_dir).await;
         assert!(res.is_ok());
@@ -450,7 +354,7 @@ mod test {
         let install_dir = temp_dir().join("can_gracefully_fail_running_nats");
         let _ = remove_dir_all(&install_dir).await;
         create_dir_all(&install_dir).await?;
-        assert!(!is_nats_installed(&install_dir).await);
+        assert!(!is_bin_installed(&install_dir, NATS_SERVER_BINARY).await);
 
         let res = ensure_nats_server(NATS_SERVER_VERSION, &install_dir).await;
         assert!(res.is_ok());
@@ -483,7 +387,7 @@ mod test {
         let _ = remove_dir_all(&install_dir).await;
         create_dir_all(&install_dir).await?;
         assert!(
-            !is_nats_installed(&install_dir).await,
+            !is_bin_installed(&install_dir, NATS_SERVER_BINARY).await,
             "NATS should not be installed"
         );
 

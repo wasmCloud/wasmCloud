@@ -1,6 +1,6 @@
 [package]
 name = "wash-cli"
-version = "0.17.3"
+version = "0.18.0"
 authors = ["wasmCloud Team"]
 categories = ["wasm", "command-line-utilities"]
 description = "wasmcloud Shell (wash) CLI tool"
@@ -12,7 +12,7 @@ repository = "https://github.com/wasmcloud/wash"
 rust-version = "1.60.0"
 
 [badges]
-maintenance = {status = "actively-developed"}
+maintenance = { status = "actively-developed" }
 
 [dependencies]
 anyhow = { workspace = true, features = ["backtrace"] }
@@ -49,6 +49,7 @@ thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 toml = { workspace = true }
 which = { workspace = true }
+wadm = { workspace = true }
 wash-lib = { workspace = true, features = ["cli"] }
 wascap = { workspace = true }
 weld-codegen = { workspace = true }
@@ -75,7 +76,7 @@ path = "src/main.rs"
 test = true
 
 [workspace]
-members = [ "./", "./crates/wash-lib"]
+members = ["./", "./crates/wash-lib"]
 
 [workspace.dependencies]
 anyhow = "1.0.71"
@@ -130,10 +131,11 @@ thiserror = "1.0"
 tokio = { version = "1.27.0", default-features = false, features = ["fs"] }
 tokio-stream = "0.1"
 tokio-tar = "0.3"
-toml = "0.7.3"
+toml = "0.7.2"
+wadm = "0.4.0-alpha.2"
 walkdir = "2.3"
 wascap = "0.10.1"
-wash-lib = { version = "0.8", path = "./crates/wash-lib" }
+wash-lib = { version = "0.9.0", path = "./crates/wash-lib" }
 wasmbus-rpc = "0.13.0"
 wasmcloud-control-interface = "0.25"
 wasmcloud-test-util = "0.6.4"

@@ -8,7 +8,7 @@ use clap::Parser;
 use serde_json::json;
 use tokio::process::Command;
 use wash_lib::cli::{CommandOutput, OutputKind};
-use wash_lib::start::{find_wasmcloud_binary, NATS_SERVER_BINARY, NATS_SERVER_PID};
+use wash_lib::start::{find_wasmcloud_binary, NATS_SERVER_BINARY, NATS_SERVER_PID, WADM_PID};
 
 use crate::appearance::spinner::Spinner;
 use crate::cfg::cfg_dir;
@@ -62,7 +62,7 @@ pub(crate) async fn handle_down(
     let nats_bin = install_dir.join(NATS_SERVER_BINARY);
     if nats_bin.is_file() {
         sp.update_spinner_message(" Stopping NATS server ...".to_string());
-        if let Err(e) = stop_nats(install_dir).await {
+        if let Err(e) = stop_nats(&install_dir).await {
             out_json.insert("nats_stopped".to_string(), json!(false));
             out_text.push_str(&format!(
                 "❌ NATS server did not stop successfully: {e:?}\n"
@@ -70,6 +70,18 @@ pub(crate) async fn handle_down(
         } else {
             out_json.insert("nats_stopped".to_string(), json!(true));
             out_text.push_str("✅ NATS server stopped successfully\n");
+        }
+    }
+
+    match stop_wadm(&install_dir).await {
+        Ok(_) => {
+            tokio::fs::remove_file(&install_dir.join(WADM_PID)).await?;
+            out_json.insert("wadm_stopped".to_string(), json!(true));
+            out_text.push_str("✅ wadm stopped successfully\n");
+        }
+        Err(e) => {
+            out_json.insert("wadm_stopped".to_string(), json!(false));
+            out_text.push_str(&format!("❌ wadm did not stop successfully: {e:?}\n"));
         }
     }
 
@@ -126,4 +138,20 @@ where
     P: AsRef<Path>,
 {
     install_dir.as_ref().join(NATS_SERVER_PID)
+}
+
+/// Helper function to kill the wadm process
+pub(crate) async fn stop_wadm<P>(install_dir: P) -> Result<Output>
+where
+    P: AsRef<Path>,
+{
+    if let Ok(pid) = tokio::fs::read_to_string(&install_dir.as_ref().join(WADM_PID)).await {
+        tokio::process::Command::new("kill")
+            .arg(pid)
+            .output()
+            .await
+            .map_err(|e| anyhow::anyhow!(e))
+    } else {
+        Err(anyhow::anyhow!("No pidfile found"))
+    }
 }
