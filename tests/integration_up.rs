@@ -17,8 +17,19 @@ fn integration_up_can_start_wasmcloud_and_actor() {
     let path = dir.join("washup.log");
     let stdout = std::fs::File::create(&path).expect("could not create log file for wash up test");
 
+    let host_seed = nkeys::KeyPair::new_server();
+
     let mut up_cmd = wash()
-        .args(["up", "--nats-port", "5893", "-o", "json", "--detached"])
+        .args([
+            "up",
+            "--nats-port",
+            "5893",
+            "-o",
+            "json",
+            "--detached",
+            "--host-seed",
+            &host_seed.seed().expect("Should have a seed for the host"),
+        ])
         .stdout(stdout)
         .spawn()
         .expect("Could not spawn wash up process");
@@ -28,20 +39,26 @@ fn integration_up_can_start_wasmcloud_and_actor() {
     assert!(status.success());
     let out = read_to_string(&path).expect("could not read output of wash up");
 
-    let (kill_cmd, wasmcloud_log) = match serde_json::from_str::<serde_json::Value>(&out) {
+    let (kill_cmd, _wasmcloud_log) = match serde_json::from_str::<serde_json::Value>(&out) {
         Ok(v) => (v["kill_cmd"].to_owned(), v["wasmcloud_log"].to_owned()),
         Err(_e) => panic!("Unable to parse kill cmd from wash up output"),
     };
 
-    // Wait until the host starts
+    // Wait until the host starts, measured by trying to retrieve host inventory over NATS
+    // Once this returns something other than a no responders, we know the host is ready for a ctl command
     let mut tries = 30;
-    while !read_to_string(wasmcloud_log.to_string().trim_matches('"'))
-        .expect("could not read output")
-        .contains("Started wasmCloud OTP Host Runtime")
-    {
-        tries -= 1;
-        assert!(tries >= 0);
-        std::thread::sleep(std::time::Duration::from_secs(1));
+    while tries >= 0 {
+        let output = wash()
+            .args(["ctl", "get", "inventory", &host_seed.public_key()])
+            .output()
+            .expect("expected command to finish");
+        if output.stdout.is_empty() {
+            tries -= 1;
+            assert!(tries >= 0);
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        } else {
+            break;
+        }
     }
 
     let start_echo = wash()
@@ -114,6 +131,9 @@ fn can_stop_detached_host() {
         .args(vec![down])
         .output()
         .expect("Could not spawn wash down process");
+
+    // After `wash down` exits, sometimes Erlang things stick around for a few seconds
+    std::thread::sleep(std::time::Duration::from_millis(5000));
 
     // Check to see if process was removed
     let mut info = sysinfo::System::new_with_specifics(

@@ -110,7 +110,7 @@ pub async fn pull_oci_artifact(url: String, options: OciPullOptions) -> Result<V
         Some(caps) => caps.get(2).map(|m| m.as_str().to_owned()),
         None => bail!("Invalid OCI reference URL."),
     }
-    .unwrap_or(String::from(""));
+    .unwrap_or_default();
 
     if !options.allow_latest {
         if input_tag == "latest" {
