@@ -222,16 +222,29 @@ mod test {
         let log_path = install_dir.join("wadm.log");
         let log_file = tokio::fs::File::create(&log_path).await?.into_std().await;
 
-        let child_res = start_wadm(&install_dir.join(WADM_BINARY), log_file, None).await;
+        let config = WadmConfig {
+            structured_logging: false,
+            js_domain: None,
+            nats_server_url: "nats://127.0.0.1:54321".to_string(),
+            nats_credsfile: None,
+        };
+
+        let child_res = start_wadm(&install_dir.join(WADM_BINARY), log_file, Some(config)).await;
         assert!(child_res.is_ok());
 
         // Wait for process to exit since NATS couldn't connect
         assert!(child_res.unwrap().wait().await.is_ok());
         let log_contents = tokio::fs::read_to_string(&log_path).await?;
         // wadm couldn't connect to NATS but that's okay
-        assert!(log_contents.contains("Connection refused (os error 61)"));
 
-        // child_res.unwrap().kill().await?;
+        // Different OS-es have different error codes, but all I care about is that wadm executed at all
+        #[cfg(target_os = "macos")]
+        assert!(log_contents.contains("Connection refused (os error 61)"));
+        #[cfg(target_os = "linux")]
+        assert!(log_contents.contains("Connection refused (os error 111)"));
+        #[cfg(target_os = "windows")]
+        assert!(log_contents.contains("No connection could be made because the target machine actively refused it. (os error 10061)"));
+
         let _ = remove_dir_all(install_dir).await;
         Ok(())
     }
