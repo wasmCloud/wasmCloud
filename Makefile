@@ -34,6 +34,7 @@ test: ## Run unit test suite
 
 test-wash-ci:
 	@$(CARGO) nextest run --profile ci --workspace --bin wash
+	@$(CARGO) nextest run --profile ci -p wash-lib
 
 test-watch: ## Run unit tests continously, can optionally specify a target test filter.
 	@$(CARGO) watch -- $(CARGO) nextest run $(TARGET)
