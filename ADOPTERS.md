@@ -9,7 +9,6 @@ We appreciate all our users and their contributions to making wasmCloud a succes
 
 | Organization | Contact | Status | Description of Use |
 | - | - | - | - |
-| [Adobe](https://adobe.com) | [@seanisom](https://github.com/seanisom) | ![internal](https://img.shields.io/badge/-internal-green?style=flat) | Running in Kubernetes for FaaS as part of our Internal Developer Platform |
 | [Cosmonic](https://www.cosmonic.com) | [@thomastaylor312](https://github.com/thomastaylor312) | ![production](https://img.shields.io/badge/-production-blue?style=flat) | Cosmonic is a distributed app platform built on wasmCloud for wasmCloud apps. |
 
 _This file is part of the CNCF official documentation for projects._
