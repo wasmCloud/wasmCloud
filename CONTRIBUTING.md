@@ -5,8 +5,10 @@ to help get your contribution accepted.
 
 ## Table of Contents
 
+- [Contributing Guide](#contributing-guide)
+  - [Table of Contents](#table-of-contents)
   - [Reporting a Security Issue](#reporting-a-security-issue)
-  - [Sign Your Work](#sign-your-work)
+  - [Developer Certificate of Origin](#developer-certificate-of-origin)
   - [Support Channels](#support-channels)
   - [Semantic Versioning](#semantic-versioning)
   - [Issues](#issues)
@@ -28,9 +30,11 @@ Most of the time, when you find a bug in wasmCloud, it should be reported using 
 if you are reporting a _security vulnerability_, please follow the guidelines outlined in our
 [security process](SECURITY.md)
 
-## Sign Your Work
+## Developer Certificate of Origin
 
-The sign-off is a simple line at the end of the explanation for a commit. All commits needs to be
+As with other CNCF projects, wasmCloud has adopted a [Developers Certificate of Origin (DCO)](https://developercertificate.org/). A DCO is a lightweight way for a developer to certify that they wrote or otherwise have the right to submit code or documentation to a project.
+
+The sign-off is a simple line at the end of the explanation for a commit. All commits need to be
 signed. Your signature certifies that you wrote the patch or otherwise have the right to contribute
 the material. The rules are pretty simple, if you can certify the below (from
 [developercertificate.org](https://developercertificate.org/)):
@@ -87,6 +91,10 @@ Date:   Thu Feb 2 11:41:15 2018 -0800
 
 Notice the `Author` and `Signed-off-by` lines match. If they don't your PR will be rejected by the
 automated DCO check.
+
+- In case you forgot to add it to the most recent commit, use `git commit --amend --signoff`
+- In case you forgot to add it to the last N commits in your branch, use `git rebase --signoff HEAD~N` and replace N with the number of new commits you created in your branch.
+- If you have already pushed your branch to a remote, will need to push your changes to overwrite the branch: `git push --force-with-lease origin my-branch`
 
 ## Support Channels
 

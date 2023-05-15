@@ -75,4 +75,8 @@ The primary Cloud Native wasmCloud host runtime is the [Elixir/OTP](https://gith
 
 ### 🕸 JavaScript Runtime (`Experimental`)
 
-For running a wasmCloud host in a browser or embedding in a JavaScript V8 host, use the [JavaScript Runtime](https://github.com/wasmCloud/wasmcloud-js).
+For running a wasmCloud host in a browser or embedding in a JavaScript V8 host, use the [JavaScript Runtime](https://github.com/wasmCloud/
+
+---
+
+_We are a Cloud Native Computing Foundation [sandbox project](https://www.cncf.io/sandbox-projects/)._
