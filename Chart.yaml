@@ -8,7 +8,7 @@ keywords:
   - wasmCloud
   - wasmcloud
 
-home: https://wasmcloud.dev
+home: https://wasmcloud.com
 sources:
   - https://github.com/wasmCloud/wasmcloud-otp
 icon: https://github.com/wasmCloud/wasmcloud.com-dev/raw/main/static/images/wasmcloud-logo.png
@@ -20,4 +20,4 @@ type: application
 # in one PR, then open a new PR updating this `version` and `appVersion`.
 version: 0.6.11
 
-appVersion: "0.62.1"
+appVersion: "0.63.0"
