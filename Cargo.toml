@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-control-interface"
-version = "0.25.0"
+version = "0.26.0"
 authors = ["wasmCloud Team"]
 edition = "2021"
 homepage = "https://wasmcloud.com"
@@ -16,7 +16,7 @@ categories = ["wasm", "api-bindings"]
 async-nats = "0.29"
 data-encoding = "2.3.3"
 ring = "0.16.20"
-cloudevents-sdk = "0.6.0"
+cloudevents-sdk = "0.7.0"
 futures = "0.3"
 rmp-serde = "1.0.0"
 tokio = {version="1.9", features=["time"]}
