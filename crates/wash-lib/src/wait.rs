@@ -1,7 +1,56 @@
 use anyhow::{anyhow, bail, Result};
-use cloudevents::{event::Event, AttributesReader};
-use std::time::{Duration, Instant};
+use cloudevents::event::{AttributesReader, Event};
 use tokio::sync::mpsc::Receiver;
+use tokio::time::{Duration, Instant};
+
+/// Useful parts of a CloudEvent coming in from the wasmbus.
+#[derive(Debug)]
+struct CloudEventData {
+    event_type: String,
+    source: String,
+    data: serde_json::Value,
+}
+
+/// Small helper to easily get a String value out of a JSON object.
+fn get_string_data_from_json(json: &serde_json::Value, key: &str) -> Result<String> {
+    Ok(json
+        .get(key)
+        .ok_or_else(|| anyhow!("No {} key found in json data", key))?
+        .as_str()
+        .ok_or_else(|| anyhow!("{} is not a string", key))?
+        .to_string())
+}
+
+/// Get the useful parts out of a wasmbus cloud event.
+fn get_wasmbus_event_info(event: Event) -> Result<CloudEventData> {
+    let data: serde_json::Value = event
+        .data()
+        .ok_or_else(|| anyhow!("No data in event"))?
+        .clone()
+        .try_into()?;
+
+    Ok(CloudEventData {
+        event_type: event.ty().to_string(),
+        source: event.source().to_string(),
+        data,
+    })
+}
+
+/// The potential outcomes of an event that has been found.
+/// It can either succeed or fail. This enum should only be returned if we found the applicable event.
+/// If we did not find the event or another error occured, use the `Err` variant of a `Result` wrapping around this enum.
+pub enum FindEventOutcome<T> {
+    Success(T),
+    Failure(anyhow::Error),
+}
+
+/// The potential outcomes of a function check on an event.
+/// Because we can pass events that are not applicable to the event we are looking for, we need the `NotApplicable` variant to skip these events.
+pub enum EventCheckOutcome<T> {
+    Success(T),
+    Failure(anyhow::Error),
+    NotApplicable,
+}
 
 /// Uses the NATS reciever to read events being published to the wasmCloud lattice event subject, up until the given timeout duration.
 ///
@@ -53,29 +102,13 @@ async fn find_event<T>(
     }
 }
 
-/// The potential outcomes of an event that has been found.
-/// It can either succeed or fail. This enum should only be returned if we found the applicable event.
-/// If we did not find the event or another error occured, use the `Err` variant of a `Result` wrapping around this enum.
-pub enum FindEventOutcome<T> {
-    Success(T),
-    Failure(anyhow::Error),
-}
-
-/// The potential outcomes of a function check on an event.
-/// Because we can pass events that are not applicable to the event we are looking for, we need the `NotApplicable` variant to skip these events.
-enum EventCheckOutcome<T> {
-    Success(T),
-    Failure(anyhow::Error),
-    NotApplicable,
-}
-
 /// Uses the NATS reciever to read events being published to the wasmCloud lattice event subject, up until the given timeout duration.
 ///
 /// If the applicable actor start response event is found (either started or failed to start), the `Ok` variant of the `Result` will be returned,
 /// with the `FindEventOutcome` enum containing the success or failure state of the event.
 ///
 /// If the timeout is reached or another error occurs, the `Err` variant of the `Result` will be returned.
-pub(crate) async fn wait_for_actor_start_event(
+pub async fn wait_for_actor_start_event(
     receiver: &mut Receiver<Event>,
     timeout: Duration,
     host_id: String,
@@ -286,36 +319,4 @@ pub async fn wait_for_actor_stop_event(
 
     let event = find_event(receiver, timeout, check_function).await?;
     Ok(event)
-}
-
-/// Useful parts of a CloudEvent coming in from the wasmbus.
-struct CloudEventData {
-    event_type: String,
-    source: String,
-    data: serde_json::Value,
-}
-
-/// Get the useful parts out of a wasmbus cloud event.
-fn get_wasmbus_event_info(event: Event) -> Result<CloudEventData> {
-    let data: serde_json::Value = event
-        .data()
-        .ok_or_else(|| anyhow!("No data in event"))?
-        .clone()
-        .try_into()?;
-
-    Ok(CloudEventData {
-        event_type: event.ty().to_string(),
-        source: event.source().to_string(),
-        data,
-    })
-}
-
-/// Small helper to easily get a String value out of a JSON object.
-fn get_string_data_from_json(json: &serde_json::Value, key: &str) -> Result<String> {
-    Ok(json
-        .get(key)
-        .ok_or_else(|| anyhow!("No {} key found in json data", key))?
-        .as_str()
-        .ok_or_else(|| anyhow!("{} is not a string", key))?
-        .to_string())
 }
