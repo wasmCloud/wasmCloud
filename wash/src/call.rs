@@ -4,8 +4,9 @@ use anyhow::{bail, Context, Result};
 use clap::Args;
 use log::{debug, error};
 use wash_lib::cli::CommandOutput;
-use wash_lib::config::{DEFAULT_LATTICE_PREFIX, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT};
+use wash_lib::config::{context_dir, DEFAULT_LATTICE_PREFIX, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT};
 use wash_lib::context::{
+    ensure_host_config_context,
     fs::{load_context, ContextDir},
     ContextManager,
 };
@@ -13,12 +14,9 @@ use wash_lib::id::{ClusterSeed, ModuleId};
 use wasmbus_rpc::{common::Message, core::WasmCloudEntity, rpc_client::RpcClient};
 use wasmcloud_test_util::testing::TestResults;
 
-use crate::{
-    ctx::{context_dir, ensure_host_config_context},
-    util::{
-        default_timeout_ms, extract_arg_value, json_str_to_msgpack_bytes, msgpack_to_json_val,
-        nats_client_from_opts,
-    },
+use crate::util::{
+    default_timeout_ms, extract_arg_value, json_str_to_msgpack_bytes, msgpack_to_json_val,
+    nats_client_from_opts,
 };
 
 /// fake key (not a real public key)  used to construct origin for invoking actors

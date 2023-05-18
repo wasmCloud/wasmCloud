@@ -284,7 +284,6 @@ mod test {
             !contexts_path
                 .read_dir()
                 .unwrap()
-                .into_iter()
                 .any(|p| p.unwrap().path() == ctx_path),
             "Context should have been removed from directory"
         );
