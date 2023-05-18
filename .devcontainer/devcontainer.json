@@ -1,9 +1,14 @@
 {
 	"name": "wash",
-	"image": "mcr.microsoft.com/devcontainers/base:bullseye",
+	"image": "rust:bullseye",
 	"features": {
-		"ghcr.io/devcontainers/features/rust:1": {
-			"version": "latest"
+		"devwasm.azurecr.io/dev-wasm/dev-wasm-feature/rust-wasi:0": {},
+		"ghcr.io/lee-orr/rusty-dev-containers/cargo-binstall:latest": {},
+		"ghcr.io/lee-orr/rusty-dev-containers/cargo-watch:latest": {},
+		"ghcr.io/lee-orr/rusty-dev-containers/cargo-nextest:latest": {},
+		"ghcr.io/devcontainers/features/go:1": {},
+		"ghcr.io/lee-orr/rusty-dev-containers/tinygo:0": {
+			"version": "0.27.0"
 		}
 	},
 	"workspaceMount": "source=${localWorkspaceFolder},target=/wash,type=bind,consistency=cached",
