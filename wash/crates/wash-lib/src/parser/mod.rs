@@ -149,7 +149,7 @@ impl TryFrom<RawInterfaceConfig> for InterfaceConfig {
 pub struct RustConfig {
     /// The path to the cargo binary. Optional, will default to search the user's `PATH` for `cargo` if not specified.
     pub cargo_path: Option<PathBuf>,
-    /// Path to cargo/rust's `target` directory. Optional, defaults to `./target`.
+    /// Path to cargo/rust's `target` directory. Optional, defaults to the cargo target directory for the workspace or project.
     pub target_path: Option<PathBuf>,
 }
 

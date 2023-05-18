@@ -12,5 +12,12 @@
 		}
 	},
 	"workspaceMount": "source=${localWorkspaceFolder},target=/wash,type=bind,consistency=cached",
-	"workspaceFolder": "/wash"
+	"workspaceFolder": "/wash",
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"rust-lang.rust-analyzer"
+			]
+		}
+	}
 }
