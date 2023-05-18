@@ -168,11 +168,11 @@ fn path_to_test_file(smithy_cache_dir: &str) -> PathBuf {
 #[cfg(target_os = "linux")]
 fn set_smithy_cache_dir() -> (PathBuf, String) {
     let tmp_dir = test_dir_with_subfolder("drain_smithy");
-    std::env::set_var("XDG_CACHE_HOME", &format!("{}", &tmp_dir.display()));
+    std::env::set_var("XDG_CACHE_HOME", format!("{}", &tmp_dir.display()));
     let smithy_cache = format!("{}/smithy", &tmp_dir.display());
-    create_dir_all(&PathBuf::from(&smithy_cache)).unwrap();
+    create_dir_all(PathBuf::from(&smithy_cache)).unwrap();
     // write a dummy file inside the smithy cache folder
-    std::fs::write(&path_to_test_file(&smithy_cache), b"junk").unwrap();
+    std::fs::write(path_to_test_file(&smithy_cache), b"junk").unwrap();
     (tmp_dir, smithy_cache)
 }
 

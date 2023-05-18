@@ -128,6 +128,9 @@ fn build_rust_actor(
     // Change directory into the project directory
     std::env::set_current_dir(&common_config.path)?;
 
+    let metadata = cargo_metadata::MetadataCommand::new().exec()?;
+    let target_path = metadata.target_directory.as_path();
+
     let result = command.args(["build", "--release"]).status()?;
 
     if !result.success() {
@@ -145,7 +148,7 @@ fn build_rust_actor(
         rust_config
             .target_path
             .clone()
-            .unwrap_or_else(|| PathBuf::from("target"))
+            .unwrap_or_else(|| PathBuf::from(target_path))
             .to_string_lossy(),
         actor_config.wasm_target,
         wasm_bin_name,

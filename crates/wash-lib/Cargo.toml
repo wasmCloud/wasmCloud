@@ -57,6 +57,7 @@ walkdir = { workspace = true }
 wascap = { workspace = true }
 weld-codegen = { workspace = true }
 cargo_toml = { workspace = true }
+cargo_metadata = "0.15"
 
 [dev-dependencies]
 claims = { workspace = true }

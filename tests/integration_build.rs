@@ -3,7 +3,7 @@ use anyhow::Result;
 mod common;
 use common::wash;
 use serial_test::serial;
-use std::{fs::File, path::PathBuf};
+use std::{fs::File, io::Write, path::PathBuf};
 use tempfile::TempDir;
 
 #[test]
@@ -46,6 +46,28 @@ fn build_rust_actor_signed() -> Result<()> {
     assert!(unsigned_file.exists(), "unsigned file not found!");
     let signed_file = project_dir.join("build/hello_s.wasm");
     assert!(signed_file.exists(), "signed file not found!");
+    Ok(())
+}
+
+#[test]
+fn build_rust_actor_in_workspace_unsigned() -> Result<()> {
+    let test_setup = init_workspace(vec![/* actor_names= */ "hello-1", "hello-2"])?;
+    let project_dir = test_setup.project_dirs.get(0).unwrap();
+    std::env::set_current_dir(project_dir)?;
+
+    let status = wash()
+        .args(["build", "--build-only"])
+        .status()
+        .expect("Failed to build project");
+
+    assert!(status.success());
+    let unsigned_file = project_dir.join("build/hello_1.wasm");
+    assert!(unsigned_file.exists(), "unsigned file not found!");
+    let signed_file = project_dir.join("build/hello_1_s.wasm");
+    assert!(
+        !signed_file.exists(),
+        "signed file should not exist when using --build-only!"
+    );
     Ok(())
 }
 
@@ -103,6 +125,15 @@ struct TestSetup {
     project_dir: PathBuf,
 }
 
+struct WorkspaceTestSetup {
+    /// The path to the directory for the test.
+    /// Added here so that the directory is not deleted until the end of the test.
+    #[allow(dead_code)]
+    test_dir: TempDir,
+    /// The path to the created actor's directory.
+    project_dirs: Vec<PathBuf>,
+}
+
 /// Inits an actor build test by setting up a test directory and creating an actor from a template.
 /// Returns the paths of the test directory and actor directory.
 fn init(actor_name: &str, template_name: &str) -> Result<TestSetup> {
@@ -113,6 +144,42 @@ fn init(actor_name: &str, template_name: &str) -> Result<TestSetup> {
     Ok(TestSetup {
         test_dir,
         project_dir,
+    })
+}
+
+/// Inits an actor build test by setting up a test directory and creating an actor from a template.
+/// Returns the paths of the test directory and actor directory.
+fn init_workspace(actor_names: Vec<&str>) -> Result<WorkspaceTestSetup> {
+    let test_dir = TempDir::new()?;
+    std::env::set_current_dir(&test_dir)?;
+    let project_dirs: Result<Vec<_>> = actor_names
+        .iter()
+        .map(|actor_name| {
+            let project_dir = init_actor_from_template(actor_name, "hello")?;
+            Result::<PathBuf>::Ok(project_dir)
+        })
+        .collect();
+    let project_dirs = project_dirs?;
+
+    let members = actor_names
+        .iter()
+        .map(|actor_name| format!("\"{actor_name}\""))
+        .collect::<Vec<_>>()
+        .join(",");
+    let cargo_toml = format!(
+        "
+    [workspace]
+    members = [{members}]
+    "
+    );
+
+    let mut cargo_path = PathBuf::from(test_dir.path());
+    cargo_path.push("Cargo.toml");
+    let mut file = File::create(cargo_path)?;
+    file.write_all(cargo_toml.as_bytes())?;
+    Ok(WorkspaceTestSetup {
+        test_dir,
+        project_dirs,
     })
 }
 
