@@ -27,6 +27,7 @@ async-nats = { workspace = true, optional = true}
 cargo_metadata = "0.15"
 cargo_toml = { workspace = true }
 clap = { workspace = true, features = ["derive", "env"], optional = true }
+cloudevents-sdk = { workspace = true }
 command-group = { workspace = true, features = ["with-tokio"] }
 config = { workspace = true, features = ["toml"], optional = true }
 console = { workspace = true, optional = true }
