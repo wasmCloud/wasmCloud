@@ -14,18 +14,30 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 use anyhow::Result;
+use clap::Args;
 use nkeys::{KeyPair, KeyPairType};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::config::cfg_dir;
-use crate::keys::{
-    fs::{read_key, KeyDir},
-    KeyManager,
+use crate::{
+    config::{
+        cfg_dir, context_dir, WashConnectionOptions, DEFAULT_LATTICE_PREFIX, DEFAULT_NATS_HOST,
+        DEFAULT_NATS_PORT, DEFAULT_NATS_TIMEOUT_MS,
+    },
+    context::{
+        default_timeout_ms, ensure_host_config_context,
+        fs::{load_context, ContextDir},
+        ContextManager,
+    },
+    keys::{
+        fs::{read_key, KeyDir},
+        KeyManager,
+    },
 };
 
 pub mod claims;
 pub mod inspect;
+pub mod link;
 
 /// Used for displaying human-readable output vs JSON format
 #[derive(Debug, Copy, Clone, Eq, Serialize, Deserialize, PartialEq)]
@@ -113,6 +125,112 @@ impl Default for CommandOutput {
             map: std::collections::HashMap::new(),
             text: "".to_string(),
         }
+    }
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct CliConnectionOpts {
+    /// CTL Host for connection, defaults to 127.0.0.1 for local nats
+    #[clap(short = 'r', long = "ctl-host", env = "WASMCLOUD_CTL_HOST")]
+    pub ctl_host: Option<String>,
+
+    /// CTL Port for connections, defaults to 4222 for local nats
+    #[clap(short = 'p', long = "ctl-port", env = "WASMCLOUD_CTL_PORT")]
+    pub ctl_port: Option<String>,
+
+    /// JWT file for CTL authentication. Must be supplied with ctl_seed.
+    #[clap(long = "ctl-jwt", env = "WASMCLOUD_CTL_JWT", hide_env_values = true)]
+    pub ctl_jwt: Option<String>,
+
+    /// Seed file or literal for CTL authentication. Must be supplied with ctl_jwt.
+    #[clap(long = "ctl-seed", env = "WASMCLOUD_CTL_SEED", hide_env_values = true)]
+    pub ctl_seed: Option<String>,
+
+    /// Credsfile for CTL authentication. Combines ctl_seed and ctl_jwt.
+    /// See https://docs.nats.io/developing-with-nats/security/creds for details.
+    #[clap(long = "ctl-credsfile", env = "WASH_CTL_CREDS", hide_env_values = true)]
+    pub ctl_credsfile: Option<PathBuf>,
+
+    /// JS domain for wasmcloud control interface. Defaults to None
+    #[clap(
+        long = "js-domain",
+        env = "WASMCLOUD_JS_DOMAIN",
+        hide_env_values = true
+    )]
+    pub js_domain: Option<String>,
+
+    /// Lattice prefix for wasmcloud control interface, defaults to "default"
+    #[clap(short = 'x', long = "lattice-prefix", env = "WASMCLOUD_LATTICE_PREFIX")]
+    pub lattice_prefix: Option<String>,
+
+    /// Timeout length to await a control interface response, defaults to 2000 milliseconds
+    #[clap(
+        short = 't',
+        long = "timeout-ms",
+        default_value_t = default_timeout_ms(),
+        env = "WASMCLOUD_CTL_TIMEOUT_MS"
+    )]
+    pub timeout_ms: u64,
+
+    /// Path to a context with values to use for CTL connection and authentication
+    #[clap(long = "context")]
+    pub context: Option<PathBuf>,
+}
+
+impl Default for CliConnectionOpts {
+    fn default() -> Self {
+        CliConnectionOpts {
+            ctl_host: Some(DEFAULT_NATS_HOST.to_string()),
+            ctl_port: Some(DEFAULT_NATS_PORT.to_string()),
+            ctl_jwt: None,
+            ctl_seed: None,
+            ctl_credsfile: None,
+            js_domain: None,
+            lattice_prefix: Some(DEFAULT_LATTICE_PREFIX.to_string()),
+            timeout_ms: DEFAULT_NATS_TIMEOUT_MS,
+            context: None,
+        }
+    }
+}
+
+impl TryFrom<CliConnectionOpts> for WashConnectionOptions {
+    type Error = anyhow::Error;
+
+    fn try_from(
+        CliConnectionOpts {
+            ctl_host,
+            ctl_port,
+            ctl_jwt,
+            ctl_seed,
+            ctl_credsfile,
+            js_domain,
+            lattice_prefix,
+            timeout_ms,
+            context,
+        }: CliConnectionOpts,
+    ) -> Result<WashConnectionOptions> {
+        // Attempt to load a context, falling back on the default if not supplied
+        let ctx = if let Some(context) = context {
+            Some(load_context(context)?)
+        } else if let Ok(ctx_dir) = context_dir(None) {
+            let ctx_dir = ContextDir::new(ctx_dir)?;
+            ensure_host_config_context(&ctx_dir)?;
+            Some(ctx_dir.load_default_context()?)
+        } else {
+            None
+        };
+
+        Ok(WashConnectionOptions {
+            ctl_host,
+            ctl_port,
+            ctl_jwt,
+            ctl_seed,
+            ctl_credsfile,
+            js_domain,
+            lattice_prefix,
+            timeout_ms,
+            ctx,
+        })
     }
 }
 

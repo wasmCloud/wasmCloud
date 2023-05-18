@@ -68,6 +68,7 @@ scopeguard = { workspace = true }
 sysinfo = { workspace = true }
 chrono = { workspace = true }
 serial_test = { workspace = true }
+rand = "0.8.5"
 
 [[bin]]
 bench = true

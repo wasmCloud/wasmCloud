@@ -12,22 +12,20 @@ use serde_json::json;
 use wash_lib::{
     cli::CommandOutput,
     config::{
-        cfg_dir, DEFAULT_LATTICE_PREFIX, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT,
-        DEFAULT_NATS_TIMEOUT_MS,
+        DEFAULT_LATTICE_PREFIX, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT, DEFAULT_NATS_TIMEOUT_MS,
     },
-    context::{
-        fs::{load_context, ContextDir},
-        ContextManager, WashContext, HOST_CONFIG_NAME,
-    },
+    context::{fs::ContextDir, ContextManager, WashContext, HOST_CONFIG_NAME},
     id::ClusterSeed,
 };
 
-use wash_lib::generate::{
-    interactive::{prompt_for_choice, user_question},
-    project_variables::StringEntry,
+use wash_lib::{
+    config::context_dir,
+    context::ensure_host_config_context,
+    generate::{
+        interactive::{prompt_for_choice, user_question},
+        project_variables::StringEntry,
+    },
 };
-
-const CTX_DIR_NAME: &str = "contexts";
 
 pub(crate) async fn handle_command(ctx_cmd: CtxCommand) -> Result<CommandOutput> {
     use CtxCommand::*;
@@ -247,36 +245,6 @@ fn handle_edit(cmd: EditCommand) -> Result<CommandOutput> {
             "Unable to find context supplied, please ensure it exists".to_string(),
         )
         .into())
-    }
-}
-
-/// Ensures the host config context exists
-pub(crate) fn ensure_host_config_context(context_dir: &ContextDir) -> Result<()> {
-    create_host_config_context(context_dir)
-}
-
-/// Load the host configuration file and create a context called `host_config` from it
-fn create_host_config_context(context_dir: &ContextDir) -> Result<()> {
-    let host_config_ctx = WashContext {
-        name: HOST_CONFIG_NAME.to_string(),
-        ..load_context(cfg_dir()?.join(format!("{HOST_CONFIG_NAME}.json")))
-            .unwrap_or_else(|_| WashContext::default())
-    };
-    context_dir.save_context(&host_config_ctx)?;
-    // Set the default context if it isn't set yet
-    if context_dir.default_context()?.is_none() {
-        context_dir.set_default_context(HOST_CONFIG_NAME)?;
-    }
-    Ok(())
-}
-
-/// Given an optional supplied directory, determine the context directory either from the supplied
-/// directory or using the home directory and the predefined `.wash/contexts` folder.
-pub(crate) fn context_dir(cmd_dir: Option<PathBuf>) -> Result<PathBuf> {
-    if let Some(dir) = cmd_dir {
-        Ok(dir)
-    } else {
-        Ok(cfg_dir()?.join(CTX_DIR_NAME))
     }
 }
 
