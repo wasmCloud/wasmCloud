@@ -131,7 +131,7 @@ thiserror = "1.0"
 tokio = { version = "1.28.1", default-features = false, features = ["fs"] }
 tokio-stream = "0.1"
 tokio-tar = "0.3"
-toml = "0.7.2"
+toml = "0.7.4"
 wadm = "0.4.0-alpha.2"
 walkdir = "2.3"
 wascap = "0.10.1"
