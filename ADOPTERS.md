@@ -11,5 +11,7 @@ We appreciate all our users and their contributions to making wasmCloud a succes
 | - | - | - | - |
 | [Cosmonic](https://www.cosmonic.com) | [@thomastaylor312](https://github.com/thomastaylor312) | ![production](https://img.shields.io/badge/-production-blue?style=flat) | Cosmonic is a distributed app platform built on wasmCloud for wasmCloud apps. |
 | [SigScale](https://www.sigscale.com) | [@vances](https://github.com/vances) | ![internal](https://img.shields.io/badge/-internal-green?style=flat) | Developing support for service logic as customer provided Actors |
+| [Orange](https://www.orange.com/) | [@ycardon-pro](https://github.com/ycardon-pro) | ![internal](https://img.shields.io/badge/-internal-green?style=flat) | Prototyping distributed rating in multi-tiers ecosystem |
+
 
 _This file is part of the CNCF official documentation for projects._
