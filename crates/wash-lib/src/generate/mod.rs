@@ -1,7 +1,6 @@
 //! Generate wasmCloud projects (WebAssembly actors, native capability providers, or contract interfaces) from templates
 
 use std::{
-    borrow::Borrow,
     fmt, fs,
     path::{Path, PathBuf},
     process::Stdio,
@@ -316,7 +315,7 @@ where
         .as_ref()
         .map_or_else(|| template_folder.to_owned(), |s| template_folder.join(s));
     loop {
-        let file_path = search_folder.join(name.borrow());
+        let file_path = search_folder.join(name);
         if file_path.exists() {
             return Ok(file_path);
         }
