@@ -1,6 +1,16 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
+use serde_json::json;
+use smithy::{GenerateCli, LintCli, ValidateCli};
+use wash_lib::{
+    cli::{
+        claims::ClaimsCliCommand, inspect::InspectCliCommand, link::LinkCommand, CommandOutput,
+        OutputKind,
+    },
+    drain::Drain as DrainSelection,
+};
+
 use app::AppCliCommand;
 use build::BuildCommand;
 use call::CallCli;
@@ -13,19 +23,14 @@ use generate::NewCliCommand;
 use keys::KeysCliCommand;
 use par::ParCliCommand;
 use reg::RegCliCommand;
-use serde_json::json;
-use smithy::{GenerateCli, LintCli, ValidateCli};
 use up::UpCommand;
-use wash_lib::cli::claims::ClaimsCliCommand;
-use wash_lib::cli::inspect::InspectCliCommand;
-use wash_lib::cli::{CommandOutput, OutputKind};
-use wash_lib::drain::Drain as DrainSelection;
 
 mod app;
 mod appearance;
 mod build;
 mod call;
 mod cfg;
+mod common;
 mod completions;
 mod ctl;
 mod ctx;
@@ -144,6 +149,9 @@ enum CliCommand {
     /// Perform lint checks on smithy models
     #[clap(name = "lint")]
     Lint(LintCli),
+    /// Link an actor and a provider
+    #[clap(name = "link", subcommand)]
+    Link(LinkCommand),
     /// Create a new project from template
     #[clap(name = "new", subcommand)]
     New(NewCliCommand),
@@ -189,6 +197,7 @@ async fn main() {
         }
         CliCommand::Keys(keys_cli) => keys::handle_command(keys_cli),
         CliCommand::Lint(lint_cli) => smithy::handle_lint_command(lint_cli).await,
+        CliCommand::Link(link_cli) => common::link_cmd::handle_command(link_cli, output_kind).await,
         CliCommand::New(new_cli) => generate::handle_command(new_cli).await,
         CliCommand::Par(par_cli) => par::handle_command(par_cli, output_kind).await,
         CliCommand::Reg(reg_cli) => reg::handle_command(reg_cli, output_kind).await,

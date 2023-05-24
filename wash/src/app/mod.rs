@@ -1,25 +1,18 @@
-use std::{collections::HashMap, path::PathBuf, time::Duration};
+use std::{collections::HashMap, path::PathBuf};
 
 use anyhow::{bail, Result};
-use async_nats::Client;
 use clap::{Args, Subcommand};
 use serde_json::json;
 use wadm::server::{
     DeleteModelResponse, DeployModelResponse, GetModelResponse, GetResult, ModelSummary,
     PutModelResponse, PutResult, VersionResponse,
 };
-use wash_lib::cli::{CommandOutput, OutputKind};
-use wash_lib::config::{DEFAULT_NATS_HOST, DEFAULT_NATS_PORT};
-use wash_lib::context::{
-    fs::{load_context, ContextDir},
-    ContextManager,
+use wash_lib::{
+    cli::{CliConnectionOpts, CommandOutput, OutputKind},
+    config::WashConnectionOptions,
 };
 
-use crate::{
-    appearance::spinner::Spinner,
-    ctl::ConnectionOpts,
-    ctx::{context_dir, ensure_host_config_context},
-};
+use crate::appearance::spinner::Spinner;
 
 mod output;
 
@@ -51,7 +44,7 @@ pub(crate) enum AppCliCommand {
 #[derive(Args, Debug, Clone)]
 pub(crate) struct ListCommand {
     #[clap(flatten)]
-    opts: ConnectionOpts,
+    opts: CliConnectionOpts,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -65,7 +58,7 @@ pub(crate) struct UndeployCommand {
     non_destructive: bool,
 
     #[clap(flatten)]
-    opts: ConnectionOpts,
+    opts: CliConnectionOpts,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -79,7 +72,7 @@ pub(crate) struct DeployCommand {
     version: Option<String>,
 
     #[clap(flatten)]
-    opts: ConnectionOpts,
+    opts: CliConnectionOpts,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -97,7 +90,7 @@ pub(crate) struct DeleteCommand {
     version: Option<String>,
 
     #[clap(flatten)]
-    opts: ConnectionOpts,
+    opts: CliConnectionOpts,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -106,7 +99,7 @@ pub(crate) struct PutCommand {
     source: PathBuf,
 
     #[clap(flatten)]
-    opts: ConnectionOpts,
+    opts: CliConnectionOpts,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -120,7 +113,7 @@ pub(crate) struct GetCommand {
     version: Option<String>,
 
     #[clap(flatten)]
-    opts: ConnectionOpts,
+    opts: CliConnectionOpts,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -130,7 +123,7 @@ pub(crate) struct HistoryCommand {
     model_name: String,
 
     #[clap(flatten)]
-    opts: ConnectionOpts,
+    opts: CliConnectionOpts,
 }
 
 pub(crate) async fn handle_command(
@@ -183,7 +176,10 @@ pub(crate) async fn handle_command(
 
 async fn undeploy_model(cmd: UndeployCommand) -> Result<DeployModelResponse> {
     let lattice_prefix = cmd.opts.lattice_prefix.clone();
-    let (client, _timeout) = nats_client_from_opts(cmd.opts).await?;
+    let (client, _timeout) =
+        <CliConnectionOpts as TryInto<WashConnectionOptions>>::try_into(cmd.opts)?
+            .into_nats_client()
+            .await?;
 
     wash_lib::app::undeploy_model(
         &client,
@@ -196,7 +192,10 @@ async fn undeploy_model(cmd: UndeployCommand) -> Result<DeployModelResponse> {
 
 async fn deploy_model(cmd: DeployCommand) -> Result<DeployModelResponse> {
     let lattice_prefix = cmd.opts.lattice_prefix.clone();
-    let (client, _timeout) = nats_client_from_opts(cmd.opts).await?;
+    let (client, _timeout) =
+        <CliConnectionOpts as TryInto<WashConnectionOptions>>::try_into(cmd.opts)?
+            .into_nats_client()
+            .await?;
 
     // If the model name is a file on disk, apply it and then deploy
     let model_name = if tokio::fs::metadata(&cmd.model_name).await.is_ok() {
@@ -220,7 +219,10 @@ async fn deploy_model(cmd: DeployCommand) -> Result<DeployModelResponse> {
 
 async fn put_model(cmd: PutCommand) -> Result<PutModelResponse> {
     let lattice_prefix = cmd.opts.lattice_prefix.clone();
-    let (client, _timeout) = nats_client_from_opts(cmd.opts).await?;
+    let (client, _timeout) =
+        <CliConnectionOpts as TryInto<WashConnectionOptions>>::try_into(cmd.opts)?
+            .into_nats_client()
+            .await?;
 
     wash_lib::app::put_model(
         &client,
@@ -232,21 +234,30 @@ async fn put_model(cmd: PutCommand) -> Result<PutModelResponse> {
 
 async fn get_model_history(cmd: HistoryCommand) -> Result<VersionResponse> {
     let lattice_prefix = cmd.opts.lattice_prefix.clone();
-    let (client, _timeout) = nats_client_from_opts(cmd.opts).await?;
+    let (client, _timeout) =
+        <CliConnectionOpts as TryInto<WashConnectionOptions>>::try_into(cmd.opts)?
+            .into_nats_client()
+            .await?;
 
     wash_lib::app::get_model_history(&client, lattice_prefix, &cmd.model_name).await
 }
 
 async fn get_model_details(cmd: GetCommand) -> Result<GetModelResponse> {
     let lattice_prefix = cmd.opts.lattice_prefix.clone();
-    let (client, _timeout) = nats_client_from_opts(cmd.opts).await?;
+    let (client, _timeout) =
+        <CliConnectionOpts as TryInto<WashConnectionOptions>>::try_into(cmd.opts)?
+            .into_nats_client()
+            .await?;
 
     wash_lib::app::get_model_details(&client, lattice_prefix, &cmd.model_name, cmd.version).await
 }
 
 async fn delete_model_version(cmd: DeleteCommand) -> Result<DeleteModelResponse> {
     let lattice_prefix = cmd.opts.lattice_prefix.clone();
-    let (client, _timeout) = nats_client_from_opts(cmd.opts).await?;
+    let (client, _timeout) =
+        <CliConnectionOpts as TryInto<WashConnectionOptions>>::try_into(cmd.opts)?
+            .into_nats_client()
+            .await?;
 
     wash_lib::app::delete_model_version(
         &client,
@@ -260,7 +271,10 @@ async fn delete_model_version(cmd: DeleteCommand) -> Result<DeleteModelResponse>
 
 async fn get_models(cmd: ListCommand) -> Result<Vec<ModelSummary>> {
     let lattice_prefix = cmd.opts.lattice_prefix.clone();
-    let (client, _timeout) = nats_client_from_opts(cmd.opts).await?;
+    let (client, _timeout) =
+        <CliConnectionOpts as TryInto<WashConnectionOptions>>::try_into(cmd.opts)?
+            .into_nats_client()
+            .await?;
 
     wash_lib::app::get_models(&client, lattice_prefix).await
 }
@@ -310,57 +324,4 @@ fn show_model_history(results: VersionResponse) -> CommandOutput {
     let mut map = HashMap::new();
     map.insert("revisions".to_string(), json!(results));
     CommandOutput::new(output::list_revisions_table(results.versions), map)
-}
-
-async fn nats_client_from_opts(opts: ConnectionOpts) -> Result<(Client, Duration)> {
-    // Attempt to load a context, falling back on the default if not supplied
-    let ctx = if let Some(context) = opts.context {
-        Some(load_context(context)?)
-    } else if let Ok(ctx_dir) = context_dir(None) {
-        let ctx_dir = ContextDir::new(ctx_dir)?;
-        ensure_host_config_context(&ctx_dir)?;
-        Some(ctx_dir.load_default_context()?)
-    } else {
-        None
-    };
-
-    let ctl_host = opts.ctl_host.unwrap_or_else(|| {
-        ctx.as_ref()
-            .map(|c| c.ctl_host.clone())
-            .unwrap_or_else(|| DEFAULT_NATS_HOST.to_string())
-    });
-
-    let ctl_port = opts.ctl_port.unwrap_or_else(|| {
-        ctx.as_ref()
-            .map(|c| c.ctl_port.to_string())
-            .unwrap_or_else(|| DEFAULT_NATS_PORT.to_string())
-    });
-
-    let ctl_jwt = if opts.ctl_jwt.is_some() {
-        opts.ctl_jwt
-    } else {
-        ctx.as_ref().map(|c| c.ctl_jwt.clone()).unwrap_or_default()
-    };
-
-    let ctl_seed = if opts.ctl_seed.is_some() {
-        opts.ctl_seed
-    } else {
-        ctx.as_ref().map(|c| c.ctl_seed.clone()).unwrap_or_default()
-    };
-
-    let ctl_credsfile = if opts.ctl_credsfile.is_some() {
-        opts.ctl_credsfile
-    } else {
-        ctx.as_ref()
-            .map(|c| c.ctl_credsfile.clone())
-            .unwrap_or_default()
-    };
-
-    let nc =
-        crate::util::nats_client_from_opts(&ctl_host, &ctl_port, ctl_jwt, ctl_seed, ctl_credsfile)
-            .await?;
-
-    let timeout = Duration::from_millis(opts.timeout_ms);
-
-    Ok((nc, timeout))
 }
