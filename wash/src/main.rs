@@ -5,7 +5,7 @@ use serde_json::json;
 use smithy::{GenerateCli, LintCli, ValidateCli};
 use wash_lib::{
     cli::{
-        claims::ClaimsCliCommand, inspect::InspectCliCommand, link::LinkCommand,
+        claims::ClaimsCliCommand, get::GetCommand, inspect::InspectCliCommand, link::LinkCommand,
         start::StartCommand, stop::StopCommand, CommandOutput, OutputKind,
     },
     drain::Drain as DrainSelection,
@@ -139,6 +139,9 @@ enum CliCommand {
     /// Generate code from smithy IDL files
     #[clap(name = "gen")]
     Gen(GenerateCli),
+    /// Get information about different resources
+    #[clap(name = "get", subcommand)]
+    Get(GetCommand),
     /// Inspect capability provider or actor module
     #[clap(name = "inspect")]
     Inspect(InspectCliCommand),
@@ -202,6 +205,7 @@ async fn main() {
         CliCommand::Ctx(ctx_cli) => ctx::handle_command(ctx_cli).await,
         CliCommand::Down(down_cli) => down::handle_command(down_cli, output_kind).await,
         CliCommand::Drain(drain_cli) => drain::handle_command(drain_cli),
+        CliCommand::Get(get_cli) => common::get_cmd::handle_command(get_cli, output_kind).await,
         CliCommand::Gen(generate_cli) => smithy::handle_gen_command(generate_cli),
         CliCommand::Inspect(inspect_cli) => {
             wash_lib::cli::inspect::handle_command(inspect_cli, output_kind).await

@@ -1,16 +1,15 @@
 use anyhow::{Context, Result};
-use serial_test::serial;
+use tokio::process::Command;
 
 mod common;
-use common::{wash, TestWashInstance, ECHO_OCI_REF, PROVIDER_HTTPSERVER_OCI_REF};
-use wash_lib::cli::output::{StartCommandJsonOutput, StopCommandJsonOutput};
+use common::{TestWashInstance, ECHO_OCI_REF, PROVIDER_HTTPSERVER_OCI_REF};
+use wash_lib::cli::output::{StartCommandOutput, StopCommandOutput};
 
 #[tokio::test]
-#[serial]
-async fn integration_stop_actor() -> Result<()> {
+async fn integration_stop_actor_serial() -> Result<()> {
     let wash_instance = TestWashInstance::create().await?;
 
-    let output = wash()
+    let output = Command::new(env!("CARGO_BIN_EXE_wash"))
         .args([
             "start",
             "actor",
@@ -21,10 +20,11 @@ async fn integration_stop_actor() -> Result<()> {
             "20000",
         ])
         .output()
+        .await
         .context("failed to start actor")?;
     assert!(output.status.success(), "executed start");
 
-    let StartCommandJsonOutput {
+    let StartCommandOutput {
         actor_id,
         actor_ref,
         host_id,
@@ -39,14 +39,15 @@ async fn integration_stop_actor() -> Result<()> {
     assert_eq!(host_id, wash_instance.host_id, "host_id matches");
 
     // Stop the actor
-    let output = wash()
+    let output = Command::new(env!("CARGO_BIN_EXE_wash"))
         .args(["stop", "actor", &host_id, &actor_id, "--output", "json"])
         .output()
+        .await
         .context("failed to stop actor")?;
 
     assert!(output.status.success(), "executed stop");
 
-    let cmd_output: StopCommandJsonOutput =
+    let cmd_output: StopCommandOutput =
         serde_json::from_slice(&output.stdout).context("failed to parse stop output")?;
     assert!(cmd_output.success, "command returned success");
 
@@ -54,11 +55,10 @@ async fn integration_stop_actor() -> Result<()> {
 }
 
 #[tokio::test]
-#[serial]
-async fn integration_stop_provider() -> Result<()> {
+async fn integration_stop_provider_serial() -> Result<()> {
     let wash_instance = TestWashInstance::create().await?;
 
-    let output = wash()
+    let output = Command::new(env!("CARGO_BIN_EXE_wash"))
         .args([
             "start",
             "provider",
@@ -69,10 +69,11 @@ async fn integration_stop_provider() -> Result<()> {
             "20000",
         ])
         .output()
+        .await
         .context("failed to start actor")?;
     assert!(output.status.success(), "executed start");
 
-    let StartCommandJsonOutput {
+    let StartCommandOutput {
         provider_id,
         provider_ref,
         host_id,
@@ -93,7 +94,7 @@ async fn integration_stop_provider() -> Result<()> {
     let link_name = link_name.expect("missing link_name from start command output");
     let contract_id = contract_id.expect("missing contract_id from start command output");
 
-    let output = wash()
+    let output = Command::new(env!("CARGO_BIN_EXE_wash"))
         .args([
             "stop",
             "provider",
@@ -105,11 +106,12 @@ async fn integration_stop_provider() -> Result<()> {
             "json",
         ])
         .output()
+        .await
         .context("failed to stop provider")?;
 
     assert!(output.status.success(), "executed stop");
 
-    let cmd_output: StopCommandJsonOutput =
+    let cmd_output: StopCommandOutput =
         serde_json::from_slice(&output.stdout).context("failed to parse stop output")?;
     assert!(cmd_output.success, "command returned success");
 
@@ -117,18 +119,18 @@ async fn integration_stop_provider() -> Result<()> {
 }
 
 #[tokio::test]
-#[serial]
-async fn integration_stop_host() -> Result<()> {
+async fn integration_stop_host_serial() -> Result<()> {
     let wash_instance = TestWashInstance::create().await?;
 
-    let output = wash()
+    let output = Command::new(env!("CARGO_BIN_EXE_wash"))
         .args(["stop", "host", &wash_instance.host_id, "--output", "json"])
         .output()
+        .await
         .context("failed to stop provider")?;
 
     assert!(output.status.success(), "executed stop");
 
-    let cmd_output: StopCommandJsonOutput =
+    let cmd_output: StopCommandOutput =
         serde_json::from_slice(&output.stdout).context("failed to parse output")?;
     assert!(cmd_output.success, "command returned success");
 

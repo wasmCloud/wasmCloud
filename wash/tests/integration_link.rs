@@ -1,18 +1,19 @@
 use anyhow::{Context, Result};
-use serial_test::serial;
+use tokio::process::Command;
 use wash_lib::cli::output::LinkQueryOutput;
 
 mod common;
-use common::{wash, TestWashInstance};
+use common::TestWashInstance;
 
 #[tokio::test]
-#[serial]
-async fn integration_link() -> Result<()> {
+async fn integration_link_serial() -> Result<()> {
     let _wash = TestWashInstance::create().await?;
 
-    let output = wash()
+    let output = Command::new(env!("CARGO_BIN_EXE_wash"))
         .args(["link", "query", "--output", "json"])
+        .kill_on_drop(true)
         .output()
+        .await
         .context("failed to execute link query")?;
 
     assert!(output.status.success(), "executed link query");
