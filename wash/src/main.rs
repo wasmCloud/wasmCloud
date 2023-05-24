@@ -15,6 +15,7 @@ use app::AppCliCommand;
 use build::BuildCommand;
 use call::CallCli;
 use clap::{Parser, Subcommand};
+use common::start_cmd::StartCommand;
 use completions::CompletionOpts;
 use ctl::CtlCliCommand;
 use ctx::CtxCommand;
@@ -161,6 +162,9 @@ enum CliCommand {
     /// Interact with OCI compliant registries
     #[clap(name = "reg", subcommand)]
     Reg(RegCliCommand),
+    /// Start an actor or a provider
+    #[clap(name = "start", subcommand)]
+    Start(StartCommand),
     /// Bootstrap a wasmCloud environment
     #[clap(name = "up")]
     Up(UpCommand),
@@ -201,6 +205,9 @@ async fn main() {
         CliCommand::New(new_cli) => generate::handle_command(new_cli).await,
         CliCommand::Par(par_cli) => par::handle_command(par_cli, output_kind).await,
         CliCommand::Reg(reg_cli) => reg::handle_command(reg_cli, output_kind).await,
+        CliCommand::Start(start_cli) => {
+            common::start_cmd::handle_command(start_cli, output_kind).await
+        }
         CliCommand::Up(up_cli) => up::handle_command(up_cli, output_kind).await,
         CliCommand::Validate(validate_cli) => smithy::handle_validate_command(validate_cli).await,
     };

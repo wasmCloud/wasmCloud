@@ -1,16 +1,11 @@
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
-use std::{
-    path::{Path, PathBuf},
-    time::Duration,
-};
+use std::{path::Path, time::Duration};
 use wash_lib::{
     cli::{labels_vec_to_hashmap, link::LinkCommand, CliConnectionOpts, CommandOutput, OutputKind},
-    config::{
-        WashConnectionOptions, DEFAULT_NATS_TIMEOUT_MS, DEFAULT_START_ACTOR_TIMEOUT_MS,
-        DEFAULT_START_PROVIDER_TIMEOUT_MS,
-    },
+    config::WashConnectionOptions,
     id::{ModuleId, ServerId, ServiceId},
+    wait::{wait_for_actor_stop_event, wait_for_provider_stop_event, FindEventOutcome},
 };
 use wasmcloud_control_interface::{
     Client as CtlClient, CtlOperationAck, GetClaimsResponse, Host, HostInventory,
@@ -19,18 +14,14 @@ use wasmcloud_control_interface::{
 use crate::{
     appearance::spinner::Spinner,
     common::link_cmd::handle_command as handle_link_command,
+    common::start_cmd::{handle_command as handle_start_command, StartCommand},
     ctl::manifest::HostManifest,
     util::{convert_error, default_timeout_ms, validate_contract_id},
 };
 pub(crate) use output::*;
-use wait::{
-    wait_for_actor_start_event, wait_for_actor_stop_event, wait_for_provider_start_event,
-    wait_for_provider_stop_event, FindEventOutcome,
-};
 
 mod manifest;
 mod output;
-mod wait;
 
 // default start actor command starts with one actor
 const ONE_ACTOR: u16 = 1;
@@ -96,17 +87,6 @@ pub(crate) enum GetCommand {
     /// Query lattice for its claims cache
     #[clap(name = "claims")]
     Claims(GetClaimsCommand),
-}
-
-#[derive(Debug, Clone, Parser)]
-pub(crate) enum StartCommand {
-    /// Launch an actor in a host
-    #[clap(name = "actor")]
-    Actor(StartActorCommand),
-
-    /// Launch a provider in a host
-    #[clap(name = "provider")]
-    Provider(StartProviderCommand),
 }
 
 #[derive(Debug, Clone, Parser)]
@@ -188,74 +168,7 @@ pub(crate) struct GetClaimsCommand {
 }
 
 #[derive(Debug, Clone, Parser)]
-pub(crate) struct StartActorCommand {
-    #[clap(flatten)]
-    opts: CliConnectionOpts,
 
-    /// Id of host, if omitted the actor will be auctioned in the lattice to find a suitable host
-    #[clap(long = "host-id", name = "host-id", value_parser)]
-    pub(crate) host_id: Option<ServerId>,
-
-    /// Actor reference, e.g. the OCI URL for the actor.
-    #[clap(name = "actor-ref")]
-    pub(crate) actor_ref: String,
-
-    /// Number of actors to start
-    #[clap(long = "count", default_value = "1")]
-    pub(crate) count: u16,
-
-    /// Constraints for actor auction in the form of "label=value". If host-id is supplied, this list is ignored
-    #[clap(short = 'c', long = "constraint", name = "constraints")]
-    constraints: Option<Vec<String>>,
-
-    /// Timeout to await an auction response, defaults to 2000 milliseconds
-    #[clap(long = "auction-timeout-ms", default_value_t = default_timeout_ms())]
-    auction_timeout_ms: u64,
-
-    /// By default, the command will wait until the actor has been started.
-    /// If this flag is passed, the command will return immediately after acknowledgement from the host, without waiting for the actor to start.
-    /// If this flag is omitted, the timeout will be adjusted to 5 seconds to account for actor download times
-    #[clap(long = "skip-wait")]
-    skip_wait: bool,
-}
-
-#[derive(Debug, Clone, Parser)]
-pub(crate) struct StartProviderCommand {
-    #[clap(flatten)]
-    opts: CliConnectionOpts,
-
-    /// Id of host, if omitted the provider will be auctioned in the lattice to find a suitable host
-    #[clap(long = "host-id", name = "host-id", value_parser)]
-    host_id: Option<ServerId>,
-
-    /// Provider reference, e.g. the OCI URL for the provider
-    #[clap(name = "provider-ref")]
-    pub(crate) provider_ref: String,
-
-    /// Link name of provider
-    #[clap(short = 'l', long = "link-name", default_value = "default")]
-    pub(crate) link_name: String,
-
-    /// Constraints for provider auction in the form of "label=value". If host-id is supplied, this list is ignored
-    #[clap(short = 'c', long = "constraint", name = "constraints")]
-    constraints: Option<Vec<String>>,
-
-    /// Timeout to await an auction response, defaults to 2000 milliseconds
-    #[clap(long = "auction-timeout-ms", default_value_t = default_timeout_ms())]
-    auction_timeout_ms: u64,
-
-    /// Path to provider configuration JSON file
-    #[clap(long = "config-json")]
-    config_json: Option<PathBuf>,
-
-    /// By default, the command will wait until the provider has been started.
-    /// If this flag is passed, the command will return immediately after acknowledgement from the host, without waiting for the provider to start.
-    /// If this flag is omitted, the timeout will be adjusted to 30 seconds to account for provider download times
-    #[clap(long = "skip-wait")]
-    skip_wait: bool,
-}
-
-#[derive(Debug, Clone, Parser)]
 pub(crate) struct StopActorCommand {
     #[clap(flatten)]
     opts: CliConnectionOpts,
@@ -371,20 +284,7 @@ pub(crate) async fn handle_command(
             get_claims_output(claims)
         }
         Link(cmd) => handle_link_command(cmd, output_kind).await?,
-        Start(StartCommand::Actor(cmd)) => {
-            let actor_ref = &cmd.actor_ref.to_string();
-
-            sp.update_spinner_message(format!(" Starting actor {actor_ref} ... "));
-
-            start_actor(cmd).await?
-        }
-        Start(StartCommand::Provider(cmd)) => {
-            let provider_ref = &cmd.provider_ref.to_string();
-
-            sp.update_spinner_message(format!(" Starting provider {provider_ref} ... "));
-
-            start_provider(cmd).await?
-        }
+        Start(cmd) => handle_start_command(cmd, output_kind).await?,
         Stop(StopCommand::Actor(cmd)) => {
             sp.update_spinner_message(format!(" Stopping actor {} ... ", cmd.actor_id));
 
@@ -467,207 +367,6 @@ pub(crate) async fn get_claims(cmd: GetClaimsCommand) -> Result<GetClaimsRespons
         .map_err(convert_error)
         // TODO(mattwilkinsonn): Use Client Debug impl when merged: https://github.com/wasmCloud/control-interface-client/pull/35
         .context("Was able to connect to NATS, but failed to get claims.")
-}
-
-pub(crate) async fn start_actor(cmd: StartActorCommand) -> Result<CommandOutput> {
-    // If timeout isn't supplied, override with a longer timeout for starting actor
-    let timeout_ms = if cmd.opts.timeout_ms == DEFAULT_NATS_TIMEOUT_MS {
-        DEFAULT_START_ACTOR_TIMEOUT_MS
-    } else {
-        cmd.opts.timeout_ms
-    };
-    let wco: WashConnectionOptions = cmd.opts.try_into()?;
-    let client = wco.into_ctl_client(Some(cmd.auction_timeout_ms)).await?;
-
-    let host = match cmd.host_id {
-        Some(host) => host,
-        None => {
-            let suitable_hosts = client
-                .perform_actor_auction(
-                    &cmd.actor_ref,
-                    labels_vec_to_hashmap(cmd.constraints.unwrap_or_default())?,
-                )
-                .await
-                .map_err(convert_error)
-                .with_context(|| {
-                    format!(
-                        "Failed to auction actor {} to hosts in lattice",
-                        &cmd.actor_ref
-                    )
-                })?;
-            if suitable_hosts.is_empty() {
-                bail!("No suitable hosts found for actor {}", cmd.actor_ref);
-            } else {
-                suitable_hosts[0].host_id.parse().with_context(|| {
-                    format!("Failed to parse host id: {}", suitable_hosts[0].host_id)
-                })?
-            }
-        }
-    };
-
-    let mut receiver = client
-        .events_receiver()
-        .await
-        .map_err(convert_error)
-        .context("Failed to get lattice event channel")?;
-
-    let ack = client
-        .start_actor(&host.to_string(), &cmd.actor_ref, cmd.count, None)
-        .await
-        .map_err(convert_error)
-        .with_context(|| format!("Failed to start actor: {}", &cmd.actor_ref))?;
-
-    if !ack.accepted {
-        bail!("Start actor ack not accepted: {}", ack.error);
-    }
-
-    if cmd.skip_wait {
-        return Ok(CommandOutput::from_key_and_text(
-            "result",
-            format!(
-                "Start actor request received: {}, host: {}",
-                &cmd.actor_ref, &host
-            ),
-        ));
-    }
-
-    let event = wait_for_actor_start_event(
-        &mut receiver,
-        Duration::from_millis(timeout_ms),
-        host.to_string(),
-        cmd.actor_ref.clone(),
-    )
-    .await
-    .with_context(|| {
-        format!(
-            "Timed out waitng for start event for actor {} on host {}",
-            &cmd.actor_ref, &host
-        )
-    })?;
-
-    match event {
-        FindEventOutcome::Success(_) => Ok(CommandOutput::from_key_and_text(
-            "result",
-            format!("Actor {} started on host {}", cmd.actor_ref, host),
-        )),
-        FindEventOutcome::Failure(err) => Err(err)
-            .with_context(|| format!("Failed to start actor {} on host {}", &cmd.actor_ref, &host)),
-    }
-}
-
-pub(crate) async fn start_provider(cmd: StartProviderCommand) -> Result<CommandOutput> {
-    // If timeout isn't supplied, override with a longer timeout for starting provider
-    let timeout_ms = if cmd.opts.timeout_ms == DEFAULT_NATS_TIMEOUT_MS {
-        DEFAULT_START_PROVIDER_TIMEOUT_MS
-    } else {
-        cmd.opts.timeout_ms
-    };
-    let wco: WashConnectionOptions = cmd.opts.try_into()?;
-    let client = wco.into_ctl_client(Some(cmd.auction_timeout_ms)).await?;
-
-    let host = match cmd.host_id {
-        Some(host) => host,
-        None => {
-            let suitable_hosts = client
-                .perform_provider_auction(
-                    &cmd.provider_ref,
-                    &cmd.link_name,
-                    labels_vec_to_hashmap(cmd.constraints.unwrap_or_default())?,
-                )
-                .await
-                .map_err(convert_error)
-                .with_context(|| {
-                    format!(
-                        "Failed to auction provider {} with link name {} to hosts in lattice",
-                        &cmd.provider_ref, &cmd.link_name
-                    )
-                })?;
-            if suitable_hosts.is_empty() {
-                bail!("No suitable hosts found for provider {}", cmd.provider_ref);
-            } else {
-                suitable_hosts[0].host_id.parse().with_context(|| {
-                    format!("Failed to parse host id: {}", suitable_hosts[0].host_id)
-                })?
-            }
-        }
-    };
-
-    let config_json = if let Some(config_path) = cmd.config_json {
-        let config_str = match std::fs::read_to_string(&config_path) {
-            Ok(s) => s,
-            Err(e) => bail!("Error reading provider configuration: {}", e),
-        };
-        match serde_json::from_str::<serde_json::Value>(&config_str) {
-            Ok(_v) => Some(config_str),
-            _ => bail!(
-                "Configuration path provided but was invalid JSON: {}",
-                config_path.display()
-            ),
-        }
-    } else {
-        None
-    };
-
-    let mut receiver = client
-        .events_receiver()
-        .await
-        .map_err(convert_error)
-        .context("Failed to get lattice event channel")?;
-
-    let ack = client
-        .start_provider(
-            &host.to_string(),
-            &cmd.provider_ref,
-            Some(cmd.link_name.clone()),
-            None,
-            config_json.clone(),
-        )
-        .await
-        .map_err(convert_error)
-        .with_context(|| {
-            format!(
-                "Failed to start provider {} on host {:?} with link name {} and configuration {:?}",
-                &cmd.provider_ref, &host, &cmd.link_name, &config_json
-            )
-        })?;
-
-    if !ack.accepted {
-        bail!("Start provider ack not accepted: {}", ack.error);
-    }
-
-    if cmd.skip_wait {
-        return Ok(CommandOutput::from_key_and_text(
-            "result",
-            format!("Start provider request received: {}", &cmd.provider_ref),
-        ));
-    }
-
-    let event = wait_for_provider_start_event(
-        &mut receiver,
-        Duration::from_millis(timeout_ms),
-        host.to_string(),
-        cmd.provider_ref.clone(),
-    )
-    .await
-    .with_context(|| {
-        format!(
-            "Timed out waiting for start event for provider {} on host {}",
-            &cmd.provider_ref, &host
-        )
-    })?;
-
-    match event {
-        FindEventOutcome::Success(_) => Ok(CommandOutput::from_key_and_text(
-            "result",
-            format!("Provider {} started on host {}", cmd.provider_ref, host),
-        )),
-        FindEventOutcome::Failure(err) => Err(err).with_context(|| {
-            format!(
-                "Failed starting provider {} on host {}",
-                &cmd.provider_ref, &host
-            )
-        }),
-    }
 }
 
 pub(crate) async fn scale_actor(cmd: ScaleActorCommand) -> Result<CommandOutput> {
@@ -932,6 +631,7 @@ async fn apply_manifest_providers(
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::CtlCliCommand;
     use clap::Parser;
 
     #[derive(Parser)]
@@ -954,93 +654,6 @@ mod test {
     /// change between versions. This test will fail if any subcommand of `wash ctl`
     /// changes syntax, ordering of required elements, or flags.
     fn test_ctl_comprehensive() -> Result<()> {
-        let start_actor_all: Cmd = Parser::try_parse_from([
-            "ctl",
-            "start",
-            "actor",
-            "--lattice-prefix",
-            LATTICE_PREFIX,
-            "--ctl-host",
-            CTL_HOST,
-            "--ctl-port",
-            CTL_PORT,
-            "--timeout-ms",
-            "2001",
-            "--auction-timeout-ms",
-            "2002",
-            "--constraint",
-            "arch=x86_64",
-            "--host-id",
-            HOST_ID,
-            "wasmcloud.azurecr.io/actor:v1",
-        ])?;
-        match start_actor_all.command {
-            CtlCliCommand::Start(StartCommand::Actor(super::StartActorCommand {
-                opts,
-                host_id,
-                actor_ref,
-                constraints,
-                auction_timeout_ms,
-                ..
-            })) => {
-                assert_eq!(&opts.ctl_host.unwrap(), CTL_HOST);
-                assert_eq!(&opts.ctl_port.unwrap(), CTL_PORT);
-                assert_eq!(&opts.lattice_prefix.unwrap(), LATTICE_PREFIX);
-                assert_eq!(auction_timeout_ms, 2002);
-                assert_eq!(host_id.unwrap(), HOST_ID.parse()?);
-                assert_eq!(actor_ref, "wasmcloud.azurecr.io/actor:v1".to_string());
-                assert_eq!(constraints.unwrap(), vec!["arch=x86_64".to_string()]);
-            }
-            cmd => panic!("ctl start actor constructed incorrect command {cmd:?}"),
-        }
-        let start_provider_all: Cmd = Parser::try_parse_from([
-            "ctl",
-            "start",
-            "provider",
-            "--lattice-prefix",
-            LATTICE_PREFIX,
-            "--ctl-host",
-            CTL_HOST,
-            "--ctl-port",
-            CTL_PORT,
-            "--timeout-ms",
-            "2001",
-            "--auction-timeout-ms",
-            "2002",
-            "--constraint",
-            "arch=x86_64",
-            "--host-id",
-            HOST_ID,
-            "--link-name",
-            "default",
-            "--skip-wait",
-            "wasmcloud.azurecr.io/provider:v1",
-        ])?;
-        match start_provider_all.command {
-            CtlCliCommand::Start(StartCommand::Provider(super::StartProviderCommand {
-                opts,
-                host_id,
-                provider_ref,
-                link_name,
-                constraints,
-                auction_timeout_ms,
-                config_json,
-                skip_wait,
-            })) => {
-                assert_eq!(&opts.ctl_host.unwrap(), CTL_HOST);
-                assert_eq!(&opts.ctl_port.unwrap(), CTL_PORT);
-                assert_eq!(&opts.lattice_prefix.unwrap(), LATTICE_PREFIX);
-                assert_eq!(opts.timeout_ms, 2001);
-                assert_eq!(config_json, None);
-                assert_eq!(auction_timeout_ms, 2002);
-                assert_eq!(link_name, "default".to_string());
-                assert_eq!(constraints.unwrap(), vec!["arch=x86_64".to_string()]);
-                assert_eq!(host_id.unwrap(), HOST_ID.parse()?);
-                assert_eq!(provider_ref, "wasmcloud.azurecr.io/provider:v1".to_string());
-                assert!(skip_wait);
-            }
-            cmd => panic!("ctl start provider constructed incorrect command {cmd:?}"),
-        }
         let stop_actor_all: Cmd = Parser::try_parse_from([
             "ctl",
             "stop",
@@ -1286,7 +899,7 @@ mod test {
         ])?;
 
         match scale_actor_all.command {
-            CtlCliCommand::Scale(ScaleCommand::Actor(super::ScaleActorCommand {
+            crate::CtlCliCommand::Scale(ScaleCommand::Actor(super::ScaleActorCommand {
                 opts,
                 host_id,
                 actor_id,
