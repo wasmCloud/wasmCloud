@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
@@ -13,8 +14,22 @@ use crate::{
     },
     context::default_timeout_ms,
     id::ServerId,
-    wait::{wait_for_actor_start_event, wait_for_provider_start_event, FindEventOutcome},
+    wait::{
+        wait_for_actor_start_event, wait_for_provider_start_event, ActorStartedInfo,
+        FindEventOutcome, ProviderStartedInfo,
+    },
 };
+
+#[derive(Debug, Clone, Parser)]
+pub enum StartCommand {
+    /// Launch an actor in a host
+    #[clap(name = "actor")]
+    Actor(StartActorCommand),
+
+    /// Launch a provider in a host
+    #[clap(name = "provider")]
+    Provider(StartProviderCommand),
+}
 
 #[derive(Debug, Clone, Parser)]
 pub struct StartActorCommand {
@@ -102,12 +117,17 @@ pub async fn start_actor(cmd: StartActorCommand) -> Result<CommandOutput> {
     }
 
     if cmd.skip_wait {
-        return Ok(CommandOutput::from_key_and_text(
-            "result",
-            format!(
-                "Start actor request received: {}, host: {}",
-                &cmd.actor_ref, &host
-            ),
+        let text = format!(
+            "Start actor request received: {}, host: {}",
+            &cmd.actor_ref, &host
+        );
+        return Ok(CommandOutput::new(
+            text.clone(),
+            HashMap::from([
+                ("result".into(), text.into()),
+                ("actor_ref".into(), cmd.actor_ref.into()),
+                ("host_id".into(), host.to_string().into()),
+            ]),
         ));
     }
 
@@ -126,10 +146,25 @@ pub async fn start_actor(cmd: StartActorCommand) -> Result<CommandOutput> {
     })?;
 
     match event {
-        FindEventOutcome::Success(_) => Ok(CommandOutput::from_key_and_text(
-            "result",
-            format!("Actor {} started on host {}", cmd.actor_ref, host),
-        )),
+        FindEventOutcome::Success(ActorStartedInfo {
+            actor_id,
+            host_id,
+            actor_ref,
+        }) => {
+            let text = format!(
+                "Actor [{}] (ref: [{}]) started on host [{}]",
+                &actor_id, &actor_ref, &host_id
+            );
+            Ok(CommandOutput::new(
+                text.clone(),
+                HashMap::from([
+                    ("result".into(), text.into()),
+                    ("actor_ref".into(), actor_ref.into()),
+                    ("actor_id".into(), actor_id.into()),
+                    ("host_id".into(), host_id.into()),
+                ]),
+            ))
+        }
         FindEventOutcome::Failure(err) => Err(err)
             .with_context(|| format!("Failed to start actor {} on host {}", &cmd.actor_ref, &host)),
     }
@@ -253,9 +288,15 @@ pub async fn start_provider(cmd: StartProviderCommand) -> Result<CommandOutput> 
     }
 
     if cmd.skip_wait {
-        return Ok(CommandOutput::from_key_and_text(
-            "result",
-            format!("Start provider request received: {}", &cmd.provider_ref),
+        let text = format!("Start provider request received: {}", &cmd.provider_ref);
+        return Ok(CommandOutput::new(
+            text.clone(),
+            HashMap::from([
+                ("result".into(), text.into()),
+                ("provider_ref".into(), cmd.provider_ref.into()),
+                ("link_name".into(), cmd.link_name.into()),
+                ("host_id".into(), host.to_string().into()),
+            ]),
         ));
     }
 
@@ -274,10 +315,29 @@ pub async fn start_provider(cmd: StartProviderCommand) -> Result<CommandOutput> 
     })?;
 
     match event {
-        FindEventOutcome::Success(_) => Ok(CommandOutput::from_key_and_text(
-            "result",
-            format!("Provider {} started on host {}", cmd.provider_ref, host),
-        )),
+        FindEventOutcome::Success(ProviderStartedInfo {
+            provider_id,
+            provider_ref,
+            host_id,
+            contract_id,
+            link_name,
+        }) => {
+            let text = format!(
+                "Provider [{}] (ref: [{}]) started on host [{}]",
+                &provider_id, &provider_ref, &host_id
+            );
+            Ok(CommandOutput::new(
+                text.clone(),
+                HashMap::from([
+                    ("result".into(), text.into()),
+                    ("provider_ref".into(), provider_ref.into()),
+                    ("provider_id".into(), provider_id.into()),
+                    ("link_name".into(), link_name.into()),
+                    ("contract_id".into(), contract_id.into()),
+                    ("host_id".into(), host_id.into()),
+                ]),
+            ))
+        }
         FindEventOutcome::Failure(err) => Err(err).with_context(|| {
             format!(
                 "Failed starting provider {} on host {}",

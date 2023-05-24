@@ -60,6 +60,7 @@ walkdir = { workspace = true }
 wascap = { workspace = true }
 wasmcloud-control-interface = { workspace = true }
 weld-codegen = { workspace = true }
+wasmbus-rpc = { workspace = true }
 
 [dev-dependencies]
 claims = { workspace = true }

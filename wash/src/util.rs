@@ -1,6 +1,6 @@
 use std::{fs::File, io::Read, path::PathBuf};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, Context, Result};
 use term_table::{Table, TableStyle};
 use wash_lib::config::DEFAULT_NATS_TIMEOUT_MS;
 
@@ -172,23 +172,6 @@ pub(crate) async fn nats_client_from_opts(
         async_nats::connect(&nats_url).await.with_context(|| format!("Failed to connect to NATS {}\nNo credentials file was provided, you may need one to connect.", &nats_url))?
     };
     Ok(nc)
-}
-
-// Check if the contract ID parameter is a 56 character key and suggest that the user
-// give the contract ID instead
-//
-// NOTE: `len` is ok here because keys are only ascii characters that take up a single
-// byte.
-pub fn validate_contract_id(contract_id: &str) -> Result<()> {
-    if contract_id.len() == 56
-        && contract_id
-            .chars()
-            .all(|c| c.is_ascii_digit() || c.is_ascii_uppercase())
-    {
-        bail!("It looks like you used an Actor or Provider ID (e.g. VABC...) instead of a contract ID (e.g. wasmcloud:httpserver)")
-    } else {
-        Ok(())
-    }
 }
 
 mod test {

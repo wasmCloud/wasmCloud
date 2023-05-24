@@ -4237,6 +4237,7 @@ dependencies = [
  "wadm",
  "walkdir",
  "wascap 0.10.1",
+ "wasmbus-rpc 0.13.0",
  "wasmcloud-control-interface",
  "weld-codegen 0.7.0",
 ]
