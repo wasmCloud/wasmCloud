@@ -8,7 +8,7 @@ use term_table::{
     Table,
 };
 use wash_lib::cli::CommandOutput;
-use wash_lib::id::{ModuleId, ServiceId};
+use wash_lib::id::ModuleId;
 use wasmcloud_control_interface::{GetClaimsResponse, Host, HostInventory, LinkDefinitionList};
 
 use crate::util::format_optional;
@@ -50,31 +50,6 @@ pub(crate) fn link_del_output(
         }
         Some(f) => bail!("Error deleting link: {}", f),
     }
-}
-
-pub(crate) fn link_put_output(
-    actor_id: &ModuleId,
-    provider_id: &ServiceId,
-    failure: Option<String>,
-) -> Result<CommandOutput> {
-    match failure {
-        None => {
-            let mut map = HashMap::new();
-            map.insert("actor_id".to_string(), json!(actor_id));
-            map.insert("provider_id".to_string(), json!(provider_id));
-            Ok(CommandOutput::new(
-                format!("Published link ({actor_id}) <-> ({provider_id}) successfully"),
-                map,
-            ))
-        }
-        Some(f) => bail!("Error advertising link: {}", f),
-    }
-}
-
-pub(crate) fn link_query_output(list: LinkDefinitionList) -> CommandOutput {
-    let mut map = HashMap::new();
-    map.insert("links".to_string(), json!(list.links));
-    CommandOutput::new(links_table(list), map)
 }
 
 pub(crate) fn apply_manifest_output(results: Vec<String>) -> CommandOutput {

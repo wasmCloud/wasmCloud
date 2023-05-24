@@ -9,10 +9,13 @@ use serde_with::{serde_as, NoneAsEmptyString};
 
 use crate::{
     config::{
-        DEFAULT_LATTICE_PREFIX, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT, DEFAULT_NATS_TIMEOUT_MS,
+        cfg_dir, DEFAULT_LATTICE_PREFIX, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT,
+        DEFAULT_NATS_TIMEOUT_MS,
     },
     id::ClusterSeed,
 };
+
+use crate::context::fs::{load_context, ContextDir};
 
 pub mod fs;
 
@@ -139,6 +142,26 @@ fn default_lattice_prefix() -> String {
     DEFAULT_LATTICE_PREFIX.to_string()
 }
 
-fn default_timeout_ms() -> u64 {
+pub fn default_timeout_ms() -> u64 {
     DEFAULT_NATS_TIMEOUT_MS
+}
+
+/// Ensures the host config context exists
+pub fn ensure_host_config_context(context_dir: &ContextDir) -> Result<()> {
+    create_host_config_context(context_dir)
+}
+
+/// Load the host configuration file and create a context called `host_config` from it
+fn create_host_config_context(context_dir: &ContextDir) -> Result<()> {
+    let host_config_ctx = WashContext {
+        name: HOST_CONFIG_NAME.to_string(),
+        ..load_context(cfg_dir()?.join(format!("{HOST_CONFIG_NAME}.json")))
+            .unwrap_or_else(|_| WashContext::default())
+    };
+    context_dir.save_context(&host_config_ctx)?;
+    // Set the default context if it isn't set yet
+    if context_dir.default_context()?.is_none() {
+        context_dir.set_default_context(HOST_CONFIG_NAME)?;
+    }
+    Ok(())
 }

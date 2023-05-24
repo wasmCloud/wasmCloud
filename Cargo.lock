@@ -4161,6 +4161,7 @@ dependencies = [
  "oci-distribution",
  "once_cell",
  "provider-archive",
+ "rand",
  "regex",
  "remove_dir_all",
  "reqwest",
@@ -4235,6 +4236,7 @@ dependencies = [
  "wadm",
  "walkdir",
  "wascap 0.10.1",
+ "wasmcloud-control-interface",
  "weld-codegen 0.7.0",
 ]
 
