@@ -16,6 +16,12 @@ use wash_lib::start::{ensure_nats_server, start_nats_server, NatsConfig};
 #[allow(unused)]
 pub(crate) const LOCAL_REGISTRY: &str = "localhost:5001";
 
+#[allow(unused)]
+pub(crate) const ECHO_OCI_REF: &str = "wasmcloud.azurecr.io/echo:0.3.4";
+
+#[allow(unused)]
+pub(crate) const PROVIDER_HTTPSERVER_OCI_REF: &str = "wasmcloud.azurecr.io/httpserver:0.17.0";
+
 /// Helper function to create the `wash` binary process
 #[allow(unused)]
 pub(crate) fn wash() -> std::process::Command {

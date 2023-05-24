@@ -174,7 +174,7 @@ impl WashConnectionOptions {
     }
 
     /// Create a NATS client from WashConnectionOptions
-    pub async fn into_nats_client(self) -> Result<(Client, tokio::time::Duration)> {
+    pub async fn into_nats_client(self) -> Result<Client> {
         let ctl_host = self.ctl_host.unwrap_or_else(|| {
             self.ctx
                 .as_ref()
@@ -220,9 +220,7 @@ impl WashConnectionOptions {
             create_nats_client_from_opts(&ctl_host, &ctl_port, ctl_jwt, ctl_seed, ctl_credsfile)
                 .await?;
 
-        let timeout = tokio::time::Duration::from_millis(self.timeout_ms);
-
-        Ok((nc, timeout))
+        Ok(nc)
     }
 }
 

@@ -1,9 +1,10 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use clap::Parser;
 use wasmcloud_control_interface::{CtlOperationAck, LinkDefinitionList};
 
 use crate::{
     cli::{labels_vec_to_hashmap, CliConnectionOpts},
+    common::boxed_err_to_anyhow,
     config::WashConnectionOptions,
     id::{ModuleId, ServiceId},
 };
@@ -74,11 +75,6 @@ pub enum LinkCommand {
     /// Delete a link definition
     #[clap(name = "del")]
     Del(LinkDelCommand),
-}
-
-/// Converts error from Send + Sync error to standard anyhow error
-fn boxed_err_to_anyhow(e: Box<dyn ::std::error::Error + Send + Sync>) -> anyhow::Error {
-    anyhow!(e.to_string())
 }
 
 /// Query links for a given Wash instance

@@ -4205,6 +4205,7 @@ dependencies = [
  "cargo_toml",
  "claims",
  "clap 4.3.0",
+ "cloudevents-sdk 0.6.0",
  "command-group",
  "config",
  "console",

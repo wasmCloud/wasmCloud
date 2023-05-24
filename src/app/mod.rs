@@ -176,10 +176,9 @@ pub(crate) async fn handle_command(
 
 async fn undeploy_model(cmd: UndeployCommand) -> Result<DeployModelResponse> {
     let lattice_prefix = cmd.opts.lattice_prefix.clone();
-    let (client, _timeout) =
-        <CliConnectionOpts as TryInto<WashConnectionOptions>>::try_into(cmd.opts)?
-            .into_nats_client()
-            .await?;
+    let client = <CliConnectionOpts as TryInto<WashConnectionOptions>>::try_into(cmd.opts)?
+        .into_nats_client()
+        .await?;
 
     wash_lib::app::undeploy_model(
         &client,
@@ -192,10 +191,9 @@ async fn undeploy_model(cmd: UndeployCommand) -> Result<DeployModelResponse> {
 
 async fn deploy_model(cmd: DeployCommand) -> Result<DeployModelResponse> {
     let lattice_prefix = cmd.opts.lattice_prefix.clone();
-    let (client, _timeout) =
-        <CliConnectionOpts as TryInto<WashConnectionOptions>>::try_into(cmd.opts)?
-            .into_nats_client()
-            .await?;
+    let client = <CliConnectionOpts as TryInto<WashConnectionOptions>>::try_into(cmd.opts)?
+        .into_nats_client()
+        .await?;
 
     // If the model name is a file on disk, apply it and then deploy
     let model_name = if tokio::fs::metadata(&cmd.model_name).await.is_ok() {
@@ -219,10 +217,9 @@ async fn deploy_model(cmd: DeployCommand) -> Result<DeployModelResponse> {
 
 async fn put_model(cmd: PutCommand) -> Result<PutModelResponse> {
     let lattice_prefix = cmd.opts.lattice_prefix.clone();
-    let (client, _timeout) =
-        <CliConnectionOpts as TryInto<WashConnectionOptions>>::try_into(cmd.opts)?
-            .into_nats_client()
-            .await?;
+    let client = <CliConnectionOpts as TryInto<WashConnectionOptions>>::try_into(cmd.opts)?
+        .into_nats_client()
+        .await?;
 
     wash_lib::app::put_model(
         &client,
@@ -234,30 +231,27 @@ async fn put_model(cmd: PutCommand) -> Result<PutModelResponse> {
 
 async fn get_model_history(cmd: HistoryCommand) -> Result<VersionResponse> {
     let lattice_prefix = cmd.opts.lattice_prefix.clone();
-    let (client, _timeout) =
-        <CliConnectionOpts as TryInto<WashConnectionOptions>>::try_into(cmd.opts)?
-            .into_nats_client()
-            .await?;
+    let client = <CliConnectionOpts as TryInto<WashConnectionOptions>>::try_into(cmd.opts)?
+        .into_nats_client()
+        .await?;
 
     wash_lib::app::get_model_history(&client, lattice_prefix, &cmd.model_name).await
 }
 
 async fn get_model_details(cmd: GetCommand) -> Result<GetModelResponse> {
     let lattice_prefix = cmd.opts.lattice_prefix.clone();
-    let (client, _timeout) =
-        <CliConnectionOpts as TryInto<WashConnectionOptions>>::try_into(cmd.opts)?
-            .into_nats_client()
-            .await?;
+    let client = <CliConnectionOpts as TryInto<WashConnectionOptions>>::try_into(cmd.opts)?
+        .into_nats_client()
+        .await?;
 
     wash_lib::app::get_model_details(&client, lattice_prefix, &cmd.model_name, cmd.version).await
 }
 
 async fn delete_model_version(cmd: DeleteCommand) -> Result<DeleteModelResponse> {
     let lattice_prefix = cmd.opts.lattice_prefix.clone();
-    let (client, _timeout) =
-        <CliConnectionOpts as TryInto<WashConnectionOptions>>::try_into(cmd.opts)?
-            .into_nats_client()
-            .await?;
+    let client = <CliConnectionOpts as TryInto<WashConnectionOptions>>::try_into(cmd.opts)?
+        .into_nats_client()
+        .await?;
 
     wash_lib::app::delete_model_version(
         &client,
@@ -271,10 +265,9 @@ async fn delete_model_version(cmd: DeleteCommand) -> Result<DeleteModelResponse>
 
 async fn get_models(cmd: ListCommand) -> Result<Vec<ModelSummary>> {
     let lattice_prefix = cmd.opts.lattice_prefix.clone();
-    let (client, _timeout) =
-        <CliConnectionOpts as TryInto<WashConnectionOptions>>::try_into(cmd.opts)?
-            .into_nats_client()
-            .await?;
+    let client = <CliConnectionOpts as TryInto<WashConnectionOptions>>::try_into(cmd.opts)?
+        .into_nats_client()
+        .await?;
 
     wash_lib::app::get_models(&client, lattice_prefix).await
 }
