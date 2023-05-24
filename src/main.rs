@@ -5,8 +5,8 @@ use serde_json::json;
 use smithy::{GenerateCli, LintCli, ValidateCli};
 use wash_lib::{
     cli::{
-        claims::ClaimsCliCommand, inspect::InspectCliCommand, link::LinkCommand, CommandOutput,
-        OutputKind,
+        claims::ClaimsCliCommand, inspect::InspectCliCommand, link::LinkCommand,
+        start::StartCommand, stop::StopCommand, CommandOutput, OutputKind,
     },
     drain::Drain as DrainSelection,
 };
@@ -15,7 +15,6 @@ use app::AppCliCommand;
 use build::BuildCommand;
 use call::CallCli;
 use clap::{Parser, Subcommand};
-use common::start_cmd::StartCommand;
 use completions::CompletionOpts;
 use ctl::CtlCliCommand;
 use ctx::CtxCommand;
@@ -165,6 +164,9 @@ enum CliCommand {
     /// Start an actor or a provider
     #[clap(name = "start", subcommand)]
     Start(StartCommand),
+    /// Stop an actor, provider, or host
+    #[clap(name = "stop", subcommand)]
+    Stop(StopCommand),
     /// Bootstrap a wasmCloud environment
     #[clap(name = "up")]
     Up(UpCommand),
@@ -208,6 +210,7 @@ async fn main() {
         CliCommand::Start(start_cli) => {
             common::start_cmd::handle_command(start_cli, output_kind).await
         }
+        CliCommand::Stop(stop_cli) => common::stop_cmd::handle_command(stop_cli, output_kind).await,
         CliCommand::Up(up_cli) => up::handle_command(up_cli, output_kind).await,
         CliCommand::Validate(validate_cli) => smithy::handle_validate_command(validate_cli).await,
     };

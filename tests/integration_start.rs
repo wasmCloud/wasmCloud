@@ -1,14 +1,9 @@
 use anyhow::{Context, Result};
-use serde::Deserialize;
 use serial_test::serial;
+use wash_lib::cli::output::StartCommandJsonOutput;
 
 mod common;
 use common::{wash, TestWashInstance, ECHO_OCI_REF, PROVIDER_HTTPSERVER_OCI_REF};
-
-#[derive(Debug, Deserialize)]
-struct StartOutput {
-    success: bool,
-}
 
 #[tokio::test]
 #[serial]
@@ -30,7 +25,7 @@ async fn integration_start_actor() -> Result<()> {
 
     assert!(output.status.success(), "executed start");
 
-    let cmd_output: StartOutput =
+    let cmd_output: StartCommandJsonOutput =
         serde_json::from_slice(&output.stdout).context("failed to parse output")?;
     assert!(cmd_output.success, "command returned success");
 
@@ -57,7 +52,7 @@ async fn integration_start_provider() -> Result<()> {
 
     assert!(output.status.success(), "executed start");
 
-    let cmd_output: StartOutput =
+    let cmd_output: StartCommandJsonOutput =
         serde_json::from_slice(&output.stdout).context("failed to parse output")?;
     assert!(cmd_output.success, "command returned success");
 

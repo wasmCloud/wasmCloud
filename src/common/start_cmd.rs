@@ -1,19 +1,8 @@
 use anyhow::Result;
-use clap::Parser;
-use wash_lib::cli::start::{start_actor, start_provider, StartActorCommand, StartProviderCommand};
+
+use wash_lib::cli::start::{start_actor, start_provider, StartCommand};
 
 use crate::{appearance::spinner::Spinner, CommandOutput, OutputKind};
-
-#[derive(Debug, Clone, Parser)]
-pub(crate) enum StartCommand {
-    /// Launch an actor in a host
-    #[clap(name = "actor")]
-    Actor(StartActorCommand),
-
-    /// Launch a provider in a host
-    #[clap(name = "provider")]
-    Provider(StartProviderCommand),
-}
 
 pub(crate) async fn handle_command(
     command: StartCommand,
@@ -45,6 +34,7 @@ mod test {
     use super::*;
     use crate::CtlCliCommand;
     use clap::Parser;
+    use wash_lib::cli::start::{StartActorCommand, StartProviderCommand};
 
     #[derive(Parser)]
     struct Cmd {
@@ -84,7 +74,7 @@ mod test {
             "wasmcloud.azurecr.io/actor:v1",
         ])?;
         match start_actor_all.command {
-            CtlCliCommand::Start(StartCommand::Actor(super::StartActorCommand {
+            CtlCliCommand::Start(StartCommand::Actor(StartActorCommand {
                 opts,
                 host_id,
                 actor_ref,
@@ -126,7 +116,7 @@ mod test {
             "wasmcloud.azurecr.io/provider:v1",
         ])?;
         match start_provider_all.command {
-            CtlCliCommand::Start(StartCommand::Provider(super::StartProviderCommand {
+            CtlCliCommand::Start(StartCommand::Provider(StartProviderCommand {
                 opts,
                 host_id,
                 provider_ref,
