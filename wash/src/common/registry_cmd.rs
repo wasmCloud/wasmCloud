@@ -1,7 +1,6 @@
 use std::{collections::HashMap, path::PathBuf};
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
 use log::warn;
 use oci_distribution::{
     client::{Client, ClientConfig, ClientProtocol},
@@ -11,128 +10,23 @@ use oci_distribution::{
 use serde_json::json;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
-use wash_lib::cli::{labels_vec_to_hashmap, CommandOutput, OutputKind};
 use wash_lib::registry::{
     pull_oci_artifact, push_oci_artifact, validate_artifact, OciPullOptions, OciPushOptions,
     SupportedArtifacts,
 };
+use wash_lib::{
+    cli::{labels_vec_to_hashmap, CommandOutput, OutputKind},
+    registry::{RegistryCommand, RegistryPingCommand, RegistryPullCommand, RegistryPushCommand},
+};
 
 use crate::appearance::spinner::Spinner;
 
-const PROVIDER_ARCHIVE_FILE_EXTENSION: &str = ".par.gz";
-const WASM_FILE_EXTENSION: &str = ".wasm";
-
 pub(crate) const SHOWER_EMOJI: &str = "\u{1F6BF}";
+pub(crate) const PROVIDER_ARCHIVE_FILE_EXTENSION: &str = ".par.gz";
+pub(crate) const WASM_FILE_EXTENSION: &str = ".wasm";
 
-#[derive(Debug, Clone, Subcommand)]
-pub(crate) enum RegCliCommand {
-    /// Pull an artifact from an OCI compliant registry
-    #[clap(name = "pull")]
-    Pull(PullCommand),
-    /// Push an artifact to an OCI compliant registry
-    #[clap(name = "push")]
-    Push(PushCommand),
-    /// Ping (test url) to see if the OCI url has an artifact
-    #[clap(name = "ping")]
-    Ping(PingCommand),
-}
-
-#[derive(Parser, Debug, Clone)]
-pub(crate) struct PullCommand {
-    /// URL of artifact
-    #[clap(name = "url")]
-    pub(crate) url: String,
-
-    /// File destination of artifact
-    #[clap(long = "destination")]
-    pub(crate) destination: Option<String>,
-
-    /// Digest to verify artifact against
-    #[clap(short = 'd', long = "digest")]
-    pub(crate) digest: Option<String>,
-
-    /// Allow latest artifact tags
-    #[clap(long = "allow-latest")]
-    pub(crate) allow_latest: bool,
-
-    #[clap(flatten)]
-    pub(crate) opts: AuthOpts,
-}
-
-#[derive(Parser, Debug, Clone)]
-pub(crate) struct PushCommand {
-    /// URL to push artifact to
-    #[clap(name = "url")]
-    pub(crate) url: String,
-
-    /// Path to artifact to push
-    #[clap(name = "artifact")]
-    pub(crate) artifact: String,
-
-    /// Path to config file, if omitted will default to a blank configuration
-    #[clap(short = 'c', long = "config")]
-    pub(crate) config: Option<String>,
-
-    /// Allow latest artifact tags
-    #[clap(long = "allow-latest")]
-    pub(crate) allow_latest: bool,
-
-    /// Optional set of annotations to apply to the OCI artifact manifest
-    #[clap(short = 'a', long = "annotation", name = "annotations")]
-    pub(crate) annotations: Option<Vec<String>>,
-
-    #[clap(flatten)]
-    pub(crate) opts: AuthOpts,
-}
-
-#[derive(Parser, Debug, Clone)]
-pub(crate) struct PingCommand {
-    /// URL of artifact
-    #[clap(name = "url")]
-    pub(crate) url: String,
-
-    #[clap(flatten)]
-    pub(crate) opts: AuthOpts,
-}
-
-#[derive(Parser, Debug, Clone)]
-pub(crate) struct AuthOpts {
-    /// OCI username, if omitted anonymous authentication will be used
-    #[clap(
-        short = 'u',
-        long = "user",
-        env = "WASH_REG_USER",
-        hide_env_values = true
-    )]
-    pub(crate) user: Option<String>,
-
-    /// OCI password, if omitted anonymous authentication will be used
-    #[clap(
-        short = 'p',
-        long = "password",
-        env = "WASH_REG_PASSWORD",
-        hide_env_values = true
-    )]
-    pub(crate) password: Option<String>,
-
-    /// Allow insecure (HTTP) registry connections
-    #[clap(long = "insecure")]
-    pub(crate) insecure: bool,
-}
-
-pub(crate) async fn handle_command(
-    command: RegCliCommand,
-    output_kind: OutputKind,
-) -> Result<CommandOutput> {
-    match command {
-        RegCliCommand::Pull(cmd) => handle_pull(cmd, output_kind).await,
-        RegCliCommand::Push(cmd) => handle_push(cmd, output_kind).await,
-        RegCliCommand::Ping(cmd) => handle_ping(cmd).await,
-    }
-}
-
-pub(crate) async fn handle_pull(
-    cmd: PullCommand,
+pub(crate) async fn registry_pull(
+    cmd: RegistryPullCommand,
     output_kind: OutputKind,
 ) -> Result<CommandOutput> {
     let artifact_url = cmd.url.to_ascii_lowercase();
@@ -165,7 +59,7 @@ pub(crate) async fn handle_pull(
     ))
 }
 
-pub(crate) async fn handle_ping(cmd: PingCommand) -> Result<CommandOutput> {
+pub(crate) async fn registry_ping(cmd: RegistryPingCommand) -> Result<CommandOutput> {
     let image: Reference = cmd.url.parse()?;
     let mut client = Client::new(ClientConfig {
         protocol: if cmd.opts.insecure {
@@ -212,8 +106,8 @@ pub(crate) async fn write_artifact(
     Ok(outfile)
 }
 
-pub(crate) async fn handle_push(
-    cmd: PushCommand,
+pub(crate) async fn registry_push(
+    cmd: RegistryPushCommand,
     output_kind: OutputKind,
 ) -> Result<CommandOutput> {
     let artifact_url = cmd.url.to_ascii_lowercase();
@@ -250,9 +144,20 @@ pub(crate) async fn handle_push(
     ))
 }
 
+pub(crate) async fn handle_command(
+    command: RegistryCommand,
+    output_kind: OutputKind,
+) -> Result<CommandOutput> {
+    match command {
+        RegistryCommand::Pull(cmd) => registry_pull(cmd, output_kind).await,
+        RegistryCommand::Push(cmd) => registry_push(cmd, output_kind).await,
+        RegistryCommand::Ping(cmd) => registry_ping(cmd).await,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{PullCommand, PushCommand, RegCliCommand};
+    use crate::common::registry_cmd::{RegistryCommand, RegistryPullCommand, RegistryPushCommand};
     use clap::Parser;
 
     const ECHO_WASM: &str = "wasmcloud.azurecr.io/echo:0.2.0";
@@ -261,7 +166,7 @@ mod tests {
     #[derive(Debug, Parser)]
     struct Cmd {
         #[clap(subcommand)]
-        reg: RegCliCommand,
+        reg: RegistryCommand,
     }
 
     #[test]
@@ -291,14 +196,14 @@ mod tests {
         ])
         .unwrap();
         match pull_basic.reg {
-            RegCliCommand::Pull(PullCommand { url, .. }) => {
+            RegistryCommand::Pull(RegistryPullCommand { url, .. }) => {
                 assert_eq!(url, ECHO_WASM);
             }
             _ => panic!("`reg pull` constructed incorrect command"),
         };
 
         match pull_all_flags.reg {
-            RegCliCommand::Pull(PullCommand {
+            RegistryCommand::Pull(RegistryPullCommand {
                 url,
                 allow_latest,
                 opts,
@@ -312,7 +217,7 @@ mod tests {
         };
 
         match pull_all_options.reg {
-            RegCliCommand::Pull(PullCommand {
+            RegistryCommand::Pull(RegistryPullCommand {
                 url,
                 destination,
                 digest,
@@ -351,7 +256,7 @@ mod tests {
         ])
         .unwrap();
         match push_basic.reg {
-            RegCliCommand::Push(PushCommand {
+            RegistryCommand::Push(RegistryPushCommand {
                 url,
                 artifact,
                 opts,
@@ -376,7 +281,7 @@ mod tests {
         ])
         .unwrap();
         match push_all_flags.reg {
-            RegCliCommand::Push(PushCommand {
+            RegistryCommand::Push(RegistryPushCommand {
                 url,
                 artifact,
                 opts,
@@ -409,7 +314,7 @@ mod tests {
         ])
         .unwrap();
         match push_all_options.reg {
-            RegCliCommand::Push(PushCommand {
+            RegistryCommand::Push(RegistryPushCommand {
                 url,
                 artifact,
                 opts,
