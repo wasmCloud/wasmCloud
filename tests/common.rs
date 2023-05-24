@@ -109,6 +109,10 @@ impl Drop for TestWashInstance {
             .output()
             .expect("Could not spawn wash down process");
 
+        self.nats
+            .start_kill()
+            .expect("failed to start_kill() on nats instance");
+
         // Check to see if process was removed
         let mut info = sysinfo::System::new_with_specifics(
             sysinfo::RefreshKind::new().with_processes(sysinfo::ProcessRefreshKind::new()),
@@ -157,6 +161,7 @@ impl TestWashInstance {
                 &host_seed.seed().expect("Should have a seed for the host"),
             ])
             .stdout(stdout.into_std().await)
+            .kill_on_drop(true)
             .spawn()
             .context("Could not spawn wash up process")?;
 

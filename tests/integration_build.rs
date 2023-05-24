@@ -1,22 +1,23 @@
-use anyhow::Result;
-
-mod common;
-use common::wash;
-use serial_test::serial;
+use anyhow::{Context, Result};
 use std::{fs::File, io::Write, path::PathBuf};
 use tempfile::TempDir;
+use tokio::process::Command;
 
-#[test]
-fn build_rust_actor_unsigned() -> Result<()> {
+mod common;
+
+#[tokio::test]
+async fn build_rust_actor_unsigned_serial() -> Result<()> {
     let test_setup = init(
         /* actor_name= */ "hello", /* template_name= */ "hello",
-    )?;
+    )
+    .await?;
     let project_dir = test_setup.project_dir;
 
-    let status = wash()
+    let status = Command::new(env!("CARGO_BIN_EXE_wash"))
         .args(["build", "--build-only"])
         .status()
-        .expect("Failed to build project");
+        .await
+        .context("Failed to build project")?;
 
     assert!(status.success());
     let unsigned_file = project_dir.join("build/hello.wasm");
@@ -29,17 +30,20 @@ fn build_rust_actor_unsigned() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn build_rust_actor_signed() -> Result<()> {
+#[tokio::test]
+async fn build_rust_actor_signed_serial() -> Result<()> {
     let test_setup = init(
         /* actor_name= */ "hello", /* template_name= */ "hello",
-    )?;
+    )
+    .await?;
     let project_dir = test_setup.project_dir;
 
-    let status = wash()
+    let status = Command::new(env!("CARGO_BIN_EXE_wash"))
         .args(["build"])
+        .kill_on_drop(true)
         .status()
-        .expect("Failed to build project");
+        .await
+        .context("Failed to build project")?;
 
     assert!(status.success());
     let unsigned_file = project_dir.join("build/hello.wasm");
@@ -49,16 +53,18 @@ fn build_rust_actor_signed() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn build_rust_actor_in_workspace_unsigned() -> Result<()> {
-    let test_setup = init_workspace(vec![/* actor_names= */ "hello-1", "hello-2"])?;
+#[tokio::test]
+async fn build_rust_actor_in_workspace_unsigned_serial() -> Result<()> {
+    let test_setup = init_workspace(vec![/* actor_names= */ "hello-1", "hello-2"]).await?;
     let project_dir = test_setup.project_dirs.get(0).unwrap();
     std::env::set_current_dir(project_dir)?;
 
-    let status = wash()
+    let status = Command::new(env!("CARGO_BIN_EXE_wash"))
         .args(["build", "--build-only"])
+        .kill_on_drop(true)
         .status()
-        .expect("Failed to build project");
+        .await
+        .context("Failed to build project")?;
 
     assert!(status.success());
     let unsigned_file = project_dir.join("build/hello_1.wasm");
@@ -71,18 +77,21 @@ fn build_rust_actor_in_workspace_unsigned() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn build_tinygo_actor_unsigned() -> Result<()> {
+#[tokio::test]
+async fn build_tinygo_actor_unsigned_serial() -> Result<()> {
     let test_setup = init(
         /* actor_name= */ "echo",
         /* template_name= */ "echo-tinygo",
-    )?;
+    )
+    .await?;
     let project_dir = test_setup.project_dir;
 
-    let status = wash()
+    let status = Command::new(env!("CARGO_BIN_EXE_wash"))
         .args(["build", "--build-only"])
+        .kill_on_drop(true)
         .status()
-        .expect("Failed to build project");
+        .await
+        .context("Failed to build project")?;
 
     assert!(status.success());
     let unsigned_file = project_dir.join("build/echo.wasm");
@@ -95,18 +104,21 @@ fn build_tinygo_actor_unsigned() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn build_tinygo_actor_signed() -> Result<()> {
+#[tokio::test]
+async fn build_tinygo_actor_signed_serial() -> Result<()> {
     let test_setup = init(
         /* actor_name= */ "echo",
         /* template_name= */ "echo-tinygo",
-    )?;
+    )
+    .await?;
     let project_dir = test_setup.project_dir;
 
-    let status = wash()
+    let status = Command::new(env!("CARGO_BIN_EXE_wash"))
         .args(["build"])
+        .kill_on_drop(true)
         .status()
-        .expect("Failed to build project");
+        .await
+        .context("Failed to build project")?;
 
     assert!(status.success());
     let unsigned_file = project_dir.join("build/echo.wasm");
@@ -136,10 +148,10 @@ struct WorkspaceTestSetup {
 
 /// Inits an actor build test by setting up a test directory and creating an actor from a template.
 /// Returns the paths of the test directory and actor directory.
-fn init(actor_name: &str, template_name: &str) -> Result<TestSetup> {
+async fn init(actor_name: &str, template_name: &str) -> Result<TestSetup> {
     let test_dir = TempDir::new()?;
     std::env::set_current_dir(&test_dir)?;
-    let project_dir = init_actor_from_template(actor_name, template_name)?;
+    let project_dir = init_actor_from_template(actor_name, template_name).await?;
     std::env::set_current_dir(&project_dir)?;
     Ok(TestSetup {
         test_dir,
@@ -149,17 +161,16 @@ fn init(actor_name: &str, template_name: &str) -> Result<TestSetup> {
 
 /// Inits an actor build test by setting up a test directory and creating an actor from a template.
 /// Returns the paths of the test directory and actor directory.
-fn init_workspace(actor_names: Vec<&str>) -> Result<WorkspaceTestSetup> {
+async fn init_workspace(actor_names: Vec<&str>) -> Result<WorkspaceTestSetup> {
     let test_dir = TempDir::new()?;
     std::env::set_current_dir(&test_dir)?;
-    let project_dirs: Result<Vec<_>> = actor_names
-        .iter()
-        .map(|actor_name| {
-            let project_dir = init_actor_from_template(actor_name, "hello")?;
+
+    let project_dirs: Vec<_> =
+        futures::future::try_join_all(actor_names.iter().map(|actor_name| async {
+            let project_dir = init_actor_from_template(actor_name, "hello").await?;
             Result::<PathBuf>::Ok(project_dir)
-        })
-        .collect();
-    let project_dirs = project_dirs?;
+        }))
+        .await?;
 
     let members = actor_names
         .iter()
@@ -184,8 +195,8 @@ fn init_workspace(actor_names: Vec<&str>) -> Result<WorkspaceTestSetup> {
 }
 
 /// Initializes a new actor from a wasmCloud template, and sets the environment to use the created actor's directory.
-fn init_actor_from_template(actor_name: &str, template_name: &str) -> Result<PathBuf> {
-    let status = wash()
+async fn init_actor_from_template(actor_name: &str, template_name: &str) -> Result<PathBuf> {
+    let status = Command::new(env!("CARGO_BIN_EXE_wash"))
         .args([
             "new",
             "actor",
@@ -197,8 +208,10 @@ fn init_actor_from_template(actor_name: &str, template_name: &str) -> Result<Pat
             "--silent",
             "--no-git-init",
         ])
+        .kill_on_drop(true)
         .status()
-        .expect("Failed to generate project");
+        .await
+        .context("Failed to generate project")?;
 
     assert!(status.success());
 
@@ -206,9 +219,8 @@ fn init_actor_from_template(actor_name: &str, template_name: &str) -> Result<Pat
     Ok(project_dir)
 }
 
-#[test]
-#[serial]
-fn integration_build_handles_dashed_names() -> Result<()> {
+#[tokio::test]
+async fn integration_build_handles_dashed_names_serial() -> Result<()> {
     let actor_name = "dashed-actor";
     // This tests runs against a temp directory since cargo gets confused
     // about workspace projects if done from within wash
@@ -220,23 +232,25 @@ fn integration_build_handles_dashed_names() -> Result<()> {
     let stdout = File::create(stdout_path)?;
 
     // Execute wash new to create an actor with the given name
-    let mut new_cmd = wash()
+    let mut new_cmd = Command::new(env!("CARGO_BIN_EXE_wash"))
         .args(["new", "actor", "dashed-actor", "-t", "hello"])
+        .kill_on_drop(true)
         .current_dir(&root_dir)
         .stdout(stdout.try_clone()?)
         .spawn()?;
-    assert!(new_cmd.wait()?.success());
+    assert!(new_cmd.wait().await?.success());
 
     // Ensure that the actor dir was created as expected
     assert!(actor_dir.exists());
 
-    let mut build_cmd = wash()
+    let mut build_cmd = Command::new(env!("CARGO_BIN_EXE_wash"))
         .args(["build"])
+        .kill_on_drop(true)
         .stdout(stdout)
         .current_dir(&actor_dir)
         .spawn()?;
 
-    assert!(build_cmd.wait()?.success());
+    assert!(build_cmd.wait().await?.success());
 
     Ok(())
 }

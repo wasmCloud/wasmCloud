@@ -1,16 +1,15 @@
 use anyhow::{Context, Result};
-use serial_test::serial;
-use wash_lib::cli::output::StartCommandJsonOutput;
+use tokio::process::Command;
+use wash_lib::cli::output::StartCommandOutput;
 
 mod common;
-use common::{wash, TestWashInstance, ECHO_OCI_REF, PROVIDER_HTTPSERVER_OCI_REF};
+use common::{TestWashInstance, ECHO_OCI_REF, PROVIDER_HTTPSERVER_OCI_REF};
 
 #[tokio::test]
-#[serial]
-async fn integration_start_actor() -> Result<()> {
+async fn integration_start_actor_serial() -> Result<()> {
     let _wash_instance = TestWashInstance::create().await?;
 
-    let output = wash()
+    let output = Command::new(env!("CARGO_BIN_EXE_wash"))
         .args([
             "start",
             "actor",
@@ -20,12 +19,14 @@ async fn integration_start_actor() -> Result<()> {
             "--timeout-ms",
             "20000",
         ])
+        .kill_on_drop(true)
         .output()
+        .await
         .context("failed to start actor")?;
 
     assert!(output.status.success(), "executed start");
 
-    let cmd_output: StartCommandJsonOutput =
+    let cmd_output: StartCommandOutput =
         serde_json::from_slice(&output.stdout).context("failed to parse output")?;
     assert!(cmd_output.success, "command returned success");
 
@@ -33,11 +34,10 @@ async fn integration_start_actor() -> Result<()> {
 }
 
 #[tokio::test]
-#[serial]
-async fn integration_start_provider() -> Result<()> {
+async fn integration_start_provider_serial() -> Result<()> {
     let _wash_instance = TestWashInstance::create().await?;
 
-    let output = wash()
+    let output = Command::new(env!("CARGO_BIN_EXE_wash"))
         .args([
             "start",
             "provider",
@@ -47,12 +47,14 @@ async fn integration_start_provider() -> Result<()> {
             "--timeout-ms",
             "20000",
         ])
+        .kill_on_drop(true)
         .output()
+        .await
         .context("failed to start provider")?;
 
     assert!(output.status.success(), "executed start");
 
-    let cmd_output: StartCommandJsonOutput =
+    let cmd_output: StartCommandOutput =
         serde_json::from_slice(&output.stdout).context("failed to parse output")?;
     assert!(cmd_output.success, "command returned success");
 

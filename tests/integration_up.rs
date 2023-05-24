@@ -1,28 +1,28 @@
-use regex::Regex;
 use std::{
     fs::{read_to_string, remove_dir_all},
     path::PathBuf,
 };
 
-use anyhow::{anyhow, Result};
-use common::{test_dir_with_subfolder, wash};
+use anyhow::{anyhow, Context, Result};
+use common::test_dir_with_subfolder;
+use regex::Regex;
 use sysinfo::{ProcessExt, SystemExt};
-use tokio::process::Child;
+use tokio::process::{Child, Command};
 use wash_lib::start::{ensure_nats_server, start_nats_server, NatsConfig};
 
 mod common;
 
 const RGX_ACTOR_START_MSG: &str = r"Actor \[(?P<actor_id>[^]]+)\] \(ref: \[(?P<actor_ref>[^]]+)\]\) started on host \[(?P<host_id>[^]]+)\]";
 
-#[test]
-fn integration_up_can_start_wasmcloud_and_actor() {
+#[tokio::test]
+async fn integration_up_can_start_wasmcloud_and_actor_serial() -> Result<()> {
     let dir = test_dir_with_subfolder("can_start_wasmcloud");
     let path = dir.join("washup.log");
     let stdout = std::fs::File::create(&path).expect("could not create log file for wash up test");
 
     let host_seed = nkeys::KeyPair::new_server();
 
-    let mut up_cmd = wash()
+    let mut up_cmd = Command::new(env!("CARGO_BIN_EXE_wash"))
         .args([
             "up",
             "--nats-port",
@@ -34,14 +34,19 @@ fn integration_up_can_start_wasmcloud_and_actor() {
             &host_seed.seed().expect("Should have a seed for the host"),
         ])
         .stdout(stdout)
+        .kill_on_drop(true)
         .spawn()
-        .expect("Could not spawn wash up process");
+        .context("Could not spawn wash up process")?;
 
-    let status = up_cmd.wait().expect("up command failed to complete");
+    let status = up_cmd
+        .wait()
+        .await
+        .context("up command failed to complete")?;
 
-    assert!(status.success());
+    assert!(status.success(), "failed to complete up command");
     let out = read_to_string(&path).expect("could not read output of wash up");
 
+    // Extract kill comamnd for later
     let (kill_cmd, _wasmcloud_log) = match serde_json::from_str::<serde_json::Value>(&out) {
         Ok(v) => (v["kill_cmd"].to_owned(), v["wasmcloud_log"].to_owned()),
         Err(_e) => panic!("Unable to parse kill cmd from wash up output"),
@@ -51,20 +56,22 @@ fn integration_up_can_start_wasmcloud_and_actor() {
     // Once this returns something other than a no responders, we know the host is ready for a ctl command
     let mut tries = 30;
     while tries >= 0 {
-        let output = wash()
+        let output = Command::new(env!("CARGO_BIN_EXE_wash"))
             .args(["ctl", "get", "inventory", &host_seed.public_key()])
+            .kill_on_drop(true)
             .output()
-            .expect("expected command to finish");
+            .await
+            .context("expected command to finish")?;
         if output.stdout.is_empty() {
             tries -= 1;
             assert!(tries >= 0);
-            std::thread::sleep(std::time::Duration::from_secs(1));
+            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
         } else {
             break;
         }
     }
 
-    let start_echo = wash()
+    let start_echo = Command::new(env!("CARGO_BIN_EXE_wash"))
         .args([
             "ctl",
             "start",
@@ -75,8 +82,10 @@ fn integration_up_can_start_wasmcloud_and_actor() {
             "--timeout-ms",
             "10000", // Wait up to 10 seconds for slowpoke systems
         ])
+        .kill_on_drop(true)
         .output()
-        .expect("could not start echo actor on new host");
+        .await
+        .context("could not start echo actor on new host")?;
 
     let stdout = String::from_utf8_lossy(&start_echo.stdout);
     let actor_start_output_rgx =
@@ -89,27 +98,34 @@ fn integration_up_can_start_wasmcloud_and_actor() {
 
     let kill_cmd = kill_cmd.to_string();
     let (_wash, down) = kill_cmd.trim_matches('"').split_once(' ').unwrap();
-    wash()
+    Command::new(env!("CARGO_BIN_EXE_wash"))
         .args(vec![down])
+        .kill_on_drop(true)
         .output()
-        .expect("Could not spawn wash down process");
+        .await
+        .context("Could not spawn wash down process")?;
 
     remove_dir_all(dir).unwrap();
+    Ok(())
 }
 
-#[test]
-fn can_stop_detached_host() {
+#[tokio::test]
+async fn integration_up_can_stop_detached_host_serial() -> Result<()> {
     let dir = test_dir_with_subfolder("can_stop_wasmcloud");
     let path = dir.join("washup.log");
     let stdout = std::fs::File::create(&path).expect("could not create log file for wash up test");
 
-    let mut up_cmd = wash()
+    let mut up_cmd = Command::new(env!("CARGO_BIN_EXE_wash"))
         .args(["up", "--nats-port", "5894", "-o", "json", "--detached"])
+        .kill_on_drop(true)
         .stdout(stdout)
         .spawn()
-        .expect("Could not spawn wash up process");
+        .context("Could not spawn wash up process")?;
 
-    let status = up_cmd.wait().expect("up command failed to complete");
+    let status = up_cmd
+        .wait()
+        .await
+        .context("up command failed to complete")?;
 
     assert!(status.success());
     let out = read_to_string(&path).expect("could not read output of wash up");
@@ -127,18 +143,20 @@ fn can_stop_detached_host() {
     {
         tries -= 1;
         assert!(tries >= 0);
-        std::thread::sleep(std::time::Duration::from_secs(1));
+        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
     }
 
     let kill_cmd = kill_cmd.to_string();
     let (_wash, down) = kill_cmd.trim_matches('"').split_once(' ').unwrap();
-    wash()
+    Command::new(env!("CARGO_BIN_EXE_wash"))
         .args(vec![down])
+        .kill_on_drop(true)
         .output()
-        .expect("Could not spawn wash down process");
+        .await
+        .context("Could not spawn wash down process")?;
 
     // After `wash down` exits, sometimes Erlang things stick around for a few seconds
-    std::thread::sleep(std::time::Duration::from_millis(5000));
+    tokio::time::sleep(tokio::time::Duration::from_millis(5000)).await;
 
     // Check to see if process was removed
     let mut info = sysinfo::System::new_with_specifics(
@@ -156,17 +174,18 @@ fn can_stop_detached_host() {
     );
 
     remove_dir_all(dir).unwrap();
+    Ok(())
 }
 
 #[tokio::test]
-async fn doesnt_kill_unowned_nats() -> Result<()> {
+async fn integration_up_doesnt_kill_unowned_nats_serial() -> Result<()> {
     let dir = test_dir_with_subfolder("doesnt_kill_unowned_nats");
     let path = dir.join("washup.log");
     let stdout = std::fs::File::create(&path).expect("could not create log file for wash up test");
 
     let mut nats = start_nats(5895, &dir).await?;
 
-    let mut up_cmd = wash()
+    let mut up_cmd = Command::new(env!("CARGO_BIN_EXE_wash"))
         .args([
             "up",
             "--nats-port",
@@ -176,11 +195,15 @@ async fn doesnt_kill_unowned_nats() -> Result<()> {
             "json",
             "--detached",
         ])
+        .kill_on_drop(true)
         .stdout(stdout)
         .spawn()
-        .expect("Could not spawn wash up process");
+        .context("Could not spawn wash up process")?;
 
-    let status = up_cmd.wait().expect("up command failed to complete");
+    let status = up_cmd
+        .wait()
+        .await
+        .context("up command failed to complete")?;
 
     assert!(status.success());
     let out = read_to_string(&path).expect("could not read output of wash up");
@@ -198,15 +221,17 @@ async fn doesnt_kill_unowned_nats() -> Result<()> {
     {
         tries -= 1;
         assert!(tries >= 0);
-        std::thread::sleep(std::time::Duration::from_secs(1));
+        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
     }
 
     let kill_cmd = kill_cmd.to_string();
     let (_wash, down) = kill_cmd.trim_matches('"').split_once(' ').unwrap();
-    wash()
+    Command::new(env!("CARGO_BIN_EXE_wash"))
+        .kill_on_drop(true)
         .args(vec![down])
         .output()
-        .expect("Could not spawn wash down process");
+        .await
+        .context("Could not spawn wash down process")?;
 
     // Check to see if process was removed
     let mut info = sysinfo::System::new_with_specifics(

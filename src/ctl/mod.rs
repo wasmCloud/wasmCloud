@@ -1,8 +1,9 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use clap::{Args, Parser, Subcommand};
 use std::path::Path;
 use wash_lib::{
     cli::{
+        get::{GetClaimsCommand, GetCommand, GetHostInventoryCommand, GetHostsCommand},
         labels_vec_to_hashmap,
         link::LinkCommand,
         start::StartCommand,
@@ -12,13 +13,16 @@ use wash_lib::{
     config::WashConnectionOptions,
     id::{ModuleId, ServerId},
 };
-use wasmcloud_control_interface::{
-    Client as CtlClient, CtlOperationAck, GetClaimsResponse, Host, HostInventory,
-};
+use wasmcloud_control_interface::{Client as CtlClient, CtlOperationAck};
 
 use crate::{
-    appearance::spinner::Spinner, common::link_cmd::handle_command as handle_link_command,
-    common::start_cmd::handle_command as handle_start_command, ctl::manifest::HostManifest,
+    appearance::spinner::Spinner,
+    common::link_cmd::handle_command as handle_link_command,
+    common::{
+        get_cmd::handle_command as handle_get_command,
+        start_cmd::handle_command as handle_start_command,
+    },
+    ctl::manifest::HostManifest,
     util::convert_error,
 };
 pub(crate) use output::*;
@@ -33,7 +37,7 @@ const ONE_ACTOR: u16 = 1;
 pub(crate) enum CtlCliCommand {
     /// Retrieves information about the lattice
     #[clap(name = "get", subcommand)]
-    Get(GetCommand),
+    Get(CtlGetCommand),
 
     /// Link an actor and a provider
     #[clap(name = "link", subcommand)]
@@ -78,7 +82,7 @@ pub(crate) struct ApplyCommand {
 }
 
 #[derive(Debug, Clone, Subcommand)]
-pub(crate) enum GetCommand {
+pub(crate) enum CtlGetCommand {
     /// Query lattice for running hosts
     #[clap(name = "hosts")]
     Hosts(GetHostsCommand),
@@ -134,28 +138,6 @@ pub struct ScaleActorCommand {
 }
 
 #[derive(Debug, Clone, Parser)]
-pub(crate) struct GetHostsCommand {
-    #[clap(flatten)]
-    opts: CliConnectionOpts,
-}
-
-#[derive(Debug, Clone, Parser)]
-pub(crate) struct GetHostInventoryCommand {
-    #[clap(flatten)]
-    opts: CliConnectionOpts,
-
-    /// Id of host
-    #[clap(name = "host-id", value_parser)]
-    pub(crate) host_id: ServerId,
-}
-
-#[derive(Debug, Clone, Parser)]
-pub(crate) struct GetClaimsCommand {
-    #[clap(flatten)]
-    opts: CliConnectionOpts,
-}
-
-#[derive(Debug, Clone, Parser)]
 pub(crate) struct UpdateActorCommand {
     #[clap(flatten)]
     opts: CliConnectionOpts,
@@ -185,23 +167,14 @@ pub(crate) async fn handle_command(
             let results = apply_manifest(cmd).await?;
             apply_manifest_output(results)
         }
-        Get(GetCommand::Hosts(cmd)) => {
-            sp.update_spinner_message(" Retrieving Hosts ...".to_string());
-            let hosts = get_hosts(cmd).await?;
-            get_hosts_output(hosts)
+        Get(CtlGetCommand::Hosts(cmd)) => {
+            handle_get_command(GetCommand::Hosts(cmd), output_kind).await?
         }
-        Get(GetCommand::HostInventory(cmd)) => {
-            sp.update_spinner_message(format!(
-                " Retrieving inventory for host {} ...",
-                cmd.host_id
-            ));
-            let inv = get_host_inventory(cmd).await?;
-            get_host_inventory_output(inv)
+        Get(CtlGetCommand::HostInventory(cmd)) => {
+            handle_get_command(GetCommand::HostInventory(cmd), output_kind).await?
         }
-        Get(GetCommand::Claims(cmd)) => {
-            sp.update_spinner_message(" Retrieving claims ... ".to_string());
-            let claims = get_claims(cmd).await?;
-            get_claims_output(claims)
+        Get(CtlGetCommand::Claims(cmd)) => {
+            handle_get_command(GetCommand::Claims(cmd), output_kind).await?
         }
         Link(cmd) => handle_link_command(cmd, output_kind).await?,
         Start(cmd) => handle_start_command(cmd, output_kind).await?,
@@ -248,37 +221,6 @@ pub(crate) async fn handle_command(
     sp.finish_and_clear();
 
     Ok(out)
-}
-
-pub(crate) async fn get_hosts(cmd: GetHostsCommand) -> Result<Vec<Host>> {
-    let wco: WashConnectionOptions = cmd.opts.try_into()?;
-    let client = wco.into_ctl_client(None).await?;
-    client
-        .get_hosts()
-        .await
-        .map_err(convert_error)
-        .context("Was able to connect to NATS, but failed to get hosts.")
-}
-
-pub(crate) async fn get_host_inventory(cmd: GetHostInventoryCommand) -> Result<HostInventory> {
-    let wco: WashConnectionOptions = cmd.opts.try_into()?;
-    let client = wco.into_ctl_client(None).await?;
-    client
-        .get_host_inventory(&cmd.host_id.to_string())
-        .await
-        .map_err(convert_error)
-        .context("Was able to connect to NATS, but failed to get host inventory.")
-}
-
-pub(crate) async fn get_claims(cmd: GetClaimsCommand) -> Result<GetClaimsResponse> {
-    let wco: WashConnectionOptions = cmd.opts.try_into()?;
-    let client = wco.into_ctl_client(None).await?;
-    client
-        .get_claims()
-        .await
-        .map_err(convert_error)
-        // TODO(mattwilkinsonn): Use Client Debug impl when merged: https://github.com/wasmCloud/control-interface-client/pull/35
-        .context("Was able to connect to NATS, but failed to get claims.")
 }
 
 pub(crate) async fn scale_actor(cmd: ScaleActorCommand) -> Result<CommandOutput> {
@@ -445,7 +387,10 @@ mod test {
     use super::*;
     use crate::CtlCliCommand;
     use clap::Parser;
-    use wash_lib::cli::stop::{StopActorCommand, StopProviderCommand};
+    use wash_lib::cli::{
+        get::GetHostsCommand,
+        stop::{StopActorCommand, StopProviderCommand},
+    };
 
     #[derive(Parser)]
     struct Cmd {
@@ -555,7 +500,7 @@ mod test {
             "2001",
         ])?;
         match get_hosts_all.command {
-            CtlCliCommand::Get(GetCommand::Hosts(GetHostsCommand { opts })) => {
+            CtlCliCommand::Get(CtlGetCommand::Hosts(GetHostsCommand { opts })) => {
                 assert_eq!(&opts.ctl_host.unwrap(), CTL_HOST);
                 assert_eq!(&opts.ctl_port.unwrap(), CTL_PORT);
                 assert_eq!(&opts.lattice_prefix.unwrap(), LATTICE_PREFIX);
@@ -578,7 +523,7 @@ mod test {
             HOST_ID,
         ])?;
         match get_host_inventory_all.command {
-            CtlCliCommand::Get(GetCommand::HostInventory(GetHostInventoryCommand {
+            CtlCliCommand::Get(CtlGetCommand::HostInventory(GetHostInventoryCommand {
                 opts,
                 host_id,
             })) => {
@@ -606,7 +551,7 @@ mod test {
             JS_DOMAIN,
         ])?;
         match get_claims_all.command {
-            CtlCliCommand::Get(GetCommand::Claims(GetClaimsCommand { opts })) => {
+            CtlCliCommand::Get(CtlGetCommand::Claims(GetClaimsCommand { opts })) => {
                 assert_eq!(&opts.ctl_host.unwrap(), CTL_HOST);
                 assert_eq!(&opts.ctl_port.unwrap(), CTL_PORT);
                 assert_eq!(&opts.lattice_prefix.unwrap(), LATTICE_PREFIX);

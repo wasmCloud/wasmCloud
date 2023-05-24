@@ -5,8 +5,6 @@ use std::{
     path::PathBuf,
 };
 
-use super::{extract_keypair, CommandOutput, OutputKind};
-use crate::cli::inspect;
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
 use log::warn;
@@ -17,6 +15,11 @@ use wascap::{
     jwt::{Account, Actor, CapabilityProvider, Claims, Operator},
     wasm::{days_from_now_to_jwt_time, sign_buffer_with_claims},
 };
+
+use wasmcloud_control_interface::GetClaimsResponse;
+
+use super::{extract_keypair, get::GetClaimsCommand, CommandOutput, OutputKind};
+use crate::{cli::inspect, common::boxed_err_to_anyhow, config::WashConnectionOptions};
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum ClaimsCliCommand {
@@ -670,6 +673,22 @@ fn sanitize_alias(call_alias: Option<String>) -> Result<Option<String>> {
     } else {
         Ok(None)
     }
+}
+
+/// Retreive claims from a given wasmCloud instance
+pub async fn get_claims(GetClaimsCommand { opts }: GetClaimsCommand) -> Result<GetClaimsResponse> {
+    let wco: WashConnectionOptions = opts.try_into()?;
+    let client = wco.into_ctl_client(None).await?;
+    client
+        .get_claims()
+        .await
+        .map_err(boxed_err_to_anyhow)
+        .with_context(|| {
+            format!(
+                "Was able to connect to NATS, but failed to get claims: {:?}",
+                client
+            )
+        })
 }
 
 #[cfg(test)]
