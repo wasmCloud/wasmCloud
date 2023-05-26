@@ -102,6 +102,13 @@ async fn find_event<T>(
     }
 }
 
+/// Information related to an actor start
+pub struct ActorStartedInfo {
+    pub host_id: String,
+    pub actor_ref: String,
+    pub actor_id: String,
+}
+
 /// Uses the NATS reciever to read events being published to the wasmCloud lattice event subject, up until the given timeout duration.
 ///
 /// If the applicable actor start response event is found (either started or failed to start), the `Ok` variant of the `Result` will be returned,
@@ -113,7 +120,7 @@ pub async fn wait_for_actor_start_event(
     timeout: Duration,
     host_id: String,
     actor_ref: String,
-) -> Result<FindEventOutcome<()>> {
+) -> Result<FindEventOutcome<ActorStartedInfo>> {
     let check_function = move |event: Event| {
         let cloud_event = get_wasmbus_event_info(event)?;
 
@@ -126,7 +133,12 @@ pub async fn wait_for_actor_start_event(
                 let image_ref = get_string_data_from_json(&cloud_event.data, "image_ref")?;
 
                 if image_ref == actor_ref {
-                    return Ok(EventCheckOutcome::Success(()));
+                    let actor_id = get_string_data_from_json(&cloud_event.data, "public_key")?;
+                    return Ok(EventCheckOutcome::Success(ActorStartedInfo {
+                        host_id: host_id.as_str().into(),
+                        actor_ref: actor_ref.as_str().into(),
+                        actor_id,
+                    }));
                 }
             }
             "com.wasmcloud.lattice.actor_start_failed" => {
@@ -156,6 +168,15 @@ pub async fn wait_for_actor_start_event(
     Ok(event)
 }
 
+/// Information related to an provider start
+pub struct ProviderStartedInfo {
+    pub host_id: String,
+    pub provider_ref: String,
+    pub provider_id: String,
+    pub link_name: String,
+    pub contract_id: String,
+}
+
 /// Uses the NATS reciever to read events being published to the wasmCloud lattice event subject, up until the given timeout duration.
 ///
 /// If the applicable provider start response event is found (either started or failed to start), the `Ok` variant of the `Result` will be returned,
@@ -167,7 +188,7 @@ pub async fn wait_for_provider_start_event(
     timeout: Duration,
     host_id: String,
     provider_ref: String,
-) -> Result<FindEventOutcome<()>> {
+) -> Result<FindEventOutcome<ProviderStartedInfo>> {
     let check_function = move |event: Event| {
         let cloud_event = get_wasmbus_event_info(event)?;
 
@@ -180,7 +201,17 @@ pub async fn wait_for_provider_start_event(
                 let image_ref = get_string_data_from_json(&cloud_event.data, "image_ref")?;
 
                 if image_ref == provider_ref {
-                    return Ok(EventCheckOutcome::Success(()));
+                    let provider_id = get_string_data_from_json(&cloud_event.data, "public_key")?;
+                    let contract_id = get_string_data_from_json(&cloud_event.data, "contract_id")?;
+                    let link_name = get_string_data_from_json(&cloud_event.data, "link_name")?;
+
+                    return Ok(EventCheckOutcome::Success(ProviderStartedInfo {
+                        host_id: host_id.as_str().into(),
+                        provider_ref: provider_ref.as_str().into(),
+                        provider_id,
+                        contract_id,
+                        link_name,
+                    }));
                 }
             }
             "com.wasmcloud.lattice.provider_start_failed" => {
@@ -211,6 +242,14 @@ pub async fn wait_for_provider_start_event(
     Ok(event)
 }
 
+/// Information related to an provider stop
+pub struct ProviderStoppedInfo {
+    pub host_id: String,
+    pub provider_id: String,
+    pub link_name: String,
+    pub contract_id: String,
+}
+
 /// Uses the NATS reciever to read events being published to the wasmCloud lattice event subject, up until the given timeout duration.
 ///
 /// If the applicable provider stop response event is found (either stopped or failed to stop), the `Ok` variant of the `Result` will be returned,
@@ -222,7 +261,7 @@ pub async fn wait_for_provider_stop_event(
     timeout: Duration,
     host_id: String,
     provider_id: String,
-) -> Result<FindEventOutcome<()>> {
+) -> Result<FindEventOutcome<ProviderStoppedInfo>> {
     let check_function = move |event: Event| {
         let cloud_event = get_wasmbus_event_info(event)?;
 
@@ -236,7 +275,15 @@ pub async fn wait_for_provider_stop_event(
                     get_string_data_from_json(&cloud_event.data, "public_key")?;
 
                 if returned_provider_id == provider_id {
-                    return Ok(EventCheckOutcome::Success(()));
+                    let contract_id = get_string_data_from_json(&cloud_event.data, "contract_id")?;
+                    let link_name = get_string_data_from_json(&cloud_event.data, "link_name")?;
+
+                    return Ok(EventCheckOutcome::Success(ProviderStoppedInfo {
+                        host_id: host_id.as_str().into(),
+                        provider_id: returned_provider_id,
+                        contract_id,
+                        link_name,
+                    }));
                 }
             }
             "com.wasmcloud.lattice.provider_stop_failed" => {
@@ -267,6 +314,12 @@ pub async fn wait_for_provider_stop_event(
     Ok(event)
 }
 
+/// Information related to an actor stop
+pub struct ActorStoppedInfo {
+    pub host_id: String,
+    pub actor_id: String,
+}
+
 /// Uses the NATS reciever to read events being published to the wasmCloud lattice event subject, up until the given timeout duration.
 ///
 /// If the applicable stop actor response event is found (either started or failed to start), the `Ok` variant of the `Result` will be returned,
@@ -278,7 +331,7 @@ pub async fn wait_for_actor_stop_event(
     timeout: Duration,
     host_id: String,
     actor_id: String,
-) -> Result<FindEventOutcome<()>> {
+) -> Result<FindEventOutcome<ActorStoppedInfo>> {
     let check_function = move |event: Event| {
         let cloud_event = get_wasmbus_event_info(event)?;
 
@@ -289,9 +342,11 @@ pub async fn wait_for_actor_stop_event(
         match cloud_event.event_type.as_str() {
             "com.wasmcloud.lattice.actor_stopped" => {
                 let returned_actor_id = get_string_data_from_json(&cloud_event.data, "public_key")?;
-
                 if returned_actor_id == actor_id {
-                    return Ok(EventCheckOutcome::Success(()));
+                    return Ok(EventCheckOutcome::Success(ActorStoppedInfo {
+                        host_id: host_id.as_str().into(),
+                        actor_id: returned_actor_id,
+                    }));
                 }
             }
             "com.wasmcloud.lattice.actor_stop_failed" => {

@@ -2,6 +2,7 @@
 
 use std::{convert::AsRef, fmt::Display, str::FromStr};
 
+use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -99,6 +100,23 @@ fn parse(value: &str, prefix: char, is_seed: bool) -> Result<String, ParseError>
             found: value.chars().take(prefix.chars().count()).collect(),
             expected: prefix,
         })
+    }
+}
+
+// Check if the contract ID parameter is a 56 character key and suggest that the user
+// give the contract ID instead
+//
+// NOTE: `len` is ok here because keys are only ascii characters that take up a single
+// byte.
+pub fn validate_contract_id(contract_id: &str) -> Result<()> {
+    if contract_id.len() == 56
+        && contract_id
+            .chars()
+            .all(|c| c.is_ascii_digit() || c.is_ascii_uppercase())
+    {
+        bail!("It looks like you used an Actor or Provider ID (e.g. VABC...) instead of a contract ID (e.g. wasmcloud:httpserver)")
+    } else {
+        Ok(())
     }
 }
 

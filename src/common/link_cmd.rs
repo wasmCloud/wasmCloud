@@ -9,16 +9,14 @@ use wash_lib::{
         },
         CommandOutput,
     },
-    id::{ModuleId, ServiceId},
+    id::{validate_contract_id, ModuleId, ServiceId},
 };
 use wasmcloud_control_interface::LinkDefinitionList;
 
 use crate::{
     appearance::spinner::Spinner,
     ctl::{link_del_output, links_table},
-    json,
-    util::validate_contract_id,
-    OutputKind,
+    json, OutputKind,
 };
 
 /// Generate output for link put command
