@@ -20,13 +20,17 @@
         src = ./.;
 
         excludePaths = [
+          ".github"
           ".gitignore"
+          "ADOPTERS.md"
           "awesome-wasmcloud"
           "CODE_OF_CONDUCT.md"
+          "CODEOWNERS"
           "CONTRIBUTING.md"
           "CONTRIBUTION_LADDER.md"
           "flake.lock"
           "flake.nix"
+          "garnix.yaml"
           "GOVERNANCE.md"
           "LICENSE"
           "OWNERS"
