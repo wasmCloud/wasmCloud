@@ -1,3 +1,4 @@
+use regex::Regex;
 use std::{
     fs::{read_to_string, remove_dir_all},
     path::PathBuf,
@@ -10,6 +11,8 @@ use tokio::process::Child;
 use wash_lib::start::{ensure_nats_server, start_nats_server, NatsConfig};
 
 mod common;
+
+const RGX_ACTOR_START_MSG: &str = r"Actor \[(?P<actor_id>[^]]+)\] \(ref: \[(?P<actor_ref>[^]]+)\]\) started on host \[(?P<host_id>[^]]+)\]";
 
 #[test]
 fn integration_up_can_start_wasmcloud_and_actor() {
@@ -76,8 +79,10 @@ fn integration_up_can_start_wasmcloud_and_actor() {
         .expect("could not start echo actor on new host");
 
     let stdout = String::from_utf8_lossy(&start_echo.stdout);
+    let actor_start_output_rgx =
+        Regex::new(RGX_ACTOR_START_MSG).expect("failed to create regular expression");
     assert!(
-        stdout.contains("Actor wasmcloud.azurecr.io/echo:0.3.4 started on host N"),
+        actor_start_output_rgx.is_match(&stdout),
         "Did not find the correct output when starting actor.\n stdout: {stdout}\nstderr: {}",
         String::from_utf8_lossy(&start_echo.stderr)
     );

@@ -1,17 +1,9 @@
 use anyhow::{Context, Result};
-use serde::Deserialize;
 use serial_test::serial;
-use std::collections::HashMap;
-use wasmbus_rpc::core::ActorLinks;
+use wash_lib::cli::output::LinkQueryOutput;
 
 mod common;
 use common::{wash, TestWashInstance};
-
-#[derive(Debug, Deserialize)]
-struct LinkQueryOutput {
-    links: Vec<HashMap<String, ActorLinks>>,
-    success: bool,
-}
 
 #[tokio::test]
 #[serial]

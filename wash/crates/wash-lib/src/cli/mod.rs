@@ -38,7 +38,9 @@ use crate::{
 pub mod claims;
 pub mod inspect;
 pub mod link;
+pub mod output;
 pub mod start;
+pub mod stop;
 
 /// Used for displaying human-readable output vs JSON format
 #[derive(Debug, Copy, Clone, Eq, Serialize, Deserialize, PartialEq)]

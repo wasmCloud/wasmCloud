@@ -89,9 +89,10 @@ async fn find_open_port() -> Result<u16> {
 
 #[allow(unused)]
 pub(crate) struct TestWashInstance {
-    test_dir: PathBuf,
-    nats_port: u16,
-    kill_cmd: String,
+    pub host_id: String,
+    pub test_dir: PathBuf,
+    pub nats_port: u16,
+    pub kill_cmd: String,
     nats: Child,
 }
 
@@ -140,6 +141,9 @@ impl TestWashInstance {
         let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_wash"));
         cmd.kill_on_drop(true);
 
+        let host_seed = nkeys::KeyPair::new_server();
+        let host_id = host_seed.public_key();
+
         let mut up_cmd = cmd
             .args([
                 "up",
@@ -149,6 +153,8 @@ impl TestWashInstance {
                 "-o",
                 "json",
                 "--detached",
+                "--host-seed",
+                &host_seed.seed().expect("Should have a seed for the host"),
             ])
             .stdout(stdout.into_std().await)
             .spawn()
@@ -167,12 +173,15 @@ impl TestWashInstance {
             Err(_e) => panic!("Unable to parse kill cmd from wash up output"),
         };
 
-        // Wait until the host starts
+        // Wait until the host starts by checking the logs
         let mut tries = 30;
-        while !read_to_string(wasmcloud_log.to_string().trim_matches('"'))
-            .context("could not read output")?
-            .contains("Started wasmCloud OTP Host Runtime")
-        {
+        let mut start_message_logs: String = String::new();
+        loop {
+            start_message_logs = read_to_string(wasmcloud_log.to_string().trim_matches('"'))
+                .context("could not read log file output")?;
+            if (start_message_logs.contains("Started wasmCloud OTP Host Runtime")) {
+                break;
+            }
             tries -= 1;
             assert!(tries >= 0);
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
@@ -183,6 +192,7 @@ impl TestWashInstance {
             kill_cmd: kill_cmd.to_string(),
             nats,
             nats_port,
+            host_id,
         })
     }
 }
