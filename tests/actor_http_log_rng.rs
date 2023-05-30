@@ -23,7 +23,7 @@ static REQUEST: Lazy<Vec<u8>> = Lazy::new(|| {
         "max": 4242,
     }))
     .expect("failed to encode body to JSON");
-    serialize(&HttpRequest {
+    rmp_serde::to_vec(&HttpRequest {
         body,
         ..Default::default()
     })
@@ -96,7 +96,7 @@ async fn run(wasm: impl AsRef<[u8]>) -> anyhow::Result<Vec<(logging::Level, Stri
         status_code,
         header,
         body,
-    } = deserialize(response.as_ref()).context("failed to deserialize response")?;
+    } = rmp_serde::from_slice(response.as_ref()).context("failed to deserialize response")?;
     ensure!(status_code == 200);
     ensure!(header.is_empty());
 

@@ -2,7 +2,6 @@ use anyhow::{bail, Context};
 use wascap::prelude::{ClaimsBuilder, KeyPair};
 use wascap::wasm::embed_claims;
 use wascap::{caps, jwt};
-use wasmbus_rpc::common::{deserialize, serialize};
 use wasmcloud_host::{Actor, Runtime};
 use wasmcloud_interface_httpserver::{HttpRequest, HttpResponse};
 
@@ -27,7 +26,7 @@ async fn main() -> anyhow::Result<()> {
     let actor = Actor::read(&rt, wasm.as_slice())
         .await
         .context("failed to construct actor")?;
-    let buf = serialize(&HttpRequest::default()).context("failed to encode request")?;
+    let buf = rmp_serde::to_vec(&HttpRequest::default()).context("failed to encode request")?;
     match actor
         .call("HttpServer.HandleRequest", Some(buf))
         .await
@@ -38,7 +37,7 @@ async fn main() -> anyhow::Result<()> {
                 status_code,
                 header,
                 body,
-            } = deserialize(&response).context("failed to deserialize response")?;
+            } = rmp_serde::from_slice(&response).context("failed to deserialize response")?;
             println!("Status code: {status_code}");
             for (k, v) in header {
                 println!("Header `{k}`: `{v:?}`");

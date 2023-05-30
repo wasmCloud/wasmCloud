@@ -1,5 +1,4 @@
 pub use wascap::{caps, jwt};
-pub use wasmbus_rpc::common::{deserialize, serialize};
 
 use anyhow::Context;
 use once_cell::sync::Lazy;
