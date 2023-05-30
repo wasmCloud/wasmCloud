@@ -11,14 +11,31 @@ repository.workspace = true
 
 [features]
 default = [
+    "component",
     "rand",
     "uuid",
 ]
 
+component = [
+    "wit-bindgen"
+]
+
+module = [
+    "rmp-serde",
+    "serde",
+    "uuid",
+    "wasmcloud-actor-derive",
+    "wasmcloud-interface-httpserver",
+]
+
 [dependencies]
 rand = { workspace = true, optional = true }
+rmp-serde = { workspace = true, optional = true }
+serde = { workspace = true, features = ["derive"], optional = true }
 uuid = { workspace = true, optional = true }
-wit-bindgen = { workspace = true, features = ["macros"] }
+wasmcloud-actor-derive = { workspace = true, optional = true }
+wasmcloud-interface-httpserver = { workspace = true, optional = true }
+wit-bindgen = { workspace = true, features = ["macros"], optional = true }
 
 [build-dependencies]
 anyhow = { workspace = true }
