@@ -92,13 +92,12 @@ impl host::Host for Handler {
         operation: String,
         payload: Option<Vec<u8>>,
     ) -> anyhow::Result<Result<Option<Vec<u8>>, String>> {
-        use wasmbus_rpc::common::{deserialize, serialize};
-
         match (namespace.as_str(), operation.as_str()) {
             ("wasmcloud:builtin:logging", "Logging.WriteLog") => {
                 let payload = payload.context("payload cannot be empty")?;
                 let wasmcloud_interface_logging::LogEntry { level, text } =
-                    deserialize(payload.as_ref()).context("failed to deserialize log entry")?;
+                    rmp_serde::from_slice(payload.as_ref())
+                        .context("failed to deserialize log entry")?;
                 Ok(self
                     .write_log(&level, text)
                     .await
@@ -108,14 +107,14 @@ impl host::Host for Handler {
             ("wasmcloud:builtin:numbergen", "NumberGen.GenerateGuid") => {
                 match self.generate_guid().await {
                     Err(e) => Ok(Err(e.to_string())),
-                    Ok(guid) => Ok(serialize(&guid.to_string())
+                    Ok(guid) => Ok(rmp_serde::to_vec(&guid.to_string())
                         .context("failed to serialize value")
                         .map_err(|e| e.to_string())
                         .map(Some)),
                 }
             }
             ("wasmcloud:builtin:numbergen", "NumberGen.Random32") => {
-                Ok(serialize(&self.random_32().await)
+                Ok(rmp_serde::to_vec(&self.random_32().await)
                     .context("failed to serialize value")
                     .map_err(|e| e.to_string())
                     .map(Some))
@@ -123,8 +122,8 @@ impl host::Host for Handler {
             ("wasmcloud:builtin:numbergen", "NumberGen.RandomInRange") => {
                 let payload = payload.context("payload cannot be empty")?;
                 let wasmcloud_interface_numbergen::RangeLimit { min, max } =
-                    deserialize(&payload).context("failed to deserialize range limit")?;
-                Ok(serialize(&self.random_in_range(min, max).await)
+                    rmp_serde::from_slice(&payload).context("failed to deserialize range limit")?;
+                Ok(rmp_serde::to_vec(&self.random_in_range(min, max).await)
                     .context("failed to serialize value")
                     .map_err(|e| e.to_string())
                     .map(Some))
