@@ -16,10 +16,8 @@ dependencies = [
 name = "actor-echo-module"
 version = "0.1.0"
 dependencies = [
- "futures",
  "serde_json",
- "wasmbus-rpc",
- "wasmcloud-interface-httpserver",
+ "wasmcloud-actor",
 ]
 
 [[package]]
@@ -27,9 +25,9 @@ name = "actor-http-log-rng-component"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "rmp-serde",
  "serde",
  "serde_json",
- "wasmbus-rpc",
  "wasmcloud-actor",
  "wasmcloud-interface-httpserver",
  "wit-bindgen",
@@ -40,13 +38,9 @@ dependencies = [
 name = "actor-http-log-rng-module"
 version = "0.1.0"
 dependencies = [
- "futures",
  "serde",
  "serde_json",
- "wasmbus-rpc",
- "wasmcloud-interface-httpserver",
- "wasmcloud-interface-logging",
- "wasmcloud-interface-numbergen",
+ "wasmcloud-actor",
 ]
 
 [[package]]
@@ -3015,9 +3009,21 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "rand",
+ "rmp-serde",
+ "serde",
  "uuid",
+ "wasmcloud-actor-derive",
+ "wasmcloud-interface-httpserver",
  "wit-bindgen",
  "wit-deps",
+]
+
+[[package]]
+name = "wasmcloud-actor-derive"
+version = "0.1.0"
+dependencies = [
+ "quote",
+ "syn 2.0.17",
 ]
 
 [[package]]
@@ -3027,37 +3033,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cea02a20445b828ee195737fb3e23725d8a7356afa67cf2b8b58d74b7c44e43b"
 dependencies = [
  "async-trait",
- "serde",
- "serde_bytes",
- "serde_json",
- "wasmbus-rpc",
- "weld-codegen 0.5.0",
-]
-
-[[package]]
-name = "wasmcloud-interface-logging"
-version = "0.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "689624eff781235ce90f6e68fe6c099643b10c8a66959848581f30959866d43c"
-dependencies = [
- "async-trait",
- "cfg-if",
- "futures",
- "serde",
- "serde_bytes",
- "serde_json",
- "wasmbus-rpc",
- "weld-codegen 0.5.0",
-]
-
-[[package]]
-name = "wasmcloud-interface-numbergen"
-version = "0.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "745f71e1a7e6d84731319720fe9429255ee360cf1ffb012385631d23ab5a888c"
-dependencies = [
- "async-trait",
- "futures",
  "serde",
  "serde_bytes",
  "serde_json",

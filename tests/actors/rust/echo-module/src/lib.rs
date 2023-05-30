@@ -1,26 +1,20 @@
-#![cfg(target_arch = "wasm32")]
-
 use serde_json::json;
-use wasmbus_rpc::actor::prelude::*;
-use wasmcloud_interface_httpserver::{HttpRequest, HttpResponse, HttpServer, HttpServerReceiver};
+use wasmcloud_actor::{export_actor, HttpHandler, HttpRequest, HttpResponse};
 
-#[derive(Debug, Default, Actor, HealthResponder)]
-#[services(Actor, HttpServer)]
+#[derive(Default)]
 struct Echo;
 
-#[async_trait]
-impl HttpServer for Echo {
-    async fn handle_request(
+impl HttpHandler for Echo {
+    fn handle_request(
         &self,
-        _: &Context,
         HttpRequest {
             method,
             path,
             query_string,
             body,
             header,
-        }: &HttpRequest,
-    ) -> RpcResult<HttpResponse> {
+        }: HttpRequest,
+    ) -> Result<HttpResponse, String> {
         let body = serde_json::to_vec(&json!({
             "method": method,
             "path": path,
@@ -28,10 +22,12 @@ impl HttpServer for Echo {
             "body": body,
             "header": header,
         }))
-        .map_err(|e| RpcError::ActorHandler(format!("failed to serialize response: {e}")))?;
+        .map_err(|e| format!("failed to serialize response: {e}"))?;
         Ok(HttpResponse {
             body,
             ..Default::default()
         })
     }
 }
+
+export_actor!(Echo, HttpHandler);

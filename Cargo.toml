@@ -55,10 +55,12 @@ async-trait = { version = "0.1.66", default-features = false }
 futures = { version = "0.3.28", default-features = false }
 log = { version = "0.4.17", default-features = false }
 once_cell = { version = "1.17.1", default-features = false }
+quote = { version = "1.0", default-features = false }
 rand = { version = "0.8.5", default-features = false }
 rmp-serde = { version = "1.1.1", default-features = false }
 serde = { version = "1.0.152", default-features = false }
 serde_json = { version = "1.0.93", default-features = false }
+syn = { version = "2.0.17", default-features = false }
 test-actors = { path = "./tests/actors" }
 tokio = { version = "1.26.0", default-features = false }
 tracing = { version = "0.1.37", default-features = false }
@@ -68,8 +70,8 @@ wascap = { version = "0.10.0", default-features = false }
 wasi-cap-std-sync = { git = "https://github.com/bytecodealliance/wasmtime", rev = "3b90faf4a7715a66e1b7298d50300d235604cf50", default-features = false }
 wasi-common = { git = "https://github.com/bytecodealliance/wasmtime", rev = "3b90faf4a7715a66e1b7298d50300d235604cf50", default-features = false }
 wasm-compose = { version = "0.2.11", default-features = false }
-wasmbus-rpc = { version = "0.11.2", default-features = false }
 wasmcloud-actor = { path = "./crates/actor" }
+wasmcloud-actor-derive = { path = "./crates/actor/derive" }
 wasmcloud-host = { path = "./crates/host" }
 wasmcloud-interface-httpserver = { version = "0.9.0", default-features = false }
 wasmcloud-interface-logging = { version = "0.8.1", default-features = false }

@@ -3657,9 +3657,21 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "rand",
+ "rmp-serde",
+ "serde",
  "uuid",
+ "wasmcloud-actor-derive",
+ "wasmcloud-interface-httpserver",
  "wit-bindgen",
  "wit-deps",
+]
+
+[[package]]
+name = "wasmcloud-actor-derive"
+version = "0.1.0"
+dependencies = [
+ "quote",
+ "syn 2.0.17",
 ]
 
 [[package]]
