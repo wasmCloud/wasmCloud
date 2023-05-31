@@ -60,8 +60,13 @@
           # - external services running, which would require a more involved setup
           "tests/integration_build.rs"
           "tests/integration_claims.rs"
+          "tests/integration_inspect.rs"
+          "tests/integration_keys.rs"
+          "tests/integration_link.rs"
           "tests/integration_par.rs"
           "tests/integration_reg.rs"
+          "tests/integration_start.rs"
+          "tests/integration_stop.rs"
           "tests/integration_up.rs"
         ];
       };
