@@ -190,8 +190,8 @@ fn guest_error(
 #[instrument(skip(store))]
 fn guest_request(
     mut store: wasmtime::Caller<'_, super::Ctx>,
-    op_ptr: wasm::ptr,
-    pld_ptr: wasm::ptr,
+    operation_ptr: wasm::ptr,
+    payload_ptr: wasm::ptr,
 ) -> Result<()> {
     let (op, pld) = store
         .data_mut()
@@ -201,9 +201,9 @@ fn guest_request(
         .context("unexpected `__guest_request`")?;
 
     let memory = caller_memory(&mut store);
-    write_bytes(&mut store, &memory, op_ptr, op)
+    write_bytes(&mut store, &memory, operation_ptr, op)
         .context("failed to write `__guest_call` operation into guest memory")?;
-    write_bytes(&mut store, &memory, pld_ptr, pld)
+    write_bytes(&mut store, &memory, payload_ptr, pld)
         .context("failed to write `__guest_call` payload into guest memory")
 }
 
@@ -225,27 +225,27 @@ fn guest_response(
 #[allow(clippy::too_many_arguments)]
 async fn host_call(
     mut store: wasmtime::Caller<'_, super::Ctx>,
-    bd_ptr: wasm::ptr,
-    bd_len: wasm::usize,
-    ns_ptr: wasm::ptr,
-    ns_len: wasm::usize,
-    op_ptr: wasm::ptr,
-    op_len: wasm::usize,
-    pld_ptr: wasm::ptr,
-    pld_len: wasm::usize,
+    binding_ptr: wasm::ptr,
+    binding_len: wasm::usize,
+    namespace_ptr: wasm::ptr,
+    namespace_len: wasm::usize,
+    operation_ptr: wasm::ptr,
+    operation_len: wasm::usize,
+    payload_ptr: wasm::ptr,
+    payload_len: wasm::usize,
 ) -> Result<wasm::usize> {
     let memory = caller_memory(&mut store);
-    let bd = read_string(&mut store, &memory, bd_ptr, bd_len)
+    let bd = read_string(&mut store, &memory, binding_ptr, binding_len)
         .context("failed to read `__host_call` binding")?;
 
-    let ns = read_string(&mut store, &memory, ns_ptr, ns_len)
+    let ns = read_string(&mut store, &memory, namespace_ptr, namespace_len)
         .context("failed to read `__host_call` namespace")?;
 
-    let op = read_string(&mut store, &memory, op_ptr, op_len)
+    let op = read_string(&mut store, &memory, operation_ptr, operation_len)
         .context("failed to read `__host_call` operation")?;
 
     // TODO: make payload nullable
-    let pld = read_bytes(&mut store, &memory, pld_ptr, pld_len)
+    let pld = read_bytes(&mut store, &memory, payload_ptr, payload_len)
         .context("failed to read `__host_call` payload")?;
 
     match trace_span!("Handle::handle")
@@ -344,9 +344,25 @@ pub(super) fn add_to_linker(linker: &mut wasmtime::Linker<super::Ctx>) -> Result
     linker.func_wrap8_async(
         "wasmbus",
         "__host_call",
-        |store, bd_ptr, bd_len, ns_ptr, ns_len, op_ptr, op_len, pld_ptr, pld_len| {
+        |store,
+         binding_ptr,
+         binding_len,
+         namespace_ptr,
+         namespace_len,
+         operation_ptr,
+         operation_len,
+         payload_ptr,
+         payload_len| {
             Box::new(host_call(
-                store, bd_ptr, bd_len, ns_ptr, ns_len, op_ptr, op_len, pld_ptr, pld_len,
+                store,
+                binding_ptr,
+                binding_len,
+                namespace_ptr,
+                namespace_len,
+                operation_ptr,
+                operation_len,
+                payload_ptr,
+                payload_len,
             ))
         },
     )?;
