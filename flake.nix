@@ -43,6 +43,7 @@
           ".github"
           ".gitignore"
           ".pre-commit-config.yaml"
+          "Completions.md"
           "Dockerfile"
           "flake.lock"
           "flake.nix"
@@ -50,6 +51,7 @@
           "Makefile"
           "README.md"
           "rust-toolchain.toml"
+          "sample-manifest.yaml"
           "snap"
           "tools"
 
