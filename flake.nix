@@ -1,11 +1,13 @@
 {
   nixConfig.extra-substituters = [
     "https://wasmcloud.cachix.org"
+    "https://bytecodealliance.cachix.org"
     "https://nix-community.cachix.org"
     "https://cache.garnix.io"
   ];
   nixConfig.extra-trusted-public-keys = [
     "wasmcloud.cachix.org-1:9gRBzsKh+x2HbVVspreFg/6iFRiD4aOcUQfXVDl3hiM="
+    "bytecodealliance.cachix.org-1:0SBgh//n2n0heh0sDFhTm+ZKBRy2sInakzFGfzN531Y="
     "nix-community.cachix.org-1:mB9FSh9qf2dCimDSUo8Zy7bkq5CX+/rkCWyvRCYg3Fs="
     "cache.garnix.io:CTFPyKSLcx5RMJKfLo5EEPUObbA78b0YQ2DTCJXqr9g="
   ];
@@ -13,11 +15,20 @@
   inputs.fenix.url = github:nix-community/fenix/monthly;
   inputs.nixify.inputs.fenix.follows = "fenix";
   inputs.nixify.url = github:rvolosatovs/nixify;
+  inputs.wit-deps.url = github:bytecodealliance/wit-deps;
 
-  outputs = {nixify, ...}:
+  outputs = {
+    nixify,
+    wit-deps,
+    ...
+  }:
     with nixify.lib;
       rust.mkFlake {
         src = ./.;
+
+        overlays = [
+          wit-deps.overlays.default
+        ];
 
         excludePaths = [
           ".github"
@@ -99,5 +110,17 @@
                   export DYLD_FALLBACK_LIBRARY_PATH=$(rustc --print sysroot)/lib
                 '';
             };
+
+        withDevShells = {
+          devShells,
+          pkgs,
+          ...
+        }:
+          extendDerivations {
+            buildInputs = [
+              pkgs.wit-deps
+            ];
+          }
+          devShells;
       };
 }
