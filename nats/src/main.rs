@@ -124,13 +124,14 @@ impl ConnectionConfig {
         } else {
             ConnectionConfig::default()
         };
+
         if let Some(sub) = values.get(ENV_NATS_SUBSCRIPTION) {
             config
                 .subscriptions
                 .extend(sub.split(',').map(|s| s.to_string()));
         }
         if let Some(url) = values.get(ENV_NATS_URI) {
-            config.cluster_uris.push(url.clone());
+            config.cluster_uris = url.split(',').map(String::from).collect();
         }
         if let Some(jwt) = values.get(ENV_NATS_CLIENT_JWT) {
             config.auth_jwt = Some(jwt.clone());
@@ -206,6 +207,8 @@ impl NatsMessagingProvider {
                 ));
             }
         };
+
+        // Use the first visible cluster_uri
         let url = cfg.cluster_uris.get(0).unwrap();
 
         let client = opts
@@ -475,6 +478,7 @@ mod test {
     use crate::{generate_provider, ConnectionConfig, NatsMessagingProvider};
     use wasmbus_rpc::{
         core::{HostData, LinkDefinition},
+        error::RpcError,
         provider::ProviderHandler,
     };
 
@@ -534,7 +538,7 @@ mod test {
     /// NOTE: this is tested here for easy access to put_link/del_link without
     /// the fuss of loading/managing individual actors in the lattice
     #[tokio::test]
-    async fn test_unlink_unsub() {
+    async fn test_link_unsub() -> anyhow::Result<()> {
         // Build a nats messaging provider
         let prov = NatsMessagingProvider::default();
 
@@ -555,7 +559,7 @@ mod test {
             ),
             (String::from("URI"), String::from("127.0.0.1:4222")),
         ]);
-        let _ = prov.put_link(&ld).await;
+        prov.put_link(&ld).await?;
 
         // After putting a link there should be one sub
         let actor_map = prov.actors.write().await;
@@ -572,5 +576,46 @@ mod test {
         drop(actor_map);
 
         let _ = prov.shutdown().await;
+        Ok(())
+    }
+
+    /// Ensure that provided URIs are honored by NATS provider
+    /// https://github.com/wasmCloud/capability-providers/issues/231
+    ///
+    /// NOTE: This test can't be rolled into the put_link test because
+    /// NATS does not store the URL you fed it to connect -- it stores the host's view in
+    /// [async_nats::ServerInfo]
+    #[tokio::test]
+    async fn test_link_value_uri_usage() -> anyhow::Result<()> {
+        // Build a nats messaging provider
+        let prov = NatsMessagingProvider::default();
+
+        // Actor should have no clients and no subs before hand
+        let actor_map = prov.actors.write().await;
+        assert_eq!(actor_map.len(), 0);
+        drop(actor_map);
+
+        // Add a provider
+        let mut ld = LinkDefinition::default();
+        ld.actor_id = String::from("???");
+        ld.link_name = String::from("test");
+        ld.contract_id = String::from("test");
+        ld.values = HashMap::<String, String>::from([
+            (
+                String::from("SUBSCRIPTION"),
+                String::from("test.wasmcloud.unlink"),
+            ),
+            (String::from("URI"), String::from("99.99.99.99:4222")),
+        ]);
+        let result = prov.put_link(&ld).await;
+
+        // Expect the result to fail, connecting to an IP that (should) not exist
+        assert!(result.is_err(), "put_link failed");
+        assert!(
+            matches!(result, Err(RpcError::ProviderInit(msg)) if msg == "NATS connection to 99.99.99.99:4222: timed out")
+        );
+
+        let _ = prov.shutdown().await;
+        Ok(())
     }
 }
