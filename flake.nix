@@ -59,7 +59,7 @@
         }: {
           buildInputs ? [],
           depsBuildBuild ? [],
-          preBuild ? "",
+          preCheck ? "",
           ...
         } @ args: let
           cargoLock.root = readTOML ./Cargo.lock;
@@ -69,26 +69,35 @@
           lockPackages = cargoLock.root.package ++ cargoLock.actors-rust.package ++ cargoLock.wasi-adapter.package;
         in
           with pkgsCross;
-          with pkgs.lib; {
-            cargoLockParsed =
-              cargoLock.root
-              // {
-                package = lockPackages;
-              };
+          with pkgs.lib;
+            {
+              cargoLockParsed =
+                cargoLock.root
+                // {
+                  package = lockPackages;
+                };
 
-            buildInputs =
-              buildInputs
-              ++ optionals stdenv.hostPlatform.isDarwin [
-                pkgs.darwin.apple_sdk.frameworks.Security
-                pkgs.libiconv
-              ];
+              buildInputs =
+                buildInputs
+                ++ optionals stdenv.hostPlatform.isDarwin [
+                  pkgs.darwin.apple_sdk.frameworks.Security
+                  pkgs.libiconv
+                ];
 
-            depsBuildBuild =
-              depsBuildBuild
-              ++ optionals stdenv.hostPlatform.isDarwin [
-                darwin.apple_sdk.frameworks.CoreFoundation
-                libiconv
-              ];
-          };
+              depsBuildBuild =
+                depsBuildBuild
+                ++ optionals stdenv.hostPlatform.isDarwin [
+                  darwin.apple_sdk.frameworks.CoreFoundation
+                  libiconv
+                ];
+            }
+            // optionalAttrs (args ? cargoArtifacts && stdenv.hostPlatform.isDarwin) {
+              # See https://github.com/nextest-rs/nextest/issues/267
+              preCheck =
+                preCheck
+                + ''
+                  export DYLD_FALLBACK_LIBRARY_PATH=$(rustc --print sysroot)/lib
+                '';
+            };
       };
 }
