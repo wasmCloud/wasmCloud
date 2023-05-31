@@ -16,13 +16,16 @@
 
         buildOverrides = {
           pkgs,
+          pkgsCross ? pkgs,
+          ...
+        }: {
           buildInputs ? [],
           nativeBuildInputs ? [],
           depsBuildBuild ? [],
           ...
         } @ args:
-          with pkgs.lib;
-          with (args.pkgsCross or pkgs); {
+          with pkgsCross;
+          with pkgs.lib; {
             buildInputs =
               buildInputs
               ++ optionals stdenv.hostPlatform.isDarwin [
