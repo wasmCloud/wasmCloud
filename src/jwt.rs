@@ -96,6 +96,9 @@ pub struct CapabilityProvider {
     pub ver: Option<String>,
     /// The file hashes that correspond to the achitecture-OS target triples for this provider.
     pub target_hashes: HashMap<String, String>,
+    /// If the provider chooses, it can supply a JSON schma that describes its expected link configuration
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_schema: Option<serde_json::Value>,
 }
 
 /// The claims metadata corresponding to an account
@@ -286,6 +289,7 @@ impl WascapEntity for Invocation {
 }
 
 impl Claims<Account> {
+    /// Creates a new non-expiring Claims wrapper for metadata representing an account
     pub fn new(
         name: String,
         issuer: String,
@@ -295,6 +299,7 @@ impl Claims<Account> {
         Self::with_dates(name, issuer, subject, None, None, additional_keys)
     }
 
+    /// Creates a new Claims wrapper for metadata representing an account, with optional valid before and expiration dates
     pub fn with_dates(
         name: String,
         issuer: String,
@@ -320,6 +325,7 @@ impl Claims<Account> {
 }
 
 impl Claims<CapabilityProvider> {
+    /// Creates a new non-expiring Claims wrapper for metadata representing a capability provider
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         name: String,
@@ -336,6 +342,27 @@ impl Claims<CapabilityProvider> {
         )
     }
 
+    /// Creates a new Claims non-expiring wrapper for metadata representing a capability provider, with optional valid before and expiration dates
+    pub fn with_provider(
+        issuer: String,
+        subject: String,
+        not_before: Option<u64>,
+        expires: Option<u64>,
+        provider: CapabilityProvider,
+    ) -> Claims<CapabilityProvider> {
+        Claims {
+            metadata: Some(provider),
+            expires,
+            id: nuid::next(),
+            issued_at: since_the_epoch().as_secs(),
+            issuer,
+            subject,
+            not_before,
+            wascap_revision: Some(WASCAP_INTERNAL_REVISION),
+        }
+    }
+
+    /// Creates a new Claims wrapper for metadata representing a capability provider, with optional valid before and expiration dates
     #[allow(clippy::too_many_arguments)]
     pub fn with_dates(
         name: String,
@@ -357,6 +384,7 @@ impl Claims<CapabilityProvider> {
                 ver,
                 target_hashes: hashes,
                 vendor,
+                config_schema: None,
             }),
             expires,
             id: nuid::next(),
@@ -370,6 +398,7 @@ impl Claims<CapabilityProvider> {
 }
 
 impl Claims<Operator> {
+    /// Creates a new non-expiring Claims wrapper for metadata representing an operator
     pub fn new(
         name: String,
         issuer: String,
@@ -379,6 +408,7 @@ impl Claims<Operator> {
         Self::with_dates(name, issuer, subject, None, None, additional_keys)
     }
 
+    /// Creates a new Claims wrapper for metadata representing an operator, with optional valid before and expiration dates
     pub fn with_dates(
         name: String,
         issuer: String,
@@ -404,6 +434,7 @@ impl Claims<Operator> {
 }
 
 impl Claims<Cluster> {
+    /// Creates a new non-expiring Claims wrapper for metadata representing a cluster
     pub fn new(
         name: String,
         issuer: String,
@@ -413,6 +444,7 @@ impl Claims<Cluster> {
         Self::with_dates(name, issuer, subject, None, None, additional_keys)
     }
 
+    /// Creates a new Claims wrapper for metadata representing a cluster, with optional valid before and expiration dates
     pub fn with_dates(
         name: String,
         issuer: String,
@@ -438,6 +470,7 @@ impl Claims<Cluster> {
 }
 
 impl Claims<Actor> {
+    /// Creates a new non-expiring Claims wrapper for metadata representing an actor
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         name: String,
@@ -455,6 +488,7 @@ impl Claims<Actor> {
         )
     }
 
+    /// Creates a new Claims wrapper for metadata representing an actor, with optional valid before and expiration dates
     #[allow(clippy::too_many_arguments)]
     pub fn with_dates(
         name: String,
@@ -483,6 +517,7 @@ impl Claims<Actor> {
 }
 
 impl Claims<Invocation> {
+    /// Creates a new non-expiring Claims wrapper for metadata representing an invocation
     pub fn new(
         issuer: String,
         subject: String,
@@ -493,6 +528,7 @@ impl Claims<Invocation> {
         Self::with_dates(issuer, subject, None, None, target_url, origin_url, hash)
     }
 
+    /// Creates a new Claims wrapper for metadata representing an invocation, with optional valid before and expiration dates
     pub fn with_dates(
         issuer: String,
         subject: String,
@@ -557,7 +593,7 @@ where
         self
     }
 
-    /// Sets the appropriate metadata for this claims type (e.g. `Actor`, `Operator`, `CapabilityProvider` or `Account`)
+    /// Sets the appropriate metadata for this claims type (e.g. `Actor`, `Operator`, `Invocation`, `CapabilityProvider` or `Account`)
     pub fn with_metadata(&mut self, metadata: T) -> &mut Self {
         self.claims.metadata = Some(metadata);
         self
@@ -757,6 +793,7 @@ impl CapabilityProvider {
             vendor,
             rev,
             ver,
+            config_schema: None,
         }
     }
 }
@@ -1059,6 +1096,72 @@ mod test {
         assert_eq!(
             decoded.metadata.as_ref().unwrap().capid,
             "wasmcloud:testing"
+        );
+    }
+
+    #[test]
+    fn provider_round_trip_with_schema() {
+        let raw_schema = r#"
+        {
+            "$id": "https://wasmcloud.com/httpserver.schema.json",
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "title": "HTTP server provider schema",
+            "type": "object",
+            "properties": {
+              "port": {
+                "type": "integer",
+                "description": "The port number to use for the web server",
+                "minimum": 4000,
+                "maximum": 10000
+              },
+              "lastName": {
+                "type": "string",
+                "description": "Someone's last name."
+              },
+              "easterEgg": {
+                "description": "Indicates whether or not the easter egg should be displayed",
+                "type": "boolean"                
+              }
+            }
+          }
+        "#;
+        let account = KeyPair::new_account();
+        let provider = KeyPair::new_service();
+
+        let mut hashes = HashMap::new();
+        hashes.insert("aarch64-linux".to_string(), "abc12345".to_string());
+
+        let schema = serde_json::from_str::<serde_json::Value>(raw_schema).unwrap();
+        let mut hashes = HashMap::new();
+        hashes.insert("aarch64-linux".to_string(), "abc12345".to_string());
+        let claims = ClaimsBuilder::new()
+            .subject(&provider.public_key())
+            .issuer(&account.public_key())
+            .with_metadata(CapabilityProvider {
+                name: Some("Test Provider".to_string()),
+                capid: "wasmcloud:testing".to_string(),
+                vendor: "wasmCloud Internal".to_string(),
+                rev: Some(1),
+                ver: Some("v0.0.1".to_string()),
+                target_hashes: hashes,
+                config_schema: Some(schema),
+            })
+            .build();
+
+        let encoded = claims.encode(&account).unwrap();
+        let decoded: Claims<CapabilityProvider> = Claims::decode(&encoded).unwrap();
+        assert!(validate_token::<CapabilityProvider>(&encoded).is_ok());
+        assert_eq!(decoded.issuer, account.public_key());
+        assert_eq!(decoded.subject, provider.public_key());
+        assert_eq!(
+            decoded
+                .metadata
+                .as_ref()
+                .unwrap()
+                .config_schema
+                .as_ref()
+                .unwrap()["properties"]["port"]["minimum"],
+            4000
         );
     }
 
