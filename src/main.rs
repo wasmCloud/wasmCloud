@@ -68,6 +68,9 @@ impl logging::Host for HandlerArc {
             logging::Level::Info => info!(subject, context, message),
             logging::Level::Warn => warn!(subject, context, message),
             logging::Level::Error => error!(subject, context, message),
+            logging::Level::Critical => {
+                error!("[CRITICAL] subject: {subject}, context: {context}, message: {message}");
+            }
         }
         Ok(())
     }

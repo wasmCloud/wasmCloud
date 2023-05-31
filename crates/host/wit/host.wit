@@ -1,4 +1,6 @@
+package wasmcloud:host
+
 world interfaces {
-    import host: wasmcloud.host
-    import logging: logging.logging
+    import wasmcloud:bus/host
+    import wasi:logging/logging
 }

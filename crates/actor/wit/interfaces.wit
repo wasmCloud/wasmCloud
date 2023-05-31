@@ -1,6 +1,8 @@
-default world interfaces {
-    import host: wasmcloud.host
+package wasmcloud:actor
 
-    import logging: logging.logging
-    import random: random.random
+world interfaces {
+    import wasmcloud:bus/host
+
+    import wasi:logging/logging
+    import wasi:random/random
 }

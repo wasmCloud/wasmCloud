@@ -1,3 +1,5 @@
+package wasmcloud:host
+
 world actor {
-    export guest: wasmcloud.guest
+    export wasmcloud:bus/guest
 }

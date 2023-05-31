@@ -20,14 +20,14 @@ impl HostRng {
     /// Generate a 32-bit random number
     #[inline]
     pub fn random32() -> u32 {
-        random::get_random_u64() as _
+        wasi::random::random::get_random_u64() as _
     }
 
     /// Generate a v4-format guid in the form "nnnnnnnn-nnnn-nnnn-nnnn-nnnnnnnnnnnn"
     /// where n is a lowercase hex digit and all bits are random.
     #[cfg(feature = "uuid")]
     pub fn generate_guid() -> Uuid {
-        let buf = uuid::Bytes::try_from(random::get_random_bytes(16))
+        let buf = uuid::Bytes::try_from(wasi::random::random::get_random_bytes(16))
             .expect("invalid amount of bytes generated");
         uuid::Builder::from_random_bytes(buf).into_uuid()
     }
@@ -44,19 +44,19 @@ impl HostRng {
     /// Generate a 32-bit random number
     #[inline]
     pub fn random32() -> u32 {
-        random::random32()
+        wasi::random::random::random32()
     }
 
     /// Generate a v4-format guid in the form "nnnnnnnn-nnnn-nnnn-nnnn-nnnnnnnnnnnn"
     /// where n is a lowercase hex digit and all bits are random.
     #[cfg(feature = "uuid")]
     pub fn generate_guid() -> Uuid {
-        random::generate_guid()
+        wasi::random::random::generate_guid()
     }
 
     /// Generate a random integer within an inclusive range. ( min <= n <= max )
     pub fn random_in_range(min: u32, max: u32) -> u32 {
-        random::random_in_range(min, max)
+        wasi::random::random::random_in_range(min, max)
     }
 }
 
@@ -69,16 +69,16 @@ impl RngCore for HostRng {
 
     #[inline]
     fn next_u64(&mut self) -> u64 {
-        random::get_random_u64()
+        wasi::random::random::get_random_u64()
     }
 
     fn fill_bytes(&mut self, dest: &mut [u8]) {
         let n = dest.len();
         if usize::BITS <= u64::BITS || n <= u64::MAX as _ {
-            dest.copy_from_slice(&random::get_random_bytes(n as _));
+            dest.copy_from_slice(&wasi::random::random::get_random_bytes(n as _));
         } else {
             let (head, tail) = dest.split_at_mut(u64::MAX as _);
-            head.copy_from_slice(&random::get_random_bytes(u64::MAX));
+            head.copy_from_slice(&wasi::random::random::get_random_bytes(u64::MAX));
             // TODO: Optimize
             self.fill_bytes(tail);
         }
@@ -100,7 +100,7 @@ impl RngCore for HostRng {
 ///
 /// ```no_run
 /// use wasmcloud_actor::log;
-/// use wasmcloud_actor::logging::Level;
+/// use wasmcloud_actor::wasi::logging::logging::Level;
 ///
 /// # fn main() {
 /// let data = (42, "Forty-two");
@@ -115,7 +115,7 @@ impl RngCore for HostRng {
 macro_rules! log {
     // log!(context: "my_context", Level::Info, "a {} event", "log");
     (context: $context:expr, $lvl:expr, $($arg:tt)+) => ({
-        $crate::logging::log(
+        $crate::wasi::logging::logging::log(
             $lvl,
             $context,
             &std::fmt::format(format_args!($($arg)*)),
@@ -134,61 +134,73 @@ macro_rules! log {
 #[macro_export]
 macro_rules! trace {
     // trace!(context: "context", "a {} event", "log")
-    (context: $context:expr, $($arg:tt)+) => ($crate::log!(context: $context, $crate::logging::Level::Trace, $($arg)+));
+    (context: $context:expr, $($arg:tt)+) => ($crate::log!(context: $context, $crate::wasi::logging::logging::Level::Trace, $($arg)+));
 
     // trace!(context: "context"; "a {} event", "log")
-    (context: $context:expr; $($arg:tt)+) => ($crate::log!(context: $context, $crate::logging::Level::Trace; $($arg)+));
+    (context: $context:expr; $($arg:tt)+) => ($crate::log!(context: $context, $crate::wasi::logging::logging::Level::Trace; $($arg)+));
 
     // trace!("a {} event", "log")
-    ($($arg:tt)+) => ($crate::log!($crate::logging::Level::Trace, $($arg)+))
+    ($($arg:tt)+) => ($crate::log!($crate::wasi::logging::logging::Level::Trace, $($arg)+))
 }
 
 #[macro_export]
 macro_rules! debug {
     // debug!(context: "context", "a {} event", "log")
-    (context: $context:expr, $($arg:tt)+) => ($crate::log!(context: $context, $crate::logging::Level::Debug, $($arg)+));
+    (context: $context:expr, $($arg:tt)+) => ($crate::log!(context: $context, $crate::wasi::logging::logging::Level::Debug, $($arg)+));
 
     // debug!(context: "context"; "a {} event", "log")
-    (context: $context:expr; $($arg:tt)+) => ($crate::log!(context: $context, $crate::logging::Level::Debug; $($arg)+));
+    (context: $context:expr; $($arg:tt)+) => ($crate::log!(context: $context, $crate::wasi::logging::logging::Level::Debug; $($arg)+));
 
     // debug!("a {} event", "log")
-    ($($arg:tt)+) => ($crate::log!($crate::logging::Level::Debug, $($arg)+))
+    ($($arg:tt)+) => ($crate::log!($crate::wasi::logging::logging::Level::Debug, $($arg)+))
 }
 
 #[macro_export]
 macro_rules! info {
     // info!(context: "context", "a {} event", "log")
-    (context: $context:expr, $($arg:tt)+) => ($crate::log!(context: $context, $crate::logging::Level::Info, $($arg)+));
+    (context: $context:expr, $($arg:tt)+) => ($crate::log!(context: $context, $crate::wasi::logging::logging::Level::Info, $($arg)+));
 
     // info!(context: "context"; "a {} event", "log")
-    (context: $context:expr; $($arg:tt)+) => ($crate::log!(context: $context, $crate::logging::Level::Info; $($arg)+));
+    (context: $context:expr; $($arg:tt)+) => ($crate::log!(context: $context, $crate::wasi::logging::logging::Level::Info; $($arg)+));
 
     // info!("a {} event", "log")
-    ($($arg:tt)+) => ($crate::log!($crate::logging::Level::Info, $($arg)+))
+    ($($arg:tt)+) => ($crate::log!($crate::wasi::logging::logging::Level::Info, $($arg)+))
 }
 
 #[macro_export]
 macro_rules! warn {
     // warn!(context: "context", "a {} event", "log")
-    (context: $context:expr, $($arg:tt)+) => ($crate::log!(context: $context, $crate::logging::Level::Warn, $($arg)+));
+    (context: $context:expr, $($arg:tt)+) => ($crate::log!(context: $context, $crate::wasi::logging::logging::Level::Warn, $($arg)+));
 
     // warn!(context: "context"; "a {} event", "log")
-    (context: $context:expr; $($arg:tt)+) => ($crate::log!(context: $context, $crate::logging::Level::Warn; $($arg)+));
+    (context: $context:expr; $($arg:tt)+) => ($crate::log!(context: $context, $crate::wasi::logging::logging::Level::Warn; $($arg)+));
 
     // warn!("a {} event", "log")
-    ($($arg:tt)+) => ($crate::log!($crate::logging::Level::Warn, $($arg)+))
+    ($($arg:tt)+) => ($crate::log!($crate::wasi::logging::logging::Level::Warn, $($arg)+))
 }
 
 #[macro_export]
 macro_rules! error {
     // error!(context: "context", "a {} event", "log")
-    (context: $context:expr, $($arg:tt)+) => ($crate::log!(context: $context, $crate::logging::Level::Error, $($arg)+));
+    (context: $context:expr, $($arg:tt)+) => ($crate::log!(context: $context, $crate::wasi::logging::logging::Level::Error, $($arg)+));
 
     // error!(context: "context"; "a {} event", "log")
-    (context: $context:expr; $($arg:tt)+) => ($crate::log!(context: $context, $crate::logging::Level::Error; $($arg)+));
+    (context: $context:expr; $($arg:tt)+) => ($crate::log!(context: $context, $crate::wasi::logging::logging::Level::Error; $($arg)+));
 
     // error!("a {} event", "log")
-    ($($arg:tt)+) => ($crate::log!($crate::logging::Level::Error, $($arg)+))
+    ($($arg:tt)+) => ($crate::log!($crate::wasi::logging::logging::Level::Error, $($arg)+))
+}
+
+#[macro_export]
+macro_rules! critical {
+    // critical!(context: "context", "a {} event", "log")
+    (context: $context:expr, $($arg:tt)+) => ($crate::log!(context: $context, $crate::wasi::logging::logging::Level::Critical, $($arg)+));
+
+    // critical!(context: "context"; "a {} event", "log")
+    (context: $context:expr; $($arg:tt)+) => ($crate::log!(context: $context, $crate::wasi::logging::logging::Level::Critical; $($arg)+));
+
+    // critical!("a {} event", "log")
+    ($($arg:tt)+) => ($crate::log!($crate::wasi::logging::logging::Level::Critical, $($arg)+))
 }
 
 #[cfg(test)]
@@ -203,14 +215,18 @@ mod test {
     impl Actor {
         #[cfg(any(feature = "module", feature = "component"))]
         fn use_host_exports() {
-            logging::log(logging::Level::Trace, "context", "message");
-            logging::log(logging::Level::Debug, "context", "message");
-            logging::log(logging::Level::Info, "context", "message");
-            logging::log(logging::Level::Warn, "context", "message");
-            logging::log(logging::Level::Error, "context", "message");
-            let _: Vec<u8> = random::get_random_bytes(4);
-            let _: u64 = random::get_random_u64();
-            let (_, _): (u64, u64) = random::insecure_random();
+            wasi::logging::logging::log(wasi::logging::logging::Level::Trace, "context", "message");
+            wasi::logging::logging::log(wasi::logging::logging::Level::Debug, "context", "message");
+            wasi::logging::logging::log(wasi::logging::logging::Level::Info, "context", "message");
+            wasi::logging::logging::log(wasi::logging::logging::Level::Warn, "context", "message");
+            wasi::logging::logging::log(wasi::logging::logging::Level::Error, "context", "message");
+            wasi::logging::logging::log(
+                wasi::logging::logging::Level::Critical,
+                "context",
+                "message",
+            );
+            let _: Vec<u8> = wasi::random::random::get_random_bytes(4);
+            let _: u64 = wasi::random::random::get_random_u64();
             // TODO: Add support for HTTP
             //outgoing_http::handle(
             //    types::new_outgoing_request(
@@ -227,7 +243,8 @@ mod test {
             //        between_bytes_timeout_ms: Some(42),
             //    }),
             //);
-            host::call("binding", "namespace", "operation", Some(b"payload")).unwrap();
+            wasmcloud::bus::host::call("binding", "namespace", "operation", Some(b"payload"))
+                .unwrap();
         }
     }
 }

@@ -1,12 +1,14 @@
 #[allow(missing_docs)]
 mod bindgen {
     wasmtime::component::bindgen!({
-        world: "host.interfaces",
+        world: "interfaces",
         async: true,
     });
 }
 
-pub use bindgen::*;
+pub use bindgen::wasi::logging::logging;
+pub use bindgen::wasmcloud::bus::host;
+pub use bindgen::Interfaces;
 
 use logging::Host;
 use rand::{thread_rng, Rng, RngCore};

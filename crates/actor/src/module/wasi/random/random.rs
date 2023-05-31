@@ -1,4 +1,4 @@
-use super::host;
+use crate::wasmcloud::bus::host;
 
 use core::iter;
 

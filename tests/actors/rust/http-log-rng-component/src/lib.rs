@@ -2,12 +2,14 @@ wit_bindgen::generate!("actor");
 
 use serde::Deserialize;
 use serde_json::json;
-use wasmcloud_actor::{debug, error, info, logging, random, trace, warn, HostRng};
+use wasmcloud_actor::wasi::logging::logging;
+use wasmcloud_actor::wasi::random::random;
+use wasmcloud_actor::{debug, error, info, trace, warn, HostRng};
 use wasmcloud_interface_httpserver::{HttpRequest, HttpResponse};
 
 struct Actor;
 
-impl guest::Guest for Actor {
+impl exports::wasmcloud::bus::guest::Guest for Actor {
     fn call(operation: String, payload: Option<Vec<u8>>) -> Result<Option<Vec<u8>>, String> {
         assert_eq!(operation, "HttpServer.HandleRequest");
         let payload = payload.expect("missing payload");

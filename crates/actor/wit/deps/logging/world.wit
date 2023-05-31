@@ -1,3 +1,5 @@
-default world example-world {
-    import logging: pkg.logging
+package wasi:logging
+
+world example-world {
+    import logging
 }

@@ -10,7 +10,7 @@ use wascap::jwt;
 use wasmtime_wasi::preview2;
 
 wasmtime::component::bindgen!({
-    world: "guest.actor",
+    world: "actor",
     async: true,
 });
 
@@ -312,7 +312,7 @@ impl Instance {
                 .await
                 .context("failed to instantiate component `guest` interface")?;
         bindings
-            .guest()
+            .wasmcloud_bus_guest()
             .call_call(
                 &mut self.store,
                 operation.as_ref(),
