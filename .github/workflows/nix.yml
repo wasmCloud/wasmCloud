@@ -34,4 +34,4 @@ jobs:
     - uses: ./.github/actions/install-nix
       with: 
         cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
-    - run: nix develop -L --ignore-environment -c cargo pkgid
+    - run: nix develop -L --ignore-environment -c cargo tree
