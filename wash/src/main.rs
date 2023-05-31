@@ -9,6 +9,7 @@ use wash_lib::{
         start::StartCommand, stop::StopCommand, CommandOutput, OutputKind,
     },
     drain::Drain as DrainSelection,
+    registry::{RegistryCommand, RegistryPullCommand, RegistryPushCommand},
 };
 
 use app::AppCliCommand;
@@ -22,7 +23,6 @@ use down::DownCommand;
 use generate::NewCliCommand;
 use keys::KeysCliCommand;
 use par::ParCliCommand;
-use reg::RegCliCommand;
 use up::UpCommand;
 
 mod app;
@@ -39,7 +39,6 @@ mod drain;
 mod generate;
 mod keys;
 mod par;
-mod reg;
 mod smithy;
 mod up;
 mod util;
@@ -160,7 +159,13 @@ enum CliCommand {
     Par(ParCliCommand),
     /// Interact with OCI compliant registries
     #[clap(name = "reg", subcommand)]
-    Reg(RegCliCommand),
+    Reg(RegistryCommand),
+    /// Push an artifact to an OCI compliant registry
+    #[clap(name = "push")]
+    RegPush(RegistryPushCommand),
+    /// Pull an artifact from an OCI compliant registry
+    #[clap(name = "pull")]
+    RegPull(RegistryPullCommand),
     /// Start an actor or a provider
     #[clap(name = "start", subcommand)]
     Start(StartCommand),
@@ -206,7 +211,15 @@ async fn main() {
         CliCommand::Link(link_cli) => common::link_cmd::handle_command(link_cli, output_kind).await,
         CliCommand::New(new_cli) => generate::handle_command(new_cli).await,
         CliCommand::Par(par_cli) => par::handle_command(par_cli, output_kind).await,
-        CliCommand::Reg(reg_cli) => reg::handle_command(reg_cli, output_kind).await,
+        CliCommand::Reg(reg_cli) => {
+            common::registry_cmd::handle_command(reg_cli, output_kind).await
+        }
+        CliCommand::RegPush(reg_push_cli) => {
+            common::registry_cmd::registry_push(reg_push_cli, output_kind).await
+        }
+        CliCommand::RegPull(reg_pull_cli) => {
+            common::registry_cmd::registry_pull(reg_pull_cli, output_kind).await
+        }
         CliCommand::Start(start_cli) => {
             common::start_cmd::handle_command(start_cli, output_kind).await
         }
