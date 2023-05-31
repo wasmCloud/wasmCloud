@@ -1,3 +1,5 @@
-default world actor {
-    export guest: wasmcloud.guest
+package test-actors:http-log-rng
+
+world actor {
+    export wasmcloud:bus/guest
 }

@@ -5,7 +5,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
-wasi-preview1-component-adapter = { git = "https://github.com/bytecodealliance/wasmtime", rev = "3b90faf4a7715a66e1b7298d50300d235604cf50", default-features = false, target = "wasm32-unknown-unknown", artifact = "cdylib", features = ["reactor"] }
+wasi-preview1-component-adapter = { git = "https://github.com/bytecodealliance/wasmtime", rev = "c044790a9047db1593516b9c6916642c155ee87a", default-features = false, target = "wasm32-unknown-unknown", artifact = "cdylib", features = ["reactor"] }
 
 [workspace]
 

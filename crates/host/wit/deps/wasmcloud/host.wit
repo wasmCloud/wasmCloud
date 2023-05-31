@@ -1,3 +1,5 @@
-default interface host {
+package wasmcloud:bus
+
+interface host {
     call: func(binding: string, namespace: string, operation: string, payload: option<list<u8>>) -> result<option<list<u8>>, string>
 }

@@ -1,8 +1,9 @@
 use serde::Deserialize;
 use serde_json::json;
+use wasmcloud_actor::wasi::logging::logging;
+use wasmcloud_actor::wasi::random::random;
 use wasmcloud_actor::{
-    debug, error, export_actor, info, logging, random, trace, warn, HostRng, HttpHandler,
-    HttpRequest, HttpResponse,
+    debug, error, export_actor, info, trace, warn, HostRng, HttpHandler, HttpRequest, HttpResponse,
 };
 
 #[derive(Default)]

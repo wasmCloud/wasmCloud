@@ -1,4 +1,4 @@
-use super::host;
+use crate::wasmcloud::bus::host;
 
 use serde::Serialize;
 
@@ -12,6 +12,8 @@ pub enum Level {
     Info,
     Warn,
     Error,
+    // NOTE: Legacy implementation lacked Critical level
+    Critical,
 }
 
 /// Emit a log message.
@@ -26,6 +28,7 @@ pub fn log(level: Level, context: &str, message: &str) {
                 Level::Info => "info",
                 Level::Warn => "warn",
                 Level::Error => "error",
+                Level::Critical => "critical",
             }
         }
     }

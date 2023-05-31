@@ -66,19 +66,16 @@ tokio = { version = "1.26.0", default-features = false }
 tracing = { version = "0.1.37", default-features = false }
 tracing-subscriber = { version = "0.3.17", default-features = false }
 uuid = { version = "1.3.0", default-features = false }
-wascap = { version = "0.10.0", default-features = false }
-wasi-cap-std-sync = { git = "https://github.com/bytecodealliance/wasmtime", rev = "3b90faf4a7715a66e1b7298d50300d235604cf50", default-features = false }
-wasi-common = { git = "https://github.com/bytecodealliance/wasmtime", rev = "3b90faf4a7715a66e1b7298d50300d235604cf50", default-features = false }
-wasm-compose = { version = "0.2.11", default-features = false }
+wascap = { version = "0.11.0", default-features = false }
 wasmcloud-actor = { path = "./crates/actor" }
 wasmcloud-actor-derive = { path = "./crates/actor/derive" }
 wasmcloud-host = { path = "./crates/host" }
 wasmcloud-interface-httpserver = { version = "0.9.0", default-features = false }
 wasmcloud-interface-logging = { version = "0.8.1", default-features = false }
 wasmcloud-interface-numbergen = { version = "0.8.1", default-features = false }
-wasmparser = { version = "0.103.0", default-features = false }
-wasmtime = { git = "https://github.com/bytecodealliance/wasmtime", rev = "3b90faf4a7715a66e1b7298d50300d235604cf50", default-features = false }
-wasmtime-wasi = { git = "https://github.com/bytecodealliance/wasmtime", rev = "3b90faf4a7715a66e1b7298d50300d235604cf50", default-features = false }
-wit-bindgen = { version = "0.4.0", default-features = false }
-wit-component = { version = "0.7.4", default-features = false }
+wasmparser = { version = "0.107.0", default-features = false }
+wasmtime = { git = "https://github.com/bytecodealliance/wasmtime", rev = "c044790a9047db1593516b9c6916642c155ee87a", default-features = false }
+wasmtime-wasi = { git = "https://github.com/bytecodealliance/wasmtime", rev = "c044790a9047db1593516b9c6916642c155ee87a", default-features = false }
+wit-bindgen = { version = "0.7.0", default-features = false }
+wit-component = { version = "0.11.0", default-features = false }
 wit-deps = { version = "0.3.0", default-features = false }
