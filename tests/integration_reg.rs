@@ -11,7 +11,7 @@ const LOGGING_PAR: &str = "wasmcloud.azurecr.io/logging:0.9.1";
 const LOCAL_REGISTRY: &str = "localhost:5001";
 
 #[test]
-fn integration_pull_basic() {
+fn integration_reg_pull_basic() {
     const SUBFOLDER: &str = "pull_basic";
     let pull_dir = test_dir_with_subfolder(SUBFOLDER);
 
@@ -19,7 +19,6 @@ fn integration_pull_basic() {
 
     let pull_basic = wash()
         .args([
-            "reg",
             "pull",
             ECHO_WASM,
             "--destination",
@@ -36,7 +35,7 @@ fn integration_pull_basic() {
 }
 
 #[test]
-fn integration_pull_comprehensive() {
+fn integration_reg_pull_comprehensive() {
     const SUBFOLDER: &str = "pull_comprehensive";
     let pull_dir = test_dir_with_subfolder(SUBFOLDER);
 
@@ -45,7 +44,6 @@ fn integration_pull_comprehensive() {
 
     let pull_echo_comprehensive = wash()
         .args([
-            "reg",
             "pull",
             ECHO_WASM,
             "--destination",
@@ -67,7 +65,6 @@ fn integration_pull_comprehensive() {
 
     let pull_logging_comprehensive = wash()
         .args([
-            "reg",
             "pull",
             LOGGING_PAR,
             "--destination",
@@ -90,8 +87,9 @@ fn integration_pull_comprehensive() {
     remove_dir_all(pull_dir).unwrap();
 }
 
+// NOTE: This test will fail without a local docker registry running
 #[test]
-fn integration_push_basic() {
+fn integration_reg_push_basic() {
     const SUBFOLDER: &str = "push_basic";
     let push_dir = test_dir_with_subfolder(SUBFOLDER);
 
@@ -100,12 +98,13 @@ fn integration_push_basic() {
     // Pull echo.wasm for push tests
     wash()
         .args([
-            "reg",
             "pull",
             ECHO_WASM,
             "--destination",
             pull_echo_wasm.to_str().unwrap(),
         ])
+        .stderr(std::process::Stdio::inherit())
+        .stdout(std::process::Stdio::inherit())
         .output()
         .unwrap_or_else(|_| panic!("failed to pull {ECHO_WASM} for push basic"));
 
@@ -120,9 +119,14 @@ fn integration_push_basic() {
             pull_echo_wasm.to_str().unwrap(),
             "--insecure",
         ])
+        .stderr(std::process::Stdio::inherit())
+        .stdout(std::process::Stdio::inherit())
         .output()
         .expect("failed to push echo.wasm to local registry");
-    assert!(push_echo.status.success());
+    assert!(
+        push_echo.status.success(),
+        "failed to push to local registry"
+    );
 
     let pull_local_registry_echo = wash()
         .args([
@@ -133,16 +137,22 @@ fn integration_push_basic() {
             "--destination",
             localregistry_echo_wasm.to_str().unwrap(),
         ])
+        .stderr(std::process::Stdio::inherit())
+        .stdout(std::process::Stdio::inherit())
         .output()
         .expect("failed to pull echo.wasm from local registry");
 
-    assert!(pull_local_registry_echo.status.success());
+    assert!(
+        pull_local_registry_echo.status.success(),
+        "failed to pull echo.wasm from local registry"
+    );
 
     remove_dir_all(push_dir).unwrap();
 }
 
+// NOTE: This test will fail without a local docker registry running
 #[test]
-fn integration_push_comprehensive() {
+fn integration_reg_push_comprehensive() {
     const SUBFOLDER: &str = "push_comprehensive";
     let push_dir = test_dir_with_subfolder(SUBFOLDER);
 
@@ -152,7 +162,6 @@ fn integration_push_comprehensive() {
     // Pull echo.wasm and logging.par.gz for push tests
     wash()
         .args([
-            "reg",
             "pull",
             ECHO_WASM,
             "--destination",
@@ -178,7 +187,6 @@ fn integration_push_comprehensive() {
     let logging_push_all_options = &format!("{LOCAL_REGISTRY}/logging:alloptions");
     let push_all_options = wash()
         .args([
-            "reg",
             "push",
             logging_push_all_options,
             pull_logging_par.to_str().unwrap(),
