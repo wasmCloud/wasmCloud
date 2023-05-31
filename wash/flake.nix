@@ -1,4 +1,15 @@
 {
+  nixConfig.extra-substituters = [
+    "https://wasmcloud.cachix.org"
+    "https://nix-community.cachix.org"
+    "https://cache.garnix.io"
+  ];
+  nixConfig.extra-trusted-public-keys = [
+    "wasmcloud.cachix.org-1:9gRBzsKh+x2HbVVspreFg/6iFRiD4aOcUQfXVDl3hiM="
+    "nix-community.cachix.org-1:mB9FSh9qf2dCimDSUo8Zy7bkq5CX+/rkCWyvRCYg3Fs="
+    "cache.garnix.io:CTFPyKSLcx5RMJKfLo5EEPUObbA78b0YQ2DTCJXqr9g="
+  ];
+
   description = "wash - wasmCloud Shell";
 
   inputs.nixify.url = github:rvolosatovs/nixify;
@@ -12,17 +23,42 @@
         name = "wash";
         src = ./.;
 
+        targets.wasm32-wasi = false; # `wash` does not compile for WASI
+
+        doCheck = false; # testing is performed in checks via `nextest`
+
         buildOverrides = {
           pkgs,
-          nativeBuildInputs ? [],
+          pkgsCross ? pkgs,
           ...
         }: {
-          nativeBuildInputs =
-            nativeBuildInputs
-            ++ [
-              pkgs.protobuf # build dependency of prost-build v0.9.0
-            ];
-        };
+          buildInputs ? [],
+          nativeBuildInputs ? [],
+          depsBuildBuild ? [],
+          ...
+        } @ args:
+          with pkgsCross;
+          with pkgs.lib; {
+            buildInputs =
+              buildInputs
+              ++ optionals stdenv.hostPlatform.isDarwin [
+                pkgs.darwin.apple_sdk.frameworks.Security
+                pkgs.libiconv
+              ];
+
+            depsBuildBuild =
+              depsBuildBuild
+              ++ optionals stdenv.hostPlatform.isDarwin [
+                darwin.apple_sdk.frameworks.CoreFoundation
+                libiconv
+              ];
+
+            nativeBuildInputs =
+              nativeBuildInputs
+              ++ [
+                pkgs.protobuf # build dependency of prost-build v0.9.0
+              ];
+          };
 
         withDevShells = {
           pkgs,
