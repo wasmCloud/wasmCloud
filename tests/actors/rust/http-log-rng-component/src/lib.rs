@@ -2,7 +2,7 @@ wit_bindgen::generate!("actor");
 
 use serde::Deserialize;
 use serde_json::json;
-use wasmcloud_actor::{logging, HostRng};
+use wasmcloud_actor::{debug, error, info, logging, random, trace, warn, HostRng};
 use wasmcloud_interface_httpserver::{HttpRequest, HttpResponse};
 
 struct Actor;
@@ -37,14 +37,27 @@ impl guest::Guest for Actor {
         logging::log(logging::Level::Warn, "warn-context", "warn");
         logging::log(logging::Level::Error, "error-context", "error");
 
+        trace!(context: "trace-context", "trace");
+        debug!(context: "debug-context", "debug");
+        info!(context: "info-context", "info");
+        warn!(context: "warn-context", "warn");
+        error!(context: "error-context", "error");
+
+        trace!("trace");
+        debug!("debug");
+        info!("info");
+        warn!("warn");
+        error!("error");
+
         let res = json!({
-            "guid": HostRng::generate_guid().to_string(),
-            "random_in_range": HostRng::random_in_range(min, max),
+            "get_random_bytes": random::get_random_bytes(8),
+            "get_random_u64": random::get_random_u64(),
+            "guid": HostRng::generate_guid(),
             "random_32": HostRng::random32(),
+            "random_in_range": HostRng::random_in_range(min, max),
         });
         eprintln!("response: `{res:?}`");
         let body = serde_json::to_vec(&res).expect("failed to encode response to JSON");
-
         let res = rmp_serde::to_vec(&HttpResponse {
             body,
             ..Default::default()

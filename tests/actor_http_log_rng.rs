@@ -40,13 +40,6 @@ impl logging::Host for Logging {
         context: String,
         message: String,
     ) -> anyhow::Result<()> {
-        match level {
-            logging::Level::Trace => assert_eq!(message, "trace"),
-            logging::Level::Debug => assert_eq!(message, "debug"),
-            logging::Level::Info => assert_eq!(message, "info"),
-            logging::Level::Warn => assert_eq!(message, "warn"),
-            logging::Level::Error => assert_eq!(message, "error"),
-        }
         self.0.lock().await.push((level, context, message));
         Ok(())
     }
@@ -83,15 +76,6 @@ async fn run(wasm: impl AsRef<[u8]>) -> anyhow::Result<Vec<(logging::Level, Stri
             .context("response missing")?
     };
 
-    #[derive(Deserialize)]
-    struct Response {
-        guid: String,
-        random_in_range: u32,
-        // If this is truly random, we have nothing to assert here
-        #[allow(dead_code)]
-        random_32: u32,
-    }
-
     let HttpResponse {
         status_code,
         header,
@@ -100,10 +84,25 @@ async fn run(wasm: impl AsRef<[u8]>) -> anyhow::Result<Vec<(logging::Level, Stri
     ensure!(status_code == 200);
     ensure!(header.is_empty());
 
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    // NOTE: If values are truly random, we have nothing to assert for some of these fields
+    struct Response {
+        #[allow(dead_code)]
+        get_random_bytes: [u8; 8],
+        #[allow(dead_code)]
+        get_random_u64: u64,
+        guid: String,
+        random_in_range: u32,
+        #[allow(dead_code)]
+        random_32: u32,
+    }
     let Response {
+        get_random_bytes: _,
+        get_random_u64: _,
         guid,
-        random_in_range,
         random_32: _,
+        random_in_range,
     } = serde_json::from_slice(&body).context("failed to decode body as JSON")?;
     ensure!(Uuid::from_str(&guid).is_ok());
     ensure!(
@@ -121,6 +120,57 @@ async fn actor_http_log_rng_module() -> anyhow::Result<()> {
     assert_eq!(
         logs,
         vec![
+            (
+                logging::Level::Trace,
+                "".into(),
+                "context: trace-context; trace".into()
+            ),
+            (
+                logging::Level::Debug,
+                "".into(),
+                "context: debug-context; debug".into()
+            ),
+            (
+                logging::Level::Info,
+                "".into(),
+                "context: info-context; info".into()
+            ),
+            (
+                logging::Level::Warn,
+                "".into(),
+                "context: warn-context; warn".into()
+            ),
+            (
+                logging::Level::Error,
+                "".into(),
+                "context: error-context; error".into()
+            ),
+            (
+                logging::Level::Trace,
+                "".into(),
+                "context: trace-context; trace".into()
+            ),
+            (
+                logging::Level::Debug,
+                "".into(),
+                "context: debug-context; debug".into()
+            ),
+            (
+                logging::Level::Info,
+                "".into(),
+                "context: info-context; info".into()
+            ),
+            (
+                logging::Level::Warn,
+                "".into(),
+                "context: warn-context; warn".into()
+            ),
+            (
+                logging::Level::Error,
+                "".into(),
+                "context: error-context; error".into()
+            ),
+            (logging::Level::Trace, "".into(), "trace".into()),
             (logging::Level::Debug, "".into(), "debug".into()),
             (logging::Level::Info, "".into(), "info".into()),
             (logging::Level::Warn, "".into(), "warn".into()),
@@ -155,6 +205,28 @@ async fn actor_http_log_rng_component() -> anyhow::Result<()> {
                 "error-context".into(),
                 "error".into()
             ),
+            (
+                logging::Level::Trace,
+                "trace-context".into(),
+                "trace".into()
+            ),
+            (
+                logging::Level::Debug,
+                "debug-context".into(),
+                "debug".into()
+            ),
+            (logging::Level::Info, "info-context".into(), "info".into()),
+            (logging::Level::Warn, "warn-context".into(), "warn".into()),
+            (
+                logging::Level::Error,
+                "error-context".into(),
+                "error".into()
+            ),
+            (logging::Level::Trace, "".into(), "trace".into()),
+            (logging::Level::Debug, "".into(), "debug".into()),
+            (logging::Level::Info, "".into(), "info".into()),
+            (logging::Level::Warn, "".into(), "warn".into()),
+            (logging::Level::Error, "".into(), "error".into()),
         ]
     );
     Ok(())
