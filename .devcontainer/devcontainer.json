@@ -1,0 +1,22 @@
+{
+    "name": "wasmCloud",
+    "image": "rust:latest",
+    "features": {
+        "ghcr.io/devcontainers/features/nix": {}
+    },
+    "customizations": {
+        "vscode": {
+            "settings": {
+                "git.alwaysSignOff": true
+            },
+            "extensions": [
+                "rust-lang.rust-analyzer",
+                "panicbit.cargo",
+                "serayuzgur.crates",
+                "bbenoist.Nix",
+                "tamasfe.even-better-toml"
+            ]
+        }
+    },
+    "postAttachCommand": "rustup show"
+}
