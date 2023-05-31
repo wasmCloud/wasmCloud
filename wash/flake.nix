@@ -25,6 +25,8 @@
 
         targets.wasm32-wasi = false; # `wash` does not compile for WASI
 
+        doCheck = false; # testing is performed in checks via `nextest`
+
         buildOverrides = {
           pkgs,
           pkgsCross ? pkgs,
