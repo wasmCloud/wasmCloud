@@ -17,7 +17,7 @@ pub enum Level {
 /// Emit a log message.
 ///
 /// A log message has a `level` describing what kind of message is being sent, a context, which is an uninterpreted string meant to help consumers group similar messages, and a string containing the message text.
-pub fn log(level: Level, cx: &str, msg: &str) {
+pub fn log(level: Level, context: &str, message: &str) {
     impl From<Level> for &'static str {
         fn from(level: Level) -> Self {
             match level {
@@ -46,10 +46,10 @@ pub fn log(level: Level, cx: &str, msg: &str) {
     }
 
     let level = level.into();
-    let text = if cx == "" {
-        msg.into()
+    let text = if context == "" {
+        message.into()
     } else {
-        format!("context: {cx}; {msg}")
+        format!("context: {context}; {message}")
     };
     let pld = rmp_serde::to_vec(&LogEntry { level, text })
         .expect("failed to serialize `Logging.WriteLog` request");
