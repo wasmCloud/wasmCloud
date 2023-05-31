@@ -29,7 +29,7 @@ checksum = "6776fc96284a0bb647b615056fc496d1fe1644a7ab01829818a6d91cae888b84"
 [[package]]
 name = "byte-array-literals"
 version = "10.0.0"
-source = "git+https://github.com/bytecodealliance/wasmtime?rev=c044790a9047db1593516b9c6916642c155ee87a#c044790a9047db1593516b9c6916642c155ee87a"
+source = "git+https://github.com/rvolosatovs/wasmtime?rev=c1a43101bd4548350629ef657fb91b4888e68087#c1a43101bd4548350629ef657fb91b4888e68087"
 
 [[package]]
 name = "cfg-if"
@@ -280,7 +280,7 @@ dependencies = [
 [[package]]
 name = "wasi-preview1-component-adapter"
 version = "10.0.0"
-source = "git+https://github.com/bytecodealliance/wasmtime?rev=c044790a9047db1593516b9c6916642c155ee87a#c044790a9047db1593516b9c6916642c155ee87a"
+source = "git+https://github.com/rvolosatovs/wasmtime?rev=c1a43101bd4548350629ef657fb91b4888e68087#c1a43101bd4548350629ef657fb91b4888e68087"
 dependencies = [
  "byte-array-literals",
  "object",

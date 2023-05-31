@@ -5,7 +5,8 @@ edition = "2021"
 publish = false
 
 [dependencies]
-wasi-preview1-component-adapter = { git = "https://github.com/bytecodealliance/wasmtime", rev = "c044790a9047db1593516b9c6916642c155ee87a", default-features = false, target = "wasm32-unknown-unknown", artifact = "cdylib", features = ["reactor"] }
+# TODO: Remove fork pin once https://github.com/bytecodealliance/wasmtime/pull/6486 is merged
+wasi-preview1-component-adapter = { git = "https://github.com/rvolosatovs/wasmtime", rev = "c1a43101bd4548350629ef657fb91b4888e68087", default-features = false, target = "wasm32-unknown-unknown", artifact = "cdylib", features = ["reactor"] }
 
 [workspace]
 
