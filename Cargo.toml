@@ -1,6 +1,6 @@
 [package]
 name = "provider-archive"
-version = "0.6.0"
+version = "0.7.0"
 authors = ["wasmCloud Team"]
 edition = "2021"
 description = "Library for reading and writing wasmCloud capability provider archive files"
@@ -12,7 +12,7 @@ keywords = ["jwt", "zip", "archive", "security", "wasmcloud"]
 categories = ["cryptography", "authentication", "wasm"]
 
 [dependencies]
-wascap = "0.8.0"
+wascap = "0.11.0"
 data-encoding = "2.3.1"
 ring = "0.16"
 tokio = { version = "1.17.0", features = ["io-util"], default-features = false }

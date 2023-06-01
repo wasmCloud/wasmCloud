@@ -57,4 +57,5 @@ The following is a list of the custom claims that will appear in the `wascap` se
 * `capid` - The capability contract ID (e.g. `wasmcloud:messaging` or `wasmcloud:keyvalue`, etc). Note that the plugin itself is required to expose this information to the runtime when it receives the "query descriptor" message. This value is to allow processes other than the wasmCloud runtime to interrogate the core metadata.
 * `version` - Friendly version string
 * `revision` - A monotonically increasing revision value. This value will be used to retrieve / store version-specific files.
+* `config_schema` - An optional JSON schema that describes the configuration structure for this capability provider. 
 
