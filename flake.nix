@@ -111,6 +111,16 @@
                 '';
             };
 
+        withPackages = {
+          packages,
+          hostRustToolchain,
+          ...
+        }:
+          packages
+          // {
+            rust = hostRustToolchain;
+          };
+
         withDevShells = {
           devShells,
           pkgs,

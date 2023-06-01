@@ -1,22 +1,40 @@
 {
     "name": "wasmCloud",
-    "image": "rust:latest",
-    "features": {
-        "ghcr.io/devcontainers/features/nix": {}
-    },
+    "dockerComposeFile": "docker-compose.yml",
+    "service": "dev",
+    "workspaceFolder": "/workspace",
+
+    "userEnvProbe": "loginShell",
+    "updateRemoteUserUID": false,
+
+    "onCreateCommand": "${containerWorkspaceFolder}/.devcontainer/setup.sh",
+
     "customizations": {
         "vscode": {
             "settings": {
-                "git.alwaysSignOff": true
+                "git.alwaysSignOff": true,
+                "nix.enableLanguageServer": true,
+                "nix.serverPath": "rnix-lsp"
+            },
+            "runItOn": {
+                "commands": [
+                    {
+                        "match": "flake\\.{toml,lock}|rust-toolchain.toml",
+                        "isShellCommand": false,
+                        "cmd": "nixEnvSelector.hitEnv"
+                    }
+                ]
             },
             "extensions": [
-                "rust-lang.rust-analyzer",
+                "arrterian.nix-env-selector",
+                "jnoortheen.nix-ide",
+                "fsevenm.run-it-on",
                 "panicbit.cargo",
+                "rust-lang.rust-analyzer",
                 "serayuzgur.crates",
-                "bbenoist.Nix",
+                "yzhang.markdown-all-in-one",
                 "tamasfe.even-better-toml"
-            ]
+            ],
         }
-    },
-    "postAttachCommand": "rustup show"
+    }
 }
