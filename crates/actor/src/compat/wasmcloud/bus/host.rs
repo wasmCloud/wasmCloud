@@ -4,7 +4,7 @@ pub fn call(
     namespace: &str,
     operation: &str,
     payload: Option<&[u8]>,
-) -> Result<Vec<u8>, String> {
+) -> Result<Option<Vec<u8>>, String> {
     #[link(wasm_import_module = "wasmbus")]
     extern "C" {
         pub fn __host_call(
@@ -44,7 +44,7 @@ pub fn call(
             // call succeeded
             let mut buf = vec![0; unsafe { __host_response_len() }];
             unsafe { __host_response(buf.as_mut_ptr()) };
-            Ok(buf)
+            Ok(Some(buf))
         }
         _ => {
             // call failed

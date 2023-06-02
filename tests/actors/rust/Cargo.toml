@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "echo-module",
+    "http-log-rng-compat",
     "http-log-rng-component",
     "http-log-rng-module",
 ]

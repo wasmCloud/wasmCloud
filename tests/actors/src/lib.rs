@@ -1,6 +1,11 @@
 pub const RUST_ECHO_MODULE: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/actor-rust-echo-module.wasm"));
 
+pub const RUST_HTTP_LOG_RNG_COMPAT: &[u8] = include_bytes!(concat!(
+    env!("OUT_DIR"),
+    "/actor-rust-http-log-rng-compat.wasm"
+));
+
 pub const RUST_HTTP_LOG_RNG_COMPONENT: &[u8] = include_bytes!(concat!(
     env!("OUT_DIR"),
     "/actor-rust-http-log-rng-component.wasm"

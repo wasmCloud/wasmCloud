@@ -37,7 +37,8 @@ pub(crate) fn generate_guid() -> Uuid {
         "NumberGen.GenerateGuid",
         None,
     )
-    .expect("failed to call `NumberGen.GenerateGuid`");
+    .expect("failed to call `NumberGen.GenerateGuid`")
+    .expect("`NumberGen.GenerateGuid` did not return a response");
     let id: String =
         rmp_serde::from_slice(&res).expect("failed to decode `NumberGen.GenerateGuid` response");
     Uuid::try_parse(&id).expect("failed to parse UUID")
@@ -57,7 +58,8 @@ pub(crate) fn random_in_range(min: u32, max: u32) -> u32 {
         "NumberGen.RandomInRange",
         Some(&pld),
     )
-    .expect("failed to call `NumberGen.RandomInRange`");
+    .expect("failed to call `NumberGen.RandomInRange`")
+    .expect("`NumberGen.RandomInRange` did not return a response");
     rmp_serde::from_slice(&res).expect("failed to decode `NumberGen.RandomInRange` response")
 }
 
@@ -68,6 +70,7 @@ pub(crate) fn random32() -> u32 {
         "NumberGen.Random32",
         None,
     )
-    .expect("failed to call `NumberGen.Random32`");
+    .expect("failed to call `NumberGen.Random32`")
+    .expect("`NumberGen.Random32` did not return a response");
     rmp_serde::from_slice(&res).expect("failed to decode `NumberGen.Random32` response")
 }

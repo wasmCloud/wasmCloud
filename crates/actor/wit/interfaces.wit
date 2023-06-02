@@ -1,8 +1,14 @@
 package wasmcloud:actor
 
+/// All interfaces provided by the host. This may change in backwards-incompatible way.
 world interfaces {
     import wasmcloud:bus/host
 
     import wasi:logging/logging
     import wasi:random/random
+}
+
+/// All interfaces guaranteed to be provided by all previous and future hosts.
+world interfaces-compat0 {
+    import wasmcloud:bus/host
 }

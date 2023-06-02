@@ -1,11 +1,18 @@
-#[cfg(all(not(feature = "module"), feature = "component"))]
+#[cfg(all(
+    not(feature = "module"),
+    feature = "component",
+    not(feature = "compat")
+))]
 wit_bindgen::generate!("interfaces");
 
-#[cfg(feature = "module")]
-mod module;
+#[cfg(any(feature = "module", all(feature = "component", feature = "compat")))]
+mod compat;
+
+#[cfg(any(feature = "module", all(feature = "component", feature = "compat")))]
+pub use compat::*;
 
 #[cfg(feature = "module")]
-pub use module::*;
+pub use wasmcloud_actor_derive::*;
 
 #[cfg(feature = "rand")]
 pub use rand::{Rng, RngCore};
@@ -15,7 +22,11 @@ pub use uuid::Uuid;
 
 pub struct HostRng;
 
-#[cfg(all(not(feature = "module"), feature = "component"))]
+#[cfg(all(
+    not(feature = "module"),
+    feature = "component",
+    not(feature = "compat")
+))]
 impl HostRng {
     /// Generate a 32-bit random number
     #[inline]
@@ -39,7 +50,7 @@ impl HostRng {
     }
 }
 
-#[cfg(feature = "module")]
+#[cfg(any(feature = "module", all(feature = "component", feature = "compat")))]
 impl HostRng {
     /// Generate a 32-bit random number
     #[inline]

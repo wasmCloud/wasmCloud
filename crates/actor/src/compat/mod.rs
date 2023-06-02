@@ -4,8 +4,6 @@ pub mod wasmcloud;
 pub mod http; // TODO: This should have a component model counterpart
 pub use http::{Handler as HttpHandler, Request as HttpRequest, Response as HttpResponse};
 
-pub use wasmcloud_actor_derive::*;
-
 pub trait Handler<T: ?Sized> {
     type Error: ToString;
 
