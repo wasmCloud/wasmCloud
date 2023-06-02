@@ -1,9 +1,9 @@
 [package]
 name = "wasmcloud-provider-httpserver"
-description = "Http server for wasmcloud, using warp. This package provides a library, and a capability provider with the 'wasmcloud:httpserver' contract." 
+description = "Http server for wasmcloud, using warp. This package provides a library, and a capability provider with the 'wasmcloud:httpserver' contract."
 license = "Apache-2.0"
 authors = ["wasmCloud Team"]
-version = "0.18.0"
+version = "0.18.1"
 edition = "2021"
 
 [dependencies]
@@ -41,4 +41,9 @@ path = "src/lib.rs"
 [[bin]]
 name = "httpserver"
 path = "bin/main.rs"
+
+[profile.release]
+strip = true
+opt-level = "z"
+lto = true
 

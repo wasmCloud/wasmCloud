@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-provider-blobstore-s3"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2021"
 
 [dependencies]
@@ -50,3 +50,8 @@ path = "src/lib.rs"
 [[bin]]
 name = "blobstore-s3"
 path = "src/main.rs"
+
+[profile.release]
+strip = true
+opt-level = "z"
+lto = true

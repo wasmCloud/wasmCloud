@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-provider-kvredis"
-version = "0.21.0"
+version = "0.21.1"
 edition = "2021"
 
 [dependencies]
@@ -33,3 +33,8 @@ rand = "0.8"
 [[bin]]
 name = "kvredis"
 path = "src/main.rs"
+
+[profile.release]
+strip = true
+opt-level = "z"
+lto = true

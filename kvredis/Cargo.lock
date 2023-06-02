@@ -2963,7 +2963,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-kvredis"
-version = "0.21.0"
+version = "0.21.1"
 dependencies = [
  "async-trait",
  "atty",
