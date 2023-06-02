@@ -181,6 +181,74 @@ async fn actor_http_log_rng_module() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn actor_http_log_rng_compat() -> anyhow::Result<()> {
+    init();
+    let wasm = encode_component(test_actors::RUST_HTTP_LOG_RNG_COMPAT, true)?;
+    let logs = run(wasm).await?;
+    assert_eq!(
+        logs,
+        vec![
+            (
+                logging::Level::Trace,
+                "".into(),
+                "context: trace-context; trace".into()
+            ),
+            (
+                logging::Level::Debug,
+                "".into(),
+                "context: debug-context; debug".into()
+            ),
+            (
+                logging::Level::Info,
+                "".into(),
+                "context: info-context; info".into()
+            ),
+            (
+                logging::Level::Warn,
+                "".into(),
+                "context: warn-context; warn".into()
+            ),
+            (
+                logging::Level::Error,
+                "".into(),
+                "context: error-context; error".into()
+            ),
+            (
+                logging::Level::Trace,
+                "".into(),
+                "context: trace-context; trace".into()
+            ),
+            (
+                logging::Level::Debug,
+                "".into(),
+                "context: debug-context; debug".into()
+            ),
+            (
+                logging::Level::Info,
+                "".into(),
+                "context: info-context; info".into()
+            ),
+            (
+                logging::Level::Warn,
+                "".into(),
+                "context: warn-context; warn".into()
+            ),
+            (
+                logging::Level::Error,
+                "".into(),
+                "context: error-context; error".into()
+            ),
+            (logging::Level::Trace, "".into(), "trace".into()),
+            (logging::Level::Debug, "".into(), "debug".into()),
+            (logging::Level::Info, "".into(), "info".into()),
+            (logging::Level::Warn, "".into(), "warn".into()),
+            (logging::Level::Error, "".into(), "error".into()),
+        ]
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn actor_http_log_rng_component() -> anyhow::Result<()> {
     init();
     let wasm = encode_component(test_actors::RUST_HTTP_LOG_RNG_COMPONENT, true)?;

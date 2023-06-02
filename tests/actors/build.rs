@@ -176,6 +176,33 @@ async fn install_rust_wasm32_unknown_unknown_actors(
 
 async fn install_rust_wasm32_wasi_actors(out_dir: impl AsRef<Path>) -> anyhow::Result<()> {
     let out_dir = out_dir.as_ref();
+
+    // NOTE: Due to bizarre nature of `cargo` feature unification, compiling both actors in a
+    // singular `cargo` invocation would unify `component` and `compat` features in
+    // `wasmcloud_actor` crate
+
+    let mut artifacts = build_artifacts(
+        [
+            "--manifest-path=./rust/Cargo.toml",
+            "--target=wasm32-wasi",
+            "-p=actor-http-log-rng-compat",
+        ],
+        |name, kind| {
+            ["actor-http-log-rng-compat"].contains(&name) && kind.contains(&CrateType::Cdylib)
+        },
+    )
+    .await
+    .context("failed to build `wasm32-wasi` actors")?;
+    match (artifacts.next().deref_artifact(), artifacts.next()) {
+        (Some(("actor-http-log-rng-compat", [http_log_rng_compat_path])), None) => {
+            try_join!(copy(
+                http_log_rng_compat_path,
+                out_dir.join("actor-rust-http-log-rng-compat.wasm"),
+            ),)?;
+        }
+        _ => bail!("invalid `wasm32-wasi` Rust actor build artifacts"),
+    }
+
     let mut artifacts = build_artifacts(
         [
             "--manifest-path=./rust/Cargo.toml",
@@ -189,15 +216,15 @@ async fn install_rust_wasm32_wasi_actors(out_dir: impl AsRef<Path>) -> anyhow::R
     .await
     .context("failed to build `wasm32-wasi` actors")?;
     match (artifacts.next().deref_artifact(), artifacts.next()) {
-        (Some(("actor-http-log-rng-component", [http_log_rng_path])), None) => {
+        (Some(("actor-http-log-rng-component", [http_log_rng_component_path])), None) => {
             try_join!(copy(
-                http_log_rng_path,
+                http_log_rng_component_path,
                 out_dir.join("actor-rust-http-log-rng-component.wasm"),
-            ))?;
-            Ok(())
+            ),)?;
         }
         _ => bail!("invalid `wasm32-wasi` Rust actor build artifacts"),
     }
+    Ok(())
 }
 
 #[tokio::main]

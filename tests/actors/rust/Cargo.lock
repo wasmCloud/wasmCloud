@@ -21,6 +21,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "actor-http-log-rng-compat"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "rmp-serde",
+ "serde",
+ "serde_json",
+ "wasmcloud-actor",
+ "wasmcloud-interface-httpserver",
+ "wit-bindgen",
+ "wit-deps",
+]
+
+[[package]]
 name = "actor-http-log-rng-component"
 version = "0.1.0"
 dependencies = [
