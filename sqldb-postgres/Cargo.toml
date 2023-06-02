@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-provider-sqldb-postgres"
-version = "0.5.0"
+version = "0.5.1"
 description = "Postgres SQL Database capability provider for contract wasmcloud:sqldb"
 readme = "README.md"
 edition = "2021"
@@ -38,3 +38,9 @@ wasmcloud-test-util = "0.8"
 [[bin]]
 name = "sqldb-postgres"
 path = "src/main.rs"
+
+[profile.release]
+strip = true
+opt-level = "z"
+lto = true
+

@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-provider-httpclient"
-version = "0.7.0"
+version = "0.7.1"
 edition = "2021"
 
 [dependencies]
@@ -33,3 +33,8 @@ wasmcloud-test-util = "0.8"
 [[bin]]
 name = "httpclient"
 path = "src/main.rs"
+
+[profile.release]
+strip = true
+opt-level = "z"
+lto = true

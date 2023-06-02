@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-provider-blobstore-fs"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
 resolver = "2"
 
@@ -26,3 +26,8 @@ futures-util = "0.3.23"
 [[bin]]
 name = "blobstore_fs"
 path = "src/main.rs"
+
+[profile.release]
+strip = true
+opt-level = "z"
+lto = true
