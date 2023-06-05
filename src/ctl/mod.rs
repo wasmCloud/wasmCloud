@@ -168,19 +168,28 @@ pub(crate) async fn handle_command(
             apply_manifest_output(results)
         }
         Get(CtlGetCommand::Hosts(cmd)) => {
+            eprintln!("[warn] `wash ctl get hosts` has been deprecated in favor of `wash get hosts` and will be removed in a future version.");
             handle_get_command(GetCommand::Hosts(cmd), output_kind).await?
         }
         Get(CtlGetCommand::HostInventory(cmd)) => {
+            eprintln!("[warn] `wash ctl get inventory` has been deprecated in favor of `wash get inventory` and will be removed in a future version.");
             handle_get_command(GetCommand::HostInventory(cmd), output_kind).await?
         }
         Get(CtlGetCommand::Claims(cmd)) => {
+            eprintln!("[warn] `wash ctl get claims` has been deprecated in favor of `wash get claims` and will be removed in a future version.");
             handle_get_command(GetCommand::Claims(cmd), output_kind).await?
         }
-        Link(cmd) => handle_link_command(cmd, output_kind).await?,
-        Start(cmd) => handle_start_command(cmd, output_kind).await?,
+        Link(cmd) => {
+            eprintln!("[warn] `wash ctl link` has been deprecated in favor of `wash link` and will be removed in a future version.");
+            handle_link_command(cmd, output_kind).await?
+        }
+        Start(cmd) => {
+            eprintln!("[warn] `wash ctl start` has been deprecated in favor of `wash start` and will be removed in a future version.");
+            handle_start_command(cmd, output_kind).await?
+        }
         Stop(StopCommand::Actor(cmd)) => {
+            eprintln!("[warn] `wash ctl stop` has been deprecated in favor of `wash stop` and will be removed in a future version.");
             sp.update_spinner_message(format!(" Stopping actor {} ... ", cmd.actor_id));
-
             stop_actor(cmd.clone()).await?
         }
         Stop(StopCommand::Provider(cmd)) => {
