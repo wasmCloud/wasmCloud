@@ -128,6 +128,8 @@
         }:
           extendDerivations {
             buildInputs = [
+              pkgs.cargo-audit
+
               pkgs.wit-deps
             ];
           }
