@@ -111,6 +111,7 @@ jobs:
     strategy:
       matrix:
         check:
+        - audit
         - fmt
         - clippy
         - nextest
