@@ -1,0 +1,22 @@
+package wasmcloud:messaging
+
+interface types {
+     record broker-message {
+        subject: string,
+        body: option<list<u8>>,
+        reply-to: option<string>
+    }
+}
+
+interface handler {
+    use types.{broker-message}
+
+    handle-message: func(message: broker-message) -> result<_, string>
+}
+
+interface publisher {
+    use types.{broker-message}
+    
+    publish: func(subject: string, reply-to: option<string>, body: option<list<u8>>) -> result<_, string>
+    request: func(subject: string, body: option<list<u8>>) -> result<broker-message, string>
+}

@@ -4,6 +4,10 @@ package wasmcloud:actor
 world interfaces {
     import wasmcloud:bus/host
 
+    import wasmcloud:messaging/publisher
+
+    export wasmcloud:messaging/handler
+
     import wasi:logging/logging
     import wasi:random/random
 }
