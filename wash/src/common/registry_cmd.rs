@@ -149,8 +149,14 @@ pub(crate) async fn handle_command(
     output_kind: OutputKind,
 ) -> Result<CommandOutput> {
     match command {
-        RegistryCommand::Pull(cmd) => registry_pull(cmd, output_kind).await,
-        RegistryCommand::Push(cmd) => registry_push(cmd, output_kind).await,
+        RegistryCommand::Pull(cmd) => {
+            eprintln!("[warn] `wash reg pull` has been deprecated in favor of `wash pull` and will be removed in a future version.");
+            registry_pull(cmd, output_kind).await
+        }
+        RegistryCommand::Push(cmd) => {
+            eprintln!("[warn] `wash reg push` has been deprecated in favor of `wash push` and will be removed in a future version.");
+            registry_push(cmd, output_kind).await
+        }
         RegistryCommand::Ping(cmd) => registry_ping(cmd).await,
     }
 }
