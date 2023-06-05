@@ -1,4 +1,4 @@
 logging = "https://github.com/WebAssembly/wasi-logging/archive/main.tar.gz"
 random = "https://github.com/WebAssembly/wasi-random/archive/main.tar.gz"
 wasmcloud = "../../../wit"
-wasmcloud-messaging = "../../../wit/messaging"
+wasmcloud-messaging = "https://github.com/wasmcloud/wasmcloud-messaging/archive/main.tar.gz"
