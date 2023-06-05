@@ -1,5 +1,21 @@
 {
   "nodes": {
+    "advisory-db": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1685821301,
+        "narHash": "sha256-4XRcnSboLJw1XKjDpg2jBU70jEw/8Bgx4nUmnq3kXbY=",
+        "owner": "rustsec",
+        "repo": "advisory-db",
+        "rev": "af3f3d503f82056785841bee49997bae65eba1c0",
+        "type": "github"
+      },
+      "original": {
+        "owner": "rustsec",
+        "repo": "advisory-db",
+        "type": "github"
+      }
+    },
     "crane": {
       "inputs": {
         "flake-compat": "flake-compat",
@@ -388,6 +404,7 @@
     },
     "nixify": {
       "inputs": {
+        "advisory-db": "advisory-db",
         "crane": "crane",
         "fenix": [
           "fenix"
@@ -400,11 +417,11 @@
         "rust-overlay": "rust-overlay_2"
       },
       "locked": {
-        "lastModified": 1685644209,
-        "narHash": "sha256-3BUkXLxNHOs/w6Qr9vDILjeyocIhXDHAlpQR980xUU0=",
+        "lastModified": 1685982784,
+        "narHash": "sha256-cZRIrW5Hml8HUsgU2S5JDLF2/UAzx4TyNGKYFoLIbYU=",
         "owner": "rvolosatovs",
         "repo": "nixify",
-        "rev": "65892512b104d5577d8eb61685aee5082abf6afe",
+        "rev": "c7bbb41424d383b2c39176cf54cdbab893a26b17",
         "type": "github"
       },
       "original": {
