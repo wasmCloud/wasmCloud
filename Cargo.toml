@@ -75,8 +75,8 @@ wasmcloud-interface-logging = { version = "0.9.0", default-features = false }
 wasmcloud-interface-numbergen = { version = "0.9.0", default-features = false }
 wasmparser = { version = "0.107.0", default-features = false }
 # TODO: Remove fork pin once https://github.com/bytecodealliance/wasmtime/pull/6486 is merged
-wasmtime = { git = "https://github.com/rvolosatovs/wasmtime", rev = "c1a43101bd4548350629ef657fb91b4888e68087", default-features = false }
-wasmtime-wasi = { git = "https://github.com/rvolosatovs/wasmtime", rev = "c1a43101bd4548350629ef657fb91b4888e68087", default-features = false }
+wasmtime = { git = "https://github.com/rvolosatovs/wasmtime", rev = "18b7c9aba5decb03734539edf9a88e40861f552a", default-features = false }
+wasmtime-wasi = { git = "https://github.com/rvolosatovs/wasmtime", rev = "18b7c9aba5decb03734539edf9a88e40861f552a", default-features = false }
 wit-bindgen = { version = "0.7.0", default-features = false }
 wit-component = { version = "0.11.0", default-features = false }
 wit-deps = { version = "0.3.0", default-features = false }
