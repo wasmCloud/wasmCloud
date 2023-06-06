@@ -104,6 +104,7 @@ jobs:
 
       - name: Build native executable
         run: |
+          mkdir -p ${HOME}/.cache
           chmod +x ~/.cargo/bin/cross
           XDG_CACHE_HOME=${HOME}/.cache cross build --release --target ${{ matrix.target }}
         working-directory: ${{ env.working-directory }}
