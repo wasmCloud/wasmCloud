@@ -83,18 +83,24 @@ For running a wasmCloud host in a browser or embedding in a JavaScript V8 host, 
 
 ## SDKs and libraries
 
-### 🦀 `wasmcloud_host` (`Experimental`)
+### 🦀 `wasmcloud_runtime` (`Experimental`)
 
-`wasmcloud_host` is a wasmCloud host runtime library written in Rust and available at [`./crates/host`](./crates/host).
-It is under heavy development, but is already used by Elixir/OTP and Rust runtimes.
+`wasmcloud_runtime` is a wasmCloud runtime library written in Rust and available at [`./crates/runtime`](./crates/runtime).
+
+It is under heavy development, but is already used by Elixir/OTP and Rust host runtimes.
+
 Bindings to other languages than Rust will be provided in the future.
-Latest documentation is available at [wasmcloud.github.io/wasmCloud/wasmcloud_host](https://wasmcloud.github.io/wasmCloud/wasmcloud_host).
+
+Latest documentation is available at [wasmcloud.github.io/wasmCloud/wasmcloud_runtime](https://wasmcloud.github.io/wasmCloud/wasmcloud_runtime).
 
 ### 🦀 `wasmcloud_actor` (`Experimental`)
 
 `wasmcloud_actor` is a wasmCloud actor library written in Rust and available at [`./crates/actor`](./crates/actor).
+
 It provides functionality, which facilitates building of wasmCloud actors.
+
 The API of the crate matches closely what [`wit-bindgen`](https://github.com/bytecodealliance/wit-bindgen) would generate, meaning that one can switch from using plain `wit-bindgen`-generated bindings to `wasmcloud_actor` (and back) with minimal or no code changes.
+
 Latest documentation is available at [wasmcloud.github.io/wasmCloud/wasmcloud_actor](https://wasmcloud.github.io/wasmCloud/wasmcloud_actor/).
 
 ---

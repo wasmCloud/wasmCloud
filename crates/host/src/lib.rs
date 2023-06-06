@@ -1,19 +1,24 @@
-//! wasmCloud host runtime library
+//! wasmCloud host library
 
 #![warn(clippy::pedantic)]
-#![allow(clippy::module_name_repetitions)]
 #![warn(missing_docs)]
 #![forbid(clippy::unwrap_used)]
 
-/// Actor module parsing, loading and execution
-pub mod actor;
+/// local lattice
+pub mod local;
 
-/// Capability provider implementations and adaptors
-pub mod capability;
+pub use local::{Lattice as LocalLattice, LatticeConfig as LocalLatticeConfig};
 
-/// Shared wasmCloud runtime engine
-pub mod runtime;
+pub use url;
 
-pub use actor::{Actor, ConfiguredActor, Instance as ActorInstance};
-pub use capability::*;
-pub use runtime::*;
+use anyhow::Context as _;
+
+#[cfg(unix)]
+fn socket_pair() -> anyhow::Result<(tokio::net::UnixStream, tokio::net::UnixStream)> {
+    tokio::net::UnixStream::pair().context("failed to create an unnamed unix socket pair")
+}
+
+#[cfg(windows)]
+fn socket_pair() -> anyhow::Result<(tokio::io::DuplexStream, tokio::io::DuplexStream)> {
+    Ok(tokio::io::duplex(8196))
+}

@@ -1,0 +1,11 @@
+[package]
+name = "logging-module-command"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = { workspace = true, features = ["std"] }
+rmp-serde = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true, features = ["std"] }
+wasmcloud-actor = { workspace = true, features = ["module"] }

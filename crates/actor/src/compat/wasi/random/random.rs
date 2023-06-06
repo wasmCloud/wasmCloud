@@ -35,10 +35,9 @@ pub(crate) fn generate_guid() -> Uuid {
         "",
         "wasmcloud:builtin:numbergen",
         "NumberGen.GenerateGuid",
-        None,
+        &[],
     )
-    .expect("failed to call `NumberGen.GenerateGuid`")
-    .expect("`NumberGen.GenerateGuid` did not return a response");
+    .expect("failed to call `NumberGen.GenerateGuid`");
     let id: String =
         rmp_serde::from_slice(&res).expect("failed to decode `NumberGen.GenerateGuid` response");
     Uuid::try_parse(&id).expect("failed to parse UUID")
@@ -56,21 +55,14 @@ pub(crate) fn random_in_range(min: u32, max: u32) -> u32 {
         "",
         "wasmcloud:builtin:numbergen",
         "NumberGen.RandomInRange",
-        Some(&pld),
+        &pld,
     )
-    .expect("failed to call `NumberGen.RandomInRange`")
-    .expect("`NumberGen.RandomInRange` did not return a response");
+    .expect("failed to call `NumberGen.RandomInRange`");
     rmp_serde::from_slice(&res).expect("failed to decode `NumberGen.RandomInRange` response")
 }
 
 pub(crate) fn random32() -> u32 {
-    let res = host::call(
-        "",
-        "wasmcloud:builtin:numbergen",
-        "NumberGen.Random32",
-        None,
-    )
-    .expect("failed to call `NumberGen.Random32`")
-    .expect("`NumberGen.Random32` did not return a response");
+    let res = host::call("", "wasmcloud:builtin:numbergen", "NumberGen.Random32", &[])
+        .expect("failed to call `NumberGen.Random32`");
     rmp_serde::from_slice(&res).expect("failed to decode `NumberGen.Random32` response")
 }

@@ -1,4 +1,4 @@
-pub use wasmcloud_interface_httpserver::{HttpRequest as Request, HttpResponse as Response};
+pub use crate::{HttpRequest as Request, HttpResponse as Response};
 
 pub trait Handler {
     fn handle_request(&self, req: Request) -> Result<Response, String>;
@@ -9,7 +9,7 @@ impl<T: Handler> super::Handler<dyn Handler> for T {
 
     fn handle(&self, operation: &str, payload: Vec<u8>) -> Option<Result<Vec<u8>, Self::Error>> {
         match operation {
-            "HttpServer.HandleRequest" => {
+            "default:http-server/HttpServer.HandleRequest" | "HttpServer.HandleRequest" => {
                 let res = match rmp_serde::from_slice(payload.as_ref()) {
                     Ok(req) => self.handle_request(req),
                     Err(e) => return Some(Err(format!("failed to deserialize request: {e}"))),

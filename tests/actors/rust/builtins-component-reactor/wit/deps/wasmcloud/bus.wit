@@ -1,0 +1,17 @@
+package wasmcloud:bus
+
+interface host {
+    use wasi:io/streams.{input-stream, output-stream}
+
+    /// call an operation of form `namespace:package/interface.operation`, e.g. `wasmcloud:bus/host.call`
+    call: func(operation: string) -> result<tuple<input-stream, output-stream>, string>
+}
+
+interface guest {
+    // NOTE: The `call` below could also look more like this:
+    //call: func(operation: string, request: input-stream, response: output-stream) -> result<_, string>
+    // At least while the ecosystem is still developing, use stdio streams as a simplification for guest developers
+
+    /// call an operation of form `namespace:package/interface.operation`, e.g. `wasmcloud:bus/guest.call`
+    call: func(operation: string) -> result<_, string>
+}

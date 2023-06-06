@@ -15,10 +15,12 @@
   inputs.fenix.url = github:nix-community/fenix/monthly;
   inputs.nixify.inputs.fenix.follows = "fenix";
   inputs.nixify.url = github:rvolosatovs/nixify;
-  inputs.wit-deps.url = github:bytecodealliance/wit-deps;
+  inputs.wash.url = github:wasmcloud/wash/v0.18.0;
+  inputs.wit-deps.url = github:bytecodealliance/wit-deps/v0.3.2;
 
   outputs = {
     nixify,
+    wash,
     wit-deps,
     ...
   }:
@@ -27,6 +29,7 @@
         src = ./.;
 
         overlays = [
+          wash.overlays.default
           wit-deps.overlays.default
         ];
 
@@ -74,10 +77,18 @@
           ...
         } @ args: let
           cargoLock.root = readTOML ./Cargo.lock;
-          cargoLock.actors-rust = readTOML ./tests/actors/rust/Cargo.lock;
-          cargoLock.wasi-adapter = readTOML ./tests/wasi-adapter/Cargo.lock;
 
-          lockPackages = cargoLock.root.package ++ cargoLock.actors-rust.package ++ cargoLock.wasi-adapter.package;
+          cargoLock.actors-rust = readTOML ./tests/actors/rust/Cargo.lock;
+          cargoLock.tcp-component-command = readTOML ./tests/actors/rust/tcp-component-command/Cargo.lock;
+          cargoLock.wasi-command-adapter = readTOML ./tests/wasi-command-adapter/Cargo.lock;
+          cargoLock.wasi-reactor-adapter = readTOML ./tests/wasi-reactor-adapter/Cargo.lock;
+
+          lockPackages =
+            cargoLock.root.package
+            ++ cargoLock.actors-rust.package
+            ++ cargoLock.tcp-component-command.package
+            ++ cargoLock.wasi-command-adapter.package
+            ++ cargoLock.wasi-reactor-adapter.package;
         in
           with pkgsCross;
           with pkgs.lib;
@@ -129,7 +140,9 @@
           extendDerivations {
             buildInputs = [
               pkgs.cargo-audit
-
+              pkgs.nats-server
+              pkgs.protobuf # prost build dependency
+              pkgs.wash
               pkgs.wit-deps
             ];
           }

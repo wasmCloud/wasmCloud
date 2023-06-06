@@ -60,7 +60,8 @@ async fn build_artifacts(
         status,
         stdout,
         stderr: _, // inherited
-    } = Command::new("cargo")
+    } = Command::new(env::var("CARGO").unwrap())
+        .env("CARGO_ENCODED_RUSTFLAGS", "--cfg\x1ftokio_unstable") // Enable tokio on WASI
         .args(["build", "--message-format=json-render-diagnostics"])
         .args(args)
         .stderr(Stdio::inherit())
@@ -113,23 +114,41 @@ impl DerefArtifact for Option<(String, Vec<PathBuf>)> {
     }
 }
 
-async fn install_wasi_adapter(out_dir: impl AsRef<Path>) -> anyhow::Result<()> {
+async fn install_wasi_reactor_adapter(out_dir: impl AsRef<Path>) -> anyhow::Result<()> {
     let mut artifacts = build_artifacts(
-        ["--manifest-path=../wasi-adapter/Cargo.toml", "-Z=bindeps"],
-        |name, kind| name == "wasi-preview1-component-adapter" && kind.contains(&CrateType::Cdylib),
+        [
+            "--manifest-path=../wasi-reactor-adapter/Cargo.toml",
+            "-Z=bindeps",
+        ],
+        |name, kind| name == "wasi_snapshot_preview1" && kind.contains(&CrateType::Cdylib),
     )
     .await
-    .context("failed to build `wasi-adapter` crate")?;
+    .context("failed to build `wasi-reactor-adapter` crate")?;
     match (artifacts.next().deref_artifact(), artifacts.next()) {
-        (Some(("wasi-preview1-component-adapter", [path])), None) => copy(
-            path,
-            out_dir
-                .as_ref()
-                .join("wasi-preview1-component-adapter.wasm"),
-        )
-        .await
-        .map(|_| ()),
-        _ => bail!("invalid `wasi-preview1-component-adapter` build artifacts"),
+        (Some(("wasi_snapshot_preview1", [path])), None) => {
+            copy(path, out_dir.as_ref().join("wasi-reactor-adapter.wasm")).await?;
+            Ok(())
+        }
+        _ => bail!("invalid `wasi-reactor-adapter` build artifacts"),
+    }
+}
+
+async fn install_wasi_command_adapter(out_dir: impl AsRef<Path>) -> anyhow::Result<()> {
+    let mut artifacts = build_artifacts(
+        [
+            "--manifest-path=../wasi-command-adapter/Cargo.toml",
+            "-Z=bindeps",
+        ],
+        |name, kind| name == "wasi_snapshot_preview1" && kind.contains(&CrateType::Cdylib),
+    )
+    .await
+    .context("failed to build `wasi-command-adapter` crate")?;
+    match (artifacts.next().deref_artifact(), artifacts.next()) {
+        (Some(("wasi_snapshot_preview1", [path])), None) => {
+            copy(path, out_dir.as_ref().join("wasi-command-adapter.wasm")).await?;
+            Ok(())
+        }
+        _ => bail!("invalid `wasi-command-adapter` build artifacts"),
     }
 }
 
@@ -141,95 +160,170 @@ async fn install_rust_wasm32_unknown_unknown_actors(
         [
             "--manifest-path=./rust/Cargo.toml",
             "--target=wasm32-unknown-unknown",
-            "-p=actor-echo-module",
-            "-p=actor-http-log-rng-module",
+            "-p=builtins-module-reactor",
         ],
         |name, kind| {
-            ["actor-echo-module", "actor-http-log-rng-module"].contains(&name)
-                && kind.contains(&CrateType::Cdylib)
+            ["builtins-module-reactor"].contains(&name) && kind.contains(&CrateType::Cdylib)
         },
     )
     .await
-    .context("failed to build `wasm32-unknown-unknown` actors")?;
-    match (
-        artifacts.next().deref_artifact(),
-        artifacts.next().deref_artifact(),
-        artifacts.next(),
-    ) {
-        (
-            Some(("actor-echo-module", [echo_path])),
-            Some(("actor-http-log-rng-module", [http_log_rng_path])),
-            None,
-        ) => {
-            try_join!(
-                copy(echo_path, out_dir.join("actor-rust-echo-module.wasm")),
-                copy(
-                    http_log_rng_path,
-                    out_dir.join("actor-rust-http-log-rng-module.wasm"),
-                )
-            )?;
+    .context("failed to build `builtins-module-reactor` crate")?;
+    match (artifacts.next().deref_artifact(), artifacts.next()) {
+        (Some(("builtins-module-reactor", [builtins_module_reactor])), None) => {
+            copy(
+                builtins_module_reactor,
+                out_dir.join("rust-builtins-module-reactor.wasm"),
+            )
+            .await?;
             Ok(())
         }
-        _ => bail!("invalid `wasm32-unknown-unknown` Rust actor build artifacts"),
+        _ => bail!("invalid `builtins-module-reactor` build artifacts"),
     }
 }
 
 async fn install_rust_wasm32_wasi_actors(out_dir: impl AsRef<Path>) -> anyhow::Result<()> {
     let out_dir = out_dir.as_ref();
 
-    // NOTE: Due to bizarre nature of `cargo` feature unification, compiling both actors in a
+    // NOTE: Due to bizarre nature of `cargo` feature unification, compiling builtins actors in a
     // singular `cargo` invocation would unify `component` and `compat` features in
     // `wasmcloud_actor` crate
 
-    let mut artifacts = build_artifacts(
-        [
-            "--manifest-path=./rust/Cargo.toml",
-            "--target=wasm32-wasi",
-            "-p=actor-http-log-rng-compat",
-        ],
-        |name, kind| {
-            ["actor-http-log-rng-compat"].contains(&name) && kind.contains(&CrateType::Cdylib)
+    try_join!(
+        async {
+            let mut artifacts = build_artifacts(
+                [
+                    "--manifest-path=./rust/Cargo.toml",
+                    "--target=wasm32-wasi",
+                    "-p=builtins-compat-reactor",
+                    "-p=http-compat-command",
+                ],
+                |name, kind| {
+                    ["builtins-compat-reactor", "http-compat-command"].contains(&name)
+                        && (kind.contains(&CrateType::Cdylib) || kind.contains(&CrateType::Bin))
+                },
+            )
+            .await
+            .context(
+                "failed to build `builtins-compat-reactor` and `http-compat-command` crates",
+            )?;
+            match (
+                artifacts.next().deref_artifact(),
+                artifacts.next().deref_artifact(),
+                artifacts.next(),
+            ) {
+                (
+                    Some(("builtins-compat-reactor", [builtins_compat_reactor])),
+                    Some(("http-compat-command", [http_compat_command])),
+                    None,
+                ) => {
+                    try_join!(
+                        copy(
+                            builtins_compat_reactor,
+                            out_dir.join("rust-builtins-compat-reactor.wasm"),
+                        ),
+                        copy(
+                            http_compat_command,
+                            out_dir.join("rust-http-compat-command.wasm"),
+                        ),
+                    )
+                }
+                _ => bail!(
+                    "invalid `builtins-compat-reactor` and `http-compat-command` build artifacts"
+                ),
+            }
         },
-    )
-    .await
-    .context("failed to build `wasm32-wasi` actors")?;
-    match (artifacts.next().deref_artifact(), artifacts.next()) {
-        (Some(("actor-http-log-rng-compat", [http_log_rng_compat_path])), None) => {
-            try_join!(copy(
-                http_log_rng_compat_path,
-                out_dir.join("actor-rust-http-log-rng-compat.wasm"),
-            ),)?;
-        }
-        _ => bail!("invalid `wasm32-wasi` Rust actor build artifacts"),
-    }
-
-    let mut artifacts = build_artifacts(
-        [
-            "--manifest-path=./rust/Cargo.toml",
-            "--target=wasm32-wasi",
-            "-p=actor-http-log-rng-component",
-        ],
-        |name, kind| {
-            ["actor-http-log-rng-component"].contains(&name) && kind.contains(&CrateType::Cdylib)
+        async {
+            let mut artifacts = build_artifacts(
+                [
+                    "--manifest-path=./rust/Cargo.toml",
+                    "--target=wasm32-wasi",
+                    "-p=builtins-component-reactor",
+                ],
+                |name, kind| {
+                    ["builtins-component-reactor"].contains(&name)
+                        && kind.contains(&CrateType::Cdylib)
+                },
+            )
+            .await
+            .context("failed to build `builtins-component-reactor` crate")?;
+            match (artifacts.next().deref_artifact(), artifacts.next()) {
+                (Some(("builtins-component-reactor", [builtins_component_reactor])), None) => {
+                    copy(
+                        builtins_component_reactor,
+                        out_dir.join("rust-builtins-component-reactor.wasm"),
+                    )
+                    .await
+                }
+                _ => bail!("invalid `builtins-component-reactor` build artifacts"),
+            }
         },
-    )
-    .await
-    .context("failed to build `wasm32-wasi` actors")?;
-    match (artifacts.next().deref_artifact(), artifacts.next()) {
-        (Some(("actor-http-log-rng-component", [http_log_rng_component_path])), None) => {
-            try_join!(copy(
-                http_log_rng_component_path,
-                out_dir.join("actor-rust-http-log-rng-component.wasm"),
-            ),)?;
+        async {
+            let mut artifacts = build_artifacts(
+                [
+                    "--manifest-path=./rust/Cargo.toml",
+                    "--target=wasm32-wasi",
+                    "-p=logging-module-command",
+                ],
+                |name, kind| {
+                    ["logging-module-command"].contains(&name) && kind.contains(&CrateType::Bin)
+                },
+            )
+            .await
+            .context("failed to build `logging-module-command` crate")?;
+            match (artifacts.next().deref_artifact(), artifacts.next()) {
+                (Some(("logging-module-command", [logging_module_command])), None) => {
+                    copy(
+                        logging_module_command,
+                        out_dir.join("rust-logging-module-command.wasm"),
+                    )
+                    .await
+                }
+                _ => bail!("invalid `logging-module-command` build artifacts"),
+            }
+        },
+        async {
+            let mut artifacts = build_artifacts(
+                [
+                    "--manifest-path=./rust/tcp-component-command/Cargo.toml",
+                    "--target=wasm32-wasi",
+                ],
+                |name, kind| {
+                    ["tcp-component-command"].contains(&name) && kind.contains(&CrateType::Bin)
+                },
+            )
+            .await
+            .context("failed to build `tcp-component-command` crate")?;
+            match (artifacts.next().deref_artifact(), artifacts.next()) {
+                (Some(("tcp-component-command", [tcp_component_command])), None) => {
+                    copy(
+                        tcp_component_command,
+                        out_dir.join("rust-tcp-component-command.wasm"),
+                    )
+                    .await
+                }
+                _ => bail!("invalid `tcp-component-command` build artifacts"),
+            }
         }
-        _ => bail!("invalid `wasm32-wasi` Rust actor build artifacts"),
-    }
+    )
+    .context("failed to build `wasm32-wasi` actors")?;
     Ok(())
+}
+
+fn encode_component(module: impl AsRef<[u8]>, adapter: &[u8]) -> anyhow::Result<Vec<u8>> {
+    wit_component::ComponentEncoder::default()
+        .validate(true)
+        .module(module.as_ref())
+        .context("failed to set core component module")?
+        .adapter("wasi_snapshot_preview1", adapter)
+        .context("failed to add WASI adapter")?
+        .encode()
+        .context("failed to encode a component")
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    println!("cargo:rerun-if-changed=../wasi-adapter");
+    println!("cargo:rerun-if-changed=../wasi-command-adapter");
+    println!("cargo:rerun-if-changed=../wasi-reactor-adapter");
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=rust");
 
@@ -237,9 +331,41 @@ async fn main() -> anyhow::Result<()> {
         .map(PathBuf::from)
         .context("failed to lookup `OUT_DIR`")?;
     try_join!(
-        install_wasi_adapter(&out_dir),
+        install_wasi_reactor_adapter(&out_dir),
+        install_wasi_command_adapter(&out_dir),
         install_rust_wasm32_unknown_unknown_actors(&out_dir),
         install_rust_wasm32_wasi_actors(&out_dir),
     )?;
+    let (reactor_adapter, command_adapter) = try_join!(
+        fs::read(out_dir.join("wasi-reactor-adapter.wasm")),
+        fs::read(out_dir.join("wasi-command-adapter.wasm"))
+    )
+    .context("failed to read adapters")?;
+    for name in ["builtins-compat-reactor", "builtins-component-reactor"] {
+        let path = out_dir.join(format!("rust-{name}.wasm"));
+        let module = fs::read(&path)
+            .await
+            .with_context(|| format!("failed to read `{}`", path.display()))?;
+        let component = encode_component(module, &reactor_adapter)
+            .with_context(|| format!("failed to encode `{}`", path.display()))?;
+
+        let path = out_dir.join(format!("rust-{name}-preview2.wasm"));
+        fs::write(&path, component)
+            .await
+            .with_context(|| format!("failed to write `{}`", path.display()))?;
+    }
+    for name in ["http-compat-command", "tcp-component-command"] {
+        let path = out_dir.join(format!("rust-{name}.wasm"));
+        let module = fs::read(&path)
+            .await
+            .with_context(|| format!("failed to read `{}`", path.display()))?;
+        let component = encode_component(module, &command_adapter)
+            .with_context(|| format!("failed to encode `{}`", path.display()))?;
+
+        let path = out_dir.join(format!("rust-{name}-preview2.wasm"));
+        fs::write(&path, component)
+            .await
+            .with_context(|| format!("failed to write `{}`", path.display()))?;
+    }
     Ok(())
 }
