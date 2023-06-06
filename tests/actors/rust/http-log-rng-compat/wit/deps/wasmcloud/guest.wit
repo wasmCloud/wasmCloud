@@ -1,5 +1,0 @@
-package wasmcloud:bus
-
-interface guest {
-    call: func(operation: string, payload: option<list<u8>>) -> result<option<list<u8>>, string>
-}

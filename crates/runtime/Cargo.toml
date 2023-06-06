@@ -1,0 +1,44 @@
+[package]
+name = "wasmcloud-runtime"
+version = "0.1.0"
+description = "wasmCloud runtime library"
+
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[badges.maintenance]
+status = "actively-developed"
+
+[features]
+log = [
+    "tracing/log"
+]
+
+[dependencies]
+anyhow = { workspace = true, features = ["std"] }
+async-trait = { workspace = true }
+futures = { workspace = true, features = ["async-await", "std"] }
+http = { workspace = true }
+log = { workspace = true }
+rand = { workspace = true, features = ["std"] }
+rmp-serde = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true, features = ["std"] }
+tokio = { workspace = true, features = ["io-util", "rt-multi-thread", "sync"] }
+tracing = { workspace = true }
+uuid = { workspace = true }
+wascap = { workspace = true }
+wasmparser = { workspace = true }
+wasmtime = { workspace = true, features = ["async", "cache", "component-model", "cranelift", "jitdump", "parallel-compilation", "pooling-allocator", "vtune"] }
+wasmtime-wasi = { workspace = true, features = ["sync", "preview2"] }
+wasi-common = { workspace = true }
+
+[dev-dependencies]
+once_cell = { workspace = true }
+test-actors = { workspace = true }
+tokio = { workspace = true, features = ["fs", "io-std", "macros", "net"] }
+tracing-subscriber = { workspace = true, features = ["ansi", "env-filter", "fmt", "json", "std"] }
+wasmcloud-actor = { workspace = true }

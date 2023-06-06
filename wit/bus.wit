@@ -1,0 +1,30 @@
+package wasmcloud:bus
+
+interface host {
+    use wasi:io/streams.{input-stream, output-stream}
+    use wasi:poll/poll.{pollable}
+
+    // The following block defines a special resource type used by the
+    // `wasi:bus/host` interface to emulate
+    // `future<result<_, string>>` in advance of Preview3. Given a
+    // `future-incoming-response`, the client can call the non-blocking `get`
+    // method to get the result if it is available. If the result is not available,
+    // the client can call `listen` to get a `pollable` that can be passed to
+    // `io.poll.poll-oneoff`.
+    type future-result = u32
+    drop-future-result: func(f: future-result)
+    future-result-get: func(f: future-result) -> option<result<_, string>>
+    listen-to-future-result: func(f: future-result) -> pollable
+
+    /// call an operation of form `namespace:package/interface.operation`, e.g. `wasmcloud:bus/host.call`
+    call: func(operation: string) -> result<tuple<future-result, input-stream, output-stream>, string>
+}
+
+interface guest {
+    // NOTE: The `call` below could also look more like this:
+    //call: func(operation: string, request: input-stream, response: output-stream) -> result<_, string>
+    // At least while the ecosystem is still developing, use stdio streams as a simplification for guest developers
+
+    /// call an operation of form `namespace:package/interface.operation`, e.g. `wasmcloud:bus/guest.call`
+    call: func(operation: string) -> result<_, string>
+}

@@ -1,0 +1,18 @@
+[package]
+name = "wasi-reactor-adapter"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+# TODO: Remove fork pin once https://github.com/bytecodealliance/wasmtime/pull/6486 is merged
+wasi-preview1-component-adapter = { git = "https://github.com/rvolosatovs/wasmtime", rev = "89aa901cbce1628c5b5f0b38962eb69a34f38553", default-features = false, target = "wasm32-unknown-unknown", artifact = "cdylib", features = ["reactor"] }
+
+[workspace]
+
+# From https://github.com/bytecodealliance/wasmtime/blob/3b90faf4a7715a66e1b7298d50300d235604cf50/Cargo.toml#L302-L312
+[profile.dev.package.wasi-preview1-component-adapter]
+incremental = false
+opt-level = 's'
+debug-assertions = false
+overflow-checks = false

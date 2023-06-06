@@ -1,17 +1,18 @@
 [workspace]
 members = [
-    "echo-module",
-    "http-log-rng-compat",
-    "http-log-rng-component",
-    "http-log-rng-module",
+    "builtins-compat-reactor",
+    "builtins-component-reactor",
+    "builtins-module-reactor",
+    "http-compat-command",
+    "logging-module-command",
 ]
 
 [workspace.dependencies]
-anyhow = { version = "1.0.69", default-features = false }
-rmp-serde = { version = "1.1.1", default-features = false }
-serde = { version = "1.0.152", default-features = false }
-serde_json = { version = "1.0.93", default-features = false }
+anyhow = { version = "1", default-features = false }
+axum = { version = "0.6", default-features = false }
+rmp-serde = { version = "1", default-features = false }
+serde = { version = "1", default-features = false }
+serde_json = { version = "1", default-features = false }
+tokio = { version = "1", default-features = false }
 wasmcloud-actor = { path = "../../../crates/actor", default-features = false }
-wasmcloud-interface-httpserver = { version = "0.10.0", default-features = false }
-wit-bindgen = { version = "0.7.0", default-features = false }
-wit-deps = { version = "0.3.0", default-features = false }
+wit-bindgen = { version = "0.7", default-features = false }

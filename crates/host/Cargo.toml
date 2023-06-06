@@ -1,7 +1,7 @@
 [package]
 name = "wasmcloud-host"
 version = "0.1.0"
-description = "wasmCloud host runtime library"
+description = "wasmCloud host library"
 
 authors.workspace = true
 categories.workspace = true
@@ -12,24 +12,23 @@ repository.workspace = true
 [badges.maintenance]
 status = "actively-developed"
 
-[features]
-log = [
-    "tracing/log"
-]
-
 [dependencies]
 anyhow = { workspace = true, features = ["std"] }
+async-recursion = { workspace = true }
 async-trait = { workspace = true }
-futures = { workspace = true, features = ["std"] }
-log = { workspace = true }
-rand = { workspace = true, features = ["std"] }
+futures = { workspace = true, features = ["async-await", "std"] }
+http = { workspace = true }
+reqwest = { workspace = true, features = ["rustls-tls"] }
 rmp-serde = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["fs", "io-std", "io-util", "process", "rt-multi-thread", "time"] }
+tokio-stream = { workspace = true, features = ["net", "time"] }
 tracing = { workspace = true }
+url = { workspace = true, features = ["serde"] }
 uuid = { workspace = true }
 wascap = { workspace = true }
-wasmcloud-interface-logging = { workspace = true }
-wasmcloud-interface-numbergen = { workspace = true }
-wasmparser = { workspace = true }
-wasmtime = { workspace = true, features = ["async", "cache", "component-model", "cranelift", "jitdump", "parallel-compilation", "pooling-allocator", "vtune"] }
-wasmtime-wasi = { workspace = true, features = ["sync", "preview2"] }
+wasmcloud-runtime = { workspace = true }
+
+[dev-dependencies]
+toml = { workspace = true, features = ["parse"] }

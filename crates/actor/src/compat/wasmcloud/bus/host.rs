@@ -3,8 +3,8 @@ pub fn call(
     binding: &str,
     namespace: &str,
     operation: &str,
-    payload: Option<&[u8]>,
-) -> Result<Option<Vec<u8>>, String> {
+    payload: &[u8],
+) -> Result<Vec<u8>, String> {
     #[link(wasm_import_module = "wasmbus")]
     extern "C" {
         pub fn __host_call(
@@ -25,9 +25,6 @@ pub fn call(
         pub fn __host_error_len() -> usize;
     }
 
-    let (pld_ptr, pld_len) = payload
-        .map(|payload| (payload.as_ptr(), payload.len()))
-        .unwrap_or(([].as_ptr(), 0));
     match unsafe {
         __host_call(
             binding.as_ptr(),
@@ -36,15 +33,15 @@ pub fn call(
             namespace.len(),
             operation.as_ptr(),
             operation.len(),
-            pld_ptr,
-            pld_len,
+            payload.as_ptr(),
+            payload.len(),
         )
     } {
         1 => {
             // call succeeded
             let mut buf = vec![0; unsafe { __host_response_len() }];
             unsafe { __host_response(buf.as_mut_ptr()) };
-            Ok(Some(buf))
+            Ok(buf)
         }
         _ => {
             // call failed
