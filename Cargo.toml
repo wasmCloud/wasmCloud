@@ -102,7 +102,7 @@ envmnt = "0.10.2"
 futures = "0.3"
 heck = "0.4"
 ignore = "0.4"
-indicatif = "0.17.3"
+indicatif = "0.17.5"
 log = "0.4"
 nkeys = "0.2.0"
 oci-distribution = { version = "0.9.4", default-features = false, features = ["rustls-tls"] }
