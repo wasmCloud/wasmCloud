@@ -240,9 +240,9 @@ pub(crate) async fn scale_actor(cmd: ScaleActorCommand) -> Result<CommandOutput>
 
     let ack = client
         .scale_actor(
-            &cmd.host_id.to_string(),
+            &cmd.host_id,
             &cmd.actor_ref,
-            &cmd.actor_id.to_string(),
+            &cmd.actor_id,
             cmd.count,
             Some(annotations),
         )
@@ -266,12 +266,7 @@ pub(crate) async fn update_actor(cmd: UpdateActorCommand) -> Result<CtlOperation
     let wco: WashConnectionOptions = cmd.opts.try_into()?;
     let client = wco.into_ctl_client(None).await?;
     client
-        .update_actor(
-            &cmd.host_id.to_string(),
-            &cmd.actor_id.to_string(),
-            &cmd.new_actor_ref,
-            None,
-        )
+        .update_actor(&cmd.host_id, &cmd.actor_id, &cmd.new_actor_ref, None)
         .await
         .map_err(convert_error)
 }
@@ -298,10 +293,7 @@ async fn apply_manifest_actors(
     let mut results = vec![];
 
     for actor in hm.actors.iter() {
-        match client
-            .start_actor(&host_id.to_string(), actor, ONE_ACTOR, None)
-            .await
-        {
+        match client.start_actor(host_id, actor, ONE_ACTOR, None).await {
             Ok(ack) => {
                 if ack.accepted {
                     results.push(format!("Instruction to start actor {actor} acknowledged."));
@@ -362,13 +354,7 @@ async fn apply_manifest_providers(
 
     for cap in hm.capabilities.iter() {
         match client
-            .start_provider(
-                &host_id.to_string(),
-                &cap.image_ref,
-                cap.link_name.clone(),
-                None,
-                None,
-            )
+            .start_provider(host_id, &cap.image_ref, cap.link_name.clone(), None, None)
             .await
         {
             Ok(ack) => {

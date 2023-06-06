@@ -110,8 +110,8 @@ pub async fn stop_provider(cmd: StopProviderCommand) -> Result<CommandOutput> {
 
     let ack = client
         .stop_provider(
-            &cmd.host_id.to_string(),
-            &cmd.provider_id.to_string(),
+            &cmd.host_id,
+            &cmd.provider_id,
             &cmd.link_name,
             &cmd.contract_id,
             None,
@@ -178,12 +178,7 @@ pub async fn stop_actor(cmd: StopActorCommand) -> Result<CommandOutput> {
         .map_err(boxed_err_to_anyhow)?;
 
     let ack = client
-        .stop_actor(
-            &cmd.host_id.to_string(),
-            &cmd.actor_id.to_string(),
-            cmd.count,
-            None,
-        )
+        .stop_actor(&cmd.host_id, &cmd.actor_id, cmd.count, None)
         .await
         .map_err(boxed_err_to_anyhow)?;
 
@@ -231,7 +226,7 @@ pub async fn stop_host(cmd: StopHostCommand) -> Result<CommandOutput> {
     let wco: WashConnectionOptions = cmd.opts.try_into()?;
     let client = wco.into_ctl_client(None).await?;
     let ack = client
-        .stop_host(&cmd.host_id.to_string(), Some(cmd.host_shutdown_timeout))
+        .stop_host(&cmd.host_id, Some(cmd.host_shutdown_timeout))
         .await
         .map_err(boxed_err_to_anyhow)?;
 

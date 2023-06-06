@@ -40,6 +40,7 @@ pub mod get;
 pub mod inspect;
 pub mod link;
 pub mod output;
+pub mod spy;
 pub mod start;
 pub mod stop;
 
