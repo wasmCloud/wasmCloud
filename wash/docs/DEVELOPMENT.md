@@ -9,6 +9,7 @@ This document serves as a guide and reference for people looking to develop `was
     - [Optional Tools](#optional-tools)
   - [Building the project](#building-the-project)
   - [Testing the project](#testing-the-project)
+  - [Making Commits](#making-commits)
 
 ## Development Prerequistes
 
@@ -75,3 +76,14 @@ To test a *specific* target test(s) continuously:
 ```console
 TARGET=integration_new_handles_dashed_names make test-watch
 ```
+
+## Making Commits
+
+For us to be able to merge in any commits, they need to be signed off. If you didn't do so, the PR bot will let you know how to fix it, but it's worth knowing how to do it in advance.
+
+There are a few options:
+- use `git commit -s` in the CLI
+- in `vscode`, go to settings and set the `git.alwaysSignOff` setting. Note that the dev container configuration in this repo sets this up by default.
+- manually add "Signed-off-by: NAME <EMAIL>" at the end of each commit
+
+You may also be able to use GPG signing in leu of a sign off.

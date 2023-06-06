@@ -15,6 +15,9 @@
 	"workspaceFolder": "/wash",
 	"customizations": {
 		"vscode": {
+			"settings": {
+				"git.alwaysSignOff": true
+			},
 			"extensions": [
 				"rust-lang.rust-analyzer"
 			]
