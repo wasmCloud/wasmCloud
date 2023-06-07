@@ -58,7 +58,7 @@ pub async fn get_host_inventory(cmd: GetHostInventoryCommand) -> Result<HostInve
     let wco: WashConnectionOptions = cmd.opts.try_into()?;
     let client = wco.into_ctl_client(None).await?;
     client
-        .get_host_inventory(&cmd.host_id.to_string())
+        .get_host_inventory(&cmd.host_id)
         .await
         .map_err(boxed_err_to_anyhow)
         .context("Was able to connect to NATS, but failed to get host inventory.")

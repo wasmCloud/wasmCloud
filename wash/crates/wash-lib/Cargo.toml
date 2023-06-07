@@ -26,6 +26,7 @@ async-compression = { workspace = true, features = ["tokio", "gzip"] }
 async-nats = { workspace = true, optional = true}
 cargo_metadata = "0.15"
 cargo_toml = { workspace = true }
+chrono = "0.4"
 clap = { workspace = true, features = ["derive", "env"], optional = true }
 cloudevents-sdk = { workspace = true }
 command-group = { workspace = true, features = ["with-tokio"] }
@@ -44,9 +45,12 @@ path-absolutize = { workspace = true, features = ["once_cell_cache"], optional =
 provider-archive = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls-tls", "stream"] }
+rmp-serde = "1"
 semver = { workspace = true, features = ["serde"], optional = true }
 serde = { workspace = true, features = ["derive"], optional = true }
+serde_cbor = "0.11"
 serde_json = { workspace = true, optional = true }
+serde-transcode = "1"
 serde_with = { workspace = true }
 tempfile = { workspace = true }
 term-table = { workspace = true, optional = true }
