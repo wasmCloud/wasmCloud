@@ -5,8 +5,15 @@ use serde_json::json;
 use smithy::{GenerateCli, LintCli, ValidateCli};
 use wash_lib::{
     cli::{
-        claims::ClaimsCliCommand, get::GetCommand, inspect::InspectCliCommand, link::LinkCommand,
-        spy::SpyCommand, start::StartCommand, stop::StopCommand, CommandOutput, OutputKind,
+        capture::{CaptureCommand, CaptureSubcommand},
+        claims::ClaimsCliCommand,
+        get::GetCommand,
+        inspect::InspectCliCommand,
+        link::LinkCommand,
+        spy::SpyCommand,
+        start::StartCommand,
+        stop::StopCommand,
+        CommandOutput, OutputKind,
     },
     drain::Drain as DrainSelection,
     registry::{RegistryCommand, RegistryPullCommand, RegistryPushCommand},
@@ -130,6 +137,9 @@ enum CliCommand {
     /// Invoke a wasmCloud actor
     #[clap(name = "call")]
     Call(CallCli),
+    /// Capture and debug cluster invocations and state
+    #[clap(name = "capture")]
+    Capture(CaptureCommand),
     /// Generate shell completions
     #[clap(name = "completions")]
     Completions(CompletionOpts),
@@ -210,6 +220,15 @@ async fn main() {
         CliCommand::App(app_cli) => app::handle_command(app_cli, output_kind).await,
         CliCommand::Build(build_cli) => build::handle_command(build_cli),
         CliCommand::Call(call_cli) => call::handle_command(call_cli.command()).await,
+        CliCommand::Capture(capture_cli) => {
+            if !cli.experimental {
+                experimental_error_message("capture")
+            } else if let Some(CaptureSubcommand::Replay(cmd)) = capture_cli.replay {
+                wash_lib::cli::capture::handle_replay_command(cmd).await
+            } else {
+                wash_lib::cli::capture::handle_command(capture_cli).await
+            }
+        }
         CliCommand::Claims(claims_cli) => {
             wash_lib::cli::claims::handle_command(claims_cli, output_kind).await
         }
