@@ -23,7 +23,6 @@ cargo_atelier = { workspace = true }
 clap = { workspace = true, features = ["derive", "env"] }
 cloudevents-sdk = { workspace = true }
 console = { workspace = true }
-ctrlc = { workspace = true }
 dirs = { workspace = true }
 env_logger = { workspace = true }
 envmnt = { workspace = true }
@@ -58,6 +57,7 @@ wasmcloud-control-interface = { workspace = true }
 wasmbus-rpc = { workspace = true }
 wasmcloud-test-util = { workspace = true }
 clap_complete = { workspace = true }
+notify = "6.0.0"
 
 [dev-dependencies]
 reqwest = { workspace = true, features = ["json", "rustls-tls"] }
@@ -72,6 +72,7 @@ futures = { workspace = true }
 # serial_test ensures serial execution when running with cargo, '<test name>_serial' works with nextest
 serial_test = { workspace = true }
 rand = "0.8.5"
+nix = { version = "0.26.2", default-features = false, features = [ "signal" ] }
 
 [[bin]]
 bench = true
@@ -97,7 +98,6 @@ cloudevents-sdk = "0.6.0"
 command-group = "1.0.8"
 config = "0.13.1"
 console = "0.15"
-ctrlc = "3.4.0"
 dialoguer = "0.10.4"
 dirs = "4.0"
 env_logger = "0.10"

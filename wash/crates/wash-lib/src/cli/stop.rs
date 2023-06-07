@@ -4,15 +4,13 @@ use std::collections::HashMap;
 use tokio::time::Duration;
 
 use crate::{
+    actor::stop_actor,
     cli::{CliConnectionOpts, CommandOutput},
     common::boxed_err_to_anyhow,
     config::WashConnectionOptions,
     context::default_timeout_ms,
     id::{validate_contract_id, ModuleId, ServerId, ServiceId},
-    wait::{
-        wait_for_actor_stop_event, wait_for_provider_stop_event, ActorStoppedInfo,
-        FindEventOutcome, ProviderStoppedInfo,
-    },
+    wait::{wait_for_provider_stop_event, ActorStoppedInfo, FindEventOutcome, ProviderStoppedInfo},
 };
 
 #[derive(Debug, Clone, Parser)]
@@ -167,59 +165,36 @@ pub async fn stop_provider(cmd: StopProviderCommand) -> Result<CommandOutput> {
     }
 }
 
-pub async fn stop_actor(cmd: StopActorCommand) -> Result<CommandOutput> {
+pub async fn handle_stop_actor(cmd: StopActorCommand) -> Result<CommandOutput> {
     let timeout_ms = cmd.opts.timeout_ms;
     let wco: WashConnectionOptions = cmd.opts.try_into()?;
     let client = wco.into_ctl_client(None).await?;
 
-    let mut receiver = client
-        .events_receiver()
-        .await
-        .map_err(boxed_err_to_anyhow)?;
-
-    let ack = client
-        .stop_actor(&cmd.host_id, &cmd.actor_id, cmd.count, None)
-        .await
-        .map_err(boxed_err_to_anyhow)?;
-
-    if !ack.accepted {
-        bail!("Operation failed: {}", ack.error);
-    }
-
-    if cmd.skip_wait {
-        let text = format!("Request to stop actor {} received", cmd.actor_id);
-        return Ok(CommandOutput::new(
-            text.clone(),
-            HashMap::from([
-                ("result".into(), text.into()),
-                ("actor_id".into(), cmd.actor_id.to_string().into()),
-                ("host_id".into(), cmd.host_id.to_string().into()),
-            ]),
-        ));
-    }
-
-    let event = wait_for_actor_stop_event(
-        &mut receiver,
-        Duration::from_millis(timeout_ms),
-        cmd.host_id.to_string(),
-        cmd.actor_id.to_string(),
+    let ActorStoppedInfo { actor_id, host_id } = stop_actor(
+        &client,
+        &cmd.host_id,
+        &cmd.actor_id,
+        cmd.count,
+        None,
+        timeout_ms,
+        cmd.skip_wait,
     )
     .await?;
 
-    match event {
-        FindEventOutcome::Success(ActorStoppedInfo { actor_id, host_id }) => {
-            let text = format!("Actor [{}] stopped", &actor_id);
-            Ok(CommandOutput::new(
-                text.clone(),
-                HashMap::from([
-                    ("result".into(), text.into()),
-                    ("actor_id".into(), actor_id.into()),
-                    ("host_id".into(), host_id.into()),
-                ]),
-            ))
-        }
-        FindEventOutcome::Failure(err) => bail!("{}", err),
-    }
+    let text = if cmd.skip_wait {
+        format!("Request to stop actor {} received", &actor_id)
+    } else {
+        format!("Actor [{}] stopped", &actor_id)
+    };
+
+    Ok(CommandOutput::new(
+        text.clone(),
+        HashMap::from([
+            ("result".into(), text.into()),
+            ("actor_id".into(), actor_id.into()),
+            ("host_id".into(), host_id.into()),
+        ]),
+    ))
 }
 
 pub async fn stop_host(cmd: StopHostCommand) -> Result<CommandOutput> {

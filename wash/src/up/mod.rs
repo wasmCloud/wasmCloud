@@ -8,7 +8,7 @@ use std::sync::{
     Arc,
 };
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use async_nats::Client;
 use clap::Parser;
 use serde_json::json;
@@ -19,6 +19,8 @@ use tokio::{
     process::Child,
 };
 use wash_lib::cli::{CommandOutput, OutputKind};
+use wash_lib::config::downloads_dir;
+use wash_lib::config::DEFAULT_NATS_TIMEOUT_MS;
 use wash_lib::start::ensure_wadm;
 use wash_lib::start::find_wasmcloud_binary;
 use wash_lib::start::nats_pid_path;
@@ -28,9 +30,9 @@ use wash_lib::start::{
     ensure_nats_server, ensure_wasmcloud, start_nats_server, start_wasmcloud_host, wait_for_server,
     NatsConfig,
 };
+use wasmcloud_control_interface::{Client as CtlClient, ClientBuilder as CtlClientBuilder};
 
 use crate::appearance::spinner::Spinner;
-use crate::cfg::cfg_dir;
 use crate::down::stop_nats;
 use crate::util::nats_client_from_opts;
 
@@ -262,6 +264,49 @@ pub(crate) struct WasmcloudOpts {
     pub(crate) start_only: bool,
 }
 
+impl WasmcloudOpts {
+    pub async fn into_ctl_client(self, auction_timeout_ms: Option<u64>) -> Result<CtlClient> {
+        let lattice_prefix = self.lattice_prefix;
+        let ctl_host = self
+            .ctl_host
+            .unwrap_or_else(|| DEFAULT_NATS_HOST.to_string());
+        let ctl_port = self.ctl_port.unwrap_or(4222).to_string();
+        let auction_timeout_ms = auction_timeout_ms.unwrap_or(DEFAULT_NATS_TIMEOUT_MS);
+
+        let nc = nats_client_from_opts(
+            &ctl_host,
+            &ctl_port,
+            self.ctl_jwt,
+            self.ctl_seed,
+            self.ctl_credsfile,
+        )
+        .await
+        .context("Failed to create NATS client")?;
+
+        let mut builder = CtlClientBuilder::new(nc)
+            .lattice_prefix(lattice_prefix)
+            .rpc_timeout(tokio::time::Duration::from_millis(
+                self.rpc_timeout_ms.into(),
+            ))
+            .auction_timeout(tokio::time::Duration::from_millis(auction_timeout_ms));
+
+        if let Some(js_domain) = self.wasmcloud_js_domain {
+            builder = builder.js_domain(js_domain);
+        }
+
+        if let Ok(topic_prefix) = std::env::var("WASMCLOUD_CTL_TOPIC_PREFIX") {
+            builder = builder.topic_prefix(topic_prefix);
+        }
+
+        let ctl_client = builder
+            .build()
+            .await
+            .map_err(|err| anyhow!("Failed to create control interface client: {err:?}"))?;
+
+        Ok(ctl_client)
+    }
+}
+
 #[derive(Parser, Debug, Clone)]
 pub(crate) struct WadmOpts {
     /// wadm version to download, e.g. `v0.4.0`. See https://github.com/wasmCloud/wadm/releases for releases
@@ -280,7 +325,7 @@ pub(crate) async fn handle_command(
 }
 
 pub(crate) async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<CommandOutput> {
-    let install_dir = cfg_dir()?.join(DOWNLOADS_DIR);
+    let install_dir = downloads_dir()?;
     create_dir_all(&install_dir).await?;
     let spinner = Spinner::new(&output_kind)?;
 
@@ -548,15 +593,19 @@ async fn run_wasmcloud_interactive(
     let (running_sender, running_receiver) = channel();
     let running = Arc::new(AtomicBool::new(true));
 
-    ctrlc::set_handler(move || {
+    // Handle Ctrl + c with Tokio
+    tokio::spawn(async move {
+        tokio::signal::ctrl_c()
+            .await
+            .context("failed to wait for ctrl_c signal")?;
         if running.load(Ordering::SeqCst) {
             running.store(false, Ordering::SeqCst);
             let _ = running_sender.send(true);
         } else {
             log::warn!("\nRepeated CTRL+C received, killing wasmCloud and NATS. This may result in zombie processes")
         }
-    })
-    .expect("Error setting Ctrl-C handler, please file a bug issue https://github.com/wasmCloud/wash/issues/new/choose");
+        Result::<_, anyhow::Error>::Ok(())
+    });
 
     if output_kind != OutputKind::Json {
         println!("🏃 Running in interactive mode, your host is running at http://localhost:{port}",);

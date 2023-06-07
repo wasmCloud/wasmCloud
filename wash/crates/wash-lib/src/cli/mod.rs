@@ -37,6 +37,7 @@ use crate::{
 
 pub mod capture;
 pub mod claims;
+pub mod dev;
 pub mod get;
 pub mod inspect;
 pub mod link;

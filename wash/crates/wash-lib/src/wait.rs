@@ -3,6 +3,8 @@ use cloudevents::event::{AttributesReader, Event};
 use tokio::sync::mpsc::Receiver;
 use tokio::time::{Duration, Instant};
 
+use crate::actor::ActorStartedInfo;
+
 /// Useful parts of a CloudEvent coming in from the wasmbus.
 #[derive(Debug)]
 struct CloudEventData {
@@ -102,13 +104,6 @@ async fn find_event<T>(
     }
 }
 
-/// Information related to an actor start
-pub struct ActorStartedInfo {
-    pub host_id: String,
-    pub actor_ref: String,
-    pub actor_id: String,
-}
-
 /// Uses the NATS reciever to read events being published to the wasmCloud lattice event subject, up until the given timeout duration.
 ///
 /// If the applicable actor start response event is found (either started or failed to start), the `Ok` variant of the `Result` will be returned,
@@ -137,7 +132,7 @@ pub async fn wait_for_actor_start_event(
                     return Ok(EventCheckOutcome::Success(ActorStartedInfo {
                         host_id: host_id.as_str().into(),
                         actor_ref: actor_ref.as_str().into(),
-                        actor_id,
+                        actor_id: Some(actor_id),
                     }));
                 }
             }
