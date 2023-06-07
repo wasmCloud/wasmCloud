@@ -73,9 +73,29 @@ The **w**asmCloud **A**pplication **D**eployment **M**anager [wadm](https://gith
 
 The primary Cloud Native wasmCloud host runtime is the [Elixir/OTP](https://github.com/wasmCloud/wasmcloud-otp) runtime. wasmCloud leverages Elixir/OTP for its battle-tested, massively-scalable foundation; we leverage Rust for its zero-cost abstractions, safety, security, and WebAssembly support.
 
+### 🦀 Rust Runtime (`Experimental`)
+
+Rust runtime is under heavy development at the root of this repository.
+
 ### 🕸 JavaScript Runtime (`Experimental`)
 
-For running a wasmCloud host in a browser or embedding in a JavaScript V8 host, use the [JavaScript Runtime](https://github.com/wasmCloud/
+For running a wasmCloud host in a browser or embedding in a JavaScript V8 host, use the [JavaScript Runtime](https://github.com/wasmCloud/wasmcloud-js)
+
+## SDKs and libraries
+
+### 🦀 `wasmcloud_host` (`Experimental`)
+
+`wasmcloud_host` is a wasmCloud host runtime library written in Rust and available at [`./crates/host`](./crates/host).
+It is under heavy development, but is already used by Elixir/OTP and Rust runtimes.
+Bindings to other languages than Rust will be provided in the future.
+Latest documentation is available at [wasmcloud.github.io/wasmCloud/wasmcloud_host](https://wasmcloud.github.io/wasmCloud/wasmcloud_host).
+
+### 🦀 `wasmcloud_actor` (`Experimental`)
+
+`wasmcloud_actor` is a wasmCloud actor library written in Rust and available at [`./crates/actor`](./crates/actor).
+It provides functionality, which facilitates building of wasmCloud actors.
+The API of the crate matches closely what [`wit-bindgen`](https://github.com/bytecodealliance/wit-bindgen) would generate, meaning that one can switch from using plain `wit-bindgen`-generated bindings to `wasmcloud_actor` (and back) with minimal or no code changes.
+Latest documentation is available at [wasmcloud.github.io/wasmCloud/wasmcloud_actor](https://wasmcloud.github.io/wasmCloud/wasmcloud_actor/).
 
 ---
 
