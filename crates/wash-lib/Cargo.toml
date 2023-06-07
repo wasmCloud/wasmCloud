@@ -24,6 +24,7 @@ nats = ["async-nats", "wadm"]
 anyhow = { workspace = true }
 async-compression = { workspace = true, features = ["tokio", "gzip"] }
 async-nats = { workspace = true, optional = true}
+bytes = { version = "1", features = ["serde"] }
 cargo_metadata = "0.15"
 cargo_toml = { workspace = true }
 chrono = "0.4"
@@ -55,6 +56,7 @@ serde_with = { workspace = true }
 tempfile = { workspace = true }
 term-table = { workspace = true, optional = true }
 thiserror = { workspace = true }
+time = "0.3"
 tokio = { workspace = true, features = ["process"] }
 tokio-stream = { workspace = true }
 tokio-tar = { workspace = true }
