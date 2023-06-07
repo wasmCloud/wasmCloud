@@ -61,6 +61,7 @@ pub fn downloads_dir() -> IoResult<PathBuf> {
     cfg_dir().map(|p| p.join(DOWNLOADS_DIR))
 }
 
+#[derive(Clone)]
 /// Connection options for a Wash instance
 pub struct WashConnectionOptions {
     /// CTL Host for connection, defaults to 127.0.0.1 for local nats

@@ -6,7 +6,7 @@ use smithy::{GenerateCli, LintCli, ValidateCli};
 use wash_lib::{
     cli::{
         claims::ClaimsCliCommand, get::GetCommand, inspect::InspectCliCommand, link::LinkCommand,
-        start::StartCommand, stop::StopCommand, CommandOutput, OutputKind,
+        spy::SpyCommand, start::StartCommand, stop::StopCommand, CommandOutput, OutputKind,
     },
     drain::Drain as DrainSelection,
     registry::{RegistryCommand, RegistryPullCommand, RegistryPushCommand},
@@ -71,6 +71,7 @@ Projects:
   new          Create a new project from template
   par          Create, inspect, and modify capability provider archive files
   reg          Push an actor or provider component to an OCI or Bindle registry
+  spy          Spy on all invocations between an actor and its linked providers
   validate     Perform validation checks on smithy models
 
 Configuration:
@@ -85,6 +86,7 @@ Runtime environments:
 
 Options:
   -o, --output <OUTPUT>  Specify output format (text or json) [default: text]
+  --experimental         Whether or not to enable experimental features [default: false]
   -h, --help             Print help
   -V, --version          Print version
 "#;
@@ -100,6 +102,16 @@ struct Cli {
         global = true
     )]
     pub(crate) output: OutputKind,
+
+    #[clap(
+        long = "experimental",
+        id = "experimental",
+        env = "WASH_EXPERIMENTAL",
+        default_value = "false",
+        help = "Whether or not to enable experimental features",
+        global = true
+    )]
+    pub(crate) experimental: bool,
 
     #[clap(subcommand)]
     command: CliCommand,
@@ -169,6 +181,9 @@ enum CliCommand {
     /// Pull an artifact from an OCI compliant registry
     #[clap(name = "pull")]
     RegPull(RegistryPullCommand),
+    /// (experimental) Spy on all invocations between an actor and its linked providers
+    #[clap(name = "spy")]
+    Spy(SpyCommand),
     /// Start an actor or a provider
     #[clap(name = "start", subcommand)]
     Start(StartCommand),
@@ -223,6 +238,13 @@ async fn main() {
         }
         CliCommand::RegPull(reg_pull_cli) => {
             common::registry_cmd::registry_pull(reg_pull_cli, output_kind).await
+        }
+        CliCommand::Spy(spy_cli) => {
+            if !cli.experimental {
+                experimental_error_message("spy")
+            } else {
+                wash_lib::cli::spy::handle_command(spy_cli).await
+            }
         }
         CliCommand::Start(start_cli) => {
             common::start_cmd::handle_command(start_cli, output_kind).await
@@ -294,4 +316,8 @@ async fn main() {
             1
         }
     })
+}
+
+fn experimental_error_message(command: &str) -> Result<CommandOutput> {
+    Err(anyhow::anyhow!("The `wash {command}` command is experimental and may change in future releases. Set the `WASH_EXPERIMENTAL` environment variable or `--experimental` flag to `true` to use this command."))
 }

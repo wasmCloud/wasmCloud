@@ -125,7 +125,7 @@ pub async fn delete_link(
 ) -> Result<CtlOperationAck> {
     wco.into_ctl_client(None)
         .await?
-        .remove_link(&actor_id.to_string(), contract_id, link_name)
+        .remove_link(actor_id, contract_id, link_name)
         .await
         .map_err(boxed_err_to_anyhow)
         .with_context(|| {
@@ -170,8 +170,8 @@ pub async fn create_link(
     wco.into_ctl_client(None)
         .await?
         .advertise_link(
-            &actor_id.to_string(),
-            &provider_id.to_string(),
+            actor_id,
+            provider_id,
             contract_id,
             link_name,
             labels_vec_to_hashmap(link_values.clone())?,

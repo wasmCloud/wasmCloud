@@ -1,6 +1,6 @@
 //! Types and tools for basic validation of seeds and IDs used in configuration
 
-use std::{convert::AsRef, fmt::Display, str::FromStr};
+use std::{convert::AsRef, fmt::Display, ops::Deref, str::FromStr};
 
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
@@ -39,9 +39,34 @@ impl<const PREFIX: char> FromStr for Id<PREFIX> {
     }
 }
 
+impl<const PREFIX: char> AsRef<str> for Id<PREFIX> {
+    fn as_ref(&self) -> &str {
+        self.0.as_ref()
+    }
+}
+
+impl<const PREFIX: char> Deref for Id<PREFIX> {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.deref()
+    }
+}
+
 impl<const PREFIX: char> Display for Id<PREFIX> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(f)
+    }
+}
+
+impl<const PREFIX: char> Id<PREFIX> {
+    /// Converts the wrapped key back into a plain string
+    pub fn into_string(self) -> String {
+        self.0
+    }
+
+    pub fn prefix() -> char {
+        PREFIX
     }
 }
 
@@ -70,11 +95,30 @@ impl<const PREFIX: char> AsRef<str> for Seed<PREFIX> {
     }
 }
 
+impl<const PREFIX: char> Deref for Seed<PREFIX> {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.deref()
+    }
+}
+
 impl<const PREFIX: char> FromStr for Seed<PREFIX> {
     type Err = ParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(Self(parse(s, PREFIX, true)?))
+    }
+}
+
+impl<const PREFIX: char> Seed<PREFIX> {
+    /// Converts the wrapped key back into a plain string
+    pub fn into_string(self) -> String {
+        self.0
+    }
+
+    pub fn prefix() -> char {
+        PREFIX
     }
 }
 

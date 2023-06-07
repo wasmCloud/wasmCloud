@@ -35,4 +35,5 @@ pub mod drain;
 pub mod id;
 pub mod keys;
 pub mod registry;
+pub mod spier;
 pub mod wait;

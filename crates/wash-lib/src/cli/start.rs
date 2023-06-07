@@ -107,7 +107,7 @@ pub async fn start_actor(cmd: StartActorCommand) -> Result<CommandOutput> {
         .context("Failed to get lattice event channel")?;
 
     let ack = client
-        .start_actor(&host.to_string(), &cmd.actor_ref, cmd.count, None)
+        .start_actor(&host, &cmd.actor_ref, cmd.count, None)
         .await
         .map_err(boxed_err_to_anyhow)
         .with_context(|| format!("Failed to start actor: {}", &cmd.actor_ref))?;
@@ -268,7 +268,7 @@ pub async fn start_provider(cmd: StartProviderCommand) -> Result<CommandOutput> 
 
     let ack = client
         .start_provider(
-            &host.to_string(),
+            &host,
             &cmd.provider_ref,
             Some(cmd.link_name.clone()),
             None,
