@@ -7,7 +7,9 @@ use std::{
 
 use anyhow::{bail, Context, Result};
 use rand::{distributions::Alphanumeric, Rng};
+use tempfile::TempDir;
 use tokio::net::TcpStream;
+use tokio::process::Command;
 
 use sysinfo::SystemExt;
 use tokio::process::Child;
@@ -65,7 +67,7 @@ pub(crate) fn test_dir_file(subfolder: &str, file: &str) -> PathBuf {
 }
 
 #[allow(unused)]
-async fn start_nats(port: u16, nats_install_dir: &PathBuf) -> Result<Child> {
+pub(crate) async fn start_nats(port: u16, nats_install_dir: &PathBuf) -> Result<Child> {
     let nats_binary = ensure_nats_server("v2.8.4", nats_install_dir).await?;
     let config = NatsConfig::new_standalone("127.0.0.1", port, None);
     start_nats_server(nats_binary, std::process::Stdio::null(), config).await
@@ -208,4 +210,68 @@ impl TestWashInstance {
             host_id,
         })
     }
+}
+
+pub(crate) struct TestSetup {
+    /// The path to the directory for the test.
+    /// Added here so that the directory is not deleted until the end of the test.
+    #[allow(dead_code)]
+    pub test_dir: TempDir,
+    /// The path to the created actor's directory.
+    #[allow(dead_code)]
+    pub project_dir: PathBuf,
+}
+
+#[allow(dead_code)]
+pub(crate) struct WorkspaceTestSetup {
+    /// The path to the directory for the test.
+    /// Added here so that the directory is not deleted until the end of the test.
+    #[allow(dead_code)]
+    pub test_dir: TempDir,
+    /// The path to the created actor's directory.
+    #[allow(dead_code)]
+    pub project_dirs: Vec<PathBuf>,
+}
+
+/// Inits an actor build test by setting up a test directory and creating an actor from a template.
+/// Returns the paths of the test directory and actor directory.
+#[allow(dead_code)]
+pub(crate) async fn init(actor_name: &str, template_name: &str) -> Result<TestSetup> {
+    let test_dir = TempDir::new()?;
+    std::env::set_current_dir(&test_dir)?;
+    let project_dir = init_actor_from_template(actor_name, template_name).await?;
+    std::env::set_current_dir(&project_dir)?;
+    Ok(TestSetup {
+        test_dir,
+        project_dir,
+    })
+}
+
+/// Initializes a new actor from a wasmCloud template, and sets the environment to use the created actor's directory.
+#[allow(dead_code)]
+pub(crate) async fn init_actor_from_template(
+    actor_name: &str,
+    template_name: &str,
+) -> Result<PathBuf> {
+    let status = Command::new(env!("CARGO_BIN_EXE_wash"))
+        .args([
+            "new",
+            "actor",
+            actor_name,
+            "--git",
+            "wasmcloud/project-templates",
+            "--subfolder",
+            &format!("actor/{template_name}"),
+            "--silent",
+            "--no-git-init",
+        ])
+        .kill_on_drop(true)
+        .status()
+        .await
+        .context("Failed to generate project")?;
+
+    assert!(status.success());
+
+    let project_dir = std::env::current_dir()?.join(actor_name);
+    Ok(project_dir)
 }

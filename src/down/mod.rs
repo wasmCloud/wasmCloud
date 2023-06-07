@@ -21,7 +21,7 @@ use crate::up::{
 };
 use crate::util::nats_client_from_opts;
 
-#[derive(Parser, Debug, Clone)]
+#[derive(Parser, Debug, Clone, Default)]
 pub(crate) struct DownCommand {
     /// A lattice prefix is a unique identifier for a lattice, and is frequently used within NATS topics to isolate messages from different lattices
     #[clap(

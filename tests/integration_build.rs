@@ -6,6 +6,8 @@ use tokio::process::Command;
 
 mod common;
 
+use crate::common::{init, init_actor_from_template, WorkspaceTestSetup};
+
 #[tokio::test]
 #[serial]
 async fn build_rust_actor_unsigned_serial() -> Result<()> {
@@ -134,37 +136,6 @@ async fn build_tinygo_actor_signed_serial() -> Result<()> {
     Ok(())
 }
 
-struct TestSetup {
-    /// The path to the directory for the test.
-    /// Added here so that the directory is not deleted until the end of the test.
-    #[allow(dead_code)]
-    test_dir: TempDir,
-    /// The path to the created actor's directory.
-    project_dir: PathBuf,
-}
-
-struct WorkspaceTestSetup {
-    /// The path to the directory for the test.
-    /// Added here so that the directory is not deleted until the end of the test.
-    #[allow(dead_code)]
-    test_dir: TempDir,
-    /// The path to the created actor's directory.
-    project_dirs: Vec<PathBuf>,
-}
-
-/// Inits an actor build test by setting up a test directory and creating an actor from a template.
-/// Returns the paths of the test directory and actor directory.
-async fn init(actor_name: &str, template_name: &str) -> Result<TestSetup> {
-    let test_dir = TempDir::new()?;
-    std::env::set_current_dir(&test_dir)?;
-    let project_dir = init_actor_from_template(actor_name, template_name).await?;
-    std::env::set_current_dir(&project_dir)?;
-    Ok(TestSetup {
-        test_dir,
-        project_dir,
-    })
-}
-
 /// Inits an actor build test by setting up a test directory and creating an actor from a template.
 /// Returns the paths of the test directory and actor directory.
 async fn init_workspace(actor_names: Vec<&str>) -> Result<WorkspaceTestSetup> {
@@ -198,31 +169,6 @@ async fn init_workspace(actor_names: Vec<&str>) -> Result<WorkspaceTestSetup> {
         test_dir,
         project_dirs,
     })
-}
-
-/// Initializes a new actor from a wasmCloud template, and sets the environment to use the created actor's directory.
-async fn init_actor_from_template(actor_name: &str, template_name: &str) -> Result<PathBuf> {
-    let status = Command::new(env!("CARGO_BIN_EXE_wash"))
-        .args([
-            "new",
-            "actor",
-            actor_name,
-            "--git",
-            "wasmcloud/project-templates",
-            "--subfolder",
-            &format!("actor/{template_name}"),
-            "--silent",
-            "--no-git-init",
-        ])
-        .kill_on_drop(true)
-        .status()
-        .await
-        .context("Failed to generate project")?;
-
-    assert!(status.success());
-
-    let project_dir = std::env::current_dir()?.join(actor_name);
-    Ok(project_dir)
 }
 
 #[tokio::test]

@@ -29,14 +29,14 @@
 //!         nats_log_file,
 //!         config,
 //!     ).await?;
-//!     
+//!
 //!     // Download wasmCloud if not already installed
 //!     let wasmcloud_executable = ensure_wasmcloud("v0.57.1", &install_dir).await?;
-//!     
+//!
 //!     // Redirect output (which is on stderr) to a log file
 //!     let log_path = install_dir.join("wasmcloud_stderr.log");
 //!     let log_file = tokio::fs::File::create(&log_path).await?.into_std().await;
-//!     
+//!
 //!     let mut wasmcloud_process = start_wasmcloud_host(
 //!         wasmcloud_executable,
 //!         std::process::Stdio::null(),
@@ -45,7 +45,7 @@
 //!     ).await?;
 //!
 //!     // Park thread, wasmCloud and NATS are running
-//!     
+//!
 //!     // Terminate processes
 //!     nats_process.kill().await?;
 //!     wasmcloud_process.kill().await?;
