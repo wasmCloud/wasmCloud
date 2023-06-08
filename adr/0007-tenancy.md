@@ -11,7 +11,7 @@ When we run multiple copies of the same actor within the same host, we assume th
 
 An **inviolable** rule of wasmCloud's zero-trust policy is that we absolutely cannot ever allow one actor to compromise the security of another. We can't allow the generation of a link definition at runtime that could create a potential data exfiltration or PII compromise situation, or even enable the sharing of seemingly harmless data.
 
-Given the state of our documentation, people looking for multi-tenant solutions might not have sufficient context to make the right architectural decisions, and so this ADR needs to make clear where the tenancy boundaries are so that they can in turn be documented clearly at [wasmcloud.dev](https://wasmcloud.dev).
+Given the state of our documentation, people looking for multi-tenant solutions might not have sufficient context to make the right architectural decisions, and so this ADR needs to make clear where the tenancy boundaries are so that they can in turn be documented clearly at [wasmcloud.com](https://wasmcloud.com).
 
 ## Considered Options
 

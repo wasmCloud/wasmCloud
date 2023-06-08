@@ -21,7 +21,7 @@ or not actors should be allowed to communicate directly by default.
 
 ### Allow by Default
 
-This option essentially provides no _built-in_ rules preventing communication between actors. Developers and administrators can still use the [authorizer](https://wasmcloud.dev/reference/custom/authorizers/) trait facility of the wasmCloud host to create their own policies, but wasmCloud opts out of this decision-making process.
+This option essentially provides no _built-in_ rules preventing communication between actors. Developers and administrators can still use the [policy service](https://wasmcloud.com/docs/production/secure/policy) to create their own policies.
 
 ### Deny by Default
 
