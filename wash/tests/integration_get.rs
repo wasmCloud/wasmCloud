@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use serial_test::serial;
 use tokio::process::Command;
 use wash_lib::cli::output::{
     GetClaimsOutput, GetHostInventoryOutput, GetHostsOutput, LinkQueryOutput,
@@ -8,6 +9,7 @@ mod common;
 use common::TestWashInstance;
 
 #[tokio::test]
+#[serial]
 async fn integration_get_hosts_serial() -> Result<()> {
     let wash_instance = TestWashInstance::create().await?;
 
@@ -32,6 +34,7 @@ async fn integration_get_hosts_serial() -> Result<()> {
 }
 
 #[tokio::test]
+#[serial]
 async fn integration_get_links_serial() -> Result<()> {
     let _wash_instance = TestWashInstance::create().await?;
 
@@ -52,6 +55,7 @@ async fn integration_get_links_serial() -> Result<()> {
 }
 
 #[tokio::test]
+#[serial]
 async fn integration_get_host_inventory_serial() -> Result<()> {
     let wash_instance = TestWashInstance::create().await?;
 
@@ -109,6 +113,7 @@ async fn integration_get_host_inventory_serial() -> Result<()> {
 }
 
 #[tokio::test]
+#[serial]
 async fn integration_get_claims_serial() -> Result<()> {
     let _wash_instance = TestWashInstance::create().await?;
 
