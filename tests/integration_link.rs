@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use serial_test::serial;
 use tokio::process::Command;
 use wash_lib::cli::output::LinkQueryOutput;
 
@@ -6,6 +7,7 @@ mod common;
 use common::TestWashInstance;
 
 #[tokio::test]
+#[serial]
 async fn integration_link_serial() -> Result<()> {
     let _wash = TestWashInstance::create().await?;
 

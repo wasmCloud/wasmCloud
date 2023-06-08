@@ -1,3 +1,4 @@
+use serial_test::serial;
 use std::{
     fs::{read_to_string, remove_dir_all},
     path::PathBuf,
@@ -15,6 +16,7 @@ mod common;
 const RGX_ACTOR_START_MSG: &str = r"Actor \[(?P<actor_id>[^]]+)\] \(ref: \[(?P<actor_ref>[^]]+)\]\) started on host \[(?P<host_id>[^]]+)\]";
 
 #[tokio::test]
+#[serial]
 async fn integration_up_can_start_wasmcloud_and_actor_serial() -> Result<()> {
     let dir = test_dir_with_subfolder("can_start_wasmcloud");
     let path = dir.join("washup.log");
@@ -110,6 +112,7 @@ async fn integration_up_can_start_wasmcloud_and_actor_serial() -> Result<()> {
 }
 
 #[tokio::test]
+#[serial]
 async fn integration_up_can_stop_detached_host_serial() -> Result<()> {
     let dir = test_dir_with_subfolder("can_stop_wasmcloud");
     let path = dir.join("washup.log");
@@ -178,6 +181,7 @@ async fn integration_up_can_stop_detached_host_serial() -> Result<()> {
 }
 
 #[tokio::test]
+#[serial]
 async fn integration_up_doesnt_kill_unowned_nats_serial() -> Result<()> {
     let dir = test_dir_with_subfolder("doesnt_kill_unowned_nats");
     let path = dir.join("washup.log");
