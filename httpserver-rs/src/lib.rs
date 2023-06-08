@@ -204,7 +204,7 @@ impl HttpServerCore {
                             ?req,
                             "httpserver calling actor"
                         );
-                        let response = match arc_inner.call_actor.call(arc_inner.lattice_id.clone(), ld, req, timeout).in_current_span().await {
+                        let response = match arc_inner.call_actor.call(arc_inner.lattice_id.clone(), ld.clone(), req, timeout).in_current_span().await {
                             Ok(resp) => resp,
                             Err(e) => {
                                 error!(
@@ -218,7 +218,6 @@ impl HttpServerCore {
                                 }
                             }
                         };
-                        let mut http_response = http::response::Response::new(response.body);
                         let status = match http::StatusCode::from_u16(response.status_code) {
                             Ok(status_code) => status_code,
                             Err(e) => {
@@ -230,7 +229,19 @@ impl HttpServerCore {
                                 http::StatusCode::INTERNAL_SERVER_ERROR
                             }
                         };
-                        *http_response.status_mut() = status;
+                        let http_builder = http::Response::builder()
+                        .status(status);
+                        let http_builder = if let Some(cache_control_header) = arc_inner.settings.cache_control.as_ref(){
+                            let mut builder = http_builder;
+                            for val in cache_control_header{
+                                builder = builder.header("Cache-Control",val)
+                            }
+                            builder
+                        }else{
+                            http_builder
+                        };
+                        // Unwrapping here because validation takes place for the linkdef
+                        let mut http_response = http_builder.body(response.body).unwrap();
                         convert_response_headers(response.header, http_response.headers_mut());
                         Ok::<_, warp::Rejection>(http_response)
                     }.instrument(span)
@@ -340,6 +351,7 @@ fn convert_response_headers(
                 continue;
             }
         };
+        map.remove(&name);
         for val in vals.into_iter() {
             let value = match http::header::HeaderValue::try_from(val) {
                 Ok(value) => value,
