@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use serial_test::serial;
 use std::{fs::File, io::Write, path::PathBuf};
 use tempfile::TempDir;
 use tokio::process::Command;
@@ -6,6 +7,7 @@ use tokio::process::Command;
 mod common;
 
 #[tokio::test]
+#[serial]
 async fn build_rust_actor_unsigned_serial() -> Result<()> {
     let test_setup = init(
         /* actor_name= */ "hello", /* template_name= */ "hello",
@@ -31,6 +33,7 @@ async fn build_rust_actor_unsigned_serial() -> Result<()> {
 }
 
 #[tokio::test]
+#[serial]
 async fn build_rust_actor_signed_serial() -> Result<()> {
     let test_setup = init(
         /* actor_name= */ "hello", /* template_name= */ "hello",
@@ -54,6 +57,7 @@ async fn build_rust_actor_signed_serial() -> Result<()> {
 }
 
 #[tokio::test]
+#[serial]
 async fn build_rust_actor_in_workspace_unsigned_serial() -> Result<()> {
     let test_setup = init_workspace(vec![/* actor_names= */ "hello-1", "hello-2"]).await?;
     let project_dir = test_setup.project_dirs.get(0).unwrap();
@@ -78,6 +82,7 @@ async fn build_rust_actor_in_workspace_unsigned_serial() -> Result<()> {
 }
 
 #[tokio::test]
+#[serial]
 async fn build_tinygo_actor_unsigned_serial() -> Result<()> {
     let test_setup = init(
         /* actor_name= */ "echo",
@@ -105,6 +110,7 @@ async fn build_tinygo_actor_unsigned_serial() -> Result<()> {
 }
 
 #[tokio::test]
+#[serial]
 async fn build_tinygo_actor_signed_serial() -> Result<()> {
     let test_setup = init(
         /* actor_name= */ "echo",
@@ -220,6 +226,7 @@ async fn init_actor_from_template(actor_name: &str, template_name: &str) -> Resu
 }
 
 #[tokio::test]
+#[serial]
 async fn integration_build_handles_dashed_names_serial() -> Result<()> {
     let actor_name = "dashed-actor";
     // This tests runs against a temp directory since cargo gets confused

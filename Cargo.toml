@@ -68,6 +68,8 @@ scopeguard = { workspace = true }
 sysinfo = { workspace = true }
 chrono = { workspace = true }
 futures = { workspace = true }
+# serial_test ensures serial execution when running with cargo, '<test name>_serial' works with nextest
+serial_test = { workspace = true }
 rand = "0.8.5"
 
 [[bin]]
