@@ -1,3 +1,7 @@
+[build.env]
+volumes = ["XDG_CACHE_HOME"]
+passthrough = ["XDG_CACHE_HOME"]
+
 [target.armv7-unknown-linux-gnueabihf]
 image = "wasmcloud/cross:armv7-unknown-linux-gnueabihf"
 
