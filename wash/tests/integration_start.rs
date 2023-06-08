@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use serial_test::serial;
 use tokio::process::Command;
 use wash_lib::cli::output::StartCommandOutput;
 
@@ -6,6 +7,7 @@ mod common;
 use common::{TestWashInstance, ECHO_OCI_REF, PROVIDER_HTTPSERVER_OCI_REF};
 
 #[tokio::test]
+#[serial]
 async fn integration_start_actor_serial() -> Result<()> {
     let _wash_instance = TestWashInstance::create().await?;
 
@@ -34,6 +36,7 @@ async fn integration_start_actor_serial() -> Result<()> {
 }
 
 #[tokio::test]
+#[serial]
 async fn integration_start_provider_serial() -> Result<()> {
     let _wash_instance = TestWashInstance::create().await?;
 
