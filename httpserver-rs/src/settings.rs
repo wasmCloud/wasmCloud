@@ -194,7 +194,7 @@ impl ServiceSettings {
         if let Some(cache_control) = self.cache_control.as_ref() {
             for val in cache_control.iter() {
                 if http::HeaderValue::from_str(val).is_err() {
-                    errors.push("Invalid Cache Control header".to_string());
+                    errors.push(format!("Invalid Cache Control header : '{}'", val));
                 }
             }
         }
