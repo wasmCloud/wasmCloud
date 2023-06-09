@@ -28,6 +28,7 @@ pub mod parser;
 #[cfg(feature = "start")]
 pub mod start;
 
+pub mod capture;
 pub mod common;
 pub mod config;
 pub mod context;
