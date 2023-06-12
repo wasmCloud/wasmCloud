@@ -233,9 +233,7 @@ impl HttpServerCore {
                         .status(status);
                         let http_builder = if let Some(cache_control_header) = arc_inner.settings.cache_control.as_ref(){
                             let mut builder = http_builder;
-                            for val in cache_control_header{
-                                builder = builder.header("Cache-Control",val)
-                            }
+                            builder = builder.header("Cache-Control",cache_control_header);
                             builder
                         }else{
                             http_builder

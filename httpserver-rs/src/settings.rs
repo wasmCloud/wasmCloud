@@ -33,7 +33,6 @@ const CORS_ALLOWED_HEADERS: &[&str] = &[
     "accept-language",
     "content-type",
     "content-language",
-    "cache-control",
 ];
 const CORS_EXPOSED_HEADERS: &[&str] = &[];
 const CORS_DEFAULT_MAX_AGE_SECS: u64 = 300;
@@ -70,7 +69,7 @@ pub struct ServiceSettings {
     pub timeout_ms: Option<u64>,
 
     /// cache control options
-    pub cache_control: Option<Vec<String>>,
+    pub cache_control: Option<String>,
 
     /// Max content length. Default "10m" (10MiB = 10485760 bytes)
     /// Can be overridden by link def value max_content_len
@@ -192,10 +191,11 @@ impl ServiceSettings {
             }
         }
         if let Some(cache_control) = self.cache_control.as_ref() {
-            for val in cache_control.iter() {
-                if http::HeaderValue::from_str(val).is_err() {
-                    errors.push(format!("Invalid Cache Control header : '{}'", val));
-                }
+            if http::HeaderValue::from_str(cache_control).is_err() {
+                errors.push(format!(
+                    "Invalid Cache Control header : '{}'",
+                    cache_control
+                ));
             }
         }
         if !errors.is_empty() {
@@ -266,12 +266,7 @@ pub fn load_settings(values: &HashMap<String, String>) -> Result<ServiceSettings
 
     // accept cache-control header values
     if let Some(cache_control) = values.get("cache_control") {
-        settings.cache_control = Some(
-            cache_control
-                .split(',')
-                .map(|s| s.trim().to_owned())
-                .collect(),
-        );
+        settings.cache_control = Some(cache_control.to_string());
     }
 
     settings.validate()?;

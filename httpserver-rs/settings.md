@@ -27,7 +27,7 @@ An empty tls section, or no tls section, disables tls. To enable TLS, both `cert
 - `allowed_headers` - a list of allowed headers, case-insensitive. See [`Access-Control-Allow-Headers`](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Access-Control-Allow-Headers) Default:
 
   ```json
-  ["accept", "accept-language", "content-type", "content-language","cache-control"]
+  ["accept", "accept-language", "content-type", "content-language"]
   ```
 
 - `exposed_headers` - see [`Access-Control-Expose-Headers`](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Access-Control-Expose-Headers)
@@ -42,6 +42,10 @@ For example, the following setting limits uploads to 20 MB.
 ```json
 { "max_content_len": "20M" }
 ```
+
+### Cache Control
+
+An optional set of cache-control values that will appear in the header if they are not already set.
 
 ## Examples of settings files
 
@@ -63,13 +67,14 @@ Example with all settings
   "cors": {
     "allowed_origins": [],
     "allowed_headers": [
-      "accept", "accept-language", "content-language", "content-type", "cache-control","x-custome-header"
+      "accept", "accept-language", "content-language", "content-type", "x-custome-header"
     ],
     "allowed_methods": [ "GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS" ],
     "exposed_headers": [],
     "max_age_secs": 300
   },
-  "max_content_len": "100M"
+  "max_content_len": "100M",
+  "cache-control":"max-age=20"
 }
 ```
 
