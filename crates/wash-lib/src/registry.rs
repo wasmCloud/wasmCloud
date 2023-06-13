@@ -6,6 +6,7 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, Result};
+#[cfg(feature = "cli")]
 use clap::{Parser, Subcommand};
 use oci_distribution::manifest::OciImageManifest;
 use oci_distribution::{

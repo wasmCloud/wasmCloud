@@ -29,6 +29,8 @@ async fn integration_up_can_start_wasmcloud_and_actor_serial() -> Result<()> {
             "up",
             "--nats-port",
             "5893",
+            "--dashboard-port",
+            "5002",
             "-o",
             "json",
             "--detached",
@@ -36,7 +38,6 @@ async fn integration_up_can_start_wasmcloud_and_actor_serial() -> Result<()> {
             &host_seed.seed().expect("Should have a seed for the host"),
         ])
         .stdout(stdout)
-        .kill_on_drop(true)
         .spawn()
         .context("Could not spawn wash up process")?;
 
@@ -59,7 +60,13 @@ async fn integration_up_can_start_wasmcloud_and_actor_serial() -> Result<()> {
     let mut tries = 30;
     while tries >= 0 {
         let output = Command::new(env!("CARGO_BIN_EXE_wash"))
-            .args(["ctl", "get", "inventory", &host_seed.public_key()])
+            .args([
+                "get",
+                "inventory",
+                &host_seed.public_key(),
+                "--ctl-port",
+                "5893",
+            ])
             .kill_on_drop(true)
             .output()
             .await
@@ -69,13 +76,13 @@ async fn integration_up_can_start_wasmcloud_and_actor_serial() -> Result<()> {
             assert!(tries >= 0);
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
         } else {
+            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
             break;
         }
     }
 
     let start_echo = Command::new(env!("CARGO_BIN_EXE_wash"))
         .args([
-            "ctl",
             "start",
             "actor",
             "wasmcloud.azurecr.io/echo:0.3.4",
@@ -98,10 +105,17 @@ async fn integration_up_can_start_wasmcloud_and_actor_serial() -> Result<()> {
         String::from_utf8_lossy(&start_echo.stderr)
     );
 
+    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
     let kill_cmd = kill_cmd.to_string();
     let (_wash, down) = kill_cmd.trim_matches('"').split_once(' ').unwrap();
     Command::new(env!("CARGO_BIN_EXE_wash"))
-        .args(vec![down])
+        .args(vec![
+            down,
+            "--ctl-port",
+            "5893",
+            "--host-id",
+            &host_seed.public_key(),
+        ])
         .kill_on_drop(true)
         .output()
         .await
@@ -118,9 +132,22 @@ async fn integration_up_can_stop_detached_host_serial() -> Result<()> {
     let path = dir.join("washup.log");
     let stdout = std::fs::File::create(&path).expect("could not create log file for wash up test");
 
+    // sleep for 10 seconds
+    tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+
+    let host_seed = nkeys::KeyPair::new_server();
+
     let mut up_cmd = Command::new(env!("CARGO_BIN_EXE_wash"))
-        .args(["up", "--nats-port", "5894", "-o", "json", "--detached"])
-        .kill_on_drop(true)
+        .args([
+            "up",
+            "--nats-port",
+            "5894",
+            "-o",
+            "json",
+            "--detached",
+            "--host-seed",
+            &host_seed.seed().expect("Should have a seed for the host"),
+        ])
         .stdout(stdout)
         .spawn()
         .context("Could not spawn wash up process")?;
@@ -149,11 +176,18 @@ async fn integration_up_can_stop_detached_host_serial() -> Result<()> {
         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
     }
 
+    tokio::time::sleep(tokio::time::Duration::from_millis(5000)).await;
+
     let kill_cmd = kill_cmd.to_string();
     let (_wash, down) = kill_cmd.trim_matches('"').split_once(' ').unwrap();
     Command::new(env!("CARGO_BIN_EXE_wash"))
-        .args(vec![down])
-        .kill_on_drop(true)
+        .args(vec![
+            down,
+            "--ctl-port",
+            "5894",
+            "--host-id",
+            &host_seed.public_key(),
+        ])
         .output()
         .await
         .context("Could not spawn wash down process")?;
@@ -199,7 +233,6 @@ async fn integration_up_doesnt_kill_unowned_nats_serial() -> Result<()> {
             "json",
             "--detached",
         ])
-        .kill_on_drop(true)
         .stdout(stdout)
         .spawn()
         .context("Could not spawn wash up process")?;
@@ -228,11 +261,13 @@ async fn integration_up_doesnt_kill_unowned_nats_serial() -> Result<()> {
         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
     }
 
+    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+
     let kill_cmd = kill_cmd.to_string();
     let (_wash, down) = kill_cmd.trim_matches('"').split_once(' ').unwrap();
     Command::new(env!("CARGO_BIN_EXE_wash"))
         .kill_on_drop(true)
-        .args(vec![down])
+        .args(vec![down, "--ctl-port", "5895"])
         .output()
         .await
         .context("Could not spawn wash down process")?;

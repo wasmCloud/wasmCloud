@@ -219,5 +219,5 @@ fn integration_inspect_cached() {
 
     assert!(!remote_inspect_no_cache.status.success());
 
-    remove_file(http_client_cache_path).unwrap();
+    let _ = remove_file(http_client_cache_path);
 }

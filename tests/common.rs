@@ -105,7 +105,13 @@ impl Drop for TestWashInstance {
         let kill_cmd = kill_cmd.to_string();
         let (_wash, down) = kill_cmd.trim_matches('"').split_once(' ').unwrap();
         wash()
-            .args(vec![down])
+            .args(vec![
+                down,
+                "--host-id",
+                &self.host_id,
+                "--ctl-port",
+                &self.nats_port.to_string(),
+            ])
             .output()
             .expect("Could not spawn wash down process");
 
@@ -171,6 +177,7 @@ impl TestWashInstance {
             .context("up command failed to complete")?;
 
         assert!(status.success());
+
         let out = read_to_string(&log_path).context("could not read output of wash up")?;
 
         let (kill_cmd, wasmcloud_log) = match serde_json::from_str::<serde_json::Value>(&out) {
@@ -179,7 +186,7 @@ impl TestWashInstance {
         };
 
         // Wait until the host starts by checking the logs
-        let mut tries = 30;
+        let mut tries: i32 = 30;
         let mut start_message_logs: String = String::new();
         loop {
             start_message_logs = read_to_string(wasmcloud_log.to_string().trim_matches('"'))
@@ -191,6 +198,7 @@ impl TestWashInstance {
             assert!(tries >= 0);
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
         }
+        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
 
         Ok(TestWashInstance {
             test_dir,

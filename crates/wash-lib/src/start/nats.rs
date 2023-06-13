@@ -268,6 +268,14 @@ where
         .map(|_| child)
 }
 
+/// Helper function to get the path to the NATS server pid file
+pub fn nats_pid_path<P>(install_dir: P) -> PathBuf
+where
+    P: AsRef<Path>,
+{
+    install_dir.as_ref().join(NATS_SERVER_PID)
+}
+
 /// Helper function to determine the NATS server release path given an os/arch and version
 fn nats_url(os: &str, arch: &str, version: &str) -> String {
     // Replace "macos" with "darwin" to match NATS release scheme

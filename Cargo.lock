@@ -4267,6 +4267,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tokio-tar",
+ "tokio-util 0.7.8",
  "toml 0.7.4",
  "wadm",
  "walkdir",
