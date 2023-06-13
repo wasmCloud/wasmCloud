@@ -6,8 +6,6 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, Result};
-#[cfg(feature = "cli")]
-use clap::{Parser, Subcommand};
 use oci_distribution::manifest::OciImageManifest;
 use oci_distribution::{
     client::{Client, ClientConfig, ClientProtocol, Config, ImageLayer},
@@ -28,6 +26,109 @@ const OCI_MEDIA_TYPE: &str = "application/vnd.oci.image.layer.v1.tar";
 
 // straight up stolen from oci_distribution::Reference
 pub const REFERENCE_REGEXP: &str = r"^((?:(?:[a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9])(?:(?:\.(?:[a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]))+)?(?::[0-9]+)?/)?[a-z0-9]+(?:(?:(?:[._]|__|[-]*)[a-z0-9]+)+)?(?:(?:/[a-z0-9]+(?:(?:(?:[._]|__|[-]*)[a-z0-9]+)+)?)+)?)(?::([\w][\w.-]{0,127}))?(?:@([A-Za-z][A-Za-z0-9]*(?:[-_+.][A-Za-z][A-Za-z0-9]*)*[:][[:xdigit:]]{32,}))?$";
+
+#[cfg(feature = "cli")]
+mod cli {
+    use clap::{Parser, Subcommand};
+
+    #[derive(Parser, Debug, Clone)]
+    pub struct AuthOpts {
+        /// OCI username, if omitted anonymous authentication will be used
+        #[clap(
+            short = 'u',
+            long = "user",
+            env = "WASH_REG_USER",
+            hide_env_values = true
+        )]
+        pub user: Option<String>,
+
+        /// OCI password, if omitted anonymous authentication will be used
+        #[clap(
+            short = 'p',
+            long = "password",
+            env = "WASH_REG_PASSWORD",
+            hide_env_values = true
+        )]
+        pub password: Option<String>,
+
+        /// Allow insecure (HTTP) registry connections
+        #[clap(long = "insecure")]
+        pub insecure: bool,
+    }
+
+    #[derive(Debug, Clone, Subcommand)]
+    pub enum RegistryCommand {
+        /// Pull an artifact from an OCI compliant registry
+        #[clap(name = "pull")]
+        Pull(RegistryPullCommand),
+        /// Push an artifact to an OCI compliant registry
+        #[clap(name = "push")]
+        Push(RegistryPushCommand),
+        /// Ping (test url) to see if the OCI url has an artifact
+        #[clap(name = "ping")]
+        Ping(RegistryPingCommand),
+    }
+
+    #[derive(Parser, Debug, Clone)]
+    pub struct RegistryPullCommand {
+        /// URL of artifact
+        #[clap(name = "url")]
+        pub url: String,
+
+        /// File destination of artifact
+        #[clap(long = "destination")]
+        pub destination: Option<String>,
+
+        /// Digest to verify artifact against
+        #[clap(short = 'd', long = "digest")]
+        pub digest: Option<String>,
+
+        /// Allow latest artifact tags
+        #[clap(long = "allow-latest")]
+        pub allow_latest: bool,
+
+        #[clap(flatten)]
+        pub opts: AuthOpts,
+    }
+
+    #[derive(Parser, Debug, Clone)]
+    pub struct RegistryPushCommand {
+        /// URL to push artifact to
+        #[clap(name = "url")]
+        pub url: String,
+
+        /// Path to artifact to push
+        #[clap(name = "artifact")]
+        pub artifact: String,
+
+        /// Path to config file, if omitted will default to a blank configuration
+        #[clap(short = 'c', long = "config")]
+        pub config: Option<String>,
+
+        /// Allow latest artifact tags
+        #[clap(long = "allow-latest")]
+        pub allow_latest: bool,
+
+        /// Optional set of annotations to apply to the OCI artifact manifest
+        #[clap(short = 'a', long = "annotation", name = "annotations")]
+        pub annotations: Option<Vec<String>>,
+
+        #[clap(flatten)]
+        pub opts: AuthOpts,
+    }
+
+    #[derive(Parser, Debug, Clone)]
+    pub struct RegistryPingCommand {
+        /// URL of artifact
+        #[clap(name = "url")]
+        pub url: String,
+
+        #[clap(flatten)]
+        pub opts: AuthOpts,
+    }
+}
+#[cfg(feature = "cli")]
+pub use cli::*;
 
 /// Additional options for pulling an OCI artifact
 #[derive(Default)]
@@ -67,102 +168,6 @@ pub enum SupportedArtifacts {
     Par,
     /// WebAssembly modules
     Wasm,
-}
-
-#[derive(Parser, Debug, Clone)]
-pub struct AuthOpts {
-    /// OCI username, if omitted anonymous authentication will be used
-    #[clap(
-        short = 'u',
-        long = "user",
-        env = "WASH_REG_USER",
-        hide_env_values = true
-    )]
-    pub user: Option<String>,
-
-    /// OCI password, if omitted anonymous authentication will be used
-    #[clap(
-        short = 'p',
-        long = "password",
-        env = "WASH_REG_PASSWORD",
-        hide_env_values = true
-    )]
-    pub password: Option<String>,
-
-    /// Allow insecure (HTTP) registry connections
-    #[clap(long = "insecure")]
-    pub insecure: bool,
-}
-
-#[derive(Debug, Clone, Subcommand)]
-pub enum RegistryCommand {
-    /// Pull an artifact from an OCI compliant registry
-    #[clap(name = "pull")]
-    Pull(RegistryPullCommand),
-    /// Push an artifact to an OCI compliant registry
-    #[clap(name = "push")]
-    Push(RegistryPushCommand),
-    /// Ping (test url) to see if the OCI url has an artifact
-    #[clap(name = "ping")]
-    Ping(RegistryPingCommand),
-}
-
-#[derive(Parser, Debug, Clone)]
-pub struct RegistryPullCommand {
-    /// URL of artifact
-    #[clap(name = "url")]
-    pub url: String,
-
-    /// File destination of artifact
-    #[clap(long = "destination")]
-    pub destination: Option<String>,
-
-    /// Digest to verify artifact against
-    #[clap(short = 'd', long = "digest")]
-    pub digest: Option<String>,
-
-    /// Allow latest artifact tags
-    #[clap(long = "allow-latest")]
-    pub allow_latest: bool,
-
-    #[clap(flatten)]
-    pub opts: AuthOpts,
-}
-
-#[derive(Parser, Debug, Clone)]
-pub struct RegistryPushCommand {
-    /// URL to push artifact to
-    #[clap(name = "url")]
-    pub url: String,
-
-    /// Path to artifact to push
-    #[clap(name = "artifact")]
-    pub artifact: String,
-
-    /// Path to config file, if omitted will default to a blank configuration
-    #[clap(short = 'c', long = "config")]
-    pub config: Option<String>,
-
-    /// Allow latest artifact tags
-    #[clap(long = "allow-latest")]
-    pub allow_latest: bool,
-
-    /// Optional set of annotations to apply to the OCI artifact manifest
-    #[clap(short = 'a', long = "annotation", name = "annotations")]
-    pub annotations: Option<Vec<String>>,
-
-    #[clap(flatten)]
-    pub opts: AuthOpts,
-}
-
-#[derive(Parser, Debug, Clone)]
-pub struct RegistryPingCommand {
-    /// URL of artifact
-    #[clap(name = "url")]
-    pub url: String,
-
-    #[clap(flatten)]
-    pub opts: AuthOpts,
 }
 
 // NOTE(thomastaylor312): In later refactors, we might want to consider making some sort of puller
