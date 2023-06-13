@@ -68,6 +68,9 @@ pub struct ServiceSettings {
     #[serde(default)]
     pub timeout_ms: Option<u64>,
 
+    /// cache control options
+    pub cache_control: Option<String>,
+
     /// Max content length. Default "10m" (10MiB = 10485760 bytes)
     /// Can be overridden by link def value max_content_len
     /// Accepts number (bytes), or number with suffix 'k', 'm', or 'g', (upper or lower case)
@@ -92,6 +95,7 @@ impl Default for ServiceSettings {
             cors: Cors::default(),
             log: Log::default(),
             timeout_ms: None,
+            cache_control: None,
             max_content_len: Some(DEFAULT_MAX_CONTENT_LEN.to_string()),
             extra: Default::default(),
         }
@@ -141,7 +145,7 @@ impl ServiceSettings {
 
     /// Merge settings from other into self
     fn merge(&mut self, other: ServiceSettings) {
-        merge!(self, other, address);
+        merge!(self, other, address, cache_control);
         self.tls.merge(other.tls);
         self.cors.merge(other.cors);
         self.log.merge(other.log);
@@ -186,6 +190,14 @@ impl ServiceSettings {
                 }
             }
         }
+        if let Some(cache_control) = self.cache_control.as_ref() {
+            if http::HeaderValue::from_str(cache_control).is_err() {
+                errors.push(format!(
+                    "Invalid Cache Control header : '{}'",
+                    cache_control
+                ));
+            }
+        }
         if !errors.is_empty() {
             Err(Error::Settings(format!(
                 "\nInvalid httpserver settings: \n{}\n",
@@ -209,7 +221,7 @@ impl ServiceSettings {
 pub fn load_settings(values: &HashMap<String, String>) -> Result<ServiceSettings, Error> {
     // Allow keys to be UPPERCASE, as an accommodation
     // for the lost souls who prefer ugly all-caps variable names.
-    let values = crate::make_case_insensitive(values).ok_or_else(|| Error::InvalidParameter(
+    let values: HashMap<String, &String> = crate::make_case_insensitive(values).ok_or_else(|| Error::InvalidParameter(
         "Key collision: httpserver settings (from linkdef.values) has one or more keys that are not unique based on case-insensitivity"
             .to_string(),
     ))?;
@@ -250,6 +262,11 @@ pub fn load_settings(values: &HashMap<String, String>) -> Result<ServiceSettings
             IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
             port,
         ));
+    }
+
+    // accept cache-control header values
+    if let Some(cache_control) = values.get("cache_control") {
+        settings.cache_control = Some(cache_control.to_string());
     }
 
     settings.validate()?;

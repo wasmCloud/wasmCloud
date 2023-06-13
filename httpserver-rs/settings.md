@@ -43,6 +43,10 @@ For example, the following setting limits uploads to 20 MB.
 { "max_content_len": "20M" }
 ```
 
+### Cache Control
+
+An optional set of cache-control values that will appear in the header if they are not already set.
+
 ## Examples of settings files
 
 Bind to all IP interfaces and port 3000, with TLS disabled
@@ -69,7 +73,8 @@ Example with all settings
     "exposed_headers": [],
     "max_age_secs": 300
   },
-  "max_content_len": "100M"
+  "max_content_len": "100M",
+  "cache-control":"max-age=20"
 }
 ```
 
