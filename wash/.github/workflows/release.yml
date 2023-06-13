@@ -56,8 +56,9 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: release/windows/wash.exe
-          tag_name: ${{ github.ref }}
-          release_name: Release ${{ github.ref }}
+          generate_release_notes: true
+          tag_name: ${{ github.ref_name }}
+          release_name: Release ${{ github.ref_name }}
           token: ${{ secrets.GITHUB_TOKEN }}
           draft: false
           prerelease: true
