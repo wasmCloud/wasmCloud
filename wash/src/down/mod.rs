@@ -215,7 +215,9 @@ where
     let signal = if pid_file.is_file() {
         format!("stop={}", &pid_file.display())
     } else {
-        "stop".into()
+        return Err(anyhow::anyhow!(
+            "No pidfile found for nats-server, assuming it's managed externally"
+        ));
     };
     let output = Command::new(bin_path)
         .arg("--signal")
