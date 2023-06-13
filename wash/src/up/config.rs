@@ -11,8 +11,9 @@ pub(crate) const DEFAULT_NATS_PORT: &str = "4222";
 // wadm configuration values
 pub(crate) const WADM_VERSION: &str = "v0.4.0";
 // wasmCloud configuration values, https://wasmcloud.dev/reference/host-runtime/host_configure/
-pub(crate) const WASMCLOUD_HOST_VERSION: &str = "v0.62.1";
+pub(crate) const WASMCLOUD_HOST_VERSION: &str = "v0.63.1";
 pub(crate) const WASMCLOUD_DASHBOARD_PORT: &str = "WASMCLOUD_DASHBOARD_PORT";
+// NOTE: We scan from this port up to 1000 ports higher, should always be under 64535
 pub(crate) const DEFAULT_DASHBOARD_PORT: &str = "4000";
 // NATS isolation configuration variables
 pub(crate) const WASMCLOUD_LATTICE_PREFIX: &str = "WASMCLOUD_LATTICE_PREFIX";
@@ -50,7 +51,7 @@ pub(crate) const WASMCLOUD_PROV_RPC_TLS: &str = "WASMCLOUD_PROV_RPC_TLS";
 pub(crate) const WASMCLOUD_OCI_ALLOWED_INSECURE: &str = "WASMCLOUD_OCI_ALLOWED_INSECURE";
 pub(crate) const WASMCLOUD_OCI_ALLOW_LATEST: &str = "WASMCLOUD_OCI_ALLOW_LATEST";
 // Extra configuration (logs, IPV6, config service)
-pub(crate) const WASMCLOUD_STRUCTURED_LOG_LEVEL: &str = "WASMCLOUD_STRUCTURED_LOG_LEVEL";
+pub(crate) const WASMCLOUD_STRUCTURED_LOG_LEVEL: &str = "WASMCLOUD_LOG_LEVEL";
 pub(crate) const DEFAULT_STRUCTURED_LOG_LEVEL: &str = "info";
 pub(crate) const WASMCLOUD_ENABLE_IPV6: &str = "WASMCLOUD_ENABLE_IPV6";
 pub(crate) const WASMCLOUD_STRUCTURED_LOGGING_ENABLED: &str =

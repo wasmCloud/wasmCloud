@@ -30,7 +30,7 @@ build-watch: ## Continuously build the project
 
 test: ## Run unit test suite
 	@$(CARGO) nextest run $(CARGO_TEST_TARGET) --no-fail-fast --bin wash
-	@$(CARGO) nextest run $(CARGO_TEST_TARGET) --no-fail-fast -p wash-lib
+	@$(CARGO) nextest run $(CARGO_TEST_TARGET) --no-fail-fast -p wash-lib --features=cli
 
 test-wash-ci:
 	@$(CARGO) nextest run --profile ci --workspace --bin wash

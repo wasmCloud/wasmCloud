@@ -27,6 +27,7 @@ ctrlc = { workspace = true }
 dirs = { workspace = true }
 env_logger = { workspace = true }
 envmnt = { workspace = true }
+futures = { workspace = true }
 indicatif = { workspace = true }
 log = { workspace = true }
 nkeys = { workspace = true }
@@ -134,6 +135,7 @@ thiserror = "1.0"
 tokio = { version = "1.28.2", default-features = false, features = ["fs"] }
 tokio-stream = "0.1"
 tokio-tar = "0.3"
+tokio-util = "0.7.8"
 toml = "0.7.4"
 wadm = "0.4.0"
 walkdir = "2.3"

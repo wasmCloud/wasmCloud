@@ -23,3 +23,5 @@ docker-compose.yml
 
 # Host config files
 host_config.json
+# No dumps in git
+*.dump
