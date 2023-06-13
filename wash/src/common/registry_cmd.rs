@@ -10,13 +10,14 @@ use oci_distribution::{
 use serde_json::json;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
+use wash_lib::cli::{
+    labels_vec_to_hashmap,
+    registry::{RegistryCommand, RegistryPingCommand, RegistryPullCommand, RegistryPushCommand},
+    CommandOutput, OutputKind,
+};
 use wash_lib::registry::{
     pull_oci_artifact, push_oci_artifact, validate_artifact, OciPullOptions, OciPushOptions,
     SupportedArtifacts,
-};
-use wash_lib::{
-    cli::{labels_vec_to_hashmap, CommandOutput, OutputKind},
-    registry::{RegistryCommand, RegistryPingCommand, RegistryPullCommand, RegistryPushCommand},
 };
 
 use crate::appearance::spinner::Spinner;
