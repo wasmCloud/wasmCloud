@@ -10,13 +10,13 @@ use wash_lib::{
         get::GetCommand,
         inspect::InspectCliCommand,
         link::LinkCommand,
+        registry::{RegistryCommand, RegistryPullCommand, RegistryPushCommand},
         spy::SpyCommand,
         start::StartCommand,
         stop::StopCommand,
         CommandOutput, OutputKind,
     },
     drain::Drain as DrainSelection,
-    registry::{RegistryCommand, RegistryPullCommand, RegistryPushCommand},
 };
 
 use app::AppCliCommand;
