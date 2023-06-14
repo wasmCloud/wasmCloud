@@ -79,4 +79,3 @@ wasmtime = { git = "https://github.com/rvolosatovs/wasmtime", rev = "c1a43101bd4
 wasmtime-wasi = { git = "https://github.com/rvolosatovs/wasmtime", rev = "c1a43101bd4548350629ef657fb91b4888e68087", default-features = false }
 wit-bindgen = { version = "0.7.0", default-features = false }
 wit-component = { version = "0.11.0", default-features = false }
-wit-deps = { version = "0.3.0", default-features = false }

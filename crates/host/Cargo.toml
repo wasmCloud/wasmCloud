@@ -33,7 +33,3 @@ wasmcloud-interface-numbergen = { workspace = true }
 wasmparser = { workspace = true }
 wasmtime = { workspace = true, features = ["async", "cache", "component-model", "cranelift", "jitdump", "parallel-compilation", "pooling-allocator", "vtune"] }
 wasmtime-wasi = { workspace = true, features = ["sync", "preview2"] }
-
-[build-dependencies]
-anyhow = { workspace = true }
-wit-deps = { workspace = true, features = ["sync"] }

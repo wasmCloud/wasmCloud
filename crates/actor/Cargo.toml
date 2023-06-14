@@ -44,7 +44,3 @@ uuid = { workspace = true, optional = true }
 wasmcloud-actor-derive = { workspace = true, optional = true }
 wasmcloud-interface-httpserver = { workspace = true, optional = true } # TODO: Remove
 wit-bindgen = { workspace = true, features = ["macros"], optional = true }
-
-[build-dependencies]
-anyhow = { workspace = true }
-wit-deps = { workspace = true, features = ["sync"] }
