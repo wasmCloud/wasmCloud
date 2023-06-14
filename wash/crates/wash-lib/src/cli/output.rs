@@ -63,3 +63,9 @@ pub struct GetClaimsOutput {
     pub claims: GetClaimsResponse,
     pub success: bool,
 }
+
+/// JSON output representation of the `wash dev` command
+#[derive(Debug, Deserialize)]
+pub struct DevCommandOutput {
+    pub success: bool,
+}

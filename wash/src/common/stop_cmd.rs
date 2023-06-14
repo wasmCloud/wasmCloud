@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use wash_lib::cli::stop::{stop_actor, stop_host, stop_provider, StopCommand};
+use wash_lib::cli::stop::{handle_stop_actor, stop_host, stop_provider, StopCommand};
 
 use crate::{appearance::spinner::Spinner, CommandOutput, OutputKind};
 
@@ -13,7 +13,7 @@ pub async fn handle_command(
         StopCommand::Actor(cmd) => {
             let actor_id = &cmd.actor_id.to_string();
             sp.update_spinner_message(format!(" Stopping actor {actor_id} ... "));
-            stop_actor(cmd).await?
+            handle_stop_actor(cmd).await?
         }
         StopCommand::Provider(cmd) => {
             let provider_id = &cmd.provider_id.to_string();

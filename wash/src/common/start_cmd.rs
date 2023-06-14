@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use wash_lib::cli::start::{start_actor, start_provider, StartCommand};
+use wash_lib::cli::start::{handle_start_actor, start_provider, StartCommand};
 
 use crate::{appearance::spinner::Spinner, CommandOutput, OutputKind};
 
@@ -15,7 +15,7 @@ pub(crate) async fn handle_command(
 
             sp.update_spinner_message(format!(" Starting actor {actor_ref} ... "));
 
-            start_actor(cmd).await?
+            handle_start_actor(cmd).await?
         }
         StartCommand::Provider(cmd) => {
             let provider_ref = &cmd.provider_ref.to_string();

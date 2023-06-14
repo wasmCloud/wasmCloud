@@ -15,6 +15,7 @@ use crate::parser::{
 
 /// Configuration for signing an artifact (actor or provider) including issuer and subject key, the path to where keys can be found, and an option to
 /// disable automatic key generation if keys cannot be found.
+#[derive(Debug, Clone)]
 pub struct SignConfig {
     /// Location of key files for signing
     pub keys_directory: Option<PathBuf>,

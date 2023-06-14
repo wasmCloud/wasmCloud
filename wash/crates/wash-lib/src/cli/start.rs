@@ -6,6 +6,7 @@ use clap::Parser;
 use tokio::time::Duration;
 
 use crate::{
+    actor::{start_actor, ActorStartedInfo, StartActorArgs},
     cli::{labels_vec_to_hashmap, CliConnectionOpts, CommandOutput},
     common::boxed_err_to_anyhow,
     config::{
@@ -14,10 +15,7 @@ use crate::{
     },
     context::default_timeout_ms,
     id::ServerId,
-    wait::{
-        wait_for_actor_start_event, wait_for_provider_start_event, ActorStartedInfo,
-        FindEventOutcome, ProviderStartedInfo,
-    },
+    wait::{wait_for_provider_start_event, FindEventOutcome, ProviderStartedInfo},
 };
 
 #[derive(Debug, Clone, Parser)]
@@ -63,7 +61,7 @@ pub struct StartActorCommand {
     pub skip_wait: bool,
 }
 
-pub async fn start_actor(cmd: StartActorCommand) -> Result<CommandOutput> {
+pub async fn handle_start_actor(cmd: StartActorCommand) -> Result<CommandOutput> {
     // If timeout isn't supplied, override with a longer timeout for starting actor
     let timeout_ms = if cmd.opts.timeout_ms == DEFAULT_NATS_TIMEOUT_MS {
         DEFAULT_START_ACTOR_TIMEOUT_MS
@@ -100,74 +98,44 @@ pub async fn start_actor(cmd: StartActorCommand) -> Result<CommandOutput> {
         }
     };
 
-    let mut receiver = client
-        .events_receiver()
-        .await
-        .map_err(boxed_err_to_anyhow)
-        .context("Failed to get lattice event channel")?;
+    // Start the actor
+    let ActorStartedInfo {
+        host_id,
+        actor_ref,
+        actor_id,
+    } = start_actor(StartActorArgs {
+        ctl_client: &client,
+        host_id: &host,
+        actor_ref: &cmd.actor_ref,
+        count: cmd.count,
+        skip_wait: cmd.skip_wait,
+        timeout_ms: Some(timeout_ms),
+    })
+    .await?;
 
-    let ack = client
-        .start_actor(&host, &cmd.actor_ref, cmd.count, None)
-        .await
-        .map_err(boxed_err_to_anyhow)
-        .with_context(|| format!("Failed to start actor: {}", &cmd.actor_ref))?;
-
-    if !ack.accepted {
-        bail!("Start actor ack not accepted: {}", ack.error);
-    }
-
-    if cmd.skip_wait {
-        let text = format!(
-            "Start actor request received: {}, host: {}",
-            &cmd.actor_ref, &host
-        );
-        return Ok(CommandOutput::new(
-            text.clone(),
-            HashMap::from([
-                ("result".into(), text.into()),
-                ("actor_ref".into(), cmd.actor_ref.into()),
-                ("host_id".into(), host.to_string().into()),
-            ]),
-        ));
-    }
-
-    let event = wait_for_actor_start_event(
-        &mut receiver,
-        Duration::from_millis(timeout_ms),
-        host.to_string(),
-        cmd.actor_ref.clone(),
-    )
-    .await
-    .with_context(|| {
+    let text = if cmd.skip_wait {
         format!(
-            "Timed out waitng for start event for actor {} on host {}",
-            &cmd.actor_ref, &host
+            "Start actor [{}] request received on host [{}]",
+            actor_ref, host_id
         )
-    })?;
+    } else {
+        format!(
+            "Actor [{}] (ref: [{}]) started on host [{}]",
+            actor_id.clone().unwrap_or("<unknown>".into()),
+            &actor_ref,
+            &host_id
+        )
+    };
 
-    match event {
-        FindEventOutcome::Success(ActorStartedInfo {
-            actor_id,
-            host_id,
-            actor_ref,
-        }) => {
-            let text = format!(
-                "Actor [{}] (ref: [{}]) started on host [{}]",
-                &actor_id, &actor_ref, &host_id
-            );
-            Ok(CommandOutput::new(
-                text.clone(),
-                HashMap::from([
-                    ("result".into(), text.into()),
-                    ("actor_ref".into(), actor_ref.into()),
-                    ("actor_id".into(), actor_id.into()),
-                    ("host_id".into(), host_id.into()),
-                ]),
-            ))
-        }
-        FindEventOutcome::Failure(err) => Err(err)
-            .with_context(|| format!("Failed to start actor {} on host {}", &cmd.actor_ref, &host)),
-    }
+    Ok(CommandOutput::new(
+        text.clone(),
+        HashMap::from([
+            ("result".into(), text.into()),
+            ("actor_ref".into(), actor_ref.into()),
+            ("actor_id".into(), actor_id.into()),
+            ("host_id".into(), host_id.into()),
+        ]),
+    ))
 }
 
 #[derive(Debug, Clone, Parser)]

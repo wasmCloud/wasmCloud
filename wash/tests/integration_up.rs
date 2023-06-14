@@ -1,17 +1,15 @@
 use serial_test::serial;
-use std::{
-    fs::{read_to_string, remove_dir_all},
-    path::PathBuf,
-};
+use std::fs::{read_to_string, remove_dir_all};
 
 use anyhow::{anyhow, Context, Result};
 use common::test_dir_with_subfolder;
 use regex::Regex;
 use sysinfo::{ProcessExt, SystemExt};
-use tokio::process::{Child, Command};
-use wash_lib::start::{ensure_nats_server, start_nats_server, NatsConfig};
+use tokio::process::Command;
 
 mod common;
+
+use common::start_nats;
 
 const RGX_ACTOR_START_MSG: &str = r"Actor \[(?P<actor_id>[^]]+)\] \(ref: \[(?P<actor_ref>[^]]+)\]\) started on host \[(?P<host_id>[^]]+)\]";
 
@@ -289,10 +287,4 @@ async fn integration_up_doesnt_kill_unowned_nats_serial() -> Result<()> {
     nats.kill().await.map_err(|e| anyhow!(e))?;
     remove_dir_all(dir).unwrap();
     Ok(())
-}
-
-async fn start_nats(port: u16, nats_install_dir: &PathBuf) -> Result<Child> {
-    let nats_binary = ensure_nats_server("v2.8.4", nats_install_dir).await?;
-    let config = NatsConfig::new_standalone("127.0.0.1", port, None);
-    start_nats_server(nats_binary, std::process::Stdio::null(), config).await
 }

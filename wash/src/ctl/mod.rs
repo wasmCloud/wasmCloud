@@ -2,12 +2,13 @@ use anyhow::{bail, Result};
 use clap::{Args, Parser, Subcommand};
 use std::path::Path;
 use wash_lib::{
+    actor::scale_actor,
     cli::{
         get::{GetClaimsCommand, GetCommand, GetHostInventoryCommand, GetHostsCommand},
         labels_vec_to_hashmap,
         link::LinkCommand,
         start::StartCommand,
-        stop::{stop_actor, stop_host, stop_provider, StopCommand},
+        stop::{handle_stop_actor, stop_host, stop_provider, StopCommand},
         CliConnectionOpts, CommandOutput, OutputKind,
     },
     config::WashConnectionOptions,
@@ -190,7 +191,7 @@ pub(crate) async fn handle_command(
         Stop(StopCommand::Actor(cmd)) => {
             eprintln!("[warn] `wash ctl stop` has been deprecated in favor of `wash stop` and will be removed in a future version.");
             sp.update_spinner_message(format!(" Stopping actor {} ... ", cmd.actor_id));
-            stop_actor(cmd.clone()).await?
+            handle_stop_actor(cmd.clone()).await?
         }
         Stop(StopCommand::Provider(cmd)) => {
             sp.update_spinner_message(format!(" Stopping provider {} ... ", cmd.provider_id));
@@ -223,7 +224,7 @@ pub(crate) async fn handle_command(
                 " Scaling Actor {} to {} instances ... ",
                 cmd.actor_id, cmd.count
             ));
-            scale_actor(cmd.clone()).await?
+            handle_scale_actor(cmd.clone()).await?
         }
     };
 
@@ -232,26 +233,21 @@ pub(crate) async fn handle_command(
     Ok(out)
 }
 
-pub(crate) async fn scale_actor(cmd: ScaleActorCommand) -> Result<CommandOutput> {
+pub(crate) async fn handle_scale_actor(cmd: ScaleActorCommand) -> Result<CommandOutput> {
     let wco: WashConnectionOptions = cmd.opts.try_into()?;
     let client = wco.into_ctl_client(None).await?;
 
     let annotations = labels_vec_to_hashmap(cmd.annotations)?;
 
-    let ack = client
-        .scale_actor(
-            &cmd.host_id,
-            &cmd.actor_ref,
-            &cmd.actor_id,
-            cmd.count,
-            Some(annotations),
-        )
-        .await
-        .map_err(convert_error)?;
-
-    if !ack.accepted {
-        bail!("Operation failed: {}", ack.error);
-    }
+    scale_actor(
+        &client,
+        &cmd.host_id,
+        &cmd.actor_ref,
+        &cmd.actor_id,
+        cmd.count,
+        Some(annotations),
+    )
+    .await?;
 
     Ok(CommandOutput::from_key_and_text(
         "result",

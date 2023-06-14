@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
+use dev::DevCommand;
 use serde_json::json;
 use smithy::{GenerateCli, LintCli, ValidateCli};
 use wash_lib::{
@@ -41,6 +42,7 @@ mod common;
 mod completions;
 mod ctl;
 mod ctx;
+mod dev;
 mod down;
 mod drain;
 mod generate;
@@ -72,6 +74,7 @@ Applications:
 Projects:
   build        Build (and sign) a wasmCloud actor, provider, or interface
   claims       Generate and manage JWTs for wasmCloud actors
+  dev          Run a actor development loop (experimental)
   gen          Generate code from smithy IDL files
   inspect      Inspect capability provider or actor module
   lint         Perform lint checks on smithy models
@@ -152,6 +155,9 @@ enum CliCommand {
     /// Manage wasmCloud host configuration contexts
     #[clap(name = "ctx", subcommand)]
     Ctx(CtxCommand),
+    /// (experimental) Run a local development loop for an actor
+    #[clap(name = "dev")]
+    Dev(DevCommand),
     /// Tear down a wasmCloud environment launched with wash up
     #[clap(name = "down")]
     Down(DownCommand),
@@ -237,6 +243,13 @@ async fn main() {
         }
         CliCommand::Ctl(ctl_cli) => ctl::handle_command(ctl_cli, output_kind).await,
         CliCommand::Ctx(ctx_cli) => ctx::handle_command(ctx_cli).await,
+        CliCommand::Dev(dev_cli) => {
+            if cli.experimental {
+                dev::handle_command(dev_cli, output_kind).await
+            } else {
+                experimental_error_message("dev")
+            }
+        }
         CliCommand::Down(down_cli) => down::handle_command(down_cli, output_kind).await,
         CliCommand::Drain(drain_cli) => drain::handle_command(drain_cli),
         CliCommand::Get(get_cli) => common::get_cmd::handle_command(get_cli, output_kind).await,
