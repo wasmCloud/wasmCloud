@@ -13,7 +13,3 @@ serde_json = { workspace = true }
 wasmcloud-actor = { workspace = true, features = ["component", "rand", "uuid"] }
 wasmcloud-interface-httpserver = { workspace = true }
 wit-bindgen = { workspace = true, features = ["default"] }
-
-[build-dependencies]
-anyhow = { workspace = true }
-wit-deps = { workspace = true, features = ["sync"] }
