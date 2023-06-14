@@ -30,6 +30,12 @@ description = "a hello-world actor (in Rust) that echoes a request back over a N
 git = "wasmCloud/project-templates"
 subfolder = "actor/echo-messaging"
 
+[[actor]]
+name = "kvcounter"
+description = "an example actor (in Rust) that increments a counter in a key-value store"
+git = "wasmCloud/project-templates"
+subfolder = "actor/kvcounter"
+
 [[interface]]
 name = "converter-interface"
 description = "an interface for actor-to-actor messages with a single Convert method"
