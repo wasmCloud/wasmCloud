@@ -8,10 +8,11 @@ use tokio::{process::Command, sync::RwLock, time::Duration};
 
 mod common;
 
-use crate::common::{init, start_nats, test_dir_with_subfolder};
+use crate::common::{init, start_nats, test_dir_with_subfolder, wait_for_no_hosts};
 
 #[tokio::test]
 #[serial]
+#[cfg(target_family = "unix")]
 async fn integration_dev_hello_actor_serial() -> Result<()> {
     let test_setup = init(
         /* actor_name= */ "hello", /* template_name= */ "hello",
@@ -20,6 +21,11 @@ async fn integration_dev_hello_actor_serial() -> Result<()> {
     let project_dir = test_setup.project_dir;
 
     let dir = test_dir_with_subfolder("dev_hello_actor");
+
+    wait_for_no_hosts()
+        .await
+        .context("one or more unexpected wasmcloud instances running")?;
+
     let mut nats = start_nats(5895, &dir).await?;
 
     let dev_cmd = Arc::new(RwLock::new(
@@ -84,6 +90,10 @@ async fn integration_dev_hello_actor_serial() -> Result<()> {
     let _ = tokio::time::timeout(Duration::from_secs(15), dev_cmd.write().await.wait())
         .await
         .context("dev command did not exit")?;
+
+    wait_for_no_hosts()
+        .await
+        .context("wasmcloud instance failed to exit cleanly (processes still left over)")?;
 
     nats.kill().await.map_err(|e| anyhow!(e))?;
     Ok(())

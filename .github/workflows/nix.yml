@@ -42,7 +42,7 @@ jobs:
     steps:
     - uses: actions/checkout@v3
     - uses: ./.github/actions/install-nix
-      with: 
+      with:
         cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
     - uses: ./.github/actions/build-nix
       with:
@@ -66,11 +66,12 @@ jobs:
           test: ./result/bin/wash --version
 
     name: wash-${{ matrix.config.target }}
-    runs-on: macos-12
+    # NOTE(vados-cosmonic): Mac have OOMed in GitHub CI on macos-12 at least once
+    runs-on: macos-12-xl
     steps:
     - uses: actions/checkout@v3
     - uses: ./.github/actions/install-nix
-      with: 
+      with:
         cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
     - uses: ./.github/actions/build-nix
       with:
@@ -125,7 +126,7 @@ jobs:
     steps:
     - uses: actions/checkout@v3
     - uses: ./.github/actions/install-nix
-      with: 
+      with:
         cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
     - run: nix build -L .#checks.x86_64-linux.${{ matrix.check }}
 
@@ -134,7 +135,7 @@ jobs:
     steps:
     - uses: actions/checkout@v3
     - uses: ./.github/actions/install-nix
-      with: 
+      with:
         cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
     - run: nix fmt
 
@@ -143,7 +144,7 @@ jobs:
     steps:
     - uses: actions/checkout@v3
     - uses: ./.github/actions/install-nix
-      with: 
+      with:
         cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
     - run: nix run -L . -- --version
 
@@ -152,6 +153,6 @@ jobs:
     steps:
     - uses: actions/checkout@v3
     - uses: ./.github/actions/install-nix
-      with: 
+      with:
         cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
     - run: nix develop -L --ignore-environment -c cargo pkgid
