@@ -12,7 +12,7 @@ use std::{
 
 #[test]
 /// Running create and insert tests together
-fn integration_create_and_insert() {
+fn integration_par_create_and_insert() {
     const SUBFOLDER: &str = "par_create_insert";
     const ISSUER: &str = "SAACTTUPKR55VUWUDK7GJ5SU5KGED455FR7BDO46RUVOTHUWKBLECLH2UU";
     const SUBJECT: &str = "SVAOZUSBWWFL65P255DOHIETPTXUQMM5ETLSYPITI5G4K4HI6M2CDAPWAU";
@@ -23,6 +23,135 @@ fn integration_create_and_insert() {
     integration_par_insert(ISSUER, SUBJECT, pargz.to_str().unwrap());
 
     remove_dir_all(test_dir).unwrap();
+}
+#[test]
+fn integration_par_inspect() {
+    const SUBFOLDER: &str = "par_inspect";
+    const HTTP_OCI: &str = "wasmcloud.azurecr.io/httpclient:0.3.5";
+    const HTTP_ISSUER: &str = "ACOJJN6WUP4ODD75XEBKKTCCUJJCY5ZKQ56XVKYK4BEJWGVAOOQHZMCW";
+    const HTTP_SERVICE: &str = "VCCVLH4XWGI3SGARFNYKYT2A32SUYA2KVAIV2U2Q34DQA7WWJPFRKIKM";
+    let inspect_dir = test_dir_with_subfolder(SUBFOLDER);
+    let httpclient_parinspect = &format!("{LOCAL_REGISTRY}/httpclient:parinspect");
+
+    // Pull the echo module and push to local registry to test local inspect
+    let local_http_client_path = test_dir_file(SUBFOLDER, "httpclient.wasm");
+    let get_http_client = wash()
+        .args([
+            "reg",
+            "pull",
+            HTTP_OCI,
+            "--destination",
+            local_http_client_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("failed to pull https server for par inspect test");
+    assert!(get_http_client.status.success());
+    let push_echo = wash()
+        .args([
+            "reg",
+            "push",
+            httpclient_parinspect,
+            local_http_client_path.to_str().unwrap(),
+            "--insecure",
+        ])
+        .output()
+        .expect("failed to push echo.wasm to local registry");
+    assert!(push_echo.status.success());
+
+    // Inspect local, local registry, and remote registry actor wasm
+    // `String.contains` is used here to ensure we aren't relying on relative json field position.
+    // This also allows tests to pass if information is _added_ but not if information is _omitted_
+    // from the command output
+    let local_inspect = wash()
+        .args([
+            "par",
+            "inspect",
+            local_http_client_path.to_str().unwrap(),
+            "--output",
+            "json",
+        ])
+        .output()
+        .expect("failed to inspect local http server");
+    assert!(local_inspect.status.success());
+    let local_inspect_output = get_json_output(local_inspect).unwrap();
+    let inspect_expected = json!({
+        "issuer": HTTP_ISSUER,
+        "service": HTTP_SERVICE,
+        "capability_contract_id": "wasmcloud:httpclient",
+    });
+    assert_json_include!(actual: local_inspect_output, expected: inspect_expected);
+
+    let local_reg_inspect = wash()
+        .args([
+            "par",
+            "inspect",
+            httpclient_parinspect,
+            "--insecure",
+            "-o",
+            "json",
+        ])
+        .output()
+        .expect("failed to inspect local registry wasm");
+    assert!(local_reg_inspect.status.success());
+    let local_reg_inspect_output = get_json_output(local_reg_inspect).unwrap();
+    assert_json_include!(actual: local_reg_inspect_output, expected: inspect_expected);
+
+    let remote_inspect = wash()
+        .args(["par", "inspect", HTTP_OCI, "-o", "json"])
+        .output()
+        .expect("failed to inspect local registry wasm");
+    assert!(remote_inspect.status.success());
+    let remote_inspect_output = get_json_output(remote_inspect).unwrap();
+    assert_json_include!(actual: remote_inspect_output, expected: inspect_expected);
+
+    remove_dir_all(inspect_dir).unwrap();
+}
+
+#[test]
+fn integration_par_inspect_cached() {
+    const HTTP_OCI: &str = "wasmcloud.azurecr.io/httpclient:0.3.5";
+    const HTTP_FAKE_OCI: &str = "foo.bar.io/httpclient:0.3.5";
+    const HTTP_FAKE_CACHED: &str = "foo_bar_io_httpclient_0_3_5";
+    const HTTP_ISSUER: &str = "ACOJJN6WUP4ODD75XEBKKTCCUJJCY5ZKQ56XVKYK4BEJWGVAOOQHZMCW";
+    const HTTP_SERVICE: &str = "VCCVLH4XWGI3SGARFNYKYT2A32SUYA2KVAIV2U2Q34DQA7WWJPFRKIKM";
+
+    let mut http_client_cache_path = temp_dir().join("wasmcloud_ocicache").join(HTTP_FAKE_CACHED);
+    let _ = ::std::fs::create_dir_all(&http_client_cache_path);
+    http_client_cache_path.set_extension("bin");
+
+    let get_http_client = wash()
+        .args([
+            "reg",
+            "pull",
+            HTTP_OCI,
+            "--destination",
+            http_client_cache_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("failed to pull echo for claims sign test");
+    assert!(get_http_client.status.success());
+
+    let remote_inspect = wash()
+        .args(["par", "inspect", HTTP_FAKE_OCI, "-o", "json"])
+        .output()
+        .expect("failed to inspect remote cached registry");
+    assert!(remote_inspect.status.success());
+    let remote_inspect_output = get_json_output(remote_inspect).unwrap();
+    let expected_output = json!({
+        "issuer": HTTP_ISSUER,
+        "service": HTTP_SERVICE,
+        "capability_contract_id": "wasmcloud:httpclient",
+    });
+    assert_json_include!(actual: remote_inspect_output, expected: expected_output);
+
+    let remote_inspect_no_cache = wash()
+        .args(["par", "inspect", HTTP_FAKE_OCI, "-o", "json", "--no-cache"])
+        .output()
+        .expect("failed to inspect remote cached registry");
+
+    assert!(!remote_inspect_no_cache.status.success());
+
+    let _ = remove_file(http_client_cache_path);
 }
 
 /// Tests creation of a provider archive file with an initial binary
@@ -216,134 +345,4 @@ fn integration_par_insert(issuer: &str, subject: &str, archive: &str) {
     assert!(targets.contains(&"x86_64-linux".to_string()));
 
     remove_dir_all(insert_dir).unwrap();
-}
-
-#[test]
-fn integration_par_inspect() {
-    const SUBFOLDER: &str = "par_inspect";
-    const HTTP_OCI: &str = "wasmcloud.azurecr.io/httpclient:0.3.5";
-    const HTTP_ISSUER: &str = "ACOJJN6WUP4ODD75XEBKKTCCUJJCY5ZKQ56XVKYK4BEJWGVAOOQHZMCW";
-    const HTTP_SERVICE: &str = "VCCVLH4XWGI3SGARFNYKYT2A32SUYA2KVAIV2U2Q34DQA7WWJPFRKIKM";
-    let inspect_dir = test_dir_with_subfolder(SUBFOLDER);
-    let httpclient_parinspect = &format!("{LOCAL_REGISTRY}/httpclient:parinspect");
-
-    // Pull the echo module and push to local registry to test local inspect
-    let local_http_client_path = test_dir_file(SUBFOLDER, "httpclient.wasm");
-    let get_http_client = wash()
-        .args([
-            "reg",
-            "pull",
-            HTTP_OCI,
-            "--destination",
-            local_http_client_path.to_str().unwrap(),
-        ])
-        .output()
-        .expect("failed to pull https server for par inspect test");
-    assert!(get_http_client.status.success());
-    let push_echo = wash()
-        .args([
-            "reg",
-            "push",
-            httpclient_parinspect,
-            local_http_client_path.to_str().unwrap(),
-            "--insecure",
-        ])
-        .output()
-        .expect("failed to push echo.wasm to local registry");
-    assert!(push_echo.status.success());
-
-    // Inspect local, local registry, and remote registry actor wasm
-    // `String.contains` is used here to ensure we aren't relying on relative json field position.
-    // This also allows tests to pass if information is _added_ but not if information is _omitted_
-    // from the command output
-    let local_inspect = wash()
-        .args([
-            "par",
-            "inspect",
-            local_http_client_path.to_str().unwrap(),
-            "--output",
-            "json",
-        ])
-        .output()
-        .expect("failed to inspect local http server");
-    assert!(local_inspect.status.success());
-    let local_inspect_output = get_json_output(local_inspect).unwrap();
-    let inspect_expected = json!({
-        "issuer": HTTP_ISSUER,
-        "service": HTTP_SERVICE,
-        "capability_contract_id": "wasmcloud:httpclient",
-    });
-    assert_json_include!(actual: local_inspect_output, expected: inspect_expected);
-
-    let local_reg_inspect = wash()
-        .args([
-            "par",
-            "inspect",
-            httpclient_parinspect,
-            "--insecure",
-            "-o",
-            "json",
-        ])
-        .output()
-        .expect("failed to inspect local registry wasm");
-    assert!(local_reg_inspect.status.success());
-    let local_reg_inspect_output = get_json_output(local_reg_inspect).unwrap();
-    assert_json_include!(actual: local_reg_inspect_output, expected: inspect_expected);
-
-    let remote_inspect = wash()
-        .args(["par", "inspect", HTTP_OCI, "-o", "json"])
-        .output()
-        .expect("failed to inspect local registry wasm");
-    assert!(remote_inspect.status.success());
-    let remote_inspect_output = get_json_output(remote_inspect).unwrap();
-    assert_json_include!(actual: remote_inspect_output, expected: inspect_expected);
-
-    remove_dir_all(inspect_dir).unwrap();
-}
-
-#[test]
-fn integration_par_inspect_cached() {
-    const HTTP_OCI: &str = "wasmcloud.azurecr.io/httpclient:0.3.5";
-    const HTTP_FAKE_OCI: &str = "foo.bar.io/httpclient:0.3.5";
-    const HTTP_FAKE_CACHED: &str = "foo_bar_io_httpclient_0_3_5";
-    const HTTP_ISSUER: &str = "ACOJJN6WUP4ODD75XEBKKTCCUJJCY5ZKQ56XVKYK4BEJWGVAOOQHZMCW";
-    const HTTP_SERVICE: &str = "VCCVLH4XWGI3SGARFNYKYT2A32SUYA2KVAIV2U2Q34DQA7WWJPFRKIKM";
-
-    let mut http_client_cache_path = temp_dir().join("wasmcloud_ocicache").join(HTTP_FAKE_CACHED);
-    let _ = ::std::fs::create_dir_all(&http_client_cache_path);
-    http_client_cache_path.set_extension("bin");
-
-    let get_http_client = wash()
-        .args([
-            "reg",
-            "pull",
-            HTTP_OCI,
-            "--destination",
-            http_client_cache_path.to_str().unwrap(),
-        ])
-        .output()
-        .expect("failed to pull echo for claims sign test");
-    assert!(get_http_client.status.success());
-
-    let remote_inspect = wash()
-        .args(["par", "inspect", HTTP_FAKE_OCI, "-o", "json"])
-        .output()
-        .expect("failed to inspect remote cached registry");
-    assert!(remote_inspect.status.success());
-    let remote_inspect_output = get_json_output(remote_inspect).unwrap();
-    let expected_output = json!({
-        "issuer": HTTP_ISSUER,
-        "service": HTTP_SERVICE,
-        "capability_contract_id": "wasmcloud:httpclient",
-    });
-    assert_json_include!(actual: remote_inspect_output, expected: expected_output);
-
-    let remote_inspect_no_cache = wash()
-        .args(["par", "inspect", HTTP_FAKE_OCI, "-o", "json", "--no-cache"])
-        .output()
-        .expect("failed to inspect remote cached registry");
-
-    assert!(!remote_inspect_no_cache.status.success());
-
-    let _ = remove_file(http_client_cache_path);
 }

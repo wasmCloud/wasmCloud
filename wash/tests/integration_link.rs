@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use serial_test::serial;
 use tokio::process::Command;
-use wash_lib::cli::output::LinkQueryOutput;
+use wash_lib::cli::output::LinkQueryCommandOutput;
 
 mod common;
 use common::TestWashInstance;
@@ -20,7 +20,7 @@ async fn integration_link_serial() -> Result<()> {
 
     assert!(output.status.success(), "executed link query");
 
-    let cmd_output: LinkQueryOutput = serde_json::from_slice(&output.stdout)?;
+    let cmd_output: LinkQueryCommandOutput = serde_json::from_slice(&output.stdout)?;
     assert!(cmd_output.success, "command returned success");
     assert_eq!(
         cmd_output.links.len(),

@@ -4,12 +4,11 @@ use std::fs::{read_to_string, remove_dir_all};
 use anyhow::{anyhow, Context, Result};
 use common::test_dir_with_subfolder;
 use regex::Regex;
-use sysinfo::{ProcessExt, SystemExt};
-use tokio::process::Command;
+use tokio::{process::Command, time::Duration};
 
 mod common;
 
-use common::start_nats;
+use common::{start_nats, wait_for_nats_to_start, wait_for_no_hosts, wait_for_single_host};
 
 const RGX_ACTOR_START_MSG: &str = r"Actor \[(?P<actor_id>[^]]+)\] \(ref: \[(?P<actor_ref>[^]]+)\]\) started on host \[(?P<host_id>[^]]+)\]";
 
@@ -19,6 +18,10 @@ async fn integration_up_can_start_wasmcloud_and_actor_serial() -> Result<()> {
     let dir = test_dir_with_subfolder("can_start_wasmcloud");
     let path = dir.join("washup.log");
     let stdout = std::fs::File::create(&path).expect("could not create log file for wash up test");
+
+    wait_for_no_hosts()
+        .await
+        .context("unexpected wasmcloud instance(s) running")?;
 
     let host_seed = nkeys::KeyPair::new_server();
 
@@ -35,6 +38,7 @@ async fn integration_up_can_start_wasmcloud_and_actor_serial() -> Result<()> {
             "--host-seed",
             &host_seed.seed().expect("Should have a seed for the host"),
         ])
+        .kill_on_drop(true)
         .stdout(stdout)
         .spawn()
         .context("Could not spawn wash up process")?;
@@ -53,31 +57,8 @@ async fn integration_up_can_start_wasmcloud_and_actor_serial() -> Result<()> {
         Err(_e) => panic!("Unable to parse kill cmd from wash up output"),
     };
 
-    // Wait until the host starts, measured by trying to retrieve host inventory over NATS
-    // Once this returns something other than a no responders, we know the host is ready for a ctl command
-    let mut tries = 30;
-    while tries >= 0 {
-        let output = Command::new(env!("CARGO_BIN_EXE_wash"))
-            .args([
-                "get",
-                "inventory",
-                &host_seed.public_key(),
-                "--ctl-port",
-                "5893",
-            ])
-            .kill_on_drop(true)
-            .output()
-            .await
-            .context("expected command to finish")?;
-        if output.stdout.is_empty() {
-            tries -= 1;
-            assert!(tries >= 0);
-            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-        } else {
-            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-            break;
-        }
-    }
+    // Wait for a single host to exis
+    let host = wait_for_single_host(5893, Duration::from_secs(10), Duration::from_secs(1)).await?;
 
     let start_echo = Command::new(env!("CARGO_BIN_EXE_wash"))
         .args([
@@ -89,10 +70,12 @@ async fn integration_up_can_start_wasmcloud_and_actor_serial() -> Result<()> {
             "--timeout-ms",
             "10000", // Wait up to 10 seconds for slowpoke systems
         ])
-        .kill_on_drop(true)
         .output()
         .await
-        .context("could not start echo actor on new host")?;
+        .context(format!(
+            "could not start echo actor on new host [{}]",
+            host.id
+        ))?;
 
     let stdout = String::from_utf8_lossy(&start_echo.stdout);
     let actor_start_output_rgx =
@@ -103,7 +86,6 @@ async fn integration_up_can_start_wasmcloud_and_actor_serial() -> Result<()> {
         String::from_utf8_lossy(&start_echo.stderr)
     );
 
-    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
     let kill_cmd = kill_cmd.to_string();
     let (_wash, down) = kill_cmd.trim_matches('"').split_once(' ').unwrap();
     Command::new(env!("CARGO_BIN_EXE_wash"))
@@ -119,6 +101,11 @@ async fn integration_up_can_start_wasmcloud_and_actor_serial() -> Result<()> {
         .await
         .context("Could not spawn wash down process")?;
 
+    // Wait until the beam.smp process has finished and exited
+    wait_for_no_hosts()
+        .await
+        .context("wasmcloud instance failed to exit cleanly (processes still left over)")?;
+
     remove_dir_all(dir).unwrap();
     Ok(())
 }
@@ -129,9 +116,11 @@ async fn integration_up_can_stop_detached_host_serial() -> Result<()> {
     let dir = test_dir_with_subfolder("can_stop_wasmcloud");
     let path = dir.join("washup.log");
     let stdout = std::fs::File::create(&path).expect("could not create log file for wash up test");
+    let nats_port: u16 = 5894;
 
-    // sleep for 10 seconds
-    tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+    wait_for_no_hosts()
+        .await
+        .context("unexpected wasmcloud instance(s) running")?;
 
     let host_seed = nkeys::KeyPair::new_server();
 
@@ -139,13 +128,14 @@ async fn integration_up_can_stop_detached_host_serial() -> Result<()> {
         .args([
             "up",
             "--nats-port",
-            "5894",
+            nats_port.to_string().as_ref(),
             "-o",
             "json",
             "--detached",
             "--host-seed",
             &host_seed.seed().expect("Should have a seed for the host"),
         ])
+        .kill_on_drop(true)
         .stdout(stdout)
         .spawn()
         .context("Could not spawn wash up process")?;
@@ -158,31 +148,22 @@ async fn integration_up_can_stop_detached_host_serial() -> Result<()> {
     assert!(status.success());
     let out = read_to_string(&path).expect("could not read output of wash up");
 
-    let (kill_cmd, wasmcloud_log) = match serde_json::from_str::<serde_json::Value>(&out) {
+    let (kill_cmd, _wasmcloud_log) = match serde_json::from_str::<serde_json::Value>(&out) {
         Ok(v) => (v["kill_cmd"].to_owned(), v["wasmcloud_log"].to_owned()),
         Err(_e) => panic!("Unable to parse kill cmd from wash up output"),
     };
 
-    // Wait until the host starts
-    let mut tries = 30;
-    while !read_to_string(wasmcloud_log.to_string().trim_matches('"'))
-        .expect("could not read output")
-        .contains("Started wasmCloud OTP Host Runtime")
-    {
-        tries -= 1;
-        assert!(tries >= 0);
-        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-    }
+    // Wait for a single host to exist
+    wait_for_single_host(nats_port, Duration::from_secs(10), Duration::from_secs(1)).await?;
 
-    tokio::time::sleep(tokio::time::Duration::from_millis(5000)).await;
-
+    // Stop the wash instance
     let kill_cmd = kill_cmd.to_string();
     let (_wash, down) = kill_cmd.trim_matches('"').split_once(' ').unwrap();
     Command::new(env!("CARGO_BIN_EXE_wash"))
         .args(vec![
             down,
             "--ctl-port",
-            "5894",
+            nats_port.to_string().as_ref(),
             "--host-id",
             &host_seed.public_key(),
         ])
@@ -190,23 +171,10 @@ async fn integration_up_can_stop_detached_host_serial() -> Result<()> {
         .await
         .context("Could not spawn wash down process")?;
 
-    // After `wash down` exits, sometimes Erlang things stick around for a few seconds
-    tokio::time::sleep(tokio::time::Duration::from_millis(5000)).await;
-
-    // Check to see if process was removed
-    let mut info = sysinfo::System::new_with_specifics(
-        sysinfo::RefreshKind::new().with_processes(sysinfo::ProcessRefreshKind::new()),
-    );
-
-    info.refresh_processes();
-
-    assert!(
-        !info
-            .processes()
-            .values()
-            .any(|p| p.exe().to_string_lossy().contains("beam.smp")),
-        "No wasmcloud process should be running"
-    );
+    // Wait until the beam.smp process has finished and exited
+    wait_for_no_hosts()
+        .await
+        .context("wasmcloud instance failed to exit cleanly (processes still left over)")?;
 
     remove_dir_all(dir).unwrap();
     Ok(())
@@ -218,6 +186,12 @@ async fn integration_up_doesnt_kill_unowned_nats_serial() -> Result<()> {
     let dir = test_dir_with_subfolder("doesnt_kill_unowned_nats");
     let path = dir.join("washup.log");
     let stdout = std::fs::File::create(&path).expect("could not create log file for wash up test");
+    let nats_port: u16 = 5895;
+
+    // Check that there are no beam.smp (wasmcloud instance) processes running
+    wait_for_no_hosts()
+        .await
+        .context("unexpected wasmcloud instance(s) running")?;
 
     let mut nats = start_nats(5895, &dir).await?;
 
@@ -225,12 +199,13 @@ async fn integration_up_doesnt_kill_unowned_nats_serial() -> Result<()> {
         .args([
             "up",
             "--nats-port",
-            "5895",
+            nats_port.to_string().as_ref(),
             "--nats-connect-only",
             "-o",
             "json",
             "--detached",
         ])
+        .kill_on_drop(true)
         .stdout(stdout)
         .spawn()
         .context("Could not spawn wash up process")?;
@@ -243,46 +218,27 @@ async fn integration_up_doesnt_kill_unowned_nats_serial() -> Result<()> {
     assert!(status.success());
     let out = read_to_string(&path).expect("could not read output of wash up");
 
-    let (kill_cmd, wasmcloud_log) = match serde_json::from_str::<serde_json::Value>(&out) {
+    let (kill_cmd, _wasmcloud_log) = match serde_json::from_str::<serde_json::Value>(&out) {
         Ok(v) => (v["kill_cmd"].to_owned(), v["wasmcloud_log"].to_owned()),
         Err(_e) => panic!("Unable to parse kill cmd from wash up output"),
     };
 
-    // Wait until the host starts
-    let mut tries = 30;
-    while !read_to_string(wasmcloud_log.to_string().trim_matches('"'))
-        .expect("could not read output")
-        .contains("Started wasmCloud OTP Host Runtime")
-    {
-        tries -= 1;
-        assert!(tries >= 0);
-        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-    }
-
-    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+    // Wait for a single host to exist
+    wait_for_single_host(nats_port, Duration::from_secs(10), Duration::from_secs(1)).await?;
 
     let kill_cmd = kill_cmd.to_string();
     let (_wash, down) = kill_cmd.trim_matches('"').split_once(' ').unwrap();
     Command::new(env!("CARGO_BIN_EXE_wash"))
         .kill_on_drop(true)
-        .args(vec![down, "--ctl-port", "5895"])
+        .args(vec![down, "--ctl-port", nats_port.to_string().as_ref()])
         .output()
         .await
         .context("Could not spawn wash down process")?;
 
-    // Check to see if process was removed
-    let mut info = sysinfo::System::new_with_specifics(
-        sysinfo::RefreshKind::new().with_processes(sysinfo::ProcessRefreshKind::new()),
-    );
-
-    info.refresh_processes();
-
-    assert!(
-        info.processes()
-            .values()
-            .any(|p| p.exe().to_string_lossy().contains("nats-server")),
-        "Nats server should still be running"
-    );
+    // Check that there is exactly one nats-server running
+    wait_for_nats_to_start()
+        .await
+        .context("nats process not running")?;
 
     nats.kill().await.map_err(|e| anyhow!(e))?;
     remove_dir_all(dir).unwrap();
