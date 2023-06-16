@@ -66,33 +66,42 @@ Interact and manage wasmCloud applications, projects, and runtime environments
 
 Usage: wash [OPTIONS] <COMMAND>
 
-Applications:
-  app          Manage declarative applications and deployments (wadm) (experimental)
+Build:
+  new          Create a new project from template
+  build        Build (and sign) a wasmCloud actor, capability provider, or interface
+  dev          Run a actor development loop (experimental)
+  inspect      Inspect capability provider or actor module
+  par          Create, inspect, and modify capability provider archive files
+
+Run:
+  up           Bootstrap a local wasmCloud environment
+  down         Tear down a local wasmCloud environment (launched with wash up)
+  app          Manage declarative applications and deployments (wadm)
+  spy          Spy on all invocations between an actor and its linked providers
+
+Iterate:
+  start        Start an actor or provider
+  link         Link an actor and a provider
   call         Invoke a wasmCloud actor
+  stop         Stop an actor or provider, or host
   ctl          Interact with a wasmCloud control interface
 
-Projects:
-  build        Build (and sign) a wasmCloud actor, provider, or interface
-  claims       Generate and manage JWTs for wasmCloud actors
-  dev          Run a actor development loop (experimental)
-  gen          Generate code from smithy IDL files
-  inspect      Inspect capability provider or actor module
-  lint         Perform lint checks on smithy models
-  new          Create a new project from template
-  par          Create, inspect, and modify capability provider archive files
-  reg          Push an actor or provider component to an OCI or Bindle registry
-  spy          Spy on all invocations between an actor and its linked providers
-  validate     Perform validation checks on smithy models
+Publish:
+  pull         Pull an artifact from an OCI compliant registry
+  push         Push an artifact to an OCI compliant registry
+  reg          Perform operations on an OCI or Bindle registry
 
-Configuration:
-  completions  Generate shell completions
+Configure:
+  completions  Generate shell completions for wash
   ctx          Manage wasmCloud host configuration contexts
   drain        Manage contents of local wasmCloud caches
   keys         Utilities for generating and managing keys
+  claims       Generate and manage JWTs for wasmCloud actors
 
-Runtime environments:
-  up           Bootstrap a wasmCloud environment
-  down         Tear down a wasmCloud environment launched with wash up
+Optimize:
+  gen          Generate code from smithy IDL files
+  lint         Perform lint checks on smithy models
+  validate     Perform validation checks on smithy models
 
 Options:
   -o, --output <OUTPUT>  Specify output format (text or json) [default: text]
