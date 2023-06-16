@@ -78,8 +78,8 @@ Example with all settings
     "max_age_secs": 300
   },
   "max_content_len": "100M",
-  "cache-control": "max-age=20",
-  "readonly-mode": false,
+  "cache_control": "max-age=20",
+  "readonly_mode": false,
 }
 ```
 
@@ -96,5 +96,3 @@ The link definition connecting an actor to a capability provider includes a key-
   (The option `-w0` omits line breaks within the base64)
 
 - use key `config_json`, with a value that is the raw json. Don't forget to escape quotes.
-
-- use key `readonly_mode`, with a boolean value to set the mode as true or false.
