@@ -192,8 +192,7 @@ impl HttpServerCore {
                     let ld = linkdefs.clone();
                     let arc_inner = arc_inner.clone();
                     async move{
-                        if let Some(mode) = ld.values.get("READONLY_MODE"){
-                            let readonly_mode =  mode.parse().unwrap_or(false);
+                        if let Some(readonly_mode) = arc_inner.settings.readonly_mode{
                             if readonly_mode && method!= http::method::Method::GET && method!= http::method::Method::HEAD {
                                 debug!("Cannot use other methods in Read Only Mode");
                                 // If this fails it is developer error, so unwrap is okay

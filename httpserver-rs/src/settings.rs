@@ -71,6 +71,9 @@ pub struct ServiceSettings {
     /// cache control options
     pub cache_control: Option<String>,
 
+    /// Flag for read only mode
+    pub readonly_mode: Option<bool>,
+
     /// Max content length. Default "10m" (10MiB = 10485760 bytes)
     /// Can be overridden by link def value max_content_len
     /// Accepts number (bytes), or number with suffix 'k', 'm', or 'g', (upper or lower case)
@@ -96,6 +99,7 @@ impl Default for ServiceSettings {
             log: Log::default(),
             timeout_ms: None,
             cache_control: None,
+            readonly_mode: Some(false),
             max_content_len: Some(DEFAULT_MAX_CONTENT_LEN.to_string()),
             extra: Default::default(),
         }
@@ -145,7 +149,7 @@ impl ServiceSettings {
 
     /// Merge settings from other into self
     fn merge(&mut self, other: ServiceSettings) {
-        merge!(self, other, address, cache_control);
+        merge!(self, other, address, cache_control, readonly_mode);
         self.tls.merge(other.tls);
         self.cors.merge(other.cors);
         self.log.merge(other.log);
@@ -267,6 +271,11 @@ pub fn load_settings(values: &HashMap<String, String>) -> Result<ServiceSettings
     // accept cache-control header values
     if let Some(cache_control) = values.get("cache_control") {
         settings.cache_control = Some(cache_control.to_string());
+    }
+
+    // accept read only mode flag
+    if let Some(readonly_mode) = values.get("readonly_mode") {
+        settings.readonly_mode = Some(readonly_mode.to_string().parse().unwrap_or(false));
     }
 
     settings.validate()?;
