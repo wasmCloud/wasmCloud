@@ -6,6 +6,7 @@
 
 mod broker;
 mod kv;
+mod otel;
 mod sub_stream;
 mod types;
 
@@ -19,8 +20,8 @@ use sub_stream::collect_timeout;
 use tokio::sync::mpsc::Receiver;
 use tracing::{debug, error, instrument, trace};
 use tracing_futures::Instrument;
-use wasmbus_rpc::core::LinkDefinition;
-use wasmbus_rpc::otel::OtelHeaderInjector;
+
+use crate::otel::OtelHeaderInjector;
 
 type Result<T> = ::std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 

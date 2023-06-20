@@ -132,7 +132,7 @@ pub type LabelsMap = std::collections::HashMap<String, String>;
 /// A list of link definitions
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct LinkDefinitionList {
-    pub links: wasmbus_rpc::core::ActorLinks,
+    pub links: ActorLinks,
 }
 
 /// One of a potential list of responses to a provider auction
@@ -365,4 +365,34 @@ pub struct UpdateActorCommand {
     /// The new image reference of the upgraded version of this actor
     #[serde(default)]
     pub new_actor_ref: String,
+}
+
+// Below are copied structs to avoid depedency conflicts on wasmbus_rpc
+
+// COPIED FROM https://github.com/wasmCloud/weld/blob/wasmbus-rpc-v0.13.0/rpc-rs/src/wasmbus_core.rs#L1176
+/// Settings associated with an actor-provider link
+pub type LinkSettings = std::collections::HashMap<String, String>;
+
+// COPIED FROM https://github.com/wasmCloud/weld/blob/wasmbus-rpc-v0.13.0/rpc-rs/src/wasmbus_core.rs#L26
+/// List of linked actors for a provider
+pub type ActorLinks = Vec<LinkDefinition>;
+
+// COPIED FROM https://github.com/wasmCloud/weld/blob/wasmbus-rpc-v0.13.0/rpc-rs/src/wasmbus_core.rs#L1042
+/// Link definition for binding actor to provider
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[non_exhaustive]
+pub struct LinkDefinition {
+    /// actor public key
+    #[serde(default)]
+    pub actor_id: String,
+    /// provider public key
+    #[serde(default)]
+    pub provider_id: String,
+    /// link name
+    #[serde(default)]
+    pub link_name: String,
+    /// contract id
+    #[serde(default)]
+    pub contract_id: String,
+    pub values: LinkSettings,
 }

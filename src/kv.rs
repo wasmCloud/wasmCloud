@@ -1,14 +1,14 @@
 use std::collections::HashMap;
 
 use async_nats::{jetstream::kv::Store, Client};
-use futures::TryStreamExt;
-use tracing::debug;
-use wasmbus_rpc::core::LinkDefinition;
-
+use bytes::Bytes;
 use data_encoding::HEXUPPER;
+use futures::TryStreamExt;
 use ring::digest::{digest, SHA256};
+use tracing::debug;
 
 use crate::GetClaimsResponse;
+use crate::LinkDefinition;
 use crate::LinkDefinitionList;
 use crate::Result;
 
@@ -65,10 +65,10 @@ pub(crate) async fn get_links(store: &Store) -> Result<LinkDefinitionList> {
 pub(crate) async fn put_link(store: &Store, ld: LinkDefinition) -> Result<()> {
     let id = ld_hash(&ld);
     let key = format!("{}{}", LINKDEF_PREFIX, id);
-    store
+    Ok(store
         .put(key, serde_json::to_vec(&ld)?.into())
         .await
-        .map(|_| ())
+        .map(|_| ())?)
 }
 
 pub(crate) async fn delete_link(
@@ -82,10 +82,10 @@ pub(crate) async fn delete_link(
         LINKDEF_PREFIX,
         ld_hash_raw(actor_id, contract_id, link_name)
     );
-    store.delete(key).await.map(|_| ())
+    Ok(store.delete(key).await.map(|_| ())?)
 }
 
-async fn add_linkdef(links: &mut Vec<LinkDefinition>, data: Option<Vec<u8>>) -> Result<()> {
+async fn add_linkdef(links: &mut Vec<LinkDefinition>, data: Option<Bytes>) -> Result<()> {
     if let Some(d) = data {
         let ld: LinkDefinition = serde_json::from_slice(&d)?;
         links.push(ld);
@@ -94,7 +94,7 @@ async fn add_linkdef(links: &mut Vec<LinkDefinition>, data: Option<Vec<u8>>) -> 
     Ok(())
 }
 
-async fn add_claim(claims: &mut Vec<HashMap<String, String>>, data: Option<Vec<u8>>) -> Result<()> {
+async fn add_claim(claims: &mut Vec<HashMap<String, String>>, data: Option<Bytes>) -> Result<()> {
     if let Some(d) = data {
         let json: HashMap<String, String> = serde_json::from_slice(&d)?;
         claims.push(json);
@@ -124,7 +124,7 @@ pub(crate) fn ld_hash_raw(actor_id: &str, contract_id: &str, link_name: &str) ->
 // NOTE: these tests require nats to be running with JS enabled.
 #[cfg(test)]
 mod test {
-    use wasmbus_rpc::core::LinkDefinition;
+    use super::LinkDefinition;
 
     use crate::kv::{delete_link, get_claims, get_kv_store, get_links, ld_hash, put_link};
 
