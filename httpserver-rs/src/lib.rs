@@ -44,7 +44,7 @@ use futures::Future;
 use http::header::HeaderMap;
 use thiserror::Error as ThisError;
 use tokio::task::JoinHandle;
-use tracing::{error, info, trace, Instrument};
+use tracing::{debug, error, info, trace, Instrument};
 use warp::{filters::cors::Builder, path::FullPath, Filter};
 use wasmbus_rpc::{core::LinkDefinition, error::RpcResult};
 use wasmcloud_interface_httpserver::{HttpRequest, HttpResponse};
@@ -191,7 +191,15 @@ impl HttpServerCore {
                     let span = tracing::debug_span!("http request", %method, path = %path.as_str(), %query);
                     let ld = linkdefs.clone();
                     let arc_inner = arc_inner.clone();
-                    async move {
+                    async move{
+                        if let Some(readonly_mode) = arc_inner.settings.readonly_mode{
+                            if readonly_mode && method!= http::method::Method::GET && method!= http::method::Method::HEAD {
+                                debug!("Cannot use other methods in Read Only Mode");
+                                // If this fails it is developer error, so unwrap is okay
+                                let resp = http::Response::builder().status(http::StatusCode::METHOD_NOT_ALLOWED).body(Vec::with_capacity(0)).unwrap();
+                                return Ok::<_, warp::Rejection>(resp)
+                            }
+                        }
                         let hmap = convert_request_headers(&headers);
                         let req = HttpRequest {
                             body: Vec::from(body),

@@ -47,6 +47,10 @@ For example, the following setting limits uploads to 20 MB.
 
 An optional set of cache-control values that will appear in the header if they are not already set.
 
+### Read Only Mode
+
+If set to true, it allows only GET and HEAD methods on the provider. Default value is false.
+
 ## Examples of settings files
 
 Bind to all IP interfaces and port 3000, with TLS disabled
@@ -74,7 +78,8 @@ Example with all settings
     "max_age_secs": 300
   },
   "max_content_len": "100M",
-  "cache-control":"max-age=20"
+  "cache_control": "max-age=20",
+  "readonly_mode": false,
 }
 ```
 
