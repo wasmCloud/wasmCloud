@@ -80,6 +80,7 @@ Run:
   spy          Spy on all invocations between an actor and its linked providers
 
 Iterate:
+  get          Get information about different resources
   start        Start an actor or provider
   link         Link an actor and a provider
   call         Invoke a wasmCloud actor
