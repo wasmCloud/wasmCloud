@@ -7,13 +7,19 @@ use std::{
 
 use anyhow::{bail, Context, Result};
 use rand::{distributions::Alphanumeric, Rng};
+use sysinfo::{ProcessExt, SystemExt};
 use tempfile::TempDir;
 use tokio::net::TcpStream;
-use tokio::process::Command;
+use tokio::{
+    fs::File,
+    io::AsyncWriteExt,
+    process::{Child, Command},
+    time::Duration,
+};
 
-use sysinfo::SystemExt;
-use tokio::process::Child;
+use wash_lib::cli::output::GetHostsCommandOutput;
 use wash_lib::start::{ensure_nats_server, start_nats_server, NatsConfig};
+use wasmcloud_control_interface::Host;
 
 #[allow(unused)]
 pub(crate) const LOCAL_REGISTRY: &str = "localhost:5001";
@@ -274,4 +280,153 @@ pub(crate) async fn init_actor_from_template(
 
     let project_dir = std::env::current_dir()?.join(actor_name);
     Ok(project_dir)
+}
+
+/// Wait until a process has a given count on the current machine
+#[allow(dead_code)]
+pub(crate) async fn wait_until_process_has_count(
+    filter: &str,
+    predicate: impl Fn(usize) -> bool,
+    timeout: Duration,
+    check_interval: Duration,
+) -> Result<()> {
+    // Check to see if process was removed
+    let mut info = sysinfo::System::new_with_specifics(
+        sysinfo::RefreshKind::new().with_processes(sysinfo::ProcessRefreshKind::new()),
+    );
+
+    tokio::time::timeout(timeout, async move {
+        loop {
+            info.refresh_processes();
+            let count = info
+                .processes()
+                .values()
+                .map(|p| p.exe().to_string_lossy())
+                .filter(|name| name.contains(filter))
+                .count();
+            if predicate(count) {
+                break;
+            };
+            tokio::time::sleep(check_interval).await;
+        }
+    })
+    .await
+    .context(format!(
+        "Failed to find find satisfactory amount of processes named [{filter}]"
+    ))?;
+
+    Ok(())
+}
+
+#[allow(dead_code)]
+pub(crate) async fn wait_for_single_host(
+    ctl_port: u16,
+    timeout: Duration,
+    check_interval: Duration,
+) -> Result<Host> {
+    tokio::time::timeout(timeout, async move {
+        loop {
+            let output = Command::new(env!("CARGO_BIN_EXE_wash"))
+                .args([
+                    "get",
+                    "hosts",
+                    "--ctl-port",
+                    ctl_port.to_string().as_str(),
+                    "--output",
+                    "json",
+                ])
+                .output()
+                .await
+                .context("get host command failed")?;
+
+            // If we fail to get hosts, then restart
+            if !output.status.success() {
+                bail!(
+                    "`wash get hosts` failed (exit code {:?}): {}",
+                    output.status.code(),
+                    String::from_utf8_lossy(&output.stdout)
+                );
+            }
+
+            let mut cmd_output: GetHostsCommandOutput = serde_json::from_slice(&output.stdout)
+                .with_context(|| {
+                    format!(
+                        "failed to parse get hosts command JSON output: {}",
+                        String::from_utf8_lossy(&output.stdout)
+                    )
+                })?;
+
+            match &cmd_output.hosts[..] {
+                [] => {}
+                [_h] => break Ok(cmd_output.hosts.remove(0)),
+                _ => bail!("unexpected received more than one host"),
+            }
+
+            tokio::time::sleep(check_interval).await;
+        }
+    })
+    .await
+    .context("failed to wait for single host to exist")?
+}
+
+/// Inits an actor build test by setting up a test directory and creating an actor from a template.
+/// Returns the paths of the test directory and actor directory.
+#[allow(dead_code)]
+pub(crate) async fn init_workspace(actor_names: Vec<&str>) -> Result<WorkspaceTestSetup> {
+    let test_dir = TempDir::new()?;
+    std::env::set_current_dir(&test_dir)?;
+
+    let project_dirs: Vec<_> =
+        futures::future::try_join_all(actor_names.iter().map(|actor_name| async {
+            let project_dir = init_actor_from_template(actor_name, "hello").await?;
+            Result::<PathBuf>::Ok(project_dir)
+        }))
+        .await?;
+
+    let members = actor_names
+        .iter()
+        .map(|actor_name| format!("\"{actor_name}\""))
+        .collect::<Vec<_>>()
+        .join(",");
+    let cargo_toml = format!(
+        "
+    [workspace]
+    members = [{members}]
+    "
+    );
+
+    let mut cargo_path = PathBuf::from(test_dir.path());
+    cargo_path.push("Cargo.toml");
+    let mut file = File::create(cargo_path).await?;
+    file.write_all(cargo_toml.as_bytes()).await?;
+    Ok(WorkspaceTestSetup {
+        test_dir,
+        project_dirs,
+    })
+}
+
+/// Wait for no hosts to be running by checking for process names,
+/// expecting that the wasmcloud process invocation contains 'beam.smp'
+#[allow(dead_code)]
+pub(crate) async fn wait_for_no_hosts() -> Result<()> {
+    wait_until_process_has_count(
+        "beam.smp",
+        |v| v == 0,
+        Duration::from_secs(10),
+        Duration::from_millis(250),
+    )
+    .await
+}
+
+/// Wait for NATS to start running by checking for process names.
+/// expecting that exactly one 'nats-server' process is running
+#[allow(dead_code)]
+pub(crate) async fn wait_for_nats_to_start() -> Result<()> {
+    wait_until_process_has_count(
+        "nats-server",
+        |v| v == 1,
+        Duration::from_secs(10),
+        Duration::from_secs(1),
+    )
+    .await
 }

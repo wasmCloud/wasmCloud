@@ -38,28 +38,28 @@ pub struct StopCommandOutput {
 
 /// JSON output representation of the `wash link query` command
 #[derive(Debug, Deserialize)]
-pub struct LinkQueryOutput {
+pub struct LinkQueryCommandOutput {
     pub links: Vec<HashMap<String, ActorLinks>>,
     pub success: bool,
 }
 
 /// JSON output representation of the `wash get hosts` command
 #[derive(Debug, Clone, Deserialize)]
-pub struct GetHostsOutput {
+pub struct GetHostsCommandOutput {
     pub success: bool,
     pub hosts: Vec<Host>,
 }
 
 /// JSON output representation of the `wash get inventory` command
 #[derive(Debug, Clone, Deserialize)]
-pub struct GetHostInventoryOutput {
+pub struct GetHostInventoryCommandOutput {
     pub success: bool,
     pub inventory: HostInventory,
 }
 
 /// JSON output representation of the `wash get claims` command
 #[derive(Debug, Deserialize)]
-pub struct GetClaimsOutput {
+pub struct GetClaimsCommandOutput {
     pub claims: GetClaimsResponse,
     pub success: bool,
 }
