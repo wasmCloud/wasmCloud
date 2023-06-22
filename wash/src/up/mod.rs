@@ -106,6 +106,7 @@ impl From<NatsOpts> for NatsConfig {
         NatsConfig {
             host: other.nats_host,
             port: other.nats_port,
+            store_dir: std::env::temp_dir().join(format!("wash-jetstream-{}", other.nats_port)),
             js_domain: other.nats_js_domain,
             remote_url: other.nats_remote_url,
             credentials: other.nats_credsfile,
