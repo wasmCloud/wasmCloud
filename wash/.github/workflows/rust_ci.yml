@@ -10,13 +10,14 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  fmt_clippy:
-    name: Fmt & Clippy Checks
+  lint:
+    name: Lint
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v3
-      # Cache Rust builds between runs
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "ubuntu-22.04-shared-cache"
       - name: Run Rust check + clippy
         run: make rust-check
 
@@ -29,11 +30,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v3
-      # Cache Rust builds between runs
       - uses: Swatinem/rust-cache@v2
         with:
-          # Additional key to ensure OS specific caches are separated
-          key: "${{ matrix.os }}-cache"
+          shared-key: "${{ matrix.os }}-shared-cache"
       - name: Install nextest
         uses: taiki-e/install-action@nextest
       - name: Run all wash & wash-lib unit tests
@@ -44,8 +43,9 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v3
-      # Cache Rust builds between runs
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "ubuntu-22.04-shared-cache"
       - uses: acifani/setup-tinygo@v1
         with:
           tinygo-version: '0.27.0'

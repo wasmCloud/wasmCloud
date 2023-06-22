@@ -1,16 +1,13 @@
 use anyhow::{Context, Result};
-use serial_test::serial;
-use std::{fs::File, io::Write, path::PathBuf};
-use tempfile::TempDir;
+use std::fs::File;
 use tokio::process::Command;
 
 mod common;
 
-use crate::common::{init, init_actor_from_template, WorkspaceTestSetup};
+use crate::common::{init, init_workspace};
 
 #[tokio::test]
-#[serial]
-async fn build_rust_actor_unsigned_serial() -> Result<()> {
+async fn integration_build_rust_actor_unsigned() -> Result<()> {
     let test_setup = init(
         /* actor_name= */ "hello", /* template_name= */ "hello",
     )
@@ -35,8 +32,7 @@ async fn build_rust_actor_unsigned_serial() -> Result<()> {
 }
 
 #[tokio::test]
-#[serial]
-async fn build_rust_actor_signed_serial() -> Result<()> {
+async fn integration_build_rust_actor_signed() -> Result<()> {
     let test_setup = init(
         /* actor_name= */ "hello", /* template_name= */ "hello",
     )
@@ -59,8 +55,7 @@ async fn build_rust_actor_signed_serial() -> Result<()> {
 }
 
 #[tokio::test]
-#[serial]
-async fn build_rust_actor_in_workspace_unsigned_serial() -> Result<()> {
+async fn integration_build_rust_actor_in_workspace_unsigned() -> Result<()> {
     let test_setup = init_workspace(vec![/* actor_names= */ "hello-1", "hello-2"]).await?;
     let project_dir = test_setup.project_dirs.get(0).unwrap();
     std::env::set_current_dir(project_dir)?;
@@ -84,8 +79,7 @@ async fn build_rust_actor_in_workspace_unsigned_serial() -> Result<()> {
 }
 
 #[tokio::test]
-#[serial]
-async fn build_tinygo_actor_unsigned_serial() -> Result<()> {
+async fn integration_build_tinygo_actor_unsigned() -> Result<()> {
     let test_setup = init(
         /* actor_name= */ "echo",
         /* template_name= */ "echo-tinygo",
@@ -112,8 +106,7 @@ async fn build_tinygo_actor_unsigned_serial() -> Result<()> {
 }
 
 #[tokio::test]
-#[serial]
-async fn build_tinygo_actor_signed_serial() -> Result<()> {
+async fn integration_build_tinygo_actor_signed() -> Result<()> {
     let test_setup = init(
         /* actor_name= */ "echo",
         /* template_name= */ "echo-tinygo",
@@ -136,44 +129,8 @@ async fn build_tinygo_actor_signed_serial() -> Result<()> {
     Ok(())
 }
 
-/// Inits an actor build test by setting up a test directory and creating an actor from a template.
-/// Returns the paths of the test directory and actor directory.
-async fn init_workspace(actor_names: Vec<&str>) -> Result<WorkspaceTestSetup> {
-    let test_dir = TempDir::new()?;
-    std::env::set_current_dir(&test_dir)?;
-
-    let project_dirs: Vec<_> =
-        futures::future::try_join_all(actor_names.iter().map(|actor_name| async {
-            let project_dir = init_actor_from_template(actor_name, "hello").await?;
-            Result::<PathBuf>::Ok(project_dir)
-        }))
-        .await?;
-
-    let members = actor_names
-        .iter()
-        .map(|actor_name| format!("\"{actor_name}\""))
-        .collect::<Vec<_>>()
-        .join(",");
-    let cargo_toml = format!(
-        "
-    [workspace]
-    members = [{members}]
-    "
-    );
-
-    let mut cargo_path = PathBuf::from(test_dir.path());
-    cargo_path.push("Cargo.toml");
-    let mut file = File::create(cargo_path)?;
-    file.write_all(cargo_toml.as_bytes())?;
-    Ok(WorkspaceTestSetup {
-        test_dir,
-        project_dirs,
-    })
-}
-
 #[tokio::test]
-#[serial]
-async fn integration_build_handles_dashed_names_serial() -> Result<()> {
+async fn integration_build_handles_dashed_names() -> Result<()> {
     let actor_name = "dashed-actor";
     // This tests runs against a temp directory since cargo gets confused
     // about workspace projects if done from within wash

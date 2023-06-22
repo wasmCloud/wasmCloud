@@ -33,8 +33,7 @@ test: ## Run unit test suite
 	@$(CARGO) nextest run $(CARGO_TEST_TARGET) --no-fail-fast -p wash-lib --features=cli
 
 test-wash-ci:
-	@$(CARGO) nextest run --profile ci --workspace --bin wash
-	@$(CARGO) nextest run --profile ci -p wash-lib --features=cli
+	@$(CARGO) nextest run --profile ci --workspace --all-features -E 'binary(wash)' -E 'package(wash-lib)'
 
 test-watch: ## Run unit tests continously, can optionally specify a target test filter.
 	@$(CARGO) watch -- $(CARGO) nextest run $(TARGET)
