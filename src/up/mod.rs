@@ -513,8 +513,10 @@ pub(crate) async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result
             "CTRL+c received, stopping wasmCloud, wadm, and NATS...".to_string(),
         );
 
-        // remove wadm pidfile, the process is stopped automatically by CTRL+c
-        remove_wadm_pidfile(&install_dir).await?;
+        if wadm_process.is_some() {
+            // remove wadm pidfile, the process is stopped automatically by CTRL+c
+            remove_wadm_pidfile(&install_dir).await?;
+        }
 
         spinner.finish_and_clear();
     }
