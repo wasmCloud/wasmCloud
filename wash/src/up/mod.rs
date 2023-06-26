@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fmt::Write;
+use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -28,7 +29,7 @@ use wash_lib::start::start_wadm;
 use wash_lib::start::WadmConfig;
 use wash_lib::start::{
     ensure_nats_server, ensure_wasmcloud, start_nats_server, start_wasmcloud_host, wait_for_server,
-    NatsConfig,
+    NatsConfig, WADM_PID,
 };
 use wasmcloud_control_interface::{Client as CtlClient, ClientBuilder as CtlClientBuilder};
 
@@ -444,7 +445,10 @@ pub(crate) async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result
     {
         wasmcloud_bin
     } else {
-        // Ensure we clean up the NATS server if we can't start wasmCloud
+        // Ensure we clean up the NATS server and wadm if we can't start wasmCloud
+        if let Some(child) = wadm_process {
+            stop_wadm(child, &install_dir).await?;
+        }
         if nats_bin.is_some() {
             stop_nats(install_dir).await?;
         }
@@ -477,8 +481,8 @@ pub(crate) async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result
         Ok(child) => child,
         Err(e) => {
             // Ensure we clean up the NATS server and wadm if we can't start wasmCloud
-            if let Some(mut child) = wadm_process {
-                child.kill().await?;
+            if let Some(child) = wadm_process {
+                stop_wadm(child, &install_dir).await?;
             }
             if !cmd.nats_opts.connect_only {
                 stop_nats(install_dir).await?;
@@ -489,6 +493,10 @@ pub(crate) async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result
 
     let url = format!("{LOCALHOST}:{}", host_port);
     if wait_for_server(&url, "Washboard").await.is_err() {
+        // Ensure we clean up the NATS server and wadm if we can't start wasmCloud
+        if let Some(child) = wadm_process {
+            stop_wadm(child, &install_dir).await?;
+        }
         if nats_bin.is_some() {
             stop_nats(install_dir).await?;
         }
@@ -506,7 +514,7 @@ pub(crate) async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result
         );
 
         // remove wadm pidfile, the process is stopped automatically by CTRL+c
-        tokio::fs::remove_file(&install_dir.join("wadm.pid")).await?;
+        remove_wadm_pidfile(&install_dir).await?;
 
         spinner.finish_and_clear();
     }
@@ -650,6 +658,26 @@ async fn is_wadm_running(nats_opts: &NatsOpts, lattice_prefix: &str) -> Result<b
             .await
             .is_ok(),
     )
+}
+
+async fn stop_wadm<P>(mut wadm: Child, install_dir: P) -> Result<()>
+where
+    P: AsRef<Path>,
+{
+    wadm.kill().await?;
+    remove_wadm_pidfile(install_dir).await
+}
+
+async fn remove_wadm_pidfile<P>(install_dir: P) -> Result<()>
+where
+    P: AsRef<Path>,
+{
+    if let Err(err) = tokio::fs::remove_file(install_dir.as_ref().join(WADM_PID)).await {
+        if err.kind() != ErrorKind::NotFound {
+            return Err(anyhow!(err));
+        }
+    }
+    Ok(())
 }
 
 /// Scans ports from 4000 to 5000 to find an open port for the wasmCloud dashboard
