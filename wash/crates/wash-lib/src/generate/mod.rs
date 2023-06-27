@@ -2,6 +2,7 @@
 
 use std::{
     fmt, fs,
+    io::ErrorKind,
     path::{Path, PathBuf},
     process::Stdio,
 };
@@ -133,6 +134,23 @@ fn validate(project: &Project) -> Result<()> {
             project.kind
         ));
     }
+
+    if project.git.is_some() || !project.no_git_init {
+        if let Err(err) = Command::new("git").args(["version"]).spawn() {
+            if err.kind() == ErrorKind::NotFound {
+                return Err(anyhow!(
+                    "Error in 'new {}' options: required 'git' to be installed in PATH",
+                    project.kind
+                ));
+            }
+            return Err(anyhow!(
+                "Error in 'new {}' options: failed to check 'git' command, {}",
+                project.kind,
+                err
+            ));
+        }
+    }
+
     if let Some(name) = &project.project_name {
         crate::generate::project_variables::validate_project_name(name)?;
     }
