@@ -1,6 +1,6 @@
 //! Build (and sign) a wasmCloud actor, provider, or interface. Depends on the "cli" feature
 
-use std::{fs, path::PathBuf, process, str::FromStr};
+use std::{fs, io::ErrorKind, path::PathBuf, process, str::FromStr};
 
 use anyhow::{anyhow, bail, Result};
 
@@ -132,7 +132,13 @@ fn build_rust_actor(
     let metadata = cargo_metadata::MetadataCommand::new().exec()?;
     let target_path = metadata.target_directory.as_path();
 
-    let result = command.args(["build", "--release"]).status()?;
+    let result = command.args(["build", "--release"]).status().map_err(|e| {
+        if e.kind() == ErrorKind::NotFound {
+            anyhow!("{:?} command is not found", command.get_program())
+        } else {
+            anyhow!(e)
+        }
+    })?;
 
     if !result.success() {
         bail!("Compiling actor failed: {}", result.to_string())
@@ -205,7 +211,14 @@ fn build_tinygo_actor(
             "-no-debug",
             ".",
         ])
-        .status()?;
+        .status()
+        .map_err(|e| {
+            if e.kind() == ErrorKind::NotFound {
+                anyhow!("{:?} command is not found", command.get_program())
+            } else {
+                anyhow!(e)
+            }
+        })?;
 
     if !result.success() {
         bail!("Compiling actor failed: {}", result.to_string())
