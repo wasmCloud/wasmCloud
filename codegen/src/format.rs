@@ -23,7 +23,9 @@ pub(crate) fn run_command(program: &str, args: &[&str]) -> Result<()> {
     let mut child = std::process::Command::new(program)
         .args(args.iter())
         .spawn()
-        .map_err(|e| Error::Formatter(format!("failed to start: {e}")))?;
+        .map_err(|e| {
+            Error::Formatter(format!("failed to start format program \"{program}\": {e}"))
+        })?;
 
     let code = child
         .wait()
