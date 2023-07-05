@@ -490,7 +490,7 @@ pub(crate) async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result
             if let Some(child) = wadm_process {
                 stop_wadm(child, &install_dir).await?;
             }
-            if !cmd.nats_opts.connect_only {
+            if nats_bin.is_some() {
                 stop_nats(install_dir).await?;
             }
             return Err(e);
