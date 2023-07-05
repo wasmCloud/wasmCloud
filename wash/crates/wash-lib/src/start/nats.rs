@@ -115,6 +115,9 @@ where
 pub struct NatsConfig {
     pub host: String,
     pub port: u16,
+    /// The path where the NATS server will store its jetstream data. This must be different for
+    /// each NATS server you spin up, otherwise they will share stream data
+    pub store_dir: PathBuf,
     pub js_domain: Option<String>,
     pub remote_url: Option<String>,
     pub credentials: Option<PathBuf>,
@@ -131,6 +134,7 @@ impl Default for NatsConfig {
         NatsConfig {
             host: "127.0.0.1".to_string(),
             port: 4222,
+            store_dir: std::env::temp_dir().join("wash-jetstream-4222"),
             js_domain: Some("core".to_string()),
             remote_url: None,
             credentials: None,
@@ -160,6 +164,7 @@ impl NatsConfig {
         NatsConfig {
             host: host.to_owned(),
             port,
+            store_dir: std::env::temp_dir().join(format!("wash-jetstream-{}", port)),
             js_domain,
             remote_url: Some(remote_url),
             credentials: Some(credentials),
@@ -179,6 +184,7 @@ impl NatsConfig {
         NatsConfig {
             host: host.to_owned(),
             port,
+            store_dir: std::env::temp_dir().join(format!("wash-jetstream-{}", port)),
             js_domain,
             ..Default::default()
         }
@@ -209,10 +215,12 @@ leafnodes {{
             r#"
 jetstream {{
     domain={}
+    store_dir={:?}
 }}
 {}
 "#,
             self.js_domain.unwrap_or_else(|| "core".to_string()),
+            self.store_dir.as_os_str().to_string_lossy(),
             leafnode_section
         );
         write(path, config).await.map_err(anyhow::Error::from)
@@ -417,7 +425,7 @@ mod test {
         let mut contents = String::new();
         credsfile.read_to_string(&mut contents).await?;
 
-        assert_eq!(contents, format!("\njetstream {{\n    domain={}\n}}\n\nleafnodes {{\n    remotes = [\n        {{\n            url: \"{}\"\n            credentials: {:?}\n        }}\n    ]\n}}\n                \n", "core", "connect.ngs.global", creds.to_string_lossy()));
+        assert_eq!(contents, format!("\njetstream {{\n    domain={}\n    store_dir={:?}\n}}\n\nleafnodes {{\n    remotes = [\n        {{\n            url: \"{}\"\n            credentials: {:?}\n        }}\n    ]\n}}\n                \n", "core", std::env::temp_dir().join("wash-jetstream-4243").display(), "connect.ngs.global", creds.to_string_lossy()));
         // A simple check to ensure we are properly escaping quotes, this is unescaped and checks for "\\"
         #[cfg(target_family = "windows")]
         assert!(creds.to_string_lossy().contains("\\"));
