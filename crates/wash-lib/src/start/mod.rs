@@ -59,7 +59,7 @@ pub async fn wait_for_server(url: &str, service: &str) -> Result<()> {
     loop {
         // Magic number: 10 + 1, since we are starting at 1 for humans
         if wait_count >= 11 {
-            anyhow::bail!("Ran out of retries waiting for host to start");
+            anyhow::bail!("Ran out of retries waiting for {service} to start");
         }
         match tokio::net::TcpStream::connect(url).await {
             Ok(_) => break,
