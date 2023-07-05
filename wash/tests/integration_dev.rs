@@ -8,7 +8,9 @@ use tokio::{process::Command, sync::RwLock, time::Duration};
 
 mod common;
 
-use crate::common::{init, start_nats, test_dir_with_subfolder, wait_for_no_hosts};
+use crate::common::{
+    init, start_nats, test_dir_with_subfolder, wait_for_no_hosts, wait_for_no_nats,
+};
 
 #[tokio::test]
 #[serial]
@@ -95,6 +97,12 @@ async fn integration_dev_hello_actor_serial() -> Result<()> {
         .await
         .context("wasmcloud instance failed to exit cleanly (processes still left over)")?;
 
+    // Kill the nats instance
     nats.kill().await.map_err(|e| anyhow!(e))?;
+
+    wait_for_no_nats()
+        .await
+        .context("nats instance failed to exit cleanly (processes still left over")?;
+
     Ok(())
 }

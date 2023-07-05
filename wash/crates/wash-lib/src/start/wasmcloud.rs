@@ -242,6 +242,8 @@ where
         // wasmCloud host logs are sent to stderr as of https://github.com/wasmCloud/wasmcloud-otp/pull/418
         .stderr(stderr)
         .stdout(stdout)
+        // NOTE: while normally we might want to kill_on_drop here, the tests that use this function
+        // manually manage the process that is spawned (see can_download_and_start_wasmcloud)
         .stdin(Stdio::null())
         .envs(&env_vars);
 
@@ -302,6 +304,7 @@ fn check_version(version: &str) -> Result<()> {
         }
     }
 }
+
 #[cfg(test)]
 mod test {
     use super::{check_version, ensure_wasmcloud, wasmcloud_url};
@@ -309,10 +312,30 @@ mod test {
         ensure_nats_server, ensure_wasmcloud_for_os_arch_pair, find_wasmcloud_binary,
         is_bin_installed, start_nats_server, start_wasmcloud_host, NatsConfig, NATS_SERVER_BINARY,
     };
+
+    use anyhow::{bail, Context, Result};
     use reqwest::StatusCode;
     use std::{collections::HashMap, env::temp_dir};
     use tokio::fs::{create_dir_all, remove_dir_all};
+    use tokio::net::TcpStream;
+    use tokio::time::Duration;
+
     const WASMCLOUD_VERSION: &str = "v0.63.0";
+    const RANDOM_PORT_RANGE_START: u16 = 5000;
+    const RANDOM_PORT_RANGE_END: u16 = 6000;
+    const LOCALHOST: &str = "127.0.0.1";
+
+    /// Returns an open port on the interface, searching within the range endpoints, inclusive
+    async fn find_open_port() -> Result<u16> {
+        for i in RANDOM_PORT_RANGE_START..=RANDOM_PORT_RANGE_END {
+            if let Ok(conn) = TcpStream::connect((LOCALHOST, i)).await {
+                drop(conn);
+            } else {
+                return Ok(i);
+            }
+        }
+        bail!("Failed to find open port for host")
+    }
 
     #[tokio::test]
     async fn can_request_supported_wasmcloud_urls() {
@@ -417,7 +440,7 @@ mod test {
             .is_none());
 
         // Install and start NATS server for this test
-        let nats_port = 10004;
+        let nats_port = find_open_port().await?;
         assert!(ensure_nats_server(NATS_SERVER_VERSION, &install_dir)
             .await
             .is_ok());
@@ -470,23 +493,52 @@ mod test {
         .await
         .expect("Unable to start wasmcloud host");
 
-        // Give wasmCloud max 15 seconds to start up
-        for _ in 0..14 {
-            let log_contents = tokio::fs::read_to_string(&stderr_log_path).await?;
-            if log_contents.is_empty() {
-                println!("wasmCloud hasn't started up yet, waiting 1 second");
-                tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
-            } else {
-                // Give just a little bit of time for the startup logs to flow in, re-read logs
-                tokio::time::sleep(std::time::Duration::from_millis(5000)).await;
-                let log_contents = tokio::fs::read_to_string(&stderr_log_path).await?;
-                assert!(log_contents
-                    .contains("connect to control interface NATS without authentication"));
-                assert!(log_contents.contains("connect to lattice rpc NATS without authentication"));
-                assert!(log_contents.contains("Started wasmCloud OTP Host Runtime"));
-                break;
+        // Wait at most 10 seconds for wasmcloud to start
+        println!("waiting for wasmcloud to start..");
+        let startup_log_path = stderr_log_path.clone();
+        tokio::time::timeout(Duration::from_secs(10), async move {
+            loop {
+                match tokio::fs::read_to_string(&startup_log_path).await {
+                    Ok(file_contents) if !file_contents.is_empty() => break,
+                    _ => {
+                        println!("wasmCloud hasn't started up yet, waiting 1 second");
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                    }
+                }
             }
-        }
+        })
+        .await
+        .context("failed to start wasmcloud (log path is missing)")?;
+
+        // Wait for up to 15 seconds for the logs to contain expected lines
+        println!("wasmCloud has started, waiting for expected startup logs...");
+        let startup_log_path = stderr_log_path.clone();
+        tokio::time::timeout(Duration::from_secs(15), async move {
+            loop {
+                match tokio::fs::read_to_string(&startup_log_path).await {
+                    Ok(file_contents) => {
+                        if [
+                            "connect to control interface NATS without authentication",
+                            "connect to lattice rpc NATS without authentication",
+                            "Started wasmCloud OTP Host Runtime",
+                        ]
+                        .into_iter()
+                        .all(|l| file_contents.contains(l))
+                        {
+                            // After wasmcloud says it's ready, it still requires some seconds to start up.
+                            tokio::time::sleep(Duration::from_secs(3)).await;
+                            break;
+                        }
+                    }
+                    _ => {
+                        println!("no host startup logs in output yet, waiting 1 second");
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                    }
+                }
+            }
+        })
+        .await
+        .context("failed to start wasmcloud (logs did not contain expected content)")?;
 
         // Should fail because the port is already in use by another host
         let mut host_env = HashMap::new();
