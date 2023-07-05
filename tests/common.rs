@@ -194,19 +194,25 @@ impl TestWashInstance {
         };
 
         // Wait until the host starts by checking the logs
-        let mut tries: i32 = 30;
-        let mut start_message_logs: String = String::new();
-        loop {
-            start_message_logs = read_to_string(wasmcloud_log.to_string().trim_matches('"'))
-                .context("could not read log file output")?;
-            if (start_message_logs.contains("Started wasmCloud OTP Host Runtime")) {
-                break;
+        let logs_path = String::from(wasmcloud_log.to_string().trim_matches('"'));
+        tokio::time::timeout(Duration::from_secs(15), async move {
+            loop {
+                match tokio::fs::read_to_string(&logs_path).await {
+                    Ok(file_contents) => {
+                        if file_contents.contains("Started wasmCloud OTP Host Runtime") {
+                            // After wasmcloud says it's ready, it still requires some seconds to start up.
+                            tokio::time::sleep(Duration::from_secs(3)).await;
+                            break;
+                        }
+                    }
+                    _ => {
+                        println!("no host startup logs in output yet, waiting 1 second");
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                    }
+                }
             }
-            tries -= 1;
-            assert!(tries >= 0);
-            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-        }
-        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+        })
+        .await?;
 
         Ok(TestWashInstance {
             test_dir,
@@ -412,7 +418,7 @@ pub(crate) async fn wait_for_no_hosts() -> Result<()> {
     wait_until_process_has_count(
         "beam.smp",
         |v| v == 0,
-        Duration::from_secs(10),
+        Duration::from_secs(15),
         Duration::from_millis(250),
     )
     .await
@@ -427,6 +433,18 @@ pub(crate) async fn wait_for_nats_to_start() -> Result<()> {
         |v| v == 1,
         Duration::from_secs(10),
         Duration::from_secs(1),
+    )
+    .await
+}
+
+/// Wait for no nats to be running by checking for process names
+#[allow(dead_code)]
+pub(crate) async fn wait_for_no_nats() -> Result<()> {
+    wait_until_process_has_count(
+        "nats-server",
+        |v| v == 0,
+        Duration::from_secs(10),
+        Duration::from_millis(250),
     )
     .await
 }

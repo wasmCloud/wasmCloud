@@ -5,16 +5,17 @@ use anyhow::{anyhow, bail, Result};
 use cargo_toml::{Manifest, Product};
 use config::Config;
 use semver::Version;
-use std::{fs, path::PathBuf};
+use serde::Deserialize;
+use std::{fmt::Display, fs, path::PathBuf};
 
-#[derive(serde::Deserialize, Debug, PartialEq, Eq, Clone)]
+#[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 #[serde(rename_all = "snake_case")]
 pub enum LanguageConfig {
     Rust(RustConfig),
     TinyGo(TinyGoConfig),
 }
 
-#[derive(serde::Deserialize, Debug, PartialEq, Eq, Clone)]
+#[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 #[serde(rename_all = "snake_case")]
 pub enum TypeConfig {
     Actor(ActorConfig),
@@ -22,7 +23,8 @@ pub enum TypeConfig {
     Interface(InterfaceConfig),
 }
 
-#[derive(serde::Deserialize, Debug, Clone)]
+/// Project configuration, normally specified in the root keys of a wasmcloud.toml file
+#[derive(Deserialize, Debug, Clone)]
 pub struct ProjectConfig {
     /// The language of the project, e.g. rust, tinygo. Contains specific configuration for that language.
     pub language: LanguageConfig,
@@ -34,7 +36,7 @@ pub struct ProjectConfig {
     pub common: CommonConfig,
 }
 
-#[derive(serde::Deserialize, Debug, PartialEq, Eq, Clone, Default)]
+#[derive(Deserialize, Debug, PartialEq, Eq, Clone, Default)]
 pub struct ActorConfig {
     /// The list of provider claims that this actor requires. eg. ["wasmcloud:httpserver", "wasmcloud:blobstore"]
     pub claims: Vec<String>,
@@ -47,11 +49,12 @@ pub struct ActorConfig {
     /// The filename of the signed wasm actor.
     pub filename: Option<String>,
     /// The target wasm target to build for. Defaults to "wasm32-unknown-unknown".
-    pub wasm_target: String,
+    pub wasm_target: WasmTarget,
     /// The call alias of the actor.
     pub call_alias: Option<String>,
 }
-#[derive(serde::Deserialize, Debug, PartialEq)]
+
+#[derive(Deserialize, Debug, PartialEq)]
 struct RawActorConfig {
     /// The list of provider claims that this actor requires. eg. ["wasmcloud:httpserver", "wasmcloud:blobstore"]
     pub claims: Option<Vec<String>>,
@@ -83,19 +86,20 @@ impl TryFrom<RawActorConfig> for ActorConfig {
             filename: raw_config.filename,
             wasm_target: raw_config
                 .wasm_target
-                .unwrap_or_else(|| "wasm32-unknown-unknown".to_string()),
+                .map(WasmTarget::from)
+                .unwrap_or_default(),
             call_alias: raw_config.call_alias,
         })
     }
 }
-#[derive(serde::Deserialize, Debug, PartialEq, Eq, Clone, Default)]
+#[derive(Deserialize, Debug, PartialEq, Eq, Clone, Default)]
 pub struct ProviderConfig {
     /// The capability ID of the provider.
     pub capability_id: String,
     /// The vendor name of the provider.
     pub vendor: String,
 }
-#[derive(serde::Deserialize, Debug, PartialEq)]
+#[derive(Deserialize, Debug, PartialEq)]
 struct RawProviderConfig {
     /// The capability ID of the provider.
     pub capability_id: String,
@@ -114,14 +118,14 @@ impl TryFrom<RawProviderConfig> for ProviderConfig {
     }
 }
 
-#[derive(serde::Deserialize, Debug, PartialEq, Eq, Clone, Default)]
+#[derive(Deserialize, Debug, PartialEq, Eq, Clone, Default)]
 pub struct InterfaceConfig {
     /// Directory to output HTML.
     pub html_target: PathBuf,
     /// Path to codegen.toml file.
     pub codegen_config: PathBuf,
 }
-#[derive(serde::Deserialize, Debug, PartialEq)]
+#[derive(Deserialize, Debug, PartialEq)]
 
 struct RawInterfaceConfig {
     /// Directory to output HTML. Defaults to "./html".
@@ -145,7 +149,7 @@ impl TryFrom<RawInterfaceConfig> for InterfaceConfig {
     }
 }
 
-#[derive(serde::Deserialize, Debug, PartialEq, Eq, Clone, Default)]
+#[derive(Deserialize, Debug, PartialEq, Eq, Clone, Default)]
 pub struct RustConfig {
     /// The path to the cargo binary. Optional, will default to search the user's `PATH` for `cargo` if not specified.
     pub cargo_path: Option<PathBuf>,
@@ -153,7 +157,19 @@ pub struct RustConfig {
     pub target_path: Option<PathBuf>,
 }
 
-#[derive(serde::Deserialize, Debug, PartialEq, Default, Clone)]
+impl RustConfig {
+    pub fn build_target(&self, wasm_target: &WasmTarget) -> &'static str {
+        match wasm_target {
+            WasmTarget::CoreModule => "wasm32-unknown-unknown",
+            // NOTE: eventually "wasm32-wasi" will be renamed to "wasm32-wasi-preview1"
+            // https://github.com/rust-lang/compiler-team/issues/607
+            WasmTarget::WasiPreview1 => "wasm32-wasi",
+            WasmTarget::WasiPreview2 => "wasm32-wasi-preview2",
+        }
+    }
+}
+
+#[derive(Deserialize, Debug, PartialEq, Default, Clone)]
 struct RawRustConfig {
     /// The path to the cargo binary. Optional, will default to search the user's `PATH` for `cargo` if not specified.
     pub cargo_path: Option<PathBuf>,
@@ -173,7 +189,7 @@ impl TryFrom<RawRustConfig> for RustConfig {
 }
 
 /// Configuration common amoung all project types & languages.
-#[derive(serde::Deserialize, Debug, PartialEq, Eq, Clone)]
+#[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct CommonConfig {
     /// Name of the project.
     pub name: String,
@@ -186,7 +202,45 @@ pub struct CommonConfig {
     pub wasm_bin_name: Option<String>,
 }
 
-#[derive(serde::Deserialize, Debug)]
+#[derive(Debug, Deserialize, Default, Clone, Eq, PartialEq)]
+pub enum WasmTarget {
+    #[default]
+    #[serde(alias = "wasm32-unknown-unknown")]
+    CoreModule,
+    #[serde(alias = "wasm32-wasi", alias = "wasm32-wasi-preview1")]
+    WasiPreview1,
+    #[serde(alias = "wasm32-wasi-preview2")]
+    WasiPreview2,
+}
+
+impl From<&str> for WasmTarget {
+    fn from(value: &str) -> Self {
+        match value {
+            "wasm32-wasi-preview1" => WasmTarget::WasiPreview1,
+            "wasm32-wasi" => WasmTarget::WasiPreview1,
+            "wasm32-wasi-preview2" => WasmTarget::WasiPreview2,
+            _ => WasmTarget::CoreModule,
+        }
+    }
+}
+
+impl From<String> for WasmTarget {
+    fn from(value: String) -> Self {
+        value.as_str().into()
+    }
+}
+
+impl Display for WasmTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match &self {
+            WasmTarget::CoreModule => "wasm32-unknown-unknown",
+            WasmTarget::WasiPreview1 => "wasm32-wasi",
+            WasmTarget::WasiPreview2 => "wasm32-wasi-preview2",
+        })
+    }
+}
+
+#[derive(Deserialize, Debug)]
 struct RawProjectConfig {
     /// The language of the project, e.g. rust, tinygo. This is used to determine which config to parse.
     pub language: String,
@@ -205,13 +259,13 @@ struct RawProjectConfig {
     pub tinygo: Option<RawTinyGoConfig>,
 }
 
-#[derive(serde::Deserialize, Debug, PartialEq, Eq, Clone, Default)]
+#[derive(Deserialize, Debug, PartialEq, Eq, Clone, Default)]
 pub struct TinyGoConfig {
     /// The path to the tinygo binary. Optional, will default to `tinygo` if not specified.
     pub tinygo_path: Option<PathBuf>,
 }
 
-#[derive(serde::Deserialize, Debug, PartialEq, Default)]
+#[derive(Deserialize, Debug, PartialEq, Default)]
 struct RawTinyGoConfig {
     /// The path to the tinygo binary. Optional, will default to `tinygo` if not specified.
     pub tinygo_path: Option<PathBuf>,

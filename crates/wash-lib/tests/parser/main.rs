@@ -4,6 +4,7 @@ use claims::{assert_err, assert_ok};
 use semver::Version;
 use wash_lib::parser::{
     get_config, ActorConfig, CommonConfig, LanguageConfig, RustConfig, TinyGoConfig, TypeConfig,
+    WasmTarget,
 };
 
 #[test]
@@ -32,7 +33,7 @@ fn rust_actor() {
             push_insecure: false,
             key_directory: PathBuf::from("./keys"),
             filename: Some("testactor.wasm".to_string()),
-            wasm_target: "wasm32-unknown-unknown".to_string(),
+            wasm_target: WasmTarget::CoreModule,
             call_alias: Some("testactor".to_string())
         })
     );
@@ -74,7 +75,7 @@ fn tinygo_actor() {
             push_insecure: false,
             key_directory: PathBuf::from("./keys"),
             filename: Some("testactor.wasm".to_string()),
-            wasm_target: "wasm32-unknown-unknown".to_string(),
+            wasm_target: WasmTarget::CoreModule,
             call_alias: Some("testactor".to_string())
         })
     );
@@ -256,7 +257,7 @@ fn minimal_rust_actor() {
             push_insecure: false,
             key_directory: PathBuf::from("./keys"),
             filename: None,
-            wasm_target: "wasm32-unknown-unknown".to_string(),
+            wasm_target: WasmTarget::CoreModule,
             call_alias: None
         })
     );
@@ -301,7 +302,7 @@ fn cargo_toml_actor() {
             push_insecure: false,
             key_directory: PathBuf::from("./keys"),
             filename: None,
-            wasm_target: "wasm32-unknown-unknown".to_string(),
+            wasm_target: WasmTarget::CoreModule,
             call_alias: None
         })
     );
@@ -317,4 +318,67 @@ fn cargo_toml_actor() {
             wasm_bin_name: None,
         }
     )
+}
+
+/// wasm_target=wasm32-wasi-preview2 is properly parsed
+/// see: https://github.com/wasmCloud/wash/issues/640
+#[test]
+fn minimal_rust_actor_preview2() {
+    let result = get_config(
+        Some(PathBuf::from(
+            "./tests/parser/files/minimal_rust_actor_preview2.toml",
+        )),
+        None,
+    );
+
+    let config = assert_ok!(result);
+    assert!(matches!(
+        config.project_type,
+        TypeConfig::Actor(ActorConfig {
+            wasm_target: WasmTarget::WasiPreview2,
+            ..
+        })
+    ));
+}
+
+/// wasm_target=wasm32-wasi-preview1 is properly parsed
+/// see: https://github.com/wasmCloud/wash/issues/640
+#[test]
+fn minimal_rust_actor_preview1() {
+    let result = get_config(
+        Some(PathBuf::from(
+            "./tests/parser/files/minimal_rust_actor_preview1.toml",
+        )),
+        None,
+    );
+
+    let config = assert_ok!(result);
+    assert!(matches!(
+        config.project_type,
+        TypeConfig::Actor(ActorConfig {
+            wasm_target: WasmTarget::WasiPreview1,
+            ..
+        })
+    ));
+}
+
+/// wasm_target=wasm32-unknown-unknown is properly parsed
+/// see: https://github.com/wasmCloud/wash/issues/640
+#[test]
+fn minimal_rust_actor_core_module() {
+    let result = get_config(
+        Some(PathBuf::from(
+            "./tests/parser/files/minimal_rust_actor_core_module.toml",
+        )),
+        None,
+    );
+
+    let config = assert_ok!(result);
+    assert!(matches!(
+        config.project_type,
+        TypeConfig::Actor(ActorConfig {
+            wasm_target: WasmTarget::CoreModule,
+            ..
+        })
+    ));
 }

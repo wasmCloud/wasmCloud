@@ -4,13 +4,15 @@ use std::{fs, io::ErrorKind, path::PathBuf, process, str::FromStr};
 
 use anyhow::{anyhow, bail, Result};
 
-use crate::cli::{
-    claims::{sign_file, ActorMetadata, SignCommand},
-    OutputKind,
-};
-use crate::parser::{
-    ActorConfig, CommonConfig, InterfaceConfig, LanguageConfig, ProjectConfig, ProviderConfig,
-    RustConfig, TinyGoConfig, TypeConfig,
+use crate::{
+    cli::{
+        claims::{sign_file, ActorMetadata, SignCommand},
+        OutputKind,
+    },
+    parser::{
+        ActorConfig, CommonConfig, InterfaceConfig, LanguageConfig, ProjectConfig, ProviderConfig,
+        RustConfig, TinyGoConfig, TypeConfig, WasmTarget,
+    },
 };
 
 /// Configuration for signing an artifact (actor or provider) including issuer and subject key, the path to where keys can be found, and an option to
@@ -126,19 +128,31 @@ fn build_rust_actor(
         None => process::Command::new("cargo"),
     };
 
+    if actor_config.wasm_target == WasmTarget::WasiPreview2 {
+        bail!("Building projects targeting WASI preview 2 is not yet supported");
+    }
+
     // Change directory into the project directory
     std::env::set_current_dir(&common_config.path)?;
 
     let metadata = cargo_metadata::MetadataCommand::new().exec()?;
     let target_path = metadata.target_directory.as_path();
 
-    let result = command.args(["build", "--release"]).status().map_err(|e| {
-        if e.kind() == ErrorKind::NotFound {
-            anyhow!("{:?} command is not found", command.get_program())
-        } else {
-            anyhow!(e)
-        }
-    })?;
+    let result = command
+        .args([
+            "build",
+            "--release",
+            "--target",
+            rust_config.build_target(&actor_config.wasm_target),
+        ])
+        .status()
+        .map_err(|e| {
+            if e.kind() == ErrorKind::NotFound {
+                anyhow!("{:?} command is not found", command.get_program())
+            } else {
+                anyhow!(e)
+            }
+        })?;
 
     if !result.success() {
         bail!("Compiling actor failed: {}", result.to_string())

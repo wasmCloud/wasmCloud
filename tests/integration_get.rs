@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use serial_test::serial;
 use tokio::process::Command;
 use wash_lib::cli::output::{
@@ -73,7 +73,13 @@ async fn integration_get_host_inventory_serial() -> Result<()> {
         .await
         .context("failed to execute get inventory")?;
 
-    assert!(output.status.success(), "executed get inventory");
+    if !output.status.success() {
+        bail!(
+            "failed to execute `wash get inventory`, stdout: {} \nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
 
     let cmd_output: GetHostInventoryCommandOutput = serde_json::from_slice(&output.stdout)?;
     assert!(cmd_output.success, "command returned success");
