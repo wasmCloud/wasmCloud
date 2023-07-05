@@ -215,7 +215,7 @@ leafnodes {{
             r#"
 jetstream {{
     domain={}
-    store_dir={}
+    store_dir={:?}
 }}
 {}
 "#,
@@ -425,7 +425,7 @@ mod test {
         let mut contents = String::new();
         credsfile.read_to_string(&mut contents).await?;
 
-        assert_eq!(contents, format!("\njetstream {{\n    domain={}\n    store_dir={}\n}}\n\nleafnodes {{\n    remotes = [\n        {{\n            url: \"{}\"\n            credentials: {:?}\n        }}\n    ]\n}}\n                \n", "core", std::env::temp_dir().join("wash-jetstream-4243").display(), "connect.ngs.global", creds.to_string_lossy()));
+        assert_eq!(contents, format!("\njetstream {{\n    domain={}\n    store_dir={:?}\n}}\n\nleafnodes {{\n    remotes = [\n        {{\n            url: \"{}\"\n            credentials: {:?}\n        }}\n    ]\n}}\n                \n", "core", std::env::temp_dir().join("wash-jetstream-4243").display(), "connect.ngs.global", creds.to_string_lossy()));
         // A simple check to ensure we are properly escaping quotes, this is unescaped and checks for "\\"
         #[cfg(target_family = "windows")]
         assert!(creds.to_string_lossy().contains("\\"));
