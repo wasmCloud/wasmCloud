@@ -31,7 +31,7 @@ $HOME/.cargo/bin/wash completions -d $HOME/.wash bash
 source $HOME/.wash/wash.bash 
 ```
 
-Completions will be enabled the next time you start a shell. Or, you can `source ~/.zshrc` for the completions to take effect in the current shell.
+Completions will be enabled the next time you start a shell. Or, you can `source ~/.bashrc` for the completions to take effect in the current shell.
 
 
 ## Fish
