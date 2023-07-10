@@ -1,8 +1,15 @@
 //! Build (and sign) a wasmCloud actor, provider, or interface. Depends on the "cli" feature
 
-use std::{fs, io::ErrorKind, path::PathBuf, process, str::FromStr};
+use std::{
+    fs,
+    io::ErrorKind,
+    path::{Path, PathBuf},
+    process,
+    str::FromStr,
+};
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
+use wit_component::ComponentEncoder;
 
 use crate::{
     cli::{
@@ -49,6 +56,7 @@ pub struct SignConfig {
 /// # Arguments
 /// * `config`: [ProjectConfig] for required information to find, build, and sign an actor
 /// * `signing`: Optional [SignConfig] with information for signing the project artifact. If omitted, the artifact will only be built
+/// * `adapter_bytes`: Optional [&[u8]] bytes that represent a wasm component adapter that should be used, if present.
 pub fn build_project(config: &ProjectConfig, signing: Option<SignConfig>) -> Result<PathBuf> {
     match &config.project_type {
         TypeConfig::Actor(actor_config) => {
@@ -78,15 +86,36 @@ pub fn build_actor(
     signing_config: Option<SignConfig>,
 ) -> Result<PathBuf> {
     // Build actor based on language toolchain
-    let file_path = match language_config {
+    let actor_wasm_path = match language_config {
         LanguageConfig::Rust(rust_config) => {
             build_rust_actor(common_config, rust_config, actor_config)
         }
         LanguageConfig::TinyGo(tinygo_config) => build_tinygo_actor(common_config, tinygo_config),
     }?;
 
+    // If the actor has been configured as WASI Preview2, adapt it
+    if actor_config.wasm_target == WasmTarget::WasiPreview2 {
+        let adapter_wasm_bytes = get_wasi_preview2_adapter_bytes(actor_config)?;
+        // Adapt the component, using the adapter that is available locally
+        let wasm_bytes = adapt_wasi_preview1_component(&actor_wasm_path, adapter_wasm_bytes)
+            .with_context(|| {
+                format!(
+                    "failed to adapt component at [{}] to WASI preview2",
+                    actor_wasm_path.display(),
+                )
+            })?;
+
+        // Write the adapted file out to disk
+        fs::write(&actor_wasm_path, wasm_bytes).with_context(|| {
+            format!(
+                "failed to write WASI preview2 adapted bytes to path [{}]",
+                actor_wasm_path.display(),
+            )
+        })?;
+    }
+
     if let Some(config) = signing_config {
-        let source = file_path
+        let source = actor_wasm_path
             .to_str()
             .ok_or_else(|| anyhow!("Could not convert file path to string"))?
             .to_string();
@@ -113,7 +142,7 @@ pub fn build_actor(
         Ok(destination_file)
     } else {
         // Exit without signing
-        Ok(file_path)
+        Ok(actor_wasm_path)
     }
 }
 
@@ -128,23 +157,15 @@ fn build_rust_actor(
         None => process::Command::new("cargo"),
     };
 
-    if actor_config.wasm_target == WasmTarget::WasiPreview2 {
-        bail!("Building projects targeting WASI preview 2 is not yet supported");
-    }
-
     // Change directory into the project directory
     std::env::set_current_dir(&common_config.path)?;
 
     let metadata = cargo_metadata::MetadataCommand::new().exec()?;
     let target_path = metadata.target_directory.as_path();
+    let build_target = rust_config.build_target(&actor_config.wasm_target);
 
     let result = command
-        .args([
-            "build",
-            "--release",
-            "--target",
-            rust_config.build_target(&actor_config.wasm_target),
-        ])
+        .args(["build", "--release", "--target", build_target])
         .status()
         .map_err(|e| {
             if e.kind() == ErrorKind::NotFound {
@@ -171,7 +192,7 @@ fn build_rust_actor(
             .clone()
             .unwrap_or_else(|| PathBuf::from(target_path))
             .to_string_lossy(),
-        actor_config.wasm_target,
+        build_target,
         wasm_bin_name,
     ));
 
@@ -248,6 +269,69 @@ fn build_tinygo_actor(
     }
 
     Ok(common_config.path.join(wasm_file))
+}
+
+/// Adapt a core module/preview1 component to a preview2 wasm component
+/// returning the bytes that are the adapted wasm module
+fn adapt_wasi_preview1_component(
+    wasm_path: impl AsRef<Path>,
+    adapter_wasm_bytes: impl AsRef<[u8]>,
+) -> Result<Vec<u8>> {
+    let wasm_bytes = fs::read(&wasm_path).with_context(|| {
+        format!(
+            "failed to read wasm file from path [{}]",
+            wasm_path.as_ref().display()
+        )
+    })?;
+
+    // Build a component encoder
+    let mut encoder = ComponentEncoder::default()
+        .validate(true)
+        .module(&wasm_bytes)
+        .with_context(|| {
+            format!(
+                "failed to encode wasm component @ [{}]",
+                wasm_path.as_ref().display()
+            )
+        })?;
+
+    // Adapt the module
+    encoder = encoder
+        .adapter("wasi_snapshot_preview1", adapter_wasm_bytes.as_ref())
+        .context("failed to set adapter during encoding")?;
+
+    // Return the encoded module bytes
+    encoder
+        .encode()
+        .context("failed to serialize encoded component")
+}
+
+/// Retrieve bytes for WASI preview2 adapter given a project configuration,
+/// if required by project configuration
+pub(crate) fn get_wasi_preview2_adapter_bytes(config: &ActorConfig) -> Result<Vec<u8>> {
+    if let ActorConfig {
+        wasm_target: WasmTarget::WasiPreview2,
+        wasi_preview2_adapter_path: Some(path),
+        ..
+    } = config
+    {
+        return std::fs::read(path)
+            .with_context(|| format!("failed to read wasm bytes from [{}]", path.display()));
+    }
+    get_wasi_preview2_adapter_default_bytes()
+}
+
+#[cfg(target_family = "unix")]
+fn get_wasi_preview2_adapter_default_bytes() -> Result<Vec<u8>> {
+    Ok(wasmcloud_component_adapters::WASI_PREVIEW1_REACTOR_COMPONENT_ADAPTER.into())
+}
+
+/// Bytes from wasmcloud_component_adapters cannot be used on
+/// windows yet due to a lack of support of a dependency (nix-nar) for building on windows.
+/// This can be removed once `wasmcloud_component_adapters` builds on windows.
+#[cfg(target_family = "windows")]
+fn get_wasi_preview2_adapter_default_bytes() -> Result<Vec<u8>> {
+    bail!("building wasi preview2 components is not yet supported on windows")
 }
 
 /// Placeholder for future functionality for building providers

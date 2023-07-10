@@ -86,4 +86,4 @@ There are a few options:
 - in `vscode`, go to settings and set the `git.alwaysSignOff` setting. Note that the dev container configuration in this repo sets this up by default.
 - manually add "Signed-off-by: NAME <EMAIL>" at the end of each commit
 
-You may also be able to use GPG signing in leu of a sign off.
+You may also be able to use GPG signing in lieu of a sign off.

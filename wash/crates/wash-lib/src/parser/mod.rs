@@ -50,6 +50,8 @@ pub struct ActorConfig {
     pub filename: Option<String>,
     /// The target wasm target to build for. Defaults to "wasm32-unknown-unknown".
     pub wasm_target: WasmTarget,
+    /// Path to a wasm adapter that can be used for preview2
+    pub wasi_preview2_adapter_path: Option<PathBuf>,
     /// The call alias of the actor.
     pub call_alias: Option<String>,
 }
@@ -88,6 +90,7 @@ impl TryFrom<RawActorConfig> for ActorConfig {
                 .wasm_target
                 .map(WasmTarget::from)
                 .unwrap_or_default(),
+            wasi_preview2_adapter_path: None,
             call_alias: raw_config.call_alias,
         })
     }
@@ -163,8 +166,7 @@ impl RustConfig {
             WasmTarget::CoreModule => "wasm32-unknown-unknown",
             // NOTE: eventually "wasm32-wasi" will be renamed to "wasm32-wasi-preview1"
             // https://github.com/rust-lang/compiler-team/issues/607
-            WasmTarget::WasiPreview1 => "wasm32-wasi",
-            WasmTarget::WasiPreview2 => "wasm32-wasi-preview2",
+            WasmTarget::WasiPreview1 | WasmTarget::WasiPreview2 => "wasm32-wasi",
         }
     }
 }

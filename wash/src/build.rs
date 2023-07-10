@@ -1,13 +1,14 @@
-use std::collections::HashMap;
-use std::path::PathBuf;
+use std::{collections::HashMap, path::PathBuf};
 
 use anyhow::Result;
 use clap::Parser;
 use serde_json::json;
 
-use wash_lib::build::{build_project, SignConfig};
-use wash_lib::cli::CommandOutput;
-use wash_lib::parser::{get_config, TypeConfig};
+use wash_lib::{
+    build::{build_project, SignConfig},
+    cli::CommandOutput,
+    parser::{get_config, TypeConfig},
+};
 
 /// Build (and sign) a wasmCloud actor, provider, or interface
 #[derive(Debug, Parser, Clone)]
@@ -48,7 +49,7 @@ pub(crate) struct BuildCommand {
     pub build_only: bool,
 }
 
-pub(crate) fn handle_command(command: BuildCommand) -> Result<CommandOutput> {
+pub(crate) async fn handle_command(command: BuildCommand) -> Result<CommandOutput> {
     let config = get_config(command.config_path, Some(true))?;
 
     match config.project_type {
@@ -65,6 +66,7 @@ pub(crate) fn handle_command(command: BuildCommand) -> Result<CommandOutput> {
             };
 
             let actor_path = build_project(&config, sign_config)?;
+
             let json_output = HashMap::from([
                 ("actor_path".to_string(), json!(actor_path)),
                 ("signed".to_string(), json!(command.build_only)),
