@@ -1,10 +1,19 @@
 #![warn(clippy::pedantic)]
-#![forbid(clippy::unwrap_used)]
 
+use anyhow::{self, Context};
+use clap::Parser;
+use tokio::signal;
 use tracing_subscriber::prelude::*;
+use wasmcloud_host::WasmbusLatticeConfig;
+
+#[derive(Debug, Parser)]
+#[command(version, about, long_about = None)]
+struct Args;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let Args = Args::parse();
+
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer().pretty().without_time())
         .with(
@@ -14,7 +23,10 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    // TODO: Start lattice
-
+    let (_, shutdown) = wasmcloud_host::WasmbusLattice::new(WasmbusLatticeConfig::default())
+        .await
+        .context("failed to initialize `wasmbus` lattice")?;
+    signal::ctrl_c().await?;
+    shutdown.await.context("failed to shutdown lattice")?;
     Ok(())
 }
