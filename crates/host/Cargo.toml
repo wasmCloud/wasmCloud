@@ -14,17 +14,28 @@ status = "actively-developed"
 
 [dependencies]
 anyhow = { workspace = true, features = ["std"] }
+async-nats = { workspace = true }
 async-recursion = { workspace = true }
 async-trait = { workspace = true }
+bindle = { workspace = true, features = ["client", "caching", "rustls-tls"] }
+bytes = { workspace = true }
+cloudevents-sdk = { workspace = true }
 futures = { workspace = true, features = ["async-await", "std"] }
 http = { workspace = true }
+oci-distribution = { workspace = true, features = ["rustls-tls"] }
+names = { workspace = true }
+nkeys = { workspace = true }
+provider-archive = { workspace = true }
 reqwest = { workspace = true, features = ["rustls-tls"] }
 rmp-serde = { workspace = true }
 serde = { workspace = true }
+serde_bytes = { workspace = true }
 serde_json = { workspace = true }
+time = { workspace = true, features = ["formatting"] }
 tokio = { workspace = true, features = ["fs", "io-std", "io-util", "process", "rt-multi-thread", "time"] }
 tokio-stream = { workspace = true, features = ["net", "time"] }
 tracing = { workspace = true }
+ulid = { workspace = true, features = ["std"] }
 url = { workspace = true, features = ["serde"] }
 uuid = { workspace = true }
 wascap = { workspace = true }

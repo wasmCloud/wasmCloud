@@ -7,7 +7,11 @@
 /// local lattice
 pub mod local;
 
+/// wasmbus lattice
+pub mod wasmbus;
+
 pub use local::{Lattice as LocalLattice, LatticeConfig as LocalLatticeConfig};
+pub use wasmbus::{Lattice as WasmbusLattice, LatticeConfig as WasmbusLatticeConfig};
 
 pub use url;
 
