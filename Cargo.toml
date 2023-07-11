@@ -35,55 +35,55 @@ test-actors = { workspace = true }
 members = ["examples/rust/*"]
 
 [workspace.dependencies]
-anyhow = { version = "1.0.69", default-features = false }
-async-nats = { version = "0.29.0", default-features = false }
-async-recursion = { version = "1.0.4", default-features = false }
-async-trait = { version = "0.1.66", default-features = false }
-base64 = { version = "0.21.2", default-features = false }
-bindle = { version = "0.9.1", default-features = false }
-bytes = { version = "1.4.0", default-features = false }
-clap = { version = "4.3.11", default-features = false }
-cloudevents-sdk = { version = "0.7.0", default-features = false }
-futures = { version = "0.3.28", default-features = false }
-http = { version = "0.2.9", default-features = false }
-log = { version = "0.4.17", default-features = false }
-names = { version = "0.14.0", default-features = false }
-nix-nar = { version = "0.2.1", default-features = false }
-nkeys = { version = "0.3.0", default-features = false }
-oci-distribution = { version = "0.9.1", default-features = false }
-once_cell = { version = "1.17.1", default-features = false }
-provider-archive = { version = "0.7.0", default-features = false }
-quote = { version = "1.0", default-features = false }
-rand = { version = "0.8.5", default-features = false }
+anyhow = { version = "1", default-features = false }
+async-nats = { version = "0.29", default-features = false }
+async-recursion = { version = "1", default-features = false }
+async-trait = { version = "0.1", default-features = false }
+base64 = { version = "0.21", default-features = false }
+bindle = { version = "0.9", default-features = false }
+bytes = { version = "1", default-features = false }
+clap = { version = "4", default-features = false }
+cloudevents-sdk = { version = "0.7", default-features = false }
+futures = { version = "0.3", default-features = false }
+http = { version = "0.2", default-features = false }
+log = { version = "0.4", default-features = false }
+names = { version = "0.14", default-features = false }
+nix-nar = { version = "0.2", default-features = false }
+nkeys = { version = "0.3", default-features = false }
+oci-distribution = { version = "0.9", default-features = false }
+once_cell = { version = "1", default-features = false }
+provider-archive = { version = "0.7", default-features = false }
+quote = { version = "1", default-features = false }
+rand = { version = "0.8", default-features = false }
 reqwest = { version = "0.11", default-features = false }
-rmp-serde = { version = "1.1.1", default-features = false }
-serde = { version = "1.0.152", default-features = false }
-serde_bytes = { version = "0.11.9", default-features = false }
-serde_json = { version = "1.0.93", default-features = false }
-sha2 = { version = "0.10.7", default-features = false }
-syn = { version = "2.0.17", default-features = false }
-tempfile = { version = "3.6.0", default-features = false }
+rmp-serde = { version = "1", default-features = false }
+serde = { version = "1", default-features = false }
+serde_bytes = { version = "0.11", default-features = false }
+serde_json = { version = "1", default-features = false }
+sha2 = { version = "0.10", default-features = false }
+syn = { version = "2", default-features = false }
+tempfile = { version = "3", default-features = false }
 test-actors = { path = "./tests/actors" }
-time = { version = "0.3.23", default-features = false }
-tokio = { version = "1.26.0", default-features = false }
-tokio-stream = { version = "0.1.14", default-features = false }
-tokio-util = { version = "0.7.8", default-features = false }
-toml = { version = "0.7.4", default-features = false }
-tracing = { version = "0.1.37", default-features = false }
-tracing-subscriber = { version = "0.3.17", default-features = false }
-ulid = { version = "1.0.0", default-features = false }
-url = { version = "2.4.0", default-features = false }
-uuid = { version = "1.3.0", default-features = false }
-wascap = { version = "0.11.0", default-features = false }
-wasi-common = { version = "10.0.1", default-features = false }
+time = { version = "0.3", default-features = false }
+tokio = { version = "1", default-features = false }
+tokio-stream = { version = "0.1", default-features = false }
+tokio-util = { version = "0.7", default-features = false }
+toml = { version = "0.7", default-features = false }
+tracing = { version = "0.1", default-features = false }
+tracing-subscriber = { version = "0.3", default-features = false }
+ulid = { version = "1", default-features = false }
+url = { version = "2", default-features = false }
+uuid = { version = "1", default-features = false }
+wascap = { version = "0.11", default-features = false }
+wasi-common = { version = "10", default-features = false }
 wasmcloud-actor = { path = "./crates/actor" }
 wasmcloud-actor-derive = { path = "./crates/actor/derive" }
 wasmcloud-component-adapters = { path = "./crates/component-adapters" }
 wasmcloud-control-interface = { version = "0.27.0", default-features = false }
 wasmcloud-host = { path = "./crates/host" }
 wasmcloud-runtime = { path = "./crates/runtime" }
-wasmparser = { version = "0.107.0", default-features = false }
-wasmtime = { version = "10.0.1", default-features = false }
-wasmtime-wasi = { version = "10.0.1", default-features = false }
-wit-bindgen = { version = "0.7.0", default-features = false }
-wit-component = { version = "0.11.0", default-features = false }
+wasmparser = { version = "0.107", default-features = false }
+wasmtime = { version = "10", default-features = false }
+wasmtime-wasi = { version = "10", default-features = false }
+wit-bindgen = { version = "0.7", default-features = false }
+wit-component = { version = "0.11", default-features = false }
