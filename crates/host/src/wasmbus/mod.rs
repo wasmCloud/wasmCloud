@@ -164,15 +164,15 @@ impl Lattice {
             KeyPair::new(KeyPairType::Server)
         };
 
-        let labels = HashMap::from([
+        let mut labels = HashMap::from([
             ("hostcore.arch".into(), ARCH.into()),
             ("hostcore.os".into(), OS.into()),
             ("hostcore.osfamily".into(), FAMILY.into()),
-            (
-                "path".into(),
-                env::var("WASMCLOUD_HOST_PATH").unwrap_or_default(),
-            ),
         ]);
+        labels.extend(env::vars().filter_map(|(k, v)| {
+            let k = k.strip_prefix("HOST_")?;
+            Some((k.to_lowercase(), v))
+        }));
         let friendly_name = names::Generator::default()
             .next()
             .context("failed to generate friendly name")?;
