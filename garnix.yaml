@@ -18,3 +18,6 @@ builds:
   - packages.x86_64-linux.wasmcloud-aarch64-unknown-linux-musl-oci
   - packages.x86_64-linux.wasmcloud-x86_64-unknown-linux-musl
   - packages.x86_64-linux.wasmcloud-x86_64-unknown-linux-musl-oci
+
+  exclude:
+  - checks.aarch64-darwin.nextest # Garnix CI runners cannot listen on TCP
