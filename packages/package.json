@@ -1,0 +1,13 @@
+{
+  "name": "wash-ts",
+  "version": "1.0.0",
+  "description": "NPM Packages for Wash",
+  "main": "",
+  "scripts": {},
+  "workspaces": [
+    "washboard"
+  ],
+  "keywords": [],
+  "author": "",
+  "license": "Apache-2.0"
+}

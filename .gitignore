@@ -25,3 +25,9 @@ docker-compose.yml
 host_config.json
 # No dumps in git
 *.dump
+
+# node modules
+node_modules
+
+# OS generated files
+.DS_Store

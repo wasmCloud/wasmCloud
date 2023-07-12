@@ -121,6 +121,7 @@ pub struct NatsConfig {
     pub js_domain: Option<String>,
     pub remote_url: Option<String>,
     pub credentials: Option<PathBuf>,
+    pub websocket_port: Option<u16>,
 }
 
 /// Returns a standalone NATS config with the following values:
@@ -138,6 +139,7 @@ impl Default for NatsConfig {
             js_domain: Some("core".to_string()),
             remote_url: None,
             credentials: None,
+            websocket_port: None,
         }
     }
 }
@@ -160,6 +162,7 @@ impl NatsConfig {
         js_domain: Option<String>,
         remote_url: String,
         credentials: PathBuf,
+        websocket_port: Option<u16>,
     ) -> Self {
         NatsConfig {
             host: host.to_owned(),
@@ -168,6 +171,7 @@ impl NatsConfig {
             js_domain,
             remote_url: Some(remote_url),
             credentials: Some(credentials),
+            websocket_port,
         }
     }
     /// Instantiates config for a standalone NATS server. Unless you're looking to extend
@@ -211,17 +215,28 @@ leafnodes {{
             ),
             _ => "".to_owned(),
         };
+        let websocket_section = match self.websocket_port {
+            Some(port) => format!(
+                r#"
+websocket {{
+    port: {port}
+    no_tls: true
+}}
+                "#
+            ),
+            _ => "".to_owned(),
+        };
         let config = format!(
             r#"
 jetstream {{
     domain={}
     store_dir={:?}
 }}
-{}
+{leafnode_section}
+{websocket_section}
 "#,
             self.js_domain.unwrap_or_else(|| "core".to_string()),
-            self.store_dir.as_os_str().to_string_lossy(),
-            leafnode_section
+            self.store_dir.as_os_str().to_string_lossy()
         );
         write(path, config).await.map_err(anyhow::Error::from)
     }
@@ -417,6 +432,7 @@ mod test {
             None,
             "connect.ngs.global".to_string(),
             creds.clone(),
+            Some(4204),
         );
 
         config.write_to_path(creds.clone()).await?;
@@ -425,7 +441,7 @@ mod test {
         let mut contents = String::new();
         credsfile.read_to_string(&mut contents).await?;
 
-        assert_eq!(contents, format!("\njetstream {{\n    domain={}\n    store_dir={:?}\n}}\n\nleafnodes {{\n    remotes = [\n        {{\n            url: \"{}\"\n            credentials: {:?}\n        }}\n    ]\n}}\n                \n", "core", std::env::temp_dir().join("wash-jetstream-4243").display(), "connect.ngs.global", creds.to_string_lossy()));
+        assert_eq!(contents, format!("\njetstream {{\n    domain={}\n    store_dir={:?}\n}}\n\nleafnodes {{\n    remotes = [\n        {{\n            url: \"{}\"\n            credentials: {:?}\n        }}\n    ]\n}}\n                \n\nwebsocket {{\n    port: 4204\n    no_tls: true\n}}\n                \n", "core", std::env::temp_dir().join("wash-jetstream-4243").display(), "connect.ngs.global", creds.to_string_lossy()));
         // A simple check to ensure we are properly escaping quotes, this is unescaped and checks for "\\"
         #[cfg(target_family = "windows")]
         assert!(creds.to_string_lossy().contains("\\"));

@@ -1,10 +1,11 @@
 .DEFAULT_GOAL:=help
 
-.PHONY: build build-watch test test-integration test-all clean help
+.PHONY: build build-watch build-ui test test-integration test-all clean help run-ui
 
 CARGO ?= cargo
 DOCKER ?= docker
 PYTHON ?= python3
+NPM ?= npm
 
 ##@ Helpers
 
@@ -18,6 +19,10 @@ clean: ## Clean all tests
 deps-check:
 	@$(PYTHON) tools/deps_check.py
 
+run-ui: # Run UI from source
+	@$(NPM) install --prefix packages/washboard
+	@$(NPM) run --prefix packages/washboard dev
+
 ##@ Building
 
 build: ## Build the project
@@ -25,6 +30,10 @@ build: ## Build the project
 
 build-watch: ## Continuously build the project
 	@$(CARGO) watch -x build
+
+build-ui: ## Build the UI from source
+	@$(NPM) install --prefix ./packages/washboard
+	@$(NPM) run build --prefix ./packages/washboard
 
 ##@ Testing
 

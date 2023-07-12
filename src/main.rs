@@ -31,6 +31,7 @@ use down::DownCommand;
 use generate::NewCliCommand;
 use keys::KeysCliCommand;
 use par::ParCliCommand;
+use ui::UiCommand;
 use up::UpCommand;
 
 mod app;
@@ -49,6 +50,7 @@ mod generate;
 mod keys;
 mod par;
 mod smithy;
+mod ui;
 mod up;
 mod util;
 
@@ -78,6 +80,7 @@ Run:
   down         Tear down a local wasmCloud environment (launched with wash up)
   app          Manage declarative applications and deployments (wadm)
   spy          Spy on all invocations between an actor and its linked providers
+  ui           Launch a web UI for wasmCloud (experimental)
 
 Iterate:
   get          Get information about different resources
@@ -219,6 +222,9 @@ enum CliCommand {
     /// Bootstrap a wasmCloud environment
     #[clap(name = "up")]
     Up(UpCommand),
+    /// Start a wasmCloud web ui (washboard)
+    #[clap(name = "ui")]
+    Ui(UiCommand),
     /// Perform validation checks on smithy models
     #[clap(name = "validate")]
     Validate(ValidateCli),
@@ -293,6 +299,13 @@ async fn main() {
         }
         CliCommand::Stop(stop_cli) => common::stop_cmd::handle_command(stop_cli, output_kind).await,
         CliCommand::Up(up_cli) => up::handle_command(up_cli, output_kind).await,
+        CliCommand::Ui(ui_cli) => {
+            if cli.experimental {
+                ui::handle_command(ui_cli, output_kind).await
+            } else {
+                experimental_error_message("ui")
+            }
+        }
         CliCommand::Validate(validate_cli) => smithy::handle_validate_command(validate_cli).await,
     };
 

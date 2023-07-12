@@ -13,6 +13,7 @@ COPY crates/wash-lib/src ./crates/wash-lib/src
 COPY Cargo.toml .
 COPY Cargo.lock .
 COPY ./src ./src
+COPY packages/washboard/dist ./packages/washboard/dist
 
 RUN adduser \    
     --disabled-password \    
