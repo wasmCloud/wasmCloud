@@ -97,6 +97,10 @@ pub(crate) struct NatsOpts {
     #[clap(long = "nats-port", default_value = DEFAULT_NATS_PORT, env = "NATS_PORT")]
     pub(crate) nats_port: u16,
 
+    /// NATS websocket port to use. Websocket support will not be enabled if this option isn't set. TLS is not supported. This is required for the wash ui to connect from localhost
+    #[clap(long = "nats-websocket-port", env = "NATS_WEBSOCKET_PORT")]
+    pub(crate) nats_websocket_port: Option<u16>,
+
     /// NATS Server Jetstream domain, defaults to `core`
     #[clap(long = "nats-js-domain", env = "NATS_JS_DOMAIN")]
     pub(crate) nats_js_domain: Option<String>,
@@ -111,6 +115,7 @@ impl From<NatsOpts> for NatsConfig {
             js_domain: other.nats_js_domain,
             remote_url: other.nats_remote_url,
             credentials: other.nats_credsfile,
+            websocket_port: other.nats_websocket_port,
         }
     }
 }

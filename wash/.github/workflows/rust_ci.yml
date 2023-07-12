@@ -21,6 +21,19 @@ jobs:
       - name: Run Rust check + clippy
         run: make rust-check
 
+  build_ui:
+    name: Build UI
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+        with:
+          node-version: '18.x'
+      - name: npm install
+        run: npm install --prefix ./packages/washboard
+      - name: npm run build
+        run: npm run build --prefix ./packages/washboard
+
   unit_tests:
     name: Unit Tests
     strategy:
@@ -29,6 +42,9 @@ jobs:
         os: [ubuntu-22.04, windows-2022, macos-11]
     runs-on: ${{ matrix.os }}
     steps:
+      - uses: actions/setup-node@v3
+        with:
+          node-version: '18.x'
       - uses: actions/checkout@v3
       - uses: Swatinem/rust-cache@v2
         with:
