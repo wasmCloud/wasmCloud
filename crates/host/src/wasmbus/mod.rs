@@ -504,14 +504,22 @@ impl Lattice {
         bail!("TODO")
     }
 
-    #[allow(unused)] // TODO: Remove once implemented
-    #[instrument(skip(payload))]
+    #[instrument(skip(_payload))]
     async fn handle_inventory(
         &self,
-        payload: impl AsRef<[u8]>,
+        _payload: impl AsRef<[u8]>,
         host_id: &str,
     ) -> anyhow::Result<Bytes> {
-        bail!("TODO")
+        let buf = serde_json::to_vec(&json!({
+          "host_id": self.host_key.public_key(),
+          "issuer": self.cluster_key.public_key(),
+          "labels": self.labels,
+          "friendly_name": self.friendly_name,
+          "actors": [], // TODO
+          "providers": [], // TODO
+        }))
+        .context("failed to encode reply")?;
+        Ok(buf.into())
     }
 
     #[allow(unused)] // TODO: Remove once implemented
