@@ -509,10 +509,27 @@ impl Lattice {
         bail!("TODO")
     }
 
-    #[allow(unused)] // TODO: Remove once implemented
     #[instrument(skip(payload))]
     async fn handle_ping_hosts(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
-        bail!("TODO")
+        let uptime = self.start_at.elapsed();
+        // TODO: Fill in the TODOs
+        let buf = serde_json::to_vec(&json!({
+          "id": self.host_key.public_key(),
+          "issuer": self.cluster_key.public_key(),
+          "labels": self.labels,
+          "friendly_name": self.friendly_name,
+          "uptime_seconds": uptime.as_secs(),
+          "uptime_human": "TODO",
+          "version": env!("CARGO_PKG_VERSION"),
+          "cluster_issuers": "TODO",
+          "js_domain": "TODO",
+          "ctl_host": "TODO",
+          "prov_rpc_host": "TODO",
+          "rpc_host": "TODO",
+          "lattice_prefix": "default",
+        }))
+        .context("failed to encode reply")?;
+        Ok(buf.into())
     }
 
     #[instrument]
