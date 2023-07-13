@@ -29,7 +29,7 @@ provider-archive = { workspace = true }
 reqwest = { workspace = true, features = ["rustls-tls"] }
 rmp-serde = { workspace = true }
 serde = { workspace = true }
-serde_bytes = { workspace = true }
+serde_bytes = { workspace = true, features = ["std"] }
 serde_json = { workspace = true }
 time = { workspace = true, features = ["formatting"] }
 tokio = { workspace = true, features = ["fs", "io-std", "io-util", "process", "rt-multi-thread", "time"] }
@@ -37,7 +37,7 @@ tokio-stream = { workspace = true, features = ["net", "time"] }
 tracing = { workspace = true }
 ulid = { workspace = true, features = ["std"] }
 url = { workspace = true, features = ["serde"] }
-uuid = { workspace = true }
+uuid = { workspace = true, features = ["serde"] }
 wascap = { workspace = true }
 wasmcloud-runtime = { workspace = true }
 
