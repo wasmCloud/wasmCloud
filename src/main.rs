@@ -2,7 +2,7 @@
 
 use anyhow::{self, Context};
 use clap::Parser;
-use tokio::signal;
+use tokio::{select, signal};
 use tracing_subscriber::prelude::*;
 use wasmcloud_host::WasmbusLatticeConfig;
 
@@ -23,10 +23,13 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let (_, shutdown) = wasmcloud_host::WasmbusLattice::new(WasmbusLatticeConfig::default())
+    let (lattice, shutdown) = wasmcloud_host::WasmbusLattice::new(WasmbusLatticeConfig::default())
         .await
         .context("failed to initialize `wasmbus` lattice")?;
-    signal::ctrl_c().await?;
+    select! {
+        sig = signal::ctrl_c() => sig.context("failed to wait for Ctrl-C")?,
+        _ = lattice.stopped() => {},
+    };
     shutdown.await.context("failed to shutdown lattice")?;
     Ok(())
 }

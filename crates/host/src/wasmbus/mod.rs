@@ -24,11 +24,14 @@ use serde_json::json;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 use tokio::spawn;
+use tokio::sync::watch;
 use tokio::time::{interval_at, Instant};
 use tokio_stream::wrappers::IntervalStream;
 use tracing::{debug, error, info, instrument, trace, warn};
 use ulid::Ulid;
 use uuid::Uuid;
+
+const SUCCESS: &str = r#"{"accepted":true,"error":""}"#;
 
 #[derive(Debug)]
 struct Queue {
@@ -127,12 +130,17 @@ impl Queue {
 /// Wasmbus lattice
 #[derive(Debug)]
 pub struct Lattice {
+    cluster_key: KeyPair,
     event_builder: EventBuilderV10,
     friendly_name: String,
+    heartbeat: AbortHandle,
     host_key: KeyPair,
     labels: HashMap<String, String>,
     nats: async_nats::Client,
     start_at: Instant,
+    stop_tx: watch::Sender<Option<Instant>>,
+    stop_rx: watch::Receiver<Option<Instant>>,
+    queue: AbortHandle,
 }
 
 impl Lattice {
@@ -201,17 +209,24 @@ impl Lattice {
         let heartbeat =
             IntervalStream::new(interval_at(heartbeat_start_at, Self::HEARTBEAT_INTERVAL));
 
+        let (stop_tx, stop_rx) = watch::channel(None);
+
         let (queue_abort, queue_abort_reg) = AbortHandle::new_pair();
         let (heartbeat_abort, heartbeat_abort_reg) = AbortHandle::new_pair();
 
         let event_builder = EventBuilderV10::new().source(host_key.public_key());
         let wasmbus = Lattice {
+            cluster_key,
             event_builder,
             friendly_name,
+            heartbeat: heartbeat_abort.clone(),
             host_key,
             labels,
             nats,
             start_at,
+            stop_rx,
+            stop_tx,
+            queue: queue_abort.clone(),
         };
         wasmbus
             .publish_event("host_started", start_evt)
@@ -259,6 +274,21 @@ impl Lattice {
                 .await
                 .context("failed to publish stop event")
         }))
+    }
+
+    /// Waits for host to be stopped via lattice commands and returns the shutdown deadline on
+    /// success
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if internal stop channel is closed prematurely
+    pub async fn stopped(&self) -> anyhow::Result<Option<Instant>> {
+        self.stop_rx
+            .clone()
+            .changed()
+            .await
+            .context("failed to wait for stop")?;
+        Ok(*self.stop_rx.borrow())
     }
 
     fn heartbeat(&self) -> serde_json::Value {
@@ -333,14 +363,19 @@ impl Lattice {
     async fn handle_stop(&self, payload: impl AsRef<[u8]>, host_id: &str) -> anyhow::Result<Bytes> {
         #[derive(Deserialize)]
         struct Command {
-            timeout: u64, // ms
+            timeout: Option<u64>, // ms
         }
         let Command { timeout }: Command = serde_json::from_slice(payload.as_ref())
             .context("failed to deserialize stop command")?;
 
-        debug!(timeout, "stop host");
+        debug!(?timeout, "stop host");
 
-        bail!("TODO");
+        self.heartbeat.abort();
+        self.queue.abort();
+        let deadline =
+            timeout.and_then(|timeout| Instant::now().checked_add(Duration::from_millis(timeout)));
+        self.stop_tx.send_replace(deadline);
+        Ok(SUCCESS.into())
     }
 
     #[instrument(skip(payload))]
@@ -509,8 +544,8 @@ impl Lattice {
         bail!("TODO")
     }
 
-    #[instrument(skip(payload))]
-    async fn handle_ping_hosts(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
+    #[instrument(skip(_payload))]
+    async fn handle_ping_hosts(&self, _payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
         let uptime = self.start_at.elapsed();
         // TODO: Fill in the TODOs
         let buf = serde_json::to_vec(&json!({
