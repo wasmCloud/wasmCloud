@@ -1,6 +1,8 @@
 // Adapted from
 // https://github.com/wasmCloud/wasmcloud-otp/blob/5f13500646d9e077afa1fca67a3fe9c8df5f3381/host_core/native/hostcore_wasmcloud_native/src/oci.rs
 
+use crate::par;
+
 use core::str::FromStr;
 
 use std::collections::HashMap;
@@ -13,11 +15,13 @@ use oci_distribution::secrets::RegistryAuth;
 use oci_distribution::{Client, Reference};
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
+use wascap::jwt;
 
 const OCI_VAR_REGISTRY: &str = "OCI_REGISTRY";
 const OCI_VAR_USER: &str = "OCI_REGISTRY_USER";
 const OCI_VAR_PASSWORD: &str = "OCI_REGISTRY_PASSWORD";
 
+const PROVIDER_ARCHIVE_MEDIA_TYPE: &str = "application/vnd.wasmcloud.provider.archive.layer.v1+par";
 const WASM_MEDIA_TYPE: &str = "application/vnd.module.wasm.content.layer.v1+wasm";
 const OCI_MEDIA_TYPE: &str = "application/vnd.oci.image.layer.v1.tar";
 
@@ -162,6 +166,33 @@ pub async fn fetch_actor(
     .await
     .context("failed to fetch OCI path")?;
     fs::read(&path)
+        .await
+        .with_context(|| format!("failed to read `{}`", path.display()))
+}
+
+/// Fetch provider from OCI
+///
+/// # Errors
+///
+/// Returns an error if either fetching fails or reading the fetched OCI path fails
+#[allow(clippy::implicit_hasher)]
+pub async fn fetch_provider(
+    creds_override: Option<HashMap<String, String>>,
+    oci_ref: impl AsRef<str>,
+    allow_latest: bool,
+    allowed_insecure: Vec<String>,
+    link_name: impl AsRef<str>,
+) -> anyhow::Result<(PathBuf, jwt::Claims<jwt::CapabilityProvider>)> {
+    let path = fetch_oci_path(
+        oci_ref.as_ref(),
+        allow_latest,
+        allowed_insecure,
+        creds_override,
+        vec![PROVIDER_ARCHIVE_MEDIA_TYPE, OCI_MEDIA_TYPE],
+    )
+    .await
+    .context("failed to fetch OCI path")?;
+    par::read(&path, link_name)
         .await
         .with_context(|| format!("failed to read `{}`", path.display()))
 }
