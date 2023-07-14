@@ -15,11 +15,13 @@
   inputs.fenix.url = github:nix-community/fenix/monthly;
   inputs.nixify.inputs.fenix.follows = "fenix";
   inputs.nixify.url = github:rvolosatovs/nixify;
-  inputs.wash.url = github:wasmcloud/wash/v0.18.0;
+  inputs.wash.inputs.nixify.follows = "nixify"; # TODO: drop once updated upstream
+  inputs.wash.url = github:wasmcloud/wash/v0.18.1;
   inputs.wasi-preview1-command-component-adapter.flake = false;
   inputs.wasi-preview1-command-component-adapter.url = https://github.com/bytecodealliance/wasmtime/releases/download/v10.0.1/wasi_snapshot_preview1.command.wasm;
   inputs.wasi-preview1-reactor-component-adapter.flake = false;
   inputs.wasi-preview1-reactor-component-adapter.url = https://github.com/bytecodealliance/wasmtime/releases/download/v10.0.1/wasi_snapshot_preview1.reactor.wasm;
+  inputs.wit-deps.inputs.nixify.follows = "nixify"; # TODO: drop once updated upstream
   inputs.wit-deps.url = github:bytecodealliance/wit-deps/v0.3.2;
 
   outputs = {
