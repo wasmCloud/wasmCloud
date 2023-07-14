@@ -6,7 +6,7 @@ use serde_json::json;
 use uuid::Uuid;
 use wascap::jwt;
 
-fn format_claims(claims: &jwt::Claims<jwt::Actor>) -> serde_json::Value {
+fn format_actor_claims(claims: &jwt::Claims<jwt::Actor>) -> serde_json::Value {
     let issuer = &claims.issuer;
     let not_before_human = "TODO";
     let expires_human = "TODO";
@@ -43,7 +43,7 @@ pub fn actor_started(
         "api_version": "n/a",
         "instance_id": instance_id,
         "annotations": annotations,
-        "claims": format_claims(claims),
+        "claims": format_actor_claims(claims),
     })
 }
 
@@ -89,5 +89,53 @@ pub fn actors_stopped(
         "count": count,
         "remaining": remaining,
         "annotations": annotations,
+    })
+}
+
+pub fn provider_started(
+    claims: &jwt::Claims<jwt::CapabilityProvider>,
+    annotations: &Option<BTreeMap<String, String>>,
+    instance_id: Uuid,
+    host_id: impl AsRef<str>,
+    image_ref: impl AsRef<str>,
+    link_name: impl AsRef<str>,
+) -> serde_json::Value {
+    let metadata = claims.metadata.as_ref();
+    json!({
+        "host_id": host_id.as_ref(),
+        "public_key": claims.subject,
+        "image_ref": image_ref.as_ref(),
+        "link_name": link_name.as_ref(),
+        "contract_id": metadata.map(|jwt::CapabilityProvider { capid, .. }| capid),
+        "instance_id": instance_id,
+        "annotations": annotations,
+        "claims": {
+            "issuer": &claims.issuer,
+            "tags": None::<Vec<()>>, // present in OTP, but hardcoded to `None`
+            "name": metadata.map(|jwt::CapabilityProvider { name, .. }| name),
+            "version": metadata.map(|jwt::CapabilityProvider { ver, .. }| ver),
+            "not_before_human": "TODO",
+            "expires_human": "TODO",
+        },
+    })
+}
+
+pub fn provider_stopped(
+    claims: &jwt::Claims<jwt::CapabilityProvider>,
+    annotations: &Option<BTreeMap<String, String>>,
+    instance_id: Uuid,
+    host_id: impl AsRef<str>,
+    link_name: impl AsRef<str>,
+    reason: impl AsRef<str>,
+) -> serde_json::Value {
+    let metadata = claims.metadata.as_ref();
+    json!({
+        "host_id": host_id.as_ref(),
+        "public_key": claims.subject,
+        "link_name": link_name.as_ref(),
+        "contract_id": metadata.map(|jwt::CapabilityProvider { capid, .. }| capid),
+        "instance_id": instance_id,
+        "annotations": annotations,
+        "reason": reason.as_ref(),
     })
 }

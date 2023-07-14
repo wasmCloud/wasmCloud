@@ -30,17 +30,18 @@ use serde_json::json;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 use tokio::io::{stderr, AsyncWrite};
-use tokio::spawn;
 use tokio::sync::{watch, RwLock};
 use tokio::time::{interval_at, Instant};
+use tokio::{process, spawn};
 use tokio_stream::wrappers::IntervalStream;
 use tracing::{debug, error, info, instrument, trace, warn};
 use ulid::Ulid;
 use uuid::Uuid;
 use wascap::jwt;
 use wasmcloud_control_interface::{
-    ActorAuctionRequest, ActorDescription, ScaleActorCommand, StartActorCommand,
-    StartProviderCommand, StopActorCommand, StopHostCommand, UpdateActorCommand,
+    ActorAuctionRequest, ActorDescription, ProviderAuctionRequest, ProviderDescription,
+    ScaleActorCommand, StartActorCommand, StartProviderCommand, StopActorCommand, StopHostCommand,
+    StopProviderCommand, UpdateActorCommand,
 };
 use wasmcloud_runtime::{ActorInstancePool, Runtime};
 
@@ -308,7 +309,21 @@ type Annotations = BTreeMap<String, String>;
 struct Actor {
     pool: ActorInstancePool,
     instances: RwLock<HashMap<Option<Annotations>, Vec<Arc<ActorInstance>>>>,
-    actor_ref: String,
+    image_ref: String,
+}
+
+#[derive(Debug)]
+struct ProviderInstance {
+    child: process::Child,
+    id: Ulid,
+    annotations: Option<Annotations>,
+}
+
+#[derive(Debug)]
+struct Provider {
+    claims: jwt::Claims<jwt::CapabilityProvider>,
+    instances: HashMap<String, ProviderInstance>,
+    image_ref: String,
 }
 
 /// Wasmbus lattice
@@ -323,6 +338,7 @@ pub struct Lattice {
     host_key: KeyPair,
     labels: HashMap<String, String>,
     nats: async_nats::Client,
+    providers: RwLock<HashMap<String, Provider>>,
     runtime: Runtime,
     start_at: Instant,
     stop_tx: watch::Sender<Option<Instant>>,
@@ -418,6 +434,7 @@ impl Lattice {
             host_key,
             labels,
             nats,
+            providers: RwLock::default(),
             runtime,
             start_at,
             stop_rx,
@@ -499,12 +516,37 @@ impl Lattice {
             })
             .collect()
             .await;
+        let providers: Vec<_> = self
+            .providers
+            .read()
+            .await
+            .iter()
+            .flat_map(
+                |(
+                    public_key,
+                    Provider {
+                        claims, instances, ..
+                    },
+                )| {
+                    instances.keys().map(move |link_name| {
+                        let metadata = claims.metadata.as_ref();
+                        let contract_id =
+                            metadata.map(|jwt::CapabilityProvider { capid, .. }| capid.as_str());
+                        json!({
+                            "public_key": public_key,
+                            "link_name": link_name,
+                            "contract_id": contract_id.unwrap_or("n/a"),
+                        })
+                    })
+                },
+            )
+            .collect();
         let uptime = self.start_at.elapsed();
         json!({
             "actors": actors,
             "friendly_name": self.friendly_name,
             "labels": self.labels,
-            "providers": [], // TODO
+            "providers": providers,
             "uptime_human": "TODO", // TODO
             "uptime_seconds": uptime.as_secs(),
             "version": env!("CARGO_PKG_VERSION"),
@@ -670,7 +712,7 @@ impl Lattice {
         let actor = Arc::new(Actor {
             pool,
             instances: RwLock::new(HashMap::from([(annotations, instances)])),
-            actor_ref,
+            image_ref: actor_ref,
         });
         Ok(entry.insert(actor))
     }
@@ -734,12 +776,42 @@ impl Lattice {
         Ok(buf.into())
     }
 
-    #[allow(unused)] // TODO: Remove once implemented
     #[instrument(skip(payload))]
-    async fn handle_auction_provider(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
-        debug!("auction provider");
+    async fn handle_auction_provider(
+        &self,
+        payload: impl AsRef<[u8]>,
+    ) -> anyhow::Result<Option<Bytes>> {
+        let ProviderAuctionRequest {
+            provider_ref,
+            constraints,
+            link_name,
+        } = serde_json::from_slice(payload.as_ref())
+            .context("failed to deserialize provider auction command")?;
 
-        bail!("TODO")
+        debug!(provider_ref, link_name, ?constraints, "auction provider");
+
+        let providers = self.providers.read().await;
+        if providers.values().any(
+            |Provider {
+                 image_ref,
+                 instances,
+                 ..
+             }| { *image_ref == provider_ref && instances.contains_key(&link_name) },
+        ) {
+            // Do not reply if the provider is already running
+            return Ok(None);
+        }
+
+        // TODO: ProviderAuctionAck is missing `constraints` field sent by OTP.
+        // Either replace this by ProviderAuctionAck or update upstream.
+        let buf = serde_json::to_vec(&json!({
+          "provider_ref": provider_ref,
+          "link_name": link_name,
+          "constraints": constraints,
+          "host_id": self.host_key.public_key(),
+        }))
+        .context("failed to encode reply")?;
+        Ok(Some(buf.into()))
     }
 
     #[instrument(skip(payload))]
@@ -815,7 +887,7 @@ impl Lattice {
                             claims,
                             &annotations,
                             host_id,
-                            &actor.actor_ref,
+                            &actor.image_ref,
                             delta,
                             actor.pool.clone(),
                         )
@@ -904,7 +976,7 @@ impl Lattice {
                         claims,
                         &annotations,
                         host_id,
-                        &actor.actor_ref,
+                        &actor.image_ref,
                         count,
                         actor.pool.clone(),
                     )
@@ -1016,17 +1088,100 @@ impl Lattice {
             "launch provider"
         );
 
-        bail!("TODO");
+        let (path, claims) = crate::fetch_provider(&provider_ref, &link_name)
+            .await
+            .context("failed to fetch provider")?;
+
+        let annotations = annotations.map(|annotations| annotations.into_iter().collect());
+        let mut providers = self.providers.write().await;
+        let Provider { instances, .. } =
+            providers.entry(claims.subject.clone()).or_insert(Provider {
+                claims: claims.clone(),
+                image_ref: provider_ref.clone(),
+                instances: HashMap::default(),
+            });
+        if let hash_map::Entry::Vacant(entry) = instances.entry(link_name.clone()) {
+            debug!(?path, "spawn provider process");
+            let child = process::Command::new(&path)
+                .kill_on_drop(true)
+                .spawn()
+                .context("failed to spawn provider process")?;
+            let id = Ulid::new();
+            self.publish_event(
+                "provider_started",
+                event::provider_started(
+                    &claims,
+                    &annotations,
+                    Uuid::from_u128(id.into()),
+                    host_id,
+                    provider_ref,
+                    link_name,
+                ),
+            )
+            .await?;
+            entry.insert(ProviderInstance {
+                child,
+                id,
+                annotations,
+            });
+        } else {
+            bail!("provider is already running")
+        }
+        Ok(SUCCESS.into())
     }
 
-    #[allow(unused)] // TODO: Remove once implemented
     #[instrument(skip(payload))]
     async fn handle_stop_provider(
         &self,
         payload: impl AsRef<[u8]>,
         host_id: &str,
     ) -> anyhow::Result<Bytes> {
-        bail!("TODO")
+        let StopProviderCommand {
+            annotations,
+            contract_id,
+            link_name,
+            provider_ref,
+            ..
+        } = serde_json::from_slice(payload.as_ref())
+            .context("failed to deserialize provider stop command")?;
+
+        debug!(
+            link_name,
+            provider_ref,
+            contract_id,
+            ?annotations,
+            "stop provider"
+        );
+
+        let annotations = annotations.map(|annotations| annotations.into_iter().collect());
+        let mut providers = self.providers.write().await;
+        let hash_map::Entry::Occupied(mut entry) = providers.entry(provider_ref) else {
+            return Ok(SUCCESS.into());
+        };
+        let provider = entry.get_mut();
+        let instances = &mut provider.instances;
+        if let hash_map::Entry::Occupied(entry) = instances.entry(link_name.clone()) {
+            if entry.get().annotations == annotations {
+                let ProviderInstance { id, mut child, .. } = entry.remove();
+                child.kill().await.context("failed to kill child")?;
+                self.publish_event(
+                    "provider_stopped",
+                    event::provider_stopped(
+                        &provider.claims,
+                        &annotations,
+                        Uuid::from_u128(id.into()),
+                        host_id,
+                        link_name,
+                        "stop",
+                    ),
+                )
+                .await?;
+            }
+        }
+        if instances.is_empty() {
+            entry.remove();
+        }
+        Ok(SUCCESS.into())
     }
 
     #[instrument(skip(_payload))]
@@ -1072,13 +1227,53 @@ impl Lattice {
                     .cloned();
                 Some(ActorDescription {
                     id: id.into(),
-                    image_ref: Some(actor.actor_ref.clone()),
+                    image_ref: Some(actor.image_ref.clone()),
                     instances,
                     name,
                 })
             })
             .collect()
             .await;
+        let providers = self.providers.read().await;
+        let providers: Vec<_> = providers
+            .iter()
+            .filter_map(
+                |(
+                    id,
+                    Provider {
+                        claims,
+                        instances,
+                        image_ref,
+                        ..
+                    },
+                )| {
+                    let jwt::CapabilityProvider {
+                        capid: contract_id,
+                        name,
+                        rev: revision,
+                        ..
+                    } = claims.metadata.as_ref()?;
+                    Some(instances.iter().map(
+                        move |(link_name, ProviderInstance { annotations, .. })| {
+                            let annotations = annotations
+                                .as_ref()
+                                .map(|annotations| annotations.clone().into_iter().collect());
+                            let revision = revision.unwrap_or_default();
+                            ProviderDescription {
+                                id: id.into(),
+                                image_ref: Some(image_ref.clone()),
+                                contract_id: contract_id.clone(),
+                                link_name: link_name.into(),
+                                name: name.clone(),
+                                annotations,
+                                revision,
+                            }
+                        },
+                    ))
+                },
+            )
+            .flatten()
+            .collect();
         // TODO: Use `HostInventory` once https://github.com/wasmCloud/control-interface-client/issues/51 is resolved
         let buf = serde_json::to_vec(&json!({
           "host_id": self.host_key.public_key(),
@@ -1086,7 +1281,7 @@ impl Lattice {
           "labels": self.labels,
           "friendly_name": self.friendly_name,
           "actors": actors,
-          "providers": [], // TODO
+          "providers": providers,
         }))
         .context("failed to encode reply")?;
         Ok(buf.into())
@@ -1161,43 +1356,52 @@ impl Lattice {
         let mut parts = subject.split('.').skip(3); // skip `wasmbus.ctl.{prefix}`
         let res = match (parts.next(), parts.next(), parts.next(), parts.next()) {
             (Some("auction"), Some("actor"), None, None) => {
-                self.handle_auction_actor(payload).await
+                self.handle_auction_actor(payload).await.map(Some)
             }
             (Some("auction"), Some("provider"), None, None) => {
                 self.handle_auction_provider(payload).await
             }
             (Some("cmd"), Some(host_id), Some("la"), None) => {
-                self.handle_launch_actor(payload, host_id).await
+                self.handle_launch_actor(payload, host_id).await.map(Some)
             }
-            (Some("cmd"), Some(host_id), Some("lp"), None) => {
-                self.handle_launch_provider(payload, host_id).await
-            }
+            (Some("cmd"), Some(host_id), Some("lp"), None) => self
+                .handle_launch_provider(payload, host_id)
+                .await
+                .map(Some),
             (Some("cmd"), Some(host_id), Some("sa"), None) => {
-                self.handle_stop_actor(payload, host_id).await
+                self.handle_stop_actor(payload, host_id).await.map(Some)
             }
             (Some("cmd"), Some(host_id), Some("scale"), None) => {
-                self.handle_scale_actor(payload, host_id).await
+                self.handle_scale_actor(payload, host_id).await.map(Some)
             }
             (Some("cmd"), Some(host_id), Some("sp"), None) => {
-                self.handle_stop_provider(payload, host_id).await
+                self.handle_stop_provider(payload, host_id).await.map(Some)
             }
             (Some("cmd"), Some(host_id), Some("stop"), None) => {
-                self.handle_stop(payload, host_id).await
+                self.handle_stop(payload, host_id).await.map(Some)
             }
             (Some("cmd"), Some(host_id), Some("update"), None) => {
-                self.handle_update_actor(payload, host_id).await
+                self.handle_update_actor(payload, host_id).await.map(Some)
             }
             (Some("get"), Some(host_id), Some("inv"), None) => {
-                self.handle_inventory(payload, host_id).await
+                self.handle_inventory(payload, host_id).await.map(Some)
             }
-            (Some("get"), Some("claims"), None, None) => self.handle_claims(payload).await,
-            (Some("get"), Some("links"), None, None) => self.handle_links(payload).await,
-            (Some("linkdefs"), Some("put"), None, None) => self.handle_linkdef_put(payload).await,
-            (Some("linkdefs"), Some("del"), None, None) => self.handle_linkdef_del(payload).await,
+            (Some("get"), Some("claims"), None, None) => {
+                self.handle_claims(payload).await.map(Some)
+            }
+            (Some("get"), Some("links"), None, None) => self.handle_links(payload).await.map(Some),
+            (Some("linkdefs"), Some("put"), None, None) => {
+                self.handle_linkdef_put(payload).await.map(Some)
+            }
+            (Some("linkdefs"), Some("del"), None, None) => {
+                self.handle_linkdef_del(payload).await.map(Some)
+            }
             (Some("registries"), Some("put"), None, None) => {
-                self.handle_registries_put(payload).await
+                self.handle_registries_put(payload).await.map(Some)
             }
-            (Some("ping"), Some("hosts"), None, None) => self.handle_ping_hosts(payload).await,
+            (Some("ping"), Some("hosts"), None, None) => {
+                self.handle_ping_hosts(payload).await.map(Some)
+            }
             _ => {
                 error!("unsupported subject `{subject}`");
                 return;
@@ -1207,7 +1411,7 @@ impl Lattice {
             warn!("failed to handle `{subject}` request: {e:?}");
         }
         match (reply, res) {
-            (Some(reply), Ok(buf)) => {
+            (Some(reply), Ok(Some(buf))) => {
                 if let Err(e) = self.nats.publish(reply, buf).await {
                     error!("failed to publish success in response to `{subject}` request: {e:?}");
                 }

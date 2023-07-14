@@ -16,6 +16,9 @@ pub mod bindle;
 /// OCI artifact fetching
 pub mod oci;
 
+/// Provider archive functionality
+mod par;
+
 pub use local::{Lattice as LocalLattice, LatticeConfig as LocalLatticeConfig};
 pub use wasmbus::{Lattice as WasmbusLattice, LatticeConfig as WasmbusLatticeConfig};
 
@@ -27,6 +30,7 @@ use anyhow::{anyhow, bail, Context as _};
 use tokio::fs;
 use tracing::instrument;
 use url::Url;
+use wascap::jwt;
 
 #[cfg(unix)]
 fn socket_pair() -> anyhow::Result<(tokio::net::UnixStream, tokio::net::UnixStream)> {
@@ -83,5 +87,33 @@ pub async fn fetch_actor(actor_ref: impl AsRef<str>) -> anyhow::Result<Vec<u8>> 
         ResourceRef::Oci(actor_ref) => crate::oci::fetch_actor(None, &actor_ref, true, vec![])
             .await
             .with_context(|| format!("failed to fetch actor under OCI reference `{actor_ref}`")),
+    }
+}
+
+/// Fetch a provider from a reference.
+#[instrument(skip(provider_ref, link_name))]
+pub async fn fetch_provider(
+    provider_ref: impl AsRef<str>,
+    link_name: impl AsRef<str>,
+) -> anyhow::Result<(PathBuf, jwt::Claims<jwt::CapabilityProvider>)> {
+    match ResourceRef::try_from(provider_ref.as_ref())? {
+        ResourceRef::File(provider_ref) => par::read(provider_ref, link_name)
+            .await
+            .context("failed to read provider"),
+        ResourceRef::Bindle(provider_ref) => {
+            crate::bindle::fetch_provider(None, &provider_ref, link_name)
+                .await
+                .with_context(|| {
+                    format!("failed to fetch provider under Bindle reference `{provider_ref}`")
+                })
+        }
+        // TODO: Set config
+        ResourceRef::Oci(provider_ref) => {
+            crate::oci::fetch_provider(None, &provider_ref, true, vec![], link_name)
+                .await
+                .with_context(|| {
+                    format!("failed to fetch provider under OCI reference `{provider_ref}`")
+                })
+        }
     }
 }

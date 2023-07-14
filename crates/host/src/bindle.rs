@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 use std::env;
+use std::env::consts::{ARCH, OS};
 use std::path::PathBuf;
 use std::str;
 use std::sync::Arc;
@@ -12,13 +13,18 @@ use async_trait::async_trait;
 use bindle::cache::DumbCache;
 use bindle::client::tokens::{HttpBasic, LongLivedToken, NoToken, TokenManager};
 use bindle::client::{self, Client, ClientBuilder};
+use bindle::filters::BindleFilter;
 use bindle::provider::file::FileProvider;
 use bindle::provider::Provider;
 use bindle::search::NoopEngine;
 use bindle::signature::{KeyRing, KeyRingLoader, KeyRingSaver};
 use bindle::{Invoice, SignatureRole, VerificationStrategy};
 use futures::StreamExt;
+use tokio::io::AsyncWriteExt;
 use tracing::warn;
+use wascap::jwt;
+
+use crate::par;
 
 const BINDLE_USER_NAME_ENV: &str = "BINDLE_USER_NAME";
 const BINDLE_TOKEN_ENV: &str = "BINDLE_TOKEN";
@@ -184,4 +190,70 @@ pub async fn fetch_actor(
         data.extend(bytes);
     }
     Ok(data)
+}
+
+/// Fetch provider from bindle
+#[allow(clippy::implicit_hasher)]
+#[allow(clippy::missing_errors_doc)] // TODO: document errors
+pub async fn fetch_provider(
+    creds_override: Option<HashMap<String, String>>,
+    bindle_id: impl AsRef<str>,
+    link_name: impl AsRef<str>,
+) -> anyhow::Result<(PathBuf, jwt::Claims<jwt::CapabilityProvider>)> {
+    let bindle_id = bindle_id.as_ref();
+    let client = get_client(creds_override, bindle_id)
+        .await
+        .context("failed to construct client")?;
+    let bindle_id = normalize_bindle_id(bindle_id);
+    // Get the invoice first
+    let inv = client
+        .get_invoice(bindle_id)
+        .await
+        .context("failed to get invoice")?;
+
+    // Now filter to figure out which parcels to get (should only get the claims and the provider based on arch)
+    let parcels = BindleFilter::new(&inv)
+        .activate_feature("wasmcloud", "arch", ARCH)
+        .activate_feature("wasmcloud", "os", OS)
+        .filter();
+    let (claims, provider) = match parcels.as_slice() {
+        [claims, provider] | [provider, claims] if claims.label.name == "claims.jwt" => {
+            (claims, provider)
+        }
+        _ => bail!("invalid bindle"),
+    };
+
+    let claims = {
+        let mut stream = client
+            .get_parcel(&inv.bindle.id, &claims.label.sha256)
+            .await
+            .context("failed to get parcel")?;
+        let mut data = Vec::new();
+        while let Some(res) = stream.next().await {
+            let bytes = res?;
+            data.extend(bytes);
+        }
+        let data = str::from_utf8(&data).context("invalid UTF-8 data in claims")?;
+        jwt::Claims::decode(data)?
+    };
+
+    let exe = par::cache_path(&claims, link_name);
+    // Now get the parcel (if it doesn't already exist on disk)
+    if let Some(mut file) = par::create(&exe).await? {
+        let mut written = 0;
+        let mut stream = client
+            .get_parcel(&inv.bindle.id, &provider.label.sha256)
+            .await
+            .context("failed to get parcel")?;
+        while let Some(res) = stream.next().await {
+            let bytes = res?;
+            written += bytes.len();
+            file.write_all(&bytes).await.context("failed to write")?;
+        }
+        file.flush().await.context("failed to flush")?;
+        if written == 0 {
+            bail!("provider parcel not found or was empty");
+        }
+    }
+    Ok((exe, claims))
 }
