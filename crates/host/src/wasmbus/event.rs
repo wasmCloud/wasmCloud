@@ -33,7 +33,7 @@ fn format_claims(claims: &jwt::Claims<jwt::Actor>) -> serde_json::Value {
 
 pub fn actor_started(
     claims: &jwt::Claims<jwt::Actor>,
-    annotations: &BTreeMap<String, String>,
+    annotations: &Option<BTreeMap<String, String>>,
     instance_id: Uuid,
     image_ref: impl AsRef<str>,
 ) -> serde_json::Value {
@@ -49,7 +49,7 @@ pub fn actor_started(
 
 pub fn actor_stopped(
     claims: &jwt::Claims<jwt::Actor>,
-    annotations: &BTreeMap<String, String>,
+    annotations: &Option<BTreeMap<String, String>>,
     instance_id: Uuid,
 ) -> serde_json::Value {
     json!({
@@ -61,7 +61,7 @@ pub fn actor_stopped(
 
 pub fn actors_started(
     claims: &jwt::Claims<jwt::Actor>,
-    annotations: &BTreeMap<String, String>,
+    annotations: &Option<BTreeMap<String, String>>,
     host_id: impl AsRef<str>,
     count: impl Into<usize>,
     image_ref: impl AsRef<str>,
@@ -78,7 +78,7 @@ pub fn actors_started(
 
 pub fn actors_stopped(
     claims: &jwt::Claims<jwt::Actor>,
-    annotations: &BTreeMap<String, String>,
+    annotations: &Option<BTreeMap<String, String>>,
     host_id: impl AsRef<str>,
     count: NonZeroUsize,
     remaining: usize,

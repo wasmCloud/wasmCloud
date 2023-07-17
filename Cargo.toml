@@ -72,6 +72,7 @@ uuid = { version = "1.3.0", default-features = false }
 wascap = { version = "0.11.0", default-features = false }
 wasmcloud-actor = { path = "./crates/actor" }
 wasmcloud-actor-derive = { path = "./crates/actor/derive" }
+wasmcloud-control-interface = { version = "0.27.0", default-features = false }
 wasmcloud-host = { path = "./crates/host" }
 wasmcloud-runtime = { path = "./crates/runtime" }
 # TODO: Remove fork pin once https://github.com/bytecodealliance/wasmtime/pull/6486 is merged
