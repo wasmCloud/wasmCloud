@@ -39,6 +39,7 @@ ulid = { workspace = true, features = ["std"] }
 url = { workspace = true, features = ["serde"] }
 uuid = { workspace = true, features = ["serde"] }
 wascap = { workspace = true }
+wasmcloud-control-interface = { workspace = true }
 wasmcloud-runtime = { workspace = true }
 
 [dev-dependencies]

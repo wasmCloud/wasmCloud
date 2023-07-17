@@ -38,6 +38,10 @@ use tracing::{debug, error, info, instrument, trace, warn};
 use ulid::Ulid;
 use uuid::Uuid;
 use wascap::jwt;
+use wasmcloud_control_interface::{
+    ActorAuctionRequest, ActorDescription, ScaleActorCommand, StartActorCommand,
+    StartProviderCommand, StopActorCommand, StopHostCommand, UpdateActorCommand,
+};
 use wasmcloud_runtime::{ActorInstancePool, Runtime};
 
 const SUCCESS: &str = r#"{"accepted":true,"error":""}"#;
@@ -303,7 +307,7 @@ type Annotations = BTreeMap<String, String>;
 #[derive(Debug)]
 struct Actor {
     pool: ActorInstancePool,
-    instances: RwLock<HashMap<Annotations, Vec<Arc<ActorInstance>>>>,
+    instances: RwLock<HashMap<Option<Annotations>, Vec<Arc<ActorInstance>>>>,
     actor_ref: String,
 }
 
@@ -541,7 +545,7 @@ impl Lattice {
     async fn instantiate_actor(
         &self,
         claims: &jwt::Claims<jwt::Actor>,
-        annotations: &Annotations,
+        annotations: &Option<Annotations>,
         host_id: impl AsRef<str>,
         actor_ref: impl AsRef<str>,
         count: NonZeroUsize,
@@ -608,7 +612,7 @@ impl Lattice {
     async fn uninstantiate_actor(
         &self,
         claims: &jwt::Claims<jwt::Actor>,
-        annotations: &Annotations,
+        annotations: &Option<Annotations>,
         host_id: impl AsRef<str>,
         instances: &mut Vec<Arc<ActorInstance>>,
         count: NonZeroUsize,
@@ -646,9 +650,9 @@ impl Lattice {
         actor_ref: String,
         count: NonZeroUsize,
         host_id: impl AsRef<str>,
-        annotations: impl Into<Annotations>,
+        annotations: Option<impl Into<Annotations>>,
     ) -> anyhow::Result<&'a mut Arc<Actor>> {
-        let annotations = annotations.into();
+        let annotations = annotations.map(Into::into);
         let claims = actor.claims().context("claims missing")?;
 
         let pool = ActorInstancePool::new(actor.clone(), Some(count));
@@ -712,19 +716,15 @@ impl Lattice {
 
     #[instrument(skip(payload))]
     async fn handle_auction_actor(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
-        #[derive(Deserialize)]
-        struct Command {
-            actor_ref: String,
-            constraints: HashMap<String, String>,
-        }
-        let Command {
+        let ActorAuctionRequest {
             actor_ref,
             constraints,
-        }: Command = serde_json::from_slice(payload.as_ref())
+        } = serde_json::from_slice(payload.as_ref())
             .context("failed to deserialize actor auction command")?;
 
         debug!(actor_ref, ?constraints, "auction actor");
 
+        // TODO: Use `ActorAuctionAck` once https://github.com/wasmCloud/control-interface-client/issues/50 is resolved
         let buf = serde_json::to_vec(&json!({
           "actor_ref": actor_ref,
           "constraints": constraints,
@@ -744,11 +744,7 @@ impl Lattice {
 
     #[instrument(skip(payload))]
     async fn handle_stop(&self, payload: impl AsRef<[u8]>, host_id: &str) -> anyhow::Result<Bytes> {
-        #[derive(Deserialize)]
-        struct Command {
-            timeout: Option<u64>, // ms
-        }
-        let Command { timeout }: Command = serde_json::from_slice(payload.as_ref())
+        let StopHostCommand { timeout, .. } = serde_json::from_slice(payload.as_ref())
             .context("failed to deserialize stop command")?;
 
         debug!(?timeout, "stop host");
@@ -767,17 +763,13 @@ impl Lattice {
         payload: impl AsRef<[u8]>,
         host_id: &str,
     ) -> anyhow::Result<Bytes> {
-        #[derive(Deserialize)]
-        struct Command {
-            actor_id: String,
-            actor_ref: String,
-            count: usize,
-        }
-        let Command {
+        let ScaleActorCommand {
             actor_id,
             actor_ref,
             count,
-        }: Command = serde_json::from_slice(payload.as_ref())
+            annotations,
+            ..
+        } = serde_json::from_slice(payload.as_ref())
             .context("failed to deserialize actor scale command")?;
 
         debug!(actor_id, actor_ref, count, "scale actor");
@@ -793,10 +785,10 @@ impl Lattice {
             actor_id
         };
 
-        let annotations = BTreeMap::default();
+        let annotations = annotations.map(|annotations| annotations.into_iter().collect());
         match (
             self.actors.write().await.entry(actor_id),
-            NonZeroUsize::new(count),
+            NonZeroUsize::new(count.into()),
         ) {
             (hash_map::Entry::Vacant(_), None) => {}
             (hash_map::Entry::Vacant(entry), Some(count)) => {
@@ -871,19 +863,12 @@ impl Lattice {
         payload: impl AsRef<[u8]>,
         host_id: &str,
     ) -> anyhow::Result<Bytes> {
-        #[derive(Deserialize)]
-        struct Command {
-            actor_ref: String,
-            #[serde(default)]
-            count: Option<usize>,
-            #[serde(default)]
-            annotations: Annotations,
-        }
-        let Command {
+        let StartActorCommand {
             actor_ref,
-            count,
             annotations,
-        }: Command = serde_json::from_slice(payload.as_ref())
+            count,
+            ..
+        } = serde_json::from_slice(payload.as_ref())
             .context("failed to deserialize actor launch command")?;
         debug!(actor_ref, ?count, ?annotations, "launch actor");
 
@@ -894,8 +879,8 @@ impl Lattice {
             .context("failed to initialize actor")?;
         let claims = actor.claims().context("claims missing")?;
 
-        let count = count.unwrap_or(1);
-        let Some(count) = NonZeroUsize::new(count) else {
+        let annotations = annotations.map(|annotations| annotations.into_iter().collect());
+        let Some(count) = NonZeroUsize::new(count.into()) else {
             // NOTE: This mimics OTP behavior
             self.publish_event(
                 "actors_started",
@@ -937,47 +922,34 @@ impl Lattice {
         payload: impl AsRef<[u8]>,
         host_id: &str,
     ) -> anyhow::Result<Bytes> {
-        #[derive(Deserialize)]
-        struct Command {
-            actor_ref: String,
-            count: usize,
-            #[serde(default)]
-            annotations: Annotations,
-        }
-        let Command {
+        let StopActorCommand {
             actor_ref,
             count,
             annotations,
-        }: Command = serde_json::from_slice(payload.as_ref())
+            ..
+        } = serde_json::from_slice(payload.as_ref())
             .context("failed to deserialize actor stop command")?;
 
         debug!(actor_ref, count, ?annotations, "stop actor");
 
+        let annotations = annotations.map(|annotations| annotations.into_iter().collect());
         match (
             self.actors.write().await.entry(actor_ref),
-            NonZeroUsize::new(count),
+            NonZeroUsize::new(count.into()),
         ) {
             (hash_map::Entry::Occupied(entry), None) => {
                 self.stop_actor(entry, host_id).await?;
             }
             (hash_map::Entry::Occupied(entry), Some(count)) => {
                 let actor = entry.get();
-                let mut instances = actor.instances.write().await;
-                let current: usize = instances.values().map(Vec::len).sum();
                 let claims = actor.pool.claims().context("claims missing")?;
-                let mut remaining = current;
-                let mut delta = current.min(count.into());
-                for (annotations, instances) in instances.iter_mut() {
-                    let Some(count) = NonZeroUsize::new(instances.len().min(delta)) else {
-                            continue;
-                        };
-                    remaining = remaining
-                        .checked_sub(count.into())
-                        .context("invalid instance length")?;
-                    delta = delta.checked_sub(count.into()).context("invalid delta")?;
+                let mut instances = actor.instances.write().await;
+                if let hash_map::Entry::Occupied(mut entry) = instances.entry(annotations.clone()) {
+                    let instances = entry.get_mut();
+                    let remaining = instances.len().saturating_sub(count.into());
                     self.uninstantiate_actor(
                         claims,
-                        annotations,
+                        &annotations,
                         host_id,
                         instances,
                         count,
@@ -985,11 +957,11 @@ impl Lattice {
                     )
                     .await
                     .context("failed to uninstantiate actor")?;
-                    if delta == 0 {
-                        break;
+                    if remaining == 0 {
+                        entry.remove();
                     }
                 }
-                if remaining == 0 {
+                if instances.len() == 0 {
                     drop(instances);
                     entry.remove();
                 }
@@ -1008,14 +980,15 @@ impl Lattice {
         payload: impl AsRef<[u8]>,
         host_id: &str,
     ) -> anyhow::Result<Bytes> {
-        #[derive(Deserialize)]
-        struct Command {
-            new_actor_ref: String,
-        }
-        let Command { new_actor_ref }: Command = serde_json::from_slice(payload.as_ref())
+        let UpdateActorCommand {
+            actor_id,
+            annotations,
+            new_actor_ref,
+            ..
+        } = serde_json::from_slice(payload.as_ref())
             .context("failed to deserialize actor update command")?;
 
-        debug!(new_actor_ref, "update actor");
+        debug!(actor_id, new_actor_ref, ?annotations, "update actor");
 
         bail!("TODO");
     }
@@ -1026,20 +999,22 @@ impl Lattice {
         payload: impl AsRef<[u8]>,
         host_id: &str,
     ) -> anyhow::Result<Bytes> {
-        #[derive(Deserialize)]
-        struct Command {
-            configuration: String,
-            link_name: String,
-            provider_ref: String,
-        }
-        let Command {
+        let StartProviderCommand {
             configuration,
             link_name,
             provider_ref,
-        }: Command = serde_json::from_slice(payload.as_ref())
+            annotations,
+            ..
+        } = serde_json::from_slice(payload.as_ref())
             .context("failed to deserialize provider launch command")?;
 
-        debug!(configuration, link_name, provider_ref, "launch provider");
+        debug!(
+            configuration,
+            link_name,
+            provider_ref,
+            ?annotations,
+            "launch provider"
+        );
 
         bail!("TODO");
     }
@@ -1068,20 +1043,20 @@ impl Lattice {
                     .iter()
                     .flat_map(|(annotations, instances)| {
                         instances.iter().map(move |actor| {
-                            let instance_id = Uuid::from_u128(actor.id.into());
-                            if let Some(rev) = actor.pool.claims().and_then(|claims| {
-                                claims.metadata.as_ref().map(|jwt::Actor { rev, .. }| rev)
-                            }) {
-                                json!({
-                                    "annotations": annotations,
-                                    "instance_id": instance_id,
-                                    "revision": rev,
-                                })
-                            } else {
-                                json!({
-                                    "annotations": annotations,
-                                    "instance_id": instance_id,
-                                })
+                            let instance_id = Uuid::from_u128(actor.id.into()).to_string();
+                            let revision = actor
+                                .pool
+                                .claims()
+                                .and_then(|claims| claims.metadata.as_ref())
+                                .and_then(|jwt::Actor { rev, .. }| *rev)
+                                .unwrap_or_default();
+                            let annotations = annotations
+                                .as_ref()
+                                .map(|annotations| annotations.clone().into_iter().collect());
+                            wasmcloud_control_interface::ActorInstance {
+                                annotations,
+                                instance_id,
+                                revision,
                             }
                         })
                     })
@@ -1089,28 +1064,22 @@ impl Lattice {
                 if instances.is_empty() {
                     return None;
                 }
-                if let Some(name) = actor
+                let name = actor
                     .pool
                     .claims()
                     .and_then(|claims| claims.metadata.as_ref())
                     .and_then(|metadata| metadata.name.as_ref())
-                {
-                    Some(json!({
-                        "id": id,
-                        "image_ref": actor.actor_ref,
-                        "instances": instances,
-                        "name": name,
-                    }))
-                } else {
-                    Some(json!({
-                        "id": id,
-                        "image_ref": actor.actor_ref,
-                        "instances": instances,
-                    }))
-                }
+                    .cloned();
+                Some(ActorDescription {
+                    id: id.into(),
+                    image_ref: Some(actor.actor_ref.clone()),
+                    instances,
+                    name,
+                })
             })
             .collect()
             .await;
+        // TODO: Use `HostInventory` once https://github.com/wasmCloud/control-interface-client/issues/51 is resolved
         let buf = serde_json::to_vec(&json!({
           "host_id": self.host_key.public_key(),
           "issuer": self.cluster_key.public_key(),
