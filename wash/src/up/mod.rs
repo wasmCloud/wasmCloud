@@ -476,7 +476,7 @@ pub(crate) async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result
     let version = wasmcloud_opts.wasmcloud_version.clone();
 
     let host_env = configure_host_env(nats_opts, wasmcloud_opts).await;
-    let wasmcloud_child = match start_wasmcloud_host(
+    let mut wasmcloud_child = match start_wasmcloud_host(
         &wasmcloud_executable,
         std::process::Stdio::null(),
         stderr,
@@ -511,13 +511,15 @@ pub(crate) async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result
 
     spinner.finish_and_clear();
     if !cmd.detached {
-        run_wasmcloud_interactive(wasmcloud_child, host_port, output_kind).await?;
+        run_wasmcloud_interactive(&mut wasmcloud_child, host_port, output_kind).await?;
 
         let spinner = Spinner::new(&output_kind)?;
         spinner.update_spinner_message(
-            // wasmCloud and NATS both exit immediately when sent SIGINT
+            // wadm and NATS both exit immediately when sent SIGINT
             "CTRL+c received, stopping wasmCloud, wadm, and NATS...".to_string(),
         );
+
+        stop_wasmcloud(wasmcloud_child).await?;
 
         if wadm_process.is_some() {
             // remove wadm pidfile, the process is stopped automatically by CTRL+c
@@ -601,7 +603,7 @@ async fn start_nats(install_dir: &Path, nats_binary: &Path, nats_opts: NatsOpts)
 
 /// Helper function to run wasmCloud in interactive mode
 async fn run_wasmcloud_interactive(
-    mut wasmcloud_child: Child,
+    wasmcloud_child: &mut Child,
     port: u16,
     output_kind: OutputKind,
 ) -> Result<()> {
@@ -646,7 +648,27 @@ async fn run_wasmcloud_interactive(
     if let Some(handle) = handle {
         handle.abort()
     };
+    Ok(())
+}
 
+#[cfg(all(unix))]
+async fn stop_wasmcloud(mut wasmcloud_child: Child) -> Result<()> {
+    use nix::sys::signal::{kill, Signal};
+    use nix::unistd::Pid;
+
+    if let Some(pid) = wasmcloud_child.id() {
+        // Send the SIGTERM signal to ensure that wasmcloud is graceful shutdown.
+        kill(Pid::from_raw(pid as i32), Signal::SIGTERM)?;
+
+        // TODO(iceber): the timeout for the SIGTERM could be added in the future,
+        // but it doesn't look like it's needed yet.
+        wasmcloud_child.wait().await?;
+    }
+    Ok(())
+}
+
+#[cfg(target_family = "windows")]
+async fn stop_wasmcloud(mut wasmcloud_child: Child) -> Result<()> {
     wasmcloud_child.kill().await?;
     Ok(())
 }
