@@ -58,7 +58,7 @@ pub fn export_actor(input: TokenStream) -> TokenStream {
             let op = match String::from_utf8(op) {
                 Ok(op) => op,
                 Err(e) => {
-                    let e = format!("operation is not valid UTF-8: {e}");
+                    let e = format!("operation is not valid UTF-8: {}", e);
                     unsafe {
                         __guest_error(e.as_ptr(), e.len() as _);
                     }
@@ -76,7 +76,7 @@ pub fn export_actor(input: TokenStream) -> TokenStream {
                         return 1
                     }
                     Some(Err(e)) => {
-                        let e = format!("failed to call `{op}`: {e}");
+                        let e = format!("failed to call `{}`: {}", op, e);
                         unsafe {
                             __guest_error(e.as_ptr(), e.len() as _);
                         }
@@ -84,8 +84,9 @@ pub fn export_actor(input: TokenStream) -> TokenStream {
                     }
                     None => {},
                 }
-            )*
-            let e = format!("no handler found for operation `{op}`");
+            )*;
+
+            let e = format!("no handler found for operation `{}`", op);
             unsafe {
                 __guest_error(e.as_ptr(), e.len() as _);
             }
