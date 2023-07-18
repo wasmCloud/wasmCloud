@@ -16,15 +16,24 @@
   inputs.nixify.inputs.fenix.follows = "fenix";
   inputs.nixify.url = github:rvolosatovs/nixify;
   inputs.wash.url = github:wasmcloud/wash/v0.18.0;
+  inputs.wasi-preview1-command-component-adapter.flake = false;
+  inputs.wasi-preview1-command-component-adapter.url = https://github.com/bytecodealliance/wasmtime/releases/download/v10.0.1/wasi_snapshot_preview1.command.wasm;
+  inputs.wasi-preview1-reactor-component-adapter.flake = false;
+  inputs.wasi-preview1-reactor-component-adapter.url = https://github.com/bytecodealliance/wasmtime/releases/download/v10.0.1/wasi_snapshot_preview1.reactor.wasm;
   inputs.wit-deps.url = github:bytecodealliance/wit-deps/v0.3.2;
 
   outputs = {
     nixify,
     wash,
+    wasi-preview1-command-component-adapter,
+    wasi-preview1-reactor-component-adapter,
     wit-deps,
     ...
   }:
-    with nixify.lib;
+    with nixify.lib; let
+      WASI_PREVIEW1_COMMAND_COMPONENT_ADAPTER = wasi-preview1-command-component-adapter;
+      WASI_PREVIEW1_REACTOR_COMPONENT_ADAPTER = wasi-preview1-reactor-component-adapter;
+    in
       rust.mkFlake {
         src = ./.;
 
@@ -42,7 +51,6 @@
           "CODEOWNERS"
           "CONTRIBUTING.md"
           "CONTRIBUTION_LADDER.md"
-          "flake.lock"
           "flake.nix"
           "garnix.yaml"
           "GOVERNANCE.md"
@@ -80,19 +88,20 @@
 
           cargoLock.actors-rust = readTOML ./tests/actors/rust/Cargo.lock;
           cargoLock.tcp-component-command = readTOML ./tests/actors/rust/tcp-component-command/Cargo.lock;
-          cargoLock.wasi-command-adapter = readTOML ./tests/wasi-command-adapter/Cargo.lock;
-          cargoLock.wasi-reactor-adapter = readTOML ./tests/wasi-reactor-adapter/Cargo.lock;
 
           lockPackages =
             cargoLock.root.package
             ++ cargoLock.actors-rust.package
-            ++ cargoLock.tcp-component-command.package
-            ++ cargoLock.wasi-command-adapter.package
-            ++ cargoLock.wasi-reactor-adapter.package;
+            ++ cargoLock.tcp-component-command.package;
         in
           with pkgsCross;
           with pkgs.lib;
             {
+              inherit
+                WASI_PREVIEW1_COMMAND_COMPONENT_ADAPTER
+                WASI_PREVIEW1_REACTOR_COMPONENT_ADAPTER
+                ;
+
               cargoLockParsed =
                 cargoLock.root
                 // {
@@ -123,13 +132,32 @@
             };
 
         withPackages = {
-          packages,
           hostRustToolchain,
+          packages,
+          pkgs,
           ...
-        }:
+        }: let
+          mkAdapter = name: src:
+            pkgs.stdenv.mkDerivation {
+              inherit
+                name
+                src
+                ;
+
+              dontUnpack = true;
+              dontBuild = true;
+
+              installPhase = ''
+                install $src $out
+              '';
+            };
+        in
           packages
           // {
             rust = hostRustToolchain;
+
+            wasi-preview1-command-component-adapter = mkAdapter "wasi-preview1-command-component-adapter" wasi-preview1-command-component-adapter;
+            wasi-preview1-reactor-component-adapter = mkAdapter "wasi-preview1-reactor-component-adapter" wasi-preview1-reactor-component-adapter;
           };
 
         withDevShells = {

@@ -992,6 +992,8 @@
         "fenix": "fenix",
         "nixify": "nixify",
         "wash": "wash",
+        "wasi-preview1-command-component-adapter": "wasi-preview1-command-component-adapter",
+        "wasi-preview1-reactor-component-adapter": "wasi-preview1-reactor-component-adapter",
         "wit-deps": "wit-deps"
       }
     },
@@ -1266,6 +1268,30 @@
         "ref": "v0.18.0",
         "repo": "wash",
         "type": "github"
+      }
+    },
+    "wasi-preview1-command-component-adapter": {
+      "flake": false,
+      "locked": {
+        "narHash": "sha256-1/FwdzqQ9KaeFlVpyShegG59nKN5GHtRSmgbEvQuJ4o=",
+        "type": "file",
+        "url": "https://github.com/bytecodealliance/wasmtime/releases/download/v10.0.1/wasi_snapshot_preview1.command.wasm"
+      },
+      "original": {
+        "type": "file",
+        "url": "https://github.com/bytecodealliance/wasmtime/releases/download/v10.0.1/wasi_snapshot_preview1.command.wasm"
+      }
+    },
+    "wasi-preview1-reactor-component-adapter": {
+      "flake": false,
+      "locked": {
+        "narHash": "sha256-kjBuH6v/SHAWMyTz5Mize56w71tK+pehqDMD/MuJaEQ=",
+        "type": "file",
+        "url": "https://github.com/bytecodealliance/wasmtime/releases/download/v10.0.1/wasi_snapshot_preview1.reactor.wasm"
+      },
+      "original": {
+        "type": "file",
+        "url": "https://github.com/bytecodealliance/wasmtime/releases/download/v10.0.1/wasi_snapshot_preview1.reactor.wasm"
       }
     },
     "wit-deps": {
