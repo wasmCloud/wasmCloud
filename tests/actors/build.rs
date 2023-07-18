@@ -4,6 +4,10 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
 
+use wasmcloud_component_adapters::{
+    WASI_PREVIEW1_COMMAND_COMPONENT_ADAPTER, WASI_PREVIEW1_REACTOR_COMPONENT_ADAPTER,
+};
+
 use anyhow::{bail, ensure, Context};
 use futures::try_join;
 use serde::Deserialize;
@@ -111,44 +115,6 @@ impl DerefArtifact for Option<(String, Vec<PathBuf>)> {
     fn deref_artifact(&self) -> Option<(&str, &[PathBuf])> {
         self.as_ref()
             .map(|(pkg, paths)| (pkg.as_str(), paths.as_slice()))
-    }
-}
-
-async fn install_wasi_reactor_adapter(out_dir: impl AsRef<Path>) -> anyhow::Result<()> {
-    let mut artifacts = build_artifacts(
-        [
-            "--manifest-path=../wasi-reactor-adapter/Cargo.toml",
-            "-Z=bindeps",
-        ],
-        |name, kind| name == "wasi_snapshot_preview1" && kind.contains(&CrateType::Cdylib),
-    )
-    .await
-    .context("failed to build `wasi-reactor-adapter` crate")?;
-    match (artifacts.next().deref_artifact(), artifacts.next()) {
-        (Some(("wasi_snapshot_preview1", [path])), None) => {
-            copy(path, out_dir.as_ref().join("wasi-reactor-adapter.wasm")).await?;
-            Ok(())
-        }
-        _ => bail!("invalid `wasi-reactor-adapter` build artifacts"),
-    }
-}
-
-async fn install_wasi_command_adapter(out_dir: impl AsRef<Path>) -> anyhow::Result<()> {
-    let mut artifacts = build_artifacts(
-        [
-            "--manifest-path=../wasi-command-adapter/Cargo.toml",
-            "-Z=bindeps",
-        ],
-        |name, kind| name == "wasi_snapshot_preview1" && kind.contains(&CrateType::Cdylib),
-    )
-    .await
-    .context("failed to build `wasi-command-adapter` crate")?;
-    match (artifacts.next().deref_artifact(), artifacts.next()) {
-        (Some(("wasi_snapshot_preview1", [path])), None) => {
-            copy(path, out_dir.as_ref().join("wasi-command-adapter.wasm")).await?;
-            Ok(())
-        }
-        _ => bail!("invalid `wasi-command-adapter` build artifacts"),
     }
 }
 
@@ -322,8 +288,6 @@ fn encode_component(module: impl AsRef<[u8]>, adapter: &[u8]) -> anyhow::Result<
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    println!("cargo:rerun-if-changed=../wasi-command-adapter");
-    println!("cargo:rerun-if-changed=../wasi-reactor-adapter");
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=rust");
 
@@ -331,22 +295,15 @@ async fn main() -> anyhow::Result<()> {
         .map(PathBuf::from)
         .context("failed to lookup `OUT_DIR`")?;
     try_join!(
-        install_wasi_reactor_adapter(&out_dir),
-        install_wasi_command_adapter(&out_dir),
         install_rust_wasm32_unknown_unknown_actors(&out_dir),
         install_rust_wasm32_wasi_actors(&out_dir),
     )?;
-    let (reactor_adapter, command_adapter) = try_join!(
-        fs::read(out_dir.join("wasi-reactor-adapter.wasm")),
-        fs::read(out_dir.join("wasi-command-adapter.wasm"))
-    )
-    .context("failed to read adapters")?;
     for name in ["builtins-compat-reactor", "builtins-component-reactor"] {
         let path = out_dir.join(format!("rust-{name}.wasm"));
         let module = fs::read(&path)
             .await
             .with_context(|| format!("failed to read `{}`", path.display()))?;
-        let component = encode_component(module, &reactor_adapter)
+        let component = encode_component(module, WASI_PREVIEW1_REACTOR_COMPONENT_ADAPTER)
             .with_context(|| format!("failed to encode `{}`", path.display()))?;
 
         let path = out_dir.join(format!("rust-{name}-preview2.wasm"));
@@ -359,7 +316,7 @@ async fn main() -> anyhow::Result<()> {
         let module = fs::read(&path)
             .await
             .with_context(|| format!("failed to read `{}`", path.display()))?;
-        let component = encode_component(module, &command_adapter)
+        let component = encode_component(module, WASI_PREVIEW1_COMMAND_COMPONENT_ADAPTER)
             .with_context(|| format!("failed to encode `{}`", path.display()))?;
 
         let path = out_dir.join(format!("rust-{name}-preview2.wasm"));

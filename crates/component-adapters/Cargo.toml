@@ -1,0 +1,27 @@
+[package]
+name = "wasmcloud-component-adapters"
+version = "0.1.0"
+description = "wasmCloud component adapters"
+
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[badges.maintenance]
+status = "actively-developed"
+
+[build-dependencies]
+anyhow = { workspace = true, features = ["std"] }
+base64 = { workspace = true }
+futures = { workspace = true, features = ["async-await", "std"] }
+nix-nar = { workspace = true }
+once_cell = { workspace = true }
+reqwest = { workspace = true, features = ["rustls-tls", "stream"] }
+serde = { workspace = true }
+serde_json = { workspace = true, features = ["std"] }
+sha2 = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["fs", "macros", "rt-multi-thread"] }
+tokio-util = { workspace = true, features = ["io"] }

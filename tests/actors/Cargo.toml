@@ -10,4 +10,5 @@ futures = { workspace = true, features = ["alloc", "async-await"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["fs", "macros", "process", "rt-multi-thread"] }
+wasmcloud-component-adapters = { workspace = true }
 wit-component = { workspace = true }
