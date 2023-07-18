@@ -61,6 +61,7 @@ notify = "6.0.1"
 rust-embed = "6.8.1"
 warp = "0.3.5"
 warp-embed = "0.4.0"
+nix = { workspace = true }
 
 [dev-dependencies]
 reqwest = { workspace = true, features = ["json", "rustls-tls"] }
@@ -75,7 +76,6 @@ futures = { workspace = true }
 # serial_test ensures serial execution when running with cargo, '<test name>_serial' works with nextest
 serial_test = { workspace = true }
 rand = "0.8.5"
-nix = { version = "0.26.2", default-features = false, features = [ "signal" ] }
 
 [[bin]]
 bench = true
@@ -151,3 +151,4 @@ weld-codegen = "0.7.0"
 which = "4.4.0"
 chrono = "0.4.26"
 clap_complete = "4.3.2"
+nix = { version = "0.26.2", default-features = false, features = ["signal"] }
