@@ -25,7 +25,8 @@
         name = "wash";
         src = ./.;
 
-        targets.wasm32-wasi = false; # `wash` does not compile for WASI
+        targets.wasm32-unknown-unknown = false; # `wash` does not compile for wasm32-unknown-unknown
+        targets.wasm32-wasi = false; # `wash` does not compile for wasm32-wasi
 
         doCheck = false; # testing is performed in checks via `nextest`
 
