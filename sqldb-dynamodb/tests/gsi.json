@@ -1,0 +1,42 @@
+[
+    {
+        "IndexName": "GameTitleIndex",
+        "KeySchema": [
+            {
+                "AttributeName": "GameTitle",
+                "KeyType": "HASH"
+            },
+            {
+                "AttributeName": "TopScore",
+                "KeyType": "RANGE"
+            }
+        ],
+        "Projection": {
+            "ProjectionType": "ALL"
+        },
+        "ProvisionedThroughput": {
+            "ReadCapacityUnits": 10,
+            "WriteCapacityUnits": 5
+        }
+    },
+    {
+        "IndexName": "GameDateIndex",
+        "KeySchema": [
+            {
+                "AttributeName": "GameTitle",
+                "KeyType": "HASH"
+            },
+            {
+                "AttributeName": "Date",
+                "KeyType": "RANGE"
+            }
+        ],
+        "Projection": {
+            "ProjectionType": "ALL"
+        },
+        "ProvisionedThroughput": {
+            "ReadCapacityUnits": 5,
+            "WriteCapacityUnits": 5
+        }
+    }
+]
