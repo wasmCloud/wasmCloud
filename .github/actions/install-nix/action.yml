@@ -16,6 +16,9 @@ runs:
       extra-conf: |
         accept-flake-config = true
 
+  # Setup magic Nix cache
+  - uses: DeterminateSystems/magic-nix-cache-action@v2
+
   # Setup Cachix cache
   - uses: cachix/cachix-action@v12
     continue-on-error: true
