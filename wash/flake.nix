@@ -13,10 +13,12 @@
   description = "wash - wasmCloud Shell";
 
   inputs.nixify.url = github:rvolosatovs/nixify;
+  inputs.wasmcloud.url = github:wasmcloud/wasmCloud;
 
   outputs = {
     self,
     nixify,
+    wasmcloud,
   }:
     with nixify.lib;
       rust.mkFlake {
@@ -39,6 +41,9 @@
         } @ args:
           with pkgsCross;
           with pkgs.lib; {
+            WASI_PREVIEW1_COMMAND_COMPONENT_ADAPTER = wasmcloud.packages.${pkgs.stdenv.system}.wasi-preview1-command-component-adapter;
+            WASI_PREVIEW1_REACTOR_COMPONENT_ADAPTER = wasmcloud.packages.${pkgs.stdenv.system}.wasi-preview1-reactor-component-adapter;
+
             buildInputs =
               buildInputs
               ++ optionals stdenv.hostPlatform.isDarwin [
