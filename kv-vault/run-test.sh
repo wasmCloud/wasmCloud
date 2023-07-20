@@ -30,7 +30,7 @@ docker run --rm -d \
   --cap-add=IPC_LOCK \
   --name ${CONTAINER_NAME} \
   -p 127.0.0.1:${PORT}:8200 \
-  vault:latest
+  vault:1.13.3
 sleep 2
 export VAULT_TOKEN="$(docker logs ${CONTAINER_NAME} 2>&1 | grep 'Root Token:' | sed -E 's/Root Token: //')"
 
