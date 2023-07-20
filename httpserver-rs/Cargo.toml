@@ -3,7 +3,7 @@ name = "wasmcloud-provider-httpserver"
 description = "Http server for wasmcloud, using warp. This package provides a library, and a capability provider with the 'wasmcloud:httpserver' contract."
 license = "Apache-2.0"
 authors = ["wasmCloud Team"]
-version = "0.18.2"
+version = "0.19.0"
 edition = "2021"
 
 [dependencies]
@@ -26,13 +26,13 @@ toml = "0.7"
 tracing = "0.1.34"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 warp = { version="0.3", features=["tls"] }
-wasmbus-rpc = { version = "0.13", features = ["otel"]}
+wasmbus-rpc = { version = "0.14", features = ["otel"] }
 
 [dev-dependencies]
 assert_matches = "1.5"
 blake2 = "0.10.4"
 reqwest = { version = "0.11", features = ["json"]}
-wasmcloud-test-util = "0.8"
+wasmcloud-test-util = "0.9"
 
 [lib]
 name = "wasmcloud_provider_httpserver"
