@@ -1,11 +1,11 @@
 [package]
 name = "wasmcloud-provider-lattice-controller"
 description = "Capability provider that allows actors to interact with lattice control interfaces"
-version = "0.11.1"
+version = "0.12.0"
 edition = "2021"
 
 [dependencies]
-async-nats = "0.29"
+async-nats = "0.30"
 async-trait = "0.1"
 atty = "0.2"
 base64 = "0.13"
@@ -22,13 +22,13 @@ toml = "0.5"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 wascap = "0.9.0"
-wasmbus-rpc = { version = "0.13", features = ["otel"] }
-wasmcloud-control-interface = "0.25"
-wasmcloud-interface-lattice-control = "0.18"
+wasmbus-rpc = { version = "0.14", features = ["otel"] }
+wasmcloud-control-interface = "0.27"
+wasmcloud-interface-lattice-control = "0.19"
 
 # test dependencies
 [dev-dependencies]
-wasmcloud-test-util = "0.8"
+wasmcloud-test-util = "0.9"
 
 [[bin]]
 name = "lattice-controller"
