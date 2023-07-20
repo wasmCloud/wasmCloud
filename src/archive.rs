@@ -36,6 +36,7 @@ pub struct ProviderArchive {
     rev: Option<i32>,
     ver: Option<String>,
     claims: Option<Claims<CapabilityProvider>>,
+    json_schema: Option<serde_json::Value>,
 }
 
 impl ProviderArchive {
@@ -55,12 +56,22 @@ impl ProviderArchive {
             rev,
             ver,
             claims: None,
+            json_schema: None,
         }
     }
 
     /// Adds a native library file (.so, .dylib, .dll) to the archive for a given target string
     pub fn add_library(&mut self, target: &str, input: &[u8]) -> Result<()> {
         self.libraries.insert(target.to_string(), input.to_vec());
+
+        Ok(())
+    }
+
+    /// Sets a JSON schema for this provider's link definition specification. This will be injected
+    /// into the claims written to a provider's PAR file, so you'll need to do this after instantiation
+    /// and prior to writing
+    pub fn set_schema(&mut self, schema: serde_json::Value) -> Result<()> {
+        self.json_schema = Some(schema);
 
         Ok(())
     }
@@ -80,6 +91,12 @@ impl ProviderArchive {
     /// or if the archive was loaded from an existing file
     pub fn claims(&self) -> Option<Claims<CapabilityProvider>> {
         self.claims.clone()
+    }
+
+    /// Obtains the JSON schema if one was either set explicitly on the structure or loaded from
+    /// claims in the PAR
+    pub fn schema(&self) -> Option<serde_json::Value> {
+        self.json_schema.clone()
     }
 
     /// Attempts to read a Provider Archive (PAR) file's bytes to analyze and verify its contents.
@@ -226,6 +243,7 @@ impl ProviderArchive {
             let vendor = metadata.vendor.to_string();
             let rev = metadata.rev;
             let ver = metadata.ver.clone();
+            let json_schema = metadata.config_schema.clone();
 
             validate_hashes(&libraries, c.as_ref().unwrap())?;
 
@@ -237,6 +255,7 @@ impl ProviderArchive {
                 rev,
                 ver,
                 claims: c,
+                json_schema,
             })
         } else {
             Err("No claims found embedded in provider archive.".into())
@@ -273,7 +292,7 @@ impl ProviderArchive {
             Box::new(file) as Box<dyn AsyncWrite + Send + Sync + Unpin>
         });
 
-        let claims = Claims::<CapabilityProvider>::new(
+        let mut claims = Claims::<CapabilityProvider>::new(
             self.name.to_string(),
             issuer.public_key(),
             subject.public_key(),
@@ -283,6 +302,9 @@ impl ProviderArchive {
             self.ver.clone(),
             generate_hashes(&self.libraries),
         );
+        if let Some(schema) = self.json_schema.clone() {
+            claims.metadata.as_mut().unwrap().config_schema = Some(schema);
+        }
         self.claims = Some(claims.clone());
 
         let claims_file = claims.encode(issuer)?;
@@ -363,6 +385,7 @@ fn sha256_digest<R: Read>(mut reader: R) -> Result<Digest> {
 #[cfg(test)]
 mod test {
     use super::*;
+    use serde_json::json;
     use wascap::prelude::KeyPair;
 
     #[tokio::test]
@@ -434,6 +457,7 @@ mod test {
         arch.add_library("aarch64-linux", b"blahblah")?;
         arch.add_library("x86_64-linux", b"bloobloo")?;
         arch.add_library("x86_64-macos", b"blarblar")?;
+        arch.set_schema(json!({"property":"foo"}))?;
 
         let issuer = KeyPair::new_account();
         let subject = KeyPair::new_service();
@@ -470,10 +494,19 @@ mod test {
             "Should have loaded only one binary"
         );
         assert_eq!(
-            arch.claims().unwrap().subject,
+            arch2.claims().unwrap().subject,
             subject.public_key(),
             "Claims should still load"
         );
+
+        let json = arch2
+            .claims()
+            .unwrap()
+            .metadata
+            .unwrap()
+            .config_schema
+            .unwrap();
+        assert_eq!(json, json!({"property":"foo"}));
 
         let mut buf2 = Vec::new();
         let mut f2 = File::open(&firstpath).await?;

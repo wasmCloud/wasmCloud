@@ -1,6 +1,6 @@
 [package]
 name = "provider-archive"
-version = "0.7.0"
+version = "0.8.0"
 authors = ["wasmCloud Team"]
 edition = "2021"
 description = "Library for reading and writing wasmCloud capability provider archive files"
@@ -19,6 +19,7 @@ tokio = { version = "1.17.0", features = ["io-util"], default-features = false }
 async-compression = { version = "0.3", default-features = false, features = ["tokio", "gzip"] }
 tokio-tar = "0.3"
 tokio-stream = "0.1"
+serde_json = "1.0"
 
 [dev-dependencies]
 # Turn on the test feature for our tests

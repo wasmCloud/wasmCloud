@@ -59,3 +59,4 @@ The following is a list of the custom claims that will appear in the `wascap` se
 * `revision` - A monotonically increasing revision value. This value will be used to retrieve / store version-specific files.
 * `config_schema` - An optional JSON schema that describes the configuration structure for this capability provider. 
 
+Note that when using this library to create or append to a provider archive the claims for the JWT are _not generated until write-time_ because the hash values for the files are not known until the files are written to the archive. In other words, if you instantiate a `ProviderArchive`, accessing `claims()` will return `None` until after you've called `write`.
