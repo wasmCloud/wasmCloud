@@ -1,0 +1,28 @@
+# configuration for sqldb test
+
+# name of compiled binary (usually project name unless overridden in [[bin]]
+# Required
+bin_path = "target/debug/sqldb-postgres"
+
+# set RUST_LOG environment variable (default "info")
+rust_log = "debug"
+
+# set RUST_BACKTRACE (default: 0)
+rust_backtrace = "1"
+
+# nats should be running. Uncomment to override the default url
+nats_url = "127.0.0.1:4222"
+
+# lattice prefix (default "default")
+#lattice_rpc_prefix = "default"
+
+# link name (default: "default")
+#link_name = "default"
+
+# name of contract under test
+contract_id = "wasmcloud:sqldb"
+
+# values here will be passed as config_b64
+[values]
+uri = "postgresql://postgres:postgres@127.0.0.1:5433/postgres"
+pool = { max_connections=2, min_idle=1, max_lifetime_secs=300, idle_timeout_secs=300 }
