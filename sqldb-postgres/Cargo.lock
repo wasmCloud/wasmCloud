@@ -2370,23 +2370,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "62bb4feee49fdd9f707ef802e22365a35de4b7b299de4763d44bfea899442ff9"
 
 [[package]]
-name = "smithy-bindgen"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72465f7ba4112b55816e2c9eac7b36204ea1c94f5fd1b12996980d9e1785dfc5"
-dependencies = [
- "atelier_json",
- "proc-macro-error",
- "proc-macro2",
- "quote",
- "serde",
- "serde_json",
- "syn 1.0.109",
- "tracing",
- "weld-codegen",
-]
-
-[[package]]
 name = "socket2"
 version = "0.4.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3208,6 +3191,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasmcloud-interface-testing"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f673d4742a3199016dd7941f776b1b1d8be42ca4809f7ef00e0a7bd18e93536f"
+dependencies = [
+ "async-trait",
+ "regex",
+ "rmp-serde",
+ "serde",
+ "serde_bytes",
+ "serde_json",
+ "wasmbus-rpc",
+ "weld-codegen",
+]
+
+[[package]]
 name = "wasmcloud-provider-sqldb-postgres"
 version = "0.6.0"
 dependencies = [
@@ -3240,9 +3239,9 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-test-util"
-version = "0.9.0"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b7c679c97b70edc118561c8b47dda2b2a0cf66418bbc4ac87cabd86006814a23"
+checksum = "90fdfd194000a791d207ee0932acba35dfca35b2bae584317b315a01550ae816"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3254,11 +3253,11 @@ dependencies = [
  "serde",
  "serde_bytes",
  "serde_json",
- "smithy-bindgen",
  "termcolor",
  "tokio",
  "toml 0.7.6",
  "wasmbus-rpc",
+ "wasmcloud-interface-testing",
 ]
 
 [[package]]

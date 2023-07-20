@@ -32,7 +32,7 @@ wasmbus-rpc = { version = "0.14", features = ["otel"] }
 assert_matches = "1.5"
 blake2 = "0.10.4"
 reqwest = { version = "0.11", features = ["json"]}
-wasmcloud-test-util = "0.9"
+wasmcloud-test-util = "0.10"
 
 [lib]
 name = "wasmcloud_provider_httpserver"
