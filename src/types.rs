@@ -9,6 +9,9 @@ pub struct ActorAuctionAck {
     /// The host ID of the "bidder" for this auction.
     #[serde(default)]
     pub host_id: String,
+    /// Constraints that were used in the auction
+    #[serde(default)]
+    pub constraints: HashMap<String, String>,
 }
 
 /// A request to locate suitable hosts for a given actor
@@ -119,6 +122,12 @@ pub struct HostInventory {
     /// The host's unique ID
     #[serde(default)]
     pub host_id: String,
+    /// The host's cluster issuer public key
+    #[serde(default)]
+    pub issuer: String,
+    /// The host's human-readable friendly name
+    #[serde(default)]
+    pub friendly_name: String,
     /// The host's labels
     pub labels: LabelsMap,
     /// Providers running on this host
