@@ -2587,13 +2587,14 @@ dependencies = [
 
 [[package]]
 name = "provider-archive"
-version = "0.7.0"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f02e3a69a868e932a76ee5e026ae1923e761f157aaf3ad0b9d4906eaebf62fc"
+checksum = "b3e73940ae67588b3e7f1d29798ee5b76b32217fcfb3d9f64d28bd5d6d72c113"
 dependencies = [
  "async-compression",
  "data-encoding",
  "ring",
+ "serde_json",
  "tokio",
  "tokio-stream",
  "tokio-tar",

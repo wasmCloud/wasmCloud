@@ -42,6 +42,15 @@ pub(crate) struct CreateCommand {
     #[clap(long = "version")]
     version: Option<String>,
 
+    /// Optional path to a JSON schema describing the link definition specification for this provider.
+    #[clap(
+        short = 'j',
+        long = "schema",
+        env = "WASH_JSON_SCHEMA",
+        hide_env_values = true
+    )]
+    schema: Option<PathBuf>,
+
     /// Location of key files for signing. Defaults to $WASH_KEYS ($HOME/.wash/keys)
     #[clap(
         short = 'd',
@@ -258,6 +267,15 @@ pub(crate) async fn handle_create(
             extension
         ),
     };
+    if let Some(ref schema) = cmd.schema {
+        let bytes = std::fs::read(schema)?;
+        par.set_schema(
+            serde_json::from_slice::<serde_json::Value>(&bytes)
+                .with_context(|| "Unable to parse JSON from file contents".to_string())?,
+        )
+        .map_err(convert_error)
+        .with_context(|| format!("Error parsing JSON schema from file '{:?}'", schema))?;
+    }
 
     par.write(&outfile, &issuer, &subject, cmd.compress)
         .await
@@ -387,6 +405,7 @@ mod test {
                 vendor,
                 revision,
                 version,
+                schema,
                 directory,
                 issuer,
                 subject,
@@ -408,6 +427,7 @@ mod test {
                 assert_eq!(destination.unwrap(), "./test.par.gz");
                 assert_eq!(revision.unwrap(), 1);
                 assert_eq!(version.unwrap(), "1.11.111");
+                assert_eq!(schema, None);
                 assert!(disable_keygen);
                 assert!(compress);
             }
@@ -446,6 +466,7 @@ mod test {
                 vendor,
                 revision,
                 version,
+                schema,
                 directory,
                 issuer,
                 subject,
@@ -467,6 +488,7 @@ mod test {
                 assert_eq!(destination.unwrap(), "./test.par.gz");
                 assert_eq!(revision.unwrap(), 1);
                 assert_eq!(version.unwrap(), "1.11.111");
+                assert_eq!(schema, None);
                 assert!(!disable_keygen);
                 assert!(!compress);
             }
