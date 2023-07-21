@@ -240,7 +240,7 @@ async fn main() {
 
     let res: Result<CommandOutput> = match cli.command {
         CliCommand::App(app_cli) => app::handle_command(app_cli, output_kind).await,
-        CliCommand::Build(build_cli) => build::handle_command(build_cli),
+        CliCommand::Build(build_cli) => build::handle_command(build_cli).await,
         CliCommand::Call(call_cli) => call::handle_command(call_cli.command()).await,
         CliCommand::Capture(capture_cli) => {
             if !cli.experimental {
