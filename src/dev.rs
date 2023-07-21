@@ -258,7 +258,10 @@ pub async fn handle_command(
     );
 
     // Build the project
-    let artifact_path = build_project(&project_cfg, sign_cfg.clone())?.canonicalize()?;
+    let artifact_path = build_project(&project_cfg, sign_cfg.clone())
+        .context("failed to build project")?
+        .canonicalize()
+        .context("failed to canonicalize path")?;
     eprintln!(
         "✅ successfully built project at [{}]",
         artifact_path.display()
@@ -353,7 +356,14 @@ pub async fn handle_command(
         select! {
             _ = reload_rx.recv() => {
                 pause_watch.store(true, Ordering::SeqCst);
-                run_dev_loop(&project_cfg, ModuleId::from_str(&actor_id)?, &actor_ref, ServerId::from_str(&host.id)?, &ctl_client, sign_cfg.clone()).await?;
+                run_dev_loop(
+                    &project_cfg,
+                    ModuleId::from_str(&actor_id)?,
+                    &actor_ref,
+                    ServerId::from_str(&host.id)?,
+                    &ctl_client,
+                    sign_cfg.clone(),
+                ).await?;
                 pause_watch.store(false, Ordering::SeqCst);
                 eprintln!("👀 watching for file changes (press Ctrl+c to stop)...");
             },
