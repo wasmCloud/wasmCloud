@@ -27,7 +27,7 @@ wasmbus-rpc = { version = "0.14", features = ["otel"] }
 
 # test dependencies
 [dev-dependencies]
-wasmcloud-test-util = "0.9"
+wasmcloud-test-util = "0.10"
 
 [[bin]]
 name = "httpclient"

@@ -28,7 +28,7 @@ wasmcloud-interface-lattice-control = "0.19"
 
 # test dependencies
 [dev-dependencies]
-wasmcloud-test-util = "0.9"
+wasmcloud-test-util = "0.10"
 
 [[bin]]
 name = "lattice-controller"

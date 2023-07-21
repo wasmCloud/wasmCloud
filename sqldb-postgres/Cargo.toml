@@ -33,7 +33,7 @@ wasmcloud-interface-sqldb = "0.10"
 
 # test dependencies
 [dev-dependencies]
-wasmcloud-test-util = "0.9"
+wasmcloud-test-util = "0.10"
 
 [[bin]]
 name = "sqldb-postgres"
