@@ -522,7 +522,7 @@ mod test {
                 assert_eq!(&opts.ctl_port.unwrap(), CTL_PORT);
                 assert_eq!(&opts.lattice_prefix.unwrap(), LATTICE_PREFIX);
                 assert_eq!(opts.timeout_ms, 2001);
-                assert_eq!(host_id, HOST_ID.parse()?);
+                assert_eq!(host_id.unwrap(), HOST_ID.parse()?);
             }
             cmd => panic!("ctl get inventory constructed incorrect command {cmd:?}"),
         }
