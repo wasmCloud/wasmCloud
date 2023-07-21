@@ -1,9 +1,7 @@
 # Capability Providers
 
-This repository contains capability providers for wasmCloud. The providers
-in the root level of this repository are _only_ compatible with version `0.50`
-and _newer_ of wasmCloud. All of the pre-existing capability providers compatible
-with `0.18` (aka "pre-OTP") or earlier can be found in the [pre-otp](./pre-otp) folder.
+This directory contains capability providers for wasmCloud. The providers
+in this directory are _only_ compatible with version `0.50` and _newer_ of wasmCloud.
 
 ## First-Party Capability Providers
 

@@ -9,9 +9,7 @@ use wasmbus_rpc::{
     core::LinkDefinition, error::RpcError, provider::prelude::*, provider::ProviderTransport,
 };
 use wasmcloud_provider_httpserver::{
-    load_settings,
-    wasmcloud_interface_httpserver::{HttpRequest, HttpResponse, HttpServer, HttpServerSender},
-    HttpServerCore,
+    load_settings, HttpServerCore, Request, Response, Server, ServerSender,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -82,23 +80,23 @@ impl ProviderHandler for HttpServerProvider {
     }
 }
 
-/// forward HttpRequest to actor.
+/// forward Request to actor.
 #[instrument(level = "debug", skip(_lattice_id, ld, req, timeout), fields(actor_id = %ld.actor_id))]
 async fn call_actor(
     _lattice_id: String,
     ld: Arc<LinkDefinition>,
-    req: HttpRequest,
+    req: Request,
     timeout: Option<std::time::Duration>,
-) -> Result<HttpResponse, RpcError> {
+) -> Result<Response, RpcError> {
     let tx = ProviderTransport::new_with_timeout(ld.as_ref(), Some(get_host_bridge()), timeout);
     let ctx = Context::default();
-    let actor = HttpServerSender::via(tx);
+    let actor = ServerSender::via(tx);
 
     let rc = actor.handle_request(&ctx, &req).await;
     match rc {
         Err(RpcError::Timeout(_)) => {
             error!("actor request timed out: returning 503",);
-            Ok(HttpResponse {
+            Ok(Response {
                 status_code: 503,
                 body: Default::default(),
                 header: Default::default(),
