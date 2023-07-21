@@ -39,7 +39,7 @@ jobs:
     strategy:
       fail-fast: false # Ensure we can run the full suite even if one OS fails
       matrix:
-        os: [ubuntu-22.04, windows-2022, macos-11]
+        os: [ubuntu-22.04, windows-latest-8-cores, macos-11]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/setup-node@v3
