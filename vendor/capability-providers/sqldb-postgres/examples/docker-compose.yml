@@ -1,0 +1,41 @@
+# dev setup for postgres and pgadmin and psql
+# listens on localhost since this is an insecure setup
+# 
+# db user and password: postgres,postgres
+# db url:  postgresql://postgres:postgres@127.0.0.1/postgres
+# pgadmin: postgres@example.com,postgres
+# access via browser on localhost:9999
+# 
+# on your local machine 
+#   alias psql="psql -h localhost -U postgres"
+#   when prompted, use password 'postgres'
+#
+
+
+version: '3.1'
+
+
+services:
+
+  db:
+    image: postgres:13
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      # must be on a port accessible to the capability provider
+      - 127.0.0.1:5432:5432
+    environment:
+      - POSTGRES_PASSWORD=postgres
+    restart: always
+
+  pgadmin:
+    image: dpage/pgadmin4
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=postgres@example.com
+      - PGADMIN_DEFAULT_PASSWORD=postgres
+      - PGADMIN_LISTEN_ADDRESS=0.0.0.0
+    ports:
+      - 127.0.0.1:9999:80
+
+volumes:
+  pgdata:

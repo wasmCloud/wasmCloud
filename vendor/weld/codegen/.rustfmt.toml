@@ -1,0 +1,12 @@
+edition = "2021"
+max_width = 100
+reorder_imports = true
+chain_width = 75
+single_line_if_else_max_width = 70
+struct_lit_width = 40
+struct_variant_width = 55
+# these require rust-nightly
+#overflow_delimited_expr = true
+#imports_granularity = "Crate"
+#group_imports = "StdExternalCrate"
+#unstable_fetures = false

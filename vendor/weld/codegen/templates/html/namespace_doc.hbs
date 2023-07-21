@@ -1,0 +1,286 @@
+{{!--~ shape_traits
+   -- display Traits table for a shape
+~--}}{{#*inline "shape_traits" }}
+    {{#if (traits this)}}
+        <div class="ml-12">
+            <p class="font-medium mt-4">Traits
+            <p>
+            <table>
+                {{~#each (traits this) }}
+                    <tr>
+                        {{#if @key }}
+                            <td>{{ typ @key ../ns }}</td>
+                            <td>{{ this }}</td>
+                        {{else}}
+                            <td>{{ this }}</td>
+                            <td>{{ this }}</td>
+                        {{/if}}
+                    </tr>
+                {{~/each}}
+            </table>
+        </div>
+    {{/if ~}}
+{{/inline }}
+{{!--~ toc
+   -- display row in TOC grouped by type
+~--}}{{#*inline "toc" }}
+    {{~#with (filter_shapes kind (filter_namespace namespace model.shapes)) as |shapes| }}
+        {{~#if shapes }}
+
+            <div class="table-row">
+                <div class="table-cell align-top pr-6 w-28">
+                    {{../title}}
+                </div>
+                <div class="table-cell align-top">
+                    <ul>
+                        {{#each shapes ~}}
+                            <li class="font-light"><a href="#{{to_snake_case _key}}">{{ typ _key ../../namespace }}</a></li>
+                        {{~/each }}
+                    </ul>
+                </div>
+            </div>
+        {{~/if }}
+    {{~/with }}
+{{/inline }}
+{{!--~ type_head
+   -- begin output for shape's definition: heading and doc
+~--}}{{#*inline "type_head" }}
+
+    <h2 id="{{ to_snake_case (shape_name _key) }}" class="mt-8 border-t-2 border-gray-300">
+        {{ typ _key ../namespace }}<span class="text-lg pl-4">({{this.type}})</span>
+    </h2>
+    {{~#if (doc this)}}<p class="font-light ml-6">{{ doc this }}</p>{{/if}}
+{{/inline }}
+{{!--~ display_trait
+   -- output trait object html
+~--}}{{#*inline "display_trait" }}
+    {{~> type_head }}
+    {{!-- fixme - this only handles traits that are structures --}}
+    <div class="ml-12">
+        <table>
+            <thead>
+            <tr>
+                <th class="w-48"></th>
+                <th class="w-48"></th>
+                <th class=""></th>
+            </tr>
+            </thead>
+            <tbody>
+            {{~#each members }}
+                <tr>
+                    <td>{{member_name @key}}:</td>
+                    <td>{{ typ target ../../namespace }}</td>
+                    <td>&nbsp;</td>
+                    <!--
+                    <td><span class="font-light">{{../this}} </span> </td>
+                    -->
+                </tr>
+            {{~/each }}
+            </tbody>
+        </table>
+    </div>
+    {{ >shape_traits ns=../namespace }}
+{{/inline }}
+{{!--~ display_simple
+   -- output simple type definition
+~--}}{{#*inline "display_simple" }}
+    {{~> type_head }}
+    {{ >shape_traits ns=../namespace }}
+{{/inline }}
+{{!--~ main
+   -- main page for namespace documentation
+~--}}{{#*inline "main" }}
+{{!-- <p class="text-4xl font-extrabold text-gray-900">{{title}}</p> --}}
+    <div id="content">
+        <div class="p-4 overflow-y-auto">
+            <h1 id="{{to_snake_case namespace }}" class="text-2xl font-serif">Namespace {{ namespace }}</h1>
+            <div class="table m-4 ml-12">
+                {{~> toc title="Services"   kind="service"}}
+                {{~> toc title="Operations" kind="operation"}}
+                {{~> toc title="Structures" kind="structure"}}
+                {{~> toc title="Traits"     kind="trait"}}
+                {{~> toc title="Simple"     kind="simple"}}
+                {{~> toc title="Lists"      kind="list"}}
+                {{~> toc title="Maps"       kind="map"}}
+            </div>
+            {{#each (filter_namespace namespace model.shapes) ~}}
+                {{#if (is_trait this) ~}}
+                    {{~> display_trait }}
+                {{else ~}}
+                    {{#if (is_simple this.type) ~}}
+                        {{~> display_simple }}
+                    {{/if ~}}
+                    {{#if (eq this.type "list") ~}}
+                        {{~> type_head}}
+                        <div class="ml-12">
+                            <table>
+                                <thead>
+                                <tr>
+                                    <th class="w-48"></th>
+                                    <th class="w-48"></th>
+                                    <th class=""></th>
+                                </tr>
+                                </thead>
+                                <tbody>
+                                <tr>
+                                    <td>member:</td>
+                                    <td>{{ typ member.target ../namespace }}</td>
+                                    <td><span class="font-light">&nbsp;</span></td>
+                                </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        {{ >shape_traits ns=../namespace }}
+                    {{~/if }}
+                    {{#if (eq this.type "set") ~}}
+                        {{~> type_head}}
+                        <div class="ml-12">
+                            <table>
+                                <thead>
+                                <tr>
+                                    <th class="w-48"></th>
+                                    <th class="w-48"></th>
+                                    <th class=""></th>
+                                </tr>
+                                </thead>
+                                <tbody>
+                                <tr>
+                                    <td>member:</td>
+                                    <td>{{ typ member.target ../namespace }}</td>
+                                    <td><span class="font-light">{{ doc member }}</span></td>
+                                </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        {{ >shape_traits ns=../namespace }}
+                    {{~/if }}
+
+                    {{#if (eq type "map") ~}}
+                        {{~> type_head}}
+                        <div class="ml-12">
+                            <table>
+                                <thead>
+                                <tr>
+                                    <th class="w-48"></th>
+                                    <th class="w-48"></th>
+                                    <th class=""></th>
+                                </tr>
+                                </thead>
+                                <tbody>
+                                <tr>
+                                    <td>key:</td>
+                                    <td>{{ typ this.key.target ../namespace }}</td>
+                                    <td><span class="font-light">{{ doc this.key }}</span></td>
+                                </tr>
+                                <tr>
+                                    <td>value:</td>
+                                    <td>{{ typ value.target  ../namespace}}</td>
+                                    <td><span class="font-light">{{ doc value }}</span></td>
+                                </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        {{ >shape_traits ns=../namespace }}
+                    {{~/if }}
+                    {{#if (eq type "operation") ~}}
+                        {{~> type_head}}
+                        <div class="ml-12">
+                            <table>
+                                <thead>
+                                <tr>
+                                    <th class="w-48"></th>
+                                    <th class="w-48"></th>
+                                    <th class=""></th>
+                                </tr>
+                                </thead>
+                                <tbody>
+                                {{~#if input }}
+                                    <tr>
+                                        <td>input:</td>
+                                        <td>{{ typ input.target ../namespace }}</td>
+                                        <td><span class="font-light">{{ doc input }}</span></td>
+                                    </tr>
+                                {{~/if}}
+                                {{~#if output }}
+                                    <tr>
+                                        <td>output:</td>
+                                        <td>{{ typ output.target ../namespace }}</td>
+                                        <td><span class="font-light">{{ doc output }}</span></td>
+                                    </tr>
+                                {{~/if}}
+                                {{~#if errors }}
+                                    <tr>
+                                        <td>errors:</td>
+                                        <td>
+                                            <ul>{{#each errors}}
+                                                <li>{{ typ target }}</li>{{/each}}
+                                            </ul>
+                                        </td>
+                                        <td><span class="font-light">{{ doc errors }}</span></td>
+                                    </tr>
+                                {{~/if}}
+                                </tbody>
+                            </table>
+                        </div>
+                        {{ >shape_traits ns=../namespace }}
+                    {{~/if }}
+                    {{~#if (eq type "structure") }}
+                        {{~> type_head }}
+                        <div class="ml-12">
+                            <table>
+                                <thead>
+                                <tr>
+                                    <th class="w-48"></th>
+                                    <th class="w-48"></th>
+                                    <th class=""></th>
+                                </tr>
+                                </thead>
+                                <tbody>
+                                    {{~#each members }}
+                                    <tr>
+                                        <td>{{member_name @key}}:</td>
+                                        <td>{{ typ target ../../namespace }}</td>
+                                        <td><span class="font-light">{{ doc
+                                                this }}</span></td>
+                                    </tr>
+                                {{~/each }}
+                                </tbody>
+                            </table>
+                        </div>
+                        {{~ >shape_traits ns=../namespace }}
+                    {{~/if }}
+
+                    {{#if (eq type "service") }}
+                        {{~> type_head}}
+                        <div class="ml-12">
+                            {{~#if operations }}
+                                <div class="table my-4">
+                                    <div class="table-row">
+                                        <div class="table-cell align-top pr-6 w-48">
+                                            <span class="font-medium my-4">
+                                                Operations
+                                            </span>
+                                        </div>
+                                        <div class="table-cell align-top">
+                                            <ul>
+                                                {{~#each operations}}
+                                                    <li class="font-light">
+                                                        <a href="#{{to_snake_case target}}">
+                                                            {{ typ target ../../namespace }}
+                                                        </a>
+                                                    </li>
+                                                {{~/each }}
+                                            </ul>
+                                        </div>
+                                    </div>
+                                </div>
+                            {{~/if}}
+                        </div>
+                        {{~ >shape_traits ns=../namespace }}
+                    {{~/if }}
+                {{~/if }}
+            {{~/each }}
+        </div>
+    </div>
+{{~/inline }}
+{{~> page_base ~}}

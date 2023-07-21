@@ -86,6 +86,7 @@
         }: {
           buildInputs ? [],
           depsBuildBuild ? [],
+          nativeBuildInputs ? [],
           preCheck ? "",
           ...
         } @ args: let
@@ -125,6 +126,12 @@
                 ++ optionals stdenv.hostPlatform.isDarwin [
                   darwin.apple_sdk.frameworks.CoreFoundation
                   libiconv
+                ];
+
+              nativeBuildInputs =
+                nativeBuildInputs
+                ++ [
+                  pkgs.protobuf # prost build dependency
                 ];
             }
             // optionalAttrs (args ? cargoArtifacts && stdenv.hostPlatform.isDarwin) {
