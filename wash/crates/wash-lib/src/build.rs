@@ -318,20 +318,7 @@ pub(crate) fn get_wasi_preview2_adapter_bytes(config: &ActorConfig) -> Result<Ve
         return std::fs::read(path)
             .with_context(|| format!("failed to read wasm bytes from [{}]", path.display()));
     }
-    get_wasi_preview2_adapter_default_bytes()
-}
-
-#[cfg(target_family = "unix")]
-fn get_wasi_preview2_adapter_default_bytes() -> Result<Vec<u8>> {
     Ok(wasmcloud_component_adapters::WASI_PREVIEW1_REACTOR_COMPONENT_ADAPTER.into())
-}
-
-/// Bytes from wasmcloud_component_adapters cannot be used on
-/// windows yet due to a lack of support of a dependency (nix-nar) for building on windows.
-/// This can be removed once `wasmcloud_component_adapters` builds on windows.
-#[cfg(target_family = "windows")]
-fn get_wasi_preview2_adapter_default_bytes() -> Result<Vec<u8>> {
-    bail!("building wasi preview2 components is not yet supported on windows")
 }
 
 /// Placeholder for future functionality for building providers
