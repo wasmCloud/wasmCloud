@@ -19,11 +19,6 @@ repository = "https://github.com/wasmCloud/wasmCloud"
 [badges.maintenance]
 status = "actively-developed"
 
-[profile.release]
-strip = true
-opt-level = "z"
-lto = true
-
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["color", "derive", "error-context", "help", "std", "suggestions", "usage"] }
@@ -35,10 +30,10 @@ wasmcloud-host = { workspace = true }
 [dev-dependencies]
 reqwest = { workspace = true, features = ["rustls-tls"] }
 test-actors = { workspace = true }
+test-providers = { workspace = true }
 
 [workspace]
 members = [
-    "crates/providers/*",
     "examples/rust/*"
 ]
 
@@ -52,9 +47,8 @@ bindle = { version = "0.9", default-features = false }
 bytes = { version = "1", default-features = false }
 clap = { version = "4", default-features = false }
 cloudevents-sdk = { version = "0.7", default-features = false }
-dashmap = { version = "5", default-features = false }
-flume = { version = "0.10", default-features = false }
 futures = { version = "0.3", default-features = false }
+hex = { version = "0.4", default-features = false }
 http = { version = "0.2", default-features = false }
 log = { version = "0.4", default-features = false }
 names = { version = "0.14", default-features = false }
@@ -74,7 +68,7 @@ sha2 = { version = "0.10", default-features = false }
 syn = { version = "2", default-features = false }
 tempfile = { version = "3", default-features = false }
 test-actors = { path = "./tests/actors" }
-thiserror = { version = "1", default-features = false }
+test-providers = { path = "./tests/providers" }
 time = { version = "0.3", default-features = false }
 tokio = { version = "1", default-features = false }
 tokio-stream = { version = "0.1", default-features = false }
@@ -85,10 +79,8 @@ tracing-subscriber = { version = "0.3", default-features = false }
 ulid = { version = "1", default-features = false }
 url = { version = "2", default-features = false }
 uuid = { version = "1", default-features = false }
-warp = { version = "0.3", default-features = false }
 wascap = { version = "0.11", default-features = false }
 wasi-common = { version = "10", default-features = false }
-wasmbus-rpc = { version = "0.13", default-features = false }
 wasmcloud-actor = { path = "./crates/actor" }
 wasmcloud-actor-derive = { path = "./crates/actor/derive" }
 wasmcloud-component-adapters = { path = "./crates/component-adapters" }

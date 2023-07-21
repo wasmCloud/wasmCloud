@@ -5,6 +5,10 @@ updates:
   schedule:
     interval: "daily"
 - package-ecosystem: "cargo"
+  directory: "/crates/providers"
+  schedule:
+    interval: "daily"
+- package-ecosystem: "cargo"
   directory: "/tests/actors/rust"
   schedule:
     interval: "daily"

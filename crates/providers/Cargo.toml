@@ -1,0 +1,35 @@
+[workspace.package]
+authors = ["The wasmCloud Team"]
+categories = ["wasm"]
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/wasmCloud/wasmCloud"
+
+[profile.release]
+strip = true
+opt-level = "z"
+lto = true
+
+[workspace]
+members = [
+    "http-server"
+]
+
+[workspace.dependencies]
+async-trait = { version = "0.1", default-features = false }
+base64 = { version = "0.21", default-features = false }
+bytes = { version = "1", default-features = false }
+dashmap = { version = "5", default-features = false }
+flume = { version = "0.10", default-features = false }
+futures = { version = "0.3", default-features = false }
+http = { version = "0.2", default-features = false }
+serde = { version = "1", default-features = false }
+serde_bytes = { version = "0.11", default-features = false }
+serde_json = { version = "1", default-features = false }
+thiserror = { version = "1", default-features = false }
+tokio = { version = "1", default-features = false }
+toml = { version = "0.7", default-features = false }
+tracing = { version = "0.1", default-features = false }
+tracing-subscriber = { version = "0.3", default-features = false }
+warp = { version = "0.3", default-features = false }
+wasmbus-rpc = { version = "0.13", default-features = false }
