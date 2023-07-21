@@ -32,10 +32,11 @@ pub(crate) async fn handle_command(
             get_hosts_output(hosts)
         }
         GetCommand::HostInventory(cmd) => {
-            sp.update_spinner_message(format!(
-                " Retrieving inventory for host {} ...",
-                cmd.host_id
-            ));
+            if let Some(id) = cmd.host_id.as_ref() {
+                sp.update_spinner_message(format!(" Retrieving inventory for host {} ...", id));
+            } else {
+                sp.update_spinner_message(" Retrieving hosts for inventory query ...".to_string());
+            }
             let inv = get_host_inventory(cmd).await?;
             get_host_inventory_output(inv)
         }
