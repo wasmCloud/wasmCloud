@@ -45,9 +45,12 @@
         ];
 
         excludePaths = [
+          ".devcontainer"
+          ".envrc"
           ".github"
           ".gitignore"
           "ADOPTERS.md"
+          "adr"
           "awesome-wasmcloud"
           "CODE_OF_CONDUCT.md"
           "CODEOWNERS"
