@@ -295,6 +295,10 @@ pub(crate) async fn handle_provider_archive(
     map.insert("version".to_string(), json!(friendly_ver));
     map.insert("revision".to_string(), json!(friendly_rev));
     map.insert("targets".to_string(), json!(artifact.targets()));
+    if let Some(schema) = artifact.schema() {
+        map.insert("schema".to_string(), json!(schema));
+    }
+
     let text_table = {
         let mut table = Table::new();
         super::configure_table_style(&mut table);
@@ -343,6 +347,20 @@ pub(crate) async fn handle_provider_archive(
             2,
             Alignment::Left,
         )]));
+
+        if artifact.schema().is_some() {
+            table.add_row(Row::new(vec![TableCell::new_with_alignment(
+                "\nLink Definition Schema",
+                2,
+                Alignment::Center,
+            )]));
+
+            table.add_row(Row::new(vec![TableCell::new_with_alignment(
+                "\nUse the JSON output option to extract the schema",
+                2,
+                Alignment::Left,
+            )]));
+        }
 
         table.render()
     };
