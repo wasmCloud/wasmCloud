@@ -69,8 +69,6 @@ wasmcloud-control-interface = { workspace = true }
 weld-codegen = { workspace = true }
 wasmbus-rpc = { workspace = true }
 wit-component = { workspace = true }
-
-[target.'cfg(unix)'.dependencies]
 wasmcloud-component-adapters = { workspace = true }
 
 [dev-dependencies]
