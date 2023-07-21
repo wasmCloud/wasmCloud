@@ -30,7 +30,7 @@ jobs:
           args: --all-features
 
   windows_build:
-    runs-on: windows-latest
+    runs-on: windows-latest-8-cores
     needs: [cargo_check]
     steps:
       - uses: actions/checkout@v3
