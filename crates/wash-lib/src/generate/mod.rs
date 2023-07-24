@@ -136,7 +136,13 @@ fn validate(project: &Project) -> Result<()> {
     }
 
     if project.git.is_some() || !project.no_git_init {
-        if let Err(err) = Command::new("git").args(["version"]).spawn() {
+        if let Err(err) = std::process::Command::new("git")
+            .args(["version"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+        {
             if err.kind() == ErrorKind::NotFound {
                 return Err(anyhow!(
                     "Error in 'new {}' options: required 'git' to be installed in PATH",
