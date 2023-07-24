@@ -62,7 +62,7 @@ wascap = { workspace = true }
 wasmcloud-control-interface = { workspace = true }
 
 [workspace]
-members = ["crates/provider-sdk", "examples/rust/*"]
+members = ["crates/provider-sdk", "crates/wit-bindgen-wasmcloud-provider", "examples/rust/*"]
 
 [workspace.dependencies]
 anyhow = { version = "1", default-features = false }
@@ -76,6 +76,7 @@ clap = { version = "4", default-features = false }
 cloudevents-sdk = { version = "0.7", default-features = false }
 data-encoding = { version = "2.3", default-features = false }
 futures = { version = "0.3", default-features = false }
+heck = { version = "0.4.1", default-features = false }
 hex = { version = "0.4", default-features = false }
 http = { version = "0.2", default-features = false }
 lazy_static = { version = "1.4", default-features = false }
@@ -88,6 +89,7 @@ once_cell = { version = "1", default-features = false }
 # https://github.com/wasmCloud/wasmCloud/issues/453 for more information
 opentelemetry = { version = "0.17", default-features = false }
 opentelemetry-otlp = { version = "0.10", default-features = false }
+proc-macro2 = { version = "1.0.66", default-features = false }
 provider-archive = { version = "0.7", default-features = false }
 quote = { version = "1", default-features = false }
 rand = { version = "0.8", default-features = false }
@@ -119,6 +121,7 @@ url = { version = "2", default-features = false }
 uuid = { version = "1", default-features = false }
 wascap = { version = "0.11", default-features = false }
 wasi-common = { version = "11", default-features = false }
+wasm-metadata = { version = "0.10.1", default-features = false }
 wasmcloud-actor = { path = "./crates/actor" }
 wasmcloud-actor-derive = { path = "./crates/actor/derive" }
 wasmcloud-component-adapters = { git = "https://github.com/wasmCloud/wasmcloud-component-adapters" }
@@ -127,6 +130,10 @@ wasmcloud-host = { path = "./crates/host" }
 wasmcloud-runtime = { path = "./crates/runtime" }
 wasmparser = { version = "0.110", default-features = false }
 wasmtime = { version = "11", default-features = false }
+wasmtime-component-macro = { version = "11.0.1", default-features = false }
 wasmtime-wasi = { version = "11", default-features = false }
+wasmtime-wit-bindgen = { version = "11.0.1", default-features = false }
 wit-bindgen = { version = "0.9", default-features = false }
+wit-bindgen-wasmcloud-provider = { path = "./crates/wit-bindgen-wasmcloud-provider" }
 wit-component = { version = "0.12", default-features = false }
+wit-parser = { version = "0.8.0", default-features = false }
