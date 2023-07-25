@@ -12,6 +12,7 @@ fn wasm_url(path: impl AsRef<Path>) -> Url {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+#[ignore = "skip local lattice test by default"]
 async fn local() -> anyhow::Result<()> {
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer().pretty().without_time())

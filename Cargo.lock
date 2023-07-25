@@ -172,40 +172,6 @@ dependencies = [
 
 [[package]]
 name = "async-nats"
-version = "0.29.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1174495e436c928905018f10a36160f7a8a6786450f50f4ce7fba05d1539704c"
-dependencies = [
- "async-nats-tokio-rustls-deps",
- "base64 0.13.1",
- "base64-url",
- "bytes",
- "futures",
- "http",
- "itoa",
- "memchr",
- "nkeys 0.2.0",
- "nuid 0.3.2",
- "once_cell",
- "rand 0.8.5",
- "regex",
- "ring",
- "rustls-native-certs",
- "rustls-pemfile",
- "serde",
- "serde_json",
- "serde_nanos",
- "serde_repr",
- "thiserror",
- "time 0.3.23",
- "tokio",
- "tokio-retry",
- "tracing",
- "url",
-]
-
-[[package]]
-name = "async-nats"
 version = "0.30.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94e3e851ddf3b62be8a8085e1e453968df9cdbf990a37bbb589b5b4f587c68d7"
@@ -216,7 +182,7 @@ dependencies = [
  "http",
  "itoa",
  "memchr",
- "nkeys 0.3.0",
+ "nkeys",
  "nuid 0.3.2",
  "once_cell",
  "rand 0.8.5",
@@ -236,17 +202,6 @@ dependencies = [
  "tokio-rustls",
  "tracing",
  "url",
-]
-
-[[package]]
-name = "async-nats-tokio-rustls-deps"
-version = "0.24.0-ALPHA.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8cdefe54cd7867d937c0a507d2a3a830af410044282cd3e4002b5b7860e1892e"
-dependencies = [
- "rustls",
- "tokio",
- "webpki",
 ]
 
 [[package]]
@@ -354,15 +309,6 @@ name = "base64"
 version = "0.21.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "604178f6c5c21f02dc555784810edfb88d34ac2c73b2eae109655649ee73ce3d"
-
-[[package]]
-name = "base64-url"
-version = "1.4.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "67a99c239d0c7e77c85dddfa9cebce48704b3c49550fcd3b84dd637e4484899f"
-dependencies = [
- "base64 0.13.1",
-]
 
 [[package]]
 name = "base64ct"
@@ -1994,21 +1940,6 @@ dependencies = [
 
 [[package]]
 name = "nkeys"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e66a7cd1358277b2a6f77078e70aea7315ff2f20db969cc61153103ec162594"
-dependencies = [
- "byteorder 1.4.3",
- "data-encoding",
- "ed25519-dalek",
- "getrandom 0.2.10",
- "log",
- "rand 0.8.5",
- "signatory",
-]
-
-[[package]]
-name = "nkeys"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2d151f6ece2f3d1077f6c779268de2516653d8344ddde65addd785cce764fe5"
@@ -3335,9 +3266,11 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "futures",
+ "nkeys",
  "serde",
  "serde_json",
  "tokio",
+ "wascap",
  "wasmcloud-component-adapters",
  "wit-component",
 ]
@@ -3348,6 +3281,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "futures",
+ "nkeys",
+ "provider-archive",
  "serde",
  "serde_json",
  "tokio",
@@ -3878,7 +3813,7 @@ dependencies = [
  "humantime",
  "lazy_static",
  "log",
- "nkeys 0.3.0",
+ "nkeys",
  "nuid 0.4.1",
  "ring",
  "serde",
@@ -4067,13 +4002,24 @@ name = "wasmcloud"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-nats",
  "clap",
+ "futures",
+ "nkeys",
  "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
  "test-actors",
  "test-providers",
  "tokio",
+ "tokio-stream",
  "tracing",
  "tracing-subscriber",
+ "url",
+ "uuid",
+ "wascap",
+ "wasmcloud-control-interface",
  "wasmcloud-host",
 ]
 
@@ -4124,7 +4070,7 @@ version = "0.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f86693c41af8686e99950450a0dbf2f9a75ee0d133f08209538c46b37514517e"
 dependencies = [
- "async-nats 0.30.0",
+ "async-nats",
  "bytes",
  "cloudevents-sdk",
  "data-encoding",
@@ -4146,9 +4092,10 @@ name = "wasmcloud-host"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "async-nats 0.29.0",
+ "async-nats",
  "async-recursion",
  "async-trait",
+ "base64 0.21.2",
  "bindle",
  "bytes",
  "cloudevents-sdk",
@@ -4156,7 +4103,7 @@ dependencies = [
  "hex",
  "http",
  "names",
- "nkeys 0.3.0",
+ "nkeys",
  "oci-distribution",
  "provider-archive",
  "reqwest",

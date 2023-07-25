@@ -87,6 +87,7 @@
           buildInputs ? [],
           depsBuildBuild ? [],
           nativeBuildInputs ? [],
+          nativeCheckInputs ? [],
           preCheck ? "",
           ...
         } @ args: let
@@ -134,6 +135,12 @@
                 nativeBuildInputs
                 ++ [
                   pkgs.protobuf # prost build dependency
+                ];
+
+              nativeCheckInputs =
+                nativeCheckInputs
+                ++ [
+                  pkgs.nats-server
                 ];
             }
             // optionalAttrs (args ? cargoArtifacts && stdenv.hostPlatform.isDarwin) {

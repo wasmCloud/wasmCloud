@@ -28,9 +28,21 @@ tracing-subscriber = { workspace = true, features = ["ansi", "env-filter", "fmt"
 wasmcloud-host = { workspace = true }
 
 [dev-dependencies]
+async-nats = { workspace = true }
+futures = { workspace = true }
+nkeys = { workspace = true }
 reqwest = { workspace = true, features = ["rustls-tls"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
 test-actors = { workspace = true }
 test-providers = { workspace = true }
+tokio = { workspace = true, features = ["time"] }
+tokio-stream = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true }
+wascap = { workspace = true }
+wasmcloud-control-interface = { workspace = true }
 
 [workspace]
 members = [
@@ -39,7 +51,7 @@ members = [
 
 [workspace.dependencies]
 anyhow = { version = "1", default-features = false }
-async-nats = { version = "0.29", default-features = false }
+async-nats = { version = "0.30", default-features = false }
 async-recursion = { version = "1", default-features = false }
 async-trait = { version = "0.1", default-features = false }
 base64 = { version = "0.21", default-features = false }
