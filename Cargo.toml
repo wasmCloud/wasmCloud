@@ -46,6 +46,7 @@ wasmcloud-control-interface = { workspace = true }
 
 [workspace]
 members = [
+    "crates/provider-sdk",
     "examples/rust/*"
 ]
 
@@ -54,20 +55,25 @@ anyhow = { version = "1", default-features = false }
 async-nats = { version = "0.30", default-features = false }
 async-recursion = { version = "1", default-features = false }
 async-trait = { version = "0.1", default-features = false }
+atty = { version = "0.2", default-features = false }
 base64 = { version = "0.21", default-features = false }
 bindle = { version = "0.9", default-features = false }
 bytes = { version = "1", default-features = false }
 clap = { version = "4", default-features = false }
 cloudevents-sdk = { version = "0.7", default-features = false }
+data-encoding = { version = "2.3", default-features = false }
 futures = { version = "0.3", default-features = false }
 hex = { version = "0.4", default-features = false }
 http = { version = "0.2", default-features = false }
+lazy_static = { version = "1.4", default-features = false }
 log = { version = "0.4", default-features = false }
 names = { version = "0.14", default-features = false }
 nix-nar = { version = "0.2", default-features = false }
 nkeys = { version = "0.3", default-features = false }
 oci-distribution = { version = "0.9", default-features = false }
 once_cell = { version = "1", default-features = false }
+opentelemetry = { version = "0.17", default-features = false }
+opentelemetry-otlp = { version = "0.10", default-features = false }
 provider-archive = { version = "0.7", default-features = false }
 quote = { version = "1", default-features = false }
 rand = { version = "0.8", default-features = false }
@@ -81,12 +87,15 @@ syn = { version = "2", default-features = false }
 tempfile = { version = "3", default-features = false }
 test-actors = { path = "./tests/actors" }
 test-providers = { path = "./tests/providers" }
+thiserror = { version = "1", default-features = false }
 time = { version = "0.3", default-features = false }
 tokio = { version = "1", default-features = false }
 tokio-stream = { version = "0.1", default-features = false }
 tokio-util = { version = "0.7", default-features = false }
 toml = { version = "0.7", default-features = false }
 tracing = { version = "0.1", default-features = false }
+tracing-futures = { version = "0.2", default-features = false }
+tracing-opentelemetry = { version = "0.17", default-features = false }
 tracing-subscriber = { version = "0.3", default-features = false }
 ulid = { version = "1", default-features = false }
 url = { version = "2", default-features = false }
