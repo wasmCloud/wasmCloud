@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-control-interface"
-version = "0.27.0"
+version = "0.28.0"
 authors = ["wasmCloud Team"]
 edition = "2021"
 homepage = "https://wasmcloud.com"
@@ -13,7 +13,7 @@ keywords = ["webassembly", "wasm", "wasmcloud", "control", "ctl"]
 categories = ["wasm", "api-bindings"]
 
 [dependencies]
-async-nats = "0.30"
+async-nats = "0.31"
 data-encoding = "2.3.3"
 ring = "0.16.20"
 cloudevents-sdk = "0.7.0"
