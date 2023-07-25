@@ -351,12 +351,7 @@ impl ProviderConnection {
                 }) = msg
                 {
                     let shutmsg: ShutdownMessage = serde_json::from_slice(&payload).unwrap_or_default();
-                    // Backwards compatibility - if no host (or payload) is supplied, default
-                    // to shutting down unconditionally
-                    if shutmsg.host_id.is_empty() {
-                        warn!("Please upgrade your wasmcloud host to >= 0.59.0 if you use lattices with multiple hosts.")
-                    }
-                    if shutmsg.host_id == host_id || shutmsg.host_id.is_empty() {
+                    if shutmsg.host_id == host_id {
                         info!("Received termination signal and stopping");
                         // Tell provider to shutdown - before we shut down nats subscriptions,
                         // in case it needs to do any message passing during shutdown

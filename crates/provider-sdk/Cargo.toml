@@ -1,34 +1,40 @@
 [package]
-name = "provider-sdk"
+name = "wasmcloud-provider-sdk"
 version = "0.1.0"
-edition = "2021"
+
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [features]
 default = [ ]
 otel = ["opentelemetry", "tracing-opentelemetry", "opentelemetry-otlp"]
 
 [dependencies]
+# This is using all the concrete error types now so it needs to stay custom until we upgrade it in the workspace
 async-nats = "0.30"
-async-trait = "0.1"
+async-trait = { workspace = true }
 atty = "0.2"
-base64 = "0.21"
+base64 = { workspace = true }
 data-encoding = "2.3"
-futures = "0.3"
-lazy_static = "1.4"
-nkeys = "0.3"
-once_cell = "1.8"
+futures = { workspace = true }
+lazy_static = { workspace = true }
+nkeys = { workspace = true }
+once_cell = { workspace = true }
 opentelemetry = { version = "0.17", features = ["rt-tokio"], optional = true }
 opentelemetry-otlp = { version = "0.10", features = ["http-proto", "reqwest-client"], optional = true }
-rmp-serde = "1.1"
-serde = { version = "1", features = ["derive"] }
-serde_bytes = "0.11"
-serde_json = "1"
-sha2 = "0.10.2"
-thiserror = "1"
-tokio = { version = "1", features = ["full"] }
-tracing = { version = "0.1.34", features = ["log"] }
-tracing-futures = "0.2"
+rmp-serde = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_bytes = { workspace = true, features = ["default"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tracing = { workspace = true, features = ["log"] }
+tracing-futures = { workspace = true, features = ["default"] }
 tracing-opentelemetry = { version = "0.17", optional = true }
-tracing-subscriber = { version = "0.3.7", features = ["env-filter", "json"] }
-uuid = { version = "1.4", features = ["v4"] }
-wascap = "0.10"
+tracing-subscriber = { workspace = true, features = ["env-filter", "json", "fmt"] }
+uuid = { workspace = true, features = ["v4"] }
+wascap = { workspace = true }

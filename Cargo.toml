@@ -57,6 +57,7 @@ dashmap = { version = "5", default-features = false }
 flume = { version = "0.10", default-features = false }
 futures = { version = "0.3", default-features = false }
 http = { version = "0.2", default-features = false }
+lazy_static = { version = "1.4", default-features = false }
 log = { version = "0.4", default-features = false }
 names = { version = "0.14", default-features = false }
 nix-nar = { version = "0.2", default-features = false }
@@ -82,6 +83,7 @@ tokio-stream = { version = "0.1", default-features = false }
 tokio-util = { version = "0.7", default-features = false }
 toml = { version = "0.7", default-features = false }
 tracing = { version = "0.1", default-features = false }
+tracing-futures = { version = "0.2", default-features = false }
 tracing-subscriber = { version = "0.3", default-features = false }
 ulid = { version = "1", default-features = false }
 url = { version = "2", default-features = false }
