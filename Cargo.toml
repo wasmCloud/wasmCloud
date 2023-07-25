@@ -39,6 +39,7 @@ test-actors = { workspace = true }
 [workspace]
 members = [
     "crates/providers/*",
+    "crates/provider-sdk",
     "examples/rust/*"
 ]
 

@@ -1,0 +1,9 @@
+[logging]
+url = "https://github.com/WebAssembly/wasi-logging/archive/main.tar.gz"
+sha256 = "5a53c168c502ff4a9c6890ecfbb2a916cd2a51be7a04aca343d467022dfa92b8"
+sha512 = "f7a3ac786ca7bdbc4f203a448e6991e0cdd43f739c41a8b4a4a382570df138fb6fadc9ac00bf36e18828c37503aefb72f7c731c7faf5f160ff2a8b85824d0774"
+
+[wasmcloud-core]
+path = "."
+sha256 = "94b6bedfd4ab48b9d69aebed636e7837db77a4985c194c7bf9cbc15e0140ed72"
+sha512 = "a093b52827d5ba667642f5c7422d70d1987c26bf1a0185c4b2689d4fafd29d869427c28a5952a6c9a5b53acab64b3d30e87204329e0470ee1a5f418988e31e6f"
