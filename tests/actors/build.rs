@@ -4,6 +4,10 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
 
+use nkeys::KeyPair;
+use wascap::prelude::ClaimsBuilder;
+use wascap::wasm::embed_claims;
+use wascap::{caps, jwt};
 use wasmcloud_component_adapters::{
     WASI_PREVIEW1_COMMAND_COMPONENT_ADAPTER, WASI_PREVIEW1_REACTOR_COMPONENT_ADAPTER,
 };
@@ -324,5 +328,81 @@ async fn main() -> anyhow::Result<()> {
             .await
             .with_context(|| format!("failed to write `{}`", path.display()))?;
     }
+
+    let issuer = KeyPair::new_account();
+    println!(
+        "cargo:rustc-env=ISSUER={}",
+        issuer.seed().expect("failed to extract issuer seed")
+    );
+
+    for (name, caps) in [
+        (
+            "builtins-compat-reactor",
+            Some(vec![
+                caps::HTTP_SERVER.into(),
+                caps::LOGGING.into(),
+                caps::NUMBERGEN.into(),
+            ]),
+        ),
+        (
+            "builtins-compat-reactor-preview2",
+            Some(vec![
+                caps::HTTP_SERVER.into(),
+                caps::LOGGING.into(),
+                caps::NUMBERGEN.into(),
+            ]),
+        ),
+        (
+            "builtins-component-reactor",
+            Some(vec![
+                caps::HTTP_SERVER.into(),
+                caps::LOGGING.into(),
+                caps::NUMBERGEN.into(),
+            ]),
+        ),
+        (
+            "builtins-component-reactor-preview2",
+            Some(vec![
+                caps::HTTP_SERVER.into(),
+                caps::LOGGING.into(),
+                caps::NUMBERGEN.into(),
+            ]),
+        ),
+        (
+            "builtins-module-reactor",
+            Some(vec![
+                caps::HTTP_SERVER.into(),
+                caps::LOGGING.into(),
+                caps::NUMBERGEN.into(),
+            ]),
+        ),
+        ("http-compat-command", Some(vec![caps::HTTP_SERVER.into()])),
+        (
+            "http-compat-command-preview2",
+            Some(vec![caps::HTTP_SERVER.into()]),
+        ),
+        ("logging-module-command", Some(vec![caps::LOGGING.into()])),
+        ("tcp-component-command", None),
+        ("tcp-component-command-preview2", None),
+    ] {
+        let wasm = fs::read(out_dir.join(format!("rust-{name}.wasm")))
+            .await
+            .with_context(|| format!("failed to read `{name}` Wasm"))?;
+        let module = KeyPair::new_module();
+        let claims = ClaimsBuilder::new()
+            .issuer(&issuer.public_key())
+            .subject(&module.public_key())
+            .with_metadata(jwt::Actor {
+                name: Some(name.into()),
+                caps,
+                ..Default::default()
+            })
+            .build();
+        let wasm = embed_claims(&wasm, &claims, &issuer).context("failed to embed actor claims")?;
+        fs::write(out_dir.join(format!("rust-{name}.signed.wasm")), wasm)
+            .await
+            .context("failed to write Wasm")?;
+    }
+
     Ok(())
 }

@@ -1,6 +1,6 @@
 use core::num::NonZeroUsize;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use serde_json::json;
 use uuid::Uuid;
@@ -89,6 +89,42 @@ pub fn actors_stopped(
         "count": count,
         "remaining": remaining,
         "annotations": annotations,
+    })
+}
+
+pub fn linkdef_set(
+    id: impl AsRef<str>,
+    actor_id: impl AsRef<str>,
+    provider_id: impl AsRef<str>,
+    link_name: impl AsRef<str>,
+    contract_id: impl AsRef<str>,
+    values: &HashMap<String, String>,
+) -> serde_json::Value {
+    json!({
+        "id": id.as_ref(),
+        "actor_id": actor_id.as_ref(),
+        "provider_id": provider_id.as_ref(),
+        "link_name": link_name.as_ref(),
+        "contract_id": contract_id.as_ref(),
+        "values": values,
+    })
+}
+
+pub fn linkdef_deleted(
+    id: impl AsRef<str>,
+    actor_id: impl AsRef<str>,
+    provider_id: impl AsRef<str>,
+    link_name: impl AsRef<str>,
+    contract_id: impl AsRef<str>,
+    values: &HashMap<String, String>,
+) -> serde_json::Value {
+    json!({
+        "id": id.as_ref(),
+        "actor_id": actor_id.as_ref(),
+        "provider_id": provider_id.as_ref(),
+        "link_name": link_name.as_ref(),
+        "contract_id": contract_id.as_ref(),
+        "values": values,
     })
 }
 

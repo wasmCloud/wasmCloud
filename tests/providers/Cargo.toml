@@ -1,5 +1,5 @@
 [package]
-name = "test-actors"
+name = "test-providers"
 version = "0.1.0"
 edition = "2021"
 publish = false
@@ -8,9 +8,9 @@ publish = false
 anyhow = { workspace = true, features = ["std"] }
 futures = { workspace = true, features = ["alloc", "async-await"] }
 nkeys = { workspace = true }
+provider-archive = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["fs", "macros", "process", "rt-multi-thread"] }
-wascap = { workspace = true }
 wasmcloud-component-adapters = { workspace = true }
 wit-component = { workspace = true }

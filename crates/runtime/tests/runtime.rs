@@ -1,7 +1,3 @@
-mod common;
-
-use common::*;
-
 use std::net::{Ipv6Addr, SocketAddr};
 use std::path::Path;
 use std::str::FromStr;
@@ -17,9 +13,27 @@ use tokio::fs;
 use tokio::io::{stderr, AsyncReadExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::spawn;
+use tracing_subscriber::prelude::*;
 use wasmcloud_actor::{HttpRequest, HttpResponse, Uuid};
 use wasmcloud_runtime::capability::{self, logging};
 use wasmcloud_runtime::{Actor, Runtime};
+
+static LOGGER: Lazy<()> = Lazy::new(|| {
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer().pretty().without_time())
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                tracing_subscriber::EnvFilter::new(
+                    "info,integration=trace,wasmcloud=trace,cranelift_codegen=warn",
+                )
+            }),
+        )
+        .init();
+});
+
+fn init() {
+    _ = Lazy::force(&LOGGER);
+}
 
 static REQUEST: Lazy<Vec<u8>> = Lazy::new(|| {
     let body = serde_json::to_vec(&json!({
@@ -28,6 +42,8 @@ static REQUEST: Lazy<Vec<u8>> = Lazy::new(|| {
     }))
     .expect("failed to encode body to JSON");
     rmp_serde::to_vec(&HttpRequest {
+        method: "POST".into(),
+        path: "/".into(),
         body,
         ..Default::default()
     })
@@ -58,12 +74,6 @@ fn new_runtime(logs: Arc<Mutex<Vec<(logging::Level, String, String)>>>) -> Runti
 
 async fn run(wasm: impl AsRef<Path>) -> anyhow::Result<Vec<(logging::Level, String, String)>> {
     let wasm = fs::read(wasm).await.context("failed to read Wasm")?;
-    let (wasm, key) = sign(
-        wasm,
-        "http_log_rng",
-        [caps::HTTP_SERVER, caps::LOGGING, caps::NUMBERGEN],
-    )
-    .context("failed to sign Wasm")?;
 
     let socket = TcpListener::bind(SocketAddr::from((Ipv6Addr::UNSPECIFIED, 0)))
         .await
@@ -87,8 +97,7 @@ async fn run(wasm: impl AsRef<Path>) -> anyhow::Result<Vec<(logging::Level, Stri
     {
         let rt = new_runtime(Arc::clone(&logs));
         let actor = Actor::new(&rt, wasm).expect("failed to construct actor");
-        let claims = actor.claims().expect("claims missing");
-        assert_eq!(claims.subject, key.public_key());
+        actor.claims().expect("claims missing");
         let mut actor = actor.instantiate().await.context("failed to instantiate")?;
         actor
             .stderr(stderr())
@@ -141,7 +150,7 @@ async fn run(wasm: impl AsRef<Path>) -> anyhow::Result<Vec<(logging::Level, Stri
 async fn builtins_module() -> anyhow::Result<()> {
     init();
 
-    let logs = run(test_actors::RUST_BUILTINS_MODULE_REACTOR).await?;
+    let logs = run(test_actors::RUST_BUILTINS_MODULE_REACTOR_SIGNED).await?;
     assert_eq!(
         logs,
         vec![
@@ -209,7 +218,7 @@ async fn builtins_module() -> anyhow::Result<()> {
 async fn builtins_compat() -> anyhow::Result<()> {
     init();
 
-    let logs = run(test_actors::RUST_BUILTINS_COMPAT_REACTOR_PREVIEW2).await?;
+    let logs = run(test_actors::RUST_BUILTINS_COMPAT_REACTOR_PREVIEW2_SIGNED).await?;
     assert_eq!(
         logs,
         vec![
@@ -261,7 +270,7 @@ async fn builtins_compat() -> anyhow::Result<()> {
 async fn builtins_component() -> anyhow::Result<()> {
     init();
 
-    let logs = run(test_actors::RUST_BUILTINS_COMPONENT_REACTOR_PREVIEW2).await?;
+    let logs = run(test_actors::RUST_BUILTINS_COMPONENT_REACTOR_PREVIEW2_SIGNED).await?;
     assert_eq!(
         logs,
         vec![

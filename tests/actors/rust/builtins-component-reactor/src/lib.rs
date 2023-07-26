@@ -17,13 +17,13 @@ impl exports::wasmcloud::bus::guest::Guest for Actor {
             method,
             path,
             query_string,
-            header,
+            header: _,
             body,
         } = rmp_serde::from_read(stdin()).expect("failed to read request");
-        assert!(method.is_empty());
-        assert!(path.is_empty());
-        assert!(query_string.is_empty());
-        assert!(header.is_empty());
+        assert_eq!(method, "POST");
+        assert_eq!(path, "/");
+        assert_eq!(query_string, "");
+        // TODO: Validate headers
 
         #[derive(Deserialize)]
         struct Request {

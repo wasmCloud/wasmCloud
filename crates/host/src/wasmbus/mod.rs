@@ -9,6 +9,7 @@ use crate::fetch_actor;
 
 use core::future::Future;
 use core::num::NonZeroUsize;
+
 use core::pin::Pin;
 use core::task::{Context, Poll};
 use core::time::Duration;
@@ -17,9 +18,13 @@ use std::collections::{hash_map, BTreeMap, HashMap};
 use std::env;
 use std::env::consts::{ARCH, FAMILY, OS};
 use std::io::Cursor;
+use std::process::Stdio;
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, ensure, Context as _};
+use async_nats::jetstream::kv;
+use base64::engine::general_purpose::STANDARD_NO_PAD;
+use base64::Engine;
 use bytes::{BufMut, Bytes, BytesMut};
 use cloudevents::{EventBuilder, EventBuilderV10};
 use futures::stream::{AbortHandle, Abortable};
@@ -27,21 +32,24 @@ use futures::{stream, try_join, Stream, StreamExt, TryStreamExt};
 use nkeys::{KeyPair, KeyPairType};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
-use tokio::io::{stderr, AsyncWrite};
+use tokio::io::{stderr, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{watch, RwLock};
+use tokio::task::JoinHandle;
 use tokio::time::{interval_at, Instant};
 use tokio::{process, spawn};
 use tokio_stream::wrappers::IntervalStream;
-use tracing::{debug, error, info, instrument, trace, warn};
+use tracing::{debug, error, info, instrument, warn};
 use ulid::Ulid;
 use uuid::Uuid;
 use wascap::jwt;
 use wasmcloud_control_interface::{
-    ActorAuctionRequest, ActorDescription, ProviderAuctionRequest, ProviderDescription,
-    ScaleActorCommand, StartActorCommand, StartProviderCommand, StopActorCommand, StopHostCommand,
-    StopProviderCommand, UpdateActorCommand,
+    ActorAuctionRequest, ActorDescription, LinkDefinition, ProviderAuctionRequest,
+    ProviderDescription, RemoveLinkDefinitionRequest, ScaleActorCommand, StartActorCommand,
+    StartProviderCommand, StopActorCommand, StopHostCommand, StopProviderCommand,
+    UpdateActorCommand,
 };
 use wasmcloud_runtime::{ActorInstancePool, Runtime};
 
@@ -191,7 +199,7 @@ struct ActorInstance {
 }
 
 impl ActorInstance {
-    #[instrument(skip(payload))]
+    #[instrument(skip(self, payload))]
     async fn handle_call(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
         #[allow(unused)] // TODO: Use fields or remove
         #[derive(Debug, Deserialize)]
@@ -278,7 +286,7 @@ impl ActorInstance {
             .context("failed to encode response")
     }
 
-    #[instrument]
+    #[instrument(skip(self))]
     async fn handle_message(
         &self,
         async_nats::Message {
@@ -314,7 +322,7 @@ struct Actor {
 
 #[derive(Debug)]
 struct ProviderInstance {
-    child: process::Child,
+    child: JoinHandle<()>,
     id: Ulid,
     annotations: Option<Annotations>,
 }
@@ -338,12 +346,27 @@ pub struct Lattice {
     host_key: KeyPair,
     labels: HashMap<String, String>,
     nats: async_nats::Client,
+    data: kv::Store,
+    data_watch: AbortHandle,
     providers: RwLock<HashMap<String, Provider>>,
     runtime: Runtime,
     start_at: Instant,
     stop_tx: watch::Sender<Option<Instant>>,
     stop_rx: watch::Receiver<Option<Instant>>,
     queue: AbortHandle,
+    links: RwLock<HashMap<String, LinkDefinition>>,
+}
+
+fn linkdef_hash(
+    actor_id: impl AsRef<str>,
+    contract_id: impl AsRef<str>,
+    link_name: impl AsRef<str>,
+) -> String {
+    let mut hash = Sha256::default();
+    hash.update(actor_id.as_ref());
+    hash.update(contract_id.as_ref());
+    hash.update(link_name.as_ref());
+    hex::encode_upper(hash.finalize())
 }
 
 impl Lattice {
@@ -414,9 +437,6 @@ impl Lattice {
 
         let (stop_tx, stop_rx) = watch::channel(None);
 
-        let (queue_abort, queue_abort_reg) = AbortHandle::new_pair();
-        let (heartbeat_abort, heartbeat_abort_reg) = AbortHandle::new_pair();
-
         // TODO: Configure
         let runtime = Runtime::builder()
             .actor_config(wasmcloud_runtime::ActorConfig {
@@ -425,6 +445,38 @@ impl Lattice {
             .build()
             .context("failed to build runtime")?;
         let event_builder = EventBuilderV10::new().source(host_key.public_key());
+
+        let jetstream = async_nats::jetstream::new(nats.clone());
+        // TODO: Use prefix
+        let bucket = format!("LATTICEDATA_{prefix}", prefix = "default");
+        jetstream
+            .create_stream(async_nats::jetstream::stream::Config {
+                allow_direct: true,
+                allow_rollup: true,
+                deny_delete: true,
+                discard: async_nats::jetstream::stream::DiscardPolicy::New,
+                duplicate_window: Duration::from_nanos(120_000_000_000),
+                max_bytes: -1,
+                max_consumers: -1,
+                max_message_size: -1,
+                max_messages: -1,
+                max_messages_per_subject: 1,
+                name: format!("KV_{bucket}"),
+                num_replicas: 1,
+                subjects: vec![format!("$KV.{bucket}.>")],
+                ..async_nats::jetstream::stream::Config::default()
+            })
+            .await
+            .map_err(|e| anyhow!(e).context("failed to create data bucket"))?;
+        let data = jetstream
+            .get_key_value(&bucket)
+            .await
+            .map_err(|e| anyhow!(e).context("failed to acquire data bucket"))?;
+
+        let (queue_abort, queue_abort_reg) = AbortHandle::new_pair();
+        let (heartbeat_abort, heartbeat_abort_reg) = AbortHandle::new_pair();
+        let (data_watch_abort, data_watch_abort_reg) = AbortHandle::new_pair();
+
         let wasmbus = Lattice {
             actors: RwLock::default(),
             cluster_key,
@@ -434,12 +486,15 @@ impl Lattice {
             host_key,
             labels,
             nats,
+            data: data.clone(),
+            data_watch: data_watch_abort.clone(),
             providers: RwLock::default(),
             runtime,
             start_at,
             stop_rx,
             stop_tx,
             queue: queue_abort.clone(),
+            links: RwLock::default(),
         };
         wasmbus
             .publish_event("host_started", start_evt)
@@ -459,6 +514,29 @@ impl Lattice {
                     .await;
             }
         });
+        let data_watch: JoinHandle<anyhow::Result<_>> = spawn({
+            let wasmbus = Arc::clone(&wasmbus);
+            async move {
+                let data_watch = data
+                    .watch_with_history(">")
+                    .await
+                    .context("failed to watch lattice data bucket")?;
+                Abortable::new(data_watch, data_watch_abort_reg)
+                    .for_each(move |entry| {
+                        let wasmbus = Arc::clone(&wasmbus);
+                        async move {
+                            match entry {
+                                Err(error) => {
+                                    error!("failed to watch lattice data bucket: {error}");
+                                }
+                                Ok(entry) => wasmbus.process_entry(entry).await,
+                            }
+                        }
+                    })
+                    .await;
+                Ok(())
+            }
+        });
         let heartbeat = spawn({
             let wasmbus = Arc::clone(&wasmbus);
             Abortable::new(heartbeat, heartbeat_abort_reg).for_each(move |_| {
@@ -474,7 +552,8 @@ impl Lattice {
         Ok((Arc::clone(&wasmbus), async move {
             heartbeat_abort.abort();
             queue_abort.abort();
-            try_join!(heartbeat, queue).context("failed to await tasks")?;
+            data_watch_abort.abort();
+            let _ = try_join!(queue, data_watch, heartbeat).context("failed to await tasks")?;
             wasmbus
                 .publish_event(
                     "host_stopped",
@@ -573,9 +652,7 @@ impl Lattice {
             .data("application/json", data)
             .build()
             .context("failed to build cloud event")?;
-        trace!(?ev, "serialize event");
         let ev = serde_json::to_vec(&ev).context("failed to serialize event")?;
-        trace!(?ev, "publish event");
         self.nats
             .publish("wasmbus.evt.default".into(), ev.into())
             .await
@@ -756,7 +833,7 @@ impl Lattice {
         Ok(())
     }
 
-    #[instrument(skip(payload))]
+    #[instrument(skip(self, payload))]
     async fn handle_auction_actor(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
         let ActorAuctionRequest {
             actor_ref,
@@ -776,7 +853,7 @@ impl Lattice {
         Ok(buf.into())
     }
 
-    #[instrument(skip(payload))]
+    #[instrument(skip(self, payload))]
     async fn handle_auction_provider(
         &self,
         payload: impl AsRef<[u8]>,
@@ -814,7 +891,7 @@ impl Lattice {
         Ok(Some(buf.into()))
     }
 
-    #[instrument(skip(payload))]
+    #[instrument(skip(self, payload))]
     async fn handle_stop(&self, payload: impl AsRef<[u8]>, host_id: &str) -> anyhow::Result<Bytes> {
         let StopHostCommand { timeout, .. } = serde_json::from_slice(payload.as_ref())
             .context("failed to deserialize stop command")?;
@@ -822,6 +899,7 @@ impl Lattice {
         debug!(?timeout, "stop host");
 
         self.heartbeat.abort();
+        self.data_watch.abort();
         self.queue.abort();
         let deadline =
             timeout.and_then(|timeout| Instant::now().checked_add(Duration::from_millis(timeout)));
@@ -829,7 +907,7 @@ impl Lattice {
         Ok(SUCCESS.into())
     }
 
-    #[instrument(skip(payload))]
+    #[instrument(skip(self, payload))]
     async fn handle_scale_actor(
         &self,
         payload: impl AsRef<[u8]>,
@@ -929,7 +1007,7 @@ impl Lattice {
         Ok(SUCCESS.into())
     }
 
-    #[instrument(skip(payload))]
+    #[instrument(skip(self, payload))]
     async fn handle_launch_actor(
         &self,
         payload: impl AsRef<[u8]>,
@@ -988,7 +1066,7 @@ impl Lattice {
         Ok(SUCCESS.into())
     }
 
-    #[instrument(skip(payload))]
+    #[instrument(skip(self, payload))]
     async fn handle_stop_actor(
         &self,
         payload: impl AsRef<[u8]>,
@@ -1046,7 +1124,7 @@ impl Lattice {
         Ok(SUCCESS.into())
     }
 
-    #[instrument(skip(payload))]
+    #[instrument(skip(self, payload))]
     async fn handle_update_actor(
         &self,
         payload: impl AsRef<[u8]>,
@@ -1065,7 +1143,7 @@ impl Lattice {
         bail!("TODO");
     }
 
-    #[instrument(skip(payload))]
+    #[instrument(skip(self, payload))]
     async fn handle_launch_provider(
         &self,
         payload: impl AsRef<[u8]>,
@@ -1101,12 +1179,70 @@ impl Lattice {
                 instances: HashMap::default(),
             });
         if let hash_map::Entry::Vacant(entry) = instances.entry(link_name.clone()) {
-            debug!(?path, "spawn provider process");
-            let child = process::Command::new(&path)
+            let id = Ulid::new();
+            let async_nats::ServerInfo { host, port, .. } = self.nats.server_info();
+            let invocation_seed = self
+                .cluster_key
+                .seed()
+                .context("cluster key seed missing")?;
+            let links = self.links.read().await;
+            let link_definitions: Vec<_> = links
+                .values()
+                .filter(|ld| ld.provider_id == claims.subject && ld.link_name == link_name)
+                .collect();
+            let data = serde_json::to_vec(&json!({
+                "host_id": self.host_key.public_key(),
+                "lattice_rpc_prefix": "default", // TODO: Support lattice prefix config
+                "link_name": link_name,
+                "lattice_rpc_user_jwt": "", // TODO: Support config
+                "lattice_rpc_user_seed": "", // TODO: Support config
+                "lattice_rpc_url": format!("{host}:{port}"),
+                "lattice_rpc_tls": 0, // TODO: Support config
+                "env_values": {},
+                "instance_id": Uuid::from_u128(id.into()),
+                "provider_key": claims.subject,
+                "link_definitions": link_definitions,
+                "config_json": configuration,
+                "default_rpc_timeout_ms": 2000, // TODO: Support config
+                "cluster_issuers": vec![self.cluster_key.public_key()], // TODO: Support config
+                "invocation_seed": invocation_seed,
+                // TODO: Set `js_domain`
+                // TODO: Set `structured_logging`
+                // TODO: Set `log_level`
+            }))
+            .context("failed to serialize provider data")?;
+
+            debug!(
+                ?path,
+                data = &*String::from_utf8_lossy(&data),
+                "spawn provider process"
+            );
+            let mut child = process::Command::new(&path)
+                .stdin(Stdio::piped())
                 .kill_on_drop(true)
                 .spawn()
                 .context("failed to spawn provider process")?;
-            let id = Ulid::new();
+            let mut stdin = child.stdin.take().context("failed to take stdin")?;
+            stdin
+                .write_all(STANDARD_NO_PAD.encode(&data).as_bytes())
+                .await
+                .context("failed to write provider data")?;
+            stdin
+                .write_all(b"\r\n")
+                .await
+                .context("failed to write newline")?;
+            stdin.shutdown().await.context("failed to close stdin")?;
+
+            let child = spawn(async move {
+                match child.wait().await {
+                    Ok(status) => {
+                        debug!("`{}` exited with `{status:?}`", path.display());
+                    }
+                    Err(e) => {
+                        error!("failed to wait for `{}` to execute: {e}", path.display());
+                    }
+                }
+            });
             self.publish_event(
                 "provider_started",
                 event::provider_started(
@@ -1130,7 +1266,7 @@ impl Lattice {
         Ok(SUCCESS.into())
     }
 
-    #[instrument(skip(payload))]
+    #[instrument(skip(self, payload))]
     async fn handle_stop_provider(
         &self,
         payload: impl AsRef<[u8]>,
@@ -1162,8 +1298,8 @@ impl Lattice {
         let instances = &mut provider.instances;
         if let hash_map::Entry::Occupied(entry) = instances.entry(link_name.clone()) {
             if entry.get().annotations == annotations {
-                let ProviderInstance { id, mut child, .. } = entry.remove();
-                child.kill().await.context("failed to kill child")?;
+                let ProviderInstance { id, child, .. } = entry.remove();
+                child.abort();
                 self.publish_event(
                     "provider_stopped",
                     event::provider_stopped(
@@ -1184,7 +1320,7 @@ impl Lattice {
         Ok(SUCCESS.into())
     }
 
-    #[instrument(skip(_payload))]
+    #[instrument(skip(self, _payload))]
     async fn handle_inventory(
         &self,
         _payload: impl AsRef<[u8]>,
@@ -1288,36 +1424,75 @@ impl Lattice {
     }
 
     #[allow(unused)] // TODO: Remove once implemented
-    #[instrument(skip(payload))]
+    #[instrument(skip(self, payload))]
     async fn handle_claims(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
         bail!("TODO")
     }
 
     #[allow(unused)] // TODO: Remove once implemented
-    #[instrument(skip(payload))]
+    #[instrument(skip(self, payload))]
     async fn handle_links(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
         bail!("TODO")
     }
 
-    #[allow(unused)] // TODO: Remove once implemented
-    #[instrument(skip(payload))]
+    #[instrument(skip(self, payload))]
     async fn handle_linkdef_put(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
-        bail!("TODO")
+        let payload = payload.as_ref();
+        let LinkDefinition {
+            actor_id,
+            provider_id,
+            link_name,
+            contract_id,
+            values,
+            ..
+        } = serde_json::from_slice(payload).context("failed to deserialize link definition")?;
+        let id = linkdef_hash(&actor_id, &contract_id, &link_name);
+
+        debug!(
+            id,
+            actor_id,
+            provider_id,
+            link_name,
+            contract_id,
+            ?values,
+            "put link definition"
+        );
+        self.data
+            .put(format!("LINKDEF_{id}"), Bytes::copy_from_slice(payload))
+            .await
+            .map_err(|e| anyhow!(e).context("failed to store link definition"))?;
+        Ok(SUCCESS.into())
     }
 
     #[allow(unused)] // TODO: Remove once implemented
-    #[instrument(skip(payload))]
+    #[instrument(skip(self, payload))]
     async fn handle_linkdef_del(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
-        bail!("TODO")
+        let RemoveLinkDefinitionRequest {
+            actor_id,
+            ref link_name,
+            contract_id,
+        } = serde_json::from_slice(payload.as_ref())
+            .context("failed to deserialize link definition deletion command")?;
+        let id = linkdef_hash(&actor_id, &contract_id, link_name);
+
+        debug!(
+            id,
+            actor_id, link_name, contract_id, "delete link definition"
+        );
+        self.data
+            .delete(format!("LINKDEF_{id}"))
+            .await
+            .map_err(|e| anyhow!(e).context("failed to delete link definition"))?;
+        Ok(SUCCESS.into())
     }
 
     #[allow(unused)] // TODO: Remove once implemented
-    #[instrument(skip(payload))]
+    #[instrument(skip(self, payload))]
     async fn handle_registries_put(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
         bail!("TODO")
     }
 
-    #[instrument(skip(_payload))]
+    #[instrument(skip(self, _payload))]
     async fn handle_ping_hosts(&self, _payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
         let uptime = self.start_at.elapsed();
         // TODO: Fill in the TODOs
@@ -1340,7 +1515,7 @@ impl Lattice {
         Ok(buf.into())
     }
 
-    #[instrument]
+    #[instrument(skip(self))]
     async fn handle_message(
         &self,
         async_nats::Message {
@@ -1429,6 +1604,153 @@ impl Lattice {
                 }
             }
             _ => {}
+        }
+    }
+
+    #[instrument(skip(self, id, value))]
+    async fn process_linkdef_put(
+        &self,
+        id: impl AsRef<str>,
+        value: impl AsRef<[u8]>,
+    ) -> anyhow::Result<()> {
+        let id = id.as_ref();
+        let value = value.as_ref();
+        let ref ld @ LinkDefinition {
+            ref actor_id,
+            ref provider_id,
+            ref link_name,
+            ref contract_id,
+            ref values,
+            ..
+        } = serde_json::from_slice(value).context("failed to deserialize link definition")?;
+        ensure!(
+            id == linkdef_hash(actor_id, contract_id, link_name),
+            "linkdef hash mismatch"
+        );
+
+        debug!(
+            id,
+            actor_id,
+            provider_id,
+            link_name,
+            contract_id,
+            ?values,
+            "process link definition entry put"
+        );
+
+        let mut links = self.links.write().await;
+        links.insert(id.to_string(), ld.clone());
+
+        self.publish_event(
+            "linkdef_set",
+            event::linkdef_set(id, actor_id, provider_id, link_name, contract_id, values),
+        )
+        .await?;
+
+        // TODO: Broadcast `linkdef_added`
+
+        let msgp = rmp_serde::to_vec(ld).context("failed to encode link definition")?;
+        self.nats
+            .publish(
+                // TODO: Set prefix
+                format!(
+                    "wasmbus.rpc.{prefix}.{provider_id}.{link_name}.linkdefs.put",
+                    prefix = "default"
+                ),
+                msgp.into(),
+            )
+            .await
+            .context("failed to publish link definition")?;
+        Ok(())
+    }
+
+    #[instrument(skip(self, id, _value))]
+    async fn process_linkdef_delete(
+        &self,
+        id: impl AsRef<str>,
+        _value: impl AsRef<[u8]>,
+    ) -> anyhow::Result<()> {
+        let id = id.as_ref();
+
+        debug!(id, "process link definition entry deletion");
+
+        let mut links = self.links.write().await;
+        // NOTE: There is a race condition here, which occurs when `linkdefs.del`
+        // is used before `data_watch` task has fully imported the current lattice,
+        // but that command is deprecated, so assume it's fine
+        let ref ld @ LinkDefinition {
+            ref actor_id,
+            ref provider_id,
+            ref link_name,
+            ref contract_id,
+            ref values,
+            ..
+        } = links
+            .remove(id)
+            .context("attempt to remove a non-existent link")?;
+
+        self.publish_event(
+            "linkdef_deleted",
+            event::linkdef_deleted(id, actor_id, provider_id, link_name, contract_id, values),
+        )
+        .await?;
+
+        // TODO: Broadcast `linkdef_removed`
+
+        let msgp = rmp_serde::to_vec(ld).context("failed to encode link definition")?;
+        self.nats
+            .publish(
+                // TODO: Set prefix
+                format!(
+                    "wasmbus.rpc.{prefix}.{provider_id}.{link_name}.linkdefs.del",
+                    prefix = "default"
+                ),
+                msgp.into(),
+            )
+            .await
+            .context("failed to publish link definition deletion")?;
+        Ok(())
+    }
+
+    #[instrument(skip(self))]
+    async fn process_entry(
+        &self,
+        async_nats::jetstream::kv::Entry {
+            bucket,
+            key,
+            value,
+            revision,
+            delta,
+            created,
+            operation,
+        }: async_nats::jetstream::kv::Entry,
+    ) {
+        use async_nats::jetstream::kv::Operation;
+
+        let mut key_parts = key.split('_');
+        #[allow(clippy::single_match_else)]
+        let res = match (operation, key_parts.next(), key_parts.next()) {
+            (Operation::Put, Some("LINKDEF"), Some(id)) => {
+                self.process_linkdef_put(id, value).await
+            }
+            (Operation::Delete, Some("LINKDEF"), Some(id)) => {
+                self.process_linkdef_delete(id, value).await
+            }
+            _ => {
+                error!(
+                    bucket,
+                    key,
+                    revision,
+                    delta,
+                    ?created,
+                    ?operation,
+                    "unsupported KV bucket entry"
+                );
+                return;
+            }
+        };
+        if let Err(error) = &res {
+            warn!(?error, ?operation, bucket, "failed to process entry");
         }
     }
 }

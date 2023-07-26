@@ -87,17 +87,20 @@
           buildInputs ? [],
           depsBuildBuild ? [],
           nativeBuildInputs ? [],
+          nativeCheckInputs ? [],
           preCheck ? "",
           ...
         } @ args: let
           cargoLock.root = readTOML ./Cargo.lock;
 
           cargoLock.actors-rust = readTOML ./tests/actors/rust/Cargo.lock;
+          cargoLock.providers-rust = readTOML ./crates/providers/Cargo.lock;
           cargoLock.tcp-component-command = readTOML ./tests/actors/rust/tcp-component-command/Cargo.lock;
 
           lockPackages =
             cargoLock.root.package
             ++ cargoLock.actors-rust.package
+            ++ cargoLock.providers-rust.package
             ++ cargoLock.tcp-component-command.package;
         in
           with pkgsCross;
@@ -132,6 +135,12 @@
                 nativeBuildInputs
                 ++ [
                   pkgs.protobuf # prost build dependency
+                ];
+
+              nativeCheckInputs =
+                nativeCheckInputs
+                ++ [
+                  pkgs.nats-server
                 ];
             }
             // optionalAttrs (args ? cargoArtifacts && stdenv.hostPlatform.isDarwin) {

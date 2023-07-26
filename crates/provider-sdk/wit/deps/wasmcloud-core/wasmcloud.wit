@@ -1,0 +1,85 @@
+package wasmcloud:core@0.1.0
+
+interface types {
+  use wasi:logging/logging.{level}
+
+  type link-settings =          list<tuple<string, string>>
+  type host-env-values =        list<tuple<string, string>>
+  type trace-context =          list<tuple<string, string>>
+  type actor-links =            list<link-definition>
+  type cluster-issuers =        list<cluster-issuer-key>
+  type cluster-issuer-key =     string 
+  type capability-contract-id = string
+  type blob =                   list<u8>
+
+  record link-definition {
+    actor-id:     string,
+    provider-id:  string,
+    link-name:    string,
+    contract-id:  string,
+    values:       option<link-settings>,
+  }
+
+  record health-check-response {
+    healthy: bool,
+    message: string,
+  }
+
+  record host-data {
+    host-id:                string,
+    lattice-rpc-prefix:     string,
+    link-name:              string,
+    lattice-rpc-user-jwt:   string,
+    lattice-rpc-user-seed:  string,
+    lattice-rpc-url:        string,
+    provider-key:           string,
+    invocation-seed:        string,
+    env-values:             host-env-values,
+    instance-id:            string,
+    link-definitions:       actor-links,
+    cluster-issuers:        cluster-issuers,
+    config-json:            string,
+    default-rpc-timeout-ms: u64,
+    structured-logging:     bool,
+    log-level:              level,
+  }
+
+  record invocation {
+    origin:         wasmcloud-entity,
+    target:         wasmcloud-entity,
+    operation:      string,
+    msg:            blob,
+    id:             string,
+    encoded-claims: string,
+    source-host-id: string,
+    content-length: u64,
+    trace-context:  trace-context,
+  }
+
+  record invocation-response {
+    msg:            blob,
+    invocation-id:  string,
+    error:          option<string>,
+    content-length: u64,
+    trace-context:  trace-context,
+  }
+
+  record wasmcloud-entity {
+    public-key:  string,
+    contract-id: string,
+    link-name:   string,
+  }
+}
+
+interface health-check {
+  use types.{invocation, invocation-response, health-check-response, link-definition, wasmcloud-entity}
+
+  health-request: func() -> health-check-response
+}
+
+world wasmcloud-core {
+  import wasi:logging/logging
+  use types.{invocation, invocation-response, health-check-response, link-definition, wasmcloud-entity}
+
+  export health-check
+}

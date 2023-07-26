@@ -1,0 +1,39 @@
+[package]
+name = "wasmcloud-provider-sdk"
+version = "0.1.0"
+
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = [ ]
+otel = ["opentelemetry", "tracing-opentelemetry", "opentelemetry-otlp"]
+
+[dependencies]
+async-nats = { workspace = true }
+async-trait = { workspace = true }
+atty = { workspace = true }
+base64 = { workspace = true }
+data-encoding = { workspace = true }
+futures = { workspace = true }
+lazy_static = { workspace = true }
+nkeys = { workspace = true }
+once_cell = { workspace = true }
+opentelemetry = { workspace = true, features = ["rt-tokio"], optional = true }
+opentelemetry-otlp = { workspace = true, features = ["http-proto", "reqwest-client"], optional = true }
+rmp-serde = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_bytes = { workspace = true, features = ["default"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tracing = { workspace = true, features = ["log"] }
+tracing-futures = { workspace = true, features = ["default"] }
+tracing-opentelemetry = { workspace = true, optional = true }
+tracing-subscriber = { workspace = true, features = ["env-filter", "json", "fmt"] }
+uuid = { workspace = true, features = ["v4"] }
+wascap = { workspace = true }
