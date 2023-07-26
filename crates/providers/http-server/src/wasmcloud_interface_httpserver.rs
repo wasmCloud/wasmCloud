@@ -1,91 +1,17 @@
 use std::{borrow::Cow, string::ToString};
 
 use serde::{Deserialize, Serialize};
-use wasmbus_rpc::{
-    common::{Context, Message, MessageDispatch, Transport},
-    error::{RpcError, RpcResult},
+use wasmcloud_provider_sdk::{
+    Context, Message, MessageDispatch, Transport,
+    error::{InvocationError, InvocationResult},
 };
 #[allow(dead_code)]
 pub const SMITHY_VERSION: &str = "1.0";
 /// map data structure for holding http headers
 ///
 pub type HeaderMap = std::collections::HashMap<String, HeaderValues>;
-#[doc(hidden)]
-#[allow(unused_mut)]
-pub fn encode_header_map<W: wasmbus_rpc::cbor::Write>(
-    mut e: &mut wasmbus_rpc::cbor::Encoder<W>,
-    val: &HeaderMap,
-) -> RpcResult<()>
-where
-    <W as wasmbus_rpc::cbor::Write>::Error: std::fmt::Display,
-{
-    e.map(val.len() as u64)?;
-    for (k, v) in val {
-        e.str(k)?;
-        encode_header_values(e, v)?;
-    }
-    Ok(())
-}
-#[doc(hidden)]
-pub fn decode_header_map(d: &mut wasmbus_rpc::cbor::Decoder<'_>) -> Result<HeaderMap, RpcError> {
-    let __result = {
-        {
-            let map_len = d.fixed_map()? as usize;
-            let mut m: std::collections::HashMap<String, HeaderValues> =
-                std::collections::HashMap::with_capacity(map_len);
-            for _ in 0..map_len {
-                let k = d.str()?.to_string();
-                let v = decode_header_values(d).map_err(|e| {
-                    format!("decoding 'org.wasmcloud.interface.httpserver#HeaderValues': {e}",)
-                })?;
-                m.insert(k, v);
-            }
-            m
-        }
-    };
-    Ok(__result)
-}
 pub type HeaderValues = Vec<String>;
-#[doc(hidden)]
-#[allow(unused_mut)]
-pub fn encode_header_values<W: wasmbus_rpc::cbor::Write>(
-    mut e: &mut wasmbus_rpc::cbor::Encoder<W>,
-    val: &HeaderValues,
-) -> RpcResult<()>
-where
-    <W as wasmbus_rpc::cbor::Write>::Error: std::fmt::Display,
-{
-    e.array(val.len() as u64)?;
-    for item in val.iter() {
-        e.str(item)?;
-    }
-    Ok(())
-}
-#[doc(hidden)]
-pub fn decode_header_values(
-    d: &mut wasmbus_rpc::cbor::Decoder<'_>,
-) -> Result<HeaderValues, RpcError> {
-    let __result = {
-        if let Some(n) = d.array()? {
-            let mut arr: Vec<String> = Vec::with_capacity(n as usize);
-            for _ in 0..(n as usize) {
-                arr.push(d.str()?.to_string())
-            }
-            arr
-        } else {
-            let mut arr: Vec<String> = Vec::new();
-            loop {
-                match d.datatype() {
-                    Err(_) => break,
-                    Ok(wasmbus_rpc::cbor::Type::Break) => break,
-                    Ok(_) => arr.push(d.str()?.to_string()),
-                }
-            }
-            arr
-        }
-    };
-    Ok(__result)
-}
+
 /// HttpRequest contains data sent to actor about the http request
 #[derive(Serialize, Deserialize, Debug)]
 pub struct HttpRequest {
@@ -107,115 +33,6 @@ pub struct HttpRequest {
     pub body: Vec<u8>,
 }
 
-#[doc(hidden)]
-#[allow(unused_mut)]
-pub fn encode_http_request<W: wasmbus_rpc::cbor::Write>(
-    mut e: &mut wasmbus_rpc::cbor::Encoder<W>,
-    val: &HttpRequest,
-) -> RpcResult<()>
-where
-    <W as wasmbus_rpc::cbor::Write>::Error: std::fmt::Display,
-{
-    e.array(5)?;
-    e.str(&val.method)?;
-    e.str(&val.path)?;
-    e.str(&val.query_string)?;
-    encode_header_map(e, &val.header)?;
-    e.bytes(&val.body)?;
-    Ok(())
-}
-#[doc(hidden)]
-pub fn decode_http_request(
-    d: &mut wasmbus_rpc::cbor::Decoder<'_>,
-) -> Result<HttpRequest, RpcError> {
-    let __result = {
-        let mut method: Option<String> = None;
-        let mut path: Option<String> = None;
-        let mut query_string: Option<String> = None;
-        let mut header: Option<HeaderMap> = None;
-        let mut body: Option<Vec<u8>> = None;
-        let is_array = match d.datatype()? {
-            wasmbus_rpc::cbor::Type::Array => true,
-            wasmbus_rpc::cbor::Type::Map => false,
-            _ => {
-                return Err(RpcError::Deser(
-                    "decoding struct HttpRequest, expected array or map".to_string(),
-                ));
-            }
-        };
-        if is_array {
-            let len = d.fixed_array()?;
-            for __i in 0..(len as usize) {
-                match __i {
-                    0 => method = Some(d.str()?.to_string()),
-                    1 => path = Some(d.str()?.to_string()),
-                    2 => query_string = Some(d.str()?.to_string()),
-                    3 => {
-                        header = Some(decode_header_map(d).map_err(|e| {
-                            format!("decoding 'org.wasmcloud.interface.httpserver#HeaderMap': {e}")
-                        })?);
-                    }
-                    4 => body = Some(d.bytes()?.to_vec()),
-                    _ => d.skip()?,
-                }
-            }
-        } else {
-            let len = d.fixed_map()?;
-            for __i in 0..(len as usize) {
-                match d.str()? {
-                    "method" => method = Some(d.str()?.to_string()),
-                    "path" => path = Some(d.str()?.to_string()),
-                    "queryString" => query_string = Some(d.str()?.to_string()),
-                    "header" => {
-                        header = Some(decode_header_map(d).map_err(|e| {
-                            format!("decoding 'org.wasmcloud.interface.httpserver#HeaderMap': {e}",)
-                        })?);
-                    }
-                    "body" => body = Some(d.bytes()?.to_vec()),
-                    _ => d.skip()?,
-                }
-            }
-        }
-        HttpRequest {
-            method: if let Some(__x) = method {
-                __x
-            } else {
-                return Err(RpcError::Deser(
-                    "missing field HttpRequest.method (#0)".to_string(),
-                ));
-            },
-            path: if let Some(__x) = path {
-                __x
-            } else {
-                return Err(RpcError::Deser(
-                    "missing field HttpRequest.path (#1)".to_string(),
-                ));
-            },
-            query_string: if let Some(__x) = query_string {
-                __x
-            } else {
-                return Err(RpcError::Deser(
-                    "missing field HttpRequest.query_string (#2)".to_string(),
-                ));
-            },
-            header: if let Some(__x) = header {
-                __x
-            } else {
-                return Err(RpcError::Deser(
-                    "missing field HttpRequest.header (#3)".to_string(),
-                ));
-            },
-            body: if let Some(__x) = body {
-                __x
-            } else {
-                return Err(RpcError::Deser(
-                    "missing field HttpRequest.body (#4)".to_string(),
-                ));
-            },
-        }
-    };
-    Ok(__result)
-}
 /// HttpResponse contains the actor's response to return to the http client
 #[derive(Serialize, Deserialize, Debug)]
 pub struct HttpResponse {
@@ -232,93 +49,6 @@ pub struct HttpResponse {
     pub body: Vec<u8>,
 }
 
-#[doc(hidden)]
-#[allow(unused_mut)]
-pub fn encode_http_response<W: wasmbus_rpc::cbor::Write>(
-    mut e: &mut wasmbus_rpc::cbor::Encoder<W>,
-    val: &HttpResponse,
-) -> RpcResult<()>
-where
-    <W as wasmbus_rpc::cbor::Write>::Error: std::fmt::Display,
-{
-    e.array(3)?;
-    e.u16(val.status_code)?;
-    encode_header_map(e, &val.header)?;
-    e.bytes(&val.body)?;
-    Ok(())
-}
-#[doc(hidden)]
-pub fn decode_http_response(
-    d: &mut wasmbus_rpc::cbor::Decoder<'_>,
-) -> Result<HttpResponse, RpcError> {
-    let __result = {
-        let mut status_code: Option<u16> = None;
-        let mut header: Option<HeaderMap> = None;
-        let mut body: Option<Vec<u8>> = None;
-        let is_array = match d.datatype()? {
-            wasmbus_rpc::cbor::Type::Array => true,
-            wasmbus_rpc::cbor::Type::Map => false,
-            _ => {
-                return Err(RpcError::Deser(
-                    "decoding struct HttpResponse, expected array or map".to_string(),
-                ));
-            }
-        };
-        if is_array {
-            let len = d.fixed_array()?;
-            for __i in 0..(len as usize) {
-                match __i {
-                    0 => status_code = Some(d.u16()?),
-                    1 => {
-                        header = Some(decode_header_map(d).map_err(|e| {
-                            format!("decoding 'org.wasmcloud.interface.httpserver#HeaderMap': {e}")
-                        })?);
-                    }
-                    2 => body = Some(d.bytes()?.to_vec()),
-                    _ => d.skip()?,
-                }
-            }
-        } else {
-            let len = d.fixed_map()?;
-            for __i in 0..(len as usize) {
-                match d.str()? {
-                    "statusCode" => status_code = Some(d.u16()?),
-                    "header" => {
-                        header = Some(decode_header_map(d).map_err(|e| {
-                            format!("decoding 'org.wasmcloud.interface.httpserver#HeaderMap': {e}")
-                        })?);
-                    }
-                    "body" => body = Some(d.bytes()?.to_vec()),
-                    _ => d.skip()?,
-                }
-            }
-        }
-        HttpResponse {
-            status_code: if let Some(__x) = status_code {
-                __x
-            } else {
-                return Err(RpcError::Deser(
-                    "missing field HttpResponse.status_code (#0)".to_string(),
-                ));
-            },
-            header: if let Some(__x) = header {
-                __x
-            } else {
-                return Err(RpcError::Deser(
-                    "missing field HttpResponse.header (#1)".to_string(),
-                ));
-            },
-            body: if let Some(__x) = body {
-                __x
-            } else {
-                return Err(RpcError::Deser(
-                    "missing field HttpResponse.body (#2)".to_string(),
-                ));
-            },
-        }
-    };
-    Ok(__result)
-}
 /// HttpServer is the contract to be implemented by actor
 /// wasmbus.contractId: wasmcloud:httpserver
 /// wasmbus.actorReceive
@@ -335,7 +65,7 @@ pub trait HttpServer {
         arg: &'life2 HttpRequest,
     ) -> ::core::pin::Pin<
         Box<
-            dyn ::core::future::Future<Output = RpcResult<HttpResponse>>
+            dyn ::core::future::Future<Output = InvocationResult<HttpResponse>>
                 + ::core::marker::Send
                 + 'async_trait,
         >,
@@ -366,7 +96,7 @@ pub trait HttpServerReceiver: MessageDispatch + HttpServer {
         message: Message<'life2>,
     ) -> ::core::pin::Pin<
         Box<
-            dyn ::core::future::Future<Output = Result<Vec<u8>, RpcError>>
+            dyn ::core::future::Future<Output = Result<Vec<u8>, InvocationError>>
                 + ::core::marker::Send
                 + 'async_trait,
         >,
@@ -378,21 +108,22 @@ pub trait HttpServerReceiver: MessageDispatch + HttpServer {
         Self: ::core::marker::Sync + 'async_trait,
     {
         Box::pin(async move {
-            if let Some(__ret) = None::<Result<Vec<u8>, RpcError>> {
+            if let Some(__ret) = None::<Result<Vec<u8>, InvocationError>> {
                 return __ret;
             }
             let __self = self;
             let message = message;
-            let __ret: Result<Vec<u8>, RpcError> = {
+            let __ret: Result<Vec<u8>, InvocationError> = {
                 match message.method {
                     "HandleRequest" => {
-                        let value: HttpRequest = wasmbus_rpc::common::deserialize(&message.arg)
-                            .map_err(|e| RpcError::Deser(format!("'HttpRequest': {e}")))?;
+                        let value: HttpRequest =
+                            wasmcloud_provider_sdk::deserialize(&message.arg)
+                                .map_err(|e| InvocationError::Deser(format!("'HttpRequest': {e}")))?;
                         let resp = HttpServer::handle_request(__self, ctx, &value).await?;
-                        let buf = wasmbus_rpc::common::serialize(&resp)?;
+                        let buf = wasmcloud_provider_sdk::serialize(&resp)?;
                         Ok(buf)
                     }
-                    _ => Err(RpcError::MethodNotHandled(format!(
+                    _ => Err(InvocationError::MethodNotHandled(format!(
                         "HttpServer::{}",
                         message.method
                     ))),
@@ -419,12 +150,12 @@ impl<T: Transport> HttpServerSender<T> {
     }
 }
 #[cfg(not(target_arch = "wasm32"))]
-impl<'send> HttpServerSender<wasmbus_rpc::provider::ProviderTransport<'send>> {
+impl<'send> HttpServerSender<wasmcloud_provider_sdk::provider::ProviderTransport<'send>> {
     /// Constructs a Sender using an actor's LinkDefinition,
     /// Uses the provider's HostBridge for rpc
-    pub fn for_actor(ld: &'send wasmbus_rpc::core::LinkDefinition) -> Self {
+    pub fn for_actor(ld: &'send wasmcloud_provider_sdk::core::LinkDefinition) -> Self {
         Self {
-            transport: wasmbus_rpc::provider::ProviderTransport::new(ld, None),
+            transport: wasmcloud_provider_sdk::provider::ProviderTransport::new(ld, None),
         }
     }
 }
@@ -445,7 +176,7 @@ impl<T: Transport + std::marker::Sync + std::marker::Send> HttpServer for HttpSe
         arg: &'life2 HttpRequest,
     ) -> ::core::pin::Pin<
         Box<
-            dyn ::core::future::Future<Output = RpcResult<HttpResponse>>
+            dyn ::core::future::Future<Output = InvocationResult<HttpResponse>>
                 + ::core::marker::Send
                 + 'async_trait,
         >,
@@ -457,12 +188,12 @@ impl<T: Transport + std::marker::Sync + std::marker::Send> HttpServer for HttpSe
         Self: 'async_trait,
     {
         Box::pin(async move {
-            if let Some(__ret) = None::<RpcResult<HttpResponse>> {
+            if let Some(__ret) = None::<InvocationResult<HttpResponse>> {
                 return __ret;
             }
             let __self = self;
-            let __ret: RpcResult<HttpResponse> = {
-                let buf = wasmbus_rpc::common::serialize(arg)?;
+            let __ret: InvocationResult<HttpResponse> = {
+                let buf = wasmcloud_provider_sdk::serialize(arg)?;
                 let resp = __self
                     .transport
                     .send(
@@ -474,8 +205,8 @@ impl<T: Transport + std::marker::Sync + std::marker::Send> HttpServer for HttpSe
                         None,
                     )
                     .await?;
-                let value: HttpResponse = wasmbus_rpc::common::deserialize(&resp)
-                    .map_err(|e| RpcError::Deser(format!("'{e}': HttpResponse")))?;
+                let value: HttpResponse = wasmcloud_provider_sdk::deserialize(&resp)
+                    .map_err(|e| InvocationError::Deser(format!("'{e}': HttpResponse")))?;
                 Ok(value)
             };
             #[allow(unreachable_code)]

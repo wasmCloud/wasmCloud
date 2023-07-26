@@ -5,8 +5,8 @@ use std::{convert::Infallible, sync::Arc};
 
 use async_trait::async_trait;
 use tracing::{error, instrument, trace, warn};
-use wasmbus_rpc::{
-    core::LinkDefinition, error::RpcError, provider::prelude::*, provider::ProviderTransport,
+use wasmcloud_provider_sdk::{
+    core::LinkDefinition, error::InvocationError, provider::prelude::*, provider::ProviderTransport,
 };
 use wasmcloud_provider_httpserver::{
     load_settings, HttpServerCore, Request, Response, Server, ServerSender,
@@ -42,9 +42,9 @@ impl ProviderHandler for HttpServerProvider {
     /// Provider should perform any operations needed for a new link,
     /// including setting up per-actor resources, and checking authorization.
     /// If the link is allowed, return true, otherwise return false to deny the link.
-    async fn put_link(&self, ld: &LinkDefinition) -> Result<bool, RpcError> {
+    async fn put_link(&self, ld: &LinkDefinition) -> Result<bool, InvocationError> {
         let settings =
-            load_settings(&ld.values).map_err(|e| RpcError::ProviderInit(e.to_string()))?;
+            load_settings(&ld.values).map_err(|e| InvocationError::ProviderInit(e.to_string()))?;
 
         let http_server = HttpServerCore::new(
             settings.clone(),
@@ -53,7 +53,7 @@ impl ProviderHandler for HttpServerProvider {
         );
 
         http_server.start(ld).await.map_err(|e| {
-            RpcError::ProviderInit(format!(
+            InvocationError::ProviderInit(format!(
                 "starting httpserver for {} {:?}: {}",
                 &ld.actor_id, &settings.address, e
             ))
@@ -87,14 +87,14 @@ async fn call_actor(
     ld: Arc<LinkDefinition>,
     req: Request,
     timeout: Option<std::time::Duration>,
-) -> Result<Response, RpcError> {
+) -> Result<Response, InvocationError> {
     let tx = ProviderTransport::new_with_timeout(ld.as_ref(), Some(get_host_bridge()), timeout);
     let ctx = Context::default();
     let actor = ServerSender::via(tx);
 
     let rc = actor.handle_request(&ctx, &req).await;
     match rc {
-        Err(RpcError::Timeout(_)) => {
+        Err(InvocationError::Timeout(_)) => {
             error!("actor request timed out: returning 503",);
             Ok(Response {
                 status_code: 503,
