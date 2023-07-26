@@ -11,11 +11,7 @@ opt-level = "z"
 lto = true
 
 [workspace]
-members = [
-    "http-server",
-    "kv-redis",
-    "nats",
-]
+members = ["http-server", "kv-redis", "nats"]
 
 [workspace.dependencies]
 anyhow = { version = "1", default-features = false }
@@ -38,4 +34,4 @@ tracing = { version = "0.1", default-features = false }
 tracing-futures = { version = "0.2", default-features = false }
 warp = { version = "0.3", default-features = false }
 wascap = { version = "0.8", default-features = false }
-wasmbus-rpc = { version = "0.13", default-features = false }
+wasmcloud-provider-sdk = { path = "../provider-sdk", default-features = false }

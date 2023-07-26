@@ -28,7 +28,7 @@ tokio = { workspace = true, features = ["full"] }
 toml = { workspace = true, features = ["parse"] }
 tracing = { workspace = true }
 warp = { workspace = true, features = ["tls"] }
-wasmbus-rpc = { workspace = true, features = ["otel"] }
+wasmcloud-provider-sdk = { workspace = true, features = ["otel"] }
 
 [lib]
 name = "wasmcloud_provider_httpserver"
