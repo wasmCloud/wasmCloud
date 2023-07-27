@@ -228,8 +228,8 @@ impl Client {
             debug!("get_claims:request {}", &subject);
             match self.request_timeout(subject, vec![], self.timeout).await {
                 Ok(msg) => {
-                    let list: GetClaimsResponse = json_deserialize(&msg.payload)?;
-                    Ok(list)
+                    let list: SafeClaimsResponse = json_deserialize(&msg.payload)?;
+                    Ok(list.into())
                 }
                 Err(e) => Err(format!("Did not receive claims from lattice: {}", e).into()),
             }

@@ -77,6 +77,31 @@ pub struct GetClaimsResponse {
     pub claims: CtlKVList,
 }
 
+/// A safety type that can handle claims values that are set to Null. This is
+/// only used internally for compatibility, we will still send out [GetClaimsResponse]
+/// as the response type.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) struct SafeClaimsResponse {
+    pub claims: Vec<HashMap<String, Option<String>>>,
+}
+
+impl Into<GetClaimsResponse> for SafeClaimsResponse {
+    fn into(self) -> GetClaimsResponse {
+        GetClaimsResponse {
+            claims: self
+                .claims
+                .into_iter()
+                .map(|claim| {
+                    claim
+                        .into_iter()
+                        .map(|(k, v)| (k, v.unwrap_or_default()))
+                        .collect()
+                })
+                .collect(),
+        }
+    }
+}
+
 /// A summary representation of a host
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Host {
