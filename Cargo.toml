@@ -95,7 +95,7 @@ tokio-util = { version = "0.7", default-features = false }
 toml = { version = "0.7", default-features = false }
 tracing = { version = "0.1", default-features = false }
 tracing-futures = { version = "0.2", default-features = false }
-tracing-opentelemetry = { version = "0.17", default-features = false }
+tracing-opentelemetry = { version = "0.19", default-features = false }
 tracing-subscriber = { version = "0.3", default-features = false }
 ulid = { version = "1", default-features = false }
 url = { version = "2", default-features = false }
