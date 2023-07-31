@@ -72,7 +72,7 @@ nix-nar = { version = "0.2", default-features = false }
 nkeys = { version = "0.3", default-features = false }
 oci-distribution = { version = "0.9", default-features = false }
 once_cell = { version = "1", default-features = false }
-opentelemetry = { version = "0.17", default-features = false }
+opentelemetry = { version = "0.19", default-features = false }
 opentelemetry-otlp = { version = "0.10", default-features = false }
 provider-archive = { version = "0.7", default-features = false }
 quote = { version = "1", default-features = false }

@@ -2258,8 +2258,6 @@ dependencies = [
  "pin-project",
  "rand 0.8.5",
  "thiserror",
- "tokio",
- "tokio-stream",
 ]
 
 [[package]]
@@ -2337,6 +2335,8 @@ dependencies = [
  "percent-encoding",
  "rand 0.8.5",
  "thiserror",
+ "tokio",
+ "tokio-stream",
 ]
 
 [[package]]
@@ -4304,7 +4304,7 @@ dependencies = [
  "lazy_static",
  "nkeys",
  "once_cell",
- "opentelemetry 0.17.0",
+ "opentelemetry 0.19.0",
  "opentelemetry-otlp",
  "rmp-serde",
  "serde",
