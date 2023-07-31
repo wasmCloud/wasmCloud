@@ -108,7 +108,7 @@ wasmcloud-component-adapters = { path = "./crates/component-adapters" }
 wasmcloud-control-interface = { version = "0.27.0", default-features = false }
 wasmcloud-host = { path = "./crates/host" }
 wasmcloud-runtime = { path = "./crates/runtime" }
-wasmparser = { version = "0.107", default-features = false }
+wasmparser = { version = "0.109", default-features = false }
 wasmtime = { version = "10", default-features = false }
 wasmtime-wasi = { version = "10", default-features = false }
 wit-bindgen = { version = "0.7", default-features = false }
