@@ -4343,7 +4343,7 @@ dependencies = [
  "wascap",
  "wasi-common",
  "wasmcloud-actor",
- "wasmparser 0.107.0",
+ "wasmparser 0.109.0",
  "wasmtime",
  "wasmtime-wasi",
 ]
