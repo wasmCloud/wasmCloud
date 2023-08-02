@@ -4357,6 +4357,16 @@ dependencies = [
 
 [[package]]
 name = "wasmparser"
+version = "0.109.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8bf9564f29de2890ee34406af52d2a92dec6ef044c8ddfc5add5db8dcfd36e6c"
+dependencies = [
+ "indexmap 2.0.0",
+ "semver",
+]
+
+[[package]]
+name = "wasmparser"
 version = "0.110.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1dfcdb72d96f01e6c85b6bf20102e7423bdbaad5c337301bab2bbf253d26413c"
