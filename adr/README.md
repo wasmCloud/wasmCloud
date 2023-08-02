@@ -17,6 +17,7 @@ This log lists the architectural decisions for wasmCloud. When an architectural 
 | Accepted | [0010](0010-otp.md) | Use Elixir/OTP for the main cloud host runtime |
 | Accepted | [0011](0011-split-rpc-events.md) | Separate RPC/invocation events from regular events on wasmbus |
 | Accepted | [0012](0012-rfc-management.md) | RFCs are Managed in GitHub and Completed As ADRs |
+| Accepted | [0013](0013-transition-feature-focus-to-rust.md) | Transition feature focus to Rust |
 
 For new ADRs, please use [template.md](template.md).
 
