@@ -4340,7 +4340,7 @@ dependencies = [
  "wascap",
  "wasi-common",
  "wasmcloud-actor",
- "wasmparser 0.109.0",
+ "wasmparser 0.110.0",
  "wasmtime",
  "wasmtime-wasi",
 ]
@@ -4352,16 +4352,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29e3ac9b780c7dda0cac7a52a5d6d2d6707cc6e3451c9db209b6c758f40d7acb"
 dependencies = [
  "indexmap 1.9.3",
- "semver",
-]
-
-[[package]]
-name = "wasmparser"
-version = "0.109.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8bf9564f29de2890ee34406af52d2a92dec6ef044c8ddfc5add5db8dcfd36e6c"
-dependencies = [
- "indexmap 2.0.0",
  "semver",
 ]
 
