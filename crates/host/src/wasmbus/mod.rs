@@ -22,7 +22,7 @@ use std::process::Stdio;
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, ensure, Context as _};
-use async_nats::jetstream::kv;
+use async_nats::jetstream::{context::Context as JetstreamContext, kv};
 use async_trait::async_trait;
 use base64::engine::general_purpose::STANDARD_NO_PAD;
 use base64::Engine;
@@ -644,6 +644,40 @@ fn linkdef_hash(
     hex::encode_upper(hash.finalize())
 }
 
+#[instrument(skip(jetstream))]
+async fn create_lattice_metadata_bucket(
+    jetstream: &JetstreamContext,
+    bucket: &str,
+) -> anyhow::Result<()> {
+    match jetstream
+        .create_key_value(kv::Config {
+            bucket: bucket.to_string(),
+            ..Default::default()
+        })
+        .await
+    {
+        Ok(_) => {
+            info!("created lattice metadata bucket {bucket} with 1 replica");
+            Ok(())
+        }
+        Err(err) => {
+            // Ignore the error if the bucket was pre-provisioned
+            // This is a terrible hack, but the error we get from the NATS client is a nested
+            // dyn Error. The NATS server will return an error containing the code
+            // 10058 if the underlying stream already exists with different configuration,
+            // which is the case we care about
+            if err.to_string().contains("10058") {
+                info!("lattice metadata bucket {bucket} already exists. Skipping creation.");
+                Ok(())
+            } else {
+                Err(anyhow!(
+                    "failed to create lattice metadata bucket {bucket}: {err}"
+                ))
+            }
+        }
+    }
+}
+
 impl Lattice {
     const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 
@@ -725,25 +759,8 @@ impl Lattice {
         let jetstream = async_nats::jetstream::new(nats.clone());
         // TODO: Use prefix
         let bucket = format!("LATTICEDATA_{prefix}", prefix = "default");
-        jetstream
-            .create_stream(async_nats::jetstream::stream::Config {
-                allow_direct: true,
-                allow_rollup: true,
-                deny_delete: true,
-                discard: async_nats::jetstream::stream::DiscardPolicy::New,
-                duplicate_window: Duration::from_nanos(120_000_000_000),
-                max_bytes: -1,
-                max_consumers: -1,
-                max_message_size: -1,
-                max_messages: -1,
-                max_messages_per_subject: 1,
-                name: format!("KV_{bucket}"),
-                num_replicas: 1,
-                subjects: vec![format!("$KV.{bucket}.>")],
-                ..async_nats::jetstream::stream::Config::default()
-            })
-            .await
-            .map_err(|e| anyhow!(e).context("failed to create data bucket"))?;
+        create_lattice_metadata_bucket(&jetstream, &bucket).await?;
+
         let data = jetstream
             .get_key_value(&bucket)
             .await
