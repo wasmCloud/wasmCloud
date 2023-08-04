@@ -170,10 +170,17 @@ async fn wasmbus() -> anyhow::Result<()> {
         .await
         .map_err(|e| anyhow!(e).context("failed to perform actor auction"))?;
     match (ack.pop(), ack.as_slice()) {
-        (Some(ActorAuctionAck { actor_ref, host_id }), []) => {
-            // TODO: Validate `constraints`
+        (
+            Some(ActorAuctionAck {
+                actor_ref,
+                host_id,
+                constraints,
+            }),
+            [],
+        ) => {
             ensure!(host_id == host_key.public_key());
             ensure!(actor_ref == actor_url.as_str());
+            ensure!(constraints.is_empty());
         }
         (None, []) => bail!("no actor auction ack received"),
         _ => bail!("more than one actor auction ack received"),
@@ -284,11 +291,15 @@ async fn wasmbus() -> anyhow::Result<()> {
         host_id,
         labels,
         mut providers,
+        issuer,
+        friendly_name,
     } = client
         .get_host_inventory(&host_key.public_key())
         .await
         .map_err(|e| anyhow!(e).context("failed to start provider"))?;
+    ensure!(friendly_name != ""); // TODO: Make sure it's actually friendly?
     ensure!(host_id == host_key.public_key());
+    ensure!(issuer == cluster_key.public_key());
     ensure!(
         labels == expected_labels,
         "invalid labels:\ngot: {labels:?}\nexpected: {expected_labels:?}"
