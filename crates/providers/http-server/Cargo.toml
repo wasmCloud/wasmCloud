@@ -27,7 +27,6 @@ thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 toml = { workspace = true, features = ["parse"] }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true, features = ["env-filter"] }
 warp = { workspace = true, features = ["tls"] }
 wasmbus-rpc = { workspace = true, features = ["otel"] }
 
