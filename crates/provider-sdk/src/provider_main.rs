@@ -1,6 +1,6 @@
 //! Functions for starting and running a provider
 
-use std::io::{BufRead, StderrLock, Write};
+use std::io::{BufRead, IsTerminal, StderrLock, Write};
 use std::str::FromStr;
 
 use async_nats::{AuthError, ConnectOptions};
@@ -392,7 +392,7 @@ fn get_tracer(provider_name: String) -> Result<Tracer, TraceError> {
 fn get_default_log_layer() -> impl Layer<Layered<EnvFilter, Registry>> {
     tracing_subscriber::fmt::layer()
         .with_writer(LockedWriter::new)
-        .with_ansi(atty::is(atty::Stream::Stderr))
+        .with_ansi(STDERR.is_terminal())
         .event_format(JsonOrNot::Not(Format::default()))
         .fmt_fields(DefaultFields::new())
 }
@@ -400,7 +400,7 @@ fn get_default_log_layer() -> impl Layer<Layered<EnvFilter, Registry>> {
 fn get_json_log_layer() -> impl Layer<Layered<EnvFilter, Registry>> {
     tracing_subscriber::fmt::layer()
         .with_writer(LockedWriter::new)
-        .with_ansi(atty::is(atty::Stream::Stderr))
+        .with_ansi(STDERR.is_terminal())
         .event_format(JsonOrNot::Json(Format::default().json()))
         .fmt_fields(JsonFields::new())
 }
