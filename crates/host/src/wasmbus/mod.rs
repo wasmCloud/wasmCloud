@@ -46,10 +46,10 @@ use ulid::Ulid;
 use uuid::Uuid;
 use wascap::jwt;
 use wasmcloud_control_interface::{
-    ActorAuctionRequest, ActorDescription, LinkDefinition, ProviderAuctionRequest,
-    ProviderDescription, RemoveLinkDefinitionRequest, ScaleActorCommand, StartActorCommand,
-    StartProviderCommand, StopActorCommand, StopHostCommand, StopProviderCommand,
-    UpdateActorCommand,
+    ActorAuctionAck, ActorAuctionRequest, ActorDescription, HostInventory, LinkDefinition,
+    ProviderAuctionRequest, ProviderDescription, RemoveLinkDefinitionRequest, ScaleActorCommand,
+    StartActorCommand, StartProviderCommand, StopActorCommand, StopHostCommand,
+    StopProviderCommand, UpdateActorCommand,
 };
 use wasmcloud_runtime::{ActorInstancePool, Runtime};
 
@@ -843,12 +843,11 @@ impl Lattice {
 
         debug!(actor_ref, ?constraints, "auction actor");
 
-        // TODO: Use `ActorAuctionAck` once https://github.com/wasmCloud/control-interface-client/issues/50 is resolved
-        let buf = serde_json::to_vec(&json!({
-          "actor_ref": actor_ref,
-          "constraints": constraints,
-          "host_id": self.host_key.public_key(),
-        }))
+        let buf = serde_json::to_vec(&ActorAuctionAck {
+            actor_ref,
+            constraints,
+            host_id: self.host_key.public_key(),
+        })
         .context("failed to encode reply")?;
         Ok(buf.into())
     }
@@ -1410,15 +1409,14 @@ impl Lattice {
             )
             .flatten()
             .collect();
-        // TODO: Use `HostInventory` once https://github.com/wasmCloud/control-interface-client/issues/51 is resolved
-        let buf = serde_json::to_vec(&json!({
-          "host_id": self.host_key.public_key(),
-          "issuer": self.cluster_key.public_key(),
-          "labels": self.labels,
-          "friendly_name": self.friendly_name,
-          "actors": actors,
-          "providers": providers,
-        }))
+        let buf = serde_json::to_vec(&HostInventory {
+            host_id: self.host_key.public_key(),
+            issuer: self.cluster_key.public_key(),
+            labels: self.labels.clone(),
+            friendly_name: self.friendly_name.clone(),
+            actors,
+            providers,
+        })
         .context("failed to encode reply")?;
         Ok(buf.into())
     }
