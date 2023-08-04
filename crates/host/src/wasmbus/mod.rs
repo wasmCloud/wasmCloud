@@ -41,7 +41,7 @@ use tokio::task::JoinHandle;
 use tokio::time::{interval_at, Instant};
 use tokio::{process, spawn};
 use tokio_stream::wrappers::IntervalStream;
-use tracing::{debug, error, info, instrument, warn};
+use tracing::{debug, error, info, instrument, trace, warn};
 use ulid::Ulid;
 use uuid::Uuid;
 use wascap::jwt;
@@ -670,6 +670,8 @@ impl Lattice {
         count: NonZeroUsize,
         pool: ActorInstancePool,
     ) -> anyhow::Result<Vec<Arc<ActorInstance>>> {
+        trace!(actor_ref = actor_ref.as_ref(), count, "instantiating actor");
+
         let actor_ref = actor_ref.as_ref();
         let instances = stream::repeat(format!("wasmbus.rpc.default.{}", claims.subject))
             .take(count.into())
@@ -737,6 +739,13 @@ impl Lattice {
         count: NonZeroUsize,
         remaining: usize,
     ) -> anyhow::Result<()> {
+        trace!(
+            subject = claims.subject,
+            count,
+            remaining,
+            "uninstantiating actor instances"
+        );
+
         stream::iter(instances.drain(..usize::from(count)))
             .map(Ok)
             .try_for_each_concurrent(None, |instance| {
@@ -771,6 +780,8 @@ impl Lattice {
         host_id: impl AsRef<str>,
         annotations: Option<impl Into<Annotations>>,
     ) -> anyhow::Result<&'a mut Arc<Actor>> {
+        trace!(actor_ref, "starting new actor");
+
         let annotations = annotations.map(Into::into);
         let claims = actor.claims().context("claims missing")?;
 
@@ -1139,7 +1150,58 @@ impl Lattice {
 
         debug!(actor_id, new_actor_ref, ?annotations, "update actor");
 
-        bail!("TODO");
+        let actors = self.actors.write().await;
+        let actor = actors.get(&actor_id).context("actor not found")?;
+        let annotations = annotations.map(|annotations| annotations.into_iter().collect()); // convert from HashMap to BTreeMap
+        let mut all_instances = actor.instances.write().await;
+        let matching_instances = all_instances
+            .get_mut(&annotations)
+            .context("actor instances with matching annotations not found")?;
+        let count =
+            NonZeroUsize::new(matching_instances.len()).context("zero instances of actor found")?;
+
+        let new_actor_bytes = fetch_actor(&new_actor_ref)
+            .await
+            .context("failed to fetch actor")?;
+        let new_actor = wasmcloud_runtime::Actor::new(&self.runtime, new_actor_bytes)
+            .context("failed to initialize actor")?;
+        let new_claims = new_actor
+            .claims()
+            .context("claims missing from new actor")?;
+        let old_claims = actor
+            .pool
+            .claims()
+            .context("claims missing from running actor")?;
+
+        self.uninstantiate_actor(
+            old_claims,
+            &annotations,
+            host_id,
+            matching_instances,
+            count,
+            0,
+        )
+        .await
+        .context("failed to uninstantiate running actor")?;
+
+        let new_pool = ActorInstancePool::new(new_actor.clone(), Some(count));
+        let mut new_instances = self
+            .instantiate_actor(
+                new_claims,
+                &annotations,
+                host_id,
+                new_actor_ref,
+                count,
+                new_pool,
+            )
+            .await
+            .context("failed to instantiate actor from new reference")?;
+        all_instances
+            .entry(annotations)
+            .or_default()
+            .append(&mut new_instances);
+
+        Ok(SUCCESS.into())
     }
 
     #[instrument(skip(self, payload))]
@@ -1553,7 +1615,7 @@ impl Lattice {
             (Some("cmd"), Some(host_id), Some("stop"), None) => {
                 self.handle_stop(payload, host_id).await.map(Some)
             }
-            (Some("cmd"), Some(host_id), Some("update"), None) => {
+            (Some("cmd"), Some(host_id), Some("upd"), None) => {
                 self.handle_update_actor(payload, host_id).await.map(Some)
             }
             (Some("get"), Some(host_id), Some("inv"), None) => {
