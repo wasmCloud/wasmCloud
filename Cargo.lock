@@ -4193,6 +4193,7 @@ dependencies = [
 [[package]]
 name = "wasmcloud-component-adapters"
 version = "0.1.0"
+source = "git+https://github.com/wasmCloud/wasmcloud-component-adapters#c4ea6a0c1ecbf362145d59733fa9959cd1b0de59"
 dependencies = [
  "anyhow",
  "base64 0.21.2",

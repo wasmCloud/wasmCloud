@@ -476,8 +476,7 @@
         "fenix": "fenix",
         "nixify": "nixify",
         "wash": "wash",
-        "wasi-preview1-command-component-adapter": "wasi-preview1-command-component-adapter",
-        "wasi-preview1-reactor-component-adapter": "wasi-preview1-reactor-component-adapter",
+        "wasmcloud-component-adapters": "wasmcloud-component-adapters",
         "wit-deps": "wit-deps"
       }
     },
@@ -627,6 +626,28 @@
       "original": {
         "type": "file",
         "url": "https://github.com/bytecodealliance/wasmtime/releases/download/v10.0.1/wasi_snapshot_preview1.reactor.wasm"
+      }
+    },
+    "wasmcloud-component-adapters": {
+      "inputs": {
+        "nixify": [
+          "nixify"
+        ],
+        "wasi-preview1-command-component-adapter": "wasi-preview1-command-component-adapter",
+        "wasi-preview1-reactor-component-adapter": "wasi-preview1-reactor-component-adapter"
+      },
+      "locked": {
+        "lastModified": 1689958161,
+        "narHash": "sha256-DVu+dOhaNEBIe0EBTtBCChTttn0qN8SvyTm/1HSNWIk=",
+        "owner": "wasmCloud",
+        "repo": "wasmcloud-component-adapters",
+        "rev": "2ecf8580d6ed67c7060ada9843bfb61d6686108a",
+        "type": "github"
+      },
+      "original": {
+        "owner": "wasmCloud",
+        "repo": "wasmcloud-component-adapters",
+        "type": "github"
       }
     },
     "wit-deps": {
