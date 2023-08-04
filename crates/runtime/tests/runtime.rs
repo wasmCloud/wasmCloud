@@ -15,7 +15,8 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::spawn;
 use tracing_subscriber::prelude::*;
 use wasmcloud_actor::{HttpRequest, HttpResponse, Uuid};
-use wasmcloud_runtime::capability::{self, logging};
+use wasmcloud_runtime::capability;
+use wasmcloud_runtime::capability::logging::logging;
 use wasmcloud_runtime::{Actor, Runtime};
 
 static LOGGER: Lazy<()> = Lazy::new(|| {

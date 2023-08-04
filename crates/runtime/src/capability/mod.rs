@@ -27,8 +27,10 @@ mod bindgen {
     });
 }
 
-pub use bindgen::wasi::logging::logging;
+pub use bindgen::wasi::logging;
+pub use bindgen::wasmcloud::blobstore;
 pub use bindgen::wasmcloud::bus;
+pub use bindgen::wasmcloud::messaging;
 pub use bindgen::Interfaces;
 
 fn format_opt<T>(opt: &Option<T>) -> &'static str {

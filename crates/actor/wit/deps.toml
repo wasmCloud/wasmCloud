@@ -1,3 +1,5 @@
+blobstore = "../../../wit/blobstore"
 logging = "https://github.com/WebAssembly/wasi-logging/archive/main.tar.gz"
+messaging = "../../../wit/messaging"
 random = "https://github.com/WebAssembly/wasi-random/archive/main.tar.gz"
 wasmcloud = "../../../wit"

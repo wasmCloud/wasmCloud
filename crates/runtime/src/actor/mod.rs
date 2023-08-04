@@ -10,7 +10,8 @@ pub use module::{
     Module,
 };
 
-use crate::capability::{logging, Bus, IncomingHttp, Logging};
+use crate::capability::logging::logging;
+use crate::capability::{Bus, IncomingHttp, Logging};
 use crate::Runtime;
 
 use core::fmt::Debug;
