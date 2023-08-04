@@ -572,6 +572,7 @@ impl Lattice {
     /// # Errors
     ///
     /// Returns an error if internal stop channel is closed prematurely
+    #[instrument(skip(self))]
     pub async fn stopped(&self) -> anyhow::Result<Option<Instant>> {
         self.stop_rx
             .clone()
@@ -581,6 +582,7 @@ impl Lattice {
         Ok(*self.stop_rx.borrow())
     }
 
+    #[instrument(skip(self))]
     async fn heartbeat(&self) -> serde_json::Value {
         let actors = self.actors.read().await;
         let actors: HashMap<&String, usize> = stream::iter(actors.iter())
@@ -632,7 +634,7 @@ impl Lattice {
         })
     }
 
-    #[instrument(skip(name))]
+    #[instrument(skip(self, name))]
     async fn publish_event(
         &self,
         name: impl AsRef<str>,
@@ -660,7 +662,7 @@ impl Lattice {
     }
 
     /// Instantiate an actor and publish the actor start events.
-    #[instrument(skip(host_id, actor_ref))]
+    #[instrument(skip(self, host_id, actor_ref))]
     async fn instantiate_actor(
         &self,
         claims: &jwt::Claims<jwt::Actor>,
@@ -729,12 +731,12 @@ impl Lattice {
     }
 
     /// Uninstantiate an actor and publish the actor stop events.
-    #[instrument(skip(host_id))]
+    #[instrument(skip(self))]
     async fn uninstantiate_actor(
         &self,
         claims: &jwt::Claims<jwt::Actor>,
         annotations: &Option<Annotations>,
-        host_id: impl AsRef<str>,
+        host_id: &str,
         instances: &mut Vec<Arc<ActorInstance>>,
         count: NonZeroUsize,
         remaining: usize,
@@ -770,14 +772,14 @@ impl Lattice {
         .await
     }
 
-    #[instrument(skip(host_id, annotations))]
+    #[instrument(skip(self, annotations))]
     async fn start_actor<'a>(
         &self,
         entry: hash_map::VacantEntry<'a, String, Arc<Actor>>,
         actor: wasmcloud_runtime::Actor,
         actor_ref: String,
         count: NonZeroUsize,
-        host_id: impl AsRef<str>,
+        host_id: &str,
         annotations: Option<impl Into<Annotations>>,
     ) -> anyhow::Result<&'a mut Arc<Actor>> {
         trace!(actor_ref, "starting new actor");
@@ -805,13 +807,12 @@ impl Lattice {
         Ok(entry.insert(actor))
     }
 
-    #[instrument(skip(host_id))]
+    #[instrument(skip(self))]
     async fn stop_actor<'a>(
         &self,
         entry: hash_map::OccupiedEntry<'a, String, Arc<Actor>>,
-        host_id: impl AsRef<str>,
+        host_id: &str,
     ) -> anyhow::Result<()> {
-        let host_id = host_id.as_ref();
         let actor = entry.remove();
         let claims = actor.pool.claims().context("claims missing")?;
         let mut instances = actor.instances.write().await;
