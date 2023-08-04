@@ -1,6 +1,6 @@
 pub(crate) mod builtin;
 
-pub use builtin::{Bus, IncomingHttp, Logging};
+pub use builtin::{Bus, IncomingHttp, Logging, Messaging};
 
 #[allow(missing_docs)]
 mod bindgen {

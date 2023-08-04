@@ -14,7 +14,7 @@ use tokio::net::TcpListener;
 use tokio::process::Command;
 use tokio::sync::oneshot;
 use tokio::time::interval;
-use tokio::{fs, select, spawn};
+use tokio::{fs, select, spawn, try_join};
 use tokio_stream::wrappers::IntervalStream;
 use tokio_stream::StreamExt;
 use tracing::warn;
@@ -36,6 +36,58 @@ async fn free_port() -> anyhow::Result<u16> {
         .local_addr()
         .context("failed to query listener local address")?;
     Ok(lis.port())
+}
+
+async fn assert_start_provider(
+    client: &wasmcloud_control_interface::Client,
+    nats_client: &async_nats::Client, // TODO: This should be exposed by `wasmcloud_control_interface::Client`
+    host_key: &KeyPair,
+    provider_key: &KeyPair,
+    url: impl AsRef<str>,
+) -> anyhow::Result<()> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct HealthCheckResponse {
+        #[serde(default)]
+        healthy: bool,
+        #[serde(default)]
+        message: Option<String>,
+    }
+
+    let CtlOperationAck { accepted, error } = client
+        .start_provider(&host_key.public_key(), url.as_ref(), None, None, None)
+        .await
+        .map_err(|e| anyhow!(e).context("failed to start provider"))?;
+    ensure!(error == "");
+    ensure!(accepted);
+
+    let res = pin!(IntervalStream::new(interval(Duration::from_secs(1)))
+        .take(10)
+        .then(|_| nats_client.request(
+            format!(
+                "wasmbus.rpc.default.{}.default.health",
+                provider_key.public_key()
+            ),
+            "".into(),
+        ))
+        .filter_map(|res| {
+            match res {
+                Err(error) => {
+                    warn!(?error, "failed to connect to provider");
+                    None
+                }
+                Ok(res) => Some(res),
+            }
+        }))
+    .next()
+    .await
+    .context("failed to perform health check request")?;
+
+    let HealthCheckResponse { healthy, message } =
+        rmp_serde::from_slice(&res.payload).context("failed to decode health check response")?;
+    ensure!(message == None);
+    ensure!(healthy);
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -81,13 +133,13 @@ async fn wasmbus() -> anyhow::Result<()> {
         .context("failed to wait for NATS")
     });
 
-    let client = async_nats::connect_with_options(
+    let nats_client = async_nats::connect_with_options(
         nats_url.as_str(),
         async_nats::ConnectOptions::new().retry_on_initial_connect(),
     )
     .await
     .context("failed to connect to NATS")?;
-    let client = ClientBuilder::new(client)
+    let client = ClientBuilder::new(nats_client.clone())
         // TODO: Remove rpc_timeout in https://github.com/wasmCloud/wasmCloud/issues/367
         .rpc_timeout(Duration::from_secs(20))
         .build()
@@ -258,7 +310,7 @@ async fn wasmbus() -> anyhow::Result<()> {
             "default",
             HashMap::from([(
                 "config_json".into(),
-                format!(r#"{{"cluster_uris":"{nats_url}"}}"#),
+                format!(r#"{{"cluster_uris":["{nats_url}"]}}"#),
             )]),
         )
         .await
@@ -266,25 +318,23 @@ async fn wasmbus() -> anyhow::Result<()> {
     ensure!(error == "");
     ensure!(accepted);
 
-    let CtlOperationAck { accepted, error } = client
-        .start_provider(
-            &host_key.public_key(),
-            httpserver_provider_url.as_str(),
-            None,
-            None,
-            None,
+    try_join!(
+        assert_start_provider(
+            &client,
+            &nats_client,
+            &host_key,
+            &httpserver_provider_key,
+            &httpserver_provider_url,
+        ),
+        assert_start_provider(
+            &client,
+            &nats_client,
+            &host_key,
+            &nats_provider_key,
+            &nats_provider_url,
         )
-        .await
-        .map_err(|e| anyhow!(e).context("failed to start provider"))?;
-    ensure!(error == "");
-    ensure!(accepted);
-
-    let CtlOperationAck { accepted, error } = client
-        .start_provider("", nats_provider_url.as_str(), None, None, None)
-        .await
-        .map_err(|e| anyhow!(e).context("failed to start provider"))?;
-    ensure!(error == "");
-    ensure!(accepted);
+    )
+    .context("failed to start providers")?;
 
     let HostInventory {
         mut actors,
@@ -296,7 +346,7 @@ async fn wasmbus() -> anyhow::Result<()> {
     } = client
         .get_host_inventory(&host_key.public_key())
         .await
-        .map_err(|e| anyhow!(e).context("failed to start provider"))?;
+        .map_err(|e| anyhow!(e).context("failed to get host inventory"))?;
     ensure!(friendly_name != ""); // TODO: Make sure it's actually friendly?
     ensure!(host_id == host_key.public_key());
     ensure!(issuer == cluster_key.public_key());
@@ -363,34 +413,25 @@ async fn wasmbus() -> anyhow::Result<()> {
         _ => bail!("invalid provider count"),
     }
 
-    let res = pin!(IntervalStream::new(interval(Duration::from_secs(1)))
-        .take(10)
-        .then(|_| async {
-            reqwest::Client::builder()
-                .timeout(Duration::from_secs(20))
-                .connect_timeout(Duration::from_secs(20))
-                .build()
-                .context("failed to build HTTP client")?
-                .post(format!("http://localhost:{http_port}"))
-                .body(r#"{"min":42,"max":4242}"#)
-                .send()
-                .await?
-                .text()
-                .await
-                .context("failed to get response text")
-        })
-        .filter_map(|res| {
-            match res {
-                Err(error) => {
-                    warn!(?error, "failed to connect to server");
-                    None
-                }
-                Ok(res) => Some(res),
-            }
-        }))
-    .next()
-    .await
-    .context("failed to connect to server")?;
+    let mut nats_sub = nats_client
+        .subscribe("test".into())
+        .await
+        .context("failed to subscribe to `test`")?;
+
+    let http_client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .connect_timeout(Duration::from_secs(20))
+        .build()
+        .context("failed to build HTTP client")?;
+    let http_res = http_client
+        .post(format!("http://localhost:{http_port}"))
+        .body(r#"{"min":42,"max":4242}"#)
+        .send()
+        .await
+        .context("failed to connect to server")?
+        .text()
+        .await
+        .context("failed to get response text")?;
 
     // TODO: Instead of duplication here, reuse the same struct used in `wasmcloud-runtime` tests
     #[derive(Deserialize)]
@@ -412,12 +453,17 @@ async fn wasmbus() -> anyhow::Result<()> {
         guid,
         random_32: _,
         random_in_range,
-    } = serde_json::from_str(&res).context("failed to decode body as JSON")?;
+    } = serde_json::from_str(&http_res).context("failed to decode body as JSON")?;
     ensure!(Uuid::from_str(&guid).is_ok());
     ensure!(
         (42..=4242).contains(&random_in_range),
         "{random_in_range} should have been within range from 42 to 4242 inclusive"
     );
+    let nats_res = nats_sub
+        .next()
+        .await
+        .context("failed to receive NATS response")?;
+    ensure!(nats_res.payload == http_res);
 
     let CtlOperationAck { accepted, error } = client
         .remove_link(&actor_claims.subject, "wasmcloud:messaging", "default")

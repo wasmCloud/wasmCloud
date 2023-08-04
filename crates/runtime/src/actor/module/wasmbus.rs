@@ -278,7 +278,7 @@ async fn handle(
             rmp_serde::to_vec(&v).context("failed to serialize u32")
         }
         _ => {
-            let (mut request, mut response, result) = handler
+            let (result, mut request, mut response) = handler
                 .call(format!("{binding}:{namespace}/{operation}"))
                 .await
                 .context("failed to call `wasmcloud:bus/host.call`")?;

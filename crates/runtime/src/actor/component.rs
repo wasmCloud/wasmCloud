@@ -1,7 +1,9 @@
 use crate::actor::claims;
 use crate::capability::bus::host;
 use crate::capability::logging::logging;
-use crate::capability::{blobstore, builtin, messaging, Bus, IncomingHttp, Interfaces, Logging};
+use crate::capability::{
+    blobstore, builtin, messaging, Bus, IncomingHttp, Interfaces, Logging, Messaging,
+};
 use crate::Runtime;
 
 use core::fmt::{self, Debug};
@@ -12,6 +14,7 @@ use core::pin::Pin;
 
 use std::io::Cursor;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context as _};
 use async_trait::async_trait;
@@ -330,15 +333,19 @@ impl host::Host for Ctx {
     ) -> anyhow::Result<
         Result<
             (
+                host::FutureResult,
                 preview2::wasi::io::streams::InputStream,
                 preview2::wasi::io::streams::OutputStream,
-                host::FutureResult,
             ),
             String,
         >,
     > {
         match self.handler.call(operation).await {
-            Ok((stdin, stdout, result)) => {
+            Ok((result, stdin, stdout)) => {
+                let result = self
+                    .table
+                    .push_future_result(result)
+                    .context("failed to push result to table")?;
                 let stdin = self
                     .table
                     .push_output_stream(Box::new(AsyncStream(stdin)))
@@ -347,13 +354,9 @@ impl host::Host for Ctx {
                     .table
                     .push_input_stream(Box::new(AsyncStream(stdout)))
                     .context("failed to push stdout stream")?;
-                let result = self
-                    .table
-                    .push_future_result(result)
-                    .context("failed to push result to table")?;
-                Ok(Ok((stdin, stdout, result)))
+                Ok(Ok((result, stdin, stdout)))
             }
-            Err(err) => Ok(Err(err.to_string())),
+            Err(err) => Ok(Err(format!("{err:#}"))),
         }
     }
 
@@ -398,7 +401,6 @@ impl logging::Host for Ctx {
 #[async_trait]
 impl messaging::types::Host for Ctx {}
 
-#[allow(unused)] // TODO: Remove once implemented
 #[async_trait]
 impl messaging::consumer::Host for Ctx {
     #[instrument]
@@ -408,7 +410,12 @@ impl messaging::consumer::Host for Ctx {
         body: Option<Vec<u8>>,
         timeout_ms: u32,
     ) -> anyhow::Result<Result<messaging::types::BrokerMessage, String>> {
-        bail!("unsupported")
+        let timeout = Duration::from_millis(timeout_ms.into());
+        Ok(self
+            .handler
+            .request(subject, body, timeout)
+            .await
+            .map_err(|err| format!("{err:#}")))
     }
 
     #[instrument]
@@ -419,7 +426,18 @@ impl messaging::consumer::Host for Ctx {
         timeout_ms: u32,
         max_results: u32,
     ) -> anyhow::Result<Result<Vec<messaging::types::BrokerMessage>, String>> {
-        bail!("unsupported")
+        let timeout = Duration::from_millis(timeout_ms.into());
+        let max_results = max_results.try_into().unwrap_or(usize::MAX);
+        let mut msgs = Vec::with_capacity(max_results);
+        match self
+            .handler
+            .request_multi(subject, body, timeout, &mut msgs)
+            .await
+        {
+            Ok(n) if n <= max_results && n == msgs.len() => Ok(Ok(msgs)),
+            Ok(_) => bail!("invalid amount of results returned"),
+            Err(err) => Ok(Err(format!("{err:#}"))),
+        }
     }
 
     #[instrument]
@@ -427,7 +445,11 @@ impl messaging::consumer::Host for Ctx {
         &mut self,
         msg: messaging::types::BrokerMessage,
     ) -> anyhow::Result<Result<(), String>> {
-        bail!("unsupported")
+        Ok(self
+            .handler
+            .publish(msg)
+            .await
+            .map_err(|err| format!("{err:#}")))
     }
 }
 
@@ -668,7 +690,14 @@ impl Instance {
         &mut self.store.data_mut().handler
     }
 
-    /// Set [Bus] handler for this [Instance].
+    /// Reset [`Instance`] state to defaults
+    pub async fn reset(&mut self, rt: &Runtime) {
+        *self.handler_mut() = rt.handler.clone().into();
+        let ctx = self.store.data_mut();
+        ctx.stderr.take().await;
+    }
+
+    /// Set [`Bus`] handler for this [Instance].
     pub fn bus(&mut self, bus: Arc<dyn Bus + Send + Sync>) -> &mut Self {
         self.handler_mut().replace_bus(bus);
         self
@@ -683,9 +712,15 @@ impl Instance {
         self
     }
 
-    /// Set [Logging] handler for this [Instance].
+    /// Set [`Logging`] handler for this [Instance].
     pub fn logging(&mut self, logging: Arc<dyn Logging + Send + Sync>) -> &mut Self {
         self.handler_mut().replace_logging(logging);
+        self
+    }
+
+    /// Set [`Messaging`] handler for this [Instance].
+    pub fn messaging(&mut self, messaging: Arc<dyn Messaging + Send + Sync>) -> &mut Self {
+        self.handler_mut().replace_messaging(messaging);
         self
     }
 
