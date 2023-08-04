@@ -6,10 +6,10 @@ use std::env;
 use serde::{de, Deserialize, Deserializer, Serialize};
 use url::Url;
 
-/// Declarative local lattice configuration
+/// Declarative local host configuration
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct Lattice {
+pub struct Host {
     /// Actor definitions
     #[serde(default)]
     pub actors: HashMap<String, Actor>,
@@ -128,10 +128,10 @@ addr = "[::]:5000"
 
     #[test]
     fn parse() -> anyhow::Result<()> {
-        let config: Lattice = toml::from_str(CONFIG).context("failed to parse config")?;
+        let config: Host = toml::from_str(CONFIG).context("failed to parse config")?;
         assert_eq!(
             config,
-            Lattice {
+            Host {
                 actors: HashMap::from([
                     (
                         "http-parser".into(),

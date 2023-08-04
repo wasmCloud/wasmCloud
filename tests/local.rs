@@ -4,7 +4,7 @@ use std::path::Path;
 
 use anyhow::Context;
 use tracing_subscriber::prelude::*;
-use wasmcloud_host::local::{ActorConfig, Lattice, LatticeConfig, LinkConfig, TcpSocketConfig};
+use wasmcloud_host::local::{ActorConfig, Host, HostConfig, LinkConfig, TcpSocketConfig};
 use wasmcloud_host::url::Url;
 
 fn wasm_url(path: impl AsRef<Path>) -> Url {
@@ -12,7 +12,7 @@ fn wasm_url(path: impl AsRef<Path>) -> Url {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "skip local lattice test by default"]
+#[ignore = "skip local host test by default"]
 async fn local() -> anyhow::Result<()> {
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer().pretty().without_time())
@@ -29,7 +29,7 @@ async fn local() -> anyhow::Result<()> {
         .context("failed to query listener local address")?
         .port();
 
-    let _lattice = Lattice::new(LatticeConfig {
+    let _host = Host::new(HostConfig {
         actors: HashMap::from([
             (
                 "logging".into(),

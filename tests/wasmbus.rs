@@ -24,10 +24,10 @@ use uuid::Uuid;
 use wascap::jwt;
 use wascap::wasm::extract_claims;
 use wasmcloud_control_interface::{
-    ActorAuctionAck, ActorDescription, ActorInstance, ClientBuilder, CtlOperationAck, Host,
-    HostInventory, ProviderAuctionAck,
+    ActorAuctionAck, ActorDescription, ActorInstance, ClientBuilder, CtlOperationAck,
+    Host as HostInfo, HostInventory, ProviderAuctionAck,
 };
-use wasmcloud_host::wasmbus::{Lattice, LatticeConfig};
+use wasmcloud_host::wasmbus::{Host, HostConfig};
 
 async fn free_port() -> anyhow::Result<u16> {
     let lis = TcpListener::bind((Ipv6Addr::UNSPECIFIED, 0))
@@ -156,13 +156,13 @@ async fn wasmbus() -> anyhow::Result<()> {
         ("hostcore.osfamily".into(), FAMILY.into()),
         ("path".into(), "test-path".into()),
     ]);
-    let (lattice, shutdown) = Lattice::new(LatticeConfig {
+    let (host, shutdown) = Host::new(HostConfig {
         url: nats_url.clone(),
         cluster_seed: Some(cluster_key.seed().unwrap()),
         host_seed: Some(host_key.seed().unwrap()),
     })
     .await
-    .context("failed to initialize `wasmbus` lattice")?;
+    .context("failed to initialize host")?;
 
     let mut hosts = client
         .get_hosts()
@@ -170,7 +170,7 @@ async fn wasmbus() -> anyhow::Result<()> {
         .map_err(|e| anyhow!(e).context("failed to get hosts"))?;
     match (hosts.pop(), hosts.as_slice()) {
         (
-            Some(Host {
+            Some(HostInfo {
                 cluster_issuers,
                 ctl_host,
                 id,
@@ -486,8 +486,8 @@ async fn wasmbus() -> anyhow::Result<()> {
     ensure!(error == "");
     ensure!(accepted);
 
-    let _ = lattice.stopped().await;
-    shutdown.await.context("failed to shutdown lattice")?;
+    let _ = host.stopped().await;
+    shutdown.await.context("failed to shutdown host")?;
 
     stop_tx.send(()).expect("failed to stop NATS");
 

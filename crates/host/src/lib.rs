@@ -4,10 +4,10 @@
 #![warn(missing_docs)]
 #![forbid(clippy::unwrap_used)]
 
-/// local lattice
+/// local host
 pub mod local;
 
-/// wasmbus lattice
+/// wasmbus host
 pub mod wasmbus;
 
 /// bindle artifact fetching
@@ -19,8 +19,8 @@ pub mod oci;
 /// Provider archive functionality
 mod par;
 
-pub use local::{Lattice as LocalLattice, LatticeConfig as LocalLatticeConfig};
-pub use wasmbus::{Lattice as WasmbusLattice, LatticeConfig as WasmbusLatticeConfig};
+pub use local::{Host as LocalHost, HostConfig as LocalHostConfig};
+pub use wasmbus::{Host as WasmbusHost, HostConfig as WasmbusHostConfig};
 
 pub use url;
 
