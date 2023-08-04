@@ -5,7 +5,7 @@
 // Note that in this phase 1 interface, subscriptions are defined out of band from this
 // component. Components themselves cannot establish or terminate subscriptions. This may
 // change for phase 2.
-package wasmcloud:messaging@0.1.0
+package wasmcloud:messaging
 
 // Types common to message broker interactions
 interface types {

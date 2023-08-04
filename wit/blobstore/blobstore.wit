@@ -1,7 +1,7 @@
 // The blob store interface
 // This is currently a phase 1 interface, and is subject to change
 
-package wasmcloud:blobstore@0.1.0
+package wasmcloud:blobstore
 
 // Shared data types for use when interacting with a blob store
 interface types {
