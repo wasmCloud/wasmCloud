@@ -1,7 +1,11 @@
 //! Nats implementation for wasmcloud:messaging.
-//!
-use std::{collections::HashMap, convert::Infallible, sync::Arc, time::Duration};
 
+use std::collections::HashMap;
+use std::convert::Infallible;
+use std::sync::Arc;
+use std::time::Duration;
+
+use base64::Engine;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{OwnedSemaphorePermit, RwLock, Semaphore};
@@ -9,12 +13,11 @@ use tokio::task::JoinHandle;
 use tracing::{debug, error, instrument, warn};
 use tracing_futures::Instrument;
 use wascap::prelude::KeyPair;
-use wasmbus_rpc::{
-    core::{HostData, LinkDefinition},
-    otel::OtelHeaderInjector,
-    provider::prelude::*,
-};
-use wasmcloud_interface_messaging::{
+use wasmbus_rpc::core::{HostData, LinkDefinition};
+use wasmbus_rpc::otel::OtelHeaderInjector;
+use wasmbus_rpc::provider::prelude::*;
+
+use wasmcloud_provider_nats::wasmcloud_interface_messaging::{
     MessageSubscriber, MessageSubscriberSender, Messaging, MessagingReceiver, PubMessage,
     ReplyMessage, RequestMessage, SubMessage,
 };
@@ -92,7 +95,7 @@ impl ConnectionConfig {
             out.auth_seed = extra.auth_seed.clone()
         }
         if extra.ping_interval_sec.is_some() {
-            out.ping_interval_sec = extra.ping_interval_sec.clone()
+            out.ping_interval_sec = extra.ping_interval_sec
         }
         out
     }
@@ -113,9 +116,11 @@ impl Default for ConnectionConfig {
 impl ConnectionConfig {
     fn new_from(values: &HashMap<String, String>) -> RpcResult<ConnectionConfig> {
         let mut config = if let Some(config_b64) = values.get("config_b64") {
-            let bytes = base64::decode(config_b64.as_bytes()).map_err(|e| {
-                RpcError::InvalidParameter(format!("invalid base64 encoding: {}", e))
-            })?;
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(config_b64.as_bytes())
+                .map_err(|e| {
+                    RpcError::InvalidParameter(format!("invalid base64 encoding: {}", e))
+                })?;
             serde_json::from_slice::<ConnectionConfig>(&bytes)
                 .map_err(|e| RpcError::InvalidParameter(format!("corrupt config_b64: {}", e)))?
         } else if let Some(config) = values.get("config_json") {
@@ -493,7 +498,7 @@ mod test {
 }
 "#;
 
-        let config: ConnectionConfig = serde_json::from_str(&input).unwrap();
+        let config: ConnectionConfig = serde_json::from_str(input).unwrap();
         assert_eq!(config.auth_jwt.unwrap(), "authy");
         assert_eq!(config.auth_seed.unwrap(), "seedy");
         assert_eq!(config.cluster_uris, ["nats://soyvuh"]);
@@ -520,12 +525,16 @@ mod test {
     #[test]
     fn test_connectionconfig_merge() {
         // second > original, individual vec fields are replace not extend
-        let mut cc1 = ConnectionConfig::default();
-        cc1.cluster_uris = vec!["old_server".to_string()];
-        cc1.subscriptions = vec!["topic1".to_string()];
-        let mut cc2 = ConnectionConfig::default();
-        cc2.cluster_uris = vec!["server1".to_string(), "server2".to_string()];
-        cc2.auth_jwt = Some("jawty".to_string());
+        let cc1 = ConnectionConfig {
+            cluster_uris: vec!["old_server".to_string()],
+            subscriptions: vec!["topic1".to_string()],
+            ..Default::default()
+        };
+        let cc2 = ConnectionConfig {
+            cluster_uris: vec!["server1".to_string(), "server2".to_string()],
+            auth_jwt: Some("jawty".to_string()),
+            ..Default::default()
+        };
         let cc3 = cc1.merge(&cc2);
         assert_eq!(cc3.cluster_uris, cc2.cluster_uris);
         assert_eq!(cc3.subscriptions, cc1.subscriptions);

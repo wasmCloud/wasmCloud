@@ -1,15 +1,15 @@
 use std::collections::BTreeMap;
 use std::env;
 use std::ffi::OsStr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
 
 use anyhow::{anyhow, bail, ensure, Context};
 use nkeys::KeyPair;
 use provider_archive::ProviderArchive;
 use serde::Deserialize;
-use tokio::fs;
 use tokio::process::Command;
+use tokio::{fs, try_join};
 
 // Unfortunately, `cargo` exported structs and enums do not implement `Deserialize`, so
 // implement the relevant parts here
@@ -106,6 +106,35 @@ impl DerefArtifact for Option<(String, Vec<PathBuf>)> {
     }
 }
 
+async fn build_par(
+    issuer: &KeyPair,
+    out: impl AsRef<Path>,
+    capid: impl AsRef<str>,
+    name: impl AsRef<str>,
+    bin: impl AsRef<Path>,
+) -> anyhow::Result<String> {
+    let mut par = ProviderArchive::new(capid.as_ref(), name.as_ref(), "test", None, None);
+    let bin = bin.as_ref();
+    let bin = fs::read(bin)
+        .await
+        .with_context(|| format!("failed to read binary at `{}`", bin.display()))?;
+    par.add_library(
+        &format!(
+            "{}-{}",
+            env::var("CARGO_CFG_TARGET_ARCH").expect("`CARGO_CFG_TARGET_ARCH` not set"),
+            env::var("CARGO_CFG_TARGET_OS").expect("`CARGO_CFG_TARGET_OS` not set")
+        ),
+        &bin,
+    )
+    .map_err(|e| anyhow!(e).context("failed to add  binary to PAR"))?;
+    let subject = KeyPair::new_service();
+    let seed = subject.seed().context("failed to extract subject seed")?;
+    par.write(out, issuer, &subject, false)
+        .await
+        .map_err(|e| anyhow!(e).context("failed to write PAR"))?;
+    Ok(seed)
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     println!("cargo:rerun-if-changed=build.rs");
@@ -124,48 +153,40 @@ async fn main() -> anyhow::Result<()> {
         [
             "--manifest-path=../../crates/providers/Cargo.toml",
             "-p=wasmcloud-provider-httpserver",
+            "-p=wasmcloud-provider-nats",
         ],
-        |name, kind| ["httpserver"].contains(&name) && kind.contains(&CrateType::Bin),
+        |name, kind| {
+            ["httpserver", "nats_messaging"].contains(&name) && kind.contains(&CrateType::Bin)
+        },
     )
     .await
     .context("failed to build `wasmcloud-provider-httpserver` crate")?;
-    match (artifacts.next().deref_artifact(), artifacts.next()) {
-        (Some(("httpserver", [rust_httpserver])), None) => {
-            let mut par = ProviderArchive::new(
-                "wasmcloud:httpserver",
-                "wasmcloud-provider-httpserver",
-                "test",
-                None,
-                None,
-            );
-            let bin = fs::read(rust_httpserver)
-                .await
-                .context("failed to read `wasmcloud-provider-httpserver` binary")?;
-            par.add_library(
-                &format!(
-                    "{}-{}",
-                    env::var("CARGO_CFG_TARGET_ARCH").expect("`CARGO_CFG_TARGET_ARCH` not set"),
-                    env::var("CARGO_CFG_TARGET_OS").expect("`CARGO_CFG_TARGET_OS` not set")
+    match (
+        artifacts.next().deref_artifact(),
+        artifacts.next().deref_artifact(),
+        artifacts.next(),
+    ) {
+        (Some(("httpserver", [rust_httpserver])), Some(("nats_messaging", [rust_nats])), None) => {
+            let (rust_httpserver_seed, rust_nats_seed) = try_join!(
+                build_par(
+                    &issuer,
+                    out_dir.join("rust-httpserver.par"),
+                    "wasmcloud:httpserver",
+                    "wasmcloud-provider-httpserver",
+                    rust_httpserver,
                 ),
-                &bin,
-            )
-            .map_err(|e| {
-                anyhow!(e).context("failed to add `wasmcloud-provider-httpserver` binary to PAR")
-            })?;
-            let subject = KeyPair::new_service();
-            println!(
-                "cargo:rustc-env=RUST_HTTPSERVER_SUBJECT={}",
-                subject.seed().expect("failed to extract subject seed")
-            );
-            par.write(
-                out_dir.join("rust-httpserver.par"),
-                &issuer,
-                &subject,
-                false,
-            )
-            .await
-            .map_err(|e| anyhow!(e).context("failed to write `wasmcloud-provider-httpserver` PAR"))
+                build_par(
+                    &issuer,
+                    out_dir.join("rust-nats.par"),
+                    "wasmcloud:messaging",
+                    "wasmcloud-provider-nats",
+                    rust_nats,
+                ),
+            )?;
+            println!("cargo:rustc-env=RUST_HTTPSERVER_SUBJECT={rust_httpserver_seed}");
+            println!("cargo:rustc-env=RUST_NATS_SUBJECT={rust_nats_seed}");
+            Ok(())
         }
-        _ => bail!("invalid `wasmcloud-provider-httpserver` build artifacts"),
+        _ => bail!("invalid provider build artifacts"),
     }
 }
