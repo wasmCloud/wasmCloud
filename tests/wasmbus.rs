@@ -44,6 +44,7 @@ async fn free_port() -> anyhow::Result<u16> {
 async fn assert_start_provider(
     client: &wasmcloud_control_interface::Client,
     nats_client: &async_nats::Client, // TODO: This should be exposed by `wasmcloud_control_interface::Client`
+    lattice_prefix: &str,
     host_key: &KeyPair,
     provider_key: &KeyPair,
     url: impl AsRef<str>,
@@ -75,7 +76,8 @@ async fn assert_start_provider(
         .take(30)
         .then(|_| nats_client.request(
             format!(
-                "wasmbus.rpc.default.{}.default.health",
+                "wasmbus.rpc.{}.{}.default.health",
+                lattice_prefix,
                 provider_key.public_key()
             ),
             "".into(),
@@ -172,8 +174,8 @@ async fn wasmbus() -> anyhow::Result<()> {
         .init();
 
     let nats_port = free_port().await?;
-    let nats_url =
-        Url::parse(&format!("nats://localhost:{nats_port}")).context("failed to parse NATS URL")?;
+    let ctl_nats_url = Url::parse(&format!("nats://localhost:{nats_port}"))
+        .context("failed to parse control NATS URL")?;
     let jetstream_dir = tempdir().context("failed to create temporary directory")?;
     let (nats_server, stop_nats_tx) = spawn_server(
         Command::new(
@@ -187,12 +189,14 @@ async fn wasmbus() -> anyhow::Result<()> {
     )
     .await
     .context("failed to start NATS")?;
-    let nats_client = async_nats::connect_with_options(
-        nats_url.as_str(),
+    let ctl_nats_client = async_nats::connect_with_options(
+        ctl_nats_url.as_str(),
         async_nats::ConnectOptions::new().retry_on_initial_connect(),
     )
     .await
-    .context("failed to connect to NATS")?;
+    .context("failed to connect to NATS control server")?;
+
+    let nats_client = ctl_nats_client; // FIXME: we should be using separate NATS clients for CTL, RPC, and PROV_RPC
 
     let redis_port = free_port().await?;
     let redis_url = Url::parse(&format!("redis://localhost:{redis_port}"))
@@ -211,10 +215,12 @@ async fn wasmbus() -> anyhow::Result<()> {
     let mut redis_client =
         redis::Client::open(redis_url.as_str()).context("failed to connect to Redis")?;
 
-    let client = ClientBuilder::new(nats_client.clone())
+    const TEST_PREFIX: &str = "test-prefix";
+    let ctl_client = ClientBuilder::new(nats_client.clone())
+        .lattice_prefix(TEST_PREFIX.to_string())
         .build()
         .await
-        .map_err(|e| anyhow!(e).context("failed to build client"))?;
+        .map_err(|e| anyhow!(e).context("failed to build control interface client"))?;
 
     let cluster_key = KeyPair::new_cluster();
     let host_key = KeyPair::new_server();
@@ -226,15 +232,17 @@ async fn wasmbus() -> anyhow::Result<()> {
         ("hostcore.osfamily".into(), FAMILY.into()),
         ("path".into(), "test-path".into()),
     ]);
+
     let (host, shutdown) = Host::new(HostConfig {
-        url: nats_url.clone(),
+        ctl_nats_url: ctl_nats_url.clone(),
+        lattice_prefix: TEST_PREFIX.to_string(),
         cluster_seed: Some(cluster_key.seed().unwrap()),
         host_seed: Some(host_key.seed().unwrap()),
     })
     .await
     .context("failed to initialize host")?;
 
-    let mut hosts = client
+    let mut hosts = ctl_client
         .get_hosts()
         .await
         .map_err(|e| anyhow!(e).context("failed to get hosts"))?;
@@ -266,7 +274,7 @@ async fn wasmbus() -> anyhow::Result<()> {
 got: {labels:?}
 expected: {expected_labels:?}"#
             );
-            ensure!(lattice_prefix == Some("default".into()));
+            ensure!(lattice_prefix == Some(TEST_PREFIX.into()));
             ensure!(prov_rpc_host == Some("TODO".into()));
             ensure!(rpc_host == Some("TODO".into()));
             ensure!(uptime_human == Some("TODO".into()));
@@ -289,7 +297,7 @@ expected: {expected_labels:?}"#
     let actor_url =
         Url::from_file_path(test_actors::RUST_BUILTINS_COMPONENT_REACTOR_PREVIEW2_SIGNED)
             .expect("failed to construct actor ref");
-    let mut ack = client
+    let mut ack = ctl_client
         .perform_actor_auction(actor_url.as_str(), HashMap::default())
         .await
         .map_err(|e| anyhow!(e).context("failed to perform actor auction"))?;
@@ -310,7 +318,7 @@ expected: {expected_labels:?}"#
         _ => bail!("more than one actor auction ack received"),
     }
 
-    let CtlOperationAck { accepted, error } = client
+    let CtlOperationAck { accepted, error } = ctl_client
         .start_actor(&host_key.public_key(), actor_url.as_str(), 1, None)
         .await
         .map_err(|e| anyhow!(e).context("failed to start actor"))?;
@@ -332,7 +340,7 @@ expected: {expected_labels:?}"#
     let nats_provider_url =
         Url::from_file_path(test_providers::RUST_NATS).expect("failed to construct provider ref");
 
-    let mut ack = client
+    let mut ack = ctl_client
         .perform_provider_auction(
             httpserver_provider_url.as_str(),
             "default",
@@ -365,7 +373,7 @@ expected: {expected_labels:?}"#
     // topics
     try_join!(
         assert_advertise_link(
-            &client,
+            &ctl_client,
             &actor_claims,
             &httpserver_provider_key,
             "wasmcloud:httpserver",
@@ -375,20 +383,20 @@ expected: {expected_labels:?}"#
             )]),
         ),
         assert_advertise_link(
-            &client,
+            &ctl_client,
             &actor_claims,
             &kvredis_provider_key,
             "wasmcloud:keyvalue",
             HashMap::from([("URL".into(), format!("{redis_url}"))]),
         ),
         assert_advertise_link(
-            &client,
+            &ctl_client,
             &actor_claims,
             &nats_provider_key,
             "wasmcloud:messaging",
             HashMap::from([(
                 "config_json".into(),
-                format!(r#"{{"cluster_uris":["{nats_url}"]}}"#)
+                format!(r#"{{"cluster_uris":["{ctl_nats_url}"]}}"#)
             )]),
         )
     )
@@ -396,24 +404,27 @@ expected: {expected_labels:?}"#
 
     try_join!(
         assert_start_provider(
-            &client,
+            &ctl_client,
             &nats_client,
+            TEST_PREFIX,
             &host_key,
             &httpserver_provider_key,
             &httpserver_provider_url,
             None,
         ),
         assert_start_provider(
-            &client,
+            &ctl_client,
             &nats_client,
+            TEST_PREFIX,
             &host_key,
             &kvredis_provider_key,
             &kvredis_provider_url,
             None,
         ),
         assert_start_provider(
-            &client,
+            &ctl_client,
             &nats_client,
+            TEST_PREFIX,
             &host_key,
             &nats_provider_key,
             &nats_provider_url,
@@ -429,7 +440,7 @@ expected: {expected_labels:?}"#
         mut providers,
         issuer,
         friendly_name,
-    } = client
+    } = ctl_client
         .get_host_inventory(&host_key.public_key())
         .await
         .map_err(|e| anyhow!(e).context("failed to get host inventory"))?;
@@ -626,13 +637,13 @@ expected: {expected_redis_keys:?}"#
     ensure!(redis_res == redis::Value::Data(http_res.into()));
 
     try_join!(
-        assert_remove_link(&client, &actor_claims, "wasmcloud:messaging"),
-        assert_remove_link(&client, &actor_claims, "wasmcloud:keyvalue"),
-        assert_remove_link(&client, &actor_claims, "wasmcloud:httpserver"),
+        assert_remove_link(&ctl_client, &actor_claims, "wasmcloud:messaging"),
+        assert_remove_link(&ctl_client, &actor_claims, "wasmcloud:keyvalue"),
+        assert_remove_link(&ctl_client, &actor_claims, "wasmcloud:httpserver"),
     )
     .context("failed to remove links")?;
 
-    let CtlOperationAck { accepted, error } = client
+    let CtlOperationAck { accepted, error } = ctl_client
         .stop_host(&host_key.public_key(), None)
         .await
         .map_err(|e| anyhow!(e).context("failed to stop host"))?;

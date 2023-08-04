@@ -161,23 +161,19 @@ impl Queue {
     #[instrument]
     async fn new(
         nats: &async_nats::Client,
+        lattice_prefix: &str,
         cluster_key: &KeyPair,
         host_key: &KeyPair,
     ) -> anyhow::Result<Self> {
+        let host_id = host_key.public_key();
         let (registries, pings, links, queries, auction, commands, inventory) = try_join!(
-            nats.subscribe("wasmbus.ctl.default.registries.put".into()),
-            nats.subscribe("wasmbus.ctl.default.ping.hosts".into()),
-            nats.subscribe("wasmbus.ctl.default.linkdefs.*".into()),
-            nats.subscribe("wasmbus.ctl.default.get.*".into()),
-            nats.subscribe("wasmbus.ctl.default.auction.>".into()),
-            nats.subscribe(format!(
-                "wasmbus.ctl.default.cmd.{}.*",
-                host_key.public_key()
-            )),
-            nats.subscribe(format!(
-                "wasmbus.ctl.default.get.{}.inv",
-                host_key.public_key()
-            )),
+            nats.subscribe(format!("wasmbus.ctl.{lattice_prefix}.registries.put",)),
+            nats.subscribe(format!("wasmbus.ctl.{lattice_prefix}.ping.hosts",)),
+            nats.subscribe(format!("wasmbus.ctl.{lattice_prefix}.linkdefs.*",)),
+            nats.subscribe(format!("wasmbus.ctl.{lattice_prefix}.get.*",)),
+            nats.subscribe(format!("wasmbus.ctl.{lattice_prefix}.auction.>",)),
+            nats.subscribe(format!("wasmbus.ctl.{lattice_prefix}.cmd.{host_id}.*",)),
+            nats.subscribe(format!("wasmbus.ctl.{lattice_prefix}.get.{host_id}.inv",)),
         )
         .context("failed to subscribe to queues")?;
         Ok(Self {
@@ -313,6 +309,7 @@ struct InvocationResponse {
 #[derive(Clone, Debug)]
 struct Handler {
     nats: async_nats::Client,
+    lattice_prefix: String,
     cluster_key: Arc<KeyPair>,
     origin: WasmCloudEntity,
     interfaces: Arc<RwLock<HashMap<String, WasmCloudEntity>>>,
@@ -350,13 +347,12 @@ impl Handler {
         let invocation = self.invocation(operation, request).await?;
         let request =
             rmp_serde::to_vec_named(&invocation).context("failed to encode invocation")?;
+        let lattice_prefix = &self.lattice_prefix;
+        let provider_id = invocation.target.public_key;
         let res = self
             .nats
             .request(
-                format!(
-                    "wasmbus.rpc.default.{}.default",
-                    invocation.target.public_key
-                ),
+                format!("wasmbus.rpc.{lattice_prefix}.{provider_id}.default",),
                 request.into(),
             )
             .await
@@ -416,6 +412,7 @@ impl Bus for Handler {
         let (res_r, mut res_w) = socket_pair()?;
 
         let nats = self.nats.clone();
+        let lattice_prefix = self.lattice_prefix.clone();
         let provider_id = target.public_key.clone();
         let origin = self.origin.clone();
         let target = target.clone();
@@ -438,7 +435,7 @@ impl Bus for Handler {
                     .map_err(|e| e.to_string())?;
                 let res = nats
                     .request(
-                        format!("wasmbus.rpc.default.{provider_id}.default"),
+                        format!("wasmbus.rpc.{lattice_prefix}.{provider_id}.default"),
                         request.into(),
                     )
                     .await
@@ -838,6 +835,7 @@ pub struct Host {
     event_builder: EventBuilderV10,
     friendly_name: String,
     heartbeat: AbortHandle,
+    host_config: HostConfig,
     host_key: KeyPair,
     labels: HashMap<String, String>,
     nats: async_nats::Client,
@@ -904,14 +902,10 @@ impl Host {
     /// Construct a new [Host] returning a tuple of its [Arc] and an async shutdown function.
     #[instrument]
     pub async fn new(
-        HostConfig {
-            url,
-            cluster_seed,
-            host_seed,
-        }: HostConfig,
+        config: HostConfig,
     ) -> anyhow::Result<(Arc<Self>, impl Future<Output = anyhow::Result<()>>)> {
-        let cluster_key = if let Some(cluster_seed) = cluster_seed {
-            let kp = KeyPair::from_seed(&cluster_seed)
+        let cluster_key = if let Some(cluster_seed) = config.cluster_seed.as_ref() {
+            let kp = KeyPair::from_seed(cluster_seed)
                 .context("failed to construct key pair from seed")?;
             ensure!(kp.key_pair_type() == KeyPairType::Cluster);
             kp
@@ -919,9 +913,9 @@ impl Host {
             KeyPair::new(KeyPairType::Cluster)
         };
         let cluster_key = Arc::new(cluster_key);
-        let host_key = if let Some(host_seed) = host_seed {
+        let host_key = if let Some(host_seed) = config.host_seed.as_ref() {
             let kp =
-                KeyPair::from_seed(&host_seed).context("failed to construct key pair from seed")?;
+                KeyPair::from_seed(host_seed).context("failed to construct key pair from seed")?;
             ensure!(kp.key_pair_type() == KeyPairType::Server);
             kp
         } else {
@@ -948,11 +942,15 @@ impl Host {
             "version": env!("CARGO_PKG_VERSION"),
         });
 
-        let nats = async_nats::connect(url.as_str())
+        debug!(
+            ctl_nats_url = config.ctl_nats_url.as_str(),
+            "connecting to NATS control server"
+        );
+        let nats = async_nats::connect(config.ctl_nats_url.as_str())
             .await
-            .context("failed to connect to NATS")?;
+            .context("failed to connect to NATS control server")?;
 
-        let queue = Queue::new(&nats, &cluster_key, &host_key)
+        let queue = Queue::new(&nats, &config.lattice_prefix, &cluster_key, &host_key)
             .await
             .context("failed to initialize queue")?;
         nats.flush().await.context("failed to flush")?;
@@ -977,8 +975,7 @@ impl Host {
         let event_builder = EventBuilderV10::new().source(host_key.public_key());
 
         let jetstream = async_nats::jetstream::new(nats.clone());
-        // TODO: Use prefix
-        let bucket = format!("LATTICEDATA_{prefix}", prefix = "default");
+        let bucket = format!("LATTICEDATA_{}", config.lattice_prefix);
         create_lattice_metadata_bucket(&jetstream, &bucket).await?;
 
         let data = jetstream
@@ -996,6 +993,7 @@ impl Host {
             event_builder,
             friendly_name,
             heartbeat: heartbeat_abort.clone(),
+            host_config: config,
             host_key,
             labels,
             nats,
@@ -1167,7 +1165,10 @@ impl Host {
             .context("failed to build cloud event")?;
         let ev = serde_json::to_vec(&ev).context("failed to serialize event")?;
         self.nats
-            .publish("wasmbus.evt.default".into(), ev.into())
+            .publish(
+                format!("wasmbus.evt.{}", self.host_config.lattice_prefix),
+                ev.into(),
+            )
             .await
             .with_context(|| format!("failed to publish `{name}` event"))
     }
@@ -1188,56 +1189,57 @@ impl Host {
         trace!(actor_ref = actor_ref.as_ref(), count, "instantiating actor");
 
         let actor_ref = actor_ref.as_ref();
-        let instances = stream::repeat(format!("wasmbus.rpc.default.{}", claims.subject))
-            .take(count.into())
-            .then(|topic| {
-                let pool = pool.clone();
-                let handler = handler.clone();
-                async move {
-                    let calls = self
-                        .nats
-                        .queue_subscribe(topic.clone(), topic)
-                        .await
-                        .context("failed to subscribe to actor call queue")?;
+        let instances = stream::repeat(format!(
+            "wasmbus.rpc.{lattice_prefix}.{subject}",
+            lattice_prefix = self.host_config.lattice_prefix,
+            subject = claims.subject
+        ))
+        .take(count.into())
+        .then(|topic| {
+            let pool = pool.clone();
+            let handler = handler.clone();
+            async move {
+                let calls = self
+                    .nats
+                    .queue_subscribe(topic.clone(), topic)
+                    .await
+                    .context("failed to subscribe to actor call queue")?;
 
-                    let (calls_abort, calls_abort_reg) = AbortHandle::new_pair();
-                    let id = Ulid::new();
-                    let instance = Arc::new(ActorInstance {
-                        nats: self.nats.clone(),
-                        pool,
-                        id,
-                        calls: calls_abort,
-                        runtime: self.runtime.clone(),
-                        handler: handler.clone(),
-                    });
+                let (calls_abort, calls_abort_reg) = AbortHandle::new_pair();
+                let id = Ulid::new();
+                let instance = Arc::new(ActorInstance {
+                    nats: self.nats.clone(),
+                    pool,
+                    id,
+                    calls: calls_abort,
+                    runtime: self.runtime.clone(),
+                    handler: handler.clone(),
+                });
 
-                    let _calls = spawn({
+                let _calls = spawn({
+                    let instance = Arc::clone(&instance);
+                    Abortable::new(calls, calls_abort_reg).for_each_concurrent(None, move |msg| {
                         let instance = Arc::clone(&instance);
-                        Abortable::new(calls, calls_abort_reg).for_each_concurrent(
-                            None,
-                            move |msg| {
-                                let instance = Arc::clone(&instance);
-                                async move { instance.handle_message(msg).await }
-                            },
-                        )
-                    });
+                        async move { instance.handle_message(msg).await }
+                    })
+                });
 
-                    self.publish_event(
-                        "actor_started",
-                        event::actor_started(
-                            claims,
-                            annotations,
-                            Uuid::from_u128(id.into()),
-                            actor_ref,
-                        ),
-                    )
-                    .await?;
-                    anyhow::Result::<_>::Ok(instance)
-                }
-            })
-            .try_collect()
-            .await
-            .context("failed to instantiate actor")?;
+                self.publish_event(
+                    "actor_started",
+                    event::actor_started(
+                        claims,
+                        annotations,
+                        Uuid::from_u128(id.into()),
+                        actor_ref,
+                    ),
+                )
+                .await?;
+                anyhow::Result::<_>::Ok(instance)
+            }
+        })
+        .try_collect()
+        .await
+        .context("failed to instantiate actor")?;
         self.publish_event(
             "actors_started",
             event::actors_started(claims, annotations, host_id, count, actor_ref),
@@ -1324,6 +1326,7 @@ impl Host {
         };
         let handler = Handler {
             nats: self.nats.clone(),
+            lattice_prefix: self.host_config.lattice_prefix.clone(),
             origin,
             cluster_key: Arc::clone(&self.cluster_key),
             interfaces: Arc::new(RwLock::new(interfaces)),
@@ -1833,7 +1836,7 @@ impl Host {
                 .collect();
             let data = serde_json::to_vec(&json!({
                 "host_id": self.host_key.public_key(),
-                "lattice_rpc_prefix": "default", // TODO: Support lattice prefix config
+                "lattice_rpc_prefix": self.host_config.lattice_prefix,
                 "link_name": link_name,
                 "lattice_rpc_user_jwt": "", // TODO: Support config
                 "lattice_rpc_user_seed": "", // TODO: Support config
@@ -2189,7 +2192,7 @@ impl Host {
           "ctl_host": "TODO",
           "prov_rpc_host": "TODO",
           "rpc_host": "TODO",
-          "lattice_prefix": "default",
+          "lattice_prefix": self.host_config.lattice_prefix,
         }))
         .context("failed to encode reply")?;
         Ok(buf.into())
@@ -2340,13 +2343,10 @@ impl Host {
         .await?;
 
         let msgp = rmp_serde::to_vec(ld).context("failed to encode link definition")?;
+        let lattice_prefix = &self.host_config.lattice_prefix;
         self.nats
             .publish(
-                // TODO: Set prefix
-                format!(
-                    "wasmbus.rpc.{prefix}.{provider_id}.{link_name}.linkdefs.put",
-                    prefix = "default"
-                ),
+                format!("wasmbus.rpc.{lattice_prefix}.{provider_id}.{link_name}.linkdefs.put",),
                 msgp.into(),
             )
             .await
@@ -2388,13 +2388,10 @@ impl Host {
         // TODO: Broadcast `linkdef_removed`
 
         let msgp = rmp_serde::to_vec(ld).context("failed to encode link definition")?;
+        let lattice_prefix = &self.host_config.lattice_prefix;
         self.nats
             .publish(
-                // TODO: Set prefix
-                format!(
-                    "wasmbus.rpc.{prefix}.{provider_id}.{link_name}.linkdefs.del",
-                    prefix = "default"
-                ),
+                format!("wasmbus.rpc.{lattice_prefix}.{provider_id}.{link_name}.linkdefs.del",),
                 msgp.into(),
             )
             .await
