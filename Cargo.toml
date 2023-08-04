@@ -21,7 +21,7 @@ status = "actively-developed"
 
 [dependencies]
 anyhow = { workspace = true }
-clap = { workspace = true, features = ["color", "derive", "error-context", "help", "std", "suggestions", "usage"] }
+clap = { workspace = true, features = ["color", "derive", "env", "error-context", "help", "std", "suggestions", "usage"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
 tracing = { workspace = true, features = ["release_max_level_info"] }
 tracing-subscriber = { workspace = true, features = ["ansi", "env-filter", "fmt", "json", "std"] }
