@@ -2,5 +2,9 @@ package wasmcloud:host
 
 world interfaces {
     import wasmcloud:bus/host
+
     import wasi:logging/logging
+
+    import wasmcloud:blobstore/consumer
+    import wasmcloud:messaging/consumer
 }

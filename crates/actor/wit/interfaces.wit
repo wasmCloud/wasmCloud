@@ -6,6 +6,9 @@ world interfaces {
 
     import wasi:logging/logging
     import wasi:random/random
+
+    import wasmcloud:blobstore/consumer
+    import wasmcloud:messaging/consumer
 }
 
 /// All interfaces guaranteed to be provided by all previous and future hosts.

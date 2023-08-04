@@ -68,7 +68,8 @@ mod test {
             //);
             // TODO
             #[cfg(not(feature = "module"))]
-            let (_, _): (
+            let (_, _, _): (
+                wasmcloud::bus::host::FutureResult,
                 wasi::io::streams::InputStream,
                 wasi::io::streams::OutputStream,
             ) = wasmcloud::bus::host::call("mycompany:mypackage/interface.operation").unwrap();

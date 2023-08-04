@@ -3,8 +3,8 @@ mod wasmbus;
 use wasmbus::guest_call;
 
 use crate::actor::claims;
-use crate::capability::builtin::IncomingHttp;
-use crate::capability::{builtin, logging, Bus, Logging};
+use crate::capability::logging::logging;
+use crate::capability::{builtin, Bus, IncomingHttp, Logging};
 use crate::Runtime;
 
 use core::any::Any;

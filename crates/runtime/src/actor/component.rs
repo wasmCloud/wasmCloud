@@ -1,6 +1,7 @@
 use crate::actor::claims;
 use crate::capability::bus::host;
-use crate::capability::{builtin, logging, Bus, IncomingHttp, Interfaces, Logging};
+use crate::capability::logging::logging;
+use crate::capability::{blobstore, builtin, messaging, Bus, IncomingHttp, Interfaces, Logging};
 use crate::Runtime;
 
 use core::fmt::{self, Debug};
@@ -391,6 +392,125 @@ impl logging::Host for Ctx {
         message: String,
     ) -> anyhow::Result<()> {
         self.handler.log(level, context, message).await
+    }
+}
+
+#[async_trait]
+impl messaging::types::Host for Ctx {}
+
+#[allow(unused)] // TODO: Remove once implemented
+#[async_trait]
+impl messaging::consumer::Host for Ctx {
+    #[instrument]
+    async fn request(
+        &mut self,
+        subject: String,
+        body: Option<Vec<u8>>,
+        timeout_ms: u32,
+    ) -> anyhow::Result<Result<messaging::types::BrokerMessage, String>> {
+        bail!("unsupported")
+    }
+
+    #[instrument]
+    async fn request_multi(
+        &mut self,
+        subject: String,
+        body: Option<Vec<u8>>,
+        timeout_ms: u32,
+        max_results: u32,
+    ) -> anyhow::Result<Result<Vec<messaging::types::BrokerMessage>, String>> {
+        bail!("unsupported")
+    }
+
+    #[instrument]
+    async fn publish(
+        &mut self,
+        msg: messaging::types::BrokerMessage,
+    ) -> anyhow::Result<Result<(), String>> {
+        bail!("unsupported")
+    }
+}
+
+#[async_trait]
+impl blobstore::types::Host for Ctx {}
+
+#[allow(unused)] // TODO: Remove once implemented
+#[async_trait]
+impl blobstore::consumer::Host for Ctx {
+    #[instrument]
+    async fn container_exists(&mut self, container_id: String) -> anyhow::Result<bool> {
+        bail!("unsupported")
+    }
+
+    #[instrument]
+    async fn create_container(
+        &mut self,
+        container_id: String,
+    ) -> anyhow::Result<Result<(), String>> {
+        bail!("unsupported")
+    }
+
+    #[instrument]
+    async fn remove_container(
+        &mut self,
+        container_id: String,
+    ) -> anyhow::Result<Result<(), String>> {
+        bail!("unsupported")
+    }
+
+    #[instrument]
+    async fn get_container_info(
+        &mut self,
+        container_id: String,
+    ) -> anyhow::Result<Result<Option<blobstore::types::ContainerInfo>, String>> {
+        bail!("unsupported")
+    }
+
+    #[instrument]
+    async fn get_object_info(
+        &mut self,
+        container_id: String,
+        object_id: String,
+    ) -> anyhow::Result<Result<Option<blobstore::types::ObjectInfo>, String>> {
+        bail!("unsupported")
+    }
+
+    #[instrument]
+    async fn remove_object(
+        &mut self,
+        container_id: String,
+        object_id: String,
+    ) -> anyhow::Result<Result<bool, String>> {
+        bail!("unsupported")
+    }
+
+    #[instrument]
+    async fn put_object(
+        &mut self,
+        chunk: blobstore::types::Chunk,
+        content_type: String,
+        content_encoding: String,
+    ) -> anyhow::Result<Result<String, String>> {
+        bail!("unsupported")
+    }
+
+    #[instrument]
+    async fn put_chunk(
+        &mut self,
+        stream_id: String,
+        chunk: blobstore::types::Chunk,
+        cancel: bool,
+    ) -> anyhow::Result<Result<(), String>> {
+        bail!("unsupported")
+    }
+
+    #[instrument]
+    async fn stream_object(
+        &mut self,
+        container_id: String,
+        object_id: String,
+    ) -> anyhow::Result<Result<(), String>> {
+        bail!("unsupported")
     }
 }
 

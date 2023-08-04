@@ -1,4 +1,5 @@
-use super::{format_opt, logging};
+use super::format_opt;
+use super::logging::logging;
 
 use core::fmt::Debug;
 use core::future::Future;

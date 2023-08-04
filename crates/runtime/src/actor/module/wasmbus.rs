@@ -1,5 +1,5 @@
 use crate::capability::builtin::{self, Bus, Logging};
-use crate::capability::logging;
+use crate::capability::logging::logging;
 
 use core::fmt::{self, Debug};
 
