@@ -1,0 +1,33 @@
+[package]
+name = "wasmcloud-provider-nats"
+version = "0.17.3"
+
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+async-nats = { workspace = true }
+async-trait = { workspace = true }
+atty = { workspace = true }
+base64 = { workspace = true }
+bytes = { workspace = true }
+chrono = { workspace = true }
+crossbeam = { workspace = true }
+futures = { workspace = true }
+once_cell = { workspace = true }
+rmp-serde = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_bytes = { workspace = true, features = ["std"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+toml = { workspace = true, features = ["parse"] }
+tracing = { workspace = true }
+tracing-futures = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+wascap = { workspace = true }
+wasmbus-rpc = { workspace = true, features = ["otel"] }

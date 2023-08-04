@@ -25,7 +25,7 @@ use wascap::jwt;
 use wascap::wasm::extract_claims;
 use wasmcloud_control_interface::{
     ActorAuctionAck, ActorDescription, ActorInstance, ClientBuilder, CtlOperationAck, Host,
-    HostInventory, ProviderAuctionAck, ProviderDescription,
+    HostInventory, ProviderAuctionAck,
 };
 use wasmcloud_host::wasmbus::{Lattice, LatticeConfig};
 
@@ -105,7 +105,7 @@ async fn wasmbus() -> anyhow::Result<()> {
         ("path".into(), "test-path".into()),
     ]);
     let (lattice, shutdown) = Lattice::new(LatticeConfig {
-        url: nats_url,
+        url: nats_url.clone(),
         cluster_seed: Some(cluster_key.seed().unwrap()),
         host_seed: Some(host_key.seed().unwrap()),
     })
@@ -186,12 +186,22 @@ async fn wasmbus() -> anyhow::Result<()> {
     ensure!(error == "");
     ensure!(accepted);
 
-    let provider_key = KeyPair::from_seed(test_providers::RUST_HTTPSERVER_SUBJECT)
+    let httpserver_provider_key = KeyPair::from_seed(test_providers::RUST_HTTPSERVER_SUBJECT)
         .context("failed to parse `rust-httpserver` provider key")?;
-    let provider_url = Url::from_file_path(test_providers::RUST_HTTPSERVER)
+    let httpserver_provider_url = Url::from_file_path(test_providers::RUST_HTTPSERVER)
         .expect("failed to construct provider ref");
+
+    let nats_provider_key = KeyPair::from_seed(test_providers::RUST_NATS_SUBJECT)
+        .context("failed to parse `rust-nats` provider key")?;
+    let nats_provider_url =
+        Url::from_file_path(test_providers::RUST_NATS).expect("failed to construct provider ref");
+
     let mut ack = client
-        .perform_provider_auction(provider_url.as_str(), "default", HashMap::default())
+        .perform_provider_auction(
+            httpserver_provider_url.as_str(),
+            "default",
+            HashMap::default(),
+        )
         .await
         .map_err(|e| anyhow!(e).context("failed to perform provider auction"))?;
     match (ack.pop(), ack.as_slice()) {
@@ -205,7 +215,7 @@ async fn wasmbus() -> anyhow::Result<()> {
         ) => {
             // TODO: Validate `constraints`
             ensure!(host_id == host_key.public_key());
-            ensure!(provider_ref == provider_url.as_str());
+            ensure!(provider_ref == httpserver_provider_url.as_str());
             ensure!(link_name == "default");
         }
         (None, []) => bail!("no provider auction ack received"),
@@ -214,13 +224,13 @@ async fn wasmbus() -> anyhow::Result<()> {
 
     let http_port = free_port().await?;
 
-    // NOTE: Link is advertised before the provider is started to prevent race condition, which
+    // NOTE: Links are advertised before the provider is started to prevent race condition, which
     // occurs if link is established after the providers starts, but before it subscribes to NATS
     // topics
     let CtlOperationAck { accepted, error } = client
         .advertise_link(
             &actor_claims.subject,
-            &provider_key.public_key(),
+            &httpserver_provider_key.public_key(),
             "wasmcloud:httpserver",
             "default",
             HashMap::from([(
@@ -234,13 +244,36 @@ async fn wasmbus() -> anyhow::Result<()> {
     ensure!(accepted);
 
     let CtlOperationAck { accepted, error } = client
+        .advertise_link(
+            &actor_claims.subject,
+            &nats_provider_key.public_key(),
+            "wasmcloud:messaging",
+            "default",
+            HashMap::from([(
+                "config_json".into(),
+                format!(r#"{{"cluster_uris":"{nats_url}"}}"#),
+            )]),
+        )
+        .await
+        .map_err(|e| anyhow!(e).context("failed to advertise link"))?;
+    ensure!(error == "");
+    ensure!(accepted);
+
+    let CtlOperationAck { accepted, error } = client
         .start_provider(
             &host_key.public_key(),
-            provider_url.as_str(),
+            httpserver_provider_url.as_str(),
             None,
             None,
             None,
         )
+        .await
+        .map_err(|e| anyhow!(e).context("failed to start provider"))?;
+    ensure!(error == "");
+    ensure!(accepted);
+
+    let CtlOperationAck { accepted, error } = client
+        .start_provider("", nats_provider_url.as_str(), None, None, None)
         .await
         .map_err(|e| anyhow!(e).context("failed to start provider"))?;
     ensure!(error == "");
@@ -295,30 +328,28 @@ async fn wasmbus() -> anyhow::Result<()> {
         (None, []) => bail!("no actor found"),
         _ => bail!("more than one actor found"),
     }
-    match (providers.pop(), providers.as_slice()) {
-        (
-            Some(ProviderDescription {
-                annotations,
-                id,
-                image_ref,
-                contract_id,
-                link_name,
-                name,
-                revision,
-            }),
-            [],
-        ) => {
+    providers.sort_unstable_by(|a, b| b.name.cmp(&a.name));
+    match (providers.pop(), providers.pop(), providers.as_slice()) {
+        (Some(httpserver), Some(nats), []) => {
             // TODO: Validate `constraints`
-            ensure!(annotations == None);
-            ensure!(id == provider_key.public_key());
-            ensure!(image_ref == Some(provider_url.to_string()));
-            ensure!(contract_id == "wasmcloud:httpserver");
-            ensure!(link_name == "default");
-            ensure!(name == Some("wasmcloud-provider-httpserver".into()),);
-            ensure!(revision == 0);
+            ensure!(httpserver.annotations == None);
+            ensure!(httpserver.id == httpserver_provider_key.public_key());
+            ensure!(httpserver.image_ref == Some(httpserver_provider_url.to_string()));
+            ensure!(httpserver.contract_id == "wasmcloud:httpserver");
+            ensure!(httpserver.link_name == "default");
+            ensure!(httpserver.name == Some("wasmcloud-provider-httpserver".into()),);
+            ensure!(httpserver.revision == 0);
+
+            // TODO: Validate `constraints`
+            ensure!(nats.annotations == None);
+            ensure!(nats.id == nats_provider_key.public_key());
+            ensure!(nats.image_ref == Some(nats_provider_url.to_string()));
+            ensure!(nats.contract_id == "wasmcloud:messaging");
+            ensure!(nats.link_name == "default");
+            ensure!(nats.name == Some("wasmcloud-provider-nats".into()),);
+            ensure!(nats.revision == 0);
         }
-        (None, []) => bail!("no provider found"),
-        _ => bail!("more than one provider found"),
+        _ => bail!("invalid provider count"),
     }
 
     let res = pin!(IntervalStream::new(interval(Duration::from_secs(1)))
@@ -376,6 +407,13 @@ async fn wasmbus() -> anyhow::Result<()> {
         (42..=4242).contains(&random_in_range),
         "{random_in_range} should have been within range from 42 to 4242 inclusive"
     );
+
+    let CtlOperationAck { accepted, error } = client
+        .remove_link(&actor_claims.subject, "wasmcloud:messaging", "default")
+        .await
+        .map_err(|e| anyhow!(e).context("failed to remove link"))?;
+    ensure!(error == "");
+    ensure!(accepted);
 
     let CtlOperationAck { accepted, error } = client
         .remove_link(&actor_claims.subject, "wasmcloud:httpserver", "default")
