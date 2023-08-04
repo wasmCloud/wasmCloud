@@ -17,25 +17,19 @@
   inputs.nixify.url = github:rvolosatovs/nixify;
   inputs.wash.inputs.nixify.follows = "nixify"; # TODO: drop once updated upstream
   inputs.wash.url = github:wasmcloud/wash/v0.18.1;
-  inputs.wasi-preview1-command-component-adapter.flake = false;
-  inputs.wasi-preview1-command-component-adapter.url = https://github.com/bytecodealliance/wasmtime/releases/download/v10.0.1/wasi_snapshot_preview1.command.wasm;
-  inputs.wasi-preview1-reactor-component-adapter.flake = false;
-  inputs.wasi-preview1-reactor-component-adapter.url = https://github.com/bytecodealliance/wasmtime/releases/download/v10.0.1/wasi_snapshot_preview1.reactor.wasm;
+  inputs.wasmcloud-component-adapters.inputs.nixify.follows = "nixify";
+  inputs.wasmcloud-component-adapters.url = github:wasmCloud/wasmcloud-component-adapters;
   inputs.wit-deps.inputs.nixify.follows = "nixify"; # TODO: drop once updated upstream
   inputs.wit-deps.url = github:bytecodealliance/wit-deps/v0.3.2;
 
   outputs = {
     nixify,
     wash,
-    wasi-preview1-command-component-adapter,
-    wasi-preview1-reactor-component-adapter,
+    wasmcloud-component-adapters,
     wit-deps,
     ...
   }:
-    with nixify.lib; let
-      WASI_PREVIEW1_COMMAND_COMPONENT_ADAPTER = wasi-preview1-command-component-adapter;
-      WASI_PREVIEW1_REACTOR_COMPONENT_ADAPTER = wasi-preview1-reactor-component-adapter;
-    in
+    with nixify.lib;
       rust.mkFlake {
         src = ./.;
 
@@ -106,10 +100,8 @@
           with pkgsCross;
           with pkgs.lib;
             {
-              inherit
-                WASI_PREVIEW1_COMMAND_COMPONENT_ADAPTER
-                WASI_PREVIEW1_REACTOR_COMPONENT_ADAPTER
-                ;
+              WASI_PREVIEW1_COMMAND_COMPONENT_ADAPTER = wasmcloud-component-adapters.packages.${pkgs.stdenv.system}.wasi-preview1-command-component-adapter;
+              WASI_PREVIEW1_REACTOR_COMPONENT_ADAPTER = wasmcloud-component-adapters.packages.${pkgs.stdenv.system}.wasi-preview1-reactor-component-adapter;
 
               cargoLockParsed =
                 cargoLock.root
