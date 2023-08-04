@@ -11,7 +11,7 @@ pub use module::{
 };
 
 use crate::capability::logging::logging;
-use crate::capability::{Bus, IncomingHttp, Logging};
+use crate::capability::{Bus, IncomingHttp, Logging, Messaging};
 use crate::Runtime;
 
 use core::fmt::Debug;
@@ -309,7 +309,15 @@ impl IncomingHttp for IncomingHttpInstance {
 }
 
 impl Instance {
-    /// Set [Bus] handler for this [Instance].
+    /// Reset [`Instance`] state to defaults
+    pub async fn reset(&mut self, rt: &Runtime) {
+        match self {
+            Self::Module(module) => module.reset(rt),
+            Self::Component(component) => component.reset(rt).await,
+        }
+    }
+
+    /// Set [`Bus`] handler for this [Instance].
     pub fn bus(&mut self, bus: Arc<dyn Bus + Send + Sync>) -> &mut Self {
         match self {
             Self::Module(module) => {
@@ -338,7 +346,7 @@ impl Instance {
         self
     }
 
-    /// Set [Logging] handler for this [Instance].
+    /// Set [`Logging`] handler for this [Instance].
     pub fn logging(&mut self, logging: Arc<dyn Logging + Send + Sync>) -> &mut Self {
         match self {
             Self::Module(module) => {
@@ -346,6 +354,19 @@ impl Instance {
             }
             Self::Component(component) => {
                 component.logging(logging);
+            }
+        }
+        self
+    }
+
+    /// Set [`Messaging`] handler for this [Instance].
+    pub fn messaging(&mut self, messaging: Arc<dyn Messaging + Send + Sync>) -> &mut Self {
+        match self {
+            Self::Module(module) => {
+                module.messaging(messaging);
+            }
+            Self::Component(component) => {
+                component.messaging(messaging);
             }
         }
         self
@@ -511,13 +532,17 @@ impl Deref for InstancePool {
 pub struct PooledInstance {
     instance: Option<Instance>,
     instances: Arc<RwLock<PooledInstances>>,
+    runtime: Runtime,
 }
 
 impl Drop for PooledInstance {
     fn drop(&mut self) {
-        if let Some(instance) = self.instance.take() {
+        if let Some(mut instance) = self.instance.take() {
             task::block_in_place(move || {
-                Handle::current().block_on(async { self.instances.write().await.push(instance) })
+                Handle::current().block_on(async {
+                    instance.reset(&self.runtime).await;
+                    self.instances.write().await.push(instance)
+                })
             });
         }
     }
@@ -606,7 +631,7 @@ impl InstancePool {
 
     /// Instantiate the actor and return an [PooledInstance] on success.
     #[instrument]
-    pub async fn instantiate(&self) -> anyhow::Result<PooledInstance> {
+    pub async fn instantiate(&self, runtime: Runtime) -> anyhow::Result<PooledInstance> {
         let instance = if let Some(instance) = self.instances.write().await.pop() {
             instance
         } else {
@@ -618,6 +643,7 @@ impl InstancePool {
         Ok(PooledInstance {
             instance: Some(instance),
             instances: Arc::clone(&self.instances),
+            runtime,
         })
     }
 }

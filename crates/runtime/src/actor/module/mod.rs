@@ -4,7 +4,7 @@ use wasmbus::guest_call;
 
 use crate::actor::claims;
 use crate::capability::logging::logging;
-use crate::capability::{builtin, Bus, IncomingHttp, Logging};
+use crate::capability::{builtin, Bus, IncomingHttp, Logging, Messaging};
 use crate::Runtime;
 
 use core::any::Any;
@@ -23,6 +23,7 @@ use tokio::task;
 use tracing::{instrument, trace};
 use wascap::jwt;
 use wasi_common::file::{FdFlags, FileType};
+use wasi_common::pipe::WritePipe;
 use wasmtime::TypedFunc;
 use wasmtime_wasi::{WasiCtxBuilder, WasiFile};
 
@@ -292,7 +293,16 @@ impl Instance {
         &mut self.store.data_mut().wasmbus.handler
     }
 
-    /// Set [Bus] handler for this [Instance].
+    /// Reset [`Instance`] state to defaults
+    pub fn reset(&mut self, rt: &Runtime) {
+        *self.handler_mut() = rt.handler.clone().into();
+        self.store
+            .data_mut()
+            .wasi
+            .set_stderr(Box::new(WritePipe::new(std::io::sink())));
+    }
+
+    /// Set [`Bus`] handler for this [Instance].
     pub fn bus(&mut self, bus: Arc<dyn Bus + Send + Sync>) -> &mut Self {
         self.handler_mut().replace_bus(bus);
         self
@@ -307,9 +317,15 @@ impl Instance {
         self
     }
 
-    /// Set [Logging] handler for this [Instance].
+    /// Set [`Logging`] handler for this [Instance].
     pub fn logging(&mut self, logging: Arc<dyn Logging + Send + Sync>) -> &mut Self {
         self.handler_mut().replace_logging(logging);
+        self
+    }
+
+    /// Set [`Messaging`] handler for this [Instance].
+    pub fn messaging(&mut self, messaging: Arc<dyn Messaging + Send + Sync>) -> &mut Self {
+        self.handler_mut().replace_messaging(messaging);
         self
     }
 

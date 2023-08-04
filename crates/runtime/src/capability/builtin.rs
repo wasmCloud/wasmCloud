@@ -1,15 +1,16 @@
-use super::format_opt;
 use super::logging::logging;
+use super::{format_opt, messaging};
 
 use core::fmt::Debug;
 use core::future::Future;
 use core::pin::Pin;
 
 use std::sync::Arc;
+use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use async_trait::async_trait;
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tracing::{instrument, trace};
 
 #[derive(Clone, Default)]
@@ -17,6 +18,7 @@ pub struct Handler {
     bus: Option<Arc<dyn Bus + Sync + Send>>,
     logging: Option<Arc<dyn Logging + Sync + Send>>,
     incoming_http: Option<Arc<dyn IncomingHttp + Sync + Send>>,
+    messaging: Option<Arc<dyn Messaging + Sync + Send>>,
 }
 
 impl Debug for Handler {
@@ -24,12 +26,14 @@ impl Debug for Handler {
         f.debug_struct("Handler")
             .field("bus", &format_opt(&self.bus))
             .field("logging", &format_opt(&self.logging))
+            .field("incoming_http", &format_opt(&self.incoming_http))
+            .field("messaging", &format_opt(&self.messaging))
             .finish()
     }
 }
 
 impl Handler {
-    /// Replace [Bus] handler returning the old one, if such was set
+    /// Replace [`Bus`] handler returning the old one, if such was set
     pub fn replace_bus(
         &mut self,
         bus: Arc<dyn Bus + Send + Sync>,
@@ -45,12 +49,20 @@ impl Handler {
         self.incoming_http.replace(incoming_http)
     }
 
-    /// Replace [Logging] handler returning the old one, if such was set
+    /// Replace [`Logging`] handler returning the old one, if such was set
     pub fn replace_logging(
         &mut self,
         logging: Arc<dyn Logging + Send + Sync>,
     ) -> Option<Arc<dyn Logging + Send + Sync>> {
         self.logging.replace(logging)
+    }
+
+    /// Replace [`Messaging`] handler returning the old one, if such was set
+    pub fn replace_messaging(
+        &mut self,
+        messaging: Arc<dyn Messaging + Send + Sync>,
+    ) -> Option<Arc<dyn Messaging + Send + Sync>> {
+        self.messaging.replace(messaging)
     }
 }
 
@@ -62,10 +74,54 @@ pub trait Bus {
         &self,
         operation: String,
     ) -> anyhow::Result<(
+        Pin<Box<dyn Future<Output = Result<(), String>> + Send>>,
         Box<dyn AsyncWrite + Sync + Send + Unpin>,
         Box<dyn AsyncRead + Sync + Send + Unpin>,
-        Pin<Box<dyn Future<Output = Result<(), String>> + Send>>,
     )>;
+
+    /// Handle `wasmcloud:bus/host.call` without streaming and with no response
+    async fn call_oneshot(
+        &self,
+        operation: String,
+        request: Vec<u8>,
+    ) -> anyhow::Result<Result<(), String>> {
+        let (res, mut input, mut output) = self
+            .call(operation)
+            .await
+            .context("failed to process call")?;
+        input
+            .write_all(&request)
+            .await
+            .context("failed to write request")?;
+        let n = output
+            .read_buf(&mut [0u8].as_mut_slice())
+            .await
+            .context("failed to read output")?;
+        ensure!(n == 0, "unexpected output received");
+        Ok(res.await)
+    }
+
+    /// Handle `wasmcloud:bus/host.call` without streaming
+    async fn call_oneshot_with_response(
+        &self,
+        operation: String,
+        request: Vec<u8>,
+        response: &mut Vec<u8>,
+    ) -> anyhow::Result<Result<usize, String>> {
+        let (res, mut input, mut output) = self
+            .call(operation)
+            .await
+            .context("failed to process call")?;
+        input
+            .write_all(&request)
+            .await
+            .context("failed to write request")?;
+        let n = output
+            .read_to_end(response)
+            .await
+            .context("failed to read output")?;
+        Ok(res.await.map(|()| n))
+    }
 }
 
 #[async_trait]
@@ -91,15 +147,39 @@ pub trait Logging {
 }
 
 #[async_trait]
+/// `wasmcloud:messaging/consumer` implementation
+pub trait Messaging {
+    /// Handle `wasmcloud:messaging/consumer.request`
+    async fn request(
+        &self,
+        subject: String,
+        body: Option<Vec<u8>>,
+        timeout: Duration,
+    ) -> anyhow::Result<messaging::types::BrokerMessage>;
+
+    /// Handle `wasmcloud:messaging/consumer.request_multi`
+    async fn request_multi(
+        &self,
+        subject: String,
+        body: Option<Vec<u8>>,
+        timeout: Duration,
+        results: &mut [messaging::types::BrokerMessage],
+    ) -> anyhow::Result<usize>;
+
+    /// Handle `wasmcloud:messaging/consumer.publish`
+    async fn publish(&self, msg: messaging::types::BrokerMessage) -> anyhow::Result<()>;
+}
+
+#[async_trait]
 impl Bus for Handler {
     #[instrument]
     async fn call(
         &self,
         operation: String,
     ) -> anyhow::Result<(
+        Pin<Box<dyn Future<Output = Result<(), String>> + Send>>,
         Box<dyn AsyncWrite + Sync + Send + Unpin>,
         Box<dyn AsyncRead + Sync + Send + Unpin>,
-        Pin<Box<dyn Future<Output = Result<(), String>> + Send>>,
     )> {
         if let Some(ref bus) = self.bus {
             trace!("call `Bus` handler");
@@ -145,6 +225,50 @@ impl IncomingHttp for Handler {
     }
 }
 
+#[async_trait]
+impl Messaging for Handler {
+    #[instrument(skip(body))]
+    async fn request(
+        &self,
+        subject: String,
+        body: Option<Vec<u8>>,
+        timeout: Duration,
+    ) -> anyhow::Result<messaging::types::BrokerMessage> {
+        trace!("call `Messaging` handler");
+        self.messaging
+            .as_ref()
+            .context("cannot handle `wasmcloud:messaging/consumer.request`")?
+            .request(subject, body, timeout)
+            .await
+    }
+
+    #[instrument(skip(body))]
+    async fn request_multi(
+        &self,
+        subject: String,
+        body: Option<Vec<u8>>,
+        timeout: Duration,
+        results: &mut [messaging::types::BrokerMessage],
+    ) -> anyhow::Result<usize> {
+        trace!("call `Messaging` handler");
+        self.messaging
+            .as_ref()
+            .context("cannot handle `wasmcloud:messaging/consumer.request_multi`")?
+            .request_multi(subject, body, timeout, results)
+            .await
+    }
+
+    #[instrument(skip(msg))]
+    async fn publish(&self, msg: messaging::types::BrokerMessage) -> anyhow::Result<()> {
+        trace!("call `Messaging` handler");
+        self.messaging
+            .as_ref()
+            .context("cannot handle `wasmcloud:messaging/consumer.publish`")?
+            .publish(msg)
+            .await
+    }
+}
+
 /// A [Handler] builder used to configure it
 #[derive(Clone, Default)]
 pub(crate) struct HandlerBuilder {
@@ -154,6 +278,8 @@ pub(crate) struct HandlerBuilder {
     pub incoming_http: Option<Arc<dyn IncomingHttp + Sync + Send>>,
     /// [`Logging`] handler
     pub logging: Option<Arc<dyn Logging + Sync + Send>>,
+    /// [`Messaging`] handler
+    pub messaging: Option<Arc<dyn Messaging + Sync + Send>>,
 }
 
 impl HandlerBuilder {
@@ -183,6 +309,14 @@ impl HandlerBuilder {
             ..self
         }
     }
+
+    /// Set [`Messaging`] handler
+    pub fn messaging(self, messaging: Arc<impl Messaging + Sync + Send + 'static>) -> Self {
+        Self {
+            messaging: Some(messaging),
+            ..self
+        }
+    }
 }
 
 impl Debug for HandlerBuilder {
@@ -191,6 +325,7 @@ impl Debug for HandlerBuilder {
             .field("bus", &format_opt(&self.bus))
             .field("incoming_http", &format_opt(&self.incoming_http))
             .field("logging", &format_opt(&self.logging))
+            .field("messaging", &format_opt(&self.messaging))
             .finish()
     }
 }
@@ -201,12 +336,14 @@ impl From<Handler> for HandlerBuilder {
             bus,
             incoming_http,
             logging,
+            messaging,
         }: Handler,
     ) -> Self {
         Self {
             bus,
             incoming_http,
             logging,
+            messaging,
         }
     }
 }
@@ -217,12 +354,14 @@ impl From<HandlerBuilder> for Handler {
             bus,
             incoming_http,
             logging,
+            messaging,
         }: HandlerBuilder,
     ) -> Self {
         Self {
             bus,
             logging,
             incoming_http,
+            messaging,
         }
     }
 }

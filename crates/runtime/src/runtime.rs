@@ -1,5 +1,5 @@
 use crate::actor::ModuleConfig;
-use crate::capability::{builtin, Bus, IncomingHttp, Logging};
+use crate::capability::{builtin, Bus, IncomingHttp, Logging, Messaging};
 use crate::ActorConfig;
 
 use core::fmt;
@@ -77,6 +77,15 @@ impl RuntimeBuilder {
     pub fn logging(self, logging: Arc<impl Logging + Sync + Send + 'static>) -> Self {
         Self {
             handler: self.handler.logging(logging),
+            ..self
+        }
+    }
+
+    /// Set a [`Messaging`] handler to use for all actor instances unless overriden for the instance
+    #[must_use]
+    pub fn messaging(self, messaging: Arc<impl Messaging + Sync + Send + 'static>) -> Self {
+        Self {
+            handler: self.handler.messaging(messaging),
             ..self
         }
     }

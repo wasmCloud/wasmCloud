@@ -6,6 +6,7 @@ use serde::Deserialize;
 use serde_json::json;
 use wasmcloud_actor::wasi::logging::logging;
 use wasmcloud_actor::wasi::random::random;
+use wasmcloud_actor::wasmcloud::messaging;
 use wasmcloud_actor::{debug, error, info, trace, warn, HostRng, HttpRequest, HttpResponse};
 
 struct Actor;
@@ -61,7 +62,7 @@ impl exports::wasmcloud::bus::guest::Guest for Actor {
         eprintln!("response: `{res:?}`");
         let body = serde_json::to_vec(&res).expect("failed to encode response to JSON");
         let res = rmp_serde::to_vec(&HttpResponse {
-            body,
+            body: body.clone(),
             ..Default::default()
         })
         .expect("failed to serialize response");
@@ -71,6 +72,12 @@ impl exports::wasmcloud::bus::guest::Guest for Actor {
             .write_all(&res)
             .expect("failed to write response");
         stdout.flush().expect("failed to flush stdout");
+        messaging::consumer::publish(&messaging::types::BrokerMessage {
+            body: Some(body),
+            reply_to: None,
+            subject: "test".into(),
+        })
+        .expect("failed to publish response");
         Ok(())
     }
 }

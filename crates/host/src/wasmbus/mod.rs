@@ -5,11 +5,11 @@ pub use config::Lattice as LatticeConfig;
 
 mod event;
 
-use crate::fetch_actor;
+use crate::{fetch_actor, socket_pair};
 
+use core::fmt;
 use core::future::Future;
 use core::num::NonZeroUsize;
-
 use core::pin::Pin;
 use core::task::{Context, Poll};
 use core::time::Duration;
@@ -23,19 +23,20 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, bail, ensure, Context as _};
 use async_nats::jetstream::kv;
+use async_trait::async_trait;
 use base64::engine::general_purpose::STANDARD_NO_PAD;
 use base64::Engine;
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use cloudevents::{EventBuilder, EventBuilderV10};
 use futures::stream::{AbortHandle, Abortable};
-use futures::{stream, try_join, Stream, StreamExt, TryStreamExt};
+use futures::{stream, try_join, FutureExt, Stream, StreamExt, TryStreamExt};
 use nkeys::{KeyPair, KeyPairType};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
-use tokio::io::{stderr, AsyncWrite, AsyncWriteExt};
+use tokio::io::{stderr, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{watch, RwLock};
 use tokio::task::JoinHandle;
 use tokio::time::{interval_at, Instant};
@@ -51,6 +52,7 @@ use wasmcloud_control_interface::{
     StartActorCommand, StartProviderCommand, StopActorCommand, StopHostCommand,
     StopProviderCommand, UpdateActorCommand,
 };
+use wasmcloud_runtime::capability::{messaging, Bus, Messaging};
 use wasmcloud_runtime::{ActorInstancePool, Runtime};
 
 const SUCCESS: &str = r#"{"accepted":true,"error":""}"#;
@@ -196,50 +198,319 @@ struct ActorInstance {
     pool: ActorInstancePool,
     id: Ulid,
     calls: AbortHandle,
+    runtime: Runtime,
+    handler: Handler,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+struct WasmCloudEntity {
+    link_name: String,
+    contract_id: String,
+    public_key: String,
+}
+
+impl fmt::Display for WasmCloudEntity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let url = self.url();
+        write!(f, "{url}")
+    }
+}
+
+impl WasmCloudEntity {
+    /// The URL of the entity
+    pub fn url(&self) -> String {
+        if self.public_key.to_uppercase().starts_with('M') {
+            format!("wasmbus://{}", self.public_key)
+        } else {
+            format!(
+                "wasmbus://{}/{}/{}",
+                self.contract_id
+                    .replace(':', "/")
+                    .replace(' ', "_")
+                    .to_lowercase(),
+                self.link_name.replace(' ', "_").to_lowercase(),
+                self.public_key
+            )
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Invocation {
+    origin: WasmCloudEntity,
+    target: WasmCloudEntity,
+    operation: String,
+    #[serde(with = "serde_bytes")]
+    msg: Vec<u8>,
+    id: String,
+    encoded_claims: String,
+    host_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content_length: Option<u64>,
+}
+
+fn invocation_hash(
+    target_url: impl AsRef<str>,
+    origin_url: impl AsRef<str>,
+    op: impl AsRef<str>,
+    msg: impl AsRef<[u8]>,
+) -> String {
+    let mut hash = Sha256::default();
+    hash.update(origin_url.as_ref());
+    hash.update(target_url.as_ref());
+    hash.update(op.as_ref());
+    hash.update(msg.as_ref());
+    hex::encode_upper(hash.finalize())
+}
+
+impl Invocation {
+    /// Creates a new invocation. All invocations are signed with the host key as a way
+    /// of preventing them from being forged over the network when connected to a lattice,
+    /// so an invocation requires a reference to the host (signing) key
+    pub fn new(
+        hostkey: &KeyPair,
+        origin: WasmCloudEntity,
+        target: WasmCloudEntity,
+        operation: String,
+        msg: Vec<u8>,
+    ) -> anyhow::Result<Invocation> {
+        let id = Uuid::from_u128(Ulid::new().into()).to_string();
+        let host_id = hostkey.public_key();
+        let target_url = format!("{}/{operation}", target.url());
+        let claims = jwt::Claims::<jwt::Invocation>::new(
+            host_id.to_string(),
+            id.to_string(),
+            &target_url,
+            &origin.url(),
+            &invocation_hash(&target_url, origin.url(), &operation, &msg),
+        );
+        let encoded_claims = claims.encode(hostkey).context("failed to encode claims")?;
+
+        Ok(Invocation {
+            content_length: Some(msg.len() as _),
+            origin,
+            target,
+            operation,
+            msg,
+            id,
+            encoded_claims,
+            host_id,
+        })
+    }
+}
+
+#[derive(Default, Serialize)]
+struct InvocationResponse {
+    #[serde(with = "serde_bytes")]
+    msg: Vec<u8>,
+    invocation_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content_length: Option<u64>,
+}
+
+#[derive(Clone, Debug)]
+struct Handler {
+    nats: async_nats::Client,
+    cluster_key: Arc<KeyPair>,
+    origin: WasmCloudEntity,
+    interfaces: Arc<RwLock<HashMap<String, WasmCloudEntity>>>,
+}
+
+impl Handler {
+    async fn invocation(
+        &self,
+        operation: impl AsRef<str>,
+        request: Vec<u8>,
+    ) -> anyhow::Result<Invocation> {
+        let (package, interface_method) = operation
+            .as_ref()
+            .split_once('/')
+            .context("failed to parse operation")?;
+        let interfaces = self.interfaces.read().await;
+        let target = interfaces.get(package).context("link not found")?;
+        // TODO: Support per-interface links
+        Invocation::new(
+            &self.cluster_key,
+            self.origin.clone(),
+            target.clone(),
+            interface_method.into(),
+            request,
+        )
+    }
+}
+
+#[async_trait]
+impl Bus for Handler {
+    #[instrument]
+    async fn call(
+        &self,
+        operation: String,
+    ) -> anyhow::Result<(
+        Pin<Box<dyn Future<Output = Result<(), String>> + Send>>,
+        Box<dyn AsyncWrite + Sync + Send + Unpin>,
+        Box<dyn AsyncRead + Sync + Send + Unpin>,
+    )> {
+        let (package, interface_method) = operation
+            .split_once('/')
+            .context("failed to parse operation")?;
+        let interfaces = self.interfaces.read().await;
+        let target = interfaces.get(package).context("link not found")?;
+        // TODO: Support per-interface links
+        let (mut req_r, req_w) = socket_pair()?;
+        let (res_r, mut res_w) = socket_pair()?;
+
+        let nats = self.nats.clone();
+        let provider_id = target.public_key.clone();
+        let origin = self.origin.clone();
+        let target = target.clone();
+        let cluster_key = self.cluster_key.clone();
+        let interface_method = interface_method.to_string();
+        Ok((
+            async move {
+                // TODO: Stream data
+                let mut request = vec![];
+                req_r
+                    .read_to_end(&mut request)
+                    .await
+                    .context("failed to read request")
+                    .map_err(|e| e.to_string())?;
+                let invocation =
+                    Invocation::new(&cluster_key, origin, target, interface_method, request)
+                        .map_err(|e| e.to_string())?;
+                let request = rmp_serde::to_vec_named(&invocation)
+                    .context("failed to encode invocation")
+                    .map_err(|e| e.to_string())?;
+                let res = nats
+                    .request(
+                        format!("wasmbus.rpc.default.{provider_id}.default"),
+                        request.into(),
+                    )
+                    .await
+                    .context("failed to call provider")
+                    .map_err(|e| e.to_string())?;
+                res_w
+                    .write_all(&res.payload)
+                    .await
+                    .context("failed to write reply")
+                    .map_err(|e| e.to_string())?;
+                Ok(())
+            }
+            .boxed(),
+            Box::new(req_w),
+            Box::new(res_r),
+        ))
+    }
+
+    async fn call_oneshot(
+        &self,
+        operation: String,
+        request: Vec<u8>,
+    ) -> anyhow::Result<Result<(), String>> {
+        let invocation = self.invocation(operation, request).await?;
+        let request =
+            rmp_serde::to_vec_named(&invocation).context("failed to encode invocation")?;
+        self.nats
+            .publish(
+                format!(
+                    "wasmbus.rpc.default.{}.default",
+                    invocation.target.public_key
+                ),
+                request.into(),
+            )
+            .await
+            .context("failed to publish on NATS topic")?;
+        Ok(Ok(()))
+    }
+
+    async fn call_oneshot_with_response(
+        &self,
+        operation: String,
+        request: Vec<u8>,
+        response: &mut Vec<u8>,
+    ) -> anyhow::Result<Result<usize, String>> {
+        let invocation = self.invocation(operation, request).await?;
+        let request =
+            rmp_serde::to_vec_named(&invocation).context("failed to encode invocation")?;
+        let mut res = self
+            .nats
+            .request(
+                format!(
+                    "wasmbus.rpc.default.{}.default",
+                    invocation.target.public_key
+                ),
+                request.into(),
+            )
+            .await
+            .context("failed to publish on NATS topic")?;
+        response.clear();
+        res.payload.copy_to_slice(response);
+        Ok(Ok(res.length))
+    }
+}
+
+#[async_trait]
+impl Messaging for Handler {
+    #[allow(unused)] // TODO: Use and remove
+    #[instrument]
+    async fn request(
+        &self,
+        subject: String,
+        body: Option<Vec<u8>>,
+        timeout: Duration,
+    ) -> anyhow::Result<messaging::types::BrokerMessage> {
+        bail!("unimplemented")
+    }
+
+    #[allow(unused)] // TODO: Use and remove
+    #[instrument]
+    async fn request_multi(
+        &self,
+        subject: String,
+        body: Option<Vec<u8>>,
+        timeout: Duration,
+        results: &mut [messaging::types::BrokerMessage],
+    ) -> anyhow::Result<usize> {
+        bail!("unimplemented")
+    }
+
+    #[instrument]
+    async fn publish(
+        &self,
+        messaging::types::BrokerMessage {
+            subject,
+            reply_to,
+            body,
+        }: messaging::types::BrokerMessage,
+    ) -> anyhow::Result<()> {
+        #[derive(Serialize)]
+        struct PubMessage {
+            pub subject: String,
+            #[serde(rename = "replyTo")]
+            #[serde(skip_serializing_if = "Option::is_none")]
+            pub reply_to: Option<String>,
+            #[serde(with = "serde_bytes")]
+            pub body: Vec<u8>,
+        }
+
+        const METHOD: &str = "wasmcloud:messaging/Messaging.Publish";
+        let msg = rmp_serde::to_vec_named(&PubMessage {
+            subject,
+            reply_to,
+            body: body.unwrap_or_default(),
+        })
+        .context("failed to encode message")?;
+        self.call_oneshot(METHOD.into(), msg)
+            .await
+            .with_context(|| format!("failed to call linked provider for `{METHOD}`"))?
+            .map_err(|e| anyhow!(e).context(format!("`{METHOD}` call failed")))
+    }
 }
 
 impl ActorInstance {
     #[instrument(skip(self, payload))]
     async fn handle_call(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
-        #[allow(unused)] // TODO: Use fields or remove
-        #[derive(Debug, Deserialize)]
-        struct Entity {
-            link_name: String,
-            contract_id: String,
-            public_key: String,
-        }
-        #[allow(unused)] // TODO: Use fields or remove
-        #[derive(Debug, Deserialize)]
-        struct Invocation {
-            origin: Entity,
-            target: Entity,
-            #[serde(default)]
-            operation: String,
-            #[serde(with = "serde_bytes")]
-            #[serde(default)]
-            msg: Vec<u8>,
-            #[serde(default)]
-            id: String,
-            #[serde(default)]
-            encoded_claims: String,
-            #[serde(default)]
-            host_id: String,
-            #[serde(default)]
-            content_length: Option<u64>,
-            #[serde(rename = "traceContext")]
-            #[serde(default)]
-            trace_context: HashMap<String, String>,
-        }
-        #[derive(Default, Serialize)]
-        struct InvocationResponse {
-            #[serde(with = "serde_bytes")]
-            msg: Vec<u8>,
-            invocation_id: String,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            error: Option<String>,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            content_length: Option<u64>,
-        }
         let Invocation {
             origin,
             target,
@@ -251,16 +522,19 @@ impl ActorInstance {
 
         debug!(?origin, ?target, operation, "handle actor invocation");
 
-        let res = AsyncBytesMut::default();
         let mut instance = self
             .pool
-            .instantiate()
+            .instantiate(self.runtime.clone())
             .await
             .context("failed to instantiate actor")?;
-        let res = match instance
+        instance
             .stderr(stderr())
             .await
             .context("failed to set stderr")?
+            .bus(Arc::new(self.handler.clone()))
+            .messaging(Arc::new(self.handler.clone()));
+        let res = AsyncBytesMut::default();
+        let res = match instance
             .call(operation, Cursor::new(msg), res.clone())
             .await
             .context("failed to call actor")?
@@ -318,6 +592,7 @@ struct Actor {
     pool: ActorInstancePool,
     instances: RwLock<HashMap<Option<Annotations>, Vec<Arc<ActorInstance>>>>,
     image_ref: String,
+    handler: Handler,
 }
 
 #[derive(Debug)]
@@ -339,7 +614,7 @@ struct Provider {
 pub struct Lattice {
     // TODO: Clean up actors after stop
     actors: RwLock<HashMap<String, Arc<Actor>>>,
-    cluster_key: KeyPair,
+    cluster_key: Arc<KeyPair>,
     event_builder: EventBuilderV10,
     friendly_name: String,
     heartbeat: AbortHandle,
@@ -389,6 +664,7 @@ impl Lattice {
         } else {
             KeyPair::new(KeyPairType::Cluster)
         };
+        let cluster_key = Arc::new(cluster_key);
         let host_key = if let Some(host_seed) = host_seed {
             let kp =
                 KeyPair::from_seed(&host_seed).context("failed to construct key pair from seed")?;
@@ -662,6 +938,7 @@ impl Lattice {
     }
 
     /// Instantiate an actor and publish the actor start events.
+    #[allow(clippy::too_many_arguments)] // TODO: refactor into a config struct
     #[instrument(skip(self, host_id, actor_ref))]
     async fn instantiate_actor(
         &self,
@@ -671,6 +948,7 @@ impl Lattice {
         actor_ref: impl AsRef<str>,
         count: NonZeroUsize,
         pool: ActorInstancePool,
+        handler: Handler,
     ) -> anyhow::Result<Vec<Arc<ActorInstance>>> {
         trace!(actor_ref = actor_ref.as_ref(), count, "instantiating actor");
 
@@ -679,6 +957,7 @@ impl Lattice {
             .take(count.into())
             .then(|topic| {
                 let pool = pool.clone();
+                let handler = handler.clone();
                 async move {
                     let calls = self
                         .nats
@@ -693,6 +972,8 @@ impl Lattice {
                         pool,
                         id,
                         calls: calls_abort,
+                        runtime: self.runtime.clone(),
+                        handler: handler.clone(),
                     });
 
                     let _calls = spawn({
@@ -786,6 +1067,32 @@ impl Lattice {
 
         let annotations = annotations.map(Into::into);
         let claims = actor.claims().context("claims missing")?;
+        let links = self.links.read().await;
+        let interfaces = links
+            .values()
+            .filter_map(|ld| {
+                (ld.actor_id == claims.subject).then(|| {
+                    (
+                        ld.contract_id.clone(),
+                        WasmCloudEntity {
+                            link_name: ld.link_name.clone(),
+                            contract_id: ld.contract_id.clone(),
+                            public_key: ld.provider_id.clone(),
+                        },
+                    )
+                })
+            })
+            .collect();
+        let origin = WasmCloudEntity {
+            public_key: claims.subject.clone(),
+            ..Default::default()
+        };
+        let handler = Handler {
+            nats: self.nats.clone(),
+            origin,
+            cluster_key: Arc::clone(&self.cluster_key),
+            interfaces: Arc::new(RwLock::new(interfaces)),
+        };
 
         let pool = ActorInstancePool::new(actor.clone(), Some(count));
         let instances = self
@@ -796,6 +1103,7 @@ impl Lattice {
                 &actor_ref,
                 count,
                 pool.clone(),
+                handler.clone(),
             )
             .await
             .context("failed to instantiate actor")?;
@@ -803,6 +1111,7 @@ impl Lattice {
             pool,
             instances: RwLock::new(HashMap::from([(annotations, instances)])),
             image_ref: actor_ref,
+            handler,
         });
         Ok(entry.insert(actor))
     }
@@ -979,6 +1288,7 @@ impl Lattice {
                             &actor.image_ref,
                             delta,
                             actor.pool.clone(),
+                            actor.handler.clone(),
                         )
                         .await
                         .context("failed to instantiate actor")?;
@@ -1068,6 +1378,7 @@ impl Lattice {
                         &actor.image_ref,
                         count,
                         actor.pool.clone(),
+                        actor.handler.clone(),
                     )
                     .await
                     .context("failed to instantiate actor")?;
@@ -1194,6 +1505,7 @@ impl Lattice {
                 new_actor_ref,
                 count,
                 new_pool,
+                actor.handler.clone(),
             )
             .await
             .context("failed to instantiate actor from new reference")?;
@@ -1701,14 +2013,23 @@ impl Lattice {
 
         let mut links = self.links.write().await;
         links.insert(id.to_string(), ld.clone());
+        if let Some(actor) = self.actors.write().await.get_mut(actor_id) {
+            let mut interfaces = actor.handler.interfaces.write().await;
+            interfaces.insert(
+                contract_id.clone(),
+                WasmCloudEntity {
+                    link_name: ld.link_name.clone(),
+                    contract_id: ld.contract_id.clone(),
+                    public_key: ld.provider_id.clone(),
+                },
+            );
+        }
 
         self.publish_event(
             "linkdef_set",
             event::linkdef_set(id, actor_id, provider_id, link_name, contract_id, values),
         )
         .await?;
-
-        // TODO: Broadcast `linkdef_added`
 
         let msgp = rmp_serde::to_vec(ld).context("failed to encode link definition")?;
         self.nats

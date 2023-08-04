@@ -64,6 +64,7 @@ struct Actor {
     logging: Option<String>,
     incoming_http: Option<String>,
     interfaces: HashMap<String, String>,
+    runtime: Runtime,
 }
 
 #[derive(Default)]
@@ -76,9 +77,9 @@ impl Bus for BusHandler {
         &self,
         operation: String,
     ) -> anyhow::Result<(
+        Pin<Box<dyn Future<Output = Result<(), String>> + Send>>,
         Box<dyn AsyncWrite + Send + Sync + Unpin>,
         Box<dyn AsyncRead + Send + Sync + Unpin>,
-        Pin<Box<dyn Future<Output = Result<(), String>> + Send>>,
     )> {
         let actor = self
             .0
@@ -90,8 +91,6 @@ impl Bus for BusHandler {
         let (res_r, res_w) = socket_pair()?;
         let actor = actor.clone();
         Ok((
-            Box::new(req_w),
-            Box::new(res_r),
             async move {
                 actor
                     .call(operation, req_r, res_w)
@@ -100,6 +99,8 @@ impl Bus for BusHandler {
                     .map_err(|e| e.to_string())?
             }
             .boxed(),
+            Box::new(req_w),
+            Box::new(res_r),
         ))
     }
 }
@@ -133,6 +134,7 @@ impl Actor {
                     logging: None,
                     incoming_http: None,
                     interfaces: HashMap::default(),
+                    runtime: rt.clone(),
                 })
             }
             scheme => bail!("`{scheme}` URLs not supported yet"),
@@ -154,7 +156,7 @@ impl Actor {
         } = self;
         trace!("instantiate local actor");
         let mut actor = actor
-            .instantiate()
+            .instantiate(self.runtime.clone())
             .await
             .context("failed to instantiate actor")?;
         actor

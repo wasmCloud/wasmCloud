@@ -3,7 +3,7 @@ use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use anyhow::{ensure, Context};
+use anyhow::{bail, ensure, Context};
 use async_trait::async_trait;
 use futures::lock::Mutex;
 use once_cell::sync::Lazy;
@@ -17,6 +17,7 @@ use tracing_subscriber::prelude::*;
 use wasmcloud_actor::{HttpRequest, HttpResponse, Uuid};
 use wasmcloud_runtime::capability;
 use wasmcloud_runtime::capability::logging::logging;
+use wasmcloud_runtime::capability::messaging;
 use wasmcloud_runtime::{Actor, Runtime};
 
 static LOGGER: Lazy<()> = Lazy::new(|| {
@@ -66,14 +67,50 @@ impl capability::Logging for Logging {
     }
 }
 
-fn new_runtime(logs: Arc<Mutex<Vec<(logging::Level, String, String)>>>) -> Runtime {
+struct Messaging(Arc<Mutex<Vec<messaging::types::BrokerMessage>>>);
+
+#[async_trait]
+impl capability::Messaging for Messaging {
+    async fn request(
+        &self,
+        _subject: String,
+        _body: Option<Vec<u8>>,
+        _timeout: std::time::Duration,
+    ) -> anyhow::Result<messaging::types::BrokerMessage> {
+        panic!("should not be called")
+    }
+
+    async fn request_multi(
+        &self,
+        _subject: String,
+        _body: Option<Vec<u8>>,
+        _timeout: std::time::Duration,
+        _results: &mut [messaging::types::BrokerMessage],
+    ) -> anyhow::Result<usize> {
+        panic!("should not be called")
+    }
+
+    async fn publish(&self, msg: messaging::types::BrokerMessage) -> anyhow::Result<()> {
+        self.0.lock().await.push(msg);
+        Ok(())
+    }
+}
+
+fn new_runtime(
+    logs: Arc<Mutex<Vec<(logging::Level, String, String)>>>,
+    published: Arc<Mutex<Vec<messaging::types::BrokerMessage>>>,
+) -> Runtime {
     Runtime::builder()
         .logging(Arc::new(Logging(logs)))
+        .messaging(Arc::new(Messaging(published)))
         .build()
         .expect("failed to construct runtime")
 }
 
-async fn run(wasm: impl AsRef<Path>) -> anyhow::Result<Vec<(logging::Level, String, String)>> {
+async fn run(
+    wasm: impl AsRef<Path>,
+    interfaces: bool,
+) -> anyhow::Result<Vec<(logging::Level, String, String)>> {
     let wasm = fs::read(wasm).await.context("failed to read Wasm")?;
 
     let socket = TcpListener::bind(SocketAddr::from((Ipv6Addr::UNSPECIFIED, 0)))
@@ -95,8 +132,9 @@ async fn run(wasm: impl AsRef<Path>) -> anyhow::Result<Vec<(logging::Level, Stri
         .await
         .context("failed to connect to socket")?;
     let logs = Arc::new(vec![].into());
+    let published = Arc::new(vec![].into());
     {
-        let rt = new_runtime(Arc::clone(&logs));
+        let rt = new_runtime(Arc::clone(&logs), Arc::clone(&published));
         let actor = Actor::new(&rt, wasm).expect("failed to construct actor");
         actor.claims().expect("claims missing");
         let mut actor = actor.instantiate().await.context("failed to instantiate")?;
@@ -110,14 +148,35 @@ async fn run(wasm: impl AsRef<Path>) -> anyhow::Result<Vec<(logging::Level, Stri
             .context("failed to call `HttpServer.HandleRequest`")?
             .expect("`HttpServer.HandleRequest` must not fail");
     }
+
     let HttpResponse {
         status_code,
         header,
         body,
     } = response.await??;
-
     ensure!(status_code == 200);
     ensure!(header.is_empty());
+
+    let mut published = Arc::try_unwrap(published).unwrap().into_inner().into_iter();
+    if interfaces {
+        let published = match (published.next(), published.next()) {
+            (
+                Some(messaging::types::BrokerMessage {
+                    subject,
+                    reply_to,
+                    body,
+                }),
+                None,
+            ) => {
+                ensure!(subject == "test");
+                ensure!(reply_to == None);
+                body.context("body missing")?
+            }
+            (None, None) => bail!("no messages published"),
+            _ => bail!("too many messages published"),
+        };
+        ensure!(body == published);
+    }
 
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -151,7 +210,7 @@ async fn run(wasm: impl AsRef<Path>) -> anyhow::Result<Vec<(logging::Level, Stri
 async fn builtins_module() -> anyhow::Result<()> {
     init();
 
-    let logs = run(test_actors::RUST_BUILTINS_MODULE_REACTOR_SIGNED).await?;
+    let logs = run(test_actors::RUST_BUILTINS_MODULE_REACTOR_SIGNED, false).await?;
     assert_eq!(
         logs,
         vec![
@@ -219,7 +278,11 @@ async fn builtins_module() -> anyhow::Result<()> {
 async fn builtins_compat() -> anyhow::Result<()> {
     init();
 
-    let logs = run(test_actors::RUST_BUILTINS_COMPAT_REACTOR_PREVIEW2_SIGNED).await?;
+    let logs = run(
+        test_actors::RUST_BUILTINS_COMPAT_REACTOR_PREVIEW2_SIGNED,
+        false,
+    )
+    .await?;
     assert_eq!(
         logs,
         vec![
@@ -271,7 +334,11 @@ async fn builtins_compat() -> anyhow::Result<()> {
 async fn builtins_component() -> anyhow::Result<()> {
     init();
 
-    let logs = run(test_actors::RUST_BUILTINS_COMPONENT_REACTOR_PREVIEW2_SIGNED).await?;
+    let logs = run(
+        test_actors::RUST_BUILTINS_COMPONENT_REACTOR_PREVIEW2_SIGNED,
+        true,
+    )
+    .await?;
     assert_eq!(
         logs,
         vec![
