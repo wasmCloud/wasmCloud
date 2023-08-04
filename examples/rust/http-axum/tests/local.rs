@@ -6,7 +6,7 @@ use std::net::{Ipv6Addr, TcpListener};
 use anyhow::Context;
 use tokio::process::Command;
 use tracing_subscriber::prelude::*;
-use wasmcloud_host::local::{ActorConfig, Lattice, LatticeConfig, LinkConfig, TcpSocketConfig};
+use wasmcloud_host::local::{ActorConfig, Host, HostConfig, LinkConfig, TcpSocketConfig};
 use wasmcloud_host::url::Url;
 
 #[tokio::test(flavor = "multi_thread")]
@@ -45,7 +45,7 @@ async fn local() -> anyhow::Result<()> {
         env!("CARGO_TARGET_TMPDIR")
     ))
     .expect("failed to parse Wasm path");
-    let _lattice = Lattice::new(LatticeConfig {
+    let _host = Host::new(HostConfig {
         actors: HashMap::from([("server".into(), ActorConfig { url })]),
         links: vec![LinkConfig::Tcp {
             socket: TcpSocketConfig {
@@ -55,7 +55,7 @@ async fn local() -> anyhow::Result<()> {
         }],
     })
     .await
-    .context("failed to initialize lattice")?;
+    .context("failed to initialize host")?;
 
     eprintln!("sending a GET request on port `{port}`");
 

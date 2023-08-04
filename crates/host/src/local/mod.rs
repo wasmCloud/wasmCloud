@@ -1,9 +1,8 @@
-/// Local lattice configuration
+/// Local host configuration
 pub mod config;
 
 pub use config::{
-    Actor as ActorConfig, Lattice as LatticeConfig, Link as LinkConfig,
-    TcpSocket as TcpSocketConfig,
+    Actor as ActorConfig, Host as HostConfig, Link as LinkConfig, TcpSocket as TcpSocketConfig,
 };
 
 use crate::socket_pair;
@@ -234,21 +233,21 @@ impl Actor {
     }
 }
 
-/// Local lattice
+/// Local host
 #[derive(Debug)]
-pub struct Lattice {
+pub struct Host {
     #[allow(unused)] // TODO: Use and remove
     actors: Arc<RwLock<HashMap<String, Actor>>>,
     state: State,
 }
 
-/// Local lattice state
+/// Local host state
 #[derive(Debug, Default)]
 pub struct State {
     tcp_listeners: HashMap<String, AbortHandle>,
 }
 
-impl Drop for Lattice {
+impl Drop for Host {
     fn drop(&mut self) {
         for abort in self.state.tcp_listeners.values() {
             abort.abort();
@@ -299,10 +298,10 @@ async fn handle_tcp_stream(
     .context("failed to execute chain")
 }
 
-impl Lattice {
-    /// Construct a new [Lattice]
+impl Host {
+    /// Construct a new [Host]
     #[instrument]
-    pub async fn new(LatticeConfig { actors, links }: LatticeConfig) -> anyhow::Result<Self> {
+    pub async fn new(HostConfig { actors, links }: HostConfig) -> anyhow::Result<Self> {
         // TODO: Configure
         let rt = Runtime::builder()
             .build()

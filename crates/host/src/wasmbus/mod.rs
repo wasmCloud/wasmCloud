@@ -1,7 +1,7 @@
-/// Wasmbus lattice configuration
+/// wasmCloud host configuration
 pub mod config;
 
-pub use config::Lattice as LatticeConfig;
+pub use config::Host as HostConfig;
 
 mod event;
 
@@ -609,9 +609,9 @@ struct Provider {
     image_ref: String,
 }
 
-/// Wasmbus lattice
+/// wasmCloud Host
 #[derive(Debug)]
-pub struct Lattice {
+pub struct Host {
     // TODO: Clean up actors after stop
     actors: RwLock<HashMap<String, Arc<Actor>>>,
     cluster_key: Arc<KeyPair>,
@@ -678,17 +678,17 @@ async fn create_lattice_metadata_bucket(
     }
 }
 
-impl Lattice {
+impl Host {
     const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 
-    /// Construct a new [Lattice] returning a tuple of it's [Arc] and an async shutdown function.
+    /// Construct a new [Host] returning a tuple of its [Arc] and an async shutdown function.
     #[instrument]
     pub async fn new(
-        LatticeConfig {
+        HostConfig {
             url,
             cluster_seed,
             host_seed,
-        }: LatticeConfig,
+        }: HostConfig,
     ) -> anyhow::Result<(Arc<Self>, impl Future<Output = anyhow::Result<()>>)> {
         let cluster_key = if let Some(cluster_seed) = cluster_seed {
             let kp = KeyPair::from_seed(&cluster_seed)
@@ -770,7 +770,7 @@ impl Lattice {
         let (heartbeat_abort, heartbeat_abort_reg) = AbortHandle::new_pair();
         let (data_watch_abort, data_watch_abort_reg) = AbortHandle::new_pair();
 
-        let wasmbus = Lattice {
+        let host = Host {
             actors: RwLock::default(),
             cluster_key,
             event_builder,
@@ -789,26 +789,25 @@ impl Lattice {
             queue: queue_abort.clone(),
             links: RwLock::default(),
         };
-        wasmbus
-            .publish_event("host_started", start_evt)
+        host.publish_event("host_started", start_evt)
             .await
             .context("failed to publish start event")?;
-        info!("host {} started", wasmbus.host_key.public_key());
+        info!("host {} started", host.host_key.public_key());
 
-        let wasmbus = Arc::new(wasmbus);
+        let host = Arc::new(host);
         let queue = spawn({
-            let wasmbus = Arc::clone(&wasmbus);
+            let host = Arc::clone(&host);
             async {
                 Abortable::new(queue, queue_abort_reg)
                     .for_each(move |msg| {
-                        let wasmbus = Arc::clone(&wasmbus);
-                        async move { wasmbus.handle_message(msg).await }
+                        let host = Arc::clone(&host);
+                        async move { host.handle_message(msg).await }
                     })
                     .await;
             }
         });
         let data_watch: JoinHandle<anyhow::Result<_>> = spawn({
-            let wasmbus = Arc::clone(&wasmbus);
+            let host = Arc::clone(&host);
             async move {
                 let data_watch = data
                     .watch_with_history(">")
@@ -816,13 +815,13 @@ impl Lattice {
                     .context("failed to watch lattice data bucket")?;
                 Abortable::new(data_watch, data_watch_abort_reg)
                     .for_each(move |entry| {
-                        let wasmbus = Arc::clone(&wasmbus);
+                        let host = Arc::clone(&host);
                         async move {
                             match entry {
                                 Err(error) => {
                                     error!("failed to watch lattice data bucket: {error}");
                                 }
-                                Ok(entry) => wasmbus.process_entry(entry).await,
+                                Ok(entry) => host.process_entry(entry).await,
                             }
                         }
                     })
@@ -831,31 +830,30 @@ impl Lattice {
             }
         });
         let heartbeat = spawn({
-            let wasmbus = Arc::clone(&wasmbus);
+            let host = Arc::clone(&host);
             Abortable::new(heartbeat, heartbeat_abort_reg).for_each(move |_| {
-                let wasmbus = Arc::clone(&wasmbus);
+                let host = Arc::clone(&host);
                 async move {
-                    let heartbeat = wasmbus.heartbeat().await;
-                    if let Err(e) = wasmbus.publish_event("host_heartbeat", heartbeat).await {
+                    let heartbeat = host.heartbeat().await;
+                    if let Err(e) = host.publish_event("host_heartbeat", heartbeat).await {
                         error!("failed to publish heartbeat: {e}");
                     }
                 }
             })
         });
-        Ok((Arc::clone(&wasmbus), async move {
+        Ok((Arc::clone(&host), async move {
             heartbeat_abort.abort();
             queue_abort.abort();
             data_watch_abort.abort();
             let _ = try_join!(queue, data_watch, heartbeat).context("failed to await tasks")?;
-            wasmbus
-                .publish_event(
-                    "host_stopped",
-                    json!({
-                        "labels": wasmbus.labels,
-                    }),
-                )
-                .await
-                .context("failed to publish stop event")
+            host.publish_event(
+                "host_stopped",
+                json!({
+                    "labels": host.labels,
+                }),
+            )
+            .await
+            .context("failed to publish stop event")
         }))
     }
 
