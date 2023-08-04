@@ -7,27 +7,27 @@ package wasmcloud:blobstore
 interface types {
     // Metadata about a container
     record container-info {
-        container-id: string
-        created-at: u64
+        container-id: string,
+        created-at: u64,
     }
 
     // Metadata about an object
     record object-info {
-        container-id: string
-        object-id: string
-        content-length: u64
-        last-modified: u64
-        content-type: option<string>
-        content-encoding: option<string>
+        container-id: string,
+        object-id: string,
+        content-length: u64,
+        last-modified: u64,
+        content-type: option<string>,
+        content-encoding: option<string>,
     }
 
     // Metadata about a chunk
     record chunk {    
-        object-id: string
-        container-id: string
-        bytes: list<u8>
-        offset: u64
-        is-last: bool
+        object-id: string,
+        container-id: string,
+        bytes: list<u8>,
+        offset: u64,
+        is-last: bool,
     }
 }
 
@@ -56,7 +56,7 @@ interface consumer {
 }
 
 interface handler {
-    use types.chunk
+    use types.{chunk}
 
     // Callback to handle a single chunk of an object delivered by the provider
     receive-chunk: func(chunk: chunk) -> result<bool, string>
