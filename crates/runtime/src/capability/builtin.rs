@@ -15,24 +15,34 @@ use tracing::{instrument, trace};
 
 #[derive(Clone, Default)]
 pub struct Handler {
+    blobstore: Option<Arc<dyn Blobstore + Sync + Send>>,
     bus: Option<Arc<dyn Bus + Sync + Send>>,
-    logging: Option<Arc<dyn Logging + Sync + Send>>,
     incoming_http: Option<Arc<dyn IncomingHttp + Sync + Send>>,
+    logging: Option<Arc<dyn Logging + Sync + Send>>,
     messaging: Option<Arc<dyn Messaging + Sync + Send>>,
 }
 
 impl Debug for Handler {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Handler")
+            .field("blobstore", &format_opt(&self.blobstore))
             .field("bus", &format_opt(&self.bus))
-            .field("logging", &format_opt(&self.logging))
             .field("incoming_http", &format_opt(&self.incoming_http))
+            .field("logging", &format_opt(&self.logging))
             .field("messaging", &format_opt(&self.messaging))
             .finish()
     }
 }
 
 impl Handler {
+    /// Replace [`Blobstore`] handler returning the old one, if such was set
+    pub fn replace_blobstore(
+        &mut self,
+        blobstore: Arc<dyn Blobstore + Send + Sync>,
+    ) -> Option<Arc<dyn Blobstore + Send + Sync>> {
+        self.blobstore.replace(blobstore)
+    }
+
     /// Replace [`Bus`] handler returning the old one, if such was set
     pub fn replace_bus(
         &mut self,
@@ -132,6 +142,12 @@ pub trait IncomingHttp {
         &self,
         request: http::Request<Box<dyn AsyncRead + Sync + Send + Unpin>>,
     ) -> anyhow::Result<http::Response<Box<dyn AsyncRead + Sync + Send + Unpin>>>;
+}
+
+#[async_trait]
+/// `wasi:blobstore/consumer` implementation
+pub trait Blobstore {
+    // TODO: Implement
 }
 
 #[async_trait]
@@ -272,6 +288,8 @@ impl Messaging for Handler {
 /// A [Handler] builder used to configure it
 #[derive(Clone, Default)]
 pub(crate) struct HandlerBuilder {
+    /// [`Blobstore`] handler
+    pub blobstore: Option<Arc<dyn Blobstore + Sync + Send>>,
     /// [`Bus`] handler
     pub bus: Option<Arc<dyn Bus + Sync + Send>>,
     /// [`IncomingHttp`] handler
@@ -283,6 +301,14 @@ pub(crate) struct HandlerBuilder {
 }
 
 impl HandlerBuilder {
+    /// Set [`Blobstore`] handler
+    pub fn blobstore(self, blobstore: Arc<impl Blobstore + Sync + Send + 'static>) -> Self {
+        Self {
+            blobstore: Some(blobstore),
+            ..self
+        }
+    }
+
     /// Set [`Bus`] handler
     pub fn bus(self, bus: Arc<impl Bus + Sync + Send + 'static>) -> Self {
         Self {
@@ -322,6 +348,7 @@ impl HandlerBuilder {
 impl Debug for HandlerBuilder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HandlerBuilder")
+            .field("blobstore", &format_opt(&self.blobstore))
             .field("bus", &format_opt(&self.bus))
             .field("incoming_http", &format_opt(&self.incoming_http))
             .field("logging", &format_opt(&self.logging))
@@ -333,6 +360,7 @@ impl Debug for HandlerBuilder {
 impl From<Handler> for HandlerBuilder {
     fn from(
         Handler {
+            blobstore,
             bus,
             incoming_http,
             logging,
@@ -340,6 +368,7 @@ impl From<Handler> for HandlerBuilder {
         }: Handler,
     ) -> Self {
         Self {
+            blobstore,
             bus,
             incoming_http,
             logging,
@@ -351,6 +380,7 @@ impl From<Handler> for HandlerBuilder {
 impl From<HandlerBuilder> for Handler {
     fn from(
         HandlerBuilder {
+            blobstore,
             bus,
             incoming_http,
             logging,
@@ -358,9 +388,10 @@ impl From<HandlerBuilder> for Handler {
         }: HandlerBuilder,
     ) -> Self {
         Self {
+            blobstore,
             bus,
-            logging,
             incoming_http,
+            logging,
             messaging,
         }
     }
