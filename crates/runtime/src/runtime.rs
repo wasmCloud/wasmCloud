@@ -1,5 +1,5 @@
 use crate::actor::ModuleConfig;
-use crate::capability::{builtin, Bus, IncomingHttp, Logging, Messaging};
+use crate::capability::{builtin, Blobstore, Bus, IncomingHttp, Logging, Messaging};
 use crate::ActorConfig;
 
 use core::fmt;
@@ -47,6 +47,15 @@ impl RuntimeBuilder {
     pub fn module_config(self, module_config: ModuleConfig) -> Self {
         Self {
             module_config,
+            ..self
+        }
+    }
+
+    /// Set a [`Blobstore`] handler to use for all actor instances unless overriden for the instance
+    #[must_use]
+    pub fn blobstore(self, blobstore: Arc<impl Blobstore + Sync + Send + 'static>) -> Self {
+        Self {
+            handler: self.handler.blobstore(blobstore),
             ..self
         }
     }
