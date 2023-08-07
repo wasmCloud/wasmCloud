@@ -4,6 +4,7 @@ package wasmcloud:actor
 world interfaces {
     import wasmcloud:bus/host
 
+    import wasi:keyvalue/readwrite
     import wasi:logging/logging
     import wasi:random/random
 

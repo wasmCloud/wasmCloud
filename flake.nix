@@ -133,6 +133,7 @@
                 nativeCheckInputs
                 ++ [
                   pkgs.nats-server
+                  pkgs.redis
                 ];
             }
             // optionalAttrs (args ? cargoArtifacts && stdenv.hostPlatform.isDarwin) {
@@ -183,6 +184,7 @@
               pkgs.cargo-audit
               pkgs.nats-server
               pkgs.protobuf # prost build dependency
+              pkgs.redis
               pkgs.wash
               pkgs.wit-deps
             ];

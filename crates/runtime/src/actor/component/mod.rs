@@ -5,12 +5,15 @@ use crate::Runtime;
 use core::fmt::{self, Debug};
 use core::mem::replace;
 use core::ops::{Deref, DerefMut};
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
-use std::sync::Arc;
+use std::io::Cursor;
+use std::sync::{Arc, MutexGuard};
 
 use anyhow::Context as _;
 use async_trait::async_trait;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncWrite, AsyncWriteExt};
 use tokio::sync::Mutex;
 use tracing::{instrument, trace};
 use wascap::jwt;
@@ -20,11 +23,14 @@ use wasmtime_wasi::preview2::{self, InputStream, OutputStream};
 mod blobstore;
 mod bus;
 mod http;
+mod keyvalue;
 mod logging;
 mod messaging;
 
 pub(crate) use self::http::incoming_http_bindings;
 pub(crate) use self::logging::logging_bindings;
+
+type TableResult<T> = Result<T, preview2::TableError>;
 
 mod guest_bindings {
     wasmtime::component::bindgen!({
@@ -35,6 +41,61 @@ mod guest_bindings {
            "wasi:poll/poll": wasmtime_wasi::preview2::wasi::poll::poll,
         },
     });
+}
+
+#[derive(Clone, Default)]
+struct AsyncVec(Arc<std::sync::Mutex<Cursor<Vec<u8>>>>);
+
+impl AsyncVec {
+    fn inner(&self) -> std::io::Result<MutexGuard<Cursor<Vec<u8>>>> {
+        self.0
+            .lock()
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+    }
+}
+
+impl AsyncWrite for AsyncVec {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        let mut inner = self.inner()?;
+        Pin::new(&mut *inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        let mut inner = self.inner()?;
+        Pin::new(&mut *inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        let mut inner = self.inner()?;
+        Pin::new(&mut *inner).poll_shutdown(cx)
+    }
+}
+
+impl AsyncRead for AsyncVec {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let mut inner = self.inner()?;
+        Pin::new(&mut *inner).poll_read(cx, buf)
+    }
+}
+
+impl AsyncSeek for AsyncVec {
+    fn start_seek(self: Pin<&mut Self>, position: std::io::SeekFrom) -> std::io::Result<()> {
+        let mut inner = self.inner()?;
+        Pin::new(&mut *inner).start_seek(position)
+    }
+
+    fn poll_complete(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<u64>> {
+        let mut inner = self.inner()?;
+        Pin::new(&mut *inner).poll_complete(cx)
+    }
 }
 
 struct AsyncStream<T>(T);

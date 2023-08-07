@@ -4,7 +4,7 @@ use wasmbus::guest_call;
 
 use crate::actor::claims;
 use crate::capability::logging::logging;
-use crate::capability::{builtin, Bus, IncomingHttp, Logging, Messaging};
+use crate::capability::{builtin, Bus, IncomingHttp, KeyValueReadWrite, Logging, Messaging};
 use crate::Runtime;
 
 use core::any::Any;
@@ -314,6 +314,16 @@ impl Instance {
         incoming_http: Arc<dyn IncomingHttp + Send + Sync>,
     ) -> &mut Self {
         self.handler_mut().replace_incoming_http(incoming_http);
+        self
+    }
+
+    /// Set [`KeyValueReadWrite`] handler for this [Instance].
+    pub fn keyvalue_readwrite(
+        &mut self,
+        keyvalue_readwrite: Arc<dyn KeyValueReadWrite + Send + Sync>,
+    ) -> &mut Self {
+        self.handler_mut()
+            .replace_keyvalue_readwrite(keyvalue_readwrite);
         self
     }
 

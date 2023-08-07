@@ -39,10 +39,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let default_connect_url = if let Some(raw_config) = hd.config_json.as_ref() {
         match serde_json::from_str(raw_config) {
-            Ok(KvRedisConfig { url }) => url,
-            _ => DEFAULT_CONNECT_URL.to_string(),
+            Ok(KvRedisConfig { url }) => {
+                info!(url, "Using Redis URL from config");
+                url
+            }
+            Err(err) => {
+                warn!(
+                    DEFAULT_CONNECT_URL,
+                    "Failed to parse `config_json`: {err}\nUsing default configuration"
+                );
+                DEFAULT_CONNECT_URL.to_string()
+            }
         }
     } else {
+        info!(DEFAULT_CONNECT_URL, "Using default Redis URL");
         DEFAULT_CONNECT_URL.to_string()
     };
 
@@ -88,21 +98,27 @@ impl ProviderHandler for KvRedisProvider {
     async fn put_link(&self, ld: &LinkDefinition) -> RpcResult<bool> {
         let redis_url = get_redis_url(&ld.values, &self.default_connect_url);
 
-        if let Ok(client) = redis::Client::open(redis_url.clone()) {
-            if let Ok(conn_manager) = client.get_tokio_connection_manager().await {
-                let mut update_map = self.actors.write().await;
-                update_map.insert(ld.actor_id.to_string(), RwLock::new(conn_manager));
-            } else {
-                warn!(
+        match redis::Client::open(redis_url.clone()) {
+            Ok(client) => match client.get_tokio_connection_manager().await {
+                Ok(conn_manager) => {
+                    info!(redis_url, "established link");
+                    let mut update_map = self.actors.write().await;
+                    update_map.insert(ld.actor_id.to_string(), RwLock::new(conn_manager));
+                }
+                Err(err) => {
+                    warn!(
+                        redis_url,
+                        ?err,
                     "Could not create Redis connection manager for actor {}, keyvalue operations will fail",
                     ld.actor_id
                 );
-            }
-        } else {
-            warn!(
+                }
+            },
+            Err(err) => warn!(
+                ?err,
                 "Could not create Redis client for actor {}, keyvalue operations will fail",
                 ld.actor_id
-            )
+            ),
         }
 
         Ok(true)

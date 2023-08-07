@@ -17,8 +17,9 @@ use tracing::{instrument, trace};
 pub struct Handler {
     blobstore: Option<Arc<dyn Blobstore + Sync + Send>>,
     bus: Option<Arc<dyn Bus + Sync + Send>>,
-    incoming_http: Option<Arc<dyn IncomingHttp + Sync + Send>>,
+    keyvalue_readwrite: Option<Arc<dyn KeyValueReadWrite + Sync + Send>>,
     logging: Option<Arc<dyn Logging + Sync + Send>>,
+    incoming_http: Option<Arc<dyn IncomingHttp + Sync + Send>>,
     messaging: Option<Arc<dyn Messaging + Sync + Send>>,
 }
 
@@ -28,6 +29,7 @@ impl Debug for Handler {
             .field("blobstore", &format_opt(&self.blobstore))
             .field("bus", &format_opt(&self.bus))
             .field("incoming_http", &format_opt(&self.incoming_http))
+            .field("keyvalue_readwrite", &format_opt(&self.keyvalue_readwrite))
             .field("logging", &format_opt(&self.logging))
             .field("messaging", &format_opt(&self.messaging))
             .finish()
@@ -57,6 +59,14 @@ impl Handler {
         incoming_http: Arc<dyn IncomingHttp + Send + Sync>,
     ) -> Option<Arc<dyn IncomingHttp + Send + Sync>> {
         self.incoming_http.replace(incoming_http)
+    }
+
+    /// Replace [`KeyValueReadWrite`] handler returning the old one, if such was set
+    pub fn replace_keyvalue_readwrite(
+        &mut self,
+        keyvalue_readwrite: Arc<dyn KeyValueReadWrite + Send + Sync>,
+    ) -> Option<Arc<dyn KeyValueReadWrite + Send + Sync>> {
+        self.keyvalue_readwrite.replace(keyvalue_readwrite)
     }
 
     /// Replace [`Logging`] handler returning the old one, if such was set
@@ -163,6 +173,31 @@ pub trait Logging {
 }
 
 #[async_trait]
+/// `wasi:keyvalue/readwrite` implementation
+pub trait KeyValueReadWrite {
+    /// Handle `wasi:keyvalue/readwrite.get`
+    async fn get(
+        &self,
+        bucket: &str,
+        key: String,
+    ) -> anyhow::Result<(Box<dyn AsyncRead + Sync + Send + Unpin>, u64)>;
+
+    /// Handle `wasi:keyvalue/readwrite.set`
+    async fn set(
+        &self,
+        bucket: &str,
+        key: String,
+        value: Box<dyn AsyncRead + Sync + Send + Unpin>,
+    ) -> anyhow::Result<()>;
+
+    /// Handle `wasi:keyvalue/readwrite.delete`
+    async fn delete(&self, bucket: &str, key: String) -> anyhow::Result<()>;
+
+    /// Handle `wasi:keyvalue/readwrite.exists`
+    async fn exists(&self, bucket: &str, key: String) -> anyhow::Result<bool>;
+}
+
+#[async_trait]
 /// `wasmcloud:messaging/consumer` implementation
 pub trait Messaging {
     /// Handle `wasmcloud:messaging/consumer.request`
@@ -222,6 +257,58 @@ impl Logging for Handler {
             // discard all log invocations by default
             Ok(())
         }
+    }
+}
+
+#[async_trait]
+impl KeyValueReadWrite for Handler {
+    #[instrument]
+    async fn get(
+        &self,
+        bucket: &str,
+        key: String,
+    ) -> anyhow::Result<(Box<dyn AsyncRead + Sync + Send + Unpin>, u64)> {
+        trace!("call `KeyValueReadWrite` handler");
+        self.keyvalue_readwrite
+            .as_ref()
+            .context("cannot handle `wasi:keyvalue/readwrite.get`")?
+            .get(bucket, key)
+            .await
+    }
+
+    #[instrument(skip(value))]
+    async fn set(
+        &self,
+        bucket: &str,
+        key: String,
+        value: Box<dyn AsyncRead + Sync + Send + Unpin>,
+    ) -> anyhow::Result<()> {
+        trace!("call `KeyValueReadWrite` handler");
+        self.keyvalue_readwrite
+            .as_ref()
+            .context("cannot handle `wasi:keyvalue/readwrite.set`")?
+            .set(bucket, key, value)
+            .await
+    }
+
+    #[instrument]
+    async fn delete(&self, bucket: &str, key: String) -> anyhow::Result<()> {
+        trace!("call `KeyValueReadWrite` handler");
+        self.keyvalue_readwrite
+            .as_ref()
+            .context("cannot handle `wasi:keyvalue/readwrite.delete`")?
+            .delete(bucket, key)
+            .await
+    }
+
+    #[instrument]
+    async fn exists(&self, bucket: &str, key: String) -> anyhow::Result<bool> {
+        trace!("call `KeyValueReadWrite` handler");
+        self.keyvalue_readwrite
+            .as_ref()
+            .context("cannot handle `wasi:keyvalue/readwrite.exists`")?
+            .exists(bucket, key)
+            .await
     }
 }
 
@@ -294,6 +381,8 @@ pub(crate) struct HandlerBuilder {
     pub bus: Option<Arc<dyn Bus + Sync + Send>>,
     /// [`IncomingHttp`] handler
     pub incoming_http: Option<Arc<dyn IncomingHttp + Sync + Send>>,
+    /// [`KeyValueReadWrite`] handler
+    pub keyvalue_readwrite: Option<Arc<dyn KeyValueReadWrite + Sync + Send>>,
     /// [`Logging`] handler
     pub logging: Option<Arc<dyn Logging + Sync + Send>>,
     /// [`Messaging`] handler
@@ -328,6 +417,17 @@ impl HandlerBuilder {
         }
     }
 
+    /// Set [`KeyValueReadWrite`] handler
+    pub fn keyvalue_readwrite(
+        self,
+        keyvalue_readwrite: Arc<impl KeyValueReadWrite + Sync + Send + 'static>,
+    ) -> Self {
+        Self {
+            keyvalue_readwrite: Some(keyvalue_readwrite),
+            ..self
+        }
+    }
+
     /// Set [`Logging`] handler
     pub fn logging(self, logging: Arc<impl Logging + Sync + Send + 'static>) -> Self {
         Self {
@@ -351,6 +451,7 @@ impl Debug for HandlerBuilder {
             .field("blobstore", &format_opt(&self.blobstore))
             .field("bus", &format_opt(&self.bus))
             .field("incoming_http", &format_opt(&self.incoming_http))
+            .field("keyvalue_readwrite", &format_opt(&self.keyvalue_readwrite))
             .field("logging", &format_opt(&self.logging))
             .field("messaging", &format_opt(&self.messaging))
             .finish()
@@ -363,6 +464,7 @@ impl From<Handler> for HandlerBuilder {
             blobstore,
             bus,
             incoming_http,
+            keyvalue_readwrite,
             logging,
             messaging,
         }: Handler,
@@ -371,6 +473,7 @@ impl From<Handler> for HandlerBuilder {
             blobstore,
             bus,
             incoming_http,
+            keyvalue_readwrite,
             logging,
             messaging,
         }
@@ -383,6 +486,7 @@ impl From<HandlerBuilder> for Handler {
             blobstore,
             bus,
             incoming_http,
+            keyvalue_readwrite,
             logging,
             messaging,
         }: HandlerBuilder,
@@ -390,8 +494,9 @@ impl From<HandlerBuilder> for Handler {
         Self {
             blobstore,
             bus,
-            incoming_http,
+            keyvalue_readwrite,
             logging,
+            incoming_http,
             messaging,
         }
     }

@@ -1,4 +1,4 @@
-use super::{AsyncStream, Ctx, Instance};
+use super::{AsyncStream, Ctx, Instance, TableResult};
 
 use crate::capability::bus::host;
 use crate::capability::Bus;
@@ -26,31 +26,20 @@ impl Instance {
 
 type FutureResult = Pin<Box<dyn Future<Output = Result<(), String>> + Send>>;
 
-pub trait TableFutureResultExt {
-    fn push_future_result(&mut self, res: FutureResult) -> Result<u32, preview2::TableError>;
-    fn get_future_result(
-        &mut self,
-        res: u32,
-    ) -> Result<Box<Shared<FutureResult>>, preview2::TableError>;
-    fn delete_future_result(
-        &mut self,
-        res: u32,
-    ) -> Result<Box<Shared<FutureResult>>, preview2::TableError>;
+trait TableFutureResultExt {
+    fn push_future_result(&mut self, res: FutureResult) -> TableResult<u32>;
+    fn get_future_result(&mut self, res: u32) -> TableResult<Box<Shared<FutureResult>>>;
+    fn delete_future_result(&mut self, res: u32) -> TableResult<Box<Shared<FutureResult>>>;
 }
+
 impl TableFutureResultExt for preview2::Table {
-    fn push_future_result(&mut self, res: FutureResult) -> Result<u32, preview2::TableError> {
+    fn push_future_result(&mut self, res: FutureResult) -> TableResult<u32> {
         self.push(Box::new(res.shared()))
     }
-    fn get_future_result(
-        &mut self,
-        res: u32,
-    ) -> Result<Box<Shared<FutureResult>>, preview2::TableError> {
+    fn get_future_result(&mut self, res: u32) -> TableResult<Box<Shared<FutureResult>>> {
         self.get(res).cloned()
     }
-    fn delete_future_result(
-        &mut self,
-        res: u32,
-    ) -> Result<Box<Shared<FutureResult>>, preview2::TableError> {
+    fn delete_future_result(&mut self, res: u32) -> TableResult<Box<Shared<FutureResult>>> {
         self.delete(res)
     }
 }

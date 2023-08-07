@@ -19,11 +19,17 @@ sha512 = "3195a3e0f9ec52c3a91c4b4fde0547694236c7b29bceecb7f38634894fafd809c69ed1
 url = "https://github.com/WebAssembly/wasi-http/archive/main.tar.gz"
 sha256 = "09f82431ed2a5738400a8236154ff6555f23e3c6adf47406fa03ee0223785779"
 sha512 = "2f148e4338119c5aa8aa090fb6c0bb52f6fe0a8e289a5fb1af720e7778be8ba5073240520166d657666668eac154d186b9505f6580e5ec598636f4849484492e"
-deps = ["cli", "clocks", "filesystem", "io", "poll", "random", "sockets"]
+deps = ["cli", "clocks", "filesystem", "random", "sockets"]
 
 [io]
+url = "https://github.com/WebAssembly/wasi-io/archive/1b22f18a5af1274724a293782798f91e7dcf4ed6.tar.gz"
 sha256 = "eeb4701c2becafa40a7ee3bf0d2c94e2170e15806b25abdcd1de1ed94f2c1036"
 sha512 = "89be853b2acae211570cd6ad0ec9d8132881dafbdea83ac7b4cad600f0627003c61f310427379bf47ecf862724367bd5d6e976db70069f6f90a3c2d9c20dbfb7"
+
+[keyvalue]
+url = "https://github.com/WebAssembly/wasi-keyvalue/archive/main.tar.gz"
+sha256 = "04d2669a395d2ca8baaeb4df835b94de8c97edaf1c90ac02a0d33b957157d808"
+sha512 = "377e4bc81264d5d6cec06275fbcb1209248f06124f4950b19421244c766cc73837dfa041dcf5095d11803663e7929b48eb0857214386a6634ba6bc477b0fa7e8"
 
 [logging]
 url = "https://github.com/WebAssembly/wasi-logging/archive/main.tar.gz"
@@ -36,6 +42,7 @@ sha256 = "1151d0c461c2d04658d823834e76dc29db17f603101b58c14e74f5dbb1dc2919"
 sha512 = "34b326c9a9ef4bbf2c9632e4202d5835a93fdf06d4223bfa09b6b7d001a02f7b550c0b7c050e51804a59cf8d10fe189bdc7e0893bb6dfd7c3e06aadc6599bf5a"
 
 [poll]
+url = "https://github.com/WebAssembly/wasi-poll/archive/main.tar.gz"
 sha256 = "d4c27124f4c137eb538b5c92ba5858ed9042e11b24a2eef85d14becd0b7f55de"
 sha512 = "422c01b273b4b1377ece6f2e4ba0dfc609ca8ef30a3e0be0e172e1303fcf7b3ca4c470f4dea6c51bdf114b0f5c871ebc4934dfe3bf217d66ea689748df2b1e55"
 
@@ -51,4 +58,3 @@ sha512 = "e436a5ff3145ca85d702a086499c03488523483dd3addc8d71e4946e9c186355291551
 path = "../../../wit"
 sha256 = "5965d85560a8b106182543cada6202de06e18061ddb6c4c6c93f0b582b2829b3"
 sha512 = "a54cd56e117947452bb0e7703ade5b6ae652b744715f4553d48e731ccc4074d4a1a81685834057411e37ce65ea9a93e5e05b57d79da4e172518ac7f8c9eafb18"
-deps = ["io", "poll"]

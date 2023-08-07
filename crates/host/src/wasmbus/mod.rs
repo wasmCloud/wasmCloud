@@ -26,7 +26,7 @@ use async_nats::jetstream::{context::Context as JetstreamContext, kv};
 use async_trait::async_trait;
 use base64::engine::general_purpose::STANDARD_NO_PAD;
 use base64::Engine;
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use bytes::{BufMut, Bytes, BytesMut};
 use cloudevents::{EventBuilder, EventBuilderV10};
 use futures::stream::{AbortHandle, Abortable};
 use futures::{stream, try_join, FutureExt, Stream, StreamExt, TryStreamExt};
@@ -52,7 +52,7 @@ use wasmcloud_control_interface::{
     StartActorCommand, StartProviderCommand, StopActorCommand, StopHostCommand,
     StopProviderCommand, UpdateActorCommand,
 };
-use wasmcloud_runtime::capability::{messaging, Bus, Messaging};
+use wasmcloud_runtime::capability::{messaging, Bus, KeyValueReadWrite, Messaging};
 use wasmcloud_runtime::{ActorInstancePool, Runtime};
 
 const SUCCESS: &str = r#"{"accepted":true,"error":""}"#;
@@ -299,7 +299,7 @@ impl Invocation {
     }
 }
 
-#[derive(Default, Serialize)]
+#[derive(Default, Deserialize, Serialize)]
 struct InvocationResponse {
     #[serde(with = "serde_bytes")]
     msg: Vec<u8>,
@@ -338,6 +338,60 @@ impl Handler {
             interface_method.into(),
             request,
         )
+    }
+
+    #[instrument(skip(operation, request))]
+    async fn call_provider_with_payload(
+        &self,
+        operation: impl AsRef<str>,
+        request: Vec<u8>,
+    ) -> anyhow::Result<Result<Vec<u8>, String>> {
+        let operation = operation.as_ref();
+        let invocation = self.invocation(operation, request).await?;
+        let request =
+            rmp_serde::to_vec_named(&invocation).context("failed to encode invocation")?;
+        let res = self
+            .nats
+            .request(
+                format!(
+                    "wasmbus.rpc.default.{}.default",
+                    invocation.target.public_key
+                ),
+                request.into(),
+            )
+            .await
+            .context("failed to publish on NATS topic")?;
+        let InvocationResponse {
+            invocation_id,
+            msg,
+            content_length,
+            error,
+        } = rmp_serde::from_slice(&res.payload).context("failed to decode invocation response")?;
+        ensure!(invocation_id == invocation.id, "invocation ID mismatch");
+        if let Some(content_length) = content_length {
+            let content_length =
+                usize::try_from(content_length).context("content length does not fit in usize")?;
+            ensure!(content_length == msg.len(), "message size mismatch");
+        }
+        if let Some(error) = error {
+            Ok(Err(error))
+        } else {
+            Ok(Ok(msg))
+        }
+    }
+
+    #[instrument(skip(operation, request))]
+    async fn call_provider(
+        &self,
+        operation: impl AsRef<str>,
+        request: &impl Serialize,
+    ) -> anyhow::Result<Vec<u8>> {
+        let operation = operation.as_ref();
+        let request = rmp_serde::to_vec_named(request).context("failed to encode request")?;
+        self.call_provider_with_payload(operation, request)
+            .await
+            .context("failed to call linked provider")?
+            .map_err(|err| anyhow!(err).context(format!("`{operation}` call failed")))
     }
 }
 
@@ -390,12 +444,35 @@ impl Bus for Handler {
                     .await
                     .context("failed to call provider")
                     .map_err(|e| e.to_string())?;
-                res_w
-                    .write_all(&res.payload)
-                    .await
-                    .context("failed to write reply")
+                let InvocationResponse {
+                    invocation_id,
+                    msg,
+                    content_length,
+                    error,
+                } = rmp_serde::from_slice(&res.payload)
+                    .context("failed to decode invocation response")
                     .map_err(|e| e.to_string())?;
-                Ok(())
+                if invocation_id != invocation.id {
+                    return Err("invocation ID mismatch".into());
+                }
+                if let Some(content_length) = content_length {
+                    let content_length = usize::try_from(content_length)
+                        .context("content length does not fit in usize")
+                        .map_err(|e| e.to_string())?;
+                    if content_length != msg.len() {
+                        return Err("message size mismatch".into());
+                    }
+                }
+                if let Some(error) = error {
+                    Err(error)
+                } else {
+                    res_w
+                        .write_all(&msg)
+                        .await
+                        .context("failed to write reply")
+                        .map_err(|e| e.to_string())?;
+                    Ok(())
+                }
             }
             .boxed(),
             Box::new(req_w),
@@ -408,20 +485,19 @@ impl Bus for Handler {
         operation: String,
         request: Vec<u8>,
     ) -> anyhow::Result<Result<(), String>> {
-        let invocation = self.invocation(operation, request).await?;
-        let request =
-            rmp_serde::to_vec_named(&invocation).context("failed to encode invocation")?;
-        self.nats
-            .publish(
-                format!(
-                    "wasmbus.rpc.default.{}.default",
-                    invocation.target.public_key
-                ),
-                request.into(),
-            )
+        match self
+            .call_provider_with_payload(&operation, request)
             .await
-            .context("failed to publish on NATS topic")?;
-        Ok(Ok(()))
+            .context("failed to call linked provider")?
+        {
+            Ok(msg) => {
+                if !msg.is_empty() {
+                    error!("unexpected response returned for `{operation}` call");
+                }
+                Ok(Ok(()))
+            }
+            Err(err) => Ok(Err(err)),
+        }
     }
 
     async fn call_oneshot_with_response(
@@ -430,23 +506,114 @@ impl Bus for Handler {
         request: Vec<u8>,
         response: &mut Vec<u8>,
     ) -> anyhow::Result<Result<usize, String>> {
-        let invocation = self.invocation(operation, request).await?;
-        let request =
-            rmp_serde::to_vec_named(&invocation).context("failed to encode invocation")?;
-        let mut res = self
-            .nats
-            .request(
-                format!(
-                    "wasmbus.rpc.default.{}.default",
-                    invocation.target.public_key
-                ),
-                request.into(),
-            )
+        match self
+            .call_provider_with_payload(operation, request)
             .await
-            .context("failed to publish on NATS topic")?;
-        response.clear();
-        res.payload.copy_to_slice(response);
-        Ok(Ok(res.length))
+            .context("failed to call linked provider")?
+        {
+            Ok(msg) => {
+                let size = msg.len();
+                response.resize(size, 0);
+                response.copy_from_slice(&msg);
+                Ok(Ok(size))
+            }
+            Err(err) => Ok(Err(err)),
+        }
+    }
+}
+
+#[async_trait]
+impl KeyValueReadWrite for Handler {
+    #[instrument]
+    async fn get(
+        &self,
+        bucket: &str,
+        key: String,
+    ) -> anyhow::Result<(Box<dyn AsyncRead + Sync + Send + Unpin>, u64)> {
+        #[derive(Deserialize)]
+        struct GetResponse {
+            #[serde(default)]
+            value: String,
+            #[serde(default)]
+            exists: bool,
+        }
+
+        const METHOD: &str = "wasmcloud:keyvalue/KeyValue.Get";
+        if !bucket.is_empty() {
+            bail!("buckets not currently supported")
+        }
+        let res = self.call_provider(METHOD, &key).await?;
+        let GetResponse { value, exists } =
+            rmp_serde::from_slice(&res).context("failed to decode response")?;
+        if !exists {
+            bail!("key not found")
+        }
+        let size = value
+            .len()
+            .try_into()
+            .context("value size does not fit in `u64`")?;
+        Ok((Box::new(Cursor::new(value)), size))
+    }
+
+    #[instrument(skip(value))]
+    async fn set(
+        &self,
+        bucket: &str,
+        key: String,
+        mut value: Box<dyn AsyncRead + Sync + Send + Unpin>,
+    ) -> anyhow::Result<()> {
+        #[derive(Serialize)]
+        struct SetRequest {
+            key: String,
+            value: String,
+            expires: u32,
+        }
+
+        const METHOD: &str = "wasmcloud:keyvalue/KeyValue.Set";
+        if !bucket.is_empty() {
+            bail!("buckets not currently supported")
+        }
+        let mut buf = String::new();
+        value
+            .read_to_string(&mut buf)
+            .await
+            .context("failed to read value")?;
+        let res = self
+            .call_provider(
+                METHOD,
+                &SetRequest {
+                    key,
+                    value: buf,
+                    expires: 0,
+                },
+            )
+            .await?;
+        if !res.is_empty() {
+            error!("unexpected response returned for `{METHOD}` call");
+        }
+        Ok(())
+    }
+
+    #[instrument]
+    async fn delete(&self, bucket: &str, key: String) -> anyhow::Result<()> {
+        const METHOD: &str = "wasmcloud:keyvalue/KeyValue.Del";
+        if !bucket.is_empty() {
+            bail!("buckets not currently supported")
+        }
+        let res = self.call_provider(METHOD, &key).await?;
+        let deleted: bool = rmp_serde::from_slice(&res).context("failed to decode response")?;
+        ensure!(deleted, "key not found");
+        Ok(())
+    }
+
+    #[instrument]
+    async fn exists(&self, bucket: &str, key: String) -> anyhow::Result<bool> {
+        const METHOD: &str = "wasmcloud:keyvalue/KeyValue.Contains";
+        if !bucket.is_empty() {
+            bail!("buckets not currently supported")
+        }
+        let res = self.call_provider(METHOD, &key).await?;
+        rmp_serde::from_slice(&res).context("failed to decode response")
     }
 }
 
@@ -495,16 +662,20 @@ impl Messaging for Handler {
         }
 
         const METHOD: &str = "wasmcloud:messaging/Messaging.Publish";
-        let msg = rmp_serde::to_vec_named(&PubMessage {
-            subject,
-            reply_to,
-            body: body.unwrap_or_default(),
-        })
-        .context("failed to encode message")?;
-        self.call_oneshot(METHOD.into(), msg)
-            .await
-            .with_context(|| format!("failed to call linked provider for `{METHOD}`"))?
-            .map_err(|e| anyhow!(e).context(format!("`{METHOD}` call failed")))
+        let res = self
+            .call_provider(
+                METHOD,
+                &PubMessage {
+                    subject,
+                    reply_to,
+                    body: body.unwrap_or_default(),
+                },
+            )
+            .await?;
+        if !res.is_empty() {
+            error!("unexpected response returned for `{METHOD}` call");
+        }
+        Ok(())
     }
 }
 
@@ -532,6 +703,7 @@ impl ActorInstance {
             .await
             .context("failed to set stderr")?
             .bus(Arc::new(self.handler.clone()))
+            .keyvalue_readwrite(Arc::new(self.handler.clone()))
             .messaging(Arc::new(self.handler.clone()));
         let res = AsyncBytesMut::default();
         let res = match instance
