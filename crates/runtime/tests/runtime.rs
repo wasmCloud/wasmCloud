@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::net::{Ipv6Addr, SocketAddr};
 use std::path::Path;
 use std::str::FromStr;
@@ -18,6 +19,7 @@ use wasmcloud_actor::{HttpRequest, HttpResponse, Uuid};
 use wasmcloud_runtime::capability;
 use wasmcloud_runtime::capability::logging::logging;
 use wasmcloud_runtime::capability::messaging;
+use wasmcloud_runtime::capability::provider::MemoryKeyValue;
 use wasmcloud_runtime::{Actor, Runtime};
 
 static LOGGER: Lazy<()> = Lazy::new(|| {
@@ -99,10 +101,12 @@ impl capability::Messaging for Messaging {
 fn new_runtime(
     logs: Arc<Mutex<Vec<(logging::Level, String, String)>>>,
     published: Arc<Mutex<Vec<messaging::types::BrokerMessage>>>,
+    keyvalue_readwrite: Arc<MemoryKeyValue>,
 ) -> Runtime {
     Runtime::builder()
         .logging(Arc::new(Logging(logs)))
         .messaging(Arc::new(Messaging(published)))
+        .keyvalue_readwrite(Arc::clone(&keyvalue_readwrite))
         .build()
         .expect("failed to construct runtime")
 }
@@ -133,8 +137,16 @@ async fn run(
         .context("failed to connect to socket")?;
     let logs = Arc::new(vec![].into());
     let published = Arc::new(vec![].into());
+    let keyvalue_readwrite = Arc::new(MemoryKeyValue::from(HashMap::from([(
+        "".into(),
+        HashMap::from([("foo".into(), b"bar".to_vec())]),
+    )])));
     {
-        let rt = new_runtime(Arc::clone(&logs), Arc::clone(&published));
+        let rt = new_runtime(
+            Arc::clone(&logs),
+            Arc::clone(&published),
+            Arc::clone(&keyvalue_readwrite),
+        );
         let actor = Actor::new(&rt, wasm).expect("failed to construct actor");
         actor.claims().expect("claims missing");
         let mut actor = actor.instantiate().await.context("failed to instantiate")?;
@@ -158,6 +170,7 @@ async fn run(
     ensure!(header.is_empty());
 
     let mut published = Arc::try_unwrap(published).unwrap().into_inner().into_iter();
+    let mut keyvalue = HashMap::from(Arc::try_unwrap(keyvalue_readwrite).unwrap()).into_iter();
     if interfaces {
         let published = match (published.next(), published.next()) {
             (
@@ -176,6 +189,27 @@ async fn run(
             _ => bail!("too many messages published"),
         };
         ensure!(body == published);
+
+        let set = match (keyvalue.next(), keyvalue.next()) {
+            (Some((bucket, kv)), None) => {
+                ensure!(bucket == "");
+                let mut kv = kv.into_iter();
+                match (kv.next(), kv.next()) {
+                    (Some((k, v)), None) => {
+                        ensure!(k == "result");
+                        v
+                    }
+                    _ => bail!("too many entries present in keyvalue map bucket"),
+                }
+            }
+            _ => bail!("too many buckets present in keyvalue map"),
+        };
+        ensure!(
+            body == set,
+            "invalid keyvalue map `result` value:\ngot: {}\nexpected: {}",
+            String::from_utf8_lossy(&set),
+            String::from_utf8_lossy(&body),
+        );
     }
 
     #[derive(Deserialize)]

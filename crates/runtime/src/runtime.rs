@@ -1,5 +1,7 @@
 use crate::actor::ModuleConfig;
-use crate::capability::{builtin, Blobstore, Bus, IncomingHttp, Logging, Messaging};
+use crate::capability::{
+    builtin, Blobstore, Bus, IncomingHttp, KeyValueReadWrite, Logging, Messaging,
+};
 use crate::ActorConfig;
 
 use core::fmt;
@@ -77,6 +79,18 @@ impl RuntimeBuilder {
     ) -> Self {
         Self {
             handler: self.handler.incoming_http(incoming_http),
+            ..self
+        }
+    }
+
+    /// Set a [`KeyValueReadWrite`] handler to use for all actor instances unless overriden for the instance
+    #[must_use]
+    pub fn keyvalue_readwrite(
+        self,
+        keyvalue_readwrite: Arc<impl KeyValueReadWrite + Sync + Send + 'static>,
+    ) -> Self {
+        Self {
+            handler: self.handler.keyvalue_readwrite(keyvalue_readwrite),
             ..self
         }
     }

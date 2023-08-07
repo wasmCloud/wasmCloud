@@ -1,5 +1,8 @@
 blobstore = "../../../wit/blobstore"
+io = "https://github.com/WebAssembly/wasi-io/archive/1b22f18a5af1274724a293782798f91e7dcf4ed6.tar.gz" # Pin for Wasmtime 11 compatibility
+keyvalue = "https://github.com/WebAssembly/wasi-keyvalue/archive/main.tar.gz"
 logging = "https://github.com/WebAssembly/wasi-logging/archive/main.tar.gz"
 messaging = "../../../wit/messaging"
+poll = "https://github.com/WebAssembly/wasi-poll/archive/main.tar.gz" # TODO: Remove once keyvalue is compatible
 random = "https://github.com/WebAssembly/wasi-random/archive/main.tar.gz"
 wasmcloud = "../../../wit"

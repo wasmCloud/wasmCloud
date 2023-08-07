@@ -1,7 +1,11 @@
 pub(crate) mod builtin;
 
-pub use builtin::{Blobstore, Bus, IncomingHttp, Logging, Messaging};
+/// Provider implementations
+pub mod provider;
 
+pub use builtin::{Blobstore, Bus, IncomingHttp, KeyValueReadWrite, Logging, Messaging};
+
+#[allow(clippy::doc_markdown)]
 #[allow(missing_docs)]
 mod bindgen {
     use wasmtime_wasi::preview2;
@@ -27,6 +31,7 @@ mod bindgen {
     });
 }
 
+pub use bindgen::wasi::keyvalue;
 pub use bindgen::wasi::logging;
 pub use bindgen::wasmcloud::blobstore;
 pub use bindgen::wasmcloud::bus;

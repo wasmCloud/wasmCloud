@@ -11,7 +11,7 @@ pub use module::{
 };
 
 use crate::capability::logging::logging;
-use crate::capability::{Bus, IncomingHttp, Logging, Messaging};
+use crate::capability::{Bus, IncomingHttp, KeyValueReadWrite, Logging, Messaging};
 use crate::Runtime;
 
 use core::fmt::Debug;
@@ -341,6 +341,22 @@ impl Instance {
             }
             Self::Component(component) => {
                 component.incoming_http(incoming_http);
+            }
+        }
+        self
+    }
+
+    /// Set [`KeyValueReadWrite`] handler for this [Instance].
+    pub fn keyvalue_readwrite(
+        &mut self,
+        keyvalue_readwrite: Arc<dyn KeyValueReadWrite + Send + Sync>,
+    ) -> &mut Self {
+        match self {
+            Self::Module(module) => {
+                module.keyvalue_readwrite(keyvalue_readwrite);
+            }
+            Self::Component(component) => {
+                component.keyvalue_readwrite(keyvalue_readwrite);
             }
         }
         self

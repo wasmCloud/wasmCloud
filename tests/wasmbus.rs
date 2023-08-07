@@ -3,16 +3,19 @@ use std::env;
 use std::env::consts::{ARCH, FAMILY, OS};
 use std::net::Ipv6Addr;
 use std::pin::pin;
+use std::process::ExitStatus;
 use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, ensure, Context};
 use nkeys::KeyPair;
+use redis::ConnectionLike;
 use serde::Deserialize;
 use tempfile::tempdir;
 use tokio::net::TcpListener;
 use tokio::process::Command;
 use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 use tokio::time::interval;
 use tokio::{fs, select, spawn, try_join};
 use tokio_stream::wrappers::IntervalStream;
@@ -44,6 +47,7 @@ async fn assert_start_provider(
     host_key: &KeyPair,
     provider_key: &KeyPair,
     url: impl AsRef<str>,
+    configuration: Option<String>,
 ) -> anyhow::Result<()> {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -55,14 +59,20 @@ async fn assert_start_provider(
     }
 
     let CtlOperationAck { accepted, error } = client
-        .start_provider(&host_key.public_key(), url.as_ref(), None, None, None)
+        .start_provider(
+            &host_key.public_key(),
+            url.as_ref(),
+            None,
+            None,
+            configuration,
+        )
         .await
         .map_err(|e| anyhow!(e).context("failed to start provider"))?;
     ensure!(error == "");
     ensure!(accepted);
 
     let res = pin!(IntervalStream::new(interval(Duration::from_secs(1)))
-        .take(10)
+        .take(30)
         .then(|_| nats_client.request(
             format!(
                 "wasmbus.rpc.default.{}.default.health",
@@ -90,6 +100,66 @@ async fn assert_start_provider(
     Ok(())
 }
 
+async fn assert_advertise_link(
+    client: &wasmcloud_control_interface::Client,
+    actor_claims: &jwt::Claims<jwt::Actor>,
+    provider_key: &KeyPair,
+    contract_id: impl AsRef<str>,
+    values: HashMap<String, String>,
+) -> anyhow::Result<()> {
+    let CtlOperationAck { accepted, error } = client
+        .advertise_link(
+            &actor_claims.subject,
+            &provider_key.public_key(),
+            contract_id.as_ref(),
+            "default",
+            values,
+        )
+        .await
+        .map_err(|e| anyhow!(e).context("failed to advertise link"))?;
+    ensure!(error == "");
+    ensure!(accepted);
+    Ok(())
+}
+
+async fn assert_remove_link(
+    client: &wasmcloud_control_interface::Client,
+    actor_claims: &jwt::Claims<jwt::Actor>,
+    contract_id: impl AsRef<str>,
+) -> anyhow::Result<()> {
+    let CtlOperationAck { accepted, error } = client
+        .remove_link(&actor_claims.subject, contract_id.as_ref(), "default")
+        .await
+        .map_err(|e| anyhow!(e).context("failed to remove link"))?;
+    ensure!(error == "");
+    ensure!(accepted);
+    Ok(())
+}
+
+async fn spawn_server(
+    cmd: &mut Command,
+) -> anyhow::Result<(JoinHandle<anyhow::Result<ExitStatus>>, oneshot::Sender<()>)> {
+    let mut child = cmd
+        .kill_on_drop(true)
+        .spawn()
+        .context("failed to spawn child")?;
+    let (stop_tx, stop_rx) = oneshot::channel();
+    let child = spawn(async move {
+        select!(
+            res = stop_rx => {
+                res.context("failed to wait for shutdown")?;
+                child.kill().await.context("failed to kill child")?;
+                child.wait().await
+            }
+            status = child.wait() => {
+                status
+            }
+        )
+        .context("failed to wait for child")
+    });
+    Ok((child, stop_tx))
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn wasmbus() -> anyhow::Result<()> {
     tracing_subscriber::registry()
@@ -104,41 +174,43 @@ async fn wasmbus() -> anyhow::Result<()> {
     let nats_port = free_port().await?;
     let nats_url =
         Url::parse(&format!("nats://localhost:{nats_port}")).context("failed to parse NATS URL")?;
-
-    let dir = tempdir().context("failed to create temporary directory")?;
-    let mut nats = Command::new(
-        env::var("WASMCLOUD_NATS")
-            .as_ref()
-            .map(String::as_str)
-            .unwrap_or("nats-server"),
-    )
-    .args(["-js", "-V", "-T=false", "-p", &nats_port.to_string(), "-sd"])
-    .arg(dir.path())
-    .kill_on_drop(true)
-    .spawn()
-    .context("failed to spawn NATS")?;
-
-    let (stop_tx, stop_rx) = oneshot::channel();
-    let nats = spawn(async move {
-        select!(
-            res = stop_rx => {
-                res.context("failed to wait for shutdown")?;
-                nats.kill().await.context("failed to kill NATS")?;
-                nats.wait().await
-            }
-            status = nats.wait() => {
-                status
-            }
+    let jetstream_dir = tempdir().context("failed to create temporary directory")?;
+    let (nats_server, stop_nats_tx) = spawn_server(
+        Command::new(
+            env::var("WASMCLOUD_NATS")
+                .as_ref()
+                .map(String::as_str)
+                .unwrap_or("nats-server"),
         )
-        .context("failed to wait for NATS")
-    });
-
+        .args(["-js", "-V", "-T=false", "-p", &nats_port.to_string(), "-sd"])
+        .arg(jetstream_dir.path()),
+    )
+    .await
+    .context("failed to start NATS")?;
     let nats_client = async_nats::connect_with_options(
         nats_url.as_str(),
         async_nats::ConnectOptions::new().retry_on_initial_connect(),
     )
     .await
     .context("failed to connect to NATS")?;
+
+    let redis_port = free_port().await?;
+    let redis_url = Url::parse(&format!("redis://localhost:{redis_port}"))
+        .context("failed to parse Redis URL")?;
+    let (redis_server, stop_redis_tx) = spawn_server(
+        Command::new(
+            env::var("WASMCLOUD_REDIS")
+                .as_ref()
+                .map(String::as_str)
+                .unwrap_or("redis-server"),
+        )
+        .args(["--port", &redis_port.to_string()]),
+    )
+    .await
+    .context("failed to start Redis")?;
+    let mut redis_client =
+        redis::Client::open(redis_url.as_str()).context("failed to connect to Redis")?;
+
     let client = ClientBuilder::new(nats_client.clone())
         .build()
         .await
@@ -190,7 +262,9 @@ async fn wasmbus() -> anyhow::Result<()> {
             ensure!(js_domain == Some("TODO".into()));
             ensure!(
                 labels.as_ref() == Some(&expected_labels),
-                "invalid labels:\ngot: {labels:?}\nexpected: {expected_labels:?}"
+                r#"invalid labels:
+got: {labels:?}
+expected: {expected_labels:?}"#
             );
             ensure!(lattice_prefix == Some("default".into()));
             ensure!(prov_rpc_host == Some("TODO".into()));
@@ -248,6 +322,11 @@ async fn wasmbus() -> anyhow::Result<()> {
     let httpserver_provider_url = Url::from_file_path(test_providers::RUST_HTTPSERVER)
         .expect("failed to construct provider ref");
 
+    let kvredis_provider_key = KeyPair::from_seed(test_providers::RUST_KVREDIS_SUBJECT)
+        .context("failed to parse `rust-kvredis` provider key")?;
+    let kvredis_provider_url = Url::from_file_path(test_providers::RUST_KVREDIS)
+        .expect("failed to construct provider ref");
+
     let nats_provider_key = KeyPair::from_seed(test_providers::RUST_NATS_SUBJECT)
         .context("failed to parse `rust-nats` provider key")?;
     let nats_provider_url =
@@ -284,37 +363,36 @@ async fn wasmbus() -> anyhow::Result<()> {
     // NOTE: Links are advertised before the provider is started to prevent race condition, which
     // occurs if link is established after the providers starts, but before it subscribes to NATS
     // topics
-    let CtlOperationAck { accepted, error } = client
-        .advertise_link(
-            &actor_claims.subject,
-            &httpserver_provider_key.public_key(),
+    try_join!(
+        assert_advertise_link(
+            &client,
+            &actor_claims,
+            &httpserver_provider_key,
             "wasmcloud:httpserver",
-            "default",
             HashMap::from([(
                 "config_json".into(),
-                format!(r#"{{"address":"[{}]:{http_port}"}}"#, Ipv6Addr::UNSPECIFIED),
+                format!(r#"{{"address":"[{}]:{http_port}"}}"#, Ipv6Addr::UNSPECIFIED)
             )]),
-        )
-        .await
-        .map_err(|e| anyhow!(e).context("failed to advertise link"))?;
-    ensure!(error == "");
-    ensure!(accepted);
-
-    let CtlOperationAck { accepted, error } = client
-        .advertise_link(
-            &actor_claims.subject,
-            &nats_provider_key.public_key(),
+        ),
+        assert_advertise_link(
+            &client,
+            &actor_claims,
+            &kvredis_provider_key,
+            "wasmcloud:keyvalue",
+            HashMap::from([("URL".into(), format!("{redis_url}"))]),
+        ),
+        assert_advertise_link(
+            &client,
+            &actor_claims,
+            &nats_provider_key,
             "wasmcloud:messaging",
-            "default",
             HashMap::from([(
                 "config_json".into(),
-                format!(r#"{{"cluster_uris":["{nats_url}"]}}"#),
+                format!(r#"{{"cluster_uris":["{nats_url}"]}}"#)
             )]),
         )
-        .await
-        .map_err(|e| anyhow!(e).context("failed to advertise link"))?;
-    ensure!(error == "");
-    ensure!(accepted);
+    )
+    .context("failed to advertise links")?;
 
     try_join!(
         assert_start_provider(
@@ -323,6 +401,15 @@ async fn wasmbus() -> anyhow::Result<()> {
             &host_key,
             &httpserver_provider_key,
             &httpserver_provider_url,
+            None,
+        ),
+        assert_start_provider(
+            &client,
+            &nats_client,
+            &host_key,
+            &kvredis_provider_key,
+            &kvredis_provider_url,
+            None,
         ),
         assert_start_provider(
             &client,
@@ -330,6 +417,7 @@ async fn wasmbus() -> anyhow::Result<()> {
             &host_key,
             &nats_provider_key,
             &nats_provider_url,
+            None,
         )
     )
     .context("failed to start providers")?;
@@ -350,7 +438,9 @@ async fn wasmbus() -> anyhow::Result<()> {
     ensure!(issuer == cluster_key.public_key());
     ensure!(
         labels == expected_labels,
-        "invalid labels:\ngot: {labels:?}\nexpected: {expected_labels:?}"
+        r#"invalid labels:
+got: {labels:?}
+expected: {expected_labels:?}"#
     );
     match (actors.pop(), actors.as_slice()) {
         (
@@ -368,11 +458,16 @@ async fn wasmbus() -> anyhow::Result<()> {
                 name: expected_name,
                 rev: expected_revision,
                 ..
-            } = actor_claims.metadata.context("missing actor metadata")?;
+            } = actor_claims
+                .metadata
+                .as_ref()
+                .context("missing actor metadata")?;
             ensure!(image_ref == Some(actor_url.to_string()));
             ensure!(
-                name == expected_name,
-                "invalid name:\ngot: {name:?}\nexpected: {expected_name:?}"
+                name == *expected_name,
+                r#"invalid name:
+got: {name:?}
+expected: {expected_name:?}"#
             );
             let ActorInstance {
                 annotations,
@@ -388,8 +483,13 @@ async fn wasmbus() -> anyhow::Result<()> {
         _ => bail!("more than one actor found"),
     }
     providers.sort_unstable_by(|a, b| b.name.cmp(&a.name));
-    match (providers.pop(), providers.pop(), providers.as_slice()) {
-        (Some(httpserver), Some(nats), []) => {
+    match (
+        providers.pop(),
+        providers.pop(),
+        providers.pop(),
+        providers.as_slice(),
+    ) {
+        (Some(httpserver), Some(kvredis), Some(nats), []) => {
             // TODO: Validate `constraints`
             ensure!(httpserver.annotations == None);
             ensure!(httpserver.id == httpserver_provider_key.public_key());
@@ -398,6 +498,15 @@ async fn wasmbus() -> anyhow::Result<()> {
             ensure!(httpserver.link_name == "default");
             ensure!(httpserver.name == Some("wasmcloud-provider-httpserver".into()),);
             ensure!(httpserver.revision == 0);
+
+            // TODO: Validate `constraints`
+            ensure!(kvredis.annotations == None);
+            ensure!(kvredis.id == kvredis_provider_key.public_key());
+            ensure!(kvredis.image_ref == Some(kvredis_provider_url.to_string()));
+            ensure!(kvredis.contract_id == "wasmcloud:keyvalue");
+            ensure!(kvredis.link_name == "default");
+            ensure!(kvredis.name == Some("wasmcloud-provider-kvredis".into()),);
+            ensure!(kvredis.revision == 0);
 
             // TODO: Validate `constraints`
             ensure!(nats.annotations == None);
@@ -415,6 +524,10 @@ async fn wasmbus() -> anyhow::Result<()> {
         .subscribe("test".into())
         .await
         .context("failed to subscribe to `test`")?;
+
+    redis_client
+        .req_command(&redis::Cmd::set("foo", "bar"))
+        .context("failed to set `foo` key in Redis")?;
 
     let http_client = reqwest::Client::builder()
         .timeout(Duration::from_secs(20))
@@ -463,19 +576,28 @@ async fn wasmbus() -> anyhow::Result<()> {
         .context("failed to receive NATS response")?;
     ensure!(nats_res.payload == http_res);
 
-    let CtlOperationAck { accepted, error } = client
-        .remove_link(&actor_claims.subject, "wasmcloud:messaging", "default")
-        .await
-        .map_err(|e| anyhow!(e).context("failed to remove link"))?;
-    ensure!(error == "");
-    ensure!(accepted);
+    let redis_keys = redis_client
+        .req_command(&redis::Cmd::keys("*"))
+        .context("failed to list keys in Redis")?;
+    let expected_redis_keys = redis::Value::Bulk(vec![redis::Value::Data(b"result".to_vec())]);
+    ensure!(
+        redis_keys == expected_redis_keys,
+        r#"invalid keys in Redis:
+got: {redis_keys:?}
+expected: {expected_redis_keys:?}"#
+    );
 
-    let CtlOperationAck { accepted, error } = client
-        .remove_link(&actor_claims.subject, "wasmcloud:httpserver", "default")
-        .await
-        .map_err(|e| anyhow!(e).context("failed to remove link"))?;
-    ensure!(error == "");
-    ensure!(accepted);
+    let redis_res = redis_client
+        .req_command(&redis::Cmd::get("result"))
+        .context("failed to get `result` key in Redis")?;
+    ensure!(redis_res == redis::Value::Data(http_res.into()));
+
+    try_join!(
+        assert_remove_link(&client, &actor_claims, "wasmcloud:messaging"),
+        assert_remove_link(&client, &actor_claims, "wasmcloud:keyvalue"),
+        assert_remove_link(&client, &actor_claims, "wasmcloud:httpserver"),
+    )
+    .context("failed to remove links")?;
 
     let CtlOperationAck { accepted, error } = client
         .stop_host(&host_key.public_key(), None)
@@ -487,10 +609,17 @@ async fn wasmbus() -> anyhow::Result<()> {
     let _ = host.stopped().await;
     shutdown.await.context("failed to shutdown host")?;
 
-    stop_tx.send(()).expect("failed to stop NATS");
+    stop_nats_tx.send(()).expect("failed to stop NATS");
+    let nats_status = nats_server
+        .await
+        .context("failed to wait for NATS to exit")??;
+    ensure!(nats_status.code().is_none());
 
-    let status = nats.await.context("failed to wait for NATS to exit")??;
-    ensure!(status.code().is_none());
+    stop_redis_tx.send(()).expect("failed to stop Redis");
+    let redis_status = redis_server
+        .await
+        .context("failed to wait for Redis to exit")??;
+    ensure!(redis_status.code().is_none());
 
     Ok(())
 }
