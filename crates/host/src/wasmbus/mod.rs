@@ -670,9 +670,9 @@ async fn create_lattice_metadata_bucket(
                 info!("lattice metadata bucket {bucket} already exists. Skipping creation.");
                 Ok(())
             } else {
-                Err(anyhow!(
-                    "failed to create lattice metadata bucket {bucket}: {err}"
-                ))
+                Err(anyhow!(err).context(format!(
+                    "failed to create lattice metadata bucket '{bucket}'"
+                )))
             }
         }
     }
