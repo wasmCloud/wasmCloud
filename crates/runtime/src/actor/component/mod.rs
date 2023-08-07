@@ -1,33 +1,30 @@
 use crate::actor::claims;
-use crate::capability::bus::host;
-use crate::capability::logging::logging;
-use crate::capability::{
-    blobstore, builtin, messaging, Bus, IncomingHttp, Interfaces, Logging, Messaging,
-};
+use crate::capability::{builtin, Interfaces};
 use crate::Runtime;
 
 use core::fmt::{self, Debug};
-use core::future::Future;
 use core::mem::replace;
 use core::ops::{Deref, DerefMut};
-use core::pin::Pin;
 
-use std::io::Cursor;
 use std::sync::Arc;
-use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context as _};
+use anyhow::Context as _;
 use async_trait::async_trait;
-use futures::future::Shared;
-use futures::lock::Mutex;
-use futures::FutureExt;
-use serde_json::json;
-use tokio::io::{sink, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tracing::{instrument, trace, warn};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::sync::Mutex;
+use tracing::{instrument, trace};
 use wascap::jwt;
-use wasmtime_wasi::preview2::stream::TableStreamExt;
 use wasmtime_wasi::preview2::wasi::command::Command;
 use wasmtime_wasi::preview2::{self, InputStream, OutputStream};
+
+mod blobstore;
+mod bus;
+mod http;
+mod logging;
+mod messaging;
+
+pub(crate) use self::http::incoming_http_bindings;
+pub(crate) use self::logging::logging_bindings;
 
 mod guest_bindings {
     wasmtime::component::bindgen!({
@@ -37,23 +34,6 @@ mod guest_bindings {
            "wasi:io/streams": wasmtime_wasi::preview2::wasi::io::streams,
            "wasi:poll/poll": wasmtime_wasi::preview2::wasi::poll::poll,
         },
-    });
-}
-
-pub(crate) mod logging_bindings {
-    wasmtime::component::bindgen!({
-        world: "logging",
-        async: true,
-        with: {
-           "wasi:logging/logging": crate::capability::logging,
-        },
-    });
-}
-
-pub(crate) mod incoming_http_bindings {
-    wasmtime::component::bindgen!({
-        world: "incoming-http",
-        async: true,
     });
 }
 
@@ -293,249 +273,6 @@ impl preview2::WasiView for Ctx {
     }
 }
 
-type FutureResult = Pin<Box<dyn Future<Output = Result<(), String>> + Send>>;
-
-pub trait TableFutureResultExt {
-    fn push_future_result(&mut self, res: FutureResult) -> Result<u32, preview2::TableError>;
-    fn get_future_result(
-        &mut self,
-        res: u32,
-    ) -> Result<Box<Shared<FutureResult>>, preview2::TableError>;
-    fn delete_future_result(
-        &mut self,
-        res: u32,
-    ) -> Result<Box<Shared<FutureResult>>, preview2::TableError>;
-}
-impl TableFutureResultExt for preview2::Table {
-    fn push_future_result(&mut self, res: FutureResult) -> Result<u32, preview2::TableError> {
-        self.push(Box::new(res.shared()))
-    }
-    fn get_future_result(
-        &mut self,
-        res: u32,
-    ) -> Result<Box<Shared<FutureResult>>, preview2::TableError> {
-        self.get(res).cloned()
-    }
-    fn delete_future_result(
-        &mut self,
-        res: u32,
-    ) -> Result<Box<Shared<FutureResult>>, preview2::TableError> {
-        self.delete(res)
-    }
-}
-
-#[async_trait]
-impl host::Host for Ctx {
-    #[instrument]
-    async fn call(
-        &mut self,
-        operation: String,
-    ) -> anyhow::Result<
-        Result<
-            (
-                host::FutureResult,
-                preview2::wasi::io::streams::InputStream,
-                preview2::wasi::io::streams::OutputStream,
-            ),
-            String,
-        >,
-    > {
-        match self.handler.call(operation).await {
-            Ok((result, stdin, stdout)) => {
-                let result = self
-                    .table
-                    .push_future_result(result)
-                    .context("failed to push result to table")?;
-                let stdin = self
-                    .table
-                    .push_output_stream(Box::new(AsyncStream(stdin)))
-                    .context("failed to push stdin stream")?;
-                let stdout = self
-                    .table
-                    .push_input_stream(Box::new(AsyncStream(stdout)))
-                    .context("failed to push stdout stream")?;
-                Ok(Ok((result, stdin, stdout)))
-            }
-            Err(err) => Ok(Err(format!("{err:#}"))),
-        }
-    }
-
-    #[instrument]
-    async fn listen_to_future_result(&mut self, _res: u32) -> anyhow::Result<u32> {
-        bail!("unsupported") // TODO: Support
-    }
-
-    #[instrument]
-    async fn future_result_get(&mut self, res: u32) -> anyhow::Result<Option<Result<(), String>>> {
-        let fut = self.table.get_future_result(res)?;
-        if let Some(result) = fut.clone().now_or_never() {
-            let fut = self.table.delete_future_result(res)?;
-            drop(fut);
-            Ok(Some(result))
-        } else {
-            Ok(None)
-        }
-    }
-
-    #[instrument]
-    async fn drop_future_result(&mut self, res: u32) -> anyhow::Result<()> {
-        let fut = self.table.delete_future_result(res)?;
-        drop(fut);
-        Ok(())
-    }
-}
-
-#[async_trait]
-impl logging::Host for Ctx {
-    #[instrument]
-    async fn log(
-        &mut self,
-        level: logging::Level,
-        context: String,
-        message: String,
-    ) -> anyhow::Result<()> {
-        self.handler.log(level, context, message).await
-    }
-}
-
-#[async_trait]
-impl messaging::types::Host for Ctx {}
-
-#[async_trait]
-impl messaging::consumer::Host for Ctx {
-    #[instrument]
-    async fn request(
-        &mut self,
-        subject: String,
-        body: Option<Vec<u8>>,
-        timeout_ms: u32,
-    ) -> anyhow::Result<Result<messaging::types::BrokerMessage, String>> {
-        let timeout = Duration::from_millis(timeout_ms.into());
-        Ok(self
-            .handler
-            .request(subject, body, timeout)
-            .await
-            .map_err(|err| format!("{err:#}")))
-    }
-
-    #[instrument]
-    async fn request_multi(
-        &mut self,
-        subject: String,
-        body: Option<Vec<u8>>,
-        timeout_ms: u32,
-        max_results: u32,
-    ) -> anyhow::Result<Result<Vec<messaging::types::BrokerMessage>, String>> {
-        let timeout = Duration::from_millis(timeout_ms.into());
-        let max_results = max_results.try_into().unwrap_or(usize::MAX);
-        let mut msgs = Vec::with_capacity(max_results);
-        match self
-            .handler
-            .request_multi(subject, body, timeout, &mut msgs)
-            .await
-        {
-            Ok(n) if n <= max_results && n == msgs.len() => Ok(Ok(msgs)),
-            Ok(_) => bail!("invalid amount of results returned"),
-            Err(err) => Ok(Err(format!("{err:#}"))),
-        }
-    }
-
-    #[instrument]
-    async fn publish(
-        &mut self,
-        msg: messaging::types::BrokerMessage,
-    ) -> anyhow::Result<Result<(), String>> {
-        Ok(self
-            .handler
-            .publish(msg)
-            .await
-            .map_err(|err| format!("{err:#}")))
-    }
-}
-
-#[async_trait]
-impl blobstore::types::Host for Ctx {}
-
-#[allow(unused)] // TODO: Remove once implemented
-#[async_trait]
-impl blobstore::consumer::Host for Ctx {
-    #[instrument]
-    async fn container_exists(&mut self, container_id: String) -> anyhow::Result<bool> {
-        bail!("unsupported")
-    }
-
-    #[instrument]
-    async fn create_container(
-        &mut self,
-        container_id: String,
-    ) -> anyhow::Result<Result<(), String>> {
-        bail!("unsupported")
-    }
-
-    #[instrument]
-    async fn remove_container(
-        &mut self,
-        container_id: String,
-    ) -> anyhow::Result<Result<(), String>> {
-        bail!("unsupported")
-    }
-
-    #[instrument]
-    async fn get_container_info(
-        &mut self,
-        container_id: String,
-    ) -> anyhow::Result<Result<Option<blobstore::types::ContainerInfo>, String>> {
-        bail!("unsupported")
-    }
-
-    #[instrument]
-    async fn get_object_info(
-        &mut self,
-        container_id: String,
-        object_id: String,
-    ) -> anyhow::Result<Result<Option<blobstore::types::ObjectInfo>, String>> {
-        bail!("unsupported")
-    }
-
-    #[instrument]
-    async fn remove_object(
-        &mut self,
-        container_id: String,
-        object_id: String,
-    ) -> anyhow::Result<Result<bool, String>> {
-        bail!("unsupported")
-    }
-
-    #[instrument]
-    async fn put_object(
-        &mut self,
-        chunk: blobstore::types::Chunk,
-        content_type: String,
-        content_encoding: String,
-    ) -> anyhow::Result<Result<String, String>> {
-        bail!("unsupported")
-    }
-
-    #[instrument]
-    async fn put_chunk(
-        &mut self,
-        stream_id: String,
-        chunk: blobstore::types::Chunk,
-        cancel: bool,
-    ) -> anyhow::Result<Result<(), String>> {
-        bail!("unsupported")
-    }
-
-    #[instrument]
-    async fn stream_object(
-        &mut self,
-        container_id: String,
-        object_id: String,
-    ) -> anyhow::Result<Result<(), String>> {
-        bail!("unsupported")
-    }
-}
-
 impl Debug for Ctx {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Ctx").field("runtime", &"wasmtime").finish()
@@ -697,33 +434,6 @@ impl Instance {
         ctx.stderr.take().await;
     }
 
-    /// Set [`Bus`] handler for this [Instance].
-    pub fn bus(&mut self, bus: Arc<dyn Bus + Send + Sync>) -> &mut Self {
-        self.handler_mut().replace_bus(bus);
-        self
-    }
-
-    /// Set [`IncomingHttp`] handler for this [Instance].
-    pub fn incoming_http(
-        &mut self,
-        incoming_http: Arc<dyn IncomingHttp + Send + Sync>,
-    ) -> &mut Self {
-        self.handler_mut().replace_incoming_http(incoming_http);
-        self
-    }
-
-    /// Set [`Logging`] handler for this [Instance].
-    pub fn logging(&mut self, logging: Arc<dyn Logging + Send + Sync>) -> &mut Self {
-        self.handler_mut().replace_logging(logging);
-        self
-    }
-
-    /// Set [`Messaging`] handler for this [Instance].
-    pub fn messaging(&mut self, messaging: Arc<dyn Messaging + Send + Sync>) -> &mut Self {
-        self.handler_mut().replace_messaging(messaging);
-        self
-    }
-
     /// Set actor stderr stream. If another stderr was set, it is replaced and the old one is flushed and shut down.
     ///
     /// # Errors
@@ -785,63 +495,6 @@ impl Instance {
         Ok(GuestInstance {
             store: Arc::new(Mutex::new(self.store)),
             bindings: Arc::new(bindings),
-        })
-    }
-
-    /// Instantiates and returns a [`InterfaceInstance<incoming_http_bindings::IncomingHttp>`] if exported by the [`Instance`].
-    ///
-    /// # Errors
-    ///
-    /// Fails if incoming HTTP bindings are not exported by the [`Instance`]
-    pub async fn into_incoming_http(
-        mut self,
-    ) -> anyhow::Result<InterfaceInstance<incoming_http_bindings::IncomingHttp>> {
-        let bindings = if let Ok((bindings, _)) =
-            incoming_http_bindings::IncomingHttp::instantiate_async(
-                &mut self.store,
-                &self.component,
-                &self.linker,
-            )
-            .await
-        {
-            InterfaceBindings::Interface(bindings)
-        } else {
-            self.as_guest_bindings()
-                .await
-                .map(InterfaceBindings::Guest)
-                .context("failed to instantiate `wasi:http/incoming-handler` interface")?
-        };
-        Ok(InterfaceInstance {
-            store: Mutex::new(self.store),
-            bindings,
-        })
-    }
-
-    /// Instantiates and returns an [`InterfaceInstance<logging_bindings::Logging>`] if exported by the [`Instance`].
-    ///
-    /// # Errors
-    ///
-    /// Fails if logging bindings are not exported by the [`Instance`]
-    pub async fn into_logging(
-        mut self,
-    ) -> anyhow::Result<InterfaceInstance<logging_bindings::Logging>> {
-        let bindings = if let Ok((bindings, _)) = logging_bindings::Logging::instantiate_async(
-            &mut self.store,
-            &self.component,
-            &self.linker,
-        )
-        .await
-        {
-            InterfaceBindings::Interface(bindings)
-        } else {
-            self.as_guest_bindings()
-                .await
-                .map(InterfaceBindings::Guest)
-                .context("failed to instantiate `wasi:logging/logging` interface")?
-        };
-        Ok(InterfaceInstance {
-            store: Mutex::new(self.store),
-            bindings,
         })
     }
 }
@@ -938,87 +591,4 @@ enum InterfaceBindings<T> {
 pub struct InterfaceInstance<T> {
     store: Mutex<wasmtime::Store<Ctx>>,
     bindings: InterfaceBindings<T>,
-}
-
-#[async_trait]
-impl Logging for InterfaceInstance<logging_bindings::Logging> {
-    #[instrument(skip(self))]
-    async fn log(
-        &self,
-        level: logging::Level,
-        context: String,
-        message: String,
-    ) -> anyhow::Result<()> {
-        let mut store = self.store.lock().await;
-        match &self.bindings {
-            InterfaceBindings::Guest(guest) => {
-                let level = match level {
-                    logging::Level::Trace => "trace",
-                    logging::Level::Debug => "debug",
-                    logging::Level::Info => "info",
-                    logging::Level::Warn => "warn",
-                    logging::Level::Error => "error",
-                    logging::Level::Critical => "critical",
-                };
-                let request = serde_json::to_vec(&json!({
-                    "level": level,
-                    "context": context,
-                    "message": message,
-                }))
-                .context("failed to encode request")?;
-                guest
-                    .call(
-                        &mut store,
-                        "wasi:logging/logging.log",
-                        Cursor::new(request),
-                        sink(),
-                    )
-                    .await
-                    .context("failed to call actor")?
-                    .map_err(|e| anyhow!(e))
-            }
-            InterfaceBindings::Interface(bindings) => {
-                // NOTE: It appears that unifying the `Level` type is not possible currently
-                use logging_bindings::exports::wasi::logging::logging::Level;
-                let level = match level {
-                    logging::Level::Trace => Level::Trace,
-                    logging::Level::Debug => Level::Debug,
-                    logging::Level::Info => Level::Info,
-                    logging::Level::Warn => Level::Warn,
-                    logging::Level::Error => Level::Error,
-                    logging::Level::Critical => Level::Critical,
-                };
-                trace!("call `wasi:logging/logging.log`");
-                bindings
-                    .wasi_logging_logging()
-                    .call_log(&mut *store, level, &context, &message)
-                    .await
-            }
-        }
-    }
-}
-
-#[async_trait]
-impl IncomingHttp for InterfaceInstance<incoming_http_bindings::IncomingHttp> {
-    #[allow(unused)] // TODO: Remove
-    #[instrument(skip_all)]
-    async fn handle(
-        &self,
-        request: http::Request<Box<dyn AsyncRead + Sync + Send + Unpin>>,
-    ) -> anyhow::Result<http::Response<Box<dyn AsyncRead + Sync + Send + Unpin>>> {
-        let (
-            http::request::Parts {
-                method,
-                uri,
-                headers,
-                ..
-            },
-            body,
-        ) = request.into_parts();
-        let path_with_query = uri.path_and_query().map(http::uri::PathAndQuery::as_str);
-        let scheme = uri.scheme_str();
-        let authority = uri.authority().map(http::uri::Authority::as_str);
-        let mut store = self.store.lock().await;
-        bail!("unsupported"); // TODO: Support
-    }
 }
