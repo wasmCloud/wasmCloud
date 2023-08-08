@@ -33,7 +33,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-//pub(crate) type NTLS = native_tls::TlsConnector;
 pub(crate) type PgConnection = bb8_postgres::PostgresConnectionManager<NoTls>;
 pub(crate) type Pool = bb8_postgres::bb8::Pool<PgConnection>;
 

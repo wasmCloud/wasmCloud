@@ -53,7 +53,7 @@ jobs:
         working-directory: ${{ env.working-directory }}
 
   build_artifact:
-    # if: startswith(github.ref, 'refs/tags/') # Only run on tag push
+    if: startswith(github.ref, 'refs/tags/') # Only run on tag push
     strategy:
       fail-fast: false
       matrix:
