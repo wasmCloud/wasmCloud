@@ -1,0 +1,19 @@
+[package]
+name = "wasmcloud-provider-kvredis"
+version = "0.21.2"
+
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+base64 = { workspace = true }
+redis = { workspace = true, features = ["tokio-comp", "aio", "connection-manager", "rustls"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tracing = { workspace = true }
+wasmbus-rpc = { workspace = true, features = ["otel"] }
