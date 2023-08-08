@@ -3250,7 +3250,7 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-provider-httpserver"
-version = "0.19.0"
+version = "0.19.1"
 dependencies = [
  "assert_matches",
  "async-trait",

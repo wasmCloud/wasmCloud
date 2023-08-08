@@ -3,7 +3,7 @@ name = "wasmcloud-provider-httpserver"
 description = "Http server for wasmcloud, using warp. This package provides a library, and a capability provider with the 'wasmcloud:httpserver' contract."
 license = "Apache-2.0"
 authors = ["wasmCloud Team"]
-version = "0.19.0"
+version = "0.19.1"
 edition = "2021"
 
 [dependencies]
