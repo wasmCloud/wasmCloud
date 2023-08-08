@@ -22,7 +22,7 @@ jobs:
   rust_check:
     runs-on: ubuntu-20.04
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       # If your integration tests require nats or redis, run them here
       - id: run-nats
         uses: wasmcloud/common-actions/run-nats@main
@@ -32,7 +32,7 @@ jobs:
           working-directory: ${{ env.working-directory }}
 
   build_artifact:
-    # if: startswith(github.ref, 'refs/tags/') # Only run on tag push
+    if: startswith(github.ref, 'refs/tags/') # Only run on tag push
     strategy:
       fail-fast: false
       matrix:
@@ -147,7 +147,7 @@ jobs:
     needs: [rust_check, build_artifact]
     runs-on: ubuntu-20.04
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - uses: wasmcloud/common-actions/install-wash@main
       # Downloads all artifacts
       - uses: actions/download-artifact@v3
@@ -204,7 +204,7 @@ jobs:
     if: startswith(github.ref, 'refs/tags/') # Only run on tag push
     runs-on: ubuntu-20.04
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - name: Download provider archive
         uses: actions/download-artifact@v3
         with:
