@@ -1,16 +1,17 @@
-use std::{borrow::Cow, string::ToString};
+use std::string::ToString;
 
 use serde::{Deserialize, Serialize};
 use wasmcloud_provider_sdk::{
-    Context, Message, MessageDispatch, Transport,
-    error::{InvocationError, InvocationResult},
+    core::{LinkDefinition, WasmCloudEntity},
+    error::ProviderInvocationError,
 };
-#[allow(dead_code)]
-pub const SMITHY_VERSION: &str = "1.0";
+
 /// map data structure for holding http headers
 ///
 pub type HeaderMap = std::collections::HashMap<String, HeaderValues>;
 pub type HeaderValues = Vec<String>;
+
+const HANDLE_REQUEST_METHOD: &str = "HttpServer.HandleRequest";
 
 /// HttpRequest contains data sent to actor about the http request
 #[derive(Serialize, Deserialize, Debug)]
@@ -49,168 +50,51 @@ pub struct HttpResponse {
     pub body: Vec<u8>,
 }
 
-/// HttpServer is the contract to be implemented by actor
-/// wasmbus.contractId: wasmcloud:httpserver
-/// wasmbus.actorReceive
-pub trait HttpServer {
-    /// returns the capability contract id for this interface
-    fn contract_id() -> &'static str {
-        "wasmcloud:httpserver"
-    }
-    #[must_use]
-    #[allow(clippy::type_complexity, clippy::type_repetition_in_bounds)]
-    fn handle_request<'life0, 'life1, 'life2, 'async_trait>(
-        &'life0 self,
-        ctx: &'life1 Context,
-        arg: &'life2 HttpRequest,
-    ) -> ::core::pin::Pin<
-        Box<
-            dyn ::core::future::Future<Output = InvocationResult<HttpResponse>>
-                + ::core::marker::Send
-                + 'async_trait,
-        >,
-    >
-    where
-        'life0: 'async_trait,
-        'life1: 'async_trait,
-        'life2: 'async_trait,
-        Self: 'async_trait;
+pub struct HttpServer<'a> {
+    ld: &'a LinkDefinition,
+    timeout: Option<std::time::Duration>,
 }
-/// HttpServerReceiver receives messages defined in the HttpServer service trait
-/// HttpServer is the contract to be implemented by actor
-#[doc(hidden)]
-pub trait HttpServerReceiver: MessageDispatch + HttpServer {
-    #[must_use]
-    #[allow(
-        clippy::async_yields_async,
-        clippy::let_unit_value,
-        clippy::no_effect_underscore_binding,
-        clippy::shadow_same,
-        clippy::type_complexity,
-        clippy::type_repetition_in_bounds,
-        clippy::used_underscore_binding
-    )]
-    fn dispatch<'life0, 'life1, 'life2, 'async_trait>(
-        &'life0 self,
-        ctx: &'life1 Context,
-        message: Message<'life2>,
-    ) -> ::core::pin::Pin<
-        Box<
-            dyn ::core::future::Future<Output = Result<Vec<u8>, InvocationError>>
-                + ::core::marker::Send
-                + 'async_trait,
-        >,
-    >
-    where
-        'life0: 'async_trait,
-        'life1: 'async_trait,
-        'life2: 'async_trait,
-        Self: ::core::marker::Sync + 'async_trait,
-    {
-        Box::pin(async move {
-            if let Some(__ret) = None::<Result<Vec<u8>, InvocationError>> {
-                return __ret;
-            }
-            let __self = self;
-            let message = message;
-            let __ret: Result<Vec<u8>, InvocationError> = {
-                match message.method {
-                    "HandleRequest" => {
-                        let value: HttpRequest =
-                            wasmcloud_provider_sdk::deserialize(&message.arg)
-                                .map_err(|e| InvocationError::Deser(format!("'HttpRequest': {e}")))?;
-                        let resp = HttpServer::handle_request(__self, ctx, &value).await?;
-                        let buf = wasmcloud_provider_sdk::serialize(&resp)?;
-                        Ok(buf)
-                    }
-                    _ => Err(InvocationError::MethodNotHandled(format!(
-                        "HttpServer::{}",
-                        message.method
-                    ))),
-                }
-            };
-            #[allow(unreachable_code)]
-            __ret
-        })
+
+impl<'a> HttpServer<'a> {
+    pub fn new(ld: &'a LinkDefinition, timeout: Option<std::time::Duration>) -> Self {
+        Self { ld, timeout }
     }
-}
-/// HttpServerSender sends messages to a HttpServer service
-/// HttpServer is the contract to be implemented by actor
-/// client for sending HttpServer messages
-pub struct HttpServerSender<T: Transport> {
-    transport: T,
-}
-impl<T: Transport> HttpServerSender<T> {
-    /// Constructs a HttpServerSender with the specified transport
-    pub fn via(transport: T) -> Self {
-        Self { transport }
-    }
-    pub fn set_timeout(&self, interval: std::time::Duration) {
-        self.transport.set_timeout(interval);
-    }
-}
-#[cfg(not(target_arch = "wasm32"))]
-impl<'send> HttpServerSender<wasmcloud_provider_sdk::provider::ProviderTransport<'send>> {
-    /// Constructs a Sender using an actor's LinkDefinition,
-    /// Uses the provider's HostBridge for rpc
-    pub fn for_actor(ld: &'send wasmcloud_provider_sdk::core::LinkDefinition) -> Self {
-        Self {
-            transport: wasmcloud_provider_sdk::provider::ProviderTransport::new(ld, None),
+
+    pub async fn handle_request(
+        &self,
+        req: HttpRequest,
+    ) -> Result<HttpResponse, ProviderInvocationError> {
+        let connection = wasmcloud_provider_sdk::provider_main::get_connection();
+
+        let client = connection.get_rpc_client();
+        let origin = WasmCloudEntity {
+            public_key: self.ld.provider_id.clone(),
+            link_name: self.ld.link_name.clone(),
+            contract_id: "wasmcloud:httpserver".to_string(),
+        };
+        let target = WasmCloudEntity {
+            public_key: self.ld.actor_id.clone(),
+            ..Default::default()
+        };
+
+        let data = wasmcloud_provider_sdk::serialize(&req)?;
+
+        let response = if let Some(timeout) = self.timeout {
+            client
+                .send_timeout(origin, target, HANDLE_REQUEST_METHOD, data, timeout)
+                .await?
+        } else {
+            client
+                .send(origin, target, HANDLE_REQUEST_METHOD, data)
+                .await?
+        };
+
+        if let Some(e) = response.error {
+            return Err(ProviderInvocationError::Provider(e));
         }
-    }
-}
-impl<T: Transport + std::marker::Sync + std::marker::Send> HttpServer for HttpServerSender<T> {
-    #[allow(unused)]
-    #[allow(
-        clippy::async_yields_async,
-        clippy::let_unit_value,
-        clippy::no_effect_underscore_binding,
-        clippy::shadow_same,
-        clippy::type_complexity,
-        clippy::type_repetition_in_bounds,
-        clippy::used_underscore_binding
-    )]
-    fn handle_request<'life0, 'life1, 'life2, 'async_trait>(
-        &'life0 self,
-        ctx: &'life1 Context,
-        arg: &'life2 HttpRequest,
-    ) -> ::core::pin::Pin<
-        Box<
-            dyn ::core::future::Future<Output = InvocationResult<HttpResponse>>
-                + ::core::marker::Send
-                + 'async_trait,
-        >,
-    >
-    where
-        'life0: 'async_trait,
-        'life1: 'async_trait,
-        'life2: 'async_trait,
-        Self: 'async_trait,
-    {
-        Box::pin(async move {
-            if let Some(__ret) = None::<InvocationResult<HttpResponse>> {
-                return __ret;
-            }
-            let __self = self;
-            let __ret: InvocationResult<HttpResponse> = {
-                let buf = wasmcloud_provider_sdk::serialize(arg)?;
-                let resp = __self
-                    .transport
-                    .send(
-                        ctx,
-                        Message {
-                            method: "HttpServer.HandleRequest",
-                            arg: Cow::Borrowed(&buf),
-                        },
-                        None,
-                    )
-                    .await?;
-                let value: HttpResponse = wasmcloud_provider_sdk::deserialize(&resp)
-                    .map_err(|e| InvocationError::Deser(format!("'{e}': HttpResponse")))?;
-                Ok(value)
-            };
-            #[allow(unreachable_code)]
-            __ret
-        })
+
+        let response: HttpResponse = wasmcloud_provider_sdk::deserialize(&response.msg)?;
+
+        Ok(response)
     }
 }

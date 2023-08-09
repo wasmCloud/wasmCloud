@@ -222,7 +222,7 @@ impl ServiceSettings {
 /// If more than one key is provided, they are processed in the order above.
 ///   (later names override earlier names in the list)
 ///
-pub fn load_settings(values: &HashMap<String, String>) -> Result<ServiceSettings, Error> {
+pub fn load_settings(values: &[(String, String)]) -> Result<ServiceSettings, Error> {
     // Allow keys to be UPPERCASE, as an accommodation
     // for the lost souls who prefer ugly all-caps variable names.
     let values: HashMap<String, &String> = crate::make_case_insensitive(values).ok_or_else(|| Error::InvalidParameter(
