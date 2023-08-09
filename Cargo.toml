@@ -21,10 +21,25 @@ status = "actively-developed"
 
 [dependencies]
 anyhow = { workspace = true }
-clap = { workspace = true, features = ["color", "derive", "env", "error-context", "help", "std", "suggestions", "usage"] }
+clap = { workspace = true, features = [
+    "color",
+    "derive",
+    "env",
+    "error-context",
+    "help",
+    "std",
+    "suggestions",
+    "usage",
+] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
 tracing = { workspace = true, features = ["release_max_level_info"] }
-tracing-subscriber = { workspace = true, features = ["ansi", "env-filter", "fmt", "json", "std"] }
+tracing-subscriber = { workspace = true, features = [
+    "ansi",
+    "env-filter",
+    "fmt",
+    "json",
+    "std",
+] }
 wasmcloud-host = { workspace = true }
 
 [dev-dependencies]
@@ -47,10 +62,7 @@ wascap = { workspace = true }
 wasmcloud-control-interface = { workspace = true }
 
 [workspace]
-members = [
-    "crates/provider-sdk",
-    "examples/rust/*"
-]
+members = ["crates/provider-sdk", "examples/rust/*"]
 
 [workspace.dependencies]
 anyhow = { version = "1", default-features = false }
@@ -72,7 +84,9 @@ names = { version = "0.14", default-features = false }
 nkeys = { version = "0.3", default-features = false }
 oci-distribution = { version = "0.9", default-features = false }
 once_cell = { version = "1", default-features = false }
-opentelemetry = { version = "0.19", default-features = false }
+# This is currently pinned to an older version. See
+# https://github.com/wasmCloud/wasmCloud/issues/453 for more information
+opentelemetry = { version = "0.17", default-features = false }
 opentelemetry-otlp = { version = "0.10", default-features = false }
 provider-archive = { version = "0.7", default-features = false }
 quote = { version = "1", default-features = false }
@@ -96,7 +110,9 @@ tokio-util = { version = "0.7", default-features = false }
 toml = { version = "0.7", default-features = false }
 tracing = { version = "0.1", default-features = false }
 tracing-futures = { version = "0.2", default-features = false }
-tracing-opentelemetry = { version = "0.19", default-features = false }
+# This is currently pinned to an older version. See
+# https://github.com/wasmCloud/wasmCloud/issues/453 for more information
+tracing-opentelemetry = { version = "0.17", default-features = false }
 tracing-subscriber = { version = "0.3", default-features = false }
 ulid = { version = "1", default-features = false }
 url = { version = "2", default-features = false }

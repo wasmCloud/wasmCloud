@@ -103,16 +103,44 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bddcadddf5e9015d310179a59bb28c4d4b9920ad0f11e8e14dbadf654890c9a6"
 
 [[package]]
-name = "ascii_tree"
-version = "0.1.1"
+name = "async-nats"
+version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca6c635b3aa665c649ad1415f1573c85957dfa47690ec27aebe7ec17efe3c643"
+checksum = "1174495e436c928905018f10a36160f7a8a6786450f50f4ce7fba05d1539704c"
+dependencies = [
+ "async-nats-tokio-rustls-deps",
+ "base64 0.13.1",
+ "base64-url",
+ "bytes",
+ "futures",
+ "http",
+ "itoa",
+ "memchr",
+ "nkeys 0.2.0",
+ "nuid 0.3.2",
+ "once_cell",
+ "rand",
+ "regex",
+ "ring",
+ "rustls-native-certs",
+ "rustls-pemfile",
+ "serde",
+ "serde_json",
+ "serde_nanos",
+ "serde_repr",
+ "thiserror",
+ "time",
+ "tokio",
+ "tokio-retry",
+ "tracing",
+ "url",
+]
 
 [[package]]
 name = "async-nats"
-version = "0.30.0"
+version = "0.31.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "94e3e851ddf3b62be8a8085e1e453968df9cdbf990a37bbb589b5b4f587c68d7"
+checksum = "8257238e2a3629ee5618502a75d1b91f8017c24638c75349fc8d2d80cf1f7c4c"
 dependencies = [
  "base64 0.21.2",
  "bytes",
@@ -120,7 +148,7 @@ dependencies = [
  "http",
  "itoa",
  "memchr",
- "nkeys",
+ "nkeys 0.3.1",
  "nuid 0.3.2",
  "once_cell",
  "rand",
@@ -229,6 +257,15 @@ name = "base64"
 version = "0.21.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "604178f6c5c21f02dc555784810edfb88d34ac2c73b2eae109655649ee73ce3d"
+
+[[package]]
+name = "base64-url"
+version = "1.4.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "67a99c239d0c7e77c85dddfa9cebce48704b3c49550fcd3b84dd637e4484899f"
+dependencies = [
+ "base64 0.13.1",
+]
 
 [[package]]
 name = "base64ct"
@@ -366,7 +403,7 @@ dependencies = [
  "memchr",
  "pin-project-lite",
  "tokio",
- "tokio-util 0.7.8",
+ "tokio-util",
 ]
 
 [[package]]
@@ -542,6 +579,19 @@ dependencies = [
 
 [[package]]
 name = "env_logger"
+version = "0.8.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a19187fea3ac7e84da7dacf48de0c45d63c6a76f9490dae389aead16c243fce3"
+dependencies = [
+ "atty",
+ "humantime",
+ "log",
+ "regex",
+ "termcolor",
+]
+
+[[package]]
+name = "env_logger"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "85cdab6a89accf66733ad5a1693a4dcced6aeff64602b634530dd73c1f3ee9f0"
@@ -627,6 +677,7 @@ checksum = "23342abe12aba583913b2e62f22225ff9c950774065e4bfb61a19cd9770fec40"
 dependencies = [
  "futures-channel",
  "futures-core",
+ "futures-executor",
  "futures-io",
  "futures-sink",
  "futures-task",
@@ -1074,6 +1125,21 @@ checksum = "e5ce46fe64a9d73be07dcbe690a38ce1b293be448fd8ce1e6c1b8062c9f72c6a"
 
 [[package]]
 name = "nkeys"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0e66a7cd1358277b2a6f77078e70aea7315ff2f20db969cc61153103ec162594"
+dependencies = [
+ "byteorder 1.4.3",
+ "data-encoding",
+ "ed25519-dalek",
+ "getrandom",
+ "log",
+ "rand",
+ "signatory",
+]
+
+[[package]]
+name = "nkeys"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3e9261eb915c785ea65708bc45ef43507ea46914e1a73f1412d1a38aba967c8e"
@@ -1205,6 +1271,12 @@ dependencies = [
  "reqwest",
  "thiserror",
 ]
+
+[[package]]
+name = "parity-wasm"
+version = "0.42.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "be5e13c266502aadf83426d87d81a0f5d1ef45b8027f5a471c360abfe4bfae92"
 
 [[package]]
 name = "parking_lot"
@@ -1492,7 +1564,7 @@ dependencies = [
  "ryu",
  "tokio",
  "tokio-retry",
- "tokio-util 0.7.8",
+ "tokio-util",
  "url",
 ]
 
@@ -2435,17 +2507,38 @@ dependencies = [
 
 [[package]]
 name = "wascap"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32d1cfad67501627ac9344cbd89be80d2d5ebc98ef3b86862041cb26a280081f"
+dependencies = [
+ "base64 0.13.1",
+ "data-encoding",
+ "env_logger 0.8.4",
+ "humantime",
+ "lazy_static",
+ "log",
+ "nkeys 0.2.0",
+ "nuid 0.3.2",
+ "parity-wasm",
+ "ring",
+ "serde",
+ "serde_derive",
+ "serde_json",
+]
+
+[[package]]
+name = "wascap"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c38c03de923f80027cb62281f520bd97245a38eeb85a53f435a110509d044551"
 dependencies = [
  "base64 0.13.1",
  "data-encoding",
- "env_logger",
+ "env_logger 0.10.0",
  "humantime",
  "lazy_static",
  "log",
- "nkeys",
+ "nkeys 0.3.1",
  "nuid 0.4.1",
  "ring",
  "serde",
@@ -2570,17 +2663,50 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasmcloud-provider-kvredis"
+version = "0.21.2"
+dependencies = [
+ "async-trait",
+ "base64 0.21.2",
+ "redis",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "wasmcloud-provider-sdk",
+]
+
+[[package]]
+name = "wasmcloud-provider-nats"
+version = "0.17.3"
+dependencies = [
+ "anyhow",
+ "async-nats 0.29.0",
+ "async-trait",
+ "base64 0.21.2",
+ "bytes",
+ "futures",
+ "serde",
+ "serde_bytes",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-futures",
+ "wascap 0.8.0",
+ "wasmcloud-provider-sdk",
+]
+
+[[package]]
 name = "wasmcloud-provider-sdk"
 version = "0.1.0"
 dependencies = [
- "async-nats",
+ "async-nats 0.31.0",
  "async-trait",
- "atty",
  "base64 0.21.2",
  "data-encoding",
  "futures",
  "lazy_static",
- "nkeys",
+ "nkeys 0.3.1",
  "once_cell",
  "opentelemetry",
  "opentelemetry-otlp",
@@ -2596,7 +2722,7 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-subscriber",
  "uuid",
- "wascap",
+ "wascap 0.11.0",
 ]
 
 [[package]]
@@ -2607,40 +2733,6 @@ checksum = "29e3ac9b780c7dda0cac7a52a5d6d2d6707cc6e3451c9db209b6c758f40d7acb"
 dependencies = [
  "indexmap 1.9.3",
  "semver",
-]
-
-[[package]]
-name = "wasmcloud-provider-kvredis"
-version = "0.21.2"
-dependencies = [
- "async-trait",
- "base64 0.21.2",
- "redis",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "wasmbus-rpc",
-]
-
-[[package]]
-name = "wasmcloud-provider-nats"
-version = "0.17.3"
-dependencies = [
- "anyhow",
- "async-nats",
- "async-trait",
- "base64 0.21.2",
- "bytes",
- "futures",
- "serde",
- "serde_bytes",
- "serde_json",
- "tokio",
- "tracing",
- "tracing-futures",
- "wascap",
- "wasmbus-rpc",
 ]
 
 [[package]]

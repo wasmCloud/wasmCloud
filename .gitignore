@@ -17,3 +17,6 @@ target/
 *.par.gz
 
 .direnv
+
+# Ignore vscode config
+.vscode/

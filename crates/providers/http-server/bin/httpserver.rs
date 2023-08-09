@@ -1,21 +1,22 @@
 //! Http Server implementation for wasmcloud:httpserver
 //!
 //!
-use std::{convert::Infallible, sync::Arc};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use tracing::{error, instrument, trace, warn};
+use wasmcloud_provider_httpserver::{load_settings, HttpServerCore, Request, Response, Server};
 use wasmcloud_provider_sdk::{
-    core::LinkDefinition, error::InvocationError, provider::prelude::*, provider::ProviderTransport,
-};
-use wasmcloud_provider_httpserver::{
-    load_settings, HttpServerCore, Request, Response, Server, ServerSender,
+    core::LinkDefinition,
+    error::{InvocationError, ProviderInvocationError},
+    provider_main::start_provider,
+    ProviderHandler,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // handle lattice control messages and forward rpc to the provider dispatch
     // returns when provider receives a shutdown control message
-    provider_main(
+    start_provider(
         HttpServerProvider::default(),
         Some("HttpServer Provider".to_string()),
     )?;
@@ -25,13 +26,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// HttpServer provider implementation.
-#[derive(Clone, Default, Provider)]
+#[derive(Clone, Default)]
 struct HttpServerProvider {
     // map to store http server (and its link parameters) for each linked actor
     actors: Arc<dashmap::DashMap<String, HttpServerCore>>,
 }
-
-impl ProviderDispatch for HttpServerProvider {}
 
 /// Your provider can handle any of these methods
 /// to receive notification of new actor links, deleted links,
@@ -42,26 +41,25 @@ impl ProviderHandler for HttpServerProvider {
     /// Provider should perform any operations needed for a new link,
     /// including setting up per-actor resources, and checking authorization.
     /// If the link is allowed, return true, otherwise return false to deny the link.
-    async fn put_link(&self, ld: &LinkDefinition) -> Result<bool, InvocationError> {
-        let settings =
-            load_settings(&ld.values).map_err(|e| InvocationError::ProviderInit(e.to_string()))?;
+    async fn put_link(&self, ld: &LinkDefinition) -> bool {
+        let settings = match load_settings(&ld.values) {
+            Ok(s) => s,
+            Err(e) => {
+                error!(%e, ?ld, "httpserver failed to load settings for actor");
+                return false;
+            }
+        };
 
-        let http_server = HttpServerCore::new(
-            settings.clone(),
-            get_host_bridge().lattice_prefix().to_string(),
-            call_actor,
-        );
+        let http_server = HttpServerCore::new(settings.clone(), call_actor);
 
-        http_server.start(ld).await.map_err(|e| {
-            InvocationError::ProviderInit(format!(
-                "starting httpserver for {} {:?}: {}",
-                &ld.actor_id, &settings.address, e
-            ))
-        })?;
+        if let Err(e) = http_server.start(ld).await {
+            error!(%e, ?ld, "httpserver failed to start listener for actor");
+            return false;
+        }
 
         self.actors.insert(ld.actor_id.to_string(), http_server);
 
-        Ok(true)
+        true
     }
 
     /// Handle notification that a link is dropped - stop the http listener
@@ -73,28 +71,38 @@ impl ProviderHandler for HttpServerProvider {
     }
 
     /// Handle shutdown request by shutting down all the http server threads
-    async fn shutdown(&self) -> Result<(), Infallible> {
+    async fn shutdown(&self) {
         // empty the actor link data and stop all servers
         self.actors.clear();
-        Ok(())
     }
 }
 
+#[async_trait]
+impl wasmcloud_provider_sdk::MessageDispatch for HttpServerProvider {
+    async fn dispatch<'a>(
+        &'a self,
+        _: ::wasmcloud_provider_sdk::Context,
+        _: String,
+        _: std::borrow::Cow<'a, [u8]>,
+    ) -> Result<Vec<u8>, ::wasmcloud_provider_sdk::error::ProviderInvocationError> {
+        Ok(Vec::with_capacity(0))
+    }
+}
+
+impl wasmcloud_provider_sdk::Provider for HttpServerProvider {}
+
 /// forward Request to actor.
-#[instrument(level = "debug", skip(_lattice_id, ld, req, timeout), fields(actor_id = %ld.actor_id))]
+#[instrument(level = "debug", skip_all, fields(actor_id = %ld.actor_id))]
 async fn call_actor(
-    _lattice_id: String,
     ld: Arc<LinkDefinition>,
     req: Request,
     timeout: Option<std::time::Duration>,
-) -> Result<Response, InvocationError> {
-    let tx = ProviderTransport::new_with_timeout(ld.as_ref(), Some(get_host_bridge()), timeout);
-    let ctx = Context::default();
-    let actor = ServerSender::via(tx);
+) -> Result<Response, ProviderInvocationError> {
+    let sender = Server::new(&ld, timeout);
 
-    let rc = actor.handle_request(&ctx, &req).await;
+    let rc = sender.handle_request(req).await;
     match rc {
-        Err(InvocationError::Timeout(_)) => {
+        Err(ProviderInvocationError::Invocation(InvocationError::Timeout)) => {
             error!("actor request timed out: returning 503",);
             Ok(Response {
                 status_code: 503,
