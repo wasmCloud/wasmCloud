@@ -140,8 +140,6 @@ async fn wasmbus() -> anyhow::Result<()> {
     .await
     .context("failed to connect to NATS")?;
     let client = ClientBuilder::new(nats_client.clone())
-        // TODO: Remove rpc_timeout in https://github.com/wasmCloud/wasmCloud/issues/367
-        .rpc_timeout(Duration::from_secs(20))
         .build()
         .await
         .map_err(|e| anyhow!(e).context("failed to build client"))?;

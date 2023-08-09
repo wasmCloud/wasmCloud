@@ -1343,20 +1343,15 @@ impl Host {
         Ok(SUCCESS.into())
     }
 
-    #[instrument(skip(self, payload))]
-    async fn handle_launch_actor(
+    #[instrument(skip(self))]
+    async fn handle_launch_actor_task(
         &self,
-        payload: impl AsRef<[u8]>,
+        actor_ref: String,
+        annotations: Option<HashMap<String, String>>,
+        count: u16,
         host_id: &str,
-    ) -> anyhow::Result<Bytes> {
-        let StartActorCommand {
-            actor_ref,
-            annotations,
-            count,
-            ..
-        } = serde_json::from_slice(payload.as_ref())
-            .context("failed to deserialize actor launch command")?;
-        debug!(actor_ref, ?count, ?annotations, "launch actor");
+    ) -> anyhow::Result<()> {
+        debug!("launch actor");
 
         let actor = fetch_actor(&actor_ref)
             .await
@@ -1373,13 +1368,28 @@ impl Host {
                 event::actors_started(claims, &annotations, host_id, 0usize, actor_ref),
             )
             .await?;
-            return Ok(SUCCESS.into())
+            return Ok(())
         };
 
         match self.actors.write().await.entry(claims.subject.clone()) {
             hash_map::Entry::Vacant(entry) => {
-                self.start_actor(entry, actor, actor_ref, count, host_id, annotations)
+                if let Err(err) = self
+                    .start_actor(
+                        entry,
+                        actor.clone(),
+                        actor_ref.clone(),
+                        count,
+                        host_id,
+                        annotations.clone(),
+                    )
+                    .await
+                {
+                    self.publish_event(
+                        "actors_start_failed",
+                        event::actors_start_failed(claims, &annotations, host_id, actor_ref, &err),
+                    )
                     .await?;
+                }
             }
             hash_map::Entry::Occupied(entry) => {
                 let actor = entry.get();
@@ -1400,6 +1410,40 @@ impl Host {
                 instances.entry(annotations).or_default().append(&mut delta);
             }
         }
+        Ok(())
+    }
+
+    #[instrument(skip(self, payload))]
+    async fn handle_launch_actor(
+        self: Arc<Self>,
+        payload: impl AsRef<[u8]>,
+        host_id: &str,
+    ) -> anyhow::Result<Bytes> {
+        let StartActorCommand {
+            actor_ref,
+            annotations,
+            count,
+            ..
+        } = serde_json::from_slice(payload.as_ref())
+            .context("failed to deserialize actor launch command")?;
+
+        let host_id = host_id.to_string();
+        spawn(async move {
+            if let Err(err) = self
+                .handle_launch_actor_task(actor_ref.clone(), annotations, count, &host_id)
+                .await
+            {
+                if let Err(err) = self
+                    .publish_event(
+                        "actor_start_failed",
+                        event::actor_start_failed(actor_ref, &err),
+                    )
+                    .await
+                {
+                    error!("{err:#}");
+                }
+            }
+        });
         Ok(SUCCESS.into())
     }
 
@@ -1532,30 +1576,18 @@ impl Host {
         Ok(SUCCESS.into())
     }
 
-    #[instrument(skip(self, payload))]
-    async fn handle_launch_provider(
+    #[instrument(skip(self))]
+    async fn handle_launch_provider_task(
         &self,
-        payload: impl AsRef<[u8]>,
+        configuration: Option<String>,
+        link_name: &str,
+        provider_ref: &str,
+        annotations: Option<HashMap<String, String>>,
         host_id: &str,
-    ) -> anyhow::Result<Bytes> {
-        let StartProviderCommand {
-            configuration,
-            link_name,
-            provider_ref,
-            annotations,
-            ..
-        } = serde_json::from_slice(payload.as_ref())
-            .context("failed to deserialize provider launch command")?;
+    ) -> anyhow::Result<()> {
+        debug!("launch provider");
 
-        debug!(
-            configuration,
-            link_name,
-            provider_ref,
-            ?annotations,
-            "launch provider"
-        );
-
-        let (path, claims) = crate::fetch_provider(&provider_ref, &link_name)
+        let (path, claims) = crate::fetch_provider(provider_ref, link_name)
             .await
             .context("failed to fetch provider")?;
 
@@ -1564,10 +1596,10 @@ impl Host {
         let Provider { instances, .. } =
             providers.entry(claims.subject.clone()).or_insert(Provider {
                 claims: claims.clone(),
-                image_ref: provider_ref.clone(),
+                image_ref: provider_ref.into(),
                 instances: HashMap::default(),
             });
-        if let hash_map::Entry::Vacant(entry) = instances.entry(link_name.clone()) {
+        if let hash_map::Entry::Vacant(entry) = instances.entry(link_name.into()) {
             let id = Ulid::new();
             let async_nats::ServerInfo { host, port, .. } = self.nats.server_info();
             let invocation_seed = self
@@ -1652,6 +1684,46 @@ impl Host {
         } else {
             bail!("provider is already running")
         }
+        Ok(())
+    }
+
+    #[instrument(skip(self, payload))]
+    async fn handle_launch_provider(
+        self: Arc<Self>,
+        payload: impl AsRef<[u8]>,
+        host_id: &str,
+    ) -> anyhow::Result<Bytes> {
+        let StartProviderCommand {
+            configuration,
+            link_name,
+            provider_ref,
+            annotations,
+            ..
+        } = serde_json::from_slice(payload.as_ref())
+            .context("failed to deserialize provider launch command")?;
+        let host_id = host_id.to_string();
+        spawn(async move {
+            if let Err(err) = self
+                .handle_launch_provider_task(
+                    configuration,
+                    &link_name,
+                    &provider_ref,
+                    annotations,
+                    &host_id,
+                )
+                .await
+            {
+                if let Err(err) = self
+                    .publish_event(
+                        "provider_start_failed",
+                        event::provider_start_failed(provider_ref, link_name, &err),
+                    )
+                    .await
+                {
+                    error!("{err:#}");
+                }
+            }
+        });
         Ok(SUCCESS.into())
     }
 
@@ -1905,7 +1977,7 @@ impl Host {
 
     #[instrument(skip(self))]
     async fn handle_message(
-        &self,
+        self: Arc<Self>,
         async_nats::Message {
             subject,
             reply,
@@ -1924,10 +1996,11 @@ impl Host {
             (Some("auction"), Some("provider"), None, None) => {
                 self.handle_auction_provider(payload).await
             }
-            (Some("cmd"), Some(host_id), Some("la"), None) => {
-                self.handle_launch_actor(payload, host_id).await.map(Some)
-            }
-            (Some("cmd"), Some(host_id), Some("lp"), None) => self
+            (Some("cmd"), Some(host_id), Some("la"), None) => Arc::clone(&self)
+                .handle_launch_actor(payload, host_id)
+                .await
+                .map(Some),
+            (Some("cmd"), Some(host_id), Some("lp"), None) => Arc::clone(&self)
                 .handle_launch_provider(payload, host_id)
                 .await
                 .map(Some),
@@ -2125,7 +2198,6 @@ impl Host {
         use async_nats::jetstream::kv::Operation;
 
         let mut key_parts = key.split('_');
-        #[allow(clippy::single_match_else)]
         let res = match (operation, key_parts.next(), key_parts.next()) {
             (Operation::Put, Some("LINKDEF"), Some(id)) => {
                 self.process_linkdef_put(id, value).await

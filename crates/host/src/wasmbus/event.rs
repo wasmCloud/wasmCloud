@@ -47,6 +47,13 @@ pub fn actor_started(
     })
 }
 
+pub fn actor_start_failed(actor_ref: impl AsRef<str>, error: &anyhow::Error) -> serde_json::Value {
+    json!({
+        "actor_ref": actor_ref.as_ref(),
+        "error": format!("{error:#}"),
+    })
+}
+
 pub fn actor_stopped(
     claims: &jwt::Claims<jwt::Actor>,
     annotations: &Option<BTreeMap<String, String>>,
@@ -73,6 +80,22 @@ pub fn actors_started(
         "host_id": host_id.as_ref(),
         "claims": claims,
         "count": count.into(),
+    })
+}
+
+pub fn actors_start_failed(
+    claims: &jwt::Claims<jwt::Actor>,
+    annotations: &Option<BTreeMap<String, String>>,
+    host_id: impl AsRef<str>,
+    image_ref: impl AsRef<str>,
+    error: &anyhow::Error,
+) -> serde_json::Value {
+    json!({
+        "public_key": claims.subject,
+        "image_ref": image_ref.as_ref(),
+        "annotations": annotations,
+        "host_id": host_id.as_ref(),
+        "error": format!("{error:#}"),
     })
 }
 
@@ -153,6 +176,18 @@ pub fn provider_started(
             "not_before_human": "TODO",
             "expires_human": "TODO",
         },
+    })
+}
+
+pub fn provider_start_failed(
+    provider_ref: impl AsRef<str>,
+    link_name: impl AsRef<str>,
+    error: &anyhow::Error,
+) -> serde_json::Value {
+    json!({
+        "provider_ref": provider_ref.as_ref(),
+        "link_name": link_name.as_ref(),
+        "error": format!("{error:#}"),
     })
 }
 
