@@ -211,7 +211,7 @@ jobs:
 
       - name: Determine artifact metadata
         run: |
-          echo "oci-repository=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name' | sed 's/wasmcloud-provider-//')" >> $GITHUB_ENV
+          echo "oci-repository=messaging_kafka" >> $GITHUB_ENV
           echo "oci-version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].version')" >> $GITHUB_ENV
         working-directory: ${{ env.working-directory }}
 
