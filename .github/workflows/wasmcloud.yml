@@ -161,5 +161,5 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     if: ${{ github.ref == 'refs/heads/main' }}
     steps:
-    - uses: actions/deploy-pages@v2.0.3
+    - uses: actions/deploy-pages@v2.0.4
       id: deployment
