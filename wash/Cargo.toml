@@ -121,7 +121,7 @@ provider-archive = "0.8.0"
 regex = "1.9"
 remove_dir_all = "0.7"
 reqwest = { version = "0.11", default-features = false, features = ["rustls-tls"] }
-rmp-serde = "1.1.0"
+rmp-serde = "1.1.2"
 rmpv = "1.0"
 sanitize-filename = "0.4.0"
 scopeguard = "1.1.0"
