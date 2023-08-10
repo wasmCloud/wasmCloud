@@ -1,1 +1,3 @@
-wasmcloud = "../../../../../wit"
+http = "https://github.com/wasmCloud/wasi-http/archive/main.tar.gz" # TODO: Switch to upstream once Wasm tooling compatible
+io = "../../../../../wit/deps/io" # TODO: Remove once other packages compatible
+poll = "../../../../../wit/deps/poll" # TODO: Remove once other packages compatible

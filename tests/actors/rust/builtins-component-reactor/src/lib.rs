@@ -1,35 +1,42 @@
 wit_bindgen::generate!("actor");
 
-use std::io::{stdin, stdout, Read, Write};
+use std::io::{Read, Write};
 
 use serde::Deserialize;
 use serde_json::json;
+use wasi::http::http_types as types;
 use wasmcloud_actor::wasi::keyvalue;
 use wasmcloud_actor::wasi::logging::logging;
 use wasmcloud_actor::wasi::random::random;
 use wasmcloud_actor::wasmcloud::bus::lattice::TargetEntity;
 use wasmcloud_actor::wasmcloud::{bus, messaging};
 use wasmcloud_actor::{
-    debug, error, info, trace, warn, HostRng, HttpRequest, HttpResponse, InputStreamReader,
-    OutputStreamWriter,
+    debug, error, info, trace, warn, HostRng, InputStreamReader, OutputStreamWriter,
 };
 
 struct Actor;
 
-impl exports::wasmcloud::bus::guest::Guest for Actor {
-    fn call(operation: String) -> Result<(), String> {
-        assert_eq!(operation, "HttpServer.HandleRequest");
-        let HttpRequest {
-            method,
-            path,
-            query_string,
-            header: _,
-            body,
-        } = rmp_serde::from_read(stdin()).expect("failed to read request");
-        assert_eq!(method, "POST");
-        assert_eq!(path, "/");
-        assert_eq!(query_string, "");
+impl exports::wasi::http::incoming_handler::IncomingHandler for Actor {
+    fn handle(request: types::IncomingRequest, response_out: types::ResponseOutparam) {
+        assert!(matches!(
+            types::incoming_request_method(request),
+            types::Method::Post
+        ));
+        assert_eq!(
+            types::incoming_request_path_with_query(request).as_deref(),
+            Some("/")
+        );
+        assert!(types::incoming_request_scheme(request).is_none());
+        // NOTE: Authority is lost in traslation to Smithy HttpRequest
+        assert_eq!(types::incoming_request_authority(request), None);
+        let _headers = types::incoming_request_headers(request);
         // TODO: Validate headers
+        let request_stream = types::incoming_request_consume(request)
+            .expect("failed to get incoming request stream");
+        let mut request_body = vec![];
+        InputStreamReader::from(request_stream)
+            .read_to_end(&mut request_body)
+            .expect("failed to read value from incoming request stream");
 
         #[derive(Deserialize)]
         struct Request {
@@ -37,7 +44,8 @@ impl exports::wasmcloud::bus::guest::Guest for Actor {
             max: u32,
         }
         let Request { min, max } =
-            serde_json::from_slice(&body).expect("failed to decode request body");
+            serde_json::from_slice(&request_body).expect("failed to decode request body");
+        types::finish_incoming_stream(request_stream);
 
         logging::log(logging::Level::Trace, "trace-context", "trace");
         logging::log(logging::Level::Debug, "debug-context", "debug");
@@ -66,17 +74,16 @@ impl exports::wasmcloud::bus::guest::Guest for Actor {
         });
         eprintln!("response: `{res:?}`");
         let body = serde_json::to_vec(&res).expect("failed to encode response to JSON");
-        let res = rmp_serde::to_vec(&HttpResponse {
-            body: body.clone(),
-            ..Default::default()
-        })
-        .expect("failed to serialize response");
-        let mut stdout = stdout();
-        stdout
-            .lock()
-            .write_all(&res)
-            .expect("failed to write response");
-        stdout.flush().expect("failed to flush stdout");
+        let response = types::new_outgoing_response(200, types::new_fields(&[]))
+            .expect("failed to create response"); // TODO: Set headers
+        let response_stream = types::outgoing_response_write(response)
+            .expect("failed to get outgoing response stream");
+        let n = OutputStreamWriter::from(response_stream)
+            .write(&body)
+            .expect("failed to write body to outgoing response stream");
+        assert_eq!(n, body.len());
+        types::finish_outgoing_stream(response_stream);
+        types::set_response_outparam(response_out, Ok(response)).expect("failed to set response");
 
         bus::lattice::set_target(
             Some(&TargetEntity::Link(Some("messaging".into()))),
@@ -184,8 +191,6 @@ impl exports::wasmcloud::bus::guest::Guest for Actor {
         keyvalue::readwrite::set(bucket, &result_key, result_value)
             .map_err(keyvalue::wasi_cloud_error::trace)
             .expect("failed to set `result`");
-
-        Ok(())
     }
 }
 

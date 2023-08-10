@@ -1,7 +1,8 @@
-use super::{AsyncStream, AsyncVec, Ctx, Instance, TableResult};
+use super::{AsyncStream, Ctx, Instance, TableResult};
 
 use crate::capability::keyvalue::{readwrite, types, wasi_cloud_error};
 use crate::capability::KeyValueReadWrite;
+use crate::io::AsyncVec;
 
 use std::sync::Arc;
 

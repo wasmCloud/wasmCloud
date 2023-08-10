@@ -630,6 +630,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2d3ce25f50619af8b0aec2eb23deebe84249e19e2ddd393a6e16e3300a6dadfd"
 dependencies = [
  "backtrace",
+ "bytes",
  "libc",
  "mio",
  "pin-project-lite",
@@ -826,8 +827,11 @@ dependencies = [
 name = "wasmcloud-compat"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "http",
  "serde",
  "serde_bytes",
+ "tokio",
 ]
 
 [[package]]
