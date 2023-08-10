@@ -41,12 +41,14 @@ async fn free_port() -> anyhow::Result<u16> {
     Ok(lis.port())
 }
 
+#[allow(clippy::too_many_arguments)] // Shush clippy, it's a test function
 async fn assert_start_provider(
     client: &wasmcloud_control_interface::Client,
     nats_client: &async_nats::Client, // TODO: This should be exposed by `wasmcloud_control_interface::Client`
     lattice_prefix: &str,
     host_key: &KeyPair,
     provider_key: &KeyPair,
+    link_name: &str,
     url: impl AsRef<str>,
     configuration: Option<String>,
 ) -> anyhow::Result<()> {
@@ -63,7 +65,7 @@ async fn assert_start_provider(
         .start_provider(
             &host_key.public_key(),
             url.as_ref(),
-            None,
+            Some(link_name.to_string()),
             None,
             configuration,
         )
@@ -76,9 +78,10 @@ async fn assert_start_provider(
         .take(30)
         .then(|_| nats_client.request(
             format!(
-                "wasmbus.rpc.{}.{}.default.health",
+                "wasmbus.rpc.{}.{}.{}.health",
                 lattice_prefix,
-                provider_key.public_key()
+                provider_key.public_key(),
+                link_name,
             ),
             "".into(),
         ))
@@ -107,6 +110,7 @@ async fn assert_advertise_link(
     actor_claims: &jwt::Claims<jwt::Actor>,
     provider_key: &KeyPair,
     contract_id: impl AsRef<str>,
+    link_name: &str,
     values: HashMap<String, String>,
 ) -> anyhow::Result<()> {
     let CtlOperationAck { accepted, error } = client
@@ -114,7 +118,7 @@ async fn assert_advertise_link(
             &actor_claims.subject,
             &provider_key.public_key(),
             contract_id.as_ref(),
-            "default",
+            link_name,
             values,
         )
         .await
@@ -128,9 +132,10 @@ async fn assert_remove_link(
     client: &wasmcloud_control_interface::Client,
     actor_claims: &jwt::Claims<jwt::Actor>,
     contract_id: impl AsRef<str>,
+    link_name: &str,
 ) -> anyhow::Result<()> {
     let CtlOperationAck { accepted, error } = client
-        .remove_link(&actor_claims.subject, contract_id.as_ref(), "default")
+        .remove_link(&actor_claims.subject, contract_id.as_ref(), link_name)
         .await
         .map_err(|e| anyhow!(e).context("failed to remove link"))?;
     ensure!(error == "");
@@ -329,21 +334,24 @@ expected: {expected_labels:?}"#
         .context("failed to parse `rust-httpserver` provider key")?;
     let httpserver_provider_url = Url::from_file_path(test_providers::RUST_HTTPSERVER)
         .expect("failed to construct provider ref");
+    let httpserver_provider_link_name = "link-name-1";
 
     let kvredis_provider_key = KeyPair::from_seed(test_providers::RUST_KVREDIS_SUBJECT)
         .context("failed to parse `rust-kvredis` provider key")?;
     let kvredis_provider_url = Url::from_file_path(test_providers::RUST_KVREDIS)
         .expect("failed to construct provider ref");
+    let kvredis_provider_link_name = "link-name-2";
 
     let nats_provider_key = KeyPair::from_seed(test_providers::RUST_NATS_SUBJECT)
         .context("failed to parse `rust-nats` provider key")?;
     let nats_provider_url =
         Url::from_file_path(test_providers::RUST_NATS).expect("failed to construct provider ref");
+    let nats_provider_link_name = "link-name-3";
 
     let mut ack = ctl_client
         .perform_provider_auction(
             httpserver_provider_url.as_str(),
-            "default",
+            httpserver_provider_link_name,
             HashMap::default(),
         )
         .await
@@ -360,7 +368,7 @@ expected: {expected_labels:?}"#
             // TODO: Validate `constraints`
             ensure!(host_id == host_key.public_key());
             ensure!(provider_ref == httpserver_provider_url.as_str());
-            ensure!(link_name == "default");
+            ensure!(link_name == httpserver_provider_link_name);
         }
         (None, []) => bail!("no provider auction ack received"),
         _ => bail!("more than one provider auction ack received"),
@@ -377,6 +385,7 @@ expected: {expected_labels:?}"#
             &actor_claims,
             &httpserver_provider_key,
             "wasmcloud:httpserver",
+            httpserver_provider_link_name,
             HashMap::from([(
                 "config_json".into(),
                 format!(r#"{{"address":"[{}]:{http_port}"}}"#, Ipv6Addr::UNSPECIFIED)
@@ -387,6 +396,7 @@ expected: {expected_labels:?}"#
             &actor_claims,
             &kvredis_provider_key,
             "wasmcloud:keyvalue",
+            kvredis_provider_link_name,
             HashMap::from([("URL".into(), format!("{redis_url}"))]),
         ),
         assert_advertise_link(
@@ -394,6 +404,7 @@ expected: {expected_labels:?}"#
             &actor_claims,
             &nats_provider_key,
             "wasmcloud:messaging",
+            nats_provider_link_name,
             HashMap::from([(
                 "config_json".into(),
                 format!(r#"{{"cluster_uris":["{ctl_nats_url}"]}}"#)
@@ -409,6 +420,7 @@ expected: {expected_labels:?}"#
             TEST_PREFIX,
             &host_key,
             &httpserver_provider_key,
+            httpserver_provider_link_name,
             &httpserver_provider_url,
             None,
         ),
@@ -418,6 +430,7 @@ expected: {expected_labels:?}"#
             TEST_PREFIX,
             &host_key,
             &kvredis_provider_key,
+            kvredis_provider_link_name,
             &kvredis_provider_url,
             None,
         ),
@@ -427,6 +440,7 @@ expected: {expected_labels:?}"#
             TEST_PREFIX,
             &host_key,
             &nats_provider_key,
+            nats_provider_link_name,
             &nats_provider_url,
             None,
         )
@@ -506,7 +520,7 @@ expected: {expected_name:?}"#
             ensure!(httpserver.id == httpserver_provider_key.public_key());
             ensure!(httpserver.image_ref == Some(httpserver_provider_url.to_string()));
             ensure!(httpserver.contract_id == "wasmcloud:httpserver");
-            ensure!(httpserver.link_name == "default");
+            ensure!(httpserver.link_name == httpserver_provider_link_name);
             ensure!(httpserver.name == Some("wasmcloud-provider-httpserver".into()),);
             ensure!(httpserver.revision == 0);
 
@@ -515,7 +529,7 @@ expected: {expected_name:?}"#
             ensure!(kvredis.id == kvredis_provider_key.public_key());
             ensure!(kvredis.image_ref == Some(kvredis_provider_url.to_string()));
             ensure!(kvredis.contract_id == "wasmcloud:keyvalue");
-            ensure!(kvredis.link_name == "default");
+            ensure!(kvredis.link_name == kvredis_provider_link_name);
             ensure!(kvredis.name == Some("wasmcloud-provider-kvredis".into()),);
             ensure!(kvredis.revision == 0);
 
@@ -524,7 +538,7 @@ expected: {expected_name:?}"#
             ensure!(nats.id == nats_provider_key.public_key());
             ensure!(nats.image_ref == Some(nats_provider_url.to_string()));
             ensure!(nats.contract_id == "wasmcloud:messaging");
-            ensure!(nats.link_name == "default");
+            ensure!(nats.link_name == nats_provider_link_name);
             ensure!(nats.name == Some("wasmcloud-provider-nats".into()),);
             ensure!(nats.revision == 0);
         }
@@ -637,9 +651,24 @@ expected: {expected_redis_keys:?}"#
     ensure!(redis_res == redis::Value::Data(http_res.into()));
 
     try_join!(
-        assert_remove_link(&ctl_client, &actor_claims, "wasmcloud:messaging"),
-        assert_remove_link(&ctl_client, &actor_claims, "wasmcloud:keyvalue"),
-        assert_remove_link(&ctl_client, &actor_claims, "wasmcloud:httpserver"),
+        assert_remove_link(
+            &ctl_client,
+            &actor_claims,
+            "wasmcloud:messaging",
+            httpserver_provider_link_name
+        ),
+        assert_remove_link(
+            &ctl_client,
+            &actor_claims,
+            "wasmcloud:keyvalue",
+            kvredis_provider_link_name
+        ),
+        assert_remove_link(
+            &ctl_client,
+            &actor_claims,
+            "wasmcloud:httpserver",
+            nats_provider_link_name
+        ),
     )
     .context("failed to remove links")?;
 

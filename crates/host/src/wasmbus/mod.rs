@@ -349,10 +349,11 @@ impl Handler {
             rmp_serde::to_vec_named(&invocation).context("failed to encode invocation")?;
         let lattice_prefix = &self.lattice_prefix;
         let provider_id = invocation.target.public_key;
+        let link_name = invocation.target.link_name;
         let res = self
             .nats
             .request(
-                format!("wasmbus.rpc.{lattice_prefix}.{provider_id}.default",),
+                format!("wasmbus.rpc.{lattice_prefix}.{provider_id}.{link_name}"),
                 request.into(),
             )
             .await
@@ -413,7 +414,6 @@ impl Bus for Handler {
 
         let nats = self.nats.clone();
         let lattice_prefix = self.lattice_prefix.clone();
-        let provider_id = target.public_key.clone();
         let origin = self.origin.clone();
         let target = target.clone();
         let cluster_key = self.cluster_key.clone();
@@ -430,12 +430,14 @@ impl Bus for Handler {
                 let invocation =
                     Invocation::new(&cluster_key, origin, target, interface_method, request)
                         .map_err(|e| e.to_string())?;
+                let provider_id = &invocation.target.public_key;
+                let link_name = &invocation.target.link_name;
                 let request = rmp_serde::to_vec_named(&invocation)
                     .context("failed to encode invocation")
                     .map_err(|e| e.to_string())?;
                 let res = nats
                     .request(
-                        format!("wasmbus.rpc.{lattice_prefix}.{provider_id}.default"),
+                        format!("wasmbus.rpc.{lattice_prefix}.{provider_id}.{link_name}"),
                         request.into(),
                     )
                     .await
