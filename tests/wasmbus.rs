@@ -520,14 +520,41 @@ expected: {expected_name:?}"#
         _ => bail!("invalid provider count"),
     }
 
-    let mut nats_sub = nats_client
-        .subscribe("test".into())
-        .await
-        .context("failed to subscribe to `test`")?;
+    let (mut nats_publish_sub, mut nats_request_sub, mut nats_request_multi_sub) = try_join!(
+        nats_client.subscribe("test-messaging-publish".into()),
+        nats_client.subscribe("test-messaging-request".into()),
+        nats_client.subscribe("test-messaging-request-multi".into()),
+    )
+    .context("failed to subscribe to NATS topics")?;
 
     redis_client
         .req_command(&redis::Cmd::set("foo", "bar"))
         .context("failed to set `foo` key in Redis")?;
+
+    let nats_requests = spawn(async move {
+        let res = nats_request_sub
+            .next()
+            .await
+            .context("failed to receive NATS response to `request`")?;
+        ensure!(res.payload == "foo");
+        let reply = res.reply.context("no reply set on `request`")?;
+        nats_client
+            .publish(reply, "bar".into())
+            .await
+            .context("failed to publish response to `request`")?;
+
+        let res = nats_request_multi_sub
+            .next()
+            .await
+            .context("failed to receive NATS response to `request_multi`")?;
+        ensure!(res.payload == "foo");
+        let reply = res.reply.context("no reply on set `request_multi`")?;
+        nats_client
+            .publish(reply, "bar".into())
+            .await
+            .context("failed to publish response to `request_multi`")?;
+        Ok(())
+    });
 
     let http_client = reqwest::Client::builder()
         .timeout(Duration::from_secs(20))
@@ -570,11 +597,17 @@ expected: {expected_name:?}"#
         (42..=4242).contains(&random_in_range),
         "{random_in_range} should have been within range from 42 to 4242 inclusive"
     );
-    let nats_res = nats_sub
+    let nats_res = nats_publish_sub
         .next()
         .await
         .context("failed to receive NATS response")?;
     ensure!(nats_res.payload == http_res);
+    ensure!(nats_res.reply.as_deref() == Some("noreply"));
+
+    nats_requests
+        .await
+        .context("failed to await NATS request task")?
+        .context("failed to handle NATS requests")?;
 
     let redis_keys = redis_client
         .req_command(&redis::Cmd::keys("*"))
