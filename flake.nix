@@ -12,10 +12,7 @@
     "cache.garnix.io:CTFPyKSLcx5RMJKfLo5EEPUObbA78b0YQ2DTCJXqr9g="
   ];
 
-  inputs.fenix.url = github:nix-community/fenix/monthly;
-  inputs.nixify.inputs.fenix.follows = "fenix";
   inputs.nixify.url = github:rvolosatovs/nixify;
-  inputs.wash.inputs.nixify.follows = "nixify"; # TODO: drop once updated upstream
   inputs.wash.url = github:wasmcloud/wash/v0.18.1;
   inputs.wasmcloud-component-adapters.inputs.nixify.follows = "nixify";
   inputs.wasmcloud-component-adapters.url = github:wasmCloud/wasmcloud-component-adapters;
