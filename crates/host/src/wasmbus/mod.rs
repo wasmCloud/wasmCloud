@@ -24,7 +24,7 @@ use std::sync::Arc;
 use anyhow::{anyhow, bail, ensure, Context as _};
 use async_nats::jetstream::{context::Context as JetstreamContext, kv};
 use async_trait::async_trait;
-use base64::engine::general_purpose::STANDARD_NO_PAD;
+use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use bytes::{BufMut, Bytes, BytesMut};
 use cloudevents::{EventBuilder, EventBuilderV10};
@@ -1870,7 +1870,7 @@ impl Host {
                 .context("failed to spawn provider process")?;
             let mut stdin = child.stdin.take().context("failed to take stdin")?;
             stdin
-                .write_all(STANDARD_NO_PAD.encode(&data).as_bytes())
+                .write_all(STANDARD.encode(&data).as_bytes())
                 .await
                 .context("failed to write provider data")?;
             stdin
