@@ -19,4 +19,4 @@ serde = { version = "1", default-features = false }
 serde_json = { version = "1", default-features = false }
 tokio = { version = "1", default-features = false }
 wasmcloud-actor = { path = "../../../crates/actor", default-features = false }
-wit-bindgen = { version = "0.7", default-features = false }
+wit-bindgen = { version = "0.9", default-features = false }

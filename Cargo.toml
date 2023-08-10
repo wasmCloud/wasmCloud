@@ -69,7 +69,6 @@ http = { version = "0.2", default-features = false }
 lazy_static = { version = "1.4", default-features = false }
 log = { version = "0.4", default-features = false }
 names = { version = "0.14", default-features = false }
-nix-nar = { version = "0.2", default-features = false }
 nkeys = { version = "0.3", default-features = false }
 oci-distribution = { version = "0.9", default-features = false }
 once_cell = { version = "1", default-features = false }
@@ -113,5 +112,5 @@ wasmcloud-runtime = { path = "./crates/runtime" }
 wasmparser = { version = "0.110", default-features = false }
 wasmtime = { version = "11", default-features = false }
 wasmtime-wasi = { version = "11", default-features = false }
-wit-bindgen = { version = "0.7", default-features = false }
-wit-component = { version = "0.11", default-features = false }
+wit-bindgen = { version = "0.9", default-features = false }
+wit-component = { version = "0.12", default-features = false }
