@@ -619,7 +619,6 @@ impl KeyValueReadWrite for Handler {
 
 #[async_trait]
 impl Messaging for Handler {
-    #[allow(unused)] // TODO: Use and remove
     #[instrument]
     async fn request(
         &self,
@@ -627,19 +626,68 @@ impl Messaging for Handler {
         body: Option<Vec<u8>>,
         timeout: Duration,
     ) -> anyhow::Result<messaging::types::BrokerMessage> {
-        bail!("unimplemented")
+        #[derive(Serialize)]
+        struct RequestMessage {
+            subject: String,
+            #[serde(with = "serde_bytes")]
+            body: Vec<u8>,
+            #[serde(rename = "timeoutMs")]
+            timeout_ms: u32,
+        }
+        #[derive(Deserialize)]
+        struct ReplyMessage {
+            #[serde(default)]
+            subject: String,
+            #[serde(rename = "replyTo")]
+            #[serde(default, skip_serializing_if = "Option::is_none")]
+            reply_to: Option<String>,
+            #[serde(with = "serde_bytes")]
+            #[serde(default)]
+            body: Vec<u8>,
+        }
+        const METHOD: &str = "wasmcloud:messaging/Messaging.Request";
+
+        let timeout_ms = timeout
+            .as_millis()
+            .try_into()
+            .context("timeout milliseconds do not fit in `u32`")?;
+        let res = self
+            .call_provider(
+                METHOD,
+                &RequestMessage {
+                    subject,
+                    body: body.unwrap_or_default(),
+                    timeout_ms,
+                },
+            )
+            .await?;
+        let ReplyMessage {
+            subject,
+            reply_to,
+            body,
+        } = rmp_serde::from_slice(&res).context("failed to decode response")?;
+        Ok(messaging::types::BrokerMessage {
+            subject,
+            reply_to,
+            body: Some(body),
+        })
     }
 
-    #[allow(unused)] // TODO: Use and remove
     #[instrument]
     async fn request_multi(
         &self,
         subject: String,
         body: Option<Vec<u8>>,
         timeout: Duration,
-        results: &mut [messaging::types::BrokerMessage],
-    ) -> anyhow::Result<usize> {
-        bail!("unimplemented")
+        max_results: u32,
+    ) -> anyhow::Result<Vec<messaging::types::BrokerMessage>> {
+        match max_results {
+            0..=1 => {
+                let res = self.request(subject, body, timeout).await?;
+                Ok(vec![res])
+            }
+            2.. => bail!("at most 1 result can be requested at the time"),
+        }
     }
 
     #[instrument]
@@ -653,12 +701,12 @@ impl Messaging for Handler {
     ) -> anyhow::Result<()> {
         #[derive(Serialize)]
         struct PubMessage {
-            pub subject: String,
+            subject: String,
             #[serde(rename = "replyTo")]
             #[serde(skip_serializing_if = "Option::is_none")]
-            pub reply_to: Option<String>,
+            reply_to: Option<String>,
             #[serde(with = "serde_bytes")]
-            pub body: Vec<u8>,
+            body: Vec<u8>,
         }
 
         const METHOD: &str = "wasmcloud:messaging/Messaging.Publish";

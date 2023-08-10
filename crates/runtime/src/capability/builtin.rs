@@ -214,8 +214,8 @@ pub trait Messaging {
         subject: String,
         body: Option<Vec<u8>>,
         timeout: Duration,
-        results: &mut [messaging::types::BrokerMessage],
-    ) -> anyhow::Result<usize>;
+        max_results: u32,
+    ) -> anyhow::Result<Vec<messaging::types::BrokerMessage>>;
 
     /// Handle `wasmcloud:messaging/consumer.publish`
     async fn publish(&self, msg: messaging::types::BrokerMessage) -> anyhow::Result<()>;
@@ -351,13 +351,13 @@ impl Messaging for Handler {
         subject: String,
         body: Option<Vec<u8>>,
         timeout: Duration,
-        results: &mut [messaging::types::BrokerMessage],
-    ) -> anyhow::Result<usize> {
+        max_results: u32,
+    ) -> anyhow::Result<Vec<messaging::types::BrokerMessage>> {
         trace!("call `Messaging` handler");
         self.messaging
             .as_ref()
             .context("cannot handle `wasmcloud:messaging/consumer.request_multi`")?
-            .request_multi(subject, body, timeout, results)
+            .request_multi(subject, body, timeout, max_results)
             .await
     }
 

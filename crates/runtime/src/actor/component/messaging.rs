@@ -7,7 +7,6 @@ use core::time::Duration;
 
 use std::sync::Arc;
 
-use anyhow::bail;
 use async_trait::async_trait;
 use tracing::instrument;
 
@@ -48,17 +47,11 @@ impl consumer::Host for Ctx {
         max_results: u32,
     ) -> anyhow::Result<Result<Vec<types::BrokerMessage>, String>> {
         let timeout = Duration::from_millis(timeout_ms.into());
-        let max_results = max_results.try_into().unwrap_or(usize::MAX);
-        let mut msgs = Vec::with_capacity(max_results);
-        match self
+        Ok(self
             .handler
-            .request_multi(subject, body, timeout, &mut msgs)
+            .request_multi(subject, body, timeout, max_results)
             .await
-        {
-            Ok(n) if n <= max_results && n == msgs.len() => Ok(Ok(msgs)),
-            Ok(_) => bail!("invalid amount of results returned"),
-            Err(err) => Ok(Err(format!("{err:#}"))),
-        }
+            .map_err(|err| format!("{err:#}")))
     }
 
     #[instrument]

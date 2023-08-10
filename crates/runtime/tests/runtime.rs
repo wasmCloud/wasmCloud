@@ -3,6 +3,7 @@ use std::net::{Ipv6Addr, SocketAddr};
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{bail, ensure, Context};
 use async_trait::async_trait;
@@ -75,21 +76,36 @@ struct Messaging(Arc<Mutex<Vec<messaging::types::BrokerMessage>>>);
 impl capability::Messaging for Messaging {
     async fn request(
         &self,
-        _subject: String,
-        _body: Option<Vec<u8>>,
-        _timeout: std::time::Duration,
+        subject: String,
+        body: Option<Vec<u8>>,
+        timeout: Duration,
     ) -> anyhow::Result<messaging::types::BrokerMessage> {
-        panic!("should not be called")
+        assert_eq!(subject, "test-messaging-request");
+        assert_eq!(body.as_deref(), Some(b"foo".as_slice()));
+        assert_eq!(timeout, Duration::from_millis(1000));
+        Ok(messaging::types::BrokerMessage {
+            subject,
+            body: Some("bar".into()),
+            reply_to: None,
+        })
     }
 
     async fn request_multi(
         &self,
-        _subject: String,
-        _body: Option<Vec<u8>>,
-        _timeout: std::time::Duration,
-        _results: &mut [messaging::types::BrokerMessage],
-    ) -> anyhow::Result<usize> {
-        panic!("should not be called")
+        subject: String,
+        body: Option<Vec<u8>>,
+        timeout: Duration,
+        max_results: u32,
+    ) -> anyhow::Result<Vec<messaging::types::BrokerMessage>> {
+        assert_eq!(subject, "test-messaging-request-multi");
+        assert_eq!(body.as_deref(), Some(b"foo".as_slice()));
+        assert_eq!(timeout, Duration::from_millis(1000));
+        assert_eq!(max_results, 1);
+        Ok(vec![messaging::types::BrokerMessage {
+            subject,
+            body: Some("bar".into()),
+            reply_to: None,
+        }])
     }
 
     async fn publish(&self, msg: messaging::types::BrokerMessage) -> anyhow::Result<()> {
@@ -181,8 +197,8 @@ async fn run(
                 }),
                 None,
             ) => {
-                ensure!(subject == "test");
-                ensure!(reply_to == None);
+                ensure!(subject == "test-messaging-publish");
+                ensure!(reply_to.as_deref() == Some("noreply"));
                 body.context("body missing")?
             }
             (None, None) => bail!("no messages published"),

@@ -76,12 +76,46 @@ impl exports::wasmcloud::bus::guest::Guest for Actor {
             .write_all(&res)
             .expect("failed to write response");
         stdout.flush().expect("failed to flush stdout");
+
         messaging::consumer::publish(&messaging::types::BrokerMessage {
             body: Some(body.clone()),
-            reply_to: None,
-            subject: "test".into(),
+            reply_to: Some("noreply".into()),
+            subject: "test-messaging-publish".into(),
         })
         .expect("failed to publish response");
+
+        let messaging::types::BrokerMessage {
+            body: response_body,
+            reply_to,
+            subject: _,
+        } = messaging::consumer::request("test-messaging-request", Some(b"foo"), 1000)
+            .expect("failed to request");
+        assert_eq!(response_body.as_deref(), Some(b"bar".as_slice()));
+        assert_eq!(reply_to, None);
+
+        let responses = messaging::consumer::request_multi(
+            "test-messaging-request-multi",
+            Some(b"foo"),
+            1000,
+            1,
+        )
+        .expect("failed to request multi");
+        let mut responses = responses.into_iter();
+        match (responses.next(), responses.next()) {
+            (
+                Some(messaging::types::BrokerMessage {
+                    body: response_body,
+                    reply_to,
+                    subject: _,
+                }),
+                None,
+            ) => {
+                assert_eq!(response_body.as_deref(), Some(b"bar".as_slice()));
+                assert_eq!(reply_to, None);
+            }
+            (None, None) => panic!("no responses received"),
+            _ => panic!("too many responses received"),
+        }
 
         let foo_key = String::from("foo");
         let bucket = keyvalue::types::open_bucket("")
