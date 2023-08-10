@@ -1,11 +1,12 @@
 /// wasmCloud host configuration
 pub mod config;
-mod nats;
 
 pub use config::Host as HostConfig;
-use nats::connection_options;
 
 mod event;
+mod nats;
+
+use nats::connection_options;
 
 use crate::{fetch_actor, socket_pair};
 
@@ -55,7 +56,8 @@ use wasmcloud_control_interface::{
     StopProviderCommand, UpdateActorCommand,
 };
 use wasmcloud_runtime::capability::{
-    messaging, ActorIdentifier, Bus, KeyValueReadWrite, Messaging, TargetEntity, TargetInterface,
+    messaging, ActorIdentifier, Bus, IncomingHttp, KeyValueReadWrite, Messaging, TargetEntity,
+    TargetInterface,
 };
 use wasmcloud_runtime::{ActorInstancePool, Runtime};
 
@@ -747,6 +749,66 @@ impl Messaging for Handler {
 }
 
 impl ActorInstance {
+    #[instrument(skip(self))]
+    async fn handle_invocation(
+        &self,
+        contract_id: &str,
+        operation: &str,
+        msg: Vec<u8>,
+    ) -> anyhow::Result<Result<Vec<u8>, String>> {
+        let mut instance = self
+            .pool
+            .instantiate(self.runtime.clone())
+            .await
+            .context("failed to instantiate actor")?;
+        instance
+            .stderr(stderr())
+            .await
+            .context("failed to set stderr")?
+            .bus(Arc::new(self.handler.clone()))
+            .keyvalue_readwrite(Arc::new(self.handler.clone()))
+            .messaging(Arc::new(self.handler.clone()));
+        #[allow(clippy::single_match_else)] // TODO: Remove once more interfaces supported
+        match (contract_id, operation) {
+            ("wasmcloud:httpserver", "HttpServer.HandleRequest") => {
+                let req: wasmcloud_compat::HttpRequest =
+                    rmp_serde::from_slice(&msg).context("failed to decode HTTP request")?;
+                let req = http::Request::try_from(req).context("failed to convert request")?;
+                let res = match wasmcloud_runtime::ActorInstance::from(instance)
+                    .into_incoming_http()
+                    .await
+                    .context("failed to instantiate `wasi:http/incoming-handler`")?
+                    .handle(req.map(|body| -> Box<dyn AsyncRead + Send + Sync + Unpin> {
+                        Box::new(Cursor::new(body))
+                    }))
+                    .await
+                {
+                    Ok(res) => res,
+                    Err(err) => return Ok(Err(format!("{err:#}"))),
+                };
+                let res = wasmcloud_compat::HttpResponse::from_http(res)
+                    .await
+                    .context("failed to convert response")?;
+                let res = rmp_serde::to_vec_named(&res).context("failed to encode response")?;
+                Ok(Ok(res))
+            }
+            _ => {
+                let res = AsyncBytesMut::default();
+                match instance
+                    .call(operation, Cursor::new(msg), res.clone())
+                    .await
+                    .context("failed to call actor")?
+                {
+                    Ok(()) => {
+                        let res = res.try_into().context("failed to unwrap bytes")?;
+                        Ok(Ok(res))
+                    }
+                    Err(e) => Ok(Err(e)),
+                }
+            }
+        }
+    }
+
     #[instrument(skip(self, payload))]
     async fn handle_call(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
         let Invocation {
@@ -760,26 +822,12 @@ impl ActorInstance {
 
         debug!(?origin, ?target, operation, "handle actor invocation");
 
-        let mut instance = self
-            .pool
-            .instantiate(self.runtime.clone())
+        let res = match self
+            .handle_invocation(&origin.contract_id, &operation, msg)
             .await
-            .context("failed to instantiate actor")?;
-        instance
-            .stderr(stderr())
-            .await
-            .context("failed to set stderr")?
-            .bus(Arc::new(self.handler.clone()))
-            .keyvalue_readwrite(Arc::new(self.handler.clone()))
-            .messaging(Arc::new(self.handler.clone()));
-        let res = AsyncBytesMut::default();
-        let res = match instance
-            .call(operation, Cursor::new(msg), res.clone())
-            .await
-            .context("failed to call actor")?
+            .context("failed to handle invocation")?
         {
-            Ok(()) => {
-                let msg: Vec<_> = res.try_into()?;
+            Ok(msg) => {
                 let content_length = msg.len().try_into().ok();
                 InvocationResponse {
                     msg,

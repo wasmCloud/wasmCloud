@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::io::Cursor;
-use std::net::{Ipv6Addr, SocketAddr};
 use std::path::Path;
 use std::pin::Pin;
 use std::str::FromStr;
@@ -12,16 +11,13 @@ use async_trait::async_trait;
 use futures::lock::Mutex;
 use once_cell::sync::Lazy;
 use serde::Deserialize;
-use serde_json::json;
 use tokio::fs;
-use tokio::io::{stderr, AsyncReadExt};
-use tokio::net::{TcpListener, TcpStream};
-use tokio::spawn;
+use tokio::io::{stderr, AsyncRead, AsyncReadExt};
 use tracing_subscriber::prelude::*;
-use wasmcloud_actor::{HttpRequest, HttpResponse, Uuid};
+use wasmcloud_actor::Uuid;
 use wasmcloud_runtime::capability::logging::logging;
 use wasmcloud_runtime::capability::provider::MemoryKeyValue;
-use wasmcloud_runtime::capability::{self, messaging, KeyValueReadWrite, Messaging};
+use wasmcloud_runtime::capability::{self, messaging, IncomingHttp, KeyValueReadWrite, Messaging};
 use wasmcloud_runtime::{Actor, Runtime};
 
 static LOGGER: Lazy<()> = Lazy::new(|| {
@@ -40,21 +36,6 @@ static LOGGER: Lazy<()> = Lazy::new(|| {
 fn init() {
     _ = Lazy::force(&LOGGER);
 }
-
-static REQUEST: Lazy<Vec<u8>> = Lazy::new(|| {
-    let body = serde_json::to_vec(&json!({
-        "min": 42,
-        "max": 4242,
-    }))
-    .expect("failed to encode body to JSON");
-    rmp_serde::to_vec(&HttpRequest {
-        method: "POST".into(),
-        path: "/".into(),
-        body,
-        ..Default::default()
-    })
-    .expect("failed to serialize request")
-});
 
 struct Handler {
     logging: Arc<Mutex<Vec<(logging::Level, String, String)>>>,
@@ -325,31 +306,14 @@ fn new_runtime(
 async fn run(wasm: impl AsRef<Path>) -> anyhow::Result<Vec<(logging::Level, String, String)>> {
     let wasm = fs::read(wasm).await.context("failed to read Wasm")?;
 
-    let socket = TcpListener::bind(SocketAddr::from((Ipv6Addr::UNSPECIFIED, 0)))
-        .await
-        .context("failed to bind on a socket")?;
-    let addr = socket
-        .local_addr()
-        .context("failed to query local socket address")?;
-    let response = spawn(async move {
-        let (mut stream, _) = socket.accept().await.context("failed to accept")?;
-        let mut buf = vec![];
-        stream
-            .read_to_end(&mut buf)
-            .await
-            .context("failed to read from stream")?;
-        rmp_serde::from_slice(&buf).context("failed to deserialize response")
-    });
-    let output = TcpStream::connect(addr)
-        .await
-        .context("failed to connect to socket")?;
     let logs = Arc::new(vec![].into());
     let published = Arc::new(vec![].into());
     let keyvalue_readwrite = Arc::new(MemoryKeyValue::from(HashMap::from([(
         "".into(),
         HashMap::from([("foo".into(), b"bar".to_vec())]),
     )])));
-    {
+
+    let res = {
         let rt = new_runtime(
             Arc::clone(&logs),
             Arc::clone(&published),
@@ -362,20 +326,35 @@ async fn run(wasm: impl AsRef<Path>) -> anyhow::Result<Vec<(logging::Level, Stri
             .stderr(stderr())
             .await
             .context("failed to set stderr")?;
+        let req: Box<dyn AsyncRead + Send + Sync + Unpin> =
+            Box::new(Cursor::new(r#"{"min":42,"max":4242}"#));
+        let req = http::Request::builder()
+            .method("POST")
+            .body(req)
+            .expect("failed to construct request");
         actor
-            .call("HttpServer.HandleRequest", REQUEST.as_slice(), output)
+            .into_incoming_http()
             .await
-            .context("failed to call `HttpServer.HandleRequest`")?
-            .expect("`HttpServer.HandleRequest` must not fail");
-    }
-
-    let HttpResponse {
-        status_code,
-        header,
-        body,
-    } = response.await??;
-    ensure!(status_code == 200);
-    ensure!(header.is_empty());
+            .context("failed to instantiate `wasi:http/incoming-handler`")?
+            .handle(req)
+            .await
+            .context("failed to call `wasi:http/incoming-handler.handle`")?
+    };
+    let (
+        http::response::Parts {
+            status, headers, ..
+        },
+        mut body,
+    ) = res.into_parts();
+    ensure!(status.as_u16() == 200);
+    ensure!(headers.is_empty());
+    let body = {
+        let mut buf = vec![];
+        body.read_to_end(&mut buf)
+            .await
+            .context("failed to read response body")?;
+        buf
+    };
 
     let mut published = Arc::try_unwrap(published).unwrap().into_inner().into_iter();
     let mut keyvalue = HashMap::from(Arc::try_unwrap(keyvalue_readwrite).unwrap()).into_iter();

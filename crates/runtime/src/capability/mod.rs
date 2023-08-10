@@ -34,6 +34,7 @@ mod bindgen {
     });
 }
 
+pub use bindgen::wasi::http;
 pub use bindgen::wasi::keyvalue;
 pub use bindgen::wasi::logging;
 pub use bindgen::wasmcloud::blobstore;

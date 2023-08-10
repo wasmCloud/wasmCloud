@@ -5,6 +5,7 @@ use wasmbus::guest_call;
 use crate::actor::claims;
 use crate::capability::logging::logging;
 use crate::capability::{builtin, Bus, IncomingHttp, KeyValueReadWrite, Logging, Messaging};
+use crate::io::AsyncVec;
 use crate::Runtime;
 
 use core::any::Any;
@@ -17,7 +18,7 @@ use anyhow::{anyhow, bail, ensure, Context};
 use async_trait::async_trait;
 use futures::lock::Mutex;
 use serde_json::json;
-use tokio::io::{sink, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{sink, AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWrite, AsyncWriteExt};
 use tokio::runtime::Handle;
 use tokio::task;
 use tracing::{instrument, trace};
@@ -492,25 +493,41 @@ impl Logging for GuestInstance {
 
 #[async_trait]
 impl IncomingHttp for GuestInstance {
-    #[allow(unused)] // TODO: Remove
     #[instrument(skip_all)]
     async fn handle(
         &self,
         request: http::Request<Box<dyn AsyncRead + Sync + Send + Unpin>>,
     ) -> anyhow::Result<http::Response<Box<dyn AsyncRead + Sync + Send + Unpin>>> {
-        let (
-            http::request::Parts {
-                method,
-                uri,
-                headers,
-                ..
-            },
-            body,
-        ) = request.into_parts();
-        let path_with_query = uri.path_and_query().map(http::uri::PathAndQuery::as_str);
-        let scheme = uri.scheme_str();
-        let authority = uri.authority().map(http::uri::Authority::as_str);
-        self.0.lock().await;
-        bail!("unsupported"); // TODO: Support
+        let request = wasmcloud_compat::HttpRequest::from_http(request)
+            .await
+            .context("failed to parse request")?;
+        let request = rmp_serde::to_vec_named(&request).context("failed to encode request")?;
+        let mut response = AsyncVec::default();
+        match self
+            .call(
+                "HttpServer.HandleRequest",
+                Cursor::new(request),
+                response.clone(),
+            )
+            .await
+            .context("failed to call actor")?
+        {
+            Ok(()) => {
+                response
+                    .rewind()
+                    .await
+                    .context("failed to rewind response buffer")?;
+                let response: wasmcloud_compat::HttpResponse =
+                    rmp_serde::from_read(&mut response).context("failed to parse response")?;
+                let response: http::Response<_> =
+                    response.try_into().context("failed to convert response")?;
+                Ok(
+                    response.map(|body| -> Box<dyn AsyncRead + Send + Sync + Unpin> {
+                        Box::new(Cursor::new(body))
+                    }),
+                )
+            }
+            Err(err) => bail!(err),
+        }
     }
 }

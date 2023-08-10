@@ -4,4 +4,4 @@ pub mod logging;
 pub mod messaging;
 pub mod numbergen;
 
-pub use http::{Request as HttpRequest, Response as HttpResponse};
+pub use self::http::{Request as HttpRequest, Response as HttpResponse};

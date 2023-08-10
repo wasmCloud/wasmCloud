@@ -4376,8 +4376,11 @@ dependencies = [
 name = "wasmcloud-compat"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "http",
  "serde",
  "serde_bytes",
+ "tokio",
 ]
 
 [[package]]

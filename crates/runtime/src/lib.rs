@@ -14,6 +14,9 @@ pub mod capability;
 /// Shared wasmCloud runtime engine
 pub mod runtime;
 
+/// wasmCloud I/O functionality
+pub mod io;
+
 pub use actor::{
     Actor, Config as ActorConfig, Instance as ActorInstance, InstancePool as ActorInstancePool,
     PooledInstance as PooledActorInstance,

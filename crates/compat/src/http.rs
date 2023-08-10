@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 
+use anyhow::Context;
+use http::header::CONTENT_LENGTH;
 use serde::{Deserialize, Serialize};
+use tokio::io::{AsyncRead, AsyncReadExt};
 
 /// Request contains data sent to actor about the http request
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -21,6 +24,87 @@ pub struct Request {
     #[serde(with = "serde_bytes")]
     #[serde(default)]
     pub body: Vec<u8>,
+}
+
+impl Request {
+    pub async fn from_http(
+        request: http::Request<impl AsyncRead + Unpin>,
+    ) -> anyhow::Result<Request> {
+        let (
+            http::request::Parts {
+                method,
+                uri,
+                headers,
+                ..
+            },
+            mut body,
+        ) = request.into_parts();
+        let content_length = headers
+            .get(CONTENT_LENGTH)
+            .and_then(|content_length| content_length.to_str().ok())
+            .and_then(|content_length| content_length.parse().ok());
+        let header = headers
+            .into_iter()
+            .map(|(name, value)| {
+                let name = name.context("name missing")?;
+                let value = value
+                    .to_str()
+                    .with_context(|| format!("failed to parse `{name}` header value as string"))?;
+                Ok((name.as_str().into(), vec![value.into()]))
+            })
+            .collect::<anyhow::Result<_>>()
+            .context("failed to process request headers")?;
+        let body = if let Some(content_length) = content_length {
+            let mut buf = Vec::with_capacity(content_length);
+            body.take(content_length.try_into().unwrap_or(u64::MAX))
+                .read_to_end(&mut buf)
+                .await
+                .context("failed to read request body")?;
+            buf
+        } else {
+            let mut buf = vec![];
+            body.read_to_end(&mut buf)
+                .await
+                .context("failed to read request body")?;
+            buf
+        };
+        Ok(Request {
+            method: method.as_str().into(),
+            path: uri.path().into(),
+            query_string: uri.query().map(Into::into).unwrap_or_default(),
+            header,
+            body,
+        })
+    }
+}
+
+impl TryFrom<Request> for http::Request<Vec<u8>> {
+    type Error = anyhow::Error;
+
+    fn try_from(
+        Request {
+            method,
+            path,
+            query_string,
+            header,
+            body,
+        }: Request,
+    ) -> Result<Self, Self::Error> {
+        let req = http::Request::builder().method(method.as_str());
+        let req = header
+            .into_iter()
+            .filter_map(|(name, mut values)| {
+                let value = values.pop()?;
+                Some((name, value))
+            })
+            .fold(req, |req, (name, value)| req.header(name, value));
+        let req = if !path.is_empty() || !query_string.is_empty() {
+            req.uri(format!("{path}{query_string}"))
+        } else {
+            req
+        };
+        req.body(body).context("failed to build request")
+    }
 }
 
 /// Response contains the actor's response to return to the http client
@@ -46,5 +130,75 @@ impl Default for Response {
             body: Vec::default(),
             header: HashMap::default(),
         }
+    }
+}
+
+impl Response {
+    pub async fn from_http(
+        response: http::Response<impl AsyncRead + Unpin>,
+    ) -> anyhow::Result<Response> {
+        let (
+            http::response::Parts {
+                status, headers, ..
+            },
+            mut body,
+        ) = response.into_parts();
+        let status_code = status.as_u16();
+        let content_length = headers
+            .get(CONTENT_LENGTH)
+            .and_then(|content_length| content_length.to_str().ok())
+            .and_then(|content_length| content_length.parse().ok());
+        let header = headers
+            .into_iter()
+            .map(|(name, value)| {
+                let name = name.context("invalid header name")?;
+                let value = value
+                    .to_str()
+                    .with_context(|| format!("failed to parse `{name}` header value as string"))?;
+                Ok((name.as_str().into(), vec![value.into()]))
+            })
+            .collect::<anyhow::Result<_>>()
+            .context("failed to process headers")?;
+        let body = if let Some(content_length) = content_length {
+            let mut buf = Vec::with_capacity(content_length);
+            body.take(content_length.try_into().unwrap_or(u64::MAX))
+                .read_to_end(&mut buf)
+                .await
+                .context("failed to read response body")?;
+            buf
+        } else {
+            let mut buf = vec![];
+            body.read_to_end(&mut buf)
+                .await
+                .context("failed to read response body")?;
+            buf
+        };
+        Ok(Response {
+            status_code,
+            header,
+            body,
+        })
+    }
+}
+
+impl TryFrom<Response> for http::Response<Vec<u8>> {
+    type Error = anyhow::Error;
+
+    fn try_from(
+        Response {
+            status_code,
+            header,
+            body,
+        }: Response,
+    ) -> Result<Self, Self::Error> {
+        let res = http::Response::builder().status(status_code);
+        let res = header
+            .into_iter()
+            .filter_map(|(name, mut values)| {
+                let value = values.pop()?;
+                Some((name, value))
+            })
+            .fold(res, |res, (name, value)| res.header(name, value));
+        res.body(body).context("failed to construct response")
     }
 }

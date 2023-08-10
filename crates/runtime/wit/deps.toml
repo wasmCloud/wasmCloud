@@ -1,6 +1,6 @@
 blobstore = "../../../wit/blobstore"
-http = "https://github.com/WebAssembly/wasi-http/archive/main.tar.gz"
-io = "../../../wit/deps/io"
+http = "https://github.com/wasmCloud/wasi-http/archive/main.tar.gz" # TODO: Switch to upstream once Wasm tooling compatible
+io = "https://github.com/WebAssembly/wasi-io/archive/1b22f18a5af1274724a293782798f91e7dcf4ed6.tar.gz" # Pin for Wasmtime 11 compatibility
 keyvalue = "https://github.com/WebAssembly/wasi-keyvalue/archive/main.tar.gz"
 logging = "https://github.com/WebAssembly/wasi-logging/archive/main.tar.gz"
 messaging = "../../../wit/messaging"
