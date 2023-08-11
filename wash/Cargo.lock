@@ -2003,12 +2003,13 @@ dependencies = [
 
 [[package]]
 name = "nkeys"
-version = "0.3.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c2d151f6ece2f3d1077f6c779268de2516653d8344ddde65addd785cce764fe5"
+checksum = "3e9261eb915c785ea65708bc45ef43507ea46914e1a73f1412d1a38aba967c8e"
 dependencies = [
  "byteorder 1.4.3",
  "data-encoding",
+ "ed25519",
  "ed25519-dalek",
  "getrandom",
  "log",
