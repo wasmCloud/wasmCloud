@@ -86,7 +86,7 @@ oci-distribution = { version = "0.9", default-features = false }
 once_cell = { version = "1", default-features = false }
 # This is currently pinned to an older version. See
 # https://github.com/wasmCloud/wasmCloud/issues/453 for more information
-opentelemetry = { version = "0.17", default-features = false }
+opentelemetry = { version = "0.19", default-features = false }
 opentelemetry-otlp = { version = "0.10", default-features = false }
 provider-archive = { version = "0.7", default-features = false }
 quote = { version = "1", default-features = false }
