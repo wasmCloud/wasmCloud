@@ -112,7 +112,7 @@ tracing = { version = "0.1", default-features = false }
 tracing-futures = { version = "0.2", default-features = false }
 # This is currently pinned to an older version. See
 # https://github.com/wasmCloud/wasmCloud/issues/453 for more information
-tracing-opentelemetry = { version = "0.17", default-features = false }
+tracing-opentelemetry = { version = "0.19", default-features = false }
 tracing-subscriber = { version = "0.3", default-features = false }
 ulid = { version = "1", default-features = false }
 url = { version = "2", default-features = false }
