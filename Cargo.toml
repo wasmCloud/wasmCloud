@@ -32,7 +32,7 @@ clap = { workspace = true, features = [
     "usage",
 ] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
-tracing = { workspace = true, features = ["release_max_level_info"] }
+tracing = { workspace = true } # TODO: revisit the 'release_max_level_info' feature https://github.com/wasmCloud/wasmCloud/issues/468
 tracing-subscriber = { workspace = true, features = [
     "ansi",
     "env-filter",
