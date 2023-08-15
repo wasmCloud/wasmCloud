@@ -1,10 +1,10 @@
 //! Nats implementation for wasmcloud:messaging.
 
 use std::collections::HashMap;
-use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::Context as _;
 use base64::Engine;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -13,13 +13,16 @@ use tokio::task::JoinHandle;
 use tracing::{debug, error, instrument, warn};
 use tracing_futures::Instrument;
 use wascap::prelude::KeyPair;
-use wasmbus_rpc::core::{HostData, LinkDefinition};
-use wasmbus_rpc::otel::OtelHeaderInjector;
-use wasmbus_rpc::provider::prelude::*;
+use wasmcloud_provider_sdk::error::ProviderInvocationError;
+use wasmcloud_provider_sdk::ProviderHandler;
+use wasmcloud_provider_sdk::{
+    core::{HostData, LinkDefinition},
+    load_host_data, start_provider, Context,
+};
 
+use wasmcloud_provider_nats::otel;
 use wasmcloud_provider_nats::wasmcloud_interface_messaging::{
-    MessageSubscriber, MessageSubscriberSender, Messaging, MessagingReceiver, PubMessage,
-    ReplyMessage, RequestMessage, SubMessage,
+    Handler, Messaging, PubMessage, ReplyMessage, RequestMessage, SubMessage,
 };
 
 const DEFAULT_NATS_URI: &str = "0.0.0.0:4222";
@@ -33,13 +36,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // returns when provider receives a shutdown control message
     let host_data = load_host_data()?;
     let provider = generate_provider(host_data);
-    provider_main(provider, Some("NATS Messaging Provider".to_string()))?;
+    start_provider(provider, Some("NATS Messaging Provider".to_string()))?;
 
     eprintln!("NATS messaging provider exiting");
     Ok(())
 }
 
-fn generate_provider(host_data: HostData) -> NatsMessagingProvider {
+fn generate_provider(host_data: &HostData) -> NatsMessagingProvider {
     if let Some(c) = host_data.config_json.as_ref() {
         // empty string becomes the default configuration
         if c.trim().is_empty() {
@@ -114,18 +117,17 @@ impl Default for ConnectionConfig {
 }
 
 impl ConnectionConfig {
-    fn new_from(values: &HashMap<String, String>) -> RpcResult<ConnectionConfig> {
+    fn new_from(values: &[(String, String)]) -> anyhow::Result<ConnectionConfig> {
+        // NOTE(thomastaylor312): This only happens on linkdef and is easier to read if we just
+        // collect the vec to a hashmap. So worth the allocations IMO
+        let values = values.iter().cloned().collect::<HashMap<_, _>>();
         let mut config = if let Some(config_b64) = values.get("config_b64") {
             let bytes = base64::engine::general_purpose::STANDARD
                 .decode(config_b64.as_bytes())
-                .map_err(|e| {
-                    RpcError::InvalidParameter(format!("invalid base64 encoding: {}", e))
-                })?;
-            serde_json::from_slice::<ConnectionConfig>(&bytes)
-                .map_err(|e| RpcError::InvalidParameter(format!("corrupt config_b64: {}", e)))?
+                .context("invalid base64 encoding")?;
+            serde_json::from_slice::<ConnectionConfig>(&bytes).context("corrupt config_b64")?
         } else if let Some(config) = values.get("config_json") {
-            serde_json::from_str::<ConnectionConfig>(config)
-                .map_err(|e| RpcError::InvalidParameter(format!("corrupt config_json: {}", e)))?
+            serde_json::from_str::<ConnectionConfig>(config).context("corrupt config_json")?
         } else {
             ConnectionConfig::default()
         };
@@ -145,9 +147,7 @@ impl ConnectionConfig {
             config.auth_seed = Some(seed.clone());
         }
         if config.auth_jwt.is_some() && config.auth_seed.is_none() {
-            return Err(RpcError::InvalidParameter(
-                "if you specify jwt, you must also specify a seed".to_string(),
-            ));
+            anyhow::bail!("if you specify jwt, you must also specify a seed");
         }
         if config.cluster_uris.is_empty() {
             config.cluster_uris.push(DEFAULT_NATS_URI.to_string());
@@ -176,16 +176,12 @@ impl Drop for NatsClientBundle {
 }
 
 /// Nats implementation for wasmcloud:messaging
-#[derive(Default, Clone, Provider)]
-#[services(Messaging)]
+#[derive(Default, Clone)]
 struct NatsMessagingProvider {
     // store nats connection client per actor
     actors: Arc<RwLock<HashMap<String, NatsClientBundle>>>,
     default_config: ConnectionConfig,
 }
-
-// use default implementations of provider message handlers
-impl ProviderDispatch for NatsMessagingProvider {}
 
 impl NatsMessagingProvider {
     /// Attempt to connect to nats url (with jwt credentials, if provided)
@@ -193,13 +189,10 @@ impl NatsMessagingProvider {
         &self,
         cfg: ConnectionConfig,
         ld: &LinkDefinition,
-    ) -> Result<NatsClientBundle, RpcError> {
+    ) -> anyhow::Result<NatsClientBundle> {
         let opts = match (cfg.auth_jwt, cfg.auth_seed) {
             (Some(jwt), Some(seed)) => {
-                let key_pair = std::sync::Arc::new(
-                    KeyPair::from_seed(&seed)
-                        .map_err(|e| RpcError::ProviderInit(format!("key init: {}", e)))?,
-                );
+                let key_pair = std::sync::Arc::new(KeyPair::from_seed(&seed)?);
                 async_nats::ConnectOptions::with_jwt(jwt, move |nonce| {
                     let key_pair = key_pair.clone();
                     async move { key_pair.sign(&nonce).map_err(async_nats::AuthError::new) }
@@ -207,9 +200,7 @@ impl NatsMessagingProvider {
             }
             (None, None) => async_nats::ConnectOptions::default(),
             _ => {
-                return Err(RpcError::InvalidParameter(
-                    "must provide both jwt and seed for jwt authentication".into(),
-                ));
+                anyhow::bail!("must provide both jwt and seed for jwt authentication");
             }
         };
 
@@ -219,8 +210,7 @@ impl NatsMessagingProvider {
         let client = opts
             .name("NATS Messaging Provider") // allow this to show up uniquely in a NATS connection list
             .connect(url)
-            .await
-            .map_err(|e| RpcError::ProviderInit(format!("NATS connection to {}: {}", url, e)))?;
+            .await?;
 
         // Connections
         let mut sub_handles = Vec::new();
@@ -249,15 +239,11 @@ impl NatsMessagingProvider {
         ld: &LinkDefinition,
         sub: String,
         queue: Option<String>,
-    ) -> RpcResult<JoinHandle<()>> {
+    ) -> anyhow::Result<JoinHandle<()>> {
         let mut subscriber = match queue {
             Some(queue) => client.queue_subscribe(sub.clone(), queue).await,
             None => client.subscribe(sub.clone()).await,
-        }
-        .map_err(|e| {
-            error!(subject = %sub, error = %e, "error subscribing subscribing");
-            RpcError::Nats(format!("subscription to {}: {}", sub, e))
-        })?;
+        }?;
 
         let link_def = ld.to_owned();
 
@@ -277,8 +263,9 @@ impl NatsMessagingProvider {
             while let Some(msg) = subscriber.next().await {
                 // Set up tracing context for the NATS message
                 let span = tracing::debug_span!("handle_message", actor_id = %link_def.actor_id);
+
                 span.in_scope(|| {
-                    wasmbus_rpc::otel::attach_span_context(&msg);
+                    otel::attach_span_context(&msg);
                 });
 
                 let permit = match semaphore.clone().acquire_owned().await {
@@ -308,8 +295,8 @@ async fn dispatch_msg(
         reply_to: nats_msg.reply,
         subject: nats_msg.subject,
     };
-    let actor = MessageSubscriberSender::for_actor(&link_def);
-    if let Err(e) = actor.handle_message(&Context::default(), &msg).await {
+    let actor = Handler::new(&link_def);
+    if let Err(e) = actor.handle_message(msg).await {
         error!(
             error = %e,
             "Unable to send subscription"
@@ -319,13 +306,13 @@ async fn dispatch_msg(
 
 /// Handle provider control commands
 /// put_link (new actor link command), del_link (remove link command), and shutdown
-#[async_trait]
+#[async_trait::async_trait]
 impl ProviderHandler for NatsMessagingProvider {
     /// Provider should perform any operations needed for a new link,
     /// including setting up per-actor resources, and checking authorization.
     /// If the link is allowed, return true, otherwise return false to deny the link.
     #[instrument(level = "debug", skip(self, ld), fields(actor_id = %ld.actor_id))]
-    async fn put_link(&self, ld: &LinkDefinition) -> RpcResult<bool> {
+    async fn put_link(&self, ld: &LinkDefinition) -> bool {
         // If the link definition values are empty, use the default connection configuration
         let config = if ld.values.is_empty() {
             self.default_config.clone()
@@ -335,15 +322,22 @@ impl ProviderHandler for NatsMessagingProvider {
                 Ok(cc) => self.default_config.merge(&cc),
                 Err(e) => {
                     error!("Failed to build connection configuration: {e:?}");
-                    return Ok(false);
+                    return false;
                 }
             }
         };
 
         let mut update_map = self.actors.write().await;
-        update_map.insert(ld.actor_id.to_string(), self.connect(config, ld).await?);
+        let bundle = match self.connect(config, ld).await {
+            Ok(b) => b,
+            Err(e) => {
+                error!("Failed to connect to NATS: {e:?}");
+                return false;
+            }
+        };
+        update_map.insert(ld.actor_id.to_string(), bundle);
 
-        Ok(true)
+        true
     }
 
     /// Handle notification that a link is dropped: close the connection
@@ -364,35 +358,37 @@ impl ProviderHandler for NatsMessagingProvider {
     }
 
     /// Handle shutdown request by closing all connections
-    async fn shutdown(&self) -> Result<(), Infallible> {
+    async fn shutdown(&self) {
         let mut aw = self.actors.write().await;
         // empty the actor link data and stop all servers
         aw.clear();
-        // dropping all connections should send unsubscribes and close the connections.
-        Ok(())
+        // dropping all connections should send unsubscribes and close the connections, so no need
+        // to handle that here
     }
 }
 
 /// Handle Messaging methods that interact with redis
-#[async_trait]
+#[async_trait::async_trait]
 impl Messaging for NatsMessagingProvider {
     #[instrument(level = "debug", skip(self, ctx, msg), fields(actor_id = ?ctx.actor, subject = %msg.subject, reply_to = ?msg.reply_to, body_len = %msg.body.len()))]
-    async fn publish(&self, ctx: &Context, msg: &PubMessage) -> RpcResult<()> {
+    async fn publish(&self, ctx: Context, msg: PubMessage) -> Result<(), String> {
         let actor_id = ctx
             .actor
             .as_ref()
-            .ok_or_else(|| RpcError::InvalidParameter("no actor in request".to_string()))?;
+            .ok_or_else(|| "no actor in request".to_string())?;
 
         // get read lock on actor-client hashmap to get the connection, then drop it
         let _rd = self.actors.read().await;
 
-        let nats_bundle = _rd
-            .get(actor_id)
-            .ok_or_else(|| RpcError::InvalidParameter(format!("actor not linked:{}", actor_id)))?;
-        let nats_client = nats_bundle.client.clone();
-        drop(_rd);
+        let nats_client = {
+            let rd = self.actors.read().await;
+            let nats_bundle = rd
+                .get(actor_id)
+                .ok_or_else(|| format!("actor not linked:{}", actor_id))?;
+            nats_bundle.client.clone()
+        };
 
-        let headers = OtelHeaderInjector::default_with_span().into();
+        let headers = otel::OtelHeaderInjector::default_with_span().into();
 
         let res = match msg.reply_to.clone() {
             Some(reply_to) => if should_strip_headers(&msg.subject) {
@@ -409,34 +405,33 @@ impl Messaging for NatsMessagingProvider {
                     )
                     .await
             }
-            .map_err(|e| RpcError::Nats(e.to_string())),
+            .map_err(|e| e.to_string()),
             None => nats_client
                 .publish_with_headers(msg.subject.to_string(), headers, msg.body.clone().into())
                 .await
-                .map_err(|e| RpcError::Nats(e.to_string())),
+                .map_err(|e| e.to_string()),
         };
         let _ = nats_client.flush().await;
         res
     }
 
     #[instrument(level = "debug", skip(self, ctx, msg), fields(actor_id = ?ctx.actor, subject = %msg.subject))]
-    async fn request(&self, ctx: &Context, msg: &RequestMessage) -> RpcResult<ReplyMessage> {
+    async fn request(&self, ctx: Context, msg: RequestMessage) -> Result<ReplyMessage, String> {
         let actor_id = ctx
             .actor
             .as_ref()
-            .ok_or_else(|| RpcError::InvalidParameter("no actor in request".to_string()))?;
-        // Obtain read lock on actor-client hashmap
-        let _rd = self.actors.read().await;
+            .ok_or_else(|| "no actor in request".to_string())?;
 
-        // Extract NATS client from bundle
-        let nats_client_bundle = _rd
-            .get(actor_id)
-            .ok_or_else(|| RpcError::InvalidParameter(format!("actor not linked:{}", actor_id)))?;
-        let nats_client = nats_client_bundle.client.clone();
-        drop(_rd); // early release of actor-client map
+        let nats_client = {
+            let rd = self.actors.read().await;
+            let nats_bundle = rd
+                .get(actor_id)
+                .ok_or_else(|| format!("actor not linked:{}", actor_id))?;
+            nats_bundle.client.clone()
+        }; // early release of actor-client map
 
         // Inject OTEL headers
-        let headers = OtelHeaderInjector::default_with_span().into();
+        let headers = otel::OtelHeaderInjector::default_with_span().into();
 
         // Perform the request with a timeout
         let request_with_timeout = if should_strip_headers(&msg.subject) {
@@ -459,8 +454,8 @@ impl Messaging for NatsMessagingProvider {
 
         // Process results of request
         match request_with_timeout {
-            Err(_timeout_err) => Err(RpcError::Timeout("nats request timed out".to_string())),
-            Ok(Err(send_err)) => Err(RpcError::Nats(format!("nats send error: {}", send_err))),
+            Err(_timeout_err) => Err("nats request timed out".to_string()),
+            Ok(Err(send_err)) => Err(format!("nats send error: {}", send_err)),
             Ok(Ok(resp)) => Ok(ReplyMessage {
                 body: resp.payload.to_vec(),
                 reply_to: resp.reply,
@@ -476,15 +471,51 @@ fn should_strip_headers(topic: &str) -> bool {
     topic.starts_with("$SYS")
 }
 
+#[async_trait::async_trait]
+impl wasmcloud_provider_sdk::MessageDispatch for NatsMessagingProvider {
+    async fn dispatch<'a>(
+        &'a self,
+        ctx: Context,
+        method: String,
+        body: std::borrow::Cow<'a, [u8]>,
+    ) -> Result<Vec<u8>, ProviderInvocationError> {
+        match method.as_str() {
+            "Messaging.Publish" => {
+                let input: PubMessage = ::wasmcloud_provider_sdk::deserialize(&body)?;
+                let result = self.publish(ctx, input).await.map_err(|e| {
+                    ::wasmcloud_provider_sdk::error::ProviderInvocationError::Provider(
+                        e.to_string(),
+                    )
+                })?;
+                Ok(::wasmcloud_provider_sdk::serialize(&result)?)
+            }
+            "Messaging.Request" => {
+                let input: RequestMessage = ::wasmcloud_provider_sdk::deserialize(&body)?;
+                let result = self.request(ctx, input).await.map_err(|e| {
+                    ::wasmcloud_provider_sdk::error::ProviderInvocationError::Provider(
+                        e.to_string(),
+                    )
+                })?;
+                Ok(::wasmcloud_provider_sdk::serialize(&result)?)
+            }
+            _ => Err(
+                ::wasmcloud_provider_sdk::error::InvocationError::Malformed(format!(
+                    "Invalid method name {method}",
+                ))
+                .into(),
+            ),
+        }
+    }
+}
+
+impl wasmcloud_provider_sdk::Provider for NatsMessagingProvider {}
+
 #[cfg(test)]
 mod test {
-    use std::collections::HashMap;
-
     use crate::{generate_provider, ConnectionConfig, NatsMessagingProvider};
-    use wasmbus_rpc::{
+    use wasmcloud_provider_sdk::{
         core::{HostData, LinkDefinition},
-        error::RpcError,
-        provider::ProviderHandler,
+        ProviderHandler,
     };
 
     #[test]
@@ -508,17 +539,18 @@ mod test {
 
     #[test]
     fn test_generate_provider_works_with_empty_string() {
-        let mut host_data = HostData::default();
-        host_data.config_json = Some("".to_string());
-        let prov = generate_provider(host_data);
+        let host_data = HostData {
+            config_json: Some("".to_string()),
+            ..Default::default()
+        };
+        let prov = generate_provider(&host_data);
         assert_eq!(prov.default_config, ConnectionConfig::default());
     }
 
     #[test]
     fn test_generate_provider_works_with_none() {
-        let mut host_data = HostData::default();
-        host_data.config_json = None;
-        let prov = generate_provider(host_data);
+        let host_data = HostData::default();
+        let prov = generate_provider(&host_data);
         assert_eq!(prov.default_config, ConnectionConfig::default());
     }
 
@@ -557,18 +589,20 @@ mod test {
         drop(actor_map);
 
         // Add a provider
-        let mut ld = LinkDefinition::default();
-        ld.actor_id = String::from("???");
-        ld.link_name = String::from("test");
-        ld.contract_id = String::from("test");
-        ld.values = HashMap::<String, String>::from([
-            (
-                String::from("SUBSCRIPTION"),
-                String::from("test.wasmcloud.unlink"),
-            ),
-            (String::from("URI"), String::from("127.0.0.1:4222")),
-        ]);
-        prov.put_link(&ld).await?;
+        let ld = LinkDefinition {
+            actor_id: String::from("???"),
+            link_name: String::from("test"),
+            contract_id: String::from("test"),
+            values: vec![
+                (
+                    String::from("SUBSCRIPTION"),
+                    String::from("test.wasmcloud.unlink"),
+                ),
+                (String::from("URI"), String::from("127.0.0.1:4222")),
+            ],
+            ..Default::default()
+        };
+        prov.put_link(&ld).await;
 
         // After putting a link there should be one sub
         let actor_map = prov.actors.write().await;
@@ -605,24 +639,23 @@ mod test {
         drop(actor_map);
 
         // Add a provider
-        let mut ld = LinkDefinition::default();
-        ld.actor_id = String::from("???");
-        ld.link_name = String::from("test");
-        ld.contract_id = String::from("test");
-        ld.values = HashMap::<String, String>::from([
-            (
-                String::from("SUBSCRIPTION"),
-                String::from("test.wasmcloud.unlink"),
-            ),
-            (String::from("URI"), String::from("99.99.99.99:4222")),
-        ]);
-        let result = prov.put_link(&ld).await;
+        let ld = LinkDefinition {
+            actor_id: String::from("???"),
+            link_name: String::from("test"),
+            contract_id: String::from("test"),
+            values: vec![
+                (
+                    String::from("SUBSCRIPTION"),
+                    String::from("test.wasmcloud.unlink"),
+                ),
+                (String::from("URI"), String::from("99.99.99.99:4222")),
+            ],
+            ..Default::default()
+        };
+        let link_succeeded = prov.put_link(&ld).await;
 
         // Expect the result to fail, connecting to an IP that (should) not exist
-        assert!(result.is_err(), "put_link failed");
-        assert!(
-            matches!(result, Err(RpcError::ProviderInit(msg)) if msg == "NATS connection to 99.99.99.99:4222: timed out")
-        );
+        assert!(!link_succeeded, "put_link failed");
 
         let _ = prov.shutdown().await;
         Ok(())
