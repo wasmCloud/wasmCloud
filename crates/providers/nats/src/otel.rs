@@ -2,6 +2,8 @@
 // NATS could leverage it. For speed right now, I am just putting it here since we no longer have
 // this code in the SDK provider (which was being used previously)
 
+use std::sync::OnceLock;
+
 use async_nats::header::HeaderMap;
 use opentelemetry::{
     propagation::{Extractor, Injector, TextMapPropagator},
@@ -10,8 +12,10 @@ use opentelemetry::{
 use tracing::span::Span;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
-lazy_static::lazy_static! {
-    static ref EMPTY_HEADERS: HeaderMap = HeaderMap::default();
+static EMPTY_HEADERS: OnceLock<HeaderMap> = OnceLock::new();
+
+fn empty_headers() -> &'static HeaderMap {
+    EMPTY_HEADERS.get_or_init(HeaderMap::new)
 }
 
 /// A convenience type that wraps a NATS [`HeaderMap`] and implements the [`Extractor`] trait
@@ -28,7 +32,7 @@ impl<'a> OtelHeaderExtractor<'a> {
 
     /// Creates a new extractor using the given message
     pub fn new_from_message(msg: &'a async_nats::Message) -> Self {
-        let inner = msg.headers.as_ref().unwrap_or(&EMPTY_HEADERS);
+        let inner = msg.headers.as_ref().unwrap_or_else(|| empty_headers());
         OtelHeaderExtractor { inner }
     }
 }
