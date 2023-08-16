@@ -1,8 +1,48 @@
 package wasmcloud:bus
 
+interface lattice {
+    /// Interface target. This represents an interface, which can be selected by `set-target`.
+    /// The set of `target-*` functions defines all "selectable" interfaces provided by the host.
+    /// Implementations of `wasmcloud:bus/lattice` may extend the set of "selectable" interfaces.
+    type target-interface = u32
+
+    /// `wasi:keyvalue/readwrite` interface target
+    target-wasi-keyvalue-readwrite: func() -> target-interface
+
+    /// `wasi:logging/logging` interface target
+    target-wasi-logging-logging: func() -> target-interface
+
+    /// `wasmcloud:blobstore/consumer` interface target
+    target-wasmcloud-blobstore-consumer: func() -> target-interface
+
+    /// `wasmcloud:messaging/consumer` interface target
+    target-wasmcloud-messaging-consumer: func() -> target-interface
+
+    /// Actor identifier
+    variant actor-identifier {
+        /// Actor public key
+        public-key(string),
+        /// Actor call alias
+        alias(string),
+    }
+
+    /// Target entity
+    variant target-entity {
+        /// Link target paired with an optional link name
+        link(option<string>),
+        /// Actor target
+        actor(actor-identifier),
+    }
+
+    /// Set an optional target for all interfaces specified. If `target` is `none`, then target is set to default.
+    set-target: func(target: option<target-entity>, interfaces: list<target-interface>)
+}
+
 interface host {
     use wasi:io/streams.{input-stream, output-stream}
     use wasi:poll/poll.{pollable}
+
+    use lattice.{target-interface, target-entity}
 
     // The following block defines a special resource type used by the
     // `wasi:bus/host` interface to emulate
@@ -16,8 +56,11 @@ interface host {
     future-result-get: func(f: future-result) -> option<result<_, string>>
     listen-to-future-result: func(f: future-result) -> pollable
 
-    /// call an operation of form `namespace:package/interface.operation`, e.g. `wasmcloud:bus/host.call`
-    call: func(operation: string) -> result<tuple<future-result, input-stream, output-stream>, string>
+    /// Call an operation of form `namespace:package/interface.operation`, e.g. `wasmcloud:bus/host.call`
+    call: func(target: option<target-entity>, operation: string) -> result<tuple<future-result, input-stream, output-stream>, string>
+
+    /// Synchronously call an operation of form `namespace:package/interface.operation`, e.g. `wasmcloud:bus/host.call_sync`
+    call-sync: func(target: option<target-entity>, operation: string, payload: list<u8>) -> result<list<u8>, string>
 }
 
 interface guest {

@@ -1,4 +1,4 @@
-package test-actors:http-log-rng
+package test-actors:builtins
 
 world actor {
     export wasmcloud:bus/guest

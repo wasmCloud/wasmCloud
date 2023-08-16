@@ -25,7 +25,7 @@ use tokio::{fs, spawn};
 use tokio_stream::wrappers::TcpListenerStream;
 use tracing::{debug, error, instrument, trace};
 use wasmcloud_runtime::actor::GuestInstance;
-use wasmcloud_runtime::capability::Bus;
+use wasmcloud_runtime::capability::{Bus, TargetEntity};
 use wasmcloud_runtime::{ActorInstance, PooledActorInstance, Runtime};
 
 #[instrument]
@@ -72,14 +72,36 @@ struct BusHandler(HashMap<String, GuestInstance>);
 #[async_trait]
 impl Bus for BusHandler {
     #[instrument(skip(self))]
+    async fn identify_wasmbus_target(
+        &self,
+        _binding: &str,
+        _namespace: &str,
+    ) -> anyhow::Result<TargetEntity> {
+        bail!("not supported by local host")
+    }
+
+    #[instrument(skip(self))]
+    async fn set_target(
+        &self,
+        _target: Option<TargetEntity>,
+        _interfaces: Vec<wasmcloud_runtime::capability::TargetInterface>,
+    ) -> anyhow::Result<()> {
+        bail!("not supported by local host")
+    }
+
+    #[instrument(skip(self))]
     async fn call(
         &self,
+        target: Option<TargetEntity>,
         operation: String,
     ) -> anyhow::Result<(
         Pin<Box<dyn Future<Output = Result<(), String>> + Send>>,
         Box<dyn AsyncWrite + Send + Sync + Unpin>,
         Box<dyn AsyncRead + Send + Sync + Unpin>,
     )> {
+        if target.is_some() {
+            bail!("targets not supported by local host")
+        }
         let actor = self
             .0
             .get(&operation)

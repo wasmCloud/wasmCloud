@@ -1,15 +1,19 @@
+use super::bus;
 use super::logging::logging;
 use super::{format_opt, messaging};
 
+use core::convert::Infallible;
 use core::fmt::Debug;
 use core::future::Future;
 use core::pin::Pin;
+use core::str::FromStr;
+use core::time::Duration;
 
 use std::sync::Arc;
-use std::time::Duration;
 
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use async_trait::async_trait;
+use nkeys::{KeyPair, KeyPairType};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tracing::{instrument, trace};
 
@@ -86,12 +90,115 @@ impl Handler {
     }
 }
 
+#[derive(Clone, Debug)]
+/// Actor identifier
+pub enum ActorIdentifier {
+    /// Actor call alias identifier
+    Alias(String),
+    /// Actor public key identifier
+    Key(Arc<KeyPair>),
+}
+
+impl From<&str> for ActorIdentifier {
+    fn from(s: &str) -> Self {
+        if let Ok(key) = KeyPair::from_public_key(s) {
+            if key.key_pair_type() == KeyPairType::Module {
+                return Self::Key(Arc::new(key));
+            }
+        }
+        Self::Alias(s.into())
+    }
+}
+
+impl FromStr for ActorIdentifier {
+    type Err = Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(s.into())
+    }
+}
+
+impl PartialEq for ActorIdentifier {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Alias(l), Self::Alias(r)) => l == r,
+            (Self::Key(l), Self::Key(r)) => l.public_key() == r.public_key(),
+            _ => false,
+        }
+    }
+}
+
+impl Eq for ActorIdentifier {}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+/// Target entity
+pub enum TargetEntity {
+    /// Link target entity
+    Link(Option<String>),
+    /// Actor target entity
+    Actor(ActorIdentifier),
+}
+
+impl TryFrom<bus::lattice::ActorIdentifier> for ActorIdentifier {
+    type Error = anyhow::Error;
+
+    fn try_from(entity: bus::lattice::ActorIdentifier) -> Result<Self, Self::Error> {
+        match entity {
+            bus::lattice::ActorIdentifier::PublicKey(key) => {
+                let key =
+                    KeyPair::from_public_key(&key).context("failed to parse actor public key")?;
+                Ok(ActorIdentifier::Key(Arc::new(key)))
+            }
+            bus::lattice::ActorIdentifier::Alias(alias) => Ok(ActorIdentifier::Alias(alias)),
+        }
+    }
+}
+
+impl TryFrom<bus::lattice::TargetEntity> for TargetEntity {
+    type Error = anyhow::Error;
+
+    fn try_from(entity: bus::lattice::TargetEntity) -> Result<Self, Self::Error> {
+        match entity {
+            bus::lattice::TargetEntity::Link(name) => Ok(Self::Link(name)),
+            bus::lattice::TargetEntity::Actor(actor) => actor.try_into().map(TargetEntity::Actor),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, Hash, PartialEq)]
+/// Call target identifier
+pub enum TargetInterface {
+    /// `wasi:keyvalue/readwrite`
+    WasiKeyvalueReadwrite,
+    /// `wasi:logging/logging`
+    WasiLoggingLogging,
+    /// `wasmcloud:blobstore/consumer`
+    WasmcloudBlobstoreConsumer,
+    /// `wasmcloud:messaging/consumer`
+    WasmcloudMessagingConsumer,
+}
+
 #[async_trait]
 /// `wasmcloud:bus/host` implementation
 pub trait Bus {
+    /// Identify the target of wasmbus module invocation
+    async fn identify_wasmbus_target(
+        &self,
+        binding: &str,
+        namespace: &str,
+    ) -> anyhow::Result<TargetEntity>;
+
+    /// Set interface call target
+    async fn set_target(
+        &self,
+        target: Option<TargetEntity>,
+        interfaces: Vec<TargetInterface>,
+    ) -> anyhow::Result<()>;
+
     /// Handle `wasmcloud:bus/host.call`
     async fn call(
         &self,
+        target: Option<TargetEntity>,
         operation: String,
     ) -> anyhow::Result<(
         Pin<Box<dyn Future<Output = Result<(), String>> + Send>>,
@@ -99,48 +206,28 @@ pub trait Bus {
         Box<dyn AsyncRead + Sync + Send + Unpin>,
     )>;
 
-    /// Handle `wasmcloud:bus/host.call` without streaming and with no response
-    async fn call_oneshot(
-        &self,
-        operation: String,
-        request: Vec<u8>,
-    ) -> anyhow::Result<Result<(), String>> {
-        let (res, mut input, mut output) = self
-            .call(operation)
-            .await
-            .context("failed to process call")?;
-        input
-            .write_all(&request)
-            .await
-            .context("failed to write request")?;
-        let n = output
-            .read_buf(&mut [0u8].as_mut_slice())
-            .await
-            .context("failed to read output")?;
-        ensure!(n == 0, "unexpected output received");
-        Ok(res.await)
-    }
-
     /// Handle `wasmcloud:bus/host.call` without streaming
-    async fn call_oneshot_with_response(
+    async fn call_sync(
         &self,
+        target: Option<TargetEntity>,
         operation: String,
-        request: Vec<u8>,
-        response: &mut Vec<u8>,
-    ) -> anyhow::Result<Result<usize, String>> {
+        mut payload: Vec<u8>,
+    ) -> anyhow::Result<Vec<u8>> {
         let (res, mut input, mut output) = self
-            .call(operation)
+            .call(target, operation)
             .await
             .context("failed to process call")?;
         input
-            .write_all(&request)
+            .write_all(&payload)
             .await
             .context("failed to write request")?;
-        let n = output
-            .read_to_end(response)
+        payload.clear();
+        output
+            .read_to_end(&mut payload)
             .await
             .context("failed to read output")?;
-        Ok(res.await.map(|()| n))
+        res.await.map_err(|e| anyhow!(e).context("call failed"))?;
+        Ok(payload)
     }
 }
 
@@ -224,8 +311,37 @@ pub trait Messaging {
 #[async_trait]
 impl Bus for Handler {
     #[instrument]
+    async fn identify_wasmbus_target(
+        &self,
+        binding: &str,
+        namespace: &str,
+    ) -> anyhow::Result<TargetEntity> {
+        if let Some(ref bus) = self.bus {
+            trace!("call `Bus` handler");
+            bus.identify_wasmbus_target(binding, namespace).await
+        } else {
+            bail!("host cannot identify the Wasmbus call target")
+        }
+    }
+
+    #[instrument]
+    async fn set_target(
+        &self,
+        target: Option<TargetEntity>,
+        interfaces: Vec<TargetInterface>,
+    ) -> anyhow::Result<()> {
+        if let Some(ref bus) = self.bus {
+            trace!("call `Bus` handler");
+            bus.set_target(target, interfaces).await
+        } else {
+            bail!("host cannot set call target")
+        }
+    }
+
+    #[instrument]
     async fn call(
         &self,
+        target: Option<TargetEntity>,
         operation: String,
     ) -> anyhow::Result<(
         Pin<Box<dyn Future<Output = Result<(), String>> + Send>>,
@@ -234,7 +350,21 @@ impl Bus for Handler {
     )> {
         if let Some(ref bus) = self.bus {
             trace!("call `Bus` handler");
-            bus.call(operation).await
+            bus.call(target, operation).await
+        } else {
+            bail!("host cannot handle `{operation}`")
+        }
+    }
+
+    async fn call_sync(
+        &self,
+        target: Option<TargetEntity>,
+        operation: String,
+        payload: Vec<u8>,
+    ) -> anyhow::Result<Vec<u8>> {
+        if let Some(ref bus) = self.bus {
+            trace!("call `Bus` handler");
+            bus.call_sync(target, operation, payload).await
         } else {
             bail!("host cannot handle `{operation}`")
         }

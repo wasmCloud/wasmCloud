@@ -7,7 +7,7 @@ use serde_json::json;
 use wasmcloud_actor::wasi::keyvalue;
 use wasmcloud_actor::wasi::logging::logging;
 use wasmcloud_actor::wasi::random::random;
-use wasmcloud_actor::wasmcloud::messaging;
+use wasmcloud_actor::wasmcloud::{bus, messaging};
 use wasmcloud_actor::{
     debug, error, info, trace, warn, HostRng, HttpRequest, HttpResponse, InputStreamReader,
     OutputStreamWriter,
@@ -77,6 +77,10 @@ impl exports::wasmcloud::bus::guest::Guest for Actor {
             .expect("failed to write response");
         stdout.flush().expect("failed to flush stdout");
 
+        bus::lattice::set_target(
+            Some(&bus::lattice::TargetEntity::Link(Some("messaging".into()))),
+            &[bus::lattice::target_wasmcloud_messaging_consumer()],
+        );
         messaging::consumer::publish(&messaging::types::BrokerMessage {
             body: Some(body.clone()),
             reply_to: Some("noreply".into()),
@@ -117,6 +121,10 @@ impl exports::wasmcloud::bus::guest::Guest for Actor {
             _ => panic!("too many responses received"),
         }
 
+        bus::lattice::set_target(
+            Some(&bus::lattice::TargetEntity::Link(Some("keyvalue".into()))),
+            &[bus::lattice::target_wasi_keyvalue_readwrite()],
+        );
         let foo_key = String::from("foo");
         let bucket = keyvalue::types::open_bucket("")
             .map_err(keyvalue::wasi_cloud_error::trace)
