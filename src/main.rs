@@ -40,7 +40,6 @@ struct Args {
     /// The seed key (a printable 256-bit Ed25519 private key) used by this host to sign all invocations
     #[clap(long = "cluster-seed", env = "WASMCLOUD_CLUSTER_SEED")]
     cluster_seed: Option<String>,
-    // TODO: use and implement cluster issuers
     /// A comma-delimited list of public keys that can be used as issuers on signed invocations
     #[clap(
         long = "cluster-issuers",
@@ -224,6 +223,7 @@ async fn main() -> anyhow::Result<()> {
         lattice_prefix,
         host_seed,
         cluster_seed,
+        cluster_issuers,
         ..
     } = Args::parse();
 
@@ -243,6 +243,7 @@ async fn main() -> anyhow::Result<()> {
         lattice_prefix,
         host_seed,
         cluster_seed,
+        cluster_issuers,
     })
     .await
     .context("failed to initialize host")?;
