@@ -218,6 +218,7 @@ struct Args {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let Args {
+        log_level,
         nats_host,
         nats_port,
         lattice_prefix,
@@ -231,7 +232,7 @@ async fn main() -> anyhow::Result<()> {
         .with(tracing_subscriber::fmt::layer().pretty().without_time())
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                tracing_subscriber::EnvFilter::new("info,cranelift_codegen=warn")
+                tracing_subscriber::EnvFilter::new(format!("{log_level},cranelift_codegen=warn"))
             }),
         )
         .init();
