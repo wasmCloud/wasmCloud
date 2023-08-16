@@ -1488,7 +1488,7 @@ impl Host {
         debug!(actor_id, actor_ref, count, "scale actor");
 
         let actor_id = if actor_id.is_empty() {
-            let actor = fetch_actor(&actor_ref)
+            let actor = fetch_actor(&actor_ref, &self.host_config.oci_opts)
                 .await
                 .context("failed to fetch actor")?;
             let actor = wasmcloud_runtime::Actor::new(&self.runtime, actor)
@@ -1505,7 +1505,8 @@ impl Host {
         ) {
             (hash_map::Entry::Vacant(_), None) => {}
             (hash_map::Entry::Vacant(entry), Some(count)) => {
-                let actor = fetch_actor(&actor_ref)
+                // FIXME: avoid duplicate actor fetch
+                let actor = fetch_actor(&actor_ref, &self.host_config.oci_opts)
                     .await
                     .context("failed to fetch actor")?;
                 let actor = wasmcloud_runtime::Actor::new(&self.runtime, actor)
@@ -1581,7 +1582,7 @@ impl Host {
     ) -> anyhow::Result<()> {
         debug!("launch actor");
 
-        let actor = fetch_actor(&actor_ref)
+        let actor = fetch_actor(&actor_ref, &self.host_config.oci_opts)
             .await
             .context("failed to fetch actor")?;
         let actor = wasmcloud_runtime::Actor::new(&self.runtime, actor)
@@ -1759,7 +1760,7 @@ impl Host {
         let count =
             NonZeroUsize::new(matching_instances.len()).context("zero instances of actor found")?;
 
-        let new_actor_bytes = fetch_actor(&new_actor_ref)
+        let new_actor_bytes = fetch_actor(&new_actor_ref, &self.host_config.oci_opts)
             .await
             .context("failed to fetch actor")?;
         let new_actor = wasmcloud_runtime::Actor::new(&self.runtime, new_actor_bytes)
@@ -1815,9 +1816,10 @@ impl Host {
     ) -> anyhow::Result<()> {
         debug!("launch provider");
 
-        let (path, claims) = crate::fetch_provider(provider_ref, link_name)
-            .await
-            .context("failed to fetch provider")?;
+        let (path, claims) =
+            crate::fetch_provider(provider_ref, link_name, &self.host_config.oci_opts)
+                .await
+                .context("failed to fetch provider")?;
 
         let annotations = annotations.map(|annotations| annotations.into_iter().collect());
         let mut providers = self.providers.write().await;
@@ -1853,7 +1855,7 @@ impl Host {
                 "link_definitions": link_definitions,
                 "config_json": configuration,
                 "default_rpc_timeout_ms": 2000, // TODO: Support config
-                "cluster_issuers": self.host_config.cluster_issuers.to_owned().unwrap_or_else(|| vec![self.cluster_key.public_key()]),
+                "cluster_issuers": self.host_config.cluster_issuers.clone().unwrap_or_else(|| vec![self.cluster_key.public_key()]),
                 "invocation_seed": invocation_seed,
                 "js_domain": self.host_config.js_domain,
                 // TODO: Set `structured_logging`
@@ -2004,7 +2006,7 @@ impl Host {
                         )
                         .await
                     {
-                        warn!(?e, "Provider didn't gracefully shut down in time, shutting down forcefully")
+                        warn!(?e, "Provider didn't gracefully shut down in time, shutting down forcefully");
                     }
                 }
 

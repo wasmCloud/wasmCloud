@@ -8,6 +8,7 @@ use clap::Parser;
 use tokio::{select, signal};
 use tracing::Level as LogLevel;
 use tracing_subscriber::prelude::*;
+use wasmcloud_host::oci::Config as OciConfig;
 use wasmcloud_host::url::Url;
 use wasmcloud_host::WasmbusHostConfig;
 
@@ -15,6 +16,9 @@ use wasmcloud_host::WasmbusHostConfig;
 #[allow(clippy::struct_excessive_bools)]
 #[command(version, about, long_about = None)]
 struct Args {
+    /// Controls the verbosity of logs from the wasmCloud host
+    #[clap(long = "log-level", alias = "structured-log-level", default_value_t = LogLevel::INFO, env = "WASMCLOUD_LOG_LEVEL")]
+    pub log_level: LogLevel,
     /// NATS server host to connect to
     #[clap(long = "nats-host", default_value = "127.0.0.1", env = "NATS_HOST")]
     nats_host: String,
@@ -50,7 +54,6 @@ struct Args {
     /// Delay, in milliseconds, between requesting a provider shut down and forcibly terminating its process
     #[clap(long = "provider-shutdown-delay", default_value = "300", env = "WASMCLOUD_PROV_SHUTDOWN_DELAY_MS", value_parser = parse_duration, hide = true)]
     provider_shutdown_delay: Duration,
-    // TODO: use and implement the below args
     /// Determines whether OCI images tagged latest are allowed to be pulled from OCI registries and started
     #[clap(long = "allow-latest", env = "WASMCLOUD_OCI_ALLOW_LATEST", hide = true)]
     allow_latest: bool,
@@ -94,9 +97,6 @@ struct Args {
         env = "WASMCLOUD_STRUCTURED_LOGGING_ENABLED"
     )]
     enable_structured_logging: bool,
-    /// Controls the verbosity of JSON structured logs from the wasmCloud host
-    #[clap(long = "log-level", alias = "structured-log-level", default_value_t = LogLevel::INFO, env = "WASMCLOUD_LOG_LEVEL")]
-    log_level: LogLevel,
 
     // TODO: use and implement RPC variables
     /// An IP address or DNS name to use to connect to NATS for RPC messages, defaults to the value supplied to --nats-host if not supplied
@@ -202,7 +202,6 @@ struct Args {
     #[clap(long = "policy-timeout-ms", env = "WASMCLOUD_POLICY_TIMEOUT", value_parser = parse_duration, hide = true)]
     policy_timeout_ms: Option<Duration>,
 
-    // TODO: use and implement OCI variables
     #[clap(long = "oci-registry", env = "OCI_REGISTRY", hide = true)]
     oci_registry: Option<String>,
     #[clap(
@@ -232,6 +231,9 @@ async fn main() -> anyhow::Result<()> {
         cluster_seed,
         cluster_issuers,
         provider_shutdown_delay,
+        oci_registry,
+        oci_user,
+        oci_password,
         js_domain,
         ..
     } = Args::parse();
@@ -255,6 +257,13 @@ async fn main() -> anyhow::Result<()> {
         cluster_issuers,
         js_domain,
         provider_shutdown_delay: Some(provider_shutdown_delay),
+        oci_opts: OciConfig {
+            allow_latest,
+            allowed_insecure,
+            oci_registry,
+            oci_user,
+            oci_password,
+        },
     })
     .await
     .context("failed to initialize host")?;
