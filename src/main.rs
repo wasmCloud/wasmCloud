@@ -17,14 +17,14 @@ use wasmcloud_host::WasmbusHostConfig;
 struct Args {
     /// NATS server host to connect to
     #[clap(long = "nats-host", default_value = "127.0.0.1", env = "NATS_HOST")]
-    pub nats_host: String,
+    nats_host: String,
     /// NATS server port to connect to
     #[clap(long = "nats-port", default_value_t = 4222, env = "NATS_PORT")]
-    pub nats_port: u16,
+    nats_port: u16,
     // TODO: use and implement NATS credsfile auth
     /// NATS credentials file to use when authenticating
     #[clap(long = "nats-credsfile", env = "NATS_CREDSFILE", hide = true)]
-    pub nats_credsfile: Option<PathBuf>,
+    nats_credsfile: Option<PathBuf>,
 
     /// The lattice the host belongs to
     #[clap(
@@ -33,13 +33,13 @@ struct Args {
         default_value = "default",
         env = "WASMCLOUD_LATTICE_PREFIX"
     )]
-    pub lattice_prefix: String,
+    lattice_prefix: String,
     /// The seed key (a printable 256-bit Ed25519 private key) used by this host to generate its public key  
     #[clap(long = "host-seed", env = "WASMCLOUD_HOST_SEED")]
-    pub host_seed: Option<String>,
+    host_seed: Option<String>,
     /// The seed key (a printable 256-bit Ed25519 private key) used by this host to sign all invocations
     #[clap(long = "cluster-seed", env = "WASMCLOUD_CLUSTER_SEED")]
-    pub cluster_seed: Option<String>,
+    cluster_seed: Option<String>,
     // TODO: use and implement cluster issuers
     /// A comma-delimited list of public keys that can be used as issuers on signed invocations
     #[clap(
@@ -47,31 +47,31 @@ struct Args {
         env = "WASMCLOUD_CLUSTER_ISSUERS",
         hide = true
     )]
-    pub cluster_issuers: Option<Vec<String>>,
+    cluster_issuers: Option<Vec<String>>,
     // TODO: use and implement the below args
     /// Delay, in milliseconds, between requesting a provider shut down and forcibly terminating its process
     #[clap(long = "provider-delay", default_value = "300", env = "WASMCLOUD_PROV_SHUTDOWN_DELAY_MS", value_parser = parse_duration, hide = true)]
-    pub provider_delay: Duration,
+    provider_delay: Duration,
     /// Determines whether OCI images tagged latest are allowed to be pulled from OCI registries and started
     #[clap(long = "allow-latest", env = "WASMCLOUD_OCI_ALLOW_LATEST", hide = true)]
-    pub allow_latest: bool,
+    allow_latest: bool,
     /// A comma-separated list of OCI hosts to which insecure (non-TLS) connections are allowed
     #[clap(
         long = "allowed-insecure",
         env = "WASMCLOUD_OCI_ALLOWED_INSECURE",
         hide = true
     )]
-    pub allowed_insecure: Option<Vec<String>>,
+    allowed_insecure: Option<Vec<String>>,
     /// Jetstream domain name, configures a host to properly connect to a NATS supercluster, defaults to `core`
     #[clap(long = "wasmcloud-js-domain", env = "WASMCLOUD_JS_DOMAIN", hide = true)]
-    pub wasmcloud_js_domain: Option<String>,
+    wasmcloud_js_domain: Option<String>,
     /// Denotes if a wasmCloud host should issue requests to a config service on startup
     #[clap(
         long = "config-service-enabled",
         env = "WASMCLOUD_CONFIG_SERVICE",
         hide = true
     )]
-    pub config_service_enabled: bool,
+    config_service_enabled: bool,
     /// Denotes if a wasmCloud host should allow starting actors from the file system
     #[clap(
         long = "allow-file-load",
@@ -79,27 +79,27 @@ struct Args {
         env = "WASMCLOUD_ALLOW_FILE_LOAD",
         hide = true
     )]
-    pub allow_file_load: bool,
+    allow_file_load: bool,
     /// Enables IPV6 addressing for wasmCloud hosts
     #[clap(long = "enable-ipv6", env = "WASMCLOUD_ENABLE_IPV6", hide = true)]
-    pub enable_ipv6: bool,
+    enable_ipv6: bool,
     /// Enable JSON structured logging from the wasmCloud host
     #[clap(
         long = "enable-structured-logging",
         env = "WASMCLOUD_STRUCTURED_LOGGING_ENABLED"
     )]
-    pub enable_structured_logging: bool,
+    enable_structured_logging: bool,
     /// Controls the verbosity of JSON structured logs from the wasmCloud host
     #[clap(long = "log-level", alias = "structured-log-level", default_value_t = LogLevel::INFO, env = "WASMCLOUD_LOG_LEVEL")]
-    pub log_level: LogLevel,
+    log_level: LogLevel,
 
     // TODO: use and implement RPC variables
     /// An IP address or DNS name to use to connect to NATS for RPC messages, defaults to the value supplied to --nats-host if not supplied
     #[clap(long = "rpc-host", env = "WASMCLOUD_RPC_HOST", hide = true)]
-    pub rpc_host: Option<String>,
+    rpc_host: Option<String>,
     /// A port to use to connect to NATS for RPC messages, defaults to the value supplied to --nats-port if not supplied
     #[clap(long = "rpc-port", env = "WASMCLOUD_RPC_PORT", hide = true)]
-    pub rpc_port: Option<u16>,
+    rpc_port: Option<u16>,
     /// A user JWT to use to authenticate to NATS for RPC messages
     #[clap(
         long = "rpc-jwt",
@@ -107,7 +107,7 @@ struct Args {
         requires = "rpc_seed",
         hide = true
     )]
-    pub rpc_jwt: Option<String>,
+    rpc_jwt: Option<String>,
     /// A seed nkey to use to authenticate to NATS for RPC messages
     #[clap(
         long = "rpc-seed",
@@ -115,21 +115,21 @@ struct Args {
         requires = "rpc_jwt",
         hide = true
     )]
-    pub rpc_seed: Option<String>,
+    rpc_seed: Option<String>,
     /// Timeout in milliseconds for all RPC calls
     #[clap(long = "rpc-timeout-ms", default_value = "2000", env = "WASMCLOUD_RPC_TIMEOUT_MS", value_parser = parse_duration, hide = true)]
-    pub rpc_timeout_ms: Duration,
+    rpc_timeout_ms: Duration,
     /// Optional flag to enable host communication with a NATS server over TLS for RPC messages
     #[clap(long = "rpc-tls", env = "WASMCLOUD_RPC_TLS", hide = true)]
-    pub rpc_tls: bool,
+    rpc_tls: bool,
 
     // TODO: use and implement PROV RPC variables
     /// An IP address or DNS name to use to connect to NATS for Provider RPC messages, defaults to the value supplied to --nats-host if not supplied
     #[clap(long = "prov-rpc-host", env = "WASMCLOUD_PROV_RPC_HOST", hide = true)]
-    pub prov_rpc_host: Option<String>,
+    prov_rpc_host: Option<String>,
     /// A port to use to connect to NATS for Provider RPC messages, defaults to the value supplied to --nats-port if not supplied
     #[clap(long = "prov-rpc-port", env = "WASMCLOUD_PROV_RPC_PORT", hide = true)]
-    pub prov_rpc_port: Option<u16>,
+    prov_rpc_port: Option<u16>,
     /// A user JWT to use to authenticate to NATS for Provider RPC messages
     #[clap(
         long = "prov-rpc-jwt",
@@ -137,7 +137,7 @@ struct Args {
         requires = "prov_rpc_seed",
         hide = true
     )]
-    pub prov_rpc_jwt: Option<String>,
+    prov_rpc_jwt: Option<String>,
     /// A seed nkey to use to authenticate to NATS for Provider RPC messages
     #[clap(
         long = "prov-rpc-seed",
@@ -145,18 +145,18 @@ struct Args {
         requires = "prov_rpc_jwt",
         hide = true
     )]
-    pub prov_rpc_seed: Option<String>,
+    prov_rpc_seed: Option<String>,
     /// Optional flag to enable host communication with a NATS server over TLS for Provider RPC messages
     #[clap(long = "prov-rpc-tls", env = "WASMCLOUD_PROV_RPC_TLS", hide = true)]
-    pub prov_rpc_tls: bool,
+    prov_rpc_tls: bool,
 
     // TODO: use and implement CTL variables
     /// An IP address or DNS name to use to connect to NATS for Control Interface (CTL) messages, defaults to the value supplied to --nats-host if not supplied
     #[clap(long = "ctl-host", env = "WASMCLOUD_CTL_HOST", hide = true)]
-    pub ctl_host: Option<String>,
+    ctl_host: Option<String>,
     /// A port to use to connect to NATS for CTL messages, defaults to the value supplied to --nats-port if not supplied
     #[clap(long = "ctl-port", env = "WASMCLOUD_CTL_PORT", hide = true)]
-    pub ctl_port: Option<u16>,
+    ctl_port: Option<u16>,
     /// A user JWT to use to authenticate to NATS for CTL messages
     #[clap(
         long = "ctl-jwt",
@@ -164,7 +164,7 @@ struct Args {
         requires = "ctl_seed",
         hide = true
     )]
-    pub ctl_jwt: Option<String>,
+    ctl_jwt: Option<String>,
     /// A seed nkey to use to authenticate to NATS for CTL messages
     #[clap(
         long = "ctl-seed",
@@ -172,10 +172,10 @@ struct Args {
         requires = "ctl_jwt",
         hide = true
     )]
-    pub ctl_seed: Option<String>,
+    ctl_seed: Option<String>,
     /// Optional flag to enable host communication with a NATS server over TLS for CTL messages
     #[clap(long = "ctl-tls", env = "WASMCLOUD_CTL_TLS", hide = true)]
-    pub ctl_tls: bool,
+    ctl_tls: bool,
     /// A prefix to use for all CTL topics
     #[clap(
         long = "ctl-topic-prefix",
@@ -183,37 +183,37 @@ struct Args {
         default_value = "wasmbus.ctl",
         hide = true
     )]
-    pub ctl_topic_prefix: String,
+    ctl_topic_prefix: String,
 
     // TODO: use and implement policy
     #[clap(long = "policy-topic", env = "WASMCLOUD_POLICY_TOPIC", hide = true)]
-    pub policy_topic: Option<String>,
+    policy_topic: Option<String>,
     #[clap(
         long = "policy-changes-topic",
         env = "WASMCLOUD_POLICY_CHANGES_TOPIC",
         hide = true
     )]
-    pub policy_changes_topic: Option<String>,
+    policy_changes_topic: Option<String>,
     #[clap(long = "policy-timeout-ms", env = "WASMCLOUD_POLICY_TIMEOUT", value_parser = parse_duration, hide = true)]
-    pub policy_timeout_ms: Option<Duration>,
+    policy_timeout_ms: Option<Duration>,
 
     // TODO: use and implement OCI variables
     #[clap(long = "oci-registry", env = "OCI_REGISTRY", hide = true)]
-    pub oci_registry: Option<String>,
+    oci_registry: Option<String>,
     #[clap(
         long = "oci-user",
         env = "OCI_REGISTRY_USER",
         requires = "oci_password",
         hide = true
     )]
-    pub oci_user: Option<String>,
+    oci_user: Option<String>,
     #[clap(
         long = "oci-password",
         env = "OCI_REGISTRY_PASSWORD",
         requires = "oci_user",
         hide = true
     )]
-    pub oci_password: Option<String>,
+    oci_password: Option<String>,
 }
 
 #[tokio::main]
