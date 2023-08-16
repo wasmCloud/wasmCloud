@@ -12,6 +12,8 @@ pub struct Host {
     pub host_seed: Option<String>,
     /// The seed key (a printable 256-bit Ed25519 private key) used by this host to sign all invocations
     pub cluster_seed: Option<String>,
+    /// The identity keys (a printable 256-bit Ed25519 public key) that this host should allow invocations from
+    pub cluster_issuers: Option<Vec<String>>,
 }
 
 impl Default for Host {
@@ -22,6 +24,7 @@ impl Default for Host {
             lattice_prefix: "default".to_string(),
             host_seed: None,
             cluster_seed: None,
+            cluster_issuers: None,
         }
     }
 }

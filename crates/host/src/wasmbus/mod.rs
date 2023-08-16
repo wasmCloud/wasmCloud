@@ -914,6 +914,11 @@ impl Host {
         } else {
             KeyPair::new(KeyPairType::Cluster)
         };
+        if let Some(issuers) = config.cluster_issuers.as_ref() {
+            if !issuers.contains(&cluster_key.public_key()) {
+                bail!("cluster issuers list must contain the cluster key");
+            }
+        }
         let cluster_key = Arc::new(cluster_key);
         let host_key = if let Some(host_seed) = config.host_seed.as_ref() {
             let kp =
@@ -1850,7 +1855,7 @@ impl Host {
                 "link_definitions": link_definitions,
                 "config_json": configuration,
                 "default_rpc_timeout_ms": 2000, // TODO: Support config
-                "cluster_issuers": vec![self.cluster_key.public_key()], // TODO: Support config
+                "cluster_issuers": self.host_config.cluster_issuers.to_owned().unwrap_or_else(|| vec![self.cluster_key.public_key()]),
                 "invocation_seed": invocation_seed,
                 // TODO: Set `js_domain`
                 // TODO: Set `structured_logging`
@@ -2180,6 +2185,12 @@ impl Host {
     #[instrument(skip(self, _payload))]
     async fn handle_ping_hosts(&self, _payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
         let uptime = self.start_at.elapsed();
+        let cluster_issuers = self
+            .host_config
+            .cluster_issuers
+            .clone()
+            .unwrap_or_else(|| vec![self.cluster_key.public_key()])
+            .join(",");
         // TODO: Fill in the TODOs
         let buf = serde_json::to_vec(&json!({
           "id": self.host_key.public_key(),
@@ -2189,8 +2200,8 @@ impl Host {
           "uptime_seconds": uptime.as_secs(),
           "uptime_human": "TODO",
           "version": env!("CARGO_PKG_VERSION"),
-          "cluster_issuers": "TODO",
-          "js_domain": "TODO",
+          "cluster_issuers": cluster_issuers,
+          "js_domain": self.host_config.js_domain,
           "ctl_host": "TODO",
           "prov_rpc_host": "TODO",
           "rpc_host": "TODO",

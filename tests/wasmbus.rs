@@ -242,6 +242,7 @@ async fn wasmbus() -> anyhow::Result<()> {
         ctl_nats_url: ctl_nats_url.clone(),
         lattice_prefix: TEST_PREFIX.to_string(),
         cluster_seed: Some(cluster_key.seed().unwrap()),
+        cluster_issuers: Some(vec![cluster_key.public_key()]),
         host_seed: Some(host_key.seed().unwrap()),
     })
     .await
