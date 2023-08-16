@@ -196,9 +196,9 @@ pub async fn fetch_actor(
 #[allow(clippy::implicit_hasher)]
 #[allow(clippy::missing_errors_doc)] // TODO: document errors
 pub async fn fetch_provider(
-    creds_override: Option<HashMap<String, String>>,
     bindle_id: impl AsRef<str>,
     link_name: impl AsRef<str>,
+    creds_override: Option<HashMap<String, String>>,
 ) -> anyhow::Result<(PathBuf, jwt::Claims<jwt::CapabilityProvider>)> {
     let bindle_id = bindle_id.as_ref();
     let client = get_client(creds_override, bindle_id)
