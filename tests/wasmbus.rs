@@ -231,6 +231,9 @@ async fn wasmbus() -> anyhow::Result<()> {
     let cluster_key = KeyPair::new_cluster();
     let host_key = KeyPair::new_server();
 
+    let cluster_key_two = KeyPair::new_cluster();
+    let host_key_two = KeyPair::new_server();
+
     env::set_var("HOST_PATH", "test-path");
     let expected_labels = HashMap::from([
         ("hostcore.arch".into(), ARCH.into()),
@@ -244,7 +247,7 @@ async fn wasmbus() -> anyhow::Result<()> {
         lattice_prefix: TEST_PREFIX.to_string(),
         js_domain: None,
         cluster_seed: Some(cluster_key.seed().unwrap()),
-        cluster_issuers: Some(vec![cluster_key.public_key()]),
+        cluster_issuers: Some(vec![cluster_key.public_key(), cluster_key_two.public_key()]),
         host_seed: Some(host_key.seed().unwrap()),
         provider_shutdown_delay: Some(Duration::from_millis(300)),
         oci_opts: OciConfig::default(),
@@ -252,11 +255,32 @@ async fn wasmbus() -> anyhow::Result<()> {
     .await
     .context("failed to initialize host")?;
 
+    let (host_two, shutdown_two) = Host::new(HostConfig {
+        ctl_nats_url: ctl_nats_url.clone(),
+        lattice_prefix: TEST_PREFIX.to_string(),
+        js_domain: None,
+        cluster_seed: Some(cluster_key_two.seed().unwrap()),
+        cluster_issuers: Some(vec![cluster_key.public_key(), cluster_key_two.public_key()]),
+        host_seed: Some(host_key_two.seed().unwrap()),
+        provider_shutdown_delay: Some(Duration::from_millis(400)),
+        oci_opts: OciConfig::default(),
+    })
+    .await
+    .context("failed to initialize host two")?;
+
     let mut hosts = ctl_client
         .get_hosts()
         .await
         .map_err(|e| anyhow!(e).context("failed to get hosts"))?;
-    match (hosts.pop(), hosts.as_slice()) {
+    hosts.sort_unstable_by(|a, _b| {
+        // If 'a' is host one, b should come after
+        if a.id == host_key.public_key() {
+            std::cmp::Ordering::Greater
+        } else {
+            std::cmp::Ordering::Less
+        }
+    });
+    match (hosts.pop(), hosts.pop(), hosts.as_slice()) {
         (
             Some(HostInfo {
                 cluster_issuers,
@@ -271,10 +295,22 @@ async fn wasmbus() -> anyhow::Result<()> {
                 uptime_seconds,
                 version,
             }),
+            Some(HostInfo {
+                cluster_issuers: cluster_issuers_two,
+                ..
+            }),
             [],
         ) => {
             // TODO: Validate `issuer`
-            ensure!(cluster_issuers == Some(cluster_key.public_key()));
+            ensure!(
+                cluster_issuers
+                    == Some(format!(
+                        "{},{}",
+                        cluster_key.public_key(),
+                        cluster_key_two.public_key()
+                    ))
+            );
+            ensure!(cluster_issuers == cluster_issuers_two);
             ensure!(ctl_host == Some("TODO".into()));
             ensure!(id == host_key.public_key());
             ensure!(js_domain == None);
@@ -291,8 +327,8 @@ expected: {expected_labels:?}"#
             ensure!(uptime_seconds >= 0);
             ensure!(version == Some(env!("CARGO_PKG_VERSION").into()));
         }
-        (None, []) => bail!("no hosts in the lattice"),
-        _ => bail!("more than one host in the lattice"),
+        (_, _, []) => bail!("not enough hosts in the lattice"),
+        _ => bail!("more than two hosts in the lattice"),
     }
 
     let actor = fs::read(test_actors::RUST_BUILTINS_COMPONENT_REACTOR_PREVIEW2_SIGNED)
@@ -311,21 +347,36 @@ expected: {expected_labels:?}"#
         .perform_actor_auction(actor_url.as_str(), HashMap::default())
         .await
         .map_err(|e| anyhow!(e).context("failed to perform actor auction"))?;
-    match (ack.pop(), ack.as_slice()) {
+    ack.sort_unstable_by(|a, _b| {
+        if a.host_id == host_key.public_key() {
+            std::cmp::Ordering::Greater
+        } else {
+            std::cmp::Ordering::Less
+        }
+    });
+    match (ack.pop(), ack.pop(), ack.as_slice()) {
         (
             Some(ActorAuctionAck {
                 actor_ref,
                 host_id,
                 constraints,
             }),
+            Some(ActorAuctionAck {
+                actor_ref: actor_ref_two,
+                host_id: host_id_two,
+                constraints: constraints_two,
+            }),
             [],
         ) => {
             ensure!(host_id == host_key.public_key());
             ensure!(actor_ref == actor_url.as_str());
             ensure!(constraints.is_empty());
+            ensure!(host_id_two == host_key_two.public_key());
+            ensure!(actor_ref_two == actor_url.as_str());
+            ensure!(constraints_two.is_empty());
         }
-        (None, []) => bail!("no actor auction ack received"),
-        _ => bail!("more than one actor auction ack received"),
+        (_, _, []) => bail!("not enough actor auction acks received"),
+        _ => bail!("more than two actor auction acks received"),
     }
 
     let CtlOperationAck { accepted, error } = ctl_client
@@ -361,12 +412,24 @@ expected: {expected_labels:?}"#
         )
         .await
         .map_err(|e| anyhow!(e).context("failed to perform provider auction"))?;
-    match (ack.pop(), ack.as_slice()) {
+    ack.sort_unstable_by(|a, _b| {
+        if a.host_id == host_key.public_key() {
+            std::cmp::Ordering::Greater
+        } else {
+            std::cmp::Ordering::Less
+        }
+    });
+    match (ack.pop(), ack.pop(), ack.as_slice()) {
         (
             Some(ProviderAuctionAck {
                 provider_ref,
                 host_id,
                 link_name,
+            }),
+            Some(ProviderAuctionAck {
+                provider_ref: provider_ref_two,
+                host_id: host_id_two,
+                link_name: link_name_two,
             }),
             [],
         ) => {
@@ -374,9 +437,12 @@ expected: {expected_labels:?}"#
             ensure!(host_id == host_key.public_key());
             ensure!(provider_ref == httpserver_provider_url.as_str());
             ensure!(link_name == httpserver_provider_link_name);
+            ensure!(host_id_two == host_key_two.public_key());
+            ensure!(provider_ref_two == httpserver_provider_url.as_str());
+            ensure!(link_name_two == httpserver_provider_link_name);
         }
-        (None, []) => bail!("no provider auction ack received"),
-        _ => bail!("more than one provider auction ack received"),
+        (_, _, []) => bail!("not enough provider auction acks received"),
+        _ => bail!("more than two provider auction acks received"),
     }
 
     let http_port = free_port().await?;
@@ -443,7 +509,7 @@ expected: {expected_labels:?}"#
             &ctl_client,
             &nats_client,
             TEST_PREFIX,
-            &host_key,
+            &host_key_two,
             &nats_provider_key,
             nats_provider_link_name,
             &nats_provider_url,
@@ -513,13 +579,8 @@ expected: {expected_name:?}"#
         _ => bail!("more than one actor found"),
     }
     providers.sort_unstable_by(|a, b| b.name.cmp(&a.name));
-    match (
-        providers.pop(),
-        providers.pop(),
-        providers.pop(),
-        providers.as_slice(),
-    ) {
-        (Some(httpserver), Some(kvredis), Some(nats), []) => {
+    match (providers.pop(), providers.pop(), providers.as_slice()) {
+        (Some(httpserver), Some(kvredis), []) => {
             // TODO: Validate `constraints`
             ensure!(httpserver.annotations == None);
             ensure!(httpserver.id == httpserver_provider_key.public_key());
@@ -537,7 +598,36 @@ expected: {expected_name:?}"#
             ensure!(kvredis.link_name == kvredis_provider_link_name);
             ensure!(kvredis.name == Some("wasmcloud-provider-kvredis".into()),);
             ensure!(kvredis.revision == 0);
+        }
+        _ => bail!("invalid provider count"),
+    }
 
+    let HostInventory {
+        actors,
+        host_id,
+        labels,
+        mut providers,
+        issuer,
+        friendly_name,
+    } = ctl_client
+        .get_host_inventory(&host_key_two.public_key())
+        .await
+        .map_err(|e| anyhow!(e).context("failed to get host inventory"))?;
+    ensure!(friendly_name != ""); // TODO: Make sure it's actually friendly?
+    ensure!(host_id == host_key_two.public_key());
+    ensure!(issuer == cluster_key_two.public_key());
+    ensure!(
+        labels == expected_labels,
+        r#"invalid labels:
+got: {labels:?}
+expected: {expected_labels:?}"#
+    );
+    match actors.as_slice() {
+        [] => (),
+        _ => bail!("actors found"),
+    }
+    match (providers.pop(), providers.as_slice()) {
+        (Some(nats), []) => {
             // TODO: Validate `constraints`
             ensure!(nats.annotations == None);
             ensure!(nats.id == nats_provider_key.public_key());
@@ -677,6 +767,7 @@ expected: {expected_redis_keys:?}"#
     )
     .context("failed to remove links")?;
 
+    // Shutdown host one
     let CtlOperationAck { accepted, error } = ctl_client
         .stop_host(&host_key.public_key(), None)
         .await
@@ -686,6 +777,17 @@ expected: {expected_redis_keys:?}"#
 
     let _ = host.stopped().await;
     shutdown.await.context("failed to shutdown host")?;
+
+    // Shutdown host two
+    let CtlOperationAck { accepted, error } = ctl_client
+        .stop_host(&host_key_two.public_key(), None)
+        .await
+        .map_err(|e| anyhow!(e).context("failed to stop host"))?;
+    ensure!(error == "");
+    ensure!(accepted);
+
+    let _ = host_two.stopped().await;
+    shutdown_two.await.context("failed to shutdown host")?;
 
     stop_nats_tx.send(()).expect("failed to stop NATS");
     let nats_status = nats_server
