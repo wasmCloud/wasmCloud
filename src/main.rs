@@ -47,7 +47,13 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let args = Args::parse();
+    let Args {
+        nats_host,
+        nats_port,
+        lattice_prefix,
+        host_seed,
+        cluster_seed,
+    } = Args::parse();
 
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer().pretty().without_time())
@@ -58,25 +64,20 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let (host, shutdown) = wasmcloud_host::wasmbus::Host::new(args.into())
-        .await
-        .context("failed to initialize host")?;
+    let ctl_nats_url = Url::parse(&format!("nats://{nats_host}:{nats_port}"))
+        .context("failed to construct a valid `ctl_nats_url` using `nats-host` and `nats-port`")?;
+    let (host, shutdown) = wasmcloud_host::wasmbus::Host::new(WasmbusHostConfig {
+        ctl_nats_url,
+        lattice_prefix,
+        host_seed,
+        cluster_seed,
+    })
+    .await
+    .context("failed to initialize host")?;
     select! {
         sig = signal::ctrl_c() => sig.context("failed to wait for Ctrl-C")?,
         _ = host.stopped() => {},
     };
     shutdown.await.context("failed to shutdown host")?;
     Ok(())
-}
-
-impl From<Args> for WasmbusHostConfig {
-    fn from(args: Args) -> Self {
-        Self {
-            ctl_nats_url: Url::parse(&format!("nats://{}:{}", args.nats_host, args.nats_port))
-                .expect("failed to parse ctl_nats_url"),
-            lattice_prefix: args.lattice_prefix,
-            host_seed: args.host_seed,
-            cluster_seed: args.cluster_seed,
-        }
-    }
 }
