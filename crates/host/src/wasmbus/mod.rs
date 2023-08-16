@@ -869,6 +869,12 @@ async fn create_lattice_metadata_bucket(
     jetstream: &JetstreamContext,
     bucket: &str,
 ) -> anyhow::Result<()> {
+    // Don't create the bucket if it already exists
+    if let Ok(_store) = jetstream.get_key_value(bucket).await {
+        info!("lattice metadata bucket {bucket} already exists. Skipping creation.");
+        return Ok(());
+    }
+
     match jetstream
         .create_key_value(kv::Config {
             bucket: bucket.to_string(),
@@ -880,21 +886,9 @@ async fn create_lattice_metadata_bucket(
             info!("created lattice metadata bucket {bucket} with 1 replica");
             Ok(())
         }
-        Err(err) => {
-            // Ignore the error if the bucket was pre-provisioned
-            // This is a terrible hack, but the error we get from the NATS client is a nested
-            // dyn Error. The NATS server will return an error containing the code
-            // 10058 if the underlying stream already exists with different configuration,
-            // which is the case we care about
-            if err.to_string().contains("10058") {
-                info!("lattice metadata bucket {bucket} already exists. Skipping creation.");
-                Ok(())
-            } else {
-                Err(anyhow!(err).context(format!(
-                    "failed to create lattice metadata bucket '{bucket}'"
-                )))
-            }
-        }
+        Err(err) => Err(anyhow!(err).context(format!(
+            "failed to create lattice metadata bucket '{bucket}'"
+        ))),
     }
 }
 
@@ -981,7 +975,11 @@ impl Host {
             .context("failed to build runtime")?;
         let event_builder = EventBuilderV10::new().source(host_key.public_key());
 
-        let jetstream = async_nats::jetstream::new(nats.clone());
+        let jetstream = if let Some(domain) = config.js_domain.as_ref() {
+            async_nats::jetstream::with_domain(nats.clone(), domain)
+        } else {
+            async_nats::jetstream::new(nats.clone())
+        };
         let bucket = format!("LATTICEDATA_{}", config.lattice_prefix);
         create_lattice_metadata_bucket(&jetstream, &bucket).await?;
 
@@ -1857,7 +1855,7 @@ impl Host {
                 "default_rpc_timeout_ms": 2000, // TODO: Support config
                 "cluster_issuers": self.host_config.cluster_issuers.to_owned().unwrap_or_else(|| vec![self.cluster_key.public_key()]),
                 "invocation_seed": invocation_seed,
-                // TODO: Set `js_domain`
+                "js_domain": self.host_config.js_domain,
                 // TODO: Set `structured_logging`
                 // TODO: Set `log_level`
             }))
@@ -1992,9 +1990,7 @@ impl Host {
                 let ProviderInstance { id, child, .. } = entry.remove();
 
                 // Send a request to the provider, requesting a graceful shutdown
-                if let Ok(payload) =
-                    serde_json::to_vec(&json!({host_id: self.host_key.public_key()}))
-                {
+                if let Ok(payload) = serde_json::to_vec(&json!({ "host_id": host_id })) {
                     if let Err(e) = self
                         .nats
                         .send_request(
