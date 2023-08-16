@@ -30,6 +30,7 @@ use wasmcloud_control_interface::{
     ActorAuctionAck, ActorDescription, ActorInstance, ClientBuilder, CtlOperationAck,
     Host as HostInfo, HostInventory, ProviderAuctionAck,
 };
+use wasmcloud_host::oci::Config as OciConfig;
 use wasmcloud_host::wasmbus::{Host, HostConfig};
 
 async fn free_port() -> anyhow::Result<u16> {
@@ -246,6 +247,7 @@ async fn wasmbus() -> anyhow::Result<()> {
         cluster_issuers: Some(vec![cluster_key.public_key()]),
         host_seed: Some(host_key.seed().unwrap()),
         provider_shutdown_delay: Some(Duration::from_millis(300)),
+        oci_opts: OciConfig::default(),
     })
     .await
     .context("failed to initialize host")?;

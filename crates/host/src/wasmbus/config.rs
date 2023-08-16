@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use url::Url;
 
+use crate::oci::Config as OciConfig;
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 /// wasmCloud Host configuration
 pub struct Host {
@@ -18,6 +20,8 @@ pub struct Host {
     pub cluster_issuers: Option<Vec<String>>,
     /// The amount of time to wait for a provider to gracefully shut down before terminating it
     pub provider_shutdown_delay: Option<std::time::Duration>,
+    /// Configuration for downloading artifacts from OCI registries
+    pub oci_opts: OciConfig,
 }
 
 impl Default for Host {
@@ -31,6 +35,7 @@ impl Default for Host {
             cluster_seed: None,
             cluster_issuers: None,
             provider_shutdown_delay: None,
+            oci_opts: OciConfig::default(),
         }
     }
 }

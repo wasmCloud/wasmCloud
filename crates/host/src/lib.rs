@@ -77,14 +77,16 @@ impl<'a> TryFrom<&'a str> for ResourceRef<'a> {
 
 /// Fetch an actor from a reference.
 #[instrument(skip(actor_ref))]
-pub async fn fetch_actor(actor_ref: impl AsRef<str>) -> anyhow::Result<Vec<u8>> {
+pub async fn fetch_actor(
+    actor_ref: impl AsRef<str>,
+    oci_opts: &oci::Config,
+) -> anyhow::Result<Vec<u8>> {
     match ResourceRef::try_from(actor_ref.as_ref())? {
         ResourceRef::File(actor_ref) => fs::read(actor_ref).await.context("failed to read actor"),
         ResourceRef::Bindle(actor_ref) => crate::bindle::fetch_actor(None, &actor_ref)
             .await
             .with_context(|| format!("failed to fetch actor under Bindle reference `{actor_ref}`")),
-        // TODO: Set config
-        ResourceRef::Oci(actor_ref) => crate::oci::fetch_actor(None, &actor_ref, true, vec![])
+        ResourceRef::Oci(actor_ref) => crate::oci::fetch_actor(None, &actor_ref, oci_opts)
             .await
             .with_context(|| format!("failed to fetch actor under OCI reference `{actor_ref}`")),
     }
@@ -95,6 +97,7 @@ pub async fn fetch_actor(actor_ref: impl AsRef<str>) -> anyhow::Result<Vec<u8>> 
 pub async fn fetch_provider(
     provider_ref: impl AsRef<str>,
     link_name: impl AsRef<str>,
+    oci_opts: &oci::Config,
 ) -> anyhow::Result<(PathBuf, jwt::Claims<jwt::CapabilityProvider>)> {
     match ResourceRef::try_from(provider_ref.as_ref())? {
         ResourceRef::File(provider_ref) => par::read(provider_ref, link_name)
@@ -107,9 +110,8 @@ pub async fn fetch_provider(
                     format!("failed to fetch provider under Bindle reference `{provider_ref}`")
                 })
         }
-        // TODO: Set config
         ResourceRef::Oci(provider_ref) => {
-            crate::oci::fetch_provider(None, &provider_ref, true, vec![], link_name)
+            crate::oci::fetch_provider(&provider_ref, link_name, None, oci_opts)
                 .await
                 .with_context(|| {
                     format!("failed to fetch provider under OCI reference `{provider_ref}`")
