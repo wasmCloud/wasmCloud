@@ -45,31 +45,22 @@ struct Args {
     #[clap(long = "cluster-seed", env = "WASMCLOUD_CLUSTER_SEED")]
     cluster_seed: Option<String>,
     /// A comma-delimited list of public keys that can be used as issuers on signed invocations
-    #[clap(
-        long = "cluster-issuers",
-        env = "WASMCLOUD_CLUSTER_ISSUERS",
-        hide = true
-    )]
+    #[clap(long = "cluster-issuers", env = "WASMCLOUD_CLUSTER_ISSUERS")]
     cluster_issuers: Option<Vec<String>>,
     /// Delay, in milliseconds, between requesting a provider shut down and forcibly terminating its process
-    #[clap(long = "provider-shutdown-delay", default_value = "300", env = "WASMCLOUD_PROV_SHUTDOWN_DELAY_MS", value_parser = parse_duration, hide = true)]
+    #[clap(long = "provider-shutdown-delay", default_value = "300", env = "WASMCLOUD_PROV_SHUTDOWN_DELAY_MS", value_parser = parse_duration)]
     provider_shutdown_delay: Duration,
     /// Determines whether OCI images tagged latest are allowed to be pulled from OCI registries and started
-    #[clap(long = "allow-latest", env = "WASMCLOUD_OCI_ALLOW_LATEST", hide = true)]
+    #[clap(long = "allow-latest", env = "WASMCLOUD_OCI_ALLOW_LATEST")]
     allow_latest: bool,
     /// A comma-separated list of OCI hosts to which insecure (non-TLS) connections are allowed
-    #[clap(
-        long = "allowed-insecure",
-        env = "WASMCLOUD_OCI_ALLOWED_INSECURE",
-        hide = true
-    )]
+    #[clap(long = "allowed-insecure", env = "WASMCLOUD_OCI_ALLOWED_INSECURE")]
     allowed_insecure: Vec<String>,
-    /// Jetstream domain name, configures a host to properly connect to a NATS supercluster, defaults to `core`
+    /// NATS Jetstream domain name
     #[clap(
         long = "js-domain",
         alias = "wasmcloud-js-domain",
-        env = "WASMCLOUD_JS_DOMAIN",
-        hide = true
+        env = "WASMCLOUD_JS_DOMAIN"
     )]
     js_domain: Option<String>,
     // TODO: use and implement the below args
@@ -202,20 +193,28 @@ struct Args {
     #[clap(long = "policy-timeout-ms", env = "WASMCLOUD_POLICY_TIMEOUT", value_parser = parse_duration, hide = true)]
     policy_timeout_ms: Option<Duration>,
 
-    #[clap(long = "oci-registry", env = "OCI_REGISTRY", hide = true)]
+    /// Used in tandem with `oci_user` and `oci_password` to override credentials for a specific OCI registry.
+    #[clap(
+        long = "oci-registry",
+        env = "OCI_REGISTRY",
+        requires = "oci_user",
+        requires = "oci_password"
+    )]
     oci_registry: Option<String>,
+    /// Username for the OCI registry specified by `oci_registry`.
     #[clap(
         long = "oci-user",
         env = "OCI_REGISTRY_USER",
-        requires = "oci_password",
-        hide = true
+        requires = "oci_registry",
+        requires = "oci_password"
     )]
     oci_user: Option<String>,
+    /// Password for the OCI registry specified by `oci_registry`.
     #[clap(
         long = "oci-password",
         env = "OCI_REGISTRY_PASSWORD",
-        requires = "oci_user",
-        hide = true
+        requires = "oci_registry",
+        requires = "oci_user"
     )]
     oci_password: Option<String>,
 }
@@ -231,6 +230,8 @@ async fn main() -> anyhow::Result<()> {
         cluster_seed,
         cluster_issuers,
         provider_shutdown_delay,
+        allow_latest,
+        allowed_insecure,
         oci_registry,
         oci_user,
         oci_password,
