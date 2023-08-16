@@ -47,10 +47,10 @@ struct Args {
         hide = true
     )]
     cluster_issuers: Option<Vec<String>>,
-    // TODO: use and implement the below args
     /// Delay, in milliseconds, between requesting a provider shut down and forcibly terminating its process
-    #[clap(long = "provider-delay", default_value = "300", env = "WASMCLOUD_PROV_SHUTDOWN_DELAY_MS", value_parser = parse_duration, hide = true)]
-    provider_delay: Duration,
+    #[clap(long = "provider-shutdown-delay", default_value = "300", env = "WASMCLOUD_PROV_SHUTDOWN_DELAY_MS", value_parser = parse_duration, hide = true)]
+    provider_shutdown_delay: Duration,
+    // TODO: use and implement the below args
     /// Determines whether OCI images tagged latest are allowed to be pulled from OCI registries and started
     #[clap(long = "allow-latest", env = "WASMCLOUD_OCI_ALLOW_LATEST", hide = true)]
     allow_latest: bool,
@@ -225,6 +225,7 @@ async fn main() -> anyhow::Result<()> {
         host_seed,
         cluster_seed,
         cluster_issuers,
+        provider_shutdown_delay,
         ..
     } = Args::parse();
 
@@ -245,6 +246,7 @@ async fn main() -> anyhow::Result<()> {
         host_seed,
         cluster_seed,
         cluster_issuers,
+        provider_shutdown_delay: Some(provider_shutdown_delay),
     })
     .await
     .context("failed to initialize host")?;

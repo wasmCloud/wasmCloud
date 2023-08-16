@@ -1982,7 +1982,7 @@ impl Host {
 
         let annotations = annotations.map(|annotations| annotations.into_iter().collect());
         let mut providers = self.providers.write().await;
-        let hash_map::Entry::Occupied(mut entry) = providers.entry(provider_ref) else {
+        let hash_map::Entry::Occupied(mut entry) = providers.entry(provider_ref.clone()) else {
             return Ok(SUCCESS.into());
         };
         let provider = entry.get_mut();
@@ -1990,6 +1990,28 @@ impl Host {
         if let hash_map::Entry::Occupied(entry) = instances.entry(link_name.clone()) {
             if entry.get().annotations == annotations {
                 let ProviderInstance { id, child, .. } = entry.remove();
+
+                // Send a request to the provider, requesting a graceful shutdown
+                if let Ok(payload) =
+                    serde_json::to_vec(&json!({host_id: self.host_key.public_key()}))
+                {
+                    if let Err(e) = self
+                        .nats
+                        .send_request(
+                            format!(
+                                "wasmbus.rpc.{}.{provider_ref}.{link_name}.shutdown",
+                                self.host_config.lattice_prefix
+                            ),
+                            async_nats::Request::new()
+                                .payload(payload.into())
+                                .timeout(self.host_config.provider_shutdown_delay),
+                        )
+                        .await
+                    {
+                        warn!(?e, "Provider didn't gracefully shut down in time, shutting down forcefully")
+                    }
+                }
+
                 child.abort();
                 self.publish_event(
                     "provider_stopped",
