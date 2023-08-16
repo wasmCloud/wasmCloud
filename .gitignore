@@ -20,3 +20,7 @@ target/
 
 # Ignore vscode config
 .vscode/
+
+
+# Ignore Macos files
+.DS_Store

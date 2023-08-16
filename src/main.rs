@@ -224,6 +224,7 @@ async fn main() -> anyhow::Result<()> {
         lattice_prefix,
         host_seed,
         cluster_seed,
+        ..
     } = Args::parse();
 
     tracing_subscriber::registry()
@@ -255,6 +256,6 @@ async fn main() -> anyhow::Result<()> {
 
 fn parse_duration(arg: &str) -> anyhow::Result<Duration> {
     arg.parse()
-        .map(|ms| Duration::from_millis(ms))
+        .map(Duration::from_millis)
         .map_err(|e| anyhow::anyhow!(e))
 }
