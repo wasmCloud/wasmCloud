@@ -244,6 +244,7 @@ async fn wasmbus() -> anyhow::Result<()> {
         cluster_seed: Some(cluster_key.seed().unwrap()),
         cluster_issuers: Some(vec![cluster_key.public_key()]),
         host_seed: Some(host_key.seed().unwrap()),
+        provider_shutdown_delay: Some(Duration::from_millis(300)),
     })
     .await
     .context("failed to initialize host")?;
