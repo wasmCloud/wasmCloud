@@ -162,8 +162,8 @@ async fn cache_oci_image(
 /// Returns an error if either fetching fails or reading the fetched OCI path fails
 #[allow(clippy::implicit_hasher)]
 pub async fn fetch_actor(
-    creds_override: Option<HashMap<String, String>>,
     oci_ref: impl AsRef<str>,
+    creds_override: Option<HashMap<String, String>>,
     host_oci_opts: &Config,
 ) -> anyhow::Result<Vec<u8>> {
     let path = fetch_oci_path(

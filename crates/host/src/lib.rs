@@ -86,7 +86,7 @@ pub async fn fetch_actor(
         ResourceRef::Bindle(actor_ref) => crate::bindle::fetch_actor(None, &actor_ref)
             .await
             .with_context(|| format!("failed to fetch actor under Bindle reference `{actor_ref}`")),
-        ResourceRef::Oci(actor_ref) => crate::oci::fetch_actor(None, &actor_ref, oci_opts)
+        ResourceRef::Oci(actor_ref) => crate::oci::fetch_actor(&actor_ref, None, oci_opts)
             .await
             .with_context(|| format!("failed to fetch actor under OCI reference `{actor_ref}`")),
     }
@@ -104,7 +104,7 @@ pub async fn fetch_provider(
             .await
             .context("failed to read provider"),
         ResourceRef::Bindle(provider_ref) => {
-            crate::bindle::fetch_provider(None, &provider_ref, link_name)
+            crate::bindle::fetch_provider(&provider_ref, link_name, None)
                 .await
                 .with_context(|| {
                     format!("failed to fetch provider under Bindle reference `{provider_ref}`")
