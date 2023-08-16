@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::net::{Ipv6Addr, SocketAddr};
 use std::path::Path;
+use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -114,12 +115,46 @@ impl capability::Messaging for Messaging {
     }
 }
 
+struct Bus;
+
+#[async_trait]
+impl capability::Bus for Bus {
+    async fn identify_wasmbus_target(
+        &self,
+        _binding: &str,
+        _namespace: &str,
+    ) -> anyhow::Result<capability::TargetEntity> {
+        panic!("should not be called")
+    }
+
+    async fn set_target(
+        &self,
+        _target: Option<capability::TargetEntity>,
+        _interfaces: Vec<capability::TargetInterface>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn call(
+        &self,
+        _target: Option<capability::TargetEntity>,
+        _operation: String,
+    ) -> anyhow::Result<(
+        Pin<Box<dyn futures::Future<Output = anyhow::Result<(), String>> + Send>>,
+        Box<dyn tokio::io::AsyncWrite + Sync + Send + Unpin>,
+        Box<dyn tokio::io::AsyncRead + Sync + Send + Unpin>,
+    )> {
+        panic!("should not be called")
+    }
+}
+
 fn new_runtime(
     logs: Arc<Mutex<Vec<(logging::Level, String, String)>>>,
     published: Arc<Mutex<Vec<messaging::types::BrokerMessage>>>,
     keyvalue_readwrite: Arc<MemoryKeyValue>,
 ) -> Runtime {
     Runtime::builder()
+        .bus(Arc::new(Bus))
         .logging(Arc::new(Logging(logs)))
         .messaging(Arc::new(Messaging(published)))
         .keyvalue_readwrite(Arc::clone(&keyvalue_readwrite))

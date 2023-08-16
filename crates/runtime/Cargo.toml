@@ -23,6 +23,7 @@ async-trait = { workspace = true }
 futures = { workspace = true, features = ["async-await", "std"] }
 http = { workspace = true }
 log = { workspace = true }
+nkeys = { workspace = true }
 rand = { workspace = true, features = ["std"] }
 rmp-serde = { workspace = true }
 serde = { workspace = true }

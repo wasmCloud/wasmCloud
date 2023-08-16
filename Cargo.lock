@@ -4499,6 +4499,7 @@ dependencies = [
  "futures",
  "http",
  "log",
+ "nkeys",
  "once_cell",
  "rand 0.8.5",
  "rmp-serde",

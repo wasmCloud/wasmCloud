@@ -3,11 +3,9 @@ use crate::capability::logging::logging;
 
 use core::fmt::{self, Debug};
 
-use anyhow::{anyhow, bail, Context, Result};
-use futures::try_join;
+use anyhow::{bail, Context, Result};
 use rand::{thread_rng, Rng, RngCore};
 use serde::Deserialize;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{instrument, trace, trace_span, warn};
 
 pub mod guest_call {
@@ -278,33 +276,14 @@ async fn handle(
             rmp_serde::to_vec(&v).context("failed to serialize u32")
         }
         _ => {
-            let (result, mut request, mut response) = handler
-                .call(format!("{binding}:{namespace}/{operation}"))
+            let target = handler
+                .identify_wasmbus_target(&binding, &namespace)
                 .await
-                .context("failed to call `wasmcloud:bus/host.call`")?;
-
-            let mut res = vec![];
-            try_join!(
-                async {
-                    trace!("write payload to request stream");
-                    request
-                        .write_all(&payload)
-                        .await
-                        .context("failed to write request")
-                },
-                async {
-                    trace!("read response from request stream");
-                    response
-                        .read_to_end(&mut res)
-                        .await
-                        .context("failed to read response")
-                },
-                async {
-                    trace!("await result");
-                    result.await.map_err(|e| anyhow!(e))
-                }
-            )?;
-            Ok(res)
+                .context("failed to identify invocation target")?;
+            handler
+                .call_sync(Some(target), format!("{namespace}/{operation}"), payload)
+                .await
+                .context("failed to call `wasmcloud:bus/host.call`")
         }
     }
 }

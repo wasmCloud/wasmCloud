@@ -2,6 +2,7 @@ package wasmcloud:host
 
 world interfaces {
     import wasmcloud:bus/host
+    import wasmcloud:bus/lattice
 
     import wasi:keyvalue/readwrite
     import wasi:logging/logging
