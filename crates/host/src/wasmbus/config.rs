@@ -8,6 +8,8 @@ pub struct Host {
     pub ctl_nats_url: Url,
     /// The lattice the host belongs to
     pub lattice_prefix: String,
+    /// The domain to use for host Jetstream operations
+    pub js_domain: Option<String>,
     /// The seed key (a printable 256-bit Ed25519 private key) used by this host to generate its public key
     pub host_seed: Option<String>,
     /// The seed key (a printable 256-bit Ed25519 private key) used by this host to sign all invocations
@@ -24,6 +26,7 @@ impl Default for Host {
             ctl_nats_url: Url::parse("nats://localhost:4222")
                 .expect("failed to parse control NATS URL"),
             lattice_prefix: "default".to_string(),
+            js_domain: None,
             host_seed: None,
             cluster_seed: None,
             cluster_issuers: None,

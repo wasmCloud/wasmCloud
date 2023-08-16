@@ -241,6 +241,7 @@ async fn wasmbus() -> anyhow::Result<()> {
     let (host, shutdown) = Host::new(HostConfig {
         ctl_nats_url: ctl_nats_url.clone(),
         lattice_prefix: TEST_PREFIX.to_string(),
+        js_domain: None,
         cluster_seed: Some(cluster_key.seed().unwrap()),
         cluster_issuers: Some(vec![cluster_key.public_key()]),
         host_seed: Some(host_key.seed().unwrap()),
@@ -271,10 +272,10 @@ async fn wasmbus() -> anyhow::Result<()> {
             [],
         ) => {
             // TODO: Validate `issuer`
-            ensure!(cluster_issuers == Some("TODO".into()));
+            ensure!(cluster_issuers == Some(cluster_key.public_key()));
             ensure!(ctl_host == Some("TODO".into()));
             ensure!(id == host_key.public_key());
-            ensure!(js_domain == Some("TODO".into()));
+            ensure!(js_domain == None);
             ensure!(
                 labels.as_ref() == Some(&expected_labels),
                 r#"invalid labels:

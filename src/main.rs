@@ -60,10 +60,16 @@ struct Args {
         env = "WASMCLOUD_OCI_ALLOWED_INSECURE",
         hide = true
     )]
-    allowed_insecure: Option<Vec<String>>,
+    allowed_insecure: Vec<String>,
     /// Jetstream domain name, configures a host to properly connect to a NATS supercluster, defaults to `core`
-    #[clap(long = "wasmcloud-js-domain", env = "WASMCLOUD_JS_DOMAIN", hide = true)]
-    wasmcloud_js_domain: Option<String>,
+    #[clap(
+        long = "js-domain",
+        alias = "wasmcloud-js-domain",
+        env = "WASMCLOUD_JS_DOMAIN",
+        hide = true
+    )]
+    js_domain: Option<String>,
+    // TODO: use and implement the below args
     /// Denotes if a wasmCloud host should issue requests to a config service on startup
     #[clap(
         long = "config-service-enabled",
@@ -226,6 +232,7 @@ async fn main() -> anyhow::Result<()> {
         cluster_seed,
         cluster_issuers,
         provider_shutdown_delay,
+        js_domain,
         ..
     } = Args::parse();
 
@@ -246,6 +253,7 @@ async fn main() -> anyhow::Result<()> {
         host_seed,
         cluster_seed,
         cluster_issuers,
+        js_domain,
         provider_shutdown_delay: Some(provider_shutdown_delay),
     })
     .await
