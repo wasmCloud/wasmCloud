@@ -80,9 +80,6 @@ struct Args {
         hide = true
     )]
     allow_file_load: bool,
-    /// Enables IPV6 addressing for wasmCloud hosts
-    #[clap(long = "enable-ipv6", env = "WASMCLOUD_ENABLE_IPV6", hide = true)]
-    enable_ipv6: bool,
     /// Enable JSON structured logging from the wasmCloud host
     #[clap(
         long = "enable-structured-logging",
