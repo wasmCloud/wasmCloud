@@ -219,100 +219,68 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let Args {
-        log_level,
-        nats_host,
-        nats_port,
-        nats_jwt,
-        nats_seed,
-        lattice_prefix,
-        host_seed,
-        cluster_seed,
-        cluster_issuers,
-        provider_shutdown_delay,
-        allow_latest,
-        allowed_insecure,
-        oci_registry,
-        oci_user,
-        oci_password,
-        js_domain,
-        ctl_host,
-        ctl_port,
-        ctl_jwt,
-        ctl_seed,
-        ctl_tls,
-        ctl_topic_prefix,
-        rpc_host,
-        rpc_port,
-        rpc_timeout_ms,
-        rpc_jwt,
-        rpc_seed,
-        rpc_tls,
-        prov_rpc_host,
-        prov_rpc_port,
-        prov_rpc_jwt,
-        prov_rpc_seed,
-        prov_rpc_tls,
-        ..
-    } = Args::parse();
+    let args: Args = Args::parse();
 
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer().pretty().without_time())
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                tracing_subscriber::EnvFilter::new(format!("{log_level},cranelift_codegen=warn"))
+                tracing_subscriber::EnvFilter::new(format!(
+                    "{},cranelift_codegen=warn",
+                    args.log_level
+                ))
             }),
         )
         .init();
 
     let ctl_nats_url = Url::parse(&format!(
         "nats://{}:{}",
-        ctl_host.unwrap_or_else(|| nats_host.clone()),
-        ctl_port.unwrap_or(nats_port)
+        args.ctl_host.unwrap_or_else(|| args.nats_host.clone()),
+        args.ctl_port.unwrap_or(args.nats_port)
     ))
     .context("failed to construct a valid `ctl_nats_url` using `ctl-host` and `ctl-port`")?;
     let rpc_nats_url = Url::parse(&format!(
         "nats://{}:{}",
-        rpc_host.unwrap_or_else(|| nats_host.clone()),
-        rpc_port.unwrap_or(nats_port)
+        args.rpc_host.unwrap_or_else(|| args.nats_host.clone()),
+        args.rpc_port.unwrap_or(args.nats_port)
     ))
     .context("failed to construct a valid `rpc_nats_url` using `rpc-host` and `rpc-port`")?;
     let prov_rpc_nats_url = Url::parse(&format!(
         "nats://{}:{}",
-        prov_rpc_host.unwrap_or(nats_host),
-        prov_rpc_port.unwrap_or(nats_port)
+        args.prov_rpc_host.unwrap_or(args.nats_host),
+        args.prov_rpc_port.unwrap_or(args.nats_port)
     ))
     .context(
         "failed to construct a valid `prov_rpc_nats_url` using `prov-rpc-host` and `prov-rpc-port`",
     )?;
     let (host, shutdown) = wasmcloud_host::wasmbus::Host::new(WasmbusHostConfig {
         ctl_nats_url,
-        lattice_prefix,
-        host_seed,
-        cluster_seed,
-        cluster_issuers,
-        js_domain,
-        provider_shutdown_delay: Some(provider_shutdown_delay),
+        lattice_prefix: args.lattice_prefix,
+        host_seed: args.host_seed,
+        cluster_seed: args.cluster_seed,
+        cluster_issuers: args.cluster_issuers,
+        js_domain: args.js_domain,
+        provider_shutdown_delay: Some(args.provider_shutdown_delay),
         oci_opts: OciConfig {
-            allow_latest,
-            allowed_insecure,
-            oci_registry,
-            oci_user,
-            oci_password,
+            allow_latest: args.allow_latest,
+            allowed_insecure: args.allowed_insecure,
+            oci_registry: args.oci_registry,
+            oci_user: args.oci_user,
+            oci_password: args.oci_password,
         },
-        ctl_jwt: ctl_jwt.or_else(|| nats_jwt.clone()),
-        ctl_seed: ctl_seed.or_else(|| nats_seed.clone()),
-        ctl_tls,
-        ctl_topic_prefix,
+        ctl_jwt: args.ctl_jwt.or_else(|| args.nats_jwt.clone()),
+        ctl_seed: args.ctl_seed.or_else(|| args.nats_seed.clone()),
+        ctl_tls: args.ctl_tls,
+        ctl_topic_prefix: args.ctl_topic_prefix,
         rpc_nats_url,
-        rpc_timeout: rpc_timeout_ms,
-        rpc_jwt: rpc_jwt.or_else(|| nats_jwt.clone()),
-        rpc_seed: rpc_seed.or_else(|| nats_seed.clone()),
-        rpc_tls,
+        rpc_timeout: args.rpc_timeout_ms,
+        rpc_jwt: args.rpc_jwt.or_else(|| args.nats_jwt.clone()),
+        rpc_seed: args.rpc_seed.or_else(|| args.nats_seed.clone()),
+        rpc_tls: args.rpc_tls,
         prov_rpc_nats_url,
-        prov_rpc_jwt: prov_rpc_jwt.or_else(|| nats_jwt.clone()),
-        prov_rpc_seed: prov_rpc_seed.or_else(|| nats_seed.clone()),
-        prov_rpc_tls,
+        prov_rpc_jwt: args.prov_rpc_jwt.or_else(|| args.nats_jwt.clone()),
+        prov_rpc_seed: args.prov_rpc_seed.or_else(|| args.nats_seed.clone()),
+        prov_rpc_tls: args.prov_rpc_tls,
     })
     .await
     .context("failed to initialize host")?;
