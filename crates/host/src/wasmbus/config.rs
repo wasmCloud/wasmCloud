@@ -16,6 +16,8 @@ pub struct Host {
     pub ctl_seed: Option<String>,
     /// Whether to require TLS for control interface connection
     pub ctl_tls: bool,
+    /// The topic prefix to use for control interface subscriptions, defaults to `wasmbus.ctl`
+    pub ctl_topic_prefix: String,
     /// NATS URL to connect to for actor RPC
     pub rpc_nats_url: Url,
     /// Timeout period for all RPC calls
@@ -58,6 +60,7 @@ impl Default for Host {
             ctl_jwt: None,
             ctl_seed: None,
             ctl_tls: false,
+            ctl_topic_prefix: "wasmbus.ctl".to_string(),
             rpc_nats_url: Url::parse("nats://localhost:4222")
                 .expect("failed to parse RPC NATS URL"),
             rpc_timeout: Duration::from_millis(2000),
