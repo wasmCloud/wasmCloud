@@ -137,8 +137,9 @@ async fn build_par(
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=../../crates/provider-sdk");
     println!("cargo:rerun-if-changed=../../crates/providers");
+    println!("cargo:rerun-if-changed=build.rs");
 
     let out_dir = env::var("OUT_DIR")
         .map(PathBuf::from)
