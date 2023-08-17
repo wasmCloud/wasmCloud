@@ -115,7 +115,7 @@ struct Args {
     /// Optional flag to require host communication over TLS with a NATS server for CTL messages
     #[clap(long = "ctl-tls", env = "WASMCLOUD_CTL_TLS", hide = true)]
     ctl_tls: bool,
-    /// A prefix to use for all CTL topics
+    /// Advanced: A prefix to use for all CTL topics
     #[clap(
         long = "ctl-topic-prefix",
         env = "WASMCLOUD_CTL_TOPIC_PREFIX",
@@ -241,6 +241,7 @@ async fn main() -> anyhow::Result<()> {
         ctl_jwt,
         ctl_seed,
         ctl_tls,
+        ctl_topic_prefix,
         rpc_host,
         rpc_port,
         rpc_timeout_ms,
@@ -302,6 +303,7 @@ async fn main() -> anyhow::Result<()> {
         ctl_jwt: ctl_jwt.or_else(|| nats_jwt.clone()),
         ctl_seed: ctl_seed.or_else(|| nats_seed.clone()),
         ctl_tls,
+        ctl_topic_prefix,
         rpc_nats_url,
         rpc_timeout: rpc_timeout_ms,
         rpc_jwt: rpc_jwt.or_else(|| nats_jwt.clone()),

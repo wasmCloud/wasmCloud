@@ -30,7 +30,6 @@ use wasmcloud_control_interface::{
     ActorAuctionAck, ActorDescription, ActorInstance, ClientBuilder, CtlOperationAck,
     Host as HostInfo, HostInventory, ProviderAuctionAck,
 };
-use wasmcloud_host::oci::Config as OciConfig;
 use wasmcloud_host::wasmbus::{Host, HostConfig};
 
 async fn free_port() -> anyhow::Result<u16> {
@@ -263,6 +262,8 @@ async fn wasmbus() -> anyhow::Result<()> {
 
     let (host, shutdown) = Host::new(HostConfig {
         ctl_nats_url: ctl_nats_url.clone(),
+        rpc_nats_url: ctl_nats_url.clone(),
+        prov_rpc_nats_url: ctl_nats_url.clone(),
         lattice_prefix: TEST_PREFIX.to_string(),
         js_domain: None,
         cluster_seed: Some(cluster_key.seed().unwrap()),
@@ -276,6 +277,8 @@ async fn wasmbus() -> anyhow::Result<()> {
 
     let (host_two, shutdown_two) = Host::new(HostConfig {
         ctl_nats_url: ctl_nats_url.clone(),
+        rpc_nats_url: ctl_nats_url.clone(),
+        prov_rpc_nats_url: ctl_nats_url.clone(),
         lattice_prefix: TEST_PREFIX.to_string(),
         cluster_seed: Some(cluster_key_two.seed().unwrap()),
         cluster_issuers: Some(vec![cluster_key.public_key(), cluster_key_two.public_key()]),

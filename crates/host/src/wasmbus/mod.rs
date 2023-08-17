@@ -161,19 +161,20 @@ impl Queue {
     #[instrument]
     async fn new(
         nats: &async_nats::Client,
+        topic_prefix: &str,
         lattice_prefix: &str,
         cluster_key: &KeyPair,
         host_key: &KeyPair,
     ) -> anyhow::Result<Self> {
         let host_id = host_key.public_key();
         let (registries, pings, links, queries, auction, commands, inventory) = try_join!(
-            nats.subscribe(format!("wasmbus.ctl.{lattice_prefix}.registries.put",)),
-            nats.subscribe(format!("wasmbus.ctl.{lattice_prefix}.ping.hosts",)),
-            nats.subscribe(format!("wasmbus.ctl.{lattice_prefix}.linkdefs.*",)),
-            nats.subscribe(format!("wasmbus.ctl.{lattice_prefix}.get.*",)),
-            nats.subscribe(format!("wasmbus.ctl.{lattice_prefix}.auction.>",)),
-            nats.subscribe(format!("wasmbus.ctl.{lattice_prefix}.cmd.{host_id}.*",)),
-            nats.subscribe(format!("wasmbus.ctl.{lattice_prefix}.get.{host_id}.inv",)),
+            nats.subscribe(format!("{topic_prefix}.{lattice_prefix}.registries.put",)),
+            nats.subscribe(format!("{topic_prefix}.{lattice_prefix}.ping.hosts",)),
+            nats.subscribe(format!("{topic_prefix}.{lattice_prefix}.linkdefs.*",)),
+            nats.subscribe(format!("{topic_prefix}.{lattice_prefix}.get.*",)),
+            nats.subscribe(format!("{topic_prefix}.{lattice_prefix}.auction.>",)),
+            nats.subscribe(format!("{topic_prefix}.{lattice_prefix}.cmd.{host_id}.*",)),
+            nats.subscribe(format!("{topic_prefix}.{lattice_prefix}.get.{host_id}.inv",)),
         )
         .context("failed to subscribe to queues")?;
         Ok(Self {
@@ -804,10 +805,11 @@ pub struct Host {
     host_config: HostConfig,
     host_key: KeyPair,
     labels: HashMap<String, String>,
-    /// NATS client to use for actor RPC calls
-    rpc_nats: async_nats::Client,
+    ctl_topic_prefix: String,
     /// NATS client to use for control interface subscriptions and jetstream queries
     ctl_nats: async_nats::Client,
+    /// NATS client to use for actor RPC calls
+    rpc_nats: async_nats::Client,
     /// NATS client to use for communicating with capability providers
     prov_rpc_nats: async_nats::Client,
     data: kv::Store,
@@ -965,9 +967,15 @@ impl Host {
         .await
         .context("failed to connect to NATS control server")?;
 
-        let queue = Queue::new(&ctl_nats, &config.lattice_prefix, &cluster_key, &host_key)
-            .await
-            .context("failed to initialize queue")?;
+        let queue = Queue::new(
+            &ctl_nats,
+            &config.ctl_topic_prefix,
+            &config.lattice_prefix,
+            &cluster_key,
+            &host_key,
+        )
+        .await
+        .context("failed to initialize queue")?;
         ctl_nats.flush().await.context("failed to flush")?;
 
         debug!(
@@ -1056,12 +1064,13 @@ impl Host {
             event_builder,
             friendly_name,
             heartbeat: heartbeat_abort.clone(),
-            host_config: config,
+            ctl_topic_prefix: config.ctl_topic_prefix.clone(),
             host_key,
             labels,
             ctl_nats,
             rpc_nats,
             prov_rpc_nats,
+            host_config: config,
             data: data.clone(),
             data_watch: data_watch_abort.clone(),
             providers: RwLock::default(),
@@ -2357,7 +2366,14 @@ impl Host {
             ..
         }: async_nats::Message,
     ) {
-        let mut parts = subject.split('.').skip(3); // skip `wasmbus.ctl.{prefix}`
+        // Skip the topic prefix and then the lattice prefix
+        // e.g. `wasmbus.ctl.{prefix}`
+        let mut parts = subject
+            .trim()
+            .trim_start_matches(&self.ctl_topic_prefix)
+            .trim_start_matches('.')
+            .split('.')
+            .skip(1);
         let res = match (parts.next(), parts.next(), parts.next(), parts.next()) {
             (Some("auction"), Some("actor"), None, None) => {
                 self.handle_auction_actor(payload).await.map(Some)
