@@ -24,6 +24,12 @@ struct Args {
     /// NATS server port to connect to
     #[clap(long = "nats-port", default_value_t = 4222, env = "NATS_PORT")]
     nats_port: u16,
+    /// A user JWT to use to authenticate to NATS
+    #[clap(long = "nats-jwt", env = "NATS_JWT", requires = "nats_seed")]
+    nats_jwt: Option<String>,
+    /// A seed nkey to use to authenticate to NATS
+    #[clap(long = "nats-seed", env = "NATS_SEED", requires = "nats_jwt")]
+    nats_seed: Option<String>,
 
     /// The lattice the host belongs to
     #[clap(
@@ -84,71 +90,13 @@ struct Args {
     )]
     enable_structured_logging: bool,
 
-    // TODO: use and implement RPC variables
-    /// An IP address or DNS name to use to connect to NATS for RPC messages, defaults to the value supplied to --nats-host if not supplied
-    #[clap(long = "rpc-host", env = "WASMCLOUD_RPC_HOST", hide = true)]
-    rpc_host: Option<String>,
-    /// A port to use to connect to NATS for RPC messages, defaults to the value supplied to --nats-port if not supplied
-    #[clap(long = "rpc-port", env = "WASMCLOUD_RPC_PORT", hide = true)]
-    rpc_port: Option<u16>,
-    /// A user JWT to use to authenticate to NATS for RPC messages
-    #[clap(
-        long = "rpc-jwt",
-        env = "WASMCLOUD_RPC_JWT",
-        requires = "rpc_seed",
-        hide = true
-    )]
-    rpc_jwt: Option<String>,
-    /// A seed nkey to use to authenticate to NATS for RPC messages
-    #[clap(
-        long = "rpc-seed",
-        env = "WASMCLOUD_RPC_SEED",
-        requires = "rpc_jwt",
-        hide = true
-    )]
-    rpc_seed: Option<String>,
-    /// Timeout in milliseconds for all RPC calls
-    #[clap(long = "rpc-timeout-ms", default_value = "2000", env = "WASMCLOUD_RPC_TIMEOUT_MS", value_parser = parse_duration, hide = true)]
-    rpc_timeout_ms: Duration,
-    /// Optional flag to require host communication over TLS with a NATS server for RPC messages
-    #[clap(long = "rpc-tls", env = "WASMCLOUD_RPC_TLS", hide = true)]
-    rpc_tls: bool,
-
-    // TODO: use and implement PROV RPC variables
-    /// An IP address or DNS name to use to connect to NATS for Provider RPC messages, defaults to the value supplied to --nats-host if not supplied
-    #[clap(long = "prov-rpc-host", env = "WASMCLOUD_PROV_RPC_HOST", hide = true)]
-    prov_rpc_host: Option<String>,
-    /// A port to use to connect to NATS for Provider RPC messages, defaults to the value supplied to --nats-port if not supplied
-    #[clap(long = "prov-rpc-port", env = "WASMCLOUD_PROV_RPC_PORT", hide = true)]
-    prov_rpc_port: Option<u16>,
-    /// A user JWT to use to authenticate to NATS for Provider RPC messages
-    #[clap(
-        long = "prov-rpc-jwt",
-        env = "WASMCLOUD_PROV_RPC_JWT",
-        requires = "prov_rpc_seed",
-        hide = true
-    )]
-    prov_rpc_jwt: Option<String>,
-    /// A seed nkey to use to authenticate to NATS for Provider RPC messages
-    #[clap(
-        long = "prov-rpc-seed",
-        env = "WASMCLOUD_PROV_RPC_SEED",
-        requires = "prov_rpc_jwt",
-        hide = true
-    )]
-    prov_rpc_seed: Option<String>,
-    /// Optional flag to require host communication over TLS with a NATS server for Provider RPC messages
-    #[clap(long = "prov-rpc-tls", env = "WASMCLOUD_PROV_RPC_TLS", hide = true)]
-    prov_rpc_tls: bool,
-
-    // TODO: use and implement CTL variables
     /// An IP address or DNS name to use to connect to NATS for Control Interface (CTL) messages, defaults to the value supplied to --nats-host if not supplied
     #[clap(long = "ctl-host", env = "WASMCLOUD_CTL_HOST", hide = true)]
     ctl_host: Option<String>,
     /// A port to use to connect to NATS for CTL messages, defaults to the value supplied to --nats-port if not supplied
     #[clap(long = "ctl-port", env = "WASMCLOUD_CTL_PORT", hide = true)]
     ctl_port: Option<u16>,
-    /// A user JWT to use to authenticate to NATS for CTL messages
+    /// A user JWT to use to authenticate to NATS for CTL messages, defaults to the value supplied to --nats-jwt if not supplied
     #[clap(
         long = "ctl-jwt",
         env = "WASMCLOUD_CTL_JWT",
@@ -156,7 +104,7 @@ struct Args {
         hide = true
     )]
     ctl_jwt: Option<String>,
-    /// A seed nkey to use to authenticate to NATS for CTL messages
+    /// A seed nkey to use to authenticate to NATS for CTL messages, defaults to the value supplied to --nats-seed if not supplied
     #[clap(
         long = "ctl-seed",
         env = "WASMCLOUD_CTL_SEED",
@@ -175,6 +123,61 @@ struct Args {
         hide = true
     )]
     ctl_topic_prefix: String,
+
+    /// An IP address or DNS name to use to connect to NATS for RPC messages, defaults to the value supplied to --nats-host if not supplied
+    #[clap(long = "rpc-host", env = "WASMCLOUD_RPC_HOST", hide = true)]
+    rpc_host: Option<String>,
+    /// A port to use to connect to NATS for RPC messages, defaults to the value supplied to --nats-port if not supplied
+    #[clap(long = "rpc-port", env = "WASMCLOUD_RPC_PORT", hide = true)]
+    rpc_port: Option<u16>,
+    /// A user JWT to use to authenticate to NATS for RPC messages, defaults to the value supplied to --nats-jwt if not supplied
+    #[clap(
+        long = "rpc-jwt",
+        env = "WASMCLOUD_RPC_JWT",
+        requires = "rpc_seed",
+        hide = true
+    )]
+    rpc_jwt: Option<String>,
+    /// A seed nkey to use to authenticate to NATS for RPC messages, defaults to the value supplied to --nats-seed if not supplied
+    #[clap(
+        long = "rpc-seed",
+        env = "WASMCLOUD_RPC_SEED",
+        requires = "rpc_jwt",
+        hide = true
+    )]
+    rpc_seed: Option<String>,
+    /// Timeout in milliseconds for all RPC calls
+    #[clap(long = "rpc-timeout-ms", default_value = "2000", env = "WASMCLOUD_RPC_TIMEOUT_MS", value_parser = parse_duration, hide = true)]
+    rpc_timeout_ms: Duration,
+    /// Optional flag to require host communication over TLS with a NATS server for RPC messages
+    #[clap(long = "rpc-tls", env = "WASMCLOUD_RPC_TLS", hide = true)]
+    rpc_tls: bool,
+
+    /// An IP address or DNS name to use to connect to NATS for Provider RPC messages, defaults to the value supplied to --nats-host if not supplied
+    #[clap(long = "prov-rpc-host", env = "WASMCLOUD_PROV_RPC_HOST", hide = true)]
+    prov_rpc_host: Option<String>,
+    /// A port to use to connect to NATS for Provider RPC messages, defaults to the value supplied to --nats-port if not supplied
+    #[clap(long = "prov-rpc-port", env = "WASMCLOUD_PROV_RPC_PORT", hide = true)]
+    prov_rpc_port: Option<u16>,
+    /// A user JWT to use to authenticate to NATS for Provider RPC messages, defaults to the value supplied to --nats-jwt if not supplied
+    #[clap(
+        long = "prov-rpc-jwt",
+        env = "WASMCLOUD_PROV_RPC_JWT",
+        requires = "prov_rpc_seed",
+        hide = true
+    )]
+    prov_rpc_jwt: Option<String>,
+    /// A seed nkey to use to authenticate to NATS for Provider RPC messages, defaults to the value supplied to --nats-seed if not supplied
+    #[clap(
+        long = "prov-rpc-seed",
+        env = "WASMCLOUD_PROV_RPC_SEED",
+        requires = "prov_rpc_jwt",
+        hide = true
+    )]
+    prov_rpc_seed: Option<String>,
+    /// Optional flag to require host communication over TLS with a NATS server for Provider RPC messages
+    #[clap(long = "prov-rpc-tls", env = "WASMCLOUD_PROV_RPC_TLS", hide = true)]
+    prov_rpc_tls: bool,
 
     // TODO: use and implement policy
     #[clap(long = "policy-topic", env = "WASMCLOUD_POLICY_TOPIC", hide = true)]
@@ -220,6 +223,8 @@ async fn main() -> anyhow::Result<()> {
         log_level,
         nats_host,
         nats_port,
+        nats_jwt,
+        nats_seed,
         lattice_prefix,
         host_seed,
         cluster_seed,
@@ -294,17 +299,17 @@ async fn main() -> anyhow::Result<()> {
             oci_user,
             oci_password,
         },
-        ctl_jwt,
-        ctl_seed,
+        ctl_jwt: ctl_jwt.or_else(|| nats_jwt.clone()),
+        ctl_seed: ctl_seed.or_else(|| nats_seed.clone()),
         ctl_tls,
         rpc_nats_url,
         rpc_timeout: rpc_timeout_ms,
-        rpc_jwt,
-        rpc_seed,
+        rpc_jwt: rpc_jwt.or_else(|| nats_jwt.clone()),
+        rpc_seed: rpc_seed.or_else(|| nats_seed.clone()),
         rpc_tls,
         prov_rpc_nats_url,
-        prov_rpc_jwt,
-        prov_rpc_seed,
+        prov_rpc_jwt: prov_rpc_jwt.or_else(|| nats_jwt.clone()),
+        prov_rpc_seed: prov_rpc_seed.or_else(|| nats_seed.clone()),
         prov_rpc_tls,
     })
     .await
