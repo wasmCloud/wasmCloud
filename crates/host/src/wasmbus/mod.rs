@@ -31,7 +31,7 @@ use cloudevents::{EventBuilder, EventBuilderV10};
 use futures::stream::{AbortHandle, Abortable};
 use futures::{stream, try_join, FutureExt, Stream, StreamExt, TryStreamExt};
 use nkeys::{KeyPair, KeyPairType};
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use time::format_description::well_known::Rfc3339;
@@ -48,14 +48,16 @@ use uuid::Uuid;
 use wascap::jwt;
 use wasmcloud_control_interface::{
     ActorAuctionAck, ActorAuctionRequest, ActorDescription, HostInventory, LinkDefinition,
-    ProviderAuctionRequest, ProviderDescription, RemoveLinkDefinitionRequest, ScaleActorCommand,
-    StartActorCommand, StartProviderCommand, StopActorCommand, StopHostCommand,
+    LinkDefinitionList, ProviderAuctionRequest, ProviderDescription, RemoveLinkDefinitionRequest,
+    ScaleActorCommand, StartActorCommand, StartProviderCommand, StopActorCommand, StopHostCommand,
     StopProviderCommand, UpdateActorCommand,
 };
 use wasmcloud_runtime::capability::{messaging, Bus, KeyValueReadWrite, Messaging};
 use wasmcloud_runtime::{ActorInstancePool, Runtime};
 
 const SUCCESS: &str = r#"{"accepted":true,"error":""}"#;
+const CLAIMS_PREFIX: &str = "CLAIMS_";
+const LINKDEF_PREFIX: &str = "LINKDEF_";
 
 #[derive(Debug)]
 struct Queue {
@@ -1587,6 +1589,9 @@ impl Host {
 
         let actor = self.fetch_actor(&actor_ref).await?;
         let claims = actor.claims().context("claims missing")?;
+        self.store_claims(claims.clone())
+            .await
+            .context("failed to store claims")?;
 
         let annotations = annotations.map(|annotations| annotations.into_iter().collect());
         let Some(count) = NonZeroUsize::new(count.into()) else {
@@ -1763,6 +1768,9 @@ impl Host {
         let new_claims = new_actor
             .claims()
             .context("claims missing from new actor")?;
+        self.store_claims(new_claims.clone())
+            .await
+            .context("failed to store claims")?;
         let old_claims = actor
             .pool
             .claims()
@@ -1815,6 +1823,9 @@ impl Host {
             crate::fetch_provider(provider_ref, link_name, &self.host_config.oci_opts)
                 .await
                 .context("failed to fetch provider")?;
+        self.store_claims(claims.clone())
+            .await
+            .context("failed to store claims")?;
 
         let annotations = annotations.map(|annotations| annotations.into_iter().collect());
         let mut providers = self.providers.write().await;
@@ -2128,16 +2139,55 @@ impl Host {
         Ok(buf.into())
     }
 
-    #[allow(unused)] // TODO: Remove once implemented
-    #[instrument(skip(self, payload))]
-    async fn handle_claims(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
-        bail!("TODO")
+    #[instrument(skip(self))]
+    async fn handle_claims(&self) -> anyhow::Result<Bytes> {
+        // TODO: update control interface client to have a more specific type definition for
+        // GetClaimsResponse, so we can re-use it here. Currently it's Vec<HashMap<String, String>>
+        #[derive(Serialize)]
+        struct ClaimsResponse {
+            claims: Vec<StoredClaims>,
+        }
+
+        let claims: Vec<StoredClaims> = self.scan_latticedata(CLAIMS_PREFIX).await?;
+        let resp = ClaimsResponse { claims };
+        Ok(serde_json::to_vec(&resp)?.into())
     }
 
-    #[allow(unused)] // TODO: Remove once implemented
-    #[instrument(skip(self, payload))]
-    async fn handle_links(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
-        bail!("TODO")
+    #[instrument(skip(self))]
+    async fn handle_links(&self) -> anyhow::Result<Bytes> {
+        let links: Vec<LinkDefinition> = self.scan_latticedata(LINKDEF_PREFIX).await?;
+        let resp = LinkDefinitionList { links };
+        Ok(serde_json::to_vec(&resp)?.into())
+    }
+
+    async fn scan_latticedata<T: DeserializeOwned>(
+        &self,
+        key_prefix: &str,
+    ) -> anyhow::Result<Vec<T>> {
+        let filtered_keys = self
+            .data
+            .keys()
+            .await
+            .context("failed to scan lattice data keys")?
+            .try_filter(|key| futures::future::ready(key.starts_with(key_prefix)))
+            .try_collect::<Vec<String>>()
+            .await
+            .context("failed to collect lattice data keys")?;
+
+        let futs = filtered_keys.into_iter().map(|key| self.data.get(key));
+        let list: Vec<T> = futures::future::join_all(futs)
+            .await
+            .into_iter()
+            .filter_map(|resp| {
+                // TODO: we should probably handle when we get an error from NATS or encountering
+                // malformed data in the bucket entries https://github.com/wasmCloud/wasmCloud/issues/509
+                resp.ok()
+                    .and_then(|bytes| bytes)
+                    .and_then(|bytes| serde_json::from_slice::<T>(&bytes).ok())
+            })
+            .collect();
+
+        Ok(list)
     }
 
     #[instrument(skip(self, payload))]
@@ -2273,10 +2323,8 @@ impl Host {
             (Some("get"), Some(host_id), Some("inv"), None) => {
                 self.handle_inventory(payload, host_id).await.map(Some)
             }
-            (Some("get"), Some("claims"), None, None) => {
-                self.handle_claims(payload).await.map(Some)
-            }
-            (Some("get"), Some("links"), None, None) => self.handle_links(payload).await.map(Some),
+            (Some("get"), Some("claims"), None, None) => self.handle_claims().await.map(Some),
+            (Some("get"), Some("links"), None, None) => self.handle_links().await.map(Some),
             (Some("linkdefs"), Some("put"), None, None) => {
                 self.handle_linkdef_put(payload).await.map(Some)
             }
@@ -2317,6 +2365,24 @@ impl Host {
             }
             _ => {}
         }
+    }
+
+    async fn store_claims<T>(&self, claims: T) -> anyhow::Result<()>
+    where
+        T: TryInto<StoredClaims, Error = anyhow::Error>,
+    {
+        let stored_claims: StoredClaims = claims.try_into()?;
+        let key = format!("CLAIMS_{}", stored_claims.subject);
+
+        let bytes = serde_json::to_vec(&stored_claims)
+            .map_err(anyhow::Error::from)
+            .context("failed to serialize claims")?
+            .into();
+        self.data
+            .put(key, bytes)
+            .await
+            .context("failed to put claims")?;
+        Ok(())
     }
 
     #[instrument(skip(self, id, value))]
@@ -2450,6 +2516,14 @@ impl Host {
             (Operation::Delete, Some("LINKDEF"), Some(id)) => {
                 self.process_linkdef_delete(id, value).await
             }
+            (Operation::Put, Some("CLAIMS"), Some(_pubkey)) => {
+                // TODO https://github.com/wasmCloud/wasmCloud/issues/507
+                Ok(())
+            }
+            (Operation::Delete, Some("CLAIMS"), Some(_pubkey)) => {
+                // TODO https://github.com/wasmCloud/wasmCloud/issues/507
+                Ok(())
+            }
             _ => {
                 error!(
                     bucket,
@@ -2466,5 +2540,77 @@ impl Host {
         if let Err(error) = &res {
             warn!(?error, ?operation, bucket, "failed to process entry");
         }
+    }
+}
+
+// TODO: use a better format https://github.com/wasmCloud/wasmCloud/issues/508
+#[derive(Serialize, Deserialize)]
+struct StoredClaims {
+    call_alias: String,
+    #[serde(rename = "caps")]
+    capabilities: String,
+    contract_id: String,
+    #[serde(rename = "iss")]
+    issuer: String,
+    name: String,
+    #[serde(rename = "rev")]
+    revision: String,
+    #[serde(rename = "sub")]
+    subject: String,
+    tags: String,
+    version: String,
+}
+
+impl TryFrom<jwt::Claims<jwt::Actor>> for StoredClaims {
+    type Error = anyhow::Error;
+
+    fn try_from(claims: jwt::Claims<jwt::Actor>) -> Result<Self, Self::Error> {
+        let jwt::Claims {
+            issuer,
+            subject,
+            metadata,
+            ..
+        } = claims;
+
+        let metadata = metadata.context("no metadata found on provider claims")?;
+
+        Ok(StoredClaims {
+            call_alias: metadata.call_alias.unwrap_or_default(),
+            capabilities: metadata.caps.unwrap_or_default().join(","),
+            contract_id: String::new(), // actors don't have a contract_id
+            issuer,
+            name: metadata.name.unwrap_or_default(),
+            revision: metadata.rev.unwrap_or_default().to_string(),
+            subject,
+            tags: metadata.tags.unwrap_or_default().join(","),
+            version: metadata.ver.unwrap_or_default(),
+        })
+    }
+}
+
+impl TryFrom<jwt::Claims<jwt::CapabilityProvider>> for StoredClaims {
+    type Error = anyhow::Error;
+
+    fn try_from(claims: jwt::Claims<jwt::CapabilityProvider>) -> Result<Self, Self::Error> {
+        let jwt::Claims {
+            issuer,
+            subject,
+            metadata,
+            ..
+        } = claims;
+
+        let metadata = metadata.context("no metadata found on provider claims")?;
+
+        Ok(StoredClaims {
+            call_alias: String::new(),   // providers don't have a call alias
+            capabilities: String::new(), // providers don't have a capabilities list
+            contract_id: metadata.capid,
+            issuer,
+            name: metadata.name.unwrap_or_default(),
+            revision: metadata.rev.unwrap_or_default().to_string(),
+            subject,
+            tags: String::new(), // providers don't have tags
+            version: metadata.ver.unwrap_or_default(),
+        })
     }
 }
