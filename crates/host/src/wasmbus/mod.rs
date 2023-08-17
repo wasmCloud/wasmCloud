@@ -1580,7 +1580,7 @@ impl Host {
         count: u16,
         host_id: &str,
     ) -> anyhow::Result<()> {
-        debug!("launch actor");
+        debug!(actor_ref, count, ?annotations, "launch actor");
 
         let actor = fetch_actor(&actor_ref, &self.host_config.oci_opts)
             .await
@@ -1814,7 +1814,7 @@ impl Host {
         annotations: Option<HashMap<String, String>>,
         host_id: &str,
     ) -> anyhow::Result<()> {
-        debug!("launch provider");
+        debug!(link_name, provider_ref, ?annotations, "launch provider");
 
         let (path, claims) =
             crate::fetch_provider(provider_ref, link_name, &self.host_config.oci_opts)
