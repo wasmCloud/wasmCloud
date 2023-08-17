@@ -1,6 +1,5 @@
 #![warn(clippy::pedantic)]
 
-use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{self, Context};
@@ -25,10 +24,6 @@ struct Args {
     /// NATS server port to connect to
     #[clap(long = "nats-port", default_value_t = 4222, env = "NATS_PORT")]
     nats_port: u16,
-    // TODO: use and implement NATS credsfile auth
-    /// NATS credentials file to use when authenticating
-    #[clap(long = "nats-credsfile", env = "NATS_CREDSFILE", hide = true)]
-    nats_credsfile: Option<PathBuf>,
 
     /// The lattice the host belongs to
     #[clap(
@@ -115,7 +110,7 @@ struct Args {
     /// Timeout in milliseconds for all RPC calls
     #[clap(long = "rpc-timeout-ms", default_value = "2000", env = "WASMCLOUD_RPC_TIMEOUT_MS", value_parser = parse_duration, hide = true)]
     rpc_timeout_ms: Duration,
-    /// Optional flag to enable host communication with a NATS server over TLS for RPC messages
+    /// Optional flag to require host communication over TLS with a NATS server for RPC messages
     #[clap(long = "rpc-tls", env = "WASMCLOUD_RPC_TLS", hide = true)]
     rpc_tls: bool,
 
@@ -142,7 +137,7 @@ struct Args {
         hide = true
     )]
     prov_rpc_seed: Option<String>,
-    /// Optional flag to enable host communication with a NATS server over TLS for Provider RPC messages
+    /// Optional flag to require host communication over TLS with a NATS server for Provider RPC messages
     #[clap(long = "prov-rpc-tls", env = "WASMCLOUD_PROV_RPC_TLS", hide = true)]
     prov_rpc_tls: bool,
 
@@ -169,7 +164,7 @@ struct Args {
         hide = true
     )]
     ctl_seed: Option<String>,
-    /// Optional flag to enable host communication with a NATS server over TLS for CTL messages
+    /// Optional flag to require host communication over TLS with a NATS server for CTL messages
     #[clap(long = "ctl-tls", env = "WASMCLOUD_CTL_TLS", hide = true)]
     ctl_tls: bool,
     /// A prefix to use for all CTL topics
@@ -236,6 +231,22 @@ async fn main() -> anyhow::Result<()> {
         oci_user,
         oci_password,
         js_domain,
+        ctl_host,
+        ctl_port,
+        ctl_jwt,
+        ctl_seed,
+        ctl_tls,
+        rpc_host,
+        rpc_port,
+        rpc_timeout_ms,
+        rpc_jwt,
+        rpc_seed,
+        rpc_tls,
+        prov_rpc_host,
+        prov_rpc_port,
+        prov_rpc_jwt,
+        prov_rpc_seed,
+        prov_rpc_tls,
         ..
     } = Args::parse();
 
@@ -248,8 +259,26 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let ctl_nats_url = Url::parse(&format!("nats://{nats_host}:{nats_port}"))
-        .context("failed to construct a valid `ctl_nats_url` using `nats-host` and `nats-port`")?;
+    let ctl_nats_url = Url::parse(&format!(
+        "nats://{}:{}",
+        ctl_host.unwrap_or_else(|| nats_host.clone()),
+        ctl_port.unwrap_or(nats_port)
+    ))
+    .context("failed to construct a valid `ctl_nats_url` using `ctl-host` and `ctl-port`")?;
+    let rpc_nats_url = Url::parse(&format!(
+        "nats://{}:{}",
+        rpc_host.unwrap_or_else(|| nats_host.clone()),
+        rpc_port.unwrap_or(nats_port)
+    ))
+    .context("failed to construct a valid `rpc_nats_url` using `rpc-host` and `rpc-port`")?;
+    let prov_rpc_nats_url = Url::parse(&format!(
+        "nats://{}:{}",
+        prov_rpc_host.unwrap_or(nats_host),
+        prov_rpc_port.unwrap_or(nats_port)
+    ))
+    .context(
+        "failed to construct a valid `prov_rpc_nats_url` using `prov-rpc-host` and `prov-rpc-port`",
+    )?;
     let (host, shutdown) = wasmcloud_host::wasmbus::Host::new(WasmbusHostConfig {
         ctl_nats_url,
         lattice_prefix,
@@ -265,6 +294,18 @@ async fn main() -> anyhow::Result<()> {
             oci_user,
             oci_password,
         },
+        ctl_jwt,
+        ctl_seed,
+        ctl_tls,
+        rpc_nats_url,
+        rpc_timeout: rpc_timeout_ms,
+        rpc_jwt,
+        rpc_seed,
+        rpc_tls,
+        prov_rpc_nats_url,
+        prov_rpc_jwt,
+        prov_rpc_seed,
+        prov_rpc_tls,
     })
     .await
     .context("failed to initialize host")?;

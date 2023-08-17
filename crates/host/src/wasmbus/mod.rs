@@ -840,7 +840,12 @@ pub struct Host {
     host_config: HostConfig,
     host_key: KeyPair,
     labels: HashMap<String, String>,
-    nats: async_nats::Client,
+    /// NATS client to use for actor RPC calls
+    rpc_nats: async_nats::Client,
+    /// NATS client to use for control interface subscriptions and jetstream queries
+    ctl_nats: async_nats::Client,
+    /// NATS client to use for communicating with capability providers
+    prov_rpc_nats: async_nats::Client,
     data: kv::Store,
     data_watch: AbortHandle,
     providers: RwLock<HashMap<String, Provider>>,
@@ -978,14 +983,72 @@ impl Host {
             ctl_nats_url = config.ctl_nats_url.as_str(),
             "connecting to NATS control server"
         );
-        let nats = async_nats::connect(config.ctl_nats_url.as_str())
-            .await
-            .context("failed to connect to NATS control server")?;
+        let ctl_nats = match (config.ctl_jwt.as_ref(), config.ctl_seed.as_ref()) {
+            (Some(jwt), Some(seed)) => {
+                let kp = std::sync::Arc::new(
+                    nkeys::KeyPair::from_seed(seed)
+                        .context("failed to construct key pair from seed")?,
+                );
+                async_nats::ConnectOptions::with_jwt(jwt.to_string(), move |nonce| {
+                    let key_pair = kp.clone();
+                    async move { key_pair.sign(&nonce).map_err(async_nats::AuthError::new) }
+                })
+            }
+            _ => async_nats::ConnectOptions::new(),
+        }
+        .require_tls(config.ctl_tls)
+        .connect(config.ctl_nats_url.as_str())
+        .await
+        .context("failed to connect to NATS control server")?;
 
-        let queue = Queue::new(&nats, &config.lattice_prefix, &cluster_key, &host_key)
+        let queue = Queue::new(&ctl_nats, &config.lattice_prefix, &cluster_key, &host_key)
             .await
             .context("failed to initialize queue")?;
-        nats.flush().await.context("failed to flush")?;
+        ctl_nats.flush().await.context("failed to flush")?;
+
+        debug!(
+            rpc_nats_url = config.rpc_nats_url.as_str(),
+            "connecting to NATS RPC server"
+        );
+        let rpc_nats = match (config.rpc_jwt.as_ref(), config.rpc_seed.as_ref()) {
+            (Some(jwt), Some(seed)) => {
+                let kp = std::sync::Arc::new(
+                    nkeys::KeyPair::from_seed(seed)
+                        .context("failed to construct key pair from seed")?,
+                );
+                async_nats::ConnectOptions::with_jwt(jwt.to_string(), move |nonce| {
+                    let key_pair = kp.clone();
+                    async move { key_pair.sign(&nonce).map_err(async_nats::AuthError::new) }
+                })
+            }
+            _ => async_nats::ConnectOptions::new(),
+        }
+        .require_tls(config.rpc_tls)
+        .connect(config.rpc_nats_url.as_str())
+        .await
+        .context("failed to connect to NATS RPC server")?;
+
+        debug!(
+            prov_rpc_nats_url = config.prov_rpc_nats_url.as_str(),
+            "connecting to NATS Provider RPC server"
+        );
+        let prov_rpc_nats = match (config.prov_rpc_jwt.as_ref(), config.prov_rpc_seed.as_ref()) {
+            (Some(jwt), Some(seed)) => {
+                let kp = std::sync::Arc::new(
+                    nkeys::KeyPair::from_seed(seed)
+                        .context("failed to construct key pair from seed")?,
+                );
+                async_nats::ConnectOptions::with_jwt(jwt.to_string(), move |nonce| {
+                    let key_pair = kp.clone();
+                    async move { key_pair.sign(&nonce).map_err(async_nats::AuthError::new) }
+                })
+            }
+            _ => async_nats::ConnectOptions::new(),
+        }
+        .require_tls(config.prov_rpc_tls)
+        .connect(config.prov_rpc_nats_url.as_str())
+        .await
+        .context("failed to connect to NATS Provider RPC server")?;
 
         let start_at = Instant::now();
 
@@ -1007,9 +1070,9 @@ impl Host {
         let event_builder = EventBuilderV10::new().source(host_key.public_key());
 
         let jetstream = if let Some(domain) = config.js_domain.as_ref() {
-            async_nats::jetstream::with_domain(nats.clone(), domain)
+            async_nats::jetstream::with_domain(ctl_nats.clone(), domain)
         } else {
-            async_nats::jetstream::new(nats.clone())
+            async_nats::jetstream::new(ctl_nats.clone())
         };
         let bucket = format!("LATTICEDATA_{}", config.lattice_prefix);
         create_lattice_metadata_bucket(&jetstream, &bucket).await?;
@@ -1032,7 +1095,9 @@ impl Host {
             host_config: config,
             host_key,
             labels,
-            nats,
+            ctl_nats,
+            rpc_nats,
+            prov_rpc_nats,
             data: data.clone(),
             data_watch: data_watch_abort.clone(),
             providers: RwLock::default(),
@@ -1200,7 +1265,7 @@ impl Host {
             .build()
             .context("failed to build cloud event")?;
         let ev = serde_json::to_vec(&ev).context("failed to serialize event")?;
-        self.nats
+        self.ctl_nats
             .publish(
                 format!("wasmbus.evt.{}", self.host_config.lattice_prefix),
                 ev.into(),
@@ -1236,7 +1301,7 @@ impl Host {
             let handler = handler.clone();
             async move {
                 let calls = self
-                    .nats
+                    .rpc_nats
                     .queue_subscribe(topic.clone(), topic)
                     .await
                     .context("failed to subscribe to actor call queue")?;
@@ -1244,7 +1309,7 @@ impl Host {
                 let (calls_abort, calls_abort_reg) = AbortHandle::new_pair();
                 let id = Ulid::new();
                 let instance = Arc::new(ActorInstance {
-                    nats: self.nats.clone(),
+                    nats: self.rpc_nats.clone(),
                     pool,
                     id,
                     calls: calls_abort,
@@ -1361,7 +1426,7 @@ impl Host {
             ..Default::default()
         };
         let handler = Handler {
-            nats: self.nats.clone(),
+            nats: self.rpc_nats.clone(),
             lattice_prefix: self.host_config.lattice_prefix.clone(),
             origin,
             cluster_key: Arc::clone(&self.cluster_key),
@@ -1862,7 +1927,6 @@ impl Host {
             });
         if let hash_map::Entry::Vacant(entry) = instances.entry(link_name.into()) {
             let id = Ulid::new();
-            let async_nats::ServerInfo { host, port, .. } = self.nats.server_info();
             let invocation_seed = self
                 .cluster_key
                 .seed()
@@ -1876,16 +1940,16 @@ impl Host {
                 "host_id": self.host_key.public_key(),
                 "lattice_rpc_prefix": self.host_config.lattice_prefix,
                 "link_name": link_name,
-                "lattice_rpc_user_jwt": "", // TODO: Support config
-                "lattice_rpc_user_seed": "", // TODO: Support config
-                "lattice_rpc_url": format!("{host}:{port}"),
-                "lattice_rpc_tls": 0, // TODO: Support config
+                "lattice_rpc_user_jwt": self.host_config.prov_rpc_jwt.clone().unwrap_or_default(),
+                "lattice_rpc_user_seed": self.host_config.prov_rpc_seed.clone().unwrap_or_default(),
+                "lattice_rpc_url": self.host_config.prov_rpc_nats_url.to_string(),
+                "lattice_rpc_tls": self.host_config.prov_rpc_tls,
                 "env_values": {},
                 "instance_id": Uuid::from_u128(id.into()),
                 "provider_key": claims.subject,
                 "link_definitions": link_definitions,
                 "config_json": configuration,
-                "default_rpc_timeout_ms": 2000, // TODO: Support config
+                "default_rpc_timeout_ms": self.host_config.rpc_timeout.as_millis(),
                 "cluster_issuers": self.host_config.cluster_issuers.clone().unwrap_or_else(|| vec![self.cluster_key.public_key()]),
                 "invocation_seed": invocation_seed,
                 "js_domain": self.host_config.js_domain,
@@ -2025,7 +2089,7 @@ impl Host {
                 // Send a request to the provider, requesting a graceful shutdown
                 if let Ok(payload) = serde_json::to_vec(&json!({ "host_id": host_id })) {
                     if let Err(e) = self
-                        .nats
+                        .prov_rpc_nats
                         .send_request(
                             format!(
                                 "wasmbus.rpc.{}.{provider_ref}.{link_name}.shutdown",
@@ -2335,13 +2399,13 @@ impl Host {
         }
         match (reply, res) {
             (Some(reply), Ok(Some(buf))) => {
-                if let Err(e) = self.nats.publish(reply, buf).await {
+                if let Err(e) = self.ctl_nats.publish(reply, buf).await {
                     error!("failed to publish success in response to `{subject}` request: {e:?}");
                 }
             }
             (Some(reply), Err(e)) => {
                 if let Err(e) = self
-                    .nats
+                    .ctl_nats
                     .publish(
                         reply,
                         format!(r#"{{"accepted":false,"error":"{e}"}}"#).into(),
@@ -2408,7 +2472,7 @@ impl Host {
 
         let msgp = rmp_serde::to_vec(ld).context("failed to encode link definition")?;
         let lattice_prefix = &self.host_config.lattice_prefix;
-        self.nats
+        self.prov_rpc_nats
             .publish(
                 format!("wasmbus.rpc.{lattice_prefix}.{provider_id}.{link_name}.linkdefs.put",),
                 msgp.into(),
@@ -2453,7 +2517,7 @@ impl Host {
 
         let msgp = rmp_serde::to_vec(ld).context("failed to encode link definition")?;
         let lattice_prefix = &self.host_config.lattice_prefix;
-        self.nats
+        self.prov_rpc_nats
             .publish(
                 format!("wasmbus.rpc.{lattice_prefix}.{provider_id}.{link_name}.linkdefs.del",),
                 msgp.into(),
