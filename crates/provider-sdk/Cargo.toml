@@ -33,6 +33,11 @@ tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true, features = ["log"] }
 tracing-futures = { workspace = true, features = ["default"] }
 tracing-opentelemetry = { workspace = true, optional = true }
-tracing-subscriber = { workspace = true, features = ["env-filter", "json", "fmt"] }
+tracing-subscriber = { workspace = true, features = [
+    "ansi",
+    "env-filter",
+    "fmt",
+    "json",
+]}
 uuid = { workspace = true, features = ["v4"] }
 wascap = { workspace = true }
