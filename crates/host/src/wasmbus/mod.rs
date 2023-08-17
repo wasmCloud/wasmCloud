@@ -1032,6 +1032,7 @@ impl Host {
             _ => async_nats::ConnectOptions::new(),
         }
         .require_tls(config.rpc_tls)
+        .request_timeout(Some(config.rpc_timeout))
         .connect(config.rpc_nats_url.as_str())
         .await
         .context("failed to connect to NATS RPC server")?;
