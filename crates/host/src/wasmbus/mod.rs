@@ -1454,6 +1454,16 @@ impl Host {
         Ok(Some(buf.into()))
     }
 
+    #[instrument(skip(self))]
+    async fn fetch_actor(&self, actor_ref: &str) -> anyhow::Result<wasmcloud_runtime::Actor> {
+        let actor = fetch_actor(&actor_ref, &self.host_config.oci_opts)
+            .await
+            .context("failed to fetch actor")?;
+        let actor = wasmcloud_runtime::Actor::new(&self.runtime, actor)
+            .context("failed to initialize actor")?;
+        Ok(actor)
+    }
+
     #[instrument(skip(self, payload))]
     async fn handle_stop(&self, payload: impl AsRef<[u8]>, host_id: &str) -> anyhow::Result<Bytes> {
         let StopHostCommand { timeout, .. } = serde_json::from_slice(payload.as_ref())
@@ -1487,15 +1497,14 @@ impl Host {
 
         debug!(actor_id, actor_ref, count, "scale actor");
 
-        let actor_id = if actor_id.is_empty() {
-            let actor = fetch_actor(&actor_ref, &self.host_config.oci_opts)
-                .await
-                .context("failed to fetch actor")?;
-            let actor = wasmcloud_runtime::Actor::new(&self.runtime, actor)
-                .context("failed to initialize actor")?;
-            actor.claims().context("claims missing")?.subject.clone()
+        let (actor_id, actor) = if actor_id.is_empty() {
+            let actor = self.fetch_actor(&actor_ref).await?;
+            (
+                actor.claims().context("claims missing")?.subject.clone(),
+                Some(actor),
+            )
         } else {
-            actor_id
+            (actor_id, None)
         };
 
         let annotations = annotations.map(|annotations| annotations.into_iter().collect());
@@ -1505,12 +1514,11 @@ impl Host {
         ) {
             (hash_map::Entry::Vacant(_), None) => {}
             (hash_map::Entry::Vacant(entry), Some(count)) => {
-                // FIXME: avoid duplicate actor fetch
-                let actor = fetch_actor(&actor_ref, &self.host_config.oci_opts)
-                    .await
-                    .context("failed to fetch actor")?;
-                let actor = wasmcloud_runtime::Actor::new(&self.runtime, actor)
-                    .context("failed to initialize actor")?;
+                let actor = if let Some(actor) = actor {
+                    actor
+                } else {
+                    self.fetch_actor(&actor_ref).await?
+                };
                 self.start_actor(entry, actor, actor_ref, count, host_id, annotations)
                     .await?;
             }
@@ -1582,11 +1590,7 @@ impl Host {
     ) -> anyhow::Result<()> {
         debug!("launch actor");
 
-        let actor = fetch_actor(&actor_ref, &self.host_config.oci_opts)
-            .await
-            .context("failed to fetch actor")?;
-        let actor = wasmcloud_runtime::Actor::new(&self.runtime, actor)
-            .context("failed to initialize actor")?;
+        let actor = self.fetch_actor(&actor_ref).await?;
         let claims = actor.claims().context("claims missing")?;
 
         let annotations = annotations.map(|annotations| annotations.into_iter().collect());
@@ -1760,11 +1764,7 @@ impl Host {
         let count =
             NonZeroUsize::new(matching_instances.len()).context("zero instances of actor found")?;
 
-        let new_actor_bytes = fetch_actor(&new_actor_ref, &self.host_config.oci_opts)
-            .await
-            .context("failed to fetch actor")?;
-        let new_actor = wasmcloud_runtime::Actor::new(&self.runtime, new_actor_bytes)
-            .context("failed to initialize actor")?;
+        let new_actor = self.fetch_actor(&new_actor_ref).await?;
         let new_claims = new_actor
             .claims()
             .context("claims missing from new actor")?;
