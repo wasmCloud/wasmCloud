@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -8,6 +10,30 @@ use crate::oci::Config as OciConfig;
 pub struct Host {
     /// NATS URL to connect to for control interface connection
     pub ctl_nats_url: Url,
+    /// Authentication JWT for control interface connection, must be specified with ctl_seed
+    pub ctl_jwt: Option<String>,
+    /// Authentication NKEY Seed for control interface connection, must be specified with ctl_jwt
+    pub ctl_seed: Option<String>,
+    /// Whether to require TLS for control interface connection
+    pub ctl_tls: bool,
+    /// NATS URL to connect to for actor RPC
+    pub rpc_nats_url: Url,
+    /// Timeout period for all RPC calls
+    pub rpc_timeout: Duration,
+    /// Authentication JWT for RPC connection, must be specified with rpc_seed
+    pub rpc_jwt: Option<String>,
+    /// Authentication NKEY Seed for RPC connection, must be specified with rpc_jwt
+    pub rpc_seed: Option<String>,
+    /// Whether to require TLS for RPC connection
+    pub rpc_tls: bool,
+    /// NATS URL to pass to providers for RPC
+    pub prov_rpc_nats_url: Url,
+    /// Authentication JWT for Provider RPC connection, must be specified with prov_rpc_seed
+    pub prov_rpc_jwt: Option<String>,
+    /// Authentication NKEY Seed for Provider RPC connection, must be specified with prov_rpc_jwt
+    pub prov_rpc_seed: Option<String>,
+    /// Whether to require TLS for Provider RPC connection
+    pub prov_rpc_tls: bool,
     /// The lattice the host belongs to
     pub lattice_prefix: String,
     /// The domain to use for host Jetstream operations
@@ -29,6 +55,20 @@ impl Default for Host {
         Self {
             ctl_nats_url: Url::parse("nats://localhost:4222")
                 .expect("failed to parse control NATS URL"),
+            ctl_jwt: None,
+            ctl_seed: None,
+            ctl_tls: false,
+            rpc_nats_url: Url::parse("nats://localhost:4222")
+                .expect("failed to parse RPC NATS URL"),
+            rpc_timeout: Duration::from_millis(2000),
+            rpc_jwt: None,
+            rpc_seed: None,
+            rpc_tls: false,
+            prov_rpc_nats_url: Url::parse("nats://localhost:4222")
+                .expect("failed to parse Provider RPC NATS URL"),
+            prov_rpc_jwt: None,
+            prov_rpc_seed: None,
+            prov_rpc_tls: false,
             lattice_prefix: "default".to_string(),
             js_domain: None,
             host_seed: None,

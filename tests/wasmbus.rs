@@ -269,7 +269,7 @@ async fn wasmbus() -> anyhow::Result<()> {
         cluster_issuers: Some(vec![cluster_key.public_key(), cluster_key_two.public_key()]),
         host_seed: Some(host_key.seed().unwrap()),
         provider_shutdown_delay: Some(Duration::from_millis(300)),
-        oci_opts: OciConfig::default(),
+        ..Default::default()
     })
     .await
     .context("failed to initialize host")?;
@@ -277,12 +277,11 @@ async fn wasmbus() -> anyhow::Result<()> {
     let (host_two, shutdown_two) = Host::new(HostConfig {
         ctl_nats_url: ctl_nats_url.clone(),
         lattice_prefix: TEST_PREFIX.to_string(),
-        js_domain: None,
         cluster_seed: Some(cluster_key_two.seed().unwrap()),
         cluster_issuers: Some(vec![cluster_key.public_key(), cluster_key_two.public_key()]),
         host_seed: Some(host_key_two.seed().unwrap()),
         provider_shutdown_delay: Some(Duration::from_millis(400)),
-        oci_opts: OciConfig::default(),
+        ..Default::default()
     })
     .await
     .context("failed to initialize host two")?;
