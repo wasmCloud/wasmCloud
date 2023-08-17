@@ -2555,7 +2555,7 @@ impl Host {
 
         let mut links = self.links.write().await;
         links.insert(id.to_string(), ld.clone());
-        if let Some(actor) = self.actors.write().await.get_mut(actor_id) {
+        if let Some(actor) = self.actors.read().await.get(actor_id) {
             let mut links = actor.handler.links.write().await;
             links.entry(contract_id.clone()).or_default().insert(
                 ld.link_name.clone(),
@@ -2609,14 +2609,18 @@ impl Host {
         } = links
             .remove(id)
             .context("attempt to remove a non-existent link")?;
+        if let Some(actor) = self.actors.read().await.get(actor_id) {
+            let mut links = actor.handler.links.write().await;
+            if let Some(links) = links.get_mut(contract_id) {
+                links.remove(link_name);
+            }
+        }
 
         self.publish_event(
             "linkdef_deleted",
             event::linkdef_deleted(id, actor_id, provider_id, link_name, contract_id, values),
         )
         .await?;
-
-        // TODO: Broadcast `linkdef_removed`
 
         let msgp = rmp_serde::to_vec(ld).context("failed to encode link definition")?;
         let lattice_prefix = &self.host_config.lattice_prefix;
