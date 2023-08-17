@@ -42,6 +42,25 @@ async fn free_port() -> anyhow::Result<u16> {
     Ok(lis.port())
 }
 
+async fn assert_start_actor(
+    ctl_client: &wasmcloud_control_interface::Client,
+    _nats_client: &async_nats::Client, // TODO: This should be exposed by `wasmcloud_control_interface::Client`
+    _lattice_prefix: &str,
+    host_key: &KeyPair,
+    url: impl AsRef<str>,
+    count: u16,
+) -> anyhow::Result<()> {
+    let CtlOperationAck { accepted, error } = ctl_client
+        .start_actor(&host_key.public_key(), url.as_ref(), count, None)
+        .await
+        .map_err(|e| anyhow!(e).context("failed to start actor"))?;
+    ensure!(error == "");
+    ensure!(accepted);
+
+    // TODO: wait for actor_started event on wasmbus.rpc.{lattice_prefix}
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)] // Shush clippy, it's a test function
 async fn assert_start_provider(
     client: &wasmcloud_control_interface::Client,
@@ -379,12 +398,16 @@ expected: {expected_labels:?}"#
         _ => bail!("more than two actor auction acks received"),
     }
 
-    let CtlOperationAck { accepted, error } = ctl_client
-        .start_actor(&host_key.public_key(), actor_url.as_str(), 1, None)
-        .await
-        .map_err(|e| anyhow!(e).context("failed to start actor"))?;
-    ensure!(error == "");
-    ensure!(accepted);
+    assert_start_actor(
+        &ctl_client,
+        &nats_client,
+        TEST_PREFIX,
+        &host_key,
+        &actor_url,
+        1,
+    )
+    .await
+    .context("failed to start actor")?;
 
     let httpserver_provider_key = KeyPair::from_seed(test_providers::RUST_HTTPSERVER_SUBJECT)
         .context("failed to parse `rust-httpserver` provider key")?;
@@ -517,6 +540,63 @@ expected: {expected_labels:?}"#
         )
     )
     .context("failed to start providers")?;
+
+    // since ctl_client was created before the host, and therefore before the lattice data
+    // bucket, the client will have fallen back to querying the host for lattice data
+    let mut claims_from_host = ctl_client
+        .get_claims()
+        .await
+        .map_err(|e| anyhow!(e).context("failed to query claims"))?
+        .claims;
+    claims_from_host.sort_by(|a, b| a.get("sub").unwrap().cmp(&b.get("sub").unwrap()));
+
+    ensure!(claims_from_host.len() == 4); // 3 providers, 1 actor
+
+    let mut links_from_host = ctl_client
+        .query_links()
+        .await
+        .map_err(|e| anyhow!(e).context("failed to query claims"))?
+        .links;
+    links_from_host.sort_by(|a, b| match a.actor_id.cmp(&b.actor_id) {
+        std::cmp::Ordering::Equal => match a.provider_id.cmp(&b.provider_id) {
+            std::cmp::Ordering::Equal => a.link_name.cmp(&b.link_name),
+            unequal => unequal,
+        },
+        unequal => unequal,
+    });
+
+    ensure!(links_from_host.len() == 3);
+
+    // recreate the ctl_client, which should now use the KV bucket directly
+    let ctl_client = ClientBuilder::new(nats_client.clone())
+        .lattice_prefix(TEST_PREFIX.to_string())
+        .build()
+        .await
+        .map_err(|e| anyhow!(e).context("failed to build control interface client"))?;
+
+    let mut claims_from_bucket = ctl_client
+        .get_claims()
+        .await
+        .map_err(|e| anyhow!(e).context("failed to query claims"))?
+        .claims;
+    claims_from_bucket.sort_by(|a, b| a.get("sub").unwrap().cmp(&b.get("sub").unwrap()));
+
+    let mut links_from_bucket = ctl_client
+        .query_links()
+        .await
+        .map_err(|e| anyhow!(e).context("failed to query claims"))?
+        .links;
+
+    links_from_bucket.sort_by(|a, b| match a.actor_id.cmp(&b.actor_id) {
+        std::cmp::Ordering::Equal => match a.provider_id.cmp(&b.provider_id) {
+            std::cmp::Ordering::Equal => a.link_name.cmp(&b.link_name),
+            unequal => unequal,
+        },
+        unequal => unequal,
+    });
+
+    ensure!(claims_from_host == claims_from_bucket);
+    ensure!(links_from_host == links_from_bucket);
 
     let HostInventory {
         mut actors,
