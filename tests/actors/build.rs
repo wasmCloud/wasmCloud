@@ -292,6 +292,7 @@ fn encode_component(module: impl AsRef<[u8]>, adapter: &[u8]) -> anyhow::Result<
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    println!("cargo:rerun-if-changed=../../crates/actor");
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=rust");
 
