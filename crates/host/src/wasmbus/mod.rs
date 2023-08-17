@@ -895,6 +895,38 @@ async fn create_lattice_metadata_bucket(
 impl Host {
     const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 
+    const NAME_ADJECTIVES: &str = "
+    autumn hidden bitter misty silent empty dry dark summer
+    icy delicate quiet white cool spring winter patient
+    twilight dawn crimson wispy weathered blue billowing
+    broken cold damp falling frosty green long late lingering
+    bold little morning muddy old red rough still small
+    sparkling bouncing shy wandering withered wild black
+    young holy solitary fragrant aged snowy proud floral
+    restless divine polished ancient purple lively nameless
+    gray orange mauve
+    ";
+
+    const NAME_NOUNS: &str = "
+    waterfall river breeze moon rain wind sea morning
+    snow lake sunset pine shadow leaf dawn glitter forest
+    hill cloud meadow sun glade bird brook butterfly
+    bush dew dust field fire flower firefly ladybug feather grass
+    haze mountain night pond darkness snowflake silence
+    sound sky shape stapler surf thunder violet water wildflower
+    wave water resonance sun wood dream cherry tree fog autocorrect
+    frost voice paper frog smoke star hamster ocean emoji robot
+    ";
+
+    /// Generate a friendly name for the host based on a random number.
+    /// Names we pulled from a list of friendly or neutral adjectives and nouns suitable for use in
+    /// public and on hosts/domain names
+    fn generate_friendly_name() -> Option<String> {
+        let adjectives: Vec<_> = Self::NAME_ADJECTIVES.split_whitespace().collect();
+        let nouns: Vec<_> = Self::NAME_NOUNS.split_whitespace().collect();
+        names::Generator::new(&adjectives, &nouns, names::Name::Numbered).next()
+    }
+
     /// Construct a new [Host] returning a tuple of its [Arc] and an async shutdown function.
     #[instrument]
     pub async fn new(
@@ -932,9 +964,8 @@ impl Host {
             let k = k.strip_prefix("HOST_")?;
             Some((k.to_lowercase(), v))
         }));
-        let friendly_name = names::Generator::default()
-            .next()
-            .context("failed to generate friendly name")?;
+        let friendly_name =
+            Self::generate_friendly_name().context("failed to generate friendly name")?;
 
         let start_evt = json!({
             "friendly_name": friendly_name,
