@@ -46,7 +46,11 @@ struct Args {
     #[clap(long = "cluster-seed", env = "WASMCLOUD_CLUSTER_SEED")]
     cluster_seed: Option<String>,
     /// A comma-delimited list of public keys that can be used as issuers on signed invocations
-    #[clap(long = "cluster-issuers", env = "WASMCLOUD_CLUSTER_ISSUERS")]
+    #[clap(
+        long = "cluster-issuers",
+        env = "WASMCLOUD_CLUSTER_ISSUERS",
+        value_delimiter = ','
+    )]
     cluster_issuers: Option<Vec<String>>,
     /// Delay, in milliseconds, between requesting a provider shut down and forcibly terminating its process
     #[clap(long = "provider-shutdown-delay", default_value = "300", env = "WASMCLOUD_PROV_SHUTDOWN_DELAY_MS", value_parser = parse_duration)]
@@ -55,7 +59,11 @@ struct Args {
     #[clap(long = "allow-latest", env = "WASMCLOUD_OCI_ALLOW_LATEST")]
     allow_latest: bool,
     /// A comma-separated list of OCI hosts to which insecure (non-TLS) connections are allowed
-    #[clap(long = "allowed-insecure", env = "WASMCLOUD_OCI_ALLOWED_INSECURE")]
+    #[clap(
+        long = "allowed-insecure",
+        env = "WASMCLOUD_OCI_ALLOWED_INSECURE",
+        value_delimiter = ','
+    )]
     allowed_insecure: Vec<String>,
     /// NATS Jetstream domain name
     #[clap(
