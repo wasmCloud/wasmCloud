@@ -5,6 +5,7 @@ use url::Url;
 
 use crate::oci::Config as OciConfig;
 
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 /// wasmCloud Host configuration
 pub struct Host {
@@ -52,10 +53,10 @@ pub struct Host {
     pub oci_opts: OciConfig,
     /// Whether to allow loading actor or provider components from the filesystem
     pub allow_file_load: bool,
-    // Whether or not structured logging is enabled
-    // pub enable_structured_logging: bool,
-    // Log level to pass to capability providers to use. Should be parsed from a [`tracing::Level`]
-    // pub log_level: String,
+    /// Whether or not structured logging is enabled
+    pub enable_structured_logging: bool,
+    /// Log level to pass to capability providers to use. Should be parsed from a [`tracing::Level`]
+    pub log_level: String,
 }
 
 impl Default for Host {
@@ -86,8 +87,8 @@ impl Default for Host {
             provider_shutdown_delay: None,
             oci_opts: OciConfig::default(),
             allow_file_load: false,
-            // enable_structured_logging: false,
-            // log_level: "INFO".to_string(),
+            enable_structured_logging: false,
+            log_level: "info".to_string(),
         }
     }
 }
