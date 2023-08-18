@@ -2164,30 +2164,36 @@ impl Host {
         &self,
         key_prefix: &str,
     ) -> anyhow::Result<Vec<T>> {
-        let filtered_keys = self
+        self
             .data
             .keys()
             .await
             .context("failed to scan lattice data keys")?
+            .map_err(|e| anyhow!(e).context("failed to read lattice data stream"))
             .try_filter(|key| futures::future::ready(key.starts_with(key_prefix)))
-            .try_collect::<Vec<String>>()
-            .await
-            .context("failed to collect lattice data keys")?;
+            .and_then(|key| async move {
+                let maybe_bytes = self.data.get(&key).await?; // if we get an error here, we do want to fail
 
-        let futs = filtered_keys.into_iter().map(|key| self.data.get(key));
-        let list: Vec<T> = futures::future::join_all(futs)
-            .await
-            .into_iter()
-            .filter_map(|resp| {
-                // TODO: we should probably handle when we get an error from NATS or encountering
-                // malformed data in the bucket entries https://github.com/wasmCloud/wasmCloud/issues/509
-                resp.ok()
-                    .and_then(|bytes| bytes)
-                    .and_then(|bytes| serde_json::from_slice::<T>(&bytes).ok())
+                match maybe_bytes {
+                    None => {
+                        // this isn't the responsibility of the host, so warn and continue
+                        warn!(key, "latticedata entry was empty. Data may have been deleted during processing");
+                        anyhow::Ok(None)
+                    }
+                    Some(bytes) => {
+                        if let Ok(t) = serde_json::from_slice::<T>(&bytes) {
+                            anyhow::Ok(Some(t))
+                        } else {
+                            // this isn't the responsibility of the host, so warn and continue
+                            warn!(key, "failed to deserialize latticedata entry");
+                            anyhow::Ok(None)
+                        }
+                    }
+                }
             })
-            .collect();
-
-        Ok(list)
+            .try_filter_map(|v| futures::future::ready(Ok(v)))
+            .try_collect::<Vec<T>>()
+            .await
     }
 
     #[instrument(skip(self, payload))]
