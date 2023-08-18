@@ -1,5 +1,7 @@
+use crate::wasmcloud::bus::lattice::{ActorIdentifier, TargetEntity};
+
 /// Invoke an operation on the host
-pub fn call(
+fn host_call(
     binding: &str,
     namespace: &str,
     operation: &str,
@@ -54,5 +56,34 @@ pub fn call(
                 )),
             }
         }
+    }
+}
+
+pub fn call_sync(
+    target: Option<&TargetEntity>,
+    operation: &str,
+    payload: &[u8],
+) -> Result<Vec<u8>, String> {
+    match target {
+        None => {
+            let (namespace, operation) = operation
+                .split_once('/')
+                .ok_or_else(|| "invalid operation format".to_string())?;
+            host_call("", namespace, operation, payload)
+        }
+        Some(TargetEntity::Link(binding)) => {
+            let (namespace, operation) = operation
+                .split_once('/')
+                .ok_or_else(|| "invalid operation format".to_string())?;
+            host_call(
+                binding.as_deref().unwrap_or_default(),
+                namespace,
+                operation,
+                payload,
+            )
+        }
+        Some(TargetEntity::Actor(
+            ActorIdentifier::PublicKey(namespace) | ActorIdentifier::Alias(namespace),
+        )) => host_call("", namespace, operation, payload),
     }
 }

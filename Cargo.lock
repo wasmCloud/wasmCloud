@@ -4352,6 +4352,7 @@ name = "wasmcloud-actor"
 version = "0.1.0"
 dependencies = [
  "futures",
+ "once_cell",
  "rand 0.8.5",
  "rmp-serde",
  "serde",

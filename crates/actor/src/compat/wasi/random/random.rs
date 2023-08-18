@@ -31,10 +31,9 @@ pub fn insecure_random() -> (u64, u64) {
 }
 
 pub(crate) fn generate_guid() -> Uuid {
-    let res = host::call(
-        "",
-        "wasmcloud:builtin:numbergen",
-        "NumberGen.GenerateGuid",
+    let res = host::call_sync(
+        None,
+        "wasmcloud:builtin:numbergen/NumberGen.GenerateGuid",
         &[],
     )
     .expect("failed to call `NumberGen.GenerateGuid`");
@@ -51,10 +50,9 @@ pub(crate) fn random_in_range(min: u32, max: u32) -> u32 {
     }
     let pld = rmp_serde::to_vec(&RangeLimit { min, max })
         .expect("failed to serialize `NumberGen.RandomInRange` request");
-    let res = host::call(
-        "",
-        "wasmcloud:builtin:numbergen",
-        "NumberGen.RandomInRange",
+    let res = host::call_sync(
+        None,
+        "wasmcloud:builtin:numbergen/NumberGen.RandomInRange",
         &pld,
     )
     .expect("failed to call `NumberGen.RandomInRange`");
@@ -62,7 +60,7 @@ pub(crate) fn random_in_range(min: u32, max: u32) -> u32 {
 }
 
 pub(crate) fn random32() -> u32 {
-    let res = host::call("", "wasmcloud:builtin:numbergen", "NumberGen.Random32", &[])
+    let res = host::call_sync(None, "wasmcloud:builtin:numbergen/NumberGen.Random32", &[])
         .expect("failed to call `NumberGen.Random32`");
     rmp_serde::from_slice(&res).expect("failed to decode `NumberGen.Random32` response")
 }
