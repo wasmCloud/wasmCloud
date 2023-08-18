@@ -332,7 +332,7 @@ async fn wasmbus() -> anyhow::Result<()> {
                     ))
             );
             ensure!(cluster_issuers == cluster_issuers_two);
-            ensure!(ctl_host == Some("TODO".into()));
+            ensure!(ctl_host == Some(ctl_nats_url.to_string()));
             ensure!(id == host_key.public_key());
             ensure!(js_domain == None);
             ensure!(
@@ -342,9 +342,9 @@ got: {labels:?}
 expected: {expected_labels:?}"#
             );
             ensure!(lattice_prefix == Some(TEST_PREFIX.into()));
-            ensure!(prov_rpc_host == Some("TODO".into()));
-            ensure!(rpc_host == Some("TODO".into()));
-            ensure!(uptime_human == Some("TODO".into()));
+            ensure!(prov_rpc_host == Some(ctl_nats_url.to_string()));
+            ensure!(rpc_host == Some(ctl_nats_url.to_string()));
+            ensure!(uptime_human.unwrap().len() > 0);
             ensure!(uptime_seconds >= 0);
             ensure!(version == Some(env!("CARGO_PKG_VERSION").into()));
         }
@@ -599,6 +599,29 @@ expected: {expected_labels:?}"#
 
     ensure!(claims_from_host == claims_from_bucket);
     ensure!(links_from_host == links_from_bucket);
+
+    let pinged_hosts = ctl_client
+        .get_hosts()
+        .await
+        .map_err(|e| anyhow!(e).context("failed to ping hosts"))?;
+
+    ensure!(pinged_hosts.len() == 2);
+
+    let pinged_host = &pinged_hosts[0];
+
+    ensure!(
+        pinged_host.cluster_issuers
+            == Some(vec![cluster_key.public_key(), cluster_key_two.public_key()].join(","))
+    );
+    ensure!(pinged_host.ctl_host == Some(ctl_nats_url.to_string()));
+    ensure!(pinged_host.js_domain == None);
+    ensure!(pinged_host.labels == Some(expected_labels.clone()));
+    ensure!(pinged_host.lattice_prefix == Some(TEST_PREFIX.into()));
+    ensure!(pinged_host.prov_rpc_host == Some(ctl_nats_url.to_string()));
+    ensure!(pinged_host.rpc_host == Some(ctl_nats_url.to_string()));
+    ensure!(pinged_host.uptime_human.clone().unwrap().len() > 0);
+    ensure!(pinged_host.uptime_seconds > 0);
+    ensure!(pinged_host.version == Some(env!("CARGO_PKG_VERSION").into()));
 
     let HostInventory {
         mut actors,

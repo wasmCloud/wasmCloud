@@ -24,6 +24,7 @@ cloudevents-sdk = { workspace = true }
 futures = { workspace = true, features = ["async-await", "std"] }
 hex = { workspace = true, features = ["std"] }
 http = { workspace = true }
+humantime = { workspace = true }
 oci-distribution = { workspace = true, features = ["rustls-tls"] }
 names = { workspace = true }
 nkeys = { workspace = true }
