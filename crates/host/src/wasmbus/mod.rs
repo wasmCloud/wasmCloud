@@ -1501,9 +1501,13 @@ impl Host {
 
     #[instrument(skip(self))]
     async fn fetch_actor(&self, actor_ref: &str) -> anyhow::Result<wasmcloud_runtime::Actor> {
-        let actor = fetch_actor(&actor_ref, &self.host_config.oci_opts)
-            .await
-            .context("failed to fetch actor")?;
+        let actor = fetch_actor(
+            &actor_ref,
+            &self.host_config.oci_opts,
+            self.host_config.allow_file_load,
+        )
+        .await
+        .context("failed to fetch actor")?;
         let actor = wasmcloud_runtime::Actor::new(&self.runtime, actor)
             .context("failed to initialize actor")?;
         Ok(actor)
@@ -1867,10 +1871,14 @@ impl Host {
     ) -> anyhow::Result<()> {
         debug!("launch provider");
 
-        let (path, claims) =
-            crate::fetch_provider(provider_ref, link_name, &self.host_config.oci_opts)
-                .await
-                .context("failed to fetch provider")?;
+        let (path, claims) = crate::fetch_provider(
+            provider_ref,
+            link_name,
+            &self.host_config.oci_opts,
+            self.host_config.allow_file_load,
+        )
+        .await
+        .context("failed to fetch provider")?;
         self.store_claims(claims.clone())
             .await
             .context("failed to store claims")?;
@@ -1911,8 +1919,8 @@ impl Host {
                 "cluster_issuers": self.host_config.cluster_issuers.clone().unwrap_or_else(|| vec![self.cluster_key.public_key()]),
                 "invocation_seed": invocation_seed,
                 "js_domain": self.host_config.js_domain,
-                // TODO: Set `structured_logging`
-                // TODO: Set `log_level`
+                "log_level": self.host_config.log_level.to_string(),
+                "structured_logging": self.host_config.enable_structured_logging
             }))
             .context("failed to serialize provider data")?;
 

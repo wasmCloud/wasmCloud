@@ -84,8 +84,7 @@ struct Args {
     #[clap(
         long = "allow-file-load",
         default_value_t = false,
-        env = "WASMCLOUD_ALLOW_FILE_LOAD",
-        hide = true
+        env = "WASMCLOUD_ALLOW_FILE_LOAD"
     )]
     allow_file_load: bool,
     /// Enable JSON structured logging from the wasmCloud host
@@ -286,6 +285,9 @@ async fn main() -> anyhow::Result<()> {
         prov_rpc_jwt: args.prov_rpc_jwt.or_else(|| args.nats_jwt.clone()),
         prov_rpc_seed: args.prov_rpc_seed.or_else(|| args.nats_seed.clone()),
         prov_rpc_tls: args.prov_rpc_tls,
+        allow_file_load: args.allow_file_load,
+        // log_level: args.log_level.to_string(),
+        // enable_structured_logging: args.enable_structured_logging,
     })
     .await
     .context("failed to initialize host")?;
