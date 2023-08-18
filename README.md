@@ -47,7 +47,7 @@ For even more examples, check out [awesome projects](./awesome-wasmcloud) using 
 
 # 🗺️ Roadmap and Vision
 
-We have plenty of ideas and things going on in the wasmCloud project. Please check out the [Roadmap doc](ROADMAP.md) for more information!
+We have plenty of ideas and things going on in the wasmCloud project. Please check out the [Roadmap doc](https://wasmcloud.com/docs/roadmap) for more information, and the [wasmCloud Roadmap project](https://github.com/orgs/wasmCloud/projects/7/views/3) to see the status of new features.
 
 # 🧑‍💻 Contributing
 
