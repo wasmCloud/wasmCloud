@@ -56,8 +56,6 @@ use wasmcloud_runtime::capability::{messaging, Bus, KeyValueReadWrite, Messaging
 use wasmcloud_runtime::{ActorInstancePool, Runtime};
 
 const SUCCESS: &str = r#"{"accepted":true,"error":""}"#;
-const CLAIMS_PREFIX: &str = "CLAIMS_";
-const LINKDEF_PREFIX: &str = "LINKDEF_";
 
 #[derive(Debug)]
 struct Queue {
@@ -2184,14 +2182,14 @@ impl Host {
             claims: Vec<StoredClaims>,
         }
 
-        let claims: Vec<StoredClaims> = self.scan_latticedata(CLAIMS_PREFIX).await?;
+        let claims: Vec<StoredClaims> = self.scan_latticedata("CLAIMS_").await?;
         let resp = ClaimsResponse { claims };
         Ok(serde_json::to_vec(&resp)?.into())
     }
 
     #[instrument(skip(self))]
     async fn handle_links(&self) -> anyhow::Result<Bytes> {
-        let links: Vec<LinkDefinition> = self.scan_latticedata(LINKDEF_PREFIX).await?;
+        let links: Vec<LinkDefinition> = self.scan_latticedata("LINKDEF_").await?;
         let resp = LinkDefinitionList { links };
         Ok(serde_json::to_vec(&resp)?.into())
     }
