@@ -24,4 +24,5 @@ tracing = { workspace = true }
 tracing-futures = { workspace = true }
 tracing-opentelemetry = { workspace = true }
 wascap = { workspace = true }
+wasmcloud-compat = { workspace = true }
 wasmcloud-provider-sdk = { workspace = true, features = ["otel"] }

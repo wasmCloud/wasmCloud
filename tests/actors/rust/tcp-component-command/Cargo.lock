@@ -818,7 +818,16 @@ dependencies = [
  "serde_bytes",
  "tokio",
  "uuid",
+ "wasmcloud-compat",
  "wit-bindgen",
+]
+
+[[package]]
+name = "wasmcloud-compat"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_bytes",
 ]
 
 [[package]]

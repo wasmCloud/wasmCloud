@@ -45,4 +45,5 @@ serde_bytes = { workspace = true, features = ["std"] } # TODO: Make optional onc
 tokio = { workspace = true, optional = true }
 uuid = { workspace = true, features = ["serde"], optional = true }
 wasmcloud-actor-derive = { workspace = true, optional = true }
+wasmcloud-compat = { workspace = true } # TODO: Make optional once `wasi-http` integrated
 wit-bindgen = { workspace = true, features = ["macros"], optional = true }

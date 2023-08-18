@@ -448,6 +448,7 @@ dependencies = [
  "serde_bytes",
  "uuid",
  "wasmcloud-actor-derive",
+ "wasmcloud-compat",
  "wit-bindgen",
 ]
 
@@ -457,6 +458,14 @@ version = "0.1.0"
 dependencies = [
  "quote",
  "syn",
+]
+
+[[package]]
+name = "wasmcloud-compat"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_bytes",
 ]
 
 [[package]]

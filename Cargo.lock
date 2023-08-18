@@ -4359,6 +4359,7 @@ dependencies = [
  "tokio",
  "uuid",
  "wasmcloud-actor-derive",
+ "wasmcloud-compat",
  "wit-bindgen",
 ]
 
@@ -4368,6 +4369,14 @@ version = "0.1.0"
 dependencies = [
  "quote",
  "syn 2.0.28",
+]
+
+[[package]]
+name = "wasmcloud-compat"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_bytes",
 ]
 
 [[package]]
@@ -4446,6 +4455,7 @@ dependencies = [
  "url",
  "uuid",
  "wascap",
+ "wasmcloud-compat",
  "wasmcloud-control-interface",
  "wasmcloud-runtime",
 ]
