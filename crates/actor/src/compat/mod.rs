@@ -6,7 +6,7 @@ pub use http::Handler as HttpHandler;
 // TODO: Reexport structs once `wasi-http` integrated and top-level definitions removed
 //pub use http::{Handler as HttpHandler, Request as HttpRequest, Response as HttpResponse};
 
-pub use wasmcloud_compat::{keyvalue, messaging};
+pub use wasmcloud_compat::{keyvalue, logging, messaging, numbergen};
 
 #[cfg(all(not(feature = "module"), feature = "component"))]
 pub(crate) mod bindings {

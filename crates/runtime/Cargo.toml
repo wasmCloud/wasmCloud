@@ -26,19 +26,20 @@ log = { workspace = true }
 nkeys = { workspace = true }
 rand = { workspace = true, features = ["std"] }
 rmp-serde = { workspace = true }
-serde = { workspace = true }
 serde_json = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["io-util", "rt-multi-thread", "sync"] }
 tracing = { workspace = true }
 uuid = { workspace = true }
 wascap = { workspace = true }
+wasi-common = { workspace = true }
+wasmcloud-compat = { workspace = true }
 wasmparser = { workspace = true }
 wasmtime = { workspace = true, features = ["async", "cache", "component-model", "cranelift", "jitdump", "parallel-compilation", "pooling-allocator", "vtune"] }
 wasmtime-wasi = { workspace = true, features = ["sync", "preview2"] }
-wasi-common = { workspace = true }
 
 [dev-dependencies]
 once_cell = { workspace = true }
+serde = { workspace = true }
 test-actors = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-std", "macros", "net"] }
 tracing-subscriber = { workspace = true, features = ["ansi", "env-filter", "fmt", "json", "std"] }

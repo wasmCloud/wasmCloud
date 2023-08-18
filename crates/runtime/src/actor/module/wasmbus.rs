@@ -5,7 +5,6 @@ use core::fmt::{self, Debug};
 
 use anyhow::{bail, Context, Result};
 use rand::{thread_rng, Rng, RngCore};
-use serde::Deserialize;
 use tracing::{instrument, trace, trace_span, warn};
 
 pub mod guest_call {
@@ -233,12 +232,7 @@ async fn handle(
 ) -> anyhow::Result<Vec<u8>> {
     match (namespace.as_str(), operation.as_str()) {
         ("wasmcloud:builtin:logging", "Logging.WriteLog") => {
-            #[derive(Deserialize)]
-            struct Request {
-                level: String,
-                text: String,
-            }
-            let Request { level, text } =
+            let wasmcloud_compat::logging::LogEntry { level, text } =
                 rmp_serde::from_slice(&payload).context("failed to deserialize log entry")?;
             let level = match level.as_str() {
                 "trace" => logging::Level::Trace,
@@ -265,12 +259,7 @@ async fn handle(
             rmp_serde::to_vec(&v).context("failed to serialize u32")
         }
         ("wasmcloud:builtin:numbergen", "NumberGen.RandomInRange") => {
-            #[derive(Deserialize)]
-            struct Request {
-                min: u32,
-                max: u32,
-            }
-            let Request { min, max } =
+            let wasmcloud_compat::numbergen::RangeLimit { min, max } =
                 rmp_serde::from_slice(&payload).context("failed to deserialize range limit")?;
             let v = thread_rng().gen_range(min..=max);
             rmp_serde::to_vec(&v).context("failed to serialize u32")

@@ -4,6 +4,7 @@ use core::iter;
 
 use serde::Serialize;
 use uuid::Uuid;
+use wasmcloud_compat::numbergen::RangeLimit;
 
 /// Return a cryptographically-secure pseudo-random [`u64`] value.
 pub fn get_random_u64() -> u64 {
@@ -43,11 +44,6 @@ pub(crate) fn generate_guid() -> Uuid {
 }
 
 pub(crate) fn random_in_range(min: u32, max: u32) -> u32 {
-    #[derive(Serialize)]
-    pub struct RangeLimit {
-        pub min: u32,
-        pub max: u32,
-    }
     let pld = rmp_serde::to_vec(&RangeLimit { min, max })
         .expect("failed to serialize `NumberGen.RandomInRange` request");
     let res = host::call_sync(

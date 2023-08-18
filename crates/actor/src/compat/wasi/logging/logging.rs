@@ -1,6 +1,7 @@
 use crate::wasmcloud::bus::host;
 
 use serde::Serialize;
+use wasmcloud_compat::logging::LogEntry;
 
 /// A log level, describing a kind of message.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -39,12 +40,6 @@ impl From<Level> for String {
 ///
 /// A log message has a `level` describing what kind of message is being sent, a context, which is an uninterpreted string meant to help consumers group similar messages, and a string containing the message text.
 pub fn log(level: Level, context: &str, message: &str) {
-    #[derive(Serialize)]
-    struct LogEntry {
-        level: String,
-        text: String,
-    }
-
     let level = level.into();
     let text = if context == "" {
         message.into()
