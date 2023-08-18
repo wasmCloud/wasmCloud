@@ -1,7 +1,9 @@
 /// wasmCloud host configuration
 pub mod config;
+mod nats;
 
 pub use config::Host as HostConfig;
+use nats::connection_options;
 
 mod event;
 
@@ -985,20 +987,11 @@ impl Host {
             ctl_nats_url = config.ctl_nats_url.as_str(),
             "connecting to NATS control server"
         );
-        let ctl_nats = match (config.ctl_jwt.as_ref(), config.ctl_seed.as_ref()) {
-            (Some(jwt), Some(seed)) => {
-                let kp = std::sync::Arc::new(
-                    nkeys::KeyPair::from_seed(seed)
-                        .context("failed to construct key pair from seed")?,
-                );
-                async_nats::ConnectOptions::with_jwt(jwt.to_string(), move |nonce| {
-                    let key_pair = kp.clone();
-                    async move { key_pair.sign(&nonce).map_err(async_nats::AuthError::new) }
-                })
-            }
-            _ => async_nats::ConnectOptions::new(),
-        }
-        .require_tls(config.ctl_tls)
+        let ctl_nats = connection_options(
+            config.ctl_jwt.as_ref(),
+            config.ctl_seed.as_ref(),
+            config.ctl_tls,
+        )?
         .connect(config.ctl_nats_url.as_str())
         .await
         .context("failed to connect to NATS control server")?;
@@ -1018,20 +1011,11 @@ impl Host {
             rpc_nats_url = config.rpc_nats_url.as_str(),
             "connecting to NATS RPC server"
         );
-        let rpc_nats = match (config.rpc_jwt.as_ref(), config.rpc_seed.as_ref()) {
-            (Some(jwt), Some(seed)) => {
-                let kp = std::sync::Arc::new(
-                    nkeys::KeyPair::from_seed(seed)
-                        .context("failed to construct key pair from seed")?,
-                );
-                async_nats::ConnectOptions::with_jwt(jwt.to_string(), move |nonce| {
-                    let key_pair = kp.clone();
-                    async move { key_pair.sign(&nonce).map_err(async_nats::AuthError::new) }
-                })
-            }
-            _ => async_nats::ConnectOptions::new(),
-        }
-        .require_tls(config.rpc_tls)
+        let rpc_nats = connection_options(
+            config.rpc_jwt.as_ref(),
+            config.rpc_seed.as_ref(),
+            config.rpc_tls,
+        )?
         .request_timeout(Some(config.rpc_timeout))
         .connect(config.rpc_nats_url.as_str())
         .await
@@ -1041,20 +1025,11 @@ impl Host {
             prov_rpc_nats_url = config.prov_rpc_nats_url.as_str(),
             "connecting to NATS Provider RPC server"
         );
-        let prov_rpc_nats = match (config.prov_rpc_jwt.as_ref(), config.prov_rpc_seed.as_ref()) {
-            (Some(jwt), Some(seed)) => {
-                let kp = std::sync::Arc::new(
-                    nkeys::KeyPair::from_seed(seed)
-                        .context("failed to construct key pair from seed")?,
-                );
-                async_nats::ConnectOptions::with_jwt(jwt.to_string(), move |nonce| {
-                    let key_pair = kp.clone();
-                    async move { key_pair.sign(&nonce).map_err(async_nats::AuthError::new) }
-                })
-            }
-            _ => async_nats::ConnectOptions::new(),
-        }
-        .require_tls(config.prov_rpc_tls)
+        let prov_rpc_nats = connection_options(
+            config.prov_rpc_jwt.as_ref(),
+            config.prov_rpc_seed.as_ref(),
+            config.prov_rpc_tls,
+        )?
         .connect(config.prov_rpc_nats_url.as_str())
         .await
         .context("failed to connect to NATS Provider RPC server")?;
