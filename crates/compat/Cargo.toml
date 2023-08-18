@@ -1,0 +1,15 @@
+[package]
+name = "wasmcloud-compat"
+version = "0.1.0"
+description = "pre-WIT functionality for post-WIT world"
+publish = false
+
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_bytes = { workspace = true, features = ["std"] }

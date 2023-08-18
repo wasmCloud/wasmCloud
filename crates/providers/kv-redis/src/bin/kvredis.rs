@@ -12,19 +12,20 @@ use std::collections::HashMap;
 use std::ops::DerefMut;
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use redis::aio::ConnectionManager;
 use redis::FromRedisValue;
 use serde::Deserialize;
 use tokio::sync::RwLock;
 use tracing::{info, instrument, warn};
-use wasmcloud_provider_kvredis::wasmcloud_interface_keyvalue::{
-    GetResponse, IncrementRequest, KeyValue, ListAddRequest, ListDelRequest, ListRangeRequest,
-    SetAddRequest, SetDelRequest, SetRequest, StringList,
+use wasmcloud_compat::keyvalue::{
+    GetResponse, IncrementRequest, ListAddRequest, ListDelRequest, ListRangeRequest, SetAddRequest,
+    SetDelRequest, SetRequest,
 };
-use wasmcloud_provider_sdk::{
-    core::LinkDefinition, error::ProviderInvocationError, load_host_data,
-    provider_main::start_provider, Context, ProviderHandler,
-};
+use wasmcloud_provider_sdk::core::LinkDefinition;
+use wasmcloud_provider_sdk::error::ProviderInvocationError;
+use wasmcloud_provider_sdk::provider_main::start_provider;
+use wasmcloud_provider_sdk::{load_host_data, Context, ProviderHandler};
 
 const REDIS_URL_KEY: &str = "URL";
 const DEFAULT_CONNECT_URL: &str = "redis://127.0.0.1:6379/";
@@ -87,7 +88,7 @@ impl KvRedisProvider {
 
 /// Handle provider control commands
 /// put_link (new actor link command), del_link (remove link command), and shutdown
-#[async_trait::async_trait]
+#[async_trait]
 impl ProviderHandler for KvRedisProvider {
     /// Provider should perform any operations needed for a new link,
     /// including setting up per-actor resources, and checking authorization.
@@ -146,24 +147,8 @@ impl ProviderHandler for KvRedisProvider {
     }
 }
 
-// There are two api styles you can use for invoking redis. You can build any raw command
-// as a string command and a sequence of args:
-// ```
-//     let mut cmd = redis::cmd("SREM");
-//     let value: u32 = self.exec(&ctx, &mut cmd.arg(&arg.set_name).arg(&arg.value)).await?;
-// ```
-// or you can call a method on Cmd, as in
-// ```
-//     let mut cmd = redis::Cmd::srem(&arg.set_name, &arg.value);
-//     let value: u32 = self.exec(&ctx, &mut cmd).await?;
-//```
-// The latter api style has better rust compile-time type checking for args.
-// The rust docs for cmd and Cmd don't document arg types or return types.
-// For that, you need to look at https://redis.io/commands#
-
 /// Handle KeyValue methods that interact with redis
-#[async_trait::async_trait]
-impl KeyValue for KvRedisProvider {
+impl KvRedisProvider {
     /// Increments a numeric value, returning the new value
     #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.key))]
     async fn increment(&self, ctx: Context, arg: IncrementRequest) -> Result<i32, String> {
@@ -237,9 +222,9 @@ impl KeyValue for KvRedisProvider {
     /// 11 items if the list contains at least 11 items. If the stop value
     /// is beyond the end of the list, it is treated as the end of the list.
     #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.list_name))]
-    async fn list_range(&self, ctx: Context, arg: ListRangeRequest) -> Result<StringList, String> {
+    async fn list_range(&self, ctx: Context, arg: ListRangeRequest) -> Result<Vec<String>, String> {
         let mut cmd = redis::Cmd::lrange(&arg.list_name, arg.start as isize, arg.stop as isize);
-        let val: StringList = self.exec(&ctx, &mut cmd).await?;
+        let val: Vec<String> = self.exec(&ctx, &mut cmd).await?;
         Ok(val)
     }
 
@@ -281,21 +266,25 @@ impl KeyValue for KvRedisProvider {
     }
 
     #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, keys = ?arg))]
-    async fn set_intersection(&self, ctx: Context, arg: StringList) -> Result<StringList, String> {
+    async fn set_intersection(
+        &self,
+        ctx: Context,
+        arg: Vec<String>,
+    ) -> Result<Vec<String>, String> {
         let mut cmd = redis::Cmd::sinter(arg);
         let value: Vec<String> = self.exec(&ctx, &mut cmd).await?;
         Ok(value)
     }
 
     #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.to_string()))]
-    async fn set_query(&self, ctx: Context, arg: String) -> Result<StringList, String> {
+    async fn set_query(&self, ctx: Context, arg: String) -> Result<Vec<String>, String> {
         let mut cmd = redis::Cmd::smembers(arg.to_string());
         let values: Vec<String> = self.exec(&ctx, &mut cmd).await?;
         Ok(values)
     }
 
     #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, keys = ?arg))]
-    async fn set_union(&self, ctx: Context, arg: StringList) -> Result<StringList, String> {
+    async fn set_union(&self, ctx: Context, arg: Vec<String>) -> Result<Vec<String>, String> {
         let mut cmd = redis::Cmd::sunion(arg);
         let values: Vec<String> = self.exec(&ctx, &mut cmd).await?;
         Ok(values)
@@ -349,7 +338,7 @@ fn get_redis_url(link_values: &[(String, String)], default_connect_url: &str) ->
         .unwrap_or_else(|| default_connect_url.to_owned())
 }
 
-#[async_trait::async_trait]
+#[async_trait]
 impl wasmcloud_provider_sdk::MessageDispatch for KvRedisProvider {
     async fn dispatch<'a>(
         &'a self,
@@ -449,7 +438,7 @@ impl wasmcloud_provider_sdk::MessageDispatch for KvRedisProvider {
                 Ok(::wasmcloud_provider_sdk::serialize(&result)?)
             }
             "KeyValue.SetIntersection" => {
-                let input: StringList = ::wasmcloud_provider_sdk::deserialize(&body)?;
+                let input: Vec<String> = ::wasmcloud_provider_sdk::deserialize(&body)?;
                 let result = self.set_intersection(ctx, input).await.map_err(|e| {
                     ::wasmcloud_provider_sdk::error::ProviderInvocationError::Provider(
                         e.to_string(),
@@ -467,7 +456,7 @@ impl wasmcloud_provider_sdk::MessageDispatch for KvRedisProvider {
                 Ok(::wasmcloud_provider_sdk::serialize(&result)?)
             }
             "KeyValue.SetUnion" => {
-                let input: StringList = ::wasmcloud_provider_sdk::deserialize(&body)?;
+                let input: Vec<String> = ::wasmcloud_provider_sdk::deserialize(&body)?;
                 let result = self.set_union(ctx, input).await.map_err(|e| {
                     ::wasmcloud_provider_sdk::error::ProviderInvocationError::Provider(
                         e.to_string(),

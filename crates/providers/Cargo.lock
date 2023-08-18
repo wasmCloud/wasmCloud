@@ -2508,6 +2508,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasmcloud-compat"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_bytes",
+]
+
+[[package]]
 name = "wasmcloud-provider-httpserver"
 version = "0.18.3"
 dependencies = [
@@ -2526,6 +2534,7 @@ dependencies = [
  "toml",
  "tracing",
  "warp",
+ "wasmcloud-compat",
  "wasmcloud-provider-sdk",
 ]
 
@@ -2540,6 +2549,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+ "wasmcloud-compat",
  "wasmcloud-provider-sdk",
 ]
 
@@ -2562,6 +2572,7 @@ dependencies = [
  "tracing-futures",
  "tracing-opentelemetry 0.20.0",
  "wascap 0.8.0",
+ "wasmcloud-compat",
  "wasmcloud-provider-sdk",
 ]
 

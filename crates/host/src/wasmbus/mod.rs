@@ -561,13 +561,6 @@ impl KeyValueReadWrite for Handler {
         key: String,
         mut value: Box<dyn AsyncRead + Sync + Send + Unpin>,
     ) -> anyhow::Result<()> {
-        #[derive(Serialize)]
-        struct SetRequest {
-            key: String,
-            value: String,
-            expires: u32,
-        }
-
         const METHOD: &str = "wasmcloud:keyvalue/KeyValue.Set";
         if !bucket.is_empty() {
             bail!("buckets not currently supported")
@@ -580,7 +573,7 @@ impl KeyValueReadWrite for Handler {
         let res = self
             .call_provider(
                 METHOD,
-                &SetRequest {
+                &wasmcloud_compat::keyvalue::SetRequest {
                     key,
                     value: buf,
                     expires: 0,
@@ -625,25 +618,6 @@ impl Messaging for Handler {
         body: Option<Vec<u8>>,
         timeout: Duration,
     ) -> anyhow::Result<messaging::types::BrokerMessage> {
-        #[derive(Serialize)]
-        struct RequestMessage {
-            subject: String,
-            #[serde(with = "serde_bytes")]
-            body: Vec<u8>,
-            #[serde(rename = "timeoutMs")]
-            timeout_ms: u32,
-        }
-        #[derive(Deserialize)]
-        struct ReplyMessage {
-            #[serde(default)]
-            subject: String,
-            #[serde(rename = "replyTo")]
-            #[serde(default, skip_serializing_if = "Option::is_none")]
-            reply_to: Option<String>,
-            #[serde(with = "serde_bytes")]
-            #[serde(default)]
-            body: Vec<u8>,
-        }
         const METHOD: &str = "wasmcloud:messaging/Messaging.Request";
 
         let timeout_ms = timeout
@@ -653,14 +627,14 @@ impl Messaging for Handler {
         let res = self
             .call_provider(
                 METHOD,
-                &RequestMessage {
+                &wasmcloud_compat::messaging::RequestMessage {
                     subject,
                     body: body.unwrap_or_default(),
                     timeout_ms,
                 },
             )
             .await?;
-        let ReplyMessage {
+        let wasmcloud_compat::messaging::ReplyMessage {
             subject,
             reply_to,
             body,
@@ -698,21 +672,11 @@ impl Messaging for Handler {
             body,
         }: messaging::types::BrokerMessage,
     ) -> anyhow::Result<()> {
-        #[derive(Serialize)]
-        struct PubMessage {
-            subject: String,
-            #[serde(rename = "replyTo")]
-            #[serde(skip_serializing_if = "Option::is_none")]
-            reply_to: Option<String>,
-            #[serde(with = "serde_bytes")]
-            body: Vec<u8>,
-        }
-
         const METHOD: &str = "wasmcloud:messaging/Messaging.Publish";
         let res = self
             .call_provider(
                 METHOD,
-                &PubMessage {
+                &wasmcloud_compat::messaging::PubMessage {
                     subject,
                     reply_to,
                     body: body.unwrap_or_default(),

@@ -1,10 +1,12 @@
 //! Nats implementation for wasmcloud:messaging.
 
+use core::time::Duration;
+
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::Context as _;
+use async_trait::async_trait;
 use base64::Engine;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -13,17 +15,12 @@ use tokio::task::JoinHandle;
 use tracing::{debug, error, instrument, warn};
 use tracing_futures::Instrument;
 use wascap::prelude::KeyPair;
+use wasmcloud_compat::messaging::{PubMessage, ReplyMessage, RequestMessage, SubMessage};
+use wasmcloud_provider_sdk::core::{HostData, LinkDefinition, WasmCloudEntity};
 use wasmcloud_provider_sdk::error::ProviderInvocationError;
-use wasmcloud_provider_sdk::ProviderHandler;
-use wasmcloud_provider_sdk::{
-    core::{HostData, LinkDefinition},
-    load_host_data, start_provider, Context,
-};
+use wasmcloud_provider_sdk::{load_host_data, start_provider, Context, ProviderHandler};
 
 use wasmcloud_provider_nats::otel;
-use wasmcloud_provider_nats::wasmcloud_interface_messaging::{
-    Handler, Messaging, PubMessage, ReplyMessage, RequestMessage, SubMessage,
-};
 
 const DEFAULT_NATS_URI: &str = "0.0.0.0:4222";
 const ENV_NATS_SUBSCRIPTION: &str = "SUBSCRIPTION";
@@ -284,6 +281,43 @@ impl NatsMessagingProvider {
     }
 }
 
+pub struct Handler<'a> {
+    ld: &'a LinkDefinition,
+}
+
+impl<'a> Handler<'a> {
+    pub fn new(ld: &'a LinkDefinition) -> Self {
+        Self { ld }
+    }
+
+    pub async fn handle_message(&self, msg: SubMessage) -> Result<(), ProviderInvocationError> {
+        let connection = wasmcloud_provider_sdk::provider_main::get_connection();
+
+        let client = connection.get_rpc_client();
+        let origin = WasmCloudEntity {
+            public_key: self.ld.provider_id.clone(),
+            link_name: self.ld.link_name.clone(),
+            contract_id: "wasmcloud:messaging".to_string(),
+        };
+        let target = WasmCloudEntity {
+            public_key: self.ld.actor_id.clone(),
+            ..Default::default()
+        };
+
+        let data = wasmcloud_provider_sdk::serialize(&msg)?;
+
+        let response = client
+            .send(origin, target, "MessageSubscriber.HandleMessage", data)
+            .await?;
+
+        if let Some(e) = response.error {
+            Err(ProviderInvocationError::Provider(e))
+        } else {
+            Ok(())
+        }
+    }
+}
+
 #[instrument(level = "debug", skip_all, fields(actor_id = %link_def.actor_id, subject = %nats_msg.subject, reply_to = ?nats_msg.reply))]
 async fn dispatch_msg(
     link_def: LinkDefinition,
@@ -306,7 +340,7 @@ async fn dispatch_msg(
 
 /// Handle provider control commands
 /// put_link (new actor link command), del_link (remove link command), and shutdown
-#[async_trait::async_trait]
+#[async_trait]
 impl ProviderHandler for NatsMessagingProvider {
     /// Provider should perform any operations needed for a new link,
     /// including setting up per-actor resources, and checking authorization.
@@ -368,8 +402,7 @@ impl ProviderHandler for NatsMessagingProvider {
 }
 
 /// Handle Messaging methods that interact with redis
-#[async_trait::async_trait]
-impl Messaging for NatsMessagingProvider {
+impl NatsMessagingProvider {
     #[instrument(level = "debug", skip(self, ctx, msg), fields(actor_id = ?ctx.actor, subject = %msg.subject, reply_to = ?msg.reply_to, body_len = %msg.body.len()))]
     async fn publish(&self, ctx: Context, msg: PubMessage) -> Result<(), String> {
         let actor_id = ctx
@@ -471,7 +504,7 @@ fn should_strip_headers(topic: &str) -> bool {
     topic.starts_with("$SYS")
 }
 
-#[async_trait::async_trait]
+#[async_trait]
 impl wasmcloud_provider_sdk::MessageDispatch for NatsMessagingProvider {
     async fn dispatch<'a>(
         &'a self,

@@ -1,5 +1,3 @@
-// TODO: This should be defined in `compat` module only
-
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};

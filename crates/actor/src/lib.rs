@@ -15,8 +15,7 @@ pub use compat::*;
 pub use wasmcloud_actor_derive::*;
 
 // TODO: Remove once `wasi-http` is integrated
-mod http;
-pub use http::{Request as HttpRequest, Response as HttpResponse};
+pub use wasmcloud_compat::{HttpRequest, HttpResponse};
 
 mod io;
 mod logging;

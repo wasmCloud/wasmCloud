@@ -2,16 +2,16 @@
 //!
 //!
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use tracing::{error, instrument, trace, warn};
-use wasmcloud_provider_httpserver::{load_settings, HttpServerCore, Request, Response, Server};
-use wasmcloud_provider_sdk::{
-    core::LinkDefinition,
-    error::{InvocationError, ProviderInvocationError},
-    provider_main::start_provider,
-    ProviderHandler,
-};
+use wasmcloud_provider_sdk::core::{LinkDefinition, WasmCloudEntity};
+use wasmcloud_provider_sdk::error::{InvocationError, ProviderInvocationError};
+use wasmcloud_provider_sdk::provider_main::start_provider;
+use wasmcloud_provider_sdk::ProviderHandler;
+
+use wasmcloud_provider_httpserver::{load_settings, HttpServerCore, Request, Response};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // handle lattice control messages and forward rpc to the provider dispatch
@@ -90,6 +90,54 @@ impl wasmcloud_provider_sdk::MessageDispatch for HttpServerProvider {
 }
 
 impl wasmcloud_provider_sdk::Provider for HttpServerProvider {}
+
+const HANDLE_REQUEST_METHOD: &str = "HttpServer.HandleRequest";
+
+pub struct Server<'a> {
+    ld: &'a LinkDefinition,
+    timeout: Option<std::time::Duration>,
+}
+
+impl<'a> Server<'a> {
+    pub fn new(ld: &'a LinkDefinition, timeout: Option<Duration>) -> Self {
+        Self { ld, timeout }
+    }
+
+    pub async fn handle_request(&self, req: Request) -> Result<Response, ProviderInvocationError> {
+        let connection = wasmcloud_provider_sdk::provider_main::get_connection();
+
+        let client = connection.get_rpc_client();
+        let origin = WasmCloudEntity {
+            public_key: self.ld.provider_id.clone(),
+            link_name: self.ld.link_name.clone(),
+            contract_id: "wasmcloud:httpserver".to_string(),
+        };
+        let target = WasmCloudEntity {
+            public_key: self.ld.actor_id.clone(),
+            ..Default::default()
+        };
+
+        let data = wasmcloud_provider_sdk::serialize(&req)?;
+
+        let response = if let Some(timeout) = self.timeout {
+            client
+                .send_timeout(origin, target, HANDLE_REQUEST_METHOD, data, timeout)
+                .await?
+        } else {
+            client
+                .send(origin, target, HANDLE_REQUEST_METHOD, data)
+                .await?
+        };
+
+        if let Some(e) = response.error {
+            return Err(ProviderInvocationError::Provider(e));
+        }
+
+        let response: Response = wasmcloud_provider_sdk::deserialize(&response.msg)?;
+
+        Ok(response)
+    }
+}
 
 /// forward Request to actor.
 #[instrument(level = "debug", skip_all, fields(actor_id = %ld.actor_id))]
