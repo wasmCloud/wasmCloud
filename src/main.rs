@@ -225,17 +225,21 @@ struct Args {
 async fn main() -> anyhow::Result<()> {
     let args: Args = Args::parse();
 
-    tracing_subscriber::registry()
-        .with(tracing_subscriber::fmt::layer().pretty().without_time())
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                tracing_subscriber::EnvFilter::new(format!(
-                    "{},cranelift_codegen=warn",
-                    args.log_level
-                ))
-            }),
-        )
-        .init();
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        tracing_subscriber::EnvFilter::new(format!("{},cranelift_codegen=warn", args.log_level))
+    });
+
+    if args.enable_structured_logging {
+        tracing_subscriber::registry()
+            .with(tracing_subscriber::fmt::layer().json().without_time())
+            .with(env_filter)
+            .init();
+    } else {
+        tracing_subscriber::registry()
+            .with(tracing_subscriber::fmt::layer().pretty().without_time())
+            .with(env_filter)
+            .init();
+    }
 
     let ctl_nats_url = Url::parse(&format!(
         "nats://{}:{}",
@@ -286,8 +290,8 @@ async fn main() -> anyhow::Result<()> {
         prov_rpc_seed: args.prov_rpc_seed.or_else(|| args.nats_seed.clone()),
         prov_rpc_tls: args.prov_rpc_tls,
         allow_file_load: args.allow_file_load,
-        // log_level: args.log_level.to_string(),
-        // enable_structured_logging: args.enable_structured_logging,
+        log_level: args.log_level.to_string().to_ascii_lowercase(),
+        enable_structured_logging: args.enable_structured_logging,
     })
     .await
     .context("failed to initialize host")?;
