@@ -1187,7 +1187,7 @@ impl Host {
             "friendly_name": self.friendly_name,
             "labels": self.labels,
             "providers": providers,
-            "uptime_human": "TODO", // TODO
+            "uptime_human": human_friendly_uptime(uptime),
             "uptime_seconds": uptime.as_secs(),
             "version": env!("CARGO_PKG_VERSION"),
         })
@@ -2309,20 +2309,20 @@ impl Host {
             .clone()
             .unwrap_or_else(|| vec![self.cluster_key.public_key()])
             .join(",");
-        // TODO: Fill in the TODOs
+
         let buf = serde_json::to_vec(&json!({
           "id": self.host_key.public_key(),
           "issuer": self.cluster_key.public_key(),
           "labels": self.labels,
           "friendly_name": self.friendly_name,
           "uptime_seconds": uptime.as_secs(),
-          "uptime_human": "TODO",
+          "uptime_human": human_friendly_uptime(uptime),
           "version": env!("CARGO_PKG_VERSION"),
           "cluster_issuers": cluster_issuers,
           "js_domain": self.host_config.js_domain,
-          "ctl_host": "TODO",
-          "prov_rpc_host": "TODO",
-          "rpc_host": "TODO",
+          "ctl_host": self.host_config.ctl_nats_url.to_string(),
+          "prov_rpc_host": self.host_config.prov_rpc_nats_url.to_string(),
+          "rpc_host": self.host_config.rpc_nats_url.to_string(),
           "lattice_prefix": self.host_config.lattice_prefix,
         }))
         .context("failed to encode reply")?;
@@ -2673,4 +2673,12 @@ impl TryFrom<jwt::Claims<jwt::CapabilityProvider>> for StoredClaims {
             version: metadata.ver.unwrap_or_default(),
         })
     }
+}
+
+fn human_friendly_uptime(uptime: Duration) -> String {
+    // strip sub-seconds, then convert to human-friendly format
+    humantime::format_duration(
+        uptime.saturating_sub(Duration::from_nanos(uptime.subsec_nanos().into())),
+    )
+    .to_string()
 }
