@@ -204,8 +204,7 @@ async fn wasmbus() -> anyhow::Result<()> {
     let (nats_server, stop_nats_tx) = spawn_server(
         Command::new(
             env::var("WASMCLOUD_NATS")
-                .as_ref()
-                .map(String::as_str)
+                .as_deref()
                 .unwrap_or("nats-server"),
         )
         .args(["-js", "-V", "-T=false", "-p", &nats_port.to_string(), "-sd"])
@@ -228,8 +227,7 @@ async fn wasmbus() -> anyhow::Result<()> {
     let (redis_server, stop_redis_tx) = spawn_server(
         Command::new(
             env::var("WASMCLOUD_REDIS")
-                .as_ref()
-                .map(String::as_str)
+                .as_deref()
                 .unwrap_or("redis-server"),
         )
         .args(["--port", &redis_port.to_string()]),
