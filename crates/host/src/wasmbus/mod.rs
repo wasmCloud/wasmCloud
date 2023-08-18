@@ -1922,6 +1922,7 @@ impl Host {
                 "spawn provider process"
             );
             let mut child = process::Command::new(&path)
+                .env_clear()
                 .stdin(Stdio::piped())
                 .kill_on_drop(true)
                 .spawn()
