@@ -19,6 +19,7 @@ default = [
 ]
 
 compat = [
+    "once_cell",
     "rmp-serde",
     "uuid",
     "uuid/serde",
@@ -30,6 +31,7 @@ component = [
 ]
 
 module = [
+    "once_cell",
     "rmp-serde",
     "uuid",
     "uuid/serde",
@@ -38,6 +40,7 @@ module = [
 
 [dependencies]
 futures = { workspace = true, optional = true, features = ["std"] }
+once_cell = { workspace = true, optional = true, features = ["std"] }
 rand = { workspace = true, optional = true }
 rmp-serde = { workspace = true, optional = true }
 serde = { workspace = true, features = ["derive"] } # TODO: Make optional once `wasi-http` integrated

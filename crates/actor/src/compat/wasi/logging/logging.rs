@@ -53,6 +53,6 @@ pub fn log(level: Level, context: &str, message: &str) {
     };
     let pld = rmp_serde::to_vec(&LogEntry { level, text })
         .expect("failed to serialize `Logging.WriteLog` request");
-    host::call("", "wasmcloud:builtin:logging", "Logging.WriteLog", &pld)
+    host::call_sync(None, "wasmcloud:builtin:logging/Logging.WriteLog", &pld)
         .expect("failed to call `Logging.WriteLog`");
 }
