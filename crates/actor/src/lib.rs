@@ -65,7 +65,7 @@ mod test {
             //        between_bytes_timeout_ms: Some(42),
             //    }),
             //);
-            
+
             // TODO: Implement `call` in module world
             #[cfg(not(feature = "module"))]
             let (_, _, _): (
