@@ -50,6 +50,12 @@ pub struct Host {
     pub provider_shutdown_delay: Option<std::time::Duration>,
     /// Configuration for downloading artifacts from OCI registries
     pub oci_opts: OciConfig,
+    /// Whether to allow loading actor or provider components from the filesystem
+    pub allow_file_load: bool,
+    // Whether or not structured logging is enabled
+    // pub enable_structured_logging: bool,
+    // Log level to pass to capability providers to use. Should be parsed from a [`tracing::Level`]
+    // pub log_level: String,
 }
 
 impl Default for Host {
@@ -79,6 +85,9 @@ impl Default for Host {
             cluster_issuers: None,
             provider_shutdown_delay: None,
             oci_opts: OciConfig::default(),
+            allow_file_load: false,
+            // enable_structured_logging: false,
+            // log_level: "INFO".to_string(),
         }
     }
 }
