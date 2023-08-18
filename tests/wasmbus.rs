@@ -548,7 +548,7 @@ expected: {expected_labels:?}"#
         .await
         .map_err(|e| anyhow!(e).context("failed to query claims"))?
         .claims;
-    claims_from_host.sort_by(|a, b| a.get("sub").unwrap().cmp(&b.get("sub").unwrap()));
+    claims_from_host.sort_by(|a, b| a.get("sub").unwrap().cmp(b.get("sub").unwrap()));
 
     ensure!(claims_from_host.len() == 4); // 3 providers, 1 actor
 
@@ -579,7 +579,7 @@ expected: {expected_labels:?}"#
         .await
         .map_err(|e| anyhow!(e).context("failed to query claims"))?
         .claims;
-    claims_from_bucket.sort_by(|a, b| a.get("sub").unwrap().cmp(&b.get("sub").unwrap()));
+    claims_from_bucket.sort_by(|a, b| a.get("sub").unwrap().cmp(b.get("sub").unwrap()));
 
     let mut links_from_bucket = ctl_client
         .query_links()
