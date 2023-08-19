@@ -624,10 +624,7 @@ impl KeyValueReadWrite for Handler {
                 },
             )
             .await?;
-        if !res.is_empty() {
-            error!("unexpected response returned for `{METHOD}` call");
-        }
-        Ok(())
+        rmp_serde::from_slice(&res).context("failed to decode response")
     }
 
     #[instrument]
@@ -745,10 +742,7 @@ impl Messaging for Handler {
                 },
             )
             .await?;
-        if !res.is_empty() {
-            error!("unexpected response returned for `{METHOD}` call");
-        }
-        Ok(())
+        rmp_serde::from_slice(&res).context("failed to decode response")
     }
 }
 
