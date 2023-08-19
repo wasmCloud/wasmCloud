@@ -7,6 +7,7 @@ use serde_json::json;
 use wasmcloud_actor::wasi::keyvalue;
 use wasmcloud_actor::wasi::logging::logging;
 use wasmcloud_actor::wasi::random::random;
+use wasmcloud_actor::wasmcloud::bus::lattice::TargetEntity;
 use wasmcloud_actor::wasmcloud::{bus, messaging};
 use wasmcloud_actor::{
     debug, error, info, trace, warn, HostRng, HttpRequest, HttpResponse, InputStreamReader,
@@ -78,7 +79,7 @@ impl exports::wasmcloud::bus::guest::Guest for Actor {
         stdout.flush().expect("failed to flush stdout");
 
         bus::lattice::set_target(
-            Some(&bus::lattice::TargetEntity::Link(Some("messaging".into()))),
+            Some(&TargetEntity::Link(Some("messaging".into()))),
             &[bus::lattice::target_wasmcloud_messaging_consumer()],
         );
         messaging::consumer::publish(&messaging::types::BrokerMessage {
@@ -122,7 +123,7 @@ impl exports::wasmcloud::bus::guest::Guest for Actor {
         }
 
         bus::lattice::set_target(
-            Some(&bus::lattice::TargetEntity::Link(Some("keyvalue".into()))),
+            Some(&TargetEntity::Link(Some("keyvalue".into()))),
             &[bus::lattice::target_wasi_keyvalue_readwrite()],
         );
         let foo_key = String::from("foo");
@@ -183,6 +184,7 @@ impl exports::wasmcloud::bus::guest::Guest for Actor {
         keyvalue::readwrite::set(bucket, &result_key, result_value)
             .map_err(keyvalue::wasi_cloud_error::trace)
             .expect("failed to set `result`");
+
         Ok(())
     }
 }

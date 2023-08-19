@@ -52,6 +52,7 @@ dependencies = [
 name = "builtins-module-reactor"
 version = "0.1.0"
 dependencies = [
+ "rmp-serde",
  "serde",
  "serde_json",
  "wasmcloud-actor",

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::io::Cursor;
 use std::net::{Ipv6Addr, SocketAddr};
 use std::path::Path;
 use std::pin::Pin;
@@ -18,10 +19,9 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::spawn;
 use tracing_subscriber::prelude::*;
 use wasmcloud_actor::{HttpRequest, HttpResponse, Uuid};
-use wasmcloud_runtime::capability;
 use wasmcloud_runtime::capability::logging::logging;
-use wasmcloud_runtime::capability::messaging;
 use wasmcloud_runtime::capability::provider::MemoryKeyValue;
+use wasmcloud_runtime::capability::{self, messaging, KeyValueReadWrite, Messaging};
 use wasmcloud_runtime::{Actor, Runtime};
 
 static LOGGER: Lazy<()> = Lazy::new(|| {
@@ -56,25 +56,27 @@ static REQUEST: Lazy<Vec<u8>> = Lazy::new(|| {
     .expect("failed to serialize request")
 });
 
-struct Logging(Arc<Mutex<Vec<(logging::Level, String, String)>>>);
+struct Handler {
+    logging: Arc<Mutex<Vec<(logging::Level, String, String)>>>,
+    messaging: Arc<Mutex<Vec<messaging::types::BrokerMessage>>>,
+    keyvalue_readwrite: Arc<MemoryKeyValue>,
+}
 
 #[async_trait]
-impl capability::Logging for Logging {
+impl capability::Logging for Handler {
     async fn log(
         &self,
         level: logging::Level,
         context: String,
         message: String,
     ) -> anyhow::Result<()> {
-        self.0.lock().await.push((level, context, message));
+        self.logging.lock().await.push((level, context, message));
         Ok(())
     }
 }
 
-struct Messaging(Arc<Mutex<Vec<messaging::types::BrokerMessage>>>);
-
 #[async_trait]
-impl capability::Messaging for Messaging {
+impl capability::Messaging for Handler {
     async fn request(
         &self,
         subject: String,
@@ -110,29 +112,39 @@ impl capability::Messaging for Messaging {
     }
 
     async fn publish(&self, msg: messaging::types::BrokerMessage) -> anyhow::Result<()> {
-        self.0.lock().await.push(msg);
+        self.messaging.lock().await.push(msg);
         Ok(())
     }
 }
 
-struct Bus;
-
 #[async_trait]
-impl capability::Bus for Bus {
+impl capability::Bus for Handler {
     async fn identify_wasmbus_target(
         &self,
-        _binding: &str,
-        _namespace: &str,
+        binding: &str,
+        namespace: &str,
     ) -> anyhow::Result<capability::TargetEntity> {
-        panic!("should not be called")
+        match (binding, namespace) {
+            ("messaging", "wasmcloud:messaging") => {
+                Ok(capability::TargetEntity::Link(Some("messaging".into())))
+            }
+            ("keyvalue", "wasmcloud:keyvalue") => {
+                Ok(capability::TargetEntity::Link(Some("keyvalue".into())))
+            }
+            _ => panic!("binding `{binding}` namespace `{namespace}` pair not supported"),
+        }
     }
 
     async fn set_target(
         &self,
-        _target: Option<capability::TargetEntity>,
-        _interfaces: Vec<capability::TargetInterface>,
+        target: Option<capability::TargetEntity>,
+        interfaces: Vec<capability::TargetInterface>,
     ) -> anyhow::Result<()> {
-        Ok(())
+        match (target, interfaces.as_slice()) {
+            (Some(capability::TargetEntity::Link(Some(name))), [capability::TargetInterface::WasmcloudMessagingConsumer]) if name == "messaging" => Ok(()),
+                (Some(capability::TargetEntity::Link(Some(name))), [capability::TargetInterface::WasiKeyvalueReadwrite]) if name == "keyvalue" => Ok(()),
+            (target, interfaces) => panic!("`set_target` with target `{target:?}` and interfaces `{interfaces:?}` should not have been called")
+        }
     }
 
     async fn call(
@@ -144,7 +156,150 @@ impl capability::Bus for Bus {
         Box<dyn tokio::io::AsyncWrite + Sync + Send + Unpin>,
         Box<dyn tokio::io::AsyncRead + Sync + Send + Unpin>,
     )> {
-        panic!("should not be called")
+        panic!("should not have been called")
+    }
+
+    async fn call_sync(
+        &self,
+        target: Option<capability::TargetEntity>,
+        operation: String,
+        payload: Vec<u8>,
+    ) -> anyhow::Result<Vec<u8>> {
+        // TODO: Migrate this translation layer to `runtime` crate once we switch to WIT-enabled providers
+        match (target, operation.as_str()) {
+            (
+                Some(capability::TargetEntity::Link(Some(name))),
+                "wasmcloud:messaging/Messaging.Publish",
+            ) if name == "messaging" => {
+                let wasmcloud_compat::messaging::PubMessage {
+                    subject,
+                    reply_to,
+                    body,
+                } = rmp_serde::from_slice(&payload).expect("failed to decode payload");
+                self.publish(messaging::types::BrokerMessage {
+                    subject,
+                    reply_to,
+                    body: Some(body),
+                })
+                .await
+                .expect("failed to publish message");
+                Ok(vec![])
+            }
+            (
+                Some(capability::TargetEntity::Link(Some(name))),
+                "wasmcloud:messaging/Messaging.Request",
+            ) if name == "messaging" => {
+                let wasmcloud_compat::messaging::RequestMessage {
+                    subject,
+                    body,
+                    timeout_ms,
+                } = rmp_serde::from_slice(&payload).expect("failed to decode payload");
+                let messaging::types::BrokerMessage {
+                    subject,
+                    body,
+                    reply_to,
+                } = match subject.as_str() {
+                    "test-messaging-request" => self
+                        .request(
+                            subject,
+                            Some(body),
+                            Duration::from_millis(timeout_ms.into()),
+                        )
+                        .await
+                        .expect("failed to call `request`"),
+                    "test-messaging-request-multi" => self
+                        .request_multi(
+                            subject,
+                            Some(body),
+                            Duration::from_millis(timeout_ms.into()),
+                            1,
+                        )
+                        .await
+                        .expect("failed to call `request_multi`")
+                        .pop()
+                        .expect("first element missing"),
+                    _ => panic!("invalid subject `{subject}`"),
+                };
+                let buf = rmp_serde::to_vec_named(&wasmcloud_compat::messaging::ReplyMessage {
+                    subject,
+                    reply_to,
+                    body: body.unwrap_or_default(),
+                })
+                .expect("failed to encode reply");
+                Ok(buf)
+            }
+
+            (
+                Some(capability::TargetEntity::Link(Some(name))),
+                "wasmcloud:keyvalue/KeyValue.Set",
+            ) if name == "keyvalue" => {
+                let wasmcloud_compat::keyvalue::SetRequest {
+                    key,
+                    value,
+                    expires,
+                } = rmp_serde::from_slice(&payload).expect("failed to decode payload");
+                assert_eq!(expires, 0);
+                self.keyvalue_readwrite
+                    .set("", key, Box::new(Cursor::new(value)))
+                    .await
+                    .expect("failed to call `set`");
+                Ok(vec![])
+            }
+
+            (
+                Some(capability::TargetEntity::Link(Some(name))),
+                "wasmcloud:keyvalue/KeyValue.Get",
+            ) if name == "keyvalue" => {
+                let key = rmp_serde::from_slice(&payload).expect("failed to decode payload");
+                let (mut reader, _) = self
+                    .keyvalue_readwrite
+                    .get("", key)
+                    .await
+                    .expect("failed to call `get`");
+                let mut value = String::new();
+                reader
+                    .read_to_string(&mut value)
+                    .await
+                    .expect("failed to read value");
+                let buf = rmp_serde::to_vec_named(&wasmcloud_compat::keyvalue::GetResponse {
+                    exists: true,
+                    value,
+                })
+                .expect("failed to encode reply");
+                Ok(buf)
+            }
+
+            (
+                Some(capability::TargetEntity::Link(Some(name))),
+                "wasmcloud:keyvalue/KeyValue.Contains",
+            ) if name == "keyvalue" => {
+                let key = rmp_serde::from_slice(&payload).expect("failed to decode payload");
+                let ok = self
+                    .keyvalue_readwrite
+                    .exists("", key)
+                    .await
+                    .expect("failed to call `exists`");
+                let buf = rmp_serde::to_vec_named(&ok).expect("failed to encode reply");
+                Ok(buf)
+            }
+
+            (
+                Some(capability::TargetEntity::Link(Some(name))),
+                "wasmcloud:keyvalue/KeyValue.Del",
+            ) if name == "keyvalue" => {
+                let key = rmp_serde::from_slice(&payload).expect("failed to decode payload");
+                self.keyvalue_readwrite
+                    .delete("", key)
+                    .await
+                    .expect("failed to call `delete`");
+                let buf = rmp_serde::to_vec_named(&true).expect("failed to encode reply");
+                Ok(buf)
+            }
+
+            (target, operation) => {
+                panic!("`call_sync` with target `{target:?}` and operation `{operation}` should not have been called")
+            }
+        }
     }
 }
 
@@ -153,19 +308,21 @@ fn new_runtime(
     published: Arc<Mutex<Vec<messaging::types::BrokerMessage>>>,
     keyvalue_readwrite: Arc<MemoryKeyValue>,
 ) -> Runtime {
+    let handler = Arc::new(Handler {
+        logging: logs,
+        messaging: published,
+        keyvalue_readwrite: Arc::clone(&keyvalue_readwrite),
+    });
     Runtime::builder()
-        .bus(Arc::new(Bus))
-        .logging(Arc::new(Logging(logs)))
-        .messaging(Arc::new(Messaging(published)))
+        .bus(Arc::clone(&handler))
+        .logging(Arc::clone(&handler))
+        .messaging(Arc::clone(&handler))
         .keyvalue_readwrite(Arc::clone(&keyvalue_readwrite))
         .build()
         .expect("failed to construct runtime")
 }
 
-async fn run(
-    wasm: impl AsRef<Path>,
-    interfaces: bool,
-) -> anyhow::Result<Vec<(logging::Level, String, String)>> {
+async fn run(wasm: impl AsRef<Path>) -> anyhow::Result<Vec<(logging::Level, String, String)>> {
     let wasm = fs::read(wasm).await.context("failed to read Wasm")?;
 
     let socket = TcpListener::bind(SocketAddr::from((Ipv6Addr::UNSPECIFIED, 0)))
@@ -222,46 +379,44 @@ async fn run(
 
     let mut published = Arc::try_unwrap(published).unwrap().into_inner().into_iter();
     let mut keyvalue = HashMap::from(Arc::try_unwrap(keyvalue_readwrite).unwrap()).into_iter();
-    if interfaces {
-        let published = match (published.next(), published.next()) {
-            (
-                Some(messaging::types::BrokerMessage {
-                    subject,
-                    reply_to,
-                    body,
-                }),
-                None,
-            ) => {
-                ensure!(subject == "test-messaging-publish");
-                ensure!(reply_to.as_deref() == Some("noreply"));
-                body.context("body missing")?
-            }
-            (None, None) => bail!("no messages published"),
-            _ => bail!("too many messages published"),
-        };
-        ensure!(body == published);
+    let published = match (published.next(), published.next()) {
+        (
+            Some(messaging::types::BrokerMessage {
+                subject,
+                reply_to,
+                body,
+            }),
+            None,
+        ) => {
+            ensure!(subject == "test-messaging-publish");
+            ensure!(reply_to.as_deref() == Some("noreply"));
+            body.context("body missing")?
+        }
+        (None, None) => bail!("no messages published"),
+        _ => bail!("too many messages published"),
+    };
+    ensure!(body == published);
 
-        let set = match (keyvalue.next(), keyvalue.next()) {
-            (Some((bucket, kv)), None) => {
-                ensure!(bucket == "");
-                let mut kv = kv.into_iter();
-                match (kv.next(), kv.next()) {
-                    (Some((k, v)), None) => {
-                        ensure!(k == "result");
-                        v
-                    }
-                    _ => bail!("too many entries present in keyvalue map bucket"),
+    let set = match (keyvalue.next(), keyvalue.next()) {
+        (Some((bucket, kv)), None) => {
+            ensure!(bucket == "");
+            let mut kv = kv.into_iter();
+            match (kv.next(), kv.next()) {
+                (Some((k, v)), None) => {
+                    ensure!(k == "result");
+                    v
                 }
+                _ => bail!("too many entries present in keyvalue map bucket"),
             }
-            _ => bail!("too many buckets present in keyvalue map"),
-        };
-        ensure!(
-            body == set,
-            "invalid keyvalue map `result` value:\ngot: {}\nexpected: {}",
-            String::from_utf8_lossy(&set),
-            String::from_utf8_lossy(&body),
-        );
-    }
+        }
+        _ => bail!("too many buckets present in keyvalue map"),
+    };
+    ensure!(
+        body == set,
+        "invalid keyvalue map `result` value:\ngot: {}\nexpected: {}",
+        String::from_utf8_lossy(&set),
+        String::from_utf8_lossy(&body),
+    );
 
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -295,7 +450,7 @@ async fn run(
 async fn builtins_module() -> anyhow::Result<()> {
     init();
 
-    let logs = run(test_actors::RUST_BUILTINS_MODULE_REACTOR_SIGNED, false).await?;
+    let logs = run(test_actors::RUST_BUILTINS_MODULE_REACTOR_SIGNED).await?;
     assert_eq!(
         logs,
         vec![
@@ -363,11 +518,7 @@ async fn builtins_module() -> anyhow::Result<()> {
 async fn builtins_compat() -> anyhow::Result<()> {
     init();
 
-    let logs = run(
-        test_actors::RUST_BUILTINS_COMPAT_REACTOR_PREVIEW2_SIGNED,
-        false,
-    )
-    .await?;
+    let logs = run(test_actors::RUST_BUILTINS_COMPAT_REACTOR_PREVIEW2_SIGNED).await?;
     assert_eq!(
         logs,
         vec![
@@ -419,11 +570,7 @@ async fn builtins_compat() -> anyhow::Result<()> {
 async fn builtins_component() -> anyhow::Result<()> {
     init();
 
-    let logs = run(
-        test_actors::RUST_BUILTINS_COMPONENT_REACTOR_PREVIEW2_SIGNED,
-        true,
-    )
-    .await?;
+    let logs = run(test_actors::RUST_BUILTINS_COMPONENT_REACTOR_PREVIEW2_SIGNED).await?;
     assert_eq!(
         logs,
         vec![
