@@ -572,14 +572,6 @@ impl KeyValueReadWrite for Handler {
         bucket: &str,
         key: String,
     ) -> anyhow::Result<(Box<dyn AsyncRead + Sync + Send + Unpin>, u64)> {
-        #[derive(Deserialize)]
-        struct GetResponse {
-            #[serde(default)]
-            value: String,
-            #[serde(default)]
-            exists: bool,
-        }
-
         const METHOD: &str = "wasmcloud:keyvalue/KeyValue.Get";
         if !bucket.is_empty() {
             bail!("buckets not currently supported")
@@ -592,7 +584,7 @@ impl KeyValueReadWrite for Handler {
                 &key,
             )
             .await?;
-        let GetResponse { value, exists } =
+        let wasmcloud_compat::keyvalue::GetResponse { value, exists } =
             rmp_serde::from_slice(&res).context("failed to decode response")?;
         if !exists {
             bail!("key not found")

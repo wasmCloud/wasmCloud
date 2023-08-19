@@ -1,6 +1,5 @@
 use crate::wasmcloud::bus::host;
 
-use serde::Serialize;
 use wasmcloud_compat::logging::LogEntry;
 
 /// A log level, describing a kind of message.

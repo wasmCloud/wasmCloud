@@ -2,7 +2,6 @@ use crate::wasmcloud::bus::host;
 
 use core::iter;
 
-use serde::Serialize;
 use uuid::Uuid;
 use wasmcloud_compat::numbergen::RangeLimit;
 
