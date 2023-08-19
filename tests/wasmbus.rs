@@ -28,7 +28,7 @@ use wascap::jwt;
 use wascap::wasm::extract_claims;
 use wasmcloud_control_interface::{
     ActorAuctionAck, ActorDescription, ActorInstance, ClientBuilder, CtlOperationAck,
-    Host as HostInfo, HostInventory, ProviderAuctionAck,
+    GetClaimsResponse, Host as HostInfo, HostInventory, ProviderAuctionAck,
 };
 use wasmcloud_host::wasmbus::{Host, HostConfig};
 
@@ -186,6 +186,174 @@ async fn spawn_server(
     Ok((child, stop_tx))
 }
 
+async fn stop_server(
+    server: JoinHandle<anyhow::Result<ExitStatus>>,
+    stop_tx: oneshot::Sender<()>,
+) -> anyhow::Result<()> {
+    stop_tx.send(()).expect("failed to stop");
+    let status = server
+        .await
+        .context("failed to wait for server to exit")??;
+    ensure!(status.code().is_none());
+    Ok(())
+}
+
+async fn start_redis() -> anyhow::Result<(
+    JoinHandle<anyhow::Result<ExitStatus>>,
+    oneshot::Sender<()>,
+    Url,
+)> {
+    let port = free_port().await?;
+    let url =
+        Url::parse(&format!("redis://localhost:{port}")).context("failed to parse Redis URL")?;
+    let (server, stop_tx) = spawn_server(
+        Command::new(
+            env::var("WASMCLOUD_REDIS")
+                .as_deref()
+                .unwrap_or("redis-server"),
+        )
+        .args(["--port", &port.to_string()]),
+    )
+    .await
+    .context("failed to start Redis")?;
+    Ok((server, stop_tx, url))
+}
+
+async fn start_nats() -> anyhow::Result<(
+    JoinHandle<anyhow::Result<ExitStatus>>,
+    oneshot::Sender<()>,
+    Url,
+)> {
+    let port = free_port().await?;
+    let url =
+        Url::parse(&format!("nats://localhost:{port}")).context("failed to parse NATS URL")?;
+    let jetstream_dir = tempdir().context("failed to create temporary directory")?;
+    let (server, stop_tx) = spawn_server(
+        Command::new(
+            env::var("WASMCLOUD_NATS")
+                .as_deref()
+                .unwrap_or("nats-server"),
+        )
+        .args(["-js", "-V", "-T=false", "-p", &port.to_string(), "-sd"])
+        .arg(jetstream_dir.path()),
+    )
+    .await
+    .context("failed to start NATS")?;
+    Ok((server, stop_tx, url))
+}
+
+async fn assert_handle_http_request(
+    http_port: u16,
+    nats_client: async_nats::Client,
+    redis_client: &mut redis::Client,
+) -> anyhow::Result<()> {
+    let (mut nats_publish_sub, mut nats_request_sub, mut nats_request_multi_sub) = try_join!(
+        nats_client.subscribe("test-messaging-publish".into()),
+        nats_client.subscribe("test-messaging-request".into()),
+        nats_client.subscribe("test-messaging-request-multi".into()),
+    )
+    .context("failed to subscribe to NATS topics")?;
+
+    redis_client
+        .req_command(&redis::Cmd::set("foo", "bar"))
+        .context("failed to set `foo` key in Redis")?;
+
+    let nats_requests = spawn(async move {
+        let res = nats_request_sub
+            .next()
+            .await
+            .context("failed to receive NATS response to `request`")?;
+        ensure!(res.payload == "foo");
+        let reply = res.reply.context("no reply set on `request`")?;
+        nats_client
+            .publish(reply, "bar".into())
+            .await
+            .context("failed to publish response to `request`")?;
+
+        let res = nats_request_multi_sub
+            .next()
+            .await
+            .context("failed to receive NATS response to `request_multi`")?;
+        ensure!(res.payload == "foo");
+        let reply = res.reply.context("no reply on set `request_multi`")?;
+        nats_client
+            .publish(reply, "bar".into())
+            .await
+            .context("failed to publish response to `request_multi`")?;
+        Ok(())
+    });
+
+    let http_client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .connect_timeout(Duration::from_secs(20))
+        .build()
+        .context("failed to build HTTP client")?;
+    let http_res = http_client
+        .post(format!("http://localhost:{http_port}"))
+        .body(r#"{"min":42,"max":4242}"#)
+        .send()
+        .await
+        .context("failed to connect to server")?
+        .text()
+        .await
+        .context("failed to get response text")?;
+
+    // TODO: Instead of duplication here, reuse the same struct used in `wasmcloud-runtime` tests
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    // NOTE: If values are truly random, we have nothing to assert for some of these fields
+    struct Response {
+        #[allow(dead_code)]
+        get_random_bytes: [u8; 8],
+        #[allow(dead_code)]
+        get_random_u64: u64,
+        guid: String,
+        random_in_range: u32,
+        #[allow(dead_code)]
+        random_32: u32,
+    }
+    let Response {
+        get_random_bytes: _,
+        get_random_u64: _,
+        guid,
+        random_32: _,
+        random_in_range,
+    } = serde_json::from_str(&http_res).context("failed to decode body as JSON")?;
+    ensure!(Uuid::from_str(&guid).is_ok());
+    ensure!(
+        (42..=4242).contains(&random_in_range),
+        "{random_in_range} should have been within range from 42 to 4242 inclusive"
+    );
+    let nats_res = nats_publish_sub
+        .next()
+        .await
+        .context("failed to receive NATS response")?;
+    ensure!(nats_res.payload == http_res);
+    ensure!(nats_res.reply.as_deref() == Some("noreply"));
+
+    nats_requests
+        .await
+        .context("failed to await NATS request task")?
+        .context("failed to handle NATS requests")?;
+
+    let redis_keys = redis_client
+        .req_command(&redis::Cmd::keys("*"))
+        .context("failed to list keys in Redis")?;
+    let expected_redis_keys = redis::Value::Bulk(vec![redis::Value::Data(b"result".to_vec())]);
+    ensure!(
+        redis_keys == expected_redis_keys,
+        r#"invalid keys in Redis:
+got: {redis_keys:?}
+expected: {expected_redis_keys:?}"#
+    );
+
+    let redis_res = redis_client
+        .req_command(&redis::Cmd::get("result"))
+        .context("failed to get `result` key in Redis")?;
+    ensure!(redis_res == redis::Value::Data(http_res.into()));
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn wasmbus() -> anyhow::Result<()> {
     tracing_subscriber::registry()
@@ -197,48 +365,52 @@ async fn wasmbus() -> anyhow::Result<()> {
         )
         .init();
 
-    let nats_port = free_port().await?;
-    let ctl_nats_url = Url::parse(&format!("nats://localhost:{nats_port}"))
-        .context("failed to parse control NATS URL")?;
-    let jetstream_dir = tempdir().context("failed to create temporary directory")?;
-    let (nats_server, stop_nats_tx) = spawn_server(
-        Command::new(
-            env::var("WASMCLOUD_NATS")
-                .as_deref()
-                .unwrap_or("nats-server"),
-        )
-        .args(["-js", "-V", "-T=false", "-p", &nats_port.to_string(), "-sd"])
-        .arg(jetstream_dir.path()),
-    )
-    .await
-    .context("failed to start NATS")?;
-    let ctl_nats_client = async_nats::connect_with_options(
-        ctl_nats_url.as_str(),
-        async_nats::ConnectOptions::new().retry_on_initial_connect(),
-    )
-    .await
-    .context("failed to connect to NATS control server")?;
+    let (
+        (ctl_nats_server, ctl_stop_nats_tx, ctl_nats_url),
+        (component_nats_server, component_stop_nats_tx, component_nats_url),
+        (compat_nats_server, compat_stop_nats_tx, compat_nats_url),
+        (module_nats_server, module_stop_nats_tx, module_nats_url),
+    ) = try_join!(start_nats(), start_nats(), start_nats(), start_nats())?;
 
-    let nats_client = ctl_nats_client; // FIXME: we should be using separate NATS clients for CTL, RPC, and PROV_RPC
+    fn default_nats_connect_options() -> async_nats::ConnectOptions {
+        async_nats::ConnectOptions::new().retry_on_initial_connect()
+    }
 
-    let redis_port = free_port().await?;
-    let redis_url = Url::parse(&format!("redis://localhost:{redis_port}"))
-        .context("failed to parse Redis URL")?;
-    let (redis_server, stop_redis_tx) = spawn_server(
-        Command::new(
-            env::var("WASMCLOUD_REDIS")
-                .as_deref()
-                .unwrap_or("redis-server"),
+    let (ctl_nats_client, compat_nats_client, component_nats_client, module_nats_client) =
+        try_join!(
+            async_nats::connect_with_options(ctl_nats_url.as_str(), default_nats_connect_options()),
+            async_nats::connect_with_options(
+                compat_nats_url.as_str(),
+                default_nats_connect_options()
+            ),
+            async_nats::connect_with_options(
+                component_nats_url.as_str(),
+                default_nats_connect_options()
+            ),
+            async_nats::connect_with_options(
+                module_nats_url.as_str(),
+                default_nats_connect_options()
+            ),
         )
-        .args(["--port", &redis_port.to_string()]),
-    )
-    .await
-    .context("failed to start Redis")?;
-    let mut redis_client =
-        redis::Client::open(redis_url.as_str()).context("failed to connect to Redis")?;
+        .context("failed to connect to NATS")?;
+
+    // FIXME: we should be using separate NATS clients for CTL, RPC, and PROV_RPC
+
+    let (
+        (component_redis_server, component_stop_redis_tx, component_redis_url),
+        (compat_redis_server, compat_stop_redis_tx, compat_redis_url),
+        (module_redis_server, module_stop_redis_tx, module_redis_url),
+    ) = try_join!(start_redis(), start_redis(), start_redis(),)?;
+
+    let mut compat_redis_client =
+        redis::Client::open(compat_redis_url.as_str()).context("failed to connect to Redis")?;
+    let mut component_redis_client =
+        redis::Client::open(component_redis_url.as_str()).context("failed to connect to Redis")?;
+    let mut module_redis_client =
+        redis::Client::open(module_redis_url.as_str()).context("failed to connect to Redis")?;
 
     const TEST_PREFIX: &str = "test-prefix";
-    let ctl_client = ClientBuilder::new(nats_client.clone())
+    let ctl_client = ClientBuilder::new(ctl_nats_client.clone())
         .lattice_prefix(TEST_PREFIX.to_string())
         .build()
         .await
@@ -350,20 +522,43 @@ expected: {expected_labels:?}"#
         _ => bail!("more than two hosts in the lattice"),
     }
 
-    let actor = fs::read(test_actors::RUST_BUILTINS_COMPONENT_REACTOR_PREVIEW2_SIGNED)
-        .await
-        .context("failed to read actor")?;
+    let (component_actor, compat_actor, module_actor) = try_join!(
+        fs::read(test_actors::RUST_BUILTINS_COMPONENT_REACTOR_PREVIEW2_SIGNED),
+        fs::read(test_actors::RUST_BUILTINS_COMPAT_REACTOR_PREVIEW2_SIGNED),
+        fs::read(test_actors::RUST_BUILTINS_MODULE_REACTOR_SIGNED),
+    )
+    .context("failed to read actors")?;
+
     let jwt::Token {
-        claims: actor_claims,
+        claims: component_actor_claims,
         ..
-    } = extract_claims(actor)
-        .context("failed to extract actor claims")?
-        .context("actor claims missing")?;
-    let actor_url =
+    } = extract_claims(component_actor)
+        .context("failed to extract component actor claims")?
+        .context("component actor claims missing")?;
+    let jwt::Token {
+        claims: compat_actor_claims,
+        ..
+    } = extract_claims(compat_actor)
+        .context("failed to extract compat actor claims")?
+        .context("compat actor claims missing")?;
+    let jwt::Token {
+        claims: module_actor_claims,
+        ..
+    } = extract_claims(module_actor)
+        .context("failed to extract module actor claims")?
+        .context("module actor claims missing")?;
+
+    let component_actor_url =
         Url::from_file_path(test_actors::RUST_BUILTINS_COMPONENT_REACTOR_PREVIEW2_SIGNED)
-            .expect("failed to construct actor ref");
+            .expect("failed to construct component actor ref");
+    let compat_actor_url =
+        Url::from_file_path(test_actors::RUST_BUILTINS_COMPAT_REACTOR_PREVIEW2_SIGNED)
+            .expect("failed to construct compat actor ref");
+    let module_actor_url = Url::from_file_path(test_actors::RUST_BUILTINS_MODULE_REACTOR_SIGNED)
+        .expect("failed to construct module actor ref");
+
     let mut ack = ctl_client
-        .perform_actor_auction(actor_url.as_str(), HashMap::default())
+        .perform_actor_auction(component_actor_url.as_str(), HashMap::default())
         .await
         .map_err(|e| anyhow!(e).context("failed to perform actor auction"))?;
     ack.sort_unstable_by(|a, _b| {
@@ -388,26 +583,43 @@ expected: {expected_labels:?}"#
             [],
         ) => {
             ensure!(host_id == host_key.public_key());
-            ensure!(actor_ref == actor_url.as_str());
+            ensure!(actor_ref == component_actor_url.as_str());
             ensure!(constraints.is_empty());
             ensure!(host_id_two == host_key_two.public_key());
-            ensure!(actor_ref_two == actor_url.as_str());
+            ensure!(actor_ref_two == component_actor_url.as_str());
             ensure!(constraints_two.is_empty());
         }
         (_, _, []) => bail!("not enough actor auction acks received"),
         _ => bail!("more than two actor auction acks received"),
     }
 
-    assert_start_actor(
-        &ctl_client,
-        &nats_client,
-        TEST_PREFIX,
-        &host_key,
-        &actor_url,
-        1,
+    try_join!(
+        assert_start_actor(
+            &ctl_client,
+            &ctl_nats_client,
+            TEST_PREFIX,
+            &host_key,
+            &component_actor_url,
+            1,
+        ),
+        assert_start_actor(
+            &ctl_client,
+            &ctl_nats_client,
+            TEST_PREFIX,
+            &host_key,
+            &compat_actor_url,
+            1,
+        ),
+        assert_start_actor(
+            &ctl_client,
+            &ctl_nats_client,
+            TEST_PREFIX,
+            &host_key,
+            &module_actor_url,
+            1,
+        ),
     )
-    .await
-    .context("failed to start actor")?;
+    .context("failed to start actors")?;
 
     let httpserver_provider_key = KeyPair::from_seed(test_providers::RUST_HTTPSERVER_SUBJECT)
         .context("failed to parse `rust-httpserver` provider key")?;
@@ -465,7 +677,8 @@ expected: {expected_labels:?}"#
         _ => bail!("more than two provider auction acks received"),
     }
 
-    let http_port = free_port().await?;
+    let (component_http_port, compat_http_port, module_http_port) =
+        try_join!(free_port(), free_port(), free_port())?;
 
     // NOTE: Links are advertised before the provider is started to prevent race condition, which
     // occurs if link is established after the providers starts, but before it subscribes to NATS
@@ -473,32 +686,101 @@ expected: {expected_labels:?}"#
     try_join!(
         assert_advertise_link(
             &ctl_client,
-            &actor_claims,
+            &compat_actor_claims,
             &httpserver_provider_key,
             "wasmcloud:httpserver",
             "httpserver",
             HashMap::from([(
                 "config_json".into(),
-                format!(r#"{{"address":"[{}]:{http_port}"}}"#, Ipv6Addr::UNSPECIFIED)
+                format!(
+                    r#"{{"address":"[{}]:{compat_http_port}"}}"#,
+                    Ipv6Addr::UNSPECIFIED
+                )
             )]),
         ),
         assert_advertise_link(
             &ctl_client,
-            &actor_claims,
-            &kvredis_provider_key,
-            "wasmcloud:keyvalue",
-            "keyvalue",
-            HashMap::from([("URL".into(), format!("{redis_url}"))]),
+            &component_actor_claims,
+            &httpserver_provider_key,
+            "wasmcloud:httpserver",
+            "httpserver",
+            HashMap::from([(
+                "config_json".into(),
+                format!(
+                    r#"{{"address":"[{}]:{component_http_port}"}}"#,
+                    Ipv6Addr::UNSPECIFIED
+                )
+            )]),
         ),
         assert_advertise_link(
             &ctl_client,
-            &actor_claims,
+            &module_actor_claims,
+            &httpserver_provider_key,
+            "wasmcloud:httpserver",
+            "httpserver",
+            HashMap::from([(
+                "config_json".into(),
+                format!(
+                    r#"{{"address":"[{}]:{module_http_port}"}}"#,
+                    Ipv6Addr::UNSPECIFIED
+                )
+            )]),
+        ),
+        assert_advertise_link(
+            &ctl_client,
+            &compat_actor_claims,
+            &kvredis_provider_key,
+            "wasmcloud:keyvalue",
+            "keyvalue",
+            HashMap::from([("URL".into(), format!("{compat_redis_url}"))]),
+        ),
+        assert_advertise_link(
+            &ctl_client,
+            &component_actor_claims,
+            &kvredis_provider_key,
+            "wasmcloud:keyvalue",
+            "keyvalue",
+            HashMap::from([("URL".into(), format!("{component_redis_url}"))]),
+        ),
+        assert_advertise_link(
+            &ctl_client,
+            &module_actor_claims,
+            &kvredis_provider_key,
+            "wasmcloud:keyvalue",
+            "keyvalue",
+            HashMap::from([("URL".into(), format!("{module_redis_url}"))]),
+        ),
+        assert_advertise_link(
+            &ctl_client,
+            &compat_actor_claims,
             &nats_provider_key,
             "wasmcloud:messaging",
             "messaging",
             HashMap::from([(
                 "config_json".into(),
-                format!(r#"{{"cluster_uris":["{ctl_nats_url}"]}}"#)
+                format!(r#"{{"cluster_uris":["{compat_nats_url}"]}}"#)
+            )]),
+        ),
+        assert_advertise_link(
+            &ctl_client,
+            &component_actor_claims,
+            &nats_provider_key,
+            "wasmcloud:messaging",
+            "messaging",
+            HashMap::from([(
+                "config_json".into(),
+                format!(r#"{{"cluster_uris":["{component_nats_url}"]}}"#)
+            )]),
+        ),
+        assert_advertise_link(
+            &ctl_client,
+            &module_actor_claims,
+            &nats_provider_key,
+            "wasmcloud:messaging",
+            "messaging",
+            HashMap::from([(
+                "config_json".into(),
+                format!(r#"{{"cluster_uris":["{module_nats_url}"]}}"#)
             )]),
         )
     )
@@ -507,7 +789,7 @@ expected: {expected_labels:?}"#
     try_join!(
         assert_start_provider(
             &ctl_client,
-            &nats_client,
+            &ctl_nats_client,
             TEST_PREFIX,
             &host_key,
             &httpserver_provider_key,
@@ -517,7 +799,7 @@ expected: {expected_labels:?}"#
         ),
         assert_start_provider(
             &ctl_client,
-            &nats_client,
+            &ctl_nats_client,
             TEST_PREFIX,
             &host_key,
             &kvredis_provider_key,
@@ -527,7 +809,7 @@ expected: {expected_labels:?}"#
         ),
         assert_start_provider(
             &ctl_client,
-            &nats_client,
+            &ctl_nats_client,
             TEST_PREFIX,
             &host_key_two,
             &nats_provider_key,
@@ -540,14 +822,14 @@ expected: {expected_labels:?}"#
 
     // since ctl_client was created before the host, and therefore before the lattice data
     // bucket, the client will have fallen back to querying the host for lattice data
-    let mut claims_from_host = ctl_client
+    let GetClaimsResponse {
+        claims: mut claims_from_host,
+    } = ctl_client
         .get_claims()
         .await
-        .map_err(|e| anyhow!(e).context("failed to query claims"))?
-        .claims;
+        .map_err(|e| anyhow!(e).context("failed to query claims"))?;
     claims_from_host.sort_by(|a, b| a.get("sub").unwrap().cmp(b.get("sub").unwrap()));
-
-    ensure!(claims_from_host.len() == 4); // 3 providers, 1 actor
+    ensure!(claims_from_host.len() == 6); // 3 providers, 3 actors
 
     let mut links_from_host = ctl_client
         .query_links()
@@ -562,20 +844,21 @@ expected: {expected_labels:?}"#
         unequal => unequal,
     });
 
-    ensure!(links_from_host.len() == 3);
+    ensure!(links_from_host.len() == 9);
 
     // recreate the ctl_client, which should now use the KV bucket directly
-    let ctl_client = ClientBuilder::new(nats_client.clone())
+    let ctl_client = ClientBuilder::new(ctl_nats_client.clone())
         .lattice_prefix(TEST_PREFIX.to_string())
         .build()
         .await
         .map_err(|e| anyhow!(e).context("failed to build control interface client"))?;
 
-    let mut claims_from_bucket = ctl_client
+    let GetClaimsResponse {
+        claims: mut claims_from_bucket,
+    } = ctl_client
         .get_claims()
         .await
-        .map_err(|e| anyhow!(e).context("failed to query claims"))?
-        .claims;
+        .map_err(|e| anyhow!(e).context("failed to query claims"))?;
     claims_from_bucket.sort_by(|a, b| a.get("sub").unwrap().cmp(b.get("sub").unwrap()));
 
     let mut links_from_bucket = ctl_client
@@ -583,7 +866,6 @@ expected: {expected_labels:?}"#
         .await
         .map_err(|e| anyhow!(e).context("failed to query claims"))?
         .links;
-
     links_from_bucket.sort_by(|a, b| match a.actor_id.cmp(&b.actor_id) {
         std::cmp::Ordering::Equal => match a.provider_id.cmp(&b.provider_id) {
             std::cmp::Ordering::Equal => a.link_name.cmp(&b.link_name),
@@ -638,45 +920,127 @@ expected: {expected_labels:?}"#
 got: {labels:?}
 expected: {expected_labels:?}"#
     );
-    match (actors.pop(), actors.as_slice()) {
+    actors.sort_by(|a, b| b.name.cmp(&a.name));
+    match (actors.pop(), actors.pop(), actors.pop(), actors.as_slice()) {
         (
             Some(ActorDescription {
-                id,
-                image_ref,
-                mut instances,
-                name,
+                id: compat_id,
+                image_ref: compat_image_ref,
+                instances: mut compat_instances,
+                name: compat_name,
+            }),
+            Some(ActorDescription {
+                id: component_id,
+                image_ref: component_image_ref,
+                instances: mut component_instances,
+                name: component_name,
+            }),
+            Some(ActorDescription {
+                id: module_id,
+                image_ref: module_image_ref,
+                instances: mut module_instances,
+                name: module_name,
             }),
             [],
         ) => {
             // TODO: Validate `constraints`
-            ensure!(id == actor_claims.subject);
+            ensure!(compat_id == compat_actor_claims.subject);
             let jwt::Actor {
                 name: expected_name,
                 rev: expected_revision,
                 ..
-            } = actor_claims
+            } = compat_actor_claims
                 .metadata
                 .as_ref()
-                .context("missing actor metadata")?;
-            ensure!(image_ref == Some(actor_url.to_string()));
+                .context("missing compat actor metadata")?;
+            ensure!(compat_image_ref == Some(compat_actor_url.to_string()));
             ensure!(
-                name == *expected_name,
-                r#"invalid name:
-got: {name:?}
+                compat_name == *expected_name,
+                r#"invalid compat actor name:
+got: {compat_name:?}
 expected: {expected_name:?}"#
             );
             let ActorInstance {
                 annotations,
                 instance_id,
                 revision,
-            } = instances.pop().context("no actor instances found")?;
-            ensure!(instances.is_empty(), "more than one actor instance found");
+            } = compat_instances
+                .pop()
+                .context("no compat actor instances found")?;
+            ensure!(
+                compat_instances.is_empty(),
+                "more than one compat actor instance found"
+            );
+            ensure!(annotations == None);
+            ensure!(Uuid::parse_str(&instance_id).is_ok());
+            ensure!(revision == expected_revision.unwrap_or_default());
+
+            // TODO: Validate `constraints`
+            ensure!(component_id == component_actor_claims.subject);
+            let jwt::Actor {
+                name: expected_name,
+                rev: expected_revision,
+                ..
+            } = component_actor_claims
+                .metadata
+                .as_ref()
+                .context("missing component actor metadata")?;
+            ensure!(component_image_ref == Some(component_actor_url.to_string()));
+            ensure!(
+                component_name == *expected_name,
+                r#"invalid component actor name:
+got: {component_name:?}
+expected: {expected_name:?}"#
+            );
+            let ActorInstance {
+                annotations,
+                instance_id,
+                revision,
+            } = component_instances
+                .pop()
+                .context("no component actor instances found")?;
+            ensure!(
+                component_instances.is_empty(),
+                "more than one component actor instance found"
+            );
+            ensure!(annotations == None);
+            ensure!(Uuid::parse_str(&instance_id).is_ok());
+            ensure!(revision == expected_revision.unwrap_or_default());
+
+            // TODO: Validate `constraints`
+            ensure!(module_id == module_actor_claims.subject);
+            let jwt::Actor {
+                name: expected_name,
+                rev: expected_revision,
+                ..
+            } = module_actor_claims
+                .metadata
+                .as_ref()
+                .context("missing module actor metadata")?;
+            ensure!(module_image_ref == Some(module_actor_url.to_string()));
+            ensure!(
+                module_name == *expected_name,
+                r#"invalid module actor name:
+got: {module_name:?}
+expected: {expected_name:?}"#
+            );
+            let ActorInstance {
+                annotations,
+                instance_id,
+                revision,
+            } = module_instances
+                .pop()
+                .context("no module actor instances found")?;
+            ensure!(
+                module_instances.is_empty(),
+                "more than one module actor instance found"
+            );
             ensure!(annotations == None);
             ensure!(Uuid::parse_str(&instance_id).is_ok());
             ensure!(revision == expected_revision.unwrap_or_default());
         }
-        (None, []) => bail!("no actor found"),
-        _ => bail!("more than one actor found"),
+        (None, None, None, []) => bail!("no actor found"),
+        _ => bail!("more than three actors found"),
     }
     providers.sort_unstable_by(|a, b| b.name.cmp(&a.name));
     match (providers.pop(), providers.pop(), providers.as_slice()) {
@@ -722,10 +1086,7 @@ expected: {expected_name:?}"#
 got: {labels:?}
 expected: {expected_labels:?}"#
     );
-    match actors.as_slice() {
-        [] => (),
-        _ => bail!("actors found"),
-    }
+    ensure!(actors.is_empty());
     match (providers.pop(), providers.as_slice()) {
         (Some(nats), []) => {
             // TODO: Validate `constraints`
@@ -740,122 +1101,88 @@ expected: {expected_labels:?}"#
         _ => bail!("invalid provider count"),
     }
 
-    let (mut nats_publish_sub, mut nats_request_sub, mut nats_request_multi_sub) = try_join!(
-        nats_client.subscribe("test-messaging-publish".into()),
-        nats_client.subscribe("test-messaging-request".into()),
-        nats_client.subscribe("test-messaging-request-multi".into()),
-    )
-    .context("failed to subscribe to NATS topics")?;
-
-    redis_client
-        .req_command(&redis::Cmd::set("foo", "bar"))
-        .context("failed to set `foo` key in Redis")?;
-
-    let nats_requests = spawn(async move {
-        let res = nats_request_sub
-            .next()
+    try_join!(
+        async {
+            assert_handle_http_request(
+                compat_http_port,
+                compat_nats_client.clone(),
+                &mut compat_redis_client,
+            )
             .await
-            .context("failed to receive NATS response to `request`")?;
-        ensure!(res.payload == "foo");
-        let reply = res.reply.context("no reply set on `request`")?;
-        nats_client
-            .publish(reply, "bar".into())
+            .context("compat actor test failed")
+        },
+        async {
+            assert_handle_http_request(
+                component_http_port,
+                component_nats_client.clone(),
+                &mut component_redis_client,
+            )
             .await
-            .context("failed to publish response to `request`")?;
-
-        let res = nats_request_multi_sub
-            .next()
+            .context("component actor test failed")
+        },
+        async {
+            assert_handle_http_request(
+                module_http_port,
+                module_nats_client.clone(),
+                &mut module_redis_client,
+            )
             .await
-            .context("failed to receive NATS response to `request_multi`")?;
-        ensure!(res.payload == "foo");
-        let reply = res.reply.context("no reply on set `request_multi`")?;
-        nats_client
-            .publish(reply, "bar".into())
-            .await
-            .context("failed to publish response to `request_multi`")?;
-        Ok(())
-    });
-
-    let http_client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(20))
-        .connect_timeout(Duration::from_secs(20))
-        .build()
-        .context("failed to build HTTP client")?;
-    let http_res = http_client
-        .post(format!("http://localhost:{http_port}"))
-        .body(r#"{"min":42,"max":4242}"#)
-        .send()
-        .await
-        .context("failed to connect to server")?
-        .text()
-        .await
-        .context("failed to get response text")?;
-
-    // TODO: Instead of duplication here, reuse the same struct used in `wasmcloud-runtime` tests
-    #[derive(Deserialize)]
-    #[serde(deny_unknown_fields)]
-    // NOTE: If values are truly random, we have nothing to assert for some of these fields
-    struct Response {
-        #[allow(dead_code)]
-        get_random_bytes: [u8; 8],
-        #[allow(dead_code)]
-        get_random_u64: u64,
-        guid: String,
-        random_in_range: u32,
-        #[allow(dead_code)]
-        random_32: u32,
-    }
-    let Response {
-        get_random_bytes: _,
-        get_random_u64: _,
-        guid,
-        random_32: _,
-        random_in_range,
-    } = serde_json::from_str(&http_res).context("failed to decode body as JSON")?;
-    ensure!(Uuid::from_str(&guid).is_ok());
-    ensure!(
-        (42..=4242).contains(&random_in_range),
-        "{random_in_range} should have been within range from 42 to 4242 inclusive"
-    );
-    let nats_res = nats_publish_sub
-        .next()
-        .await
-        .context("failed to receive NATS response")?;
-    ensure!(nats_res.payload == http_res);
-    ensure!(nats_res.reply.as_deref() == Some("noreply"));
-
-    nats_requests
-        .await
-        .context("failed to await NATS request task")?
-        .context("failed to handle NATS requests")?;
-
-    let redis_keys = redis_client
-        .req_command(&redis::Cmd::keys("*"))
-        .context("failed to list keys in Redis")?;
-    let expected_redis_keys = redis::Value::Bulk(vec![redis::Value::Data(b"result".to_vec())]);
-    ensure!(
-        redis_keys == expected_redis_keys,
-        r#"invalid keys in Redis:
-got: {redis_keys:?}
-expected: {expected_redis_keys:?}"#
-    );
-
-    let redis_res = redis_client
-        .req_command(&redis::Cmd::get("result"))
-        .context("failed to get `result` key in Redis")?;
-    ensure!(redis_res == redis::Value::Data(http_res.into()));
+            .context("module actor test failed")
+        },
+    )?;
 
     try_join!(
         assert_remove_link(
             &ctl_client,
-            &actor_claims,
+            &compat_actor_claims,
             "wasmcloud:messaging",
             "messaging",
         ),
-        assert_remove_link(&ctl_client, &actor_claims, "wasmcloud:keyvalue", "keyvalue"),
         assert_remove_link(
             &ctl_client,
-            &actor_claims,
+            &component_actor_claims,
+            "wasmcloud:messaging",
+            "messaging",
+        ),
+        assert_remove_link(
+            &ctl_client,
+            &module_actor_claims,
+            "wasmcloud:messaging",
+            "messaging",
+        ),
+        assert_remove_link(
+            &ctl_client,
+            &compat_actor_claims,
+            "wasmcloud:keyvalue",
+            "keyvalue"
+        ),
+        assert_remove_link(
+            &ctl_client,
+            &component_actor_claims,
+            "wasmcloud:keyvalue",
+            "keyvalue"
+        ),
+        assert_remove_link(
+            &ctl_client,
+            &module_actor_claims,
+            "wasmcloud:keyvalue",
+            "keyvalue"
+        ),
+        assert_remove_link(
+            &ctl_client,
+            &compat_actor_claims,
+            "wasmcloud:httpserver",
+            "httpserver"
+        ),
+        assert_remove_link(
+            &ctl_client,
+            &component_actor_claims,
+            "wasmcloud:httpserver",
+            "httpserver"
+        ),
+        assert_remove_link(
+            &ctl_client,
+            &module_actor_claims,
             "wasmcloud:httpserver",
             "httpserver"
         ),
@@ -884,17 +1211,16 @@ expected: {expected_redis_keys:?}"#
     let _ = host_two.stopped().await;
     shutdown_two.await.context("failed to shutdown host")?;
 
-    stop_nats_tx.send(()).expect("failed to stop NATS");
-    let nats_status = nats_server
-        .await
-        .context("failed to wait for NATS to exit")??;
-    ensure!(nats_status.code().is_none());
-
-    stop_redis_tx.send(()).expect("failed to stop Redis");
-    let redis_status = redis_server
-        .await
-        .context("failed to wait for Redis to exit")??;
-    ensure!(redis_status.code().is_none());
+    try_join!(
+        stop_server(ctl_nats_server, ctl_stop_nats_tx),
+        stop_server(compat_nats_server, compat_stop_nats_tx),
+        stop_server(component_nats_server, component_stop_nats_tx),
+        stop_server(module_nats_server, module_stop_nats_tx),
+        stop_server(compat_redis_server, compat_stop_redis_tx),
+        stop_server(component_redis_server, component_stop_redis_tx),
+        stop_server(module_redis_server, module_stop_redis_tx),
+    )
+    .context("failed to stop servers")?;
 
     Ok(())
 }

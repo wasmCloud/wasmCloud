@@ -396,6 +396,7 @@ async fn main() -> anyhow::Result<()> {
             .with_metadata(jwt::Actor {
                 name: Some(name.into()),
                 caps,
+                call_alias: Some(name.into()),
                 ..Default::default()
             })
             .build();
