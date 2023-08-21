@@ -4515,7 +4515,7 @@ dependencies = [
  "wasi-common",
  "wasmcloud-actor",
  "wasmcloud-compat",
- "wasmparser 0.110.0",
+ "wasmparser 0.111.0",
  "wasmtime",
  "wasmtime-wasi",
 ]
