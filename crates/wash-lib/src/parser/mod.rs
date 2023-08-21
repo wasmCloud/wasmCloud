@@ -70,6 +70,8 @@ struct RawActorConfig {
     pub filename: Option<String>,
     /// The target wasm target to build for. Defaults to "wasm32-unknown-unknown".
     pub wasm_target: Option<String>,
+    /// Path to a wasm adapter that can be used for preview2
+    pub wasi_preview2_adapter_path: Option<PathBuf>,
     /// The call alias of the actor. Defaults to no alias.
     pub call_alias: Option<String>,
 }
@@ -90,7 +92,7 @@ impl TryFrom<RawActorConfig> for ActorConfig {
                 .wasm_target
                 .map(WasmTarget::from)
                 .unwrap_or_default(),
-            wasi_preview2_adapter_path: None,
+            wasi_preview2_adapter_path: raw_config.wasi_preview2_adapter_path,
             call_alias: raw_config.call_alias,
         })
     }
