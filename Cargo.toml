@@ -130,7 +130,7 @@ wasmcloud-component-adapters = { git = "https://github.com/wasmCloud/wasmcloud-c
 wasmcloud-control-interface = { version = "0.28", default-features = false }
 wasmcloud-host = { path = "./crates/host" }
 wasmcloud-runtime = { path = "./crates/runtime" }
-wasmparser = { version = "0.110", default-features = false }
+wasmparser = { version = "0.111", default-features = false }
 wasmtime = { version = "11", default-features = false }
 wasmtime-component-macro = { version = "11.0.1", default-features = false }
 wasmtime-wasi = { version = "11", default-features = false }
