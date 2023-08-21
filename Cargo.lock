@@ -4476,9 +4476,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-encoder"
-version = "0.31.0"
+version = "0.31.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "06a3d1b4a575ffb873679402b2aedb3117555eb65c27b1b86c8a91e574bc2a2a"
+checksum = "41763f20eafed1399fff1afb466496d3a959f58241436cfdc17e3f5ca954de16"
 dependencies = [
  "leb128",
 ]
@@ -4495,17 +4495,17 @@ dependencies = [
 
 [[package]]
 name = "wasm-metadata"
-version = "0.10.0"
+version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eb85334398ff45293a2363baf031c959e19c4e1a95929aacefdceb95c1bc7f60"
+checksum = "7ac8d3bcbbb5081489f35966b86d127596e9cdacfb3824b79f43344662226178"
 dependencies = [
  "anyhow",
  "indexmap 2.0.0",
  "serde",
  "serde_json",
  "spdx",
- "wasm-encoder 0.31.0",
- "wasmparser 0.109.0",
+ "wasm-encoder 0.31.1",
+ "wasmparser 0.111.0",
 ]
 
 [[package]]
@@ -4667,9 +4667,9 @@ dependencies = [
 
 [[package]]
 name = "wasmparser"
-version = "0.109.0"
+version = "0.111.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8bf9564f29de2890ee34406af52d2a92dec6ef044c8ddfc5add5db8dcfd36e6c"
+checksum = "ad71036aada3f6b09251546e97e4f4f176dd6b41cf6fa55e7e0f65e86aec319a"
 dependencies = [
  "indexmap 2.0.0",
  "semver",
@@ -4937,25 +4937,25 @@ dependencies = [
 
 [[package]]
 name = "wit-component"
-version = "0.13.0"
+version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b2ba1f13b1762d1995046790e18f283b38da19ff82505283d97a29b3914c8b5"
+checksum = "4a9eb6179c5a26adc38fa5a22e263e7a3812c6777ca2e75d1717fd3789f82b64"
 dependencies = [
  "anyhow",
  "bitflags 2.3.3",
  "indexmap 2.0.0",
  "log",
- "wasm-encoder 0.31.0",
+ "wasm-encoder 0.31.1",
  "wasm-metadata",
- "wasmparser 0.109.0",
+ "wasmparser 0.111.0",
  "wit-parser",
 ]
 
 [[package]]
 name = "wit-parser"
-version = "0.9.1"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "93b5016f1dc64a1e7ffae43731381549b7846904e3ae9765fac464c4884caa94"
+checksum = "c8d6926af931f285e206ea71f9b67681f00a65d79097f81da7f9f285de006ba2"
 dependencies = [
  "anyhow",
  "id-arena",
