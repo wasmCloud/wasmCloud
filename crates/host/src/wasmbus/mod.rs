@@ -46,7 +46,7 @@ use tokio_stream::wrappers::IntervalStream;
 use tracing::{debug, error, info, instrument, trace, warn};
 use ulid::Ulid;
 use uuid::Uuid;
-use wascap::jwt;
+use wascap::{jwt, prelude::Claims};
 use wasmcloud_control_interface::{
     ActorAuctionAck, ActorAuctionRequest, ActorDescription, HostInventory, LinkDefinition,
     LinkDefinitionList, ProviderAuctionRequest, ProviderDescription, RegistryCredential,
@@ -202,6 +202,10 @@ struct ActorInstance {
     calls: AbortHandle,
     runtime: Runtime,
     handler: Handler,
+    /// Claims for this actor instance
+    claims: jwt::Claims<jwt::Actor>,
+    /// Cluster issuers that this actor should accept invocations from
+    valid_issuers: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -237,7 +241,7 @@ impl WasmCloudEntity {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct Invocation {
     origin: WasmCloudEntity,
     target: WasmCloudEntity,
@@ -266,13 +270,24 @@ fn invocation_hash(
 }
 
 impl Invocation {
-    /// Creates a new invocation. All invocations are signed with the host key as a way
-    /// of preventing them from being forged over the network when connected to a lattice,
-    /// so an invocation requires a reference to the host (signing) key
+    /// Creates a new invocation. All invocations are signed with the cluster key as a way
+    /// of preventing them from being forged over the network when connected to a lattice, and
+    /// allows hosts to validate that the invocation is coming from a trusted source.
+    ///
+    /// # Arguments
+    /// * `links` - a map of package name to target name to entity, used internally to disambiguate
+    ///            between multiple links to the same provider or for actor-to-actor calls.
+    /// * `cluster_key` - the cluster key used to sign the invocation
+    /// * `host_key` - the host key of the host that is creating the invocation
+    /// * `origin` - the origin of the invocation
+    /// * `target` - the target of the invocation
+    /// * `operation` - the operation being invoked
+    /// * `msg` - the raw bytes of the invocation
     pub fn new(
         // package -> target -> entity
         links: &HashMap<String, HashMap<String, WasmCloudEntity>>,
-        hostkey: &KeyPair,
+        cluster_key: &KeyPair,
+        host_key: &KeyPair,
         origin: WasmCloudEntity,
         target: Option<&TargetEntity>,
         operation: impl Into<String>,
@@ -307,16 +322,17 @@ impl Invocation {
         };
         // TODO: Support per-interface links
         let id = Uuid::from_u128(Ulid::new().into()).to_string();
-        let host_id = hostkey.public_key();
         let target_url = format!("{}/{operation}", target.url());
         let claims = jwt::Claims::<jwt::Invocation>::new(
-            host_id.to_string(),
+            cluster_key.public_key(),
             id.to_string(),
             &target_url,
             &origin.url(),
             &invocation_hash(&target_url, origin.url(), operation, &msg),
         );
-        let encoded_claims = claims.encode(hostkey).context("failed to encode claims")?;
+        let encoded_claims = claims
+            .encode(cluster_key)
+            .context("failed to encode claims")?;
 
         let operation = operation.to_string();
         Ok(Invocation {
@@ -327,8 +343,83 @@ impl Invocation {
             msg,
             id,
             encoded_claims,
-            host_id,
+            host_id: host_key.public_key(),
         })
+    }
+
+    /// A fully-qualified URL indicating the origin of the invocation
+    pub fn origin_url(&self) -> String {
+        self.origin.url()
+    }
+
+    /// A fully-qualified URL indicating the target of the invocation
+    pub fn target_url(&self) -> String {
+        format!("{}/{}", self.target.url(), self.operation)
+    }
+
+    /// The hash of the invocation's target, origin, and raw bytes
+    pub fn hash(&self) -> String {
+        invocation_hash(
+            self.target_url(),
+            self.origin_url(),
+            &self.operation,
+            &self.msg,
+        )
+    }
+
+    /// Validates the current invocation to ensure that the invocation claims have
+    /// not been forged, are not expired, etc
+    pub fn validate_antiforgery(&self, valid_issuers: &[String]) -> anyhow::Result<()> {
+        match KeyPair::from_public_key(&self.host_id) {
+            Ok(kp) if kp.key_pair_type() == KeyPairType::Server => (),
+            _ => bail!("invalid host ID on invocation: '{}'", self.host_id),
+        }
+
+        let token_validation =
+            jwt::validate_token::<wascap::prelude::Invocation>(&self.encoded_claims)
+                .map_err(|e| anyhow!(e))?;
+        ensure!(!token_validation.expired, "invocation claims token expired");
+        ensure!(
+            !token_validation.cannot_use_yet,
+            "attempt to use invocation before claims token allows"
+        );
+        ensure!(
+            token_validation.signature_valid,
+            "invocation claims signature invalid"
+        );
+
+        let claims = Claims::<wascap::prelude::Invocation>::decode(&self.encoded_claims)
+            .map_err(|e| anyhow!(e))?;
+        ensure!(
+            valid_issuers.contains(&claims.issuer),
+            "issuer of this invocation is not among the list of valid issuers"
+        );
+
+        let inv_claims = claims
+            .metadata
+            .context("no wascap metadata found on claims")?;
+        ensure!(
+            inv_claims.target_url == self.target_url(),
+            "invocation claims and invocation target URL do not match"
+        );
+        ensure!(
+            inv_claims.origin_url == self.origin_url(),
+            "invocation claims and invocation origin URL do not match"
+        );
+
+        // Don't perform the hash validity test when the body has been externalized
+        // via object store. This is an optimization that helps us not have to run
+        // through the same set of bytes twice. The object store internals have their
+        // own hash mechanisms so we'll know the chunked bytes haven't been manipulated
+        if !self.msg.is_empty() && inv_claims.invocation_hash != self.hash() {
+            bail!(
+                "invocation hash does not match signed claims hash ({} / {})",
+                inv_claims.invocation_hash,
+                self.hash()
+            );
+        }
+
+        Ok(())
     }
 }
 
@@ -357,6 +448,8 @@ struct Handler {
     nats: async_nats::Client,
     lattice_prefix: String,
     cluster_key: Arc<KeyPair>,
+    host_key: Arc<KeyPair>,
+    claims: jwt::Claims<jwt::Actor>,
     origin: WasmCloudEntity,
     // package -> target -> entity
     links: Arc<RwLock<HashMap<String, HashMap<String, WasmCloudEntity>>>>,
@@ -375,10 +468,17 @@ impl Handler {
         let invocation = Invocation::new(
             &links,
             &self.cluster_key,
+            &self.host_key,
             self.origin.clone(),
             target,
             operation,
             request,
+        )?;
+
+        // Validate that the actor has the capability to call the target
+        ensure_actor_capability(
+            self.claims.metadata.as_ref(),
+            &invocation.target.contract_id,
         )?;
         let request =
             rmp_serde::to_vec_named(&invocation).context("failed to encode invocation")?;
@@ -487,6 +587,8 @@ impl Bus for Handler {
         let lattice_prefix = self.lattice_prefix.clone();
         let origin = self.origin.clone();
         let cluster_key = self.cluster_key.clone();
+        let host_key = self.host_key.clone();
+        let claims_metadata = self.claims.metadata.clone();
         Ok((
             async move {
                 // TODO: Stream data
@@ -500,12 +602,18 @@ impl Bus for Handler {
                 let invocation = Invocation::new(
                     &links,
                     &cluster_key,
+                    &host_key,
                     origin,
                     target.as_ref(),
                     operation,
                     request,
                 )
                 .map_err(|e| e.to_string())?;
+
+                // Validate that the actor has the capability to call the target
+                ensure_actor_capability(claims_metadata.as_ref(), &invocation.target.contract_id)
+                    .map_err(|e| e.to_string())?;
+
                 let request = rmp_serde::to_vec_named(&invocation)
                     .context("failed to encode invocation")
                     .map_err(|e| e.to_string())?;
@@ -807,6 +915,9 @@ impl ActorInstance {
         operation: &str,
         msg: Vec<u8>,
     ) -> anyhow::Result<Result<Vec<u8>, String>> {
+        // Validate that the actor has the capability to receive the invocation
+        ensure_actor_capability(self.claims.metadata.as_ref(), contract_id)?;
+
         let mut instance = self
             .pool
             .instantiate(self.runtime.clone())
@@ -863,19 +974,19 @@ impl ActorInstance {
 
     #[instrument(skip(self, payload))]
     async fn handle_call(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
-        let Invocation {
-            origin,
-            target,
-            operation,
-            msg,
-            id: invocation_id,
-            ..
-        } = rmp_serde::from_slice(payload.as_ref()).context("failed to decode invocation")?;
+        let invocation: Invocation =
+            rmp_serde::from_slice(payload.as_ref()).context("failed to decode invocation")?;
 
-        debug!(?origin, ?target, operation, "handle actor invocation");
+        debug!(?invocation.origin, ?invocation.target, invocation.operation, "validate actor invocation");
+        invocation.validate_antiforgery(&self.valid_issuers)?;
 
+        debug!(?invocation.origin, ?invocation.target, invocation.operation, "handle actor invocation");
         let res = match self
-            .handle_invocation(&origin.contract_id, &operation, msg)
+            .handle_invocation(
+                &invocation.origin.contract_id,
+                &invocation.operation,
+                invocation.msg,
+            )
             .await
             .context("failed to handle invocation")?
         {
@@ -883,13 +994,13 @@ impl ActorInstance {
                 let content_length = msg.len().try_into().ok();
                 InvocationResponse {
                     msg,
-                    invocation_id,
+                    invocation_id: invocation.id,
                     content_length,
                     ..Default::default()
                 }
             }
             Err(e) => InvocationResponse {
-                invocation_id,
+                invocation_id: invocation.id,
                 error: Some(e),
                 ..Default::default()
             },
@@ -1538,6 +1649,7 @@ impl Host {
         .then(|topic| {
             let pool = pool.clone();
             let handler = handler.clone();
+            let claims = claims.clone();
             async move {
                 let calls = self
                     .rpc_nats
@@ -1554,6 +1666,8 @@ impl Host {
                     calls: calls_abort,
                     runtime: self.runtime.clone(),
                     handler: handler.clone(),
+                    claims: claims.clone(),
+                    valid_issuers: self.host_config.cluster_issuers.clone().unwrap_or_default(),
                 });
 
                 let _calls = spawn({
@@ -1567,7 +1681,7 @@ impl Host {
                 self.publish_event(
                     "actor_started",
                     event::actor_started(
-                        claims,
+                        &claims,
                         annotations,
                         Uuid::from_u128(id.into()),
                         actor_ref,
@@ -1582,7 +1696,7 @@ impl Host {
         .context("failed to instantiate actor")?;
         self.publish_event(
             "actors_started",
-            event::actors_started(claims, annotations, host_id, count, actor_ref),
+            event::actors_started(&claims, annotations, host_id, count, actor_ref),
         )
         .await?;
         Ok(instances)
@@ -1681,14 +1795,16 @@ impl Host {
             lattice_prefix: self.host_config.lattice_prefix.clone(),
             origin,
             cluster_key: Arc::clone(&self.cluster_key),
+            claims: claims.clone(),
             links: Arc::new(RwLock::new(links)),
             targets: Arc::new(RwLock::default()),
+            host_key: Arc::clone(&self.host_key),
         };
 
         let pool = ActorInstancePool::new(actor.clone(), Some(count));
         let instances = self
             .instantiate_actor(
-                claims,
+                &claims,
                 &annotations,
                 host_id,
                 &actor_ref,
@@ -1887,7 +2003,7 @@ impl Host {
                 if let Some(delta) = count.checked_sub(current).and_then(NonZeroUsize::new) {
                     let mut delta = self
                         .instantiate_actor(
-                            claims,
+                            &claims,
                             &annotations,
                             host_id,
                             &actor.image_ref,
@@ -1982,7 +2098,7 @@ impl Host {
                 let claims = actor.pool.claims().context("claims missing")?;
                 let mut delta = self
                     .instantiate_actor(
-                        claims,
+                        &claims,
                         &annotations,
                         host_id,
                         &actor.image_ref,
@@ -2142,7 +2258,7 @@ impl Host {
         let new_pool = ActorInstancePool::new(new_actor.clone(), Some(count));
         let mut new_instances = self
             .instantiate_actor(
-                new_claims,
+                &new_claims,
                 &annotations,
                 host_id,
                 new_actor_ref,
@@ -3096,4 +3212,213 @@ fn human_friendly_uptime(uptime: Duration) -> String {
         uptime.saturating_sub(Duration::from_nanos(uptime.subsec_nanos().into())),
     )
     .to_string()
+}
+
+/// Ensure actor has the capability claim to send or receive this invocation. This
+/// should be called whenever an actor is about to send or receive an invocation.
+fn ensure_actor_capability(
+    claims_metadata: Option<&jwt::Actor>,
+    contract_id: impl AsRef<str>,
+) -> anyhow::Result<()> {
+    let contract_id = contract_id.as_ref();
+    match claims_metadata {
+        // [ADR-0006](https://github.com/wasmCloud/wasmCloud/blob/main/adr/0006-actor-to-actor.md)
+        // Allow actor to actor calls by default
+        _ if contract_id.is_empty() => {}
+        Some(jwt::Actor {
+            caps: Some(ref caps),
+            ..
+        }) => {
+            ensure!(
+                caps.iter().any(|cap| cap == contract_id),
+                "actor does not have capability claim `{contract_id}`"
+            );
+        }
+        Some(_) | None => bail!("actor missing capability claims, denying invocation"),
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod test {
+    use std::collections::HashMap;
+
+    use nkeys::KeyPair;
+    use ulid::Ulid;
+    use uuid::Uuid;
+    use wascap::jwt;
+    use wasmcloud_runtime::capability::TargetEntity;
+
+    use crate::wasmbus::{invocation_hash, WasmCloudEntity};
+
+    use super::Invocation;
+
+    const CLUSTER_PUBKEY: &str = "CAQQHYABXBPDBZIGDZIT7E73HW66RPCFC3GGLQKSDDTVWUVOYZBYHUND";
+    const CLUSTER_SEED: &str = "SCAIYCZTW775GJYX3MVWLURALVC3PULW43PTEKGH72JBMA3A7LOLGLQ2JA";
+    const HOSTKEY_PUBKEY: &str = "NAGASFIHF5SBGTNTZUOVWT3O63SJUMIFUL7BH52T3UAFKQW7PPP46KFU";
+    const HOSTKEY_SEED: &str = "SNAAGG2LW2FP2JTXDTLQNB4EOHQDHQR2Y75PYAVOCYUPGHUK24WA3RSZYI";
+    const ACTOR_PUBKEY: &str = "MDNX3CB6VBXG55GOJ6UYON7AMK6SLYPB6GLPRZGTEE6625EFLJDQKWWR";
+    const PROVIDER_PUBKEY: &str = "VC3IJSRK3KIJUD5PQIEU2UNWT4PQCRYTAXFC4PDLTCMDX7L77YRUGCXW";
+    const OUTSIDE_CLUSTER_PUBKEY: &str = "CAT4QMKWIUTIX5ZBNOT2ICJHCSVVHGHLOHSXDSS5P2MIWRXHYHANTJZQ";
+
+    #[test]
+    fn validate_antiforgery_catches_invalid_invocations() {
+        let clusterkey = KeyPair::from_seed(CLUSTER_SEED).expect("failed to create cluster key");
+        assert_eq!(clusterkey.public_key(), CLUSTER_PUBKEY);
+        let hostkey = KeyPair::from_seed(HOSTKEY_SEED).expect("failed to create host key");
+        assert_eq!(hostkey.public_key(), HOSTKEY_PUBKEY);
+        let origin = actor_entity(ACTOR_PUBKEY);
+        let target = provider_entity(PROVIDER_PUBKEY, "default", "wasmcloud:testoperation");
+        let operation = "wasmcloud:bus/TestOperation.HandleTest";
+        let msg = vec![0xF0, 0x9F, 0x8C, 0xAE];
+
+        let target_operation_url = format!("{}/TestOperation.HandleTest", target.url());
+        let valid_issuers = vec![CLUSTER_PUBKEY.to_string()];
+        let links: HashMap<String, HashMap<String, WasmCloudEntity>> = HashMap::from_iter(vec![(
+            "wasmcloud:bus".to_string(),
+            HashMap::from_iter(vec![(
+                "default".to_string(),
+                WasmCloudEntity {
+                    link_name: "default".to_string(),
+                    contract_id: "wasmcloud:testoperation".to_string(),
+                    public_key: PROVIDER_PUBKEY.to_string(),
+                },
+            )]),
+        )]);
+
+        let basic_invocation: Invocation = Invocation::new(
+            &links,
+            &clusterkey,
+            &hostkey,
+            origin.clone(),
+            Some(&TargetEntity::Link(Some("default".to_string()))),
+            operation.to_string(),
+            msg.clone(),
+        )
+        .expect("failed to create invocation");
+        assert!(basic_invocation
+            .validate_antiforgery(&valid_issuers)
+            .is_ok());
+        // Ensure issuer signed with a key that isn't in the list of valid issuers is rejected
+        assert!(basic_invocation
+            .validate_antiforgery(&[OUTSIDE_CLUSTER_PUBKEY.to_string()])
+            .is_err_and(|e| e
+                .to_string()
+                .contains("issuer of this invocation is not among the list of valid issuers")));
+
+        // Ensure claims that are expired are rejected
+        let old_claims = jwt::Claims::<jwt::Invocation>::with_dates(
+            CLUSTER_PUBKEY.to_string(),
+            Uuid::from_u128(Ulid::new().into()).to_string(),
+            Some(0),
+            Some(0),
+            &target.url(),
+            &origin.url(),
+            &invocation_hash(&target_operation_url, origin.url(), operation, msg.clone()),
+        );
+        let old_invocation = Invocation {
+            encoded_claims: old_claims
+                .encode(&clusterkey)
+                .expect("failed to encode old claims"),
+            ..basic_invocation.clone()
+        };
+        assert!(old_invocation
+            .validate_antiforgery(&valid_issuers)
+            .is_err_and(|e| e.to_string().contains("invocation claims token expired")));
+
+        // Ensure claims that aren't valid yet are rejected
+        let nbf_claims = jwt::Claims::<jwt::Invocation>::with_dates(
+            CLUSTER_PUBKEY.to_string(),
+            Uuid::from_u128(Ulid::new().into()).to_string(),
+            Some(u64::MAX),
+            Some(u64::MAX),
+            &target_operation_url,
+            &origin.url(),
+            &invocation_hash(&target_operation_url, origin.url(), operation, msg.clone()),
+        );
+        let nbf_invocation = Invocation {
+            encoded_claims: nbf_claims
+                .encode(&clusterkey)
+                .expect("failed to encode old claims"),
+            ..basic_invocation.clone()
+        };
+        assert!(nbf_invocation
+            .validate_antiforgery(&valid_issuers)
+            .is_err_and(|e| e
+                .to_string()
+                .contains("attempt to use invocation before claims token allows")));
+
+        // Ensure invocations that don't match the claims hash are rejected
+        let bad_hash_invocation = Invocation {
+            msg: vec![0xF0, 0x9F, 0x98, 0x88],
+            ..basic_invocation.clone()
+        };
+        assert!(bad_hash_invocation
+            .validate_antiforgery(&valid_issuers)
+            .is_err_and(|e| e
+                .to_string()
+                .contains("invocation hash does not match signed claims hash")));
+
+        // Ensure mismatched host IDs are rejected
+        let bad_host_invocation = Invocation {
+            host_id: "NOTAHOSTID".to_string(),
+            ..basic_invocation.clone()
+        };
+        assert!(bad_host_invocation
+            .validate_antiforgery(&valid_issuers)
+            .is_err_and(|e| e
+                .to_string()
+                .contains("invalid host ID on invocation: 'NOTAHOSTID'")));
+
+        // Ensure mismatched origin URL is rejected
+        let bad_origin_claims = jwt::Claims::<jwt::Invocation>::new(
+            CLUSTER_PUBKEY.to_string(),
+            Uuid::from_u128(Ulid::new().into()).to_string(),
+            &target_operation_url,
+            &origin.url(),
+            &invocation_hash(&target_operation_url, origin.url(), operation, msg.clone()),
+        );
+        let bad_origin_invocation = Invocation {
+            encoded_claims: bad_origin_claims
+                .encode(&clusterkey)
+                .expect("failed to encode claims"),
+            origin: actor_entity("somethingelse"),
+            ..basic_invocation.clone()
+        };
+        assert!(bad_origin_invocation
+            .validate_antiforgery(&valid_issuers)
+            .is_err_and(|e| e
+                .to_string()
+                .contains("invocation claims and invocation origin URL do not match")));
+
+        // Ensure mismatched target URL is rejected (setting a different operation affects target URL)
+        let bad_target_invocation = Invocation {
+            operation: "wasmcloud:bus/Bitcoin.MineBitcoin".to_string(),
+            ..basic_invocation.clone()
+        };
+        assert!(bad_target_invocation
+            .validate_antiforgery(&valid_issuers)
+            .is_err_and(|e| e
+                .to_string()
+                .contains("invocation claims and invocation target URL do not match")));
+    }
+
+    /// Helper test function for oneline creation of an actor [`WasmCloudEntity`]. Consider adding to the
+    /// actual impl block if it's useful elsewhere.
+    fn actor_entity(public_key: &str) -> WasmCloudEntity {
+        WasmCloudEntity {
+            public_key: public_key.to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// Helper test function for oneline creation of a provider [`WasmCloudEntity`]. Consider adding to the
+    /// actual impl block if it's useful elsewhere.
+    fn provider_entity(public_key: &str, link_name: &str, contract_id: &str) -> WasmCloudEntity {
+        WasmCloudEntity {
+            public_key: public_key.to_string(),
+            link_name: link_name.to_string(),
+            contract_id: contract_id.to_string(),
+        }
+    }
 }
