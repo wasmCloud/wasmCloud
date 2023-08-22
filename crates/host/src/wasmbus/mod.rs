@@ -1531,6 +1531,10 @@ impl Host {
 
         let annotations = annotations.map(Into::into);
         let claims = actor.claims().context("claims missing")?;
+        self.store_claims(claims.clone())
+            .await
+            .context("failed to store claims")?;
+
         let links = self.links.read().await;
         let links = links
             .values()
@@ -1827,10 +1831,6 @@ impl Host {
 
         let actor = self.fetch_actor(&actor_ref).await?;
         let claims = actor.claims().context("claims missing")?;
-        self.store_claims(claims.clone())
-            .await
-            .context("failed to store claims")?;
-
         let annotations = annotations.map(|annotations| annotations.into_iter().collect());
         let Some(count) = NonZeroUsize::new(count.into()) else {
             // NOTE: This mimics OTP behavior
