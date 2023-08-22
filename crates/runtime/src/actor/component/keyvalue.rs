@@ -10,8 +10,7 @@ use anyhow::{anyhow, ensure, Context};
 use async_trait::async_trait;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt};
 use tracing::instrument;
-use wasmtime_wasi::preview2;
-use wasmtime_wasi::preview2::stream::TableStreamExt;
+use wasmtime_wasi::preview2::{self, TableStreamExt};
 
 impl Instance {
     /// Set [`KeyValueReadWrite`] handler for this [Instance].

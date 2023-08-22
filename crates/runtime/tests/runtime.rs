@@ -425,7 +425,7 @@ async fn run(wasm: impl AsRef<Path>) -> anyhow::Result<Vec<(logging::Level, Stri
     Ok(Arc::try_unwrap(logs).unwrap().into_inner())
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn builtins_module() -> anyhow::Result<()> {
     init();
 
@@ -493,7 +493,7 @@ async fn builtins_module() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn builtins_compat() -> anyhow::Result<()> {
     init();
 
@@ -545,7 +545,7 @@ async fn builtins_compat() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn builtins_component() -> anyhow::Result<()> {
     init();
 

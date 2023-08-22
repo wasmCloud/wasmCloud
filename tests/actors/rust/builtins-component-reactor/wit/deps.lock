@@ -18,8 +18,8 @@ deps = ["cli", "clocks", "filesystem", "random", "sockets"]
 
 [io]
 path = "../../../../../wit/deps/io"
-sha256 = "eeb4701c2becafa40a7ee3bf0d2c94e2170e15806b25abdcd1de1ed94f2c1036"
-sha512 = "89be853b2acae211570cd6ad0ec9d8132881dafbdea83ac7b4cad600f0627003c61f310427379bf47ecf862724367bd5d6e976db70069f6f90a3c2d9c20dbfb7"
+sha256 = "0faa1fe936bd3a83812965cfb157fd5aaf2ef0a149685af9539e521ed7ce3d4e"
+sha512 = "3ee02f5c5f0d8581e05e7cc080a2ba6d3f840471fe6a405de5a319a2decaa6a7c0c0d16908f52157b05854c5af0b4b23791f002778bce97e6c5d879709868828"
 
 [poll]
 path = "../../../../../wit/deps/poll"
