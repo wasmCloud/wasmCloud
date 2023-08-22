@@ -32,7 +32,7 @@ indicatif = { workspace = true }
 log = { workspace = true }
 nix = { workspace = true }
 nkeys = { workspace = true }
-notify = "6.0.1"
+notify = "6.1.1"
 oci-distribution = { workspace = true, features = ["rustls-tls"] }
 once_cell = { workspace = true }
 provider-archive = { workspace = true }
