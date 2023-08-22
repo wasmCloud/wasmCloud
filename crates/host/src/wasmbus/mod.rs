@@ -1474,6 +1474,10 @@ impl Host {
     ) -> anyhow::Result<()> {
         let actor = entry.remove();
         let claims = actor.pool.claims().context("claims missing")?;
+        self.delete_claims(claims.clone())
+            .await
+            .context("failed to delete claims")?;
+
         let mut instances = actor.instances.write().await;
         let remaining: usize = instances.values().map(Vec::len).sum();
         stream::iter(instances.drain())
@@ -1679,6 +1683,9 @@ impl Host {
                     }
                     if remaining == 0 {
                         drop(instances);
+                        self.delete_claims(claims.clone())
+                            .await
+                            .context("failed to delete claims")?;
                         entry.remove();
                     }
                 }
@@ -1837,6 +1844,9 @@ impl Host {
                 }
                 if instances.len() == 0 {
                     drop(instances);
+                    self.delete_claims(claims.clone())
+                        .await
+                        .context("failed to delete claims")?;
                     entry.remove();
                 }
             }
@@ -2142,6 +2152,9 @@ impl Host {
             }
         }
         if instances.is_empty() {
+            self.delete_claims(provider.claims.clone())
+                .await
+                .context("failed to delete claims")?;
             entry.remove();
         }
         Ok(SUCCESS.into())
@@ -2505,6 +2518,17 @@ impl Host {
             .put(key, bytes)
             .await
             .context("failed to put claims")?;
+        Ok(())
+    }
+
+    async fn delete_claims<T>(&self, claims: T) -> anyhow::Result<()>
+    where
+        T: TryInto<StoredClaims, Error = anyhow::Error>,
+    {
+        let stored_claims: StoredClaims = claims.try_into()?;
+        let key = format!("CLAIMS_{}", stored_claims.subject);
+
+        self.data.delete(key).await?;
         Ok(())
     }
 
