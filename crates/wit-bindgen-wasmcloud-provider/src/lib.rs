@@ -3,12 +3,12 @@
 //!
 //! For example, to build a capability provider for the [wasmcloud:keyvalue contract](https://github.com/wasmCloud/interfaces/tree/main/keyvalue):
 //!
-//! ```
+//! ```rust,ignore
 //! wit_bindgen_wasmcloud::provider::binary::generate!(
 //!   KeyvalueProvider,      // implementation struct
 //!   "wasmcloud:keyvalue",  // wasmcloud contract name
 //!   "keyvalue",            // wit-bindgen style configuration
-//! )
+//! );
 //!
 //! struct YourProvider;
 //! ```
