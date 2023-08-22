@@ -2,10 +2,10 @@
 // https://github.com/wasmCloud/wasmcloud-otp/blob/5f13500646d9e077afa1fca67a3fe9c8df5f3381/host_core/native/hostcore_wasmcloud_native/src/oci.rs
 
 use crate::par;
+use crate::registry::Settings as RegistrySettings;
 
 use core::str::FromStr;
 
-use std::collections::HashMap;
 use std::env::temp_dir;
 use std::path::{Path, PathBuf};
 
@@ -37,49 +37,34 @@ pub struct Config {
     pub oci_password: Option<String>,
 }
 
-fn determine_auth(
-    image_reference: &str,
-    creds_override: Option<HashMap<String, String>>,
-    oci_config: &Config,
-) -> RegistryAuth {
-    match (creds_override, oci_config) {
-        (
-            _,
-            Config {
-                oci_registry: Some(reg),
-                oci_user: Some(u),
-                oci_password: Some(p),
-                ..
-            },
-        ) if image_reference.starts_with(reg) => RegistryAuth::Basic(u.clone(), p.clone()),
-        (Some(hm), _) => match (hm.get("username"), hm.get("password")) {
-            (Some(un), Some(pw)) => RegistryAuth::Basic(un.to_string(), pw.to_string()),
-            _ => RegistryAuth::Anonymous,
-        },
-        _ => RegistryAuth::Anonymous,
-    }
-}
-
 /// Fetch an OCI path
 #[allow(clippy::implicit_hasher)]
 #[allow(clippy::missing_errors_doc)] // TODO: document errors
 pub async fn fetch_oci_path(
     img: &str,
-    creds_override: Option<HashMap<String, String>>,
-    oci_config: &Config,
+    registry_settings: &RegistrySettings,
     accepted_media_types: Vec<&str>,
 ) -> anyhow::Result<PathBuf> {
     let img = &img.to_lowercase(); // the OCI spec does not allow for capital letters in references
-    if !oci_config.allow_latest && img.ends_with(":latest") {
+    if !registry_settings.allow_latest && img.ends_with(":latest") {
         bail!("fetching images tagged 'latest' is currently prohibited in this host. This option can be overridden with WASMCLOUD_OCI_ALLOW_LATEST")
     }
     let cache_file = get_cached_filepath(img).await?;
     let digest_file = get_digest_filepath(img).await?;
 
-    let auth = determine_auth(img, creds_override, oci_config);
+    let auth = match &registry_settings.auth {
+        crate::registry::Auth::Basic(username, password) => {
+            RegistryAuth::Basic(username.to_string(), password.to_string())
+        }
+        _ => RegistryAuth::Anonymous,
+    };
     let img = Reference::from_str(img)?;
 
-    let protocol = ClientProtocol::HttpsExcept(oci_config.allowed_insecure.clone());
+    let protocol = if registry_settings.allow_insecure {
+        ClientProtocol::HttpsExcept(vec![img.registry().to_string()])
+    } else {
+        ClientProtocol::Https
+    };
     let config = ClientConfig {
         protocol,
         ..Default::default()
@@ -163,13 +148,11 @@ async fn cache_oci_image(
 #[allow(clippy::implicit_hasher)]
 pub async fn fetch_actor(
     oci_ref: impl AsRef<str>,
-    creds_override: Option<HashMap<String, String>>,
-    host_oci_opts: &Config,
+    registry_settings: &RegistrySettings,
 ) -> anyhow::Result<Vec<u8>> {
     let path = fetch_oci_path(
         oci_ref.as_ref(),
-        creds_override,
-        host_oci_opts,
+        registry_settings,
         vec![WASM_MEDIA_TYPE, OCI_MEDIA_TYPE],
     )
     .await
@@ -188,13 +171,11 @@ pub async fn fetch_actor(
 pub async fn fetch_provider(
     oci_ref: impl AsRef<str>,
     link_name: impl AsRef<str>,
-    creds_override: Option<HashMap<String, String>>,
-    host_oci_opts: &Config,
+    registry_settings: &RegistrySettings,
 ) -> anyhow::Result<(PathBuf, jwt::Claims<jwt::CapabilityProvider>)> {
     let path = fetch_oci_path(
         oci_ref.as_ref(),
-        creds_override,
-        host_oci_opts,
+        registry_settings,
         vec![PROVIDER_ARCHIVE_MEDIA_TYPE, OCI_MEDIA_TYPE],
     )
     .await

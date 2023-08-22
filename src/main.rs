@@ -74,13 +74,8 @@ struct Args {
         env = "WASMCLOUD_JS_DOMAIN"
     )]
     js_domain: Option<String>,
-    // TODO: use and implement the below args
     /// Denotes if a wasmCloud host should issue requests to a config service on startup
-    #[clap(
-        long = "config-service-enabled",
-        env = "WASMCLOUD_CONFIG_SERVICE",
-        hide = true
-    )]
+    #[clap(long = "config-service-enabled", env = "WASMCLOUD_CONFIG_SERVICE")]
     config_service_enabled: bool,
     /// Denotes if a wasmCloud host should allow starting actors from the file system
     #[clap(
@@ -320,6 +315,7 @@ async fn main() -> anyhow::Result<()> {
         host_key,
         cluster_key,
         cluster_issuers: args.cluster_issuers,
+        config_service_enabled: args.config_service_enabled,
         js_domain: args.js_domain,
         provider_shutdown_delay: Some(args.provider_shutdown_delay),
         oci_opts,
