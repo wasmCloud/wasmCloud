@@ -1,4 +1,4 @@
-use super::{AsyncStream, Ctx, Instance, TableResult};
+use super::{Ctx, Instance, TableResult};
 
 use crate::capability::keyvalue::{readwrite, types, wasi_cloud_error};
 use crate::capability::KeyValueReadWrite;
@@ -10,6 +10,7 @@ use anyhow::{anyhow, ensure, Context};
 use async_trait::async_trait;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt};
 use tracing::instrument;
+use wasmtime_wasi::preview2::pipe::{AsyncReadStream, AsyncWriteStream};
 use wasmtime_wasi::preview2::{self, TableStreamExt};
 
 impl Instance {
@@ -264,7 +265,7 @@ impl types::Host for Ctx {
             .clone();
         let stream = self
             .table
-            .push_output_stream(Box::new(AsyncStream(stream)))
+            .push_output_stream(Box::new(AsyncWriteStream::new(stream)))
             .context("failed to push output stream")?;
         Ok(Ok(stream))
     }
@@ -318,7 +319,7 @@ impl types::Host for Ctx {
             .context("failed to delete incoming value")?;
         let stream = self
             .table
-            .push_input_stream(Box::new(AsyncStream(stream)))
+            .push_input_stream(Box::new(AsyncReadStream::new(stream)))
             .context("failed to push input stream")?;
         Ok(Ok(stream))
     }

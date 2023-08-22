@@ -1,4 +1,4 @@
-use super::{AsyncStream, Ctx, Instance, TableResult};
+use super::{Ctx, Instance, TableResult};
 
 use crate::capability::bus::{host, lattice};
 use crate::capability::{Bus, TargetInterface};
@@ -13,6 +13,7 @@ use async_trait::async_trait;
 use futures::future::Shared;
 use futures::FutureExt;
 use tracing::instrument;
+use wasmtime_wasi::preview2::pipe::{AsyncReadStream, AsyncWriteStream};
 use wasmtime_wasi::preview2::{self, TableStreamExt};
 
 impl Instance {
@@ -92,11 +93,11 @@ impl host::Host for Ctx {
                     .context("failed to push result to table")?;
                 let stdin = self
                     .table
-                    .push_output_stream(Box::new(AsyncStream(stdin)))
+                    .push_output_stream(Box::new(AsyncWriteStream::new(stdin)))
                     .context("failed to push stdin stream")?;
                 let stdout = self
                     .table
-                    .push_input_stream(Box::new(AsyncStream(stdout)))
+                    .push_input_stream(Box::new(AsyncReadStream::new(stdout)))
                     .context("failed to push stdout stream")?;
                 Ok(Ok((result, stdin, stdout)))
             }

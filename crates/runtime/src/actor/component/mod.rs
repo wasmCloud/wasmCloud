@@ -8,17 +8,17 @@ use core::ops::{Deref, DerefMut};
 
 use std::sync::Arc;
 
-use anyhow::{bail, ensure, Context as _};
+use anyhow::{bail, Context as _};
 use async_trait::async_trait;
-use bytes::{Bytes, BytesMut};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::runtime::Handle;
+use bytes::Bytes;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::Mutex;
-use tokio::task::block_in_place;
 use tracing::{instrument, trace};
 use wascap::jwt;
 use wasmtime_wasi::preview2::command::Command;
-use wasmtime_wasi::preview2::pipe::{ClosedInputStream, ClosedOutputStream};
+use wasmtime_wasi::preview2::pipe::{
+    AsyncReadStream, AsyncWriteStream, ClosedInputStream, ClosedOutputStream,
+};
 use wasmtime_wasi::preview2::{self, HostInputStream, HostOutputStream, StreamState};
 
 mod blobstore;
@@ -44,57 +44,9 @@ mod guest_bindings {
     });
 }
 
-struct AsyncStream<T>(T);
-
-#[async_trait]
-impl<T: AsyncRead + Send + Sync + Unpin + 'static> HostInputStream for AsyncStream<T> {
-    #[instrument(skip(self))]
-    fn read(&mut self, size: usize) -> anyhow::Result<(Bytes, StreamState)> {
-        let mut buf = BytesMut::with_capacity(size);
-        // TODO: Don't block
-        match block_in_place(|| Handle::current().block_on(self.0.read_buf(&mut buf)))
-            .context("failed to read bytes")?
-        {
-            0 => Ok((Bytes::new(), StreamState::Closed)),
-            n => {
-                ensure!(n <= size, "more bytes read than requested");
-                Ok((buf.freeze(), StreamState::Open))
-            }
-        }
-    }
-
-    #[instrument(skip(self))]
-    async fn ready(&mut self) -> anyhow::Result<()> {
-        Ok(())
-    }
-}
-
-#[async_trait]
-impl<T: AsyncWrite + Send + Sync + Unpin + 'static> HostOutputStream for AsyncStream<T> {
-    #[instrument(skip(self))]
-    fn write(&mut self, mut buf: Bytes) -> anyhow::Result<(usize, StreamState)> {
-        let size = buf.len();
-        // TODO: Don't block
-        match block_in_place(|| Handle::current().block_on(self.0.write_buf(&mut buf)))
-            .context("failed to write bytes")?
-        {
-            0 => Ok((0, StreamState::Closed)),
-            n => {
-                ensure!(n <= size, "more bytes written than requested");
-                Ok((n, StreamState::Open))
-            }
-        }
-    }
-
-    #[instrument(skip(self))]
-    async fn ready(&mut self) -> anyhow::Result<()> {
-        Ok(())
-    }
-}
-
-/// `StdioStream` delegates all stream I/O to inner [`AsyncStream`] if such is set and
+/// `StdioStream` delegates all stream I/O to inner stream if such is set and
 /// mimics [`ClosedInputStream`] and [`ClosedOutputStream`] otherwise
-struct StdioStream<T>(Arc<Mutex<Option<AsyncStream<T>>>>);
+struct StdioStream<T>(Arc<Mutex<Option<T>>>);
 
 impl<T> Clone for StdioStream<T> {
     fn clone(&self) -> Self {
@@ -109,7 +61,7 @@ impl<T> Default for StdioStream<T> {
 }
 
 impl<T> Deref for StdioStream<T> {
-    type Target = Arc<Mutex<Option<AsyncStream<T>>>>;
+    type Target = Arc<Mutex<Option<T>>>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -124,18 +76,18 @@ impl<T> DerefMut for StdioStream<T> {
 
 impl<T> StdioStream<T> {
     /// Replace the inner stream by another one returning the previous one if such was set
-    async fn replace(&self, stream: T) -> Option<AsyncStream<T>> {
-        self.lock().await.replace(AsyncStream(stream))
+    async fn replace(&self, stream: T) -> Option<T> {
+        self.0.lock().await.replace(stream)
     }
 
     /// Replace the inner stream by another one returning the previous one if such was set
-    async fn take(&self) -> Option<AsyncStream<T>> {
-        self.lock().await.take()
+    async fn take(&self) -> Option<T> {
+        self.0.lock().await.take()
     }
 }
 
 #[async_trait]
-impl<T: AsyncRead + Send + Sync + Unpin + 'static> HostInputStream for StdioStream<T> {
+impl HostInputStream for StdioStream<Box<dyn HostInputStream>> {
     #[instrument(skip(self))]
     fn read(&mut self, size: usize) -> anyhow::Result<(Bytes, StreamState)> {
         match self.0.try_lock().as_deref_mut() {
@@ -165,7 +117,7 @@ impl<T: AsyncRead + Send + Sync + Unpin + 'static> HostInputStream for StdioStre
 }
 
 #[async_trait]
-impl<T: AsyncWrite + Send + Sync + Unpin + 'static> HostOutputStream for StdioStream<T> {
+impl HostOutputStream for StdioStream<Box<dyn HostOutputStream>> {
     #[instrument(skip(self))]
     fn write(&mut self, bytes: Bytes) -> anyhow::Result<(usize, StreamState)> {
         match self.0.try_lock().as_deref_mut() {
@@ -211,9 +163,9 @@ struct Ctx {
     wasi: preview2::WasiCtx,
     table: preview2::Table,
     handler: builtin::Handler,
-    stdin: StdioStream<Box<dyn AsyncRead + Send + Sync + Unpin>>,
-    stdout: StdioStream<Box<dyn AsyncWrite + Send + Sync + Unpin>>,
-    stderr: StdioStream<Box<dyn AsyncWrite + Send + Sync + Unpin>>,
+    stdin: StdioStream<Box<dyn HostInputStream>>,
+    stdout: StdioStream<Box<dyn HostOutputStream>>,
+    stderr: StdioStream<Box<dyn HostOutputStream>>,
 }
 
 impl preview2::WasiView for Ctx {
@@ -403,17 +355,11 @@ impl Instance {
         &mut self,
         stderr: impl AsyncWrite + Send + Sync + Unpin + 'static,
     ) -> anyhow::Result<&mut Self> {
-        let ctx = self.store.data();
-        if let Some(AsyncStream(mut stderr)) = ctx.stderr.replace(Box::new(stderr)).await {
-            stderr.flush().await.context("failed to flush stderr")?;
-            stderr
-                .shutdown()
-                .await
-                .context("failed to shutdown stderr")?;
-            Ok(self)
-        } else {
-            Ok(self)
-        }
+        let data = self.store.data();
+        data.stderr
+            .replace(Box::new(AsyncWriteStream::new(stderr)))
+            .await;
+        Ok(self)
     }
 
     /// Instantiates and returns [`GuestBindings`] if exported by the [`Instance`].
@@ -489,8 +435,12 @@ impl GuestBindings {
         response: impl AsyncWrite + Send + Sync + Unpin + 'static,
     ) -> anyhow::Result<Result<(), String>> {
         let ctx = store.data_mut();
-        ctx.stdin.replace(Box::new(request)).await;
-        ctx.stdout.replace(Box::new(response)).await;
+        ctx.stdin
+            .replace(Box::new(AsyncReadStream::new(request)))
+            .await;
+        ctx.stdout
+            .replace(Box::new(AsyncWriteStream::new(response)))
+            .await;
         let res = match self {
             GuestBindings::Command(bindings) => {
                 let wasi = preview2::WasiCtxBuilder::new()
@@ -521,14 +471,7 @@ impl GuestBindings {
         };
         let ctx = store.data();
         ctx.stdin.take().await.context("stdin missing")?;
-        let AsyncStream(mut stdout) = ctx.stdout.take().await.context("stdout missing")?;
-        trace!("flush stdout");
-        stdout.flush().await.context("failed to flush stdout")?;
-        trace!("shutdown stdout");
-        stdout
-            .shutdown()
-            .await
-            .context("failed to shutdown stdout")?;
+        ctx.stdout.take().await.context("stdout missing")?;
         res
     }
 }
