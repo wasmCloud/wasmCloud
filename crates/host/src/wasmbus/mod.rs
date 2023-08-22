@@ -34,13 +34,11 @@ use nkeys::{KeyPair, KeyPairType};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use time::format_description::well_known::Rfc3339;
-use time::OffsetDateTime;
 use tokio::io::{stderr, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{watch, RwLock};
 use tokio::task::JoinHandle;
 use tokio::time::{interval_at, Instant};
-use tokio::{process, spawn};
+use tokio::{process, select, spawn};
 use tokio_stream::wrappers::IntervalStream;
 use tracing::{debug, error, info, instrument, trace, warn};
 use ulid::Ulid;
@@ -339,6 +337,15 @@ struct InvocationResponse {
     error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     content_length: Option<u64>,
+}
+
+#[derive(Default, Deserialize, Serialize)]
+struct HealthCheckResponse {
+    /// Whether the provider is healthy
+    #[serde(default)]
+    healthy: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -1347,28 +1354,14 @@ impl Host {
         name: impl AsRef<str>,
         data: serde_json::Value,
     ) -> anyhow::Result<()> {
-        let name = name.as_ref();
-        let name = format!("com.wasmcloud.lattice.{name}");
-        let now = OffsetDateTime::now_utc()
-            .format(&Rfc3339)
-            .context("failed to format current time")?;
-        let ev = self
-            .event_builder
-            .clone()
-            .ty(&name)
-            .id(Uuid::from_u128(Ulid::new().into()).to_string())
-            .time(now)
-            .data("application/json", data)
-            .build()
-            .context("failed to build cloud event")?;
-        let ev = serde_json::to_vec(&ev).context("failed to serialize event")?;
-        self.ctl_nats
-            .publish(
-                format!("wasmbus.evt.{}", self.host_config.lattice_prefix),
-                ev.into(),
-            )
-            .await
-            .with_context(|| format!("failed to publish `{name}` event"))
+        event::publish(
+            &self.event_builder,
+            &self.ctl_nats,
+            &self.host_config.lattice_prefix,
+            name,
+            data,
+        )
+        .await
     }
 
     /// Instantiate an actor and publish the actor start events.
@@ -2110,13 +2103,86 @@ impl Host {
                 .context("failed to write newline")?;
             stdin.shutdown().await.context("failed to close stdin")?;
 
+            // TODO: Change method receiver to Arc<Self> and `move` into the closure
+            let prov_nats = self.prov_rpc_nats.clone();
+            let ctl_nats = self.ctl_nats.clone();
+            let event_builder = self.event_builder.clone();
+            // NOTE: health_ prefix here is to allow us to move the variables into the closure
+            let health_lattice_prefix = self.host_config.lattice_prefix.clone();
+            let health_provider_id = claims.subject.to_string();
+            let health_link_name = link_name.to_string();
+            let health_contract_id = claims.metadata.clone().map(|m| m.capid).unwrap_or_default();
             let child = spawn(async move {
-                match child.wait().await {
-                    Ok(status) => {
-                        debug!("`{}` exited with `{status:?}`", path.display());
-                    }
-                    Err(e) => {
-                        error!("failed to wait for `{}` to execute: {e}", path.display());
+                // Check the health of the provider every 30 seconds
+                let mut health_check = tokio::time::interval(Duration::from_secs(30));
+                let mut previous_healthy = false;
+                // Allow the provider 5 seconds to initialize
+                health_check.reset_after(Duration::from_secs(5));
+                let health_topic =
+                    format!("wasmbus.rpc.{health_lattice_prefix}.{health_provider_id}.{health_link_name}.health");
+                // TODO: Refactor this logic to simplify nesting
+                loop {
+                    select! {
+                        _ = health_check.tick() => {
+                            trace!(provider_id=health_provider_id, "performing provider health check");
+                            if let Ok(async_nats::Message { payload, ..}) = prov_nats.request(
+                                health_topic.clone(),
+                                Bytes::new(),
+                                ).await {
+                                    match (rmp_serde::from_slice::<HealthCheckResponse>(&payload), previous_healthy) {
+                                        (Ok(HealthCheckResponse { healthy: true, ..}), false) => {
+                                            trace!(provider_id=health_provider_id, "provider health check succeeded");
+                                            previous_healthy = true;
+                                            if let Err(e) = event::publish(
+                                                &event_builder,
+                                                &ctl_nats,
+                                                &health_lattice_prefix,
+                                                "health_check_passed",
+                                                event::provider_health_check(
+                                                    &health_provider_id,
+                                                    &health_link_name,
+                                                    &health_contract_id,
+                                                )
+                                            ).await {
+                                                warn!(?e, "failed to publish provider health check succeeded event");
+                                            }
+                                        },
+                                        (Ok(HealthCheckResponse { healthy: false, ..}), true) => {
+                                            trace!(provider_id=health_provider_id, "provider health check failed");
+                                            previous_healthy = false;
+                                            if let Err(e) = event::publish(
+                                                &event_builder,
+                                                &ctl_nats,
+                                                &health_lattice_prefix,
+                                                "health_check_failed",
+                                                event::provider_health_check(
+                                                    &health_provider_id,
+                                                    &health_link_name,
+                                                    &health_contract_id,
+                                                )
+                                            ).await {
+                                                warn!(?e, "failed to publish provider health check failed event");
+                                            }
+                                        }
+                                        // If the provider health status didn't change, we don't need to publish an event
+                                        (Ok(_), _) => (),
+                                        _ => warn!("failed to deserialize provider health check response"),
+                                    }
+                                }
+                                else {
+                                    warn!("failed to request provider health, retrying in 30 seconds");
+                                }
+                        }
+                        exit_status = child.wait() => match exit_status {
+                            Ok(status) => {
+                                debug!("`{}` exited with `{status:?}`", path.display());
+                                break;
+                            }
+                            Err(e) => {
+                                warn!("failed to wait for `{}` to execute: {e}", path.display());
+                                break;
+                            }
+                        }
                     }
                 }
             });

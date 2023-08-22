@@ -2,7 +2,12 @@ use core::num::NonZeroUsize;
 
 use std::collections::{BTreeMap, HashMap};
 
+use anyhow::Context;
+use cloudevents::{EventBuilder, EventBuilderV10};
 use serde_json::json;
+use time::{format_description::well_known::Rfc3339, OffsetDateTime};
+use tracing::instrument;
+use ulid::Ulid;
 use uuid::Uuid;
 use wascap::jwt;
 
@@ -209,4 +214,44 @@ pub fn provider_stopped(
         "annotations": annotations,
         "reason": reason.as_ref(),
     })
+}
+
+pub fn provider_health_check(
+    public_key: impl AsRef<str>,
+    link_name: impl AsRef<str>,
+    contract_id: impl AsRef<str>,
+) -> serde_json::Value {
+    json!({
+        "public_key": public_key.as_ref(),
+        "link_name": link_name.as_ref(),
+        "contract_id": contract_id.as_ref(),
+    })
+}
+
+#[instrument(skip(event_builder, ctl_nats, name))]
+pub(crate) async fn publish(
+    event_builder: &EventBuilderV10,
+    ctl_nats: &async_nats::Client,
+    lattice_prefix: &str,
+    name: impl AsRef<str>,
+    data: serde_json::Value,
+) -> anyhow::Result<()> {
+    let name = name.as_ref();
+    let name = format!("com.wasmcloud.lattice.{name}");
+    let now = OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .context("failed to format current time")?;
+    let ev = event_builder
+        .clone()
+        .ty(&name)
+        .id(Uuid::from_u128(Ulid::new().into()).to_string())
+        .time(now)
+        .data("application/json", data)
+        .build()
+        .context("failed to build cloud event")?;
+    let ev = serde_json::to_vec(&ev).context("failed to serialize event")?;
+    ctl_nats
+        .publish(format!("wasmbus.evt.{lattice_prefix}"), ev.into())
+        .await
+        .with_context(|| format!("failed to publish `{name}` event"))
 }
