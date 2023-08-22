@@ -940,7 +940,7 @@ impl Host {
     bush dew dust field fire flower firefly ladybug feather grass
     haze mountain night pond darkness snowflake silence
     sound sky shape stapler surf thunder violet water wildflower
-    wave water resonance sun wood dream cherry tree fog autocorrect
+    wave water resonance sun timber dream cherry tree fog autocorrect
     frost voice paper frog smoke star hamster ocean emoji robot
     ";
 
