@@ -6,9 +6,9 @@ use url::Url;
 
 use crate::oci::Config as OciConfig;
 
+/// wasmCloud Host configuration
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Debug)]
-/// wasmCloud Host configuration
 pub struct Host {
     /// NATS URL to connect to for control interface connection
     pub ctl_nats_url: Url,
@@ -58,6 +58,8 @@ pub struct Host {
     pub enable_structured_logging: bool,
     /// Log level to pass to capability providers to use. Should be parsed from a [`tracing::Level`]
     pub log_level: String,
+    /// Whether to enable loading supplemental configuration
+    pub config_service_enabled: bool,
 }
 
 impl Default for Host {
@@ -90,6 +92,7 @@ impl Default for Host {
             allow_file_load: false,
             enable_structured_logging: false,
             log_level: "info".to_string(),
+            config_service_enabled: false,
         }
     }
 }

@@ -5,6 +5,8 @@ pub use config::Host as HostConfig;
 
 mod event;
 
+use crate::oci::Config as OciConfig;
+use crate::registry::{Auth as RegistryAuth, Settings as RegistrySettings, Type as RegistryType};
 use crate::{fetch_actor, socket_pair};
 
 use core::fmt;
@@ -14,6 +16,7 @@ use core::pin::Pin;
 use core::task::{Context, Poll};
 use core::time::Duration;
 
+use std::collections::hash_map::Entry;
 use std::collections::{hash_map, BTreeMap, HashMap};
 use std::env;
 use std::env::consts::{ARCH, FAMILY, OS};
@@ -966,6 +969,7 @@ pub struct Host {
     data: kv::Store,
     data_watch: AbortHandle,
     providers: RwLock<HashMap<String, Provider>>,
+    registry_settings: RwLock<HashMap<String, RegistrySettings>>,
     runtime: Runtime,
     start_at: Instant,
     stop_tx: watch::Sender<Option<Instant>>,
@@ -1051,6 +1055,104 @@ async fn connect_nats(
     opts.connect(addr)
         .await
         .context("failed to connect to NATS")
+}
+
+#[derive(Debug, Default)]
+struct SupplementalConfig {
+    registry_settings: Option<HashMap<String, RegistrySettings>>,
+}
+
+#[instrument(skip(ctl_nats))]
+async fn load_supplemental_config(
+    ctl_nats: &async_nats::Client,
+    lattice_prefix: &str,
+    labels: &HashMap<String, String>,
+) -> anyhow::Result<SupplementalConfig> {
+    #[derive(Deserialize, Default)]
+    struct SerializedSupplementalConfig {
+        #[serde(default, rename = "registryCredentials")]
+        registry_credentials:
+            Option<HashMap<String, wasmcloud_control_interface::RegistryCredential>>,
+    }
+
+    let cfg_topic = format!("wasmbus.cfg.{lattice_prefix}.req");
+    let cfg_payload = serde_json::to_vec(&json!({
+        "labels": labels,
+    }))
+    .context("failed to serialize config payload")?;
+
+    match ctl_nats.request(cfg_topic, cfg_payload.into()).await {
+        Ok(resp) => {
+            match serde_json::from_slice::<SerializedSupplementalConfig>(resp.payload.as_ref()) {
+                Ok(ser_cfg) => Ok(SupplementalConfig {
+                    registry_settings: ser_cfg
+                        .registry_credentials
+                        .map(|creds| creds.into_iter().map(|(k, v)| (k, v.into())).collect()),
+                }),
+                Err(e) => {
+                    error!(
+                        ?e,
+                        "failed to deserialize supplemental config. Defaulting to empty config"
+                    );
+                    Ok(SupplementalConfig::default())
+                }
+            }
+        }
+        Err(e) => {
+            error!(
+                ?e,
+                "failed to request supplemental config. Defaulting to empty config"
+            );
+            Ok(SupplementalConfig::default())
+        }
+    }
+}
+
+#[instrument(skip_all)]
+async fn merge_registry_settings(
+    registry_settings: &RwLock<HashMap<String, RegistrySettings>>,
+    oci_opts: OciConfig,
+) -> () {
+    let mut registry_settings = registry_settings.write().await;
+    let allow_latest = oci_opts.allow_latest;
+
+    // update auth for specific registry, if provided
+    if let Some(reg) = oci_opts.oci_registry {
+        match registry_settings.entry(reg) {
+            Entry::Occupied(_entry) => {
+                // note we don't update settings here, since the config service should take priority
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(RegistrySettings {
+                    reg_type: RegistryType::Oci,
+                    auth: RegistryAuth::from((oci_opts.oci_user, oci_opts.oci_password)),
+                    ..Default::default()
+                });
+            }
+        }
+    }
+
+    // update or create entry for all registries in allowed_insecure
+    oci_opts
+        .allowed_insecure
+        .into_iter()
+        .for_each(|reg| match registry_settings.entry(reg) {
+            Entry::Occupied(mut entry) => {
+                entry.get_mut().allow_insecure = true;
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(RegistrySettings {
+                    reg_type: RegistryType::Oci,
+                    allow_insecure: true,
+                    ..Default::default()
+                });
+            }
+        });
+
+    // set allow_latest for all registries
+    registry_settings
+        .values_mut()
+        .for_each(|settings| settings.allow_latest = allow_latest);
 }
 
 impl Host {
@@ -1225,6 +1327,16 @@ impl Host {
         let (heartbeat_abort, heartbeat_abort_reg) = AbortHandle::new_pair();
         let (data_watch_abort, data_watch_abort_reg) = AbortHandle::new_pair();
 
+        let supplemental_config = if config.config_service_enabled {
+            load_supplemental_config(&ctl_nats, &config.lattice_prefix, &labels).await?
+        } else {
+            SupplementalConfig::default()
+        };
+
+        let registry_settings =
+            RwLock::new(supplemental_config.registry_settings.unwrap_or_default());
+        merge_registry_settings(&registry_settings, config.oci_opts.clone()).await;
+
         let host = Host {
             actors: RwLock::default(),
             cluster_key,
@@ -1241,6 +1353,7 @@ impl Host {
             data: data.clone(),
             data_watch: data_watch_abort.clone(),
             providers: RwLock::default(),
+            registry_settings,
             runtime,
             start_at,
             stop_rx,
@@ -1687,10 +1800,11 @@ impl Host {
 
     #[instrument(skip(self))]
     async fn fetch_actor(&self, actor_ref: &str) -> anyhow::Result<wasmcloud_runtime::Actor> {
+        let registry_settings = self.registry_settings.read().await;
         let actor = fetch_actor(
-            &actor_ref,
-            &self.host_config.oci_opts,
+            actor_ref,
             self.host_config.allow_file_load,
+            &registry_settings,
         )
         .await
         .context("failed to fetch actor")?;
@@ -2057,11 +2171,12 @@ impl Host {
     ) -> anyhow::Result<()> {
         debug!("launch provider");
 
+        let registry_settings = self.registry_settings.read().await;
         let (path, claims) = crate::fetch_provider(
             provider_ref,
             link_name,
-            &self.host_config.oci_opts,
             self.host_config.allow_file_load,
+            &registry_settings,
         )
         .await
         .context("failed to fetch provider")?;

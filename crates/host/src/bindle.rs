@@ -1,7 +1,6 @@
 // Adapted from
 // https://github.com/wasmCloud/wasmcloud-otp/blob/5f13500646d9e077afa1fca67a3fe9c8df5f3381/host_core/native/hostcore_wasmcloud_native/src/client.rs
 
-use std::collections::HashMap;
 use std::env;
 use std::env::consts::{ARCH, OS};
 use std::path::PathBuf;
@@ -25,10 +24,8 @@ use tracing::warn;
 use wascap::jwt;
 
 use crate::par;
+use crate::registry::{Auth as RegistryAuth, Settings as RegistrySettings};
 
-const BINDLE_USER_NAME_ENV: &str = "BINDLE_USER_NAME";
-const BINDLE_TOKEN_ENV: &str = "BINDLE_TOKEN";
-const BINDLE_PASSWORD_ENV: &str = "BINDLE_PASSWORD";
 const BINDLE_URL_ENV: &str = "BINDLE_URL";
 const BINDLE_KEYRING_PATH: &str = "BINDLE_KEYRING_PATH";
 
@@ -62,28 +59,11 @@ impl TokenManager for Auth {
 }
 
 #[allow(clippy::implicit_hasher)]
-fn get_bindle_auth(creds_override: Option<HashMap<String, String>>) -> Auth {
-    if let Some(co) = creds_override {
-        match (co.get("username"), co.get("password"), co.get("token")) {
-            (Some(u), Some(p), _) => Auth::Http(HttpBasic::new(u, p)),
-            (_, _, Some(t)) => Auth::LongLived(LongLivedToken::new(t)),
-            _ => Auth::None(NoToken),
-        }
-    } else {
-        match (
-            env::var(BINDLE_PASSWORD_ENV),
-            env::var(BINDLE_USER_NAME_ENV),
-            env::var(BINDLE_TOKEN_ENV),
-        ) {
-            (Ok(pw), Ok(username), _) => Auth::Http(HttpBasic::new(&username, &pw)),
-            (_, _, Ok(token)) => Auth::LongLived(LongLivedToken::new(&token)),
-            _ => {
-                // used to return an error here. Instead, default to anonymous and hope
-                // for the best. If insufficient creds were provided, the fetch call will
-                // fail anyway
-                Auth::None(NoToken)
-            }
-        }
+fn get_bindle_auth(registry_settings: &RegistrySettings) -> Auth {
+    match &registry_settings.auth {
+        RegistryAuth::Basic(username, password) => Auth::Http(HttpBasic::new(username, password)),
+        RegistryAuth::Token(token) => Auth::LongLived(LongLivedToken::new(token)),
+        RegistryAuth::Anonymous => Auth::None(NoToken),
     }
 }
 
@@ -91,10 +71,10 @@ fn get_bindle_auth(creds_override: Option<HashMap<String, String>>) -> Auth {
 #[allow(clippy::implicit_hasher)]
 #[allow(clippy::missing_errors_doc)] // TODO: document errors
 pub async fn get_client(
-    creds_override: Option<HashMap<String, String>>,
     bindle_id: &str,
+    registry_settings: &RegistrySettings,
 ) -> anyhow::Result<DumbCache<FileProvider<NoopEngine>, Client<Auth>>> {
-    let auth = get_bindle_auth(creds_override.clone());
+    let auth = get_bindle_auth(registry_settings);
 
     // Make sure the cache dir exists
     let temp_dir = std::env::temp_dir();
@@ -106,11 +86,7 @@ pub async fn get_client(
         bindle_dir.join(KEYRING_FILE)
     };
     tokio::fs::create_dir_all(&bindle_dir).await?;
-    let bindle_url = if creds_override.is_some() {
-        extract_server(bindle_id)
-    } else {
-        env::var(BINDLE_URL_ENV).unwrap_or_else(|_| DEFAULT_BINDLE_URL.to_owned())
-    };
+    let bindle_url = extract_server(bindle_id);
     let keyring: KeyRing = match keyring_path.load().await {
         Ok(k) => k,
         Err(e) => {
@@ -160,12 +136,12 @@ pub(crate) fn normalize_bindle_id(bindle_id: &str) -> String {
 #[allow(clippy::implicit_hasher)]
 #[allow(clippy::missing_errors_doc)] // TODO: document errors
 pub async fn fetch_actor(
-    creds_override: Option<HashMap<String, String>>,
     bindle_id: impl AsRef<str>,
+    registry_settings: &RegistrySettings,
 ) -> anyhow::Result<Vec<u8>> {
     let bindle_id = bindle_id.as_ref();
     // Get the invoice, validate this bindle contains an actor, fetch the actor and return
-    let client = get_client(creds_override, bindle_id)
+    let client = get_client(bindle_id, registry_settings)
         .await
         .context("failed to get client")?;
 
@@ -198,10 +174,10 @@ pub async fn fetch_actor(
 pub async fn fetch_provider(
     bindle_id: impl AsRef<str>,
     link_name: impl AsRef<str>,
-    creds_override: Option<HashMap<String, String>>,
+    registry_settings: &RegistrySettings,
 ) -> anyhow::Result<(PathBuf, jwt::Claims<jwt::CapabilityProvider>)> {
     let bindle_id = bindle_id.as_ref();
-    let client = get_client(creds_override, bindle_id)
+    let client = get_client(bindle_id, registry_settings)
         .await
         .context("failed to construct client")?;
     let bindle_id = normalize_bindle_id(bindle_id);
