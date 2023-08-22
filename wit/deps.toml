@@ -1,2 +1,2 @@
-io = "https://github.com/WebAssembly/wasi-io/archive/1b22f18a5af1274724a293782798f91e7dcf4ed6.tar.gz" # Pin for Wasmtime 11 compatibility
+io = "./io" # Pin for Wasmtime 12 compatibility
 poll = "https://github.com/WebAssembly/wasi-poll/archive/main.tar.gz" # TODO: Remove together with pin above

@@ -121,8 +121,8 @@ ulid = { version = "1", default-features = false }
 url = { version = "2", default-features = false }
 uuid = { version = "1", default-features = false }
 wascap = { version = "0.11", default-features = false }
-wasi-common = { version = "11", default-features = false }
-wasm-metadata = { version = "0.10.2", default-features = false }
+wasi-common = { version = "12", default-features = false }
+wasm-metadata = { version = "0.10", default-features = false }
 wasmcloud-actor = { path = "./crates/actor" }
 wasmcloud-actor-derive = { path = "./crates/actor/derive" }
 wasmcloud-compat = { path = "./crates/compat" }
@@ -131,11 +131,11 @@ wasmcloud-control-interface = { version = "0.28", default-features = false }
 wasmcloud-host = { path = "./crates/host" }
 wasmcloud-runtime = { path = "./crates/runtime" }
 wasmparser = { version = "0.111", default-features = false }
-wasmtime = { version = "11", default-features = false }
-wasmtime-component-macro = { version = "11.0.1", default-features = false }
-wasmtime-wasi = { version = "11", default-features = false }
-wasmtime-wit-bindgen = { version = "11.0.1", default-features = false }
-wit-bindgen = { version = "0.9", default-features = false }
+wasmtime = { version = "12", default-features = false }
+wasmtime-component-macro = { version = "11", default-features = false }
+wasmtime-wasi = { version = "12", default-features = false }
+wasmtime-wit-bindgen = { version = "11", default-features = false }
+wit-bindgen = { version = "0.10", default-features = false }
 wit-bindgen-wasmcloud-provider = { path = "./crates/wit-bindgen-wasmcloud-provider" }
 wit-component = { version = "0.12", default-features = false }
-wit-parser = { version = "0.8.0", default-features = false }
+wit-parser = { version = "0.8", default-features = false }

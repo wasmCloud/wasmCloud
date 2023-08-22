@@ -3,29 +3,32 @@ use std::io::{Read, Write};
 #[cfg(all(not(feature = "module"), feature = "component"))]
 pub struct InputStreamReader {
     stream: crate::wasi::io::streams::InputStream,
-    end: bool,
+    status: Option<crate::wasi::io::streams::StreamStatus>,
 }
 
 #[cfg(all(not(feature = "module"), feature = "component"))]
 impl From<crate::wasi::io::streams::InputStream> for InputStreamReader {
     fn from(stream: crate::wasi::io::streams::InputStream) -> Self {
-        Self { stream, end: false }
+        Self {
+            stream,
+            status: None,
+        }
     }
 }
 
 #[cfg(all(not(feature = "module"), feature = "component"))]
 impl std::io::Read for InputStreamReader {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        if self.end {
+        if let Some(crate::wasi::io::streams::StreamStatus::Ended) = self.status {
             return Ok(0);
         }
         let n = buf
             .len()
             .try_into()
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-        let (chunk, end) = crate::wasi::io::streams::blocking_read(self.stream, n)
+        let (chunk, status) = crate::wasi::io::streams::blocking_read(self.stream, n)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-        self.end = end;
+        self.status = Some(status);
 
         let n = chunk.len();
         if n > buf.len() {
@@ -40,22 +43,40 @@ impl std::io::Read for InputStreamReader {
 }
 
 #[cfg(all(not(feature = "module"), feature = "component"))]
-pub struct OutputStreamWriter(crate::wasi::io::streams::OutputStream);
+pub struct OutputStreamWriter {
+    stream: crate::wasi::io::streams::OutputStream,
+    status: Option<crate::wasi::io::streams::StreamStatus>,
+}
 
 #[cfg(all(not(feature = "module"), feature = "component"))]
 impl From<crate::wasi::io::streams::OutputStream> for OutputStreamWriter {
     fn from(stream: crate::wasi::io::streams::OutputStream) -> Self {
-        Self(stream)
+        Self {
+            stream,
+            status: None,
+        }
     }
 }
 
 #[cfg(all(not(feature = "module"), feature = "component"))]
 impl std::io::Write for OutputStreamWriter {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        crate::wasi::io::streams::blocking_write(self.0, buf)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?
+        if let Some(crate::wasi::io::streams::StreamStatus::Ended) = self.status {
+            return Ok(0);
+        }
+        let (n, status) = crate::wasi::io::streams::blocking_write(self.stream, buf)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        self.status = Some(status);
+        let n = n
             .try_into()
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        if n > buf.len() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "more bytes written than requested",
+            ));
+        }
+        Ok(n)
     }
 
     fn flush(&mut self) -> std::io::Result<()> {

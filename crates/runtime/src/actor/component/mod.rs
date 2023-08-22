@@ -8,14 +8,18 @@ use core::ops::{Deref, DerefMut};
 
 use std::sync::Arc;
 
-use anyhow::Context as _;
+use anyhow::{ensure, Context as _};
 use async_trait::async_trait;
+use bytes::{Bytes, BytesMut};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::runtime::Handle;
 use tokio::sync::Mutex;
+use tokio::task::block_in_place;
 use tracing::{instrument, trace};
 use wascap::jwt;
-use wasmtime_wasi::preview2::wasi::command::Command;
-use wasmtime_wasi::preview2::{self, InputStream, OutputStream};
+use wasmtime_wasi::preview2::command::Command;
+use wasmtime_wasi::preview2::pipe::{ClosedInputStream, ClosedOutputStream};
+use wasmtime_wasi::preview2::{self, HostInputStream, HostOutputStream, StreamState};
 
 mod blobstore;
 mod bus;
@@ -34,8 +38,8 @@ mod guest_bindings {
         world: "guest",
         async: true,
         with: {
-           "wasi:io/streams": wasmtime_wasi::preview2::wasi::io::streams,
-           "wasi:poll/poll": wasmtime_wasi::preview2::wasi::poll::poll,
+           "wasi:io/streams": wasmtime_wasi::preview2::bindings::io::streams,
+           "wasi:poll/poll": wasmtime_wasi::preview2::bindings::poll::poll,
         },
     });
 }
@@ -43,76 +47,53 @@ mod guest_bindings {
 struct AsyncStream<T>(T);
 
 #[async_trait]
-impl<T: AsyncRead + Send + Sync + Unpin + 'static> InputStream for AsyncStream<T> {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
+impl<T: AsyncRead + Send + Sync + Unpin + 'static> HostInputStream for AsyncStream<T> {
+    #[instrument(skip(self))]
+    fn read(&mut self, size: usize) -> anyhow::Result<(Bytes, StreamState)> {
+        let mut buf = BytesMut::with_capacity(size);
+        // TODO: Don't block
+        match block_in_place(|| Handle::current().block_on(self.0.read_buf(&mut buf)))
+            .context("failed to read bytes")?
+        {
+            0 => Ok((Bytes::new(), StreamState::Closed)),
+            n => {
+                ensure!(n <= size, "more bytes read than requested");
+                Ok((buf.freeze(), StreamState::Open))
+            }
+        }
     }
 
     #[instrument(skip(self))]
-    async fn read(&mut self, buf: &mut [u8]) -> anyhow::Result<(u64, bool)> {
-        let n = self.0.read(buf).await.context("failed to read")?;
-        let n = n.try_into().context("overflow")?;
-        Ok((n, !buf.is_empty() && n == 0))
-    }
-
-    async fn read_vectored<'a>(
-        &mut self,
-        bufs: &mut [std::io::IoSliceMut<'a>],
-    ) -> anyhow::Result<(u64, bool)> {
-        for buf in bufs {
-            if buf.len() > 0 {
-                let n = self.0.read(buf).await.context("failed to read")?;
-                let n = n.try_into().context("overflow")?;
-                return Ok((n, n == 0));
-            }
-        }
-        Ok((0, false))
-    }
-
-    fn is_read_vectored(&self) -> bool {
-        true
-    }
-
-    async fn readable(&self) -> anyhow::Result<()> {
+    async fn ready(&mut self) -> anyhow::Result<()> {
         Ok(())
     }
 }
 
 #[async_trait]
-impl<T: AsyncWrite + Send + Sync + Unpin + 'static> OutputStream for AsyncStream<T> {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
+impl<T: AsyncWrite + Send + Sync + Unpin + 'static> HostOutputStream for AsyncStream<T> {
+    #[instrument(skip(self))]
+    fn write(&mut self, mut buf: Bytes) -> anyhow::Result<(usize, StreamState)> {
+        let size = buf.len();
+        // TODO: Don't block
+        match block_in_place(|| Handle::current().block_on(self.0.write_buf(&mut buf)))
+            .context("failed to write bytes")?
+        {
+            0 => Ok((0, StreamState::Closed)),
+            n => {
+                ensure!(n <= size, "more bytes written than requested");
+                Ok((n, StreamState::Open))
+            }
+        }
     }
 
     #[instrument(skip(self))]
-    async fn write(&mut self, buf: &[u8]) -> anyhow::Result<u64> {
-        let n = self.0.write(buf).await.context("failed to write")?;
-        let n = n.try_into().context("overflow")?;
-        Ok(n)
-    }
-
-    #[instrument(skip(self))]
-    async fn write_vectored<'a>(&mut self, bufs: &[std::io::IoSlice<'a>]) -> anyhow::Result<u64> {
-        let n = self
-            .0
-            .write_vectored(bufs)
-            .await
-            .context("failed to write")?;
-        let n = n.try_into().context("overflow")?;
-        Ok(n)
-    }
-
-    fn is_write_vectored(&self) -> bool {
-        true
-    }
-
-    async fn writable(&self) -> anyhow::Result<()> {
+    async fn ready(&mut self) -> anyhow::Result<()> {
         Ok(())
     }
 }
 
 /// `StdioStream` delegates all stream I/O to inner [`AsyncStream`] if such is set and
-/// mimics [`std::io::empty`] and [`std::io::sink`] otherwise
+/// mimics [`ClosedInputStream`] and [`ClosedOutputStream`] otherwise
 struct StdioStream<T>(Arc<Mutex<Option<AsyncStream<T>>>>);
 
 impl<T> Clone for StdioStream<T> {
@@ -154,97 +135,74 @@ impl<T> StdioStream<T> {
 }
 
 #[async_trait]
-impl<T: AsyncRead + Send + Sync + Unpin + 'static> InputStream for StdioStream<T> {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
+impl<T: AsyncRead + Send + Sync + Unpin + 'static> HostInputStream for StdioStream<T> {
     #[instrument(skip(self))]
-    async fn read(&mut self, buf: &mut [u8]) -> anyhow::Result<(u64, bool)> {
-        if let Some(stream) = self.0.lock().await.as_mut() {
-            stream.read(buf).await
-        } else {
-            Ok((0, true))
+    fn read(&mut self, size: usize) -> anyhow::Result<(Bytes, StreamState)> {
+        match self.0.try_lock().as_deref_mut() {
+            Ok(None) => ClosedInputStream.read(size),
+            Ok(Some(stream)) => stream.read(size),
+            Err(_) => Ok((Bytes::default(), StreamState::Open)),
         }
     }
 
     #[instrument(skip(self))]
-    async fn read_vectored<'a>(
-        &mut self,
-        bufs: &mut [std::io::IoSliceMut<'a>],
-    ) -> anyhow::Result<(u64, bool)> {
-        if let Some(stream) = self.0.lock().await.as_mut() {
-            stream.read_vectored(bufs).await
-        } else {
-            Ok((0, true))
+    fn skip(&mut self, nelem: usize) -> anyhow::Result<(usize, StreamState)> {
+        match self.0.try_lock().as_deref_mut() {
+            Ok(None) => ClosedInputStream.skip(nelem),
+            Ok(Some(stream)) => stream.skip(nelem),
+            Err(_) => Ok((0, StreamState::Open)),
         }
     }
 
-    fn is_read_vectored(&self) -> bool {
-        true
-    }
-
-    async fn readable(&self) -> anyhow::Result<()> {
-        if let Some(stream) = self.0.lock().await.as_ref() {
-            stream.readable().await
+    #[instrument(skip(self))]
+    async fn ready(&mut self) -> anyhow::Result<()> {
+        if let Some(stream) = self.0.lock().await.as_mut() {
+            stream.ready().await
         } else {
-            Ok(())
+            ClosedInputStream.ready().await
         }
     }
 }
 
 #[async_trait]
-impl<T: AsyncWrite + Send + Sync + Unpin + 'static> OutputStream for StdioStream<T> {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
+impl<T: AsyncWrite + Send + Sync + Unpin + 'static> HostOutputStream for StdioStream<T> {
+    #[instrument(skip(self))]
+    fn write(&mut self, bytes: Bytes) -> anyhow::Result<(usize, StreamState)> {
+        match self.0.try_lock().as_deref_mut() {
+            Ok(None) => ClosedOutputStream.write(bytes),
+            Ok(Some(stream)) => stream.write(bytes),
+            Err(_) => Ok((0, StreamState::Open)),
+        }
     }
 
-    #[instrument(skip(self))]
-    async fn write(&mut self, buf: &[u8]) -> anyhow::Result<u64> {
-        if let Some(stream) = self.0.lock().await.as_mut() {
-            stream.write(buf).await
-        } else {
-            Ok(buf.len().try_into().unwrap_or(u64::MAX))
+    #[instrument(skip(self, src))]
+    fn splice(
+        &mut self,
+        src: &mut dyn HostInputStream,
+        nelem: usize,
+    ) -> anyhow::Result<(usize, StreamState)> {
+        match self.0.try_lock().as_deref_mut() {
+            Ok(None) => ClosedOutputStream.splice(src, nelem),
+            Ok(Some(stream)) => stream.splice(src, nelem),
+            Err(_) => Ok((0, StreamState::Open)),
         }
     }
 
     #[instrument(skip(self))]
-    async fn write_vectored<'a>(&mut self, bufs: &[std::io::IoSlice<'a>]) -> anyhow::Result<u64> {
-        if let Some(stream) = self.0.lock().await.as_mut() {
-            stream.write_vectored(bufs).await
-        } else {
-            let total = bufs.iter().map(|b| b.len()).sum::<usize>();
-            Ok(total.try_into().unwrap_or(u64::MAX))
+    fn write_zeroes(&mut self, nelem: usize) -> anyhow::Result<(usize, StreamState)> {
+        match self.0.try_lock().as_deref_mut() {
+            Ok(None) => ClosedOutputStream.write_zeroes(nelem),
+            Ok(Some(stream)) => stream.write_zeroes(nelem),
+            Err(_) => Ok((0, StreamState::Open)),
         }
     }
-
-    // TODO: Implement `splice`
-    //async fn splice(
-    //    &mut self,
-    //    src: &mut dyn InputStream,
-    //    nelem: u64,
-    //) -> anyhow::Result<(u64, bool)> {
-    //    todo!()
-    //}
 
     #[instrument(skip(self))]
-    async fn write_zeroes(&mut self, nelem: u64) -> anyhow::Result<u64> {
+    async fn ready(&mut self) -> anyhow::Result<()> {
         if let Some(stream) = self.0.lock().await.as_mut() {
-            stream.write_zeroes(nelem).await
+            stream.ready().await
         } else {
-            Ok(nelem)
-        }
-    }
-
-    fn is_write_vectored(&self) -> bool {
-        true
-    }
-
-    async fn writable(&self) -> anyhow::Result<()> {
-        if let Some(stream) = self.0.lock().await.as_ref() {
-            stream.writable().await
-        } else {
-            Ok(())
+            ClosedOutputStream.ready().await
         }
     }
 }
@@ -311,8 +269,7 @@ fn instantiate(
     Interfaces::add_to_linker(&mut linker, |ctx| ctx)
         .context("failed to link `Wasmcloud` interface")?;
 
-    preview2::wasi::command::add_to_linker(&mut linker)
-        .context("failed to link `WASI` interface")?;
+    preview2::command::add_to_linker(&mut linker).context("failed to link `WASI` interface")?;
 
     let stdin = StdioStream::default();
     let stdout = StdioStream::default();

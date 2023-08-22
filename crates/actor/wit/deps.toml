@@ -3,6 +3,6 @@ io = "../../../wit/deps/io"
 keyvalue = "../../runtime/wit/deps/keyvalue"
 logging = "../../runtime/wit/deps/logging"
 messaging = "../../../wit/messaging"
-poll = "../../../wit/deps/poll" # TODO: Remove once keyvalue is compatible
+poll = "../../../wit/deps/poll"
 random = "../../runtime/wit/deps/random"
 wasmcloud = "../../../wit"

@@ -20,6 +20,7 @@ log = [
 [dependencies]
 anyhow = { workspace = true, features = ["std"] }
 async-trait = { workspace = true }
+bytes = { workspace = true }
 futures = { workspace = true, features = ["async-await", "std"] }
 http = { workspace = true }
 log = { workspace = true }

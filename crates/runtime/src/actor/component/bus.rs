@@ -13,8 +13,7 @@ use async_trait::async_trait;
 use futures::future::Shared;
 use futures::FutureExt;
 use tracing::instrument;
-use wasmtime_wasi::preview2;
-use wasmtime_wasi::preview2::stream::TableStreamExt;
+use wasmtime_wasi::preview2::{self, TableStreamExt};
 
 impl Instance {
     /// Set [`Bus`] handler for this [Instance].
@@ -75,8 +74,8 @@ impl host::Host for Ctx {
         Result<
             (
                 host::FutureResult,
-                preview2::wasi::io::streams::InputStream,
-                preview2::wasi::io::streams::OutputStream,
+                preview2::bindings::io::streams::InputStream,
+                preview2::bindings::io::streams::OutputStream,
             ),
             String,
         >,

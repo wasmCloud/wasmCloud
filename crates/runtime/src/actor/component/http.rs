@@ -13,8 +13,7 @@ use async_trait::async_trait;
 use tokio::io::{AsyncRead, AsyncSeekExt};
 use tokio::sync::Mutex;
 use tracing::instrument;
-use wasmtime_wasi::preview2;
-use wasmtime_wasi::preview2::stream::TableStreamExt;
+use wasmtime_wasi::preview2::{self, TableStreamExt};
 
 pub mod incoming_http_bindings {
     wasmtime::component::bindgen!({
@@ -274,14 +273,14 @@ impl types::Host for Ctx {
         s: types::IncomingStream,
     ) -> anyhow::Result<Option<types::Trailers>> {
         self.table
-            .get_input_stream(s)
+            .get_input_stream_mut(s)
             .context("failed to get output stream")?;
         // TODO: Read to end and get trailers
         Ok(None)
     }
     async fn finish_outgoing_stream(&mut self, s: types::OutgoingStream) -> anyhow::Result<()> {
         self.table
-            .get_output_stream(s)
+            .get_output_stream_mut(s)
             .context("failed to get output stream")?;
         // TODO: Close
         Ok(())
@@ -293,7 +292,7 @@ impl types::Host for Ctx {
         trailers: types::Trailers,
     ) -> anyhow::Result<types::FutureWriteTrailersResult> {
         self.table
-            .get_output_stream(s)
+            .get_output_stream_mut(s)
             .context("failed to get output stream")?;
         // TODO: Close
         bail!("trailers not supported yet")
