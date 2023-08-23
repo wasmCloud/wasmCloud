@@ -13,7 +13,7 @@
   description = "wash - wasmCloud Shell";
 
   inputs.nixify.url = github:rvolosatovs/nixify;
-  inputs.wasmcloud-component-adapters.url = github:wasmCloud/wasmcloud-component-adapters;
+  inputs.wasmcloud-component-adapters.url = github:wasmCloud/wasmcloud-component-adapters/v0.2.0;
 
   outputs = {
     self,
