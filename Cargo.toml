@@ -131,7 +131,6 @@ wasmcloud-host = { path = "./crates/host" }
 wasmcloud-runtime = { path = "./crates/runtime" }
 wasmparser = { version = "0.111", default-features = false }
 wasmtime = { version = "12", default-features = false }
-wasmtime-component-macro = { version = "12", default-features = false }
 wasmtime-wasi = { version = "12", default-features = false }
 wasmtime-wit-bindgen = { version = "11", default-features = false }
 wit-bindgen = { version = "0.10", default-features = false }
