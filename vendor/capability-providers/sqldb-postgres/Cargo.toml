@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud-provider-sqldb-postgres"
-version = "0.5.1"
+version = "0.6.0"
 description = "Postgres SQL Database capability provider for contract wasmcloud:sqldb"
 readme = "README.md"
 edition = "2021"
@@ -24,16 +24,15 @@ tokio-postgres = { version = "0.7", features=["with-bit-vec-0_6", "with-chrono-0
 bb8-postgres = "0.8.1"
 bit-vec = "0.6"
 uuid = "1.1.2"
-native-tls = "0.2"
 toml = "0.5"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-wasmbus-rpc = { version = "0.13", features = [ "otel" ] }
-wasmcloud-interface-sqldb = "0.9"
+wasmbus-rpc = { version = "0.14", features = [ "otel" ] }
+wasmcloud-interface-sqldb = "0.10"
 
 # test dependencies
 [dev-dependencies]
-wasmcloud-test-util = "0.8"
+wasmcloud-test-util = "0.10"
 
 [[bin]]
 name = "sqldb-postgres"
