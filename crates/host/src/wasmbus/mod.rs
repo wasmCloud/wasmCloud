@@ -623,7 +623,11 @@ impl KeyValueReadWrite for Handler {
                 },
             )
             .await?;
-        rmp_serde::from_slice(&res).context("failed to decode response")
+        if res.is_empty() {
+            Ok(())
+        } else {
+            rmp_serde::from_slice(&res).context("failed to decode response")
+        }
     }
 
     #[instrument]
@@ -741,7 +745,11 @@ impl Messaging for Handler {
                 },
             )
             .await?;
-        rmp_serde::from_slice(&res).context("failed to decode response")
+        if res.is_empty() {
+            Ok(())
+        } else {
+            rmp_serde::from_slice(&res).context("failed to decode response")
+        }
     }
 }
 
