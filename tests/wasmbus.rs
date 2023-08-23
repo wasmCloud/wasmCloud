@@ -5,6 +5,7 @@ use std::net::Ipv6Addr;
 use std::pin::pin;
 use std::process::ExitStatus;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, ensure, Context};
@@ -430,15 +431,17 @@ async fn wasmbus() -> anyhow::Result<()> {
         ("path".into(), "test-path".into()),
     ]);
 
+    let cluster_key = Arc::new(cluster_key);
+    let host_key = Arc::new(host_key);
     let (host, shutdown) = Host::new(HostConfig {
         ctl_nats_url: ctl_nats_url.clone(),
         rpc_nats_url: ctl_nats_url.clone(),
         prov_rpc_nats_url: ctl_nats_url.clone(),
         lattice_prefix: TEST_PREFIX.to_string(),
         js_domain: None,
-        cluster_seed: Some(cluster_key.seed().unwrap()),
+        cluster_key: Some(Arc::clone(&cluster_key)),
         cluster_issuers: Some(vec![cluster_key.public_key(), cluster_key_two.public_key()]),
-        host_seed: Some(host_key.seed().unwrap()),
+        host_key: Some(Arc::clone(&host_key)),
         provider_shutdown_delay: Some(Duration::from_millis(300)),
         allow_file_load: true,
         ..Default::default()
@@ -446,14 +449,16 @@ async fn wasmbus() -> anyhow::Result<()> {
     .await
     .context("failed to initialize host")?;
 
+    let cluster_key_two = Arc::new(cluster_key_two);
+    let host_key_two = Arc::new(host_key_two);
     let (host_two, shutdown_two) = Host::new(HostConfig {
         ctl_nats_url: ctl_nats_url.clone(),
         rpc_nats_url: ctl_nats_url.clone(),
         prov_rpc_nats_url: ctl_nats_url.clone(),
         lattice_prefix: TEST_PREFIX.to_string(),
-        cluster_seed: Some(cluster_key_two.seed().unwrap()),
+        cluster_key: Some(Arc::clone(&cluster_key_two)),
         cluster_issuers: Some(vec![cluster_key.public_key(), cluster_key_two.public_key()]),
-        host_seed: Some(host_key_two.seed().unwrap()),
+        host_key: Some(Arc::clone(&host_key_two)),
         provider_shutdown_delay: Some(Duration::from_millis(400)),
         allow_file_load: true,
         ..Default::default()
