@@ -2,6 +2,8 @@ use std::sync::RwLock;
 
 use once_cell::sync::Lazy;
 
+pub(crate) const WASI_KEYVALUE_ATOMIC_TARGET: Lazy<RwLock<Option<TargetEntity>>> =
+    Lazy::new(RwLock::default);
 pub(crate) const WASI_KEYVALUE_READWRITE_TARGET: Lazy<RwLock<Option<TargetEntity>>> =
     Lazy::new(RwLock::default);
 pub(crate) const WASI_LOGGING_LOGGING_TARGET: Lazy<RwLock<Option<TargetEntity>>> =
@@ -35,6 +37,17 @@ mod private {
 
 pub trait TargetInterface: private::Sealed {
     fn set_target(&self, target: Option<&TargetEntity>);
+}
+
+#[derive(Eq, PartialEq)]
+struct WasiKeyvalueAtomic;
+impl private::Sealed for WasiKeyvalueAtomic {}
+impl TargetInterface for WasiKeyvalueAtomic {
+    fn set_target(&self, target: Option<&TargetEntity>) {
+        *WASI_KEYVALUE_ATOMIC_TARGET
+            .write()
+            .expect("failed to lock target") = target.cloned();
+    }
 }
 
 #[derive(Eq, PartialEq)]
@@ -81,6 +94,9 @@ impl TargetInterface for WasmcloudMessagingConsumer {
     }
 }
 
+pub fn target_wasi_keyvalue_atomic() -> &'static dyn TargetInterface {
+    &WasiKeyvalueAtomic
+}
 pub fn target_wasi_keyvalue_readwrite() -> &'static dyn TargetInterface {
     &WasiKeyvalueReadwrite
 }

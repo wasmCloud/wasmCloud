@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::env;
 use std::env::consts::{ARCH, FAMILY, OS};
 use std::net::Ipv6Addr;
@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, ensure, Context};
 use nkeys::KeyPair;
-use redis::ConnectionLike;
+use redis::{Commands, ConnectionLike};
 use serde::Deserialize;
 use tempfile::tempdir;
 use tokio::net::TcpListener;
@@ -337,10 +337,12 @@ async fn assert_handle_http_request(
         .context("failed to await NATS request task")?
         .context("failed to handle NATS requests")?;
 
-    let redis_keys = redis_client
-        .req_command(&redis::Cmd::keys("*"))
+    let redis_keys: BTreeSet<String> = redis_client
+        .get_connection()
+        .context("failed to get connection")?
+        .keys("*")
         .context("failed to list keys in Redis")?;
-    let expected_redis_keys = redis::Value::Bulk(vec![redis::Value::Data(b"result".to_vec())]);
+    let expected_redis_keys = BTreeSet::from(["counter".into(), "result".into()]);
     ensure!(
         redis_keys == expected_redis_keys,
         r#"invalid keys in Redis:
@@ -349,9 +351,14 @@ expected: {expected_redis_keys:?}"#
     );
 
     let redis_res = redis_client
+        .req_command(&redis::Cmd::get("counter"))
+        .context("failed to get `counter` key in Redis")?;
+    ensure!(redis_res == redis::Value::Data(b"42".to_vec()));
+    let redis_res = redis_client
         .req_command(&redis::Cmd::get("result"))
         .context("failed to get `result` key in Redis")?;
     ensure!(redis_res == redis::Value::Data(http_res.into()));
+
     Ok(())
 }
 

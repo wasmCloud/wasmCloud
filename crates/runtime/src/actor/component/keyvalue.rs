@@ -1,7 +1,7 @@
 use super::{AsyncStream, Ctx, Instance, TableResult};
 
-use crate::capability::keyvalue::{readwrite, types, wasi_cloud_error};
-use crate::capability::KeyValueReadWrite;
+use crate::capability::keyvalue::{atomic, readwrite, types, wasi_cloud_error};
+use crate::capability::{KeyValueAtomic, KeyValueReadWrite};
 use crate::io::AsyncVec;
 
 use std::sync::Arc;
@@ -13,6 +13,15 @@ use tracing::instrument;
 use wasmtime_wasi::preview2::{self, TableStreamExt};
 
 impl Instance {
+    /// Set [`KeyValueAtomic`] handler for this [Instance].
+    pub fn keyvalue_atomic(
+        &mut self,
+        keyvalue_atomic: Arc<dyn KeyValueAtomic + Send + Sync>,
+    ) -> &mut Self {
+        self.handler_mut().replace_keyvalue_atomic(keyvalue_atomic);
+        self
+    }
+
     /// Set [`KeyValueReadWrite`] handler for this [Instance].
     pub fn keyvalue_readwrite(
         &mut self,
@@ -113,6 +122,50 @@ impl TableKeyValueExt for preview2::Table {
 }
 
 type Result<T, E = types::Error> = core::result::Result<T, E>;
+
+#[async_trait]
+impl atomic::Host for Ctx {
+    #[instrument]
+    async fn increment(
+        &mut self,
+        bucket: types::Bucket,
+        key: types::Key,
+        delta: u64,
+    ) -> anyhow::Result<Result<u64>> {
+        let bucket = self
+            .table
+            .get_bucket(bucket)
+            .context("failed to get bucket")?;
+        match self.handler.increment(bucket, key, delta).await {
+            Ok(new) => Ok(Ok(new)),
+            Err(err) => {
+                let err = self.table.push_error(err).context("failed to push error")?;
+                Ok(Err(err))
+            }
+        }
+    }
+
+    #[instrument]
+    async fn compare_and_swap(
+        &mut self,
+        bucket: types::Bucket,
+        key: types::Key,
+        old: u64,
+        new: u64,
+    ) -> anyhow::Result<Result<bool>> {
+        let bucket = self
+            .table
+            .get_bucket(bucket)
+            .context("failed to get bucket")?;
+        match self.handler.compare_and_swap(bucket, key, old, new).await {
+            Ok(changed) => Ok(Ok(changed)),
+            Err(err) => {
+                let err = self.table.push_error(err).context("failed to push error")?;
+                Ok(Err(err))
+            }
+        }
+    }
+}
 
 #[async_trait]
 impl readwrite::Host for Ctx {

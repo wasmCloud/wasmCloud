@@ -1,6 +1,6 @@
 use crate::actor::ModuleConfig;
 use crate::capability::{
-    builtin, Blobstore, Bus, IncomingHttp, KeyValueReadWrite, Logging, Messaging,
+    builtin, Blobstore, Bus, IncomingHttp, KeyValueAtomic, KeyValueReadWrite, Logging, Messaging,
 };
 use crate::ActorConfig;
 
@@ -79,6 +79,18 @@ impl RuntimeBuilder {
     ) -> Self {
         Self {
             handler: self.handler.incoming_http(incoming_http),
+            ..self
+        }
+    }
+
+    /// Set a [`KeyValueAtomic`] handler to use for all actor instances unless overriden for the instance
+    #[must_use]
+    pub fn keyvalue_atomic(
+        self,
+        keyvalue_atomic: Arc<impl KeyValueAtomic + Sync + Send + 'static>,
+    ) -> Self {
+        Self {
+            handler: self.handler.keyvalue_atomic(keyvalue_atomic),
             ..self
         }
     }

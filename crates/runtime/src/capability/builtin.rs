@@ -21,9 +21,10 @@ use tracing::{instrument, trace};
 pub struct Handler {
     blobstore: Option<Arc<dyn Blobstore + Sync + Send>>,
     bus: Option<Arc<dyn Bus + Sync + Send>>,
+    incoming_http: Option<Arc<dyn IncomingHttp + Sync + Send>>,
+    keyvalue_atomic: Option<Arc<dyn KeyValueAtomic + Sync + Send>>,
     keyvalue_readwrite: Option<Arc<dyn KeyValueReadWrite + Sync + Send>>,
     logging: Option<Arc<dyn Logging + Sync + Send>>,
-    incoming_http: Option<Arc<dyn IncomingHttp + Sync + Send>>,
     messaging: Option<Arc<dyn Messaging + Sync + Send>>,
 }
 
@@ -33,6 +34,7 @@ impl Debug for Handler {
             .field("blobstore", &format_opt(&self.blobstore))
             .field("bus", &format_opt(&self.bus))
             .field("incoming_http", &format_opt(&self.incoming_http))
+            .field("keyvalue_atomic", &format_opt(&self.keyvalue_atomic))
             .field("keyvalue_readwrite", &format_opt(&self.keyvalue_readwrite))
             .field("logging", &format_opt(&self.logging))
             .field("messaging", &format_opt(&self.messaging))
@@ -63,6 +65,14 @@ impl Handler {
         incoming_http: Arc<dyn IncomingHttp + Send + Sync>,
     ) -> Option<Arc<dyn IncomingHttp + Send + Sync>> {
         self.incoming_http.replace(incoming_http)
+    }
+
+    /// Replace [`KeyValueAtomic`] handler returning the old one, if such was set
+    pub fn replace_keyvalue_atomic(
+        &mut self,
+        keyvalue_atomic: Arc<dyn KeyValueAtomic + Send + Sync>,
+    ) -> Option<Arc<dyn KeyValueAtomic + Send + Sync>> {
+        self.keyvalue_atomic.replace(keyvalue_atomic)
     }
 
     /// Replace [`KeyValueReadWrite`] handler returning the old one, if such was set
@@ -168,6 +178,8 @@ impl TryFrom<bus::lattice::TargetEntity> for TargetEntity {
 #[derive(Debug, Clone, Copy, Eq, Hash, PartialEq)]
 /// Call target identifier
 pub enum TargetInterface {
+    /// `wasi:keyvalue/atomic`
+    WasiKeyvalueAtomic,
     /// `wasi:keyvalue/readwrite`
     WasiKeyvalueReadwrite,
     /// `wasi:logging/logging`
@@ -257,6 +269,22 @@ pub trait Logging {
         context: String,
         message: String,
     ) -> anyhow::Result<()>;
+}
+
+#[async_trait]
+/// `wasi:keyvalue/atomic` implementation
+pub trait KeyValueAtomic {
+    /// Handle `wasi:keyvalue/atomic.increment`
+    async fn increment(&self, bucket: &str, key: String, delta: u64) -> anyhow::Result<u64>;
+
+    /// Handle `wasi:keyvalue/atomic.compare-and-swap`
+    async fn compare_and_swap(
+        &self,
+        bucket: &str,
+        key: String,
+        old: u64,
+        new: u64,
+    ) -> anyhow::Result<bool>;
 }
 
 #[async_trait]
@@ -391,6 +419,33 @@ impl Logging for Handler {
 }
 
 #[async_trait]
+impl KeyValueAtomic for Handler {
+    async fn increment(&self, bucket: &str, key: String, delta: u64) -> anyhow::Result<u64> {
+        trace!("call `KeyValueAtomic` handler");
+        self.keyvalue_atomic
+            .as_ref()
+            .context("cannot handle `wasi:keyvalue/atomic.increment`")?
+            .increment(bucket, key, delta)
+            .await
+    }
+
+    async fn compare_and_swap(
+        &self,
+        bucket: &str,
+        key: String,
+        old: u64,
+        new: u64,
+    ) -> anyhow::Result<bool> {
+        trace!("call `KeyValueAtomic` handler");
+        self.keyvalue_atomic
+            .as_ref()
+            .context("cannot handle `wasi:keyvalue/atomic.compare_and_swap`")?
+            .compare_and_swap(bucket, key, old, new)
+            .await
+    }
+}
+
+#[async_trait]
 impl KeyValueReadWrite for Handler {
     #[instrument]
     async fn get(
@@ -511,6 +566,8 @@ pub(crate) struct HandlerBuilder {
     pub bus: Option<Arc<dyn Bus + Sync + Send>>,
     /// [`IncomingHttp`] handler
     pub incoming_http: Option<Arc<dyn IncomingHttp + Sync + Send>>,
+    /// [`KeyValueAtomic`] handler
+    pub keyvalue_atomic: Option<Arc<dyn KeyValueAtomic + Sync + Send>>,
     /// [`KeyValueReadWrite`] handler
     pub keyvalue_readwrite: Option<Arc<dyn KeyValueReadWrite + Sync + Send>>,
     /// [`Logging`] handler
@@ -543,6 +600,17 @@ impl HandlerBuilder {
     ) -> Self {
         Self {
             incoming_http: Some(incoming_http),
+            ..self
+        }
+    }
+
+    /// Set [`KeyValueAtomic`] handler
+    pub fn keyvalue_atomic(
+        self,
+        keyvalue_atomic: Arc<impl KeyValueAtomic + Sync + Send + 'static>,
+    ) -> Self {
+        Self {
+            keyvalue_atomic: Some(keyvalue_atomic),
             ..self
         }
     }
@@ -581,6 +649,7 @@ impl Debug for HandlerBuilder {
             .field("blobstore", &format_opt(&self.blobstore))
             .field("bus", &format_opt(&self.bus))
             .field("incoming_http", &format_opt(&self.incoming_http))
+            .field("keyvalue_atomic", &format_opt(&self.keyvalue_atomic))
             .field("keyvalue_readwrite", &format_opt(&self.keyvalue_readwrite))
             .field("logging", &format_opt(&self.logging))
             .field("messaging", &format_opt(&self.messaging))
@@ -594,6 +663,7 @@ impl From<Handler> for HandlerBuilder {
             blobstore,
             bus,
             incoming_http,
+            keyvalue_atomic,
             keyvalue_readwrite,
             logging,
             messaging,
@@ -603,6 +673,7 @@ impl From<Handler> for HandlerBuilder {
             blobstore,
             bus,
             incoming_http,
+            keyvalue_atomic,
             keyvalue_readwrite,
             logging,
             messaging,
@@ -616,6 +687,7 @@ impl From<HandlerBuilder> for Handler {
             blobstore,
             bus,
             incoming_http,
+            keyvalue_atomic,
             keyvalue_readwrite,
             logging,
             messaging,
@@ -624,9 +696,10 @@ impl From<HandlerBuilder> for Handler {
         Self {
             blobstore,
             bus,
+            incoming_http,
+            keyvalue_atomic,
             keyvalue_readwrite,
             logging,
-            incoming_http,
             messaging,
         }
     }

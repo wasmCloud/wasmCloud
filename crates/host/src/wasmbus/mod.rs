@@ -51,8 +51,8 @@ use wasmcloud_control_interface::{
     StopProviderCommand, UpdateActorCommand,
 };
 use wasmcloud_runtime::capability::{
-    messaging, ActorIdentifier, Bus, IncomingHttp, KeyValueReadWrite, Messaging, TargetEntity,
-    TargetInterface,
+    messaging, ActorIdentifier, Bus, IncomingHttp, KeyValueAtomic, KeyValueReadWrite, Messaging,
+    TargetEntity, TargetInterface,
 };
 use wasmcloud_runtime::{ActorInstancePool, Runtime};
 
@@ -571,6 +571,41 @@ impl Bus for Handler {
 }
 
 #[async_trait]
+impl KeyValueAtomic for Handler {
+    #[instrument]
+    async fn increment(&self, bucket: &str, key: String, delta: u64) -> anyhow::Result<u64> {
+        const METHOD: &str = "wasmcloud:keyvalue/KeyValue.Increment";
+        if !bucket.is_empty() {
+            bail!("buckets not currently supported")
+        }
+        let targets = self.targets.read().await;
+        let value = delta.try_into().context("delta does not fit in `i32`")?;
+        let res = self
+            .call_operation(
+                targets.get(&TargetInterface::WasiKeyvalueAtomic),
+                METHOD,
+                &wasmcloud_compat::keyvalue::IncrementRequest { key, value },
+            )
+            .await?;
+        let new: i32 = rmp_serde::from_slice(&res).context("failed to decode response")?;
+        let new = new.try_into().context("result does not fit in `u64`")?;
+        Ok(new)
+    }
+
+    #[allow(unused)] // TODO: Implement https://github.com/wasmCloud/wasmCloud/issues/457
+    #[instrument]
+    async fn compare_and_swap(
+        &self,
+        bucket: &str,
+        key: String,
+        old: u64,
+        new: u64,
+    ) -> anyhow::Result<bool> {
+        bail!("not supported")
+    }
+}
+
+#[async_trait]
 impl KeyValueReadWrite for Handler {
     #[instrument]
     async fn get(
@@ -778,6 +813,7 @@ impl ActorInstance {
             .await
             .context("failed to set stderr")?
             .bus(Arc::new(self.handler.clone()))
+            .keyvalue_atomic(Arc::new(self.handler.clone()))
             .keyvalue_readwrite(Arc::new(self.handler.clone()))
             .messaging(Arc::new(self.handler.clone()));
         #[allow(clippy::single_match_else)] // TODO: Remove once more interfaces supported
