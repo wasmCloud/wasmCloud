@@ -1,15 +1,27 @@
-use crate::capability::KeyValueReadWrite;
+use crate::capability::{KeyValueAtomic, KeyValueReadWrite};
+
+use core::sync::atomic::AtomicU64;
 
 use std::collections::{hash_map, BTreeMap, HashMap};
 use std::io::Cursor;
+use std::sync::atomic::Ordering;
 
-use anyhow::Context;
+use anyhow::{bail, Context};
 use async_trait::async_trait;
 use tokio::io::AsyncReadExt;
 use tokio::sync::RwLock;
 use tracing::instrument;
 
-type Bucket = HashMap<String, Vec<u8>>;
+/// Bucket entry
+#[derive(Debug)]
+pub enum Entry {
+    /// Atomic number
+    Atomic(AtomicU64),
+    /// Byte blob
+    Blob(Vec<u8>),
+}
+
+type Bucket = HashMap<String, Entry>;
 
 /// In-memory [`KeyValueReadWrite`] implementation
 #[derive(Debug)]
@@ -70,6 +82,55 @@ impl IntoIterator for KeyValue {
 }
 
 #[async_trait]
+impl KeyValueAtomic for KeyValue {
+    async fn increment(&self, bucket: &str, key: String, delta: u64) -> anyhow::Result<u64> {
+        let kv = self.0.read().await;
+        let bucket = kv.get(bucket).context("bucket not found")?;
+        if let Some(entry) = bucket.read().await.get(&key) {
+            match entry {
+                Entry::Atomic(value) => {
+                    return Ok(value
+                        .fetch_add(delta, Ordering::Relaxed)
+                        .wrapping_add(delta));
+                }
+                Entry::Blob(_) => bail!("invalid entry type"),
+            }
+        }
+        let mut bucket = bucket.write().await;
+        match bucket.entry(key) {
+            hash_map::Entry::Vacant(entry) => {
+                entry.insert(Entry::Atomic(AtomicU64::new(delta)));
+                Ok(delta)
+            }
+            hash_map::Entry::Occupied(entry) => match entry.get() {
+                Entry::Atomic(value) => Ok(value
+                    .fetch_add(delta, Ordering::Relaxed)
+                    .wrapping_add(delta)),
+                Entry::Blob(_) => bail!("invalid entry type"),
+            },
+        }
+    }
+
+    async fn compare_and_swap(
+        &self,
+        bucket: &str,
+        key: String,
+        old: u64,
+        new: u64,
+    ) -> anyhow::Result<bool> {
+        let kv = self.0.read().await;
+        let bucket = kv.get(bucket).context("bucket not found")?.read().await;
+        match bucket.get(&key).context("key not found")? {
+            Entry::Atomic(value) => Ok(value
+                .compare_exchange(old, new, Ordering::Relaxed, Ordering::Relaxed)
+                .map(|value| value == old)
+                .unwrap_or_default()),
+            Entry::Blob(_) => bail!("invalid entry type"),
+        }
+    }
+}
+
+#[async_trait]
 impl KeyValueReadWrite for KeyValue {
     #[instrument]
     async fn get(
@@ -79,12 +140,15 @@ impl KeyValueReadWrite for KeyValue {
     ) -> anyhow::Result<(Box<dyn tokio::io::AsyncRead + Sync + Send + Unpin>, u64)> {
         let kv = self.0.read().await;
         let bucket = kv.get(bucket).context("bucket not found")?.read().await;
-        let value = bucket.get(&key).context("key not found")?;
+        let value = match bucket.get(&key).context("key not found")? {
+            Entry::Atomic(value) => value.load(Ordering::Relaxed).to_string().into_bytes(),
+            Entry::Blob(value) => value.clone(),
+        };
         let size = value
             .len()
             .try_into()
             .context("size does not fit in `u64`")?;
-        Ok((Box::new(Cursor::new(value.clone())), size))
+        Ok((Box::new(Cursor::new(value)), size))
     }
 
     #[instrument(skip(value))]
@@ -101,7 +165,7 @@ impl KeyValueReadWrite for KeyValue {
             .context("failed to read value")?;
         let mut kv = self.0.write().await;
         let mut bucket = kv.entry(bucket.into()).or_default().write().await;
-        bucket.insert(key, buf);
+        bucket.insert(key, Entry::Blob(buf));
         Ok(())
     }
 

@@ -1,8 +1,9 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::Cursor;
 use std::path::Path;
 use std::pin::Pin;
 use std::str::FromStr;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -16,8 +17,10 @@ use tokio::io::{stderr, AsyncRead, AsyncReadExt};
 use tracing_subscriber::prelude::*;
 use wasmcloud_actor::Uuid;
 use wasmcloud_runtime::capability::logging::logging;
-use wasmcloud_runtime::capability::provider::MemoryKeyValue;
-use wasmcloud_runtime::capability::{self, messaging, IncomingHttp, KeyValueReadWrite, Messaging};
+use wasmcloud_runtime::capability::provider::{MemoryKeyValue, MemoryKeyValueEntry};
+use wasmcloud_runtime::capability::{
+    self, messaging, IncomingHttp, KeyValueAtomic, KeyValueReadWrite, Messaging,
+};
 use wasmcloud_runtime::{Actor, Runtime};
 
 static LOGGER: Lazy<()> = Lazy::new(|| {
@@ -40,6 +43,7 @@ fn init() {
 struct Handler {
     logging: Arc<Mutex<Vec<(logging::Level, String, String)>>>,
     messaging: Arc<Mutex<Vec<messaging::types::BrokerMessage>>>,
+    keyvalue_atomic: Arc<MemoryKeyValue>,
     keyvalue_readwrite: Arc<MemoryKeyValue>,
 }
 
@@ -123,7 +127,7 @@ impl capability::Bus for Handler {
     ) -> anyhow::Result<()> {
         match (target, interfaces.as_slice()) {
             (Some(capability::TargetEntity::Link(Some(name))), [capability::TargetInterface::WasmcloudMessagingConsumer]) if name == "messaging" => Ok(()),
-                (Some(capability::TargetEntity::Link(Some(name))), [capability::TargetInterface::WasiKeyvalueReadwrite]) if name == "keyvalue" => Ok(()),
+                (Some(capability::TargetEntity::Link(Some(name))), [capability::TargetInterface::WasiKeyvalueAtomic | capability::TargetInterface::WasiKeyvalueReadwrite]) if name == "keyvalue" => Ok(()),
             (target, interfaces) => panic!("`set_target` with target `{target:?}` and interfaces `{interfaces:?}` should not have been called")
         }
     }
@@ -277,6 +281,23 @@ impl capability::Bus for Handler {
                 Ok(buf)
             }
 
+            (
+                Some(capability::TargetEntity::Link(Some(name))),
+                "wasmcloud:keyvalue/KeyValue.Increment",
+            ) if name == "keyvalue" => {
+                let wasmcloud_compat::keyvalue::IncrementRequest { key, value } =
+                    rmp_serde::from_slice(&payload).expect("failed to decode payload");
+                let value = value.try_into().expect("value does not fit in `u64`");
+                let new = self
+                    .keyvalue_atomic
+                    .increment("", key, value)
+                    .await
+                    .expect("failed to call `increment`");
+                let new: i32 = new.try_into().expect("response does not fit in `u64`");
+                let buf = rmp_serde::to_vec_named(&new).expect("failed to encode reply");
+                Ok(buf)
+            }
+
             (target, operation) => {
                 panic!("`call_sync` with target `{target:?}` and operation `{operation}` should not have been called")
             }
@@ -287,18 +308,20 @@ impl capability::Bus for Handler {
 fn new_runtime(
     logs: Arc<Mutex<Vec<(logging::Level, String, String)>>>,
     published: Arc<Mutex<Vec<messaging::types::BrokerMessage>>>,
-    keyvalue_readwrite: Arc<MemoryKeyValue>,
+    keyvalue: Arc<MemoryKeyValue>,
 ) -> Runtime {
     let handler = Arc::new(Handler {
         logging: logs,
         messaging: published,
-        keyvalue_readwrite: Arc::clone(&keyvalue_readwrite),
+        keyvalue_atomic: Arc::clone(&keyvalue),
+        keyvalue_readwrite: Arc::clone(&keyvalue),
     });
     Runtime::builder()
         .bus(Arc::clone(&handler))
         .logging(Arc::clone(&handler))
         .messaging(Arc::clone(&handler))
-        .keyvalue_readwrite(Arc::clone(&keyvalue_readwrite))
+        .keyvalue_atomic(Arc::clone(&keyvalue))
+        .keyvalue_readwrite(Arc::clone(&keyvalue))
         .build()
         .expect("failed to construct runtime")
 }
@@ -308,16 +331,16 @@ async fn run(wasm: impl AsRef<Path>) -> anyhow::Result<Vec<(logging::Level, Stri
 
     let logs = Arc::new(vec![].into());
     let published = Arc::new(vec![].into());
-    let keyvalue_readwrite = Arc::new(MemoryKeyValue::from(HashMap::from([(
+    let keyvalue = Arc::new(MemoryKeyValue::from(HashMap::from([(
         "".into(),
-        HashMap::from([("foo".into(), b"bar".to_vec())]),
+        HashMap::from([("foo".into(), MemoryKeyValueEntry::Blob(b"bar".to_vec()))]),
     )])));
 
     let res = {
         let rt = new_runtime(
             Arc::clone(&logs),
             Arc::clone(&published),
-            Arc::clone(&keyvalue_readwrite),
+            Arc::clone(&keyvalue),
         );
         let actor = Actor::new(&rt, wasm).expect("failed to construct actor");
         actor.claims().expect("claims missing");
@@ -357,7 +380,7 @@ async fn run(wasm: impl AsRef<Path>) -> anyhow::Result<Vec<(logging::Level, Stri
     };
 
     let mut published = Arc::try_unwrap(published).unwrap().into_inner().into_iter();
-    let mut keyvalue = HashMap::from(Arc::try_unwrap(keyvalue_readwrite).unwrap()).into_iter();
+    let mut keyvalue = HashMap::from(Arc::try_unwrap(keyvalue).unwrap()).into_iter();
     let published = match (published.next(), published.next()) {
         (
             Some(messaging::types::BrokerMessage {
@@ -379,13 +402,19 @@ async fn run(wasm: impl AsRef<Path>) -> anyhow::Result<Vec<(logging::Level, Stri
     let set = match (keyvalue.next(), keyvalue.next()) {
         (Some((bucket, kv)), None) => {
             ensure!(bucket == "");
-            let mut kv = kv.into_iter();
-            match (kv.next(), kv.next()) {
-                (Some((k, v)), None) => {
-                    ensure!(k == "result");
-                    v
+            let mut kv = kv.into_iter().collect::<BTreeMap<_, _>>().into_iter();
+            match (kv.next(), kv.next(), kv.next()) {
+                (
+                    Some((counter_key, MemoryKeyValueEntry::Atomic(counter_value))),
+                    Some((result_key, MemoryKeyValueEntry::Blob(result_value))),
+                    None,
+                ) => {
+                    ensure!(counter_key == "counter");
+                    ensure!(counter_value.load(Ordering::Relaxed) == 42);
+                    ensure!(result_key == "result");
+                    result_value
                 }
-                _ => bail!("too many entries present in keyvalue map bucket"),
+                (a, b, c) => bail!("invalid keyvalue map bucket entries ({a:?}, {b:?}, {c:?})"),
             }
         }
         _ => bail!("too many buckets present in keyvalue map"),

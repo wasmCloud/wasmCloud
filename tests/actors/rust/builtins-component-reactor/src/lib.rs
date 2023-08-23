@@ -191,6 +191,24 @@ impl exports::wasi::http::incoming_handler::IncomingHandler for Actor {
         keyvalue::readwrite::set(bucket, &result_key, result_value)
             .map_err(keyvalue::wasi_cloud_error::trace)
             .expect("failed to set `result`");
+
+        bus::lattice::set_target(
+            Some(&TargetEntity::Link(Some("keyvalue".into()))),
+            &[bus::lattice::target_wasi_keyvalue_atomic()],
+        );
+        let counter_key = String::from("counter");
+        let value = keyvalue::atomic::increment(bucket, &counter_key, 1)
+            .map_err(keyvalue::wasi_cloud_error::trace)
+            .expect("failed to increment `counter`");
+        assert_eq!(value, 1);
+        let value = keyvalue::atomic::increment(bucket, &counter_key, 41)
+            .map_err(keyvalue::wasi_cloud_error::trace)
+            .expect("failed to increment `counter`");
+        assert_eq!(value, 42);
+
+        // TODO: Verify return value when implemented for all hosts
+        let _ = keyvalue::atomic::compare_and_swap(bucket, &counter_key, 42, 4242);
+        let _ = keyvalue::atomic::compare_and_swap(bucket, &counter_key, 4242, 42);
     }
 }
 

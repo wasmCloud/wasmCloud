@@ -11,7 +11,7 @@ pub use module::{
 };
 
 use crate::capability::logging::logging;
-use crate::capability::{Bus, IncomingHttp, KeyValueReadWrite, Logging, Messaging};
+use crate::capability::{Bus, IncomingHttp, KeyValueAtomic, KeyValueReadWrite, Logging, Messaging};
 use crate::Runtime;
 
 use core::fmt::Debug;
@@ -341,6 +341,22 @@ impl Instance {
             }
             Self::Component(component) => {
                 component.incoming_http(incoming_http);
+            }
+        }
+        self
+    }
+
+    /// Set [`KeyValueAtomic`] handler for this [Instance].
+    pub fn keyvalue_atomic(
+        &mut self,
+        keyvalue_atomic: Arc<dyn KeyValueAtomic + Send + Sync>,
+    ) -> &mut Self {
+        match self {
+            Self::Module(module) => {
+                module.keyvalue_atomic(keyvalue_atomic);
+            }
+            Self::Component(component) => {
+                component.keyvalue_atomic(keyvalue_atomic);
             }
         }
         self

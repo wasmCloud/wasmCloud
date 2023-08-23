@@ -6,6 +6,9 @@ interface lattice {
     /// Implementations of `wasmcloud:bus/lattice` may extend the set of "selectable" interfaces.
     type target-interface = u32
 
+    /// `wasi:keyvalue/atomic` interface target
+    target-wasi-keyvalue-atomic: func() -> target-interface
+
     /// `wasi:keyvalue/readwrite` interface target
     target-wasi-keyvalue-readwrite: func() -> target-interface
 

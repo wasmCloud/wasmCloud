@@ -170,6 +170,43 @@ impl HttpHandler for HttpLogRng {
         )
         .expect("failed to set `result`");
 
+        bus::lattice::set_target(
+            Some(&keyvalue_target),
+            &[bus::lattice::target_wasi_keyvalue_atomic()],
+        );
+
+        let counter_key = String::from("counter");
+
+        let buf = rmp_serde::to_vec_named(&keyvalue::IncrementRequest {
+            key: counter_key.clone(),
+            value: 1,
+        })
+        .expect("failed to encode `IncrementRequest`");
+        let buf = bus::host::call_sync(
+            Some(&keyvalue_target),
+            "wasmcloud:keyvalue/KeyValue.Increment",
+            &buf,
+        )
+        .expect("failed to increment `counter`");
+        let value: i32 =
+            rmp_serde::from_slice(&buf).expect("failed to decode `Increment` response");
+        assert_eq!(value, 1);
+
+        let buf = rmp_serde::to_vec_named(&keyvalue::IncrementRequest {
+            key: counter_key.clone(),
+            value: 41,
+        })
+        .expect("failed to encode `IncrementRequest`");
+        let buf = bus::host::call_sync(
+            Some(&keyvalue_target),
+            "wasmcloud:keyvalue/KeyValue.Increment",
+            &buf,
+        )
+        .expect("failed to increment `counter`");
+        let value: i32 =
+            rmp_serde::from_slice(&buf).expect("failed to decode `Increment` response");
+        assert_eq!(value, 42);
+
         Ok(HttpResponse {
             body: body.into(),
             ..Default::default()

@@ -171,6 +171,13 @@ impl lattice::Host for Ctx {
     }
 
     #[instrument]
+    async fn target_wasi_keyvalue_atomic(&mut self) -> anyhow::Result<host::TargetInterface> {
+        self.table
+            .push_interface_target(TargetInterface::WasiKeyvalueAtomic)
+            .context("failed to push target interface")
+    }
+
+    #[instrument]
     async fn target_wasi_keyvalue_readwrite(&mut self) -> anyhow::Result<host::TargetInterface> {
         self.table
             .push_interface_target(TargetInterface::WasiKeyvalueReadwrite)
