@@ -49,9 +49,10 @@ use uuid::Uuid;
 use wascap::jwt;
 use wasmcloud_control_interface::{
     ActorAuctionAck, ActorAuctionRequest, ActorDescription, HostInventory, LinkDefinition,
-    LinkDefinitionList, ProviderAuctionRequest, ProviderDescription, RemoveLinkDefinitionRequest,
-    ScaleActorCommand, StartActorCommand, StartProviderCommand, StopActorCommand, StopHostCommand,
-    StopProviderCommand, UpdateActorCommand,
+    LinkDefinitionList, ProviderAuctionRequest, ProviderDescription, RegistryCredential,
+    RegistryCredentialMap, RemoveLinkDefinitionRequest, ScaleActorCommand, StartActorCommand,
+    StartProviderCommand, StopActorCommand, StopHostCommand, StopProviderCommand,
+    UpdateActorCommand,
 };
 use wasmcloud_runtime::capability::{
     messaging, ActorIdentifier, Bus, IncomingHttp, KeyValueAtomic, KeyValueReadWrite, Messaging,
@@ -1071,8 +1072,7 @@ async fn load_supplemental_config(
     #[derive(Deserialize, Default)]
     struct SerializedSupplementalConfig {
         #[serde(default, rename = "registryCredentials")]
-        registry_credentials:
-            Option<HashMap<String, wasmcloud_control_interface::RegistryCredential>>,
+        registry_credentials: Option<HashMap<String, RegistryCredential>>,
     }
 
     let cfg_topic = format!("wasmbus.cfg.{lattice_prefix}.req");
@@ -2684,10 +2684,31 @@ impl Host {
         Ok(SUCCESS.into())
     }
 
-    #[allow(unused)] // TODO: Remove once implemented
     #[instrument(skip(self, payload))]
     async fn handle_registries_put(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
-        bail!("TODO")
+        let registry_creds: RegistryCredentialMap = serde_json::from_slice(payload.as_ref())
+            .context("failed to deserialize registries put command")?;
+
+        debug!(
+            registries = ?registry_creds.keys(),
+            "updating registry settings",
+        );
+
+        let mut registry_settings = self.registry_settings.write().await;
+        for (reg, new_creds) in registry_creds {
+            let mut new_settings = RegistrySettings::from(new_creds);
+            match registry_settings.entry(reg) {
+                hash_map::Entry::Occupied(mut entry) => {
+                    entry.get_mut().auth = new_settings.auth;
+                }
+                hash_map::Entry::Vacant(entry) => {
+                    new_settings.allow_latest = self.host_config.oci_opts.allow_latest;
+                    entry.insert(new_settings);
+                }
+            }
+        }
+
+        Ok(SUCCESS.into())
     }
 
     #[instrument(skip(self, _payload))]
