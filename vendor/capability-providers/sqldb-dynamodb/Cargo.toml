@@ -1,6 +1,6 @@
 [package]
 name = "sqldb-dynamodb"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 resolver = "2"
 
@@ -22,12 +22,12 @@ tokio-stream = { version = "0.1.8"}
 tracing = "0.1"
 tracing-futures = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-wasmcloud-interface-sqldb = "0.6"
-wasmbus-rpc = "0.9"
+wasmcloud-interface-sqldb = "0.10"
+wasmbus-rpc = "0.14"
 
 # test dependencies
 [dev-dependencies]
-wasmcloud-test-util = "0.4.0"
+wasmcloud-test-util = "0.10"
 
 [lib]
 name = "sqldb_dynamodb_lib"

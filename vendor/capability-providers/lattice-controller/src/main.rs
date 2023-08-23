@@ -418,7 +418,21 @@ impl LatticeController for LatticeControllerProvider {
             .await?
             .query_links()
             .await
-            .map(|res| LinkDefinitionList { links: res.links })
+            .map(|res| LinkDefinitionList {
+                links: res
+                    .links
+                    .into_iter()
+                    .map(|client_ld| {
+                        let mut core_ld = wasmbus_rpc::core::LinkDefinition::default();
+                        core_ld.actor_id = client_ld.actor_id;
+                        core_ld.provider_id = client_ld.provider_id;
+                        core_ld.contract_id = client_ld.contract_id;
+                        core_ld.link_name = client_ld.link_name;
+                        core_ld.values = client_ld.values;
+                        core_ld
+                    })
+                    .collect(),
+            })
             .map_err(|e| RpcError::Nats(e.to_string()))?)
     }
 

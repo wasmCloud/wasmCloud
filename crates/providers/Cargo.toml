@@ -11,7 +11,12 @@ opt-level = "z"
 lto = true
 
 [workspace]
-members = ["http-server", "kv-redis", "nats"]
+members = [
+    "blobstore-fs",
+    "http-server",
+    "kv-redis",
+    "nats",
+]
 
 [workspace.dependencies]
 anyhow = { version = "1", default-features = false }
@@ -24,6 +29,7 @@ flume = { version = "0.10", default-features = false }
 futures = { version = "0.3", default-features = false }
 http = { version = "0.2", default-features = false }
 opentelemetry = { version = "0.20", default-features = false }
+path-clean = { version = "1", default-features = false }
 redis = { version = "0.23", default-features = false }
 serde = { version = "1", default-features = false }
 serde_bytes = { version = "0.11", default-features = false }

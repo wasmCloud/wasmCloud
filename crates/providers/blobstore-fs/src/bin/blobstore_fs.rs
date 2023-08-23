@@ -22,8 +22,7 @@ use wasmbus_rpc::provider::prelude::*;
 use wasmbus_rpc::Timestamp;
 use wasmcloud_interface_blobstore::*;
 
-mod fs_utils;
-use fs_utils::all_dirs;
+use wasmcloud_provider_blobstore_fs::fs_utils::all_dirs;
 
 #[allow(unused)]
 const CAPABILITY_ID: &str = "wasmcloud:blobstore";

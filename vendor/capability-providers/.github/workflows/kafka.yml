@@ -1,22 +1,22 @@
-name: LATTICE-CONTROLLER
+name: messaging-kafka
 
 on:
   push:
     branches: [main]
     paths:
-      - "lattice-controller/**"
+      - "messaging-kafka/**"
     tags:
-      - "lattice-controller-v*"
+      - "messaging-kafka-v*"
   pull_request:
     branches: [main]
     paths:
-      - "lattice-controller/**"
+      - "messaging-kafka/**"
 
 env:
   CARGO_TERM_COLOR: always
-  working-directory: ./lattice-controller
+  working-directory: ./messaging-kafka
   WASH_ISSUER_KEY: ${{ secrets.WASMCLOUD_ACCOUNT_OFFICIAL }}
-  WASH_SUBJECT_KEY: ${{ secrets.WASMCLOUD_LATTICECONTROLLER }}
+  WASH_SUBJECT_KEY: ${{ secrets.WASMCLOUD_MESSAGING_KAFKA }}
 
 jobs:
   rust_check:
@@ -24,8 +24,6 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       # If your integration tests require nats or redis, run them here
-      - id: run-nats
-        uses: wasmcloud/common-actions/run-nats@main
       - id: rust-check-action
         uses: wasmcloud/common-actions/rust-check@main
         with:
@@ -213,7 +211,7 @@ jobs:
 
       - name: Determine artifact metadata
         run: |
-          echo "oci-repository=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name' | sed 's/wasmcloud-provider-//')" >> $GITHUB_ENV
+          echo "oci-repository=messaging_kafka" >> $GITHUB_ENV
           echo "oci-version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].version')" >> $GITHUB_ENV
         working-directory: ${{ env.working-directory }}
 

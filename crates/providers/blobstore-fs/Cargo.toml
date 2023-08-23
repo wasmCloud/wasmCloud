@@ -1,0 +1,21 @@
+[package]
+name = "wasmcloud-provider-blobstore-fs"
+version = "0.3.3"
+
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[badges.maintenance]
+status = "actively-developed"
+
+[dependencies]
+async-trait = { workspace = true }
+path-clean = { workspace = true }
+serde = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+wasmbus-rpc = { version = "0.14", features = ["otel"] } # TODO: Replace by `wasmcloud-provider-sdk`
+wasmcloud-interface-blobstore = "0.7" # TODO: Replace by WIT
