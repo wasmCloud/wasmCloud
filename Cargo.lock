@@ -199,6 +199,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-nats"
+version = "0.31.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8257238e2a3629ee5618502a75d1b91f8017c24638c75349fc8d2d80cf1f7c4c"
+dependencies = [
+ "base64 0.21.2",
+ "bytes",
+ "futures",
+ "http",
+ "itoa",
+ "memchr",
+ "nkeys",
+ "nuid 0.3.2",
+ "once_cell",
+ "rand",
+ "regex",
+ "ring",
+ "rustls-native-certs",
+ "rustls-pemfile",
+ "rustls-webpki",
+ "serde",
+ "serde_json",
+ "serde_nanos",
+ "serde_repr",
+ "thiserror",
+ "time 0.3.23",
+ "tokio",
+ "tokio-retry",
+ "tokio-rustls",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "async-stream"
 version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4154,13 +4188,14 @@ checksum = "49874b5167b65d7193b8aba1567f5c7d93d001cafc34600cee003eda787e483f"
 
 [[package]]
 name = "wadm"
-version = "0.4.1"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43e32c8c8015b48bdbc8b1f46944559ebfad2301629ad5ecbe138afe6c4e9581"
+checksum = "0516b68c9d02fe1f1e6e409279a4020f103bf87ed6dce94cf9ef2804d936716e"
 dependencies = [
  "anyhow",
- "async-nats",
+ "async-nats 0.31.0",
  "async-trait",
+ "base64 0.21.2",
  "bytes",
  "chrono",
  "cloudevents-sdk",
@@ -4169,6 +4204,7 @@ dependencies = [
  "lazy_static",
  "nkeys",
  "rand",
+ "regex",
  "semver",
  "serde",
  "serde_json",
@@ -4180,7 +4216,7 @@ dependencies = [
  "tracing-futures",
  "uuid 1.4.1",
  "wasmbus-rpc",
- "wasmcloud-control-interface",
+ "wasmcloud-control-interface 0.28.1",
 ]
 
 [[package]]
@@ -4273,7 +4309,7 @@ version = "0.19.1"
 dependencies = [
  "anyhow",
  "assert-json-diff",
- "async-nats",
+ "async-nats 0.30.0",
  "atelier_core 0.2.22",
  "bytes",
  "cargo_atelier",
@@ -4324,7 +4360,7 @@ dependencies = [
  "wascap",
  "wash-lib",
  "wasmbus-rpc",
- "wasmcloud-control-interface",
+ "wasmcloud-control-interface 0.27.0",
  "wasmcloud-test-util",
  "weld-codegen",
  "which",
@@ -4336,7 +4372,7 @@ version = "0.9.3"
 dependencies = [
  "anyhow",
  "async-compression",
- "async-nats",
+ "async-nats 0.30.0",
  "bytes",
  "cargo_metadata",
  "cargo_toml",
@@ -4382,7 +4418,7 @@ dependencies = [
  "wascap",
  "wasmbus-rpc",
  "wasmcloud-component-adapters",
- "wasmcloud-control-interface",
+ "wasmcloud-control-interface 0.27.0",
  "weld-codegen",
  "wit-component",
 ]
@@ -4539,7 +4575,7 @@ version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2da4e25698e9e15af56e9bb510d233495c4ec9c6bbbf13d046205190dd4ab935"
 dependencies = [
- "async-nats",
+ "async-nats 0.30.0",
  "async-trait",
  "atty",
  "base64 0.13.1",
@@ -4599,7 +4635,30 @@ version = "0.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f86693c41af8686e99950450a0dbf2f9a75ee0d133f08209538c46b37514517e"
 dependencies = [
- "async-nats",
+ "async-nats 0.30.0",
+ "bytes",
+ "cloudevents-sdk",
+ "data-encoding",
+ "futures",
+ "lazy_static",
+ "opentelemetry 0.19.0",
+ "ring",
+ "rmp-serde",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-futures",
+ "tracing-opentelemetry 0.19.0",
+]
+
+[[package]]
+name = "wasmcloud-control-interface"
+version = "0.28.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "37be05dfc4e1c528be5b9bdf7d0934182abe4a25424fcca0ba7afdb3f2b432e7"
+dependencies = [
+ "async-nats 0.31.0",
  "bytes",
  "cloudevents-sdk",
  "data-encoding",
