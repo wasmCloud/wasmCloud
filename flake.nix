@@ -13,7 +13,7 @@
   ];
 
   inputs.nixify.url = github:rvolosatovs/nixify;
-  inputs.wash.url = github:wasmcloud/wash/v0.18.1;
+  inputs.wash.url = github:wasmcloud/wash/v0.19.0;
   inputs.wasmcloud-component-adapters.inputs.nixify.follows = "nixify";
   inputs.wasmcloud-component-adapters.url = github:wasmCloud/wasmcloud-component-adapters;
   inputs.wit-deps.inputs.nixify.follows = "nixify"; # TODO: drop once updated upstream
