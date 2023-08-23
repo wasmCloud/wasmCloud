@@ -8,7 +8,7 @@ use core::ops::{Deref, DerefMut};
 
 use std::sync::Arc;
 
-use anyhow::{ensure, Context as _};
+use anyhow::{bail, ensure, Context as _};
 use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -418,16 +418,30 @@ impl Instance {
 
     /// Instantiates and returns [`GuestBindings`] if exported by the [`Instance`].
     async fn as_guest_bindings(&mut self) -> anyhow::Result<GuestBindings> {
-        if let Ok((bindings, _)) =
-            guest_bindings::Guest::instantiate_async(&mut self.store, &self.component, &self.linker)
-                .await
+        // Attempt to instantiate using guest bindings
+        let guest_err = match guest_bindings::Guest::instantiate_async(
+            &mut self.store,
+            &self.component,
+            &self.linker,
+        )
+        .await
         {
-            Ok(GuestBindings::Interface(bindings))
-        } else {
-            let (bindings, _) = Command::instantiate_async(&mut self.store, &self.component, &self.linker).await.context(
-                    "failed to instantiate either `wasmcloud::bus/guest` interface or get `wasi:command/command`",
-                )?;
-            Ok(GuestBindings::Command(bindings))
+            Ok((bindings, _)) => return Ok(GuestBindings::Interface(bindings)),
+            Err(e) => e,
+        };
+
+        // Attempt to instantiate using only bindings available in command
+        match Command::instantiate_async(&mut self.store, &self.component, &self.linker).await {
+            Ok((bindings, _)) => Ok(GuestBindings::Command(bindings)),
+            // If neither of the above instantiations worked, the instance cannot be run
+            Err(command_err) => bail!(
+                r#"failed to instantiate instance (no bindings satisfied exports):
+
+`wasmcloud:bus/guest` error: {guest_err:?}
+
+`wasi:command/command` error: {command_err:?}
+"#,
+            ),
         }
     }
 
