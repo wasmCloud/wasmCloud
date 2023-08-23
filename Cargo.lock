@@ -5237,7 +5237,6 @@ dependencies = [
  "quote",
  "serde",
  "syn 1.0.109",
- "wasmtime-component-macro",
  "wasmtime-wit-bindgen 11.0.1",
  "wit-parser 0.8.0",
 ]
