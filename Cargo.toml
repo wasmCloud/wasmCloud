@@ -90,7 +90,7 @@ once_cell = { version = "1", default-features = false }
 # https://github.com/wasmCloud/wasmCloud/issues/453 for more information
 opentelemetry = { version = "0.17", default-features = false }
 opentelemetry-otlp = { version = "0.10", default-features = false }
-proc-macro2 = { version = "1.0.66", default-features = false }
+proc-macro2 = { version = "1", default-features = false }
 provider-archive = { version = "0.7", default-features = false }
 quote = { version = "1", default-features = false }
 rand = { version = "0.8", default-features = false }
