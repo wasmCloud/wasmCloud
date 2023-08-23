@@ -628,6 +628,11 @@ expected: {expected_labels:?}"#
     )
     .context("failed to start actors")?;
 
+    let blobstore_fs_provider_key = KeyPair::from_seed(test_providers::RUST_BLOBSTORE_FS_SUBJECT)
+        .context("failed to parse `rust-blobstore-fs` provider key")?;
+    let blobstore_fs_provider_url = Url::from_file_path(test_providers::RUST_BLOBSTORE_FS)
+        .expect("failed to construct provider ref");
+
     let httpserver_provider_key = KeyPair::from_seed(test_providers::RUST_HTTPSERVER_SUBJECT)
         .context("failed to parse `rust-httpserver` provider key")?;
     let httpserver_provider_url = Url::from_file_path(test_providers::RUST_HTTPSERVER)
@@ -799,6 +804,16 @@ expected: {expected_labels:?}"#
             &ctl_nats_client,
             TEST_PREFIX,
             &host_key,
+            &blobstore_fs_provider_key,
+            "blobstore",
+            &blobstore_fs_provider_url,
+            None,
+        ),
+        assert_start_provider(
+            &ctl_client,
+            &ctl_nats_client,
+            TEST_PREFIX,
+            &host_key,
             &httpserver_provider_key,
             "httpserver",
             &httpserver_provider_url,
@@ -836,7 +851,7 @@ expected: {expected_labels:?}"#
         .await
         .map_err(|e| anyhow!(e).context("failed to query claims"))?;
     claims_from_host.sort_by(|a, b| a.get("sub").unwrap().cmp(b.get("sub").unwrap()));
-    ensure!(claims_from_host.len() == 6); // 3 providers, 3 actors
+    ensure!(claims_from_host.len() == 7); // 4 providers, 3 actors
 
     let mut links_from_host = ctl_client
         .query_links()
@@ -1050,15 +1065,29 @@ expected: {expected_name:?}"#
         _ => bail!("more than three actors found"),
     }
     providers.sort_unstable_by(|a, b| b.name.cmp(&a.name));
-    match (providers.pop(), providers.pop(), providers.as_slice()) {
-        (Some(httpserver), Some(kvredis), []) => {
+    match (
+        providers.pop(),
+        providers.pop(),
+        providers.pop(),
+        providers.as_slice(),
+    ) {
+        (Some(blobstore_fs), Some(httpserver), Some(kvredis), []) => {
+            // TODO: Validate `constraints`
+            ensure!(blobstore_fs.annotations == None);
+            ensure!(blobstore_fs.id == blobstore_fs_provider_key.public_key());
+            ensure!(blobstore_fs.image_ref == Some(blobstore_fs_provider_url.to_string()));
+            ensure!(blobstore_fs.contract_id == "wasmcloud:blobstore");
+            ensure!(blobstore_fs.link_name == "blobstore");
+            ensure!(blobstore_fs.name.as_deref() == Some("wasmcloud-provider-blobstore-fs"));
+            ensure!(blobstore_fs.revision == 0);
+
             // TODO: Validate `constraints`
             ensure!(httpserver.annotations == None);
             ensure!(httpserver.id == httpserver_provider_key.public_key());
             ensure!(httpserver.image_ref == Some(httpserver_provider_url.to_string()));
             ensure!(httpserver.contract_id == "wasmcloud:httpserver");
             ensure!(httpserver.link_name == "httpserver");
-            ensure!(httpserver.name == Some("wasmcloud-provider-httpserver".into()),);
+            ensure!(httpserver.name.as_deref() == Some("wasmcloud-provider-httpserver"));
             ensure!(httpserver.revision == 0);
 
             // TODO: Validate `constraints`
@@ -1067,7 +1096,7 @@ expected: {expected_name:?}"#
             ensure!(kvredis.image_ref == Some(kvredis_provider_url.to_string()));
             ensure!(kvredis.contract_id == "wasmcloud:keyvalue");
             ensure!(kvredis.link_name == "keyvalue");
-            ensure!(kvredis.name == Some("wasmcloud-provider-kvredis".into()),);
+            ensure!(kvredis.name.as_deref() == Some("wasmcloud-provider-kvredis"));
             ensure!(kvredis.revision == 0);
         }
         _ => bail!("invalid provider count"),
@@ -1102,7 +1131,7 @@ expected: {expected_labels:?}"#
             ensure!(nats.image_ref == Some(nats_provider_url.to_string()));
             ensure!(nats.contract_id == "wasmcloud:messaging");
             ensure!(nats.link_name == "messaging");
-            ensure!(nats.name == Some("wasmcloud-provider-nats".into()),);
+            ensure!(nats.name.as_deref() == Some("wasmcloud-provider-nats"));
             ensure!(nats.revision == 0);
         }
         _ => bail!("invalid provider count"),
