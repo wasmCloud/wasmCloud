@@ -23,7 +23,7 @@ serde = { workspace = true }
 # This version of syn is required due to current version of wasmtime_component_macro that
 # has been vendored in this crate. It can be upgraded when the macros themselves update
 # (see: src/vendor/wasmtime_component_macro.rs)
-syn = { version = "1.0.92", features = [ "parsing", "full", "visit-mut", "extra-traits" ] }
+syn = { version = "1", features = [ "parsing", "full", "visit-mut", "extra-traits" ] }
 wasmtime-component-macro = { workspace = true, features = [ "async" ] }
 wasmtime-wit-bindgen = { workspace = true }
 wit-parser = { workspace = true }
