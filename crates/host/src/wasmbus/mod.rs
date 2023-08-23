@@ -4,9 +4,6 @@ pub mod config;
 pub use config::Host as HostConfig;
 
 mod event;
-mod nats;
-
-use nats::connection_options;
 
 use crate::{fetch_actor, socket_pair};
 
@@ -966,6 +963,49 @@ async fn create_lattice_metadata_bucket(
     }
 }
 
+/// Given the NATS address, authentication jwt, seed, tls requirement and optional request timeout,
+/// attempt to establish connection.
+///
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - Only one of JWT or seed is specified, as we cannot authenticate with only one of them
+/// - Seed is not valid
+/// - Connection fails
+async fn connect_nats(
+    addr: impl async_nats::ToServerAddrs,
+    jwt: Option<&String>,
+    seed: Option<&String>,
+    require_tls: bool,
+    request_timeout: Option<Duration>,
+) -> anyhow::Result<async_nats::Client> {
+    let opts = async_nats::ConnectOptions::new().require_tls(require_tls);
+    let opts = match (jwt, seed) {
+        (Some(jwt), Some(seed)) => {
+            let kp = Arc::new(
+                KeyPair::from_seed(seed).context("failed to construct key pair from seed")?,
+            );
+            opts.jwt(jwt.to_string(), move |nonce| {
+                let key_pair = kp.clone();
+                async move { key_pair.sign(&nonce).map_err(async_nats::AuthError::new) }
+            })
+        }
+        (Some(_), None) | (None, Some(_)) => {
+            bail!("cannot authenticate if only one of jwt or seed is specified")
+        }
+        _ => opts,
+    };
+    let opts = if let Some(timeout) = request_timeout {
+        opts.request_timeout(Some(timeout))
+    } else {
+        opts
+    };
+    opts.connect(addr)
+        .await
+        .context("failed to connect to NATS")
+}
+
 impl Host {
     const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 
@@ -1048,56 +1088,64 @@ impl Host {
             "version": env!("CARGO_PKG_VERSION"),
         });
 
-        debug!(
-            ctl_nats_url = config.ctl_nats_url.as_str(),
-            "connecting to NATS control server"
-        );
-        let ctl_nats = connection_options(
-            config.ctl_jwt.as_ref(),
-            config.ctl_seed.as_ref(),
-            config.ctl_tls,
-        )?
-        .connect(config.ctl_nats_url.as_str())
-        .await
-        .context("failed to connect to NATS control server")?;
-
-        let queue = Queue::new(
-            &ctl_nats,
-            &config.ctl_topic_prefix,
-            &config.lattice_prefix,
-            &cluster_key,
-            &host_key,
-        )
-        .await
-        .context("failed to initialize queue")?;
-        ctl_nats.flush().await.context("failed to flush")?;
-
-        debug!(
-            rpc_nats_url = config.rpc_nats_url.as_str(),
-            "connecting to NATS RPC server"
-        );
-        let rpc_nats = connection_options(
-            config.rpc_jwt.as_ref(),
-            config.rpc_seed.as_ref(),
-            config.rpc_tls,
-        )?
-        .request_timeout(Some(config.rpc_timeout))
-        .connect(config.rpc_nats_url.as_str())
-        .await
-        .context("failed to connect to NATS RPC server")?;
-
-        debug!(
-            prov_rpc_nats_url = config.prov_rpc_nats_url.as_str(),
-            "connecting to NATS Provider RPC server"
-        );
-        let prov_rpc_nats = connection_options(
-            config.prov_rpc_jwt.as_ref(),
-            config.prov_rpc_seed.as_ref(),
-            config.prov_rpc_tls,
-        )?
-        .connect(config.prov_rpc_nats_url.as_str())
-        .await
-        .context("failed to connect to NATS Provider RPC server")?;
+        let ((ctl_nats, queue), rpc_nats, prov_rpc_nats) = try_join!(
+            async {
+                debug!(
+                    ctl_nats_url = config.ctl_nats_url.as_str(),
+                    "connecting to NATS control server"
+                );
+                let ctl_nats = connect_nats(
+                    config.ctl_nats_url.as_str(),
+                    config.ctl_jwt.as_ref(),
+                    config.ctl_seed.as_ref(),
+                    config.ctl_tls,
+                    None,
+                )
+                .await
+                .context("failed to establish NATS control server connection")?;
+                let queue = Queue::new(
+                    &ctl_nats,
+                    &config.ctl_topic_prefix,
+                    &config.lattice_prefix,
+                    &cluster_key,
+                    &host_key,
+                )
+                .await
+                .context("failed to initialize queue")?;
+                ctl_nats.flush().await.context("failed to flush")?;
+                Ok((ctl_nats, queue))
+            },
+            async {
+                debug!(
+                    rpc_nats_url = config.rpc_nats_url.as_str(),
+                    "connecting to NATS RPC server"
+                );
+                connect_nats(
+                    config.rpc_nats_url.as_str(),
+                    config.rpc_jwt.as_ref(),
+                    config.rpc_seed.as_ref(),
+                    config.rpc_tls,
+                    Some(config.rpc_timeout),
+                )
+                .await
+                .context("failed to establish NATS RPC server connection")
+            },
+            async {
+                debug!(
+                    prov_rpc_nats_url = config.prov_rpc_nats_url.as_str(),
+                    "connecting to NATS Provider RPC server"
+                );
+                connect_nats(
+                    config.prov_rpc_nats_url.as_str(),
+                    config.prov_rpc_jwt.as_ref(),
+                    config.prov_rpc_seed.as_ref(),
+                    config.prov_rpc_tls,
+                    None,
+                )
+                .await
+                .context("failed to establish NATS provider RPC server connection")
+            }
+        )?;
 
         let start_at = Instant::now();
 

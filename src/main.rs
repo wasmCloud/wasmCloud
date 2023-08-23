@@ -261,7 +261,7 @@ async fn main() -> anyhow::Result<()> {
     .context(
         "failed to construct a valid `prov_rpc_nats_url` using `prov-rpc-host` and `prov-rpc-port`",
     )?;
-    let (host, shutdown) = wasmcloud_host::wasmbus::Host::new(WasmbusHostConfig {
+    let (host, shutdown) = Box::pin(wasmcloud_host::wasmbus::Host::new(WasmbusHostConfig {
         ctl_nats_url,
         lattice_prefix: args.lattice_prefix,
         host_seed: args.host_seed,
@@ -292,7 +292,7 @@ async fn main() -> anyhow::Result<()> {
         allow_file_load: args.allow_file_load,
         log_level: args.log_level.to_string().to_ascii_lowercase(),
         enable_structured_logging: args.enable_structured_logging,
-    })
+    }))
     .await
     .context("failed to initialize host")?;
     select! {
