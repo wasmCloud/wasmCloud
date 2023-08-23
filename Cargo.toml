@@ -136,5 +136,5 @@ wasmtime-wasi = { version = "12", default-features = false }
 wasmtime-wit-bindgen = { version = "11", default-features = false }
 wit-bindgen = { version = "0.10", default-features = false }
 wit-bindgen-wasmcloud-provider = { path = "./crates/wit-bindgen-wasmcloud-provider" }
-wit-component = { version = "0.12", default-features = false }
+wit-component = { version = "0.13", default-features = false }
 wit-parser = { version = "0.8", default-features = false }
