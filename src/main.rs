@@ -1,9 +1,11 @@
 #![warn(clippy::pedantic)]
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{self, Context};
 use clap::Parser;
+use nkeys::KeyPair;
 use tokio::{select, signal};
 use tracing::Level as LogLevel;
 use tracing_subscriber::prelude::*;
@@ -222,6 +224,7 @@ struct Args {
 }
 
 #[tokio::main]
+#[allow(clippy::too_many_lines)]
 async fn main() -> anyhow::Result<()> {
     let args: Args = Args::parse();
 
@@ -261,33 +264,77 @@ async fn main() -> anyhow::Result<()> {
     .context(
         "failed to construct a valid `prov_rpc_nats_url` using `prov-rpc-host` and `prov-rpc-port`",
     )?;
+
+    let host_key = args
+        .host_seed
+        .as_deref()
+        .map(KeyPair::from_seed)
+        .transpose()
+        .context("failed to construct host key pair from seed")?
+        .map(Arc::new);
+    let cluster_key = args
+        .cluster_seed
+        .as_deref()
+        .map(KeyPair::from_seed)
+        .transpose()
+        .context("failed to construct cluster key pair from seed")?
+        .map(Arc::new);
+    let nats_key = args
+        .nats_seed
+        .as_deref()
+        .map(KeyPair::from_seed)
+        .transpose()
+        .context("failed to construct NATS key pair from seed")?
+        .map(Arc::new);
+    let ctl_key = args
+        .ctl_seed
+        .as_deref()
+        .map(KeyPair::from_seed)
+        .transpose()
+        .context("failed to construct control interface key pair from seed")?
+        .map(Arc::new);
+    let rpc_key = args
+        .rpc_seed
+        .as_deref()
+        .map(KeyPair::from_seed)
+        .transpose()
+        .context("failed to construct RPC key pair from seed")?
+        .map(Arc::new);
+    let prov_rpc_key = args
+        .prov_rpc_seed
+        .as_deref()
+        .map(KeyPair::from_seed)
+        .transpose()
+        .context("failed to construct provider RPC key pair from seed")?
+        .map(Arc::new);
+    let oci_opts = OciConfig {
+        allow_latest: args.allow_latest,
+        allowed_insecure: args.allowed_insecure,
+        oci_registry: args.oci_registry,
+        oci_user: args.oci_user,
+        oci_password: args.oci_password,
+    };
     let (host, shutdown) = Box::pin(wasmcloud_host::wasmbus::Host::new(WasmbusHostConfig {
         ctl_nats_url,
         lattice_prefix: args.lattice_prefix,
-        host_seed: args.host_seed,
-        cluster_seed: args.cluster_seed,
+        host_key,
+        cluster_key,
         cluster_issuers: args.cluster_issuers,
         js_domain: args.js_domain,
         provider_shutdown_delay: Some(args.provider_shutdown_delay),
-        oci_opts: OciConfig {
-            allow_latest: args.allow_latest,
-            allowed_insecure: args.allowed_insecure,
-            oci_registry: args.oci_registry,
-            oci_user: args.oci_user,
-            oci_password: args.oci_password,
-        },
+        oci_opts,
         ctl_jwt: args.ctl_jwt.or_else(|| args.nats_jwt.clone()),
-        ctl_seed: args.ctl_seed.or_else(|| args.nats_seed.clone()),
+        ctl_key: ctl_key.or_else(|| nats_key.clone()),
         ctl_tls: args.ctl_tls,
         ctl_topic_prefix: args.ctl_topic_prefix,
         rpc_nats_url,
         rpc_timeout: args.rpc_timeout_ms,
         rpc_jwt: args.rpc_jwt.or_else(|| args.nats_jwt.clone()),
-        rpc_seed: args.rpc_seed.or_else(|| args.nats_seed.clone()),
+        rpc_key: rpc_key.or_else(|| nats_key.clone()),
         rpc_tls: args.rpc_tls,
         prov_rpc_nats_url,
         prov_rpc_jwt: args.prov_rpc_jwt.or_else(|| args.nats_jwt.clone()),
-        prov_rpc_seed: args.prov_rpc_seed.or_else(|| args.nats_seed.clone()),
+        prov_rpc_key: prov_rpc_key.or_else(|| nats_key.clone()),
         prov_rpc_tls: args.prov_rpc_tls,
         allow_file_load: args.allow_file_load,
         log_level: args.log_level.to_string().to_ascii_lowercase(),

@@ -903,7 +903,7 @@ pub struct Host {
     friendly_name: String,
     heartbeat: AbortHandle,
     host_config: HostConfig,
-    host_key: KeyPair,
+    host_key: Arc<KeyPair>,
     labels: HashMap<String, String>,
     ctl_topic_prefix: String,
     /// NATS client to use for control interface subscriptions and jetstream queries
@@ -971,26 +971,22 @@ async fn create_lattice_metadata_bucket(
 ///
 /// Returns an error if:
 /// - Only one of JWT or seed is specified, as we cannot authenticate with only one of them
-/// - Seed is not valid
 /// - Connection fails
 async fn connect_nats(
     addr: impl async_nats::ToServerAddrs,
     jwt: Option<&String>,
-    seed: Option<&String>,
+    key: Option<Arc<KeyPair>>,
     require_tls: bool,
     request_timeout: Option<Duration>,
 ) -> anyhow::Result<async_nats::Client> {
     let opts = async_nats::ConnectOptions::new().require_tls(require_tls);
-    let opts = match (jwt, seed) {
-        (Some(jwt), Some(seed)) => {
-            let kp = Arc::new(
-                KeyPair::from_seed(seed).context("failed to construct key pair from seed")?,
-            );
-            opts.jwt(jwt.to_string(), move |nonce| {
-                let key_pair = kp.clone();
-                async move { key_pair.sign(&nonce).map_err(async_nats::AuthError::new) }
-            })
-        }
+    let opts = match (jwt, key) {
+        (Some(jwt), Some(key)) => opts.jwt(jwt.to_string(), {
+            move |nonce| {
+                let key = key.clone();
+                async move { key.sign(&nonce).map_err(async_nats::AuthError::new) }
+            }
+        }),
         (Some(_), None) | (None, Some(_)) => {
             bail!("cannot authenticate if only one of jwt or seed is specified")
         }
@@ -1046,27 +1042,22 @@ impl Host {
     pub async fn new(
         config: HostConfig,
     ) -> anyhow::Result<(Arc<Self>, impl Future<Output = anyhow::Result<()>>)> {
-        let cluster_key = if let Some(cluster_seed) = config.cluster_seed.as_ref() {
-            let kp = KeyPair::from_seed(cluster_seed)
-                .context("failed to construct key pair from seed")?;
-            ensure!(kp.key_pair_type() == KeyPairType::Cluster);
-            kp
+        let cluster_key = if let Some(cluster_key) = &config.cluster_key {
+            ensure!(cluster_key.key_pair_type() == KeyPairType::Cluster);
+            Arc::clone(cluster_key)
         } else {
-            KeyPair::new(KeyPairType::Cluster)
+            Arc::new(KeyPair::new(KeyPairType::Cluster))
         };
         if let Some(issuers) = config.cluster_issuers.as_ref() {
             if !issuers.contains(&cluster_key.public_key()) {
                 bail!("cluster issuers list must contain the cluster key");
             }
         }
-        let cluster_key = Arc::new(cluster_key);
-        let host_key = if let Some(host_seed) = config.host_seed.as_ref() {
-            let kp =
-                KeyPair::from_seed(host_seed).context("failed to construct key pair from seed")?;
-            ensure!(kp.key_pair_type() == KeyPairType::Server);
-            kp
+        let host_key = if let Some(host_key) = &config.host_key {
+            ensure!(host_key.key_pair_type() == KeyPairType::Server);
+            Arc::clone(host_key)
         } else {
-            KeyPair::new(KeyPairType::Server)
+            Arc::new(KeyPair::new(KeyPairType::Server))
         };
 
         let mut labels = HashMap::from([
@@ -1097,7 +1088,7 @@ impl Host {
                 let ctl_nats = connect_nats(
                     config.ctl_nats_url.as_str(),
                     config.ctl_jwt.as_ref(),
-                    config.ctl_seed.as_ref(),
+                    config.ctl_key.clone(),
                     config.ctl_tls,
                     None,
                 )
@@ -1123,7 +1114,7 @@ impl Host {
                 connect_nats(
                     config.rpc_nats_url.as_str(),
                     config.rpc_jwt.as_ref(),
-                    config.rpc_seed.as_ref(),
+                    config.rpc_key.clone(),
                     config.rpc_tls,
                     Some(config.rpc_timeout),
                 )
@@ -1138,7 +1129,7 @@ impl Host {
                 connect_nats(
                     config.prov_rpc_nats_url.as_str(),
                     config.prov_rpc_jwt.as_ref(),
-                    config.prov_rpc_seed.as_ref(),
+                    config.prov_rpc_key.clone(),
                     config.prov_rpc_tls,
                     None,
                 )
@@ -2060,12 +2051,19 @@ impl Host {
                 .values()
                 .filter(|ld| ld.provider_id == claims.subject && ld.link_name == link_name)
                 .collect();
+            let lattice_rpc_user_seed = self
+                .host_config
+                .prov_rpc_key
+                .as_ref()
+                .map(|key| key.seed())
+                .transpose()
+                .context("private key missing for provider RPC key")?;
             let data = serde_json::to_vec(&json!({
                 "host_id": self.host_key.public_key(),
                 "lattice_rpc_prefix": self.host_config.lattice_prefix,
                 "link_name": link_name,
                 "lattice_rpc_user_jwt": self.host_config.prov_rpc_jwt.clone().unwrap_or_default(),
-                "lattice_rpc_user_seed": self.host_config.prov_rpc_seed.clone().unwrap_or_default(),
+                "lattice_rpc_user_seed": lattice_rpc_user_seed.unwrap_or_default(),
                 "lattice_rpc_url": self.host_config.prov_rpc_nats_url.to_string(),
                 "lattice_rpc_tls": self.host_config.prov_rpc_tls,
                 "env_values": {},
