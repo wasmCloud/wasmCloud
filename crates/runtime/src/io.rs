@@ -19,6 +19,12 @@ impl AsyncVec {
     }
 }
 
+impl From<Vec<u8>> for AsyncVec {
+    fn from(buf: Vec<u8>) -> Self {
+        Self(Arc::new(std::sync::Mutex::new(Cursor::new(buf))))
+    }
+}
+
 impl Read for AsyncVec {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let mut inner = self.inner()?;

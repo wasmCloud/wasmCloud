@@ -2,13 +2,13 @@ use std::sync::RwLock;
 
 use once_cell::sync::Lazy;
 
+pub(crate) const WASI_BLOBSTORE_BLOBSTORE_TARGET: Lazy<RwLock<Option<TargetEntity>>> =
+    Lazy::new(RwLock::default);
 pub(crate) const WASI_KEYVALUE_ATOMIC_TARGET: Lazy<RwLock<Option<TargetEntity>>> =
     Lazy::new(RwLock::default);
 pub(crate) const WASI_KEYVALUE_READWRITE_TARGET: Lazy<RwLock<Option<TargetEntity>>> =
     Lazy::new(RwLock::default);
 pub(crate) const WASI_LOGGING_LOGGING_TARGET: Lazy<RwLock<Option<TargetEntity>>> =
-    Lazy::new(RwLock::default);
-pub(crate) const WASMCLOUD_BLOBSTORE_CONSUMER_TARGET: Lazy<RwLock<Option<TargetEntity>>> =
     Lazy::new(RwLock::default);
 pub(crate) const WASMCLOUD_MESSAGING_CONSUMER_TARGET: Lazy<RwLock<Option<TargetEntity>>> =
     Lazy::new(RwLock::default);
@@ -37,6 +37,17 @@ mod private {
 
 pub trait TargetInterface: private::Sealed {
     fn set_target(&self, target: Option<&TargetEntity>);
+}
+
+#[derive(Eq, PartialEq)]
+struct WasiBlobstoreBlobstore;
+impl private::Sealed for WasiBlobstoreBlobstore {}
+impl TargetInterface for WasiBlobstoreBlobstore {
+    fn set_target(&self, target: Option<&TargetEntity>) {
+        *WASI_BLOBSTORE_BLOBSTORE_TARGET
+            .write()
+            .expect("failed to lock target") = target.cloned();
+    }
 }
 
 #[derive(Eq, PartialEq)]
@@ -73,17 +84,6 @@ impl TargetInterface for WasiLoggingLogging {
 }
 
 #[derive(Eq, PartialEq)]
-struct WasmcloudBlobstoreConsumer;
-impl private::Sealed for WasmcloudBlobstoreConsumer {}
-impl TargetInterface for WasmcloudBlobstoreConsumer {
-    fn set_target(&self, target: Option<&TargetEntity>) {
-        *WASMCLOUD_BLOBSTORE_CONSUMER_TARGET
-            .write()
-            .expect("failed to lock target") = target.cloned();
-    }
-}
-
-#[derive(Eq, PartialEq)]
 struct WasmcloudMessagingConsumer;
 impl private::Sealed for WasmcloudMessagingConsumer {}
 impl TargetInterface for WasmcloudMessagingConsumer {
@@ -94,6 +94,9 @@ impl TargetInterface for WasmcloudMessagingConsumer {
     }
 }
 
+pub fn target_wasi_blobstore_blobstore() -> &'static dyn TargetInterface {
+    &WasiBlobstoreBlobstore
+}
 pub fn target_wasi_keyvalue_atomic() -> &'static dyn TargetInterface {
     &WasiKeyvalueAtomic
 }
@@ -102,9 +105,6 @@ pub fn target_wasi_keyvalue_readwrite() -> &'static dyn TargetInterface {
 }
 pub fn target_wasi_logging_logging() -> &'static dyn TargetInterface {
     &WasiLoggingLogging
-}
-pub fn target_wasmcloud_blobstore_consumer() -> &'static dyn TargetInterface {
-    &WasmcloudBlobstoreConsumer
 }
 pub fn target_wasmcloud_messaging_consumer() -> &'static dyn TargetInterface {
     &WasmcloudMessagingConsumer

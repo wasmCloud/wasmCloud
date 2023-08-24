@@ -6,6 +6,9 @@ interface lattice {
     /// Implementations of `wasmcloud:bus/lattice` may extend the set of "selectable" interfaces.
     type target-interface = u32
 
+    /// `wasi:blobstore/blobstore` interface target
+    target-wasi-blobstore-blobstore: func() -> target-interface
+
     /// `wasi:keyvalue/atomic` interface target
     target-wasi-keyvalue-atomic: func() -> target-interface
 
@@ -14,9 +17,6 @@ interface lattice {
 
     /// `wasi:logging/logging` interface target
     target-wasi-logging-logging: func() -> target-interface
-
-    /// `wasmcloud:blobstore/consumer` interface target
-    target-wasmcloud-blobstore-consumer: func() -> target-interface
 
     /// `wasmcloud:messaging/consumer` interface target
     target-wasmcloud-messaging-consumer: func() -> target-interface

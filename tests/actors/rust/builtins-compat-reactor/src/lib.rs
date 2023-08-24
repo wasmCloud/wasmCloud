@@ -229,6 +229,8 @@ impl exports::wasmcloud::bus::guest::Guest for Actor {
             rmp_serde::from_slice(&buf).expect("failed to decode `Increment` response");
         assert_eq!(value, 42);
 
+        // TODO: Use blobstore
+
         Ok(())
     }
 }

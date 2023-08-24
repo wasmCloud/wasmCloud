@@ -207,6 +207,8 @@ impl HttpHandler for HttpLogRng {
             rmp_serde::from_slice(&buf).expect("failed to decode `Increment` response");
         assert_eq!(value, 42);
 
+        // TODO: Use blobstore
+
         Ok(HttpResponse {
             body: body.into(),
             ..Default::default()

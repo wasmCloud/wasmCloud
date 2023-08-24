@@ -27,13 +27,13 @@ type FutureResult = Pin<Box<dyn Future<Output = Result<(), String>> + Send>>;
 
 trait TableHostExt {
     fn push_future_result(&mut self, res: FutureResult) -> TableResult<u32>;
-    fn get_future_result(&mut self, res: u32) -> TableResult<Box<Shared<FutureResult>>>;
+    fn get_future_result(&self, res: u32) -> TableResult<Box<Shared<FutureResult>>>;
     fn delete_future_result(&mut self, res: u32) -> TableResult<Box<Shared<FutureResult>>>;
 }
 
 trait TableLatticeExt {
     fn push_interface_target(&mut self, target: TargetInterface) -> TableResult<u32>;
-    fn get_interface_target(&mut self, target: u32) -> TableResult<&TargetInterface>;
+    fn get_interface_target(&self, target: u32) -> TableResult<&TargetInterface>;
     fn delete_interface_target(&mut self, target: u32) -> TableResult<TargetInterface>;
 }
 
@@ -41,7 +41,7 @@ impl TableHostExt for preview2::Table {
     fn push_future_result(&mut self, res: FutureResult) -> TableResult<u32> {
         self.push(Box::new(res.shared()))
     }
-    fn get_future_result(&mut self, res: u32) -> TableResult<Box<Shared<FutureResult>>> {
+    fn get_future_result(&self, res: u32) -> TableResult<Box<Shared<FutureResult>>> {
         self.get(res).cloned()
     }
     fn delete_future_result(&mut self, res: u32) -> TableResult<Box<Shared<FutureResult>>> {
@@ -54,7 +54,7 @@ impl TableLatticeExt for preview2::Table {
         self.push(Box::new(target))
     }
 
-    fn get_interface_target(&mut self, target: u32) -> TableResult<&TargetInterface> {
+    fn get_interface_target(&self, target: u32) -> TableResult<&TargetInterface> {
         self.get(target)
     }
 
@@ -171,6 +171,13 @@ impl lattice::Host for Ctx {
     }
 
     #[instrument]
+    async fn target_wasi_blobstore_blobstore(&mut self) -> anyhow::Result<host::TargetInterface> {
+        self.table
+            .push_interface_target(TargetInterface::WasiBlobstoreBlobstore)
+            .context("failed to push target interface")
+    }
+
+    #[instrument]
     async fn target_wasi_keyvalue_atomic(&mut self) -> anyhow::Result<host::TargetInterface> {
         self.table
             .push_interface_target(TargetInterface::WasiKeyvalueAtomic)
@@ -188,15 +195,6 @@ impl lattice::Host for Ctx {
     async fn target_wasi_logging_logging(&mut self) -> anyhow::Result<host::TargetInterface> {
         self.table
             .push_interface_target(TargetInterface::WasiLoggingLogging)
-            .context("failed to push target interface")
-    }
-
-    #[instrument]
-    async fn target_wasmcloud_blobstore_consumer(
-        &mut self,
-    ) -> anyhow::Result<host::TargetInterface> {
-        self.table
-            .push_interface_target(TargetInterface::WasmcloudBlobstoreConsumer)
             .context("failed to push target interface")
     }
 

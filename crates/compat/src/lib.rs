@@ -18,7 +18,7 @@ pub const INVALID_DATETIME: &str = "Invalid DateTime";
 /// Timestamp - represents absolute time in UTC,
 /// as non-leap seconds and nanoseconds since the UNIX EPOCH
 /// It is recommended to use the `new` constructor to check parameters for validity
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Timestamp {
     /// The number of non-leap seconds since UNIX EPOCH in UTC
     pub sec: i64,

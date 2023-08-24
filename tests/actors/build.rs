@@ -336,57 +336,26 @@ async fn main() -> anyhow::Result<()> {
         issuer.seed().expect("failed to extract issuer seed")
     );
 
+    let builtin_caps = vec![
+        caps::BLOB.into(),
+        caps::HTTP_SERVER.into(),
+        caps::KEY_VALUE.into(),
+        caps::LOGGING.into(),
+        caps::MESSAGING.into(),
+        caps::NUMBERGEN.into(),
+    ];
     for (name, caps) in [
-        (
-            "builtins-compat-reactor",
-            Some(vec![
-                caps::HTTP_SERVER.into(),
-                caps::LOGGING.into(),
-                caps::NUMBERGEN.into(),
-                caps::MESSAGING.into(),
-                caps::KEY_VALUE.into(),
-            ]),
-        ),
+        ("builtins-compat-reactor", Some(builtin_caps.clone())),
         (
             "builtins-compat-reactor-preview2",
-            Some(vec![
-                caps::HTTP_SERVER.into(),
-                caps::LOGGING.into(),
-                caps::NUMBERGEN.into(),
-                caps::MESSAGING.into(),
-                caps::KEY_VALUE.into(),
-            ]),
+            Some(builtin_caps.clone()),
         ),
-        (
-            "builtins-component-reactor",
-            Some(vec![
-                caps::HTTP_SERVER.into(),
-                caps::LOGGING.into(),
-                caps::NUMBERGEN.into(),
-                caps::MESSAGING.into(),
-                caps::KEY_VALUE.into(),
-            ]),
-        ),
+        ("builtins-component-reactor", Some(builtin_caps.clone())),
         (
             "builtins-component-reactor-preview2",
-            Some(vec![
-                caps::HTTP_SERVER.into(),
-                caps::LOGGING.into(),
-                caps::NUMBERGEN.into(),
-                caps::MESSAGING.into(),
-                caps::KEY_VALUE.into(),
-            ]),
+            Some(builtin_caps.clone()),
         ),
-        (
-            "builtins-module-reactor",
-            Some(vec![
-                caps::HTTP_SERVER.into(),
-                caps::LOGGING.into(),
-                caps::NUMBERGEN.into(),
-                caps::MESSAGING.into(),
-                caps::KEY_VALUE.into(),
-            ]),
-        ),
+        ("builtins-module-reactor", Some(builtin_caps.clone())),
         ("http-compat-command", Some(vec![caps::HTTP_SERVER.into()])),
         (
             "http-compat-command-preview2",
