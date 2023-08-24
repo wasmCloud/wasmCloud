@@ -2228,7 +2228,11 @@ impl Host {
                 "invocation_seed": invocation_seed,
                 "js_domain": self.host_config.js_domain,
                 "log_level": self.host_config.log_level.to_string(),
-                "structured_logging": self.host_config.enable_structured_logging
+                "structured_logging": self.host_config.enable_structured_logging,
+                "otel_config": {
+                    "traces_exporter": std::env::var("OTEL_TRACES_EXPORTER").unwrap_or_default(),
+                    "exporter_otlp_endpoint": std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").unwrap_or_default(),
+                }
             }))
             .context("failed to serialize provider data")?;
 

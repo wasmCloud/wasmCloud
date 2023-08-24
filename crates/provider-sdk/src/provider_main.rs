@@ -32,7 +32,7 @@ use tracing_subscriber::{
 use crate::error::{ProviderError, ProviderResult};
 use crate::provider::ProviderConnection;
 use crate::{
-    core::{logging::Level, HostData},
+    core::{logging::Level, HostData, OtelConfig},
     Provider,
 };
 
@@ -113,9 +113,10 @@ where
         .await
         .map_err(|e| ProviderError::Initialization(format!("Unable to load host data: {e}")))??;
     configure_tracing(
-        friendly_name.unwrap_or_else(|| host_data.provider_key.clone()),
+        friendly_name.unwrap_or(host_data.provider_key.clone()),
+        &host_data.otel_config,
         host_data.structured_logging,
-        host_data.log_level.clone(),
+        &host_data.log_level,
     );
 
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::broadcast::channel::<bool>(1);
@@ -238,6 +239,9 @@ fn _load_host_data() -> ProviderResult<HostData> {
 #[cfg(feature = "otel")]
 const TRACING_PATH: &str = "/v1/traces";
 
+#[cfg(feature = "otel")]
+const DEFAULT_TRACING_ENDPOINT: &str = "http://localhost:55681/v1/traces";
+
 /// A struct that allows us to dynamically choose JSON formatting without using dynamic dispatch.
 /// This is just so we avoid any sort of possible slow down in logging code
 enum JsonOrNot {
@@ -269,8 +273,9 @@ where
 #[cfg(not(feature = "otel"))]
 fn configure_tracing(
     _: String,
+    _: &Option<OtelConfig>,
     structured_logging_enabled: bool,
-    log_level_override: Option<Level>,
+    log_level_override: &Option<Level>,
 ) {
     let base_reg = tracing_subscriber::Registry::default();
     let level_filter = get_level_filter(log_level_override);
@@ -296,17 +301,37 @@ fn configure_tracing(
 #[cfg(feature = "otel")]
 fn configure_tracing(
     provider_name: String,
+    otel_config: &Option<OtelConfig>,
     structured_logging_enabled: bool,
-    log_level_override: Option<Level>,
+    log_level_override: &Option<Level>,
 ) {
     let base_reg = tracing_subscriber::Registry::default();
     let level_filter = get_level_filter(log_level_override);
 
-    let maybe_tracer = (std::env::var_os("OTEL_TRACES_EXPORTER")
+    let exporter = otel_config
+        .as_ref()
+        .map(|c| c.traces_exporter.as_str())
         .unwrap_or_default()
-        .to_ascii_lowercase()
-        == "otlp")
-        .then(|| get_tracer(provider_name));
+        .to_ascii_lowercase();
+
+    let maybe_tracer = if exporter.is_empty() {
+        None
+    } else if exporter != "otlp" {
+        eprintln!("unsupported OTEL exporter: '{}'", exporter);
+        None
+    } else {
+        let mut tracing_endpoint = otel_config
+            .as_ref()
+            .map(|c| c.exporter_otlp_endpoint.clone())
+            .unwrap_or_default();
+
+        if tracing_endpoint.is_empty() {
+            eprintln!("OTEL exporter endpoint not set, defaulting to '{DEFAULT_TRACING_ENDPOINT}'");
+            tracing_endpoint = DEFAULT_TRACING_ENDPOINT.to_string();
+        }
+
+        Some(get_tracer(tracing_endpoint, provider_name))
+    };
 
     let res = match (maybe_tracer, structured_logging_enabled) {
         (Some(Ok(t)), true) => {
@@ -360,12 +385,11 @@ fn configure_tracing(
 }
 
 #[cfg(feature = "otel")]
-fn get_tracer(provider_name: String) -> Result<Tracer, TraceError> {
-    let mut tracing_endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
-        .unwrap_or_else(|_| format!("http://localhost:55681{}", TRACING_PATH));
+fn get_tracer(mut tracing_endpoint: String, provider_name: String) -> Result<Tracer, TraceError> {
     if !tracing_endpoint.ends_with(TRACING_PATH) {
-        tracing_endpoint.push_str(TRACING_PATH);
-    }
+        tracing_endpoint.push_str(TRACING_PATH)
+    };
+
     opentelemetry_otlp::new_pipeline()
         .tracing()
         .with_exporter(
@@ -405,7 +429,7 @@ fn get_json_log_layer() -> impl Layer<Layered<EnvFilter, Registry>> {
         .fmt_fields(JsonFields::new())
 }
 
-fn get_level_filter(log_level_override: Option<Level>) -> EnvFilter {
+fn get_level_filter(log_level_override: &Option<Level>) -> EnvFilter {
     if let Some(log_level) = log_level_override {
         let level = wasi_level_to_tracing_level(log_level);
         // NOTE(thomastaylor312): Technically we should just use the plain level filter, but we are
@@ -420,7 +444,7 @@ fn get_level_filter(log_level_override: Option<Level>) -> EnvFilter {
     }
 }
 
-fn wasi_level_to_tracing_level(level: Level) -> LevelFilter {
+fn wasi_level_to_tracing_level(level: &Level) -> LevelFilter {
     match level {
         Level::Error => LevelFilter::ERROR,
         Level::Critical => LevelFilter::ERROR,
