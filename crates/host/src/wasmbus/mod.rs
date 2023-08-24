@@ -25,10 +25,6 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, ensure, Context as _};
-use async_nats::{
-    jetstream::{context::Context as JetstreamContext, kv},
-    Request,
-};
 use async_trait::async_trait;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
@@ -321,7 +317,7 @@ impl Handler {
         };
 
         let timeout = needs_chunking.then_some(CHUNK_RPC_EXTRA_TIME); // TODO: add rpc_nats timeout
-        let request = Request::new()
+        let request = async_nats::Request::new()
             .payload(payload.into())
             .timeout(timeout)
             .headers(headers); // TODO: remove headers once all providers are built off the new SDK, which parses the trace context in the invocation
@@ -771,7 +767,7 @@ impl Bus for Handler {
                 };
 
                 let timeout = needs_chunking.then_some(CHUNK_RPC_EXTRA_TIME); // TODO: add rpc_nats timeout
-                let request = Request::new()
+                let request = async_nats::Request::new()
                     .payload(payload.into())
                     .timeout(timeout)
                     .headers(headers); // TODO: remove headers once all providers are built off the new SDK, which parses the trace context in the invocation
@@ -1509,7 +1505,7 @@ fn linkdef_hash(
 
 #[instrument(skip(jetstream))]
 async fn create_lattice_metadata_bucket(
-    jetstream: &JetstreamContext,
+    jetstream: &async_nats::jetstream::Context,
     bucket: &str,
 ) -> anyhow::Result<()> {
     // Don't create the bucket if it already exists
@@ -1519,7 +1515,7 @@ async fn create_lattice_metadata_bucket(
     }
 
     match jetstream
-        .create_key_value(kv::Config {
+        .create_key_value(async_nats::jetstream::kv::Config {
             bucket: bucket.to_string(),
             ..Default::default()
         })
