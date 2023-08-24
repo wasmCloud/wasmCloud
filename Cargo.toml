@@ -86,10 +86,8 @@ names = { version = "0.14", default-features = false }
 nkeys = { version = "0.3", default-features = false }
 oci-distribution = { version = "0.9", default-features = false }
 once_cell = { version = "1", default-features = false }
-# This is currently pinned to an older version. See
-# https://github.com/wasmCloud/wasmCloud/issues/453 for more information
-opentelemetry = { version = "0.17", default-features = false }
-opentelemetry-otlp = { version = "0.10", default-features = false }
+opentelemetry = { version = "0.20", default-features = false }
+opentelemetry-otlp = { version = "0.13", default-features = false }
 proc-macro2 = { version = "1", default-features = false }
 provider-archive = { version = "0.7", default-features = false }
 quote = { version = "1", default-features = false }
@@ -113,9 +111,7 @@ tokio-util = { version = "0.7", default-features = false }
 toml = { version = "0.7", default-features = false }
 tracing = { version = "0.1", default-features = false }
 tracing-futures = { version = "0.2", default-features = false }
-# This is currently pinned to an older version. See
-# https://github.com/wasmCloud/wasmCloud/issues/453 for more information
-tracing-opentelemetry = { version = "0.17", default-features = false }
+tracing-opentelemetry = { version = "0.20", default-features = false }
 tracing-subscriber = { version = "0.3", default-features = false }
 ulid = { version = "1", default-features = false }
 url = { version = "2", default-features = false }
