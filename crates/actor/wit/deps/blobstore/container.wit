@@ -2,15 +2,19 @@ package wasi:blobstore
 
 // a Container is a collection of objects
 interface container {
-  use types.{ object-name, object-metadata, container-metadata, error }
-  use data-blob.{ data-blob }
+  use wasi:io/streams.{
+    input-stream,
+    output-stream,
+  }
 
-  use wasi:io/streams.{input-stream, output-stream}
-  use wasi:poll/poll.{ pollable }
-
-  type read-stream = input-stream
-  type write-stream = output-stream
-
+  use types.{
+    container-metadata,
+    error,
+    incoming-value,
+    object-metadata,
+    object-name,
+    outgoing-value,
+  }
 
   // this defines the `container` resource
   type container = u32
@@ -24,20 +28,14 @@ interface container {
   info: func(container: container) -> result<container-metadata, error>
 
 
-  // begins reading an object
-  read-object: func(container: container, name: object-name) -> result<read-stream, error>
-
-  // creates or replaces an object.
-  write-object: func(container: container, name: object-name) -> result<write-stream, error>
-
   // retrieves an object or portion of an object, as a resource.
   // Start and end offsets are inclusive.
   // Once a data-blob resource has been created, the underlying bytes are held by the blobstore service for the lifetime
   // of the data-blob resource, even if the object they came from is later deleted.
-  get-data: func(container: container, name: object-name, start: u64, end: u64) -> result<data-blob, error>
+  get-data: func(container: container, name: object-name, start: u64, end: u64) -> result<incoming-value, error>
 
   // creates or replaces an object with the data blob.
-  write-data: func(container: container, name: object-name, data: data-blob) -> result<_, error>
+  write-data: func(container: container, name: object-name, data: outgoing-value) -> result<_, error>
 
   // this defines the `stream-object-names` resource which is a representation of stream<object-name>
   type stream-object-names = u32

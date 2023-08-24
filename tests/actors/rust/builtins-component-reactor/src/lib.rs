@@ -5,9 +5,9 @@ use std::io::{Read, Write};
 use serde::Deserialize;
 use serde_json::json;
 use wasi::http::http_types as types;
-use wasmcloud_actor::wasi::keyvalue;
 use wasmcloud_actor::wasi::logging::logging;
 use wasmcloud_actor::wasi::random::random;
+use wasmcloud_actor::wasi::{blobstore, keyvalue};
 use wasmcloud_actor::wasmcloud::bus::lattice::TargetEntity;
 use wasmcloud_actor::wasmcloud::{bus, messaging};
 use wasmcloud_actor::{
@@ -209,6 +209,59 @@ impl exports::wasi::http::incoming_handler::IncomingHandler for Actor {
         // TODO: Verify return value when implemented for all hosts
         let _ = keyvalue::atomic::compare_and_swap(bucket, &counter_key, 42, 4242);
         let _ = keyvalue::atomic::compare_and_swap(bucket, &counter_key, 4242, 42);
+
+        bus::lattice::set_target(
+            Some(&TargetEntity::Link(Some("blobstore".into()))),
+            &[bus::lattice::target_wasi_blobstore_blobstore()],
+        );
+
+        let container_name = String::from("container");
+        assert!(!blobstore::blobstore::container_exists(&container_name)
+            .expect("failed to check whether container exists"));
+        let created_container = blobstore::blobstore::create_container(&container_name)
+            .expect("failed to create container");
+        assert!(blobstore::blobstore::container_exists(&container_name)
+            .expect("failed to check whether container exists"));
+        let got_container =
+            blobstore::blobstore::get_container(&container_name).expect("failed to get container");
+
+        let blobstore::container::ContainerMetadata { name, created_at } =
+            blobstore::container::info(created_container)
+                .expect("failed to get info of created container");
+        assert_eq!(name, "container");
+        assert!(created_at > 0);
+
+        let got_info =
+            blobstore::container::info(got_container).expect("failed to get info of got container");
+        assert_eq!(got_info.name, "container");
+        assert_eq!(got_info.created_at, created_at);
+        // NOTE: At this point we should be able to assume that created container and got container are
+        // indeed the same container
+        blobstore::container::drop_container(got_container);
+
+        assert_eq!(
+            blobstore::container::name(created_container).expect("failed to get container name"),
+            "container"
+        );
+
+        assert!(
+            !blobstore::container::has_object(created_container, &result_key)
+                .expect("failed to check whether `result` object exists")
+        );
+        // TODO: Assert that this succeeds once providers are compatible
+        let _ = blobstore::container::delete_object(created_container, &result_key);
+
+        let result_value = blobstore::types::new_outgoing_value();
+        let result_stream = blobstore::types::outgoing_value_write_body(result_value)
+            .expect("failed to get outgoing value output stream");
+        let n = OutputStreamWriter::from(result_stream)
+            .write(&body)
+            .expect("failed to write result to blobstore output stream");
+        assert_eq!(n, body.len());
+        blobstore::container::write_data(created_container, &result_key, result_value)
+            .expect("failed to write `result`");
+
+        // TODO: Expand blobstore testing procedure
     }
 }
 

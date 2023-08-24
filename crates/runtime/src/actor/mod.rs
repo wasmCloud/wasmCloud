@@ -11,7 +11,9 @@ pub use module::{
 };
 
 use crate::capability::logging::logging;
-use crate::capability::{Bus, IncomingHttp, KeyValueAtomic, KeyValueReadWrite, Logging, Messaging};
+use crate::capability::{
+    Blobstore, Bus, IncomingHttp, KeyValueAtomic, KeyValueReadWrite, Logging, Messaging,
+};
 use crate::Runtime;
 
 use core::fmt::Debug;
@@ -315,6 +317,19 @@ impl Instance {
             Self::Module(module) => module.reset(rt),
             Self::Component(component) => component.reset(rt).await,
         }
+    }
+
+    /// Set [`Blobstore`] handler for this [Instance].
+    pub fn blobstore(&mut self, blobstore: Arc<dyn Blobstore + Send + Sync>) -> &mut Self {
+        match self {
+            Self::Module(module) => {
+                module.blobstore(blobstore);
+            }
+            Self::Component(component) => {
+                component.blobstore(blobstore);
+            }
+        }
+        self
     }
 
     /// Set [`Bus`] handler for this [Instance].

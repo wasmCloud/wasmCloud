@@ -17,7 +17,9 @@ use tokio::io::{stderr, AsyncRead, AsyncReadExt};
 use tracing_subscriber::prelude::*;
 use wasmcloud_actor::Uuid;
 use wasmcloud_runtime::capability::logging::logging;
-use wasmcloud_runtime::capability::provider::{MemoryKeyValue, MemoryKeyValueEntry};
+use wasmcloud_runtime::capability::provider::{
+    MemoryBlobstore, MemoryKeyValue, MemoryKeyValueEntry,
+};
 use wasmcloud_runtime::capability::{
     self, messaging, IncomingHttp, KeyValueAtomic, KeyValueReadWrite, Messaging,
 };
@@ -41,10 +43,12 @@ fn init() {
 }
 
 struct Handler {
-    logging: Arc<Mutex<Vec<(logging::Level, String, String)>>>,
-    messaging: Arc<Mutex<Vec<messaging::types::BrokerMessage>>>,
+    #[allow(unused)] // TODO: Verify resulting contents and remove
+    blobstore: Arc<MemoryBlobstore>,
     keyvalue_atomic: Arc<MemoryKeyValue>,
     keyvalue_readwrite: Arc<MemoryKeyValue>,
+    logging: Arc<Mutex<Vec<(logging::Level, String, String)>>>,
+    messaging: Arc<Mutex<Vec<messaging::types::BrokerMessage>>>,
 }
 
 #[async_trait]
@@ -128,6 +132,7 @@ impl capability::Bus for Handler {
         match (target, interfaces.as_slice()) {
             (Some(capability::TargetEntity::Link(Some(name))), [capability::TargetInterface::WasmcloudMessagingConsumer]) if name == "messaging" => Ok(()),
                 (Some(capability::TargetEntity::Link(Some(name))), [capability::TargetInterface::WasiKeyvalueAtomic | capability::TargetInterface::WasiKeyvalueReadwrite]) if name == "keyvalue" => Ok(()),
+                (Some(capability::TargetEntity::Link(Some(name))), [capability::TargetInterface::WasiBlobstoreBlobstore]) if name == "blobstore" => Ok(()),
             (target, interfaces) => panic!("`set_target` with target `{target:?}` and interfaces `{interfaces:?}` should not have been called")
         }
     }
@@ -306,22 +311,25 @@ impl capability::Bus for Handler {
 }
 
 fn new_runtime(
+    blobstore: Arc<MemoryBlobstore>,
+    keyvalue: Arc<MemoryKeyValue>,
     logs: Arc<Mutex<Vec<(logging::Level, String, String)>>>,
     published: Arc<Mutex<Vec<messaging::types::BrokerMessage>>>,
-    keyvalue: Arc<MemoryKeyValue>,
 ) -> Runtime {
     let handler = Arc::new(Handler {
-        logging: logs,
-        messaging: published,
+        blobstore: Arc::clone(&blobstore),
         keyvalue_atomic: Arc::clone(&keyvalue),
         keyvalue_readwrite: Arc::clone(&keyvalue),
+        logging: logs,
+        messaging: published,
     });
     Runtime::builder()
         .bus(Arc::clone(&handler))
-        .logging(Arc::clone(&handler))
-        .messaging(Arc::clone(&handler))
+        .blobstore(Arc::clone(&blobstore))
         .keyvalue_atomic(Arc::clone(&keyvalue))
         .keyvalue_readwrite(Arc::clone(&keyvalue))
+        .logging(Arc::clone(&handler))
+        .messaging(Arc::clone(&handler))
         .build()
         .expect("failed to construct runtime")
 }
@@ -329,18 +337,20 @@ fn new_runtime(
 async fn run(wasm: impl AsRef<Path>) -> anyhow::Result<Vec<(logging::Level, String, String)>> {
     let wasm = fs::read(wasm).await.context("failed to read Wasm")?;
 
-    let logs = Arc::new(vec![].into());
-    let published = Arc::new(vec![].into());
     let keyvalue = Arc::new(MemoryKeyValue::from(HashMap::from([(
         "".into(),
         HashMap::from([("foo".into(), MemoryKeyValueEntry::Blob(b"bar".to_vec()))]),
     )])));
+    let blobstore = Arc::default();
+    let logs = Arc::default();
+    let published = Arc::default();
 
     let res = {
         let rt = new_runtime(
+            Arc::clone(&blobstore),
+            Arc::clone(&keyvalue),
             Arc::clone(&logs),
             Arc::clone(&published),
-            Arc::clone(&keyvalue),
         );
         let actor = Actor::new(&rt, wasm).expect("failed to construct actor");
         actor.claims().expect("claims missing");

@@ -12,7 +12,7 @@ use anyhow::{anyhow, bail, ensure, Context};
 use nkeys::KeyPair;
 use redis::{Commands, ConnectionLike};
 use serde::Deserialize;
-use tempfile::tempdir;
+use tempfile::TempDir;
 use tokio::net::TcpListener;
 use tokio::process::Command;
 use tokio::sync::oneshot;
@@ -32,6 +32,10 @@ use wasmcloud_control_interface::{
     GetClaimsResponse, Host as HostInfo, HostInventory, ProviderAuctionAck,
 };
 use wasmcloud_host::wasmbus::{Host, HostConfig};
+
+fn tempdir() -> anyhow::Result<TempDir> {
+    tempfile::tempdir().context("failed to create temporary directory")
+}
 
 async fn free_port() -> anyhow::Result<u16> {
     let lis = TcpListener::bind((Ipv6Addr::UNSPECIFIED, 0))
@@ -228,7 +232,7 @@ async fn start_nats() -> anyhow::Result<(
     let port = free_port().await?;
     let url =
         Url::parse(&format!("nats://localhost:{port}")).context("failed to parse NATS URL")?;
-    let jetstream_dir = tempdir().context("failed to create temporary directory")?;
+    let jetstream_dir = tempdir()?;
     let (server, stop_tx) = spawn_server(
         Command::new(
             env::var("WASMCLOUD_NATS")
@@ -699,10 +703,46 @@ expected: {expected_labels:?}"#
     let (component_http_port, compat_http_port, module_http_port) =
         try_join!(free_port(), free_port(), free_port())?;
 
+    let compat_blobstore_dir = tempdir()?;
+    let component_blobstore_dir = tempdir()?;
+    let module_blobstore_dir = tempdir()?;
     // NOTE: Links are advertised before the provider is started to prevent race condition, which
     // occurs if link is established after the providers starts, but before it subscribes to NATS
     // topics
     try_join!(
+        assert_advertise_link(
+            &ctl_client,
+            &compat_actor_claims,
+            &blobstore_fs_provider_key,
+            "wasmcloud:blobstore",
+            "blobstore",
+            HashMap::from([(
+                "ROOT".into(),
+                compat_blobstore_dir.path().to_string_lossy().into(),
+            )]),
+        ),
+        assert_advertise_link(
+            &ctl_client,
+            &component_actor_claims,
+            &blobstore_fs_provider_key,
+            "wasmcloud:blobstore",
+            "blobstore",
+            HashMap::from([(
+                "ROOT".into(),
+                component_blobstore_dir.path().to_string_lossy().into(),
+            )]),
+        ),
+        assert_advertise_link(
+            &ctl_client,
+            &module_actor_claims,
+            &blobstore_fs_provider_key,
+            "wasmcloud:blobstore",
+            "blobstore",
+            HashMap::from([(
+                "ROOT".into(),
+                module_blobstore_dir.path().to_string_lossy().into(),
+            )]),
+        ),
         assert_advertise_link(
             &ctl_client,
             &compat_actor_claims,
@@ -873,7 +913,7 @@ expected: {expected_labels:?}"#
         unequal => unequal,
     });
 
-    ensure!(links_from_host.len() == 9);
+    ensure!(links_from_host.len() == 12);
 
     // recreate the ctl_client, which should now use the KV bucket directly
     let ctl_client = ClientBuilder::new(ctl_nats_client.clone())
@@ -1178,20 +1218,38 @@ expected: {expected_labels:?}"#
         assert_remove_link(
             &ctl_client,
             &compat_actor_claims,
-            "wasmcloud:messaging",
-            "messaging",
+            "wasmcloud:blobstore",
+            "blobstore"
         ),
         assert_remove_link(
             &ctl_client,
             &component_actor_claims,
-            "wasmcloud:messaging",
-            "messaging",
+            "wasmcloud:blobstore",
+            "blobstore"
         ),
         assert_remove_link(
             &ctl_client,
             &module_actor_claims,
-            "wasmcloud:messaging",
-            "messaging",
+            "wasmcloud:blobstore",
+            "blobstore"
+        ),
+        assert_remove_link(
+            &ctl_client,
+            &compat_actor_claims,
+            "wasmcloud:httpserver",
+            "httpserver"
+        ),
+        assert_remove_link(
+            &ctl_client,
+            &component_actor_claims,
+            "wasmcloud:httpserver",
+            "httpserver"
+        ),
+        assert_remove_link(
+            &ctl_client,
+            &module_actor_claims,
+            "wasmcloud:httpserver",
+            "httpserver"
         ),
         assert_remove_link(
             &ctl_client,
@@ -1214,20 +1272,20 @@ expected: {expected_labels:?}"#
         assert_remove_link(
             &ctl_client,
             &compat_actor_claims,
-            "wasmcloud:httpserver",
-            "httpserver"
+            "wasmcloud:messaging",
+            "messaging",
         ),
         assert_remove_link(
             &ctl_client,
             &component_actor_claims,
-            "wasmcloud:httpserver",
-            "httpserver"
+            "wasmcloud:messaging",
+            "messaging",
         ),
         assert_remove_link(
             &ctl_client,
             &module_actor_claims,
-            "wasmcloud:httpserver",
-            "httpserver"
+            "wasmcloud:messaging",
+            "messaging",
         ),
     )
     .context("failed to remove links")?;

@@ -1,6 +1,5 @@
-use super::bus;
 use super::logging::logging;
-use super::{format_opt, messaging};
+use super::{blobstore, bus, format_opt, messaging};
 
 use core::convert::Infallible;
 use core::fmt::Debug;
@@ -9,10 +8,12 @@ use core::pin::Pin;
 use core::str::FromStr;
 use core::time::Duration;
 
+use std::ops::RangeInclusive;
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context, Result};
 use async_trait::async_trait;
+use futures::{Stream, TryStreamExt};
 use nkeys::{KeyPair, KeyPairType};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tracing::{instrument, trace};
@@ -42,7 +43,44 @@ impl Debug for Handler {
     }
 }
 
+fn proxy<'a, T: ?Sized>(
+    field: &'a Option<Arc<T>>,
+    interface: &str,
+    method: &str,
+) -> anyhow::Result<&'a Arc<T>> {
+    trace!("call `{interface}` handler");
+    field
+        .as_ref()
+        .with_context(|| format!("cannot handle `{method}`"))
+}
+
 impl Handler {
+    fn proxy_bus(&self, method: &str) -> anyhow::Result<&Arc<dyn Bus + Sync + Send>> {
+        proxy(&self.bus, "Bus", method)
+    }
+
+    fn proxy_blobstore(&self, method: &str) -> anyhow::Result<&Arc<dyn Blobstore + Sync + Send>> {
+        proxy(&self.blobstore, "Blobstore", method)
+    }
+
+    fn proxy_keyvalue_atomic(
+        &self,
+        method: &str,
+    ) -> anyhow::Result<&Arc<dyn KeyValueAtomic + Sync + Send>> {
+        proxy(&self.keyvalue_atomic, "KeyvalueAtomic", method)
+    }
+
+    fn proxy_keyvalue_readwrite(
+        &self,
+        method: &str,
+    ) -> anyhow::Result<&Arc<dyn KeyValueReadWrite + Sync + Send>> {
+        proxy(&self.keyvalue_readwrite, "KeyvalueReadWrite", method)
+    }
+
+    fn proxy_messaging(&self, method: &str) -> anyhow::Result<&Arc<dyn Messaging + Sync + Send>> {
+        proxy(&self.messaging, "Messaging", method)
+    }
+
     /// Replace [`Blobstore`] handler returning the old one, if such was set
     pub fn replace_blobstore(
         &mut self,
@@ -178,14 +216,14 @@ impl TryFrom<bus::lattice::TargetEntity> for TargetEntity {
 #[derive(Debug, Clone, Copy, Eq, Hash, PartialEq)]
 /// Call target identifier
 pub enum TargetInterface {
+    /// `wasi:blobstore/blobstore`
+    WasiBlobstoreBlobstore,
     /// `wasi:keyvalue/atomic`
     WasiKeyvalueAtomic,
     /// `wasi:keyvalue/readwrite`
     WasiKeyvalueReadwrite,
     /// `wasi:logging/logging`
     WasiLoggingLogging,
-    /// `wasmcloud:blobstore/consumer`
-    WasmcloudBlobstoreConsumer,
     /// `wasmcloud:messaging/consumer`
     WasmcloudMessagingConsumer,
 }
@@ -254,9 +292,70 @@ pub trait IncomingHttp {
 }
 
 #[async_trait]
-/// `wasi:blobstore/consumer` implementation
+/// `wasi:blobstore/blobstore` implementation
 pub trait Blobstore {
-    // TODO: Implement
+    /// Handle `wasi:blobstore/blobstore.create-container`
+    async fn create_container(&self, name: &str) -> anyhow::Result<()>;
+
+    /// Handle `wasi:blobstore/blobstore.container-exists`
+    async fn container_exists(&self, name: &str) -> anyhow::Result<bool>;
+
+    /// Handle `wasi:blobstore/blobstore.delete-container`
+    async fn delete_container(&self, name: &str) -> anyhow::Result<()>;
+
+    /// Handle `wasi:blobstore/container.info`
+    async fn container_info(
+        &self,
+        name: &str,
+    ) -> anyhow::Result<blobstore::container::ContainerMetadata>;
+
+    /// Handle `wasi:blobstore/container.get-data`
+    async fn get_data(
+        &self,
+        container: &str,
+        name: String,
+        range: RangeInclusive<u64>,
+    ) -> anyhow::Result<(Box<dyn AsyncRead + Sync + Send + Unpin>, u64)>;
+
+    /// Handle `wasi:blobstore/container.has-object`
+    async fn has_object(&self, container: &str, name: String) -> anyhow::Result<bool>;
+
+    /// Handle `wasi:blobstore/container.write-data`
+    async fn write_data(
+        &self,
+        container: &str,
+        name: String,
+        value: Box<dyn AsyncRead + Sync + Send + Unpin>,
+    ) -> anyhow::Result<()>;
+
+    /// Handle `wasi:blobstore/blobstore.delete-objects`
+    async fn delete_objects(&self, container: &str, names: Vec<String>) -> anyhow::Result<()>;
+
+    /// Handle `wasi:blobstore/container.list-objects`
+    async fn list_objects(
+        &self,
+        container: &str,
+    ) -> anyhow::Result<Box<dyn Stream<Item = anyhow::Result<String>> + Sync + Send + Unpin>>;
+
+    /// Handle `wasi:blobstore/container.object-info`
+    async fn object_info(
+        &self,
+        container: &str,
+        name: String,
+    ) -> anyhow::Result<blobstore::container::ObjectMetadata>;
+
+    /// Handle `wasi:blobstore/container.clear`
+    async fn clear_container(&self, container: &str) -> anyhow::Result<()> {
+        let names = self
+            .list_objects(container)
+            .await
+            .context("failed to list objects")?;
+        let names = names
+            .try_collect()
+            .await
+            .context("failed to collect object names")?;
+        self.delete_objects(container, names).await
+    }
 }
 
 #[async_trait]
@@ -337,6 +436,106 @@ pub trait Messaging {
 }
 
 #[async_trait]
+impl Blobstore for Handler {
+    #[instrument]
+    async fn create_container(&self, name: &str) -> anyhow::Result<()> {
+        self.proxy_blobstore("wasi:blobstore/blobstore.create-container")?
+            .create_container(name)
+            .await
+    }
+
+    #[instrument]
+    async fn container_exists(&self, name: &str) -> anyhow::Result<bool> {
+        self.proxy_blobstore("wasi:blobstore/blobstore.container-exists")?
+            .container_exists(name)
+            .await
+    }
+
+    #[instrument]
+    async fn delete_container(&self, name: &str) -> anyhow::Result<()> {
+        self.proxy_blobstore("wasi:blobstore/blobstore.delete-container")?
+            .delete_container(name)
+            .await
+    }
+
+    #[instrument]
+    async fn container_info(
+        &self,
+        name: &str,
+    ) -> anyhow::Result<blobstore::container::ContainerMetadata> {
+        self.proxy_blobstore("wasi:blobstore/container.info")?
+            .container_info(name)
+            .await
+    }
+
+    #[instrument]
+    async fn get_data(
+        &self,
+        container: &str,
+        name: String,
+        range: RangeInclusive<u64>,
+    ) -> anyhow::Result<(Box<dyn AsyncRead + Sync + Send + Unpin>, u64)> {
+        self.proxy_blobstore("wasi:blobstore/container.get-data")?
+            .get_data(container, name, range)
+            .await
+    }
+
+    #[instrument]
+    async fn has_object(&self, container: &str, name: String) -> anyhow::Result<bool> {
+        self.proxy_blobstore("wasi:blobstore/container.has-object")?
+            .has_object(container, name)
+            .await
+    }
+
+    #[instrument(skip(value))]
+    async fn write_data(
+        &self,
+        container: &str,
+        name: String,
+        value: Box<dyn AsyncRead + Sync + Send + Unpin>,
+    ) -> anyhow::Result<()> {
+        self.proxy_blobstore("wasi:blobstore/container.write-data")?
+            .write_data(container, name, value)
+            .await
+    }
+
+    #[instrument]
+    async fn delete_objects(&self, container: &str, names: Vec<String>) -> anyhow::Result<()> {
+        self.proxy_blobstore("wasi:blobstore/container.delete-objects")?
+            .delete_objects(container, names)
+            .await
+    }
+
+    #[instrument]
+    async fn list_objects(
+        &self,
+        container: &str,
+    ) -> anyhow::Result<Box<dyn Stream<Item = anyhow::Result<String>> + Sync + Send + Unpin>> {
+        self.proxy_blobstore("wasi:blobstore/container.list-objects")?
+            .list_objects(container)
+            .await
+    }
+
+    #[instrument]
+    async fn object_info(
+        &self,
+        container: &str,
+        name: String,
+    ) -> anyhow::Result<blobstore::container::ObjectMetadata> {
+        self.proxy_blobstore("wasi:blobstore/container.object-info")?
+            .object_info(container, name)
+            .await
+    }
+
+    #[instrument]
+    async fn clear_container(&self, container: &str) -> anyhow::Result<()> {
+        self.proxy_blobstore("wasi:blobstore/container.clear")?
+            .clear_container(container)
+            .await
+    }
+}
+
+#[async_trait]
 impl Bus for Handler {
     #[instrument]
     async fn identify_wasmbus_target(
@@ -358,12 +557,9 @@ impl Bus for Handler {
         target: Option<TargetEntity>,
         interfaces: Vec<TargetInterface>,
     ) -> anyhow::Result<()> {
-        if let Some(ref bus) = self.bus {
-            trace!("call `Bus` handler");
-            bus.set_target(target, interfaces).await
-        } else {
-            bail!("host cannot set call target")
-        }
+        self.proxy_bus("wasmcloud:bus/lattice.set-target")?
+            .set_target(target, interfaces)
+            .await
     }
 
     #[instrument]
@@ -376,12 +572,9 @@ impl Bus for Handler {
         Box<dyn AsyncWrite + Sync + Send + Unpin>,
         Box<dyn AsyncRead + Sync + Send + Unpin>,
     )> {
-        if let Some(ref bus) = self.bus {
-            trace!("call `Bus` handler");
-            bus.call(target, operation).await
-        } else {
-            bail!("host cannot handle `{operation}`")
-        }
+        self.proxy_bus("wasmcloud:bus/host.call")?
+            .call(target, operation)
+            .await
     }
 
     async fn call_sync(
@@ -390,12 +583,9 @@ impl Bus for Handler {
         operation: String,
         payload: Vec<u8>,
     ) -> anyhow::Result<Vec<u8>> {
-        if let Some(ref bus) = self.bus {
-            trace!("call `Bus` handler");
-            bus.call_sync(target, operation, payload).await
-        } else {
-            bail!("host cannot handle `{operation}`")
-        }
+        self.proxy_bus("wasmcloud:bus/host.call-sync")?
+            .call_sync(target, operation, payload)
+            .await
     }
 }
 
@@ -421,10 +611,7 @@ impl Logging for Handler {
 #[async_trait]
 impl KeyValueAtomic for Handler {
     async fn increment(&self, bucket: &str, key: String, delta: u64) -> anyhow::Result<u64> {
-        trace!("call `KeyValueAtomic` handler");
-        self.keyvalue_atomic
-            .as_ref()
-            .context("cannot handle `wasi:keyvalue/atomic.increment`")?
+        self.proxy_keyvalue_atomic("wasi:keyvalue/atomic.increment")?
             .increment(bucket, key, delta)
             .await
     }
@@ -436,10 +623,7 @@ impl KeyValueAtomic for Handler {
         old: u64,
         new: u64,
     ) -> anyhow::Result<bool> {
-        trace!("call `KeyValueAtomic` handler");
-        self.keyvalue_atomic
-            .as_ref()
-            .context("cannot handle `wasi:keyvalue/atomic.compare_and_swap`")?
+        self.proxy_keyvalue_atomic("wasi:keyvalue/atomic.compare-and-swap")?
             .compare_and_swap(bucket, key, old, new)
             .await
     }
@@ -453,10 +637,7 @@ impl KeyValueReadWrite for Handler {
         bucket: &str,
         key: String,
     ) -> anyhow::Result<(Box<dyn AsyncRead + Sync + Send + Unpin>, u64)> {
-        trace!("call `KeyValueReadWrite` handler");
-        self.keyvalue_readwrite
-            .as_ref()
-            .context("cannot handle `wasi:keyvalue/readwrite.get`")?
+        self.proxy_keyvalue_readwrite("wasi:keyvalue/readwrite.get")?
             .get(bucket, key)
             .await
     }
@@ -468,30 +649,21 @@ impl KeyValueReadWrite for Handler {
         key: String,
         value: Box<dyn AsyncRead + Sync + Send + Unpin>,
     ) -> anyhow::Result<()> {
-        trace!("call `KeyValueReadWrite` handler");
-        self.keyvalue_readwrite
-            .as_ref()
-            .context("cannot handle `wasi:keyvalue/readwrite.set`")?
+        self.proxy_keyvalue_readwrite("wasi:keyvalue/readwrite.set")?
             .set(bucket, key, value)
             .await
     }
 
     #[instrument]
     async fn delete(&self, bucket: &str, key: String) -> anyhow::Result<()> {
-        trace!("call `KeyValueReadWrite` handler");
-        self.keyvalue_readwrite
-            .as_ref()
-            .context("cannot handle `wasi:keyvalue/readwrite.delete`")?
+        self.proxy_keyvalue_readwrite("wasi:keyvalue/readwrite.delete")?
             .delete(bucket, key)
             .await
     }
 
     #[instrument]
     async fn exists(&self, bucket: &str, key: String) -> anyhow::Result<bool> {
-        trace!("call `KeyValueReadWrite` handler");
-        self.keyvalue_readwrite
-            .as_ref()
-            .context("cannot handle `wasi:keyvalue/readwrite.exists`")?
+        self.proxy_keyvalue_readwrite("wasi:keyvalue/readwrite.exists")?
             .exists(bucket, key)
             .await
     }
@@ -504,12 +676,13 @@ impl IncomingHttp for Handler {
         &self,
         request: http::Request<Box<dyn AsyncRead + Sync + Send + Unpin>>,
     ) -> anyhow::Result<http::Response<Box<dyn AsyncRead + Sync + Send + Unpin>>> {
-        trace!("call `IncomingHttp` handler");
-        self.incoming_http
-            .as_ref()
-            .context("cannot handle `wasi:http/incoming-handler.handle`")?
-            .handle(request)
-            .await
+        proxy(
+            &self.incoming_http,
+            "IncomingHttp",
+            "wasi:http/incoming-handler.handle",
+        )?
+        .handle(request)
+        .await
     }
 }
 
@@ -522,10 +695,7 @@ impl Messaging for Handler {
         body: Option<Vec<u8>>,
         timeout: Duration,
     ) -> anyhow::Result<messaging::types::BrokerMessage> {
-        trace!("call `Messaging` handler");
-        self.messaging
-            .as_ref()
-            .context("cannot handle `wasmcloud:messaging/consumer.request`")?
+        self.proxy_messaging("wasmcloud:messaging/consumer.request")?
             .request(subject, body, timeout)
             .await
     }
@@ -538,20 +708,14 @@ impl Messaging for Handler {
         timeout: Duration,
         max_results: u32,
     ) -> anyhow::Result<Vec<messaging::types::BrokerMessage>> {
-        trace!("call `Messaging` handler");
-        self.messaging
-            .as_ref()
-            .context("cannot handle `wasmcloud:messaging/consumer.request_multi`")?
+        self.proxy_messaging("wasmcloud:messaging/consumer.request-multi")?
             .request_multi(subject, body, timeout, max_results)
             .await
     }
 
     #[instrument(skip(msg))]
     async fn publish(&self, msg: messaging::types::BrokerMessage) -> anyhow::Result<()> {
-        trace!("call `Messaging` handler");
-        self.messaging
-            .as_ref()
-            .context("cannot handle `wasmcloud:messaging/consumer.publish`")?
+        self.proxy_messaging("wasmcloud:messaging/consumer.publish")?
             .publish(msg)
             .await
     }

@@ -23,7 +23,7 @@ pub enum Entry {
 
 type Bucket = HashMap<String, Entry>;
 
-/// In-memory [`KeyValueReadWrite`] implementation
+/// In-memory [`KeyValueReadWrite`] and [`KeyValueAtomic`] implementation
 #[derive(Debug)]
 pub struct KeyValue(RwLock<HashMap<String, RwLock<Bucket>>>);
 

@@ -11,6 +11,7 @@ use crate::{fetch_actor, socket_pair};
 
 use core::future::Future;
 use core::num::NonZeroUsize;
+use core::ops::RangeInclusive;
 use core::pin::Pin;
 use core::task::{Context, Poll};
 use core::time::Duration;
@@ -36,7 +37,7 @@ use nkeys::{KeyPair, KeyPairType};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use tokio::io::{stderr, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{empty, stderr, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{watch, RwLock};
 use tokio::task::JoinHandle;
 use tokio::time::{interval_at, Instant};
@@ -57,8 +58,8 @@ use wasmcloud_core::{
     HealthCheckResponse, HostData, Invocation, InvocationResponse, OtelConfig, WasmCloudEntity,
 };
 use wasmcloud_runtime::capability::{
-    messaging, ActorIdentifier, Bus, IncomingHttp, KeyValueAtomic, KeyValueReadWrite, Messaging,
-    TargetEntity, TargetInterface,
+    blobstore, messaging, ActorIdentifier, Blobstore, Bus, IncomingHttp, KeyValueAtomic,
+    KeyValueReadWrite, Messaging, TargetEntity, TargetInterface,
 };
 use wasmcloud_runtime::{ActorInstancePool, Runtime};
 use wasmcloud_tracing::context::{attach_span_context, OtelHeaderInjector};
@@ -303,6 +304,283 @@ impl Handler {
     }
 }
 
+/// Decode provider response accounting for the custom wasmbus-rpc encoding format
+fn decode_provider_response<T>(buf: impl AsRef<[u8]>) -> anyhow::Result<T>
+where
+    for<'a> T: Deserialize<'a>,
+{
+    let buf = buf.as_ref();
+    match buf.split_first() {
+        Some((0x7f, _)) => bail!("CBOR responses are not supported"),
+        Some((0xc1, buf)) => rmp_serde::from_slice(buf),
+        _ => rmp_serde::from_slice(buf),
+    }
+    .context("failed to decode response")
+}
+
+fn decode_empty_provider_response(buf: impl AsRef<[u8]>) -> anyhow::Result<()> {
+    let buf = buf.as_ref();
+    if buf.is_empty() {
+        Ok(())
+    } else {
+        decode_provider_response(buf)
+    }
+}
+
+#[async_trait]
+impl Blobstore for Handler {
+    #[instrument]
+    async fn create_container(&self, name: &str) -> anyhow::Result<()> {
+        let targets = self.targets.read().await;
+        self.call_operation(
+            targets.get(&TargetInterface::WasiBlobstoreBlobstore),
+            "wasmcloud:blobstore/Blobstore.CreateContainer",
+            &name,
+        )
+        .await
+        .and_then(decode_empty_provider_response)
+    }
+
+    #[instrument]
+    async fn container_exists(&self, name: &str) -> anyhow::Result<bool> {
+        let targets = self.targets.read().await;
+        self.call_operation(
+            targets.get(&TargetInterface::WasiBlobstoreBlobstore),
+            "wasmcloud:blobstore/Blobstore.ContainerExists",
+            &name,
+        )
+        .await
+        .and_then(decode_provider_response)
+    }
+
+    #[instrument]
+    async fn delete_container(&self, name: &str) -> anyhow::Result<()> {
+        let targets = self.targets.read().await;
+        self.call_operation(
+            targets.get(&TargetInterface::WasiBlobstoreBlobstore),
+            "wasmcloud:blobstore/Blobstore.DeleteContainer",
+            &name,
+        )
+        .await
+        .and_then(decode_empty_provider_response)
+    }
+
+    #[instrument]
+    async fn container_info(
+        &self,
+        name: &str,
+    ) -> anyhow::Result<blobstore::container::ContainerMetadata> {
+        let targets = self.targets.read().await;
+        let res = self
+            .call_operation(
+                targets.get(&TargetInterface::WasiBlobstoreBlobstore),
+                "wasmcloud:blobstore/Blobstore.GetContainerInfo",
+                &name,
+            )
+            .await?;
+        let wasmcloud_compat::blobstore::ContainerMetadata {
+            container_id: name,
+            created_at,
+        } = decode_provider_response(res)?;
+        let created_at = created_at
+            .map(|wasmcloud_compat::Timestamp { sec, .. }| sec.try_into())
+            .transpose()
+            .context("timestamp seconds do not fit in `u64`")?;
+        Ok(blobstore::container::ContainerMetadata {
+            name,
+            created_at: created_at.unwrap_or_default(),
+        })
+    }
+
+    #[instrument]
+    async fn get_data(
+        &self,
+        container: &str,
+        name: String,
+        range: RangeInclusive<u64>,
+    ) -> anyhow::Result<(Box<dyn AsyncRead + Sync + Send + Unpin>, u64)> {
+        let targets = self.targets.read().await;
+        let res = self
+            .call_operation(
+                targets.get(&TargetInterface::WasiBlobstoreBlobstore),
+                "wasmcloud:blobstore/Blobstore.GetObject",
+                &wasmcloud_compat::blobstore::GetObjectRequest {
+                    object_id: name.clone(),
+                    container_id: container.into(),
+                    range_start: Some(*range.start()),
+                    range_end: Some(*range.end()),
+                },
+            )
+            .await?;
+        let wasmcloud_compat::blobstore::GetObjectResponse {
+            success,
+            error,
+            initial_chunk,
+            ..
+        } = decode_provider_response(res)?;
+        match (success, initial_chunk, error) {
+            (_, _, Some(err)) => Err(anyhow!(err).context("failed to get object response")),
+            (false, _, None) => bail!("failed to get object response"),
+            (true, None, None) => Ok((Box::new(empty()), 0)),
+            (
+                true,
+                Some(wasmcloud_compat::blobstore::Chunk {
+                    object_id,
+                    container_id,
+                    bytes,
+                    ..
+                }),
+                None,
+            ) => {
+                ensure!(object_id == name);
+                ensure!(container_id == container);
+                let size = bytes
+                    .len()
+                    .try_into()
+                    .context("value size does not fit in `u64`")?;
+                Ok((Box::new(Cursor::new(bytes)), size))
+            }
+        }
+    }
+
+    #[instrument]
+    async fn has_object(&self, container: &str, name: String) -> anyhow::Result<bool> {
+        let targets = self.targets.read().await;
+        self.call_operation(
+            targets.get(&TargetInterface::WasiBlobstoreBlobstore),
+            "wasmcloud:blobstore/Blobstore.ObjectExists",
+            &wasmcloud_compat::blobstore::ContainerObject {
+                container_id: container.into(),
+                object_id: name,
+            },
+        )
+        .await
+        .and_then(decode_provider_response)
+    }
+
+    #[instrument(skip(value))]
+    async fn write_data(
+        &self,
+        container: &str,
+        name: String,
+        mut value: Box<dyn AsyncRead + Sync + Send + Unpin>,
+    ) -> anyhow::Result<()> {
+        let targets = self.targets.read().await;
+        let mut bytes = Vec::new();
+        value
+            .read_to_end(&mut bytes)
+            .await
+            .context("failed to read bytes")?;
+        let res = self
+            .call_operation(
+                targets.get(&TargetInterface::WasiBlobstoreBlobstore),
+                "wasmcloud:blobstore/Blobstore.PutObject",
+                &wasmcloud_compat::blobstore::PutObjectRequest {
+                    chunk: wasmcloud_compat::blobstore::Chunk {
+                        object_id: name,
+                        container_id: container.into(),
+                        bytes,
+                        offset: 0,
+                        is_last: true,
+                    },
+                    ..Default::default()
+                },
+            )
+            .await?;
+        let wasmcloud_compat::blobstore::PutObjectResponse { stream_id } =
+            decode_provider_response(res)?;
+        ensure!(
+            stream_id.is_none(),
+            "provider returned an unexpected stream ID"
+        );
+        Ok(())
+    }
+
+    #[instrument]
+    async fn delete_objects(&self, container: &str, names: Vec<String>) -> anyhow::Result<()> {
+        let targets = self.targets.read().await;
+        let res = self
+            .call_operation(
+                targets.get(&TargetInterface::WasiBlobstoreBlobstore),
+                "wasmcloud:blobstore/Blobstore.RemoveObjects",
+                &wasmcloud_compat::blobstore::RemoveObjectsRequest {
+                    container_id: container.into(),
+                    objects: names,
+                },
+            )
+            .await?;
+        for wasmcloud_compat::blobstore::ItemResult {
+            key,
+            success,
+            error,
+        } in decode_provider_response::<Vec<_>>(res)?
+        {
+            if let Some(err) = error {
+                bail!(err)
+            }
+            ensure!(success, "failed to delete object `{key}`");
+        }
+        Ok(())
+    }
+
+    #[instrument]
+    async fn list_objects(
+        &self,
+        container: &str,
+    ) -> anyhow::Result<Box<dyn Stream<Item = anyhow::Result<String>> + Sync + Send + Unpin>> {
+        let targets = self.targets.read().await;
+        let res = self
+            .call_operation(
+                targets.get(&TargetInterface::WasiBlobstoreBlobstore),
+                "wasmcloud:blobstore/Blobstore.ListObjects",
+                &wasmcloud_compat::blobstore::ListObjectsRequest {
+                    container_id: container.into(),
+                    max_items: Some(u32::MAX),
+                    ..Default::default()
+                },
+            )
+            .await?;
+        let wasmcloud_compat::blobstore::ListObjectsResponse {
+            objects,
+            is_last,
+            continuation,
+        } = decode_provider_response(res)?;
+        ensure!(is_last);
+        ensure!(continuation.is_none(), "chunked responses not supported");
+        Ok(Box::new(stream::iter(objects.into_iter().map(
+            |wasmcloud_compat::blobstore::ObjectMetadata { object_id, .. }| Ok(object_id),
+        ))))
+    }
+
+    #[instrument]
+    async fn object_info(
+        &self,
+        container: &str,
+        name: String,
+    ) -> anyhow::Result<blobstore::container::ObjectMetadata> {
+        let targets = self.targets.read().await;
+        let res = self
+            .call_operation(
+                targets.get(&TargetInterface::WasiBlobstoreBlobstore),
+                "wasmcloud:blobstore/Blobstore.GetObjectInfo",
+                &name,
+            )
+            .await?;
+        let wasmcloud_compat::blobstore::ObjectMetadata {
+            object_id,
+            container_id,
+            content_length,
+            ..
+        } = decode_provider_response(res)?;
+        Ok(blobstore::container::ObjectMetadata {
+            name: object_id,
+            container: container_id,
+            size: content_length,
+            created_at: 0,
+        })
+    }
+}
+
 #[async_trait]
 impl Bus for Handler {
     #[instrument]
@@ -478,7 +756,7 @@ impl KeyValueAtomic for Handler {
                 &wasmcloud_compat::keyvalue::IncrementRequest { key, value },
             )
             .await?;
-        let new: i32 = rmp_serde::from_slice(&res).context("failed to decode response")?;
+        let new: i32 = decode_provider_response(res)?;
         let new = new.try_into().context("result does not fit in `u64`")?;
         Ok(new)
     }
@@ -517,7 +795,7 @@ impl KeyValueReadWrite for Handler {
             )
             .await?;
         let wasmcloud_compat::keyvalue::GetResponse { value, exists } =
-            rmp_serde::from_slice(&res).context("failed to decode response")?;
+            decode_provider_response(res)?;
         if !exists {
             bail!("key not found")
         }
@@ -545,22 +823,17 @@ impl KeyValueReadWrite for Handler {
             .await
             .context("failed to read value")?;
         let targets = self.targets.read().await;
-        let res = self
-            .call_operation(
-                targets.get(&TargetInterface::WasiKeyvalueReadwrite),
-                METHOD,
-                &wasmcloud_compat::keyvalue::SetRequest {
-                    key,
-                    value: buf,
-                    expires: 0,
-                },
-            )
-            .await?;
-        if res.is_empty() {
-            Ok(())
-        } else {
-            rmp_serde::from_slice(&res).context("failed to decode response")
-        }
+        self.call_operation(
+            targets.get(&TargetInterface::WasiKeyvalueReadwrite),
+            METHOD,
+            &wasmcloud_compat::keyvalue::SetRequest {
+                key,
+                value: buf,
+                expires: 0,
+            },
+        )
+        .await
+        .and_then(decode_empty_provider_response)
     }
 
     #[instrument]
@@ -577,7 +850,7 @@ impl KeyValueReadWrite for Handler {
                 &key,
             )
             .await?;
-        let deleted: bool = rmp_serde::from_slice(&res).context("failed to decode response")?;
+        let deleted: bool = decode_provider_response(res)?;
         ensure!(deleted, "key not found");
         Ok(())
     }
@@ -589,14 +862,13 @@ impl KeyValueReadWrite for Handler {
             bail!("buckets not currently supported")
         }
         let targets = self.targets.read().await;
-        let res = self
-            .call_operation(
-                targets.get(&TargetInterface::WasiKeyvalueReadwrite),
-                METHOD,
-                &key,
-            )
-            .await?;
-        rmp_serde::from_slice(&res).context("failed to decode response")
+        self.call_operation(
+            targets.get(&TargetInterface::WasiKeyvalueReadwrite),
+            METHOD,
+            &key,
+        )
+        .await
+        .and_then(decode_provider_response)
     }
 }
 
@@ -631,7 +903,7 @@ impl Messaging for Handler {
             subject,
             reply_to,
             body,
-        } = rmp_serde::from_slice(&res).context("failed to decode response")?;
+        } = decode_provider_response(res)?;
         Ok(messaging::types::BrokerMessage {
             subject,
             reply_to,
@@ -667,22 +939,17 @@ impl Messaging for Handler {
     ) -> anyhow::Result<()> {
         const METHOD: &str = "wasmcloud:messaging/Messaging.Publish";
         let targets = self.targets.read().await;
-        let res = self
-            .call_operation(
-                targets.get(&TargetInterface::WasmcloudMessagingConsumer),
-                METHOD,
-                &wasmcloud_compat::messaging::PubMessage {
-                    subject,
-                    reply_to,
-                    body: body.unwrap_or_default(),
-                },
-            )
-            .await?;
-        if res.is_empty() {
-            Ok(())
-        } else {
-            rmp_serde::from_slice(&res).context("failed to decode response")
-        }
+        self.call_operation(
+            targets.get(&TargetInterface::WasmcloudMessagingConsumer),
+            METHOD,
+            &wasmcloud_compat::messaging::PubMessage {
+                subject,
+                reply_to,
+                body: body.unwrap_or_default(),
+            },
+        )
+        .await
+        .and_then(decode_empty_provider_response)
     }
 }
 
@@ -706,6 +973,7 @@ impl ActorInstance {
             .stderr(stderr())
             .await
             .context("failed to set stderr")?
+            .blobstore(Arc::new(self.handler.clone()))
             .bus(Arc::new(self.handler.clone()))
             .keyvalue_atomic(Arc::new(self.handler.clone()))
             .keyvalue_readwrite(Arc::new(self.handler.clone()))

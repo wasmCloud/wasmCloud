@@ -1,20 +1,24 @@
-use super::{Ctx, Instance};
+use super::{AsyncStream, Ctx, Instance, TableResult};
 
 use crate::capability::blobstore::blobstore::ContainerName;
 use crate::capability::blobstore::container::{Container, StreamObjectNames};
 use crate::capability::blobstore::types::{
-    ContainerMetadata, Error, ObjectId, ObjectMetadata, ObjectName, ObjectSize,
+    ContainerMetadata, Error, ObjectId, ObjectMetadata, ObjectName,
 };
-use crate::capability::blobstore::{blobstore, container, data_blob, types};
+use crate::capability::blobstore::{blobstore, container, types};
 use crate::capability::Blobstore;
+use crate::io::AsyncVec;
 
 use std::sync::Arc;
 
-use anyhow::bail;
+use anyhow::{bail, ensure, Context as _};
 use async_trait::async_trait;
+use futures::{Stream, StreamExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt};
 use tracing::instrument;
+use wasmtime_wasi::preview2::{self, TableStreamExt};
 
-type Result<T> = core::result::Result<T, Error>;
+type Result<T, E = Error> = core::result::Result<T, E>;
 
 impl Instance {
     /// Set [`Blobstore`] handler for this [Instance].
@@ -24,98 +28,362 @@ impl Instance {
     }
 }
 
-impl types::Host for Ctx {}
+trait TableBlobstoreExt {
+    fn push_container(&mut self, name: String) -> TableResult<Container>;
+    fn contains_container(&self, container: Container) -> bool;
+    fn get_container(&self, container: Container) -> TableResult<&String>;
+    fn delete_container(&mut self, container: Container) -> TableResult<String>;
 
-#[allow(unused)] // TODO: Implement and remove
+    fn push_object_name_stream(
+        &mut self,
+        stream: Box<dyn Stream<Item = anyhow::Result<String>> + Sync + Send + Unpin>,
+    ) -> TableResult<StreamObjectNames>;
+    fn get_object_name_stream_mut(
+        &mut self,
+        stream: StreamObjectNames,
+    ) -> TableResult<&mut Box<dyn Stream<Item = anyhow::Result<String>> + Sync + Send + Unpin>>;
+    fn delete_object_name_stream(
+        &mut self,
+        stream: StreamObjectNames,
+    ) -> TableResult<Box<dyn Stream<Item = anyhow::Result<String>> + Sync + Send + Unpin>>;
+
+    fn push_incoming_value(
+        &mut self,
+        stream: Box<dyn AsyncRead + Sync + Send + Unpin>,
+        size: u64,
+    ) -> TableResult<types::IncomingValue>;
+    fn get_incoming_value(
+        &self,
+        stream: types::IncomingValue,
+    ) -> TableResult<&(Box<dyn AsyncRead + Sync + Send + Unpin>, u64)>;
+    fn delete_incoming_value(
+        &mut self,
+        stream: types::IncomingValue,
+    ) -> TableResult<(Box<dyn AsyncRead + Sync + Send + Unpin>, u64)>;
+
+    fn push_outgoing_value(&mut self, stream: AsyncVec) -> TableResult<types::OutgoingValue>;
+    fn get_outgoing_value(&self, stream: types::OutgoingValue) -> TableResult<&AsyncVec>;
+    fn delete_outgoing_value(&mut self, stream: types::OutgoingValue) -> TableResult<AsyncVec>;
+}
+
+impl TableBlobstoreExt for preview2::Table {
+    fn push_container(&mut self, name: String) -> TableResult<Container> {
+        self.push(Box::new(name))
+    }
+
+    fn contains_container(&self, container: Container) -> bool {
+        self.contains_key(container)
+    }
+
+    fn get_container(&self, container: Container) -> TableResult<&String> {
+        self.get(container)
+    }
+
+    fn delete_container(&mut self, container: Container) -> TableResult<String> {
+        self.delete(container)
+    }
+
+    fn push_object_name_stream(
+        &mut self,
+        stream: Box<dyn Stream<Item = anyhow::Result<String>> + Sync + Send + Unpin>,
+    ) -> TableResult<StreamObjectNames> {
+        self.push(Box::new(stream))
+    }
+
+    fn get_object_name_stream_mut(
+        &mut self,
+        stream: StreamObjectNames,
+    ) -> TableResult<&mut Box<dyn Stream<Item = anyhow::Result<String>> + Sync + Send + Unpin>>
+    {
+        self.get_mut(stream)
+    }
+
+    fn delete_object_name_stream(
+        &mut self,
+        stream: StreamObjectNames,
+    ) -> TableResult<Box<dyn Stream<Item = anyhow::Result<String>> + Sync + Send + Unpin>> {
+        self.delete(stream)
+    }
+
+    fn push_incoming_value(
+        &mut self,
+        stream: Box<dyn AsyncRead + Sync + Send + Unpin>,
+        size: u64,
+    ) -> TableResult<types::IncomingValue> {
+        self.push(Box::new((stream, size)))
+    }
+
+    fn get_incoming_value(
+        &self,
+        stream: types::IncomingValue,
+    ) -> TableResult<&(Box<dyn AsyncRead + Sync + Send + Unpin>, u64)> {
+        self.get(stream)
+    }
+
+    fn delete_incoming_value(
+        &mut self,
+        stream: types::IncomingValue,
+    ) -> TableResult<(Box<dyn AsyncRead + Sync + Send + Unpin>, u64)> {
+        self.delete(stream)
+    }
+
+    fn push_outgoing_value(&mut self, stream: AsyncVec) -> TableResult<types::OutgoingValue> {
+        self.push(Box::new(stream))
+    }
+
+    fn get_outgoing_value(&self, stream: types::OutgoingValue) -> TableResult<&AsyncVec> {
+        self.get(stream)
+    }
+
+    fn delete_outgoing_value(&mut self, stream: types::OutgoingValue) -> TableResult<AsyncVec> {
+        self.delete(stream)
+    }
+}
+
 #[async_trait]
-impl data_blob::Host for Ctx {
+impl types::Host for Ctx {
     #[instrument]
-    async fn drop_data_blob(&mut self, blob: data_blob::DataBlob) -> anyhow::Result<()> {
-        bail!("not supported yet")
-    }
-
-    #[instrument]
-    async fn create(
+    async fn drop_outgoing_value(
         &mut self,
-        blob: data_blob::DataBlob,
-    ) -> anyhow::Result<data_blob::WriteStream> {
-        bail!("not supported yet")
+        outgoing_value: types::OutgoingValue,
+    ) -> anyhow::Result<()> {
+        self.table
+            .delete_outgoing_value(outgoing_value)
+            .context("failed to delete outgoing value")?;
+        Ok(())
     }
 
     #[instrument]
-    async fn read(
+    async fn new_outgoing_value(&mut self) -> anyhow::Result<types::OutgoingValue> {
+        self.table
+            .push_outgoing_value(AsyncVec::default())
+            .context("failed to push outgoing value")
+    }
+
+    #[instrument]
+    async fn outgoing_value_write_body(
         &mut self,
-        blob: data_blob::DataBlob,
-    ) -> anyhow::Result<Result<data_blob::ReadStream>> {
-        bail!("not supported yet")
+        outgoing_value: types::OutgoingValue,
+    ) -> anyhow::Result<Result<types::OutputStream, ()>> {
+        let stream = self
+            .table
+            .get_outgoing_value(outgoing_value)
+            .context("failed to get outgoing value")?
+            .clone();
+        let stream = self
+            .table
+            .push_output_stream(Box::new(AsyncStream(stream)))
+            .context("failed to push output stream")?;
+        Ok(Ok(stream))
     }
 
     #[instrument]
-    async fn size(&mut self, blob: data_blob::DataBlob) -> anyhow::Result<Result<ObjectSize>> {
+    async fn drop_incoming_value(
+        &mut self,
+        incoming_value: types::IncomingValue,
+    ) -> anyhow::Result<()> {
+        self.table
+            .delete_incoming_value(incoming_value)
+            .context("failed to delete incoming value")?;
+        Ok(())
+    }
+
+    #[instrument]
+    async fn incoming_value_consume_sync(
+        &mut self,
+        incoming_value: types::IncomingValue,
+    ) -> anyhow::Result<Result<types::IncomingValueSyncBody>> {
+        let (stream, size) = self
+            .table
+            .delete_incoming_value(incoming_value)
+            .context("failed to delete incoming value")?;
+        let mut stream = stream.take(size);
+        let size = size.try_into().context("size does not fit in `usize`")?;
+        let mut buf = Vec::with_capacity(size);
+        match stream.read_to_end(&mut buf).await {
+            Ok(n) => {
+                ensure!(n == size);
+                Ok(Ok(buf))
+            }
+            Err(err) => Ok(Err(format!("{err:#}"))),
+        }
+    }
+
+    #[instrument]
+    async fn incoming_value_consume_async(
+        &mut self,
+        incoming_value: types::IncomingValue,
+    ) -> anyhow::Result<Result<types::IncomingValueAsyncBody>> {
+        let (stream, _) = self
+            .table
+            .delete_incoming_value(incoming_value)
+            .context("failed to delete incoming value")?;
+        let stream = self
+            .table
+            .push_input_stream(Box::new(AsyncStream(stream)))
+            .context("failed to push input stream")?;
+        Ok(Ok(stream))
+    }
+
+    #[instrument]
+    async fn size(&mut self, incoming_value: types::IncomingValue) -> anyhow::Result<u64> {
+        let (_, size) = self
+            .table
+            .get_incoming_value(incoming_value)
+            .context("failed to get incoming value")?;
+        Ok(*size)
+    }
+}
+
+#[async_trait]
+impl blobstore::Host for Ctx {
+    #[instrument]
+    async fn create_container(&mut self, name: ContainerName) -> anyhow::Result<Result<Container>> {
+        match self.handler.create_container(&name).await {
+            Ok(_) => {
+                let container = self
+                    .table
+                    .push_container(name)
+                    .context("failed to push container")?;
+                Ok(Ok(container))
+            }
+            Err(err) => Ok(Err(format!("{err:#}"))),
+        }
+    }
+
+    #[instrument]
+    async fn get_container(&mut self, name: ContainerName) -> anyhow::Result<Result<Container>> {
+        match self.handler.container_exists(&name).await {
+            Ok(true) => {
+                let container = self
+                    .table
+                    .push_container(name)
+                    .context("failed to push container")?;
+                Ok(Ok(container))
+            }
+            Ok(false) => Ok(Err("container does not exist".into())),
+            Err(err) => Ok(Err(format!("{err:#}"))),
+        }
+    }
+
+    #[instrument]
+    async fn delete_container(&mut self, name: ContainerName) -> anyhow::Result<Result<()>> {
+        match self.handler.delete_container(&name).await {
+            Ok(()) => Ok(Ok(())),
+            Err(err) => Ok(Err(format!("{err:#}"))),
+        }
+    }
+
+    #[instrument]
+    async fn container_exists(&mut self, name: ContainerName) -> anyhow::Result<Result<bool>> {
+        match self.handler.container_exists(&name).await {
+            Ok(exists) => Ok(Ok(exists)),
+            Err(err) => Ok(Err(format!("{err:#}"))),
+        }
+    }
+
+    #[allow(unused)] // TODO: Implement and remove
+    #[instrument]
+    async fn copy_object(&mut self, src: ObjectId, dest: ObjectId) -> anyhow::Result<Result<()>> {
+        bail!("not supported yet")
+    }
+
+    #[allow(unused)] // TODO: Implement and remove
+    #[instrument]
+    async fn move_object(&mut self, src: ObjectId, dest: ObjectId) -> anyhow::Result<Result<()>> {
         bail!("not supported yet")
     }
 }
 
-#[allow(unused)] // TODO: Implement and remove
 #[async_trait]
 impl container::Host for Ctx {
     #[instrument]
-    async fn drop_container(&mut self, cont: Container) -> anyhow::Result<()> {
-        bail!("not supported yet")
+    async fn drop_container(&mut self, container: Container) -> anyhow::Result<()> {
+        self.table
+            .delete_container(container)
+            .context("failed to delete container")?;
+        Ok(())
     }
 
     #[instrument]
-    async fn name(&mut self, cont: Container) -> anyhow::Result<Result<String>> {
-        bail!("not supported yet")
+    async fn name(&mut self, container: Container) -> anyhow::Result<Result<String>> {
+        let name = self
+            .table
+            .get_container(container)
+            .context("failed to get container")?;
+        Ok(Ok(name.clone()))
     }
 
     #[instrument]
-    async fn info(&mut self, cont: Container) -> anyhow::Result<Result<ContainerMetadata>> {
-        bail!("not supported yet")
-    }
-
-    #[instrument]
-    async fn read_object(
-        &mut self,
-        cont: Container,
-        name: ObjectName,
-    ) -> anyhow::Result<Result<container::ReadStream>> {
-        bail!("not supported yet")
-    }
-
-    #[instrument]
-    async fn write_object(
-        &mut self,
-        cont: Container,
-        name: ObjectName,
-    ) -> anyhow::Result<Result<container::WriteStream>> {
-        bail!("not supported yet")
+    async fn info(&mut self, container: Container) -> anyhow::Result<Result<ContainerMetadata>> {
+        let name = self
+            .table
+            .get_container(container)
+            .context("failed to get container")?;
+        match self.handler.container_info(name).await {
+            Ok(md) => Ok(Ok(md)),
+            Err(err) => Ok(Err(format!("{err:#}"))),
+        }
     }
 
     #[instrument]
     async fn get_data(
         &mut self,
-        cont: Container,
+        container: Container,
         name: ObjectName,
         start: u64,
         end: u64,
-    ) -> anyhow::Result<Result<container::DataBlob>> {
-        bail!("not supported yet")
+    ) -> anyhow::Result<Result<types::IncomingValue>> {
+        let container = self
+            .table
+            .get_container(container)
+            .context("failed to get container")?;
+        match self.handler.get_data(container, name, start..=end).await {
+            Ok((stream, size)) => {
+                let value = self
+                    .table
+                    .push_incoming_value(stream, size)
+                    .context("failed to push stream and size")?;
+                Ok(Ok(value))
+            }
+            Err(err) => Ok(Err(format!("{err:#}"))),
+        }
     }
 
     #[instrument]
     async fn write_data(
         &mut self,
-        cont: Container,
+        container: Container,
         name: ObjectName,
-        data: container::DataBlob,
+        data: types::OutgoingValue,
     ) -> anyhow::Result<Result<()>> {
-        bail!("not supported yet")
+        let mut stream = self
+            .table
+            .get_outgoing_value(data)
+            .context("failed to get outgoing value")?
+            .clone();
+        stream.rewind().await.context("failed to rewind stream")?;
+        let container = self
+            .table
+            .get_container(container)
+            .context("failed to get container")?;
+        match self
+            .handler
+            .write_data(container, name, Box::new(stream))
+            .await
+        {
+            Ok(()) => Ok(Ok(())),
+            Err(err) => Ok(Err(format!("{err:#}"))),
+        }
     }
 
     #[instrument]
     async fn drop_stream_object_names(&mut self, names: StreamObjectNames) -> anyhow::Result<()> {
-        bail!("not supported yet")
+        let _ = self
+            .table
+            .delete_object_name_stream(names)
+            .context("failed to delete object name stream")?;
+        Ok(())
     }
 
     #[instrument]
@@ -124,7 +392,19 @@ impl container::Host for Ctx {
         this: StreamObjectNames,
         len: u64,
     ) -> anyhow::Result<Result<(Vec<ObjectName>, bool)>> {
-        bail!("not supported yet")
+        let stream = self
+            .table
+            .get_object_name_stream_mut(this)
+            .context("failed to get object name stream")?;
+        let mut names = Vec::with_capacity(len.try_into().unwrap_or(usize::MAX));
+        for _ in 0..len {
+            match stream.next().await {
+                Some(Ok(name)) => names.push(name),
+                Some(Err(err)) => return Ok(Err(format!("{err:#}"))),
+                None => return Ok(Ok((names, true))),
+            }
+        }
+        Ok(Ok((names, false)))
     }
 
     #[instrument]
@@ -133,86 +413,107 @@ impl container::Host for Ctx {
         this: StreamObjectNames,
         num: u64,
     ) -> anyhow::Result<Result<(u64, bool)>> {
-        bail!("not supported yet")
+        let stream = self
+            .table
+            .get_object_name_stream_mut(this)
+            .context("failed to get object name stream")?;
+        for i in 0..num {
+            match stream.next().await {
+                Some(Ok(_)) => {}
+                Some(Err(err)) => return Ok(Err(format!("{err:#}"))),
+                None => return Ok(Ok((i, true))),
+            }
+        }
+        Ok(Ok((num, false)))
     }
 
     #[instrument]
-    async fn list_objects(&mut self, cont: Container) -> anyhow::Result<Result<StreamObjectNames>> {
-        bail!("not supported yet")
+    async fn list_objects(
+        &mut self,
+        container: Container,
+    ) -> anyhow::Result<Result<StreamObjectNames>> {
+        let container = self
+            .table
+            .get_container(container)
+            .context("failed to get container")?;
+        match self.handler.list_objects(container).await {
+            Ok(stream) => {
+                let stream = self
+                    .table
+                    .push_object_name_stream(stream)
+                    .context("failed to push object name stream")?;
+                Ok(Ok(stream))
+            }
+            Err(err) => Ok(Err(format!("{err:#}"))),
+        }
     }
 
     #[instrument]
     async fn delete_object(
         &mut self,
-        cont: Container,
+        container: Container,
         name: ObjectName,
     ) -> anyhow::Result<Result<()>> {
-        bail!("not supported yet")
+        self.delete_objects(container, vec![name]).await
     }
 
     #[instrument]
     async fn delete_objects(
         &mut self,
-        cont: Container,
+        container: Container,
         names: Vec<ObjectName>,
     ) -> anyhow::Result<Result<()>> {
-        bail!("not supported yet")
+        let container = self
+            .table
+            .get_container(container)
+            .context("failed to get container")?;
+        match self.handler.delete_objects(container, names).await {
+            Ok(()) => Ok(Ok(())),
+            Err(err) => Ok(Err(format!("{err:#}"))),
+        }
     }
 
     #[instrument]
     async fn has_object(
         &mut self,
-        cont: Container,
+        container: Container,
         name: ObjectName,
     ) -> anyhow::Result<Result<bool>> {
-        bail!("not supported yet")
+        let container = self
+            .table
+            .get_container(container)
+            .context("failed to get container")?;
+        match self.handler.has_object(container, name).await {
+            Ok(exists) => Ok(Ok(exists)),
+            Err(err) => Ok(Err(format!("{err:#}"))),
+        }
     }
 
     #[instrument]
     async fn object_info(
         &mut self,
-        cont: Container,
+        container: Container,
         name: ObjectName,
     ) -> anyhow::Result<Result<ObjectMetadata>> {
-        bail!("not supported yet")
+        let container = self
+            .table
+            .get_container(container)
+            .context("failed to get container")?;
+        match self.handler.object_info(container, name).await {
+            Ok(info) => Ok(Ok(info)),
+            Err(err) => Ok(Err(format!("{err:#}"))),
+        }
     }
 
     #[instrument]
-    async fn clear(&mut self, cont: Container) -> anyhow::Result<Result<()>> {
-        bail!("not supported yet")
-    }
-}
-
-#[allow(unused)] // TODO: Implement and remove
-#[async_trait]
-impl blobstore::Host for Ctx {
-    #[instrument]
-    async fn create_container(&mut self, name: ContainerName) -> anyhow::Result<Result<Container>> {
-        bail!("not supported yet")
-    }
-
-    #[instrument]
-    async fn get_container(&mut self, name: ContainerName) -> anyhow::Result<Result<Container>> {
-        bail!("not supported yet")
-    }
-
-    #[instrument]
-    async fn delete_container(&mut self, name: ContainerName) -> anyhow::Result<Result<()>> {
-        bail!("not supported yet")
-    }
-
-    #[instrument]
-    async fn container_exists(&mut self, name: ContainerName) -> anyhow::Result<Result<bool>> {
-        bail!("not supported yet")
-    }
-
-    #[instrument]
-    async fn copy_object(&mut self, src: ObjectId, dest: ObjectId) -> anyhow::Result<Result<()>> {
-        bail!("not supported yet")
-    }
-
-    #[instrument]
-    async fn move_object(&mut self, src: ObjectId, dest: ObjectId) -> anyhow::Result<Result<()>> {
-        bail!("not supported yet")
+    async fn clear(&mut self, container: Container) -> anyhow::Result<Result<()>> {
+        let container = self
+            .table
+            .get_container(container)
+            .context("failed to get container")?;
+        match self.handler.clear_container(container).await {
+            Ok(()) => Ok(Ok(())),
+            Err(err) => Ok(Err(format!("{err:#}"))),
+        }
     }
 }

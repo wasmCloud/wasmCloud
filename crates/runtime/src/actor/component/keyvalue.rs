@@ -35,7 +35,7 @@ impl Instance {
 
 trait TableKeyValueExt {
     fn push_bucket(&mut self, name: String) -> TableResult<types::Bucket>;
-    fn get_bucket(&mut self, bucket: types::Bucket) -> TableResult<&String>;
+    fn get_bucket(&self, bucket: types::Bucket) -> TableResult<&String>;
     fn delete_bucket(&mut self, bucket: types::Bucket) -> TableResult<String>;
 
     fn push_incoming_value(
@@ -44,7 +44,7 @@ trait TableKeyValueExt {
         size: u64,
     ) -> TableResult<types::IncomingValue>;
     fn get_incoming_value(
-        &mut self,
+        &self,
         stream: types::IncomingValue,
     ) -> TableResult<&(Box<dyn AsyncRead + Sync + Send + Unpin>, u64)>;
     fn delete_incoming_value(
@@ -53,11 +53,11 @@ trait TableKeyValueExt {
     ) -> TableResult<(Box<dyn AsyncRead + Sync + Send + Unpin>, u64)>;
 
     fn push_outgoing_value(&mut self, stream: AsyncVec) -> TableResult<types::OutgoingValue>;
-    fn get_outgoing_value(&mut self, stream: types::OutgoingValue) -> TableResult<&AsyncVec>;
+    fn get_outgoing_value(&self, stream: types::OutgoingValue) -> TableResult<&AsyncVec>;
     fn delete_outgoing_value(&mut self, stream: types::OutgoingValue) -> TableResult<AsyncVec>;
 
     fn push_error(&mut self, error: anyhow::Error) -> TableResult<wasi_cloud_error::Error>;
-    fn get_error(&mut self, error: wasi_cloud_error::Error) -> TableResult<&anyhow::Error>;
+    fn get_error(&self, error: wasi_cloud_error::Error) -> TableResult<&anyhow::Error>;
     fn delete_error(&mut self, error: wasi_cloud_error::Error) -> TableResult<anyhow::Error>;
 }
 
@@ -66,7 +66,7 @@ impl TableKeyValueExt for preview2::Table {
         self.push(Box::new(name))
     }
 
-    fn get_bucket(&mut self, bucket: types::Bucket) -> TableResult<&String> {
+    fn get_bucket(&self, bucket: types::Bucket) -> TableResult<&String> {
         self.get(bucket)
     }
 
@@ -83,7 +83,7 @@ impl TableKeyValueExt for preview2::Table {
     }
 
     fn get_incoming_value(
-        &mut self,
+        &self,
         stream: types::IncomingValue,
     ) -> TableResult<&(Box<dyn AsyncRead + Sync + Send + Unpin>, u64)> {
         self.get(stream)
@@ -100,7 +100,7 @@ impl TableKeyValueExt for preview2::Table {
         self.push(Box::new(stream))
     }
 
-    fn get_outgoing_value(&mut self, stream: types::OutgoingValue) -> TableResult<&AsyncVec> {
+    fn get_outgoing_value(&self, stream: types::OutgoingValue) -> TableResult<&AsyncVec> {
         self.get(stream)
     }
 
@@ -112,7 +112,7 @@ impl TableKeyValueExt for preview2::Table {
         self.push(Box::new(error))
     }
 
-    fn get_error(&mut self, error: wasi_cloud_error::Error) -> TableResult<&anyhow::Error> {
+    fn get_error(&self, error: wasi_cloud_error::Error) -> TableResult<&anyhow::Error> {
         self.get(error)
     }
 

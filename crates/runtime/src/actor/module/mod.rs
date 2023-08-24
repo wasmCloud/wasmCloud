@@ -5,7 +5,7 @@ use wasmbus::guest_call;
 use crate::actor::claims;
 use crate::capability::logging::logging;
 use crate::capability::{
-    builtin, Bus, IncomingHttp, KeyValueAtomic, KeyValueReadWrite, Logging, Messaging,
+    builtin, Blobstore, Bus, IncomingHttp, KeyValueAtomic, KeyValueReadWrite, Logging, Messaging,
 };
 use crate::io::AsyncVec;
 use crate::Runtime;
@@ -303,6 +303,12 @@ impl Instance {
             .data_mut()
             .wasi
             .set_stderr(Box::new(WritePipe::new(std::io::sink())));
+    }
+
+    /// Set [`Blobstore`] handler for this [Instance].
+    pub fn blobstore(&mut self, blobstore: Arc<dyn Blobstore + Send + Sync>) -> &mut Self {
+        self.handler_mut().replace_blobstore(blobstore);
+        self
     }
 
     /// Set [`Bus`] handler for this [Instance].

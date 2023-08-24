@@ -42,5 +42,7 @@ tracing-futures = { version = "0.2", default-features = false }
 tracing-opentelemetry = { version = "0.20", default-features = false }
 warp = { version = "0.3", default-features = false }
 wascap = { version = "0.8", default-features = false }
+wasmbus-rpc = { version = "0.14", default-features = false } # TODO: Replace by `wasmcloud-provider-sdk`
 wasmcloud-compat = { path = "../compat", default-features = false }
+wasmcloud-interface-blobstore = { version = "0.8" } # TODO: Replace by WIT
 wasmcloud-provider-sdk = { path = "../provider-sdk", default-features = false }
