@@ -1,7 +1,7 @@
 // Adapted from
 // https://github.com/wasmCloud/wasmcloud-otp/blob/5f13500646d9e077afa1fca67a3fe9c8df5f3381/host_core/native/hostcore_wasmcloud_native/src/oci.rs
 
-use crate::{par, RegistrySettings};
+use crate::par;
 
 use core::str::FromStr;
 
@@ -36,29 +36,47 @@ pub struct Config {
     pub oci_password: Option<String>,
 }
 
+impl From<crate::RegistryAuth> for RegistryAuth {
+    fn from(auth: crate::RegistryAuth) -> Self {
+        match auth {
+            crate::RegistryAuth::Basic(username, password) => Self::Basic(username, password),
+            _ => Self::Anonymous,
+        }
+    }
+}
+
+impl From<&crate::RegistryAuth> for RegistryAuth {
+    fn from(auth: &crate::RegistryAuth) -> Self {
+        match auth {
+            crate::RegistryAuth::Basic(username, password) => {
+                Self::Basic(username.clone(), password.clone())
+            }
+            _ => Self::Anonymous,
+        }
+    }
+}
+
 /// Fetch an OCI path
 #[allow(clippy::missing_errors_doc)] // TODO: document errors
 pub async fn fetch_oci_path(
-    img: &str,
-    registry_settings: &RegistrySettings,
+    img: impl AsRef<str>,
+    auth: &RegistryAuth,
+    allow_latest: bool,
+    allow_insecure: bool,
     accepted_media_types: Vec<&str>,
 ) -> anyhow::Result<PathBuf> {
+    let img = img.as_ref();
+
     let img = &img.to_lowercase(); // the OCI spec does not allow for capital letters in references
-    if !registry_settings.allow_latest && img.ends_with(":latest") {
+    if !allow_latest && img.ends_with(":latest") {
         bail!("fetching images tagged 'latest' is currently prohibited in this host. This option can be overridden with WASMCLOUD_OCI_ALLOW_LATEST")
     }
     let cache_file = get_cached_filepath(img).await?;
     let digest_file = get_digest_filepath(img).await?;
 
-    let auth = match &registry_settings.auth {
-        crate::registry::Auth::Basic(username, password) => {
-            RegistryAuth::Basic(username.to_string(), password.to_string())
-        }
-        _ => RegistryAuth::Anonymous,
-    };
     let img = Reference::from_str(img)?;
 
-    let protocol = if registry_settings.allow_insecure {
+    let protocol = if allow_insecure {
         ClientProtocol::HttpsExcept(vec![img.registry().to_string()])
     } else {
         ClientProtocol::Https
@@ -72,7 +90,7 @@ pub async fn fetch_oci_path(
     // In case of a cache miss where the file does not exist, pull a fresh OCI Image
     if fs::metadata(&cache_file).await.is_ok() {
         let (_, oci_digest) = c
-            .pull_manifest(&img, &auth)
+            .pull_manifest(&img, auth)
             .await
             .context("failed to fetch OCI manifest")?;
         // If the digest file doesn't exist that is ok, we just unwrap to an empty string
@@ -83,7 +101,7 @@ pub async fn fetch_oci_path(
     }
 
     let imgdata = c
-        .pull(&img, &auth, accepted_media_types)
+        .pull(&img, auth, accepted_media_types)
         .await
         .context("failed to fetch OCI bytes")?;
     cache_oci_image(imgdata, &cache_file, digest_file)
@@ -145,11 +163,15 @@ async fn cache_oci_image(
 /// Returns an error if either fetching fails or reading the fetched OCI path fails
 pub async fn fetch_actor(
     oci_ref: impl AsRef<str>,
-    registry_settings: &RegistrySettings,
+    auth: impl Into<RegistryAuth>,
+    allow_latest: bool,
+    allow_insecure: bool,
 ) -> anyhow::Result<Vec<u8>> {
     let path = fetch_oci_path(
-        oci_ref.as_ref(),
-        registry_settings,
+        oci_ref,
+        &auth.into(),
+        allow_latest,
+        allow_insecure,
         vec![WASM_MEDIA_TYPE, OCI_MEDIA_TYPE],
     )
     .await
@@ -167,11 +189,15 @@ pub async fn fetch_actor(
 pub async fn fetch_provider(
     oci_ref: impl AsRef<str>,
     link_name: impl AsRef<str>,
-    registry_settings: &RegistrySettings,
+    auth: impl Into<RegistryAuth>,
+    allow_latest: bool,
+    allow_insecure: bool,
 ) -> anyhow::Result<(PathBuf, jwt::Claims<jwt::CapabilityProvider>)> {
     let path = fetch_oci_path(
-        oci_ref.as_ref(),
-        registry_settings,
+        oci_ref,
+        &auth.into(),
+        allow_latest,
+        allow_insecure,
         vec![PROVIDER_ARCHIVE_MEDIA_TYPE, OCI_MEDIA_TYPE],
     )
     .await

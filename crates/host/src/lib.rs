@@ -35,7 +35,7 @@ pub use url;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use anyhow::{anyhow, bail, Context as _};
+use anyhow::{anyhow, bail, ensure, Context as _};
 use tokio::fs;
 use tracing::{instrument, warn};
 use url::Url;
@@ -93,13 +93,9 @@ impl<'a> TryFrom<&'a str> for ResourceRef<'a> {
     }
 }
 
-fn extract_server<'a>(resource_ref: &ResourceRef<'a>) -> Option<&'a str> {
-    match resource_ref {
-        ResourceRef::File(_) => None,
-        ResourceRef::Bindle(resource_ref) | ResourceRef::Oci(resource_ref) => {
-            resource_ref.split('/').next()
-        }
-    }
+fn oci_authority(s: &str) -> Option<&str> {
+    let (l, _) = s.split_once('/')?;
+    Some(l)
 }
 
 /// Fetch an actor from a reference.
@@ -107,26 +103,37 @@ fn extract_server<'a>(resource_ref: &ResourceRef<'a>) -> Option<&'a str> {
 pub async fn fetch_actor(
     actor_ref: impl AsRef<str>,
     allow_file_load: bool,
-    all_registry_settings: &HashMap<String, RegistrySettings>,
+    registry_settings: &HashMap<String, RegistrySettings>,
 ) -> anyhow::Result<Vec<u8>> {
-    let actor_ref = ResourceRef::try_from(actor_ref.as_ref())?;
-    let server = extract_server(&actor_ref).unwrap_or_default();
-    let default_registry_settings = RegistrySettings::default();
-    let registry_settings = all_registry_settings
-        .get(server)
-        .unwrap_or(&default_registry_settings);
-
-    match actor_ref {
-        ResourceRef::File(actor_ref) if allow_file_load => {
+    match ResourceRef::try_from(actor_ref.as_ref())? {
+        ResourceRef::File(actor_ref) => {
+            ensure!(
+                allow_file_load,
+                "unable to start actor from file, file loading is disabled"
+            );
             fs::read(actor_ref).await.context("failed to read actor")
         }
-        ResourceRef::File(_) => bail!("unable to start actor from file, file loading is disabled"),
-        ResourceRef::Bindle(actor_ref) => crate::bindle::fetch_actor(actor_ref, registry_settings)
-            .await
-            .with_context(|| format!("failed to fetch actor under Bindle reference `{actor_ref}`")),
-        ResourceRef::Oci(actor_ref) => crate::oci::fetch_actor(actor_ref, registry_settings)
-            .await
-            .with_context(|| format!("failed to fetch actor under OCI reference `{actor_ref}`")),
+        ResourceRef::Bindle(actor_ref) => if let Some(RegistrySettings { auth, .. }) =
+            oci_authority(actor_ref).and_then(|authority| registry_settings.get(authority))
+        {
+            bindle::fetch_actor(actor_ref, auth).await
+        } else {
+            bindle::fetch_actor(actor_ref, RegistryAuth::Anonymous).await
+        }
+        .with_context(|| format!("failed to fetch actor under Bindle reference `{actor_ref}`")),
+        ResourceRef::Oci(actor_ref) => if let Some(RegistrySettings {
+            auth,
+            allow_latest,
+            allow_insecure,
+            ..
+        }) =
+            oci_authority(actor_ref).and_then(|authority| registry_settings.get(authority))
+        {
+            oci::fetch_actor(actor_ref, auth, *allow_latest, *allow_insecure).await
+        } else {
+            oci::fetch_actor(actor_ref, RegistryAuth::Anonymous, false, false).await
+        }
+        .with_context(|| format!("failed to fetch actor under OCI reference `{actor_ref}`")),
     }
 }
 
@@ -136,35 +143,54 @@ pub async fn fetch_provider(
     provider_ref: impl AsRef<str>,
     link_name: impl AsRef<str>,
     allow_file_load: bool,
-    all_registry_settings: &HashMap<String, RegistrySettings>,
+    registry_settings: &HashMap<String, RegistrySettings>,
 ) -> anyhow::Result<(PathBuf, jwt::Claims<jwt::CapabilityProvider>)> {
-    let provider_ref = ResourceRef::try_from(provider_ref.as_ref())?;
-    let server = extract_server(&provider_ref).unwrap_or_default();
-    let default_registry_settings = RegistrySettings::default();
-    let registry_settings = all_registry_settings
-        .get(server)
-        .unwrap_or(&default_registry_settings);
-
-    match provider_ref {
-        ResourceRef::File(provider_ref) if allow_file_load => par::read(provider_ref, link_name)
+    match ResourceRef::try_from(provider_ref.as_ref())? {
+        ResourceRef::File(provider_ref) => {
+            ensure!(
+                allow_file_load,
+                "unable to start provider from file, file loading is disabled"
+            );
+            par::read(provider_ref, link_name)
+                .await
+                .context("failed to read provider")
+        }
+        ResourceRef::Bindle(provider_ref) => if let Some(RegistrySettings { auth, .. }) =
+            oci_authority(provider_ref).and_then(|authority| registry_settings.get(authority))
+        {
+            bindle::fetch_provider(provider_ref, link_name, auth).await
+        } else {
+            bindle::fetch_provider(provider_ref, link_name, RegistryAuth::Anonymous).await
+        }
+        .with_context(|| {
+            format!("failed to fetch provider under Bindle reference `{provider_ref}`")
+        }),
+        ResourceRef::Oci(provider_ref) => if let Some(RegistrySettings {
+            auth,
+            allow_latest,
+            allow_insecure,
+            ..
+        }) =
+            oci_authority(provider_ref).and_then(|authority| registry_settings.get(authority))
+        {
+            oci::fetch_provider(
+                provider_ref,
+                link_name,
+                auth,
+                *allow_latest,
+                *allow_insecure,
+            )
             .await
-            .context("failed to read provider"),
-        ResourceRef::File(_) => {
-            bail!("unable to start provider from file, file loading is disabled")
+        } else {
+            oci::fetch_provider(
+                provider_ref,
+                link_name,
+                RegistryAuth::Anonymous,
+                false,
+                false,
+            )
+            .await
         }
-        ResourceRef::Bindle(provider_ref) => {
-            crate::bindle::fetch_provider(&provider_ref, link_name, registry_settings)
-                .await
-                .with_context(|| {
-                    format!("failed to fetch provider under Bindle reference `{provider_ref}`")
-                })
-        }
-        ResourceRef::Oci(provider_ref) => {
-            crate::oci::fetch_provider(&provider_ref, link_name, registry_settings)
-                .await
-                .with_context(|| {
-                    format!("failed to fetch provider under OCI reference `{provider_ref}`")
-                })
-        }
+        .with_context(|| format!("failed to fetch provider under OCI reference `{provider_ref}`")),
     }
 }
