@@ -1,4 +1,5 @@
 name: Build and Release Docker Artifact
+
 on:
   push:
     branches:
@@ -7,34 +8,152 @@ on:
       - v[0-9].[0-9]+.[0-9]+
 
 jobs:
-  push_to_registry:
-    name: Push Docker image to Azure and Docker Hub
-    runs-on: ubuntu-latest
+  build:
+    name: Build wash docker image
+    runs-on: ${{ matrix.config.os }}
+    outputs:
+      version_output: ${{ steps.version_output.outputs.version }}
+    strategy:
+      matrix:
+        config:
+          # NOTE: We are building on an older version of ubuntu because of libc compatibility
+          # issues. Namely, if we build on a new version of libc, it isn't backwards compatible with
+          # old versions. But if we build on the old version, it is compatible with the newer
+          # versions running in ubuntu 22 and its ilk
+          - os: "ubuntu-20.04"
+            arch: "amd64"
+            extension: ""
+            targetPath: "target/release/"
+          - os: "ubuntu-20.04"
+            arch: "aarch64"
+            extension: ""
+            targetPath: "target/aarch64-unknown-linux-gnu/release/"
     steps:
-      - name: Check out the repo
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v3
+
+      - name: Set the release version (tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: echo "RELEASE_VERSION=${GITHUB_REF/refs\/tags\//}" >> $GITHUB_ENV
+
+      - name: Set the release version (main)
+        if: github.ref == 'refs/heads/main'
+        shell: bash
+        run: echo "RELEASE_VERSION=canary" >> $GITHUB_ENV
+
+      - name: Output Version
+        id: version_output
+        run: echo "version=$RELEASE_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Lowercase the runner OS name
+        shell: bash
+        run: |
+          OS=$(echo "${{ runner.os }}" | tr '[:upper:]' '[:lower:]')
+          echo "RUNNER_OS=$OS" >> $GITHUB_ENV
+
+      - name: Install latest Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        if: matrix.config.arch != 'aarch64'
+        with:
+          toolchain: stable
+          components: clippy, rustfmt
+
+      - name: Setup for cross-compile builds
+        if: matrix.config.arch == 'aarch64' && matrix.config.os == 'ubuntu-20.04'
+        run: |
+          sudo apt-get update
+          sudo apt install gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+          rustup toolchain install stable-aarch64-unknown-linux-gnu
+          rustup target add --toolchain stable-aarch64-unknown-linux-gnu aarch64-unknown-linux-gnu
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+          echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+          echo "CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++" >> $GITHUB_ENV
+
+      - name: Install latest Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        if: matrix.config.arch == 'aarch64' && matrix.config.os == 'ubuntu-20.04'
+        with:
+          toolchain: stable
+          components: clippy, rustfmt
+          target: aarch64-unknown-linux-gnu
+
+      - name: Build release
+        if: matrix.config.arch != 'aarch64'
+        run: "cargo build --release"
+
+      - name: Build release
+        if: matrix.config.arch == 'aarch64' && matrix.config.os == 'ubuntu-20.04'
+        run: "cargo build --release --target aarch64-unknown-linux-gnu"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: wash-${{ env.RELEASE_VERSION }}-${{ env.RUNNER_OS }}-${{ matrix.config.arch }}
+          if-no-files-found: error
+          path: |
+            ${{ matrix.config.targetPath }}wash${{ matrix.config.extension }}
+
+  publish_images:
+    name: Publish docker image
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      packages: write
+    env:
+      RELEASE_VERSION: ${{ needs.build.outputs.version_output }}
+      # Annotations cause issues with the image metadata
+      # as displayed on GitHub packages page for the repo ('unknown/unknown')
+      #
+      # See: https://github.com/orgs/community/discussions/45969
+      BUILDX_NO_DEFAULT_ATTESTATIONS: 1
+    steps:
+      - uses: actions/checkout@v3
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+
+      # Download all artifacts artifacts
+      - uses: actions/download-artifact@v3
+        with:
+          path: ./artifacts
+
+      # AzureCR login
       - uses: azure/docker-login@v1
         if: github.repository == 'wasmCloud/wash'
         with:
           login-server: ${{ secrets.AZURECR_PUSH_URL }}
           username: ${{ secrets.AZURECR_PUSH_USER }}
           password: ${{ secrets.AZURECR_PUSH_PASSWORD }}
-      - uses: docker/login-action@v3
+
+      # DockerHub login
+      - uses: docker/login-action@v2
         if: github.repository == 'wasmCloud/wash'
         with:
           username: ${{ secrets.DOCKERHUB_PUSH_USER }}
           password: ${{ secrets.DOCKERHUB_PUSH_PASSWORD }}
-      - name: Docker metadata
+
+      # Github Registry login
+      #
+      # NOTE: unknown/unknown will show up due to a bug in GHCR
+      # see: https://github.com/orgs/community/discussions/45969
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Extract docker metadata
+      - name: Configure Docker metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: |
             wasmcloud/wash
             wasmcloud.azurecr.io/wash
+            ghcr.io/wasmcloud/wash
           tags: |
             type=semver,pattern={{version}}
             type=sha
@@ -45,23 +164,23 @@ jobs:
             org.opencontainers.image.description=WAsmcloud SHell
             org.opencontainers.image.vendor=wasmCloud
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ env.RELEASE_VERSION }}
+
+      # Build the docker image
       - name: Build and push
-        id: docker_build_builder
-        uses: docker/build-push-action@v5
-        with:
-          file: "Dockerfile"
-          push: ${{ github.repository == 'wasmCloud/wash' }}
-          target: release-alpine
-          tags: |
-            wasmcloud/wash:alpine
-          labels: ${{ steps.meta.outputs.labels }}
-      - name: Build and push - scratch
         id: docker_build
         uses: docker/build-push-action@v5
         with:
+          build-args: |
+            BIN_AMD64=/artifacts/wash-${{ env.RELEASE_VERSION }}-linux-amd64/wash
+            BIN_ARM64=/artifacts/wash-${{ env.RELEASE_VERSION }}-linux-aarch64/wash
+          context: .
           file: "Dockerfile"
-          push: ${{ github.repository == 'wasmcloud/wash' }}
-          tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.repository == 'wasmCloud/wash' }}
+          tags: ${{ steps.meta.outputs.tags }}
+
+      # Display image digest
       - name: Image digest
         run: echo ${{ steps.docker_build.outputs.digest }}
