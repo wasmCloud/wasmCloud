@@ -26,12 +26,14 @@ pub mod registry;
 mod par;
 
 pub use local::{Host as LocalHost, HostConfig as LocalHostConfig};
+pub use oci::Config as OciConfig;
 pub use registry::{Auth as RegistryAuth, Settings as RegistrySettings, Type as RegistryType};
 pub use wasmbus::{Host as WasmbusHost, HostConfig as WasmbusHostConfig};
 
 pub use url;
 
-use std::{collections::HashMap, path::PathBuf};
+use std::collections::HashMap;
+use std::path::PathBuf;
 
 use anyhow::{anyhow, bail, Context as _};
 use tokio::fs;
