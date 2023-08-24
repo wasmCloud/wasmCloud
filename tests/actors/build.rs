@@ -343,6 +343,8 @@ async fn main() -> anyhow::Result<()> {
                 caps::HTTP_SERVER.into(),
                 caps::LOGGING.into(),
                 caps::NUMBERGEN.into(),
+                caps::MESSAGING.into(),
+                caps::KEY_VALUE.into(),
             ]),
         ),
         (
@@ -351,6 +353,8 @@ async fn main() -> anyhow::Result<()> {
                 caps::HTTP_SERVER.into(),
                 caps::LOGGING.into(),
                 caps::NUMBERGEN.into(),
+                caps::MESSAGING.into(),
+                caps::KEY_VALUE.into(),
             ]),
         ),
         (
@@ -359,6 +363,8 @@ async fn main() -> anyhow::Result<()> {
                 caps::HTTP_SERVER.into(),
                 caps::LOGGING.into(),
                 caps::NUMBERGEN.into(),
+                caps::MESSAGING.into(),
+                caps::KEY_VALUE.into(),
             ]),
         ),
         (
@@ -367,6 +373,8 @@ async fn main() -> anyhow::Result<()> {
                 caps::HTTP_SERVER.into(),
                 caps::LOGGING.into(),
                 caps::NUMBERGEN.into(),
+                caps::MESSAGING.into(),
+                caps::KEY_VALUE.into(),
             ]),
         ),
         (
@@ -375,6 +383,8 @@ async fn main() -> anyhow::Result<()> {
                 caps::HTTP_SERVER.into(),
                 caps::LOGGING.into(),
                 caps::NUMBERGEN.into(),
+                caps::MESSAGING.into(),
+                caps::KEY_VALUE.into(),
             ]),
         ),
         ("http-compat-command", Some(vec![caps::HTTP_SERVER.into()])),
