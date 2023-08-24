@@ -27,7 +27,7 @@ mod par;
 
 pub use local::{Host as LocalHost, HostConfig as LocalHostConfig};
 pub use oci::Config as OciConfig;
-pub use registry::{Auth as RegistryAuth, Settings as RegistrySettings, Type as RegistryType};
+pub use registry::{Auth as RegistryAuth, Config as RegistryConfig, Type as RegistryType};
 pub use wasmbus::{Host as WasmbusHost, HostConfig as WasmbusHostConfig};
 
 pub use url;
@@ -103,7 +103,7 @@ fn oci_authority(s: &str) -> Option<&str> {
 pub async fn fetch_actor(
     actor_ref: impl AsRef<str>,
     allow_file_load: bool,
-    registry_settings: &HashMap<String, RegistrySettings>,
+    registry_config: &HashMap<String, RegistryConfig>,
 ) -> anyhow::Result<Vec<u8>> {
     match ResourceRef::try_from(actor_ref.as_ref())? {
         ResourceRef::File(actor_ref) => {
@@ -113,21 +113,21 @@ pub async fn fetch_actor(
             );
             fs::read(actor_ref).await.context("failed to read actor")
         }
-        ResourceRef::Bindle(actor_ref) => if let Some(RegistrySettings { auth, .. }) =
-            oci_authority(actor_ref).and_then(|authority| registry_settings.get(authority))
+        ResourceRef::Bindle(actor_ref) => if let Some(RegistryConfig { auth, .. }) =
+            oci_authority(actor_ref).and_then(|authority| registry_config.get(authority))
         {
             bindle::fetch_actor(actor_ref, auth).await
         } else {
             bindle::fetch_actor(actor_ref, RegistryAuth::Anonymous).await
         }
         .with_context(|| format!("failed to fetch actor under Bindle reference `{actor_ref}`")),
-        ResourceRef::Oci(actor_ref) => if let Some(RegistrySettings {
+        ResourceRef::Oci(actor_ref) => if let Some(RegistryConfig {
             auth,
             allow_latest,
             allow_insecure,
             ..
         }) =
-            oci_authority(actor_ref).and_then(|authority| registry_settings.get(authority))
+            oci_authority(actor_ref).and_then(|authority| registry_config.get(authority))
         {
             oci::fetch_actor(actor_ref, auth, *allow_latest, *allow_insecure).await
         } else {
@@ -143,7 +143,7 @@ pub async fn fetch_provider(
     provider_ref: impl AsRef<str>,
     link_name: impl AsRef<str>,
     allow_file_load: bool,
-    registry_settings: &HashMap<String, RegistrySettings>,
+    registry_config: &HashMap<String, RegistryConfig>,
 ) -> anyhow::Result<(PathBuf, jwt::Claims<jwt::CapabilityProvider>)> {
     match ResourceRef::try_from(provider_ref.as_ref())? {
         ResourceRef::File(provider_ref) => {
@@ -155,8 +155,8 @@ pub async fn fetch_provider(
                 .await
                 .context("failed to read provider")
         }
-        ResourceRef::Bindle(provider_ref) => if let Some(RegistrySettings { auth, .. }) =
-            oci_authority(provider_ref).and_then(|authority| registry_settings.get(authority))
+        ResourceRef::Bindle(provider_ref) => if let Some(RegistryConfig { auth, .. }) =
+            oci_authority(provider_ref).and_then(|authority| registry_config.get(authority))
         {
             bindle::fetch_provider(provider_ref, link_name, auth).await
         } else {
@@ -165,13 +165,13 @@ pub async fn fetch_provider(
         .with_context(|| {
             format!("failed to fetch provider under Bindle reference `{provider_ref}`")
         }),
-        ResourceRef::Oci(provider_ref) => if let Some(RegistrySettings {
+        ResourceRef::Oci(provider_ref) => if let Some(RegistryConfig {
             auth,
             allow_latest,
             allow_insecure,
             ..
         }) =
-            oci_authority(provider_ref).and_then(|authority| registry_settings.get(authority))
+            oci_authority(provider_ref).and_then(|authority| registry_config.get(authority))
         {
             oci::fetch_provider(
                 provider_ref,
