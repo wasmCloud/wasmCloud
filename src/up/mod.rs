@@ -506,7 +506,14 @@ pub(crate) async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result
         if nats_bin.is_some() {
             stop_nats(install_dir).await?;
         }
-        return Err(anyhow!("wasmCloud host did not start. Failed to connect to washboard. Check host-logs at {:?}.", wasmcloud_log_path));
+        return Err(anyhow!(
+            "wasmCloud host did not start. Failed to connect to washboard.{}",
+            if cmd.detached {
+                format!(" Check host-logs at {:?}.", wasmcloud_log_path)
+            } else {
+                "".to_string()
+            }
+        ));
     }
 
     spinner.finish_and_clear();
