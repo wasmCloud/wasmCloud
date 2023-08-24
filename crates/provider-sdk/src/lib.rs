@@ -7,10 +7,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{error, info, warn};
 
 mod chunkify;
-pub mod core;
 pub mod error;
-#[cfg(feature = "otel")]
-pub mod otel;
 pub mod provider;
 pub mod provider_main;
 pub mod rpc_client;
@@ -18,6 +15,12 @@ pub mod rpc_client;
 pub use provider::ProviderConnection;
 pub use provider_main::{load_host_data, run_provider, start_provider};
 pub use rpc_client::RpcClient;
+
+pub mod core {
+    pub use wasmcloud_core::{
+        HealthCheckRequest, HealthCheckResponse, HostData, LinkDefinition, WasmCloudEntity,
+    };
+}
 
 use crate::{
     core::{HealthCheckRequest, HealthCheckResponse, LinkDefinition, WasmCloudEntity},

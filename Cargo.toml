@@ -41,7 +41,14 @@ tracing-subscriber = { workspace = true, features = [
     "json",
     "std",
 ] }
+opentelemetry = { workspace = true, features = ["rt-tokio"], optional = true }
+opentelemetry-otlp = { workspace = true, features = [
+    "http-proto",
+    "reqwest-client",
+] }
 wasmcloud-host = { workspace = true }
+wasmcloud-core = { workspace = true, features = ["otel"] }
+wasmcloud-tracing = { workspace = true, features = ["otel"] }
 
 [dev-dependencies]
 async-nats = { workspace = true }
@@ -125,11 +132,13 @@ wasi-common = { version = "12", default-features = false }
 wasmcloud-actor = { path = "./crates/actor" }
 wasmcloud-actor-derive = { path = "./crates/actor/derive" }
 wasmcloud-compat = { path = "./crates/compat" }
+wasmcloud-core = { path = "./crates/core" }
 wasmcloud-component-adapters = { version = "0.2.0" }
 wasmcloud-control-interface = { version = "0.28", default-features = false }
 wasmcloud-host = { path = "./crates/host" }
 wasmcloud-provider-wit-bindgen = { path = "./crates/provider-wit-bindgen" }
 wasmcloud-runtime = { path = "./crates/runtime" }
+wasmcloud-tracing = { path = "./crates/tracing" }
 wasmparser = { version = "0.111", default-features = false }
 wasmtime = { version = "12", default-features = false }
 wasmtime-wasi = { version = "12", default-features = false }

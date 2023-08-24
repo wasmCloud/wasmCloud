@@ -9,7 +9,6 @@ use crate::oci::Config as OciConfig;
 use crate::registry::{Auth as RegistryAuth, Settings as RegistrySettings, Type as RegistryType};
 use crate::{fetch_actor, socket_pair};
 
-use core::fmt;
 use core::future::Future;
 use core::num::NonZeroUsize;
 use core::pin::Pin;
@@ -46,7 +45,7 @@ use tokio_stream::wrappers::IntervalStream;
 use tracing::{debug, error, info, instrument, trace, warn};
 use ulid::Ulid;
 use uuid::Uuid;
-use wascap::{jwt, prelude::Claims};
+use wascap::jwt;
 use wasmcloud_control_interface::{
     ActorAuctionAck, ActorAuctionRequest, ActorDescription, HostInventory, LinkDefinition,
     LinkDefinitionList, ProviderAuctionRequest, ProviderDescription, RegistryCredential,
@@ -54,11 +53,13 @@ use wasmcloud_control_interface::{
     StartProviderCommand, StopActorCommand, StopHostCommand, StopProviderCommand,
     UpdateActorCommand,
 };
+use wasmcloud_core::{HealthCheckResponse, Invocation, InvocationResponse, WasmCloudEntity};
 use wasmcloud_runtime::capability::{
     messaging, ActorIdentifier, Bus, IncomingHttp, KeyValueAtomic, KeyValueReadWrite, Messaging,
     TargetEntity, TargetInterface,
 };
 use wasmcloud_runtime::{ActorInstancePool, Runtime};
+use wasmcloud_tracing::context::{attach_span_context, OtelHeaderInjector};
 
 const SUCCESS: &str = r#"{"accepted":true,"error":""}"#;
 
@@ -208,241 +209,6 @@ struct ActorInstance {
     valid_issuers: Vec<String>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-struct WasmCloudEntity {
-    link_name: String,
-    contract_id: String,
-    public_key: String,
-}
-
-impl fmt::Display for WasmCloudEntity {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let url = self.url();
-        write!(f, "{url}")
-    }
-}
-
-impl WasmCloudEntity {
-    /// The URL of the entity
-    pub fn url(&self) -> String {
-        if self.public_key.to_uppercase().starts_with('M') {
-            format!("wasmbus://{}", self.public_key)
-        } else {
-            format!(
-                "wasmbus://{}/{}/{}",
-                self.contract_id
-                    .replace(':', "/")
-                    .replace(' ', "_")
-                    .to_lowercase(),
-                self.link_name.replace(' ', "_").to_lowercase(),
-                self.public_key
-            )
-        }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-struct Invocation {
-    origin: WasmCloudEntity,
-    target: WasmCloudEntity,
-    operation: String,
-    #[serde(with = "serde_bytes")]
-    msg: Vec<u8>,
-    id: String,
-    encoded_claims: String,
-    host_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    content_length: Option<u64>,
-}
-
-fn invocation_hash(
-    target_url: impl AsRef<str>,
-    origin_url: impl AsRef<str>,
-    op: impl AsRef<str>,
-    msg: impl AsRef<[u8]>,
-) -> String {
-    let mut hash = Sha256::default();
-    hash.update(origin_url.as_ref());
-    hash.update(target_url.as_ref());
-    hash.update(op.as_ref());
-    hash.update(msg.as_ref());
-    hex::encode_upper(hash.finalize())
-}
-
-impl Invocation {
-    /// Creates a new invocation. All invocations are signed with the cluster key as a way
-    /// of preventing them from being forged over the network when connected to a lattice, and
-    /// allows hosts to validate that the invocation is coming from a trusted source.
-    ///
-    /// # Arguments
-    /// * `links` - a map of package name to target name to entity, used internally to disambiguate
-    ///            between multiple links to the same provider or for actor-to-actor calls.
-    /// * `cluster_key` - the cluster key used to sign the invocation
-    /// * `host_key` - the host key of the host that is creating the invocation
-    /// * `origin` - the origin of the invocation
-    /// * `target` - the target of the invocation
-    /// * `operation` - the operation being invoked
-    /// * `msg` - the raw bytes of the invocation
-    pub fn new(
-        // package -> target -> entity
-        links: &HashMap<String, HashMap<String, WasmCloudEntity>>,
-        cluster_key: &KeyPair,
-        host_key: &KeyPair,
-        origin: WasmCloudEntity,
-        target: Option<&TargetEntity>,
-        operation: impl Into<String>,
-        msg: Vec<u8>,
-    ) -> anyhow::Result<Invocation> {
-        const DEFAULT_LINK_NAME: &str = "default";
-
-        let operation = operation.into();
-        let (package, operation) = operation
-            .split_once('/')
-            .context("failed to parse operation")?;
-        let target = match target {
-            None => links
-                .get(package)
-                .and_then(|targets| targets.get(DEFAULT_LINK_NAME))
-                .context("link not found")?
-                .clone(),
-            Some(TargetEntity::Link(link_name)) => links
-                .get(package)
-                .and_then(|targets| targets.get(link_name.as_deref().unwrap_or(DEFAULT_LINK_NAME)))
-                .context("link not found")?
-                .clone(),
-            Some(TargetEntity::Actor(ActorIdentifier::Key(key))) => WasmCloudEntity {
-                public_key: key.public_key(),
-                ..Default::default()
-            },
-            Some(TargetEntity::Actor(ActorIdentifier::Alias(alias))) => {
-                // TODO: Support actor call aliases
-                // https://github.com/wasmCloud/wasmCloud/issues/505
-                bail!("actor-to-actor calls to alias `{alias}` not supported yet")
-            }
-        };
-        // TODO: Support per-interface links
-        let id = Uuid::from_u128(Ulid::new().into()).to_string();
-        let target_url = format!("{}/{operation}", target.url());
-        let claims = jwt::Claims::<jwt::Invocation>::new(
-            cluster_key.public_key(),
-            id.to_string(),
-            &target_url,
-            &origin.url(),
-            &invocation_hash(&target_url, origin.url(), operation, &msg),
-        );
-        let encoded_claims = claims
-            .encode(cluster_key)
-            .context("failed to encode claims")?;
-
-        let operation = operation.to_string();
-        Ok(Invocation {
-            content_length: Some(msg.len() as _),
-            origin,
-            target,
-            operation,
-            msg,
-            id,
-            encoded_claims,
-            host_id: host_key.public_key(),
-        })
-    }
-
-    /// A fully-qualified URL indicating the origin of the invocation
-    pub fn origin_url(&self) -> String {
-        self.origin.url()
-    }
-
-    /// A fully-qualified URL indicating the target of the invocation
-    pub fn target_url(&self) -> String {
-        format!("{}/{}", self.target.url(), self.operation)
-    }
-
-    /// The hash of the invocation's target, origin, and raw bytes
-    pub fn hash(&self) -> String {
-        invocation_hash(
-            self.target_url(),
-            self.origin_url(),
-            &self.operation,
-            &self.msg,
-        )
-    }
-
-    /// Validates the current invocation to ensure that the invocation claims have
-    /// not been forged, are not expired, etc
-    pub fn validate_antiforgery(&self, valid_issuers: &[String]) -> anyhow::Result<()> {
-        match KeyPair::from_public_key(&self.host_id) {
-            Ok(kp) if kp.key_pair_type() == KeyPairType::Server => (),
-            _ => bail!("invalid host ID on invocation: '{}'", self.host_id),
-        }
-
-        let token_validation =
-            jwt::validate_token::<wascap::prelude::Invocation>(&self.encoded_claims)
-                .map_err(|e| anyhow!(e))?;
-        ensure!(!token_validation.expired, "invocation claims token expired");
-        ensure!(
-            !token_validation.cannot_use_yet,
-            "attempt to use invocation before claims token allows"
-        );
-        ensure!(
-            token_validation.signature_valid,
-            "invocation claims signature invalid"
-        );
-
-        let claims = Claims::<wascap::prelude::Invocation>::decode(&self.encoded_claims)
-            .map_err(|e| anyhow!(e))?;
-        ensure!(
-            valid_issuers.contains(&claims.issuer),
-            "issuer of this invocation is not among the list of valid issuers"
-        );
-
-        let inv_claims = claims
-            .metadata
-            .context("no wascap metadata found on claims")?;
-        ensure!(
-            inv_claims.target_url == self.target_url(),
-            "invocation claims and invocation target URL do not match"
-        );
-        ensure!(
-            inv_claims.origin_url == self.origin_url(),
-            "invocation claims and invocation origin URL do not match"
-        );
-
-        // Don't perform the hash validity test when the body has been externalized
-        // via object store. This is an optimization that helps us not have to run
-        // through the same set of bytes twice. The object store internals have their
-        // own hash mechanisms so we'll know the chunked bytes haven't been manipulated
-        if !self.msg.is_empty() && inv_claims.invocation_hash != self.hash() {
-            bail!(
-                "invocation hash does not match signed claims hash ({} / {})",
-                inv_claims.invocation_hash,
-                self.hash()
-            );
-        }
-
-        Ok(())
-    }
-}
-
-#[derive(Default, Deserialize, Serialize)]
-struct InvocationResponse {
-    #[serde(with = "serde_bytes")]
-    msg: Vec<u8>,
-    invocation_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    content_length: Option<u64>,
-}
-
-#[derive(Default, Deserialize, Serialize)]
-struct HealthCheckResponse {
-    /// Whether the provider is healthy
-    #[serde(default)]
-    healthy: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    message: Option<String>,
-}
-
 #[derive(Clone, Debug)]
 struct Handler {
     nats: async_nats::Client,
@@ -465,14 +231,19 @@ impl Handler {
         request: Vec<u8>,
     ) -> anyhow::Result<Result<Vec<u8>, String>> {
         let links = self.links.read().await;
+        let operation = operation.into();
+        let (package, _) = operation
+            .split_once('/')
+            .context("failed to parse operation")?;
+        let core_target = to_core_entity(target, links.get(package))?;
         let invocation = Invocation::new(
-            &links,
             &self.cluster_key,
             &self.host_key,
             self.origin.clone(),
-            target,
+            core_target,
             operation,
             request,
+            OtelHeaderInjector::default_with_span().into(),
         )?;
 
         // Validate that the actor has the capability to call the target
@@ -502,6 +273,7 @@ impl Handler {
             msg,
             content_length,
             error,
+            ..
         } = rmp_serde::from_slice(&res.payload).context("failed to decode invocation response")?;
         ensure!(invocation_id == invocation.id, "invocation ID mismatch");
         if let Some(content_length) = content_length {
@@ -599,14 +371,20 @@ impl Bus for Handler {
                     .context("failed to read request")
                     .map_err(|e| e.to_string())?;
                 let links = links.read().await;
+                let (package, _) = operation
+                    .split_once('/')
+                    .context("failed to parse operation")
+                    .map_err(|e| e.to_string())?;
+                let core_target = to_core_entity(target.as_ref(), links.get(package))
+                    .map_err(|e| e.to_string())?;
                 let invocation = Invocation::new(
-                    &links,
                     &cluster_key,
                     &host_key,
                     origin,
-                    target.as_ref(),
+                    core_target,
                     operation,
                     request,
+                    OtelHeaderInjector::default_with_span().into(),
                 )
                 .map_err(|e| e.to_string())?;
 
@@ -637,6 +415,7 @@ impl Bus for Handler {
                     msg,
                     content_length,
                     error,
+                    ..
                 } = rmp_serde::from_slice(&res.payload)
                     .context("failed to decode invocation response")
                     .map_err(|e| e.to_string())?;
@@ -976,6 +755,7 @@ impl ActorInstance {
     async fn handle_call(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
         let invocation: Invocation =
             rmp_serde::from_slice(payload.as_ref()).context("failed to decode invocation")?;
+        attach_span_context(&invocation);
 
         debug!(?invocation.origin, ?invocation.target, invocation.operation, "validate actor invocation");
         invocation.validate_antiforgery(&self.valid_issuers)?;
@@ -2346,8 +2126,8 @@ impl Host {
                 "log_level": self.host_config.log_level.to_string(),
                 "structured_logging": self.host_config.enable_structured_logging,
                 "otel_config": {
-                    "traces_exporter": std::env::var("OTEL_TRACES_EXPORTER").unwrap_or_default(),
-                    "exporter_otlp_endpoint": std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").unwrap_or_default(),
+                    "traces_exporter": self.host_config.otel_config.traces_exporter,
+                    "exporter_otlp_endpoint": self.host_config.otel_config.exporter_otlp_endpoint,
                 }
             }))
             .context("failed to serialize provider data")?;
@@ -3218,6 +2998,33 @@ fn human_friendly_uptime(uptime: Duration) -> String {
     .to_string()
 }
 
+fn to_core_entity(
+    maybe_target: Option<&TargetEntity>,
+    links: Option<&HashMap<String, WasmCloudEntity>>,
+) -> anyhow::Result<WasmCloudEntity> {
+    const DEFAULT_LINK_NAME: &str = "default";
+
+    Ok(match maybe_target {
+        None => links
+            .and_then(|targets| targets.get(DEFAULT_LINK_NAME))
+            .context("link not found")?
+            .clone(),
+        Some(TargetEntity::Link(link_name)) => links
+            .and_then(|targets| targets.get(link_name.as_deref().unwrap_or(DEFAULT_LINK_NAME)))
+            .context("link not found")?
+            .clone(),
+        Some(TargetEntity::Actor(ActorIdentifier::Key(key))) => WasmCloudEntity {
+            public_key: key.public_key(),
+            ..Default::default()
+        },
+        Some(TargetEntity::Actor(ActorIdentifier::Alias(alias))) => {
+            // TODO: Support actor call aliases
+            // https://github.com/wasmCloud/wasmCloud/issues/505
+            bail!("actor-to-actor calls to alias `{alias}` not supported yet")
+        }
+    })
+}
+
 /// Ensure actor has the capability claim to send or receive this invocation. This
 /// should be called whenever an actor is about to send or receive an invocation.
 fn ensure_actor_capability(
@@ -3245,15 +3052,12 @@ fn ensure_actor_capability(
 
 #[cfg(test)]
 mod test {
-    use std::collections::HashMap;
-
     use nkeys::KeyPair;
     use ulid::Ulid;
     use uuid::Uuid;
     use wascap::jwt;
-    use wasmcloud_runtime::capability::TargetEntity;
-
-    use crate::wasmbus::{invocation_hash, WasmCloudEntity};
+    use wasmcloud_core::{invocation_hash, WasmCloudEntity};
+    use wasmcloud_tracing::context::OtelHeaderInjector;
 
     use super::Invocation;
 
@@ -3279,26 +3083,15 @@ mod test {
 
         let target_operation_url = format!("{}/TestOperation.HandleTest", target.url());
         let valid_issuers = vec![CLUSTER_PUBKEY.to_string()];
-        let links: HashMap<String, HashMap<String, WasmCloudEntity>> = HashMap::from_iter(vec![(
-            "wasmcloud:bus".to_string(),
-            HashMap::from_iter(vec![(
-                "default".to_string(),
-                WasmCloudEntity {
-                    link_name: "default".to_string(),
-                    contract_id: "wasmcloud:testoperation".to_string(),
-                    public_key: PROVIDER_PUBKEY.to_string(),
-                },
-            )]),
-        )]);
 
         let basic_invocation: Invocation = Invocation::new(
-            &links,
             &clusterkey,
             &hostkey,
             origin.clone(),
-            Some(&TargetEntity::Link(Some("default".to_string()))),
+            target.clone(),
             operation.to_string(),
             msg.clone(),
+            OtelHeaderInjector::default_with_span().into(),
         )
         .expect("failed to create invocation");
         assert!(basic_invocation

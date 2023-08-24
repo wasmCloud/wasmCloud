@@ -1171,6 +1171,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "443144c8cdadd93ebf52ddb4056d257f5b52c04d3c804e657d19eb73fc33668b"
 
 [[package]]
+name = "hex"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
+
+[[package]]
 name = "http"
 version = "0.2.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3217,6 +3223,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed646292ffc8188ef8ea4d1e0e0150fb15a5c2e12ad9b8fc191ae7a8a7f3c4b9"
 
 [[package]]
+name = "ulid"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "13a3aaa69b04e5b66cc27309710a569ea23593612387d67daaf102e73aa974fd"
+dependencies = [
+ "rand",
+]
+
+[[package]]
 name = "unicase"
 version = "2.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3541,6 +3556,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasmcloud-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "hex",
+ "nkeys 0.3.2",
+ "serde",
+ "serde_bytes",
+ "sha2 0.10.7",
+ "tracing",
+ "ulid",
+ "uuid",
+ "wascap 0.11.0",
+]
+
+[[package]]
 name = "wasmcloud-interface-blobstore"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3642,7 +3673,6 @@ dependencies = [
  "nkeys 0.3.2",
  "once_cell",
  "opentelemetry 0.20.0",
- "opentelemetry-otlp 0.13.0",
  "rmp-serde",
  "serde",
  "serde_bytes",
@@ -3653,9 +3683,25 @@ dependencies = [
  "tracing",
  "tracing-futures",
  "tracing-opentelemetry 0.20.0",
- "tracing-subscriber",
  "uuid",
  "wascap 0.11.0",
+ "wasmcloud-core",
+ "wasmcloud-tracing",
+]
+
+[[package]]
+name = "wasmcloud-tracing"
+version = "0.1.0"
+dependencies = [
+ "lazy_static",
+ "opentelemetry 0.20.0",
+ "opentelemetry-otlp 0.13.0",
+ "serde",
+ "tracing",
+ "tracing-futures",
+ "tracing-opentelemetry 0.20.0",
+ "tracing-subscriber",
+ "wasmcloud-core",
 ]
 
 [[package]]
