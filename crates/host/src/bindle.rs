@@ -1,6 +1,8 @@
 // Adapted from
 // https://github.com/wasmCloud/wasmcloud-otp/blob/5f13500646d9e077afa1fca67a3fe9c8df5f3381/host_core/native/hostcore_wasmcloud_native/src/client.rs
 
+use crate::{par, RegistryAuth};
+
 use std::env;
 use std::env::consts::{ARCH, OS};
 use std::path::PathBuf;
@@ -23,9 +25,6 @@ use tokio::io::AsyncWriteExt;
 use tracing::warn;
 use wascap::jwt;
 
-use crate::par;
-use crate::registry::{Auth as RegistryAuth, Settings as RegistrySettings};
-
 const BINDLE_URL_ENV: &str = "BINDLE_URL";
 const BINDLE_KEYRING_PATH: &str = "BINDLE_KEYRING_PATH";
 
@@ -36,12 +35,36 @@ const KEYRING_FILE: &str = "keyring.toml";
 /// Authentication method
 #[derive(Clone)]
 pub enum Auth {
-    /// No authentication
-    None(NoToken),
     /// HTTP authentication
     Http(HttpBasic),
     /// Token authentication
     LongLived(LongLivedToken),
+    /// No authentication
+    None(NoToken),
+}
+
+impl Default for Auth {
+    fn default() -> Self {
+        Self::None(NoToken)
+    }
+}
+
+impl From<&RegistryAuth> for Auth {
+    fn from(auth: &RegistryAuth) -> Self {
+        match auth {
+            RegistryAuth::Basic(username, password) => {
+                Auth::Http(HttpBasic::new(username, password))
+            }
+            RegistryAuth::Token(token) => Auth::LongLived(LongLivedToken::new(token)),
+            RegistryAuth::Anonymous => Auth::None(NoToken),
+        }
+    }
+}
+
+impl From<RegistryAuth> for Auth {
+    fn from(auth: RegistryAuth) -> Self {
+        (&auth).into()
+    }
 }
 
 #[async_trait]
@@ -58,22 +81,12 @@ impl TokenManager for Auth {
     }
 }
 
-fn get_bindle_auth(registry_settings: &RegistrySettings) -> Auth {
-    match &registry_settings.auth {
-        RegistryAuth::Basic(username, password) => Auth::Http(HttpBasic::new(username, password)),
-        RegistryAuth::Token(token) => Auth::LongLived(LongLivedToken::new(token)),
-        RegistryAuth::Anonymous => Auth::None(NoToken),
-    }
-}
-
 /// Returns a bindle client configured to cache to disk
 #[allow(clippy::missing_errors_doc)] // TODO: document errors
 pub async fn get_client(
     bindle_id: &str,
-    registry_settings: &RegistrySettings,
+    auth: Auth,
 ) -> anyhow::Result<DumbCache<FileProvider<NoopEngine>, Client<Auth>>> {
-    let auth = get_bindle_auth(registry_settings);
-
     // Make sure the cache dir exists
     let temp_dir = std::env::temp_dir();
     let bindle_dir = temp_dir.join(CACHE_DIR);
@@ -134,11 +147,11 @@ pub(crate) fn normalize_bindle_id(bindle_id: &str) -> String {
 #[allow(clippy::missing_errors_doc)] // TODO: document errors
 pub async fn fetch_actor(
     bindle_id: impl AsRef<str>,
-    registry_settings: &RegistrySettings,
+    auth: impl Into<Auth>,
 ) -> anyhow::Result<Vec<u8>> {
     let bindle_id = bindle_id.as_ref();
     // Get the invoice, validate this bindle contains an actor, fetch the actor and return
-    let client = get_client(bindle_id, registry_settings)
+    let client = get_client(bindle_id, auth.into())
         .await
         .context("failed to get client")?;
 
@@ -170,10 +183,11 @@ pub async fn fetch_actor(
 pub async fn fetch_provider(
     bindle_id: impl AsRef<str>,
     link_name: impl AsRef<str>,
-    registry_settings: &RegistrySettings,
+    auth: impl Into<Auth>,
 ) -> anyhow::Result<(PathBuf, jwt::Claims<jwt::CapabilityProvider>)> {
     let bindle_id = bindle_id.as_ref();
-    let client = get_client(bindle_id, registry_settings)
+
+    let client = get_client(bindle_id, auth.into())
         .await
         .context("failed to construct client")?;
     let bindle_id = normalize_bindle_id(bindle_id);
