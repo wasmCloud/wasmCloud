@@ -58,7 +58,6 @@ impl TokenManager for Auth {
     }
 }
 
-#[allow(clippy::implicit_hasher)]
 fn get_bindle_auth(registry_settings: &RegistrySettings) -> Auth {
     match &registry_settings.auth {
         RegistryAuth::Basic(username, password) => Auth::Http(HttpBasic::new(username, password)),
@@ -68,7 +67,6 @@ fn get_bindle_auth(registry_settings: &RegistrySettings) -> Auth {
 }
 
 /// Returns a bindle client configured to cache to disk
-#[allow(clippy::implicit_hasher)]
 #[allow(clippy::missing_errors_doc)] // TODO: document errors
 pub async fn get_client(
     bindle_id: &str,
@@ -133,7 +131,6 @@ pub(crate) fn normalize_bindle_id(bindle_id: &str) -> String {
 }
 
 /// Fetch actor from bindle
-#[allow(clippy::implicit_hasher)]
 #[allow(clippy::missing_errors_doc)] // TODO: document errors
 pub async fn fetch_actor(
     bindle_id: impl AsRef<str>,
@@ -169,7 +166,6 @@ pub async fn fetch_actor(
 }
 
 /// Fetch provider from bindle
-#[allow(clippy::implicit_hasher)]
 #[allow(clippy::missing_errors_doc)] // TODO: document errors
 pub async fn fetch_provider(
     bindle_id: impl AsRef<str>,
