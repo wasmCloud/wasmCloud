@@ -66,10 +66,20 @@ pub struct HostData {
     /// The log level providers should log at
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub log_level: Option<logging::Level>,
+    pub otel_config: Option<OtelConfig>,
 }
 
 /// Environment settings for initializing a capability provider
 pub type HostEnvValues = WitMap<String>;
+
+/// Configuration values for Open Telemetry
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct OtelConfig {
+    /// OTEL_TRACES_EXPORTER https://opentelemetry.io/docs/concepts/sdk-configuration/general-sdk-configuration/#otel_traces_exporter
+    pub traces_exporter: String,
+    /// OTEL_EXPORTER_OTLP_ENDPOINT https://opentelemetry.io/docs/concepts/sdk-configuration/otlp-exporter-configuration/#otel_exporter_otlp_endpoint
+    pub exporter_otlp_endpoint: String,
+}
 
 /// RPC message to capability provider
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
