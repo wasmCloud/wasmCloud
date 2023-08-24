@@ -22,7 +22,5 @@ interface readwrite {
 	delete: func(bucket: bucket, key: key) -> result<_, error>
 
 	/// Check if the key exists in the bucket.
-	///
-	/// If the key does not exist in the bucket, it returns an error.
 	exists: func(bucket: bucket, key: key) -> result<bool, error>
 }

@@ -1,0 +1,48 @@
+package wasi:blobstore
+
+// Types used by blobstore
+interface types {
+  // name of a container, a collection of objects.
+  // The container name may be any valid UTF-8 string.
+  type container-name = string
+
+  // name of an object within a container
+  // The object name may be any valid UTF-8 string.
+  type object-name = string
+
+  // TODO: define timestamp to include seconds since 
+  // Unix epoch and nanoseconds 
+  // https://github.com/WebAssembly/wasi-blob-store/issues/7
+  type timestamp = u64
+
+  // size of an object, in bytes
+  type object-size = u64
+
+  type error = string
+
+  // information about a container
+  record container-metadata {
+    // the container's name
+    name: container-name,
+    // date and time container was created
+    created-at: timestamp,
+  }
+
+  // information about an object
+  record object-metadata {
+    // the object's name
+    name: object-name,
+    // the object's parent container
+    container: container-name,
+    // date and time the object was created
+    created-at: timestamp,
+    // size of the object, in bytes
+    size: object-size,
+  }
+
+  // identifier for an object that includes its container name
+  record object-id {
+    container: container-name,
+    object: object-name
+  }
+}

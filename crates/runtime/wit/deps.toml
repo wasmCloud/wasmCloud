@@ -1,4 +1,4 @@
-blobstore = "../../../wit/blobstore"
+blobstore = "https://github.com/wasmCloud/wasi-blob-store/archive/main.tar.gz"
 http = "https://github.com/wasmCloud/wasi-http/archive/main.tar.gz" # TODO: Switch to upstream once Wasm tooling compatible
 io = "../../../wit/deps/io"
 keyvalue = "https://github.com/WebAssembly/wasi-keyvalue/archive/main.tar.gz"
