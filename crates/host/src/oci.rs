@@ -1,8 +1,7 @@
 // Adapted from
 // https://github.com/wasmCloud/wasmcloud-otp/blob/5f13500646d9e077afa1fca67a3fe9c8df5f3381/host_core/native/hostcore_wasmcloud_native/src/oci.rs
 
-use crate::par;
-use crate::registry::Settings as RegistrySettings;
+use crate::{par, RegistrySettings};
 
 use core::str::FromStr;
 

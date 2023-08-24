@@ -1,4 +1,4 @@
-use crate::oci::Config as OciConfig;
+use crate::OciConfig;
 
 use std::sync::Arc;
 use std::time::Duration;

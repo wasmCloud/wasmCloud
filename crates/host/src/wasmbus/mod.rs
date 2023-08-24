@@ -5,10 +5,8 @@ pub use config::Host as HostConfig;
 
 mod event;
 
-use crate::oci::Config as OciConfig;
 use crate::policy::{Action, HostInfo, Manager as PolicyManager, RequestSource, RequestTarget};
-use crate::registry::{Auth as RegistryAuth, Settings as RegistrySettings, Type as RegistryType};
-use crate::{fetch_actor, socket_pair};
+use crate::{fetch_actor, socket_pair, OciConfig, RegistryAuth, RegistrySettings, RegistryType};
 
 use core::future::Future;
 use core::num::NonZeroUsize;
@@ -17,8 +15,8 @@ use core::pin::Pin;
 use core::task::{Context, Poll};
 use core::time::Duration;
 
-use std::collections::hash_map::Entry;
-use std::collections::{hash_map, BTreeMap, HashMap};
+use std::collections::hash_map::{self, Entry};
+use std::collections::{BTreeMap, HashMap};
 use std::env;
 use std::env::consts::{ARCH, FAMILY, OS};
 use std::io::Cursor;
