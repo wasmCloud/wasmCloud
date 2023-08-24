@@ -8,7 +8,7 @@ use base64::Engine;
 use once_cell::sync::OnceCell;
 #[cfg(feature = "otel")]
 use opentelemetry::sdk::{
-    trace::{self, IdGenerator, Sampler, Tracer},
+    trace::{self, RandomIdGenerator, Sampler, Tracer},
     Resource,
 };
 #[cfg(feature = "otel")]
@@ -377,7 +377,7 @@ fn get_tracer(provider_name: String) -> Result<Tracer, TraceError> {
         .with_trace_config(
             trace::config()
                 .with_sampler(Sampler::AlwaysOn)
-                .with_id_generator(IdGenerator::default())
+                .with_id_generator(RandomIdGenerator::default())
                 .with_max_events_per_span(64)
                 .with_max_attributes_per_span(16)
                 .with_max_events_per_span(16)
