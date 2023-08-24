@@ -2,7 +2,7 @@ use tracing::warn;
 
 /// Credentials for a registry containing wasmCloud artifacts
 #[derive(Debug, Default)]
-pub struct Settings {
+pub struct Config {
     /// The type of the registry (either OCI or Bindle)
     pub reg_type: Type,
     /// The auth settings for the registry
@@ -35,7 +35,7 @@ pub enum Auth {
     Anonymous,
 }
 
-impl From<wasmcloud_control_interface::RegistryCredential> for Settings {
+impl From<wasmcloud_control_interface::RegistryCredential> for Config {
     fn from(creds: wasmcloud_control_interface::RegistryCredential) -> Self {
         Self {
             reg_type: match creds.registry_type.as_str() {

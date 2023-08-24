@@ -6,7 +6,7 @@ pub use config::Host as HostConfig;
 mod event;
 
 use crate::policy::{Action, HostInfo, Manager as PolicyManager, RequestSource, RequestTarget};
-use crate::{fetch_actor, socket_pair, OciConfig, RegistryAuth, RegistrySettings, RegistryType};
+use crate::{fetch_actor, socket_pair, OciConfig, RegistryAuth, RegistryConfig, RegistryType};
 
 use core::future::Future;
 use core::num::NonZeroUsize;
@@ -1414,7 +1414,7 @@ pub struct Host {
     data_watch: AbortHandle,
     policy_manager: Arc<PolicyManager>,
     providers: RwLock<HashMap<String, Provider>>,
-    registry_settings: RwLock<HashMap<String, RegistrySettings>>,
+    registry_config: RwLock<HashMap<String, RegistryConfig>>,
     runtime: Runtime,
     start_at: Instant,
     stop_tx: watch::Sender<Option<Instant>>,
@@ -1572,7 +1572,7 @@ async fn connect_nats(
 
 #[derive(Debug, Default)]
 struct SupplementalConfig {
-    registry_settings: Option<HashMap<String, RegistrySettings>>,
+    registry_config: Option<HashMap<String, RegistryConfig>>,
 }
 
 #[instrument(skip(ctl_nats))]
@@ -1597,7 +1597,7 @@ async fn load_supplemental_config(
         Ok(resp) => {
             match serde_json::from_slice::<SerializedSupplementalConfig>(resp.payload.as_ref()) {
                 Ok(ser_cfg) => Ok(SupplementalConfig {
-                    registry_settings: ser_cfg
+                    registry_config: ser_cfg
                         .registry_credentials
                         .map(|creds| creds.into_iter().map(|(k, v)| (k, v.into())).collect()),
                 }),
@@ -1621,21 +1621,21 @@ async fn load_supplemental_config(
 }
 
 #[instrument(skip_all)]
-async fn merge_registry_settings(
-    registry_settings: &RwLock<HashMap<String, RegistrySettings>>,
+async fn merge_registry_config(
+    registry_config: &RwLock<HashMap<String, RegistryConfig>>,
     oci_opts: OciConfig,
 ) -> () {
-    let mut registry_settings = registry_settings.write().await;
+    let mut registry_config = registry_config.write().await;
     let allow_latest = oci_opts.allow_latest;
 
     // update auth for specific registry, if provided
     if let Some(reg) = oci_opts.oci_registry {
-        match registry_settings.entry(reg) {
+        match registry_config.entry(reg) {
             Entry::Occupied(_entry) => {
-                // note we don't update settings here, since the config service should take priority
+                // note we don't update config here, since the config service should take priority
             }
             Entry::Vacant(entry) => {
-                entry.insert(RegistrySettings {
+                entry.insert(RegistryConfig {
                     reg_type: RegistryType::Oci,
                     auth: RegistryAuth::from((oci_opts.oci_user, oci_opts.oci_password)),
                     ..Default::default()
@@ -1648,12 +1648,12 @@ async fn merge_registry_settings(
     oci_opts
         .allowed_insecure
         .into_iter()
-        .for_each(|reg| match registry_settings.entry(reg) {
+        .for_each(|reg| match registry_config.entry(reg) {
             Entry::Occupied(mut entry) => {
                 entry.get_mut().allow_insecure = true;
             }
             Entry::Vacant(entry) => {
-                entry.insert(RegistrySettings {
+                entry.insert(RegistryConfig {
                     reg_type: RegistryType::Oci,
                     allow_insecure: true,
                     ..Default::default()
@@ -1662,9 +1662,9 @@ async fn merge_registry_settings(
         });
 
     // set allow_latest for all registries
-    registry_settings
+    registry_config
         .values_mut()
-        .for_each(|settings| settings.allow_latest = allow_latest);
+        .for_each(|config| config.allow_latest = allow_latest);
 }
 
 impl Host {
@@ -1852,9 +1852,8 @@ impl Host {
             SupplementalConfig::default()
         };
 
-        let registry_settings =
-            RwLock::new(supplemental_config.registry_settings.unwrap_or_default());
-        merge_registry_settings(&registry_settings, config.oci_opts.clone()).await;
+        let registry_config = RwLock::new(supplemental_config.registry_config.unwrap_or_default());
+        merge_registry_config(&registry_config, config.oci_opts.clone()).await;
 
         let policy_manager = PolicyManager::new(
             ctl_nats.clone(),
@@ -1889,7 +1888,7 @@ impl Host {
             data_watch: data_watch_abort.clone(),
             policy_manager,
             providers: RwLock::default(),
-            registry_settings,
+            registry_config,
             runtime,
             start_at,
             stop_rx,
@@ -2373,11 +2372,11 @@ impl Host {
 
     #[instrument(skip(self))]
     async fn fetch_actor(&self, actor_ref: &str) -> anyhow::Result<wasmcloud_runtime::Actor> {
-        let registry_settings = self.registry_settings.read().await;
+        let registry_config = self.registry_config.read().await;
         let actor = fetch_actor(
             actor_ref,
             self.host_config.allow_file_load,
-            &registry_settings,
+            &registry_config,
         )
         .await
         .context("failed to fetch actor")?;
@@ -2766,12 +2765,12 @@ impl Host {
     ) -> anyhow::Result<()> {
         debug!("launch provider");
 
-        let registry_settings = self.registry_settings.read().await;
+        let registry_config = self.registry_config.read().await;
         let (path, claims) = crate::fetch_provider(
             provider_ref,
             link_name,
             self.host_config.allow_file_load,
-            &registry_settings,
+            &registry_config,
         )
         .await
         .context("failed to fetch provider")?;
@@ -3322,19 +3321,19 @@ impl Host {
 
         debug!(
             registries = ?registry_creds.keys(),
-            "updating registry settings",
+            "updating registry config",
         );
 
-        let mut registry_settings = self.registry_settings.write().await;
+        let mut registry_config = self.registry_config.write().await;
         for (reg, new_creds) in registry_creds {
-            let mut new_settings = RegistrySettings::from(new_creds);
-            match registry_settings.entry(reg) {
+            let mut new_config = RegistryConfig::from(new_creds);
+            match registry_config.entry(reg) {
                 hash_map::Entry::Occupied(mut entry) => {
-                    entry.get_mut().auth = new_settings.auth;
+                    entry.get_mut().auth = new_config.auth;
                 }
                 hash_map::Entry::Vacant(entry) => {
-                    new_settings.allow_latest = self.host_config.oci_opts.allow_latest;
-                    entry.insert(new_settings);
+                    new_config.allow_latest = self.host_config.oci_opts.allow_latest;
+                    entry.insert(new_config);
                 }
             }
         }
