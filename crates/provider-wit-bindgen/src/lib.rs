@@ -4,7 +4,7 @@
 //! For example, to build a capability provider for the [wasmcloud:keyvalue contract](https://github.com/wasmCloud/interfaces/tree/main/keyvalue):
 //!
 //! ```rust,ignore
-//! wit_bindgen_wasmcloud::provider::binary::generate!(
+//! wasmcloud_provider_wit_bindgen::generate!(
 //!   KeyvalueProvider,      // implementation struct
 //!   "wasmcloud:keyvalue",  // wasmcloud contract name
 //!   "keyvalue",            // wit-bindgen style configuration
@@ -17,6 +17,9 @@
 //!
 
 mod vendor;
+
+use vendor::wasmtime_component_macro::bindgen::{expand as expand_wasmtime_component, Config};
+
 use std::collections::HashMap;
 
 use heck::{ToSnakeCase, ToUpperCamelCase};
@@ -30,8 +33,6 @@ use syn::{
     FnArg, Item, ItemMod, ItemStruct, LitStr, PathSegment, ReturnType, Token, TraitItem,
     TraitItemMethod,
 };
-
-use vendor::wasmtime_component_macro::bindgen::{expand as expand_wasmtime_component, Config};
 
 /// Rust module name that is used by wit-bindgen to generate all the modules
 const EXPORTS_MODULE_NAME: &str = "exports";

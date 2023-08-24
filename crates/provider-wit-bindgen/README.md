@@ -1,4 +1,4 @@
-# `wit-bindgen-wasmcloud-provider`
+# `wasmcloud-provider-wit-bindgen`
 
 This crate contains a macro that helps build [Wasmcloud Capability Providers][wasmcloud-capability-providers] which are distributed as binaries and work with the [WIT][wit].
 
@@ -9,7 +9,7 @@ This crate leverages [`wit-bindgen`][wit-bindgen] in it's generation of interfac
 This crate can be be used similarly to `wit-bindgen`, with the following syntax:
 
 ```rust
-wit_bindgen_wasmcloud_provider::generate!(
+wasmcloud_provider_wit_bindgen::generate!(
     YourProvider,
     "wasmcloud:contract",
     "your-world"
@@ -29,7 +29,7 @@ For example, to build a provider for the [wasmCloud keyvalue WIT interface][wasm
 
 ```rust
 /// Generate bindings for a wasmCloud provider
-wit_bindgen_wasmcloud_provider::generate!(
+wasmcloud_provider_wit_bindgen::generate!(
     MyKeyvalueProvider,
     "wasmcloud:keyvalue",
     "keyvalue"
