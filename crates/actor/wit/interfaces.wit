@@ -4,12 +4,12 @@ package wasmcloud:actor
 world interfaces {
     import wasmcloud:bus/host
 
+    import wasi:blobstore/blobstore
     import wasi:keyvalue/atomic
     import wasi:keyvalue/readwrite
     import wasi:logging/logging
     import wasi:random/random
 
-    import wasmcloud:blobstore/consumer
     import wasmcloud:messaging/consumer
 }
 

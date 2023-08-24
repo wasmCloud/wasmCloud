@@ -1,2 +1,1 @@
-io = "./io" # Pin for Wasmtime 12 compatibility
-poll = "https://github.com/WebAssembly/wasi-poll/archive/main.tar.gz" # TODO: Remove together with pin above
+io = "https://github.com/wasmCloud/wasi-io/archive/main.tar.gz" # TODO: Switch to upstream once compatible with Wasmtime 12

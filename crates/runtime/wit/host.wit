@@ -4,11 +4,11 @@ world interfaces {
     import wasmcloud:bus/host
     import wasmcloud:bus/lattice
 
+    import wasi:blobstore/blobstore
     import wasi:http/http-types
     import wasi:keyvalue/atomic
     import wasi:keyvalue/readwrite
     import wasi:logging/logging
 
-    import wasmcloud:blobstore/consumer
     import wasmcloud:messaging/consumer
 }

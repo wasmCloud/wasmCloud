@@ -1,63 +1,29 @@
-// The blob store interface
-// This is currently a phase 1 interface, and is subject to change
+package wasi:blobstore
 
-package wasmcloud:blobstore
+// wasi-cloud Blobstore service definition
+interface blobstore {
+  use container.{container}
+  use types.{error, container-name, object-id}
 
-// Shared data types for use when interacting with a blob store
-interface types {
-    // Metadata about a container
-    record container-info {
-        container-id: string,
-        created-at: u64,
-    }
+  // creates a new empty container
+  create-container: func(name: container-name) -> result<container, error>
 
-    // Metadata about an object
-    record object-info {
-        container-id: string,
-        object-id: string,
-        content-length: u64,
-        last-modified: u64,
-        content-type: option<string>,
-        content-encoding: option<string>,
-    }
+  // retrieves a container by name
+  get-container: func(name: container-name) -> result<container, error>
 
-    // Metadata about a chunk
-    record chunk {    
-        object-id: string,
-        container-id: string,
-        bytes: list<u8>,
-        offset: u64,
-        is-last: bool,
-    }
-}
+  // deletes a container and all objects within it
+  delete-container: func(name: container-name) -> result<_, error>
 
-// Functions used by a component that wishes to use a blob store
-interface consumer {
-    use types.{container-info, object-info, chunk}
+  // returns true if the container exists
+  container-exists: func(name: container-name) -> result<bool, error>
 
-    // Determine if a container exists in the store
-    container-exists: func(container-id: string) -> bool
-    // Create a container in the store
-    create-container: func(container-id: string) -> result<_, string>
-    // Remove a container from the store
-    remove-container: func(container-id: string) -> result<_, string>
-    // Get metadata about a container
-    get-container-info: func(container-id: string) -> result<option<container-info>, string>        
-    // Get metadata about an object
-    get-object-info: func(container-id: string, object-id: string) -> result<option<object-info>, string>
-    // Removes an object from the store
-    remove-object: func(container-id: string, object-id: string) -> result<bool, string>
-    // Puts an object and its first (or only) chunk into the store
-    put-object: func(chunk: chunk, content-type: string, content-encoding: string) -> result<string, string>
-    // Puts subsequent chunks of a pre-existing object into the store
-    put-chunk: func(stream-id: string, chunk: chunk, cancel: bool) -> result<_, string>
-    // Stream object chunks from the store. Requests that receive-chunk be called multiple times by the provider
-    stream-object: func(container-id: string, object-id: string) -> result<_, string>
-}
+  // copies (duplicates) an object, to the same or a different container.
+  // returns an error if the target container does not exist.
+  // overwrites destination object if it already existed.
+  copy-object: func(src: object-id, dest: object-id) -> result<_, error>
 
-interface handler {
-    use types.{chunk}
-
-    // Callback to handle a single chunk of an object delivered by the provider
-    receive-chunk: func(chunk: chunk) -> result<bool, string>
+  // moves or renames an object, to the same or a different container
+  // returns an error if the destination container does not exist.
+  // overwrites destination object if it already existed.
+  move-object: func(src:object-id, dest: object-id) -> result<_, error>
 }
