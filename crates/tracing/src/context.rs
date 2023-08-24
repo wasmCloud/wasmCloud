@@ -11,7 +11,7 @@ use opentelemetry::{
 use tracing::span::Span;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
-use crate::core::{Invocation, TraceContext};
+use wasmcloud_core::{Invocation, TraceContext};
 
 /// A convenience type that wraps an invocation [`TraceContext`] and implements the [`Extractor`] trait
 #[derive(Debug)]

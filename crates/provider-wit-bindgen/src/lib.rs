@@ -171,12 +171,12 @@ out on the lattice. Please modify the corresponding WIT file that contains inter
                             let client = connection.get_rpc_client();
                             let response = client
                                 .send(
-                                    ::wasmcloud_provider_sdk::core::WasmCloudEntity {
+                                    ::wasmcloud_core::WasmCloudEntity {
                                         public_key: self.ld.provider_id.clone(),
                                         link_name: self.ld.link_name.clone(),
                                         contract_id: #contract_ident.to_string(),
                                     },
-                                    ::wasmcloud_provider_sdk::core::WasmCloudEntity {
+                                    ::wasmcloud_core::WasmCloudEntity {
                                         public_key: self.ld.actor_id.clone(),
                                         ..Default::default()
                                     },
@@ -381,7 +381,7 @@ out on the lattice. Please modify the corresponding WIT file that contains inter
         /// at least the following members are is supported.
         #[::async_trait::async_trait]
         trait WasmcloudCapabilityProvider {
-            async fn put_link(&self, ld: &::wasmcloud_provider_sdk::core::LinkDefinition) -> bool;
+            async fn put_link(&self, ld: &::wasmcloud_core::LinkDefinition) -> bool;
             async fn delete_link(&self, actor_id: &str);
             async fn shutdown(&self);
         }
@@ -392,7 +392,7 @@ out on the lattice. Please modify the corresponding WIT file that contains inter
         /// This implementation is a stub and must be filled out by implementers
         #[::async_trait::async_trait]
         impl ::wasmcloud_provider_sdk::ProviderHandler for #impl_struct_name {
-            async fn put_link(&self, ld: &::wasmcloud_provider_sdk::core::LinkDefinition) -> bool {
+            async fn put_link(&self, ld: &::wasmcloud_core::LinkDefinition) -> bool {
                 WasmcloudCapabilityProvider::put_link(self, ld).await
             }
 
@@ -414,11 +414,11 @@ out on the lattice. Please modify the corresponding WIT file that contains inter
         ///
         /// Interfaces exported by the provider can use this to send traffic across the lattice
         pub struct InvocationHandler<'a> {
-            ld: &'a ::wasmcloud_provider_sdk::core::LinkDefinition,
+            ld: &'a ::wasmcloud_core::LinkDefinition,
         }
 
         impl<'a> InvocationHandler<'a> {
-            pub fn new(ld: &'a ::wasmcloud_provider_sdk::core::LinkDefinition) -> Self {
+            pub fn new(ld: &'a ::wasmcloud_core::LinkDefinition) -> Self {
                 Self { ld }
             }
 

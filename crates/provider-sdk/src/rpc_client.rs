@@ -11,14 +11,15 @@ use tracing::{
 use uuid::Uuid;
 use wascap::{jwt, prelude::Claims};
 
-#[cfg(feature = "otel")]
-use crate::otel::OtelHeaderInjector;
 use crate::{
     chunkify::{needs_chunking, ChunkEndpoint},
-    core::{Invocation, InvocationResponse, WasmCloudEntity},
     error::{InvocationError, InvocationResult, NetworkError, ValidationError},
     rpc_topic,
 };
+
+use wasmcloud_core::{Invocation, InvocationResponse, WasmCloudEntity};
+#[cfg(feature = "otel")]
+use wasmcloud_tracing::context::OtelHeaderInjector;
 
 /// Amount of time to add to rpc timeout if chunkifying
 pub(crate) const CHUNK_RPC_EXTRA_TIME: Duration = Duration::from_secs(13);

@@ -1,0 +1,25 @@
+[package]
+name = "wasmcloud-core"
+version = "0.1.0"
+
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+otel = []
+
+[dependencies]
+anyhow = { workspace = true }
+nkeys = { workspace = true }
+hex = { workspace = true, features = ["std"] }
+serde = { workspace = true, features = ["derive"] }
+serde_bytes = { workspace = true, features = ["std"] }
+sha2 = { workspace = true }
+tracing = { workspace = true }
+ulid = { workspace = true, features = ["std"] }
+uuid = { workspace = true, features = ["serde"] }
+wascap = { workspace = true }

@@ -7,19 +7,21 @@ use anyhow::{self, Context};
 use clap::Parser;
 use nkeys::KeyPair;
 use tokio::{select, signal};
-use tracing::Level as LogLevel;
-use tracing_subscriber::prelude::*;
+use tracing::Level as TracingLogLevel;
+use wasmcloud_core::logging::Level as WasmcloudLogLevel;
+use wasmcloud_core::OtelConfig;
 use wasmcloud_host::oci::Config as OciConfig;
 use wasmcloud_host::url::Url;
 use wasmcloud_host::WasmbusHostConfig;
+use wasmcloud_tracing::configure_tracing;
 
 #[derive(Debug, Parser)]
 #[allow(clippy::struct_excessive_bools)]
 #[command(version, about, long_about = None)]
 struct Args {
     /// Controls the verbosity of logs from the wasmCloud host
-    #[clap(long = "log-level", alias = "structured-log-level", default_value_t = LogLevel::INFO, env = "WASMCLOUD_LOG_LEVEL")]
-    pub log_level: LogLevel,
+    #[clap(long = "log-level", alias = "structured-log-level", default_value_t = TracingLogLevel::INFO, env = "WASMCLOUD_LOG_LEVEL")]
+    pub log_level: TracingLogLevel,
     /// NATS server host to connect to
     #[clap(long = "nats-host", default_value = "127.0.0.1", env = "NATS_HOST")]
     nats_host: String,
@@ -216,6 +218,21 @@ struct Args {
         requires = "oci_user"
     )]
     oci_password: Option<String>,
+
+    /// Specifies which exporter to use for traces. Only "otlp" is supported at this time
+    #[clap(
+        long = "otel-traces-exporter",
+        env = "OTEL_TRACES_EXPORTER",
+        default_value = "otlp"
+    )]
+    otel_traces_exporter: Option<String>,
+
+    /// Specifies the endpoint to use for the OTLP exporter
+    #[clap(
+        long = "otel-exporter-otlp-endpoint",
+        env = "OTEL_EXPORTER_OTLP_ENDPOINT"
+    )]
+    otel_exporter_otlp_endpoint: Option<String>,
 }
 
 #[tokio::main]
@@ -223,21 +240,16 @@ struct Args {
 async fn main() -> anyhow::Result<()> {
     let args: Args = Args::parse();
 
-    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-        tracing_subscriber::EnvFilter::new(format!("{},cranelift_codegen=warn", args.log_level))
-    });
-
-    if args.enable_structured_logging {
-        tracing_subscriber::registry()
-            .with(tracing_subscriber::fmt::layer().json().without_time())
-            .with(env_filter)
-            .init();
-    } else {
-        tracing_subscriber::registry()
-            .with(tracing_subscriber::fmt::layer().pretty().without_time())
-            .with(env_filter)
-            .init();
-    }
+    let otel_config = OtelConfig {
+        traces_exporter: args.otel_traces_exporter,
+        exporter_otlp_endpoint: args.otel_exporter_otlp_endpoint,
+    };
+    configure_tracing(
+        "wasmCloud Host".to_string(),
+        &otel_config,
+        args.enable_structured_logging,
+        &Some(WasmcloudLogLevel::from(args.log_level)),
+    );
 
     let ctl_nats_url = Url::parse(&format!(
         "nats://{}:{}",
@@ -335,6 +347,7 @@ async fn main() -> anyhow::Result<()> {
         allow_file_load: args.allow_file_load,
         log_level: args.log_level.to_string().to_ascii_lowercase(),
         enable_structured_logging: args.enable_structured_logging,
+        otel_config,
     }))
     .await
     .context("failed to initialize host")?;

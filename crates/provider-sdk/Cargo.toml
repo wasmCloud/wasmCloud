@@ -9,8 +9,8 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-default = [ ]
-otel = ["opentelemetry", "tracing-opentelemetry", "opentelemetry-otlp"]
+default = []
+otel = ["opentelemetry", "tracing-opentelemetry"]
 
 [dependencies]
 async-nats = { workspace = true }
@@ -22,7 +22,6 @@ lazy_static = { workspace = true }
 nkeys = { workspace = true }
 once_cell = { workspace = true }
 opentelemetry = { workspace = true, features = ["rt-tokio"], optional = true }
-opentelemetry-otlp = { workspace = true, features = ["http-proto", "reqwest-client"], optional = true }
 rmp-serde = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_bytes = { workspace = true, features = ["default"] }
@@ -33,11 +32,7 @@ tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true, features = ["log"] }
 tracing-futures = { workspace = true, features = ["default"] }
 tracing-opentelemetry = { workspace = true, optional = true }
-tracing-subscriber = { workspace = true, features = [
-    "ansi",
-    "env-filter",
-    "fmt",
-    "json",
-]}
 uuid = { workspace = true, features = ["v4"] }
 wascap = { workspace = true }
+wasmcloud-core = { workspace = true, features = ["otel"] }
+wasmcloud-tracing = { workspace = true, features = ["otel"] }

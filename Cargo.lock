@@ -4355,6 +4355,8 @@ dependencies = [
  "clap",
  "futures",
  "nkeys",
+ "opentelemetry 0.20.0",
+ "opentelemetry-otlp",
  "redis",
  "reqwest",
  "rmp-serde",
@@ -4371,7 +4373,9 @@ dependencies = [
  "uuid",
  "wascap",
  "wasmcloud-control-interface",
+ "wasmcloud-core",
  "wasmcloud-host",
+ "wasmcloud-tracing",
 ]
 
 [[package]]
@@ -4454,6 +4458,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasmcloud-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "hex",
+ "nkeys",
+ "serde",
+ "serde_bytes",
+ "sha2 0.10.7",
+ "tracing",
+ "ulid",
+ "uuid",
+ "wascap",
+]
+
+[[package]]
 name = "wasmcloud-host"
 version = "0.1.0"
 dependencies = [
@@ -4490,7 +4510,9 @@ dependencies = [
  "wascap",
  "wasmcloud-compat",
  "wasmcloud-control-interface",
+ "wasmcloud-core",
  "wasmcloud-runtime",
+ "wasmcloud-tracing",
 ]
 
 [[package]]
@@ -4506,7 +4528,6 @@ dependencies = [
  "nkeys",
  "once_cell",
  "opentelemetry 0.20.0",
- "opentelemetry-otlp",
  "rmp-serde",
  "serde",
  "serde_bytes",
@@ -4517,9 +4538,10 @@ dependencies = [
  "tracing",
  "tracing-futures",
  "tracing-opentelemetry 0.20.0",
- "tracing-subscriber",
  "uuid",
  "wascap",
+ "wasmcloud-core",
+ "wasmcloud-tracing",
 ]
 
 [[package]]
@@ -4532,6 +4554,7 @@ dependencies = [
  "quote",
  "serde",
  "syn 1.0.109",
+ "wasmcloud-core",
  "wasmtime-wit-bindgen 11.0.1",
  "wit-parser 0.8.0",
 ]
@@ -4564,6 +4587,21 @@ dependencies = [
  "wasmparser 0.111.0",
  "wasmtime",
  "wasmtime-wasi",
+]
+
+[[package]]
+name = "wasmcloud-tracing"
+version = "0.1.0"
+dependencies = [
+ "lazy_static",
+ "opentelemetry 0.20.0",
+ "opentelemetry-otlp",
+ "serde",
+ "tracing",
+ "tracing-futures",
+ "tracing-opentelemetry 0.20.0",
+ "tracing-subscriber",
+ "wasmcloud-core",
 ]
 
 [[package]]

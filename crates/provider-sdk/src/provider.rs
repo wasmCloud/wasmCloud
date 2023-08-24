@@ -13,8 +13,11 @@ use wascap::{
     prelude::{Claims, KeyPair},
 };
 
+use wasmcloud_core::{
+    HealthCheckRequest, HostData, Invocation, InvocationResponse, LinkDefinition,
+};
+
 use crate::{
-    core::{HealthCheckRequest, HostData, Invocation, InvocationResponse, LinkDefinition},
     deserialize,
     error::{
         InvocationError, ProviderError, ProviderInvocationError, ProviderResult, ValidationError,
@@ -233,7 +236,7 @@ impl ProviderConnection {
                             match deserialize::<Invocation>(&msg.payload) {
                                 Ok(inv) => {
                                     #[cfg(feature = "otel")]
-                                    crate::otel::attach_span_context(&inv);
+                                    wasmcloud_tracing::context::attach_span_context(&inv);
                                     let current = tracing::Span::current();
                                     current.record("operation", &tracing::field::display(&inv.operation));
                                     current.record("lattice_id", &tracing::field::display(&lattice));
