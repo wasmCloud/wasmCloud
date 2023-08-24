@@ -1672,15 +1672,16 @@
         "wasi-preview1-reactor-component-adapter": "wasi-preview1-reactor-component-adapter_2"
       },
       "locked": {
-        "lastModified": 1692733487,
-        "narHash": "sha256-2kge69EIxgUVdOI2bJ8i5uyhu1+sL8p2dK//ByxDquQ=",
+        "lastModified": 1692807623,
+        "narHash": "sha256-/7QsQM+bBrlZs8XvAv7QEoyEDRj8Vf7cWRuCexY06uw=",
         "owner": "wasmCloud",
         "repo": "wasmcloud-component-adapters",
-        "rev": "c7c1af1d765c4ecec8c2dffe46eca6c6409e1529",
+        "rev": "871e4d6d76830d7f8ecbdfc27f48b17a4353af17",
         "type": "github"
       },
       "original": {
         "owner": "wasmCloud",
+        "ref": "v0.2.0",
         "repo": "wasmcloud-component-adapters",
         "type": "github"
       }
