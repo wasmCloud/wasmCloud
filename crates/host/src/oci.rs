@@ -38,7 +38,6 @@ pub struct Config {
 }
 
 /// Fetch an OCI path
-#[allow(clippy::implicit_hasher)]
 #[allow(clippy::missing_errors_doc)] // TODO: document errors
 pub async fn fetch_oci_path(
     img: &str,
@@ -145,7 +144,6 @@ async fn cache_oci_image(
 /// # Errors
 ///
 /// Returns an error if either fetching fails or reading the fetched OCI path fails
-#[allow(clippy::implicit_hasher)]
 pub async fn fetch_actor(
     oci_ref: impl AsRef<str>,
     registry_settings: &RegistrySettings,
@@ -167,7 +165,6 @@ pub async fn fetch_actor(
 /// # Errors
 ///
 /// Returns an error if either fetching fails or reading the fetched OCI path fails
-#[allow(clippy::implicit_hasher)]
 pub async fn fetch_provider(
     oci_ref: impl AsRef<str>,
     link_name: impl AsRef<str>,
