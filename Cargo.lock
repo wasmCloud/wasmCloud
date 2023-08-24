@@ -4524,6 +4524,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasmcloud-provider-wit-bindgen"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "heck",
+ "proc-macro2",
+ "quote",
+ "serde",
+ "syn 1.0.109",
+ "wasmtime-wit-bindgen 11.0.1",
+ "wit-parser 0.8.0",
+]
+
+[[package]]
 name = "wasmcloud-runtime"
 version = "0.1.0"
 dependencies = [
@@ -5271,20 +5285,6 @@ dependencies = [
  "wit-bindgen-rust",
  "wit-bindgen-rust-lib",
  "wit-component",
-]
-
-[[package]]
-name = "wit-bindgen-wasmcloud-provider"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "heck",
- "proc-macro2",
- "quote",
- "serde",
- "syn 1.0.109",
- "wasmtime-wit-bindgen 11.0.1",
- "wit-parser 0.8.0",
 ]
 
 [[package]]

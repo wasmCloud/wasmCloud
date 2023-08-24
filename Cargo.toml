@@ -62,7 +62,11 @@ wascap = { workspace = true }
 wasmcloud-control-interface = { workspace = true }
 
 [workspace]
-members = ["crates/provider-sdk", "crates/wit-bindgen-wasmcloud-provider", "examples/rust/*"]
+members = [
+    "crates/provider-sdk",
+    "crates/provider-wit-bindgen",
+    "examples/rust/*",
+]
 
 [workspace.dependencies]
 anyhow = { version = "1", default-features = false }
@@ -124,12 +128,12 @@ wasmcloud-compat = { path = "./crates/compat" }
 wasmcloud-component-adapters = { version = "0.2.0" }
 wasmcloud-control-interface = { version = "0.28", default-features = false }
 wasmcloud-host = { path = "./crates/host" }
+wasmcloud-provider-wit-bindgen = { path = "./crates/provider-wit-bindgen" }
 wasmcloud-runtime = { path = "./crates/runtime" }
 wasmparser = { version = "0.111", default-features = false }
 wasmtime = { version = "12", default-features = false }
 wasmtime-wasi = { version = "12", default-features = false }
 wasmtime-wit-bindgen = { version = "11", default-features = false }
 wit-bindgen = { version = "0.10", default-features = false }
-wit-bindgen-wasmcloud-provider = { path = "./crates/wit-bindgen-wasmcloud-provider" }
 wit-component = { version = "0.13", default-features = false }
 wit-parser = { version = "0.8", default-features = false }
