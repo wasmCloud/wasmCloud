@@ -2163,6 +2163,23 @@ impl Host {
             );
             let mut child = process::Command::new(&path)
                 .env_clear()
+                // TODO: remove these once all providers are updated to use the new SDK
+                .env(
+                    "OTEL_TRACES_EXPORTER",
+                    self.host_config
+                        .otel_config
+                        .traces_exporter
+                        .clone()
+                        .unwrap_or_default(),
+                )
+                .env(
+                    "OTEL_EXPORTER_OTLP_ENDPOINT",
+                    self.host_config
+                        .otel_config
+                        .exporter_otlp_endpoint
+                        .clone()
+                        .unwrap_or_default(),
+                )
                 .stdin(Stdio::piped())
                 .kill_on_drop(true)
                 .spawn()
