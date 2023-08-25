@@ -12,9 +12,8 @@ use opentelemetry::trace::TraceError;
 #[cfg(feature = "otel")]
 use opentelemetry_otlp::{Protocol, WithExportConfig};
 use tracing::{Event, Subscriber};
-use tracing_subscriber::fmt::format::{DefaultFields, JsonFields};
 use tracing_subscriber::fmt::{
-    format::{Format, Full, Json, Writer},
+    format::{DefaultFields, Format, Full, Json, JsonFields, Writer},
     time::SystemTime,
     FmtContext, FormatEvent, FormatFields,
 };
