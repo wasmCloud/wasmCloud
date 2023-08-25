@@ -100,7 +100,7 @@ pub fn configure_tracing(
     _: String,
     _: &OtelConfig,
     structured_logging_enabled: bool,
-    log_level_override: &Option<Level>,
+    log_level_override: Option<&Level>,
 ) {
     let base_reg = tracing_subscriber::Registry::default();
     let level_filter = get_level_filter(log_level_override);
@@ -125,7 +125,7 @@ pub fn configure_tracing(
     service_name: String,
     otel_config: &OtelConfig,
     structured_logging_enabled: bool,
-    log_level_override: &Option<Level>,
+    log_level_override: Option<&Level>,
 ) {
     let base_reg = tracing_subscriber::Registry::default();
     let level_filter = get_level_filter(log_level_override);
@@ -252,7 +252,7 @@ fn get_json_log_layer() -> impl Layer<Layered<EnvFilter, Registry>> {
         .fmt_fields(JsonFields::new())
 }
 
-fn get_level_filter(log_level_override: &Option<Level>) -> EnvFilter {
+fn get_level_filter(log_level_override: Option<&Level>) -> EnvFilter {
     if let Some(log_level) = log_level_override {
         let level = wasi_level_to_tracing_level(log_level);
         // NOTE(thomastaylor312): Technically we should just use the plain level filter, but we are

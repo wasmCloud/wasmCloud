@@ -5,7 +5,7 @@ use nkeys::KeyPair;
 use url::Url;
 
 use crate::oci::Config as OciConfig;
-use wasmcloud_core::OtelConfig;
+use wasmcloud_core::{logging::Level as LogLevel, OtelConfig};
 
 /// wasmCloud Host configuration
 #[allow(clippy::struct_excessive_bools)]
@@ -58,7 +58,7 @@ pub struct Host {
     /// Whether or not structured logging is enabled
     pub enable_structured_logging: bool,
     /// Log level to pass to capability providers to use. Should be parsed from a [`tracing::Level`]
-    pub log_level: String,
+    pub log_level: LogLevel,
     /// Whether to enable loading supplemental configuration
     pub config_service_enabled: bool,
     /// configuration for OpenTelemetry tracing
@@ -94,7 +94,7 @@ impl Default for Host {
             oci_opts: OciConfig::default(),
             allow_file_load: false,
             enable_structured_logging: false,
-            log_level: "info".to_string(),
+            log_level: LogLevel::Info,
             config_service_enabled: false,
             otel_config: OtelConfig::default(),
         }

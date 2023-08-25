@@ -53,7 +53,9 @@ use wasmcloud_control_interface::{
     StartProviderCommand, StopActorCommand, StopHostCommand, StopProviderCommand,
     UpdateActorCommand,
 };
-use wasmcloud_core::{HealthCheckResponse, Invocation, InvocationResponse, WasmCloudEntity};
+use wasmcloud_core::{
+    HealthCheckResponse, HostData, Invocation, InvocationResponse, OtelConfig, WasmCloudEntity,
+};
 use wasmcloud_runtime::capability::{
     messaging, ActorIdentifier, Bus, IncomingHttp, KeyValueAtomic, KeyValueReadWrite, Messaging,
     TargetEntity, TargetInterface,
@@ -2095,9 +2097,18 @@ impl Host {
                 .seed()
                 .context("cluster key seed missing")?;
             let links = self.links.read().await;
+            // TODO: update type of links to use wasmcloud_core::LinkDefinition
             let link_definitions: Vec<_> = links
-                .values()
+                .clone()
+                .into_values()
                 .filter(|ld| ld.provider_id == claims.subject && ld.link_name == link_name)
+                .map(|ld| wasmcloud_core::LinkDefinition {
+                    actor_id: ld.actor_id,
+                    provider_id: ld.provider_id,
+                    link_name: ld.link_name,
+                    contract_id: ld.contract_id,
+                    values: ld.values.into_iter().collect(),
+                })
                 .collect();
             let lattice_rpc_user_seed = self
                 .host_config
@@ -2106,35 +2117,48 @@ impl Host {
                 .map(|key| key.seed())
                 .transpose()
                 .context("private key missing for provider RPC key")?;
-            let data = serde_json::to_vec(&json!({
-                "host_id": self.host_key.public_key(),
-                "lattice_rpc_prefix": self.host_config.lattice_prefix,
-                "link_name": link_name,
-                "lattice_rpc_user_jwt": self.host_config.prov_rpc_jwt.clone().unwrap_or_default(),
-                "lattice_rpc_user_seed": lattice_rpc_user_seed.unwrap_or_default(),
-                "lattice_rpc_url": self.host_config.prov_rpc_nats_url.to_string(),
-                "lattice_rpc_tls": self.host_config.prov_rpc_tls,
-                "env_values": {},
-                "instance_id": Uuid::from_u128(id.into()),
-                "provider_key": claims.subject,
-                "link_definitions": link_definitions,
-                "config_json": configuration,
-                "default_rpc_timeout_ms": self.host_config.rpc_timeout.as_millis(),
-                "cluster_issuers": self.host_config.cluster_issuers.clone().unwrap_or_else(|| vec![self.cluster_key.public_key()]),
-                "invocation_seed": invocation_seed,
-                "js_domain": self.host_config.js_domain,
-                "log_level": self.host_config.log_level.to_string(),
-                "structured_logging": self.host_config.enable_structured_logging,
-                "otel_config": {
-                    "traces_exporter": self.host_config.otel_config.traces_exporter,
-                    "exporter_otlp_endpoint": self.host_config.otel_config.exporter_otlp_endpoint,
-                }
-            }))
-            .context("failed to serialize provider data")?;
+            let host_data = HostData {
+                host_id: self.host_key.public_key(),
+                lattice_rpc_prefix: self.host_config.lattice_prefix.clone(),
+                link_name: link_name.to_string(),
+                lattice_rpc_user_jwt: self.host_config.prov_rpc_jwt.clone().unwrap_or_default(),
+                lattice_rpc_user_seed: lattice_rpc_user_seed.unwrap_or_default(),
+                lattice_rpc_url: self.host_config.prov_rpc_nats_url.to_string(),
+                env_values: vec![],
+                instance_id: Uuid::from_u128(id.into()).to_string(),
+                provider_key: claims.subject.clone(),
+                link_definitions,
+                config_json: configuration,
+                default_rpc_timeout_ms: Some(
+                    self.host_config
+                        .rpc_timeout
+                        .as_millis()
+                        .try_into()
+                        .context("failed to convert rpc_timeout to u64")?,
+                ),
+                cluster_issuers: self
+                    .host_config
+                    .cluster_issuers
+                    .clone()
+                    .unwrap_or_else(|| vec![self.cluster_key.public_key()]),
+                invocation_seed,
+                log_level: Some(self.host_config.log_level.clone()),
+                structured_logging: self.host_config.enable_structured_logging,
+                otel_config: OtelConfig {
+                    traces_exporter: self.host_config.otel_config.traces_exporter.clone(),
+                    exporter_otlp_endpoint: self
+                        .host_config
+                        .otel_config
+                        .exporter_otlp_endpoint
+                        .clone(),
+                },
+            };
+            let host_data =
+                serde_json::to_vec(&host_data).context("failed to serialize provider data")?;
 
             debug!(
                 ?path,
-                data = &*String::from_utf8_lossy(&data),
+                host_data = &*String::from_utf8_lossy(&host_data),
                 "spawn provider process"
             );
             let mut child = process::Command::new(&path)
@@ -2145,7 +2169,7 @@ impl Host {
                 .context("failed to spawn provider process")?;
             let mut stdin = child.stdin.take().context("failed to take stdin")?;
             stdin
-                .write_all(STANDARD.encode(&data).as_bytes())
+                .write_all(STANDARD.encode(&host_data).as_bytes())
                 .await
                 .context("failed to write provider data")?;
             stdin
