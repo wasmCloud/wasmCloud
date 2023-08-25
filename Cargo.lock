@@ -4524,7 +4524,6 @@ dependencies = [
  "base64 0.21.2",
  "data-encoding",
  "futures",
- "lazy_static",
  "nkeys",
  "once_cell",
  "opentelemetry 0.20.0",
@@ -4593,7 +4592,8 @@ dependencies = [
 name = "wasmcloud-tracing"
 version = "0.1.0"
 dependencies = [
- "lazy_static",
+ "anyhow",
+ "once_cell",
  "opentelemetry 0.20.0",
  "opentelemetry-otlp",
  "serde",

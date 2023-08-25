@@ -245,12 +245,14 @@ async fn main() -> anyhow::Result<()> {
         exporter_otlp_endpoint: args.otel_exporter_otlp_endpoint,
     };
     let log_level = WasmcloudLogLevel::from(args.log_level);
-    configure_tracing(
+    if let Err(e) = configure_tracing(
         "wasmCloud Host".to_string(),
         &otel_config,
         args.enable_structured_logging,
         Some(&log_level),
-    );
+    ) {
+        eprintln!("Failed to configure tracing: {e}");
+    };
 
     let ctl_nats_url = Url::parse(&format!(
         "nats://{}:{}",

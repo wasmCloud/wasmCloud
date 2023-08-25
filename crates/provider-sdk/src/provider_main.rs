@@ -56,12 +56,14 @@ where
     let host_data = tokio::task::spawn_blocking(load_host_data)
         .await
         .map_err(|e| ProviderError::Initialization(format!("Unable to load host data: {e}")))??;
-    wasmcloud_tracing::configure_tracing(
+    if let Err(e) = wasmcloud_tracing::configure_tracing(
         friendly_name.unwrap_or(host_data.provider_key.clone()),
         &host_data.otel_config,
         host_data.structured_logging,
         host_data.log_level.as_ref(),
-    );
+    ) {
+        eprintln!("Failed to configure tracing: {e}");
+    }
 
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::broadcast::channel::<bool>(1);
 
