@@ -1696,7 +1696,7 @@ impl Host {
         .context("failed to instantiate actor")?;
         self.publish_event(
             "actors_started",
-            event::actors_started(&claims, annotations, host_id, count, actor_ref),
+            event::actors_started(claims, annotations, host_id, count, actor_ref),
         )
         .await?;
         Ok(instances)
@@ -1804,7 +1804,7 @@ impl Host {
         let pool = ActorInstancePool::new(actor.clone(), Some(count));
         let instances = self
             .instantiate_actor(
-                &claims,
+                claims,
                 &annotations,
                 host_id,
                 &actor_ref,
@@ -2003,7 +2003,7 @@ impl Host {
                 if let Some(delta) = count.checked_sub(current).and_then(NonZeroUsize::new) {
                     let mut delta = self
                         .instantiate_actor(
-                            &claims,
+                            claims,
                             &annotations,
                             host_id,
                             &actor.image_ref,
@@ -2098,7 +2098,7 @@ impl Host {
                 let claims = actor.pool.claims().context("claims missing")?;
                 let mut delta = self
                     .instantiate_actor(
-                        &claims,
+                        claims,
                         &annotations,
                         host_id,
                         &actor.image_ref,
@@ -2258,7 +2258,7 @@ impl Host {
         let new_pool = ActorInstancePool::new(new_actor.clone(), Some(count));
         let mut new_instances = self
             .instantiate_actor(
-                &new_claims,
+                new_claims,
                 &annotations,
                 host_id,
                 new_actor_ref,
@@ -3266,6 +3266,7 @@ mod test {
     const OUTSIDE_CLUSTER_PUBKEY: &str = "CAT4QMKWIUTIX5ZBNOT2ICJHCSVVHGHLOHSXDSS5P2MIWRXHYHANTJZQ";
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn validate_antiforgery_catches_invalid_invocations() {
         let clusterkey = KeyPair::from_seed(CLUSTER_SEED).expect("failed to create cluster key");
         assert_eq!(clusterkey.public_key(), CLUSTER_PUBKEY);
