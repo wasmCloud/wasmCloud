@@ -516,7 +516,7 @@ async fn mock_blobstore_actor(num_requests: u32) -> tokio::task::JoinHandle<RpcR
                     break;
                 }
 
-                let rec_chunk: Chunk = wasmbus_rpc::common::decode(&inv.msg, &decode_chunk)
+                let rec_chunk: Chunk = wasmbus_rpc::common::deserialize(&inv.msg)
                     .map_err(|e| RpcError::Deser(format!("'Chunk': {}", e)))?;
 
                 // do something with chunk
