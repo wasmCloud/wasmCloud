@@ -1885,6 +1885,7 @@ impl Host {
                 let current = instances.values().map(Vec::len).sum();
                 let claims = actor.pool.claims().context("claims missing")?;
                 if let Some(delta) = count.checked_sub(current).and_then(NonZeroUsize::new) {
+                    actor.pool.set_limit(NonZeroUsize::new(count)).await;
                     let mut delta = self
                         .instantiate_actor(
                             claims,
@@ -1926,6 +1927,8 @@ impl Host {
                     if remaining == 0 {
                         drop(instances);
                         entry.remove();
+                    } else {
+                        actor.pool.set_limit(NonZeroUsize::new(count)).await;
                     }
                 }
             }
