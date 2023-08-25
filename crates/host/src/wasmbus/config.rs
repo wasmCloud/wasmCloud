@@ -1,10 +1,10 @@
+use crate::oci::Config as OciConfig;
+
 use std::sync::Arc;
 use std::time::Duration;
 
 use nkeys::KeyPair;
 use url::Url;
-
-use crate::oci::Config as OciConfig;
 use wasmcloud_core::{logging::Level as LogLevel, OtelConfig};
 
 /// wasmCloud Host configuration
