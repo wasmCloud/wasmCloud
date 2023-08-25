@@ -60,7 +60,7 @@ where
         friendly_name.unwrap_or(host_data.provider_key.clone()),
         &host_data.otel_config,
         host_data.structured_logging,
-        &host_data.log_level,
+        host_data.log_level.as_ref(),
     );
 
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::broadcast::channel::<bool>(1);

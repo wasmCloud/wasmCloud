@@ -244,11 +244,12 @@ async fn main() -> anyhow::Result<()> {
         traces_exporter: args.otel_traces_exporter,
         exporter_otlp_endpoint: args.otel_exporter_otlp_endpoint,
     };
+    let log_level = WasmcloudLogLevel::from(args.log_level);
     configure_tracing(
         "wasmCloud Host".to_string(),
         &otel_config,
         args.enable_structured_logging,
-        &Some(WasmcloudLogLevel::from(args.log_level)),
+        Some(&log_level),
     );
 
     let ctl_nats_url = Url::parse(&format!(
@@ -345,7 +346,7 @@ async fn main() -> anyhow::Result<()> {
         prov_rpc_key: prov_rpc_key.or_else(|| nats_key.clone()),
         prov_rpc_tls: args.prov_rpc_tls,
         allow_file_load: args.allow_file_load,
-        log_level: args.log_level.to_string().to_ascii_lowercase(),
+        log_level,
         enable_structured_logging: args.enable_structured_logging,
         otel_config,
     }))
