@@ -2,6 +2,8 @@ pub mod context;
 
 use std::io::{IsTerminal, StderrLock, Write};
 
+use anyhow::Context;
+use once_cell::sync::OnceCell;
 #[cfg(feature = "otel")]
 use opentelemetry::sdk::{
     trace::{self, RandomIdGenerator, Sampler, Tracer},
@@ -33,7 +35,7 @@ struct LockedWriter<'a> {
 impl<'a> LockedWriter<'a> {
     fn new() -> Self {
         LockedWriter {
-            stderr: STDERR.lock(),
+            stderr: STDERR.get_or_init(std::io::stderr).lock(),
         }
     }
 }
@@ -56,9 +58,7 @@ impl<'a> Drop for LockedWriter<'a> {
     }
 }
 
-lazy_static::lazy_static! {
-    static ref STDERR: std::io::Stderr = std::io::stderr();
-}
+static STDERR: OnceCell<std::io::Stderr> = OnceCell::new();
 
 #[cfg(feature = "otel")]
 const TRACING_PATH: &str = "/v1/traces";
@@ -100,23 +100,25 @@ pub fn configure_tracing(
     _: &OtelConfig,
     structured_logging_enabled: bool,
     log_level_override: Option<&Level>,
-) {
+) -> anyhow::Result<()> {
+    STDERR
+        .set(std::io::stderr())
+        .map_err(|_| anyhow::anyhow!("stderr already initialized"))?;
+
     let base_reg = tracing_subscriber::Registry::default();
     let level_filter = get_level_filter(log_level_override);
 
     let res = if structured_logging_enabled {
-        let log_layer = get_json_log_layer();
+        let log_layer = get_json_log_layer()?;
         let layered = base_reg.with(level_filter).with(log_layer);
         tracing::subscriber::set_global_default(layered)
     } else {
-        let log_layer = get_default_log_layer();
+        let log_layer = get_default_log_layer()?;
         let layered = base_reg.with(level_filter).with(log_layer);
         tracing::subscriber::set_global_default(layered)
     };
 
-    if let Err(err) = res {
-        eprintln!("Logger/tracer was already created, continuing: {}", err);
-    }
+    res.map_err(|e| anyhow::anyhow!(e).context("Logger was already created"))
 }
 
 #[cfg(feature = "otel")]
@@ -125,7 +127,11 @@ pub fn configure_tracing(
     otel_config: &OtelConfig,
     structured_logging_enabled: bool,
     log_level_override: Option<&Level>,
-) {
+) -> anyhow::Result<()> {
+    STDERR
+        .set(std::io::stderr())
+        .map_err(|_| anyhow::anyhow!("stderr already initialized"))?;
+
     let base_reg = tracing_subscriber::Registry::default();
     let level_filter = get_level_filter(log_level_override);
 
@@ -160,7 +166,7 @@ pub fn configure_tracing(
 
     let res = match (maybe_tracer, structured_logging_enabled) {
         (Some(Ok(t)), true) => {
-            let log_layer = get_json_log_layer();
+            let log_layer = get_json_log_layer()?;
             let tracing_layer = tracing_opentelemetry::layer().with_tracer(t);
             let layered = base_reg
                 .with(level_filter)
@@ -169,7 +175,7 @@ pub fn configure_tracing(
             tracing::subscriber::set_global_default(layered)
         }
         (Some(Ok(t)), false) => {
-            let log_layer = get_default_log_layer();
+            let log_layer = get_default_log_layer()?;
             let tracing_layer = tracing_opentelemetry::layer().with_tracer(t);
             let layered = base_reg
                 .with(level_filter)
@@ -179,31 +185,29 @@ pub fn configure_tracing(
         }
         (Some(Err(err)), true) => {
             eprintln!("Unable to configure OTEL tracing, defaulting to logging only: {err:?}");
-            let log_layer = get_json_log_layer();
+            let log_layer = get_json_log_layer()?;
             let layered = base_reg.with(level_filter).with(log_layer);
             tracing::subscriber::set_global_default(layered)
         }
         (Some(Err(err)), false) => {
             eprintln!("Unable to configure OTEL tracing, defaulting to logging only: {err:?}");
-            let log_layer = get_default_log_layer();
+            let log_layer = get_default_log_layer()?;
             let layered = base_reg.with(level_filter).with(log_layer);
             tracing::subscriber::set_global_default(layered)
         }
         (None, true) => {
-            let log_layer = get_json_log_layer();
+            let log_layer = get_json_log_layer()?;
             let layered = base_reg.with(level_filter).with(log_layer);
             tracing::subscriber::set_global_default(layered)
         }
         (None, false) => {
-            let log_layer = get_default_log_layer();
+            let log_layer = get_default_log_layer()?;
             let layered = base_reg.with(level_filter).with(log_layer);
             tracing::subscriber::set_global_default(layered)
         }
     };
 
-    if let Err(err) = res {
-        eprintln!("Logger/tracer was already created, continuing: {}", err);
-    }
+    res.map_err(|e| anyhow::anyhow!(e).context("Logger/tracer was already created"))
 }
 
 #[cfg(feature = "otel")]
@@ -235,20 +239,22 @@ fn get_tracer(mut tracing_endpoint: String, service_name: String) -> Result<Trac
         .install_batch(opentelemetry::runtime::Tokio)
 }
 
-fn get_default_log_layer() -> impl Layer<Layered<EnvFilter, Registry>> {
-    tracing_subscriber::fmt::layer()
+fn get_default_log_layer() -> anyhow::Result<impl Layer<Layered<EnvFilter, Registry>>> {
+    let stderr = STDERR.get().context("stderr not initialized")?;
+    Ok(tracing_subscriber::fmt::layer()
         .with_writer(LockedWriter::new)
-        .with_ansi(STDERR.is_terminal())
+        .with_ansi(stderr.is_terminal())
         .event_format(JsonOrNot::Not(Format::default()))
-        .fmt_fields(DefaultFields::new())
+        .fmt_fields(DefaultFields::new()))
 }
 
-fn get_json_log_layer() -> impl Layer<Layered<EnvFilter, Registry>> {
-    tracing_subscriber::fmt::layer()
+fn get_json_log_layer() -> anyhow::Result<impl Layer<Layered<EnvFilter, Registry>>> {
+    let stderr = STDERR.get().context("stderr not initialized")?;
+    Ok(tracing_subscriber::fmt::layer()
         .with_writer(LockedWriter::new)
-        .with_ansi(STDERR.is_terminal())
+        .with_ansi(stderr.is_terminal())
         .event_format(JsonOrNot::Json(Format::default().json()))
-        .fmt_fields(JsonFields::new())
+        .fmt_fields(JsonFields::new()))
 }
 
 fn get_level_filter(log_level_override: Option<&Level>) -> EnvFilter {

@@ -13,7 +13,8 @@ default = []
 otel = ["opentelemetry", "tracing-opentelemetry", "opentelemetry-otlp"]
 
 [dependencies]
-lazy_static = { workspace = true }
+anyhow = { workspace = true }
+once_cell = { workspace = true }
 opentelemetry = { workspace = true, features = ["rt-tokio"], optional = true }
 opentelemetry-otlp = { workspace = true, features = [
     "http-proto",

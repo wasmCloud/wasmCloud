@@ -91,7 +91,6 @@ heck = { version = "0.4.1", default-features = false }
 hex = { version = "0.4", default-features = false }
 http = { version = "0.2", default-features = false }
 humantime = { version = "2.1", default-features = false }
-lazy_static = { version = "1.4", default-features = false }
 log = { version = "0.4", default-features = false }
 names = { version = "0.14", default-features = false }
 nkeys = { version = "0.3", default-features = false }
