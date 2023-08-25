@@ -15,12 +15,7 @@ pub mod rpc_client;
 pub use provider::ProviderConnection;
 pub use provider_main::{load_host_data, run_provider, start_provider};
 pub use rpc_client::RpcClient;
-
-pub mod core {
-    pub use wasmcloud_core::{
-        HealthCheckRequest, HealthCheckResponse, HostData, LinkDefinition, WasmCloudEntity,
-    };
-}
+pub use wasmcloud_core as core;
 
 use crate::{
     core::{HealthCheckRequest, HealthCheckResponse, LinkDefinition, WasmCloudEntity},
