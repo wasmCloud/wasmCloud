@@ -847,6 +847,7 @@ pub struct Host {
     // TODO: Clean up actors after stop
     actors: RwLock<HashMap<String, Arc<Actor>>>,
     cluster_key: Arc<KeyPair>,
+    cluster_issuers: Vec<String>,
     event_builder: EventBuilderV10,
     friendly_name: String,
     heartbeat: AbortHandle,
@@ -1094,10 +1095,10 @@ impl Host {
         } else {
             Arc::new(KeyPair::new(KeyPairType::Cluster))
         };
-        if let Some(issuers) = config.cluster_issuers.as_ref() {
-            if !issuers.contains(&cluster_key.public_key()) {
-                bail!("cluster issuers list must contain the cluster key");
-            }
+        let mut cluster_issuers = config.cluster_issuers.clone().unwrap_or_default();
+        if !cluster_issuers.contains(&cluster_key.public_key()) {
+            debug!("adding cluster key to cluster issuers");
+            cluster_issuers.push(cluster_key.public_key());
         }
         let host_key = if let Some(host_key) = &config.host_key {
             ensure!(host_key.key_pair_type() == KeyPairType::Server);
@@ -1233,6 +1234,7 @@ impl Host {
         let host = Host {
             actors: RwLock::default(),
             cluster_key,
+            cluster_issuers,
             event_builder,
             friendly_name,
             heartbeat: heartbeat_abort.clone(),
@@ -1449,7 +1451,7 @@ impl Host {
                     runtime: self.runtime.clone(),
                     handler: handler.clone(),
                     claims: claims.clone(),
-                    valid_issuers: self.host_config.cluster_issuers.clone().unwrap_or_default(),
+                    valid_issuers: self.cluster_issuers.clone(),
                 });
 
                 let _calls = spawn({
@@ -2136,11 +2138,7 @@ impl Host {
                         .try_into()
                         .context("failed to convert rpc_timeout to u64")?,
                 ),
-                cluster_issuers: self
-                    .host_config
-                    .cluster_issuers
-                    .clone()
-                    .unwrap_or_else(|| vec![self.cluster_key.public_key()]),
+                cluster_issuers: self.cluster_issuers.clone(),
                 invocation_seed,
                 log_level: Some(self.host_config.log_level.clone()),
                 structured_logging: self.host_config.enable_structured_logging,
@@ -2655,12 +2653,7 @@ impl Host {
     #[instrument(skip(self, _payload))]
     async fn handle_ping_hosts(&self, _payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
         let uptime = self.start_at.elapsed();
-        let cluster_issuers = self
-            .host_config
-            .cluster_issuers
-            .clone()
-            .unwrap_or_else(|| vec![self.cluster_key.public_key()])
-            .join(",");
+        let cluster_issuers = self.cluster_issuers.clone().join(",");
 
         let buf = serde_json::to_vec(&json!({
           "id": self.host_key.public_key(),
