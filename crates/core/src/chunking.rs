@@ -17,45 +17,40 @@
 
 use std::marker::Unpin;
 
+use anyhow::{anyhow, Context};
 use async_nats::jetstream::{
     self,
     object_store::{Config, ObjectStore},
-    Context,
+    Context as JetstreamContext,
 };
 use futures::TryFutureExt;
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tracing::{debug, error, instrument};
-
-use crate::error::{InvocationError, InvocationResult};
 
 /// Maximum size of a message payload before it will be chunked
 /// Nats currently uses 128kb chunk size so this should be at least 128KB
 const CHUNK_THRESHOLD_BYTES: usize = 1024 * 900; // 900KB
 
 /// check if message payload needs to be chunked
-pub(crate) fn needs_chunking(payload_size: usize) -> bool {
+pub fn needs_chunking(payload_size: usize) -> bool {
     payload_size > CHUNK_THRESHOLD_BYTES
 }
 
 #[derive(Clone)]
 pub struct ChunkEndpoint {
     lattice: String,
-    js: Context,
+    js: JetstreamContext,
 }
 
 impl ChunkEndpoint {
-    pub fn new(lattice: &str, js: Context) -> Self {
+    pub fn new(lattice: &str, js: JetstreamContext) -> Self {
         ChunkEndpoint {
             lattice: lattice.to_string(),
             js,
         }
     }
 
-    pub(crate) fn with_client(
-        lattice: &str,
-        nc: async_nats::Client,
-        domain: Option<String>,
-    ) -> Self {
+    pub fn with_client(lattice: &str, nc: async_nats::Client, domain: Option<String>) -> Self {
         let js = if let Some(domain) = domain {
             jetstream::with_domain(nc, domain)
         } else {
@@ -66,22 +61,18 @@ impl ChunkEndpoint {
 
     /// load the message after de-chunking
     #[instrument(level = "trace", skip(self))]
-    pub async fn get_unchunkified(&self, inv_id: &str) -> InvocationResult<Vec<u8>> {
+    pub async fn get_unchunkified(&self, inv_id: &str) -> anyhow::Result<Vec<u8>> {
         let mut result = Vec::new();
         let store = self.create_or_reuse_store().await?;
         debug!(invocation_id = %inv_id, "chunkify starting to receive");
-        let mut obj = store.get(inv_id).await.map_err(|e| {
-            InvocationError::Chunking(format!(
-                "error starting to receive chunked stream for inv {inv_id}:{e}"
-            ))
-        })?;
+        let mut obj = store
+            .get(inv_id)
+            .await
+            .map_err(|e| anyhow!(e))
+            .context("error starting to receive chunked stream for inv {inv_id}")?;
         let r = obj.read_to_end(&mut result);
-        r.map_err(|e| {
-            InvocationError::Chunking(format!(
-                "error receiving chunked stream for inv {inv_id}:{e}"
-            ))
-        })
-        .await?;
+        r.map_err(|e| anyhow!(e).context("error receiving chunked stream for inv {inv_id}"))
+            .await?;
         if let Err(e) = store.delete(inv_id).await {
             // not deleting will be a non-fatal error for the receiver,
             // if all the bytes have been received
@@ -91,7 +82,7 @@ impl ChunkEndpoint {
     }
 
     /// load response after de-chunking
-    pub async fn get_unchunkified_response(&self, inv_id: &str) -> InvocationResult<Vec<u8>> {
+    pub async fn get_unchunkified_response(&self, inv_id: &str) -> anyhow::Result<Vec<u8>> {
         // responses are stored in the object store with '-r' suffix on the object name
         self.get_unchunkified(&format!("{inv_id}-r")).await
     }
@@ -102,14 +93,14 @@ impl ChunkEndpoint {
         &self,
         inv_id: &str,
         mut bytes: (impl AsyncRead + Unpin),
-    ) -> InvocationResult<()> {
+    ) -> anyhow::Result<()> {
         let store = self.create_or_reuse_store().await?;
         debug!(invocation_id = %inv_id, "chunkify starting to send");
-        let info = store.put(inv_id, &mut bytes).await.map_err(|e| {
-            InvocationError::Chunking(format!(
-                "error when writing chunkified data for {inv_id}: {e}"
-            ))
-        })?;
+        let info = store
+            .put(inv_id, &mut bytes)
+            .await
+            .map_err(|e| anyhow!(e))
+            .context("error when writing chunkified data for {inv_id}")?;
         debug!(?info, invocation_id = %inv_id, "chunkify completed writing");
 
         Ok(())
@@ -120,11 +111,11 @@ impl ChunkEndpoint {
         &self,
         inv_id: &str,
         bytes: (impl AsyncRead + Unpin),
-    ) -> InvocationResult<()> {
+    ) -> anyhow::Result<()> {
         self.chunkify(&format!("{inv_id}-r"), bytes).await
     }
 
-    async fn create_or_reuse_store(&self) -> InvocationResult<ObjectStore> {
+    async fn create_or_reuse_store(&self) -> anyhow::Result<ObjectStore> {
         let store = match self.js.get_object_store(&self.lattice).await {
             Ok(store) => store,
             Err(_) => self
@@ -134,9 +125,8 @@ impl ChunkEndpoint {
                     ..Default::default()
                 })
                 .await
-                .map_err(|e| {
-                    InvocationError::Chunking(format!("Failed to create store: {}", &e))
-                })?,
+                .map_err(|e| anyhow!(e))
+                .context("Failed to create chunking store")?,
         };
         Ok(store)
     }

@@ -6,7 +6,6 @@ use error::ProviderInvocationError;
 use serde::{Deserialize, Serialize};
 use tracing::{error, info, warn};
 
-mod chunkify;
 pub mod error;
 pub mod provider;
 pub mod provider_main;

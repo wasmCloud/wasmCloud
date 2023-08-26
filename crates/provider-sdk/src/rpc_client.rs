@@ -1,3 +1,8 @@
+use crate::{
+    error::{InvocationError, InvocationResult, NetworkError, ValidationError},
+    rpc_topic,
+};
+
 use std::{fmt, sync::Arc, time::Duration};
 
 use async_nats::Client;
@@ -10,14 +15,10 @@ use tracing::{
 };
 use uuid::Uuid;
 use wascap::{jwt, prelude::Claims};
-
-use crate::{
-    chunkify::{needs_chunking, ChunkEndpoint},
-    error::{InvocationError, InvocationResult, NetworkError, ValidationError},
-    rpc_topic,
+use wasmcloud_core::{
+    chunking::{needs_chunking, ChunkEndpoint},
+    Invocation, InvocationResponse, WasmCloudEntity,
 };
-
-use wasmcloud_core::{Invocation, InvocationResponse, WasmCloudEntity};
 #[cfg(feature = "otel")]
 use wasmcloud_tracing::context::OtelHeaderInjector;
 
