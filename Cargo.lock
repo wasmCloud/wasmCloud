@@ -4462,11 +4462,14 @@ name = "wasmcloud-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-nats",
+ "futures",
  "hex",
  "nkeys",
  "serde",
  "serde_bytes",
  "sha2 0.10.7",
+ "tokio",
  "tracing",
  "ulid",
  "uuid",

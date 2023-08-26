@@ -14,11 +14,14 @@ otel = []
 
 [dependencies]
 anyhow = { workspace = true }
+async-nats = { workspace = true }
+futures = { workspace = true }
 nkeys = { workspace = true }
 hex = { workspace = true, features = ["std"] }
 serde = { workspace = true, features = ["derive"] }
 serde_bytes = { workspace = true, features = ["std"] }
 sha2 = { workspace = true }
+tokio = { workspace = true }
 tracing = { workspace = true }
 ulid = { workspace = true, features = ["std"] }
 uuid = { workspace = true, features = ["serde"] }
