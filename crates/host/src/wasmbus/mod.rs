@@ -230,7 +230,7 @@ struct Handler {
 }
 
 impl Handler {
-    #[instrument(skip(operation, request))]
+    #[instrument(skip(self, operation, request))]
     async fn call_operation_with_payload(
         &self,
         target: Option<&TargetEntity>,
@@ -317,7 +317,7 @@ impl Handler {
         }
     }
 
-    #[instrument(skip(operation, request))]
+    #[instrument(skip(self, operation, request))]
     async fn call_operation(
         &self,
         target: Option<&TargetEntity>,
@@ -611,7 +611,7 @@ impl Blobstore for Handler {
 
 #[async_trait]
 impl Bus for Handler {
-    #[instrument]
+    #[instrument(skip(self))]
     async fn identify_wasmbus_target(
         &self,
         binding: &str,
@@ -628,7 +628,7 @@ impl Bus for Handler {
         Ok(TargetEntity::Actor(namespace.into()))
     }
 
-    #[instrument]
+    #[instrument(skip(self))]
     async fn set_target(
         &self,
         target: Option<TargetEntity>,
@@ -647,7 +647,7 @@ impl Bus for Handler {
         Ok(())
     }
 
-    #[instrument]
+    #[instrument(skip(self))]
     async fn call(
         &self,
         target: Option<TargetEntity>,
@@ -774,7 +774,7 @@ impl Bus for Handler {
         ))
     }
 
-    #[instrument]
+    #[instrument(skip(self, request))]
     async fn call_sync(
         &self,
         target: Option<TargetEntity>,
@@ -790,7 +790,7 @@ impl Bus for Handler {
 
 #[async_trait]
 impl KeyValueAtomic for Handler {
-    #[instrument]
+    #[instrument(skip(self))]
     async fn increment(&self, bucket: &str, key: String, delta: u64) -> anyhow::Result<u64> {
         const METHOD: &str = "wasmcloud:keyvalue/KeyValue.Increment";
         if !bucket.is_empty() {
@@ -811,7 +811,7 @@ impl KeyValueAtomic for Handler {
     }
 
     #[allow(unused)] // TODO: Implement https://github.com/wasmCloud/wasmCloud/issues/457
-    #[instrument]
+    #[instrument(skip(self))]
     async fn compare_and_swap(
         &self,
         bucket: &str,
@@ -825,7 +825,7 @@ impl KeyValueAtomic for Handler {
 
 #[async_trait]
 impl KeyValueReadWrite for Handler {
-    #[instrument]
+    #[instrument(skip(self))]
     async fn get(
         &self,
         bucket: &str,
@@ -855,7 +855,7 @@ impl KeyValueReadWrite for Handler {
         Ok((Box::new(Cursor::new(value)), size))
     }
 
-    #[instrument(skip(value))]
+    #[instrument(skip(self, value))]
     async fn set(
         &self,
         bucket: &str,
@@ -885,7 +885,7 @@ impl KeyValueReadWrite for Handler {
         .and_then(decode_empty_provider_response)
     }
 
-    #[instrument]
+    #[instrument(skip(self))]
     async fn delete(&self, bucket: &str, key: String) -> anyhow::Result<()> {
         const METHOD: &str = "wasmcloud:keyvalue/KeyValue.Del";
         if !bucket.is_empty() {
@@ -904,7 +904,7 @@ impl KeyValueReadWrite for Handler {
         Ok(())
     }
 
-    #[instrument]
+    #[instrument(skip(self))]
     async fn exists(&self, bucket: &str, key: String) -> anyhow::Result<bool> {
         const METHOD: &str = "wasmcloud:keyvalue/KeyValue.Contains";
         if !bucket.is_empty() {
@@ -923,7 +923,7 @@ impl KeyValueReadWrite for Handler {
 
 #[async_trait]
 impl Messaging for Handler {
-    #[instrument]
+    #[instrument(skip(self, body))]
     async fn request(
         &self,
         subject: String,
@@ -960,7 +960,7 @@ impl Messaging for Handler {
         })
     }
 
-    #[instrument]
+    #[instrument(skip(self, body))]
     async fn request_multi(
         &self,
         subject: String,
@@ -977,7 +977,7 @@ impl Messaging for Handler {
         }
     }
 
-    #[instrument]
+    #[instrument(skip(self, __arg1))]
     async fn publish(
         &self,
         messaging::types::BrokerMessage {
@@ -1003,7 +1003,7 @@ impl Messaging for Handler {
 }
 
 impl ActorInstance {
-    #[instrument(skip(self))]
+    #[instrument(skip(self, msg))]
     async fn handle_invocation(
         &self,
         contract_id: &str,
@@ -1130,7 +1130,7 @@ impl ActorInstance {
             .context("failed to encode response")
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self, payload))]
     async fn handle_message(
         &self,
         async_nats::Message {
@@ -1755,7 +1755,7 @@ impl Host {
 
     /// Instantiate an actor and publish the actor start events.
     #[allow(clippy::too_many_arguments)] // TODO: refactor into a config struct
-    #[instrument(skip(self, host_id, actor_ref))]
+    #[instrument(skip(self, claims, annotations, host_id, actor_ref, pool, handler))]
     async fn instantiate_actor(
         &self,
         claims: &jwt::Claims<jwt::Actor>,
@@ -1832,7 +1832,7 @@ impl Host {
     }
 
     /// Uninstantiate an actor and publish the actor stop events.
-    #[instrument(skip(self))]
+    #[instrument(skip(self, instances))]
     async fn uninstantiate_actor(
         &self,
         claims: &jwt::Claims<jwt::Actor>,
@@ -1873,7 +1873,7 @@ impl Host {
         .await
     }
 
-    #[instrument(skip(self, annotations))]
+    #[instrument(skip(self, entry, actor, annotations))]
     async fn start_actor<'a>(
         &self,
         entry: hash_map::VacantEntry<'a, String, Arc<Actor>>,
@@ -1953,7 +1953,7 @@ impl Host {
         Ok(entry.insert(actor))
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self, entry))]
     async fn stop_actor<'a>(
         &self,
         entry: hash_map::OccupiedEntry<'a, String, Arc<Actor>>,
@@ -3020,7 +3020,7 @@ impl Host {
         Ok(buf.into())
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self, payload))]
     async fn handle_message(
         self: Arc<Self>,
         async_nats::Message {

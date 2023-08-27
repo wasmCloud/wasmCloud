@@ -104,7 +104,7 @@ impl host::Host for Ctx {
         }
     }
 
-    #[instrument]
+    #[instrument(skip(self, payload))]
     async fn call_sync(
         &mut self,
         target: Option<host::TargetEntity>,
