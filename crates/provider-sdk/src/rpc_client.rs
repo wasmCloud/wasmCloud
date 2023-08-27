@@ -16,14 +16,11 @@ use tracing::{
 use uuid::Uuid;
 use wascap::{jwt, prelude::Claims};
 use wasmcloud_core::{
-    chunking::{needs_chunking, ChunkEndpoint},
+    chunking::{needs_chunking, ChunkEndpoint, CHUNK_RPC_EXTRA_TIME},
     Invocation, InvocationResponse, WasmCloudEntity,
 };
 #[cfg(feature = "otel")]
 use wasmcloud_tracing::context::OtelHeaderInjector;
-
-/// Amount of time to add to rpc timeout if chunkifying
-pub(crate) const CHUNK_RPC_EXTRA_TIME: Duration = Duration::from_secs(13);
 
 /// Send wasmbus rpc messages
 ///
@@ -66,7 +63,7 @@ impl RpcClient {
         // TODO(thomastaylor312): The original RPC code passes a None for the domain, but that seems
         // maybe wrong? We should probably be passing through a domain here but I don't want to
         // touch it without a second opinion as this code is some of our most tempermental.
-        let chonky = ChunkEndpoint::with_client(lattice_id, nats.clone(), None);
+        let chonky = ChunkEndpoint::with_client(lattice_id, nats.clone(), None::<&str>);
         RpcClient {
             client: nats,
             host_id,
@@ -237,7 +234,8 @@ impl RpcClient {
             {
                 self.chonky
                     .get_unchunkified_response(&inv_response.invocation_id)
-                    .await?
+                    .await
+                    .map_err(|e| InvocationError::Chunking(e.to_string()))?
             } else {
                 inv_response.msg
             };
@@ -303,7 +301,8 @@ impl RpcClient {
             if needs_chunking(response.msg.len()) {
                 self.chonky
                     .chunkify_response(&response.invocation_id, std::io::Cursor::new(response.msg))
-                    .await?;
+                    .await
+                    .map_err(|e| InvocationError::Chunking(e.to_string()))?;
                 InvocationResponse {
                     msg: Vec::new(),
                     content_length,
@@ -323,7 +322,11 @@ impl RpcClient {
 
     pub async fn dechunk(&self, mut inv: Invocation) -> InvocationResult<Invocation> {
         if inv.content_length.is_some() && inv.content_length.unwrap() > inv.msg.len() as u64 {
-            inv.msg = self.chonky.get_unchunkified(&inv.id).await?;
+            inv.msg = self
+                .chonky
+                .get_unchunkified(&inv.id)
+                .await
+                .map_err(|e| InvocationError::Chunking(e.to_string()))?;
         }
         Ok(inv)
     }

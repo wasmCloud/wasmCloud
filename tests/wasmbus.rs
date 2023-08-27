@@ -239,7 +239,7 @@ async fn start_nats() -> anyhow::Result<(
                 .as_deref()
                 .unwrap_or("nats-server"),
         )
-        .args(["-js", "-V", "-T=false", "-p", &port.to_string(), "-sd"])
+        .args(["-js", "-D", "-T=false", "-p", &port.to_string(), "-sd"])
         .arg(jetstream_dir.path()),
     )
     .await
@@ -316,6 +316,8 @@ async fn assert_handle_http_request(
         random_in_range: u32,
         #[allow(dead_code)]
         random_32: u32,
+        #[allow(dead_code)]
+        long_value: String,
     }
     let Response {
         get_random_bytes: _,
@@ -323,6 +325,7 @@ async fn assert_handle_http_request(
         guid,
         random_32: _,
         random_in_range,
+        long_value: _,
     } = serde_json::from_str(&http_res).context("failed to decode body as JSON")?;
     ensure!(Uuid::from_str(&guid).is_ok());
     ensure!(

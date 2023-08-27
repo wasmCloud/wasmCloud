@@ -2,6 +2,7 @@
 pub mod config;
 
 pub use config::Host as HostConfig;
+use wasmcloud_core::chunking::{needs_chunking, ChunkEndpoint, CHUNK_RPC_EXTRA_TIME};
 
 mod event;
 
@@ -25,7 +26,10 @@ use std::process::Stdio;
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, ensure, Context as _};
-use async_nats::jetstream::{context::Context as JetstreamContext, kv};
+use async_nats::{
+    jetstream::{context::Context as JetstreamContext, kv},
+    Request,
+};
 use async_trait::async_trait;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
@@ -206,6 +210,7 @@ struct ActorInstance {
     calls: AbortHandle,
     runtime: Runtime,
     handler: Handler,
+    chunk_endpoint: ChunkEndpoint,
     /// Cluster issuers that this actor should accept invocations from
     valid_issuers: Vec<String>,
 }
@@ -221,6 +226,7 @@ struct Handler {
     // package -> target -> entity
     links: Arc<RwLock<HashMap<String, HashMap<String, WasmCloudEntity>>>>,
     targets: Arc<RwLock<HashMap<TargetInterface, TargetEntity>>>,
+    chunk_endpoint: ChunkEndpoint,
 }
 
 impl Handler {
@@ -237,7 +243,8 @@ impl Handler {
             .split_once('/')
             .context("failed to parse operation")?;
         let core_target = to_core_entity(target, links.get(package))?;
-        let invocation = Invocation::new(
+        let chunked = needs_chunking(request.len());
+        let mut invocation = Invocation::new(
             &self.cluster_key,
             &self.host_key,
             self.origin.clone(),
@@ -252,7 +259,16 @@ impl Handler {
             self.claims.metadata.as_ref(),
             &invocation.target.contract_id,
         )?;
-        let request =
+
+        if chunked {
+            self.chunk_endpoint
+                .chunkify(&invocation.id, Cursor::new(invocation.msg))
+                .await
+                .context("failed to chunk invocation")?;
+            invocation.msg = vec![];
+        }
+
+        let payload =
             rmp_serde::to_vec_named(&invocation).context("failed to encode invocation")?;
         let topic = match target {
             None | Some(TargetEntity::Link(_)) => format!(
@@ -264,24 +280,36 @@ impl Handler {
                 self.lattice_prefix, invocation.target.public_key
             ),
         };
+
+        let timeout = chunked.then_some(CHUNK_RPC_EXTRA_TIME); // TODO: add rpc_nats timeout
+        let request = Request::new().payload(payload.into()).timeout(timeout);
         let res = self
             .nats
-            .request(topic, request.into())
+            .send_request(topic, request)
             .await
             .context("failed to publish on NATS topic")?;
+
         let InvocationResponse {
             invocation_id,
-            msg,
+            mut msg,
             content_length,
             error,
             ..
         } = rmp_serde::from_slice(&res.payload).context("failed to decode invocation response")?;
         ensure!(invocation_id == invocation.id, "invocation ID mismatch");
-        if let Some(content_length) = content_length {
-            let content_length =
-                usize::try_from(content_length).context("content length does not fit in usize")?;
-            ensure!(content_length == msg.len(), "message size mismatch");
+
+        let resp_length = usize::try_from(content_length.unwrap_or_default())
+            .context("content length does not fit in usize")?;
+        if needs_chunking(resp_length) {
+            msg = self
+                .chunk_endpoint
+                .get_unchunkified(&invocation_id)
+                .await
+                .context("failed to dechunk response")?;
+        } else {
+            ensure!(resp_length == msg.len(), "message size mismatch");
         }
+
         if let Some(error) = error {
             Ok(Err(error))
         } else {
@@ -634,6 +662,7 @@ impl Bus for Handler {
 
         let links = Arc::clone(&self.links);
         let nats = self.nats.clone();
+        let chunk_endpoint = self.chunk_endpoint.clone();
         let lattice_prefix = self.lattice_prefix.clone();
         let origin = self.origin.clone();
         let cluster_key = self.cluster_key.clone();
@@ -655,7 +684,8 @@ impl Bus for Handler {
                     .map_err(|e| e.to_string())?;
                 let core_target = to_core_entity(target.as_ref(), links.get(package))
                     .map_err(|e| e.to_string())?;
-                let invocation = Invocation::new(
+                let chunked = needs_chunking(request.len());
+                let mut invocation = Invocation::new(
                     &cluster_key,
                     &host_key,
                     origin,
@@ -670,7 +700,16 @@ impl Bus for Handler {
                 ensure_actor_capability(claims_metadata.as_ref(), &invocation.target.contract_id)
                     .map_err(|e| e.to_string())?;
 
-                let request = rmp_serde::to_vec_named(&invocation)
+                if chunked {
+                    chunk_endpoint
+                        .chunkify(&invocation.id, Cursor::new(invocation.msg))
+                        .await
+                        .context("failed to chunk invocation")
+                        .map_err(|e| e.to_string())?;
+                    invocation.msg = vec![];
+                }
+
+                let payload = rmp_serde::to_vec_named(&invocation)
                     .context("failed to encode invocation")
                     .map_err(|e| e.to_string())?;
                 let topic = match target {
@@ -683,14 +722,18 @@ impl Bus for Handler {
                         invocation.target.public_key
                     ),
                 };
+
+                let timeout = chunked.then_some(CHUNK_RPC_EXTRA_TIME); // TODO: add rpc_nats timeout
+                let request = Request::new().payload(payload.into()).timeout(timeout);
                 let res = nats
-                    .request(topic, request.into())
+                    .send_request(topic, request)
                     .await
                     .context("failed to call provider")
                     .map_err(|e| e.to_string())?;
+
                 let InvocationResponse {
                     invocation_id,
-                    msg,
+                    mut msg,
                     content_length,
                     error,
                     ..
@@ -700,14 +743,20 @@ impl Bus for Handler {
                 if invocation_id != invocation.id {
                     return Err("invocation ID mismatch".into());
                 }
-                if let Some(content_length) = content_length {
-                    let content_length = usize::try_from(content_length)
-                        .context("content length does not fit in usize")
+
+                let resp_length = usize::try_from(content_length.unwrap_or_default())
+                    .context("content length does not fit in usize")
+                    .map_err(|e| e.to_string())?;
+                if needs_chunking(resp_length) {
+                    msg = chunk_endpoint
+                        .get_unchunkified(&invocation_id)
+                        .await
+                        .context("failed to dechunk response")
                         .map_err(|e| e.to_string())?;
-                    if content_length != msg.len() {
-                        return Err("message size mismatch".into());
-                    }
+                } else if resp_length != msg.len() {
+                    return Err("message size mismatch".into());
                 }
+
                 if let Some(error) = error {
                     Err(error)
                 } else {
@@ -1028,22 +1077,45 @@ impl ActorInstance {
         debug!(?invocation.origin, ?invocation.target, invocation.operation, "validate actor invocation");
         invocation.validate_antiforgery(&self.valid_issuers)?;
 
+        let content_length: usize = invocation
+            .content_length
+            .unwrap_or_default()
+            .try_into()
+            .context("failed to convert content_length to usize")?;
+        let inv_msg = if needs_chunking(content_length) {
+            debug!(inv_id = invocation.id, "dechunking invocation");
+            self.chunk_endpoint.get_unchunkified(&invocation.id).await?
+        } else {
+            invocation.msg
+        };
+
         debug!(?invocation.origin, ?invocation.target, invocation.operation, "handle actor invocation");
         let res = match self
             .handle_invocation(
                 &invocation.origin.contract_id,
                 &invocation.operation,
-                invocation.msg,
+                inv_msg,
             )
             .await
             .context("failed to handle invocation")?
         {
-            Ok(msg) => {
-                let content_length = msg.len().try_into().ok();
+            Ok(resp_msg) => {
+                let content_length = resp_msg.len();
+                let resp_msg = if needs_chunking(content_length) {
+                    debug!(inv_id = invocation.id, "chunking invocation response");
+                    self.chunk_endpoint
+                        .chunkify_response(&invocation.id, Cursor::new(resp_msg))
+                        .await
+                        .context("failed to chunk invocation response")?;
+                    vec![]
+                } else {
+                    resp_msg
+                };
+
                 InvocationResponse {
-                    msg,
+                    msg: resp_msg,
                     invocation_id: invocation.id,
-                    content_length,
+                    content_length: content_length.try_into().ok(),
                     ..Default::default()
                 }
             }
@@ -1108,10 +1180,10 @@ struct Provider {
 }
 
 /// wasmCloud Host
-#[derive(Debug)]
 pub struct Host {
     // TODO: Clean up actors after stop
     actors: RwLock<HashMap<String, Arc<Actor>>>,
+    chunk_endpoint: ChunkEndpoint,
     cluster_key: Arc<KeyPair>,
     cluster_issuers: Vec<String>,
     event_builder: EventBuilderV10,
@@ -1470,18 +1542,24 @@ impl Host {
             .context("failed to build runtime")?;
         let event_builder = EventBuilderV10::new().source(host_key.public_key());
 
-        let jetstream = if let Some(domain) = config.js_domain.as_ref() {
+        let ctl_jetstream = if let Some(domain) = config.js_domain.as_ref() {
             async_nats::jetstream::with_domain(ctl_nats.clone(), domain)
         } else {
             async_nats::jetstream::new(ctl_nats.clone())
         };
         let bucket = format!("LATTICEDATA_{}", config.lattice_prefix);
-        create_lattice_metadata_bucket(&jetstream, &bucket).await?;
+        create_lattice_metadata_bucket(&ctl_jetstream, &bucket).await?;
 
-        let data = jetstream
+        let data = ctl_jetstream
             .get_key_value(&bucket)
             .await
             .map_err(|e| anyhow!(e).context("failed to acquire data bucket"))?;
+
+        let chunk_endpoint = ChunkEndpoint::with_client(
+            &config.lattice_prefix,
+            rpc_nats.clone(),
+            config.js_domain.as_ref(),
+        );
 
         let (queue_abort, queue_abort_reg) = AbortHandle::new_pair();
         let (heartbeat_abort, heartbeat_abort_reg) = AbortHandle::new_pair();
@@ -1499,6 +1577,7 @@ impl Host {
 
         let host = Host {
             actors: RwLock::default(),
+            chunk_endpoint,
             cluster_key,
             cluster_issuers,
             event_builder,
@@ -1716,6 +1795,7 @@ impl Host {
                     calls: calls_abort,
                     runtime: self.runtime.clone(),
                     handler: handler.clone(),
+                    chunk_endpoint: self.chunk_endpoint.clone(),
                     valid_issuers: self.cluster_issuers.clone(),
                 });
 
@@ -1848,6 +1928,7 @@ impl Host {
             links: Arc::new(RwLock::new(links)),
             targets: Arc::new(RwLock::default()),
             host_key: Arc::clone(&self.host_key),
+            chunk_endpoint: self.chunk_endpoint.clone(),
         };
 
         let pool = ActorInstancePool::new(actor.clone(), Some(count));

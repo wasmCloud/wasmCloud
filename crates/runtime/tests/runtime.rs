@@ -448,6 +448,8 @@ async fn run(wasm: impl AsRef<Path>) -> anyhow::Result<Vec<(logging::Level, Stri
         random_in_range: u32,
         #[allow(dead_code)]
         random_32: u32,
+        #[allow(dead_code)]
+        long_value: String,
     }
     let Response {
         get_random_bytes: _,
@@ -455,6 +457,7 @@ async fn run(wasm: impl AsRef<Path>) -> anyhow::Result<Vec<(logging::Level, Stri
         guid,
         random_32: _,
         random_in_range,
+        long_value: _,
     } = serde_json::from_slice(&body).context("failed to decode body as JSON")?;
     ensure!(Uuid::from_str(&guid).is_ok());
     ensure!(
