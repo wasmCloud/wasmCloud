@@ -15,7 +15,7 @@
 //
 // I will always be chunkified ...
 
-use std::marker::Unpin;
+use std::{marker::Unpin, time::Duration};
 
 use anyhow::{anyhow, Context};
 use async_nats::jetstream::{
@@ -27,16 +27,22 @@ use futures::TryFutureExt;
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tracing::{debug, error, instrument};
 
+/// Amount of time to add to rpc timeout if chunkifying
+pub const CHUNK_RPC_EXTRA_TIME: Duration = Duration::from_secs(13);
+
 /// Maximum size of a message payload before it will be chunked
 /// Nats currently uses 128kb chunk size so this should be at least 128KB
+#[cfg(not(test))]
 const CHUNK_THRESHOLD_BYTES: usize = 1024 * 900; // 900KB
+#[cfg(test)]
+const CHUNK_THRESHOLD_BYTES: usize = 1024 * 1; // 1KB
 
 /// check if message payload needs to be chunked
 pub fn needs_chunking(payload_size: usize) -> bool {
     payload_size > CHUNK_THRESHOLD_BYTES
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ChunkEndpoint {
     lattice: String,
     js: JetstreamContext,
@@ -50,7 +56,11 @@ impl ChunkEndpoint {
         }
     }
 
-    pub fn with_client(lattice: &str, nc: async_nats::Client, domain: Option<String>) -> Self {
+    pub fn with_client(
+        lattice: &str,
+        nc: async_nats::Client,
+        domain: Option<impl AsRef<str>>,
+    ) -> Self {
         let js = if let Some(domain) = domain {
             jetstream::with_domain(nc, domain)
         } else {
@@ -115,6 +125,7 @@ impl ChunkEndpoint {
         self.chunkify(&format!("{inv_id}-r"), bytes).await
     }
 
+    // TODO: cache the store locally
     async fn create_or_reuse_store(&self) -> anyhow::Result<ObjectStore> {
         let store = match self.js.get_object_store(&self.lattice).await {
             Ok(store) => store,

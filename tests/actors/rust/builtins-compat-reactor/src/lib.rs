@@ -60,6 +60,7 @@ impl exports::wasmcloud::bus::guest::Guest for Actor {
             "guid": HostRng::generate_guid(),
             "random_32": HostRng::random32(),
             "random_in_range": HostRng::random_in_range(min, max),
+            "long_value": "1234567890".repeat(1000),
         });
         eprintln!("response: `{res:?}`");
         let body = serde_json::to_string(&res).expect("failed to encode response to JSON");
