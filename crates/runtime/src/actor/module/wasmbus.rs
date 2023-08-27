@@ -222,7 +222,7 @@ fn guest_response(
     Ok(())
 }
 
-#[instrument]
+#[instrument(skip(handler, payload))]
 async fn handle(
     handler: &mut builtin::Handler,
     binding: String,

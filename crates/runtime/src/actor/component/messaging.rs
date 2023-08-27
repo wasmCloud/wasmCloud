@@ -54,7 +54,7 @@ impl consumer::Host for Ctx {
             .map_err(|err| format!("{err:#}")))
     }
 
-    #[instrument]
+    #[instrument(skip(self, msg))]
     async fn publish(&mut self, msg: types::BrokerMessage) -> anyhow::Result<Result<(), String>> {
         Ok(self
             .handler
