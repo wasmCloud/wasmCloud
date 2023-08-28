@@ -19,7 +19,7 @@ sha256 = "5a53c168c502ff4a9c6890ecfbb2a916cd2a51be7a04aca343d467022dfa92b8"
 sha512 = "f7a3ac786ca7bdbc4f203a448e6991e0cdd43f739c41a8b4a4a382570df138fb6fadc9ac00bf36e18828c37503aefb72f7c731c7faf5f160ff2a8b85824d0774"
 
 [messaging]
-path = "../../../wit/messaging"
+url = "https://github.com/wasmCloud/messaging/archive/main.tar.gz"
 sha256 = "1151d0c461c2d04658d823834e76dc29db17f603101b58c14e74f5dbb1dc2919"
 sha512 = "34b326c9a9ef4bbf2c9632e4202d5835a93fdf06d4223bfa09b6b7d001a02f7b550c0b7c050e51804a59cf8d10fe189bdc7e0893bb6dfd7c3e06aadc6599bf5a"
 
