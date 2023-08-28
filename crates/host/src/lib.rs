@@ -16,6 +16,9 @@ pub mod bindle;
 /// OCI artifact fetching
 pub mod oci;
 
+/// wasmCloud policy service
+pub mod policy;
+
 /// Provider archive functionality
 mod par;
 
