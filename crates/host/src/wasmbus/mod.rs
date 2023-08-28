@@ -2950,23 +2950,8 @@ impl Host {
 
     #[instrument(skip(self))]
     async fn handle_links(&self) -> anyhow::Result<Bytes> {
-        let links: Vec<LinkDefinition> = scan_kv(&self.data, "LINKDEF_")
-            .await?
-            .try_filter_map(|(key, buf)| async move {
-                match serde_json::from_slice(&buf) {
-                    Ok(claims) => Ok(Some(claims)),
-                    Err(err) => {
-                        warn!(
-                            key,
-                            err = err.to_string(),
-                            "failed to deserialize link definition"
-                        );
-                        Ok(None)
-                    }
-                }
-            })
-            .try_collect()
-            .await?;
+        let links = self.links.read().await;
+        let links = links.values().cloned().collect();
         let res = serde_json::to_vec(&LinkDefinitionList { links })
             .context("failed to serialize response")?;
         Ok(res.into())
