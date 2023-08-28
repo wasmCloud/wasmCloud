@@ -246,7 +246,7 @@ impl ProviderConnection {
                                     current.record("provider_id", &tracing::field::display(&inv.target.public_key));
                                     current.record("contract_id", &tracing::field::display(&inv.target.contract_id));
                                     current.record("link_name", &tracing::field::display(&inv.target.link_name));
-                                    current.record("payload_size", &tracing::field::display(&inv.content_length.unwrap_or_default()));
+                                    current.record("payload_size", &tracing::field::display(&inv.content_length));
                                     let inv_id = inv.id.clone();
                                     let resp = match this.handle_rpc(provider.clone(), inv).in_current_span().await {
                                         Err(error) => {
@@ -260,7 +260,7 @@ impl ProviderConnection {
                                         Ok(bytes) => {
                                             InvocationResponse{
                                                 invocation_id: inv_id,
-                                                content_length: Some(bytes.len() as u64),
+                                                content_length: bytes.len() as u64,
                                                 msg: bytes,
                                                 ..Default::default()
                                             }

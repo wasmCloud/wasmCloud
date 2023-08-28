@@ -121,9 +121,8 @@ pub struct Invocation {
     pub encoded_claims: String,
     #[serde(default)]
     pub host_id: String,
-    /// total message size (optional)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub content_length: Option<u64>,
+    /// total message size
+    pub content_length: u64,
     /// Open Telemetry tracing support
     #[serde(rename = "traceContext")]
     #[serde(
@@ -177,7 +176,7 @@ impl Invocation {
 
         let operation = operation.to_string();
         Ok(Invocation {
-            content_length: Some(msg.len() as _),
+            content_length: msg.len() as _,
             origin,
             target,
             operation,
@@ -278,9 +277,8 @@ pub struct InvocationResponse {
     /// optional error message
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
-    /// total message size (optional)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub content_length: Option<u64>,
+    /// total message size
+    pub content_length: u64,
     #[serde(rename = "traceContext")]
     #[serde(
         default,

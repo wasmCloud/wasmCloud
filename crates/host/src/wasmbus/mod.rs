@@ -298,8 +298,8 @@ impl Handler {
         } = rmp_serde::from_slice(&res.payload).context("failed to decode invocation response")?;
         ensure!(invocation_id == invocation.id, "invocation ID mismatch");
 
-        let resp_length = usize::try_from(content_length.unwrap_or_default())
-            .context("content length does not fit in usize")?;
+        let resp_length =
+            usize::try_from(content_length).context("content length does not fit in usize")?;
         if resp_length > CHUNK_THRESHOLD_BYTES {
             msg = self
                 .chunk_endpoint
@@ -744,7 +744,7 @@ impl Bus for Handler {
                     return Err("invocation ID mismatch".into());
                 }
 
-                let resp_length = usize::try_from(content_length.unwrap_or_default())
+                let resp_length = usize::try_from(content_length)
                     .context("content length does not fit in usize")
                     .map_err(|e| e.to_string())?;
                 if resp_length > CHUNK_THRESHOLD_BYTES {
@@ -1079,7 +1079,6 @@ impl ActorInstance {
 
         let content_length: usize = invocation
             .content_length
-            .unwrap_or_default()
             .try_into()
             .context("failed to convert content_length to usize")?;
         let inv_msg = if content_length > CHUNK_THRESHOLD_BYTES {
@@ -1115,7 +1114,7 @@ impl ActorInstance {
                 InvocationResponse {
                     msg: resp_msg,
                     invocation_id: invocation.id,
-                    content_length: content_length.try_into().ok(),
+                    content_length: content_length as u64,
                     ..Default::default()
                 }
             }
