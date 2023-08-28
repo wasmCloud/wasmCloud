@@ -2465,6 +2465,17 @@ impl Host {
                 .map(|key| key.seed())
                 .transpose()
                 .context("private key missing for provider RPC key")?;
+            let default_rpc_timeout_ms = Some(
+                self.host_config
+                    .rpc_timeout
+                    .as_millis()
+                    .try_into()
+                    .context("failed to convert rpc_timeout to u64")?,
+            );
+            let otel_config = OtelConfig {
+                traces_exporter: self.host_config.otel_config.traces_exporter.clone(),
+                exporter_otlp_endpoint: self.host_config.otel_config.exporter_otlp_endpoint.clone(),
+            };
             let host_data = HostData {
                 host_id: self.host_key.public_key(),
                 lattice_rpc_prefix: self.host_config.lattice_prefix.clone(),
@@ -2477,25 +2488,12 @@ impl Host {
                 provider_key: claims.subject.clone(),
                 link_definitions,
                 config_json: configuration,
-                default_rpc_timeout_ms: Some(
-                    self.host_config
-                        .rpc_timeout
-                        .as_millis()
-                        .try_into()
-                        .context("failed to convert rpc_timeout to u64")?,
-                ),
+                default_rpc_timeout_ms,
                 cluster_issuers: self.cluster_issuers.clone(),
                 invocation_seed,
                 log_level: Some(self.host_config.log_level.clone()),
                 structured_logging: self.host_config.enable_structured_logging,
-                otel_config: OtelConfig {
-                    traces_exporter: self.host_config.otel_config.traces_exporter.clone(),
-                    exporter_otlp_endpoint: self
-                        .host_config
-                        .otel_config
-                        .exporter_otlp_endpoint
-                        .clone(),
-                },
+                otel_config,
             };
             let host_data =
                 serde_json::to_vec(&host_data).context("failed to serialize provider data")?;
