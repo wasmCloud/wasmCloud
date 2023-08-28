@@ -2,7 +2,7 @@
 pub mod config;
 
 pub use config::Host as HostConfig;
-use wasmcloud_core::chunking::{needs_chunking, ChunkEndpoint, CHUNK_RPC_EXTRA_TIME};
+use wasmcloud_core::chunking::{ChunkEndpoint, CHUNK_RPC_EXTRA_TIME, CHUNK_THRESHOLD_BYTES};
 
 mod event;
 
@@ -243,7 +243,7 @@ impl Handler {
             .split_once('/')
             .context("failed to parse operation")?;
         let core_target = to_core_entity(target, links.get(package))?;
-        let chunked = needs_chunking(request.len());
+        let needs_chunking = request.len() > CHUNK_THRESHOLD_BYTES;
         let mut invocation = Invocation::new(
             &self.cluster_key,
             &self.host_key,
@@ -260,7 +260,7 @@ impl Handler {
             &invocation.target.contract_id,
         )?;
 
-        if chunked {
+        if needs_chunking {
             self.chunk_endpoint
                 .chunkify(&invocation.id, Cursor::new(invocation.msg))
                 .await
@@ -281,7 +281,7 @@ impl Handler {
             ),
         };
 
-        let timeout = chunked.then_some(CHUNK_RPC_EXTRA_TIME); // TODO: add rpc_nats timeout
+        let timeout = needs_chunking.then_some(CHUNK_RPC_EXTRA_TIME); // TODO: add rpc_nats timeout
         let request = Request::new().payload(payload.into()).timeout(timeout);
         let res = self
             .nats
@@ -300,7 +300,7 @@ impl Handler {
 
         let resp_length = usize::try_from(content_length.unwrap_or_default())
             .context("content length does not fit in usize")?;
-        if needs_chunking(resp_length) {
+        if resp_length > CHUNK_THRESHOLD_BYTES {
             msg = self
                 .chunk_endpoint
                 .get_unchunkified(&invocation_id)
@@ -684,7 +684,7 @@ impl Bus for Handler {
                     .map_err(|e| e.to_string())?;
                 let core_target = to_core_entity(target.as_ref(), links.get(package))
                     .map_err(|e| e.to_string())?;
-                let chunked = needs_chunking(request.len());
+                let needs_chunking = request.len() > CHUNK_THRESHOLD_BYTES;
                 let mut invocation = Invocation::new(
                     &cluster_key,
                     &host_key,
@@ -700,7 +700,7 @@ impl Bus for Handler {
                 ensure_actor_capability(claims_metadata.as_ref(), &invocation.target.contract_id)
                     .map_err(|e| e.to_string())?;
 
-                if chunked {
+                if needs_chunking {
                     chunk_endpoint
                         .chunkify(&invocation.id, Cursor::new(invocation.msg))
                         .await
@@ -723,7 +723,7 @@ impl Bus for Handler {
                     ),
                 };
 
-                let timeout = chunked.then_some(CHUNK_RPC_EXTRA_TIME); // TODO: add rpc_nats timeout
+                let timeout = needs_chunking.then_some(CHUNK_RPC_EXTRA_TIME); // TODO: add rpc_nats timeout
                 let request = Request::new().payload(payload.into()).timeout(timeout);
                 let res = nats
                     .send_request(topic, request)
@@ -747,7 +747,7 @@ impl Bus for Handler {
                 let resp_length = usize::try_from(content_length.unwrap_or_default())
                     .context("content length does not fit in usize")
                     .map_err(|e| e.to_string())?;
-                if needs_chunking(resp_length) {
+                if resp_length > CHUNK_THRESHOLD_BYTES {
                     msg = chunk_endpoint
                         .get_unchunkified(&invocation_id)
                         .await
@@ -1082,7 +1082,7 @@ impl ActorInstance {
             .unwrap_or_default()
             .try_into()
             .context("failed to convert content_length to usize")?;
-        let inv_msg = if needs_chunking(content_length) {
+        let inv_msg = if content_length > CHUNK_THRESHOLD_BYTES {
             debug!(inv_id = invocation.id, "dechunking invocation");
             self.chunk_endpoint.get_unchunkified(&invocation.id).await?
         } else {
@@ -1101,7 +1101,7 @@ impl ActorInstance {
         {
             Ok(resp_msg) => {
                 let content_length = resp_msg.len();
-                let resp_msg = if needs_chunking(content_length) {
+                let resp_msg = if content_length > CHUNK_THRESHOLD_BYTES {
                     debug!(inv_id = invocation.id, "chunking invocation response");
                     self.chunk_endpoint
                         .chunkify_response(&invocation.id, Cursor::new(resp_msg))
