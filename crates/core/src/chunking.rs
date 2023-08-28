@@ -33,14 +33,9 @@ pub const CHUNK_RPC_EXTRA_TIME: Duration = Duration::from_secs(13);
 /// Maximum size of a message payload before it will be chunked
 /// Nats currently uses 128kb chunk size so this should be at least 128KB
 #[cfg(not(test))]
-const CHUNK_THRESHOLD_BYTES: usize = 1024 * 900; // 900KB
+pub const CHUNK_THRESHOLD_BYTES: usize = 1024 * 900; // 900KB
 #[cfg(test)]
-const CHUNK_THRESHOLD_BYTES: usize = 1024 * 1; // 1KB
-
-/// check if message payload needs to be chunked
-pub fn needs_chunking(payload_size: usize) -> bool {
-    payload_size > CHUNK_THRESHOLD_BYTES
-}
+pub const CHUNK_THRESHOLD_BYTES: usize = 1024; // 1KB
 
 #[derive(Clone, Debug)]
 pub struct ChunkEndpoint {

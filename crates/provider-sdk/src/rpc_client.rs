@@ -16,7 +16,7 @@ use tracing::{
 use uuid::Uuid;
 use wascap::{jwt, prelude::Claims};
 use wasmcloud_core::{
-    chunking::{needs_chunking, ChunkEndpoint, CHUNK_RPC_EXTRA_TIME},
+    chunking::{ChunkEndpoint, CHUNK_RPC_EXTRA_TIME, CHUNK_THRESHOLD_BYTES},
     Invocation, InvocationResponse, WasmCloudEntity,
 };
 #[cfg(feature = "otel")]
@@ -163,7 +163,7 @@ impl RpcClient {
         );
 
         let len = data.len();
-        let chunkify = needs_chunking(len);
+        let needs_chunking = len > CHUNK_THRESHOLD_BYTES;
 
         let (invocation, body) = {
             let mut inv = Invocation {
@@ -178,7 +178,7 @@ impl RpcClient {
                 trace_context: OtelHeaderInjector::default_with_span().into(),
                 ..Default::default()
             };
-            if chunkify {
+            if needs_chunking {
                 (inv, Some(data))
             } else {
                 inv.msg = data;
@@ -203,7 +203,7 @@ impl RpcClient {
             // error
         }
 
-        let timeout = if chunkify {
+        let timeout = if needs_chunking {
             timeout.map(|t| t + CHUNK_RPC_EXTRA_TIME)
         } else {
             timeout
@@ -298,7 +298,7 @@ impl RpcClient {
     ) -> InvocationResult<()> {
         let content_length = Some(response.msg.len() as u64);
         let response = {
-            if needs_chunking(response.msg.len()) {
+            if response.msg.len() > CHUNK_THRESHOLD_BYTES {
                 self.chonky
                     .chunkify_response(&response.invocation_id, std::io::Cursor::new(response.msg))
                     .await
