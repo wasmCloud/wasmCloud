@@ -3,6 +3,6 @@ http = "https://github.com/wasmCloud/wasi-http/archive/main.tar.gz" # TODO: Swit
 io = "../../../wit/deps/io"
 keyvalue = "https://github.com/WebAssembly/wasi-keyvalue/archive/main.tar.gz"
 logging = "https://github.com/WebAssembly/wasi-logging/archive/main.tar.gz"
-messaging = "../../../wit/messaging"
+messaging = "https://github.com/wasmCloud/messaging/archive/main.tar.gz"
 poll = "../../../wit/deps/poll"
 wasmcloud = "../../../wit"
