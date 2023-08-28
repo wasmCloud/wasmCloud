@@ -173,7 +173,7 @@ impl RpcClient {
                 id: subject,
                 encoded_claims: claims.encode(&self.key).unwrap_or_default(),
                 host_id: self.host_id.clone(),
-                content_length: Some(len as u64),
+                content_length: len as u64,
                 #[cfg(feature = "otel")]
                 trace_context: OtelHeaderInjector::default_with_span().into(),
                 ..Default::default()
@@ -229,9 +229,7 @@ impl RpcClient {
         let mut inv_response = crate::deserialize::<InvocationResponse>(&payload)?;
         if inv_response.error.is_none() {
             // was response chunked?
-            let msg = if inv_response.content_length.is_some()
-                && inv_response.content_length.unwrap() > inv_response.msg.len() as u64
-            {
+            let msg = if inv_response.content_length > inv_response.msg.len() as u64 {
                 self.chonky
                     .get_unchunkified_response(&inv_response.invocation_id)
                     .await
@@ -296,7 +294,7 @@ impl RpcClient {
         reply_to: String,
         response: InvocationResponse,
     ) -> InvocationResult<()> {
-        let content_length = Some(response.msg.len() as u64);
+        let content_length = response.msg.len() as u64;
         let response = {
             if response.msg.len() > CHUNK_THRESHOLD_BYTES {
                 self.chonky
@@ -321,7 +319,7 @@ impl RpcClient {
     }
 
     pub async fn dechunk(&self, mut inv: Invocation) -> InvocationResult<Invocation> {
-        if inv.content_length.is_some() && inv.content_length.unwrap() > inv.msg.len() as u64 {
+        if inv.content_length > inv.msg.len() as u64 {
             inv.msg = self
                 .chonky
                 .get_unchunkified(&inv.id)
