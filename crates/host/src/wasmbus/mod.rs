@@ -977,7 +977,7 @@ impl Messaging for Handler {
         }
     }
 
-    #[instrument(skip(self, __arg1))]
+    #[instrument(skip_all)]
     async fn publish(
         &self,
         messaging::types::BrokerMessage {
