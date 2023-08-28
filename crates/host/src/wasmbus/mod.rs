@@ -2,7 +2,6 @@
 pub mod config;
 
 pub use config::Host as HostConfig;
-use wasmcloud_core::chunking::{ChunkEndpoint, CHUNK_RPC_EXTRA_TIME, CHUNK_THRESHOLD_BYTES};
 
 mod event;
 
@@ -38,7 +37,7 @@ use cloudevents::{EventBuilder, EventBuilderV10};
 use futures::stream::{AbortHandle, Abortable};
 use futures::{stream, try_join, FutureExt, Stream, StreamExt, TryStreamExt};
 use nkeys::{KeyPair, KeyPairType};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use tokio::io::{empty, stderr, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -58,6 +57,7 @@ use wasmcloud_control_interface::{
     StartProviderCommand, StopActorCommand, StopHostCommand, StopProviderCommand,
     UpdateActorCommand,
 };
+use wasmcloud_core::chunking::{ChunkEndpoint, CHUNK_RPC_EXTRA_TIME, CHUNK_THRESHOLD_BYTES};
 use wasmcloud_core::{
     HealthCheckResponse, HostData, Invocation, InvocationResponse, OtelConfig, WasmCloudEntity,
 };
@@ -226,7 +226,39 @@ struct Handler {
     // package -> target -> entity
     links: Arc<RwLock<HashMap<String, HashMap<String, WasmCloudEntity>>>>,
     targets: Arc<RwLock<HashMap<TargetInterface, TargetEntity>>>,
+    aliases: Arc<RwLock<HashMap<String, WasmCloudEntity>>>,
     chunk_endpoint: ChunkEndpoint,
+}
+
+#[instrument]
+async fn resolve_target(
+    target: Option<&TargetEntity>,
+    links: Option<&HashMap<String, WasmCloudEntity>>,
+    aliases: &HashMap<String, WasmCloudEntity>,
+) -> anyhow::Result<WasmCloudEntity> {
+    const DEFAULT_LINK_NAME: &str = "default";
+
+    trace!("resolve target");
+
+    let target = match target {
+        None => links
+            .and_then(|targets| targets.get(DEFAULT_LINK_NAME))
+            .context("link not found")?
+            .clone(),
+        Some(TargetEntity::Link(link_name)) => links
+            .and_then(|targets| targets.get(link_name.as_deref().unwrap_or(DEFAULT_LINK_NAME)))
+            .context("link not found")?
+            .clone(),
+        Some(TargetEntity::Actor(ActorIdentifier::Key(key))) => WasmCloudEntity {
+            public_key: key.public_key(),
+            ..Default::default()
+        },
+        Some(TargetEntity::Actor(ActorIdentifier::Alias(alias))) => aliases
+            .get(alias)
+            .context("unknown actor call alias")?
+            .clone(),
+    };
+    Ok(target)
 }
 
 impl Handler {
@@ -238,17 +270,18 @@ impl Handler {
         request: Vec<u8>,
     ) -> anyhow::Result<Result<Vec<u8>, String>> {
         let links = self.links.read().await;
+        let aliases = self.aliases.read().await;
         let operation = operation.into();
         let (package, _) = operation
             .split_once('/')
             .context("failed to parse operation")?;
-        let core_target = to_core_entity(target, links.get(package))?;
+        let inv_target = resolve_target(target, links.get(package), &aliases).await?;
         let needs_chunking = request.len() > CHUNK_THRESHOLD_BYTES;
         let mut invocation = Invocation::new(
             &self.cluster_key,
             &self.host_key,
             self.origin.clone(),
-            core_target,
+            inv_target,
             operation,
             request,
             OtelHeaderInjector::default_with_span().into(),
@@ -327,7 +360,7 @@ impl Handler {
         let request = rmp_serde::to_vec_named(request).context("failed to encode request")?;
         self.call_operation_with_payload(target, operation, request)
             .await
-            .context("failed to call linked provider")?
+            .context("failed to call target entity")?
             .map_err(|err| anyhow!(err).context("call failed"))
     }
 }
@@ -661,6 +694,7 @@ impl Bus for Handler {
         let (res_r, mut res_w) = socket_pair()?;
 
         let links = Arc::clone(&self.links);
+        let aliases = Arc::clone(&self.aliases);
         let nats = self.nats.clone();
         let chunk_endpoint = self.chunk_endpoint.clone();
         let lattice_prefix = self.lattice_prefix.clone();
@@ -678,18 +712,20 @@ impl Bus for Handler {
                     .context("failed to read request")
                     .map_err(|e| e.to_string())?;
                 let links = links.read().await;
+                let aliases = aliases.read().await;
                 let (package, _) = operation
                     .split_once('/')
                     .context("failed to parse operation")
                     .map_err(|e| e.to_string())?;
-                let core_target = to_core_entity(target.as_ref(), links.get(package))
+                let inv_target = resolve_target(target.as_ref(), links.get(package), &aliases)
+                    .await
                     .map_err(|e| e.to_string())?;
                 let needs_chunking = request.len() > CHUNK_THRESHOLD_BYTES;
                 let mut invocation = Invocation::new(
                     &cluster_key,
                     &host_key,
                     origin,
-                    core_target,
+                    inv_target,
                     operation,
                     request,
                     OtelHeaderInjector::default_with_span().into(),
@@ -1198,7 +1234,7 @@ pub struct Host {
     rpc_nats: async_nats::Client,
     /// NATS client to use for communicating with capability providers
     prov_rpc_nats: async_nats::Client,
-    data: kv::Store,
+    data: async_nats::jetstream::kv::Store,
     data_watch: AbortHandle,
     providers: RwLock<HashMap<String, Provider>>,
     registry_settings: RwLock<HashMap<String, RegistrySettings>>,
@@ -1207,6 +1243,7 @@ pub struct Host {
     stop_tx: watch::Sender<Option<Instant>>,
     stop_rx: watch::Receiver<Option<Instant>>,
     queue: AbortHandle,
+    aliases: Arc<RwLock<HashMap<String, WasmCloudEntity>>>,
     links: RwLock<HashMap<String, LinkDefinition>>,
 }
 
@@ -1384,6 +1421,30 @@ async fn merge_registry_settings(
     registry_settings
         .values_mut()
         .for_each(|settings| settings.allow_latest = allow_latest);
+}
+
+async fn scan_kv<'a>(
+    data: &'a async_nats::jetstream::kv::Store,
+    prefix: &'a str,
+) -> anyhow::Result<impl Stream<Item = anyhow::Result<(String, Bytes)>> + 'a> {
+    let keys = data.keys().await.context("failed to scan keys")?;
+    let stream = keys
+        .map_err(|e| anyhow!(e).context("failed to read data stream"))
+        .try_filter_map(move |key| async move {
+            if !key.starts_with(prefix) {
+                return Ok(None);
+            }
+            // fail if NATS query fails
+            let Some(buf) = data.get(&key).await? else {
+                warn!(
+                    key,
+                    "data entry was empty. Data may have been deleted during processing"
+                );
+                return Ok(None);
+            };
+            Ok(Some((key, buf)))
+        });
+    Ok(stream)
 }
 
 impl Host {
@@ -1598,6 +1659,7 @@ impl Host {
             stop_rx,
             stop_tx,
             queue: queue_abort.clone(),
+            aliases: Arc::default(),
             links: RwLock::default(),
         };
         host.publish_event("host_started", start_evt)
@@ -1924,6 +1986,7 @@ impl Host {
             origin,
             cluster_key: Arc::clone(&self.cluster_key),
             claims: claims.clone(),
+            aliases: Arc::clone(&self.aliases),
             links: Arc::new(RwLock::new(links)),
             targets: Arc::new(RwLock::default()),
             host_key: Arc::clone(&self.host_key),
@@ -2867,52 +2930,46 @@ impl Host {
             claims: Vec<StoredClaims>,
         }
 
-        let claims: Vec<StoredClaims> = self.scan_latticedata("CLAIMS_").await?;
-        let resp = ClaimsResponse { claims };
-        Ok(serde_json::to_vec(&resp)?.into())
+        let claims: Vec<StoredClaims> = scan_kv(&self.data, "CLAIMS_")
+            .await?
+            .try_filter_map(|(key, buf)| async move {
+                match serde_json::from_slice(&buf) {
+                    Ok(claims) => Ok(Some(claims)),
+                    Err(err) => {
+                        warn!(key, err = err.to_string(), "failed to deserialize claims");
+                        Ok(None)
+                    }
+                }
+            })
+            .try_collect()
+            .await?;
+        let res = serde_json::to_vec(&ClaimsResponse { claims })
+            .context("failed to serialize response")?;
+        Ok(res.into())
     }
 
     #[instrument(skip(self))]
     async fn handle_links(&self) -> anyhow::Result<Bytes> {
-        let links: Vec<LinkDefinition> = self.scan_latticedata("LINKDEF_").await?;
-        let resp = LinkDefinitionList { links };
-        Ok(serde_json::to_vec(&resp)?.into())
-    }
-
-    async fn scan_latticedata<T: DeserializeOwned>(
-        &self,
-        key_prefix: &str,
-    ) -> anyhow::Result<Vec<T>> {
-        self
-            .data
-            .keys()
-            .await
-            .context("failed to scan lattice data keys")?
-            .map_err(|e| anyhow!(e).context("failed to read lattice data stream"))
-            .try_filter(|key| futures::future::ready(key.starts_with(key_prefix)))
-            .and_then(|key| async move {
-                let maybe_bytes = self.data.get(&key).await?; // if we get an error here, we do want to fail
-
-                match maybe_bytes {
-                    None => {
-                        // this isn't the responsibility of the host, so warn and continue
-                        warn!(key, "latticedata entry was empty. Data may have been deleted during processing");
-                        anyhow::Ok(None)
-                    }
-                    Some(bytes) => {
-                        if let Ok(t) = serde_json::from_slice::<T>(&bytes) {
-                            anyhow::Ok(Some(t))
-                        } else {
-                            // this isn't the responsibility of the host, so warn and continue
-                            warn!(key, "failed to deserialize latticedata entry");
-                            anyhow::Ok(None)
-                        }
+        let links: Vec<LinkDefinition> = scan_kv(&self.data, "LINKDEF_")
+            .await?
+            .try_filter_map(|(key, buf)| async move {
+                match serde_json::from_slice(&buf) {
+                    Ok(claims) => Ok(Some(claims)),
+                    Err(err) => {
+                        warn!(
+                            key,
+                            err = err.to_string(),
+                            "failed to deserialize link definition"
+                        );
+                        Ok(None)
                     }
                 }
             })
-            .try_filter_map(|v| futures::future::ready(Ok(v)))
-            .try_collect::<Vec<T>>()
-            .await
+            .try_collect()
+            .await?;
+        let res = serde_json::to_vec(&LinkDefinitionList { links })
+            .context("failed to serialize response")?;
+        Ok(res.into())
     }
 
     #[instrument(skip(self, payload))]
@@ -3245,6 +3302,76 @@ impl Host {
         Ok(())
     }
 
+    #[instrument(skip(self, pubkey, value))]
+    async fn process_claims_put(
+        &self,
+        pubkey: impl AsRef<str>,
+        value: impl AsRef<[u8]>,
+    ) -> anyhow::Result<()> {
+        let pubkey = pubkey.as_ref();
+
+        debug!(pubkey, "process claim entry put");
+
+        let StoredClaims {
+            call_alias,
+            subject,
+            ..
+        } = serde_json::from_slice(value.as_ref()).context("failed to decode stored claims")?;
+        ensure!(subject == pubkey, "subject mismatch");
+
+        if call_alias.is_empty() {
+            return Ok(());
+        }
+
+        let mut aliases = self.aliases.write().await;
+        match aliases.entry(call_alias) {
+            Entry::Occupied(entry) => {
+                if entry.get().public_key != subject {
+                    bail!(
+                        "call alias `{}` clash between `{}` and `{subject}`",
+                        entry.key(),
+                        entry.get().public_key,
+                    )
+                }
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(WasmCloudEntity {
+                    public_key: subject,
+                    ..Default::default()
+                });
+            }
+        }
+        Ok(())
+    }
+
+    #[instrument(skip(self, pubkey, value))]
+    async fn process_claims_delete(
+        &self,
+        pubkey: impl AsRef<str>,
+        value: impl AsRef<[u8]>,
+    ) -> anyhow::Result<()> {
+        let pubkey = pubkey.as_ref();
+
+        debug!(pubkey, "process claim entry deletion");
+
+        let StoredClaims {
+            call_alias,
+            subject,
+            ..
+        } = serde_json::from_slice(value.as_ref()).context("failed to decode stored claims")?;
+        ensure!(subject == pubkey, "subject mismatch");
+
+        if call_alias.is_empty() {
+            return Ok(());
+        }
+
+        let mut aliases = self.aliases.write().await;
+        aliases
+            .remove(&call_alias)
+            .context("attempt to remove a non-existent call alias")?;
+        Ok(())
+    }
+
     #[instrument(skip(self))]
     async fn process_entry(
         &self,
@@ -3268,13 +3395,11 @@ impl Host {
             (Operation::Delete, Some("LINKDEF"), Some(id)) => {
                 self.process_linkdef_delete(id, value).await
             }
-            (Operation::Put, Some("CLAIMS"), Some(_pubkey)) => {
-                // TODO https://github.com/wasmCloud/wasmCloud/issues/507
-                Ok(())
+            (Operation::Put, Some("CLAIMS"), Some(pubkey)) => {
+                self.process_claims_put(pubkey, value).await
             }
-            (Operation::Delete, Some("CLAIMS"), Some(_pubkey)) => {
-                // TODO https://github.com/wasmCloud/wasmCloud/issues/507
-                Ok(())
+            (Operation::Delete, Some("CLAIMS"), Some(pubkey)) => {
+                self.process_claims_delete(pubkey, value).await
             }
             _ => {
                 error!(
@@ -3373,33 +3498,6 @@ fn human_friendly_uptime(uptime: Duration) -> String {
         uptime.saturating_sub(Duration::from_nanos(uptime.subsec_nanos().into())),
     )
     .to_string()
-}
-
-fn to_core_entity(
-    maybe_target: Option<&TargetEntity>,
-    links: Option<&HashMap<String, WasmCloudEntity>>,
-) -> anyhow::Result<WasmCloudEntity> {
-    const DEFAULT_LINK_NAME: &str = "default";
-
-    Ok(match maybe_target {
-        None => links
-            .and_then(|targets| targets.get(DEFAULT_LINK_NAME))
-            .context("link not found")?
-            .clone(),
-        Some(TargetEntity::Link(link_name)) => links
-            .and_then(|targets| targets.get(link_name.as_deref().unwrap_or(DEFAULT_LINK_NAME)))
-            .context("link not found")?
-            .clone(),
-        Some(TargetEntity::Actor(ActorIdentifier::Key(key))) => WasmCloudEntity {
-            public_key: key.public_key(),
-            ..Default::default()
-        },
-        Some(TargetEntity::Actor(ActorIdentifier::Alias(alias))) => {
-            // TODO: Support actor call aliases
-            // https://github.com/wasmCloud/wasmCloud/issues/505
-            bail!("actor-to-actor calls to alias `{alias}` not supported yet")
-        }
-    })
 }
 
 /// Ensure actor has the capability claim to send or receive this invocation. This

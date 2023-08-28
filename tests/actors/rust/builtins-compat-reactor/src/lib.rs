@@ -232,6 +232,26 @@ impl exports::wasmcloud::bus::guest::Guest for Actor {
 
         // TODO: Use blobstore
 
+        bus::host::call_sync(
+            Some(&TargetEntity::Actor(bus::lattice::ActorIdentifier::Alias(
+                "unknown".into(),
+            ))),
+            "test-actors:foobar/actor.foobar",
+            r#"{"arg":"foo"}"#.as_bytes(),
+        )
+        .expect_err("invoked `test-actors:foobar/actor.foobar` on unknown actor");
+
+        let res = bus::host::call_sync(
+            Some(&TargetEntity::Actor(bus::lattice::ActorIdentifier::Alias(
+                "foobar-component-command-preview2".into(),
+            ))),
+            "test-actors:foobar/actor.foobar",
+            r#"{"arg":"foo"}"#.as_bytes(),
+        )
+        .expect("failed to invoke `test-actors:foobar/actor.foobar` on an actor");
+        let res: String = serde_json::from_slice(&res).expect("failed to decode response");
+        assert_eq!(res, "foobar");
+
         Ok(())
     }
 }

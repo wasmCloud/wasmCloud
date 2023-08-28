@@ -493,15 +493,16 @@ impl GuestBindings {
         ctx.stdout.replace(Box::new(response)).await;
         let res = match self {
             GuestBindings::Command(bindings) => {
+                let operation = operation.as_ref();
                 let wasi = preview2::WasiCtxBuilder::new()
-                    .set_args(&["main.wasm", operation.as_ref()]) // TODO: Configure argv[0]
+                    .set_args(&["main.wasm", operation]) // TODO: Configure argv[0]
                     .set_stdin(ctx.stdin.clone())
                     .set_stdout(ctx.stdout.clone())
                     .set_stderr(ctx.stderr.clone())
                     .build(&mut ctx.table)
                     .context("failed to build WASI")?;
                 let wasi = replace(&mut ctx.wasi, wasi);
-                trace!("call `wasi:command/command.run`");
+                trace!(operation, "call `wasi:command/command.run`");
                 let res = bindings
                     .call_run(&mut store)
                     .await
