@@ -205,8 +205,6 @@ struct ActorInstance {
     calls: AbortHandle,
     runtime: Runtime,
     handler: Handler,
-    /// Claims for this actor instance
-    claims: jwt::Claims<jwt::Actor>,
     /// Cluster issuers that this actor should accept invocations from
     valid_issuers: Vec<String>,
 }
@@ -697,7 +695,7 @@ impl ActorInstance {
         msg: Vec<u8>,
     ) -> anyhow::Result<Result<Vec<u8>, String>> {
         // Validate that the actor has the capability to receive the invocation
-        ensure_actor_capability(self.claims.metadata.as_ref(), contract_id)?;
+        ensure_actor_capability(self.handler.claims.metadata.as_ref(), contract_id)?;
 
         let mut instance = self
             .pool
@@ -1450,7 +1448,6 @@ impl Host {
                     calls: calls_abort,
                     runtime: self.runtime.clone(),
                     handler: handler.clone(),
-                    claims: claims.clone(),
                     valid_issuers: self.cluster_issuers.clone(),
                 });
 
