@@ -6,6 +6,7 @@ pub use config::Host as HostConfig;
 mod event;
 
 use crate::oci::Config as OciConfig;
+use crate::policy::{Action, HostInfo, Manager as PolicyManager, RequestSource, RequestTarget};
 use crate::registry::{Auth as RegistryAuth, Settings as RegistrySettings, Type as RegistryType};
 use crate::{fetch_actor, socket_pair};
 
@@ -49,7 +50,7 @@ use tokio_stream::wrappers::IntervalStream;
 use tracing::{debug, error, info, instrument, trace, warn};
 use ulid::Ulid;
 use uuid::Uuid;
-use wascap::jwt;
+use wascap::{jwt, prelude::ClaimsBuilder};
 use wasmcloud_control_interface::{
     ActorAuctionAck, ActorAuctionRequest, ActorDescription, HostInventory, LinkDefinition,
     LinkDefinitionList, ProviderAuctionRequest, ProviderDescription, RegistryCredential,
@@ -213,6 +214,9 @@ struct ActorInstance {
     chunk_endpoint: ChunkEndpoint,
     /// Cluster issuers that this actor should accept invocations from
     valid_issuers: Vec<String>,
+    policy_manager: Arc<PolicyManager>,
+    actor_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::Actor>>>>, // TODO: use a single map once Claims is an enum
+    provider_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::CapabilityProvider>>>>,
 }
 
 #[derive(Clone, Debug)]
@@ -1125,6 +1129,59 @@ impl ActorInstance {
         };
 
         debug!(?invocation.origin, ?invocation.target, invocation.operation, "handle actor invocation");
+
+        let source_public_key = invocation.origin.public_key;
+        // actors don't have a contract_id
+        let source = if invocation.origin.contract_id.is_empty() {
+            let actor_claims = self.actor_claims.read().await;
+            let claims = actor_claims
+                .get(&source_public_key)
+                .cloned()
+                .context("failed to look up claims for origin")?;
+            RequestSource::from(claims)
+        } else {
+            let provider_claims = self.provider_claims.read().await;
+            let claims = provider_claims
+                .get(&source_public_key)
+                .cloned()
+                .context("failed to look up claims for origin")?;
+            let mut source = RequestSource::from(claims);
+            source.link_name = Some(invocation.origin.link_name.clone());
+            source
+        };
+
+        // actors don't have a contract_id
+        let target_public_key = invocation.target.public_key;
+        let target = if invocation.target.contract_id.is_empty() {
+            let actor_claims = self.actor_claims.read().await;
+            let claims = actor_claims
+                .get(&target_public_key)
+                .cloned()
+                .context("failed to look up claims for target")?;
+            RequestTarget::from(claims)
+        } else {
+            let provider_claims = self.provider_claims.read().await;
+            let claims = provider_claims
+                .get(&target_public_key)
+                .cloned()
+                .context("failed to look up claims for target")?;
+            let mut target = RequestTarget::from(claims);
+            target.link_name = Some(invocation.target.link_name.clone());
+            target
+        };
+
+        let resp = self
+            .policy_manager
+            .evaluate_action(Some(source), target, Action::PerformInvocation)
+            .await?;
+        if !resp.permitted {
+            bail!(
+                "Policy denied request to invoke actor `{}`: `{:?}`",
+                resp.request_id,
+                resp.message
+            );
+        };
+
         let res = match self
             .handle_invocation(
                 &invocation.origin.contract_id,
@@ -1236,6 +1293,7 @@ pub struct Host {
     prov_rpc_nats: async_nats::Client,
     data: async_nats::jetstream::kv::Store,
     data_watch: AbortHandle,
+    policy_manager: Arc<PolicyManager>,
     providers: RwLock<HashMap<String, Provider>>,
     registry_settings: RwLock<HashMap<String, RegistrySettings>>,
     runtime: Runtime,
@@ -1245,6 +1303,82 @@ pub struct Host {
     queue: AbortHandle,
     aliases: Arc<RwLock<HashMap<String, WasmCloudEntity>>>,
     links: RwLock<HashMap<String, LinkDefinition>>,
+    actor_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::Actor>>>>, // TODO: use a single map once Claims is an enum
+    provider_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::CapabilityProvider>>>>,
+}
+
+#[allow(clippy::large_enum_variant)] // Without this clippy complains actor is at least 0 bytes while provider is at least 280 bytes. That doesn't make sense
+enum Claims {
+    Actor(jwt::Claims<jwt::Actor>),
+    Provider(jwt::Claims<jwt::CapabilityProvider>),
+}
+
+impl Claims {
+    fn subject(&self) -> &str {
+        match self {
+            Claims::Actor(claims) => &claims.subject,
+            Claims::Provider(claims) => &claims.subject,
+        }
+    }
+}
+
+impl From<StoredClaims> for Claims {
+    fn from(claims: StoredClaims) -> Self {
+        let name = (!claims.name.is_empty()).then_some(claims.name);
+        let rev = claims.revision.parse().ok();
+        let ver = (!claims.version.is_empty()).then_some(claims.version);
+
+        // rely on the fact that serialized actor claims don't include a contract_id
+        if claims.contract_id.is_empty() {
+            let tags = (!claims.tags.is_empty()).then(|| {
+                claims
+                    .tags
+                    .split(',')
+                    .map(std::string::ToString::to_string)
+                    .collect()
+            });
+            let caps = (!claims.capabilities.is_empty()).then(|| {
+                claims
+                    .capabilities
+                    .split(',')
+                    .map(std::string::ToString::to_string)
+                    .collect()
+            });
+            let call_alias = (!claims.call_alias.is_empty()).then_some(claims.call_alias);
+            Claims::Actor(
+                ClaimsBuilder::new()
+                    .subject(&claims.subject)
+                    .issuer(&claims.issuer)
+                    .with_metadata(jwt::Actor {
+                        name,
+                        tags,
+                        caps,
+                        rev,
+                        ver,
+                        call_alias,
+                        ..Default::default()
+                    })
+                    .build(),
+            )
+        } else {
+            let config_schema: Option<serde_json::Value> =
+                serde_json::from_str(&claims.config_schema).ok();
+            Claims::Provider(
+                ClaimsBuilder::new()
+                    .subject(&claims.subject)
+                    .issuer(&claims.issuer)
+                    .with_metadata(jwt::CapabilityProvider {
+                        name,
+                        capid: claims.contract_id,
+                        rev,
+                        ver,
+                        config_schema,
+                        ..Default::default()
+                    })
+                    .build(),
+            )
+        }
+    }
 }
 
 fn linkdef_hash(
@@ -1421,30 +1555,6 @@ async fn merge_registry_settings(
     registry_settings
         .values_mut()
         .for_each(|settings| settings.allow_latest = allow_latest);
-}
-
-async fn scan_kv<'a>(
-    data: &'a async_nats::jetstream::kv::Store,
-    prefix: &'a str,
-) -> anyhow::Result<impl Stream<Item = anyhow::Result<(String, Bytes)>> + 'a> {
-    let keys = data.keys().await.context("failed to scan keys")?;
-    let stream = keys
-        .map_err(|e| anyhow!(e).context("failed to read data stream"))
-        .try_filter_map(move |key| async move {
-            if !key.starts_with(prefix) {
-                return Ok(None);
-            }
-            // fail if NATS query fails
-            let Some(buf) = data.get(&key).await? else {
-                warn!(
-                    key,
-                    "data entry was empty. Data may have been deleted during processing"
-                );
-                return Ok(None);
-            };
-            Ok(Some((key, buf)))
-        });
-    Ok(stream)
 }
 
 impl Host {
@@ -1635,6 +1745,20 @@ impl Host {
             RwLock::new(supplemental_config.registry_settings.unwrap_or_default());
         merge_registry_settings(&registry_settings, config.oci_opts.clone()).await;
 
+        let policy_manager = PolicyManager::new(
+            ctl_nats.clone(),
+            HostInfo {
+                public_key: host_key.public_key(),
+                lattice_id: config.lattice_prefix.clone(),
+                labels: labels.clone(),
+                cluster_issuers: cluster_issuers.clone(),
+            },
+            config.policy_service_config.policy_topic.clone(),
+            config.policy_service_config.policy_timeout_ms,
+            config.policy_service_config.policy_changes_topic.clone(),
+        )
+        .await?;
+
         let host = Host {
             actors: RwLock::default(),
             chunk_endpoint,
@@ -1652,6 +1776,7 @@ impl Host {
             host_config: config,
             data: data.clone(),
             data_watch: data_watch_abort.clone(),
+            policy_manager,
             providers: RwLock::default(),
             registry_settings,
             runtime,
@@ -1661,6 +1786,8 @@ impl Host {
             queue: queue_abort.clone(),
             aliases: Arc::default(),
             links: RwLock::default(),
+            actor_claims: Arc::new(RwLock::default()),
+            provider_claims: Arc::new(RwLock::default()),
         };
         host.publish_event("host_started", start_evt)
             .await
@@ -1718,6 +1845,7 @@ impl Host {
             heartbeat_abort.abort();
             queue_abort.abort();
             data_watch_abort.abort();
+            host.policy_manager.policy_changes.abort();
             let _ = try_join!(queue, data_watch, heartbeat).context("failed to await tasks")?;
             host.publish_event(
                 "host_stopped",
@@ -1858,6 +1986,9 @@ impl Host {
                     handler: handler.clone(),
                     chunk_endpoint: self.chunk_endpoint.clone(),
                     valid_issuers: self.cluster_issuers.clone(),
+                    policy_manager: Arc::clone(&self.policy_manager),
+                    actor_claims: Arc::clone(&self.actor_claims),
+                    provider_claims: Arc::clone(&self.provider_claims),
                 });
 
                 let _calls = spawn({
@@ -2158,14 +2289,23 @@ impl Host {
 
         debug!(actor_id, actor_ref, count, "scale actor");
 
-        let (actor_id, actor) = if actor_id.is_empty() {
-            let actor = self.fetch_actor(&actor_ref).await?;
-            (
-                actor.claims().context("claims missing")?.subject.clone(),
-                Some(actor),
+        let actor = self.fetch_actor(&actor_ref).await?;
+        let claims = actor.claims().context("claims missing")?;
+        let actor_id = claims.subject.clone();
+        let resp = self
+            .policy_manager
+            .evaluate_action(
+                None,
+                RequestTarget::from(claims.clone()),
+                Action::StartActor,
             )
-        } else {
-            (actor_id, None)
+            .await?;
+        if !resp.permitted {
+            bail!(
+                "Policy denied request to start actor `{}`: `{:?}`",
+                resp.request_id,
+                resp.message
+            )
         };
 
         let annotations = annotations.map(|annotations| annotations.into_iter().collect());
@@ -2175,11 +2315,6 @@ impl Host {
         ) {
             (hash_map::Entry::Vacant(_), None) => {}
             (hash_map::Entry::Vacant(entry), Some(count)) => {
-                let actor = if let Some(actor) = actor {
-                    actor
-                } else {
-                    self.fetch_actor(&actor_ref).await?
-                };
                 self.start_actor(entry, actor, actor_ref, count, host_id, annotations)
                     .await?;
             }
@@ -2253,6 +2388,23 @@ impl Host {
 
         let actor = self.fetch_actor(&actor_ref).await?;
         let claims = actor.claims().context("claims missing")?;
+        let actor_id = claims.subject.clone();
+        let resp = self
+            .policy_manager
+            .evaluate_action(
+                None,
+                RequestTarget::from(claims.clone()),
+                Action::StartActor,
+            )
+            .await?;
+        if !resp.permitted {
+            bail!(
+                "Policy denied request to start actor `{}`: `{:?}`",
+                resp.request_id,
+                resp.message
+            )
+        };
+
         let annotations = annotations.map(|annotations| annotations.into_iter().collect());
         let Some(count) = NonZeroUsize::new(count.into()) else {
             // NOTE: This mimics OTP behavior
@@ -2264,7 +2416,7 @@ impl Host {
             return Ok(())
         };
 
-        match self.actors.write().await.entry(claims.subject.clone()) {
+        match self.actors.write().await.entry(actor_id) {
             hash_map::Entry::Vacant(entry) => {
                 if let Err(err) = self
                     .start_actor(
@@ -2491,6 +2643,20 @@ impl Host {
         self.store_claims(claims.clone())
             .await
             .context("failed to store claims")?;
+
+        let mut target = RequestTarget::from(claims.clone());
+        target.link_name = Some(link_name.to_owned());
+        let resp = self
+            .policy_manager
+            .evaluate_action(None, target, Action::StartProvider)
+            .await?;
+        if !resp.permitted {
+            bail!(
+                "Policy denied request to start provider `{}`: `{:?}`",
+                resp.request_id,
+                resp.message
+            )
+        };
 
         let annotations = annotations.map(|annotations| annotations.into_iter().collect());
         let mut providers = self.providers.write().await;
@@ -2930,19 +3096,18 @@ impl Host {
             claims: Vec<StoredClaims>,
         }
 
-        let claims: Vec<StoredClaims> = scan_kv(&self.data, "CLAIMS_")
-            .await?
-            .try_filter_map(|(key, buf)| async move {
-                match serde_json::from_slice(&buf) {
-                    Ok(claims) => Ok(Some(claims)),
-                    Err(err) => {
-                        warn!(key, err = err.to_string(), "failed to deserialize claims");
-                        Ok(None)
-                    }
-                }
-            })
-            .try_collect()
-            .await?;
+        let actor_claims = self.actor_claims.read().await;
+        let actor_claims = actor_claims
+            .values()
+            .cloned()
+            .filter_map(|v| StoredClaims::try_from(v).ok());
+        let provider_claims = self.provider_claims.read().await;
+        let provider_claims = provider_claims
+            .values()
+            .cloned()
+            .filter_map(|v| StoredClaims::try_from(v).ok());
+        let claims = actor_claims.chain(provider_claims).collect();
+
         let res = serde_json::to_vec(&ClaimsResponse { claims })
             .context("failed to serialize response")?;
         Ok(res.into())
@@ -3157,12 +3322,15 @@ impl Host {
         }
     }
 
+    #[instrument(skip_all)]
     async fn store_claims<T>(&self, claims: T) -> anyhow::Result<()>
     where
         T: TryInto<StoredClaims, Error = anyhow::Error>,
     {
         let stored_claims: StoredClaims = claims.try_into()?;
         let key = format!("CLAIMS_{}", stored_claims.subject);
+
+        trace!(?stored_claims, ?key, "storing claims");
 
         let bytes = serde_json::to_vec(&stored_claims)
             .map_err(anyhow::Error::from)
@@ -3297,36 +3465,50 @@ impl Host {
 
         debug!(pubkey, "process claim entry put");
 
-        let StoredClaims {
-            call_alias,
-            subject,
-            ..
-        } = serde_json::from_slice(value.as_ref()).context("failed to decode stored claims")?;
-        ensure!(subject == pubkey, "subject mismatch");
+        let stored_claims: StoredClaims =
+            serde_json::from_slice(value.as_ref()).context("failed to decode stored claims")?;
+        let claims = Claims::from(stored_claims);
 
-        if call_alias.is_empty() {
-            return Ok(());
-        }
+        ensure!(claims.subject() == pubkey, "subject mismatch");
 
-        let mut aliases = self.aliases.write().await;
-        match aliases.entry(call_alias) {
-            Entry::Occupied(entry) => {
-                if entry.get().public_key != subject {
-                    bail!(
-                        "call alias `{}` clash between `{}` and `{subject}`",
-                        entry.key(),
-                        entry.get().public_key,
-                    )
+        match claims {
+            Claims::Actor(claims) => {
+                let subject = claims.subject.clone();
+                let metadata = claims.metadata.clone();
+                let mut actor_claims = self.actor_claims.write().await;
+                actor_claims.insert(claims.subject.clone(), claims);
+
+                let Some(call_alias) = metadata.and_then(|m| m.call_alias) else {
+                    return Ok(());
+                };
+
+                let mut aliases = self.aliases.write().await;
+                match aliases.entry(call_alias) {
+                    Entry::Occupied(entry) => {
+                        if entry.get().public_key != subject {
+                            bail!(
+                                "call alias `{}` clash between `{}` and `{}`",
+                                entry.key(),
+                                entry.get().public_key,
+                                subject
+                            )
+                        }
+                    }
+                    Entry::Vacant(entry) => {
+                        entry.insert(WasmCloudEntity {
+                            public_key: subject,
+                            ..Default::default()
+                        });
+                    }
                 }
+                Ok(())
             }
-            Entry::Vacant(entry) => {
-                entry.insert(WasmCloudEntity {
-                    public_key: subject,
-                    ..Default::default()
-                });
+            Claims::Provider(claims) => {
+                let mut provider_claims = self.provider_claims.write().await;
+                provider_claims.insert(claims.subject.clone(), claims);
+                Ok(())
             }
         }
-        Ok(())
     }
 
     #[instrument(skip(self, pubkey, value))]
@@ -3339,21 +3521,32 @@ impl Host {
 
         debug!(pubkey, "process claim entry deletion");
 
-        let StoredClaims {
-            call_alias,
-            subject,
-            ..
-        } = serde_json::from_slice(value.as_ref()).context("failed to decode stored claims")?;
-        ensure!(subject == pubkey, "subject mismatch");
+        let stored_claims: StoredClaims =
+            serde_json::from_slice(value.as_ref()).context("failed to decode stored claims")?;
+        let claims = Claims::from(stored_claims);
 
-        if call_alias.is_empty() {
-            return Ok(());
+        ensure!(claims.subject() == pubkey, "subject mismatch");
+
+        match claims {
+            Claims::Actor(claims) => {
+                let mut actor_claims = self.actor_claims.write().await;
+                actor_claims.remove(&claims.subject);
+
+                let Some(call_alias) = claims.metadata.and_then(|m| m.call_alias) else {
+                    return Ok(());
+                };
+
+                let mut aliases = self.aliases.write().await;
+                aliases
+                    .remove(&call_alias)
+                    .context("attempt to remove a non-existent call alias")?;
+            }
+            Claims::Provider(claims) => {
+                let mut provider_claims = self.provider_claims.write().await;
+                provider_claims.remove(&claims.subject);
+            }
         }
 
-        let mut aliases = self.aliases.write().await;
-        aliases
-            .remove(&call_alias)
-            .context("attempt to remove a non-existent call alias")?;
         Ok(())
     }
 
@@ -3406,7 +3599,7 @@ impl Host {
 }
 
 // TODO: use a better format https://github.com/wasmCloud/wasmCloud/issues/508
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct StoredClaims {
     call_alias: String,
     #[serde(rename = "caps")]
@@ -3421,6 +3614,7 @@ struct StoredClaims {
     subject: String,
     tags: String,
     version: String,
+    config_schema: String,
 }
 
 impl TryFrom<jwt::Claims<jwt::Actor>> for StoredClaims {
@@ -3446,6 +3640,7 @@ impl TryFrom<jwt::Claims<jwt::Actor>> for StoredClaims {
             subject,
             tags: metadata.tags.unwrap_or_default().join(","),
             version: metadata.ver.unwrap_or_default(),
+            config_schema: String::new(), // actors don't have a config schema
         })
     }
 }
@@ -3473,6 +3668,10 @@ impl TryFrom<jwt::Claims<jwt::CapabilityProvider>> for StoredClaims {
             subject,
             tags: String::new(), // providers don't have tags
             version: metadata.ver.unwrap_or_default(),
+            config_schema: metadata
+                .config_schema
+                .map(|schema| schema.to_string())
+                .unwrap_or_default(),
         })
     }
 }

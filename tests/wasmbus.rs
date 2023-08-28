@@ -921,14 +921,14 @@ expected: {expected_labels:?}"#
     } = ctl_client
         .get_claims()
         .await
-        .map_err(|e| anyhow!(e).context("failed to query claims"))?;
+        .map_err(|e| anyhow!(e).context("failed to query claims via host"))?;
     claims_from_host.sort_by(|a, b| a.get("sub").unwrap().cmp(b.get("sub").unwrap()));
     ensure!(claims_from_host.len() == 8); // 4 providers, 4 actors
 
     let mut links_from_host = ctl_client
         .query_links()
         .await
-        .map_err(|e| anyhow!(e).context("failed to query claims"))?
+        .map_err(|e| anyhow!(e).context("failed to query links via host"))?
         .links;
     links_from_host.sort_by(|a, b| match a.actor_id.cmp(&b.actor_id) {
         std::cmp::Ordering::Equal => match a.provider_id.cmp(&b.provider_id) {
@@ -952,13 +952,13 @@ expected: {expected_labels:?}"#
     } = ctl_client
         .get_claims()
         .await
-        .map_err(|e| anyhow!(e).context("failed to query claims"))?;
+        .map_err(|e| anyhow!(e).context("failed to query claims via bucket"))?;
     claims_from_bucket.sort_by(|a, b| a.get("sub").unwrap().cmp(b.get("sub").unwrap()));
 
     let mut links_from_bucket = ctl_client
         .query_links()
         .await
-        .map_err(|e| anyhow!(e).context("failed to query claims"))?
+        .map_err(|e| anyhow!(e).context("failed to query links via bucket"))?
         .links;
     links_from_bucket.sort_by(|a, b| match a.actor_id.cmp(&b.actor_id) {
         std::cmp::Ordering::Equal => match a.provider_id.cmp(&b.provider_id) {

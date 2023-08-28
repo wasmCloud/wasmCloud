@@ -63,6 +63,19 @@ pub struct Host {
     pub config_service_enabled: bool,
     /// configuration for OpenTelemetry tracing
     pub otel_config: OtelConfig,
+    /// configuration for wasmCloud policy service
+    pub policy_service_config: PolicyService,
+}
+
+/// Configuration for wasmCloud policy service
+#[derive(Clone, Debug, Default)]
+pub struct PolicyService {
+    /// The topic to request policy decisions on
+    pub policy_topic: Option<String>,
+    /// An optional topic to receive updated policy decisions on
+    pub policy_changes_topic: Option<String>,
+    /// The timeout for policy requests
+    pub policy_timeout_ms: Option<Duration>,
 }
 
 impl Default for Host {
@@ -97,6 +110,7 @@ impl Default for Host {
             log_level: LogLevel::Info,
             config_service_enabled: false,
             otel_config: OtelConfig::default(),
+            policy_service_config: PolicyService::default(),
         }
     }
 }

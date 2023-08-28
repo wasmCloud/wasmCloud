@@ -12,6 +12,7 @@ use wasmcloud_core::logging::Level as WasmcloudLogLevel;
 use wasmcloud_core::OtelConfig;
 use wasmcloud_host::oci::Config as OciConfig;
 use wasmcloud_host::url::Url;
+use wasmcloud_host::wasmbus::config::PolicyService as PolicyServiceConfig;
 use wasmcloud_host::WasmbusHostConfig;
 use wasmcloud_tracing::configure_tracing;
 
@@ -182,16 +183,22 @@ struct Args {
     #[clap(long = "prov-rpc-tls", env = "WASMCLOUD_PROV_RPC_TLS", hide = true)]
     prov_rpc_tls: bool,
 
-    // TODO: use and implement policy
     #[clap(long = "policy-topic", env = "WASMCLOUD_POLICY_TOPIC", hide = true)]
     policy_topic: Option<String>,
     #[clap(
         long = "policy-changes-topic",
         env = "WASMCLOUD_POLICY_CHANGES_TOPIC",
+        requires = "policy_topic",
         hide = true
     )]
     policy_changes_topic: Option<String>,
-    #[clap(long = "policy-timeout-ms", env = "WASMCLOUD_POLICY_TIMEOUT", value_parser = parse_duration, hide = true)]
+    #[clap(
+        long = "policy-timeout-ms",
+        env = "WASMCLOUD_POLICY_TIMEOUT",
+        requires = "policy_topic",
+        value_parser = parse_duration,
+        hide = true
+    )]
     policy_timeout_ms: Option<Duration>,
 
     /// Used in tandem with `oci_user` and `oci_password` to override credentials for a specific OCI registry.
@@ -324,6 +331,11 @@ async fn main() -> anyhow::Result<()> {
         oci_user: args.oci_user,
         oci_password: args.oci_password,
     };
+    let policy_service_config = PolicyServiceConfig {
+        policy_topic: args.policy_topic,
+        policy_changes_topic: args.policy_changes_topic,
+        policy_timeout_ms: args.policy_timeout_ms,
+    };
     let (host, shutdown) = Box::pin(wasmcloud_host::wasmbus::Host::new(WasmbusHostConfig {
         ctl_nats_url,
         lattice_prefix: args.lattice_prefix,
@@ -351,6 +363,7 @@ async fn main() -> anyhow::Result<()> {
         log_level,
         enable_structured_logging: args.enable_structured_logging,
         otel_config,
+        policy_service_config,
     }))
     .await
     .context("failed to initialize host")?;
