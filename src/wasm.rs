@@ -159,7 +159,7 @@ pub(crate) fn strip_custom_section(buf: &[u8]) -> Result<Vec<u8>> {
             }
             _ => {
                 if let Some((id, range)) = payload.as_section() {
-                    if range.end < buf.len() {
+                    if range.end <= buf.len() {
                         wasm_encoder::RawSection {
                             id,
                             data: &buf[range],

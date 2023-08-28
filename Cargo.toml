@@ -1,6 +1,6 @@
 [package]
 name = "wascap"
-version = "0.11.0"
+version = "0.11.1"
 authors = ["wasmCloud Team"]
 edition = "2018"
 description = "Wascap - wasmCloud Capabilities. Library for extracting, embedding, and validating claims"
