@@ -120,6 +120,12 @@ impl capability::Bus for Handler {
             ("keyvalue", "wasmcloud:keyvalue") => {
                 Ok(capability::TargetEntity::Link(Some("keyvalue".into())))
             }
+            ("", "foobar-component-command-preview2") => Ok(capability::TargetEntity::Actor(
+                capability::ActorIdentifier::Alias("foobar-component-command-preview2".into()),
+            )),
+            ("", "unknown") => Ok(capability::TargetEntity::Actor(
+                capability::ActorIdentifier::Alias("unknown".into()),
+            )),
             _ => panic!("binding `{binding}` namespace `{namespace}` pair not supported"),
         }
     }
@@ -301,6 +307,20 @@ impl capability::Bus for Handler {
                 let new: i32 = new.try_into().expect("response does not fit in `u64`");
                 let buf = rmp_serde::to_vec_named(&new).expect("failed to encode reply");
                 Ok(buf)
+            }
+
+            (
+                Some(capability::TargetEntity::Actor(capability::ActorIdentifier::Alias(name))),
+                "test-actors:foobar/actor.foobar" // component invocation
+                | "foobar-component-command-preview2/actor.foobar"  // valid module invocation
+                | "unknown/actor.foobar", // invalid module invocation
+            ) if name == "foobar-component-command-preview2" || name == "unknown" => {
+                assert_eq!(payload, br#"{"arg":"foo"}"#);
+                if name == "unknown" {
+                    bail!("unknown actor call alias")
+                } else {
+                    Ok(r#""foobar""#.into())
+                }
             }
 
             (target, operation) => {

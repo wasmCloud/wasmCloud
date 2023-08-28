@@ -543,10 +543,11 @@ expected: {expected_labels:?}"#
         _ => bail!("more than two hosts in the lattice"),
     }
 
-    let (component_actor, compat_actor, module_actor) = try_join!(
+    let (component_actor, compat_actor, module_actor, foobar_actor) = try_join!(
         fs::read(test_actors::RUST_BUILTINS_COMPONENT_REACTOR_PREVIEW2_SIGNED),
         fs::read(test_actors::RUST_BUILTINS_COMPAT_REACTOR_PREVIEW2_SIGNED),
         fs::read(test_actors::RUST_BUILTINS_MODULE_REACTOR_SIGNED),
+        fs::read(test_actors::RUST_FOOBAR_COMPONENT_COMMAND_PREVIEW2_SIGNED),
     )
     .context("failed to read actors")?;
 
@@ -569,6 +570,13 @@ expected: {expected_labels:?}"#
         .context("failed to extract module actor claims")?
         .context("module actor claims missing")?;
 
+    let jwt::Token {
+        claims: foobar_actor_claims,
+        ..
+    } = extract_claims(foobar_actor)
+        .context("failed to extract foobar actor claims")?
+        .context("foobar actor claims missing")?;
+
     let component_actor_url =
         Url::from_file_path(test_actors::RUST_BUILTINS_COMPONENT_REACTOR_PREVIEW2_SIGNED)
             .expect("failed to construct component actor ref");
@@ -578,8 +586,12 @@ expected: {expected_labels:?}"#
     let module_actor_url = Url::from_file_path(test_actors::RUST_BUILTINS_MODULE_REACTOR_SIGNED)
         .expect("failed to construct module actor ref");
 
+    let foobar_actor_url =
+        Url::from_file_path(test_actors::RUST_FOOBAR_COMPONENT_COMMAND_PREVIEW2_SIGNED)
+            .expect("failed to construct foobar actor ref");
+
     let mut ack = ctl_client
-        .perform_actor_auction(component_actor_url.as_str(), HashMap::default())
+        .perform_actor_auction(foobar_actor_url.as_str(), HashMap::default())
         .await
         .map_err(|e| anyhow!(e).context("failed to perform actor auction"))?;
     ack.sort_unstable_by(|a, _b| {
@@ -604,10 +616,11 @@ expected: {expected_labels:?}"#
             [],
         ) => {
             ensure!(host_id == host_key.public_key());
-            ensure!(actor_ref == component_actor_url.as_str());
+            ensure!(actor_ref == foobar_actor_url.as_str());
             ensure!(constraints.is_empty());
+
             ensure!(host_id_two == host_key_two.public_key());
-            ensure!(actor_ref_two == component_actor_url.as_str());
+            ensure!(actor_ref_two == foobar_actor_url.as_str());
             ensure!(constraints_two.is_empty());
         }
         (_, _, []) => bail!("not enough actor auction acks received"),
@@ -637,6 +650,14 @@ expected: {expected_labels:?}"#
             TEST_PREFIX,
             &host_key,
             &module_actor_url,
+            1,
+        ),
+        assert_start_actor(
+            &ctl_client,
+            &ctl_nats_client,
+            TEST_PREFIX,
+            &host_key,
+            &foobar_actor_url,
             1,
         ),
     )
@@ -695,6 +716,7 @@ expected: {expected_labels:?}"#
             ensure!(host_id == host_key.public_key());
             ensure!(provider_ref == httpserver_provider_url.as_str());
             ensure!(link_name == "httpserver");
+
             ensure!(host_id_two == host_key_two.public_key());
             ensure!(provider_ref_two == httpserver_provider_url.as_str());
             ensure!(link_name_two == "httpserver");
@@ -901,7 +923,7 @@ expected: {expected_labels:?}"#
         .await
         .map_err(|e| anyhow!(e).context("failed to query claims"))?;
     claims_from_host.sort_by(|a, b| a.get("sub").unwrap().cmp(b.get("sub").unwrap()));
-    ensure!(claims_from_host.len() == 7); // 4 providers, 3 actors
+    ensure!(claims_from_host.len() == 8); // 4 providers, 4 actors
 
     let mut links_from_host = ctl_client
         .query_links()
@@ -993,7 +1015,13 @@ got: {labels:?}
 expected: {expected_labels:?}"#
     );
     actors.sort_by(|a, b| b.name.cmp(&a.name));
-    match (actors.pop(), actors.pop(), actors.pop(), actors.as_slice()) {
+    match (
+        actors.pop(),
+        actors.pop(),
+        actors.pop(),
+        actors.pop(),
+        actors.as_slice(),
+    ) {
         (
             Some(ActorDescription {
                 id: compat_id,
@@ -1012,6 +1040,12 @@ expected: {expected_labels:?}"#
                 image_ref: module_image_ref,
                 instances: mut module_instances,
                 name: module_name,
+            }),
+            Some(ActorDescription {
+                id: foobar_id,
+                image_ref: foobar_image_ref,
+                instances: mut foobar_instances,
+                name: foobar_name,
             }),
             [],
         ) => {
@@ -1110,9 +1144,41 @@ expected: {expected_name:?}"#
             ensure!(annotations == None);
             ensure!(Uuid::parse_str(&instance_id).is_ok());
             ensure!(revision == expected_revision.unwrap_or_default());
+
+            // TODO: Validate `constraints`
+            ensure!(foobar_id == foobar_actor_claims.subject);
+            let jwt::Actor {
+                name: expected_name,
+                rev: expected_revision,
+                ..
+            } = foobar_actor_claims
+                .metadata
+                .as_ref()
+                .context("missing foobar actor metadata")?;
+            ensure!(foobar_image_ref == Some(foobar_actor_url.to_string()));
+            ensure!(
+                foobar_name == *expected_name,
+                r#"invalid foobar actor name:
+got: {foobar_name:?}
+expected: {expected_name:?}"#
+            );
+            let ActorInstance {
+                annotations,
+                instance_id,
+                revision,
+            } = foobar_instances
+                .pop()
+                .context("no foobar actor instances found")?;
+            ensure!(
+                foobar_instances.is_empty(),
+                "more than one foobar actor instance found"
+            );
+            ensure!(annotations == None);
+            ensure!(Uuid::parse_str(&instance_id).is_ok());
+            ensure!(revision == expected_revision.unwrap_or_default());
         }
-        (None, None, None, []) => bail!("no actor found"),
-        _ => bail!("more than three actors found"),
+        (None, None, None, None, []) => bail!("no actor found"),
+        _ => bail!("more than four actors found"),
     }
     providers.sort_unstable_by(|a, b| b.name.cmp(&a.name));
     match (

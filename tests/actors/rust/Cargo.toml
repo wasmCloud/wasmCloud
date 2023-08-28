@@ -3,6 +3,7 @@ members = [
     "builtins-compat-reactor",
     "builtins-component-reactor",
     "builtins-module-reactor",
+    "foobar-component-command",
     "http-compat-command",
     "logging-module-command",
 ]

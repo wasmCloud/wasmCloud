@@ -154,7 +154,7 @@ async fn install_rust_wasm32_unknown_unknown_actors(
 async fn install_rust_wasm32_wasi_actors(out_dir: impl AsRef<Path>) -> anyhow::Result<()> {
     let out_dir = out_dir.as_ref();
 
-    // NOTE: Due to bizarre nature of `cargo` feature unification, compiling builtins actors in a
+    // NOTE: Due to bizarre nature of `cargo` feature unification, compiling builtin actors in a
     // singular `cargo` invocation would unify `component` and `compat` features in
     // `wasmcloud_actor` crate
 
@@ -208,23 +208,37 @@ async fn install_rust_wasm32_wasi_actors(out_dir: impl AsRef<Path>) -> anyhow::R
                     "--manifest-path=./rust/Cargo.toml",
                     "--target=wasm32-wasi",
                     "-p=builtins-component-reactor",
+                    "-p=foobar-component-command",
                 ],
                 |name, kind| {
-                    ["builtins-component-reactor"].contains(&name)
-                        && kind.contains(&CrateType::Cdylib)
+                    ["builtins-component-reactor", "foobar-component-command"].contains(&name)
+                        && (kind.contains(&CrateType::Cdylib) || kind.contains(&CrateType::Bin))
                 },
             )
             .await
-            .context("failed to build `builtins-component-reactor` crate")?;
-            match (artifacts.next().deref_artifact(), artifacts.next()) {
-                (Some(("builtins-component-reactor", [builtins_component_reactor])), None) => {
-                    copy(
-                        builtins_component_reactor,
-                        out_dir.join("rust-builtins-component-reactor.wasm"),
+            .context("failed to build `builtins-component-reactor` and `foobar-component-command` crates")?;
+            match (
+                artifacts.next().deref_artifact(),
+                artifacts.next().deref_artifact(),
+                artifacts.next()
+            ) {
+                (
+                    Some(("builtins-component-reactor", [builtins_component_reactor])),
+                    Some(("foobar-component-command", [foobar_component_command])),
+                    None
+                ) => {
+                    try_join!(
+                        copy(
+                            builtins_component_reactor,
+                            out_dir.join("rust-builtins-component-reactor.wasm"),
+                        ),
+                        copy(
+                            foobar_component_command,
+                            out_dir.join("rust-foobar-component-command.wasm"),
+                        )
                     )
-                    .await
                 }
-                _ => bail!("invalid `builtins-component-reactor` build artifacts"),
+                _ => bail!("invalid `builtins-component-reactor` and `foobar-component-command` build artifacts"),
             }
         },
         async {
@@ -316,7 +330,11 @@ async fn main() -> anyhow::Result<()> {
             .await
             .with_context(|| format!("failed to write `{}`", path.display()))?;
     }
-    for name in ["http-compat-command", "tcp-component-command"] {
+    for name in [
+        "foobar-component-command",
+        "http-compat-command",
+        "tcp-component-command",
+    ] {
         let path = out_dir.join(format!("rust-{name}.wasm"));
         let module = fs::read(&path)
             .await
@@ -356,6 +374,8 @@ async fn main() -> anyhow::Result<()> {
             Some(builtin_caps.clone()),
         ),
         ("builtins-module-reactor", Some(builtin_caps.clone())),
+        ("foobar-component-command", None),
+        ("foobar-component-command-preview2", None),
         ("http-compat-command", Some(vec![caps::HTTP_SERVER.into()])),
         (
             "http-compat-command-preview2",

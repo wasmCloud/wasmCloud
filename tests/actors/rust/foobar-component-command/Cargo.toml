@@ -1,0 +1,10 @@
+[package]
+name = "foobar-component-command"
+
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow = { workspace = true, features = ["std"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true, features = ["std"] }
