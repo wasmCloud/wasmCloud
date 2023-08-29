@@ -1605,7 +1605,7 @@ impl Host {
     }
 
     /// Construct a new [Host] returning a tuple of its [Arc] and an async shutdown function.
-    #[instrument]
+    #[instrument(skip_all)]
     pub async fn new(
         config: HostConfig,
     ) -> anyhow::Result<(Arc<Self>, impl Future<Output = anyhow::Result<()>>)> {
@@ -1616,9 +1616,10 @@ impl Host {
             Arc::new(KeyPair::new(KeyPairType::Cluster))
         };
         let mut cluster_issuers = config.cluster_issuers.clone().unwrap_or_default();
-        if !cluster_issuers.contains(&cluster_key.public_key()) {
-            debug!("adding cluster key to cluster issuers");
-            cluster_issuers.push(cluster_key.public_key());
+        let cluster_pub_key = cluster_key.public_key();
+        if !cluster_issuers.contains(&cluster_pub_key) {
+            debug!(cluster_pub_key, "adding cluster key to cluster issuers");
+            cluster_issuers.push(cluster_pub_key);
         }
         let host_key = if let Some(host_key) = &config.host_key {
             ensure!(host_key.key_pair_type() == KeyPairType::Server);
@@ -3562,7 +3563,7 @@ impl Host {
         Ok(())
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn process_entry(
         &self,
         async_nats::jetstream::kv::Entry {
