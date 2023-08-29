@@ -108,22 +108,24 @@
 
               buildInputs =
                 buildInputs
-                ++ optionals stdenv.hostPlatform.isDarwin [
+                ++ optionals (pkgs.stdenv.hostPlatform.isDarwin && stdenv.hostPlatform.isDarwin) [
                   pkgs.darwin.apple_sdk.frameworks.Security
                   pkgs.libiconv
-                ];
-
-              depsBuildBuild =
-                depsBuildBuild
-                ++ optionals stdenv.hostPlatform.isDarwin [
-                  darwin.apple_sdk.frameworks.CoreFoundation
-                  libiconv
+                  pkgs.xcbuild.xcrun
                 ];
 
               nativeBuildInputs =
                 nativeBuildInputs
                 ++ [
                   pkgs.protobuf # prost build dependency
+                ];
+            }
+            // optionalAttrs (args ? cargoArtifacts) {
+              depsBuildBuild =
+                depsBuildBuild
+                ++ optionals (pkgs.stdenv.hostPlatform.isDarwin && stdenv.hostPlatform.isDarwin) [
+                  darwin.apple_sdk.frameworks.CoreFoundation
+                  libiconv
                 ];
 
               nativeCheckInputs =
@@ -132,12 +134,11 @@
                   pkgs.nats-server
                   pkgs.redis
                 ];
-            }
-            // optionalAttrs (args ? cargoArtifacts && stdenv.hostPlatform.isDarwin) {
-              # See https://github.com/nextest-rs/nextest/issues/267
+
               preCheck =
                 preCheck
-                + ''
+                # See https://github.com/nextest-rs/nextest/issues/267
+                + optionalString (pkgs.stdenv.hostPlatform.isDarwin && stdenv.hostPlatform.isDarwin) ''
                   export DYLD_FALLBACK_LIBRARY_PATH=$(rustc --print sysroot)/lib
                 '';
             };
