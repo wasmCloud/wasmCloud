@@ -1,4 +1,9 @@
-wit_bindgen::generate!("actor");
+wit_bindgen::generate!({
+    exports: {
+        world: Actor,
+        "wasi:http/incoming-handler": Actor,
+    }
+});
 
 use std::io::{Read, Write};
 
@@ -16,7 +21,7 @@ use wasmcloud_actor::{
 
 struct Actor;
 
-impl exports::wasi::http::incoming_handler::IncomingHandler for Actor {
+impl exports::wasi::http::incoming_handler::Guest for Actor {
     fn handle(request: types::IncomingRequest, response_out: types::ResponseOutparam) {
         assert!(matches!(
             types::incoming_request_method(request),
@@ -286,5 +291,3 @@ impl exports::wasi::http::incoming_handler::IncomingHandler for Actor {
         assert_eq!(res, "foobar");
     }
 }
-
-export_actor!(Actor);

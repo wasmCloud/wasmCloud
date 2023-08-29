@@ -1,4 +1,9 @@
-wit_bindgen::generate!("actor");
+wit_bindgen::generate!({
+    exports: {
+        world: Actor,
+        "wasmcloud:bus/guest": Actor,
+    }
+});
 
 use std::io::{stdin, stdout, Write};
 
@@ -255,5 +260,3 @@ impl exports::wasmcloud::bus::guest::Guest for Actor {
         Ok(())
     }
 }
-
-export_actor!(Actor);
