@@ -1108,12 +1108,8 @@ impl ActorInstance {
         }
     }
 
-    #[instrument(skip(self, payload))]
-    async fn handle_call(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
-        let invocation: Invocation =
-            rmp_serde::from_slice(payload.as_ref()).context("failed to decode invocation")?;
-        attach_span_context(&invocation);
-
+    #[instrument(skip_all)]
+    async fn handle_call(&self, invocation: Invocation) -> anyhow::Result<(Vec<u8>, usize)> {
         debug!(?invocation.origin, ?invocation.target, invocation.operation, "validate actor invocation");
         invocation.validate_antiforgery(&self.valid_issuers)?;
 
@@ -1182,15 +1178,16 @@ impl ActorInstance {
             );
         };
 
-        let res = match self
+        let maybe_resp = self
             .handle_invocation(
                 &invocation.origin.contract_id,
                 &invocation.operation,
                 inv_msg,
             )
             .await
-            .context("failed to handle invocation")?
-        {
+            .context("failed to handle invocation")?;
+
+        match maybe_resp {
             Ok(resp_msg) => {
                 let content_length = resp_msg.len();
                 let resp_msg = if content_length > CHUNK_THRESHOLD_BYTES {
@@ -1203,23 +1200,10 @@ impl ActorInstance {
                 } else {
                     resp_msg
                 };
-
-                InvocationResponse {
-                    msg: resp_msg,
-                    invocation_id: invocation.id,
-                    content_length: content_length as u64,
-                    ..Default::default()
-                }
+                Ok((resp_msg, content_length))
             }
-            Err(e) => InvocationResponse {
-                invocation_id: invocation.id,
-                error: Some(e),
-                ..Default::default()
-            },
-        };
-        rmp_serde::to_vec_named(&res)
-            .map(Into::into)
-            .context("failed to encode response")
+            Err(e) => Err(anyhow!(e)),
+        }
     }
 
     #[instrument(skip(self, payload))]
@@ -1232,17 +1216,45 @@ impl ActorInstance {
             ..
         }: async_nats::Message,
     ) {
-        let res = self.handle_call(payload).await;
-        match (reply, res) {
-            (Some(reply), Ok(buf)) => {
-                if let Err(e) = self.nats.publish(reply, buf).await {
-                    error!("failed to publish response to `{subject}` request: {e:?}");
+        match rmp_serde::from_slice::<Invocation>(payload.as_ref()) {
+            Ok(invocation) => {
+                let invocation_id = invocation.id.clone();
+                attach_span_context(&invocation);
+                let res = self.handle_call(invocation).await;
+
+                let inv_resp = match res {
+                    Ok((msg, content_length)) => InvocationResponse {
+                        msg,
+                        invocation_id,
+                        content_length: content_length as u64,
+                        ..Default::default()
+                    },
+                    Err(e) => {
+                        warn!(?subject, ?e, "failed to handle request");
+                        InvocationResponse {
+                            invocation_id,
+                            error: Some(e.to_string()),
+                            ..Default::default()
+                        }
+                    }
+                };
+
+                if let Some(reply) = reply {
+                    match rmp_serde::to_vec_named(&inv_resp) {
+                        Ok(buf) => {
+                            if let Err(e) = self.nats.publish(reply, buf.into()).await {
+                                error!(?subject, ?e, "failed to publish response to request");
+                            }
+                        }
+                        Err(e) => {
+                            error!(?e, "failed to encode response");
+                        }
+                    }
                 }
             }
-            (_, Err(e)) => {
-                warn!("failed to handle `{subject}` request: {e:?}");
+            Err(e) => {
+                error!(?subject, ?e, "failed to decode invocation");
             }
-            _ => {}
         }
     }
 }
