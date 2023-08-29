@@ -583,6 +583,22 @@
         "type": "github"
       }
     },
+    "macos-sdk": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1656095854,
+        "narHash": "sha256-Bksziu35r3/t7qNl6P/LXc/UZDF1zbXCMMvEarPFGUs=",
+        "owner": "hexops-graveyard",
+        "repo": "sdk-macos-12.0",
+        "rev": "14613b4917c7059dad8f3789f55bb13a2548f83d",
+        "type": "github"
+      },
+      "original": {
+        "owner": "hexops-graveyard",
+        "repo": "sdk-macos-12.0",
+        "type": "github"
+      }
+    },
     "nix-filter": {
       "locked": {
         "lastModified": 1687178632,
@@ -825,6 +841,7 @@
         "crane": "crane",
         "fenix": "fenix",
         "flake-utils": "flake-utils",
+        "macos-sdk": "macos-sdk",
         "nix-filter": "nix-filter",
         "nix-log": "nix-log",
         "nixlib": "nixlib_3",
@@ -832,11 +849,11 @@
         "rust-overlay": "rust-overlay_2"
       },
       "locked": {
-        "lastModified": 1692781236,
-        "narHash": "sha256-yVLgQX6tLNGCUxIvafIb8hVYAUlzxT23Xfn4kXPtzeY=",
+        "lastModified": 1693327678,
+        "narHash": "sha256-UQoH8G4uOWXPsgD7v30kbIOBkq15T4yk6XlTZt9of+8=",
         "owner": "rvolosatovs",
         "repo": "nixify",
-        "rev": "a195c4f8c33bad8cd8d614ab616229a743f936f2",
+        "rev": "8c5e4e0183fbd09c811fa5ff8a36cd62ef601a95",
         "type": "github"
       },
       "original": {
