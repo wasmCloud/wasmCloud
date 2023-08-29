@@ -1373,8 +1373,9 @@ impl From<StoredClaims> for Claims {
                     .build(),
             )
         } else {
-            let config_schema: Option<serde_json::Value> =
-                serde_json::from_str(&claims.config_schema).ok();
+            let config_schema: Option<serde_json::Value> = claims
+                .config_schema
+                .and_then(|schema| serde_json::from_str(&schema).ok());
             Claims::Provider(
                 ClaimsBuilder::new()
                     .subject(&claims.subject)
@@ -3632,7 +3633,8 @@ struct StoredClaims {
     subject: String,
     tags: String,
     version: String,
-    config_schema: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    config_schema: Option<String>,
 }
 
 impl TryFrom<jwt::Claims<jwt::Actor>> for StoredClaims {
@@ -3658,7 +3660,7 @@ impl TryFrom<jwt::Claims<jwt::Actor>> for StoredClaims {
             subject,
             tags: metadata.tags.unwrap_or_default().join(","),
             version: metadata.ver.unwrap_or_default(),
-            config_schema: String::new(), // actors don't have a config schema
+            config_schema: None, // actors don't have a config schema
         })
     }
 }
@@ -3686,10 +3688,7 @@ impl TryFrom<jwt::Claims<jwt::CapabilityProvider>> for StoredClaims {
             subject,
             tags: String::new(), // providers don't have tags
             version: metadata.ver.unwrap_or_default(),
-            config_schema: metadata
-                .config_schema
-                .map(|schema| schema.to_string())
-                .unwrap_or_default(),
+            config_schema: metadata.config_schema.map(|schema| schema.to_string()),
         })
     }
 }
