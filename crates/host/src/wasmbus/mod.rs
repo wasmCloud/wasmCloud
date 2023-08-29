@@ -3592,6 +3592,11 @@ impl Host {
             (Operation::Delete, Some("CLAIMS"), Some(pubkey)) => {
                 self.process_claims_delete(pubkey, value).await
             }
+            (operation, Some("REFMAP"), id) => {
+                // TODO: process REFMAP entries
+                debug!(?operation, id, "ignoring REFMAP entry");
+                Ok(())
+            }
             _ => {
                 error!(
                     bucket,
