@@ -45,9 +45,9 @@ uuid = { workspace = true, features = ["serde"] }
 wascap = { workspace = true }
 wasmcloud-compat = { workspace = true }
 wasmcloud-control-interface = { workspace = true }
-wasmcloud-core = { workspace = true }
+wasmcloud-core = { workspace = true, features = ["otel"] }
 wasmcloud-runtime = { workspace = true }
-wasmcloud-tracing = { workspace = true }
+wasmcloud-tracing = { workspace = true, features = ["otel"] }
 
 [dev-dependencies]
 toml = { workspace = true, features = ["parse"] }

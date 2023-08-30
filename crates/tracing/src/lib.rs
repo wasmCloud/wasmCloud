@@ -1,3 +1,4 @@
+#[cfg(feature = "otel")]
 pub mod context;
 
 use std::io::{IsTerminal, StderrLock, Write};
