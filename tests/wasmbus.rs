@@ -1077,7 +1077,7 @@ expected: {expected_name:?}"#
                 compat_instances.is_empty(),
                 "more than one compat actor instance found"
             );
-            ensure!(annotations == None);
+            ensure!(annotations == Some(HashMap::default()));
             ensure!(Uuid::parse_str(&instance_id).is_ok());
             ensure!(revision == expected_revision.unwrap_or_default());
 
@@ -1109,7 +1109,7 @@ expected: {expected_name:?}"#
                 component_instances.is_empty(),
                 "more than one component actor instance found"
             );
-            ensure!(annotations == None);
+            ensure!(annotations == Some(HashMap::default()));
             ensure!(Uuid::parse_str(&instance_id).is_ok());
             ensure!(revision == expected_revision.unwrap_or_default());
 
@@ -1141,7 +1141,7 @@ expected: {expected_name:?}"#
                 module_instances.is_empty(),
                 "more than one module actor instance found"
             );
-            ensure!(annotations == None);
+            ensure!(annotations == Some(HashMap::default()));
             ensure!(Uuid::parse_str(&instance_id).is_ok());
             ensure!(revision == expected_revision.unwrap_or_default());
 
@@ -1173,7 +1173,7 @@ expected: {expected_name:?}"#
                 foobar_instances.is_empty(),
                 "more than one foobar actor instance found"
             );
-            ensure!(annotations == None);
+            ensure!(annotations == Some(HashMap::default()));
             ensure!(Uuid::parse_str(&instance_id).is_ok());
             ensure!(revision == expected_revision.unwrap_or_default());
         }
@@ -1189,7 +1189,7 @@ expected: {expected_name:?}"#
     ) {
         (Some(blobstore_fs), Some(httpserver), Some(kvredis), []) => {
             // TODO: Validate `constraints`
-            ensure!(blobstore_fs.annotations == None);
+            ensure!(blobstore_fs.annotations == Some(HashMap::new()));
             ensure!(blobstore_fs.id == blobstore_fs_provider_key.public_key());
             ensure!(blobstore_fs.image_ref == Some(blobstore_fs_provider_url.to_string()));
             ensure!(blobstore_fs.contract_id == "wasmcloud:blobstore");
@@ -1198,7 +1198,7 @@ expected: {expected_name:?}"#
             ensure!(blobstore_fs.revision == 0);
 
             // TODO: Validate `constraints`
-            ensure!(httpserver.annotations == None);
+            ensure!(httpserver.annotations == Some(HashMap::new()));
             ensure!(httpserver.id == httpserver_provider_key.public_key());
             ensure!(httpserver.image_ref == Some(httpserver_provider_url.to_string()));
             ensure!(httpserver.contract_id == "wasmcloud:httpserver");
@@ -1207,7 +1207,7 @@ expected: {expected_name:?}"#
             ensure!(httpserver.revision == 0);
 
             // TODO: Validate `constraints`
-            ensure!(kvredis.annotations == None);
+            ensure!(kvredis.annotations == Some(HashMap::new()));
             ensure!(kvredis.id == kvredis_provider_key.public_key());
             ensure!(kvredis.image_ref == Some(kvredis_provider_url.to_string()));
             ensure!(kvredis.contract_id == "wasmcloud:keyvalue");
@@ -1242,7 +1242,7 @@ expected: {expected_labels:?}"#
     match (providers.pop(), providers.as_slice()) {
         (Some(nats), []) => {
             // TODO: Validate `constraints`
-            ensure!(nats.annotations == None);
+            ensure!(nats.annotations == Some(HashMap::new()));
             ensure!(nats.id == nats_provider_key.public_key());
             ensure!(nats.image_ref == Some(nats_provider_url.to_string()));
             ensure!(nats.contract_id == "wasmcloud:messaging");

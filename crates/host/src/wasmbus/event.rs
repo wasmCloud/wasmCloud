@@ -38,7 +38,7 @@ fn format_actor_claims(claims: &jwt::Claims<jwt::Actor>) -> serde_json::Value {
 
 pub fn actor_started(
     claims: &jwt::Claims<jwt::Actor>,
-    annotations: &Option<BTreeMap<String, String>>,
+    annotations: &BTreeMap<String, String>,
     instance_id: Uuid,
     image_ref: impl AsRef<str>,
 ) -> serde_json::Value {
@@ -61,7 +61,7 @@ pub fn actor_start_failed(actor_ref: impl AsRef<str>, error: &anyhow::Error) -> 
 
 pub fn actor_stopped(
     claims: &jwt::Claims<jwt::Actor>,
-    annotations: &Option<BTreeMap<String, String>>,
+    annotations: &BTreeMap<String, String>,
     instance_id: Uuid,
 ) -> serde_json::Value {
     json!({
@@ -73,7 +73,7 @@ pub fn actor_stopped(
 
 pub fn actors_started(
     claims: &jwt::Claims<jwt::Actor>,
-    annotations: &Option<BTreeMap<String, String>>,
+    annotations: &BTreeMap<String, String>,
     host_id: impl AsRef<str>,
     count: impl Into<usize>,
     image_ref: impl AsRef<str>,
@@ -90,7 +90,7 @@ pub fn actors_started(
 
 pub fn actors_start_failed(
     claims: &jwt::Claims<jwt::Actor>,
-    annotations: &Option<BTreeMap<String, String>>,
+    annotations: &BTreeMap<String, String>,
     host_id: impl AsRef<str>,
     image_ref: impl AsRef<str>,
     error: &anyhow::Error,
@@ -106,7 +106,7 @@ pub fn actors_start_failed(
 
 pub fn actors_stopped(
     claims: &jwt::Claims<jwt::Actor>,
-    annotations: &Option<BTreeMap<String, String>>,
+    annotations: &BTreeMap<String, String>,
     host_id: impl AsRef<str>,
     count: NonZeroUsize,
     remaining: usize,
@@ -158,7 +158,7 @@ pub fn linkdef_deleted(
 
 pub fn provider_started(
     claims: &jwt::Claims<jwt::CapabilityProvider>,
-    annotations: &Option<BTreeMap<String, String>>,
+    annotations: &BTreeMap<String, String>,
     instance_id: Uuid,
     host_id: impl AsRef<str>,
     image_ref: impl AsRef<str>,
@@ -198,7 +198,7 @@ pub fn provider_start_failed(
 
 pub fn provider_stopped(
     claims: &jwt::Claims<jwt::CapabilityProvider>,
-    annotations: &Option<BTreeMap<String, String>>,
+    annotations: &BTreeMap<String, String>,
     instance_id: Uuid,
     host_id: impl AsRef<str>,
     link_name: impl AsRef<str>,

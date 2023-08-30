@@ -1269,7 +1269,7 @@ type Annotations = BTreeMap<String, String>;
 #[derive(Debug)]
 struct Actor {
     pool: ActorInstancePool,
-    instances: RwLock<HashMap<Option<Annotations>, Vec<Arc<ActorInstance>>>>,
+    instances: RwLock<HashMap<Annotations, Vec<Arc<ActorInstance>>>>,
     image_ref: String,
     handler: Handler,
 }
@@ -1278,7 +1278,7 @@ struct Actor {
 struct ProviderInstance {
     child: JoinHandle<()>,
     id: Ulid,
-    annotations: Option<Annotations>,
+    annotations: Annotations,
 }
 
 #[derive(Debug)]
@@ -1957,7 +1957,7 @@ impl Host {
     async fn instantiate_actor(
         &self,
         claims: &jwt::Claims<jwt::Actor>,
-        annotations: &Option<Annotations>,
+        annotations: &Annotations,
         host_id: impl AsRef<str>,
         actor_ref: impl AsRef<str>,
         count: NonZeroUsize,
@@ -2037,7 +2037,7 @@ impl Host {
     async fn uninstantiate_actor(
         &self,
         claims: &jwt::Claims<jwt::Actor>,
-        annotations: &Option<Annotations>,
+        annotations: &Annotations,
         host_id: &str,
         instances: &mut Vec<Arc<ActorInstance>>,
         count: NonZeroUsize,
@@ -2082,11 +2082,11 @@ impl Host {
         actor_ref: String,
         count: NonZeroUsize,
         host_id: &str,
-        annotations: Option<impl Into<Annotations>>,
+        annotations: impl Into<Annotations>,
     ) -> anyhow::Result<&'a mut Arc<Actor>> {
         trace!(actor_ref, "starting new actor");
 
-        let annotations = annotations.map(Into::into);
+        let annotations = annotations.into();
         let claims = actor.claims().context("claims missing")?;
         self.store_claims(claims.clone())
             .await
@@ -2317,7 +2317,7 @@ impl Host {
             )
         };
 
-        let annotations = annotations.map(|annotations| annotations.into_iter().collect());
+        let annotations = annotations.unwrap_or_default().into_iter().collect();
         match (
             self.actors.write().await.entry(actor_id),
             NonZeroUsize::new(count.into()),
@@ -2389,7 +2389,7 @@ impl Host {
     async fn handle_launch_actor_task(
         &self,
         actor_ref: String,
-        annotations: Option<HashMap<String, String>>,
+        annotations: HashMap<String, String>,
         count: u16,
         host_id: &str,
     ) -> anyhow::Result<()> {
@@ -2414,7 +2414,7 @@ impl Host {
             )
         };
 
-        let annotations = annotations.map(|annotations| annotations.into_iter().collect());
+        let annotations = annotations.into_iter().collect();
         let Some(count) = NonZeroUsize::new(count.into()) else {
             // NOTE: This mimics OTP behavior
             self.publish_event(
@@ -2484,7 +2484,12 @@ impl Host {
         let host_id = host_id.to_string();
         spawn(async move {
             if let Err(err) = self
-                .handle_launch_actor_task(actor_ref.clone(), annotations, count, &host_id)
+                .handle_launch_actor_task(
+                    actor_ref.clone(),
+                    annotations.unwrap_or_default(),
+                    count,
+                    &host_id,
+                )
                 .await
             {
                 if let Err(err) = self
@@ -2517,7 +2522,7 @@ impl Host {
 
         debug!(actor_ref, count, ?annotations, "stop actor");
 
-        let annotations = annotations.map(|annotations| annotations.into_iter().collect());
+        let annotations: Annotations = annotations.unwrap_or_default().into_iter().collect();
         match (
             self.actors.write().await.entry(actor_ref),
             NonZeroUsize::new(count.into()),
@@ -2577,7 +2582,7 @@ impl Host {
 
         let actors = self.actors.write().await;
         let actor = actors.get(&actor_id).context("actor not found")?;
-        let annotations = annotations.map(|annotations| annotations.into_iter().collect()); // convert from HashMap to BTreeMap
+        let annotations = annotations.unwrap_or_default().into_iter().collect(); // convert from HashMap to BTreeMap
         let mut all_instances = actor.instances.write().await;
         let matching_instances = all_instances
             .get_mut(&annotations)
@@ -2635,7 +2640,7 @@ impl Host {
         configuration: Option<String>,
         link_name: &str,
         provider_ref: &str,
-        annotations: Option<HashMap<String, String>>,
+        annotations: HashMap<String, String>,
         host_id: &str,
     ) -> anyhow::Result<()> {
         debug!("launch provider");
@@ -2667,7 +2672,7 @@ impl Host {
             )
         };
 
-        let annotations = annotations.map(|annotations| annotations.into_iter().collect());
+        let annotations: Annotations = annotations.into_iter().collect();
         let mut providers = self.providers.write().await;
         let Provider { instances, .. } =
             providers.entry(claims.subject.clone()).or_insert(Provider {
@@ -2901,7 +2906,7 @@ impl Host {
                     configuration,
                     &link_name,
                     &provider_ref,
-                    annotations,
+                    annotations.unwrap_or_default(),
                     &host_id,
                 )
                 .await
@@ -2943,7 +2948,7 @@ impl Host {
             "stop provider"
         );
 
-        let annotations = annotations.map(|annotations| annotations.into_iter().collect());
+        let annotations: Annotations = annotations.unwrap_or_default().into_iter().collect();
         let mut providers = self.providers.write().await;
         let hash_map::Entry::Occupied(mut entry) = providers.entry(provider_ref.clone()) else {
             return Ok(SUCCESS.into());
@@ -3015,9 +3020,7 @@ impl Host {
                                 .and_then(|claims| claims.metadata.as_ref())
                                 .and_then(|jwt::Actor { rev, .. }| *rev)
                                 .unwrap_or_default();
-                            let annotations = annotations
-                                .as_ref()
-                                .map(|annotations| annotations.clone().into_iter().collect());
+                            let annotations = Some(annotations.clone().into_iter().collect());
                             wasmcloud_control_interface::ActorInstance {
                                 annotations,
                                 instance_id,
@@ -3065,9 +3068,7 @@ impl Host {
                     } = claims.metadata.as_ref()?;
                     Some(instances.iter().map(
                         move |(link_name, ProviderInstance { annotations, .. })| {
-                            let annotations = annotations
-                                .as_ref()
-                                .map(|annotations| annotations.clone().into_iter().collect());
+                            let annotations = Some(annotations.clone().into_iter().collect());
                             let revision = revision.unwrap_or_default();
                             ProviderDescription {
                                 id: id.into(),
