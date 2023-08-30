@@ -220,11 +220,7 @@ struct Args {
     oci_password: Option<String>,
 
     /// Specifies which exporter to use for traces. Only "otlp" is supported at this time
-    #[clap(
-        long = "otel-traces-exporter",
-        env = "OTEL_TRACES_EXPORTER",
-        default_value = "otlp"
-    )]
+    #[clap(long = "otel-traces-exporter", env = "OTEL_TRACES_EXPORTER")]
     otel_traces_exporter: Option<String>,
 
     /// Specifies the endpoint to use for the OTLP exporter
