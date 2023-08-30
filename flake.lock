@@ -849,11 +849,11 @@
         "rust-overlay": "rust-overlay_2"
       },
       "locked": {
-        "lastModified": 1693327678,
-        "narHash": "sha256-UQoH8G4uOWXPsgD7v30kbIOBkq15T4yk6XlTZt9of+8=",
+        "lastModified": 1693487474,
+        "narHash": "sha256-Bc8WHASM9nY/L3u5ov8yQhMihfVHlvg8P6Nb6lPAdoo=",
         "owner": "rvolosatovs",
         "repo": "nixify",
-        "rev": "8c5e4e0183fbd09c811fa5ff8a36cd62ef601a95",
+        "rev": "bbdb7492f615c341518fc63e278f78a6aaadd459",
         "type": "github"
       },
       "original": {
@@ -1712,16 +1712,16 @@
         "nixlib": "nixlib_10"
       },
       "locked": {
-        "lastModified": 1685717506,
-        "narHash": "sha256-Slz0RRLPufKADm8ouIIlkbmZ7ppOHXpkkgibmlPY2fo=",
+        "lastModified": 1693329517,
+        "narHash": "sha256-peHelLgJBj10NGDxLpqil3iey7WKT+wpLrINcMY+Ax0=",
         "owner": "bytecodealliance",
         "repo": "wit-deps",
-        "rev": "102683fdbf01fe645ed425dbec9a0d9f5cbe7484",
+        "rev": "87aec821936419eeeb4969c2aa2cace226468b84",
         "type": "github"
       },
       "original": {
         "owner": "bytecodealliance",
-        "ref": "v0.3.2",
+        "ref": "v0.3.3",
         "repo": "wit-deps",
         "type": "github"
       }
