@@ -350,10 +350,17 @@ async fn main() -> anyhow::Result<()> {
     }))
     .await
     .context("failed to initialize host")?;
-    let mut stream = signal::unix::signal(signal::unix::SignalKind::terminate())?;
+    #[cfg(unix)]
+    let mut terminate = signal::unix::signal(signal::unix::SignalKind::terminate())?;
+    #[cfg(unix)]
     select! {
         sig = signal::ctrl_c() => sig.context("failed to wait for Ctrl-C")?,
-        _ = stream.recv() => {},
+        _ = terminate.recv() => {},
+        _ = host.stopped() => {},
+    }
+    #[cfg(not(unix))]
+    select! {
+        sig = signal::ctrl_c() => sig.context("failed to wait for Ctrl-C")?,
         _ = host.stopped() => {},
     };
     shutdown.await.context("failed to shutdown host")?;
