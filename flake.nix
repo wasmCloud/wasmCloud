@@ -17,7 +17,7 @@
   inputs.wasmcloud-component-adapters.inputs.nixify.follows = "nixify";
   inputs.wasmcloud-component-adapters.url = github:wasmCloud/wasmcloud-component-adapters/v0.2.0;
   inputs.wit-deps.inputs.nixify.follows = "nixify"; # TODO: drop once updated upstream
-  inputs.wit-deps.url = github:bytecodealliance/wit-deps/v0.3.2;
+  inputs.wit-deps.url = github:bytecodealliance/wit-deps/v0.3.3;
 
   outputs = {
     nixify,

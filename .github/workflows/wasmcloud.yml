@@ -3,6 +3,11 @@ name: wasmCloud
 on:
   pull_request:
   push:
+    branches:
+    - main
+    tags:
+    - 'v[0-9].[0-9]+.[0-9]+'
+    - 'v[0-9].[0-9]+.[0-9]+-rc[0-9]+'
   workflow_dispatch:
 
 concurrency:
@@ -81,6 +86,16 @@ jobs:
         name: wasmcloud-universal-darwin
         path: wasmcloud-universal-darwin
 
+  test-linux:
+    runs-on: ubuntu-22.04
+    needs: build-bin
+    steps:
+    - uses: actions/download-artifact@v3
+      with:
+        name: wasmcloud-x86_64-unknown-linux-musl
+    - run: chmod +x ./wasmcloud-x86_64-unknown-linux-musl
+    - run: ./wasmcloud-x86_64-unknown-linux-musl --version
+
   test-windows:
     runs-on: windows-2022
     needs: build-bin
@@ -127,7 +142,7 @@ jobs:
           <meta charset="utf-8">
           <title>Redirecting to wasmcloud/index.html</title>
           <meta http-equiv="refresh" content="0; URL=wasmcloud/index.html">
-          <link rel="canonical" href="https://${{ github.repository.owner }}.github.io/wasmCloud/wasmcloud/index.html">
+          <link rel="canonical" href="https://${{ github.repository_owner }}.github.io/wasmCloud/wasmcloud/index.html">
         EOF
     - uses: actions/upload-pages-artifact@v2.0.0
       with:
@@ -146,3 +161,138 @@ jobs:
     steps:
     - uses: actions/deploy-pages@v2.0.4
       id: deployment
+
+  oci:
+    runs-on: ubuntu-22.04
+    permissions:
+      packages: write
+    needs: build-bin
+    if: ${{ github.event_name != 'pull_request' }}
+    steps:
+    - uses: actions/checkout@v3
+    - uses: ./.github/actions/install-nix
+      with: 
+        cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+
+    - name: Extract tag context
+      id: ctx
+      run: |
+        echo 'sha_short=$(git rev-parse --short HEAD)' >> $GITHUB_OUTPUT
+        echo 'version=${GITHUB_REF_NAME#v}' >> $GITHUB_OUTPUT
+
+    - name: Login to GitHub Container Registry
+      uses: docker/login-action@v2
+      with:
+        registry: ghcr.io
+        username: ${{ github.repository_owner }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Login to DockerHub
+      if: startswith(github.ref, 'refs/tags/')
+      uses: docker/login-action@v2
+      with:
+        username: ${{ secrets.DOCKERHUB_PUSH_USER }}
+        password: ${{ secrets.DOCKERHUB_PUSH_PASSWORD }}
+
+    - name: Login to AzureCR
+      if: startswith(github.ref, 'refs/tags/')
+      uses: azure/docker-login@v1
+      with:
+        login-server: ${{ secrets.AZURECR_PUSH_URL }}
+        username: ${{ secrets.AZURECR_PUSH_USER }}
+        password: ${{ secrets.AZURECR_PUSH_PASSWORD }}
+
+    - run: |
+        nix run -L .#build-wasmcloud-oci wasmcloud
+        nix profile install --inputs-from . 'nixpkgs#buildah'
+
+    - name: Push commit rev
+      run: |
+        buildah manifest push --storage-driver=vfs --all --format 'v2s2' wasmcloud docker://ghcr.io/${{ github.repository_owner }}/wasmcloud:${{ github.sha }}
+        buildah manifest push --storage-driver=vfs --all --format 'v2s2' wasmcloud docker://ghcr.io/${{ github.repository_owner }}/wasmcloud:${{ steps.ctx.outputs.sha_short }}
+
+        docker run ghcr.io/${{ github.repository_owner }}/wasmcloud:${{ github.sha }} wasmcloud --version
+        docker run ghcr.io/${{ github.repository_owner }}/wasmcloud:${{ steps.ctx.outputs.sha_short }} wasmcloud --version
+
+    - name: Push tag
+      if: startswith(github.ref, 'refs/tags/')
+      run: |
+        buildah manifest push --storage-driver=vfs --all --format 'v2s2' wasmcloud docker://${{ github.repository_owner }}/wasmcloud:${{ steps.ctx.outputs.version }}
+        buildah manifest push --storage-driver=vfs --all --format 'v2s2' wasmcloud docker://ghcr.io/${{ github.repository_owner }}/wasmcloud:${{ steps.ctx.outputs.version }}
+        buildah manifest push --storage-driver=vfs --all --format 'v2s2' wasmcloud docker://wasmcloud.azurecr.io/${{ github.repository_owner }}/wasmcloud:${{ steps.ctx.outputs.version }}
+
+        docker run ${{ github.repository_owner }}/wasmcloud:${{ steps.ctx.outputs.version }} wasmcloud --version
+        docker run ghcr.io/${{ github.repository_owner }}/wasmcloud:${{ steps.ctx.outputs.version }} wasmcloud --version
+        docker run wasmcloud.azurecr.io/${{ github.repository_owner }}/wasmcloud:${{ steps.ctx.outputs.version }} wasmcloud --version
+
+  # TODO: Push `latest`
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/') && github.event_name == 'push'
+    needs:
+    - build-bin
+    - build-doc
+    - build-lipo
+    - cargo
+    - oci
+    - test-linux
+    - test-windows
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+    - uses: actions/checkout@v3
+    - uses: actions/download-artifact@v3
+      with:
+        name: wasmcloud-aarch64-apple-darwin
+    - uses: actions/download-artifact@v3
+      with:
+        name: wasmcloud-aarch64-unknown-linux-musl
+    - uses: actions/download-artifact@v3
+      with:
+        name: wasmcloud-universal-darwin
+    - uses: actions/download-artifact@v3
+      with:
+        name: wasmcloud-x86_64-apple-darwin
+    - uses: actions/download-artifact@v3
+      with:
+        name: wasmcloud-x86_64-pc-windows-gnu
+    - uses: actions/download-artifact@v3
+      with:
+        name: wasmcloud-x86_64-unknown-linux-musl
+
+    - run: chmod +x ./wasmcloud-*
+
+    - uses: actions/download-artifact@v3
+      with:
+        name: wasmcloud-aarch64-apple-darwin-oci
+    - uses: actions/download-artifact@v3
+      with:
+        name: wasmcloud-aarch64-unknown-linux-musl-oci
+    - uses: actions/download-artifact@v3
+      with:
+        name: wasmcloud-x86_64-pc-windows-gnu-oci
+    - uses: actions/download-artifact@v3
+      with:
+        name: wasmcloud-x86_64-apple-darwin-oci
+    - uses: actions/download-artifact@v3
+      with:
+        name: wasmcloud-x86_64-unknown-linux-musl-oci
+
+    - uses: softprops/action-gh-release@v1
+      with:
+        draft: true
+        prerelease: true
+        generate_release_notes: true
+        files: |
+          wasmcloud-aarch64-apple-darwin
+          wasmcloud-aarch64-apple-darwin-oci
+          wasmcloud-aarch64-unknown-linux-musl
+          wasmcloud-aarch64-unknown-linux-musl-oci
+          wasmcloud-universal-darwin
+          wasmcloud-x86_64-apple-darwin
+          wasmcloud-x86_64-apple-darwin-oci
+          wasmcloud-x86_64-pc-windows-gnu
+          wasmcloud-x86_64-pc-windows-gnu-oci
+          wasmcloud-x86_64-unknown-linux-musl
+          wasmcloud-x86_64-unknown-linux-musl-oci
