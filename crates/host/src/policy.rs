@@ -21,6 +21,7 @@ use wascap::jwt;
 /// Relevant information about the actor or provider making an invocation. This struct is empty for
 /// policy decisions related to starting actors or providers. All fields are optional for backwards-compatibility
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Hash)]
+// TODO: convert to an enum where variants use relevant fields, then remove the above comment about backwards-compatibility
 pub struct RequestSource {
     /// The public key of the actor or provider
     #[serde(rename = "publicKey")]
@@ -48,6 +49,7 @@ pub struct RequestSource {
 /// Relevant information about the actor that is being invoked, or the actor or provider that is
 /// being started. All fields are optional for backwards-compatibility
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Hash)]
+// TODO: convert to an enum where variants use relevant fields, then remove the above comment about backwards-compatibility
 pub struct RequestTarget {
     /// The public key of the actor or provider
     #[serde(rename = "publicKey")]
@@ -229,8 +231,8 @@ impl Manager {
             host_info,
             policy_topic,
             policy_timeout: policy_timeout.unwrap_or(DEFAULT_POLICY_TIMEOUT),
-            decision_cache: Arc::new(RwLock::new(HashMap::new())),
-            request_to_key: Arc::new(RwLock::new(HashMap::new())),
+            decision_cache: Arc::default(),
+            request_to_key: Arc::default(),
             policy_changes: policy_changes_abort,
         };
         let manager = Arc::new(manager);
@@ -254,7 +256,7 @@ impl Manager {
             });
         }
 
-        Ok(Arc::clone(&manager))
+        Ok(manager)
     }
 
     /// Constructs a

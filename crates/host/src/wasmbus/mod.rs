@@ -1109,7 +1109,7 @@ impl ActorInstance {
     }
 
     #[instrument(skip_all)]
-    async fn handle_call(&self, invocation: Invocation) -> anyhow::Result<(Vec<u8>, usize)> {
+    async fn handle_call(&self, invocation: Invocation) -> anyhow::Result<(Vec<u8>, u64)> {
         debug!(?invocation.origin, ?invocation.target, invocation.operation, "validate actor invocation");
         invocation.validate_antiforgery(&self.valid_issuers)?;
 
@@ -1200,7 +1200,12 @@ impl ActorInstance {
                 } else {
                     resp_msg
                 };
-                Ok((resp_msg, content_length))
+                Ok((
+                    resp_msg,
+                    content_length
+                        .try_into()
+                        .context("failed to convert content_length to u64")?,
+                ))
             }
             Err(e) => Err(anyhow!(e)),
         }
@@ -1226,7 +1231,7 @@ impl ActorInstance {
                     Ok((msg, content_length)) => InvocationResponse {
                         msg,
                         invocation_id,
-                        content_length: content_length as u64,
+                        content_length,
                         ..Default::default()
                     },
                     Err(e) => {
@@ -1342,54 +1347,44 @@ impl From<StoredClaims> for Claims {
 
         // rely on the fact that serialized actor claims don't include a contract_id
         if claims.contract_id.is_empty() {
-            let tags = (!claims.tags.is_empty()).then(|| {
-                claims
-                    .tags
-                    .split(',')
-                    .map(std::string::ToString::to_string)
-                    .collect()
-            });
-            let caps = (!claims.capabilities.is_empty()).then(|| {
-                claims
-                    .capabilities
-                    .split(',')
-                    .map(std::string::ToString::to_string)
-                    .collect()
-            });
+            let tags =
+                (!claims.tags.is_empty()).then(|| claims.tags.split(',').map(Into::into).collect());
+            let caps = (!claims.capabilities.is_empty())
+                .then(|| claims.capabilities.split(',').map(Into::into).collect());
             let call_alias = (!claims.call_alias.is_empty()).then_some(claims.call_alias);
-            Claims::Actor(
-                ClaimsBuilder::new()
-                    .subject(&claims.subject)
-                    .issuer(&claims.issuer)
-                    .with_metadata(jwt::Actor {
-                        name,
-                        tags,
-                        caps,
-                        rev,
-                        ver,
-                        call_alias,
-                        ..Default::default()
-                    })
-                    .build(),
-            )
+            let metadata = jwt::Actor {
+                name,
+                tags,
+                caps,
+                rev,
+                ver,
+                call_alias,
+                ..Default::default()
+            };
+            let claims = ClaimsBuilder::new()
+                .subject(&claims.subject)
+                .issuer(&claims.issuer)
+                .with_metadata(metadata)
+                .build();
+            Claims::Actor(claims)
         } else {
             let config_schema: Option<serde_json::Value> = claims
                 .config_schema
                 .and_then(|schema| serde_json::from_str(&schema).ok());
-            Claims::Provider(
-                ClaimsBuilder::new()
-                    .subject(&claims.subject)
-                    .issuer(&claims.issuer)
-                    .with_metadata(jwt::CapabilityProvider {
-                        name,
-                        capid: claims.contract_id,
-                        rev,
-                        ver,
-                        config_schema,
-                        ..Default::default()
-                    })
-                    .build(),
-            )
+            let metadata = jwt::CapabilityProvider {
+                name,
+                capid: claims.contract_id,
+                rev,
+                ver,
+                config_schema,
+                ..Default::default()
+            };
+            let claims = ClaimsBuilder::new()
+                .subject(&claims.subject)
+                .issuer(&claims.issuer)
+                .with_metadata(metadata)
+                .build();
+            Claims::Provider(claims)
         }
     }
 }
@@ -1800,8 +1795,8 @@ impl Host {
             queue: queue_abort.clone(),
             aliases: Arc::default(),
             links: RwLock::default(),
-            actor_claims: Arc::new(RwLock::default()),
-            provider_claims: Arc::new(RwLock::default()),
+            actor_claims: Arc::default(),
+            provider_claims: Arc::default(),
         };
         host.publish_event("host_started", start_evt)
             .await
