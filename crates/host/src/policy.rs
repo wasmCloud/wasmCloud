@@ -42,7 +42,7 @@ pub struct RequestSource {
     #[serde(rename = "expiresAt")]
     pub expires_at: Option<u64>,
     /// Whether the claims have expired already. This is included in case the policy server is fulfilled by an actor, which cannot access the system clock
-    pub expired: Option<bool>,
+    pub expired: bool,
 }
 
 /// Relevant information about the actor that is being invoked, or the actor or provider that is
@@ -155,7 +155,7 @@ impl From<jwt::Claims<jwt::Actor>> for RequestSource {
             issuer: Some(claims.issuer),
             issued_on: Some(claims.issued_at.to_string()),
             expires_at: claims.expires,
-            expired: claims.expires.map(is_expired),
+            expired: claims.expires.map(is_expired).unwrap_or_default(),
         }
     }
 }
@@ -170,7 +170,7 @@ impl From<jwt::Claims<jwt::CapabilityProvider>> for RequestSource {
             issuer: Some(claims.issuer),
             issued_on: Some(claims.issued_at.to_string()),
             expires_at: claims.expires,
-            expired: claims.expires.map(is_expired),
+            expired: claims.expires.map(is_expired).unwrap_or_default(),
         }
     }
 }
