@@ -67,7 +67,7 @@ class LatticeService {
   private connection?: NatsConnection;
 
   private config = {
-    latticeUrl: 'ws://localhost:4001',
+    latticeUrl: import.meta.env.VITE_NATS_WEBSOCKET_URL || 'ws://localhost:4001',
   };
 
   private constructor() {
