@@ -2948,7 +2948,6 @@ impl Host {
             "stop provider"
         );
 
-        let annotations: Annotations = annotations.unwrap_or_default().into_iter().collect();
         let mut providers = self.providers.write().await;
         let hash_map::Entry::Occupied(mut entry) = providers.entry(provider_ref.clone()) else {
             return Ok(SUCCESS.into());
@@ -2956,42 +2955,48 @@ impl Host {
         let provider = entry.get_mut();
         let instances = &mut provider.instances;
         if let hash_map::Entry::Occupied(entry) = instances.entry(link_name.clone()) {
-            if entry.get().annotations == annotations {
-                let ProviderInstance { id, child, .. } = entry.remove();
+            let ProviderInstance {
+                id,
+                child,
+                annotations,
+                ..
+            } = entry.remove();
 
-                // Send a request to the provider, requesting a graceful shutdown
-                if let Ok(payload) = serde_json::to_vec(&json!({ "host_id": host_id })) {
-                    if let Err(e) = self
-                        .prov_rpc_nats
-                        .send_request(
-                            format!(
-                                "wasmbus.rpc.{}.{provider_ref}.{link_name}.shutdown",
-                                self.host_config.lattice_prefix
-                            ),
-                            async_nats::Request::new()
-                                .payload(payload.into())
-                                .timeout(self.host_config.provider_shutdown_delay),
-                        )
-                        .await
-                    {
-                        warn!(?e, "Provider didn't gracefully shut down in time, shutting down forcefully");
-                    }
-                }
-
-                child.abort();
-                self.publish_event(
-                    "provider_stopped",
-                    event::provider_stopped(
-                        &provider.claims,
-                        &annotations,
-                        Uuid::from_u128(id.into()),
-                        host_id,
-                        link_name,
-                        "stop",
+            // Send a request to the provider, requesting a graceful shutdown
+            let req = serde_json::to_vec(&json!({ "host_id": host_id }))
+                .context("failed to encode provider stop request")?;
+            let req = async_nats::Request::new()
+                .payload(req.into())
+                .timeout(self.host_config.provider_shutdown_delay);
+            if let Err(e) = self
+                .prov_rpc_nats
+                .send_request(
+                    format!(
+                        "wasmbus.rpc.{}.{provider_ref}.{link_name}.shutdown",
+                        self.host_config.lattice_prefix
                     ),
+                    req,
                 )
-                .await?;
+                .await
+            {
+                warn!(
+                    ?e,
+                    "provider did not gracefully shut down in time, shutting down forcefully"
+                );
             }
+            child.abort();
+            self.publish_event(
+                "provider_stopped",
+                event::provider_stopped(
+                    &provider.claims,
+                    &annotations,
+                    Uuid::from_u128(id.into()),
+                    host_id,
+                    link_name,
+                    "stop",
+                ),
+            )
+            .await?;
         }
         if instances.is_empty() {
             entry.remove();
