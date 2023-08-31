@@ -2,7 +2,6 @@
 name = "wasmcloud-compat"
 version = "0.1.0"
 description = "pre-WIT functionality for post-WIT world"
-publish = false
 
 authors.workspace = true
 categories.workspace = true
