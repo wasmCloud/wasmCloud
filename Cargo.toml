@@ -111,8 +111,8 @@ serde_json = { version = "1", default-features = false }
 sha2 = { version = "0.10", default-features = false }
 syn = { version = "2", default-features = false }
 tempfile = { version = "3", default-features = false }
-test-actors = { path = "./tests/actors" }
-test-providers = { path = "./tests/providers" }
+test-actors = { version = "*", path = "./tests/actors" }
+test-providers = { version = "*", path = "./tests/providers" }
 thiserror = { version = "1", default-features = false }
 time = { version = "0.3", default-features = false }
 tokio = { version = "1", default-features = false }
@@ -128,16 +128,16 @@ url = { version = "2", default-features = false }
 uuid = { version = "1", default-features = false }
 wascap = { version = "0.11", default-features = false }
 wasi-common = { version = "12", default-features = false }
-wasmcloud-actor = { path = "./crates/actor" }
-wasmcloud-actor-derive = { path = "./crates/actor/derive" }
-wasmcloud-compat = { path = "./crates/compat" }
-wasmcloud-core = { path = "./crates/core" }
+wasmcloud-actor = { version = "*", path = "./crates/actor" }
+wasmcloud-actor-derive = { version = "*", path = "./crates/actor/derive" }
+wasmcloud-compat = { version = "*", path = "./crates/compat" }
+wasmcloud-core = { version = "*", path = "./crates/core" }
 wasmcloud-component-adapters = { version = "0.2.0" }
 wasmcloud-control-interface = { version = "0.28", default-features = false }
-wasmcloud-host = { path = "./crates/host" }
-wasmcloud-provider-wit-bindgen = { path = "./crates/provider-wit-bindgen" }
-wasmcloud-runtime = { path = "./crates/runtime" }
-wasmcloud-tracing = { path = "./crates/tracing" }
+wasmcloud-host = { version = "*", path = "./crates/host" }
+wasmcloud-provider-wit-bindgen = { version = "*", path = "./crates/provider-wit-bindgen" }
+wasmcloud-runtime = { version = "*", path = "./crates/runtime" }
+wasmcloud-tracing = { version = "*", path = "./crates/tracing" }
 wasmparser = { version = "0.111", default-features = false }
 wasmtime = { version = "12", default-features = false }
 wasmtime-wasi = { version = "12", default-features = false }
