@@ -177,6 +177,7 @@ jobs:
     - name: Extract tag context
       id: ctx
       run: |
+        echo 'package=${GITHUB_REPOSITORY,,}' >> $GITHUB_OUTPUT
         echo 'sha_short=$(git rev-parse --short HEAD)' >> $GITHUB_OUTPUT
         echo 'version=${GITHUB_REF_NAME#v}' >> $GITHUB_OUTPUT
 
@@ -211,19 +212,19 @@ jobs:
         buildah manifest push --storage-driver=vfs --all --format 'v2s2' wasmcloud docker://ghcr.io/${{ github.repository_owner }}/wasmcloud:${{ github.sha }}
         buildah manifest push --storage-driver=vfs --all --format 'v2s2' wasmcloud docker://ghcr.io/${{ github.repository_owner }}/wasmcloud:${{ steps.ctx.outputs.sha_short }}
 
-        docker run ghcr.io/${{ github.repository_owner }}/wasmcloud:${{ github.sha }} wasmcloud --version
-        docker run ghcr.io/${{ github.repository_owner }}/wasmcloud:${{ steps.ctx.outputs.sha_short }} wasmcloud --version
+        docker run ghcr.io/${{ steps.ctx.outputs.package }}:${{ github.sha }} wasmcloud --version
+        docker run ghcr.io/${{ steps.ctx.outputs.package }}:${{ steps.ctx.outputs.sha_short }} wasmcloud --version
 
     - name: Push tag
       if: startswith(github.ref, 'refs/tags/')
       run: |
-        buildah manifest push --storage-driver=vfs --all --format 'v2s2' wasmcloud docker://${{ github.repository_owner }}/wasmcloud:${{ steps.ctx.outputs.version }}
-        buildah manifest push --storage-driver=vfs --all --format 'v2s2' wasmcloud docker://ghcr.io/${{ github.repository_owner }}/wasmcloud:${{ steps.ctx.outputs.version }}
-        buildah manifest push --storage-driver=vfs --all --format 'v2s2' wasmcloud docker://wasmcloud.azurecr.io/${{ github.repository_owner }}/wasmcloud:${{ steps.ctx.outputs.version }}
+        buildah manifest push --storage-driver=vfs --all --format 'v2s2' wasmcloud docker://${{ steps.ctx.outputs.package }}:${{ steps.ctx.outputs.version }}
+        buildah manifest push --storage-driver=vfs --all --format 'v2s2' wasmcloud docker://ghcr.io/${{ steps.ctx.outputs.package }}:${{ steps.ctx.outputs.version }}
+        buildah manifest push --storage-driver=vfs --all --format 'v2s2' wasmcloud docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.package }}:${{ steps.ctx.outputs.version }}
 
-        docker run ${{ github.repository_owner }}/wasmcloud:${{ steps.ctx.outputs.version }} wasmcloud --version
-        docker run ghcr.io/${{ github.repository_owner }}/wasmcloud:${{ steps.ctx.outputs.version }} wasmcloud --version
-        docker run wasmcloud.azurecr.io/${{ github.repository_owner }}/wasmcloud:${{ steps.ctx.outputs.version }} wasmcloud --version
+        docker run ${{ steps.ctx.outputs.package }}:${{ steps.ctx.outputs.version }} wasmcloud --version
+        docker run ghcr.io/${{ steps.ctx.outputs.package }}:${{ steps.ctx.outputs.version }} wasmcloud --version
+        docker run wasmcloud.azurecr.io/${{ steps.ctx.outputs.package }}:${{ steps.ctx.outputs.version }} wasmcloud --version
 
   # TODO: Push `latest`
 
