@@ -294,7 +294,8 @@ async fn assert_handle_http_request(
         .build()
         .context("failed to build HTTP client")?;
     let http_res = http_client
-        .post(format!("http://localhost:{http_port}"))
+        .post(format!("http://localhost:{http_port}/foo?bar=baz"))
+        .header("test-header", "test-value")
         .body(r#"{"min":42,"max":4242}"#)
         .send()
         .await

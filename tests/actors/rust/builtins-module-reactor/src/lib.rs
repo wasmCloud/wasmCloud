@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde::Deserialize;
 use serde_json::json;
 use wasmcloud_actor::wasi::logging::logging;
@@ -15,8 +17,35 @@ struct HttpLogRng;
 impl HttpHandler for HttpLogRng {
     fn handle_request(
         &self,
-        HttpRequest { body, .. }: HttpRequest,
+        HttpRequest {
+            method,
+            path,
+            query_string,
+            header,
+            body,
+        }: HttpRequest,
     ) -> Result<HttpResponse, String> {
+        assert_eq!(method, "POST");
+        assert_eq!(path, "/foo");
+        assert_eq!(query_string, "bar=baz");
+
+        let mut header_iter = header.into_iter().collect::<BTreeMap<_, _>>().into_iter();
+        assert_eq!(
+            header_iter.next(),
+            Some(("accept".into(), vec!["*/*".into()]))
+        );
+        assert_eq!(
+            header_iter.next(),
+            Some(("content-length".into(), vec!["21".into()]))
+        );
+        let (host_key, _) = header_iter.next().expect("`host` header missing");
+        assert_eq!(host_key, "host");
+        assert_eq!(
+            header_iter.next(),
+            Some(("test-header".into(), vec!["test-value".into()]))
+        );
+        assert!(header_iter.next().is_none());
+
         logging::log(logging::Level::Trace, "trace-context", "trace");
         logging::log(logging::Level::Debug, "debug-context", "debug");
         logging::log(logging::Level::Info, "info-context", "info");

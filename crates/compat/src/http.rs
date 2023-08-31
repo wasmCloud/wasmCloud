@@ -98,12 +98,14 @@ impl TryFrom<Request> for http::Request<Vec<u8>> {
                 Some((name, value))
             })
             .fold(req, |req, (name, value)| req.header(name, value));
-        let req = if !path.is_empty() || !query_string.is_empty() {
-            req.uri(format!("{path}{query_string}"))
-        } else {
-            req
-        };
-        req.body(body).context("failed to build request")
+        match (path.as_str(), query_string.as_str()) {
+            ("", "") => req,
+            (_, "") => req.uri(path),
+            ("", _) => req.uri(format!("?{query_string}")),
+            _ => req.uri(format!("{path}?{query_string}")),
+        }
+        .body(body)
+        .context("failed to build request")
     }
 }
 

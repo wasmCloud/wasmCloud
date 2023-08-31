@@ -383,6 +383,11 @@ async fn run(wasm: impl AsRef<Path>) -> anyhow::Result<Vec<(logging::Level, Stri
             Box::new(Cursor::new(r#"{"min":42,"max":4242}"#));
         let req = http::Request::builder()
             .method("POST")
+            .uri("/foo?bar=baz")
+            .header("accept", "*/*")
+            .header("content-length", "21")
+            .header("host", "fake:42")
+            .header("test-header", "test-value")
             .body(req)
             .expect("failed to construct request");
         actor
