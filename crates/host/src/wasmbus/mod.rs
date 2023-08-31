@@ -62,9 +62,10 @@ use wasmcloud_core::chunking::{ChunkEndpoint, CHUNK_RPC_EXTRA_TIME, CHUNK_THRESH
 use wasmcloud_core::{
     HealthCheckResponse, HostData, Invocation, InvocationResponse, OtelConfig, WasmCloudEntity,
 };
+use wasmcloud_runtime::capability::logging::logging;
 use wasmcloud_runtime::capability::{
     blobstore, messaging, ActorIdentifier, Blobstore, Bus, IncomingHttp, KeyValueAtomic,
-    KeyValueReadWrite, Messaging, TargetEntity, TargetInterface,
+    KeyValueReadWrite, Logging, Messaging, TargetEntity, TargetInterface,
 };
 use wasmcloud_runtime::{ActorInstancePool, Runtime};
 use wasmcloud_tracing::context::{attach_span_context, OtelHeaderInjector};
@@ -962,6 +963,42 @@ impl KeyValueReadWrite for Handler {
 }
 
 #[async_trait]
+impl Logging for Handler {
+    #[instrument(skip(self))]
+    async fn log(
+        &self,
+        level: logging::Level,
+        context: String,
+        message: String,
+    ) -> anyhow::Result<()> {
+        let metadata = self.claims.metadata.as_ref();
+        ensure!(
+            metadata
+                .map(|jwt::Actor { caps, .. }| caps
+                    .iter()
+                    .flatten()
+                    .any(|cap| cap == wascap::caps::LOGGING))
+                .unwrap_or_default(),
+            "{} claim missing",
+            wascap::caps::LOGGING
+        );
+        let level = match level {
+            logging::Level::Trace => "trace",
+            logging::Level::Debug => "debug",
+            logging::Level::Info => "info",
+            logging::Level::Warn => "warn",
+            logging::Level::Error => "error",
+            logging::Level::Critical => "critical",
+        };
+        info!(
+            actor_id = self.claims.subject,
+            level, context, message, "{message}",
+        );
+        Ok(())
+    }
+}
+
+#[async_trait]
 impl Messaging for Handler {
     #[instrument(skip(self, body))]
     async fn request(
@@ -1066,6 +1103,7 @@ impl ActorInstance {
             .bus(Arc::new(self.handler.clone()))
             .keyvalue_atomic(Arc::new(self.handler.clone()))
             .keyvalue_readwrite(Arc::new(self.handler.clone()))
+            .logging(Arc::new(self.handler.clone()))
             .messaging(Arc::new(self.handler.clone()));
         #[allow(clippy::single_match_else)] // TODO: Remove once more interfaces supported
         match (contract_id, operation) {
