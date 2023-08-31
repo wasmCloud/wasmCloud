@@ -209,8 +209,8 @@ jobs:
 
     - name: Push commit rev
       run: |
-        buildah manifest push --storage-driver=vfs --all --format 'v2s2' wasmcloud docker://ghcr.io/${{ github.repository_owner }}/wasmcloud:${{ github.sha }}
-        buildah manifest push --storage-driver=vfs --all --format 'v2s2' wasmcloud docker://ghcr.io/${{ github.repository_owner }}/wasmcloud:${{ steps.ctx.outputs.sha_short }}
+        buildah manifest push --storage-driver=vfs --all --format 'v2s2' wasmcloud docker://ghcr.io/${{ steps.ctx.outputs.package }}:${{ github.sha }}
+        buildah manifest push --storage-driver=vfs --all --format 'v2s2' wasmcloud docker://ghcr.io/${{ steps.ctx.outputs.package }}:${{ steps.ctx.outputs.sha_short }}
 
         docker run ghcr.io/${{ steps.ctx.outputs.package }}:${{ github.sha }} wasmcloud --version
         docker run ghcr.io/${{ steps.ctx.outputs.package }}:${{ steps.ctx.outputs.sha_short }} wasmcloud --version
