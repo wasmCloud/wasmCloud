@@ -5,6 +5,7 @@ wit_bindgen::generate!({
     }
 });
 
+use std::collections::BTreeMap;
 use std::io::{stdin, stdout, Write};
 
 use serde::Deserialize;
@@ -25,13 +26,29 @@ impl exports::wasmcloud::bus::guest::Guest for Actor {
             method,
             path,
             query_string,
-            header: _,
+            header,
             body,
         } = rmp_serde::from_read(stdin()).expect("failed to read request");
         assert_eq!(method, "POST");
-        assert_eq!(path, "/");
-        assert_eq!(query_string, "");
-        // TODO: Validate headers
+        assert_eq!(path, "/foo");
+        assert_eq!(query_string, "bar=baz");
+
+        let mut header_iter = header.into_iter().collect::<BTreeMap<_, _>>().into_iter();
+        assert_eq!(
+            header_iter.next(),
+            Some(("accept".into(), vec!["*/*".into()]))
+        );
+        assert_eq!(
+            header_iter.next(),
+            Some(("content-length".into(), vec!["21".into()]))
+        );
+        let (host_key, _) = header_iter.next().expect("`host` header missing");
+        assert_eq!(host_key, "host");
+        assert_eq!(
+            header_iter.next(),
+            Some(("test-header".into(), vec!["test-value".into()]))
+        );
+        assert!(header_iter.next().is_none());
 
         #[derive(Deserialize)]
         struct Request {

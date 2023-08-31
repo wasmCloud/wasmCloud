@@ -5,6 +5,7 @@ wit_bindgen::generate!({
     }
 });
 
+use std::collections::BTreeMap;
 use std::io::{Read, Write};
 
 use serde::Deserialize;
@@ -29,13 +30,55 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
         ));
         assert_eq!(
             types::incoming_request_path_with_query(request).as_deref(),
-            Some("/")
+            Some("/foo?bar=baz")
         );
         assert!(types::incoming_request_scheme(request).is_none());
         // NOTE: Authority is lost in traslation to Smithy HttpRequest
         assert_eq!(types::incoming_request_authority(request), None);
-        let _headers = types::incoming_request_headers(request);
-        // TODO: Validate headers
+        let headers = types::incoming_request_headers(request);
+
+        let header_entries = types::fields_entries(headers)
+            .into_iter()
+            .collect::<BTreeMap<_, _>>();
+        let mut header_iter = header_entries.clone().into_iter();
+
+        assert_eq!(header_iter.next(), Some(("accept".into(), b"*/*".to_vec())));
+        assert_eq!(types::fields_get(headers, "accept"), vec![b"*/*"]);
+
+        assert_eq!(
+            header_iter.next(),
+            Some(("content-length".into(), b"21".to_vec()))
+        );
+        assert_eq!(types::fields_get(headers, "content-length"), vec![b"21"]);
+
+        let (host_key, host_value) = header_iter.next().expect("`host` header missing");
+        assert_eq!(host_key, "host");
+        assert_eq!(types::fields_get(headers, "host"), vec![host_value]);
+
+        assert_eq!(
+            header_iter.next(),
+            Some(("test-header".into(), b"test-value".to_vec()))
+        );
+        assert_eq!(types::fields_get(headers, "test-header"), vec![b"test-value"]);
+
+        assert!(header_iter.next().is_none());
+
+        let headers_clone = types::fields_clone(headers);
+        assert_ne!(headers, headers_clone);
+        types::fields_set(headers_clone, "foo", &[b"bar".to_vec()]);
+        types::fields_append(headers_clone, "foo", b"baz");
+        assert_eq!(
+            types::fields_get(headers_clone, "foo"),
+            vec![b"bar", b"baz"]
+        );
+        types::fields_delete(headers_clone, "foo");
+        assert_eq!(
+            types::fields_entries(headers_clone)
+                .into_iter()
+                .collect::<BTreeMap<_, _>>(),
+            header_entries,
+        );
+
         let request_stream = types::incoming_request_consume(request)
             .expect("failed to get incoming request stream");
         let mut request_body = vec![];
