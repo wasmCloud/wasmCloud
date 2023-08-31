@@ -13,7 +13,7 @@ default = []
 otel = []
 
 [dependencies]
-anyhow = { workspace = true }
+anyhow = { workspace = true, features = ["std"] }
 async-nats = { workspace = true }
 futures = { workspace = true }
 nkeys = { workspace = true }
