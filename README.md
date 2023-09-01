@@ -5,6 +5,21 @@ in the root level of this repository are _only_ compatible with version `0.50`
 and _newer_ of wasmCloud. All of the pre-existing capability providers compatible
 with `0.18` (aka "pre-OTP") or earlier can be found in the [pre-otp](./pre-otp) folder.
 
+## Finding the Latest Provider
+
+You can query this list via script to ensure that you are pulling the most up-to-date wasmCloud provider:
+
+```
+curl https://wasmcloud-ocireferences.cosmonic.app/httpserver
+{"schemaVersion":1,"label":"","message":"wasmcloud.azurecr.io/httpserver:0.19.1","color":"253746","namedLogo":"wasmcloud"}
+```
+
+If you want to return only the latest reference: 
+
+```
+curl -s https://wasmcloud-ocireferences.cosmonic.app/httpserver | jq -r '.message'
+```
+
 ## First-Party Capability Providers
 
 The following is a list of first-party supported capability providers developed by the
