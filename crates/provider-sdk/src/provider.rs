@@ -17,7 +17,6 @@ use wasmcloud_core::{
     HealthCheckRequest, HostData, Invocation, InvocationResponse, LinkDefinition,
 };
 
-
 use crate::{
     deserialize,
     error::{
