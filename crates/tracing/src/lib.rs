@@ -268,6 +268,7 @@ fn get_level_filter(log_level_override: Option<&Level>) -> EnvFilter {
             .with_default_directive(level.into())
             .parse("")
             .unwrap()
+            .add_directive("async_nats=info".parse().unwrap())
             .add_directive("hyper=info".parse().unwrap())
             .add_directive("cranelift_codegen=warn".parse().unwrap())
     } else {
