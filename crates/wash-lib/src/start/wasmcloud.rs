@@ -15,7 +15,7 @@ use tokio_stream::StreamExt;
 use tokio_util::io::StreamReader;
 
 const WASMCLOUD_GITHUB_RELEASE_URL: &str =
-    "https://github.com/wasmCloud/wasmcloud-otp/releases/download";
+    "https://github.com/wasmCloud/wasmCloud/releases/download";
 #[cfg(target_family = "unix")]
 pub const WASMCLOUD_HOST_BIN: &str = "wasmcloud_host";
 #[cfg(target_family = "windows")]
@@ -23,7 +23,7 @@ pub const WASMCLOUD_HOST_BIN: &str = "wasmcloud_host.exe";
 
 // Any version of wasmCloud under 0.63.0 uses Elixir releases and is incompatible
 // See https://github.com/wasmCloud/wasmcloud-otp/pull/616 for the move to burrito releases
-const MINIMUM_WASMCLOUD_VERSION: &str = "0.63.0";
+const MINIMUM_WASMCLOUD_VERSION: &str = "0.78.0-rc1";
 const DEFAULT_DASHBOARD_PORT: u16 = 4000;
 
 /// A wrapper around the [ensure_wasmcloud_for_os_arch_pair] function that uses the
@@ -48,8 +48,7 @@ pub async fn ensure_wasmcloud<P>(version: &str, dir: P) -> Result<PathBuf>
 where
     P: AsRef<Path>,
 {
-    ensure_wasmcloud_for_os_arch_pair(std::env::consts::OS, std::env::consts::ARCH, version, dir)
-        .await
+    ensure_wasmcloud_for_os_arch_pair(version, dir).await
 }
 
 /// Ensures the `wasmcloud_host` application is installed, returning the path to the executable
@@ -74,17 +73,12 @@ where
 /// use wash_lib::start::ensure_wasmcloud_for_os_arch_pair;
 /// let os = std::env::consts::OS;
 /// let arch = std::env::consts::ARCH;
-/// let res = ensure_wasmcloud_for_os_arch_pair(os, arch, "v0.63.0", "/tmp/wasmcloud/").await;
+/// let res = ensure_wasmcloud_for_os_arch_pair("v0.63.0", "/tmp/wasmcloud/").await;
 /// assert!(res.is_ok());
 /// assert!(res.unwrap().to_string_lossy() == "/tmp/wasmcloud/v0.63.0/wasmcloud_host".to_string());
 /// # }
 /// ```
-pub async fn ensure_wasmcloud_for_os_arch_pair<P>(
-    os: &str,
-    arch: &str,
-    version: &str,
-    dir: P,
-) -> Result<PathBuf>
+pub async fn ensure_wasmcloud_for_os_arch_pair<P>(version: &str, dir: P) -> Result<PathBuf>
 where
     P: AsRef<Path>,
 {
@@ -94,7 +88,7 @@ where
         return Ok(dir);
     }
     // Download wasmCloud host tarball
-    download_wasmcloud_for_os_arch_pair(os, arch, version, dir).await
+    download_wasmcloud_for_os_arch_pair(version, dir).await
 }
 
 /// A wrapper around the [download_wasmcloud_for_os_arch_pair] function that uses the
@@ -120,8 +114,7 @@ pub async fn download_wasmcloud<P>(version: &str, dir: P) -> Result<PathBuf>
 where
     P: AsRef<Path>,
 {
-    download_wasmcloud_for_os_arch_pair(std::env::consts::OS, std::env::consts::ARCH, version, dir)
-        .await
+    download_wasmcloud_for_os_arch_pair(version, dir).await
 }
 
 /// Downloads the specified GitHub release version of the wasmCloud host from
@@ -148,16 +141,11 @@ where
 /// assert!(res.unwrap().to_string_lossy() == "/tmp/wasmcloud/v0.63.0/wasmcloud_host".to_string());
 /// # }
 /// ```
-pub async fn download_wasmcloud_for_os_arch_pair<P>(
-    os: &str,
-    arch: &str,
-    version: &str,
-    dir: P,
-) -> Result<PathBuf>
+pub async fn download_wasmcloud_for_os_arch_pair<P>(version: &str, dir: P) -> Result<PathBuf>
 where
     P: AsRef<Path>,
 {
-    let url = wasmcloud_url(os, arch, version);
+    let url = wasmcloud_url(version);
     // NOTE(brooksmtownsend): This seems like a lot of work when I really just want to use AsyncRead
     // to pipe the response body into a file. I'm not sure if there's a better way to do this.
     let download_response = reqwest::get(url.clone()).await?;
@@ -270,15 +258,22 @@ where
 }
 
 /// Helper function to determine the wasmCloud host release path given an os/arch and version
-fn wasmcloud_url(os: &str, arch: &str, version: &str) -> String {
+fn wasmcloud_url(version: &str) -> String {
     // NOTE(brooksmtownsend): I'm hardcoding `gnu` here because I'm not sure how to determine
     // that programmatically. This essentially is what we had before (gnu only) but we do have a musl
     // release that we should consider.
-    let os = os
-        .replace("macos", "darwin")
-        .replace("linux", "linux_gnu")
-        .replace("windows", "windows.exe");
-    format!("{WASMCLOUD_GITHUB_RELEASE_URL}/{version}/wasmcloud_host_{arch}_{os}")
+    #[cfg(target_os = "macos")]
+    let os = "apple-darwin";
+
+    #[cfg(target_os = "linux")]
+    let os = "unknown-linux-musl";
+
+    #[cfg(target_os = "windows")]
+    let os = "pc-windows-gnu";
+    format!(
+        "{WASMCLOUD_GITHUB_RELEASE_URL}/{version}/wasmcloud-{arch}-{os}",
+        arch = std::env::consts::ARCH
+    )
 }
 
 /// Helper function to ensure the version of wasmCloud is above the minimum
@@ -307,7 +302,7 @@ fn check_version(version: &str) -> Result<()> {
 
 #[cfg(test)]
 mod test {
-    use super::{check_version, ensure_wasmcloud, wasmcloud_url};
+    use super::{check_version, ensure_wasmcloud, wasmcloud_url, MINIMUM_WASMCLOUD_VERSION};
     use crate::start::{
         ensure_nats_server, ensure_wasmcloud_for_os_arch_pair, find_wasmcloud_binary,
         is_bin_installed, start_nats_server, start_wasmcloud_host, NatsConfig, NATS_SERVER_BINARY,
@@ -320,7 +315,7 @@ mod test {
     use tokio::net::TcpStream;
     use tokio::time::Duration;
 
-    const WASMCLOUD_VERSION: &str = "v0.63.0";
+    const WASMCLOUD_VERSION: &str = "v0.78.0-rc1";
     const RANDOM_PORT_RANGE_START: u16 = 5000;
     const RANDOM_PORT_RANGE_END: u16 = 6000;
     const LOCALHOST: &str = "127.0.0.1";
@@ -339,28 +334,21 @@ mod test {
 
     #[tokio::test]
     async fn can_request_supported_wasmcloud_urls() {
-        let host_tarballs = vec![
-            wasmcloud_url("linux", "aarch64", WASMCLOUD_VERSION),
-            wasmcloud_url("linux", "x86_64", WASMCLOUD_VERSION),
-            wasmcloud_url("macos", "aarch64", WASMCLOUD_VERSION),
-            wasmcloud_url("macos", "x86_64", WASMCLOUD_VERSION),
-            wasmcloud_url("windows", "x86_64", WASMCLOUD_VERSION),
-        ];
-        for tarball_url in host_tarballs {
-            assert_eq!(
-                reqwest::get(tarball_url).await.unwrap().status(),
-                StatusCode::OK
-            );
-        }
+        assert_eq!(
+            reqwest::get(wasmcloud_url(WASMCLOUD_VERSION))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
     }
 
     #[tokio::test]
     async fn can_download_wasmcloud_burrito() {
         let download_dir = temp_dir().join("can_download_wasmcloud_burrito");
-        let res =
-            ensure_wasmcloud_for_os_arch_pair("macos", "aarch64", WASMCLOUD_VERSION, &download_dir)
-                .await
-                .expect("Should be able to download tarball");
+        let res = ensure_wasmcloud_for_os_arch_pair(WASMCLOUD_VERSION, &download_dir)
+            .await
+            .expect("Should be able to download tarball");
 
         // Make sure we can find the binary and that it matches the path we got back from ensure
         assert_eq!(
@@ -385,7 +373,7 @@ mod test {
     #[tokio::test]
     async fn can_download_different_versions() {
         let download_dir = temp_dir().join("can_download_different_versions");
-        ensure_wasmcloud_for_os_arch_pair("macos", "aarch64", WASMCLOUD_VERSION, &download_dir)
+        ensure_wasmcloud_for_os_arch_pair(WASMCLOUD_VERSION, &download_dir)
             .await
             .expect("Should be able to download host");
 
@@ -396,24 +384,9 @@ mod test {
             "wasmCloud should be installed"
         );
 
-        ensure_wasmcloud_for_os_arch_pair("macos", "aarch64", "v0.63.1", &download_dir)
-            .await
-            .expect("Should be able to download host");
-
-        assert!(
-            find_wasmcloud_binary(&download_dir, "v0.63.1")
-                .await
-                .is_some(),
-            "wasmCloud should be installed"
-        );
-
         // Just to triple check, make sure the paths actually exist
         assert!(
             download_dir.join(WASMCLOUD_VERSION).exists(),
-            "Directory should exist"
-        );
-        assert!(
-            download_dir.join("v0.63.1").exists(),
             "Directory should exist"
         );
 
@@ -421,7 +394,6 @@ mod test {
     }
 
     const NATS_SERVER_VERSION: &str = "v2.8.4";
-    const WASMCLOUD_HOST_VERSION: &str = "v0.63.1";
 
     #[tokio::test]
     async fn can_download_and_start_wasmcloud() -> anyhow::Result<()> {
@@ -435,7 +407,7 @@ mod test {
         let install_dir = std::env::current_dir()?.join("can_download_and_start_wasmcloud");
         let _ = remove_dir_all(&install_dir).await;
         create_dir_all(&install_dir).await?;
-        assert!(find_wasmcloud_binary(&install_dir, WASMCLOUD_HOST_VERSION)
+        assert!(find_wasmcloud_binary(&install_dir, WASMCLOUD_VERSION)
             .await
             .is_none());
 
@@ -454,7 +426,7 @@ mod test {
         .await
         .expect("Unable to start nats process");
 
-        let wasmcloud_binary = ensure_wasmcloud(WASMCLOUD_HOST_VERSION, &install_dir)
+        let wasmcloud_binary = ensure_wasmcloud(WASMCLOUD_VERSION, &install_dir)
             .await
             .expect("Unable to ensure wasmcloud");
 
@@ -580,28 +552,17 @@ mod test {
     #[tokio::test]
     async fn can_properly_deny_elixir_release_hosts() -> anyhow::Result<()> {
         // Ensure we allow versions >= 0.63.0
-        assert!(check_version("v1.56.0").is_ok());
-        assert!(check_version("v0.63.0").is_ok());
-        assert!(check_version("v0.63.1").is_ok());
-        assert!(check_version("v0.63.2").is_ok());
-        assert!(check_version("v0.64.0").is_ok());
-        assert!(check_version("v0.100.0").is_ok());
-        assert!(check_version("v0.203.0").is_ok());
+        assert!(check_version("v0.78.0").is_ok());
+        assert!(check_version(MINIMUM_WASMCLOUD_VERSION).is_ok());
 
         // Ensure we allow prerelease tags for testing
-        assert!(check_version("v0.64.0-rc.1").is_ok());
-        assert!(check_version("v0.64.0-alpha.23").is_ok());
-        assert!(check_version("v0.64.0-beta.0").is_ok());
+        assert!(check_version("v0.79.0-rc.1").is_ok());
 
-        // Ensure we deny versions < 0.63.0
-        assert!(check_version("v0.48.0").is_err());
-        assert!(check_version("v0.56.0").is_err());
-        assert!(check_version("v0.58.0").is_err());
-        assert!(check_version("v0.62.3").is_err());
-        assert!(check_version("v0.12.0").is_err());
-        assert!(check_version("v0.56.999").is_err());
+        // Ensure we deny versions < MINIMUM_WASMCLOUD_VERSION
+        assert!(check_version("v0.63.1").is_err());
+
         if let Err(e) = check_version("v0.56.0") {
-            assert_eq!(e.to_string(), "wasmCloud version v0.56.0 is earlier than the minimum supported version of v0.63.0");
+            assert_eq!(e.to_string(), format!("wasmCloud version v0.56.0 is earlier than the minimum supported version of v{MINIMUM_WASMCLOUD_VERSION}"));
         } else {
             panic!("v0.56.0 should be before the minimum version")
         }
