@@ -16,6 +16,7 @@ base64 = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true }
 opentelemetry = { workspace = true }
+opentelemetry-nats = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_bytes = { workspace = true, features = ["std"] }
 serde_json = { workspace = true }

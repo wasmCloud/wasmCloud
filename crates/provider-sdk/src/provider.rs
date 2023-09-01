@@ -17,6 +17,7 @@ use wasmcloud_core::{
     HealthCheckRequest, HostData, Invocation, InvocationResponse, LinkDefinition,
 };
 
+
 use crate::{
     deserialize,
     error::{
@@ -236,7 +237,9 @@ impl ProviderConnection {
                             match deserialize::<Invocation>(&msg.payload) {
                                 Ok(inv) => {
                                     #[cfg(feature = "otel")]
-                                    wasmcloud_tracing::context::attach_span_context(&inv);
+                                    if !inv.trace_context.is_empty() {
+                                        attach_span_context(&inv.trace_context);
+                                    }
                                     let current = tracing::Span::current();
                                     current.record("operation", &tracing::field::display(&inv.operation));
                                     current.record("lattice_id", &tracing::field::display(&lattice));

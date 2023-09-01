@@ -42,6 +42,7 @@ tracing-subscriber = { workspace = true, features = [
     "std",
 ] }
 opentelemetry = { workspace = true, features = ["rt-tokio"], optional = true }
+opentelemetry-nats = { workspace = true }
 opentelemetry-otlp = { workspace = true, features = [
     "http-proto",
     "reqwest-client",
@@ -97,6 +98,7 @@ nkeys = { version = "0.3", default-features = false }
 oci-distribution = { version = "0.9", default-features = false }
 once_cell = { version = "1", default-features = false }
 opentelemetry = { version = "0.20", default-features = false }
+opentelemetry-nats = { version = "*", path = "./crates/opentelemetry-nats" }
 opentelemetry-otlp = { version = "0.13", default-features = false }
 proc-macro2 = { version = "1", default-features = false }
 provider-archive = { version = "0.7", default-features = false }

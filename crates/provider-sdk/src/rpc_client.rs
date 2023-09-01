@@ -20,7 +20,7 @@ use wasmcloud_core::{
     Invocation, InvocationResponse, WasmCloudEntity,
 };
 #[cfg(feature = "otel")]
-use wasmcloud_tracing::context::OtelHeaderInjector;
+use wasmcloud_tracing::context::TraceContextInjector;
 
 /// Send wasmbus rpc messages
 ///
@@ -175,7 +175,7 @@ impl RpcClient {
                 host_id: self.host_id.clone(),
                 content_length: len as u64,
                 #[cfg(feature = "otel")]
-                trace_context: OtelHeaderInjector::default_with_span().into(),
+                trace_context: TraceContextInjector::default_with_span().into(),
                 ..Default::default()
             };
             if needs_chunking {
