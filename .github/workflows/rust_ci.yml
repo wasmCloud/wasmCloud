@@ -52,21 +52,8 @@ jobs:
       - name: Install nextest
         uses: taiki-e/install-action@nextest
 
-      # Sometimes, unit tests will get stuck executing wash during the
-      # loading CA certificates from the :otp store step. All you see is:
-      #
-      # > stderr log: 14:38:03.656 [info] Loading 467 CA(s) from :otp store
-      #
-      # when this happens, tests like can_download_and_start_wasmcloud get stuck and fail.
-      # to avoid this, we can call wash up/down and at least cause this loading as early as possible,
-      # hoping it does not happen again (or completes near instantaneously) during a test.
       - name: Build wash
         run: make build
-      - name: Cycle wash
-        run: |
-          cargo run -- up --detached;
-          sleep 10;
-          cargo run -- down;
 
       - name: Run all wash & wash-lib unit tests
         run: make test-wash-ci

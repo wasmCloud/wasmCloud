@@ -499,7 +499,7 @@ pub(crate) async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result
 
     spinner.finish_and_clear();
     if !cmd.detached {
-        run_wasmcloud_interactive(&mut wasmcloud_child, host_port, output_kind).await?;
+        run_wasmcloud_interactive(&mut wasmcloud_child, output_kind).await?;
 
         let spinner = Spinner::new(&output_kind)?;
         spinner.update_spinner_message(
@@ -592,7 +592,6 @@ async fn start_nats(install_dir: &Path, nats_binary: &Path, nats_opts: NatsOpts)
 /// Helper function to run wasmCloud in interactive mode
 async fn run_wasmcloud_interactive(
     wasmcloud_child: &mut Child,
-    port: u16,
     output_kind: OutputKind,
 ) -> Result<()> {
     use std::sync::mpsc::channel;
