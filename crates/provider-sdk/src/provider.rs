@@ -16,6 +16,7 @@ use wascap::{
 use wasmcloud_core::{
     HealthCheckRequest, HostData, Invocation, InvocationResponse, LinkDefinition,
 };
+use wasmcloud_tracing::context::attach_span_context;
 
 use crate::{
     deserialize,
