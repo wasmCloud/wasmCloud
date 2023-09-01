@@ -33,20 +33,15 @@ const CACHE_DIR: &str = "wasmcloud_bindlecache";
 const KEYRING_FILE: &str = "keyring.toml";
 
 /// Authentication method
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub enum Auth {
     /// HTTP authentication
     Http(HttpBasic),
     /// Token authentication
     LongLived(LongLivedToken),
     /// No authentication
-    None(NoToken),
-}
-
-impl Default for Auth {
-    fn default() -> Self {
-        Self::None(NoToken)
-    }
+    #[default]
+    NoToken,
 }
 
 impl From<&RegistryAuth> for Auth {
@@ -56,7 +51,7 @@ impl From<&RegistryAuth> for Auth {
                 Auth::Http(HttpBasic::new(username, password))
             }
             RegistryAuth::Token(token) => Auth::LongLived(LongLivedToken::new(token)),
-            RegistryAuth::Anonymous => Auth::None(NoToken),
+            RegistryAuth::Anonymous => Auth::NoToken,
         }
     }
 }
@@ -74,7 +69,7 @@ impl TokenManager for Auth {
         builder: reqwest::RequestBuilder,
     ) -> client::Result<reqwest::RequestBuilder> {
         match &self {
-            Auth::None(nt) => nt.apply_auth_header(builder).await,
+            Auth::NoToken => NoToken.apply_auth_header(builder).await,
             Auth::Http(h) => h.apply_auth_header(builder).await,
             Auth::LongLived(l) => l.apply_auth_header(builder).await,
         }
