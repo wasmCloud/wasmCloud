@@ -93,9 +93,16 @@ impl<'a> TryFrom<&'a str> for ResourceRef<'a> {
     }
 }
 
-fn oci_authority(s: &str) -> Option<&str> {
-    let (l, _) = s.split_once('/')?;
-    Some(l)
+impl ResourceRef<'_> {
+    fn authority(&self) -> Option<&str> {
+        match self {
+            ResourceRef::File(_) => None,
+            ResourceRef::Bindle(s) | ResourceRef::Oci(s) => {
+                let (l, _) = s.split_once('/')?;
+                Some(l)
+            }
+        }
+    }
 }
 
 /// Fetch an actor from a reference.
@@ -113,14 +120,16 @@ pub async fn fetch_actor(
             );
             fs::read(actor_ref).await.context("failed to read actor")
         }
-        ResourceRef::Bindle(actor_ref) => oci_authority(actor_ref)
+        ref bindle_ref @ ResourceRef::Bindle(actor_ref) => bindle_ref
+            .authority()
             .and_then(|authority| registry_config.get(authority))
             .map(bindle::Fetcher::from)
             .unwrap_or_default()
             .fetch_actor(actor_ref)
             .await
             .with_context(|| format!("failed to fetch actor under Bindle reference `{actor_ref}`")),
-        ResourceRef::Oci(actor_ref) => oci_authority(actor_ref)
+        ref oci_ref @ ResourceRef::Oci(actor_ref) => oci_ref
+            .authority()
             .and_then(|authority| registry_config.get(authority))
             .map(oci::Fetcher::from)
             .unwrap_or_default()
@@ -148,20 +157,22 @@ pub async fn fetch_provider(
                 .await
                 .context("failed to read provider")
         }
-        ResourceRef::Bindle(provider_ref) => oci_authority(provider_ref)
+        ref bindle_ref @ ResourceRef::Bindle(provider_ref) => bindle_ref
+            .authority()
             .and_then(|authority| registry_config.get(authority))
             .map(bindle::Fetcher::from)
             .unwrap_or_default()
-            .fetch_provider(provider_ref, link_name)
+            .fetch_provider(&provider_ref, link_name)
             .await
             .with_context(|| {
                 format!("failed to fetch provider under Bindle reference `{provider_ref}`")
             }),
-        ResourceRef::Oci(provider_ref) => oci_authority(provider_ref)
+        ref oci_ref @ ResourceRef::Oci(provider_ref) => oci_ref
+            .authority()
             .and_then(|authority| registry_config.get(authority))
             .map(oci::Fetcher::from)
             .unwrap_or_default()
-            .fetch_provider(provider_ref, link_name)
+            .fetch_provider(&provider_ref, link_name)
             .await
             .with_context(|| {
                 format!("failed to fetch provider under OCI reference `{provider_ref}`")
