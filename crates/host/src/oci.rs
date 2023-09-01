@@ -1,7 +1,7 @@
 // Adapted from
 // https://github.com/wasmCloud/wasmcloud-otp/blob/5f13500646d9e077afa1fca67a3fe9c8df5f3381/host_core/native/hostcore_wasmcloud_native/src/oci.rs
 
-use crate::par;
+use crate::{par, RegistryConfig};
 
 use core::str::FromStr;
 
@@ -56,60 +56,6 @@ impl From<&crate::RegistryAuth> for RegistryAuth {
     }
 }
 
-/// Fetch an OCI path
-#[allow(clippy::missing_errors_doc)] // TODO: document errors
-pub async fn fetch_oci_path(
-    img: impl AsRef<str>,
-    auth: &RegistryAuth,
-    allow_latest: bool,
-    allow_insecure: bool,
-    accepted_media_types: Vec<&str>,
-) -> anyhow::Result<PathBuf> {
-    let img = img.as_ref();
-
-    let img = &img.to_lowercase(); // the OCI spec does not allow for capital letters in references
-    if !allow_latest && img.ends_with(":latest") {
-        bail!("fetching images tagged 'latest' is currently prohibited in this host. This option can be overridden with WASMCLOUD_OCI_ALLOW_LATEST")
-    }
-    let cache_file = get_cached_filepath(img).await?;
-    let digest_file = get_digest_filepath(img).await?;
-
-    let img = Reference::from_str(img)?;
-
-    let protocol = if allow_insecure {
-        ClientProtocol::HttpsExcept(vec![img.registry().to_string()])
-    } else {
-        ClientProtocol::Https
-    };
-    let config = ClientConfig {
-        protocol,
-        ..Default::default()
-    };
-    let mut c = Client::new(config);
-
-    // In case of a cache miss where the file does not exist, pull a fresh OCI Image
-    if fs::metadata(&cache_file).await.is_ok() {
-        let (_, oci_digest) = c
-            .pull_manifest(&img, auth)
-            .await
-            .context("failed to fetch OCI manifest")?;
-        // If the digest file doesn't exist that is ok, we just unwrap to an empty string
-        let file_digest = fs::read_to_string(&digest_file).await.unwrap_or_default();
-        if !oci_digest.is_empty() && !file_digest.is_empty() && file_digest == oci_digest {
-            return Ok(cache_file);
-        }
-    }
-
-    let imgdata = c
-        .pull(&img, auth, accepted_media_types)
-        .await
-        .context("failed to fetch OCI bytes")?;
-    cache_oci_image(imgdata, &cache_file, digest_file)
-        .await
-        .context("failed to cache OCI bytes")?;
-    Ok(cache_file)
-}
-
 async fn get_cached_filepath(img: &str) -> std::io::Result<PathBuf> {
     let mut path = create_filepath(img).await?;
     path.set_extension("bin");
@@ -156,53 +102,141 @@ async fn cache_oci_image(
     Ok(())
 }
 
-/// Fetch actor from OCI
-///
-/// # Errors
-///
-/// Returns an error if either fetching fails or reading the fetched OCI path fails
-pub async fn fetch_actor(
-    oci_ref: impl AsRef<str>,
-    auth: impl Into<RegistryAuth>,
+/// OCI artifact fetcher
+#[derive(Clone, Debug)]
+pub struct Fetcher {
     allow_latest: bool,
     allow_insecure: bool,
-) -> anyhow::Result<Vec<u8>> {
-    let path = fetch_oci_path(
-        oci_ref,
-        &auth.into(),
-        allow_latest,
-        allow_insecure,
-        vec![WASM_MEDIA_TYPE, OCI_MEDIA_TYPE],
-    )
-    .await
-    .context("failed to fetch OCI path")?;
-    fs::read(&path)
-        .await
-        .with_context(|| format!("failed to read `{}`", path.display()))
+    auth: RegistryAuth,
 }
 
-/// Fetch provider from OCI
-///
-/// # Errors
-///
-/// Returns an error if either fetching fails or reading the fetched OCI path fails
-pub async fn fetch_provider(
-    oci_ref: impl AsRef<str>,
-    link_name: impl AsRef<str>,
-    auth: impl Into<RegistryAuth>,
-    allow_latest: bool,
-    allow_insecure: bool,
-) -> anyhow::Result<(PathBuf, jwt::Claims<jwt::CapabilityProvider>)> {
-    let path = fetch_oci_path(
-        oci_ref,
-        &auth.into(),
-        allow_latest,
-        allow_insecure,
-        vec![PROVIDER_ARCHIVE_MEDIA_TYPE, OCI_MEDIA_TYPE],
-    )
-    .await
-    .context("failed to fetch OCI path")?;
-    par::read(&path, link_name)
-        .await
-        .with_context(|| format!("failed to read `{}`", path.display()))
+impl Default for Fetcher {
+    fn default() -> Self {
+        Self {
+            allow_latest: false,
+            allow_insecure: false,
+            auth: RegistryAuth::Anonymous,
+        }
+    }
+}
+
+impl From<&RegistryConfig> for Fetcher {
+    fn from(
+        RegistryConfig {
+            auth,
+            allow_latest,
+            allow_insecure,
+            ..
+        }: &RegistryConfig,
+    ) -> Self {
+        Self {
+            auth: auth.into(),
+            allow_latest: *allow_latest,
+            allow_insecure: *allow_insecure,
+        }
+    }
+}
+
+impl From<RegistryConfig> for Fetcher {
+    fn from(
+        RegistryConfig {
+            auth,
+            allow_latest,
+            allow_insecure,
+            ..
+        }: RegistryConfig,
+    ) -> Self {
+        Self {
+            auth: auth.into(),
+            allow_latest,
+            allow_insecure,
+        }
+    }
+}
+
+impl Fetcher {
+    /// Fetch an OCI path
+    async fn fetch_path(
+        &self,
+        img: impl AsRef<str>,
+        accepted_media_types: Vec<&str>,
+    ) -> anyhow::Result<PathBuf> {
+        let img = img.as_ref();
+
+        let img = &img.to_lowercase(); // the OCI spec does not allow for capital letters in references
+        if !self.allow_latest && img.ends_with(":latest") {
+            bail!("fetching images tagged 'latest' is currently prohibited in this host. This option can be overridden with WASMCLOUD_OCI_ALLOW_LATEST")
+        }
+        let cache_file = get_cached_filepath(img).await?;
+        let digest_file = get_digest_filepath(img).await?;
+
+        let img = Reference::from_str(img)?;
+
+        let protocol = if self.allow_insecure {
+            ClientProtocol::HttpsExcept(vec![img.registry().to_string()])
+        } else {
+            ClientProtocol::Https
+        };
+        let config = ClientConfig {
+            protocol,
+            ..Default::default()
+        };
+        let mut c = Client::new(config);
+
+        // In case of a cache miss where the file does not exist, pull a fresh OCI Image
+        if fs::metadata(&cache_file).await.is_ok() {
+            let (_, oci_digest) = c
+                .pull_manifest(&img, &self.auth)
+                .await
+                .context("failed to fetch OCI manifest")?;
+            // If the digest file doesn't exist that is ok, we just unwrap to an empty string
+            let file_digest = fs::read_to_string(&digest_file).await.unwrap_or_default();
+            if !oci_digest.is_empty() && !file_digest.is_empty() && file_digest == oci_digest {
+                return Ok(cache_file);
+            }
+        }
+
+        let imgdata = c
+            .pull(&img, &self.auth, accepted_media_types)
+            .await
+            .context("failed to fetch OCI bytes")?;
+        cache_oci_image(imgdata, &cache_file, digest_file)
+            .await
+            .context("failed to cache OCI bytes")?;
+        Ok(cache_file)
+    }
+
+    /// Fetch actor from OCI
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either fetching fails or reading the fetched OCI path fails
+    pub async fn fetch_actor(&self, oci_ref: impl AsRef<str>) -> anyhow::Result<Vec<u8>> {
+        let path = self
+            .fetch_path(oci_ref, vec![WASM_MEDIA_TYPE, OCI_MEDIA_TYPE])
+            .await
+            .context("failed to fetch OCI path")?;
+        fs::read(&path)
+            .await
+            .with_context(|| format!("failed to read `{}`", path.display()))
+    }
+
+    /// Fetch provider from OCI
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either fetching fails or reading the fetched OCI path fails
+    pub async fn fetch_provider(
+        &self,
+        oci_ref: impl AsRef<str>,
+        link_name: impl AsRef<str>,
+    ) -> anyhow::Result<(PathBuf, jwt::Claims<jwt::CapabilityProvider>)> {
+        let path = self
+            .fetch_path(oci_ref, vec![PROVIDER_ARCHIVE_MEDIA_TYPE, OCI_MEDIA_TYPE])
+            .await
+            .context("failed to fetch OCI path")?;
+        par::read(&path, link_name)
+            .await
+            .with_context(|| format!("failed to read `{}`", path.display()))
+    }
 }

@@ -26,7 +26,7 @@ pub mod registry;
 mod par;
 
 pub use local::{Host as LocalHost, HostConfig as LocalHostConfig};
-pub use oci::Config as OciConfig;
+pub use oci::{Config as OciConfig, Fetcher as OciFetcher};
 pub use registry::{Auth as RegistryAuth, Config as RegistryConfig, Type as RegistryType};
 pub use wasmbus::{Host as WasmbusHost, HostConfig as WasmbusHostConfig};
 
@@ -113,27 +113,20 @@ pub async fn fetch_actor(
             );
             fs::read(actor_ref).await.context("failed to read actor")
         }
-        ResourceRef::Bindle(actor_ref) => if let Some(RegistryConfig { auth, .. }) =
-            oci_authority(actor_ref).and_then(|authority| registry_config.get(authority))
-        {
-            bindle::fetch_actor(actor_ref, auth).await
-        } else {
-            bindle::fetch_actor(actor_ref, RegistryAuth::Anonymous).await
-        }
-        .with_context(|| format!("failed to fetch actor under Bindle reference `{actor_ref}`")),
-        ResourceRef::Oci(actor_ref) => if let Some(RegistryConfig {
-            auth,
-            allow_latest,
-            allow_insecure,
-            ..
-        }) =
-            oci_authority(actor_ref).and_then(|authority| registry_config.get(authority))
-        {
-            oci::fetch_actor(actor_ref, auth, *allow_latest, *allow_insecure).await
-        } else {
-            oci::fetch_actor(actor_ref, RegistryAuth::Anonymous, false, false).await
-        }
-        .with_context(|| format!("failed to fetch actor under OCI reference `{actor_ref}`")),
+        ResourceRef::Bindle(actor_ref) => oci_authority(actor_ref)
+            .and_then(|authority| registry_config.get(authority))
+            .map(bindle::Fetcher::from)
+            .unwrap_or_default()
+            .fetch_actor(actor_ref)
+            .await
+            .with_context(|| format!("failed to fetch actor under Bindle reference `{actor_ref}`")),
+        ResourceRef::Oci(actor_ref) => oci_authority(actor_ref)
+            .and_then(|authority| registry_config.get(authority))
+            .map(oci::Fetcher::from)
+            .unwrap_or_default()
+            .fetch_actor(actor_ref)
+            .await
+            .with_context(|| format!("failed to fetch actor under OCI reference `{actor_ref}`")),
     }
 }
 
@@ -155,42 +148,23 @@ pub async fn fetch_provider(
                 .await
                 .context("failed to read provider")
         }
-        ResourceRef::Bindle(provider_ref) => if let Some(RegistryConfig { auth, .. }) =
-            oci_authority(provider_ref).and_then(|authority| registry_config.get(authority))
-        {
-            bindle::fetch_provider(provider_ref, link_name, auth).await
-        } else {
-            bindle::fetch_provider(provider_ref, link_name, RegistryAuth::Anonymous).await
-        }
-        .with_context(|| {
-            format!("failed to fetch provider under Bindle reference `{provider_ref}`")
-        }),
-        ResourceRef::Oci(provider_ref) => if let Some(RegistryConfig {
-            auth,
-            allow_latest,
-            allow_insecure,
-            ..
-        }) =
-            oci_authority(provider_ref).and_then(|authority| registry_config.get(authority))
-        {
-            oci::fetch_provider(
-                provider_ref,
-                link_name,
-                auth,
-                *allow_latest,
-                *allow_insecure,
-            )
+        ResourceRef::Bindle(provider_ref) => oci_authority(provider_ref)
+            .and_then(|authority| registry_config.get(authority))
+            .map(bindle::Fetcher::from)
+            .unwrap_or_default()
+            .fetch_provider(provider_ref, link_name)
             .await
-        } else {
-            oci::fetch_provider(
-                provider_ref,
-                link_name,
-                RegistryAuth::Anonymous,
-                false,
-                false,
-            )
+            .with_context(|| {
+                format!("failed to fetch provider under Bindle reference `{provider_ref}`")
+            }),
+        ResourceRef::Oci(provider_ref) => oci_authority(provider_ref)
+            .and_then(|authority| registry_config.get(authority))
+            .map(oci::Fetcher::from)
+            .unwrap_or_default()
+            .fetch_provider(provider_ref, link_name)
             .await
-        }
-        .with_context(|| format!("failed to fetch provider under OCI reference `{provider_ref}`")),
+            .with_context(|| {
+                format!("failed to fetch provider under OCI reference `{provider_ref}`")
+            }),
     }
 }

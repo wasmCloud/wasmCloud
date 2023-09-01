@@ -1,7 +1,7 @@
 // Adapted from
 // https://github.com/wasmCloud/wasmcloud-otp/blob/5f13500646d9e077afa1fca67a3fe9c8df5f3381/host_core/native/hostcore_wasmcloud_native/src/client.rs
 
-use crate::{par, RegistryAuth};
+use crate::{par, RegistryAuth, RegistryConfig};
 
 use std::env;
 use std::env::consts::{ARCH, OS};
@@ -113,7 +113,7 @@ pub async fn get_client(
         .verification_strategy(VerificationStrategy::MultipleAttestation(vec![
             SignatureRole::Host,
         ]))
-        .build(&bindle_url, auth, std::sync::Arc::new(keyring))?;
+        .build(&bindle_url, auth, Arc::new(keyring))?;
     let local = FileProvider::new(bindle_dir, NoopEngine::default()).await;
     Ok(DumbCache::new(client, local))
 }
@@ -138,75 +138,47 @@ pub(crate) fn normalize_bindle_id(bindle_id: &str) -> String {
     }
 }
 
-/// Fetch actor from bindle
-#[allow(clippy::missing_errors_doc)] // TODO: document errors
-pub async fn fetch_actor(
-    bindle_id: impl AsRef<str>,
-    auth: impl Into<Auth>,
-) -> anyhow::Result<Vec<u8>> {
-    let bindle_id = bindle_id.as_ref();
-    // Get the invoice, validate this bindle contains an actor, fetch the actor and return
-    let client = get_client(bindle_id, auth.into())
-        .await
-        .context("failed to get client")?;
-
-    let bindle_id = normalize_bindle_id(bindle_id);
-    let Invoice { bindle, parcel, .. } = client
-        .get_invoice(bindle_id)
-        .await
-        .context("failed to get invoice")?;
-
-    // TODO: We may want to allow more than one down the line, or include the JWT separately as
-    // part of the bindle. For now we just expect the single parcel
-    let Some([parcel]) = parcel.as_deref() else {
-        bail!("actor bindle should contain exactly one parcel")
-    };
-    let mut stream = client
-        .get_parcel(&bindle.id, &parcel.label.sha256)
-        .await
-        .context("failed to get parcel")?;
-    let mut data = Vec::new();
-    while let Some(res) = stream.next().await {
-        let bytes = res?;
-        data.extend(bytes);
-    }
-    Ok(data)
+/// Bindle artifact fetcher
+#[derive(Default)]
+pub struct Fetcher {
+    auth: Auth,
 }
 
-/// Fetch provider from bindle
-#[allow(clippy::missing_errors_doc)] // TODO: document errors
-pub async fn fetch_provider(
-    bindle_id: impl AsRef<str>,
-    link_name: impl AsRef<str>,
-    auth: impl Into<Auth>,
-) -> anyhow::Result<(PathBuf, jwt::Claims<jwt::CapabilityProvider>)> {
-    let bindle_id = bindle_id.as_ref();
+impl From<&RegistryConfig> for Fetcher {
+    fn from(RegistryConfig { auth, .. }: &RegistryConfig) -> Self {
+        Self { auth: auth.into() }
+    }
+}
 
-    let client = get_client(bindle_id, auth.into())
-        .await
-        .context("failed to construct client")?;
-    let bindle_id = normalize_bindle_id(bindle_id);
-    // Get the invoice first
-    let inv = client
-        .get_invoice(bindle_id)
-        .await
-        .context("failed to get invoice")?;
+impl From<RegistryConfig> for Fetcher {
+    fn from(RegistryConfig { auth, .. }: RegistryConfig) -> Self {
+        Self { auth: auth.into() }
+    }
+}
 
-    // Now filter to figure out which parcels to get (should only get the claims and the provider based on arch)
-    let parcels = BindleFilter::new(&inv)
-        .activate_feature("wasmcloud", "arch", ARCH)
-        .activate_feature("wasmcloud", "os", OS)
-        .filter();
-    let (claims, provider) = match parcels.as_slice() {
-        [claims, provider] | [provider, claims] if claims.label.name == "claims.jwt" => {
-            (claims, provider)
-        }
-        _ => bail!("invalid bindle"),
+impl Fetcher {
+    /// Fetch actor from bindle
+    #[allow(clippy::missing_errors_doc)] // TODO: document errors
+    pub async fn fetch_actor(&self, bindle_id: impl AsRef<str>) -> anyhow::Result<Vec<u8>> {
+        let bindle_id = bindle_id.as_ref();
+        // Get the invoice, validate this bindle contains an actor, fetch the actor and return
+        let client = get_client(bindle_id, self.auth.clone())
+            .await
+            .context("failed to get client")?;
+
+        let bindle_id = normalize_bindle_id(bindle_id);
+        let Invoice { bindle, parcel, .. } = client
+            .get_invoice(bindle_id)
+            .await
+            .context("failed to get invoice")?;
+
+        // TODO: We may want to allow more than one down the line, or include the JWT separately as
+        // part of the bindle. For now we just expect the single parcel
+        let Some([parcel]) = parcel.as_deref() else {
+        bail!("actor bindle should contain exactly one parcel")
     };
-
-    let claims = {
         let mut stream = client
-            .get_parcel(&inv.bindle.id, &claims.label.sha256)
+            .get_parcel(&bindle.id, &parcel.label.sha256)
             .await
             .context("failed to get parcel")?;
         let mut data = Vec::new();
@@ -214,27 +186,72 @@ pub async fn fetch_provider(
             let bytes = res?;
             data.extend(bytes);
         }
-        let data = str::from_utf8(&data).context("invalid UTF-8 data in claims")?;
-        jwt::Claims::decode(data)?
-    };
-
-    let exe = par::cache_path(&claims, link_name);
-    // Now get the parcel (if it doesn't already exist on disk)
-    if let Some(mut file) = par::create(&exe).await? {
-        let mut written = 0;
-        let mut stream = client
-            .get_parcel(&inv.bindle.id, &provider.label.sha256)
-            .await
-            .context("failed to get parcel")?;
-        while let Some(res) = stream.next().await {
-            let bytes = res?;
-            written += bytes.len();
-            file.write_all(&bytes).await.context("failed to write")?;
-        }
-        file.flush().await.context("failed to flush")?;
-        if written == 0 {
-            bail!("provider parcel not found or was empty");
-        }
+        Ok(data)
     }
-    Ok((exe, claims))
+
+    /// Fetch provider from bindle
+    #[allow(clippy::missing_errors_doc)] // TODO: document errors
+    pub async fn fetch_provider(
+        &self,
+        bindle_id: impl AsRef<str>,
+        link_name: impl AsRef<str>,
+    ) -> anyhow::Result<(PathBuf, jwt::Claims<jwt::CapabilityProvider>)> {
+        let bindle_id = bindle_id.as_ref();
+
+        let client = get_client(bindle_id, self.auth.clone())
+            .await
+            .context("failed to construct client")?;
+        let bindle_id = normalize_bindle_id(bindle_id);
+        // Get the invoice first
+        let inv = client
+            .get_invoice(bindle_id)
+            .await
+            .context("failed to get invoice")?;
+
+        // Now filter to figure out which parcels to get (should only get the claims and the provider based on arch)
+        let parcels = BindleFilter::new(&inv)
+            .activate_feature("wasmcloud", "arch", ARCH)
+            .activate_feature("wasmcloud", "os", OS)
+            .filter();
+        let (claims, provider) = match parcels.as_slice() {
+            [claims, provider] | [provider, claims] if claims.label.name == "claims.jwt" => {
+                (claims, provider)
+            }
+            _ => bail!("invalid bindle"),
+        };
+
+        let claims = {
+            let mut stream = client
+                .get_parcel(&inv.bindle.id, &claims.label.sha256)
+                .await
+                .context("failed to get parcel")?;
+            let mut data = Vec::new();
+            while let Some(res) = stream.next().await {
+                let bytes = res?;
+                data.extend(bytes);
+            }
+            let data = str::from_utf8(&data).context("invalid UTF-8 data in claims")?;
+            jwt::Claims::decode(data)?
+        };
+
+        let exe = par::cache_path(&claims, link_name);
+        // Now get the parcel (if it doesn't already exist on disk)
+        if let Some(mut file) = par::create(&exe).await? {
+            let mut written = 0;
+            let mut stream = client
+                .get_parcel(&inv.bindle.id, &provider.label.sha256)
+                .await
+                .context("failed to get parcel")?;
+            while let Some(res) = stream.next().await {
+                let bytes = res?;
+                written += bytes.len();
+                file.write_all(&bytes).await.context("failed to write")?;
+            }
+            file.flush().await.context("failed to flush")?;
+            if written == 0 {
+                bail!("provider parcel not found or was empty");
+            }
+        }
+        Ok((exe, claims))
+    }
 }
