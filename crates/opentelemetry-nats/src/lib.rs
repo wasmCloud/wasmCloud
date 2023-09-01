@@ -1,7 +1,3 @@
-// NOTE(thomastaylor312): It might be worth just having this code be its own crate so anyone using
-// NATS could leverage it. For speed right now, I am just putting it here since we no longer have
-// this code in the SDK provider (which was being used previously)
-
 use std::sync::OnceLock;
 
 use async_nats::header::HeaderMap;
@@ -20,24 +16,24 @@ fn empty_headers() -> &'static HeaderMap {
 
 /// A convenience type that wraps a NATS [`HeaderMap`] and implements the [`Extractor`] trait
 #[derive(Debug)]
-pub struct OtelHeaderExtractor<'a> {
+pub struct NatsHeaderExtractor<'a> {
     inner: &'a HeaderMap,
 }
 
-impl<'a> OtelHeaderExtractor<'a> {
+impl<'a> NatsHeaderExtractor<'a> {
     /// Creates a new extractor using the given [`HeaderMap`]
     pub fn new(headers: &'a HeaderMap) -> Self {
-        OtelHeaderExtractor { inner: headers }
+        NatsHeaderExtractor { inner: headers }
     }
 
     /// Creates a new extractor using the given message
     pub fn new_from_message(msg: &'a async_nats::Message) -> Self {
         let inner = msg.headers.as_ref().unwrap_or_else(|| empty_headers());
-        OtelHeaderExtractor { inner }
+        NatsHeaderExtractor { inner }
     }
 }
 
-impl<'a> Extractor for OtelHeaderExtractor<'a> {
+impl<'a> Extractor for NatsHeaderExtractor<'a> {
     fn get(&self, key: &str) -> Option<&str> {
         self.inner
             .get(key)
@@ -53,7 +49,7 @@ impl<'a> Extractor for OtelHeaderExtractor<'a> {
     }
 }
 
-impl<'a> AsRef<HeaderMap> for OtelHeaderExtractor<'a> {
+impl<'a> AsRef<HeaderMap> for NatsHeaderExtractor<'a> {
     fn as_ref(&self) -> &'a HeaderMap {
         self.inner
     }
@@ -61,14 +57,14 @@ impl<'a> AsRef<HeaderMap> for OtelHeaderExtractor<'a> {
 
 /// A convenience type that wraps a NATS [`HeaderMap`] and implements the [`Injector`] trait
 #[derive(Debug, Default)]
-pub struct OtelHeaderInjector {
+pub struct NatsHeaderInjector {
     inner: HeaderMap,
 }
 
-impl OtelHeaderInjector {
+impl NatsHeaderInjector {
     /// Creates a new injector using the given [`HeaderMap`]
     pub fn new(headers: HeaderMap) -> Self {
-        OtelHeaderInjector { inner: headers }
+        NatsHeaderInjector { inner: headers }
     }
 
     /// Convenience constructor that returns a new injector with the current span context already
@@ -94,36 +90,42 @@ impl OtelHeaderInjector {
     }
 }
 
-impl Injector for OtelHeaderInjector {
+impl Injector for NatsHeaderInjector {
     fn set(&mut self, key: &str, value: String) {
         self.inner.insert(key, value.as_ref());
     }
 }
 
-impl AsRef<HeaderMap> for OtelHeaderInjector {
+impl AsRef<HeaderMap> for NatsHeaderInjector {
     fn as_ref(&self) -> &HeaderMap {
         &self.inner
     }
 }
 
-impl From<HeaderMap> for OtelHeaderInjector {
+impl From<HeaderMap> for NatsHeaderInjector {
     fn from(headers: HeaderMap) -> Self {
-        OtelHeaderInjector::new(headers)
+        NatsHeaderInjector::new(headers)
     }
 }
 
-impl From<OtelHeaderInjector> for HeaderMap {
-    fn from(inj: OtelHeaderInjector) -> Self {
+impl From<NatsHeaderInjector> for HeaderMap {
+    fn from(inj: NatsHeaderInjector) -> Self {
         inj.inner
     }
 }
 
-/// A convenience function that will extract the current context from NATS message headers and set
-/// the parent span for the current tracing Span. If you want to do something more advanced, use the
-/// [`OtelHeaderExtractor`] type directly
+/// A convenience function that will extract headers from a message and set the parent span for the
+/// current tracing Span.  If you want to do something more advanced, use the
+/// [`NatsHeaderExtractor`] type directly
 pub fn attach_span_context(msg: &async_nats::Message) {
-    let header_map = OtelHeaderExtractor::new_from_message(msg);
-    let ctx_propagator = TraceContextPropagator::new();
-    let parent_ctx = ctx_propagator.extract(&header_map);
-    Span::current().set_parent(parent_ctx);
+    // If we extract and there are no OTEL headers, setting the parent will orphan the current span
+    // hierarchy. Checking that there are headers is a heuristic to avoid this
+    if let Some(ref headers) = msg.headers {
+        if headers.iter().len() > 0 {
+            let extractor = NatsHeaderExtractor::new(headers);
+            let ctx_propagator = TraceContextPropagator::new();
+            let parent_ctx = ctx_propagator.extract(&extractor);
+            Span::current().set_parent(parent_ctx);
+        }
+    }
 }

@@ -9,6 +9,7 @@ use anyhow::Context as _;
 use async_trait::async_trait;
 use base64::Engine;
 use futures::StreamExt;
+use opentelemetry_nats::{attach_span_context, NatsHeaderInjector};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{OwnedSemaphorePermit, RwLock, Semaphore};
 use tokio::task::JoinHandle;
@@ -19,8 +20,6 @@ use wasmcloud_compat::messaging::{PubMessage, ReplyMessage, RequestMessage, SubM
 use wasmcloud_provider_sdk::core::{HostData, LinkDefinition, WasmCloudEntity};
 use wasmcloud_provider_sdk::error::ProviderInvocationError;
 use wasmcloud_provider_sdk::{load_host_data, start_provider, Context, ProviderHandler};
-
-use wasmcloud_provider_nats::otel;
 
 const DEFAULT_NATS_URI: &str = "0.0.0.0:4222";
 const ENV_NATS_SUBSCRIPTION: &str = "SUBSCRIPTION";
@@ -262,7 +261,7 @@ impl NatsMessagingProvider {
                 let span = tracing::debug_span!("handle_message", actor_id = %link_def.actor_id);
 
                 span.in_scope(|| {
-                    otel::attach_span_context(&msg);
+                    attach_span_context(&msg);
                 });
 
                 let permit = match semaphore.clone().acquire_owned().await {
@@ -421,7 +420,7 @@ impl NatsMessagingProvider {
             nats_bundle.client.clone()
         };
 
-        let headers = otel::OtelHeaderInjector::default_with_span().into();
+        let headers = NatsHeaderInjector::default_with_span().into();
 
         let res = match msg.reply_to.clone() {
             Some(reply_to) => if should_strip_headers(&msg.subject) {
@@ -464,7 +463,7 @@ impl NatsMessagingProvider {
         }; // early release of actor-client map
 
         // Inject OTEL headers
-        let headers = otel::OtelHeaderInjector::default_with_span().into();
+        let headers = NatsHeaderInjector::default_with_span().into();
 
         // Perform the request with a timeout
         let request_with_timeout = if should_strip_headers(&msg.subject) {

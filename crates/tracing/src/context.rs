@@ -3,6 +3,7 @@
 //! is only available with the `otel` feature enabled
 
 use std::collections::HashMap;
+use std::ops::Deref;
 
 use opentelemetry::{
     propagation::{Extractor, Injector, TextMapPropagator},
@@ -11,28 +12,22 @@ use opentelemetry::{
 use tracing::span::Span;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
-use wasmcloud_core::{Invocation, TraceContext};
+use wasmcloud_core::TraceContext;
 
 /// A convenience type that wraps an invocation [`TraceContext`] and implements the [`Extractor`] trait
 #[derive(Debug)]
-pub struct OtelHeaderExtractor<'a> {
+pub struct TraceContextExtractor<'a> {
     inner: &'a TraceContext,
 }
 
-impl<'a> OtelHeaderExtractor<'a> {
-    /// Creates a new extractor using the given [`HeaderMap`]
-    pub fn new(headers: &'a TraceContext) -> Self {
-        OtelHeaderExtractor { inner: headers }
-    }
-
-    /// Creates a new extractor using the given invocation
-    pub fn new_from_message(inv: &'a Invocation) -> Self {
-        let inner = inv.trace_context.as_ref();
-        OtelHeaderExtractor { inner }
+impl<'a> TraceContextExtractor<'a> {
+    /// Creates a new extractor using the given [`TraceContext`]
+    pub fn new(context: &'a TraceContext) -> Self {
+        TraceContextExtractor { inner: context }
     }
 }
 
-impl<'a> Extractor for OtelHeaderExtractor<'a> {
+impl<'a> Extractor for TraceContextExtractor<'a> {
     fn get(&self, key: &str) -> Option<&str> {
         // NOTE(thomastaylor312): I don't like that we have to iterate to find this, but I didn't
         // want to allocate hashmap for now. If this starts to cause performance issues, we can see
@@ -47,26 +42,20 @@ impl<'a> Extractor for OtelHeaderExtractor<'a> {
     }
 }
 
-impl<'a> AsRef<TraceContext> for OtelHeaderExtractor<'a> {
-    fn as_ref(&self) -> &'a TraceContext {
-        self.inner
-    }
-}
-
 /// A convenience type that wraps an invocation [`TraceContext`] and implements the [`Injector`] trait
-#[derive(Debug, Default)]
-pub struct OtelHeaderInjector {
+#[derive(Clone, Debug, Default)]
+pub struct TraceContextInjector {
     inner: HashMap<String, String>,
 }
 
-impl OtelHeaderInjector {
+impl TraceContextInjector {
     /// Creates a new injector using the given [`TraceContext`]
     pub fn new(headers: TraceContext) -> Self {
         // NOTE(thomastaylor312): Same point here with performance, technically we aren't allocating anything here except the hashmap, but we could do more optimization here if needed
         // Manually constructing the map here so we are sure we're only allocating once
         let mut inner = HashMap::with_capacity(headers.len());
         inner.extend(headers.into_iter());
-        OtelHeaderInjector { inner }
+        TraceContextInjector { inner }
     }
 
     /// Convenience constructor that returns a new injector with the current span context already
@@ -92,30 +81,48 @@ impl OtelHeaderInjector {
     }
 }
 
-impl Injector for OtelHeaderInjector {
+impl Injector for TraceContextInjector {
     fn set(&mut self, key: &str, value: String) {
         self.inner.insert(key.to_owned(), value);
     }
 }
 
-impl From<TraceContext> for OtelHeaderInjector {
-    fn from(headers: TraceContext) -> Self {
-        OtelHeaderInjector::new(headers)
+impl AsRef<HashMap<String, String>> for TraceContextInjector {
+    fn as_ref(&self) -> &HashMap<String, String> {
+        &self.inner
     }
 }
 
-impl From<OtelHeaderInjector> for TraceContext {
-    fn from(inj: OtelHeaderInjector) -> Self {
+impl Deref for TraceContextInjector {
+    type Target = HashMap<String, String>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl From<TraceContext> for TraceContextInjector {
+    fn from(context: TraceContext) -> Self {
+        TraceContextInjector::new(context)
+    }
+}
+
+impl From<TraceContextInjector> for TraceContext {
+    fn from(inj: TraceContextInjector) -> Self {
         inj.inner.into_iter().collect()
     }
 }
 
-/// A convenience function that will extract the current context from NATS message headers and set
-/// the parent span for the current tracing Span. If you want to do something more advanced, use the
-/// [`OtelHeaderExtractor`] type directly
-pub fn attach_span_context(inv: &Invocation) {
-    let header_map = OtelHeaderExtractor::new_from_message(inv);
+/// A convenience function that will extract from an incoming context and set the parent span for
+/// the current tracing Span.  If you want to do something more advanced, use the
+/// [`TraceContextExtractor`] type directly
+///
+/// **WARNING**: To avoid performance issues, this function does not check if you have empty tracing
+/// headers. **If you pass an empty Extractor to this function, you will orphan the current span
+/// hierarchy.**
+pub fn attach_span_context(trace_context: &TraceContext) {
     let ctx_propagator = TraceContextPropagator::new();
-    let parent_ctx = ctx_propagator.extract(&header_map);
+    let extractor = TraceContextExtractor::new(trace_context);
+    let parent_ctx = ctx_propagator.extract(&extractor);
     Span::current().set_parent(parent_ctx);
 }

@@ -15,6 +15,7 @@ pub use provider::ProviderConnection;
 pub use provider_main::{load_host_data, run_provider, start_provider};
 pub use rpc_client::RpcClient;
 pub use wasmcloud_core as core;
+pub use wasmcloud_tracing;
 
 use crate::{
     core::{HealthCheckRequest, HealthCheckResponse, LinkDefinition, WasmCloudEntity},

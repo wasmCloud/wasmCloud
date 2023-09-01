@@ -23,6 +23,7 @@ use std::env;
 use std::env::consts::{ARCH, FAMILY, OS};
 use std::io::Cursor;
 use std::process::Stdio;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, ensure, Context as _};
@@ -67,7 +68,7 @@ use wasmcloud_runtime::capability::{
     KeyValueReadWrite, Messaging, TargetEntity, TargetInterface,
 };
 use wasmcloud_runtime::{ActorInstancePool, Runtime};
-use wasmcloud_tracing::context::{attach_span_context, OtelHeaderInjector};
+use wasmcloud_tracing::context::TraceContextInjector;
 
 const SUCCESS: &str = r#"{"accepted":true,"error":""}"#;
 
@@ -281,6 +282,8 @@ impl Handler {
             .context("failed to parse operation")?;
         let inv_target = resolve_target(target, links.get(package), &aliases).await?;
         let needs_chunking = request.len() > CHUNK_THRESHOLD_BYTES;
+        let injector = TraceContextInjector::default_with_span();
+        let headers = injector_to_headers(&injector);
         let mut invocation = Invocation::new(
             &self.cluster_key,
             &self.host_key,
@@ -288,7 +291,7 @@ impl Handler {
             inv_target,
             operation,
             request,
-            OtelHeaderInjector::default_with_span().into(),
+            injector.into(),
         )?;
 
         // Validate that the actor has the capability to call the target
@@ -319,7 +322,10 @@ impl Handler {
         };
 
         let timeout = needs_chunking.then_some(CHUNK_RPC_EXTRA_TIME); // TODO: add rpc_nats timeout
-        let request = Request::new().payload(payload.into()).timeout(timeout);
+        let request = Request::new()
+            .payload(payload.into())
+            .timeout(timeout)
+            .headers(headers); // TODO: remove headers once all providers are built off the new SDK, which parses the trace context in the invocation
         let res = self
             .nats
             .send_request(topic, request)
@@ -725,6 +731,8 @@ impl Bus for Handler {
                     .await
                     .map_err(|e| e.to_string())?;
                 let needs_chunking = request.len() > CHUNK_THRESHOLD_BYTES;
+                let injector = TraceContextInjector::default_with_span();
+                let headers = injector_to_headers(&injector);
                 let mut invocation = Invocation::new(
                     &cluster_key,
                     &host_key,
@@ -732,7 +740,7 @@ impl Bus for Handler {
                     inv_target,
                     operation,
                     request,
-                    OtelHeaderInjector::default_with_span().into(),
+                    injector.into(),
                 )
                 .map_err(|e| e.to_string())?;
 
@@ -764,7 +772,10 @@ impl Bus for Handler {
                 };
 
                 let timeout = needs_chunking.then_some(CHUNK_RPC_EXTRA_TIME); // TODO: add rpc_nats timeout
-                let request = Request::new().payload(payload.into()).timeout(timeout);
+                let request = Request::new()
+                    .payload(payload.into())
+                    .timeout(timeout)
+                    .headers(headers); // TODO: remove headers once all providers are built off the new SDK, which parses the trace context in the invocation
                 let res = nats
                     .send_request(topic, request)
                     .await
@@ -1211,34 +1222,55 @@ impl ActorInstance {
         }
     }
 
-    #[instrument(skip(self, payload))]
-    async fn handle_message(
-        &self,
-        async_nats::Message {
-            reply,
-            payload,
-            subject,
+    #[instrument(skip_all)]
+    async fn handle_message(&self, message: async_nats::Message) {
+        let async_nats::Message {
+            ref subject,
+            ref reply,
+            ref payload,
             ..
-        }: async_nats::Message,
-    ) {
-        match rmp_serde::from_slice::<Invocation>(payload.as_ref()) {
-            Ok(invocation) => {
-                let invocation_id = invocation.id.clone();
-                attach_span_context(&invocation);
-                let res = self.handle_call(invocation).await;
+        } = message;
 
+        match rmp_serde::from_slice::<Invocation>(payload) {
+            Ok(invocation) => {
+                if !invocation.trace_context.is_empty() {
+                    wasmcloud_tracing::context::attach_span_context(&invocation.trace_context);
+                } else if message.headers.is_some() {
+                    // TODO: remove once all providers are built off the new SDK, which passes the trace context in the invocation
+                    // fall back on message headers
+                    opentelemetry_nats::attach_span_context(&message);
+                }
+
+                let invocation_id = invocation.id.clone();
+                let origin = invocation.origin.clone();
+                let target = invocation.target.clone();
+                let operation = invocation.operation.clone();
+
+                let res = self.handle_call(invocation).await;
+                let injector = TraceContextInjector::default_with_span();
+                let headers = injector_to_headers(&injector);
+                let trace_context = injector.into();
                 let inv_resp = match res {
                     Ok((msg, content_length)) => InvocationResponse {
                         msg,
                         invocation_id,
                         content_length,
+                        trace_context,
                         ..Default::default()
                     },
                     Err(e) => {
-                        warn!(?subject, ?e, "failed to handle request");
+                        error!(
+                            ?origin,
+                            ?target,
+                            ?operation,
+                            ?invocation_id,
+                            ?e,
+                            "failed to handle request"
+                        );
                         InvocationResponse {
                             invocation_id,
                             error: Some(e.to_string()),
+                            trace_context,
                             ..Default::default()
                         }
                     }
@@ -1247,8 +1279,12 @@ impl ActorInstance {
                 if let Some(reply) = reply {
                     match rmp_serde::to_vec_named(&inv_resp) {
                         Ok(buf) => {
-                            if let Err(e) = self.nats.publish(reply, buf.into()).await {
-                                error!(?subject, ?e, "failed to publish response to request");
+                            if let Err(e) = self
+                                .nats
+                                .publish_with_headers(reply.clone(), headers, buf.into())
+                                .await
+                            {
+                                error!(?reply, ?e, "failed to publish response to request");
                             }
                         }
                         Err(e) => {
@@ -1258,7 +1294,7 @@ impl ActorInstance {
                 }
             }
             Err(e) => {
-                error!(?subject, ?e, "failed to decode invocation");
+                error!(?subject, ?e, "failed to decode invocation"); // Note: this won't be traced
             }
         }
     }
@@ -2801,9 +2837,12 @@ impl Host {
                     select! {
                         _ = health_check.tick() => {
                             trace!(provider_id=health_provider_id, "performing provider health check");
-                            if let Ok(async_nats::Message { payload, ..}) = prov_nats.request(
+                            let request = async_nats::Request::new()
+                                .payload(Bytes::new())
+                                .headers(injector_to_headers(&TraceContextInjector::default_with_span()));
+                            if let Ok(async_nats::Message { payload, ..}) = prov_nats.send_request(
                                 health_topic.clone(),
-                                Bytes::new(),
+                                request,
                                 ).await {
                                     match (rmp_serde::from_slice::<HealthCheckResponse>(&payload), previous_healthy) {
                                         (Ok(HealthCheckResponse { healthy: true, ..}), false) => {
@@ -2967,7 +3006,10 @@ impl Host {
                 .context("failed to encode provider stop request")?;
             let req = async_nats::Request::new()
                 .payload(req.into())
-                .timeout(self.host_config.provider_shutdown_delay);
+                .timeout(self.host_config.provider_shutdown_delay)
+                .headers(injector_to_headers(
+                    &TraceContextInjector::default_with_span(),
+                ));
             if let Err(e) = self
                 .prov_rpc_nats
                 .send_request(
@@ -3239,19 +3281,16 @@ impl Host {
         Ok(buf.into())
     }
 
-    #[instrument(skip(self, payload))]
-    async fn handle_message(
-        self: Arc<Self>,
-        async_nats::Message {
-            subject,
-            reply,
-            payload,
-            headers,
-            status,
-            description,
+    #[instrument(skip_all)]
+    async fn handle_message(self: Arc<Self>, message: async_nats::Message) {
+        let async_nats::Message {
+            ref subject,
+            ref reply,
+            ref payload,
             ..
-        }: async_nats::Message,
-    ) {
+        } = message;
+
+        opentelemetry_nats::attach_span_context(&message);
         // Skip the topic prefix and then the lattice prefix
         // e.g. `wasmbus.ctl.{prefix}`
         let mut parts = subject
@@ -3315,17 +3354,23 @@ impl Host {
         if let Err(e) = &res {
             warn!("failed to handle `{subject}` request: {e:?}");
         }
+        let headers = injector_to_headers(&TraceContextInjector::default_with_span());
         match (reply, res) {
             (Some(reply), Ok(Some(buf))) => {
-                if let Err(e) = self.ctl_nats.publish(reply, buf).await {
+                if let Err(e) = self
+                    .ctl_nats
+                    .publish_with_headers(reply.clone(), headers, buf)
+                    .await
+                {
                     error!("failed to publish success in response to `{subject}` request: {e:?}");
                 }
             }
             (Some(reply), Err(e)) => {
                 if let Err(e) = self
                     .ctl_nats
-                    .publish(
-                        reply,
+                    .publish_with_headers(
+                        reply.clone(),
+                        headers,
                         format!(r#"{{"accepted":false,"error":"{e}"}}"#).into(),
                     )
                     .await
@@ -3412,8 +3457,9 @@ impl Host {
         let msgp = rmp_serde::to_vec(ld).context("failed to encode link definition")?;
         let lattice_prefix = &self.host_config.lattice_prefix;
         self.prov_rpc_nats
-            .publish(
+            .publish_with_headers(
                 format!("wasmbus.rpc.{lattice_prefix}.{provider_id}.{link_name}.linkdefs.put",),
+                injector_to_headers(&TraceContextInjector::default_with_span()),
                 msgp.into(),
             )
             .await
@@ -3461,8 +3507,9 @@ impl Host {
         let msgp = rmp_serde::to_vec(ld).context("failed to encode link definition")?;
         let lattice_prefix = &self.host_config.lattice_prefix;
         self.prov_rpc_nats
-            .publish(
+            .publish_with_headers(
                 format!("wasmbus.rpc.{lattice_prefix}.{provider_id}.{link_name}.linkdefs.del",),
+                injector_to_headers(&TraceContextInjector::default_with_span()),
                 msgp.into(),
             )
             .await
@@ -3727,6 +3774,18 @@ fn ensure_actor_capability(
     Ok(())
 }
 
+fn injector_to_headers(injector: &TraceContextInjector) -> async_nats::header::HeaderMap {
+    injector
+        .iter()
+        .filter_map(|(k, v)| {
+            // There's not really anything we can do about headers that don't parse
+            let name = async_nats::header::HeaderName::from_str(k.as_str()).ok()?;
+            let value = async_nats::header::HeaderValue::from_str(v.as_str()).ok()?;
+            Some((name, value))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod test {
     use nkeys::KeyPair;
@@ -3734,7 +3793,7 @@ mod test {
     use uuid::Uuid;
     use wascap::jwt;
     use wasmcloud_core::{invocation_hash, WasmCloudEntity};
-    use wasmcloud_tracing::context::OtelHeaderInjector;
+    use wasmcloud_tracing::context::TraceContextInjector;
 
     use super::Invocation;
 
@@ -3768,7 +3827,7 @@ mod test {
             target.clone(),
             operation.to_string(),
             msg.clone(),
-            OtelHeaderInjector::default_with_span().into(),
+            TraceContextInjector::default_with_span().into(),
         )
         .expect("failed to create invocation");
         assert!(basic_invocation

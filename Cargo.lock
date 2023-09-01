@@ -2316,6 +2316,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "opentelemetry-nats"
+version = "0.1.0"
+dependencies = [
+ "async-nats",
+ "opentelemetry 0.20.0",
+ "tracing",
+ "tracing-opentelemetry 0.20.0",
+]
+
+[[package]]
 name = "opentelemetry-otlp"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4357,6 +4367,7 @@ dependencies = [
  "futures",
  "nkeys",
  "opentelemetry 0.20.0",
+ "opentelemetry-nats",
  "opentelemetry-otlp",
  "redis",
  "reqwest",
@@ -4496,6 +4507,7 @@ dependencies = [
  "names",
  "nkeys",
  "oci-distribution",
+ "opentelemetry-nats",
  "provider-archive",
  "reqwest",
  "rmp-serde",
