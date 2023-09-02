@@ -18,7 +18,7 @@ use crate::{
     },
     parser::{
         ActorConfig, CommonConfig, InterfaceConfig, LanguageConfig, ProjectConfig, ProviderConfig,
-        RustConfig, RustWasmTarget, TinyGoConfig, TinyGoWasmTarget, TypeConfig,
+        RustConfig, TinyGoConfig, TypeConfig, WasmTarget,
     },
 };
 
@@ -90,11 +90,19 @@ pub fn build_actor(
         LanguageConfig::Rust(rust_config) => {
             build_rust_actor(common_config, rust_config, actor_config)
         }
-        LanguageConfig::TinyGo(tinygo_config) => build_tinygo_actor(common_config, tinygo_config),
+        LanguageConfig::TinyGo(tinygo_config) => {
+            build_tinygo_actor(common_config, tinygo_config, actor_config)
+        }
     }?;
 
+    if actor_config.wasm_target == WasmTarget::TinyGoWasiPreview1 {
+        // TODO: run equivalent of `wasm-tools component embed --world [world] ./wit [actor_wasm_path] -o [actor_wasm_embed_path]
+    }
+
     // If the actor has been configured as WASI Preview2, adapt it
-    if actor_config.wasm_target == RustWasmTarget::WasiPreview2 {
+    if actor_config.wasm_target == WasmTarget::WasiPreview2
+        || actor_config.wasm_target == WasmTarget::TinyGoWasiPreview1
+    {
         let adapter_wasm_bytes = get_wasi_preview2_adapter_bytes(actor_config)?;
         // Adapt the component, using the adapter that is available locally
         let wasm_bytes = adapt_wasi_preview1_component(&actor_wasm_path, adapter_wasm_bytes)
@@ -162,7 +170,7 @@ fn build_rust_actor(
 
     let metadata = cargo_metadata::MetadataCommand::new().exec()?;
     let target_path = metadata.target_directory.as_path();
-    let build_target = rust_config.build_target(&actor_config.wasm_target);
+    let build_target = actor_config.build_target(&actor_config.wasm_target);
 
     let result = command
         .args(["build", "--release", "--target", build_target])
@@ -219,6 +227,7 @@ fn build_rust_actor(
 fn build_tinygo_actor(
     common_config: &CommonConfig,
     tinygo_config: &TinyGoConfig,
+    actor_config: &ActorConfig,
 ) -> Result<PathBuf> {
     let filename = format!("build/{}.wasm", common_config.name);
 
@@ -228,11 +237,6 @@ fn build_tinygo_actor(
     let mut command = match &tinygo_config.tinygo_path {
         Some(path) => process::Command::new(path),
         None => process::Command::new("tinygo"),
-    };
-
-    let build_target = match &tinygo_config.wasm_target {
-        Some(t) => t.to_string(),
-        None => TinyGoWasmTarget::CoreModule.to_string(),
     };
 
     if let Some(p) = PathBuf::from(&filename).parent() {
@@ -245,7 +249,7 @@ fn build_tinygo_actor(
             "-o",
             filename.as_str(),
             "-target",
-            build_target.as_str(),
+            actor_config.build_target(&actor_config.wasm_target),
             "-scheduler",
             "none",
             "-no-debug",
@@ -315,7 +319,7 @@ fn adapt_wasi_preview1_component(
 /// if required by project configuration
 pub(crate) fn get_wasi_preview2_adapter_bytes(config: &ActorConfig) -> Result<Vec<u8>> {
     if let ActorConfig {
-        wasm_target: RustWasmTarget::WasiPreview2,
+        wasm_target: WasmTarget::WasiPreview2 | WasmTarget::TinyGoWasiPreview1,
         wasi_preview2_adapter_path: Some(path),
         ..
     } = config

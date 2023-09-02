@@ -49,11 +49,24 @@ pub struct ActorConfig {
     /// The filename of the signed wasm actor.
     pub filename: Option<String>,
     /// The target wasm target to build for. Defaults to "wasm32-unknown-unknown".
-    pub wasm_target: RustWasmTarget,
+    pub wasm_target: WasmTarget,
     /// Path to a wasm adapter that can be used for preview2
     pub wasi_preview2_adapter_path: Option<PathBuf>,
     /// The call alias of the actor.
     pub call_alias: Option<String>,
+}
+
+impl ActorConfig {
+    pub fn build_target(&self, wasm_target: &WasmTarget) -> &'static str {
+        match wasm_target {
+            WasmTarget::CoreModule => "wasm32-unknown-unknown",
+            // NOTE: eventually "wasm32-wasi" will be renamed to "wasm32-wasi-preview1"
+            // https://github.com/rust-lang/compiler-team/issues/607
+            WasmTarget::WasiPreview1 | WasmTarget::WasiPreview2 => "wasm32-wasi",
+            WasmTarget::TinyGoCoreModule => "wasm",
+            WasmTarget::TinyGoWasiPreview1 => "wasi",
+        }
+    }
 }
 
 #[derive(Deserialize, Debug, PartialEq)]
@@ -90,7 +103,7 @@ impl TryFrom<RawActorConfig> for ActorConfig {
             filename: raw_config.filename,
             wasm_target: raw_config
                 .wasm_target
-                .map(RustWasmTarget::from)
+                .map(WasmTarget::from)
                 .unwrap_or_default(),
             wasi_preview2_adapter_path: raw_config.wasi_preview2_adapter_path,
             call_alias: raw_config.call_alias,
@@ -162,17 +175,6 @@ pub struct RustConfig {
     pub target_path: Option<PathBuf>,
 }
 
-impl RustConfig {
-    pub fn build_target(&self, wasm_target: &RustWasmTarget) -> &'static str {
-        match wasm_target {
-            RustWasmTarget::CoreModule => "wasm32-unknown-unknown",
-            // NOTE: eventually "wasm32-wasi" will be renamed to "wasm32-wasi-preview1"
-            // https://github.com/rust-lang/compiler-team/issues/607
-            RustWasmTarget::WasiPreview1 | RustWasmTarget::WasiPreview2 => "wasm32-wasi",
-        }
-    }
-}
-
 #[derive(Deserialize, Debug, PartialEq, Default, Clone)]
 struct RawRustConfig {
     /// The path to the cargo binary. Optional, will default to search the user's `PATH` for `cargo` if not specified.
@@ -207,7 +209,7 @@ pub struct CommonConfig {
 }
 
 #[derive(Debug, Deserialize, Default, Clone, Eq, PartialEq)]
-pub enum RustWasmTarget {
+pub enum WasmTarget {
     #[default]
     #[serde(alias = "wasm32-unknown-unknown")]
     CoreModule,
@@ -215,64 +217,40 @@ pub enum RustWasmTarget {
     WasiPreview1,
     #[serde(alias = "wasm32-wasi-preview2")]
     WasiPreview2,
+    #[serde(alias = "wasm")] // Shame, shame, TinyGo. Shame.
+    TinyGoCoreModule,
+    #[serde(alias = "wasi", alias = "wasip1")] // Shame, shame, TinyGo. Shame.
+    TinyGoWasiPreview1,
 }
 
-impl From<&str> for RustWasmTarget {
+impl From<&str> for WasmTarget {
     fn from(value: &str) -> Self {
         match value {
-            "wasm32-wasi-preview1" => RustWasmTarget::WasiPreview1,
-            "wasm32-wasi" => RustWasmTarget::WasiPreview1,
-            "wasm32-wasi-preview2" => RustWasmTarget::WasiPreview2,
-            _ => RustWasmTarget::CoreModule,
+            "wasm32-wasi-preview1" => WasmTarget::WasiPreview1,
+            "wasm32-wasi" => WasmTarget::WasiPreview1,
+            "wasm32-wasi-preview2" => WasmTarget::WasiPreview2,
+            "wasi" => WasmTarget::TinyGoWasiPreview1,
+            "wasip1" => WasmTarget::TinyGoWasiPreview1,
+            "wasm" => WasmTarget::TinyGoCoreModule,
+            _ => WasmTarget::CoreModule,
         }
     }
 }
 
-impl From<String> for RustWasmTarget {
+impl From<String> for WasmTarget {
     fn from(value: String) -> Self {
         value.as_str().into()
     }
 }
 
-impl Display for RustWasmTarget {
+impl Display for WasmTarget {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match &self {
-            RustWasmTarget::CoreModule => "wasm32-unknown-unknown",
-            RustWasmTarget::WasiPreview1 => "wasm32-wasi",
-            RustWasmTarget::WasiPreview2 => "wasm32-wasi-preview2",
-        })
-    }
-}
-
-#[derive(Debug, Deserialize, Default, Clone, Eq, PartialEq)]
-pub enum TinyGoWasmTarget {
-    #[default]
-    #[serde(alias = "wasm")]
-    CoreModule,
-    #[serde(alias = "wasi", alias = "wasi")]
-    WasiPreview1,
-}
-
-impl From<&str> for TinyGoWasmTarget {
-    fn from(value: &str) -> Self {
-        match value {
-            "wasi" => TinyGoWasmTarget::WasiPreview1,
-            _ => TinyGoWasmTarget::CoreModule,
-        }
-    }
-}
-
-impl From<String> for TinyGoWasmTarget {
-    fn from(value: String) -> Self {
-        value.as_str().into()
-    }
-}
-
-impl Display for TinyGoWasmTarget {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match &self {
-            TinyGoWasmTarget::CoreModule => "wasm",
-            TinyGoWasmTarget::WasiPreview1 => "wasi",
+            WasmTarget::CoreModule => "wasm32-unknown-unknown",
+            WasmTarget::WasiPreview1 => "wasm32-wasi",
+            WasmTarget::WasiPreview2 => "wasm32-wasi-preview2",
+            WasmTarget::TinyGoCoreModule => "wasm",
+            WasmTarget::TinyGoWasiPreview1 => "wasi",
         })
     }
 }
@@ -300,16 +278,12 @@ struct RawProjectConfig {
 pub struct TinyGoConfig {
     /// The path to the tinygo binary. Optional, will default to `tinygo` if not specified.
     pub tinygo_path: Option<PathBuf>,
-    /// The target wasm target to build for. Defaults to "wasm".
-    pub wasm_target: Option<TinyGoWasmTarget>,
 }
 
 #[derive(Deserialize, Debug, PartialEq, Default)]
 struct RawTinyGoConfig {
     /// The path to the tinygo binary. Optional, will default to `tinygo` if not specified.
     pub tinygo_path: Option<PathBuf>,
-    /// The target wasm target to build for. Defaults to "wasm".
-    pub wasm_target: Option<TinyGoWasmTarget>,
 }
 
 impl TryFrom<RawTinyGoConfig> for TinyGoConfig {
@@ -318,7 +292,6 @@ impl TryFrom<RawTinyGoConfig> for TinyGoConfig {
     fn try_from(raw_config: RawTinyGoConfig) -> Result<Self> {
         Ok(Self {
             tinygo_path: raw_config.tinygo_path,
-            wasm_target: raw_config.wasm_target,
         })
     }
 }
