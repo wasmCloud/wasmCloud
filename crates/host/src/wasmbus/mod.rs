@@ -964,36 +964,70 @@ impl KeyValueReadWrite for Handler {
 
 #[async_trait]
 impl Logging for Handler {
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn log(
         &self,
         level: logging::Level,
         context: String,
         message: String,
     ) -> anyhow::Result<()> {
-        let metadata = self.claims.metadata.as_ref();
-        ensure!(
-            metadata
-                .map(|jwt::Actor { caps, .. }| caps
-                    .iter()
-                    .flatten()
-                    .any(|cap| cap == wascap::caps::LOGGING))
-                .unwrap_or_default(),
-            "{} claim missing",
-            wascap::caps::LOGGING
-        );
-        let level = match level {
-            logging::Level::Trace => "trace",
-            logging::Level::Debug => "debug",
-            logging::Level::Info => "info",
-            logging::Level::Warn => "warn",
-            logging::Level::Error => "error",
-            logging::Level::Critical => "critical",
+        ensure_actor_capability(self.claims.metadata.as_ref(), wascap::caps::LOGGING)?;
+        match level {
+            logging::Level::Trace => {
+                tracing::event!(
+                    tracing::Level::TRACE,
+                    actor_id = self.claims.subject,
+                    ?level,
+                    context,
+                    "{message}"
+                );
+            }
+            logging::Level::Debug => {
+                tracing::event!(
+                    tracing::Level::DEBUG,
+                    actor_id = self.claims.subject,
+                    ?level,
+                    context,
+                    "{message}"
+                );
+            }
+            logging::Level::Info => {
+                tracing::event!(
+                    tracing::Level::INFO,
+                    actor_id = self.claims.subject,
+                    ?level,
+                    context,
+                    "{message}"
+                );
+            }
+            logging::Level::Warn => {
+                tracing::event!(
+                    tracing::Level::WARN,
+                    actor_id = self.claims.subject,
+                    ?level,
+                    context,
+                    "{message}"
+                );
+            }
+            logging::Level::Error => {
+                tracing::event!(
+                    tracing::Level::ERROR,
+                    actor_id = self.claims.subject,
+                    ?level,
+                    context,
+                    "{message}"
+                );
+            }
+            logging::Level::Critical => {
+                tracing::event!(
+                    tracing::Level::ERROR,
+                    actor_id = self.claims.subject,
+                    ?level,
+                    context,
+                    "{message}"
+                );
+            }
         };
-        info!(
-            actor_id = self.claims.subject,
-            level, context, message, "{message}",
-        );
         Ok(())
     }
 }

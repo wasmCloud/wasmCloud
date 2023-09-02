@@ -480,7 +480,7 @@ impl GuestInstance {
 
 #[async_trait]
 impl Logging for GuestInstance {
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn log(
         &self,
         level: logging::Level,
