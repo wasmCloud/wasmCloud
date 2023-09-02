@@ -1906,10 +1906,6 @@ impl Host {
             actor_claims: Arc::default(),
             provider_claims: Arc::default(),
         };
-        host.publish_event("host_started", start_evt)
-            .await
-            .context("failed to publish start event")?;
-        info!("host {} started", host.host_key.public_key());
 
         let host = Arc::new(host);
         let queue = spawn({
@@ -1958,6 +1954,15 @@ impl Host {
                 }
             })
         });
+
+        host.publish_event("host_started", start_evt)
+            .await
+            .context("failed to publish start event")?;
+        info!(
+            host_id = host.host_key.public_key(),
+            "wasmCloud host started"
+        );
+
         Ok((Arc::clone(&host), async move {
             heartbeat_abort.abort();
             queue_abort.abort();
