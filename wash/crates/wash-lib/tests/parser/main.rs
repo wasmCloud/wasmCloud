@@ -3,8 +3,8 @@ use std::{fs, path::PathBuf};
 use claims::{assert_err, assert_ok};
 use semver::Version;
 use wash_lib::parser::{
-    get_config, ActorConfig, CommonConfig, LanguageConfig, RustConfig, RustWasmTarget,
-    TinyGoConfig, TinyGoWasmTarget, TypeConfig,
+    get_config, ActorConfig, CommonConfig, LanguageConfig, RustConfig, TinyGoConfig, TypeConfig,
+    WasmTarget,
 };
 
 #[test]
@@ -33,7 +33,52 @@ fn rust_actor() {
             push_insecure: false,
             key_directory: PathBuf::from("./keys"),
             filename: Some("testactor.wasm".to_string()),
-            wasm_target: RustWasmTarget::CoreModule,
+            wasm_target: WasmTarget::CoreModule,
+            wasi_preview2_adapter_path: None,
+            call_alias: Some("testactor".to_string())
+        })
+    );
+
+    assert_eq!(
+        config.common,
+        CommonConfig {
+            name: "testactor".to_string(),
+            version: Version::parse("0.1.0").unwrap(),
+            path: PathBuf::from("./tests/parser/files/")
+                .canonicalize()
+                .unwrap(),
+            wasm_bin_name: None,
+        }
+    );
+}
+
+#[test]
+fn tinygo_actor_module() {
+    let result = get_config(
+        Some(PathBuf::from(
+            "./tests/parser/files/tinygo_actor_module.toml",
+        )),
+        None,
+    );
+
+    let config = assert_ok!(result);
+
+    assert_eq!(
+        config.language,
+        LanguageConfig::TinyGo(TinyGoConfig {
+            tinygo_path: Some("path/to/tinygo".into()),
+        })
+    );
+
+    assert_eq!(
+        config.project_type,
+        TypeConfig::Actor(ActorConfig {
+            claims: vec!["wasmcloud:httpserver".to_string()],
+            registry: Some("localhost:8080".to_string()),
+            push_insecure: false,
+            key_directory: PathBuf::from("./keys"),
+            filename: Some("testactor.wasm".to_string()),
+            wasm_target: WasmTarget::TinyGoCoreModule,
             wasi_preview2_adapter_path: None,
             call_alias: Some("testactor".to_string())
         })
@@ -55,19 +100,13 @@ fn rust_actor() {
 #[test]
 fn tinygo_actor() {
     let result = get_config(
-        Some(PathBuf::from("./tests/parser/files/tinygo_actor.toml")),
+        Some(PathBuf::from(
+            "./tests/parser/files/tinygo_actor_component.toml",
+        )),
         None,
     );
 
     let config = assert_ok!(result);
-
-    assert_eq!(
-        config.language,
-        LanguageConfig::TinyGo(TinyGoConfig {
-            tinygo_path: Some("path/to/tinygo".into()),
-            wasm_target: Some(TinyGoWasmTarget::CoreModule.into()),
-        })
-    );
 
     assert_eq!(
         config.project_type,
@@ -81,18 +120,6 @@ fn tinygo_actor() {
             wasi_preview2_adapter_path: None,
             wasm_target: WasmTarget::CoreModule,
         })
-    );
-
-    assert_eq!(
-        config.common,
-        CommonConfig {
-            name: "testactor".to_string(),
-            version: Version::parse("0.1.0").unwrap(),
-            path: PathBuf::from("./tests/parser/files/")
-                .canonicalize()
-                .unwrap(),
-            wasm_bin_name: None,
-        }
     );
 }
 
@@ -340,7 +367,7 @@ fn minimal_rust_actor_preview2() {
     assert!(matches!(
         config.project_type,
         TypeConfig::Actor(ActorConfig {
-            wasm_target: RustWasmTarget::WasiPreview2,
+            wasm_target: WasmTarget::WasiPreview2,
             ..
         })
     ));
@@ -361,7 +388,7 @@ fn minimal_rust_actor_preview1() {
     assert!(matches!(
         config.project_type,
         TypeConfig::Actor(ActorConfig {
-            wasm_target: RustWasmTarget::WasiPreview1,
+            wasm_target: WasmTarget::WasiPreview1,
             ..
         })
     ));
@@ -382,7 +409,7 @@ fn minimal_rust_actor_core_module() {
     assert!(matches!(
         config.project_type,
         TypeConfig::Actor(ActorConfig {
-            wasm_target: RustWasmTarget::CoreModule,
+            wasm_target: WasmTarget::CoreModule,
             ..
         })
     ));
