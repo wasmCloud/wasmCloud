@@ -16,6 +16,7 @@ use wascap::{
 use wasmcloud_core::{
     HealthCheckRequest, HostData, Invocation, InvocationResponse, LinkDefinition,
 };
+#[cfg(feature = "otel")]
 use wasmcloud_tracing::context::attach_span_context;
 
 use crate::{
