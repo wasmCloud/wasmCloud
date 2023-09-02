@@ -19,7 +19,7 @@ async fn integration_start_actor_serial() -> Result<()> {
             "--output",
             "json",
             "--timeout-ms",
-            "20000",
+            "40000",
         ])
         .kill_on_drop(true)
         .output()
@@ -48,7 +48,7 @@ async fn integration_start_provider_serial() -> Result<()> {
             "--output",
             "json",
             "--timeout-ms",
-            "20000",
+            "40000",
         ])
         .kill_on_drop(true)
         .output()

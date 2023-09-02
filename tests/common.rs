@@ -25,10 +25,10 @@ use wasmcloud_control_interface::Host;
 pub(crate) const LOCAL_REGISTRY: &str = "localhost:5001";
 
 #[allow(unused)]
-pub(crate) const ECHO_OCI_REF: &str = "wasmcloud.azurecr.io/echo:0.3.4";
+pub(crate) const ECHO_OCI_REF: &str = "wasmcloud.azurecr.io/echo:0.3.8";
 
 #[allow(unused)]
-pub(crate) const PROVIDER_HTTPSERVER_OCI_REF: &str = "wasmcloud.azurecr.io/httpserver:0.17.0";
+pub(crate) const PROVIDER_HTTPSERVER_OCI_REF: &str = "wasmcloud.azurecr.io/httpserver:0.19.1";
 
 /// Helper function to create the `wash` binary process
 #[allow(unused)]
