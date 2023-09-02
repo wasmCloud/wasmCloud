@@ -124,7 +124,7 @@ pub fn read_key(p: impl AsRef<Path>) -> std::io::Result<KeyPair> {
     KeyPair::from_seed(&raw).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
 }
 
-#[cfg(all(unix))]
+#[cfg(unix)]
 /// Set file and folder permissions for keys.
 fn set_permissions_keys(path: impl AsRef<Path>) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
