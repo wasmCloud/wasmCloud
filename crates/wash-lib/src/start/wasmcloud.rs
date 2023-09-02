@@ -23,7 +23,7 @@ pub const WASMCLOUD_HOST_BIN: &str = "wasmcloud_host.exe";
 
 // Any version of wasmCloud under 0.63.0 uses Elixir releases and is incompatible
 // See https://github.com/wasmCloud/wasmcloud-otp/pull/616 for the move to burrito releases
-const MINIMUM_WASMCLOUD_VERSION: &str = "0.78.0-rc1";
+const MINIMUM_WASMCLOUD_VERSION: &str = "0.78.0-rc2";
 const DEFAULT_DASHBOARD_PORT: u16 = 4000;
 
 /// A wrapper around the [ensure_wasmcloud_for_os_arch_pair] function that uses the
@@ -315,7 +315,7 @@ mod test {
     use tokio::net::TcpStream;
     use tokio::time::Duration;
 
-    const WASMCLOUD_VERSION: &str = "v0.78.0-rc1";
+    const WASMCLOUD_VERSION: &str = "v0.78.0-rc2";
     const RANDOM_PORT_RANGE_START: u16 = 5000;
     const RANDOM_PORT_RANGE_END: u16 = 6000;
     const LOCALHOST: &str = "127.0.0.1";
