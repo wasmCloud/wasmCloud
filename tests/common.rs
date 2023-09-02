@@ -199,7 +199,7 @@ impl TestWashInstance {
             loop {
                 match tokio::fs::read_to_string(&logs_path).await {
                     Ok(file_contents) => {
-                        if file_contents.contains("Started wasmCloud OTP Host Runtime") {
+                        if file_contents.contains("started") {
                             // After wasmcloud says it's ready, it still requires some seconds to start up.
                             tokio::time::sleep(Duration::from_secs(3)).await;
                             break;
