@@ -101,7 +101,7 @@ async fn integration_up_can_start_wasmcloud_and_actor_serial() -> Result<()> {
         .await
         .context("Could not spawn wash down process")?;
 
-    // Wait until the beam.smp process has finished and exited
+    // Wait until the host process has finished and exited
     wait_for_no_hosts()
         .await
         .context("wasmcloud instance failed to exit cleanly (processes still left over)")?;
@@ -171,7 +171,7 @@ async fn integration_up_can_stop_detached_host_serial() -> Result<()> {
         .await
         .context("Could not spawn wash down process")?;
 
-    // Wait until the beam.smp process has finished and exited
+    // Wait until the host process has finished and exited
     wait_for_no_hosts()
         .await
         .context("wasmcloud instance failed to exit cleanly (processes still left over)")?;
@@ -188,7 +188,7 @@ async fn integration_up_doesnt_kill_unowned_nats_serial() -> Result<()> {
     let stdout = std::fs::File::create(&path).expect("could not create log file for wash up test");
     let nats_port: u16 = 5895;
 
-    // Check that there are no beam.smp (wasmcloud instance) processes running
+    // Check that there are no host processes running
     wait_for_no_hosts()
         .await
         .context("unexpected wasmcloud instance(s) running")?;
