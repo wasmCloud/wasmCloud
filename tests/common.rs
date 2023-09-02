@@ -412,11 +412,11 @@ pub(crate) async fn init_workspace(actor_names: Vec<&str>) -> Result<WorkspaceTe
 }
 
 /// Wait for no hosts to be running by checking for process names,
-/// expecting that the wasmcloud process invocation contains 'beam.smp'
+/// expecting that the wasmcloud process invocation contains 'wasmcloud_host'
 #[allow(dead_code)]
 pub(crate) async fn wait_for_no_hosts() -> Result<()> {
     wait_until_process_has_count(
-        "beam.smp",
+        "wasmcloud_host",
         |v| v == 0,
         Duration::from_secs(15),
         Duration::from_millis(250),
