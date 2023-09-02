@@ -591,7 +591,7 @@ impl Bus for Handler {
 
 #[async_trait]
 impl Logging for Handler {
-    #[instrument]
+    #[instrument(skip_all)]
     async fn log(
         &self,
         level: logging::Level,

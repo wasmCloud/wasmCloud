@@ -61,7 +61,7 @@ impl Instance {
 
 #[async_trait]
 impl logging::Host for Ctx {
-    #[instrument]
+    #[instrument(skip_all)]
     async fn log(
         &mut self,
         level: logging::Level,
