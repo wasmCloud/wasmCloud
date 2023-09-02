@@ -1863,7 +1863,21 @@ impl Host {
                 }),
             )
             .await
-            .context("failed to publish stop event")
+            .context("failed to publish stop event")?;
+            // Before we exit, make sure to flush all messages or we may lose some that we've
+            // thought were sent (like the host_stopped event)
+            host.ctl_nats
+                .flush()
+                .await
+                .context("failed to flush ctl client")?;
+            host.rpc_nats
+                .flush()
+                .await
+                .context("failed to flush rpc client")?;
+            host.prov_rpc_nats
+                .flush()
+                .await
+                .context("failed to flush prov rpc client")
         }))
     }
 
