@@ -25,10 +25,10 @@ use wasmcloud_control_interface::Host;
 pub(crate) const LOCAL_REGISTRY: &str = "localhost:5001";
 
 #[allow(unused)]
-pub(crate) const ECHO_OCI_REF: &str = "wasmcloud.azurecr.io/echo:0.3.4";
+pub(crate) const ECHO_OCI_REF: &str = "wasmcloud.azurecr.io/echo:0.3.8";
 
 #[allow(unused)]
-pub(crate) const PROVIDER_HTTPSERVER_OCI_REF: &str = "wasmcloud.azurecr.io/httpserver:0.17.0";
+pub(crate) const PROVIDER_HTTPSERVER_OCI_REF: &str = "wasmcloud.azurecr.io/httpserver:0.19.1";
 
 /// Helper function to create the `wash` binary process
 #[allow(unused)]
@@ -199,7 +199,7 @@ impl TestWashInstance {
             loop {
                 match tokio::fs::read_to_string(&logs_path).await {
                     Ok(file_contents) => {
-                        if file_contents.contains("Started wasmCloud OTP Host Runtime") {
+                        if file_contents.contains("started") {
                             // After wasmcloud says it's ready, it still requires some seconds to start up.
                             tokio::time::sleep(Duration::from_secs(3)).await;
                             break;
@@ -412,11 +412,11 @@ pub(crate) async fn init_workspace(actor_names: Vec<&str>) -> Result<WorkspaceTe
 }
 
 /// Wait for no hosts to be running by checking for process names,
-/// expecting that the wasmcloud process invocation contains 'beam.smp'
+/// expecting that the wasmcloud process invocation contains 'wasmcloud_host'
 #[allow(dead_code)]
 pub(crate) async fn wait_for_no_hosts() -> Result<()> {
     wait_until_process_has_count(
-        "beam.smp",
+        "wasmcloud_host",
         |v| v == 0,
         Duration::from_secs(15),
         Duration::from_millis(250),

@@ -28,8 +28,8 @@ use wash_lib::start::nats_pid_path;
 use wash_lib::start::start_wadm;
 use wash_lib::start::WadmConfig;
 use wash_lib::start::{
-    ensure_nats_server, ensure_wasmcloud, start_nats_server, start_wasmcloud_host, wait_for_server,
-    NatsConfig, WADM_PID,
+    ensure_nats_server, ensure_wasmcloud, start_nats_server, start_wasmcloud_host, NatsConfig,
+    WADM_PID,
 };
 use wasmcloud_control_interface::{Client as CtlClient, ClientBuilder as CtlClientBuilder};
 
@@ -255,7 +255,7 @@ pub(crate) struct WasmcloudOpts {
     pub(crate) enable_structured_logging: bool,
 
     /// Controls the verbosity of JSON structured logs from the wasmCloud host
-    #[clap(long = "log-level", alias = "structured-log-level", default_value = DEFAULT_STRUCTURED_LOG_LEVEL, env = WASMCLOUD_STRUCTURED_LOG_LEVEL)]
+    #[clap(long = "log-level", alias = "structured-log-level", default_value = DEFAULT_STRUCTURED_LOG_LEVEL, env = WASMCLOUD_LOG_LEVEL)]
     pub(crate) structured_log_level: String,
 
     /// Port to listen on for the wasmCloud dashboard, defaults to 4000
@@ -497,28 +497,9 @@ pub(crate) async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result
         }
     };
 
-    let url = format!("{LOCALHOST}:{}", host_port);
-    if wait_for_server(&url, "Washboard").await.is_err() {
-        // Ensure we clean up the NATS server and wadm if we can't start wasmCloud
-        if let Some(child) = wadm_process {
-            stop_wadm(child, &install_dir).await?;
-        }
-        if nats_bin.is_some() {
-            stop_nats(install_dir).await?;
-        }
-        return Err(anyhow!(
-            "wasmCloud host did not start. Failed to connect to washboard.{}",
-            if cmd.detached {
-                format!(" Check host-logs at {:?}.", wasmcloud_log_path)
-            } else {
-                "".to_string()
-            }
-        ));
-    }
-
     spinner.finish_and_clear();
     if !cmd.detached {
-        run_wasmcloud_interactive(&mut wasmcloud_child, host_port, output_kind).await?;
+        run_wasmcloud_interactive(&mut wasmcloud_child, output_kind).await?;
 
         let spinner = Spinner::new(&output_kind)?;
         spinner.update_spinner_message(
@@ -611,7 +592,6 @@ async fn start_nats(install_dir: &Path, nats_binary: &Path, nats_opts: NatsOpts)
 /// Helper function to run wasmCloud in interactive mode
 async fn run_wasmcloud_interactive(
     wasmcloud_child: &mut Child,
-    port: u16,
     output_kind: OutputKind,
 ) -> Result<()> {
     use std::sync::mpsc::channel;
@@ -633,7 +613,7 @@ async fn run_wasmcloud_interactive(
     });
 
     if output_kind != OutputKind::Json {
-        println!("🏃 Running in interactive mode, your host is running at http://localhost:{port}",);
+        println!("🏃 Running in interactive mode. Start the dashboard by executing `wash ui --experimental`",);
         println!("🚪 Press `CTRL+c` at any time to exit");
     }
 
@@ -658,7 +638,7 @@ async fn run_wasmcloud_interactive(
     Ok(())
 }
 
-#[cfg(all(unix))]
+#[cfg(unix)]
 async fn stop_wasmcloud(mut wasmcloud_child: Child) -> Result<()> {
     use nix::sys::signal::{kill, Signal};
     use nix::unistd::Pid;
