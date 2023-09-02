@@ -452,7 +452,6 @@ mod test {
             .await;
 
         let mut host_env = HashMap::new();
-        host_env.insert("WASMCLOUD_DASHBOARD_PORT".to_string(), "5003".to_string());
         host_env.insert("WASMCLOUD_RPC_PORT".to_string(), nats_port.to_string());
         host_env.insert("WASMCLOUD_CTL_PORT".to_string(), nats_port.to_string());
         host_env.insert("WASMCLOUD_PROV_RPC_PORT".to_string(), nats_port.to_string());
@@ -489,13 +488,9 @@ mod test {
             loop {
                 match tokio::fs::read_to_string(&startup_log_path).await {
                     Ok(file_contents) => {
-                        if [
-                            "connect to control interface NATS without authentication",
-                            "connect to lattice rpc NATS without authentication",
-                            "Started wasmCloud OTP Host Runtime",
-                        ]
-                        .into_iter()
-                        .all(|l| file_contents.contains(l))
+                        if ["host", "started"]
+                            .into_iter()
+                            .all(|l| file_contents.contains(l))
                         {
                             // After wasmcloud says it's ready, it still requires some seconds to start up.
                             tokio::time::sleep(Duration::from_secs(3)).await;
@@ -512,24 +507,8 @@ mod test {
         .await
         .context("failed to start wasmcloud (logs did not contain expected content)")?;
 
-        // Should fail because the port is already in use by another host
+        // We support multiple hosts, so this should work fine
         let mut host_env = HashMap::new();
-        host_env.insert("WASMCLOUD_DASHBOARD_PORT".to_string(), "5003".to_string());
-        host_env.insert("WASMCLOUD_RPC_PORT".to_string(), nats_port.to_string());
-        host_env.insert("WASMCLOUD_CTL_PORT".to_string(), nats_port.to_string());
-        host_env.insert("WASMCLOUD_PROV_RPC_PORT".to_string(), nats_port.to_string());
-        start_wasmcloud_host(
-            &wasmcloud_binary,
-            std::process::Stdio::null(),
-            std::process::Stdio::null(),
-            host_env,
-        )
-        .await
-        .expect_err("Starting a second process should error");
-
-        // Burrito releases (0.63.0+) do support multiple hosts, so this should work fine
-        let mut host_env = HashMap::new();
-        host_env.insert("WASMCLOUD_DASHBOARD_PORT".to_string(), "4002".to_string());
         host_env.insert("WASMCLOUD_RPC_PORT".to_string(), nats_port.to_string());
         host_env.insert("WASMCLOUD_CTL_PORT".to_string(), nats_port.to_string());
         host_env.insert("WASMCLOUD_PROV_RPC_PORT".to_string(), nats_port.to_string());
