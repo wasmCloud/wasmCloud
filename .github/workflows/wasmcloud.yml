@@ -204,7 +204,7 @@ jobs:
         password: ${{ secrets.DOCKERHUB_PUSH_PASSWORD }}
 
     - run: |
-        nix run -L .#build-wasmcloud-oci wasmcloud
+        nix run -L .#build-wasmcloud-oci-debian wasmcloud
         nix profile install --inputs-from . 'nixpkgs#buildah'
 
     - name: Push commit rev
@@ -264,22 +264,6 @@ jobs:
 
     - run: chmod +x ./wasmcloud-*
 
-    - uses: actions/download-artifact@v3
-      with:
-        name: wasmcloud-aarch64-apple-darwin-oci
-    - uses: actions/download-artifact@v3
-      with:
-        name: wasmcloud-aarch64-unknown-linux-musl-oci
-    - uses: actions/download-artifact@v3
-      with:
-        name: wasmcloud-x86_64-pc-windows-gnu-oci
-    - uses: actions/download-artifact@v3
-      with:
-        name: wasmcloud-x86_64-apple-darwin-oci
-    - uses: actions/download-artifact@v3
-      with:
-        name: wasmcloud-x86_64-unknown-linux-musl-oci
-
     - uses: softprops/action-gh-release@v1
       with:
         draft: true
@@ -287,13 +271,8 @@ jobs:
         generate_release_notes: true
         files: |
           wasmcloud-aarch64-apple-darwin
-          wasmcloud-aarch64-apple-darwin-oci
           wasmcloud-aarch64-unknown-linux-musl
-          wasmcloud-aarch64-unknown-linux-musl-oci
           wasmcloud-universal-darwin
           wasmcloud-x86_64-apple-darwin
-          wasmcloud-x86_64-apple-darwin-oci
           wasmcloud-x86_64-pc-windows-gnu
-          wasmcloud-x86_64-pc-windows-gnu-oci
           wasmcloud-x86_64-unknown-linux-musl
-          wasmcloud-x86_64-unknown-linux-musl-oci
