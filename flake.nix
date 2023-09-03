@@ -163,9 +163,87 @@
                 install $src $out
               '';
             };
+
+          pullDebian = {
+            imageDigest,
+            sha256,
+          }:
+            pkgs.dockerTools.pullImage {
+              inherit
+                imageDigest
+                sha256
+                ;
+
+              imageName = "debian";
+              finalImageTag = "12.1-slim";
+              finalImageName = "debian";
+            };
+
+          debian.aarch64 = pullDebian {
+            imageDigest = "sha256:3b9b661aeca5c7b4aba37d4258b86c9ed9154981cf0ae47051060dd601659866";
+            sha256 = "sha256-jjsR/k/cmSQGQON3V8GRrt96CAIoM4Uk7/eDOYvpS8c=";
+          };
+          debian.x86_64 = pullDebian {
+            imageDigest = "sha256:a60c0c42bc6bdc09d91cd57067fcc952b68ad62de651c4cf939c27c9f007d1c5";
+            sha256 = "sha256-4ZLqoBoARp6DkVQzl6I0UJtklWb5/E/uZYXT7Ru6ugM=";
+          };
+
+          buildImage = {
+            fromImage ? null,
+            bin,
+            architecture,
+          }:
+            pkgs.dockerTools.buildImage {
+              inherit
+                architecture
+                fromImage
+                ;
+
+              name = "wasmcloud";
+              tag = "${bin.version}-${bin.passthru.target}";
+              copyToRoot = pkgs.buildEnv {
+                name = "wasmcloud";
+                paths = [bin];
+                pathsToLink = ["/bin"];
+              };
+              config.Cmd = ["wasmcloud"];
+              config.Env = ["PATH=${bin}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"];
+            };
+
+          wasmcloud-aarch64-unknown-linux-musl-oci-debian = buildImage {
+            bin = packages.wasmcloud-aarch64-unknown-linux-musl;
+            fromImage = debian.aarch64;
+            architecture = "arm64";
+          };
+          wasmcloud-x86_64-unknown-linux-musl-oci-debian = buildImage {
+            bin = packages.wasmcloud-x86_64-unknown-linux-musl;
+            fromImage = debian.x86_64;
+            architecture = "amd64";
+          };
+
+          build-wasmcloud-oci-debian = pkgs.writeShellScriptBin "build-wasmcloud-oci-debian" ''
+            set -xe
+
+            build() {
+              ${pkgs.buildah}/bin/buildah manifest create "''${1}"
+
+              ${pkgs.buildah}/bin/buildah manifest add "''${1}" docker-archive:${wasmcloud-aarch64-unknown-linux-musl-oci-debian}
+              ${pkgs.buildah}/bin/buildah pull docker-archive:${wasmcloud-aarch64-unknown-linux-musl-oci-debian}
+
+              ${pkgs.buildah}/bin/buildah manifest add "''${1}" docker-archive:${wasmcloud-x86_64-unknown-linux-musl-oci-debian}
+              ${pkgs.buildah}/bin/buildah pull docker-archive:${wasmcloud-x86_64-unknown-linux-musl-oci-debian}
+            }
+            build "''${1:-wasmcloud:debian}"
+          '';
         in
           packages
           // {
+            inherit
+              build-wasmcloud-oci-debian
+              wasmcloud-aarch64-unknown-linux-musl-oci-debian
+              wasmcloud-x86_64-unknown-linux-musl-oci-debian
+              ;
+
             rust = hostRustToolchain;
 
             wasi-preview1-command-component-adapter = mkAdapter "wasi-preview1-command-component-adapter" wasi-preview1-command-component-adapter;
@@ -179,6 +257,7 @@
         }:
           extendDerivations {
             buildInputs = [
+              pkgs.buildah
               pkgs.cargo-audit
               pkgs.nats-server
               pkgs.protobuf # prost build dependency
