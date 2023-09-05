@@ -1,6 +1,6 @@
 [package]
 name = "wash-cli"
-version = "0.20.0"
+version = "0.20.1"
 authors = ["wasmCloud Team"]
 categories = ["wasm", "command-line-utilities"]
 description = "wasmcloud Shell (wash) CLI tool"
@@ -71,7 +71,7 @@ nix = { version = "0.26.2", default-features = false, features = ["signal"] }
 rand = "0.8.5"
 reqwest = { workspace = true, features = ["json", "rustls-tls"] }
 scopeguard = { workspace = true }
-serial_test = { workspace = true } # serial_test works with cargo, '<test name>_serial' works with nextest
+serial_test = { workspace = true }                                            # serial_test works with cargo, '<test name>_serial' works with nextest
 sysinfo = { workspace = true }
 tempfile = { workspace = true }
 test-case = { workspace = true }
@@ -122,7 +122,9 @@ path-absolutize = "3.1"
 provider-archive = "0.8.0"
 regex = "1.9"
 remove_dir_all = "0.7"
-reqwest = { version = "0.11", default-features = false, features = ["rustls-tls"] }
+reqwest = { version = "0.11", default-features = false, features = [
+    "rustls-tls",
+] }
 rmp-serde = "1.1.2"
 rmpv = "1.0"
 sanitize-filename = "0.4.0"
@@ -145,7 +147,7 @@ tokio-stream = "0.1"
 tokio-tar = "0.3"
 tokio-util = "0.7.8"
 toml = "0.7.6"
-wadm = "0.5.0"
+wadm = "0.6.0"
 walkdir = "2.3"
 wascap = "0.11.0"
 wash-lib = { version = "0.10", path = "./crates/wash-lib" }
@@ -155,4 +157,4 @@ wasmcloud-control-interface = "0.27"
 wasmcloud-test-util = "0.10.0"
 weld-codegen = "0.7.0"
 which = "4.4.0"
-wit-component = "0.13.2" 
+wit-component = "0.13.2"
