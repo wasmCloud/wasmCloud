@@ -5,8 +5,11 @@ pub use config::Host as HostConfig;
 
 mod event;
 
-use crate::policy::{Action, HostInfo, Manager as PolicyManager, RequestSource, RequestTarget};
-use crate::{fetch_actor, socket_pair, OciConfig, RegistryAuth, RegistryConfig, RegistryType};
+use crate::{
+    fetch_actor, socket_pair, OciConfig, PolicyAction, PolicyHostInfo, PolicyManager,
+    PolicyRequestSource, PolicyRequestTarget, PolicyResponse, RegistryAuth, RegistryConfig,
+    RegistryType,
+};
 
 use core::future::Future;
 use core::num::NonZeroUsize;
@@ -31,7 +34,7 @@ use base64::Engine;
 use bytes::{BufMut, Bytes, BytesMut};
 use cloudevents::{EventBuilder, EventBuilderV10};
 use futures::stream::{AbortHandle, Abortable};
-use futures::{stream, try_join, FutureExt, Stream, StreamExt, TryStreamExt};
+use futures::{join, stream, try_join, FutureExt, Stream, StreamExt, TryStreamExt};
 use nkeys::{KeyPair, KeyPairType};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -1211,14 +1214,14 @@ impl ActorInstance {
                 .get(&source_public_key)
                 .cloned()
                 .context("failed to look up claims for origin")?;
-            RequestSource::from(claims)
+            PolicyRequestSource::from(claims)
         } else {
             let provider_claims = self.provider_claims.read().await;
             let claims = provider_claims
                 .get(&source_public_key)
                 .cloned()
                 .context("failed to look up claims for origin")?;
-            let mut source = RequestSource::from(claims);
+            let mut source = PolicyRequestSource::from(claims);
             source.link_name = Some(invocation.origin.link_name.clone());
             source
         };
@@ -1231,21 +1234,21 @@ impl ActorInstance {
                 .get(&target_public_key)
                 .cloned()
                 .context("failed to look up claims for target")?;
-            RequestTarget::from(claims)
+            PolicyRequestTarget::from(claims)
         } else {
             let provider_claims = self.provider_claims.read().await;
             let claims = provider_claims
                 .get(&target_public_key)
                 .cloned()
                 .context("failed to look up claims for target")?;
-            let mut target = RequestTarget::from(claims);
+            let mut target = PolicyRequestTarget::from(claims);
             target.link_name = Some(invocation.target.link_name.clone());
             target
         };
 
         let resp = self
             .policy_manager
-            .evaluate_action(Some(source), target, Action::PerformInvocation)
+            .evaluate_action(Some(source), target, PolicyAction::PerformInvocation)
             .await?;
         if !resp.permitted {
             bail!(
@@ -1857,7 +1860,7 @@ impl Host {
 
         let policy_manager = PolicyManager::new(
             ctl_nats.clone(),
-            HostInfo {
+            PolicyHostInfo {
                 public_key: host_key.public_key(),
                 lattice_id: config.lattice_prefix.clone(),
                 labels: labels.clone(),
@@ -2208,7 +2211,7 @@ impl Host {
 
         let annotations = annotations.into();
         let claims = actor.claims().context("claims missing")?;
-        self.store_claims(claims.clone())
+        self.store_claims(Claims::Actor(claims.clone()))
             .await
             .context("failed to store claims")?;
 
@@ -2385,6 +2388,37 @@ impl Host {
         Ok(actor)
     }
 
+    #[instrument(skip(self))]
+    async fn store_actor_claims(&self, claims: jwt::Claims<jwt::Actor>) -> anyhow::Result<()> {
+        if let Some(call_alias) = claims
+            .metadata
+            .as_ref()
+            .and_then(|jwt::Actor { call_alias, .. }| call_alias.clone())
+        {
+            let mut aliases = self.aliases.write().await;
+            match aliases.entry(call_alias) {
+                Entry::Occupied(entry) => {
+                    ensure!(
+                        entry.get().public_key == claims.subject,
+                        "call alias `{}` clash between `{}` and `{}`",
+                        entry.key(),
+                        entry.get().public_key,
+                        claims.subject
+                    );
+                }
+                Entry::Vacant(entry) => {
+                    entry.insert(WasmCloudEntity {
+                        public_key: claims.subject.clone(),
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+        let mut actor_claims = self.actor_claims.write().await;
+        actor_claims.insert(claims.subject.clone(), claims);
+        Ok(())
+    }
+
     #[instrument(skip(self, payload))]
     async fn handle_stop(&self, payload: impl AsRef<[u8]>, host_id: &str) -> anyhow::Result<Bytes> {
         let StopHostCommand { timeout, .. } = serde_json::from_slice(payload.as_ref())
@@ -2425,8 +2459,8 @@ impl Host {
             .policy_manager
             .evaluate_action(
                 None,
-                RequestTarget::from(claims.clone()),
-                Action::StartActor,
+                PolicyRequestTarget::from(claims.clone()),
+                PolicyAction::StartActor,
             )
             .await?;
         if !resp.permitted {
@@ -2522,8 +2556,8 @@ impl Host {
             .policy_manager
             .evaluate_action(
                 None,
-                RequestTarget::from(claims.clone()),
-                Action::StartActor,
+                PolicyRequestTarget::from(claims.clone()),
+                PolicyAction::StartActor,
             )
             .await?;
         if !resp.permitted {
@@ -2714,7 +2748,7 @@ impl Host {
         let new_claims = new_actor
             .claims()
             .context("claims missing from new actor")?;
-        self.store_claims(new_claims.clone())
+        self.store_claims(Claims::Actor(new_claims.clone()))
             .await
             .context("failed to store claims")?;
         let old_claims = actor
@@ -2774,23 +2808,24 @@ impl Host {
         )
         .await
         .context("failed to fetch provider")?;
-        self.store_claims(claims.clone())
+
+        let mut target = PolicyRequestTarget::from(claims.clone());
+        target.link_name = Some(link_name.to_owned());
+        let PolicyResponse {
+            permitted,
+            request_id,
+            message,
+        } = self
+            .policy_manager
+            .evaluate_action(None, target, PolicyAction::StartProvider)
+            .await?;
+        ensure!(
+            permitted,
+            "policy denied request to start provider `{request_id}`: `{message:?}`",
+        );
+        self.store_claims(Claims::Provider(claims.clone()))
             .await
             .context("failed to store claims")?;
-
-        let mut target = RequestTarget::from(claims.clone());
-        target.link_name = Some(link_name.to_owned());
-        let resp = self
-            .policy_manager
-            .evaluate_action(None, target, Action::StartProvider)
-            .await?;
-        if !resp.permitted {
-            bail!(
-                "Policy denied request to start provider `{}`: `{:?}`",
-                resp.request_id,
-                resp.message
-            )
-        };
 
         let annotations: Annotations = annotations.into_iter().collect();
         let mut providers = self.providers.write().await;
@@ -3237,18 +3272,14 @@ impl Host {
             claims: Vec<StoredClaims>,
         }
 
-        let actor_claims = self.actor_claims.read().await;
-        let actor_claims = actor_claims
-            .values()
-            .cloned()
-            .filter_map(|v| StoredClaims::try_from(v).ok());
-        let provider_claims = self.provider_claims.read().await;
-        let provider_claims = provider_claims
-            .values()
-            .cloned()
-            .filter_map(|v| StoredClaims::try_from(v).ok());
-        let claims = actor_claims.chain(provider_claims).collect();
-
+        let (actor_claims, provider_claims) =
+            join!(self.actor_claims.read(), self.provider_claims.read());
+        let actor_claims = actor_claims.values().cloned().map(Claims::Actor);
+        let provider_claims = provider_claims.values().cloned().map(Claims::Provider);
+        let claims = actor_claims
+            .chain(provider_claims)
+            .flat_map(TryFrom::try_from)
+            .collect();
         let res = serde_json::to_vec(&ClaimsResponse { claims })
             .context("failed to serialize response")?;
         Ok(res.into())
@@ -3467,17 +3498,21 @@ impl Host {
     }
 
     #[instrument(skip_all)]
-    async fn store_claims<T>(&self, claims: T) -> anyhow::Result<()>
-    where
-        T: TryInto<StoredClaims, Error = anyhow::Error>,
-    {
-        let stored_claims: StoredClaims = claims.try_into()?;
-        let key = format!("CLAIMS_{}", stored_claims.subject);
+    async fn store_claims(&self, claims: Claims) -> anyhow::Result<()> {
+        match &claims {
+            Claims::Actor(claims) => {
+                self.store_actor_claims(claims.clone()).await?;
+            }
+            Claims::Provider(claims) => {
+                let mut provider_claims = self.provider_claims.write().await;
+                provider_claims.insert(claims.subject.clone(), claims.clone());
+            }
+        };
+        let claims: StoredClaims = claims.try_into()?;
+        let key = format!("CLAIMS_{}", claims.subject);
+        trace!(?claims, ?key, "storing claims");
 
-        trace!(?stored_claims, ?key, "storing claims");
-
-        let bytes = serde_json::to_vec(&stored_claims)
-            .map_err(anyhow::Error::from)
+        let bytes = serde_json::to_vec(&claims)
             .context("failed to serialize claims")?
             .into();
         self.data
@@ -3616,39 +3651,8 @@ impl Host {
         let claims = Claims::from(stored_claims);
 
         ensure!(claims.subject() == pubkey, "subject mismatch");
-
         match claims {
-            Claims::Actor(claims) => {
-                let subject = claims.subject.clone();
-                let metadata = claims.metadata.clone();
-                let mut actor_claims = self.actor_claims.write().await;
-                actor_claims.insert(claims.subject.clone(), claims);
-
-                let Some(call_alias) = metadata.and_then(|m| m.call_alias) else {
-                    return Ok(());
-                };
-
-                let mut aliases = self.aliases.write().await;
-                match aliases.entry(call_alias) {
-                    Entry::Occupied(entry) => {
-                        if entry.get().public_key != subject {
-                            bail!(
-                                "call alias `{}` clash between `{}` and `{}`",
-                                entry.key(),
-                                entry.get().public_key,
-                                subject
-                            )
-                        }
-                    }
-                    Entry::Vacant(entry) => {
-                        entry.insert(WasmCloudEntity {
-                            public_key: subject,
-                            ..Default::default()
-                        });
-                    }
-                }
-                Ok(())
-            }
+            Claims::Actor(claims) => self.store_actor_claims(claims).await,
             Claims::Provider(claims) => {
                 let mut provider_claims = self.provider_claims.write().await;
                 provider_claims.insert(claims.subject.clone(), claims);
@@ -3750,7 +3754,7 @@ impl Host {
 }
 
 // TODO: use a better format https://github.com/wasmCloud/wasmCloud/issues/508
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 struct StoredClaims {
     call_alias: String,
     #[serde(rename = "caps")]
@@ -3769,59 +3773,129 @@ struct StoredClaims {
     config_schema: Option<String>,
 }
 
-impl TryFrom<jwt::Claims<jwt::Actor>> for StoredClaims {
+impl TryFrom<Claims> for StoredClaims {
     type Error = anyhow::Error;
 
-    fn try_from(claims: jwt::Claims<jwt::Actor>) -> Result<Self, Self::Error> {
-        let jwt::Claims {
-            issuer,
-            subject,
-            metadata,
-            ..
-        } = claims;
-
-        let metadata = metadata.context("no metadata found on provider claims")?;
-
-        Ok(StoredClaims {
-            call_alias: metadata.call_alias.unwrap_or_default(),
-            capabilities: metadata.caps.unwrap_or_default().join(","),
-            contract_id: String::new(), // actors don't have a contract_id
-            issuer,
-            name: metadata.name.unwrap_or_default(),
-            revision: metadata.rev.unwrap_or_default().to_string(),
-            subject,
-            tags: metadata.tags.unwrap_or_default().join(","),
-            version: metadata.ver.unwrap_or_default(),
-            config_schema: None, // actors don't have a config schema
-        })
+    fn try_from(claims: Claims) -> Result<Self, Self::Error> {
+        match claims {
+            Claims::Actor(jwt::Claims {
+                issuer,
+                subject,
+                metadata,
+                ..
+            }) => {
+                let jwt::Actor {
+                    name,
+                    tags,
+                    caps,
+                    rev,
+                    ver,
+                    call_alias,
+                    ..
+                } = metadata.context("no metadata found on actor claims")?;
+                Ok(StoredClaims {
+                    call_alias: call_alias.unwrap_or_default(),
+                    capabilities: caps.unwrap_or_default().join(","),
+                    issuer,
+                    name: name.unwrap_or_default(),
+                    revision: rev.unwrap_or_default().to_string(),
+                    subject,
+                    tags: tags.unwrap_or_default().join(","),
+                    version: ver.unwrap_or_default(),
+                    ..Default::default()
+                })
+            }
+            Claims::Provider(jwt::Claims {
+                issuer,
+                subject,
+                metadata,
+                ..
+            }) => {
+                let jwt::CapabilityProvider {
+                    name,
+                    capid: contract_id,
+                    rev,
+                    ver,
+                    config_schema,
+                    ..
+                } = metadata.context("no metadata found on provider claims")?;
+                Ok(StoredClaims {
+                    contract_id,
+                    issuer,
+                    name: name.unwrap_or_default(),
+                    revision: rev.unwrap_or_default().to_string(),
+                    subject,
+                    version: ver.unwrap_or_default(),
+                    config_schema: config_schema.map(|schema| schema.to_string()),
+                    ..Default::default()
+                })
+            }
+        }
     }
 }
 
-impl TryFrom<jwt::Claims<jwt::CapabilityProvider>> for StoredClaims {
+impl TryFrom<&Claims> for StoredClaims {
     type Error = anyhow::Error;
 
-    fn try_from(claims: jwt::Claims<jwt::CapabilityProvider>) -> Result<Self, Self::Error> {
-        let jwt::Claims {
-            issuer,
-            subject,
-            metadata,
-            ..
-        } = claims;
-
-        let metadata = metadata.context("no metadata found on provider claims")?;
-
-        Ok(StoredClaims {
-            call_alias: String::new(),   // providers don't have a call alias
-            capabilities: String::new(), // providers don't have a capabilities list
-            contract_id: metadata.capid,
-            issuer,
-            name: metadata.name.unwrap_or_default(),
-            revision: metadata.rev.unwrap_or_default().to_string(),
-            subject,
-            tags: String::new(), // providers don't have tags
-            version: metadata.ver.unwrap_or_default(),
-            config_schema: metadata.config_schema.map(|schema| schema.to_string()),
-        })
+    fn try_from(claims: &Claims) -> Result<Self, Self::Error> {
+        match claims {
+            Claims::Actor(jwt::Claims {
+                issuer,
+                subject,
+                metadata,
+                ..
+            }) => {
+                let jwt::Actor {
+                    name,
+                    tags,
+                    caps,
+                    rev,
+                    ver,
+                    call_alias,
+                    ..
+                } = metadata
+                    .as_ref()
+                    .context("no metadata found on actor claims")?;
+                Ok(StoredClaims {
+                    call_alias: call_alias.clone().unwrap_or_default(),
+                    capabilities: caps.clone().unwrap_or_default().join(","),
+                    issuer: issuer.clone(),
+                    name: name.clone().unwrap_or_default(),
+                    revision: rev.unwrap_or_default().to_string(),
+                    subject: subject.clone(),
+                    tags: tags.clone().unwrap_or_default().join(","),
+                    version: ver.clone().unwrap_or_default(),
+                    ..Default::default()
+                })
+            }
+            Claims::Provider(jwt::Claims {
+                issuer,
+                subject,
+                metadata,
+                ..
+            }) => {
+                let jwt::CapabilityProvider {
+                    name,
+                    capid: contract_id,
+                    rev,
+                    ver,
+                    config_schema,
+                    ..
+                } = metadata
+                    .as_ref()
+                    .context("no metadata found on provider claims")?;
+                Ok(StoredClaims {
+                    contract_id: contract_id.clone(),
+                    issuer: issuer.clone(),
+                    name: name.clone().unwrap_or_default(),
+                    revision: rev.unwrap_or_default().to_string(),
+                    subject: subject.clone(),
+                    version: ver.clone().unwrap_or_default(),
+                    config_schema: config_schema.as_ref().map(ToString::to_string),
+                    ..Default::default()
+                })
+            }
+        }
     }
 }
 

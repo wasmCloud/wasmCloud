@@ -27,6 +27,11 @@ mod par;
 
 pub use local::{Host as LocalHost, HostConfig as LocalHostConfig};
 pub use oci::{Config as OciConfig, Fetcher as OciFetcher};
+pub use policy::{
+    Action as PolicyAction, HostInfo as PolicyHostInfo, Manager as PolicyManager,
+    RequestSource as PolicyRequestSource, RequestTarget as PolicyRequestTarget,
+    Response as PolicyResponse,
+};
 pub use registry::{Auth as RegistryAuth, Config as RegistryConfig, Type as RegistryType};
 pub use wasmbus::{Host as WasmbusHost, HostConfig as WasmbusHostConfig};
 
