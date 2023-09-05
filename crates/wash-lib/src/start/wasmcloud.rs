@@ -24,7 +24,6 @@ pub const WASMCLOUD_HOST_BIN: &str = "wasmcloud_host.exe";
 // Any version of wasmCloud under 0.63.0 uses Elixir releases and is incompatible
 // See https://github.com/wasmCloud/wasmcloud-otp/pull/616 for the move to burrito releases
 const MINIMUM_WASMCLOUD_VERSION: &str = "0.78.0-rc2";
-const DEFAULT_DASHBOARD_PORT: u16 = 4000;
 
 /// A wrapper around the [ensure_wasmcloud_for_os_arch_pair] function that uses the
 /// architecture and operating system of the current host machine.
@@ -192,7 +191,7 @@ where
 }
 
 /// Helper function to start a wasmCloud host given the path to the burrito release application
-/// /// # Arguments
+/// # Arguments
 ///
 /// * `bin_path` - Path to the wasmcloud_host burrito application
 /// * `stdout` - Specify where wasmCloud stdout logs should be written to. Logs can be written to stdout by the erlang process
@@ -209,21 +208,6 @@ where
     T: Into<Stdio>,
     S: Into<Stdio>,
 {
-    // If we can connect to the local port, a wasmCloud host won't be able to listen on that port
-    let port = env_vars
-        .get("WASMCLOUD_DASHBOARD_PORT")
-        .cloned()
-        .unwrap_or_else(|| DEFAULT_DASHBOARD_PORT.to_string());
-    if tokio::net::TcpStream::connect(format!("localhost:{port}"))
-        .await
-        .is_ok()
-    {
-        return Err(anyhow!(
-            "Could not start wasmCloud, a process is already listening on localhost:{}",
-            port
-        ));
-    }
-
     // Constructing this object in one step results in a temporary value that's dropped
     let mut cmd = Command::new(bin_path.as_ref());
     let cmd = cmd

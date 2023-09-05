@@ -30,8 +30,6 @@ async fn integration_up_can_start_wasmcloud_and_actor_serial() -> Result<()> {
             "up",
             "--nats-port",
             "5893",
-            "--dashboard-port",
-            "5002",
             "-o",
             "json",
             "--detached",
