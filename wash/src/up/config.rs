@@ -9,7 +9,7 @@ pub(crate) const NATS_SERVER_VERSION: &str = "v2.9.14";
 pub(crate) const DEFAULT_NATS_HOST: &str = "127.0.0.1";
 pub(crate) const DEFAULT_NATS_PORT: &str = "4222";
 // wadm configuration values
-pub(crate) const WADM_VERSION: &str = "v0.5.0";
+pub(crate) const WADM_VERSION: &str = "v0.6.0";
 // wasmCloud configuration values, https://wasmcloud.dev/reference/host-runtime/host_configure/
 pub(crate) const WASMCLOUD_HOST_VERSION: &str = "v0.78.0-rc4";
 // NATS isolation configuration variables
