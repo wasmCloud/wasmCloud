@@ -41,8 +41,6 @@ mod config;
 mod credsfile;
 pub use config::*;
 
-const LOCALHOST: &str = "127.0.0.1";
-
 #[derive(Parser, Debug, Clone)]
 pub(crate) struct UpCommand {
     /// Launch NATS and wasmCloud detached from the current terminal as background processes
@@ -258,10 +256,6 @@ pub(crate) struct WasmcloudOpts {
     #[clap(long = "log-level", alias = "structured-log-level", default_value = DEFAULT_STRUCTURED_LOG_LEVEL, env = WASMCLOUD_LOG_LEVEL)]
     pub(crate) structured_log_level: String,
 
-    /// Port to listen on for the wasmCloud dashboard, defaults to 4000
-    #[clap(long = "dashboard-port", env = WASMCLOUD_DASHBOARD_PORT)]
-    pub(crate) dashboard_port: Option<u16>,
-
     /// Enables IPV6 addressing for wasmCloud hosts
     #[clap(long = "enable-ipv6", env = WASMCLOUD_ENABLE_IPV6)]
     pub(crate) enable_ipv6: bool,
@@ -336,12 +330,8 @@ pub(crate) async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result
     create_dir_all(&install_dir).await?;
     let spinner = Spinner::new(&output_kind)?;
 
-    // Find an open port for the host, and if the user specified a port, ensure it's open
-    let host_port = ensure_open_port(cmd.wasmcloud_opts.dashboard_port).await?;
-
     // Ensure we use the open dashboard port and the supplied NATS host/port if no overrides were supplied
     let wasmcloud_opts = WasmcloudOpts {
-        dashboard_port: Some(host_port),
         ctl_host: Some(
             cmd.wasmcloud_opts
                 .ctl_host
@@ -463,7 +453,7 @@ pub(crate) async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result
 
     // Redirect output (which is on stderr) to a log file in detached mode, or use the terminal
     spinner.update_spinner_message(" Starting wasmCloud ...".to_string());
-    let wasmcloud_log_path = install_dir.join(format!("wasmcloud_{host_port}.log"));
+    let wasmcloud_log_path = install_dir.join(format!("wasmcloud.log"));
     let stderr: Stdio = if cmd.detached {
         tokio::fs::File::create(&wasmcloud_log_path)
             .await?
@@ -526,8 +516,6 @@ pub(crate) async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result
     if cmd.detached {
         // Write the pid file with the selected version
         tokio::fs::write(install_dir.join(config::WASMCLOUD_PID_FILE), version).await?;
-        let url = format!("http://localhost:{}", host_port);
-        out_json.insert("wasmcloud_url".to_string(), json!(url));
         out_json.insert("wasmcloud_log".to_string(), json!(wasmcloud_log_path));
         out_json.insert("kill_cmd".to_string(), json!("wash down"));
         out_json.insert("nats_url".to_string(), json!(nats_listen_address));
@@ -539,8 +527,8 @@ pub(crate) async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result
 
         let _ = write!(
             out_text,
-            "\n🌐 The wasmCloud dashboard is running at {}\n📜 Logs for the host are being written to {}",
-            url, wasmcloud_log_path.to_string_lossy()
+            "\n📜 Logs for the host are being written to {}",
+            wasmcloud_log_path.to_string_lossy()
         );
         let _ = write!(out_text, "\n\n⬇️  To stop wasmCloud, run \"wash down\"");
     }
@@ -695,33 +683,6 @@ where
         }
     }
     Ok(())
-}
-
-/// Scans ports from 4000 to 5000 to find an open port for the wasmCloud dashboard
-///
-/// # Arguments
-/// `supplied_port` - The port supplied by the user so we can check if it's open
-async fn ensure_open_port(supplied_port: Option<u16>) -> Result<u16> {
-    if let Some(port) = supplied_port {
-        match tokio::net::TcpStream::connect((LOCALHOST, port)).await {
-            Ok(_tcp_stream) => Err(anyhow!(
-                "Supplied host port {port} already has a process listening"
-            )),
-            Err(_e) => Ok(port),
-        }
-    } else {
-        let start_port = DEFAULT_DASHBOARD_PORT.parse().unwrap_or(4000);
-        let end_port = start_port + 1000;
-        for i in start_port..=end_port {
-            if tokio::net::TcpStream::connect((LOCALHOST, i))
-                .await
-                .is_err()
-            {
-                return Ok(i);
-            }
-        }
-        Err(anyhow!("Failed to find open port for host"))
-    }
 }
 
 /// Helper function to create a NATS client from the same arguments wasmCloud will use

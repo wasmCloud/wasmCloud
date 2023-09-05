@@ -11,10 +11,7 @@ pub(crate) const DEFAULT_NATS_PORT: &str = "4222";
 // wadm configuration values
 pub(crate) const WADM_VERSION: &str = "v0.5.0";
 // wasmCloud configuration values, https://wasmcloud.dev/reference/host-runtime/host_configure/
-pub(crate) const WASMCLOUD_HOST_VERSION: &str = "v0.78.0-rc2";
-pub(crate) const WASMCLOUD_DASHBOARD_PORT: &str = "WASMCLOUD_DASHBOARD_PORT";
-// NOTE: We scan from this port up to 1000 ports higher, should always be under 64535
-pub(crate) const DEFAULT_DASHBOARD_PORT: &str = "4000";
+pub(crate) const WASMCLOUD_HOST_VERSION: &str = "v0.78.0-rc4";
 // NATS isolation configuration variables
 pub(crate) const WASMCLOUD_LATTICE_PREFIX: &str = "WASMCLOUD_LATTICE_PREFIX";
 pub(crate) const DEFAULT_LATTICE_PREFIX: &str = "default";
@@ -200,14 +197,6 @@ pub(crate) async fn configure_host_env(
     host_config.insert(
         WASMCLOUD_PROV_SHUTDOWN_DELAY_MS.to_string(),
         wasmcloud_opts.provider_delay.to_string(),
-    );
-
-    host_config.insert(
-        WASMCLOUD_DASHBOARD_PORT.to_string(),
-        wasmcloud_opts
-            .dashboard_port
-            .map(|p| p.to_string())
-            .unwrap_or_else(|| DEFAULT_DASHBOARD_PORT.to_string()),
     );
 
     // Extras configuration
