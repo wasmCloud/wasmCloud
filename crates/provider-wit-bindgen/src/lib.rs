@@ -506,21 +506,25 @@ impl VisitMut for WitBindgenOutputVisitor {
     fn visit_item_mod_mut(&mut self, node: &mut ItemMod) {
         // Save the WIT namespace that we've recognized
         //
-        // ASSUMPTION: The top level WIT namespace is always a module at @ level zero
-        // of the generated output
-        if self.current_module_level() == 0 && node.ident != EXPORTS_MODULE_NAME {
+        // The top level WIT namespace is always a module at @ level zero
+        // of the item hierarchy in packages with imports, but is @ level 1 in packages
+        // with only exports
+        if (self.current_module_level() == 0 && node.ident != EXPORTS_MODULE_NAME)
+            || (self.current_module_level() == 1 && self.at_exported_module())
+        {
             self.wit_ns = Some(node.ident.to_string());
         }
 
         // Save the WIT package name
         //
-        // ASSUMPTION: The level 1 modules in the detected top level wasm namespace
-        // is the package the top level WIT package
-        if self.current_module_level() == 1
-        // If we're one level in and the closest parent is the wasm namespace,
-        // we know this must be the package name
+        // In packages with imports, the package name will be at level 1 (under the ns)
+        // but in packages with only exports, it will be at level 2 under 'exports' and the ns)
+        if (
+            self.current_module_level() == 1
             && self.at_wit_ns_module_child()
-            && !self.at_exported_module()
+            && !self.at_exported_module())
+            // Exports only case
+            || (self.current_module_level() == 2 && self.at_exported_module())
         {
             self.wit_package = Some(node.ident.to_string());
         }
