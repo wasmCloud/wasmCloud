@@ -19,14 +19,14 @@ pub mod oci;
 /// wasmCloud policy service
 pub mod policy;
 
+/// Common registry types
+pub mod registry;
+
 /// Provider archive functionality
 mod par;
 
-/// Common registry types
-mod registry;
-
 pub use local::{Host as LocalHost, HostConfig as LocalHostConfig};
-use registry::Settings as RegistrySettings;
+pub use registry::{Auth as RegistryAuth, Settings as RegistrySettings, Type as RegistryType};
 pub use wasmbus::{Host as WasmbusHost, HostConfig as WasmbusHostConfig};
 
 pub use url;
