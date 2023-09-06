@@ -9,10 +9,17 @@ use common::TestWashInstance;
 #[tokio::test]
 #[serial]
 async fn integration_link_serial() -> Result<()> {
-    let _wash = TestWashInstance::create().await?;
+    let wash = TestWashInstance::create().await?;
 
     let output = Command::new(env!("CARGO_BIN_EXE_wash"))
-        .args(["link", "query", "--output", "json"])
+        .args([
+            "link",
+            "query",
+            "--output",
+            "json",
+            "--ctl-port",
+            &wash.nats_port.to_string(),
+        ])
         .kill_on_drop(true)
         .output()
         .await

@@ -20,6 +20,8 @@ async fn integration_stop_actor_serial() -> Result<()> {
             "json",
             "--timeout-ms",
             "20000",
+            "--ctl-port",
+            &wash_instance.nats_port.to_string(),
         ])
         .output()
         .await
@@ -42,7 +44,16 @@ async fn integration_stop_actor_serial() -> Result<()> {
 
     // Stop the actor
     let output = Command::new(env!("CARGO_BIN_EXE_wash"))
-        .args(["stop", "actor", &host_id, &actor_id, "--output", "json"])
+        .args([
+            "stop",
+            "actor",
+            &host_id,
+            &actor_id,
+            "--output",
+            "json",
+            "--ctl-port",
+            &wash_instance.nats_port.to_string(),
+        ])
         .output()
         .await
         .context("failed to stop actor")?;
@@ -70,6 +81,8 @@ async fn integration_stop_provider_serial() -> Result<()> {
             "json",
             "--timeout-ms",
             "20000",
+            "--ctl-port",
+            &wash_instance.nats_port.to_string(),
         ])
         .output()
         .await
@@ -107,6 +120,8 @@ async fn integration_stop_provider_serial() -> Result<()> {
             &contract_id,
             "--output",
             "json",
+            "--ctl-port",
+            &wash_instance.nats_port.to_string(),
         ])
         .output()
         .await
@@ -127,7 +142,15 @@ async fn integration_stop_host_serial() -> Result<()> {
     let wash_instance = TestWashInstance::create().await?;
 
     let output = Command::new(env!("CARGO_BIN_EXE_wash"))
-        .args(["stop", "host", &wash_instance.host_id, "--output", "json"])
+        .args([
+            "stop",
+            "host",
+            &wash_instance.host_id,
+            "--output",
+            "json",
+            "--ctl-port",
+            &wash_instance.nats_port.to_string(),
+        ])
         .output()
         .await
         .context("failed to stop provider")?;
