@@ -15,7 +15,14 @@ async fn integration_get_hosts_serial() -> Result<()> {
     let wash_instance = TestWashInstance::create().await?;
 
     let output = Command::new(env!("CARGO_BIN_EXE_wash"))
-        .args(["get", "hosts", "--output", "json"])
+        .args([
+            "get",
+            "hosts",
+            "--output",
+            "json",
+            "--ctl-port",
+            &wash_instance.nats_port.to_string(),
+        ])
         .kill_on_drop(true)
         .output()
         .await
@@ -37,10 +44,17 @@ async fn integration_get_hosts_serial() -> Result<()> {
 #[tokio::test]
 #[serial]
 async fn integration_get_links_serial() -> Result<()> {
-    let _wash_instance = TestWashInstance::create().await?;
+    let wash_instance = TestWashInstance::create().await?;
 
     let output = Command::new(env!("CARGO_BIN_EXE_wash"))
-        .args(["get", "links", "--output", "json"])
+        .args([
+            "get",
+            "links",
+            "--output",
+            "json",
+            "--ctl-port",
+            &wash_instance.nats_port.to_string(),
+        ])
         .kill_on_drop(true)
         .output()
         .await
@@ -67,6 +81,8 @@ async fn integration_get_host_inventory_serial() -> Result<()> {
             &wash_instance.host_id,
             "--output",
             "json",
+            "--ctl-port",
+            &wash_instance.nats_port.to_string(),
         ])
         .kill_on_drop(true)
         .output()
@@ -122,10 +138,17 @@ async fn integration_get_host_inventory_serial() -> Result<()> {
 #[tokio::test]
 #[serial]
 async fn integration_get_claims_serial() -> Result<()> {
-    let _wash_instance = TestWashInstance::create().await?;
+    let wash_instance = TestWashInstance::create().await?;
 
     let output = Command::new(env!("CARGO_BIN_EXE_wash"))
-        .args(["get", "claims", "--output", "json"])
+        .args([
+            "get",
+            "claims",
+            "--output",
+            "json",
+            "--ctl-port",
+            &wash_instance.nats_port.to_string(),
+        ])
         .kill_on_drop(true)
         .output()
         .await

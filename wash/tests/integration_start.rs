@@ -9,7 +9,7 @@ use common::{TestWashInstance, ECHO_OCI_REF, PROVIDER_HTTPSERVER_OCI_REF};
 #[tokio::test]
 #[serial]
 async fn integration_start_actor_serial() -> Result<()> {
-    let _wash_instance = TestWashInstance::create().await?;
+    let wash_instance = TestWashInstance::create().await?;
 
     let output = Command::new(env!("CARGO_BIN_EXE_wash"))
         .args([
@@ -20,6 +20,8 @@ async fn integration_start_actor_serial() -> Result<()> {
             "json",
             "--timeout-ms",
             "40000",
+            "--ctl-port",
+            &wash_instance.nats_port.to_string(),
         ])
         .kill_on_drop(true)
         .output()
@@ -38,7 +40,7 @@ async fn integration_start_actor_serial() -> Result<()> {
 #[tokio::test]
 #[serial]
 async fn integration_start_provider_serial() -> Result<()> {
-    let _wash_instance = TestWashInstance::create().await?;
+    let wash_instance = TestWashInstance::create().await?;
 
     let output = Command::new(env!("CARGO_BIN_EXE_wash"))
         .args([
@@ -49,6 +51,8 @@ async fn integration_start_provider_serial() -> Result<()> {
             "json",
             "--timeout-ms",
             "40000",
+            "--ctl-port",
+            &wash_instance.nats_port.to_string(),
         ])
         .kill_on_drop(true)
         .output()
