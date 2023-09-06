@@ -1,6 +1,6 @@
 [package]
 name = "wash-lib"
-version = "0.10.0"
+version = "0.10.1"
 authors = ["wasmCloud Team"]
 categories = ["wasm", "wasmcloud"]
 description = "wasmcloud Shell (wash) libraries"
@@ -11,19 +11,28 @@ readme = "README.md"
 repository = "https://github.com/wasmcloud/wash"
 
 [badges]
-maintenance = {status = "actively-developed"}
+maintenance = { status = "actively-developed" }
 
 [features]
 default = ["start", "parser", "nats"]
 start = ["semver"]
 parser = ["config", "semver", "serde", "serde_json"]
-cli = ["clap", "term-table", "console", "dialoguer", "heck", "ignore", "indicatif", "path-absolutize"]
+cli = [
+    "clap",
+    "term-table",
+    "console",
+    "dialoguer",
+    "heck",
+    "ignore",
+    "indicatif",
+    "path-absolutize",
+]
 nats = ["async-nats", "wadm"]
 
 [dependencies]
 anyhow = { workspace = true }
 async-compression = { workspace = true, features = ["tokio", "gzip"] }
-async-nats = { workspace = true, optional = true}
+async-nats = { workspace = true, optional = true }
 bytes = { version = "1", features = ["serde"] }
 cargo_metadata = "0.17"
 cargo_toml = { workspace = true }
@@ -42,7 +51,9 @@ indicatif = { workspace = true, optional = true }
 log = { workspace = true }
 nkeys = { workspace = true }
 oci-distribution = { workspace = true, features = ["rustls-tls"] }
-path-absolutize = { workspace = true, features = ["once_cell_cache"], optional = true }
+path-absolutize = { workspace = true, features = [
+    "once_cell_cache",
+], optional = true }
 provider-archive = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls-tls", "stream"] }
@@ -62,7 +73,7 @@ tokio-stream = { workspace = true }
 tokio-tar = { workspace = true }
 tokio-util = { workspace = true }
 toml = { workspace = true }
-wadm = { workspace = true, optional = true}
+wadm = { workspace = true, optional = true }
 walkdir = { workspace = true }
 wascap = { workspace = true }
 wasmcloud-control-interface = { workspace = true }
