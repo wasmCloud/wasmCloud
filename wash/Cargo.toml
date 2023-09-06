@@ -67,7 +67,7 @@ which = { workspace = true }
 assert-json-diff = { workspace = true }
 chrono = { workspace = true }
 futures = { workspace = true }
-nix = { version = "0.26.2", default-features = false, features = ["signal"] }
+nix = { version = "0.27.1", default-features = false, features = ["signal"] }
 rand = "0.8.5"
 reqwest = { workspace = true, features = ["json", "rustls-tls"] }
 scopeguard = { workspace = true }
@@ -112,7 +112,7 @@ heck = "0.4"
 ignore = "0.4"
 indicatif = "0.17.6"
 log = "0.4"
-nix = { version = "0.26.2", default-features = false, features = ["signal"] }
+nix = { version = "0.27.1", default-features = false, features = ["signal"] }
 nkeys = "0.3.2"
 oci-distribution = { version = "0.9.4", default-features = false, features = [
     "rustls-tls",
