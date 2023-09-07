@@ -344,7 +344,7 @@ impl Handler {
         if resp_length > CHUNK_THRESHOLD_BYTES {
             msg = self
                 .chunk_endpoint
-                .get_unchunkified(&invocation_id)
+                .get_unchunkified_response(&invocation_id)
                 .await
                 .context("failed to dechunk response")?;
         } else {
@@ -798,7 +798,7 @@ impl Bus for Handler {
                     .map_err(|e| e.to_string())?;
                 if resp_length > CHUNK_THRESHOLD_BYTES {
                     msg = chunk_endpoint
-                        .get_unchunkified(&invocation_id)
+                        .get_unchunkified_response(&invocation_id)
                         .await
                         .context("failed to dechunk response")
                         .map_err(|e| e.to_string())?;

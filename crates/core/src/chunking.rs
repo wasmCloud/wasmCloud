@@ -68,20 +68,21 @@ impl ChunkEndpoint {
     #[instrument(level = "trace", skip(self))]
     pub async fn get_unchunkified(&self, inv_id: &str) -> anyhow::Result<Vec<u8>> {
         let mut result = Vec::new();
-        let store = self.create_or_reuse_store().await?;
-        debug!(invocation_id = %inv_id, "chunkify starting to receive");
-        let mut obj = store
-            .get(inv_id)
+        let store = self
+            .create_or_reuse_store()
             .await
-            .map_err(|e| anyhow!(e))
-            .context("error starting to receive chunked stream for inv {inv_id}")?;
-        let r = obj.read_to_end(&mut result);
-        r.map_err(|e| anyhow!(e).context("error receiving chunked stream for inv {inv_id}"))
+            .map_err(|e| anyhow!(e).context("failed to get object store"))?;
+        debug!(invocation_id = %inv_id, "chunkify starting to receive");
+        let mut obj = store.get(inv_id).await.map_err(|e| {
+            anyhow!(e).context("failed to receive chunked stream for inv {inv_id}: {e}")
+        })?;
+        obj.read_to_end(&mut result)
+            .map_err(|e| anyhow!(e).context("failed to read chunked stream for inv {inv_id}: {e}"))
             .await?;
         if let Err(e) = store.delete(inv_id).await {
             // not deleting will be a non-fatal error for the receiver,
             // if all the bytes have been received
-            error!(invocation_id = %inv_id, error = %e, "deleting chunks for inv");
+            error!(invocation_id = %inv_id, error = %e, "failed to delete chunks for inv");
         }
         Ok(result)
     }
