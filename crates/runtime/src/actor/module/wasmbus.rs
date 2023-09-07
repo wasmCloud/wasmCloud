@@ -147,8 +147,7 @@ fn write_bytes<T>(
 }
 
 #[instrument(skip(store, err))]
-fn set_host_error(store: &mut wasmtime::Caller<'_, super::Ctx>, err: impl ToString) {
-    let err = err.to_string();
+fn set_host_error(store: &mut wasmtime::Caller<'_, super::Ctx>, err: String) {
     trace!(err, "set host error");
     store.data_mut().wasmbus.host_error = Some(err);
 }
@@ -308,7 +307,7 @@ async fn host_call(
             Ok(wasm::SUCCESS)
         }
         Err(err) => {
-            set_host_error(&mut store, err);
+            set_host_error(&mut store, format!("{err:#}"));
             Ok(wasm::ERROR)
         }
     }
