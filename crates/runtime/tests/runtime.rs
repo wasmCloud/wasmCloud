@@ -123,8 +123,8 @@ impl capability::Bus for Handler {
             ("", "foobar-component-command-preview2") => Ok(capability::TargetEntity::Actor(
                 capability::ActorIdentifier::Alias("foobar-component-command-preview2".into()),
             )),
-            ("", "unknown") => Ok(capability::TargetEntity::Actor(
-                capability::ActorIdentifier::Alias("unknown".into()),
+            ("", "unknown/alias") => Ok(capability::TargetEntity::Actor(
+                capability::ActorIdentifier::Alias("unknown/alias".into()),
             )),
             _ => panic!("binding `{binding}` namespace `{namespace}` pair not supported"),
         }
@@ -313,10 +313,10 @@ impl capability::Bus for Handler {
                 Some(capability::TargetEntity::Actor(capability::ActorIdentifier::Alias(name))),
                 "test-actors:foobar/actor.foobar" // component invocation
                 | "foobar-component-command-preview2/actor.foobar"  // valid module invocation
-                | "unknown/actor.foobar", // invalid module invocation
-            ) if name == "foobar-component-command-preview2" || name == "unknown" => {
+                | "unknown/alias/actor.foobar", // invalid module invocation
+            ) if name == "foobar-component-command-preview2" || name == "unknown/alias" => {
                 assert_eq!(payload, br#"{"arg":"foo"}"#);
-                if name == "unknown" {
+                if name == "unknown/alias" {
                     bail!("unknown actor call alias")
                 } else {
                     Ok(r#""foobar""#.into())

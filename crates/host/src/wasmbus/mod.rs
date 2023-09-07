@@ -276,7 +276,7 @@ impl Handler {
         let aliases = self.aliases.read().await;
         let operation = operation.into();
         let (package, _) = operation
-            .split_once('/')
+            .rsplit_once('/')
             .context("failed to parse operation")?;
         let inv_target = resolve_target(target, links.get(package), &aliases).await?;
         let needs_chunking = request.len() > CHUNK_THRESHOLD_BYTES;
@@ -722,7 +722,7 @@ impl Bus for Handler {
                 let links = links.read().await;
                 let aliases = aliases.read().await;
                 let (package, _) = operation
-                    .split_once('/')
+                    .rsplit_once('/')
                     .context("failed to parse operation")
                     .map_err(|e| e.to_string())?;
                 let inv_target = resolve_target(target.as_ref(), links.get(package), &aliases)
