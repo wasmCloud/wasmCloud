@@ -148,7 +148,7 @@ tokio-tar = "0.3"
 tokio-util = "0.7.8"
 toml = "0.7.6"
 wadm = "0.6.0"
-walkdir = "2.3"
+walkdir = "2.4"
 wascap = "0.11.1"
 wash-lib = { version = "0.10", path = "./crates/wash-lib" }
 wasmbus-rpc = "0.14.0"
