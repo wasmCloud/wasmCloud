@@ -158,7 +158,7 @@ impl Invocation {
     ) -> anyhow::Result<Invocation> {
         let operation = operation.into();
         let (_, operation) = operation
-            .split_once('/')
+            .rsplit_once('/')
             .context("failed to parse operation")?;
         // TODO: Support per-interface links
         let id = Uuid::from_u128(Ulid::new().into()).to_string();

@@ -314,7 +314,7 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
 
         bus::host::call_sync(
             Some(&TargetEntity::Actor(bus::lattice::ActorIdentifier::Alias(
-                "unknown".into(),
+                "unknown/alias".into(),
             ))),
             "test-actors:foobar/actor.foobar",
             r#"{"arg":"foo"}"#.as_bytes(),

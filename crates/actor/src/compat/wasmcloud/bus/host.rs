@@ -67,13 +67,13 @@ pub fn call_sync(
     match target {
         None => {
             let (namespace, operation) = operation
-                .split_once('/')
+                .rsplit_once('/')
                 .ok_or_else(|| "invalid operation format".to_string())?;
             host_call("", namespace, operation, payload)
         }
         Some(TargetEntity::Link(binding)) => {
             let (namespace, operation) = operation
-                .split_once('/')
+                .rsplit_once('/')
                 .ok_or_else(|| "invalid operation format".to_string())?;
             host_call(
                 binding.as_deref().unwrap_or_default(),

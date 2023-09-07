@@ -241,7 +241,7 @@ impl HttpHandler for HttpLogRng {
 
         bus::host::call_sync(
             Some(&TargetEntity::Actor(bus::lattice::ActorIdentifier::Alias(
-                "unknown".into(),
+                "unknown/alias".into(),
             ))),
             // TODO: This should include the package name, i.e. `test-actors:foobar/actor.foobar`
             "actor.foobar",
