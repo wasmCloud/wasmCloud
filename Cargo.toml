@@ -92,7 +92,7 @@ assert-json-diff = "2.0.1"
 async-compression = { version = "0.3", default-features = false }
 async-nats = "0.30.0"
 atelier_core = "0.2"
-bytes = "1.4"
+bytes = "1.5"
 cargo_atelier = "0.2"
 cargo_toml = "0.15.3"
 chrono = "0.4.30"
