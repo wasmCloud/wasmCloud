@@ -30,6 +30,11 @@ jobs:
           test-bin: file ./result/bin/wasmcloud
           test-oci: docker load < ./result
 
+        - target: aarch64-linux-android
+          install-path: /bin/wasmcloud
+          test-bin: file ./result/bin/wasmcloud
+          test-oci: docker load < ./result
+
         - target: x86_64-apple-darwin
           install-path: /bin/wasmcloud
           test-bin: file ./result/bin/wasmcloud
