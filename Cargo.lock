@@ -524,6 +524,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "cbindgen"
+version = "0.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "faeaa693e5a727975a79211b8f35c0cb09b031fdb6eaa4a788bc6713d01488ca"
+dependencies = [
+ "heck",
+ "indexmap 1.9.3",
+ "log",
+ "proc-macro2",
+ "quote",
+ "serde",
+ "serde_json",
+ "syn 1.0.109",
+ "tempfile",
+ "toml 0.5.11",
+]
+
+[[package]]
 name = "cc"
 version = "1.0.83"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4529,6 +4547,16 @@ dependencies = [
  "wasmcloud-core",
  "wasmcloud-runtime",
  "wasmcloud-tracing",
+]
+
+[[package]]
+name = "wasmcloud-host-sys"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cbindgen",
+ "tokio",
+ "wasmcloud-host",
 ]
 
 [[package]]
