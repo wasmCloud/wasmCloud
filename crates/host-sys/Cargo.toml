@@ -1,0 +1,24 @@
+[package]
+name = "wasmcloud-host-sys"
+version = "0.1.0"
+description = "wasmCloud host library C bindings"
+
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[badges.maintenance]
+status = "actively-developed"
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+wasmcloud-host = { workspace = true }
+
+[build-dependencies]
+anyhow = { workspace = true }
+cbindgen = { workspace = true }

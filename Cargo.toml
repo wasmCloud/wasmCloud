@@ -71,9 +71,11 @@ wasmcloud-control-interface = { workspace = true }
 
 [workspace]
 members = [
-    "crates/provider-sdk",
-    "crates/provider-wit-bindgen",
+    "crates/*",
     "examples/rust/*",
+]
+exclude = [
+    "crates/providers"
 ]
 
 [workspace.dependencies]
@@ -84,6 +86,7 @@ async-trait = { version = "0.1", default-features = false }
 base64 = { version = "0.21", default-features = false }
 bindle = { version = "0.9", default-features = false }
 bytes = { version = "1", default-features = false }
+cbindgen = { version = "0.25", default-features = false }
 clap = { version = "4", default-features = false }
 cloudevents-sdk = { version = "0.7", default-features = false }
 data-encoding = { version = "2.3", default-features = false }
