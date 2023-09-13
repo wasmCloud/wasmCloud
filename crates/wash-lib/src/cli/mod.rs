@@ -15,6 +15,7 @@ use std::str::FromStr;
 
 use anyhow::Result;
 use clap::Args;
+use log::info;
 use nkeys::{KeyPair, KeyPairType};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -290,16 +291,16 @@ pub fn extract_keypair(
             // No default key, generating for user
             None if !disable_keygen => {
                 match output_kind {
-                    OutputKind::Text => println!(
+                    OutputKind::Text => info!(
                         "No keypair found in \"{}\".
                     We will generate one for you and place it there.
-                    If you'd like to use alternative keys, you can supply them as a flag.\n",
+                    If you'd like to use an existing key, you can supply it on the CLI as a flag.\n",
                         path.display()
                     ),
                     OutputKind::Json => {
-                        println!(
+                        info!(
                             "{}",
-                            json!({"status": "No keypair found", "path": path, "keygen": "true"})
+                            json!({"status": "No existing keypair found, automatically generated and stored a new one", "path": path, "keygen": "true"})
                         )
                     }
                 }
