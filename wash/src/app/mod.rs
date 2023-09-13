@@ -33,10 +33,10 @@ pub(crate) enum AppCliCommand {
     /// Puts a model version into the store
     #[clap(name = "put")]
     Put(PutCommand),
-    /// Deploy an app (start a deployment monitor)
+    /// Deploy an application to the lattice
     #[clap(name = "deploy")]
     Deploy(DeployCommand),
-    /// Undeploy an application (stop the deployment monitor)
+    /// Undeploy an application, removing it from the lattice
     #[clap(name = "undeploy")]
     Undeploy(UndeployCommand),
 }
@@ -63,9 +63,9 @@ pub(crate) struct UndeployCommand {
 
 #[derive(Args, Debug, Clone)]
 pub(crate) struct DeployCommand {
-    /// Name of the app specification to deploy
-    #[clap(name = "name")]
-    model_name: String,
+    /// Name of the application to deploy, if it was already `put`, or a path to a file containing the application manifest
+    #[clap(name = "application")]
+    application: String,
 
     /// Version of the app specification to deploy, defaults to the latest created version
     #[clap(name = "version")]
@@ -196,11 +196,11 @@ async fn deploy_model(cmd: DeployCommand) -> Result<DeployModelResponse> {
         .await?;
 
     // If the model name is a file on disk, apply it and then deploy
-    let model_name = if tokio::fs::metadata(&cmd.model_name).await.is_ok() {
+    let model_name = if tokio::fs::metadata(&cmd.application).await.is_ok() {
         let put_res = wash_lib::app::put_model(
             &client,
             lattice_prefix.clone(),
-            &tokio::fs::read_to_string(&cmd.model_name).await?,
+            &tokio::fs::read_to_string(&cmd.application).await?,
         )
         .await?;
 
@@ -209,7 +209,7 @@ async fn deploy_model(cmd: DeployCommand) -> Result<DeployModelResponse> {
             _ => bail!("Could not put manifest to deploy {}", put_res.message),
         }
     } else {
-        cmd.model_name
+        cmd.application
     };
 
     wash_lib::app::deploy_model(&client, lattice_prefix, &model_name, cmd.version).await
