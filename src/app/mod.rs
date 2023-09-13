@@ -196,20 +196,27 @@ async fn deploy_model(cmd: DeployCommand) -> Result<DeployModelResponse> {
         .await?;
 
     // If the model name is a file on disk, apply it and then deploy
-    let model_name = if tokio::fs::metadata(&cmd.application).await.is_ok() {
-        let put_res = wash_lib::app::put_model(
-            &client,
-            lattice_prefix.clone(),
-            &tokio::fs::read_to_string(&cmd.application).await?,
-        )
-        .await?;
+    let model_name = match tokio::fs::metadata(&cmd.application).await {
+        Ok(_) => {
+            let put_res = wash_lib::app::put_model(
+                &client,
+                lattice_prefix.clone(),
+                &tokio::fs::read_to_string(&cmd.application).await?,
+            )
+            .await?;
 
-        match put_res.result {
-            PutResult::Created | PutResult::NewVersion => put_res.name,
-            _ => bail!("Could not put manifest to deploy {}", put_res.message),
+            match put_res.result {
+                PutResult::Created | PutResult::NewVersion => put_res.name,
+                _ => bail!("Could not put manifest to deploy {}", put_res.message),
+            }
         }
-    } else {
-        cmd.application
+        // Catch the edge case where the user is trying to deploy a file and it's not found. This does
+        // not catch the edge case where the file is missing an extension, but that will fail with a
+        // model not found error from the server
+        Err(e) if cmd.application.contains('.') => {
+            bail!("Could not put manifest to deploy: {}. If you were trying to deploy an existing application, \"{}\" is not a valid model name.", e, cmd.application)
+        }
+        Err(_) => cmd.application,
     };
 
     wash_lib::app::deploy_model(&client, lattice_prefix, &model_name, cmd.version).await
