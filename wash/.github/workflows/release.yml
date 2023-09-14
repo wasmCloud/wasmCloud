@@ -9,7 +9,7 @@ jobs:
   cargo_check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Build
         run: cargo build --verbose
       - name: Install nextest
@@ -22,7 +22,7 @@ jobs:
   clippy_check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - run: rustup component add clippy
       - uses: actions-rs/clippy-check@v1
         with:
@@ -33,7 +33,7 @@ jobs:
     runs-on: windows-latest-8-cores
     needs: [cargo_check]
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Compile wash
         run: cargo build --release
       - name: Upload artifact
@@ -67,7 +67,7 @@ jobs:
     needs: release
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - id: crates-release-action
         uses: wasmcloud/common-actions/crates-release@main
         with:
