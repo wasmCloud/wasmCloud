@@ -15,7 +15,7 @@ jobs:
         os: [ubuntu-20.04, windows-latest-8-cores, macos-11]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Install nextest
         uses: taiki-e/install-action@nextest
       - name: Run wash-lib unit tests (${{ matrix.name }})
@@ -28,7 +28,7 @@ jobs:
     env:
       working-directory: ./crates/wash-lib
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - id: crates-release-action
         uses: wasmcloud/common-actions/crates-release@main
         with:

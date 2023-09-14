@@ -9,7 +9,7 @@ jobs:
   cargo_check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Build
         run: cargo build --verbose
       - name: Install nextest
@@ -22,7 +22,7 @@ jobs:
   clippy_check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - run: rustup component add clippy
       - uses: actions-rs/clippy-check@v1
         with:
@@ -47,7 +47,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       - name: Compile wash
         if: ${{ matrix.arch }} == 'amd64'
         run: cargo build --release
