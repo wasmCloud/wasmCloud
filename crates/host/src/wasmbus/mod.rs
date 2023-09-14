@@ -3573,7 +3573,7 @@ impl Host {
         )
         .await?;
 
-        let msgp = rmp_serde::to_vec(ld).context("failed to encode link definition")?;
+        let msgp = rmp_serde::to_vec_named(ld).context("failed to encode link definition")?;
         let lattice_prefix = &self.host_config.lattice_prefix;
         self.prov_rpc_nats
             .publish_with_headers(
@@ -3623,7 +3623,7 @@ impl Host {
         )
         .await?;
 
-        let msgp = rmp_serde::to_vec(ld).context("failed to encode link definition")?;
+        let msgp = rmp_serde::to_vec_named(ld).context("failed to encode link definition")?;
         let lattice_prefix = &self.host_config.lattice_prefix;
         self.prov_rpc_nats
             .publish_with_headers(
