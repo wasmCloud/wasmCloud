@@ -10,7 +10,7 @@ jobs:
   cargo_check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Build
         run: cargo build --verbose
       - name: Install nextest
@@ -23,7 +23,7 @@ jobs:
   clippy_check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - run: rustup component add clippy
       - uses: actions-rs/clippy-check@v1
         with:
@@ -34,7 +34,7 @@ jobs:
     needs: [cargo_check, clippy_check]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - uses: snapcore/action-build@v1
         id: build
       - uses: snapcore/action-publish@v1
