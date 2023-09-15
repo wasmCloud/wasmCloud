@@ -128,7 +128,7 @@ jobs:
           password: ${{ secrets.AZURECR_PUSH_PASSWORD }}
 
       # DockerHub login
-      - uses: docker/login-action@v2
+      - uses: docker/login-action@v3
         if: github.repository == 'wasmCloud/wash'
         with:
           username: ${{ secrets.DOCKERHUB_PUSH_USER }}
@@ -139,7 +139,7 @@ jobs:
       # NOTE: unknown/unknown will show up due to a bug in GHCR
       # see: https://github.com/orgs/community/discussions/45969
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v2
+        uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
