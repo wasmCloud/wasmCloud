@@ -23,14 +23,6 @@ pub fn actor_auction_subject(topic_prefix: &Option<String>, lattice_prefix: &str
     format!("{}.auction.actor", prefix(topic_prefix, lattice_prefix))
 }
 
-pub fn advertise_link(topic_prefix: &Option<String>, lattice_prefix: &str) -> String {
-    format!("{}.linkdefs.put", prefix(topic_prefix, lattice_prefix))
-}
-
-pub fn remove_link(topic_prefix: &Option<String>, lattice_prefix: &str) -> String {
-    format!("{}.linkdefs.del", prefix(topic_prefix, lattice_prefix))
-}
-
 pub fn publish_registries(topic_prefix: &Option<String>, lattice_prefix: &str) -> String {
     format!("{}.registries.put", prefix(topic_prefix, lattice_prefix))
 }
@@ -82,14 +74,6 @@ pub mod commands {
 
 pub mod queries {
     use super::prefix;
-
-    pub fn link_definitions(topic_prefix: &Option<String>, lattice_prefix: &str) -> String {
-        format!("{}.get.links", prefix(topic_prefix, lattice_prefix))
-    }
-
-    pub fn claims(topic_prefix: &Option<String>, lattice_prefix: &str) -> String {
-        format!("{}.get.claims", prefix(topic_prefix, lattice_prefix))
-    }
 
     pub fn host_inventory(
         topic_prefix: &Option<String>,

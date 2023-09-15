@@ -60,7 +60,6 @@ pub struct ActorInstance {
 }
 
 pub type AnnotationMap = std::collections::HashMap<String, String>;
-pub type CtlKVList = Vec<KeyValueMap>;
 
 /// Standard response for control interface operations
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -69,37 +68,6 @@ pub struct CtlOperationAck {
     pub accepted: bool,
     #[serde(default)]
     pub error: String,
-}
-
-/// A response containing the full list of known claims within the lattice
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-pub struct GetClaimsResponse {
-    pub claims: CtlKVList,
-}
-
-/// A safety type that can handle claims values that are set to Null. This is
-/// only used internally for compatibility, we will still send out [GetClaimsResponse]
-/// as the response type.
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-pub(crate) struct SafeClaimsResponse {
-    pub claims: Vec<HashMap<String, Option<String>>>,
-}
-
-impl Into<GetClaimsResponse> for SafeClaimsResponse {
-    fn into(self) -> GetClaimsResponse {
-        GetClaimsResponse {
-            claims: self
-                .claims
-                .into_iter()
-                .map(|claim| {
-                    claim
-                        .into_iter()
-                        .map(|(k, v)| (k, v.unwrap_or_default()))
-                        .collect()
-                })
-                .collect(),
-        }
-    }
 }
 
 /// A summary representation of a host
@@ -164,12 +132,6 @@ pub struct HostInventory {
 pub type Hosts = Vec<Host>;
 pub type KeyValueMap = std::collections::HashMap<String, String>;
 pub type LabelsMap = std::collections::HashMap<String, String>;
-
-/// A list of link definitions
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-pub struct LinkDefinitionList {
-    pub links: ActorLinks,
-}
 
 /// One of a potential list of responses to a provider auction
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -409,14 +371,9 @@ pub struct UpdateActorCommand {
 /// Settings associated with an actor-provider link
 pub type LinkSettings = std::collections::HashMap<String, String>;
 
-// COPIED FROM https://github.com/wasmCloud/weld/blob/wasmbus-rpc-v0.13.0/rpc-rs/src/wasmbus_core.rs#L26
-/// List of linked actors for a provider
-pub type ActorLinks = Vec<LinkDefinition>;
-
 // COPIED FROM https://github.com/wasmCloud/weld/blob/wasmbus-rpc-v0.13.0/rpc-rs/src/wasmbus_core.rs#L1042
 /// Link definition for binding actor to provider
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[non_exhaustive]
 pub struct LinkDefinition {
     /// actor public key
     #[serde(default)]
