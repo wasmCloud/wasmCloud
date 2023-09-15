@@ -18,14 +18,16 @@ use redis::FromRedisValue;
 use serde::Deserialize;
 use tokio::sync::RwLock;
 use tracing::{info, instrument, warn};
-use wasmcloud_compat::keyvalue::{
-    GetResponse, IncrementRequest, ListAddRequest, ListDelRequest, ListRangeRequest, SetAddRequest,
-    SetDelRequest, SetRequest,
-};
 use wasmcloud_provider_sdk::core::LinkDefinition;
-use wasmcloud_provider_sdk::error::ProviderInvocationError;
+use wasmcloud_provider_sdk::error::{ProviderInvocationError, ProviderInvocationResult};
 use wasmcloud_provider_sdk::provider_main::start_provider;
-use wasmcloud_provider_sdk::{load_host_data, Context, ProviderHandler};
+use wasmcloud_provider_sdk::{load_host_data, Context};
+
+wasmcloud_provider_wit_bindgen::generate!({
+    impl_struct: KvRedisProvider,
+    contract: "wasmcloud:keyvalue",
+    wit_bindgen_cfg: "provider-kvredis"
+});
 
 const REDIS_URL_KEY: &str = "URL";
 const DEFAULT_CONNECT_URL: &str = "redis://127.0.0.1:6379/";
@@ -89,7 +91,7 @@ impl KvRedisProvider {
 /// Handle provider control commands
 /// put_link (new actor link command), del_link (remove link command), and shutdown
 #[async_trait]
-impl ProviderHandler for KvRedisProvider {
+impl WasmcloudCapabilityProvider for KvRedisProvider {
     /// Provider should perform any operations needed for a new link,
     /// including setting up per-actor resources, and checking authorization.
     /// If the link is allowed, return true, otherwise return false to deny the link.
@@ -148,28 +150,40 @@ impl ProviderHandler for KvRedisProvider {
 }
 
 /// Handle KeyValue methods that interact with redis
-impl KvRedisProvider {
+#[async_trait]
+impl WasmcloudKeyvalueKeyValue for KvRedisProvider {
     /// Increments a numeric value, returning the new value
     #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.key))]
-    async fn increment(&self, ctx: Context, arg: IncrementRequest) -> Result<i32, String> {
+    async fn increment(
+        &self,
+        ctx: Context,
+        arg: IncrementRequest,
+    ) -> ProviderInvocationResult<i32> {
         let mut cmd = redis::Cmd::incr(&arg.key, arg.value);
-        let val: i32 = self.exec(&ctx, &mut cmd).await?;
-        Ok(val)
+        self
+            .exec(&ctx, &mut cmd)
+            .await
+            .map_err(ProviderInvocationError::Provider)
     }
 
     /// Returns true if the store contains the key
     #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.to_string()))]
-    async fn contains(&self, ctx: Context, arg: String) -> Result<bool, String> {
+    async fn contains(&self, ctx: Context, arg: String) -> ProviderInvocationResult<bool> {
         let mut cmd = redis::Cmd::exists(arg.to_string());
-        let val: bool = self.exec(&ctx, &mut cmd).await?;
-        Ok(val)
+        self
+            .exec(&ctx, &mut cmd)
+            .await
+            .map_err(ProviderInvocationError::Provider)
     }
 
     /// Deletes a key, returning true if the key was deleted
     #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.to_string()))]
-    async fn del(&self, ctx: Context, arg: String) -> Result<bool, String> {
+    async fn del(&self, ctx: Context, arg: String) -> ProviderInvocationResult<bool> {
         let mut cmd = redis::Cmd::del(arg.to_string());
-        let val: i32 = self.exec(&ctx, &mut cmd).await?;
+        let val: i32 = self
+            .exec(&ctx, &mut cmd)
+            .await
+            .map_err(ProviderInvocationError::Provider)?;
         Ok(val > 0)
     }
 
@@ -177,9 +191,13 @@ impl KvRedisProvider {
     /// the return structure contains exists: true and the value,
     /// otherwise the return structure contains exists == false.
     #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.to_string()))]
-    async fn get(&self, ctx: Context, arg: String) -> Result<GetResponse, String> {
+    async fn get(&self, ctx: Context, arg: String) -> ProviderInvocationResult<GetResponse> {
         let mut cmd = redis::Cmd::get(arg.to_string());
-        let val: Option<String> = self.exec(&ctx, &mut cmd).await?;
+        let val: Option<String> = self
+            .exec(&ctx, &mut cmd)
+            .await
+            .map_err(ProviderInvocationError::Provider)?;
+
         let resp = match val {
             Some(s) => GetResponse {
                 exists: true,
@@ -187,7 +205,7 @@ impl KvRedisProvider {
             },
             None => GetResponse {
                 exists: false,
-                ..Default::default()
+                value: String::default(),
             },
         };
         Ok(resp)
@@ -195,25 +213,29 @@ impl KvRedisProvider {
 
     /// Append a value onto the end of a list. Returns the new list size
     #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.list_name))]
-    async fn list_add(&self, ctx: Context, arg: ListAddRequest) -> Result<u32, String> {
+    async fn list_add(&self, ctx: Context, arg: ListAddRequest) -> ProviderInvocationResult<u32> {
         let mut cmd = redis::Cmd::rpush(&arg.list_name, &arg.value);
-        let val: u32 = self.exec(&ctx, &mut cmd).await?;
-        Ok(val)
+        self.exec(&ctx, &mut cmd)
+            .await
+            .map_err(ProviderInvocationError::Provider)
     }
 
     /// Deletes a list and its contents
     /// input: list name
     /// returns: true if the list existed and was deleted
     #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.to_string()))]
-    async fn list_clear(&self, ctx: Context, arg: String) -> Result<bool, String> {
+    async fn list_clear(&self, ctx: Context, arg: String) -> ProviderInvocationResult<bool> {
         self.del(ctx, arg).await
     }
 
     /// Deletes an item from a list. Returns true if the item was removed.
     #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.list_name))]
-    async fn list_del(&self, ctx: Context, arg: ListDelRequest) -> Result<bool, String> {
+    async fn list_del(&self, ctx: Context, arg: ListDelRequest) -> ProviderInvocationResult<bool> {
         let mut cmd = redis::Cmd::lrem(&arg.list_name, 1, &arg.value);
-        let val: u32 = self.exec(&ctx, &mut cmd).await?;
+        let val: u32 = self
+            .exec(&ctx, &mut cmd)
+            .await
+            .map_err(ProviderInvocationError::Provider)?;
         Ok(val > 0)
     }
 
@@ -222,46 +244,57 @@ impl KvRedisProvider {
     /// 11 items if the list contains at least 11 items. If the stop value
     /// is beyond the end of the list, it is treated as the end of the list.
     #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.list_name))]
-    async fn list_range(&self, ctx: Context, arg: ListRangeRequest) -> Result<Vec<String>, String> {
+    async fn list_range(
+        &self,
+        ctx: Context,
+        arg: ListRangeRequest,
+    ) -> ProviderInvocationResult<Vec<String>> {
         let mut cmd = redis::Cmd::lrange(&arg.list_name, arg.start as isize, arg.stop as isize);
-        let val: Vec<String> = self.exec(&ctx, &mut cmd).await?;
-        Ok(val)
+        self
+            .exec(&ctx, &mut cmd)
+            .await
+            .map_err(ProviderInvocationError::Provider)
     }
 
     /// Sets the value of a key.
     /// expires is an optional number of seconds before the value should be automatically deleted,
     /// or 0 for no expiration.
     #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.key))]
-    async fn set(&self, ctx: Context, arg: SetRequest) -> Result<(), String> {
+    async fn set(&self, ctx: Context, arg: SetRequest) -> ProviderInvocationResult<()> {
         let mut cmd = match arg.expires {
             0 => redis::Cmd::set(&arg.key, &arg.value),
             _ => redis::Cmd::set_ex(&arg.key, &arg.value, arg.expires as usize),
         };
-        let _value: Option<String> = self.exec(&ctx, &mut cmd).await?;
+        let _value: Option<String> = self
+            .exec(&ctx, &mut cmd)
+            .await
+            .map_err(ProviderInvocationError::Provider)?;
         Ok(())
     }
 
     /// Add an item into a set. Returns number of items added
     #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.set_name))]
-    async fn set_add(&self, ctx: Context, arg: SetAddRequest) -> Result<u32, String> {
+    async fn set_add(&self, ctx: Context, arg: SetAddRequest) -> ProviderInvocationResult<u32> {
         let mut cmd = redis::Cmd::sadd(&arg.set_name, &arg.value);
-        let value: u32 = self.exec(&ctx, &mut cmd).await?;
-        Ok(value)
+        self.exec(&ctx, &mut cmd)
+            .await
+            .map_err(ProviderInvocationError::Provider)
     }
 
     /// Remove a item from the set. Returns
     #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.set_name))]
-    async fn set_del(&self, ctx: Context, arg: SetDelRequest) -> Result<u32, String> {
+    async fn set_del(&self, ctx: Context, arg: SetDelRequest) -> ProviderInvocationResult<u32> {
         let mut cmd = redis::Cmd::srem(&arg.set_name, &arg.value);
-        let value: u32 = self.exec(&ctx, &mut cmd).await?;
-        Ok(value)
+        self.exec(&ctx, &mut cmd)
+            .await
+            .map_err(ProviderInvocationError::Provider)
     }
 
     /// Deletes a set and its contents
     /// input: set name
     /// returns: true if the set existed and was deleted
     #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.to_string()))]
-    async fn set_clear(&self, ctx: Context, arg: String) -> Result<bool, String> {
+    async fn set_clear(&self, ctx: Context, arg: String) -> ProviderInvocationResult<bool> {
         self.del(ctx, arg).await
     }
 
@@ -270,24 +303,31 @@ impl KvRedisProvider {
         &self,
         ctx: Context,
         arg: Vec<String>,
-    ) -> Result<Vec<String>, String> {
+    ) -> ProviderInvocationResult<Vec<String>> {
         let mut cmd = redis::Cmd::sinter(arg);
-        let value: Vec<String> = self.exec(&ctx, &mut cmd).await?;
-        Ok(value)
+        self.exec(&ctx, &mut cmd)
+            .await
+            .map_err(ProviderInvocationError::Provider)
     }
 
     #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, key = %arg.to_string()))]
-    async fn set_query(&self, ctx: Context, arg: String) -> Result<Vec<String>, String> {
+    async fn set_query(&self, ctx: Context, arg: String) -> ProviderInvocationResult<Vec<String>> {
         let mut cmd = redis::Cmd::smembers(arg.to_string());
-        let values: Vec<String> = self.exec(&ctx, &mut cmd).await?;
-        Ok(values)
+        self.exec(&ctx, &mut cmd)
+            .await
+            .map_err(ProviderInvocationError::Provider)
     }
 
     #[instrument(level = "debug", skip(self, ctx, arg), fields(actor_id = ?ctx.actor, keys = ?arg))]
-    async fn set_union(&self, ctx: Context, arg: Vec<String>) -> Result<Vec<String>, String> {
+    async fn set_union(
+        &self,
+        ctx: Context,
+        arg: Vec<String>,
+    ) -> ProviderInvocationResult<Vec<String>> {
         let mut cmd = redis::Cmd::sunion(arg);
-        let values: Vec<String> = self.exec(&ctx, &mut cmd).await?;
-        Ok(values)
+        self.exec(&ctx, &mut cmd)
+            .await
+            .map_err(ProviderInvocationError::Provider)
     }
 }
 
@@ -337,153 +377,6 @@ fn get_redis_url(link_values: &[(String, String)], default_connect_url: &str) ->
         .map(|(_key, url)| url.to_owned())
         .unwrap_or_else(|| default_connect_url.to_owned())
 }
-
-#[async_trait]
-impl wasmcloud_provider_sdk::MessageDispatch for KvRedisProvider {
-    async fn dispatch<'a>(
-        &'a self,
-        ctx: Context,
-        method: String,
-        body: std::borrow::Cow<'a, [u8]>,
-    ) -> Result<Vec<u8>, ProviderInvocationError> {
-        match method.as_str() {
-            "KeyValue.Increment" => {
-                let input: IncrementRequest = ::wasmcloud_provider_sdk::deserialize(&body)?;
-                let result = self.increment(ctx, input).await.map_err(|e| {
-                    ::wasmcloud_provider_sdk::error::ProviderInvocationError::Provider(
-                        e.to_string(),
-                    )
-                })?;
-                Ok(::wasmcloud_provider_sdk::serialize(&result)?)
-            }
-            "KeyValue.Contains" => {
-                let input: String = ::wasmcloud_provider_sdk::deserialize(&body)?;
-                let result = self.contains(ctx, input).await.map_err(|e| {
-                    ::wasmcloud_provider_sdk::error::ProviderInvocationError::Provider(
-                        e.to_string(),
-                    )
-                })?;
-                Ok(::wasmcloud_provider_sdk::serialize(&result)?)
-            }
-            "KeyValue.Del" => {
-                let input: String = ::wasmcloud_provider_sdk::deserialize(&body)?;
-                let result = self.del(ctx, input).await.map_err(|e| {
-                    ::wasmcloud_provider_sdk::error::ProviderInvocationError::Provider(
-                        e.to_string(),
-                    )
-                })?;
-                Ok(::wasmcloud_provider_sdk::serialize(&result)?)
-            }
-            "KeyValue.Get" => {
-                let input: String = ::wasmcloud_provider_sdk::deserialize(&body)?;
-                let result = self.get(ctx, input).await.map_err(|e| {
-                    ::wasmcloud_provider_sdk::error::ProviderInvocationError::Provider(
-                        e.to_string(),
-                    )
-                })?;
-                Ok(::wasmcloud_provider_sdk::serialize(&result)?)
-            }
-            "KeyValue.ListAdd" => {
-                let input: ListAddRequest = ::wasmcloud_provider_sdk::deserialize(&body)?;
-                let result = self.list_add(ctx, input).await.map_err(|e| {
-                    ::wasmcloud_provider_sdk::error::ProviderInvocationError::Provider(
-                        e.to_string(),
-                    )
-                })?;
-                Ok(::wasmcloud_provider_sdk::serialize(&result)?)
-            }
-            "KeyValue.ListClear" => {
-                let input: String = ::wasmcloud_provider_sdk::deserialize(&body)?;
-                let result = self.list_clear(ctx, input).await.map_err(|e| {
-                    ::wasmcloud_provider_sdk::error::ProviderInvocationError::Provider(
-                        e.to_string(),
-                    )
-                })?;
-                Ok(::wasmcloud_provider_sdk::serialize(&result)?)
-            }
-            "KeyValue.ListRange" => {
-                let input: ListRangeRequest = ::wasmcloud_provider_sdk::deserialize(&body)?;
-                let result = self.list_range(ctx, input).await.map_err(|e| {
-                    ::wasmcloud_provider_sdk::error::ProviderInvocationError::Provider(
-                        e.to_string(),
-                    )
-                })?;
-                Ok(::wasmcloud_provider_sdk::serialize(&result)?)
-            }
-            "KeyValue.Set" => {
-                let input: SetRequest = ::wasmcloud_provider_sdk::deserialize(&body)?;
-                let result = self.set(ctx, input).await.map_err(|e| {
-                    ::wasmcloud_provider_sdk::error::ProviderInvocationError::Provider(
-                        e.to_string(),
-                    )
-                })?;
-                Ok(::wasmcloud_provider_sdk::serialize(&result)?)
-            }
-            "KeyValue.SetAdd" => {
-                let input: SetAddRequest = ::wasmcloud_provider_sdk::deserialize(&body)?;
-                let result = self.set_add(ctx, input).await.map_err(|e| {
-                    ::wasmcloud_provider_sdk::error::ProviderInvocationError::Provider(
-                        e.to_string(),
-                    )
-                })?;
-                Ok(::wasmcloud_provider_sdk::serialize(&result)?)
-            }
-            "KeyValue.SetDel" => {
-                let input: SetDelRequest = ::wasmcloud_provider_sdk::deserialize(&body)?;
-                let result = self.set_del(ctx, input).await.map_err(|e| {
-                    ::wasmcloud_provider_sdk::error::ProviderInvocationError::Provider(
-                        e.to_string(),
-                    )
-                })?;
-                Ok(::wasmcloud_provider_sdk::serialize(&result)?)
-            }
-            "KeyValue.SetIntersection" => {
-                let input: Vec<String> = ::wasmcloud_provider_sdk::deserialize(&body)?;
-                let result = self.set_intersection(ctx, input).await.map_err(|e| {
-                    ::wasmcloud_provider_sdk::error::ProviderInvocationError::Provider(
-                        e.to_string(),
-                    )
-                })?;
-                Ok(::wasmcloud_provider_sdk::serialize(&result)?)
-            }
-            "KeyValue.SetQuery" => {
-                let input: String = ::wasmcloud_provider_sdk::deserialize(&body)?;
-                let result = self.set_query(ctx, input).await.map_err(|e| {
-                    ::wasmcloud_provider_sdk::error::ProviderInvocationError::Provider(
-                        e.to_string(),
-                    )
-                })?;
-                Ok(::wasmcloud_provider_sdk::serialize(&result)?)
-            }
-            "KeyValue.SetUnion" => {
-                let input: Vec<String> = ::wasmcloud_provider_sdk::deserialize(&body)?;
-                let result = self.set_union(ctx, input).await.map_err(|e| {
-                    ::wasmcloud_provider_sdk::error::ProviderInvocationError::Provider(
-                        e.to_string(),
-                    )
-                })?;
-                Ok(::wasmcloud_provider_sdk::serialize(&result)?)
-            }
-            "KeyValue.SetClear" => {
-                let input: String = ::wasmcloud_provider_sdk::deserialize(&body)?;
-                let result = self.set_clear(ctx, input).await.map_err(|e| {
-                    ::wasmcloud_provider_sdk::error::ProviderInvocationError::Provider(
-                        e.to_string(),
-                    )
-                })?;
-                Ok(::wasmcloud_provider_sdk::serialize(&result)?)
-            }
-            _ => Err(
-                ::wasmcloud_provider_sdk::error::InvocationError::Malformed(format!(
-                    "Invalid method name {method}",
-                ))
-                .into(),
-            ),
-        }
-    }
-}
-
-impl wasmcloud_provider_sdk::Provider for KvRedisProvider {}
 
 #[cfg(test)]
 mod test {

@@ -2,6 +2,7 @@
 
 pub type InvocationResult<T> = Result<T, InvocationError>;
 pub type ProviderResult<T> = Result<T, ProviderError>;
+pub type ProviderInvocationResult<T> = Result<T, ProviderInvocationError>;
 
 /// All errors that that can be returned by a provider when it is being initialized
 #[derive(Debug, thiserror::Error)]

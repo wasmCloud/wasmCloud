@@ -252,9 +252,10 @@ impl ProviderConnection {
                                     current.record("link_name", &tracing::field::display(&inv.target.link_name));
                                     current.record("payload_size", &tracing::field::display(&inv.content_length));
                                     let inv_id = inv.id.clone();
+                                    let inv_operation = inv.operation.clone();
                                     let resp = match this.handle_rpc(provider.clone(), inv).in_current_span().await {
                                         Err(error) => {
-                                            error!(%error, "Invocation failed");
+                                            error!(%error, operation = %inv_operation, "Invocation failed");
                                             InvocationResponse{
                                                 invocation_id: inv_id,
                                                 error: Some(format!("Error when handling invocation: {error}")),
