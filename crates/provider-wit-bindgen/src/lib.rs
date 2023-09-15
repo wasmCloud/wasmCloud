@@ -4,33 +4,49 @@
 //! For example, to build a capability provider for the [wasmcloud:keyvalue contract](https://github.com/wasmCloud/interfaces/tree/main/keyvalue):
 //!
 //! ```rust,ignore
-//! wasmcloud_provider_wit_bindgen::generate!(
-//!   KeyvalueProvider,      // implementation struct
-//!   "wasmcloud:keyvalue",  // wasmcloud contract name
-//!   "keyvalue",            // wit-bindgen style configuration
-//! );
+//! wasmcloud_provider_wit_bindgen::generate!({
+//!     impl_struct: KvRedisProvider,
+//!     contract: "wasmcloud:keyvalue",
+//!     wit_bindgen_cfg: "provider-kvredis"
+//! });
 //!
 //! struct YourProvider;
 //! ```
 //!
-//! As is customary with WIT-related tooling, "keyvalue" refers to the WIT world that your component will inhabit. See [wit-bindgen tooling](https://github.com/bytecodealliance/wit-bindgen) for more information on the different forms that can be used.
+//! All content after `wit_bindgen_cfg: ` is fed to the underlying bindgen (wasmtime::component::macro). In this example, "provider-kvredis" refers to the WIT world that your component will inhabit -- expected to be found at `<project root>/wit/<your world name>.wit`. An example world file:
+//!
+//! ```rust,ignore
+//! package wasmcloud:provider-kvredis
+//!
+//! world provider-kvredis {
+//!     import wasmcloud:keyvalue/key-value
+//! }
+//! ```
+//!
+//! For more information on the options available to underlying bindgen, see the [wasmtime-component-bindgen documentation](https://docs.rs/wasmtime/latest/wasmtime/component/macro.bindgen.html).
 //!
 
 mod vendor;
 
-use vendor::wasmtime_component_macro::bindgen::{expand as expand_wasmtime_component, Config};
+use anyhow::{bail, ensure, Context};
+use tracing::{debug, warn};
+use tracing_subscriber::EnvFilter;
+use vendor::wasmtime_component_macro::bindgen::{
+    expand as expand_wasmtime_component, Config as WitBindgenConfig,
+};
 
-use std::collections::HashMap;
+use std::{collections::HashMap, str::FromStr};
 
 use heck::{ToSnakeCase, ToUpperCamelCase};
 use proc_macro2::{Ident, Punct, Spacing, Span, TokenStream, TokenTree};
 use quote::{format_ident, ToTokens, TokenStreamExt};
 use syn::{
+    braced, bracketed,
     parse::Parse,
     parse_macro_input, parse_quote,
     punctuated::Punctuated,
     visit_mut::{visit_item_mut, VisitMut},
-    FnArg, Item, ItemMod, ItemStruct, LitStr, PathSegment, ReturnType, Token, TraitItem,
+    FnArg, Item, ItemMod, ItemStruct, ItemType, LitStr, PathSegment, ReturnType, Token, TraitItem,
     TraitItemMethod,
 };
 
@@ -41,32 +57,851 @@ const EXPORTS_MODULE_NAME: &str = "exports";
 const HOST_IMPORTS_TRAIT_NAME: &str = "Host";
 
 type ImplStructName = String;
-type StructName = String;
-type WasmcloudContractName = String;
 type WitNamespaceName = String;
 type WitPackageName = String;
-type WitInterfaceName = String;
+/// '.' delimited module path to an existing WIT interface (ex. 'wasmcloud.keyvalue.key_value')
+type WitInterfacePath = String;
+type WitFunctionName = String;
 type FullModulePath = String;
+type WasmcloudContract = String;
+type LatticeExposedInterface = (WitNamespaceName, WitPackageName, WitFunctionName);
+
+type StructName = String;
 type StructLookup = HashMap<StructName, (Punctuated<PathSegment, Token![::]>, ItemStruct)>;
 
+type TypeName = String;
+type TypeLookup = HashMap<TypeName, (Punctuated<PathSegment, Token![::]>, ItemType)>;
+
 /// Inputs to the wit_bindgen_wasmcloud::provider::binary::generate! macro
-struct MacroConfig {
+struct ProviderBindgenConfig {
+    /// The struct that will contain the implementation of the provider
     pub(crate) impl_struct: ImplStructName,
-    pub(crate) contract: WasmcloudContractName,
-    pub(crate) bindgen_cfg: Config,
+
+    /// The wasmCloud contract that the provider fulfills
+    pub(crate) contract: WasmcloudContract,
+
+    /// WIT namespace of the provider WIT
+    pub(crate) wit_ns: Option<WitNamespaceName>,
+
+    /// WIT package of the provider
+    pub(crate) wit_pkg: Option<WitPackageName>,
+
+    /// Interfaces that will be exposed onto the lattice.
+    /// If left empty, all available interfaces will be exposed
+    pub(crate) exposed_interface_allow_list: Vec<LatticeExposedInterface>,
+
+    /// Interfaces that must explicitly not be exposed onto the lattice
+    pub(crate) exposed_interface_deny_list: Vec<LatticeExposedInterface>,
+
+    /// wit-bindgen configuration that is passed straight through (uses vendored wit-bindgen)
+    pub(crate) wit_bindgen_cfg: WitBindgenConfig,
+
+    /// Translation strategy for functions on imported interfaces when generating lattice data structures and code
+    pub(crate) import_fn_lattice_translation_strategy: WitFunctionLatticeTranslationStrategy,
+
+    /// Translation strategy for functions on exported interfaces when generating lattice data structures and code
+    pub(crate) export_fn_lattice_translation_strategy: WitFunctionLatticeTranslationStrategy,
 }
 
-impl Parse for MacroConfig {
+/// Keywords that are used by this macro
+mod keywords {
+    syn::custom_keyword!(contract);
+    syn::custom_keyword!(wit_namespace);
+    syn::custom_keyword!(wit_package);
+    syn::custom_keyword!(impl_struct);
+    syn::custom_keyword!(wit_bindgen_cfg);
+    syn::custom_keyword!(import_fn_lattice_translation_strategy);
+    syn::custom_keyword!(export_fn_lattice_translation_strategy);
+    syn::custom_keyword!(exposed_interface_allow_list);
+    syn::custom_keyword!(exposed_interface_deny_list);
+}
+
+/// Wrapper for a list of qualified WIT function names
+#[derive(Debug, Default)]
+struct WitFnList {
+    inner: Vec<LatticeExposedInterface>,
+}
+
+impl From<WitFnList> for Vec<LatticeExposedInterface> {
+    fn from(value: WitFnList) -> Self {
+        value.inner
+    }
+}
+
+impl Parse for WitFnList {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
-        let impl_struct: ImplStructName = input.parse::<syn::Ident>()?.to_string();
-        input.parse::<Token![,]>()?;
-        let contract: WasmcloudContractName = input.parse::<syn::LitStr>()?.value();
-        input.parse::<Token![,]>()?;
-        let bindgen_cfg = input.parse::<Config>()?;
-        syn::Result::Ok(MacroConfig {
-            impl_struct,
-            contract,
-            bindgen_cfg,
+        let mut inner = Vec::new();
+        let names;
+        bracketed!(names in input);
+        let fns = Punctuated::<LitStr, Token![,]>::parse_terminated(&names)?;
+        for name_ident in fns {
+            let name = name_ident.value();
+            let mut split = name.split(':');
+            match (
+                split.nth(0),
+                split.nth(1),
+                split.nth(1).and_then(|rhs| rhs.split('/').nth(1)),
+            ) {
+                (Some(ns), Some(pkg), Some(fn_name)) => {
+                    debug!("adding lattice exposed interface {ns}:{pkg}/{fn_name}");
+                    inner.push((ns.into(), pkg.into(), fn_name.into()));
+                }
+                _ => {
+                    return syn::Result::Err(
+                        syn::Error::new(
+                            Span::call_site(),
+                            "allow/deny list entries must be of the form \"<ns>:<package>/<interface>\", failed to process [\"{name}\"]"
+                        )
+                    );
+                }
+            }
+        }
+        Ok(Self { inner })
+    }
+}
+
+/// Options that can be used to perform bindgen
+#[allow(clippy::large_enum_variant)]
+enum ProviderBindgenConfigOption {
+    /// Wasmcloud contract that should be the generated provider
+    Contract(syn::LitStr),
+
+    /// Struct that will implement the WIT world
+    ImplStruct(syn::Ident),
+
+    /// WIT namespace name
+    WitNamespace(syn::LitStr),
+
+    /// WIT package name
+    WitPackage(syn::LitStr),
+
+    /// Wit Bindgen configuration (mostly passed on directly to vendored bindgen)
+    WitBindgenCfg(WitBindgenConfig),
+
+    /// '<namespace>:<package>/<interface>' combinations that are allowed to be exposed over the lattice
+    ///
+    /// If no interfaces are specified, all are allowed.
+    /// If one or more interfaces are specified, then only those interfaces will be exposed over the lattice.
+    ///
+    /// If combined with the deny list, this listing will be used first (creating the list of allowed fns).
+    ExposedFnAllowList(WitFnList),
+
+    /// '<namespace>:<package>/<interface>' combinations that are explicitly disallowed from being exposed over the lattice.
+    ///
+    /// If combined with the allow list, this listing will be used last (filtering the list of allowed fns).
+    ExposedFnDenyList(WitFnList),
+
+    /// WIT Function lattice translation strategy to use on imported WIT interfaces
+    ImportFnLatticeTranslationStrategy(WitFunctionLatticeTranslationStrategy),
+
+    /// WIT Function lattice translation strategy to use on exported WIT interfaces
+    ExportFnLatticeTranslationStrategy(WitFunctionLatticeTranslationStrategy),
+}
+
+impl Parse for ProviderBindgenConfigOption {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let l = input.lookahead1();
+        if l.peek(keywords::contract) {
+            input.parse::<keywords::contract>()?;
+            input.parse::<Token![:]>()?;
+            Ok(ProviderBindgenConfigOption::Contract(input.parse()?))
+        } else if l.peek(keywords::impl_struct) {
+            input.parse::<keywords::impl_struct>()?;
+            input.parse::<Token![:]>()?;
+            Ok(ProviderBindgenConfigOption::ImplStruct(input.parse()?))
+        } else if l.peek(keywords::exposed_interface_allow_list) {
+            input.parse::<keywords::exposed_interface_allow_list>()?;
+            input.parse::<Token![:]>()?;
+            Ok(ProviderBindgenConfigOption::ExposedFnAllowList(
+                input.parse()?,
+            ))
+        } else if l.peek(keywords::exposed_interface_deny_list) {
+            input.parse::<keywords::exposed_interface_deny_list>()?;
+            input.parse::<Token![:]>()?;
+            Ok(ProviderBindgenConfigOption::ExposedFnDenyList(
+                input.parse()?,
+            ))
+        } else if l.peek(keywords::wit_bindgen_cfg) {
+            input.parse::<keywords::wit_bindgen_cfg>()?;
+            input.parse::<Token![:]>()?;
+            Ok(ProviderBindgenConfigOption::WitBindgenCfg(input.parse()?))
+        } else if l.peek(keywords::wit_namespace) {
+            input.parse::<keywords::wit_namespace>()?;
+            input.parse::<Token![:]>()?;
+            Ok(ProviderBindgenConfigOption::WitNamespace(input.parse()?))
+        } else if l.peek(keywords::wit_package) {
+            input.parse::<keywords::wit_package>()?;
+            input.parse::<Token![:]>()?;
+            Ok(ProviderBindgenConfigOption::WitPackage(input.parse()?))
+        } else if l.peek(keywords::import_fn_lattice_translation_strategy) {
+            input.parse::<keywords::import_fn_lattice_translation_strategy>()?;
+            input.parse::<Token![:]>()?;
+            Ok(ProviderBindgenConfigOption::ImportFnLatticeTranslationStrategy(input.parse()?))
+        } else if l.peek(keywords::export_fn_lattice_translation_strategy) {
+            input.parse::<keywords::import_fn_lattice_translation_strategy>()?;
+            input.parse::<Token![:]>()?;
+            Ok(ProviderBindgenConfigOption::ExportFnLatticeTranslationStrategy(input.parse()?))
+        } else {
+            Err(syn::Error::new(
+                Span::call_site(),
+                "unrecognized keyword provided to wamscloud_provider_wit_bindgen",
+            ))
+        }
+    }
+}
+
+/// The strategy used to expose a function and its arguments on the wasmCloud lattice
+#[derive(Debug, Default, PartialEq, Eq, Clone)]
+enum WitFunctionLatticeTranslationStrategy {
+    /// Automatically determine how to bundle a function and its arguments to be sent over the lattice
+    ///
+    /// Generally, this means detecting whether the function has a single argument or multiple
+    /// and choosing whether to send that single argument or bundle up all arguments into a generated Invocation struct.
+    #[default]
+    Auto,
+
+    /// First argument usage assumes that every function that should be exported to the lattice
+    /// has *one* argument, which is the object that should be serialized and set out onto the lattice.
+    ///
+    /// For example, the following WIT:
+    ///
+    /// ```ignore
+    /// interface example {
+    ///   f: func(input: string);
+    ///
+    ///   record g-request {
+    ///     first: string;
+    ///     second: u32;
+    ///     third: bool;
+    ///   }
+    ///
+    ///   g: func(input: g-request);
+    ///
+    ///   h: func(first: bool, second: string);
+    /// }
+    /// ```
+    ///
+    /// Under this setting, bindgen will produce an error on function `h`, as it contains multiple arguments
+    FirstArgument,
+
+    /// Argument bundling assumes that every function that should be exported to the lattice
+    /// has *one or more* arguments, which are bundled into an object that should be serialized and set out onto the lattice.
+    ///
+    /// For example, the following WIT:
+    ///
+    /// ```ignore
+    /// package examples:arg-bundle;
+    ///
+    /// interface example {
+    ///   f: func(input: string);
+    ///
+    ///   record g-request {
+    ///     first: string;
+    ///     second: u32;
+    ///     third: bool;
+    ///   }
+    ///
+    ///   g: func(input: g-request);
+    ///
+    ///   h: func(first: bool, second: string);
+    /// }
+    /// ```
+    ///
+    /// Under this setting, bindgen will not produce an error on any function, but will be slightly
+    /// inefficient as it will wrap `f` in a generated `ExamplesArgBundleFInvocation` struct (containing one member, `input`).
+    BundleArguments,
+}
+
+impl WitFunctionLatticeTranslationStrategy {
+    /// Translate a wit-bindgen generated trait function for use across the lattice
+    fn translate_import_fn_for_lattice(
+        &self,
+        wit_iface_path: WitInterfacePath,
+        trait_method: &TraitItemMethod,
+        struct_lookup: &StructLookup,
+        type_lookup: &TypeLookup,
+    ) -> anyhow::Result<(WitInterfacePath, LatticeMethod)> {
+        let lattice_method_name = LitStr::new(
+            format!(
+                "{}.{}",
+                wit_iface_path
+                    .split(".")
+                    .last()
+                    .map(ToUpperCamelCase::to_upper_camel_case)
+                    .with_context(|| format!(
+                        "failed to retrieve WIT iface name from path [{}]",
+                        wit_iface_path
+                    ))?,
+                trait_method.sig.ident.to_string().to_upper_camel_case()
+            )
+            .as_ref(),
+            // TODO: extract contract/package name from the context for the general case
+            Span::call_site(),
+        );
+
+        match self {
+            WitFunctionLatticeTranslationStrategy::Auto => match trait_method.sig.inputs.len() {
+                0 | 1 => Self::translate_import_fn_via_first_arg(
+                    wit_iface_path,
+                    lattice_method_name,
+                    trait_method,
+                    struct_lookup,
+                    type_lookup,
+                ),
+                _ => Self::translate_import_fn_via_bundled_args(
+                    wit_iface_path,
+                    lattice_method_name,
+                    trait_method,
+                    struct_lookup,
+                    type_lookup,
+                ),
+            },
+            WitFunctionLatticeTranslationStrategy::FirstArgument => {
+                Self::translate_import_fn_via_first_arg(
+                    wit_iface_path,
+                    lattice_method_name,
+                    trait_method,
+                    struct_lookup,
+                    type_lookup,
+                )
+            }
+            WitFunctionLatticeTranslationStrategy::BundleArguments => {
+                Self::translate_import_fn_via_bundled_args(
+                    wit_iface_path,
+                    lattice_method_name,
+                    trait_method,
+                    struct_lookup,
+                    type_lookup,
+                )
+            }
+        }
+    }
+
+    /// Translate a function for use on the lattice via the first argument.
+    /// Functions that cannot be translated properly via this method will fail.
+    fn translate_import_fn_via_first_arg(
+        wit_iface_path: WitInterfacePath,
+        lattice_method_name: LitStr,
+        trait_method: &TraitItemMethod,
+        _struct_lookup: &StructLookup,
+        _type_lookup: &TypeLookup,
+    ) -> anyhow::Result<(WitInterfacePath, LatticeMethod)> {
+        // It is possible to force first argument style handling, so double check
+        ensure!(
+            trait_method.sig.inputs.len() == 1,
+            "forcing translation of first arg for trait method [{}] that has more than one arg",
+            trait_method.sig.ident,
+        );
+
+        // Get the first function argument, which will become the type sent across the lattice
+        // Get the remaining tokens after the argument name and colon type name from the first argument
+        let mut first_arg_tokens = trait_method
+            .sig
+            .inputs
+            .iter()
+            .nth(0)
+            .context(format!(
+                "trait method [{}] has no arguments yet is attempting to translate via first arg",
+                trait_method.sig.ident,
+            ))?
+            .to_token_stream()
+            .into_iter();
+
+        let arg_name = if let Some(TokenTree::Ident(n)) = first_arg_tokens.nth(0) {
+            n
+        } else {
+            bail!(
+                "failed to get first arg name for trait method [{}]",
+                trait_method.sig.ident.to_string()
+            );
+        };
+
+        let type_name = first_arg_tokens.skip(1).collect::<TokenStream>();
+
+        Ok((
+            wit_iface_path.to_string().to_upper_camel_case(),
+            LatticeMethod {
+                lattice_method_name,
+                type_name,
+                func_name: trait_method.sig.ident.clone(),
+                struct_members: None,
+                invocation_arg_names: vec![arg_name],
+                invocation_return: trait_method.sig.output.clone(),
+            },
+        ))
+    }
+
+    /// Translate a function for use on the lattice via bundled args.
+    /// Functions that cannot be translated properly via this method will fail.
+    fn translate_import_fn_via_bundled_args(
+        wit_iface_name: WitInterfacePath,
+        lattice_method_name: LitStr,
+        trait_method: &TraitItemMethod,
+        struct_lookup: &StructLookup,
+        type_lookup: &TypeLookup,
+    ) -> anyhow::Result<(WitInterfacePath, LatticeMethod)> {
+        // Create an identifier for the new struct that will represent the function invocation coming
+        // across the lattice, in a <CamelCaseModule><CamelCaseInterface><CamelCaseFunctionName> pattern
+        // (ex. MessagingConsumerRequestMultiInvocation)
+        let struct_name = format_ident!(
+            "{}{}Invocation",
+            wit_iface_name.to_upper_camel_case(),
+            trait_method.sig.ident.to_string().to_upper_camel_case()
+        );
+
+        // Build a list of invocation arguments similar to the structs
+        let mut invocation_arg_names: Vec<Ident> = Vec::new();
+
+        // Transform the members and remove any lifetimes by manually converting references to owned data
+        // (i.e. doing things like converting a type like &str to String mechanically)
+        let struct_members = trait_method
+                .sig
+                // Get all function inputs for the function signature
+                .inputs
+                .iter()
+                .enumerate()
+                .fold(TokenStream::new(), |mut tokens, (idx, arg)| {
+                    // If we're not the first index, add a comma
+                    if idx != 0 {
+                        tokens.append_all([&TokenTree::Punct(Punct::new(',', proc_macro2::Spacing::Alone))]);
+                    }
+
+                    // Match on a single input argument in the function signature,
+                    // converting known types to ones that can be used as invocation struct members.
+                    match &arg
+                            .to_token_stream()
+                            .into_iter()
+                            .collect::<Vec<TokenTree>>()[..]
+                        {
+                            // pattern: 'name: &T'
+                            simple_ref @ &[
+                                TokenTree::Ident(ref n), // name
+                                TokenTree::Punct(_), // :
+                                TokenTree::Punct(ref p), // &
+                                TokenTree::Ident(ref t), // T
+                            ] if p.as_char() == '&' => {
+                                // Save the invocation argument for later
+                                invocation_arg_names.push(n.clone());
+
+                                // Match the type that came out of the simple case
+                                match t.to_string().as_str() {
+                                    // A &str
+                                    "str" => {
+                                        tokens.append_all([
+                                            &simple_ref[0],
+                                            &simple_ref[1],
+                                            // replace the type with an owned string
+                                            &TokenTree::Ident(Ident::new("String", t.span())),
+                                        ]);
+                                    },
+
+                                    // Unexpected non-standard type as reference
+                                    // (likely a known custom type generated by wit-bindgen)
+                                    _ => {
+
+                                        // Add a modified group of tokens to the list for the struct
+                                        tokens.append_all([
+                                            &simple_ref[0], // name
+                                            &simple_ref[1], // colon
+                                        ]);
+
+                                        let arg_type = &simple_ref[3].to_string();
+
+                                        // If we have a T that this module defined, we must use the full path to it
+                                        // if not, it is likely a builtin, so we can use it directly
+                                        if let Some((struct_path, _)) = struct_lookup.get(arg_type) { // struct
+                                            tokens.append_all([ struct_path.to_token_stream() ]);
+                                        } else if let Some((type_path, _)) = type_lookup.get(arg_type) { // type
+                                            tokens.append_all([ type_path.to_token_stream() ]);
+                                        } else {
+                                            tokens.append_all([ &simple_ref[3]]);
+                                        };
+                                    }
+                                }
+                            },
+
+                            // pattern: 'name: Wrapper<&T>'
+                            wrapped_ref @ &[
+                                TokenTree::Ident(ref n),  // name
+                                TokenTree::Punct(_),  // :
+                                TokenTree::Ident(_),  // Wrapper
+                                TokenTree::Punct(ref p),  // <
+                                TokenTree::Punct(ref p2), // &
+                                ..,  // T
+                                TokenTree::Punct(_) // >
+                            ] if p.as_char() == '<' && p2.as_char() == '&' => {
+                                // Save the invocation argument for later
+                                invocation_arg_names.push(n.clone());
+
+                                // Slice out the parts in between the < ... >
+                                let type_section = &wrapped_ref[4..wrapped_ref.len()]; // TODO: lint
+
+                                match type_section {
+                                    // case: str (ex. Vec<&str>)
+                                    [
+                                        TokenTree::Punct(_), // <
+                                        TokenTree::Ident(ref n),
+                                        TokenTree::Punct(_) // >
+                                    ] if n.to_string().as_str() == "str" => {
+                                        tokens.append_all([
+                                            &wrapped_ref[0], // name
+                                            &wrapped_ref[1], // colon
+                                            &wrapped_ref[2], // wrapper
+                                            &wrapped_ref[3], // <
+                                            &TokenTree::Ident(Ident::new("String", n.span())),
+                                            &wrapped_ref[5], // >
+                                        ]);
+                                    },
+
+                                    // case: [u8] (ex. Vec<&str>)
+                                    [
+                                        TokenTree::Punct(_), // <
+                                        TokenTree::Group(g),
+                                        TokenTree::Punct(_), // >
+                                    ] if g.to_string().as_str() == "[u8]" => {
+                                        tokens.append_all([
+                                            &wrapped_ref[0], // name
+                                            &wrapped_ref[1], // colon
+                                            &wrapped_ref[2], // wrapper
+                                            &wrapped_ref[3], // <
+                                            &TokenTree::Ident(Ident::new("Vec", Span::call_site())), // Vec
+                                            &TokenTree::Punct(Punct::new('<', Spacing::Joint)), // <
+                                            &TokenTree::Ident(Ident::new("u8", Span::call_site())), // u8
+                                            &TokenTree::Punct(Punct::new('>', Spacing::Joint)), // >
+                                            &TokenTree::Punct(Punct::new('>', Spacing::Joint)), // >
+                                        ]);
+                                    },
+
+                                    rest =>  {
+                                        let arg_type = &rest[1].to_string();
+
+                                        // If we have a < T >, and T is a struct this module defined, we must use the full path to it
+                                        // if not, it is likely a builtin, so we can use it directly
+                                        if let Some((struct_path, _)) = struct_lookup.get(arg_type) {
+                                            tokens.append_all(&wrapped_ref[0..5]);
+                                            tokens.append_all([ struct_path.to_token_stream() ]);
+                                            tokens.append_all(&wrapped_ref[6..]);
+                                        } else if let Some((type_path, _)) = type_lookup.get(arg_type) {
+                                            tokens.append_all(&wrapped_ref[0..5]);
+                                            tokens.append_all([ type_path.to_token_stream() ]);
+                                            tokens.append_all(&wrapped_ref[6..]);
+                                        } else {
+                                            tokens.append_all(wrapped_ref);
+                                        };
+                                    },
+                                }
+                            },
+
+                            // pattern: unknown (any T)
+                            ts => {
+                                // Save the first token (which should be the argument name) as an invocation argument for later
+                                if let TokenTree::Ident(name) = &ts[0] {
+                                    invocation_arg_names.push(name.clone());
+                                }
+
+                                // With a completely unknown type, we should attempt to replace it with a qualified type name
+                                match &ts[2] {
+                                    // If the third token (after the arg name and ':') has a type we know, fill in the qualified name
+                                    TokenTree::Ident(name) if type_lookup.contains_key(&name.to_string()) => {
+                                        let qualified_type = type_lookup.get(&name.to_string()).unwrap().0.to_token_stream();
+                                        tokens.append_all(&ts[0..2]);
+                                        tokens.append_all(qualified_type);
+                                        tokens.append_all(&ts[3..]);
+                                    }
+                                    // Ignore types that aren't in some lookup
+                                    _ => tokens.append_all(ts)
+                                }
+                            }
+                        }
+
+                    tokens
+                });
+
+        Ok((
+            wit_iface_name.to_string().to_upper_camel_case(),
+            LatticeMethod {
+                lattice_method_name,
+                type_name: struct_name.to_token_stream(),
+                struct_members: Some(struct_members),
+                func_name: trait_method.sig.ident.clone(),
+                invocation_arg_names,
+                invocation_return: trait_method.sig.output.clone(),
+            },
+        ))
+    }
+
+    /// Translate an exported WIT function automatically by detecting the number of arguments
+    fn translate_export_fn_for_lattice(
+        &self,
+        iface: &wit_parser::Interface,
+        iface_fn_name: &String,
+        iface_fn: &wit_parser::Function,
+        cfg: &ProviderBindgenConfig,
+    ) -> anyhow::Result<TokenStream> {
+        match self {
+            WitFunctionLatticeTranslationStrategy::Auto => {
+                match &iface_fn.params.as_slice() {
+                    [] => {
+                        bail!("exported functions with no arguments are not yet supported");
+                    }
+                    [(arg_name, arg_type)] => {
+                        // If there is one input, we can use it assuming it is the message being sent out onto the lattice
+                        Self::translate_export_fn_via_first_arg(
+                            iface,
+                            iface_fn_name,
+                            arg_name,
+                            arg_type,
+                            cfg,
+                        )
+                    }
+                    // for n > 1 inputs, we can attempt bundling the arguments into one object
+                    _ => Self::translate_export_fn_via_bundled_args(
+                        iface,
+                        iface_fn_name,
+                        iface_fn,
+                        cfg,
+                    ),
+                }
+            }
+            WitFunctionLatticeTranslationStrategy::FirstArgument => {
+                if let [(arg_name, arg_type)] = &iface_fn.params.as_slice() {
+                    Self::translate_export_fn_via_first_arg(
+                        iface,
+                        iface_fn_name,
+                        arg_name,
+                        arg_type,
+                        cfg,
+                    )
+                } else {
+                    bail!("function parameters for interface function {iface_fn_name} have more than one argument");
+                }
+            }
+            WitFunctionLatticeTranslationStrategy::BundleArguments => {
+                Self::translate_export_fn_via_bundled_args(iface, iface_fn_name, iface_fn, cfg)
+            }
+        }
+    }
+
+    /// Translate an exported WIT function via first argument
+    fn translate_export_fn_via_first_arg(
+        iface: &wit_parser::Interface,
+        iface_fn_name: &str,
+        arg_name: &str,
+        arg_type: &wit_parser::Type,
+        cfg: &ProviderBindgenConfig,
+    ) -> anyhow::Result<TokenStream> {
+        let rust_type = match arg_type {
+            wit_parser::Type::Bool => "bool",
+            wit_parser::Type::U8 => "u8",
+            wit_parser::Type::U16 => "u16",
+            wit_parser::Type::U32 => "u32",
+            wit_parser::Type::U64 => "u64",
+            wit_parser::Type::S8 => "i8",
+            wit_parser::Type::S16 => "i16",
+            wit_parser::Type::S32 => "i32",
+            wit_parser::Type::S64 => "i64",
+            wit_parser::Type::Float32 => "f32",
+            wit_parser::Type::Float64 => "f64",
+            wit_parser::Type::Char => "char",
+            wit_parser::Type::String => "String",
+            wit_parser::Type::Id(tydef) => {
+                let type_def = &cfg.wit_bindgen_cfg.resolve.types[*tydef];
+                if let Some(name) = &type_def.name {
+                    name.as_str()
+                } else {
+                    panic!(
+                        r#"
+Un-named type detected on argument while parsing interface [{}].
+Please ensure that types for exported interface functions (normally a single record type representing a message to be sent on the lattice) are specified.
+"#,
+                        iface.name.clone().unwrap_or("<unknown>".into()),
+                    )
+                }
+            }
+        };
+
+        let fn_name = Ident::new(iface_fn_name.to_snake_case().as_str(), Span::call_site());
+
+        let lattice_method = LitStr::new(
+            format!("Message.{}", iface_fn_name.to_upper_camel_case()).as_str(),
+            Span::call_site(),
+        );
+
+        let arg_name_ident = Ident::new(arg_name, Span::call_site());
+        let arg_type_ident = Ident::new(rust_type, Span::call_site());
+
+        let contract_ident = LitStr::new(&cfg.contract, Span::call_site());
+
+        Ok(quote::quote!(
+            async fn #fn_name(
+                &self,
+                #arg_name_ident: #arg_type_ident,
+            ) -> Result<(), ::wasmcloud_provider_sdk::error::ProviderInvocationError> {
+                let connection = ::wasmcloud_provider_sdk::provider_main::get_connection();
+                let client = connection.get_rpc_client();
+                let response = client
+                    .send(
+                        ::wasmcloud_provider_sdk::core::WasmCloudEntity {
+                            public_key: self.ld.provider_id.clone(),
+                            link_name: self.ld.link_name.clone(),
+                            contract_id: #contract_ident.to_string(),
+                        },
+                        ::wasmcloud_provider_sdk::core::WasmCloudEntity {
+                            public_key: self.ld.actor_id.clone(),
+                            ..Default::default()
+                        },
+                        #lattice_method,
+                        ::wasmcloud_provider_sdk::serialize(&#arg_name_ident)?,
+                    )
+                    .await?;
+
+                if let Some(err) = response.error {
+                    Err(::wasmcloud_provider_sdk::error::ProviderInvocationError::Provider(err.to_string()))
+                } else {
+                    Ok(())
+                }
+            }
+        ))
+    }
+
+    /// Translate an exported WIT function via bundled arguments
+    fn translate_export_fn_via_bundled_args(
+        iface: &wit_parser::Interface,
+        _iface_fn_name: &str,
+        _iface_fn: &wit_parser::Function,
+        _cfg: &ProviderBindgenConfig,
+    ) -> anyhow::Result<TokenStream> {
+        bail!(
+            r#"[warn] Functions on exported interfaces must only accept one argument, normally a record type that can be sent out on the lattice. Please modify the corresponding WIT file that contains interface [{}]"#,
+            iface.name.clone().unwrap_or("<unknown>".into())
+        );
+    }
+}
+
+impl FromStr for WitFunctionLatticeTranslationStrategy {
+    type Err = std::io::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "auto" => Ok(Self::Auto),
+            "bundle-arguments" => Ok(Self::BundleArguments),
+            "first-argument" => Ok(Self::FirstArgument),
+            _ => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "failed",
+            )),
+        }
+    }
+}
+
+impl Parse for WitFunctionLatticeTranslationStrategy {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let key = input.parse::<LitStr>()?;
+        Self::from_str(key.value().as_str())
+            .map_err(|e| syn::Error::new::<std::io::Error>(Span::call_site(), e))
+    }
+}
+
+impl Parse for ProviderBindgenConfig {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let call_site = Span::call_site();
+        // Ensure the configuration starts with '{' as it should be an object
+        if !input.peek(syn::token::Brace) {
+            return Err(syn::Error::new::<String>(
+                call_site,
+                "bindgen configuration should start with a brace ('{')".into(),
+            ));
+        }
+
+        // Expect and parse a braced set of bindgen configuration options
+        let values;
+        braced!(values in input);
+        let entries =
+            Punctuated::<ProviderBindgenConfigOption, Token![,]>::parse_terminated(&values)?;
+
+        // Gather members of bindgen
+        let mut contract: Option<WasmcloudContract> = None;
+        let mut impl_struct: Option<ImplStructName> = None;
+        let mut wit_ns: Option<WitNamespaceName> = None;
+        let mut wit_pkg: Option<WitPackageName> = None;
+        let mut wit_bindgen_cfg: Option<WitBindgenConfig> = None;
+        let mut import_fn_lattice_translation_strategy: Option<
+            WitFunctionLatticeTranslationStrategy,
+        > = None;
+        let mut export_fn_lattice_translation_strategy: Option<
+            WitFunctionLatticeTranslationStrategy,
+        > = None;
+        let mut exposed_interface_allow_list: Option<WitFnList> = None;
+        let mut exposed_interface_deny_list: Option<WitFnList> = None;
+
+        // For each successfully parsed configuration entry in the map, build the appropriate bindgen option
+        for entry in entries.into_pairs() {
+            match entry.into_value() {
+                ProviderBindgenConfigOption::Contract(c) => {
+                    contract = Some(c.value());
+                }
+                ProviderBindgenConfigOption::WitNamespace(ns) => {
+                    wit_ns = Some(ns.value());
+                }
+                ProviderBindgenConfigOption::WitPackage(pkg) => {
+                    wit_pkg = Some(pkg.value());
+                }
+                ProviderBindgenConfigOption::ExposedFnAllowList(list) => {
+                    exposed_interface_allow_list = Some(list)
+                }
+                ProviderBindgenConfigOption::ExposedFnDenyList(list) => {
+                    exposed_interface_deny_list = Some(list)
+                }
+                ProviderBindgenConfigOption::ImplStruct(s) => impl_struct = Some(s.to_string()),
+                ProviderBindgenConfigOption::WitBindgenCfg(cfg) => {
+                    wit_bindgen_cfg = Some(cfg);
+                }
+                ProviderBindgenConfigOption::ImportFnLatticeTranslationStrategy(strat) => {
+                    import_fn_lattice_translation_strategy = Some(strat);
+                }
+                ProviderBindgenConfigOption::ExportFnLatticeTranslationStrategy(strat) => {
+                    export_fn_lattice_translation_strategy = Some(strat);
+                }
+            }
+        }
+
+        // Build the bindgen configuration from the parsed parts
+        syn::Result::Ok(ProviderBindgenConfig {
+            impl_struct: impl_struct.ok_or_else(|| {
+                syn::Error::new(
+                    call_site,
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "missing/invalid 'impl_struct' bindgen option",
+                    ),
+                )
+            })?,
+            contract: contract.ok_or_else(|| {
+                syn::Error::new(
+                    call_site,
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "missing/invalid 'contract' bindgen option",
+                    ),
+                )
+            })?,
+            wit_ns,
+            wit_pkg,
+            exposed_interface_allow_list: exposed_interface_allow_list.unwrap_or_default().into(),
+            exposed_interface_deny_list: exposed_interface_deny_list.unwrap_or_default().into(),
+            wit_bindgen_cfg: wit_bindgen_cfg.ok_or_else(|| {
+                syn::Error::new(
+                    call_site,
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "missing/invalid 'wit_bindgen_cfg' arguments",
+                    ),
+                )
+            })?,
+            import_fn_lattice_translation_strategy: import_fn_lattice_translation_strategy
+                .unwrap_or_default(),
+            export_fn_lattice_translation_strategy: export_fn_lattice_translation_strategy
+                .unwrap_or_default(),
         })
     }
 }
@@ -74,154 +909,66 @@ impl Parse for MacroConfig {
 /// This macro generates functionality necessary to use a WIT-enabled Rust providers (binaries that are managed by the host)
 #[proc_macro]
 pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    let cfg = parse_macro_input!(input as MacroConfig);
-    let contract_ident = LitStr::new(cfg.contract.as_str(), Span::call_site());
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .init();
+
+    let cfg = parse_macro_input!(input as ProviderBindgenConfig);
+    let contract_ident = LitStr::new(&cfg.contract, Span::call_site());
 
     // Parse the WIT for files (a second time, in addition to what has been done to generate)
     let mut exported_iface_invocation_methods: Vec<TokenStream> = Vec::new();
-    for (_, world) in cfg.bindgen_cfg.resolve.worlds.iter() {
+    for (_, world) in cfg.wit_bindgen_cfg.resolve.worlds.iter() {
         for (world_item, _) in world.exports.iter() {
             if let wit_parser::WorldKey::Interface(iface_id) = world_item {
-                let iface = &cfg.bindgen_cfg.resolve.interfaces[*iface_id];
-
-                // For each function in an exported interface,
-                // we'll need to generate a method on the eventual InvocationHandler
-                // that will be built later.
-                //
-                // We expect functions on exported interface to consist of *one* argument which is
-                // normally a struct (WIT record type) what represents the information to be sent out on the lattice, ex.:
-                //
-                //  ```
-                //  interface handler {
-                //       use types.{some-message}
-                //       handle-message: func(msg: some-message) -> result<_, string>
-                //   }
-                //  ```
+                let iface = &cfg.wit_bindgen_cfg.resolve.interfaces[*iface_id];
                 for (iface_fn_name, iface_fn) in iface.functions.iter() {
-                    // Since we expect  inputs to the
-                    let (arg_name, arg_rust_type): (&str, String) = match &iface_fn
-                        .params
-                        .as_slice()
-                    {
-                        [(arg_name, arg_type_raw)] => {
-                            let rust_type = match arg_type_raw {
-                                wit_parser::Type::Bool => "bool",
-                                wit_parser::Type::U8 => "u8",
-                                wit_parser::Type::U16 => "u16",
-                                wit_parser::Type::U32 => "u32",
-                                wit_parser::Type::U64 => "u64",
-                                wit_parser::Type::S8 => "i8",
-                                wit_parser::Type::S16 => "i16",
-                                wit_parser::Type::S32 => "i32",
-                                wit_parser::Type::S64 => "i64",
-                                wit_parser::Type::Float32 => "f32",
-                                wit_parser::Type::Float64 => "f64",
-                                wit_parser::Type::Char => "char",
-                                wit_parser::Type::String => "String",
-                                wit_parser::Type::Id(tydef) => {
-                                    let type_def = &cfg.bindgen_cfg.resolve.types[*tydef];
-                                    if let Some(name) = &type_def.name {
-                                        name.as_str()
-                                    } else {
-                                        panic!(
-                                            r#"
-Un-named type detected on argument while parsing interface [{}].
-Please ensure that types for exported interface functions (normally a single record type representing a message to be sent on the lattice) are specified.
-"#,
-                                            iface.name.clone().unwrap_or("<unknown>".into()),
-                                        )
-                                    }
-                                }
-                            };
-
-                            // At this point we know there's actually only one
-                            (arg_name, rust_type.to_upper_camel_case())
-                        }
-                        // Currently, interface functions are only allowed to accept
-                        // a single parameter, normally a record, which represent a message to be sent out on the lattice
-                        _ => {
-                            panic!(
-                                r#"
-Functions on exported interfaces must only accept one argument, normally a a record type that can be sent
-out on the lattice. Please modify the corresponding WIT file that contains interface [{}]
-"#,
-                                iface.name.clone().unwrap_or("<unknown>".into())
-                            );
-                        }
-                    };
-
-                    let fn_name =
-                        Ident::new(iface_fn_name.to_snake_case().as_str(), Span::call_site());
-
-                    let lattice_method = LitStr::new(
-                        format!("Message.{}", iface_fn_name.to_upper_camel_case()).as_str(),
-                        Span::call_site(),
-                    );
-
-                    let arg_name_ident = Ident::new(arg_name, Span::call_site());
-                    let arg_type_ident = Ident::new(arg_rust_type.as_str(), Span::call_site());
+                    // For each function in an exported interface,
+                    // we'll need to generate a method on the eventual InvocationHandler
+                    // that will be built later.
+                    //
+                    // We expect functions on exported interface to consist of *one* argument which is
+                    // normally a struct (WIT record type) what represents the information to be sent out on the lattice, ex.:
+                    //
+                    //  ```
+                    //  interface handler {
+                    //       use types.{some-message}
+                    //       handle-message: func(msg: some-message) -> result<_, string>
+                    //   }
+                    //  ```
+                    let invocation_method_tokens = cfg
+                        .export_fn_lattice_translation_strategy
+                        .translate_export_fn_for_lattice(iface, iface_fn_name, iface_fn, &cfg)
+                        .expect("failed to translate export fn");
 
                     // Augment the list of invocation methods that have to be fulfilled
-                    exported_iface_invocation_methods.push(quote::quote!(
-                        async fn #fn_name(
-                            &self,
-                            #arg_name_ident: #arg_type_ident,
-                        ) -> Result<(), ::wasmcloud_provider_sdk::error::ProviderInvocationError> {
-                            let connection = ::wasmcloud_provider_sdk::provider_main::get_connection();
-                            let client = connection.get_rpc_client();
-                            let response = client
-                                .send(
-                                    ::wasmcloud_core::WasmCloudEntity {
-                                        public_key: self.ld.provider_id.clone(),
-                                        link_name: self.ld.link_name.clone(),
-                                        contract_id: #contract_ident.to_string(),
-                                    },
-                                    ::wasmcloud_core::WasmCloudEntity {
-                                        public_key: self.ld.actor_id.clone(),
-                                        ..Default::default()
-                                    },
-                                    #lattice_method,
-                                    ::wasmcloud_provider_sdk::serialize(&#arg_name_ident)?,
-                                )
-                                .await?;
-
-                            if let Some(err) = response.error {
-                                // Please note that all errors used should implement ToString in order for this to work
-                                Err(::wasmcloud_provider_sdk::error::ProviderInvocationError::Provider(
-                                    err.to_string(),
-                                ))
-                            } else {
-                                Ok(())
-                            }
-                        }
-                    ));
+                    exported_iface_invocation_methods.push(invocation_method_tokens);
                 }
             }
         }
     }
 
     // Expand the wasmtime::component macro with the given arguments
-    let bindgen_tokens: TokenStream =
-        expand_wasmtime_component(&cfg.bindgen_cfg).unwrap_or_else(syn::Error::into_compile_error);
+    let bindgen_tokens: TokenStream = expand_wasmtime_component(&cfg.wit_bindgen_cfg)
+        .unwrap_or_else(syn::Error::into_compile_error);
 
     // Parse the bindgen-generated tokens into an AST
+    // NOTE: while we will use these tokens, they will not be in macro output
     let mut bindgen_ast: syn::File =
         syn::parse2(bindgen_tokens).expect("failed to parse wit-bindgen generated code as file");
 
     // Visit the code that has been generated, to extract information we'll need to modify it
-    let mut visitor = WitBindgenOutputVisitor::default();
+    let mut visitor = WitBindgenOutputVisitor::new(&cfg);
     visitor.visit_file_mut(&mut bindgen_ast);
 
     // Turn the function calls into object declarations for receiving from lattice
-    let methods_by_iface = match (&visitor.wit_ns, &visitor.wit_package) {
-        (Some(ns), Some(package)) => build_lattice_methods_by_wit_interface(
-            &visitor.serde_extended_structs,
-            &visitor.import_trait_methods,
-            ns,
-            package,
-        ),
-        _ => panic!("failed to parse top-level WIT package name while reading bindgen output"),
-    };
+    let methods_by_iface = build_lattice_methods_by_wit_interface(
+        &visitor.serde_extended_structs,
+        &visitor.type_lookup,
+        &visitor.import_trait_methods,
+        &cfg,
+    )
+    .expect("failed to build lattice methods from WIT interfaces");
 
     // Create the implementation struct name as an Ident
     let impl_struct_name = Ident::new_raw(cfg.impl_struct.as_str(), Span::call_site());
@@ -233,61 +980,86 @@ out on the lattice. Please modify the corresponding WIT file that contains inter
     for (wit_iface_name, methods) in methods_by_iface.iter() {
         let wit_iface = Ident::new(wit_iface_name, Span::call_site());
 
-        // Build collections to be iterated over during codegen
-        let struct_names = methods
-            .clone()
-            .into_iter()
-            .map(|LatticeMethod { struct_name, .. }| struct_name)
-            .collect::<Vec<proc_macro2::Ident>>();
-        let struct_members = methods
-            .clone()
-            .into_iter()
-            .map(|LatticeMethod { struct_members, .. }| struct_members)
-            .collect::<Vec<TokenStream>>();
-        let lattice_method_names = methods
-            .clone()
-            .into_iter()
-            .map(
-                |LatticeMethod {
-                     lattice_method_name,
-                     ..
-                 }| lattice_method_name,
-            )
-            .collect::<Vec<LitStr>>();
-        let func_names = methods
-            .clone()
-            .into_iter()
-            .map(|LatticeMethod { func_name, .. }| func_name)
-            .collect::<Vec<Ident>>();
-        let invocation_args = methods
-            .clone()
-            .into_iter()
-            .map(
-                |LatticeMethod {
-                     invocation_args, ..
-                 }| invocation_args,
-            )
-            .collect::<Vec<Vec<Ident>>>();
-        let invocation_returns = methods
-            .clone()
-            .into_iter()
-            .map(
-                |LatticeMethod {
-                     invocation_return, ..
-                 }| invocation_return,
-            )
-            .collect::<Vec<ReturnType>>();
+        // Add generated code for new XInvocation structs
 
-        // Add the structs for the current interface
+        // Filter out type names and struct members for structs that should be generated
+        let (struct_type_names, struct_members) = methods.clone().into_iter().fold(
+            (Vec::<TokenStream>::new(), Vec::<TokenStream>::new()),
+            |mut acc, lm| {
+                if let Some(sm) = lm.struct_members {
+                    acc.0.push(lm.type_name);
+                    acc.1.push(sm);
+                }
+                acc
+            },
+        );
+
+        // Add generated struct code for the current interface
         iface_tokens.append_all(quote::quote!(
             // START: *Invocation structs & trait for #wit_iface
             #(
                 #[derive(Debug, ::serde::Serialize, ::serde::Deserialize)]
-                struct #struct_names {
+                struct #struct_type_names {
                     #struct_members
                 }
             )*
+        ));
 
+        // Generate main trait for this interface (ex. `WasiKeyvalueReadWrite`) that facilitates invocations
+        // and pipes through calls to provider impl
+
+        // NOTE: struct_members is *either*
+        // - the actual member from the GeneratedStruct variant
+        // - the typename + type from the single first arg
+
+        // Create a list of lattice method names that will trigger provider calls
+        let lattice_method_names = methods
+            .clone()
+            .into_iter()
+            .map(|lm| lm.lattice_method_name)
+            .collect::<Vec<LitStr>>();
+        // Function names that providers will implement for lattice methods (these functions will be called)
+        let func_names = methods
+            .clone()
+            .into_iter()
+            .map(|lm| lm.func_name)
+            .collect::<Vec<Ident>>();
+        // Get the invocation args with names, which is either:
+        // - all struct members if present
+        // - the arg name plus type name for a known type
+        // - an empty list for zero args
+        let invocation_args_with_types = methods
+            .clone()
+            .into_iter()
+            .map(|lm| {
+                match (lm.struct_members, &lm.invocation_arg_names[..]) {
+                    // If more than one argument was present, we should be dealing with that as
+                    // an invocation struct
+                    (Some(members), _) => members,
+                    // For no arguments, then we don't need to add any invocation args
+                    (None, []) => {
+                        TokenStream::new()
+                    },
+                    // If there's one argument then we should add the single argument
+                    (None, [first]) => {
+                        let type_name = lm.type_name;
+                        quote::quote!(#first: #type_name)
+                    },
+                    // All other combinations are invalid (ex. forcing first-argument parsing when there are muiltiple args to the fn),
+                    _ => panic!("unexpectedly found more than 1 invocation arg in function [{}] name, wit_function_lattice_translation-strategy should likely not be set to 'first-argument'", lm.func_name),
+                }
+            })
+            .collect::<Vec<TokenStream>>();
+        // Invocation returns of the functions that are called for each lattice method
+        let invocation_returns = methods
+            .clone()
+            .into_iter()
+            .map(|lm| lm.invocation_return)
+            .collect::<Vec<ReturnType>>();
+
+        // Create and append the trait for the iface along with
+        // the functions that should be implemented by the provider
+        iface_tokens.append_all(quote::quote!(
             #[::async_trait::async_trait]
             pub trait #wit_iface {
                 fn contract_id() -> &'static str {
@@ -298,24 +1070,38 @@ out on the lattice. Please modify the corresponding WIT file that contains inter
                     async fn #func_names (
                         &self,
                         ctx: ::wasmcloud_provider_sdk::Context,
-                        #struct_members,
+                        #invocation_args_with_types
                     ) #invocation_returns;
                 )*
             }
             // END: *Invocation structs & trait for #wit_iface
         ));
 
+        // Get all type names
+        let type_names = methods
+            .clone()
+            .into_iter()
+            .map(|lm| lm.type_name)
+            .collect::<Vec<TokenStream>>();
+        // Invocation arguments of the functions that are called for each lattice method
+        // which is *roughly* the same as the list of invocation struct members
+        let invocation_arg_names = methods
+            .clone()
+            .into_iter()
+            .map(|lm| lm.invocation_arg_names)
+            .collect::<Vec<Vec<Ident>>>();
+
         // After building individual invocation structs and traits for each interface
         // we must build & hold on to the usage of these inside the match for the MessageDispatch trait
         interface_dispatch_match_arms.push(quote::quote!(
             #(
                 #lattice_method_names => {
-                    let input: #struct_names = ::wasmcloud_provider_sdk::deserialize(&body)?;
+                    let input: #type_names = ::wasmcloud_provider_sdk::deserialize(&body)?;
                     let result = #wit_iface::#func_names(
                         self,
                         ctx,
                         #(
-                            input.#invocation_args,
+                            #invocation_arg_names
                         )*
                     )
                         .await
@@ -381,7 +1167,7 @@ out on the lattice. Please modify the corresponding WIT file that contains inter
         /// at least the following members are is supported.
         #[::async_trait::async_trait]
         trait WasmcloudCapabilityProvider {
-            async fn put_link(&self, ld: &::wasmcloud_core::LinkDefinition) -> bool;
+            async fn put_link(&self, ld: &::wasmcloud_provider_sdk::core::LinkDefinition) -> bool;
             async fn delete_link(&self, actor_id: &str);
             async fn shutdown(&self);
         }
@@ -392,7 +1178,7 @@ out on the lattice. Please modify the corresponding WIT file that contains inter
         /// This implementation is a stub and must be filled out by implementers
         #[::async_trait::async_trait]
         impl ::wasmcloud_provider_sdk::ProviderHandler for #impl_struct_name {
-            async fn put_link(&self, ld: &::wasmcloud_core::LinkDefinition) -> bool {
+            async fn put_link(&self, ld: &::wasmcloud_provider_sdk::core::LinkDefinition) -> bool {
                 WasmcloudCapabilityProvider::put_link(self, ld).await
             }
 
@@ -414,11 +1200,11 @@ out on the lattice. Please modify the corresponding WIT file that contains inter
         ///
         /// Interfaces exported by the provider can use this to send traffic across the lattice
         pub struct InvocationHandler<'a> {
-            ld: &'a ::wasmcloud_core::LinkDefinition,
+            ld: &'a ::wasmcloud_provider_sdk::core::LinkDefinition,
         }
 
         impl<'a> InvocationHandler<'a> {
-            pub fn new(ld: &'a ::wasmcloud_core::LinkDefinition) -> Self {
+            pub fn new(ld: &'a ::wasmcloud_provider_sdk::core::LinkDefinition) -> Self {
                 Self { ld }
             }
 
@@ -436,11 +1222,18 @@ out on the lattice. Please modify the corresponding WIT file that contains inter
 /// focused around gathering all the important declarations we care about
 #[derive(Default)]
 struct WitBindgenOutputVisitor {
-    /// The detected namespace of the WIT file
+    /// WIT namespace
     wit_ns: Option<WitNamespaceName>,
 
-    /// The detected package of the WIT file
-    wit_package: Option<WitPackageName>,
+    /// WIT package
+    wit_pkg: Option<WitPackageName>,
+
+    /// List of interfaces that if specified, will only be exposed on the lattice.
+    /// If left empty, this indicates that all interfaces should be exposed
+    exposed_interface_allow_list: Vec<LatticeExposedInterface>,
+
+    /// List of interfaces that should explicitly not be exposed on the lattice
+    exposed_interface_deny_list: Vec<LatticeExposedInterface>,
 
     /// Parents of the current module being traversed
     parents: Vec<Ident>,
@@ -453,17 +1246,22 @@ struct WitBindgenOutputVisitor {
     /// Structs that were modified and extended to derive Serialize/Deserialize
     serde_extended_structs: StructLookup,
 
+    /// Lookup of encountered types that were produced by bindgen, with their fully qualified names
+    type_lookup: TypeLookup,
+
     /// Functions in traits that we'll have to stub eventually
-    import_trait_methods: HashMap<WitInterfaceName, Vec<TraitItemMethod>>,
+    import_trait_methods: HashMap<WitInterfacePath, Vec<TraitItemMethod>>,
 }
 
 impl WitBindgenOutputVisitor {
-    /// Check if a given string is the same as the top-level WIT namespace that was detected
-    fn is_wit_ns(&self, s: impl AsRef<str>) -> bool {
-        if let Some(v) = &self.wit_ns {
-            v == s.as_ref()
-        } else {
-            false
+    /// Build a new visitor to traverse a wit-bindgen generated syntax tree
+    fn new(cfg: &ProviderBindgenConfig) -> Self {
+        Self {
+            wit_ns: cfg.wit_ns.clone(),
+            wit_pkg: cfg.wit_pkg.clone(),
+            exposed_interface_allow_list: cfg.exposed_interface_allow_list.clone(),
+            exposed_interface_deny_list: cfg.exposed_interface_deny_list.clone(),
+            ..Default::default()
         }
     }
 
@@ -479,7 +1277,16 @@ impl WitBindgenOutputVisitor {
             .iter()
             .map(|i| i.to_string())
             .collect::<Vec<String>>()
-            .join(",")
+            .join(".")
+    }
+
+    /// Check if a given string is the same as the top-level WIT namespace that was detected
+    fn is_wit_ns(&self, s: impl AsRef<str>) -> bool {
+        if let Some(v) = &self.wit_ns {
+            v == s.as_ref()
+        } else {
+            false
+        }
     }
 
     /// Check whether a the current node is directly under the wasm namespace
@@ -504,21 +1311,34 @@ impl WitBindgenOutputVisitor {
 
 impl VisitMut for WitBindgenOutputVisitor {
     fn visit_item_mod_mut(&mut self, node: &mut ItemMod) {
-        // Save the WIT namespace that we've recognized
+        debug!(
+            "(bindgen module hierarchy): {}> {}",
+            "=".repeat(self.current_module_level()),
+            node.ident
+        );
+
+        // Detect the WIT namespace while traversing the bindgen output
         //
-        // The top level WIT namespace is always a module at @ level zero
-        // of the item hierarchy in packages with imports, but is @ level 1 in packages
-        // with only exports
-        if (self.current_module_level() == 0 && node.ident != EXPORTS_MODULE_NAME)
-            || (self.current_module_level() == 1 && self.at_exported_module())
+        // We expect the top level rust module (i.e. level zero of the module hierarchy)
+        // in a package with imports to be the wit namespace.
+        //
+        // Packages with exports (which may *only* have exports) have 'exports' at level zero
+        // then follow a similar pattern
+        if self.wit_ns.is_none()
+            && ((self.current_module_level() == 0 && node.ident != EXPORTS_MODULE_NAME)
+                || (self.current_module_level() == 1 && self.at_exported_module()))
         {
             self.wit_ns = Some(node.ident.to_string());
         }
 
-        // Save the WIT package name
+        // Detect the WIT package while traversing the bindgen output
         //
-        // In packages with imports, the package name will be at level 1 (under the ns)
-        // but in packages with only exports, it will be at level 2 under 'exports' and the ns)
+        // We expect the second level rust module (i.e. level 1 in a zero-indexed module hierarchy)
+        // in a package with imports to be the wit package name.
+        //
+        // Packages with exports (which may *only* have exports) have 'exports' at level zero
+        // then follow a similar pattern. For example, one would expect a module hierarchy like
+        // `exports -> <wit namespace> -> <wit package>`
         if (
             self.current_module_level() == 1
             && self.at_wit_ns_module_child()
@@ -526,7 +1346,7 @@ impl VisitMut for WitBindgenOutputVisitor {
             // Exports only case
             || (self.current_module_level() == 2 && self.at_exported_module())
         {
-            self.wit_package = Some(node.ident.to_string());
+            self.wit_pkg = Some(node.ident.to_string());
         }
 
         // Recognize the 'exports' module which contains
@@ -548,11 +1368,9 @@ impl VisitMut for WitBindgenOutputVisitor {
         if let Some((_, ref mut items)) = &mut node.content {
             // Save the current module before we go spelunking
             self.parents.push(node.ident.clone());
-
             for item in items {
                 self.visit_item_mut(item);
             }
-
             self.parents.pop();
         }
     }
@@ -560,10 +1378,74 @@ impl VisitMut for WitBindgenOutputVisitor {
     fn visit_item_mut(&mut self, node: &mut syn::Item) {
         match node {
             Item::Trait(t) => {
-                // Host traits are generated for interfaces that are imported by the host, and generally
-                // must have traits created that are *similar*, but asynchronous in nature.
+                // Retrieve the interface name from the module hierarchy (immediate parent)
+                let iface = if let Some(iface) = self.parents.last() {
+                    iface
+                } else {
+                    panic!(
+                        "unexpectedly missing parent while processing trait {}",
+                        t.ident
+                    )
+                };
+
+                // Ensure we have the WIT namespace and package available at this point
+                let wit_ns = self.wit_ns.clone().expect(
+                    "WIT namespace missing (failed to auto-detect?) while parsing iface [{iface}]",
+                );
+                let wit_pkg = self.wit_pkg.clone().expect(
+                    "WIT package missing (failed to auto-detect?) while parsing iface [{iface}]",
+                );
+                let full_iface_name = format!("{wit_ns}:{wit_pkg}/{iface}",);
+
+                // Build the (ns,pkg,interface) triples used to control lattice-exposed interfaces
+                let iface_triple: &LatticeExposedInterface = &(wit_ns, wit_pkg, iface.to_string());
+
+                // Use the allow and deny lists to determine which interfaces should be processed
+                match (
+                    self.exposed_interface_allow_list.as_slice(),
+                    self.exposed_interface_deny_list.as_slice(),
+                ) {
+                    // If neither allow nor deny were specified, we are unconstrained
+                    ([], []) => {
+                        debug!("processing interface [{full_iface_name}], unconstrained (no allow/deny list)");
+                    }
+                    // If allow list is present (and deny missing), process only allow list
+                    (allow, []) => {
+                        if allow.contains(iface_triple) {
+                            debug!(
+                                "processing interface [{full_iface_name}], included in allow list"
+                            );
+                        } else {
+                            warn!(
+                                "skipping interface [{full_iface_name}], missing from allow list"
+                            );
+                            return;
+                        }
+                    }
+                    // If deny list is present (and allow missing), process only deny list
+                    ([], deny) => {
+                        if deny.contains(iface_triple) {
+                            warn!("skipping interface [{full_iface_name}], included in deny list");
+                            return;
+                        } else {
+                            debug!("processing interface [{full_iface_name}], not included in deny list");
+                        }
+                    }
+                    // If both allow and deny are present, process allow then deny
+                    (allow, deny) => {
+                        if allow.contains(iface_triple) && !deny.contains(iface_triple) {
+                            debug!("processing interface [{full_iface_name}], included in allow and not in deny");
+                        } else {
+                            warn!("[warn] skipping interface [{full_iface_name}], not included in allow or missing from deny");
+                            return;
+                        }
+                    }
+                };
+
+                // wit-bindgen generated code contains a 'Host' trait which contains generated methods for all imported interfaces.
                 //
-                // In general, messages in host traits become RPC calls that go out on the lattice, so they must be converted
+                // In general, generated trait methods should become RPC calls that come in from the lattice
+                // which means the function calls & arguments must be converted to serializable objects to be received
                 if t.ident == HOST_IMPORTS_TRAIT_NAME {
                     for ti in t.items.iter_mut() {
                         if let TraitItem::Method(tim) = ti {
@@ -597,17 +1479,21 @@ impl VisitMut for WitBindgenOutputVisitor {
                                         acc.append(v.clone());
                                         acc
                                     });
+
                                     let result_tokens = quote::quote!(
-                                            -> ::wasmcloud_provider_sdk::error::ProviderResult<#inner_tokens>
+                                            -> ::wasmcloud_provider_sdk::error::ProviderInvocationResult<#inner_tokens>
                                         );
 
-                                        trimmed.sig.output = syn::parse2::<ReturnType>(result_tokens).expect("failed to purge wasmtime::Result from method return");
+                                    // TODO(debug) show message on failure/success manipulating types
+                                    trimmed.sig.output = syn::parse2::<ReturnType>(result_tokens.clone())
+                                        .expect("failed to purge wasmtime::Result from method return");
 
                                     },
                                     _ => {},
                                 }
 
-                            // Find functions in traits that we must stub later
+                            // Save methods in traits that we must stub later
+                            // TODO(debug): show import trait methods that are added
                             self.import_trait_methods
                                 .entry(self.current_module_full_path())
                                 .or_default()
@@ -617,6 +1503,23 @@ impl VisitMut for WitBindgenOutputVisitor {
                 }
             }
 
+            // Process type declarations that appear in bindgen output
+            //
+            // Primarily, we pick up the definitions here so that we can use them for full qualification later
+            Item::Type(t) => {
+                // Determine the import path to this type
+                let mut import_path = Punctuated::<syn::PathSegment, Token![::]>::new();
+                for p in self.parents.iter() {
+                    import_path.push(syn::PathSegment::from(p.clone()));
+                }
+                import_path.push(syn::PathSegment::from(t.ident.clone()));
+
+                // Add the type to the lookup so it can be used later for fully qualified names
+                self.type_lookup
+                    .insert(t.ident.to_string(), (import_path, t.clone()));
+            }
+
+            // Process struct declarations that appear in the bindgen output
             Item::Struct(s) => {
                 // If this is a generated struct (from a WIT record), add serde Serialize/eDeserialize
                 //
@@ -668,217 +1571,71 @@ impl VisitMut for WitBindgenOutputVisitor {
     }
 }
 
+/// A converted trait method that will go out on the lattice
 #[derive(Debug, Clone)]
 struct LatticeMethod {
+    /// Lattice methods that depend on pre-existing types that are serializable (i.e. [`serde::Serializable`] directly and can be sent out on the lattice as-is.
+    ///
+    /// These types may be produced by wit-bindgen produced types, but *do not* have to be generated by
+    /// this macro.
+    ///
+    /// Often produced when [`WitFunctionLatticeTranslationStrategy::FirstArgument`] is configured.
     /// The name of the method that would be used on the lattice
     lattice_method_name: LitStr,
-    /// The name of the struct that can be deserialized to perform the invocation
-    struct_name: Ident,
+
+    /// The name of the type can be deserialized to perform the invocation
+    ///
+    /// When this is a bindgen-generated struct, `type_name` will be the name of the struct, and
+    /// when the type is known/a standard type, `struct_members` will be empty and this `type_name` will be the
+    /// known value (ex. `String`)
+    type_name: TokenStream,
+
     /// Tokens that represent the struct member declarations
-    struct_members: TokenStream,
+    /// This is only present when the `type_name` corresponds to a struct that we must generate as part of this macro
+    struct_members: Option<TokenStream>,
+
     /// Function name for the method that will be called after a lattice invocation is received
     func_name: Ident,
-    /// Invocation arguments (i.e. invocation struct members)
-    invocation_args: Vec<Ident>,
-    /// Invocation arguments (i.e. invocation struct members)
+
+    /// Invocation arguments, only names without types
+    invocation_arg_names: Vec<Ident>,
+
+    /// Return type of the invocation
     invocation_return: ReturnType,
 }
 
+/// Build [`LatticeMethod`]s (including related information to facilitate invocations)
+/// for the imports of a WIT interface
 fn build_lattice_methods_by_wit_interface(
     struct_lookup: &StructLookup,
-    map: &HashMap<WitInterfaceName, Vec<TraitItemMethod>>,
-    wit_ns: &str,
-    wit_package: &str,
-) -> HashMap<WitInterfaceName, Vec<LatticeMethod>> {
-    let mut methods_by_name: HashMap<WitInterfaceName, Vec<LatticeMethod>> = HashMap::new();
+    type_lookup: &TypeLookup,
+    map: &HashMap<WitInterfacePath, Vec<TraitItemMethod>>,
+    bindgen_cfg: &ProviderBindgenConfig,
+) -> anyhow::Result<HashMap<WitInterfacePath, Vec<LatticeMethod>>> {
+    let mut methods_by_name: HashMap<WitInterfacePath, Vec<LatticeMethod>> = HashMap::new();
 
-    // Per module import we must build up a different structs
+    // For every trait item generated by an imported WIT interface we must generate the appropriate
+    // structures that are expected from incoming messages on the lattice.
     for (wit_iface_name, funcs) in map.iter() {
-        for f in funcs.iter() {
-            // Create an identifier for the new struct that will represent the function invocation coming
-            // across the lattice, in a <CamelCaseModule><CamelCaseInterface><CamelCaseFunctionName> pattern
-            // (ex. MessagingConsumerRequestMultiInvocation)
-            let lattice_method_name = LitStr::new(
-                format!(
-                    "{}{}/Message.{}",
-                    wit_ns,
-                    wit_package,
-                    f.sig.ident.to_string().to_upper_camel_case()
-                )
-                .as_ref(),
-                Span::call_site(),
-            );
+        for trait_method in funcs.iter() {
+            // Convert the trait method to code that can be used on the lattice
+            let (name, lattice_method) = bindgen_cfg
+                .import_fn_lattice_translation_strategy
+                .translate_import_fn_for_lattice(
+                    wit_iface_name.into(),
+                    trait_method,
+                    struct_lookup,
+                    type_lookup,
+                )?;
 
-            // Build the name of the invocation struct
-            let struct_name = format_ident!(
-                "{}{}Invocation",
-                wit_iface_name.to_upper_camel_case(),
-                f.sig.ident.to_string().to_upper_camel_case()
-            );
-
-            // Build a list of invocation arguments similar to the structs
-            let mut invocation_args: Vec<Ident> = Vec::new();
-
-            // Transform the members and remove any lifetimes by manually converting references to owned data
-            // (i.e. doing things like converting a type like &str to String mechanically)
-            let struct_members = f
-                .sig
-                // Get all function inputs for the function signature
-                .inputs
-                .iter()
-                .enumerate()
-                .fold(TokenStream::new(), |mut tokens, (idx, arg)| {
-                    // If we're not the first index, add a comman
-                    if idx != 0 {
-                        tokens.append_all([&TokenTree::Punct(Punct::new(',', proc_macro2::Spacing::Alone))]);
-                    }
-
-                    // Match on a single input argument in the function signature
-                    match &arg
-                            .to_token_stream()
-                            .into_iter()
-                            .collect::<Vec<TokenTree>>()[..]
-                        {
-                            // pattern: 'name: &T'
-                            simple_ref @ &[
-                                TokenTree::Ident(ref n), // name
-                                TokenTree::Punct(_), // :
-                                TokenTree::Punct(ref p), // &
-                                TokenTree::Ident(ref t), // T
-                            ] if p.as_char() == '&' => {
-                                // Save the invocation argument for later
-                                invocation_args.push(n.clone());
-
-                                // Match the type that came out of the simple case
-                                match t.to_string().as_str() {
-                                    // A &str
-                                    "str" => {
-                                        tokens.append_all([
-                                            &simple_ref[0],
-                                            &simple_ref[1],
-                                            // replace the type with an owned string
-                                            &TokenTree::Ident(Ident::new("String", t.span())),
-                                        ]);
-                                    },
-
-                                    // Unexpected non-standard type as reference
-                                    // (likely a known custom type generated by wit-bindgen)
-                                    _ => {
-
-                                        // Add a modified group of tokens to the list for the struct
-                                        tokens.append_all([
-                                            &simple_ref[0], // name
-                                            &simple_ref[1], // colon
-                                        ]);
-
-                                        // If we have a T that this module defined, we must use the full path to it
-                                        // if not, it is likely a builtin, so we can use it directly
-                                        if let Some((v, _)) = struct_lookup.get(&simple_ref[3].to_string()) {
-                                            tokens.append_all([ v.to_token_stream() ]);
-                                        } else {
-                                            tokens.append_all([ &simple_ref[3]]);
-                                        };
-                                    }
-                                }
-                            },
-
-                            // pattern: 'name: Wrapper<&T>'
-                            wrapped_ref @ &[
-                                TokenTree::Ident(ref n),  // name
-                                TokenTree::Punct(_),  // :
-                                TokenTree::Ident(_),  // Wrapper
-                                TokenTree::Punct(ref p),  // <
-                                TokenTree::Punct(ref p2), // &
-                                ..,  // T
-                                TokenTree::Punct(_) // >
-                            ] if p.as_char() == '<' && p2.as_char() == '&' => {
-                                // Save the invocation argument for later
-                                invocation_args.push(n.clone());
-
-                                // Slice out the parts in between the < ... >
-                                let type_section = &wrapped_ref[4..wrapped_ref.len()];
-
-                                match type_section {
-                                    // case: str
-                                    [
-                                        TokenTree::Punct(_), // <
-                                        TokenTree::Ident(ref n),
-                                        TokenTree::Punct(_) // >
-                                    ] if n.to_string().as_str() == "str" => {
-                                        tokens.append_all([
-                                            &wrapped_ref[0], // name
-                                            &wrapped_ref[1], // colon
-                                            &wrapped_ref[2], // wrapper
-                                            &wrapped_ref[3], // <
-                                            &TokenTree::Ident(Ident::new("String", n.span())),
-                                            &wrapped_ref[5], // >
-                                        ]);
-                                    },
-
-                                    // case: [u8]
-                                    [
-                                        TokenTree::Punct(_), // <
-                                        TokenTree::Group(g),
-                                        TokenTree::Punct(_), // >
-                                    ] if g.to_string().as_str() == "[u8]" => {
-                                        tokens.append_all([
-                                            &wrapped_ref[0], // name
-                                            &wrapped_ref[1], // colon
-                                            &wrapped_ref[2], // wrapper
-                                            &wrapped_ref[3], // <
-                                            &TokenTree::Ident(Ident::new("Vec", Span::call_site())), // Vec
-                                            &TokenTree::Punct(Punct::new('<', Spacing::Joint)), // <
-                                            &TokenTree::Ident(Ident::new("u8", Span::call_site())), // u8
-                                            &TokenTree::Punct(Punct::new('>', Spacing::Joint)), // >
-                                            &TokenTree::Punct(Punct::new('>', Spacing::Joint)), // >
-                                        ]);
-                                    },
-
-                                    rest =>  {
-                                        // If we have a < T >, and T is a struct this module defined, we must use the full path to it
-                                        // if not, it is likely a builtin, so we can use it directly
-                                        if let Some((v, _)) = struct_lookup.get(&rest[1].to_string()) {
-                                            tokens.append_all(&wrapped_ref[0..5]);
-                                            tokens.append_all([ v.to_token_stream() ]);
-                                            tokens.append_all(&wrapped_ref[6..]);
-                                        } else {
-                                            tokens.append_all(wrapped_ref);
-                                        };
-                                    },
-                                }
-                            },
-
-                            // pattern: unknown
-                            ts => {
-                                // Save the first token (which should be the argument name) as an invocation argument for later
-                                if let TokenTree::Ident(name) = &ts[0] {
-                                    invocation_args.push(name.clone());
-                                }
-
-                                tokens.append_all(ts);
-                            }
-                        }
-
-                    tokens
-                });
-
-            // Remove wasmtime::Error from methods on the output
-
-            // Add the struct and it's members to a list that will be used in another quote
+            // Add the struct and its members to a list that will be used in another quote
             // it cannot be added directly/composed to a TokenStream here to avoid import conflicts
             // in case bindgen-defined types are used.
             methods_by_name
-                .entry(wit_iface_name.to_string().to_upper_camel_case())
+                .entry(name)
                 .or_default()
-                .push(LatticeMethod {
-                    lattice_method_name,
-                    struct_name,
-                    struct_members,
-                    func_name: f.sig.ident.clone(),
-                    invocation_args,
-                    invocation_return: f.sig.output.clone(),
-                });
+                .push(lattice_method);
         }
     }
-    methods_by_name
+    Ok(methods_by_name)
 }

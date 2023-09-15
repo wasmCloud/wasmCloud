@@ -25,6 +25,7 @@ serde = { workspace = true }
 # has been vendored in this crate. It can be upgraded when the macros themselves update
 # (see: src/vendor/wasmtime_component_macro.rs)
 syn = { version = "1", features = [ "parsing", "full", "visit-mut", "extra-traits" ] }
-wasmcloud-core = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = [ "fmt", "env-filter" ] }
 wasmtime-wit-bindgen = { workspace = true }
 wit-parser = { workspace = true }
