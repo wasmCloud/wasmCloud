@@ -3,51 +3,55 @@
 //! This library provides a client API for consuming the wasmCloud control interface over a
 //! NATS connection. This library can be used by multiple types of tools, and is also used
 //! by the control interface capability provider and the wash CLI
+use std::fmt::Debug;
+use std::marker::PhantomData;
+use std::{collections::HashMap, time::Duration};
 
-mod broker;
-mod kv;
-mod otel;
-mod sub_stream;
-mod types;
-
-pub use types::*;
-
-use async_nats::jetstream::kv::Store;
 use cloudevents::event::Event;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use std::{collections::HashMap, time::Duration};
 use sub_stream::collect_timeout;
 use tokio::sync::mpsc::Receiver;
 use tracing::{debug, error, instrument, trace};
 use tracing_futures::Instrument;
 
+mod broker;
+pub mod kv;
+mod otel;
+mod sub_stream;
+mod types;
+
+use kv::{CachedKvStore, DirectKvStore};
+pub use types::*;
+
+use crate::kv::KvStore;
 use crate::otel::OtelHeaderInjector;
 
 type Result<T> = ::std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 /// Lattice control interface client
 #[derive(Clone, Debug)]
-pub struct Client {
+pub struct Client<T: Clone + Debug> {
     nc: async_nats::Client,
     topic_prefix: Option<String>,
     pub lattice_prefix: String,
     timeout: Duration,
     auction_timeout: Duration,
-    kvstore: Option<Store>,
+    kvstore: T,
 }
 
 /// A client builder that can be used to fluently provide configuration settings used to construct
 /// the control interface client
-pub struct ClientBuilder {
+pub struct ClientBuilder<T> {
     nc: Option<async_nats::Client>,
     topic_prefix: Option<String>,
     lattice_prefix: String,
     timeout: Duration,
     auction_timeout: Duration,
     js_domain: Option<String>,
+    store_placeholder: PhantomData<T>,
 }
 
-impl Default for ClientBuilder {
+impl Default for ClientBuilder<DirectKvStore> {
     fn default() -> Self {
         Self {
             nc: None,
@@ -56,21 +60,24 @@ impl Default for ClientBuilder {
             timeout: Duration::from_secs(2),
             auction_timeout: Duration::from_secs(5),
             js_domain: None,
+            store_placeholder: PhantomData,
         }
     }
 }
 
-impl ClientBuilder {
-    /// Creates a new client builder
-    pub fn new(nc: async_nats::Client) -> ClientBuilder {
+impl ClientBuilder<DirectKvStore> {
+    /// Creates a new client builder using the given client
+    pub fn new(nc: async_nats::Client) -> ClientBuilder<DirectKvStore> {
         ClientBuilder {
             nc: Some(nc),
             ..Default::default()
         }
     }
+}
 
+impl<T> ClientBuilder<T> {
     /// Sets the topic prefix for the NATS topic used for all control requests. Not to be confused with lattice ID/prefix
-    pub fn topic_prefix(self, prefix: impl Into<String>) -> ClientBuilder {
+    pub fn topic_prefix(self, prefix: impl Into<String>) -> ClientBuilder<T> {
         ClientBuilder {
             topic_prefix: Some(prefix.into()),
             ..self
@@ -78,7 +85,7 @@ impl ClientBuilder {
     }
 
     /// The lattice ID/prefix used for this client. If this function is not invoked, the prefix will be set to `default`
-    pub fn lattice_prefix(self, prefix: impl Into<String>) -> ClientBuilder {
+    pub fn lattice_prefix(self, prefix: impl Into<String>) -> ClientBuilder<T> {
         ClientBuilder {
             lattice_prefix: prefix.into(),
             ..self
@@ -86,12 +93,12 @@ impl ClientBuilder {
     }
 
     /// Sets the timeout for standard calls and RPC invocations used by the client. If not set, the default will be 2 seconds
-    pub fn rpc_timeout(self, timeout: Duration) -> ClientBuilder {
+    pub fn rpc_timeout(self, timeout: Duration) -> ClientBuilder<T> {
         ClientBuilder { timeout, ..self }
     }
 
     /// Sets the timeout for auction (scatter/gather) operations. If not set, the default will be 5 seconds
-    pub fn auction_timeout(self, timeout: Duration) -> ClientBuilder {
+    pub fn auction_timeout(self, timeout: Duration) -> ClientBuilder<T> {
         ClientBuilder {
             auction_timeout: timeout,
             ..self
@@ -100,18 +107,36 @@ impl ClientBuilder {
 
     /// Sets the JetStream domain for this client, which can be critical for locating the right key-value bucket
     /// for lattice metadata storage. If this is skipped, then the JS domain will be `None`
-    pub fn js_domain(self, domain: impl Into<String>) -> ClientBuilder {
+    pub fn js_domain(self, domain: impl Into<String>) -> ClientBuilder<T> {
         ClientBuilder {
             js_domain: Some(domain.into()),
             ..self
         }
     }
 
+    /// Tells the client to use caching for lattice metadata. This is useful for long running
+    /// applications that want to consistently fetch lattice metadata. If this is not set, then
+    /// every call to `get_links` or `get_claims` will result in a query to the lattice metadata
+    /// bucket
+    pub fn use_caching(self) -> ClientBuilder<CachedKvStore> {
+        ClientBuilder {
+            nc: self.nc,
+            topic_prefix: self.topic_prefix,
+            lattice_prefix: self.lattice_prefix,
+            timeout: self.timeout,
+            auction_timeout: self.auction_timeout,
+            js_domain: self.js_domain,
+            store_placeholder: PhantomData,
+        }
+    }
+}
+
+impl ClientBuilder<CachedKvStore> {
     /// Completes the generation of a control interface client. This function is async because it will attempt
     /// to locate and attach to a metadata key-value bucket (`LATTICEDATA_{prefix}`) when starting. If this bucket
     /// is not discovered during build time, all subsequent client calls will operate in "legacy" mode against the
     /// deprecated control interface topics
-    pub async fn build(self) -> Result<Client> {
+    pub async fn build(self) -> Result<Client<CachedKvStore>> {
         if let Some(nc) = self.nc {
             Ok(Client {
                 nc: nc.clone(),
@@ -119,7 +144,7 @@ impl ClientBuilder {
                 lattice_prefix: self.lattice_prefix.clone(),
                 timeout: self.timeout,
                 auction_timeout: self.auction_timeout,
-                kvstore: kv::get_kv_store(nc, &self.lattice_prefix, self.js_domain).await,
+                kvstore: CachedKvStore::new(nc, &self.lattice_prefix, self.js_domain).await?,
             })
         } else {
             Err("Cannot create a control interface client without a NATS client".into())
@@ -127,49 +152,28 @@ impl ClientBuilder {
     }
 }
 
-impl Client {
-    /// Creates a new lattice control interface client. You should use [ClientBuilder::new] instead. This
-    /// function will also not attempt to communicate with a key-value store containing the lattice metadata
-    /// and will only ever use the deprecated methods of host/lattice interaction
-    #[deprecated(since = "0.23.0", note = "please use the client builder instead")]
-    pub fn new(
-        nc: async_nats::Client,
-        lattice_prefix: Option<String>,
-        timeout: Duration,
-        auction_timeout: Duration,
-    ) -> Self {
-        Client {
-            nc,
-            topic_prefix: None,
-            lattice_prefix: lattice_prefix.unwrap_or_else(|| "default".to_string()),
-            timeout,
-            auction_timeout,
-            kvstore: None,
+impl ClientBuilder<DirectKvStore> {
+    /// Completes the generation of a control interface client. This function is async because it will attempt
+    /// to locate and attach to a metadata key-value bucket (`LATTICEDATA_{prefix}`) when starting. If this bucket
+    /// is not discovered during build time, all subsequent client calls will operate in "legacy" mode against the
+    /// deprecated control interface topics
+    pub async fn build(self) -> Result<Client<DirectKvStore>> {
+        if let Some(nc) = self.nc {
+            Ok(Client {
+                nc: nc.clone(),
+                topic_prefix: self.topic_prefix,
+                lattice_prefix: self.lattice_prefix.clone(),
+                timeout: self.timeout,
+                auction_timeout: self.auction_timeout,
+                kvstore: DirectKvStore::new(nc, &self.lattice_prefix, self.js_domain).await?,
+            })
+        } else {
+            Err("Cannot create a control interface client without a NATS client".into())
         }
     }
+}
 
-    /// Creates a new lattice control interface client with a control interface topic
-    /// prefix. You should use [ClientBuilder::new] instead.  This
-    /// function will also not attempt to communicate with a key-value store containing the lattice metadata
-    /// and will only ever use the deprecated methods of host/lattice interaction
-    #[deprecated(since = "0.23.0", note = "please use the client builder instead")]
-    pub fn new_with_topic_prefix(
-        nc: async_nats::Client,
-        topic_prefix: &str,
-        lattice_prefix: Option<String>,
-        timeout: Duration,
-        auction_timeout: Duration,
-    ) -> Self {
-        Client {
-            nc,
-            topic_prefix: Some(topic_prefix.to_owned()),
-            lattice_prefix: lattice_prefix.unwrap_or_else(|| "default".to_string()),
-            timeout,
-            auction_timeout,
-            kvstore: None,
-        }
-    }
-
+impl<T: KvStore + Clone + Debug + Send + Sync> Client<T> {
     #[instrument(level = "debug", skip_all)]
     pub(crate) async fn request_timeout(
         &self,
@@ -193,7 +197,13 @@ impl Client {
         }
     }
 
-    /// Queries the lattice for all responsive hosts, waiting for the full period specified by _timeout_.
+    /// Returns a handle to the underlying metadata client for use in advanced scenarios and queries
+    pub fn lattice_metadata_client(&self) -> &T {
+        &self.kvstore
+    }
+
+    /// Queries the lattice for all responsive hosts, waiting for the full period specified by
+    /// _timeout_.
     #[instrument(level = "debug", skip_all)]
     pub async fn get_hosts(&self) -> Result<Vec<Host>> {
         let subject = broker::queries::hosts(&self.topic_prefix, &self.lattice_prefix);
@@ -216,30 +226,17 @@ impl Client {
         }
     }
 
-    /// Retrieves the full set of all cached claims in the lattice. If a suitable key-value bucket for metadata
-    /// was discovered at client creation time, then that bucket will be queried directly for the claims. If not,
-    /// then the claims will be queried by issuing a request on a queue-subscribed topic to the listening hosts.    
+    /// Retrieves the full set of all cached claims in the lattice.   
     #[instrument(level = "debug", skip_all)]
-    pub async fn get_claims(&self) -> Result<GetClaimsResponse> {
-        if let Some(ref store) = self.kvstore {
-            kv::get_claims(store).await
-        } else {
-            let subject = broker::queries::claims(&self.topic_prefix, &self.lattice_prefix);
-            debug!("get_claims:request {}", &subject);
-            match self.request_timeout(subject, vec![], self.timeout).await {
-                Ok(msg) => {
-                    let list: SafeClaimsResponse = json_deserialize(&msg.payload)?;
-                    Ok(list.into())
-                }
-                Err(e) => Err(format!("Did not receive claims from lattice: {}", e).into()),
-            }
-        }
+    pub async fn get_claims(&self) -> Result<Vec<HashMap<String, String>>> {
+        self.kvstore.get_all_claims().await
     }
 
-    /// Performs an actor auction within the lattice, publishing a set of constraints and the metadata for the actor
-    /// in question. This will always wait for the full period specified by _duration_, and then return the set of
-    /// gathered results. It is then up to the client to choose from among the "auction winners" to issue the appropriate
-    /// command to start an actor. Clients cannot assume that auctions will always return at least one result.
+    /// Performs an actor auction within the lattice, publishing a set of constraints and the
+    /// metadata for the actor in question. This will always wait for the full period specified by
+    /// _duration_, and then return the set of gathered results. It is then up to the client to
+    /// choose from among the "auction winners" to issue the appropriate command to start an actor.
+    /// Clients cannot assume that auctions will always return at least one result.
     #[instrument(level = "debug", skip_all)]
     pub async fn perform_actor_auction(
         &self,
@@ -255,10 +252,11 @@ impl Client {
         self.publish_and_wait(subject, bytes).await
     }
 
-    /// Performs a provider auction within the lattice, publishing a set of constraints and the metadata for the provider
-    /// in question. This will always wait for the full period specified by _duration_, and then return the set of gathered
-    /// results. It is then up to the client to choose from among the "auction winners" and issue the appropriate command
-    /// to start a provider. Clients cannot assume that auctions will always return at least one result.
+    /// Performs a provider auction within the lattice, publishing a set of constraints and the
+    /// metadata for the provider in question. This will always wait for the full period specified
+    /// by _duration_, and then return the set of gathered results. It is then up to the client to
+    /// choose from among the "auction winners" and issue the appropriate command to start a
+    /// provider. Clients cannot assume that auctions will always return at least one result.
     #[instrument(level = "debug", skip_all)]
     pub async fn perform_provider_auction(
         &self,
@@ -276,12 +274,13 @@ impl Client {
         self.publish_and_wait(subject, bytes).await
     }
 
-    /// Sends a request to the given host to start a given actor by its OCI reference. This returns an acknowledgement
-    /// of _receipt_ of the command, not a confirmation that the actor started. An acknowledgement will either indicate
-    /// some form of validation failure, or, if no failure occurs, the receipt of the command. To avoid blocking consumers,
-    /// wasmCloud hosts will acknowledge the start actor command prior to fetching the actor's OCI bytes. If a client needs
-    /// deterministic results as to whether the actor completed its startup process, the client will have to monitor
-    /// the appropriate event in the control event stream
+    /// Sends a request to the given host to start a given actor by its OCI reference. This returns
+    /// an acknowledgement of _receipt_ of the command, not a confirmation that the actor started.
+    /// An acknowledgement will either indicate some form of validation failure, or, if no failure
+    /// occurs, the receipt of the command. To avoid blocking consumers, wasmCloud hosts will
+    /// acknowledge the start actor command prior to fetching the actor's OCI bytes. If a client
+    /// needs deterministic results as to whether the actor completed its startup process, the
+    /// client will have to monitor the appropriate event in the control event stream
     #[instrument(level = "debug", skip_all)]
     pub async fn start_actor(
         &self,
@@ -308,12 +307,13 @@ impl Client {
         }
     }
 
-    /// Sends a request to the given host to scale a given actor. This returns an acknowledgement of _receipt_ of the
-    /// command, not a confirmation that the actor scaled. An acknowledgement will either indicate some form of
-    /// validation failure, or, if no failure occurs, the receipt of the command. To avoid blocking consumers,
-    /// wasmCloud hosts will acknowledge the scale actor command prior to fetching the actor's OCI bytes. If a client
-    /// needs deterministic results as to whether the actor completed its startup process, the client will have to
-    /// monitor the appropriate event in the control event stream
+    /// Sends a request to the given host to scale a given actor. This returns an acknowledgement of
+    /// _receipt_ of the command, not a confirmation that the actor scaled. An acknowledgement will
+    /// either indicate some form of validation failure, or, if no failure occurs, the receipt of
+    /// the command. To avoid blocking consumers, wasmCloud hosts will acknowledge the scale actor
+    /// command prior to fetching the actor's OCI bytes. If a client needs deterministic results as
+    /// to whether the actor completed its startup process, the client will have to monitor the
+    /// appropriate event in the control event stream
     #[instrument(level = "debug", skip_all)]
     pub async fn scale_actor(
         &self,
@@ -342,11 +342,10 @@ impl Client {
         }
     }
 
-    /// Publishes a registry credential map to the control interface of the lattice.
-    /// All hosts will be listening and all will overwrite their registry credential
-    /// map with the new information. It is highly recommended you use TLS connections
-    /// with NATS and isolate the control interface credentials when using this
-    /// function in production as the data contains secrets
+    /// Publishes a registry credential map to the control interface of the lattice. All hosts will
+    /// be listening and all will overwrite their registry credential map with the new information.
+    /// It is highly recommended you use TLS connections with NATS and isolate the control interface
+    /// credentials when using this function in production as the data contains secrets
     #[instrument(level = "debug", skip_all)]
     pub async fn put_registries(&self, registries: RegistryCredentialMap) -> Result<()> {
         let subject = broker::publish_registries(&self.topic_prefix, &self.lattice_prefix);
@@ -367,10 +366,8 @@ impl Client {
         }
     }
 
-    /// If a key-value bucket was discovered at client construction time, then the link data will be written directly
-    /// to the bucket and interested parties will be notified indirectly by virtue of key subscription/monitoring. If
-    /// no bucket was discovered, then the "old" behavior will be performed of publishing the link data on the
-    /// appropriate topic.    
+    /// Puts a link into the lattice metadata keyvalue bucket. Returns an error if it was unable to
+    /// put the link
     #[instrument(level = "debug", skip_all)]
     pub async fn advertise_link(
         &self,
@@ -379,101 +376,48 @@ impl Client {
         contract_id: &str,
         link_name: &str,
         values: HashMap<String, String>,
-    ) -> Result<CtlOperationAck> {
-        let mut ld = LinkDefinition::default();
-        ld.actor_id = actor_id.to_string();
-        ld.provider_id = provider_id.to_string();
-        ld.contract_id = contract_id.to_string();
-        ld.link_name = link_name.to_string();
-        ld.values = values;
-
-        if let Some(ref store) = self.kvstore {
-            kv::put_link(store, ld).await.map(|_| CtlOperationAck {
-                accepted: true,
-                error: "".to_string(),
+    ) -> Result<()> {
+        self.kvstore
+            .put_link(LinkDefinition {
+                actor_id: actor_id.to_string(),
+                provider_id: provider_id.to_string(),
+                contract_id: contract_id.to_string(),
+                link_name: link_name.to_string(),
+                values,
             })
-        } else {
-            let subject = broker::advertise_link(&self.topic_prefix, &self.lattice_prefix);
-            debug!("advertise_link:request {}", &subject);
-
-            let bytes = crate::json_serialize(&ld)?;
-            match self.request_timeout(subject, bytes, self.timeout).await {
-                Ok(msg) => {
-                    let ack: CtlOperationAck = json_deserialize(&msg.payload)?;
-                    Ok(ack)
-                }
-                Err(e) => {
-                    Err(format!("Did not receive advertise link acknowledgement: {}", e).into())
-                }
-            }
-        }
+            .await
     }
 
-    /// If a key-value bucket is being used, then the link definition will be removed from that bucket directly. If not,
-    /// then this function will fall back to publishing a link definition removal request on the right lattice control
-    /// interface topic.
+    /// Removes a link from the lattice metadata keyvalue bucket. Returns an error if it was unable
+    /// to delete. This is an idempotent operation.
     #[instrument(level = "debug", skip_all)]
     pub async fn remove_link(
         &self,
         actor_id: &str,
         contract_id: &str,
         link_name: &str,
-    ) -> Result<CtlOperationAck> {
-        if let Some(ref store) = self.kvstore {
-            match kv::delete_link(store, actor_id, contract_id, link_name).await {
-                Ok(_) => Ok(CtlOperationAck {
-                    accepted: true,
-                    error: "".to_string(),
-                }),
-                Err(e) => Ok(CtlOperationAck {
-                    accepted: false,
-                    error: format!("{}", e),
-                }),
-            }
-        } else {
-            let subject = broker::remove_link(&self.topic_prefix, &self.lattice_prefix);
-            debug!("remove_link:request {}", &subject);
-            let mut ld = LinkDefinition::default();
-            ld.actor_id = actor_id.to_string();
-            ld.contract_id = contract_id.to_string();
-            ld.link_name = link_name.to_string();
-            let bytes = crate::json_serialize(&ld)?;
-            match self.request_timeout(subject, bytes, self.timeout).await {
-                Ok(msg) => {
-                    let ack: CtlOperationAck = json_deserialize(&msg.payload)?;
-                    Ok(ack)
-                }
-                Err(e) => Err(format!("Did not receive remove link acknowledgement: {}", e).into()),
-            }
-        }
+    ) -> Result<()> {
+        self.kvstore
+            .delete_link(actor_id, contract_id, link_name)
+            .await
     }
 
-    /// Retrieves the list of link definitions stored in the lattice metadata key-value bucket. If no such bucket was discovered
-    /// at client creation time, then it will issue a "legacy" request on the appropriate topic to request link definitions
-    /// from the first host that answers that request.    
+    /// Retrieves the list of link definitions stored in the lattice metadata key-value bucket. If
+    /// the client was created with caching, this will return the cached list of links. Otherwise,
+    /// it will query the bucket for the list of links.
     #[instrument(level = "debug", skip_all)]
-    pub async fn query_links(&self) -> Result<LinkDefinitionList> {
-        if let Some(ref store) = self.kvstore {
-            kv::get_links(store).await
-        } else {
-            let subject =
-                broker::queries::link_definitions(&self.topic_prefix, &self.lattice_prefix);
-            debug!("query_links:request {}", &subject);
-            match self.request_timeout(subject, vec![], self.timeout).await {
-                Ok(msg) => json_deserialize(&msg.payload),
-                Err(e) => Err(format!("Did not receive a response to links query: {}", e).into()),
-            }
-        }
+    pub async fn query_links(&self) -> Result<Vec<LinkDefinition>> {
+        self.kvstore.get_links().await
     }
 
     /// Issue a command to a host instructing that it replace an existing actor (indicated by its
     /// public key) with a new actor indicated by an OCI image reference. The host will acknowledge
     /// this request as soon as it verifies that the target actor is running. This acknowledgement
-    /// occurs **before** the new bytes are downloaded. Live-updating an actor can take a long
-    /// time and control clients cannot block waiting for a reply that could come several seconds
-    /// later. If you need to verify that the actor has been updated, you will want to set up a
-    /// listener for the appropriate **PublishedEvent** which will be published on the control events
-    /// channel in JSON
+    /// occurs **before** the new bytes are downloaded. Live-updating an actor can take a long time
+    /// and control clients cannot block waiting for a reply that could come several seconds later.
+    /// If you need to verify that the actor has been updated, you will want to set up a listener
+    /// for the appropriate **PublishedEvent** which will be published on the control events channel
+    /// in JSON
     #[instrument(level = "debug", skip_all)]
     pub async fn update_actor(
         &self,
@@ -500,13 +444,14 @@ impl Client {
         }
     }
 
-    /// Issues a command to a host to start a provider with a given OCI reference using the specified link
-    /// name (or "default" if none is specified). The target wasmCloud host will acknowledge the receipt
-    /// of this command _before_ downloading the provider's bytes from the OCI registry, indicating either
-    /// a validation failure or success. If a client needs deterministic guarantees that the provider has
-    /// completed its startup process, such a client needs to monitor the control event stream for the
-    /// appropriate event. If a host ID is not supplied (empty string), then this function will return
-    /// an early acknowledgement, go find a host, and then submit the start request to a target host.
+    /// Issues a command to a host to start a provider with a given OCI reference using the
+    /// specified link name (or "default" if none is specified). The target wasmCloud host will
+    /// acknowledge the receipt of this command _before_ downloading the provider's bytes from the
+    /// OCI registry, indicating either a validation failure or success. If a client needs
+    /// deterministic guarantees that the provider has completed its startup process, such a client
+    /// needs to monitor the control event stream for the appropriate event. If a host ID is not
+    /// supplied (empty string), then this function will return an early acknowledgement, go find a
+    /// host, and then submit the start request to a target host.
     #[instrument(level = "debug", skip_all)]
     pub async fn start_provider(
         &self,
@@ -575,10 +520,10 @@ impl Client {
         }
     }
 
-    /// Issues a command to a host to stop a provider for the given OCI reference, link name, and contract ID. The
-    /// target wasmCloud host will acknowledge the receipt of this command, and _will not_ supply a discrete
-    /// confirmation that a provider has terminated. For that kind of information, the client must also monitor
-    /// the control event stream
+    /// Issues a command to a host to stop a provider for the given OCI reference, link name, and
+    /// contract ID. The target wasmCloud host will acknowledge the receipt of this command, and
+    /// _will not_ supply a discrete confirmation that a provider has terminated. For that kind of
+    /// information, the client must also monitor the control event stream
     #[instrument(level = "debug", skip_all)]
     pub async fn stop_provider(
         &self,
@@ -607,10 +552,10 @@ impl Client {
         }
     }
 
-    /// Issues a command to a host to stop an actor for the given OCI reference. The
-    /// target wasmCloud host will acknowledge the receipt of this command, and _will not_ supply a discrete
-    /// confirmation that the actor has terminated. For that kind of information, the client must also monitor
-    /// the control event stream
+    /// Issues a command to a host to stop an actor for the given OCI reference. The target
+    /// wasmCloud host will acknowledge the receipt of this command, and _will not_ supply a
+    /// discrete confirmation that the actor has terminated. For that kind of information, the
+    /// client must also monitor the control event stream
     #[instrument(level = "debug", skip_all)]
     pub async fn stop_actor(
         &self,
@@ -637,8 +582,8 @@ impl Client {
         }
     }
 
-    /// Issues a command to a specific host to perform a graceful termination. The target host
-    /// will acknowledge receipt of the command before it attempts a shutdown. To deterministically
+    /// Issues a command to a specific host to perform a graceful termination. The target host will
+    /// acknowledge receipt of the command before it attempts a shutdown. To deterministically
     /// verify that the host is down, a client should monitor for the "host stopped" event or
     /// passively detect the host down by way of a lack of heartbeat receipts
     #[instrument(level = "debug", skip_all)]
@@ -664,11 +609,11 @@ impl Client {
         }
     }
 
-    async fn publish_and_wait<T: DeserializeOwned>(
+    async fn publish_and_wait<D: DeserializeOwned>(
         &self,
         subject: String,
         payload: Vec<u8>,
-    ) -> Result<Vec<T>> {
+    ) -> Result<Vec<D>> {
         let reply = self.nc.new_inbox();
         let sub = self.nc.subscribe(reply.clone()).await?;
         self.nc
@@ -685,7 +630,7 @@ impl Client {
                 error!(%error, "flush after publish");
             }
         });
-        Ok(collect_timeout::<T>(sub, self.auction_timeout, subject.as_str()).await)
+        Ok(collect_timeout::<D>(sub, self.auction_timeout, subject.as_str()).await)
     }
 
     /// Returns the receiver end of a channel that subscribes to the lattice control event stream.
