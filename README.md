@@ -2,7 +2,10 @@
 [![CNCF sandbox project](https://img.shields.io/website?label=CNCF%20Sandbox%20Project&url=https://landscape.cncf.io/?selected=wasm-cloud)](https://landscape.cncf.io/?selected=wasm-cloud)
 [![Stars](https://img.shields.io/github/stars/wasmcloud?color=gold&label=wasmCloud%20Org%20Stars)](https://github.com/wasmcloud/)
 ![Powered by WebAssembly](https://img.shields.io/badge/powered%20by-WebAssembly-orange.svg)<br />
-[![reddit](https://img.shields.io/reddit/subreddit-subscribers/wasmcloud?style=social)](https://reddit.com/r/wasmcloud)
+[![OpenSSF Best Practices](https://bestpractices.coreinfrastructure.org/projects/6363/badge)](https://bestpractices.coreinfrastructure.org/projects/6363)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/wasmcloud/wasmcloud/badge)](https://securityscorecards.dev/viewer/?uri=github.com/wasmcloud/wasmcloud)
+[![CLOMonitor](https://img.shields.io/endpoint?url=https://clomonitor.io/api/projects/cncf/wasm-cloud/badge)](https://clomonitor.io/projects/cncf/wasm-cloud)
+[![FOSSA Status](https://app.fossa.com/api/projects/custom%2B40030%2Fgit%40github.com%3AwasmCloud%2FwasmCloud.git.svg?type=small)](https://app.fossa.com/projects/custom%2B40030%2Fgit%40github.com%3AwasmCloud%2FwasmCloud.git?ref=badge_small)
 [![twitter](https://img.shields.io/twitter/follow/wasmcloud?style=social)](https://twitter.com/wasmcloud)
 [![youtube subscribers](https://img.shields.io/youtube/channel/subscribers/UCmZVIWGxkudizD1Z1and5JA?style=social)](https://youtube.com/wasmcloud)
 [![youtube views](https://img.shields.io/youtube/channel/views/UCmZVIWGxkudizD1Z1and5JA?style=social)](https://youtube.com/wasmcloud)
@@ -49,11 +52,25 @@ For even more examples, check out [awesome projects](./awesome-wasmcloud) using 
 
 We have plenty of ideas and things going on in the wasmCloud project. Please check out the [Roadmap doc](https://wasmcloud.com/docs/roadmap) for more information, and the [wasmCloud Roadmap project](https://github.com/orgs/wasmCloud/projects/7/views/3) to see the status of new features.
 
+## Releases
+
+The latest release and changelog can be found on the [releases page](https://github.com/wasmCloud/wasmCloud/releases).
+
 # 🧑‍💻 Contributing
 
 Want to get involved? For more information on how to contribute and our contributor guidelines, check out the [contributing readme](./CONTRIBUTING.md).
 
 # 📚 Other Resources
+
+## Community
+
+### Community Meetings
+
+We host weekly community meetings at 1pm EST on Wednesdays. These community meetings are livestreamed to our Twitter account and to [YouTube](https://www.youtube.com/@wasmCloud/streams). You can find the agenda and notes for each meeting in the [community](https://wasmcloud.com/community) secton of our webste. If you're interested in joining in on the call to demo or take part in the discussion, we have a Zoom link on our [community calendar](https://calendar.google.com/calendar/u/0/embed?src=c_6cm5hud8evuns4pe5ggu3h9qrs@group.calendar.google.com).
+
+### Slack
+
+We host our own [community slack](https://slack.wasmcloud.com) for all community members to join and talk about WebAssembly, wasmCloud, or just general cloud native technology. For those of you who are already on the [CNCF Slack](https://cloud-native.slack.com/), we also have our own channel at [#wasmcloud](https://cloud-native.slack.com/archives/C027YTXEYFL).
 
 ## Reference Documentation
 
