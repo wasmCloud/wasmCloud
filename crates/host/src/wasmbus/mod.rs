@@ -2294,7 +2294,7 @@ impl Host {
                 remaining,
                 |remaining, (annotations, mut instances)| async move {
                     let Some(count) = NonZeroUsize::new(instances.len()) else {
-                        return Ok(remaining)
+                        return Ok(remaining);
                     };
                     let remaining = remaining
                         .checked_sub(count.into())
@@ -2576,7 +2576,7 @@ impl Host {
                 event::actors_started(claims, &annotations, host_id, 0usize, actor_ref),
             )
             .await?;
-            return Ok(())
+            return Ok(());
         };
 
         match self.actors.write().await.entry(actor_id) {
@@ -2998,8 +2998,22 @@ impl Host {
                                                 warn!(?e, "failed to publish provider health check failed event");
                                             }
                                         }
-                                        // If the provider health status didn't change, we don't need to publish an event
-                                        (Ok(_), _) => (),
+                                        // If the provider health status didn't change, we simply publish a health check status event
+                                        (Ok(_), _) => {
+                                            if let Err(e) = event::publish(
+                                                &event_builder,
+                                                &ctl_nats,
+                                                &health_lattice_prefix,
+                                                "health_check_status",
+                                                event::provider_health_check(
+                                                    &health_provider_id,
+                                                    &health_link_name,
+                                                    &health_contract_id,
+                                                )
+                                            ).await {
+                                                warn!(?e, "failed to publish provider health check status event");
+                                            }
+                                        },
                                         _ => warn!("failed to deserialize provider health check response"),
                                     }
                                 }
