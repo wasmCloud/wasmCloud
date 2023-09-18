@@ -54,7 +54,7 @@ impl TraceContextInjector {
         // NOTE(thomastaylor312): Same point here with performance, technically we aren't allocating anything here except the hashmap, but we could do more optimization here if needed
         // Manually constructing the map here so we are sure we're only allocating once
         let mut inner = HashMap::with_capacity(headers.len());
-        inner.extend(headers.into_iter());
+        inner.extend(headers);
         TraceContextInjector { inner }
     }
 

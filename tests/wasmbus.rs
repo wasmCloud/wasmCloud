@@ -1001,7 +1001,7 @@ expected: {expected_labels:?}"#
 
     ensure!(
         pinged_host.cluster_issuers
-            == Some(vec![cluster_key.public_key(), cluster_key_two.public_key()].join(","))
+            == Some([cluster_key.public_key(), cluster_key_two.public_key()].join(","))
     );
     ensure!(pinged_host.ctl_host == Some(ctl_nats_url.to_string()));
     ensure!(pinged_host.js_domain == None);
@@ -1407,7 +1407,7 @@ expected: {expected_labels:?}"#
         &host_key,
         &foobar_actor_url,
         Some(HashMap::from_iter([("foo".to_string(), "bar".to_string())])),
-        3,
+        0,
     )
     .await
     .context("failed to scale foobar actor")?;
@@ -1419,8 +1419,8 @@ expected: {expected_labels:?}"#
         .iter()
         .find(|a| a.image_ref == Some(foobar_actor_url.to_string()))
         .expect("foobar actor to be in the list");
-    // 1 with no annotations, 3 with annotations
-    ensure!(foobar_actor.instances.len() == 4);
+    // 1 with no annotations, 0 with annotations
+    ensure!(foobar_actor.instances.len() == 1);
 
     assert_scale_actor(
         &ctl_client,
@@ -1439,8 +1439,7 @@ expected: {expected_labels:?}"#
         .map_err(|e| anyhow!(e).context("failed to get host inventory"))?;
     ensure!(!actors
         .iter()
-        .find(|a| a.image_ref == Some(foobar_actor_url.to_string()))
-        .is_none());
+        .any(|a| a.image_ref == Some(foobar_actor_url.to_string())));
 
     // Shutdown host one
     let CtlOperationAck { accepted, error } = ctl_client

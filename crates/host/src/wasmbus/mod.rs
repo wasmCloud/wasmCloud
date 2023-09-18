@@ -3988,8 +3988,7 @@ fn annotations_match_filter(annotations: &Annotations, filter: &Annotations) -> 
     filter.iter().all(|(k, v)| {
         annotations
             .get(k)
-            .map(|instance_value| instance_value == v)
-            .unwrap_or(false)
+            .is_some_and(|instance_value| instance_value == v)
     })
 }
 
