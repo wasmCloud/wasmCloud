@@ -65,6 +65,25 @@ async fn assert_start_actor(
     Ok(())
 }
 
+async fn assert_scale_actor(
+    ctl_client: &wasmcloud_control_interface::Client,
+    _nats_client: &async_nats::Client, // TODO: This should be exposed by `wasmcloud_control_interface::Client`
+    _lattice_prefix: &str,
+    host_key: &KeyPair,
+    url: impl AsRef<str>,
+    annotations: Option<HashMap<String, String>>,
+    count: u16,
+) -> anyhow::Result<()> {
+    let CtlOperationAck { accepted, error } = ctl_client
+        .scale_actor(&host_key.public_key(), url.as_ref(), "", count, annotations)
+        .await
+        .map_err(|e| anyhow!(e).context("failed to start actor"))?;
+    ensure!(error == "");
+    ensure!(accepted);
+
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)] // Shush clippy, it's a test function
 async fn assert_start_provider(
     client: &wasmcloud_control_interface::Client,
@@ -586,7 +605,6 @@ expected: {expected_labels:?}"#
             .expect("failed to construct compat actor ref");
     let module_actor_url = Url::from_file_path(test_actors::RUST_BUILTINS_MODULE_REACTOR_SIGNED)
         .expect("failed to construct module actor ref");
-
     let foobar_actor_url =
         Url::from_file_path(test_actors::RUST_FOOBAR_COMPONENT_COMMAND_PREVIEW2_SIGNED)
             .expect("failed to construct foobar actor ref");
@@ -660,7 +678,7 @@ expected: {expected_labels:?}"#
             &host_key,
             &foobar_actor_url,
             1,
-        ),
+        )
     )
     .context("failed to start actors")?;
 
@@ -1359,6 +1377,70 @@ expected: {expected_labels:?}"#
         ),
     )
     .context("failed to remove links")?;
+
+    // Test specific scale annotation logic
+    assert_scale_actor(
+        &ctl_client,
+        &ctl_nats_client,
+        TEST_PREFIX,
+        &host_key,
+        &foobar_actor_url,
+        Some(HashMap::from_iter([("foo".to_string(), "bar".to_string())])),
+        5,
+    )
+    .await
+    .context("failed to scale foobar actor")?;
+    let HostInventory { actors, .. } = ctl_client
+        .get_host_inventory(&host_key.public_key())
+        .await
+        .map_err(|e| anyhow!(e).context("failed to get host inventory"))?;
+    let foobar_actor = actors
+        .iter()
+        .find(|a| a.image_ref == Some(foobar_actor_url.to_string()))
+        .expect("foobar actor to be in the list");
+    // 1 with no annotations, 5 with annotations
+    ensure!(foobar_actor.instances.len() == 6);
+    assert_scale_actor(
+        &ctl_client,
+        &ctl_nats_client,
+        TEST_PREFIX,
+        &host_key,
+        &foobar_actor_url,
+        Some(HashMap::from_iter([("foo".to_string(), "bar".to_string())])),
+        3,
+    )
+    .await
+    .context("failed to scale foobar actor")?;
+    let HostInventory { actors, .. } = ctl_client
+        .get_host_inventory(&host_key.public_key())
+        .await
+        .map_err(|e| anyhow!(e).context("failed to get host inventory"))?;
+    let foobar_actor = actors
+        .iter()
+        .find(|a| a.image_ref == Some(foobar_actor_url.to_string()))
+        .expect("foobar actor to be in the list");
+    // 1 with no annotations, 3 with annotations
+    ensure!(foobar_actor.instances.len() == 4);
+
+    assert_scale_actor(
+        &ctl_client,
+        &ctl_nats_client,
+        TEST_PREFIX,
+        &host_key,
+        &foobar_actor_url,
+        None,
+        0,
+    )
+    .await
+    .context("failed to scale foobar actor")?;
+    let HostInventory { actors, .. } = ctl_client
+        .get_host_inventory(&host_key.public_key())
+        .await
+        .map_err(|e| anyhow!(e).context("failed to get host inventory"))?;
+    ensure!(!actors
+        .iter()
+        .find(|a| a.image_ref == Some(foobar_actor_url.to_string()))
+        .is_none());
 
     // Shutdown host one
     let CtlOperationAck { accepted, error } = ctl_client

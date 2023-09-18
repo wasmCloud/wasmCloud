@@ -2292,7 +2292,7 @@ impl Host {
             .map(anyhow::Result::<_>::Ok)
             .try_fold(
                 remaining,
-                |remaining, (annotations, mut instances)| async move {
+                |remaining, (instance_annotations, mut instances)| async move {
                     let Some(count) = NonZeroUsize::new(instances.len()) else {
                         return Ok(remaining);
                     };
@@ -2301,7 +2301,7 @@ impl Host {
                         .context("invalid instance length")?;
                     self.uninstantiate_actor(
                         claims,
-                        &annotations,
+                        &instance_annotations,
                         host_id,
                         &mut instances,
                         count,
@@ -2442,7 +2442,6 @@ impl Host {
         host_id: &str,
     ) -> anyhow::Result<Bytes> {
         let ScaleActorCommand {
-            actor_id,
             actor_ref,
             count,
             annotations,
@@ -2450,7 +2449,7 @@ impl Host {
         } = serde_json::from_slice(payload.as_ref())
             .context("failed to deserialize actor scale command")?;
 
-        debug!(actor_id, actor_ref, count, "scale actor");
+        debug!(actor_ref, count, "scale actor");
 
         let actor = self.fetch_actor(&actor_ref).await?;
         let claims = actor.claims().context("claims missing")?;
@@ -2471,7 +2470,7 @@ impl Host {
             )
         };
 
-        let annotations = annotations.unwrap_or_default().into_iter().collect();
+        let annotations: Annotations = annotations.unwrap_or_default().into_iter().collect();
         match (
             self.actors.write().await.entry(actor_id),
             NonZeroUsize::new(count.into()),
@@ -2481,14 +2480,23 @@ impl Host {
                 self.start_actor(entry, actor, actor_ref, count, host_id, annotations)
                     .await?;
             }
-            (hash_map::Entry::Occupied(entry), None) => {
-                self.stop_actor(entry, host_id).await?;
-            }
-            (hash_map::Entry::Occupied(entry), Some(count)) => {
+            (hash_map::Entry::Occupied(entry), _) => {
                 let actor = entry.get();
-                let mut instances = actor.instances.write().await;
+                let mut actor_instances = actor.instances.write().await;
                 let count = usize::from(count);
-                let current = instances.values().map(Vec::len).sum();
+                // Only consider instances that match the requested annotations
+                let matching_instances = actor_instances
+                    .iter()
+                    .filter_map(|(instance_annotations, instances)| {
+                        annotations_match_filter(instance_annotations, &annotations)
+                            .then(|| (instance_annotations.clone(), instances.clone()))
+                    })
+                    .collect::<Vec<_>>();
+                let current = matching_instances
+                    .iter()
+                    .map(|(_annotations, instances)| instances.len())
+                    .sum();
+
                 let claims = actor.pool.claims().context("claims missing")?;
                 if let Some(delta) = count.checked_sub(current).and_then(NonZeroUsize::new) {
                     let mut delta = self
@@ -2503,36 +2511,56 @@ impl Host {
                         )
                         .await
                         .context("failed to instantiate actor")?;
-                    instances.entry(annotations).or_default().append(&mut delta);
+                    actor_instances
+                        .entry(annotations)
+                        .or_default()
+                        .append(&mut delta);
                 } else if let Some(delta) = current.checked_sub(count).and_then(NonZeroUsize::new) {
                     let mut remaining = current;
                     let mut delta = usize::from(delta);
-                    for (annotations, instances) in instances.iter_mut() {
-                        let Some(count) = NonZeroUsize::new(instances.len().min(delta)) else {
+
+                    // Collect instances to uninstantiate into a single vector so we can
+                    // uninstantiate all of them in one go, sending one single `actors_stopped` event.
+                    let to_uninstantiate: &mut Vec<Arc<ActorInstance>> = &mut Vec::new();
+                    for (instance_annotations, instances) in matching_instances {
+                        let Some(count) = NonZeroUsize::new(current.min(delta)) else {
                             continue;
                         };
+
                         remaining = remaining
                             .checked_sub(count.into())
                             .context("invalid instance length")?;
                         delta = delta.checked_sub(count.into()).context("invalid delta")?;
+
+                        // Update actor instance list, removing instances that are being scaled down
+                        let mut remaining_instances = instances.clone();
+                        to_uninstantiate.extend(remaining_instances.drain(..usize::from(count)));
+                        if remaining_instances.is_empty() {
+                            actor_instances.remove(&instance_annotations);
+                        } else {
+                            actor_instances.insert(instance_annotations, remaining_instances);
+                        }
+                    }
+
+                    if let Some(count) = NonZeroUsize::new(to_uninstantiate.len()) {
                         self.uninstantiate_actor(
                             claims,
-                            annotations,
+                            &annotations,
                             host_id,
-                            instances,
+                            to_uninstantiate,
                             count,
                             remaining,
                         )
                         .await
                         .context("failed to uninstantiate actor")?;
-                        if delta == 0 {
-                            break;
-                        }
+                    } else {
+                        return Ok(r#"{"accepted":false,"error":"no actors with matching annotations found to stop"}"#.into());
                     }
-                    if remaining == 0 {
-                        drop(instances);
-                        entry.remove();
-                    }
+                }
+
+                if actor_instances.is_empty() {
+                    drop(actor_instances);
+                    entry.remove();
                 }
             }
         }
@@ -3133,6 +3161,7 @@ impl Host {
             "stop provider"
         );
 
+        let annotations: Annotations = annotations.unwrap_or_default().into_iter().collect();
         let mut providers = self.providers.write().await;
         let hash_map::Entry::Occupied(mut entry) = providers.entry(provider_ref.clone()) else {
             return Ok(SUCCESS.into());
@@ -3140,51 +3169,58 @@ impl Host {
         let provider = entry.get_mut();
         let instances = &mut provider.instances;
         if let hash_map::Entry::Occupied(entry) = instances.entry(link_name.clone()) {
-            let ProviderInstance {
-                id,
-                child,
-                annotations,
-                ..
-            } = entry.remove();
+            if annotations_match_filter(&entry.get().annotations, &annotations) {
+                let ProviderInstance {
+                    id,
+                    child,
+                    annotations,
+                    ..
+                } = entry.remove();
 
-            // Send a request to the provider, requesting a graceful shutdown
-            let req = serde_json::to_vec(&json!({ "host_id": host_id }))
-                .context("failed to encode provider stop request")?;
-            let req = async_nats::Request::new()
-                .payload(req.into())
-                .timeout(self.host_config.provider_shutdown_delay)
-                .headers(injector_to_headers(
-                    &TraceContextInjector::default_with_span(),
-                ));
-            if let Err(e) = self
-                .prov_rpc_nats
-                .send_request(
-                    format!(
-                        "wasmbus.rpc.{}.{provider_ref}.{link_name}.shutdown",
-                        self.host_config.lattice_prefix
+                // Send a request to the provider, requesting a graceful shutdown
+                let req = serde_json::to_vec(&json!({ "host_id": host_id }))
+                    .context("failed to encode provider stop request")?;
+                let req = async_nats::Request::new()
+                    .payload(req.into())
+                    .timeout(self.host_config.provider_shutdown_delay)
+                    .headers(injector_to_headers(
+                        &TraceContextInjector::default_with_span(),
+                    ));
+                if let Err(e) = self
+                    .prov_rpc_nats
+                    .send_request(
+                        format!(
+                            "wasmbus.rpc.{}.{provider_ref}.{link_name}.shutdown",
+                            self.host_config.lattice_prefix
+                        ),
+                        req,
+                    )
+                    .await
+                {
+                    warn!(
+                        ?e,
+                        "provider did not gracefully shut down in time, shutting down forcefully"
+                    );
+                }
+                child.abort();
+                self.publish_event(
+                    "provider_stopped",
+                    event::provider_stopped(
+                        &provider.claims,
+                        &annotations,
+                        Uuid::from_u128(id.into()),
+                        host_id,
+                        link_name,
+                        "stop",
                     ),
-                    req,
                 )
-                .await
-            {
-                warn!(
-                    ?e,
-                    "provider did not gracefully shut down in time, shutting down forcefully"
-                );
+                .await?;
             }
-            child.abort();
-            self.publish_event(
-                "provider_stopped",
-                event::provider_stopped(
-                    &provider.claims,
-                    &annotations,
-                    Uuid::from_u128(id.into()),
-                    host_id,
-                    link_name,
-                    "stop",
-                ),
-            )
-            .await?;
+        } else {
+            return Ok(
+                r#"{"accepted":false,"error":"provider with that link name is not running"}"#
+                    .into(),
+            );
         }
         if instances.is_empty() {
             entry.remove();
@@ -3973,6 +4009,19 @@ fn injector_to_headers(injector: &TraceContextInjector) -> async_nats::header::H
             Some((name, value))
         })
         .collect()
+}
+
+/// Helper function to ensure an individual instance's annotations contain all the
+/// filter annotations, determining if an instance matches a filter.
+///
+/// See #607 for more details.
+fn annotations_match_filter(annotations: &Annotations, filter: &Annotations) -> bool {
+    filter.iter().all(|(k, v)| {
+        annotations
+            .get(k)
+            .map(|instance_value| instance_value == v)
+            .unwrap_or(false)
+    })
 }
 
 #[cfg(test)]
