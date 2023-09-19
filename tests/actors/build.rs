@@ -305,6 +305,7 @@ async fn main() -> anyhow::Result<()> {
 
     let builtin_caps = vec![
         caps::BLOB.into(),
+        caps::HTTP_CLIENT.into(),
         caps::HTTP_SERVER.into(),
         caps::KEY_VALUE.into(),
         caps::LOGGING.into(),

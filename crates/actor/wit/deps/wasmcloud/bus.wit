@@ -21,6 +21,9 @@ interface lattice {
     /// `wasmcloud:messaging/consumer` interface target
     target-wasmcloud-messaging-consumer: func() -> target-interface
 
+    /// `wasi:http/outgoing-handler` interface target
+    target-wasi-http-outgoing-handler: func() -> target-interface
+
     /// Actor identifier
     variant actor-identifier {
         /// Actor public key

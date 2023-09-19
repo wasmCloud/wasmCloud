@@ -166,6 +166,13 @@ impl lattice::Host for Ctx {
     }
 
     #[instrument]
+    async fn target_wasi_http_outgoing_handler(&mut self) -> anyhow::Result<host::TargetInterface> {
+        self.table
+            .push(Box::new(TargetInterface::WasiHttpOutgoingHandler))
+            .context("failed to push target interface")
+    }
+
+    #[instrument]
     async fn target_wasmcloud_messaging_consumer(
         &mut self,
     ) -> anyhow::Result<host::TargetInterface> {

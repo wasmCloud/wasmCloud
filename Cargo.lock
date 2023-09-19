@@ -4318,6 +4318,7 @@ dependencies = [
  "async-nats",
  "clap",
  "futures",
+ "hyper 0.14.27",
  "nkeys",
  "opentelemetry 0.20.0",
  "opentelemetry-nats",

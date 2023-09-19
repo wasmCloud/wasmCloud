@@ -6,6 +6,7 @@ use crate::actor::claims;
 use crate::capability::logging::logging;
 use crate::capability::{
     builtin, Blobstore, Bus, IncomingHttp, KeyValueAtomic, KeyValueReadWrite, Logging, Messaging,
+    OutgoingHttp,
 };
 use crate::io::AsyncVec;
 use crate::Runtime;
@@ -357,6 +358,15 @@ impl Instance {
         self
     }
 
+    /// Set [`OutgoingHttp`] handler for this [Instance].
+    pub fn outgoing_http(
+        &mut self,
+        outgoing_http: Arc<dyn OutgoingHttp + Send + Sync>,
+    ) -> &mut Self {
+        self.handler_mut().replace_outgoing_http(outgoing_http);
+        self
+    }
+
     /// Set actor stderr stream. If another stderr was set, it is replaced.
     pub fn stderr(&mut self, stderr: impl AsyncWrite + Send + Sync + Unpin + 'static) -> &mut Self {
         let stderr = AsyncWritePipe(Arc::new(Mutex::new(stderr)));
@@ -515,7 +525,7 @@ impl IncomingHttp for GuestInstance {
         &self,
         request: http::Request<Box<dyn AsyncRead + Sync + Send + Unpin>>,
     ) -> anyhow::Result<http::Response<Box<dyn AsyncRead + Sync + Send + Unpin>>> {
-        let request = wasmcloud_compat::HttpRequest::from_http(request)
+        let request = wasmcloud_compat::HttpServerRequest::from_http(request)
             .await
             .context("failed to parse request")?;
         let request = rmp_serde::to_vec_named(&request).context("failed to encode request")?;

@@ -1,6 +1,7 @@
 use crate::actor::ModuleConfig;
 use crate::capability::{
     builtin, Blobstore, Bus, IncomingHttp, KeyValueAtomic, KeyValueReadWrite, Logging, Messaging,
+    OutgoingHttp,
 };
 use crate::ActorConfig;
 
@@ -121,6 +122,18 @@ impl RuntimeBuilder {
     pub fn messaging(self, messaging: Arc<impl Messaging + Sync + Send + 'static>) -> Self {
         Self {
             handler: self.handler.messaging(messaging),
+            ..self
+        }
+    }
+
+    /// Set a [`OutgoingHttp`] handler to use for all actor instances unless overriden for the instance
+    #[must_use]
+    pub fn outgoing_http(
+        self,
+        outgoing_http: Arc<impl OutgoingHttp + Sync + Send + 'static>,
+    ) -> Self {
+        Self {
+            handler: self.handler.outgoing_http(outgoing_http),
             ..self
         }
     }

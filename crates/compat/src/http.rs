@@ -7,7 +7,7 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 
 /// Request contains data sent to actor about the http request
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-pub struct Request {
+pub struct ServerRequest {
     /// HTTP method. One of: GET,POST,PUT,DELETE,HEAD,OPTIONS,CONNECT,PATCH,TRACE
     #[serde(default)]
     pub method: String,
@@ -26,10 +26,10 @@ pub struct Request {
     pub body: Vec<u8>,
 }
 
-impl Request {
+impl ServerRequest {
     pub async fn from_http(
         request: http::Request<impl AsyncRead + Unpin>,
-    ) -> anyhow::Result<Request> {
+    ) -> anyhow::Result<ServerRequest> {
         let (
             http::request::Parts {
                 method,
@@ -68,7 +68,7 @@ impl Request {
                 .context("failed to read request body")?;
             buf
         };
-        Ok(Request {
+        Ok(ServerRequest {
             method: method.as_str().into(),
             path: uri.path().into(),
             query_string: uri.query().map(Into::into).unwrap_or_default(),
@@ -78,17 +78,17 @@ impl Request {
     }
 }
 
-impl TryFrom<Request> for http::Request<Vec<u8>> {
+impl TryFrom<ServerRequest> for http::Request<Vec<u8>> {
     type Error = anyhow::Error;
 
     fn try_from(
-        Request {
+        ServerRequest {
             method,
             path,
             query_string,
             header,
             body,
-        }: Request,
+        }: ServerRequest,
     ) -> Result<Self, Self::Error> {
         let req = http::Request::builder().method(method.as_str());
         let req = header
@@ -106,6 +106,98 @@ impl TryFrom<Request> for http::Request<Vec<u8>> {
         }
         .body(body)
         .context("failed to build request")
+    }
+}
+
+/// Request contains data sent to actor about the http request
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ClientRequest {
+    /// http method, defaults to "GET"
+    #[serde(default)]
+    pub method: String,
+    #[serde(default)]
+    pub url: String,
+    /// optional headers. defaults to empty
+    pub headers: HashMap<String, Vec<String>>,
+    /// request body, defaults to empty
+    #[serde(with = "serde_bytes")]
+    #[serde(default)]
+    pub body: Vec<u8>,
+}
+
+impl ClientRequest {
+    pub async fn from_http(
+        request: http::Request<impl AsyncRead + Unpin>,
+    ) -> anyhow::Result<ClientRequest> {
+        let (
+            http::request::Parts {
+                method,
+                uri,
+                headers,
+                ..
+            },
+            mut body,
+        ) = request.into_parts();
+        let content_length = headers
+            .get(CONTENT_LENGTH)
+            .and_then(|content_length| content_length.to_str().ok())
+            .and_then(|content_length| content_length.parse().ok());
+        let headers = headers
+            .into_iter()
+            .map(|(name, value)| {
+                let name = name.context("name missing")?;
+                let value = value
+                    .to_str()
+                    .with_context(|| format!("failed to parse `{name}` header value as string"))?;
+                Ok((name.as_str().into(), vec![value.into()]))
+            })
+            .collect::<anyhow::Result<_>>()
+            .context("failed to process request headers")?;
+        let body = if let Some(content_length) = content_length {
+            let mut buf = Vec::with_capacity(content_length);
+            body.take(content_length.try_into().unwrap_or(u64::MAX))
+                .read_to_end(&mut buf)
+                .await
+                .context("failed to read request body")?;
+            buf
+        } else {
+            let mut buf = vec![];
+            body.read_to_end(&mut buf)
+                .await
+                .context("failed to read request body")?;
+            buf
+        };
+        Ok(ClientRequest {
+            method: method.as_str().into(),
+            url: uri.to_string(),
+            headers,
+            body,
+        })
+    }
+}
+
+impl TryFrom<ClientRequest> for http::Request<Vec<u8>> {
+    type Error = anyhow::Error;
+
+    fn try_from(
+        ClientRequest {
+            method,
+            url,
+            headers,
+            body,
+        }: ClientRequest,
+    ) -> Result<Self, Self::Error> {
+        let req = http::Request::builder().method(method.as_str());
+        headers
+            .into_iter()
+            .filter_map(|(name, mut values)| {
+                let value = values.pop()?;
+                Some((name, value))
+            })
+            .fold(req, |req, (name, value)| req.header(name, value))
+            .uri(url)
+            .body(body)
+            .context("failed to build request")
     }
 }
 

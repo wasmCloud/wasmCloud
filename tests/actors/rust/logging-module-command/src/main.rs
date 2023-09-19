@@ -4,7 +4,7 @@ use std::io::stdin;
 use anyhow::{anyhow, Context};
 use serde::Deserialize;
 use wasmcloud_actor::wasmcloud::bus::lattice::TargetEntity;
-use wasmcloud_actor::{wasmcloud, HttpRequest, HttpResponse};
+use wasmcloud_actor::{wasmcloud, HttpResponse, HttpServerRequest};
 
 // TODO: Migrate this to Go
 
@@ -26,7 +26,7 @@ fn main() -> anyhow::Result<()> {
     assert_eq!(level, "info");
     assert!(context.is_empty());
     let message = format!("[{}]{message}", env!("CARGO_PKG_NAME"));
-    let req = rmp_serde::to_vec(&HttpRequest {
+    let req = rmp_serde::to_vec(&HttpServerRequest {
         body: message.as_bytes().into(),
         ..Default::default()
     })

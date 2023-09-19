@@ -112,7 +112,7 @@ fn read_bytes(
     memory
         .read(store, data, &mut buf)
         .context("failed to read data from guest memory")?;
-    trace!(?buf, "read buffer from guest memory");
+    trace!("read buffer from guest memory");
     Ok(buf)
 }
 
@@ -126,7 +126,7 @@ fn read_string(
     let buf =
         read_bytes(store, memory, data, len).context("failed to read bytes from guest memory")?;
     let s = String::from_utf8(buf).context("failed to parse bytes as UTF-8")?;
-    trace!(s, "read string from guest memory");
+    trace!("read string from guest memory");
     Ok(s)
 }
 
@@ -142,7 +142,7 @@ fn write_bytes<T>(
     memory
         .write(store, data, buf)
         .context("failed to write bytes to guest memory")?;
-    trace!(?buf, "wrote bytes into guest memory");
+    trace!(len = buf.len(), "wrote bytes into guest memory");
     Ok(())
 }
 
@@ -155,7 +155,7 @@ fn set_host_error(store: &mut wasmtime::Caller<'_, super::Ctx>, err: String) {
 #[instrument(level = "trace", skip(store, res))]
 fn set_host_response(store: &mut wasmtime::Caller<'_, super::Ctx>, res: impl Into<Vec<u8>>) {
     let res = res.into();
-    trace!(?res, "set host response");
+    trace!("set host response");
     store.data_mut().wasmbus.host_response = Some(res);
 }
 
@@ -216,7 +216,7 @@ fn guest_response(
     let memory = caller_memory(&mut store);
     let res = read_bytes(&mut store, &memory, res_ptr, res_len)
         .context("failed to read `__guest_response` response")?;
-    trace!(?res, "set guest response");
+    trace!("set guest response");
     store.data_mut().wasmbus.guest_response = Some(res);
     Ok(())
 }
@@ -346,7 +346,7 @@ fn host_error_len(store: wasmtime::Caller<'_, super::Ctx>) -> wasm::usize {
             );
             wasm::usize::MAX
         });
-    trace!(len);
+    trace!(len, "`host_error_len` called");
     len
 }
 
@@ -360,7 +360,7 @@ fn host_response(mut store: wasmtime::Caller<'_, super::Ctx>, res_ptr: wasm::ptr
         .context("unexpected `__host_response`")?;
 
     let memory = caller_memory(&mut store);
-    trace_span!("write response into guest memory", ?res)
+    trace_span!("write response into guest memory")
         .in_scope(|| write_bytes(&mut store, &memory, res_ptr, res))
         .context("failed to write `__host_response` response into guest memory")
 }

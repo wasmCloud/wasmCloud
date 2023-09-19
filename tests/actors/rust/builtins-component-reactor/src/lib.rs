@@ -14,6 +14,7 @@ use std::io::{Read, Write};
 use serde::Deserialize;
 use serde_json::json;
 use wasi::http;
+use wasi::io::poll::poll_one;
 use wasi::sockets::{instance_network, network, tcp_create_socket, udp_create_socket};
 use wasmcloud_actor::wasi::logging::logging;
 use wasmcloud_actor::wasi::random::random;
@@ -32,6 +33,7 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
         struct Request {
             min: u32,
             max: u32,
+            port: u16,
         }
 
         assert!(matches!(request.method(), http::types::Method::Post));
@@ -47,11 +49,13 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
         assert_eq!(header_iter.next(), Some(("accept".into(), b"*/*".to_vec())));
         assert_eq!(headers.get(&String::from("accept")), vec![b"*/*"]);
 
+        let (content_length_key, content_length_value) =
+            header_iter.next().expect("`content-length` header missing");
+        assert_eq!(content_length_key, "content-length");
         assert_eq!(
-            header_iter.next(),
-            Some(("content-length".into(), b"21".to_vec()))
+            headers.get(&String::from("content-length")),
+            vec![content_length_value]
         );
-        assert_eq!(headers.get(&String::from("content-length")), vec![b"21"]);
 
         let (host_key, host_value) = header_iter.next().expect("`host` header missing");
         assert_eq!(host_key, "host");
@@ -65,7 +69,6 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
             headers.get(&String::from("test-header")),
             vec![b"test-value"]
         );
-
         assert!(header_iter.next().is_none());
 
         let headers_clone = headers.clone();
@@ -87,7 +90,7 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
         let request_body = request
             .consume()
             .expect("failed to get incoming request body");
-        let Request { min, max } = {
+        let Request { min, max, port } = {
             let mut buf = vec![];
             let mut stream = request_body
                 .stream()
@@ -364,15 +367,56 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
         let res: String = serde_json::from_slice(&res).expect("failed to decode response");
         assert_eq!(res, "foobar");
 
-        let _req = http::types::OutgoingRequest::new(
-            &http::types::Method::Get,
-            None,
-            None,
-            None,
+        bus::lattice::set_target(
+            Some(&TargetEntity::Link(Some("httpclient".into()))),
+            &[bus::lattice::target_wasi_http_outgoing_handler()],
+        );
+        let request = http::types::OutgoingRequest::new(
+            &http::types::Method::Put,
+            Some("/test"),
+            Some(&http::types::Scheme::Http),
+            Some(&format!("localhost:{port}")),
             &http::types::Fields::new(&[]),
         );
-        // TODO: Verify outgoing HTTP handler, currently calling this method would trap
-        //http::outgoing_handler::handle(req, None).expect_err("should not succeed");
+        let request_body = request
+            .write()
+            .expect("failed to get outgoing request body");
+        {
+            let mut stream = request_body
+                .write()
+                .expect("failed to get outgoing request stream");
+            let mut w = OutputStreamWriter::from(&mut stream);
+            w.write_all(b"test")
+                .expect("failed to write `test` to outgoing request stream");
+            w.flush().expect("failed to flush outgoing request stream");
+        }
+        http::types::OutgoingBody::finish(request_body, None);
+
+        let response =
+            http::outgoing_handler::handle(request, None).expect("failed to handle HTTP request");
+        poll_one(&response.subscribe());
+        let response = response
+            .get()
+            .expect("HTTP request response missing")
+            .expect("HTTP request response requested more than once")
+            .expect("HTTP request failed");
+        assert_eq!(response.status(), 200);
+        // TODO: Assert headers
+        _ = response.headers();
+        let response_body = response
+            .consume()
+            .expect("failed to get incoming request body");
+        {
+            let mut buf = vec![];
+            let mut stream = response_body
+                .stream()
+                .expect("failed to get HTTP request response stream");
+            InputStreamReader::from(&mut stream)
+                .read_to_end(&mut buf)
+                .expect("failed to read value from HTTP request response stream");
+            assert_eq!(buf, b"test");
+        };
+        let _trailers = http::types::IncomingBody::finish(response_body);
 
         let tcp4 = tcp_create_socket::create_tcp_socket(network::IpAddressFamily::Ipv4)
             .expect("failed to create an IPv4 TCP socket");

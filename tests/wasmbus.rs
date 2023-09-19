@@ -9,6 +9,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, ensure, Context};
+use hyper::server::conn::Http;
+use hyper::service::service_fn;
 use nkeys::KeyPair;
 use redis::{Commands, ConnectionLike};
 use serde::Deserialize;
@@ -279,6 +281,31 @@ async fn start_nats() -> anyhow::Result<(
     Ok((server, stop_tx, url))
 }
 
+async fn http_handler(
+    req: hyper::Request<hyper::Body>,
+) -> anyhow::Result<hyper::Response<hyper::Body>> {
+    let (
+        hyper::http::request::Parts {
+            method,
+            uri,
+            headers: _, // TODO: Verify headers
+            ..
+        },
+        body,
+    ) = req.into_parts();
+    ensure!(method == &hyper::Method::PUT);
+    ensure!(uri == "/test");
+    let body = hyper::body::to_bytes(body)
+        .await
+        .context("failed to read body")?;
+    ensure!(body == b"test"[..]);
+    let res = hyper::Response::builder()
+        .status(hyper::StatusCode::OK)
+        .body(hyper::Body::from("test"))
+        .context("failed to construct response")?;
+    Ok(res)
+}
+
 async fn assert_handle_http_request(
     http_port: u16,
     nats_client: async_nats::Client,
@@ -320,6 +347,21 @@ async fn assert_handle_http_request(
         Ok(())
     });
 
+    let lis = TcpListener::bind((Ipv6Addr::UNSPECIFIED, 0))
+        .await
+        .context("failed to start TCP listener")?;
+    let out_port = lis
+        .local_addr()
+        .context("failed to query listener local address")?
+        .port();
+    let http_server = spawn(async move {
+        let (stream, _addr) = lis.accept().await.expect("failed to accept connection");
+        Http::new()
+            .serve_connection(stream, service_fn(http_handler))
+            .await
+            .expect("failed to handle HTTP request");
+    });
+
     let http_client = reqwest::Client::builder()
         .timeout(Duration::from_secs(20))
         .connect_timeout(Duration::from_secs(20))
@@ -328,7 +370,7 @@ async fn assert_handle_http_request(
     let http_res = http_client
         .post(format!("http://localhost:{http_port}/foo?bar=baz"))
         .header("test-header", "test-value")
-        .body(r#"{"min":42,"max":4242}"#)
+        .body(format!(r#"{{"min":42,"max":4242,"port":{out_port}}}"#))
         .send()
         .await
         .context("failed to connect to server")?
@@ -399,6 +441,9 @@ expected: {expected_redis_keys:?}"#
         .context("failed to get `result` key in Redis")?;
     ensure!(redis_res == redis::Value::Data(http_res.into()));
 
+    http_server
+        .await
+        .context("failed to join HTTP server task")?;
     Ok(())
 }
 
@@ -775,6 +820,22 @@ expected: {expected_labels:?}"#
         assert_advertise_link(
             &ctl_client,
             &component_actor_claims,
+            &httpclient_provider_key,
+            "wasmcloud:httpclient",
+            "httpclient",
+            HashMap::default(),
+        ),
+        assert_advertise_link(
+            &ctl_client,
+            &module_actor_claims,
+            &httpclient_provider_key,
+            "wasmcloud:httpclient",
+            "httpclient",
+            HashMap::default(),
+        ),
+        assert_advertise_link(
+            &ctl_client,
+            &component_actor_claims,
             &httpserver_provider_key,
             "wasmcloud:httpserver",
             "httpserver",
@@ -919,7 +980,7 @@ expected: {expected_labels:?}"#
         },
         unequal => unequal,
     });
-    ensure!(links_from_bucket.len() == 8);
+    ensure!(links_from_bucket.len() == 10);
 
     let pinged_hosts = ctl_client
         .get_hosts()

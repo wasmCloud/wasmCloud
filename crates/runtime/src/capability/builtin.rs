@@ -23,6 +23,7 @@ pub struct Handler {
     blobstore: Option<Arc<dyn Blobstore + Sync + Send>>,
     bus: Option<Arc<dyn Bus + Sync + Send>>,
     incoming_http: Option<Arc<dyn IncomingHttp + Sync + Send>>,
+    outgoing_http: Option<Arc<dyn OutgoingHttp + Sync + Send>>,
     keyvalue_atomic: Option<Arc<dyn KeyValueAtomic + Sync + Send>>,
     keyvalue_readwrite: Option<Arc<dyn KeyValueReadWrite + Sync + Send>>,
     logging: Option<Arc<dyn Logging + Sync + Send>>,
@@ -39,6 +40,7 @@ impl Debug for Handler {
             .field("keyvalue_readwrite", &format_opt(&self.keyvalue_readwrite))
             .field("logging", &format_opt(&self.logging))
             .field("messaging", &format_opt(&self.messaging))
+            .field("outgoing_http", &format_opt(&self.outgoing_http))
             .finish()
     }
 }
@@ -136,6 +138,14 @@ impl Handler {
     ) -> Option<Arc<dyn Messaging + Send + Sync>> {
         self.messaging.replace(messaging)
     }
+
+    /// Replace [`OutgoingHttp`] handler returning the old one, if such was set
+    pub fn replace_outgoing_http(
+        &mut self,
+        outgoing_http: Arc<dyn OutgoingHttp + Send + Sync>,
+    ) -> Option<Arc<dyn OutgoingHttp + Send + Sync>> {
+        self.outgoing_http.replace(outgoing_http)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -218,6 +228,8 @@ impl TryFrom<bus::lattice::TargetEntity> for TargetEntity {
 pub enum TargetInterface {
     /// `wasi:blobstore/blobstore`
     WasiBlobstoreBlobstore,
+    /// `wasi:http/outgoing-handler`
+    WasiHttpOutgoingHandler,
     /// `wasi:keyvalue/atomic`
     WasiKeyvalueAtomic,
     /// `wasi:keyvalue/readwrite`
@@ -228,67 +240,21 @@ pub enum TargetInterface {
     WasmcloudMessagingConsumer,
 }
 
-#[async_trait]
-/// `wasmcloud:bus/host` implementation
-pub trait Bus {
-    /// Identify the target of wasmbus module invocation
-    async fn identify_wasmbus_target(
-        &self,
-        binding: &str,
-        namespace: &str,
-    ) -> anyhow::Result<TargetEntity>;
-
-    /// Set interface call target
-    async fn set_target(
-        &self,
-        target: Option<TargetEntity>,
-        interfaces: Vec<TargetInterface>,
-    ) -> anyhow::Result<()>;
-
-    /// Handle `wasmcloud:bus/host.call`
-    async fn call(
-        &self,
-        target: Option<TargetEntity>,
-        operation: String,
-    ) -> anyhow::Result<(
-        Pin<Box<dyn Future<Output = Result<(), String>> + Send>>,
-        Box<dyn AsyncWrite + Sync + Send + Unpin>,
-        Box<dyn AsyncRead + Sync + Send + Unpin>,
-    )>;
-
-    /// Handle `wasmcloud:bus/host.call` without streaming
-    async fn call_sync(
-        &self,
-        target: Option<TargetEntity>,
-        operation: String,
-        mut payload: Vec<u8>,
-    ) -> anyhow::Result<Vec<u8>> {
-        let (res, mut input, mut output) = self
-            .call(target, operation)
-            .await
-            .context("failed to process call")?;
-        input
-            .write_all(&payload)
-            .await
-            .context("failed to write request")?;
-        payload.clear();
-        output
-            .read_to_end(&mut payload)
-            .await
-            .context("failed to read output")?;
-        res.await.map_err(|e| anyhow!(e).context("call failed"))?;
-        Ok(payload)
-    }
-}
-
-#[async_trait]
-/// `wasi:http/incoming-handler` implementation
-pub trait IncomingHttp {
-    /// Handle `wasi:http/incoming-handler`
-    async fn handle(
-        &self,
-        request: http::Request<Box<dyn AsyncRead + Sync + Send + Unpin>>,
-    ) -> anyhow::Result<http::Response<Box<dyn AsyncRead + Sync + Send + Unpin>>>;
+/// Outgoing HTTP request
+pub struct OutgoingHttpRequest {
+    /// Whether to use TLS
+    pub use_tls: bool,
+    /// TLS authority
+    pub authority: String,
+    /// HTTP request
+    pub request: ::http::Request<Box<dyn AsyncRead + Sync + Send + Unpin>>,
+    /// The timeout for the initial connect.
+    pub connect_timeout: Duration,
+    /// The timeout for receiving the first byte of the response body.
+    pub first_byte_timeout: Duration,
+    /// The timeout for receiving the next chunk of bytes in the response body
+    /// stream.
+    pub between_bytes_timeout: Duration,
 }
 
 #[async_trait]
@@ -359,15 +325,66 @@ pub trait Blobstore {
 }
 
 #[async_trait]
-/// `wasi:logging/logging` implementation
-pub trait Logging {
-    /// Handle `wasi:logging/logging.log`
-    async fn log(
+/// `wasmcloud:bus/host` implementation
+pub trait Bus {
+    /// Identify the target of wasmbus module invocation
+    async fn identify_wasmbus_target(
         &self,
-        level: logging::Level,
-        context: String,
-        message: String,
+        binding: &str,
+        namespace: &str,
+    ) -> anyhow::Result<TargetEntity>;
+
+    /// Set interface call target
+    async fn set_target(
+        &self,
+        target: Option<TargetEntity>,
+        interfaces: Vec<TargetInterface>,
     ) -> anyhow::Result<()>;
+
+    /// Handle `wasmcloud:bus/host.call`
+    async fn call(
+        &self,
+        target: Option<TargetEntity>,
+        operation: String,
+    ) -> anyhow::Result<(
+        Pin<Box<dyn Future<Output = Result<(), String>> + Send>>,
+        Box<dyn AsyncWrite + Sync + Send + Unpin>,
+        Box<dyn AsyncRead + Sync + Send + Unpin>,
+    )>;
+
+    /// Handle `wasmcloud:bus/host.call` without streaming
+    async fn call_sync(
+        &self,
+        target: Option<TargetEntity>,
+        operation: String,
+        mut payload: Vec<u8>,
+    ) -> anyhow::Result<Vec<u8>> {
+        let (res, mut input, mut output) = self
+            .call(target, operation)
+            .await
+            .context("failed to process call")?;
+        input
+            .write_all(&payload)
+            .await
+            .context("failed to write request")?;
+        payload.clear();
+        output
+            .read_to_end(&mut payload)
+            .await
+            .context("failed to read output")?;
+        res.await.map_err(|e| anyhow!(e).context("call failed"))?;
+        Ok(payload)
+    }
+}
+
+#[async_trait]
+/// `wasi:http/incoming-handler` implementation
+pub trait IncomingHttp {
+    /// Handle `wasi:http/incoming-handler`
+    async fn handle(
+        &self,
+        request: ::http::Request<Box<dyn AsyncRead + Sync + Send + Unpin>>,
+    ) -> anyhow::Result<::http::Response<Box<dyn AsyncRead + Sync + Send + Unpin>>>;
 }
 
 #[async_trait]
@@ -412,6 +429,18 @@ pub trait KeyValueReadWrite {
 }
 
 #[async_trait]
+/// `wasi:logging/logging` implementation
+pub trait Logging {
+    /// Handle `wasi:logging/logging.log`
+    async fn log(
+        &self,
+        level: logging::Level,
+        context: String,
+        message: String,
+    ) -> anyhow::Result<()>;
+}
+
+#[async_trait]
 /// `wasmcloud:messaging/consumer` implementation
 pub trait Messaging {
     /// Handle `wasmcloud:messaging/consumer.request`
@@ -433,6 +462,16 @@ pub trait Messaging {
 
     /// Handle `wasmcloud:messaging/consumer.publish`
     async fn publish(&self, msg: messaging::types::BrokerMessage) -> anyhow::Result<()>;
+}
+
+#[async_trait]
+/// `wasi:http/outgoing-handler` implementation
+pub trait OutgoingHttp {
+    /// Handle `wasi:http/outgoing-handler`
+    async fn handle(
+        &self,
+        request: OutgoingHttpRequest,
+    ) -> anyhow::Result<::http::Response<Box<dyn AsyncRead + Sync + Send + Unpin>>>;
 }
 
 #[async_trait]
@@ -674,8 +713,8 @@ impl IncomingHttp for Handler {
     #[instrument(skip(request))]
     async fn handle(
         &self,
-        request: http::Request<Box<dyn AsyncRead + Sync + Send + Unpin>>,
-    ) -> anyhow::Result<http::Response<Box<dyn AsyncRead + Sync + Send + Unpin>>> {
+        request: ::http::Request<Box<dyn AsyncRead + Sync + Send + Unpin>>,
+    ) -> anyhow::Result<::http::Response<Box<dyn AsyncRead + Sync + Send + Unpin>>> {
         proxy(
             &self.incoming_http,
             "IncomingHttp",
@@ -721,6 +760,23 @@ impl Messaging for Handler {
     }
 }
 
+#[async_trait]
+impl OutgoingHttp for Handler {
+    #[instrument(skip(request))]
+    async fn handle(
+        &self,
+        request: OutgoingHttpRequest,
+    ) -> anyhow::Result<::http::Response<Box<dyn AsyncRead + Sync + Send + Unpin>>> {
+        proxy(
+            &self.outgoing_http,
+            "OutgoingHttp",
+            "wasi:http/outgoing-handler.handle",
+        )?
+        .handle(request)
+        .await
+    }
+}
+
 /// A [Handler] builder used to configure it
 #[derive(Clone, Default)]
 pub(crate) struct HandlerBuilder {
@@ -738,6 +794,8 @@ pub(crate) struct HandlerBuilder {
     pub logging: Option<Arc<dyn Logging + Sync + Send>>,
     /// [`Messaging`] handler
     pub messaging: Option<Arc<dyn Messaging + Sync + Send>>,
+    /// [`OutgoingHttp`] handler
+    pub outgoing_http: Option<Arc<dyn OutgoingHttp + Sync + Send>>,
 }
 
 impl HandlerBuilder {
@@ -805,6 +863,17 @@ impl HandlerBuilder {
             ..self
         }
     }
+
+    /// Set [`OutgoingHttp`] handler
+    pub fn outgoing_http(
+        self,
+        outgoing_http: Arc<impl OutgoingHttp + Sync + Send + 'static>,
+    ) -> Self {
+        Self {
+            outgoing_http: Some(outgoing_http),
+            ..self
+        }
+    }
 }
 
 impl Debug for HandlerBuilder {
@@ -817,6 +886,7 @@ impl Debug for HandlerBuilder {
             .field("keyvalue_readwrite", &format_opt(&self.keyvalue_readwrite))
             .field("logging", &format_opt(&self.logging))
             .field("messaging", &format_opt(&self.messaging))
+            .field("outgoing_http", &format_opt(&self.outgoing_http))
             .finish()
     }
 }
@@ -831,6 +901,7 @@ impl From<Handler> for HandlerBuilder {
             keyvalue_readwrite,
             logging,
             messaging,
+            outgoing_http,
         }: Handler,
     ) -> Self {
         Self {
@@ -841,6 +912,7 @@ impl From<Handler> for HandlerBuilder {
             keyvalue_readwrite,
             logging,
             messaging,
+            outgoing_http,
         }
     }
 }
@@ -855,12 +927,14 @@ impl From<HandlerBuilder> for Handler {
             keyvalue_readwrite,
             logging,
             messaging,
+            outgoing_http,
         }: HandlerBuilder,
     ) -> Self {
         Self {
             blobstore,
             bus,
             incoming_http,
+            outgoing_http,
             keyvalue_atomic,
             keyvalue_readwrite,
             logging,
