@@ -26,7 +26,7 @@ use tokio_stream::wrappers::TcpListenerStream;
 use tracing::{debug, error, instrument, trace};
 use wasmcloud_runtime::actor::GuestInstance;
 use wasmcloud_runtime::capability::{Bus, TargetEntity};
-use wasmcloud_runtime::{ActorInstance, PooledActorInstance, Runtime};
+use wasmcloud_runtime::{ActorInstance, Runtime};
 
 #[instrument]
 fn get_actor<'a>(actors: &'a HashMap<String, Actor>, actor: &str) -> anyhow::Result<&'a Actor> {
@@ -49,7 +49,7 @@ fn get_actor_mut<'a>(
 async fn get_actor_link<'a>(
     actors: &'a HashMap<String, Actor>,
     actor: &str,
-) -> anyhow::Result<PooledActorInstance> {
+) -> anyhow::Result<ActorInstance> {
     get_actor(actors, actor)
         .with_context(|| format!("failed to link to `{actor}`"))?
         .instantiate(actors)
@@ -59,11 +59,10 @@ async fn get_actor_link<'a>(
 
 #[derive(Debug)]
 struct Actor {
-    actor: wasmcloud_runtime::ActorInstancePool,
+    actor: wasmcloud_runtime::Actor,
     logging: Option<String>,
     incoming_http: Option<String>,
     interfaces: HashMap<String, String>,
-    runtime: Runtime,
 }
 
 #[derive(Default)]
@@ -151,11 +150,10 @@ impl Actor {
                 let actor = wasmcloud_runtime::Actor::new(rt, buf)
                     .context("failed to initialize local actor")?;
                 Ok(Self {
-                    actor: actor.into(),
+                    actor,
                     logging: None,
                     incoming_http: None,
                     interfaces: HashMap::default(),
-                    runtime: rt.clone(),
                 })
             }
             scheme => bail!("`{scheme}` URLs not supported yet"),
@@ -167,7 +165,7 @@ impl Actor {
     pub async fn instantiate(
         &self,
         actors: &HashMap<String, Actor>,
-    ) -> anyhow::Result<PooledActorInstance> {
+    ) -> anyhow::Result<ActorInstance> {
         let Self {
             actor,
             logging,
@@ -177,14 +175,13 @@ impl Actor {
         } = self;
         trace!("instantiate local actor");
         let mut actor = actor
-            .instantiate(self.runtime.clone())
+            .instantiate()
             .await
             .context("failed to instantiate actor")?;
         actor
             .stderr(stderr()) // TODO: Add actor name prefix per-line?
             .await
             .context("failed to set stderr")?;
-        // NOTE: Instance pool does not currently support component model interfaces
         let (incoming_http, logging) = try_join!(
             async {
                 let Some(incoming_http) = incoming_http else {

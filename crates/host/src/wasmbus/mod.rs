@@ -13,7 +13,7 @@ use crate::{
 
 use core::future::Future;
 use core::num::NonZeroUsize;
-use core::ops::RangeInclusive;
+use core::ops::{Deref, RangeInclusive};
 use core::pin::Pin;
 use core::task::{Context, Poll};
 use core::time::Duration;
@@ -65,7 +65,7 @@ use wasmcloud_runtime::capability::{
     blobstore, messaging, ActorIdentifier, Blobstore, Bus, IncomingHttp, KeyValueAtomic,
     KeyValueReadWrite, Logging, Messaging, TargetEntity, TargetInterface,
 };
-use wasmcloud_runtime::{ActorInstancePool, Runtime};
+use wasmcloud_runtime::Runtime;
 use wasmcloud_tracing::context::TraceContextInjector;
 
 const SUCCESS: &str = r#"{"accepted":true,"error":""}"#;
@@ -204,11 +204,10 @@ impl Queue {
 
 #[derive(Debug)]
 struct ActorInstance {
+    actor: wasmcloud_runtime::Actor,
     nats: async_nats::Client,
-    pool: ActorInstancePool,
     id: Ulid,
     calls: AbortHandle,
-    runtime: Runtime,
     handler: Handler,
     chunk_endpoint: ChunkEndpoint,
     /// Cluster issuers that this actor should accept invocations from
@@ -216,6 +215,14 @@ struct ActorInstance {
     policy_manager: Arc<PolicyManager>,
     actor_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::Actor>>>>, // TODO: use a single map once Claims is an enum
     provider_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::CapabilityProvider>>>>,
+}
+
+impl Deref for ActorInstance {
+    type Target = wasmcloud_runtime::Actor;
+
+    fn deref(&self) -> &Self::Target {
+        &self.actor
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1133,8 +1140,8 @@ impl ActorInstance {
         ensure_actor_capability(self.handler.claims.metadata.as_ref(), contract_id)?;
 
         let mut instance = self
-            .pool
-            .instantiate(self.runtime.clone())
+            .actor
+            .instantiate()
             .await
             .context("failed to instantiate actor")?;
         instance
@@ -1153,7 +1160,7 @@ impl ActorInstance {
                 let req: wasmcloud_compat::HttpRequest =
                     rmp_serde::from_slice(&msg).context("failed to decode HTTP request")?;
                 let req = http::Request::try_from(req).context("failed to convert request")?;
-                let res = match wasmcloud_runtime::ActorInstance::from(instance)
+                let res = match instance
                     .into_incoming_http()
                     .await
                     .context("failed to instantiate `wasi:http/incoming-handler`")?
@@ -1373,10 +1380,18 @@ type Annotations = BTreeMap<String, String>;
 
 #[derive(Debug)]
 struct Actor {
-    pool: ActorInstancePool,
+    actor: wasmcloud_runtime::Actor,
     instances: RwLock<HashMap<Annotations, Vec<Arc<ActorInstance>>>>,
     image_ref: String,
     handler: Handler,
+}
+
+impl Deref for Actor {
+    type Target = wasmcloud_runtime::Actor;
+
+    fn deref(&self) -> &Self::Target {
+        &self.actor
+    }
 }
 
 #[derive(Debug)]
@@ -2076,7 +2091,7 @@ impl Host {
 
     /// Instantiate an actor and publish the actor start events.
     #[allow(clippy::too_many_arguments)] // TODO: refactor into a config struct
-    #[instrument(skip(self, claims, annotations, host_id, actor_ref, pool, handler))]
+    #[instrument(skip(self, claims, annotations, host_id, actor_ref, actor, handler))]
     async fn instantiate_actor(
         &self,
         claims: &jwt::Claims<jwt::Actor>,
@@ -2084,7 +2099,7 @@ impl Host {
         host_id: impl AsRef<str>,
         actor_ref: impl AsRef<str>,
         count: NonZeroUsize,
-        pool: ActorInstancePool,
+        actor: wasmcloud_runtime::Actor,
         handler: Handler,
     ) -> anyhow::Result<Vec<Arc<ActorInstance>>> {
         trace!(actor_ref = actor_ref.as_ref(), count, "instantiating actor");
@@ -2097,7 +2112,7 @@ impl Host {
         ))
         .take(count.into())
         .then(|topic| {
-            let pool = pool.clone();
+            let actor = actor.clone();
             let handler = handler.clone();
             let claims = claims.clone();
             async move {
@@ -2111,10 +2126,9 @@ impl Host {
                 let id = Ulid::new();
                 let instance = Arc::new(ActorInstance {
                     nats: self.rpc_nats.clone(),
-                    pool,
+                    actor,
                     id,
                     calls: calls_abort,
-                    runtime: self.runtime.clone(),
                     handler: handler.clone(),
                     chunk_endpoint: self.chunk_endpoint.clone(),
                     valid_issuers: self.cluster_issuers.clone(),
@@ -2256,7 +2270,6 @@ impl Host {
             chunk_endpoint: self.chunk_endpoint.clone(),
         };
 
-        let pool = ActorInstancePool::new(actor.clone(), Some(count));
         let instances = self
             .instantiate_actor(
                 claims,
@@ -2264,13 +2277,13 @@ impl Host {
                 host_id,
                 &actor_ref,
                 count,
-                pool.clone(),
+                actor.clone(),
                 handler.clone(),
             )
             .await
             .context("failed to instantiate actor")?;
         let actor = Arc::new(Actor {
-            pool,
+            actor,
             instances: RwLock::new(HashMap::from([(annotations, instances)])),
             image_ref: actor_ref,
             handler,
@@ -2285,7 +2298,7 @@ impl Host {
         host_id: &str,
     ) -> anyhow::Result<()> {
         let actor = entry.remove();
-        let claims = actor.pool.claims().context("claims missing")?;
+        let claims = actor.claims().context("claims missing")?;
         let mut instances = actor.instances.write().await;
         let remaining: usize = instances.values().map(Vec::len).sum();
         stream::iter(instances.drain())
@@ -2509,7 +2522,7 @@ impl Host {
                     .map(|(_annotations, instances)| instances.len())
                     .sum();
 
-                let claims = actor.pool.claims().context("claims missing")?;
+                let claims = actor.claims().context("claims missing")?;
                 if let Some(delta) = count.checked_sub(current).and_then(NonZeroUsize::new) {
                     let mut delta = self
                         .instantiate_actor(
@@ -2518,7 +2531,7 @@ impl Host {
                             host_id,
                             &actor.image_ref,
                             delta,
-                            actor.pool.clone(),
+                            actor.actor.clone(),
                             actor.handler.clone(),
                         )
                         .await
@@ -2655,7 +2668,7 @@ impl Host {
                     bail!(err);
                 }
                 let mut instances = actor.instances.write().await;
-                let claims = actor.pool.claims().context("claims missing")?;
+                let claims = actor.claims().context("claims missing")?;
                 let mut delta = self
                     .instantiate_actor(
                         claims,
@@ -2663,7 +2676,7 @@ impl Host {
                         host_id,
                         &actor.image_ref,
                         count,
-                        actor.pool.clone(),
+                        actor.actor.clone(),
                         actor.handler.clone(),
                     )
                     .await
@@ -2739,7 +2752,7 @@ impl Host {
             }
             (hash_map::Entry::Occupied(entry), Some(count)) => {
                 let actor = entry.get();
-                let claims = actor.pool.claims().context("claims missing")?;
+                let claims = actor.claims().context("claims missing")?;
                 let mut instances = actor.instances.write().await;
                 if let hash_map::Entry::Occupied(mut entry) = instances.entry(annotations.clone()) {
                     let instances = entry.get_mut();
@@ -2805,7 +2818,6 @@ impl Host {
             .await
             .context("failed to store claims")?;
         let old_claims = actor
-            .pool
             .claims()
             .context("claims missing from running actor")?;
 
@@ -2820,7 +2832,6 @@ impl Host {
         .await
         .context("failed to uninstantiate running actor")?;
 
-        let new_pool = ActorInstancePool::new(new_actor.clone(), Some(count));
         let mut new_instances = self
             .instantiate_actor(
                 new_claims,
@@ -2828,7 +2839,7 @@ impl Host {
                 host_id,
                 new_actor_ref,
                 count,
-                new_pool,
+                new_actor.clone(),
                 actor.handler.clone(),
             )
             .await
@@ -3269,7 +3280,6 @@ impl Host {
                         instances.iter().map(move |actor| {
                             let instance_id = Uuid::from_u128(actor.id.into()).to_string();
                             let revision = actor
-                                .pool
                                 .claims()
                                 .and_then(|claims| claims.metadata.as_ref())
                                 .and_then(|jwt::Actor { rev, .. }| *rev)
@@ -3287,7 +3297,6 @@ impl Host {
                     return None;
                 }
                 let name = actor
-                    .pool
                     .claims()
                     .and_then(|claims| claims.metadata.as_ref())
                     .and_then(|metadata| metadata.name.as_ref())
