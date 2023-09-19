@@ -2900,7 +2900,9 @@ impl Host {
                 host_data = &*String::from_utf8_lossy(&host_data),
                 "spawn provider process"
             );
-            let mut child = process::Command::new(&path)
+
+            let mut child_cmd = process::Command::new(&path);
+            child_cmd
                 .env_clear()
                 // TODO: remove these once all providers are updated to use the new SDK
                 .env(
@@ -2918,7 +2920,18 @@ impl Host {
                         .exporter_otlp_endpoint
                         .clone()
                         .unwrap_or_default(),
-                )
+                );
+
+            if cfg!(windows) {
+                // Proxy SYSTEMROOT to providers. Without this, providers on Windows won't be able to start
+                child_cmd.env(
+                    "SYSTEMROOT",
+                    env::var("SYSTEMROOT")
+                        .context("SYSTEMROOT is not set. Providers cannot be started")?,
+                );
+            }
+
+            let mut child = child_cmd
                 .stdin(Stdio::piped())
                 .kill_on_drop(true)
                 .spawn()
