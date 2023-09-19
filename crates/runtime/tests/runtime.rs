@@ -21,7 +21,7 @@ use wasmcloud_runtime::capability::provider::{
     MemoryBlobstore, MemoryKeyValue, MemoryKeyValueEntry,
 };
 use wasmcloud_runtime::capability::{
-    self, messaging, IncomingHttp, KeyValueAtomic, KeyValueReadWrite, Messaging,
+    self, messaging, IncomingHttp, KeyValueAtomic, KeyValueReadWrite, Messaging, OutgoingHttp,
 };
 use wasmcloud_runtime::{Actor, Runtime};
 
@@ -38,6 +38,8 @@ static LOGGER: Lazy<()> = Lazy::new(|| {
         .init();
 });
 
+const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(600);
+
 fn init() {
     _ = Lazy::force(&LOGGER);
 }
@@ -49,61 +51,7 @@ struct Handler {
     keyvalue_readwrite: Arc<MemoryKeyValue>,
     logging: Arc<Mutex<Vec<(logging::Level, String, String)>>>,
     messaging: Arc<Mutex<Vec<messaging::types::BrokerMessage>>>,
-}
-
-#[async_trait]
-impl capability::Logging for Handler {
-    async fn log(
-        &self,
-        level: logging::Level,
-        context: String,
-        message: String,
-    ) -> anyhow::Result<()> {
-        self.logging.lock().await.push((level, context, message));
-        Ok(())
-    }
-}
-
-#[async_trait]
-impl capability::Messaging for Handler {
-    async fn request(
-        &self,
-        subject: String,
-        body: Option<Vec<u8>>,
-        timeout: Duration,
-    ) -> anyhow::Result<messaging::types::BrokerMessage> {
-        assert_eq!(subject, "test-messaging-request");
-        assert_eq!(body.as_deref(), Some(b"foo".as_slice()));
-        assert_eq!(timeout, Duration::from_millis(1000));
-        Ok(messaging::types::BrokerMessage {
-            subject,
-            body: Some("bar".into()),
-            reply_to: None,
-        })
-    }
-
-    async fn request_multi(
-        &self,
-        subject: String,
-        body: Option<Vec<u8>>,
-        timeout: Duration,
-        max_results: u32,
-    ) -> anyhow::Result<Vec<messaging::types::BrokerMessage>> {
-        assert_eq!(subject, "test-messaging-request-multi");
-        assert_eq!(body.as_deref(), Some(b"foo".as_slice()));
-        assert_eq!(timeout, Duration::from_millis(1000));
-        assert_eq!(max_results, 1);
-        Ok(vec![messaging::types::BrokerMessage {
-            subject,
-            body: Some("bar".into()),
-            reply_to: None,
-        }])
-    }
-
-    async fn publish(&self, msg: messaging::types::BrokerMessage) -> anyhow::Result<()> {
-        self.messaging.lock().await.push(msg);
-        Ok(())
-    }
+    outgoing_http: Arc<Mutex<Vec<capability::OutgoingHttpRequest>>>,
 }
 
 #[async_trait]
@@ -114,11 +62,14 @@ impl capability::Bus for Handler {
         namespace: &str,
     ) -> anyhow::Result<capability::TargetEntity> {
         match (binding, namespace) {
-            ("messaging", "wasmcloud:messaging") => {
-                Ok(capability::TargetEntity::Link(Some("messaging".into())))
+            ("httpclient", "wasmcloud:httpclient") => {
+                Ok(capability::TargetEntity::Link(Some("httpclient".into())))
             }
             ("keyvalue", "wasmcloud:keyvalue") => {
                 Ok(capability::TargetEntity::Link(Some("keyvalue".into())))
+            }
+            ("messaging", "wasmcloud:messaging") => {
+                Ok(capability::TargetEntity::Link(Some("messaging".into())))
             }
             ("", "foobar-component-command-preview2") => Ok(capability::TargetEntity::Actor(
                 capability::ActorIdentifier::Alias("foobar-component-command-preview2".into()),
@@ -139,6 +90,7 @@ impl capability::Bus for Handler {
             (Some(capability::TargetEntity::Link(Some(name))), [capability::TargetInterface::WasmcloudMessagingConsumer]) if name == "messaging" => Ok(()),
                 (Some(capability::TargetEntity::Link(Some(name))), [capability::TargetInterface::WasiKeyvalueAtomic | capability::TargetInterface::WasiKeyvalueReadwrite]) if name == "keyvalue" => Ok(()),
                 (Some(capability::TargetEntity::Link(Some(name))), [capability::TargetInterface::WasiBlobstoreBlobstore]) if name == "blobstore" => Ok(()),
+                (Some(capability::TargetEntity::Link(Some(name))), [capability::TargetInterface::WasiHttpOutgoingHandler]) if name == "httpclient" => Ok(()),
             (target, interfaces) => panic!("`set_target` with target `{target:?}` and interfaces `{interfaces:?}` should not have been called")
         }
     }
@@ -165,63 +117,25 @@ impl capability::Bus for Handler {
         match (target, operation.as_str()) {
             (
                 Some(capability::TargetEntity::Link(Some(name))),
-                "wasmcloud:messaging/Messaging.Publish",
-            ) if name == "messaging" => {
-                let wasmcloud_compat::messaging::PubMessage {
-                    subject,
-                    reply_to,
-                    body,
-                } = rmp_serde::from_slice(&payload).expect("failed to decode payload");
-                self.publish(messaging::types::BrokerMessage {
-                    subject,
-                    reply_to,
-                    body: Some(body),
-                })
-                .await
-                .expect("failed to publish message");
-                Ok(vec![])
-            }
-            (
-                Some(capability::TargetEntity::Link(Some(name))),
-                "wasmcloud:messaging/Messaging.Request",
-            ) if name == "messaging" => {
-                let wasmcloud_compat::messaging::RequestMessage {
-                    subject,
-                    body,
-                    timeout_ms,
-                } = rmp_serde::from_slice(&payload).expect("failed to decode payload");
-                let messaging::types::BrokerMessage {
-                    subject,
-                    body,
-                    reply_to,
-                } = match subject.as_str() {
-                    "test-messaging-request" => self
-                        .request(
-                            subject,
-                            Some(body),
-                            Duration::from_millis(timeout_ms.into()),
-                        )
-                        .await
-                        .expect("failed to call `request`"),
-                    "test-messaging-request-multi" => self
-                        .request_multi(
-                            subject,
-                            Some(body),
-                            Duration::from_millis(timeout_ms.into()),
-                            1,
-                        )
-                        .await
-                        .expect("failed to call `request_multi`")
-                        .pop()
-                        .expect("first element missing"),
-                    _ => panic!("invalid subject `{subject}`"),
-                };
-                let buf = rmp_serde::to_vec_named(&wasmcloud_compat::messaging::ReplyMessage {
-                    subject,
-                    reply_to,
-                    body: body.unwrap_or_default(),
-                })
-                .expect("failed to encode reply");
+                "wasmcloud:httpclient/HttpClient.Request",
+            ) if name == "httpclient" => {
+                let request: wasmcloud_compat::HttpClientRequest =
+                    rmp_serde::from_slice(&payload).expect("failed to decode payload");
+                let request = http::Request::try_from(request)
+                    .expect("failed to convert HTTP request")
+                    .map(|body| -> Box<dyn AsyncRead + Sync + Send + Unpin> {
+                        Box::new(Cursor::new(body))
+                    });
+                let res = self.handle(capability::OutgoingHttpRequest {
+                    use_tls: false,
+                    authority: "localhost:42424".into(),
+                    request,
+                    connect_timeout: DEFAULT_HTTP_TIMEOUT,
+                    first_byte_timeout: DEFAULT_HTTP_TIMEOUT,
+                    between_bytes_timeout: DEFAULT_HTTP_TIMEOUT,
+                }).await.expect("failed to call `handle`");
+                let res = wasmcloud_compat::HttpResponse::from_http(res).await.expect("failed to convert response");
+                let buf = rmp_serde::to_vec_named(&res).expect("failed to encode response");
                 Ok(buf)
             }
 
@@ -310,6 +224,68 @@ impl capability::Bus for Handler {
             }
 
             (
+                Some(capability::TargetEntity::Link(Some(name))),
+                "wasmcloud:messaging/Messaging.Publish",
+            ) if name == "messaging" => {
+                let wasmcloud_compat::messaging::PubMessage {
+                    subject,
+                    reply_to,
+                    body,
+                } = rmp_serde::from_slice(&payload).expect("failed to decode payload");
+                self.publish(messaging::types::BrokerMessage {
+                    subject,
+                    reply_to,
+                    body: Some(body),
+                })
+                .await
+                .expect("failed to publish message");
+                Ok(vec![])
+            }
+            (
+                Some(capability::TargetEntity::Link(Some(name))),
+                "wasmcloud:messaging/Messaging.Request",
+            ) if name == "messaging" => {
+                let wasmcloud_compat::messaging::RequestMessage {
+                    subject,
+                    body,
+                    timeout_ms,
+                } = rmp_serde::from_slice(&payload).expect("failed to decode payload");
+                let messaging::types::BrokerMessage {
+                    subject,
+                    body,
+                    reply_to,
+                } = match subject.as_str() {
+                    "test-messaging-request" => self
+                        .request(
+                            subject,
+                            Some(body),
+                            Duration::from_millis(timeout_ms.into()),
+                        )
+                        .await
+                        .expect("failed to call `request`"),
+                    "test-messaging-request-multi" => self
+                        .request_multi(
+                            subject,
+                            Some(body),
+                            Duration::from_millis(timeout_ms.into()),
+                            1,
+                        )
+                        .await
+                        .expect("failed to call `request_multi`")
+                        .pop()
+                        .expect("first element missing"),
+                    _ => panic!("invalid subject `{subject}`"),
+                };
+                let buf = rmp_serde::to_vec_named(&wasmcloud_compat::messaging::ReplyMessage {
+                    subject,
+                    reply_to,
+                    body: body.unwrap_or_default(),
+                })
+                .expect("failed to encode reply");
+                Ok(buf)
+            }
+
+            (
                 Some(capability::TargetEntity::Actor(capability::ActorIdentifier::Alias(name))),
                 "test-actors:foobar/actor.foobar" // component invocation
                 | "foobar-component-command-preview2/actor.foobar"  // valid module invocation
@@ -330,11 +306,84 @@ impl capability::Bus for Handler {
     }
 }
 
+#[async_trait]
+impl capability::Logging for Handler {
+    async fn log(
+        &self,
+        level: logging::Level,
+        context: String,
+        message: String,
+    ) -> anyhow::Result<()> {
+        self.logging.lock().await.push((level, context, message));
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl capability::Messaging for Handler {
+    async fn request(
+        &self,
+        subject: String,
+        body: Option<Vec<u8>>,
+        timeout: Duration,
+    ) -> anyhow::Result<messaging::types::BrokerMessage> {
+        assert_eq!(subject, "test-messaging-request");
+        assert_eq!(body.as_deref(), Some(b"foo".as_slice()));
+        assert_eq!(timeout, Duration::from_millis(1000));
+        Ok(messaging::types::BrokerMessage {
+            subject,
+            body: Some("bar".into()),
+            reply_to: None,
+        })
+    }
+
+    async fn request_multi(
+        &self,
+        subject: String,
+        body: Option<Vec<u8>>,
+        timeout: Duration,
+        max_results: u32,
+    ) -> anyhow::Result<Vec<messaging::types::BrokerMessage>> {
+        assert_eq!(subject, "test-messaging-request-multi");
+        assert_eq!(body.as_deref(), Some(b"foo".as_slice()));
+        assert_eq!(timeout, Duration::from_millis(1000));
+        assert_eq!(max_results, 1);
+        Ok(vec![messaging::types::BrokerMessage {
+            subject,
+            body: Some("bar".into()),
+            reply_to: None,
+        }])
+    }
+
+    async fn publish(&self, msg: messaging::types::BrokerMessage) -> anyhow::Result<()> {
+        self.messaging.lock().await.push(msg);
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl capability::OutgoingHttp for Handler {
+    async fn handle(
+        &self,
+        request: capability::OutgoingHttpRequest,
+    ) -> anyhow::Result<http::Response<Box<dyn AsyncRead + Sync + Send + Unpin>>> {
+        self.outgoing_http.lock().await.push(request);
+
+        let body: Box<dyn AsyncRead + Sync + Send + Unpin> = Box::new(Cursor::new("test"));
+        let res = http::Response::builder()
+            .status(200)
+            .body(body)
+            .expect("failed to build response");
+        Ok(res)
+    }
+}
+
 fn new_runtime(
     blobstore: Arc<MemoryBlobstore>,
     keyvalue: Arc<MemoryKeyValue>,
     logs: Arc<Mutex<Vec<(logging::Level, String, String)>>>,
     published: Arc<Mutex<Vec<messaging::types::BrokerMessage>>>,
+    sent: Arc<Mutex<Vec<capability::OutgoingHttpRequest>>>,
 ) -> Runtime {
     let handler = Arc::new(Handler {
         blobstore: Arc::clone(&blobstore),
@@ -342,6 +391,7 @@ fn new_runtime(
         keyvalue_readwrite: Arc::clone(&keyvalue),
         logging: logs,
         messaging: published,
+        outgoing_http: sent,
     });
     Runtime::builder()
         .bus(Arc::clone(&handler))
@@ -350,11 +400,14 @@ fn new_runtime(
         .keyvalue_readwrite(Arc::clone(&keyvalue))
         .logging(Arc::clone(&handler))
         .messaging(Arc::clone(&handler))
+        .outgoing_http(Arc::clone(&handler))
         .build()
         .expect("failed to construct runtime")
 }
 
 async fn run(wasm: impl AsRef<Path>) -> anyhow::Result<Vec<(logging::Level, String, String)>> {
+    const BODY: &str = r#"{"min":42,"max":4242,"port":42424}"#;
+
     let wasm = fs::read(wasm).await.context("failed to read Wasm")?;
 
     let keyvalue = Arc::new(MemoryKeyValue::from(HashMap::from([(
@@ -364,6 +417,7 @@ async fn run(wasm: impl AsRef<Path>) -> anyhow::Result<Vec<(logging::Level, Stri
     let blobstore = Arc::default();
     let logs = Arc::default();
     let published = Arc::default();
+    let sent = Arc::default();
 
     let res = {
         let rt = new_runtime(
@@ -371,6 +425,7 @@ async fn run(wasm: impl AsRef<Path>) -> anyhow::Result<Vec<(logging::Level, Stri
             Arc::clone(&keyvalue),
             Arc::clone(&logs),
             Arc::clone(&published),
+            Arc::clone(&sent),
         );
         let actor = Actor::new(&rt, wasm).expect("failed to construct actor");
         actor.claims().expect("claims missing");
@@ -379,13 +434,12 @@ async fn run(wasm: impl AsRef<Path>) -> anyhow::Result<Vec<(logging::Level, Stri
             .stderr(stderr())
             .await
             .context("failed to set stderr")?;
-        let req: Box<dyn AsyncRead + Send + Sync + Unpin> =
-            Box::new(Cursor::new(r#"{"min":42,"max":4242}"#));
+        let req: Box<dyn AsyncRead + Send + Sync + Unpin> = Box::new(Cursor::new(BODY));
         let req = http::Request::builder()
             .method("POST")
             .uri("/foo?bar=baz")
             .header("accept", "*/*")
-            .header("content-length", "21")
+            .header("content-length", BODY.len())
             .header("host", "fake:42")
             .header("test-header", "test-value")
             .body(req)
@@ -415,7 +469,6 @@ async fn run(wasm: impl AsRef<Path>) -> anyhow::Result<Vec<(logging::Level, Stri
     };
 
     let mut published = Arc::try_unwrap(published).unwrap().into_inner().into_iter();
-    let mut keyvalue = HashMap::from(Arc::try_unwrap(keyvalue).unwrap()).into_iter();
     let published = match (published.next(), published.next()) {
         (
             Some(messaging::types::BrokerMessage {
@@ -434,6 +487,40 @@ async fn run(wasm: impl AsRef<Path>) -> anyhow::Result<Vec<(logging::Level, Stri
     };
     ensure!(body == published);
 
+    let mut sent = Arc::try_unwrap(sent).unwrap().into_inner().into_iter();
+    match (sent.next(), sent.next()) {
+        (
+            Some(capability::OutgoingHttpRequest {
+                use_tls,
+                authority,
+                request,
+                connect_timeout,
+                first_byte_timeout,
+                between_bytes_timeout,
+            }),
+            None,
+        ) => {
+            ensure!(!use_tls);
+            ensure!(authority == format!("localhost:42424"));
+            ensure!(connect_timeout == DEFAULT_HTTP_TIMEOUT);
+            ensure!(first_byte_timeout == DEFAULT_HTTP_TIMEOUT);
+            ensure!(between_bytes_timeout == DEFAULT_HTTP_TIMEOUT);
+            ensure!(request.method() == http::Method::PUT);
+            ensure!(*request.uri() == *format!("http://localhost:42424/test"));
+            let mut body = String::new();
+            request
+                .into_body()
+                .read_to_string(&mut body)
+                .await
+                .context("failed to read request body")?;
+            ensure!(body == "test");
+        }
+        (None, None) => bail!("no messages published"),
+        _ => bail!("too many messages published"),
+    };
+    ensure!(body == published);
+
+    let mut keyvalue = HashMap::from(Arc::try_unwrap(keyvalue).unwrap()).into_iter();
     let set = match (keyvalue.next(), keyvalue.next()) {
         (Some((bucket, kv)), None) => {
             ensure!(bucket == "");

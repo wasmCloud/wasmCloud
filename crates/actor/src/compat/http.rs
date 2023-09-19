@@ -1,7 +1,10 @@
-pub use crate::{HttpRequest as Request, HttpResponse as Response};
+pub use crate::{
+    HttpClientRequest as ClientRequest, HttpResponse as Response,
+    HttpServerRequest as ServerRequest,
+};
 
 pub trait Handler {
-    fn handle_request(&self, req: Request) -> Result<Response, String>;
+    fn handle_request(&self, req: ServerRequest) -> Result<Response, String>;
 }
 
 impl<T: Handler> super::Handler<dyn Handler> for T {

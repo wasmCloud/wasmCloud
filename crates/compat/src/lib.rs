@@ -5,7 +5,10 @@ pub mod logging;
 pub mod messaging;
 pub mod numbergen;
 
-pub use self::http::{Request as HttpRequest, Response as HttpResponse};
+pub use self::http::{
+    ClientRequest as HttpClientRequest, Response as HttpResponse,
+    ServerRequest as HttpServerRequest,
+};
 
 use std::cmp::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};

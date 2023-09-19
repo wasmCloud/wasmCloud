@@ -10,9 +10,6 @@ pub use compat::*;
 #[cfg(feature = "module")]
 pub use wasmcloud_actor_macros::*;
 
-// TODO: Remove once `wasi-http` is integrated
-pub use wasmcloud_compat::{HttpRequest, HttpResponse};
-
 mod wrappers;
 pub use wrappers::*;
 

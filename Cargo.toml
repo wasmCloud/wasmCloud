@@ -54,6 +54,7 @@ wasmcloud-tracing = { workspace = true, features = ["otel"] }
 [dev-dependencies]
 async-nats = { workspace = true }
 futures = { workspace = true }
+hyper = { workspace = true }
 redis = { workspace = true }
 reqwest = { workspace = true, features = ["rustls-tls"] }
 rmp-serde = { workspace = true }
@@ -93,6 +94,7 @@ http = { version = "0.2", default-features = false }
 http-body = { version = "1.0.0-rc.2", default-features = false }
 http-body-util = { version = "0.1.0-rc.2", default-features = false }
 humantime = { version = "2.1", default-features = false }
+hyper = { version = "0.14", default-features = false }
 log = { version = "0.4", default-features = false }
 names = { version = "0.14", default-features = false }
 nkeys = { version = "0.3", default-features = false }

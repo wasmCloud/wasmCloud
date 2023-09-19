@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use serde::Deserialize;
 use serde_json::json;
@@ -7,7 +7,8 @@ use wasmcloud_actor::wasi::random::random;
 use wasmcloud_actor::wasmcloud::bus;
 use wasmcloud_actor::wasmcloud::bus::lattice::TargetEntity;
 use wasmcloud_actor::{
-    debug, error, export_actor, info, trace, warn, HostRng, HttpHandler, HttpRequest, HttpResponse,
+    debug, error, export_actor, http, info, trace, warn, HostRng, HttpHandler, HttpResponse,
+    HttpServerRequest,
 };
 use wasmcloud_actor::{keyvalue, messaging};
 
@@ -17,14 +18,21 @@ struct HttpLogRng;
 impl HttpHandler for HttpLogRng {
     fn handle_request(
         &self,
-        HttpRequest {
+        HttpServerRequest {
             method,
             path,
             query_string,
             header,
             body,
-        }: HttpRequest,
+        }: HttpServerRequest,
     ) -> Result<HttpResponse, String> {
+        #[derive(Deserialize)]
+        struct Request {
+            min: u32,
+            max: u32,
+            port: u16,
+        }
+
         assert_eq!(method, "POST");
         assert_eq!(path, "/foo");
         assert_eq!(query_string, "bar=baz");
@@ -34,10 +42,8 @@ impl HttpHandler for HttpLogRng {
             header_iter.next(),
             Some(("accept".into(), vec!["*/*".into()]))
         );
-        assert_eq!(
-            header_iter.next(),
-            Some(("content-length".into(), vec!["21".into()]))
-        );
+        let (content_length_key, _) = header_iter.next().expect("`content-length` header missing");
+        assert_eq!(content_length_key, "content-length");
         let (host_key, _) = header_iter.next().expect("`host` header missing");
         assert_eq!(host_key, "host");
         assert_eq!(
@@ -64,12 +70,7 @@ impl HttpHandler for HttpLogRng {
         warn!("warn");
         error!("error");
 
-        #[derive(Deserialize)]
-        struct Request {
-            min: u32,
-            max: u32,
-        }
-        let Request { min, max } =
+        let Request { min, max, port } =
             serde_json::from_slice(&body).expect("failed to decode request body");
 
         let res = json!({
@@ -260,6 +261,28 @@ impl HttpHandler for HttpLogRng {
         .expect("failed to invoke `test-actors:foobar/actor.foobar` on an actor");
         let res: String = serde_json::from_slice(&res).expect("failed to decode response");
         assert_eq!(res, "foobar");
+
+        let httpclient_target = TargetEntity::Link(Some("httpclient".into()));
+        let buf = rmp_serde::to_vec_named(&http::ClientRequest {
+            method: "PUT".into(),
+            url: format!("http://localhost:{port}/test"),
+            headers: HashMap::default(),
+            body: b"test".to_vec(),
+        })
+        .expect("failed to encode `ClientRequest`");
+        let buf = bus::host::call_sync(
+            Some(&httpclient_target),
+            "wasmcloud:httpclient/HttpClient.Request",
+            &buf,
+        )
+        .expect("failed to perform `HttpClient.Request`");
+        let http::Response {
+            status_code,
+            header: _, // TODO: Verify headers
+            body: response_body,
+        } = rmp_serde::from_slice(&buf).expect("failed to decode `HttpClient.Request` response");
+        assert_eq!(status_code, 200);
+        assert_eq!(response_body, b"test");
 
         Ok(HttpResponse {
             body: body.into(),

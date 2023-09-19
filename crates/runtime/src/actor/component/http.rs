@@ -1,7 +1,7 @@
 use super::{Ctx, Instance, InterfaceBindings, InterfaceInstance};
 
 use crate::capability::http::types;
-use crate::capability::IncomingHttp;
+use crate::capability::{IncomingHttp, OutgoingHttp, OutgoingHttpRequest};
 use crate::io::AsyncVec;
 
 use core::pin::Pin;
@@ -18,8 +18,10 @@ use http_body_util::combinators::BoxBody;
 use tokio::io::{AsyncRead, AsyncSeekExt, ReadBuf};
 use tokio::sync::{oneshot, Mutex};
 use wasmtime::component::Resource;
-use wasmtime_wasi::preview2::Table;
-use wasmtime_wasi_http::types::{HostFutureIncomingResponse, OutgoingRequest};
+use wasmtime_wasi::preview2::{self, Table};
+use wasmtime_wasi_http::types::{
+    HostFutureIncomingResponse, IncomingResponseInternal, OutgoingRequest,
+};
 use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpView};
 
 pub mod incoming_http_bindings {
@@ -33,23 +35,62 @@ pub mod incoming_http_bindings {
 }
 
 impl WasiHttpView for Ctx {
-    fn table(&mut self) -> &mut Table {
-        &mut self.table
-    }
-
     fn ctx(&mut self) -> &mut WasiHttpCtx {
         &mut self.http
     }
 
+    fn table(&mut self) -> &mut Table {
+        &mut self.table
+    }
+
     fn send_request(
         &mut self,
-        _request: OutgoingRequest,
+        OutgoingRequest {
+            use_tls,
+            authority,
+            request,
+            connect_timeout,
+            first_byte_timeout,
+            between_bytes_timeout,
+        }: OutgoingRequest,
     ) -> wasmtime::Result<Resource<HostFutureIncomingResponse>>
     where
         Self: Sized,
     {
-        // TODO: Implement https://github.com/wasmCloud/wasmCloud/issues/680
-        bail!("outgoing HTTP not supported yet")
+        let request = request.map(|body| -> Box<dyn AsyncRead + Send + Sync + Unpin> {
+            Box::new(BodyAsyncRead::new(body))
+        });
+        let handler = self.handler.clone();
+        let res = HostFutureIncomingResponse::new(preview2::spawn(async move {
+            match OutgoingHttp::handle(
+                &handler,
+                OutgoingHttpRequest {
+                    use_tls,
+                    authority,
+                    request,
+                    connect_timeout,
+                    first_byte_timeout,
+                    between_bytes_timeout,
+                },
+            )
+            .await
+            {
+                Ok(resp) => {
+                    let resp = resp.map(|body| BoxBody::new(AsyncReadBody::new(body, 1024)));
+                    Ok(IncomingResponseInternal {
+                        resp,
+                        worker: preview2::spawn(async { Ok(()) }),
+                        between_bytes_timeout,
+                    })
+                }
+                Err(e) => Err(e),
+            }
+        }));
+        let res = self
+            .table()
+            .push_resource(res)
+            .context("failed to push response")?;
+        Ok(res)
     }
 }
 
@@ -60,6 +101,15 @@ impl Instance {
         incoming_http: Arc<dyn IncomingHttp + Send + Sync>,
     ) -> &mut Self {
         self.handler_mut().replace_incoming_http(incoming_http);
+        self
+    }
+
+    /// Set [`OutgoingHttp`] handler for this [Instance].
+    pub fn outgoing_http(
+        &mut self,
+        outgoing_http: Arc<dyn OutgoingHttp + Send + Sync>,
+    ) -> &mut Self {
+        self.handler_mut().replace_outgoing_http(outgoing_http);
         self
     }
 
@@ -206,7 +256,7 @@ impl IncomingHttp for InterfaceInstance<incoming_http_bindings::IncomingHttp> {
         let mut store = self.store.lock().await;
         match &self.bindings {
             InterfaceBindings::Guest(guest) => {
-                let request = wasmcloud_compat::HttpRequest::from_http(request)
+                let request = wasmcloud_compat::HttpServerRequest::from_http(request)
                     .await
                     .context("failed to convert request")?;
                 let request =

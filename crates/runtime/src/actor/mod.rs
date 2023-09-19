@@ -13,6 +13,7 @@ pub use module::{
 use crate::capability::logging::logging;
 use crate::capability::{
     Blobstore, Bus, IncomingHttp, KeyValueAtomic, KeyValueReadWrite, Logging, Messaging,
+    OutgoingHttp,
 };
 use crate::Runtime;
 
@@ -409,6 +410,22 @@ impl Instance {
             }
             Self::Component(component) => {
                 component.messaging(messaging);
+            }
+        }
+        self
+    }
+
+    /// Set [`OutgoingHttp`] handler for this [Instance].
+    pub fn outgoing_http(
+        &mut self,
+        outgoing_http: Arc<dyn OutgoingHttp + Send + Sync>,
+    ) -> &mut Self {
+        match self {
+            Self::Module(module) => {
+                module.outgoing_http(outgoing_http);
+            }
+            Self::Component(component) => {
+                component.outgoing_http(outgoing_http);
             }
         }
         self

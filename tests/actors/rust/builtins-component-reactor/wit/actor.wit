@@ -2,6 +2,7 @@ package test-actors:builtins
 
 world actor {
     import wasi:http/outgoing-handler@0.2.0-rc-2023-10-18
+    import wasi:io/poll@0.2.0-rc-2023-10-18
     import wasi:sockets/instance-network@0.2.0-rc-2023-10-18
     import wasi:sockets/tcp-create-socket@0.2.0-rc-2023-10-18
     import wasi:sockets/tcp@0.2.0-rc-2023-10-18

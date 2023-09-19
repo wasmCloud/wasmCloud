@@ -62,7 +62,8 @@ use wasmcloud_core::{
 use wasmcloud_runtime::capability::logging::logging;
 use wasmcloud_runtime::capability::{
     blobstore, messaging, ActorIdentifier, Blobstore, Bus, IncomingHttp, KeyValueAtomic,
-    KeyValueReadWrite, Logging, Messaging, TargetEntity, TargetInterface,
+    KeyValueReadWrite, Logging, Messaging, OutgoingHttp, OutgoingHttpRequest, TargetEntity,
+    TargetInterface,
 };
 use wasmcloud_runtime::Runtime;
 use wasmcloud_tracing::context::TraceContextInjector;
@@ -1130,6 +1131,41 @@ impl Messaging for Handler {
     }
 }
 
+#[async_trait]
+impl OutgoingHttp for Handler {
+    #[instrument(skip_all)]
+    async fn handle(
+        &self,
+        OutgoingHttpRequest {
+            use_tls: _,
+            authority: _,
+            request,
+            connect_timeout: _,
+            first_byte_timeout: _,
+            between_bytes_timeout: _,
+        }: OutgoingHttpRequest,
+    ) -> anyhow::Result<http::Response<Box<dyn AsyncRead + Sync + Send + Unpin>>> {
+        const METHOD: &str = "wasmcloud:httpclient/HttpClient.Request";
+
+        let req = wasmcloud_compat::HttpClientRequest::from_http(request)
+            .await
+            .context("failed to convert HTTP request")?;
+        let targets = self.targets.read().await;
+        let res = self
+            .call_operation(
+                targets.get(&TargetInterface::WasiHttpOutgoingHandler),
+                METHOD,
+                &req,
+            )
+            .await?;
+        let res: wasmcloud_compat::HttpResponse = decode_provider_response(res)?;
+        let res = ::http::Response::<Vec<u8>>::try_from(res)?;
+        Ok(res.map(|body| -> Box<dyn AsyncRead + Sync + Send + Unpin> {
+            Box::new(Cursor::new(body))
+        }))
+    }
+}
+
 impl ActorInstance {
     #[instrument(level = "debug", skip(self, msg))]
     async fn handle_invocation(
@@ -1155,11 +1191,12 @@ impl ActorInstance {
             .keyvalue_atomic(Arc::new(self.handler.clone()))
             .keyvalue_readwrite(Arc::new(self.handler.clone()))
             .logging(Arc::new(self.handler.clone()))
-            .messaging(Arc::new(self.handler.clone()));
+            .messaging(Arc::new(self.handler.clone()))
+            .outgoing_http(Arc::new(self.handler.clone()));
         #[allow(clippy::single_match_else)] // TODO: Remove once more interfaces supported
         match (contract_id, operation) {
             ("wasmcloud:httpserver", "HttpServer.HandleRequest") => {
-                let req: wasmcloud_compat::HttpRequest =
+                let req: wasmcloud_compat::HttpServerRequest =
                     rmp_serde::from_slice(&msg).context("failed to decode HTTP request")?;
                 let req = http::Request::try_from(req).context("failed to convert request")?;
                 let res = match instance

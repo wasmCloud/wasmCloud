@@ -37,7 +37,7 @@ mod settings;
 
 pub use settings::{load_settings, ServiceSettings, CONTENT_LEN_LIMIT, DEFAULT_MAX_CONTENT_LEN};
 
-pub use wasmcloud_compat::http::{Request, Response};
+pub use wasmcloud_compat::http::{Response, ServerRequest as Request};
 
 pub(crate) use hashmap_ci::make_case_insensitive;
 
@@ -133,7 +133,9 @@ impl HttpServerCore {
                 shutdown_tx,
                 shutdown_rx,
                 call_actor: CallActorFn(Box::new(
-                    move |ld: Arc<LinkDefinition>, req: Request, timeout: Option<Duration>| {
+                    move |ld: Arc<LinkDefinition>,
+                          req: Request,
+                          timeout: Option<Duration>| {
                         let call_actor_fn = call_actor_fn.clone();
                         Box::pin(call_actor_fn(ld, req, timeout))
                     },
