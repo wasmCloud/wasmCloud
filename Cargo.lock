@@ -4596,7 +4596,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "serde",
- "syn 1.0.109",
+ "syn 2.0.29",
  "wasmcloud-core",
  "wasmtime-wit-bindgen 11.0.1",
  "wit-parser 0.8.0",
