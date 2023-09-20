@@ -192,20 +192,29 @@
             fromImage ? null,
             bin,
             architecture,
-          }:
+          }: let
+            copyToRoot = pkgs.buildEnv {
+              name = "wasmcloud";
+              extraPrefix = "/usr"; # /bin is a symlink to /usr/bin on Debian, add a prefix to avoid replacing original `/bin`
+              paths = [
+                bin
+
+                pkgs.dockerTools.caCertificates
+              ];
+              postBuild = ''
+                mv $out/usr/etc $out/etc
+              '';
+            };
+          in
             pkgs.dockerTools.buildImage {
               inherit
                 architecture
                 fromImage
+                copyToRoot
                 ;
 
               name = "wasmcloud";
               tag = "${bin.version}-${bin.passthru.target}";
-              copyToRoot = pkgs.buildEnv {
-                name = "wasmcloud";
-                paths = [bin];
-                pathsToLink = ["/bin"];
-              };
               config.Cmd = ["wasmcloud"];
               config.Env = ["PATH=${bin}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"];
             };
@@ -245,9 +254,6 @@
               ;
 
             rust = hostRustToolchain;
-
-            wasi-preview1-command-component-adapter = mkAdapter "wasi-preview1-command-component-adapter" wasi-preview1-command-component-adapter;
-            wasi-preview1-reactor-component-adapter = mkAdapter "wasi-preview1-reactor-component-adapter" wasi-preview1-reactor-component-adapter;
           };
 
         withDevShells = {
