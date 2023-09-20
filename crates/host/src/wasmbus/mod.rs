@@ -34,7 +34,7 @@ use base64::Engine;
 use bytes::{BufMut, Bytes, BytesMut};
 use cloudevents::{EventBuilder, EventBuilderV10};
 use futures::stream::{AbortHandle, Abortable};
-use futures::{join, stream, try_join, FutureExt, Stream, StreamExt, TryStreamExt};
+use futures::{join, stream, try_join, FutureExt, Stream, StreamExt, TryFutureExt, TryStreamExt};
 use nkeys::{KeyPair, KeyPairType};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -3502,6 +3502,8 @@ impl Host {
                 if let Err(e) = self
                     .ctl_nats
                     .publish_with_headers(reply.clone(), headers, buf)
+                    .err_into::<anyhow::Error>()
+                    .and_then(|_| self.ctl_nats.flush().err_into::<anyhow::Error>())
                     .await
                 {
                     error!("failed to publish success in response to `{subject}` request: {e:?}");
@@ -3515,6 +3517,8 @@ impl Host {
                         headers,
                         format!(r#"{{"accepted":false,"error":"{e}"}}"#).into(),
                     )
+                    .err_into::<anyhow::Error>()
+                    .and_then(|_| self.ctl_nats.flush().err_into::<anyhow::Error>())
                     .await
                 {
                     error!("failed to publish error: {e:?}");
