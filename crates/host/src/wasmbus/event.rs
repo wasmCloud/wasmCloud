@@ -83,7 +83,7 @@ pub fn actors_started(
         "image_ref": image_ref.as_ref(),
         "annotations": annotations,
         "host_id": host_id.as_ref(),
-        "claims": claims,
+        "claims": format_actor_claims(claims),
         "count": count.into(),
     })
 }
