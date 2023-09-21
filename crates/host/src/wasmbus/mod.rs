@@ -2482,6 +2482,18 @@ impl Host {
             }
             (hash_map::Entry::Occupied(entry), _) => {
                 let actor = entry.get();
+                if actor.image_ref != actor_ref {
+                    let err = anyhow!(
+                        "actor is already running with a different image reference `{}`",
+                        actor.image_ref
+                    );
+                    self.publish_event(
+                        "actors_start_failed",
+                        event::actors_start_failed(claims, &annotations, host_id, actor_ref, &err),
+                    )
+                    .await?;
+                    bail!(err);
+                }
                 let mut actor_instances = actor.instances.write().await;
                 let count = usize::from(count);
                 // Only consider instances that match the requested annotations
@@ -2578,6 +2590,7 @@ impl Host {
         debug!("launch actor");
 
         let actor = self.fetch_actor(&actor_ref).await?;
+
         let claims = actor.claims().context("claims missing")?;
         let actor_id = claims.subject.clone();
         let resp = self
@@ -2629,6 +2642,18 @@ impl Host {
             }
             hash_map::Entry::Occupied(entry) => {
                 let actor = entry.get();
+                if actor.image_ref != actor_ref {
+                    let err = anyhow!(
+                        "actor is already running with a different image reference `{}`",
+                        actor.image_ref
+                    );
+                    self.publish_event(
+                        "actors_start_failed",
+                        event::actors_start_failed(claims, &annotations, host_id, actor_ref, &err),
+                    )
+                    .await?;
+                    bail!(err);
+                }
                 let mut instances = actor.instances.write().await;
                 let claims = actor.pool.claims().context("claims missing")?;
                 let mut delta = self
