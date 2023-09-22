@@ -166,7 +166,7 @@ impl Debug for Runtime {
             .field("actor_config", &self.actor_config)
             .field("module_config", &self.module_config)
             .field("runtime", &"wasmtime")
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

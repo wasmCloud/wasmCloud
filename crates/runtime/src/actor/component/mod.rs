@@ -207,7 +207,7 @@ impl Debug for Component {
             .field("claims", &self.claims)
             .field("handler", &self.handler)
             .field("runtime", &"wasmtime")
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

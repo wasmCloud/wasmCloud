@@ -128,7 +128,7 @@ impl Debug for Ctx {
         f.debug_struct("Ctx")
             .field("runtime", &"wasmtime")
             .field("wasmbus", &self.wasmbus)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -154,7 +154,7 @@ impl Debug for Module {
             .field("config", &self.config)
             .field("handler", &self.handler)
             .field("runtime", &"wasmtime")
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -286,7 +286,7 @@ impl Debug for Instance {
             .field("runtime", &"wasmtime")
             .field("guest_call", &self.guest_call.is_some().to_string())
             .field("start", &self.start.is_some().to_string())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

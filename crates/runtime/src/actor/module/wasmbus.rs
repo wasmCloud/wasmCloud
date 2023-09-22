@@ -43,7 +43,7 @@ impl Debug for Ctx {
             .field("guest_response", &self.guest_response)
             .field("host_error", &self.host_error)
             .field("host_response", &self.host_response)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
