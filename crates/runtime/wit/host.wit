@@ -5,7 +5,7 @@ world interfaces {
     import wasmcloud:bus/lattice
 
     import wasi:blobstore/blobstore
-    import wasi:http/http-types
+    import wasi:http/types
     import wasi:keyvalue/atomic
     import wasi:keyvalue/readwrite
     import wasi:logging/logging

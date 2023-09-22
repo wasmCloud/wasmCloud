@@ -17,7 +17,7 @@ interface batch {
 	///
 	/// If any of the keys do not exist in the bucket, it creates a new key-value pair.
 	/// If any other error occurs, it returns an error.
-	set-many: func(bucket: bucket, keys: keys, values: list<tuple<key, outgoing-value>>) -> result<_, error>
+	set-many: func(bucket: bucket, key-values: list<tuple<key, outgoing-value>>) -> result<_, error>
 
 	/// Delete the key-value pairs associated with the keys in the bucket.
 	///

@@ -172,7 +172,7 @@ impl capability::Blobstore for Blobstore {
         let Container { ref objects, .. } = *container.read().await;
         let Object { data, .. } = objects.get(&name).context("object not found")?;
         let Some(len) = NonZeroUsize::new(data.len()) else {
-            return Ok((Box::new(io::empty()), 0))
+            return Ok((Box::new(io::empty()), 0));
         };
         let start = (*range.start()).try_into().unwrap_or(usize::MAX);
         let end = (*range.end()).try_into().unwrap_or(usize::MAX);

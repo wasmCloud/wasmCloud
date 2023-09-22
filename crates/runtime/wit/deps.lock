@@ -16,25 +16,25 @@ sha256 = "dc170645d8aa52f2f94ab8f71093fa0c101e509ed1a07318995dc0395e9d6cf2"
 sha512 = "3195a3e0f9ec52c3a91c4b4fde0547694236c7b29bceecb7f38634894fafd809c69ed1c1c9acbf225b2d5d00f5036d70371c9fed121d85028162b202035cabef"
 
 [http]
-url = "https://github.com/wasmCloud/wasi-http/archive/main.tar.gz"
-sha256 = "fc36af91c16cb44df7ef947ce2f4da539f3a4ea07b8b5a58aff0b574943e1ba4"
-sha512 = "f98a17c19c17bcc55e5b3ae296b46c96a5a2bd59404db821d649b4c763da7a49a6e8a6a6b0bfaf90b1f142b25dff6c1db9da5cb2686f38b73c53a96d4ac1f2d5"
+url = "https://github.com/WebAssembly/wasi-http/archive/main.tar.gz"
+sha256 = "304c74e2bb3716216f36ead15f830d4df09903e2531ea0def80350bf353b6ee2"
+sha512 = "1bd6e7b6a113c920e4aea26bb246615bbf9ae77a20700a937caac51bdd9d6b6f38f237f345fd66ef5abb3d10b30577f37234dfd4cbd2f52db74751dcf09dfa61"
 deps = ["cli", "clocks", "filesystem", "random", "sockets"]
 
 [io]
 path = "../../../wit/deps/io"
-sha256 = "0faa1fe936bd3a83812965cfb157fd5aaf2ef0a149685af9539e521ed7ce3d4e"
-sha512 = "3ee02f5c5f0d8581e05e7cc080a2ba6d3f840471fe6a405de5a319a2decaa6a7c0c0d16908f52157b05854c5af0b4b23791f002778bce97e6c5d879709868828"
+sha256 = "8f927d374d71c7bd79b53f94631d9b3ddbc7093ae97bed018eeb32486e849b4b"
+sha512 = "63959ac670bba0f008238f77d6fe0a1fc206e77c2df6e33323c62751ef424571ee8ac5951ca6a2d0c94c4173884032b97447394a302bd4c85c23329df58b150d"
 
 [keyvalue]
 url = "https://github.com/WebAssembly/wasi-keyvalue/archive/main.tar.gz"
-sha256 = "cbe6f5c0b0bd0dd382fe91a14dc83f42545463bc7a1f14e13d3c500896ef2214"
-sha512 = "ed54e12d87144c38ea941cda0ea28dff6cff2334a7fba48215e95163c9ccce9d922e22604d84b0742b7c6c848174bbf946eec2db9e212fd5cce16fab13534a26"
+sha256 = "f3562203addf3901bff5ef4d7bffc718fc2f86d72070f3f36265e44a3688dd88"
+sha512 = "cfac6f63bd6fddccca4a3e14e6e91be1e2bc6ab019188efd61e9124be0db46fe57c209c1ac0fe4833683cadf05fcaed7fd7cecc8448782376df6101c95949938"
 
 [logging]
 url = "https://github.com/WebAssembly/wasi-logging/archive/main.tar.gz"
-sha256 = "5a53c168c502ff4a9c6890ecfbb2a916cd2a51be7a04aca343d467022dfa92b8"
-sha512 = "f7a3ac786ca7bdbc4f203a448e6991e0cdd43f739c41a8b4a4a382570df138fb6fadc9ac00bf36e18828c37503aefb72f7c731c7faf5f160ff2a8b85824d0774"
+sha256 = "889b5a2f3bea4660a07d661bac414387874aaa41a8a095583ae8b3fb0d896754"
+sha512 = "3c97f7fe84777fe75fea131229a204c1e5328ee85d75b81a3a3cca5b96b32243188becd2ef5ff8e504d6371aa865dc2920050cc967fab9e4e75f5ef0c0b5e1d0"
 
 [messaging]
 url = "https://github.com/wasmCloud/messaging/archive/main.tar.gz"

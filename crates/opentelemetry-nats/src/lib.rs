@@ -1,6 +1,6 @@
 use std::sync::OnceLock;
 
-use async_nats::header::HeaderMap;
+use async_nats::header::{HeaderMap, HeaderValue};
 use opentelemetry::{
     propagation::{Extractor, Injector, TextMapPropagator},
     sdk::propagation::TraceContextPropagator,
@@ -35,9 +35,7 @@ impl<'a> NatsHeaderExtractor<'a> {
 
 impl<'a> Extractor for NatsHeaderExtractor<'a> {
     fn get(&self, key: &str) -> Option<&str> {
-        self.inner
-            .get(key)
-            .and_then(|s| s.iter().next().map(|s| s.as_str()))
+        self.inner.get(key).map(HeaderValue::as_str)
     }
 
     fn keys(&self) -> Vec<&str> {

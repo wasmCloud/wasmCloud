@@ -287,7 +287,7 @@ impl Parse for Opt {
             let _lbrace = braced!(contents in input);
             let fields: Punctuated<(String, String), Token![,]> =
                 contents.parse_terminated(with_field_parse)?;
-            Ok(Opt::With(HashMap::from_iter(fields.into_iter())))
+            Ok(Opt::With(HashMap::from_iter(fields)))
         } else {
             Err(l.error())
         }

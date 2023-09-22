@@ -175,8 +175,8 @@ impl Fetcher {
         // TODO: We may want to allow more than one down the line, or include the JWT separately as
         // part of the bindle. For now we just expect the single parcel
         let Some([parcel]) = parcel.as_deref() else {
-        bail!("actor bindle should contain exactly one parcel")
-    };
+            bail!("actor bindle should contain exactly one parcel")
+        };
         let mut stream = client
             .get_parcel(&bindle.id, &parcel.label.sha256)
             .await

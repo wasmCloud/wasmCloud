@@ -34,9 +34,12 @@ interface types {
 	/// to the output-stream defined in the `wasi-io` interface.
 	// Soon: switch to `resource value { ... }`
 	type outgoing-value = u32
+	type outgoing-value-body-async = output-stream
+	type outgoing-value-body-sync = list<u8>
 	drop-outgoing-value: func(outgoing-value: outgoing-value)
 	new-outgoing-value: func() -> outgoing-value
-	outgoing-value-write-body: func(outgoing-value: outgoing-value) -> result<output-stream>
+	outgoing-value-write-body-async: func(outgoing-value: outgoing-value) -> result<outgoing-value-body-async, error>
+	outgoing-value-write-body-sync: func(outgoing-value: outgoing-value, value: outgoing-value-body-sync) -> result<_, error>
 
 	/// A incoming-value is a wrapper around a value. It provides a way to read the value
 	/// from the input-stream defined in the `wasi-io` interface.

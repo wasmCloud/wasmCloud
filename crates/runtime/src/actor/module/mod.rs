@@ -171,7 +171,7 @@ async fn instantiate(
     config: &Config,
     handler: impl Into<builtin::Handler>,
 ) -> anyhow::Result<Instance> {
-    let wasi = WasiCtxBuilder::new();
+    let mut wasi = WasiCtxBuilder::new();
     let wasi = wasi
         .arg("main.wasm")
         .context("failed to set argv[0]")?
