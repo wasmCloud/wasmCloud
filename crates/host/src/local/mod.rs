@@ -185,7 +185,7 @@ impl Actor {
         let (incoming_http, logging) = try_join!(
             async {
                 let Some(incoming_http) = incoming_http else {
-                    return Ok(None)
+                    return Ok(None);
                 };
                 get_actor_link(actors, incoming_http)
                     .await
@@ -199,7 +199,7 @@ impl Actor {
             },
             async {
                 let Some(logging) = logging else {
-                    return Ok(None)
+                    return Ok(None);
                 };
                 get_actor_link(actors, logging)
                     .await

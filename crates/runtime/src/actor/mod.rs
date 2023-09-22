@@ -37,7 +37,7 @@ pub struct Config {
 /// Extracts and validates claims contained within `WebAssembly` binary, if such are found
 fn claims(wasm: impl AsRef<[u8]>) -> Result<Option<jwt::Claims<jwt::Actor>>> {
     let Some(claims) = extract_claims(wasm).context("failed to extract module claims")? else {
-        return Ok(None)
+        return Ok(None);
     };
     let v = jwt::validate_token::<jwt::Actor>(&claims.jwt)
         .context("failed to validate module token")?;

@@ -10,7 +10,7 @@ use std::io::{Read, Write};
 
 use serde::Deserialize;
 use serde_json::json;
-use wasi::http::http_types as types;
+use wasi::http::types;
 use wasmcloud_actor::wasi::logging::logging;
 use wasmcloud_actor::wasi::random::random;
 use wasmcloud_actor::wasi::{blobstore, keyvalue};
@@ -59,7 +59,10 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
             header_iter.next(),
             Some(("test-header".into(), b"test-value".to_vec()))
         );
-        assert_eq!(types::fields_get(headers, "test-header"), vec![b"test-value"]);
+        assert_eq!(
+            types::fields_get(headers, "test-header"),
+            vec![b"test-value"]
+        );
 
         assert!(header_iter.next().is_none());
 
@@ -124,13 +127,16 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
         eprintln!("response: `{res:?}`");
         let body = serde_json::to_vec(&res).expect("failed to encode response to JSON");
         let response = types::new_outgoing_response(200, types::new_fields(&[]))
-            .expect("failed to create response"); // TODO: Set headers
+            .expect("failed to construct outgoing response");
         let response_stream = types::outgoing_response_write(response)
             .expect("failed to get outgoing response stream");
-        let n = OutputStreamWriter::from(response_stream)
-            .write(&body)
+        let mut response_stream_writer = OutputStreamWriter::from(response_stream);
+        response_stream_writer
+            .write_all(&body)
             .expect("failed to write body to outgoing response stream");
-        assert_eq!(n, body.len());
+        response_stream_writer
+            .flush()
+            .expect("failed to flush outgoing response stream");
         types::finish_outgoing_stream(response_stream);
         types::set_response_outparam(response_out, Ok(response)).expect("failed to set response");
 
@@ -230,13 +236,32 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
             );
 
         let result_key = String::from("result");
+
         let result_value = keyvalue::types::new_outgoing_value();
-        let result_stream = keyvalue::types::outgoing_value_write_body(result_value)
+        keyvalue::types::outgoing_value_write_body_sync(result_value, &body)
+            .expect("failed to write outgoing value");
+        keyvalue::readwrite::set(bucket, &result_key, result_value)
+            .map_err(keyvalue::wasi_cloud_error::trace)
+            .expect("failed to set `result`");
+
+        let result_value = keyvalue::readwrite::get(bucket, &result_key)
+            .map_err(keyvalue::wasi_cloud_error::trace)
+            .expect("failed to get `result`");
+        let result_value = keyvalue::types::incoming_value_consume_sync(result_value)
+            .map_err(keyvalue::wasi_cloud_error::trace)
+            .expect("failed to get incoming value buffer");
+        assert_eq!(result_value, body);
+
+        let result_value = keyvalue::types::new_outgoing_value();
+        let result_stream = keyvalue::types::outgoing_value_write_body_async(result_value)
             .expect("failed to get outgoing value output stream");
-        let n = OutputStreamWriter::from(result_stream)
-            .write(&body)
+        let mut result_stream_writer = OutputStreamWriter::from(result_stream);
+        result_stream_writer
+            .write_all(&body)
             .expect("failed to write result to keyvalue output stream");
-        assert_eq!(n, body.len());
+        result_stream_writer
+            .flush()
+            .expect("failed to flush keyvalue output stream");
         keyvalue::readwrite::set(bucket, &result_key, result_value)
             .map_err(keyvalue::wasi_cloud_error::trace)
             .expect("failed to set `result`");
@@ -303,10 +328,13 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
         let result_value = blobstore::types::new_outgoing_value();
         let result_stream = blobstore::types::outgoing_value_write_body(result_value)
             .expect("failed to get outgoing value output stream");
-        let n = OutputStreamWriter::from(result_stream)
-            .write(&body)
+        let mut result_stream_writer = OutputStreamWriter::from(result_stream);
+        result_stream_writer
+            .write_all(&body)
             .expect("failed to write result to blobstore output stream");
-        assert_eq!(n, body.len());
+        result_stream_writer
+            .flush()
+            .expect("failed to flush blobstore output stream");
         blobstore::container::write_data(created_container, &result_key, result_value)
             .expect("failed to write `result`");
 

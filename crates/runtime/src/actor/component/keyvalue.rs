@@ -1,4 +1,4 @@
-use super::{AsyncStream, Ctx, Instance, TableResult};
+use super::{Ctx, Instance, TableResult};
 
 use crate::capability::keyvalue::{atomic, readwrite, types, wasi_cloud_error};
 use crate::capability::{KeyValueAtomic, KeyValueReadWrite};
@@ -8,8 +8,9 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, ensure, Context};
 use async_trait::async_trait;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tracing::instrument;
+use wasmtime_wasi::preview2::pipe::{AsyncReadStream, AsyncWriteStream};
 use wasmtime_wasi::preview2::{self, TableStreamExt};
 
 impl Instance {
@@ -306,10 +307,28 @@ impl types::Host for Ctx {
     }
 
     #[instrument]
-    async fn outgoing_value_write_body(
+    async fn outgoing_value_write_body_sync(
         &mut self,
         outgoing_value: types::OutgoingValue,
-    ) -> anyhow::Result<Result<types::OutputStream, ()>> {
+        body: Vec<u8>,
+    ) -> anyhow::Result<Result<()>> {
+        let mut stream = self
+            .table
+            .get_outgoing_value(outgoing_value)
+            .context("failed to get outgoing value")?
+            .clone();
+        stream
+            .write_all(&body)
+            .await
+            .context("failed to write body")?;
+        Ok(Ok(()))
+    }
+
+    #[instrument]
+    async fn outgoing_value_write_body_async(
+        &mut self,
+        outgoing_value: types::OutgoingValue,
+    ) -> anyhow::Result<Result<types::OutputStream>> {
         let stream = self
             .table
             .get_outgoing_value(outgoing_value)
@@ -317,7 +336,7 @@ impl types::Host for Ctx {
             .clone();
         let stream = self
             .table
-            .push_output_stream(Box::new(AsyncStream(stream)))
+            .push_output_stream(Box::new(AsyncWriteStream::new(1 << 16, stream)))
             .context("failed to push output stream")?;
         Ok(Ok(stream))
     }
@@ -371,7 +390,7 @@ impl types::Host for Ctx {
             .context("failed to delete incoming value")?;
         let stream = self
             .table
-            .push_input_stream(Box::new(AsyncStream(stream)))
+            .push_input_stream(Box::new(AsyncReadStream::new(stream)))
             .context("failed to push input stream")?;
         Ok(Ok(stream))
     }

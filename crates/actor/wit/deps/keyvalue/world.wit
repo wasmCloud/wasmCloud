@@ -7,8 +7,6 @@ world keyvalue {
 }
 
 world keyvalue-handle-watch {
-	import readwrite
-	import atomic
-	import batch
+	include keyvalue
 	export handle-watch
 }

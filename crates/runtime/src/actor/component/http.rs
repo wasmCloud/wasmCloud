@@ -1,6 +1,6 @@
-use super::{AsyncStream, Ctx, Instance, InterfaceBindings, InterfaceInstance, TableResult};
+use super::{Ctx, Instance, InterfaceBindings, InterfaceInstance, TableResult};
 
-use crate::capability::http::http_types as types; // TODO: Remove alias
+use crate::capability::http::types;
 use crate::capability::IncomingHttp;
 use crate::io::AsyncVec;
 
@@ -13,6 +13,7 @@ use async_trait::async_trait;
 use tokio::io::{AsyncRead, AsyncSeekExt};
 use tokio::sync::Mutex;
 use tracing::instrument;
+use wasmtime_wasi::preview2::pipe::{AsyncReadStream, AsyncWriteStream};
 use wasmtime_wasi::preview2::{self, TableStreamExt};
 
 pub mod incoming_http_bindings {
@@ -416,7 +417,7 @@ impl types::Host for Ctx {
             .context("failed to delete incoming request")?;
         let stream = self
             .table
-            .push_input_stream(Box::new(AsyncStream(body)))
+            .push_input_stream(Box::new(AsyncReadStream::new(body)))
             .context("failed to push input stream")?;
         Ok(Ok(stream))
     }
@@ -519,10 +520,10 @@ impl types::Host for Ctx {
         let OutgoingResponse { body, .. } = self
             .table
             .get_outgoing_response(response)
-            .context("failed to delete outgoing response")?;
+            .context("failed to get outgoing response")?;
         let stream = self
             .table
-            .push_output_stream(Box::new(AsyncStream(body.clone())))
+            .push_output_stream(Box::new(AsyncWriteStream::new(1 << 16, body.clone())))
             .context("failed to push output stream")?;
         Ok(Ok(stream))
     }

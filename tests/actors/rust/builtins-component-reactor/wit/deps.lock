@@ -11,18 +11,17 @@ sha256 = "dc170645d8aa52f2f94ab8f71093fa0c101e509ed1a07318995dc0395e9d6cf2"
 sha512 = "3195a3e0f9ec52c3a91c4b4fde0547694236c7b29bceecb7f38634894fafd809c69ed1c1c9acbf225b2d5d00f5036d70371c9fed121d85028162b202035cabef"
 
 [http]
-url = "https://github.com/wasmCloud/wasi-http/archive/main.tar.gz"
-sha256 = "fc36af91c16cb44df7ef947ce2f4da539f3a4ea07b8b5a58aff0b574943e1ba4"
-sha512 = "f98a17c19c17bcc55e5b3ae296b46c96a5a2bd59404db821d649b4c763da7a49a6e8a6a6b0bfaf90b1f142b25dff6c1db9da5cb2686f38b73c53a96d4ac1f2d5"
-deps = ["cli", "clocks", "filesystem", "random", "sockets"]
+url = "https://github.com/WebAssembly/wasi-http/archive/main.tar.gz"
+sha256 = "304c74e2bb3716216f36ead15f830d4df09903e2531ea0def80350bf353b6ee2"
+sha512 = "1bd6e7b6a113c920e4aea26bb246615bbf9ae77a20700a937caac51bdd9d6b6f38f237f345fd66ef5abb3d10b30577f37234dfd4cbd2f52db74751dcf09dfa61"
+deps = ["cli", "clocks", "filesystem", "poll", "random", "sockets"]
 
 [io]
 path = "../../../../../wit/deps/io"
-sha256 = "0faa1fe936bd3a83812965cfb157fd5aaf2ef0a149685af9539e521ed7ce3d4e"
-sha512 = "3ee02f5c5f0d8581e05e7cc080a2ba6d3f840471fe6a405de5a319a2decaa6a7c0c0d16908f52157b05854c5af0b4b23791f002778bce97e6c5d879709868828"
+sha256 = "8f927d374d71c7bd79b53f94631d9b3ddbc7093ae97bed018eeb32486e849b4b"
+sha512 = "63959ac670bba0f008238f77d6fe0a1fc206e77c2df6e33323c62751ef424571ee8ac5951ca6a2d0c94c4173884032b97447394a302bd4c85c23329df58b150d"
 
 [poll]
-path = "../../../../../wit/deps/poll"
 sha256 = "d4c27124f4c137eb538b5c92ba5858ed9042e11b24a2eef85d14becd0b7f55de"
 sha512 = "422c01b273b4b1377ece6f2e4ba0dfc609ca8ef30a3e0be0e172e1303fcf7b3ca4c470f4dea6c51bdf114b0f5c871ebc4934dfe3bf217d66ea689748df2b1e55"
 

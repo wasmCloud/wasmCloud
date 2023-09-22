@@ -1,5 +1,5 @@
 package wasi:logging
 
-world example-world {
+world imports {
     import logging
 }
