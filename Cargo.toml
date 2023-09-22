@@ -137,7 +137,7 @@ wasmcloud-actor = { version = "*", path = "./crates/actor" }
 wasmcloud-actor-derive = { version = "*", path = "./crates/actor/derive" }
 wasmcloud-compat = { version = "*", path = "./crates/compat" }
 wasmcloud-core = { version = "*", path = "./crates/core" }
-wasmcloud-component-adapters = { version = "0.2.1" }
+wasmcloud-component-adapters = { version = "0.2.2" }
 wasmcloud-control-interface = { version = "0.28", default-features = false }
 wasmcloud-host = { version = "*", path = "./crates/host" }
 wasmcloud-provider-wit-bindgen = { version = "*", path = "./crates/provider-wit-bindgen" }
