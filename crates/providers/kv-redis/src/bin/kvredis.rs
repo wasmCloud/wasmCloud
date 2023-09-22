@@ -18,14 +18,15 @@ use redis::FromRedisValue;
 use serde::Deserialize;
 use tokio::sync::RwLock;
 use tracing::{info, instrument, warn};
-use wasmcloud_compat::keyvalue::{
-    GetResponse, IncrementRequest, ListAddRequest, ListDelRequest, ListRangeRequest, SetAddRequest,
-    SetDelRequest, SetRequest,
-};
 use wasmcloud_provider_sdk::core::LinkDefinition;
 use wasmcloud_provider_sdk::error::ProviderInvocationError;
 use wasmcloud_provider_sdk::provider_main::start_provider;
 use wasmcloud_provider_sdk::{load_host_data, Context, ProviderHandler};
+// TODO: Import the generated types
+//use wasmcloud_compat::keyvalue::{
+//    GetResponse, IncrementRequest, ListAddRequest, ListDelRequest, ListRangeRequest, SetAddRequest,
+//    SetDelRequest, SetRequest,
+//};
 
 const REDIS_URL_KEY: &str = "URL";
 const DEFAULT_CONNECT_URL: &str = "redis://127.0.0.1:6379/";

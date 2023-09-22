@@ -1,0 +1,9 @@
+package wasmcloud:provider-kvredis
+
+world provider {
+    # TODO: Export standard WASI interfaces
+    #export wasi:keyvalue/atomic
+    #export wasi:keyvalue/readwrite
+
+    export wasmcloud:keyvalue/key-value
+}
