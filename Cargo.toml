@@ -110,7 +110,7 @@ envmnt = "0.10.2"
 futures = "0.3"
 heck = "0.4"
 ignore = "0.4"
-indicatif = "0.17.6"
+indicatif = "0.17.7"
 log = "0.4"
 nix = { version = "0.27.1", default-features = false, features = ["signal"] }
 nkeys = "0.3.2"
