@@ -243,9 +243,9 @@ where
 
 /// Helper function to determine the wasmCloud host release path given an os/arch and version
 fn wasmcloud_url(version: &str) -> String {
-    // NOTE(brooksmtownsend): I'm hardcoding `gnu` here because I'm not sure how to determine
-    // that programmatically. This essentially is what we had before (gnu only) but we do have a musl
-    // release that we should consider.
+    #[cfg(target_os = "android")]
+    let os = "linux-android";
+
     #[cfg(target_os = "macos")]
     let os = "apple-darwin";
 
