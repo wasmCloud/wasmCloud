@@ -12,7 +12,7 @@ mod compat;
 pub use compat::*;
 
 #[cfg(feature = "module")]
-pub use wasmcloud_actor_derive::*;
+pub use wasmcloud_actor_macros::*;
 
 // TODO: Remove once `wasi-http` is integrated
 pub use wasmcloud_compat::{HttpRequest, HttpResponse};

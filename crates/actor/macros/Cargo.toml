@@ -1,5 +1,5 @@
 [package]
-name = "wasmcloud-actor-derive"
+name = "wasmcloud-actor-macros"
 version = "0.1.0"
 description = "derive macros for wasmCloud actors"
 
