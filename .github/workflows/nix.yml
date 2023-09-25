@@ -14,15 +14,30 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-linux:
+  build-bin:
     strategy:
       matrix:
         config:
+        - target: aarch64-apple-darwin
+          install-path: /bin/wash
+          test-bin: file ./result/bin/wash
+          test-oci: docker load < ./result
+
+        - target: aarch64-linux-android
+          install-path: /bin/wash
+          test-bin: file ./result/bin/wash
+          test-oci: docker load < ./result
+
         - target: aarch64-unknown-linux-musl
           install-path: /bin/wash
           test-bin: nix shell --inputs-from . 'nixpkgs#qemu' -c qemu-aarch64 ./result/bin/wash --version
           test-oci: docker load < ./result
           # TODO: Run aarch64 binary within OCI
+
+        - target: x86_64-apple-darwin
+          install-path: /bin/wash
+          test-bin: file ./result/bin/wash
+          test-oci: docker load < ./result
 
         - target: x86_64-pc-windows-gnu
           install-path: /bin/wash.exe
@@ -54,39 +69,9 @@ jobs:
         package: wash-${{ matrix.config.target }}-oci
     - run: ${{ matrix.config.test-oci }}
 
-  build-mac:
-    strategy:
-      matrix:
-        config:
-        - target: aarch64-apple-darwin
-          test: file ./result/bin/wash
-          # TODO: Run aarch64 binary on host system and via OCI
-
-        - target: x86_64-apple-darwin
-          test: ./result/bin/wash --version
-
-    name: wash-${{ matrix.config.target }}
-    # NOTE(vados-cosmonic): Mac have OOMed in GitHub CI on macos-12 at least once
-    runs-on: macos-12-xl
-    steps:
-    - uses: actions/checkout@v4
-    - uses: ./.github/actions/install-nix
-      with:
-        cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
-    - uses: ./.github/actions/build-nix
-      with:
-        package: wash-${{ matrix.config.target }}
-        install-path: /bin/wash
-    - run: ${{ matrix.config.test-bin }}
-    - uses: ./.github/actions/build-nix
-      with:
-        package: wash-${{ matrix.config.target }}-oci
-    - run: ${{ matrix.platform.test-oci }}
-    # TODO: Test OCI on Mac
-
   build-lipo:
     name: wash-universal-darwin
-    needs: build-mac
+    needs: build-bin
     runs-on: macos-12
     steps:
     - uses: actions/download-artifact@v3
