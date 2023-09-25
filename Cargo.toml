@@ -134,7 +134,7 @@ uuid = { version = "1", default-features = false }
 wascap = { version = "0.11", default-features = false }
 wasi-common = { version = "13", default-features = false }
 wasmcloud-actor = { version = "*", path = "./crates/actor" }
-wasmcloud-actor-derive = { version = "*", path = "./crates/actor/derive" }
+wasmcloud-actor-macros = { version = "*", path = "./crates/actor/macros" }
 wasmcloud-compat = { version = "*", path = "./crates/compat" }
 wasmcloud-core = { version = "*", path = "./crates/core" }
 wasmcloud-component-adapters = { version = "0.2.2" }

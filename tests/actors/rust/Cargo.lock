@@ -585,13 +585,13 @@ dependencies = [
  "serde",
  "serde_bytes",
  "uuid",
- "wasmcloud-actor-derive",
+ "wasmcloud-actor-macros",
  "wasmcloud-compat",
  "wit-bindgen 0.11.0",
 ]
 
 [[package]]
-name = "wasmcloud-actor-derive"
+name = "wasmcloud-actor-macros"
 version = "0.1.0"
 dependencies = [
  "quote",
