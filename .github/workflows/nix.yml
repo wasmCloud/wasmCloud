@@ -90,7 +90,7 @@ jobs:
 
   test-windows:
     runs-on: windows-2022
-    needs: build-linux
+    needs: build-bin
     steps:
     - uses: actions/download-artifact@v3
       with:
