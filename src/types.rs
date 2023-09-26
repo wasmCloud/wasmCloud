@@ -227,24 +227,27 @@ pub struct RemoveLinkDefinitionRequest {
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ScaleActorCommand {
-    /// Public Key ID of the actor to scale
-    #[serde(default)]
-    pub actor_id: String,
-    /// Reference for the actor. Can be any of the acceptable forms of unique identification
+    /// Image reference for the actor.
     #[serde(default)]
     pub actor_ref: String,
     /// Optional set of annotations used to describe the nature of this actor scale command. For
     /// example, autonomous agents may wish to "tag" scale requests as part of a given deployment
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub annotations: Option<AnnotationMap>,
-    /// The target number of actors
-    #[serde(default)]
-    pub count: u16,
+    /// The maximum number of concurrent executing instances of this actor. If omitted or set to
+    /// zero there is no maximum.
+    // NOTE: renaming to `count` lets us remain backwards compatible for a few minor versions
+    #[serde(default, alias = "count", rename = "count")]
+    pub max_concurrent: u16,
     /// Host ID on which to scale this actor
     #[serde(default)]
     pub host_id: String,
 }
 
+#[deprecated(
+    since = "0.30.0",
+    note = "Use `ScaleActorCommand` instead. This will be removed in a future release."
+)]
 /// A command sent to a specific host instructing it to start the actor
 /// indicated by the reference.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -302,10 +305,6 @@ pub struct StopActorCommand {
     /// annotations will be stopped
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub annotations: Option<AnnotationMap>,
-    /// The number of actors to stop
-    /// A zero value means stop all actors
-    #[serde(default)]
-    pub count: u16,
     /// The ID of the target host
     #[serde(default)]
     pub host_id: String,
