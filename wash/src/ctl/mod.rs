@@ -2,7 +2,7 @@ use anyhow::{bail, Result};
 use clap::{Args, Parser, Subcommand};
 use std::path::Path;
 use wash_lib::{
-    actor::scale_actor,
+    actor::{scale_actor, update_actor},
     cli::{
         get::{GetClaimsCommand, GetCommand, GetHostInventoryCommand, GetHostsCommand},
         labels_vec_to_hashmap,
@@ -14,7 +14,7 @@ use wash_lib::{
     config::WashConnectionOptions,
     id::{ModuleId, ServerId},
 };
-use wasmcloud_control_interface::{Client as CtlClient, CtlOperationAck};
+use wasmcloud_control_interface::Client as CtlClient;
 
 use crate::{
     appearance::spinner::Spinner,
@@ -24,7 +24,6 @@ use crate::{
         start_cmd::handle_command as handle_start_command,
     },
     ctl::manifest::HostManifest,
-    util::convert_error,
 };
 pub(crate) use output::*;
 
@@ -209,7 +208,13 @@ pub(crate) async fn handle_command(
                 cmd.actor_id, cmd.new_actor_ref
             ));
 
-            let ack = update_actor(cmd.clone()).await?;
+            let ack = update_actor(
+                cmd.opts.try_into()?,
+                &cmd.host_id,
+                &cmd.actor_id,
+                &cmd.new_actor_ref,
+            )
+            .await?;
             if !ack.accepted {
                 bail!("Operation failed: {}", ack.error);
             }
@@ -256,15 +261,6 @@ pub(crate) async fn handle_scale_actor(cmd: ScaleActorCommand) -> Result<Command
             cmd.actor_id, cmd.count
         ),
     ))
-}
-
-pub(crate) async fn update_actor(cmd: UpdateActorCommand) -> Result<CtlOperationAck> {
-    let wco: WashConnectionOptions = cmd.opts.try_into()?;
-    let client = wco.into_ctl_client(None).await?;
-    client
-        .update_actor(&cmd.host_id, &cmd.actor_id, &cmd.new_actor_ref, None)
-        .await
-        .map_err(convert_error)
 }
 
 pub(crate) async fn apply_manifest(cmd: ApplyCommand) -> Result<Vec<String>> {
