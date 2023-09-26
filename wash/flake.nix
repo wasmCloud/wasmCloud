@@ -35,30 +35,13 @@
           pkgsCross ? pkgs,
           ...
         }: {
-          buildInputs ? [],
           nativeBuildInputs ? [],
-          depsBuildBuild ? [],
           ...
         } @ args:
           with pkgsCross;
           with pkgs.lib; {
             WASI_PREVIEW1_COMMAND_COMPONENT_ADAPTER = wasmcloud-component-adapters.packages.${pkgs.stdenv.system}.wasi-preview1-command-component-adapter;
             WASI_PREVIEW1_REACTOR_COMPONENT_ADAPTER = wasmcloud-component-adapters.packages.${pkgs.stdenv.system}.wasi-preview1-reactor-component-adapter;
-
-            buildInputs =
-              buildInputs
-              ++ optionals stdenv.hostPlatform.isDarwin [
-                pkgs.darwin.apple_sdk.frameworks.Security
-                pkgs.libiconv
-              ];
-
-            depsBuildBuild =
-              depsBuildBuild
-              ++ optionals stdenv.hostPlatform.isDarwin [
-                darwin.apple_sdk.frameworks.CoreFoundation
-                darwin.apple_sdk.frameworks.CoreServices
-                libiconv
-              ];
 
             nativeBuildInputs =
               nativeBuildInputs
