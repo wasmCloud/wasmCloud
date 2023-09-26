@@ -394,17 +394,13 @@
     "macos-sdk": {
       "flake": false,
       "locked": {
-        "lastModified": 1656095854,
-        "narHash": "sha256-Bksziu35r3/t7qNl6P/LXc/UZDF1zbXCMMvEarPFGUs=",
-        "owner": "hexops-graveyard",
-        "repo": "sdk-macos-12.0",
-        "rev": "14613b4917c7059dad8f3789f55bb13a2548f83d",
-        "type": "github"
+        "narHash": "sha256-TEvVJy+NMPyzgWSk/6S29ZMQR+ICFxSdS3tw247uhFc=",
+        "type": "tarball",
+        "url": "https://github.com/roblabla/MacOSX-SDKs/releases/download/macosx14.0/MacOSX14.0.sdk.tar.xz"
       },
       "original": {
-        "owner": "hexops-graveyard",
-        "repo": "sdk-macos-12.0",
-        "type": "github"
+        "type": "tarball",
+        "url": "https://github.com/roblabla/MacOSX-SDKs/releases/download/macosx14.0/MacOSX14.0.sdk.tar.xz"
       }
     },
     "macos-sdk_2": {
@@ -567,11 +563,11 @@
         "rust-overlay": "rust-overlay_2"
       },
       "locked": {
-        "lastModified": 1695234380,
-        "narHash": "sha256-ZQtac0no6fTRarR7U+O7/K+8fUQPGtQ4vQ7pArwvCyc=",
+        "lastModified": 1695747847,
+        "narHash": "sha256-DsJEQ30k6fpu44mZ3GLEudsUR2gb3C26Jmx3lUTsN7w=",
         "owner": "rvolosatovs",
         "repo": "nixify",
-        "rev": "def5f979a51fae1859799ceed8e624a572a0a23b",
+        "rev": "d0b4d8fa9946c9529b725d14e46af9f4e9f4a4c3",
         "type": "github"
       },
       "original": {
