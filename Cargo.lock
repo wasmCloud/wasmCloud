@@ -4098,11 +4098,10 @@ dependencies = [
 
 [[package]]
 name = "wascap"
-version = "0.11.1"
+version = "0.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "69a594087cfb6d023c1ac1e3ca3390b3461f7be344e3e291c2b6140486ba2221"
+checksum = "dc48258fe9b2c61bf78d21f7fd84a22769de339a79b5ef82bcdf7cebd42b7eb6"
 dependencies = [
- "base64 0.13.1",
  "data-encoding",
  "env_logger",
  "humantime",
