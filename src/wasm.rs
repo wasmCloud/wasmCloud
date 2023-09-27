@@ -220,7 +220,7 @@ mod test {
         caps::{KEY_VALUE, LOGGING, MESSAGING},
         jwt::{Actor, Claims, WASCAP_INTERNAL_REVISION},
     };
-    use base64::decode;
+    use data_encoding::BASE64;
 
     const WASM_BASE64: &str =
         "AGFzbQEAAAAADAZkeWxpbmuAgMACAAGKgICAAAJgAn9/AX9gAAACwYCAgAAEA2VudgptZW1vcnlCYXNl\
@@ -234,8 +234,6 @@ mod test {
         let mut f = File::open("./fixtures/guest.component.wasm").unwrap();
         let mut buffer = Vec::new();
         f.read_to_end(&mut buffer).unwrap();
-
-        //let dec_module = decode(WASM_BASE64).unwrap();
 
         let kp = KeyPair::new_account();
         let claims = Claims {
@@ -315,7 +313,7 @@ mod test {
     fn claims_roundtrip() {
         // Serialize and de-serialize this because the module loader adds bytes to
         // the above base64 encoded module.
-        let dec_module = decode(WASM_BASE64).unwrap();
+        let dec_module = BASE64.decode(WASM_BASE64.as_bytes()).unwrap();
 
         let kp = KeyPair::new_account();
         let claims = Claims {
@@ -353,7 +351,7 @@ mod test {
     fn claims_doublesign_roundtrip() {
         // Verify that we can sign a previously signed module by stripping the old
         // custom JWT and maintaining valid hashes
-        let dec_module = decode(WASM_BASE64).unwrap();
+        let dec_module = BASE64.decode(WASM_BASE64.as_bytes()).unwrap();
 
         let kp = KeyPair::new_account();
         let claims = Claims {
@@ -395,7 +393,7 @@ mod test {
     fn claims_logging_roundtrip() {
         // Serialize and de-serialize this because the module loader adds bytes to
         // the above base64 encoded module.
-        let dec_module = decode(WASM_BASE64).unwrap();
+        let dec_module = BASE64.decode(WASM_BASE64.as_bytes()).unwrap();
 
         let kp = KeyPair::new_account();
         let claims = Claims {

@@ -28,7 +28,7 @@ pub(crate) fn new(kind: ErrorKind) -> Error {
 pub enum ErrorKind {
     Serialize(serde_json::error::Error),
     Encryption(nkeys::error::Error),
-    Decode(base64::DecodeError),
+    Decode(data_encoding::DecodeError),
     UTF8(std::string::FromUtf8Error),
     Token(String),
     InvalidCapability,
@@ -141,8 +141,8 @@ impl From<serde_json::error::Error> for Error {
     }
 }
 
-impl From<base64::DecodeError> for Error {
-    fn from(source: base64::DecodeError) -> Error {
+impl From<data_encoding::DecodeError> for Error {
+    fn from(source: data_encoding::DecodeError) -> Error {
         Error(Box::new(ErrorKind::Decode(source)))
     }
 }

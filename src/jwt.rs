@@ -1,6 +1,7 @@
 //! Claims encoding, decoding, and validation for JSON Web Tokens (JWT)
 
 use crate::{errors, errors::ErrorKind, Result};
+use data_encoding::BASE64URL_NOPAD;
 use nkeys::KeyPair;
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::{from_str, to_string};
@@ -215,7 +216,7 @@ where
 
         let head_and_claims = format!("{}.{}", jheader, jclaims);
         let sig = kp.sign(head_and_claims.as_bytes())?;
-        let sig64 = base64::encode_config(&sig, base64::URL_SAFE_NO_PAD);
+        let sig64 = BASE64URL_NOPAD.encode(&sig);
         Ok(format!("{}.{}", head_and_claims, sig64))
     }
 
@@ -616,7 +617,7 @@ where
 {
     let segments: Vec<&str> = input.split('.').collect();
     let header_and_claims = format!("{}.{}", segments[0], segments[1]);
-    let sig = base64::decode_config(segments[2], base64::URL_SAFE_NO_PAD)?;
+    let sig = BASE64URL_NOPAD.decode(segments[2].as_bytes())?;
 
     let header: ClaimsHeader = from_jwt_segment(segments[0])?;
     validate_header(&header)?;
@@ -701,14 +702,11 @@ fn validate_header(h: &ClaimsHeader) -> Result<()> {
 
 fn to_jwt_segment<T: Serialize>(input: &T) -> Result<String> {
     let encoded = to_string(input)?;
-    Ok(base64::encode_config(
-        encoded.as_bytes(),
-        base64::URL_SAFE_NO_PAD,
-    ))
+    Ok(BASE64URL_NOPAD.encode(encoded.as_bytes()))
 }
 
 fn from_jwt_segment<B: AsRef<str>, T: DeserializeOwned>(encoded: B) -> Result<T> {
-    let decoded = base64::decode_config(encoded.as_ref(), base64::URL_SAFE_NO_PAD)?;
+    let decoded = BASE64URL_NOPAD.decode(encoded.as_ref().as_bytes())?;
     let s = String::from_utf8(decoded)?;
 
     Ok(from_str(&s)?)
