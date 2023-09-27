@@ -616,6 +616,13 @@ where
     T: Serialize + DeserializeOwned + WascapEntity,
 {
     let segments: Vec<&str> = input.split('.').collect();
+    if segments.len() != 3 {
+        return Err(crate::errors::new(ErrorKind::Token(format!(
+            "invalid token format, expected 3 segments, found {}",
+            segments.len()
+        ))));
+    }
+
     let header_and_claims = format!("{}.{}", segments[0], segments[1]);
     let sig = BASE64URL_NOPAD.decode(segments[2].as_bytes())?;
 
@@ -1349,5 +1356,25 @@ mod test {
 
         let vres = validate_token::<Actor>(&extracted.jwt);
         assert!(vres.is_ok());
+    }
+
+    #[test]
+    fn ensure_jwt_valid_segments() {
+        let valid = "eyJ0eXAiOiJqd3QiLCJhbGciOiJFZDI1NTE5In0.eyJqdGkiOiJTakI1Zm05NzRTanU5V01nVFVjaHNiIiwiaWF0IjoxNjQ0ODQzNzQzLCJpc3MiOiJBQ09KSk42V1VQNE9ERDc1WEVCS0tUQ0NVSkpDWTVaS1E1NlhWS1lLNEJFSldHVkFPT1FIWk1DVyIsInN1YiI6Ik1CQ0ZPUE02SlcyQVBKTFhKRDNaNU80Q043Q1BZSjJCNEZUS0xKVVI1WVI1TUlUSVU3SEQzV0Q1Iiwid2FzY2FwIjp7Im5hbWUiOiJFY2hvIiwiaGFzaCI6IjRDRUM2NzNBN0RDQ0VBNkE0MTY1QkIxOTU4MzJDNzkzNjQ3MUNGN0FCNDUwMUY4MzdGOEQ2NzlGNDQwMEJDOTciLCJ0YWdzIjpbXSwiY2FwcyI6WyJ3YXNtY2xvdWQ6aHR0cHNlcnZlciJdLCJyZXYiOjQsInZlciI6IjAuMy40IiwicHJvdiI6ZmFsc2V9fQ.ZWyD6VQqzaYM1beD2x9Fdw4o_Bavy3ZG703Eg4cjhyJwUKLDUiVPVhqHFE6IXdV4cW6j93YbMT6VGq5iBDWmAg";
+        let too_few = "asd.123123123";
+        let too_many = "asd.123.abc.easy";
+        let correct_but_wrong = "ddd.123.notajwt";
+
+        assert!(validate_token::<Actor>(valid).is_ok());
+        assert!(validate_token::<Actor>(too_few)
+            .is_err_and(|e| e.to_string()
+                == "JWT error: invalid token format, expected 3 segments, found 2"));
+        assert!(validate_token::<Actor>(too_many)
+            .is_err_and(|e| e.to_string()
+                == "JWT error: invalid token format, expected 3 segments, found 4"));
+        // Should be an error, but not because of the segment validation
+        assert!(validate_token::<Actor>(correct_but_wrong).is_err_and(|e| !e
+            .to_string()
+            .contains("invalid token format, expected 3 segments")));
     }
 }
