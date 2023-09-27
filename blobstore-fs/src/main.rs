@@ -378,7 +378,7 @@ impl Blobstore for FsProvider {
     async fn list_containers(&self, ctx: &Context) -> RpcResult<ContainersInfo> {
         let root = self.get_root(ctx).await?;
 
-        let containers = all_dirs(&root, &root)
+        let containers = all_dirs(&root, &root, 0)
             .iter()
             .map(|c| ContainerMetadata {
                 container_id: c.as_path().display().to_string(),
