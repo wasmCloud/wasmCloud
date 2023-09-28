@@ -6,6 +6,7 @@ use std::time::Duration;
 use anyhow::{self, Context};
 use clap::Parser;
 use nkeys::KeyPair;
+use tokio::time::{timeout, timeout_at};
 use tokio::{select, signal};
 use tracing::Level as TracingLogLevel;
 use wasmcloud_core::logging::Level as WasmcloudLogLevel;
@@ -238,6 +239,8 @@ struct Args {
     otel_exporter_otlp_endpoint: Option<String>,
 }
 
+const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+
 #[tokio::main]
 #[allow(clippy::too_many_lines)]
 async fn main() -> anyhow::Result<()> {
@@ -364,19 +367,33 @@ async fn main() -> anyhow::Result<()> {
     .await
     .context("failed to initialize host")?;
     #[cfg(unix)]
-    let mut terminate = signal::unix::signal(signal::unix::SignalKind::terminate())?;
-    #[cfg(unix)]
-    select! {
-        sig = signal::ctrl_c() => sig.context("failed to wait for Ctrl-C")?,
-        _ = terminate.recv() => {},
-        _ = host.stopped() => {},
-    }
-    #[cfg(not(unix))]
-    select! {
-        sig = signal::ctrl_c() => sig.context("failed to wait for Ctrl-C")?,
-        _ = host.stopped() => {},
+    let deadline = {
+        let mut terminate = signal::unix::signal(signal::unix::SignalKind::terminate())?;
+        select! {
+            sig = signal::ctrl_c() => {
+                sig.context("failed to wait for Ctrl-C")?;
+                None
+            },
+            _ = terminate.recv() => None,
+            deadline = host.stopped() => deadline?,
+        }
     };
-    shutdown.await.context("failed to shutdown host")?;
+    #[cfg(not(unix))]
+    let deadline = select! {
+        sig = signal::ctrl_c() => {
+            sig.context("failed to wait for Ctrl-C")?;
+            None
+        },
+        deadline = host.stopped() => deadline?,
+    };
+    if let Some(deadline) = deadline {
+        timeout_at(deadline, shutdown)
+    } else {
+        timeout(DEFAULT_SHUTDOWN_TIMEOUT, shutdown)
+    }
+    .await
+    .context("host shutdown timed out")?
+    .context("failed to shutdown host")?;
     Ok(())
 }
 

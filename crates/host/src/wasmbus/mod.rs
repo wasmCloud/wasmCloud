@@ -1921,13 +1921,25 @@ impl Host {
         let host = Arc::new(host);
         let queue = spawn({
             let host = Arc::clone(&host);
-            async {
-                Abortable::new(queue, queue_abort_reg)
-                    .for_each(move |msg| {
+            async move {
+                let mut queue = Abortable::new(queue, queue_abort_reg);
+                queue
+                    .by_ref()
+                    .for_each({
                         let host = Arc::clone(&host);
-                        async move { host.handle_message(msg).await }
+                        move |msg| {
+                            let host = Arc::clone(&host);
+                            async move { host.handle_message(msg).await }
+                        }
                     })
                     .await;
+                let deadline = { *host.stop_rx.borrow() };
+                host.stop_tx.send_replace(deadline);
+                if queue.is_aborted() {
+                    info!("control interface queue task gracefully stopped");
+                } else {
+                    error!("control interface queue task unexpectedly stopped");
+                }
             }
         });
         let data_watch: JoinHandle<anyhow::Result<_>> = spawn({
@@ -1937,33 +1949,63 @@ impl Host {
                     .watch_with_history(">")
                     .await
                     .context("failed to watch lattice data bucket")?;
-                Abortable::new(data_watch, data_watch_abort_reg)
-                    .for_each(move |entry| {
+                let mut data_watch = Abortable::new(data_watch, data_watch_abort_reg);
+                data_watch
+                    .by_ref()
+                    .for_each({
                         let host = Arc::clone(&host);
-                        async move {
-                            match entry {
-                                Err(error) => {
-                                    error!("failed to watch lattice data bucket: {error}");
+                        move |entry| {
+                            let host = Arc::clone(&host);
+                            async move {
+                                match entry {
+                                    Err(error) => {
+                                        error!("failed to watch lattice data bucket: {error}");
+                                    }
+                                    Ok(entry) => host.process_entry(entry).await,
                                 }
-                                Ok(entry) => host.process_entry(entry).await,
                             }
                         }
                     })
                     .await;
+                let deadline = { *host.stop_rx.borrow() };
+                host.stop_tx.send_replace(deadline);
+                if data_watch.is_aborted() {
+                    info!("data watch task gracefully stopped");
+                } else {
+                    error!("data watch task unexpectedly stopped");
+                }
                 Ok(())
             }
         });
         let heartbeat = spawn({
             let host = Arc::clone(&host);
-            Abortable::new(heartbeat, heartbeat_abort_reg).for_each(move |_| {
-                let host = Arc::clone(&host);
-                async move {
-                    let heartbeat = host.heartbeat().await;
-                    if let Err(e) = host.publish_event("host_heartbeat", heartbeat).await {
-                        error!("failed to publish heartbeat: {e}");
-                    }
+            async move {
+                let mut heartbeat = Abortable::new(heartbeat, heartbeat_abort_reg);
+                heartbeat
+                    .by_ref()
+                    .for_each({
+                        let host = Arc::clone(&host);
+                        move |_| {
+                            let host = Arc::clone(&host);
+                            async move {
+                                let heartbeat = host.heartbeat().await;
+                                if let Err(e) =
+                                    host.publish_event("host_heartbeat", heartbeat).await
+                                {
+                                    error!("failed to publish heartbeat: {e}");
+                                }
+                            }
+                        }
+                    })
+                    .await;
+                let deadline = { *host.stop_rx.borrow() };
+                host.stop_tx.send_replace(deadline);
+                if heartbeat.is_aborted() {
+                    info!("heartbeat task gracefully stopped");
+                } else {
+                    error!("heartbeat task unexpectedly stopped");
                 }
-            })
+            }
         });
 
         host.publish_event("host_started", start_evt)
@@ -1990,18 +2032,13 @@ impl Host {
             .context("failed to publish stop event")?;
             // Before we exit, make sure to flush all messages or we may lose some that we've
             // thought were sent (like the host_stopped event)
-            host.ctl_nats
-                .flush()
-                .await
-                .context("failed to flush ctl client")?;
-            host.rpc_nats
-                .flush()
-                .await
-                .context("failed to flush rpc client")?;
-            host.prov_rpc_nats
-                .flush()
-                .await
-                .context("failed to flush prov rpc client")
+            try_join!(
+                host.ctl_nats.flush(),
+                host.rpc_nats.flush(),
+                host.prov_rpc_nats.flush(),
+            )
+            .context("failed to flush NATS clients")?;
+            Ok(())
         }))
     }
 
@@ -2442,6 +2479,7 @@ impl Host {
         self.heartbeat.abort();
         self.data_watch.abort();
         self.queue.abort();
+        self.policy_manager.policy_changes.abort();
         let deadline =
             timeout.and_then(|timeout| Instant::now().checked_add(Duration::from_millis(timeout)));
         self.stop_tx.send_replace(deadline);
