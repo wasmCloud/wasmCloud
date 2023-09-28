@@ -1,2 +1,38 @@
-# wasmCloud team members
-* @rvolosatovs @autodidaddict @brooksmtownsend @thomastaylor312 @connorsmith256
+# Default to org maintainers
+* @wasmCloud/org-maintainers
+
+# .github CI
+.github @wasmCloud/ci-maintainers
+
+# nix
+.github/actions/build-nix @rvolosatovs
+.github/actions/install-nix @rvolosatovs
+.github/workflows/nix.yml @rvolosatovs
+flake.* @rvolosatovs
+garnix.yaml @rvolosatovs
+
+# host-related code
+crates/actor @wasmCloud/host-maintainers
+crates/compat @wasmCloud/host-maintainers
+crates/host @wasmCloud/host-maintainers
+crates/host-sys @wasmCloud/host-maintainers
+crates/runtime @wasmCloud/host-maintainers
+src/main.rs @wasmCloud/host-maintainers
+tests/actors @wasmCloud/host-maintainers
+tests/providers @wasmCloud/host-maintainers
+tests/local.rs @wasmCloud/host-maintainers
+tests/wasmbus.rs @wasmCloud/host-maintainers
+wit @wasmCloud/host-maintainers
+Cargo.toml @wasmCloud/host-maintainers
+
+# shared crates
+crates/core @wasmCloud/org-maintainers
+crates/opentelemetry-nats @thomastaylor312 @connorsmith256
+crates/provider-sdk @thomastaylor312 @connorsmith256
+crates/provider-wit-bindgen @thomastaylor312 @vados-cosmonic
+crates/tracing @thomastaylor312 @connorsmith256
+
+# projects
+crates/providers @wasmCloud/capability-provider-maintainers
+examples @wasmCloud/examples-maintainers
+vendor/capability-providers @wasmCloud/capability-provider-maintainers
