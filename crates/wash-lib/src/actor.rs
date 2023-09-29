@@ -6,7 +6,7 @@ use wasmcloud_control_interface::{Client as CtlClient, CtlOperationAck};
 
 use crate::{
     common::boxed_err_to_anyhow,
-    config::{WashConnectionOptions, DEFAULT_START_ACTOR_TIMEOUT_MS},
+    config::DEFAULT_START_ACTOR_TIMEOUT_MS,
     wait::{
         wait_for_actor_start_event, wait_for_actor_stop_event, ActorStoppedInfo, FindEventOutcome,
     },
@@ -163,12 +163,11 @@ pub async fn stop_actor(
 }
 
 pub async fn update_actor(
-    opts: WashConnectionOptions,
+    client: &CtlClient,
     host_id: &str,
     actor_id: &str,
     actor_ref: &str,
 ) -> Result<CtlOperationAck> {
-    let client = opts.into_ctl_client(None).await?;
     client
         .update_actor(host_id, actor_id, actor_ref, None)
         .await

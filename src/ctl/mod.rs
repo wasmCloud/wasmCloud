@@ -208,13 +208,11 @@ pub(crate) async fn handle_command(
                 cmd.actor_id, cmd.new_actor_ref
             ));
 
-            let ack = update_actor(
-                cmd.opts.try_into()?,
-                &cmd.host_id,
-                &cmd.actor_id,
-                &cmd.new_actor_ref,
-            )
-            .await?;
+            let wco: WashConnectionOptions = cmd.opts.try_into()?;
+            let client = wco.into_ctl_client(None).await?;
+
+            let ack =
+                update_actor(&client, &cmd.host_id, &cmd.actor_id, &cmd.new_actor_ref).await?;
             if !ack.accepted {
                 bail!("Operation failed: {}", ack.error);
             }
