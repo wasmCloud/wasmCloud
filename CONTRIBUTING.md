@@ -7,6 +7,10 @@ to help get your contribution accepted.
 
 - [Contributing Guide](#contributing-guide)
   - [Table of Contents](#table-of-contents)
+  - [How to Contribute Code](#how-to-contribute-code)
+  - [Pull Requests](#pull-requests)
+    - [PR Lifecycle](#pr-lifecycle)
+      - [Documentation PRs](#documentation-prs)
   - [Reporting a Security Issue](#reporting-a-security-issue)
   - [Developer Certificate of Origin](#developer-certificate-of-origin)
   - [Support Channels](#support-channels)
@@ -15,14 +19,78 @@ to help get your contribution accepted.
     - [Issue Types](#issue-types)
     - [Issue Lifecycle](#issue-lifecycle)
   - [Proposing an Idea](#proposing-an-idea)
-  - [How to Contribute Code](#how-to-contribute-code)
-  - [Pull Requests](#pull-requests)
-    - [PR Lifecycle](#pr-lifecycle)
-      - [Documentation PRs](#documentation-prs)
   - [Labels](#labels)
     - [Common](#common)
     - [Issue Specific](#issue-specific)
     - [PR Specific](#pr-specific)
+
+## How to Contribute Code
+
+1. Identify or create the related issue. If you're proposing a larger change to wasmCloud, see
+   [Proposing an Idea](#proposing-an-idea).
+2. Fork the desired repo; develop and test your code changes.
+3. Submit a pull request, making sure to sign your work and link the related issue.
+
+In general, most repos in the wasmCloud project have linters and other coding standards to follow.
+Those standards should be followed when you contribute your code.
+
+## Pull Requests
+
+Like any good open source project, we use Pull Requests (PRs) to track code changes.
+
+### PR Lifecycle
+
+1. PR creation
+    - We more than welcome PRs that are currently in progress. They are a great way to keep track of
+      important work that is in-flight, but useful for others to see. If a PR is a work in progress,
+      it **must** be prefaced with "WIP: [title]". Once the PR is ready for review, remove "WIP"
+      from the title.
+    - It is preferred, but not required, to have a PR tied to a specific issue. There can be
+      circumstances where if it is a quick fix then an issue might be overkill. The details provided
+      in the PR description would suffice in this case.
+2. Triage
+    - The maintainer in charge of triaging will apply the proper labels for the issue. This should
+      include at least a `bug` or `feature` label once all labels are applied. See the [Labels
+      section](#labels) for full details on the definitions of labels.
+3. Assigning reviews
+    - Reviewers will either be autoassigned using a CODEOWNERS file or by maintainers of the repo
+      when they triage PRs, maintainers will review them as schedule permits. The maintainer who
+      takes the issue should self-request a review.
+    - PRs from a community member with that are any larger than 10-ish lines requires 2 review
+      approvals from maintainers before it can be merged. For contributions from contributors and
+      maintainers, 2 reviews are only required if the PR is large, or if the first maintainer
+      requests a second review. These size and review requirements are implemented per the judgement
+      of the maintainers. In the future, we may adopt a more standardized approach
+4. Reviewing/Discussion
+    - All reviews will be completed using GitHub review tool.
+    - A "Comment" review should be used when there are questions about the code that should be
+      answered, but that don't involve code changes. This type of review does not count as approval.
+    - A "Changes Requested" review indicates that changes to the code need to be made before they
+      will be merged.
+    - Reviewers should update labels as needed (such as `breaking`, if the PR contains a breaking
+      change)
+    - If a comment is a nit, it should be prefaced with the text `Nit:` to indicate to the submitter
+      that addressing this comment is optional
+5. Address comments by answering questions or changing code
+6. LGTM (Looks good to me)
+    - Once a Reviewer has completed a review and the code looks ready to merge, an "Approve" review
+      is used to signal to the contributor and to other maintainers that you have reviewed the code
+      and feel that it is ready to be merged.
+7. Merge or close
+    - PRs should stay open until merged or if they have not been active for more than 30 days. This
+      will help keep the PR queue to a manageable size and reduce noise. Should the PR need to stay
+      open (like in the case of a WIP), the `keep open` label can be added.
+    - If the owner of the PR is a maintainer, that user **must** merge their own PRs or explicitly
+      request another maintainer do that for them.
+    - If the owner of a PR is _not_ a maintainer, any maintainer may merge the PR. As a rule of
+      thumb, we usually recommend one of the reviewers be the one to merge the PR, but this is not
+      required
+
+#### Documentation PRs
+
+Documentation PRs will follow the same lifecycle as other PRs. They will also be labeled with the
+`documentation` label. For documentation, special attention will be paid to spelling, grammar, and
+clarity (whereas those things don't matter *as* much for comments in code).
 
 ## Reporting a Security Issue
 
@@ -186,74 +254,6 @@ a the specific structure chosen and the [provided
 template](https://wasmcloud.github.io/adr/template.html) to write your own
 
 After your proposal has been approved, you can go ahead and get started implementing it!
-
-## How to Contribute Code
-
-1. Identify or create the related issue. If you're proposing a larger change to wasmCloud, see
-   [Proposing an Idea](#proposing-an-idea).
-2. Fork the desired repo; develop and test your code changes.
-3. Submit a pull request, making sure to sign your work and link the related issue.
-
-In general, most repos in the wasmCloud project have linters and other coding standards to follow.
-Those standards should be followed when you contribute your code.
-
-## Pull Requests
-
-Like any good open source project, we use Pull Requests (PRs) to track code changes.
-
-### PR Lifecycle
-
-1. PR creation
-    - We more than welcome PRs that are currently in progress. They are a great way to keep track of
-      important work that is in-flight, but useful for others to see. If a PR is a work in progress,
-      it **must** be prefaced with "WIP: [title]". Once the PR is ready for review, remove "WIP"
-      from the title.
-    - It is preferred, but not required, to have a PR tied to a specific issue. There can be
-      circumstances where if it is a quick fix then an issue might be overkill. The details provided
-      in the PR description would suffice in this case.
-2. Triage
-    - The maintainer in charge of triaging will apply the proper labels for the issue. This should
-      include at least a `bug` or `feature` label once all labels are applied. See the [Labels
-      section](#labels) for full details on the definitions of labels.
-3. Assigning reviews
-    - Reviewers will either be autoassigned using a CODEOWNERS file or by maintainers of the repo
-      when they triage PRs, maintainers will review them as schedule permits. The maintainer who
-      takes the issue should self-request a review.
-    - PRs from a community member with that are any larger than 10-ish lines requires 2 review
-      approvals from maintainers before it can be merged. For contributions from contributors and
-      maintainers, 2 reviews are only required if the PR is large, or if the first maintainer
-      requests a second review. These size and review requirements are implemented per the judgement
-      of the maintainers. In the future, we may adopt a more standardized approach
-4. Reviewing/Discussion
-    - All reviews will be completed using GitHub review tool.
-    - A "Comment" review should be used when there are questions about the code that should be
-      answered, but that don't involve code changes. This type of review does not count as approval.
-    - A "Changes Requested" review indicates that changes to the code need to be made before they
-      will be merged.
-    - Reviewers should update labels as needed (such as `breaking`, if the PR contains a breaking
-      change)
-    - If a comment is a nit, it should be prefaced with the text `Nit:` to indicate to the submitter
-      that addressing this comment is optional
-5. Address comments by answering questions or changing code
-6. LGTM (Looks good to me)
-    - Once a Reviewer has completed a review and the code looks ready to merge, an "Approve" review
-      is used to signal to the contributor and to other maintainers that you have reviewed the code
-      and feel that it is ready to be merged.
-7. Merge or close
-    - PRs should stay open until merged or if they have not been active for more than 30 days. This
-      will help keep the PR queue to a manageable size and reduce noise. Should the PR need to stay
-      open (like in the case of a WIP), the `keep open` label can be added.
-    - If the owner of the PR is a maintainer, that user **must** merge their own PRs or explicitly
-      request another maintainer do that for them.
-    - If the owner of a PR is _not_ a maintainer, any maintainer may merge the PR. As a rule of
-      thumb, we usually recommend one of the reviewers be the one to merge the PR, but this is not
-      required
-
-#### Documentation PRs
-
-Documentation PRs will follow the same lifecycle as other PRs. They will also be labeled with the
-`documentation` label. For documentation, special attention will be paid to spelling, grammar, and
-clarity (whereas those things don't matter *as* much for comments in code).
 
 ## Labels
 
