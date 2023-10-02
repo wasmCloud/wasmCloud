@@ -19,7 +19,7 @@ use core::task::{Context, Poll};
 use core::time::Duration;
 
 use std::collections::hash_map::{self, Entry};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
 use std::env::consts::{ARCH, FAMILY, OS};
 use std::io::Cursor;
@@ -1749,9 +1749,17 @@ impl Host {
             ("hostcore.os".into(), OS.into()),
             ("hostcore.osfamily".into(), FAMILY.into()),
         ]);
-        labels.extend(env::vars().filter_map(|(k, v)| {
-            let k = k.strip_prefix("HOST_")?;
-            Some((k.to_lowercase(), v))
+        labels.extend(config.labels.clone().into_iter());
+        let existing_labels: HashSet<String> = labels.keys().cloned().collect();
+        labels.extend(env::vars().filter_map(|(key, value)| {
+            let key = key.strip_prefix("HOST_")?;
+            if existing_labels.contains(key) {
+                warn!(
+                    ?key,
+                    "label provided via HOST_ environment variable will override existing label"
+                );
+            }
+            Some((key.to_string(), value))
         }));
         let friendly_name =
             Self::generate_friendly_name().context("failed to generate friendly name")?;

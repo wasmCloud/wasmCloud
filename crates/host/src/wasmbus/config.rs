@@ -1,5 +1,6 @@
 use crate::OciConfig;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -43,6 +44,8 @@ pub struct Host {
     pub lattice_prefix: String,
     /// The domain to use for host Jetstream operations
     pub js_domain: Option<String>,
+    /// Labels (key-value pairs) to add to the host
+    pub labels: HashMap<String, String>,
     /// The server key pair used by this host to generate its public key
     pub host_key: Option<Arc<KeyPair>>,
     /// The cluster key pair used by this host to sign all invocations
@@ -100,6 +103,7 @@ impl Default for Host {
             prov_rpc_tls: false,
             lattice_prefix: "default".to_string(),
             js_domain: None,
+            labels: HashMap::default(),
             host_key: None,
             cluster_key: None,
             cluster_issuers: None,

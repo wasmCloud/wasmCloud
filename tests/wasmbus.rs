@@ -462,7 +462,8 @@ async fn wasmbus() -> anyhow::Result<()> {
         ("hostcore.arch".into(), ARCH.into()),
         ("hostcore.os".into(), OS.into()),
         ("hostcore.osfamily".into(), FAMILY.into()),
-        ("path".into(), "test-path".into()),
+        ("label1".into(), "value1".into()),
+        ("PATH".into(), "test-path".into()),
     ]);
 
     let cluster_key = Arc::new(cluster_key);
@@ -473,6 +474,7 @@ async fn wasmbus() -> anyhow::Result<()> {
         prov_rpc_nats_url: ctl_nats_url.clone(),
         lattice_prefix: TEST_PREFIX.to_string(),
         js_domain: None,
+        labels: HashMap::from([("label1".into(), "value1".into())]),
         cluster_key: Some(Arc::clone(&cluster_key)),
         cluster_issuers: Some(vec![cluster_key.public_key(), cluster_key_two.public_key()]),
         host_key: Some(Arc::clone(&host_key)),
@@ -490,6 +492,7 @@ async fn wasmbus() -> anyhow::Result<()> {
         rpc_nats_url: ctl_nats_url.clone(),
         prov_rpc_nats_url: ctl_nats_url.clone(),
         lattice_prefix: TEST_PREFIX.to_string(),
+        labels: HashMap::from([("label1".into(), "value1".into())]),
         cluster_key: Some(Arc::clone(&cluster_key_two)),
         cluster_issuers: Some(vec![cluster_key.public_key(), cluster_key_two.public_key()]),
         host_key: Some(Arc::clone(&host_key_two)),
