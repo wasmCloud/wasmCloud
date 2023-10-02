@@ -60,9 +60,9 @@ reqwest = { workspace = true, features = ["json", "rustls-tls", "stream"] }
 rmp-serde = "1"
 semver = { workspace = true, features = ["serde"], optional = true }
 serde = { workspace = true, features = ["derive"], optional = true }
+serde-transcode = "1"
 serde_cbor = "0.11"
 serde_json = { workspace = true, optional = true }
-serde-transcode = "1"
 serde_with = { workspace = true }
 tempfile = { workspace = true }
 term-table = { workspace = true, optional = true }
@@ -76,11 +76,14 @@ toml = { workspace = true }
 wadm = { workspace = true, optional = true }
 walkdir = { workspace = true }
 wascap = { workspace = true }
-wasmcloud-control-interface = { workspace = true }
-weld-codegen = { workspace = true }
+wasm-encoder = { workspace = true }
 wasmbus-rpc = { workspace = true }
-wit-component = { workspace = true }
 wasmcloud-component-adapters = { workspace = true }
+wasmcloud-control-interface = { workspace = true }
+wat = { workspace = true }
+weld-codegen = { workspace = true }
+wit-component = { workspace = true }
+wit-parser = { workspace = true }
 
 [dev-dependencies]
 claims = { workspace = true }
