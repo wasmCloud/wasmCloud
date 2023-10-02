@@ -1,9 +1,10 @@
 #![warn(clippy::pedantic)]
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{self, Context};
+use anyhow::{self, bail, Context};
 use clap::Parser;
 use nkeys::KeyPair;
 use tokio::time::{timeout, timeout_at};
@@ -36,7 +37,6 @@ struct Args {
     /// A seed nkey to use to authenticate to NATS
     #[clap(long = "nats-seed", env = "NATS_SEED", requires = "nats_jwt")]
     nats_seed: Option<String>,
-
     /// The lattice the host belongs to
     #[clap(
         short = 'x',
@@ -94,7 +94,8 @@ struct Args {
         env = "WASMCLOUD_STRUCTURED_LOGGING_ENABLED"
     )]
     enable_structured_logging: bool,
-
+    #[clap(short = 'l', long = "label")]
+    label: Option<Vec<String>>,
     /// An IP address or DNS name to use to connect to NATS for Control Interface (CTL) messages, defaults to the value supplied to --nats-host if not supplied
     #[clap(long = "ctl-host", env = "WASMCLOUD_CTL_HOST", hide = true)]
     ctl_host: Option<String>,
@@ -335,6 +336,13 @@ async fn main() -> anyhow::Result<()> {
         policy_changes_topic: args.policy_changes_topic,
         policy_timeout_ms: args.policy_timeout_ms,
     };
+    let labels = args
+        .label
+        .unwrap_or_default()
+        .iter()
+        .map(|labelpair| parse_label(labelpair))
+        .collect::<anyhow::Result<HashMap<String, String>, anyhow::Error>>()
+        .context("failed to parse labels")?;
     let (host, shutdown) = Box::pin(wasmcloud_host::wasmbus::Host::new(WasmbusHostConfig {
         ctl_nats_url,
         lattice_prefix: args.lattice_prefix,
@@ -343,6 +351,7 @@ async fn main() -> anyhow::Result<()> {
         cluster_issuers: args.cluster_issuers,
         config_service_enabled: args.config_service_enabled,
         js_domain: args.js_domain,
+        labels,
         provider_shutdown_delay: Some(args.provider_shutdown_delay),
         oci_opts,
         ctl_jwt: args.ctl_jwt.or_else(|| args.nats_jwt.clone()),
@@ -401,4 +410,11 @@ fn parse_duration(arg: &str) -> anyhow::Result<Duration> {
     arg.parse()
         .map(Duration::from_millis)
         .map_err(|e| anyhow::anyhow!(e))
+}
+
+fn parse_label(labelpair: &str) -> anyhow::Result<(String, String)> {
+    match labelpair.split('=').collect::<Vec<&str>>()[..] {
+        [k, v] => Ok((k.to_string(), v.to_string())),
+        _ => bail!("invalid label format `{labelpair}`. Expected `key=value`"),
+    }
 }
