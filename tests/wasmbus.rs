@@ -28,8 +28,8 @@ use uuid::Uuid;
 use wascap::jwt;
 use wascap::wasm::extract_claims;
 use wasmcloud_control_interface::{
-    ActorAuctionAck, ActorDescription, ActorInstance, ClientBuilder, CtlOperationAck,
-    GetClaimsResponse, Host as HostInfo, HostInventory, ProviderAuctionAck,
+    kv::DirectKvStore, ActorAuctionAck, ActorDescription, ActorInstance, ClientBuilder,
+    CtlOperationAck, Host as HostInfo, HostInventory, ProviderAuctionAck,
 };
 use wasmcloud_host::wasmbus::{Host, HostConfig};
 
@@ -47,13 +47,15 @@ async fn free_port() -> anyhow::Result<u16> {
 }
 
 async fn assert_start_actor(
-    ctl_client: &wasmcloud_control_interface::Client,
+    ctl_client: &wasmcloud_control_interface::Client<DirectKvStore>,
     _nats_client: &async_nats::Client, // TODO: This should be exposed by `wasmcloud_control_interface::Client`
     _lattice_prefix: &str,
     host_key: &KeyPair,
     url: impl AsRef<str>,
     count: u16,
 ) -> anyhow::Result<()> {
+    // TODO(#740): Remove deprecated once control clients no longer use this command
+    #[allow(deprecated)]
     let CtlOperationAck { accepted, error } = ctl_client
         .start_actor(&host_key.public_key(), url.as_ref(), count, None)
         .await
@@ -66,19 +68,19 @@ async fn assert_start_actor(
 }
 
 async fn assert_scale_actor(
-    ctl_client: &wasmcloud_control_interface::Client,
+    ctl_client: &wasmcloud_control_interface::Client<DirectKvStore>,
     nats_client: &async_nats::Client, // TODO: This should be exposed by `wasmcloud_control_interface::Client`
     lattice_prefix: &str,
     host_key: &KeyPair,
     url: impl AsRef<str>,
     annotations: Option<HashMap<String, String>>,
-    count: u16,
+    count: Option<u16>,
 ) -> anyhow::Result<()> {
     let mut sub = nats_client
         .subscribe(format!("wasmbus.evt.{lattice_prefix}"))
         .await?;
     let CtlOperationAck { accepted, error } = ctl_client
-        .scale_actor(&host_key.public_key(), url.as_ref(), "", count, annotations)
+        .scale_actor(&host_key.public_key(), url.as_ref(), count, annotations)
         .await
         .map_err(|e| anyhow!(e).context("failed to start actor"))?;
     ensure!(error == "");
@@ -101,7 +103,7 @@ async fn assert_scale_actor(
 
 #[allow(clippy::too_many_arguments)] // Shush clippy, it's a test function
 async fn assert_start_provider(
-    client: &wasmcloud_control_interface::Client,
+    client: &wasmcloud_control_interface::Client<DirectKvStore>,
     nats_client: &async_nats::Client, // TODO: This should be exposed by `wasmcloud_control_interface::Client`
     lattice_prefix: &str,
     host_key: &KeyPair,
@@ -164,14 +166,14 @@ async fn assert_start_provider(
 }
 
 async fn assert_advertise_link(
-    client: &wasmcloud_control_interface::Client,
+    client: &wasmcloud_control_interface::Client<DirectKvStore>,
     actor_claims: &jwt::Claims<jwt::Actor>,
     provider_key: &KeyPair,
     contract_id: impl AsRef<str>,
     link_name: &str,
     values: HashMap<String, String>,
 ) -> anyhow::Result<()> {
-    let CtlOperationAck { accepted, error } = client
+    client
         .advertise_link(
             &actor_claims.subject,
             &provider_key.public_key(),
@@ -181,23 +183,19 @@ async fn assert_advertise_link(
         )
         .await
         .map_err(|e| anyhow!(e).context("failed to advertise link"))?;
-    ensure!(error == "");
-    ensure!(accepted);
     Ok(())
 }
 
 async fn assert_remove_link(
-    client: &wasmcloud_control_interface::Client,
+    client: &wasmcloud_control_interface::Client<DirectKvStore>,
     actor_claims: &jwt::Claims<jwt::Actor>,
     contract_id: impl AsRef<str>,
     link_name: &str,
 ) -> anyhow::Result<()> {
-    let CtlOperationAck { accepted, error } = client
+    client
         .remove_link(&actor_claims.subject, contract_id.as_ref(), link_name)
         .await
         .map_err(|e| anyhow!(e).context("failed to remove link"))?;
-    ensure!(error == "");
-    ensure!(accepted);
     Ok(())
 }
 
@@ -460,11 +458,6 @@ async fn wasmbus() -> anyhow::Result<()> {
         redis::Client::open(module_redis_url.as_str()).context("failed to connect to Redis")?;
 
     const TEST_PREFIX: &str = "test-prefix";
-    let ctl_client = ClientBuilder::new(ctl_nats_client.clone())
-        .lattice_prefix(TEST_PREFIX.to_string())
-        .build()
-        .await
-        .map_err(|e| anyhow!(e).context("failed to build control interface client"))?;
 
     let cluster_key = KeyPair::new_cluster();
     let host_key = KeyPair::new_server();
@@ -518,6 +511,11 @@ async fn wasmbus() -> anyhow::Result<()> {
     .await
     .context("failed to initialize host two")?;
 
+    let ctl_client = ClientBuilder::new(ctl_nats_client.clone())
+        .lattice_prefix(TEST_PREFIX.to_string())
+        .build()
+        .await
+        .map_err(|e| anyhow!(e).context("failed to build control interface client"))?;
     let mut hosts = ctl_client
         .get_hosts()
         .await
@@ -746,11 +744,13 @@ expected: {expected_labels:?}"#
                 provider_ref,
                 host_id,
                 link_name,
+                ..
             }),
             Some(ProviderAuctionAck {
                 provider_ref: provider_ref_two,
                 host_id: host_id_two,
                 link_name: link_name_two,
+                ..
             }),
             [],
         ) => {
@@ -966,52 +966,23 @@ expected: {expected_labels:?}"#
     )
     .context("failed to start providers")?;
 
-    // since ctl_client was created before the host, and therefore before the lattice data
-    // bucket, the client will have fallen back to querying the host for lattice data
-    let GetClaimsResponse {
-        claims: mut claims_from_host,
-    } = ctl_client
-        .get_claims()
-        .await
-        .map_err(|e| anyhow!(e).context("failed to query claims via host"))?;
-    claims_from_host.sort_by(|a, b| a.get("sub").unwrap().cmp(b.get("sub").unwrap()));
-    ensure!(claims_from_host.len() == 9); // 5 providers, 4 actors
-
-    let mut links_from_host = ctl_client
-        .query_links()
-        .await
-        .map_err(|e| anyhow!(e).context("failed to query links via host"))?
-        .links;
-    links_from_host.sort_by(|a, b| match a.actor_id.cmp(&b.actor_id) {
-        std::cmp::Ordering::Equal => match a.provider_id.cmp(&b.provider_id) {
-            std::cmp::Ordering::Equal => a.link_name.cmp(&b.link_name),
-            unequal => unequal,
-        },
-        unequal => unequal,
-    });
-
-    ensure!(links_from_host.len() == 12);
-
-    // recreate the ctl_client, which should now use the KV bucket directly
     let ctl_client = ClientBuilder::new(ctl_nats_client.clone())
         .lattice_prefix(TEST_PREFIX.to_string())
         .build()
         .await
         .map_err(|e| anyhow!(e).context("failed to build control interface client"))?;
 
-    let GetClaimsResponse {
-        claims: mut claims_from_bucket,
-    } = ctl_client
+    let mut claims_from_bucket = ctl_client
         .get_claims()
         .await
         .map_err(|e| anyhow!(e).context("failed to query claims via bucket"))?;
     claims_from_bucket.sort_by(|a, b| a.get("sub").unwrap().cmp(b.get("sub").unwrap()));
+    ensure!(claims_from_bucket.len() == 8); // 4 providers, 4 actors
 
     let mut links_from_bucket = ctl_client
         .query_links()
         .await
-        .map_err(|e| anyhow!(e).context("failed to query links via bucket"))?
-        .links;
+        .map_err(|e| anyhow!(e).context("failed to query links via bucket"))?;
     links_from_bucket.sort_by(|a, b| match a.actor_id.cmp(&b.actor_id) {
         std::cmp::Ordering::Equal => match a.provider_id.cmp(&b.provider_id) {
             std::cmp::Ordering::Equal => a.link_name.cmp(&b.link_name),
@@ -1019,9 +990,7 @@ expected: {expected_labels:?}"#
         },
         unequal => unequal,
     });
-
-    ensure!(claims_from_host == claims_from_bucket);
-    ensure!(links_from_host == links_from_bucket);
+    ensure!(links_from_bucket.len() == 12);
 
     let pinged_hosts = ctl_client
         .get_hosts()
@@ -1122,6 +1091,8 @@ expected: {expected_name:?}"#
                 annotations,
                 instance_id,
                 revision,
+                image_ref,
+                max_concurrent,
             } = compat_instances
                 .pop()
                 .context("no compat actor instances found")?;
@@ -1132,6 +1103,8 @@ expected: {expected_name:?}"#
             ensure!(annotations == Some(HashMap::default()));
             ensure!(Uuid::parse_str(&instance_id).is_ok());
             ensure!(revision == expected_revision.unwrap_or_default());
+            ensure!(image_ref == compat_image_ref);
+            ensure!(max_concurrent == 1);
 
             // TODO: Validate `constraints`
             ensure!(component_id == component_actor_claims.subject);
@@ -1154,6 +1127,8 @@ expected: {expected_name:?}"#
                 annotations,
                 instance_id,
                 revision,
+                image_ref,
+                max_concurrent,
             } = component_instances
                 .pop()
                 .context("no component actor instances found")?;
@@ -1164,6 +1139,8 @@ expected: {expected_name:?}"#
             ensure!(annotations == Some(HashMap::default()));
             ensure!(Uuid::parse_str(&instance_id).is_ok());
             ensure!(revision == expected_revision.unwrap_or_default());
+            ensure!(image_ref == component_image_ref);
+            ensure!(max_concurrent == 1);
 
             // TODO: Validate `constraints`
             ensure!(module_id == module_actor_claims.subject);
@@ -1186,6 +1163,8 @@ expected: {expected_name:?}"#
                 annotations,
                 instance_id,
                 revision,
+                image_ref,
+                max_concurrent,
             } = module_instances
                 .pop()
                 .context("no module actor instances found")?;
@@ -1196,6 +1175,8 @@ expected: {expected_name:?}"#
             ensure!(annotations == Some(HashMap::default()));
             ensure!(Uuid::parse_str(&instance_id).is_ok());
             ensure!(revision == expected_revision.unwrap_or_default());
+            ensure!(image_ref == module_image_ref);
+            ensure!(max_concurrent == 1);
 
             // TODO: Validate `constraints`
             ensure!(foobar_id == foobar_actor_claims.subject);
@@ -1218,6 +1199,8 @@ expected: {expected_name:?}"#
                 annotations,
                 instance_id,
                 revision,
+                image_ref,
+                max_concurrent,
             } = foobar_instances
                 .pop()
                 .context("no foobar actor instances found")?;
@@ -1228,6 +1211,8 @@ expected: {expected_name:?}"#
             ensure!(annotations == Some(HashMap::default()));
             ensure!(Uuid::parse_str(&instance_id).is_ok());
             ensure!(revision == expected_revision.unwrap_or_default());
+            ensure!(image_ref == foobar_image_ref);
+            ensure!(max_concurrent == 1);
         }
         (None, None, None, None, []) => bail!("no actor found"),
         _ => bail!("more than four actors found"),
@@ -1429,7 +1414,29 @@ expected: {expected_labels:?}"#
         &host_key,
         &foobar_actor_url,
         Some(HashMap::from_iter([("foo".to_string(), "bar".to_string())])),
-        5,
+        Some(5),
+    )
+    .await
+    .context("failed to scale foobar actor")?;
+    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    let HostInventory { actors, .. } = ctl_client
+        .get_host_inventory(&host_key.public_key())
+        .await
+        .map_err(|e| anyhow!(e).context("failed to get host inventory"))?;
+    let foobar_actor = actors
+        .iter()
+        .find(|a| a.image_ref == Some(foobar_actor_url.to_string()))
+        .expect("foobar actor to be in the list");
+    // 1 with no annotations, 1 with annotations (max scale 5)
+    ensure!(foobar_actor.instances.len() == 2);
+    assert_scale_actor(
+        &ctl_client,
+        &ctl_nats_client,
+        TEST_PREFIX,
+        &host_key,
+        &foobar_actor_url,
+        Some(HashMap::from_iter([("foo".to_string(), "bar".to_string())])),
+        None,
     )
     .await
     .context("failed to scale foobar actor")?;
@@ -1441,8 +1448,9 @@ expected: {expected_labels:?}"#
         .iter()
         .find(|a| a.image_ref == Some(foobar_actor_url.to_string()))
         .expect("foobar actor to be in the list");
-    // 1 with no annotations, 5 with annotations
-    ensure!(foobar_actor.instances.len() == 6);
+    // 1 with no annotations, 1 with annotations (with unbounded scale)
+    ensure!(foobar_actor.instances.len() == 2);
+
     assert_scale_actor(
         &ctl_client,
         &ctl_nats_client,
@@ -1450,7 +1458,7 @@ expected: {expected_labels:?}"#
         &host_key,
         &foobar_actor_url,
         Some(HashMap::from_iter([("foo".to_string(), "bar".to_string())])),
-        0,
+        Some(0),
     )
     .await
     .context("failed to scale foobar actor")?;
@@ -1464,25 +1472,6 @@ expected: {expected_labels:?}"#
         .expect("foobar actor to be in the list");
     // 1 with no annotations, 0 with annotations
     ensure!(foobar_actor.instances.len() == 1);
-
-    assert_scale_actor(
-        &ctl_client,
-        &ctl_nats_client,
-        TEST_PREFIX,
-        &host_key,
-        &foobar_actor_url,
-        None,
-        0,
-    )
-    .await
-    .context("failed to scale foobar actor")?;
-    let HostInventory { actors, .. } = ctl_client
-        .get_host_inventory(&host_key.public_key())
-        .await
-        .map_err(|e| anyhow!(e).context("failed to get host inventory"))?;
-    ensure!(!actors
-        .iter()
-        .any(|a| a.image_ref == Some(foobar_actor_url.to_string())));
 
     // Shutdown host one
     let CtlOperationAck { accepted, error } = ctl_client
