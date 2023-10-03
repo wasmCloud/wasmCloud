@@ -1,6 +1,7 @@
 #[cfg(feature = "otel")]
 pub mod context;
 
+use std::env;
 use std::io::{IsTerminal, StderrLock, Write};
 
 use anyhow::Context;
@@ -261,16 +262,26 @@ fn get_json_log_layer() -> anyhow::Result<impl Layer<Layered<EnvFilter, Registry
 fn get_level_filter(log_level_override: Option<&Level>) -> EnvFilter {
     if let Some(log_level) = log_level_override {
         let level = wasi_level_to_tracing_level(log_level);
-        // NOTE(thomastaylor312): Technically we should just use the plain level filter, but we are
-        // cheating so we don't have to mix dynamic filter types.
         // SAFETY: We can unwrap here because we control all inputs
-        EnvFilter::builder()
+        let mut filter = EnvFilter::builder()
             .with_default_directive(level.into())
             .parse("")
             .unwrap()
             .add_directive("async_nats=info".parse().unwrap())
-            .add_directive("hyper=info".parse().unwrap())
             .add_directive("cranelift_codegen=warn".parse().unwrap())
+            .add_directive("hyper=info".parse().unwrap())
+            .add_directive("oci_distribution=info".parse().unwrap());
+
+        // Allow RUST_LOG to override the other directives
+        if let Ok(rust_log) = env::var("RUST_LOG") {
+            if let Ok(directive) = rust_log.parse() {
+                filter = filter.add_directive(directive);
+            } else {
+                eprintln!("ERROR: Ignoring invalid RUST_LOG directive: {}", rust_log);
+            }
+        }
+
+        filter
     } else {
         EnvFilter::default().add_directive(LevelFilter::INFO.into())
     }

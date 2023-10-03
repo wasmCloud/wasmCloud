@@ -2975,6 +2975,10 @@ impl Host {
                 traces_exporter: self.host_config.otel_config.traces_exporter.clone(),
                 exporter_otlp_endpoint: self.host_config.otel_config.exporter_otlp_endpoint.clone(),
             };
+            // TODO: set back to Some(self.host_config.log_level.clone()) once all providers can be
+            // assumed to be built using the new SDK. Providers built using wasmbus-rpc <= 0.15
+            // ignore RUST_LOG when log_level is set
+            let log_level: Option<wasmcloud_core::logging::Level> = None;
             let host_data = HostData {
                 host_id: self.host_key.public_key(),
                 lattice_rpc_prefix: self.host_config.lattice_prefix.clone(),
@@ -2990,7 +2994,7 @@ impl Host {
                 default_rpc_timeout_ms,
                 cluster_issuers: self.cluster_issuers.clone(),
                 invocation_seed,
-                log_level: Some(self.host_config.log_level.clone()),
+                log_level,
                 structured_logging: self.host_config.enable_structured_logging,
                 otel_config,
             };
@@ -3004,9 +3008,12 @@ impl Host {
             );
 
             let mut child_cmd = process::Command::new(&path);
+            // Prevent the provider from inheriting the host's environment, with the exception of
+            // the following variables we manually add back
+            child_cmd.env_clear();
+
+            // TODO: remove these OTEL vars once all providers are updated to use the new SDK
             child_cmd
-                .env_clear()
-                // TODO: remove these once all providers are updated to use the new SDK
                 .env(
                     "OTEL_TRACES_EXPORTER",
                     self.host_config
@@ -3031,6 +3038,11 @@ impl Host {
                     env::var("SYSTEMROOT")
                         .context("SYSTEMROOT is not set. Providers cannot be started")?,
                 );
+            }
+
+            // Proxy RUST_LOG to (Rust) providers, so they can use the same module-level directives
+            if let Ok(rust_log) = env::var("RUST_LOG") {
+                let _ = child_cmd.env("RUST_LOG", rust_log);
             }
 
             let mut child = child_cmd
