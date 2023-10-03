@@ -19,7 +19,7 @@ fn integration_keys_gen_basic() {
 
 #[test]
 fn integration_keys_gen_comprehensive() {
-    let key_gen_types = vec![
+    let key_gen_types = [
         "account", "user", "module", "service", "server", "operator", "cluster",
     ];
 

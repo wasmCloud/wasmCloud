@@ -76,9 +76,9 @@ fn tinygo_actor() {
             push_insecure: false,
             key_directory: PathBuf::from("./keys"),
             filename: Some("testactor.wasm".to_string()),
-            wasm_target: WasmTarget::CoreModule,
+            call_alias: Some("testactor".to_string()),
             wasi_preview2_adapter_path: None,
-            call_alias: Some("testactor".to_string())
+            wasm_target: WasmTarget::CoreModule,
         })
     );
 
@@ -259,9 +259,9 @@ fn minimal_rust_actor() {
             push_insecure: false,
             key_directory: PathBuf::from("./keys"),
             filename: None,
-            wasm_target: WasmTarget::CoreModule,
+            call_alias: None,
             wasi_preview2_adapter_path: None,
-            call_alias: None
+            wasm_target: WasmTarget::CoreModule,
         })
     );
 
@@ -305,9 +305,9 @@ fn cargo_toml_actor() {
             push_insecure: false,
             key_directory: PathBuf::from("./keys"),
             filename: None,
-            wasm_target: WasmTarget::CoreModule,
+            call_alias: None,
             wasi_preview2_adapter_path: None,
-            call_alias: None
+            wasm_target: WasmTarget::CoreModule,
         })
     );
 
