@@ -1197,7 +1197,7 @@ impl ActorInstance {
 
     #[instrument(level = "debug", skip_all)]
     async fn handle_call(&self, invocation: Invocation) -> anyhow::Result<(Vec<u8>, u64)> {
-        debug!(?invocation.origin, ?invocation.target, invocation.operation, "validate actor invocation");
+        trace!(?invocation.origin, ?invocation.target, invocation.operation, "validate actor invocation");
         invocation.validate_antiforgery(&self.valid_issuers)?;
 
         let content_length: usize = invocation
@@ -1211,7 +1211,7 @@ impl ActorInstance {
             invocation.msg
         };
 
-        debug!(?invocation.origin, ?invocation.target, invocation.operation, "handle actor invocation");
+        trace!(?invocation.origin, ?invocation.target, invocation.operation, "handle actor invocation");
 
         let source_public_key = invocation.origin.public_key;
         // actors don't have a contract_id
