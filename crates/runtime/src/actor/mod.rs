@@ -108,7 +108,7 @@ impl Actor {
     }
 
     /// [Claims](jwt::Claims) associated with this [Actor].
-    #[instrument]
+    #[instrument(level = "trace")]
     pub fn claims(&self) -> Option<&jwt::Claims<jwt::Actor>> {
         match self {
             Self::Module(module) => module.claims(),
@@ -160,7 +160,7 @@ impl Actor {
     /// # Errors
     ///
     /// Fails if [`Instance::call`] fails
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn call(
         &self,
         operation: impl AsRef<str>,
@@ -255,7 +255,7 @@ impl GuestInstance {
     ///
     /// Outermost error represents a failure in calling the actor, innermost - the
     /// application-layer error originating from within the actor itself
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn call(
         &self,
         operation: impl AsRef<str>,
@@ -440,7 +440,7 @@ impl Instance {
     ///
     /// Outermost error represents a failure in calling the actor, innermost - the
     /// application-layer error originating from within the actor itself
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn call(
         &mut self,
         operation: impl AsRef<str>,

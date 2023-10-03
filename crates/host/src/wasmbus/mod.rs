@@ -240,7 +240,7 @@ struct Handler {
     chunk_endpoint: ChunkEndpoint,
 }
 
-#[instrument]
+#[instrument(level = "debug")]
 async fn resolve_target(
     target: Option<&TargetEntity>,
     links: Option<&HashMap<String, WasmCloudEntity>>,
@@ -272,7 +272,7 @@ async fn resolve_target(
 }
 
 impl Handler {
-    #[instrument(skip(self, operation, request))]
+    #[instrument(level = "debug", skip(self, operation, request))]
     async fn call_operation_with_payload(
         &self,
         target: Option<&TargetEntity>,
@@ -365,7 +365,7 @@ impl Handler {
         }
     }
 
-    #[instrument(skip(self, operation, request))]
+    #[instrument(level = "debug", skip(self, operation, request))]
     async fn call_operation(
         &self,
         target: Option<&TargetEntity>,
@@ -659,7 +659,7 @@ impl Blobstore for Handler {
 
 #[async_trait]
 impl Bus for Handler {
-    #[instrument(skip(self))]
+    #[instrument(level = "debug", skip(self))]
     async fn identify_wasmbus_target(
         &self,
         binding: &str,
@@ -676,7 +676,7 @@ impl Bus for Handler {
         Ok(TargetEntity::Actor(namespace.into()))
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = "debug", skip(self))]
     async fn set_target(
         &self,
         target: Option<TargetEntity>,
@@ -695,7 +695,7 @@ impl Bus for Handler {
         Ok(())
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = "debug", skip(self))]
     async fn call(
         &self,
         target: Option<TargetEntity>,
@@ -830,7 +830,7 @@ impl Bus for Handler {
         ))
     }
 
-    #[instrument(skip(self, request))]
+    #[instrument(level = "debug", skip(self, request))]
     async fn call_sync(
         &self,
         target: Option<TargetEntity>,
@@ -979,7 +979,7 @@ impl KeyValueReadWrite for Handler {
 
 #[async_trait]
 impl Logging for Handler {
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     async fn log(
         &self,
         level: logging::Level,
@@ -1129,7 +1129,7 @@ impl Messaging for Handler {
 }
 
 impl ActorInstance {
-    #[instrument(skip(self, msg))]
+    #[instrument(level = "debug", skip(self, msg))]
     async fn handle_invocation(
         &self,
         contract_id: &str,
@@ -1195,7 +1195,7 @@ impl ActorInstance {
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     async fn handle_call(&self, invocation: Invocation) -> anyhow::Result<(Vec<u8>, u64)> {
         debug!(?invocation.origin, ?invocation.target, invocation.operation, "validate actor invocation");
         invocation.validate_antiforgery(&self.valid_issuers)?;
@@ -1298,7 +1298,7 @@ impl ActorInstance {
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     async fn handle_message(&self, message: async_nats::Message) {
         let async_nats::Message {
             ref subject,
@@ -2110,12 +2110,8 @@ impl Host {
         })
     }
 
-    #[instrument(skip(self, name))]
-    async fn publish_event(
-        &self,
-        name: impl AsRef<str>,
-        data: serde_json::Value,
-    ) -> anyhow::Result<()> {
+    #[instrument(level = "debug", skip(self, name))]
+    async fn publish_event(&self, name: &str, data: serde_json::Value) -> anyhow::Result<()> {
         event::publish(
             &self.event_builder,
             &self.ctl_nats,

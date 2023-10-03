@@ -90,7 +90,7 @@ impl<T> StdioStream<T> {
 
 #[async_trait]
 impl HostInputStream for StdioStream<Box<dyn HostInputStream>> {
-    #[instrument(skip(self))]
+    #[instrument(level = "trace", skip(self))]
     fn read(&mut self, size: usize) -> anyhow::Result<(Bytes, StreamState)> {
         match self.0.try_lock().as_deref_mut() {
             Ok(None) => ClosedInputStream.read(size),
@@ -99,7 +99,7 @@ impl HostInputStream for StdioStream<Box<dyn HostInputStream>> {
         }
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = "trace", skip(self))]
     fn skip(&mut self, nelem: usize) -> anyhow::Result<(usize, StreamState)> {
         match self.0.try_lock().as_deref_mut() {
             Ok(None) => ClosedInputStream.skip(nelem),
@@ -108,7 +108,7 @@ impl HostInputStream for StdioStream<Box<dyn HostInputStream>> {
         }
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = "trace", skip(self))]
     async fn ready(&mut self) -> anyhow::Result<()> {
         if let Some(stream) = self.0.lock().await.as_mut() {
             stream.ready().await
@@ -122,7 +122,7 @@ type OutputStreamResult<T> = Result<T, OutputStreamError>;
 
 #[async_trait]
 impl HostOutputStream for StdioStream<Box<dyn HostOutputStream>> {
-    #[instrument(skip(self))]
+    #[instrument(level = "trace", skip(self))]
     fn write(&mut self, bytes: Bytes) -> OutputStreamResult<()> {
         match self.0.try_lock().as_deref_mut() {
             Ok(None) => ClosedOutputStream.write(bytes),
@@ -131,7 +131,7 @@ impl HostOutputStream for StdioStream<Box<dyn HostOutputStream>> {
         }
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = "trace", skip(self))]
     fn write_zeroes(&mut self, nelem: usize) -> OutputStreamResult<()> {
         match self.0.try_lock().as_deref_mut() {
             Ok(None) => ClosedOutputStream.write_zeroes(nelem),
@@ -140,7 +140,7 @@ impl HostOutputStream for StdioStream<Box<dyn HostOutputStream>> {
         }
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = "trace", skip(self))]
     fn flush(&mut self) -> OutputStreamResult<()> {
         match self.0.try_lock().as_deref_mut() {
             Ok(None) => ClosedOutputStream.flush(),
@@ -149,7 +149,7 @@ impl HostOutputStream for StdioStream<Box<dyn HostOutputStream>> {
         }
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = "trace", skip(self))]
     async fn write_ready(&mut self) -> OutputStreamResult<usize> {
         if let Some(stream) = self.0.lock().await.as_mut() {
             stream.write_ready().await
@@ -271,7 +271,7 @@ impl Component {
     }
 
     /// [Claims](jwt::Claims) associated with this [Component].
-    #[instrument]
+    #[instrument(level = "trace")]
     pub fn claims(&self) -> Option<&jwt::Claims<jwt::Actor>> {
         self.claims.as_ref()
     }
@@ -298,7 +298,7 @@ impl Component {
     }
 
     /// Instantiates a [Component] producing an [Instance] and invokes an operation on it using [Instance::call]
-    #[instrument(skip_all)]
+    #[instrument(level = "trace", skip_all)]
     pub async fn call(
         &self,
         operation: impl AsRef<str>,
@@ -493,7 +493,7 @@ pub struct GuestInstance {
 
 impl GuestInstance {
     /// Invoke an operation on a [GuestInstance] producing a result.
-    #[instrument(skip_all)]
+    #[instrument(level = "trace", skip_all)]
     pub async fn call(
         &self,
         operation: impl AsRef<str>,
