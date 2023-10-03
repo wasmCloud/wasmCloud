@@ -1,6 +1,6 @@
 use std::{fs::File, io::Read, path::PathBuf};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use term_table::{Table, TableStyle};
 use wash_lib::config::DEFAULT_NATS_TIMEOUT_MS;
 
@@ -23,11 +23,6 @@ pub(crate) fn extract_arg_value(arg: &str) -> Result<String> {
 
 pub(crate) fn default_timeout_ms() -> u64 {
     DEFAULT_NATS_TIMEOUT_MS
-}
-
-/// Converts error from Send + Sync error to standard anyhow error
-pub(crate) fn convert_error(e: Box<dyn ::std::error::Error + Send + Sync>) -> anyhow::Error {
-    anyhow!(e.to_string())
 }
 
 /// Transform a json string (e.g. "{"hello": "world"}") into msgpack bytes

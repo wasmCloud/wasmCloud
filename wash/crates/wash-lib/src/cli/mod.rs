@@ -43,6 +43,7 @@ pub mod get;
 pub mod inspect;
 pub mod link;
 pub mod output;
+pub mod par;
 pub mod registry;
 pub mod spy;
 pub mod start;
