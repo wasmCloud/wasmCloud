@@ -1,13 +1,15 @@
-use std::{collections::HashMap, fs::File, io::prelude::*, path::PathBuf};
+use std::fs::File;
+use std::io::Read;
+use std::{collections::HashMap, path::PathBuf};
 
-use crate::util::convert_error;
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand};
 use log::warn;
 use nkeys::KeyPairType;
 use provider_archive::ProviderArchive;
 use serde_json::json;
-use wash_lib::cli::{extract_keypair, inspect, CommandOutput, OutputKind};
+use wash_lib::cli::par::{convert_error, create_provider_archive, insert_provider_binary};
+use wash_lib::cli::{extract_keypair, inspect, par, CommandOutput, OutputKind};
 
 const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
 
@@ -204,6 +206,21 @@ impl From<InspectCommand> for inspect::InspectCliCommand {
         }
     }
 }
+
+impl From<CreateCommand> for par::ParCreateArgs {
+    fn from(cmd: CreateCommand) -> Self {
+        par::ParCreateArgs {
+            capid: cmd.capid,
+            vendor: cmd.vendor,
+            revision: cmd.revision,
+            version: cmd.version,
+            schema: cmd.schema,
+            name: cmd.name,
+            arch: cmd.arch,
+        }
+    }
+}
+
 pub(crate) async fn handle_command(
     command: ParCliCommand,
     output_kind: OutputKind,
@@ -223,20 +240,12 @@ pub(crate) async fn handle_create(
     cmd: CreateCommand,
     output_kind: OutputKind,
 ) -> Result<CommandOutput> {
-    let mut par = ProviderArchive::new(
-        &cmd.capid,
-        &cmd.name,
-        &cmd.vendor,
-        cmd.revision,
-        cmd.version,
-    );
-
     let mut f = File::open(cmd.binary.clone())?;
     let mut lib = Vec::new();
     f.read_to_end(&mut lib)?;
 
     let issuer = extract_keypair(
-        cmd.issuer,
+        cmd.issuer.clone(),
         Some(cmd.binary.clone()),
         cmd.directory.clone(),
         KeyPairType::Account,
@@ -244,18 +253,16 @@ pub(crate) async fn handle_create(
         output_kind,
     )?;
     let subject = extract_keypair(
-        cmd.subject,
+        cmd.subject.clone(),
         Some(cmd.binary.clone()),
-        cmd.directory,
+        cmd.directory.clone(),
         KeyPairType::Service,
         cmd.disable_keygen,
         output_kind,
     )?;
 
-    par.add_library(&cmd.arch, &lib).map_err(convert_error)?;
-
     let extension = if cmd.compress { ".par.gz" } else { ".par" };
-    let outfile = match cmd.destination {
+    let outfile = match cmd.destination.clone() {
         Some(path) => path,
         None => format!(
             "{}{}",
@@ -267,16 +274,8 @@ pub(crate) async fn handle_create(
             extension
         ),
     };
-    if let Some(ref schema) = cmd.schema {
-        let bytes = std::fs::read(schema)?;
-        par.set_schema(
-            serde_json::from_slice::<serde_json::Value>(&bytes)
-                .with_context(|| "Unable to parse JSON from file contents".to_string())?,
-        )
-        .map_err(convert_error)
-        .with_context(|| format!("Error parsing JSON schema from file '{:?}'", schema))?;
-    }
 
+    let mut par = create_provider_archive(cmd.clone().into(), &lib).await?;
     par.write(&outfile, &issuer, &subject, cmd.compress)
         .await
         .map_err(|e| anyhow!("{}", e))
@@ -304,33 +303,32 @@ pub(crate) async fn handle_insert(
     let mut f = File::open(cmd.archive.clone())?;
     f.read_to_end(&mut buf)?;
 
-    let mut par = ProviderArchive::try_load(&buf)
-        .await
-        .map_err(convert_error)?;
+    let mut f = File::open(cmd.binary.clone())?;
+    let mut lib = Vec::new();
+    f.read_to_end(&mut lib)?;
 
     let issuer = extract_keypair(
-        cmd.issuer,
-        Some(cmd.binary.clone()),
+        cmd.issuer.clone(),
+        Some(cmd.binary.clone().to_owned()),
         cmd.directory.clone(),
         KeyPairType::Account,
         cmd.disable_keygen,
         output_kind,
     )?;
     let subject = extract_keypair(
-        cmd.subject,
-        Some(cmd.binary.clone()),
-        cmd.directory,
+        cmd.subject.clone(),
+        Some(cmd.binary.clone().to_owned()),
+        cmd.directory.clone(),
         KeyPairType::Service,
         cmd.disable_keygen,
         output_kind,
     )?;
 
-    let mut f = File::open(cmd.binary.clone())?;
-    let mut lib = Vec::new();
-    f.read_to_end(&mut lib)?;
+    let mut par = ProviderArchive::try_load(&buf)
+        .await
+        .map_err(convert_error)?;
 
-    par.add_library(&cmd.arch, &lib).map_err(convert_error)?;
-
+    par = insert_provider_binary(cmd.arch, &lib, par).await?;
     par.write(&cmd.archive, &issuer, &subject, is_compressed(&buf)?)
         .await
         .map_err(convert_error)?;
