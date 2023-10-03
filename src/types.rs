@@ -52,12 +52,18 @@ pub struct ActorInstance {
     /// this actor instance
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub annotations: Option<AnnotationMap>,
+    /// Image reference for this actor, if applicable
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_ref: Option<String>,
     /// This instance's unique ID (guid)
     #[serde(default)]
     pub instance_id: String,
     /// The revision number for this actor instance
     #[serde(default)]
     pub revision: i32,
+    /// The maximum number of concurrent requests this instance can handle
+    #[serde(default)]
+    pub max_concurrent: u16,
 }
 
 pub type AnnotationMap = std::collections::HashMap<String, String>;
