@@ -250,7 +250,7 @@ mod tests {
     /// change between versions. This test will fail if `wash keys gen <type>`
     /// changes syntax, ordering of required elements, or flags.
     fn test_gen_comprehensive() {
-        let key_gen_types = vec![
+        let key_gen_types = [
             "account", "user", "module", "service", "server", "operator", "cluster",
         ];
 

@@ -453,7 +453,7 @@ pub(crate) async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result
 
     // Redirect output (which is on stderr) to a log file in detached mode, or use the terminal
     spinner.update_spinner_message(" Starting wasmCloud ...".to_string());
-    let wasmcloud_log_path = install_dir.join(format!("wasmcloud.log"));
+    let wasmcloud_log_path = install_dir.join("wasmcloud.log");
     let stderr: Stdio = if cmd.detached {
         tokio::fs::File::create(&wasmcloud_log_path)
             .await?
