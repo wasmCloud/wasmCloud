@@ -160,7 +160,7 @@ impl Debug for Module {
 
 impl Module {
     /// [Claims](jwt::Claims) associated with this [Module].
-    #[instrument]
+    #[instrument(level = "trace")]
     pub fn claims(&self) -> Option<&jwt::Claims<jwt::Actor>> {
         self.claims.as_ref()
     }
@@ -258,7 +258,7 @@ impl Module {
     }
 
     /// Instantiate a [Module] producing an [Instance] and invoke an operation on it using [Instance::call]
-    #[instrument(skip_all)]
+    #[instrument(level = "trace", skip_all)]
     pub async fn call(
         &self,
         operation: impl AsRef<str>,
@@ -365,7 +365,7 @@ impl Instance {
     }
 
     /// Invoke an operation on an [Instance].
-    #[instrument(skip_all)]
+    #[instrument(level = "trace", skip_all)]
     pub async fn call(
         &mut self,
         operation: impl AsRef<str>,
@@ -467,7 +467,7 @@ impl From<Instance> for GuestInstance {
 
 impl GuestInstance {
     /// Invoke an operation on a [GuestInstance].
-    #[instrument(skip_all)]
+    #[instrument(level = "trace", skip_all)]
     pub async fn call(
         &self,
         operation: impl AsRef<str>,

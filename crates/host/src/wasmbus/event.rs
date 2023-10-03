@@ -228,15 +228,14 @@ pub fn provider_health_check(
     })
 }
 
-#[instrument(skip(event_builder, ctl_nats, name))]
+#[instrument(level = "debug", skip(event_builder, ctl_nats, data))]
 pub(crate) async fn publish(
     event_builder: &EventBuilderV10,
     ctl_nats: &async_nats::Client,
     lattice_prefix: &str,
-    name: impl AsRef<str>,
+    name: &str,
     data: serde_json::Value,
 ) -> anyhow::Result<()> {
-    let name = name.as_ref();
     let name = format!("com.wasmcloud.lattice.{name}");
     let now = OffsetDateTime::now_utc()
         .format(&Rfc3339)

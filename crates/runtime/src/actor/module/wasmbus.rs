@@ -98,7 +98,7 @@ fn caller_memory<T>(store: &mut wasmtime::Caller<'_, T>) -> wasmtime::Memory {
         .expect("`memory` type is not valid")
 }
 
-#[instrument(skip(store, memory))]
+#[instrument(level = "trace", skip(store, memory))]
 fn read_bytes(
     store: impl wasmtime::AsContext,
     memory: &wasmtime::Memory,
@@ -116,7 +116,7 @@ fn read_bytes(
     Ok(buf)
 }
 
-#[instrument(skip(store, memory))]
+#[instrument(level = "trace", skip(store, memory))]
 fn read_string(
     store: impl wasmtime::AsContext,
     memory: &wasmtime::Memory,
@@ -130,7 +130,7 @@ fn read_string(
     Ok(s)
 }
 
-#[instrument(skip(store, memory, buf))]
+#[instrument(level = "trace", skip(store, memory, buf))]
 fn write_bytes<T>(
     store: &mut wasmtime::Caller<'_, T>,
     memory: &wasmtime::Memory,
@@ -146,20 +146,20 @@ fn write_bytes<T>(
     Ok(())
 }
 
-#[instrument(skip(store, err))]
+#[instrument(level = "trace", skip(store, err))]
 fn set_host_error(store: &mut wasmtime::Caller<'_, super::Ctx>, err: String) {
     trace!(err, "set host error");
     store.data_mut().wasmbus.host_error = Some(err);
 }
 
-#[instrument(skip(store, res))]
+#[instrument(level = "trace", skip(store, res))]
 fn set_host_response(store: &mut wasmtime::Caller<'_, super::Ctx>, res: impl Into<Vec<u8>>) {
     let res = res.into();
     trace!(?res, "set host response");
     store.data_mut().wasmbus.host_response = Some(res);
 }
 
-#[instrument(skip(store))]
+#[instrument(level = "trace", skip(store))]
 fn console_log(
     mut store: wasmtime::Caller<'_, super::Ctx>,
     log_ptr: wasm::ptr,
@@ -173,7 +173,7 @@ fn console_log(
     Ok(())
 }
 
-#[instrument(skip(store))]
+#[instrument(level = "trace", skip(store))]
 fn guest_error(
     mut store: wasmtime::Caller<'_, super::Ctx>,
     err_ptr: wasm::ptr,
@@ -187,7 +187,7 @@ fn guest_error(
     Ok(())
 }
 
-#[instrument(skip(store))]
+#[instrument(level = "trace", skip(store))]
 fn guest_request(
     mut store: wasmtime::Caller<'_, super::Ctx>,
     operation_ptr: wasm::ptr,
@@ -207,7 +207,7 @@ fn guest_request(
         .context("failed to write `__guest_call` payload into guest memory")
 }
 
-#[instrument(skip(store))]
+#[instrument(level = "trace", skip(store))]
 fn guest_response(
     mut store: wasmtime::Caller<'_, super::Ctx>,
     res_ptr: wasm::ptr,
@@ -313,7 +313,7 @@ async fn host_call(
     }
 }
 
-#[instrument(skip(store))]
+#[instrument(level = "trace", skip(store))]
 fn host_error(mut store: wasmtime::Caller<'_, super::Ctx>, err_ptr: wasm::ptr) -> Result<()> {
     let err = store
         .data_mut()
@@ -328,7 +328,7 @@ fn host_error(mut store: wasmtime::Caller<'_, super::Ctx>, err_ptr: wasm::ptr) -
         .context("failed to write `__host_error` error into guest memory")
 }
 
-#[instrument(skip(store))]
+#[instrument(level = "trace", skip(store))]
 fn host_error_len(store: wasmtime::Caller<'_, super::Ctx>) -> wasm::usize {
     let len = store
         .data()
@@ -350,7 +350,7 @@ fn host_error_len(store: wasmtime::Caller<'_, super::Ctx>) -> wasm::usize {
     len
 }
 
-#[instrument(skip(store))]
+#[instrument(level = "trace", skip(store))]
 fn host_response(mut store: wasmtime::Caller<'_, super::Ctx>, res_ptr: wasm::ptr) -> Result<()> {
     let res = store
         .data_mut()
@@ -365,7 +365,7 @@ fn host_response(mut store: wasmtime::Caller<'_, super::Ctx>, res_ptr: wasm::ptr
         .context("failed to write `__host_response` response into guest memory")
 }
 
-#[instrument(skip(store))]
+#[instrument(level = "trace", skip(store))]
 fn host_response_len(store: wasmtime::Caller<'_, super::Ctx>) -> wasm::usize {
     store
         .data()

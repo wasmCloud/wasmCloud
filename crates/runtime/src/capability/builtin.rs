@@ -537,7 +537,7 @@ impl Blobstore for Handler {
 
 #[async_trait]
 impl Bus for Handler {
-    #[instrument]
+    #[instrument(level = "trace")]
     async fn identify_wasmbus_target(
         &self,
         binding: &str,
@@ -591,7 +591,7 @@ impl Bus for Handler {
 
 #[async_trait]
 impl Logging for Handler {
-    #[instrument(skip_all)]
+    #[instrument(level = "trace", skip_all)]
     async fn log(
         &self,
         level: logging::Level,

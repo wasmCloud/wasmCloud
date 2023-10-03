@@ -267,7 +267,7 @@ impl RpcClient {
 
     /// Send a nats message with no reply-to. Do not wait for a response.
     /// This can be used for general nats messages, not just wasmbus actor/provider messages.
-    #[instrument(level = "debug", skip(self, payload))]
+    #[instrument(level = "trace", skip(self, payload))]
     pub async fn publish(&self, subject: String, payload: Vec<u8>) -> InvocationResult<()> {
         maybe_timeout(
             self.timeout,
