@@ -152,6 +152,9 @@ pub struct ProviderAuctionAck {
     /// The original provider ref provided for the auction
     #[serde(default)]
     pub provider_ref: String,
+    /// The constraints provided for the auction
+    #[serde(default)]
+    pub constraints: HashMap<String, String>,
 }
 
 /// A request to locate a suitable host for a capability provider. The
