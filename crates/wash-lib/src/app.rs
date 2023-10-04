@@ -1,6 +1,6 @@
 //! Interact with and manage wadm applications over NATS, requires the `nats` feature
 
-use std::time::Duration;
+use std::{path::PathBuf, time::Duration};
 
 use anyhow::{bail, Result};
 use async_nats::{Client, Message};
@@ -9,6 +9,9 @@ use wadm::server::{
     GetModelRequest, GetModelResponse, ModelSummary, PutModelResponse, UndeployModelRequest,
     VersionResponse,
 };
+
+use tokio::io::AsyncReadExt;
+use url::Url;
 
 use crate::config::DEFAULT_LATTICE_PREFIX;
 
@@ -40,6 +43,11 @@ impl ToString for ModelOperation {
         }
         .to_string()
     }
+}
+
+pub enum AppManifest {
+    SerializedModel(String),
+    ModelName(String),
 }
 
 /// Undeploy a model, instructing wadm to no longer manage the given application
@@ -236,5 +244,30 @@ async fn model_request(
         Ok(Ok(res)) => Ok(res),
         Ok(Err(e)) => bail!("Error making model request: {}", e),
         Err(e) => bail!("model_request timed out:  {}", e),
+    }
+}
+
+//  NOTE(ahmedtadde): This should probably be refactored at some point to account for cases where the source's input is unusually (or erroneously) large.
+pub async fn app_manifest_loader(source: &Option<String>) -> Result<AppManifest> {
+    match source {
+        Some(s) if PathBuf::from(s).exists() => Ok(AppManifest::SerializedModel(
+            tokio::fs::read_to_string(s).await?,
+        )),
+        Some(s) if Url::parse(s).is_ok() && s.starts_with("http") => Ok(
+            AppManifest::SerializedModel(reqwest::get(s).await?.text().await?),
+        ),
+        Some(s) if s == "-" => {
+            let mut buffer = String::new();
+            tokio::io::stdin().read_to_string(&mut buffer).await?;
+            Ok(AppManifest::SerializedModel(buffer))
+        }
+        // NOTE(ahmedtadde): If the source is a string that isn't matched by any of the previous branches, we assume it's a model name
+        // Though, applying some validation here would be nice. I looked around for existing model name validation and didn't find any.
+        Some(s) => Ok(AppManifest::ModelName(s.to_owned())),
+        None => {
+            let mut buffer = String::new();
+            tokio::io::stdin().read_to_string(&mut buffer).await?;
+            Ok(AppManifest::SerializedModel(buffer))
+        }
     }
 }
