@@ -1933,7 +1933,7 @@ impl Host {
                 let mut queue = Abortable::new(queue, queue_abort_reg);
                 queue
                     .by_ref()
-                    .for_each({
+                    .for_each_concurrent(0, {
                         let host = Arc::clone(&host);
                         move |msg| {
                             let host = Arc::clone(&host);
