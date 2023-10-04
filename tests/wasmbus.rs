@@ -67,19 +67,34 @@ async fn assert_start_actor(
 
 async fn assert_scale_actor(
     ctl_client: &wasmcloud_control_interface::Client,
-    _nats_client: &async_nats::Client, // TODO: This should be exposed by `wasmcloud_control_interface::Client`
-    _lattice_prefix: &str,
+    nats_client: &async_nats::Client, // TODO: This should be exposed by `wasmcloud_control_interface::Client`
+    lattice_prefix: &str,
     host_key: &KeyPair,
     url: impl AsRef<str>,
     annotations: Option<HashMap<String, String>>,
     count: u16,
 ) -> anyhow::Result<()> {
+    let mut sub = nats_client
+        .subscribe(format!("wasmbus.evt.{lattice_prefix}"))
+        .await?;
     let CtlOperationAck { accepted, error } = ctl_client
         .scale_actor(&host_key.public_key(), url.as_ref(), "", count, annotations)
         .await
         .map_err(|e| anyhow!(e).context("failed to start actor"))?;
     ensure!(error == "");
     ensure!(accepted);
+
+    // Naive wait for at least a stopped / started event before exiting this function. This prevents
+    // assuming we're done with scaling too early since scale is an early-ack ctl request.
+    while let Some(message) = sub.next().await {
+        if let Ok(evt) = serde_json::from_slice::<serde_json::Value>(&message.payload) {
+            if let Some(serde_json::Value::String(event_type)) = evt.get("type") {
+                if event_type.contains("actors_stopped") || event_type.contains("actors_started") {
+                    break;
+                }
+            }
+        }
+    }
 
     Ok(())
 }
