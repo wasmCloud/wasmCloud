@@ -129,13 +129,13 @@ where
 ///   directory where to store hosts. Each host will be stored in a directory maching its version
 /// # Examples
 ///
-/// ```no_run
+/// ```rust,ignore
 /// # #[tokio::main]
 /// # async fn main() {
 /// use wash_lib::start::download_wasmcloud_for_os_arch_pair;
 /// let os = std::env::consts::OS;
 /// let arch = std::env::consts::ARCH;
-/// let res = download_wasmcloud_for_os_arch_pair(os, arch, "v0.63.0", "/tmp/wasmcloud/").await;
+/// let res = download_wasmcloud_for_os_arch_pair("v0.63.0", "/tmp/wasmcloud/").await;
 /// assert!(res.is_ok());
 /// assert!(res.unwrap().to_string_lossy() == "/tmp/wasmcloud/v0.63.0/wasmcloud_host".to_string());
 /// # }

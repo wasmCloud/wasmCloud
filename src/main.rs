@@ -54,7 +54,7 @@ mod ui;
 mod up;
 mod util;
 
-const HELP: &str = r#"
+const HELP: &str = r"
 _________________________________________________________________________________
                                _____ _                 _    _____ _          _ _
                               / ____| |               | |  / ____| |        | | |
@@ -112,7 +112,7 @@ Options:
   --experimental         Whether or not to enable experimental features [default: false]
   -h, --help             Print help
   -V, --version          Print version
-"#;
+";
 
 #[derive(Debug, Clone, Parser)]
 #[clap(name = "wash", version, override_help = HELP)]
@@ -233,7 +233,7 @@ enum CliCommand {
 #[tokio::main]
 async fn main() {
     use clap::CommandFactory;
-    if env_logger::try_init().is_err() {}
+    env_logger::init();
     let cli: Cli = Parser::parse();
 
     let output_kind = cli.output;

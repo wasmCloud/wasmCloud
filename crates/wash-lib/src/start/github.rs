@@ -19,7 +19,7 @@ use tokio_tar::Archive;
 /// * `bin_name` - Name of the binary inside of the tarball, e.g. `nats-server` or `wadm`
 /// # Examples
 ///
-/// ```no_run
+/// ```rust,ignore
 /// # #[tokio::main]
 /// # async fn main() {
 /// let url = "https://github.com/wasmCloud/wadm/releases/download/v0.4.0-alpha.1/wadm-v0.4.0-alpha.1-linux-amd64.tar.gz";
