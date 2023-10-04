@@ -325,7 +325,7 @@ impl WitFunctionLatticeTranslationStrategy {
             format!(
                 "{}.{}",
                 wit_iface_path
-                    .split(".")
+                    .split('.')
                     .last()
                     .map(ToUpperCamelCase::to_upper_camel_case)
                     .with_context(|| format!(
