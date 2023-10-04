@@ -2492,7 +2492,7 @@ impl Host {
 
     #[instrument(skip(self, payload))]
     async fn handle_scale_actor(
-        &self,
+        self: Arc<Self>,
         payload: impl AsRef<[u8]>,
         host_id: &str,
     ) -> anyhow::Result<Bytes> {
@@ -2506,7 +2506,30 @@ impl Host {
 
         debug!(actor_ref, count, "scale actor");
 
-        let actor = self.fetch_actor(&actor_ref).await?;
+        let host_id = host_id.to_string();
+        let annotations = annotations.unwrap_or_default().into_iter().collect();
+        spawn(async move {
+            if let Err(e) = self
+                .handle_scale_actor_task(&actor_ref, &host_id, count, annotations)
+                .await
+            {
+                error!("{e:?}");
+            }
+        });
+        Ok(SUCCESS.into())
+    }
+
+    #[instrument(skip(self))]
+    async fn handle_scale_actor_task(
+        &self,
+        actor_ref: &str,
+        host_id: &str,
+        count: u16,
+        annotations: Annotations,
+    ) -> anyhow::Result<()> {
+        debug!(actor_ref, count, "scale actor task");
+
+        let actor = self.fetch_actor(actor_ref).await?;
         let claims = actor.claims().context("claims missing")?;
         let actor_id = claims.subject.clone();
         let resp = self
@@ -2525,7 +2548,7 @@ impl Host {
             )
         };
 
-        let annotations: Annotations = annotations.unwrap_or_default().into_iter().collect();
+        let actor_ref = actor_ref.to_string();
         match (
             self.actors.write().await.entry(actor_id),
             NonZeroUsize::new(count.into()),
@@ -2621,7 +2644,7 @@ impl Host {
                         .await
                         .context("failed to uninstantiate actor")?;
                     } else {
-                        return Ok(r#"{"accepted":false,"error":"no actors with matching annotations found to stop"}"#.into());
+                        bail!("no actors with matching annotations found to stop");
                     }
                 }
 
@@ -2631,7 +2654,7 @@ impl Host {
                 }
             }
         }
-        Ok(SUCCESS.into())
+        Ok(())
     }
 
     #[instrument(skip(self))]
@@ -3583,9 +3606,10 @@ impl Host {
             (Some("cmd"), Some(host_id), Some("sa"), None) => {
                 self.handle_stop_actor(payload, host_id).await.map(Some)
             }
-            (Some("cmd"), Some(host_id), Some("scale"), None) => {
-                self.handle_scale_actor(payload, host_id).await.map(Some)
-            }
+            (Some("cmd"), Some(host_id), Some("scale"), None) => Arc::clone(&self)
+                .handle_scale_actor(payload, host_id)
+                .await
+                .map(Some),
             (Some("cmd"), Some(host_id), Some("sp"), None) => {
                 self.handle_stop_provider(payload, host_id).await.map(Some)
             }
