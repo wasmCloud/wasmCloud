@@ -52,6 +52,7 @@ term-table = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 toml = { workspace = true }
+url = { workspace = true }
 wadm = { workspace = true }
 warp = "0.3.6"
 warp-embed = "0.4.0"
@@ -147,6 +148,7 @@ tokio-stream = "0.1"
 tokio-tar = "0.3"
 tokio-util = "0.7.9"
 toml = "0.7.8"
+url = { version = "2.4.1", features = ["serde"] }
 wadm = "0.6.0"
 walkdir = "2.4"
 wascap = "0.11.2"
