@@ -136,7 +136,7 @@ wasi-common = { version = "13", default-features = false }
 wasmcloud-actor = { version = "*", path = "./crates/actor" }
 wasmcloud-actor-macros = { version = "*", path = "./crates/actor/macros" }
 wasmcloud-compat = { version = "*", path = "./crates/compat" }
-wasmcloud-component-adapters = { version = "0.2.2" }
+wasmcloud-component-adapters = { version = "0.2.3" }
 wasmcloud-control-interface = { version = "0.28", default-features = false }
 wasmcloud-core = { version = "*", path = "./crates/core" }
 wasmcloud-host = { version = "*", path = "./crates/host" }
