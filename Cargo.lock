@@ -4548,7 +4548,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "serde",
- "syn 1.0.109",
+ "syn 2.0.37",
  "tracing",
  "tracing-subscriber",
  "wasmtime-wit-bindgen 11.0.2",
