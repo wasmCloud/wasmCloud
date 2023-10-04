@@ -93,7 +93,13 @@ impl<T> ClientBuilder<T> {
     }
 
     /// Sets the timeout for standard calls and RPC invocations used by the client. If not set, the default will be 2 seconds
+    #[deprecated(since = "0.30.0", note = "please use `timeout` instead")]
     pub fn rpc_timeout(self, timeout: Duration) -> ClientBuilder<T> {
+        ClientBuilder { timeout, ..self }
+    }
+
+    /// Sets the timeout for control interface requests issued by the client. If not set, the default will be 2 seconds
+    pub fn timeout(self, timeout: Duration) -> ClientBuilder<T> {
         ClientBuilder { timeout, ..self }
     }
 
@@ -784,7 +790,7 @@ mod tests {
     async fn test_events_receiver() {
         let nc = async_nats::connect("127.0.0.1:4222").await.unwrap();
         let client = ClientBuilder::new(nc)
-            .rpc_timeout(Duration::from_millis(1000))
+            .timeout(Duration::from_millis(1000))
             .auction_timeout(Duration::from_millis(1000))
             .build()
             .await
