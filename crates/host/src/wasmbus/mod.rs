@@ -68,7 +68,7 @@ use wasmcloud_runtime::capability::{
 use wasmcloud_runtime::Runtime;
 use wasmcloud_tracing::context::TraceContextInjector;
 
-const SUCCESS: &str = r#"{"accepted":true,"error":""}"#;
+const ACCEPTED: &str = r#"{"accepted":true,"error":""}"#;
 
 #[derive(Debug)]
 struct Queue {
@@ -1933,7 +1933,7 @@ impl Host {
                 let mut queue = Abortable::new(queue, queue_abort_reg);
                 queue
                     .by_ref()
-                    .for_each_concurrent(0, {
+                    .for_each_concurrent(None, {
                         let host = Arc::clone(&host);
                         move |msg| {
                             let host = Arc::clone(&host);
@@ -2487,7 +2487,7 @@ impl Host {
         let deadline =
             timeout.and_then(|timeout| Instant::now().checked_add(Duration::from_millis(timeout)));
         self.stop_tx.send_replace(deadline);
-        Ok(SUCCESS.into())
+        Ok(ACCEPTED.into())
     }
 
     #[instrument(skip(self, payload))]
@@ -2513,10 +2513,10 @@ impl Host {
                 .handle_scale_actor_task(&actor_ref, &host_id, count, annotations)
                 .await
             {
-                error!("{e:?}");
+                error!(%actor_ref, err = ?e, "failed to scale actor");
             }
         });
-        Ok(SUCCESS.into())
+        Ok(ACCEPTED.into())
     }
 
     #[instrument(skip(self))]
@@ -2788,7 +2788,7 @@ impl Host {
                 }
             }
         });
-        Ok(SUCCESS.into())
+        Ok(ACCEPTED.into())
     }
 
     #[instrument(skip(self, payload))]
@@ -2846,7 +2846,7 @@ impl Host {
                 // TODO: What does OTP do?
             }
         }
-        Ok(SUCCESS.into())
+        Ok(ACCEPTED.into())
     }
 
     #[instrument(skip(self, payload))]
@@ -2914,7 +2914,7 @@ impl Host {
             .or_default()
             .append(&mut new_instances);
 
-        Ok(SUCCESS.into())
+        Ok(ACCEPTED.into())
     }
 
     #[instrument(skip(self))]
@@ -3248,7 +3248,7 @@ impl Host {
                 }
             }
         });
-        Ok(SUCCESS.into())
+        Ok(ACCEPTED.into())
     }
 
     #[instrument(skip(self, payload))]
@@ -3277,7 +3277,7 @@ impl Host {
         let annotations: Annotations = annotations.unwrap_or_default().into_iter().collect();
         let mut providers = self.providers.write().await;
         let hash_map::Entry::Occupied(mut entry) = providers.entry(provider_ref.clone()) else {
-            return Ok(SUCCESS.into());
+            return Ok(ACCEPTED.into());
         };
         let provider = entry.get_mut();
         let instances = &mut provider.instances;
@@ -3338,7 +3338,7 @@ impl Host {
         if instances.is_empty() {
             entry.remove();
         }
-        Ok(SUCCESS.into())
+        Ok(ACCEPTED.into())
     }
 
     #[instrument(skip(self, _payload))]
@@ -3494,7 +3494,7 @@ impl Host {
             .put(format!("LINKDEF_{id}"), Bytes::copy_from_slice(payload))
             .await
             .map_err(|e| anyhow!(e).context("failed to store link definition"))?;
-        Ok(SUCCESS.into())
+        Ok(ACCEPTED.into())
     }
 
     #[allow(unused)] // TODO: Remove once implemented
@@ -3516,7 +3516,7 @@ impl Host {
             .delete(format!("LINKDEF_{id}"))
             .await
             .map_err(|e| anyhow!(e).context("failed to delete link definition"))?;
-        Ok(SUCCESS.into())
+        Ok(ACCEPTED.into())
     }
 
     #[instrument(skip(self, payload))]
@@ -3543,7 +3543,7 @@ impl Host {
             }
         }
 
-        Ok(SUCCESS.into())
+        Ok(ACCEPTED.into())
     }
 
     #[instrument(skip(self, _payload))]
