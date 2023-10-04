@@ -4552,7 +4552,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "wasmtime-wit-bindgen 11.0.2",
- "wit-parser 0.8.0",
+ "wit-parser 0.11.1",
 ]
 
 [[package]]
