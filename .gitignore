@@ -21,6 +21,12 @@ target/
 # Ignore vscode config
 .vscode/
 
+# Ignore gitpod if you use that
+.gitpod.yml
+
+# Ignore Redis dumps from testing
+dump.rdb
 
 # Ignore Macos files
 .DS_Store
+
