@@ -274,10 +274,19 @@ fn get_level_filter(log_level_override: Option<&Level>) -> EnvFilter {
 
         // Allow RUST_LOG to override the other directives
         if let Ok(rust_log) = env::var("RUST_LOG") {
-            if let Ok(directive) = rust_log.parse() {
-                filter = filter.add_directive(directive);
-            } else {
-                eprintln!("ERROR: Ignoring invalid RUST_LOG directive: {}", rust_log);
+            match rust_log
+                .split(',')
+                .map(|dir| dir.parse())
+                .collect::<Result<Vec<_>, _>>()
+            {
+                Ok(directives) => {
+                    for directive in directives {
+                        filter = filter.add_directive(directive);
+                    }
+                }
+                Err(err) => {
+                    eprintln!("ERROR: Ignoring invalid RUST_LOG directive: {err}");
+                }
             }
         }
 
