@@ -87,7 +87,7 @@ struct RawActorConfig {
     pub wasi_preview2_adapter_path: Option<PathBuf>,
     /// The call alias of the actor. Defaults to no alias.
     pub call_alias: Option<String>,
-    /// The WIT world that is implemented by the componet
+    /// The WIT world that is implemented by the component
     pub wit_world: Option<String>,
 }
 
