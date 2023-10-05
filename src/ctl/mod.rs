@@ -98,9 +98,15 @@ pub struct ScaleActorCommand {
     #[clap(name = "actor-ref")]
     pub(crate) actor_ref: String,
 
-    /// Number of actors to scale to.
-    #[clap(short = 'c', long = "count", default_value = "1")]
-    pub count: u16,
+    /// Maximum number of instances this actor can run concurrently. Setting this value to 0 means there is no maximum.
+    #[clap(
+        short = 'c',
+        long = "max-concurrent",
+        alias = "max",
+        alias = "count",
+        default_value = "1"
+    )]
+    pub max_concurrent: u16,
 
     /// Optional set of annotations used to describe the nature of this actor scale command.
     /// For example, autonomous agents may wish to “tag” scale requests as part of a given deployment
@@ -190,8 +196,8 @@ pub(crate) async fn handle_command(
         }
         Scale(ScaleCommand::Actor(cmd)) => {
             sp.update_spinner_message(format!(
-                " Scaling Actor {} to {} instances ... ",
-                cmd.actor_id, cmd.count
+                " Scaling Actor {} to {} max concurrent instances ... ",
+                cmd.actor_id, cmd.max_concurrent
             ));
             handle_scale_actor(cmd.clone()).await?
         }
@@ -212,7 +218,7 @@ pub(crate) async fn handle_scale_actor(cmd: ScaleActorCommand) -> Result<Command
         &client,
         &cmd.host_id,
         &cmd.actor_ref,
-        cmd.count,
+        cmd.max_concurrent,
         Some(annotations),
     )
     .await?;
@@ -220,8 +226,8 @@ pub(crate) async fn handle_scale_actor(cmd: ScaleActorCommand) -> Result<Command
     Ok(CommandOutput::from_key_and_text(
         "result",
         format!(
-            "Request to scale actor {} to {} instances recieved",
-            cmd.actor_id, cmd.count
+            "Request to scale actor {} to {} max concurrent instances recieved",
+            cmd.actor_id, cmd.max_concurrent
         ),
     ))
 }
@@ -506,7 +512,7 @@ mod test {
                 host_id,
                 actor_id,
                 actor_ref,
-                count,
+                max_concurrent,
                 annotations,
             })) => {
                 assert_eq!(&opts.ctl_host.unwrap(), CTL_HOST);
@@ -516,7 +522,7 @@ mod test {
                 assert_eq!(host_id, HOST_ID.parse()?);
                 assert_eq!(actor_id, ACTOR_ID.parse()?);
                 assert_eq!(actor_ref, "wasmcloud.azurecr.io/actor:v2".to_string());
-                assert_eq!(count, 1);
+                assert_eq!(max_concurrent, 1);
                 assert_eq!(annotations, vec!["foo=bar".to_string()]);
             }
             cmd => panic!("ctl scale actor constructed incorrect command {cmd:?}"),
