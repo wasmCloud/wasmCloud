@@ -1,6 +1,5 @@
 use anyhow::{bail, Result};
-use clap::{Args, Parser, Subcommand};
-use std::path::Path;
+use clap::{Parser, Subcommand};
 use wash_lib::{
     actor::{scale_actor, update_actor},
     cli::{
@@ -14,7 +13,6 @@ use wash_lib::{
     config::WashConnectionOptions,
     id::{ModuleId, ServerId},
 };
-use wasmcloud_control_interface::{kv::DirectKvStore, Client as CtlClient};
 
 use crate::{
     appearance::spinner::Spinner,
@@ -23,15 +21,10 @@ use crate::{
         get_cmd::handle_command as handle_get_command,
         start_cmd::handle_command as handle_start_command,
     },
-    ctl::manifest::HostManifest,
 };
 pub(crate) use output::*;
 
-mod manifest;
 mod output;
-
-// default start actor command starts with one actor
-const ONE_ACTOR: u16 = 1;
 
 #[derive(Debug, Clone, Subcommand)]
 pub(crate) enum CtlCliCommand {
@@ -55,30 +48,8 @@ pub(crate) enum CtlCliCommand {
     #[clap(name = "update", subcommand)]
     Update(UpdateCommand),
 
-    /// Apply a manifest file to a target host
-    #[clap(name = "apply")]
-    Apply(ApplyCommand),
-
     #[clap(name = "scale", subcommand)]
     Scale(ScaleCommand),
-}
-
-#[derive(Args, Debug, Clone)]
-pub(crate) struct ApplyCommand {
-    /// Public key of the target host for the manifest application
-    #[clap(name = "host-key", value_parser)]
-    pub(crate) host_key: ServerId,
-
-    /// Path to the manifest file. Note that all the entries in this file are imperative instructions, and all actor and provider references MUST be valid OCI references.
-    #[clap(name = "path")]
-    pub(crate) path: String,
-
-    /// Expand environment variables using substitution syntax within the manifest file
-    #[clap(name = "expand-env", short = 'e', long = "expand-env")]
-    pub(crate) expand_env: bool,
-
-    #[clap(flatten)]
-    opts: CliConnectionOpts,
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -162,11 +133,6 @@ pub(crate) async fn handle_command(
     use CtlCliCommand::*;
     let sp: Spinner = Spinner::new(&output_kind)?;
     let out: CommandOutput = match command {
-        Apply(cmd) => {
-            sp.update_spinner_message(" Applying manifest ...".to_string());
-            let results = apply_manifest(cmd).await?;
-            apply_manifest_output(results)
-        }
         Get(CtlGetCommand::Hosts(cmd)) => {
             eprintln!("[warn] `wash ctl get hosts` has been deprecated in favor of `wash get hosts` and will be removed in a future version.");
             handle_get_command(GetCommand::Hosts(cmd), output_kind).await?
@@ -258,108 +224,6 @@ pub(crate) async fn handle_scale_actor(cmd: ScaleActorCommand) -> Result<Command
             cmd.actor_id, cmd.count
         ),
     ))
-}
-
-pub(crate) async fn apply_manifest(cmd: ApplyCommand) -> Result<Vec<String>> {
-    let wco: WashConnectionOptions = cmd.opts.try_into()?;
-    let client = wco.into_ctl_client(None).await?;
-    let hm = match HostManifest::from_path(Path::new(&cmd.path), cmd.expand_env) {
-        Ok(hm) => hm,
-        Err(e) => bail!("Failed to load manifest: {}", e),
-    };
-    let mut results = vec![];
-    results.extend_from_slice(&apply_manifest_actors(&cmd.host_key, &client, &hm).await?);
-    results.extend_from_slice(&apply_manifest_providers(&cmd.host_key, &client, &hm).await?);
-    results.extend_from_slice(&apply_manifest_linkdefs(&client, &hm).await?);
-    Ok(results)
-}
-
-async fn apply_manifest_actors(
-    host_id: &ServerId,
-    client: &CtlClient<DirectKvStore>,
-    hm: &HostManifest,
-) -> Result<Vec<String>> {
-    let mut results = vec![];
-
-    for actor in hm.actors.iter() {
-        match client.start_actor(host_id, actor, ONE_ACTOR, None).await {
-            Ok(ack) => {
-                if ack.accepted {
-                    results.push(format!("Instruction to start actor {actor} acknowledged."));
-                } else {
-                    results.push(format!(
-                        "Instruction to start actor {} not acked: {}",
-                        actor, ack.error
-                    ));
-                }
-            }
-            Err(e) => results.push(format!("Failed to send start actor: {e}")),
-        }
-    }
-
-    Ok(results)
-}
-
-async fn apply_manifest_linkdefs(
-    client: &CtlClient<DirectKvStore>,
-    hm: &HostManifest,
-) -> Result<Vec<String>> {
-    let mut results = vec![];
-
-    for ld in hm.links.iter() {
-        match client
-            .advertise_link(
-                &ld.actor,
-                &ld.provider_id,
-                &ld.contract_id,
-                ld.link_name.as_ref().unwrap_or(&"default".to_string()),
-                ld.values.clone().unwrap_or_default(),
-            )
-            .await
-        {
-            Ok(_) => {
-                results.push(format!(
-                    "Link def submission from {} to {} acknowledged.",
-                    ld.actor, ld.provider_id
-                ));
-            }
-            Err(e) => results.push(format!("Failed to send link def: {e}")),
-        }
-    }
-
-    Ok(results)
-}
-
-async fn apply_manifest_providers(
-    host_id: &ServerId,
-    client: &CtlClient<DirectKvStore>,
-    hm: &HostManifest,
-) -> Result<Vec<String>> {
-    let mut results = vec![];
-
-    for cap in hm.capabilities.iter() {
-        match client
-            .start_provider(host_id, &cap.image_ref, cap.link_name.clone(), None, None)
-            .await
-        {
-            Ok(ack) => {
-                if ack.accepted {
-                    results.push(format!(
-                        "Instruction to start provider {} acknowledged.",
-                        cap.image_ref
-                    ));
-                } else {
-                    results.push(format!(
-                        "Instruction to start provider {} not acked: {}",
-                        cap.image_ref, ack.error
-                    ));
-                }
-            }
-            Err(e) => results.push(format!("Failed to send start capability message: {e}")),
-        }
-    }
-
-    Ok(results)
 }
 
 #[cfg(test)]

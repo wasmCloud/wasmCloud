@@ -52,16 +52,6 @@ pub(crate) fn link_del_output(
     }
 }
 
-pub(crate) fn apply_manifest_output(results: Vec<String>) -> CommandOutput {
-    let mut map = HashMap::new();
-    map.insert("results".to_string(), json!(results));
-
-    CommandOutput::new(
-        format!("\nManifest application results:\n{}", results.join("\n")),
-        map,
-    )
-}
-
 /// Helper function to transform a LinkDefinitionList into a table string for printing
 pub(crate) fn links_table(list: Vec<LinkDefinition>) -> String {
     let mut table = Table::new();
