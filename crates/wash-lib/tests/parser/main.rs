@@ -369,13 +369,16 @@ fn minimal_rust_actor_preview2() {
     );
 
     let config = assert_ok!(result);
-    assert!(matches!(
+    assert_eq!(
         config.project_type,
         TypeConfig::Actor(ActorConfig {
+            claims: vec!["wasmcloud:httpserver".to_string()],
+            key_directory: PathBuf::from("./keys"),
             wasm_target: WasmTarget::WasiPreview2,
-            ..
+            wit_world: Some("test-world".to_string()),
+            ..Default::default()
         })
-    ));
+    );
 }
 
 /// wasm_target=wasm32-wasi-preview1 is properly parsed

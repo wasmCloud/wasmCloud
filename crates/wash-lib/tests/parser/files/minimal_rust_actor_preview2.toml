@@ -6,3 +6,4 @@ version = "0.1.0"
 [actor]
 claims = ["wasmcloud:httpserver"]
 wasm_target = "wasm32-wasi-preview2"
+wit_world = "test-world"
