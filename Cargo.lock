@@ -2659,17 +2659,6 @@ dependencies = [
 
 [[package]]
 name = "pulldown-cmark"
-version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ffade02495f22453cd593159ea2f59827aae7f53fa8323f756799b670881dcf8"
-dependencies = [
- "bitflags 1.3.2",
- "memchr",
- "unicase",
-]
-
-[[package]]
-name = "pulldown-cmark"
 version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77a1a2f1f0a7ecff9c31abbe177637be0e97a0aef46cf8738ece09327985d998"
@@ -4548,11 +4537,11 @@ dependencies = [
  "proc-macro2",
  "quote",
  "serde",
- "syn 1.0.109",
+ "syn 2.0.37",
  "tracing",
  "tracing-subscriber",
- "wasmtime-wit-bindgen 11.0.2",
- "wit-parser 0.8.0",
+ "wasmtime-wit-bindgen",
+ "wit-parser",
 ]
 
 [[package]]
@@ -4720,8 +4709,8 @@ dependencies = [
  "quote",
  "syn 2.0.37",
  "wasmtime-component-util",
- "wasmtime-wit-bindgen 13.0.0",
- "wit-parser 0.11.1",
+ "wasmtime-wit-bindgen",
+ "wit-parser",
 ]
 
 [[package]]
@@ -4965,17 +4954,6 @@ dependencies = [
 
 [[package]]
 name = "wasmtime-wit-bindgen"
-version = "11.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aed98de4b3e68b1abe60f0dc59ecd74b757d70a39459d500a727a8cab3311bbb"
-dependencies = [
- "anyhow",
- "heck",
- "wit-parser 0.8.0",
-]
-
-[[package]]
-name = "wasmtime-wit-bindgen"
 version = "13.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "62003d48822f89cc393e93643366ddbee1766779c0874353b8ba2ede4679fbf9"
@@ -4983,7 +4961,7 @@ dependencies = [
  "anyhow",
  "heck",
  "indexmap 2.0.0",
- "wit-parser 0.11.1",
+ "wit-parser",
 ]
 
 [[package]]
@@ -5294,7 +5272,7 @@ checksum = "7f0371c47784e7559efb422f74473e395b49f7101725584e2673657e0b4fc104"
 dependencies = [
  "anyhow",
  "wit-component",
- "wit-parser 0.11.1",
+ "wit-parser",
 ]
 
 [[package]]
@@ -5351,36 +5329,20 @@ dependencies = [
  "wasm-encoder 0.33.1",
  "wasm-metadata",
  "wasmparser 0.113.3",
- "wit-parser 0.11.1",
+ "wit-parser",
 ]
 
 [[package]]
 name = "wit-parser"
-version = "0.8.0"
+version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6daec9f093dbaea0e94043eeb92ece327bbbe70c86b1f41aca9bbfefd7f050f0"
-dependencies = [
- "anyhow",
- "id-arena",
- "indexmap 1.9.3",
- "log",
- "pulldown-cmark 0.8.0",
- "semver",
- "unicode-xid",
- "url",
-]
-
-[[package]]
-name = "wit-parser"
-version = "0.11.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1dcd022610436a1873e60bfdd9b407763f2404adf7d1cb57912c7ae4059e57a5"
+checksum = "a39edca9abb16309def3843af73b58d47d243fe33a9ceee572446bcc57556b9a"
 dependencies = [
  "anyhow",
  "id-arena",
  "indexmap 2.0.0",
  "log",
- "pulldown-cmark 0.9.3",
+ "pulldown-cmark",
  "semver",
  "serde",
  "serde_json",

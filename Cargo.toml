@@ -147,7 +147,7 @@ wasmcloud-tracing = { version = "*", path = "./crates/tracing" }
 wasmparser = { version = "0.113", default-features = false }
 wasmtime = { version = "13", default-features = false }
 wasmtime-wasi = { version = "13", default-features = false }
-wasmtime-wit-bindgen = { version = "11", default-features = false }
+wasmtime-wit-bindgen = { version = "13", default-features = false }
 wit-bindgen = { version = "0.12", default-features = false }
 wit-component = { version = "0.14", default-features = false }
-wit-parser = { version = "0.8", default-features = false }
+wit-parser = { version = "0.11.3", default-features = false }
