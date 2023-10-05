@@ -93,7 +93,13 @@ impl<T> ClientBuilder<T> {
     }
 
     /// Sets the timeout for standard calls and RPC invocations used by the client. If not set, the default will be 2 seconds
+    #[deprecated(since = "0.30.0", note = "please use `timeout` instead")]
     pub fn rpc_timeout(self, timeout: Duration) -> ClientBuilder<T> {
+        ClientBuilder { timeout, ..self }
+    }
+
+    /// Sets the timeout for control interface requests issued by the client. If not set, the default will be 2 seconds
+    pub fn timeout(self, timeout: Duration) -> ClientBuilder<T> {
         ClientBuilder { timeout, ..self }
     }
 
@@ -282,6 +288,7 @@ impl<T: KvStore + Clone + Debug + Send + Sync> Client<T> {
     /// needs deterministic results as to whether the actor completed its startup process, the
     /// client will have to monitor the appropriate event in the control event stream
     #[instrument(level = "debug", skip_all)]
+    #[deprecated(since = "0.30.0", note = "please use `scale_actor` instead")]
     pub async fn start_actor(
         &self,
         host_id: &str,
@@ -289,22 +296,8 @@ impl<T: KvStore + Clone + Debug + Send + Sync> Client<T> {
         count: u16,
         annotations: Option<HashMap<String, String>>,
     ) -> Result<CtlOperationAck> {
-        let subject =
-            broker::commands::start_actor(&self.topic_prefix, &self.lattice_prefix, host_id);
-        debug!("start_actor:request {}", &subject);
-        let bytes = json_serialize(StartActorCommand {
-            count,
-            actor_ref: actor_ref.to_string(),
-            host_id: host_id.to_string(),
-            annotations,
-        })?;
-        match self.request_timeout(subject, bytes, self.timeout).await {
-            Ok(msg) => {
-                let ack: CtlOperationAck = json_deserialize(&msg.payload)?;
-                Ok(ack)
-            }
-            Err(e) => Err(format!("Did not receive start actor acknowledgement: {}", e).into()),
-        }
+        self.scale_actor(host_id, actor_ref, count, annotations)
+            .await
     }
 
     /// Sends a request to the given host to scale a given actor. This returns an acknowledgement of
@@ -314,23 +307,27 @@ impl<T: KvStore + Clone + Debug + Send + Sync> Client<T> {
     /// command prior to fetching the actor's OCI bytes. If a client needs deterministic results as
     /// to whether the actor completed its startup process, the client will have to monitor the
     /// appropriate event in the control event stream
+    ///
+    /// # Arguments
+    /// `host_id`: The ID of the host to scale the actor on
+    /// `actor_ref`: The OCI reference of the actor to scale
+    /// `max_concurrent`: The maximum number of instances this actor can run concurrently. Setting this value to 0 means there is no maximum.
+    /// `annotations`: Optional annotations to apply to the actor
     #[instrument(level = "debug", skip_all)]
     pub async fn scale_actor(
         &self,
         host_id: &str,
         actor_ref: &str,
-        actor_id: &str,
-        count: u16,
+        max_concurrent: u16,
         annotations: Option<HashMap<String, String>>,
     ) -> Result<CtlOperationAck> {
         let subject =
             broker::commands::scale_actor(&self.topic_prefix, &self.lattice_prefix, host_id);
         debug!("scale_actor:request {}", &subject);
         let bytes = json_serialize(ScaleActorCommand {
-            count,
+            max_concurrent,
             actor_ref: actor_ref.to_string(),
             host_id: host_id.to_string(),
-            actor_id: actor_id.to_string(),
             annotations,
         })?;
         match self.request_timeout(subject, bytes, self.timeout).await {
@@ -561,7 +558,6 @@ impl<T: KvStore + Clone + Debug + Send + Sync> Client<T> {
         &self,
         host_id: &str,
         actor_ref: &str,
-        count: u16,
         annotations: Option<HashMap<String, String>>,
     ) -> Result<CtlOperationAck> {
         let subject =
@@ -570,7 +566,6 @@ impl<T: KvStore + Clone + Debug + Send + Sync> Client<T> {
         let bytes = json_serialize(StopActorCommand {
             host_id: host_id.to_string(),
             actor_ref: actor_ref.to_string(),
-            count,
             annotations,
         })?;
         match self.request_timeout(subject, bytes, self.timeout).await {
@@ -795,7 +790,7 @@ mod tests {
     async fn test_events_receiver() {
         let nc = async_nats::connect("127.0.0.1:4222").await.unwrap();
         let client = ClientBuilder::new(nc)
-            .rpc_timeout(Duration::from_millis(1000))
+            .timeout(Duration::from_millis(1000))
             .auction_timeout(Duration::from_millis(1000))
             .build()
             .await
