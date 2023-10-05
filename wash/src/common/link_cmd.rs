@@ -11,7 +11,7 @@ use wash_lib::{
     },
     id::{validate_contract_id, ModuleId, ServiceId},
 };
-use wasmcloud_control_interface::LinkDefinitionList;
+use wasmcloud_control_interface::LinkDefinition;
 
 use crate::{
     appearance::spinner::Spinner,
@@ -40,9 +40,9 @@ pub(crate) fn link_put_output(
 }
 
 /// Generate output for the link query command
-pub(crate) fn link_query_output(list: LinkDefinitionList) -> CommandOutput {
+pub(crate) fn link_query_output(list: Vec<LinkDefinition>) -> CommandOutput {
     let mut map = HashMap::new();
-    map.insert("links".to_string(), json!(list.links));
+    map.insert("links".to_string(), json!(list));
     CommandOutput::new(links_table(list), map)
 }
 

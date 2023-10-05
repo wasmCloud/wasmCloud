@@ -31,6 +31,7 @@ use wash_lib::start::{
     ensure_nats_server, ensure_wasmcloud, start_nats_server, start_wasmcloud_host, NatsConfig,
     WADM_PID,
 };
+use wasmcloud_control_interface::kv::DirectKvStore;
 use wasmcloud_control_interface::{Client as CtlClient, ClientBuilder as CtlClientBuilder};
 
 use crate::appearance::spinner::Spinner;
@@ -266,7 +267,10 @@ pub(crate) struct WasmcloudOpts {
 }
 
 impl WasmcloudOpts {
-    pub async fn into_ctl_client(self, auction_timeout_ms: Option<u64>) -> Result<CtlClient> {
+    pub async fn into_ctl_client(
+        self,
+        auction_timeout_ms: Option<u64>,
+    ) -> Result<CtlClient<DirectKvStore>> {
         let lattice_prefix = self.lattice_prefix;
         let ctl_host = self
             .ctl_host
@@ -286,7 +290,7 @@ impl WasmcloudOpts {
 
         let mut builder = CtlClientBuilder::new(nc)
             .lattice_prefix(lattice_prefix)
-            .rpc_timeout(tokio::time::Duration::from_millis(
+            .timeout(tokio::time::Duration::from_millis(
                 self.rpc_timeout_ms.into(),
             ))
             .auction_timeout(tokio::time::Duration::from_millis(auction_timeout_ms));

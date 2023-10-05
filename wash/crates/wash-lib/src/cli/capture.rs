@@ -10,6 +10,7 @@ use futures::TryStreamExt;
 use tokio::io::{stdin, stdout, AsyncReadExt, AsyncWriteExt};
 use tokio::time::Instant;
 use wasmbus_rpc::core::Invocation;
+use wasmcloud_control_interface::kv::DirectKvStore;
 
 use super::{CliConnectionOpts, CommandOutput};
 use crate::config::WashConnectionOptions;
@@ -217,7 +218,7 @@ pub async fn disable(
 
 pub async fn capture(
     ctx: async_nats::jetstream::Context,
-    ctl_client: wasmcloud_control_interface::Client,
+    ctl_client: wasmcloud_control_interface::Client<DirectKvStore>,
     lattice_id: &str,
 ) -> Result<CommandOutput> {
     let stream = ctx.get_stream(stream_name(lattice_id)).await.map_err(|e| {
@@ -308,7 +309,7 @@ pub async fn capture(
 }
 
 async fn get_all_inventory(
-    ctl_client: &wasmcloud_control_interface::Client,
+    ctl_client: &wasmcloud_control_interface::Client<DirectKvStore>,
 ) -> anyhow::Result<Vec<wasmcloud_control_interface::HostInventory>> {
     let futs = ctl_client
         .get_hosts()

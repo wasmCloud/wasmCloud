@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use wasmbus_rpc::core::ActorLinks;
 
 use serde::Deserialize;
-use wasmcloud_control_interface::{GetClaimsResponse, Host, HostInventory};
+use wasmcloud_control_interface::{Host, HostInventory};
 
 /// JSON Output of the `wash start` command
 #[derive(Debug, Deserialize)]
@@ -60,7 +60,7 @@ pub struct GetHostInventoryCommandOutput {
 /// JSON output representation of the `wash get claims` command
 #[derive(Debug, Deserialize)]
 pub struct GetClaimsCommandOutput {
-    pub claims: GetClaimsResponse,
+    pub claims: Vec<HashMap<String, String>>,
     pub success: bool,
 }
 

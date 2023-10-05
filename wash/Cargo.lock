@@ -4376,7 +4376,7 @@ dependencies = [
  "wascap",
  "wash-lib",
  "wasmbus-rpc 0.15.0",
- "wasmcloud-control-interface 0.30.0",
+ "wasmcloud-control-interface 0.29.0",
  "wasmcloud-test-util",
  "weld-codegen",
  "which",
@@ -4435,7 +4435,7 @@ dependencies = [
  "wasm-encoder 0.33.2",
  "wasmbus-rpc 0.15.0",
  "wasmcloud-component-adapters",
- "wasmcloud-control-interface 0.30.0",
+ "wasmcloud-control-interface 0.29.0",
  "wat",
  "weld-codegen",
  "wit-component",
@@ -4704,7 +4704,9 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-control-interface"
-version = "0.30.0"
+version = "0.29.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "521b4f13b9b923b9358428c752e47a88c9537921e0067f2f4696d3b7001936db"
 dependencies = [
  "async-nats 0.31.0",
  "async-trait",

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::{bail, Context, Result};
 use tokio::time::Duration;
-use wasmcloud_control_interface::{Client as CtlClient, CtlOperationAck};
+use wasmcloud_control_interface::{kv::DirectKvStore, Client as CtlClient, CtlOperationAck};
 
 use crate::{
     common::boxed_err_to_anyhow,
@@ -14,7 +14,7 @@ use crate::{
 
 /// Arguments required when starting an actor
 pub struct StartActorArgs<'a> {
-    pub ctl_client: &'a CtlClient,
+    pub ctl_client: &'a CtlClient<DirectKvStore>,
     pub host_id: &'a str,
     pub actor_ref: &'a str,
     pub count: u16,
@@ -98,15 +98,14 @@ pub async fn start_actor(
 
 /// Scale a Wasmcloud actor on a given host
 pub async fn scale_actor(
-    client: &CtlClient,
+    client: &CtlClient<DirectKvStore>,
     host_id: &str,
     actor_ref: &str,
-    actor_id: &str,
-    count: u16,
+    max_concurrent: u16,
     annotations: Option<HashMap<String, String>>,
 ) -> Result<()> {
     let ack = client
-        .scale_actor(host_id, actor_ref, actor_id, count, annotations)
+        .scale_actor(host_id, actor_ref, max_concurrent, annotations)
         .await
         .map_err(boxed_err_to_anyhow)?;
 
@@ -119,10 +118,9 @@ pub async fn scale_actor(
 
 /// Stop an actor
 pub async fn stop_actor(
-    client: &CtlClient,
+    client: &CtlClient<DirectKvStore>,
     host_id: &str,
     actor_id: &str,
-    count: u16,
     annotations: Option<HashMap<String, String>>,
     timeout_ms: u64,
     skip_wait: bool,
@@ -133,7 +131,7 @@ pub async fn stop_actor(
         .map_err(boxed_err_to_anyhow)?;
 
     let ack = client
-        .stop_actor(host_id, actor_id, count, annotations)
+        .stop_actor(host_id, actor_id, annotations)
         .await
         .map_err(boxed_err_to_anyhow)?;
 
@@ -163,7 +161,7 @@ pub async fn stop_actor(
 }
 
 pub async fn update_actor(
-    client: &CtlClient,
+    client: &CtlClient<DirectKvStore>,
     host_id: &str,
     actor_id: &str,
     actor_ref: &str,

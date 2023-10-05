@@ -14,7 +14,7 @@ use wash_lib::{
     config::WashConnectionOptions,
     id::{ModuleId, ServerId},
 };
-use wasmcloud_control_interface::Client as CtlClient;
+use wasmcloud_control_interface::{kv::DirectKvStore, Client as CtlClient};
 
 use crate::{
     appearance::spinner::Spinner,
@@ -246,7 +246,6 @@ pub(crate) async fn handle_scale_actor(cmd: ScaleActorCommand) -> Result<Command
         &client,
         &cmd.host_id,
         &cmd.actor_ref,
-        &cmd.actor_id,
         cmd.count,
         Some(annotations),
     )
@@ -277,7 +276,7 @@ pub(crate) async fn apply_manifest(cmd: ApplyCommand) -> Result<Vec<String>> {
 
 async fn apply_manifest_actors(
     host_id: &ServerId,
-    client: &CtlClient,
+    client: &CtlClient<DirectKvStore>,
     hm: &HostManifest,
 ) -> Result<Vec<String>> {
     let mut results = vec![];
@@ -301,7 +300,10 @@ async fn apply_manifest_actors(
     Ok(results)
 }
 
-async fn apply_manifest_linkdefs(client: &CtlClient, hm: &HostManifest) -> Result<Vec<String>> {
+async fn apply_manifest_linkdefs(
+    client: &CtlClient<DirectKvStore>,
+    hm: &HostManifest,
+) -> Result<Vec<String>> {
     let mut results = vec![];
 
     for ld in hm.links.iter() {
@@ -315,18 +317,11 @@ async fn apply_manifest_linkdefs(client: &CtlClient, hm: &HostManifest) -> Resul
             )
             .await
         {
-            Ok(ack) => {
-                if ack.accepted {
-                    results.push(format!(
-                        "Link def submission from {} to {} acknowledged.",
-                        ld.actor, ld.provider_id
-                    ));
-                } else {
-                    results.push(format!(
-                        "Link def submission from {} to {} not acked: {}",
-                        ld.actor, ld.provider_id, ack.error
-                    ));
-                }
+            Ok(_) => {
+                results.push(format!(
+                    "Link def submission from {} to {} acknowledged.",
+                    ld.actor, ld.provider_id
+                ));
             }
             Err(e) => results.push(format!("Failed to send link def: {e}")),
         }
@@ -337,7 +332,7 @@ async fn apply_manifest_linkdefs(client: &CtlClient, hm: &HostManifest) -> Resul
 
 async fn apply_manifest_providers(
     host_id: &ServerId,
-    client: &CtlClient,
+    client: &CtlClient<DirectKvStore>,
     hm: &HostManifest,
 ) -> Result<Vec<String>> {
     let mut results = vec![];

@@ -174,7 +174,6 @@ pub async fn handle_stop_actor(cmd: StopActorCommand) -> Result<CommandOutput> {
         &client,
         &cmd.host_id,
         &cmd.actor_id,
-        cmd.count,
         None,
         timeout_ms,
         cmd.skip_wait,
