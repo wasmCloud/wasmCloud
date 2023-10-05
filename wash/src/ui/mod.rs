@@ -9,7 +9,7 @@ mod config;
 pub use config::*;
 
 #[derive(RustEmbed)]
-#[folder = "./packages/washboard/dist"]
+#[folder = "./washboard/dist"]
 struct Asset;
 
 #[derive(Parser, Debug, Clone)]

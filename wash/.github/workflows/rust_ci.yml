@@ -30,9 +30,9 @@ jobs:
         with:
           node-version: '18.x'
       - name: npm install
-        run: npm install --prefix ./packages/washboard
+        run: npm install --prefix ./washboard
       - name: npm run build
-        run: npm run build --prefix ./packages/washboard
+        run: npm run build --prefix ./washboard
 
   unit_tests:
     name: Unit Tests
