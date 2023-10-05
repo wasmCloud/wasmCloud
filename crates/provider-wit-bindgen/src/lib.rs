@@ -47,7 +47,7 @@ use syn::{
     punctuated::Punctuated,
     visit_mut::{visit_item_mut, VisitMut},
     FnArg, Item, ItemMod, ItemStruct, ItemType, LitStr, PathSegment, ReturnType, Token, TraitItem,
-    TraitItemMethod,
+    TraitItemFn,
 };
 
 /// Rust module name that is used by wit-bindgen to generate all the modules
@@ -317,7 +317,7 @@ impl WitFunctionLatticeTranslationStrategy {
     fn translate_import_fn_for_lattice(
         &self,
         wit_iface_path: WitInterfacePath,
-        trait_method: &TraitItemMethod,
+        trait_method: &TraitItemFn,
         struct_lookup: &StructLookup,
         type_lookup: &TypeLookup,
     ) -> anyhow::Result<(WitInterfacePath, LatticeMethod)> {
@@ -382,7 +382,7 @@ impl WitFunctionLatticeTranslationStrategy {
     fn translate_import_fn_via_first_arg(
         wit_iface_path: WitInterfacePath,
         lattice_method_name: LitStr,
-        trait_method: &TraitItemMethod,
+        trait_method: &TraitItemFn,
         _struct_lookup: &StructLookup,
         _type_lookup: &TypeLookup,
     ) -> anyhow::Result<(WitInterfacePath, LatticeMethod)> {
@@ -436,7 +436,7 @@ impl WitFunctionLatticeTranslationStrategy {
     fn translate_import_fn_via_bundled_args(
         wit_iface_name: WitInterfacePath,
         lattice_method_name: LitStr,
-        trait_method: &TraitItemMethod,
+        trait_method: &TraitItemFn,
         struct_lookup: &StructLookup,
         type_lookup: &TypeLookup,
     ) -> anyhow::Result<(WitInterfacePath, LatticeMethod)> {
@@ -1250,7 +1250,7 @@ struct WitBindgenOutputVisitor {
     type_lookup: TypeLookup,
 
     /// Functions in traits that we'll have to stub eventually
-    import_trait_methods: HashMap<WitInterfacePath, Vec<TraitItemMethod>>,
+    import_trait_methods: HashMap<WitInterfacePath, Vec<TraitItemFn>>,
 }
 
 impl WitBindgenOutputVisitor {
@@ -1448,7 +1448,7 @@ impl VisitMut for WitBindgenOutputVisitor {
                 // which means the function calls & arguments must be converted to serializable objects to be received
                 if t.ident == HOST_IMPORTS_TRAIT_NAME {
                     for ti in t.items.iter_mut() {
-                        if let TraitItem::Method(tim) = ti {
+                        if let TraitItem::Fn(tim) = ti {
                             // Prune the &self argument
                             let mut trimmed = tim.clone();
                             trimmed.sig.inputs = <Punctuated<FnArg, Token![,]>>::from_iter(
@@ -1609,7 +1609,7 @@ struct LatticeMethod {
 fn build_lattice_methods_by_wit_interface(
     struct_lookup: &StructLookup,
     type_lookup: &TypeLookup,
-    map: &HashMap<WitInterfacePath, Vec<TraitItemMethod>>,
+    map: &HashMap<WitInterfacePath, Vec<TraitItemFn>>,
     bindgen_cfg: &ProviderBindgenConfig,
 ) -> anyhow::Result<HashMap<WitInterfacePath, Vec<LatticeMethod>>> {
     let mut methods_by_name: HashMap<WitInterfacePath, Vec<LatticeMethod>> = HashMap::new();
