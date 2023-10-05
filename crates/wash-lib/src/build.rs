@@ -1,6 +1,7 @@
 //! Build (and sign) a wasmCloud actor, provider, or interface. Depends on the "cli" feature
 
 use std::{
+    borrow::Cow,
     fs,
     io::ErrorKind,
     path::{Path, PathBuf},
@@ -9,7 +10,8 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, Context, Result};
-use wit_component::ComponentEncoder;
+use wasm_encoder::{Encode, Section};
+use wit_component::{ComponentEncoder, StringEncoding};
 
 use crate::{
     cli::{
@@ -90,10 +92,25 @@ pub fn build_actor(
         LanguageConfig::Rust(rust_config) => {
             build_rust_actor(common_config, rust_config, actor_config)
         }
-        LanguageConfig::TinyGo(tinygo_config) => build_tinygo_actor(common_config, tinygo_config),
+        LanguageConfig::TinyGo(tinygo_config) => {
+            build_tinygo_actor(common_config, tinygo_config, actor_config)
+        }
     }?;
 
-    // If the actor has been configured as WASI Preview2, adapt it
+    // Perform embedding, if necessary
+    if let WasmTarget::WasiPreview1 | WasmTarget::WasiPreview2 = &actor_config.wasm_target {
+        embed_wasm_component_metadata(
+            &common_config.path,
+            actor_config
+                .wit_world
+                .as_ref()
+                .context("`wit_world` must be specified in wasmcloud.toml for creating preview1 or preview2 components")?,
+            &actor_wasm_path,
+            &actor_wasm_path,
+        )?;
+    };
+
+    // If the actor has been configured as WASI Preview2, adapt it from preview1
     if actor_config.wasm_target == WasmTarget::WasiPreview2 {
         let adapter_wasm_bytes = get_wasi_preview2_adapter_bytes(actor_config)?;
         // Adapt the component, using the adapter that is available locally
@@ -219,6 +236,7 @@ fn build_rust_actor(
 fn build_tinygo_actor(
     common_config: &CommonConfig,
     tinygo_config: &TinyGoConfig,
+    actor_config: &ActorConfig,
 ) -> Result<PathBuf> {
     let filename = format!("build/{}.wasm", common_config.name);
 
@@ -240,7 +258,7 @@ fn build_tinygo_actor(
             "-o",
             filename.as_str(),
             "-target",
-            "wasm",
+            tinygo_config.build_target(&actor_config.wasm_target),
             "-scheduler",
             "none",
             "-no-debug",
@@ -319,6 +337,72 @@ pub(crate) fn get_wasi_preview2_adapter_bytes(config: &ActorConfig) -> Result<Ve
             .with_context(|| format!("failed to read wasm bytes from [{}]", path.display()));
     }
     Ok(wasmcloud_component_adapters::WASI_PREVIEW1_REACTOR_COMPONENT_ADAPTER.into())
+}
+
+/// Embed required component metadata to a given WebAssembly binary
+fn embed_wasm_component_metadata(
+    project_path: impl AsRef<Path>,
+    wit_world: impl AsRef<str>,
+    input_wasm: impl AsRef<Path>,
+    output_wasm: impl AsRef<Path>,
+) -> Result<()> {
+    // Find the the WIT directory for the project
+    let wit_dir = project_path.as_ref().join("wit");
+    if !wit_dir.is_dir() {
+        bail!(
+            "expected 'wit' directory under project path at [{}] is missing",
+            wit_dir.display()
+        );
+    };
+
+    // Resolve the WIT directory packages & worlds
+    let mut resolve = wit_parser::Resolve::default();
+    let (package_id, _paths) = resolve
+        .push_dir(&wit_dir)
+        .context("failed to add WIT deps directory")?;
+    log::info!("successfully loaded WIT @ [{}]", wit_dir.display());
+
+    // Select the target world that was specified by the user
+    let world = resolve
+        .select_world(package_id, wit_world.as_ref().into())
+        .context("failed to select world from built resolver")?;
+
+    // Encode the metadata
+    let encoded_metadata =
+        wit_component::metadata::encode(&resolve, world, StringEncoding::UTF8, None)
+            .context("failed to encode WIT metadata for component")?;
+
+    // Load the wasm binary
+    let mut wasm_bytes = wat::parse_file(input_wasm.as_ref()).with_context(|| {
+        format!(
+            "failed to read wasm bytes from [{}]",
+            input_wasm.as_ref().display()
+        )
+    })?;
+
+    // Build & encode a new custom section at the end of the wasm
+    let section = wasm_encoder::CustomSection {
+        name: "component-type".into(),
+        data: Cow::Borrowed(&encoded_metadata),
+    };
+    wasm_bytes.push(section.id());
+    section.encode(&mut wasm_bytes);
+    log::info!("successfully embedded component metadata in WASM");
+
+    // Output the WASM to disk (possibly overwriting the original path)
+    std::fs::write(output_wasm.as_ref(), wasm_bytes).with_context(|| {
+        format!(
+            "failed to write updated wasm to disk at [{}]",
+            output_wasm.as_ref().display()
+        )
+    })?;
+
+    log::info!(
+        "successfully wrote component w/ metadata to [{}]",
+        output_wasm.as_ref().display()
+    );
+
+    Ok(())
 }
 
 /// Placeholder for future functionality for building providers
