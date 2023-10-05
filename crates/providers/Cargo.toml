@@ -17,6 +17,7 @@ members = [
     "kv-redis",
     "nats",
 ]
+resolver = "2"
 
 [workspace.dependencies]
 anyhow = { version = "1", default-features = false }
