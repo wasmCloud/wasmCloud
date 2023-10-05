@@ -16,8 +16,6 @@ use wascap::{
     wasm::{days_from_now_to_jwt_time, sign_buffer_with_claims},
 };
 
-use wasmcloud_control_interface::GetClaimsResponse;
-
 use super::{extract_keypair, get::GetClaimsCommand, CommandOutput, OutputKind};
 use crate::{cli::inspect, common::boxed_err_to_anyhow, config::WashConnectionOptions};
 
@@ -676,7 +674,9 @@ fn sanitize_alias(call_alias: Option<String>) -> Result<Option<String>> {
 }
 
 /// Retreive claims from a given wasmCloud instance
-pub async fn get_claims(GetClaimsCommand { opts }: GetClaimsCommand) -> Result<GetClaimsResponse> {
+pub async fn get_claims(
+    GetClaimsCommand { opts }: GetClaimsCommand,
+) -> Result<Vec<HashMap<String, String>>> {
     let wco: WashConnectionOptions = opts.try_into()?;
     let client = wco.into_ctl_client(None).await?;
     client

@@ -9,7 +9,7 @@ use term_table::{
 };
 use wash_lib::cli::CommandOutput;
 use wash_lib::id::ModuleId;
-use wasmcloud_control_interface::{GetClaimsResponse, Host, HostInventory, LinkDefinitionList};
+use wasmcloud_control_interface::{Host, HostInventory, LinkDefinition};
 
 use crate::util::format_optional;
 
@@ -25,7 +25,7 @@ pub(crate) fn get_host_inventory_output(inv: HostInventory) -> CommandOutput {
     CommandOutput::new(host_inventory_table(inv), map)
 }
 
-pub(crate) fn get_claims_output(claims: GetClaimsResponse) -> CommandOutput {
+pub(crate) fn get_claims_output(claims: Vec<HashMap<String, String>>) -> CommandOutput {
     let mut map = HashMap::new();
     map.insert("claims".to_string(), json!(claims));
     CommandOutput::new(claims_table(claims), map)
@@ -63,7 +63,7 @@ pub(crate) fn apply_manifest_output(results: Vec<String>) -> CommandOutput {
 }
 
 /// Helper function to transform a LinkDefinitionList into a table string for printing
-pub(crate) fn links_table(list: LinkDefinitionList) -> String {
+pub(crate) fn links_table(list: Vec<LinkDefinition>) -> String {
     let mut table = Table::new();
     crate::util::configure_table_style(&mut table);
 
@@ -74,7 +74,7 @@ pub(crate) fn links_table(list: LinkDefinitionList) -> String {
         TableCell::new_with_alignment("Link Name", 1, Alignment::Left),
     ]));
 
-    list.links.iter().for_each(|l| {
+    list.iter().for_each(|l| {
         table.add_row(Row::new(vec![
             TableCell::new_with_alignment(l.actor_id.clone(), 1, Alignment::Left),
             TableCell::new_with_alignment(l.provider_id.clone(), 1, Alignment::Left),
@@ -195,7 +195,7 @@ pub(crate) fn host_inventory_table(inv: HostInventory) -> String {
 }
 
 /// Helper function to transform a ClaimsList into a table string for printing
-pub(crate) fn claims_table(list: GetClaimsResponse) -> String {
+pub(crate) fn claims_table(list: Vec<HashMap<String, String>>) -> String {
     let mut table = Table::new();
     crate::util::configure_table_style(&mut table);
 
@@ -205,7 +205,7 @@ pub(crate) fn claims_table(list: GetClaimsResponse) -> String {
         Alignment::Center,
     )]));
 
-    list.claims.iter().for_each(|c| {
+    list.iter().for_each(|c| {
         table.add_row(Row::new(vec![
             TableCell::new_with_alignment("Issuer", 1, Alignment::Left),
             TableCell::new_with_alignment(

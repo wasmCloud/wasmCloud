@@ -1,6 +1,6 @@
 use anyhow::Result;
 use console::style;
-use wasmcloud_control_interface::Client;
+use wasmcloud_control_interface::{kv::DirectKvStore, Client};
 
 use crate::{
     actor::{start_actor, stop_actor, StartActorArgs},
@@ -17,7 +17,7 @@ pub async fn run_dev_loop(
     actor_id: ModuleId,
     actor_ref: &str,
     host_id: ServerId,
-    ctl_client: &Client,
+    ctl_client: &Client<DirectKvStore>,
     sign_cfg: Option<SignConfig>,
 ) -> Result<()> {
     let built_artifact_path = build_project(project_cfg, sign_cfg)?.canonicalize()?;
@@ -46,7 +46,6 @@ pub async fn run_dev_loop(
                 ctl_client,
                 &host_id,
                 &actor_id,
-                1,
                 None,
                 default_timeout_ms(),
                 false,

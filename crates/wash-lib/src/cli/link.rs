@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use clap::Parser;
-use wasmcloud_control_interface::{CtlOperationAck, LinkDefinitionList};
+use wasmcloud_control_interface::LinkDefinition;
 
 use crate::{
     cli::{labels_vec_to_hashmap, CliConnectionOpts},
@@ -89,7 +89,7 @@ pub enum LinkCommand {
 /// let ack = query_links(WashConnectionOptions::default()).await?;
 /// assert_eq!(ack.accepted, true);
 /// ```
-pub async fn query_links(wco: WashConnectionOptions) -> Result<LinkDefinitionList> {
+pub async fn query_links(wco: WashConnectionOptions) -> Result<Vec<LinkDefinition>> {
     wco.into_ctl_client(None)
         .await?
         .query_links()
@@ -122,7 +122,7 @@ pub async fn delete_link(
     contract_id: &str,
     actor_id: &ModuleId,
     link_name: &str,
-) -> Result<CtlOperationAck> {
+) -> Result<()> {
     wco.into_ctl_client(None)
         .await?
         .remove_link(actor_id, contract_id, link_name)
@@ -166,7 +166,7 @@ pub async fn create_link(
     provider_id: &ServiceId,
     link_name: &str,
     link_values: &Vec<String>,
-) -> Result<CtlOperationAck> {
+) -> Result<()> {
     wco.into_ctl_client(None)
         .await?
         .advertise_link(

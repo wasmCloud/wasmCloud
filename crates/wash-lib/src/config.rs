@@ -8,7 +8,9 @@ use std::{
 use anyhow::{anyhow, Context, Result};
 use async_nats::Client;
 use tokio::io::AsyncReadExt;
-use wasmcloud_control_interface::{Client as CtlClient, ClientBuilder as CtlClientBuilder};
+use wasmcloud_control_interface::{
+    kv::DirectKvStore, Client as CtlClient, ClientBuilder as CtlClientBuilder,
+};
 
 use crate::context::WashContext;
 
@@ -95,7 +97,10 @@ pub struct WashConnectionOptions {
 
 impl WashConnectionOptions {
     /// Create a control client from connection options
-    pub async fn into_ctl_client(self, auction_timeout_ms: Option<u64>) -> Result<CtlClient> {
+    pub async fn into_ctl_client(
+        self,
+        auction_timeout_ms: Option<u64>,
+    ) -> Result<CtlClient<DirectKvStore>> {
         let lattice_prefix = self.lattice_prefix.unwrap_or_else(|| {
             self.ctx
                 .as_ref()
@@ -147,7 +152,7 @@ impl WashConnectionOptions {
 
         let mut builder = CtlClientBuilder::new(nc)
             .lattice_prefix(lattice_prefix)
-            .rpc_timeout(tokio::time::Duration::from_millis(self.timeout_ms))
+            .timeout(tokio::time::Duration::from_millis(self.timeout_ms))
             .auction_timeout(tokio::time::Duration::from_millis(auction_timeout_ms));
 
         let opts_js_domain = self.js_domain;
