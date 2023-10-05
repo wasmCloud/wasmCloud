@@ -33,9 +33,10 @@ fn rust_actor() {
             push_insecure: false,
             key_directory: PathBuf::from("./keys"),
             filename: Some("testactor.wasm".to_string()),
-            wasm_target: WasmTarget::CoreModule,
+            call_alias: Some("testactor".to_string()),
             wasi_preview2_adapter_path: None,
-            call_alias: Some("testactor".to_string())
+            wasm_target: WasmTarget::CoreModule,
+            wit_world: None,
         })
     );
 
@@ -53,9 +54,11 @@ fn rust_actor() {
 }
 
 #[test]
-fn tinygo_actor() {
+fn tinygo_actor_module() {
     let result = get_config(
-        Some(PathBuf::from("./tests/parser/files/tinygo_actor.toml")),
+        Some(PathBuf::from(
+            "./tests/parser/files/tinygo_actor_module.toml",
+        )),
         None,
     );
 
@@ -64,7 +67,7 @@ fn tinygo_actor() {
     assert_eq!(
         config.language,
         LanguageConfig::TinyGo(TinyGoConfig {
-            tinygo_path: Some("path/to/tinygo".into())
+            tinygo_path: Some("path/to/tinygo".into()),
         })
     );
 
@@ -79,6 +82,7 @@ fn tinygo_actor() {
             call_alias: Some("testactor".to_string()),
             wasi_preview2_adapter_path: None,
             wasm_target: WasmTarget::CoreModule,
+            wit_world: None,
         })
     );
 
@@ -92,6 +96,33 @@ fn tinygo_actor() {
                 .unwrap(),
             wasm_bin_name: None,
         }
+    );
+}
+
+#[test]
+fn tinygo_actor_component() {
+    let result = get_config(
+        Some(PathBuf::from(
+            "./tests/parser/files/tinygo_actor_component.toml",
+        )),
+        None,
+    );
+
+    let config = assert_ok!(result);
+
+    assert_eq!(
+        config.project_type,
+        TypeConfig::Actor(ActorConfig {
+            claims: vec!["wasmcloud:httpserver".to_string()],
+            registry: Some("localhost:8080".to_string()),
+            push_insecure: false,
+            key_directory: PathBuf::from("./keys"),
+            filename: Some("testactor.wasm".to_string()),
+            call_alias: Some("testactor".to_string()),
+            wasi_preview2_adapter_path: None,
+            wasm_target: WasmTarget::WasiPreview2,
+            wit_world: None,
+        })
     );
 }
 
@@ -262,6 +293,7 @@ fn minimal_rust_actor() {
             call_alias: None,
             wasi_preview2_adapter_path: None,
             wasm_target: WasmTarget::CoreModule,
+            wit_world: None,
         })
     );
 
@@ -308,6 +340,7 @@ fn cargo_toml_actor() {
             call_alias: None,
             wasi_preview2_adapter_path: None,
             wasm_target: WasmTarget::CoreModule,
+            wit_world: None,
         })
     );
 
@@ -336,13 +369,16 @@ fn minimal_rust_actor_preview2() {
     );
 
     let config = assert_ok!(result);
-    assert!(matches!(
+    assert_eq!(
         config.project_type,
         TypeConfig::Actor(ActorConfig {
+            claims: vec!["wasmcloud:httpserver".to_string()],
+            key_directory: PathBuf::from("./keys"),
             wasm_target: WasmTarget::WasiPreview2,
-            ..
+            wit_world: Some("test-world".to_string()),
+            ..Default::default()
         })
-    ));
+    );
 }
 
 /// wasm_target=wasm32-wasi-preview1 is properly parsed

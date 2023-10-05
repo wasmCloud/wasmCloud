@@ -9,7 +9,7 @@ registry = "localhost:8080"
 push_insecure = false
 key_directory = "./keys"
 filename = "testactor.wasm"
-wasm_target = "wasm32-unknown-unknown"
+wasm_target = "wasm"
 call_alias = "testactor"
 
 [tinygo]
