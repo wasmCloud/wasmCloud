@@ -41,8 +41,12 @@ pub struct StopActorCommand {
     #[clap(name = "actor-id", value_parser)]
     pub actor_id: ModuleId,
 
-    /// Number of actors to stop
+    /// Number of actors to stop (DEPRECATED: count is ignored)
     #[clap(long = "count", default_value = "1")]
+    #[deprecated(
+        since = "0.21.0",
+        note = "actor will be stopped regardless of scale, count is now ignored"
+    )]
     pub count: u16,
 
     /// By default, the command will wait until the actor has been stopped.
