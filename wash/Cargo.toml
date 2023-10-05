@@ -1,6 +1,6 @@
 [package]
 name = "wash-cli"
-version = "0.20.2"
+version = "0.21.0"
 authors = ["wasmCloud Team"]
 categories = ["wasm", "command-line-utilities"]
 description = "wasmcloud Shell (wash) CLI tool"
@@ -90,7 +90,7 @@ members = ["./", "./crates/wash-lib"]
 anyhow = "1.0.75"
 assert-json-diff = "2.0.1"
 async-compression = { version = "0.3", default-features = false }
-async-nats = "0.30.0"
+async-nats = "0.31.0"
 atelier_core = "0.2"
 bytes = "1.5"
 cargo_atelier = "0.2"
@@ -151,10 +151,10 @@ wadm = "0.6.0"
 walkdir = "2.4"
 wascap = "0.11.2"
 wasm-encoder = "0.33.2"
-wash-lib = { version = "0.11", path = "./crates/wash-lib" }
-wasmbus-rpc = "0.14"
 wasmcloud-component-adapters = { version = "0.2.4", default-features = false }
-wasmcloud-control-interface = "0.27"
+wash-lib = { version = "0.12", path = "./crates/wash-lib" }
+wasmbus-rpc = "0.15.0"
+wasmcloud-control-interface = { version = "0.30", path = "../control-interface-client" }
 wasmcloud-test-util = "0.10.0"
 weld-codegen = "0.7.0"
 which = "4.4.0"
