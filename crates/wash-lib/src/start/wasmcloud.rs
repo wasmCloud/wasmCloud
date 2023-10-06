@@ -299,7 +299,7 @@ mod test {
     use tokio::net::TcpStream;
     use tokio::time::Duration;
 
-    const WASMCLOUD_VERSION: &str = "v0.78.0-rc2";
+    const WASMCLOUD_VERSION: &str = "v0.79.0-rc3";
     const RANDOM_PORT_RANGE_START: u16 = 5000;
     const RANDOM_PORT_RANGE_END: u16 = 6000;
     const LOCALHOST: &str = "127.0.0.1";
