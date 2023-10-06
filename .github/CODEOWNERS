@@ -5,11 +5,11 @@
 .github @wasmCloud/ci-maintainers
 
 # nix
-.github/actions/build-nix @rvolosatovs
-.github/actions/install-nix @rvolosatovs
-.github/workflows/nix.yml @rvolosatovs
-flake.* @rvolosatovs
-garnix.yaml @rvolosatovs
+.github/actions/build-nix @wasmCloud/ci-maintainers
+.github/actions/install-nix @wasmCloud/ci-maintainers
+.github/workflows/nix.yml @wasmCloud/ci-maintainers
+flake.* @wasmCloud/ci-maintainers
+garnix.yaml @wasmCloud/ci-maintainers
 
 # host-related code
 crates/actor @wasmCloud/host-maintainers
