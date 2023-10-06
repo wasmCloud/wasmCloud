@@ -1,4 +1,5 @@
 {
+  # this is a comment
   nixConfig.extra-substituters = [
     "https://wasmcloud.cachix.org"
     "https://bytecodealliance.cachix.org"
