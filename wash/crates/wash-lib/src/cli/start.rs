@@ -42,9 +42,14 @@ pub struct StartActorCommand {
     #[clap(name = "actor-ref")]
     pub actor_ref: String,
 
-    /// Number of actors to start
-    #[clap(long = "count", default_value = "1")]
-    pub count: u16,
+    /// Maximum number of instances this actor can run concurrently. Setting this value to 0 means there is no maximum.
+    #[clap(
+        long = "max-concurrent",
+        alias = "max",
+        alias = "count",
+        default_value = "1"
+    )]
+    pub max_concurrent: u16,
 
     /// Constraints for actor auction in the form of "label=value". If host-id is supplied, this list is ignored
     #[clap(short = 'c', long = "constraint", name = "constraints")]
@@ -107,7 +112,7 @@ pub async fn handle_start_actor(cmd: StartActorCommand) -> Result<CommandOutput>
         ctl_client: &client,
         host_id: &host,
         actor_ref: &cmd.actor_ref,
-        count: cmd.count,
+        count: cmd.max_concurrent,
         skip_wait: cmd.skip_wait,
         timeout_ms: Some(timeout_ms),
     })

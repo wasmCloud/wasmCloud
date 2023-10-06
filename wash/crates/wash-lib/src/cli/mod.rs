@@ -45,9 +45,11 @@ pub mod link;
 pub mod output;
 pub mod par;
 pub mod registry;
+pub mod scale;
 pub mod spy;
 pub mod start;
 pub mod stop;
+pub mod update;
 
 /// Used for displaying human-readable output vs JSON format
 #[derive(Debug, Copy, Clone, Eq, Serialize, Deserialize, PartialEq)]

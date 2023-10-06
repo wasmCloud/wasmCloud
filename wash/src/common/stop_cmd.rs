@@ -95,6 +95,7 @@ mod test {
         ])?;
 
         match stop_actor_all.command {
+            #[allow(deprecated)]
             CtlCliCommand::Stop(StopCommand::Actor(StopActorCommand {
                 opts,
                 host_id,

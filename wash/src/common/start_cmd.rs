@@ -9,7 +9,6 @@ pub(crate) async fn handle_command(
     output_kind: OutputKind,
 ) -> Result<CommandOutput> {
     let sp: Spinner = Spinner::new(&output_kind)?;
-    eprintln!("[warn] `start` has been deprecated in favor `scale` and will be removed in a future version.");
     let out: CommandOutput = match command {
         StartCommand::Actor(cmd) => {
             let actor_ref = &cmd.actor_ref.to_string();
