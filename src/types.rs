@@ -244,11 +244,11 @@ pub struct ScaleActorCommand {
     /// example, autonomous agents may wish to "tag" scale requests as part of a given deployment
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub annotations: Option<AnnotationMap>,
-    /// The maximum number of concurrent executing instances of this actor. If omitted or set to
-    /// zero there is no maximum.
+    /// The maximum number of concurrent executing instances of this actor. If set to `None` there
+    /// there is no maximum, while setting to `0` will stop the actor.
     // NOTE: renaming to `count` lets us remain backwards compatible for a few minor versions
     #[serde(default, alias = "count", rename = "count")]
-    pub max_concurrent: u16,
+    pub max_concurrent: Option<u16>,
     /// Host ID on which to scale this actor
     #[serde(default)]
     pub host_id: String,

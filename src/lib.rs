@@ -296,8 +296,9 @@ impl<T: KvStore + Clone + Debug + Send + Sync> Client<T> {
         count: u16,
         annotations: Option<HashMap<String, String>>,
     ) -> Result<CtlOperationAck> {
-        self.scale_actor(host_id, actor_ref, count, annotations)
-            .await
+        // It makes no logical sense to start 0 actors, so we represent that as an unbounded max instead.
+        let max = if count == 0 { None } else { Some(count) };
+        self.scale_actor(host_id, actor_ref, max, annotations).await
     }
 
     /// Sends a request to the given host to scale a given actor. This returns an acknowledgement of
@@ -311,14 +312,15 @@ impl<T: KvStore + Clone + Debug + Send + Sync> Client<T> {
     /// # Arguments
     /// `host_id`: The ID of the host to scale the actor on
     /// `actor_ref`: The OCI reference of the actor to scale
-    /// `max_concurrent`: The maximum number of instances this actor can run concurrently. Setting this value to 0 means there is no maximum.
+    /// `max_concurrent`: The maximum number of requests this actor handle run concurrently. `None` represents an unbounded
+    /// level of concurrency while `0` will stop the actor.
     /// `annotations`: Optional annotations to apply to the actor
     #[instrument(level = "debug", skip_all)]
     pub async fn scale_actor(
         &self,
         host_id: &str,
         actor_ref: &str,
-        max_concurrent: u16,
+        max_concurrent: Option<u16>,
         annotations: Option<HashMap<String, String>>,
     ) -> Result<CtlOperationAck> {
         let subject =
