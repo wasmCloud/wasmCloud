@@ -87,6 +87,9 @@ pub struct Host {
     /// NATS server host used for the control interface
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ctl_host: Option<String>,
+    /// Human-friendly name for this host
+    #[serde(default)]
+    pub friendly_name: String,
     #[serde(default)]
     pub id: String,
     /// JetStream domain (if applicable) in use by this host
@@ -136,7 +139,6 @@ pub struct HostInventory {
     pub providers: ProviderDescriptions,
 }
 
-pub type Hosts = Vec<Host>;
 pub type KeyValueMap = std::collections::HashMap<String, String>;
 pub type LabelsMap = std::collections::HashMap<String, String>;
 
