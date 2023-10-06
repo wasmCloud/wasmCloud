@@ -3,6 +3,7 @@
 
 # .github CI
 .github @wasmCloud/ci-maintainers
+.github/CODEOWNERS @wasmCloud/org-maintainers
 
 # nix
 .github/actions/build-nix @wasmCloud/ci-maintainers
