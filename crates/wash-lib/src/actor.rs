@@ -51,6 +51,7 @@ pub async fn start_actor(
         .context("Failed to get lattice event channel")?;
 
     // Start the actor
+    #[allow(deprecated)]
     let ack = ctl_client
         .start_actor(host_id, actor_ref, count, None)
         .await
@@ -101,7 +102,7 @@ pub async fn scale_actor(
     client: &CtlClient<DirectKvStore>,
     host_id: &str,
     actor_ref: &str,
-    max_concurrent: u16,
+    max_concurrent: Option<u16>,
     annotations: Option<HashMap<String, String>>,
 ) -> Result<()> {
     let ack = client

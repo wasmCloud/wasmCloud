@@ -1,17 +1,13 @@
-use anyhow::{bail, Result};
-use clap::{Parser, Subcommand};
-use wash_lib::{
-    actor::{scale_actor, update_actor},
-    cli::{
-        get::{GetClaimsCommand, GetCommand, GetHostInventoryCommand, GetHostsCommand},
-        labels_vec_to_hashmap,
-        link::LinkCommand,
-        start::StartCommand,
-        stop::{handle_stop_actor, stop_host, stop_provider, StopCommand},
-        CliConnectionOpts, CommandOutput, OutputKind,
-    },
-    config::WashConnectionOptions,
-    id::{ModuleId, ServerId},
+use anyhow::Result;
+use clap::Subcommand;
+use wash_lib::cli::{
+    get::{GetClaimsCommand, GetCommand, GetHostInventoryCommand, GetHostsCommand},
+    link::LinkCommand,
+    scale::{handle_scale_actor, ScaleCommand},
+    start::StartCommand,
+    stop::{handle_stop_actor, stop_host, stop_provider, StopCommand},
+    update::{handle_update_actor, UpdateCommand},
+    CommandOutput, OutputKind,
 };
 
 use crate::{
@@ -67,71 +63,6 @@ pub(crate) enum CtlGetCommand {
     Claims(GetClaimsCommand),
 }
 
-#[derive(Debug, Clone, Parser)]
-pub(crate) enum UpdateCommand {
-    /// Update an actor running in a host
-    #[clap(name = "actor")]
-    Actor(UpdateActorCommand),
-}
-
-#[derive(Debug, Clone, Parser)]
-pub(crate) enum ScaleCommand {
-    /// Scale an actor running in a host
-    #[clap(name = "actor")]
-    Actor(ScaleActorCommand),
-}
-
-#[derive(Debug, Clone, Parser)]
-pub struct ScaleActorCommand {
-    #[clap(flatten)]
-    opts: CliConnectionOpts,
-
-    /// Id of host
-    #[clap(name = "host-id", value_parser)]
-    host_id: ServerId,
-
-    /// Actor Id, e.g. the public key for the actor
-    #[clap(name = "actor-id", value_parser)]
-    pub(crate) actor_id: ModuleId,
-
-    /// Actor reference, e.g. the OCI URL for the actor.
-    #[clap(name = "actor-ref")]
-    pub(crate) actor_ref: String,
-
-    /// Maximum number of instances this actor can run concurrently. Setting this value to 0 means there is no maximum.
-    #[clap(
-        short = 'c',
-        long = "max-concurrent",
-        alias = "max",
-        alias = "count",
-        default_value = "1"
-    )]
-    pub max_concurrent: u16,
-
-    /// Optional set of annotations used to describe the nature of this actor scale command.
-    /// For example, autonomous agents may wish to “tag” scale requests as part of a given deployment
-    #[clap(short = 'a', long = "annotations")]
-    pub annotations: Vec<String>,
-}
-
-#[derive(Debug, Clone, Parser)]
-pub(crate) struct UpdateActorCommand {
-    #[clap(flatten)]
-    opts: CliConnectionOpts,
-
-    /// Id of host
-    #[clap(name = "host-id", value_parser)]
-    pub(crate) host_id: ServerId,
-
-    /// Actor Id, e.g. the public key for the actor
-    #[clap(name = "actor-id", value_parser)]
-    pub(crate) actor_id: ModuleId,
-
-    /// Actor reference, e.g. the OCI URL for the actor.
-    #[clap(name = "new-actor-ref")]
-    pub(crate) new_actor_ref: String,
-}
-
 pub(crate) async fn handle_command(
     command: CtlCliCommand,
     output_kind: OutputKind,
@@ -165,39 +96,35 @@ pub(crate) async fn handle_command(
             handle_stop_actor(cmd.clone()).await?
         }
         Stop(StopCommand::Provider(cmd)) => {
+            eprintln!("[warn] `wash ctl stop` has been deprecated in favor of `wash stop` and will be removed in a future version.");
             sp.update_spinner_message(format!(" Stopping provider {} ... ", cmd.provider_id));
 
             stop_provider(cmd.clone()).await?
         }
         Stop(StopCommand::Host(cmd)) => {
+            eprintln!("[warn] `wash ctl stop` has been deprecated in favor of `wash stop` and will be removed in a future version.");
             sp.update_spinner_message(format!(" Stopping host {} ... ", cmd.host_id));
 
             stop_host(cmd.clone()).await?
         }
         Update(UpdateCommand::Actor(cmd)) => {
+            eprintln!("[warn] `wash ctl update actor` has been deprecated in favor of `wash update actor` and will be removed in a future version.");
             sp.update_spinner_message(format!(
                 " Updating Actor {} to {} ... ",
                 cmd.actor_id, cmd.new_actor_ref
             ));
 
-            let wco: WashConnectionOptions = cmd.opts.try_into()?;
-            let client = wco.into_ctl_client(None).await?;
-
-            let ack =
-                update_actor(&client, &cmd.host_id, &cmd.actor_id, &cmd.new_actor_ref).await?;
-            if !ack.accepted {
-                bail!("Operation failed: {}", ack.error);
-            }
-
-            CommandOutput::from_key_and_text(
-                "result",
-                format!("Actor {} updated to {}", cmd.actor_id, cmd.new_actor_ref),
-            )
+            handle_update_actor(cmd.clone()).await?
         }
         Scale(ScaleCommand::Actor(cmd)) => {
+            eprintln!("[warn] `wash ctl scale actor` has been deprecated in favor of `wash scale actor` and will be removed in a future version.");
+            let max = cmd
+                .max_concurrent
+                .map(|max| max.to_string())
+                .unwrap_or_else(|| "unbounded".to_string());
             sp.update_spinner_message(format!(
                 " Scaling Actor {} to {} max concurrent instances ... ",
-                cmd.actor_id, cmd.max_concurrent
+                cmd.actor_ref, max
             ));
             handle_scale_actor(cmd.clone()).await?
         }
@@ -208,30 +135,6 @@ pub(crate) async fn handle_command(
     Ok(out)
 }
 
-pub(crate) async fn handle_scale_actor(cmd: ScaleActorCommand) -> Result<CommandOutput> {
-    let wco: WashConnectionOptions = cmd.opts.try_into()?;
-    let client = wco.into_ctl_client(None).await?;
-
-    let annotations = labels_vec_to_hashmap(cmd.annotations)?;
-
-    scale_actor(
-        &client,
-        &cmd.host_id,
-        &cmd.actor_ref,
-        cmd.max_concurrent,
-        Some(annotations),
-    )
-    .await?;
-
-    Ok(CommandOutput::from_key_and_text(
-        "result",
-        format!(
-            "Request to scale actor {} to {} max concurrent instances recieved",
-            cmd.actor_id, cmd.max_concurrent
-        ),
-    ))
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
@@ -239,7 +142,9 @@ mod test {
     use clap::Parser;
     use wash_lib::cli::{
         get::GetHostsCommand,
+        scale::ScaleActorCommand,
         stop::{StopActorCommand, StopProviderCommand},
+        update::UpdateActorCommand,
     };
 
     #[derive(Parser)]
@@ -280,6 +185,7 @@ mod test {
             ACTOR_ID,
         ])?;
         match stop_actor_all.command {
+            #[allow(deprecated)]
             CtlCliCommand::Stop(StopCommand::Actor(StopActorCommand {
                 opts,
                 host_id,
@@ -468,7 +374,7 @@ mod test {
             "wasmcloud.azurecr.io/actor:v2",
         ])?;
         match update_all.command {
-            CtlCliCommand::Update(UpdateCommand::Actor(super::UpdateActorCommand {
+            CtlCliCommand::Update(UpdateCommand::Actor(UpdateActorCommand {
                 opts,
                 host_id,
                 actor_id,
@@ -498,7 +404,6 @@ mod test {
             "--timeout-ms",
             "2001",
             HOST_ID,
-            ACTOR_ID,
             "wasmcloud.azurecr.io/actor:v2",
             "--count",
             "1",
@@ -507,10 +412,9 @@ mod test {
         ])?;
 
         match scale_actor_all.command {
-            crate::CtlCliCommand::Scale(ScaleCommand::Actor(super::ScaleActorCommand {
+            crate::CtlCliCommand::Scale(ScaleCommand::Actor(ScaleActorCommand {
                 opts,
                 host_id,
-                actor_id,
                 actor_ref,
                 max_concurrent,
                 annotations,
@@ -520,9 +424,8 @@ mod test {
                 assert_eq!(&opts.lattice_prefix.unwrap(), LATTICE_PREFIX);
                 assert_eq!(opts.timeout_ms, 2001);
                 assert_eq!(host_id, HOST_ID.parse()?);
-                assert_eq!(actor_id, ACTOR_ID.parse()?);
                 assert_eq!(actor_ref, "wasmcloud.azurecr.io/actor:v2".to_string());
-                assert_eq!(max_concurrent, 1);
+                assert_eq!(max_concurrent, Some(1));
                 assert_eq!(annotations, vec!["foo=bar".to_string()]);
             }
             cmd => panic!("ctl scale actor constructed incorrect command {cmd:?}"),

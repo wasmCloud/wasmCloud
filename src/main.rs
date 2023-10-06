@@ -12,9 +12,11 @@ use wash_lib::{
         inspect::InspectCliCommand,
         link::LinkCommand,
         registry::{RegistryCommand, RegistryPullCommand, RegistryPushCommand},
+        scale::ScaleCommand,
         spy::SpyCommand,
         start::StartCommand,
         stop::StopCommand,
+        update::UpdateCommand,
         CommandOutput, OutputKind,
     },
     drain::Drain as DrainSelection,
@@ -85,10 +87,12 @@ Run:
 Iterate:
   get          Get information about different resources
   start        Start an actor or provider
+  scale        Scale an actor running in a host to a certain level of concurrency
+  stop         Stop an actor or provider, or host
+  update       Update an actor running in a host to a newer version
   link         Link an actor and a provider
   call         Invoke a wasmCloud actor
-  stop         Stop an actor or provider, or host
-  ctl          Interact with a wasmCloud control interface
+  ctl          Interact with a wasmCloud control interface (deprecated, use above commands)
 
 Publish:
   pull         Pull an artifact from an OCI compliant registry
@@ -213,12 +217,18 @@ enum CliCommand {
     /// (experimental) Spy on all invocations between an actor and its linked providers
     #[clap(name = "spy")]
     Spy(SpyCommand),
+    /// Scale an actor running in a host to a certain level of concurrency
+    #[clap(name = "scale", subcommand)]
+    Scale(ScaleCommand),
     /// Start an actor or a provider
     #[clap(name = "start", subcommand)]
     Start(StartCommand),
     /// Stop an actor, provider, or host
     #[clap(name = "stop", subcommand)]
     Stop(StopCommand),
+    /// Update an actor running in a host to a newer version
+    #[clap(name = "update", subcommand)]
+    Update(UpdateCommand),
     /// Bootstrap a wasmCloud environment
     #[clap(name = "up")]
     Up(UpCommand),
@@ -294,10 +304,16 @@ async fn main() {
                 wash_lib::cli::spy::handle_command(spy_cli).await
             }
         }
+        CliCommand::Scale(scale_cli) => {
+            common::scale_cmd::handle_command(scale_cli, output_kind).await
+        }
         CliCommand::Start(start_cli) => {
             common::start_cmd::handle_command(start_cli, output_kind).await
         }
         CliCommand::Stop(stop_cli) => common::stop_cmd::handle_command(stop_cli, output_kind).await,
+        CliCommand::Update(update_cli) => {
+            common::update_cmd::handle_command(update_cli, output_kind).await
+        }
         CliCommand::Up(up_cli) => up::handle_command(up_cli, output_kind).await,
         CliCommand::Ui(ui_cli) => {
             if cli.experimental {
