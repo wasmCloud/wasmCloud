@@ -4,7 +4,7 @@ use tokio::process::Command;
 
 mod common;
 use common::{TestWashInstance, ECHO_OCI_REF};
-use wash_lib::cli::output::{GetHostInventoryCommandOutput, ScaleCommandOutput};
+use wash_lib::cli::output::{GetHostInventoriesCommandOutput, ScaleCommandOutput};
 
 #[tokio::test]
 #[serial]
@@ -58,17 +58,23 @@ async fn integration_scale_actor_serial() -> Result<()> {
             .context("failed to get host inventory")?;
         assert!(output.status.success(), "checked host inventory");
 
-        let cmd_output: GetHostInventoryCommandOutput =
+        let cmd_output: GetHostInventoriesCommandOutput =
             serde_json::from_slice(&output.stdout).context("failed to parse output")?;
 
-        if cmd_output.inventory.actors.is_empty() && retries > 4 {
+        let actors = cmd_output
+            .inventories
+            .into_iter()
+            .next()
+            .map(|i| i.actors)
+            .unwrap_or_default();
+        if actors.is_empty() && retries > 4 {
             panic!("Should have started the actor")
         } else if retries <= 4 {
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
             continue;
         } else {
-            assert_eq!(cmd_output.inventory.actors.len(), 1);
-            let max = cmd_output.inventory.actors[0]
+            assert_eq!(actors.len(), 1);
+            let max = actors[0]
                 .instances
                 .iter()
                 .map(|i| {
@@ -132,19 +138,25 @@ async fn integration_scale_actor_serial() -> Result<()> {
             .context("failed to get host inventory")?;
         assert!(output.status.success(), "checked host inventory");
 
-        let cmd_output: GetHostInventoryCommandOutput =
+        let cmd_output: GetHostInventoriesCommandOutput =
             serde_json::from_slice(&output.stdout).context("failed to parse output")?;
 
-        if cmd_output.inventory.actors.is_empty() && retries > 4 {
+        let actors = cmd_output
+            .inventories
+            .into_iter()
+            .next()
+            .map(|i| i.actors)
+            .unwrap_or_default();
+        if actors.is_empty() && retries > 4 {
             panic!("Should have started the actor")
         } else if retries <= 4 {
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
             continue;
         } else {
-            assert_eq!(cmd_output.inventory.actors.len(), 1);
+            assert_eq!(actors.len(), 1);
             // NOTE: This is a compensation for the fact that <0.79.0 hosts include individual instances,
             // but 0.79.0+ hosts include instances with max counts on them.
-            let max = cmd_output.inventory.actors[0]
+            let max = actors[0]
                 .instances
                 .iter()
                 .map(|i| {

@@ -2,7 +2,7 @@ use anyhow::{bail, Context, Result};
 use serial_test::serial;
 use tokio::process::Command;
 use wash_lib::cli::output::{
-    GetClaimsCommandOutput, GetHostInventoryCommandOutput, GetHostsCommandOutput,
+    GetClaimsCommandOutput, GetHostInventoriesCommandOutput, GetHostsCommandOutput,
     LinkQueryCommandOutput,
 };
 
@@ -97,40 +97,39 @@ async fn integration_get_host_inventory_serial() -> Result<()> {
         );
     }
 
-    let cmd_output: GetHostInventoryCommandOutput = serde_json::from_slice(&output.stdout)?;
+    let cmd_output: GetHostInventoriesCommandOutput = serde_json::from_slice(&output.stdout)?;
     assert!(cmd_output.success, "command returned success");
 
     assert!(
-        cmd_output.inventory.actors.is_empty(),
+        cmd_output.inventories.len() == 1,
+        "one host inventory returned"
+    );
+    let inventory = &cmd_output.inventories[0];
+    assert!(
+        inventory.actors.is_empty(),
         "host inventory contains no actors "
     );
     assert_eq!(
-        cmd_output.inventory.host_id, wash_instance.host_id,
+        inventory.host_id, wash_instance.host_id,
         "host ID matches request"
     );
     assert!(
-        !cmd_output.inventory.labels.is_empty(),
+        !inventory.labels.is_empty(),
         "at least one label on the host"
     );
     assert!(
-        cmd_output.inventory.labels.contains_key("hostcore.os"),
+        inventory.labels.contains_key("hostcore.os"),
         "hostcore.os label is present"
     );
     assert!(
-        cmd_output.inventory.labels.contains_key("hostcore.arch"),
+        inventory.labels.contains_key("hostcore.arch"),
         "hostcore.arch label is present"
     );
     assert!(
-        cmd_output
-            .inventory
-            .labels
-            .contains_key("hostcore.osfamily"),
+        inventory.labels.contains_key("hostcore.osfamily"),
         "hostcore.osfmaily label is present"
     );
-    assert!(
-        cmd_output.inventory.providers.is_empty(),
-        "host has no providers"
-    );
+    assert!(inventory.providers.is_empty(), "host has no providers");
 
     Ok(())
 }

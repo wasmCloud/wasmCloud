@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::Subcommand;
 use wash_lib::cli::{
-    get::{GetClaimsCommand, GetCommand, GetHostInventoryCommand, GetHostsCommand},
+    get::{GetClaimsCommand, GetCommand, GetHostInventoriesCommand, GetHostsCommand},
     link::LinkCommand,
     scale::{handle_scale_actor, ScaleCommand},
     start::StartCommand,
@@ -56,7 +56,7 @@ pub(crate) enum CtlGetCommand {
 
     /// Query a single host for its inventory of labels, actors and providers
     #[clap(name = "inventory")]
-    HostInventory(GetHostInventoryCommand),
+    HostInventories(GetHostInventoriesCommand),
 
     /// Query lattice for its claims cache
     #[clap(name = "claims")]
@@ -74,9 +74,9 @@ pub(crate) async fn handle_command(
             eprintln!("[warn] `wash ctl get hosts` has been deprecated in favor of `wash get hosts` and will be removed in a future version.");
             handle_get_command(GetCommand::Hosts(cmd), output_kind).await?
         }
-        Get(CtlGetCommand::HostInventory(cmd)) => {
+        Get(CtlGetCommand::HostInventories(cmd)) => {
             eprintln!("[warn] `wash ctl get inventory` has been deprecated in favor of `wash get inventory` and will be removed in a future version.");
-            handle_get_command(GetCommand::HostInventory(cmd), output_kind).await?
+            handle_get_command(GetCommand::HostInventories(cmd), output_kind).await?
         }
         Get(CtlGetCommand::Claims(cmd)) => {
             eprintln!("[warn] `wash ctl get claims` has been deprecated in favor of `wash get claims` and will be removed in a future version.");
@@ -279,7 +279,7 @@ mod test {
             HOST_ID,
         ])?;
         match get_host_inventory_all.command {
-            CtlCliCommand::Get(CtlGetCommand::HostInventory(GetHostInventoryCommand {
+            CtlCliCommand::Get(CtlGetCommand::HostInventories(GetHostInventoriesCommand {
                 opts,
                 host_id,
             })) => {
