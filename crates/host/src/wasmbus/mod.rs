@@ -1307,7 +1307,11 @@ impl ActorInstance {
             ..
         } = message;
 
-        match rmp_serde::from_slice::<Invocation>(payload) {
+        let injector = TraceContextInjector::default_with_span();
+        let headers = injector_to_headers(&injector);
+        let trace_context = injector.into();
+
+        let inv_resp = match rmp_serde::from_slice::<Invocation>(payload) {
             Ok(invocation) => {
                 if !invocation.trace_context.is_empty() {
                     wasmcloud_tracing::context::attach_span_context(&invocation.trace_context);
@@ -1323,10 +1327,7 @@ impl ActorInstance {
                 let operation = invocation.operation.clone();
 
                 let res = self.handle_call(invocation).await;
-                let injector = TraceContextInjector::default_with_span();
-                let headers = injector_to_headers(&injector);
-                let trace_context = injector.into();
-                let inv_resp = match res {
+                match res {
                     Ok((msg, content_length)) => InvocationResponse {
                         msg,
                         invocation_id,
@@ -1350,27 +1351,33 @@ impl ActorInstance {
                             ..Default::default()
                         }
                     }
-                };
-
-                if let Some(reply) = reply {
-                    match rmp_serde::to_vec_named(&inv_resp) {
-                        Ok(buf) => {
-                            if let Err(e) = self
-                                .nats
-                                .publish_with_headers(reply.clone(), headers, buf.into())
-                                .await
-                            {
-                                error!(?reply, ?e, "failed to publish response to request");
-                            }
-                        }
-                        Err(e) => {
-                            error!(?e, "failed to encode response");
-                        }
-                    }
                 }
             }
             Err(e) => {
                 error!(?subject, ?e, "failed to decode invocation"); // Note: this won't be traced
+                InvocationResponse {
+                    invocation_id: "UNKNOWN".to_string(),
+                    error: Some(e.to_string()),
+                    trace_context,
+                    ..Default::default()
+                }
+            }
+        };
+
+        if let Some(reply) = reply {
+            match rmp_serde::to_vec_named(&inv_resp) {
+                Ok(buf) => {
+                    if let Err(e) = self
+                        .nats
+                        .publish_with_headers(reply.clone(), headers, buf.into())
+                        .await
+                    {
+                        error!(?reply, ?e, "failed to publish response to request");
+                    }
+                }
+                Err(e) => {
+                    error!(?e, "failed to encode response");
+                }
             }
         }
     }
