@@ -28,7 +28,7 @@ pub(crate) enum AppCliCommand {
     #[clap(name = "history")]
     History(HistoryCommand),
     /// Delete a model version
-    #[clap(name = "del")]
+    #[clap(name = "delete", alias = "del")]
     Delete(DeleteCommand),
     /// Puts a model version into the store
     #[clap(name = "put")]
