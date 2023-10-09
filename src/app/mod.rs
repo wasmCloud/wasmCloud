@@ -222,18 +222,13 @@ async fn put_model(cmd: PutCommand) -> Result<PutModelResponse> {
 
     let app_manifest = app_manifest_loader(&cmd.source).await?;
 
-    if let AppManifest::SerializedModel(manifest) = app_manifest {
-        return wash_lib::app::put_model(&client, lattice_prefix, &manifest).await;
-    }
-
     match app_manifest {
+        AppManifest::SerializedModel(manifest) => {
+            wash_lib::app::put_model(&client, lattice_prefix, &manifest).await
+        }
         AppManifest::ModelName(model_name) => {
             bail!("Could not load app model manifest for put command; received invalid result (model_name={model_name}) from app_manifest_loader")
         }
-        //  This should never happen (assuming no other AppManifest variants), but it is handled to satisfy the compiler
-        _ => bail!(
-            "Could not load app model manifest for put command; received invalid result from app_manifest_loader"
-        ),
     }
 }
 

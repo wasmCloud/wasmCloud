@@ -45,6 +45,7 @@ impl ToString for ModelOperation {
     }
 }
 
+#[derive(Debug)]
 pub enum AppManifest {
     SerializedModel(String),
     ModelName(String),
@@ -248,26 +249,41 @@ async fn model_request(
 }
 
 //  NOTE(ahmedtadde): This should probably be refactored at some point to account for cases where the source's input is unusually (or erroneously) large.
+//  For now, we'll just assume that the input is small enough to be a oneshot read into memory and that the default timeout of 1 sec is plenty sufficient (or even too generous?) for the desired/expected behavior.
 pub async fn app_manifest_loader(source: &Option<String>) -> Result<AppManifest> {
-    match source {
-        Some(s) if PathBuf::from(s).exists() => Ok(AppManifest::SerializedModel(
-            tokio::fs::read_to_string(s).await?,
-        )),
-        Some(s) if Url::parse(s).is_ok() && s.starts_with("http") => Ok(
-            AppManifest::SerializedModel(reqwest::get(s).await?.text().await?),
-        ),
-        Some(s) if s == "-" => {
-            let mut buffer = String::new();
-            tokio::io::stdin().read_to_string(&mut buffer).await?;
+    let read_from_stdin = || async {
+        let mut buffer = String::new();
+        tokio::io::stdin().read_to_string(&mut buffer).await?;
+        if buffer.is_empty() {
+            Err(anyhow::anyhow!(
+                "unable to load app manifest from empty stdin input"
+            ))
+        } else {
             Ok(AppManifest::SerializedModel(buffer))
         }
-        // NOTE(ahmedtadde): If the source is a string that isn't matched by any of the previous branches, we assume it's a model name
-        // Though, applying some validation here would be nice. I looked around for existing model name validation and didn't find any.
-        Some(s) => Ok(AppManifest::ModelName(s.to_owned())),
-        None => {
-            let mut buffer = String::new();
-            tokio::io::stdin().read_to_string(&mut buffer).await?;
-            Ok(AppManifest::SerializedModel(buffer))
+    };
+
+    let load_from_source = || async {
+        match source {
+            Some(s) if PathBuf::from(s).exists() => Ok(AppManifest::SerializedModel(
+                tokio::fs::read_to_string(s).await?,
+            )),
+            Some(s) if Url::parse(s).is_ok() && s.starts_with("http") => Ok(
+                AppManifest::SerializedModel(reqwest::get(s).await?.text().await?),
+            ),
+            Some(s) if s == "-" => read_from_stdin().await,
+            // NOTE(ahmedtadde): If the source is a string that isn't matched by any of the previous branches, we assume it's a model name
+            // Though, applying some validation here would be nice. I looked around for existing model name validation and didn't find any.
+            Some(s) => Ok(AppManifest::ModelName(s.to_owned())),
+            // If no source is provided, we attempt to read from stdin
+            None => read_from_stdin().await,
         }
-    }
+    };
+
+    // Note(ahmedtadde): considered having a timeout: Option<Duration> parameter, but decided against it since, given the use case for this fn, the callers shouldn't have to bother with such a details
+    // and just assume the manifest should be loaded within a reasonable time frame. Now, reasonable is debatable, but i think anything over 1 sec is out of the question as things stand.
+    const DEFAULT_TIMEOUT: Duration = Duration::from_secs(1);
+    tokio::time::timeout(DEFAULT_TIMEOUT, load_from_source())
+        .await
+        .map_err(|e| anyhow::anyhow!("app manifest loader timed out: {}", e))?
 }
