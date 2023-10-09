@@ -8,7 +8,7 @@ use wadm::server::{
     PutModelResponse, PutResult, VersionResponse,
 };
 use wash_lib::{
-    app::{app_manifest_loader, AppManifest},
+    app::{load_app_manifest, AppManifest},
     cli::{CliConnectionOpts, CommandOutput, OutputKind},
     config::WashConnectionOptions,
 };
@@ -196,7 +196,7 @@ async fn deploy_model(cmd: DeployCommand) -> Result<DeployModelResponse> {
         .into_nats_client()
         .await?;
 
-    let app_manifest = app_manifest_loader(&cmd.application).await?;
+    let app_manifest = load_app_manifest(&cmd.application).await?;
     match app_manifest {
         AppManifest::SerializedModel(manifest) => {
             let put_res =
@@ -220,14 +220,14 @@ async fn put_model(cmd: PutCommand) -> Result<PutModelResponse> {
         .into_nats_client()
         .await?;
 
-    let app_manifest = app_manifest_loader(&cmd.source).await?;
+    let app_manifest = load_app_manifest(&cmd.source).await?;
 
     match app_manifest {
         AppManifest::SerializedModel(manifest) => {
             wash_lib::app::put_model(&client, lattice_prefix, &manifest).await
         }
-        AppManifest::ModelName(model_name) => {
-            bail!("Could not load app model manifest for put command; received invalid result (model_name={model_name}) from app_manifest_loader")
+        AppManifest::ModelName(_) => {
+            bail!("failed to retrieve manifest at `{:?}`", cmd.source)
         }
     }
 }
