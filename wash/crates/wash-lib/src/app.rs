@@ -2,7 +2,7 @@
 
 use std::{path::PathBuf, time::Duration};
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use async_nats::{Client, Message};
 use wadm::server::{
     DeleteModelRequest, DeleteModelResponse, DeployModelRequest, DeployModelResponse,
@@ -250,31 +250,51 @@ async fn model_request(
 
 //  NOTE(ahmedtadde): This should probably be refactored at some point to account for cases where the source's input is unusually (or erroneously) large.
 //  For now, we'll just assume that the input is small enough to be a oneshot read into memory and that the default timeout of 1 sec is plenty sufficient (or even too generous?) for the desired/expected behavior.
-pub async fn app_manifest_loader(source: &Option<String>) -> Result<AppManifest> {
+pub async fn load_app_manifest(source: &Option<String>) -> Result<AppManifest> {
     let read_from_stdin = || async {
         let mut buffer = String::new();
-        tokio::io::stdin().read_to_string(&mut buffer).await?;
+        tokio::io::stdin()
+            .read_to_string(&mut buffer)
+            .await
+            .context("failed to read model from stdin")?;
         if buffer.is_empty() {
-            Err(anyhow::anyhow!(
-                "unable to load app manifest from empty stdin input"
-            ))
-        } else {
-            Ok(AppManifest::SerializedModel(buffer))
+            bail!("unable to load app manifest from empty stdin input")
         }
+
+        Ok(AppManifest::SerializedModel(buffer))
     };
 
     let load_from_source = || async {
         match source {
             Some(s) if PathBuf::from(s).exists() => Ok(AppManifest::SerializedModel(
-                tokio::fs::read_to_string(s).await?,
+                tokio::fs::read_to_string(s)
+                    .await
+                    .context("failed to read model from file")?,
             )),
-            Some(s) if Url::parse(s).is_ok() && s.starts_with("http") => Ok(
-                AppManifest::SerializedModel(reqwest::get(s).await?.text().await?),
-            ),
+            Some(s) if Url::parse(s).is_ok() && s.starts_with("http") => {
+                Ok(AppManifest::SerializedModel(
+                    reqwest::get(s)
+                        .await
+                        .context("request to remote model file failed")?
+                        .text()
+                        .await
+                        .context("failed to read model from remote file")?,
+                ))
+            }
             Some(s) if s == "-" => read_from_stdin().await,
             // NOTE(ahmedtadde): If the source is a string that isn't matched by any of the previous branches, we assume it's a model name
             // Though, applying some validation here would be nice. I looked around for existing model name validation and didn't find any.
-            Some(s) => Ok(AppManifest::ModelName(s.to_owned())),
+            Some(s) => {
+                if Url::parse(s).is_ok() {
+                    bail!("file url {} has an unsupported scheme. Only http(s):// is supported at this type", s)
+                }
+
+                if PathBuf::from(s).is_file() {
+                    bail!("file {} not found", s)
+                }
+
+                Ok(AppManifest::ModelName(s.to_owned()))
+            }
             // If no source is provided, we attempt to read from stdin
             None => read_from_stdin().await,
         }
@@ -285,5 +305,5 @@ pub async fn app_manifest_loader(source: &Option<String>) -> Result<AppManifest>
     const DEFAULT_TIMEOUT: Duration = Duration::from_secs(1);
     tokio::time::timeout(DEFAULT_TIMEOUT, load_from_source())
         .await
-        .map_err(|e| anyhow::anyhow!("app manifest loader timed out: {}", e))?
+        .context("app manifest loader timed out")?
 }
