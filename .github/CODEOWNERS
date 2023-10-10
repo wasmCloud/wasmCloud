@@ -24,7 +24,8 @@ tests/providers @wasmCloud/host-maintainers
 tests/local.rs @wasmCloud/host-maintainers
 tests/wasmbus.rs @wasmCloud/host-maintainers
 wit @wasmCloud/host-maintainers
-Cargo.toml @wasmCloud/host-maintainers
+Cargo.* @wasmCloud/host-maintainers
+.cargo @wasmCloud/host-maintainers
 
 # shared crates
 crates/core @wasmCloud/org-maintainers
