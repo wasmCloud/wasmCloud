@@ -424,6 +424,9 @@ async fn wasmbus() -> anyhow::Result<()> {
         async_nats::ConnectOptions::new().retry_on_initial_connect()
     }
 
+    // Sometimes NATS completes the server process start but isn't actually ready for connections
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
     let (ctl_nats_client, compat_nats_client, component_nats_client, module_nats_client) =
         try_join!(
             async_nats::connect_with_options(ctl_nats_url.as_str(), default_nats_connect_options()),
@@ -977,7 +980,7 @@ expected: {expected_labels:?}"#
         .await
         .map_err(|e| anyhow!(e).context("failed to query claims via bucket"))?;
     claims_from_bucket.sort_by(|a, b| a.get("sub").unwrap().cmp(b.get("sub").unwrap()));
-    ensure!(claims_from_bucket.len() == 8); // 4 providers, 4 actors
+    ensure!(claims_from_bucket.len() == 9); // 5 providers, 4 actors
 
     let mut links_from_bucket = ctl_client
         .query_links()
