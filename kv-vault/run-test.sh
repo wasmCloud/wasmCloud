@@ -2,6 +2,10 @@
 set -e
 
 # This script starts vault in dev mode in a docker container, and runs cargo tests
+if ! nc -z 127.0.0.1 4222; then
+  echo "Unable to connect to NATS on port 4222, ensure it's running with jetstream before running tests"
+  exit 1
+fi
 
 # localhost port for server - should be unique to avoid conflicts
 PORT=11182
@@ -45,9 +49,11 @@ docker exec -i -e VAULT_TOKEN=${VAULT_TOKEN} ${CONTAINER_NAME} \
 export RUST_BACKTRACE=1
 export RUST_LOG=${RUST_LOG}
 export VAULT_ADDR=http://127.0.0.1:${PORT}
+# Create a short lived token for the renewal test
+export SHORT_LIVED_TOKEN=$(docker exec -i -e VAULT_TOKEN=${VAULT_TOKEN} ${CONTAINER_NAME} \
+    vault token create -ttl 120s -renewable -format json -address=http://127.0.0.1:8200 | jq -r .auth.client_token)
 [ -n "$VAULT_MOUNT" ] && export VAULT_MOUNT=${VAULT_MOUNT}
 cargo test ${RELEASE_FLAG} -- --nocapture
 
 # cleanup
 cleanup
-

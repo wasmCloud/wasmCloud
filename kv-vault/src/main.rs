@@ -1,11 +1,12 @@
 //! Hashicorp Vault implementation of the wasmcloud KeyValue capability contract wasmcloud:keyvalue
 //!
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use kv_vault_lib::{client::Client, config::Config, error::VaultError, STRING_VALUE_MARKER};
 use serde_json::Value;
 use tokio::sync::RwLock;
-use tracing::{debug, info, instrument};
+use tracing::{debug, instrument};
 use wasmbus_rpc::provider::prelude::*;
 use wasmcloud_interface_keyvalue::{
     GetResponse, IncrementRequest, KeyValue, KeyValueReceiver, ListAddRequest, ListDelRequest,
@@ -28,8 +29,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[derive(Default, Clone, Provider)]
 #[services(KeyValue)]
 struct KvVaultProvider {
-    // store redis connections per actor
-    actors: std::sync::Arc<RwLock<HashMap<String, RwLock<Client>>>>,
+    // store vault connection per actor
+    actors: Arc<RwLock<HashMap<String, Arc<Client>>>>,
 }
 /// use default implementations of provider message handlers
 impl ProviderDispatch for KvVaultProvider {}
@@ -43,11 +44,12 @@ impl ProviderHandler for KvVaultProvider {
     /// If the link is allowed, return true, otherwise return false to deny the link.
     #[instrument(level = "debug", skip(self, ld), fields(actor_id = %ld.actor_id))]
     async fn put_link(&self, ld: &LinkDefinition) -> RpcResult<bool> {
+        debug!("adding link for actor");
         let config = Config::from_values(&ld.values)?;
         let client = Client::new(config).map_err(to_rpc_err)?;
+        client.set_renewal().await;
         let mut update_map = self.actors.write().await;
-        info!("adding link for actor");
-        update_map.insert(ld.actor_id.to_string(), RwLock::new(client));
+        update_map.insert(ld.actor_id.to_string(), Arc::new(client));
         Ok(true)
     }
 
@@ -56,7 +58,7 @@ impl ProviderHandler for KvVaultProvider {
     async fn delete_link(&self, actor_id: &str) {
         let mut aw = self.actors.write().await;
         if let Some(client) = aw.remove(actor_id) {
-            info!("deleting link for actor");
+            debug!("deleting link for actor");
             drop(client)
         }
     }
@@ -287,17 +289,16 @@ impl KeyValue for KvVaultProvider {
 
 impl KvVaultProvider {
     /// Helper function to get client
-    async fn get_client(&self, ctx: &Context) -> RpcResult<Client> {
+    async fn get_client(&self, ctx: &Context) -> RpcResult<Arc<Client>> {
         let actor_id = ctx
             .actor
             .as_ref()
             .ok_or_else(|| RpcError::InvalidParameter("no actor in request".to_string()))?;
         // get read lock on actor-client hashmap
         let rd = self.actors.read().await;
-        let client_rw = rd
+        let client = rd
             .get(actor_id)
             .ok_or_else(|| RpcError::InvalidParameter(format!("actor not linked:{}", actor_id)))?;
-        let client = client_rw.read().await.clone();
-        Ok(client)
+        Ok(client.clone())
     }
 }

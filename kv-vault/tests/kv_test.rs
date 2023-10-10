@@ -1,6 +1,7 @@
 //! Tests kv-vault
 //!
 use kv_vault_lib::STRING_VALUE_MARKER;
+use serde_json::Value;
 use wasmbus_rpc::{
     error::{RpcError, RpcResult},
     provider::prelude::Context,
@@ -11,17 +12,21 @@ use wasmcloud_test_util::{
     cli::print_test_results,
     provider_test::{test_provider, Provider},
     run_selected_spawn,
-    testing::{TestOptions, TestResult},
+    testing::TestOptions,
 };
 
 #[tokio::test]
 async fn run_all() {
-    let _prov = test_provider().await;
-    // allow time for put_link
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-
     let opts = TestOptions::default();
-    let res = run_selected_spawn!(opts, health_check, get_set, contains_del, json_values,);
+
+    let res = run_selected_spawn!(
+        opts,
+        health_check,
+        get_set,
+        contains_del,
+        json_values,
+        renewal,
+    );
     print_test_results(&res);
 
     let passed = res.iter().filter(|tr| tr.passed).count();
@@ -173,6 +178,71 @@ async fn json_values(_opt: &TestOptions) -> RpcResult<()> {
     kv.del(&ctx, "test_map_data")
         .await
         .expect("delete test_map_data");
+
+    Ok(())
+}
+
+/// tests renewal of token
+async fn renewal(_opt: &TestOptions) -> RpcResult<()> {
+    let token = std::env::var("SHORT_LIVED_TOKEN")
+        .expect("token to exist in env. Run this test with `run-test.sh`.");
+    // Weird but env takes precedence so we have to set the environment variable
+    std::env::set_var("VAULT_TOKEN", token.clone());
+    let config_values = std::collections::HashMap::from_iter([
+        ("token_increment_ttl".to_string(), "130s".to_string()),
+        ("token_refresh_interval".to_string(), "5".to_string()),
+    ]);
+    let config = kv_vault_lib::config::Config::from_values(&config_values)
+        .expect("configuration to be valid");
+    let vault_direct = kv_vault_lib::client::Client::new(config).expect("client from defaults");
+    vault_direct.set_renewal().await;
+
+    let current_token_info = vaultrs::token::lookup(vault_direct.inner_client().as_ref(), &token)
+        .await
+        .expect("token to exist");
+    // Should have enough time to carry out the rest of the test
+    assert!(current_token_info.ttl > 10);
+
+    // Allow the token to renew, should have an additional duration of 60 seconds afterwards
+    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+
+    let secret_path = "secret/data/veryverysecret";
+    let value: Value = serde_json::from_str("ALICE").unwrap_or_else(|_| {
+        let mut map = serde_json::Map::new();
+        map.insert(
+            STRING_VALUE_MARKER.to_string(),
+            Value::String("ALICE".to_string()),
+        );
+        Value::Object(map)
+    });
+    let _put = vault_direct
+        .write_secret(secret_path, &value)
+        .await
+        .expect("should be able to write secret");
+
+    // Wait an entire renewal period to ensure the token has expired and renews
+    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+
+    let secret: serde_json::Value = vault_direct
+        .read_secret(secret_path)
+        .await
+        .expect("should be able to read secret");
+
+    assert_eq!(secret, value);
+
+    let renewed_token_info = vaultrs::token::lookup(vault_direct.inner_client().as_ref(), &token)
+        .await
+        .expect("token to exist");
+
+    // Once the renewal loop starts, the ttl should _always_ be greater than what we looked up when
+    // we started the client with current token. Subtract 5 seconds to account for any weird edge
+    // cases where we got the "current" ttl right after being renewed.
+    //
+    // Put another way, if this check fails it means the token was never renewed.
+    assert!(renewed_token_info.ttl >= current_token_info.ttl - 5);
+    // We also renew with a ttl of 130 which is above the initial ttl of 120, so we can
+    // assert that too.
+    assert!(renewed_token_info.ttl > 120);
 
     Ok(())
 }

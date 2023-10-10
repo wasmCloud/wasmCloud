@@ -1,5 +1,6 @@
 //! Configuration for kv-vault capability provider
 //!
+use crate::client::TOKEN_REFRESH_INTERVAL;
 use std::{collections::HashMap, env};
 use url::Url;
 use wasmbus_rpc::error::{RpcError, RpcResult};
@@ -22,6 +23,12 @@ pub struct Config {
     /// The linkdef value `certs` and the environment variable `VAULT_CERTS`
     /// are parsed as a comma-separated string of file paths to generate this list.
     pub certs: Vec<String>,
+
+    /// Renewal TTL for tokens used by this provider. Defaults to 72 hours.
+    pub token_increment_ttl: Option<String>,
+
+    /// Refresh interval for tokens used by this provider. Defaults to 12 hours.
+    pub token_refresh_interval: Option<std::time::Duration>,
 }
 
 impl Default for Config {
@@ -67,6 +74,27 @@ impl Config {
             {
                 Some(certs) => certs.split(',').map(|s| s.trim().to_string()).collect(),
                 _ => Vec::new(),
+            },
+            token_increment_ttl: env::var("VAULT_TOKEN_INCREMENT_TTL")
+                .ok()
+                .or_else(|| values.get("token_increment_ttl").cloned())
+                .or_else(|| values.get("TOKEN_INCREMENT_TTL").cloned()),
+            token_refresh_interval: match env::var("VAULT_TOKEN_REFRESH_INTERVAL")
+                .ok()
+                .or_else(|| values.get("token_refresh_interval").cloned())
+                .or_else(|| values.get("TOKEN_REFRESH_INTERVAL").cloned())
+            {
+                Some(val) => {
+                    let secs = val.parse::<u64>().unwrap_or_else(|_| {
+                        eprintln!(
+                            "Could not parse VAULT_TOKEN_REFRESH_INTERVAL as u64, using default of {}",
+                            TOKEN_REFRESH_INTERVAL.as_secs()
+                        );
+                        TOKEN_REFRESH_INTERVAL.as_secs()
+                    });
+                    Some(std::time::Duration::from_secs(secs))
+                }
+                _ => None,
             },
         };
         Ok(config)
