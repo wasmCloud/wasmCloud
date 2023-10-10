@@ -93,9 +93,11 @@
           "tests/integration_link.rs"
           "tests/integration_par.rs"
           "tests/integration_reg.rs"
+          "tests/integration_scale.rs"
           "tests/integration_start.rs"
           "tests/integration_stop.rs"
           "tests/integration_up.rs"
+          "tests/integration_update.rs"
         ];
       };
 }
