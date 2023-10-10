@@ -20,7 +20,7 @@ mod otel;
 mod sub_stream;
 mod types;
 
-use kv::{CachedKvStore, DirectKvStore};
+use kv::{Build, CachedKvStore, DirectKvStore};
 pub use types::*;
 
 use crate::kv::KvStore;
@@ -29,14 +29,25 @@ use crate::otel::OtelHeaderInjector;
 type Result<T> = ::std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 /// Lattice control interface client
-#[derive(Clone, Debug)]
-pub struct Client<T: Clone + Debug> {
+#[derive(Clone)]
+pub struct Client<T: Clone> {
     nc: async_nats::Client,
     topic_prefix: Option<String>,
     pub lattice_prefix: String,
     timeout: Duration,
     auction_timeout: Duration,
     kvstore: T,
+}
+
+impl<T: Clone> Debug for Client<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Client")
+            .field("topic_prefix", &self.topic_prefix)
+            .field("lattice_prefix", &self.lattice_prefix)
+            .field("timeout", &self.timeout)
+            .field("auction_timeout", &self.auction_timeout)
+            .finish()
+    }
 }
 
 /// A client builder that can be used to fluently provide configuration settings used to construct
@@ -51,7 +62,7 @@ pub struct ClientBuilder<T> {
     store_placeholder: PhantomData<T>,
 }
 
-impl Default for ClientBuilder<DirectKvStore> {
+impl<T> Default for ClientBuilder<T> {
     fn default() -> Self {
         Self {
             nc: None,
@@ -66,7 +77,8 @@ impl Default for ClientBuilder<DirectKvStore> {
 }
 
 impl ClientBuilder<DirectKvStore> {
-    /// Creates a new client builder using the given client
+    /// Creates a new client builder using the given client, set up to use the
+    /// [`DirectKvStore`](DirectKvStore) for bucket operations
     pub fn new(nc: async_nats::Client) -> ClientBuilder<DirectKvStore> {
         ClientBuilder {
             nc: Some(nc),
@@ -75,8 +87,68 @@ impl ClientBuilder<DirectKvStore> {
     }
 }
 
+impl ClientBuilder<CachedKvStore> {
+    /// Creates a new client builder using the given client, set up to use the
+    /// [`CachedKvStore`](CachedKvStore) for bucket operations
+    pub fn new_caching(nc: async_nats::Client) -> ClientBuilder<CachedKvStore> {
+        ClientBuilder {
+            nc: Some(nc),
+            ..Default::default()
+        }
+    }
+}
+
+impl<T: KvStore + Build + Clone> ClientBuilder<T> {
+    /// Creates a new client builder using the given client, set up to use the generic key value
+    /// store type `T` for bucket operations. This is useful for times when you need to specify a
+    /// type dynamically
+    ///
+    /// ```no_run
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() {
+    /// use wasmcloud_control_interface::{kv::CachedKvStore, ClientBuilder};
+    ///
+    /// let nc = async_nats::connect("localhost:4222").await.unwrap();
+    /// let client = ClientBuilder::<CachedKvStore>::new_generic(nc.clone()).build().await.unwrap();
+    /// // or
+    /// let builder: ClientBuilder<CachedKvStore> = ClientBuilder::new_generic(nc);
+    /// let client = builder.build().await.unwrap();
+    /// # }
+    /// ```
+    ///
+    /// This function is not just `new` because we want to preserve the default behavior of the
+    /// direct KV store behind the already used `new` function.
+    pub fn new_generic(nc: async_nats::Client) -> ClientBuilder<T> {
+        ClientBuilder {
+            nc: Some(nc),
+            ..Default::default()
+        }
+    }
+
+    /// Completes the generation of a control interface client. This function is async because it
+    /// will attempt to locate and attach to a metadata key-value bucket (`LATTICEDATA_{prefix}`)
+    /// when starting. If this bucket doesn't exist (meaning no hosts have actually run in that
+    /// lattice), than an error will be returned
+    pub async fn build(self) -> Result<Client<T>> {
+        if let Some(nc) = self.nc {
+            let kvstore = T::build(nc.clone(), &self.lattice_prefix, self.js_domain).await?;
+            Ok(Client {
+                nc,
+                topic_prefix: self.topic_prefix,
+                lattice_prefix: self.lattice_prefix,
+                timeout: self.timeout,
+                auction_timeout: self.auction_timeout,
+                kvstore,
+            })
+        } else {
+            Err("Cannot create a control interface client without a NATS client".into())
+        }
+    }
+}
+
 impl<T> ClientBuilder<T> {
-    /// Sets the topic prefix for the NATS topic used for all control requests. Not to be confused with lattice ID/prefix
+    /// Sets the topic prefix for the NATS topic used for all control requests. Not to be confused
+    /// with lattice ID/prefix
     pub fn topic_prefix(self, prefix: impl Into<String>) -> ClientBuilder<T> {
         ClientBuilder {
             topic_prefix: Some(prefix.into()),
@@ -84,7 +156,8 @@ impl<T> ClientBuilder<T> {
         }
     }
 
-    /// The lattice ID/prefix used for this client. If this function is not invoked, the prefix will be set to `default`
+    /// The lattice ID/prefix used for this client. If this function is not invoked, the prefix will
+    /// be set to `default`
     pub fn lattice_prefix(self, prefix: impl Into<String>) -> ClientBuilder<T> {
         ClientBuilder {
             lattice_prefix: prefix.into(),
@@ -92,18 +165,21 @@ impl<T> ClientBuilder<T> {
         }
     }
 
-    /// Sets the timeout for standard calls and RPC invocations used by the client. If not set, the default will be 2 seconds
+    /// Sets the timeout for standard calls and RPC invocations used by the client. If not set, the
+    /// default will be 2 seconds
     #[deprecated(since = "0.30.0", note = "please use `timeout` instead")]
     pub fn rpc_timeout(self, timeout: Duration) -> ClientBuilder<T> {
         ClientBuilder { timeout, ..self }
     }
 
-    /// Sets the timeout for control interface requests issued by the client. If not set, the default will be 2 seconds
+    /// Sets the timeout for control interface requests issued by the client. If not set, the
+    /// default will be 2 seconds
     pub fn timeout(self, timeout: Duration) -> ClientBuilder<T> {
         ClientBuilder { timeout, ..self }
     }
 
-    /// Sets the timeout for auction (scatter/gather) operations. If not set, the default will be 5 seconds
+    /// Sets the timeout for auction (scatter/gather) operations. If not set, the default will be 5
+    /// seconds
     pub fn auction_timeout(self, timeout: Duration) -> ClientBuilder<T> {
         ClientBuilder {
             auction_timeout: timeout,
@@ -111,75 +187,18 @@ impl<T> ClientBuilder<T> {
         }
     }
 
-    /// Sets the JetStream domain for this client, which can be critical for locating the right key-value bucket
-    /// for lattice metadata storage. If this is skipped, then the JS domain will be `None`
+    /// Sets the JetStream domain for this client, which can be critical for locating the right
+    /// key-value bucket for lattice metadata storage. If this is skipped, then the JS domain will
+    /// be `None`
     pub fn js_domain(self, domain: impl Into<String>) -> ClientBuilder<T> {
         ClientBuilder {
             js_domain: Some(domain.into()),
             ..self
         }
     }
-
-    /// Tells the client to use caching for lattice metadata. This is useful for long running
-    /// applications that want to consistently fetch lattice metadata. If this is not set, then
-    /// every call to `get_links` or `get_claims` will result in a query to the lattice metadata
-    /// bucket
-    pub fn use_caching(self) -> ClientBuilder<CachedKvStore> {
-        ClientBuilder {
-            nc: self.nc,
-            topic_prefix: self.topic_prefix,
-            lattice_prefix: self.lattice_prefix,
-            timeout: self.timeout,
-            auction_timeout: self.auction_timeout,
-            js_domain: self.js_domain,
-            store_placeholder: PhantomData,
-        }
-    }
 }
 
-impl ClientBuilder<CachedKvStore> {
-    /// Completes the generation of a control interface client. This function is async because it will attempt
-    /// to locate and attach to a metadata key-value bucket (`LATTICEDATA_{prefix}`) when starting. If this bucket
-    /// is not discovered during build time, all subsequent client calls will operate in "legacy" mode against the
-    /// deprecated control interface topics
-    pub async fn build(self) -> Result<Client<CachedKvStore>> {
-        if let Some(nc) = self.nc {
-            Ok(Client {
-                nc: nc.clone(),
-                topic_prefix: self.topic_prefix,
-                lattice_prefix: self.lattice_prefix.clone(),
-                timeout: self.timeout,
-                auction_timeout: self.auction_timeout,
-                kvstore: CachedKvStore::new(nc, &self.lattice_prefix, self.js_domain).await?,
-            })
-        } else {
-            Err("Cannot create a control interface client without a NATS client".into())
-        }
-    }
-}
-
-impl ClientBuilder<DirectKvStore> {
-    /// Completes the generation of a control interface client. This function is async because it will attempt
-    /// to locate and attach to a metadata key-value bucket (`LATTICEDATA_{prefix}`) when starting. If this bucket
-    /// is not discovered during build time, all subsequent client calls will operate in "legacy" mode against the
-    /// deprecated control interface topics
-    pub async fn build(self) -> Result<Client<DirectKvStore>> {
-        if let Some(nc) = self.nc {
-            Ok(Client {
-                nc: nc.clone(),
-                topic_prefix: self.topic_prefix,
-                lattice_prefix: self.lattice_prefix.clone(),
-                timeout: self.timeout,
-                auction_timeout: self.auction_timeout,
-                kvstore: DirectKvStore::new(nc, &self.lattice_prefix, self.js_domain).await?,
-            })
-        } else {
-            Err("Cannot create a control interface client without a NATS client".into())
-        }
-    }
-}
-
-impl<T: KvStore + Clone + Debug + Send + Sync> Client<T> {
+impl<T: KvStore + Clone + Send + Sync> Client<T> {
     #[instrument(level = "debug", skip_all)]
     pub(crate) async fn request_timeout(
         &self,

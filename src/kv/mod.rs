@@ -59,6 +59,16 @@ pub trait KvStore {
     async fn delete_link(&self, actor_id: &str, contract_id: &str, link_name: &str) -> Result<()>;
 }
 
+/// A trait that defines the interface for a type that can build a [`KvStore`]
+#[async_trait::async_trait]
+pub trait Build
+where
+    Self: Sized,
+{
+    /// Builds a [`KvStore`] using the given NATS client and lattice prefix
+    async fn build(nc: Client, lattice_prefix: &str, js_domain: Option<String>) -> Result<Self>;
+}
+
 /// A helper that creates a filter function for [`get_filtered_links`](KvStore::get_filtered_links)
 /// to fetch links between a specific actor and provider
 pub fn actor_and_provider_filter<'a>(
@@ -160,9 +170,12 @@ mod test {
     async fn test_get_returns_none_for_nonexistent_store() {
         let client = async_nats::connect("127.0.0.1:4222").await.unwrap();
 
-        CachedKvStore::new(client, "this-lattice-shall-never-existeth", None)
+        if CachedKvStore::new(client, "this-lattice-shall-never-existeth", None)
             .await
-            .expect_err("Should not be able to get a store for a non-existent lattice");
+            .is_ok()
+        {
+            panic!("Should not be able to get a store for a non-existent lattice");
+        }
     }
 
     #[rstest]

@@ -24,9 +24,7 @@ pub struct OtelHeaderExtractor<'a> {
 
 impl<'a> Extractor for OtelHeaderExtractor<'a> {
     fn get(&self, key: &str) -> Option<&str> {
-        self.inner
-            .get(key)
-            .and_then(|s| s.iter().next().map(|s| s.as_str()))
+        self.inner.get(key).map(|s| s.as_str())
     }
 
     fn keys(&self) -> Vec<&str> {

@@ -8,30 +8,27 @@ use futures::StreamExt;
 use futures::TryStreamExt;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
-use tracing::{debug, error};
+use tracing::{debug, error, trace, Instrument};
 
 use crate::LinkDefinition;
 use crate::Result;
 
 use super::{
-    delete_link, ld_hash, ld_hash_raw, put_link, KvStore, CLAIMS_PREFIX, LINKDEF_PREFIX,
+    delete_link, ld_hash, ld_hash_raw, put_link, Build, KvStore, CLAIMS_PREFIX, LINKDEF_PREFIX,
     SUBJECT_KEY,
 };
 
 type ClaimsMap = HashMap<String, HashMap<String, String>>;
 
-#[derive(Clone, Debug)]
+/// A KV store that caches all link definitions and claims in memory as it receives updates from the
+/// NATS KV bucket. This store is recommended for use in situations where there are many data
+/// lookups (an example of this is Wadm).
+#[derive(Clone)]
 pub struct CachedKvStore {
     store: Store,
     linkdefs: Arc<RwLock<HashMap<String, LinkDefinition>>>,
     claims: Arc<RwLock<ClaimsMap>>,
-    handle: Arc<JoinHandle<()>>,
-}
-
-impl Drop for CachedKvStore {
-    fn drop(&mut self) {
-        self.handle.abort();
-    }
+    _handle: Arc<WrappedHandle>,
 }
 
 impl AsRef<Store> for CachedKvStore {
@@ -48,6 +45,18 @@ impl Deref for CachedKvStore {
     }
 }
 
+/// A wrapper around a JoinHandle that will abort the task when dropped. This allows it to be
+/// wrapped in an Arc and cloned, but doesn't abort the task until the last arc is dropped
+struct WrappedHandle {
+    handle: JoinHandle<()>,
+}
+
+impl Drop for WrappedHandle {
+    fn drop(&mut self) {
+        self.handle.abort();
+    }
+}
+
 impl CachedKvStore {
     /// Create a new KV store with the given configuration. This function will do an initial fetch
     /// of all claims and linkdefs from the store and then start a watcher to keep the cache up to
@@ -56,15 +65,12 @@ impl CachedKvStore {
         let store = super::get_kv_store(nc, lattice_prefix, js_domain).await?;
         let linkdefs = Arc::new(RwLock::new(HashMap::new()));
         let claims = Arc::new(RwLock::new(ClaimsMap::default()));
-        let linkdefs_clone = linkdefs.clone();
-        let claims_clone = claims.clone();
+        let linkdefs_clone = Arc::clone(&linkdefs);
+        let claims_clone = Arc::clone(&claims);
         let cloned_store = store.clone();
         let (tx, rx) = tokio::sync::oneshot::channel::<Result<()>>();
-        let kvstore = CachedKvStore {
-            store,
-            linkdefs,
-            claims,
-            handle: Arc::new(tokio::spawn(async move {
+        let handle = tokio::spawn(
+            async move {
                 // We have to create this in here and use the oneshot to return the error because of
                 // lifetimes
                 let mut watcher = match cloned_store.watch_all().await {
@@ -78,6 +84,7 @@ impl CachedKvStore {
                         return;
                     }
                 };
+                debug!("Getting initial data from store");
                 // Start with an initial list of the data before consuming events from the watcher.
                 // This will ensure we have the most up to date data from the watcher (which we
                 // started before this step) as well as all entries from the store
@@ -116,13 +123,15 @@ impl CachedKvStore {
                         return;
                     }
                 };
+                debug!(num_entries = %all_entries.len(), "Finished fetching initial data, adding data to cache");
 
                 tx.send(Ok(())).unwrap();
 
                 for entry in all_entries {
-                    handle_entry(entry, linkdefs_clone.clone(), claims_clone.clone()).await;
+                    handle_entry(entry, Arc::clone(&linkdefs_clone), Arc::clone(&claims_clone)).await;
                 }
 
+                trace!("Beginning watch on store");
                 while let Some(event) = watcher.next().await {
                     let entry = match event {
                         Ok(en) => en,
@@ -131,15 +140,31 @@ impl CachedKvStore {
                             continue;
                         }
                     };
-                    handle_entry(entry, linkdefs_clone.clone(), claims_clone.clone()).await;
+                    trace!(key = %entry.key, bucket = %entry.bucket, operation = ?entry.operation, "Received entry from watcher, handling");
+                    handle_entry(entry, Arc::clone(&linkdefs_clone), Arc::clone(&claims_clone)).in_current_span().await;
+                    trace!("Finished handling entry from watcher");
                 }
                 // NOTE(thomastaylor312): We should probably do something to automatically restart
                 // the watch if something fails. But for now this should be ok
                 error!("Cache watcher has exited");
-            })),
+            }
+            .instrument(tracing::trace_span!("kvstore-watcher", %lattice_prefix)),
+        );
+        let kvstore = CachedKvStore {
+            store,
+            linkdefs,
+            claims,
+            _handle: Arc::new(WrappedHandle { handle }),
         };
         rx.await??;
         Ok(kvstore)
+    }
+}
+
+#[async_trait::async_trait]
+impl Build for CachedKvStore {
+    async fn build(nc: Client, lattice_prefix: &str, js_domain: Option<String>) -> Result<Self> {
+        CachedKvStore::new(nc, lattice_prefix, js_domain).await
     }
 }
 
@@ -252,9 +277,9 @@ async fn handle_entry(
     claims: Arc<RwLock<ClaimsMap>>,
 ) {
     if entry.key.starts_with(LINKDEF_PREFIX) {
-        handle_linkdef(entry, linkdefs).await;
+        handle_linkdef(entry, linkdefs).in_current_span().await;
     } else if entry.key.starts_with(CLAIMS_PREFIX) {
-        handle_claim(entry, claims).await;
+        handle_claim(entry, claims).in_current_span().await;
     } else {
         debug!(key = %entry.key, "Ignoring entry with unrecognized key");
     }
@@ -263,10 +288,13 @@ async fn handle_entry(
 async fn handle_linkdef(entry: Entry, linkdefs: Arc<RwLock<HashMap<String, LinkDefinition>>>) {
     match entry.operation {
         Operation::Delete | Operation::Purge => {
+            trace!("Handling linkdef delete entry");
             let mut linkdefs = linkdefs.write().await;
             linkdefs.remove(entry.key.trim_start_matches(LINKDEF_PREFIX));
+            trace!(num_entries = %linkdefs.len(), "Finished handling linkdef delete entry");
         }
         Operation::Put => {
+            trace!("Handling linkdef put entry");
             let ld: LinkDefinition = match serde_json::from_slice(&entry.value) {
                 Ok(ld) => ld,
                 Err(e) => {
@@ -275,7 +303,16 @@ async fn handle_linkdef(entry: Entry, linkdefs: Arc<RwLock<HashMap<String, LinkD
                 }
             };
             let key = entry.key.trim_start_matches(LINKDEF_PREFIX).to_owned();
-            linkdefs.write().await.insert(key, ld);
+            let mut lds = linkdefs.write().await;
+            match lds.insert(key, ld) {
+                Some(_) => {
+                    trace!("Updated linkdef with new information");
+                }
+                None => {
+                    trace!("Added new linkdef");
+                }
+            }
+            trace!(num_entries = %lds.len(), "Finished handling linkdef put entry");
         }
     }
 }
@@ -283,10 +320,13 @@ async fn handle_linkdef(entry: Entry, linkdefs: Arc<RwLock<HashMap<String, LinkD
 async fn handle_claim(entry: Entry, claims: Arc<RwLock<ClaimsMap>>) {
     match entry.operation {
         Operation::Delete | Operation::Purge => {
+            trace!("Handling claim delete entry");
             let mut claims = claims.write().await;
             claims.remove(entry.key.trim_start_matches(CLAIMS_PREFIX));
+            trace!(num_entries = %claims.len(), "Finished handling claim delete entry");
         }
         Operation::Put => {
+            trace!("Handling claim put entry");
             let json: HashMap<String, String> = match serde_json::from_slice(&entry.value) {
                 Ok(j) => j,
                 Err(e) => {
@@ -301,7 +341,16 @@ async fn handle_claim(entry: Entry, claims: Arc<RwLock<ClaimsMap>>) {
                     return;
                 }
             };
-            claims.write().await.insert(sub, json);
+            let mut c = claims.write().await;
+            match c.insert(sub, json) {
+                Some(_) => {
+                    trace!("Updated claim with new information");
+                }
+                None => {
+                    trace!("Added new claim");
+                }
+            }
+            trace!(num_entries = %c.len(), "Finished handling claim put entry");
         }
     }
 }

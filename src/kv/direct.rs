@@ -7,7 +7,7 @@ use serde::de::DeserializeOwned;
 use tracing::{debug, error};
 
 use super::{
-    delete_link, ld_hash_raw, put_link, KvStore, CLAIMS_PREFIX, LINKDEF_PREFIX, SUBJECT_KEY,
+    delete_link, ld_hash_raw, put_link, Build, KvStore, CLAIMS_PREFIX, LINKDEF_PREFIX, SUBJECT_KEY,
 };
 use crate::{types::LinkDefinition, Result};
 
@@ -127,6 +127,13 @@ impl DirectKvStore {
                 _ => None,
             })
             .collect())
+    }
+}
+
+#[async_trait::async_trait]
+impl Build for DirectKvStore {
+    async fn build(nc: Client, lattice_prefix: &str, js_domain: Option<String>) -> Result<Self> {
+        Self::new(nc, lattice_prefix, js_domain).await
     }
 }
 
