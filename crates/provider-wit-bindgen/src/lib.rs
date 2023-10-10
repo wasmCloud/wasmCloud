@@ -138,7 +138,7 @@ impl Parse for WitFnList {
             let name = name_ident.value();
             let mut split = name.split(':');
             match (
-                split.nth(0),
+                split.next(),
                 split.nth(1),
                 split.nth(1).and_then(|rhs| rhs.split('/').nth(1)),
             ) {
@@ -399,7 +399,7 @@ impl WitFunctionLatticeTranslationStrategy {
             .sig
             .inputs
             .iter()
-            .nth(0)
+            .next()
             .context(format!(
                 "trait method [{}] has no arguments yet is attempting to translate via first arg",
                 trait_method.sig.ident,
@@ -407,7 +407,7 @@ impl WitFunctionLatticeTranslationStrategy {
             .to_token_stream()
             .into_iter();
 
-        let arg_name = if let Some(TokenTree::Ident(n)) = first_arg_tokens.nth(0) {
+        let arg_name = if let Some(TokenTree::Ident(n)) = first_arg_tokens.next() {
             n
         } else {
             bail!(
