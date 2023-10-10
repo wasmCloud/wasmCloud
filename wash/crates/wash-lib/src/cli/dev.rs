@@ -42,6 +42,7 @@ pub async fn run_dev_loop(
                 ))
                 .bold(),
             );
+            // TODO: Just use update actor here
             stop_actor(
                 ctl_client,
                 &host_id,
