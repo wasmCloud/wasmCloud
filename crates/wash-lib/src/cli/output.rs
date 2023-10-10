@@ -69,3 +69,10 @@ pub struct GetClaimsCommandOutput {
 pub struct DevCommandOutput {
     pub success: bool,
 }
+
+/// JSON output representation of the `wash dev` command
+#[derive(Debug, Deserialize)]
+pub struct ScaleCommandOutput {
+    pub success: bool,
+    pub result: String,
+}
