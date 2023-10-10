@@ -2654,7 +2654,7 @@ impl Host {
                             .instantiate_actor(
                                 claims,
                                 &annotations,
-                                host_id.clone(),
+                                host_id,
                                 &actor_ref,
                                 max,
                                 actor.actor.clone(),
@@ -2674,7 +2674,7 @@ impl Host {
                         .instantiate_actor(
                             claims,
                             &annotations,
-                            host_id.clone(),
+                            host_id,
                             &actor_ref,
                             max,
                             actor.actor.clone(),
