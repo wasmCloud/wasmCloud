@@ -705,6 +705,11 @@ expected: {expected_labels:?}"#
     let blobstore_fs_provider_url = Url::from_file_path(test_providers::RUST_BLOBSTORE_FS)
         .expect("failed to construct provider ref");
 
+    let httpclient_provider_key = KeyPair::from_seed(test_providers::RUST_HTTPCLIENT_SUBJECT)
+        .context("failed to parse `rust-httpclient` provider key")?;
+    let httpclient_provider_url = Url::from_file_path(test_providers::RUST_HTTPCLIENT)
+        .expect("failed to construct provider ref");
+
     let httpserver_provider_key = KeyPair::from_seed(test_providers::RUST_HTTPSERVER_SUBJECT)
         .context("failed to parse `rust-httpserver` provider key")?;
     let httpserver_provider_url = Url::from_file_path(test_providers::RUST_HTTPSERVER)
@@ -923,6 +928,16 @@ expected: {expected_labels:?}"#
             &ctl_nats_client,
             TEST_PREFIX,
             &host_key,
+            &httpclient_provider_key,
+            "httpclient",
+            &httpclient_provider_url,
+            None,
+        ),
+        assert_start_provider(
+            &ctl_client,
+            &ctl_nats_client,
+            TEST_PREFIX,
+            &host_key,
             &httpserver_provider_key,
             "httpserver",
             &httpserver_provider_url,
@@ -960,7 +975,7 @@ expected: {expected_labels:?}"#
         .await
         .map_err(|e| anyhow!(e).context("failed to query claims via host"))?;
     claims_from_host.sort_by(|a, b| a.get("sub").unwrap().cmp(b.get("sub").unwrap()));
-    ensure!(claims_from_host.len() == 8); // 4 providers, 4 actors
+    ensure!(claims_from_host.len() == 9); // 5 providers, 4 actors
 
     let mut links_from_host = ctl_client
         .query_links()
@@ -1222,9 +1237,10 @@ expected: {expected_name:?}"#
         providers.pop(),
         providers.pop(),
         providers.pop(),
+        providers.pop(),
         providers.as_slice(),
     ) {
-        (Some(blobstore_fs), Some(httpserver), Some(kvredis), []) => {
+        (Some(blobstore_fs), Some(httpclient), Some(httpserver), Some(kvredis), []) => {
             // TODO: Validate `constraints`
             ensure!(blobstore_fs.annotations == Some(HashMap::new()));
             ensure!(blobstore_fs.id == blobstore_fs_provider_key.public_key());
@@ -1233,6 +1249,15 @@ expected: {expected_name:?}"#
             ensure!(blobstore_fs.link_name == "blobstore");
             ensure!(blobstore_fs.name.as_deref() == Some("wasmcloud-provider-blobstore-fs"));
             ensure!(blobstore_fs.revision == 0);
+
+            // TODO: Validate `constraints`
+            ensure!(httpclient.annotations == Some(HashMap::new()));
+            ensure!(httpclient.id == httpclient_provider_key.public_key());
+            ensure!(httpclient.image_ref == Some(httpclient_provider_url.to_string()));
+            ensure!(httpclient.contract_id == "wasmcloud:httpclient");
+            ensure!(httpclient.link_name == "httpclient");
+            ensure!(httpclient.name.as_deref() == Some("wasmcloud-provider-httpclient"));
+            ensure!(httpclient.revision == 0);
 
             // TODO: Validate `constraints`
             ensure!(httpserver.annotations == Some(HashMap::new()));

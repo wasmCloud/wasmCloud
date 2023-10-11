@@ -3574,6 +3574,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasmcloud-interface-httpclient"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9457b98b82ab3c835cb68f619f6ad874d4f003c92a39d3a6749a26da3536499e"
+dependencies = [
+ "async-trait",
+ "futures",
+ "serde",
+ "serde_bytes",
+ "serde_json",
+ "wasmbus-rpc",
+ "weld-codegen",
+]
+
+[[package]]
 name = "wasmcloud-provider-blobstore-fs"
 version = "0.3.3"
 dependencies = [
@@ -3584,6 +3599,17 @@ dependencies = [
  "tracing",
  "wasmbus-rpc",
  "wasmcloud-interface-blobstore",
+]
+
+[[package]]
+name = "wasmcloud-provider-httpclient"
+version = "0.8.0"
+dependencies = [
+ "async-trait",
+ "reqwest",
+ "tracing",
+ "wasmbus-rpc",
+ "wasmcloud-interface-httpclient",
 ]
 
 [[package]]

@@ -4,8 +4,5 @@ This capability provider implements the `wasmcloud:httpclient` capability contra
 
 This capability provider is multi-threaded and can handle concurrent requests from multiple actors.
 
-Build with `make`. Test with `make test`.
-
 ## Link Definition Values
 This capability provider does not have any link definition configuration values.
-

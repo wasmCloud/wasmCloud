@@ -13,6 +13,7 @@ lto = true
 [workspace]
 members = [
     "blobstore-fs",
+    "http-client",
     "http-server",
     "kv-redis",
     "nats",
@@ -33,6 +34,7 @@ opentelemetry = { version = "0.20", default-features = false }
 opentelemetry-nats = { path = "../opentelemetry-nats" }
 path-clean = { version = "1", default-features = false }
 redis = { version = "0.23", default-features = false }
+reqwest = { version = "0.11", default-features = false }
 serde = { version = "1", default-features = false }
 serde_bytes = { version = "0.11", default-features = false }
 serde_json = { version = "1", default-features = false }
@@ -48,5 +50,6 @@ wasmbus-rpc = { version = "0.14", default-features = false } # TODO: Replace by 
 wasmcloud-compat = { path = "../compat", default-features = false }
 wasmcloud-core = { path = "../core", default-features = false }
 wasmcloud-interface-blobstore = { version = "0.8" } # TODO: Replace by WIT
+wasmcloud-interface-httpclient = { version = "0.10" } # TODO: Replace by WIT
 wasmcloud-provider-sdk = { path = "../provider-sdk", default-features = false }
 wasmcloud-provider-wit-bindgen = { path = "../provider-wit-bindgen", default-features = false }
