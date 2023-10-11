@@ -40,6 +40,7 @@ async fn integration_dev_hello_actor_serial() -> Result<()> {
                 "--ctl-port",
                 "5895",
                 "--use-host-subprocess",
+                "--disable-wadm",
             ])
             .kill_on_drop(true)
             .envs(HashMap::from([("WASH_EXPERIMENTAL", "true")]))
