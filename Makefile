@@ -20,8 +20,8 @@ deps-check:
 	@$(PYTHON) tools/deps_check.py
 
 run-ui: # Run UI from source
-	@$(NPM) install --prefix packages/washboard
-	@$(NPM) run --prefix packages/washboard dev
+	@$(NPM) install --prefix washboard
+	@$(NPM) run --prefix washboard dev
 
 ##@ Building
 
@@ -32,8 +32,8 @@ build-watch: ## Continuously build the project
 	@$(CARGO) watch -x build
 
 build-ui: ## Build the UI from source
-	@$(NPM) install --prefix ./packages/washboard
-	@$(NPM) run build --prefix ./packages/washboard
+	@$(NPM) install --prefix .washboard
+	@$(NPM) run build --prefix .washboard
 
 ##@ Testing
 
