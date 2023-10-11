@@ -251,7 +251,17 @@ async fn start_redis() -> anyhow::Result<(
                 .as_deref()
                 .unwrap_or("redis-server"),
         )
-        .args(["--port", &port.to_string()]),
+        .args([
+            "--port",
+            &port.to_string(),
+            // Ensure that no data is saved locally, since users with
+            // redis-server installed on their machines may have default
+            // configurations which normally specify a persistence directory
+            "--save",
+            "",
+            "--dbfilename",
+            format!("test-redis-{port}.rdb").as_str(),
+        ]),
     )
     .await
     .context("failed to start Redis")?;

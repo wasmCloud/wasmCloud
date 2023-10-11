@@ -1,6 +1,9 @@
 [package]
 name = "wasmcloud-provider-httpclient"
 version = "0.8.0"
+description = """
+HTTP client for wasmCloud, using reqwest. This package provides a capability provider that satisfies the 'wasmcloud:httpclient' contract.
+"""
 
 authors.workspace = true
 categories.workspace = true
@@ -8,9 +11,16 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[badges.maintenance]
+status = "actively-developed"
+
 [dependencies]
 async-trait = { workspace = true }
+http = { workspace = true }
 reqwest = { workspace = true, features = ["rustls-tls"] }
+serde = { workspace = true, features = ["derive"] }
+serde_bytes = { workspace = true }
 tracing = { workspace = true }
-wasmbus-rpc = { workspace = true, features = ["otel"] }
-wasmcloud-interface-httpclient = { workspace = true }
+tracing-subscriber = { workspace = true, features = [ "std", "fmt", "env-filter", "json", "ansi" ] }
+wasmcloud-provider-sdk = { workspace = true, features = ["otel"] }
+wasmcloud-provider-wit-bindgen = { workspace = true }
