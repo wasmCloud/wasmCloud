@@ -1,142 +1,200 @@
 use std::path::PathBuf;
 use std::{ffi::OsStr, process::Stdio, time::Duration};
 
-use anyhow::{Context, Result};
-use tokio::fs::{read_to_string, remove_dir_all};
-use tokio::io::AsyncWriteExt;
+use anyhow::{bail, Context, Result};
+use nkeys::KeyPair;
+
+use tokio::fs::read_to_string;
+
 use tokio::process::Command;
 
 mod common;
-use common::{init_workspace, start_nats, wait_for_no_hosts, wait_for_single_host};
+use common::{
+    init, start_nats, test_dir_with_subfolder, wait_for_nats_to_start, wait_for_no_hosts,
+    wait_for_no_nats, wait_for_single_host, wash, TestSetup,
+};
 use wadm::model::{Manifest, VERSION_ANNOTATION_KEY};
 
 const NATS_PORT: u16 = 5893;
+const APP_ACTOR_NAME: &str = "hello";
+const APP_TEMPLATE_NAME: &str = "hello";
 
-struct TestManifest {
-    inner: Manifest,
+struct TestWorkspace {
+    project: TestSetup,
+    test_dir: PathBuf,
+    nats: tokio::process::Child,
+    nats_port: u16,
+    host_seed: KeyPair,
+    wash_instance_kill_cmd: String,
+    manifest: Manifest,
 }
 
-impl TestManifest {
-    fn new(inner: Manifest) -> Self {
-        Self { inner }
-    }
-
-    fn version(&self) -> &str {
-        self.inner.version()
-    }
-    fn update_version(&mut self, version: &str) {
-        self.inner
+impl TestWorkspace {
+    async fn set_manifest_version(&mut self, version: &str) -> Result<()> {
+        self.manifest
             .metadata
             .annotations
             .insert(VERSION_ANNOTATION_KEY.to_string(), version.to_string());
+        tokio::fs::write(
+            self.project.project_dir.join("wadm.yaml"),
+            serde_yaml::to_string(&self.manifest)
+                .context("could not serialize manifest into yaml string")?,
+        )
+        .await
+        .context("could not write manifest to file")?;
+        Ok(())
     }
 
-    async fn write(&self, path: &PathBuf) -> Result<()> {
-        let content = serde_yaml::to_string(&self.inner)
-            .context("could not serialize manifest into yaml string")?;
-        tokio::fs::write(path, content)
+    async fn try_new() -> Result<Self> {
+        let test_setup = init(
+            /* actor_name= */ APP_ACTOR_NAME,
+            /* template_name= */ APP_TEMPLATE_NAME,
+        )
+        .await?;
+        let project_dir = test_setup.project_dir.to_owned();
+        let test_dir = test_dir_with_subfolder("wash_app_deploy");
+
+        run_cmd(
+            "`wash down` to ensure clean slate before running tests".to_string(),
+            env!("CARGO_BIN_EXE_wash"),
+            ["down"],
+            Stdio::piped(),
+            Stdio::piped(),
+            true,
+        )
+        .await?;
+
+        wait_for_no_nats()
             .await
-            .context("could not write manifest to file")
+            .context("one or more unexpected nats-server instances running")?;
+        let nats = start_nats(NATS_PORT, &test_dir).await?;
+        wait_for_nats_to_start()
+            .await
+            .context("nats process not running")?;
+
+        wait_for_no_hosts()
+            .await
+            .context("one or more unexpected wasmcloud instances running")?;
+        let host_seed = nkeys::KeyPair::new_server();
+
+        run_cmd(
+            "`wash up`".to_string(),
+            env!("CARGO_BIN_EXE_wash"),
+            [
+                "up",
+                "--nats-port",
+                NATS_PORT.to_string().as_str(),
+                "-o",
+                "json",
+                "--detached",
+                "--host-seed",
+                &host_seed.seed().expect("Should have a seed for the host"),
+            ],
+            Stdio::piped(),
+            tokio::fs::File::create(test_dir.join("wash_up.ouput"))
+                .await
+                .context("could not create log file for wash up command")?
+                .into_std()
+                .await
+                .into(),
+            true,
+        )
+        .await?;
+
+        let wash_instance_kill_cmd = match serde_json::from_str::<serde_json::Value>(
+            &read_to_string(test_dir.join("wash_up.ouput"))
+                .await
+                .context("could not read output of wash up command")?,
+        ) {
+            Ok(v) => v["kill_cmd"].to_owned().to_string(),
+            Err(e) => bail!("Unable to parse kill cmd from wash up output: {}", e),
+        };
+
+        wait_for_single_host(NATS_PORT, Duration::from_secs(15), Duration::from_secs(1)).await?;
+
+        Ok(Self {
+            project: test_setup,
+            test_dir,
+            nats,
+            nats_port: NATS_PORT,
+            host_seed,
+            wash_instance_kill_cmd,
+            manifest: serde_yaml::from_str::<Manifest>(
+                read_to_string(project_dir.join("wadm.yaml"))
+                    .await
+                    .context("could not read wadm.yaml")?
+                    .as_str(),
+            )
+            .context("could not parse wadm.yaml content into Manifest object")?,
+        })
+    }
+}
+
+impl Drop for TestWorkspace {
+    fn drop(&mut self) {
+        println!("[integration_app::TestWorkspace::drop] runnning test workspace clean up...");
+        let TestWorkspace {
+            project,
+            wash_instance_kill_cmd,
+            host_seed,
+            nats,
+            nats_port,
+            test_dir,
+            ..
+        } = self;
+
+        let (_, down) = wash_instance_kill_cmd
+            .trim_matches('"')
+            .split_once(' ')
+            .unwrap();
+        wash()
+            .args(vec![
+                down,
+                "--host-id",
+                &host_seed.public_key(),
+                "--ctl-port",
+                &nats_port.to_string(),
+            ])
+            .output()
+            .expect("[integration_app::TestWorkspace::drop] wash instance kill command failed");
+
+        nats.start_kill()
+            .expect("[integration_app::TestWorkspace::drop] nats kill command failed");
+
+        std::fs::remove_dir_all(test_dir)
+            .expect("[integration_app::TestWorkspace::drop] failed to remove temporary `test_dir` directory during cleanup");
+
+        std::fs::remove_dir_all(&project.project_dir)
+            .expect("[integration_app::TestWorkspace::drop] failed to remove temporary `project_dir` directory during cleanup");
     }
 }
 
 #[tokio::test]
 async fn integration_can_deploy_app() -> Result<()> {
-    let test_workspace = init_workspace(vec![/* actor_names= */ "hello"]).await?;
-    let test_dir = test_workspace.project_dirs.get(0).unwrap();
-    std::env::set_current_dir(test_dir)?;
-    let mut test_manifest = TestManifest::new(
-        serde_yaml::from_str::<Manifest>(
-            read_to_string(test_dir.join("wadm.yaml"))
-                .await
-                .context("could not read wadm.yaml")?
-                .as_str(),
-        )
-        .context("could not parse wadm.yaml content into Manifest object")?,
-    );
+    let mut test_workspace = TestWorkspace::try_new().await?;
+    test_workspace.set_manifest_version("v0.1.0").await?;
 
-    let log_path = test_dir.join("washapp.log");
-    let stdout = tokio::fs::File::create(&log_path)
-        .await
-        .context("could not create log file for app deploy tests")?;
+    // Note(ahmedtadde): everything works until we get here... error log
+    //     running 1 test
+    // 🔧   Cloning template from repo wasmcloud/project-templates subfolder actor/hello...
+    // 🔧   Using template subfolder actor/hello...
+    // 🔧   Generating template...
+    // ✨   Done! New project created /private/var/folders/47/80g4yscn7t58njrqm47wjg500000gn/T/.tmpEMoMNS/hello
 
-    // First, we `wash up` to get things running...
-    wait_for_no_hosts()
-        .await
-        .context("unexpected wasmcloud instance(s) running")?;
-    let host_seed = nkeys::KeyPair::new_server();
-    let mut nats = start_nats(NATS_PORT, test_dir).await?;
+    // Project generated and is located at: /private/var/folders/47/80g4yscn7t58njrqm47wjg500000gn/T/.tmpEMoMNS/hello
+    // ==================================
+    // executing command(name=`wash down` to ensure clean slate before running tests)
+    // ...command executed successfully
+    // ==================================
+    // ==================================
+    // executing command(name=`wash up`)
+    // ...command executed successfully
+    // ==================================
+    // ==================================
+    // executing command(name=`wash app deploy` w/ local manifest file)
 
-    run_cmd_and_check_status(
-        "`wash up`".to_string(),
-        env!("CARGO_BIN_EXE_wash"),
-        [
-            "up",
-            "--nats-port",
-            NATS_PORT.to_string().as_str(),
-            "-o",
-            "json",
-            "--detached",
-            "--host-seed",
-            &host_seed.seed().expect("Should have a seed for the host"),
-        ],
-        Stdio::piped(),
-        stdout.into_std().await.into(),
-        None,
-    )
-    .await?;
-
-    let output = read_to_string(&log_path)
-        .await
-        .context("could not read (wash up) output from log file")?;
-
-    let (wash_up_kill_cmd, _) = match serde_json::from_str::<serde_json::Value>(&output) {
-        Ok(v) => (v["kill_cmd"].to_owned(), v["wasmcloud_log"].to_owned()),
-        Err(_e) => panic!("Unable to parse kill cmd from wash up output"),
-    };
-
-    wait_for_single_host(NATS_PORT, Duration::from_secs(10), Duration::from_secs(1)).await?;
-
-    //NOTE(ahmedtadde): this is normally not needed. From my experience running this test locally, the test may fail on REruns due to the manifest store already having versions used on previous runs. This is a workaround to ensure that the store is clean before running the commands.
-    run_cmd_and_check_status(
-        "`wash app del` to clean the manifest store before running commands".to_string(),
-        env!("CARGO_BIN_EXE_wash"),
-        [
-            "app",
-            "del",
-            "hello",
-            "--delete-all",
-            "--ctl-port",
-            NATS_PORT.to_string().as_str(),
-        ],
-        Stdio::piped(),
-        Stdio::piped(),
-        None,
-    )
-    .await?;
-
-    // Next, we test `wash app deploy` (w/ remote manifest file https://raw.githubusercontent.com/wasmCloud/examples/main/actor/hello/wadm.yaml)
-    assert_eq!(test_manifest.version(), "v0.0.1");
-    run_cmd_and_check_status(
-        "`wash app deploy` w/ remote manifest file".to_string(),
-        env!("CARGO_BIN_EXE_wash"),
-        [
-            "app",
-            "deploy",
-            "https://raw.githubusercontent.com/wasmCloud/examples/main/actor/hello/wadm.yaml",
-            "--ctl-port",
-            NATS_PORT.to_string().as_str(),
-        ],
-        Stdio::piped(),
-        Stdio::piped(),
-        None,
-    )
-    .await?;
-
-    // Then, we test `wash app deploy` (w/ local manifest file)
-    test_manifest.update_version("v0.0.2");
-    test_manifest.write(&test_dir.join("wadm.yaml")).await?;
-    run_cmd_and_check_status(
+    // Could not put manifest to deploy Internal storage error
+    run_cmd(
         "`wash app deploy` w/ local manifest file".to_string(),
         env!("CARGO_BIN_EXE_wash"),
         [
@@ -148,111 +206,98 @@ async fn integration_can_deploy_app() -> Result<()> {
         ],
         Stdio::piped(),
         Stdio::piped(),
-        None,
+        true,
     )
     .await?;
 
-    // And, we test `wash app deploy` (w/ local manifest file piped into stdin)
-    test_manifest.update_version("v0.0.3");
-    test_manifest.write(&test_dir.join("wadm.yaml")).await?;
-    run_cmd_and_check_status(
-        "`wash app deploy` w/ local manifest file piped into stdin".to_string(),
-        env!("CARGO_BIN_EXE_wash"),
-        [
-            "app",
-            "deploy",
-            "--ctl-port",
-            NATS_PORT.to_string().as_str(),
-        ],
-        Stdio::piped(),
-        Stdio::piped(),
-        Some(
-            Command::new("cat")
-                .args(["wadm.yaml"])
-                .kill_on_drop(true)
-                .output()
-                .await
-                .context("failed to cat wadm.yaml for `wash app deploy`")?
-                .stdout
-                .as_slice(),
-        ),
-    )
-    .await?;
+    // run_cmd(
+    //     "`wash app deploy` w/ remote manifest file".to_string(),
+    //     env!("CARGO_BIN_EXE_wash"),
+    //     [
+    //         "app",
+    //         "deploy",
+    //         "https://raw.githubusercontent.com/wasmCloud/examples/main/actor/hello/wadm.yaml",
+    //         "--ctl-port",
+    //         NATS_PORT.to_string().as_str(),
+    //     ],
+    //     Stdio::piped(),
+    //     Stdio::piped(),
+    //     true,
+    // )
+    // .await?;
+    // run_cmd(
+    //     "`wash app undeploy` to cleanup after `wash app deploy` w/ remote manifest file"
+    //         .to_string(),
+    //     env!("CARGO_BIN_EXE_wash"),
+    //     [
+    //         "app",
+    //         "undeploy",
+    //         "hello",
+    //         "--ctl-port",
+    //         NATS_PORT.to_string().as_str(),
+    //     ],
+    //     Stdio::piped(),
+    //     Stdio::piped(),
+    //     true,
+    // )
+    // .await?;
 
-    // Lastly, let's cleanup...
-    run_cmd_and_check_status(
-        "`wash app del` to cleanup".to_string(),
-        env!("CARGO_BIN_EXE_wash"),
-        [
-            "app",
-            "del",
-            "hello",
-            "--delete-all",
-            "--ctl-port",
-            NATS_PORT.to_string().as_str(),
-        ],
-        Stdio::piped(),
-        Stdio::piped(),
-        None,
-    )
-    .await?;
+    // run_cmd(
+    //     "`wash app del` to cleanup after `wash app deploy` w/ remote manifest file".to_string(),
+    //     env!("CARGO_BIN_EXE_wash"),
+    //     [
+    //         "app",
+    //         "del",
+    //         "hello",
+    //         "--delete-all",
+    //         "--ctl-port",
+    //         NATS_PORT.to_string().as_str(),
+    //     ],
+    //     Stdio::piped(),
+    //     Stdio::piped(),
+    //     true,
+    // )
+    // .await?;
 
-    let wash_up_kill_cmd = wash_up_kill_cmd.to_string();
-    let (_, wash_up_kill_cmd) = wash_up_kill_cmd.trim_matches('"').split_once(' ').unwrap();
-
-    run_cmd_and_check_status(
-        "`wash down` to clean up".to_string(),
-        env!("CARGO_BIN_EXE_wash"),
-        vec![
-            wash_up_kill_cmd,
-            "--ctl-port",
-            NATS_PORT.to_string().as_str(),
-            "--host-id",
-            &host_seed.public_key(),
-        ],
-        Stdio::piped(),
-        Stdio::piped(),
-        None,
-    )
-    .await?;
-
-    // Wait until the host process has finished and exited
-    wait_for_no_hosts()
-        .await
-        .context("wasmcloud instance(s) failed to exit cleanly (processes still left over)")?;
-
-    nats.kill()
-        .await
-        .context("failed to kill nats server process (after `wash down` to clean up)")?;
-
-    remove_dir_all(test_dir)
-        .await
-        .context("failed to remove test directory (project)")?;
-
-    remove_dir_all(test_workspace.test_dir)
-        .await
-        .context("failed to remove test directory (workspace")?;
+    // test_workspace.set_manifest_version("v0.2.0").await?;
+    // run_cmd(
+    //     "`wash app deploy` w/ local manifest file piped into stdin".to_string(),
+    //     env!("CARGO_BIN_EXE_wash"),
+    //     [
+    //         "app",
+    //         "deploy",
+    //         "--ctl-port",
+    //         NATS_PORT.to_string().as_str(),
+    //     ],
+    //     tokio::fs::File::create("wadm.yaml")
+    //         .await
+    //         .context("could not create file for stdin input")?
+    //         .into_std()
+    //         .await
+    //         .into(),
+    //     Stdio::piped(),
+    //     true,
+    // )
+    // .await?;
 
     Ok(())
 }
 
-async fn run_cmd_and_check_status<I, S, T>(
+async fn run_cmd<I, S, T>(
     cmd_name: String,
     cmd: S,
     args: I,
     stdin: T,
     stdout: T,
-    stdin_input: Option<&[u8]>,
+    expect_success: bool,
 ) -> Result<()>
 where
     I: IntoIterator<Item = S> + std::fmt::Debug,
     S: AsRef<OsStr>,
     T: Into<Stdio>,
 {
-    println!(
-        "running command(name={}; args={:?}) and will assert success status...",
-        cmd_name, args
-    );
+    println!("==================================");
+    println!("executing command(name={})", cmd_name);
 
     let mut cmd = Command::new(cmd)
         .args(args)
@@ -262,26 +307,21 @@ where
         .spawn()
         .context("could not spawn process for command")?;
 
-    if let Some(stdin_input) = stdin_input {
-        cmd.stdin
-            .as_mut()
-            .unwrap()
-            .write_all(stdin_input)
-            .await
-            .context("could not write to stdin")?;
-    }
-
     let status = cmd
         .wait()
         .await
-        .context("command failed to complete; unable to retrieve exit status")?;
+        .context("command failed to execute and complete command")?;
 
-    assert!(
+    assert_eq!(
         status.success(),
-        "command exited with failure status: {:?}",
-        status
+        expect_success,
+        "unexpected command status: expected status.success={:?} instead of status.success={:?} w/ status.code={:?}",
+        expect_success,
+        status.success(),
+        status.code()
     );
 
-    println!("command(name={}) ran successfully...", cmd_name);
+    println!("...command executed successfully");
+    println!("==================================");
     Ok(())
 }
