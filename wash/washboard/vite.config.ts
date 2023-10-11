@@ -5,5 +5,5 @@ import {defineConfig} from 'vite';
 
 // https://vitejs.dev/config/
 export default defineConfig({
-  plugins: [react(), tsconfigPaths(), svgrPlugin({exportAsDefault: true})],
+  plugins: [react(), tsconfigPaths(), svgrPlugin()],
 });

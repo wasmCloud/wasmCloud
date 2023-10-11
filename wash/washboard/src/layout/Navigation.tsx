@@ -1,5 +1,5 @@
 import {ReactElement} from 'react';
-import SvgLogo from 'assets/logo-wide.svg';
+import SvgLogo from 'assets/logo-wide.svg?react';
 import {Settings} from 'settings';
 
 function Navigation(): ReactElement {
