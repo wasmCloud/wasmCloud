@@ -384,6 +384,10 @@ pub trait HealthCheck {
 
 // I don't know if these would be generated or if we'd just include them in the library and then use them in the generated code, but they work around the lack of a map type in wit
 
+/// Representation of maps (AKA associative arrays) that are usable from WIT
+///
+/// This representation is required because WIT does not natively
+/// have support for a map type, so we must use a list of tuples
 pub type WitMap<T> = Vec<(String, T)>;
 
 fn serialize_wit_map<S: Serializer, T>(map: &WitMap<T>, serializer: S) -> Result<S::Ok, S::Error>

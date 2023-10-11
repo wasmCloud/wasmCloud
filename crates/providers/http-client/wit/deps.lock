@@ -1,0 +1,4 @@
+[httpclient]
+path = "../../../../wit/wasmcloud/httpclient"
+sha256 = "8c8f9e9e66771006b05f3a466eacf9e4bacd7d7eb5a58a48077932a55fc7de88"
+sha512 = "daa99c84a40bd340aabc681c4317bbfcca0ed4ea37f641d2aff0905cd0ac6ce215d77ac6c87ede9543b6a791c4f54ff85d3b119cfe69c891300788045f0a3ea5"
