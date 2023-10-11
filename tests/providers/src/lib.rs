@@ -3,6 +3,9 @@ pub const ISSUER: &str = env!("ISSUER");
 pub const RUST_BLOBSTORE_FS: &str = concat!(env!("OUT_DIR"), "/rust-blobstore-fs.par");
 pub const RUST_BLOBSTORE_FS_SUBJECT: &str = env!("RUST_BLOBSTORE_FS_SUBJECT");
 
+pub const RUST_HTTPCLIENT: &str = concat!(env!("OUT_DIR"), "/rust-httpclient.par");
+pub const RUST_HTTPCLIENT_SUBJECT: &str = env!("RUST_HTTPCLIENT_SUBJECT");
+
 pub const RUST_HTTPSERVER: &str = concat!(env!("OUT_DIR"), "/rust-httpserver.par");
 pub const RUST_HTTPSERVER_SUBJECT: &str = env!("RUST_HTTPSERVER_SUBJECT");
 

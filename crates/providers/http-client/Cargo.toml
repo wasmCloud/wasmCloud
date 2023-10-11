@@ -1,0 +1,16 @@
+[package]
+name = "wasmcloud-provider-httpclient"
+version = "0.8.0"
+
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+reqwest = { workspace = true, features = ["rustls-tls"] }
+tracing = { workspace = true }
+wasmbus-rpc = { workspace = true, features = ["otel"] }
+wasmcloud-interface-httpclient = { workspace = true }

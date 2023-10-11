@@ -154,18 +154,27 @@ async fn main() -> anyhow::Result<()> {
         [
             "--manifest-path=../../crates/providers/Cargo.toml",
             "-p=wasmcloud-provider-blobstore-fs",
+            "-p=wasmcloud-provider-httpclient",
             "-p=wasmcloud-provider-httpserver",
             "-p=wasmcloud-provider-kvredis",
             "-p=wasmcloud-provider-nats",
         ],
         |name, kind| {
-            ["blobstore_fs", "httpserver", "kvredis", "nats_messaging"].contains(&name)
+            [
+                "blobstore_fs",
+                "httpclient",
+                "httpserver",
+                "kvredis",
+                "nats_messaging",
+            ]
+            .contains(&name)
                 && kind.contains(&CrateType::Bin)
         },
     )
     .await
-    .context("failed to build `wasmcloud-provider-httpserver` crate")?;
+    .context("failed to build provider workspace")?;
     match (
+        artifacts.next().deref_artifact(),
         artifacts.next().deref_artifact(),
         artifacts.next().deref_artifact(),
         artifacts.next().deref_artifact(),
@@ -174,43 +183,57 @@ async fn main() -> anyhow::Result<()> {
     ) {
         (
             Some(("blobstore_fs", [rust_blobstore_fs])),
+            Some(("httpclient", [rust_httpclient])),
             Some(("httpserver", [rust_httpserver])),
             Some(("kvredis", [rust_kvredis])),
             Some(("nats_messaging", [rust_nats])),
             None,
         ) => {
-            let (rust_blobstore_fs_seed, rust_httpserver_seed, rust_kvredis_seed, rust_nats_seed) =
-                try_join!(
-                    build_par(
-                        &issuer,
-                        out_dir.join("rust-blobstore-fs.par"),
-                        "wasmcloud:blobstore",
-                        "wasmcloud-provider-blobstore-fs",
-                        rust_blobstore_fs,
-                    ),
-                    build_par(
-                        &issuer,
-                        out_dir.join("rust-httpserver.par"),
-                        "wasmcloud:httpserver",
-                        "wasmcloud-provider-httpserver",
-                        rust_httpserver,
-                    ),
-                    build_par(
-                        &issuer,
-                        out_dir.join("rust-kvredis.par"),
-                        "wasmcloud:keyvalue",
-                        "wasmcloud-provider-kvredis",
-                        rust_kvredis,
-                    ),
-                    build_par(
-                        &issuer,
-                        out_dir.join("rust-nats.par"),
-                        "wasmcloud:messaging",
-                        "wasmcloud-provider-nats",
-                        rust_nats,
-                    ),
-                )?;
+            let (
+                rust_blobstore_fs_seed,
+                rust_httpclient_seed,
+                rust_httpserver_seed,
+                rust_kvredis_seed,
+                rust_nats_seed,
+            ) = try_join!(
+                build_par(
+                    &issuer,
+                    out_dir.join("rust-blobstore-fs.par"),
+                    "wasmcloud:blobstore",
+                    "wasmcloud-provider-blobstore-fs",
+                    rust_blobstore_fs,
+                ),
+                build_par(
+                    &issuer,
+                    out_dir.join("rust-httpclient.par"),
+                    "wasmcloud:httpclient",
+                    "wasmcloud-provider-httpclient",
+                    rust_httpclient,
+                ),
+                build_par(
+                    &issuer,
+                    out_dir.join("rust-httpserver.par"),
+                    "wasmcloud:httpserver",
+                    "wasmcloud-provider-httpserver",
+                    rust_httpserver,
+                ),
+                build_par(
+                    &issuer,
+                    out_dir.join("rust-kvredis.par"),
+                    "wasmcloud:keyvalue",
+                    "wasmcloud-provider-kvredis",
+                    rust_kvredis,
+                ),
+                build_par(
+                    &issuer,
+                    out_dir.join("rust-nats.par"),
+                    "wasmcloud:messaging",
+                    "wasmcloud-provider-nats",
+                    rust_nats,
+                ),
+            )?;
             println!("cargo:rustc-env=RUST_BLOBSTORE_FS_SUBJECT={rust_blobstore_fs_seed}");
+            println!("cargo:rustc-env=RUST_HTTPCLIENT_SUBJECT={rust_httpclient_seed}");
             println!("cargo:rustc-env=RUST_HTTPSERVER_SUBJECT={rust_httpserver_seed}");
             println!("cargo:rustc-env=RUST_KVREDIS_SUBJECT={rust_kvredis_seed}");
             println!("cargo:rustc-env=RUST_NATS_SUBJECT={rust_nats_seed}");

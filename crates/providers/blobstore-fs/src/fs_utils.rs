@@ -3,7 +3,10 @@ use std::vec::Vec;
 
 /// Traverses a file system starting at location `root` and returning a list of all directories
 /// contained in that directory, recursively, relative to the original root at level 0.
-pub fn all_dirs(root: &Path, prefix: &Path) -> Vec<PathBuf> {
+pub fn all_dirs(root: &Path, prefix: &Path, depth: u32) -> Vec<PathBuf> {
+    if depth > 1000 {
+        return vec![];
+    }
     let mut dirs: Vec<PathBuf> = match std::fs::read_dir(root) {
         Ok(rd) => rd
             .filter(|e| match e {
@@ -23,7 +26,7 @@ pub fn all_dirs(root: &Path, prefix: &Path) -> Vec<PathBuf> {
     // Now recursively go in all directories and collect all sub-directories
     let mut subdirs: Vec<PathBuf> = Vec::new();
     for dir in &dirs {
-        let mut local_subdirs = all_dirs(prefix.join(dir.as_path()).as_path(), prefix);
+        let mut local_subdirs = all_dirs(prefix.join(dir.as_path()).as_path(), prefix, depth + 1);
         subdirs.append(&mut local_subdirs);
     }
     dirs.append(&mut subdirs);
@@ -54,7 +57,7 @@ mod tests {
             );
         }
 
-        let dirs = all_dirs(root, root);
+        let dirs = all_dirs(root, root, 0);
 
         clear_state(root);
 
@@ -72,7 +75,7 @@ mod tests {
             panic!("Error in create_dir_all: {}", e);
         }
 
-        let dirs = all_dirs(root, root);
+        let dirs = all_dirs(root, root, 0);
 
         clear_state(root);
 
@@ -94,7 +97,7 @@ mod tests {
 
         File::create(root.join("dir2/foo.txt").as_path()).unwrap();
 
-        let dirs = all_dirs(root, root);
+        let dirs = all_dirs(root, root, 0);
 
         clear_state(root);
 
