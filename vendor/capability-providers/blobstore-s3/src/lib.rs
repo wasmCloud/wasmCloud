@@ -3,8 +3,9 @@
 //! assume role http request https://docs.aws.amazon.com/cli/latest/reference/sts/assume-role.html
 //! get session token https://docs.aws.amazon.com/cli/latest/reference/sts/get-session-token.html
 
-use std::collections::HashMap;
+use std::num::NonZeroU64;
 use std::sync::Arc;
+use std::{collections::HashMap, num::NonZeroUsize};
 
 use aws_sdk_s3::{
     error::{HeadBucketError, HeadBucketErrorKind, HeadObjectError, HeadObjectErrorKind},
@@ -188,8 +189,8 @@ impl StorageClient {
         while bytes_sent < bytes_to_send {
             let chunk_offset = offset + bytes_sent;
             let chunk_len = (self.max_chunk_size() as u64).min(bytes_to_send - bytes_sent);
-            bytes_sent += self
-                .send_chunk(
+            let Some(chunk_bytes) = NonZeroU64::new(
+                self.send_chunk(
                     ctx,
                     Chunk {
                         is_last: offset + chunk_len > end_range,
@@ -200,7 +201,13 @@ impl StorageClient {
                         object_id: cobj.object_id.clone(),
                     },
                 )
-                .await?;
+                .await?,
+            ) else {
+                return Err(RpcError::InvalidParameter(
+                    "sent chunk successfully but actor returned 0 bytes received.".to_string(),
+                ));
+            };
+            bytes_sent += chunk_bytes.get();
         }
         Ok(bytes_sent)
     }
