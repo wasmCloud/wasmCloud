@@ -21,6 +21,9 @@ struct Actor;
 
 impl exports::wasmcloud::bus::guest::Guest for Actor {
     fn call(operation: String) -> Result<(), String> {
+        let _now = wasi::clocks::timezone::display(wasi::clocks::wall_clock::now());
+        let _now = wasi::clocks::monotonic_clock::now();
+
         assert_eq!(operation, "HttpServer.HandleRequest");
         let HttpRequest {
             method,

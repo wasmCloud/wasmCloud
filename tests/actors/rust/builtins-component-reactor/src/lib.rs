@@ -24,6 +24,9 @@ struct Actor;
 
 impl exports::wasi::http::incoming_handler::Guest for Actor {
     fn handle(request: types::IncomingRequest, response_out: types::ResponseOutparam) {
+        let _now = wasi::clocks::timezone::display(wasi::clocks::wall_clock::now());
+        let _now = wasi::clocks::monotonic_clock::now();
+
         assert!(matches!(
             types::incoming_request_method(request),
             types::Method::Post
@@ -33,7 +36,7 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
             Some("/foo?bar=baz")
         );
         assert!(types::incoming_request_scheme(request).is_none());
-        // NOTE: Authority is lost in traslation to Smithy HttpRequest
+        // NOTE: Authority is lost in translation to Smithy HttpRequest
         assert_eq!(types::incoming_request_authority(request), None);
         let headers = types::incoming_request_headers(request);
 

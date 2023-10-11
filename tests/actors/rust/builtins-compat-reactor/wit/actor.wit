@@ -1,5 +1,9 @@
 package test-actors:http-log-rng
 
 world actor {
+    import wasi:clocks/monotonic-clock
+    import wasi:clocks/timezone
+    import wasi:clocks/wall-clock
+
     export wasmcloud:bus/guest
 }

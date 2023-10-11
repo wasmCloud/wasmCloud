@@ -1,5 +1,9 @@
 package test-actors:builtins
 
 world actor {
+    import wasi:clocks/monotonic-clock
+    import wasi:clocks/timezone
+    import wasi:clocks/wall-clock
+
     export wasi:http/incoming-handler
 }
