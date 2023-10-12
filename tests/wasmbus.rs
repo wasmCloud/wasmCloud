@@ -545,6 +545,7 @@ async fn wasmbus() -> anyhow::Result<()> {
                 uptime_human,
                 uptime_seconds,
                 version,
+                friendly_name,
             }),
             Some(HostInfo {
                 cluster_issuers: cluster_issuers_two,
@@ -577,6 +578,7 @@ expected: {expected_labels:?}"#
             ensure!(uptime_human.unwrap().len() > 0);
             ensure!(uptime_seconds >= 0);
             ensure!(version == Some(env!("CARGO_PKG_VERSION").into()));
+            ensure!(!friendly_name.is_empty());
         }
         (_, _, []) => bail!("not enough hosts in the lattice"),
         _ => bail!("more than two hosts in the lattice"),

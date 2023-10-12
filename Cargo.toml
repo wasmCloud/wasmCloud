@@ -70,13 +70,8 @@ wascap = { workspace = true }
 wasmcloud-control-interface = { workspace = true }
 
 [workspace]
-members = [
-    "crates/*",
-    "examples/rust/*",
-]
-exclude = [
-    "crates/providers"
-]
+members = ["crates/*", "examples/rust/*"]
+exclude = ["crates/providers"]
 
 [workspace.dependencies]
 anyhow = { version = "1", default-features = false }
@@ -137,7 +132,7 @@ wasmcloud-actor = { version = "*", path = "./crates/actor" }
 wasmcloud-actor-macros = { version = "*", path = "./crates/actor/macros" }
 wasmcloud-compat = { version = "*", path = "./crates/compat" }
 wasmcloud-component-adapters = { version = "0.2.3" }
-wasmcloud-control-interface = { version = "0.29", default-features = false }
+wasmcloud-control-interface = { version = "0.30", default-features = false }
 wasmcloud-core = { version = "*", path = "./crates/core" }
 wasmcloud-host = { version = "*", path = "./crates/host" }
 wasmcloud-provider-sdk = { version = "*", path = "./crates/provider-sdk", default-features = false }
