@@ -134,7 +134,7 @@ pub(crate) struct WasmcloudOpts {
     )]
     pub(crate) lattice_prefix: String,
 
-    /// The seed key (a printable 256-bit Ed25519 private key) used by this host to generate it's public key  
+    /// The seed key (a printable 256-bit Ed25519 private key) used by this host to generate it's public key
     #[clap(long = "host-seed", env = WASMCLOUD_HOST_SEED)]
     pub(crate) host_seed: Option<String>,
 
@@ -606,7 +606,7 @@ async fn run_wasmcloud_interactive(
 
     if output_kind != OutputKind::Json {
         println!("🏃 Running in interactive mode.",);
-        println!("🎛️ If you enabled --nats-websocket-port, start the dashboard by executing `wash ui --experimental`");
+        println!("🎛️  If you enabled --nats-websocket-port, start the dashboard by executing `wash ui --experimental`");
         println!("🚪 Press `CTRL+c` at any time to exit");
     }
 
