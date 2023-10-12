@@ -3599,7 +3599,7 @@ impl Host {
                     .ctl_nats
                     .publish_with_headers(reply.clone(), headers, buf)
                     .err_into::<anyhow::Error>()
-                    .and_then(|_| self.ctl_nats.flush().err_into::<anyhow::Error>())
+                    .and_then(|()| self.ctl_nats.flush().err_into::<anyhow::Error>())
                     .await
                 {
                     error!("failed to publish success in response to `{subject}` request: {e:?}");
@@ -3614,7 +3614,7 @@ impl Host {
                         format!(r#"{{"accepted":false,"error":"{e}"}}"#).into(),
                     )
                     .err_into::<anyhow::Error>()
-                    .and_then(|_| self.ctl_nats.flush().err_into::<anyhow::Error>())
+                    .and_then(|()| self.ctl_nats.flush().err_into::<anyhow::Error>())
                     .await
                 {
                     error!("failed to publish error: {e:?}");

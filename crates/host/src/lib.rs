@@ -72,7 +72,7 @@ impl<'a> TryFrom<&'a str> for ResourceRef<'a> {
                     "file" => url
                         .to_file_path()
                         .map(Self::File)
-                        .map_err(|_| anyhow!("failed to convert `{url}` to a file path")),
+                        .map_err(|()| anyhow!("failed to convert `{url}` to a file path")),
                     "bindle" => s
                         .strip_prefix("bindle://")
                         .map(Self::Bindle)

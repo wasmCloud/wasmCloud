@@ -145,7 +145,7 @@ impl Actor {
             "file" => {
                 let path = url
                     .to_file_path()
-                    .map_err(|_| anyhow!("failed to convert `{url}` to a file path"))?;
+                    .map_err(|()| anyhow!("failed to convert `{url}` to a file path"))?;
                 let buf = fs::read(path).await.context("failed to read actor")?;
                 let actor = wasmcloud_runtime::Actor::new(rt, buf)
                     .context("failed to initialize local actor")?;
