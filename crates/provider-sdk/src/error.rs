@@ -30,6 +30,18 @@ pub enum ProviderInvocationError {
     Provider(String),
 }
 
+impl From<std::io::Error> for ProviderInvocationError {
+    fn from(e: std::io::Error) -> Self {
+        Self::Provider(format!("i/o error: {e}"))
+    }
+}
+
+impl From<String> for ProviderInvocationError {
+    fn from(e: String) -> Self {
+        Self::Provider(e)
+    }
+}
+
 /// Errors that can occur when sending or receiving an invocation, including the `dispatch` method
 /// of the provider.
 #[derive(Debug, thiserror::Error)]
