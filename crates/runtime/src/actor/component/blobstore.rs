@@ -241,7 +241,7 @@ impl blobstore::Host for Ctx {
     #[instrument]
     async fn create_container(&mut self, name: ContainerName) -> anyhow::Result<Result<Container>> {
         match self.handler.create_container(&name).await {
-            Ok(_) => {
+            Ok(()) => {
                 let container = self
                     .table
                     .push_container(name)
