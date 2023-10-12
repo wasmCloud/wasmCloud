@@ -1406,20 +1406,14 @@ impl Deref for Actor {
 
 // NOTE: this is specifically a function instead of an [Actor] method
 // to avoid deadlocks on the instances field.
-/// Returns the first instance that matches the provided annotations
+/// Returns the first instance that matches the provided annotations exactly
 fn matching_instance(
     instances: &HashMap<BTreeMap<String, String>, Arc<ActorInstance>>,
     annotations: &Annotations,
 ) -> Option<Arc<ActorInstance>> {
     instances
         .iter()
-        .find(|(instance_annotations, _)| {
-            annotations.iter().all(|(k, v)| {
-                instance_annotations
-                    .get(k)
-                    .is_some_and(|instance_value| instance_value == v)
-            })
-        })
+        .find(|(instance_annotations, _)| instance_annotations == &annotations)
         .map(|(_, instance)| instance.clone())
 }
 
@@ -2384,16 +2378,30 @@ impl Host {
         let claims = actor.claims().context("claims missing")?;
         let mut instances = actor.instances.write().await;
 
-        if let Some(to_stop) = matching_instance(&instances, annotations) {
-            instances.remove(&to_stop.annotations);
+        // Find all instances that match the annotations like a filter (#607)
+        let matching_instances = instances
+            .iter()
+            .filter(|(instance_annotations, _)| {
+                annotations.iter().all(|(k, v)| {
+                    instance_annotations
+                        .get(k)
+                        .is_some_and(|instance_value| instance_value == v)
+                })
+            })
+            .map(|(_, instance)| instance.clone())
+            .collect::<Vec<Arc<ActorInstance>>>();
+        ensure!(
+            !matching_instances.is_empty(),
+            "no actors with matching annotations found to stop"
+        );
 
-            self.uninstantiate_actor(claims, host_id, to_stop)
+        for instance in matching_instances {
+            instances.remove(&instance.annotations);
+            self.uninstantiate_actor(claims, host_id, instance)
                 .await
                 .context("failed to uninstantiate actor")?;
-            Ok(())
-        } else {
-            bail!("no actors with matching annotations found to stop")
         }
+        Ok(())
     }
 
     #[instrument(skip(self, payload))]
