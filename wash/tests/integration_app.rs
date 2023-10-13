@@ -1,8 +1,6 @@
-use std::path::PathBuf;
 use std::{ffi::OsStr, process::Stdio, time::Duration};
 
-use anyhow::{bail, Context, Result};
-use nkeys::KeyPair;
+use anyhow::{Context, Result};
 
 use tokio::fs::read_to_string;
 
@@ -10,22 +8,17 @@ use tokio::process::Command;
 
 mod common;
 use common::{
-    init, start_nats, test_dir_with_subfolder, wait_for_nats_to_start, wait_for_no_hosts,
-    wait_for_no_nats, wait_for_single_host, wash, TestSetup,
+    init, wait_for_nats_to_start, wait_for_no_hosts, wait_for_no_nats, wait_for_single_host,
+    TestSetup, TestWashInstance,
 };
 use wadm::model::{Manifest, VERSION_ANNOTATION_KEY};
 
-const NATS_PORT: u16 = 5893;
 const APP_ACTOR_NAME: &str = "hello";
 const APP_TEMPLATE_NAME: &str = "hello";
 
 struct TestWorkspace {
     project: TestSetup,
-    test_dir: PathBuf,
-    nats: tokio::process::Child,
-    nats_port: u16,
-    host_seed: KeyPair,
-    wash_instance_kill_cmd: String,
+    wash: TestWashInstance,
     manifest: Manifest,
 }
 
@@ -52,73 +45,64 @@ impl TestWorkspace {
         )
         .await?;
         let project_dir = test_setup.project_dir.to_owned();
-        let test_dir = test_dir_with_subfolder("wash_app_deploy");
-
-        run_cmd(
-            "`wash down` to ensure clean slate before running tests".to_string(),
-            env!("CARGO_BIN_EXE_wash"),
-            ["down"],
-            Stdio::piped(),
-            Stdio::piped(),
-            true,
-        )
-        .await?;
 
         wait_for_no_nats()
             .await
             .context("one or more unexpected nats-server instances running")?;
-        let nats = start_nats(NATS_PORT, &test_dir).await?;
-        wait_for_nats_to_start()
-            .await
-            .context("nats process not running")?;
 
         wait_for_no_hosts()
             .await
             .context("one or more unexpected wasmcloud instances running")?;
-        let host_seed = nkeys::KeyPair::new_server();
+
+        let test_wash_instance = TestWashInstance::create().await?;
+
+        wait_for_nats_to_start()
+            .await
+            .context("nats process not running")?;
+
+        wait_for_single_host(
+            test_wash_instance.nats_port,
+            Duration::from_secs(15),
+            Duration::from_secs(1),
+        )
+        .await?;
 
         run_cmd(
-            "`wash up`".to_string(),
+            "`wash app undeploy` to start from a clean slate".to_string(),
             env!("CARGO_BIN_EXE_wash"),
             [
-                "up",
-                "--nats-port",
-                NATS_PORT.to_string().as_str(),
-                "-o",
-                "json",
-                "--detached",
-                "--host-seed",
-                &host_seed.seed().expect("Should have a seed for the host"),
+                "app",
+                "undeploy",
+                "hello",
+                "--ctl-port",
+                test_wash_instance.nats_port.to_string().as_str(),
             ],
             Stdio::piped(),
-            tokio::fs::File::create(test_dir.join("wash_up.ouput"))
-                .await
-                .context("could not create log file for wash up command")?
-                .into_std()
-                .await
-                .into(),
+            Stdio::piped(),
             true,
         )
         .await?;
 
-        let wash_instance_kill_cmd = match serde_json::from_str::<serde_json::Value>(
-            &read_to_string(test_dir.join("wash_up.ouput"))
-                .await
-                .context("could not read output of wash up command")?,
-        ) {
-            Ok(v) => v["kill_cmd"].to_owned().to_string(),
-            Err(e) => bail!("Unable to parse kill cmd from wash up output: {}", e),
-        };
-
-        wait_for_single_host(NATS_PORT, Duration::from_secs(15), Duration::from_secs(1)).await?;
+        run_cmd(
+            "`wash app del` to start from a clean slate".to_string(),
+            env!("CARGO_BIN_EXE_wash"),
+            [
+                "app",
+                "del",
+                "hello",
+                "--delete-all",
+                "--ctl-port",
+                test_wash_instance.nats_port.to_string().as_str(),
+            ],
+            Stdio::piped(),
+            Stdio::piped(),
+            true,
+        )
+        .await?;
 
         Ok(Self {
             project: test_setup,
-            test_dir,
-            nats,
-            nats_port: NATS_PORT,
-            host_seed,
-            wash_instance_kill_cmd,
+            wash: test_wash_instance,
             manifest: serde_yaml::from_str::<Manifest>(
                 read_to_string(project_dir.join("wadm.yaml"))
                     .await
@@ -127,45 +111,6 @@ impl TestWorkspace {
             )
             .context("could not parse wadm.yaml content into Manifest object")?,
         })
-    }
-}
-
-impl Drop for TestWorkspace {
-    fn drop(&mut self) {
-        println!("[integration_app::TestWorkspace::drop] runnning test workspace clean up...");
-        let TestWorkspace {
-            project,
-            wash_instance_kill_cmd,
-            host_seed,
-            nats,
-            nats_port,
-            test_dir,
-            ..
-        } = self;
-
-        let (_, down) = wash_instance_kill_cmd
-            .trim_matches('"')
-            .split_once(' ')
-            .unwrap();
-        wash()
-            .args(vec![
-                down,
-                "--host-id",
-                &host_seed.public_key(),
-                "--ctl-port",
-                &nats_port.to_string(),
-            ])
-            .output()
-            .expect("[integration_app::TestWorkspace::drop] wash instance kill command failed");
-
-        nats.start_kill()
-            .expect("[integration_app::TestWorkspace::drop] nats kill command failed");
-
-        std::fs::remove_dir_all(test_dir)
-            .expect("[integration_app::TestWorkspace::drop] failed to remove temporary `test_dir` directory during cleanup");
-
-        std::fs::remove_dir_all(&project.project_dir)
-            .expect("[integration_app::TestWorkspace::drop] failed to remove temporary `project_dir` directory during cleanup");
     }
 }
 
@@ -202,7 +147,7 @@ async fn integration_can_deploy_app() -> Result<()> {
             "deploy",
             "wadm.yaml",
             "--ctl-port",
-            NATS_PORT.to_string().as_str(),
+            test_workspace.wash.nats_port.to_string().as_str(),
         ],
         Stdio::piped(),
         Stdio::piped(),
@@ -218,7 +163,7 @@ async fn integration_can_deploy_app() -> Result<()> {
     //         "deploy",
     //         "https://raw.githubusercontent.com/wasmCloud/examples/main/actor/hello/wadm.yaml",
     //         "--ctl-port",
-    //         NATS_PORT.to_string().as_str(),
+    //         test_workspace.wash.nats_port.to_string().as_str(),
     //     ],
     //     Stdio::piped(),
     //     Stdio::piped(),
@@ -234,7 +179,7 @@ async fn integration_can_deploy_app() -> Result<()> {
     //         "undeploy",
     //         "hello",
     //         "--ctl-port",
-    //         NATS_PORT.to_string().as_str(),
+    //         test_workspace.wash.nats_port.to_string().as_str(),
     //     ],
     //     Stdio::piped(),
     //     Stdio::piped(),
@@ -251,7 +196,7 @@ async fn integration_can_deploy_app() -> Result<()> {
     //         "hello",
     //         "--delete-all",
     //         "--ctl-port",
-    //         NATS_PORT.to_string().as_str(),
+    //         test_workspace.wash.nats_port.to_string().as_str(),
     //     ],
     //     Stdio::piped(),
     //     Stdio::piped(),
@@ -267,7 +212,7 @@ async fn integration_can_deploy_app() -> Result<()> {
     //         "app",
     //         "deploy",
     //         "--ctl-port",
-    //         NATS_PORT.to_string().as_str(),
+    //         test_workspace.wash.nats_port.to_string().as_str(),
     //     ],
     //     tokio::fs::File::create("wadm.yaml")
     //         .await
