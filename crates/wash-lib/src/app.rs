@@ -4,6 +4,7 @@ use std::{path::PathBuf, time::Duration};
 
 use anyhow::{bail, Context, Result};
 use async_nats::{Client, Message};
+use regex::Regex;
 use wadm::server::{
     DeleteModelRequest, DeleteModelResponse, DeployModelRequest, DeployModelResponse,
     GetModelRequest, GetModelResponse, ModelSummary, PutModelResponse, UndeployModelRequest,
@@ -266,42 +267,60 @@ pub async fn load_app_manifest(source: &Option<String>) -> Result<AppManifest> {
 
     let load_from_source = || async {
         match source {
-            Some(s) if PathBuf::from(s).exists() => Ok(AppManifest::SerializedModel(
-                tokio::fs::read_to_string(s)
-                    .await
-                    .context("failed to read model from file")?,
-            )),
-            Some(s) if Url::parse(s).is_ok() && s.starts_with("http") => {
-                Ok(AppManifest::SerializedModel(
-                    reqwest::get(s)
-                        .await
-                        .context("request to remote model file failed")?
-                        .text()
-                        .await
-                        .context("failed to read model from remote file")?,
-                ))
-            }
-            Some(s) if s == "-" => read_from_stdin().await,
-            // NOTE(ahmedtadde): If the source is a string that isn't matched by any of the previous branches, we assume it's a model name
-            // Though, applying some validation here would be nice. I looked around for existing model name validation and didn't find any.
             Some(s) => {
+                if s == "-" {
+                    return read_from_stdin().await;
+                }
+
+                // Is the source a url?
                 if Url::parse(s).is_ok() {
-                    bail!("file url {} has an unsupported scheme. Only http(s):// is supported at this type", s)
+                    if !s.starts_with("http") {
+                        bail!("file url {} has an unsupported scheme. Only http(s):// is supported at this time", s)
+                    }
+
+                    return Ok(AppManifest::SerializedModel(
+                        reqwest::get(s)
+                            .await
+                            .context("request to remote model file failed")?
+                            .text()
+                            .await
+                            .context("failed to read model from remote file")?,
+                    ));
                 }
 
+                // Note(ahmedtadde): this checks that the string is a path to file that actually exists and has a supported extension
+                // A `false` result doesnt necessarily mean that the string is not a file path input. ergo, we shouldn't bail as a result of this check.
                 if PathBuf::from(s).is_file() {
-                    bail!("file {} not found", s)
+                    match PathBuf::from(s).extension() {
+                        Some(ext) if ext == "yaml" || ext == "yml" || ext == "json" => {
+                            return Ok(AppManifest::SerializedModel(
+                                tokio::fs::read_to_string(s)
+                                    .await
+                                    .context("failed to read model from file")?,
+                            ));
+                        }
+                        _ => bail!("file {} has an unsupported extension. Only .yaml, .yml, and .json are supported at this time", s),
+
+                    }
                 }
 
-                Ok(AppManifest::ModelName(s.to_owned()))
+                // This is lifted from `wadm`'s manifest name validation
+                let model_name_regex =
+                    Regex::new(r"^[-\w]+$").context("failed to instantiate manifest name regex")?;
+
+                if model_name_regex.is_match(s) {
+                    return Ok(AppManifest::ModelName(s.to_owned()));
+                }
+
+                bail!("invalid manifest source: {}", s)
             }
             // If no source is provided, we attempt to read from stdin
             None => read_from_stdin().await,
         }
     };
 
-    // Note(ahmedtadde): considered having a timeout: Option<Duration> parameter, but decided against it since, given the use case for this fn, the callers shouldn't have to bother with such a details
-    // and just assume the manifest should be loaded within a reasonable time frame. Now, reasonable is debatable, but i think anything over 1 sec is out of the question as things stand.
+    // Note(ahmedtadde): considered having a timeout: Option<Duration> parameter, but decided against it since, given the use case for this fn, the callers can fairly
+    // assume that the manifest should be loaded within a reasonable time frame. Now, reasonable is debatable, but i think anything over 1 sec is out of the question as things stand.
     const DEFAULT_TIMEOUT: Duration = Duration::from_secs(1);
     tokio::time::timeout(DEFAULT_TIMEOUT, load_from_source())
         .await
