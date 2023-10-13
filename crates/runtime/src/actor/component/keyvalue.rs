@@ -10,8 +10,9 @@ use anyhow::{anyhow, ensure, Context};
 use async_trait::async_trait;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tracing::instrument;
+use wasmtime::component::Resource;
 use wasmtime_wasi::preview2::pipe::{AsyncReadStream, AsyncWriteStream};
-use wasmtime_wasi::preview2::{self, TableStreamExt};
+use wasmtime_wasi::preview2::{self, HostOutputStream, InputStream};
 
 impl Instance {
     /// Set [`KeyValueAtomic`] handler for this [Instance].
@@ -328,15 +329,16 @@ impl types::Host for Ctx {
     async fn outgoing_value_write_body_async(
         &mut self,
         outgoing_value: types::OutgoingValue,
-    ) -> anyhow::Result<Result<types::OutputStream>> {
+    ) -> anyhow::Result<Result<Resource<Box<dyn HostOutputStream>>>> {
         let stream = self
             .table
             .get_outgoing_value(outgoing_value)
             .context("failed to get outgoing value")?
             .clone();
+        let stream: Box<dyn HostOutputStream> = Box::new(AsyncWriteStream::new(1 << 16, stream));
         let stream = self
             .table
-            .push_output_stream(Box::new(AsyncWriteStream::new(1 << 16, stream)))
+            .push_resource(stream)
             .context("failed to push output stream")?;
         Ok(Ok(stream))
     }
@@ -383,14 +385,14 @@ impl types::Host for Ctx {
     async fn incoming_value_consume_async(
         &mut self,
         incoming_value: types::IncomingValue,
-    ) -> anyhow::Result<Result<types::IncomingValueAsyncBody>> {
+    ) -> anyhow::Result<Result<Resource<InputStream>>> {
         let (stream, _) = self
             .table
             .delete_incoming_value(incoming_value)
             .context("failed to delete incoming value")?;
         let stream = self
             .table
-            .push_input_stream(Box::new(AsyncReadStream::new(stream)))
+            .push_resource(InputStream::Host(Box::new(AsyncReadStream::new(stream))))
             .context("failed to push input stream")?;
         Ok(Ok(stream))
     }

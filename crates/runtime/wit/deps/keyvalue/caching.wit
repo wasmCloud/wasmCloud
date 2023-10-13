@@ -11,7 +11,7 @@
 // Time-to-Live values (within the usual limitations around time in a
 // distributed setting).
 interface cache {
-    use wasi:poll/poll.{pollable}
+    use wasi:io/poll@0.2.0-rc-2023-10-18.{pollable}
     use types.{key, incoming-value, outgoing-value, error}
 
     // The `get` operation returns the value passed by a previous `set` for the

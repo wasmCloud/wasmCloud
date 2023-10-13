@@ -27,7 +27,7 @@ interface types {
 	/// A list of keys
 	type keys = list<key>
 
-	use wasi:io/streams.{input-stream, output-stream}
+	use wasi:io/streams@0.2.0-rc-2023-10-18.{input-stream, output-stream}
 	use wasi-cloud-error.{ error }
 	/// A value is the data stored in a key-value pair. The value can be of any type
 	/// that can be represented in a byte array. It provides a way to write the value

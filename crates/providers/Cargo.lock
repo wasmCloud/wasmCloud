@@ -3398,7 +3398,7 @@ dependencies = [
  "serde_json",
  "wasm-encoder 0.33.2",
  "wasm-gen",
- "wasmparser 0.113.3",
+ "wasmparser 0.115.0",
 ]
 
 [[package]]
@@ -3792,9 +3792,9 @@ dependencies = [
 
 [[package]]
 name = "wasmparser"
-version = "0.113.3"
+version = "0.115.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "286049849b5a5bd09a8773171be96824afabffc7cc3df6caaf33a38db6cd07ae"
+checksum = "e06c0641a4add879ba71ccb3a1e4278fd546f76f1eafb21d8f7b07733b547cd5"
 dependencies = [
  "indexmap 2.0.2",
  "semver",

@@ -1,2 +1,2 @@
 http = "https://github.com/WebAssembly/wasi-http/archive/main.tar.gz"
-io = "../../../../../wit/deps/io" # TODO: Remove once http is compatible with Wasmtime 13
+io = "../../../../../wit/deps/io" # for compatibility with Wasmtime version used

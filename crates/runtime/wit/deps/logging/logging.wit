@@ -1,3 +1,5 @@
+package wasi:logging@0.2.0-rc-2023-10-18;
+
 /// WASI Logging is a logging API intended to let users emit log messages with
 /// simple priority levels and context values.
 interface logging {
@@ -31,5 +33,5 @@ interface logging {
     /// sent, a context, which is an uninterpreted string meant to help
     /// consumers group similar messages, and a string containing the message
     /// text.
-    log: func(level: level, context: string, message: string)
+    log: func(level: level, context: string, message: string);
 }
