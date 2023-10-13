@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use serial_test::serial;
 use tokio::process::Command;
-use wash_lib::cli::output::{GetHostInventoryCommandOutput, StartCommandOutput};
+use wash_lib::cli::output::{GetHostInventoriesCommandOutput, StartCommandOutput};
 
 mod common;
 use common::{TestWashInstance, ECHO_OCI_REF};
@@ -57,17 +57,23 @@ async fn integration_update_actor_serial() -> Result<()> {
             .context("failed to get host inventory")?;
         assert!(output.status.success(), "checked host inventory");
 
-        let cmd_output: GetHostInventoryCommandOutput =
+        let cmd_output: GetHostInventoriesCommandOutput =
             serde_json::from_slice(&output.stdout).context("failed to parse output")?;
 
-        if cmd_output.inventory.actors.is_empty() && retries > 4 {
+        let actors = cmd_output
+            .inventories
+            .into_iter()
+            .next()
+            .map(|i| i.actors)
+            .unwrap_or_default();
+        if actors.is_empty() && retries > 4 {
             panic!("Should have started the actor")
         } else if retries <= 4 {
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
             continue;
         } else {
-            assert_eq!(cmd_output.inventory.actors.len(), 1);
-            assert!(cmd_output.inventory.actors[0]
+            assert_eq!(actors.len(), 1);
+            assert!(actors[0]
                 .image_ref
                 .as_ref()
                 .is_some_and(|image_ref| image_ref == OLD_ECHO_OCI_REF));
@@ -120,13 +126,19 @@ async fn integration_update_actor_serial() -> Result<()> {
             .context("failed to get host inventory")?;
         assert!(output.status.success(), "checked host inventory");
 
-        let cmd_output: GetHostInventoryCommandOutput =
+        let cmd_output: GetHostInventoriesCommandOutput =
             serde_json::from_slice(&output.stdout).context("failed to parse output")?;
 
         // SAFETY: This is a test but also since the actor already started we should never get
         // no actors returned here. Give the host a few retries here, the old actor should still
         // be running the whole time.
-        if !cmd_output.inventory.actors[0]
+        let actors = cmd_output
+            .inventories
+            .into_iter()
+            .next()
+            .map(|i| i.actors)
+            .unwrap_or_default();
+        if !actors[0]
             .image_ref
             .as_ref()
             .is_some_and(|image_ref| image_ref == ECHO_OCI_REF)
@@ -137,8 +149,8 @@ async fn integration_update_actor_serial() -> Result<()> {
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
             continue;
         } else {
-            assert_eq!(cmd_output.inventory.actors.len(), 1);
-            assert!(cmd_output.inventory.actors[0]
+            assert_eq!(actors.len(), 1);
+            assert!(actors[0]
                 .image_ref
                 .as_ref()
                 .is_some_and(|image_ref| image_ref == ECHO_OCI_REF));

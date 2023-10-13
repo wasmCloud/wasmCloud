@@ -1,14 +1,14 @@
 use anyhow::Result;
 use wash_lib::cli::{
     claims::get_claims,
-    get::{get_host_inventory, get_hosts, GetCommand, GetLinksCommand},
+    get::{get_host_inventories, get_hosts, GetCommand, GetLinksCommand},
     link::{LinkCommand, LinkQueryCommand},
 };
 
 use crate::{
     appearance::spinner::Spinner,
     common::link_cmd::handle_command as handle_link_command,
-    ctl::{get_claims_output, get_host_inventory_output, get_hosts_output},
+    ctl::{get_claims_output, get_host_inventories_output, get_hosts_output},
     CommandOutput, OutputKind,
 };
 
@@ -31,14 +31,14 @@ pub(crate) async fn handle_command(
             let hosts = get_hosts(cmd).await?;
             get_hosts_output(hosts)
         }
-        GetCommand::HostInventory(cmd) => {
+        GetCommand::HostInventories(cmd) => {
             if let Some(id) = cmd.host_id.as_ref() {
                 sp.update_spinner_message(format!(" Retrieving inventory for host {} ...", id));
             } else {
                 sp.update_spinner_message(" Retrieving hosts for inventory query ...".to_string());
             }
-            let inv = get_host_inventory(cmd).await?;
-            get_host_inventory_output(inv)
+            let invs = get_host_inventories(cmd).await?;
+            get_host_inventories_output(invs)
         }
     };
 
