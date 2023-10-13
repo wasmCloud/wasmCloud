@@ -154,54 +154,7 @@ async fn install_rust_wasm32_unknown_unknown_actors(
 async fn install_rust_wasm32_wasi_actors(out_dir: impl AsRef<Path>) -> anyhow::Result<()> {
     let out_dir = out_dir.as_ref();
 
-    // NOTE: Due to bizarre nature of `cargo` feature unification, compiling builtin actors in a
-    // singular `cargo` invocation would unify `component` and `compat` features in
-    // `wasmcloud_actor` crate
-
     try_join!(
-        async {
-            let mut artifacts = build_artifacts(
-                [
-                    "--manifest-path=./rust/Cargo.toml",
-                    "--target=wasm32-wasi",
-                    "-p=builtins-compat-reactor",
-                    "-p=http-compat-command",
-                ],
-                |name, kind| {
-                    ["builtins-compat-reactor", "http-compat-command"].contains(&name)
-                        && (kind.contains(&CrateType::Cdylib) || kind.contains(&CrateType::Bin))
-                },
-            )
-            .await
-            .context(
-                "failed to build `builtins-compat-reactor` and `http-compat-command` crates",
-            )?;
-            match (
-                artifacts.next().deref_artifact(),
-                artifacts.next().deref_artifact(),
-                artifacts.next(),
-            ) {
-                (
-                    Some(("builtins-compat-reactor", [builtins_compat_reactor])),
-                    Some(("http-compat-command", [http_compat_command])),
-                    None,
-                ) => {
-                    try_join!(
-                        copy(
-                            builtins_compat_reactor,
-                            out_dir.join("rust-builtins-compat-reactor.wasm"),
-                        ),
-                        copy(
-                            http_compat_command,
-                            out_dir.join("rust-http-compat-command.wasm"),
-                        ),
-                    )
-                }
-                _ => bail!(
-                    "invalid `builtins-compat-reactor` and `http-compat-command` build artifacts"
-                ),
-            }
-        },
         async {
             let mut artifacts = build_artifacts(
                 [
@@ -317,7 +270,7 @@ async fn main() -> anyhow::Result<()> {
         install_rust_wasm32_unknown_unknown_actors(&out_dir),
         install_rust_wasm32_wasi_actors(&out_dir),
     )?;
-    for name in ["builtins-compat-reactor", "builtins-component-reactor"] {
+    for name in ["builtins-component-reactor"] {
         let path = out_dir.join(format!("rust-{name}.wasm"));
         let module = fs::read(&path)
             .await
@@ -330,11 +283,7 @@ async fn main() -> anyhow::Result<()> {
             .await
             .with_context(|| format!("failed to write `{}`", path.display()))?;
     }
-    for name in [
-        "foobar-component-command",
-        "http-compat-command",
-        "tcp-component-command",
-    ] {
+    for name in ["foobar-component-command", "tcp-component-command"] {
         let path = out_dir.join(format!("rust-{name}.wasm"));
         let module = fs::read(&path)
             .await
@@ -363,11 +312,6 @@ async fn main() -> anyhow::Result<()> {
         caps::NUMBERGEN.into(),
     ];
     for (name, caps) in [
-        ("builtins-compat-reactor", Some(builtin_caps.clone())),
-        (
-            "builtins-compat-reactor-preview2",
-            Some(builtin_caps.clone()),
-        ),
         ("builtins-component-reactor", Some(builtin_caps.clone())),
         (
             "builtins-component-reactor-preview2",
@@ -376,11 +320,6 @@ async fn main() -> anyhow::Result<()> {
         ("builtins-module-reactor", Some(builtin_caps.clone())),
         ("foobar-component-command", None),
         ("foobar-component-command-preview2", None),
-        ("http-compat-command", Some(vec![caps::HTTP_SERVER.into()])),
-        (
-            "http-compat-command-preview2",
-            Some(vec![caps::HTTP_SERVER.into()]),
-        ),
         ("logging-module-command", Some(vec![caps::LOGGING.into()])),
         ("tcp-component-command", None),
         ("tcp-component-command-preview2", None),

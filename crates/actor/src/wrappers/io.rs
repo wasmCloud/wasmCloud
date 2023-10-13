@@ -1,78 +1,89 @@
 use std::io::{Read, Write};
 
 #[cfg(all(not(feature = "module"), feature = "component"))]
-pub struct InputStreamReader {
-    stream: crate::wasi::io::streams::InputStream,
-    status: Option<crate::wasi::io::streams::StreamStatus>,
+pub struct InputStreamReader<'a> {
+    stream: &'a mut crate::wasi::io::streams::InputStream,
 }
 
 #[cfg(all(not(feature = "module"), feature = "component"))]
-impl From<crate::wasi::io::streams::InputStream> for InputStreamReader {
-    fn from(stream: crate::wasi::io::streams::InputStream) -> Self {
-        Self {
-            stream,
-            status: None,
-        }
-    }
-}
-
-#[cfg(all(not(feature = "module"), feature = "component"))]
-impl std::io::Read for InputStreamReader {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        if let Some(crate::wasi::io::streams::StreamStatus::Ended) = self.status {
-            return Ok(0);
-        }
-        let n = buf
-            .len()
-            .try_into()
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-        let (chunk, status) = crate::wasi::io::streams::blocking_read(self.stream, n)
-            .map_err(|()| std::io::Error::new(std::io::ErrorKind::Other, "read failed"))?;
-        self.status = Some(status);
-
-        let n = chunk.len();
-        if n > buf.len() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "more bytes read than requested",
-            ));
-        }
-        buf[..n].copy_from_slice(&chunk);
-        Ok(n)
-    }
-}
-
-#[cfg(all(not(feature = "module"), feature = "component"))]
-pub struct OutputStreamWriter {
-    stream: crate::wasi::io::streams::OutputStream,
-}
-
-#[cfg(all(not(feature = "module"), feature = "component"))]
-impl From<crate::wasi::io::streams::OutputStream> for OutputStreamWriter {
-    fn from(stream: crate::wasi::io::streams::OutputStream) -> Self {
+impl<'a> From<&'a mut crate::wasi::io::streams::InputStream> for InputStreamReader<'a> {
+    fn from(stream: &'a mut crate::wasi::io::streams::InputStream) -> Self {
         Self { stream }
     }
 }
 
 #[cfg(all(not(feature = "module"), feature = "component"))]
-impl std::io::Write for OutputStreamWriter {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let n = crate::wasi::io::streams::check_write(self.stream)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-        if n == 0 {
-            return Ok(0);
-        }
-        let n = n
+impl std::io::Read for InputStreamReader<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        use crate::wasi::io::streams::StreamError;
+        use std::io;
+
+        let n = buf
+            .len()
             .try_into()
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        match self.stream.blocking_read(n) {
+            Ok(chunk) => {
+                let n = chunk.len();
+                if n > buf.len() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::Other,
+                        "more bytes read than requested",
+                    ));
+                }
+                buf[..n].copy_from_slice(&chunk);
+                Ok(n)
+            }
+            Err(StreamError::Closed) => Ok(0),
+            Err(StreamError::LastOperationFailed(e)) => {
+                Err(io::Error::new(io::ErrorKind::Other, e.to_debug_string()))
+            }
+        }
+    }
+}
+
+#[cfg(all(not(feature = "module"), feature = "component"))]
+pub struct OutputStreamWriter<'a> {
+    stream: &'a mut crate::wasi::io::streams::OutputStream,
+}
+
+#[cfg(all(not(feature = "module"), feature = "component"))]
+impl<'a> From<&'a mut crate::wasi::io::streams::OutputStream> for OutputStreamWriter<'a> {
+    fn from(stream: &'a mut crate::wasi::io::streams::OutputStream) -> Self {
+        Self { stream }
+    }
+}
+
+#[cfg(all(not(feature = "module"), feature = "component"))]
+impl std::io::Write for OutputStreamWriter<'_> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        use crate::wasi::io::streams::StreamError;
+        use std::io;
+
+        let n = match self.stream.check_write().map(std::num::NonZeroU64::new) {
+            Ok(Some(n)) => n,
+            Ok(None) | Err(StreamError::Closed) => return Ok(0),
+            Err(StreamError::LastOperationFailed(e)) => {
+                return Err(io::Error::new(io::ErrorKind::Other, e.to_debug_string()))
+            }
+        };
+        let n = n
+            .get()
+            .try_into()
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
         let n = buf.len().min(n);
-        crate::wasi::io::streams::write(self.stream, &buf[..n])
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        self.stream.write(&buf[..n]).map_err(|e| match e {
+            StreamError::Closed => io::ErrorKind::UnexpectedEof.into(),
+            StreamError::LastOperationFailed(e) => {
+                io::Error::new(io::ErrorKind::Other, e.to_debug_string())
+            }
+        })?;
         Ok(n)
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
-        crate::wasi::io::streams::blocking_flush(self.stream)
+        self.stream
+            .blocking_flush()
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
     }
 }

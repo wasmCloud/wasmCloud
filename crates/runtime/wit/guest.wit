@@ -1,13 +1,13 @@
-package wasmcloud:host
+package wasmcloud:host;
 
 world guest {
-    export wasmcloud:bus/guest
+    export wasmcloud:bus/guest;
 }
 
 world logging {
-    export wasi:logging/logging
+    export wasi:logging/logging@0.2.0-rc-2023-10-18;
 }
 
 world incoming-http {
-    export wasi:http/incoming-handler
+    export wasi:http/incoming-handler@0.2.0-rc-2023-10-18;
 }

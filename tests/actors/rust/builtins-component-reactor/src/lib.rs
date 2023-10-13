@@ -2,6 +2,9 @@ wit_bindgen::generate!({
     exports: {
         world: Actor,
         "wasi:http/incoming-handler": Actor,
+    },
+    with: {
+        "wasi:io/streams@0.2.0-rc-2023-10-18": wasmcloud_actor::wasi::io::streams,
     }
 });
 
@@ -24,79 +27,76 @@ struct Actor;
 
 impl exports::wasi::http::incoming_handler::Guest for Actor {
     fn handle(request: types::IncomingRequest, response_out: types::ResponseOutparam) {
-        assert!(matches!(
-            types::incoming_request_method(request),
-            types::Method::Post
-        ));
-        assert_eq!(
-            types::incoming_request_path_with_query(request).as_deref(),
-            Some("/foo?bar=baz")
-        );
-        assert!(types::incoming_request_scheme(request).is_none());
-        // NOTE: Authority is lost in traslation to Smithy HttpRequest
-        assert_eq!(types::incoming_request_authority(request), None);
-        let headers = types::incoming_request_headers(request);
+        #[derive(Deserialize)]
+        struct Request {
+            min: u32,
+            max: u32,
+        }
 
-        let header_entries = types::fields_entries(headers)
-            .into_iter()
-            .collect::<BTreeMap<_, _>>();
+        assert!(matches!(request.method(), types::Method::Post));
+        assert_eq!(request.path_with_query().as_deref(), Some("/foo?bar=baz"));
+        assert!(request.scheme().is_none());
+        // NOTE: Authority is lost in traslation to Smithy HttpRequest
+        assert_eq!(request.authority(), None);
+        let headers = request.headers();
+
+        let header_entries = headers.entries().into_iter().collect::<BTreeMap<_, _>>();
         let mut header_iter = header_entries.clone().into_iter();
 
         assert_eq!(header_iter.next(), Some(("accept".into(), b"*/*".to_vec())));
-        assert_eq!(types::fields_get(headers, "accept"), vec![b"*/*"]);
+        assert_eq!(headers.get(&String::from("accept")), vec![b"*/*"]);
 
         assert_eq!(
             header_iter.next(),
             Some(("content-length".into(), b"21".to_vec()))
         );
-        assert_eq!(types::fields_get(headers, "content-length"), vec![b"21"]);
+        assert_eq!(headers.get(&String::from("content-length")), vec![b"21"]);
 
         let (host_key, host_value) = header_iter.next().expect("`host` header missing");
         assert_eq!(host_key, "host");
-        assert_eq!(types::fields_get(headers, "host"), vec![host_value]);
+        assert_eq!(headers.get(&String::from("host")), vec![host_value]);
 
         assert_eq!(
             header_iter.next(),
             Some(("test-header".into(), b"test-value".to_vec()))
         );
         assert_eq!(
-            types::fields_get(headers, "test-header"),
+            headers.get(&String::from("test-header")),
             vec![b"test-value"]
         );
 
         assert!(header_iter.next().is_none());
 
-        let headers_clone = types::fields_clone(headers);
-        assert_ne!(headers, headers_clone);
-        types::fields_set(headers_clone, "foo", &[b"bar".to_vec()]);
-        types::fields_append(headers_clone, "foo", b"baz");
+        let headers_clone = headers.clone();
+        headers_clone.set(&String::from("foo"), &[b"bar".to_vec()]);
+        headers_clone.append(&String::from("foo"), b"baz".as_ref());
         assert_eq!(
-            types::fields_get(headers_clone, "foo"),
+            headers_clone.get(&String::from("foo")),
             vec![b"bar", b"baz"]
         );
-        types::fields_delete(headers_clone, "foo");
+        headers_clone.delete(&String::from("foo"));
         assert_eq!(
-            types::fields_entries(headers_clone)
+            headers_clone
+                .entries()
                 .into_iter()
                 .collect::<BTreeMap<_, _>>(),
             header_entries,
         );
 
-        let request_stream = types::incoming_request_consume(request)
-            .expect("failed to get incoming request stream");
-        let mut request_body = vec![];
-        InputStreamReader::from(request_stream)
-            .read_to_end(&mut request_body)
-            .expect("failed to read value from incoming request stream");
-
-        #[derive(Deserialize)]
-        struct Request {
-            min: u32,
-            max: u32,
-        }
-        let Request { min, max } =
-            serde_json::from_slice(&request_body).expect("failed to decode request body");
-        types::finish_incoming_stream(request_stream);
+        let request_body = request
+            .consume()
+            .expect("failed to get incoming request body");
+        let Request { min, max } = {
+            let mut buf = vec![];
+            let mut stream = request_body
+                .stream()
+                .expect("failed to get incoming request stream");
+            InputStreamReader::from(&mut stream)
+                .read_to_end(&mut buf)
+                .expect("failed to read value from incoming request stream");
+            serde_json::from_slice(&buf).expect("failed to decode request body")
+        };
+        let _trailers = types::IncomingBody::finish(request_body);
 
         logging::log(logging::Level::Trace, "trace-context", "trace");
         logging::log(logging::Level::Debug, "debug-context", "debug");
@@ -126,19 +126,21 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
         });
         eprintln!("response: `{res:?}`");
         let body = serde_json::to_vec(&res).expect("failed to encode response to JSON");
-        let response = types::new_outgoing_response(200, types::new_fields(&[]))
-            .expect("failed to construct outgoing response");
-        let response_stream = types::outgoing_response_write(response)
-            .expect("failed to get outgoing response stream");
-        let mut response_stream_writer = OutputStreamWriter::from(response_stream);
-        response_stream_writer
-            .write_all(&body)
-            .expect("failed to write body to outgoing response stream");
-        response_stream_writer
-            .flush()
-            .expect("failed to flush outgoing response stream");
-        types::finish_outgoing_stream(response_stream);
-        types::set_response_outparam(response_out, Ok(response)).expect("failed to set response");
+        let response = types::OutgoingResponse::new(200, &types::Fields::new(&[]));
+        let response_body = response
+            .write()
+            .expect("failed to get outgoing response body");
+        {
+            let mut stream = response_body
+                .write()
+                .expect("failed to get outgoing response stream");
+            let mut w = OutputStreamWriter::from(&mut stream);
+            w.write_all(&body)
+                .expect("failed to write body to outgoing response stream");
+            w.flush().expect("failed to flush outgoing response stream");
+        }
+        types::OutgoingBody::finish(response_body, None);
+        types::ResponseOutparam::set(response_out, Ok(response));
 
         bus::lattice::set_target(
             Some(&TargetEntity::Link(Some("messaging".into()))),
@@ -213,11 +215,11 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
         let foo_value = keyvalue::readwrite::get(bucket, &foo_key)
             .map_err(keyvalue::wasi_cloud_error::trace)
             .expect("failed to get `foo`");
-        let foo_stream = keyvalue::types::incoming_value_consume_async(foo_value)
+        let mut foo_stream = keyvalue::types::incoming_value_consume_async(foo_value)
             .map_err(keyvalue::wasi_cloud_error::trace)
             .expect("failed to get incoming value stream");
         let mut foo_value = vec![];
-        let n = InputStreamReader::from(foo_stream)
+        let n = InputStreamReader::from(&mut foo_stream)
             .read_to_end(&mut foo_value)
             .expect("failed to read value from keyvalue input stream");
         assert_eq!(n, 3);
@@ -253,9 +255,9 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
         assert_eq!(result_value, body);
 
         let result_value = keyvalue::types::new_outgoing_value();
-        let result_stream = keyvalue::types::outgoing_value_write_body_async(result_value)
+        let mut result_stream = keyvalue::types::outgoing_value_write_body_async(result_value)
             .expect("failed to get outgoing value output stream");
-        let mut result_stream_writer = OutputStreamWriter::from(result_stream);
+        let mut result_stream_writer = OutputStreamWriter::from(&mut result_stream);
         result_stream_writer
             .write_all(&body)
             .expect("failed to write result to keyvalue output stream");
@@ -326,9 +328,9 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
         let _ = blobstore::container::delete_object(created_container, &result_key);
 
         let result_value = blobstore::types::new_outgoing_value();
-        let result_stream = blobstore::types::outgoing_value_write_body(result_value)
+        let mut result_stream = blobstore::types::outgoing_value_write_body(result_value)
             .expect("failed to get outgoing value output stream");
-        let mut result_stream_writer = OutputStreamWriter::from(result_stream);
+        let mut result_stream_writer = OutputStreamWriter::from(&mut result_stream);
         result_stream_writer
             .write_all(&body)
             .expect("failed to write result to blobstore output stream");

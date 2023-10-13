@@ -1,14 +1,10 @@
-#[cfg(all(
-    not(feature = "module"),
-    feature = "component",
-    not(feature = "compat")
-))]
+#[cfg(all(not(feature = "module"), feature = "component",))]
 wit_bindgen::generate!("interfaces");
 
-#[cfg(any(feature = "module", all(feature = "component", feature = "compat")))]
+#[cfg(feature = "module")]
 mod compat;
 
-#[cfg(any(feature = "module", all(feature = "component", feature = "compat")))]
+#[cfg(feature = "module")]
 pub use compat::*;
 
 #[cfg(feature = "module")]
@@ -17,13 +13,8 @@ pub use wasmcloud_actor_macros::*;
 // TODO: Remove once `wasi-http` is integrated
 pub use wasmcloud_compat::{HttpRequest, HttpResponse};
 
-mod io;
-mod logging;
-mod random;
-
-pub use io::*;
-pub use logging::*;
-pub use random::*;
+mod wrappers;
+pub use wrappers::*;
 
 #[cfg(test)]
 mod test {

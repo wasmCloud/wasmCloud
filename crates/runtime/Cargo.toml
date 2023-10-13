@@ -23,6 +23,8 @@ async-trait = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true, features = ["async-await", "std"] }
 http = { workspace = true }
+http-body = { workspace = true }
+http-body-util = { workspace = true }
 log = { workspace = true }
 nkeys = { workspace = true }
 rand = { workspace = true, features = ["std"] }
@@ -37,6 +39,7 @@ wasmcloud-compat = { workspace = true }
 wasmparser = { workspace = true }
 wasmtime = { workspace = true, features = ["async", "cache", "component-model", "cranelift", "jitdump", "parallel-compilation", "pooling-allocator", "vtune"] }
 wasmtime-wasi = { workspace = true, features = ["sync", "preview2"] }
+wasmtime-wasi-http = { workspace = true, features = ["sync"] }
 
 [dev-dependencies]
 once_cell = { workspace = true }

@@ -16,8 +16,9 @@ use async_trait::async_trait;
 use futures::{Stream, StreamExt};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt};
 use tracing::instrument;
+use wasmtime::component::Resource;
 use wasmtime_wasi::preview2::pipe::{AsyncReadStream, AsyncWriteStream};
-use wasmtime_wasi::preview2::{self, TableStreamExt};
+use wasmtime_wasi::preview2::{self, HostOutputStream, InputStream};
 
 type Result<T, E = Error> = core::result::Result<T, E>;
 
@@ -31,7 +32,6 @@ impl Instance {
 
 trait TableBlobstoreExt {
     fn push_container(&mut self, name: String) -> TableResult<Container>;
-    fn contains_container(&self, container: Container) -> bool;
     fn get_container(&self, container: Container) -> TableResult<&String>;
     fn delete_container(&mut self, container: Container) -> TableResult<String>;
 
@@ -70,10 +70,6 @@ trait TableBlobstoreExt {
 impl TableBlobstoreExt for preview2::Table {
     fn push_container(&mut self, name: String) -> TableResult<Container> {
         self.push(Box::new(name))
-    }
-
-    fn contains_container(&self, container: Container) -> bool {
-        self.contains_key(container)
     }
 
     fn get_container(&self, container: Container) -> TableResult<&String> {
@@ -165,15 +161,16 @@ impl types::Host for Ctx {
     async fn outgoing_value_write_body(
         &mut self,
         outgoing_value: types::OutgoingValue,
-    ) -> anyhow::Result<Result<types::OutputStream, ()>> {
+    ) -> anyhow::Result<Result<Resource<Box<dyn HostOutputStream>>, ()>> {
         let stream = self
             .table
             .get_outgoing_value(outgoing_value)
             .context("failed to get outgoing value")?
             .clone();
+        let stream: Box<dyn HostOutputStream> = Box::new(AsyncWriteStream::new(1 << 16, stream));
         let stream = self
             .table
-            .push_output_stream(Box::new(AsyncWriteStream::new(1 << 16, stream)))
+            .push_resource(stream)
             .context("failed to push output stream")?;
         Ok(Ok(stream))
     }
@@ -214,14 +211,14 @@ impl types::Host for Ctx {
     async fn incoming_value_consume_async(
         &mut self,
         incoming_value: types::IncomingValue,
-    ) -> anyhow::Result<Result<types::IncomingValueAsyncBody>> {
+    ) -> anyhow::Result<Result<Resource<InputStream>>> {
         let (stream, _) = self
             .table
             .delete_incoming_value(incoming_value)
             .context("failed to delete incoming value")?;
         let stream = self
             .table
-            .push_input_stream(Box::new(AsyncReadStream::new(stream)))
+            .push_resource(InputStream::Host(Box::new(AsyncReadStream::new(stream))))
             .context("failed to push input stream")?;
         Ok(Ok(stream))
     }

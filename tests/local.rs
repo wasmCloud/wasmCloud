@@ -38,12 +38,6 @@ async fn local() -> anyhow::Result<()> {
                 },
             ),
             (
-                "http".into(),
-                ActorConfig {
-                    url: wasm_url(test_actors::RUST_HTTP_COMPAT_COMMAND_PREVIEW2),
-                },
-            ),
-            (
                 "tcp".into(),
                 ActorConfig {
                     url: wasm_url(test_actors::RUST_TCP_COMPONENT_COMMAND_PREVIEW2),

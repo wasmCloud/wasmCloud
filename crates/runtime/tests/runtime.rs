@@ -561,58 +561,6 @@ async fn builtins_module() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn builtins_compat() -> anyhow::Result<()> {
-    init();
-
-    let logs = run(test_actors::RUST_BUILTINS_COMPAT_REACTOR_PREVIEW2_SIGNED).await?;
-    assert_eq!(
-        logs,
-        vec![
-            (
-                logging::Level::Trace,
-                "trace-context".into(),
-                "trace".into()
-            ),
-            (
-                logging::Level::Debug,
-                "debug-context".into(),
-                "debug".into()
-            ),
-            (logging::Level::Info, "info-context".into(), "info".into()),
-            (logging::Level::Warn, "warn-context".into(), "warn".into()),
-            (
-                logging::Level::Error,
-                "error-context".into(),
-                "error".into()
-            ),
-            (
-                logging::Level::Trace,
-                "trace-context".into(),
-                "trace".into()
-            ),
-            (
-                logging::Level::Debug,
-                "debug-context".into(),
-                "debug".into()
-            ),
-            (logging::Level::Info, "info-context".into(), "info".into()),
-            (logging::Level::Warn, "warn-context".into(), "warn".into()),
-            (
-                logging::Level::Error,
-                "error-context".into(),
-                "error".into()
-            ),
-            (logging::Level::Trace, "".into(), "trace".into()),
-            (logging::Level::Debug, "".into(), "debug".into()),
-            (logging::Level::Info, "".into(), "info".into()),
-            (logging::Level::Warn, "".into(), "warn".into()),
-            (logging::Level::Error, "".into(), "error".into()),
-        ]
-    );
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread")]
 async fn builtins_component() -> anyhow::Result<()> {
     init();
 

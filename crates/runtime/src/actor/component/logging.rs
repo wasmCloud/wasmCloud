@@ -18,7 +18,7 @@ pub mod logging_bindings {
         world: "logging",
         async: true,
         with: {
-           "wasi:logging/logging": crate::capability::logging,
+           "wasi:logging/logging@0.2.0-rc-2023-10-18": crate::capability::logging,
         },
     });
 }

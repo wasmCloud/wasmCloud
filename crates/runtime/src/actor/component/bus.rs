@@ -13,8 +13,9 @@ use async_trait::async_trait;
 use futures::future::Shared;
 use futures::FutureExt;
 use tracing::instrument;
+use wasmtime::component::Resource;
 use wasmtime_wasi::preview2::pipe::{AsyncReadStream, AsyncWriteStream};
-use wasmtime_wasi::preview2::{self, TableStreamExt};
+use wasmtime_wasi::preview2::{HostOutputStream, InputStream, OutputStream, Pollable};
 
 impl Instance {
     /// Set [`Bus`] handler for this [Instance].
@@ -25,44 +26,6 @@ impl Instance {
 }
 
 type FutureResult = Pin<Box<dyn Future<Output = Result<(), String>> + Send>>;
-
-trait TableHostExt {
-    fn push_future_result(&mut self, res: FutureResult) -> TableResult<u32>;
-    fn get_future_result(&self, res: u32) -> TableResult<Box<Shared<FutureResult>>>;
-    fn delete_future_result(&mut self, res: u32) -> TableResult<Box<Shared<FutureResult>>>;
-}
-
-trait TableLatticeExt {
-    fn push_interface_target(&mut self, target: TargetInterface) -> TableResult<u32>;
-    fn get_interface_target(&self, target: u32) -> TableResult<&TargetInterface>;
-    fn delete_interface_target(&mut self, target: u32) -> TableResult<TargetInterface>;
-}
-
-impl TableHostExt for preview2::Table {
-    fn push_future_result(&mut self, res: FutureResult) -> TableResult<u32> {
-        self.push(Box::new(res.shared()))
-    }
-    fn get_future_result(&self, res: u32) -> TableResult<Box<Shared<FutureResult>>> {
-        self.get(res).cloned()
-    }
-    fn delete_future_result(&mut self, res: u32) -> TableResult<Box<Shared<FutureResult>>> {
-        self.delete(res)
-    }
-}
-
-impl TableLatticeExt for preview2::Table {
-    fn push_interface_target(&mut self, target: TargetInterface) -> TableResult<u32> {
-        self.push(Box::new(target))
-    }
-
-    fn get_interface_target(&self, target: u32) -> TableResult<&TargetInterface> {
-        self.get(target)
-    }
-
-    fn delete_interface_target(&mut self, target: u32) -> TableResult<TargetInterface> {
-        self.delete(target)
-    }
-}
 
 #[async_trait]
 impl host::Host for Ctx {
@@ -75,8 +38,8 @@ impl host::Host for Ctx {
         Result<
             (
                 host::FutureResult,
-                preview2::bindings::io::streams::InputStream,
-                preview2::bindings::io::streams::OutputStream,
+                Resource<InputStream>,
+                Resource<OutputStream>,
             ),
             String,
         >,
@@ -89,17 +52,19 @@ impl host::Host for Ctx {
             Ok((result, stdin, stdout)) => {
                 let result = self
                     .table
-                    .push_future_result(result)
+                    .push(Box::new(result.shared()))
                     .context("failed to push result to table")?;
+                let stdin: Box<dyn HostOutputStream> =
+                    Box::new(AsyncWriteStream::new(1 << 16, stdin));
                 let stdin = self
                     .table
-                    .push_output_stream(Box::new(AsyncWriteStream::new(1 << 16, stdin)))
+                    .push_resource(stdin)
                     .context("failed to push stdin stream")?;
                 let stdout = self
                     .table
-                    .push_input_stream(Box::new(AsyncReadStream::new(stdout)))
+                    .push_resource(InputStream::Host(Box::new(AsyncReadStream::new(stdout))))
                     .context("failed to push stdout stream")?;
-                Ok(Ok((result, stdin, stdout)))
+                Ok(Ok((result, stdout, stdin)))
             }
             Err(err) => Ok(Err(format!("{err:#}"))),
         }
@@ -123,15 +88,16 @@ impl host::Host for Ctx {
     }
 
     #[instrument]
-    async fn listen_to_future_result(&mut self, _res: u32) -> anyhow::Result<u32> {
+    async fn listen_to_future_result(&mut self, _res: u32) -> anyhow::Result<Resource<Pollable>> {
         bail!("not supported") // TODO: Support
     }
 
     #[instrument]
     async fn future_result_get(&mut self, res: u32) -> anyhow::Result<Option<Result<(), String>>> {
-        let fut = self.table.get_future_result(res)?;
+        #[allow(clippy::borrowed_box)]
+        let fut: &Box<Shared<FutureResult>> = self.table.get(res)?;
         if let Some(result) = fut.clone().now_or_never() {
-            let fut = self.table.delete_future_result(res)?;
+            let fut: Box<Shared<FutureResult>> = self.table.delete(res)?;
             drop(fut);
             Ok(Some(result))
         } else {
@@ -141,7 +107,7 @@ impl host::Host for Ctx {
 
     #[instrument]
     async fn drop_future_result(&mut self, res: u32) -> anyhow::Result<()> {
-        let fut = self.table.delete_future_result(res)?;
+        let fut: Box<Shared<FutureResult>> = self.table.delete(res)?;
         drop(fut);
         Ok(())
     }
@@ -157,7 +123,7 @@ impl lattice::Host for Ctx {
     ) -> anyhow::Result<()> {
         let interfaces = interfaces
             .into_iter()
-            .map(|interface| self.table.get_interface_target(interface).copied())
+            .map(|interface| self.table.get(interface).copied())
             .collect::<TableResult<_>>()
             .map_err(|e| anyhow!(e).context("failed to get interface"))?;
         let target = target
@@ -174,28 +140,28 @@ impl lattice::Host for Ctx {
     #[instrument]
     async fn target_wasi_blobstore_blobstore(&mut self) -> anyhow::Result<host::TargetInterface> {
         self.table
-            .push_interface_target(TargetInterface::WasiBlobstoreBlobstore)
+            .push(Box::new(TargetInterface::WasiBlobstoreBlobstore))
             .context("failed to push target interface")
     }
 
     #[instrument]
     async fn target_wasi_keyvalue_atomic(&mut self) -> anyhow::Result<host::TargetInterface> {
         self.table
-            .push_interface_target(TargetInterface::WasiKeyvalueAtomic)
+            .push(Box::new(TargetInterface::WasiKeyvalueAtomic))
             .context("failed to push target interface")
     }
 
     #[instrument]
     async fn target_wasi_keyvalue_readwrite(&mut self) -> anyhow::Result<host::TargetInterface> {
         self.table
-            .push_interface_target(TargetInterface::WasiKeyvalueReadwrite)
+            .push(Box::new(TargetInterface::WasiKeyvalueReadwrite))
             .context("failed to push target interface")
     }
 
     #[instrument]
     async fn target_wasi_logging_logging(&mut self) -> anyhow::Result<host::TargetInterface> {
         self.table
-            .push_interface_target(TargetInterface::WasiLoggingLogging)
+            .push(Box::new(TargetInterface::WasiLoggingLogging))
             .context("failed to push target interface")
     }
 
@@ -204,7 +170,7 @@ impl lattice::Host for Ctx {
         &mut self,
     ) -> anyhow::Result<host::TargetInterface> {
         self.table
-            .push_interface_target(TargetInterface::WasmcloudMessagingConsumer)
+            .push(Box::new(TargetInterface::WasmcloudMessagingConsumer))
             .context("failed to push target interface")
     }
 }

@@ -1,14 +1,14 @@
-package wasmcloud:host
+package wasmcloud:host;
 
 world interfaces {
-    import wasmcloud:bus/host
-    import wasmcloud:bus/lattice
+    import wasmcloud:bus/host;
+    import wasmcloud:bus/lattice;
 
-    import wasi:blobstore/blobstore
-    import wasi:http/types
-    import wasi:keyvalue/atomic
-    import wasi:keyvalue/readwrite
-    import wasi:logging/logging
+    import wasi:blobstore/blobstore;
+    import wasi:http/outgoing-handler@0.2.0-rc-2023-10-18;
+    import wasi:keyvalue/atomic;
+    import wasi:keyvalue/readwrite;
+    import wasi:logging/logging@0.2.0-rc-2023-10-18;
 
-    import wasmcloud:messaging/consumer
+    import wasmcloud:messaging/consumer;
 }
