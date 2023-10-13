@@ -70,15 +70,6 @@ impl FromStr for AppManifestSource {
             return Ok(Self::AsyncReadSource(Box::new(tokio::io::stdin())));
         }
 
-        // Is the source a url?
-        if Url::parse(s).is_ok() {
-            if !s.starts_with("http") {
-                bail!("file url {} has an unsupported scheme. Only http(s):// is supported at this time", s)
-            }
-
-            return Ok(Self::Url(url::Url::parse(s)?));
-        }
-
         // Is the source a file path?
         if PathBuf::from(s).is_file() {
             match PathBuf::from(s).extension() {
@@ -88,6 +79,15 @@ impl FromStr for AppManifestSource {
                     _ => bail!("file {} has an unsupported extension. Only .yaml, .yml, and .json are supported at this time", s),
 
                 }
+        }
+
+        // Is the source a url?
+        if Url::parse(s).is_ok() {
+            if !s.starts_with("http") {
+                bail!("file url {} has an unsupported scheme. Only http(s):// is supported at this time", s)
+            }
+
+            return Ok(Self::Url(url::Url::parse(s)?));
         }
 
         // Is the source a valid model name?
