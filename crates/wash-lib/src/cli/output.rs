@@ -52,9 +52,9 @@ pub struct GetHostsCommandOutput {
 
 /// JSON output representation of the `wash get inventory` command
 #[derive(Debug, Clone, Deserialize)]
-pub struct GetHostInventoryCommandOutput {
+pub struct GetHostInventoriesCommandOutput {
     pub success: bool,
-    pub inventory: HostInventory,
+    pub inventories: Vec<HostInventory>,
 }
 
 /// JSON output representation of the `wash get claims` command
