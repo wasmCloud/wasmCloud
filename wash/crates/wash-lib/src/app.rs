@@ -1,6 +1,6 @@
 //! Interact with and manage wadm applications over NATS, requires the `nats` feature
 
-use std::{path::PathBuf, time::Duration};
+use std::{path::PathBuf, str::FromStr, time::Duration};
 
 use anyhow::{bail, Context, Result};
 use async_nats::{Client, Message};
@@ -11,7 +11,7 @@ use wadm::server::{
     VersionResponse,
 };
 
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncRead, AsyncReadExt};
 use url::Url;
 
 use crate::config::DEFAULT_LATTICE_PREFIX;
@@ -50,6 +50,56 @@ impl ToString for ModelOperation {
 pub enum AppManifest {
     SerializedModel(String),
     ModelName(String),
+}
+
+pub trait AsyncReadSource: AsyncRead + Unpin + Send + Sync {}
+impl<T: AsyncRead + Unpin + Send + Sync> AsyncReadSource for T {}
+pub enum AppManifestSource {
+    AsyncReadSource(Box<dyn AsyncReadSource>),
+    File(PathBuf),
+    Url(url::Url),
+    // the inner string is intended to be the model name
+    Model(String),
+}
+
+impl FromStr for AppManifestSource {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s == "-" {
+            return Ok(Self::AsyncReadSource(Box::new(tokio::io::stdin())));
+        }
+
+        // Is the source a url?
+        if Url::parse(s).is_ok() {
+            if !s.starts_with("http") {
+                bail!("file url {} has an unsupported scheme. Only http(s):// is supported at this time", s)
+            }
+
+            return Ok(Self::Url(url::Url::parse(s)?));
+        }
+
+        // Is the source a file path?
+        if PathBuf::from(s).is_file() {
+            match PathBuf::from(s).extension() {
+                    Some(ext) if ext == "yaml" || ext == "yml" || ext == "json" => {
+                        return Ok(Self::File(PathBuf::from(s)));
+                    }
+                    _ => bail!("file {} has an unsupported extension. Only .yaml, .yml, and .json are supported at this time", s),
+
+                }
+        }
+
+        // Is the source a valid model name?
+        let model_name_regex =
+            Regex::new(r"^[-\w]+$").context("failed to instantiate manifest name regex")?;
+
+        if model_name_regex.is_match(s) {
+            return Ok(Self::Model(s.to_owned()));
+        }
+
+        bail!("invalid manifest source: {}", s)
+    }
 }
 
 /// Undeploy a model, instructing wadm to no longer manage the given application
@@ -251,71 +301,35 @@ async fn model_request(
 
 //  NOTE(ahmedtadde): This should probably be refactored at some point to account for cases where the source's input is unusually (or erroneously) large.
 //  For now, we'll just assume that the input is small enough to be a oneshot read into memory and that the default timeout of 1 sec is plenty sufficient (or even too generous?) for the desired/expected behavior.
-pub async fn load_app_manifest(source: &Option<String>) -> Result<AppManifest> {
-    let read_from_stdin = || async {
-        let mut buffer = String::new();
-        tokio::io::stdin()
-            .read_to_string(&mut buffer)
-            .await
-            .context("failed to read model from stdin")?;
-        if buffer.is_empty() {
-            bail!("unable to load app manifest from empty stdin input")
-        }
-
-        Ok(AppManifest::SerializedModel(buffer))
-    };
-
+pub async fn load_app_manifest(source: AppManifestSource) -> Result<AppManifest> {
     let load_from_source = || async {
         match source {
-            Some(s) => {
-                if s == "-" {
-                    return read_from_stdin().await;
+            AppManifestSource::AsyncReadSource(mut stdin) => {
+                let mut buffer = String::new();
+                stdin
+                    .read_to_string(&mut buffer)
+                    .await
+                    .context("failed to read model from stdin")?;
+                if buffer.is_empty() {
+                    bail!("unable to load app manifest from empty stdin input")
                 }
 
-                // Is the source a url?
-                if Url::parse(s).is_ok() {
-                    if !s.starts_with("http") {
-                        bail!("file url {} has an unsupported scheme. Only http(s):// is supported at this time", s)
-                    }
-
-                    return Ok(AppManifest::SerializedModel(
-                        reqwest::get(s)
-                            .await
-                            .context("request to remote model file failed")?
-                            .text()
-                            .await
-                            .context("failed to read model from remote file")?,
-                    ));
-                }
-
-                // Note(ahmedtadde): this checks that the string is a path to file that actually exists and has a supported extension
-                // A `false` result doesnt necessarily mean that the string is not a file path input. ergo, we shouldn't bail as a result of this check.
-                if PathBuf::from(s).is_file() {
-                    match PathBuf::from(s).extension() {
-                        Some(ext) if ext == "yaml" || ext == "yml" || ext == "json" => {
-                            return Ok(AppManifest::SerializedModel(
-                                tokio::fs::read_to_string(s)
-                                    .await
-                                    .context("failed to read model from file")?,
-                            ));
-                        }
-                        _ => bail!("file {} has an unsupported extension. Only .yaml, .yml, and .json are supported at this time", s),
-
-                    }
-                }
-
-                // This is lifted from `wadm`'s manifest name validation
-                let model_name_regex =
-                    Regex::new(r"^[-\w]+$").context("failed to instantiate manifest name regex")?;
-
-                if model_name_regex.is_match(s) {
-                    return Ok(AppManifest::ModelName(s.to_owned()));
-                }
-
-                bail!("invalid manifest source: {}", s)
+                Ok(AppManifest::SerializedModel(buffer))
             }
-            // If no source is provided, we attempt to read from stdin
-            None => read_from_stdin().await,
+            AppManifestSource::File(path) => Ok(AppManifest::SerializedModel(
+                tokio::fs::read_to_string(path)
+                    .await
+                    .context("failed to read model from file")?,
+            )),
+            AppManifestSource::Url(url) => Ok(AppManifest::SerializedModel(
+                reqwest::get(url)
+                    .await
+                    .context("request to remote model file failed")?
+                    .text()
+                    .await
+                    .context("failed to read model from remote file")?,
+            )),
+            AppManifestSource::Model(name) => Ok(AppManifest::ModelName(name)),
         }
     };
 
@@ -325,4 +339,136 @@ pub async fn load_app_manifest(source: &Option<String>) -> Result<AppManifest> {
     tokio::time::timeout(DEFAULT_TIMEOUT, load_from_source())
         .await
         .context("app manifest loader timed out")?
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_app_manifest_source_from_str() -> Result<(), Box<dyn std::error::Error>> {
+        // test stdin
+        let stdin = AppManifestSource::from_str("-")?;
+        assert!(
+            matches!(stdin, AppManifestSource::AsyncReadSource(_)),
+            "expected AppManifestSource::AsyncReadSource"
+        );
+
+        // create temporary file for this test
+        let tmp_dir = tempdir()?;
+        std::fs::write(tmp_dir.path().join("foo.yaml"), "foo")?;
+        std::fs::write(tmp_dir.path().join("foo.toml"), "foo")?;
+
+        // test file
+        let file = AppManifestSource::from_str(tmp_dir.path().join("foo.yaml").to_str().unwrap())?;
+        assert!(
+            matches!(file, AppManifestSource::File(_)),
+            "expected AppManifestSource::File"
+        );
+
+        // test url
+        let url = AppManifestSource::from_str(
+            "https://raw.githubusercontent.com/wasmCloud/examples/main/actor/hello/wadm.yaml",
+        )?;
+
+        assert!(
+            matches!(url, AppManifestSource::Url(_)),
+            "expected AppManifestSource::Url"
+        );
+
+        let url = AppManifestSource::from_str(
+            "http://raw.githubusercontent.com/wasmCloud/examples/main/actor/hello/wadm.yaml",
+        )?;
+
+        assert!(
+            matches!(url, AppManifestSource::Url(_)),
+            "expected AppManifestSource::Url"
+        );
+
+        // test model
+        let model = AppManifestSource::from_str("foo")?;
+        assert!(
+            matches!(model, AppManifestSource::Model(_)),
+            "expected AppManifestSource::Model"
+        );
+
+        // test invalid
+        let invalid = AppManifestSource::from_str("foo.bar");
+        assert!(
+            invalid.is_err(),
+            "expected error on invalid app manifest model name"
+        );
+
+        let invalid = AppManifestSource::from_str("sftp://foobar.com");
+        assert!(
+            invalid.is_err(),
+            "expected error on invalid app manifest url source"
+        );
+
+        let invalid =
+            AppManifestSource::from_str(tmp_dir.path().join("foo.json").to_str().unwrap());
+
+        assert!(
+            invalid.is_err(),
+            "expected error on invalid app manifest file source"
+        );
+
+        let invalid =
+            AppManifestSource::from_str(tmp_dir.path().join("foo.toml").to_str().unwrap());
+
+        assert!(
+            invalid.is_err(),
+            "expected error on invalid app manifest file source"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_load_app_manifest() -> Result<()> {
+        // test stdin
+        let stdin = AppManifestSource::AsyncReadSource(Box::new(std::io::Cursor::new(
+            "iam batman!".as_bytes(),
+        )));
+
+        let manifest = load_app_manifest(stdin).await?;
+        assert!(
+            matches!(manifest, AppManifest::SerializedModel(manifest) if manifest == "iam batman!"),
+            "expected AppManifest::SerializedModel('iam batman!')"
+        );
+
+        // create temporary file for this test
+        let tmp_dir = tempdir()?;
+        std::fs::write(tmp_dir.path().join("foo.yaml"), "foo")?;
+
+        // test file
+        let file = AppManifestSource::from_str(tmp_dir.path().join("foo.yaml").to_str().unwrap())?;
+        let manifest = load_app_manifest(file).await?;
+        assert!(
+            matches!(manifest, AppManifest::SerializedModel(manifest) if manifest == "foo"),
+            "expected AppManifest::SerializedModel('foo')"
+        );
+
+        // test url
+        let url = AppManifestSource::from_str(
+            "https://raw.githubusercontent.com/wasmCloud/examples/main/actor/hello/wadm.yaml",
+        )?;
+
+        let manifest = load_app_manifest(url).await?;
+        assert!(
+            matches!(manifest, AppManifest::SerializedModel(_)),
+            "expected AppManifest::SerializedModel(_)"
+        );
+
+        // test model
+        let model = AppManifestSource::from_str("foo")?;
+        let manifest = load_app_manifest(model).await?;
+        assert!(
+            matches!(manifest, AppManifest::ModelName(name) if name == "foo"),
+            "expected AppManifest::ModelName('foo')"
+        );
+
+        Ok(())
+    }
 }

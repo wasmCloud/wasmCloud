@@ -196,7 +196,11 @@ async fn deploy_model(cmd: DeployCommand) -> Result<DeployModelResponse> {
         .into_nats_client()
         .await?;
 
-    let app_manifest = load_app_manifest(&cmd.application).await?;
+    let app_manifest = match cmd.application {
+        Some(source) => load_app_manifest(source.parse()?).await?,
+        None => load_app_manifest("-".parse()?).await?,
+    };
+
     match app_manifest {
         AppManifest::SerializedModel(manifest) => {
             let put_res =
@@ -220,7 +224,10 @@ async fn put_model(cmd: PutCommand) -> Result<PutModelResponse> {
         .into_nats_client()
         .await?;
 
-    let app_manifest = load_app_manifest(&cmd.source).await?;
+    let app_manifest = match &cmd.source {
+        Some(source) => load_app_manifest(source.parse()?).await?,
+        None => load_app_manifest("-".parse()?).await?,
+    };
 
     match app_manifest {
         AppManifest::SerializedModel(manifest) => {
