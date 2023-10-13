@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::PathBuf};
+use std::collections::HashMap;
 
 use anyhow::{bail, Result};
 use clap::{Args, Subcommand};
@@ -8,6 +8,7 @@ use wadm::server::{
     PutModelResponse, PutResult, VersionResponse,
 };
 use wash_lib::{
+    app::{load_app_manifest, AppManifest},
     cli::{CliConnectionOpts, CommandOutput, OutputKind},
     config::WashConnectionOptions,
 };
@@ -65,7 +66,7 @@ pub(crate) struct UndeployCommand {
 pub(crate) struct DeployCommand {
     /// Name of the application to deploy, if it was already `put`, or a path to a file containing the application manifest
     #[clap(name = "application")]
-    application: String,
+    application: Option<String>,
 
     /// Version of the app specification to deploy, defaults to the latest created version
     #[clap(name = "version")]
@@ -95,8 +96,8 @@ pub(crate) struct DeleteCommand {
 
 #[derive(Args, Debug, Clone)]
 pub(crate) struct PutCommand {
-    /// Input filename (JSON or YAML) containing app specification
-    source: PathBuf,
+    /// Possible sources: file from fs, remote file http url,  or stdin. if no source is provided (or arg marches '-'), stdin is used.
+    source: Option<String>,
 
     #[clap(flatten)]
     opts: CliConnectionOpts,
@@ -195,31 +196,26 @@ async fn deploy_model(cmd: DeployCommand) -> Result<DeployModelResponse> {
         .into_nats_client()
         .await?;
 
-    // If the model name is a file on disk, apply it and then deploy
-    let model_name = match tokio::fs::metadata(&cmd.application).await {
-        Ok(_) => {
-            let put_res = wash_lib::app::put_model(
-                &client,
-                lattice_prefix.clone(),
-                &tokio::fs::read_to_string(&cmd.application).await?,
-            )
-            .await?;
-
-            match put_res.result {
-                PutResult::Created | PutResult::NewVersion => put_res.name,
-                _ => bail!("Could not put manifest to deploy {}", put_res.message),
-            }
-        }
-        // Catch the edge case where the user is trying to deploy a file and it's not found. This does
-        // not catch the edge case where the file is missing an extension, but that will fail with a
-        // model not found error from the server
-        Err(e) if cmd.application.contains('.') => {
-            bail!("Could not put manifest to deploy: {}. If you were trying to deploy an existing application, \"{}\" is not a valid model name.", e, cmd.application)
-        }
-        Err(_) => cmd.application,
+    let app_manifest = match cmd.application {
+        Some(source) => load_app_manifest(source.parse()?).await?,
+        None => load_app_manifest("-".parse()?).await?,
     };
 
-    wash_lib::app::deploy_model(&client, lattice_prefix, &model_name, cmd.version).await
+    match app_manifest {
+        AppManifest::SerializedModel(manifest) => {
+            let put_res =
+                wash_lib::app::put_model(&client, lattice_prefix.clone(), &manifest).await?;
+
+            let model_name = match put_res.result {
+                PutResult::Created | PutResult::NewVersion => put_res.name,
+                _ => bail!("Could not put manifest to deploy {}", put_res.message),
+            };
+            wash_lib::app::deploy_model(&client, lattice_prefix, &model_name, cmd.version).await
+        }
+        AppManifest::ModelName(model_name) => {
+            wash_lib::app::deploy_model(&client, lattice_prefix, &model_name, cmd.version).await
+        }
+    }
 }
 
 async fn put_model(cmd: PutCommand) -> Result<PutModelResponse> {
@@ -228,12 +224,19 @@ async fn put_model(cmd: PutCommand) -> Result<PutModelResponse> {
         .into_nats_client()
         .await?;
 
-    wash_lib::app::put_model(
-        &client,
-        lattice_prefix,
-        &tokio::fs::read_to_string(&cmd.source).await?,
-    )
-    .await
+    let app_manifest = match &cmd.source {
+        Some(source) => load_app_manifest(source.parse()?).await?,
+        None => load_app_manifest("-".parse()?).await?,
+    };
+
+    match app_manifest {
+        AppManifest::SerializedModel(manifest) => {
+            wash_lib::app::put_model(&client, lattice_prefix, &manifest).await
+        }
+        AppManifest::ModelName(_) => {
+            bail!("failed to retrieve manifest at `{:?}`", cmd.source)
+        }
+    }
 }
 
 async fn get_model_history(cmd: HistoryCommand) -> Result<VersionResponse> {
