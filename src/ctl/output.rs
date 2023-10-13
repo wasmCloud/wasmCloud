@@ -84,11 +84,13 @@ pub(crate) fn hosts_table(hosts: Vec<Host>) -> String {
     table.add_row(Row::new(vec![
         TableCell::new_with_alignment("Host ID", 1, Alignment::Left),
         TableCell::new_with_alignment("Uptime (seconds)", 1, Alignment::Left),
+        TableCell::new_with_alignment("Friendly name", 1, Alignment::Left),
     ]));
     hosts.iter().for_each(|h| {
         table.add_row(Row::new(vec![
             TableCell::new_with_alignment(h.id.clone(), 1, Alignment::Left),
             TableCell::new_with_alignment(format!("{}", h.uptime_seconds), 1, Alignment::Left),
+            TableCell::new_with_alignment(h.friendly_name.clone(), 1, Alignment::Left),
         ]))
     });
 
