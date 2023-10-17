@@ -254,11 +254,11 @@ impl ProviderConnection {
                                     let inv_id = inv.id.clone();
                                     let inv_operation = inv.operation.clone();
                                     let resp = match this.handle_rpc(provider.clone(), inv).in_current_span().await {
-                                        Err(error) => {
-                                            error!(%error, operation = %inv_operation, "Invocation failed");
+                                        Err(err) => {
+                                            error!(%err, operation = %inv_operation, "Invocation failed");
                                             InvocationResponse{
                                                 invocation_id: inv_id,
-                                                error: Some(format!("Error when handling invocation: {error}")),
+                                                error: Some(format!("Error when handling invocation: {err}")),
                                                 ..Default::default()
                                             }
                                         },
@@ -273,22 +273,22 @@ impl ProviderConnection {
                                     };
                                     if let Some(reply) = msg.reply {
                                         // send reply
-                                        if let Err(error) = this.rpc_client
+                                        if let Err(err) = this.rpc_client
                                             .publish_invocation_response(reply, resp).in_current_span().await {
-                                            error!(%error, "rpc sending response");
+                                            error!(%err, "rpc sending response");
                                         }
                                     }
                                 },
-                                Err(error) => {
-                                    error!(%error, "invalid rpc message received (not deserializable)");
+                                Err(err) => {
+                                    error!(%err, "invalid rpc message received (not deserializable)");
                                     if let Some(reply) = msg.reply {
-                                        if let Err(e) = this.rpc_client.publish_invocation_response(reply,
+                                        if let Err(err) = this.rpc_client.publish_invocation_response(reply,
                                             InvocationResponse{
-                                                error: Some(format!("Error when attempting to deserialize invocation: {error}")),
+                                                error: Some(format!("Error when attempting to deserialize invocation: {err}")),
                                                 ..Default::default()
                                             },
                                         ).in_current_span().await {
-                                            error!(error = %e, "unable to publish invocation response error");
+                                            error!(%err, "unable to publish invocation response error");
                                         }
                                     }
                                 }
@@ -348,41 +348,47 @@ impl ProviderConnection {
         let mut sub = self.rpc_client.client().subscribe(shutdown_topic).await?;
         let rpc_client = self.rpc_client.clone();
         let host_id = self.host_data.host_id.clone();
-        let handle = tokio::spawn(async move {
-            loop {
-                let msg = sub.next().await;
-                // Check if we really need to shut down
-                if let Some(async_nats::Message {
-                    reply: Some(reply_to),
-                    payload,
-                    ..
-                }) = msg
-                {
-                    let shutmsg: ShutdownMessage = serde_json::from_slice(&payload).unwrap_or_default();
-                    if shutmsg.host_id == host_id {
-                        info!("Received termination signal and stopping");
-                        // Tell provider to shutdown - before we shut down nats subscriptions,
-                        // in case it needs to do any message passing during shutdown
-                        provider.shutdown().await;
-                        let data = b"shutting down".to_vec();
-                        if let Err(error) = rpc_client.publish(reply_to, data).await {
-                            warn!(%error, "failed to send shutdown ack");
+        let handle = tokio::spawn(
+            async move {
+                loop {
+                    let msg = sub.next().await;
+                    // Check if we really need to shut down
+                    if let Some(async_nats::Message {
+                        reply: Some(reply_to),
+                        payload,
+                        ..
+                    }) = msg
+                    {
+                        let shutmsg: ShutdownMessage =
+                            serde_json::from_slice(&payload).unwrap_or_default();
+                        if shutmsg.host_id == host_id {
+                            info!("Received termination signal and stopping");
+                            // Tell provider to shutdown - before we shut down nats subscriptions,
+                            // in case it needs to do any message passing during shutdown
+                            provider.shutdown().await;
+                            let data = b"shutting down".to_vec();
+                            if let Err(err) = rpc_client.publish(reply_to, data).await {
+                                warn!(%err, "failed to send shutdown ack");
+                            }
+                            // unsubscribe from shutdown topic
+                            if let Err(err) = sub.unsubscribe().await {
+                                warn!(%err, "failed to unsubscribe from shutdown topic")
+                            }
+                            // send shutdown signal to all listeners: quit all subscribers and signal main thread to quit
+                            if let Err(err) = shutdown_tx.send(true) {
+                                error!(%err, "Problem shutting down:  failure to send signal");
+                            }
+                            break;
+                        } else {
+                            trace!(
+                                "Ignoring termination signal (request targeted for different host)"
+                            );
                         }
-                        // unsubscribe from shutdown topic
-                        if let Err(e) = sub.unsubscribe().await {
-                            warn!(error = %e, "failed to unsubscribe from shutdown topic")
-                        }
-                        // send shutdown signal to all listeners: quit all subscribers and signal main thread to quit
-                        if let Err(e) = shutdown_tx.send(true) {
-                            error!(error = %e, "Problem shutting down:  failure to send signal");
-                        }
-                        break;
-                    } else {
-                        trace!("Ignoring termination signal (request targeted for different host)");
                     }
                 }
             }
-        }.instrument(tracing::debug_span!("shutdown_subscriber")));
+            .instrument(tracing::debug_span!("shutdown_subscriber")),
+        );
 
         Ok(handle)
     }
@@ -433,8 +439,8 @@ impl ProviderConnection {
                     }
                 }
             }
-            Err(e) => {
-                error!(error = %e, "received invalid link def data on message");
+            Err(err) => {
+                error!(%err, "received invalid link def data on message");
             }
         }
     }
@@ -498,14 +504,14 @@ impl ProviderConnection {
                     match buf {
                         Ok(t) => {
                             if let Some(reply_to) = msg.reply {
-                                if let Err(e) = this.rpc_client.publish(reply_to, t).await {
-                                    error!(error = %e, "failed sending health check response");
+                                if let Err(err) = this.rpc_client.publish(reply_to, t).await {
+                                    error!(%err, "failed sending health check response");
                                 }
                             }
                         }
-                        Err(e) => {
+                        Err(err) => {
                             // extremely unlikely that InvocationResponse would fail to serialize
-                            error!(error = %e, "failed serializing HealthCheckResponse");
+                            error!(%err, "failed serializing HealthCheckResponse");
                         }
                     }
                 });

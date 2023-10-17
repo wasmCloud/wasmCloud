@@ -80,8 +80,8 @@ impl RpcClient {
     }
 
     pub async fn flush(&self) {
-        if let Err(e) = self.client.flush().await {
-            error!(error = %e, "error flushing NATS client");
+        if let Err(err) = self.client.flush().await {
+            error!(%err, "error flushing NATS client");
         }
     }
 
@@ -189,13 +189,13 @@ impl RpcClient {
         if let Some(body) = body {
             debug!(invocation_id = %invocation.id, %len, "chunkifying invocation");
 
-            if let Err(error) = self
+            if let Err(err) = self
                 .chonky
                 .chunkify(&invocation.id, &mut body.as_slice())
                 .await
             {
-                error!(%error, "chunking error");
-                return Err(InvocationError::Chunking(error.to_string()));
+                error!(%err, "chunking error");
+                return Err(InvocationError::Chunking(err.to_string()));
             }
             // NOTE(thomastaylor312) This chunkify request is not sent as a separate thread because
             // we tried starting the send to ObjectStore in background thread, and then send the
@@ -221,9 +221,9 @@ impl RpcClient {
         } else {
             self.request(topic, nats_body).await
         }
-        .map_err(|error| {
-            error!(%error, "sending request");
-            error
+        .map_err(|err| {
+            error!(%err, "sending request");
+            err
         })?;
 
         let mut inv_response = crate::deserialize::<InvocationResponse>(&payload)?;
@@ -257,9 +257,9 @@ impl RpcClient {
         )
         .await
         {
-            Err(error) => {
-                error!(%error, "error when performing NATS request");
-                Err(error)
+            Err(err) => {
+                error!(%err, "error when performing NATS request");
+                Err(err)
             }
             Ok(message) => Ok(message.payload.into()),
         }
@@ -282,8 +282,8 @@ impl RpcClient {
         // instead of flushing after every publish.
         // Flushing here is good for low traffic use cases when optimizing for latency.
         tokio::spawn(async move {
-            if let Err(error) = nc.flush().await {
-                error!(%error, "flush after publish");
+            if let Err(err) = nc.flush().await {
+                error!(%err, "flush after publish");
             }
         });
         Ok(())

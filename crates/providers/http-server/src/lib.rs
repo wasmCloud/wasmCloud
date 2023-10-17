@@ -274,16 +274,16 @@ impl HttpServerCore {
                 // for tls server yet. Waiting on https://github.com/seanmonstar/warp/pull/717
                 // attempt to bind to the address
                 .bind_with_graceful_shutdown(addr, async move {
-                    if let Err(e) = shutdown_rx.recv_async().await {
-                        error!(error = %e, "shutting down httpserver listener");
+                    if let Err(err) = shutdown_rx.recv_async().await {
+                        error!(%err, "shutting down httpserver listener");
                     }
                 });
             handle.spawn(fut)
         } else {
             let (_, fut) = server
                 .try_bind_with_graceful_shutdown(addr, async move {
-                    if let Err(e) = shutdown_rx.recv_async().await {
-                        error!(error = %e, "shutting down httpserver listener");
+                    if let Err(err) = shutdown_rx.recv_async().await {
+                        error!(%err, "shutting down httpserver listener");
                     }
                 })
                 .map_err(|e| {
