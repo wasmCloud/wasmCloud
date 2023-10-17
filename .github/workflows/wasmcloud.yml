@@ -2,6 +2,7 @@ name: wasmCloud
 
 on:
   pull_request:
+  merge_group:
   push:
     branches:
     - main
@@ -172,7 +173,7 @@ jobs:
     permissions:
       packages: write
     needs: build-bin
-    if: ${{ github.event_name != 'pull_request' }}
+    if: ${{ github.event_name != 'pull_request' && github.event_name != 'merge_group' }}
     steps:
     - uses: actions/checkout@v4.1.1
     - uses: ./.github/actions/install-nix
