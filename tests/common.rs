@@ -345,13 +345,10 @@ pub(crate) async fn wait_for_single_host(
                 .await
                 .context("get host command failed")?;
 
-            // If we fail to get hosts, then restart
-            if !output.status.success() {
-                bail!(
-                    "`wash get hosts` failed (exit code {:?}): {}",
-                    output.status.code(),
-                    String::from_utf8_lossy(&output.stdout)
-                );
+            // Continue until `wash get hosts` succeeds w/ non-empty content, until timeout
+            // this may happen when a NATS instance is unavailable for a certain amount of time
+            if !output.status.success() || output.stdout.is_empty() {
+                continue;
             }
 
             let mut cmd_output: GetHostsCommandOutput = serde_json::from_slice(&output.stdout)
