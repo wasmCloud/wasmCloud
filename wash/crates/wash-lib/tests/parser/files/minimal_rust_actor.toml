@@ -1,0 +1,7 @@
+language = "rust"
+type = "actor"
+name = "testactor"
+version = "0.1.0"
+
+[actor]
+claims = ["wasmcloud:httpserver"]

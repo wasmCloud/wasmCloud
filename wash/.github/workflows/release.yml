@@ -1,0 +1,74 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*" # Push events to matching v*, i.e. v1.0, v20.15.10
+
+jobs:
+  cargo_check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: cargo build --verbose
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
+      - name: Run tests
+        run: make test
+      - name: Check fmt
+        run: cargo fmt -- --check
+
+  clippy_check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup component add clippy
+      - uses: actions-rs/clippy-check@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          args: --all-features
+
+  windows_build:
+    runs-on: windows-latest-8-cores
+    needs: [cargo_check]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile wash
+        run: cargo build --release
+      - name: Upload artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: windows
+          path: target/release/wash.exe
+
+  release:
+    needs: [cargo_check, clippy_check, windows_build]
+    runs-on: ubuntu-latest
+    steps:
+      # We need to put windows on the release so that chocolatey can download it
+      - name: Download windows release
+        uses: actions/download-artifact@v3
+        with:
+          path: release
+      - name: Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: release/windows/wash.exe
+          generate_release_notes: true
+          tag_name: ${{ github.ref_name }}
+          release_name: Release ${{ github.ref_name }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          draft: false
+          prerelease: true
+
+  release_wash_cli:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: crates-release-action
+        uses: wasmcloud/common-actions/crates-release@main
+        with:
+          crates-token: ${{ secrets.CRATES_PUBLISH_TOKEN }}
