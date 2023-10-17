@@ -79,10 +79,10 @@ impl ChunkEndpoint {
         obj.read_to_end(&mut result)
             .await
             .context("failed to read chunked stream")?;
-        if let Err(e) = store.delete(inv_id).await {
+        if let Err(err) = store.delete(inv_id).await {
             // not deleting will be a non-fatal error for the receiver,
             // if all the bytes have been received
-            error!(invocation_id = %inv_id, error = %e, "failed to delete chunks");
+            error!(invocation_id = %inv_id, %err, "failed to delete chunks");
         }
         Ok(result)
     }
