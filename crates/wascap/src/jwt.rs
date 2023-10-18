@@ -3,7 +3,7 @@
 use crate::{errors, errors::ErrorKind, Result};
 use data_encoding::BASE64URL_NOPAD;
 use nkeys::KeyPair;
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{from_str, to_string};
 use std::{
     collections::HashMap,

@@ -6,15 +6,19 @@ on:
     tags:
     - 'wascap-v*'
     paths:
-    - "**"
+    - "Cargo.lock"
+    - "Cargo.toml"
+    - "crates/wascap"
   pull_request:
     branches: [ main ]
     paths:
-    - "**"
+    - "Cargo.lock"
+    - "Cargo.toml"
+    - "crates/wascap"
 
 env:
   CARGO_TERM_COLOR: always
-  working-directory: .
+  working-directory: ./crates/wascap
 
 jobs:
   rust_check:
@@ -27,7 +31,7 @@ jobs:
         working-directory: ${{ env.working-directory }}
 
   github_release:
-    if: startswith(github.ref, 'refs/tags/') # Only run on tag push
+    if: startswith(github.ref, 'refs/tags/wascap-v') # Only run on tag push
     needs: rust_check
     runs-on: ubuntu-latest
     steps:
@@ -38,12 +42,12 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         tag_name: ${{ github.ref }}
-        release_name: Release ${{ github.ref }}
+        release_name: Release wascap ${{ github.ref }}
         draft: false
         prerelease: true
 
   crates_release:
-    if: startswith(github.ref, 'refs/tags/') # Only run on tag push
+    if: startswith(github.ref, 'refs/tags/wascap-v') # Only run on tag push
     needs: github_release
     runs-on: ubuntu-latest
     steps:

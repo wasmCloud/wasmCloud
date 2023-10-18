@@ -1,28 +1,29 @@
 [package]
 name = "wascap"
 version = "0.11.2"
-authors = ["wasmCloud Team"]
-edition = "2018"
 description = "Wascap - wasmCloud Capabilities. Library for extracting, embedding, and validating claims"
-license = "Apache-2.0"
 homepage = "https://wasmcloud.com"
 documentation = "https://docs.rs/wascap"
 readme = "README.md"
 keywords = ["jwt", "crypto", "ed25519", "security", "webassembly"]
 categories = ["cryptography", "authentication", "wasm"]
 
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
 [dependencies]
-log = "0.4.14"
-env_logger = "0.10.0"
-serde_derive = "1.0.123"
-serde = "1.0.123"
-nkeys = "0.3.0"
-serde_json = "1.0.61"
-nuid = "0.4.1"
-wasmparser = "0.107.0"
-wasm-gen = "0.1.4"
-wasm-encoder = "0.29.0"
-lazy_static = "1.4.0"
-ring = "0.16.20"
-data-encoding = "2.3.2"
-humantime = "2.1"
+data-encoding = { workspace = true }
+humantime = { workspace = true }
+log = { workspace = true }
+nkeys = { workspace = true }
+nuid = { workspace = true }
+once_cell = { workspace = true }
+ring = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true, features = ["std"] }
+wasm-encoder = { workspace = true }
+wasm-gen = { workspace = true }
+wasmparser = { workspace = true }

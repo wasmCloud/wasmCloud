@@ -177,7 +177,7 @@ dependencies = [
  "once_cell",
  "rand 0.8.5",
  "regex",
- "ring",
+ "ring 0.16.20",
  "rustls-native-certs",
  "rustls-pemfile",
  "rustls-webpki",
@@ -379,7 +379,7 @@ dependencies = [
  "data-encoding",
  "num",
  "once_cell",
- "ring",
+ "ring 0.16.20",
  "serde",
  "serde_json",
 ]
@@ -1807,7 +1807,7 @@ checksum = "6971da4d9c3aa03c3d8f3ff0f4155b534aad021292003895a469716b2a230378"
 dependencies = [
  "base64 0.21.4",
  "pem",
- "ring",
+ "ring 0.16.20",
  "serde",
  "serde_json",
  "simple_asn1",
@@ -2648,11 +2648,11 @@ checksum = "3f02e3a69a868e932a76ee5e026ae1923e761f157aaf3ad0b9d4906eaebf62fc"
 dependencies = [
  "async-compression",
  "data-encoding",
- "ring",
+ "ring 0.16.20",
  "tokio",
  "tokio-stream",
  "tokio-tar",
- "wascap",
+ "wascap 0.11.2 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -2941,10 +2941,24 @@ dependencies = [
  "cc",
  "libc",
  "once_cell",
- "spin",
- "untrusted",
+ "spin 0.5.2",
+ "untrusted 0.7.1",
  "web-sys",
  "winapi",
+]
+
+[[package]]
+name = "ring"
+version = "0.17.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fce3045ffa7c981a6ee93f640b538952e155f1ae3a1a02b84547fc7a56b7059a"
+dependencies = [
+ "cc",
+ "getrandom 0.2.10",
+ "libc",
+ "spin 0.9.8",
+ "untrusted 0.9.0",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -3012,7 +3026,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cd8d6c9f025a446bc4d18ad9632e69aec8f287aa84499ee335599fabd20c3fd8"
 dependencies = [
  "log",
- "ring",
+ "ring 0.16.20",
  "rustls-webpki",
  "sct",
 ]
@@ -3044,8 +3058,8 @@ version = "0.101.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3c7d5dece342910d9ba34d259310cae3e0154b873b35408b787b59bce53d34fe"
 dependencies = [
- "ring",
- "untrusted",
+ "ring 0.16.20",
+ "untrusted 0.7.1",
 ]
 
 [[package]]
@@ -3081,8 +3095,8 @@ version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d53dcdb7c9f8158937a7981b48accfd39a43af418591a5d008c7b22b5e1b7ca4"
 dependencies = [
- "ring",
- "untrusted",
+ "ring 0.16.20",
+ "untrusted 0.7.1",
 ]
 
 [[package]]
@@ -3403,6 +3417,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6e63cff320ae2c57904679ba7cb63280a3dc4613885beafb148ee7bf9aa9042d"
 
 [[package]]
+name = "spin"
+version = "0.9.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
+
+[[package]]
 name = "spki"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3539,7 +3559,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "wascap",
+ "wascap 0.11.2",
  "wasmcloud-component-adapters",
  "wit-component",
 ]
@@ -4018,6 +4038,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a156c684c91ea7d62626509bce3cb4e1d9ed5c4d978f7b4352658f96a4c26b4a"
 
 [[package]]
+name = "untrusted"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
+
+[[package]]
 name = "url"
 version = "2.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4117,6 +4143,24 @@ dependencies = [
 [[package]]
 name = "wascap"
 version = "0.11.2"
+dependencies = [
+ "data-encoding",
+ "humantime",
+ "log",
+ "nkeys",
+ "nuid 0.4.1",
+ "once_cell",
+ "ring 0.17.4",
+ "serde",
+ "serde_json",
+ "wasm-encoder 0.29.0",
+ "wasm-gen",
+ "wasmparser 0.113.3",
+]
+
+[[package]]
+name = "wascap"
+version = "0.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc48258fe9b2c61bf78d21f7fd84a22769de339a79b5ef82bcdf7cebd42b7eb6"
 dependencies = [
@@ -4127,7 +4171,7 @@ dependencies = [
  "log",
  "nkeys",
  "nuid 0.4.1",
- "ring",
+ "ring 0.16.20",
  "serde",
  "serde_derive",
  "serde_json",
@@ -4349,7 +4393,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
- "wascap",
+ "wascap 0.11.2",
  "wasmcloud-control-interface",
  "wasmcloud-core",
  "wasmcloud-host",
@@ -4426,7 +4470,7 @@ dependencies = [
  "futures",
  "lazy_static",
  "opentelemetry 0.19.0",
- "ring",
+ "ring 0.16.20",
  "rmp-serde",
  "serde",
  "serde_json",
@@ -4452,7 +4496,7 @@ dependencies = [
  "tracing",
  "ulid",
  "uuid",
- "wascap",
+ "wascap 0.11.2",
 ]
 
 [[package]]
@@ -4490,7 +4534,7 @@ dependencies = [
  "ulid",
  "url",
  "uuid",
- "wascap",
+ "wascap 0.11.2",
  "wasmcloud-compat",
  "wasmcloud-control-interface",
  "wasmcloud-core",
@@ -4531,7 +4575,7 @@ dependencies = [
  "tracing-futures",
  "tracing-opentelemetry 0.20.0",
  "uuid",
- "wascap",
+ "wascap 0.11.2",
  "wasmcloud-core",
  "wasmcloud-tracing",
 ]
@@ -4573,7 +4617,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
- "wascap",
+ "wascap 0.11.2",
  "wasi-common",
  "wasmcloud-actor",
  "wasmcloud-compat",

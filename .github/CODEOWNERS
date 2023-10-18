@@ -33,6 +33,7 @@ crates/opentelemetry-nats @thomastaylor312 @connorsmith256
 crates/provider-sdk @thomastaylor312 @connorsmith256
 crates/provider-wit-bindgen @thomastaylor312 @vados-cosmonic
 crates/tracing @thomastaylor312 @connorsmith256
+crates/wascap @thomastaylor312 @connorsmith256 @brooksmtownsend
 
 # projects
 crates/providers @wasmCloud/capability-provider-maintainers
