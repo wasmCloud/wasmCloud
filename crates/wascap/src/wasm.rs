@@ -298,7 +298,7 @@ mod test {
         };
         let modified_bytecode = embed_claims(&buffer, &claims, &kp).unwrap();
 
-        if let Some(token) = extract_claims(&modified_bytecode).unwrap() {
+        if let Some(token) = extract_claims(modified_bytecode).unwrap() {
             assert_eq!(claims.issuer, token.claims.issuer);
             assert_eq!(
                 claims.metadata.as_ref().unwrap().caps,
@@ -336,7 +336,7 @@ mod test {
         };
         let modified_bytecode = embed_claims(&dec_module, &claims, &kp).unwrap();
 
-        if let Some(token) = extract_claims(&modified_bytecode).unwrap() {
+        if let Some(token) = extract_claims(modified_bytecode).unwrap() {
             assert_eq!(claims.issuer, token.claims.issuer);
             assert_eq!(
                 claims.metadata.as_ref().unwrap().caps,
@@ -381,7 +381,7 @@ mod test {
         };
 
         let modified_bytecode2 = embed_claims(&modified_bytecode, &new_claims, &kp).unwrap();
-        if let Some(token) = extract_claims(&modified_bytecode2).unwrap() {
+        if let Some(token) = extract_claims(modified_bytecode2).unwrap() {
             assert_eq!(c2.issuer, token.claims.issuer);
             assert_eq!(token.claims.subject, "altered.wasm");
         } else {
@@ -416,7 +416,7 @@ mod test {
         };
         let modified_bytecode = embed_claims(&dec_module, &claims, &kp).unwrap();
 
-        if let Some(token) = extract_claims(&modified_bytecode).unwrap() {
+        if let Some(token) = extract_claims(modified_bytecode).unwrap() {
             assert_eq!(claims.issuer, token.claims.issuer);
             assert_eq!(claims.subject, token.claims.subject);
 

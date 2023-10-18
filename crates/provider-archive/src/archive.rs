@@ -228,7 +228,7 @@ impl ProviderArchive {
             }
         }
 
-        if c == None || libraries.is_empty() {
+        if c.is_none() || libraries.is_empty() {
             // we need at least claims.jwt and one plugin binary
             libraries.clear();
             return Err(

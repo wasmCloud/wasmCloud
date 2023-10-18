@@ -879,8 +879,8 @@ mod test {
         let vres = validate_token::<Actor>(&encoded);
         assert!(vres.is_ok());
         if let Ok(v) = vres {
-            assert_eq!(v.expired, false);
-            assert_eq!(v.cannot_use_yet, true);
+            assert!(!v.expired);
+            assert!(v.cannot_use_yet);
             assert_eq!(v.not_before_human, "in 16m");
         }
     }
@@ -912,7 +912,7 @@ mod test {
         assert!(vres.is_ok());
         if let Ok(v) = vres {
             assert!(v.expired);
-            assert_eq!(v.cannot_use_yet, false);
+            assert!(!v.cannot_use_yet);
             assert_eq!(v.expires_human, "8h ago");
         }
     }
@@ -935,7 +935,7 @@ mod test {
         assert!(vres.is_ok());
         if let Ok(v) = vres {
             assert!(v.expired);
-            assert_eq!(v.cannot_use_yet, false);
+            assert!(!v.cannot_use_yet);
             assert_eq!(v.expires_human, "8h ago");
         }
     }
@@ -1257,7 +1257,7 @@ mod test {
             wascap_revision: Some(WASCAP_INTERNAL_REVISION),
         };
 
-        let encoded_nosep = claims.encode(&kp).unwrap().replace(".", "");
+        let encoded_nosep = claims.encode(&kp).unwrap().replace('.', "");
 
         let decoded = Claims::<Account>::decode(&encoded_nosep);
         assert!(decoded.is_err());
