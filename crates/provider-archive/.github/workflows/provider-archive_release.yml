@@ -1,0 +1,57 @@
+name: PROVIDER-ARCHIVE_RELEASE
+
+on:
+  push:
+    tags:
+      - 'v*' # Push events to matching v*, i.e. v1.0, v20.15.10
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  cargo_check:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - name: Build
+      run: cargo build --verbose
+    - name: Run tests
+      run: cargo test --verbose
+    - name: Check fmt
+      run: cargo fmt -- --check
+
+  clippy_check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - run: rustup component add clippy
+      - name: Run cargo clippy
+        run: cargo clippy --all-features
+
+  release:
+    needs: [cargo_check, clippy_check]
+    runs-on: ubuntu-latest
+    steps:
+    - name: Create Release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ github.ref }}
+        release_name: Release ${{ github.ref }}
+        draft: false
+        prerelease: true
+
+  crates:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v1
+      - name: Cargo login
+        env:
+          CRATES_TOKEN: ${{ secrets.CRATES_PUBLISH_TOKEN }}
+        run: cargo login ${{ env.CRATES_TOKEN }}
+      - name: Cargo publish
+        run: cargo publish --no-verify 
