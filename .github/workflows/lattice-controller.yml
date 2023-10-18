@@ -22,7 +22,7 @@ jobs:
   rust_check:
     runs-on: ubuntu-20.04
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       # If your integration tests require nats or redis, run them here
       - id: run-nats
         uses: wasmcloud/common-actions/run-nats@main
@@ -73,7 +73,7 @@ jobs:
             }
     runs-on: ${{ matrix.config.os }}
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: lowercase the runner OS name
         shell: bash
@@ -147,7 +147,7 @@ jobs:
     needs: [rust_check, build_artifact]
     runs-on: ubuntu-20.04
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - uses: wasmcloud/common-actions/install-wash@main
       # Downloads all artifacts
       - uses: actions/download-artifact@v3
@@ -175,7 +175,7 @@ jobs:
           wash par insert --arch x86_64-windows --binary ${{ env.artifact-name }}-windows-amd64/${{ env.artifact-name }}.exe build/${{ env.artifact-name }}.par.gz
 
       - name: Upload provider archive to GH Actions
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v3
         with:
           name: provider-archive
           path: ${{ env.working-directory }}/build/${{ env.artifact-name }}.par.gz
@@ -204,7 +204,7 @@ jobs:
     if: startswith(github.ref, 'refs/tags/') # Only run on tag push
     runs-on: ubuntu-20.04
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Download provider archive
         uses: actions/download-artifact@v3
         with:
