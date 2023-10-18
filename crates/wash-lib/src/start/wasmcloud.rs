@@ -472,10 +472,7 @@ mod test {
             loop {
                 match tokio::fs::read_to_string(&startup_log_path).await {
                     Ok(file_contents) => {
-                        if ["host", "started"]
-                            .into_iter()
-                            .all(|l| file_contents.contains(l))
-                        {
+                        if file_contents.contains("wasmCloud host started") {
                             // After wasmcloud says it's ready, it still requires some seconds to start up.
                             tokio::time::sleep(Duration::from_secs(3)).await;
                             break;
