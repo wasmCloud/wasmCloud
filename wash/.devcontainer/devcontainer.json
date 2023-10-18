@@ -1,0 +1,26 @@
+{
+	"name": "wash",
+	"image": "rust:bullseye",
+	"features": {
+		"devwasm.azurecr.io/dev-wasm/dev-wasm-feature/rust-wasi:0": {},
+		"ghcr.io/lee-orr/rusty-dev-containers/cargo-binstall:latest": {},
+		"ghcr.io/lee-orr/rusty-dev-containers/cargo-watch:latest": {},
+		"ghcr.io/lee-orr/rusty-dev-containers/cargo-nextest:latest": {},
+		"ghcr.io/devcontainers/features/go:1": {},
+		"ghcr.io/lee-orr/rusty-dev-containers/tinygo:0": {
+			"version": "0.27.0"
+		}
+	},
+	"workspaceMount": "source=${localWorkspaceFolder},target=/wash,type=bind,consistency=cached",
+	"workspaceFolder": "/wash",
+	"customizations": {
+		"vscode": {
+			"settings": {
+				"git.alwaysSignOff": true
+			},
+			"extensions": [
+				"rust-lang.rust-analyzer"
+			]
+		}
+	}
+}

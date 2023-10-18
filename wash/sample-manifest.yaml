@@ -1,0 +1,13 @@
+---
+  actors:
+    - wasmcloud.azurecr.io/echo:0.3.4
+  capabilities:
+    - image_ref: wasmcloud.azurecr.io/httpserver:0.16.3
+      link_name: default
+  links:
+    - actor: ${ECHO_ACTOR:MBCFOPM6JW2APJLXJD3Z5O4CN7CPYJ2B4FTKLJUR5YR5MITIU7HD3WD5}
+      provider_id: VAG3QITQQ2ODAOWB5TTQSDJ53XK3SHBEIFNK4AYJ5RKAX2UNSCAPHA5M
+      contract_id: wasmcloud:httpserver
+      link_name: default
+      values:
+        PORT: 8080
