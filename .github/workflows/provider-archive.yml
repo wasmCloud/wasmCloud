@@ -1,12 +1,22 @@
-name: PROVIDER-ARCHIVE_RELEASE
+name: provider-archive
 
 on:
   push:
+    branches: [ main ]
     tags:
-      - 'v*' # Push events to matching v*, i.e. v1.0, v20.15.10
+    - 'provider-archive-v*'
+  pull_request:
+    branches: [ main ]
+    paths:
+    - "Cargo.lock"
+    - "Cargo.toml"
+    - "crates/provider-archive"
+    - "flake.lock"
+    - "flake.nix"
 
 env:
   CARGO_TERM_COLOR: always
+  working-directory: ./crates/provider-archive
 
 jobs:
   cargo_check:
@@ -15,10 +25,13 @@ jobs:
     - uses: actions/checkout@v2
     - name: Build
       run: cargo build --verbose
+      working-directory: ${{ env.working-directory }}
     - name: Run tests
       run: cargo test --verbose
+      working-directory: ${{ env.working-directory }}
     - name: Check fmt
       run: cargo fmt -- --check
+      working-directory: ${{ env.working-directory }}
 
   clippy_check:
     runs-on: ubuntu-latest
@@ -27,8 +40,10 @@ jobs:
       - run: rustup component add clippy
       - name: Run cargo clippy
         run: cargo clippy --all-features
+        working-directory: ${{ env.working-directory }}
 
   release:
+    if: startswith(github.ref, 'refs/tags/provider-archive-v') # Only run on tag push
     needs: [cargo_check, clippy_check]
     runs-on: ubuntu-latest
     steps:
@@ -39,11 +54,12 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         tag_name: ${{ github.ref }}
-        release_name: Release ${{ github.ref }}
+        release_name: Release provider-archive ${{ github.ref }}
         draft: false
         prerelease: true
 
   crates:
+    if: startswith(github.ref, 'refs/tags/provider-archive-v') # Only run on tag push
     needs: release
     runs-on: ubuntu-latest
     steps:
@@ -55,3 +71,4 @@ jobs:
         run: cargo login ${{ env.CRATES_TOKEN }}
       - name: Cargo publish
         run: cargo publish --no-verify 
+        working-directory: ${{ env.working-directory }}

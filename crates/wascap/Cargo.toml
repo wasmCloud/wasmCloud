@@ -8,7 +8,6 @@ readme = "README.md"
 keywords = ["jwt", "crypto", "ed25519", "security", "webassembly"]
 categories = ["cryptography", "authentication", "wasm"]
 
-
 authors.workspace = true
 edition.workspace = true
 license.workspace = true

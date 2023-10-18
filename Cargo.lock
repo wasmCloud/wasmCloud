@@ -1107,19 +1107,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "env_logger"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85cdab6a89accf66733ad5a1693a4dcced6aeff64602b634530dd73c1f3ee9f0"
-dependencies = [
- "humantime",
- "is-terminal",
- "log",
- "regex",
- "termcolor",
-]
-
-[[package]]
 name = "equivalent"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2642,17 +2629,17 @@ dependencies = [
 
 [[package]]
 name = "provider-archive"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f02e3a69a868e932a76ee5e026ae1923e761f157aaf3ad0b9d4906eaebf62fc"
+version = "0.8.0"
 dependencies = [
  "async-compression",
  "data-encoding",
- "ring 0.16.20",
+ "ring 0.17.4",
+ "serde_json",
+ "tempfile",
  "tokio",
  "tokio-stream",
  "tokio-tar",
- "wascap 0.11.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "wascap",
 ]
 
 [[package]]
@@ -3541,15 +3528,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "termcolor"
-version = "1.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6093bad37da69aab9d123a8091e4be0aa4a03e4d601ec641c327398315f62b64"
-dependencies = [
- "winapi-util",
-]
-
-[[package]]
 name = "test-actors"
 version = "0.1.0"
 dependencies = [
@@ -3559,7 +3537,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "wascap 0.11.2",
+ "wascap",
  "wasmcloud-component-adapters",
  "wit-component",
 ]
@@ -4159,28 +4137,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "wascap"
-version = "0.11.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc48258fe9b2c61bf78d21f7fd84a22769de339a79b5ef82bcdf7cebd42b7eb6"
-dependencies = [
- "data-encoding",
- "env_logger",
- "humantime",
- "lazy_static",
- "log",
- "nkeys",
- "nuid 0.4.1",
- "ring 0.16.20",
- "serde",
- "serde_derive",
- "serde_json",
- "wasm-encoder 0.29.0",
- "wasm-gen",
- "wasmparser 0.107.0",
-]
-
-[[package]]
 name = "wasi"
 version = "0.9.0+wasi-snapshot-preview1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4393,7 +4349,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
- "wascap 0.11.2",
+ "wascap",
  "wasmcloud-control-interface",
  "wasmcloud-core",
  "wasmcloud-host",
@@ -4496,7 +4452,7 @@ dependencies = [
  "tracing",
  "ulid",
  "uuid",
- "wascap 0.11.2",
+ "wascap",
 ]
 
 [[package]]
@@ -4534,7 +4490,7 @@ dependencies = [
  "ulid",
  "url",
  "uuid",
- "wascap 0.11.2",
+ "wascap",
  "wasmcloud-compat",
  "wasmcloud-control-interface",
  "wasmcloud-core",
@@ -4575,7 +4531,7 @@ dependencies = [
  "tracing-futures",
  "tracing-opentelemetry 0.20.0",
  "uuid",
- "wascap 0.11.2",
+ "wascap",
  "wasmcloud-core",
  "wasmcloud-tracing",
 ]
@@ -4617,7 +4573,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
- "wascap 0.11.2",
+ "wascap",
  "wasi-common",
  "wasmcloud-actor",
  "wasmcloud-compat",
@@ -4640,16 +4596,6 @@ dependencies = [
  "tracing-opentelemetry 0.20.0",
  "tracing-subscriber",
  "wasmcloud-core",
-]
-
-[[package]]
-name = "wasmparser"
-version = "0.107.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "29e3ac9b780c7dda0cac7a52a5d6d2d6707cc6e3451c9db209b6c758f40d7acb"
-dependencies = [
- "indexmap 1.9.3",
- "semver",
 ]
 
 [[package]]
@@ -5104,15 +5050,6 @@ name = "winapi-i686-pc-windows-gnu"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac3b87c63620426dd9b991e5ce0329eff545bccbbb34f3be09ff6fb6ab51b7b6"
-
-[[package]]
-name = "winapi-util"
-version = "0.1.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f29e6f9198ba0d26b4c9f07dbe6f9ed633e1f3d5b8b414090084349e46a52596"
-dependencies = [
- "winapi",
-]
 
 [[package]]
 name = "winapi-x86_64-pc-windows-gnu"

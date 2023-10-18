@@ -30,6 +30,7 @@ Cargo.* @wasmCloud/host-maintainers
 # shared crates
 crates/core @wasmCloud/org-maintainers
 crates/opentelemetry-nats @thomastaylor312 @connorsmith256
+crates/provider-archive @wasmCloud/capability-provider-maintainers
 crates/provider-sdk @thomastaylor312 @connorsmith256
 crates/provider-wit-bindgen @thomastaylor312 @vados-cosmonic
 crates/tracing @thomastaylor312 @connorsmith256

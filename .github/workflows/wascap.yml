@@ -5,16 +5,14 @@ on:
     branches: [ main ]
     tags:
     - 'wascap-v*'
-    paths:
-    - "Cargo.lock"
-    - "Cargo.toml"
-    - "crates/wascap"
   pull_request:
     branches: [ main ]
     paths:
     - "Cargo.lock"
     - "Cargo.toml"
     - "crates/wascap"
+    - "flake.lock"
+    - "flake.nix"
 
 env:
   CARGO_TERM_COLOR: always
