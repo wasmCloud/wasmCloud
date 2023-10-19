@@ -21,6 +21,7 @@ url = "2.2.2"
 vaultrs = "0.6.0"
 wasmcloud-interface-keyvalue = "0.11"
 wasmbus-rpc = { version = "0.14", features = ["otel"] }
+simple_env_load = "0.2.0"
 
 # test dependencies
 [dev-dependencies]

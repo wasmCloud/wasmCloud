@@ -9,6 +9,8 @@ fi
 
 # localhost port for server - should be unique to avoid conflicts
 PORT=11182
+# Name of environment variables file
+ENV_FILE=vault_test.env
 # name of vault's temporary docker container
 CONTAINER_NAME=kv-vault-test
 # mount point, default is "secret"
@@ -20,6 +22,7 @@ RUST_LOG=debug
 RELEASE_FLAG=--release
 
 cleanup() {
+    rm -f ${ENV_FILE}
     docker rm -f ${CONTAINER_NAME} 2>/dev/null
     killall -q kv-vault || true
 }
@@ -53,6 +56,13 @@ export VAULT_ADDR=http://127.0.0.1:${PORT}
 export SHORT_LIVED_TOKEN=$(docker exec -i -e VAULT_TOKEN=${VAULT_TOKEN} ${CONTAINER_NAME} \
     vault token create -ttl 120s -renewable -format json -address=http://127.0.0.1:8200 | jq -r .auth.client_token)
 [ -n "$VAULT_MOUNT" ] && export VAULT_MOUNT=${VAULT_MOUNT}
+# write env file for tests
+cat <<EOF > ${ENV_FILE}
+VAULT_ADDR=$VAULT_ADDR
+VAULT_MOUNT=$VAULT_MOUNT
+VAULT_TOKEN=$VAULT_TOKEN
+EOF
+export ENV_FILE=${ENV_FILE}
 cargo test ${RELEASE_FLAG} -- --nocapture
 
 # cleanup

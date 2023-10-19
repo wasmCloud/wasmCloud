@@ -141,8 +141,12 @@ async fn json_values(_opt: &TestOptions) -> RpcResult<()> {
     let prov = test_provider().await;
     env_logger::try_init().ok();
 
-    let vault_direct = kv_vault_lib::client::Client::new(kv_vault_lib::config::Config::default())
-        .expect("client from defaults");
+    let env_file = std::env::var("ENV_FILE").expect("environment configuration file to exist");
+    let config = HashMap::from_iter([("env".to_string(), env_file)]);
+    let vault_direct = kv_vault_lib::client::Client::new(
+        kv_vault_lib::config::Config::from_values(&config).expect("configuration to be valid"),
+    )
+    .expect("client from defaults");
 
     // test pulling data when other processes have saved json data
     let mut map1 = HashMap::new();
@@ -186,8 +190,13 @@ async fn json_values(_opt: &TestOptions) -> RpcResult<()> {
 async fn renewal(_opt: &TestOptions) -> RpcResult<()> {
     let token = std::env::var("SHORT_LIVED_TOKEN")
         .expect("token to exist in env. Run this test with `run-test.sh`.");
-    // Weird but env takes precedence so we have to set the environment variable
-    std::env::set_var("VAULT_TOKEN", token.clone());
+
+    // Slightly annoying parsing of env file and then overwriting the VAULT_TOKEN with the short lived token
+    let env_file = std::env::var("ENV_FILE").expect("environment configuration file to exist");
+    let data = std::fs::read_to_string(env_file).expect("env file to load properly");
+    simple_env_load::parse_and_set(&data, |k, v| std::env::set_var(k, v));
+    std::env::set_var("VAULT_TOKEN", token.to_string());
+
     let config_values = std::collections::HashMap::from_iter([
         ("token_increment_ttl".to_string(), "130s".to_string()),
         ("token_refresh_interval".to_string(), "5".to_string()),

@@ -1,3 +1,6 @@
 build
 target
 .idea
+
+# Ignore test created environment files
+*.env
