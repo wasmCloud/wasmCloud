@@ -42,25 +42,9 @@ jobs:
         run: cargo clippy --all-features
         working-directory: ${{ env.working-directory }}
 
-  release:
+  release-crate:
     if: startswith(github.ref, 'refs/tags/provider-archive-v') # Only run on tag push
     needs: [cargo_check, clippy_check]
-    runs-on: ubuntu-latest
-    steps:
-    - name: Create Release
-      id: create_release
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        tag_name: ${{ github.ref }}
-        release_name: Release provider-archive ${{ github.ref }}
-        draft: false
-        prerelease: true
-
-  crates:
-    if: startswith(github.ref, 'refs/tags/provider-archive-v') # Only run on tag push
-    needs: release
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
