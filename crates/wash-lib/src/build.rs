@@ -15,7 +15,7 @@ use wit_component::{ComponentEncoder, StringEncoding};
 
 use crate::{
     cli::{
-        claims::{sign_file, ActorMetadata, SignCommand},
+        claims::{sign_file, ActorMetadata, GenerateCommon, SignCommand},
         OutputKind,
     },
     parser::{
@@ -181,6 +181,11 @@ fn sign_actor_wasm(
             call_alias: actor_config.call_alias.clone(),
             issuer: signing_config.issuer,
             subject: signing_config.subject,
+            common: GenerateCommon {
+                disable_keygen: signing_config.disable_keygen,
+                directory: signing_config.keys_directory,
+                ..Default::default()
+            },
             tags,
             ..Default::default()
         },

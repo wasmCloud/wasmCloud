@@ -53,12 +53,15 @@ pub(crate) async fn handle_command(command: BuildCommand) -> Result<CommandOutpu
     let config = get_config(command.config_path, Some(true))?;
 
     match config.project_type {
-        TypeConfig::Actor(ref _actor_config) => {
+        TypeConfig::Actor(ref actor_config) => {
             let sign_config = if command.build_only {
                 None
             } else {
                 Some(SignConfig {
-                    keys_directory: command.keys_directory,
+                    keys_directory: command
+                        .keys_directory
+                        .clone()
+                        .or(Some(actor_config.key_directory.to_path_buf())),
                     issuer: command.issuer,
                     subject: command.subject,
                     disable_keygen: command.disable_keygen,
@@ -69,7 +72,7 @@ pub(crate) async fn handle_command(command: BuildCommand) -> Result<CommandOutpu
 
             let json_output = HashMap::from([
                 ("actor_path".to_string(), json!(actor_path)),
-                ("signed".to_string(), json!(command.build_only)),
+                ("signed".to_string(), json!(!command.build_only)),
             ]);
             Ok(CommandOutput::new(
                 if command.build_only {
