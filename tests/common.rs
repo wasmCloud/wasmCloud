@@ -1,4 +1,6 @@
 use std::fs::read_to_string;
+use std::net::TcpListener;
+use std::net::{Ipv4Addr, SocketAddrV4};
 use std::{
     env,
     fs::{create_dir_all, remove_dir_all},
@@ -9,7 +11,6 @@ use anyhow::{bail, Context, Result};
 use rand::{distributions::Alphanumeric, Rng};
 use sysinfo::{ProcessExt, SystemExt};
 use tempfile::TempDir;
-use tokio::net::TcpStream;
 use tokio::{
     fs::File,
     io::AsyncWriteExt,
@@ -18,7 +19,7 @@ use tokio::{
 };
 
 use wash_lib::cli::output::GetHostsCommandOutput;
-use wash_lib::start::{ensure_nats_server, start_nats_server, NatsConfig};
+use wash_lib::start::{ensure_nats_server, start_nats_server, NatsConfig, WASMCLOUD_HOST_BIN};
 use wasmcloud_control_interface::Host;
 
 #[allow(unused)]
@@ -79,20 +80,13 @@ pub(crate) async fn start_nats(port: u16, nats_install_dir: &PathBuf) -> Result<
     start_nats_server(nats_binary, std::process::Stdio::null(), config).await
 }
 
-const RANDOM_PORT_RANGE_START: u16 = 5000;
-const RANDOM_PORT_RANGE_END: u16 = 6000;
-const LOCALHOST: &str = "127.0.0.1";
-
 /// Returns an open port on the interface, searching within the range endpoints, inclusive
-async fn find_open_port() -> Result<u16> {
-    for i in RANDOM_PORT_RANGE_START..=RANDOM_PORT_RANGE_END {
-        if let Ok(conn) = TcpStream::connect((LOCALHOST, i)).await {
-            drop(conn);
-        } else {
-            return Ok(i);
-        }
-    }
-    bail!("Failed to find open port for host")
+pub(crate) async fn find_open_port() -> Result<u16> {
+    TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
+        .context("failed to bind random port")?
+        .local_addr()
+        .map(|addr| addr.port())
+        .context("failed to get local address from opened TCP socket")
 }
 
 #[allow(unused)]
@@ -110,6 +104,7 @@ impl Drop for TestWashInstance {
             test_dir, kill_cmd, ..
         } = self;
 
+        // Attempt to stop the host (this may fail)
         let kill_cmd = kill_cmd.to_string();
         let (_wash, down) = kill_cmd.trim_matches('"').split_once(' ').unwrap();
         wash()
@@ -123,16 +118,10 @@ impl Drop for TestWashInstance {
             .output()
             .expect("Could not spawn wash down process");
 
+        // Attempt to stop NATS
         self.nats
             .start_kill()
             .expect("failed to start_kill() on nats instance");
-
-        // Check to see if process was removed
-        let mut info = sysinfo::System::new_with_specifics(
-            sysinfo::RefreshKind::new().with_processes(sysinfo::ProcessRefreshKind::new()),
-        );
-
-        info.refresh_processes();
 
         remove_dir_all(test_dir).expect("failed to remove temporary directory during cleanup");
     }
@@ -206,7 +195,6 @@ impl TestWashInstance {
                         }
                     }
                     _ => {
-                        println!("no host startup logs in output yet, waiting 1 second");
                         tokio::time::sleep(Duration::from_secs(1)).await;
                     }
                 }
@@ -318,7 +306,7 @@ pub(crate) async fn wait_until_process_has_count(
     })
     .await
     .context(format!(
-        "Failed to find find satisfactory amount of processes named [{filter}]"
+        "failed to find satisfactory amount of processes named [{filter}]"
     ))?;
 
     Ok(())
@@ -413,12 +401,13 @@ pub(crate) async fn init_workspace(actor_names: Vec<&str>) -> Result<WorkspaceTe
 #[allow(dead_code)]
 pub(crate) async fn wait_for_no_hosts() -> Result<()> {
     wait_until_process_has_count(
-        "wasmcloud_host",
+        WASMCLOUD_HOST_BIN,
         |v| v == 0,
         Duration::from_secs(15),
         Duration::from_millis(250),
     )
     .await
+    .context("number of hosts running is still non-zero")
 }
 
 /// Wait for NATS to start running by checking for process names.
@@ -432,6 +421,7 @@ pub(crate) async fn wait_for_nats_to_start() -> Result<()> {
         Duration::from_secs(1),
     )
     .await
+    .context("at least one nats-server process has not started")
 }
 
 /// Wait for no nats to be running by checking for process names
@@ -444,4 +434,5 @@ pub(crate) async fn wait_for_no_nats() -> Result<()> {
         Duration::from_millis(250),
     )
     .await
+    .context("number of nats-server processes should be zero")
 }

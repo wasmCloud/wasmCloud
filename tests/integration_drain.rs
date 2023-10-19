@@ -189,7 +189,6 @@ fn set_smithy_cache_dir() -> (PathBuf, String) {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn test_smithy_cache_drain() {
-    println!("temp dir is {}", &std::env::temp_dir().display());
     let (_sys_tmp_cache, smithy_cache) = set_smithy_cache_dir();
     let drain_basic = wash()
         .args(["drain", "smithy", "-o", "json"])

@@ -49,7 +49,7 @@ test-watch: ## Run unit tests continously, can optionally specify a target test 
 
 test-integration: ## Run the entire integration test suite (with docker compose)
 	@$(DOCKER) compose -f ./tools/docker-compose.yml up --detach
-	@$(CARGO) nextest run $(TARGET) --profile integration -E 'kind(test)'
+	@$(CARGO) nextest run $(TARGET) --profile integration -E 'kind(test)' --nocapture
 	@$(DOCKER) compose -f ./tools/docker-compose.yml down
 
 test-integration-ci: ## Run the entire integration test suite only

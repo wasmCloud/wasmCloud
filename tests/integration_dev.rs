@@ -9,7 +9,7 @@ use tokio::{process::Command, sync::RwLock, time::Duration};
 mod common;
 
 use crate::common::{
-    init, start_nats, test_dir_with_subfolder, wait_for_no_hosts, wait_for_no_nats,
+    find_open_port, init, start_nats, test_dir_with_subfolder, wait_for_no_hosts, wait_for_no_nats,
 };
 
 #[tokio::test]
@@ -28,17 +28,18 @@ async fn integration_dev_hello_actor_serial() -> Result<()> {
         .await
         .context("one or more unexpected wasmcloud instances running")?;
 
-    let mut nats = start_nats(5895, &dir).await?;
+    let nats_port = find_open_port().await?;
+    let mut nats = start_nats(nats_port, &dir).await?;
 
     let dev_cmd = Arc::new(RwLock::new(
         Command::new(env!("CARGO_BIN_EXE_wash"))
             .args([
                 "dev",
                 "--nats-port",
-                "5895",
+                nats_port.to_string().as_ref(),
                 "--nats-connect-only",
                 "--ctl-port",
-                "5895",
+                nats_port.to_string().as_ref(),
                 "--use-host-subprocess",
                 "--disable-wadm",
             ])
@@ -103,7 +104,7 @@ async fn integration_dev_hello_actor_serial() -> Result<()> {
 
     wait_for_no_nats()
         .await
-        .context("nats instance failed to exit cleanly (processes still left over")?;
+        .context("nats instance failed to exit cleanly (processes still left over)")?;
 
     Ok(())
 }
