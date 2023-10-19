@@ -40,7 +40,7 @@ impl From<Level> for String {
 /// A log message has a `level` describing what kind of message is being sent, a context, which is an uninterpreted string meant to help consumers group similar messages, and a string containing the message text.
 pub fn log(level: Level, context: &str, message: &str) {
     let level = level.into();
-    let text = if context == "" {
+    let text = if context.is_empty() {
         message.into()
     } else {
         format!("context: {context}; {message}")

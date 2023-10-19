@@ -188,7 +188,7 @@ jobs:
         echo 'version=${GITHUB_REF_NAME#v}' >> $GITHUB_OUTPUT
 
     - name: Login to AzureCR
-      if: startswith(github.ref, 'refs/tags/')
+      if: startswith(github.ref, 'refs/tags/v')
       uses: azure/docker-login@v1
       with:
         login-server: ${{ secrets.AZURECR_PUSH_URL }}
@@ -203,7 +203,7 @@ jobs:
         password: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Login to DockerHub
-      if: startswith(github.ref, 'refs/tags/')
+      if: startswith(github.ref, 'refs/tags/v')
       uses: docker/login-action@v3
       with:
         username: ${{ secrets.DOCKERHUB_PUSH_USER }}
@@ -222,7 +222,7 @@ jobs:
         docker run ghcr.io/${{ steps.ctx.outputs.package }}:${{ steps.ctx.outputs.sha_short }} wasmcloud --version
 
     - name: Push tag
-      if: startswith(github.ref, 'refs/tags/')
+      if: startswith(github.ref, 'refs/tags/v')
       run: |
         buildah manifest push --storage-driver=vfs --all --format 'v2s2' wasmcloud docker://${{ steps.ctx.outputs.package }}:${{ steps.ctx.outputs.version }}
         buildah manifest push --storage-driver=vfs --all --format 'v2s2' wasmcloud docker://ghcr.io/${{ steps.ctx.outputs.package }}:${{ steps.ctx.outputs.version }}
@@ -235,7 +235,7 @@ jobs:
   # TODO: Push `latest`
 
   release:
-    if: startsWith(github.ref, 'refs/tags/') && github.event_name == 'push'
+    if: startsWith(github.ref, 'refs/tags/v') && github.event_name == 'push'
     needs:
     - build-bin
     - build-doc
@@ -244,7 +244,7 @@ jobs:
     - oci
     - test-linux
     - test-windows
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     permissions:
       contents: write
     steps:
@@ -286,3 +286,21 @@ jobs:
           wasmcloud-x86_64-apple-darwin
           wasmcloud-x86_64-pc-windows-gnu
           wasmcloud-x86_64-unknown-linux-musl
+
+  crates:
+    strategy:
+      matrix:
+        crate:
+        - provider-archive
+        - wascap
+
+    name: publish ${{ matrix.crate }} to crates.io
+    if: startsWith(github.ref, 'refs/tags/') && github.event_name == 'push'
+    needs: cargo
+    runs-on: ubuntu-22.04
+    steps:
+    - uses: actions/checkout@v4.1.0
+      if: startsWith(github.ref, 'refs/tags/${{ matrix.crate }}-v')
+    - run: cargo publish --token ${{ secrets.CRATES_PUBLISH_TOKEN }}
+      working-directory: ./crates/${{ matrix.crate }}
+      if: startsWith(github.ref, 'refs/tags/${{ matrix.crate }}-v')

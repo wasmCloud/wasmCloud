@@ -17,8 +17,7 @@ pub fn get_random_u64() -> u64 {
 pub fn get_random_bytes(n: u64) -> Vec<u8> {
     let n = n.try_into().expect("too many bytes requested");
     iter::repeat_with(random32)
-        .map(u32::to_ne_bytes)
-        .flatten()
+        .flat_map(u32::to_ne_bytes)
         .take(n)
         .collect()
 }
