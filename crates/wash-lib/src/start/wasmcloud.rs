@@ -292,28 +292,25 @@ mod test {
         is_bin_installed, start_nats_server, start_wasmcloud_host, NatsConfig, NATS_SERVER_BINARY,
     };
 
-    use anyhow::{bail, Context, Result};
+    use anyhow::{Context, Result};
     use reqwest::StatusCode;
+    use std::net::{Ipv4Addr, SocketAddrV4};
     use std::{collections::HashMap, env::temp_dir};
     use tokio::fs::{create_dir_all, remove_dir_all};
-    use tokio::net::TcpStream;
+    use tokio::net::TcpListener;
     use tokio::time::Duration;
 
     const WASMCLOUD_VERSION: &str = "v0.79.0-rc3";
-    const RANDOM_PORT_RANGE_START: u16 = 5000;
-    const RANDOM_PORT_RANGE_END: u16 = 6000;
     const LOCALHOST: &str = "127.0.0.1";
 
     /// Returns an open port on the interface, searching within the range endpoints, inclusive
     async fn find_open_port() -> Result<u16> {
-        for i in RANDOM_PORT_RANGE_START..=RANDOM_PORT_RANGE_END {
-            if let Ok(conn) = TcpStream::connect((LOCALHOST, i)).await {
-                drop(conn);
-            } else {
-                return Ok(i);
-            }
-        }
-        bail!("Failed to find open port for host")
+        TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
+            .await
+            .context("failed to bind random port")?
+            .local_addr()
+            .map(|addr| addr.port())
+            .context("failed to get local address from opened TCP socket")
     }
 
     #[tokio::test]

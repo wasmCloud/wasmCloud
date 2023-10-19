@@ -229,7 +229,7 @@ pub async fn handle_command(
                 hosts
                     .into_iter()
                     .find(|h| h.id == host_id)
-                    .ok_or_else(|| anyhow!("failed to find host [{host_id}]"))?
+                    .with_context(|| format!("failed to find host [{host_id}]"))?
             } else {
                 bail!(
                     "{} hosts detected, please specify the host on which to deploy with --host-id",
@@ -373,7 +373,7 @@ pub async fn handle_command(
 
                 if !cmd.leave_host_running {
                     eprintln!("⏳ stopping wasmCloud instance...");
-                    handle_down(DownCommand::default(), output_kind).await?;
+                    handle_down(DownCommand::default(), output_kind).await.context("down command failed")?;
                     if let Some(handle) = host_subprocess.and_then(|hs| hs.into_inner())  {
                         handle.await?;
                     }
