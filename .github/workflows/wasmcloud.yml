@@ -299,7 +299,7 @@ jobs:
     needs: cargo
     runs-on: ubuntu-22.04
     steps:
-    - uses: actions/checkout@v4.1.0
+    - uses: actions/checkout@v4.1.1
       if: startsWith(github.ref, 'refs/tags/${{ matrix.crate }}-v')
     - run: cargo publish --token ${{ secrets.CRATES_PUBLISH_TOKEN }}
       working-directory: ./crates/${{ matrix.crate }}
