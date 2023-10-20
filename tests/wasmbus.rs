@@ -491,7 +491,7 @@ async fn wasmbus() -> anyhow::Result<()> {
     )
     .context("failed to connect to NATS")?;
 
-    // FIXME: we should be using separate NATS clients for CTL, RPC, and PROV_RPC
+    // FIXME: we should be using separate NATS clients for CTL and RPC
 
     let (
         (component_redis_server, component_stop_redis_tx, component_redis_url),
@@ -525,7 +525,6 @@ async fn wasmbus() -> anyhow::Result<()> {
     let (host, shutdown) = Host::new(HostConfig {
         ctl_nats_url: ctl_nats_url.clone(),
         rpc_nats_url: ctl_nats_url.clone(),
-        prov_rpc_nats_url: ctl_nats_url.clone(),
         lattice_prefix: TEST_PREFIX.to_string(),
         js_domain: None,
         labels: HashMap::from([("label1".into(), "value1".into())]),
@@ -544,7 +543,6 @@ async fn wasmbus() -> anyhow::Result<()> {
     let (host_two, shutdown_two) = Host::new(HostConfig {
         ctl_nats_url: ctl_nats_url.clone(),
         rpc_nats_url: ctl_nats_url.clone(),
-        prov_rpc_nats_url: ctl_nats_url.clone(),
         lattice_prefix: TEST_PREFIX.to_string(),
         labels: HashMap::from([("label1".into(), "value1".into())]),
         cluster_key: Some(Arc::clone(&cluster_key_two)),

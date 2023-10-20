@@ -32,14 +32,6 @@ pub struct Host {
     pub rpc_key: Option<Arc<KeyPair>>,
     /// Whether to require TLS for RPC connection
     pub rpc_tls: bool,
-    /// NATS URL to pass to providers for RPC
-    pub prov_rpc_nats_url: Url,
-    /// Authentication JWT for Provider RPC connection, must be specified with prov_rpc_seed
-    pub prov_rpc_jwt: Option<String>,
-    /// Authentication key pair for Provider RPC connection, must be specified with prov_rpc_jwt
-    pub prov_rpc_key: Option<Arc<KeyPair>>,
-    /// Whether to require TLS for Provider RPC connection
-    pub prov_rpc_tls: bool,
     /// The lattice the host belongs to
     pub lattice_prefix: String,
     /// The domain to use for host Jetstream operations
@@ -96,11 +88,6 @@ impl Default for Host {
             rpc_jwt: None,
             rpc_key: None,
             rpc_tls: false,
-            prov_rpc_nats_url: Url::parse("nats://localhost:4222")
-                .expect("failed to parse Provider RPC NATS URL"),
-            prov_rpc_jwt: None,
-            prov_rpc_key: None,
-            prov_rpc_tls: false,
             lattice_prefix: "default".to_string(),
             js_domain: None,
             labels: HashMap::default(),
