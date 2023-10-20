@@ -301,7 +301,6 @@ mod test {
     use tokio::time::Duration;
 
     const WASMCLOUD_VERSION: &str = "v0.79.0-rc3";
-    const LOCALHOST: &str = "127.0.0.1";
 
     /// Returns an open port on the interface, searching within the range endpoints, inclusive
     async fn find_open_port() -> Result<u16> {
