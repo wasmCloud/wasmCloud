@@ -159,31 +159,6 @@ struct Args {
     #[clap(long = "rpc-tls", env = "WASMCLOUD_RPC_TLS", hide = true)]
     rpc_tls: bool,
 
-    /// An IP address or DNS name to use to connect to NATS for Provider RPC messages, defaults to the value supplied to --nats-host if not supplied
-    #[clap(long = "prov-rpc-host", env = "WASMCLOUD_PROV_RPC_HOST", hide = true)]
-    prov_rpc_host: Option<String>,
-    /// A port to use to connect to NATS for Provider RPC messages, defaults to the value supplied to --nats-port if not supplied
-    #[clap(long = "prov-rpc-port", env = "WASMCLOUD_PROV_RPC_PORT", hide = true)]
-    prov_rpc_port: Option<u16>,
-    /// A user JWT to use to authenticate to NATS for Provider RPC messages, defaults to the value supplied to --nats-jwt if not supplied
-    #[clap(
-        long = "prov-rpc-jwt",
-        env = "WASMCLOUD_PROV_RPC_JWT",
-        requires = "prov_rpc_seed",
-        hide = true
-    )]
-    prov_rpc_jwt: Option<String>,
-    /// A seed nkey to use to authenticate to NATS for Provider RPC messages, defaults to the value supplied to --nats-seed if not supplied
-    #[clap(
-        long = "prov-rpc-seed",
-        env = "WASMCLOUD_PROV_RPC_SEED",
-        requires = "prov_rpc_jwt",
-        hide = true
-    )]
-    prov_rpc_seed: Option<String>,
-    /// Optional flag to require host communication over TLS with a NATS server for Provider RPC messages
-    #[clap(long = "prov-rpc-tls", env = "WASMCLOUD_PROV_RPC_TLS", hide = true)]
-    prov_rpc_tls: bool,
     /// If provided, enables policy checks on start actions and actor invocations
     #[clap(long = "policy-topic", env = "WASMCLOUD_POLICY_TOPIC")]
     policy_topic: Option<String>,
@@ -273,14 +248,6 @@ async fn main() -> anyhow::Result<()> {
         args.rpc_port.unwrap_or(args.nats_port)
     ))
     .context("failed to construct a valid `rpc_nats_url` using `rpc-host` and `rpc-port`")?;
-    let prov_rpc_nats_url = Url::parse(&format!(
-        "nats://{}:{}",
-        args.prov_rpc_host.unwrap_or(args.nats_host),
-        args.prov_rpc_port.unwrap_or(args.nats_port)
-    ))
-    .context(
-        "failed to construct a valid `prov_rpc_nats_url` using `prov-rpc-host` and `prov-rpc-port`",
-    )?;
 
     let host_key = args
         .host_seed
@@ -316,13 +283,6 @@ async fn main() -> anyhow::Result<()> {
         .map(KeyPair::from_seed)
         .transpose()
         .context("failed to construct RPC key pair from seed")?
-        .map(Arc::new);
-    let prov_rpc_key = args
-        .prov_rpc_seed
-        .as_deref()
-        .map(KeyPair::from_seed)
-        .transpose()
-        .context("failed to construct provider RPC key pair from seed")?
         .map(Arc::new);
     let oci_opts = OciConfig {
         allow_latest: args.allow_latest,
@@ -363,10 +323,6 @@ async fn main() -> anyhow::Result<()> {
         rpc_jwt: args.rpc_jwt.or_else(|| args.nats_jwt.clone()),
         rpc_key: rpc_key.or_else(|| nats_key.clone()),
         rpc_tls: args.rpc_tls,
-        prov_rpc_nats_url,
-        prov_rpc_jwt: args.prov_rpc_jwt.or_else(|| args.nats_jwt.clone()),
-        prov_rpc_key: prov_rpc_key.or_else(|| nats_key.clone()),
-        prov_rpc_tls: args.prov_rpc_tls,
         allow_file_load: args.allow_file_load,
         log_level,
         enable_structured_logging: args.enable_structured_logging,

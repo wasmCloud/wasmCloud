@@ -1507,10 +1507,8 @@ pub struct Host {
     ctl_topic_prefix: String,
     /// NATS client to use for control interface subscriptions and jetstream queries
     ctl_nats: async_nats::Client,
-    /// NATS client to use for actor RPC calls
+    /// NATS client to use for RPC calls
     rpc_nats: async_nats::Client,
-    /// NATS client to use for communicating with capability providers
-    prov_rpc_nats: async_nats::Client,
     data: async_nats::jetstream::kv::Store,
     data_watch: AbortHandle,
     policy_manager: Arc<PolicyManager>,
@@ -1874,7 +1872,7 @@ impl Host {
             "version": env!("CARGO_PKG_VERSION"),
         });
 
-        let ((ctl_nats, queue), rpc_nats, prov_rpc_nats) = try_join!(
+        let ((ctl_nats, queue), rpc_nats) = try_join!(
             async {
                 debug!(
                     ctl_nats_url = config.ctl_nats_url.as_str(),
@@ -1915,21 +1913,6 @@ impl Host {
                 )
                 .await
                 .context("failed to establish NATS RPC server connection")
-            },
-            async {
-                debug!(
-                    prov_rpc_nats_url = config.prov_rpc_nats_url.as_str(),
-                    "connecting to NATS Provider RPC server"
-                );
-                connect_nats(
-                    config.prov_rpc_nats_url.as_str(),
-                    config.prov_rpc_jwt.as_ref(),
-                    config.prov_rpc_key.clone(),
-                    config.prov_rpc_tls,
-                    None,
-                )
-                .await
-                .context("failed to establish NATS provider RPC server connection")
             }
         )?;
 
@@ -2011,7 +1994,6 @@ impl Host {
             labels,
             ctl_nats,
             rpc_nats,
-            prov_rpc_nats,
             host_config: config,
             data: data.clone(),
             data_watch: data_watch_abort.clone(),
@@ -2163,12 +2145,8 @@ impl Host {
             .context("failed to publish stop event")?;
             // Before we exit, make sure to flush all messages or we may lose some that we've
             // thought were sent (like the host_stopped event)
-            try_join!(
-                host.ctl_nats.flush(),
-                host.rpc_nats.flush(),
-                host.prov_rpc_nats.flush(),
-            )
-            .context("failed to flush NATS clients")?;
+            try_join!(host.ctl_nats.flush(), host.rpc_nats.flush(),)
+                .context("failed to flush NATS clients")?;
             Ok(())
         }))
     }
@@ -3082,7 +3060,7 @@ impl Host {
                 .collect();
             let lattice_rpc_user_seed = self
                 .host_config
-                .prov_rpc_key
+                .rpc_key
                 .as_ref()
                 .map(|key| key.seed())
                 .transpose()
@@ -3106,9 +3084,9 @@ impl Host {
                 host_id: self.host_key.public_key(),
                 lattice_rpc_prefix: self.host_config.lattice_prefix.clone(),
                 link_name: link_name.to_string(),
-                lattice_rpc_user_jwt: self.host_config.prov_rpc_jwt.clone().unwrap_or_default(),
+                lattice_rpc_user_jwt: self.host_config.rpc_jwt.clone().unwrap_or_default(),
                 lattice_rpc_user_seed: lattice_rpc_user_seed.unwrap_or_default(),
-                lattice_rpc_url: self.host_config.prov_rpc_nats_url.to_string(),
+                lattice_rpc_url: self.host_config.rpc_nats_url.to_string(),
                 env_values: vec![],
                 instance_id: Uuid::from_u128(id.into()).to_string(),
                 provider_key: claims.subject.clone(),
@@ -3181,7 +3159,7 @@ impl Host {
             stdin.shutdown().await.context("failed to close stdin")?;
 
             // TODO: Change method receiver to Arc<Self> and `move` into the closure
-            let prov_nats = self.prov_rpc_nats.clone();
+            let rpc_nats = self.rpc_nats.clone();
             let ctl_nats = self.ctl_nats.clone();
             let event_builder = self.event_builder.clone();
             // NOTE: health_ prefix here is to allow us to move the variables into the closure
@@ -3205,7 +3183,7 @@ impl Host {
                             let request = async_nats::Request::new()
                                 .payload(Bytes::new())
                                 .headers(injector_to_headers(&TraceContextInjector::default_with_span()));
-                            if let Ok(async_nats::Message { payload, ..}) = prov_nats.send_request(
+                            if let Ok(async_nats::Message { payload, ..}) = rpc_nats.send_request(
                                 health_topic.clone(),
                                 request,
                                 ).await {
@@ -3394,7 +3372,7 @@ impl Host {
                         &TraceContextInjector::default_with_span(),
                     ));
                 if let Err(e) = self
-                    .prov_rpc_nats
+                    .rpc_nats
                     .send_request(
                         format!(
                             "wasmbus.rpc.{}.{provider_ref}.{link_name}.shutdown",
@@ -3668,7 +3646,6 @@ impl Host {
           "cluster_issuers": cluster_issuers,
           "js_domain": self.host_config.js_domain,
           "ctl_host": self.host_config.ctl_nats_url.to_string(),
-          "prov_rpc_host": self.host_config.prov_rpc_nats_url.to_string(),
           "rpc_host": self.host_config.rpc_nats_url.to_string(),
           "lattice_prefix": self.host_config.lattice_prefix,
         }))
@@ -3862,7 +3839,7 @@ impl Host {
 
         let msgp = rmp_serde::to_vec_named(ld).context("failed to encode link definition")?;
         let lattice_prefix = &self.host_config.lattice_prefix;
-        self.prov_rpc_nats
+        self.rpc_nats
             .publish_with_headers(
                 format!("wasmbus.rpc.{lattice_prefix}.{provider_id}.{link_name}.linkdefs.put",),
                 injector_to_headers(&TraceContextInjector::default_with_span()),
@@ -3921,7 +3898,7 @@ impl Host {
 
         let msgp = rmp_serde::to_vec_named(ld).context("failed to encode link definition")?;
         let lattice_prefix = &self.host_config.lattice_prefix;
-        self.prov_rpc_nats
+        self.rpc_nats
             .publish_with_headers(
                 format!("wasmbus.rpc.{lattice_prefix}.{provider_id}.{link_name}.linkdefs.del",),
                 injector_to_headers(&TraceContextInjector::default_with_span()),
