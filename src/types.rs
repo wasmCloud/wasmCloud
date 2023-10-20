@@ -101,9 +101,6 @@ pub struct Host {
     /// Lattice prefix/ID used by the host
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lattice_prefix: Option<String>,
-    /// NATS server host used for provider RPC
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub prov_rpc_host: Option<String>,
     /// NATS server host used for regular RPC
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rpc_host: Option<String>,
