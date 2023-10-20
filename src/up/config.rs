@@ -37,14 +37,8 @@ pub(crate) const WASMCLOUD_CTL_JWT: &str = "WASMCLOUD_CTL_JWT";
 pub(crate) const WASMCLOUD_CTL_CREDSFILE: &str = "WASMCLOUD_CTL_CREDSFILE";
 pub(crate) const WASMCLOUD_CTL_TLS: &str = "WASMCLOUD_CTL_TLS";
 // NATS Provider RPC connection configuration
-pub(crate) const WASMCLOUD_PROV_RPC_HOST: &str = "WASMCLOUD_PROV_RPC_HOST";
-pub(crate) const WASMCLOUD_PROV_RPC_PORT: &str = "WASMCLOUD_PROV_RPC_PORT";
 pub(crate) const WASMCLOUD_PROV_SHUTDOWN_DELAY_MS: &str = "WASMCLOUD_PROV_SHUTDOWN_DELAY_MS";
 pub(crate) const DEFAULT_PROV_SHUTDOWN_DELAY_MS: &str = "300";
-pub(crate) const WASMCLOUD_PROV_RPC_SEED: &str = "WASMCLOUD_PROV_RPC_SEED";
-pub(crate) const WASMCLOUD_PROV_RPC_JWT: &str = "WASMCLOUD_PROV_RPC_JWT";
-pub(crate) const WASMCLOUD_PROV_RPC_CREDSFILE: &str = "WASMCLOUD_PROV_RPC_CREDSFILE";
-pub(crate) const WASMCLOUD_PROV_RPC_TLS: &str = "WASMCLOUD_PROV_RPC_TLS";
 pub(crate) const WASMCLOUD_OCI_ALLOWED_INSECURE: &str = "WASMCLOUD_OCI_ALLOWED_INSECURE";
 pub(crate) const WASMCLOUD_OCI_ALLOW_LATEST: &str = "WASMCLOUD_OCI_ALLOW_LATEST";
 // Extra configuration (logs, IPV6, config service)
@@ -164,36 +158,6 @@ pub(crate) async fn configure_host_env(
         host_config.insert(WASMCLOUD_CTL_TLS.to_string(), "1".to_string());
     }
 
-    // NATS Provider RPC connection configuration
-    if let Some(host) = wasmcloud_opts.prov_rpc_host {
-        host_config.insert(WASMCLOUD_PROV_RPC_HOST.to_string(), host);
-    } else {
-        host_config.insert(WASMCLOUD_PROV_RPC_HOST.to_string(), nats_opts.nats_host);
-    }
-    if let Some(port) = wasmcloud_opts.prov_rpc_port {
-        host_config.insert(WASMCLOUD_PROV_RPC_PORT.to_string(), port.to_string());
-    } else {
-        host_config.insert(
-            WASMCLOUD_PROV_RPC_PORT.to_string(),
-            nats_opts.nats_port.to_string(),
-        );
-    }
-    if let Some(path) = wasmcloud_opts.prov_rpc_credsfile {
-        if let Ok((jwt, seed)) = parse_credsfile(path).await {
-            host_config.insert(WASMCLOUD_PROV_RPC_JWT.to_string(), jwt);
-            host_config.insert(WASMCLOUD_PROV_RPC_SEED.to_string(), seed);
-        };
-    } else {
-        if let Some(seed) = wasmcloud_opts.prov_rpc_seed {
-            host_config.insert(WASMCLOUD_PROV_RPC_SEED.to_string(), seed);
-        }
-        if let Some(jwt) = wasmcloud_opts.prov_rpc_jwt {
-            host_config.insert(WASMCLOUD_PROV_RPC_JWT.to_string(), jwt);
-        }
-    }
-    if wasmcloud_opts.prov_rpc_tls {
-        host_config.insert(WASMCLOUD_PROV_RPC_TLS.to_string(), "1".to_string());
-    }
     host_config.insert(
         WASMCLOUD_PROV_SHUTDOWN_DELAY_MS.to_string(),
         wasmcloud_opts.provider_delay.to_string(),

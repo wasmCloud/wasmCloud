@@ -166,30 +166,6 @@ pub(crate) struct WasmcloudOpts {
     #[clap(long = "rpc-credsfile", env = WASMCLOUD_RPC_CREDSFILE)]
     pub(crate) rpc_credsfile: Option<PathBuf>,
 
-    /// An IP address or DNS name to use to connect to NATS for Provider RPC messages, defaults to the value supplied to --nats-host if not supplied
-    #[clap(long = "prov-rpc-host", env = WASMCLOUD_PROV_RPC_HOST)]
-    pub(crate) prov_rpc_host: Option<String>,
-
-    /// A port to use to connect to NATS for Provider RPC messages, defaults to the value supplied to --nats-port if not supplied
-    #[clap(long = "prov-rpc-port", env = WASMCLOUD_PROV_RPC_PORT)]
-    pub(crate) prov_rpc_port: Option<u16>,
-
-    /// A seed nkey to use to authenticate to NATS for Provider RPC messages
-    #[clap(long = "prov-rpc-seed", env = WASMCLOUD_PROV_RPC_SEED, requires = "prov_rpc_jwt")]
-    pub(crate) prov_rpc_seed: Option<String>,
-
-    /// Optional flag to enable host communication with a NATS server over TLS for Provider RPC messages
-    #[clap(long = "prov-rpc-tls", env = WASMCLOUD_PROV_RPC_TLS)]
-    pub(crate) prov_rpc_tls: bool,
-
-    /// A user JWT to use to authenticate to NATS for Provider RPC messages
-    #[clap(long = "prov-rpc-jwt", env = WASMCLOUD_PROV_RPC_JWT, requires = "prov_rpc_seed")]
-    pub(crate) prov_rpc_jwt: Option<String>,
-
-    /// Convenience flag for Provider RPC authentication, internally this parses the JWT and seed from the credsfile
-    #[clap(long = "prov-rpc-credsfile", env = WASMCLOUD_PROV_RPC_CREDSFILE)]
-    pub(crate) prov_rpc_credsfile: Option<PathBuf>,
-
     /// An IP address or DNS name to use to connect to NATS for Control Interface (CTL) messages, defaults to the value supplied to --nats-host if not supplied
     #[clap(long = "ctl-host", env = WASMCLOUD_CTL_HOST)]
     pub(crate) ctl_host: Option<String>,
@@ -354,16 +330,6 @@ pub(crate) async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result
         rpc_port: Some(
             cmd.wasmcloud_opts
                 .rpc_port
-                .unwrap_or(cmd.nats_opts.nats_port),
-        ),
-        prov_rpc_host: Some(
-            cmd.wasmcloud_opts
-                .prov_rpc_host
-                .unwrap_or_else(|| cmd.nats_opts.nats_host.to_owned()),
-        ),
-        prov_rpc_port: Some(
-            cmd.wasmcloud_opts
-                .prov_rpc_port
                 .unwrap_or(cmd.nats_opts.nats_port),
         ),
         ..cmd.wasmcloud_opts
@@ -760,17 +726,6 @@ mod tests {
             "tls://remote.global",
             "--nats-version",
             "v2.8.4",
-            "--prov-rpc-credsfile",
-            TESTDIR,
-            "--prov-rpc-host",
-            "127.0.0.2",
-            "--prov-rpc-jwt",
-            "eyyjWT",
-            "--prov-rpc-port",
-            "4232",
-            "--prov-rpc-seed",
-            "SUALIKDKMIUAKRT5536EXKC3CX73TJD3CFXZMJSHIKSP3LTYIIUQGCUVGA",
-            "--prov-rpc-tls",
             "--provider-delay",
             "500",
             "--rpc-credsfile",
@@ -842,21 +797,6 @@ mod tests {
             Some("SUALIKDKMIUAKRT5536EXKC3CX73TJD3CFXZMJSHIKSP3LTYIIUQGCUVGA".to_string())
         );
         assert!(up_all_flags.wasmcloud_opts.rpc_tls);
-        assert!(up_all_flags.wasmcloud_opts.prov_rpc_credsfile.is_some());
-        assert_eq!(
-            up_all_flags.wasmcloud_opts.prov_rpc_host,
-            Some("127.0.0.2".to_string())
-        );
-        assert_eq!(
-            up_all_flags.wasmcloud_opts.prov_rpc_jwt,
-            Some("eyyjWT".to_string())
-        );
-        assert_eq!(up_all_flags.wasmcloud_opts.prov_rpc_port, Some(4232));
-        assert_eq!(
-            up_all_flags.wasmcloud_opts.prov_rpc_seed,
-            Some("SUALIKDKMIUAKRT5536EXKC3CX73TJD3CFXZMJSHIKSP3LTYIIUQGCUVGA".to_string())
-        );
-        assert!(up_all_flags.wasmcloud_opts.prov_rpc_tls);
         assert!(up_all_flags.wasmcloud_opts.enable_ipv6);
         assert!(up_all_flags.wasmcloud_opts.enable_structured_logging);
         assert_eq!(

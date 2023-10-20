@@ -435,7 +435,7 @@ mod test {
         let mut host_env = HashMap::new();
         host_env.insert("WASMCLOUD_RPC_PORT".to_string(), nats_port.to_string());
         host_env.insert("WASMCLOUD_CTL_PORT".to_string(), nats_port.to_string());
-        host_env.insert("WASMCLOUD_PROV_RPC_PORT".to_string(), nats_port.to_string());
+        host_env.insert("WASMCLOUD_PROV_RPC_PORT".to_string(), nats_port.to_string()); // TODO: remove these after wasmCloud v0.80.0 is released, dropping support for prov_rpc connections
         let mut host_child = start_wasmcloud_host(
             &wasmcloud_binary,
             stdout_log_file,
@@ -489,7 +489,7 @@ mod test {
         let mut host_env = HashMap::new();
         host_env.insert("WASMCLOUD_RPC_PORT".to_string(), nats_port.to_string());
         host_env.insert("WASMCLOUD_CTL_PORT".to_string(), nats_port.to_string());
-        host_env.insert("WASMCLOUD_PROV_RPC_PORT".to_string(), nats_port.to_string());
+        host_env.insert("WASMCLOUD_PROV_RPC_PORT".to_string(), nats_port.to_string()); // TODO: remove these after wasmCloud v0.80.0 is released, dropping support for prov_rpc connections
         let child_res = start_wasmcloud_host(
             &wasmcloud_binary,
             std::process::Stdio::null(),
