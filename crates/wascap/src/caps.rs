@@ -1,8 +1,7 @@
 //! A set of standard names for capabilities that can be provided by a host
 
 use std::collections::HashMap;
-
-use once_cell::sync::Lazy;
+use std::sync::OnceLock;
 
 pub const BLOB: &str = "wasmcloud:blobstore";
 pub const HTTP_CLIENT: &str = "wasmcloud:httpclient";
@@ -13,21 +12,25 @@ pub const EVENTSTREAMS: &str = "wasmcloud:eventstreams";
 pub const NUMBERGEN: &str = "wasmcloud:builtin:numbergen";
 pub const LOGGING: &str = "wasmcloud:builtin:logging";
 
-static CAPABILITY_NAMES: Lazy<HashMap<&str, &str>> = Lazy::new(|| {
-    let mut m = HashMap::new();
-    m.insert(MESSAGING, "Messaging");
-    m.insert(KEY_VALUE, "K/V Store");
-    m.insert(HTTP_SERVER, "HTTP Server");
-    m.insert(HTTP_CLIENT, "HTTP Client");
-    m.insert(BLOB, "Blob Store");
-    m.insert(EVENTSTREAMS, "Event Streams");
-    m.insert(NUMBERGEN, "Number Generation");
-    m.insert(LOGGING, "Logging");
-    m
-});
+static CAPABILITY_NAMES: OnceLock<HashMap<&str, &str>> = OnceLock::new();
+
+fn get_capability_names() -> &'static HashMap<&'static str, &'static str> {
+    CAPABILITY_NAMES.get_or_init(|| {
+        HashMap::from([
+            (MESSAGING, "Messaging"),
+            (KEY_VALUE, "K/V Store"),
+            (HTTP_SERVER, "HTTP Server"),
+            (HTTP_CLIENT, "HTTP Client"),
+            (BLOB, "Blob Store"),
+            (EVENTSTREAMS, "Event Streams"),
+            (NUMBERGEN, "Number Generation"),
+            (LOGGING, "Logging"),
+        ])
+    })
+}
 
 pub fn capability_name(cap: &str) -> String {
-    CAPABILITY_NAMES
+    get_capability_names()
         .get(cap)
         .map_or(cap.to_string(), |item| item.to_string())
 }

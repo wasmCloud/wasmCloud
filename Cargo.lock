@@ -4127,7 +4127,6 @@ dependencies = [
  "log",
  "nkeys",
  "nuid 0.4.1",
- "once_cell",
  "ring 0.17.5",
  "serde",
  "serde_json",

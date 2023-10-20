@@ -19,7 +19,6 @@ humantime = { workspace = true }
 log = { workspace = true }
 nkeys = { workspace = true }
 nuid = { workspace = true }
-once_cell = { workspace = true }
 ring = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, features = ["std"] }

@@ -3393,7 +3393,6 @@ dependencies = [
  "log",
  "nkeys 0.3.2",
  "nuid 0.4.1",
- "once_cell",
  "ring 0.17.4",
  "serde",
  "serde_json",
