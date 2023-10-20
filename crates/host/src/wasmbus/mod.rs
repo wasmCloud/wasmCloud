@@ -1776,10 +1776,10 @@ impl Host {
         let existing_labels: HashSet<String> = labels.keys().cloned().collect();
         labels.extend(env::vars().filter_map(|(key, value)| {
             let key = if key.starts_with("HOST_") {
-                warn!("labels set via HOST_ environment variables are deprecated and will be removed in a future version. Please use WASMCLOUD_HOST_ as the prefix instead");
+                warn!("labels set via HOST_ environment variables are deprecated and will be removed in a future version. Please use WASMCLOUD_LABEL_ as the prefix instead");
                 key.strip_prefix("HOST_")?.to_string()
-            } else if key.starts_with("WASMCLOUD_HOST_") {
-                key.strip_prefix("WASMCLOUD_HOST_")?.to_string()
+            } else if key.starts_with("WASMCLOUD_LABEL_") {
+                key.strip_prefix("WASMCLOUD_LABEL_")?.to_string()
             } else {
                 return None;
             };
