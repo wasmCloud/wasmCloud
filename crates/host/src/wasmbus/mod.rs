@@ -2474,7 +2474,7 @@ impl Host {
         Ok(Some(buf.into()))
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn fetch_actor(&self, actor_ref: &str) -> anyhow::Result<wasmcloud_runtime::Actor> {
         let registry_config = self.registry_config.read().await;
         let actor = fetch_actor(
@@ -2537,7 +2537,7 @@ impl Host {
         Ok(ACCEPTED.into())
     }
 
-    #[instrument(skip(self, payload))]
+    #[instrument(skip_all)]
     async fn handle_scale_actor(
         self: Arc<Self>,
         payload: impl AsRef<[u8]>,
@@ -2566,7 +2566,7 @@ impl Host {
         Ok(ACCEPTED.into())
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     /// Handles scaling an actor to a supplied number of `max` concurrently executing instances.
     /// Supplying `None` for max will result in an unbounded number of concurrent requests, and supplying
     /// `Some(0)` will result in stopping that actor instance.
