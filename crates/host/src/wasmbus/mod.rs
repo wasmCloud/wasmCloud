@@ -2098,6 +2098,7 @@ impl Host {
 
     #[instrument(skip(self))]
     async fn heartbeat(&self) -> serde_json::Value {
+        trace!("generating heartbeat");
         let actors = self.actors.read().await;
         let actors: HashMap<&String, usize> = stream::iter(actors.iter())
             .filter_map(|(id, actor)| async move {
@@ -2297,7 +2298,7 @@ impl Host {
         host_id: &str,
         annotations: impl Into<Annotations>,
     ) -> anyhow::Result<&'a mut Arc<Actor>> {
-        trace!(actor_ref, "starting new actor");
+        debug!(actor_ref, "starting new actor");
 
         let annotations = annotations.into();
         let claims = actor.claims().context("claims missing")?;
@@ -2374,6 +2375,7 @@ impl Host {
         annotations: &BTreeMap<String, String>,
         host_id: &str,
     ) -> anyhow::Result<()> {
+        debug!(actor_id = %entry.key(), "stopping actor");
         let actor = entry.remove();
         let claims = actor.claims().context("claims missing")?;
         let mut instances = actor.instances.write().await;
@@ -3284,6 +3286,7 @@ impl Host {
         _payload: impl AsRef<[u8]>,
         host_id: &str,
     ) -> anyhow::Result<Bytes> {
+        trace!("generating inventory");
         let actors = self.actors.read().await;
         let actors: Vec<_> = stream::iter(actors.iter())
             .filter_map(|(id, actor)| async move {
@@ -3393,6 +3396,7 @@ impl Host {
             claims: Vec<StoredClaims>,
         }
 
+        trace!("getting claims");
         let (actor_claims, provider_claims) =
             join!(self.actor_claims.read(), self.provider_claims.read());
         let actor_claims = actor_claims.values().cloned().map(Claims::Actor);
@@ -3408,6 +3412,7 @@ impl Host {
 
     #[instrument(skip(self))]
     async fn handle_links(&self) -> anyhow::Result<Bytes> {
+        trace!("getting links");
         let links = self.links.read().await;
         let links: Vec<LinkDefinition> = links.values().cloned().collect();
         let res = serde_json::to_vec(&links).context("failed to serialize response")?;
@@ -3494,6 +3499,7 @@ impl Host {
 
     #[instrument(skip(self, _payload))]
     async fn handle_ping_hosts(&self, _payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
+        trace!("replying to ping");
         let uptime = self.start_at.elapsed();
         let cluster_issuers = self.cluster_issuers.clone().join(",");
 
