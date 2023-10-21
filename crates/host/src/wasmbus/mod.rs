@@ -1634,13 +1634,20 @@ async fn load_supplemental_config(
     }))
     .context("failed to serialize config payload")?;
 
+    debug!("requesting supplemental config");
     match ctl_nats.request(cfg_topic, cfg_payload.into()).await {
         Ok(resp) => {
             match serde_json::from_slice::<SerializedSupplementalConfig>(resp.payload.as_ref()) {
                 Ok(ser_cfg) => Ok(SupplementalConfig {
-                    registry_config: ser_cfg
-                        .registry_credentials
-                        .map(|creds| creds.into_iter().map(|(k, v)| (k, v.into())).collect()),
+                    registry_config: ser_cfg.registry_credentials.map(|creds| {
+                        creds
+                            .into_iter()
+                            .map(|(k, v)| {
+                                debug!(registry_url = %k, "set registry config");
+                                (k, v.into())
+                            })
+                            .collect()
+                    }),
                 }),
                 Err(e) => {
                     error!(
@@ -1671,11 +1678,13 @@ async fn merge_registry_config(
 
     // update auth for specific registry, if provided
     if let Some(reg) = oci_opts.oci_registry {
-        match registry_config.entry(reg) {
+        match registry_config.entry(reg.clone()) {
             Entry::Occupied(_entry) => {
                 // note we don't update config here, since the config service should take priority
+                warn!(oci_registry_url = %reg, "ignoring OCI registry config, overriden by config service");
             }
             Entry::Vacant(entry) => {
+                debug!(oci_registry_url = %reg, "set registry config");
                 entry.insert(RegistryConfig {
                     reg_type: RegistryType::Oci,
                     auth: RegistryAuth::from((oci_opts.oci_user, oci_opts.oci_password)),
@@ -1686,26 +1695,30 @@ async fn merge_registry_config(
     }
 
     // update or create entry for all registries in allowed_insecure
-    oci_opts
-        .allowed_insecure
-        .into_iter()
-        .for_each(|reg| match registry_config.entry(reg) {
+    oci_opts.allowed_insecure.into_iter().for_each(|reg| {
+        match registry_config.entry(reg.clone()) {
             Entry::Occupied(mut entry) => {
+                debug!(oci_registry_url = %reg, "set allowed_insecure");
                 entry.get_mut().allow_insecure = true;
             }
             Entry::Vacant(entry) => {
+                debug!(oci_registry_url = %reg, "set allowed_insecure");
                 entry.insert(RegistryConfig {
                     reg_type: RegistryType::Oci,
                     allow_insecure: true,
                     ..Default::default()
                 });
             }
-        });
+        }
+    });
 
-    // set allow_latest for all registries
-    registry_config
-        .values_mut()
-        .for_each(|config| config.allow_latest = allow_latest);
+    // update allow_latest for all registries
+    registry_config.iter_mut().for_each(|(url, config)| {
+        if allow_latest {
+            debug!(oci_registry_url = %url, "set allow_latest");
+        }
+        config.allow_latest = allow_latest;
+    });
 }
 
 impl Host {
