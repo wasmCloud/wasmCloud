@@ -42,7 +42,7 @@ use std::path::PathBuf;
 
 use anyhow::{anyhow, bail, ensure, Context as _};
 use tokio::fs;
-use tracing::{instrument, warn};
+use tracing::{debug, instrument, warn};
 use url::Url;
 use wascap::jwt;
 
@@ -56,6 +56,7 @@ fn socket_pair() -> anyhow::Result<(tokio::io::DuplexStream, tokio::io::DuplexSt
     Ok(tokio::io::duplex(8196))
 }
 
+#[derive(PartialEq)]
 enum ResourceRef<'a> {
     File(PathBuf),
     Bindle(&'a str),
@@ -73,16 +74,29 @@ impl<'a> TryFrom<&'a str> for ResourceRef<'a> {
                         .to_file_path()
                         .map(Self::File)
                         .map_err(|()| anyhow!("failed to convert `{url}` to a file path")),
-                    "bindle" => s
-                        .strip_prefix("bindle://")
-                        .map(Self::Bindle)
-                        .context("invalid Bindle reference"),
-                    "oci" => s
-                        .strip_prefix("oci://")
-                        .map(Self::Oci)
-                        .context("invalid OCI reference"),
-                    // TODO: Support other schemes
-                    scheme => bail!("unsupported scheme `{scheme}`"),
+                    "bindle" => {
+                        // Note: bindle is not a scheme, but using this as a prefix takes out the guesswork
+                        s.strip_prefix("bindle://")
+                            .map(Self::Bindle)
+                            .context("invalid Bindle reference")
+                    }
+                    "oci" => {
+                        // Note: oci is not a scheme, but using this as a prefix takes out the guesswork
+                        s.strip_prefix("oci://")
+                            .map(Self::Oci)
+                            .context("invalid OCI reference")
+                    }
+                    scheme @ ("http" | "https") => {
+                        debug!(%url, "interpreting reference as OCI");
+                        s.strip_prefix(&format!("{scheme}://"))
+                            .map(Self::Oci)
+                            .context("invalid OCI reference")
+                    }
+                    _ => {
+                        // handle strings like `registry:5000/v2/foo:0.1.0`
+                        debug!(%url, "unknown scheme in reference, assuming OCI");
+                        Ok(Self::Oci(s))
+                    }
                 }
             }
             Err(url::ParseError::RelativeUrlWithoutBase) => {
@@ -111,7 +125,7 @@ impl ResourceRef<'_> {
 }
 
 /// Fetch an actor from a reference.
-#[instrument(skip(actor_ref))]
+#[instrument(skip_all)]
 pub async fn fetch_actor(
     actor_ref: impl AsRef<str>,
     allow_file_load: bool,
@@ -183,4 +197,60 @@ pub async fn fetch_provider(
                 format!("failed to fetch provider under OCI reference `{provider_ref}`")
             }),
     }
+}
+
+#[test]
+fn parse_references() -> anyhow::Result<()> {
+    // file:// URL
+    let file_url = "file:///tmp/foo_s.wasm";
+    ensure!(
+        ResourceRef::try_from(file_url).expect("failed to parse")
+            == ResourceRef::File("/tmp/foo_s.wasm".into()),
+        "file reference should be parsed as file and converted to path"
+    );
+
+    // bindle:// "scheme" URL
+    ensure!(
+        ResourceRef::try_from("bindle://some-bindle-server/stuff/mybindle/v0.1.2.3")
+            .expect("failed to parse")
+            == ResourceRef::Bindle("some-bindle-server/stuff/mybindle/v0.1.2.3"),
+        "bindle reference should be parsed as Bindle and stripped of scheme"
+    );
+
+    // oci:// "scheme" URL
+    ensure!(
+        ResourceRef::try_from("oci://some-registry/foo:0.1.0").expect("failed to parse")
+            == ResourceRef::Oci("some-registry/foo:0.1.0"),
+        "OCI reference should be parsed as OCI and stripped of scheme"
+    );
+
+    // http URL
+    ensure!(
+        ResourceRef::try_from("http://127.0.0.1:5000/v2/foo:0.1.0").expect("failed to parse")
+            == ResourceRef::Oci("127.0.0.1:5000/v2/foo:0.1.0"),
+        "http reference should be parsed as OCI and stripped of scheme"
+    );
+
+    // https URL
+    ensure!(
+        ResourceRef::try_from("https://some-registry.sh/foo:0.1.0").expect("failed to parse")
+            == ResourceRef::Oci("some-registry.sh/foo:0.1.0"),
+        "https reference should be parsed as OCI and stripped of scheme"
+    );
+
+    // localhost URL
+    ensure!(
+        ResourceRef::try_from("localhost:5000/v2/foo:0.1.0").expect("failed to parse")
+            == ResourceRef::Oci("localhost:5000/v2/foo:0.1.0"),
+        "localhost reference should be parsed as OCI and left intact"
+    );
+
+    // container name URL
+    ensure!(
+        ResourceRef::try_from("registry:5000/v2/foo:0.1.0").expect("failed to parse")
+            == ResourceRef::Oci("registry:5000/v2/foo:0.1.0"),
+        "container reference should be parsed as OCI and left intact"
+    );
+
+    Ok(())
 }
