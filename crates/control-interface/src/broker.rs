@@ -70,6 +70,22 @@ pub fn clear_config(
     )
 }
 
+pub fn put_label(topic_prefix: &Option<String>, lattice_prefix: &str, host_id: &str) -> String {
+    format!(
+        "{}.labels.{}.put",
+        prefix(topic_prefix, lattice_prefix),
+        host_id
+    )
+}
+
+pub fn delete_label(topic_prefix: &Option<String>, lattice_prefix: &str, host_id: &str) -> String {
+    format!(
+        "{}.labels.{}.del",
+        prefix(topic_prefix, lattice_prefix),
+        host_id
+    )
+}
+
 pub mod commands {
     use super::prefix;
 

@@ -214,6 +214,31 @@ async fn assert_config_put(
         .map_err(|e| anyhow!(e).context("failed to put config"))
 }
 
+async fn assert_put_label(
+    client: &wasmcloud_control_interface::Client,
+    host_id: &str,
+    label: &str,
+    value: &str,
+) -> anyhow::Result<()> {
+    client
+        .put_label(host_id, label, value)
+        .await
+        .map(|_| ())
+        .map_err(|e| anyhow!(e).context("failed to put label"))
+}
+
+async fn assert_delete_label(
+    client: &wasmcloud_control_interface::Client,
+    host_id: &str,
+    label: &str,
+) -> anyhow::Result<()> {
+    client
+        .delete_label(host_id, label)
+        .await
+        .map(|_| ())
+        .map_err(|e| anyhow!(e).context("failed to put label"))
+}
+
 async fn spawn_server(
     cmd: &mut Command,
 ) -> anyhow::Result<(JoinHandle<anyhow::Result<ExitStatus>>, oneshot::Sender<()>)> {
@@ -531,7 +556,7 @@ async fn wasmbus() -> anyhow::Result<()> {
     let host_key_two = KeyPair::new_server();
 
     env::set_var("HOST_PATH", "test-path");
-    let expected_labels = HashMap::from([
+    let base_labels = HashMap::from([
         ("hostcore.arch".into(), ARCH.into()),
         ("hostcore.os".into(), OS.into()),
         ("hostcore.osfamily".into(), FAMILY.into()),
@@ -629,10 +654,10 @@ async fn wasmbus() -> anyhow::Result<()> {
             );
             ensure!(js_domain == None);
             ensure!(
-                labels.as_ref() == Some(&expected_labels),
+                labels.as_ref() == Some(&base_labels),
                 r#"invalid labels:
 got: {labels:?}
-expected: {expected_labels:?}"#
+expected: {base_labels:?}"#
             );
             ensure!(lattice_prefix == Some(TEST_PREFIX.into()));
             ensure!(rpc_host == Some(ctl_nats_url.to_string()));
@@ -1057,12 +1082,32 @@ expected: {expected_labels:?}"#
     );
     ensure!(pinged_host.ctl_host == Some(ctl_nats_url.to_string()));
     ensure!(pinged_host.js_domain == None);
-    ensure!(pinged_host.labels == Some(expected_labels.clone()));
+    ensure!(pinged_host.labels == Some(base_labels.clone()));
     ensure!(pinged_host.lattice_prefix == Some(TEST_PREFIX.into()));
     ensure!(pinged_host.rpc_host == Some(ctl_nats_url.to_string()));
     ensure!(pinged_host.uptime_human.clone().unwrap().len() > 0);
     ensure!(pinged_host.uptime_seconds > 0);
     ensure!(pinged_host.version == Some(env!("CARGO_PKG_VERSION").into()));
+
+    let host_id = host_key.public_key();
+    let host_id_two = host_key_two.public_key();
+    try_join!(
+        assert_put_label(&ctl_client, &host_id, "my-name-is", "chka-chka"),
+        assert_put_label(&ctl_client, &host_id_two, "my-name-is", "Slim Shady")
+    )
+    .context("failed to put labels")?;
+
+    let expected_labels: HashMap<String, String> = base_labels
+        .clone()
+        .into_iter()
+        .chain([("my-name-is".into(), "chka-chka".into())])
+        .collect();
+
+    let expected_labels_two: HashMap<String, String> = base_labels
+        .clone()
+        .into_iter()
+        .chain([("my-name-is".into(), "Slim Shady".into())])
+        .collect();
 
     let HostInventory {
         mut actors,
@@ -1289,10 +1334,10 @@ expected: {expected_name:?}"#
     );
     ensure!(issuer == cluster_key_two.public_key());
     ensure!(
-        labels == expected_labels,
+        labels == expected_labels_two,
         r#"invalid labels:
 got: {labels:?}
-expected: {expected_labels:?}"#
+expected: {expected_labels_two:?}"#
     );
     ensure!(actors.is_empty());
     match (providers.pop(), providers.as_slice()) {
@@ -1461,6 +1506,38 @@ expected: {expected_labels:?}"#
         .expect("foobar actor to be in the list");
     // 1 with no annotations, 0 with annotations
     ensure!(foobar_actor.instances.len() == 1);
+
+    let host_id = host_key.public_key();
+    let host_id_two = host_key_two.public_key();
+    try_join!(
+        assert_delete_label(&ctl_client, &host_id, "my-name-is"),
+        assert_delete_label(&ctl_client, &host_id_two, "my-name-is")
+    )
+    .context("failed to remove labels")?;
+
+    let HostInventory { labels, .. } = ctl_client
+        .get_host_inventory(&host_key.public_key())
+        .await
+        .map_err(|e| anyhow!(e).context("failed to get host inventory"))?;
+
+    ensure!(
+        labels == base_labels,
+        r#"invalid labels:
+got: {labels:?}
+expected: {base_labels:?}"#
+    );
+
+    let HostInventory { labels, .. } = ctl_client
+        .get_host_inventory(&host_key_two.public_key())
+        .await
+        .map_err(|e| anyhow!(e).context("failed to get host inventory"))?;
+
+    ensure!(
+        labels == base_labels,
+        r#"invalid labels:
+    got: {labels:?}
+    expected: {base_labels:?}"#
+    );
 
     // Shutdown host one
     let CtlOperationAck { accepted, error } = ctl_client

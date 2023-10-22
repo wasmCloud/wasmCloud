@@ -503,6 +503,47 @@ impl Client {
         }
     }
 
+    /// Put a new (or update an existing) label on the given host.
+    ///
+    /// # Errors
+    ///
+    /// Will return an error if there is a communication problem with the host
+    pub async fn put_label(
+        &self,
+        host_id: &str,
+        label: &str,
+        value: &str,
+    ) -> Result<CtlOperationAck> {
+        let subject = broker::put_label(&self.topic_prefix, &self.lattice_prefix, host_id);
+        debug!(%subject, "putting label");
+        let bytes = json_serialize(HostLabel {
+            label: label.to_string(),
+            value: value.to_string(),
+        })?;
+        match self.request_timeout(subject, bytes, self.timeout).await {
+            Ok(msg) => Ok(json_deserialize(&msg.payload)?),
+            Err(e) => Err(format!("Did not receive put label acknowledgement: {e}").into()),
+        }
+    }
+
+    /// Removes a label from the given host.
+    ///
+    /// # Errors
+    ///
+    /// Will return an error if there is a communication problem with the host
+    pub async fn delete_label(&self, host_id: &str, label: &str) -> Result<CtlOperationAck> {
+        let subject = broker::delete_label(&self.topic_prefix, &self.lattice_prefix, host_id);
+        debug!(%subject, "removing label");
+        let bytes = json_serialize(HostLabel {
+            label: label.to_string(),
+            value: String::new(), // value isn't parsed by the host
+        })?;
+        match self.request_timeout(subject, bytes, self.timeout).await {
+            Ok(msg) => Ok(json_deserialize(&msg.payload)?),
+            Err(e) => Err(format!("Did not receive remove label acknowledgement: {e}").into()),
+        }
+    }
+
     /// Issue a command to a host instructing that it replace an existing actor (indicated by its
     /// public key) with a new actor indicated by an OCI image reference. The host will acknowledge
     /// this request as soon as it verifies that the target actor is running. This acknowledgement
