@@ -78,6 +78,7 @@ struct Queue {
     commands: async_nats::Subscriber,
     pings: async_nats::Subscriber,
     inventory: async_nats::Subscriber,
+    labels: async_nats::Subscriber,
     links: async_nats::Subscriber,
     queries: async_nats::Subscriber,
     registries: async_nats::Subscriber,
@@ -91,6 +92,11 @@ impl Stream for Queue {
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut pending = false;
         match Pin::new(&mut self.commands).poll_next(cx) {
+            Poll::Ready(Some(msg)) => return Poll::Ready(Some(msg)),
+            Poll::Ready(None) => {}
+            Poll::Pending => pending = true,
+        }
+        match Pin::new(&mut self.labels).poll_next(cx) {
             Poll::Ready(Some(msg)) => return Poll::Ready(Some(msg)),
             Poll::Ready(None) => {}
             Poll::Pending => pending = true,
@@ -194,36 +200,50 @@ impl Queue {
         host_key: &KeyPair,
     ) -> anyhow::Result<Self> {
         let host_id = host_key.public_key();
-        let (registries, pings, links, queries, auction, commands, inventory, config, config_get) =
-            try_join!(
-                nats.subscribe(format!("{topic_prefix}.{lattice_prefix}.registries.put",)),
-                nats.subscribe(format!("{topic_prefix}.{lattice_prefix}.ping.hosts",)),
-                nats.queue_subscribe(
-                    format!("{topic_prefix}.{lattice_prefix}.linkdefs.*"),
-                    format!("{topic_prefix}.{lattice_prefix}.linkdefs",)
-                ),
-                nats.queue_subscribe(
-                    format!("{topic_prefix}.{lattice_prefix}.get.*"),
-                    format!("{topic_prefix}.{lattice_prefix}.get")
-                ),
-                nats.subscribe(format!("{topic_prefix}.{lattice_prefix}.auction.>",)),
-                nats.subscribe(format!("{topic_prefix}.{lattice_prefix}.cmd.{host_id}.*",)),
-                nats.subscribe(format!("{topic_prefix}.{lattice_prefix}.get.{host_id}.inv",)),
-                nats.queue_subscribe(
-                    format!("{topic_prefix}.{lattice_prefix}.config.>"),
-                    format!("{topic_prefix}.{lattice_prefix}.config"),
-                ),
-                nats.queue_subscribe(
-                    format!("{topic_prefix}.{lattice_prefix}.get.config.>"),
-                    format!("{topic_prefix}.{lattice_prefix}.get.config")
-                ),
-            )
-            .context("failed to subscribe to queues")?;
+        let (
+            registries,
+            pings,
+            links,
+            queries,
+            auction,
+            commands,
+            inventory,
+            labels,
+            config,
+            config_get,
+        ) = try_join!(
+            nats.subscribe(format!("{topic_prefix}.{lattice_prefix}.registries.put",)),
+            nats.subscribe(format!("{topic_prefix}.{lattice_prefix}.ping.hosts",)),
+            nats.queue_subscribe(
+                format!("{topic_prefix}.{lattice_prefix}.linkdefs.*"),
+                format!("{topic_prefix}.{lattice_prefix}.linkdefs",)
+            ),
+            nats.queue_subscribe(
+                format!("{topic_prefix}.{lattice_prefix}.get.*"),
+                format!("{topic_prefix}.{lattice_prefix}.get")
+            ),
+            nats.subscribe(format!("{topic_prefix}.{lattice_prefix}.auction.>",)),
+            nats.subscribe(format!("{topic_prefix}.{lattice_prefix}.cmd.{host_id}.*",)),
+            nats.subscribe(format!("{topic_prefix}.{lattice_prefix}.get.{host_id}.inv",)),
+            nats.subscribe(format!(
+                "{topic_prefix}.{lattice_prefix}.labels.{host_id}.*",
+            )),
+            nats.queue_subscribe(
+                format!("{topic_prefix}.{lattice_prefix}.config.>"),
+                format!("{topic_prefix}.{lattice_prefix}.config"),
+            ),
+            nats.queue_subscribe(
+                format!("{topic_prefix}.{lattice_prefix}.get.config.>"),
+                format!("{topic_prefix}.{lattice_prefix}.get.config")
+            ),
+        )
+        .context("failed to subscribe to queues")?;
         Ok(Self {
             auction,
             commands,
             pings,
             inventory,
+            labels,
             links,
             queries,
             registries,
@@ -1557,7 +1577,7 @@ pub struct Host {
     heartbeat: AbortHandle,
     host_config: HostConfig,
     host_key: Arc<KeyPair>,
-    labels: HashMap<String, String>,
+    labels: RwLock<HashMap<String, String>>,
     ctl_topic_prefix: String,
     /// NATS client to use for control interface subscriptions and jetstream queries
     ctl_nats: async_nats::Client,
@@ -2045,7 +2065,7 @@ impl Host {
             heartbeat: heartbeat_abort.clone(),
             ctl_topic_prefix: config.ctl_topic_prefix.clone(),
             host_key,
-            labels,
+            labels: RwLock::new(labels),
             ctl_nats,
             rpc_nats,
             host_config: config,
@@ -2253,7 +2273,7 @@ impl Host {
             host.publish_event(
                 "host_stopped",
                 json!({
-                    "labels": host.labels,
+                    "labels": *host.labels.read().await,
                 }),
             )
             .await
@@ -2330,7 +2350,7 @@ impl Host {
         json!({
             "actors": actors,
             "friendly_name": self.friendly_name,
-            "labels": self.labels,
+            "labels": *self.labels.read().await,
             "providers": providers,
             "uptime_human": human_friendly_uptime(uptime),
             "uptime_seconds": uptime.as_secs(),
@@ -3629,7 +3649,7 @@ impl Host {
         let buf = serde_json::to_vec(&HostInventory {
             host_id: self.host_key.public_key(),
             issuer: self.cluster_key.public_key(),
-            labels: self.labels.clone(),
+            labels: self.labels.read().await.clone(),
             friendly_name: self.friendly_name.clone(),
             actors,
             providers,
@@ -3714,6 +3734,48 @@ impl Host {
                         .map_err(anyhow::Error::from)
                 },
             )
+    }
+
+    #[instrument(level = "debug", skip_all)]
+    async fn handle_label_put(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
+        #[derive(Deserialize)]
+        struct PutLabel {
+            label: String,
+            value: String,
+        }
+
+        let PutLabel { label, value } = serde_json::from_slice(payload.as_ref())
+            .context("failed to deserialize put label request")?;
+        let mut labels = self.labels.write().await;
+        match labels.entry(label) {
+            Entry::Occupied(mut entry) => {
+                info!(label = entry.key(), value, "updated label");
+                entry.insert(value);
+            }
+            Entry::Vacant(entry) => {
+                info!(label = entry.key(), value, "set label");
+                entry.insert(value);
+            }
+        }
+        Ok(ACCEPTED.into())
+    }
+
+    #[instrument(level = "debug", skip_all)]
+    async fn handle_label_del(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
+        #[derive(Deserialize)]
+        struct DeleteLabel {
+            label: String,
+        }
+
+        let DeleteLabel { label } = serde_json::from_slice(payload.as_ref())
+            .context("failed to deserialize delete label request")?;
+        let mut labels = self.labels.write().await;
+        if labels.remove(&label).is_some() {
+            info!(label, "removed label");
+        } else {
+            warn!(label, "could not remove unset label");
+        }
+        Ok(ACCEPTED.into())
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -3862,7 +3924,7 @@ impl Host {
         let buf = serde_json::to_vec(&json!({
           "id": self.host_key.public_key(),
           "issuer": self.cluster_key.public_key(),
-          "labels": self.labels,
+          "labels": *self.labels.read().await,
           "friendly_name": self.friendly_name,
           "uptime_seconds": uptime.as_secs(),
           "uptime_human": human_friendly_uptime(uptime),
@@ -3939,6 +4001,12 @@ impl Host {
             }
             (Some("get"), Some("config"), Some(entity_id), None) => {
                 self.handle_config_get(entity_id).await.map(Some)
+            }
+            (Some("labels"), Some(_host_id), Some("del"), None) => {
+                self.handle_label_del(message.payload).await.map(Some)
+            }
+            (Some("labels"), Some(_host_id), Some("put"), None) => {
+                self.handle_label_put(message.payload).await.map(Some)
             }
             (Some("linkdefs"), Some("put"), None, None) => {
                 self.handle_linkdef_put(message.payload).await.map(Some)

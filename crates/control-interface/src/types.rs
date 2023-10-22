@@ -418,3 +418,9 @@ pub struct LinkDefinition {
     pub contract_id: String,
     pub values: LinkSettings,
 }
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct HostLabel {
+    pub label: String,
+    pub value: String,
+}
