@@ -13,7 +13,8 @@ use std::io::{Read, Write};
 
 use serde::Deserialize;
 use serde_json::json;
-use wasi::http::types;
+use wasi::http;
+use wasi::sockets::{instance_network, network, tcp_create_socket, udp_create_socket};
 use wasmcloud_actor::wasi::logging::logging;
 use wasmcloud_actor::wasi::random::random;
 use wasmcloud_actor::wasi::{blobstore, keyvalue};
@@ -26,14 +27,14 @@ use wasmcloud_actor::{
 struct Actor;
 
 impl exports::wasi::http::incoming_handler::Guest for Actor {
-    fn handle(request: types::IncomingRequest, response_out: types::ResponseOutparam) {
+    fn handle(request: http::types::IncomingRequest, response_out: http::types::ResponseOutparam) {
         #[derive(Deserialize)]
         struct Request {
             min: u32,
             max: u32,
         }
 
-        assert!(matches!(request.method(), types::Method::Post));
+        assert!(matches!(request.method(), http::types::Method::Post));
         assert_eq!(request.path_with_query().as_deref(), Some("/foo?bar=baz"));
         assert!(request.scheme().is_none());
         // NOTE: Authority is lost in traslation to Smithy HttpRequest
@@ -96,7 +97,7 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
                 .expect("failed to read value from incoming request stream");
             serde_json::from_slice(&buf).expect("failed to decode request body")
         };
-        let _trailers = types::IncomingBody::finish(request_body);
+        let _trailers = http::types::IncomingBody::finish(request_body);
 
         logging::log(logging::Level::Trace, "trace-context", "trace");
         logging::log(logging::Level::Debug, "debug-context", "debug");
@@ -126,7 +127,7 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
         });
         eprintln!("response: `{res:?}`");
         let body = serde_json::to_vec(&res).expect("failed to encode response to JSON");
-        let response = types::OutgoingResponse::new(200, &types::Fields::new(&[]));
+        let response = http::types::OutgoingResponse::new(200, &http::types::Fields::new(&[]));
         let response_body = response
             .write()
             .expect("failed to get outgoing response body");
@@ -139,8 +140,8 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
                 .expect("failed to write body to outgoing response stream");
             w.flush().expect("failed to flush outgoing response stream");
         }
-        types::OutgoingBody::finish(response_body, None);
-        types::ResponseOutparam::set(response_out, Ok(response));
+        http::types::OutgoingBody::finish(response_body, None);
+        http::types::ResponseOutparam::set(response_out, Ok(response));
 
         bus::lattice::set_target(
             Some(&TargetEntity::Link(Some("messaging".into()))),
@@ -362,5 +363,60 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
         .expect("failed to invoke `test-actors:foobar/actor.foobar` on an actor");
         let res: String = serde_json::from_slice(&res).expect("failed to decode response");
         assert_eq!(res, "foobar");
+
+        let _req = http::types::OutgoingRequest::new(
+            &http::types::Method::Get,
+            None,
+            None,
+            None,
+            &http::types::Fields::new(&[]),
+        );
+        // TODO: Verify outgoing HTTP handler, currently calling this method would trap
+        //http::outgoing_handler::handle(req, None).expect_err("should not succeed");
+
+        let tcp4 = tcp_create_socket::create_tcp_socket(network::IpAddressFamily::Ipv4)
+            .expect("failed to create an IPv4 TCP socket");
+        let tcp6 = tcp_create_socket::create_tcp_socket(network::IpAddressFamily::Ipv6)
+            .expect("failed to create an IPv6 TCP socket");
+        let udp4 = udp_create_socket::create_udp_socket(network::IpAddressFamily::Ipv4)
+            .expect("failed to create an IPv4 UDP socket");
+        let udp6 = udp_create_socket::create_udp_socket(network::IpAddressFamily::Ipv6)
+            .expect("failed to create an IPv6 UDP socket");
+        tcp4.start_bind(
+            &instance_network::instance_network(),
+            network::IpSocketAddress::Ipv4(network::Ipv4SocketAddress {
+                port: 0,
+                address: (0, 0, 0, 0),
+            }),
+        )
+        .expect_err("should not be able to bind to any IPv4 address on TCP");
+        tcp6.start_bind(
+            &instance_network::instance_network(),
+            network::IpSocketAddress::Ipv6(network::Ipv6SocketAddress {
+                port: 0,
+                address: (0, 0, 0, 0, 0, 0, 0, 0),
+                flow_info: 0,
+                scope_id: 0,
+            }),
+        )
+        .expect_err("should not be able to bind to any IPv6 address on TCP");
+        udp4.start_bind(
+            &instance_network::instance_network(),
+            network::IpSocketAddress::Ipv4(network::Ipv4SocketAddress {
+                port: 0,
+                address: (0, 0, 0, 0),
+            }),
+        )
+        .expect_err("should not be able to bind to any IPv4 address on UDP");
+        udp6.start_bind(
+            &instance_network::instance_network(),
+            network::IpSocketAddress::Ipv6(network::Ipv6SocketAddress {
+                port: 0,
+                address: (0, 0, 0, 0, 0, 0, 0, 0),
+                flow_info: 0,
+                scope_id: 0,
+            }),
+        )
+        .expect_err("should not be able to bind to any IPv6 address on UDP");
     }
 }
