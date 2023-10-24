@@ -4,45 +4,57 @@ wasmcloud:
   # Config options for the wasmCloud Host. See
   # https://wasmcloud.dev/reference/host-runtime/host_configure/ for full details
   config:
-    rpcNatsHost: 127.0.0.1
-    rpcNatsPort: 4222
-    providerNatsHost: 127.0.0.1
-    providerNatsPort: 4222
-    controlNatsHost: 127.0.0.1
-    controlNatsPort: 4222
-    controlTopicPrefix: ""
-    clusterIssuers: ""
-    clusterSeed: ""
-    hostKey: ""
+    natsHost: 127.0.0.1
+    natsPort: 4222
+    natsJwt: ""
+    natsSeed: ""
     latticePrefix: ""
-    rpcJWT: ""
-    rpcTimeout: ""
-    providerRpcJWT: ""
-    providerRpcTimeout: ""
-    ctlJWT: ""
-    providerShutdownDelay: ""
     hostSeed: ""
-    rpcSeed: ""
-    providerRpcSeed: ""
-    ctlSeed: ""
+    clusterSeed: ""
+    clusterIssuers: ""
+    providerShutdownDelay: ""
+    ociAllowedInsecure: ""
+    ociAllowLatest: false
     jetstreamDomain: ""
+    configServiceEnabled: false
+    allowFileLoad: false
     logging:
       structuredLoggingEnabled: false
       logLevel: ""
+    # A map of key value pairs to use as wasmCloud Host labels. These map to environment variable
+    # names, so the `.` character is not allowed
+    hostLabels:
+      kubernetes: "true"
+    # These are advanced settings:
+    control:
+      natsHost: ""
+      natsPort: ""
+      natsJwt: ""
+      natsSeed: ""
+      topicPrefix: ""
+      tls: false
+    rpc:
+      natsHost: ""
+      natsPort: ""
+      natsJwt: ""
+      natsSeed: ""
+      timeoutMs: ""
+      tls: false
+    providerRpc:
+      natsHost: ""
+      natsPort: ""
+      natsJwt: ""
+      natsSeed: ""
+      tls: false
     otel:
       exporter: ""
       endpoint: ""
-    ociAllowedInsecure: ""
-    ociAllowLatest: false
     # Sets the username and password for use with a private registry
     registry:
       url: ""
       username: ""
       password: ""
-    # A map of key value pairs to use as wasmCloud Host labels. These map to environment variable
-    # names, so the `.` character is not allowed
-    hostLabels:
-      kubernetes: "true"
+
   # Enables support for the Kubernetes Applier provider. Essentially, this generates a role and role
   # binding for the pod service account that allows it to get, create, update, delete, and patch
   # service resources if you start the kubernetes applier on one of these hosts. Enabling this
@@ -52,7 +64,7 @@ wasmcloud:
   # Service Applier actor, which requires specific labels in order to route to those pods
   customLabels: {}
   image:
-    repository: wasmcloud/wasmcloud_host
+    repository: wasmcloud/wasmcloud
     pullPolicy: IfNotPresent
     # Overrides the image tag whose default is the chart appVersion.
     tag: ""
@@ -111,7 +123,6 @@ securityContext:
 
 service:
   type: ClusterIP
-  washboardPort: 4000
   natsPort: 8080
 
 nodeSelector: {}
