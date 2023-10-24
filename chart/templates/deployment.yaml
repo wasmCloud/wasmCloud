@@ -34,74 +34,150 @@ spec:
             {{- toYaml .Values.securityContext | nindent 12 }}
           image: "{{ .Values.wasmcloud.image.repository }}:{{ .Values.wasmcloud.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.wasmcloud.image.pullPolicy }}
-          env: 
-            - name: WASMCLOUD_RPC_HOST
-              value: {{ .Values.wasmcloud.config.rpcNatsHost | quote }}
-            - name: WASMCLOUD_RPC_PORT
-              value: {{ .Values.wasmcloud.config.rpcNatsPort | quote }}
-            - name: WASMCLOUD_PROV_RPC_HOST
-              value: {{ .Values.wasmcloud.config.providerNatsHost | quote }}
-            - name: WASMCLOUD_PROV_RPC_PORT
-              value: {{ .Values.wasmcloud.config.providerNatsPort | quote }}
-            - name: WASMCLOUD_CTL_HOST
-              value: {{ .Values.wasmcloud.config.controlNatsHost | quote }}
-            - name: WASMCLOUD_CTL_PORT
-              value: {{ .Values.wasmcloud.config.controlNatsPort | quote }}
-            {{- if .Values.wasmcloud.config.controlTopicPrefix }}
-            - name: WASMCLOUD_CTL_TOPIC_PREFIX
-              value: {{ .Values.wasmcloud.config.controlTopicPrefix | quote }}
+          env:
+            - name: NATS_HOST
+              value: {{ .Values.wasmcloud.config.natsHost | quote }}
+            - name: NATS_PORT
+              value: {{ .Values.wasmcloud.config.natsPort | quote }}
+            {{- if .Values.wasmcloud.config.natsJwt }}
+            - name: NATS_JWT
+              value: {{ .Values.wasmcloud.config.natsJwt | quote }}
             {{- end }}
-            {{- if .Values.wasmcloud.config.clusterIssuers }}
-            - name: WASMCLOUD_CLUSTER_ISSUERS
-              value: {{ .Values.wasmcloud.config.clusterIssuers | quote }}
-            {{- end }}
-            {{- if .Values.wasmcloud.config.clusterSeed }}
-            - name: WASMCLOUD_CLUSTER_SEED
-              value: {{ .Values.wasmcloud.config.clusterSeed | quote }}
-            {{- end }}
-            {{- if .Values.wasmcloud.config.hostKey }}
-            - name: WASMCLOUD_HOST_KEY
-              value: {{ .Values.wasmcloud.config.hostKey | quote }}
-            {{- end }}
-            {{- if .Values.wasmcloud.config.rpcJWT }}
-            - name: WASMCLOUD_RPC_JWT
-              value: {{ .Values.wasmcloud.config.rpcJWT | quote }}
-            {{- end }}
-            {{- if .Values.wasmcloud.config.rpcTimeout }}
-            - name: WASMCLOUD_RPC_TIMEOUT_MS
-              value: {{ .Values.wasmcloud.config.rpcTimeout | quote }}
-            {{- end }}
-            {{- if .Values.wasmcloud.config.providerRpcJWT }}
-            - name: WASMCLOUD_PROV_RPC_JWT
-              value: {{ .Values.wasmcloud.config.providerRpcJWT | quote }}
-            {{- end }}
-            {{- if .Values.wasmcloud.config.providerRpcTimeout }}
-            - name: WASMCLOUD_PROV_RPC_TIMEOUT_MS
-              value: {{ .Values.wasmcloud.config.providerRpcTimeout | quote }}
-            {{- end }}
-            {{- if .Values.wasmcloud.config.ctlJWT }}
-            - name: WASMCLOUD_CTL_JWT
-              value: {{ .Values.wasmcloud.config.ctlJWT | quote }}
-            {{- end }}
-            {{- if .Values.wasmcloud.config.providerShutdownDelay }}
-            - name: WASMCLOUD_PROV_SHUTDOWN_DELAY_MS
-              value: {{ .Values.wasmcloud.config.providerShutdownDelay | quote }}
+            {{- if .Values.wasmcloud.config.natsSeed }}
+            - name: NATS_SEED
+              value: {{ .Values.wasmcloud.config.natsSeed | quote }}
             {{- end }}
             {{- if .Values.wasmcloud.config.latticePrefix }}
             - name: WASMCLOUD_LATTICE_PREFIX
               value: {{ .Values.wasmcloud.config.latticePrefix | quote }}
             {{- end }}
+            {{- if .Values.wasmcloud.config.hostSeed }}
+            - name: WASMCLOUD_HOST_SEED
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "wasmcloud_host.fullname" . }}
+                  key: hostSeed
+            {{- end }}
+            {{- if .Values.wasmcloud.config.clusterSeed }}
+            - name: WASMCLOUD_CLUSTER_SEED
+              value: {{ .Values.wasmcloud.config.clusterSeed | quote }}
+            {{- end }}
+            {{- if .Values.wasmcloud.config.clusterIssuers }}
+            - name: WASMCLOUD_CLUSTER_ISSUERS
+              value: {{ .Values.wasmcloud.config.clusterIssuers | quote }}
+            {{- end }}
+            {{- if .Values.wasmcloud.config.providerShutdownDelay }}
+            - name: WASMCLOUD_PROV_SHUTDOWN_DELAY_MS
+              value: {{ .Values.wasmcloud.config.providerShutdownDelay | quote }}
+            {{- end }}
+            {{- if .Values.wasmcloud.config.ociAllowLatest }}
+            - name: WASMCLOUD_OCI_ALLOW_LATEST
+              value: {{ .Values.wasmcloud.config.ociAllowLatest | quote }}
+            {{- end }}
+            {{- if .Values.wasmcloud.config.ociAllowedInsecure }}
+            - name: WASMCLOUD_OCI_ALLOWED_INSECURE
+              value: {{ .Values.wasmcloud.config.ociAllowedInsecure | quote }}
+            {{- end }}
             {{- if .Values.wasmcloud.config.jetstreamDomain }}
             - name: WASMCLOUD_JS_DOMAIN
               value: {{ .Values.wasmcloud.config.jetstreamDomain | quote }}
+            {{- end }}
+            {{- if .Values.wasmcloud.config.configServiceEnabled }}
+            - name: WASMCLOUD_CONFIG_SERVICE
+              value: {{ .Values.wasmcloud.config.configServiceEnabled | quote }}
+            {{- end }}
+            {{- if .Values.wasmcloud.config.configServiceEnabled }}
+            - name: WASMCLOUD_ALLOW_FILE_LOAD
+              value: {{ .Values.wasmcloud.config.allowFileLoad | quote }}
+            {{- end }}
+            {{- if .Values.wasmcloud.config.logging.logLevel }}
+            - name: WASMCLOUD_LOG_LEVEL
+              value: {{ .Values.wasmcloud.config.logging.logLevel | quote }}
             {{- end }}
             {{- if .Values.wasmcloud.config.logging.structuredLoggingEnabled }}
             - name: WASMCLOUD_STRUCTURED_LOGGING_ENABLED
               value: {{ .Values.wasmcloud.config.logging.structuredLoggingEnabled | quote }}
             {{- end }}
-            {{- if .Values.wasmcloud.config.logging.logLevel }}
-            - name: WASMCLOUD_STRUCTURED_LOG_LEVEL
-              value: {{ .Values.wasmcloud.config.logging.logLevel | quote }}
+            {{- range $k, $v := .Values.wasmcloud.config.hostLabels }}
+            - name: WASMCLOUD_LABEL_{{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+            {{- if .Values.wasmcloud.config.control.natsHost }}
+            - name: WASMCLOUD_CTL_HOST
+              value: {{ .Values.wasmcloud.config.control.natsHost | quote }}
+            {{- end }}
+            {{- if .Values.wasmcloud.config.control.natsPort }}
+            - name: WASMCLOUD_CTL_PORT
+              value: {{ .Values.wasmcloud.config.control.natsPort | quote }}
+            {{- end }}
+            {{- if .Values.wasmcloud.config.control.natsJwt }}
+            - name: WASMCLOUD_CTL_JWT
+              value: {{ .Values.wasmcloud.config.control.natsJwt | quote }}
+            {{- end }}
+            {{- if .Values.wasmcloud.config.control.natsSeed }}
+            - name: WASMCLOUD_CTL_SEED
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "wasmcloud_host.fullname" . }}
+                  key: controlNatsSeed
+            {{- end }}
+            {{- if .Values.wasmcloud.config.control.topicPrefix }}
+            - name: WASMCLOUD_CTL_TOPIC_PREFIX
+              value: {{ .Values.wasmcloud.config.control.topicPrefix | quote }}
+            {{- end }}
+            {{- if .Values.wasmcloud.config.control.tls }}
+            - name: WASMCLOUD_CTL_TLS
+              value: {{ .Values.wasmcloud.config.control.tls | quote }}
+            {{- end }}
+            {{- if .Values.wasmcloud.config.rpc.natsHost }}
+            - name: WASMCLOUD_RPC_HOST
+              value: {{ .Values.wasmcloud.config.rpc.natsHost | quote }}
+            {{- end }}
+            {{- if .Values.wasmcloud.config.rpc.natsPort }}
+            - name: WASMCLOUD_RPC_PORT
+              value: {{ .Values.wasmcloud.config.rpc.natsPort | quote }}
+            {{- end }}
+            {{- if .Values.wasmcloud.config.rpc.natsJwt }}
+            - name: WASMCLOUD_RPC_JWT
+              value: {{ .Values.wasmcloud.config.rpc.natsJwt | quote }}
+            {{- end }}
+            {{- if .Values.wasmcloud.config.rpc.natsSeed }}
+            - name: WASMCLOUD_RPC_SEED
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "wasmcloud_host.fullname" . }}
+                  key: rpcNatsSeed
+            {{- end }}
+            {{- if .Values.wasmcloud.config.rpc.timeout }}
+            - name: WASMCLOUD_RPC_TIMEOUT_MS
+              value: {{ .Values.wasmcloud.config.rpc.timeoutMs | quote }}
+            {{- end }}
+            {{- if .Values.wasmcloud.config.rpc.tls }}
+            - name: WASMCLOUD_RPC_TLS
+              value: {{ .Values.wasmcloud.config.rpc.tls | quote }}
+            {{- end }}
+            {{- if .Values.wasmcloud.config.providerRpc.natsHost }}
+            - name: WASMCLOUD_PROV_RPC_HOST
+              value: {{ .Values.wasmcloud.config.providerRpc.natsHost | quote }}
+            {{- end }}
+            {{- if .Values.wasmcloud.config.providerRpc.natsPort }}
+            - name: WASMCLOUD_PROV_RPC_PORT
+              value: {{ .Values.wasmcloud.config.providerRpc.natsPort | quote }}
+            {{- end }}
+            {{- if .Values.wasmcloud.config.providerRpc.natsJwt }}
+            - name: WASMCLOUD_PROV_RPC_JWT
+              value: {{ .Values.wasmcloud.config.providerRpc.natsJwt | quote }}
+            {{- end }}
+            {{- if .Values.wasmcloud.config.providerRpc.natsSeed }}
+            - name: WASMCLOUD_PROV_RPC_SEED
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "wasmcloud_host.fullname" . }}
+                  key: providerRpcNatsSeed
+            {{- end }}
+            {{- if .Values.wasmcloud.config.providerRpc.tls }}
+            - name: WASMCLOUD_PROV_RPC_TLS
+              value: {{ .Values.wasmcloud.config.providerRpc.tls | quote }}
             {{- end }}
             {{- if .Values.wasmcloud.config.otel.exporter }}
             - name: OTEL_TRACES_EXPORTER
@@ -126,58 +202,6 @@ spec:
                   name: {{ include "wasmcloud_host.fullname" . }}
                   key: registryPassword
             {{- end }}
-            {{- if .Values.wasmcloud.config.hostSeed }}
-            - name: WASMCLOUD_HOST_SEED
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "wasmcloud_host.fullname" . }}
-                  key: hostSeed
-            {{- end }}
-            {{- if .Values.wasmcloud.config.rpcSeed }}
-            - name: WASMCLOUD_RPC_SEED
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "wasmcloud_host.fullname" . }}
-                  key: rpcSeed
-            {{- end }}
-            {{- if .Values.wasmcloud.config.providerRpcSeed }}
-            - name: WASMCLOUD_PROV_RPC_SEED
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "wasmcloud_host.fullname" . }}
-                  key: providerRpcSeed
-            {{- end }}
-            {{- if .Values.wasmcloud.config.ctlSeed }}
-            - name: WASMCLOUD_CTL_SEED
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "wasmcloud_host.fullname" . }}
-                  key: ctlSeed
-            {{- end }}
-            {{- if .Values.wasmcloud.config.ociAllowedInsecure }}
-            - name: WASMCLOUD_OCI_ALLOWED_INSECURE
-              value: {{ .Values.wasmcloud.config.ociAllowedInsecure | quote }}
-            {{- end }}
-            {{- if .Values.wasmcloud.config.ociAllowLatest }}
-            - name: WASMCLOUD_OCI_ALLOW_LATEST
-              value: {{ .Values.wasmcloud.config.ociAllowLatest | quote }}
-            {{- end }}
-            {{- range $k, $v := .Values.wasmcloud.config.hostLabels }}
-            - name: HOST_{{ $k }}
-              value: {{ $v | quote }}
-            {{- end }}
-          ports:
-            - name: washboard
-              containerPort: 4000
-              protocol: TCP
-          livenessProbe:
-            httpGet:
-              path: /api/livez
-              port: washboard
-          readinessProbe:
-            httpGet:
-              path: /api/readyz
-              port: washboard
           resources:
             {{- toYaml .Values.wasmcloud.resources | nindent 12 }}
         {{- if .Values.nats.enabled }}
