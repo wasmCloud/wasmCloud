@@ -77,6 +77,12 @@ pub struct CtlOperationAck {
     pub error: String,
 }
 
+/// A response containing the full list of known claims within the lattice
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct GetClaimsResponse {
+    pub claims: Vec<HashMap<String, String>>,
+}
+
 /// A summary representation of a host
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Host {
@@ -138,6 +144,12 @@ pub struct HostInventory {
 
 pub type KeyValueMap = std::collections::HashMap<String, String>;
 pub type LabelsMap = std::collections::HashMap<String, String>;
+
+/// A list of link definitions
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct LinkDefinitionList {
+    pub links: Vec<LinkDefinition>,
+}
 
 /// One of a potential list of responses to a provider auction
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]

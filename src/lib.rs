@@ -4,7 +4,6 @@
 //! NATS connection. This library can be used by multiple types of tools, and is also used
 //! by the control interface capability provider and the wash CLI
 use std::fmt::Debug;
-use std::marker::PhantomData;
 use std::{collections::HashMap, time::Duration};
 
 use cloudevents::event::Event;
@@ -12,34 +11,29 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sub_stream::collect_timeout;
 use tokio::sync::mpsc::Receiver;
 use tracing::{debug, error, instrument, trace};
-use tracing_futures::Instrument;
 
 mod broker;
-pub mod kv;
 mod otel;
 mod sub_stream;
 mod types;
 
-use kv::{Build, CachedKvStore, DirectKvStore};
 pub use types::*;
 
-use crate::kv::KvStore;
 use crate::otel::OtelHeaderInjector;
 
 type Result<T> = ::std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 /// Lattice control interface client
 #[derive(Clone)]
-pub struct Client<T: Clone> {
+pub struct Client {
     nc: async_nats::Client,
     topic_prefix: Option<String>,
     pub lattice_prefix: String,
     timeout: Duration,
     auction_timeout: Duration,
-    kvstore: T,
 }
 
-impl<T: Clone> Debug for Client<T> {
+impl Debug for Client {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Client")
             .field("topic_prefix", &self.topic_prefix)
@@ -52,104 +46,30 @@ impl<T: Clone> Debug for Client<T> {
 
 /// A client builder that can be used to fluently provide configuration settings used to construct
 /// the control interface client
-pub struct ClientBuilder<T> {
-    nc: Option<async_nats::Client>,
+pub struct ClientBuilder {
+    nc: async_nats::Client,
     topic_prefix: Option<String>,
     lattice_prefix: String,
     timeout: Duration,
     auction_timeout: Duration,
-    js_domain: Option<String>,
-    store_placeholder: PhantomData<T>,
 }
 
-impl<T> Default for ClientBuilder<T> {
-    fn default() -> Self {
-        Self {
-            nc: None,
+impl ClientBuilder {
+    /// Creates a new client builder using the given client with all configuration values set to
+    /// their defaults
+    pub fn new(nc: async_nats::Client) -> ClientBuilder {
+        ClientBuilder {
+            nc,
             topic_prefix: None,
             lattice_prefix: "default".to_string(),
             timeout: Duration::from_secs(2),
             auction_timeout: Duration::from_secs(5),
-            js_domain: None,
-            store_placeholder: PhantomData,
-        }
-    }
-}
-
-impl ClientBuilder<DirectKvStore> {
-    /// Creates a new client builder using the given client, set up to use the
-    /// [`DirectKvStore`](DirectKvStore) for bucket operations
-    pub fn new(nc: async_nats::Client) -> ClientBuilder<DirectKvStore> {
-        ClientBuilder {
-            nc: Some(nc),
-            ..Default::default()
-        }
-    }
-}
-
-impl ClientBuilder<CachedKvStore> {
-    /// Creates a new client builder using the given client, set up to use the
-    /// [`CachedKvStore`](CachedKvStore) for bucket operations
-    pub fn new_caching(nc: async_nats::Client) -> ClientBuilder<CachedKvStore> {
-        ClientBuilder {
-            nc: Some(nc),
-            ..Default::default()
-        }
-    }
-}
-
-impl<T: KvStore + Build + Clone> ClientBuilder<T> {
-    /// Creates a new client builder using the given client, set up to use the generic key value
-    /// store type `T` for bucket operations. This is useful for times when you need to specify a
-    /// type dynamically
-    ///
-    /// ```no_run
-    /// # #[tokio::main(flavor = "current_thread")]
-    /// # async fn main() {
-    /// use wasmcloud_control_interface::{kv::CachedKvStore, ClientBuilder};
-    ///
-    /// let nc = async_nats::connect("localhost:4222").await.unwrap();
-    /// let client = ClientBuilder::<CachedKvStore>::new_generic(nc.clone()).build().await.unwrap();
-    /// // or
-    /// let builder: ClientBuilder<CachedKvStore> = ClientBuilder::new_generic(nc);
-    /// let client = builder.build().await.unwrap();
-    /// # }
-    /// ```
-    ///
-    /// This function is not just `new` because we want to preserve the default behavior of the
-    /// direct KV store behind the already used `new` function.
-    pub fn new_generic(nc: async_nats::Client) -> ClientBuilder<T> {
-        ClientBuilder {
-            nc: Some(nc),
-            ..Default::default()
         }
     }
 
-    /// Completes the generation of a control interface client. This function is async because it
-    /// will attempt to locate and attach to a metadata key-value bucket (`LATTICEDATA_{prefix}`)
-    /// when starting. If this bucket doesn't exist (meaning no hosts have actually run in that
-    /// lattice), than an error will be returned
-    pub async fn build(self) -> Result<Client<T>> {
-        if let Some(nc) = self.nc {
-            let kvstore = T::build(nc.clone(), &self.lattice_prefix, self.js_domain).await?;
-            Ok(Client {
-                nc,
-                topic_prefix: self.topic_prefix,
-                lattice_prefix: self.lattice_prefix,
-                timeout: self.timeout,
-                auction_timeout: self.auction_timeout,
-                kvstore,
-            })
-        } else {
-            Err("Cannot create a control interface client without a NATS client".into())
-        }
-    }
-}
-
-impl<T> ClientBuilder<T> {
     /// Sets the topic prefix for the NATS topic used for all control requests. Not to be confused
     /// with lattice ID/prefix
-    pub fn topic_prefix(self, prefix: impl Into<String>) -> ClientBuilder<T> {
+    pub fn topic_prefix(self, prefix: impl Into<String>) -> ClientBuilder {
         ClientBuilder {
             topic_prefix: Some(prefix.into()),
             ..self
@@ -158,7 +78,7 @@ impl<T> ClientBuilder<T> {
 
     /// The lattice ID/prefix used for this client. If this function is not invoked, the prefix will
     /// be set to `default`
-    pub fn lattice_prefix(self, prefix: impl Into<String>) -> ClientBuilder<T> {
+    pub fn lattice_prefix(self, prefix: impl Into<String>) -> ClientBuilder {
         ClientBuilder {
             lattice_prefix: prefix.into(),
             ..self
@@ -168,37 +88,44 @@ impl<T> ClientBuilder<T> {
     /// Sets the timeout for standard calls and RPC invocations used by the client. If not set, the
     /// default will be 2 seconds
     #[deprecated(since = "0.30.0", note = "please use `timeout` instead")]
-    pub fn rpc_timeout(self, timeout: Duration) -> ClientBuilder<T> {
+    pub fn rpc_timeout(self, timeout: Duration) -> ClientBuilder {
         ClientBuilder { timeout, ..self }
     }
 
     /// Sets the timeout for control interface requests issued by the client. If not set, the
     /// default will be 2 seconds
-    pub fn timeout(self, timeout: Duration) -> ClientBuilder<T> {
+    pub fn timeout(self, timeout: Duration) -> ClientBuilder {
         ClientBuilder { timeout, ..self }
     }
 
     /// Sets the timeout for auction (scatter/gather) operations. If not set, the default will be 5
     /// seconds
-    pub fn auction_timeout(self, timeout: Duration) -> ClientBuilder<T> {
+    pub fn auction_timeout(self, timeout: Duration) -> ClientBuilder {
         ClientBuilder {
             auction_timeout: timeout,
             ..self
         }
     }
 
-    /// Sets the JetStream domain for this client, which can be critical for locating the right
-    /// key-value bucket for lattice metadata storage. If this is skipped, then the JS domain will
-    /// be `None`
-    pub fn js_domain(self, domain: impl Into<String>) -> ClientBuilder<T> {
-        ClientBuilder {
-            js_domain: Some(domain.into()),
-            ..self
+    /// Constructs the client with the given configuration from the builder
+    pub fn build(self) -> Client {
+        Client {
+            nc: self.nc,
+            topic_prefix: self.topic_prefix,
+            lattice_prefix: self.lattice_prefix,
+            timeout: self.timeout,
+            auction_timeout: self.auction_timeout,
         }
     }
 }
 
-impl<T: KvStore + Clone + Send + Sync> Client<T> {
+impl Client {
+    /// Convenience method for creating a new client with all default settings. This is the same as
+    /// calling `ClientBuilder::new(nc).build()`
+    pub fn new(nc: async_nats::Client) -> Client {
+        ClientBuilder::new(nc).build()
+    }
+
     #[instrument(level = "debug", skip_all)]
     pub(crate) async fn request_timeout(
         &self,
@@ -222,11 +149,6 @@ impl<T: KvStore + Clone + Send + Sync> Client<T> {
         }
     }
 
-    /// Returns a handle to the underlying metadata client for use in advanced scenarios and queries
-    pub fn lattice_metadata_client(&self) -> &T {
-        &self.kvstore
-    }
-
     /// Queries the lattice for all responsive hosts, waiting for the full period specified by
     /// _timeout_.
     #[instrument(level = "debug", skip_all)]
@@ -243,10 +165,7 @@ impl<T: KvStore + Clone + Send + Sync> Client<T> {
             broker::queries::host_inventory(&self.topic_prefix, &self.lattice_prefix, host_id);
         debug!("get_host_inventory:request {}", &subject);
         match self.request_timeout(subject, vec![], self.timeout).await {
-            Ok(msg) => {
-                let hi: HostInventory = json_deserialize(&msg.payload)?;
-                Ok(hi)
-            }
+            Ok(msg) => Ok(json_deserialize(&msg.payload)?),
             Err(e) => Err(format!("Did not receive host inventory from target host: {}", e).into()),
         }
     }
@@ -254,7 +173,15 @@ impl<T: KvStore + Clone + Send + Sync> Client<T> {
     /// Retrieves the full set of all cached claims in the lattice.   
     #[instrument(level = "debug", skip_all)]
     pub async fn get_claims(&self) -> Result<Vec<HashMap<String, String>>> {
-        self.kvstore.get_all_claims().await
+        let subject = broker::queries::claims(&self.topic_prefix, &self.lattice_prefix);
+        debug!("get_claims:request {}", &subject);
+        match self.request_timeout(subject, vec![], self.timeout).await {
+            Ok(msg) => {
+                let list: GetClaimsResponse = json_deserialize(&msg.payload)?;
+                Ok(list.claims)
+            }
+            Err(e) => Err(format!("Did not receive claims from lattice: {}", e).into()),
+        }
     }
 
     /// Performs an actor auction within the lattice, publishing a set of constraints and the
@@ -352,10 +279,7 @@ impl<T: KvStore + Clone + Send + Sync> Client<T> {
             annotations,
         })?;
         match self.request_timeout(subject, bytes, self.timeout).await {
-            Ok(msg) => {
-                let ack: CtlOperationAck = json_deserialize(&msg.payload)?;
-                Ok(ack)
-            }
+            Ok(msg) => Ok(json_deserialize(&msg.payload)?),
             Err(e) => Err(format!("Did not receive scale actor acknowledgement: {}", e).into()),
         }
     }
@@ -384,8 +308,7 @@ impl<T: KvStore + Clone + Send + Sync> Client<T> {
         }
     }
 
-    /// Puts a link into the lattice metadata keyvalue bucket. Returns an error if it was unable to
-    /// put the link
+    /// Puts a link into the lattice. Returns an error if it was unable to put the link
     #[instrument(level = "debug", skip_all)]
     pub async fn advertise_link(
         &self,
@@ -394,16 +317,23 @@ impl<T: KvStore + Clone + Send + Sync> Client<T> {
         contract_id: &str,
         link_name: &str,
         values: HashMap<String, String>,
-    ) -> Result<()> {
-        self.kvstore
-            .put_link(LinkDefinition {
-                actor_id: actor_id.to_string(),
-                provider_id: provider_id.to_string(),
-                contract_id: contract_id.to_string(),
-                link_name: link_name.to_string(),
-                values,
-            })
-            .await
+    ) -> Result<CtlOperationAck> {
+        let ld = LinkDefinition {
+            actor_id: actor_id.to_string(),
+            provider_id: provider_id.to_string(),
+            contract_id: contract_id.to_string(),
+            link_name: link_name.to_string(),
+            values,
+        };
+
+        let subject = broker::advertise_link(&self.topic_prefix, &self.lattice_prefix);
+        debug!("advertise_link:request {}", &subject);
+
+        let bytes = crate::json_serialize(&ld)?;
+        match self.request_timeout(subject, bytes, self.timeout).await {
+            Ok(msg) => Ok(json_deserialize(&msg.payload)?),
+            Err(e) => Err(format!("Did not receive advertise link acknowledgement: {}", e).into()),
+        }
     }
 
     /// Removes a link from the lattice metadata keyvalue bucket. Returns an error if it was unable
@@ -414,10 +344,20 @@ impl<T: KvStore + Clone + Send + Sync> Client<T> {
         actor_id: &str,
         contract_id: &str,
         link_name: &str,
-    ) -> Result<()> {
-        self.kvstore
-            .delete_link(actor_id, contract_id, link_name)
-            .await
+    ) -> Result<CtlOperationAck> {
+        let subject = broker::remove_link(&self.topic_prefix, &self.lattice_prefix);
+        debug!("remove_link:request {}", &subject);
+        let ld = LinkDefinition {
+            actor_id: actor_id.to_string(),
+            contract_id: contract_id.to_string(),
+            link_name: link_name.to_string(),
+            ..Default::default()
+        };
+        let bytes = crate::json_serialize(&ld)?;
+        match self.request_timeout(subject, bytes, self.timeout).await {
+            Ok(msg) => Ok(json_deserialize(&msg.payload)?),
+            Err(e) => Err(format!("Did not receive remove link acknowledgement: {}", e).into()),
+        }
     }
 
     /// Retrieves the list of link definitions stored in the lattice metadata key-value bucket. If
@@ -425,7 +365,15 @@ impl<T: KvStore + Clone + Send + Sync> Client<T> {
     /// it will query the bucket for the list of links.
     #[instrument(level = "debug", skip_all)]
     pub async fn query_links(&self) -> Result<Vec<LinkDefinition>> {
-        self.kvstore.get_links().await
+        let subject = broker::queries::link_definitions(&self.topic_prefix, &self.lattice_prefix);
+        debug!("query_links:request {}", &subject);
+        match self.request_timeout(subject, vec![], self.timeout).await {
+            Ok(msg) => {
+                let list: LinkDefinitionList = json_deserialize(&msg.payload)?;
+                Ok(list.links)
+            }
+            Err(e) => Err(format!("Did not receive a response to links query: {}", e).into()),
+        }
     }
 
     /// Issue a command to a host instructing that it replace an existing actor (indicated by its
@@ -454,10 +402,7 @@ impl<T: KvStore + Clone + Send + Sync> Client<T> {
             annotations,
         })?;
         match self.request_timeout(subject, bytes, self.timeout).await {
-            Ok(msg) => {
-                let ack: CtlOperationAck = json_deserialize(&msg.payload)?;
-                Ok(ack)
-            }
+            Ok(msg) => Ok(json_deserialize(&msg.payload)?),
             Err(e) => Err(format!("Did not receive update actor acknowledgement: {}", e).into()),
         }
     }
@@ -467,9 +412,7 @@ impl<T: KvStore + Clone + Send + Sync> Client<T> {
     /// acknowledge the receipt of this command _before_ downloading the provider's bytes from the
     /// OCI registry, indicating either a validation failure or success. If a client needs
     /// deterministic guarantees that the provider has completed its startup process, such a client
-    /// needs to monitor the control event stream for the appropriate event. If a host ID is not
-    /// supplied (empty string), then this function will return an early acknowledgement, go find a
-    /// host, and then submit the start request to a target host.
+    /// needs to monitor the control event stream for the appropriate event.
     #[instrument(level = "debug", skip_all)]
     pub async fn start_provider(
         &self,
@@ -479,62 +422,20 @@ impl<T: KvStore + Clone + Send + Sync> Client<T> {
         annotations: Option<HashMap<String, String>>,
         provider_configuration: Option<String>,
     ) -> Result<CtlOperationAck> {
-        let provider_ref = provider_ref.to_string();
-        if !host_id.trim().is_empty() {
-            start_provider_(
-                &self.nc,
-                &self.topic_prefix,
-                &self.lattice_prefix,
-                self.timeout,
-                host_id,
-                &provider_ref,
-                link_name,
-                annotations,
-                provider_configuration,
-            )
-            .in_current_span()
-            .await
-        } else {
-            // If a host isn't supplied, try to find one via auction.
-            // If no host is found, return error.
-            // If a host is found, start brackground request to start provider and return Ack
-            let mut error = String::new();
-            debug!("start_provider:deferred (no-host) request");
-            let current_span = tracing::Span::current();
-            let host = match self.get_hosts().await {
-                Err(e) => {
-                    error = format!("failed to query hosts for no-host provider start: {}", e);
-                    None
-                }
-                Ok(hs) => hs.into_iter().next(),
-            };
-            if let Some(host) = host {
-                let this = self.clone();
-                tokio::spawn(async move {
-                    let _ = start_provider_(
-                        &this.nc,
-                        &this.topic_prefix,
-                        &this.lattice_prefix,
-                        this.timeout,
-                        &host.id,
-                        &provider_ref,
-                        link_name,
-                        annotations,
-                        provider_configuration,
-                    )
-                    .instrument(current_span)
-                    .await;
-                });
-            } else if error.is_empty() {
-                error = "No hosts detected in in no-host provider start.".to_string();
-            }
-            if !error.is_empty() {
-                error!("{}", error);
-            }
-            Ok(CtlOperationAck {
-                accepted: true,
-                error,
-            })
+        let subject =
+            broker::commands::start_provider(&self.topic_prefix, &self.lattice_prefix, host_id);
+        debug!("start_provider:request {}", &subject);
+        let bytes = json_serialize(StartProviderCommand {
+            host_id: host_id.to_string(),
+            provider_ref: provider_ref.to_string(),
+            link_name: link_name.unwrap_or_else(|| "default".to_string()),
+            annotations,
+            configuration: provider_configuration,
+        })?;
+
+        match self.request_timeout(subject, bytes, self.timeout).await {
+            Ok(msg) => Ok(json_deserialize(&msg.payload)?),
+            Err(e) => Err(format!("Did not receive start provider acknowledgement: {}", e).into()),
         }
     }
 
@@ -562,10 +463,7 @@ impl<T: KvStore + Clone + Send + Sync> Client<T> {
             annotations,
         })?;
         match self.request_timeout(subject, bytes, self.timeout).await {
-            Ok(msg) => {
-                let ack: CtlOperationAck = json_deserialize(&msg.payload)?;
-                Ok(ack)
-            }
+            Ok(msg) => Ok(json_deserialize(&msg.payload)?),
             Err(e) => Err(format!("Did not receive stop provider acknowledgement: {}", e).into()),
         }
     }
@@ -590,10 +488,7 @@ impl<T: KvStore + Clone + Send + Sync> Client<T> {
             annotations,
         })?;
         match self.request_timeout(subject, bytes, self.timeout).await {
-            Ok(msg) => {
-                let ack: CtlOperationAck = json_deserialize(&msg.payload)?;
-                Ok(ack)
-            }
+            Ok(msg) => Ok(json_deserialize(&msg.payload)?),
             Err(e) => Err(format!("Did not receive stop actor acknowledgement: {}", e).into()),
         }
     }
@@ -617,10 +512,7 @@ impl<T: KvStore + Clone + Send + Sync> Client<T> {
         })?;
 
         match self.request_timeout(subject, bytes, self.timeout).await {
-            Ok(msg) => {
-                let ack: CtlOperationAck = json_deserialize(&msg.payload)?;
-                Ok(ack)
-            }
+            Ok(msg) => Ok(json_deserialize(&msg.payload)?),
             Err(e) => Err(format!("Did not receive stop host acknowledgement: {}", e).into()),
         }
     }
@@ -662,7 +554,7 @@ impl<T: KvStore + Clone + Send + Sync> Client<T> {
     ///   let client = ClientBuilder::new(nc)
     ///                 .rpc_timeout(std::time::Duration::from_millis(1000))
     ///                 .auction_timeout(std::time::Duration::from_millis(1000))
-    ///                 .build().await.unwrap();
+    ///                 .build();
     ///   let mut receiver = client.events_receiver().await.unwrap();
     ///   tokio::spawn( async move {
     ///       while let Some(evt) = receiver.recv().await {
@@ -686,7 +578,7 @@ impl<T: KvStore + Clone + Send + Sync> Client<T> {
     ///   let client = ClientBuilder::new(nc)
     ///                 .rpc_timeout(std::time::Duration::from_millis(1000))
     ///                 .auction_timeout(std::time::Duration::from_millis(1000))
-    ///                 .build().await.unwrap();    
+    ///                 .build();    
     ///   let mut receiver = client.events_receiver().await.unwrap();
     ///   // read the docs for flume receiver. You can use it in either sync or async code
     ///   // The receiver can be cloned() as needed.
@@ -725,13 +617,8 @@ impl<T: KvStore + Clone + Send + Sync> Client<T> {
     }
 }
 
-// [ss]: renamed to json_serialize and json_deserialize to avoid confusion
-//   with msgpack serialize and deserialize, used for rpc messages.
-//
-/// The standard function for serializing codec structs into a format that can be
-/// used for message exchange between actor and host. Use of any other function to
-/// serialize could result in breaking incompatibilities.
-pub fn json_serialize<T>(
+/// Helper function that serializes the data and maps the error
+fn json_serialize<T>(
     item: T,
 ) -> ::std::result::Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>>
 where
@@ -740,62 +627,11 @@ where
     serde_json::to_vec(&item).map_err(|e| format!("JSON serialization failure: {}", e).into())
 }
 
-/// The standard function for de-serializing codec structs from a format suitable
-/// for message exchange between actor and host. Use of any other function to
-/// deserialize could result in breaking incompatibilities.
-pub fn json_deserialize<'de, T: Deserialize<'de>>(
+/// Helper function that deserializes the data and maps the error
+fn json_deserialize<'de, T: Deserialize<'de>>(
     buf: &'de [u8],
 ) -> ::std::result::Result<T, Box<dyn std::error::Error + Send + Sync>> {
-    serde_json::from_slice(buf).map_err(|e| {
-        {
-            std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("JSON deserialization failure: {}", e),
-            )
-        }
-        .into()
-    })
-}
-
-// "selfless" helper function that submits a start provider request to a host
-#[allow(clippy::too_many_arguments)]
-async fn start_provider_(
-    client: &async_nats::Client,
-    topic_prefix: &Option<String>,
-    lattice_prefix: &str,
-    timeout: Duration,
-    host_id: &str,
-    provider_ref: &str,
-    link_name: Option<String>,
-    annotations: Option<HashMap<String, String>>,
-    provider_configuration: Option<String>,
-) -> Result<CtlOperationAck> {
-    let subject = broker::commands::start_provider(topic_prefix, lattice_prefix, host_id);
-    debug!("start_provider:request {}", &subject);
-    let bytes = json_serialize(StartProviderCommand {
-        host_id: host_id.to_string(),
-        provider_ref: provider_ref.to_string(),
-        link_name: link_name.unwrap_or_else(|| "default".to_string()),
-        annotations,
-        configuration: provider_configuration,
-    })?;
-    match tokio::time::timeout(
-        timeout,
-        client.request_with_headers(
-            subject,
-            OtelHeaderInjector::default_with_span().into(),
-            bytes.into(),
-        ),
-    )
-    .await
-    {
-        Err(e) => Err(format!("Did not receive start provider acknowledgement: {}", e).into()),
-        Ok(Err(e)) => Err(format!("Error sending or receiving message: {}", e).into()),
-        Ok(Ok(msg)) => {
-            let ack: CtlOperationAck = json_deserialize(&msg.payload)?;
-            Ok(ack)
-        }
-    }
+    serde_json::from_slice(buf).map_err(|e| format!("JSON deserialization failure: {}", e).into())
 }
 
 #[cfg(test)]
@@ -813,9 +649,7 @@ mod tests {
         let client = ClientBuilder::new(nc)
             .timeout(Duration::from_millis(1000))
             .auction_timeout(Duration::from_millis(1000))
-            .build()
-            .await
-            .unwrap();
+            .build();
         let mut receiver = client.events_receiver().await.unwrap();
         tokio::spawn(async move {
             while let Some(evt) = receiver.recv().await {
