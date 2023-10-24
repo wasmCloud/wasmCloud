@@ -97,3 +97,4 @@ dirs = { workspace = true }
 tempfile = { workspace = true }
 test-case = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
+wasmparser = { workspace = true }

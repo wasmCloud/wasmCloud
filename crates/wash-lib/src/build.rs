@@ -24,9 +24,15 @@ use crate::{
     },
 };
 
+/// This tag indicates that a Wasm module uses experimental features of wasmCloud
+/// and/or the surrounding ecosystem.
+///
+/// This tag is normally embedded in a Wasm module as a custom section
+const WASMCLOUD_WASM_TAG_EXPERIMENTAL: &str = "wasmcloud.com/experimental";
+
 /// Configuration for signing an artifact (actor or provider) including issuer and subject key, the path to where keys can be found, and an option to
 /// disable automatic key generation if keys cannot be found.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SignConfig {
     /// Location of key files for signing
     pub keys_directory: Option<PathBuf>,
@@ -131,36 +137,57 @@ pub fn build_actor(
         })?;
     }
 
-    if let Some(config) = signing_config {
-        let source = actor_wasm_path
-            .to_str()
-            .ok_or_else(|| anyhow!("Could not convert file path to string"))?
-            .to_string();
-
-        // Output the signed file in the same directory with a _s suffix
-        let destination = source.replace(".wasm", "_s.wasm");
-        let destination_file = PathBuf::from_str(&destination)?;
-
-        let sign_options = SignCommand {
-            source,
-            destination: Some(destination),
-            metadata: ActorMetadata {
-                name: common_config.name.clone(),
-                ver: Some(common_config.version.to_string()),
-                custom_caps: actor_config.claims.clone(),
-                call_alias: actor_config.call_alias.clone(),
-                issuer: config.issuer,
-                subject: config.subject,
-                ..Default::default()
-            },
-        };
-        sign_file(sign_options, OutputKind::Json)?;
-
-        Ok(destination_file)
+    // Sign the wasm file (if configured)
+    if let Some(cfg) = signing_config {
+        sign_actor_wasm(common_config, actor_config, cfg, actor_wasm_path)
     } else {
-        // Exit without signing
         Ok(actor_wasm_path)
     }
+}
+
+/// Sign actor wasm configuration, if necessary
+fn sign_actor_wasm(
+    common_config: &CommonConfig,
+    actor_config: &ActorConfig,
+    signing_config: SignConfig,
+    actor_wasm_path: impl AsRef<Path>,
+) -> Result<PathBuf> {
+    // If we're building for WASI preview1 or preview2, we're targeting components-first
+    // functionality, and the signed module should be marked as experimental
+    let tags: Vec<String> =
+        if let WasmTarget::WasiPreview1 | WasmTarget::WasiPreview2 = &actor_config.wasm_target {
+            Vec::from([WASMCLOUD_WASM_TAG_EXPERIMENTAL.into()])
+        } else {
+            Vec::new()
+        };
+
+    let source = actor_wasm_path
+        .as_ref()
+        .to_str()
+        .ok_or_else(|| anyhow!("Could not convert file path to string"))?
+        .to_string();
+
+    // Output the signed file in the same directory with a _s suffix
+    let destination = source.replace(".wasm", "_s.wasm");
+    let destination_file = PathBuf::from_str(&destination)?;
+
+    let sign_options = SignCommand {
+        source,
+        destination: Some(destination),
+        metadata: ActorMetadata {
+            name: common_config.name.clone(),
+            ver: Some(common_config.version.to_string()),
+            custom_caps: actor_config.claims.clone(),
+            call_alias: actor_config.call_alias.clone(),
+            issuer: signing_config.issuer,
+            subject: signing_config.subject,
+            tags,
+            ..Default::default()
+        },
+    };
+    sign_file(sign_options, OutputKind::Json)?;
+
+    Ok(destination_file)
 }
 
 /// Builds a rust actor and returns the path to the file.
@@ -380,14 +407,25 @@ fn embed_wasm_component_metadata(
         )
     })?;
 
-    // Build & encode a new custom section at the end of the wasm
-    let section = wasm_encoder::CustomSection {
-        name: "component-type".into(),
-        data: Cow::Borrowed(&encoded_metadata),
-    };
-    wasm_bytes.push(section.id());
-    section.encode(&mut wasm_bytes);
-    log::info!("successfully embedded component metadata in WASM");
+    // Build & encode a custom sections at the end of the Wasm module
+    let custom_sections = [
+        wasm_encoder::CustomSection {
+            name: "component-type".into(),
+            data: Cow::Borrowed(&encoded_metadata),
+        },
+        wasm_encoder::CustomSection {
+            name: WASMCLOUD_WASM_TAG_EXPERIMENTAL.into(),
+            data: Cow::Borrowed(b"true"),
+        },
+    ];
+    for section in custom_sections {
+        wasm_bytes.push(section.id());
+        section.encode(&mut wasm_bytes);
+        log::debug!(
+            "successfully embedded component metadata section [{}] in WASM",
+            section.name
+        );
+    }
 
     // Output the WASM to disk (possibly overwriting the original path)
     std::fs::write(output_wasm.as_ref(), wasm_bytes).with_context(|| {
@@ -424,4 +462,147 @@ fn build_interface(
     _common_config: CommonConfig,
 ) -> Result<()> {
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+    };
+
+    use anyhow::{Context, Result};
+    use semver::Version;
+    use wascap::{jwt::Token, wasm::extract_claims};
+    use wasmparser::{Parser, Payload};
+
+    use crate::{
+        build::{embed_wasm_component_metadata, WASMCLOUD_WASM_TAG_EXPERIMENTAL},
+        parser::{ActorConfig, CommonConfig, WasmTarget},
+    };
+
+    use super::{sign_actor_wasm, SignConfig};
+
+    const MODULE_WAT: &str = "(module)";
+    const COMPONENT_WORLD_WIT: &str = r#"
+package washlib:test;
+
+interface foo {
+    bar: func() -> string;
+}
+
+world test-world {
+   import foo;
+}
+"#;
+
+    /// Set up a component that should be built
+    ///
+    /// This function returns the path to a mock project directory
+    /// which includes a `test.wasm` file along with a `wit` directory
+    fn setup_build_component(base_dir: impl AsRef<Path>) -> Result<PathBuf> {
+        // Write the test wit world
+        let wit_dir = base_dir.as_ref().join("wit");
+        fs::create_dir_all(&wit_dir)?;
+        fs::write(wit_dir.join("world.wit"), COMPONENT_WORLD_WIT)?;
+
+        // Write and build the wasm module itself
+        let wasm_path = base_dir.as_ref().join("test.wasm");
+        fs::write(&wasm_path, wat::parse_str(MODULE_WAT)?)?;
+
+        Ok(wasm_path)
+    }
+
+    /// Ensure that components which get component metadata embedded into them
+    /// contain the right experimental tags in Wasm custom sections
+    #[test]
+    fn embed_wasm_component_metadata_includes_experimental() -> Result<()> {
+        // Build project path, including WIT dir
+        let project_dir = tempfile::tempdir()?;
+        let wasm_path = setup_build_component(&project_dir)?;
+
+        // Embed component metadata into the wasm module, to build a component
+        embed_wasm_component_metadata(&project_dir, "test-world", &wasm_path, &wasm_path)
+            .context("failed to embed wasm component metadata")?;
+
+        let wasm_bytes = fs::read(&wasm_path)
+            .with_context(|| format!("failed to read test wasm @ [{}]", wasm_path.display()))?;
+
+        // Check that the Wasm module contains the custom section indicating experimental behavior
+        assert!(Parser::default()
+            .parse_all(&wasm_bytes)
+            .any(|payload| match payload {
+                Ok(Payload::CustomSection(cs_reader))
+                    if cs_reader.name() == WASMCLOUD_WASM_TAG_EXPERIMENTAL
+                        && cs_reader.data() == b"true" =>
+                    true,
+                _ => false,
+            }));
+
+        Ok(())
+    }
+
+    /// Ensure that components which get signed contain the right experimental tags
+    /// in claims when preview1 or preview2 targets are signed
+    #[test]
+    fn sign_actor_component_includes_experimental() -> Result<()> {
+        // Build project path, including WIT dir
+        let project_dir = tempfile::tempdir()?;
+        let wasm_path = setup_build_component(&project_dir)?;
+
+        // Check targets that should have experimental tag set
+        for wasm_target in [
+            WasmTarget::CoreModule,
+            WasmTarget::WasiPreview1,
+            WasmTarget::WasiPreview2,
+        ] {
+            let updated_wasm_path = sign_actor_wasm(
+                &CommonConfig {
+                    name: "test".into(),
+                    version: Version::parse("0.1.0")?,
+                    path: project_dir.path().into(),
+                    wasm_bin_name: Some("test.wasm".into()),
+                },
+                &ActorConfig {
+                    wasm_target: wasm_target.clone(),
+                    wit_world: Some("test".into()),
+                    ..ActorConfig::default()
+                },
+                SignConfig::default(),
+                &wasm_path,
+            )?;
+
+            // Check that the experimental tag is present
+            let Token { claims, .. } = extract_claims(
+                fs::read(updated_wasm_path).context("failed to read updated wasm")?,
+            )?
+            .context("failed to extract claims")?;
+
+            // Check wasm targets
+            match wasm_target {
+                WasmTarget::CoreModule => assert!(
+                    claims
+                        .metadata
+                        .context("failed to get claim metadata")?
+                        .tags
+                        .context("failed to get tags")?
+                        .iter()
+                        .all(|t| t != WASMCLOUD_WASM_TAG_EXPERIMENTAL),
+                    "experimental tag should not be present on core modules",
+                ),
+                WasmTarget::WasiPreview1 | WasmTarget::WasiPreview2 => assert!(
+                    claims
+                        .metadata
+                        .context("failed to get claim metadata")?
+                        .tags
+                        .context("failed to get tags")?
+                        .iter()
+                        .any(|t| t == WASMCLOUD_WASM_TAG_EXPERIMENTAL),
+                    "experimental tag should be present on preview1/preview2 components"
+                ),
+            }
+        }
+
+        Ok(())
+    }
 }

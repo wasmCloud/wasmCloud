@@ -4604,6 +4604,7 @@ dependencies = [
  "wasmbus-rpc 0.15.0",
  "wasmcloud-component-adapters",
  "wasmcloud-control-interface 0.30.0",
+ "wasmparser 0.115.0",
  "wat",
  "weld-codegen",
  "wit-component",
@@ -4968,6 +4969,16 @@ name = "wasmparser"
 version = "0.114.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ef211410dcb08b037eb6d197b2398f8ef9d635c5dc5598d0dfda32094315ea3"
+dependencies = [
+ "indexmap 2.0.2",
+ "semver",
+]
+
+[[package]]
+name = "wasmparser"
+version = "0.115.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e06c0641a4add879ba71ccb3a1e4278fd546f76f1eafb21d8f7b07733b547cd5"
 dependencies = [
  "indexmap 2.0.2",
  "semver",
