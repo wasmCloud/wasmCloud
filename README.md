@@ -138,8 +138,6 @@ wasmCloud also has an [**experimental** SDK](https://github.com/wasmCloud/provid
 
 The API of the crate matches closely what [`wit-bindgen`](https://github.com/bytecodealliance/wit-bindgen) would generate, meaning that one can switch from using plain `wit-bindgen`-generated bindings to `wasmcloud_actor` (and back) with minimal or no code changes.
 
-Latest documentation is available at [wasmcloud.github.io/wasmCloud/wasmcloud_actor](https://wasmcloud.github.io/wasmCloud/wasmcloud_actor/).
-
 ### wascap
 
 [`wascap`](./crates/wascap) is a low-level library used to insert and retrieve [claims](https://wasmcloud.com/docs/hosts/security#claims) on actors and providers. Claims are part of wasmCloud's zero-trust security model.
