@@ -1,3 +1,6 @@
+> [!IMPORTANT]
+> The providers in this repository are based off interfaces defined in Smithy and are used for RPC between actors over the [stable ABI](https://wasmcloud.com/docs/hosts/abis/wasmbus/). For new providers and component actors, interfaces are defined using [WIT](https://github.com/WebAssembly/component-model/blob/main/design/mvp/WIT.md), and codegen is accomplished via the [wasmcloud-provider-wit-bindgen macro](https://github.com/wasmCloud/wasmCloud/tree/main/crates/provider-wit-bindgen). Note that support for WIT is considered **experimental** at this time.
+
 # Capability Providers
 
 This repository contains capability providers for wasmCloud. The providers
