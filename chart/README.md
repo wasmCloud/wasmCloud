@@ -37,9 +37,6 @@ try things out. In order to access the dashboard and NATS, you'll need to forwar
 (using the `RELEASE_NAME` you chose above as the `RELEASE_NAME` below)
 
 ```console
-# In one terminal
-$ kubectl port-forward deployment/${RELEASE_NAME} 4000
-
 # In a second terminal
 $ kubectl port-forward deployment/${RELEASE_NAME} 4222
 ```
