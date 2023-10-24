@@ -14,7 +14,7 @@ repository = "https://github.com/wasmcloud/wash"
 maintenance = { status = "actively-developed" }
 
 [features]
-default = ["start", "parser", "nats", "build-adapters"]
+default = ["start", "parser", "nats"]
 start = ["semver"]
 parser = ["config", "semver", "serde", "serde_json"]
 cli = [
@@ -28,11 +28,10 @@ cli = [
     "path-absolutize",
 ]
 nats = ["async-nats", "wadm"]
-build-adapters = [ "wasmcloud-component-adapters/build-adapters" ]
+docs = ["wasmcloud-component-adapters/docs"]
 
 [package.metadata.docs.rs]
-no-default-features = true # skip building adapters (which requires internet access)
-features = ["start", "parser", "nats"]
+features = ["start", "parser", "nats", "docs"]
 
 [dependencies]
 anyhow = { workspace = true }
@@ -84,7 +83,7 @@ walkdir = { workspace = true }
 wascap = { workspace = true }
 wasm-encoder = { workspace = true }
 wasmbus-rpc = { workspace = true }
-wasmcloud-component-adapters = { workspace = true, default-features = false  }
+wasmcloud-component-adapters = { workspace = true }
 wasmcloud-control-interface = { workspace = true }
 wat = { workspace = true }
 weld-codegen = { workspace = true }
