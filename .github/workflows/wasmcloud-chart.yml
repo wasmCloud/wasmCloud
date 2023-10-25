@@ -48,7 +48,7 @@ jobs:
         run: ct install --charts chart/
 
   publish:
-    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/chart-v') }}
+    if: ${{ startsWith(github.ref, 'refs/tags/chart-v') }}
     runs-on: ubuntu-22.04
     needs: validate
     permissions:
