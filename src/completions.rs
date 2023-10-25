@@ -1,8 +1,7 @@
 //! Generate shell completion files
 //!
 use crate::{cfg::cfg_dir, CommandOutput};
-use anyhow::anyhow;
-use anyhow::Result;
+use anyhow::{anyhow, bail, Result};
 use clap::{Args, Subcommand};
 use clap_complete::{generator::generate_to, shells::Shell};
 use std::collections::HashMap;
@@ -90,10 +89,10 @@ pub(crate) fn handle_command(
                 map,
             ))
         }
-        Err(e) => Err(anyhow!(
+        Err(e) => bail!(
             "generating shell completion file in folder '{}': {}",
             output_dir.display(),
             e
-        )),
+        ),
     }
 }

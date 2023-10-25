@@ -70,12 +70,12 @@ pub fn build_project(config: &ProjectConfig, signing: Option<SignConfig>) -> Res
         TypeConfig::Actor(actor_config) => {
             build_actor(actor_config, &config.language, &config.common, signing)
         }
-        TypeConfig::Provider(_provider_config) => Err(anyhow!(
-            "wash build has not be implemented for providers yet. Please use `make` for now!"
-        )),
-        TypeConfig::Interface(_interface_config) => Err(anyhow!(
+        TypeConfig::Provider(_provider_config) => {
+            bail!("wash build has not be implemented for providers yet. Please use `make` for now!")
+        }
+        TypeConfig::Interface(_interface_config) => bail!(
             "wash build has not be implemented for interfaces yet. Please use `make` for now!"
-        )),
+        ),
     }
 }
 

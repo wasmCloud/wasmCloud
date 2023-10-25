@@ -1,18 +1,20 @@
 use std::collections::HashMap;
-#[cfg(target_family = "unix")]
-use std::os::unix::prelude::PermissionsExt;
-use std::path::{Path, PathBuf};
-use std::process::Stdio;
 
-use anyhow::{anyhow, Result};
-#[cfg(target_family = "unix")]
-use command_group::AsyncCommandGroup;
+use anyhow::{bail, Result};
 use log::warn;
 use reqwest::StatusCode;
 use tokio::fs::{create_dir_all, metadata, File};
 use tokio::process::{Child, Command};
 use tokio_stream::StreamExt;
 use tokio_util::io::StreamReader;
+
+#[cfg(target_family = "unix")]
+use std::os::unix::prelude::PermissionsExt;
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
+
+#[cfg(target_family = "unix")]
+use command_group::AsyncCommandGroup;
 
 const WASMCLOUD_GITHUB_RELEASE_URL: &str =
     "https://github.com/wasmCloud/wasmCloud/releases/download";
@@ -149,11 +151,11 @@ where
     // to pipe the response body into a file. I'm not sure if there's a better way to do this.
     let download_response = reqwest::get(url.clone()).await?;
     if download_response.status() != StatusCode::OK {
-        return Err(anyhow!(
-            "Failed to download wasmCloud host from {}. Status code: {}",
+        bail!(
+            "failed to download wasmCloud host from {}. Status code: {}",
             url,
             download_response.status()
-        ));
+        );
     }
 
     let burrito_bites_stream = download_response
@@ -184,9 +186,7 @@ where
     // Return success if wasmCloud components exist, error otherwise
     match find_wasmcloud_binary(&dir, version).await {
         Some(path) => Ok(path),
-        None => Err(anyhow!(
-            "wasmCloud was not installed successfully, please see logs"
-        )),
+        None => bail!("wasmCloud was not installed successfully, please see logs"),
     }
 }
 
@@ -269,11 +269,11 @@ fn check_version(version: &str) -> Result<()> {
             warn!("Using prerelease version {} of wasmCloud", version);
             Ok(())
         }
-        Ok(parsed_version) if !version_req.matches(&parsed_version) => Err(anyhow!(
+        Ok(parsed_version) if !version_req.matches(&parsed_version) => bail!(
             "wasmCloud version {} is earlier than the minimum supported version of v{}",
             version,
             MINIMUM_WASMCLOUD_VERSION
-        )),
+        ),
         Ok(_ver) => Ok(()),
         Err(_parse_err) => {
             log::warn!(

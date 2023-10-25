@@ -1,6 +1,6 @@
 use std::{collections::HashMap, path::PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 use serde_json::json;
 use wash_lib::{
@@ -105,4 +105,5 @@ pub(crate) async fn handle_command(cmd: NewCliCommand) -> Result<CommandOutput> 
                 path.to_string_lossy()
             ),
         })
+        .context("Failed to generate project")
 }

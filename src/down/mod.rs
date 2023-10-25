@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use async_nats::Client;
 use clap::Parser;
 use log::{error, warn};
@@ -199,9 +199,9 @@ async fn stop_hosts(
 
         Ok((host_ids, hosts_remaining))
     } else {
-        Err(anyhow!(
+        bail!(
                 "More than one host is running, please specify a host ID or use --all\nRunning hosts: {:?}", hosts.into_iter().map(|h| h.id).collect::<Vec<_>>()
-            ))
+            )
     }
 }
 

@@ -6,7 +6,7 @@ use crate::generate::{
     genconfig::{RenameConfig, TemplateConfig},
     ParamMap,
 };
-use anyhow::{anyhow, Context, Result};
+use anyhow::{bail, Context, Result};
 use console::style;
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
@@ -151,7 +151,7 @@ pub(crate) fn process_template_dir(
                     PathBuf::from(renderer.render_template(rename_path, values).with_context(
                         || {
                             format!(
-                                "Error processing template filename '{}'. Project variables: {:?}",
+                                "error processing template filename '{}'. Project variables: {:?}",
                                 rename_path, &values
                             )
                         },
@@ -163,22 +163,22 @@ pub(crate) fn process_template_dir(
                 // convert to absolute canonical path for safety check
                 let dest_path = dest_path.absolutize().with_context(|| {
                     format!(
-                        "Invalid file destination path: {}",
+                        "invalid file destination path: {}",
                         &dest_rel_path.display()
                     )
                 })?;
                 // Safety check: block attempts to write outside project dir
                 if !dest_path.starts_with(project_dir) {
-                    return Err(anyhow!(
-                        "Invalid destination: {} is not within project dir",
+                    bail!(
+                        "invalid destination: {} is not within project dir",
                         &dest_path.display()
-                    ));
+                    );
                 }
                 if dest_path.exists() {
-                    return Err(anyhow!(
+                    bail!(
                         "Destination file '{}' exists: quitting!",
                         &dest_path.display()
-                    ));
+                    );
                 }
                 fs::create_dir_all(dest_path.parent().unwrap()).unwrap();
                 if matcher.is_raw(src_relative) {

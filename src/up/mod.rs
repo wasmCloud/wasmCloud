@@ -9,7 +9,7 @@ use std::sync::{
     Arc,
 };
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use async_nats::Client;
 use clap::Parser;
 use serde_json::json;
@@ -418,7 +418,7 @@ pub(crate) async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result
         if nats_bin.is_some() {
             stop_nats(install_dir).await?;
         }
-        return Err(anyhow!("wasmCloud was not installed, exiting without downloading as --wasmcloud-start-only was set"));
+        bail!("wasmCloud was not installed, exiting without downloading as --wasmcloud-start-only was set");
     };
 
     // Redirect output (which is on stderr) to a log file in detached mode, or use the terminal
@@ -523,7 +523,7 @@ async fn start_nats(install_dir: &Path, nats_binary: &Path, nats_opts: NatsOpts)
             )
             .await
             {
-                return Err(anyhow!("Could not connect to leafnode remote: {}", e));
+                bail!("Could not connect to leafnode remote: {}", e);
             } else {
                 nats_opts
             }
@@ -650,7 +650,7 @@ where
 {
     if let Err(err) = tokio::fs::remove_file(install_dir.as_ref().join(WADM_PID)).await {
         if err.kind() != ErrorKind::NotFound {
-            return Err(anyhow!(err));
+            bail!(err);
         }
     }
     Ok(())

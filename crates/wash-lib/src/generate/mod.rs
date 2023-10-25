@@ -7,7 +7,7 @@ use std::{
     process::Stdio,
 };
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use console::style;
 use genconfig::{Config, CONFIG_FILE_NAME};
 use indicatif::MultiProgress;
@@ -130,9 +130,9 @@ fn validate(project: &Project) -> Result<()> {
     if project.path.is_some()
         && (project.git.is_some() || project.subfolder.is_some() || project.branch.is_some())
     {
-        return Err(anyhow!("Error in 'new {}' options: You may use --path or --git ( --branch, --subfolder ) to specify a template source, but not both. If neither is specified, you will be prompted to select a project template.",
+        bail!("error in 'new {}' options: You may use --path or --git ( --branch, --subfolder ) to specify a template source, but not both. If neither is specified, you will be prompted to select a project template.",
             project.kind
-        ));
+        );
     }
 
     if project.git.is_some() || !project.no_git_init {
@@ -144,44 +144,45 @@ fn validate(project: &Project) -> Result<()> {
             .output()
         {
             if err.kind() == ErrorKind::NotFound {
-                return Err(anyhow!(
-                    "Error in 'new {}' options: required 'git' to be installed in PATH",
+                bail!(
+                    "error in 'new {}' options: required 'git' to be installed in PATH",
                     project.kind
-                ));
+                );
             }
-            return Err(anyhow!(
-                "Error in 'new {}' options: failed to check 'git' command, {}",
+            bail!(
+                "error in 'new {}' options: failed to check 'git' command, {}",
                 project.kind,
                 err
-            ));
+            );
         }
     }
 
     if let Some(name) = &project.project_name {
-        crate::generate::project_variables::validate_project_name(name)?;
+        crate::generate::project_variables::validate_project_name(name)
+            .context("failed to validate project name")?;
     }
     if let Some(path) = &project.path {
         if !path.is_dir() {
-            return Err(anyhow!(
-                "Error in --path option: '{}' is not an existing directory",
+            bail!(
+                "error in --path option: '{}' is not an existing directory",
                 &path.display()
-            ));
+            );
         }
     }
     if let Some(path) = &project.values {
         if !path.is_file() {
-            return Err(anyhow!(
-                "Error in --values option: '{}' is not an existing file",
+            bail!(
+                "error in --values option: '{}' is not an existing file",
                 &path.display()
-            ));
+            );
         }
     }
     if let Some(path) = &project.favorites {
         if !path.is_file() {
-            return Err(anyhow!(
-                "Error in --favorites option: '{}' is not an existing file",
+            bail!(
+                "error in --favorites option: '{}' is not an existing file",
                 &path.display()
-            ));
+            );
         }
     }
     Ok(())
@@ -297,10 +298,10 @@ async fn make_project(project: Project) -> std::result::Result<PathBuf, anyhow::
             .wait_with_output()
             .await?;
         if !cmd_out.status.success() {
-            return Err(anyhow!(
+            bail!(
                 "git init error: {}",
                 String::from_utf8_lossy(&cmd_out.stderr)
-            ));
+            );
         }
     }
 
@@ -400,13 +401,13 @@ async fn prepare_local_template(project: &Project) -> Result<(TempDir, PathBuf)>
             (template_base_dir, template_folder)
         }
         _ => {
-            return Err(anyhow!(
+            bail!(
                 "{} {} {} {}",
                 style("Please specify either").bold(),
                 style("--git <repo>").bold().yellow(),
                 style("or").bold(),
                 style("--path <path>").bold().yellow(),
-            ))
+            )
         }
     };
     Ok((template_base_dir, template_folder))

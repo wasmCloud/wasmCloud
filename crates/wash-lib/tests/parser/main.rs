@@ -161,7 +161,7 @@ fn no_actor_config() {
 
     assert_eq!(
         format!(
-            "Missing actor config in {}",
+            "missing actor config in {}",
             get_full_path("./tests/parser/files/no_actor.toml")
         ),
         err.to_string().as_str()
@@ -179,7 +179,7 @@ fn no_provider_config() {
 
     assert_eq!(
         format!(
-            "Missing provider config in {}",
+            "missing provider config in {}",
             get_full_path("./tests/parser/files/no_provider.toml")
         ),
         err.to_string().as_str()
@@ -197,7 +197,7 @@ fn no_interface_config() {
 
     assert_eq!(
         format!(
-            "Missing interface config in {}",
+            "missing interface config in {}",
             get_full_path("./tests/parser/files/no_interface.toml")
         ),
         err.to_string().as_str()
@@ -212,7 +212,7 @@ fn folder_path_with_no_config() {
     let err = assert_err!(result);
     assert_eq!(
         format!(
-            "No wasmcloud.toml file found in {}",
+            "no wasmcloud.toml file found in {}",
             get_full_path("./tests/parser/files/noconfig")
         ),
         err.to_string().as_str()
@@ -227,7 +227,7 @@ fn random_file() {
     let err = assert_err!(result);
     assert_eq!(
         format!(
-            "Invalid config file: {}",
+            "invalid config file: {}",
             get_full_path("./tests/parser/files/random.txt")
         ),
         err.to_string().as_str()
@@ -244,7 +244,7 @@ fn nonexistent_file() {
 
     let err = assert_err!(result);
     assert_eq!(
-        "Path ./tests/parser/files/nonexistent.toml does not exist",
+        "path ./tests/parser/files/nonexistent.toml does not exist",
         err.to_string().as_str()
     );
 }
@@ -258,7 +258,7 @@ fn nonexistent_folder() {
 
     let err = assert_err!(result);
     assert_eq!(
-        "Path ./tests/parser/files/nonexistent/ does not exist",
+        "path ./tests/parser/files/nonexistent/ does not exist",
         err.to_string().as_str()
     );
 }

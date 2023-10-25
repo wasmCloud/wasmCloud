@@ -5,7 +5,7 @@
 //   license: MIT/Apache-2.0
 //
 use crate::generate::{genconfig::Config, ParamMap, TomlMap, PROJECT_NAME_REGEX};
-use anyhow::{anyhow, Result};
+use anyhow::{bail, Result};
 use regex::Regex;
 use serde_json::Value;
 use thiserror::Error;
@@ -77,7 +77,7 @@ pub(crate) fn validate_project_name(name: &str) -> Result<()> {
     let exp = regex::Regex::new(PROJECT_NAME_REGEX).unwrap();
     match exp.is_match(name) {
         true => Ok(()),
-        false => Err(anyhow!("Invalid project name. Project name must begin with an ascii letter and contain letters, digits, underscores('_'), or dashes('-')."))
+        false => bail!("project names must begin with an ascii letter and contain letters, digits, underscores('_'), or dashes('-').")
     }
 }
 
