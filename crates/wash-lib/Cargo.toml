@@ -87,6 +87,8 @@ wasmcloud-component-adapters = { workspace = true }
 wasmcloud-control-interface = { workspace = true }
 wat = { workspace = true }
 weld-codegen = { workspace = true }
+wit-bindgen-core = { workspace = true }
+wit-bindgen-go = { workspace = true }
 wit-component = { workspace = true }
 wit-parser = { workspace = true }
 

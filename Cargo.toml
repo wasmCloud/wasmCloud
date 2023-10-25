@@ -63,6 +63,8 @@ wasmcloud-control-interface = { workspace = true }
 wasmcloud-test-util = { workspace = true }
 weld-codegen = { workspace = true }
 which = { workspace = true }
+wit-bindgen-core = { workspace = true }
+wit-bindgen-go = { workspace = true }
 
 [dev-dependencies]
 assert-json-diff = { workspace = true }
@@ -162,5 +164,7 @@ wasmparser = "0.115.0"
 wat = "1.0.77"
 weld-codegen = "0.7.0"
 which = "4.4.0"
-wit-component = "0.14"
-wit-parser = "0.11"
+wit-bindgen-core = "0.13.0"
+wit-bindgen-go = "0.13.0"
+wit-component = "0.16"
+wit-parser = "0.12.1"

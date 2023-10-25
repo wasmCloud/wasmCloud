@@ -11,7 +11,10 @@ use std::{
 
 use anyhow::{anyhow, bail, Context, Result};
 use wasm_encoder::{Encode, Section};
+use wit_bindgen_core::Files;
+use wit_bindgen_go::Opts as WitBindgenGoOpts;
 use wit_component::{ComponentEncoder, StringEncoding};
+use wit_parser::{Resolve, WorldId};
 
 use crate::{
     cli::{
@@ -110,7 +113,7 @@ pub fn build_actor(
             actor_config
                 .wit_world
                 .as_ref()
-                .context("`wit_world` must be specified in wasmcloud.toml for creating preview1 or preview2 components")?,
+                .context("missing `wit_world` in wasmcloud.toml ([actor] section) for creating preview1 or preview2 components")?,
             &actor_wasm_path,
             &actor_wasm_path,
         )?;
@@ -271,6 +274,7 @@ fn build_tinygo_actor(
     actor_config: &ActorConfig,
 ) -> Result<PathBuf> {
     let filename = format!("build/{}.wasm", common_config.name);
+    let file_path = PathBuf::from(&filename);
 
     // Change directory into the project directory
     std::env::set_current_dir(&common_config.path)?;
@@ -280,8 +284,29 @@ fn build_tinygo_actor(
         None => process::Command::new("tinygo"),
     };
 
-    if let Some(p) = PathBuf::from(&filename).parent() {
-        fs::create_dir_all(p)?;
+    // Ensure the target directory which will contain the eventual filename exists
+    // this usually means creating the build folder in the golang project root
+    let parent_dir = file_path.parent().unwrap_or(&common_config.path);
+    if !parent_dir.exists() {
+        fs::create_dir_all(parent_dir)?;
+    }
+
+    // Ensure the output directory exists
+    let output_dir = common_config.path.join(GOLANG_BINDGEN_FOLDER_NAME);
+    if !output_dir.exists() {
+        fs::create_dir_all(&output_dir)?;
+    }
+
+    // Generate wit-bindgen code for Golang actors which are components-first
+    if let WasmTarget::WasiPreview1 | WasmTarget::WasiPreview2 = &actor_config.wasm_target {
+        generate_tinygo_bindgen(
+            &output_dir,
+            common_config.path.join("wit"),
+            actor_config.wit_world.as_ref().context(
+                "missing `wit_world` in wasmcloud.toml ([actor] section) to run go bindgen generate",
+            )?,
+        )
+            .context("generating golang bindgen code failed")?;
     }
 
     let result = command
@@ -319,6 +344,65 @@ fn build_tinygo_actor(
     }
 
     Ok(common_config.path.join(wasm_file))
+}
+
+/// The folder that golang bindgen code will be placed in, normally
+/// from the top level golang project directory
+const GOLANG_BINDGEN_FOLDER_NAME: &str = "gen";
+
+/// Generate the bindgen code that TinyGo actors need
+fn generate_tinygo_bindgen(
+    bindgen_dir: impl AsRef<Path>,
+    wit_dir: impl AsRef<Path>,
+    wit_world: impl AsRef<str>,
+) -> Result<()> {
+    if !bindgen_dir.as_ref().exists() {
+        bail!(
+            "bindgen directory @ [{}] does not exist",
+            bindgen_dir.as_ref().display(),
+        );
+    }
+
+    // Resolve the wit world
+    let (resolver, world_id) = convert_wit_dir_to_world(wit_dir, wit_world)?;
+
+    // Build the golang wit-bindgen generator
+    let mut generator = WitBindgenGoOpts::default().build();
+
+    // Run the generator
+    let mut files = Files::default();
+    generator
+        .generate(&resolver, world_id, &mut files)
+        .context("failed to run golang wit-bindgen generator")?;
+    log::info!("successfully ran golang wit-bindgen generator");
+
+    // Write all generated files to disk
+    for (file_name, content) in files.iter() {
+        let full_path = bindgen_dir.as_ref().join(file_name);
+
+        // Ensure the parent directory path is created
+        if let Some(parent_path) = PathBuf::from(&full_path).parent() {
+            if !parent_path.exists() {
+                fs::create_dir_all(parent_path).with_context(|| {
+                    format!("failed to create dir for path [{}]", parent_path.display())
+                })?;
+            }
+        }
+
+        // Write out the file's contents to disk
+        fs::write(&full_path, content).with_context(|| {
+            format!(
+                "failed to write content for file @ path [{}]",
+                full_path.display()
+            )
+        })?;
+    }
+    log::info!(
+        "successfully wrote wit-bindgen generated golang files to [{}]",
+        bindgen_dir.as_ref().display()
+    );
+
+    Ok(())
 }
 
 /// Adapt a core module/preview1 component to a preview2 wasm component
@@ -371,6 +455,27 @@ pub(crate) fn get_wasi_preview2_adapter_bytes(config: &ActorConfig) -> Result<Ve
     Ok(wasmcloud_component_adapters::WASI_PREVIEW1_REACTOR_COMPONENT_ADAPTER.into())
 }
 
+/// Build a [`wit_parser::Resolve`] from a provided directory
+/// and select a given world
+fn convert_wit_dir_to_world(
+    dir: impl AsRef<Path>,
+    world: impl AsRef<str>,
+) -> Result<(Resolve, WorldId)> {
+    // Resolve the WIT directory packages & worlds
+    let mut resolve = wit_parser::Resolve::default();
+    let (package_id, _paths) = resolve
+        .push_dir(dir.as_ref())
+        .with_context(|| format!("failed to add WIT directory @ [{}]", dir.as_ref().display()))?;
+    log::info!("successfully loaded WIT @ [{}]", dir.as_ref().display());
+
+    // Select the target world that was specified by the user
+    let world_id = resolve
+        .select_world(package_id, world.as_ref().into())
+        .context("failed to select world from built resolver")?;
+
+    Ok((resolve, world_id))
+}
+
 /// Embed required component metadata to a given WebAssembly binary
 fn embed_wasm_component_metadata(
     project_path: impl AsRef<Path>,
@@ -387,21 +492,12 @@ fn embed_wasm_component_metadata(
         );
     };
 
-    // Resolve the WIT directory packages & worlds
-    let mut resolve = wit_parser::Resolve::default();
-    let (package_id, _paths) = resolve
-        .push_dir(&wit_dir)
-        .context("failed to add WIT deps directory")?;
-    log::info!("successfully loaded WIT @ [{}]", wit_dir.display());
-
-    // Select the target world that was specified by the user
-    let world = resolve
-        .select_world(package_id, wit_world.as_ref().into())
-        .context("failed to select world from built resolver")?;
+    let (resolver, world_id) =
+        convert_wit_dir_to_world(wit_dir, wit_world).context("failed to resolve WIT world")?;
 
     // Encode the metadata
     let encoded_metadata =
-        wit_component::metadata::encode(&resolve, world, StringEncoding::UTF8, None)
+        wit_component::metadata::encode(&resolver, world_id, StringEncoding::UTF8, None)
             .context("failed to encode WIT metadata for component")?;
 
     // Load the wasm binary
@@ -471,10 +567,10 @@ fn build_interface(
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        fs,
-        path::{Path, PathBuf},
-    };
+    use std::fs;
+    use std::fs::DirEntry;
+    use std::path::Path;
+    use std::path::PathBuf;
 
     use anyhow::{Context, Result};
     use semver::Version;
@@ -486,10 +582,10 @@ mod tests {
         parser::{ActorConfig, CommonConfig, WasmTarget},
     };
 
-    use super::{sign_actor_wasm, SignConfig};
+    use super::{generate_tinygo_bindgen, sign_actor_wasm, SignConfig};
 
     const MODULE_WAT: &str = "(module)";
-    const COMPONENT_WORLD_WIT: &str = r#"
+    const COMPONENT_BASIC_WIT: &str = r#"
 package washlib:test;
 
 interface foo {
@@ -500,6 +596,43 @@ world test-world {
    import foo;
 }
 "#;
+    const EXPECTED_COMPONENT_BASIC_GOLANG_FILES: [&str; 4] = [
+        "test_world_component_type.o",
+        "test_world.h",
+        "test_world.c",
+        "test-world.go",
+    ];
+
+    const COMPONENT_UPSTREAM_WIT: &str = r#"
+package washlib:multi;
+
+interface foo {
+    bar: func() -> string;
+}
+
+world upstream {
+   import foo;
+}
+"#;
+
+    const COMPONENT_DOWNSTREAM_WIT: &str = r#"
+package washlib:multi;
+
+interface bar {
+    baz: func() -> string;
+}
+
+world downstream {
+   include upstream;
+   import bar;
+}
+"#;
+    const EXPECTED_COMPONENT_DOWNSTREAM_GOLANG_FILES: [&str; 4] = [
+        "downstream_component_type.o",
+        "downstream.h",
+        "downstream.c",
+        "downstream.go",
+    ];
 
     /// Set up a component that should be built
     ///
@@ -509,7 +642,7 @@ world test-world {
         // Write the test wit world
         let wit_dir = base_dir.as_ref().join("wit");
         fs::create_dir_all(&wit_dir)?;
-        fs::write(wit_dir.join("world.wit"), COMPONENT_WORLD_WIT)?;
+        fs::write(wit_dir.join("world.wit"), COMPONENT_BASIC_WIT)?;
 
         // Write and build the wasm module itself
         let wasm_path = base_dir.as_ref().join("test.wasm");
@@ -536,13 +669,11 @@ world test-world {
         // Check that the Wasm module contains the custom section indicating experimental behavior
         assert!(Parser::default()
             .parse_all(&wasm_bytes)
-            .any(|payload| match payload {
+            .any(|payload| matches!(payload,
                 Ok(Payload::CustomSection(cs_reader))
                     if cs_reader.name() == WASMCLOUD_WASM_TAG_EXPERIMENTAL
-                        && cs_reader.data() == b"true" =>
-                    true,
-                _ => false,
-            }));
+                        && cs_reader.data() == b"true"
+            )));
 
         Ok(())
     }
@@ -607,6 +738,87 @@ world test-world {
                 ),
             }
         }
+
+        Ok(())
+    }
+
+    /// Ensure that golang component generation works with a bindgen'd component
+    #[test]
+    fn golang_generate_bindgen_component_basic() -> Result<()> {
+        let project_dir = tempfile::tempdir()?;
+
+        // Set up directories
+        let wit_dir = project_dir.path().join("wit");
+        let output_dir = project_dir.path().join("generated");
+        std::fs::create_dir(&wit_dir).context("failed to create WIT dir")?;
+        std::fs::create_dir(&output_dir).context("failed to create output dir")?;
+
+        // Write WIT for Golang code
+        std::fs::write(wit_dir.join("test.wit"), COMPONENT_BASIC_WIT)
+            .context("failed to write test WIT file")?;
+
+        // Run bindgen generation process
+        generate_tinygo_bindgen(&output_dir, &wit_dir, "test-world")
+            .context("failed to run tinygo bindgen")?;
+
+        let dir_contents = fs::read_dir(output_dir)
+            .context("failed to read dir")?
+            .collect::<Result<Vec<DirEntry>, std::io::Error>>()?;
+
+        assert!(!dir_contents.is_empty(), "files were generated");
+        assert!(
+            EXPECTED_COMPONENT_BASIC_GOLANG_FILES.iter().all(|f| {
+                dir_contents.iter().any(|de| {
+                    de.path()
+                        .file_name()
+                        .to_owned()
+                        .is_some_and(|v| v.to_string_lossy() == **f)
+                })
+            }),
+            "expected bindgen go files are present"
+        );
+
+        Ok(())
+    }
+
+    /// Ensure that golang component generation works with a bindgen'd component
+    /// which has multiple worlds
+    #[test]
+    fn golang_generate_bindgen_component_multi_world() -> Result<()> {
+        let project_dir = tempfile::tempdir()?;
+
+        // Set up directories
+        let wit_dir = project_dir.path().join("wit");
+        let output_dir = project_dir.path().join("generated");
+        std::fs::create_dir(&wit_dir).context("failed to create WIT dir")?;
+        std::fs::create_dir(&output_dir).context("failed to create output dir")?;
+
+        // Write WIT for Golang code
+        std::fs::write(wit_dir.join("upstream.wit"), COMPONENT_UPSTREAM_WIT)
+            .context("failed to write test WIT file")?;
+        std::fs::write(wit_dir.join("downstream.wit"), COMPONENT_DOWNSTREAM_WIT)
+            .context("failed to write test WIT file")?;
+
+        // Run bindgen generation process
+        generate_tinygo_bindgen(&output_dir, &wit_dir, "downstream")
+            .context("failed to run tinygo bindgen")?;
+
+        let dir_contents = fs::read_dir(output_dir)
+            .context("failed to read dir")?
+            .collect::<Result<Vec<DirEntry>, std::io::Error>>()?;
+
+        assert!(!dir_contents.is_empty(), "files were generated");
+        assert!(
+            EXPECTED_COMPONENT_DOWNSTREAM_GOLANG_FILES.iter().all(|f| {
+                dir_contents.iter().any(|de| {
+                    de.path()
+                        .file_name()
+                        .to_owned()
+                        .is_some_and(|v| v.to_string_lossy() == **f)
+                })
+            }),
+            "expected bindgen go files are present"
+        );
 
         Ok(())
     }
