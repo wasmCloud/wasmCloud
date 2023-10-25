@@ -31,60 +31,34 @@ impl Instance {
 }
 
 trait TableBlobstoreExt {
-    fn push_container(&mut self, name: String) -> TableResult<Container>;
     fn get_container(&self, container: Container) -> TableResult<&String>;
     fn delete_container(&mut self, container: Container) -> TableResult<String>;
 
-    fn push_object_name_stream(
-        &mut self,
-        stream: Box<dyn Stream<Item = anyhow::Result<String>> + Sync + Send + Unpin>,
-    ) -> TableResult<StreamObjectNames>;
     fn get_object_name_stream_mut(
         &mut self,
         stream: StreamObjectNames,
     ) -> TableResult<&mut Box<dyn Stream<Item = anyhow::Result<String>> + Sync + Send + Unpin>>;
-    fn delete_object_name_stream(
-        &mut self,
-        stream: StreamObjectNames,
-    ) -> TableResult<Box<dyn Stream<Item = anyhow::Result<String>> + Sync + Send + Unpin>>;
 
     fn push_incoming_value(
         &mut self,
         stream: Box<dyn AsyncRead + Sync + Send + Unpin>,
         size: u64,
     ) -> TableResult<types::IncomingValue>;
-    fn get_incoming_value(
-        &self,
-        stream: types::IncomingValue,
-    ) -> TableResult<&(Box<dyn AsyncRead + Sync + Send + Unpin>, u64)>;
     fn delete_incoming_value(
         &mut self,
         stream: types::IncomingValue,
     ) -> TableResult<(Box<dyn AsyncRead + Sync + Send + Unpin>, u64)>;
 
-    fn push_outgoing_value(&mut self, stream: AsyncVec) -> TableResult<types::OutgoingValue>;
     fn get_outgoing_value(&self, stream: types::OutgoingValue) -> TableResult<&AsyncVec>;
-    fn delete_outgoing_value(&mut self, stream: types::OutgoingValue) -> TableResult<AsyncVec>;
 }
 
 impl TableBlobstoreExt for preview2::Table {
-    fn push_container(&mut self, name: String) -> TableResult<Container> {
-        self.push(Box::new(name))
-    }
-
     fn get_container(&self, container: Container) -> TableResult<&String> {
-        self.get(container)
+        self.get(&Resource::new_borrow(container))
     }
 
     fn delete_container(&mut self, container: Container) -> TableResult<String> {
-        self.delete(container)
-    }
-
-    fn push_object_name_stream(
-        &mut self,
-        stream: Box<dyn Stream<Item = anyhow::Result<String>> + Sync + Send + Unpin>,
-    ) -> TableResult<StreamObjectNames> {
-        self.push(Box::new(stream))
+        self.delete(Resource::new_own(container))
     }
 
     fn get_object_name_stream_mut(
@@ -92,14 +66,7 @@ impl TableBlobstoreExt for preview2::Table {
         stream: StreamObjectNames,
     ) -> TableResult<&mut Box<dyn Stream<Item = anyhow::Result<String>> + Sync + Send + Unpin>>
     {
-        self.get_mut(stream)
-    }
-
-    fn delete_object_name_stream(
-        &mut self,
-        stream: StreamObjectNames,
-    ) -> TableResult<Box<dyn Stream<Item = anyhow::Result<String>> + Sync + Send + Unpin>> {
-        self.delete(stream)
+        self.get_mut(&Resource::new_borrow(stream))
     }
 
     fn push_incoming_value(
@@ -107,33 +74,19 @@ impl TableBlobstoreExt for preview2::Table {
         stream: Box<dyn AsyncRead + Sync + Send + Unpin>,
         size: u64,
     ) -> TableResult<types::IncomingValue> {
-        self.push(Box::new((stream, size)))
-    }
-
-    fn get_incoming_value(
-        &self,
-        stream: types::IncomingValue,
-    ) -> TableResult<&(Box<dyn AsyncRead + Sync + Send + Unpin>, u64)> {
-        self.get(stream)
+        let res = self.push((stream, size))?;
+        Ok(res.rep())
     }
 
     fn delete_incoming_value(
         &mut self,
         stream: types::IncomingValue,
     ) -> TableResult<(Box<dyn AsyncRead + Sync + Send + Unpin>, u64)> {
-        self.delete(stream)
-    }
-
-    fn push_outgoing_value(&mut self, stream: AsyncVec) -> TableResult<types::OutgoingValue> {
-        self.push(Box::new(stream))
+        self.delete(Resource::new_own(stream))
     }
 
     fn get_outgoing_value(&self, stream: types::OutgoingValue) -> TableResult<&AsyncVec> {
-        self.get(stream)
-    }
-
-    fn delete_outgoing_value(&mut self, stream: types::OutgoingValue) -> TableResult<AsyncVec> {
-        self.delete(stream)
+        self.get(&Resource::new_borrow(stream))
     }
 }
 
@@ -144,17 +97,20 @@ impl types::Host for Ctx {
         &mut self,
         outgoing_value: types::OutgoingValue,
     ) -> anyhow::Result<()> {
-        self.table
-            .delete_outgoing_value(outgoing_value)
+        let _: AsyncVec = self
+            .table
+            .delete(Resource::new_own(outgoing_value))
             .context("failed to delete outgoing value")?;
         Ok(())
     }
 
     #[instrument]
     async fn new_outgoing_value(&mut self) -> anyhow::Result<types::OutgoingValue> {
-        self.table
-            .push_outgoing_value(AsyncVec::default())
-            .context("failed to push outgoing value")
+        let value = self
+            .table
+            .push(AsyncVec::default())
+            .context("failed to push outgoing value")?;
+        Ok(value.rep())
     }
 
     #[instrument]
@@ -170,7 +126,7 @@ impl types::Host for Ctx {
         let stream: Box<dyn HostOutputStream> = Box::new(AsyncWriteStream::new(1 << 16, stream));
         let stream = self
             .table
-            .push_resource(stream)
+            .push(stream)
             .context("failed to push output stream")?;
         Ok(Ok(stream))
     }
@@ -218,16 +174,16 @@ impl types::Host for Ctx {
             .context("failed to delete incoming value")?;
         let stream = self
             .table
-            .push_resource(InputStream::Host(Box::new(AsyncReadStream::new(stream))))
+            .push(InputStream::Host(Box::new(AsyncReadStream::new(stream))))
             .context("failed to push input stream")?;
         Ok(Ok(stream))
     }
 
     #[instrument]
     async fn size(&mut self, incoming_value: types::IncomingValue) -> anyhow::Result<u64> {
-        let (_, size) = self
+        let (_, size): &(Box<dyn AsyncRead + Sync + Send + Unpin>, _) = self
             .table
-            .get_incoming_value(incoming_value)
+            .get(&Resource::new_borrow(incoming_value))
             .context("failed to get incoming value")?;
         Ok(*size)
     }
@@ -239,11 +195,8 @@ impl blobstore::Host for Ctx {
     async fn create_container(&mut self, name: ContainerName) -> anyhow::Result<Result<Container>> {
         match self.handler.create_container(&name).await {
             Ok(()) => {
-                let container = self
-                    .table
-                    .push_container(name)
-                    .context("failed to push container")?;
-                Ok(Ok(container))
+                let container = self.table.push(name).context("failed to push container")?;
+                Ok(Ok(container.rep()))
             }
             Err(err) => Ok(Err(format!("{err:#}"))),
         }
@@ -253,11 +206,8 @@ impl blobstore::Host for Ctx {
     async fn get_container(&mut self, name: ContainerName) -> anyhow::Result<Result<Container>> {
         match self.handler.container_exists(&name).await {
             Ok(true) => {
-                let container = self
-                    .table
-                    .push_container(name)
-                    .context("failed to push container")?;
-                Ok(Ok(container))
+                let container = self.table.push(name).context("failed to push container")?;
+                Ok(Ok(container.rep()))
             }
             Ok(false) => Ok(Err("container does not exist".into())),
             Err(err) => Ok(Err(format!("{err:#}"))),
@@ -377,9 +327,9 @@ impl container::Host for Ctx {
 
     #[instrument]
     async fn drop_stream_object_names(&mut self, names: StreamObjectNames) -> anyhow::Result<()> {
-        let _ = self
+        let _: Box<dyn Stream<Item = anyhow::Result<String>> + Sync + Send + Unpin> = self
             .table
-            .delete_object_name_stream(names)
+            .delete(Resource::new_own(names))
             .context("failed to delete object name stream")?;
         Ok(())
     }
@@ -438,9 +388,9 @@ impl container::Host for Ctx {
             Ok(stream) => {
                 let stream = self
                     .table
-                    .push_object_name_stream(stream)
+                    .push(stream)
                     .context("failed to push object name stream")?;
-                Ok(Ok(stream))
+                Ok(Ok(stream.rep()))
             }
             Err(err) => Ok(Err(format!("{err:#}"))),
         }

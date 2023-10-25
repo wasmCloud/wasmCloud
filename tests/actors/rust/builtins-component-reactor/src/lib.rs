@@ -4,7 +4,7 @@ wit_bindgen::generate!({
         "wasi:http/incoming-handler": Actor,
     },
     with: {
-        "wasi:io/streams@0.2.0-rc-2023-10-18": wasmcloud_actor::wasi::io::streams,
+        "wasi:io/streams@0.2.0-rc-2023-11-10": wasmcloud_actor::wasi::io::streams,
     }
 });
 
@@ -14,7 +14,7 @@ use std::io::{Read, Write};
 use serde::Deserialize;
 use serde_json::json;
 use wasi::http;
-use wasi::io::poll::poll_one;
+use wasi::io::poll::poll;
 use wasi::sockets::{instance_network, network, tcp_create_socket, udp_create_socket};
 use wasmcloud_actor::wasi::logging::logging;
 use wasmcloud_actor::wasi::random::random;
@@ -73,13 +73,19 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
         assert!(header_iter.next().is_none());
 
         let headers_clone = headers.clone();
-        headers_clone.set(&String::from("foo"), &[b"bar".to_vec()]);
-        headers_clone.append(&String::from("foo"), b"baz".as_ref());
+        headers_clone
+            .set(&String::from("foo"), &[b"bar".to_vec()])
+            .expect("failed to set `foo` header");
+        headers_clone
+            .append(&String::from("foo"), &b"baz".to_vec())
+            .expect("failed to append `foo` header");
         assert_eq!(
             headers_clone.get(&String::from("foo")),
             vec![b"bar", b"baz"]
         );
-        headers_clone.delete(&String::from("foo"));
+        headers_clone
+            .delete(&String::from("foo"))
+            .expect("failed to delete `foo` header");
         assert_eq!(
             headers_clone
                 .entries()
@@ -138,9 +144,9 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
         });
         eprintln!("response: `{res:?}`");
         let body = serde_json::to_vec(&res).expect("failed to encode response to JSON");
-        let response = http::types::OutgoingResponse::new(200, &http::types::Fields::new(&[]));
+        let response = http::types::OutgoingResponse::new(http::types::Fields::new());
         let response_body = response
-            .write()
+            .body()
             .expect("failed to get outgoing response body");
         {
             let mut stream = response_body
@@ -151,7 +157,8 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
                 .expect("failed to write body to outgoing response stream");
             w.flush().expect("failed to flush outgoing response stream");
         }
-        http::types::OutgoingBody::finish(response_body, None);
+        http::types::OutgoingBody::finish(response_body, None)
+            .expect("failed to finish response body");
         http::types::ResponseOutparam::set(response_out, Ok(response));
 
         bus::lattice::set_target(
@@ -383,16 +390,20 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
             Some(&TargetEntity::Link(Some("httpclient".into()))),
             vec![bus::lattice::TargetInterface::wasi_http_outgoing_handler()],
         );
-        let request = http::types::OutgoingRequest::new(
-            &http::types::Method::Put,
-            Some("/test"),
-            Some(&http::types::Scheme::Http),
-            Some(&format!("localhost:{port}")),
-            &http::types::Fields::new(&[]),
-        );
-        let request_body = request
-            .write()
-            .expect("failed to get outgoing request body");
+        let request = http::types::OutgoingRequest::new(http::types::Fields::new());
+        request
+            .set_method(&http::types::Method::Put)
+            .expect("failed to set request method");
+        request
+            .set_path_with_query(Some("/test"))
+            .expect("failed to set request path with query");
+        request
+            .set_scheme(Some(&http::types::Scheme::Http))
+            .expect("failed to set request scheme");
+        request
+            .set_authority(Some(&format!("localhost:{port}")))
+            .expect("failed to set request authority");
+        let request_body = request.body().expect("failed to get outgoing request body");
         {
             let mut stream = request_body
                 .write()
@@ -402,11 +413,12 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
                 .expect("failed to write `test` to outgoing request stream");
             w.flush().expect("failed to flush outgoing request stream");
         }
-        http::types::OutgoingBody::finish(request_body, None);
+        http::types::OutgoingBody::finish(request_body, None)
+            .expect("failed to finish sending request body");
 
         let response =
             http::outgoing_handler::handle(request, None).expect("failed to handle HTTP request");
-        poll_one(&response.subscribe());
+        assert_eq!(poll(&[&response.subscribe()]), [0]);
         let response = response
             .get()
             .expect("HTTP request response missing")

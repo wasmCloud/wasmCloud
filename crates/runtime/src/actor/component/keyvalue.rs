@@ -36,90 +36,34 @@ impl Instance {
 }
 
 trait TableKeyValueExt {
-    fn push_bucket(&mut self, name: String) -> TableResult<types::Bucket>;
     fn get_bucket(&self, bucket: types::Bucket) -> TableResult<&String>;
-    fn delete_bucket(&mut self, bucket: types::Bucket) -> TableResult<String>;
-
-    fn push_incoming_value(
-        &mut self,
-        stream: Box<dyn AsyncRead + Sync + Send + Unpin>,
-        size: u64,
-    ) -> TableResult<types::IncomingValue>;
-    fn get_incoming_value(
-        &self,
-        stream: types::IncomingValue,
-    ) -> TableResult<&(Box<dyn AsyncRead + Sync + Send + Unpin>, u64)>;
     fn delete_incoming_value(
         &mut self,
         stream: types::IncomingValue,
     ) -> TableResult<(Box<dyn AsyncRead + Sync + Send + Unpin>, u64)>;
-
-    fn push_outgoing_value(&mut self, stream: AsyncVec) -> TableResult<types::OutgoingValue>;
     fn get_outgoing_value(&self, stream: types::OutgoingValue) -> TableResult<&AsyncVec>;
-    fn delete_outgoing_value(&mut self, stream: types::OutgoingValue) -> TableResult<AsyncVec>;
-
     fn push_error(&mut self, error: anyhow::Error) -> TableResult<wasi_cloud_error::Error>;
-    fn get_error(&self, error: wasi_cloud_error::Error) -> TableResult<&anyhow::Error>;
-    fn delete_error(&mut self, error: wasi_cloud_error::Error) -> TableResult<anyhow::Error>;
 }
 
 impl TableKeyValueExt for preview2::Table {
-    fn push_bucket(&mut self, name: String) -> TableResult<types::Bucket> {
-        self.push(Box::new(name))
-    }
-
     fn get_bucket(&self, bucket: types::Bucket) -> TableResult<&String> {
-        self.get(bucket)
-    }
-
-    fn delete_bucket(&mut self, bucket: types::Bucket) -> TableResult<String> {
-        self.delete(bucket)
-    }
-
-    fn push_incoming_value(
-        &mut self,
-        stream: Box<dyn AsyncRead + Sync + Send + Unpin>,
-        size: u64,
-    ) -> TableResult<types::IncomingValue> {
-        self.push(Box::new((stream, size)))
-    }
-
-    fn get_incoming_value(
-        &self,
-        stream: types::IncomingValue,
-    ) -> TableResult<&(Box<dyn AsyncRead + Sync + Send + Unpin>, u64)> {
-        self.get(stream)
+        self.get(&Resource::new_borrow(bucket))
     }
 
     fn delete_incoming_value(
         &mut self,
         stream: types::IncomingValue,
     ) -> TableResult<(Box<dyn AsyncRead + Sync + Send + Unpin>, u64)> {
-        self.delete(stream)
-    }
-
-    fn push_outgoing_value(&mut self, stream: AsyncVec) -> TableResult<types::OutgoingValue> {
-        self.push(Box::new(stream))
+        self.delete(Resource::new_own(stream))
     }
 
     fn get_outgoing_value(&self, stream: types::OutgoingValue) -> TableResult<&AsyncVec> {
-        self.get(stream)
-    }
-
-    fn delete_outgoing_value(&mut self, stream: types::OutgoingValue) -> TableResult<AsyncVec> {
-        self.delete(stream)
+        self.get(&Resource::new_borrow(stream))
     }
 
     fn push_error(&mut self, error: anyhow::Error) -> TableResult<wasi_cloud_error::Error> {
-        self.push(Box::new(error))
-    }
-
-    fn get_error(&self, error: wasi_cloud_error::Error) -> TableResult<&anyhow::Error> {
-        self.get(error)
-    }
-
-    fn delete_error(&mut self, error: wasi_cloud_error::Error) -> TableResult<anyhow::Error> {
-        self.delete(error)
+        let res = self.push(error)?;
+        Ok(res.rep())
     }
 }
 
@@ -185,9 +129,9 @@ impl readwrite::Host for Ctx {
             Ok((stream, size)) => {
                 let value = self
                     .table
-                    .push_incoming_value(stream, size)
+                    .push((stream, size))
                     .context("failed to push stream and size")?;
-                Ok(Ok(value))
+                Ok(Ok(value.rep()))
             }
             Err(err) => {
                 let err = self.table.push_error(err).context("failed to push error")?;
@@ -274,19 +218,17 @@ impl readwrite::Host for Ctx {
 impl types::Host for Ctx {
     #[instrument]
     async fn drop_bucket(&mut self, bucket: types::Bucket) -> anyhow::Result<()> {
-        self.table
-            .delete_bucket(bucket)
+        let _: String = self
+            .table
+            .delete(Resource::new_own(bucket))
             .context("failed to delete bucket")?;
         Ok(())
     }
 
     #[instrument]
     async fn open_bucket(&mut self, name: String) -> anyhow::Result<Result<types::Bucket>> {
-        let bucket = self
-            .table
-            .push_bucket(name)
-            .context("failed to open bucket")?;
-        Ok(Ok(bucket))
+        let bucket = self.table.push(name).context("failed to open bucket")?;
+        Ok(Ok(bucket.rep()))
     }
 
     #[instrument]
@@ -294,17 +236,20 @@ impl types::Host for Ctx {
         &mut self,
         outgoing_value: types::OutgoingValue,
     ) -> anyhow::Result<()> {
-        self.table
-            .delete_outgoing_value(outgoing_value)
+        let _: AsyncVec = self
+            .table
+            .delete(Resource::new_own(outgoing_value))
             .context("failed to delete outgoing value")?;
         Ok(())
     }
 
     #[instrument]
     async fn new_outgoing_value(&mut self) -> anyhow::Result<types::OutgoingValue> {
-        self.table
-            .push_outgoing_value(AsyncVec::default())
-            .context("failed to push outgoing value")
+        let value = self
+            .table
+            .push(AsyncVec::default())
+            .context("failed to push outgoing value")?;
+        Ok(value.rep())
     }
 
     #[instrument]
@@ -338,7 +283,7 @@ impl types::Host for Ctx {
         let stream: Box<dyn HostOutputStream> = Box::new(AsyncWriteStream::new(1 << 16, stream));
         let stream = self
             .table
-            .push_resource(stream)
+            .push(stream)
             .context("failed to push output stream")?;
         Ok(Ok(stream))
     }
@@ -392,16 +337,16 @@ impl types::Host for Ctx {
             .context("failed to delete incoming value")?;
         let stream = self
             .table
-            .push_resource(InputStream::Host(Box::new(AsyncReadStream::new(stream))))
+            .push(InputStream::Host(Box::new(AsyncReadStream::new(stream))))
             .context("failed to push input stream")?;
         Ok(Ok(stream))
     }
 
     #[instrument]
     async fn size(&mut self, incoming_value: types::IncomingValue) -> anyhow::Result<u64> {
-        let (_, size) = self
+        let (_, size): &(Box<dyn AsyncRead + Sync + Send + Unpin>, _) = self
             .table
-            .get_incoming_value(incoming_value)
+            .get(&Resource::new_borrow(incoming_value))
             .context("failed to get incoming value")?;
         Ok(*size)
     }
@@ -411,8 +356,9 @@ impl types::Host for Ctx {
 impl wasi_cloud_error::Host for Ctx {
     #[instrument]
     async fn drop_error(&mut self, error: wasi_cloud_error::Error) -> anyhow::Result<()> {
-        self.table
-            .delete_error(error)
+        let _: anyhow::Error = self
+            .table
+            .delete(Resource::new_own(error))
             .context("failed to delete error")?;
         Ok(())
     }
@@ -420,8 +366,8 @@ impl wasi_cloud_error::Host for Ctx {
     #[instrument]
     async fn trace(&mut self, error: wasi_cloud_error::Error) -> anyhow::Result<String> {
         self.table
-            .get_error(error)
+            .get(&Resource::new_borrow(error))
             .context("failed to get error")
-            .map(|err| format!("{err:#}"))
+            .map(|err: &anyhow::Error| format!("{err:#}"))
     }
 }

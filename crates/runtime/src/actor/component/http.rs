@@ -29,7 +29,7 @@ pub mod incoming_http_bindings {
         world: "incoming-http",
         async: true,
         with: {
-           "wasi:http/types@0.2.0-rc-2023-10-18": wasmtime_wasi_http::bindings::http::types,
+           "wasi:http/types@0.2.0-rc-2023-11-10": wasmtime_wasi_http::bindings::http::types,
         },
     });
 }
@@ -77,19 +77,16 @@ impl WasiHttpView for Ctx {
             {
                 Ok(resp) => {
                     let resp = resp.map(|body| BoxBody::new(AsyncReadBody::new(body, 1024)));
-                    Ok(IncomingResponseInternal {
+                    Ok(Ok(IncomingResponseInternal {
                         resp,
-                        worker: preview2::spawn(async { Ok(()) }),
+                        worker: Arc::new(preview2::spawn(async {})),
                         between_bytes_timeout,
-                    })
+                    }))
                 }
                 Err(e) => Err(e),
             }
         }));
-        let res = self
-            .table()
-            .push_resource(res)
-            .context("failed to push response")?;
+        let res = self.table().push(res).context("failed to push response")?;
         Ok(res)
     }
 }
@@ -164,7 +161,7 @@ impl AsyncReadBody {
 
 impl Body for AsyncReadBody {
     type Data = Bytes;
-    type Error = anyhow::Error;
+    type Error = types::ErrorCode;
 
     fn poll_frame(
         mut self: Pin<&mut Self>,
@@ -174,7 +171,9 @@ impl Body for AsyncReadBody {
         let mut buf = ReadBuf::new(&mut bytes);
         match Pin::new(&mut self.stream).poll_read(cx, &mut buf) {
             Poll::Pending => Poll::Pending,
-            Poll::Ready(Err(err)) => Poll::Ready(Some(Err(anyhow!(err).context("I/O error")))),
+            Poll::Ready(Err(err)) => Poll::Ready(Some(Err(types::ErrorCode::InternalError(Some(
+                err.to_string(),
+            ))))),
             Poll::Ready(Ok(())) => Poll::Ready({
                 let n = buf.filled().len();
                 if n == 0 {
@@ -194,7 +193,7 @@ impl Body for AsyncReadBody {
 }
 
 struct BodyAsyncRead {
-    body: BoxBody<Bytes, anyhow::Error>,
+    body: BoxBody<Bytes, types::ErrorCode>,
     buffer: Bytes,
 }
 
@@ -239,11 +238,68 @@ impl AsyncRead for BodyAsyncRead {
 }
 
 impl BodyAsyncRead {
-    pub fn new(body: BoxBody<Bytes, anyhow::Error>) -> Self {
+    pub fn new(body: BoxBody<Bytes, types::ErrorCode>) -> Self {
         Self {
             body,
             buffer: Bytes::default(),
         }
+    }
+}
+
+fn code_to_error(code: types::ErrorCode) -> anyhow::Error {
+    match code {
+        types::ErrorCode::DnsTimeout => anyhow!("DNS timeout"),
+        types::ErrorCode::DnsError(_) => anyhow!("DNS error"),
+        types::ErrorCode::DestinationNotFound => anyhow!("destination not found"),
+        types::ErrorCode::DestinationUnavailable => anyhow!("destination unavailable"),
+        types::ErrorCode::DestinationIpProhibited => anyhow!("destination IP prohibited"),
+        types::ErrorCode::DestinationIpUnroutable => anyhow!("destination IP unroutable"),
+        types::ErrorCode::ConnectionRefused => anyhow!("connection refused"),
+        types::ErrorCode::ConnectionTerminated => anyhow!("connection terminated"),
+        types::ErrorCode::ConnectionTimeout => anyhow!("connection timeout"),
+        types::ErrorCode::ConnectionReadTimeout => anyhow!("connection read timeout"),
+        types::ErrorCode::ConnectionWriteTimeout => anyhow!("connection write timeout"),
+        types::ErrorCode::ConnectionLimitReached => anyhow!("connection limit reached"),
+        types::ErrorCode::TlsProtocolError => anyhow!("TLS protocol error"),
+        types::ErrorCode::TlsCertificateError => anyhow!("TLS certificate error"),
+        types::ErrorCode::TlsAlertReceived(_) => anyhow!("TLS alert received"),
+        types::ErrorCode::HttpRequestDenied => anyhow!("HTTP request denied"),
+        types::ErrorCode::HttpRequestLengthRequired => anyhow!("HTTP request length required"),
+        types::ErrorCode::HttpRequestBodySize(_) => anyhow!("HTTP request body size"),
+        types::ErrorCode::HttpRequestMethodInvalid => anyhow!("HTTP request method invalid"),
+        types::ErrorCode::HttpRequestUriInvalid => anyhow!("HTTP request URI invalid"),
+        types::ErrorCode::HttpRequestUriTooLong => anyhow!("HTTP request URI too long"),
+        types::ErrorCode::HttpRequestHeaderSectionSize(_) => {
+            anyhow!("HTTP request header section size")
+        }
+        types::ErrorCode::HttpRequestHeaderSize(_) => anyhow!("HTTP request header size"),
+        types::ErrorCode::HttpRequestTrailerSectionSize(_) => {
+            anyhow!("HTTP request trailer section size")
+        }
+        types::ErrorCode::HttpRequestTrailerSize(_) => anyhow!("HTTP request trailer size"),
+        types::ErrorCode::HttpResponseIncomplete => anyhow!("HTTP response incomplete"),
+        types::ErrorCode::HttpResponseHeaderSectionSize(_) => {
+            anyhow!("HTTP response header section size")
+        }
+        types::ErrorCode::HttpResponseHeaderSize(_) => anyhow!("HTTP response header size"),
+        types::ErrorCode::HttpResponseBodySize(_) => anyhow!("HTTP response body size"),
+        types::ErrorCode::HttpResponseTrailerSectionSize(_) => {
+            anyhow!("HTTP response trailer section size")
+        }
+        types::ErrorCode::HttpResponseTrailerSize(_) => anyhow!("HTTP response trailer size"),
+        types::ErrorCode::HttpResponseTransferCoding(_) => {
+            anyhow!("HTTP response transfer coding")
+        }
+        types::ErrorCode::HttpResponseContentCoding(_) => {
+            anyhow!("HTTP response content coding")
+        }
+        types::ErrorCode::HttpResponseTimeout => anyhow!("HTTP response timed out"),
+        types::ErrorCode::HttpUpgradeFailed => anyhow!("HTTP upgrade failed"),
+        types::ErrorCode::HttpProtocolError => anyhow!("HTTP protocol error"),
+        types::ErrorCode::LoopDetected => anyhow!("loop detected"),
+        types::ErrorCode::ConfigurationError => anyhow!("configuration error"),
+        types::ErrorCode::InternalError(None) => anyhow!("internal error"),
+        types::ErrorCode::InternalError(Some(err)) => anyhow!(err).context("internal error"),
     }
 }
 
@@ -312,18 +368,7 @@ impl IncomingHttp for InterfaceInstance<incoming_http_bindings::IncomingHttp> {
                             Box::new(BodyAsyncRead::new(body))
                         }))
                     }
-                    Ok(Err(types::Error::InvalidUrl(err))) => {
-                        Err(anyhow!(err).context("invalid URL"))
-                    }
-                    Ok(Err(types::Error::TimeoutError(err))) => {
-                        Err(anyhow!(err).context("timeout"))
-                    }
-                    Ok(Err(types::Error::ProtocolError(err))) => {
-                        Err(anyhow!(err).context("protocol error"))
-                    }
-                    Ok(Err(types::Error::UnexpectedError(err))) => {
-                        Err(anyhow!(err).context("unexpected error"))
-                    }
+                    Ok(Err(err)) => Err(code_to_error(err)),
                     Err(_) => bail!("a response was not set"),
                 }
             }

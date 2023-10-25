@@ -44,8 +44,9 @@ mod guest_bindings {
         world: "guest",
         async: true,
         with: {
-           "wasi:io/poll@0.2.0-rc-2023-10-18": wasmtime_wasi::preview2::bindings::io::poll,
-           "wasi:io/streams@0.2.0-rc-2023-10-18": wasmtime_wasi::preview2::bindings::io::streams,
+           "wasi:io/error@0.2.0-rc-2023-11-10": wasmtime_wasi::preview2::bindings::io::error,
+           "wasi:io/poll@0.2.0-rc-2023-11-10": wasmtime_wasi::preview2::bindings::io::poll,
+           "wasi:io/streams@0.2.0-rc-2023-11-10": wasmtime_wasi::preview2::bindings::io::streams,
         },
     });
 }

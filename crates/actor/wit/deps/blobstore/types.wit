@@ -1,26 +1,26 @@
-package wasi:blobstore
+package wasi:blobstore;
 
 // Types used by blobstore
 interface types {
-  use wasi:io/streams@0.2.0-rc-2023-10-18.{input-stream, output-stream}
+  use wasi:io/streams@0.2.0-rc-2023-11-10.{input-stream, output-stream};
 
   // name of a container, a collection of objects.
   // The container name may be any valid UTF-8 string.
-  type container-name = string
+  type container-name = string;
 
   // name of an object within a container
   // The object name may be any valid UTF-8 string.
-  type object-name = string
+  type object-name = string;
 
   // TODO: define timestamp to include seconds since 
   // Unix epoch and nanoseconds 
   // https://github.com/WebAssembly/wasi-blob-store/issues/7
-  type timestamp = u64
+  type timestamp = u64;
 
   // size of an object, in bytes
-  type object-size = u64
+  type object-size = u64;
 
-  type error = string
+  type error = string;
 
   // information about a container
   record container-metadata {
@@ -52,10 +52,10 @@ interface types {
   /// that can be represented in a byte array. It provides a way to write the value
   /// to the output-stream defined in the `wasi-io` interface.
   // Soon: switch to `resource value { ... }`
-  type outgoing-value = u32
-  drop-outgoing-value: func(outgoing-value: outgoing-value)
-  new-outgoing-value: func() -> outgoing-value
-  outgoing-value-write-body: func(outgoing-value: outgoing-value) -> result<output-stream>
+  type outgoing-value = u32;
+  drop-outgoing-value: func(outgoing-value: outgoing-value);
+  new-outgoing-value: func() -> outgoing-value;
+  outgoing-value-write-body: func(outgoing-value: outgoing-value) -> result<output-stream>;
 
   /// A incoming-value is a wrapper around a value. It provides a way to read the value
   /// from the input-stream defined in the `wasi-io` interface.
@@ -66,11 +66,11 @@ interface types {
   /// 2. `incoming-value-consume-async` consumes the value asynchronously and returns the
   ///    value as an input-stream.
   // Soon: switch to `resource incoming-value { ... }`
-  type incoming-value = u32
-  type incoming-value-async-body = input-stream
-  type incoming-value-sync-body = list<u8>
-  drop-incoming-value: func(incoming-value: incoming-value)
-  incoming-value-consume-sync: func(incoming-value: incoming-value) -> result<incoming-value-sync-body, error>
-  incoming-value-consume-async: func(incoming-value: incoming-value) -> result<incoming-value-async-body, error>
-  size: func(incoming-value: incoming-value) -> u64
+  type incoming-value = u32;
+  type incoming-value-async-body = input-stream;
+  type incoming-value-sync-body = list<u8>;
+  drop-incoming-value: func(incoming-value: incoming-value);
+  incoming-value-consume-sync: func(incoming-value: incoming-value) -> result<incoming-value-sync-body, error>;
+  incoming-value-consume-async: func(incoming-value: incoming-value) -> result<incoming-value-async-body, error>;
+  size: func(incoming-value: incoming-value) -> u64;
 }
