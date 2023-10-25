@@ -1,5 +1,5 @@
 apiVersion: v2
-name: wasmcloud-host
+name: wasmcloud-chart
 description: A Helm chart for running wasmCloud hosts on Kubernetes
 
 keywords:
