@@ -165,11 +165,9 @@ impl AsyncRead for BodyAsyncRead {
                             self.buffer = data.split_off(cap);
                         }
                         buf.put_slice(&data);
-                        Poll::Ready(Ok(()))
-                    } else {
-                        // NOTE: Trailers are not currently supported
-                        Poll::Pending
                     }
+                    // NOTE: Trailers are not currently supported
+                    Poll::Ready(Ok(()))
                 }
                 Poll::Ready(Some(Err(err))) => {
                     Poll::Ready(Err(std::io::Error::new(std::io::ErrorKind::Other, err)))
