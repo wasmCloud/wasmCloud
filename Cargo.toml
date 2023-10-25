@@ -134,7 +134,7 @@ url = { version = "2", default-features = false }
 uuid = { version = "1", default-features = false }
 wascap = { version = "*", path = "./crates/wascap" }
 wasi-common = { version = "14", default-features = false }
-wasm-encoder = { version = "0.33", default-features = false }
+wasm-encoder = { version = "0.35", default-features = false }
 wasm-gen = { version = "0.1", default-features = false }
 wasmcloud-actor = { version = "*", path = "./crates/actor" }
 wasmcloud-actor-macros = { version = "*", path = "./crates/actor/macros" }
