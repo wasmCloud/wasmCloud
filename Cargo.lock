@@ -1504,20 +1504,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "http-axum"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum",
- "hyper 0.14.27",
- "reqwest",
- "tokio",
- "tracing-subscriber",
- "wasmcloud-actor",
- "wasmcloud-host",
-]
-
-[[package]]
 name = "http-body"
 version = "0.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3972,11 +3958,9 @@ dependencies = [
  "serde",
  "serde_json",
  "sharded-slab",
- "smallvec",
  "thread_local",
  "tracing",
  "tracing-core",
- "tracing-log",
  "tracing-serde",
 ]
 
