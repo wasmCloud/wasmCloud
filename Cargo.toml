@@ -154,4 +154,4 @@ wasmtime-wasi-http = { version = "14", default-features = false }
 wasmtime-wit-bindgen = { version = "14", default-features = false }
 wit-bindgen = { version = "0.13", default-features = false }
 wit-component = { version = "0.16", default-features = false }
-wit-parser = { version = "0.11", default-features = false }
+wit-parser = { version = "0.12", default-features = false }
