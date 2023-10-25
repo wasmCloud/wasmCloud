@@ -70,7 +70,7 @@ wascap = { workspace = true }
 wasmcloud-control-interface = { workspace = true }
 
 [workspace]
-members = ["crates/*", "examples/rust/*"]
+members = ["crates/*"]
 exclude = ["crates/providers"]
 
 [workspace.dependencies]
