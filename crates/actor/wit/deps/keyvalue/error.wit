@@ -4,7 +4,7 @@ interface wasi-cloud-error {
 	/// of the error. In the future, this will be extended to provide more information
 	/// about the error.
 	// Soon: switch to `resource error { ... }`
-	type error = u32
-	drop-error: func(error: error)
-	trace: func(error: error) -> string
+	type error = u32;
+	drop-error: func(error: error);
+	trace: func(error: error) -> string;
 }

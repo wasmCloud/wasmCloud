@@ -1,16 +1,16 @@
 package test-actors:reactor;
 
 world actor {
-    import wasi:http/outgoing-handler@0.2.0-rc-2023-10-18;
-    import wasi:io/poll@0.2.0-rc-2023-10-18;
-    import wasi:sockets/instance-network@0.2.0-rc-2023-10-18;
-    import wasi:sockets/tcp-create-socket@0.2.0-rc-2023-10-18;
-    import wasi:sockets/tcp@0.2.0-rc-2023-10-18;
-    import wasi:sockets/udp-create-socket@0.2.0-rc-2023-10-18;
-    import wasi:sockets/udp@0.2.0-rc-2023-10-18;
+    import wasi:http/outgoing-handler@0.2.0-rc-2023-11-10;
+    import wasi:io/poll@0.2.0-rc-2023-11-10;
+    import wasi:sockets/instance-network@0.2.0-rc-2023-11-10;
+    import wasi:sockets/tcp-create-socket@0.2.0-rc-2023-11-10;
+    import wasi:sockets/tcp@0.2.0-rc-2023-11-10;
+    import wasi:sockets/udp-create-socket@0.2.0-rc-2023-11-10;
+    import wasi:sockets/udp@0.2.0-rc-2023-11-10;
 
     import test-actors:foobar/foobar;
     import wasmcloud:bus/guest-config;
 
-    export wasi:http/incoming-handler@0.2.0-rc-2023-10-18;
+    export wasi:http/incoming-handler@0.2.0-rc-2023-11-10;
 }

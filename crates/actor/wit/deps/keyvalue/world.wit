@@ -1,12 +1,12 @@
-package wasi:keyvalue
+package wasi:keyvalue;
 
 world keyvalue {
-	import readwrite
-	import atomic
-	import batch
+	import readwrite;
+	import atomic;
+	import batch;
 }
 
 world keyvalue-handle-watch {
-	include keyvalue
-	export handle-watch
+	include keyvalue;
+	export handle-watch;
 }

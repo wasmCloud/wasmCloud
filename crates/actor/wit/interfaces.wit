@@ -8,8 +8,8 @@ world interfaces {
     import wasi:blobstore/blobstore
     import wasi:keyvalue/atomic
     import wasi:keyvalue/readwrite
-    import wasi:logging/logging@0.2.0-rc-2023-10-18
-    import wasi:random/random@0.2.0-rc-2023-10-18
+    import wasi:logging/logging
+    import wasi:random/random@0.2.0-rc-2023-11-10
 
     import wasmcloud:messaging/consumer
 }

@@ -5,9 +5,9 @@ world guest {
 }
 
 world logging {
-    export wasi:logging/logging@0.2.0-rc-2023-10-18;
+    export wasi:logging/logging;
 }
 
 world incoming-http {
-    export wasi:http/incoming-handler@0.2.0-rc-2023-10-18;
+    export wasi:http/incoming-handler@0.2.0-rc-2023-11-10;
 }
