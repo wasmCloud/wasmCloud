@@ -2177,14 +2177,13 @@ impl Host {
         .await
     }
 
-    /// Instantiate an actor and publish the actor start events.
+    /// Instantiate an actor
     #[allow(clippy::too_many_arguments)] // TODO: refactor into a config struct
-    #[instrument(skip(self, claims, annotations, host_id, actor_ref, actor, handler))]
+    #[instrument(skip(self, claims, annotations, actor_ref, actor, handler))]
     async fn instantiate_actor(
         &self,
         claims: &jwt::Claims<jwt::Actor>,
         annotations: &Annotations,
-        host_id: impl AsRef<str>,
         actor_ref: impl AsRef<str>,
         max: Option<NonZeroUsize>,
         actor: wasmcloud_runtime::Actor,
@@ -2200,7 +2199,6 @@ impl Host {
         );
         let actor = actor.clone();
         let handler = handler.clone();
-        let claims = claims.clone();
         let instance = async move {
             let calls = self
                 .rpc_nats
@@ -2239,66 +2237,20 @@ impl Host {
         .await
         .context("failed to instantiate actor")?;
 
-        self.publish_event(
-            "actor_started",
-            event::actor_started(
-                &claims,
-                annotations,
-                Uuid::from_u128(instance.id.into()),
-                actor_ref,
-            ),
-        )
-        .await?;
-        self.publish_event(
-            "actors_started",
-            event::actors_started(
-                &claims,
-                annotations,
-                host_id,
-                max.map_or(0, NonZeroUsize::get),
-                actor_ref,
-            ),
-        )
-        .await?;
         Ok(instance)
     }
 
-    /// Uninstantiate an actor and publish the actor stop events.
+    /// Uninstantiate an actor
     #[instrument(skip(self, instance))]
     async fn uninstantiate_actor(
         &self,
         claims: &jwt::Claims<jwt::Actor>,
         host_id: &str,
         instance: Arc<ActorInstance>,
-    ) -> anyhow::Result<()> {
+    ) {
         trace!(subject = claims.subject, "uninstantiating actor instance");
 
         instance.calls.abort();
-        let _ = self
-            .publish_event(
-                "actor_stopped",
-                event::actor_stopped(
-                    claims,
-                    &instance.annotations,
-                    Uuid::from_u128(instance.id.into()),
-                ),
-            )
-            .await;
-        // NOTE: We no longer track multiple instance replicas, we have one instance per
-        // set of annotations per actor. We publish the actors_stopped event using the instance's
-        // max concurrent to preserve backwards compatibility.
-        self.publish_event(
-            "actors_stopped",
-            event::actors_stopped(
-                claims,
-                &instance.annotations,
-                host_id,
-                // If the instance had no maximum concurrent value, default to stopping one
-                instance.max.unwrap_or(NonZeroUsize::MIN),
-                0,
-            ),
-        )
-        .await
     }
 
     #[instrument(skip(self, entry, actor, annotations))]
@@ -2364,7 +2316,6 @@ impl Host {
             .instantiate_actor(
                 claims,
                 &annotations,
-                host_id,
                 &actor_ref,
                 max,
                 actor.clone(),
@@ -2372,6 +2323,15 @@ impl Host {
             )
             .await
             .context("failed to instantiate actor")?;
+        self.publish_actor_started_events(
+            max.map_or(0, NonZeroUsize::get),
+            claims,
+            &annotations,
+            instance.id,
+            host_id,
+            actor_ref,
+        )
+        .await?;
 
         let actor = Arc::new(Actor {
             actor,
@@ -2412,9 +2372,17 @@ impl Host {
 
         for instance in matching_instances {
             instances.remove(&instance.annotations);
-            self.uninstantiate_actor(claims, host_id, instance)
-                .await
-                .context("failed to uninstantiate actor")?;
+            self.uninstantiate_actor(claims, host_id, instance.clone())
+                .await;
+            self.publish_actor_stopped_events(
+                claims,
+                &instance.annotations,
+                instance.id,
+                host_id,
+                instance.max,
+                0,
+            )
+            .await?;
         }
         Ok(())
     }
@@ -2619,8 +2587,17 @@ impl Host {
                 let mut actor_instances = actor.instances.write().await;
                 if let Some(matching_instance) = matching_instance(&actor_instances, &annotations) {
                     actor_instances.remove(&matching_instance.annotations);
-                    self.uninstantiate_actor(claims, host_id, matching_instance)
-                        .await?;
+                    self.uninstantiate_actor(claims, host_id, matching_instance.clone())
+                        .await;
+                    self.publish_actor_stopped_events(
+                        claims,
+                        &matching_instance.annotations,
+                        matching_instance.id,
+                        host_id,
+                        matching_instance.max,
+                        0,
+                    )
+                    .await?;
                 }
 
                 if actor_instances.is_empty() {
@@ -2677,7 +2654,6 @@ impl Host {
                             .instantiate_actor(
                                 claims,
                                 &annotations,
-                                host_id,
                                 &actor_ref,
                                 max,
                                 actor.actor.clone(),
@@ -2685,19 +2661,58 @@ impl Host {
                             )
                             .await
                             .context("failed to instantiate actor")?;
+                        let publish_result = match matching_instance.max.cmp(&max) {
+                            std::cmp::Ordering::Less => {
+                                // We started the difference between the current max and the requested max
+                                // SAFETY: We know max > matching_instance.max because of the ordering check above
+                                let num_started = max.map_or(0, NonZeroUsize::get)
+                                    - matching_instance.max.map_or(0, NonZeroUsize::get);
+                                self.publish_actor_started_events(
+                                    num_started,
+                                    claims,
+                                    &annotations,
+                                    instance.id,
+                                    host_id,
+                                    actor_ref,
+                                )
+                                .await
+                            }
+                            std::cmp::Ordering::Greater => {
+                                // We stopped the difference between the current max and the requested max
+                                let num_stopped =
+                                // SAFETY: We know matching_instance.max > max because of the ordering check above
+                                    matching_instance.max.map_or(0, NonZeroUsize::get)
+                                        - max.map_or(0, NonZeroUsize::get);
+                                self.publish_actor_stopped_events(
+                                    claims,
+                                    &annotations,
+                                    matching_instance.id,
+                                    host_id,
+                                    NonZeroUsize::new(num_stopped),
+                                    matching_instance
+                                        .max
+                                        .map_or(0, NonZeroUsize::get)
+                                        .saturating_sub(num_stopped),
+                                )
+                                .await
+                            }
+                            std::cmp::Ordering::Equal => Ok(()),
+                        };
                         let previous_instance =
                             actor_instances.remove(&matching_instance.annotations);
                         actor_instances.insert(annotations, instance);
+
                         if let Some(i) = previous_instance {
-                            i.calls.abort();
+                            self.uninstantiate_actor(claims, host_id, i).await;
                         }
+                        // Wait to unwrap the event publish result until after we've processed the instances
+                        publish_result?;
                     }
                 } else {
                     let new_instance = self
                         .instantiate_actor(
                             claims,
                             &annotations,
-                            host_id,
                             &actor_ref,
                             max,
                             actor.actor.clone(),
@@ -2705,6 +2720,15 @@ impl Host {
                         )
                         .await
                         .context("failed to instantiate actor")?;
+                    self.publish_actor_started_events(
+                        max.map_or(0, NonZeroUsize::get),
+                        claims,
+                        &annotations,
+                        new_instance.id,
+                        host_id,
+                        actor_ref,
+                    )
+                    .await?;
                     actor_instances.insert(annotations, new_instance);
                 };
             }
@@ -2848,7 +2872,6 @@ impl Host {
             .instantiate_actor(
                 new_claims,
                 &annotations,
-                host_id,
                 &new_actor_ref,
                 max,
                 new_actor.clone(),
@@ -2858,13 +2881,30 @@ impl Host {
         else {
             bail!("failed to instantiate actor from new reference");
         };
+        self.publish_actor_started_events(
+            max.map_or(0, NonZeroUsize::get),
+            new_claims,
+            &annotations,
+            new_instance.id,
+            host_id,
+            new_actor_ref,
+        )
+        .await?;
 
         all_instances.remove(&matching_instance.annotations);
         all_instances.insert(annotations, new_instance);
 
-        self.uninstantiate_actor(old_claims, host_id, matching_instance)
-            .await
-            .context("failed to uninstantiate running actor")?;
+        self.uninstantiate_actor(old_claims, host_id, matching_instance.clone())
+            .await;
+        self.publish_actor_stopped_events(
+            old_claims,
+            &matching_instance.annotations,
+            matching_instance.id,
+            host_id,
+            matching_instance.max,
+            max.map_or(0, NonZeroUsize::get),
+        )
+        .await?;
 
         Ok(ACCEPTED.into())
     }
@@ -3896,6 +3936,80 @@ impl Host {
         if let Err(error) = &res {
             warn!(?error, ?operation, bucket, "failed to process entry");
         }
+    }
+
+    /// Publishes `count` `actor_started` events and one `actors_started` event with the supplied count
+    async fn publish_actor_started_events(
+        &self,
+        count: usize,
+        claims: &jwt::Claims<jwt::Actor>,
+        annotations: &BTreeMap<String, String>,
+        instance_id: Ulid,
+        host_id: impl AsRef<str>,
+        actor_ref: impl AsRef<str>,
+    ) -> anyhow::Result<()> {
+        let () = stream::iter(0..count)
+            .for_each(|_| async {
+                let _ = self
+                    .publish_event(
+                        "actor_started",
+                        event::actor_started(
+                            claims,
+                            annotations,
+                            Uuid::from_u128(instance_id.into()),
+                            actor_ref.as_ref(),
+                        ),
+                    )
+                    .await;
+            })
+            .await;
+        self.publish_event(
+            "actors_started",
+            event::actors_started(claims, annotations, host_id, count, actor_ref),
+        )
+        .await
+    }
+
+    /// Publishes `count` `actor_stopped` events and one `actors_stopped` event with the supplied count
+    async fn publish_actor_stopped_events(
+        &self,
+        claims: &jwt::Claims<jwt::Actor>,
+        annotations: &BTreeMap<String, String>,
+        instance_id: Ulid,
+        host_id: impl AsRef<str>,
+        max: Option<NonZeroUsize>,
+        remaining: usize,
+    ) -> anyhow::Result<()> {
+        // If the instance had no maximum concurrent value, default to stopping one
+        let () = stream::iter(0..max.map_or(1, NonZeroUsize::get))
+            .for_each(|_| async {
+                let _ = self
+                    .publish_event(
+                        "actor_stopped",
+                        event::actor_stopped(
+                            claims,
+                            annotations,
+                            Uuid::from_u128(instance_id.into()),
+                        ),
+                    )
+                    .await;
+            })
+            .await;
+        // NOTE: We no longer track multiple instance replicas, we have one instance per
+        // set of annotations per actor. We publish the actors_stopped event using the instance's
+        // max concurrent to preserve backwards compatibility.
+        self.publish_event(
+            "actors_stopped",
+            event::actors_stopped(
+                claims,
+                annotations,
+                host_id,
+                // If the instance had no maximum concurrent value, default to stopping one
+                max.unwrap_or(NonZeroUsize::MIN),
+                remaining,
+            ),
+        )
+        .await
     }
 }
 
