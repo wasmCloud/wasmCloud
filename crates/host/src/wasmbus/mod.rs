@@ -34,7 +34,7 @@ use base64::Engine;
 use bytes::{BufMut, Bytes, BytesMut};
 use cloudevents::{EventBuilder, EventBuilderV10};
 use futures::stream::{AbortHandle, Abortable};
-use futures::{join, stream, try_join, FutureExt, Stream, StreamExt, TryFutureExt};
+use futures::{join, stream, try_join, FutureExt, Stream, StreamExt, TryFutureExt, TryStreamExt};
 use nkeys::{KeyPair, KeyPairType};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -1993,11 +1993,13 @@ impl Host {
                 }
             }
         });
+
         let data_watch: JoinHandle<anyhow::Result<_>> = spawn({
+            let data = data.clone();
             let host = Arc::clone(&host);
             async move {
                 let data_watch = data
-                    .watch_with_history(">")
+                    .watch_all()
                     .await
                     .context("failed to watch lattice data bucket")?;
                 let mut data_watch = Abortable::new(data_watch, data_watch_abort_reg);
@@ -2012,7 +2014,7 @@ impl Host {
                                     Err(error) => {
                                         error!("failed to watch lattice data bucket: {error}");
                                     }
-                                    Ok(entry) => host.process_entry(entry).await,
+                                    Ok(entry) => host.process_entry(entry, true).await,
                                 }
                             }
                         }
@@ -2058,6 +2060,24 @@ impl Host {
                 }
             }
         });
+
+        // Process existing data without emitting events
+        data.keys()
+            .await
+            .context("failed to read keys of lattice data bucket")?
+            .map_err(|e| anyhow!(e).context("failed to read lattice data stream"))
+            .try_filter_map(|key| async {
+                data.entry(key)
+                    .await
+                    .context("failed to get entry in lattice data bucket")
+            })
+            .for_each(|entry| async {
+                match entry {
+                    Ok(entry) => host.process_entry(entry, false).await,
+                    Err(err) => error!(%err, "failed to read entry from lattice data bucket"),
+                }
+            })
+            .await;
 
         host.publish_event("host_started", start_evt)
             .await
@@ -3673,6 +3693,7 @@ impl Host {
         &self,
         id: impl AsRef<str>,
         value: impl AsRef<[u8]>,
+        publish: bool,
     ) -> anyhow::Result<()> {
         let id = id.as_ref();
         let value = value.as_ref();
@@ -3713,11 +3734,13 @@ impl Host {
             );
         }
 
-        self.publish_event(
-            "linkdef_set",
-            event::linkdef_set(id, actor_id, provider_id, link_name, contract_id, values),
-        )
-        .await?;
+        if publish {
+            self.publish_event(
+                "linkdef_set",
+                event::linkdef_set(id, actor_id, provider_id, link_name, contract_id, values),
+            )
+            .await?;
+        }
 
         let msgp = rmp_serde::to_vec_named(ld).context("failed to encode link definition")?;
         let lattice_prefix = &self.host_config.lattice_prefix;
@@ -3737,6 +3760,7 @@ impl Host {
         &self,
         id: impl AsRef<str>,
         _value: impl AsRef<[u8]>,
+        publish: bool,
     ) -> anyhow::Result<()> {
         let id = id.as_ref();
 
@@ -3763,11 +3787,13 @@ impl Host {
             }
         }
 
-        self.publish_event(
-            "linkdef_deleted",
-            event::linkdef_deleted(id, actor_id, provider_id, link_name, contract_id, values),
-        )
-        .await?;
+        if publish {
+            self.publish_event(
+                "linkdef_deleted",
+                event::linkdef_deleted(id, actor_id, provider_id, link_name, contract_id, values),
+            )
+            .await?;
+        }
 
         let msgp = rmp_serde::to_vec_named(ld).context("failed to encode link definition")?;
         let lattice_prefix = &self.host_config.lattice_prefix;
@@ -3858,16 +3884,17 @@ impl Host {
             created,
             operation,
         }: async_nats::jetstream::kv::Entry,
+        publish: bool,
     ) {
         use async_nats::jetstream::kv::Operation;
 
         let mut key_parts = key.split('_');
         let res = match (operation, key_parts.next(), key_parts.next()) {
             (Operation::Put, Some("LINKDEF"), Some(id)) => {
-                self.process_linkdef_put(id, value).await
+                self.process_linkdef_put(id, value, publish).await
             }
             (Operation::Delete, Some("LINKDEF"), Some(id)) => {
-                self.process_linkdef_delete(id, value).await
+                self.process_linkdef_delete(id, value, publish).await
             }
             (Operation::Put, Some("CLAIMS"), Some(pubkey)) => {
                 self.process_claims_put(pubkey, value).await
