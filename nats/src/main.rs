@@ -40,17 +40,24 @@ fn generate_provider(host_data: HostData) -> NatsMessagingProvider {
     if let Some(c) = host_data.config_json.as_ref() {
         // empty string becomes the default configuration
         if c.trim().is_empty() {
-            NatsMessagingProvider::default()
+            NatsMessagingProvider {
+                host_id: host_data.host_id,
+                ..Default::default()
+            }
         } else {
             let config: ConnectionConfig = serde_json::from_str(c)
                 .expect("JSON deserialization from connection config should have worked");
             NatsMessagingProvider {
                 default_config: config,
+                host_id: host_data.host_id,
                 ..Default::default()
             }
         }
     } else {
-        NatsMessagingProvider::default()
+        NatsMessagingProvider {
+            host_id: host_data.host_id,
+            ..Default::default()
+        }
     }
 }
 
@@ -92,7 +99,7 @@ impl ConnectionConfig {
             out.auth_seed = extra.auth_seed.clone()
         }
         if extra.ping_interval_sec.is_some() {
-            out.ping_interval_sec = extra.ping_interval_sec.clone()
+            out.ping_interval_sec = extra.ping_interval_sec
         }
         out
     }
@@ -177,6 +184,7 @@ struct NatsMessagingProvider {
     // store nats connection client per actor
     actors: Arc<RwLock<HashMap<String, NatsClientBundle>>>,
     default_config: ConnectionConfig,
+    host_id: String,
 }
 
 // use default implementations of provider message handlers
@@ -211,8 +219,11 @@ impl NatsMessagingProvider {
         // Use the first visible cluster_uri
         let url = cfg.cluster_uris.get(0).unwrap();
 
-        let client = opts
-            .name("NATS Messaging Provider") // allow this to show up uniquely in a NATS connection list
+        let client_name = format!(
+            "NATS Messaging Provider - {} - {} - {}",
+            self.host_id, ld.actor_id, ld.link_name
+        );
+        let client = wasmbus_rpc::rpc_client::with_connection_event_logging(opts.name(client_name)) // allow this to show up uniquely in a NATS connection list
             .connect(url)
             .await
             .map_err(|e| RpcError::ProviderInit(format!("NATS connection to {}: {}", url, e)))?;
@@ -286,6 +297,9 @@ impl NatsMessagingProvider {
 
                 tokio::spawn(dispatch_msg(link_def.clone(), msg, permit).instrument(span));
             }
+
+            // The NATS subscriber stream should never close
+            error!(topic = %sub, "FATAL: NATS subscriber stream closed unexpectedly");
         });
 
         Ok(join_handle)
@@ -493,7 +507,7 @@ mod test {
 }
 "#;
 
-        let config: ConnectionConfig = serde_json::from_str(&input).unwrap();
+        let config: ConnectionConfig = serde_json::from_str(input).unwrap();
         assert_eq!(config.auth_jwt.unwrap(), "authy");
         assert_eq!(config.auth_seed.unwrap(), "seedy");
         assert_eq!(config.cluster_uris, ["nats://soyvuh"]);

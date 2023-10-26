@@ -2,11 +2,8 @@ use tokio::sync::oneshot;
 use wasmbus_rpc::provider::prelude::*;
 use wasmcloud_interface_messaging::*;
 use wasmcloud_test_util::{
-    check,
-    cli::print_test_results,
-    provider_test::test_provider,
-    run_selected_spawn,
-    testing::{TestOptions, TestResult},
+    check, cli::print_test_results, provider_test::test_provider, run_selected_spawn,
+    testing::TestOptions,
 };
 
 #[tokio::test]
