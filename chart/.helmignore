@@ -21,3 +21,5 @@
 .idea/
 *.tmproj
 .vscode/
+# Ignore chart-testing config
+ct.yaml
