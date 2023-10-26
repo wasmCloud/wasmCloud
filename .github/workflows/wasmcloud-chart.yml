@@ -39,13 +39,13 @@ jobs:
 
       - name: Run chart-testing (lint)
         run: |
-          ct lint --charts chart/ --validate-maintainers=false
+          ct lint --config chart/ct.yaml
 
       - name: Create kind cluster
         uses: helm/kind-action@v1.8.0
 
       - name: Run chart-testing (install)
-        run: ct install --charts chart/
+        run: ct install --config chart/ct.yaml
 
   publish:
     if: ${{ startsWith(github.ref, 'refs/tags/chart-v') }}
