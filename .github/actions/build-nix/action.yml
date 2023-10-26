@@ -4,15 +4,13 @@ inputs:
   package:
     description: package specification to build
     required: true
-  install-path:
-    description: path within resulting output, from which to install (e.g. `/bin/wasmcloud`)
 
 runs:
   using: composite
   steps:
   - run: nix build -L '.#${{ inputs.package }}'
     shell: bash
-  - run: nix run -L --inputs-from . 'nixpkgs#coreutils' -- --coreutils-prog=ginstall -p "./result${{ inputs.install-path }}" '${{ inputs.package }}'
+  - run: nix run -L --inputs-from . 'nixpkgs#coreutils' -- --coreutils-prog=cp -RLv ./result '${{ inputs.package }}'
     shell: bash
   - uses: actions/upload-artifact@v3
     with:

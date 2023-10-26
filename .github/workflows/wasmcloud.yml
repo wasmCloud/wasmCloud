@@ -13,6 +13,8 @@ on:
     - 'v[0-9].[0-9]+.[0-9]+-rc[0-9]+'
     - 'wascap-v[0-9].[0-9]+.[0-9]+'
     - 'wascap-v[0-9].[0-9]+.[0-9]+-rc[0-9]+'
+    - 'wash-cli-v[0-9].[0-9]+.[0-9]+'
+    - 'wash-cli-v[0-9].[0-9]+.[0-9]+-rc[0-9]+'
   workflow_dispatch:
 
 concurrency:
@@ -25,35 +27,43 @@ jobs:
       matrix:
         config:
         - target: aarch64-unknown-linux-musl
-          install-path: /bin/wasmcloud
-          test-bin: nix shell --inputs-from . 'nixpkgs#qemu' -c qemu-aarch64 ./result/bin/wasmcloud --version
+          test-bin: |
+            nix profile install --inputs-from . 'nixpkgs#qemu'
+            qemu-aarch64 ./result/bin/wash --version
+            qemu-aarch64 ./result/bin/wasmcloud --version
           test-oci: docker load < ./result
           # TODO: Run aarch64 binary within OCI
 
         - target: aarch64-apple-darwin
-          install-path: /bin/wasmcloud
-          test-bin: file ./result/bin/wasmcloud
+          test-bin: |
+            file ./result/bin/wash
+            file ./result/bin/wasmcloud
           test-oci: docker load < ./result
 
         - target: aarch64-linux-android
-          install-path: /bin/wasmcloud
-          test-bin: file ./result/bin/wasmcloud
+          test-bin: |
+            file ./result/bin/wash
+            file ./result/bin/wasmcloud
           test-oci: docker load < ./result
 
         - target: x86_64-apple-darwin
-          install-path: /bin/wasmcloud
-          test-bin: file ./result/bin/wasmcloud
+          test-bin: |
+            file ./result/bin/wash
+            file ./result/bin/wasmcloud
           test-oci: docker load < ./result
 
         - target: x86_64-pc-windows-gnu
-          install-path: /bin/wasmcloud.exe
-          test-bin: nix shell --inputs-from . 'nixpkgs#wine64' -c wine64 ./result/bin/wasmcloud.exe --version
+          test-bin: |
+            nix profile install --inputs-from . 'nixpkgs#wine64'
+            wine64 ./result/bin/wash.exe --version
+            wine64 ./result/bin/wasmcloud.exe --version
           test-oci: docker load < ./result
           # TODO: Run win64 binary within OCI
 
         - target: x86_64-unknown-linux-musl
-          install-path: /bin/wasmcloud
-          test-bin: ./result/bin/wasmcloud --version
+          test-bin: |
+            ./result/bin/wash --version
+            ./result/bin/wasmcloud --version
           test-oci: |
             docker load < ./result
             docker run --rm wasmcloud:$(nix eval --raw .#wasmcloud-x86_64-unknown-linux-musl-oci.imageTag) wasmcloud --version
@@ -68,7 +78,6 @@ jobs:
     - uses: ./.github/actions/build-nix
       with:
         package: wasmcloud-${{ matrix.config.target }}
-        install-path: ${{ matrix.config.install-path }}
     - run: ${{ matrix.config.test-bin }}
     - uses: ./.github/actions/build-nix
       with:
@@ -83,18 +92,26 @@ jobs:
     - uses: actions/download-artifact@v3
       with:
         name: wasmcloud-aarch64-apple-darwin
+        path: aarch64
     - uses: actions/download-artifact@v3
       with:
         name: wasmcloud-x86_64-apple-darwin
-    - run: chmod +x ./wasmcloud-x86_64-apple-darwin
-    - run: ./wasmcloud-x86_64-apple-darwin --version
-    - run: lipo -create ./wasmcloud-aarch64-apple-darwin ./wasmcloud-x86_64-apple-darwin -output ./wasmcloud-universal-darwin
+        path: x86_64
+    - run: chmod +x ./x86_64/bin/wash
+    - run: chmod +x ./x86_64/bin/wasmcloud
+    - run: ./x86_64/bin/wash --version
+    - run: ./x86_64/bin/wasmcloud --version
+    - run: mkdir -p ./bin
+    - run: lipo -create ./aarch64/bin/wash ./x86_64/bin/wash -output ./bin/wash-universal-darwin
+    - run: lipo -create ./aarch64/bin/wasmcloud ./x86_64/bin/wasmcloud -output ./bin/wasmcloud-universal-darwin
+    - run: chmod +x ./wash-universal-darwin
     - run: chmod +x ./wasmcloud-universal-darwin
-    - run: ./wasmcloud-universal-darwin --version
+    - run: ./bin/wash-universal-darwin --version
+    - run: ./bin/wasmcloud-universal-darwin --version
     - uses: actions/upload-artifact@v3
       with:
         name: wasmcloud-universal-darwin
-        path: wasmcloud-universal-darwin
+        path: bin
 
   test-linux:
     runs-on: ubuntu-22.04
@@ -103,8 +120,10 @@ jobs:
     - uses: actions/download-artifact@v3
       with:
         name: wasmcloud-x86_64-unknown-linux-musl
-    - run: chmod +x ./wasmcloud-x86_64-unknown-linux-musl
-    - run: ./wasmcloud-x86_64-unknown-linux-musl --version
+    - run: chmod +x ./bin/wash
+    - run: chmod +x ./bin/wasmcloud
+    - run: ./bin/wash --version
+    - run: ./bin/wasmcloud --version
 
   test-windows:
     runs-on: windows-2022
@@ -113,7 +132,7 @@ jobs:
     - uses: actions/download-artifact@v3
       with:
         name: wasmcloud-x86_64-pc-windows-gnu
-    - run: .\wasmcloud-x86_64-pc-windows-gnu --version
+    - run: .\bin\wasmcloud.exe --version
 
   cargo:
     strategy:
@@ -167,7 +186,7 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-    if: ${{ github.ref == 'refs/heads/main' }}
+    if: github.ref == 'refs/heads/main'
     steps:
     - uses: actions/deploy-pages@v2.0.4
       id: deployment
@@ -176,15 +195,31 @@ jobs:
     runs-on: ubuntu-22.04
     permissions:
       packages: write
-    needs: build-bin
+    needs:
+    - build-bin
+    - test-linux
     if: ${{ github.event_name != 'pull_request' && github.event_name != 'merge_group' }}
+    env:
+      # Annotations cause issues with the image metadata
+      # as displayed on GitHub packages page for the repo ('unknown/unknown')
+      #
+      # See: https://github.com/orgs/community/discussions/45969
+      BUILDX_NO_DEFAULT_ATTESTATIONS: 1
     steps:
     - uses: actions/checkout@v4.1.1
     - uses: ./.github/actions/install-nix
+      if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main'
       with: 
         cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+    - name: Set up QEMU
+      if: startsWith(github.ref, 'refs/tags/wash-cli-v') || github.ref == 'refs/heads/main'
+      uses: docker/setup-qemu-action@v3
+    - name: Set up Docker Buildx
+      if: startsWith(github.ref, 'refs/tags/wash-cli-v') || github.ref == 'refs/heads/main'
+      uses: docker/setup-buildx-action@v3
 
     - name: Extract tag context
+      if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main'
       id: ctx
       run: |
         echo 'package=${GITHUB_REPOSITORY,,}' >> $GITHUB_OUTPUT
@@ -192,7 +227,7 @@ jobs:
         echo 'version=${GITHUB_REF_NAME#v}' >> $GITHUB_OUTPUT
 
     - name: Login to AzureCR
-      if: startswith(github.ref, 'refs/tags/v')
+      if: startswith(github.ref, 'refs/tags/v') || startswith(github.ref, 'refs/tags/wash-cli-v')
       uses: azure/docker-login@v1
       with:
         login-server: ${{ secrets.AZURECR_PUSH_URL }}
@@ -207,17 +242,19 @@ jobs:
         password: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Login to DockerHub
-      if: startswith(github.ref, 'refs/tags/v')
+      if: startswith(github.ref, 'refs/tags/v') || startswith(github.ref, 'refs/tags/wash-cli-v')
       uses: docker/login-action@v3
       with:
         username: ${{ secrets.DOCKERHUB_PUSH_USER }}
         password: ${{ secrets.DOCKERHUB_PUSH_PASSWORD }}
 
-    - run: |
+    - if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main'
+      run: |
         nix run -L .#build-wasmcloud-oci-debian wasmcloud
         nix profile install --inputs-from . 'nixpkgs#buildah'
 
-    - name: Push commit rev
+    - name: Push wasmCloud commit rev
+      if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main'
       run: |
         buildah manifest push --storage-driver=vfs --all --format 'v2s2' wasmcloud docker://ghcr.io/${{ steps.ctx.outputs.package }}:${{ github.sha }}
         buildah manifest push --storage-driver=vfs --all --format 'v2s2' wasmcloud docker://ghcr.io/${{ steps.ctx.outputs.package }}:${{ steps.ctx.outputs.sha_short }}
@@ -225,7 +262,7 @@ jobs:
         docker run ghcr.io/${{ steps.ctx.outputs.package }}:${{ github.sha }} wasmcloud --version
         docker run ghcr.io/${{ steps.ctx.outputs.package }}:${{ steps.ctx.outputs.sha_short }} wasmcloud --version
 
-    - name: Push tag
+    - name: Push wasmCloud tag
       if: startswith(github.ref, 'refs/tags/v')
       run: |
         buildah manifest push --storage-driver=vfs --all --format 'v2s2' wasmcloud docker://${{ steps.ctx.outputs.package }}:${{ steps.ctx.outputs.version }}
@@ -236,7 +273,7 @@ jobs:
         docker run ghcr.io/${{ steps.ctx.outputs.package }}:${{ steps.ctx.outputs.version }} wasmcloud --version
         docker run wasmcloud.azurecr.io/${{ steps.ctx.outputs.package }}:${{ steps.ctx.outputs.version }} wasmcloud --version
 
-    - name: Push latest tag
+    - name: Push latest wasmCloud tag
       if: startswith(github.ref, 'refs/tags/v') && !contains(github.ref, 'rc')
       run: |
         buildah manifest push --storage-driver=vfs --all --format 'v2s2' wasmcloud docker://${{ steps.ctx.outputs.package }}:latest
@@ -247,8 +284,62 @@ jobs:
         docker run ghcr.io/${{ steps.ctx.outputs.package }}:latest wasmcloud --version
         docker run wasmcloud.azurecr.io/${{ steps.ctx.outputs.package }}:latest wasmcloud --version
 
+    - name: Extract wash tag context
+      if: startsWith(github.ref, 'refs/tags/wash-cli-v')
+      shell: bash
+      run: echo "RELEASE_VERSION=${GITHUB_REF/refs\/tags\//}" >> $GITHUB_ENV
+
+    - name: Extract wash build context
+      if: github.ref == 'refs/heads/main'
+      shell: bash
+      run: echo "RELEASE_VERSION=canary" >> $GITHUB_ENV
+
+    - name: Output wash Version
+      id: wash-ctx
+      run: echo "version=$RELEASE_VERSION" >> $GITHUB_OUTPUT
+
+    # Extract docker metadata
+    - name: Configure `wash` Docker metadata
+      if: startsWith(github.ref, 'refs/tags/wash-cli-v') || github.ref == 'refs/heads/main'
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: |
+          wasmcloud/wash
+          wasmcloud.azurecr.io/wash
+          ghcr.io/wasmcloud/wash
+        tags: |
+          type=semver,pattern={{version}}
+          type=sha
+        flavor: |
+          latest=auto
+        labels: |
+          org.opencontainers.image.title=wash
+          org.opencontainers.image.description=WAsmcloud SHell
+          org.opencontainers.image.vendor=wasmCloud
+          org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          org.opencontainers.image.version=${{ steps.wash-ctx.outputs.version }}
+
+    # Build the docker image
+    - name: Build and push `wash` Docker image
+      if: startsWith(github.ref, 'refs/tags/wash-cli-v') || github.ref == 'refs/heads/main'
+      id: wash_docker_build
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: "Dockerfile.wash"
+        labels: ${{ steps.meta.outputs.labels }}
+        platforms: linux/amd64,linux/arm64
+        push: ${{ github.repository == 'wasmCloud/wasmCloud' }}
+        tags: ${{ steps.meta.outputs.tags }}
+
+    # Display image digest
+    - name: Image digest
+      if: startsWith(github.ref, 'refs/tags/wash-cli-v') || github.ref == 'refs/heads/main'
+      run: echo ${{ steps.wash_docker_build.outputs.digest }}
+
   release:
-    if: startsWith(github.ref, 'refs/tags/v') && github.event_name == 'push'
+    if: (startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/wash-v')) && github.event_name == 'push'
     needs:
     - build-bin
     - build-doc
@@ -264,41 +355,109 @@ jobs:
     - uses: actions/checkout@v4.1.1
     - uses: actions/download-artifact@v3
       with:
-        name: wasmcloud-aarch64-apple-darwin
-    - uses: actions/download-artifact@v3
-      with:
-        name: wasmcloud-aarch64-linux-android
-    - uses: actions/download-artifact@v3
-      with:
-        name: wasmcloud-aarch64-unknown-linux-musl
-    - uses: actions/download-artifact@v3
-      with:
-        name: wasmcloud-universal-darwin
-    - uses: actions/download-artifact@v3
-      with:
-        name: wasmcloud-x86_64-apple-darwin
-    - uses: actions/download-artifact@v3
-      with:
-        name: wasmcloud-x86_64-pc-windows-gnu
-    - uses: actions/download-artifact@v3
-      with:
-        name: wasmcloud-x86_64-unknown-linux-musl
-
-    - run: chmod +x ./wasmcloud-*
+        path: artifacts
+    - run: |
+        for dir in ./artifacts/wasmcloud-*; do
+          target=${dir#./artifacts/wasmcloud-}
+          for bin in ${dir}/wasmcloud-${target}/bin/*; do
+            chmod +x ${bin}
+            case "$bin" in
+              *.exe)
+                name="${bin#.exe}"
+                mkdir -p ${name}
+                do mv ${bin} ./${name}/${bin#.exe}-${target}.exe
+              ;;
+              *)
+                mkdir -p ${bin}
+                do mv ${bin} ./${bin}/${bin}-${target}
+              ;;
+            esac
+          done
+        done
 
     - uses: softprops/action-gh-release@v1
+      if: startsWith(github.ref, 'refs/tags/v')
       with:
         draft: true
         prerelease: true
         generate_release_notes: true
-        files: |
-          wasmcloud-aarch64-apple-darwin
-          wasmcloud-aarch64-linux-android
-          wasmcloud-aarch64-unknown-linux-musl
-          wasmcloud-universal-darwin
-          wasmcloud-x86_64-apple-darwin
-          wasmcloud-x86_64-pc-windows-gnu
-          wasmcloud-x86_64-unknown-linux-musl
+        files: wasmcloud/*
+
+    - uses: softprops/action-gh-release@v1
+      if: startsWith(github.ref, 'refs/tags/wash-cli-v')
+      with:
+        draft: true
+        prerelease: true
+        generate_release_notes: true
+        files: wash/*
+
+  snapcraft:
+    if: startsWith(github.ref, 'refs/tags/wash-cli-v') && github.event_name == 'push'
+    needs: cargo
+    runs-on: ubuntu-22.04
+    steps:
+    - uses: actions/checkout@v4.1.1
+      
+    - uses: snapcore/action-build@v1
+      id: build
+      with:
+        path: ./crates/wash-cli
+    - uses: snapcore/action-publish@v1
+      env:
+        SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAP_STORE_LOGIN }}
+      with:
+        snap: ${{ steps.build.outputs.snap }}
+        release: edge
+
+  nfpm:
+    if: startsWith(github.ref, 'refs/tags/wash-cli-v') && github.event_name == 'push'
+    needs:
+    - cargo
+    - build-bin
+    - test-linux
+    runs-on: ubuntu-22.04
+    steps:
+    - uses: actions/checkout@v4.1.1
+      
+    - uses: ./.github/actions/install-nix
+      with: 
+        cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+    - name: Install NFPM
+      run: nix profile install -L --inputs-from . 'nixpkgs#nfpm'
+
+    - uses: actions/download-artifact@v3
+      with:
+        name: wasmcloud-aarch64-unknown-linux-musl
+        path: ./crates/wash-cli/aarch64
+    - uses: actions/download-artifact@v3
+      with:
+        name: wasmcloud-x86_64-unknown-linux-musl
+        path: ./crates/wash-cli/x86_64
+
+    - name: Build `deb` and `rpm`
+      working-directory: ./crates/wash-cli
+      run: |
+        export VERSION=$(echo $REF | cut -d/ -f3)
+        nfpm pkg --packager deb -f build/nfpm.amd64.yaml
+        nfpm pkg --packager deb -f build/nfpm.arm64.yaml
+        nfpm pkg --packager rpm -f build/nfpm.amd64.yaml
+        nfpm pkg --packager rpm -f build/nfpm.arm64.yaml
+    - name: Push `deb`
+      working-directory: ./crates/wash-cli
+      run: |
+        debs=(35 203 206 207 210 215 219 220 221 233 235 237 261 266)
+        for distro_version in "${debs[@]}"; do
+          curl -F "package[distro_version_id]=${distro_version}" -F "package[package_file]=@$(ls wash_*_amd64.deb)" https://$PACKAGECLOUD_TOKEN:@packagecloud.io/api/v1/repos/wasmcloud/core/packages.json;
+          curl -F "package[distro_version_id]=${distro_version}" -F "package[package_file]=@$(ls wash_*_arm64.deb)" https://$PACKAGECLOUD_TOKEN:@packagecloud.io/api/v1/repos/wasmcloud/core/packages.json;
+        done
+    - name: Push `rpm`
+      working-directory: ./crates/wash-cli
+      run: |
+        rpms=(194 204 209 216 226 231 236 239 240 244 260 273)
+        for distro_version in "${rpms[@]}"; do 
+          curl -F "package[distro_version_id]=${distro_version}" -F "package[package_file]=@$(ls wash-*.aarch64.rpm)" https://$PACKAGECLOUD_TOKEN:@packagecloud.io/api/v1/repos/wasmcloud/core/packages.json;
+          curl -F "package[distro_version_id]=${distro_version}" -F "package[package_file]=@$(ls wash-*.x86_64.rpm)" https://$PACKAGECLOUD_TOKEN:@packagecloud.io/api/v1/repos/wasmcloud/core/packages.json;
+        done
 
   crates:
     strategy:
@@ -306,6 +465,7 @@ jobs:
         crate:
         - provider-archive
         - wascap
+        - wash-cli
 
     if: startsWith(github.ref, 'refs/tags/') && github.event_name == 'push'
     needs: cargo

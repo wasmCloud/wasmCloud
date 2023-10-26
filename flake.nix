@@ -12,62 +12,81 @@
     "cache.garnix.io:CTFPyKSLcx5RMJKfLo5EEPUObbA78b0YQ2DTCJXqr9g="
   ];
 
+  inputs.nixify.inputs.nixlib.follows = "nixlib";
   inputs.nixify.url = github:rvolosatovs/nixify;
-  inputs.wash.url = github:wasmCloud/wash/v0.21.1;
+  inputs.nixlib.url = github:nix-community/nixpkgs.lib;
   inputs.wasmcloud-component-adapters.inputs.nixify.follows = "nixify";
   inputs.wasmcloud-component-adapters.url = github:wasmCloud/wasmcloud-component-adapters/v0.3.0;
-  inputs.wit-deps.inputs.nixify.follows = "nixify"; # TODO: drop once updated upstream
+  inputs.wit-deps.inputs.nixify.follows = "nixify";
+  inputs.wit-deps.inputs.nixlib.follows = "nixlib";
   inputs.wit-deps.url = github:bytecodealliance/wit-deps/v0.3.3;
 
   outputs = {
     nixify,
-    wash,
+    nixlib,
     wasmcloud-component-adapters,
     wit-deps,
     ...
   }:
+    with builtins;
+    with nixlib.lib;
     with nixify.lib;
       rust.mkFlake {
         src = ./.;
 
         overlays = [
-          wash.overlays.default
           wit-deps.overlays.default
         ];
 
-        excludePaths = [
-          ".devcontainer"
-          ".envrc"
-          ".github"
-          ".gitignore"
-          "ADOPTERS.md"
-          "adr"
-          "awesome-wasmcloud"
-          "CODE_OF_CONDUCT.md"
-          "CODEOWNERS"
-          "CONTRIBUTING.md"
-          "CONTRIBUTION_LADDER.md"
-          "flake.nix"
-          "garnix.yaml"
-          "GOVERNANCE.md"
-          "LICENSE"
-          "OWNERS"
-          "README.md"
-          "ROADMAP.md"
-          "rust-toolchain.toml"
-          "SECURITY.md"
-        ];
+        excludePaths = let
+          washboardExclude = map (name: "crates/wash-cli/washboard/${name}") (remove "dist" (attrNames (readDir ./crates/wash-cli/washboard)));
+        in
+          [
+            ".devcontainer"
+            ".envrc"
+            ".github"
+            ".gitignore"
+            "ADOPTERS.md"
+            "adr"
+            "awesome-wasmcloud"
+            "build"
+            "chart"
+            "CODE_OF_CONDUCT.md"
+            "CODEOWNERS"
+            "Completions.md"
+            "CONTRIBUTING.md"
+            "CONTRIBUTION_LADDER.md"
+            "flake.nix"
+            "garnix.yaml"
+            "GOVERNANCE.md"
+            "LICENSE"
+            "OWNERS"
+            "README.md"
+            "ROADMAP.md"
+            "rust-toolchain.toml"
+            "sample-manifest.yaml"
+            "SECURITY.md"
+            "snap"
+            "tools"
+          ]
+          ++ washboardExclude;
 
         doCheck = false; # testing is performed in checks via `nextest`
+
+        targets.armv7-unknown-linux-musleabihf = false;
+        targets.wasm32-wasi = false;
+
+        build.workspace = true;
 
         clippy.allTargets = true;
         clippy.deny = ["warnings"];
         clippy.workspace = true;
 
-        targets.armv7-unknown-linux-musleabihf = false;
-        targets.wasm32-wasi = false;
-
         test.allTargets = true;
+        test.excludes = [
+          "wash-cli"
+          "wash-lib"
+        ];
         test.workspace = true;
 
         buildOverrides = {
@@ -137,6 +156,10 @@
 
               preCheck =
                 preCheck
+                + ''
+                  export HOME=''${HOME:- "''${TMPDIR}/home"}
+                  export GOCACHE=$TMPDIR/go-cache
+                ''
                 # See https://github.com/nextest-rs/nextest/issues/267
                 + optionalString (pkgs.stdenv.hostPlatform.isDarwin && stdenv.hostPlatform.isDarwin) ''
                   export DYLD_FALLBACK_LIBRARY_PATH=$(rustc --print sysroot)/lib
@@ -268,7 +291,7 @@
               pkgs.nats-server
               pkgs.protobuf # prost build dependency
               pkgs.redis
-              pkgs.wash
+              pkgs.tinygo
               pkgs.wit-deps
             ];
           }

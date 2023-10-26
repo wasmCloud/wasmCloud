@@ -1,0 +1,103 @@
+[package]
+name = "wash-lib"
+version = "0.12.1"
+categories = ["wasm", "wasmcloud"]
+description = "wasmCloud Shell (wash) libraries"
+keywords = ["webassembly", "wasmcloud", "wash", "cli"]
+readme = "README.md"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[badges]
+maintenance = { status = "actively-developed" }
+
+[features]
+default = ["start", "parser", "nats"]
+start = ["semver"]
+parser = ["config", "semver", "serde", "serde_json"]
+cli = [
+    "clap",
+    "term-table",
+    "console",
+    "dialoguer",
+    "heck",
+    "ignore",
+    "indicatif",
+    "path-absolutize",
+]
+nats = ["async-nats", "wadm"]
+docs = ["wasmcloud-component-adapters/docs"]
+
+[package.metadata.docs.rs]
+features = ["start", "parser", "nats", "docs"]
+
+[dependencies]
+anyhow = { workspace = true }
+async-compression = { workspace = true, features = ["tokio", "gzip"] }
+async-nats = { workspace = true, optional = true }
+bytes = { workspace = true, features = ["serde"] }
+cargo_metadata = { workspace = true }
+cargo_toml = { workspace = true }
+chrono = { workspace = true }
+clap = { workspace = true, features = ["derive", "env"], optional = true }
+cloudevents-sdk = { workspace = true }
+command-group = { workspace = true, features = ["with-tokio"] }
+config = { workspace = true, features = ["toml"], optional = true }
+console = { workspace = true, optional = true }
+dialoguer = { workspace = true, optional = true }
+dirs = { workspace = true }
+futures = { workspace = true }
+heck = { workspace = true, optional = true }
+ignore = { workspace = true, optional = true }
+indicatif = { workspace = true, optional = true }
+log = { workspace = true }
+nkeys = { workspace = true }
+oci-distribution = { workspace = true, features = ["rustls-tls"] }
+path-absolutize = { workspace = true, features = ["once_cell_cache"], optional = true }
+provider-archive = { workspace = true }
+regex = { workspace = true }
+reqwest = { workspace = true, features = ["json", "rustls-tls", "stream"] }
+rmp-serde = { workspace = true }
+semver = { workspace = true, features = ["serde"], optional = true }
+serde = { workspace = true, features = ["derive"], optional = true }
+serde-transcode = { workspace = true }
+serde_cbor = { workspace = true, features = ["std"] }
+serde_json = { workspace = true, optional = true }
+serde_with = { workspace = true, features = ["macros"] }
+tempfile = { workspace = true }
+term-table = { workspace = true, optional = true }
+thiserror = { workspace = true }
+time = { workspace = true }
+tokio = { workspace = true, features = ["process", "fs", "io-std"] }
+tokio-stream = { workspace = true }
+tokio-tar = { workspace = true }
+tokio-util = { workspace = true }
+toml = { workspace = true }
+url = { workspace = true }
+wadm = { workspace = true, optional = true }
+walkdir = { workspace = true }
+wascap = { workspace = true }
+wasm-encoder = { workspace = true }
+wasmbus-rpc = { workspace = true }
+wasmcloud-component-adapters = { workspace = true }
+wasmcloud-control-interface = { workspace = true }
+wat = { workspace = true }
+weld-codegen = { workspace = true, features = ["wasmbus"] }
+wit-bindgen-core = { workspace = true }
+wit-bindgen-go = { workspace = true }
+wit-component = { workspace = true }
+wit-parser = { workspace = true }
+
+[build-dependencies]
+tokio = { workspace = true }
+
+[dev-dependencies]
+claims = { workspace = true }
+dirs = { workspace = true }
+tempfile = { workspace = true }
+test-case = { workspace = true }
+tokio = { workspace = true }
+wasmparser = { workspace = true }

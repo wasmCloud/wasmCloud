@@ -1,0 +1,76 @@
+[package]
+name = "wash-cli"
+version = "0.22.0"
+categories = ["wasm", "command-line-utilities"]
+description = "wasmCloud Shell (wash) CLI tool"
+keywords = ["webassembly", "wasmcloud", "wash", "cli"]
+readme = "README.md"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[badges]
+maintenance = { status = "actively-developed" }
+
+[dependencies]
+anyhow = { workspace = true, features = ["backtrace"] }
+async-nats = { workspace = true }
+atelier_core = { workspace = true }
+bytes = { workspace = true }
+cargo_atelier = { workspace = true, features = ["color"] }
+clap = { workspace = true, features = ["derive", "env"] }
+clap_complete = { workspace = true }
+cloudevents-sdk = { workspace = true }
+console = { workspace = true }
+dirs = { workspace = true }
+env_logger = { workspace = true }
+futures = { workspace = true }
+indicatif = { workspace = true }
+log = { workspace = true }
+nix = { workspace = true, features = ["signal"] }
+nkeys = { workspace = true }
+notify = { workspace = true }
+oci-distribution = { workspace = true, features = ["rustls-tls"] }
+once_cell = { workspace = true }
+provider-archive = { workspace = true }
+regex = { workspace = true }
+rmp-serde = { workspace = true }
+rmpv = { workspace = true }
+rust-embed = { workspace = true }
+sanitize-filename = { workspace = true }
+semver = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true, features = ["raw_value"] }
+serde_with = { workspace = true }
+serde_yaml = { workspace = true }
+sha2 = { workspace = true }
+term-table = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+toml = { workspace = true }
+url = { workspace = true }
+wadm = { workspace = true }
+warp = { workspace = true }
+warp-embed = { workspace = true }
+wascap = { workspace = true }
+wash-lib = { workspace = true, features = ["cli", "parser", "nats", "start"] }
+wasmbus-rpc = { workspace = true }
+wasmcloud-control-interface = { workspace = true }
+wasmcloud-test-util = { workspace = true }
+weld-codegen = { workspace = true, features = ["wasmbus"] }
+which = { workspace = true }
+
+[dev-dependencies]
+assert-json-diff = { workspace = true }
+rand = { workspace = true }
+serial_test = { workspace = true }
+sysinfo = { workspace = true }
+tempfile = { workspace = true }
+
+[build-dependencies]
+tokio = { workspace = true, features = ["macros", "net"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+notify = { workspace = true, features = ["macos_fsevent"] }
