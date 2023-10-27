@@ -19,11 +19,11 @@
     "advisory-db_2": {
       "flake": false,
       "locked": {
-        "lastModified": 1694620341,
-        "narHash": "sha256-5hV38PQ1roGn5oxWdmv7YRp684/9hypW/7nzcdLARZI=",
+        "lastModified": 1695911503,
+        "narHash": "sha256-3Jb9jRuYnB3U0OKZ0SRr1OGzznb+jAOMCd0ouYxKA60=",
         "owner": "rustsec",
         "repo": "advisory-db",
-        "rev": "12719bd23b88573977c7ad7fe818b05e8fbc33b3",
+        "rev": "9b6403d856f71291aabb91511b53fa79c2758745",
         "type": "github"
       },
       "original": {
@@ -223,11 +223,11 @@
         "rust-analyzer-src": "rust-analyzer-src_3"
       },
       "locked": {
-        "lastModified": 1695190922,
-        "narHash": "sha256-X4pQTj34pNbQK8MMIxYeuuOniNzzI5A79amorTmMloQ=",
+        "lastModified": 1695882118,
+        "narHash": "sha256-hRJn6+hgRl3lGhhkHyDSJJtTv566PDlwR1kJ/ORDABI=",
         "owner": "nix-community",
         "repo": "fenix",
-        "rev": "a00ca48f236fc574e6932d78e27f25f21006fb1a",
+        "rev": "8fd2f98fdf23c372cbac5a4ab79a02541f0bd475",
         "type": "github"
       },
       "original": {
@@ -406,17 +406,13 @@
     "macos-sdk_2": {
       "flake": false,
       "locked": {
-        "lastModified": 1656095854,
-        "narHash": "sha256-Bksziu35r3/t7qNl6P/LXc/UZDF1zbXCMMvEarPFGUs=",
-        "owner": "hexops-graveyard",
-        "repo": "sdk-macos-12.0",
-        "rev": "14613b4917c7059dad8f3789f55bb13a2548f83d",
-        "type": "github"
+        "narHash": "sha256-TEvVJy+NMPyzgWSk/6S29ZMQR+ICFxSdS3tw247uhFc=",
+        "type": "tarball",
+        "url": "https://github.com/roblabla/MacOSX-SDKs/releases/download/macosx14.0/MacOSX14.0.sdk.tar.xz"
       },
       "original": {
-        "owner": "hexops-graveyard",
-        "repo": "sdk-macos-12.0",
-        "type": "github"
+        "type": "tarball",
+        "url": "https://github.com/roblabla/MacOSX-SDKs/releases/download/macosx14.0/MacOSX14.0.sdk.tar.xz"
       }
     },
     "nix-filter": {
@@ -614,11 +610,11 @@
         "rust-overlay": "rust-overlay_4"
       },
       "locked": {
-        "lastModified": 1695234380,
-        "narHash": "sha256-ZQtac0no6fTRarR7U+O7/K+8fUQPGtQ4vQ7pArwvCyc=",
+        "lastModified": 1695931678,
+        "narHash": "sha256-21mE4qytFh0L2YniJguHOtEZhn2Gp6OR7dvDLAGNGf8=",
         "owner": "rvolosatovs",
         "repo": "nixify",
-        "rev": "def5f979a51fae1859799ceed8e624a572a0a23b",
+        "rev": "90b58578f5dea686486051f7c3d72f525c81f91e",
         "type": "github"
       },
       "original": {
@@ -728,11 +724,11 @@
     },
     "nixlib_6": {
       "locked": {
-        "lastModified": 1694911725,
-        "narHash": "sha256-8YqI+YU1DGclEjHsnrrGfqsQg3Wyga1DfTbJrN3Ud0c=",
+        "lastModified": 1695516402,
+        "narHash": "sha256-pL7m8iu1OLs/7ywhh+Q8ltPgmtwbMpi7484yr32zgYI=",
         "owner": "nix-community",
         "repo": "nixpkgs.lib",
-        "rev": "819180647f428a3826bfc917a54449da1e532ce0",
+        "rev": "01fc4cd75e577ac00e7c50b7e5f16cd9b6d633e8",
         "type": "github"
       },
       "original": {
@@ -823,11 +819,11 @@
     },
     "nixpkgs_6": {
       "locked": {
-        "lastModified": 1695106126,
-        "narHash": "sha256-5BDOEo5miK+46ByqhooW32viYzDUmHrw++UK8zkMbPg=",
+        "lastModified": 1695825837,
+        "narHash": "sha256-4Ne11kNRnQsmSJCRSSNkFRSnHC4Y5gPDBIQGjjPfJiU=",
         "owner": "nixos",
         "repo": "nixpkgs",
-        "rev": "53d337b63c8f9d7e0f8709cae0008a9655bee33e",
+        "rev": "5cfafa12d57374f48bcc36fda3274ada276cf69e",
         "type": "github"
       },
       "original": {
@@ -880,11 +876,11 @@
     "rust-analyzer-src_3": {
       "flake": false,
       "locked": {
-        "lastModified": 1695155769,
-        "narHash": "sha256-1eoWaMkGpqADYaMIabnKiMzxHNhoO1L7Z2XPHJgVn4Y=",
+        "lastModified": 1695834317,
+        "narHash": "sha256-UNIrnTUD3c4LZ/3n3bdUhFhIL3PmVulrDteFFbQqEoE=",
         "owner": "rust-lang",
         "repo": "rust-analyzer",
-        "rev": "0427a239eba36a87914dca2c7760f125b6d8fbb0",
+        "rev": "f93b6acb7ff149c8dda6d444a9b32ea9240af382",
         "type": "github"
       },
       "original": {
@@ -1010,11 +1006,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1695175880,
-        "narHash": "sha256-TBR5/K3jkrd+U5mjxvRvUhlcT1Hw9jFywz1TjAGZRm4=",
+        "lastModified": 1695867081,
+        "narHash": "sha256-TP1ocrZSKvfGgpdjw7bUd+jEuF1/OBfuKHvK5EEAhww=",
         "owner": "oxalica",
         "repo": "rust-overlay",
-        "rev": "e054ca37ee416efe9d8fc72d249ec332ef74b6d4",
+        "rev": "9d8f850c3de67597c65271f3088aced0a671677f",
         "type": "github"
       },
       "original": {
@@ -1056,25 +1052,25 @@
     "wasi-preview1-command-component-adapter": {
       "flake": false,
       "locked": {
-        "narHash": "sha256-1quEHhD9OSI7v5uC/hGN8J1VQA8VljKpVJ/v1rjWcb4=",
+        "narHash": "sha256-0gfxy3e/lfw4+07Kga14UWrPV6cUnkoGGfK0NG/ye18=",
         "type": "file",
-        "url": "https://github.com/bytecodealliance/wasmtime/releases/download/v13.0.0/wasi_snapshot_preview1.command.wasm"
+        "url": "https://github.com/bytecodealliance/wasmtime/releases/download/v14.0.0/wasi_snapshot_preview1.command.wasm"
       },
       "original": {
         "type": "file",
-        "url": "https://github.com/bytecodealliance/wasmtime/releases/download/v13.0.0/wasi_snapshot_preview1.command.wasm"
+        "url": "https://github.com/bytecodealliance/wasmtime/releases/download/v14.0.0/wasi_snapshot_preview1.command.wasm"
       }
     },
     "wasi-preview1-reactor-component-adapter": {
       "flake": false,
       "locked": {
-        "narHash": "sha256-/fP00hTtaiXu6aWBMtVyUvjc6TIXZdrV6Nwnm9TMjds=",
+        "narHash": "sha256-QcUo2VniVO4ypCb1HbGfDno8flxk9bluLpnwTlIgGaU=",
         "type": "file",
-        "url": "https://github.com/bytecodealliance/wasmtime/releases/download/v13.0.0/wasi_snapshot_preview1.reactor.wasm"
+        "url": "https://github.com/bytecodealliance/wasmtime/releases/download/v14.0.0/wasi_snapshot_preview1.reactor.wasm"
       },
       "original": {
         "type": "file",
-        "url": "https://github.com/bytecodealliance/wasmtime/releases/download/v13.0.0/wasi_snapshot_preview1.reactor.wasm"
+        "url": "https://github.com/bytecodealliance/wasmtime/releases/download/v14.0.0/wasi_snapshot_preview1.reactor.wasm"
       }
     },
     "wasmcloud-component-adapters": {
@@ -1084,16 +1080,16 @@
         "wasi-preview1-reactor-component-adapter": "wasi-preview1-reactor-component-adapter"
       },
       "locked": {
-        "lastModified": 1696460780,
-        "narHash": "sha256-xg6m9O1dgbgb3jQQWAaD/JulCPD3re8cJyn+qIJDREw=",
+        "lastModified": 1698088287,
+        "narHash": "sha256-CtjI0VH1PaH70nIwR8XGdpPmBQL9Hep5UoFmiElKWtc=",
         "owner": "wasmCloud",
         "repo": "wasmcloud-component-adapters",
-        "rev": "dd8197ed8e854e3603bbeab6f25118df262add14",
+        "rev": "9709be3ed53dd89a8b03ae389da2a7e1fdba4cba",
         "type": "github"
       },
       "original": {
         "owner": "wasmCloud",
-        "ref": "v0.2.3",
+        "ref": "v0.3.0",
         "repo": "wasmcloud-component-adapters",
         "type": "github"
       }

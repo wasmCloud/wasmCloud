@@ -1,6 +1,6 @@
 [package]
 name = "wash-cli"
-version = "0.21.1"
+version = "0.22.0"
 authors = ["wasmCloud Team"]
 categories = ["wasm", "command-line-utilities"]
 description = "wasmcloud Shell (wash) CLI tool"
@@ -63,6 +63,8 @@ wasmcloud-control-interface = { workspace = true }
 wasmcloud-test-util = { workspace = true }
 weld-codegen = { workspace = true }
 which = { workspace = true }
+wit-bindgen-core = { workspace = true }
+wit-bindgen-go = { workspace = true }
 
 [dev-dependencies]
 assert-json-diff = { workspace = true }
@@ -99,7 +101,7 @@ cargo_toml = "0.15.3"
 chrono = "0.4.31"
 claims = "0.7.1"
 clap = "4"
-clap_complete = "4.4.3"
+clap_complete = "4.4.4"
 cloudevents-sdk = "0.7.0"
 command-group = "1.0.8"
 config = "0.13.1"
@@ -134,7 +136,7 @@ semver = "1.0.20"
 serde = "1.0"
 serde_json = "1.0.107"
 serde_with = "2.3.3"
-serde_yaml = "0.9.25"
+serde_yaml = "0.9.27"
 serial_test = "0.9.0"
 sha2 = "0.10.8"
 sysinfo = "0.27"
@@ -146,20 +148,23 @@ thiserror = "1.0"
 tokio = { version = "1.33.0", default-features = false, features = ["fs"] }
 tokio-stream = "0.1"
 tokio-tar = "0.3"
-tokio-util = "0.7.9"
+tokio-util = "0.7.10"
 toml = "0.7.8"
 url = { version = "2.4.1", features = ["serde"] }
 wadm = "0.7.1"
 walkdir = "2.4"
 wascap = "0.11.2"
-wasm-encoder = "0.33.2"
-wasmcloud-component-adapters = { version = "0.2.4", default-features = false }
 wash-lib = { version = "0.12", path = "./crates/wash-lib" }
+wasm-encoder = "0.33.2"
 wasmbus-rpc = "0.15.0"
+wasmcloud-component-adapters = "0.3.0"
 wasmcloud-control-interface = "0.30"
 wasmcloud-test-util = "0.10.0"
-wat = "1.0.76"
+wasmparser = "0.115.0"
+wat = "1.0.77"
 weld-codegen = "0.7.0"
 which = "4.4.0"
-wit-component = "0.14"
-wit-parser = "0.11"
+wit-bindgen-core = "0.13.0"
+wit-bindgen-go = "0.13.0"
+wit-component = "0.16"
+wit-parser = "0.12.1"

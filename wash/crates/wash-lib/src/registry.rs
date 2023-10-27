@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{bail, Result};
 use oci_distribution::manifest::OciImageManifest;
 use oci_distribution::{
     client::{Client, ClientConfig, ClientProtocol, Config, ImageLayer},
@@ -151,9 +151,7 @@ pub async fn pull_oci_artifact(url: String, options: OciPullOptions) -> Result<V
 
     match (digest, image_data.digest) {
         (Some(digest), Some(image_digest)) if digest != image_digest => {
-            return Err(anyhow!(
-                "Image digest did not match provided digest, aborting"
-            ))
+            bail!("image digest did not match provided digest, aborting")
         }
         _ => (),
     };
@@ -251,7 +249,7 @@ fn validate_actor_module(artifact: &[u8]) -> Result<()> {
     match wascap::wasm::extract_claims(artifact) {
         Ok(Some(_token)) => Ok(()),
         Ok(None) => bail!("No capabilities discovered in actor module"),
-        Err(e) => Err(anyhow!("{}", e)),
+        Err(e) => bail!("{}", e),
     }
 }
 

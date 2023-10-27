@@ -38,8 +38,8 @@ build-ui: ## Build the UI from source
 ##@ Testing
 
 test: ## Run unit test suite
-	@$(CARGO) nextest run $(CARGO_TEST_TARGET) --no-fail-fast --bin wash
-	@$(CARGO) nextest run $(CARGO_TEST_TARGET) --no-fail-fast -p wash-lib --features=cli
+	@$(CARGO) nextest run $(TARGET) --no-fail-fast --bin wash
+	@$(CARGO) nextest run $(TARGET) --no-fail-fast -p wash-lib --features=cli
 
 test-wash-ci:
 	@$(CARGO) nextest run --profile ci --workspace --all-features -E 'binary(wash)' -E 'package(wash-lib)'
@@ -49,7 +49,7 @@ test-watch: ## Run unit tests continously, can optionally specify a target test 
 
 test-integration: ## Run the entire integration test suite (with docker compose)
 	@$(DOCKER) compose -f ./tools/docker-compose.yml up --detach
-	@$(CARGO) nextest run --profile integration -E 'kind(test)'
+	@$(CARGO) nextest run $(TARGET) --profile integration -E 'kind(test)' --nocapture
 	@$(DOCKER) compose -f ./tools/docker-compose.yml down
 
 test-integration-ci: ## Run the entire integration test suite only
@@ -59,7 +59,7 @@ test-integration-watch: ## Run integration test suite continuously
 	@$(CARGO) watch -- $(MAKE) test-integration
 
 test-unit: ## Run one or more unit tests
-	@$(CARGO) nextest run $(CARGO_TEST_TARGET)
+	@$(CARGO) nextest run $(TARGET)
 
 test-unit-watch: ## Run tests continuously
 	@$(CARGO) watch -- $(MAKE) test-unit

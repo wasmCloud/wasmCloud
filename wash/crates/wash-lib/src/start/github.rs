@@ -1,6 +1,6 @@
 //! Reusable code for downloading tarballs from GitHub releases
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use async_compression::tokio::bufread::GzipDecoder;
 #[cfg(target_family = "unix")]
 use std::os::unix::prelude::PermissionsExt;
@@ -36,7 +36,7 @@ where
     // Download release tarball
     let body = match reqwest::get(url).await {
         Ok(resp) => resp.bytes().await?,
-        Err(e) => return Err(anyhow!("Failed to request release tarball: {:?}", e)),
+        Err(e) => bail!("Failed to request release tarball: {:?}", e),
     };
     let cursor = Cursor::new(body);
     let mut bin_tarball = Archive::new(Box::new(GzipDecoder::new(cursor)));
@@ -73,9 +73,7 @@ where
         }
     }
 
-    Err(anyhow!(
-        "{bin_name} binary could not be installed, please see logs"
-    ))
+    bail!("{bin_name} binary could not be installed, please see logs")
 }
 
 /// Helper function to determine if the provided binary is present in a directory

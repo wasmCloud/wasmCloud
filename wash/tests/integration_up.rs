@@ -8,7 +8,9 @@ use tokio::{process::Command, time::Duration};
 
 mod common;
 
-use common::{start_nats, wait_for_nats_to_start, wait_for_no_hosts, wait_for_single_host};
+use common::{
+    find_open_port, start_nats, wait_for_nats_to_start, wait_for_no_hosts, wait_for_single_host,
+};
 
 const RGX_ACTOR_START_MSG: &str = r"Actor \[(?P<actor_id>[^]]+)\] \(ref: \[(?P<actor_ref>[^]]+)\]\) started on host \[(?P<host_id>[^]]+)\]";
 
@@ -25,11 +27,12 @@ async fn integration_up_can_start_wasmcloud_and_actor_serial() -> Result<()> {
 
     let host_seed = nkeys::KeyPair::new_server();
 
+    let nats_port = find_open_port().await?;
     let mut up_cmd = Command::new(env!("CARGO_BIN_EXE_wash"))
         .args([
             "up",
             "--nats-port",
-            "5893",
+            nats_port.to_string().as_ref(),
             "-o",
             "json",
             "--detached",
@@ -55,8 +58,9 @@ async fn integration_up_can_start_wasmcloud_and_actor_serial() -> Result<()> {
         Err(_e) => panic!("Unable to parse kill cmd from wash up output"),
     };
 
-    // Wait for a single host to exis
-    let host = wait_for_single_host(5893, Duration::from_secs(10), Duration::from_secs(1)).await?;
+    // Wait for a single host to exist
+    let host =
+        wait_for_single_host(nats_port, Duration::from_secs(10), Duration::from_secs(1)).await?;
 
     let start_echo = Command::new(env!("CARGO_BIN_EXE_wash"))
         .args([
@@ -64,7 +68,7 @@ async fn integration_up_can_start_wasmcloud_and_actor_serial() -> Result<()> {
             "actor",
             "wasmcloud.azurecr.io/echo:0.3.4",
             "--ctl-port",
-            "5893",
+            nats_port.to_string().as_ref(),
             "--timeout-ms",
             "10000", // Wait up to 10 seconds for slowpoke systems
         ])
@@ -90,7 +94,7 @@ async fn integration_up_can_start_wasmcloud_and_actor_serial() -> Result<()> {
         .args(vec![
             down,
             "--ctl-port",
-            "5893",
+            nats_port.to_string().as_ref(),
             "--host-id",
             &host_seed.public_key(),
         ])
@@ -114,7 +118,7 @@ async fn integration_up_can_stop_detached_host_serial() -> Result<()> {
     let dir = test_dir_with_subfolder("can_stop_wasmcloud");
     let path = dir.join("washup.log");
     let stdout = std::fs::File::create(&path).expect("could not create log file for wash up test");
-    let nats_port: u16 = 5894;
+    let nats_port: u16 = find_open_port().await?;
 
     wait_for_no_hosts()
         .await
@@ -184,14 +188,14 @@ async fn integration_up_doesnt_kill_unowned_nats_serial() -> Result<()> {
     let dir = test_dir_with_subfolder("doesnt_kill_unowned_nats");
     let path = dir.join("washup.log");
     let stdout = std::fs::File::create(&path).expect("could not create log file for wash up test");
-    let nats_port: u16 = 5895;
+    let nats_port: u16 = find_open_port().await?;
 
     // Check that there are no host processes running
     wait_for_no_hosts()
         .await
         .context("unexpected wasmcloud instance(s) running")?;
 
-    let mut nats = start_nats(5895, &dir).await?;
+    let mut nats = start_nats(nats_port, &dir).await?;
 
     let mut up_cmd = Command::new(env!("CARGO_BIN_EXE_wash"))
         .args([

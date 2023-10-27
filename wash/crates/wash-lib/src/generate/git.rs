@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use std::{path::PathBuf, process::Stdio};
 use tokio::process::Command;
 
@@ -49,10 +49,10 @@ pub async fn clone_git_template(opts: CloneTemplate) -> Result<()> {
         .wait_with_output()
         .await?;
     if !cmd_out.status.success() {
-        return Err(anyhow!(
+        bail!(
             "git clone error: {}",
             String::from_utf8_lossy(&cmd_out.stderr)
-        ));
+        );
     }
 
     if let Some(sub_folder) = opts.sub_folder {
@@ -65,10 +65,10 @@ pub async fn clone_git_template(opts: CloneTemplate) -> Result<()> {
             .wait_with_output()
             .await?;
         if !cmd_out.status.success() {
-            return Err(anyhow!(
+            bail!(
                 "git sparse-checkout set error: {}",
                 String::from_utf8_lossy(&cmd_out.stderr)
-            ));
+            );
         }
     }
 
@@ -81,10 +81,10 @@ pub async fn clone_git_template(opts: CloneTemplate) -> Result<()> {
         .wait_with_output()
         .await?;
     if !cmd_out.status.success() {
-        return Err(anyhow!(
+        bail!(
             "git checkout error: {}",
             String::from_utf8_lossy(&cmd_out.stderr)
-        ));
+        );
     }
     std::env::set_current_dir(cwd)?;
     Ok(())

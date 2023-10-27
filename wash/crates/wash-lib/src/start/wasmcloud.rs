@@ -1,18 +1,20 @@
 use std::collections::HashMap;
-#[cfg(target_family = "unix")]
-use std::os::unix::prelude::PermissionsExt;
-use std::path::{Path, PathBuf};
-use std::process::Stdio;
 
-use anyhow::{anyhow, Result};
-#[cfg(target_family = "unix")]
-use command_group::AsyncCommandGroup;
+use anyhow::{bail, Result};
 use log::warn;
 use reqwest::StatusCode;
 use tokio::fs::{create_dir_all, metadata, File};
 use tokio::process::{Child, Command};
 use tokio_stream::StreamExt;
 use tokio_util::io::StreamReader;
+
+#[cfg(target_family = "unix")]
+use std::os::unix::prelude::PermissionsExt;
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
+
+#[cfg(target_family = "unix")]
+use command_group::AsyncCommandGroup;
 
 const WASMCLOUD_GITHUB_RELEASE_URL: &str =
     "https://github.com/wasmCloud/wasmCloud/releases/download";
@@ -149,11 +151,11 @@ where
     // to pipe the response body into a file. I'm not sure if there's a better way to do this.
     let download_response = reqwest::get(url.clone()).await?;
     if download_response.status() != StatusCode::OK {
-        return Err(anyhow!(
-            "Failed to download wasmCloud host from {}. Status code: {}",
+        bail!(
+            "failed to download wasmCloud host from {}. Status code: {}",
             url,
             download_response.status()
-        ));
+        );
     }
 
     let burrito_bites_stream = download_response
@@ -184,9 +186,7 @@ where
     // Return success if wasmCloud components exist, error otherwise
     match find_wasmcloud_binary(&dir, version).await {
         Some(path) => Ok(path),
-        None => Err(anyhow!(
-            "wasmCloud was not installed successfully, please see logs"
-        )),
+        None => bail!("wasmCloud was not installed successfully, please see logs"),
     }
 }
 
@@ -269,11 +269,11 @@ fn check_version(version: &str) -> Result<()> {
             warn!("Using prerelease version {} of wasmCloud", version);
             Ok(())
         }
-        Ok(parsed_version) if !version_req.matches(&parsed_version) => Err(anyhow!(
+        Ok(parsed_version) if !version_req.matches(&parsed_version) => bail!(
             "wasmCloud version {} is earlier than the minimum supported version of v{}",
             version,
             MINIMUM_WASMCLOUD_VERSION
-        )),
+        ),
         Ok(_ver) => Ok(()),
         Err(_parse_err) => {
             log::warn!(
@@ -292,28 +292,24 @@ mod test {
         is_bin_installed, start_nats_server, start_wasmcloud_host, NatsConfig, NATS_SERVER_BINARY,
     };
 
-    use anyhow::{bail, Context, Result};
+    use anyhow::{Context, Result};
     use reqwest::StatusCode;
+    use std::net::{Ipv4Addr, SocketAddrV4};
     use std::{collections::HashMap, env::temp_dir};
     use tokio::fs::{create_dir_all, remove_dir_all};
-    use tokio::net::TcpStream;
+    use tokio::net::TcpListener;
     use tokio::time::Duration;
 
     const WASMCLOUD_VERSION: &str = "v0.79.0-rc3";
-    const RANDOM_PORT_RANGE_START: u16 = 5000;
-    const RANDOM_PORT_RANGE_END: u16 = 6000;
-    const LOCALHOST: &str = "127.0.0.1";
 
     /// Returns an open port on the interface, searching within the range endpoints, inclusive
     async fn find_open_port() -> Result<u16> {
-        for i in RANDOM_PORT_RANGE_START..=RANDOM_PORT_RANGE_END {
-            if let Ok(conn) = TcpStream::connect((LOCALHOST, i)).await {
-                drop(conn);
-            } else {
-                return Ok(i);
-            }
-        }
-        bail!("Failed to find open port for host")
+        TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
+            .await
+            .context("failed to bind random port")?
+            .local_addr()
+            .map(|addr| addr.port())
+            .context("failed to get local address from opened TCP socket")
     }
 
     #[tokio::test]
@@ -438,7 +434,7 @@ mod test {
         let mut host_env = HashMap::new();
         host_env.insert("WASMCLOUD_RPC_PORT".to_string(), nats_port.to_string());
         host_env.insert("WASMCLOUD_CTL_PORT".to_string(), nats_port.to_string());
-        host_env.insert("WASMCLOUD_PROV_RPC_PORT".to_string(), nats_port.to_string());
+        host_env.insert("WASMCLOUD_PROV_RPC_PORT".to_string(), nats_port.to_string()); // TODO: remove these after wasmCloud v0.80.0 is released, dropping support for prov_rpc connections
         let mut host_child = start_wasmcloud_host(
             &wasmcloud_binary,
             stdout_log_file,
@@ -472,10 +468,7 @@ mod test {
             loop {
                 match tokio::fs::read_to_string(&startup_log_path).await {
                     Ok(file_contents) => {
-                        if ["host", "started"]
-                            .into_iter()
-                            .all(|l| file_contents.contains(l))
-                        {
+                        if file_contents.contains("wasmCloud host started") {
                             // After wasmcloud says it's ready, it still requires some seconds to start up.
                             tokio::time::sleep(Duration::from_secs(3)).await;
                             break;
@@ -495,7 +488,7 @@ mod test {
         let mut host_env = HashMap::new();
         host_env.insert("WASMCLOUD_RPC_PORT".to_string(), nats_port.to_string());
         host_env.insert("WASMCLOUD_CTL_PORT".to_string(), nats_port.to_string());
-        host_env.insert("WASMCLOUD_PROV_RPC_PORT".to_string(), nats_port.to_string());
+        host_env.insert("WASMCLOUD_PROV_RPC_PORT".to_string(), nats_port.to_string()); // TODO: remove these after wasmCloud v0.80.0 is released, dropping support for prov_rpc connections
         let child_res = start_wasmcloud_host(
             &wasmcloud_binary,
             std::process::Stdio::null(),

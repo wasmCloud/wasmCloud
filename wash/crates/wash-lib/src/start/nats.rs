@@ -1,9 +1,11 @@
-use crate::start::wait_for_server;
-use anyhow::{anyhow, Result};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+
+use anyhow::{bail, Result};
 use tokio::fs::{metadata, write};
 use tokio::process::{Child, Command};
+
+use crate::start::wait_for_server;
 
 use super::download_binary_from_github;
 
@@ -256,11 +258,11 @@ where
     let host_addr = format!("{}:{}", config.host, config.port);
     // If we can connect to the local port, NATS won't be able to listen on that port
     if tokio::net::TcpStream::connect(&host_addr).await.is_ok() {
-        return Err(anyhow!(
-            "Could not start NATS server, a process is already listening on {}:{}",
+        bail!(
+            "could not start NATS server, a process is already listening on {}:{}",
             config.host,
             config.port
-        ));
+        );
     }
     let child = if let Some(parent_path) = bin_path.as_ref().parent() {
         let config_path = parent_path.join(NATS_SERVER_CONF);
@@ -282,9 +284,7 @@ where
             .spawn()
             .map_err(anyhow::Error::from)
     } else {
-        Err(anyhow!(
-            "Could not write config to disk, couldn't find download directory"
-        ))
+        bail!("could not write config to disk, couldn't find download directory")
     }?;
     wait_for_server(&host_addr, "NATS server")
         .await

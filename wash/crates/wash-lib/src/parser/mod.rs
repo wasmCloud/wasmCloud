@@ -1,12 +1,13 @@
 //! Parse wasmcloud.toml files which specify key information for building and signing
 //! WebAssembly modules and native capability provider binaries
 
-use anyhow::{anyhow, bail, Result};
+use std::{fmt::Display, fs, path::PathBuf};
+
+use anyhow::{anyhow, bail, Context, Result};
 use cargo_toml::{Manifest, Product};
 use config::Config;
 use semver::Version;
 use serde::Deserialize;
-use std::{fmt::Display, fs, path::PathBuf};
 
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 #[serde(rename_all = "snake_case")]
@@ -317,17 +318,14 @@ pub fn get_config(opt_path: Option<PathBuf>, use_env: Option<bool>) -> Result<Pr
     let mut path = opt_path.unwrap_or_else(|| PathBuf::from("."));
 
     if !path.exists() {
-        return Err(anyhow!("Path {} does not exist", path.display()));
+        bail!("path {} does not exist", path.display());
     }
 
     path = fs::canonicalize(path)?;
     let (project_path, wasmcloud_path) = if path.is_dir() {
         let wasmcloud_path = path.join("wasmcloud.toml");
         if !wasmcloud_path.is_file() {
-            return Err(anyhow!(
-                "No wasmcloud.toml file found in {}",
-                path.display()
-            ));
+            bail!("no wasmcloud.toml file found in {}", path.display());
         }
         (path, wasmcloud_path)
     } else if path.is_file() {
@@ -338,10 +336,7 @@ pub fn get_config(opt_path: Option<PathBuf>, use_env: Option<bool>) -> Result<Pr
             path,
         )
     } else {
-        return Err(anyhow!(
-            "No wasmcloud.toml file found in {}",
-            path.display()
-        ));
+        bail!("no wasmcloud.toml file found in {}", path.display());
     };
 
     let mut config = Config::builder().add_source(config::File::from(wasmcloud_path.clone()));
@@ -354,7 +349,7 @@ pub fn get_config(opt_path: Option<PathBuf>, use_env: Option<bool>) -> Result<Pr
         .build()
         .map_err(|e| {
             if e.to_string().contains("is not of a registered file format") {
-                return anyhow!("Invalid config file: {}", wasmcloud_path.display());
+                return anyhow!("invalid config file: {}", wasmcloud_path.display());
             }
 
             anyhow!("{}", e)
@@ -377,10 +372,10 @@ impl RawProjectConfig {
     ) -> Result<CommonConfig> {
         let cargo_toml_path = project_path.join("Cargo.toml");
         if !cargo_toml_path.is_file() {
-            return Err(anyhow!(
+            bail!(
                 "missing/invalid Cargo.toml path [{}]",
                 cargo_toml_path.display(),
-            ));
+            );
         }
 
         // Build the manifest
@@ -420,26 +415,24 @@ impl RawProjectConfig {
     pub fn convert(self, project_path: PathBuf) -> Result<ProjectConfig> {
         let project_type_config = match self.project_type.trim().to_lowercase().as_str() {
             "actor" => {
-                let actor_config = self.actor.ok_or_else(|| anyhow!("Missing actor config"))?;
+                let actor_config = self.actor.context("missing actor config")?;
                 TypeConfig::Actor(actor_config.try_into()?)
             }
 
-            "provider" => {
-                let provider_config = self
-                    .provider
-                    .ok_or_else(|| anyhow!("Missing provider config"))?;
-                TypeConfig::Provider(provider_config.try_into()?)
-            }
+            "provider" => TypeConfig::Provider(
+                self.provider
+                    .context("missing provider config")?
+                    .try_into()?,
+            ),
 
-            "interface" => {
-                let interface_config = self
-                    .interface
-                    .ok_or_else(|| anyhow!("Missing interface config"))?;
-                TypeConfig::Interface(interface_config.try_into()?)
-            }
+            "interface" => TypeConfig::Interface(
+                self.interface
+                    .context("missing interface config")?
+                    .try_into()?,
+            ),
 
             _ => {
-                return Err(anyhow!("Unknown project type: {}", self.project_type));
+                bail!("unknown project type: {}", self.project_type);
             }
         };
 
@@ -453,10 +446,7 @@ impl RawProjectConfig {
                 None => LanguageConfig::TinyGo(TinyGoConfig::default()),
             },
             _ => {
-                return Err(anyhow!(
-                    "Unknown language in wasmcloud.toml: {}",
-                    self.language
-                ));
+                bail!("unknown language in wasmcloud.toml: {}", self.language);
             }
         };
 

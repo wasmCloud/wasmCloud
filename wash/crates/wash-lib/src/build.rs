@@ -11,11 +11,14 @@ use std::{
 
 use anyhow::{anyhow, bail, Context, Result};
 use wasm_encoder::{Encode, Section};
+use wit_bindgen_core::Files;
+use wit_bindgen_go::Opts as WitBindgenGoOpts;
 use wit_component::{ComponentEncoder, StringEncoding};
+use wit_parser::{Resolve, WorldId};
 
 use crate::{
     cli::{
-        claims::{sign_file, ActorMetadata, SignCommand},
+        claims::{sign_file, ActorMetadata, GenerateCommon, SignCommand},
         OutputKind,
     },
     parser::{
@@ -24,9 +27,15 @@ use crate::{
     },
 };
 
+/// This tag indicates that a Wasm module uses experimental features of wasmCloud
+/// and/or the surrounding ecosystem.
+///
+/// This tag is normally embedded in a Wasm module as a custom section
+const WASMCLOUD_WASM_TAG_EXPERIMENTAL: &str = "wasmcloud.com/experimental";
+
 /// Configuration for signing an artifact (actor or provider) including issuer and subject key, the path to where keys can be found, and an option to
 /// disable automatic key generation if keys cannot be found.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SignConfig {
     /// Location of key files for signing
     pub keys_directory: Option<PathBuf>,
@@ -64,12 +73,12 @@ pub fn build_project(config: &ProjectConfig, signing: Option<SignConfig>) -> Res
         TypeConfig::Actor(actor_config) => {
             build_actor(actor_config, &config.language, &config.common, signing)
         }
-        TypeConfig::Provider(_provider_config) => Err(anyhow!(
-            "wash build has not be implemented for providers yet. Please use `make` for now!"
-        )),
-        TypeConfig::Interface(_interface_config) => Err(anyhow!(
+        TypeConfig::Provider(_provider_config) => {
+            bail!("wash build has not be implemented for providers yet. Please use `make` for now!")
+        }
+        TypeConfig::Interface(_interface_config) => bail!(
             "wash build has not be implemented for interfaces yet. Please use `make` for now!"
-        )),
+        ),
     }
 }
 
@@ -104,7 +113,7 @@ pub fn build_actor(
             actor_config
                 .wit_world
                 .as_ref()
-                .context("`wit_world` must be specified in wasmcloud.toml for creating preview1 or preview2 components")?,
+                .context("missing `wit_world` in wasmcloud.toml ([actor] section) for creating preview1 or preview2 components")?,
             &actor_wasm_path,
             &actor_wasm_path,
         )?;
@@ -131,36 +140,62 @@ pub fn build_actor(
         })?;
     }
 
-    if let Some(config) = signing_config {
-        let source = actor_wasm_path
-            .to_str()
-            .ok_or_else(|| anyhow!("Could not convert file path to string"))?
-            .to_string();
-
-        // Output the signed file in the same directory with a _s suffix
-        let destination = source.replace(".wasm", "_s.wasm");
-        let destination_file = PathBuf::from_str(&destination)?;
-
-        let sign_options = SignCommand {
-            source,
-            destination: Some(destination),
-            metadata: ActorMetadata {
-                name: common_config.name.clone(),
-                ver: Some(common_config.version.to_string()),
-                custom_caps: actor_config.claims.clone(),
-                call_alias: actor_config.call_alias.clone(),
-                issuer: config.issuer,
-                subject: config.subject,
-                ..Default::default()
-            },
-        };
-        sign_file(sign_options, OutputKind::Json)?;
-
-        Ok(destination_file)
+    // Sign the wasm file (if configured)
+    if let Some(cfg) = signing_config {
+        sign_actor_wasm(common_config, actor_config, cfg, actor_wasm_path)
     } else {
-        // Exit without signing
         Ok(actor_wasm_path)
     }
+}
+
+/// Sign actor wasm configuration, if necessary
+fn sign_actor_wasm(
+    common_config: &CommonConfig,
+    actor_config: &ActorConfig,
+    signing_config: SignConfig,
+    actor_wasm_path: impl AsRef<Path>,
+) -> Result<PathBuf> {
+    // If we're building for WASI preview1 or preview2, we're targeting components-first
+    // functionality, and the signed module should be marked as experimental
+    let tags: Vec<String> =
+        if let WasmTarget::WasiPreview1 | WasmTarget::WasiPreview2 = &actor_config.wasm_target {
+            Vec::from([WASMCLOUD_WASM_TAG_EXPERIMENTAL.into()])
+        } else {
+            Vec::new()
+        };
+
+    let source = actor_wasm_path
+        .as_ref()
+        .to_str()
+        .ok_or_else(|| anyhow!("Could not convert file path to string"))?
+        .to_string();
+
+    // Output the signed file in the same directory with a _s suffix
+    let destination = source.replace(".wasm", "_s.wasm");
+    let destination_file = PathBuf::from_str(&destination)?;
+
+    let sign_options = SignCommand {
+        source,
+        destination: Some(destination),
+        metadata: ActorMetadata {
+            name: common_config.name.clone(),
+            ver: Some(common_config.version.to_string()),
+            custom_caps: actor_config.claims.clone(),
+            call_alias: actor_config.call_alias.clone(),
+            issuer: signing_config.issuer,
+            subject: signing_config.subject,
+            common: GenerateCommon {
+                disable_keygen: signing_config.disable_keygen,
+                directory: signing_config.keys_directory,
+                ..Default::default()
+            },
+            tags,
+            ..Default::default()
+        },
+    };
+    sign_file(sign_options, OutputKind::Json)?;
+
+    Ok(destination_file)
 }
 
 /// Builds a rust actor and returns the path to the file.
@@ -239,6 +274,7 @@ fn build_tinygo_actor(
     actor_config: &ActorConfig,
 ) -> Result<PathBuf> {
     let filename = format!("build/{}.wasm", common_config.name);
+    let file_path = PathBuf::from(&filename);
 
     // Change directory into the project directory
     std::env::set_current_dir(&common_config.path)?;
@@ -248,8 +284,29 @@ fn build_tinygo_actor(
         None => process::Command::new("tinygo"),
     };
 
-    if let Some(p) = PathBuf::from(&filename).parent() {
-        fs::create_dir_all(p)?;
+    // Ensure the target directory which will contain the eventual filename exists
+    // this usually means creating the build folder in the golang project root
+    let parent_dir = file_path.parent().unwrap_or(&common_config.path);
+    if !parent_dir.exists() {
+        fs::create_dir_all(parent_dir)?;
+    }
+
+    // Ensure the output directory exists
+    let output_dir = common_config.path.join(GOLANG_BINDGEN_FOLDER_NAME);
+    if !output_dir.exists() {
+        fs::create_dir_all(&output_dir)?;
+    }
+
+    // Generate wit-bindgen code for Golang actors which are components-first
+    if let WasmTarget::WasiPreview1 | WasmTarget::WasiPreview2 = &actor_config.wasm_target {
+        generate_tinygo_bindgen(
+            &output_dir,
+            common_config.path.join("wit"),
+            actor_config.wit_world.as_ref().context(
+                "missing `wit_world` in wasmcloud.toml ([actor] section) to run go bindgen generate",
+            )?,
+        )
+            .context("generating golang bindgen code failed")?;
     }
 
     let result = command
@@ -287,6 +344,65 @@ fn build_tinygo_actor(
     }
 
     Ok(common_config.path.join(wasm_file))
+}
+
+/// The folder that golang bindgen code will be placed in, normally
+/// from the top level golang project directory
+const GOLANG_BINDGEN_FOLDER_NAME: &str = "gen";
+
+/// Generate the bindgen code that TinyGo actors need
+fn generate_tinygo_bindgen(
+    bindgen_dir: impl AsRef<Path>,
+    wit_dir: impl AsRef<Path>,
+    wit_world: impl AsRef<str>,
+) -> Result<()> {
+    if !bindgen_dir.as_ref().exists() {
+        bail!(
+            "bindgen directory @ [{}] does not exist",
+            bindgen_dir.as_ref().display(),
+        );
+    }
+
+    // Resolve the wit world
+    let (resolver, world_id) = convert_wit_dir_to_world(wit_dir, wit_world)?;
+
+    // Build the golang wit-bindgen generator
+    let mut generator = WitBindgenGoOpts::default().build();
+
+    // Run the generator
+    let mut files = Files::default();
+    generator
+        .generate(&resolver, world_id, &mut files)
+        .context("failed to run golang wit-bindgen generator")?;
+    log::info!("successfully ran golang wit-bindgen generator");
+
+    // Write all generated files to disk
+    for (file_name, content) in files.iter() {
+        let full_path = bindgen_dir.as_ref().join(file_name);
+
+        // Ensure the parent directory path is created
+        if let Some(parent_path) = PathBuf::from(&full_path).parent() {
+            if !parent_path.exists() {
+                fs::create_dir_all(parent_path).with_context(|| {
+                    format!("failed to create dir for path [{}]", parent_path.display())
+                })?;
+            }
+        }
+
+        // Write out the file's contents to disk
+        fs::write(&full_path, content).with_context(|| {
+            format!(
+                "failed to write content for file @ path [{}]",
+                full_path.display()
+            )
+        })?;
+    }
+    log::info!(
+        "successfully wrote wit-bindgen generated golang files to [{}]",
+        bindgen_dir.as_ref().display()
+    );
+
+    Ok(())
 }
 
 /// Adapt a core module/preview1 component to a preview2 wasm component
@@ -339,6 +455,27 @@ pub(crate) fn get_wasi_preview2_adapter_bytes(config: &ActorConfig) -> Result<Ve
     Ok(wasmcloud_component_adapters::WASI_PREVIEW1_REACTOR_COMPONENT_ADAPTER.into())
 }
 
+/// Build a [`wit_parser::Resolve`] from a provided directory
+/// and select a given world
+fn convert_wit_dir_to_world(
+    dir: impl AsRef<Path>,
+    world: impl AsRef<str>,
+) -> Result<(Resolve, WorldId)> {
+    // Resolve the WIT directory packages & worlds
+    let mut resolve = wit_parser::Resolve::default();
+    let (package_id, _paths) = resolve
+        .push_dir(dir.as_ref())
+        .with_context(|| format!("failed to add WIT directory @ [{}]", dir.as_ref().display()))?;
+    log::info!("successfully loaded WIT @ [{}]", dir.as_ref().display());
+
+    // Select the target world that was specified by the user
+    let world_id = resolve
+        .select_world(package_id, world.as_ref().into())
+        .context("failed to select world from built resolver")?;
+
+    Ok((resolve, world_id))
+}
+
 /// Embed required component metadata to a given WebAssembly binary
 fn embed_wasm_component_metadata(
     project_path: impl AsRef<Path>,
@@ -355,21 +492,12 @@ fn embed_wasm_component_metadata(
         );
     };
 
-    // Resolve the WIT directory packages & worlds
-    let mut resolve = wit_parser::Resolve::default();
-    let (package_id, _paths) = resolve
-        .push_dir(&wit_dir)
-        .context("failed to add WIT deps directory")?;
-    log::info!("successfully loaded WIT @ [{}]", wit_dir.display());
-
-    // Select the target world that was specified by the user
-    let world = resolve
-        .select_world(package_id, wit_world.as_ref().into())
-        .context("failed to select world from built resolver")?;
+    let (resolver, world_id) =
+        convert_wit_dir_to_world(wit_dir, wit_world).context("failed to resolve WIT world")?;
 
     // Encode the metadata
     let encoded_metadata =
-        wit_component::metadata::encode(&resolve, world, StringEncoding::UTF8, None)
+        wit_component::metadata::encode(&resolver, world_id, StringEncoding::UTF8, None)
             .context("failed to encode WIT metadata for component")?;
 
     // Load the wasm binary
@@ -380,14 +508,25 @@ fn embed_wasm_component_metadata(
         )
     })?;
 
-    // Build & encode a new custom section at the end of the wasm
-    let section = wasm_encoder::CustomSection {
-        name: "component-type".into(),
-        data: Cow::Borrowed(&encoded_metadata),
-    };
-    wasm_bytes.push(section.id());
-    section.encode(&mut wasm_bytes);
-    log::info!("successfully embedded component metadata in WASM");
+    // Build & encode a custom sections at the end of the Wasm module
+    let custom_sections = [
+        wasm_encoder::CustomSection {
+            name: "component-type".into(),
+            data: Cow::Borrowed(&encoded_metadata),
+        },
+        wasm_encoder::CustomSection {
+            name: WASMCLOUD_WASM_TAG_EXPERIMENTAL.into(),
+            data: Cow::Borrowed(b"true"),
+        },
+    ];
+    for section in custom_sections {
+        wasm_bytes.push(section.id());
+        section.encode(&mut wasm_bytes);
+        log::debug!(
+            "successfully embedded component metadata section [{}] in WASM",
+            section.name
+        );
+    }
 
     // Output the WASM to disk (possibly overwriting the original path)
     std::fs::write(output_wasm.as_ref(), wasm_bytes).with_context(|| {
@@ -424,4 +563,263 @@ fn build_interface(
     _common_config: CommonConfig,
 ) -> Result<()> {
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::fs::DirEntry;
+    use std::path::Path;
+    use std::path::PathBuf;
+
+    use anyhow::{Context, Result};
+    use semver::Version;
+    use wascap::{jwt::Token, wasm::extract_claims};
+    use wasmparser::{Parser, Payload};
+
+    use crate::{
+        build::{embed_wasm_component_metadata, WASMCLOUD_WASM_TAG_EXPERIMENTAL},
+        parser::{ActorConfig, CommonConfig, WasmTarget},
+    };
+
+    use super::{generate_tinygo_bindgen, sign_actor_wasm, SignConfig};
+
+    const MODULE_WAT: &str = "(module)";
+    const COMPONENT_BASIC_WIT: &str = r#"
+package washlib:test;
+
+interface foo {
+    bar: func() -> string;
+}
+
+world test-world {
+   import foo;
+}
+"#;
+    const EXPECTED_COMPONENT_BASIC_GOLANG_FILES: [&str; 4] = [
+        "test_world_component_type.o",
+        "test_world.h",
+        "test_world.c",
+        "test-world.go",
+    ];
+
+    const COMPONENT_UPSTREAM_WIT: &str = r#"
+package washlib:multi;
+
+interface foo {
+    bar: func() -> string;
+}
+
+world upstream {
+   import foo;
+}
+"#;
+
+    const COMPONENT_DOWNSTREAM_WIT: &str = r#"
+package washlib:multi;
+
+interface bar {
+    baz: func() -> string;
+}
+
+world downstream {
+   include upstream;
+   import bar;
+}
+"#;
+    const EXPECTED_COMPONENT_DOWNSTREAM_GOLANG_FILES: [&str; 4] = [
+        "downstream_component_type.o",
+        "downstream.h",
+        "downstream.c",
+        "downstream.go",
+    ];
+
+    /// Set up a component that should be built
+    ///
+    /// This function returns the path to a mock project directory
+    /// which includes a `test.wasm` file along with a `wit` directory
+    fn setup_build_component(base_dir: impl AsRef<Path>) -> Result<PathBuf> {
+        // Write the test wit world
+        let wit_dir = base_dir.as_ref().join("wit");
+        fs::create_dir_all(&wit_dir)?;
+        fs::write(wit_dir.join("world.wit"), COMPONENT_BASIC_WIT)?;
+
+        // Write and build the wasm module itself
+        let wasm_path = base_dir.as_ref().join("test.wasm");
+        fs::write(&wasm_path, wat::parse_str(MODULE_WAT)?)?;
+
+        Ok(wasm_path)
+    }
+
+    /// Ensure that components which get component metadata embedded into them
+    /// contain the right experimental tags in Wasm custom sections
+    #[test]
+    fn embed_wasm_component_metadata_includes_experimental() -> Result<()> {
+        // Build project path, including WIT dir
+        let project_dir = tempfile::tempdir()?;
+        let wasm_path = setup_build_component(&project_dir)?;
+
+        // Embed component metadata into the wasm module, to build a component
+        embed_wasm_component_metadata(&project_dir, "test-world", &wasm_path, &wasm_path)
+            .context("failed to embed wasm component metadata")?;
+
+        let wasm_bytes = fs::read(&wasm_path)
+            .with_context(|| format!("failed to read test wasm @ [{}]", wasm_path.display()))?;
+
+        // Check that the Wasm module contains the custom section indicating experimental behavior
+        assert!(Parser::default()
+            .parse_all(&wasm_bytes)
+            .any(|payload| matches!(payload,
+                Ok(Payload::CustomSection(cs_reader))
+                    if cs_reader.name() == WASMCLOUD_WASM_TAG_EXPERIMENTAL
+                        && cs_reader.data() == b"true"
+            )));
+
+        Ok(())
+    }
+
+    /// Ensure that components which get signed contain the right experimental tags
+    /// in claims when preview1 or preview2 targets are signed
+    #[test]
+    fn sign_actor_component_includes_experimental() -> Result<()> {
+        // Build project path, including WIT dir
+        let project_dir = tempfile::tempdir()?;
+        let wasm_path = setup_build_component(&project_dir)?;
+
+        // Check targets that should have experimental tag set
+        for wasm_target in [
+            WasmTarget::CoreModule,
+            WasmTarget::WasiPreview1,
+            WasmTarget::WasiPreview2,
+        ] {
+            let updated_wasm_path = sign_actor_wasm(
+                &CommonConfig {
+                    name: "test".into(),
+                    version: Version::parse("0.1.0")?,
+                    path: project_dir.path().into(),
+                    wasm_bin_name: Some("test.wasm".into()),
+                },
+                &ActorConfig {
+                    wasm_target: wasm_target.clone(),
+                    wit_world: Some("test".into()),
+                    ..ActorConfig::default()
+                },
+                SignConfig::default(),
+                &wasm_path,
+            )?;
+
+            // Check that the experimental tag is present
+            let Token { claims, .. } = extract_claims(
+                fs::read(updated_wasm_path).context("failed to read updated wasm")?,
+            )?
+            .context("failed to extract claims")?;
+
+            // Check wasm targets
+            match wasm_target {
+                WasmTarget::CoreModule => assert!(
+                    claims
+                        .metadata
+                        .context("failed to get claim metadata")?
+                        .tags
+                        .context("failed to get tags")?
+                        .iter()
+                        .all(|t| t != WASMCLOUD_WASM_TAG_EXPERIMENTAL),
+                    "experimental tag should not be present on core modules",
+                ),
+                WasmTarget::WasiPreview1 | WasmTarget::WasiPreview2 => assert!(
+                    claims
+                        .metadata
+                        .context("failed to get claim metadata")?
+                        .tags
+                        .context("failed to get tags")?
+                        .iter()
+                        .any(|t| t == WASMCLOUD_WASM_TAG_EXPERIMENTAL),
+                    "experimental tag should be present on preview1/preview2 components"
+                ),
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Ensure that golang component generation works with a bindgen'd component
+    #[test]
+    fn golang_generate_bindgen_component_basic() -> Result<()> {
+        let project_dir = tempfile::tempdir()?;
+
+        // Set up directories
+        let wit_dir = project_dir.path().join("wit");
+        let output_dir = project_dir.path().join("generated");
+        std::fs::create_dir(&wit_dir).context("failed to create WIT dir")?;
+        std::fs::create_dir(&output_dir).context("failed to create output dir")?;
+
+        // Write WIT for Golang code
+        std::fs::write(wit_dir.join("test.wit"), COMPONENT_BASIC_WIT)
+            .context("failed to write test WIT file")?;
+
+        // Run bindgen generation process
+        generate_tinygo_bindgen(&output_dir, &wit_dir, "test-world")
+            .context("failed to run tinygo bindgen")?;
+
+        let dir_contents = fs::read_dir(output_dir)
+            .context("failed to read dir")?
+            .collect::<Result<Vec<DirEntry>, std::io::Error>>()?;
+
+        assert!(!dir_contents.is_empty(), "files were generated");
+        assert!(
+            EXPECTED_COMPONENT_BASIC_GOLANG_FILES.iter().all(|f| {
+                dir_contents.iter().any(|de| {
+                    de.path()
+                        .file_name()
+                        .to_owned()
+                        .is_some_and(|v| v.to_string_lossy() == **f)
+                })
+            }),
+            "expected bindgen go files are present"
+        );
+
+        Ok(())
+    }
+
+    /// Ensure that golang component generation works with a bindgen'd component
+    /// which has multiple worlds
+    #[test]
+    fn golang_generate_bindgen_component_multi_world() -> Result<()> {
+        let project_dir = tempfile::tempdir()?;
+
+        // Set up directories
+        let wit_dir = project_dir.path().join("wit");
+        let output_dir = project_dir.path().join("generated");
+        std::fs::create_dir(&wit_dir).context("failed to create WIT dir")?;
+        std::fs::create_dir(&output_dir).context("failed to create output dir")?;
+
+        // Write WIT for Golang code
+        std::fs::write(wit_dir.join("upstream.wit"), COMPONENT_UPSTREAM_WIT)
+            .context("failed to write test WIT file")?;
+        std::fs::write(wit_dir.join("downstream.wit"), COMPONENT_DOWNSTREAM_WIT)
+            .context("failed to write test WIT file")?;
+
+        // Run bindgen generation process
+        generate_tinygo_bindgen(&output_dir, &wit_dir, "downstream")
+            .context("failed to run tinygo bindgen")?;
+
+        let dir_contents = fs::read_dir(output_dir)
+            .context("failed to read dir")?
+            .collect::<Result<Vec<DirEntry>, std::io::Error>>()?;
+
+        assert!(!dir_contents.is_empty(), "files were generated");
+        assert!(
+            EXPECTED_COMPONENT_DOWNSTREAM_GOLANG_FILES.iter().all(|f| {
+                dir_contents.iter().any(|de| {
+                    de.path()
+                        .file_name()
+                        .to_owned()
+                        .is_some_and(|v| v.to_string_lossy() == **f)
+                })
+            }),
+            "expected bindgen go files are present"
+        );
+
+        Ok(())
+    }
 }

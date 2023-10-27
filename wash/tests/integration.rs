@@ -9,8 +9,6 @@ fn integration_help_subcommand_check() {
         .expect("failed to display help text");
     let output = output_to_string(help_output).unwrap();
 
-    println!("output: \n{output}");
-
     assert!(output.contains("claims"));
     assert!(output.contains("ctl"));
     assert!(output.contains("drain"));
