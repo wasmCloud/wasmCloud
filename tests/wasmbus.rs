@@ -416,9 +416,8 @@ async fn wasmbus() -> anyhow::Result<()> {
     let (
         (ctl_nats_server, ctl_stop_nats_tx, ctl_nats_url),
         (component_nats_server, component_stop_nats_tx, component_nats_url),
-        (compat_nats_server, compat_stop_nats_tx, compat_nats_url),
         (module_nats_server, module_stop_nats_tx, module_nats_url),
-    ) = try_join!(start_nats(), start_nats(), start_nats(), start_nats())?;
+    ) = try_join!(start_nats(), start_nats(), start_nats())?;
 
     fn default_nats_connect_options() -> async_nats::ConnectOptions {
         async_nats::ConnectOptions::new().retry_on_initial_connect()
@@ -427,34 +426,23 @@ async fn wasmbus() -> anyhow::Result<()> {
     // Sometimes NATS completes the server process start but isn't actually ready for connections
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
-    let (ctl_nats_client, compat_nats_client, component_nats_client, module_nats_client) =
-        try_join!(
-            async_nats::connect_with_options(ctl_nats_url.as_str(), default_nats_connect_options()),
-            async_nats::connect_with_options(
-                compat_nats_url.as_str(),
-                default_nats_connect_options()
-            ),
-            async_nats::connect_with_options(
-                component_nats_url.as_str(),
-                default_nats_connect_options()
-            ),
-            async_nats::connect_with_options(
-                module_nats_url.as_str(),
-                default_nats_connect_options()
-            ),
-        )
-        .context("failed to connect to NATS")?;
+    let (ctl_nats_client, component_nats_client, module_nats_client) = try_join!(
+        async_nats::connect_with_options(ctl_nats_url.as_str(), default_nats_connect_options()),
+        async_nats::connect_with_options(
+            component_nats_url.as_str(),
+            default_nats_connect_options()
+        ),
+        async_nats::connect_with_options(module_nats_url.as_str(), default_nats_connect_options()),
+    )
+    .context("failed to connect to NATS")?;
 
     // FIXME: we should be using separate NATS clients for CTL, RPC, and PROV_RPC
 
     let (
         (component_redis_server, component_stop_redis_tx, component_redis_url),
-        (compat_redis_server, compat_stop_redis_tx, compat_redis_url),
         (module_redis_server, module_stop_redis_tx, module_redis_url),
-    ) = try_join!(start_redis(), start_redis(), start_redis(),)?;
+    ) = try_join!(start_redis(), start_redis())?;
 
-    let mut compat_redis_client =
-        redis::Client::open(compat_redis_url.as_str()).context("failed to connect to Redis")?;
     let mut component_redis_client =
         redis::Client::open(component_redis_url.as_str()).context("failed to connect to Redis")?;
     let mut module_redis_client =
@@ -584,9 +572,8 @@ expected: {expected_labels:?}"#
         _ => bail!("more than two hosts in the lattice"),
     }
 
-    let (component_actor, compat_actor, module_actor, foobar_actor) = try_join!(
+    let (component_actor, module_actor, foobar_actor) = try_join!(
         fs::read(test_actors::RUST_BUILTINS_COMPONENT_REACTOR_PREVIEW2_SIGNED),
-        fs::read(test_actors::RUST_BUILTINS_COMPAT_REACTOR_PREVIEW2_SIGNED),
         fs::read(test_actors::RUST_BUILTINS_MODULE_REACTOR_SIGNED),
         fs::read(test_actors::RUST_FOOBAR_COMPONENT_COMMAND_PREVIEW2_SIGNED),
     )
@@ -598,12 +585,6 @@ expected: {expected_labels:?}"#
     } = extract_claims(component_actor)
         .context("failed to extract component actor claims")?
         .context("component actor claims missing")?;
-    let jwt::Token {
-        claims: compat_actor_claims,
-        ..
-    } = extract_claims(compat_actor)
-        .context("failed to extract compat actor claims")?
-        .context("compat actor claims missing")?;
     let jwt::Token {
         claims: module_actor_claims,
         ..
@@ -621,9 +602,6 @@ expected: {expected_labels:?}"#
     let component_actor_url =
         Url::from_file_path(test_actors::RUST_BUILTINS_COMPONENT_REACTOR_PREVIEW2_SIGNED)
             .expect("failed to construct component actor ref");
-    let compat_actor_url =
-        Url::from_file_path(test_actors::RUST_BUILTINS_COMPAT_REACTOR_PREVIEW2_SIGNED)
-            .expect("failed to construct compat actor ref");
     let module_actor_url = Url::from_file_path(test_actors::RUST_BUILTINS_MODULE_REACTOR_SIGNED)
         .expect("failed to construct module actor ref");
     let foobar_actor_url =
@@ -674,14 +652,6 @@ expected: {expected_labels:?}"#
             TEST_PREFIX,
             &host_key,
             &component_actor_url,
-            1,
-        ),
-        assert_start_actor(
-            &ctl_client,
-            &ctl_nats_client,
-            TEST_PREFIX,
-            &host_key,
-            &compat_actor_url,
             1,
         ),
         assert_start_actor(
@@ -772,27 +742,14 @@ expected: {expected_labels:?}"#
         _ => bail!("more than two provider auction acks received"),
     }
 
-    let (component_http_port, compat_http_port, module_http_port) =
-        try_join!(free_port(), free_port(), free_port())?;
+    let (component_http_port, module_http_port) = try_join!(free_port(), free_port())?;
 
-    let compat_blobstore_dir = tempdir()?;
     let component_blobstore_dir = tempdir()?;
     let module_blobstore_dir = tempdir()?;
     // NOTE: Links are advertised before the provider is started to prevent race condition, which
     // occurs if link is established after the providers starts, but before it subscribes to NATS
     // topics
     try_join!(
-        assert_advertise_link(
-            &ctl_client,
-            &compat_actor_claims,
-            &blobstore_fs_provider_key,
-            "wasmcloud:blobstore",
-            "blobstore",
-            HashMap::from([(
-                "ROOT".into(),
-                compat_blobstore_dir.path().to_string_lossy().into(),
-            )]),
-        ),
         assert_advertise_link(
             &ctl_client,
             &component_actor_claims,
@@ -813,20 +770,6 @@ expected: {expected_labels:?}"#
             HashMap::from([(
                 "ROOT".into(),
                 module_blobstore_dir.path().to_string_lossy().into(),
-            )]),
-        ),
-        assert_advertise_link(
-            &ctl_client,
-            &compat_actor_claims,
-            &httpserver_provider_key,
-            "wasmcloud:httpserver",
-            "httpserver",
-            HashMap::from([(
-                "config_json".into(),
-                format!(
-                    r#"{{"address":"[{}]:{compat_http_port}"}}"#,
-                    Ipv6Addr::UNSPECIFIED
-                )
             )]),
         ),
         assert_advertise_link(
@@ -859,14 +802,6 @@ expected: {expected_labels:?}"#
         ),
         assert_advertise_link(
             &ctl_client,
-            &compat_actor_claims,
-            &kvredis_provider_key,
-            "wasmcloud:keyvalue",
-            "keyvalue",
-            HashMap::from([("URL".into(), format!("{compat_redis_url}"))]),
-        ),
-        assert_advertise_link(
-            &ctl_client,
             &component_actor_claims,
             &kvredis_provider_key,
             "wasmcloud:keyvalue",
@@ -880,17 +815,6 @@ expected: {expected_labels:?}"#
             "wasmcloud:keyvalue",
             "keyvalue",
             HashMap::from([("URL".into(), format!("{module_redis_url}"))]),
-        ),
-        assert_advertise_link(
-            &ctl_client,
-            &compat_actor_claims,
-            &nats_provider_key,
-            "wasmcloud:messaging",
-            "messaging",
-            HashMap::from([(
-                "config_json".into(),
-                format!(r#"{{"cluster_uris":["{compat_nats_url}"]}}"#)
-            )]),
         ),
         assert_advertise_link(
             &ctl_client,
@@ -982,7 +906,7 @@ expected: {expected_labels:?}"#
         .await
         .map_err(|e| anyhow!(e).context("failed to query claims via bucket"))?;
     claims_from_bucket.sort_by(|a, b| a.get("sub").unwrap().cmp(b.get("sub").unwrap()));
-    ensure!(claims_from_bucket.len() == 9); // 5 providers, 4 actors
+    ensure!(claims_from_bucket.len() == 8); // 5 providers, 3 actors
 
     let mut links_from_bucket = ctl_client
         .query_links()
@@ -995,7 +919,7 @@ expected: {expected_labels:?}"#
         },
         unequal => unequal,
     });
-    ensure!(links_from_bucket.len() == 12);
+    ensure!(links_from_bucket.len() == 8);
 
     let pinged_hosts = ctl_client
         .get_hosts()
@@ -1041,20 +965,8 @@ got: {labels:?}
 expected: {expected_labels:?}"#
     );
     actors.sort_by(|a, b| b.name.cmp(&a.name));
-    match (
-        actors.pop(),
-        actors.pop(),
-        actors.pop(),
-        actors.pop(),
-        actors.as_slice(),
-    ) {
+    match (actors.pop(), actors.pop(), actors.pop(), actors.as_slice()) {
         (
-            Some(ActorDescription {
-                id: compat_id,
-                image_ref: compat_image_ref,
-                instances: mut compat_instances,
-                name: compat_name,
-            }),
             Some(ActorDescription {
                 id: component_id,
                 image_ref: component_image_ref,
@@ -1075,42 +987,6 @@ expected: {expected_labels:?}"#
             }),
             [],
         ) => {
-            // TODO: Validate `constraints`
-            ensure!(compat_id == compat_actor_claims.subject);
-            let jwt::Actor {
-                name: expected_name,
-                rev: expected_revision,
-                ..
-            } = compat_actor_claims
-                .metadata
-                .as_ref()
-                .context("missing compat actor metadata")?;
-            ensure!(compat_image_ref == Some(compat_actor_url.to_string()));
-            ensure!(
-                compat_name == *expected_name,
-                r#"invalid compat actor name:
-got: {compat_name:?}
-expected: {expected_name:?}"#
-            );
-            let ActorInstance {
-                annotations,
-                instance_id,
-                revision,
-                image_ref,
-                max_concurrent,
-            } = compat_instances
-                .pop()
-                .context("no compat actor instances found")?;
-            ensure!(
-                compat_instances.is_empty(),
-                "more than one compat actor instance found"
-            );
-            ensure!(annotations == Some(HashMap::default()));
-            ensure!(Uuid::parse_str(&instance_id).is_ok());
-            ensure!(revision == expected_revision.unwrap_or_default());
-            ensure!(image_ref == compat_image_ref);
-            ensure!(max_concurrent == 1);
-
             // TODO: Validate `constraints`
             ensure!(component_id == component_actor_claims.subject);
             let jwt::Actor {
@@ -1219,8 +1095,8 @@ expected: {expected_name:?}"#
             ensure!(image_ref == foobar_image_ref);
             ensure!(max_concurrent == 1);
         }
-        (None, None, None, None, []) => bail!("no actor found"),
-        _ => bail!("more than four actors found"),
+        (None, None, None, []) => bail!("no actor found"),
+        _ => bail!("more than 3 actors found"),
     }
     providers.sort_unstable_by(|a, b| b.name.cmp(&a.name));
     match (
@@ -1308,15 +1184,6 @@ expected: {expected_labels:?}"#
     try_join!(
         async {
             assert_handle_http_request(
-                compat_http_port,
-                compat_nats_client.clone(),
-                &mut compat_redis_client,
-            )
-            .await
-            .context("compat actor test failed")
-        },
-        async {
-            assert_handle_http_request(
                 component_http_port,
                 component_nats_client.clone(),
                 &mut component_redis_client,
@@ -1338,12 +1205,6 @@ expected: {expected_labels:?}"#
     try_join!(
         assert_remove_link(
             &ctl_client,
-            &compat_actor_claims,
-            "wasmcloud:blobstore",
-            "blobstore"
-        ),
-        assert_remove_link(
-            &ctl_client,
             &component_actor_claims,
             "wasmcloud:blobstore",
             "blobstore"
@@ -1353,12 +1214,6 @@ expected: {expected_labels:?}"#
             &module_actor_claims,
             "wasmcloud:blobstore",
             "blobstore"
-        ),
-        assert_remove_link(
-            &ctl_client,
-            &compat_actor_claims,
-            "wasmcloud:httpserver",
-            "httpserver"
         ),
         assert_remove_link(
             &ctl_client,
@@ -1374,12 +1229,6 @@ expected: {expected_labels:?}"#
         ),
         assert_remove_link(
             &ctl_client,
-            &compat_actor_claims,
-            "wasmcloud:keyvalue",
-            "keyvalue"
-        ),
-        assert_remove_link(
-            &ctl_client,
             &component_actor_claims,
             "wasmcloud:keyvalue",
             "keyvalue"
@@ -1389,12 +1238,6 @@ expected: {expected_labels:?}"#
             &module_actor_claims,
             "wasmcloud:keyvalue",
             "keyvalue"
-        ),
-        assert_remove_link(
-            &ctl_client,
-            &compat_actor_claims,
-            "wasmcloud:messaging",
-            "messaging",
         ),
         assert_remove_link(
             &ctl_client,
@@ -1502,10 +1345,8 @@ expected: {expected_labels:?}"#
 
     try_join!(
         stop_server(ctl_nats_server, ctl_stop_nats_tx),
-        stop_server(compat_nats_server, compat_stop_nats_tx),
         stop_server(component_nats_server, component_stop_nats_tx),
         stop_server(module_nats_server, module_stop_nats_tx),
-        stop_server(compat_redis_server, compat_stop_redis_tx),
         stop_server(component_redis_server, component_stop_redis_tx),
         stop_server(module_redis_server, module_stop_redis_tx),
     )

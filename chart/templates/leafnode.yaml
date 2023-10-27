@@ -1,0 +1,33 @@
+{{- if .Values.nats.leafnode.enabled -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "wasmcloud_host.fullname" . }}
+  labels:
+    {{- include "wasmcloud_host.labels" . | nindent 4 }}
+data:
+  nats.conf: |-
+    {{ if .Values.nats.jetstreamDomain -}}
+    jetstream {
+      domain: {{ .Values.nats.jetstreamDomain }}
+    }
+    {{- end }}
+    leafnodes {
+      remotes = [
+        {
+          url: {{ .Values.nats.leafnode.clusterURL | quote }}
+          credentials: "/nats/nats.creds"
+        },
+      ]
+    }
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "wasmcloud_host.fullname" . }}-nats
+  labels:
+    {{- include "wasmcloud_host.labels" . | nindent 4 }}
+data:
+  nats.creds: |-
+    {{ required "Credentials are required for a leafnode" .Values.nats.leafnode.credentials | b64enc }}
+{{- end }}

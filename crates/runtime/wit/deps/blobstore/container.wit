@@ -2,7 +2,7 @@ package wasi:blobstore
 
 // a Container is a collection of objects
 interface container {
-  use wasi:io/streams.{
+  use wasi:io/streams@0.2.0-rc-2023-10-18.{
     input-stream,
     output-stream,
   }

@@ -15,13 +15,15 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::Mutex;
 use tracing::{instrument, trace};
 use wascap::jwt;
-use wasmtime_wasi::preview2::command::Command;
+use wasmtime_wasi::preview2::command::{self, Command};
 use wasmtime_wasi::preview2::pipe::{
     AsyncReadStream, AsyncWriteStream, ClosedInputStream, ClosedOutputStream,
 };
 use wasmtime_wasi::preview2::{
-    self, HostInputStream, HostOutputStream, OutputStreamError, StreamState,
+    HostInputStream, HostOutputStream, StdinStream, StdoutStream, StreamError, StreamResult,
+    Subscribe, Table, TableError, WasiCtx, WasiCtxBuilder, WasiView,
 };
+use wasmtime_wasi_http::WasiHttpCtx;
 
 mod blobstore;
 mod bus;
@@ -33,15 +35,15 @@ mod messaging;
 pub(crate) use self::http::incoming_http_bindings;
 pub(crate) use self::logging::logging_bindings;
 
-type TableResult<T> = Result<T, preview2::TableError>;
+type TableResult<T> = Result<T, TableError>;
 
 mod guest_bindings {
     wasmtime::component::bindgen!({
         world: "guest",
         async: true,
         with: {
-           "wasi:io/streams": wasmtime_wasi::preview2::bindings::io::streams,
-           "wasi:poll/poll": wasmtime_wasi::preview2::bindings::poll::poll,
+           "wasi:io/poll@0.2.0-rc-2023-10-18": wasmtime_wasi::preview2::bindings::io::poll,
+           "wasi:io/streams@0.2.0-rc-2023-10-18": wasmtime_wasi::preview2::bindings::io::streams,
         },
     });
 }
@@ -88,100 +90,132 @@ impl<T> StdioStream<T> {
     }
 }
 
-#[async_trait]
 impl HostInputStream for StdioStream<Box<dyn HostInputStream>> {
     #[instrument(level = "trace", skip(self))]
-    fn read(&mut self, size: usize) -> anyhow::Result<(Bytes, StreamState)> {
+    fn read(&mut self, size: usize) -> StreamResult<Bytes> {
         match self.0.try_lock().as_deref_mut() {
             Ok(None) => ClosedInputStream.read(size),
             Ok(Some(stream)) => stream.read(size),
-            Err(_) => Ok((Bytes::default(), StreamState::Open)),
+            Err(_) => Ok(Bytes::default()),
         }
     }
 
     #[instrument(level = "trace", skip(self))]
-    fn skip(&mut self, nelem: usize) -> anyhow::Result<(usize, StreamState)> {
+    fn skip(&mut self, nelem: usize) -> StreamResult<usize> {
         match self.0.try_lock().as_deref_mut() {
             Ok(None) => ClosedInputStream.skip(nelem),
             Ok(Some(stream)) => stream.skip(nelem),
-            Err(_) => Ok((0, StreamState::Open)),
-        }
-    }
-
-    #[instrument(level = "trace", skip(self))]
-    async fn ready(&mut self) -> anyhow::Result<()> {
-        if let Some(stream) = self.0.lock().await.as_mut() {
-            stream.ready().await
-        } else {
-            ClosedInputStream.ready().await
+            Err(_) => Ok(0),
         }
     }
 }
 
-type OutputStreamResult<T> = Result<T, OutputStreamError>;
+#[async_trait]
+impl Subscribe for StdioStream<Box<dyn HostInputStream>> {
+    #[instrument(level = "trace", skip(self))]
+    async fn ready(&mut self) {
+        if let Some(stream) = self.0.lock().await.as_mut() {
+            stream.ready().await;
+        } else {
+            ClosedInputStream.ready().await;
+        }
+    }
+}
+
+impl StdinStream for StdioStream<Box<dyn HostInputStream>> {
+    fn stream(&self) -> Box<dyn HostInputStream> {
+        Box::new(self.clone())
+    }
+
+    fn isatty(&self) -> bool {
+        false
+    }
+}
 
 #[async_trait]
 impl HostOutputStream for StdioStream<Box<dyn HostOutputStream>> {
     #[instrument(level = "trace", skip(self))]
-    fn write(&mut self, bytes: Bytes) -> OutputStreamResult<()> {
+    fn write(&mut self, bytes: Bytes) -> StreamResult<()> {
         match self.0.try_lock().as_deref_mut() {
             Ok(None) => ClosedOutputStream.write(bytes),
             Ok(Some(stream)) => stream.write(bytes),
-            Err(_) => Err(OutputStreamError::Trap(anyhow!("deadlock"))),
+            Err(_) => Err(StreamError::Trap(anyhow!("deadlock"))),
         }
     }
 
     #[instrument(level = "trace", skip(self))]
-    fn write_zeroes(&mut self, nelem: usize) -> OutputStreamResult<()> {
+    fn write_zeroes(&mut self, nelem: usize) -> StreamResult<()> {
         match self.0.try_lock().as_deref_mut() {
             Ok(None) => ClosedOutputStream.write_zeroes(nelem),
             Ok(Some(stream)) => stream.write_zeroes(nelem),
-            Err(_) => Err(OutputStreamError::Trap(anyhow!("deadlock"))),
+            Err(_) => Err(StreamError::Trap(anyhow!("deadlock"))),
         }
     }
 
     #[instrument(level = "trace", skip(self))]
-    fn flush(&mut self) -> OutputStreamResult<()> {
+    fn flush(&mut self) -> StreamResult<()> {
         match self.0.try_lock().as_deref_mut() {
             Ok(None) => ClosedOutputStream.flush(),
             Ok(Some(stream)) => stream.flush(),
-            Err(_) => Err(OutputStreamError::Trap(anyhow!("deadlock"))),
+            Err(_) => Err(StreamError::Trap(anyhow!("deadlock"))),
         }
     }
 
-    #[instrument(level = "trace", skip(self))]
-    async fn write_ready(&mut self) -> OutputStreamResult<usize> {
-        if let Some(stream) = self.0.lock().await.as_mut() {
-            stream.write_ready().await
-        } else {
-            ClosedOutputStream.write_ready().await
+    fn check_write(&mut self) -> StreamResult<usize> {
+        match self.0.try_lock().as_deref_mut() {
+            Ok(None) => ClosedOutputStream.check_write(),
+            Ok(Some(stream)) => stream.check_write(),
+            Err(_) => Err(StreamError::Trap(anyhow!("deadlock"))),
         }
     }
 }
 
+#[async_trait]
+impl Subscribe for StdioStream<Box<dyn HostOutputStream>> {
+    #[instrument(level = "trace", skip(self))]
+    async fn ready(&mut self) {
+        if let Some(stream) = self.0.lock().await.as_mut() {
+            stream.ready().await;
+        } else {
+            ClosedOutputStream.ready().await;
+        }
+    }
+}
+
+impl StdoutStream for StdioStream<Box<dyn HostOutputStream>> {
+    fn stream(&self) -> Box<dyn HostOutputStream> {
+        Box::new(self.clone())
+    }
+
+    fn isatty(&self) -> bool {
+        false
+    }
+}
+
 struct Ctx {
-    wasi: preview2::WasiCtx,
-    table: preview2::Table,
+    wasi: WasiCtx,
+    http: WasiHttpCtx,
+    table: Table,
     handler: builtin::Handler,
     stdin: StdioStream<Box<dyn HostInputStream>>,
     stdout: StdioStream<Box<dyn HostOutputStream>>,
     stderr: StdioStream<Box<dyn HostOutputStream>>,
 }
 
-impl preview2::WasiView for Ctx {
-    fn table(&self) -> &preview2::Table {
+impl WasiView for Ctx {
+    fn table(&self) -> &Table {
         &self.table
     }
 
-    fn table_mut(&mut self) -> &mut preview2::Table {
+    fn table_mut(&mut self) -> &mut Table {
         &mut self.table
     }
 
-    fn ctx(&self) -> &preview2::WasiCtx {
+    fn ctx(&self) -> &WasiCtx {
         &self.wasi
     }
 
-    fn ctx_mut(&mut self) -> &mut preview2::WasiCtx {
+    fn ctx_mut(&mut self) -> &mut WasiCtx {
         &mut self.wasi
     }
 }
@@ -220,25 +254,30 @@ fn instantiate(
 
     Interfaces::add_to_linker(&mut linker, |ctx| ctx)
         .context("failed to link `Wasmcloud` interface")?;
+    wasmtime_wasi_http::bindings::wasi::http::types::add_to_linker(&mut linker, |ctx| ctx)
+        .context("failed to link `wasi:http/types` interface")?;
+    wasmtime_wasi_http::bindings::wasi::http::outgoing_handler::add_to_linker(&mut linker, |ctx| {
+        ctx
+    })
+    .context("failed to link `wasi:http/outgoing-handler` interface")?;
 
-    preview2::command::add_to_linker(&mut linker).context("failed to link `WASI` interface")?;
+    command::add_to_linker(&mut linker).context("failed to link `WASI` interface")?;
 
     let stdin = StdioStream::default();
     let stdout = StdioStream::default();
     let stderr = StdioStream::default();
 
-    // NOTE: stdio will be added to table by `build()` below
-    let mut table = preview2::Table::new();
-    let wasi = preview2::WasiCtxBuilder::new()
+    let table = Table::new();
+    let wasi = WasiCtxBuilder::new()
         .args(&["main.wasm"]) // TODO: Configure argv[0]
-        .stdin(stdin.clone(), preview2::IsATTY::No)
-        .stdout(stdout.clone(), preview2::IsATTY::No)
-        .stderr(stderr.clone(), preview2::IsATTY::No)
-        .build(&mut table)
-        .context("failed to build WASI")?;
+        .stdin(stdin.clone())
+        .stdout(stdout.clone())
+        .stderr(stderr.clone())
+        .build();
     let handler = handler.into();
     let ctx = Ctx {
         wasi,
+        http: WasiHttpCtx,
         table,
         handler,
         stdin,
@@ -448,13 +487,12 @@ impl GuestBindings {
         let res = match self {
             GuestBindings::Command(bindings) => {
                 let operation = operation.as_ref();
-                let wasi = preview2::WasiCtxBuilder::new()
+                let wasi = WasiCtxBuilder::new()
                     .args(&["main.wasm", operation]) // TODO: Configure argv[0]
-                    .stdin(ctx.stdin.clone(), preview2::IsATTY::No)
-                    .stdout(ctx.stdout.clone(), preview2::IsATTY::No)
-                    .stderr(ctx.stderr.clone(), preview2::IsATTY::No)
-                    .build(&mut ctx.table)
-                    .context("failed to build WASI")?;
+                    .stdin(ctx.stdin.clone())
+                    .stdout(ctx.stdout.clone())
+                    .stderr(ctx.stderr.clone())
+                    .build();
                 let wasi = replace(&mut ctx.wasi, wasi);
                 trace!(operation, "call `wasi:command/command.run`");
                 let res = bindings

@@ -34,7 +34,7 @@ use base64::Engine;
 use bytes::{BufMut, Bytes, BytesMut};
 use cloudevents::{EventBuilder, EventBuilderV10};
 use futures::stream::{AbortHandle, Abortable};
-use futures::{join, stream, try_join, FutureExt, Stream, StreamExt, TryFutureExt};
+use futures::{join, stream, try_join, FutureExt, Stream, StreamExt, TryFutureExt, TryStreamExt};
 use nkeys::{KeyPair, KeyPairType};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -1634,13 +1634,20 @@ async fn load_supplemental_config(
     }))
     .context("failed to serialize config payload")?;
 
+    debug!("requesting supplemental config");
     match ctl_nats.request(cfg_topic, cfg_payload.into()).await {
         Ok(resp) => {
             match serde_json::from_slice::<SerializedSupplementalConfig>(resp.payload.as_ref()) {
                 Ok(ser_cfg) => Ok(SupplementalConfig {
-                    registry_config: ser_cfg
-                        .registry_credentials
-                        .map(|creds| creds.into_iter().map(|(k, v)| (k, v.into())).collect()),
+                    registry_config: ser_cfg.registry_credentials.map(|creds| {
+                        creds
+                            .into_iter()
+                            .map(|(k, v)| {
+                                debug!(registry_url = %k, "set registry config");
+                                (k, v.into())
+                            })
+                            .collect()
+                    }),
                 }),
                 Err(e) => {
                     error!(
@@ -1671,11 +1678,13 @@ async fn merge_registry_config(
 
     // update auth for specific registry, if provided
     if let Some(reg) = oci_opts.oci_registry {
-        match registry_config.entry(reg) {
+        match registry_config.entry(reg.clone()) {
             Entry::Occupied(_entry) => {
                 // note we don't update config here, since the config service should take priority
+                warn!(oci_registry_url = %reg, "ignoring OCI registry config, overriden by config service");
             }
             Entry::Vacant(entry) => {
+                debug!(oci_registry_url = %reg, "set registry config");
                 entry.insert(RegistryConfig {
                     reg_type: RegistryType::Oci,
                     auth: RegistryAuth::from((oci_opts.oci_user, oci_opts.oci_password)),
@@ -1686,26 +1695,30 @@ async fn merge_registry_config(
     }
 
     // update or create entry for all registries in allowed_insecure
-    oci_opts
-        .allowed_insecure
-        .into_iter()
-        .for_each(|reg| match registry_config.entry(reg) {
+    oci_opts.allowed_insecure.into_iter().for_each(|reg| {
+        match registry_config.entry(reg.clone()) {
             Entry::Occupied(mut entry) => {
+                debug!(oci_registry_url = %reg, "set allowed_insecure");
                 entry.get_mut().allow_insecure = true;
             }
             Entry::Vacant(entry) => {
+                debug!(oci_registry_url = %reg, "set allowed_insecure");
                 entry.insert(RegistryConfig {
                     reg_type: RegistryType::Oci,
                     allow_insecure: true,
                     ..Default::default()
                 });
             }
-        });
+        }
+    });
 
-    // set allow_latest for all registries
-    registry_config
-        .values_mut()
-        .for_each(|config| config.allow_latest = allow_latest);
+    // update allow_latest for all registries
+    registry_config.iter_mut().for_each(|(url, config)| {
+        if allow_latest {
+            debug!(oci_registry_url = %url, "set allow_latest");
+        }
+        config.allow_latest = allow_latest;
+    });
 }
 
 impl Host {
@@ -1956,11 +1969,13 @@ impl Host {
                 }
             }
         });
+
         let data_watch: JoinHandle<anyhow::Result<_>> = spawn({
+            let data = data.clone();
             let host = Arc::clone(&host);
             async move {
                 let data_watch = data
-                    .watch_with_history(">")
+                    .watch_all()
                     .await
                     .context("failed to watch lattice data bucket")?;
                 let mut data_watch = Abortable::new(data_watch, data_watch_abort_reg);
@@ -1975,7 +1990,7 @@ impl Host {
                                     Err(error) => {
                                         error!("failed to watch lattice data bucket: {error}");
                                     }
-                                    Ok(entry) => host.process_entry(entry).await,
+                                    Ok(entry) => host.process_entry(entry, true).await,
                                 }
                             }
                         }
@@ -2021,6 +2036,24 @@ impl Host {
                 }
             }
         });
+
+        // Process existing data without emitting events
+        data.keys()
+            .await
+            .context("failed to read keys of lattice data bucket")?
+            .map_err(|e| anyhow!(e).context("failed to read lattice data stream"))
+            .try_filter_map(|key| async {
+                data.entry(key)
+                    .await
+                    .context("failed to get entry in lattice data bucket")
+            })
+            .for_each(|entry| async {
+                match entry {
+                    Ok(entry) => host.process_entry(entry, false).await,
+                    Err(err) => error!(%err, "failed to read entry from lattice data bucket"),
+                }
+            })
+            .await;
 
         host.publish_event("host_started", start_evt)
             .await
@@ -2074,6 +2107,7 @@ impl Host {
 
     #[instrument(skip(self))]
     async fn heartbeat(&self) -> serde_json::Value {
+        trace!("generating heartbeat");
         let actors = self.actors.read().await;
         let actors: HashMap<&String, usize> = stream::iter(actors.iter())
             .filter_map(|(id, actor)| async move {
@@ -2139,14 +2173,13 @@ impl Host {
         .await
     }
 
-    /// Instantiate an actor and publish the actor start events.
+    /// Instantiate an actor
     #[allow(clippy::too_many_arguments)] // TODO: refactor into a config struct
-    #[instrument(skip(self, claims, annotations, host_id, actor_ref, actor, handler))]
+    #[instrument(skip(self, claims, annotations, actor_ref, actor, handler))]
     async fn instantiate_actor(
         &self,
         claims: &jwt::Claims<jwt::Actor>,
         annotations: &Annotations,
-        host_id: impl AsRef<str>,
         actor_ref: impl AsRef<str>,
         max: Option<NonZeroUsize>,
         actor: wasmcloud_runtime::Actor,
@@ -2162,7 +2195,6 @@ impl Host {
         );
         let actor = actor.clone();
         let handler = handler.clone();
-        let claims = claims.clone();
         let instance = async move {
             let calls = self
                 .rpc_nats
@@ -2201,66 +2233,20 @@ impl Host {
         .await
         .context("failed to instantiate actor")?;
 
-        self.publish_event(
-            "actor_started",
-            event::actor_started(
-                &claims,
-                annotations,
-                Uuid::from_u128(instance.id.into()),
-                actor_ref,
-            ),
-        )
-        .await?;
-        self.publish_event(
-            "actors_started",
-            event::actors_started(
-                &claims,
-                annotations,
-                host_id,
-                max.map_or(0, NonZeroUsize::get),
-                actor_ref,
-            ),
-        )
-        .await?;
         Ok(instance)
     }
 
-    /// Uninstantiate an actor and publish the actor stop events.
+    /// Uninstantiate an actor
     #[instrument(skip(self, instance))]
     async fn uninstantiate_actor(
         &self,
         claims: &jwt::Claims<jwt::Actor>,
         host_id: &str,
         instance: Arc<ActorInstance>,
-    ) -> anyhow::Result<()> {
+    ) {
         trace!(subject = claims.subject, "uninstantiating actor instance");
 
         instance.calls.abort();
-        let _ = self
-            .publish_event(
-                "actor_stopped",
-                event::actor_stopped(
-                    claims,
-                    &instance.annotations,
-                    Uuid::from_u128(instance.id.into()),
-                ),
-            )
-            .await;
-        // NOTE: We no longer track multiple instance replicas, we have one instance per
-        // set of annotations per actor. We publish the actors_stopped event using the instance's
-        // max concurrent to preserve backwards compatibility.
-        self.publish_event(
-            "actors_stopped",
-            event::actors_stopped(
-                claims,
-                &instance.annotations,
-                host_id,
-                // If the instance had no maximum concurrent value, default to stopping one
-                instance.max.unwrap_or(NonZeroUsize::MIN),
-                0,
-            ),
-        )
-        .await
     }
 
     #[instrument(skip(self, entry, actor, annotations))]
@@ -2273,7 +2259,7 @@ impl Host {
         host_id: &str,
         annotations: impl Into<Annotations>,
     ) -> anyhow::Result<&'a mut Arc<Actor>> {
-        trace!(actor_ref, "starting new actor");
+        debug!(actor_ref, "starting new actor");
 
         let annotations = annotations.into();
         let claims = actor.claims().context("claims missing")?;
@@ -2326,7 +2312,6 @@ impl Host {
             .instantiate_actor(
                 claims,
                 &annotations,
-                host_id,
                 &actor_ref,
                 max,
                 actor.clone(),
@@ -2334,6 +2319,15 @@ impl Host {
             )
             .await
             .context("failed to instantiate actor")?;
+        self.publish_actor_started_events(
+            max.map_or(0, NonZeroUsize::get),
+            claims,
+            &annotations,
+            instance.id,
+            host_id,
+            actor_ref,
+        )
+        .await?;
 
         let actor = Arc::new(Actor {
             actor,
@@ -2350,6 +2344,7 @@ impl Host {
         annotations: &BTreeMap<String, String>,
         host_id: &str,
     ) -> anyhow::Result<()> {
+        debug!(actor_id = %entry.key(), "stopping actor");
         let actor = entry.remove();
         let claims = actor.claims().context("claims missing")?;
         let mut instances = actor.instances.write().await;
@@ -2373,9 +2368,17 @@ impl Host {
 
         for instance in matching_instances {
             instances.remove(&instance.annotations);
-            self.uninstantiate_actor(claims, host_id, instance)
-                .await
-                .context("failed to uninstantiate actor")?;
+            self.uninstantiate_actor(claims, host_id, instance.clone())
+                .await;
+            self.publish_actor_stopped_events(
+                claims,
+                &instance.annotations,
+                instance.id,
+                host_id,
+                instance.max,
+                0,
+            )
+            .await?;
         }
         Ok(())
     }
@@ -2435,7 +2438,7 @@ impl Host {
         Ok(Some(buf.into()))
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn fetch_actor(&self, actor_ref: &str) -> anyhow::Result<wasmcloud_runtime::Actor> {
         let registry_config = self.registry_config.read().await;
         let actor = fetch_actor(
@@ -2498,7 +2501,7 @@ impl Host {
         Ok(ACCEPTED.into())
     }
 
-    #[instrument(skip(self, payload))]
+    #[instrument(skip_all)]
     async fn handle_scale_actor(
         self: Arc<Self>,
         payload: impl AsRef<[u8]>,
@@ -2527,7 +2530,7 @@ impl Host {
         Ok(ACCEPTED.into())
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     /// Handles scaling an actor to a supplied number of `max` concurrently executing instances.
     /// Supplying `None` for max will result in an unbounded number of concurrent requests, and supplying
     /// `Some(0)` will result in stopping that actor instance.
@@ -2580,8 +2583,17 @@ impl Host {
                 let mut actor_instances = actor.instances.write().await;
                 if let Some(matching_instance) = matching_instance(&actor_instances, &annotations) {
                     actor_instances.remove(&matching_instance.annotations);
-                    self.uninstantiate_actor(claims, host_id, matching_instance)
-                        .await?;
+                    self.uninstantiate_actor(claims, host_id, matching_instance.clone())
+                        .await;
+                    self.publish_actor_stopped_events(
+                        claims,
+                        &matching_instance.annotations,
+                        matching_instance.id,
+                        host_id,
+                        matching_instance.max,
+                        0,
+                    )
+                    .await?;
                 }
 
                 if actor_instances.is_empty() {
@@ -2638,7 +2650,6 @@ impl Host {
                             .instantiate_actor(
                                 claims,
                                 &annotations,
-                                host_id,
                                 &actor_ref,
                                 max,
                                 actor.actor.clone(),
@@ -2646,19 +2657,58 @@ impl Host {
                             )
                             .await
                             .context("failed to instantiate actor")?;
+                        let publish_result = match matching_instance.max.cmp(&max) {
+                            std::cmp::Ordering::Less => {
+                                // We started the difference between the current max and the requested max
+                                // SAFETY: We know max > matching_instance.max because of the ordering check above
+                                let num_started = max.map_or(0, NonZeroUsize::get)
+                                    - matching_instance.max.map_or(0, NonZeroUsize::get);
+                                self.publish_actor_started_events(
+                                    num_started,
+                                    claims,
+                                    &annotations,
+                                    instance.id,
+                                    host_id,
+                                    actor_ref,
+                                )
+                                .await
+                            }
+                            std::cmp::Ordering::Greater => {
+                                // We stopped the difference between the current max and the requested max
+                                let num_stopped =
+                                // SAFETY: We know matching_instance.max > max because of the ordering check above
+                                    matching_instance.max.map_or(0, NonZeroUsize::get)
+                                        - max.map_or(0, NonZeroUsize::get);
+                                self.publish_actor_stopped_events(
+                                    claims,
+                                    &annotations,
+                                    matching_instance.id,
+                                    host_id,
+                                    NonZeroUsize::new(num_stopped),
+                                    matching_instance
+                                        .max
+                                        .map_or(0, NonZeroUsize::get)
+                                        .saturating_sub(num_stopped),
+                                )
+                                .await
+                            }
+                            std::cmp::Ordering::Equal => Ok(()),
+                        };
                         let previous_instance =
                             actor_instances.remove(&matching_instance.annotations);
                         actor_instances.insert(annotations, instance);
+
                         if let Some(i) = previous_instance {
-                            i.calls.abort();
+                            self.uninstantiate_actor(claims, host_id, i).await;
                         }
+                        // Wait to unwrap the event publish result until after we've processed the instances
+                        publish_result?;
                     }
                 } else {
                     let new_instance = self
                         .instantiate_actor(
                             claims,
                             &annotations,
-                            host_id,
                             &actor_ref,
                             max,
                             actor.actor.clone(),
@@ -2666,6 +2716,15 @@ impl Host {
                         )
                         .await
                         .context("failed to instantiate actor")?;
+                    self.publish_actor_started_events(
+                        max.map_or(0, NonZeroUsize::get),
+                        claims,
+                        &annotations,
+                        new_instance.id,
+                        host_id,
+                        actor_ref,
+                    )
+                    .await?;
                     actor_instances.insert(annotations, new_instance);
                 };
             }
@@ -2809,7 +2868,6 @@ impl Host {
             .instantiate_actor(
                 new_claims,
                 &annotations,
-                host_id,
                 &new_actor_ref,
                 max,
                 new_actor.clone(),
@@ -2819,13 +2877,30 @@ impl Host {
         else {
             bail!("failed to instantiate actor from new reference");
         };
+        self.publish_actor_started_events(
+            max.map_or(0, NonZeroUsize::get),
+            new_claims,
+            &annotations,
+            new_instance.id,
+            host_id,
+            new_actor_ref,
+        )
+        .await?;
 
         all_instances.remove(&matching_instance.annotations);
         all_instances.insert(annotations, new_instance);
 
-        self.uninstantiate_actor(old_claims, host_id, matching_instance)
-            .await
-            .context("failed to uninstantiate running actor")?;
+        self.uninstantiate_actor(old_claims, host_id, matching_instance.clone())
+            .await;
+        self.publish_actor_stopped_events(
+            old_claims,
+            &matching_instance.annotations,
+            matching_instance.id,
+            host_id,
+            matching_instance.max,
+            max.map_or(0, NonZeroUsize::get),
+        )
+        .await?;
 
         Ok(ACCEPTED.into())
     }
@@ -3260,6 +3335,7 @@ impl Host {
         _payload: impl AsRef<[u8]>,
         host_id: &str,
     ) -> anyhow::Result<Bytes> {
+        trace!("generating inventory");
         let actors = self.actors.read().await;
         let actors: Vec<_> = stream::iter(actors.iter())
             .filter_map(|(id, actor)| async move {
@@ -3369,6 +3445,7 @@ impl Host {
             claims: Vec<StoredClaims>,
         }
 
+        trace!("getting claims");
         let (actor_claims, provider_claims) =
             join!(self.actor_claims.read(), self.provider_claims.read());
         let actor_claims = actor_claims.values().cloned().map(Claims::Actor);
@@ -3384,6 +3461,7 @@ impl Host {
 
     #[instrument(skip(self))]
     async fn handle_links(&self) -> anyhow::Result<Bytes> {
+        trace!("getting links");
         let links = self.links.read().await;
         let links: Vec<LinkDefinition> = links.values().cloned().collect();
         let res = serde_json::to_vec(&links).context("failed to serialize response")?;
@@ -3470,6 +3548,7 @@ impl Host {
 
     #[instrument(skip(self, _payload))]
     async fn handle_ping_hosts(&self, _payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
+        trace!("replying to ping");
         let uptime = self.start_at.elapsed();
         let cluster_issuers = self.cluster_issuers.clone().join(",");
 
@@ -3630,6 +3709,7 @@ impl Host {
         &self,
         id: impl AsRef<str>,
         value: impl AsRef<[u8]>,
+        publish: bool,
     ) -> anyhow::Result<()> {
         let id = id.as_ref();
         let value = value.as_ref();
@@ -3670,11 +3750,13 @@ impl Host {
             );
         }
 
-        self.publish_event(
-            "linkdef_set",
-            event::linkdef_set(id, actor_id, provider_id, link_name, contract_id, values),
-        )
-        .await?;
+        if publish {
+            self.publish_event(
+                "linkdef_set",
+                event::linkdef_set(id, actor_id, provider_id, link_name, contract_id, values),
+            )
+            .await?;
+        }
 
         let msgp = rmp_serde::to_vec_named(ld).context("failed to encode link definition")?;
         let lattice_prefix = &self.host_config.lattice_prefix;
@@ -3694,6 +3776,7 @@ impl Host {
         &self,
         id: impl AsRef<str>,
         _value: impl AsRef<[u8]>,
+        publish: bool,
     ) -> anyhow::Result<()> {
         let id = id.as_ref();
 
@@ -3720,11 +3803,13 @@ impl Host {
             }
         }
 
-        self.publish_event(
-            "linkdef_deleted",
-            event::linkdef_deleted(id, actor_id, provider_id, link_name, contract_id, values),
-        )
-        .await?;
+        if publish {
+            self.publish_event(
+                "linkdef_deleted",
+                event::linkdef_deleted(id, actor_id, provider_id, link_name, contract_id, values),
+            )
+            .await?;
+        }
 
         let msgp = rmp_serde::to_vec_named(ld).context("failed to encode link definition")?;
         let lattice_prefix = &self.host_config.lattice_prefix;
@@ -3815,16 +3900,17 @@ impl Host {
             created,
             operation,
         }: async_nats::jetstream::kv::Entry,
+        publish: bool,
     ) {
         use async_nats::jetstream::kv::Operation;
 
         let mut key_parts = key.split('_');
         let res = match (operation, key_parts.next(), key_parts.next()) {
             (Operation::Put, Some("LINKDEF"), Some(id)) => {
-                self.process_linkdef_put(id, value).await
+                self.process_linkdef_put(id, value, publish).await
             }
             (Operation::Delete, Some("LINKDEF"), Some(id)) => {
-                self.process_linkdef_delete(id, value).await
+                self.process_linkdef_delete(id, value, publish).await
             }
             (Operation::Put, Some("CLAIMS"), Some(pubkey)) => {
                 self.process_claims_put(pubkey, value).await
@@ -3853,6 +3939,80 @@ impl Host {
         if let Err(error) = &res {
             warn!(?error, ?operation, bucket, "failed to process entry");
         }
+    }
+
+    /// Publishes `count` `actor_started` events and one `actors_started` event with the supplied count
+    async fn publish_actor_started_events(
+        &self,
+        count: usize,
+        claims: &jwt::Claims<jwt::Actor>,
+        annotations: &BTreeMap<String, String>,
+        instance_id: Ulid,
+        host_id: impl AsRef<str>,
+        actor_ref: impl AsRef<str>,
+    ) -> anyhow::Result<()> {
+        let () = stream::iter(0..count)
+            .for_each(|_| async {
+                let _ = self
+                    .publish_event(
+                        "actor_started",
+                        event::actor_started(
+                            claims,
+                            annotations,
+                            Uuid::from_u128(instance_id.into()),
+                            actor_ref.as_ref(),
+                        ),
+                    )
+                    .await;
+            })
+            .await;
+        self.publish_event(
+            "actors_started",
+            event::actors_started(claims, annotations, host_id, count, actor_ref),
+        )
+        .await
+    }
+
+    /// Publishes `count` `actor_stopped` events and one `actors_stopped` event with the supplied count
+    async fn publish_actor_stopped_events(
+        &self,
+        claims: &jwt::Claims<jwt::Actor>,
+        annotations: &BTreeMap<String, String>,
+        instance_id: Ulid,
+        host_id: impl AsRef<str>,
+        max: Option<NonZeroUsize>,
+        remaining: usize,
+    ) -> anyhow::Result<()> {
+        // If the instance had no maximum concurrent value, default to stopping one
+        let () = stream::iter(0..max.map_or(1, NonZeroUsize::get))
+            .for_each(|_| async {
+                let _ = self
+                    .publish_event(
+                        "actor_stopped",
+                        event::actor_stopped(
+                            claims,
+                            annotations,
+                            Uuid::from_u128(instance_id.into()),
+                        ),
+                    )
+                    .await;
+            })
+            .await;
+        // NOTE: We no longer track multiple instance replicas, we have one instance per
+        // set of annotations per actor. We publish the actors_stopped event using the instance's
+        // max concurrent to preserve backwards compatibility.
+        self.publish_event(
+            "actors_stopped",
+            event::actors_stopped(
+                claims,
+                annotations,
+                host_id,
+                // If the instance had no maximum concurrent value, default to stopping one
+                max.unwrap_or(NonZeroUsize::MIN),
+                remaining,
+            ),
+        )
+        .await
     }
 }
 

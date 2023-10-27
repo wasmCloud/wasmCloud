@@ -40,9 +40,13 @@ If you're new to the wasmCloud ecosystem, a great place to start is the [getting
 
 ## Examples
 
-You can also take a look at a wide range of [examples](https://github.com/wasmCloud/examples/).
+### WebAssembly Modules (Stable ABI)
 
-This includes actors, providers, interfaces, and full applications, including our [Petclinic microservices app](https://github.com/wasmCloud/examples/tree/main/petclinic) we've created to demonstrate how to design, compose, and build applications in wasmCloud.
+wasmCloud has a wide range of [examples](https://github.com/wasmCloud/examples/) built on the [stable ABI](https://wasmcloud.com/docs/hosts/abis/wasmbus/). This includes actors, providers, interfaces, and full applications we've created to demonstrate how to design, compose, and build applications in wasmCloud.
+
+### **Experimental** WASI Preview 2 WebAssembly Components
+
+wasmCloud is actively working on staying up-to-date with WASI Preview 2 and the Component Model. For actor components which consume interfaces defined in [WIT](https://github.com/WebAssembly/component-model/blob/main/design/mvp/WIT.md), see examples in the [`examples` directory of this repository](./examples).
 
 ### 💥 Awesome wasmCloud
 
@@ -60,9 +64,9 @@ The latest release and changelog can be found on the [releases page](https://git
 
 Want to get involved? For more information on how to contribute and our contributor guidelines, check out the [contributing readme](./CONTRIBUTING.md).
 
-# 📚 Other Resources
+---
 
-## Community
+## 🌇 Community Resources
 
 ### Community Meetings
 
@@ -72,53 +76,71 @@ We host weekly community meetings at 1pm EST on Wednesdays. These community meet
 
 We host our own [community slack](https://slack.wasmcloud.com) for all community members to join and talk about WebAssembly, wasmCloud, or just general cloud native technology. For those of you who are already on the [CNCF Slack](https://cloud-native.slack.com/), we also have our own channel at [#wasmcloud](https://cloud-native.slack.com/archives/C027YTXEYFL).
 
-## Reference Documentation
+---
+
+## 📚 Reference Documentation
 
 wasmCloud uses some terminology you might not be familiar with. Check out the [reference](https://wasmcloud.com/docs/category/reference) section of our docs for a deeper dive.
 
+---
+
 ## RPC Framework
 
-wasmCloud uses [wasmbus-rpc](https://github.com/wasmCloud/weld/tree/main/rpc-rs) to communicate between the host runtime, actors, and providers.
+wasmCloud uses an [RPC API](https://wasmcloud.com/docs/hosts/lattice-protocols/rpc) to enable seamless communication among the host runtime, actors, and providers.
+
+---
 
 ## Declarative Deployments
 
 The **w**asmCloud **A**pplication **D**eployment **M**anager [wadm](https://github.com/wasmCloud/wadm) uses the Open Application Model to define and deploy application specifications.
 
+---
+
 ## Host Runtimes
 
-### ☁️ Elixir/OTP Runtime
+### 🦀 Rust Runtime
 
-The primary Cloud Native wasmCloud host runtime is the [Elixir/OTP](https://github.com/wasmCloud/wasmcloud-otp) runtime. wasmCloud leverages Elixir/OTP for its battle-tested, massively-scalable foundation; we leverage Rust for its zero-cost abstractions, safety, security, and WebAssembly support.
-
-### 🦀 Rust Runtime (`Experimental`)
-
-Rust runtime is under heavy development at the root of this repository.
+wasmCloud's [standard runtime](./crates/runtime) is built in Rust for its zero-cost abstractions, safety, security, and WebAssembly support.
 
 ### 🕸 JavaScript Runtime (`Experimental`)
 
 For running a wasmCloud host in a browser or embedding in a JavaScript V8 host, use the [JavaScript Runtime](https://github.com/wasmCloud/wasmcloud-js)
 
+### ☁️ Elixir/OTP Runtime (`Deprecated`)
+
+**Note**: The OTP Runtime is now **deprecated**.
+
+~~The [Elixir/OTP](https://github.com/wasmCloud/wasmcloud-otp) runtime leverages Elixir/OTP for its battle-tested, massively-scalable foundation. It also leverages a Rust library.~~
+
+---
+
 ## SDKs and libraries
 
-### 🦀 `wasmcloud_runtime` (`Experimental`)
+### Rust Provider SDK
 
-`wasmcloud_runtime` is a wasmCloud runtime library written in Rust and available at [`./crates/runtime`](./crates/runtime).
+wasmCloud provides an [SDK](./crates/provider-sdk) for building capability providers in Rust.
 
-It is under heavy development, but is already used by Elixir/OTP and Rust host runtimes.
+### Go Provider SDK (`Experimental`)
 
-Bindings to other languages than Rust will be provided in the future.
+wasmCloud also has an [**experimental** SDK](https://github.com/wasmCloud/provider-sdk-go) for building capability providers in Go.
 
-Latest documentation is available at [wasmcloud.github.io/wasmCloud/wasmcloud_runtime](https://wasmcloud.github.io/wasmCloud/wasmcloud_runtime).
+### Provider Bindgen from WIT Interfaces (`Experimental`)
 
-### 🦀 `wasmcloud_actor` (`Experimental`)
+[`wasmcloud-provider-wit-bindgen`](./crates/provider-wit-bindgen) is a Rust macro used to generate code for [capability providers](./crates/providers).
 
-`wasmcloud_actor` is a wasmCloud actor library written in Rust and available at [`./crates/actor`](./crates/actor).
+### Provider Archive
 
-It provides functionality, which facilitates building of wasmCloud actors.
+[`provider-archive`](./crates/provider-archive) is a crate used to create Provider Archive (PAR) files. PARs are used to store, retrieve, and sign capability providers. Today, capability providers are distributed as binary files and run as system processes. In the future, wasmCloud aims to build capability providers as WebAssembly Components, which will remove the need for Provider Archives.
+
+### `wasmcloud_actor` (`Experimental`)
+
+[`wasmcloud_actor`](./crates/actor) is a wasmCloud actor library written in Rust which facilitates building of wasmCloud actors.
 
 The API of the crate matches closely what [`wit-bindgen`](https://github.com/bytecodealliance/wit-bindgen) would generate, meaning that one can switch from using plain `wit-bindgen`-generated bindings to `wasmcloud_actor` (and back) with minimal or no code changes.
 
-Latest documentation is available at [wasmcloud.github.io/wasmCloud/wasmcloud_actor](https://wasmcloud.github.io/wasmCloud/wasmcloud_actor/).
+### wascap
+
+[`wascap`](./crates/wascap) is a low-level library used to insert and retrieve [claims](https://wasmcloud.com/docs/hosts/security#claims) on actors and providers. Claims are part of wasmCloud's zero-trust security model.
 
 ---
 

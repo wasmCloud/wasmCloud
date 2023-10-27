@@ -8,11 +8,6 @@ pub use http::Handler as HttpHandler;
 
 pub use wasmcloud_compat::{keyvalue, logging, messaging, numbergen};
 
-#[cfg(all(not(feature = "module"), feature = "component"))]
-pub(crate) mod bindings {
-    wit_bindgen::generate!("interfaces-compat0");
-}
-
 pub trait Handler<T: ?Sized> {
     type Error: ToString;
 

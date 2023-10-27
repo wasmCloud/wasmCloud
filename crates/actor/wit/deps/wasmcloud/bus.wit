@@ -42,8 +42,8 @@ interface lattice {
 }
 
 interface host {
-    use wasi:io/streams.{input-stream, output-stream}
-    use wasi:poll/poll.{pollable}
+    use wasi:io/streams@0.2.0-rc-2023-10-18.{input-stream, output-stream}
+    use wasi:io/poll@0.2.0-rc-2023-10-18.{pollable}
 
     use lattice.{target-interface, target-entity}
 

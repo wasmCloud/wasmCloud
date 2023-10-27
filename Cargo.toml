@@ -1,6 +1,6 @@
 [package]
 name = "wasmcloud"
-version = "0.79.1"
+version = "0.80.0"
 description = "wasmCloud host runtime"
 
 authors.workspace = true
@@ -70,7 +70,7 @@ wascap = { workspace = true }
 wasmcloud-control-interface = { workspace = true }
 
 [workspace]
-members = ["crates/*", "examples/rust/*"]
+members = ["crates/*"]
 exclude = ["crates/providers"]
 
 [workspace.dependencies]
@@ -90,6 +90,8 @@ futures = { version = "0.3", default-features = false }
 heck = { version = "0.4.1", default-features = false }
 hex = { version = "0.4", default-features = false }
 http = { version = "0.2", default-features = false }
+http-body = { version = "1.0.0-rc.2", default-features = false }
+http-body-util = { version = "0.1.0-rc.2", default-features = false }
 humantime = { version = "2.1", default-features = false }
 log = { version = "0.4", default-features = false }
 names = { version = "0.14", default-features = false }
@@ -131,13 +133,13 @@ ulid = { version = "1", default-features = false }
 url = { version = "2", default-features = false }
 uuid = { version = "1", default-features = false }
 wascap = { version = "*", path = "./crates/wascap" }
-wasi-common = { version = "13", default-features = false }
-wasm-encoder = { version = "0.33", default-features = false }
+wasi-common = { version = "14", default-features = false }
+wasm-encoder = { version = "0.35", default-features = false }
 wasm-gen = { version = "0.1", default-features = false }
 wasmcloud-actor = { version = "*", path = "./crates/actor" }
 wasmcloud-actor-macros = { version = "*", path = "./crates/actor/macros" }
 wasmcloud-compat = { version = "*", path = "./crates/compat" }
-wasmcloud-component-adapters = { version = "0.2.3" }
+wasmcloud-component-adapters = { version = "0.3.0" }
 wasmcloud-control-interface = { version = "0.30", default-features = false }
 wasmcloud-core = { version = "*", path = "./crates/core" }
 wasmcloud-host = { version = "*", path = "./crates/host" }
@@ -145,10 +147,11 @@ wasmcloud-provider-sdk = { version = "*", path = "./crates/provider-sdk", defaul
 wasmcloud-provider-wit-bindgen = { version = "*", path = "./crates/provider-wit-bindgen" }
 wasmcloud-runtime = { version = "*", path = "./crates/runtime" }
 wasmcloud-tracing = { version = "*", path = "./crates/tracing" }
-wasmparser = { version = "0.113", default-features = false }
-wasmtime = { version = "13", default-features = false }
-wasmtime-wasi = { version = "13", default-features = false }
-wasmtime-wit-bindgen = { version = "13", default-features = false }
-wit-bindgen = { version = "0.12", default-features = false }
-wit-component = { version = "0.14", default-features = false }
-wit-parser = { version = "0.11", default-features = false }
+wasmparser = { version = "0.115", default-features = false }
+wasmtime = { version = "14", default-features = false }
+wasmtime-wasi = { version = "14", default-features = false }
+wasmtime-wasi-http = { version = "14", default-features = false }
+wasmtime-wit-bindgen = { version = "14", default-features = false }
+wit-bindgen = { version = "0.13", default-features = false }
+wit-component = { version = "0.16", default-features = false }
+wit-parser = { version = "0.12", default-features = false }
