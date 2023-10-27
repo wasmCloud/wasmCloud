@@ -3799,6 +3799,8 @@ impl Host {
 
         let mut links = self.links.write().await;
         links.insert(id.to_string(), ld.clone());
+        // Explicitly drop the lock to avoid deadlock with tasks that lock actors before links
+        drop(links);
         if let Some(actor) = self.actors.read().await.get(actor_id) {
             let mut links = actor.handler.links.write().await;
             links.entry(contract_id.clone()).or_default().insert(
@@ -3857,6 +3859,8 @@ impl Host {
         } = links
             .remove(id)
             .context("attempt to remove a non-existent link")?;
+        // Explicitly drop the lock to avoid deadlock with tasks that lock actors before links
+        drop(links);
         if let Some(actor) = self.actors.read().await.get(actor_id) {
             let mut links = actor.handler.links.write().await;
             if let Some(links) = links.get_mut(contract_id) {
