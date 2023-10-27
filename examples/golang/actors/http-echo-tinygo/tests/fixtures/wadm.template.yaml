@@ -1,0 +1,28 @@
+---
+apiVersion: core.oam.dev/v1beta1
+kind: Application
+metadata:
+  name: {{.AppName}}
+  annotations:
+    version: {{.AppVersion}}
+    description: " Echo demo in Golang (TinyGo), using the WebAssembly Component Model and WebAssembly Interfaces Types (WIT)"
+spec:
+  components:
+    - name: test-http-echo-tinygo
+      type: actor
+      properties:
+        image: {{.ActorImage}}
+      traits:
+        - type: spreadscaler
+          properties:
+            replicas: 1
+        - type: linkdef
+          properties:
+            target: httpserver
+            values:
+              ADDRESS: {{.HttpServerHost}}:{{.HttpServerPort}}
+    - name: httpserver
+      type: capability
+      properties:
+        image: wasmcloud.azurecr.io/httpserver:0.19.1
+        contract: wasmcloud:httpserver

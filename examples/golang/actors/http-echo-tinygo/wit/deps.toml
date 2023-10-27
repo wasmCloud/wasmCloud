@@ -1,0 +1,6 @@
+blobstore = "https://github.com/WebAssembly/wasi-blob-store/archive/main.tar.gz"
+logging = "https://github.com/WebAssembly/wasi-logging/archive/main.tar.gz"
+http = "https://github.com/wasmCloud/wasi-http/archive/main.tar.gz" # TODO: Switch to upstream once Wasm tooling compatible
+poll = "https://github.com/WebAssembly/wasi-poll/archive/main.tar.gz" # TODO: Remove once keyvalue is compatible
+# io = "https://github.com/WebAssembly/wasi-io/archive/main.tar.gz" # TODO: Remove once keyvalue is compatible
+io = "./overrides/io" # Pin to newer version of streams contract
