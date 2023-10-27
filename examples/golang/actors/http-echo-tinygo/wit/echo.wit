@@ -1,0 +1,7 @@
+package wasmcloud:echo
+
+world echo {
+    import wasi:logging/logging
+
+    export wasi:http/incoming-handler
+}
