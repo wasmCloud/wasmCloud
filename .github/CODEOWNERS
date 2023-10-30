@@ -38,7 +38,7 @@ crates/wascap @thomastaylor312 @connorsmith256 @brooksmtownsend @autodidaddict
 
 # projects
 crates/providers @wasmCloud/capability-provider-maintainers
-crates/wash-cli @autodidaddict @brooksmtownsend @thomastaylor312 @mattwilkinsonn
-crates/wash-lib @autodidaddict @brooksmtownsend @thomastaylor312 @mattwilkinsonn
+crates/wash-cli @wasmCloud/wash-maintainers
+crates/wash-lib @wasmCloud/wash-maintainers
 examples @wasmCloud/examples-maintainers
 vendor/capability-providers @wasmCloud/capability-provider-maintainers
