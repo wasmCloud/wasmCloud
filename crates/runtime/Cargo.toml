@@ -47,4 +47,4 @@ serde = { workspace = true }
 test-actors = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-std", "macros", "net"] }
 tracing-subscriber = { workspace = true, features = ["ansi", "env-filter", "fmt", "json", "std"] }
-wasmcloud-actor = { workspace = true }
+wasmcloud-actor = { workspace = true, features = ["uuid"] }

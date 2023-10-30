@@ -16,6 +16,10 @@ updates:
   directory: "/tests/actors/rust/tcp-component-command"
   schedule:
     interval: "daily"
+- package-ecosystem: npm
+  directory: "/crates/wash-cli/washboard"
+  schedule:
+    interval: "daily"
 - package-ecosystem: "github-actions"
   directory: "/"
   schedule:
