@@ -6,10 +6,10 @@ on:
   pull_request:
     branches: [main]
     paths:
-    - ./Cargo.lock
-    - ./Cargo.toml
-    - ./crates/wash-cli
-    - ./crates/wash-lib
+    - Cargo.lock
+    - Cargo.toml
+    - crates/wash-cli/**
+    - crates/wash-lib/**
 
 env:
   CARGO_TERM_COLOR: always
