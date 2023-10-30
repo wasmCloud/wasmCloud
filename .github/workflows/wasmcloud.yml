@@ -120,8 +120,8 @@ jobs:
     - run: mkdir -p ./bin
     - run: lipo -create ./aarch64/bin/wash ./x86_64/bin/wash -output ./bin/wash-universal-darwin
     - run: lipo -create ./aarch64/bin/wasmcloud ./x86_64/bin/wasmcloud -output ./bin/wasmcloud-universal-darwin
-    - run: chmod +x ./wash-universal-darwin
-    - run: chmod +x ./wasmcloud-universal-darwin
+    - run: chmod +x ./bin/wash-universal-darwin
+    - run: chmod +x ./bin/wasmcloud-universal-darwin
     - run: ./bin/wash-universal-darwin --version
     - run: ./bin/wasmcloud-universal-darwin --version
     - uses: actions/upload-artifact@v3
