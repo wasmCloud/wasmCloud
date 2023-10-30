@@ -62,6 +62,9 @@ wasmcloud-test-util = { workspace = true }
 weld-codegen = { workspace = true, features = ["wasmbus"] }
 which = { workspace = true }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+notify = { workspace = true, features = ["macos_fsevent"] }
+
 [dev-dependencies]
 assert-json-diff = { workspace = true }
 rand = { workspace = true }
@@ -71,6 +74,3 @@ tempfile = { workspace = true }
 
 [build-dependencies]
 tokio = { workspace = true, features = ["macros", "net"] }
-
-[target.'cfg(target_os = "macos")'.dependencies]
-notify = { workspace = true, features = ["macos_fsevent"] }
