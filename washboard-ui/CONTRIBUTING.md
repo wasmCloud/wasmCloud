@@ -5,7 +5,7 @@
 ### Contribute code
 
 1. Start the wasmCloud host using the `wash` CLI. Read more about it [here](#start-the-wasmcloud-host-using-wash-cli).
-   1. Ensure the Nats service is running with the websocket listener enabled.
+   1. Ensure the NATS service is running with the websocket listener enabled.
 2. Start a local frontend development server. Read more about it [here](#start-a-local-ui-development-server).
 3. Make changes to the UI.
 4. Commit your changes.
@@ -28,12 +28,12 @@ npm run dev
 Run the following command to start the wasmCloud host using the wash CLI:
 
 ```bash
-wash up
+wash up --nats-websocket-port 4001
 ```
 
 ### Explanations
 
-#### Nats
+#### NATS
 
 `wasmcloud` uses [NATS](https://nats.io/) as its message broker. The `wash` CLI can be used to start a local NATS
 or connect to an existing NATS server.
@@ -45,10 +45,10 @@ In case you use `wash up` to spawn up the Nats server, you can control the webso
 `--nats-websocket-port` flag or `NATS_WEBSOCKET_PORT` environment variable. For example:
 
 ```bash
-wash up --nats-websocket-port 4008
+wash up --nats-websocket-port 4001
 ```
 
-Otherwise, verify the port you are using to connect to the NATS server. Visit [Nats Websocket Configuration][1] for more
+Otherwise, verify the port you are using to connect to the NATS server. Visit [NATS Websocket Configuration][1] for more
 information.
 
 [0]: https://github.com/wasmCloud/wash/blob/a74b50297496578e5e6c0ee806304a3ff05cd073/packages/washboard/src/lattice/lattice-service.ts#L70

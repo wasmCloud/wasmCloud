@@ -39,7 +39,7 @@
         ];
 
         excludePaths = let
-          washboardExclude = map (name: "crates/wash-cli/washboard/${name}") (remove "dist" (attrNames (readDir ./crates/wash-cli/washboard)));
+          washboardExclude = map (name: "washboard-ui/${name}") (remove "dist" (attrNames (readDir ./washboard-ui)));
         in
           [
             ".devcontainer"

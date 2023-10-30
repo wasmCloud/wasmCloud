@@ -19,10 +19,6 @@ clean: ## Clean all tests
 deps-check:
 	@$(PYTHON) tools/deps_check.py
 
-run-ui: # Run UI from source
-	@$(NPM) install --prefix washboard
-	@$(NPM) run --prefix washboard dev
-
 ##@ Building
 
 build: ## Build the project
@@ -30,10 +26,6 @@ build: ## Build the project
 
 build-watch: ## Continuously build the project
 	@$(CARGO) watch -x build
-
-build-ui: ## Build the UI from source
-	@$(NPM) install --prefix .washboard
-	@$(NPM) run build --prefix .washboard
 
 ##@ Testing
 

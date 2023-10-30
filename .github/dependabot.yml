@@ -17,7 +17,7 @@ updates:
   schedule:
     interval: "daily"
 - package-ecosystem: npm
-  directory: "/crates/wash-cli/washboard"
+  directory: "/washboard-ui"
   schedule:
     interval: "daily"
 - package-ecosystem: "github-actions"
