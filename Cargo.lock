@@ -7360,15 +7360,15 @@ dependencies = [
 
 [[package]]
 name = "wit-bindgen-go"
-version = "0.13.0"
+version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "75611180e4b8d45c8918edac1b690c0627e48843de4861eb69da8bf3be7950fd"
+checksum = "b9a3f05f54e23b29bd263ce9ef81e2cd465803078ab61dbd5cacc973c3be1d10"
 dependencies = [
  "anyhow",
  "heck 0.4.1",
  "wit-bindgen-c",
  "wit-bindgen-core",
- "wit-component 0.16.0",
+ "wit-component 0.17.0",
 ]
 
 [[package]]
