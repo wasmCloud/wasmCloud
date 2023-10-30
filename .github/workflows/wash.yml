@@ -1,4 +1,4 @@
-name: wash CI
+name: wash
 
 on:
   push:
