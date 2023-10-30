@@ -52,13 +52,14 @@ jobs:
             file ./result/bin/wasmcloud
           test-oci: docker load < ./result
 
-        - target: x86_64-pc-windows-gnu
-          test-bin: |
-            nix profile install --inputs-from . 'nixpkgs#wine64'
-            wine64 ./result/bin/wash.exe --version
-            wine64 ./result/bin/wasmcloud.exe --version
-          test-oci: docker load < ./result
-          # TODO: Run win64 binary within OCI
+        # TODO: Build for GNU once https://github.com/rust-lang/rust/issues/92212 is resolved
+        #- target: x86_64-pc-windows-gnu
+        #  test-bin: |
+        #    nix profile install --inputs-from . 'nixpkgs#wine64'
+        #    wine64 ./result/bin/wash.exe --version
+        #    wine64 ./result/bin/wasmcloud.exe --version
+        #  test-oci: docker load < ./result
+        #  # TODO: Run win64 binary within OCI
 
         - target: x86_64-unknown-linux-musl
           test-bin: |
@@ -83,6 +84,20 @@ jobs:
       with:
         package: wasmcloud-${{ matrix.config.target }}-oci
     - run: ${{ matrix.config.test-oci }}
+
+  build-windows:
+    name: wasmcloud-x86_64-pc-windows-msvc
+    runs-on: windows-latest-8-cores
+    steps: 
+    - uses: actions/checkout@v4.1.1
+    - run: cargo build --release --workspace
+    - run: mkdir -p ./bin
+    - run: mv ./target/release/wasmcloud.exe ./bin/wasmcloud.exe
+    - run: mv ./target/release/wash.exe ./bin/wash.exe
+    - uses: actions/upload-artifact@v3
+      with:
+        name: wasmcloud-x86_64-pc-windows-msvc
+        path: bin
 
   build-lipo:
     name: wasmcloud-universal-darwin
@@ -127,11 +142,12 @@ jobs:
 
   test-windows:
     runs-on: windows-2022
-    needs: build-bin
+    needs: build-windows
     steps:
     - uses: actions/download-artifact@v3
       with:
-        name: wasmcloud-x86_64-pc-windows-gnu
+        name: wasmcloud-x86_64-pc-windows-msvc
+    - run: .\bin\wash.exe --version
     - run: .\bin\wasmcloud.exe --version
 
   cargo:

@@ -10,7 +10,6 @@ RUN case ${TARGETPLATFORM} in \
     "darwin/arm64")  TARGET="aarch64-apple-darwin" ;; \
     "linux/amd64")   TARGET="x86_64-unknown-linux-musl" ;; \
     "linux/arm64")   TARGET="aarch64-unknown-linux-musl" ;; \
-    "windows/amd64") TARGET="x86_64-pc-windows-gnu" ;; \
     *) \
     echo "ERROR: TARGETPLATFORM '${TARGETPLATFORM}' not supported." \
     exit 1 \
