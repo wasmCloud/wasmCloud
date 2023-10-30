@@ -16,6 +16,7 @@ RUN case ${TARGETPLATFORM} in \
     ;; \
     esac &&\
     nix --accept-flake-config --extra-experimental-features 'nix-command flakes' build -L ".#wasmcloud-${TARGET}"
+RUN install -Dp ./result/bin/wash /out/wash
 RUN install -Dp ./result/bin/wasmcloud /out/wasmcloud
 
 FROM debian:${DEBIAN_VERSION}-slim as result
@@ -32,6 +33,7 @@ RUN addgroup --gid $USER_GID $USERNAME \
 
 USER $USERNAME
 
+COPY --from=build --chown=$USERNAME --chmod=755 /out/wash /bin/wash
 COPY --from=build --chown=$USERNAME --chmod=755 /out/wasmcloud /bin/wasmcloud
 
 CMD ["wasmcloud"]

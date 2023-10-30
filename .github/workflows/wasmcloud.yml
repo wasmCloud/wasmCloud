@@ -67,6 +67,7 @@ jobs:
             ./result/bin/wasmcloud --version
           test-oci: |
             docker load < ./result
+            docker run --rm wasmcloud:$(nix eval --raw .#wasmcloud-x86_64-unknown-linux-musl-oci.imageTag) wash --version
             docker run --rm wasmcloud:$(nix eval --raw .#wasmcloud-x86_64-unknown-linux-musl-oci.imageTag) wasmcloud --version
 
     name: wasmcloud-${{ matrix.config.target }}
