@@ -26,6 +26,6 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          dockerfile: ./crates/wash-cli/Dockerfile
+          file: ./crates/wash-cli/Dockerfile
           push: false
           platforms: linux/amd64,linux/arm64
