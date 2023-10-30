@@ -33,7 +33,7 @@ To run the `wash build` integration tests that compile actors using actual langu
 
 ### Dependency Check Script
 
-To make it easy to ensure you have all the right tools installed to run all of the `wash` tests, we've created a Python script at `tools/deps_check.py`. You can run this using `python3 ./tools/deps_check.py`.
+To make it easy to ensure you have all the right tools installed to run all of the `wash` tests, we've created a Python script at `tools/deps_check.py`. You can run this using `make deps-check` or `python3 ./tools/deps_check.py`.
 
 ### Optional Tools
 
