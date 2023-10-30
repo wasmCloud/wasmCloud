@@ -4947,7 +4947,7 @@ dependencies = [
  "tokio",
  "wascap 0.11.2",
  "wasmcloud-component-adapters",
- "wit-component 0.16.0",
+ "wit-component 0.17.0",
 ]
 
 [[package]]
@@ -5953,7 +5953,7 @@ dependencies = [
  "weld-codegen",
  "wit-bindgen-core",
  "wit-bindgen-go",
- "wit-component 0.16.0",
+ "wit-component 0.17.0",
  "wit-parser",
 ]
 
@@ -7344,7 +7344,7 @@ dependencies = [
  "wasm-encoder 0.35.0",
  "wasm-metadata",
  "wit-bindgen-core",
- "wit-component 0.16.0",
+ "wit-component 0.16.1",
 ]
 
 [[package]]
@@ -7381,7 +7381,7 @@ dependencies = [
  "heck 0.4.1",
  "wasm-metadata",
  "wit-bindgen-core",
- "wit-component 0.16.0",
+ "wit-component 0.16.1",
 ]
 
 [[package]]
@@ -7396,14 +7396,14 @@ dependencies = [
  "syn 2.0.38",
  "wit-bindgen-core",
  "wit-bindgen-rust",
- "wit-component 0.16.0",
+ "wit-component 0.16.1",
 ]
 
 [[package]]
 name = "wit-component"
-version = "0.16.0"
+version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e87488b57a08e2cbbd076b325acbe7f8666965af174d69d5929cd373bd54547f"
+checksum = "65672b7a81f9c7a4420af2ad8d0de608e27b520a6d4b68f29f5146e060a86ee4"
 dependencies = [
  "anyhow",
  "bitflags 2.4.1",
@@ -7412,9 +7412,9 @@ dependencies = [
  "serde",
  "serde_derive",
  "serde_json",
- "wasm-encoder 0.35.0",
+ "wasm-encoder 0.36.1",
  "wasm-metadata",
- "wasmparser 0.115.0",
+ "wasmparser 0.116.0",
  "wit-parser",
 ]
 
