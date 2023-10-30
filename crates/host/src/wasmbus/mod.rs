@@ -3797,8 +3797,7 @@ impl Host {
             "process link definition entry put"
         );
 
-        let mut links = self.links.write().await;
-        links.insert(id.to_string(), ld.clone());
+        self.links.write().await.insert(id.to_string(), ld.clone()); // NOTE: this is one statement so the write lock is immediately dropped
         if let Some(actor) = self.actors.read().await.get(actor_id) {
             let mut links = actor.handler.links.write().await;
             links.entry(contract_id.clone()).or_default().insert(
@@ -3843,7 +3842,6 @@ impl Host {
 
         debug!(id, "process link definition entry deletion");
 
-        let mut links = self.links.write().await;
         // NOTE: There is a race condition here, which occurs when `linkdefs.del`
         // is used before `data_watch` task has fully imported the current lattice,
         // but that command is deprecated, so assume it's fine
@@ -3854,7 +3852,10 @@ impl Host {
             ref contract_id,
             ref values,
             ..
-        } = links
+        } = self
+            .links
+            .write() // NOTE: this is one statement so the write lock is immediately dropped
+            .await
             .remove(id)
             .context("attempt to remove a non-existent link")?;
         if let Some(actor) = self.actors.read().await.get(actor_id) {
