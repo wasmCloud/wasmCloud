@@ -14,7 +14,7 @@ use crate::{
 
 /// Arguments required when starting an actor
 pub struct StartActorArgs<'a> {
-    pub ctl_client: &'a CtlClient<DirectKvStore>,
+    pub ctl_client: &'a CtlClient,
     pub host_id: &'a str,
     pub actor_ref: &'a str,
     pub count: u16,
@@ -99,7 +99,7 @@ pub async fn start_actor(
 
 /// Scale a Wasmcloud actor on a given host
 pub async fn scale_actor(
-    client: &CtlClient<DirectKvStore>,
+    client: &CtlClient,
     host_id: &str,
     actor_ref: &str,
     max_concurrent: Option<u16>,
@@ -119,7 +119,7 @@ pub async fn scale_actor(
 
 /// Stop an actor
 pub async fn stop_actor(
-    client: &CtlClient<DirectKvStore>,
+    client: &CtlClient,
     host_id: &str,
     actor_id: &str,
     annotations: Option<HashMap<String, String>>,
@@ -162,7 +162,7 @@ pub async fn stop_actor(
 }
 
 pub async fn update_actor(
-    client: &CtlClient<DirectKvStore>,
+    client: &CtlClient,
     host_id: &str,
     actor_id: &str,
     actor_ref: &str,

@@ -177,7 +177,7 @@ wasmcloud-actor = { version = "*", path = "./crates/actor", default-features = f
 wasmcloud-actor-macros = { version = "*", path = "./crates/actor/macros", default-features = false }
 wasmcloud-compat = { version = "*", path = "./crates/compat", default-features = false }
 wasmcloud-component-adapters = { version = "0.3", default-features = false }
-wasmcloud-control-interface = { version = "0.30", default-features = false }
+wasmcloud-control-interface = { version = "0.31", default-features = false }
 wasmcloud-core = { version = "*", path = "./crates/core", default-features = false }
 wasmcloud-host = { version = "*", path = "./crates/host", default-features = false }
 wasmcloud-provider-sdk = { version = "*", path = "./crates/provider-sdk", default-features = false }

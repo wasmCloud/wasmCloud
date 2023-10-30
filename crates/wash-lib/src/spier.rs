@@ -91,7 +91,7 @@ impl Spier {
     /// be found or if there are connection issues
     pub async fn new(
         actor_id_or_name: &str,
-        ctl_client: &wasmcloud_control_interface::Client<DirectKvStore>,
+        ctl_client: &wasmcloud_control_interface::Client,
         nats_client: &async_nats::Client,
     ) -> Result<Self> {
         let (actor_id, friendly_name) = find_actor_id(actor_id_or_name, ctl_client).await?;
@@ -212,7 +212,7 @@ struct ProviderDetails {
 /// Fetches all providers linked to the given actor, along with their link names
 async fn get_linked_providers(
     actor_id: &ModuleId,
-    ctl_client: &wasmcloud_control_interface::Client<DirectKvStore>,
+    ctl_client: &wasmcloud_control_interface::Client,
 ) -> Result<Vec<ProviderDetails>> {
     let mut details = ctl_client
         .query_links()

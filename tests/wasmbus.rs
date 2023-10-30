@@ -30,8 +30,8 @@ use uuid::Uuid;
 use wascap::jwt;
 use wascap::wasm::extract_claims;
 use wasmcloud_control_interface::{
-    kv::DirectKvStore, ActorAuctionAck, ActorDescription, ActorInstance, ClientBuilder,
-    CtlOperationAck, Host as HostInfo, HostInventory, ProviderAuctionAck,
+    ActorAuctionAck, ActorDescription, ActorInstance, ClientBuilder, CtlOperationAck,
+    Host as HostInfo, HostInventory, ProviderAuctionAck,
 };
 use wasmcloud_host::wasmbus::{Host, HostConfig};
 
@@ -49,7 +49,7 @@ async fn free_port() -> anyhow::Result<u16> {
 }
 
 async fn assert_start_actor(
-    ctl_client: &wasmcloud_control_interface::Client<DirectKvStore>,
+    ctl_client: &wasmcloud_control_interface::Client,
     _nats_client: &async_nats::Client, // TODO: This should be exposed by `wasmcloud_control_interface::Client`
     _lattice_prefix: &str,
     host_key: &KeyPair,
@@ -70,7 +70,7 @@ async fn assert_start_actor(
 }
 
 async fn assert_scale_actor(
-    ctl_client: &wasmcloud_control_interface::Client<DirectKvStore>,
+    ctl_client: &wasmcloud_control_interface::Client,
     nats_client: &async_nats::Client, // TODO: This should be exposed by `wasmcloud_control_interface::Client`
     lattice_prefix: &str,
     host_key: &KeyPair,
@@ -105,7 +105,7 @@ async fn assert_scale_actor(
 
 #[allow(clippy::too_many_arguments)] // Shush clippy, it's a test function
 async fn assert_start_provider(
-    client: &wasmcloud_control_interface::Client<DirectKvStore>,
+    client: &wasmcloud_control_interface::Client,
     nats_client: &async_nats::Client, // TODO: This should be exposed by `wasmcloud_control_interface::Client`
     lattice_prefix: &str,
     host_key: &KeyPair,
@@ -168,7 +168,7 @@ async fn assert_start_provider(
 }
 
 async fn assert_advertise_link(
-    client: &wasmcloud_control_interface::Client<DirectKvStore>,
+    client: &wasmcloud_control_interface::Client,
     actor_claims: &jwt::Claims<jwt::Actor>,
     provider_key: &KeyPair,
     contract_id: impl AsRef<str>,
@@ -189,7 +189,7 @@ async fn assert_advertise_link(
 }
 
 async fn assert_remove_link(
-    client: &wasmcloud_control_interface::Client<DirectKvStore>,
+    client: &wasmcloud_control_interface::Client,
     actor_claims: &jwt::Claims<jwt::Actor>,
     contract_id: impl AsRef<str>,
     link_name: &str,
@@ -549,9 +549,7 @@ async fn wasmbus() -> anyhow::Result<()> {
 
     let ctl_client = ClientBuilder::new(ctl_nats_client.clone())
         .lattice_prefix(TEST_PREFIX.to_string())
-        .build()
-        .await
-        .map_err(|e| anyhow!(e).context("failed to build control interface client"))?;
+        .build();
     let mut hosts = ctl_client
         .get_hosts()
         .await
@@ -573,7 +571,6 @@ async fn wasmbus() -> anyhow::Result<()> {
                 js_domain,
                 labels,
                 lattice_prefix,
-                prov_rpc_host,
                 rpc_host,
                 uptime_human,
                 uptime_seconds,
@@ -606,7 +603,6 @@ got: {labels:?}
 expected: {expected_labels:?}"#
             );
             ensure!(lattice_prefix == Some(TEST_PREFIX.into()));
-            ensure!(prov_rpc_host == Some(ctl_nats_url.to_string()));
             ensure!(rpc_host == Some(ctl_nats_url.to_string()));
             ensure!(uptime_human.unwrap().len() > 0);
             ensure!(uptime_seconds >= 0);
@@ -958,9 +954,7 @@ expected: {expected_labels:?}"#
 
     let ctl_client = ClientBuilder::new(ctl_nats_client.clone())
         .lattice_prefix(TEST_PREFIX.to_string())
-        .build()
-        .await
-        .map_err(|e| anyhow!(e).context("failed to build control interface client"))?;
+        .build();
 
     let mut claims_from_bucket = ctl_client
         .get_claims()
@@ -999,7 +993,6 @@ expected: {expected_labels:?}"#
     ensure!(pinged_host.js_domain == None);
     ensure!(pinged_host.labels == Some(expected_labels.clone()));
     ensure!(pinged_host.lattice_prefix == Some(TEST_PREFIX.into()));
-    ensure!(pinged_host.prov_rpc_host == Some(ctl_nats_url.to_string()));
     ensure!(pinged_host.rpc_host == Some(ctl_nats_url.to_string()));
     ensure!(pinged_host.uptime_human.clone().unwrap().len() > 0);
     ensure!(pinged_host.uptime_seconds > 0);
