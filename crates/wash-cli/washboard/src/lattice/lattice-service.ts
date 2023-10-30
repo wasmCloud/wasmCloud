@@ -70,13 +70,18 @@ class LatticeService {
     latticeUrl: import.meta.env.VITE_NATS_WEBSOCKET_URL || 'ws://localhost:4001',
   };
 
+  private linkState$: Subject<Pick<LatticeCache, 'links'>>;
+  private wadmState$: Subject<Partial<LatticeCache>>;
+
   private constructor() {
-    this.configureConnection();
+    this.linkState$ = new Subject<Pick<LatticeCache, 'links'>>();
+    this.wadmState$ = new Subject<Partial<LatticeCache>>();
+    this.connect();
   }
 
   public set latticeUrl(url: string) {
     this.config.latticeUrl = url;
-    this.configureConnection();
+    this.connect();
   }
   public get latticeUrl(): string {
     return this.config.latticeUrl;
@@ -98,7 +103,7 @@ class LatticeService {
     });
 
     // join wadmState and linkState into a single observable
-    merge(this.wadmState$(), this.linkState$())
+    merge(this.wadmState$, this.linkState$)
       .pipe(
         // merge the new event into the existing state
         map((event) =>
@@ -115,13 +120,11 @@ class LatticeService {
     return subject;
   }
 
-  public linkState$(): Subject<Pick<LatticeCache, 'links'>> {
-    const subject = new Subject<Pick<LatticeCache, 'links'>>();
-
+  private subscribeToLinks() {
     (async (): Promise<void> => {
       const connection = await this.waitForConnection();
       const message = await connection.request('wasmbus.ctl.default.get.links');
-      subject.next(message.json<{links: WadmLink[]}>());
+      this.linkState$.next(message.json<{links: WadmLink[]}>());
 
       const watch = await connection.subscribe('wasmbus.evt.default');
       for await (const event of watch) {
@@ -131,19 +134,15 @@ class LatticeService {
           case 'com.wasmcloud.lattice.linkdef_deleted': {
             // Just refresh the whole list instead of trying to figure out which one changed
             const message = await connection.request('wasmbus.ctl.default.get.links');
-            subject.next(message.json<{links: WadmLink[]}>());
+            this.linkState$.next(message.json<{links: WadmLink[]}>());
           }
         }
       }
-      subject.complete();
+      this.linkState$.complete();
     })();
-
-    return subject;
   }
 
-  public wadmState$(): Subject<Partial<LatticeCache>> {
-    const subject = new Subject<Partial<LatticeCache>>();
-
+  private subscribeToWadmState() {
     (async (): Promise<void> => {
       const connection = await this.waitForConnection();
       const wadm = await connection.jetstream().views.kv('wadm_state');
@@ -151,26 +150,24 @@ class LatticeService {
       for await (const event of watch) {
         switch (event.key) {
           case 'host_default': {
-            subject.next({hosts: event.json() as Record<string, WadmHost>});
+            this.wadmState$.next({hosts: event.json() as Record<string, WadmHost>});
             break;
           }
           case 'actor_default': {
-            subject.next({actors: event.json() as Record<string, WadmActor>});
+            this.wadmState$.next({actors: event.json() as Record<string, WadmActor>});
             break;
           }
           case 'provider_default': {
-            subject.next({providers: event.json() as Record<string, WadmProvider>});
+            this.wadmState$.next({providers: event.json() as Record<string, WadmProvider>});
             break;
           }
         }
       }
-      subject.complete();
+      this.wadmState$.complete();
     })();
-
-    return subject;
   }
 
-  private async configureConnection(): Promise<void> {
+  private async connect(): Promise<void> {
     await this.connection?.drain().catch(() => null);
     this.connection = await connect({
       servers: this.latticeUrl,
@@ -180,6 +177,8 @@ class LatticeService {
         console.error(`closed with an error: ${error.message}`);
       }
     });
+    this.subscribeToWadmState();
+    this.subscribeToLinks()
   }
 
   public async testConnection(url: string): Promise<boolean> {
