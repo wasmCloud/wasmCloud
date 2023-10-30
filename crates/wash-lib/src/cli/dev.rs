@@ -17,7 +17,7 @@ pub async fn run_dev_loop(
     actor_id: ModuleId,
     actor_ref: &str,
     host_id: ServerId,
-    ctl_client: &Client<DirectKvStore>,
+    ctl_client: &Client,
     sign_cfg: Option<SignConfig>,
 ) -> Result<()> {
     let built_artifact_path = build_project(project_cfg, sign_cfg)?.canonicalize()?;

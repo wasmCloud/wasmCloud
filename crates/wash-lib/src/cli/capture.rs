@@ -218,7 +218,7 @@ pub async fn disable(
 
 pub async fn capture(
     ctx: async_nats::jetstream::Context,
-    ctl_client: wasmcloud_control_interface::Client<DirectKvStore>,
+    ctl_client: wasmcloud_control_interface::Client,
     lattice_id: &str,
 ) -> Result<CommandOutput> {
     let stream = ctx.get_stream(stream_name(lattice_id)).await.map_err(|e| {
@@ -309,7 +309,7 @@ pub async fn capture(
 }
 
 async fn get_all_inventory(
-    ctl_client: &wasmcloud_control_interface::Client<DirectKvStore>,
+    ctl_client: &wasmcloud_control_interface::Client,
 ) -> anyhow::Result<Vec<wasmcloud_control_interface::HostInventory>> {
     let futs = ctl_client
         .get_hosts()

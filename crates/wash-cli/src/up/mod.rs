@@ -243,10 +243,7 @@ pub struct WasmcloudOpts {
 }
 
 impl WasmcloudOpts {
-    pub async fn into_ctl_client(
-        self,
-        auction_timeout_ms: Option<u64>,
-    ) -> Result<CtlClient<DirectKvStore>> {
+    pub async fn into_ctl_client(self, auction_timeout_ms: Option<u64>) -> Result<CtlClient> {
         let lattice_prefix = self.lattice_prefix;
         let ctl_host = self
             .ctl_host
