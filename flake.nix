@@ -156,10 +156,6 @@
 
               preCheck =
                 preCheck
-                + ''
-                  export HOME=''${HOME:- "''${TMPDIR}/home"}
-                  export GOCACHE=$TMPDIR/go-cache
-                ''
                 # See https://github.com/nextest-rs/nextest/issues/267
                 + optionalString (pkgs.stdenv.hostPlatform.isDarwin && stdenv.hostPlatform.isDarwin) ''
                   export DYLD_FALLBACK_LIBRARY_PATH=$(rustc --print sysroot)/lib
