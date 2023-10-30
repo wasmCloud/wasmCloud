@@ -1,5 +1,5 @@
 import {SettingsIcon} from 'lucide-react';
-import {PropsWithChildren, ReactElement} from 'react';
+import {ReactElement} from 'react';
 import LatticeSettings from '@/lattice/LatticeSettings';
 import {Button} from '@/ui/button';
 import {Label} from '@/ui/label';
@@ -29,24 +29,19 @@ function Settings(): ReactElement {
             Make changes to your settings here. Click update when you're done.
           </SheetDescription>
         </SheetHeader>
-        <div className="grid gap-4 py-4">
-          <div className="mb-6">
-            <SettingsSectionLabel>Display</SettingsSectionLabel>
+        <div className="flex flex-col gap-6">
+          <div className="flex flex-col gap-3">
+            <h3 className="font-semibold">Display</h3>
             <div className="grid w-full max-w-sm items-center gap-1.5">
               <Label htmlFor="dark-mode">Dark Mode</Label>
               <DarkModeToggle id="dark-mode" />
             </div>
           </div>
-          <SettingsSectionLabel>Lattice Configuration</SettingsSectionLabel>
           <LatticeSettings />
         </div>
       </SheetContent>
     </Sheet>
   );
-}
-
-function SettingsSectionLabel({children}: PropsWithChildren): ReactElement {
-  return <div className="mb-3 font-semibold">{children}</div>;
 }
 
 export {Settings};

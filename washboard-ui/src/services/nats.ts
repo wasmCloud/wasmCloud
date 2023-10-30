@@ -1,8 +1,11 @@
-import { connect } from 'nats.ws';
+import {connect, Authenticator} from 'nats.ws';
 
-export async function canConnect(url: string): Promise<boolean> {
+export async function canConnect(args: {
+  servers: Array<string> | string;
+  authenticator?: Authenticator[];
+}): Promise<boolean> {
   try {
-    const connection = await connect({ servers: url });
+    const connection = await connect(args);
     await connection.close();
     return true;
   } catch {

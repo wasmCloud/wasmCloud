@@ -7,7 +7,7 @@ export function ConnectionStatus() {
   const latticeConfig = useReactiveConfig();
   const [status, setStatus] = useState<'PENDING' | 'ONLINE' | 'OFFLINE'>('PENDING');
   useEffect(() => {
-    canConnect(latticeConfig.latticeUrl).then((online) => setStatus(online ? 'ONLINE' : 'OFFLINE'));
+    canConnect({servers: latticeConfig.latticeUrl}).then((online) => setStatus(online ? 'ONLINE' : 'OFFLINE'));
   }, [latticeConfig.latticeUrl]);
 
   return (
