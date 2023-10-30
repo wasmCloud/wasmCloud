@@ -1,14 +1,10 @@
 [package]
 name = "tcp-component-command"
-
-version.workspace = true
-edition.workspace = true
-
-# TODO: Make part of workspace once cargo feature unification does not break tokio
-
-[workspace.package]
 edition = "2021"
 version = "0.1.0"
+
+# TODO: Make part of workspace once cargo feature unification does not break tokio
+[workspace]
 
 [dependencies]
 anyhow = { version = "1" }
