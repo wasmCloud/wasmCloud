@@ -59,7 +59,7 @@ Run:
   down         Tear down a local wasmCloud environment (launched with wash up)
   app          Manage declarative applications and deployments (wadm)
   spy          Spy on all invocations between an actor and its linked providers
-  ui           Launch a web UI for wasmCloud (experimental)
+  ui           Serve a web UI for wasmCloud
 
 Iterate:
   get          Get information about different resources
@@ -209,7 +209,7 @@ enum CliCommand {
     /// Bootstrap a wasmCloud environment
     #[clap(name = "up")]
     Up(UpCommand),
-    /// Start a wasmCloud web ui (washboard)
+    /// Serve a web UI for wasmCloud
     #[clap(name = "ui")]
     Ui(UiCommand),
     /// Perform validation checks on smithy models
@@ -292,13 +292,7 @@ async fn main() {
             common::update_cmd::handle_command(update_cli, output_kind).await
         }
         CliCommand::Up(up_cli) => up::handle_command(up_cli, output_kind).await,
-        CliCommand::Ui(ui_cli) => {
-            if cli.experimental {
-                ui::handle_command(ui_cli, output_kind).await
-            } else {
-                experimental_error_message("ui")
-            }
-        }
+        CliCommand::Ui(ui_cli) => ui::handle_command(ui_cli, output_kind).await,
         CliCommand::Validate(validate_cli) => smithy::handle_validate_command(validate_cli).await,
     };
 

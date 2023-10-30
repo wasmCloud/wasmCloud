@@ -29,11 +29,11 @@ jobs:
         with:
           node-version: '18.x'
       - name: npm install
-        run: npm install --prefix ./washboard
-        working-directory: ./crates/wash-cli
+        run: npm install
+        working-directory: ./washboard-ui
       - name: npm run build
-        run: npm run build --prefix ./washboard
-        working-directory: ./crates/wash-cli
+        run: npm run build
+        working-directory: ./washboard-ui
 
   unit_tests:
     name: Unit Tests
