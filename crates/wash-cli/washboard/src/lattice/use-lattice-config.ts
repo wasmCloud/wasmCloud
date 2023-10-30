@@ -1,5 +1,6 @@
 import * as React from 'react';
 import LatticeService from './lattice-service';
+import {useEffect, useState} from "react";
 
 type SetConfigFunction = <K extends keyof LatticeService>(
   key: K,
@@ -27,6 +28,20 @@ function useLatticeConfig(): UseLatticeConfigResult {
     },
     setConfig,
   };
+}
+
+export function useReactiveConfig() {
+  const [config, setConfig] = useState(() => LatticeService.getInstance().config$.value);
+
+  useEffect(() => {
+    const subscription = LatticeService.getInstance().config$.subscribe(
+      newConfig => setConfig(newConfig)
+    );
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  return config;
 }
 
 export {useLatticeConfig};
