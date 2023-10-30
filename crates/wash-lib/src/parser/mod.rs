@@ -1,7 +1,7 @@
 //! Parse wasmcloud.toml files which specify key information for building and signing
 //! WebAssembly modules and native capability provider binaries
 
-use std::{fmt::Display, fs, path::PathBuf};
+use std::{collections::HashSet, fmt::Display, fs, path::PathBuf};
 
 use anyhow::{anyhow, bail, Context, Result};
 use cargo_toml::{Manifest, Product};
@@ -57,6 +57,8 @@ pub struct ActorConfig {
     pub wasi_preview2_adapter_path: Option<PathBuf>,
     /// The WIT world that is implemented by the component
     pub wit_world: Option<String>,
+    /// Tags that should be applied during the actor signing process
+    pub tags: Option<HashSet<String>>,
 }
 
 impl RustConfig {
@@ -90,6 +92,8 @@ struct RawActorConfig {
     pub call_alias: Option<String>,
     /// The WIT world that is implemented by the component
     pub wit_world: Option<String>,
+    /// Tags that should be applied during the actor signing process
+    pub tags: Option<HashSet<String>>,
 }
 
 impl TryFrom<RawActorConfig> for ActorConfig {
@@ -111,6 +115,7 @@ impl TryFrom<RawActorConfig> for ActorConfig {
             wasi_preview2_adapter_path: raw_config.wasi_preview2_adapter_path,
             call_alias: raw_config.call_alias,
             wit_world: raw_config.wit_world,
+            tags: raw_config.tags,
         })
     }
 }
@@ -121,6 +126,7 @@ pub struct ProviderConfig {
     /// The vendor name of the provider.
     pub vendor: String,
 }
+
 #[derive(Deserialize, Debug, PartialEq)]
 struct RawProviderConfig {
     /// The capability ID of the provider.

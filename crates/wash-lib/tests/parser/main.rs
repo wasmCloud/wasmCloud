@@ -1,4 +1,4 @@
-use std::{fs, path::PathBuf};
+use std::{collections::HashSet, fs, path::PathBuf};
 
 use claims::{assert_err, assert_ok};
 use semver::Version;
@@ -36,7 +36,7 @@ fn rust_actor() {
             call_alias: Some("testactor".to_string()),
             wasi_preview2_adapter_path: None,
             wasm_target: WasmTarget::CoreModule,
-            wit_world: None,
+            ..ActorConfig::default()
         })
     );
 
@@ -82,7 +82,7 @@ fn tinygo_actor_module() {
             call_alias: Some("testactor".to_string()),
             wasi_preview2_adapter_path: None,
             wasm_target: WasmTarget::CoreModule,
-            wit_world: None,
+            ..ActorConfig::default()
         })
     );
 
@@ -121,7 +121,7 @@ fn tinygo_actor_component() {
             call_alias: Some("testactor".to_string()),
             wasi_preview2_adapter_path: None,
             wasm_target: WasmTarget::WasiPreview2,
-            wit_world: None,
+            ..ActorConfig::default()
         })
     );
 }
@@ -293,7 +293,7 @@ fn minimal_rust_actor() {
             call_alias: None,
             wasi_preview2_adapter_path: None,
             wasm_target: WasmTarget::CoreModule,
-            wit_world: None,
+            ..ActorConfig::default()
         })
     );
 
@@ -340,7 +340,7 @@ fn cargo_toml_actor() {
             call_alias: None,
             wasi_preview2_adapter_path: None,
             wasm_target: WasmTarget::CoreModule,
-            wit_world: None,
+            ..ActorConfig::default()
         })
     );
 
@@ -420,5 +420,21 @@ fn minimal_rust_actor_core_module() {
             wasm_target: WasmTarget::CoreModule,
             ..
         })
+    ));
+}
+
+/// Tags are properly handled (duplicates, pre-existing experimental tag)
+/// see: https://github.com/wasmCloud/wash/pull/951
+#[test]
+fn tags() {
+    let result = get_config(Some(PathBuf::from("./tests/parser/files/tags.toml")), None);
+
+    let config = assert_ok!(result);
+    assert!(matches!(
+        config.project_type,
+        TypeConfig::Actor(ActorConfig {
+            tags,
+            ..
+        }) if tags == Some(HashSet::from(["test".into(), "wasmcloud.com/experimental".into()])),
     ));
 }
