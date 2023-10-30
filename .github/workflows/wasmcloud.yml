@@ -344,7 +344,7 @@ jobs:
       uses: docker/build-push-action@v5
       with:
         context: .
-        file: "Dockerfile.wash"
+        file: "./crates/wash-cli/Dockerfile"
         labels: ${{ steps.meta.outputs.labels }}
         platforms: linux/amd64,linux/arm64
         push: ${{ github.repository == 'wasmCloud/wasmCloud' }}
