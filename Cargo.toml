@@ -170,7 +170,7 @@ wascap = { version = "*", path = "./crates/wascap", default-features = false }
 wash-cli = { version = "*", path = "./crates/wash-cli", default-features = false }
 wash-lib = { version = "*", path = "./crates/wash-lib", default-features = false }
 wasi-common = { version = "14", default-features = false }
-wasm-encoder = { version = "0.35", default-features = false }
+wasm-encoder = { version = "0.36", default-features = false }
 wasm-gen = { version = "0.1", default-features = false }
 wasmbus-rpc = { version = "0.15", default-features = false }
 wasmcloud-actor = { version = "*", path = "./crates/actor", default-features = false }
