@@ -61,7 +61,6 @@
             "crates/wash-cli/Dockerfile"
             "crates/wash-cli/docs"
             "crates/wash-cli/Makefile"
-            "crates/wash-cli/README.md"
             "crates/wash-cli/snap"
             "crates/wash-cli/tools"
             "Dockerfile"
