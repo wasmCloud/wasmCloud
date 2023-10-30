@@ -91,13 +91,13 @@ jobs:
     steps: 
     - uses: actions/checkout@v4.1.1
     - run: cargo build --release -p wash-cli -p wasmcloud
-    - run: mkdir "bin"
-    - run: move "target/release/wasmcloud.exe" "bin/wasmcloud.exe"
-    - run: move "target/release/wash.exe" "bin/wash.exe"
+    - run: mkdir "artifact/bin"
+    - run: move "target/release/wasmcloud.exe" "artifact/bin/wasmcloud.exe"
+    - run: move "target/release/wash.exe" "artifact/bin/wash.exe"
     - uses: actions/upload-artifact@v3
       with:
         name: wasmcloud-x86_64-pc-windows-msvc
-        path: bin
+        path: artifact
 
   build-lipo:
     name: wasmcloud-universal-darwin
