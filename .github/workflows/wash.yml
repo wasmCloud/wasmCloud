@@ -11,6 +11,10 @@ on:
     - crates/wash-cli/**
     - crates/wash-lib/**
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
 
