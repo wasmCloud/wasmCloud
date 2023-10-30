@@ -157,12 +157,10 @@ fn sign_actor_wasm(
 ) -> Result<PathBuf> {
     // If we're building for WASI preview1 or preview2, we're targeting components-first
     // functionality, and the signed module should be marked as experimental
-    let tags: Vec<String> =
-        if let WasmTarget::WasiPreview1 | WasmTarget::WasiPreview2 = &actor_config.wasm_target {
-            Vec::from([WASMCLOUD_WASM_TAG_EXPERIMENTAL.into()])
-        } else {
-            Vec::new()
-        };
+    let mut tags = actor_config.tags.clone().unwrap_or_default();
+    if let WasmTarget::WasiPreview1 | WasmTarget::WasiPreview2 = &actor_config.wasm_target {
+        tags.insert(WASMCLOUD_WASM_TAG_EXPERIMENTAL.into());
+    };
 
     let source = actor_wasm_path
         .as_ref()
@@ -189,7 +187,7 @@ fn sign_actor_wasm(
                 directory: signing_config.keys_directory,
                 ..Default::default()
             },
-            tags,
+            tags: tags.into_iter().collect(),
             ..Default::default()
         },
     };
@@ -567,6 +565,7 @@ fn build_interface(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::fs;
     use std::fs::DirEntry;
     use std::path::Path;
@@ -678,8 +677,8 @@ world downstream {
         Ok(())
     }
 
-    /// Ensure that components which get signed contain the right experimental tags
-    /// in claims when preview1 or preview2 targets are signed
+    /// Ensure that components which get signed contain any tags specified
+    /// *and* experimental tag in claims when preview1 or preview2 targets are signed
     #[test]
     fn sign_actor_component_includes_experimental() -> Result<()> {
         // Build project path, including WIT dir
@@ -702,6 +701,7 @@ world downstream {
                 &ActorConfig {
                     wasm_target: wasm_target.clone(),
                     wit_world: Some("test".into()),
+                    tags: Some(HashSet::from(["test-tag".into()])),
                     ..ActorConfig::default()
                 },
                 SignConfig::default(),
@@ -715,25 +715,23 @@ world downstream {
             .context("failed to extract claims")?;
 
             // Check wasm targets
+            let tags = claims
+                .metadata
+                .context("failed to get claim metadata")?
+                .tags
+                .context("missing tags")?;
+            assert!(
+                tags.contains(&String::from("test-tag")),
+                "test-tag should be present"
+            );
+
             match wasm_target {
                 WasmTarget::CoreModule => assert!(
-                    claims
-                        .metadata
-                        .context("failed to get claim metadata")?
-                        .tags
-                        .context("failed to get tags")?
-                        .iter()
-                        .all(|t| t != WASMCLOUD_WASM_TAG_EXPERIMENTAL),
-                    "experimental tag should not be present on core modules",
+                    !tags.contains(&String::from(WASMCLOUD_WASM_TAG_EXPERIMENTAL)),
+                    "experimental tag should not be present on core modules"
                 ),
                 WasmTarget::WasiPreview1 | WasmTarget::WasiPreview2 => assert!(
-                    claims
-                        .metadata
-                        .context("failed to get claim metadata")?
-                        .tags
-                        .context("failed to get tags")?
-                        .iter()
-                        .any(|t| t == WASMCLOUD_WASM_TAG_EXPERIMENTAL),
+                    tags.contains(&String::from(WASMCLOUD_WASM_TAG_EXPERIMENTAL)),
                     "experimental tag should be present on preview1/preview2 components"
                 ),
             }
