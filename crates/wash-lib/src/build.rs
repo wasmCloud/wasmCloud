@@ -178,6 +178,8 @@ fn sign_actor_wasm(
         metadata: ActorMetadata {
             name: common_config.name.clone(),
             ver: Some(common_config.version.to_string()),
+            //NOTE(Ahmed Tadde): sign_file requires a revision, using 1 as default
+            rev: Some(1),
             custom_caps: actor_config.claims.clone(),
             call_alias: actor_config.call_alias.clone(),
             issuer: signing_config.issuer,

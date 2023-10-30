@@ -588,6 +588,18 @@ pub fn sign_file(cmd: SignCommand, output_kind: OutputKind) -> Result<CommandOut
         bail!("Capability providers cannot provide multiple capabilities at once.");
     }
 
+    if cmd.metadata.rev.is_none() && cmd.metadata.ver.is_none() {
+        bail!("revision (--rev) and version (--ver) must be specified for signing.");
+    }
+
+    if cmd.metadata.rev.is_none() {
+        bail!("revision (--rev) must be specified for signing.");
+    }
+
+    if cmd.metadata.ver.is_none() {
+        bail!("version (--ver) must be specified for signing.");
+    }
+
     let signed = sign_buffer_with_claims(
         cmd.metadata.name.clone(),
         &buf,
