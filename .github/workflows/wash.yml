@@ -72,9 +72,8 @@ jobs:
         run: rustup target add wasm32-unknown-unknown
       - name: Launch integration test services
         uses: sudo-bot/action-docker-compose@latest
-        working-directory: ./crates/wash-cli
         with:
-          cli-args: "-f ./tools/docker-compose.yml up --detach"
+          cli-args: "-f ./crates/wash-cli/tools/docker-compose.yml up --detach"
       - name: Install nextest
         uses: taiki-e/install-action@nextest
       - name: Run integration tests
