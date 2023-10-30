@@ -16,7 +16,7 @@ function useLatticeData(): LatticeCache {
     return () => {
       sub.unsubscribe();
     };
-  }, [service]);
+  }, [service, service.latticeUrl]);
 
   return state;
 }
