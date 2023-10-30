@@ -83,7 +83,10 @@
         targets.armv7-unknown-linux-musleabihf = false;
         targets.wasm32-wasi = false;
 
-        build.workspace = true;
+        build.packages = [
+          "wash-cli"
+          "wasmcloud"
+        ];
 
         clippy.allTargets = true;
         clippy.deny = ["warnings"];

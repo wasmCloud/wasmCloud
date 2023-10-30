@@ -90,10 +90,10 @@ jobs:
     runs-on: windows-latest-8-cores
     steps: 
     - uses: actions/checkout@v4.1.1
-    - run: cargo build --release --workspace
-    - run: mkdir -p ./bin
-    - run: mv ./target/release/wasmcloud.exe ./bin/wasmcloud.exe
-    - run: mv ./target/release/wash.exe ./bin/wash.exe
+    - run: cargo build --release -p wash-cli -p wasmcloud
+    - run: mkdir "bin"
+    - run: move "target/release/wasmcloud.exe" "bin/wasmcloud.exe"
+    - run: move "target/release/wash.exe" "bin/wash.exe"
     - uses: actions/upload-artifact@v3
       with:
         name: wasmcloud-x86_64-pc-windows-msvc
