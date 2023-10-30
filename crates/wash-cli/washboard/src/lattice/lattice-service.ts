@@ -72,15 +72,22 @@ class LatticeService {
 
   private linkState$: Subject<Pick<LatticeCache, 'links'>>;
   private wadmState$: Subject<Partial<LatticeCache>>;
+  public config$: BehaviorSubject<{
+    latticeUrl: string;
+  }>;
 
   private constructor() {
     this.linkState$ = new Subject<Pick<LatticeCache, 'links'>>();
     this.wadmState$ = new Subject<Partial<LatticeCache>>();
+    this.config$ = new BehaviorSubject({
+      latticeUrl: import.meta.env.VITE_NATS_WEBSOCKET_URL || 'ws://localhost:4001',
+    });
     this.connect();
   }
 
   public set latticeUrl(url: string) {
     this.config.latticeUrl = url;
+    this.config$.next({...this.config$, latticeUrl: url})
     this.connect();
   }
   public get latticeUrl(): string {
@@ -179,19 +186,6 @@ class LatticeService {
     });
     this.subscribeToWadmState();
     this.subscribeToLinks()
-  }
-
-  public async testConnection(url: string): Promise<boolean> {
-    try {
-      const connection = await connect({
-        servers: url,
-      });
-
-      await connection.close();
-      return true;
-    } catch {
-      return false;
-    }
   }
 
   private waitForConnection(count = 0): Promise<NatsConnection> {

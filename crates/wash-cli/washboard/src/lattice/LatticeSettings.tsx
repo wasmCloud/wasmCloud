@@ -5,8 +5,8 @@ import * as z from 'zod';
 import {Button} from 'ui/button';
 import {Form, FormControl, FormField, FormItem, FormLabel, FormMessage} from 'ui/form';
 import {Input} from 'ui/input';
-import LatticeService from './lattice-service';
 import {useLatticeConfig} from './use-lattice-config';
+import {canConnect} from "../services/nats.ts";
 
 type Props = {
   onSave: (event: z.infer<typeof formSchema>) => void;
@@ -20,7 +20,7 @@ const formSchema = z.object({
     })
     .refine(
       (latticeId) => {
-        return LatticeService.getInstance().testConnection(latticeId);
+        return canConnect(latticeId);
       },
       {message: 'Could not connect to Lattice'},
     ),
