@@ -185,7 +185,7 @@ wasmcloud-provider-wit-bindgen = { version = "*", path = "./crates/provider-wit-
 wasmcloud-runtime = { version = "*", path = "./crates/runtime", default-features = false }
 wasmcloud-test-util = { version = "0.10", default-features = false }
 wasmcloud-tracing = { version = "*", path = "./crates/tracing", default-features = false }
-wasmparser = { version = "0.115", default-features = false }
+wasmparser = { version = "0.116", default-features = false }
 wasmtime = { version = "14", default-features = false }
 wasmtime-wasi = { version = "14", default-features = false }
 wasmtime-wasi-http = { version = "14", default-features = false }
