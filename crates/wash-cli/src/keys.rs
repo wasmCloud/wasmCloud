@@ -15,9 +15,8 @@ const NKEYS_EXTENSION: &str = ".nk";
 pub enum KeysCliCommand {
     #[clap(name = "gen", about = "Generates a keypair")]
     GenCommand {
-        /// The type of keypair to generate. May be Account, User, Module (Actor), Service (Capability Provider), Server, Operator, Cluster
-        #[clap(ignore_case = true)]
-        keytype: KeyPairType,
+        /// The type of keypair to generate. May be Account, User, Module (Actor), Service (Capability Provider), Server (Host), Operator, Cluster
+        keytype: String,
     },
     #[clap(name = "get", about = "Retrieves a keypair and prints the contents")]
     GetCommand {
@@ -47,12 +46,32 @@ pub enum KeysCliCommand {
 
 pub fn handle_command(command: KeysCliCommand) -> Result<CommandOutput> {
     match command {
-        KeysCliCommand::GenCommand { keytype } => generate(&keytype),
+        KeysCliCommand::GenCommand { keytype } => {
+            let kt = keytype_parser(&keytype)?;
+            generate(&kt)
+        }
         KeysCliCommand::GetCommand { keyname, directory } => get(&keyname, directory),
         KeysCliCommand::ListCommand { directory } => list(directory),
     }
 }
 
+pub fn keytype_parser(keytype: &str) -> Result<KeyPairType> {
+    match keytype.to_lowercase().as_str() {
+        "account" => Ok(KeyPairType::Account),
+        "user" => Ok(KeyPairType::User),
+        "module" => Ok(KeyPairType::Module),
+        "actor" => Ok(KeyPairType::Module),
+        "service" => Ok(KeyPairType::Service),
+        "provider" => Ok(KeyPairType::Service),
+        "server" => Ok(KeyPairType::Server),
+        "host" => Ok(KeyPairType::Server),
+        "operator" => Ok(KeyPairType::Operator),
+        "cluster" => Ok(KeyPairType::Cluster),
+        _ => Err(anyhow::anyhow!(
+            "Invalid key type. Must be one of Account, User, Module (Actor), Service (Provider), Server (Host), Operator, Cluster"
+        )),
+    }
+}
 /// Generates a keypair of the specified KeyPairType
 pub fn generate(kt: &KeyPairType) -> Result<CommandOutput> {
     let kp = KeyPair::new(kt.clone());
@@ -111,7 +130,8 @@ fn determine_directory(directory: Option<PathBuf>) -> Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{generate, KeysCliCommand};
+
+    use super::{generate, keytype_parser, KeysCliCommand};
     use clap::Parser;
     use nkeys::KeyPairType;
     use serde::Deserialize;
@@ -251,46 +271,57 @@ mod tests {
     /// changes syntax, ordering of required elements, or flags.
     fn test_gen_comprehensive() {
         let key_gen_types = [
-            "account", "user", "module", "service", "server", "operator", "cluster",
+            "acCount", "usEr", "module", "ACTOR", "SERVICE", "provider", "server", "HOST",
+            "operator", "CLUSTER",
         ];
 
-        key_gen_types.iter().for_each(|cmd| {
-            let gen_cmd: Cmd = clap::Parser::try_parse_from(["keys", "gen", cmd]).unwrap();
-            match gen_cmd.keys {
-                KeysCliCommand::GenCommand { keytype } => {
-                    use KeyPairType::*;
-                    match keytype {
-                        Account => assert_eq!(*cmd, "account"),
-                        User => assert_eq!(*cmd, "user"),
-                        Module => assert_eq!(*cmd, "module"),
-                        Service => assert_eq!(*cmd, "service"),
-                        Server => assert_eq!(*cmd, "server"),
-                        Operator => assert_eq!(*cmd, "operator"),
-                        Cluster => assert_eq!(*cmd, "cluster"),
+        key_gen_types
+            .iter()
+            .map(|cmd| cmd.to_lowercase())
+            .for_each(|cmd| {
+                let gen_cmd: Cmd = clap::Parser::try_parse_from(["keys", "gen", &cmd]).unwrap();
+                match gen_cmd.keys {
+                    KeysCliCommand::GenCommand { keytype } => {
+                        use KeyPairType::*;
+                        let parsed_keytype = keytype_parser(&keytype).unwrap();
+                        match parsed_keytype {
+                            Account => assert_eq!(&cmd, "account"),
+                            User => assert_eq!(&cmd, "user"),
+                            Module => assert!(cmd.eq("module") || cmd.eq("actor")),
+                            Service => assert!(cmd.eq("service") || cmd.eq("provider")),
+                            Server => assert!(cmd.eq("server") || cmd.eq("host")),
+                            Operator => assert_eq!(&cmd, "operator"),
+                            Cluster => assert_eq!(&cmd, "cluster"),
+                        }
                     }
-                }
-                _ => panic!("`keys gen` constructed incorrect command"),
-            };
-        });
+                    _ => panic!("`keys gen` constructed incorrect command"),
+                };
+            });
+    }
 
-        key_gen_types.iter().for_each(|cmd| {
-            let gen_cmd: Cmd = clap::Parser::try_parse_from(["keys", "gen", cmd]).unwrap();
-            match gen_cmd.keys {
-                KeysCliCommand::GenCommand { keytype } => {
-                    use KeyPairType::*;
-                    match keytype {
-                        Account => assert_eq!(*cmd, "account"),
-                        User => assert_eq!(*cmd, "user"),
-                        Module => assert_eq!(*cmd, "module"),
-                        Service => assert_eq!(*cmd, "service"),
-                        Server => assert_eq!(*cmd, "server"),
-                        Operator => assert_eq!(*cmd, "operator"),
-                        Cluster => assert_eq!(*cmd, "cluster"),
+    #[test]
+    fn test_invalid_keytype_input() {
+        let key_gen_types = [
+            "accout", "USE", "moDUl", "actors", "SEVICE", "provder", "srver", "hos", "opERtoR",
+            "cluter",
+        ];
+
+        key_gen_types
+            .iter()
+            .map(|cmd| cmd.to_lowercase())
+            .for_each(|cmd| {
+                let gen_cmd: Cmd = clap::Parser::try_parse_from(["keys", "gen", &cmd]).unwrap();
+                match gen_cmd.keys {
+                    KeysCliCommand::GenCommand { keytype } => {
+                        let parsed_keytype = keytype_parser(&keytype);
+                        assert!(
+                            parsed_keytype.is_err(),
+                            "Invalid keytype parsed successfully"
+                        );
                     }
-                }
-                _ => panic!("`keys gen` constructed incorrect command"),
-            };
-        });
+                    _ => panic!("`keys gen` constructed incorrect command"),
+                };
+            });
     }
 
     #[test]

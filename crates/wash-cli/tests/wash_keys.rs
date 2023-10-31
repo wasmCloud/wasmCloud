@@ -23,7 +23,8 @@ fn integration_keys_gen_basic() {
 #[test]
 fn integration_keys_gen_comprehensive() {
     let key_gen_types = [
-        "account", "user", "module", "service", "server", "operator", "cluster",
+        "account", "user", "module", "actor", "service", "provider", "server", "host", "operator",
+        "cluster",
     ];
 
     key_gen_types.iter().for_each(|cmd| {
