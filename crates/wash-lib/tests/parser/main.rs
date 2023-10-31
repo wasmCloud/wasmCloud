@@ -85,6 +85,7 @@ fn rust_actor_with_revision() {
             wasi_preview2_adapter_path: None,
             wasm_target: WasmTarget::CoreModule,
             wit_world: None,
+            ..ActorConfig::default()
         })
     );
 
