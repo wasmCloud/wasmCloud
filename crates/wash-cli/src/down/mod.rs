@@ -146,9 +146,7 @@ async fn stop_hosts(
     let client = wasmcloud_control_interface::ClientBuilder::new(nats_client)
         .lattice_prefix(lattice_prefix)
         .auction_timeout(std::time::Duration::from_secs(2))
-        .build()
-        .await
-        .map_err(|e| anyhow!(e))?;
+        .build();
 
     let hosts = client.get_hosts().await.map_err(|e| anyhow!(e))?;
 

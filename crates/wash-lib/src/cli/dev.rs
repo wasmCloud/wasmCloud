@@ -1,6 +1,6 @@
 use anyhow::Result;
 use console::style;
-use wasmcloud_control_interface::{kv::DirectKvStore, Client};
+use wasmcloud_control_interface::Client;
 
 use crate::{
     actor::{start_actor, stop_actor, StartActorArgs},

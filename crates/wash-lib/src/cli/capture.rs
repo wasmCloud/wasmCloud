@@ -10,7 +10,6 @@ use futures::TryStreamExt;
 use tokio::io::{stdin, stdout, AsyncReadExt, AsyncWriteExt};
 use tokio::time::Instant;
 use wasmbus_rpc::core::Invocation;
-use wasmcloud_control_interface::kv::DirectKvStore;
 
 use super::{CliConnectionOpts, CommandOutput};
 use crate::config::WashConnectionOptions;

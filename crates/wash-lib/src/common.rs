@@ -30,9 +30,7 @@ pub enum FindIdError {
 /// more than one matches, then an error will be returned indicating the options to choose from
 pub async fn find_actor_id(
     value: &str,
-    ctl_client: &wasmcloud_control_interface::Client<
-        wasmcloud_control_interface::kv::DirectKvStore,
-    >,
+    ctl_client: &wasmcloud_control_interface::Client,
 ) -> Result<(ModuleId, Option<String>), FindIdError> {
     if let Ok(id) = ModuleId::from_str(value) {
         return Ok((id, None));
