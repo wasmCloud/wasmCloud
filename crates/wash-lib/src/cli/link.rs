@@ -127,6 +127,7 @@ pub async fn delete_link(
         .await?
         .remove_link(actor_id, contract_id, link_name)
         .await
+        .map(|_| ())
         .map_err(boxed_err_to_anyhow)
         .with_context(|| {
             format!(
@@ -177,6 +178,7 @@ pub async fn create_link(
             labels_vec_to_hashmap(link_values.clone())?,
         )
         .await
+        .map(|_| ())
         .map_err(boxed_err_to_anyhow)
         .with_context(|| {
             format!(

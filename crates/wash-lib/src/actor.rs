@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::{bail, Context, Result};
 use tokio::time::Duration;
-use wasmcloud_control_interface::{kv::DirectKvStore, Client as CtlClient, CtlOperationAck};
+use wasmcloud_control_interface::{Client as CtlClient, CtlOperationAck};
 
 use crate::{
     common::boxed_err_to_anyhow,

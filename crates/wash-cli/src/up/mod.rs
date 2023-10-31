@@ -9,7 +9,7 @@ use std::sync::{
     Arc,
 };
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use async_nats::Client;
 use clap::Parser;
 use serde_json::json;
@@ -31,7 +31,6 @@ use wash_lib::start::{
     ensure_nats_server, ensure_wasmcloud, start_nats_server, start_wasmcloud_host, NatsConfig,
     WADM_PID,
 };
-use wasmcloud_control_interface::kv::DirectKvStore;
 use wasmcloud_control_interface::{Client as CtlClient, ClientBuilder as CtlClientBuilder};
 
 use crate::appearance::spinner::Spinner;
@@ -268,18 +267,11 @@ impl WasmcloudOpts {
             ))
             .auction_timeout(tokio::time::Duration::from_millis(auction_timeout_ms));
 
-        if let Some(js_domain) = self.wasmcloud_js_domain {
-            builder = builder.js_domain(js_domain);
-        }
-
         if let Ok(topic_prefix) = std::env::var("WASMCLOUD_CTL_TOPIC_PREFIX") {
             builder = builder.topic_prefix(topic_prefix);
         }
 
-        let ctl_client = builder
-            .build()
-            .await
-            .map_err(|err| anyhow!("Failed to create control interface client: {err:?}"))?;
+        let ctl_client = builder.build();
 
         Ok(ctl_client)
     }

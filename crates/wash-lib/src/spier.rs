@@ -4,7 +4,6 @@ use anyhow::Result;
 use chrono::{DateTime, Local};
 use futures::{Stream, StreamExt};
 use wasmbus_rpc::core::Invocation;
-use wasmcloud_control_interface::kv::DirectKvStore;
 
 use crate::{
     common::{find_actor_id, CLAIMS_NAME, CLAIMS_SUBJECT},
