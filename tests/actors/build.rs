@@ -5,9 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
 
 use nkeys::KeyPair;
-use wascap::prelude::ClaimsBuilder;
-use wascap::wasm::embed_claims;
-use wascap::{caps, jwt};
+use wascap::caps;
 use wasmcloud_component_adapters::{
     WASI_PREVIEW1_COMMAND_COMPONENT_ADAPTER, WASI_PREVIEW1_REACTOR_COMPONENT_ADAPTER,
 };
@@ -246,6 +244,7 @@ async fn install_rust_wasm32_wasi_actors(out_dir: impl AsRef<Path>) -> anyhow::R
     Ok(())
 }
 
+#[cfg(not(feature = "docs"))]
 fn encode_component(module: impl AsRef<[u8]>, adapter: &[u8]) -> anyhow::Result<Vec<u8>> {
     wit_component::ComponentEncoder::default()
         .validate(true)
@@ -255,6 +254,11 @@ fn encode_component(module: impl AsRef<[u8]>, adapter: &[u8]) -> anyhow::Result<
         .context("failed to add WASI adapter")?
         .encode()
         .context("failed to encode a component")
+}
+
+#[cfg(feature = "docs")]
+fn encode_component(_: impl AsRef<[u8]>, _: &[u8]) -> anyhow::Result<Vec<u8>> {
+    Ok(Vec::default())
 }
 
 #[tokio::main]
@@ -303,7 +307,7 @@ async fn main() -> anyhow::Result<()> {
         issuer.seed().expect("failed to extract issuer seed")
     );
 
-    let builtin_caps = vec![
+    let builtin_caps: Vec<String> = vec![
         caps::BLOB.into(),
         caps::HTTP_CLIENT.into(),
         caps::HTTP_SERVER.into(),
@@ -328,18 +332,24 @@ async fn main() -> anyhow::Result<()> {
         let wasm = fs::read(out_dir.join(format!("rust-{name}.wasm")))
             .await
             .with_context(|| format!("failed to read `{name}` Wasm"))?;
-        let module = KeyPair::new_module();
-        let claims = ClaimsBuilder::new()
-            .issuer(&issuer.public_key())
-            .subject(&module.public_key())
-            .with_metadata(jwt::Actor {
-                name: Some(name.into()),
-                caps,
-                call_alias: Some(name.into()),
-                ..Default::default()
-            })
-            .build();
-        let wasm = embed_claims(&wasm, &claims, &issuer).context("failed to embed actor claims")?;
+        let wasm = if cfg!(feature = "docs") {
+            _ = caps;
+            wasm
+        } else {
+            let module = KeyPair::new_module();
+            let claims = wascap::prelude::ClaimsBuilder::new()
+                .issuer(&issuer.public_key())
+                .subject(&module.public_key())
+                .with_metadata(wascap::jwt::Actor {
+                    name: Some(name.into()),
+                    caps,
+                    call_alias: Some(name.into()),
+                    ..Default::default()
+                })
+                .build();
+            wascap::wasm::embed_claims(&wasm, &claims, &issuer)
+                .context("failed to embed actor claims")?
+        };
         fs::write(out_dir.join(format!("rust-{name}.signed.wasm")), wasm)
             .await
             .context("failed to write Wasm")?;
