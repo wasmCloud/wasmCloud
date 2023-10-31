@@ -266,10 +266,10 @@ pub struct ActorMetadata {
     pub provider: bool,
     /// Revision number
     #[clap(short = 'r', long = "rev")]
-    pub rev: Option<i32>,
+    pub rev: i32,
     /// Human-readable version string
     #[clap(short = 'v', long = "ver")]
-    pub ver: Option<String>,
+    pub ver: String,
     /// Developer or human friendly unique alias used for invoking an actor, consisting of lowercase alphanumeric characters, underscores '_' and slashes '/'
     #[clap(short = 'a', long = "call-alias")]
     pub call_alias: Option<String>,
@@ -410,8 +410,8 @@ fn generate_actor(actor: ActorMetadata, output_kind: OutputKind) -> Result<Comma
         days_from_now_to_jwt_time(actor.common.expires_in_days),
         days_from_now_to_jwt_time(actor.common.not_before_days),
         actor.provider,
-        actor.rev,
-        actor.ver.clone(),
+        Some(actor.rev),
+        Some(actor.ver.clone()),
         sanitize_alias(actor.call_alias)?,
     );
 
@@ -588,18 +588,6 @@ pub fn sign_file(cmd: SignCommand, output_kind: OutputKind) -> Result<CommandOut
         bail!("Capability providers cannot provide multiple capabilities at once.");
     }
 
-    if cmd.metadata.rev.is_none() && cmd.metadata.ver.is_none() {
-        bail!("revision (--rev) and version (--ver) must be specified for signing.");
-    }
-
-    if cmd.metadata.rev.is_none() {
-        bail!("revision (--rev) must be specified for signing.");
-    }
-
-    if cmd.metadata.ver.is_none() {
-        bail!("version (--ver) must be specified for signing.");
-    }
-
     let signed = sign_buffer_with_claims(
         cmd.metadata.name.clone(),
         &buf,
@@ -610,8 +598,8 @@ pub fn sign_file(cmd: SignCommand, output_kind: OutputKind) -> Result<CommandOut
         caps_list.clone(),
         cmd.metadata.tags.clone(),
         cmd.metadata.provider,
-        cmd.metadata.rev,
-        cmd.metadata.ver.clone(),
+        Some(cmd.metadata.rev),
+        Some(cmd.metadata.ver.clone()),
         sanitize_alias(cmd.metadata.call_alias)?,
     )?;
 
@@ -930,8 +918,8 @@ mod test {
                 assert!(!metadata.tags.is_empty());
                 assert_eq!(metadata.tags[0], "testtag");
                 assert!(metadata.provider);
-                assert_eq!(metadata.rev.unwrap(), 2);
-                assert_eq!(metadata.ver.unwrap(), "0.0.1");
+                assert_eq!(metadata.rev, 2);
+                assert_eq!(metadata.ver, "0.0.1");
             }
             cmd => panic!("claims constructed incorrect command: {:?}", cmd),
         }
@@ -998,8 +986,8 @@ mod test {
                 assert!(!metadata.tags.is_empty());
                 assert_eq!(metadata.tags[0], "testtag");
                 assert!(metadata.provider);
-                assert_eq!(metadata.rev.unwrap(), 2);
-                assert_eq!(metadata.ver.unwrap(), "0.0.1");
+                assert_eq!(metadata.rev, 2);
+                assert_eq!(metadata.ver, "0.0.1");
             }
             cmd => panic!("claims constructed incorrect command: {:?}", cmd),
         }
@@ -1147,8 +1135,8 @@ mod test {
                 assert_eq!(custom_caps[0], "test:custom");
                 assert!(!tags.is_empty());
                 assert_eq!(tags[0], "testtag");
-                assert_eq!(rev.unwrap(), 2);
-                assert_eq!(ver.unwrap(), "0.0.1");
+                assert_eq!(rev, 2);
+                assert_eq!(ver, "0.0.1");
             }
             cmd => panic!("claims constructed incorrect command: {:?}", cmd),
         }

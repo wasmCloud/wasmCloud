@@ -177,9 +177,8 @@ fn sign_actor_wasm(
         destination: Some(destination),
         metadata: ActorMetadata {
             name: common_config.name.clone(),
-            ver: Some(common_config.version.to_string()),
-            //NOTE(Ahmed Tadde): sign_file requires a revision, using 1 as default
-            rev: Some(1),
+            ver: common_config.version.to_string(),
+            rev: common_config.revision,
             custom_caps: actor_config.claims.clone(),
             call_alias: actor_config.call_alias.clone(),
             issuer: signing_config.issuer,
@@ -697,6 +696,7 @@ world downstream {
                 &CommonConfig {
                     name: "test".into(),
                     version: Version::parse("0.1.0")?,
+                    revision: 0,
                     path: project_dir.path().into(),
                     wasm_bin_name: Some("test.wasm".into()),
                 },

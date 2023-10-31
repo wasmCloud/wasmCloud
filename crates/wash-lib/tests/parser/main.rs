@@ -8,7 +8,6 @@ use wash_lib::parser::{
 };
 
 #[test]
-/// When given a specific toml file's path, it should parse the file and return a ProjectConfig.
 fn rust_actor() {
     let result = get_config(
         Some(PathBuf::from("./tests/parser/files/rust_actor.toml")),
@@ -45,6 +44,56 @@ fn rust_actor() {
         CommonConfig {
             name: "testactor".to_string(),
             version: Version::parse("0.1.0").unwrap(),
+            revision: 0,
+            path: PathBuf::from("./tests/parser/files/")
+                .canonicalize()
+                .unwrap(),
+            wasm_bin_name: None,
+        }
+    );
+}
+
+#[test]
+/// When given a specific toml file's path, it should parse the file and return a ProjectConfig.
+fn rust_actor_with_revision() {
+    let result = get_config(
+        Some(PathBuf::from(
+            "./tests/parser/files/rust_actor_with_revision.toml",
+        )),
+        None,
+    );
+
+    let config = assert_ok!(result);
+
+    assert_eq!(
+        config.language,
+        LanguageConfig::Rust(RustConfig {
+            cargo_path: Some("./cargo".into()),
+            target_path: Some("./target".into())
+        })
+    );
+
+    assert_eq!(
+        config.project_type,
+        TypeConfig::Actor(ActorConfig {
+            claims: vec!["wasmcloud:httpserver".to_string()],
+            registry: Some("localhost:8080".to_string()),
+            push_insecure: false,
+            key_directory: PathBuf::from("./keys"),
+            filename: Some("testactor.wasm".to_string()),
+            call_alias: Some("testactor".to_string()),
+            wasi_preview2_adapter_path: None,
+            wasm_target: WasmTarget::CoreModule,
+            wit_world: None,
+        })
+    );
+
+    assert_eq!(
+        config.common,
+        CommonConfig {
+            name: "testactor".to_string(),
+            version: Version::parse("0.1.0").unwrap(),
+            revision: 666,
             path: PathBuf::from("./tests/parser/files/")
                 .canonicalize()
                 .unwrap(),
@@ -91,6 +140,7 @@ fn tinygo_actor_module() {
         CommonConfig {
             name: "testactor".to_string(),
             version: Version::parse("0.1.0").unwrap(),
+            revision: 0,
             path: PathBuf::from("./tests/parser/files/")
                 .canonicalize()
                 .unwrap(),
@@ -305,6 +355,7 @@ fn minimal_rust_actor() {
             path: PathBuf::from("./tests/parser/files/")
                 .canonicalize()
                 .unwrap(),
+            revision: 0,
             wasm_bin_name: None,
         }
     )
@@ -352,6 +403,7 @@ fn cargo_toml_actor() {
             path: PathBuf::from("./tests/parser/files/withcargotoml")
                 .canonicalize()
                 .unwrap(),
+            revision: 0,
             wasm_bin_name: None,
         }
     )
