@@ -166,6 +166,7 @@ pub struct CliConnectionOpts {
     /// JS domain for wasmcloud control interface. Defaults to None
     #[clap(
         long = "js-domain",
+        alias = "domain",
         env = "WASMCLOUD_JS_DOMAIN",
         hide_env_values = true
     )]
