@@ -261,7 +261,7 @@ fn instantiate(
     })
     .context("failed to link `wasi:http/outgoing-handler` interface")?;
 
-    command::add_to_linker(&mut linker).context("failed to link `WASI` interface")?;
+    command::add_to_linker(&mut linker).context("failed to link core WASI interfaces")?;
 
     let stdin = StdioStream::default();
     let stdout = StdioStream::default();
