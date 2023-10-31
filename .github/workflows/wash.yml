@@ -11,6 +11,7 @@ on:
     - Cargo.toml
     - crates/wash-cli/**
     - crates/wash-lib/**
+    - washboard-ui/**
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
