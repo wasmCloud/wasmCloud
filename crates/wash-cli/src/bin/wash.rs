@@ -168,13 +168,13 @@ enum CliCommand {
     #[clap(name = "inspect")]
     Inspect(InspectCliCommand),
     /// Utilities for generating and managing keys
-    #[clap(name = "keys", subcommand)]
+    #[clap(name = "keys", alias = "key", subcommand)]
     Keys(KeysCliCommand),
     /// Perform lint checks on smithy models
     #[clap(name = "lint")]
     Lint(LintCli),
     /// Link an actor and a provider
-    #[clap(name = "link", subcommand)]
+    #[clap(name = "link", alias = "links", subcommand)]
     Link(LinkCommand),
     /// Create a new project from template
     #[clap(name = "new", subcommand)]

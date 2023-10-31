@@ -29,7 +29,7 @@ pub enum CtlCliCommand {
     Get(CtlGetCommand),
 
     /// Link an actor and a provider
-    #[clap(name = "link", subcommand)]
+    #[clap(name = "link", alias = "links", subcommand)]
     Link(LinkCommand),
 
     /// Start an actor or a provider
