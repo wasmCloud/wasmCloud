@@ -211,6 +211,8 @@ pub struct CommonConfig {
     pub name: String,
     /// Semantic version of the project.
     pub version: Version,
+    /// Monotonically increasing revision number
+    pub revision: i32,
     /// Path to the project directory to determine where built and signed artifacts should be
     pub path: PathBuf,
     /// Expected name of the wasm module binary that will be generated
@@ -271,6 +273,10 @@ struct RawProjectConfig {
 
     /// Semantic version of the project.
     pub version: Option<Version>,
+
+    /// Monotonically increasing revision number.
+    #[serde(default)]
+    pub revision: i32,
 
     pub actor: Option<RawActorConfig>,
     pub provider: Option<RawProviderConfig>,
@@ -375,6 +381,7 @@ impl RawProjectConfig {
         project_path: PathBuf,
         name: Option<String>,
         version: Option<Version>,
+        revision: i32,
     ) -> Result<CommonConfig> {
         let cargo_toml_path = project_path.join("Cargo.toml");
         if !cargo_toml_path.is_file() {
@@ -413,6 +420,7 @@ impl RawProjectConfig {
         Ok(CommonConfig {
             name,
             version,
+            revision,
             path: project_path,
             wasm_bin_name,
         })
@@ -462,6 +470,7 @@ impl RawProjectConfig {
                     project_path.clone(),
                     self.name.clone(),
                     self.version.clone(),
+                    self.revision,
                 ) {
                     // Successfully built with cargo information
                     Ok(cfg) => Ok(cfg),
@@ -470,6 +479,7 @@ impl RawProjectConfig {
                     Err(_) if self.name.is_some() && self.version.is_some() => Ok(CommonConfig {
                         name: self.name.unwrap(),
                         version: self.version.unwrap(),
+                        revision: self.revision,
                         path: project_path,
                         wasm_bin_name: None,
                     }),
@@ -487,6 +497,7 @@ impl RawProjectConfig {
                 version: self
                     .version
                     .ok_or_else(|| anyhow!("Missing version in wasmcloud.toml"))?,
+                revision: self.revision,
                 path: project_path,
                 wasm_bin_name: None,
             }),
