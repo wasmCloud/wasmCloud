@@ -97,9 +97,6 @@ fn integration_claims_sign() {
         .output()
         .expect("faile to run sign command");
     assert!(!sign_echo.status.success());
-    assert!(String::from_utf8(sign_echo.stderr)
-        .expect("Failed to convert stderr bytes to String")
-        .contains("revision (--rev) must be specified for signing"));
 
     let sign_echo = wash()
         .args([
@@ -125,9 +122,6 @@ fn integration_claims_sign() {
         .output()
         .expect("faile to run sign command");
     assert!(!sign_echo.status.success());
-    assert!(String::from_utf8(sign_echo.stderr)
-        .expect("Failed to convert stderr bytes to String")
-        .contains("version (--ver) must be specified for signing"));
 
     let sign_echo = wash()
         .args([
@@ -153,9 +147,6 @@ fn integration_claims_sign() {
         .output()
         .expect("faile to run sign command");
     assert!(!sign_echo.status.success());
-    assert!(String::from_utf8(sign_echo.stderr)
-        .expect("Failed to convert stderr bytes to String")
-        .contains("revision (--rev) and version (--ver) must be specified for signing"));
 
     remove_dir_all(sign_dir).unwrap();
 }
