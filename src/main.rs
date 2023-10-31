@@ -184,22 +184,22 @@ struct Args {
     /// Optional flag to require host communication over TLS with a NATS server for Provider RPC messages
     #[clap(long = "prov-rpc-tls", env = "WASMCLOUD_PROV_RPC_TLS", hide = true)]
     prov_rpc_tls: bool,
-
-    #[clap(long = "policy-topic", env = "WASMCLOUD_POLICY_TOPIC", hide = true)]
+    /// If provided, enables policy checks on start actions and actor invocations
+    #[clap(long = "policy-topic", env = "WASMCLOUD_POLICY_TOPIC")]
     policy_topic: Option<String>,
+    /// If provided, allows the host to subscribe to updates on past policy decisions. Requires `policy_topic` to be set.
     #[clap(
         long = "policy-changes-topic",
         env = "WASMCLOUD_POLICY_CHANGES_TOPIC",
-        requires = "policy_topic",
-        hide = true
+        requires = "policy_topic"
     )]
     policy_changes_topic: Option<String>,
+    /// If provided, allows setting a custom timeout for requesting policy decisions. Defaults to one second. Requires `policy_topic` to be set.
     #[clap(
         long = "policy-timeout-ms",
         env = "WASMCLOUD_POLICY_TIMEOUT",
         requires = "policy_topic",
         value_parser = parse_duration,
-        hide = true
     )]
     policy_timeout_ms: Option<Duration>,
 
