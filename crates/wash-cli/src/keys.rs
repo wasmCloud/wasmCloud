@@ -59,12 +59,9 @@ pub fn keytype_parser(keytype: &str) -> Result<KeyPairType> {
     match keytype.to_lowercase().as_str() {
         "account" => Ok(KeyPairType::Account),
         "user" => Ok(KeyPairType::User),
-        "module" => Ok(KeyPairType::Module),
-        "actor" => Ok(KeyPairType::Module),
-        "service" => Ok(KeyPairType::Service),
-        "provider" => Ok(KeyPairType::Service),
-        "server" => Ok(KeyPairType::Server),
-        "host" => Ok(KeyPairType::Server),
+        "module" | "actor" => Ok(KeyPairType::Module),
+        "service" | "provider" => Ok(KeyPairType::Service),
+        "server" | "host" => Ok(KeyPairType::Server),
         "operator" => Ok(KeyPairType::Operator),
         "cluster" => Ok(KeyPairType::Cluster),
         _ => Err(anyhow::anyhow!(
