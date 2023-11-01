@@ -119,7 +119,7 @@ opentelemetry-nats = { version = "*", path = "./crates/opentelemetry-nats", defa
 opentelemetry-otlp = { version = "0.13", default-features = false }
 path-absolutize = { version = "3", default-features = false }
 proc-macro2 = { version = "1", default-features = false }
-provider-archive = { version = "*", path = "./crates/provider-archive", default-features = false }
+provider-archive = { version = "0.8", path = "./crates/provider-archive", default-features = false }
 quote = { version = "1", default-features = false }
 rand = { version = "0.8", default-features = false }
 redis = { version = "0.23", default-features = false }
@@ -166,9 +166,9 @@ wadm = { version = "0.7", default-features = false }
 walkdir = { version = "2", default-features = false }
 warp = { version = "0.3", default-features = false }
 warp-embed = { version = "0.4", default-features = false }
-wascap = { version = "*", path = "./crates/wascap", default-features = false }
-wash-cli = { version = "*", path = "./crates/wash-cli", default-features = false }
-wash-lib = { version = "*", path = "./crates/wash-lib", default-features = false }
+wascap = { version = "0.11", path = "./crates/wascap", default-features = false }
+wash-cli = { version = "0.22", path = "./crates/wash-cli", default-features = false }
+wash-lib = { version = "0.13", path = "./crates/wash-lib", default-features = false }
 wasi-common = { version = "14", default-features = false }
 wasm-encoder = { version = "0.36", default-features = false }
 wasm-gen = { version = "0.1", default-features = false }
