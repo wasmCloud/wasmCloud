@@ -483,6 +483,7 @@ jobs:
         - provider-archive
         - wascap
         - wash-cli
+        - wash-lib
 
     if: startsWith(github.ref, 'refs/tags/') && github.event_name == 'push'
     needs: cargo
