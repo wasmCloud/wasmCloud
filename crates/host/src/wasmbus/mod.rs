@@ -3489,7 +3489,7 @@ impl Host {
         Ok(res.into())
     }
 
-    #[instrument(skip(self))]
+    // #[instrument(skip(self))] // FIXME: this is temporarily disabled because wadm (as of v0.8.0) queries links too often
     async fn handle_links(&self) -> anyhow::Result<Bytes> {
         trace!("getting links");
         let links = self.links.read().await;
