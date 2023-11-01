@@ -4946,7 +4946,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "wascap 0.11.2",
- "wasmcloud-component-adapters",
+ "wasmcloud-component-adapters 0.3.0",
  "wit-component 0.16.0",
 ]
 
@@ -5895,7 +5895,7 @@ dependencies = [
 
 [[package]]
 name = "wash-lib"
-version = "0.12.1"
+version = "0.13.0"
 dependencies = [
  "anyhow",
  "async-compression",
@@ -5946,7 +5946,7 @@ dependencies = [
  "wascap 0.11.2",
  "wasm-encoder 0.36.1",
  "wasmbus-rpc 0.15.0",
- "wasmcloud-component-adapters",
+ "wasmcloud-component-adapters 0.2.4",
  "wasmcloud-control-interface 0.31.0",
  "wasmparser 0.116.0",
  "wat",
@@ -6299,6 +6299,26 @@ dependencies = [
  "serde",
  "serde_bytes",
  "tokio",
+]
+
+[[package]]
+name = "wasmcloud-component-adapters"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ff238e4074b4247b33694d1e07f6de463b6d364110af4c5e9dd21ad5356be81d"
+dependencies = [
+ "anyhow",
+ "base64 0.21.5",
+ "futures",
+ "nix-nar",
+ "once_cell",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.8",
+ "tempfile",
+ "tokio",
+ "tokio-util 0.7.10",
 ]
 
 [[package]]
