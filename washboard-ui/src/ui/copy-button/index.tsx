@@ -1,9 +1,9 @@
 import {Slot} from '@radix-ui/react-slot';
 import {Check, Copy} from 'lucide-react';
 import {MouseEvent, ReactNode, forwardRef, useEffect, useState} from 'react';
-import {cn} from 'lib/utils';
-import {Button} from 'ui/button';
-import {ButtonProps} from 'ui/button/Button';
+import {cn} from '@/lib/utils';
+import {Button} from '@/ui/button';
+import {ButtonProps} from '@/ui/button/Button';
 
 interface CopyButtonProps extends Omit<ButtonProps, 'children'> {
   text: string;

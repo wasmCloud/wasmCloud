@@ -1,4 +1,4 @@
-import {AppRouteObject} from 'routes';
+import {AppRouteObject} from '@/routes';
 
 export function getBreadcrumbs(route: AppRouteObject): AppRouteObject[] {
   const breadcrumbs: AppRouteObject[] = [];

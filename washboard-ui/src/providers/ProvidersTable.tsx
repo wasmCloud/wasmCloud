@@ -10,12 +10,12 @@ import {
 } from '@tanstack/react-table';
 import {ChevronDown, ChevronRight} from 'lucide-react';
 import {Fragment, ReactElement, useState} from 'react';
-import {WadmProvider} from 'lattice/lattice-service';
-import useLatticeData from 'lattice/use-lattice-data';
-import {Collapsible, CollapsibleContent, CollapsibleTrigger} from 'ui/collapsible';
-import {ShortCopy} from 'ui/short-copy';
-import {StatusIndicator} from 'ui/status-indicator';
-import {Table, TableBody, TableCell, TableHead, TableHeader, TableRow} from 'ui/table';
+import {WadmProvider} from '@/lattice/lattice-service';
+import useLatticeData from '@/lattice/use-lattice-data';
+import {Collapsible, CollapsibleContent, CollapsibleTrigger} from '@/ui/collapsible';
+import {ShortCopy} from '@/ui/short-copy';
+import {StatusIndicator} from '@/ui/status-indicator';
+import {Table, TableBody, TableCell, TableHead, TableHeader, TableRow} from '@/ui/table';
 
 const columnHelper = createColumnHelper<WadmProvider>();
 

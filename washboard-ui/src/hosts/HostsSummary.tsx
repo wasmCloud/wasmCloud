@@ -1,10 +1,10 @@
 import {formatDistanceToNow, formatDuration, intervalToDuration} from 'date-fns';
 import {ReactElement} from 'react';
-import useLatticeData from 'lattice/use-lattice-data';
-import {Accordion, AccordionContent, AccordionItem, AccordionTrigger} from 'ui/accordion';
-import {Badge} from 'ui/badge';
-import {ShortCopy} from 'ui/short-copy';
-import {Table, TableBody, TableCell, TableHead, TableRow} from 'ui/table';
+import useLatticeData from '@/lattice/use-lattice-data';
+import {Accordion, AccordionContent, AccordionItem, AccordionTrigger} from '@/ui/accordion';
+import {Badge} from '@/ui/badge';
+import {ShortCopy} from '@/ui/short-copy';
+import {Table, TableBody, TableCell, TableHead, TableRow} from '@/ui/table';
 
 export function HostsSummary(): ReactElement {
   const {hosts} = useLatticeData();

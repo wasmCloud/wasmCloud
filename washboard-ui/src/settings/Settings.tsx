@@ -1,9 +1,9 @@
 import {SettingsIcon} from 'lucide-react';
 import {PropsWithChildren, ReactElement, useState} from 'react';
-import LatticeSettings from 'lattice/LatticeSettings';
-import {Button} from 'ui/button';
-import {Label} from 'ui/label';
-import {Popover, PopoverContent, PopoverTrigger} from 'ui/popover';
+import LatticeSettings from '@/lattice/LatticeSettings';
+import {Button} from '@/ui/button';
+import {Label} from '@/ui/label';
+import {Popover, PopoverContent, PopoverTrigger} from '@/ui/popover';
 import {DarkModeToggle} from './DarkModeToggle';
 
 function Settings(): ReactElement {

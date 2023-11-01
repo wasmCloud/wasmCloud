@@ -7,7 +7,7 @@ import {
   ToastTitle,
   ToastViewport,
   useToast,
-} from 'ui/toast';
+} from '@/ui/toast';
 
 export function Toaster(): React.ReactElement {
   const {toasts} = useToast();

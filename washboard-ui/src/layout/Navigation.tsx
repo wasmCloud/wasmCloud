@@ -1,6 +1,6 @@
 import {ReactElement} from 'react';
-import SvgLogo from 'assets/logo-wide.svg?react';
-import {Settings} from 'settings';
+import SvgLogo from '@/assets/logo-wide.svg?react';
+import {Settings} from '@/settings';
 import {ConnectionStatus} from "../components/connection-status.tsx";
 
 function Navigation(): ReactElement {

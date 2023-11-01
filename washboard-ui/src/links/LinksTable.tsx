@@ -1,9 +1,9 @@
 import {ColumnDef, createColumnHelper} from '@tanstack/react-table';
 import {ReactElement} from 'react';
-import {WadmLink} from 'lattice/lattice-service';
-import useLatticeData from 'lattice/use-lattice-data';
-import {DataTable} from 'ui/data-table';
-import {ShortCopy} from 'ui/short-copy';
+import {WadmLink} from '@/lattice/lattice-service';
+import useLatticeData from '@/lattice/use-lattice-data';
+import {DataTable} from '@/ui/data-table';
+import {ShortCopy} from '@/ui/short-copy';
 
 const columnHelper = createColumnHelper<WadmLink>();
 
