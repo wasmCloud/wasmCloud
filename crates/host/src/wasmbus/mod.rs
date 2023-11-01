@@ -182,8 +182,14 @@ impl Queue {
         let (registries, pings, links, queries, auction, commands, inventory) = try_join!(
             nats.subscribe(format!("{topic_prefix}.{lattice_prefix}.registries.put",)),
             nats.subscribe(format!("{topic_prefix}.{lattice_prefix}.ping.hosts",)),
-            nats.subscribe(format!("{topic_prefix}.{lattice_prefix}.linkdefs.*",)),
-            nats.subscribe(format!("{topic_prefix}.{lattice_prefix}.get.*",)),
+            nats.queue_subscribe(
+                format!("{topic_prefix}.{lattice_prefix}.linkdefs.*"),
+                format!("{topic_prefix}.{lattice_prefix}.linkdefs",)
+            ),
+            nats.queue_subscribe(
+                format!("{topic_prefix}.{lattice_prefix}.get.*"),
+                format!("{topic_prefix}.{lattice_prefix}.get")
+            ),
             nats.subscribe(format!("{topic_prefix}.{lattice_prefix}.auction.>",)),
             nats.subscribe(format!("{topic_prefix}.{lattice_prefix}.cmd.{host_id}.*",)),
             nats.subscribe(format!("{topic_prefix}.{lattice_prefix}.get.{host_id}.inv",)),
