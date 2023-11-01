@@ -1307,7 +1307,7 @@ impl ActorInstance {
     }
 
     #[instrument(level = "debug", skip_all)]
-    async fn handle_message(&self, message: async_nats::Message) {
+    async fn handle_rpc_message(&self, message: async_nats::Message) {
         let async_nats::Message {
             ref subject,
             ref reply,
@@ -1986,7 +1986,7 @@ impl Host {
                         let host = Arc::clone(&host);
                         move |msg| {
                             let host = Arc::clone(&host);
-                            async move { host.handle_message(msg).await }
+                            async move { host.handle_ctl_message(msg).await }
                         }
                     })
                     .await;
@@ -2255,7 +2255,7 @@ impl Host {
                 let limit = max.map(NonZeroUsize::get);
                 Abortable::new(calls, calls_abort_reg).for_each_concurrent(limit, move |msg| {
                     let instance = Arc::clone(&instance);
-                    async move { instance.handle_message(msg).await }
+                    async move { instance.handle_rpc_message(msg).await }
                 })
             });
             anyhow::Result::<_>::Ok(instance)
@@ -3602,7 +3602,7 @@ impl Host {
     }
 
     #[instrument(skip_all)]
-    async fn handle_message(self: Arc<Self>, message: async_nats::Message) {
+    async fn handle_ctl_message(self: Arc<Self>, message: async_nats::Message) {
         let async_nats::Message {
             ref subject,
             ref reply,
