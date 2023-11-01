@@ -1,8 +1,8 @@
 import {Home} from 'lucide-react';
 import {ReactElement} from 'react';
 import {RouteObject} from 'react-router-dom';
-import Dashboard from 'dashboard/Dashboard';
-import AppLayout from 'layout/AppLayout';
+import Dashboard from '@/dashboard/Dashboard';
+import AppLayout from '@/layout/AppLayout';
 
 export type AppRouteObject = RouteObject & {
   handle?: {

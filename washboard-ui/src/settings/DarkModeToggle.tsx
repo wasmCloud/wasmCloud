@@ -1,6 +1,6 @@
 import * as SelectPrimitive from '@radix-ui/react-select';
 import {ComponentPropsWithoutRef, ElementRef, forwardRef} from 'react';
-import {Select, SelectContent, SelectItem, SelectTrigger, SelectValue} from 'ui/select';
+import {Select, SelectContent, SelectItem, SelectTrigger, SelectValue} from '@/ui/select';
 import {useSettings} from './use-settings';
 
 const DarkModeToggle = forwardRef<

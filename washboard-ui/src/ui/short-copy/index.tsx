@@ -1,6 +1,6 @@
 import {ReactElement} from 'react';
-import {cn} from 'lib/utils';
-import {CopyButton} from 'ui/copy-button';
+import {cn} from '@/lib/utils';
+import {CopyButton} from '@/ui/copy-button';
 
 interface ShortCopyProps {
   text: string;

@@ -1,5 +1,5 @@
 import {ReactElement} from 'react';
-import {Card} from 'ui/card';
+import {Card} from '@/ui/card';
 
 interface StatsTileProps {
   title: string;
