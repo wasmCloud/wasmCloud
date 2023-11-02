@@ -376,17 +376,18 @@ jobs:
     - run: |
         for dir in ./artifacts/wasmcloud-*; do
           target=${dir#./artifacts/wasmcloud-}
-          for bin in ${dir}/bin/*; do
-            chmod +x ${bin}
+          for bin_path in ${dir}/bin/*; do
+            chmod +x ${bin_path}
+            bin=${basename bin_path}
             case "$bin" in
               *.exe)
                 name="${bin#.exe}"
                 mkdir -p ./artifacts/${name}
-                mv ${bin} ./artifacts/${name}/${name}-${target}.exe
+                mv ${bin_path} ./artifacts/${name}/${name}-${target}.exe
               ;;
               *)
                 mkdir -p ./artifacts/${bin}
-                mv ${bin} ./artifacts/${bin}/${bin}-${target}
+                mv ${bin_path} ./artifacts/${bin}/${bin}-${target}
               ;;
             esac
           done
