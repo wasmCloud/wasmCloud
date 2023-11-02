@@ -291,7 +291,7 @@ jobs:
         docker run wasmcloud.azurecr.io/${{ steps.ctx.outputs.package }}:${{ steps.ctx.outputs.version }} wasmcloud --version
 
     - name: Push latest wasmCloud tag
-      if: startswith(github.ref, 'refs/tags/v') && !contains(github.ref, 'rc')
+      if: startswith(github.ref, 'refs/tags/v') && !contains(github.ref, '-')
       run: |
         buildah manifest push --storage-driver=vfs --all --format 'v2s2' wasmcloud docker://${{ steps.ctx.outputs.package }}:latest
         buildah manifest push --storage-driver=vfs --all --format 'v2s2' wasmcloud docker://ghcr.io/${{ steps.ctx.outputs.package }}:latest
