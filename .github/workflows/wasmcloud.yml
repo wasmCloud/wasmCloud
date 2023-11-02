@@ -381,12 +381,12 @@ jobs:
             case "$bin" in
               *.exe)
                 name="${bin#.exe}"
-                mkdir -p ${name}
-                mv ${bin} ./${name}/${bin#.exe}-${target}.exe
+                mkdir -p ./artifacts/${name}
+                mv ${bin} ./artifacts/${name}/${name}-${target}.exe
               ;;
               *)
-                mkdir -p ${bin}
-                mv ${bin} ./${bin}/${bin}-${target}
+                mkdir -p ./artifacts/${bin}
+                mv ${bin} ./artifacts/${bin}/${bin}-${target}
               ;;
             esac
           done
@@ -398,7 +398,7 @@ jobs:
         draft: true
         prerelease: true
         generate_release_notes: true
-        files: wasmcloud/*
+        files: ./artifacts/wasmcloud/*
 
     - uses: softprops/action-gh-release@v1
       if: startsWith(github.ref, 'refs/tags/wash-cli-v')
@@ -406,7 +406,7 @@ jobs:
         draft: true
         prerelease: true
         generate_release_notes: true
-        files: wash/*
+        files: ./artifacts/wash/*
 
   snapcraft:
     if: startsWith(github.ref, 'refs/tags/wash-cli-v') && github.event_name == 'push'
