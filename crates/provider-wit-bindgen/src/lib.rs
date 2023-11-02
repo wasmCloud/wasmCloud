@@ -26,17 +26,9 @@
 //! For more information on the options available to underlying bindgen, see the [wasmtime-component-bindgen documentation](https://docs.rs/wasmtime/latest/wasmtime/component/macro.bindgen.html).
 //!
 
-mod vendor;
-
-use anyhow::{bail, ensure, Context};
-use tracing::{debug, warn};
-use tracing_subscriber::EnvFilter;
-use vendor::wasmtime_component_macro::bindgen::{
-    expand as expand_wasmtime_component, Config as WitBindgenConfig,
-};
-
 use std::{collections::HashMap, str::FromStr};
 
+use anyhow::{bail, ensure, Context};
 use heck::{ToSnakeCase, ToUpperCamelCase};
 use proc_macro2::{Ident, Punct, Spacing, Span, TokenStream, TokenTree};
 use quote::{format_ident, ToTokens, TokenStreamExt};
@@ -48,6 +40,13 @@ use syn::{
     visit_mut::{visit_item_mut, VisitMut},
     FnArg, Item, ItemMod, ItemStruct, ItemType, LitStr, PathSegment, ReturnType, Token, TraitItem,
     TraitItemFn, Type,
+};
+use tracing::{debug, trace, warn};
+use tracing_subscriber::EnvFilter;
+
+mod vendor;
+use vendor::wasmtime_component_macro::bindgen::{
+    expand as expand_wasmtime_component, Config as WitBindgenConfig,
 };
 
 /// Rust module name that is used by wit-bindgen to generate all the modules
@@ -94,13 +93,22 @@ struct ProviderBindgenConfig {
     pub(crate) exposed_interface_deny_list: Vec<LatticeExposedInterface>,
 
     /// wit-bindgen configuration that is passed straight through (uses vendored wit-bindgen)
-    pub(crate) wit_bindgen_cfg: WitBindgenConfig,
+    ///
+    /// During an actual parse run, configuration to pass through to wit bindgen *must* be provided
+    /// this means that full parse runs can only be run when you can set up the filesystem as necessary.
+    ///
+    /// This allows local tests to easily generate `ProviderBindgenConfig` objects, without building the
+    /// file tree (and related WIT) that wit-bindgen would attempt to read
+    pub(crate) wit_bindgen_cfg: Option<WitBindgenConfig>,
 
     /// Translation strategy for functions on imported interfaces when generating lattice data structures and code
     pub(crate) import_fn_lattice_translation_strategy: WitFunctionLatticeTranslationStrategy,
 
     /// Translation strategy for functions on exported interfaces when generating lattice data structures and code
     pub(crate) export_fn_lattice_translation_strategy: WitFunctionLatticeTranslationStrategy,
+
+    /// Whether to replace WIT-ified maps (`list<tuple<T, T>>`) with a Map type (`std::collections::HashMap`)
+    pub(crate) replace_witified_maps: bool,
 }
 
 /// Keywords that are used by this macro
@@ -114,6 +122,7 @@ mod keywords {
     syn::custom_keyword!(export_fn_lattice_translation_strategy);
     syn::custom_keyword!(exposed_interface_allow_list);
     syn::custom_keyword!(exposed_interface_deny_list);
+    syn::custom_keyword!(replace_witified_maps);
 }
 
 /// Wrapper for a list of qualified WIT function names
@@ -191,11 +200,17 @@ enum ProviderBindgenConfigOption {
     /// If combined with the allow list, this listing will be used last (filtering the list of allowed fns).
     ExposedFnDenyList(WitFnList),
 
-    /// WIT Function lattice translation strategy to use on imported WIT interfaces
+    /// Strategy (e.x. first argument, bundle arguments into struct) to use
+    /// when serializing imported WIT interfaces to be sent across the lattice
     ImportFnLatticeTranslationStrategy(WitFunctionLatticeTranslationStrategy),
 
-    /// WIT Function lattice translation strategy to use on exported WIT interfaces
+    /// Strategy (e.x. first argument, bundle arguments into struct) to use
+    /// when serializing exported WIT interfaces to be sent across the lattice
     ExportFnLatticeTranslationStrategy(WitFunctionLatticeTranslationStrategy),
+
+    /// Strategy (e.x. first argument, bundle arguments into struct) to use
+    /// when serializing exported WIT interfaces to be sent across the lattice
+    ReplaceWitifiedMaps(syn::LitBool),
 }
 
 impl Parse for ProviderBindgenConfigOption {
@@ -241,6 +256,12 @@ impl Parse for ProviderBindgenConfigOption {
             input.parse::<keywords::import_fn_lattice_translation_strategy>()?;
             input.parse::<Token![:]>()?;
             Ok(ProviderBindgenConfigOption::ExportFnLatticeTranslationStrategy(input.parse()?))
+        } else if l.peek(keywords::replace_witified_maps) {
+            input.parse::<keywords::replace_witified_maps>()?;
+            input.parse::<Token![:]>()?;
+            Ok(ProviderBindgenConfigOption::ReplaceWitifiedMaps(
+                input.parse()?,
+            ))
         } else {
             Err(syn::Error::new(
                 Span::call_site(),
@@ -316,6 +337,7 @@ impl WitFunctionLatticeTranslationStrategy {
     /// Translate a wit-bindgen generated trait function for use across the lattice
     fn translate_import_fn_for_lattice(
         &self,
+        bindgen_cfg: &ProviderBindgenConfig,
         wit_iface_path: WitInterfacePath,
         trait_method: &TraitItemFn,
         struct_lookup: &StructLookup,
@@ -335,8 +357,7 @@ impl WitFunctionLatticeTranslationStrategy {
                 trait_method.sig.ident.to_string().to_upper_camel_case()
             )
             .as_ref(),
-            // TODO: extract contract/package name from the context for the general case
-            Span::call_site(),
+            trait_method.sig.ident.span(),
         );
 
         match self {
@@ -349,6 +370,7 @@ impl WitFunctionLatticeTranslationStrategy {
                     type_lookup,
                 ),
                 _ => Self::translate_import_fn_via_bundled_args(
+                    bindgen_cfg,
                     wit_iface_path,
                     lattice_method_name,
                     trait_method,
@@ -367,6 +389,7 @@ impl WitFunctionLatticeTranslationStrategy {
             }
             WitFunctionLatticeTranslationStrategy::BundleArguments => {
                 Self::translate_import_fn_via_bundled_args(
+                    bindgen_cfg,
                     wit_iface_path,
                     lattice_method_name,
                     trait_method,
@@ -410,28 +433,13 @@ impl WitFunctionLatticeTranslationStrategy {
 
         // Get the first function argument, which will become the type sent across the lattice
         // Get the remaining tokens after the argument name and colon type name from the first argument
-        let mut first_arg_tokens = trait_method
-            .sig
-            .inputs
-            .iter()
-            .next()
-            .context(format!(
-                "trait method [{}] has no arguments yet is attempting to translate via first arg",
-                trait_method.sig.ident,
-            ))?
-            .to_token_stream()
-            .into_iter();
+        let first_arg = trait_method.sig.inputs.iter().next().context(format!(
+            "trait method [{}] has no arguments yet is attempting to translate via first arg",
+            trait_method.sig.ident,
+        ))?;
 
-        let arg_name = if let Some(TokenTree::Ident(n)) = first_arg_tokens.next() {
-            n
-        } else {
-            bail!(
-                "failed to get first arg name for trait method [{}]",
-                trait_method.sig.ident.to_string()
-            );
-        };
-
-        let type_name = first_arg_tokens.skip(1).collect::<TokenStream>();
+        // Process a function argument to retrieve the argument name and type name
+        let (arg_name, type_name) = process_fn_arg(first_arg)?;
 
         Ok((
             wit_iface_path.to_string().to_upper_camel_case(),
@@ -449,6 +457,7 @@ impl WitFunctionLatticeTranslationStrategy {
     /// Translate a function for use on the lattice via bundled args.
     /// Functions that cannot be translated properly via this method will fail.
     fn translate_import_fn_via_bundled_args(
+        bindgen_cfg: &ProviderBindgenConfig,
         wit_iface_name: WitInterfacePath,
         lattice_method_name: LitStr,
         trait_method: &TraitItemFn,
@@ -549,10 +558,10 @@ impl WitFunctionLatticeTranslationStrategy {
                                 invocation_arg_names.push(n.clone());
 
                                 // Slice out the parts in between the < ... >
-                                let type_section = &wrapped_ref[4..wrapped_ref.len()]; // TODO: lint
+                                let type_section = &wrapped_ref[4..wrapped_ref.len()];
 
                                 match type_section {
-                                    // case: str (ex. Vec<&str>)
+                                    // case: str (i.e. Vec<&str>)
                                     [
                                         TokenTree::Punct(_), // <
                                         TokenTree::Ident(ref n),
@@ -568,7 +577,7 @@ impl WitFunctionLatticeTranslationStrategy {
                                         ]);
                                     },
 
-                                    // case: [u8] (ex. Vec<&str>)
+                                    // case: [u8] (i.e. Vec<&[u8]>)
                                     [
                                         TokenTree::Punct(_), // <
                                         TokenTree::Group(g),
@@ -587,6 +596,7 @@ impl WitFunctionLatticeTranslationStrategy {
                                         ]);
                                     },
 
+                                    // case: T (i.e. Vec<T>)
                                     rest =>  {
                                         let arg_type = &rest[1].to_string();
 
@@ -605,6 +615,17 @@ impl WitFunctionLatticeTranslationStrategy {
                                         };
                                     },
                                 }
+                            },
+
+                            // case: Vec<(String, T)> (WIT-ified map)
+                            // NOTE: this only works for arguments that end in '_map'
+                            ts if bindgen_cfg.replace_witified_maps
+                                && ts.len() > 2 // in order to skip the name & colon tokens
+                                && matches!(ts[0], TokenTree::Ident(ref n) if n.to_string().ends_with("_map"))
+                                && extract_witified_map_types(&ts[2..]).is_some() => {
+                                    let arg_name = &ts[0];
+                                    let (k,v) = extract_witified_map_types(&ts[2..]).expect("failed to parse WIT-ified map type");
+                                    tokens.append_all(quote::quote!(#arg_name: ::std::collections::HashMap<#k,#v>));
                             },
 
                             // pattern: unknown (any T)
@@ -782,6 +803,8 @@ Please ensure that types for exported interface functions (normally a single rec
         _iface_fn: &wit_parser::Function,
         _cfg: &ProviderBindgenConfig,
     ) -> anyhow::Result<TokenStream> {
+        // TODO: add bundling of exported args to single struct
+        // TODO: handle WIT-map -> Map translation for arguments in iface
         bail!(
             r#"[warn] Functions on exported interfaces must only accept one argument, normally a record type that can be sent out on the lattice. Please modify the corresponding WIT file that contains interface [{}]"#,
             iface.name.clone().unwrap_or("<unknown>".into())
@@ -844,6 +867,7 @@ impl Parse for ProviderBindgenConfig {
         > = None;
         let mut exposed_interface_allow_list: Option<WitFnList> = None;
         let mut exposed_interface_deny_list: Option<WitFnList> = None;
+        let mut replace_witified_maps: bool = false;
 
         // For each successfully parsed configuration entry in the map, build the appropriate bindgen option
         for entry in entries.into_pairs() {
@@ -873,6 +897,9 @@ impl Parse for ProviderBindgenConfig {
                 ProviderBindgenConfigOption::ExportFnLatticeTranslationStrategy(strat) => {
                     export_fn_lattice_translation_strategy = Some(strat);
                 }
+                ProviderBindgenConfigOption::ReplaceWitifiedMaps(opt) => {
+                    replace_witified_maps = opt.value();
+                }
             }
         }
 
@@ -900,7 +927,7 @@ impl Parse for ProviderBindgenConfig {
             wit_pkg,
             exposed_interface_allow_list: exposed_interface_allow_list.unwrap_or_default().into(),
             exposed_interface_deny_list: exposed_interface_deny_list.unwrap_or_default().into(),
-            wit_bindgen_cfg: wit_bindgen_cfg.ok_or_else(|| {
+            wit_bindgen_cfg: Some(wit_bindgen_cfg.ok_or_else(|| {
                 syn::Error::new(
                     call_site,
                     std::io::Error::new(
@@ -908,11 +935,12 @@ impl Parse for ProviderBindgenConfig {
                         "missing/invalid 'wit_bindgen_cfg' arguments",
                     ),
                 )
-            })?,
+            })?),
             import_fn_lattice_translation_strategy: import_fn_lattice_translation_strategy
                 .unwrap_or_default(),
             export_fn_lattice_translation_strategy: export_fn_lattice_translation_strategy
                 .unwrap_or_default(),
+            replace_witified_maps,
         })
     }
 }
@@ -929,10 +957,18 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
     // Parse the WIT for files (a second time, in addition to what has been done to generate)
     let mut exported_iface_invocation_methods: Vec<TokenStream> = Vec::new();
-    for (_, world) in cfg.wit_bindgen_cfg.resolve.worlds.iter() {
+
+    // Resolve the WIT bindgen configuration, which at this point should definitely be present
+    let wit_bindgen_cfg = cfg
+        .wit_bindgen_cfg
+        .as_ref()
+        .context("configuration to pass to WIT bindgen is missing")
+        .expect("failed to parse WIT bindgen configuration");
+
+    for (_, world) in wit_bindgen_cfg.resolve.worlds.iter() {
         for (world_item, _) in world.exports.iter() {
             if let wit_parser::WorldKey::Interface(iface_id) = world_item {
-                let iface = &cfg.wit_bindgen_cfg.resolve.interfaces[*iface_id];
+                let iface = &wit_bindgen_cfg.resolve.interfaces[*iface_id];
                 for (iface_fn_name, iface_fn) in iface.functions.iter() {
                     // For each function in an exported interface,
                     // we'll need to generate a method on the eventual InvocationHandler
@@ -960,8 +996,8 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     }
 
     // Expand the wasmtime::component macro with the given arguments
-    let bindgen_tokens: TokenStream = expand_wasmtime_component(&cfg.wit_bindgen_cfg)
-        .unwrap_or_else(syn::Error::into_compile_error);
+    let bindgen_tokens: TokenStream =
+        expand_wasmtime_component(wit_bindgen_cfg).unwrap_or_else(syn::Error::into_compile_error);
 
     // Parse the bindgen-generated tokens into an AST
     // NOTE: while we will use these tokens, they will not be in macro output
@@ -1277,6 +1313,9 @@ pub fn generate(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 /// focused around gathering all the important declarations we care about
 #[derive(Default)]
 struct WitBindgenOutputVisitor {
+    /// Whether to replace WIT-ified maps (`list<tuple<T,T>>`) with a map type (i.e. `std::collections::HashMap`)
+    replace_witified_maps: bool,
+
     /// WIT namespace
     wit_ns: Option<WitNamespaceName>,
 
@@ -1316,6 +1355,7 @@ impl WitBindgenOutputVisitor {
             wit_pkg: cfg.wit_pkg.clone(),
             exposed_interface_allow_list: cfg.exposed_interface_allow_list.clone(),
             exposed_interface_deny_list: cfg.exposed_interface_deny_list.clone(),
+            replace_witified_maps: cfg.replace_witified_maps,
             ..Default::default()
         }
     }
@@ -1544,18 +1584,22 @@ impl VisitMut for WitBindgenOutputVisitor {
                                             -> ::wasmcloud_provider_sdk::error::ProviderInvocationResult<#inner_tokens>
                                         );
 
-                                    // TODO(debug) show message on failure/success manipulating types
                                     trimmed.sig.output = syn::parse2::<ReturnType>(result_tokens.clone())
                                         .expect("failed to purge wasmtime::Result from method return");
+                                    trace!("successfully converted type [{inner_tokens}] into ProivderInvocationResult<T>");
 
                                     },
                                     _ => {},
                                 }
 
                             // Save methods in traits that we must stub later
-                            // TODO(debug): show import trait methods that are added
+                            let full_path = self.current_module_full_path();
+                            trace!(
+                                "adding import trait method for path [{full_path}], trimmed signature: [{}]",
+                                trimmed.sig.to_token_stream().to_string(),
+                            );
                             self.import_trait_methods
-                                .entry(self.current_module_full_path())
+                                .entry(full_path)
                                 .or_default()
                                 .push(trimmed);
                         }
@@ -1606,6 +1650,26 @@ impl VisitMut for WitBindgenOutputVisitor {
                         // implementation written in the host currently expects
                         if f.ty == syn::parse_str::<Type>("Vec<u8>").expect("failed to parse") {
                             f.attrs.push(parse_quote!(#[serde(with = "::serde_bytes")]));
+                        }
+
+                        // If the struct field is a WIT-ified map, then we should replace
+                        // it with a proper hash map type
+                        if self.replace_witified_maps
+                            && f.ident
+                                .as_ref()
+                                .is_some_and(|i| i.to_string().ends_with("_map"))
+                        {
+                            if let Some((k, v)) = extract_witified_map_types(
+                                &f.ty
+                                    .to_token_stream()
+                                    .into_iter()
+                                    .collect::<Vec<TokenTree>>(),
+                            ) {
+                                f.ty = parse_quote!(::std::collections::HashMap<#k,#v>);
+                                f.ident = f.ident.as_mut().map(|i| {
+                                    Ident::new(i.to_string().trim_end_matches("_map"), i.span())
+                                });
+                            }
                         }
                     }
 
@@ -1701,6 +1765,7 @@ fn build_lattice_methods_by_wit_interface(
             let (name, lattice_method) = bindgen_cfg
                 .import_fn_lattice_translation_strategy
                 .translate_import_fn_for_lattice(
+                    bindgen_cfg,
                     wit_iface_name.into(),
                     trait_method,
                     struct_lookup,
@@ -1737,7 +1802,12 @@ fn convert_wit_type(t: &wit_parser::Type, cfg: &ProviderBindgenConfig) -> anyhow
         wit_parser::Type::String => Ok("String".into()),
         wit_parser::Type::Id(tydef) => {
             // Look up the type in the WIT resolver
-            let type_def = &cfg.wit_bindgen_cfg.resolve.types[*tydef];
+            let type_def = &cfg
+                .wit_bindgen_cfg
+                .as_ref()
+                .context("WIT bindgen config missing")?
+                .resolve
+                .types[*tydef];
             if let Some(wit_type_name) = &type_def.name {
                 // Since we get the wit type name here (in kebab case)
                 // we'll expect the custom oxidized type to be upper camel case
@@ -1747,5 +1817,173 @@ fn convert_wit_type(t: &wit_parser::Type, cfg: &ProviderBindgenConfig) -> anyhow
                 bail!("failed to parse wit type def for type {t:#?}");
             }
         }
+    }
+}
+
+/// Attempt to extract key and value types from a tree of tokens that is a witified map
+///
+/// For example, the following Rust type, submitted as a list of tokens would be parsed successfully:
+///
+/// ```rust,ignore
+/// Vec<(String, String)>
+/// ```
+fn extract_witified_map_types(input: &[TokenTree]) -> Option<(TokenStream, TokenStream)> {
+    match input {
+        [
+            TokenTree::Ident(vec_ty),
+            TokenTree::Punct(p1), // <
+            TokenTree::Group(g),
+            TokenTree::Punct(p2), // >
+        ] if *vec_ty == "Vec" && p1.to_string() == "<" && p2.to_string() == ">" => {
+            // The delimeter to the internal group must be delimited by parenthesis (it's a tuple)
+            if g.delimiter() != proc_macro2::Delimiter::Parenthesis {
+                return None;
+            }
+
+            // Now that we have the internal group (Vec< ...this bit... >),
+            // we can extract the key and value type for the vec as a tuple
+            let tokens = g.stream().into_iter().collect::<Vec<TokenTree>>();
+
+            // Find the index of the comma which splits the types
+            let comma_idx = tokens.iter().position(|t| matches!(t, TokenTree::Punct(p) if p.to_string() == ","))?;
+
+            Some((
+                TokenStream::from_iter(tokens[0..comma_idx].to_owned()),
+                TokenStream::from_iter(tokens[comma_idx + 1..].to_owned())
+            ))
+        },
+        _ => None
+    }
+}
+
+/// Process a first argument to retreive the argument name and type name used
+fn process_fn_arg(arg: &FnArg) -> anyhow::Result<(Ident, TokenStream)> {
+    // Retrieve the type pattern ascription (i.e. 'arg: Type') out of the first arg
+    let pat_type = if let syn::FnArg::Typed(pt) = arg {
+        pt
+    } else {
+        bail!("failed to parse pat type out of ");
+    };
+
+    // Retrieve argument name
+    let mut arg_name = if let syn::Pat::Ident(n) = pat_type.pat.as_ref() {
+        n.ident.clone()
+    } else {
+        bail!("unexpectedly non-ident pattern in {pat_type:#?}");
+    };
+
+    // If the argument name ends in _map, and the type matches a witified map (i.e. list<tuple<T, T>>)
+    // then convert the type into a map *before* using it
+    let type_name = match (
+        arg_name.to_string().ends_with("_map"),
+        extract_witified_map_types(
+            &pat_type
+                .ty
+                .as_ref()
+                .to_token_stream()
+                .into_iter()
+                .collect::<Vec<TokenTree>>(),
+        ),
+    ) {
+        (true, Some((k, v))) => {
+            arg_name = Ident::new(
+                arg_name.to_string().trim_end_matches("_map"),
+                arg_name.span(),
+            );
+            quote::quote!(::std::collections::HashMap<#k, #v>)
+        }
+        _ => pat_type.ty.as_ref().to_token_stream(),
+    };
+
+    Ok((arg_name, type_name))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use anyhow::{Context, Result};
+    use proc_macro2::TokenTree;
+    use syn::{parse_quote, LitStr, TraitItemFn};
+
+    use crate::{
+        extract_witified_map_types, ProviderBindgenConfig, WitFunctionLatticeTranslationStrategy,
+    };
+
+    /// Token trees that we expect to parse into WIT-ified maps should parse
+    #[test]
+    fn parse_witified_map_type() -> Result<()> {
+        extract_witified_map_types(
+            &quote::quote!(Vec<(String, String)>)
+                .into_iter()
+                .collect::<Vec<TokenTree>>(),
+        )
+        .context("failed to parse WIT-ified map type Vec<(String, String)>")?;
+        Ok(())
+    }
+
+    /// Ensure WIT-ified maps parse correctly in functions
+    #[test]
+    fn parse_witified_map_in_fn() -> Result<()> {
+        let trait_fn: TraitItemFn = parse_quote!(
+            fn baz(test_map: Vec<(String, String)>) {}
+        );
+        let bindgen_cfg = ProviderBindgenConfig {
+            impl_struct: "None".into(),
+            contract: "wasmcloud:test".into(),
+            wit_ns: Some("test".into()),
+            wit_pkg: Some("foo".into()),
+            exposed_interface_allow_list: Default::default(),
+            exposed_interface_deny_list: Default::default(),
+            wit_bindgen_cfg: None, // We won't actually run bindgen
+            import_fn_lattice_translation_strategy: Default::default(),
+            export_fn_lattice_translation_strategy: Default::default(),
+            replace_witified_maps: true,
+        };
+        let (wit_iface_name, lm) =
+            WitFunctionLatticeTranslationStrategy::translate_import_fn_via_bundled_args(
+                &bindgen_cfg,
+                "TestFoo".into(),
+                LitStr::new("Foo", proc_macro2::Span::call_site()),
+                &trait_fn,
+                &HashMap::new(), // structs
+                &HashMap::new(), // types
+            )?;
+
+        assert_eq!(wit_iface_name, "TestFoo");
+        let type_name = lm.type_name.as_ref().context("failed to get type name")?;
+        assert_eq!(type_name.to_string(), "TestFooBazInvocation");
+        let struct_members = lm.struct_members.context("struct members missing")?;
+        assert!(
+            matches!(
+                &struct_members.into_iter().collect::<Vec<TokenTree>>()[2..], // skip arg name & colon
+                [
+                    TokenTree::Punct(_),  // ":"
+                    TokenTree::Punct(_),  // ":"
+                    TokenTree::Ident(i1), // 'std'
+                    TokenTree::Punct(_),  // ":"
+                    TokenTree::Punct(_),  // ":"
+                    TokenTree::Ident(i2), // 'collections'
+                    TokenTree::Punct(_),  // ":"
+                    TokenTree::Punct(_),  // ":"
+                    TokenTree::Ident(i3), // 'HashMap'
+                    TokenTree::Punct(b1), // "<"
+                    TokenTree::Ident(key_type), // key type
+                    TokenTree::Punct(c),  // ","
+                    TokenTree::Ident(value_type), // value type
+                    TokenTree::Punct(b2), // ">"
+                ] if *i1 == "std" &&
+                    *i2 == "collections" &&
+                    *i3 == "HashMap" &&
+                    b1.to_string() == "<" &&
+                    c.to_string() == "," &&
+                    *key_type == "String" &&
+                    *value_type == "String" &&
+                    b2.to_string() == ">"
+            ),
+            "struct members converted type is incorrect",
+        );
+
+        Ok(())
     }
 }
