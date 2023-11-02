@@ -386,11 +386,11 @@ jobs:
               *.exe)
                 name="${bin#.exe}"
                 mkdir -p ${name}
-                do mv ${bin} ./${name}/${bin#.exe}-${target}.exe
+                mv ${bin} ./${name}/${bin#.exe}-${target}.exe
               ;;
               *)
                 mkdir -p ${bin}
-                do mv ${bin} ./${bin}/${bin}-${target}
+                mv ${bin} ./${bin}/${bin}-${target}
               ;;
             esac
           done
