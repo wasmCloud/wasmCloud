@@ -51,9 +51,10 @@ use uuid::Uuid;
 use wascap::{jwt, prelude::ClaimsBuilder};
 use wasmcloud_control_interface::{
     ActorAuctionAck, ActorAuctionRequest, ActorDescription, HostInventory, LinkDefinition,
-    ProviderAuctionAck, ProviderAuctionRequest, ProviderDescription, RegistryCredential,
-    RegistryCredentialMap, RemoveLinkDefinitionRequest, ScaleActorCommand, StartProviderCommand,
-    StopActorCommand, StopHostCommand, StopProviderCommand, UpdateActorCommand,
+    LinkDefinitionList, ProviderAuctionAck, ProviderAuctionRequest, ProviderDescription,
+    RegistryCredential, RegistryCredentialMap, RemoveLinkDefinitionRequest, ScaleActorCommand,
+    StartProviderCommand, StopActorCommand, StopHostCommand, StopProviderCommand,
+    UpdateActorCommand,
 };
 use wasmcloud_core::chunking::{ChunkEndpoint, CHUNK_RPC_EXTRA_TIME, CHUNK_THRESHOLD_BYTES};
 use wasmcloud_core::{
@@ -3494,7 +3495,8 @@ impl Host {
         trace!("getting links");
         let links = self.links.read().await;
         let links: Vec<LinkDefinition> = links.values().cloned().collect();
-        let res = serde_json::to_vec(&links).context("failed to serialize response")?;
+        let res = serde_json::to_vec(&LinkDefinitionList { links })
+            .context("failed to serialize response")?;
         Ok(res.into())
     }
 
