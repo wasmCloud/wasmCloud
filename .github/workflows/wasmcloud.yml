@@ -376,7 +376,7 @@ jobs:
     - run: |
         for dir in ./artifacts/wasmcloud-*; do
           target=${dir#./artifacts/wasmcloud-}
-          for bin in ${dir}/wasmcloud-${target}/bin/*; do
+          for bin in ${dir}/bin/*; do
             chmod +x ${bin}
             case "$bin" in
               *.exe)
