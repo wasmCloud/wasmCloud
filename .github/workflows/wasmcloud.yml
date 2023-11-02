@@ -378,7 +378,7 @@ jobs:
           target=${dir#./artifacts/wasmcloud-}
           for bin_path in ${dir}/bin/*; do
             chmod +x ${bin_path}
-            bin=${basename bin_path}
+            bin=$(basename ${bin_path})
             case "$bin" in
               *.exe)
                 name="${bin#.exe}"
