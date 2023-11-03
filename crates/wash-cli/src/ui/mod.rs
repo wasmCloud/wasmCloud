@@ -14,13 +14,16 @@ use clap::Parser;
 use tokio_tar::Archive;
 use warp::Filter;
 
-const WASHBOARD_VERSION: &str = "washboard-ui-v0.1.0";
+const DEFAULT_WASHBOARD_VERSION: &str = "v0.1.0";
 
 #[derive(Parser, Debug, Clone)]
 pub struct UiCommand {
     /// Whist port to run the UI on, defaults to 3030
     #[clap(short = 'p', long = "port", default_value = DEFAULT_WASH_UI_PORT)]
     pub port: u16,
+
+    #[clap(short = 'v', long = "version", default_value = DEFAULT_WASHBOARD_VERSION)]
+    pub version: String,
 }
 
 pub async fn handle_command(command: UiCommand, output_kind: OutputKind) -> Result<CommandOutput> {
@@ -30,7 +33,7 @@ pub async fn handle_command(command: UiCommand, output_kind: OutputKind) -> Resu
 }
 
 pub async fn handle_ui(cmd: UiCommand, _output_kind: OutputKind) -> Result<()> {
-    let washboard_assets = ensure_washboard(WASHBOARD_VERSION, downloads_dir()?).await?;
+    let washboard_assets = ensure_washboard(&cmd.version, downloads_dir()?).await?;
     let static_files = warp::fs::dir(washboard_assets);
 
     let cors = warp::cors()
@@ -60,7 +63,7 @@ async fn ensure_washboard(version: &str, base_dir: PathBuf) -> Result<PathBuf> {
 
 async fn download_washboard(version: &str, install_dir: &PathBuf) -> Result<()> {
     let release_url = format!(
-        "https://github.com/wasmCloud/wasmCloud/releases/download/{version}/washboard.tar.gz"
+        "https://github.com/wasmCloud/wasmCloud/releases/download/washboard-ui-{version}/washboard.tar.gz"
     );
 
     // Download tarball
