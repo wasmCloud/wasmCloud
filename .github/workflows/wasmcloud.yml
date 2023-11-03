@@ -389,7 +389,7 @@ jobs:
               bin=$(basename ${bin_path})
               case "$bin" in
                 *.exe)
-                  name="${bin#.exe}"
+                  name="${bin%.exe}"
                   mv ${bin_path} ./artifacts/${name}/${name}-${target}.exe
                 ;;
                 *)
