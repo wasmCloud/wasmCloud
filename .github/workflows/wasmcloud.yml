@@ -342,17 +342,18 @@ jobs:
     - name: Set up Docker Buildx
       if: startsWith(github.ref, 'refs/tags/wash-cli-v') || github.ref == 'refs/heads/main'
       uses: docker/setup-buildx-action@v3
-    - name: Build and push `wash` Docker image
-      if: startsWith(github.ref, 'refs/tags/wash-cli-v') || github.ref == 'refs/heads/main'
-      id: wash_docker_build
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        file: "./crates/wash-cli/Dockerfile"
-        labels: ${{ steps.meta.outputs.labels }}
-        platforms: linux/amd64,linux/arm64
-        push: ${{ github.repository == 'wasmCloud/wasmCloud' }}
-        tags: ${{ steps.meta.outputs.tags }}
+    # FIXME: re-enable this once the 403s are sorted out
+    # - name: Build and push `wash` Docker image
+    #   if: startsWith(github.ref, 'refs/tags/wash-cli-v') || github.ref == 'refs/heads/main'
+    #   id: wash_docker_build
+    #   uses: docker/build-push-action@v5
+    #   with:
+    #     context: .
+    #     file: "./crates/wash-cli/Dockerfile"
+    #     labels: ${{ steps.meta.outputs.labels }}
+    #     platforms: linux/amd64,linux/arm64
+    #     push: ${{ github.repository == 'wasmCloud/wasmCloud' }}
+    #     tags: ${{ steps.meta.outputs.tags }}
 
     # Display image digest
     - name: Image digest
