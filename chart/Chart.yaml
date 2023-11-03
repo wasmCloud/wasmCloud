@@ -20,4 +20,4 @@ type: application
 # in one PR, then open a new PR updating this `version` and `appVersion`.
 version: 0.7.0
 
-appVersion: "0.79.1"
+appVersion: "0.80.0"
