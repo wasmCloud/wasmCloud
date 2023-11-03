@@ -31,7 +31,7 @@ jobs:
           python-version: '3.12.0'
 
       - name: Set up chart-testing
-        uses: helm/chart-testing-action@v2.6.0
+        uses: helm/chart-testing-action@v2.6.1
         with:
           version: v3.9.0
           yamllint_version: 1.32.0
