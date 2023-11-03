@@ -40,6 +40,8 @@ wasmparser = { workspace = true }
 wasmtime = { workspace = true, features = ["async", "cache", "component-model", "cranelift", "jitdump", "parallel-compilation", "pooling-allocator", "vtune"] }
 wasmtime-wasi = { workspace = true, features = ["sync", "preview2"] }
 wasmtime-wasi-http = { workspace = true, features = ["sync"] }
+wit-component = { workspace = true }
+wit-parser = { workspace = true }
 
 [dev-dependencies]
 once_cell = { workspace = true }

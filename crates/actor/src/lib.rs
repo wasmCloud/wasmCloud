@@ -73,11 +73,11 @@ mod test {
 
             wasmcloud::bus::lattice::set_target(
                 None,
-                &[
-                    wasmcloud::bus::lattice::target_wasi_blobstore_blobstore(),
-                    wasmcloud::bus::lattice::target_wasi_keyvalue_readwrite(),
-                    wasmcloud::bus::lattice::target_wasi_logging_logging(),
-                    wasmcloud::bus::lattice::target_wasmcloud_messaging_consumer(),
+                vec![
+                    wasmcloud::bus::lattice::TargetInterface::wasi_blobstore_blobstore(),
+                    wasmcloud::bus::lattice::TargetInterface::wasi_keyvalue_readwrite(),
+                    wasmcloud::bus::lattice::TargetInterface::wasi_logging_logging(),
+                    wasmcloud::bus::lattice::TargetInterface::wasmcloud_messaging_consumer(),
                 ],
             );
         }

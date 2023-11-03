@@ -285,7 +285,7 @@ impl Handler {
     #[instrument(level = "debug", skip(self, operation, request))]
     async fn call_operation_with_payload(
         &self,
-        target: Option<&TargetEntity>,
+        target: Option<TargetEntity>,
         operation: impl Into<String>,
         request: Vec<u8>,
     ) -> anyhow::Result<Result<Vec<u8>, String>> {
@@ -295,7 +295,7 @@ impl Handler {
         let (package, _) = operation
             .rsplit_once('/')
             .context("failed to parse operation")?;
-        let inv_target = resolve_target(target, links.get(package), &aliases).await?;
+        let inv_target = resolve_target(target.as_ref(), links.get(package), &aliases).await?;
         let needs_chunking = request.len() > CHUNK_THRESHOLD_BYTES;
         let injector = TraceContextInjector::default_with_span();
         let headers = injector_to_headers(&injector);
@@ -378,7 +378,7 @@ impl Handler {
     #[instrument(level = "debug", skip(self, operation, request))]
     async fn call_operation(
         &self,
-        target: Option<&TargetEntity>,
+        target: Option<TargetEntity>,
         operation: impl Into<String>,
         request: &impl Serialize,
     ) -> anyhow::Result<Vec<u8>> {
@@ -417,9 +417,11 @@ fn decode_empty_provider_response(buf: impl AsRef<[u8]>) -> anyhow::Result<()> {
 impl Blobstore for Handler {
     #[instrument]
     async fn create_container(&self, name: &str) -> anyhow::Result<()> {
-        let targets = self.targets.read().await;
+        let target = self
+            .identify_interface_target(&TargetInterface::WasiBlobstoreBlobstore)
+            .await?;
         self.call_operation(
-            targets.get(&TargetInterface::WasiBlobstoreBlobstore),
+            target,
             "wasmcloud:blobstore/Blobstore.CreateContainer",
             &name,
         )
@@ -429,9 +431,11 @@ impl Blobstore for Handler {
 
     #[instrument]
     async fn container_exists(&self, name: &str) -> anyhow::Result<bool> {
-        let targets = self.targets.read().await;
+        let target = self
+            .identify_interface_target(&TargetInterface::WasiBlobstoreBlobstore)
+            .await?;
         self.call_operation(
-            targets.get(&TargetInterface::WasiBlobstoreBlobstore),
+            target,
             "wasmcloud:blobstore/Blobstore.ContainerExists",
             &name,
         )
@@ -441,9 +445,11 @@ impl Blobstore for Handler {
 
     #[instrument]
     async fn delete_container(&self, name: &str) -> anyhow::Result<()> {
-        let targets = self.targets.read().await;
+        let target = self
+            .identify_interface_target(&TargetInterface::WasiBlobstoreBlobstore)
+            .await?;
         self.call_operation(
-            targets.get(&TargetInterface::WasiBlobstoreBlobstore),
+            target,
             "wasmcloud:blobstore/Blobstore.DeleteContainer",
             &name,
         )
@@ -456,10 +462,12 @@ impl Blobstore for Handler {
         &self,
         name: &str,
     ) -> anyhow::Result<blobstore::container::ContainerMetadata> {
-        let targets = self.targets.read().await;
+        let target = self
+            .identify_interface_target(&TargetInterface::WasiBlobstoreBlobstore)
+            .await?;
         let res = self
             .call_operation(
-                targets.get(&TargetInterface::WasiBlobstoreBlobstore),
+                target,
                 "wasmcloud:blobstore/Blobstore.GetContainerInfo",
                 &name,
             )
@@ -485,10 +493,12 @@ impl Blobstore for Handler {
         name: String,
         range: RangeInclusive<u64>,
     ) -> anyhow::Result<(Box<dyn AsyncRead + Sync + Send + Unpin>, u64)> {
-        let targets = self.targets.read().await;
+        let target = self
+            .identify_interface_target(&TargetInterface::WasiBlobstoreBlobstore)
+            .await?;
         let res = self
             .call_operation(
-                targets.get(&TargetInterface::WasiBlobstoreBlobstore),
+                target,
                 "wasmcloud:blobstore/Blobstore.GetObject",
                 &wasmcloud_compat::blobstore::GetObjectRequest {
                     object_id: name.clone(),
@@ -531,9 +541,11 @@ impl Blobstore for Handler {
 
     #[instrument]
     async fn has_object(&self, container: &str, name: String) -> anyhow::Result<bool> {
-        let targets = self.targets.read().await;
+        let target = self
+            .identify_interface_target(&TargetInterface::WasiBlobstoreBlobstore)
+            .await?;
         self.call_operation(
-            targets.get(&TargetInterface::WasiBlobstoreBlobstore),
+            target,
             "wasmcloud:blobstore/Blobstore.ObjectExists",
             &wasmcloud_compat::blobstore::ContainerObject {
                 container_id: container.into(),
@@ -551,15 +563,17 @@ impl Blobstore for Handler {
         name: String,
         mut value: Box<dyn AsyncRead + Sync + Send + Unpin>,
     ) -> anyhow::Result<()> {
-        let targets = self.targets.read().await;
         let mut bytes = Vec::new();
         value
             .read_to_end(&mut bytes)
             .await
             .context("failed to read bytes")?;
+        let target = self
+            .identify_interface_target(&TargetInterface::WasiBlobstoreBlobstore)
+            .await?;
         let res = self
             .call_operation(
-                targets.get(&TargetInterface::WasiBlobstoreBlobstore),
+                target,
                 "wasmcloud:blobstore/Blobstore.PutObject",
                 &wasmcloud_compat::blobstore::PutObjectRequest {
                     chunk: wasmcloud_compat::blobstore::Chunk {
@@ -584,10 +598,12 @@ impl Blobstore for Handler {
 
     #[instrument]
     async fn delete_objects(&self, container: &str, names: Vec<String>) -> anyhow::Result<()> {
-        let targets = self.targets.read().await;
+        let target = self
+            .identify_interface_target(&TargetInterface::WasiBlobstoreBlobstore)
+            .await?;
         let res = self
             .call_operation(
-                targets.get(&TargetInterface::WasiBlobstoreBlobstore),
+                target,
                 "wasmcloud:blobstore/Blobstore.RemoveObjects",
                 &wasmcloud_compat::blobstore::RemoveObjectsRequest {
                     container_id: container.into(),
@@ -614,10 +630,12 @@ impl Blobstore for Handler {
         &self,
         container: &str,
     ) -> anyhow::Result<Box<dyn Stream<Item = anyhow::Result<String>> + Sync + Send + Unpin>> {
-        let targets = self.targets.read().await;
+        let target = self
+            .identify_interface_target(&TargetInterface::WasiBlobstoreBlobstore)
+            .await?;
         let res = self
             .call_operation(
-                targets.get(&TargetInterface::WasiBlobstoreBlobstore),
+                target,
                 "wasmcloud:blobstore/Blobstore.ListObjects",
                 &wasmcloud_compat::blobstore::ListObjectsRequest {
                     container_id: container.into(),
@@ -644,13 +662,11 @@ impl Blobstore for Handler {
         container: &str,
         name: String,
     ) -> anyhow::Result<blobstore::container::ObjectMetadata> {
-        let targets = self.targets.read().await;
+        let target = self
+            .identify_interface_target(&TargetInterface::WasiBlobstoreBlobstore)
+            .await?;
         let res = self
-            .call_operation(
-                targets.get(&TargetInterface::WasiBlobstoreBlobstore),
-                "wasmcloud:blobstore/Blobstore.GetObjectInfo",
-                &name,
-            )
+            .call_operation(target, "wasmcloud:blobstore/Blobstore.GetObjectInfo", &name)
             .await?;
         let wasmcloud_compat::blobstore::ObjectMetadata {
             object_id,
@@ -681,9 +697,19 @@ impl Bus for Handler {
             .map(|bindings| bindings.contains_key(binding))
             .unwrap_or_default()
         {
-            return Ok(TargetEntity::Link(Some(binding.into())));
+            Ok(TargetEntity::Link(Some(binding.into())))
+        } else {
+            Ok(TargetEntity::Actor(namespace.into()))
         }
-        Ok(TargetEntity::Actor(namespace.into()))
+    }
+
+    #[instrument(level = "debug", skip(self))]
+    async fn identify_interface_target(
+        &self,
+        interface: &TargetInterface,
+    ) -> anyhow::Result<Option<TargetEntity>> {
+        let targets = self.targets.read().await;
+        Ok(targets.get(interface).cloned())
     }
 
     #[instrument(level = "debug", skip(self))]
@@ -847,7 +873,7 @@ impl Bus for Handler {
         operation: String,
         request: Vec<u8>,
     ) -> anyhow::Result<Vec<u8>> {
-        self.call_operation_with_payload(target.as_ref(), operation, request)
+        self.call_operation_with_payload(target, operation, request)
             .await
             .context("failed to call linked provider")?
             .map_err(|e| anyhow!(e).context("provider call failed"))
@@ -858,16 +884,17 @@ impl Bus for Handler {
 impl KeyValueAtomic for Handler {
     #[instrument(skip(self))]
     async fn increment(&self, bucket: &str, key: String, delta: u64) -> anyhow::Result<u64> {
-        const METHOD: &str = "wasmcloud:keyvalue/KeyValue.Increment";
         if !bucket.is_empty() {
             bail!("buckets not currently supported")
         }
-        let targets = self.targets.read().await;
         let value = delta.try_into().context("delta does not fit in `i32`")?;
+        let target = self
+            .identify_interface_target(&TargetInterface::WasiKeyvalueAtomic)
+            .await?;
         let res = self
             .call_operation(
-                targets.get(&TargetInterface::WasiKeyvalueAtomic),
-                METHOD,
+                target,
+                "wasmcloud:keyvalue/KeyValue.Increment",
                 &wasmcloud_compat::keyvalue::IncrementRequest { key, value },
             )
             .await?;
@@ -897,17 +924,14 @@ impl KeyValueReadWrite for Handler {
         bucket: &str,
         key: String,
     ) -> anyhow::Result<(Box<dyn AsyncRead + Sync + Send + Unpin>, u64)> {
-        const METHOD: &str = "wasmcloud:keyvalue/KeyValue.Get";
         if !bucket.is_empty() {
             bail!("buckets not currently supported")
         }
-        let targets = self.targets.read().await;
+        let target = self
+            .identify_interface_target(&TargetInterface::WasiKeyvalueReadwrite)
+            .await?;
         let res = self
-            .call_operation(
-                targets.get(&TargetInterface::WasiKeyvalueReadwrite),
-                METHOD,
-                &key,
-            )
+            .call_operation(target, "wasmcloud:keyvalue/KeyValue.Get", &key)
             .await?;
         let wasmcloud_compat::keyvalue::GetResponse { value, exists } =
             decode_provider_response(res)?;
@@ -928,7 +952,6 @@ impl KeyValueReadWrite for Handler {
         key: String,
         mut value: Box<dyn AsyncRead + Sync + Send + Unpin>,
     ) -> anyhow::Result<()> {
-        const METHOD: &str = "wasmcloud:keyvalue/KeyValue.Set";
         if !bucket.is_empty() {
             bail!("buckets not currently supported")
         }
@@ -937,10 +960,12 @@ impl KeyValueReadWrite for Handler {
             .read_to_string(&mut buf)
             .await
             .context("failed to read value")?;
-        let targets = self.targets.read().await;
+        let target = self
+            .identify_interface_target(&TargetInterface::WasiKeyvalueReadwrite)
+            .await?;
         self.call_operation(
-            targets.get(&TargetInterface::WasiKeyvalueReadwrite),
-            METHOD,
+            target,
+            "wasmcloud:keyvalue/KeyValue.Set",
             &wasmcloud_compat::keyvalue::SetRequest {
                 key,
                 value: buf,
@@ -953,17 +978,14 @@ impl KeyValueReadWrite for Handler {
 
     #[instrument(skip(self))]
     async fn delete(&self, bucket: &str, key: String) -> anyhow::Result<()> {
-        const METHOD: &str = "wasmcloud:keyvalue/KeyValue.Del";
         if !bucket.is_empty() {
             bail!("buckets not currently supported")
         }
-        let targets = self.targets.read().await;
+        let target = self
+            .identify_interface_target(&TargetInterface::WasiKeyvalueReadwrite)
+            .await?;
         let res = self
-            .call_operation(
-                targets.get(&TargetInterface::WasiKeyvalueReadwrite),
-                METHOD,
-                &key,
-            )
+            .call_operation(target, "wasmcloud:keyvalue/KeyValue.Del", &key)
             .await?;
         let deleted: bool = decode_provider_response(res)?;
         ensure!(deleted, "key not found");
@@ -972,18 +994,15 @@ impl KeyValueReadWrite for Handler {
 
     #[instrument(skip(self))]
     async fn exists(&self, bucket: &str, key: String) -> anyhow::Result<bool> {
-        const METHOD: &str = "wasmcloud:keyvalue/KeyValue.Contains";
         if !bucket.is_empty() {
             bail!("buckets not currently supported")
         }
-        let targets = self.targets.read().await;
-        self.call_operation(
-            targets.get(&TargetInterface::WasiKeyvalueReadwrite),
-            METHOD,
-            &key,
-        )
-        .await
-        .and_then(decode_provider_response)
+        let target = self
+            .identify_interface_target(&TargetInterface::WasiKeyvalueReadwrite)
+            .await?;
+        self.call_operation(target, "wasmcloud:keyvalue/KeyValue.Contains", &key)
+            .await
+            .and_then(decode_provider_response)
     }
 }
 
@@ -1066,17 +1085,17 @@ impl Messaging for Handler {
         body: Option<Vec<u8>>,
         timeout: Duration,
     ) -> anyhow::Result<messaging::types::BrokerMessage> {
-        const METHOD: &str = "wasmcloud:messaging/Messaging.Request";
-
         let timeout_ms = timeout
             .as_millis()
             .try_into()
             .context("timeout milliseconds do not fit in `u32`")?;
-        let targets = self.targets.read().await;
+        let target = self
+            .identify_interface_target(&TargetInterface::WasmcloudMessagingConsumer)
+            .await?;
         let res = self
             .call_operation(
-                targets.get(&TargetInterface::WasmcloudMessagingConsumer),
-                METHOD,
+                target,
+                "wasmcloud:messaging/Messaging.Request",
                 &wasmcloud_compat::messaging::RequestMessage {
                     subject,
                     body: body.unwrap_or_default(),
@@ -1122,11 +1141,12 @@ impl Messaging for Handler {
             body,
         }: messaging::types::BrokerMessage,
     ) -> anyhow::Result<()> {
-        const METHOD: &str = "wasmcloud:messaging/Messaging.Publish";
-        let targets = self.targets.read().await;
+        let target = self
+            .identify_interface_target(&TargetInterface::WasmcloudMessagingConsumer)
+            .await?;
         self.call_operation(
-            targets.get(&TargetInterface::WasmcloudMessagingConsumer),
-            METHOD,
+            target,
+            "wasmcloud:messaging/Messaging.Publish",
             &wasmcloud_compat::messaging::PubMessage {
                 subject,
                 reply_to,
@@ -1152,18 +1172,14 @@ impl OutgoingHttp for Handler {
             between_bytes_timeout: _,
         }: OutgoingHttpRequest,
     ) -> anyhow::Result<http::Response<Box<dyn AsyncRead + Sync + Send + Unpin>>> {
-        const METHOD: &str = "wasmcloud:httpclient/HttpClient.Request";
-
         let req = wasmcloud_compat::HttpClientRequest::from_http(request)
             .await
             .context("failed to convert HTTP request")?;
-        let targets = self.targets.read().await;
+        let target = self
+            .identify_interface_target(&TargetInterface::WasiHttpOutgoingHandler)
+            .await?;
         let res = self
-            .call_operation(
-                targets.get(&TargetInterface::WasiHttpOutgoingHandler),
-                METHOD,
-                &req,
-            )
+            .call_operation(target, "wasmcloud:httpclient/HttpClient.Request", &req)
             .await?;
         let res: wasmcloud_compat::HttpResponse = decode_provider_response(res)?;
         let res = ::http::Response::<Vec<u8>>::try_from(res)?;

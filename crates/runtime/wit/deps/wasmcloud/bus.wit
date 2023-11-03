@@ -4,25 +4,27 @@ interface lattice {
     /// Interface target. This represents an interface, which can be selected by `set-target`.
     /// The set of `target-*` functions defines all "selectable" interfaces provided by the host.
     /// Implementations of `wasmcloud:bus/lattice` may extend the set of "selectable" interfaces.
-    type target-interface = u32
+    resource target-interface {
+        constructor(namespace: string, %package: string, %interface: string);
 
-    /// `wasi:blobstore/blobstore` interface target
-    target-wasi-blobstore-blobstore: func() -> target-interface
+        /// `wasi:blobstore/blobstore` interface target
+        wasi-blobstore-blobstore: static func() -> target-interface
 
-    /// `wasi:keyvalue/atomic` interface target
-    target-wasi-keyvalue-atomic: func() -> target-interface
+        /// `wasi:keyvalue/atomic` interface target
+        wasi-keyvalue-atomic: static func() -> target-interface
 
-    /// `wasi:keyvalue/readwrite` interface target
-    target-wasi-keyvalue-readwrite: func() -> target-interface
+        /// `wasi:keyvalue/readwrite` interface target
+        wasi-keyvalue-readwrite: static func() -> target-interface
 
-    /// `wasi:logging/logging` interface target
-    target-wasi-logging-logging: func() -> target-interface
+        /// `wasi:logging/logging` interface target
+        wasi-logging-logging: static func() -> target-interface
 
-    /// `wasmcloud:messaging/consumer` interface target
-    target-wasmcloud-messaging-consumer: func() -> target-interface
+        /// `wasmcloud:messaging/consumer` interface target
+        wasmcloud-messaging-consumer: static func() -> target-interface
 
-    /// `wasi:http/outgoing-handler` interface target
-    target-wasi-http-outgoing-handler: func() -> target-interface
+        /// `wasi:http/outgoing-handler` interface target
+        wasi-http-outgoing-handler: static func() -> target-interface
+    }
 
     /// Actor identifier
     variant actor-identifier {

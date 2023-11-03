@@ -148,7 +148,7 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
 
         bus::lattice::set_target(
             Some(&TargetEntity::Link(Some("messaging".into()))),
-            &[bus::lattice::target_wasmcloud_messaging_consumer()],
+            vec![bus::lattice::TargetInterface::wasmcloud_messaging_consumer()],
         );
         messaging::consumer::publish(&messaging::types::BrokerMessage {
             body: Some(body.clone()),
@@ -192,7 +192,7 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
 
         bus::lattice::set_target(
             Some(&TargetEntity::Link(Some("keyvalue".into()))),
-            &[bus::lattice::target_wasi_keyvalue_readwrite()],
+            vec![bus::lattice::TargetInterface::wasi_keyvalue_readwrite()],
         );
         let foo_key = String::from("foo");
         let bucket = keyvalue::types::open_bucket("")
@@ -274,7 +274,7 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
 
         bus::lattice::set_target(
             Some(&TargetEntity::Link(Some("keyvalue".into()))),
-            &[bus::lattice::target_wasi_keyvalue_atomic()],
+            vec![bus::lattice::TargetInterface::wasi_keyvalue_atomic()],
         );
         let counter_key = String::from("counter");
         let value = keyvalue::atomic::increment(bucket, &counter_key, 1)
@@ -292,7 +292,7 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
 
         bus::lattice::set_target(
             Some(&TargetEntity::Link(Some("blobstore".into()))),
-            &[bus::lattice::target_wasi_blobstore_blobstore()],
+            vec![bus::lattice::TargetInterface::wasi_blobstore_blobstore()],
         );
 
         let container_name = String::from("container");
@@ -346,30 +346,34 @@ impl exports::wasi::http::incoming_handler::Guest for Actor {
 
         // TODO: Expand blobstore testing procedure
 
-        bus::host::call_sync(
+        bus::lattice::set_target(
             Some(&TargetEntity::Actor(bus::lattice::ActorIdentifier::Alias(
                 "unknown/alias".into(),
             ))),
-            "test-actors:foobar/actor.foobar",
-            r#"{"arg":"foo"}"#.as_bytes(),
-        )
-        .expect_err("invoked `test-actors:foobar/actor.foobar` on unknown actor");
+            vec![bus::lattice::TargetInterface::new(
+                "test-actors",
+                "foobar",
+                "foobar",
+            )],
+        );
+        // TODO: Verify that this does not succeed, currently this invocation would trap
+        //assert!(test_actors::foobar::foobar::foobar("foo").is_err());
 
-        // TODO: Use a wasifill
-        let res = bus::host::call_sync(
+        bus::lattice::set_target(
             Some(&TargetEntity::Actor(bus::lattice::ActorIdentifier::Alias(
                 "foobar-component-command-preview2".into(),
             ))),
-            "test-actors:foobar/actor.foobar",
-            r#"{"arg":"foo"}"#.as_bytes(),
-        )
-        .expect("failed to invoke `test-actors:foobar/actor.foobar` on an actor");
-        let res: String = serde_json::from_slice(&res).expect("failed to decode response");
-        assert_eq!(res, "foobar");
+            vec![bus::lattice::TargetInterface::new(
+                "test-actors",
+                "foobar",
+                "foobar",
+            )],
+        );
+        assert_eq!(test_actors::foobar::foobar::foobar("foo"), "foobar");
 
         bus::lattice::set_target(
             Some(&TargetEntity::Link(Some("httpclient".into()))),
-            &[bus::lattice::target_wasi_http_outgoing_handler()],
+            vec![bus::lattice::TargetInterface::wasi_http_outgoing_handler()],
         );
         let request = http::types::OutgoingRequest::new(
             &http::types::Method::Put,

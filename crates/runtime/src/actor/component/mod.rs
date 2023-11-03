@@ -1,5 +1,5 @@
 use crate::actor::claims;
-use crate::capability::{builtin, Interfaces};
+use crate::capability::{builtin, Bus, Interfaces, TargetInterface};
 use crate::Runtime;
 
 use core::fmt::{self, Debug};
@@ -8,13 +8,14 @@ use core::ops::{Deref, DerefMut};
 
 use std::sync::Arc;
 
-use anyhow::{anyhow, bail, Context as _};
+use anyhow::{anyhow, bail, ensure, Context as _};
 use async_trait::async_trait;
 use bytes::Bytes;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::Mutex;
-use tracing::{instrument, trace};
+use tracing::{error, instrument, trace};
 use wascap::jwt;
+use wasmtime::component::{Linker, Val};
 use wasmtime_wasi::preview2::command::{self, Command};
 use wasmtime_wasi::preview2::pipe::{
     AsyncReadStream, AsyncWriteStream, ClosedInputStream, ClosedOutputStream,
@@ -24,6 +25,7 @@ use wasmtime_wasi::preview2::{
     Subscribe, Table, TableError, WasiCtx, WasiCtxBuilder, WasiView,
 };
 use wasmtime_wasi_http::WasiHttpCtx;
+use wit_parser::{Results, Type, World, WorldId, WorldKey};
 
 mod blobstore;
 mod bus;
@@ -231,6 +233,8 @@ impl Debug for Ctx {
 pub struct Component {
     component: wasmtime::component::Component,
     engine: wasmtime::Engine,
+    resolve: wit_parser::Resolve,
+    world: WorldId,
     claims: Option<jwt::Claims<jwt::Actor>>,
     handler: builtin::HandlerBuilder,
 }
@@ -245,12 +249,255 @@ impl Debug for Component {
     }
 }
 
+fn encode_custom_parameters(params: &[Val]) -> anyhow::Result<Vec<u8>> {
+    match params {
+        [] => Ok(vec![]),
+        [Val::Bool(val)] => rmp_serde::to_vec(val),
+        [Val::S8(val)] => rmp_serde::to_vec(val),
+        [Val::U8(val)] => rmp_serde::to_vec(val),
+        [Val::S16(val)] => rmp_serde::to_vec(val),
+        [Val::U16(val)] => rmp_serde::to_vec(val),
+        [Val::S32(val)] => rmp_serde::to_vec(val),
+        [Val::U32(val)] => rmp_serde::to_vec(val),
+        [Val::S64(val)] => rmp_serde::to_vec(val),
+        [Val::U64(val)] => rmp_serde::to_vec(val),
+        [Val::Float32(val)] => rmp_serde::to_vec(val),
+        [Val::Float64(val)] => rmp_serde::to_vec(val),
+        [Val::Char(val)] => rmp_serde::to_vec(val),
+        [Val::String(val)] => rmp_serde::to_vec(val),
+        _ => bail!("complex types not supported yet"),
+    }
+    .context("failed to encode parameters")
+}
+
+fn decode_custom_results(
+    results_ty: &Results,
+    results: &mut [Val],
+    buf: &[u8],
+) -> anyhow::Result<()> {
+    let mut results_ty = results_ty.iter_types();
+    match (results_ty.next(), results_ty.next(), results) {
+        (None, None, []) => {
+            ensure!(
+                buf.is_empty(),
+                "non-empty response returned when none expected"
+            );
+        }
+        (Some(Type::Bool), None, [val]) => {
+            *val = rmp_serde::from_slice(buf)
+                .context("failed to decode response")
+                .map(Val::Bool)?;
+        }
+        (Some(Type::U8), None, [val]) => {
+            *val = rmp_serde::from_slice(buf)
+                .context("failed to decode response")
+                .map(Val::U8)?;
+        }
+        (Some(Type::U16), None, [val]) => {
+            *val = rmp_serde::from_slice(buf)
+                .context("failed to decode response")
+                .map(Val::U16)?;
+        }
+        (Some(Type::U32), None, [val]) => {
+            *val = rmp_serde::from_slice(buf)
+                .context("failed to decode response")
+                .map(Val::U32)?;
+        }
+        (Some(Type::U64), None, [val]) => {
+            *val = rmp_serde::from_slice(buf)
+                .context("failed to decode response")
+                .map(Val::U64)?;
+        }
+        (Some(Type::S8), None, [val]) => {
+            *val = rmp_serde::from_slice(buf)
+                .context("failed to decode response")
+                .map(Val::S8)?;
+        }
+        (Some(Type::S16), None, [val]) => {
+            *val = rmp_serde::from_slice(buf)
+                .context("failed to decode response")
+                .map(Val::S16)?;
+        }
+        (Some(Type::S32), None, [val]) => {
+            *val = rmp_serde::from_slice(buf)
+                .context("failed to decode response")
+                .map(Val::S32)?;
+        }
+        (Some(Type::S64), None, [val]) => {
+            *val = rmp_serde::from_slice(buf)
+                .context("failed to decode response")
+                .map(Val::S64)?;
+        }
+        (Some(Type::Float32), None, [val]) => {
+            *val = rmp_serde::from_slice(buf)
+                .context("failed to decode response")
+                .map(Val::Float32)?;
+        }
+        (Some(Type::Float64), None, [val]) => {
+            *val = rmp_serde::from_slice(buf)
+                .context("failed to decode response")
+                .map(Val::Float64)?;
+        }
+        (Some(Type::Char), None, [val]) => {
+            *val = rmp_serde::from_slice(buf)
+                .context("failed to decode response")
+                .map(Val::Char)?;
+        }
+        (Some(Type::String), None, [val]) => {
+            *val = rmp_serde::from_slice(buf)
+                .context("failed to decode response")
+                .map(Val::String)?;
+        }
+        _ => bail!("complex types not supported yet"),
+    }
+    Ok(())
+}
+
+#[instrument(level = "trace", skip_all)]
+fn wasifill(
+    component: &wasmtime::component::Component,
+    resolve: &wit_parser::Resolve,
+    world: WorldId,
+    linker: &mut Linker<Ctx>,
+) {
+    let Some(World { imports, .. }) = resolve
+        .worlds
+        .iter()
+        .find_map(|(id, w)| (id == world).then_some(w))
+    else {
+        trace!("component world missing");
+        return;
+    };
+    for (key, _) in imports {
+        let WorldKey::Interface(iface) = key else {
+            continue;
+        };
+        let Some(interface) = resolve.interfaces.get(*iface) else {
+            trace!("component imports a non-existent interface");
+            continue;
+        };
+        let Some(ref interface_name) = interface.name else {
+            trace!("component imports an unnamed interface");
+            continue;
+        };
+        let Some(package) = interface.package else {
+            trace!(
+                interface = interface_name,
+                "component interface import is missing a package"
+            );
+            continue;
+        };
+        let Some(package) = resolve.packages.get(package) else {
+            trace!(
+                interface = interface_name,
+                "component interface belongs to a non-existent package"
+            );
+            continue;
+        };
+        match (package.name.namespace.as_str(), package.name.name.as_str()) {
+            (
+                "wasi",
+                "blobstore" | "cli" | "clocks" | "filesystem" | "http" | "io" | "keyvalue"
+                | "logging" | "random" | "sockets",
+            )
+            | ("wasmcloud", "bus" | "messaging") => continue,
+            _ => {
+                let interface_path = format!("{}/{interface_name}", package.name);
+                let mut linker = linker.root();
+                let mut linker = match linker.instance(&interface_path) {
+                    Ok(linker) => linker,
+                    Err(err) => {
+                        error!(
+                            ?err,
+                            namespace = package.name.namespace,
+                            "failed to instantiate interface from root"
+                        );
+                        continue;
+                    }
+                };
+                let target = Arc::new(TargetInterface::Custom {
+                    namespace: package.name.namespace.clone(),
+                    package: package.name.name.clone(),
+                    interface: interface_name.to_string(),
+                });
+                for (name, function) in interface.functions.iter().filter(|(name, function)| {
+                    if function.params.len() > 1
+                        || function.results.len() > 1
+                        || function
+                            .params
+                            .iter()
+                            .any(|(_, ty)| matches!(ty, Type::Id(_)))
+                        || function
+                            .results
+                            .iter_types()
+                            .any(|ty| matches!(ty, Type::Id(_)))
+                    {
+                        trace!(
+                            namespace = package.name.namespace,
+                            package = package.name.name,
+                            interface = interface_name,
+                            name,
+                            "avoid wasifilling unsupported component function import"
+                        );
+                        false
+                    } else {
+                        true
+                    }
+                }) {
+                    trace!(
+                        namespace = package.name.namespace,
+                        package = package.name.name,
+                        interface = interface_name,
+                        name,
+                        "wasifill component function import"
+                    );
+                    let operation = format!("{interface_path}.{name}");
+                    let target = Arc::clone(&target);
+                    let results_ty = Arc::new(function.results.clone());
+                    if let Err(err) =
+                        linker.func_new_async(component, name, move |ctx, params, results| {
+                            let operation = operation.clone();
+                            let target = Arc::clone(&target);
+                            let results_ty = Arc::clone(&results_ty);
+                            Box::new(async move {
+                                let buf = encode_custom_parameters(params)?;
+                                let handler = &ctx.data().handler;
+                                let target = handler
+                                    .identify_interface_target(&target)
+                                    .await
+                                    .context("failed to identify interface target")?;
+                                let buf = handler
+                                    .call_sync(target, operation, buf)
+                                    .await
+                                    .context("failed to call target")?;
+                                decode_custom_results(&results_ty, results, &buf)
+                            })
+                        })
+                    {
+                        error!(
+                            ?err,
+                            namespace = package.name.namespace,
+                            package = package.name.name,
+                            interface = interface_name,
+                            name,
+                            "failed to wasifill component function import"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[instrument(level = "trace", skip_all)]
 fn instantiate(
-    engine: &wasmtime::Engine,
     component: wasmtime::component::Component,
+    engine: &wasmtime::Engine,
+    resolve: &wit_parser::Resolve,
+    world: WorldId,
     handler: impl Into<builtin::Handler>,
 ) -> anyhow::Result<Instance> {
-    let mut linker = wasmtime::component::Linker::new(engine);
+    let mut linker = Linker::new(engine);
 
     Interfaces::add_to_linker(&mut linker, |ctx| ctx)
         .context("failed to link `Wasmcloud` interface")?;
@@ -262,6 +509,8 @@ fn instantiate(
     .context("failed to link `wasi:http/outgoing-handler` interface")?;
 
     command::add_to_linker(&mut linker).context("failed to link core WASI interfaces")?;
+
+    wasifill(&component, resolve, world, &mut linker);
 
     let stdin = StdioStream::default();
     let stdout = StdioStream::default();
@@ -298,12 +547,21 @@ impl Component {
     pub fn new(rt: &Runtime, wasm: impl AsRef<[u8]>) -> anyhow::Result<Self> {
         let wasm = wasm.as_ref();
         let engine = rt.engine.clone();
+        let (resolve, world) =
+            match wit_component::decode(wasm).context("failed to decode WIT component")? {
+                wit_component::DecodedWasm::Component(resolve, world) => (resolve, world),
+                wit_component::DecodedWasm::WitPackage(..) => {
+                    bail!("binary-encoded WIT packages not supported")
+                }
+            };
         let claims = claims(wasm)?;
         let component = wasmtime::component::Component::new(&engine, wasm)
             .context("failed to compile component")?;
         Ok(Self {
             component,
             engine,
+            resolve,
+            world,
             claims,
             handler: rt.handler.clone(),
         })
@@ -326,14 +584,26 @@ impl Component {
     pub fn into_instance_claims(
         self,
     ) -> anyhow::Result<(Instance, Option<jwt::Claims<jwt::Actor>>)> {
-        let instance = instantiate(&self.engine, self.component, self.handler)?;
+        let instance = instantiate(
+            self.component,
+            &self.engine,
+            &self.resolve,
+            self.world,
+            self.handler,
+        )?;
         Ok((instance, self.claims))
     }
 
     /// Instantiates a [Component] and returns the resulting [Instance].
     #[instrument]
     pub fn instantiate(&self) -> anyhow::Result<Instance> {
-        instantiate(&self.engine, self.component.clone(), self.handler.clone())
+        instantiate(
+            self.component.clone(),
+            &self.engine,
+            &self.resolve,
+            self.world,
+            self.handler.clone(),
+        )
     }
 
     /// Instantiates a [Component] producing an [Instance] and invokes an operation on it using [Instance::call]

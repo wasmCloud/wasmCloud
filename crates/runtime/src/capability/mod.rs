@@ -17,6 +17,7 @@ mod bindgen {
         world: "interfaces",
         async: true,
         with: {
+           "wasmcloud:bus/lattice/target-interface": super::TargetInterface,
            "wasi:cli/environment@0.2.0-rc-2023-10-18": preview2::bindings::cli::environment,
            "wasi:cli/exit@0.2.0-rc-2023-10-18": preview2::bindings::cli::exit,
            "wasi:cli/preopens@0.2.0-rc-2023-10-18": preview2::bindings::cli::preopens,

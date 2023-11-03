@@ -223,7 +223,7 @@ impl TryFrom<bus::lattice::TargetEntity> for TargetEntity {
     }
 }
 
-#[derive(Debug, Clone, Copy, Eq, Hash, PartialEq)]
+#[derive(Debug, Clone, Eq, Hash, PartialEq)]
 /// Call target identifier
 pub enum TargetInterface {
     /// `wasi:blobstore/blobstore`
@@ -238,6 +238,15 @@ pub enum TargetInterface {
     WasiLoggingLogging,
     /// `wasmcloud:messaging/consumer`
     WasmcloudMessagingConsumer,
+    /// Custom interface
+    Custom {
+        /// Package namespace
+        namespace: String,
+        /// Package name
+        package: String,
+        /// Interface name
+        interface: String,
+    },
 }
 
 /// Outgoing HTTP request
@@ -333,6 +342,12 @@ pub trait Bus {
         binding: &str,
         namespace: &str,
     ) -> anyhow::Result<TargetEntity>;
+
+    /// Identify the target of component interface invocation
+    async fn identify_interface_target(
+        &self,
+        interface: &TargetInterface,
+    ) -> anyhow::Result<Option<TargetEntity>>;
 
     /// Set interface call target
     async fn set_target(
@@ -576,7 +591,7 @@ impl Blobstore for Handler {
 
 #[async_trait]
 impl Bus for Handler {
-    #[instrument(level = "trace")]
+    #[instrument(level = "trace", skip_all)]
     async fn identify_wasmbus_target(
         &self,
         binding: &str,
@@ -590,7 +605,20 @@ impl Bus for Handler {
         }
     }
 
-    #[instrument]
+    #[instrument(level = "trace", skip_all)]
+    async fn identify_interface_target(
+        &self,
+        interface: &TargetInterface,
+    ) -> anyhow::Result<Option<TargetEntity>> {
+        if let Some(ref bus) = self.bus {
+            trace!("call `Bus` handler");
+            bus.identify_interface_target(interface).await
+        } else {
+            bail!("host cannot identify the interface call target")
+        }
+    }
+
+    #[instrument(level = "trace", skip_all)]
     async fn set_target(
         &self,
         target: Option<TargetEntity>,
@@ -601,7 +629,7 @@ impl Bus for Handler {
             .await
     }
 
-    #[instrument]
+    #[instrument(level = "trace", skip_all)]
     async fn call(
         &self,
         target: Option<TargetEntity>,
@@ -616,6 +644,7 @@ impl Bus for Handler {
             .await
     }
 
+    #[instrument(level = "trace", skip_all)]
     async fn call_sync(
         &self,
         target: Option<TargetEntity>,
