@@ -31,87 +31,66 @@ pub enum TargetEntity {
     Actor(ActorIdentifier),
 }
 
-mod private {
-    pub trait Sealed {}
+pub enum TargetInterface {
+    WasiBlobstoreBlobstore,
+    WasiKeyvalueAtomic,
+    WasiKeyvalueReadwrite,
+    WasiLoggingLogging,
+    WasmcloudMessagingConsumer,
+    Custom(String),
 }
 
-pub trait TargetInterface: private::Sealed {
-    fn set_target(&self, target: Option<&TargetEntity>);
-}
-
-#[derive(Eq, PartialEq)]
-struct WasiBlobstoreBlobstore;
-impl private::Sealed for WasiBlobstoreBlobstore {}
-impl TargetInterface for WasiBlobstoreBlobstore {
-    fn set_target(&self, target: Option<&TargetEntity>) {
-        *WASI_BLOBSTORE_BLOBSTORE_TARGET
-            .write()
-            .expect("failed to lock target") = target.cloned();
+impl TargetInterface {
+    pub fn wasi_blobstore_blobstore() -> TargetInterface {
+        TargetInterface::WasiBlobstoreBlobstore
+    }
+    pub fn wasi_keyvalue_atomic() -> TargetInterface {
+        TargetInterface::WasiKeyvalueAtomic
+    }
+    pub fn wasi_keyvalue_readwrite() -> TargetInterface {
+        TargetInterface::WasiKeyvalueReadwrite
+    }
+    pub fn wasi_logging_logging() -> TargetInterface {
+        TargetInterface::WasiLoggingLogging
+    }
+    pub fn wasmcloud_messaging_consumer() -> TargetInterface {
+        TargetInterface::WasmcloudMessagingConsumer
     }
 }
 
-#[derive(Eq, PartialEq)]
-struct WasiKeyvalueAtomic;
-impl private::Sealed for WasiKeyvalueAtomic {}
-impl TargetInterface for WasiKeyvalueAtomic {
-    fn set_target(&self, target: Option<&TargetEntity>) {
-        *WASI_KEYVALUE_ATOMIC_TARGET
-            .write()
-            .expect("failed to lock target") = target.cloned();
-    }
-}
-
-#[derive(Eq, PartialEq)]
-struct WasiKeyvalueReadwrite;
-impl private::Sealed for WasiKeyvalueReadwrite {}
-impl TargetInterface for WasiKeyvalueReadwrite {
-    fn set_target(&self, target: Option<&TargetEntity>) {
-        *WASI_KEYVALUE_READWRITE_TARGET
-            .write()
-            .expect("failed to lock target") = target.cloned();
-    }
-}
-
-#[derive(Eq, PartialEq)]
-struct WasiLoggingLogging;
-impl private::Sealed for WasiLoggingLogging {}
-impl TargetInterface for WasiLoggingLogging {
-    fn set_target(&self, target: Option<&TargetEntity>) {
-        *WASI_LOGGING_LOGGING_TARGET
-            .write()
-            .expect("failed to lock target") = target.cloned();
-    }
-}
-
-#[derive(Eq, PartialEq)]
-struct WasmcloudMessagingConsumer;
-impl private::Sealed for WasmcloudMessagingConsumer {}
-impl TargetInterface for WasmcloudMessagingConsumer {
-    fn set_target(&self, target: Option<&TargetEntity>) {
-        *WASMCLOUD_MESSAGING_CONSUMER_TARGET
-            .write()
-            .expect("failed to lock target") = target.cloned();
-    }
-}
-
-pub fn target_wasi_blobstore_blobstore() -> &'static dyn TargetInterface {
-    &WasiBlobstoreBlobstore
-}
-pub fn target_wasi_keyvalue_atomic() -> &'static dyn TargetInterface {
-    &WasiKeyvalueAtomic
-}
-pub fn target_wasi_keyvalue_readwrite() -> &'static dyn TargetInterface {
-    &WasiKeyvalueReadwrite
-}
-pub fn target_wasi_logging_logging() -> &'static dyn TargetInterface {
-    &WasiLoggingLogging
-}
-pub fn target_wasmcloud_messaging_consumer() -> &'static dyn TargetInterface {
-    &WasmcloudMessagingConsumer
-}
-
-pub fn set_target(target: Option<&TargetEntity>, interfaces: &[&dyn TargetInterface]) {
+pub fn set_target(target: Option<&TargetEntity>, interfaces: Vec<TargetInterface>) {
     for interface in interfaces {
-        interface.set_target(target)
+        match interface {
+            TargetInterface::WasiBlobstoreBlobstore => {
+                *WASI_BLOBSTORE_BLOBSTORE_TARGET
+                    .write()
+                    .expect("failed to lock target") = target.cloned();
+            }
+
+            TargetInterface::WasiKeyvalueAtomic => {
+                *WASI_KEYVALUE_ATOMIC_TARGET
+                    .write()
+                    .expect("failed to lock target") = target.cloned();
+            }
+
+            TargetInterface::WasiKeyvalueReadwrite => {
+                *WASI_KEYVALUE_READWRITE_TARGET
+                    .write()
+                    .expect("failed to lock target") = target.cloned();
+            }
+
+            TargetInterface::WasiLoggingLogging => {
+                *WASI_LOGGING_LOGGING_TARGET
+                    .write()
+                    .expect("failed to lock target") = target.cloned();
+            }
+
+            TargetInterface::WasmcloudMessagingConsumer => {
+                *WASMCLOUD_MESSAGING_CONSUMER_TARGET
+                    .write()
+                    .expect("failed to lock target") = target.cloned();
+            }
+            TargetInterface::Custom(_interface) => todo!("not supported yet"),
+        }
     }
 }

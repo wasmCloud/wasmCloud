@@ -81,6 +81,24 @@ impl capability::Bus for Handler {
         }
     }
 
+    async fn identify_interface_target(
+        &self,
+        interface: &capability::TargetInterface,
+    ) -> anyhow::Result<Option<capability::TargetEntity>> {
+        match interface {
+            capability::TargetInterface::Custom {
+                namespace,
+                package,
+                interface,
+            } if namespace == "test-actors" && package == "foobar" && interface == "foobar" => {
+                Ok(Some(capability::TargetEntity::Actor(
+                    capability::ActorIdentifier::Alias("foobar-component-command-preview2".into()),
+                )))
+            }
+            _ => panic!("interface `{interface:?}` not supported"),
+        }
+    }
+
     async fn set_target(
         &self,
         target: Option<capability::TargetEntity>,
@@ -91,6 +109,7 @@ impl capability::Bus for Handler {
                 (Some(capability::TargetEntity::Link(Some(name))), [capability::TargetInterface::WasiKeyvalueAtomic | capability::TargetInterface::WasiKeyvalueReadwrite]) if name == "keyvalue" => Ok(()),
                 (Some(capability::TargetEntity::Link(Some(name))), [capability::TargetInterface::WasiBlobstoreBlobstore]) if name == "blobstore" => Ok(()),
                 (Some(capability::TargetEntity::Link(Some(name))), [capability::TargetInterface::WasiHttpOutgoingHandler]) if name == "httpclient" => Ok(()),
+(Some(capability::TargetEntity::Actor(capability::ActorIdentifier::Alias(name))), [capability::TargetInterface::Custom{ namespace, package, interface }]) if (name == "foobar-component-command-preview2" || name == "unknown/alias") && namespace == "test-actors" && package == "foobar" && interface == "foobar" => Ok(()),
             (target, interfaces) => panic!("`set_target` with target `{target:?}` and interfaces `{interfaces:?}` should not have been called")
         }
     }
@@ -287,15 +306,17 @@ impl capability::Bus for Handler {
 
             (
                 Some(capability::TargetEntity::Actor(capability::ActorIdentifier::Alias(name))),
-                "test-actors:foobar/actor.foobar" // component invocation
-                | "foobar-component-command-preview2/actor.foobar"  // valid module invocation
-                | "unknown/alias/actor.foobar", // invalid module invocation
+                "test-actors:foobar/foobar.foobar" // component invocation
+                | "foobar-component-command-preview2/foobar.foobar"  // valid module invocation
+                | "unknown/alias/foobar.foobar", // invalid module invocation
             ) if name == "foobar-component-command-preview2" || name == "unknown/alias" => {
-                assert_eq!(payload, br#"{"arg":"foo"}"#);
+                let expected = rmp_serde::to_vec("foo").expect("failed to encode `foo`");
+                assert_eq!(payload, expected);
                 if name == "unknown/alias" {
                     bail!("unknown actor call alias")
                 } else {
-                    Ok(r#""foobar""#.into())
+                    let res = rmp_serde::to_vec("foobar").expect("failed to encode `foobar`");
+                    Ok(res)
                 }
             }
 

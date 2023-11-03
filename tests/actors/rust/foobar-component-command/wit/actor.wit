@@ -1,5 +1,0 @@
-package test-actors:foobar
-
-interface actor {
-    foobar: fn(arg: string) -> string
-}

@@ -115,15 +115,14 @@ impl host::Host for Ctx {
 
 #[async_trait]
 impl lattice::Host for Ctx {
-    #[instrument]
     async fn set_target(
         &mut self,
         target: Option<host::TargetEntity>,
-        interfaces: Vec<host::TargetInterface>,
+        interfaces: Vec<Resource<TargetInterface>>,
     ) -> anyhow::Result<()> {
         let interfaces = interfaces
             .into_iter()
-            .map(|interface| self.table.get(interface).copied())
+            .map(|interface| self.table.get_resource(&interface).cloned())
             .collect::<TableResult<_>>()
             .map_err(|e| anyhow!(e).context("failed to get interface"))?;
         let target = target
@@ -136,48 +135,63 @@ impl lattice::Host for Ctx {
             .context("failed to set target")?;
         Ok(())
     }
+}
 
-    #[instrument]
-    async fn target_wasi_blobstore_blobstore(&mut self) -> anyhow::Result<host::TargetInterface> {
-        self.table
-            .push(Box::new(TargetInterface::WasiBlobstoreBlobstore))
-            .context("failed to push target interface")
-    }
-
-    #[instrument]
-    async fn target_wasi_keyvalue_atomic(&mut self) -> anyhow::Result<host::TargetInterface> {
-        self.table
-            .push(Box::new(TargetInterface::WasiKeyvalueAtomic))
-            .context("failed to push target interface")
-    }
-
-    #[instrument]
-    async fn target_wasi_keyvalue_readwrite(&mut self) -> anyhow::Result<host::TargetInterface> {
-        self.table
-            .push(Box::new(TargetInterface::WasiKeyvalueReadwrite))
-            .context("failed to push target interface")
-    }
-
-    #[instrument]
-    async fn target_wasi_logging_logging(&mut self) -> anyhow::Result<host::TargetInterface> {
-        self.table
-            .push(Box::new(TargetInterface::WasiLoggingLogging))
-            .context("failed to push target interface")
-    }
-
-    #[instrument]
-    async fn target_wasi_http_outgoing_handler(&mut self) -> anyhow::Result<host::TargetInterface> {
-        self.table
-            .push(Box::new(TargetInterface::WasiHttpOutgoingHandler))
-            .context("failed to push target interface")
-    }
-
-    #[instrument]
-    async fn target_wasmcloud_messaging_consumer(
+#[async_trait]
+impl lattice::HostTargetInterface for Ctx {
+    async fn new(
         &mut self,
-    ) -> anyhow::Result<host::TargetInterface> {
+        namespace: String,
+        package: String,
+        interface: String,
+    ) -> anyhow::Result<Resource<TargetInterface>> {
         self.table
-            .push(Box::new(TargetInterface::WasmcloudMessagingConsumer))
+            .push_resource(TargetInterface::Custom {
+                namespace,
+                package,
+                interface,
+            })
             .context("failed to push target interface")
+    }
+
+    async fn wasi_blobstore_blobstore(&mut self) -> anyhow::Result<Resource<TargetInterface>> {
+        self.table
+            .push_resource(TargetInterface::WasiBlobstoreBlobstore)
+            .context("failed to push target interface")
+    }
+
+    async fn wasi_keyvalue_atomic(&mut self) -> anyhow::Result<Resource<TargetInterface>> {
+        self.table
+            .push_resource(TargetInterface::WasiKeyvalueAtomic)
+            .context("failed to push target interface")
+    }
+
+    async fn wasi_keyvalue_readwrite(&mut self) -> anyhow::Result<Resource<TargetInterface>> {
+        self.table
+            .push_resource(TargetInterface::WasiKeyvalueReadwrite)
+            .context("failed to push target interface")
+    }
+
+    async fn wasi_logging_logging(&mut self) -> anyhow::Result<Resource<TargetInterface>> {
+        self.table
+            .push_resource(TargetInterface::WasiLoggingLogging)
+            .context("failed to push target interface")
+    }
+
+    async fn wasi_http_outgoing_handler(&mut self) -> anyhow::Result<Resource<TargetInterface>> {
+        self.table
+            .push_resource(TargetInterface::WasiHttpOutgoingHandler)
+            .context("failed to push target interface")
+    }
+
+    async fn wasmcloud_messaging_consumer(&mut self) -> anyhow::Result<Resource<TargetInterface>> {
+        self.table
+            .push_resource(TargetInterface::WasmcloudMessagingConsumer)
+            .context("failed to push target interface")
+    }
+
+    fn drop(&mut self, interface: Resource<TargetInterface>) -> anyhow::Result<()> {
+        self.table.delete_resource(interface)?;
+        Ok(())
     }
 }

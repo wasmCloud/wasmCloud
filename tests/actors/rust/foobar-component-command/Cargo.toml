@@ -5,5 +5,4 @@ version = "0.1.0"
 
 [dependencies]
 anyhow = { workspace = true, features = ["std"] }
-serde = { workspace = true, features = ["derive"] }
-serde_json = { workspace = true, features = ["std"] }
+rmp-serde = { workspace = true }

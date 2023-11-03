@@ -89,7 +89,7 @@ impl HttpHandler for HttpLogRng {
         let messaging_target = TargetEntity::Link(Some("messaging".into()));
         bus::lattice::set_target(
             Some(&messaging_target),
-            &[bus::lattice::target_wasmcloud_messaging_consumer()],
+            vec![bus::lattice::TargetInterface::wasmcloud_messaging_consumer()],
         );
         let buf = rmp_serde::to_vec_named(&messaging::PubMessage {
             body: body.clone().into(),
@@ -147,7 +147,7 @@ impl HttpHandler for HttpLogRng {
         let keyvalue_target = TargetEntity::Link(Some("keyvalue".into()));
         bus::lattice::set_target(
             Some(&keyvalue_target),
-            &[bus::lattice::target_wasi_keyvalue_readwrite()],
+            vec![bus::lattice::TargetInterface::wasi_keyvalue_readwrite()],
         );
 
         let foo_key = String::from("foo");
@@ -203,7 +203,7 @@ impl HttpHandler for HttpLogRng {
 
         bus::lattice::set_target(
             Some(&keyvalue_target),
-            &[bus::lattice::target_wasi_keyvalue_atomic()],
+            vec![bus::lattice::TargetInterface::wasi_keyvalue_atomic()],
         );
 
         let counter_key = String::from("counter");
@@ -244,22 +244,22 @@ impl HttpHandler for HttpLogRng {
             Some(&TargetEntity::Actor(bus::lattice::ActorIdentifier::Alias(
                 "unknown/alias".into(),
             ))),
-            // TODO: This should include the package name, i.e. `test-actors:foobar/actor.foobar`
-            "actor.foobar",
-            r#"{"arg":"foo"}"#.as_bytes(),
+            // TODO: This should include the package name, i.e. `test-actors:foobar/foobar.foobar`
+            "foobar.foobar",
+            &rmp_serde::to_vec("foo").expect("failed to encode `foo`"),
         )
-        .expect_err("invoked `test-actors:foobar/actor.foobar` on unknown actor");
+        .expect_err("invoked `test-actors:foobar/foobar.foobar` on unknown actor");
 
         let res = bus::host::call_sync(
             Some(&TargetEntity::Actor(bus::lattice::ActorIdentifier::Alias(
                 "foobar-component-command-preview2".into(),
             ))),
-            // TODO: This should include the package name, i.e. `test-actors:foobar/actor.foobar`
-            "actor.foobar",
-            r#"{"arg":"foo"}"#.as_bytes(),
+            // TODO: This should include the package name, i.e. `test-actors:foobar/foobar.foobar`
+            "foobar.foobar",
+            &rmp_serde::to_vec("foo").expect("failed to encode `foo`"),
         )
-        .expect("failed to invoke `test-actors:foobar/actor.foobar` on an actor");
-        let res: String = serde_json::from_slice(&res).expect("failed to decode response");
+        .expect("failed to invoke `test-actors:foobar/foobar.foobar` on an actor");
+        let res: String = rmp_serde::from_slice(&res).expect("failed to decode response");
         assert_eq!(res, "foobar");
 
         let httpclient_target = TargetEntity::Link(Some("httpclient".into()));
