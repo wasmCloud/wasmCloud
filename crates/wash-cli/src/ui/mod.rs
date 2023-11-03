@@ -1,8 +1,3 @@
-use wash_lib::{
-    cli::{CommandOutput, OutputKind},
-    config::downloads_dir,
-};
-
 mod config;
 pub use config::*;
 
@@ -13,6 +8,10 @@ use async_compression::tokio::bufread::GzipDecoder;
 use clap::Parser;
 use tokio_tar::Archive;
 use warp::Filter;
+use wash_lib::{
+    cli::{CommandOutput, OutputKind},
+    config::downloads_dir,
+};
 
 const DEFAULT_WASHBOARD_VERSION: &str = "v0.1.0";
 
