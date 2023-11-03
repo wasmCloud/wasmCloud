@@ -16,17 +16,16 @@
 
 The wasmCloud runtime is a vessel for running applications in the cloud, at the edge, in the browser, on small devices, and anywhere else you can imagine.
 
-**We want to bring joy to distributed systems development without sacrificing enterprise-grade features.**
+**Move from concept to production without changing your design, architecture, or your programming environment.**
 
 wasmCloud lets you focus on shipping _features_. Build secure, portable, re-usable components. Get rid of the headaches from being smothered by boilerplate, dependency hell, tight coupling, and designs mandated by your infrastructure.
 
 ## Core Tenets
 
-- Productivity
-- Portability
-- Performance at any scale
-- Enterprise-grade security
-- Cost savings
+- Dead simple distributed applications
+- Run anywhere
+- Secure by default
+- Productivity for both developers and operations
 
 # Getting Started
 
@@ -38,6 +37,17 @@ Install the wasmCloud Shell (`wash`) with [one command](https://wasmcloud.com/do
 
 If you're new to the wasmCloud ecosystem, a great place to start is the [getting started](https://wasmcloud.com/docs/getting-started/) walkthrough.
 
+## Quickstart
+
+The following commands launch wasmCloud in a local development environment and deploy a simple "hello world" WebAssembly module.
+
+```console
+wash up -d
+wash new actor -t hello hello
+wash app deploy ./hello/wadm.yaml
+curl localhost:8080
+```
+
 ## Examples
 
 ### WebAssembly Modules (Stable ABI)
@@ -46,7 +56,7 @@ wasmCloud has a wide range of [examples](https://github.com/wasmCloud/examples/)
 
 ### **Experimental** WASI Preview 2 WebAssembly Components
 
-wasmCloud is actively working on staying up-to-date with WASI Preview 2 and the Component Model. For actor components which consume interfaces defined in [WIT](https://github.com/WebAssembly/component-model/blob/main/design/mvp/WIT.md), see examples in the [`examples` directory of this repository](./examples).
+wasmCloud is actively staying up-to-date with WASI Preview 2 and the Component Model. For actor components which consume interfaces defined in [WIT](https://github.com/WebAssembly/component-model/blob/main/design/mvp/WIT.md), see examples in the [`examples` directory of this repository](./examples).
 
 ### 💥 Awesome wasmCloud
 
@@ -80,7 +90,7 @@ We host our own [community slack](https://slack.wasmcloud.com) for all community
 
 ## 📚 Reference Documentation
 
-wasmCloud uses some terminology you might not be familiar with. Check out the [reference](https://wasmcloud.com/docs/category/reference) section of our docs for a deeper dive.
+wasmCloud uses some terminology you might not be familiar with. Check out the [concepts](https://wasmcloud.com/docs/concepts/interface-driven-development) section of our docs for a deeper dive.
 
 ---
 
