@@ -5842,6 +5842,7 @@ version = "0.22.0"
 dependencies = [
  "anyhow",
  "assert-json-diff",
+ "async-compression",
  "async-nats 0.31.0",
  "atelier_core 0.2.22",
  "bytes",
@@ -5863,6 +5864,7 @@ dependencies = [
  "provider-archive",
  "rand 0.8.5",
  "regex",
+ "reqwest",
  "rmp-serde",
  "rmpv",
  "rust-embed",
@@ -5879,6 +5881,7 @@ dependencies = [
  "term-table",
  "thiserror",
  "tokio",
+ "tokio-tar",
  "toml 0.7.8",
  "url",
  "wadm",

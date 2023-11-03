@@ -1,16 +1,20 @@
-use anyhow::Result;
-use clap::Parser;
-use rust_embed::RustEmbed;
-use warp::Filter;
-
-use wash_lib::cli::{CommandOutput, OutputKind};
+use wash_lib::{
+    cli::{CommandOutput, OutputKind},
+    config::downloads_dir,
+};
 
 mod config;
 pub use config::*;
 
-#[derive(RustEmbed)]
-#[folder = "../../washboard-ui/dist"]
-struct Asset;
+use std::{io::Cursor, path::PathBuf};
+
+use anyhow::{bail, Context, Result};
+use async_compression::tokio::bufread::GzipDecoder;
+use clap::Parser;
+use tokio_tar::Archive;
+use warp::Filter;
+
+const WASHBOARD_VERSION: &str = "washboard-ui-v0.1.0";
 
 #[derive(Parser, Debug, Clone)]
 pub struct UiCommand {
@@ -26,10 +30,8 @@ pub async fn handle_command(command: UiCommand, output_kind: OutputKind) -> Resu
 }
 
 pub async fn handle_ui(cmd: UiCommand, _output_kind: OutputKind) -> Result<()> {
-    let static_files = warp::any()
-        .and(warp::get())
-        .and(warp_embed::embed(&Asset))
-        .boxed();
+    let washboard_assets = ensure_washboard(WASHBOARD_VERSION, downloads_dir()?).await?;
+    let static_files = warp::fs::dir(washboard_assets);
 
     let cors = warp::cors()
         .allow_any_origin()
@@ -42,6 +44,46 @@ pub async fn handle_ui(cmd: UiCommand, _output_kind: OutputKind) -> Result<()> {
     warp::serve(static_files.with(cors))
         .run(([127, 0, 0, 1], cmd.port))
         .await;
+
+    Ok(())
+}
+
+async fn ensure_washboard(version: &str, base_dir: PathBuf) -> Result<PathBuf> {
+    let install_dir = base_dir.join(version);
+
+    if tokio::fs::metadata(&install_dir).await.is_err() {
+        download_washboard(version, &install_dir).await?;
+    }
+
+    Ok(install_dir)
+}
+
+async fn download_washboard(version: &str, install_dir: &PathBuf) -> Result<()> {
+    let release_url = format!(
+        "https://github.com/wasmCloud/wasmCloud/releases/download/{version}/washboard.tar.gz"
+    );
+
+    // Download tarball
+    let resp = reqwest::get(release_url)
+        .await
+        .context("failed to request washboard tarball")?;
+
+    if resp.status() != reqwest::StatusCode::OK {
+        bail!("failed to download washboard tarball: {}", resp.status());
+    }
+
+    let body = resp
+        .bytes()
+        .await
+        .context("failed to read bytes from washboard tarball")?;
+
+    // Unpack and copy to install dir
+    let cursor = Cursor::new(body);
+    let mut tarball = Archive::new(Box::new(GzipDecoder::new(cursor)));
+    tarball
+        .unpack(install_dir)
+        .await
+        .context("failed to unpack washboard tarball")?;
 
     Ok(())
 }
