@@ -11,7 +11,6 @@ on:
     - Cargo.toml
     - crates/wash-cli/**
     - crates/wash-lib/**
-    - washboard-ui/**
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -21,21 +20,6 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build_ui:
-    name: Build UI
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '18.x'
-      - name: npm install
-        run: npm install
-        working-directory: ./washboard-ui
-      - name: npm run build
-        run: npm run build
-        working-directory: ./washboard-ui
-
   unit_tests:
     name: Unit Tests
     strategy:
