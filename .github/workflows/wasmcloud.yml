@@ -89,7 +89,7 @@ jobs:
   build-windows:
     name: wasmcloud-x86_64-pc-windows-msvc
     runs-on: windows-latest-8-cores
-    steps: 
+    steps:
     - uses: actions/checkout@v4.1.1
     - run: cargo build --release -p wash-cli -p wasmcloud
     - run: mkdir "artifact/bin"
@@ -374,23 +374,30 @@ jobs:
       with:
         path: artifacts
     - run: |
+        mkdir -p ./artifacts/wasmcloud
+        mkdir -p ./artifacts/wash
+
         for dir in ./artifacts/wasmcloud-*; do
-          target=${dir#./artifacts/wasmcloud-}
-          for bin_path in ${dir}/bin/*; do
-            chmod +x ${bin_path}
-            bin=$(basename ${bin_path})
-            case "$bin" in
-              *.exe)
-                name="${bin#.exe}"
-                mkdir -p ./artifacts/${name}
-                mv ${bin_path} ./artifacts/${name}/${name}-${target}.exe
-              ;;
-              *)
-                mkdir -p ./artifacts/${bin}
-                mv ${bin_path} ./artifacts/${bin}/${bin}-${target}
-              ;;
-            esac
-          done
+          if [[ "${dir}" == *"-oci" ]]; then # OCI image
+            mv ${dir}/* ./artifacts/wasmcloud
+          elif [[ "${dir}" == *"-universal-darwin" ]]; then # universal binary
+            mv ${dir}/* ./artifacts/wasmcloud
+          else # binaries
+            target=${dir#./artifacts/wasmcloud-}
+            for bin_path in ${dir}/bin/*; do
+              chmod +x ${bin_path}
+              bin=$(basename ${bin_path})
+              case "$bin" in
+                *.exe)
+                  name="${bin#.exe}"
+                  mv ${bin_path} ./artifacts/${name}/${name}-${target}.exe
+                ;;
+                *)
+                  mv ${bin_path} ./artifacts/${bin}/${bin}-${target}
+                ;;
+              esac
+            done
+          fi
         done
 
     - uses: softprops/action-gh-release@v1
