@@ -115,21 +115,30 @@ jobs:
       with:
         name: wasmcloud-x86_64-apple-darwin
         path: x86_64
+
     - run: chmod +x ./x86_64/bin/wash
     - run: chmod +x ./x86_64/bin/wasmcloud
     - run: ./x86_64/bin/wash --version
     - run: ./x86_64/bin/wasmcloud --version
-    - run: mkdir -p ./bin
-    - run: lipo -create ./aarch64/bin/wash ./x86_64/bin/wash -output ./bin/wash-universal-darwin
-    - run: lipo -create ./aarch64/bin/wasmcloud ./x86_64/bin/wasmcloud -output ./bin/wasmcloud-universal-darwin
-    - run: chmod +x ./bin/wash-universal-darwin
-    - run: chmod +x ./bin/wasmcloud-universal-darwin
-    - run: ./bin/wash-universal-darwin --version
-    - run: ./bin/wasmcloud-universal-darwin --version
+
+    - run: mkdir -p ./wash/bin
+    - run: lipo -create ./aarch64/bin/wash ./x86_64/bin/wash -output ./wash/bin/wash
+    - run: mkdir -p ./wasmcloud/bin
+    - run: lipo -create ./aarch64/bin/wasmcloud ./x86_64/bin/wasmcloud -output ./wasmcloud/bin/wasmcloud
+
+    - run: chmod +x ./wash/bin/wash
+    - run: ./wash/bin/wash --version
+    - run: chmod +x ./wasmcloud/bin/wasmcloud
+    - run: ./wasmcloud/bin/wasmcloud --version
+
+    - uses: actions/upload-artifact@v3
+      with:
+        name: wash-universal-darwin
+        path: wash
     - uses: actions/upload-artifact@v3
       with:
         name: wasmcloud-universal-darwin
-        path: bin
+        path: wasmcloud
 
   test-linux:
     runs-on: ubuntu-22.04
@@ -381,30 +390,23 @@ jobs:
       with:
         path: artifacts
     - run: |
-        mkdir -p ./artifacts/wasmcloud
-        mkdir -p ./artifacts/wash
-
         for dir in ./artifacts/wasmcloud-*; do
-          if [[ "${dir}" == *"-oci" ]]; then # OCI image
-            mv ${dir}/* ./artifacts/wasmcloud
-          elif [[ "${dir}" == *"-universal-darwin" ]]; then # universal binary
-            mv ${dir}/* ./artifacts/wasmcloud
-          else # binaries
-            target=${dir#./artifacts/wasmcloud-}
-            for bin_path in ${dir}/bin/*; do
-              chmod +x ${bin_path}
-              bin=$(basename ${bin_path})
-              case "$bin" in
-                *.exe)
-                  name="${bin%.exe}"
-                  mv ${bin_path} ./artifacts/${name}/${name}-${target}.exe
-                ;;
-                *)
-                  mv ${bin_path} ./artifacts/${bin}/${bin}-${target}
-                ;;
-              esac
-            done
-          fi
+          target=${dir#./artifacts/wasmcloud-}
+          for bin_path in $(find ${dir}/bin -type f); do
+            chmod +x ${bin_path}
+            bin=$(basename ${bin_path})
+            case "$bin" in
+              *.exe)
+                bin="${bin%.exe}"
+                mkdir -p ./${bin}
+                mv ${bin_path} ./${bin}/${bin}-${target}.exe
+              ;;
+              *)
+                mkdir -p ./${bin}
+                mv ${bin_path} ./${bin}/${bin}-${target}
+              ;;
+            esac
+          done
         done
 
     - uses: softprops/action-gh-release@v1
@@ -413,7 +415,7 @@ jobs:
         draft: true
         prerelease: true
         generate_release_notes: true
-        files: ./artifacts/wasmcloud/*
+        files: ./wasmcloud/*
 
     - uses: softprops/action-gh-release@v1
       if: startsWith(github.ref, 'refs/tags/wash-cli-v')
@@ -421,7 +423,7 @@ jobs:
         draft: true
         prerelease: true
         generate_release_notes: true
-        files: ./artifacts/wash/*
+        files: ./wash/*
 
   snapcraft:
     if: startsWith(github.ref, 'refs/tags/wash-cli-v') && github.event_name == 'push'
