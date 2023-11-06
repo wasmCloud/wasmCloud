@@ -6,10 +6,10 @@ use std::{
     io::ErrorKind,
     path::{Path, PathBuf},
     process,
-    str::FromStr,
 };
 
 use anyhow::{anyhow, bail, Context, Result};
+use log::warn;
 use wasm_encoder::{Encode, Section};
 use wit_bindgen_core::Files;
 use wit_bindgen_go::Opts as WitBindgenGoOpts;
@@ -74,7 +74,9 @@ pub fn build_project(config: &ProjectConfig, signing: Option<SignConfig>) -> Res
             build_actor(actor_config, &config.language, &config.common, signing)
         }
         TypeConfig::Provider(_provider_config) => {
-            bail!("wash build has not be implemented for providers yet. Please use `make` for now!")
+            bail!(
+                "wash build has not been implemented for providers yet. Please use `make` for now!"
+            )
         }
         TypeConfig::Interface(_interface_config) => bail!(
             "wash build has not be implemented for interfaces yet. Please use `make` for now!"
@@ -96,19 +98,62 @@ pub fn build_actor(
     common_config: &CommonConfig,
     signing_config: Option<SignConfig>,
 ) -> Result<PathBuf> {
-    // Build actor based on language toolchain
-    let actor_wasm_path = match language_config {
-        LanguageConfig::Rust(rust_config) => {
-            build_rust_actor(common_config, rust_config, actor_config)
-        }
-        LanguageConfig::TinyGo(tinygo_config) => {
-            build_tinygo_actor(common_config, tinygo_config, actor_config)
-        }
-    }?;
+    let actor_wasm_path = if let Some(raw_command) = actor_config.build_command.as_ref() {
+        // Change directory into the project directory
+        std::env::set_current_dir(&common_config.path)?;
+        // The raw command here is a string that will be split into a command and arguments
+        let mut split_command = raw_command.split_ascii_whitespace();
+        // Consume the first element of the split command, which is the command itself
+        let command = split_command
+            .next()
+            .context("build command is supplied but empty")?;
+        let mut command = process::Command::new(command);
+        // All remaining elements of the split command are interpreted as arguments
+        command.args(split_command).status().map_err(|e| {
+            if e.kind() == ErrorKind::NotFound {
+                anyhow!("`{:?}` was not found", command.get_program())
+            } else {
+                anyhow!(format!("failed to run `{:?}`: {e}", command.get_program()))
+            }
+        })?;
 
-    // Perform embedding, if necessary
-    if let WasmTarget::WasiPreview1 | WasmTarget::WasiPreview2 = &actor_config.wasm_target {
-        embed_wasm_component_metadata(
+        let actor_path = actor_config
+            .build_artifact
+            .clone()
+            .map(|p| {
+                // This outputs the path if it's absolute, or joins it with the project path if it's relative
+                if p.is_absolute() {
+                    p
+                } else {
+                    common_config.path.join(p)
+                }
+            })
+            .unwrap_or_else(|| {
+                common_config
+                    .path
+                    .join(format!("build/{}.wasm", common_config.wasm_bin_name()))
+            });
+        if let Err(_e) = std::fs::metadata(actor_path.as_path()) {
+            warn!(
+                "Actor built with custom command but not found in expected path [{}]",
+                actor_path.display()
+            );
+        }
+        actor_path
+    } else {
+        // Build actor based on language toolchain
+        let actor_wasm_path = match language_config {
+            LanguageConfig::Rust(rust_config) => {
+                build_rust_actor(common_config, rust_config, actor_config)
+            }
+            LanguageConfig::TinyGo(tinygo_config) => {
+                build_tinygo_actor(common_config, tinygo_config, actor_config)
+            }
+        }?;
+
+        // Perform embedding, if necessary
+        if let WasmTarget::WasiPreview1 | WasmTarget::WasiPreview2 = &actor_config.wasm_target {
+            embed_wasm_component_metadata(
             &common_config.path,
             actor_config
                 .wit_world
@@ -117,28 +162,30 @@ pub fn build_actor(
             &actor_wasm_path,
             &actor_wasm_path,
         )?;
-    };
+        };
 
-    // If the actor has been configured as WASI Preview2, adapt it from preview1
-    if actor_config.wasm_target == WasmTarget::WasiPreview2 {
-        let adapter_wasm_bytes = get_wasi_preview2_adapter_bytes(actor_config)?;
-        // Adapt the component, using the adapter that is available locally
-        let wasm_bytes = adapt_wasi_preview1_component(&actor_wasm_path, adapter_wasm_bytes)
-            .with_context(|| {
+        // If the actor has been configured as WASI Preview2, adapt it from preview1
+        if actor_config.wasm_target == WasmTarget::WasiPreview2 {
+            let adapter_wasm_bytes = get_wasi_preview2_adapter_bytes(actor_config)?;
+            // Adapt the component, using the adapter that is available locally
+            let wasm_bytes = adapt_wasi_preview1_component(&actor_wasm_path, adapter_wasm_bytes)
+                .with_context(|| {
+                    format!(
+                        "failed to adapt component at [{}] to WASI preview2",
+                        actor_wasm_path.display(),
+                    )
+                })?;
+
+            // Write the adapted file out to disk
+            fs::write(&actor_wasm_path, wasm_bytes).with_context(|| {
                 format!(
-                    "failed to adapt component at [{}] to WASI preview2",
+                    "failed to write WASI preview2 adapted bytes to path [{}]",
                     actor_wasm_path.display(),
                 )
             })?;
-
-        // Write the adapted file out to disk
-        fs::write(&actor_wasm_path, wasm_bytes).with_context(|| {
-            format!(
-                "failed to write WASI preview2 adapted bytes to path [{}]",
-                actor_wasm_path.display(),
-            )
-        })?;
-    }
+        }
+        actor_wasm_path
+    };
 
     // Sign the wasm file (if configured)
     if let Some(cfg) = signing_config {
@@ -169,12 +216,15 @@ pub fn sign_actor_wasm(
         .to_string();
 
     // Output the signed file in the same directory with a _s suffix
-    let destination = source.replace(".wasm", "_s.wasm");
-    let destination_file = PathBuf::from_str(&destination)?;
+    let destination = if let Some(destination) = actor_config.destination.clone() {
+        destination
+    } else {
+        PathBuf::from(source.replace(".wasm", "_s.wasm"))
+    };
 
     let sign_options = SignCommand {
         source,
-        destination: Some(destination),
+        destination: Some(destination.to_string_lossy().to_string()),
         metadata: ActorMetadata {
             name: common_config.name.clone(),
             ver: common_config.version.to_string(),
@@ -194,7 +244,11 @@ pub fn sign_actor_wasm(
     };
     sign_file(sign_options, OutputKind::Json)?;
 
-    Ok(destination_file)
+    Ok(if destination.is_absolute() {
+        destination
+    } else {
+        common_config.path.join(destination)
+    })
 }
 
 /// Builds a rust actor and returns the path to the file.

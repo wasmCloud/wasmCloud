@@ -8,7 +8,7 @@ claims = ["wasmcloud:httpserver"]
 registry = "localhost:8080"
 push_insecure = false
 key_directory = "./keys"
-filename = "testactor.wasm"
+destination = "./build/testactor.wasm"
 wasm_target = "wasm32-wasi-preview2"
 call_alias = "testactor"
 

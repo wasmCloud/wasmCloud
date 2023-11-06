@@ -1,0 +1,9 @@
+language = "rust"
+type = "actor"
+name = "custombuildactorcomponent"
+
+[actor]
+claims = ["wasmcloud:httpserver"]
+build_artifact = "target/wasm32-wasi/release/custombuildactorcomponent.wasm"
+build_command = "cargo component build --release --target wasm32-wasi"
+destination = "./build/custombuildactorcomponent_s.wasm"
