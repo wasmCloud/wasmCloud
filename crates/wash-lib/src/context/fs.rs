@@ -5,7 +5,7 @@ use std::io::BufReader;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use super::{ContextManager, DefaultContext, WashContext};
 
@@ -94,18 +94,12 @@ impl ContextManager for ContextDir {
 
     /// Sets the current default context to the given name. Will error if it doesn't exist
     fn set_default_context(&self, name: &str) -> Result<()> {
+        let ctx = self
+            .load_context(name)
+            .context(format!("Couldn't find context with the name of {name}"))?;
+
         let file = File::create(self.index_path())?;
-        if !self
-            .list_contexts()
-            .map_err(|e| {
-                anyhow::anyhow!("Unable to check directory to see if context exists: {}", e)
-            })?
-            .into_iter()
-            .any(|p| p == name)
-        {
-            anyhow::bail!("Couldn't find context with the name of {}", name)
-        }
-        serde_json::to_writer(file, &DefaultContext { name }).map_err(anyhow::Error::from)
+        serde_json::to_writer(file, &ctx).map_err(anyhow::Error::from)
     }
 
     /// Saves the given context to the context directory. The file will be named `{ctx.name}.json`
@@ -263,6 +257,20 @@ mod test {
             "Directory should have a new entry from the default context"
         );
 
+        assert!(
+            contexts_path.join("index.json").exists(),
+            "index.json file should exist in directory after setting default context"
+        );
+
+        let ctx_from_index_json = load_context(contexts_path.join("index.json"))
+            .expect("Should be able to load index.json file");
+
+        assert!(
+            ctx_from_index_json.name == "happy_gilmore"
+                && ctx_from_index_json.lattice_prefix == "baz",
+            "Should have loaded the correct context from index.json"
+        );
+
         // List the contexts
         let list = ctx_dir
             .list_contexts()
@@ -274,6 +282,33 @@ mod test {
                 "Should have found only the contexts we created"
             );
         }
+
+        ctx_dir
+            .set_default_context("happy_path")
+            .expect("Should be able to set default context");
+
+        assert_eq!(
+            ctx_dir
+                .default_context()
+                .expect("Should be able to load default context")
+                .unwrap(),
+            "happy_path",
+            "Default context should be correct"
+        );
+
+        assert!(
+            contexts_path.join("index.json").exists(),
+            "index.json file should exist in directory after setting default context"
+        );
+
+        let ctx_from_index_json = load_context(contexts_path.join("index.json"))
+            .expect("Should be able to load index.json file");
+
+        assert!(
+            ctx_from_index_json.name == "happy_path"
+                && ctx_from_index_json.lattice_prefix == "foobar",
+            "Should have loaded the correct context from index.json"
+        );
 
         // Delete a context
         ctx_dir
