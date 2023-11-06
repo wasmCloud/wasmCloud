@@ -148,8 +148,8 @@ pub fn build_actor(
     }
 }
 
-/// Sign actor wasm configuration, if necessary
-fn sign_actor_wasm(
+/// Sign the component at `actor_wasm_path` using the provided configuration
+pub fn sign_actor_wasm(
     common_config: &CommonConfig,
     actor_config: &ActorConfig,
     signing_config: SignConfig,
