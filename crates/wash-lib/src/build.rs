@@ -5,7 +5,7 @@ use std::{
     fs,
     io::ErrorKind,
     path::{Path, PathBuf},
-    process,
+    process::{self},
 };
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -99,47 +99,7 @@ pub fn build_actor(
     signing_config: Option<SignConfig>,
 ) -> Result<PathBuf> {
     let actor_wasm_path = if let Some(raw_command) = actor_config.build_command.as_ref() {
-        // Change directory into the project directory
-        std::env::set_current_dir(&common_config.path)?;
-        // The raw command here is a string that will be split into a command and arguments
-        let mut split_command = raw_command.split_ascii_whitespace();
-        // Consume the first element of the split command, which is the command itself
-        let command = split_command
-            .next()
-            .context("build command is supplied but empty")?;
-        let mut command = process::Command::new(command);
-        // All remaining elements of the split command are interpreted as arguments
-        command.args(split_command).status().map_err(|e| {
-            if e.kind() == ErrorKind::NotFound {
-                anyhow!("`{:?}` was not found", command.get_program())
-            } else {
-                anyhow!(format!("failed to run `{:?}`: {e}", command.get_program()))
-            }
-        })?;
-
-        let actor_path = actor_config
-            .build_artifact
-            .clone()
-            .map(|p| {
-                // This outputs the path if it's absolute, or joins it with the project path if it's relative
-                if p.is_absolute() {
-                    p
-                } else {
-                    common_config.path.join(p)
-                }
-            })
-            .unwrap_or_else(|| {
-                common_config
-                    .path
-                    .join(format!("build/{}.wasm", common_config.wasm_bin_name()))
-            });
-        if let Err(_e) = std::fs::metadata(actor_path.as_path()) {
-            warn!(
-                "Actor built with custom command but not found in expected path [{}]",
-                actor_path.display()
-            );
-        }
-        actor_path
+        build_custom_actor(common_config, actor_config, raw_command)?
     } else {
         // Build actor based on language toolchain
         let actor_wasm_path = match language_config {
@@ -399,6 +359,50 @@ fn build_tinygo_actor(
     Ok(common_config.path.join(wasm_file))
 }
 
+/// Builds a wasmCloud actor using a custom override command, then returns the path to the file.
+fn build_custom_actor(
+    common_config: &CommonConfig,
+    actor_config: &ActorConfig,
+    raw_command: &str,
+) -> Result<PathBuf> {
+    // Change directory into the project directory
+    std::env::set_current_dir(&common_config.path)?;
+    let (command, args) = parse_custom_command(raw_command)?;
+    let mut command = process::Command::new(command);
+    // All remaining elements of the split command are interpreted as arguments
+    command.args(args).status().map_err(|e| {
+        if e.kind() == ErrorKind::NotFound {
+            anyhow!("`{:?}` was not found", command.get_program())
+        } else {
+            anyhow!(format!("failed to run `{:?}`: {e}", command.get_program()))
+        }
+    })?;
+
+    let actor_path = actor_config
+        .build_artifact
+        .clone()
+        .map(|p| {
+            // This outputs the path if it's absolute, or joins it with the project path if it's relative
+            if p.is_absolute() {
+                p
+            } else {
+                common_config.path.join(p)
+            }
+        })
+        .unwrap_or_else(|| {
+            common_config
+                .path
+                .join(format!("build/{}.wasm", common_config.wasm_bin_name()))
+        });
+    if std::fs::metadata(actor_path.as_path()).is_err() {
+        warn!(
+            "Actor built with custom command but not found in expected path [{}]",
+            actor_path.display()
+        );
+    }
+    Ok(actor_path)
+}
+
 /// The folder that golang bindgen code will be placed in, normally
 /// from the top level golang project directory
 const GOLANG_BINDGEN_FOLDER_NAME: &str = "gen";
@@ -595,6 +599,15 @@ fn embed_wasm_component_metadata(
     );
 
     Ok(())
+}
+
+fn parse_custom_command(command: &str) -> Result<(&str, Vec<&str>)> {
+    let mut split_command = command.split_ascii_whitespace();
+    let command = split_command
+        .next()
+        .context("build command is supplied but empty")?;
+    let args = split_command.collect::<Vec<_>>();
+    Ok((command, args))
 }
 
 /// Placeholder for future functionality for building providers
@@ -875,5 +888,57 @@ world downstream {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn can_parse_custom_command() {
+        let cargo_component_build = "cargo component build --release --target wasm32-wasi";
+        let tinygo_build =
+            "tinygo build -o build/test.wasm -target wasm32-wasi -scheduler none -no-debug .";
+        // Raw strings because backslashes are used and shouldn't trigger escape sequences
+        let some_other_language = r"zig build-exe .\tiny-hello.zig -O ReleaseSmall -fstrip -fsingle-threaded -target aarch64-linux";
+
+        let (command, args) = super::parse_custom_command(cargo_component_build)
+            .expect("should be able to parse cargo command");
+        assert_eq!(command, "cargo");
+        assert_eq!(
+            args,
+            vec!["component", "build", "--release", "--target", "wasm32-wasi"]
+        );
+
+        let (command, args) = super::parse_custom_command(tinygo_build)
+            .expect("should be able to parse tinygo command");
+        assert_eq!(command, "tinygo");
+        assert_eq!(
+            args,
+            vec![
+                "build",
+                "-o",
+                "build/test.wasm",
+                "-target",
+                "wasm32-wasi",
+                "-scheduler",
+                "none",
+                "-no-debug",
+                "."
+            ]
+        );
+
+        let (command, args) = super::parse_custom_command(some_other_language)
+            .expect("should be able to parse some other language command");
+        assert_eq!(command, "zig");
+        assert_eq!(
+            args,
+            vec![
+                "build-exe",
+                r".\tiny-hello.zig",
+                "-O",
+                "ReleaseSmall",
+                "-fstrip",
+                "-fsingle-threaded",
+                "-target",
+                "aarch64-linux"
+            ]
+        );
     }
 }
