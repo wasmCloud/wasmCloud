@@ -44,7 +44,7 @@ jobs:
         run: tar -C dist -zcvf washboard.tar.gz .
 
       - name: Upload Artifact
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v3
         with:
           name: washboard
           path: ./washboard-ui/washboard.tar.gz
