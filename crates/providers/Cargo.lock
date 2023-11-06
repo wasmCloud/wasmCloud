@@ -3171,23 +3171,6 @@ dependencies = [
 [[package]]
 name = "wascap"
 version = "0.11.2"
-dependencies = [
- "data-encoding",
- "humantime",
- "log",
- "nkeys",
- "nuid 0.4.1",
- "ring 0.17.4",
- "serde",
- "serde_json",
- "wasm-encoder 0.36.1",
- "wasm-gen",
- "wasmparser 0.116.0",
-]
-
-[[package]]
-name = "wascap"
-version = "0.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc48258fe9b2c61bf78d21f7fd84a22769de339a79b5ef82bcdf7cebd42b7eb6"
 dependencies = [
@@ -3205,6 +3188,23 @@ dependencies = [
  "wasm-encoder 0.29.0",
  "wasm-gen",
  "wasmparser 0.107.0",
+]
+
+[[package]]
+name = "wascap"
+version = "0.12.0"
+dependencies = [
+ "data-encoding",
+ "humantime",
+ "log",
+ "nkeys",
+ "nuid 0.4.1",
+ "ring 0.17.4",
+ "serde",
+ "serde_json",
+ "wasm-encoder 0.36.1",
+ "wasm-gen",
+ "wasmparser 0.116.0",
 ]
 
 [[package]]
@@ -3354,7 +3354,7 @@ dependencies = [
  "tracing-opentelemetry 0.17.4",
  "tracing-subscriber",
  "uuid",
- "wascap 0.11.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "wascap 0.11.2",
  "wasmbus-macros",
  "weld-codegen",
 ]
@@ -3386,7 +3386,7 @@ dependencies = [
  "tracing",
  "ulid",
  "uuid",
- "wascap 0.11.2",
+ "wascap 0.12.0",
 ]
 
 [[package]]
@@ -3487,7 +3487,7 @@ dependencies = [
  "tracing",
  "tracing-futures",
  "tracing-opentelemetry 0.20.0",
- "wascap 0.11.2",
+ "wascap 0.12.0",
  "wasmcloud-compat",
  "wasmcloud-provider-sdk",
 ]
@@ -3515,7 +3515,7 @@ dependencies = [
  "tracing-futures",
  "tracing-opentelemetry 0.20.0",
  "uuid",
- "wascap 0.11.2",
+ "wascap 0.12.0",
  "wasmcloud-core",
  "wasmcloud-tracing",
 ]
