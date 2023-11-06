@@ -3,7 +3,7 @@ use std::{collections::HashMap, str::FromStr, task::Poll};
 use anyhow::Result;
 use chrono::{DateTime, Local};
 use futures::{Stream, StreamExt};
-use wasmbus_rpc::core::Invocation;
+use wasmcloud_core::Invocation;
 
 use crate::{
     common::{find_actor_id, CLAIMS_NAME, CLAIMS_SUBJECT},
@@ -158,7 +158,7 @@ impl Stream for Spier {
                 let body = inv.msg;
                 inv.msg = Vec::new();
 
-                if inv.origin.is_provider() && inv.target.public_key() != self.actor_id.as_ref() {
+                if inv.origin.is_provider() && inv.target.public_key != self.actor_id.as_ref() {
                     // This is a provider invocation that isn't for us, so we should skip it
                     cx.waker().wake_by_ref();
                     return Poll::Pending;
@@ -166,24 +166,24 @@ impl Stream for Spier {
                 let from = if inv.origin.is_actor() {
                     self.friendly_name
                         .clone()
-                        .unwrap_or_else(|| inv.origin.public_key())
+                        .unwrap_or_else(|| inv.origin.public_key.clone())
                 } else {
-                    let pubkey = inv.origin.public_key();
+                    let pubkey = &inv.origin.public_key;
                     self.provider_info
-                        .get(&pubkey)
+                        .get(pubkey)
                         .and_then(|prov| prov.friendly_name.clone())
-                        .unwrap_or(pubkey)
+                        .unwrap_or_else(|| pubkey.clone())
                 };
                 let to = if inv.target.is_actor() {
                     self.friendly_name
                         .clone()
-                        .unwrap_or_else(|| inv.target.public_key())
+                        .unwrap_or_else(|| inv.target.public_key.clone())
                 } else {
-                    let pubkey = inv.target.public_key();
+                    let pubkey = &inv.target.public_key;
                     self.provider_info
-                        .get(&pubkey)
+                        .get(pubkey)
                         .and_then(|prov| prov.friendly_name.clone())
-                        .unwrap_or(pubkey)
+                        .unwrap_or_else(|| pubkey.clone())
                 };
                 // NOTE(thomastaylor312): Ideally we'd consume `msg.payload` above with a
                 // `Cursor` and `from_reader` and then manually reconstruct the acking using the

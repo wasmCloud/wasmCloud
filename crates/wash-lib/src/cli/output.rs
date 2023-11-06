@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use serde::Deserialize;
-use wasmbus_rpc::core::ActorLinks;
 use wasmcloud_control_interface::{Host, HostInventory};
+use wasmcloud_core::ActorLinks;
 
 /// JSON Output of the `wash start` command
 #[derive(Debug, Deserialize)]

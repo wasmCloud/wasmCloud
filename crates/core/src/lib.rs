@@ -345,6 +345,16 @@ impl WasmCloudEntity {
             )
         }
     }
+
+    /// Returns true if this entity refers to an actor
+    pub fn is_actor(&self) -> bool {
+        self.link_name.is_empty() || self.contract_id.is_empty()
+    }
+
+    /// Returns true if this entity refers to a provider
+    pub fn is_provider(&self) -> bool {
+        !self.is_actor()
+    }
 }
 
 impl fmt::Display for WasmCloudEntity {

@@ -9,7 +9,7 @@ use clap::{Parser, Subcommand};
 use futures::TryStreamExt;
 use tokio::io::{stdin, stdout, AsyncReadExt, AsyncWriteExt};
 use tokio::time::Instant;
-use wasmbus_rpc::core::Invocation;
+use wasmcloud_core::Invocation;
 
 use super::{CliConnectionOpts, CommandOutput};
 use crate::config::WashConnectionOptions;
@@ -96,8 +96,8 @@ pub async fn handle_replay_command(cmd: CaptureReplayCommand) -> Result<CommandO
 
         let body = inv.msg;
         inv.msg = Vec::new();
-        let from = inv.origin.public_key();
-        let to = inv.target.public_key();
+        let from = inv.origin.public_key.clone();
+        let to = inv.target.public_key.clone();
 
         Some((
             ObservedInvocation {
