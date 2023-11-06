@@ -1,11 +1,11 @@
 use std::{collections::HashMap, path::PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 use serde_json::json;
 
 use wash_lib::{
-    build::{build_project, SignConfig},
+    build::{build_project, sign_actor_wasm, SignConfig},
     cli::CommandOutput,
     parser::{get_config, TypeConfig},
 };
@@ -45,8 +45,12 @@ pub struct BuildCommand {
     pub disable_keygen: bool,
 
     /// Skip signing the artifact and only use the native toolchain to build
-    #[clap(long = "build-only")]
+    #[clap(long = "build-only", conflicts_with = "sign_only")]
     pub build_only: bool,
+
+    /// Skip building the artifact and only use configuration to sign
+    #[clap(long = "sign-only", conflicts_with = "build_only")]
+    pub sign_only: bool,
 }
 
 pub async fn handle_command(command: BuildCommand) -> Result<CommandOutput> {
@@ -68,15 +72,36 @@ pub async fn handle_command(command: BuildCommand) -> Result<CommandOutput> {
                 })
             };
 
-            let actor_path = build_project(&config, sign_config)?;
+            let actor_path = if command.sign_only {
+                std::env::set_current_dir(&config.common.path)?;
+                let signed_path = sign_actor_wasm(
+                    &config.common,
+                    &actor_config,
+                    sign_config.context("cannot supply --build-only and --sign-only")?,
+                    format!(
+                        "build/{}.wasm",
+                        config
+                            .common
+                            .wasm_bin_name
+                            .clone()
+                            .unwrap_or_else(|| config.common.name.clone())
+                    ),
+                )?;
+                config.common.path.join(signed_path)
+            } else {
+                build_project(&config, sign_config)?
+            };
 
             let json_output = HashMap::from([
                 ("actor_path".to_string(), json!(actor_path)),
+                ("built".to_string(), json!(!command.sign_only)),
                 ("signed".to_string(), json!(!command.build_only)),
             ]);
             Ok(CommandOutput::new(
                 if command.build_only {
                     format!("Actor built and can be found at {actor_path:?}")
+                } else if command.sign_only {
+                    format!("Actor signed and can be found at {actor_path:?}")
                 } else {
                     format!("Actor built and signed and can be found at {actor_path:?}")
                 },
