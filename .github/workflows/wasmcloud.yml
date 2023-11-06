@@ -7,6 +7,8 @@ on:
     branches:
     - main
     tags:
+    - 'control-interface-v[0-9].[0-9]+.[0-9]+'
+    - 'control-interface-v[0-9].[0-9]+.[0-9]+-*'
     - 'provider-archive-v[0-9].[0-9]+.[0-9]+'
     - 'provider-archive-v[0-9].[0-9]+.[0-9]+-*'
     - 'v[0-9].[0-9]+.[0-9]+'
@@ -15,8 +17,6 @@ on:
     - 'wascap-v[0-9].[0-9]+.[0-9]+-*'
     - 'wash-cli-v[0-9].[0-9]+.[0-9]+'
     - 'wash-cli-v[0-9].[0-9]+.[0-9]+-*'
-    - 'wasmcloud-control-interface-v[0-9].[0-9]+.[0-9]+'
-    - 'wasmcloud-control-interface-v[0-9].[0-9]+.[0-9]+-*'
   workflow_dispatch:
 
 concurrency:
@@ -495,11 +495,11 @@ jobs:
     strategy:
       matrix:
         crate:
+        - control-interface
         - provider-archive
         - wascap
         - wash-cli
         - wash-lib
-        - wasmcloud-control-interface
 
     needs: cargo
     runs-on: ubuntu-22.04
