@@ -16,6 +16,7 @@ pub enum LanguageConfig {
     TinyGo(TinyGoConfig),
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Deserialize, Debug, PartialEq, Eq, Clone)]
 #[serde(rename_all = "snake_case")]
 pub enum TypeConfig {
@@ -47,8 +48,6 @@ pub struct ActorConfig {
     pub push_insecure: bool,
     /// The directory to store the private signing keys in.
     pub key_directory: PathBuf,
-    /// The filename of the signed wasm actor.
-    pub filename: Option<String>,
     /// The call alias of the actor.
     pub call_alias: Option<String>,
     /// The target wasm target to build for. Defaults to "wasm32-unknown-unknown" (a WASM core module).
@@ -59,6 +58,14 @@ pub struct ActorConfig {
     pub wit_world: Option<String>,
     /// Tags that should be applied during the actor signing process
     pub tags: Option<HashSet<String>>,
+    /// File path `wash` can use to find the built artifact. Defaults to `./build/[name].wasm`
+    pub build_artifact: Option<PathBuf>,
+    /// Optional build override command to run instead of attempting to use the native language
+    /// toolchain to build. Keep in mind that `wash` expects for the built artifact to be located
+    /// under the `build` directory of the project root unless overridden by `build_artifact`.
+    pub build_command: Option<String>,
+    /// File path the built and signed actor should be written to. Defaults to `./build/[name]_s.wasm`
+    pub destination: Option<PathBuf>,
 }
 
 impl RustConfig {
@@ -82,8 +89,6 @@ struct RawActorConfig {
     pub push_insecure: Option<bool>,
     /// The directory to store the private signing keys in. Defaults to "./keys".
     pub key_directory: Option<PathBuf>,
-    /// The filename of the signed wasm actor.
-    pub filename: Option<String>,
     /// The target wasm target to build for. Defaults to "wasm32-unknown-unknown".
     pub wasm_target: Option<String>,
     /// Path to a wasm adapter that can be used for preview2
@@ -94,6 +99,14 @@ struct RawActorConfig {
     pub wit_world: Option<String>,
     /// Tags that should be applied during the actor signing process
     pub tags: Option<HashSet<String>>,
+    /// File path `wash` can use to find the built artifact. Defaults to `./build/[name].wasm`
+    pub build_artifact: Option<PathBuf>,
+    /// Optional build override command to run instead of attempting to use the native language
+    /// toolchain to build. Keep in mind that `wash` expects for the built artifact to be located
+    /// under the `build` directory of the project root unless overridden by `build_artifact`.
+    pub build_command: Option<String>,
+    /// File path the built and signed actor should be written to. Defaults to `./build/[name]_s.wasm`
+    pub destination: Option<PathBuf>,
 }
 
 impl TryFrom<RawActorConfig> for ActorConfig {
@@ -107,7 +120,6 @@ impl TryFrom<RawActorConfig> for ActorConfig {
             key_directory: raw_config
                 .key_directory
                 .unwrap_or_else(|| PathBuf::from("./keys")),
-            filename: raw_config.filename,
             wasm_target: raw_config
                 .wasm_target
                 .map(WasmTarget::from)
@@ -116,6 +128,9 @@ impl TryFrom<RawActorConfig> for ActorConfig {
             call_alias: raw_config.call_alias,
             wit_world: raw_config.wit_world,
             tags: raw_config.tags,
+            build_command: raw_config.build_command,
+            build_artifact: raw_config.build_artifact,
+            destination: raw_config.destination,
         })
     }
 }
@@ -220,6 +235,15 @@ pub struct CommonConfig {
     pub wasm_bin_name: Option<String>,
 }
 
+impl CommonConfig {
+    /// Helper function to get the Wasm name, falling back to the project name if not specified
+    pub fn wasm_bin_name(&self) -> String {
+        self.wasm_bin_name
+            .clone()
+            .unwrap_or_else(|| self.name.clone())
+    }
+}
+
 #[derive(Debug, Deserialize, Default, Clone, Eq, PartialEq)]
 pub enum WasmTarget {
     #[default]
@@ -279,9 +303,10 @@ struct RawProjectConfig {
     pub revision: i32,
 
     pub actor: Option<RawActorConfig>,
-    pub provider: Option<RawProviderConfig>,
-    pub rust: Option<RawRustConfig>,
     pub interface: Option<RawInterfaceConfig>,
+    pub provider: Option<RawProviderConfig>,
+
+    pub rust: Option<RawRustConfig>,
     pub tinygo: Option<RawTinyGoConfig>,
 }
 

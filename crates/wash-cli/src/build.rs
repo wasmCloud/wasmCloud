@@ -74,18 +74,17 @@ pub async fn handle_command(command: BuildCommand) -> Result<CommandOutput> {
 
             let actor_path = if command.sign_only {
                 std::env::set_current_dir(&config.common.path)?;
+                let actor_wasm_path = if let Some(path) = actor_config.build_artifact.clone() {
+                    path
+                } else {
+                    PathBuf::from(format!("build/{}.wasm", config.common.wasm_bin_name()))
+                };
                 let signed_path = sign_actor_wasm(
                     &config.common,
-                    &actor_config,
+                    actor_config,
+                    // We prevent supplying both fields in the CLI parser, so this `context` is just a safety fallback
                     sign_config.context("cannot supply --build-only and --sign-only")?,
-                    format!(
-                        "build/{}.wasm",
-                        config
-                            .common
-                            .wasm_bin_name
-                            .clone()
-                            .unwrap_or_else(|| config.common.name.clone())
-                    ),
+                    actor_wasm_path,
                 )?;
                 config.common.path.join(signed_path)
             } else {
