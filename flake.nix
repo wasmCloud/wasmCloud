@@ -15,13 +15,13 @@
   ];
 
   inputs.nixify.inputs.nixlib.follows = "nixlib";
-  inputs.nixify.url = github:rvolosatovs/nixify;
-  inputs.nixlib.url = github:nix-community/nixpkgs.lib;
+  inputs.nixify.url = "github:rvolosatovs/nixify";
+  inputs.nixlib.url = "github:nix-community/nixpkgs.lib";
   inputs.wasmcloud-component-adapters.inputs.nixify.follows = "nixify";
-  inputs.wasmcloud-component-adapters.url = github:wasmCloud/wasmcloud-component-adapters/v0.3.0;
+  inputs.wasmcloud-component-adapters.url = "github:wasmCloud/wasmcloud-component-adapters/v0.3.0";
   inputs.wit-deps.inputs.nixify.follows = "nixify";
   inputs.wit-deps.inputs.nixlib.follows = "nixlib";
-  inputs.wit-deps.url = github:bytecodealliance/wit-deps/v0.3.5-rc1;
+  inputs.wit-deps.url = "github:bytecodealliance/wit-deps/v0.3.5-rc1";
 
   outputs = {
     nixify,
@@ -81,7 +81,14 @@
 
         doCheck = false; # testing is performed in checks via `nextest`
 
+        targets.arm-unknown-linux-gnueabihf = false;
+        targets.arm-unknown-linux-musleabihf = false;
+        targets.armv7-unknown-linux-gnueabihf = false;
         targets.armv7-unknown-linux-musleabihf = false;
+        targets.powerpc64le-unknown-linux-gnu = false;
+        targets.riscv64gc-unknown-linux-gnu = false; # TODO: Enable once Ring updated https://github.com/wasmCloud/wasmCloud/issues/724
+        targets.s390x-unknown-linux-gnu = false;
+        targets.wasm32-unknown-unknown = false;
         targets.wasm32-wasi = false;
 
         build.packages = [
@@ -109,38 +116,56 @@
           depsBuildBuild ? [],
           nativeBuildInputs ? [],
           nativeCheckInputs ? [],
-          preCheck ? "",
           ...
-        } @ args: let
-          cargoLock.root = readTOML ./Cargo.lock;
+        } @ args:
+          with pkgs.lib; let
+            cargoLock.root = readTOML ./Cargo.lock;
 
-          cargoLock.actors-rust = readTOML ./tests/actors/rust/Cargo.lock;
-          cargoLock.providers-rust = readTOML ./crates/providers/Cargo.lock;
+            cargoLock.actors-rust = readTOML ./tests/actors/rust/Cargo.lock;
+            cargoLock.providers-rust = readTOML ./crates/providers/Cargo.lock;
 
-          lockPackages =
-            cargoLock.root.package
-            ++ cargoLock.actors-rust.package
-            ++ cargoLock.providers-rust.package;
+            lockPackages =
+              cargoLock.root.package
+              ++ cargoLock.actors-rust.package
+              ++ cargoLock.providers-rust.package;
 
-          darwin2darwin = pkgs.stdenv.hostPlatform.isDarwin && pkgsCross.stdenv.hostPlatform.isDarwin;
+            # deduplicate lockPackages by $name:$version:$checksum
+            lockPackages' = listToAttrs (
+              map (
+                {
+                  name,
+                  version,
+                  checksum ? "no-hash",
+                  ...
+                } @ pkg:
+                  nameValuePair "${name}:${version}:${checksum}" pkg
+              )
+              lockPackages
+            );
 
-          depsBuildBuild' =
-            depsBuildBuild
-            ++ optionals darwin2darwin [
-              pkgs.darwin.apple_sdk.frameworks.SystemConfiguration
-              pkgs.xcbuild.xcrun
-            ];
-        in
-          with pkgs.lib;
+            cargoLockParsed =
+              cargoLock.root
+              // {
+                package = attrValues lockPackages';
+              };
+
+            darwin2darwin = pkgs.stdenv.hostPlatform.isDarwin && pkgsCross.stdenv.hostPlatform.isDarwin;
+
+            depsBuildBuild' =
+              depsBuildBuild
+              ++ optionals darwin2darwin [
+                pkgs.darwin.apple_sdk.frameworks.SystemConfiguration
+                pkgs.xcbuild.xcrun
+              ];
+          in
             {
+              inherit
+                cargoLockParsed
+                ;
               WASI_PREVIEW1_COMMAND_COMPONENT_ADAPTER = wasmcloud-component-adapters.packages.${pkgs.stdenv.system}.wasi-preview1-command-component-adapter;
               WASI_PREVIEW1_REACTOR_COMPONENT_ADAPTER = wasmcloud-component-adapters.packages.${pkgs.stdenv.system}.wasi-preview1-reactor-component-adapter;
 
-              cargoLockParsed =
-                cargoLock.root
-                // {
-                  package = lockPackages;
-                };
+              cargoExtraArgs = ""; # disable `--locked` passed by default by crane
 
               buildInputs =
                 buildInputs
@@ -168,13 +193,6 @@
                   pkgs.nats-server
                   pkgs.redis
                 ];
-
-              preCheck =
-                preCheck
-                # See https://github.com/nextest-rs/nextest/issues/267
-                + optionalString darwin2darwin ''
-                  export DYLD_FALLBACK_LIBRARY_PATH=$(rustc --print sysroot)/lib
-                '';
             };
 
         withPackages = {
