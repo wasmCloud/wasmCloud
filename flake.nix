@@ -82,8 +82,8 @@
         targets.armv7-unknown-linux-musleabihf = false;
         targets.wasm32-wasi = false;
 
-        build.packages = [
-          "wash-cli"
+        build.bins = [
+          "wash"
           "wasmcloud"
         ];
 

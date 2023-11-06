@@ -91,7 +91,7 @@ jobs:
     runs-on: windows-latest-8-cores
     steps:
     - uses: actions/checkout@v4.1.1
-    - run: cargo build --release -p wash-cli -p wasmcloud
+    - run: cargo build --release --bin wash --bin wasmcloud
     - run: mkdir "artifact/bin"
     - run: move "target/release/wasmcloud.exe" "artifact/bin/wasmcloud.exe"
     - run: move "target/release/wash.exe" "artifact/bin/wash.exe"
