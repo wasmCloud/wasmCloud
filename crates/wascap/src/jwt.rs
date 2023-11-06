@@ -1,6 +1,7 @@
 //! Claims encoding, decoding, and validation for JSON Web Tokens (JWT)
 
-use crate::{errors, errors::ErrorKind, Result};
+use crate::{errors, errors::ErrorKind, jwt, Result};
+
 use data_encoding::BASE64URL_NOPAD;
 use nkeys::KeyPair;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -206,20 +207,22 @@ impl<T> Claims<T>
 where
     T: Serialize + DeserializeOwned + WascapEntity,
 {
+    #[allow(clippy::missing_errors_doc)] // TODO: document
     pub fn encode(&self, kp: &KeyPair) -> Result<String> {
         let header = ClaimsHeader {
             header_type: HEADER_TYPE.to_string(),
             algorithm: HEADER_ALGORITHM.to_string(),
         };
-        let jheader = to_jwt_segment(&header)?;
-        let jclaims = to_jwt_segment(self)?;
+        let header = to_jwt_segment(&header)?;
+        let claims = to_jwt_segment(self)?;
 
-        let head_and_claims = format!("{}.{}", jheader, jclaims);
+        let head_and_claims = format!("{header}.{claims}");
         let sig = kp.sign(head_and_claims.as_bytes())?;
         let sig64 = BASE64URL_NOPAD.encode(&sig);
-        Ok(format!("{}.{}", head_and_claims, sig64))
+        Ok(format!("{head_and_claims}.{sig64}"))
     }
 
+    #[allow(clippy::missing_errors_doc)] // TODO: document
     pub fn decode(input: &str) -> Result<Claims<T>> {
         let segments: Vec<&str> = input.split('.').collect();
         if segments.len() != 3 {
@@ -235,7 +238,7 @@ where
     pub fn name(&self) -> String {
         self.metadata
             .as_ref()
-            .map_or("Anonymous".to_string(), |md| md.name())
+            .map_or("Anonymous".to_string(), jwt::WascapEntity::name)
     }
 }
 
@@ -291,6 +294,7 @@ impl WascapEntity for Invocation {
 
 impl Claims<Account> {
     /// Creates a new non-expiring Claims wrapper for metadata representing an account
+    #[must_use]
     pub fn new(
         name: String,
         issuer: String,
@@ -301,6 +305,7 @@ impl Claims<Account> {
     }
 
     /// Creates a new Claims wrapper for metadata representing an account, with optional valid before and expiration dates
+    #[must_use]
     pub fn with_dates(
         name: String,
         issuer: String,
@@ -328,6 +333,7 @@ impl Claims<Account> {
 impl Claims<CapabilityProvider> {
     /// Creates a new non-expiring Claims wrapper for metadata representing a capability provider
     #[allow(clippy::too_many_arguments)]
+    #[must_use]
     pub fn new(
         name: String,
         issuer: String,
@@ -344,6 +350,7 @@ impl Claims<CapabilityProvider> {
     }
 
     /// Creates a new Claims non-expiring wrapper for metadata representing a capability provider, with optional valid before and expiration dates
+    #[must_use]
     pub fn with_provider(
         issuer: String,
         subject: String,
@@ -365,6 +372,7 @@ impl Claims<CapabilityProvider> {
 
     /// Creates a new Claims wrapper for metadata representing a capability provider, with optional valid before and expiration dates
     #[allow(clippy::too_many_arguments)]
+    #[must_use]
     pub fn with_dates(
         name: String,
         issuer: String,
@@ -400,6 +408,7 @@ impl Claims<CapabilityProvider> {
 
 impl Claims<Operator> {
     /// Creates a new non-expiring Claims wrapper for metadata representing an operator
+    #[must_use]
     pub fn new(
         name: String,
         issuer: String,
@@ -410,6 +419,7 @@ impl Claims<Operator> {
     }
 
     /// Creates a new Claims wrapper for metadata representing an operator, with optional valid before and expiration dates
+    #[must_use]
     pub fn with_dates(
         name: String,
         issuer: String,
@@ -436,6 +446,7 @@ impl Claims<Operator> {
 
 impl Claims<Cluster> {
     /// Creates a new non-expiring Claims wrapper for metadata representing a cluster
+    #[must_use]
     pub fn new(
         name: String,
         issuer: String,
@@ -446,6 +457,7 @@ impl Claims<Cluster> {
     }
 
     /// Creates a new Claims wrapper for metadata representing a cluster, with optional valid before and expiration dates
+    #[must_use]
     pub fn with_dates(
         name: String,
         issuer: String,
@@ -473,6 +485,7 @@ impl Claims<Cluster> {
 impl Claims<Actor> {
     /// Creates a new non-expiring Claims wrapper for metadata representing an actor
     #[allow(clippy::too_many_arguments)]
+    #[must_use]
     pub fn new(
         name: String,
         issuer: String,
@@ -491,6 +504,7 @@ impl Claims<Actor> {
 
     /// Creates a new Claims wrapper for metadata representing an actor, with optional valid before and expiration dates
     #[allow(clippy::too_many_arguments)]
+    #[must_use]
     pub fn with_dates(
         name: String,
         issuer: String,
@@ -519,6 +533,7 @@ impl Claims<Actor> {
 
 impl Claims<Invocation> {
     /// Creates a new non-expiring Claims wrapper for metadata representing an invocation
+    #[must_use]
     pub fn new(
         issuer: String,
         subject: String,
@@ -530,6 +545,7 @@ impl Claims<Invocation> {
     }
 
     /// Creates a new Claims wrapper for metadata representing an invocation, with optional valid before and expiration dates
+    #[must_use]
     pub fn with_dates(
         issuer: String,
         subject: String,
@@ -566,6 +582,7 @@ where
     T: Default + WascapEntity,
 {
     /// Creates a new builder
+    #[must_use]
     pub fn new() -> Self {
         ClaimsBuilder::default()
     }
@@ -611,6 +628,7 @@ where
 }
 
 /// Validates a signed JWT. This will check the signature, expiration time, and not-valid-before time
+#[allow(clippy::missing_errors_doc)] // TODO: document errors
 pub fn validate_token<T>(input: &str) -> Result<TokenValidation>
 where
     T: Serialize + DeserializeOwned + WascapEntity,
@@ -720,9 +738,10 @@ fn from_jwt_segment<B: AsRef<str>, T: DeserializeOwned>(encoded: B) -> Result<T>
 }
 
 fn stamp_to_human(stamp: Option<u64>) -> Option<String> {
-    stamp.map(|s| {
-        let now = since_the_epoch().as_secs() as i64;
-        let diff_sec = (now - (s as i64)).abs();
+    stamp.and_then(|s| {
+        let now: i64 = since_the_epoch().as_secs().try_into().ok()?;
+        let s: i64 = s.try_into().ok()?;
+        let diff_sec = (now - s).abs();
 
         // calculate roundoff
         let diff_sec = if diff_sec >= 86400 {
@@ -737,12 +756,15 @@ fn stamp_to_human(stamp: Option<u64>) -> Option<String> {
         } else {
             diff_sec
         };
-        let ht = humantime::format_duration(Duration::from_secs(diff_sec as u64));
+        let diff_sec = diff_sec.try_into().ok()?;
+        let ht = humantime::format_duration(Duration::from_secs(diff_sec));
 
-        if now as u64 > s {
-            format!("{} ago", ht)
+        let now: u64 = now.try_into().ok()?;
+        let s: u64 = s.try_into().ok()?;
+        if now > s {
+            Some(format!("{ht} ago"))
         } else {
-            format!("in {}", ht)
+            Some(format!("in {ht}"))
         }
     })
 }
@@ -760,6 +782,7 @@ fn normalize_call_alias(alias: Option<String>) -> Option<String> {
 }
 
 impl Actor {
+    #[must_use]
     pub fn new(
         name: String,
         caps: Option<Vec<String>>,
@@ -771,7 +794,7 @@ impl Actor {
     ) -> Actor {
         Actor {
             name: Some(name),
-            module_hash: "".to_string(),
+            module_hash: String::new(),
             tags,
             caps,
             provider,
@@ -783,6 +806,7 @@ impl Actor {
 }
 
 impl CapabilityProvider {
+    #[must_use]
     pub fn new(
         name: String,
         capid: String,
@@ -804,6 +828,7 @@ impl CapabilityProvider {
 }
 
 impl Account {
+    #[must_use]
     pub fn new(name: String, additional_keys: Vec<String>) -> Account {
         Account {
             name: Some(name),
@@ -813,6 +838,7 @@ impl Account {
 }
 
 impl Operator {
+    #[must_use]
     pub fn new(name: String, additional_keys: Vec<String>) -> Operator {
         Operator {
             name: Some(name),
@@ -822,6 +848,7 @@ impl Operator {
 }
 
 impl Cluster {
+    #[must_use]
     pub fn new(name: String, additional_keys: Vec<String>) -> Cluster {
         Cluster {
             name: Some(name),
@@ -831,6 +858,7 @@ impl Cluster {
 }
 
 impl Invocation {
+    #[must_use]
     pub fn new(target_url: &str, origin_url: &str, hash: &str) -> Invocation {
         Invocation {
             target_url: target_url.to_string(),
@@ -863,7 +891,7 @@ mod test {
                 Some(vec![]),
                 false,
                 Some(0),
-                Some("".to_string()),
+                Some(String::new()),
                 None,
             )),
             expires: None,
@@ -895,7 +923,7 @@ mod test {
                 Some(vec![]),
                 false,
                 Some(1),
-                Some("".to_string()),
+                Some(String::new()),
                 None,
             )),
             expires: Some(since_the_epoch().as_secs() - 30000),
@@ -977,7 +1005,7 @@ mod test {
                 Some(vec![]),
                 false,
                 Some(1),
-                Some("".to_string()),
+                Some(String::new()),
                 None,
             )),
             expires: None,
@@ -1022,7 +1050,7 @@ mod test {
                 Some(vec![]),
                 false,
                 Some(1),
-                Some("".to_string()),
+                Some(String::new()),
                 None,
             )),
             expires: None,
@@ -1049,7 +1077,7 @@ mod test {
                 Some(vec![]),
                 false,
                 Some(1),
-                Some("".to_string()),
+                Some(String::new()),
                 None,
             )),
             expires: None,
@@ -1180,7 +1208,7 @@ mod test {
                 Some(vec![]),
                 false,
                 Some(1),
-                Some("".to_string()),
+                Some(String::new()),
                 None,
             )),
             expires: None,
@@ -1245,7 +1273,7 @@ mod test {
                 Some(vec![]),
                 false,
                 Some(1),
-                Some("".to_string()),
+                Some(String::new()),
                 None,
             )),
             expires: None,
@@ -1281,7 +1309,7 @@ mod test {
                 Some(vec![]),
                 false,
                 Some(1),
-                Some("".to_string()),
+                Some(String::new()),
                 None,
             )),
             expires: None,
@@ -1319,7 +1347,7 @@ mod test {
                 Some(vec![]),
                 false,
                 Some(1),
-                Some("".to_string()),
+                Some(String::new()),
                 None,
             )),
             expires: None,

@@ -591,8 +591,8 @@ pub fn sign_file(cmd: SignCommand, output_kind: OutputKind) -> Result<CommandOut
     let signed = sign_buffer_with_claims(
         cmd.metadata.name.clone(),
         &buf,
-        subject,
-        issuer,
+        &subject,
+        &issuer,
         cmd.metadata.common.expires_in_days,
         cmd.metadata.common.not_before_days,
         caps_list.clone(),

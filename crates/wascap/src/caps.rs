@@ -29,8 +29,9 @@ fn get_capability_names() -> &'static HashMap<&'static str, &'static str> {
     })
 }
 
+#[must_use]
 pub fn capability_name(cap: &str) -> String {
     get_capability_names()
         .get(cap)
-        .map_or(cap.to_string(), |item| item.to_string())
+        .map_or(cap.to_string(), |item| (*item).to_string())
 }

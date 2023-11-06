@@ -30,12 +30,13 @@ const SECTION_WC_JWT: &str = "wasmcloud_jwt";
 /// Will return an error if hash computation fails or it can't read the JWT from inside
 /// a section's data, etc
 pub fn extract_claims(contents: impl AsRef<[u8]>) -> Result<Option<Token<Actor>>> {
+    use wasmparser::Payload::{ComponentSection, CustomSection, End, ModuleSection};
+
     let target_hash = compute_hash(&strip_custom_section(contents.as_ref())?)?;
     let parser = wasmparser::Parser::new(0);
     let mut depth = 0;
     for payload in parser.parse_all(contents.as_ref()) {
         let payload = payload?;
-        use wasmparser::Payload::*;
         match payload {
             ModuleSection { .. } | ComponentSection { .. } => depth += 1,
             End { .. } => depth -= 1,
@@ -44,18 +45,15 @@ pub fn extract_claims(contents: impl AsRef<[u8]>) -> Result<Option<Token<Actor>>
             {
                 let jwt = String::from_utf8(c.data().to_vec())?;
                 let claims: Claims<Actor> = Claims::decode(&jwt)?;
-                if let Some(ref meta) = claims.metadata {
-                    if meta.module_hash != target_hash
-                        && claims.wascap_revision.unwrap_or_default()
-                            >= MIN_WASCAP_INTERNAL_REVISION
-                    {
-                        return Err(errors::new(ErrorKind::InvalidModuleHash));
-                    } else {
-                        return Ok(Some(Token { jwt, claims }));
-                    }
-                } else {
+                let Some(ref meta) = claims.metadata else {
                     return Err(errors::new(ErrorKind::InvalidAlgorithm));
+                };
+                if meta.module_hash != target_hash
+                    && claims.wascap_revision.unwrap_or_default() >= MIN_WASCAP_INTERNAL_REVISION
+                {
+                    return Err(errors::new(ErrorKind::InvalidModuleHash));
                 }
+                return Ok(Some(Token { jwt, claims }));
             }
             _ => {}
         }
@@ -69,6 +67,7 @@ pub fn extract_claims(contents: impl AsRef<[u8]>) -> Result<Option<Token<Actor>>
 /// specification, arbitary sets of bytes can be stored in a WebAssembly module without impacting
 /// parsers or interpreters. Returns a vector of bytes representing the new WebAssembly module which can
 /// be saved to a `.wasm` file
+#[allow(clippy::missing_errors_doc)] // TODO: document errors
 pub fn embed_claims(orig_bytecode: &[u8], claims: &Claims<Actor>, kp: &KeyPair) -> Result<Vec<u8>> {
     let mut bytes = orig_bytecode.to_vec();
     bytes = strip_custom_section(&bytes)?;
@@ -89,11 +88,12 @@ pub fn embed_claims(orig_bytecode: &[u8], claims: &Claims<Actor>, kp: &KeyPair) 
 }
 
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::missing_errors_doc)] // TODO: document
 pub fn sign_buffer_with_claims(
     name: String,
     buf: impl AsRef<[u8]>,
-    mod_kp: KeyPair,
-    acct_kp: KeyPair,
+    mod_kp: &KeyPair,
+    acct_kp: &KeyPair,
     expires_in_days: Option<u64>,
     not_before_days: Option<u64>,
     caps: Vec<String>,
@@ -116,15 +116,16 @@ pub fn sign_buffer_with_claims(
         ver,
         call_alias,
     );
-    embed_claims(buf.as_ref(), &claims, &acct_kp)
+    embed_claims(buf.as_ref(), &claims, acct_kp)
 }
 
 pub(crate) fn strip_custom_section(buf: &[u8]) -> Result<Vec<u8>> {
+    use wasmparser::Payload::{ComponentSection, CustomSection, End, ModuleSection, Version};
+
     let mut output: Vec<u8> = Vec::new();
     let mut stack = Vec::new();
     for payload in Parser::new(0).parse_all(buf) {
         let payload = payload?;
-        use wasmparser::Payload::*;
         match payload {
             Version { encoding, .. } => {
                 output.extend_from_slice(match encoding {
@@ -137,10 +138,7 @@ pub(crate) fn strip_custom_section(buf: &[u8]) -> Result<Vec<u8>> {
                 continue;
             }
             End { .. } => {
-                let mut parent = match stack.pop() {
-                    Some(c) => c,
-                    None => break,
-                };
+                let Some(mut parent) = stack.pop() else { break };
                 if output.starts_with(&wasm_encoder::Component::HEADER) {
                     parent.push(ComponentSectionId::Component as u8);
                     output.encode(&mut parent);
@@ -186,6 +184,7 @@ fn since_the_epoch() -> std::time::Duration {
         .expect("A timey wimey problem has occurred!")
 }
 
+#[must_use]
 pub fn days_from_now_to_jwt_time(stamp: Option<u64>) -> Option<u64> {
     stamp.map(|e| since_the_epoch().as_secs() + e * SECS_PER_DAY)
 }
@@ -243,7 +242,7 @@ mod test {
                 Some(vec![]),
                 false,
                 Some(1),
-                Some("".to_string()),
+                Some(String::new()),
                 None,
             )),
             expires: None,
@@ -285,7 +284,7 @@ mod test {
                 Some(vec![]),
                 false,
                 Some(1),
-                Some("".to_string()),
+                Some(String::new()),
                 None,
             )),
             expires: None,
@@ -323,7 +322,7 @@ mod test {
                 Some(vec![]),
                 false,
                 Some(1),
-                Some("".to_string()),
+                Some(String::new()),
                 None,
             )),
             expires: None,
@@ -361,7 +360,7 @@ mod test {
                 Some(vec![]),
                 false,
                 Some(1),
-                Some("".to_string()),
+                Some(String::new()),
                 None,
             )),
             expires: None,
@@ -403,7 +402,7 @@ mod test {
                 Some(vec![]),
                 false,
                 Some(1),
-                Some("".to_string()),
+                Some(String::new()),
                 Some("somealias".to_string()),
             )),
             expires: None,

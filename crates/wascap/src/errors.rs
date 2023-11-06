@@ -43,10 +43,12 @@ pub enum ErrorKind {
 }
 
 impl Error {
+    #[must_use]
     pub fn kind(&self) -> &ErrorKind {
         &self.0
     }
 
+    #[must_use]
     pub fn into_kind(self) -> ErrorKind {
         *self.0
     }
@@ -78,16 +80,16 @@ impl StdError for Error {
             ErrorKind::Encryption(ref err) => Some(err),
             ErrorKind::Decode(ref err) => Some(err),
             ErrorKind::UTF8(ref err) => Some(err),
-            ErrorKind::Token(_) => None,
-            ErrorKind::InvalidCapability => None,
-            ErrorKind::WasmElement(_) => None,
             ErrorKind::IO(ref err) => Some(err),
-            ErrorKind::InvalidModuleHash => None,
-            ErrorKind::ExpiredToken => None,
-            ErrorKind::TokenTooEarly => None,
-            ErrorKind::InvalidAlgorithm => None,
-            ErrorKind::MissingIssuer => None,
-            ErrorKind::MissingSubject => None,
+            ErrorKind::Token(_)
+            | ErrorKind::InvalidCapability
+            | ErrorKind::WasmElement(_)
+            | ErrorKind::InvalidModuleHash
+            | ErrorKind::ExpiredToken
+            | ErrorKind::TokenTooEarly
+            | ErrorKind::InvalidAlgorithm
+            | ErrorKind::MissingIssuer
+            | ErrorKind::MissingSubject => None,
         }
     }
 }
@@ -95,14 +97,14 @@ impl StdError for Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self.0 {
-            ErrorKind::Serialize(ref err) => write!(f, "Serialization error: {}", err),
-            ErrorKind::Encryption(ref err) => write!(f, "Encryption error: {}", err),
-            ErrorKind::Decode(ref err) => write!(f, "Decode error: {}", err),
-            ErrorKind::UTF8(ref err) => write!(f, "UTF8 error: {}", err),
-            ErrorKind::Token(ref err) => write!(f, "JWT error: {}", err),
+            ErrorKind::Serialize(ref err) => write!(f, "Serialization error: {err}"),
+            ErrorKind::Encryption(ref err) => write!(f, "Encryption error: {err}"),
+            ErrorKind::Decode(ref err) => write!(f, "Decode error: {err}"),
+            ErrorKind::UTF8(ref err) => write!(f, "UTF8 error: {err}"),
+            ErrorKind::Token(ref err) => write!(f, "JWT error: {err}"),
             ErrorKind::InvalidCapability => write!(f, "Invalid capability"),
-            ErrorKind::WasmElement(ref err) => write!(f, "Wasm Element error: {}", err),
-            ErrorKind::IO(ref err) => write!(f, "I/O error: {}", err),
+            ErrorKind::WasmElement(ref err) => write!(f, "Wasm Element error: {err}"),
+            ErrorKind::IO(ref err) => write!(f, "I/O error: {err}"),
             ErrorKind::InvalidModuleHash => write!(f, "Invalid module hash"),
             ErrorKind::ExpiredToken => write!(f, "Module token has expired"),
             ErrorKind::TokenTooEarly => write!(f, "Module cannot be used yet"),
