@@ -204,13 +204,13 @@ jobs:
       with: 
         cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
     - run: nix build -L .#checks.x86_64-linux.doc
-    - run: tar xf ./result/target.tar.zst
-    - run: rm -f target/doc/.lock
+    - run: cp --no-preserve=mode -R ./result/share/doc ./doc
+    - run: rm -f doc/.lock
     - name: Create `.nojekyll`
-      run: touch target/doc/.nojekyll
+      run: touch doc/.nojekyll
     - name: Write `index.html`
       run: |
-        cat <<EOF > target/doc/index.html
+        cat <<EOF > doc/index.html
           <!DOCTYPE html>
           <meta charset="utf-8">
           <title>Redirecting to wasmcloud_host/index.html</title>
@@ -219,7 +219,7 @@ jobs:
         EOF
     - uses: actions/upload-pages-artifact@v2.0.0
       with:
-        path: target/doc
+        path: doc
 
   deploy-doc:
     runs-on: ubuntu-22.04
