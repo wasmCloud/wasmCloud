@@ -2341,7 +2341,6 @@ checksum = "bd070e393353796e801d209ad339e89596eb4c8d430d18ede6a1cced8fafbd99"
 dependencies = [
  "autocfg",
  "hashbrown 0.12.3",
- "serde",
 ]
 
 [[package]]
@@ -5704,9 +5703,9 @@ checksum = "49874b5167b65d7193b8aba1567f5c7d93d001cafc34600cee003eda787e483f"
 
 [[package]]
 name = "wadm"
-version = "0.7.1"
+version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c48611bc894bad6a984d94d6d6ed82f44432d76bf286bce3c690315742989247"
+checksum = "73af38c54f54c10cb7fe431da25e43ff7496343177810925850ca29231fc5b1f"
 dependencies = [
  "anyhow",
  "async-nats 0.31.0",
@@ -5716,7 +5715,7 @@ dependencies = [
  "chrono",
  "cloudevents-sdk",
  "futures",
- "indexmap 1.9.3",
+ "indexmap 2.0.2",
  "jsonschema",
  "lazy_static",
  "nkeys",
@@ -5732,8 +5731,7 @@ dependencies = [
  "tracing",
  "tracing-futures",
  "uuid 1.5.0",
- "wasmbus-rpc 0.14.0",
- "wasmcloud-control-interface 0.28.1",
+ "wasmcloud-control-interface",
 ]
 
 [[package]]
@@ -5890,7 +5888,7 @@ dependencies = [
  "wascap 0.12.0",
  "wash-lib",
  "wasmbus-rpc 0.15.0",
- "wasmcloud-control-interface 0.31.0",
+ "wasmcloud-control-interface",
  "wasmcloud-test-util",
  "weld-codegen",
  "which",
@@ -5949,7 +5947,7 @@ dependencies = [
  "wascap 0.12.0",
  "wasm-encoder 0.36.1",
  "wasmcloud-component-adapters 0.2.4",
- "wasmcloud-control-interface 0.31.0",
+ "wasmcloud-control-interface",
  "wasmcloud-core",
  "wasmparser 0.116.0",
  "wat",
@@ -6262,7 +6260,7 @@ dependencies = [
  "url",
  "uuid 1.5.0",
  "wascap 0.12.0",
- "wasmcloud-control-interface 0.31.0",
+ "wasmcloud-control-interface",
  "wasmcloud-core",
  "wasmcloud-host",
  "wasmcloud-tracing",
@@ -6346,29 +6344,6 @@ dependencies = [
 
 [[package]]
 name = "wasmcloud-control-interface"
-version = "0.28.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "37be05dfc4e1c528be5b9bdf7d0934182abe4a25424fcca0ba7afdb3f2b432e7"
-dependencies = [
- "async-nats 0.31.0",
- "bytes",
- "cloudevents-sdk",
- "data-encoding",
- "futures",
- "lazy_static",
- "opentelemetry 0.19.0",
- "ring 0.16.20",
- "rmp-serde",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "tracing-futures",
- "tracing-opentelemetry 0.19.0",
-]
-
-[[package]]
-name = "wasmcloud-control-interface"
 version = "0.31.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5d5dbc3259219796c050a5f7be75f6ced600d41333c2d741fc78f03c82308c1"
@@ -6447,7 +6422,7 @@ dependencies = [
  "uuid 1.5.0",
  "wascap 0.12.0",
  "wasmcloud-compat",
- "wasmcloud-control-interface 0.31.0",
+ "wasmcloud-control-interface",
  "wasmcloud-core",
  "wasmcloud-runtime",
  "wasmcloud-tracing",
