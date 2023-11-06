@@ -2,7 +2,6 @@
 name = "provider-archive"
 version = "0.8.0"
 description = "Library for reading and writing wasmCloud capability provider archive files"
-homepage = "https://github.com/wasmcloud/provider-archive"
 documentation = "https://docs.rs/provider-archive"
 readme = "README.md"
 keywords = ["jwt", "zip", "archive", "security", "wasmcloud"]

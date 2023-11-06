@@ -7,6 +7,8 @@ on:
     branches:
     - main
     tags:
+    - 'control-interface-v[0-9].[0-9]+.[0-9]+'
+    - 'control-interface-v[0-9].[0-9]+.[0-9]+-*'
     - 'provider-archive-v[0-9].[0-9]+.[0-9]+'
     - 'provider-archive-v[0-9].[0-9]+.[0-9]+-*'
     - 'v[0-9].[0-9]+.[0-9]+'
@@ -493,18 +495,23 @@ jobs:
     strategy:
       matrix:
         crate:
+        - control-interface
         - provider-archive
         - wascap
         - wash-cli
         - wash-lib
 
-    if: startsWith(github.ref, 'refs/tags/') && github.event_name == 'push'
     needs: cargo
     runs-on: ubuntu-22.04
     steps:
     - uses: actions/checkout@v4.1.1
-      if: startsWith(github.ref, format('refs/tags/{0}-v', matrix.crate))
-      
+
+    - name: dry-run publish ${{ matrix.crate }} to crates.io
+      run: cargo publish --dry-run
+      working-directory: ./crates/${{ matrix.crate }}
+      if: ${{ !startsWith(github.ref, format('refs/tags/{0}-v', matrix.crate)) }}
+      continue-on-error: ${{ matrix.crate != 'control-interface' && matrix.crate != 'wascap' }} # publish may fail due to workspace crates not being published yet
+
     - name: publish ${{ matrix.crate }} to crates.io
       run: cargo publish --token ${{ secrets.CRATES_PUBLISH_TOKEN }}
       working-directory: ./crates/${{ matrix.crate }}
