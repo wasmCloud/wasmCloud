@@ -15,6 +15,8 @@ on:
     - 'wascap-v[0-9].[0-9]+.[0-9]+-*'
     - 'wash-cli-v[0-9].[0-9]+.[0-9]+'
     - 'wash-cli-v[0-9].[0-9]+.[0-9]+-*'
+    - 'wasmcloud-control-interface-v[0-9].[0-9]+.[0-9]+'
+    - 'wasmcloud-control-interface-v[0-9].[0-9]+.[0-9]+-*'
   workflow_dispatch:
 
 concurrency:
@@ -497,6 +499,7 @@ jobs:
         - wascap
         - wash-cli
         - wash-lib
+        - wasmcloud-control-interface
 
     if: startsWith(github.ref, 'refs/tags/') && github.event_name == 'push'
     needs: cargo

@@ -12,10 +12,6 @@ use opentelemetry::{
 use tracing::span::Span;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
-lazy_static::lazy_static! {
-    static ref EMPTY_HEADERS: HeaderMap = HeaderMap::default();
-}
-
 /// A convenience type that wraps a NATS [`HeaderMap`] and implements the [`Extractor`] trait
 #[derive(Debug)]
 pub struct OtelHeaderExtractor<'a> {

@@ -28,6 +28,7 @@ Cargo.* @wasmCloud/host-maintainers
 .cargo @wasmCloud/host-maintainers
 
 # shared crates
+crates/control-interface @autodidaddict @brooksmtownsend @stevelr @connorsmith256
 crates/core @wasmCloud/org-maintainers
 crates/opentelemetry-nats @thomastaylor312 @connorsmith256
 crates/provider-archive @wasmCloud/capability-provider-maintainers
