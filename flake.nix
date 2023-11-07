@@ -256,6 +256,8 @@
                 fromImage
                 name
                 ;
+              tag = architecture;
+
               config.Cmd = [name];
               config.Labels."org.opencontainers.image.description" = description;
               config.Labels."org.opencontainers.image.source" = "https://github.com/wasmCloud/wasmCloud";
