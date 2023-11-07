@@ -242,6 +242,14 @@ jobs:
       id: deployment
 
   oci:
+    strategy:
+      matrix:
+        include:
+        - bin: wasmcloud
+
+        - bin: wash
+          prefix: wash-cli-
+
     runs-on: ubuntu-22.04
     permissions:
       packages: write
@@ -259,11 +267,10 @@ jobs:
       run: |
         echo 'owner=${GITHUB_REPOSITORY_OWNER,,}' >> $GITHUB_OUTPUT
         echo 'sha_short=$(git rev-parse --short HEAD)' >> $GITHUB_OUTPUT
-        echo 'wash_version=${GITHUB_REF_NAME#wash-cli-v}' >> $GITHUB_OUTPUT
-        echo 'wasmcloud_version=${GITHUB_REF_NAME#v}' >> $GITHUB_OUTPUT
+        echo 'version=${GITHUB_REF_NAME#${{ matrix.prefix }}v}' >> $GITHUB_OUTPUT
 
     - name: Login to AzureCR
-      if: startswith(github.ref, 'refs/tags/v') || startswith(github.ref, 'refs/tags/wash-cli-v')|| github.ref == 'refs/heads/main'
+      if: startswith(github.ref, format('refs/tags/{0}v', matrix.prefix)) || github.ref == 'refs/heads/main'
       uses: azure/docker-login@v1
       with:
         login-server: ${{ secrets.AZURECR_PUSH_URL }}
@@ -271,7 +278,7 @@ jobs:
         password: ${{ secrets.AZURECR_PUSH_PASSWORD }}
 
     - name: Login to GitHub Container Registry
-      if: startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/wash-cli-v') || github.ref == 'refs/heads/main'
+      if: startswith(github.ref, format('refs/tags/{0}v', matrix.prefix)) || github.ref == 'refs/heads/main'
       uses: docker/login-action@v3
       with:
         registry: ghcr.io
@@ -279,7 +286,7 @@ jobs:
         password: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Login to DockerHub
-      if: startswith(github.ref, 'refs/tags/v') || startswith(github.ref, 'refs/tags/wash-cli-v')|| github.ref == 'refs/heads/main'
+      if: startswith(github.ref, format('refs/tags/{0}v', matrix.prefix)) || github.ref == 'refs/heads/main'
       uses: docker/login-action@v3
       with:
         username: ${{ secrets.DOCKERHUB_PUSH_USER }}
@@ -288,83 +295,50 @@ jobs:
     - name: Install `buildah`
       run: nix profile install --inputs-from . 'nixpkgs#buildah'
 
-    - name: Build wasmCloud image
-      if: ${{ !startsWith(github.ref, 'refs/tags/wash-cli-v') }}
-      run: nix run -L .#build-wasmcloud-oci-debian wasmcloud
+    - name: Build `${{ matrix.bin }}` image
+      run: nix run -L .#build-${{ matrix.bin }}-oci-debian ${{ matrix.bin }}
 
-    - name: Build wash image
-      if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
-      run: nix run -L .#build-wash-oci-debian wash
-
-    - name: Push wasmCloud and wash commit rev tag
-      if: startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/wash-cli-v') || github.ref == 'refs/heads/main'
+    - name: Push `${{ matrix.bin }}` commit rev tag
+      if: startswith(github.ref, format('refs/tags/{0}v', matrix.prefix)) || github.ref == 'refs/heads/main'
       run: |
-        buildah manifest push --storage-driver=vfs --all --format 'v2s2' wash docker://ghcr.io/${{ steps.ctx.outputs.owner }}/wash:${{ github.sha }}
-        buildah manifest push --storage-driver=vfs --all --format 'v2s2' wash docker://ghcr.io/${{ steps.ctx.outputs.owner }}/wash:${{ steps.ctx.outputs.sha_short }}
+        buildah manifest push --storage-driver=vfs --all --format 'v2s2' ${{ matrix.bin }} docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ github.sha }}
+        buildah manifest push --storage-driver=vfs --all --format 'v2s2' ${{ matrix.bin }} docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.sha_short }}
 
-        buildah manifest push --storage-driver=vfs --all --format 'v2s2' wasmcloud docker://ghcr.io/${{ steps.ctx.outputs.owner }}/wasmcloud:${{ github.sha }}
-        buildah manifest push --storage-driver=vfs --all --format 'v2s2' wasmcloud docker://ghcr.io/${{ steps.ctx.outputs.owner }}/wasmcloud:${{ steps.ctx.outputs.sha_short }}
+        docker run ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ github.sha }} ${{ matrix.bin }} --version
+        docker run ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.sha_short }} ${{ matrix.bin }} --version
 
-        docker run ghcr.io/${{ steps.ctx.outputs.owner }}/wash:${{ github.sha }} wash --version
-        docker run ghcr.io/${{ steps.ctx.outputs.owner }}/wash:${{ steps.ctx.outputs.sha_short }} wash --version
-
-        docker run ghcr.io/${{ steps.ctx.outputs.owner }}/wasmcloud:${{ github.sha }} wasmcloud --version
-        docker run ghcr.io/${{ steps.ctx.outputs.owner }}/wasmcloud:${{ steps.ctx.outputs.sha_short }} wasmcloud --version
-
-    - name: Push wasmCloud version tag
-      if: startswith(github.ref, 'refs/tags/v')
-      run: |
-        buildah manifest push --storage-driver=vfs --all --format 'v2s2' wasmcloud docker://${{ steps.ctx.outputs.owner }}/wasmcloud:${{ steps.ctx.outputs.wasmcloud_version }}
-        buildah manifest push --storage-driver=vfs --all --format 'v2s2' wasmcloud docker://ghcr.io/${{ steps.ctx.outputs.owner }}/wasmcloud:${{ steps.ctx.outputs.wasmcloud_version }}
-        buildah manifest push --storage-driver=vfs --all --format 'v2s2' wasmcloud docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/wasmcloud:${{ steps.ctx.outputs.wasmcloud_version }}
-
-        docker run ${{ steps.ctx.outputs.owner }}/wasmcloud:${{ steps.ctx.outputs.wasmcloud_version }} wasmcloud --version
-        docker run ghcr.io/${{ steps.ctx.outputs.owner }}/wasmcloud:${{ steps.ctx.outputs.wasmcloud_version }} wasmcloud --version
-        docker run wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/wasmcloud:${{ steps.ctx.outputs.wasmcloud_version }} wasmcloud --version
-
-    - name: Push wash version tag
-      if: startswith(github.ref, 'refs/tags/wash-cli-v')
-      run: |
-        buildah manifest push --storage-driver=vfs --all --format 'v2s2' wash docker://${{ steps.ctx.outputs.owner }}/wash:${{ steps.ctx.outputs.wash_version }}
-        buildah manifest push --storage-driver=vfs --all --format 'v2s2' wash docker://ghcr.io/${{ steps.ctx.outputs.owner }}/wash:${{ steps.ctx.outputs.wash_version }}
-        buildah manifest push --storage-driver=vfs --all --format 'v2s2' wash docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/wash:${{ steps.ctx.outputs.wash_version }}
-
-        docker run ${{ steps.ctx.outputs.owner }}/wash:${{ steps.ctx.outputs.wash_version }} wash --version
-        docker run ghcr.io/${{ steps.ctx.outputs.owner }}/wash:${{ steps.ctx.outputs.wash_version }} wash --version
-        docker run wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/wash:${{ steps.ctx.outputs.wash_version }} wash --version
-
-    - name: Push `latest` wasmCloud tag
-      if: startswith(github.ref, 'refs/tags/v') && !contains(github.ref, '-')
-      run: |
-        buildah manifest push --storage-driver=vfs --all --format 'v2s2' wasmcloud docker://${{ steps.ctx.outputs.owner }}/wasmcloud:latest
-        buildah manifest push --storage-driver=vfs --all --format 'v2s2' wasmcloud docker://ghcr.io/${{ steps.ctx.outputs.owner }}/wasmcloud:latest
-        buildah manifest push --storage-driver=vfs --all --format 'v2s2' wasmcloud docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/wasmcloud:latest
-
-        docker run ${{ steps.ctx.outputs.owner }}/wasmcloud:latest wasmcloud --version
-        docker run ghcr.io/${{ steps.ctx.outputs.owner }}/wasmcloud:latest wasmcloud --version
-        docker run wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/wasmcloud:latest wasmcloud --version
-
-    - name: Push `canary` wash tag
+    - name: Push `${{ matrix.bin }}` `canary` tag
       if: github.ref == 'refs/heads/main'
       run: |
-        buildah manifest push --storage-driver=vfs --all --format 'v2s2' wash docker://${{ steps.ctx.outputs.owner }}/wash:canary
-        buildah manifest push --storage-driver=vfs --all --format 'v2s2' wash docker://ghcr.io/${{ steps.ctx.outputs.owner }}/wash:canary
-        buildah manifest push --storage-driver=vfs --all --format 'v2s2' wash docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/wash:canary
+        buildah manifest push --storage-driver=vfs --all --format 'v2s2' ${{ matrix.bin }} docker://${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary
+        buildah manifest push --storage-driver=vfs --all --format 'v2s2' ${{ matrix.bin }} docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary
+        buildah manifest push --storage-driver=vfs --all --format 'v2s2' ${{ matrix.bin }} docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary
 
-        docker run ${{ steps.ctx.outputs.owner }}/wash:canary wash --version
-        docker run ghcr.io/${{ steps.ctx.outputs.owner }}/wash:canary wash --version
-        docker run wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/wash:canary wash --version
+        docker run ${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary ${{ matrix.bin }} --version
+        docker run ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary ${{ matrix.bin }} --version
+        docker run wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:canary ${{ matrix.bin }} --version
 
-    - name: Push `latest` wash tag
-      if: startswith(github.ref, 'refs/tags/wash-cli-v') && !contains(github.ref, '-')
+    - name: Push `${{ matrix.bin }}` version tag
+      if: startswith(github.ref, format('refs/tags/{0}v', matrix.prefix))
       run: |
-        buildah manifest push --storage-driver=vfs --all --format 'v2s2' wash docker://${{ steps.ctx.outputs.owner }}/wash:latest
-        buildah manifest push --storage-driver=vfs --all --format 'v2s2' wash docker://ghcr.io/${{ steps.ctx.outputs.owner }}/wash:latest
-        buildah manifest push --storage-driver=vfs --all --format 'v2s2' wash docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/wash:latest
+        buildah manifest push --storage-driver=vfs --all --format 'v2s2' ${{ matrix.bin }} docker://${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}
+        buildah manifest push --storage-driver=vfs --all --format 'v2s2' ${{ matrix.bin }} docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}
+        buildah manifest push --storage-driver=vfs --all --format 'v2s2' ${{ matrix.bin }} docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }}
 
-        docker run ${{ steps.ctx.outputs.owner }}/wash:latest wash --version
-        docker run ghcr.io/${{ steps.ctx.outputs.owner }}/wash:latest wash --version
-        docker run wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/wash:latest wash --version
+        docker run ${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }} ${{ matrix.bin }} --version
+        docker run ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }} ${{ matrix.bin }} --version
+        docker run wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }} ${{ matrix.bin }} --version
+
+    - name: Push `${{ matrix.bin }}` `latest` tag
+      if: startswith(github.ref, format('refs/tags/{0}v', matrix.prefix)) && !contains(steps.ctx.outputs.version, '-')
+      run: |
+        buildah manifest push --storage-driver=vfs --all --format 'v2s2' ${{ matrix.bin }} docker://${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest
+        buildah manifest push --storage-driver=vfs --all --format 'v2s2' ${{ matrix.bin }} docker://ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest
+        buildah manifest push --storage-driver=vfs --all --format 'v2s2' ${{ matrix.bin }} docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest
+
+        docker run ${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest ${{ matrix.bin }} --version
+        docker run ghcr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest ${{ matrix.bin }} --version
+        docker run wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest ${{ matrix.bin }} --version
 
   release:
     if: (startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/wash-v')) && github.event_name == 'push'
