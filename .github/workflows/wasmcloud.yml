@@ -298,6 +298,11 @@ jobs:
     - name: Build `${{ matrix.bin }}` image
       run: nix run -L .#build-${{ matrix.bin }}-oci-debian ${{ matrix.bin }}
 
+    - name: Test `${{ matrix.bin }}` image
+      run: |
+        buildah push --storage-driver=vfs ${{ matrix.bin }}:amd64 docker-daemon:${{ matrix.bin }}:test
+        docker run --rm ${{ matrix.bin }}:test ${{ matrix.bin }} --version
+
     - name: Push `${{ matrix.bin }}` commit rev tag
       if: startswith(github.ref, format('refs/tags/{0}v', matrix.prefix)) || github.ref == 'refs/heads/main'
       run: |
