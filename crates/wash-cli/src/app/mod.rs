@@ -9,10 +9,8 @@ use wadm::server::{
 };
 use wash_lib::{
     app::{load_app_manifest, AppManifest},
-    cli::{
-        get_lattice_prefix_and_nats_client_from_cli_connection_opts, CliConnectionOpts,
-        CommandOutput, OutputKind,
-    },
+    cli::{CliConnectionOpts, CommandOutput, OutputKind},
+    config::WashConnectionOptions,
 };
 
 use crate::appearance::spinner::Spinner;
@@ -178,8 +176,11 @@ pub async fn handle_command(
 }
 
 async fn undeploy_model(cmd: UndeployCommand) -> Result<DeployModelResponse> {
-    let (lattice_prefix, client) =
-        get_lattice_prefix_and_nats_client_from_cli_connection_opts(cmd.opts).await?;
+    let connection_opts =
+        <CliConnectionOpts as TryInto<WashConnectionOptions>>::try_into(cmd.opts)?;
+    let lattice_prefix = Some(connection_opts.get_lattice_prefix());
+
+    let client = connection_opts.into_nats_client().await?;
 
     wash_lib::app::undeploy_model(
         &client,
@@ -191,8 +192,11 @@ async fn undeploy_model(cmd: UndeployCommand) -> Result<DeployModelResponse> {
 }
 
 async fn deploy_model(cmd: DeployCommand) -> Result<DeployModelResponse> {
-    let (lattice_prefix, client) =
-        get_lattice_prefix_and_nats_client_from_cli_connection_opts(cmd.opts).await?;
+    let connection_opts =
+        <CliConnectionOpts as TryInto<WashConnectionOptions>>::try_into(cmd.opts)?;
+    let lattice_prefix = Some(connection_opts.get_lattice_prefix());
+
+    let client = connection_opts.into_nats_client().await?;
 
     let app_manifest = match cmd.application {
         Some(source) => load_app_manifest(source.parse()?).await?,
@@ -217,8 +221,11 @@ async fn deploy_model(cmd: DeployCommand) -> Result<DeployModelResponse> {
 }
 
 async fn put_model(cmd: PutCommand) -> Result<PutModelResponse> {
-    let (lattice_prefix, client) =
-        get_lattice_prefix_and_nats_client_from_cli_connection_opts(cmd.opts).await?;
+    let connection_opts =
+        <CliConnectionOpts as TryInto<WashConnectionOptions>>::try_into(cmd.opts)?;
+    let lattice_prefix = Some(connection_opts.get_lattice_prefix());
+
+    let client = connection_opts.into_nats_client().await?;
 
     let app_manifest = match &cmd.source {
         Some(source) => load_app_manifest(source.parse()?).await?,
@@ -236,22 +243,31 @@ async fn put_model(cmd: PutCommand) -> Result<PutModelResponse> {
 }
 
 async fn get_model_history(cmd: HistoryCommand) -> Result<VersionResponse> {
-    let (lattice_prefix, client) =
-        get_lattice_prefix_and_nats_client_from_cli_connection_opts(cmd.opts).await?;
+    let connection_opts =
+        <CliConnectionOpts as TryInto<WashConnectionOptions>>::try_into(cmd.opts)?;
+    let lattice_prefix = Some(connection_opts.get_lattice_prefix());
+
+    let client = connection_opts.into_nats_client().await?;
 
     wash_lib::app::get_model_history(&client, lattice_prefix, &cmd.model_name).await
 }
 
 async fn get_model_details(cmd: GetCommand) -> Result<GetModelResponse> {
-    let (lattice_prefix, client) =
-        get_lattice_prefix_and_nats_client_from_cli_connection_opts(cmd.opts).await?;
+    let connection_opts =
+        <CliConnectionOpts as TryInto<WashConnectionOptions>>::try_into(cmd.opts)?;
+    let lattice_prefix = Some(connection_opts.get_lattice_prefix());
+
+    let client = connection_opts.into_nats_client().await?;
 
     wash_lib::app::get_model_details(&client, lattice_prefix, &cmd.model_name, cmd.version).await
 }
 
 async fn delete_model_version(cmd: DeleteCommand) -> Result<DeleteModelResponse> {
-    let (lattice_prefix, client) =
-        get_lattice_prefix_and_nats_client_from_cli_connection_opts(cmd.opts).await?;
+    let connection_opts =
+        <CliConnectionOpts as TryInto<WashConnectionOptions>>::try_into(cmd.opts)?;
+    let lattice_prefix = Some(connection_opts.get_lattice_prefix());
+
+    let client = connection_opts.into_nats_client().await?;
 
     wash_lib::app::delete_model_version(
         &client,
@@ -264,8 +280,11 @@ async fn delete_model_version(cmd: DeleteCommand) -> Result<DeleteModelResponse>
 }
 
 async fn get_models(cmd: ListCommand) -> Result<Vec<ModelSummary>> {
-    let (lattice_prefix, client) =
-        get_lattice_prefix_and_nats_client_from_cli_connection_opts(cmd.opts).await?;
+    let connection_opts =
+        <CliConnectionOpts as TryInto<WashConnectionOptions>>::try_into(cmd.opts)?;
+    let lattice_prefix = Some(connection_opts.get_lattice_prefix());
+
+    let client = connection_opts.into_nats_client().await?;
     wash_lib::app::get_models(&client, lattice_prefix).await
 }
 
