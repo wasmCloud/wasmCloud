@@ -265,9 +265,16 @@ jobs:
     - name: Extract tag context
       id: ctx
       run: |
-        echo 'owner=${GITHUB_REPOSITORY_OWNER,,}' >> $GITHUB_OUTPUT
-        echo 'sha_short=$(git rev-parse --short HEAD)' >> $GITHUB_OUTPUT
-        echo 'version=${GITHUB_REF_NAME#${{ matrix.prefix }}v}' >> $GITHUB_OUTPUT
+        echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+        echo "sha_short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+        version=${GITHUB_REF_NAME#${{ matrix.prefix }}v}
+        echo "version=${version}" >> "$GITHUB_OUTPUT"
+        echo "version is ${version}"
+        if [[ $version == *"-"* ]]; then
+          echo "version ${version} is a pre-release"
+          echo "prerelease=true" >> "$GITHUB_OUTPUT"
+        fi
 
     - name: Login to AzureCR
       if: startswith(github.ref, format('refs/tags/{0}v', matrix.prefix)) || github.ref == 'refs/heads/main'
@@ -339,7 +346,7 @@ jobs:
         docker run --rm wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:${{ steps.ctx.outputs.version }} ${{ matrix.bin }} --version
 
     - name: Push `${{ matrix.bin }}` `latest` tag
-      if: startswith(github.ref, format('refs/tags/{0}v', matrix.prefix)) && !contains(steps.ctx.outputs.version, '-')
+      if: startswith(github.ref, format('refs/tags/{0}v', matrix.prefix)) && !steps.ctx.outputs.prerelease
       continue-on-error: ${{ github.repository_owner != 'wasmCloud' }}
       run: |
         buildah manifest push --storage-driver=vfs --all --format 'v2s2' ${{ matrix.bin }} docker://${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest
@@ -526,6 +533,16 @@ jobs:
     steps:
     - uses: actions/checkout@v4.1.1
 
+    - name: Extract tag context
+      id: ctx
+      run: |
+        version=${GITHUB_REF_NAME#${{ matrix.crate }}-v}
+        echo "version is ${version}"
+        if [[ $version == *"-"* ]]; then
+          echo "version ${version} is a pre-release"
+          echo "prerelease=true" >> "$GITHUB_OUTPUT"
+        fi
+
     - name: dry-run publish ${{ matrix.crate }} to crates.io
       if: ${{ !startsWith(github.ref, 'refs/tags/') }}
       continue-on-error: ${{ matrix.workspace-dependencies }} # publish may fail due to workspace crates not being published yet
@@ -533,7 +550,7 @@ jobs:
       working-directory: ./crates/${{ matrix.crate }}
 
     - name: publish ${{ matrix.crate }} to crates.io
-      if: startsWith(github.ref, format('refs/tags/{0}-v', matrix.crate)) && !contains(github.ref, '-')
+      if: startsWith(github.ref, format('refs/tags/{0}-v', matrix.crate)) && !steps.ctx.outputs.prerelease
       continue-on-error: ${{ github.repository_owner != 'wasmCloud' }}
       run: cargo publish --token ${{ secrets.CRATES_PUBLISH_TOKEN }}
       working-directory: ./crates/${{ matrix.crate }}
