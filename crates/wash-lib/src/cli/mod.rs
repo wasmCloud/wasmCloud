@@ -439,7 +439,7 @@ mod test {
         let context_dir = ContextDir::new(
             tempdir
                 .path()
-                .join([WASH_DIR, DEFAULT_CTX_DIR_NAME].concat()),
+                .join(format!("{WASH_DIR}/{DEFAULT_CTX_DIR_NAME}")),
         )?;
 
         // when opts.lattice_prefix.is_none() && opts.context.is_some(), use the lattice_prefix from the specified context...
@@ -451,6 +451,7 @@ mod test {
         let context_file = context_dir.get_context_path("foo")?.unwrap();
         let cli_opts = CliConnectionOpts {
             context: Some(context_file.clone()),
+            lattice_prefix: None,
             ..Default::default()
         };
         let wash_opts = WashConnectionOptions::try_from(cli_opts)?;
@@ -463,7 +464,10 @@ mod test {
             ..Default::default()
         })?;
         context_dir.set_default_context("bar")?;
-        let cli_opts = CliConnectionOpts::default();
+        let cli_opts = CliConnectionOpts {
+            lattice_prefix: None,
+            ..Default::default()
+        };
         let wash_opts = WashConnectionOptions::try_from(cli_opts)?;
         assert_eq!(wash_opts.get_lattice_prefix(), "iamironman".to_string());
 
