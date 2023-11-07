@@ -260,7 +260,7 @@ impl Manager {
     }
 
     /// Constructs a
-    #[instrument(level = "debug", skip(self))]
+    #[instrument(level = "trace", skip_all)]
     pub async fn evaluate_action(
         &self,
         source: Option<RequestSource>,

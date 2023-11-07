@@ -67,7 +67,7 @@ impl Actor {
     /// # Errors
     ///
     /// Fails if [Component::new] or [Module::new] fails
-    #[instrument(skip(wasm))]
+    #[instrument(level = "trace", skip_all)]
     pub fn new(rt: &Runtime, wasm: impl AsRef<[u8]>) -> Result<Self> {
         let wasm = wasm.as_ref();
         // TODO: Optimize parsing, add functionality to `wascap` to parse from a custom section
@@ -148,7 +148,7 @@ impl Actor {
     /// # Errors
     ///
     /// Fails if instantiation of the underlying module or component fails
-    #[instrument]
+    #[instrument(level = "trace", skip_all)]
     pub async fn instantiate(&self) -> anyhow::Result<Instance> {
         match self {
             Self::Module(module) => module.instantiate().await.map(Instance::Module),
@@ -161,7 +161,7 @@ impl Actor {
     /// # Errors
     ///
     /// Fails if [`Instance::call`] fails
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(level = "trace", skip_all)]
     pub async fn call(
         &self,
         operation: impl AsRef<str>,

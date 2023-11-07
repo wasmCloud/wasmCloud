@@ -210,7 +210,7 @@ async fn instantiate(
 
 impl Module {
     /// Extracts [Claims](jwt::Claims) from WebAssembly module and compiles it using [Runtime].
-    #[instrument(skip(wasm))]
+    #[instrument(level = "trace", skip_all)]
     pub fn new(rt: &Runtime, wasm: impl AsRef<[u8]>) -> anyhow::Result<Self> {
         let wasm = wasm.as_ref();
         let claims = claims(wasm)?;
@@ -253,7 +253,7 @@ impl Module {
     }
 
     /// Instantiates a [Module] and returns the resulting [Instance].
-    #[instrument]
+    #[instrument(level = "trace", skip_all)]
     pub async fn instantiate(&self) -> anyhow::Result<Instance> {
         instantiate(
             &self.module,
@@ -526,7 +526,7 @@ impl Logging for GuestInstance {
 
 #[async_trait]
 impl IncomingHttp for GuestInstance {
-    #[instrument(skip_all)]
+    #[instrument(level = "trace", skip_all)]
     async fn handle(
         &self,
         request: http::Request<Box<dyn AsyncRead + Sync + Send + Unpin>>,
