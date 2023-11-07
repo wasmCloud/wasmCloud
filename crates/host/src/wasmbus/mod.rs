@@ -250,7 +250,7 @@ struct Handler {
     chunk_endpoint: ChunkEndpoint,
 }
 
-#[instrument(level = "debug")]
+#[instrument(level = "trace")]
 async fn resolve_target(
     target: Option<&TargetEntity>,
     links: Option<&HashMap<String, WasmCloudEntity>>,
@@ -685,7 +685,7 @@ impl Blobstore for Handler {
 
 #[async_trait]
 impl Bus for Handler {
-    #[instrument(level = "debug", skip(self))]
+    #[instrument(level = "trace", skip(self))]
     async fn identify_wasmbus_target(
         &self,
         binding: &str,
@@ -703,7 +703,7 @@ impl Bus for Handler {
         }
     }
 
-    #[instrument(level = "debug", skip(self))]
+    #[instrument(level = "trace", skip(self))]
     async fn identify_interface_target(
         &self,
         interface: &TargetInterface,
@@ -866,7 +866,7 @@ impl Bus for Handler {
         ))
     }
 
-    #[instrument(level = "debug", skip(self, request))]
+    #[instrument(level = "trace", skip(self, request))]
     async fn call_sync(
         &self,
         target: Option<TargetEntity>,
@@ -1257,7 +1257,7 @@ impl ActorInstance {
         }
     }
 
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(level = "trace", skip_all)]
     async fn handle_call(&self, invocation: Invocation) -> anyhow::Result<(Vec<u8>, u64)> {
         trace!(?invocation.origin, ?invocation.target, invocation.operation, "validate actor invocation");
         invocation.validate_antiforgery(&self.valid_issuers)?;
@@ -1360,7 +1360,7 @@ impl ActorInstance {
         }
     }
 
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(level = "info", skip_all)] // NOTE: level needs to stay at info here to attach the incoming span context
     async fn handle_rpc_message(&self, message: async_nats::Message) {
         let async_nats::Message {
             ref subject,
@@ -1604,14 +1604,14 @@ fn linkdef_hash(
     hex::encode_upper(hash.finalize())
 }
 
-#[instrument(skip(jetstream))]
+#[instrument(level = "debug", skip_all)]
 async fn create_lattice_metadata_bucket(
     jetstream: &async_nats::jetstream::Context,
     bucket: &str,
 ) -> anyhow::Result<()> {
     // Don't create the bucket if it already exists
     if let Ok(_store) = jetstream.get_key_value(bucket).await {
-        info!("lattice metadata bucket {bucket} already exists. Skipping creation.");
+        info!(%bucket, "lattice metadata bucket already exists. Skipping creation.");
         return Ok(());
     }
 
@@ -1623,7 +1623,7 @@ async fn create_lattice_metadata_bucket(
         .await
     {
         Ok(_) => {
-            info!("created lattice metadata bucket {bucket} with 1 replica");
+            info!(%bucket, "created lattice metadata bucket with 1 replica");
             Ok(())
         }
         Err(err) => Err(anyhow!(err).context(format!(
@@ -1676,7 +1676,7 @@ struct SupplementalConfig {
     registry_config: Option<HashMap<String, RegistryConfig>>,
 }
 
-#[instrument(skip(ctl_nats))]
+#[instrument(level = "debug", skip_all)]
 async fn load_supplemental_config(
     ctl_nats: &async_nats::Client,
     lattice_prefix: &str,
@@ -1728,7 +1728,7 @@ async fn load_supplemental_config(
     }
 }
 
-#[instrument(skip_all)]
+#[instrument(level = "debug", skip_all)]
 async fn merge_registry_config(
     registry_config: &RwLock<HashMap<String, RegistryConfig>>,
     oci_opts: OciConfig,
@@ -1817,7 +1817,7 @@ impl Host {
     }
 
     /// Construct a new [Host] returning a tuple of its [Arc] and an async shutdown function.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn new(
         config: HostConfig,
     ) -> anyhow::Result<(Arc<Self>, impl Future<Output = anyhow::Result<()>>)> {
@@ -2179,7 +2179,7 @@ impl Host {
     /// # Errors
     ///
     /// Returns an error if internal stop channel is closed prematurely
-    #[instrument(skip(self))]
+    #[instrument(level = "debug", skip_all)]
     pub async fn stopped(&self) -> anyhow::Result<Option<Instant>> {
         self.stop_rx
             .clone()
@@ -2189,7 +2189,7 @@ impl Host {
         Ok(*self.stop_rx.borrow())
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = "debug", skip_all)]
     async fn heartbeat(&self) -> serde_json::Value {
         trace!("generating heartbeat");
         let actors = self.actors.read().await;
@@ -2245,7 +2245,7 @@ impl Host {
         })
     }
 
-    #[instrument(level = "debug", skip(self, name))]
+    #[instrument(level = "debug", skip(self))]
     async fn publish_event(&self, name: &str, data: serde_json::Value) -> anyhow::Result<()> {
         event::publish(
             &self.event_builder,
@@ -2259,7 +2259,7 @@ impl Host {
 
     /// Instantiate an actor
     #[allow(clippy::too_many_arguments)] // TODO: refactor into a config struct
-    #[instrument(skip(self, claims, annotations, actor_ref, actor, handler))]
+    #[instrument(level = "debug", skip_all)]
     async fn instantiate_actor(
         &self,
         claims: &jwt::Claims<jwt::Actor>,
@@ -2321,19 +2321,18 @@ impl Host {
     }
 
     /// Uninstantiate an actor
-    #[instrument(skip(self, instance))]
+    #[instrument(level = "debug", skip_all)]
     async fn uninstantiate_actor(
         &self,
         claims: &jwt::Claims<jwt::Actor>,
-        host_id: &str,
         instance: Arc<ActorInstance>,
     ) {
-        trace!(subject = claims.subject, "uninstantiating actor instance");
+        debug!(subject = claims.subject, "uninstantiating actor instance");
 
         instance.calls.abort();
     }
 
-    #[instrument(skip(self, entry, actor, annotations))]
+    #[instrument(level = "debug", skip_all)]
     async fn start_actor<'a>(
         &self,
         entry: hash_map::VacantEntry<'a, String, Arc<Actor>>,
@@ -2343,7 +2342,7 @@ impl Host {
         host_id: &str,
         annotations: impl Into<Annotations>,
     ) -> anyhow::Result<&'a mut Arc<Actor>> {
-        debug!(actor_ref, "starting new actor");
+        debug!(actor_ref, ?max, "starting new actor");
 
         let annotations = annotations.into();
         let claims = actor.claims().context("claims missing")?;
@@ -2403,6 +2402,8 @@ impl Host {
             )
             .await
             .context("failed to instantiate actor")?;
+
+        info!(actor_ref, "actor started");
         self.publish_actor_started_events(
             max.map_or(0, NonZeroUsize::get),
             claims,
@@ -2421,14 +2422,15 @@ impl Host {
         Ok(entry.insert(actor))
     }
 
-    #[instrument(skip(self, entry))]
+    #[instrument(level = "debug", skip_all)]
     async fn stop_actor<'a>(
         &self,
         entry: hash_map::OccupiedEntry<'a, String, Arc<Actor>>,
         annotations: &BTreeMap<String, String>,
         host_id: &str,
     ) -> anyhow::Result<()> {
-        debug!(actor_id = %entry.key(), "stopping actor");
+        trace!(actor_id = %entry.key(), "stopping actor");
+
         let actor = entry.remove();
         let claims = actor.claims().context("claims missing")?;
         let mut instances = actor.instances.write().await;
@@ -2452,8 +2454,7 @@ impl Host {
 
         for instance in matching_instances {
             instances.remove(&instance.annotations);
-            self.uninstantiate_actor(claims, host_id, instance.clone())
-                .await;
+            self.uninstantiate_actor(claims, instance.clone()).await;
             self.publish_actor_stopped_events(
                 claims,
                 &instance.annotations,
@@ -2467,7 +2468,7 @@ impl Host {
         Ok(())
     }
 
-    #[instrument(skip(self, payload))]
+    #[instrument(level = "debug", skip_all)]
     async fn handle_auction_actor(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
         let ActorAuctionRequest {
             actor_ref,
@@ -2475,7 +2476,7 @@ impl Host {
         } = serde_json::from_slice(payload.as_ref())
             .context("failed to deserialize actor auction command")?;
 
-        debug!(actor_ref, ?constraints, "auction actor");
+        info!(actor_ref, ?constraints, "handling auction for actor");
 
         let buf = serde_json::to_vec(&ActorAuctionAck {
             actor_ref,
@@ -2486,7 +2487,7 @@ impl Host {
         Ok(buf.into())
     }
 
-    #[instrument(skip(self, payload))]
+    #[instrument(level = "debug", skip_all)]
     async fn handle_auction_provider(
         &self,
         payload: impl AsRef<[u8]>,
@@ -2498,7 +2499,12 @@ impl Host {
         } = serde_json::from_slice(payload.as_ref())
             .context("failed to deserialize provider auction command")?;
 
-        debug!(provider_ref, link_name, ?constraints, "auction provider");
+        info!(
+            provider_ref,
+            link_name,
+            ?constraints,
+            "handling auction for provider"
+        );
 
         let providers = self.providers.read().await;
         if providers.values().any(
@@ -2522,7 +2528,7 @@ impl Host {
         Ok(Some(buf.into()))
     }
 
-    #[instrument(skip_all)]
+    #[instrument(level = "trace", skip_all)]
     async fn fetch_actor(&self, actor_ref: &str) -> anyhow::Result<wasmcloud_runtime::Actor> {
         let registry_config = self.registry_config.read().await;
         let actor = fetch_actor(
@@ -2537,7 +2543,7 @@ impl Host {
         Ok(actor)
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = "trace", skip_all)]
     async fn store_actor_claims(&self, claims: jwt::Claims<jwt::Actor>) -> anyhow::Result<()> {
         if let Some(call_alias) = claims
             .metadata
@@ -2568,12 +2574,16 @@ impl Host {
         Ok(())
     }
 
-    #[instrument(skip(self, payload))]
-    async fn handle_stop(&self, payload: impl AsRef<[u8]>, host_id: &str) -> anyhow::Result<Bytes> {
+    #[instrument(level = "debug", skip_all)]
+    async fn handle_stop_host(
+        &self,
+        payload: impl AsRef<[u8]>,
+        _host_id: &str,
+    ) -> anyhow::Result<Bytes> {
         let StopHostCommand { timeout, .. } = serde_json::from_slice(payload.as_ref())
             .context("failed to deserialize stop command")?;
 
-        debug!(?timeout, "stop host");
+        debug!(?timeout, "handling stop host");
 
         self.heartbeat.abort();
         self.data_watch.abort();
@@ -2585,7 +2595,7 @@ impl Host {
         Ok(ACCEPTED.into())
     }
 
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     async fn handle_scale_actor(
         self: Arc<Self>,
         payload: impl AsRef<[u8]>,
@@ -2599,7 +2609,7 @@ impl Host {
         } = serde_json::from_slice(payload.as_ref())
             .context("failed to deserialize actor scale command")?;
 
-        debug!(actor_ref, max_concurrent, "scale actor");
+        debug!(actor_ref, max_concurrent, "handling scale actor");
 
         let host_id = host_id.to_string();
         let annotations: Annotations = annotations.unwrap_or_default().into_iter().collect();
@@ -2614,7 +2624,7 @@ impl Host {
         Ok(ACCEPTED.into())
     }
 
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     /// Handles scaling an actor to a supplied number of `max` concurrently executing instances.
     /// Supplying `None` for max will result in an unbounded number of concurrent requests, and supplying
     /// `Some(0)` will result in stopping that actor instance.
@@ -2625,7 +2635,7 @@ impl Host {
         max: Option<u16>,
         annotations: Annotations,
     ) -> anyhow::Result<()> {
-        debug!(actor_ref, max, "scale actor task");
+        trace!(actor_ref, max, "scale actor task");
 
         let actor = self.fetch_actor(actor_ref).await?;
         let claims = actor.claims().context("claims missing")?;
@@ -2667,8 +2677,9 @@ impl Host {
                 let mut actor_instances = actor.instances.write().await;
                 if let Some(matching_instance) = matching_instance(&actor_instances, &annotations) {
                     actor_instances.remove(&matching_instance.annotations);
-                    self.uninstantiate_actor(claims, host_id, matching_instance.clone())
+                    self.uninstantiate_actor(claims, matching_instance.clone())
                         .await;
+                    info!(actor_ref, "actor stopped");
                     self.publish_actor_stopped_events(
                         claims,
                         &matching_instance.annotations,
@@ -2753,7 +2764,7 @@ impl Host {
                                     &annotations,
                                     instance.id,
                                     host_id,
-                                    actor_ref,
+                                    &actor_ref,
                                 )
                                 .await
                             }
@@ -2783,8 +2794,11 @@ impl Host {
                         actor_instances.insert(annotations, instance);
 
                         if let Some(i) = previous_instance {
-                            self.uninstantiate_actor(claims, host_id, i).await;
+                            self.uninstantiate_actor(claims, i).await;
                         }
+
+                        info!(actor_ref, ?max, "actor scaled");
+
                         // Wait to unwrap the event publish result until after we've processed the instances
                         publish_result?;
                     }
@@ -2800,6 +2814,8 @@ impl Host {
                         )
                         .await
                         .context("failed to instantiate actor")?;
+
+                    info!(actor_ref, "actor started");
                     self.publish_actor_started_events(
                         max.map_or(0, NonZeroUsize::get),
                         claims,
@@ -2816,7 +2832,7 @@ impl Host {
         Ok(())
     }
 
-    #[instrument(skip(self, payload))]
+    #[instrument(level = "debug", skip_all)]
     async fn handle_launch_actor(
         self: Arc<Self>,
         payload: impl AsRef<[u8]>,
@@ -2886,7 +2902,7 @@ impl Host {
         Ok(ACCEPTED.into())
     }
 
-    #[instrument(skip(self, payload))]
+    #[instrument(level = "debug", skip_all)]
     async fn handle_stop_actor(
         &self,
         payload: impl AsRef<[u8]>,
@@ -2899,19 +2915,20 @@ impl Host {
         } = serde_json::from_slice(payload.as_ref())
             .context("failed to deserialize actor stop command")?;
 
-        debug!(actor_ref, ?annotations, "stop actor");
+        debug!(actor_ref, ?annotations, "handling stop actor");
 
         let annotations: Annotations = annotations.unwrap_or_default().into_iter().collect();
-        match self.actors.write().await.entry(actor_ref) {
+        match self.actors.write().await.entry(actor_ref.clone()) {
             hash_map::Entry::Occupied(entry) => {
                 self.stop_actor(entry, &annotations, host_id).await?;
+                info!(actor_ref, "actor stopped");
                 Ok(ACCEPTED.into())
             }
             hash_map::Entry::Vacant(_) => bail!("actor is not running on this host"),
         }
     }
 
-    #[instrument(skip(self, payload))]
+    #[instrument(level = "debug", skip_all)]
     async fn handle_update_actor(
         &self,
         payload: impl AsRef<[u8]>,
@@ -2925,7 +2942,12 @@ impl Host {
         } = serde_json::from_slice(payload.as_ref())
             .context("failed to deserialize actor update command")?;
 
-        debug!(actor_id, new_actor_ref, ?annotations, "update actor");
+        debug!(
+            actor_id,
+            new_actor_ref,
+            ?annotations,
+            "handling update actor"
+        );
 
         let actors = self.actors.write().await;
         let actor = actors.get(&actor_id).context("actor not found")?;
@@ -2961,6 +2983,8 @@ impl Host {
         else {
             bail!("failed to instantiate actor from new reference");
         };
+
+        info!(%new_actor_ref, "actor updated");
         self.publish_actor_started_events(
             max.map_or(0, NonZeroUsize::get),
             new_claims,
@@ -2974,7 +2998,7 @@ impl Host {
         all_instances.remove(&matching_instance.annotations);
         all_instances.insert(annotations, new_instance);
 
-        self.uninstantiate_actor(old_claims, host_id, matching_instance.clone())
+        self.uninstantiate_actor(old_claims, matching_instance.clone())
             .await;
         self.publish_actor_stopped_events(
             old_claims,
@@ -2989,7 +3013,7 @@ impl Host {
         Ok(ACCEPTED.into())
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = "debug", skip_all)]
     async fn handle_launch_provider_task(
         &self,
         configuration: Option<String>,
@@ -2998,7 +3022,7 @@ impl Host {
         annotations: HashMap<String, String>,
         host_id: &str,
     ) -> anyhow::Result<()> {
-        debug!("launch provider");
+        trace!(provider_ref, link_name, "launch provider task");
 
         let registry_config = self.registry_config.read().await;
         let (path, claims) = crate::fetch_provider(
@@ -3100,11 +3124,7 @@ impl Host {
             let host_data =
                 serde_json::to_vec(&host_data).context("failed to serialize provider data")?;
 
-            debug!(
-                ?path,
-                host_data = &*String::from_utf8_lossy(&host_data),
-                "spawn provider process"
-            );
+            trace!("spawn provider process");
 
             let mut child_cmd = process::Command::new(&path);
             // Prevent the provider from inheriting the host's environment, with the exception of
@@ -3260,6 +3280,7 @@ impl Host {
                     }
                 }
             });
+            info!(provider_ref, link_name, "provider started");
             self.publish_event(
                 "provider_started",
                 event::provider_started(
@@ -3283,7 +3304,7 @@ impl Host {
         Ok(())
     }
 
-    #[instrument(skip(self, payload))]
+    #[instrument(level = "debug", skip_all)]
     async fn handle_launch_provider(
         self: Arc<Self>,
         payload: impl AsRef<[u8]>,
@@ -3297,6 +3318,9 @@ impl Host {
             ..
         } = serde_json::from_slice(payload.as_ref())
             .context("failed to deserialize provider launch command")?;
+
+        info!(provider_ref, link_name, "handling launch provider"); // Log at info since launching providers can take a while
+
         let host_id = host_id.to_string();
         spawn(async move {
             if let Err(err) = self
@@ -3309,6 +3333,7 @@ impl Host {
                 )
                 .await
             {
+                error!(provider_ref, link_name, ?err, "failed to launch provider");
                 if let Err(err) = self
                     .publish_event(
                         "provider_start_failed",
@@ -3316,14 +3341,14 @@ impl Host {
                     )
                     .await
                 {
-                    error!("{err:#}");
+                    error!(?err, "failed to publish provider_start_failed event");
                 }
             }
         });
         Ok(ACCEPTED.into())
     }
 
-    #[instrument(skip(self, payload))]
+    #[instrument(level = "debug", skip_all)]
     async fn handle_stop_provider(
         &self,
         payload: impl AsRef<[u8]>,
@@ -3339,11 +3364,8 @@ impl Host {
             .context("failed to deserialize provider stop command")?;
 
         debug!(
-            link_name,
             provider_ref,
-            contract_id,
-            ?annotations,
-            "stop provider"
+            link_name, contract_id, "handling stop provider"
         );
 
         let annotations: Annotations = annotations.unwrap_or_default().into_iter().collect();
@@ -3388,6 +3410,7 @@ impl Host {
                     );
                 }
                 child.abort();
+                info!(provider_ref, link_name, "provider stopped");
                 self.publish_event(
                     "provider_stopped",
                     event::provider_stopped(
@@ -3402,6 +3425,10 @@ impl Host {
                 .await?;
             }
         } else {
+            warn!(
+                provider_ref,
+                link_name, "received request to stop provider that is not running"
+            );
             return Ok(
                 r#"{"accepted":false,"error":"provider with that link name is not running"}"#
                     .into(),
@@ -3413,13 +3440,9 @@ impl Host {
         Ok(ACCEPTED.into())
     }
 
-    #[instrument(skip(self, _payload))]
-    async fn handle_inventory(
-        &self,
-        _payload: impl AsRef<[u8]>,
-        host_id: &str,
-    ) -> anyhow::Result<Bytes> {
-        trace!("generating inventory");
+    #[instrument(level = "debug", skip_all)]
+    async fn handle_inventory(&self) -> anyhow::Result<Bytes> {
+        trace!("handling inventory");
         let actors = self.actors.read().await;
         let actors: Vec<_> = stream::iter(actors.iter())
             .filter_map(|(id, actor)| async move {
@@ -3520,7 +3543,7 @@ impl Host {
         Ok(buf.into())
     }
 
-    #[instrument(skip(self))]
+    #[instrument(level = "debug", skip_all)]
     async fn handle_claims(&self) -> anyhow::Result<Bytes> {
         // TODO: update control interface client to have a more specific type definition for
         // GetClaimsResponse, so we can re-use it here. Currently it's Vec<HashMap<String, String>>
@@ -3529,7 +3552,8 @@ impl Host {
             claims: Vec<StoredClaims>,
         }
 
-        trace!("getting claims");
+        trace!("handling claims");
+
         let (actor_claims, provider_claims) =
             join!(self.actor_claims.read(), self.provider_claims.read());
         let actor_claims = actor_claims.values().cloned().map(Claims::Actor);
@@ -3543,9 +3567,10 @@ impl Host {
         Ok(res.into())
     }
 
-    // #[instrument(skip(self))] // FIXME: this is temporarily disabled because wadm (as of v0.8.0) queries links too often
+    // #[instrument(level = "debug", skip_all)] // FIXME: this is temporarily disabled because wadm (as of v0.8.0) queries links too often
     async fn handle_links(&self) -> anyhow::Result<Bytes> {
-        trace!("getting links");
+        trace!("handling links"); // FIXME: set back to debug when instrumentation is re-enabled
+
         let links = self.links.read().await;
         let links: Vec<LinkDefinition> = links.values().cloned().collect();
         let res = serde_json::to_vec(&LinkDefinitionList { links })
@@ -3553,7 +3578,7 @@ impl Host {
         Ok(res.into())
     }
 
-    #[instrument(skip(self, payload))]
+    #[instrument(level = "debug", skip_all)]
     async fn handle_linkdef_put(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
         let payload = payload.as_ref();
         let LinkDefinition {
@@ -3561,20 +3586,15 @@ impl Host {
             provider_id,
             link_name,
             contract_id,
-            values,
             ..
         } = serde_json::from_slice(payload).context("failed to deserialize link definition")?;
         let id = linkdef_hash(&actor_id, &contract_id, &link_name);
 
-        debug!(
-            id,
+        info!(
             actor_id,
-            provider_id,
-            link_name,
-            contract_id,
-            ?values,
-            "put link definition"
+            provider_id, link_name, contract_id, "handling put link definition"
         );
+
         self.data
             .put(format!("LINKDEF_{id}"), Bytes::copy_from_slice(payload))
             .await
@@ -3582,8 +3602,7 @@ impl Host {
         Ok(ACCEPTED.into())
     }
 
-    #[allow(unused)] // TODO: Remove once implemented
-    #[instrument(skip(self, payload))]
+    #[instrument(level = "debug", skip_all)]
     async fn handle_linkdef_del(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
         let RemoveLinkDefinitionRequest {
             actor_id,
@@ -3593,10 +3612,11 @@ impl Host {
             .context("failed to deserialize link definition deletion command")?;
         let id = linkdef_hash(&actor_id, &contract_id, link_name);
 
-        debug!(
-            id,
-            actor_id, link_name, contract_id, "delete link definition"
+        info!(
+            actor_id,
+            link_name, contract_id, "handling delete link definition"
         );
+
         self.data
             .delete(format!("LINKDEF_{id}"))
             .await
@@ -3604,12 +3624,12 @@ impl Host {
         Ok(ACCEPTED.into())
     }
 
-    #[instrument(skip(self, payload))]
+    #[instrument(level = "debug", skip_all)]
     async fn handle_registries_put(&self, payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
         let registry_creds: RegistryCredentialMap = serde_json::from_slice(payload.as_ref())
             .context("failed to deserialize registries put command")?;
 
-        debug!(
+        info!(
             registries = ?registry_creds.keys(),
             "updating registry config",
         );
@@ -3631,7 +3651,7 @@ impl Host {
         Ok(ACCEPTED.into())
     }
 
-    #[instrument(skip(self, _payload))]
+    #[instrument(level = "debug", skip_all)]
     async fn handle_ping_hosts(&self, _payload: impl AsRef<[u8]>) -> anyhow::Result<Bytes> {
         trace!("replying to ping");
         let uptime = self.start_at.elapsed();
@@ -3656,7 +3676,7 @@ impl Host {
         Ok(buf.into())
     }
 
-    #[instrument(skip_all)]
+    #[instrument(level = "trace", skip_all)]
     async fn handle_ctl_message(self: Arc<Self>, message: async_nats::Message) {
         let async_nats::Message {
             ref subject,
@@ -3665,6 +3685,9 @@ impl Host {
             ..
         } = message;
 
+        // NOTE: if log level is not `trace`, this won't have an effect, since the current span is
+        // disabled. In most cases that's fine, since we aren't aware of any control interface
+        // requests including a trace context
         opentelemetry_nats::attach_span_context(&message);
         // Skip the topic prefix and then the lattice prefix
         // e.g. `wasmbus.ctl.{prefix}`
@@ -3674,7 +3697,8 @@ impl Host {
             .trim_start_matches('.')
             .split('.')
             .skip(1);
-        trace!("handling ctl request on {}", subject);
+        trace!(%subject, "handling control interface request");
+
         let res = match (parts.next(), parts.next(), parts.next(), parts.next()) {
             (Some("auction"), Some("actor"), None, None) => {
                 self.handle_auction_actor(payload).await.map(Some)
@@ -3701,13 +3725,13 @@ impl Host {
                 self.handle_stop_provider(payload, host_id).await.map(Some)
             }
             (Some("cmd"), Some(host_id), Some("stop"), None) => {
-                self.handle_stop(payload, host_id).await.map(Some)
+                self.handle_stop_host(payload, host_id).await.map(Some)
             }
             (Some("cmd"), Some(host_id), Some("upd"), None) => {
                 self.handle_update_actor(payload, host_id).await.map(Some)
             }
-            (Some("get"), Some(host_id), Some("inv"), None) => {
-                self.handle_inventory(payload, host_id).await.map(Some)
+            (Some("get"), Some(_host_id), Some("inv"), None) => {
+                self.handle_inventory().await.map(Some)
             }
             (Some("get"), Some("claims"), None, None) => self.handle_claims().await.map(Some),
             (Some("get"), Some("links"), None, None) => self.handle_links().await.map(Some),
@@ -3724,47 +3748,46 @@ impl Host {
                 self.handle_ping_hosts(payload).await.map(Some)
             }
             _ => {
-                error!("unsupported subject `{subject}`");
-                return;
+                warn!(%subject, "received control interface request on unsupported subject");
+                Ok(Some(
+                    r#"{"accepted":false,"error":"unsupported subject"}"#.to_string().into(),
+                ))
             }
         };
-        if let Err(e) = &res {
-            warn!("failed to handle `{subject}` request: {e:?}");
+
+        if let Err(err) = &res {
+            error!(%subject, ?err, "failed to handle control interface request");
+        } else {
+            trace!(%subject, "handled control interface request");
         }
-        trace!("handled ctl request on {}", subject);
-        let headers = injector_to_headers(&TraceContextInjector::default_with_span());
-        match (reply, res) {
-            (Some(reply), Ok(Some(buf))) => {
-                if let Err(e) = self
+
+        if let Some(reply) = reply {
+            let headers = injector_to_headers(&TraceContextInjector::default_with_span());
+
+            let payload = match res {
+                Ok(Some(payload)) => Some(payload),
+                Ok(None) => {
+                    // No response from the host (e.g. auctioning provider)
+                    None
+                }
+                Err(e) => Some(format!(r#"{{"accepted":false,"error":"{e}"}}"#).into()),
+            };
+
+            if let Some(payload) = payload {
+                if let Err(err) = self
                     .ctl_nats
-                    .publish_with_headers(reply.clone(), headers, buf)
+                    .publish_with_headers(reply.clone(), headers, payload)
                     .err_into::<anyhow::Error>()
                     .and_then(|()| self.ctl_nats.flush().err_into::<anyhow::Error>())
                     .await
                 {
-                    error!("failed to publish success in response to `{subject}` request: {e:?}");
+                    error!(%subject, ?err, "failed to publish reply to control interface request");
                 }
             }
-            (Some(reply), Err(e)) => {
-                if let Err(e) = self
-                    .ctl_nats
-                    .publish_with_headers(
-                        reply.clone(),
-                        headers,
-                        format!(r#"{{"accepted":false,"error":"{e}"}}"#).into(),
-                    )
-                    .err_into::<anyhow::Error>()
-                    .and_then(|()| self.ctl_nats.flush().err_into::<anyhow::Error>())
-                    .await
-                {
-                    error!("failed to publish error: {e:?}");
-                }
-            }
-            _ => {}
         }
     }
 
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     async fn store_claims(&self, claims: Claims) -> anyhow::Result<()> {
         match &claims {
             Claims::Actor(claims) => {
@@ -3789,7 +3812,7 @@ impl Host {
         Ok(())
     }
 
-    #[instrument(skip(self, id, value))]
+    #[instrument(level = "debug", skip(self, id, value))]
     async fn process_linkdef_put(
         &self,
         id: impl AsRef<str>,
@@ -3811,14 +3834,9 @@ impl Host {
             "linkdef hash mismatch"
         );
 
-        debug!(
-            id,
+        info!(
             actor_id,
-            provider_id,
-            link_name,
-            contract_id,
-            ?values,
-            "process link definition entry put"
+            provider_id, link_name, contract_id, "process link definition entry put"
         );
 
         self.links.write().await.insert(id.to_string(), ld.clone()); // NOTE: this is one statement so the write lock is immediately dropped
@@ -3855,7 +3873,7 @@ impl Host {
         Ok(())
     }
 
-    #[instrument(skip(self, id, _value))]
+    #[instrument(level = "debug", skip(self, id, _value))]
     async fn process_linkdef_delete(
         &self,
         id: impl AsRef<str>,
@@ -3863,8 +3881,6 @@ impl Host {
         publish: bool,
     ) -> anyhow::Result<()> {
         let id = id.as_ref();
-
-        debug!(id, "process link definition entry deletion");
 
         // NOTE: There is a race condition here, which occurs when `linkdefs.del`
         // is used before `data_watch` task has fully imported the current lattice,
@@ -3882,6 +3898,12 @@ impl Host {
             .await
             .remove(id)
             .context("attempt to remove a non-existent link")?;
+
+        info!(
+            actor_id,
+            provider_id, link_name, contract_id, "process link definition entry deletion"
+        );
+
         if let Some(actor) = self.actors.read().await.get(actor_id) {
             let mut links = actor.handler.links.write().await;
             if let Some(links) = links.get_mut(contract_id) {
@@ -3910,7 +3932,7 @@ impl Host {
         Ok(())
     }
 
-    #[instrument(skip(self, pubkey, value))]
+    #[instrument(level = "debug", skip_all)]
     async fn process_claims_put(
         &self,
         pubkey: impl AsRef<str>,
@@ -3935,7 +3957,7 @@ impl Host {
         }
     }
 
-    #[instrument(skip(self, pubkey, value))]
+    #[instrument(level = "debug", skip_all)]
     async fn process_claims_delete(
         &self,
         pubkey: impl AsRef<str>,
@@ -3974,17 +3996,14 @@ impl Host {
         Ok(())
     }
 
-    #[instrument(skip_all)]
+    #[instrument(level = "trace", skip_all)]
     async fn process_entry(
         &self,
         async_nats::jetstream::kv::Entry {
-            bucket,
             key,
             value,
-            revision,
-            delta,
-            created,
             operation,
+            ..
         }: async_nats::jetstream::kv::Entry,
         publish: bool,
     ) {
@@ -4010,20 +4029,12 @@ impl Host {
                 Ok(())
             }
             _ => {
-                error!(
-                    bucket,
-                    key,
-                    revision,
-                    delta,
-                    ?created,
-                    ?operation,
-                    "unsupported KV bucket entry"
-                );
-                return;
+                warn!(key, ?operation, "unsupported KV bucket entry");
+                Ok(())
             }
         };
         if let Err(error) = &res {
-            warn!(?error, ?operation, bucket, "failed to process entry");
+            error!(key, ?operation, ?error, "failed to process KV bucket entry");
         }
     }
 

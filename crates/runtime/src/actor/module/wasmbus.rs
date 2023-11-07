@@ -221,7 +221,7 @@ fn guest_response(
     Ok(())
 }
 
-#[instrument(skip(handler, payload))]
+#[instrument(level = "trace", skip(handler, payload))]
 async fn handle(
     handler: &mut builtin::Handler,
     binding: String,
@@ -276,7 +276,7 @@ async fn handle(
     }
 }
 
-#[instrument(skip(store))]
+#[instrument(level = "trace", skip(store))]
 #[allow(clippy::too_many_arguments)]
 async fn host_call(
     mut store: wasmtime::Caller<'_, super::Ctx>,

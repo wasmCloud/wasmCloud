@@ -228,7 +228,7 @@ pub fn provider_health_check(
     })
 }
 
-#[instrument(level = "debug", skip(event_builder, ctl_nats, data))]
+#[instrument(level = "trace", skip(event_builder, ctl_nats, data))]
 pub(crate) async fn publish(
     event_builder: &EventBuilderV10,
     ctl_nats: &async_nats::Client,

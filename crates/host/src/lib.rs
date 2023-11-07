@@ -125,13 +125,13 @@ impl ResourceRef<'_> {
 }
 
 /// Fetch an actor from a reference.
-#[instrument(skip_all)]
+#[instrument(level = "debug", skip(allow_file_load, registry_config))]
 pub async fn fetch_actor(
-    actor_ref: impl AsRef<str>,
+    actor_ref: &str,
     allow_file_load: bool,
     registry_config: &HashMap<String, RegistryConfig>,
 ) -> anyhow::Result<Vec<u8>> {
-    match ResourceRef::try_from(actor_ref.as_ref())? {
+    match ResourceRef::try_from(actor_ref)? {
         ResourceRef::File(actor_ref) => {
             ensure!(
                 allow_file_load,
