@@ -203,17 +203,17 @@
                 ;
 
               imageName = "debian";
-              finalImageTag = "12.1-slim";
+              finalImageTag = "12.2-slim";
               finalImageName = "debian";
             };
 
           debian.aarch64 = pullDebian {
-            imageDigest = "sha256:3b9b661aeca5c7b4aba37d4258b86c9ed9154981cf0ae47051060dd601659866";
-            sha256 = "sha256-jjsR/k/cmSQGQON3V8GRrt96CAIoM4Uk7/eDOYvpS8c=";
+            imageDigest = "sha256:9ccb91746bf0b2e3e82b2dd37069ef9b358cb7d813217ea3fa430b940fc5dac3";
+            sha256 = "sha256-cb2lPuBXaQGMrVmvp/Gq0/PtNuTtlZzUmF3S+4jHVtQ=";
           };
           debian.x86_64 = pullDebian {
-            imageDigest = "sha256:a60c0c42bc6bdc09d91cd57067fcc952b68ad62de651c4cf939c27c9f007d1c5";
-            sha256 = "sha256-4ZLqoBoARp6DkVQzl6I0UJtklWb5/E/uZYXT7Ru6ugM=";
+            imageDigest = "sha256:ea5ad531efe1ac11ff69395d032909baf423b8b88e9aade07e11b40b2e5a1338";
+            sha256 = "sha256-k+x4aUW10YAQ7X20xxJxqW57y2k20sc4e7unh/kqQZQ=";
           };
 
           buildImage = {
