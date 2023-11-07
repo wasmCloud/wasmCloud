@@ -248,16 +248,13 @@ jobs:
     needs:
     - build-bin
     - test-linux
-    if: ${{ github.event_name != 'pull_request' && github.event_name != 'merge_group' }}
     steps:
     - uses: actions/checkout@v4.1.1
     - uses: ./.github/actions/install-nix
-      if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main'
       with: 
         cachixAuthToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
 
     - name: Extract tag context
-      if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main'
       id: ctx
       run: |
         echo 'owner=${GITHUB_REPOSITORY_OWNER,,}' >> $GITHUB_OUTPUT
@@ -274,6 +271,7 @@ jobs:
         password: ${{ secrets.AZURECR_PUSH_PASSWORD }}
 
     - name: Login to GitHub Container Registry
+      if: startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/wash-cli-v') || github.ref == 'refs/heads/main'
       uses: docker/login-action@v3
       with:
         registry: ghcr.io
@@ -287,12 +285,15 @@ jobs:
         username: ${{ secrets.DOCKERHUB_PUSH_USER }}
         password: ${{ secrets.DOCKERHUB_PUSH_PASSWORD }}
 
-    - run: nix profile install --inputs-from . 'nixpkgs#buildah'
+    - name: Install `buildah`
+      run: nix profile install --inputs-from . 'nixpkgs#buildah'
 
-    - if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main'
+    - name: Build wasmCloud image
+      if: ${{ !startsWith(github.ref, 'refs/tags/wash-cli-v') }}
       run: nix run -L .#build-wasmcloud-oci-debian wasmcloud
 
-    - if: startsWith(github.ref, 'refs/tags/wash-cli-v') || github.ref == 'refs/heads/main'
+    - name: Build wash image
+      if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
       run: nix run -L .#build-wash-oci-debian wash
 
     - name: Push commit rev
