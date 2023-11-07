@@ -5840,7 +5840,7 @@ dependencies = [
  "ring 0.17.5",
  "serde",
  "serde_json",
- "wasm-encoder 0.36.1",
+ "wasm-encoder 0.36.2",
  "wasm-gen",
  "wasmparser 0.116.1",
 ]
@@ -5956,7 +5956,7 @@ dependencies = [
  "wadm",
  "walkdir",
  "wascap 0.12.0",
- "wasm-encoder 0.36.1",
+ "wasm-encoder 0.36.2",
  "wasmcloud-component-adapters 0.2.4",
  "wasmcloud-control-interface 0.31.0",
  "wasmcloud-core",
@@ -6110,9 +6110,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-encoder"
-version = "0.36.1"
+version = "0.36.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "53ae0be20bf87918df4fa831bfbbd0b491d24aee407ed86360eae4c2c5608d38"
+checksum = "822b645bf4f2446b949776ffca47e2af60b167209ffb70814ef8779d299cd421"
 dependencies = [
  "leb128",
 ]
@@ -6139,7 +6139,7 @@ dependencies = [
  "serde_derive",
  "serde_json",
  "spdx",
- "wasm-encoder 0.36.1",
+ "wasm-encoder 0.36.2",
  "wasmparser 0.116.1",
 ]
 
@@ -7019,7 +7019,7 @@ dependencies = [
  "leb128",
  "memchr",
  "unicode-width",
- "wasm-encoder 0.36.1",
+ "wasm-encoder 0.36.2",
 ]
 
 [[package]]
@@ -7366,7 +7366,7 @@ checksum = "e10cc53b3e4c303d43369982cfa7400310f7df8bc414e0b63402e14d6b32aa2b"
 dependencies = [
  "anyhow",
  "heck 0.4.1",
- "wasm-encoder 0.36.1",
+ "wasm-encoder 0.36.2",
  "wasm-metadata",
  "wit-bindgen-core",
  "wit-component 0.17.0",
@@ -7437,7 +7437,7 @@ dependencies = [
  "serde",
  "serde_derive",
  "serde_json",
- "wasm-encoder 0.36.1",
+ "wasm-encoder 0.36.2",
  "wasm-metadata",
  "wasmparser 0.116.1",
  "wit-parser",
@@ -7456,7 +7456,7 @@ dependencies = [
  "serde",
  "serde_derive",
  "serde_json",
- "wasm-encoder 0.36.1",
+ "wasm-encoder 0.36.2",
  "wasm-metadata",
  "wasmparser 0.116.1",
  "wit-parser",
