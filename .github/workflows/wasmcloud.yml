@@ -358,7 +358,7 @@ jobs:
         docker run --rm wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/${{ matrix.bin }}:latest ${{ matrix.bin }} --version
 
   release:
-    if: (startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/wash-v')) && github.event_name == 'push'
+    if: startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/wash-cli-v')
     needs:
     - build-bin
     - build-doc
@@ -412,7 +412,7 @@ jobs:
         files: ./wash/*
 
   snapcraft:
-    if: startsWith(github.ref, 'refs/tags/wash-cli-v') && github.event_name == 'push'
+    if: startsWith(github.ref, 'refs/tags/wash-cli-v')
     needs: cargo
     runs-on: ubuntu-22.04
     steps:
@@ -431,7 +431,7 @@ jobs:
         release: edge
 
   nfpm:
-    if: startsWith(github.ref, 'refs/tags/wash-cli-v') && github.event_name == 'push'
+    if: startsWith(github.ref, 'refs/tags/wash-cli-v')
     needs:
     - cargo
     - build-bin
