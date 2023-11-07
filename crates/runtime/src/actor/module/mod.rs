@@ -28,7 +28,7 @@ use tracing::{instrument, trace};
 use wascap::jwt;
 use wasi_common::file::{FdFlags, FileType};
 use wasi_common::pipe::WritePipe;
-use wasmtime::TypedFunc;
+use wasmtime::{Linker, TypedFunc};
 use wasmtime_wasi::{WasiCtxBuilder, WasiFile};
 
 /// Actor module instance configuration
@@ -142,10 +142,11 @@ impl Ctx {
 /// Pre-compiled actor [Module], which is cheapily-[Cloneable](Clone)
 #[derive(Clone)]
 pub struct Module {
+    module: wasmtime::Module,
+    linker: Linker<Ctx>,
     claims: Option<jwt::Claims<jwt::Actor>>,
     config: Config,
     handler: builtin::HandlerBuilder,
-    module: wasmtime::Module,
 }
 
 impl Debug for Module {
@@ -159,16 +160,9 @@ impl Debug for Module {
     }
 }
 
-impl Module {
-    /// [Claims](jwt::Claims) associated with this [Module].
-    #[instrument(level = "trace")]
-    pub fn claims(&self) -> Option<&jwt::Claims<jwt::Actor>> {
-        self.claims.as_ref()
-    }
-}
-
 async fn instantiate(
     module: &wasmtime::Module,
+    mut linker: Linker<Ctx>,
     config: &Config,
     handler: impl Into<builtin::Handler>,
 ) -> anyhow::Result<Instance> {
@@ -182,15 +176,7 @@ async fn instantiate(
         wasmbus: wasmbus::Ctx::new(handler),
     };
 
-    let engine = module.engine();
-
-    let mut store = wasmtime::Store::new(engine, ctx);
-    let mut linker = wasmtime::Linker::<Ctx>::new(engine);
-
-    wasmtime_wasi::add_to_linker(&mut linker, |ctx| &mut ctx.wasi)
-        .context("failed to link WASI")?;
-    wasmbus::add_to_linker(&mut linker).context("failed to link wasmbus")?;
-
+    let mut store = wasmtime::Store::new(module.engine(), ctx);
     let memory = wasmtime::Memory::new(
         &mut store,
         wasmtime::MemoryType::new(config.min_memory_pages, config.max_memory_pages),
@@ -199,11 +185,11 @@ async fn instantiate(
     linker
         .define_name(&store, "memory", memory)
         .context("failed to define `memory`")?;
-
     let instance = linker
         .instantiate_async(&mut store, module)
         .await
         .context("failed to instantiate module")?;
+
     let start = instance.get_typed_func(&mut store, "_start");
     let guest_call = instance
         .get_typed_func::<guest_call::Params, guest_call::Result>(&mut store, "__guest_call");
@@ -229,18 +215,32 @@ impl Module {
         let wasm = wasm.as_ref();
         let claims = claims(wasm)?;
         let module = wasmtime::Module::new(&rt.engine, wasm).context("failed to compile module")?;
+
+        let mut linker = Linker::<Ctx>::new(module.engine());
+
+        wasmtime_wasi::add_to_linker(&mut linker, |ctx| &mut ctx.wasi)
+            .context("failed to link WASI")?;
+        wasmbus::add_to_linker(&mut linker).context("failed to link wasmbus")?;
+
         Ok(Self {
             module,
+            linker,
             claims,
             handler: rt.handler.clone(),
             config: rt.module_config,
         })
     }
 
+    /// [Claims](jwt::Claims) associated with this [Module].
+    #[instrument(level = "trace")]
+    pub fn claims(&self) -> Option<&jwt::Claims<jwt::Actor>> {
+        self.claims.as_ref()
+    }
+
     /// Like [Self::instantiate], but moves the [Module].
     #[instrument]
     pub async fn into_instance(self) -> anyhow::Result<Instance> {
-        instantiate(&self.module, &self.config, self.handler).await
+        instantiate(&self.module, self.linker, &self.config, self.handler).await
     }
 
     /// Like [Self::instantiate], but moves the [Module] and returns the associated [jwt::Claims].
@@ -248,14 +248,20 @@ impl Module {
     pub async fn into_instance_claims(
         self,
     ) -> anyhow::Result<(Instance, Option<jwt::Claims<jwt::Actor>>)> {
-        let instance = instantiate(&self.module, &self.config, self.handler).await?;
+        let instance = instantiate(&self.module, self.linker, &self.config, self.handler).await?;
         Ok((instance, self.claims))
     }
 
     /// Instantiates a [Module] and returns the resulting [Instance].
     #[instrument]
     pub async fn instantiate(&self) -> anyhow::Result<Instance> {
-        instantiate(&self.module, &self.config, self.handler.clone()).await
+        instantiate(
+            &self.module,
+            self.linker.clone(),
+            &self.config,
+            self.handler.clone(),
+        )
+        .await
     }
 
     /// Instantiate a [Module] producing an [Instance] and invoke an operation on it using [Instance::call]
