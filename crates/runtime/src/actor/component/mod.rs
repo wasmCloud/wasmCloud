@@ -233,8 +233,7 @@ impl Debug for Ctx {
 pub struct Component {
     component: wasmtime::component::Component,
     engine: wasmtime::Engine,
-    resolve: wit_parser::Resolve,
-    world: WorldId,
+    linker: Linker<Ctx>,
     claims: Option<jwt::Claims<jwt::Actor>>,
     handler: builtin::HandlerBuilder,
 }
@@ -493,25 +492,9 @@ fn wasifill(
 fn instantiate(
     component: wasmtime::component::Component,
     engine: &wasmtime::Engine,
-    resolve: &wit_parser::Resolve,
-    world: WorldId,
+    linker: Linker<Ctx>,
     handler: impl Into<builtin::Handler>,
 ) -> anyhow::Result<Instance> {
-    let mut linker = Linker::new(engine);
-
-    Interfaces::add_to_linker(&mut linker, |ctx| ctx)
-        .context("failed to link `Wasmcloud` interface")?;
-    wasmtime_wasi_http::bindings::wasi::http::types::add_to_linker(&mut linker, |ctx| ctx)
-        .context("failed to link `wasi:http/types` interface")?;
-    wasmtime_wasi_http::bindings::wasi::http::outgoing_handler::add_to_linker(&mut linker, |ctx| {
-        ctx
-    })
-    .context("failed to link `wasi:http/outgoing-handler` interface")?;
-
-    command::add_to_linker(&mut linker).context("failed to link core WASI interfaces")?;
-
-    wasifill(&component, resolve, world, &mut linker);
-
     let stdin = StdioStream::default();
     let stdout = StdioStream::default();
     let stderr = StdioStream::default();
@@ -557,11 +540,27 @@ impl Component {
         let claims = claims(wasm)?;
         let component = wasmtime::component::Component::new(&engine, wasm)
             .context("failed to compile component")?;
+
+        let mut linker = Linker::new(&engine);
+
+        Interfaces::add_to_linker(&mut linker, |ctx| ctx)
+            .context("failed to link `wasmcloud:host/interfaces` interface")?;
+        wasmtime_wasi_http::bindings::wasi::http::types::add_to_linker(&mut linker, |ctx| ctx)
+            .context("failed to link `wasi:http/types` interface")?;
+        wasmtime_wasi_http::bindings::wasi::http::outgoing_handler::add_to_linker(
+            &mut linker,
+            |ctx| ctx,
+        )
+        .context("failed to link `wasi:http/outgoing-handler` interface")?;
+
+        command::add_to_linker(&mut linker).context("failed to link core WASI interfaces")?;
+
+        wasifill(&component, &resolve, world, &mut linker);
+
         Ok(Self {
             component,
             engine,
-            resolve,
-            world,
+            linker,
             claims,
             handler: rt.handler.clone(),
         })
@@ -584,13 +583,7 @@ impl Component {
     pub fn into_instance_claims(
         self,
     ) -> anyhow::Result<(Instance, Option<jwt::Claims<jwt::Actor>>)> {
-        let instance = instantiate(
-            self.component,
-            &self.engine,
-            &self.resolve,
-            self.world,
-            self.handler,
-        )?;
+        let instance = instantiate(self.component, &self.engine, self.linker, self.handler)?;
         Ok((instance, self.claims))
     }
 
@@ -600,8 +593,7 @@ impl Component {
         instantiate(
             self.component.clone(),
             &self.engine,
-            &self.resolve,
-            self.world,
+            self.linker.clone(),
             self.handler.clone(),
         )
     }
