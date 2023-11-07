@@ -218,11 +218,19 @@
 
           buildImage = {
             fromImage ? null,
-            bin,
+            pkg,
+            name,
             architecture,
+            description,
           }: let
+            # ensure that only the binary corresponding to `$name` is copied to the image
+            bin = pkgs.runCommandLocal name {} ''
+              mkdir -p $out/bin
+              cp ${pkg}/bin/${name} $out/bin/${name}
+            '';
+
             copyToRoot = pkgs.buildEnv {
-              name = "wasmcloud";
+              inherit name;
               extraPrefix = "/usr"; # /bin is a symlink to /usr/bin on Debian, add a prefix to avoid replacing original `/bin`
               paths = [
                 bin
@@ -233,31 +241,93 @@
                 mv $out/usr/etc $out/etc
               '';
             };
+
+            version =
+              if name == "wasmcloud"
+              then (readTOML ./Cargo.toml).package.version
+              else if name == "wash"
+              then (readTOML ./crates/wash-cli/Cargo.toml).package.version
+              else throw "unsupported binary `${name}`";
           in
             pkgs.dockerTools.buildImage {
               inherit
                 architecture
-                fromImage
                 copyToRoot
+                fromImage
+                name
                 ;
-
-              name = "wasmcloud";
-              tag = "${bin.version}-${bin.passthru.target}";
-              config.Cmd = ["wasmcloud"];
-              config.Env = ["PATH=${bin}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"];
+              config.Cmd = [name];
+              config.Labels."org.opencontainers.image.description" = description;
+              config.Labels."org.opencontainers.image.source" = "https://github.com/wasmCloud/wasmCloud";
+              config.Labels."org.opencontainers.image.title" = name;
+              config.Labels."org.opencontainers.image.vendor" = "wasmCloud";
+              config.Labels."org.opencontainers.image.version" = version;
             };
 
-          wasmcloud-aarch64-unknown-linux-musl-oci-debian = buildImage {
-            bin = packages.wasmcloud-aarch64-unknown-linux-musl;
+          buildWashImage = {
+            pkg,
+            fromImage,
+            architecture,
+          }:
+            buildImage {
+              inherit
+                architecture
+                fromImage
+                pkg
+                ;
+              name = "wash";
+              description = "WAsmcloud SHell";
+            };
+          wash-aarch64-unknown-linux-musl-oci-debian = buildWashImage {
+            pkg = packages.wasmcloud-aarch64-unknown-linux-musl;
             fromImage = debian.aarch64;
             architecture = "arm64";
           };
-          wasmcloud-x86_64-unknown-linux-musl-oci-debian = buildImage {
-            bin = packages.wasmcloud-x86_64-unknown-linux-musl;
+          wash-x86_64-unknown-linux-musl-oci-debian = buildWashImage {
+            pkg = packages.wasmcloud-x86_64-unknown-linux-musl;
             fromImage = debian.x86_64;
             architecture = "amd64";
           };
 
+          buildWasmcloudImage = {
+            pkg,
+            fromImage,
+            architecture,
+          }:
+            buildImage {
+              inherit
+                architecture
+                fromImage
+                pkg
+                ;
+              name = "wasmcloud";
+              description = "wasmCloud host";
+            };
+          wasmcloud-aarch64-unknown-linux-musl-oci-debian = buildWasmcloudImage {
+            pkg = packages.wasmcloud-aarch64-unknown-linux-musl;
+            fromImage = debian.aarch64;
+            architecture = "arm64";
+          };
+          wasmcloud-x86_64-unknown-linux-musl-oci-debian = buildWasmcloudImage {
+            pkg = packages.wasmcloud-x86_64-unknown-linux-musl;
+            fromImage = debian.x86_64;
+            architecture = "amd64";
+          };
+
+          build-wash-oci-debian = pkgs.writeShellScriptBin "build-wash-oci-debian" ''
+            set -xe
+
+            build() {
+              ${pkgs.buildah}/bin/buildah manifest create "''${1}"
+
+              ${pkgs.buildah}/bin/buildah manifest add "''${1}" docker-archive:${wash-aarch64-unknown-linux-musl-oci-debian}
+              ${pkgs.buildah}/bin/buildah pull docker-archive:${wash-aarch64-unknown-linux-musl-oci-debian}
+
+              ${pkgs.buildah}/bin/buildah manifest add "''${1}" docker-archive:${wash-x86_64-unknown-linux-musl-oci-debian}
+              ${pkgs.buildah}/bin/buildah pull docker-archive:${wash-x86_64-unknown-linux-musl-oci-debian}
+            }
+            build "''${1:-wash:debian}"
+          '';
           build-wasmcloud-oci-debian = pkgs.writeShellScriptBin "build-wasmcloud-oci-debian" ''
             set -xe
 
@@ -276,7 +346,10 @@
           packages
           // {
             inherit
+              build-wash-oci-debian
               build-wasmcloud-oci-debian
+              wash-aarch64-unknown-linux-musl-oci-debian
+              wash-x86_64-unknown-linux-musl-oci-debian
               wasmcloud-aarch64-unknown-linux-musl-oci-debian
               wasmcloud-x86_64-unknown-linux-musl-oci-debian
               ;
