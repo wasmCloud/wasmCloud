@@ -5,6 +5,8 @@ pub use config::Host as HostConfig;
 
 mod event;
 
+mod metrics;
+
 use crate::{
     fetch_actor, socket_pair, OciConfig, PolicyAction, PolicyHostInfo, PolicyManager,
     PolicyRequestSource, PolicyRequestTarget, PolicyResponse, RegistryAuth, RegistryConfig,
@@ -225,6 +227,7 @@ struct ActorInstance {
     image_reference: String,
     actor_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::Actor>>>>, // TODO: use a single map once Claims is an enum
     provider_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::CapabilityProvider>>>>,
+    metrics: Arc<metrics::Metrics>,
 }
 
 impl Deref for ActorInstance {
@@ -1197,6 +1200,14 @@ impl ActorInstance {
         operation: &str,
         msg: Vec<u8>,
     ) -> anyhow::Result<Result<Vec<u8>, String>> {
+        //TODO link_def, lattice_id, source, version
+        self.metrics.actor_invocations.add(
+            1,
+            &[opentelemetry::KeyValue::new(
+                "actor_id",
+                self.image_reference.clone(),
+            )],
+        );
         // Validate that the actor has the capability to receive the invocation
         ensure_actor_capability(self.handler.claims.metadata.as_ref(), contract_id)?;
 
@@ -1523,6 +1534,7 @@ pub struct Host {
     links: RwLock<HashMap<String, LinkDefinition>>,
     actor_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::Actor>>>>, // TODO: use a single map once Claims is an enum
     provider_claims: Arc<RwLock<HashMap<String, jwt::Claims<jwt::CapabilityProvider>>>>,
+    metrics: Arc<metrics::Metrics>,
 }
 
 #[allow(clippy::large_enum_variant)] // Without this clippy complains actor is at least 0 bytes while provider is at least 280 bytes. That doesn't make sense
@@ -1991,7 +2003,7 @@ impl Host {
             heartbeat: heartbeat_abort.clone(),
             ctl_topic_prefix: config.ctl_topic_prefix.clone(),
             host_key,
-            labels,
+            labels: labels.clone(),
             ctl_nats,
             rpc_nats,
             host_config: config,
@@ -2009,6 +2021,7 @@ impl Host {
             links: RwLock::default(),
             actor_claims: Arc::default(),
             provider_claims: Arc::default(),
+            metrics: Arc::new(metrics::Metrics::new(&labels)),
         };
 
         let host = Arc::new(host);
@@ -2280,6 +2293,8 @@ impl Host {
                 image_reference: actor_ref.to_string(),
                 actor_claims: Arc::clone(&self.actor_claims),
                 provider_claims: Arc::clone(&self.provider_claims),
+                // TODO ...
+                metrics: self.metrics.clone(),
             });
 
             let _calls = spawn({
@@ -2310,7 +2325,8 @@ impl Host {
         instance.calls.abort();
     }
 
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip(self, entry, actor, annotations))]
+    // TODO(pgray) metrics
     async fn start_actor<'a>(
         &self,
         entry: hash_map::VacantEntry<'a, String, Arc<Actor>>,
@@ -2320,6 +2336,10 @@ impl Host {
         host_id: &str,
         annotations: impl Into<Annotations>,
     ) -> anyhow::Result<&'a mut Arc<Actor>> {
+        //self.metrics.actor_counter.add(
+        //    1,
+        //    &[opentelemetry::KeyValue::new("actor_id", actor_ref.clone())],
+        //);
         debug!(actor_ref, ?max, "starting new actor");
 
         let annotations = annotations.into();
@@ -2579,6 +2599,8 @@ impl Host {
         payload: impl AsRef<[u8]>,
         host_id: &str,
     ) -> anyhow::Result<Bytes> {
+        //TODO
+        //self.metrics.actor_scale.add
         let ScaleActorCommand {
             actor_ref,
             annotations,

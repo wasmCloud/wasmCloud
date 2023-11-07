@@ -47,3 +47,7 @@ wasmcloud-control-interface = { workspace = true }
 wasmcloud-core = { workspace = true, features = ["otel"] }
 wasmcloud-runtime = { workspace = true }
 wasmcloud-tracing = { workspace = true, features = ["otel"] }
+opentelemetry = { workspace = true, features = ["metrics"] }
+
+[dev-dependencies]
+toml = { workspace = true, features = ["parse"] }
