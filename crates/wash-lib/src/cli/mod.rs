@@ -241,8 +241,8 @@ impl TryFrom<CliConnectionOpts> for WashConnectionOptions {
             ctl_credsfile,
             js_domain,
             lattice_prefix,
-            ctx,
             timeout_ms,
+            ctx,
         })
     }
 }
@@ -402,55 +402,39 @@ fn img_name_to_file_name(img: &str) -> String {
     img.replace([':', '/', '.'], "_")
 }
 
-pub async fn get_lattice_prefix_and_nats_client_from_cli_connection_opts(
-    opts: CliConnectionOpts,
-) -> Result<(Option<String>, async_nats::client::Client)> {
-    let connection_opts = <CliConnectionOpts as TryInto<WashConnectionOptions>>::try_into(opts)?;
-
-    let lattice_prefix = connection_opts.lattice_prefix.clone().unwrap_or_else(|| {
-        connection_opts
-            .ctx
-            .as_ref()
-            .map(|c| c.lattice_prefix.clone())
-            .unwrap_or_else(|| DEFAULT_LATTICE_PREFIX.to_string())
-    });
-    let client = connection_opts.into_nats_client().await?;
-
-    Ok((Some(lattice_prefix), client))
-}
-
 #[cfg(test)]
 mod test {
     use anyhow::Result;
     use std::env;
 
     use crate::{
-        config::{DEFAULT_CTX_DIR_NAME, DEFAULT_LATTICE_PREFIX, WASH_DIR},
+        config::{WashConnectionOptions, DEFAULT_CTX_DIR_NAME, DEFAULT_LATTICE_PREFIX, WASH_DIR},
         context::{fs::ContextDir, ContextManager, WashContext},
     };
 
-    use super::{get_lattice_prefix_and_nats_client_from_cli_connection_opts, CliConnectionOpts};
+    use super::CliConnectionOpts;
 
     #[tokio::test]
-    async fn test_lattice_prefix_and_nats_client_from_cmd_opts() -> Result<()> {
+    async fn test_lattice_prefix() -> Result<()> {
         let tempdir = tempfile::tempdir()?;
         env::set_current_dir(&tempdir)?;
         env::set_var("HOME", tempdir.path());
 
         // when opts.lattice_prefix.is_none() && opts.context.is_none() && user didn't set a default context, use the lattice_prefix from the preset default context...
-        let opts = CliConnectionOpts::default();
-        let (lattice_prefix, _) =
-            get_lattice_prefix_and_nats_client_from_cli_connection_opts(opts).await?;
-        assert_eq!(lattice_prefix, Some(DEFAULT_LATTICE_PREFIX.to_string()));
+        let cli_opts = CliConnectionOpts::default();
+        let wash_opts = WashConnectionOptions::try_from(cli_opts)?;
+        assert_eq!(
+            wash_opts.get_lattice_prefix(),
+            DEFAULT_LATTICE_PREFIX.to_string()
+        );
 
         // when opts.lattice_prefix.is_some() && opts.context.is_none(), use the specified lattice_prefix...
-        let opts = CliConnectionOpts {
+        let cli_opts = CliConnectionOpts {
             lattice_prefix: Some("hal9000".to_string()),
             ..Default::default()
         };
-        let (lattice_prefix, _) =
-            get_lattice_prefix_and_nats_client_from_cli_connection_opts(opts).await?;
-        assert_eq!(lattice_prefix, Some("hal9000".to_string()));
+        let wash_opts = WashConnectionOptions::try_from(cli_opts)?;
+        assert_eq!(wash_opts.get_lattice_prefix(), "hal9000".to_string());
 
         let context_dir = ContextDir::new(
             tempdir
@@ -465,13 +449,12 @@ mod test {
             ..Default::default()
         })?;
         let context_file = context_dir.get_context_path("foo")?.unwrap();
-        let opts = CliConnectionOpts {
+        let cli_opts = CliConnectionOpts {
             context: Some(context_file.clone()),
             ..Default::default()
         };
-        let (lattice_prefix, _) =
-            get_lattice_prefix_and_nats_client_from_cli_connection_opts(opts).await?;
-        assert_eq!(lattice_prefix, Some("iambatman".to_string()));
+        let wash_opts = WashConnectionOptions::try_from(cli_opts)?;
+        assert_eq!(wash_opts.get_lattice_prefix(), "iambatman".to_string());
 
         // when opts.lattice_prefix.is_none() && opts.context.is_none(), use the lattice_prefix from the specified default context...
         context_dir.save_context(&WashContext {
@@ -480,10 +463,9 @@ mod test {
             ..Default::default()
         })?;
         context_dir.set_default_context("bar")?;
-        let opts = CliConnectionOpts::default();
-        let (lattice_prefix, _) =
-            get_lattice_prefix_and_nats_client_from_cli_connection_opts(opts).await?;
-        assert_eq!(lattice_prefix, Some("iamironman".to_string()));
+        let cli_opts = CliConnectionOpts::default();
+        let wash_opts = WashConnectionOptions::try_from(cli_opts)?;
+        assert_eq!(wash_opts.get_lattice_prefix(), "iamironman".to_string());
 
         Ok(())
     }

@@ -208,6 +208,16 @@ impl WashConnectionOptions {
 
         Ok(nc)
     }
+
+    /// Either returns the opts.lattice prefix or opts.ctx.lattice_prefix... if both are absent/None,  returns the default lattice prefix (DEFAULT_LATTICE_PREFIX).
+    pub fn get_lattice_prefix(&self) -> String {
+        self.lattice_prefix.clone().unwrap_or_else(|| {
+            self.ctx
+                .as_ref()
+                .map(|c| c.lattice_prefix.clone())
+                .unwrap_or_else(|| DEFAULT_LATTICE_PREFIX.to_string())
+        })
+    }
 }
 
 /// Reads the content of a string if it is a valid file path, otherwise returning the string
