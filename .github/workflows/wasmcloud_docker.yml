@@ -1,0 +1,11 @@
+name: Build and Deploy Docker Artifact
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  teehee:
+    runs-on: ubuntu-22.04
+    steps:
+      - run: echo teehee
