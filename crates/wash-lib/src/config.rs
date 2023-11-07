@@ -12,7 +12,7 @@ use wasmcloud_control_interface::{Client as CtlClient, ClientBuilder as CtlClien
 
 use crate::context::WashContext;
 
-const WASH_DIR: &str = ".wash";
+pub const WASH_DIR: &str = ".wash";
 
 const DOWNLOADS_DIR: &str = "downloads";
 pub const DEFAULT_NATS_HOST: &str = "127.0.0.1";

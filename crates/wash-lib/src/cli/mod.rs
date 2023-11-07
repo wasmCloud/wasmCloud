@@ -240,9 +240,12 @@ impl TryFrom<CliConnectionOpts> for WashConnectionOptions {
             ctl_seed,
             ctl_credsfile,
             js_domain,
-            lattice_prefix,
-            timeout_ms,
+            lattice_prefix: match lattice_prefix {
+                Some(l) => Some(l),
+                None => ctx.as_ref().map(|c| c.lattice_prefix.clone()),
+            },
             ctx,
+            timeout_ms,
         })
     }
 }
