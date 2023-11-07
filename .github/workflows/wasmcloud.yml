@@ -263,7 +263,7 @@ jobs:
         echo 'wasmcloud_version=${GITHUB_REF_NAME#v}' >> $GITHUB_OUTPUT
 
     - name: Login to AzureCR
-      if: startswith(github.ref, 'refs/tags/v') || startswith(github.ref, 'refs/tags/wash-cli-v')
+      if: startswith(github.ref, 'refs/tags/v') || startswith(github.ref, 'refs/tags/wash-cli-v')|| github.ref == 'refs/heads/main'
       uses: azure/docker-login@v1
       with:
         login-server: ${{ secrets.AZURECR_PUSH_URL }}
@@ -279,7 +279,7 @@ jobs:
         password: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Login to DockerHub
-      if: startswith(github.ref, 'refs/tags/v') || startswith(github.ref, 'refs/tags/wash-cli-v')
+      if: startswith(github.ref, 'refs/tags/v') || startswith(github.ref, 'refs/tags/wash-cli-v')|| github.ref == 'refs/heads/main'
       uses: docker/login-action@v3
       with:
         username: ${{ secrets.DOCKERHUB_PUSH_USER }}
@@ -296,7 +296,7 @@ jobs:
       if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
       run: nix run -L .#build-wash-oci-debian wash
 
-    - name: Push commit rev
+    - name: Push wasmCloud and wash commit rev tag
       if: startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/wash-cli-v') || github.ref == 'refs/heads/main'
       run: |
         buildah manifest push --storage-driver=vfs --all --format 'v2s2' wash docker://ghcr.io/${{ steps.ctx.outputs.owner }}/wash:${{ github.sha }}
@@ -311,7 +311,7 @@ jobs:
         docker run ghcr.io/${{ steps.ctx.outputs.owner }}/wasmcloud:${{ github.sha }} wasmcloud --version
         docker run ghcr.io/${{ steps.ctx.outputs.owner }}/wasmcloud:${{ steps.ctx.outputs.sha_short }} wasmcloud --version
 
-    - name: Push wasmCloud tag
+    - name: Push wasmCloud version tag
       if: startswith(github.ref, 'refs/tags/v')
       run: |
         buildah manifest push --storage-driver=vfs --all --format 'v2s2' wasmcloud docker://${{ steps.ctx.outputs.owner }}/wasmcloud:${{ steps.ctx.outputs.wasmcloud_version }}
@@ -322,7 +322,7 @@ jobs:
         docker run ghcr.io/${{ steps.ctx.outputs.owner }}/wasmcloud:${{ steps.ctx.outputs.wasmcloud_version }} wasmcloud --version
         docker run wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/wasmcloud:${{ steps.ctx.outputs.wasmcloud_version }} wasmcloud --version
 
-    - name: Push wash tag
+    - name: Push wash version tag
       if: startswith(github.ref, 'refs/tags/wash-cli-v')
       run: |
         buildah manifest push --storage-driver=vfs --all --format 'v2s2' wash docker://${{ steps.ctx.outputs.owner }}/wash:${{ steps.ctx.outputs.wash_version }}
@@ -333,7 +333,7 @@ jobs:
         docker run ghcr.io/${{ steps.ctx.outputs.owner }}/wash:${{ steps.ctx.outputs.wash_version }} wash --version
         docker run wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/wash:${{ steps.ctx.outputs.wash_version }} wash --version
 
-    - name: Push latest wasmCloud tag
+    - name: Push `latest` wasmCloud tag
       if: startswith(github.ref, 'refs/tags/v') && !contains(github.ref, '-')
       run: |
         buildah manifest push --storage-driver=vfs --all --format 'v2s2' wasmcloud docker://${{ steps.ctx.outputs.owner }}/wasmcloud:latest
@@ -344,7 +344,18 @@ jobs:
         docker run ghcr.io/${{ steps.ctx.outputs.owner }}/wasmcloud:latest wasmcloud --version
         docker run wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/wasmcloud:latest wasmcloud --version
 
-    - name: Push latest wash tag
+    - name: Push `canary` wash tag
+      if: github.ref == 'refs/heads/main'
+      run: |
+        buildah manifest push --storage-driver=vfs --all --format 'v2s2' wash docker://${{ steps.ctx.outputs.owner }}/wash:canary
+        buildah manifest push --storage-driver=vfs --all --format 'v2s2' wash docker://ghcr.io/${{ steps.ctx.outputs.owner }}/wash:canary
+        buildah manifest push --storage-driver=vfs --all --format 'v2s2' wash docker://wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/wash:canary
+
+        docker run ${{ steps.ctx.outputs.owner }}/wash:canary wash --version
+        docker run ghcr.io/${{ steps.ctx.outputs.owner }}/wash:canary wash --version
+        docker run wasmcloud.azurecr.io/${{ steps.ctx.outputs.owner }}/wash:canary wash --version
+
+    - name: Push `latest` wash tag
       if: startswith(github.ref, 'refs/tags/wash-cli-v') && !contains(github.ref, '-')
       run: |
         buildah manifest push --storage-driver=vfs --all --format 'v2s2' wash docker://${{ steps.ctx.outputs.owner }}/wash:latest
