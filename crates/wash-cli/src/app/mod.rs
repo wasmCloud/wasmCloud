@@ -9,8 +9,10 @@ use wadm::server::{
 };
 use wash_lib::{
     app::{load_app_manifest, AppManifest},
-    cli::{CliConnectionOpts, CommandOutput, OutputKind},
-    config::WashConnectionOptions,
+    cli::{
+        get_lattice_prefix_and_nats_client_from_cli_connection_opts, CliConnectionOpts,
+        CommandOutput, OutputKind,
+    },
 };
 
 use crate::appearance::spinner::Spinner;
@@ -177,7 +179,7 @@ pub async fn handle_command(
 
 async fn undeploy_model(cmd: UndeployCommand) -> Result<DeployModelResponse> {
     let (lattice_prefix, client) =
-        get_lattice_prefix_and_nats_client_from_cmd_opts(cmd.opts).await?;
+        get_lattice_prefix_and_nats_client_from_cli_connection_opts(cmd.opts).await?;
 
     wash_lib::app::undeploy_model(
         &client,
@@ -190,7 +192,7 @@ async fn undeploy_model(cmd: UndeployCommand) -> Result<DeployModelResponse> {
 
 async fn deploy_model(cmd: DeployCommand) -> Result<DeployModelResponse> {
     let (lattice_prefix, client) =
-        get_lattice_prefix_and_nats_client_from_cmd_opts(cmd.opts).await?;
+        get_lattice_prefix_and_nats_client_from_cli_connection_opts(cmd.opts).await?;
 
     let app_manifest = match cmd.application {
         Some(source) => load_app_manifest(source.parse()?).await?,
@@ -216,7 +218,7 @@ async fn deploy_model(cmd: DeployCommand) -> Result<DeployModelResponse> {
 
 async fn put_model(cmd: PutCommand) -> Result<PutModelResponse> {
     let (lattice_prefix, client) =
-        get_lattice_prefix_and_nats_client_from_cmd_opts(cmd.opts).await?;
+        get_lattice_prefix_and_nats_client_from_cli_connection_opts(cmd.opts).await?;
 
     let app_manifest = match &cmd.source {
         Some(source) => load_app_manifest(source.parse()?).await?,
@@ -235,21 +237,21 @@ async fn put_model(cmd: PutCommand) -> Result<PutModelResponse> {
 
 async fn get_model_history(cmd: HistoryCommand) -> Result<VersionResponse> {
     let (lattice_prefix, client) =
-        get_lattice_prefix_and_nats_client_from_cmd_opts(cmd.opts).await?;
+        get_lattice_prefix_and_nats_client_from_cli_connection_opts(cmd.opts).await?;
 
     wash_lib::app::get_model_history(&client, lattice_prefix, &cmd.model_name).await
 }
 
 async fn get_model_details(cmd: GetCommand) -> Result<GetModelResponse> {
     let (lattice_prefix, client) =
-        get_lattice_prefix_and_nats_client_from_cmd_opts(cmd.opts).await?;
+        get_lattice_prefix_and_nats_client_from_cli_connection_opts(cmd.opts).await?;
 
     wash_lib::app::get_model_details(&client, lattice_prefix, &cmd.model_name, cmd.version).await
 }
 
 async fn delete_model_version(cmd: DeleteCommand) -> Result<DeleteModelResponse> {
     let (lattice_prefix, client) =
-        get_lattice_prefix_and_nats_client_from_cmd_opts(cmd.opts).await?;
+        get_lattice_prefix_and_nats_client_from_cli_connection_opts(cmd.opts).await?;
 
     wash_lib::app::delete_model_version(
         &client,
@@ -263,18 +265,8 @@ async fn delete_model_version(cmd: DeleteCommand) -> Result<DeleteModelResponse>
 
 async fn get_models(cmd: ListCommand) -> Result<Vec<ModelSummary>> {
     let (lattice_prefix, client) =
-        get_lattice_prefix_and_nats_client_from_cmd_opts(cmd.opts).await?;
+        get_lattice_prefix_and_nats_client_from_cli_connection_opts(cmd.opts).await?;
     wash_lib::app::get_models(&client, lattice_prefix).await
-}
-
-async fn get_lattice_prefix_and_nats_client_from_cmd_opts(
-    opts: CliConnectionOpts,
-) -> Result<(Option<String>, async_nats::client::Client)> {
-    let connection_opts = <CliConnectionOpts as TryInto<WashConnectionOptions>>::try_into(opts)?;
-    let lattice_prefix = connection_opts.lattice_prefix.clone();
-    let client = connection_opts.into_nats_client().await?;
-
-    Ok((lattice_prefix, client))
 }
 
 fn list_models_output(results: Vec<ModelSummary>) -> CommandOutput {
@@ -322,69 +314,4 @@ fn show_model_history(results: VersionResponse) -> CommandOutput {
     let mut map = HashMap::new();
     map.insert("revisions".to_string(), json!(results));
     CommandOutput::new(output::list_revisions_table(results.versions), map)
-}
-
-#[cfg(test)]
-mod test {
-    use super::get_lattice_prefix_and_nats_client_from_cmd_opts;
-    use anyhow::Result;
-    use std::env;
-    use wash_lib::{
-        cli::CliConnectionOpts,
-        config::{DEFAULT_CTX_DIR_NAME, DEFAULT_LATTICE_PREFIX, WASH_DIR},
-        context::{fs::ContextDir, ContextManager, WashContext},
-    };
-
-    #[tokio::test]
-    async fn test_lattice_prefix_and_nats_client_from_cmd_opts() -> Result<()> {
-        let tempdir = tempfile::tempdir()?;
-        env::set_current_dir(&tempdir)?;
-        env::set_var("HOME", tempdir.path());
-
-        // when opts.lattice_prefix.is_none() && opts.context.is_none() && user didn't set a default context, use the lattice_prefix from the preset default context...
-        let opts = CliConnectionOpts::default();
-        let (lattice_prefix, _) = get_lattice_prefix_and_nats_client_from_cmd_opts(opts).await?;
-        assert_eq!(lattice_prefix, Some(DEFAULT_LATTICE_PREFIX.to_string()));
-
-        // when opts.lattice_prefix.is_some() && opts.context.is_none(), use the specified lattice_prefix...
-        let opts = CliConnectionOpts {
-            lattice_prefix: Some("hal9000".to_string()),
-            ..Default::default()
-        };
-        let (lattice_prefix, _) = get_lattice_prefix_and_nats_client_from_cmd_opts(opts).await?;
-        assert_eq!(lattice_prefix, Some("hal9000".to_string()));
-
-        let context_dir = ContextDir::new(
-            tempdir
-                .path()
-                .join([WASH_DIR, DEFAULT_CTX_DIR_NAME].concat()),
-        )?;
-
-        // when opts.lattice_prefix.is_none() && opts.context.is_some(), use the lattice_prefix from the specified context...
-        context_dir.save_context(&WashContext {
-            name: "foo".to_string(),
-            lattice_prefix: "iambatman".to_string(),
-            ..Default::default()
-        })?;
-        let context_file = context_dir.get_context_path("foo")?.unwrap();
-        let opts = CliConnectionOpts {
-            context: Some(context_file.clone()),
-            ..Default::default()
-        };
-        let (lattice_prefix, _) = get_lattice_prefix_and_nats_client_from_cmd_opts(opts).await?;
-        assert_eq!(lattice_prefix, Some("iambatman".to_string()));
-
-        // when opts.lattice_prefix.is_none() && opts.context.is_none(), use the lattice_prefix from the specified default context...
-        context_dir.save_context(&WashContext {
-            name: "bar".to_string(),
-            lattice_prefix: "iamironman".to_string(),
-            ..Default::default()
-        })?;
-        context_dir.set_default_context("bar")?;
-        let opts = CliConnectionOpts::default();
-        let (lattice_prefix, _) = get_lattice_prefix_and_nats_client_from_cmd_opts(opts).await?;
-        assert_eq!(lattice_prefix, Some("iamironman".to_string()));
-
-        Ok(())
-    }
 }
