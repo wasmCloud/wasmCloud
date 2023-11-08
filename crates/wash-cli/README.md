@@ -120,7 +120,7 @@ There are three main sections of a `wasmcloud.toml` file: common config, languag
 #### Language Config - [rust]
 
 > [!IMPORTANT]
-> To build actors written in Rust, `wash` uses the `cargo` toolchain. To set up Rust, we recommend using [rustup](https://doc.rust-lang.org/cargo/getting-started/installation.html#install-rust-and-cargo).
+> To build actors written in Rust, `wash` uses the `cargo` toolchain. To set up Rust, we recommend using [`rustup`](https://doc.rust-lang.org/cargo/getting-started/installation.html#install-rust-and-cargo).
 
 | Setting     | Type   | Default       | Description                             |
 | ----------- | ------ | ------------- | --------------------------------------- |
