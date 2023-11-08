@@ -5,7 +5,7 @@ pub use config::Host as HostConfig;
 
 mod event;
 
-mod metrics;
+pub mod metrics;
 
 use crate::{
     fetch_actor, socket_pair, OciConfig, PolicyAction, PolicyHostInfo, PolicyManager,
@@ -2006,7 +2006,7 @@ impl Host {
             labels: labels.clone(),
             ctl_nats,
             rpc_nats,
-            host_config: config,
+            host_config: config.clone(),
             data: data.clone(),
             data_watch: data_watch_abort.clone(),
             policy_manager,
@@ -2021,7 +2021,7 @@ impl Host {
             links: RwLock::default(),
             actor_claims: Arc::default(),
             provider_claims: Arc::default(),
-            metrics: Arc::new(metrics::Metrics::new(&labels)),
+            metrics: Arc::new(metrics::Metrics::new(config.metric_backend, &labels)),
         };
 
         let host = Arc::new(host);
@@ -2587,6 +2587,10 @@ impl Host {
         self.data_watch.abort();
         self.queue.abort();
         self.policy_manager.policy_changes.abort();
+        match self.metrics.shutdown() {
+            Ok(()) => (),
+            Err(e) => error!(e, "error"),
+        };
         let deadline =
             timeout.and_then(|timeout| Instant::now().checked_add(Duration::from_millis(timeout)));
         self.stop_tx.send_replace(deadline);

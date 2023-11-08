@@ -15,6 +15,7 @@ use wasmcloud_core::OtelConfig;
 use wasmcloud_host::oci::Config as OciConfig;
 use wasmcloud_host::url::Url;
 use wasmcloud_host::wasmbus::config::PolicyService as PolicyServiceConfig;
+use wasmcloud_host::wasmbus::metrics::{self, MetricBackend};
 use wasmcloud_host::WasmbusHostConfig;
 use wasmcloud_tracing::configure_tracing;
 
@@ -213,6 +214,52 @@ struct Args {
         env = "OTEL_EXPORTER_OTLP_ENDPOINT"
     )]
     otel_exporter_otlp_endpoint: Option<String>,
+    #[clap(long = "otel-metric-endpoint", env = "OTEL_EXPORTER_METRICS_ENDPOINT", default_value = metrics::DEFAULT_OTEL_METRICS_ENDPOINT)]
+    otel_metrics_endpoint: String,
+    // Enable metrics
+    #[clap(
+        long = "enable-metrics",
+        default_value_t = false,
+        env = "WASMCLOUD_ENABLE_METRICS"
+    )]
+    enable_metrics: bool,
+    // Specify metrics exporter. Defaults to stdout but also supports otlp and prometheus
+    #[clap(
+        long = "metrics-type",
+        default_value_t = MetricType::Debug,
+        env = "WASMCLOUD_METRICS_TYPE"
+    )]
+    metrics_type: MetricType,
+    #[clap(long = "metrics-prometheus-port", env = "WASMCLOUD_METRICS_PROMETHEUS_PORT", default_value_t = metrics::DEFAULT_PROMETHEUS_PORT)]
+    metrics_prometheus_port: i32,
+}
+
+#[derive(clap::ValueEnum, Clone, Debug)]
+enum MetricType {
+    Otlp,
+    Prometheus,
+    Debug,
+}
+impl std::fmt::Display for MetricType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::Otlp => "otlp",
+            Self::Prometheus => "prometheus",
+            Self::Debug => "debug",
+        };
+        s.fmt(f)
+    }
+}
+impl std::str::FromStr for MetricType {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "otlp" => Ok(Self::Otlp),
+            "prometheus" => Ok(Self::Prometheus),
+            "debug" => Ok(Self::Debug),
+            _ => Err(format!("unknown metrics type: {s}")),
+        }
+    }
 }
 
 const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
@@ -328,6 +375,8 @@ async fn main() -> anyhow::Result<()> {
         enable_structured_logging: args.enable_structured_logging,
         otel_config,
         policy_service_config,
+        enable_metrics: args.enable_metrics,
+        metric_backend: MetricBackend::Debug,
     }))
     .await
     .context("failed to initialize host")?;

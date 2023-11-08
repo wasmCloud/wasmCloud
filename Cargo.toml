@@ -115,6 +115,9 @@ once_cell = { version = "1", default-features = false }
 opentelemetry = { version = "0.20", default-features = false }
 opentelemetry-nats = { version = "0", path = "./crates/opentelemetry-nats", default-features = false }
 opentelemetry-otlp = { version = "0.13", default-features = false }
+opentelemetry-prometheus = { version = "0.13" }
+prometheus = "0.13.3"
+opentelemetry-stdout = { version = "0.1.0", features = ["metrics"] }
 path-absolutize = { version = "3", default-features = false }
 proc-macro2 = { version = "1", default-features = false }
 provider-archive = { version = "0", path = "./crates/provider-archive", default-features = false }

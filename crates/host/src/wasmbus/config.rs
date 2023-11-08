@@ -8,6 +8,8 @@ use nkeys::KeyPair;
 use url::Url;
 use wasmcloud_core::{logging::Level as LogLevel, OtelConfig};
 
+use super::metrics::MetricBackend;
+
 /// wasmCloud Host configuration
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Debug)]
@@ -60,6 +62,11 @@ pub struct Host {
     pub otel_config: OtelConfig,
     /// configuration for wasmCloud policy service
     pub policy_service_config: PolicyService,
+    /// Whether or not metrics are enabled
+    pub enable_metrics: bool,
+    // TODO otlp/prometheus
+    /// The metric backend to use: otlp or prometheus
+    pub metric_backend: MetricBackend,
 }
 
 /// Configuration for wasmCloud policy service
@@ -102,6 +109,8 @@ impl Default for Host {
             config_service_enabled: false,
             otel_config: OtelConfig::default(),
             policy_service_config: PolicyService::default(),
+            enable_metrics: false,
+            metric_backend: MetricBackend::Debug,
         }
     }
 }
