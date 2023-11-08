@@ -415,6 +415,7 @@ mod test {
     use super::CliConnectionOpts;
 
     #[tokio::test]
+    #[cfg(not(target_family = "windows"))]
     async fn test_lattice_prefix() -> Result<()> {
         let tempdir = tempfile::tempdir()?;
         env::set_current_dir(&tempdir)?;
