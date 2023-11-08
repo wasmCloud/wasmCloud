@@ -1,6 +1,7 @@
 [package]
 name = "wasmcloud-tracing"
 version = "0.1.0"
+description = "wasmCloud tracing functionality"
 
 authors.workspace = true
 categories.workspace = true
