@@ -15,7 +15,7 @@ const NKEYS_EXTENSION: &str = ".nk";
 pub enum KeysCliCommand {
     #[clap(name = "gen", about = "Generates a keypair")]
     GenCommand {
-        /// The type of keypair to generate. May be Account, User, Module (Actor), Service (Capability Provider), Server (Host), Operator, Cluster
+        /// The type of keypair to generate. May be Account, User, Module (or Actor), Service (or Provider), Server (or Host), Operator, Cluster
         keytype: String,
     },
     #[clap(name = "get", about = "Retrieves a keypair and prints the contents")]
@@ -65,7 +65,7 @@ pub fn keytype_parser(keytype: &str) -> Result<KeyPairType> {
         "operator" => Ok(KeyPairType::Operator),
         "cluster" => Ok(KeyPairType::Cluster),
         _ => Err(anyhow::anyhow!(
-            "Invalid key type. Must be one of Account, User, Module (Actor), Service (Provider), Server (Host), Operator, Cluster"
+            "Invalid key type. Must be one of Account, User, Module (or Actor), Service (or Provider), Server (or Host), Operator, Cluster"
         )),
     }
 }
