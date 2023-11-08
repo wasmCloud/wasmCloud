@@ -109,11 +109,19 @@ There are three main sections of a `wasmcloud.toml` file: common config, languag
 
 
 #### Language Config - [tinygo]
+
+> [!IMPORTANT]
+> To build actors written in Go, `wash` uses the `tinygo` compiler toolchain. To set up TinyGo, we recommend the [official installation instructions](https://tinygo.org/getting-started/install/).
+
 | Setting     | Type   | Default        | Description                   |
 | ----------- | ------ | -------------- | ----------------------------- |
 | tinygo_path | string | `which tinygo` | The path to the tinygo binary |
 
 #### Language Config - [rust]
+
+> [!IMPORTANT]
+> To build actors written in Rust, `wash` uses the `cargo` toolchain. To set up Rust, we recommend using [rustup](https://doc.rust-lang.org/cargo/getting-started/installation.html#install-rust-and-cargo).
+
 | Setting     | Type   | Default       | Description                             |
 | ----------- | ------ | ------------- | --------------------------------------- |
 | cargo_path  | string | `which cargo` | The path to the cargo binary            |
