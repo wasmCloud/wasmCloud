@@ -28,7 +28,7 @@ pub fn default_timeout_ms() -> u64 {
 /// Transform a json string (e.g. "{"hello": "world"}") into msgpack bytes
 pub fn json_str_to_msgpack_bytes(payload: &str) -> Result<Vec<u8>> {
     let json = serde_json::from_str::<serde_json::Value>(payload)?;
-    let payload = wasmbus_rpc::common::serialize(&json)?;
+    let payload = rmp_serde::to_vec_named(&json)?;
     Ok(payload)
 }
 

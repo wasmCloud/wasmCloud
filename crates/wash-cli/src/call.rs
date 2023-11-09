@@ -1,6 +1,10 @@
-use std::{collections::HashMap, path::PathBuf, time::Duration};
+use core::time::Duration;
 
-use anyhow::{bail, Context, Result};
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use anyhow::{ensure, Context, Result};
 use clap::Args;
 use log::{debug, error};
 use wash_lib::cli::CommandOutput;
@@ -11,7 +15,8 @@ use wash_lib::context::{
     ContextManager,
 };
 use wash_lib::id::{ClusterSeed, ModuleId};
-use wasmbus_rpc::{common::Message, core::WasmCloudEntity, rpc_client::RpcClient};
+use wasmcloud_core::{InvocationResponse, WasmCloudEntity};
+use wasmcloud_provider_sdk::rpc_client::RpcClient;
 use wasmcloud_test_util::testing::TestResults;
 
 use crate::util::{
@@ -132,51 +137,60 @@ pub struct CallCommand {
     pub payload: Vec<String>,
 }
 
-pub async fn handle_call(cmd: CallCommand) -> Result<Vec<u8>> {
+pub async fn handle_call(
+    CallCommand {
+        opts,
+        data,
+        bin,
+        cluster_seed,
+        actor_id,
+        operation,
+        payload,
+        ..
+    }: CallCommand,
+) -> Result<Vec<u8>> {
     debug!(
         "calling actor with operation: {}, data: {}",
-        &cmd.operation,
-        cmd.payload.join("")
+        &operation,
+        payload.join("")
     );
-    if !"bs2".contains(cmd.bin) {
-        bail!("'bin' parameter must be 'b', 's', or '2'");
-    }
+    ensure!(
+        "bs2".contains(bin),
+        "'bin' parameter must be 'b', 's', or '2'"
+    );
+    ensure!(
+        data.is_none() || payload.is_empty(),
+        "you can use either -d/--data or the payload args, but not both."
+    );
+    ensure!(!actor_id.is_empty(), "actor ID may not be empty");
 
-    let origin = WasmCloudEntity::new_actor(WASH_ORIGIN_KEY)?;
-    let target = WasmCloudEntity::new_actor(&cmd.actor_id)?;
-
-    if cmd.data.is_some() && !cmd.payload.is_empty() {
-        bail!("you can use either -d/--data or the payload args, but not both.");
-    }
-    let payload = if let Some(fname) = cmd.data {
+    let payload = if let Some(fname) = data {
         std::fs::read_to_string(fname)?
     } else {
-        cmd.payload.join("")
+        payload.join("")
     };
     debug!(
         "calling actor with operation: {}, data: {}",
-        &cmd.operation, &payload
+        &operation, &payload
     );
     let bytes = json_str_to_msgpack_bytes(&payload)?;
-    let lattice_prefix = cmd
-        .opts
-        .lattice_prefix
-        .clone()
-        .unwrap_or_else(|| DEFAULT_LATTICE_PREFIX.to_string());
-
-    let (client, timeout_ms) = rpc_client_from_opts(cmd.opts, cmd.cluster_seed).await?;
-    Ok(client
+    let (client, timeout_ms) = rpc_client_from_opts(opts, cluster_seed).await?;
+    let InvocationResponse { msg, .. } = client
         .send_timeout(
-            origin,
-            target,
-            &lattice_prefix,
-            Message {
-                method: &cmd.operation,
-                arg: bytes.into(),
+            WasmCloudEntity {
+                public_key: WASH_ORIGIN_KEY.to_string(),
+                ..Default::default()
             },
+            WasmCloudEntity {
+                public_key: actor_id.to_string(),
+                ..Default::default()
+            },
+            operation,
+            bytes,
             Duration::from_millis(timeout_ms),
         )
-        .await?)
+        .await?;
+    Ok(msg)
 }
 
 // Helper output functions, used to ensure consistent output between call & standalone commands
@@ -197,13 +211,12 @@ pub fn call_output(
     }
     if is_test {
         // try to decode it as TestResults, otherwise dump as text
-        let test_results = wasmbus_rpc::common::deserialize::<TestResults>(&response)
-            .with_context(|| {
-                format!(
-                    "Error interpreting response as TestResults. Response: {}",
-                    String::from_utf8_lossy(&response)
-                )
-            })?;
+        let test_results = rmp_serde::from_slice::<TestResults>(&response).with_context(|| {
+            format!(
+                "Error interpreting response as TestResults. Response: {}",
+                String::from_utf8_lossy(&response)
+            )
+        })?;
 
         wasmcloud_test_util::cli::print_test_results(&test_results);
         return Ok(CommandOutput::new(
@@ -295,14 +308,19 @@ async fn rpc_client_from_opts(
 
     let nc = nats_client_from_opts(&rpc_host, &rpc_port, rpc_jwt, rpc_seed, rpc_credsfile).await?;
 
+    let lattice_prefix = opts
+        .lattice_prefix
+        .as_deref()
+        .unwrap_or(DEFAULT_LATTICE_PREFIX);
     Ok((
         RpcClient::new(
             nc,
             WASH_HOST_ID.to_string(),
             Some(Duration::from_millis(opts.timeout_ms)),
-            std::sync::Arc::new(nkeys::KeyPair::from_seed(&extract_arg_value(
+            Arc::new(nkeys::KeyPair::from_seed(&extract_arg_value(
                 cluster_seed.as_ref(),
             )?)?),
+            lattice_prefix,
         ),
         opts.timeout_ms,
     ))
