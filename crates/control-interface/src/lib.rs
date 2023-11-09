@@ -651,20 +651,22 @@ pub async fn collect_sub_timeout<T: DeserializeOwned>(
     tokio::pin!(sleep);
     loop {
         tokio::select! {
-            maybe_msg = sub.next() => {
-                if let Some(msg) = maybe_msg {
-                    if msg.payload.is_empty() { break; }
-                    let item = match json_deserialize::<T>(&msg.payload) {
-                        Ok(item) => item,
-                        Err(error) => {
-                            error!(%reason, %error,
-                                "deserialization error in auction - results may be incomplete",
-                            );
-                            break;
-                        }
-                    };
-                    items.push(item);
-                } else { break; }
+            msg = sub.next() => {
+                let Some(msg) = msg else {
+                    break;
+                };
+                if msg.payload.is_empty() {
+                    break;
+                }
+                match json_deserialize::<T>(&msg.payload) {
+                    Ok(item) => items.push(item),
+                    Err(error) => {
+                        error!(%reason, %error,
+                            "deserialization error in auction - results may be incomplete",
+                        );
+                        break;
+                    }
+                }
             },
             _ = &mut sleep => { /* timeout */ break; }
         }
