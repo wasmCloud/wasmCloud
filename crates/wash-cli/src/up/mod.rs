@@ -90,12 +90,12 @@ pub struct NatsOpts {
     pub nats_version: String,
 
     /// NATS server host to connect to
-    #[clap(long = "nats-host", default_value = DEFAULT_NATS_HOST, env = "NATS_HOST")]
-    pub nats_host: String,
+    #[clap(long = "nats-host", env = "NATS_HOST")]
+    pub nats_host: Option<String>,
 
     /// NATS server port to connect to. This will be used as the NATS listen port if `--nats-connect-only` isn't set
-    #[clap(long = "nats-port", default_value = DEFAULT_NATS_PORT, env = "NATS_PORT")]
-    pub nats_port: u16,
+    #[clap(long = "nats-port", env = "NATS_PORT")]
+    pub nats_port: Option<u16>,
 
     /// NATS websocket port to use. Websocket support will not be enabled if this option isn't set. TLS is not supported. This is required for the wash ui to connect from localhost
     #[clap(long = "nats-websocket-port", env = "NATS_WEBSOCKET_PORT")]
@@ -108,10 +108,18 @@ pub struct NatsOpts {
 
 impl From<NatsOpts> for NatsConfig {
     fn from(other: NatsOpts) -> NatsConfig {
+        let host = other
+            .nats_host
+            .unwrap_or_else(|| DEFAULT_NATS_HOST.to_string());
+        let port = other.nats_port.unwrap_or_else(|| {
+            DEFAULT_NATS_PORT
+                .parse()
+                .expect("failed to parse default NATS port")
+        });
         NatsConfig {
-            host: other.nats_host,
-            port: other.nats_port,
-            store_dir: std::env::temp_dir().join(format!("wash-jetstream-{}", other.nats_port)),
+            host,
+            port,
+            store_dir: std::env::temp_dir().join(format!("wash-jetstream-{port}")),
             js_domain: other.nats_js_domain,
             remote_url: other.nats_remote_url,
             credentials: other.nats_credsfile,
@@ -127,13 +135,8 @@ pub struct WasmcloudOpts {
     pub wasmcloud_version: String,
 
     /// A lattice prefix is a unique identifier for a lattice, and is frequently used within NATS topics to isolate messages from different lattices
-    #[clap(
-        short = 'x',
-        long = "lattice-prefix",
-        default_value = DEFAULT_LATTICE_PREFIX,
-        env = WASMCLOUD_LATTICE_PREFIX,
-    )]
-    pub lattice_prefix: String,
+    #[clap(short = 'x', long = "lattice-prefix", env = WASMCLOUD_LATTICE_PREFIX)]
+    pub lattice_prefix: Option<String>,
 
     /// The seed key (a printable 256-bit Ed25519 private key) used by this host to generate it's public key
     #[clap(long = "host-seed", env = WASMCLOUD_HOST_SEED)]
@@ -153,7 +156,7 @@ pub struct WasmcloudOpts {
 
     /// Timeout in milliseconds for all RPC calls
     #[clap(long = "rpc-timeout-ms", default_value = DEFAULT_RPC_TIMEOUT_MS, env = WASMCLOUD_RPC_TIMEOUT_MS)]
-    pub rpc_timeout_ms: u32,
+    pub rpc_timeout_ms: Option<u64>,
 
     /// A user JWT to use to authenticate to NATS for RPC messages
     #[clap(long = "rpc-jwt", env = WASMCLOUD_RPC_JWT, requires = "rpc_seed")]
@@ -245,11 +248,17 @@ pub struct WasmcloudOpts {
 
 impl WasmcloudOpts {
     pub async fn into_ctl_client(self, auction_timeout_ms: Option<u64>) -> Result<CtlClient> {
-        let lattice_prefix = self.lattice_prefix;
+        let lattice_prefix = self
+            .lattice_prefix
+            .unwrap_or_else(|| DEFAULT_LATTICE_PREFIX.to_string());
         let ctl_host = self
             .ctl_host
             .unwrap_or_else(|| DEFAULT_NATS_HOST.to_string());
-        let ctl_port = self.ctl_port.unwrap_or(4222).to_string();
+        let ctl_port = self
+            .ctl_port
+            .map(|p| p.to_string())
+            .unwrap_or_else(|| DEFAULT_NATS_PORT.to_string())
+            .to_string();
         let auction_timeout_ms = auction_timeout_ms.unwrap_or(DEFAULT_NATS_TIMEOUT_MS);
 
         let nc = nats_client_from_opts(
@@ -264,10 +273,11 @@ impl WasmcloudOpts {
 
         let mut builder = CtlClientBuilder::new(nc)
             .lattice_prefix(lattice_prefix)
-            .timeout(tokio::time::Duration::from_millis(
-                self.rpc_timeout_ms.into(),
-            ))
             .auction_timeout(tokio::time::Duration::from_millis(auction_timeout_ms));
+
+        if let Some(rpc_timeout_ms) = self.rpc_timeout_ms {
+            builder = builder.timeout(tokio::time::Duration::from_millis(rpc_timeout_ms))
+        }
 
         if let Ok(topic_prefix) = std::env::var("WASMCLOUD_CTL_TOPIC_PREFIX") {
             builder = builder.topic_prefix(topic_prefix);
@@ -302,35 +312,37 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
         .load_default_context()
         .context("failed to load context")?;
 
-    // Ensure we use the the supplied NATS host/port if no overrides were supplied
+    // falling back to the context's ctl_ connection won't always be right, but we have to pick one, since the context values are not optional
+    let nats_host = cmd.nats_opts.nats_host.clone().unwrap_or(ctx.ctl_host);
+    let nats_port = cmd.nats_opts.nats_port.unwrap_or(ctx.ctl_port);
+
     let wasmcloud_opts = WasmcloudOpts {
-        ctl_host: Some(
+        lattice_prefix: Some(
             cmd.wasmcloud_opts
-                .ctl_host
-                .unwrap_or_else(|| cmd.nats_opts.nats_host.to_owned()),
+                .lattice_prefix
+                .unwrap_or(ctx.lattice_prefix),
         ),
-        ctl_port: Some(
-            cmd.wasmcloud_opts
-                .ctl_port
-                .unwrap_or(cmd.nats_opts.nats_port),
-        ),
-        rpc_host: Some(
-            cmd.wasmcloud_opts
-                .rpc_host
-                .unwrap_or_else(|| cmd.nats_opts.nats_host.to_owned()),
-        ),
-        rpc_port: Some(
-            cmd.wasmcloud_opts
-                .rpc_port
-                .unwrap_or(cmd.nats_opts.nats_port),
-        ),
+        ctl_host: Some(cmd.wasmcloud_opts.ctl_host.unwrap_or(nats_host.clone())),
+        ctl_port: Some(cmd.wasmcloud_opts.ctl_port.unwrap_or(nats_port)),
+        ctl_jwt: cmd.wasmcloud_opts.ctl_jwt.or(ctx.ctl_jwt),
+        ctl_seed: cmd.wasmcloud_opts.ctl_seed.or(ctx.ctl_seed),
+        ctl_credsfile: cmd.wasmcloud_opts.ctl_credsfile.or(ctx.ctl_credsfile),
+        rpc_host: Some(cmd.wasmcloud_opts.rpc_host.unwrap_or(nats_host.clone())),
+        rpc_port: Some(cmd.wasmcloud_opts.rpc_port.unwrap_or(nats_port)),
+        rpc_timeout_ms: Some(cmd.wasmcloud_opts.rpc_timeout_ms.unwrap_or(ctx.rpc_timeout)),
+        rpc_jwt: cmd.wasmcloud_opts.rpc_jwt.or(ctx.rpc_jwt),
+        rpc_seed: cmd.wasmcloud_opts.rpc_seed.or(ctx.rpc_seed),
+        rpc_credsfile: cmd.wasmcloud_opts.rpc_credsfile.or(ctx.rpc_credsfile),
+        cluster_seed: cmd
+            .wasmcloud_opts
+            .cluster_seed
+            .or_else(|| ctx.cluster_seed.map(|seed| seed.to_string())),
+        wasmcloud_js_domain: cmd.wasmcloud_opts.wasmcloud_js_domain.or(ctx.js_domain),
         ..cmd.wasmcloud_opts
     };
-    // Capture listen address to keep the value after the nats_opts are moved
-    let nats_listen_address = format!("{}:{}", cmd.nats_opts.nats_host, cmd.nats_opts.nats_port);
+    let nats_listen_address = format!("{nats_host}:{nats_port}");
 
     let nats_client = nats_client_from_wasmcloud_opts(&wasmcloud_opts).await;
-    let nats_opts = cmd.nats_opts.clone();
 
     // Avoid downloading + starting NATS if the user already runs their own server and we can connect.
     let should_run_nats = !cmd.nats_opts.connect_only && nats_client.is_err();
@@ -344,7 +356,17 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
         let nats_binary = ensure_nats_server(&cmd.nats_opts.nats_version, &install_dir).await?;
 
         spinner.update_spinner_message(" Starting NATS ...".to_string());
-        start_nats(&install_dir, &nats_binary, cmd.nats_opts.clone()).await?;
+
+        let nats_config = NatsConfig {
+            host: nats_host.clone(),
+            port: nats_port,
+            store_dir: std::env::temp_dir().join(format!("wash-jetstream-{nats_port}")),
+            js_domain: wasmcloud_opts.wasmcloud_js_domain.clone(),
+            remote_url: cmd.nats_opts.nats_remote_url,
+            credentials: cmd.nats_opts.nats_credsfile.clone(),
+            websocket_port: cmd.nats_opts.nats_websocket_port,
+        };
+        start_nats(&install_dir, &nats_binary, nats_config).await?;
         Some(nats_binary)
     } else {
         // The user is running their own NATS server, so we don't need to download or start one
@@ -355,16 +377,25 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
     // If this fails, we should return early since wasmCloud wouldn't be able to connect either
     nats_client_from_wasmcloud_opts(&wasmcloud_opts).await?;
 
+    let lattice_prefix = wasmcloud_opts
+        .lattice_prefix
+        .clone()
+        .context("missing lattice prefix")?;
     let wadm_process = if !cmd.wadm_opts.disable_wadm
-        && !is_wadm_running(&nats_opts, &wasmcloud_opts.lattice_prefix)
-            .await
-            .unwrap_or(false)
+        && !is_wadm_running(
+            &nats_host,
+            nats_port,
+            cmd.nats_opts.nats_credsfile.clone(),
+            &lattice_prefix,
+        )
+        .await
+        .unwrap_or(false)
     {
         spinner.update_spinner_message(" Starting wadm ...".to_string());
         let config = WadmConfig {
             structured_logging: cmd.wasmcloud_opts.enable_structured_logging,
             js_domain: cmd.nats_opts.nats_js_domain.clone(),
-            nats_server_url: format!("{}:{}", cmd.nats_opts.nats_host, cmd.nats_opts.nats_port),
+            nats_server_url: nats_listen_address.clone(),
             nats_credsfile: cmd.nats_opts.nats_credsfile,
         };
         // Start wadm, redirecting output to a log file
@@ -427,7 +458,7 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
     };
     let version = wasmcloud_opts.wasmcloud_version.clone();
 
-    let host_env = configure_host_env(nats_opts, wasmcloud_opts).await;
+    let host_env = configure_host_env(wasmcloud_opts).await;
     let mut wasmcloud_child = match start_wasmcloud_host(
         &wasmcloud_executable,
         std::process::Stdio::null(),
@@ -499,36 +530,36 @@ pub async fn handle_up(cmd: UpCommand, output_kind: OutputKind) -> Result<Comman
 }
 
 /// Helper function to start the NATS binary, redirecting output to nats.log
-async fn start_nats(install_dir: &Path, nats_binary: &Path, nats_opts: NatsOpts) -> Result<Child> {
+async fn start_nats(
+    install_dir: &Path,
+    nats_binary: &Path,
+    nats_config: NatsConfig,
+) -> Result<Child> {
     // Ensure that leaf node remote connection can be established before launching NATS
-    let nats_opts = match (
-        nats_opts.nats_remote_url.as_ref(),
-        nats_opts.nats_credsfile.as_ref(),
+    if let (Some(url), Some(creds)) = (
+        nats_config.remote_url.as_ref(),
+        nats_config.credentials.as_ref(),
     ) {
-        (Some(url), Some(creds)) => {
-            if let Err(e) = crate::util::nats_client_from_opts(
-                url,
-                &nats_opts.nats_port.to_string(),
-                None,
-                None,
-                Some(creds.to_owned()),
-            )
-            .await
-            {
-                bail!("Could not connect to leafnode remote: {}", e);
-            } else {
-                nats_opts
-            }
+        if let Err(e) = crate::util::nats_client_from_opts(
+            url,
+            &nats_config.port.to_string(),
+            None,
+            None,
+            Some(creds.to_owned()),
+        )
+        .await
+        {
+            bail!("Could not connect to leafnode remote: {}", e);
         }
-        (_, _) => nats_opts,
-    };
+    }
+
     // Start NATS server, redirecting output to a log file
     let nats_log_path = install_dir.join("nats.log");
     let nats_log_file = tokio::fs::File::create(&nats_log_path)
         .await?
         .into_std()
         .await;
-    let nats_process = start_nats_server(nats_binary, nats_log_file, nats_opts.into()).await?;
+    let nats_process = start_nats_server(nats_binary, nats_log_file, nats_config).await?;
 
     // save the PID so we can kill it later
     if let Some(pid) = nats_process.id() {
@@ -613,15 +644,14 @@ async fn stop_wasmcloud(mut wasmcloud_child: Child) -> Result<()> {
     Ok(())
 }
 
-async fn is_wadm_running(nats_opts: &NatsOpts, lattice_prefix: &str) -> Result<bool> {
-    let client = nats_client_from_opts(
-        &nats_opts.nats_host,
-        &nats_opts.nats_port.to_string(),
-        None,
-        None,
-        nats_opts.nats_credsfile.clone(),
-    )
-    .await?;
+async fn is_wadm_running(
+    nats_host: &str,
+    nats_port: u16,
+    credsfile: Option<PathBuf>,
+    lattice_prefix: &str,
+) -> Result<bool> {
+    let client =
+        nats_client_from_opts(nats_host, &nats_port.to_string(), None, None, credsfile).await?;
 
     Ok(
         wash_lib::app::get_models(&client, Some(lattice_prefix.to_string()))
@@ -806,7 +836,7 @@ mod tests {
             "v0.57.1".to_string()
         );
         assert_eq!(
-            up_all_flags.wasmcloud_opts.lattice_prefix,
+            up_all_flags.wasmcloud_opts.lattice_prefix.unwrap(),
             "anotherprefix".to_string()
         );
         assert_eq!(
