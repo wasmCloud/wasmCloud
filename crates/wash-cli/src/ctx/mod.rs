@@ -115,7 +115,7 @@ pub struct EditCommand {
 /// Lists all JSON files found in the context directory, with the exception of `index.json`
 /// Being present in this list does not guarantee a valid context
 fn handle_list(cmd: ListCommand) -> Result<CommandOutput> {
-    let dir = ContextDir::new_with_dir(cmd.directory)?;
+    let dir = ContextDir::from_dir(cmd.directory)?;
 
     let default_context_name = dir.default_context_name()?;
     let contexts = dir.list_contexts()?;
@@ -148,7 +148,7 @@ fn handle_list(cmd: ListCommand) -> Result<CommandOutput> {
 
 /// Handles selecting a default context, which can be selected in the terminal or provided as an argument
 fn handle_default(cmd: DefaultCommand) -> Result<CommandOutput> {
-    let dir = ContextDir::new_with_dir(cmd.directory)?;
+    let dir = ContextDir::from_dir(cmd.directory)?;
 
     let new_default = if let Some(n) = cmd.name {
         n
@@ -162,7 +162,7 @@ fn handle_default(cmd: DefaultCommand) -> Result<CommandOutput> {
 
 /// Handles deleting an existing context
 fn handle_del(cmd: DelCommand) -> Result<CommandOutput> {
-    let dir = ContextDir::new_with_dir(cmd.directory)?;
+    let dir = ContextDir::from_dir(cmd.directory)?;
 
     let ctx_to_delete = if let Some(n) = cmd.name {
         n
@@ -176,7 +176,7 @@ fn handle_del(cmd: DelCommand) -> Result<CommandOutput> {
 
 /// Handles creating a new context by writing the default WashContext object to the specified path
 fn handle_new(cmd: NewCommand) -> Result<CommandOutput> {
-    let dir = ContextDir::new_with_dir(cmd.directory)?;
+    let dir = ContextDir::from_dir(cmd.directory)?;
 
     let mut new_context = if cmd.interactive {
         prompt_for_context()?
@@ -202,7 +202,7 @@ fn handle_new(cmd: NewCommand) -> Result<CommandOutput> {
 
 /// Handles editing a context by opening the JSON file in the user's text editor of choice
 fn handle_edit(cmd: EditCommand) -> Result<CommandOutput> {
-    let dir = ContextDir::new_with_dir(cmd.directory)?;
+    let dir = ContextDir::from_dir(cmd.directory)?;
     let editor = which::which(cmd.editor)?;
 
     let mut ctx_name = String::new();

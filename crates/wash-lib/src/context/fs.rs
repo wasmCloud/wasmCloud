@@ -31,13 +31,13 @@ impl Deref for ContextDir {
 }
 
 impl ContextDir {
-    /// Creates a new ContextDir at ~/.wash/contexts
+    /// Creates and initializes a new ContextDir at ~/.wash/contexts
     pub fn new() -> Result<ContextDir> {
-        Self::new_with_dir(None::<&Path>)
+        Self::from_dir(None::<&Path>)
     }
 
-    /// Creates a new ContextDir at the specified path. If a path is not provided, defaults to ~/.wash/contexts
-    pub fn new_with_dir(path: Option<impl AsRef<Path>>) -> Result<ContextDir> {
+    /// Creates and initializes a new [`ContextDir`] at the specified path. If a path is not provided, defaults to ~/.wash/contexts
+    pub fn from_dir(path: Option<impl AsRef<Path>>) -> Result<ContextDir> {
         let path = if let Some(path) = path {
             path.as_ref().to_path_buf()
         } else {
@@ -215,7 +215,7 @@ mod test {
     fn round_trip_happy_path() {
         let tempdir = tempfile::tempdir().expect("Unable to create tempdir");
         let contexts_path = tempdir.path().join("contexts");
-        let ctx_dir = ContextDir::new_with_dir(Some(&contexts_path))
+        let ctx_dir = ContextDir::from_dir(Some(&contexts_path))
             .expect("Should be able to create context dir");
 
         assert!(
@@ -349,7 +349,7 @@ mod test {
     fn load_non_existent_contexts() {
         let tempdir = tempfile::tempdir().expect("Unable to create tempdir");
         let ctx_dir =
-            ContextDir::new_with_dir(Some(&tempdir)).expect("Should be able to create context dir");
+            ContextDir::from_dir(Some(&tempdir)).expect("Should be able to create context dir");
 
         ctx_dir
             .load_default_context()
@@ -364,7 +364,7 @@ mod test {
     fn default_context_with_no_settings() {
         let tempdir = tempfile::tempdir().expect("Unable to create tempdir");
         let ctx_dir =
-            ContextDir::new_with_dir(Some(&tempdir)).expect("Should be able to create context dir");
+            ContextDir::from_dir(Some(&tempdir)).expect("Should be able to create context dir");
 
         assert_eq!(
             ctx_dir
@@ -390,7 +390,7 @@ mod test {
         )
         .expect("Unable to write test data to disk");
         let ctx_dir =
-            ContextDir::new_with_dir(Some(&tempdir)).expect("Should be able to create context dir");
+            ContextDir::from_dir(Some(&tempdir)).expect("Should be able to create context dir");
 
         let ctx = ctx_dir
             .load_context("host_config")
@@ -406,7 +406,7 @@ mod test {
     fn delete_default_context() {
         let tempdir = tempfile::tempdir().expect("Unable to create tempdir");
         let ctx_dir =
-            ContextDir::new_with_dir(Some(&tempdir)).expect("Should be able to create context dir");
+            ContextDir::from_dir(Some(&tempdir)).expect("Should be able to create context dir");
 
         let mut ctx = WashContext {
             name: "deleteme".to_string(),
