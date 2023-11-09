@@ -10,6 +10,7 @@ on:
   pull_request:
     paths:
       - 'chart/**'
+      - '!chart/artifacthub-repo.yml'
       - '.github/workflows/wasmcloud-chart.yml'
 
 jobs:

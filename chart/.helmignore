@@ -23,3 +23,5 @@
 .vscode/
 # Ignore chart-testing config
 ct.yaml
+# Ignore artifacthub.io config file
+artifacthub-repo.yml
