@@ -20,6 +20,7 @@ use tokio::{
     process::Child,
 };
 use wash_lib::cli::{CommandOutput, OutputKind};
+use wash_lib::config::create_nats_client_from_opts;
 use wash_lib::config::downloads_dir;
 use wash_lib::config::DEFAULT_NATS_TIMEOUT_MS;
 use wash_lib::context::fs::ContextDir;
@@ -37,7 +38,6 @@ use wasmcloud_control_interface::{Client as CtlClient, ClientBuilder as CtlClien
 
 use crate::appearance::spinner::Spinner;
 use crate::down::stop_nats;
-use crate::util::nats_client_from_opts;
 
 mod config;
 mod credsfile;
@@ -261,7 +261,7 @@ impl WasmcloudOpts {
             .to_string();
         let auction_timeout_ms = auction_timeout_ms.unwrap_or(DEFAULT_NATS_TIMEOUT_MS);
 
-        let nc = nats_client_from_opts(
+        let nc = create_nats_client_from_opts(
             &ctl_host,
             &ctl_port,
             self.ctl_jwt,
@@ -540,7 +540,7 @@ async fn start_nats(
         nats_config.remote_url.as_ref(),
         nats_config.credentials.as_ref(),
     ) {
-        if let Err(e) = crate::util::nats_client_from_opts(
+        if let Err(e) = create_nats_client_from_opts(
             url,
             &nats_config.port.to_string(),
             None,
@@ -651,7 +651,8 @@ async fn is_wadm_running(
     lattice_prefix: &str,
 ) -> Result<bool> {
     let client =
-        nats_client_from_opts(nats_host, &nats_port.to_string(), None, None, credsfile).await?;
+        create_nats_client_from_opts(nats_host, &nats_port.to_string(), None, None, credsfile)
+            .await?;
 
     Ok(
         wash_lib::app::get_models(&client, Some(lattice_prefix.to_string()))
@@ -682,7 +683,7 @@ where
 
 /// Helper function to create a NATS client from the same arguments wasmCloud will use
 async fn nats_client_from_wasmcloud_opts(wasmcloud_opts: &WasmcloudOpts) -> Result<Client> {
-    nats_client_from_opts(
+    create_nats_client_from_opts(
         &wasmcloud_opts
             .ctl_host
             .clone()

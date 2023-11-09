@@ -9,7 +9,9 @@ use log::{error, warn};
 use serde_json::json;
 use tokio::process::Command;
 use wash_lib::cli::{CommandOutput, OutputKind};
-use wash_lib::config::{cfg_dir, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT};
+use wash_lib::config::{
+    cfg_dir, create_nats_client_from_opts, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT,
+};
 use wash_lib::id::ServerId;
 use wash_lib::start::{nats_pid_path, NATS_SERVER_BINARY, WADM_PID};
 
@@ -18,7 +20,6 @@ use crate::up::{
     DEFAULT_LATTICE_PREFIX, DOWNLOADS_DIR, WASMCLOUD_CTL_CREDSFILE, WASMCLOUD_CTL_HOST,
     WASMCLOUD_CTL_JWT, WASMCLOUD_CTL_PORT, WASMCLOUD_CTL_SEED, WASMCLOUD_LATTICE_PREFIX,
 };
-use crate::util::nats_client_from_opts;
 
 #[derive(Parser, Debug, Clone, Default)]
 pub struct DownCommand {
@@ -73,7 +74,7 @@ pub async fn handle_down(cmd: DownCommand, output_kind: OutputKind) -> Result<Co
     let mut out_json = HashMap::new();
     let mut out_text = String::from("");
 
-    if let Ok(client) = nats_client_from_opts(
+    if let Ok(client) = create_nats_client_from_opts(
         &cmd.ctl_host
             .unwrap_or_else(|| DEFAULT_NATS_HOST.to_string()),
         &cmd.ctl_port
