@@ -72,53 +72,25 @@ pub struct WashConnectionOptions {
     pub timeout_ms: u64,
 
     /// Wash context
-    pub ctx: Option<WashContext>,
+    pub ctx: WashContext,
 }
 
 impl WashConnectionOptions {
     /// Create a control client from connection options
     pub async fn into_ctl_client(self, auction_timeout_ms: Option<u64>) -> Result<CtlClient> {
-        let lattice_prefix = self.lattice_prefix.unwrap_or_else(|| {
-            self.ctx
-                .as_ref()
-                .map(|c| c.lattice_prefix.clone())
-                .unwrap_or_else(|| DEFAULT_LATTICE_PREFIX.to_string())
-        });
+        let lattice_prefix = self
+            .lattice_prefix
+            .unwrap_or_else(|| self.ctx.lattice_prefix.clone());
 
-        let ctl_host = self.ctl_host.unwrap_or_else(|| {
-            self.ctx
-                .as_ref()
-                .map(|c| c.ctl_host.clone())
-                .unwrap_or_else(|| DEFAULT_NATS_HOST.to_string())
-        });
-
-        let ctl_port = self.ctl_port.unwrap_or_else(|| {
-            self.ctx
-                .as_ref()
-                .map(|c| c.ctl_port.to_string())
-                .unwrap_or_else(|| DEFAULT_NATS_PORT.to_string())
-        });
-
-        let ctl_jwt = self.ctl_jwt.or_else(|| {
-            self.ctx
-                .as_ref()
-                .map(|c| c.ctl_jwt.clone())
-                .unwrap_or_default()
-        });
-
-        let ctl_seed = self.ctl_seed.or_else(|| {
-            self.ctx
-                .as_ref()
-                .map(|c| c.ctl_seed.clone())
-                .unwrap_or_default()
-        });
-
-        let ctl_credsfile = self.ctl_credsfile.or_else(|| {
-            self.ctx
-                .as_ref()
-                .map(|c| c.ctl_credsfile.clone())
-                .unwrap_or_default()
-        });
+        let ctl_host = self.ctl_host.unwrap_or_else(|| self.ctx.ctl_host.clone());
+        let ctl_port = self
+            .ctl_port
+            .unwrap_or_else(|| self.ctx.ctl_port.to_string());
+        let ctl_jwt = self.ctl_jwt.or_else(|| self.ctx.ctl_jwt.clone());
+        let ctl_seed = self.ctl_seed.or_else(|| self.ctx.ctl_seed.clone());
+        let ctl_credsfile = self
+            .ctl_credsfile
+            .or_else(|| self.ctx.ctl_credsfile.clone());
 
         let auction_timeout_ms = auction_timeout_ms.unwrap_or(self.timeout_ms);
 
@@ -143,46 +115,15 @@ impl WashConnectionOptions {
 
     /// Create a NATS client from WashConnectionOptions
     pub async fn into_nats_client(self) -> Result<Client> {
-        let ctl_host = self.ctl_host.unwrap_or_else(|| {
-            self.ctx
-                .as_ref()
-                .map(|c| c.ctl_host.clone())
-                .unwrap_or_else(|| DEFAULT_NATS_HOST.to_string())
-        });
-
-        let ctl_port = self.ctl_port.unwrap_or_else(|| {
-            self.ctx
-                .as_ref()
-                .map(|c| c.ctl_port.to_string())
-                .unwrap_or_else(|| DEFAULT_NATS_PORT.to_string())
-        });
-
-        let ctl_jwt = if self.ctl_jwt.is_some() {
-            self.ctl_jwt
-        } else {
-            self.ctx
-                .as_ref()
-                .map(|c| c.ctl_jwt.clone())
-                .unwrap_or_default()
-        };
-
-        let ctl_seed = if self.ctl_seed.is_some() {
-            self.ctl_seed
-        } else {
-            self.ctx
-                .as_ref()
-                .map(|c| c.ctl_seed.clone())
-                .unwrap_or_default()
-        };
-
-        let ctl_credsfile = if self.ctl_credsfile.is_some() {
-            self.ctl_credsfile
-        } else {
-            self.ctx
-                .as_ref()
-                .map(|c| c.ctl_credsfile.clone())
-                .unwrap_or_default()
-        };
+        let ctl_host = self.ctl_host.unwrap_or_else(|| self.ctx.ctl_host.clone());
+        let ctl_port = self
+            .ctl_port
+            .unwrap_or_else(|| self.ctx.ctl_port.to_string());
+        let ctl_jwt = self.ctl_jwt.or_else(|| self.ctx.ctl_jwt.clone());
+        let ctl_seed = self.ctl_seed.or_else(|| self.ctx.ctl_seed.clone());
+        let ctl_credsfile = self
+            .ctl_credsfile
+            .or_else(|| self.ctx.ctl_credsfile.clone());
 
         let nc =
             create_nats_client_from_opts(&ctl_host, &ctl_port, ctl_jwt, ctl_seed, ctl_credsfile)
@@ -193,12 +134,9 @@ impl WashConnectionOptions {
 
     /// Either returns the opts.lattice prefix or opts.ctx.lattice_prefix... if both are absent/None,  returns the default lattice prefix (DEFAULT_LATTICE_PREFIX).
     pub fn get_lattice_prefix(&self) -> String {
-        self.lattice_prefix.clone().unwrap_or_else(|| {
-            self.ctx
-                .as_ref()
-                .map(|c| c.lattice_prefix.clone())
-                .unwrap_or_else(|| DEFAULT_LATTICE_PREFIX.to_string())
-        })
+        self.lattice_prefix
+            .clone()
+            .unwrap_or_else(|| self.ctx.lattice_prefix.clone())
     }
 }
 

@@ -11,9 +11,7 @@ use log::{debug, error};
 use serde::Deserialize;
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 use wash_lib::cli::CommandOutput;
-use wash_lib::config::{
-    create_nats_client_from_opts, DEFAULT_LATTICE_PREFIX, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT,
-};
+use wash_lib::config::{create_nats_client_from_opts, DEFAULT_LATTICE_PREFIX};
 use wash_lib::context::{fs::ContextDir, ContextManager};
 use wash_lib::id::{ClusterSeed, ModuleId};
 use wasmcloud_core::{InvocationResponse, WasmCloudEntity};
@@ -317,61 +315,33 @@ async fn rpc_client_from_opts(
     // Attempt to load a context, falling back on the default if not supplied
     let ctx_dir = ContextDir::new()?;
     let ctx = if let Some(context_name) = opts.context {
-        Some(ctx_dir.load_context(&context_name)?)
+        ctx_dir
+            .load_context(&context_name)
+            .with_context(|| format!("failed to load context `{context_name}`"))?
     } else {
-        ctx_dir.load_default_context().ok()
+        ctx_dir
+            .load_default_context()
+            .context("failed to load default context")?
     };
 
     // Determine connection parameters, taking explicitly provided flags,
     // then provided context values, lastly using defaults
 
-    let rpc_host = opts.rpc_host.unwrap_or_else(|| {
-        ctx.as_ref()
-            .map(|c| c.rpc_host.clone())
-            .unwrap_or_else(|| DEFAULT_NATS_HOST.to_string())
-    });
-
-    let rpc_port = opts.rpc_port.unwrap_or_else(|| {
-        ctx.as_ref()
-            .map(|c| c.rpc_port.to_string())
-            .unwrap_or_else(|| DEFAULT_NATS_PORT.to_string())
-    });
-
-    let rpc_jwt = if opts.rpc_jwt.is_some() {
-        opts.rpc_jwt
-    } else {
-        ctx.as_ref().map(|c| c.rpc_jwt.clone()).unwrap_or_default()
-    };
-
-    let rpc_seed = if opts.rpc_seed.is_some() {
-        opts.rpc_seed
-    } else {
-        ctx.as_ref().map(|c| c.rpc_seed.clone()).unwrap_or_default()
-    };
-
-    let rpc_credsfile = if opts.rpc_credsfile.is_some() {
-        opts.rpc_credsfile
-    } else {
-        ctx.as_ref()
-            .map(|c| c.rpc_credsfile.clone())
-            .unwrap_or_default()
-    };
+    let rpc_host = opts.rpc_host.unwrap_or_else(|| ctx.rpc_host.clone());
+    let rpc_port = opts.rpc_port.unwrap_or_else(|| ctx.rpc_port.to_string());
+    let rpc_jwt = opts.rpc_jwt.or_else(|| ctx.rpc_jwt.clone());
+    let rpc_seed = opts.rpc_seed.or_else(|| ctx.rpc_seed.clone());
+    let rpc_credsfile = opts.rpc_credsfile.or_else(|| ctx.rpc_credsfile.clone());
 
     // Cluster seed is optional on the CLI to allow for context to supply that variable.
     // If no context is supplied, and there is no default context, then the cluster seed
     // cannot be determined and the RPC will almost certainly fail, unless the antiforgery
     // check allows the invocation to be unsigned.
     let cluster_seed = cmd_cluster_seed.unwrap_or_else(|| {
-        ctx.as_ref()
-            .map(|c| {
-                c.cluster_seed.clone().unwrap_or_else(|| {
-                    error!(
-                        "No cluster seed provided and no context available, this RPC will fail."
-                    );
-                    ClusterSeed::default()
-                })
-            })
-            .unwrap_or_default()
+        ctx.cluster_seed.clone().unwrap_or_else(|| {
+            error!("No cluster seed provided and no context available, this RPC will fail.");
+            ClusterSeed::default()
+        })
     });
 
     let nc = create_nats_client_from_opts(&rpc_host, &rpc_port, rpc_jwt, rpc_seed, rpc_credsfile)
