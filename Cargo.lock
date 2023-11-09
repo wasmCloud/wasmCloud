@@ -5888,8 +5888,9 @@ dependencies = [
  "warp-embed",
  "wascap 0.12.0",
  "wash-lib",
- "wasmbus-rpc 0.15.0",
  "wasmcloud-control-interface 0.31.0",
+ "wasmcloud-core",
+ "wasmcloud-provider-sdk",
  "wasmcloud-test-util",
  "weld-codegen",
  "which",
@@ -6197,43 +6198,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "wasmbus-rpc"
-version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d17417841089a43a945a31ddfcc0062704a97625fb7ecbfbe91df043d930f05a"
-dependencies = [
- "async-nats 0.31.0",
- "async-trait",
- "atty",
- "base64 0.13.1",
- "bytes",
- "cfg-if",
- "data-encoding",
- "futures",
- "lazy_static",
- "minicbor 0.17.1",
- "minicbor-ser",
- "nkeys",
- "once_cell",
- "rmp-serde",
- "serde",
- "serde_bytes",
- "serde_json",
- "sha2 0.10.8",
- "thiserror",
- "time",
- "tokio",
- "toml 0.5.11",
- "tracing",
- "tracing-futures",
- "tracing-subscriber",
- "uuid 1.5.0",
- "wascap 0.11.2",
- "wasmbus-macros",
- "weld-codegen",
-]
-
-[[package]]
 name = "wasmcloud"
 version = "0.80.0"
 dependencies = [
@@ -6465,7 +6429,7 @@ dependencies = [
  "serde",
  "serde_bytes",
  "serde_json",
- "wasmbus-rpc 0.14.0",
+ "wasmbus-rpc",
  "weld-codegen",
 ]
 
@@ -6567,7 +6531,7 @@ dependencies = [
  "termcolor",
  "tokio",
  "toml 0.7.8",
- "wasmbus-rpc 0.14.0",
+ "wasmbus-rpc",
  "wasmcloud-interface-testing",
 ]
 
