@@ -8,7 +8,6 @@
 
 mod broker;
 mod otel;
-mod sub_stream;
 mod types;
 
 pub use types::*;
@@ -19,9 +18,9 @@ use core::time::Duration;
 use std::collections::HashMap;
 
 use cloudevents::event::Event;
+use futures::StreamExt;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use sub_stream::collect_timeout;
 use tokio::sync::mpsc::Receiver;
 use tracing::{debug, error, instrument, trace};
 
@@ -551,7 +550,7 @@ impl Client {
                 error!(%error, "flush after publish");
             }
         });
-        Ok(collect_timeout::<D>(sub, self.auction_timeout, subject.as_str()).await)
+        Ok(collect_sub_timeout::<D>(sub, self.auction_timeout, subject.as_str()).await)
     }
 
     /// Returns the receiver end of a channel that subscribes to the lattice control event stream.
@@ -639,6 +638,38 @@ where
 /// Helper function that deserializes the data and maps the error
 fn json_deserialize<'de, T: Deserialize<'de>>(buf: &'de [u8]) -> Result<T> {
     serde_json::from_slice(buf).map_err(|e| format!("JSON deserialization failure: {e}").into())
+}
+
+/// Collect results until timeout has elapsed
+pub async fn collect_sub_timeout<T: DeserializeOwned>(
+    mut sub: async_nats::Subscriber,
+    timeout: Duration,
+    reason: &str,
+) -> Vec<T> {
+    let mut items = Vec::new();
+    let sleep = tokio::time::sleep(timeout);
+    tokio::pin!(sleep);
+    loop {
+        tokio::select! {
+            maybe_msg = sub.next() => {
+                if let Some(msg) = maybe_msg {
+                    if msg.payload.is_empty() { break; }
+                    let item = match json_deserialize::<T>(&msg.payload) {
+                        Ok(item) => item,
+                        Err(error) => {
+                            error!(%reason, %error,
+                                "deserialization error in auction - results may be incomplete",
+                            );
+                            break;
+                        }
+                    };
+                    items.push(item);
+                } else { break; }
+            },
+            _ = &mut sleep => { /* timeout */ break; }
+        }
+    }
+    items
 }
 
 #[cfg(test)]
