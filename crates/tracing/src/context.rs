@@ -19,6 +19,7 @@ pub struct TraceContextExtractor<'a> {
 
 impl<'a> TraceContextExtractor<'a> {
     /// Creates a new extractor using the given [`TraceContext`]
+    #[must_use]
     pub fn new(context: &'a TraceContext) -> Self {
         TraceContextExtractor { inner: context }
     }
@@ -47,6 +48,7 @@ pub struct TraceContextInjector {
 
 impl TraceContextInjector {
     /// Creates a new injector using the given [`TraceContext`]
+    #[must_use]
     pub fn new(headers: TraceContext) -> Self {
         // NOTE(thomastaylor312): Same point here with performance, technically we aren't allocating anything here except the hashmap, but we could do more optimization here if needed
         // Manually constructing the map here so we are sure we're only allocating once
@@ -57,6 +59,7 @@ impl TraceContextInjector {
 
     /// Convenience constructor that returns a new injector with the current span context already
     /// injected into the given header map
+    #[must_use]
     pub fn new_with_span(headers: TraceContext) -> Self {
         let mut header_map = Self::new(headers);
         header_map.inject_context();
@@ -65,6 +68,7 @@ impl TraceContextInjector {
 
     /// Convenience constructor that returns a new injector with the current span context already
     /// injected into a default [`TraceContext`]
+    #[must_use]
     pub fn default_with_span() -> Self {
         let mut header_map = Self::default();
         header_map.inject_context();
@@ -117,6 +121,7 @@ impl From<TraceContextInjector> for TraceContext {
 /// **WARNING**: To avoid performance issues, this function does not check if you have empty tracing
 /// headers. **If you pass an empty Extractor to this function, you will orphan the current span
 /// hierarchy.**
+#[allow(clippy::module_name_repetitions)]
 pub fn attach_span_context(trace_context: &TraceContext) {
     let ctx_propagator = TraceContextPropagator::new();
     let extractor = TraceContextExtractor::new(trace_context);
