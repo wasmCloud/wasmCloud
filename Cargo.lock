@@ -213,6 +213,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-nats"
+version = "0.33.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dbc1f1a75fd07f0f517322d103211f12d757658e91676def9a2e688774656c60"
+dependencies = [
+ "base64 0.21.5",
+ "bytes",
+ "futures",
+ "http",
+ "memchr",
+ "nkeys",
+ "nuid 0.5.0",
+ "once_cell",
+ "rand",
+ "regex",
+ "ring 0.17.5",
+ "rustls",
+ "rustls-native-certs",
+ "rustls-pemfile",
+ "rustls-webpki",
+ "serde",
+ "serde_json",
+ "serde_nanos",
+ "serde_repr",
+ "thiserror",
+ "time",
+ "tokio",
+ "tokio-retry",
+ "tokio-rustls",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "async-recursion"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2569,6 +2603,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "nuid"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fc895af95856f929163a0aa20c26a78d26bfdc839f51b9d5aa7a5b79e52b7e83"
+dependencies = [
+ "rand",
+]
+
+[[package]]
 name = "num"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2763,7 +2806,7 @@ dependencies = [
 name = "opentelemetry-nats"
 version = "0.1.0"
 dependencies = [
- "async-nats",
+ "async-nats 0.33.0",
  "opentelemetry 0.20.0",
  "tracing",
  "tracing-opentelemetry 0.20.0",
@@ -4839,7 +4882,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "73af38c54f54c10cb7fe431da25e43ff7496343177810925850ca29231fc5b1f"
 dependencies = [
  "anyhow",
- "async-nats",
+ "async-nats 0.31.0",
  "async-trait",
  "base64 0.21.5",
  "bytes",
@@ -4950,7 +4993,7 @@ dependencies = [
  "anyhow",
  "assert-json-diff",
  "async-compression",
- "async-nats",
+ "async-nats 0.33.0",
  "atelier_core 0.2.22",
  "bytes",
  "cargo_atelier",
@@ -5011,7 +5054,7 @@ version = "0.14.0"
 dependencies = [
  "anyhow",
  "async-compression",
- "async-nats",
+ "async-nats 0.33.0",
  "bytes",
  "cargo_metadata",
  "cargo_toml",
@@ -5245,7 +5288,7 @@ version = "0.80.0"
 dependencies = [
  "anyhow",
  "assert-json-diff",
- "async-nats",
+ "async-nats 0.33.0",
  "clap 4.4.7",
  "futures",
  "hyper 0.14.27",
@@ -5351,7 +5394,7 @@ dependencies = [
 name = "wasmcloud-control-interface"
 version = "0.31.0"
 dependencies = [
- "async-nats",
+ "async-nats 0.33.0",
  "bytes",
  "cloudevents-sdk",
  "futures",
@@ -5369,7 +5412,7 @@ version = "0.31.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5d5dbc3259219796c050a5f7be75f6ced600d41333c2d741fc78f03c82308c1"
 dependencies = [
- "async-nats",
+ "async-nats 0.31.0",
  "async-trait",
  "bytes",
  "cloudevents-sdk",
@@ -5392,7 +5435,7 @@ name = "wasmcloud-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "async-nats",
+ "async-nats 0.33.0",
  "futures",
  "hex",
  "nkeys",
@@ -5411,7 +5454,7 @@ name = "wasmcloud-host"
 version = "0.80.0"
 dependencies = [
  "anyhow",
- "async-nats",
+ "async-nats 0.33.0",
  "async-recursion",
  "async-trait",
  "base64 0.21.5",
@@ -5462,7 +5505,7 @@ dependencies = [
 name = "wasmcloud-provider-sdk"
 version = "0.1.0"
 dependencies = [
- "async-nats",
+ "async-nats 0.33.0",
  "async-trait",
  "base64 0.21.5",
  "data-encoding",
