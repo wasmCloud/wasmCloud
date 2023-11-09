@@ -20,26 +20,37 @@ recommend deploying your main NATS server with another chart.
 
 ## Running the chart
 
-The chart is available in a hosted Helm repository. To add the repository, run the following:
+You can install the chart via [the `wasmcloud-chart` package on ArtifactHub][artifacthub-wasmcloud]:
 
 ```console
-$ helm repo add wasmcloud https://wasmcloud.github.io/wasmcloud-otp/
+$ helm install wasmcloud oci://ghcr.io/wasmcloud/wasmcloud-chart --version 0.7.0
 ```
 
-Then you can install the chart:
-
-```console
-$ helm install <RELEASE_NAME> wasmcloud/wasmcloud-host
-```
+> [!NOTE]
+>
+> You can replace `wasmcloud` with whatever you'd like to call your instantiation
+> of the helm chart.
+>
+> Version `0.7.0` of the helm chart (released Nov 9th, 2023) deploys version [`v0.80.0`][wasmcloud-v0.80.0] of the host by default.
+>
+> To change the version of the wasmcloud host that is deployed, set `wasmcloud.image.tag` in [`values.yaml`][values-yaml] to the
+> [docker image tag][wasmcloud-docker-tags] you'd like to deploy instead.
 
 This will get you up and going with a wasmCloud Host and NATS server so you can kick the tires and
-try things out. In order to access the dashboard and NATS, you'll need to forward the ports locally
+try things out.
+
+In order to access the dashboard and NATS, you'll need to forward the ports locally
 (using the `RELEASE_NAME` you chose above as the `RELEASE_NAME` below)
 
 ```console
 # In a second terminal
 $ kubectl port-forward deployment/${RELEASE_NAME} 4222
 ```
+
+[artifacthub-wasmcloud]: https://artifacthub.io/packages/helm/wasmcloud-chart/wasmcloud-chart
+[wasmcloud-v0.80.0]: https://github.com/wasmCloud/wasmCloud/tree/v0.80.0
+[wasmcloud-docker-tags]: https://hub.docker.com/r/wasmcloud/wasmcloud/tags
+[values-yaml]: ./values.yaml
 
 ### Configuration
 
