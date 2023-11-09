@@ -91,10 +91,14 @@ pub async fn configure_host_env(wasmcloud_opts: WasmcloudOpts) -> HashMap<String
 
     // NATS RPC connection configuration
     if let Some(host) = wasmcloud_opts.rpc_host {
-        host_config.insert(WASMCLOUD_RPC_HOST.to_string(), host);
+        host_config.insert(WASMCLOUD_RPC_HOST.to_string(), host.clone());
+        // TODO: remove me after the host removes support for PROV_RPC connections
+        host_config.insert("WASMCLOUD_PROV_RPC_HOST".to_string(), host);
     }
     if let Some(port) = wasmcloud_opts.rpc_port {
         host_config.insert(WASMCLOUD_RPC_PORT.to_string(), port.to_string());
+        // TODO: remove me after the host removes support for PROV_RPC connections
+        host_config.insert("WASMCLOUD_PROV_RPC_PORT".to_string(), port.to_string());
     }
     if let Some(rpc_timeout_ms) = wasmcloud_opts.rpc_timeout_ms {
         host_config.insert(
@@ -104,8 +108,11 @@ pub async fn configure_host_env(wasmcloud_opts: WasmcloudOpts) -> HashMap<String
     }
     if let Some(path) = wasmcloud_opts.rpc_credsfile {
         if let Ok((jwt, seed)) = parse_credsfile(path).await {
-            host_config.insert(WASMCLOUD_RPC_JWT.to_string(), jwt);
-            host_config.insert(WASMCLOUD_RPC_SEED.to_string(), seed);
+            host_config.insert(WASMCLOUD_RPC_JWT.to_string(), jwt.clone());
+            host_config.insert(WASMCLOUD_RPC_SEED.to_string(), seed.clone());
+            // TODO: remove me after the host removes support for PROV_RPC connections
+            host_config.insert("WASMCLOUD_PROV_RPC_JWT".to_string(), jwt);
+            host_config.insert("WASMCLOUD_PROV_RPC_SEED".to_string(), seed);
         };
     } else {
         if let Some(jwt) = wasmcloud_opts.rpc_jwt {
@@ -117,6 +124,8 @@ pub async fn configure_host_env(wasmcloud_opts: WasmcloudOpts) -> HashMap<String
     }
     if wasmcloud_opts.rpc_tls {
         host_config.insert(WASMCLOUD_RPC_TLS.to_string(), "1".to_string());
+        // TODO: remove me after the host removes support for PROV_RPC connections
+        host_config.insert("WASMCLOUD_PROV_RPC_TLS".to_string(), "1".to_string());
     }
 
     // NATS CTL connection configuration
