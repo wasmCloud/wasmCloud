@@ -4,7 +4,6 @@ version = "0.1.0"
 description = """
 Bindgen macro for binary-based wasmCloud capability providers written in Rust
 """
-publish = false
 
 authors.workspace = true
 categories.workspace = true
