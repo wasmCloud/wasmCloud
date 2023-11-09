@@ -216,7 +216,7 @@ async fn extract_arg_value(arg: &str) -> Result<String> {
 }
 
 /// Create a NATS client from NATS-related options
-async fn create_nats_client_from_opts(
+pub async fn create_nats_client_from_opts(
     host: &str,
     port: &str,
     jwt: Option<String>,

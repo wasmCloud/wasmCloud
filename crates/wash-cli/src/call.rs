@@ -11,7 +11,9 @@ use log::{debug, error};
 use serde::Deserialize;
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 use wash_lib::cli::CommandOutput;
-use wash_lib::config::{DEFAULT_LATTICE_PREFIX, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT};
+use wash_lib::config::{
+    create_nats_client_from_opts, DEFAULT_LATTICE_PREFIX, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT,
+};
 use wash_lib::context::{fs::ContextDir, ContextManager};
 use wash_lib::id::{ClusterSeed, ModuleId};
 use wasmcloud_core::{InvocationResponse, WasmCloudEntity};
@@ -19,7 +21,6 @@ use wasmcloud_provider_sdk::rpc_client::RpcClient;
 
 use crate::util::{
     default_timeout_ms, extract_arg_value, json_str_to_msgpack_bytes, msgpack_to_json_val,
-    nats_client_from_opts,
 };
 
 #[derive(Deserialize)]
@@ -373,7 +374,8 @@ async fn rpc_client_from_opts(
             .unwrap_or_default()
     });
 
-    let nc = nats_client_from_opts(&rpc_host, &rpc_port, rpc_jwt, rpc_seed, rpc_credsfile).await?;
+    let nc = create_nats_client_from_opts(&rpc_host, &rpc_port, rpc_jwt, rpc_seed, rpc_credsfile)
+        .await?;
 
     let lattice_prefix = opts
         .lattice_prefix
