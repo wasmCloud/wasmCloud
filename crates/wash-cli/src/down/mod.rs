@@ -9,12 +9,11 @@ use log::{error, warn};
 use serde_json::json;
 use tokio::process::Command;
 use wash_lib::cli::{CommandOutput, OutputKind};
-use wash_lib::config::{DEFAULT_NATS_HOST, DEFAULT_NATS_PORT};
+use wash_lib::config::{cfg_dir, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT};
 use wash_lib::id::ServerId;
 use wash_lib::start::{nats_pid_path, NATS_SERVER_BINARY, WADM_PID};
 
 use crate::appearance::spinner::Spinner;
-use crate::cfg::cfg_dir;
 use crate::up::{
     DEFAULT_LATTICE_PREFIX, DOWNLOADS_DIR, WASMCLOUD_CTL_CREDSFILE, WASMCLOUD_CTL_HOST,
     WASMCLOUD_CTL_JWT, WASMCLOUD_CTL_PORT, WASMCLOUD_CTL_SEED, WASMCLOUD_LATTICE_PREFIX,

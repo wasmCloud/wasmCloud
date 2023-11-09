@@ -11,12 +11,8 @@ use log::{debug, error};
 use serde::Deserialize;
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 use wash_lib::cli::CommandOutput;
-use wash_lib::config::{context_dir, DEFAULT_LATTICE_PREFIX, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT};
-use wash_lib::context::{
-    ensure_host_config_context,
-    fs::{load_context, ContextDir},
-    ContextManager,
-};
+use wash_lib::config::{DEFAULT_LATTICE_PREFIX, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT};
+use wash_lib::context::{fs::ContextDir, ContextManager};
 use wash_lib::id::{ClusterSeed, ModuleId};
 use wasmcloud_core::{InvocationResponse, WasmCloudEntity};
 use wasmcloud_provider_sdk::rpc_client::RpcClient;
@@ -159,9 +155,9 @@ pub struct ConnectionOpts {
     )]
     timeout_ms: u64,
 
-    /// Path to a context with values to use for RPC connection, authentication, and cluster seed invocation signing
+    /// Name of the context to use for RPC connection, authentication, and cluster seed invocation signing
     #[clap(long = "context")]
-    pub context: Option<PathBuf>,
+    pub context: Option<String>,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -317,14 +313,12 @@ async fn rpc_client_from_opts(
     opts: ConnectionOpts,
     cmd_cluster_seed: Option<ClusterSeed>,
 ) -> Result<(RpcClient, u64)> {
-    let ctx = if let Some(context) = opts.context {
-        Some(load_context(context)?)
-    } else if let Ok(ctx_dir) = context_dir(None) {
-        let ctx_dir = ContextDir::new(ctx_dir)?;
-        ensure_host_config_context(&ctx_dir)?;
-        Some(ctx_dir.load_default_context()?)
+    // Attempt to load a context, falling back on the default if not supplied
+    let ctx_dir = ContextDir::new()?;
+    let ctx = if let Some(context_name) = opts.context {
+        Some(ctx_dir.load_context(&context_name)?)
     } else {
-        None
+        ctx_dir.load_default_context().ok()
     };
 
     // Determine connection parameters, taking explicitly provided flags,
@@ -433,7 +427,7 @@ mod test {
             "--bin",
             "2",
             "--context",
-            "~/.wash/contexts/default.json",
+            "some-context",
             "--cluster-seed",
             "SCAMSVN4M2NZ65RWGYE42BZZ7VYEFEAAHGLIY7R4W7CRHORSMXTDJRKXLY",
             "--lattice-prefix",
@@ -464,10 +458,7 @@ mod test {
                 assert_eq!(&opts.rpc_port.unwrap(), RPC_PORT);
                 assert_eq!(&opts.lattice_prefix.unwrap(), LATTICE_PREFIX);
                 assert_eq!(opts.timeout_ms, 0);
-                assert_eq!(
-                    opts.context,
-                    Some(PathBuf::from("~/.wash/contexts/default.json"))
-                );
+                assert_eq!(opts.context, Some("some-context".to_string()));
                 assert_eq!(data, Some(PathBuf::from(DATA_FNAME)));
                 assert_eq!(save, Some(PathBuf::from(SAVE_FNAME)));
                 assert_eq!(

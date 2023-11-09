@@ -1,11 +1,7 @@
 //! Common config constants and functions for loading, finding, and consuming configuration data
-use std::{
-    fs,
-    io::{Error, ErrorKind, Result as IoResult},
-    path::PathBuf,
-};
+use std::{fs, path::PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use async_nats::Client;
 use tokio::io::AsyncReadExt;
 use wasmcloud_control_interface::{Client as CtlClient, ClientBuilder as CtlClientBuilder};
@@ -24,41 +20,26 @@ pub const DEFAULT_START_PROVIDER_TIMEOUT_MS: u64 = 60_000;
 pub const DEFAULT_CTX_DIR_NAME: &str = "contexts";
 
 /// Get the path to the `.wash` configuration directory. Creates the directory if it does not exist.
-pub fn cfg_dir() -> IoResult<PathBuf> {
-    let home = dirs::home_dir().ok_or_else(|| {
-        Error::new(
-            ErrorKind::NotFound,
-            "No home directory found. Please set $HOME.",
-        )
-    })?;
+pub fn cfg_dir() -> Result<PathBuf> {
+    let home = dirs::home_dir().context("no home directory found. Please set $HOME")?;
 
     let wash = home.join(WASH_DIR);
 
     if !wash.exists() {
-        fs::create_dir_all(&wash)?;
+        fs::create_dir_all(&wash).context("failed to create .wash directory")?;
     }
 
     Ok(wash)
 }
 
-/// Given an optional supplied directory, determine the context directory either from the supplied
-/// directory or using the home directory and the predefined `.wash/contexts` folder.
-pub fn context_dir(cmd_dir: Option<PathBuf>) -> Result<PathBuf> {
-    if let Some(dir) = cmd_dir {
-        Ok(dir)
-    } else {
-        Ok(cfg_dir()?.join(DEFAULT_CTX_DIR_NAME))
-    }
-}
-
 /// Returns the path to the caching directory for smithy files
-pub fn model_cache_dir() -> IoResult<PathBuf> {
-    weld_codegen::weld_cache_dir().map_err(|e| Error::new(ErrorKind::Other, e.to_string()))
+pub fn model_cache_dir() -> Result<PathBuf> {
+    weld_codegen::weld_cache_dir().map_err(|e| anyhow!(e))
 }
 
 /// The path to the downloads directory for wash
-pub fn downloads_dir() -> IoResult<PathBuf> {
-    cfg_dir().map(|p| p.join(DOWNLOADS_DIR))
+pub fn downloads_dir() -> Result<PathBuf> {
+    Ok(cfg_dir()?.join(DOWNLOADS_DIR))
 }
 
 #[derive(Clone)]

@@ -18,13 +18,9 @@ use wash_lib::{
     id::ClusterSeed,
 };
 
-use wash_lib::{
-    config::context_dir,
-    context::ensure_host_config_context,
-    generate::{
-        interactive::{prompt_for_choice, user_question},
-        project_variables::StringEntry,
-    },
+use wash_lib::generate::{
+    interactive::{prompt_for_choice, user_question},
+    project_variables::StringEntry,
 };
 
 pub async fn handle_command(ctx_cmd: CtxCommand) -> Result<CommandOutput> {
@@ -119,18 +115,15 @@ pub struct EditCommand {
 /// Lists all JSON files found in the context directory, with the exception of `index.json`
 /// Being present in this list does not guarantee a valid context
 fn handle_list(cmd: ListCommand) -> Result<CommandOutput> {
-    let dir = ContextDir::new(context_dir(cmd.directory)?)?;
-    ensure_host_config_context(&dir)?;
+    let dir = ContextDir::new_with_dir(cmd.directory)?;
 
-    let default_context = dir
-        .default_context()?
-        .unwrap_or_else(|| HOST_CONFIG_NAME.to_string());
+    let default_context_name = dir.default_context_name()?;
     let contexts = dir.list_contexts()?;
 
     let text_contexts = contexts
         .iter()
         .map(|f| {
-            if f == &default_context {
+            if f == &default_context_name {
                 format!("{f} (default)")
             } else {
                 f.clone()
@@ -141,7 +134,7 @@ fn handle_list(cmd: ListCommand) -> Result<CommandOutput> {
 
     let mut map = HashMap::new();
     map.insert("contexts".to_string(), json!(contexts));
-    map.insert("default".to_string(), json!(default_context));
+    map.insert("default".to_string(), json!(default_context_name));
 
     Ok(CommandOutput::new(
         format!(
@@ -155,8 +148,7 @@ fn handle_list(cmd: ListCommand) -> Result<CommandOutput> {
 
 /// Handles selecting a default context, which can be selected in the terminal or provided as an argument
 fn handle_default(cmd: DefaultCommand) -> Result<CommandOutput> {
-    let dir = ContextDir::new(context_dir(cmd.directory)?)?;
-    ensure_host_config_context(&dir)?;
+    let dir = ContextDir::new_with_dir(cmd.directory)?;
 
     let new_default = if let Some(n) = cmd.name {
         n
@@ -170,7 +162,7 @@ fn handle_default(cmd: DefaultCommand) -> Result<CommandOutput> {
 
 /// Handles deleting an existing context
 fn handle_del(cmd: DelCommand) -> Result<CommandOutput> {
-    let dir = ContextDir::new(context_dir(cmd.directory)?)?;
+    let dir = ContextDir::new_with_dir(cmd.directory)?;
 
     let ctx_to_delete = if let Some(n) = cmd.name {
         n
@@ -184,7 +176,7 @@ fn handle_del(cmd: DelCommand) -> Result<CommandOutput> {
 
 /// Handles creating a new context by writing the default WashContext object to the specified path
 fn handle_new(cmd: NewCommand) -> Result<CommandOutput> {
-    let dir = ContextDir::new(context_dir(cmd.directory)?)?;
+    let dir = ContextDir::new_with_dir(cmd.directory)?;
 
     let mut new_context = if cmd.interactive {
         prompt_for_context()?
@@ -210,10 +202,8 @@ fn handle_new(cmd: NewCommand) -> Result<CommandOutput> {
 
 /// Handles editing a context by opening the JSON file in the user's text editor of choice
 fn handle_edit(cmd: EditCommand) -> Result<CommandOutput> {
-    let dir = ContextDir::new(context_dir(cmd.directory)?)?;
+    let dir = ContextDir::new_with_dir(cmd.directory)?;
     let editor = which::which(cmd.editor)?;
-
-    ensure_host_config_context(&dir)?;
 
     let mut ctx_name = String::new();
 
@@ -251,10 +241,7 @@ fn handle_edit(cmd: EditCommand) -> Result<CommandOutput> {
 /// Prompts the user with the provided `contexts` choices and returns the user's response.
 /// This can be used to determine which context to delete, edit, or set as a default, for example
 fn select_context(dir: &ContextDir, prompt: &str) -> Result<Option<String>> {
-    let default = dir
-        .default_context()?
-        .unwrap_or_else(|| HOST_CONFIG_NAME.to_string());
-
+    let default = dir.default_context_name()?;
     let choices: Vec<String> = dir.list_contexts()?;
 
     let entry = StringEntry {

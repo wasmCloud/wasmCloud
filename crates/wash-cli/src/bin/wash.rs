@@ -147,7 +147,7 @@ enum CliCommand {
     #[clap(name = "ctl", subcommand)]
     Ctl(CtlCliCommand),
     /// Manage wasmCloud host configuration contexts
-    #[clap(name = "ctx", subcommand)]
+    #[clap(name = "ctx", alias = "context", alias = "contexts", subcommand)]
     Ctx(CtxCommand),
     /// (experimental) Run a local development loop for an actor
     #[clap(name = "dev")]

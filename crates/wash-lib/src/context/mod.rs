@@ -9,13 +9,10 @@ use serde_with::{serde_as, NoneAsEmptyString};
 
 use crate::{
     config::{
-        cfg_dir, DEFAULT_LATTICE_PREFIX, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT,
-        DEFAULT_NATS_TIMEOUT_MS,
+        DEFAULT_LATTICE_PREFIX, DEFAULT_NATS_HOST, DEFAULT_NATS_PORT, DEFAULT_NATS_TIMEOUT_MS,
     },
     id::ClusterSeed,
 };
-
-use crate::context::fs::{load_context, ContextDir};
 
 pub mod fs;
 
@@ -27,7 +24,7 @@ pub const HOST_CONFIG_NAME: &str = "host_config";
 // implementation than the fs one will likely involve networking
 pub trait ContextManager {
     /// Returns the name of the currently set default context.
-    fn default_context(&self) -> Result<Option<String>>;
+    fn default_context_name(&self) -> Result<String>;
 
     /// Sets the current default context to the given name. Should error if it doesn't exist
     fn set_default_context(&self, name: &str) -> Result<()>;
@@ -47,12 +44,6 @@ pub trait ContextManager {
 
     /// Returns a list of all context names
     fn list_contexts(&self) -> Result<Vec<String>>;
-}
-
-#[derive(Clone, Deserialize, Serialize, Debug)]
-pub(crate) struct DefaultContext<'a> {
-    /// Name of the default context
-    pub name: &'a str,
 }
 
 #[serde_as]
@@ -144,24 +135,4 @@ fn default_lattice_prefix() -> String {
 
 pub fn default_timeout_ms() -> u64 {
     DEFAULT_NATS_TIMEOUT_MS
-}
-
-/// Ensures the host config context exists
-pub fn ensure_host_config_context(context_dir: &ContextDir) -> Result<()> {
-    create_host_config_context(context_dir)
-}
-
-/// Load the host configuration file and create a context called `host_config` from it
-fn create_host_config_context(context_dir: &ContextDir) -> Result<()> {
-    let host_config_ctx = WashContext {
-        name: HOST_CONFIG_NAME.to_string(),
-        ..load_context(cfg_dir()?.join(format!("{HOST_CONFIG_NAME}.json")))
-            .unwrap_or_else(|_| WashContext::default())
-    };
-    context_dir.save_context(&host_config_ctx)?;
-    // Set the default context if it isn't set yet
-    if context_dir.default_context()?.is_none() {
-        context_dir.set_default_context(HOST_CONFIG_NAME)?;
-    }
-    Ok(())
 }
