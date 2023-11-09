@@ -13,7 +13,7 @@ use std::error::Error;
 use std::path::PathBuf;
 use std::str::FromStr;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Args;
 use log::info;
 use nkeys::{KeyPair, KeyPairType};
@@ -221,9 +221,13 @@ impl TryFrom<CliConnectionOpts> for WashConnectionOptions {
         // Attempt to load a context, falling back on the default if not supplied
         let ctx_dir = ContextDir::new()?;
         let ctx = if let Some(context_name) = context {
-            Some(ctx_dir.load_context(&context_name)?)
+            ctx_dir
+                .load_context(&context_name)
+                .with_context(|| format!("failed to load context `{context_name}`"))?
         } else {
-            ctx_dir.load_default_context().ok()
+            ctx_dir
+                .load_default_context()
+                .context("failed to load default context")?
         };
 
         Ok(WashConnectionOptions {
