@@ -238,13 +238,11 @@ mod test {
             .unwrap()
             .filter_map(|entry| entry.unwrap().file_name().to_os_string().into_string().ok())
             .collect();
-        let expected_filenames: std::collections::HashSet<String> = vec![
+        let expected_filenames = std::collections::HashSet::from([
             "default".to_string(),
             "host_config.json".to_string(),
             "happy_path.json".to_string(),
-        ]
-        .into_iter()
-        .collect();
+        ]);
 
         assert_eq!(
             filenames, expected_filenames,
