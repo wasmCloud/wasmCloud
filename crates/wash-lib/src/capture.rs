@@ -33,8 +33,8 @@ impl TryFrom<async_nats::jetstream::Message> for SerializableMessage {
     fn try_from(msg: async_nats::jetstream::Message) -> Result<Self, Self::Error> {
         let published = msg.info().map_err(|e| anyhow::anyhow!("{e:?}"))?.published;
         Ok(Self {
-            subject: msg.message.subject,
-            reply: msg.message.reply,
+            subject: msg.message.subject.to_string(),
+            reply: msg.message.reply.map(|s| s.to_string()),
             payload: msg.message.payload,
             description: msg.message.description,
             length: msg.message.length,

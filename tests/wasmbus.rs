@@ -322,9 +322,9 @@ async fn assert_handle_http_request(
     redis_client: &mut redis::Client,
 ) -> anyhow::Result<()> {
     let (mut nats_publish_sub, mut nats_request_sub, mut nats_request_multi_sub) = try_join!(
-        nats_client.subscribe("test-messaging-publish".into()),
-        nats_client.subscribe("test-messaging-request".into()),
-        nats_client.subscribe("test-messaging-request-multi".into()),
+        nats_client.subscribe("test-messaging-publish"),
+        nats_client.subscribe("test-messaging-request"),
+        nats_client.subscribe("test-messaging-request-multi"),
     )
     .context("failed to subscribe to NATS topics")?;
 

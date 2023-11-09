@@ -325,8 +325,8 @@ async fn dispatch_msg(
 ) {
     let msg = SubMessage {
         body: nats_msg.payload.into(),
-        reply_to: nats_msg.reply,
-        subject: nats_msg.subject,
+        reply_to: nats_msg.reply.map(|s| s.to_string()),
+        subject: nats_msg.subject.to_string(),
     };
     let actor = Handler::new(&link_def);
     if let Err(e) = actor.handle_message(msg).await {
@@ -490,8 +490,8 @@ impl NatsMessagingProvider {
             Ok(Err(send_err)) => Err(format!("nats send error: {}", send_err)),
             Ok(Ok(resp)) => Ok(ReplyMessage {
                 body: resp.payload.to_vec(),
-                reply_to: resp.reply,
-                subject: resp.subject,
+                reply_to: resp.reply.map(|s| s.to_string()),
+                subject: resp.subject.to_string(),
             }),
         }
     }
